@@ -25,7 +25,7 @@ use super::{
     ZkAmsMkhePartyIdV1,
     active::ZkAmsMkheGovernedActiveRosterV1,
     checked_rns_polynomial_bytes,
-    cpk_relation::derive_active_collective_public_a_limb_v1,
+    cpk_relation::prepare_active_collective_public_a_v1,
     manifest::{
         ZK_AMS_MKHE_RELEASE_ROSTER_SIZE_V1, ZK_AMS_MKHE_STATISTICAL_SECURITY_BITS_V1,
         release_profile_v1, zk_ams_mkhe_noise_certificate_v1, zk_ams_mkhe_release_manifest_v1,
@@ -2075,14 +2075,16 @@ where
             .map_err(|_| ZkAmsMkheErrorV1::ResourceCeilingExceeded)?
             .to_be_bytes(),
     );
-    for limb in 0..profile.moduli.len() {
-        let public_a = derive_active_collective_public_a_limb_v1(
-            &profile,
-            roster,
-            cpk_transcript_digest,
-            limb,
-        )
+    let prepared_public_a =
+        prepare_active_collective_public_a_v1(&profile, roster, cpk_transcript_digest)
+            .map_err(|_| ZkAmsMkheErrorV1::InvalidKeyMaterial)?;
+    let mut remaining_public_a_candidates = prepared_public_a
+        .candidate_budget_for_limbs_v1(profile.moduli.len())
         .map_err(|_| ZkAmsMkheErrorV1::InvalidKeyMaterial)?;
+    for limb in 0..profile.moduli.len() {
+        let public_a = prepared_public_a
+            .derive_limb_budgeted_v1(limb, &mut remaining_public_a_candidates)
+            .map_err(|_| ZkAmsMkheErrorV1::InvalidKeyMaterial)?;
         for residue in public_a {
             hash.update(&residue.to_be_bytes());
         }

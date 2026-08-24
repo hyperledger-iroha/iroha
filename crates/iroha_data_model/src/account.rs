@@ -11,8 +11,7 @@ pub use self::{
     },
 };
 pub use admission::{
-    ACCOUNT_ADMISSION_POLICY_METADATA_KEY, AccountAdmissionMode, AccountAdmissionPolicy,
-    DEFAULT_MAX_IMPLICIT_ACCOUNT_CREATIONS_PER_TX,
+    AccountAdmissionMode, AccountAdmissionPolicy, DEFAULT_MAX_IMPLICIT_ACCOUNT_CREATIONS_PER_TX,
 };
 use core::fmt;
 use iroha_crypto::{Hash, PublicKey};
@@ -1196,13 +1195,12 @@ impl IntoKeyValue for Account {
 /// The prelude re-exports most commonly used traits, structs and macros from this crate.
 pub mod prelude {
     pub use super::{
-        ACCOUNT_ADMISSION_POLICY_METADATA_KEY, Account, AccountAddress, AccountAddressSource,
-        AccountAdmissionMode, AccountAdmissionPolicy, AccountAlias, AccountAliasDomain,
-        AccountController, AccountEntry, AccountId, AccountRecoveryPolicy,
-        AccountRecoveryPolicyError, AccountRecoveryRequest, AccountRecoveryStatus,
-        AccountRekeyRecord, AccountRekeyRecordError, AccountRekeyTransitionProvenance,
-        AccountValue, MultisigMember, MultisigPolicy, NewAccount, OpaqueAccountId, ParsedAccountId,
-        RecoveryGuardian,
+        Account, AccountAddress, AccountAddressSource, AccountAdmissionMode,
+        AccountAdmissionPolicy, AccountAlias, AccountAliasDomain, AccountController, AccountEntry,
+        AccountId, AccountRecoveryPolicy, AccountRecoveryPolicyError, AccountRecoveryRequest,
+        AccountRecoveryStatus, AccountRekeyRecord, AccountRekeyRecordError,
+        AccountRekeyTransitionProvenance, AccountValue, MultisigMember, MultisigPolicy, NewAccount,
+        OpaqueAccountId, ParsedAccountId, RecoveryGuardian,
     };
 }
 #[cfg(test)]

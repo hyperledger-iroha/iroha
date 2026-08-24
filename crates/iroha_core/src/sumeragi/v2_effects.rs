@@ -98,7 +98,7 @@ use super::{
         LifecycleDecisionApplyAdapterFinalityV1, LiveProposalIntentWalSignHandoffV1,
         PreparedLifecycleDecisionApplyAdapterCompletionV1,
         RecoveredLifecycleNextVoteBodyAuthorityV1, RecoveredLifecycleNextVoteBodyLookupV1,
-        SignRequest,
+        SignRequest, VerifiedHeightContext,
     },
     v2_body_store::{
         BodyStoreCompletion, DurableBodyReceipt, V2BodyStore, V2BodyStoreInstanceIdentity,
@@ -109,7 +109,7 @@ use super::{
         LocalProposalIntentReplayEvidenceV1, LocalProposalReadyReplayEvidenceV1,
     },
     v2_lifecycle_coordinator::{
-        AdmissionDecision, InstalledAuthenticatedGenesisReplayAuthorityV1,
+        AdmissionDecision, InstalledAuthenticatedGenesisReplayAuthorityV1, LifecycleContext,
         LifecycleDecisionApplyDispatchKeyV1, LifecycleDecisionApplyLineageV1,
         LifecycleOutputAdmissionKeyV1, LifecycleOutputServiceDispositionV1,
         LifecycleValidateDispatchKeyV1, LiveLifecycleDecisionApplyReconciliationAuthorityV1,
@@ -133,9 +133,10 @@ use super::{
         BodyAvailableReservation, DecisionProposalRetirement, EnqueueError,
         LeaderWireRuntimeTerminal, LocalProposalEffectOwnership, LocalProposalReadyCommandIdentity,
         NetworkIngressError, PendingRuntimeEffectBinding, RecoveredDurableValidateRetryFrontierV1,
-        RetiredBodyPipelineCompletions, RuntimeCandidateAdmissionDisposition, RuntimeClockError,
-        RuntimeEffectOwnership, RuntimeFetchAuthorityRelation, RuntimeLifecycleOwner,
-        RuntimeQueueLaneSnapshot, RuntimeQueueSnapshot, RuntimeStep, SerializedV2Runtime,
+        RetiredBodyPipelineCompletions, RuntimeCandidateAdmissionDisposition,
+        RuntimeCandidateSemanticStatement, RuntimeClockError, RuntimeEffectOwnership,
+        RuntimeFetchAuthorityRelation, RuntimeLifecycleOwner, RuntimeQueueLaneSnapshot,
+        RuntimeQueueSnapshot, RuntimeStep, SerializedV2Runtime,
         production_adapter_effect_candidate_admission_disposition,
         production_adapter_effect_candidate_semantic_identity,
         production_adapter_effect_candidate_trace_projection,
@@ -2576,6 +2577,12 @@ type DurableDecision = (
     wire::BlockSubject,
     wire::ExecutionCommitment,
 );
+/// Exact local owner which installed one durable Decision before runner cleanup.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct PendingRunnerDecisionCleanup {
+    decision: DurableDecision,
+    owner_tag: EventTag,
+}
 /// Exact executor-retained owner for one live lifecycle Apply corridor.
 ///
 /// This is deliberately not generic pending work: the registry and bounded
@@ -2769,6 +2776,11 @@ enum RestartEffectSource {
     DiagnosticOnly,
 }
 pub(crate) trait EffectRuntime {
+    /// Return whether live pacemaker clocks crossed their one-shot activation.
+    /// Synthetic test runtimes are permanently unarmed unless they override it.
+    fn live_clocks_are_armed(&self) -> bool {
+        false
+    }
     /// Decide whether the runtime accepts one exact fair-ingress ownership carrier.
     fn can_admit_network_message_with_ingress_ownership(
         &self,
@@ -3071,6 +3083,10 @@ pub(crate) trait EffectRuntime {
     fn watchdog_threshold(&self) -> Duration;
 }
 impl EffectRuntime for SerializedV2Runtime {
+    fn live_clocks_are_armed(&self) -> bool {
+        self.lifecycle_live_clocks_are_armed()
+    }
+
     fn can_admit_network_message_with_ingress_ownership(
         &self,
         message: &wire::ConsensusMessageV2,
@@ -3453,6 +3469,11 @@ pub(crate) struct V2EffectExecutor<R = SerializedV2Runtime> {
     /// Inert exact owners retained after lifecycle consumes a Validate pre-admission; only proven retries can stutter.
     durable_validate_retry_seals:
         BTreeMap<(wire::ConsensusRound, wire::BlockSubject), DurableValidateRetrySealV1>,
+    /// Inert exact markers for Validate rows published directly by the lifecycle body pipeline.
+    published_lifecycle_validate_retry_markers: BTreeMap<
+        (wire::ConsensusRound, wire::BlockSubject),
+        PublishedLifecycleValidateRetryMarkerV1,
+    >,
     #[cfg(test)]
     last_recovered_validate_retry_trace_root: Option<Hash>,
     #[cfg(test)]
@@ -3491,6 +3512,9 @@ pub(crate) struct V2EffectExecutor<R = SerializedV2Runtime> {
     reconciled_tag: Option<EventTag>,
     protected_lock: Option<(wire::ConsensusRound, wire::BlockSubject)>,
     protected_decision: Option<DurableDecision>,
+    /// Newly installed live Decision whose exact Apply suffix cannot enter the
+    /// worker until the runner retires process-local proposal and lane owners.
+    pending_runner_decision_cleanup: Option<PendingRunnerDecisionCleanup>,
     live_lifecycle_decision_apply: Option<LiveLifecycleDecisionApplyOwnerV1>,
     live_lifecycle_validate_successor: Option<LiveLifecycleValidateSuccessorOwnerV1>,
     pending_tip_recovery: Option<PendingKuraApplyRecoveryEvidence>,
@@ -5417,6 +5441,7 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
             authenticated_genesis_replay: BTreeMap::new(),
             pending_durable_validate_admissions: BTreeMap::new(),
             durable_validate_retry_seals: BTreeMap::new(),
+            published_lifecycle_validate_retry_markers: BTreeMap::new(),
             #[cfg(test)]
             last_recovered_validate_retry_trace_root: None,
             #[cfg(test)]
@@ -5438,6 +5463,7 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
             reconciled_tag,
             protected_lock: None,
             protected_decision: None,
+            pending_runner_decision_cleanup: None,
             live_lifecycle_decision_apply: None,
             live_lifecycle_validate_successor: None,
             pending_tip_recovery: None,
@@ -6038,6 +6064,7 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
         self.publish_status(services)
     }
     /// Consume startup or reducer effects in their exact emitted order.
+    #[cfg(test)]
     pub(crate) fn consume_effects<S: V2EffectServices>(
         &mut self,
         effects: Vec<AdapterEffect>,
@@ -6054,6 +6081,13 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
         pending_runner_decision_cleanup: Option<PendingRunnerDecisionCleanup>,
     ) -> Result<usize, EffectExecutorError> {
         self.ensure_open()?;
+        if self.pending_tip_recovery.is_some() {
+            for effect in &effects {
+                if let Err(error) = self.ensure_pending_tip_recovery_effect_is_local(effect) {
+                    return Err(self.close(error, services));
+                }
+            }
+        }
         if self.pending_runner_decision_cleanup.is_some() {
             return Err(self.close(
                 EffectExecutorError::Contract(
@@ -7725,6 +7759,7 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
             AdapterEffect::Sign { .. } | AdapterEffect::EnterView { .. } => false,
         }
     }
+    #[cfg(test)]
     fn consume_pacemaker_effects<S: V2EffectServices>(
         &mut self,
         effects: Vec<AdapterEffect>,
@@ -7996,6 +8031,7 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
             .map_err(|error| self.close(error, services))?;
         match step {
             RuntimeStep::Idle => {
+                self.pending_runner_decision_cleanup = pending_runner_decision_cleanup;
                 #[cfg(test)]
                 {
                     self.last_runtime_step_observation = Some(RuntimeStepObservationV1 {
@@ -8030,7 +8066,11 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
                         canonical_prepare_qc_digest: observed_canonical_prepare_qc_digest(&effects),
                     });
                 }
-                let count = self.consume_effects(effects, services)?;
+                let count = self.consume_effects_with_runner_decision_cleanup(
+                    effects,
+                    services,
+                    pending_runner_decision_cleanup,
+                )?;
                 Ok(EffectExecutorStep::Advanced { effects: count })
             }
         }
@@ -8067,10 +8107,6 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
             "one bounded pending-Kura attempt settles exactly once"
         );
         self.pending_tip_recovery_last_result = Some(result);
-        self.pending_tip_recovery_attempts
-    }
-    /// Number of serialized interrupted-tip recovery attempts made so far.
-    pub(crate) const fn pending_tip_recovery_attempts(&self) -> u64 {
         self.pending_tip_recovery_attempts
     }
     /// Begin the asynchronous durable-store → deterministic-validation chain

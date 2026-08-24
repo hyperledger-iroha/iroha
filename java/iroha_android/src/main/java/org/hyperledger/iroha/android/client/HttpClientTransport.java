@@ -807,7 +807,7 @@ public final class HttpClientTransport implements IrohaClient {
   public CompletableFuture<Optional<VpnSession>> getVpnSession(
       final String sessionId,
       final ToriiCanonicalRequestAuth canonicalAuth) {
-    final String normalizedSessionId = normalizeHex32(sessionId, "sessionId");
+    final String normalizedSessionId = normalizeHex16(sessionId, "sessionId");
     final TransportRequest request =
         buildVpnRequest(
             "GET",
@@ -816,21 +816,6 @@ public final class HttpClientTransport implements IrohaClient {
             canonicalAuth);
     return fetchJsonAllowingNotFound(
         request, VpnJsonParser::parseSession, "vpn session lookup", 200);
-  }
-
-  /** Deletes an active VPN session and returns Torii's disconnect receipt when present. */
-  public CompletableFuture<Optional<VpnReceipt>> deleteVpnSession(
-      final String sessionId,
-      final ToriiCanonicalRequestAuth canonicalAuth) {
-    final String normalizedSessionId = normalizeHex32(sessionId, "sessionId");
-    final TransportRequest request =
-        buildVpnRequest(
-            "DELETE",
-            "/v1/vpn/sessions/" + encodePathSegment(normalizedSessionId),
-            null,
-            canonicalAuth);
-    return fetchJsonAllowingNotFound(
-        request, VpnJsonParser::parseReceipt, "vpn session delete", 200);
   }
 
   /** Submits an operator receipt and returns the native lease settlement instruction. */
@@ -3308,6 +3293,14 @@ public final class HttpClientTransport implements IrohaClient {
     final String normalized = normalizeEvenLengthHex(value, field);
     if (normalized.length() != 64) {
       throw new IllegalArgumentException(field + " must contain 64 hex characters");
+    }
+    return normalized;
+  }
+
+  static String normalizeHex16(final String value, final String field) {
+    final String normalized = normalizeEvenLengthHex(value, field);
+    if (normalized.length() != 32) {
+      throw new IllegalArgumentException(field + " must contain 32 hex characters");
     }
     return normalized;
   }

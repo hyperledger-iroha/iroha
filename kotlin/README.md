@@ -75,6 +75,12 @@ non-empty ASCII HTTP tokens of at most 32 bytes, and URI signers require an exac
 ASCII raw path of at most 64 KiB; absolute inputs must be hierarchical HTTP(S) URIs with an
 authority and no fragment.
 
+Sora VPN receipt submission returns the native `SettleVpnLease` instruction
+with exact status `settlement_pending`. That status remains provisional until
+the instruction commits; only a receipt read from committed WSV state uses
+`settled`. The parser also retains the exact `disconnected`, `expired`, and
+`replaced` lifecycle values.
+
 Identifier resolve/claim-receipt and RAM-LFE execute/receipt-verify calls require a per-call
 `ToriiCanonicalRequestAuth` and `ClientConfig.localSigningContext`. The transport signs the exact
 POST path and body once, rejects caller-supplied canonical headers, and requires a claim-receipt
@@ -468,22 +474,11 @@ available. Request and result archives stay typed and canonically framed while r
 membership, note-opening, and accumulator details remain native-owned opaque bytes.
 The protocol and JVM append builder accept one or two inputs and support up to eight peer hops.
 Inputs are canonicalized by authenticated bundle digest; duplicate or conflicting exact-state
-branches fail closed. `projectReadiness` supplies the authoritative scale, committed height/hash,
-role-specific verifier commitments/windows, and the required nullable authenticated `artifactSet`.
-When present, that set binds the V4 generation, manifest, release-policy and release-attestation
-digests, issuance window, proof-pair bound, and asset scale to the atomic recursive verifier pair.
-The pair uses exact roles `kagemusha_recursive_step_eq_v4_verifier_record` and
-`kagemusha_recursive_step_ep_v4_verifier_record` with circuits
-`kagemusha-recursive-spend-step-eq-compact-layout-v5` and
-`kagemusha-recursive-spend-step-ep-compact-lineage-v5`, respectively.
-An absent artifact set requires both recursive records and backend construction
-to be unavailable with exactly one `recursive_v4_registry_unavailable` or
-`recursive_v4_registry_malformed` blocker; a present set forbids both.
-`proofBackendAvailable` reports authenticated backend construction independently.
-`recursiveLineageSupported` is true only with the authenticated artifact set, distinct active
-Eq/Ep records, and that backend; `recursive_lineage_unavailable` is its exact inverse. `ready` is
-true only when the complete blocker set is empty, so unrelated blockers do not erase valid backend
-or lineage facts.
+branches fail closed. `getOfflineCapability` takes no selector and accepts only
+the four-field `cash_handoff_v1` response: bridge ABI 22, maximum hop count 8,
+and `ready=true`. Asset scale, committed snapshot, verifier identities, and
+release bindings are supplied through the exact command and proof types that
+consume them rather than a separate readiness archive.
 `prepareTopUp` accepts only Torii's authoritative `next_zero_path` and retains the local note
 opening. Init results do not yet carry a proof-bound output membership witness, so the JVM surface
 intentionally does not project or restore a spendable init branch. Persisted openings and

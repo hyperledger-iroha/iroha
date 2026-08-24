@@ -9,8 +9,9 @@ use crate::{
     vpn::VpnOverlay,
 };
 use hex::FromHex;
+use iroha_crypto::KeyPair;
 use std::time::Duration;
-use tempfile::NamedTempFile;
+use tempfile::{NamedTempFile, TempDir};
 macro_rules! config_fixture {
     ($name:literal) => {
         concat!(
@@ -30,21 +31,56 @@ fn write_manifest(json: &str) -> NamedTempFile {
     std::fs::write(file.path(), json).expect("write manifest");
     file
 }
+fn write_vpn_issuer_public_key(byte: u8) -> NamedTempFile {
+    let file = NamedTempFile::new_in(std::env::current_dir().expect("current directory"))
+        .expect("create VPN issuer public-key file");
+    let key_pair = KeyPair::try_from_seed(vec![byte; 32], Algorithm::Ed25519)
+        .expect("derive VPN issuer keypair");
+    let (_, payload) = key_pair
+        .public_key()
+        .try_to_bytes()
+        .expect("encode VPN issuer public key");
+    std::fs::write(file.path(), hex::encode(payload)).expect("write VPN issuer public-key file");
+    file
+}
 fn write_vpn_secret(byte: u8) -> NamedTempFile {
     let file = NamedTempFile::new_in(std::env::current_dir().expect("current directory"))
         .expect("create VPN secret file");
     std::fs::write(file.path(), hex::encode([byte; 32])).expect("write VPN secret file");
     file
 }
-fn vpn_config_with_secret(byte: u8) -> (VpnConfig, NamedTempFile) {
-    let file = write_vpn_secret(byte);
+struct VpnConfigCredentials {
+    _issuer: NamedTempFile,
+    _receipt_spool: TempDir,
+}
+fn vpn_config_with_credentials(byte: u8) -> (VpnConfig, VpnConfigCredentials) {
+    let file = write_vpn_issuer_public_key(byte);
+    let receipt_spool = tempfile::tempdir_in(std::env::current_dir().expect("current directory"))
+        .expect("create VPN receipt spool directory");
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt as _;
+        std::fs::set_permissions(receipt_spool.path(), std::fs::Permissions::from_mode(0o700))
+            .expect("protect VPN receipt spool directory");
+    }
+    let backend_socket = receipt_spool.path().join("backend.sock");
     let config = VpnConfig {
         enabled: true,
-        helper_ticket_secret_path: Some(file.path().to_path_buf()),
+        helper_ticket_issuer_public_key_path: Some(file.path().to_path_buf()),
+        backend_endpoint: Some(format!("unix:{}", backend_socket.display())),
+        backend_expected_uid: Some(0),
+        backend_expected_gid: Some(0),
         backend_bootstrap_secret_path: Some(file.path().to_path_buf()),
+        receipt_spool_dir: Some(receipt_spool.path().to_path_buf()),
         ..VpnConfig::default()
     };
-    (config, file)
+    (
+        config,
+        VpnConfigCredentials {
+            _issuer: file,
+            _receipt_spool: receipt_spool,
+        },
+    )
 }
 fn assert_config_json_admission_rejected(bytes: &[u8]) {
     let file = NamedTempFile::new().expect("create admission input");
@@ -635,7 +671,7 @@ fn vpn_requires_exit_role_and_persistent_transport_trust() {
                 "listen": "127.0.0.1:0",
                 "vpn": {
                     "enabled": true,
-                    "helper_ticket_secret_path": "/run/secrets/vpn-helper-ticket.hex",
+                    "helper_ticket_issuer_public_key_path": "/run/secrets/vpn-helper-ticket-issuer-public-key.hex",
                     "backend_bootstrap_secret_path": "/run/secrets/vpn-backend-bootstrap.hex"
                 }
             }"#;
@@ -645,7 +681,7 @@ fn vpn_requires_exit_role_and_persistent_transport_trust() {
                 "listen": "127.0.0.1:0",
                 "vpn": {
                     "enabled": true,
-                    "helper_ticket_secret_path": "/run/secrets/vpn-helper-ticket.hex",
+                    "helper_ticket_issuer_public_key_path": "/run/secrets/vpn-helper-ticket-issuer-public-key.hex",
                     "backend_bootstrap_secret_path": "/run/secrets/vpn-backend-bootstrap.hex"
                 }
             }"#;
@@ -659,7 +695,7 @@ fn vpn_requires_exit_role_and_persistent_transport_trust() {
                 },
                 "vpn": {
                     "enabled": true,
-                    "helper_ticket_secret_path": "/run/secrets/vpn-helper-ticket.hex",
+                    "helper_ticket_issuer_public_key_path": "/run/secrets/vpn-helper-ticket-issuer-public-key.hex",
                     "backend_bootstrap_secret_path": "/run/secrets/vpn-backend-bootstrap.hex"
                 }
             }"#;
@@ -687,7 +723,7 @@ fn vpn_requires_persistent_identity_and_strict_authenticated_directory() {
                 "handshake": {{ "certificate": {certificate} }},
                 "vpn": {{
                     "enabled": true,
-                    "helper_ticket_secret_path": "/run/secrets/vpn-helper-ticket.hex",
+                    "helper_ticket_issuer_public_key_path": "/run/secrets/vpn-helper-ticket-issuer-public-key.hex",
                     "backend_bootstrap_secret_path": "/run/secrets/vpn-backend-bootstrap.hex"
                 }}
             }}"#
@@ -707,7 +743,7 @@ fn vpn_requires_persistent_identity_and_strict_authenticated_directory() {
                 }},
                 "vpn": {{
                     "enabled": true,
-                    "helper_ticket_secret_path": "/run/secrets/vpn-helper-ticket.hex",
+                    "helper_ticket_issuer_public_key_path": "/run/secrets/vpn-helper-ticket-issuer-public-key.hex",
                     "backend_bootstrap_secret_path": "/run/secrets/vpn-backend-bootstrap.hex"
                 }}
             }}"#,
@@ -732,7 +768,7 @@ fn vpn_requires_persistent_identity_and_strict_authenticated_directory() {
                 }},
                 "vpn": {{
                     "enabled": true,
-                    "helper_ticket_secret_path": "/run/secrets/vpn-helper-ticket.hex",
+                    "helper_ticket_issuer_public_key_path": "/run/secrets/vpn-helper-ticket-issuer-public-key.hex",
                     "backend_bootstrap_secret_path": "/run/secrets/vpn-backend-bootstrap.hex"
                 }}
             }}"#,
@@ -2062,7 +2098,7 @@ fn vpn_dns_override_rejects_non_ip() {
 }
 #[test]
 fn vpn_cover_ratio_allows_zero_when_enabled() {
-    let (mut cfg, _helper_secret) = vpn_config_with_secret(0xAB);
+    let (mut cfg, _issuer_key) = vpn_config_with_credentials(0xAB);
     cfg.cover = VpnCoverTrafficConfig {
         enabled: true,
         cover_to_data_per_mille: 0,
@@ -2074,18 +2110,22 @@ fn vpn_cover_ratio_allows_zero_when_enabled() {
     assert_eq!(cfg.cover.cover_to_data_per_mille, 0);
 }
 #[test]
-fn vpn_helper_ticket_secret_loads_private_file() {
-    let (mut cfg, _helper_secret) = vpn_config_with_secret(0xAB);
+fn vpn_helper_ticket_issuer_public_key_loads_private_file() {
+    let (mut cfg, _issuer_key_file) = vpn_config_with_credentials(0xAB);
     cfg.validate().expect("vpn config should validate");
+    let expected = KeyPair::try_from_seed(vec![0xAB; 32], Algorithm::Ed25519)
+        .expect("derive expected issuer keypair")
+        .public_key()
+        .clone();
     assert_eq!(
-        cfg.try_helper_ticket_secret_bytes()
-            .expect("read helper secret"),
-        Some([0xAB; 32])
+        cfg.try_helper_ticket_issuer_public_key()
+            .expect("read helper-ticket issuer public key"),
+        Some(expected)
     );
 }
 #[test]
 fn vpn_helper_ticket_replay_store_defaults_are_mandatory() {
-    let (mut cfg, _helper_secret) = vpn_config_with_secret(0xAB);
+    let (mut cfg, _issuer_key) = vpn_config_with_credentials(0xAB);
     cfg.helper_ticket_replay_store_capacity = 0;
     cfg.helper_ticket_replay_store_path = PathBuf::new();
     cfg.validate().expect("VPN replay-store defaults validate");
@@ -2100,7 +2140,7 @@ fn vpn_helper_ticket_replay_store_defaults_are_mandatory() {
 }
 #[test]
 fn vpn_helper_ticket_replay_store_preserves_operator_settings() {
-    let (mut cfg, _helper_secret) = vpn_config_with_secret(0xAB);
+    let (mut cfg, _issuer_key) = vpn_config_with_credentials(0xAB);
     cfg.helper_ticket_replay_store_capacity = 32_768;
     cfg.helper_ticket_replay_store_path =
         PathBuf::from("/var/lib/soranet/vpn-helper-replays.norito");
@@ -2132,23 +2172,23 @@ fn vpn_helper_ticket_replay_capacity_enforces_first_release_ceiling() {
     ));
 }
 #[test]
-fn vpn_helper_ticket_secret_rejects_short_file() {
+fn vpn_helper_ticket_issuer_public_key_rejects_short_file() {
     let file = NamedTempFile::new_in(std::env::current_dir().expect("current directory"))
         .expect("create short VPN secret");
     std::fs::write(file.path(), "ab".repeat(16)).expect("write short VPN secret");
     let cfg = VpnConfig {
-        helper_ticket_secret_path: Some(file.path().to_path_buf()),
+        helper_ticket_issuer_public_key_path: Some(file.path().to_path_buf()),
         ..VpnConfig::default()
     };
     let err = cfg
-        .try_helper_ticket_secret_bytes()
-        .expect_err("short helper ticket secret must fail");
+        .try_helper_ticket_issuer_public_key()
+        .expect_err("short helper-ticket issuer public key must fail");
     assert!(
         matches!(err, ConfigError::Vpn(message) if message.contains("64 lowercase hexadecimal"))
     );
 }
 #[test]
-fn vpn_shared_secrets_require_canonical_nonzero_encoding() {
+fn vpn_helper_ticket_issuer_public_key_requires_canonical_nonzero_encoding() {
     for (contents, expected) in [
         ("AB".repeat(32), "lowercase"),
         (format!("{}\n", "ab".repeat(32)), "no newline"),
@@ -2158,12 +2198,12 @@ fn vpn_shared_secrets_require_canonical_nonzero_encoding() {
             .expect("create noncanonical VPN secret");
         std::fs::write(file.path(), contents).expect("write noncanonical VPN secret");
         let config = VpnConfig {
-            helper_ticket_secret_path: Some(file.path().to_path_buf()),
+            helper_ticket_issuer_public_key_path: Some(file.path().to_path_buf()),
             ..VpnConfig::default()
         };
         let error = config
-            .try_helper_ticket_secret_bytes()
-            .expect_err("noncanonical VPN secret must fail closed");
+            .try_helper_ticket_issuer_public_key()
+            .expect_err("noncanonical VPN issuer public key must fail closed");
         assert!(
             error.to_string().contains(expected),
             "unexpected error for {expected}: {error}"
@@ -2187,23 +2227,47 @@ fn vpn_rejects_retired_inline_secrets() {
 }
 #[test]
 fn vpn_backend_endpoint_normalizes_unix_endpoint() {
-    let (mut cfg, _helper_secret) = vpn_config_with_secret(0xAB);
-    cfg.backend_endpoint = Some(" unix:/run/sora-vpn-backend.sock ".to_string());
+    let (mut cfg, credentials) = vpn_config_with_credentials(0xAB);
+    let socket = credentials._receipt_spool.path().join("normalized.sock");
+    cfg.backend_endpoint = Some(format!(" unix:{} ", socket.display()));
     cfg.validate().expect("vpn config should validate");
+    let canonical_socket = std::fs::canonicalize(socket.parent().expect("socket parent"))
+        .expect("canonical socket parent")
+        .join("normalized.sock");
     assert_eq!(
         cfg.backend_endpoint,
-        Some("unix:/run/sora-vpn-backend.sock".to_string())
+        Some(format!("unix:{}", canonical_socket.display()))
     );
     assert_eq!(
-        cfg.backend_endpoint(),
-        Some(VpnBackendEndpoint::Unix(PathBuf::from(
-            "/run/sora-vpn-backend.sock"
-        )))
+        cfg.backend_endpoint()
+            .map(|endpoint| endpoint.path().to_path_buf()),
+        Some(canonical_socket)
+    );
+}
+#[cfg(unix)]
+#[test]
+fn vpn_backend_endpoint_rejects_unsafely_writable_parent() {
+    use std::os::unix::fs::PermissionsExt as _;
+
+    let (mut cfg, _credentials) = vpn_config_with_credentials(0xAB);
+    let parent = tempfile::tempdir_in(std::env::current_dir().expect("current directory"))
+        .expect("create backend socket parent");
+    std::fs::set_permissions(parent.path(), std::fs::Permissions::from_mode(0o777))
+        .expect("make backend socket parent unsafe");
+    cfg.backend_endpoint = Some(format!(
+        "unix:{}",
+        parent.path().join("backend.sock").display()
+    ));
+    let error = cfg
+        .validate()
+        .expect_err("writable backend socket parent must fail closed");
+    assert!(
+        matches!(error, ConfigError::Vpn(message) if message.contains("not be unsafely writable"))
     );
 }
 #[test]
-fn vpn_backend_endpoint_requires_secret_for_unix_and_tcp() {
-    let (mut cfg, _helper_secret) = vpn_config_with_secret(0xAB);
+fn vpn_backend_endpoint_requires_secret_for_unix_socket() {
+    let (mut cfg, _issuer_key) = vpn_config_with_credentials(0xAB);
     cfg.backend_bootstrap_secret_path = None;
     let unix_error = cfg
         .validate()
@@ -2211,19 +2275,12 @@ fn vpn_backend_endpoint_requires_secret_for_unix_and_tcp() {
     assert!(
         matches!(unix_error, ConfigError::Vpn(message) if message.contains("backend_bootstrap_secret_path"))
     );
-    cfg.backend_endpoint = Some("tcp://127.0.0.1:19090".to_string());
-    let err = cfg
-        .validate()
-        .expect_err("expected tcp bootstrap secret validation failure");
-    assert!(
-        matches!(err, ConfigError::Vpn(message) if message.contains("backend_bootstrap_secret_path"))
-    );
     let bootstrap_secret = write_vpn_secret(0xCD);
     cfg.backend_bootstrap_secret_path = Some(bootstrap_secret.path().to_path_buf());
-    cfg.validate().expect("tcp endpoint with secret");
-    assert_eq!(
-        cfg.backend_endpoint(),
-        Some(VpnBackendEndpoint::Tcp("127.0.0.1:19090".to_string()))
+    cfg.validate().expect("Unix endpoint with secret");
+    assert!(
+        cfg.backend_endpoint()
+            .is_some_and(|endpoint| endpoint.path().is_absolute())
     );
     assert_eq!(
         cfg.try_backend_bootstrap_secret_bytes()
@@ -2232,24 +2289,53 @@ fn vpn_backend_endpoint_requires_secret_for_unix_and_tcp() {
     );
 }
 #[test]
-fn vpn_backend_tcp_endpoint_rejects_non_loopback_transport() {
-    let (mut cfg, _helper_secret) = vpn_config_with_secret(0xAB);
+fn vpn_backend_tcp_endpoints_are_rejected() {
+    let (mut cfg, _issuer_key) = vpn_config_with_credentials(0xAB);
     let bootstrap_secret = write_vpn_secret(0xCD);
-    cfg.backend_endpoint = Some("tcp://192.0.2.1:19090".to_string());
     cfg.backend_bootstrap_secret_path = Some(bootstrap_secret.path().to_path_buf());
-    let err = cfg
+    for endpoint in ["tcp://127.0.0.1:19090", "tcp://192.0.2.1:19090"] {
+        cfg.backend_endpoint = Some(endpoint.to_owned());
+        let err = cfg
+            .validate()
+            .expect_err("every TCP backend must fail closed");
+        assert!(
+            matches!(&err, ConfigError::Vpn(message) if message.contains("TCP")),
+            "unexpected backend error for {endpoint}: {err:?}"
+        );
+    }
+}
+#[test]
+fn vpn_backend_peer_uid_and_gid_are_mandatory() {
+    let (mut cfg, _credentials) = vpn_config_with_credentials(0xAB);
+    cfg.backend_expected_uid = None;
+    let uid_error = cfg
         .validate()
-        .expect_err("remote TCP backend must fail closed");
+        .expect_err("VPN backend UID must be explicitly pinned");
     assert!(
-        matches!(&err, ConfigError::Vpn(message) if message.contains("loopback")),
-        "unexpected remote backend error: {err:?}"
+        matches!(uid_error, ConfigError::Vpn(message) if message.contains("backend_expected_uid"))
+    );
+
+    cfg.backend_expected_uid = Some(0);
+    cfg.backend_expected_gid = None;
+    let gid_error = cfg
+        .validate()
+        .expect_err("VPN backend GID must be explicitly pinned");
+    assert!(
+        matches!(gid_error, ConfigError::Vpn(message) if message.contains("backend_expected_gid"))
     );
 }
 #[test]
 fn vpn_fallible_accessors_decode_valid_private_files() {
-    let (mut cfg, _helper_secret) = vpn_config_with_secret(0xAB);
+    let (mut cfg, credentials) = vpn_config_with_credentials(0xAB);
     let bootstrap_secret = write_vpn_secret(0xCD);
-    cfg.backend_endpoint = Some(" tcp://127.0.0.1:19090 ".to_string());
+    cfg.backend_endpoint = Some(format!(
+        " unix:{} ",
+        credentials
+            ._receipt_spool
+            .path()
+            .join("accessor.sock")
+            .display()
+    ));
     cfg.backend_bootstrap_secret_path = Some(bootstrap_secret.path().to_path_buf());
     cfg.billing = VpnBillingConfig {
         meter_hash_hex: "ef".repeat(32),
@@ -2257,14 +2343,21 @@ fn vpn_fallible_accessors_decode_valid_private_files() {
     };
     cfg.validate().expect("vpn config validates");
     assert_eq!(cfg.try_meter_hash_bytes().expect("meter hash"), [0xEF; 32]);
+    let expected_issuer = KeyPair::try_from_seed(vec![0xAB; 32], Algorithm::Ed25519)
+        .expect("derive expected issuer keypair")
+        .public_key()
+        .clone();
     assert_eq!(
-        cfg.try_helper_ticket_secret_bytes().expect("helper secret"),
-        Some([0xAB; 32])
+        cfg.try_helper_ticket_issuer_public_key()
+            .expect("helper-ticket issuer public key"),
+        Some(expected_issuer)
     );
-    assert_eq!(
-        cfg.try_backend_endpoint().expect("backend endpoint"),
-        Some(VpnBackendEndpoint::Tcp("127.0.0.1:19090".to_string()))
+    assert!(
+        cfg.try_backend_endpoint()
+            .expect("backend endpoint")
+            .is_some_and(|endpoint| endpoint.path().is_absolute())
     );
+    assert_eq!(cfg.backend_expected_peer_ids(), Some((0, 0)));
     assert_eq!(
         cfg.try_backend_bootstrap_secret_bytes()
             .expect("bootstrap secret"),
@@ -2274,16 +2367,12 @@ fn vpn_fallible_accessors_decode_valid_private_files() {
     assert_eq!(overlay.meter_hash(), [0xEF; 32]);
 }
 #[test]
-fn vpn_overlay_try_from_config_rejects_invalid_helper_secret_without_panic() {
+fn vpn_overlay_try_from_config_rejects_invalid_issuer_key_without_panic() {
     let file = NamedTempFile::new_in(std::env::current_dir().expect("current directory"))
-        .expect("create invalid helper secret");
-    std::fs::write(file.path(), "not-hex").expect("write invalid helper secret");
-    let cfg = VpnConfig {
-        enabled: true,
-        helper_ticket_secret_path: Some(file.path().to_path_buf()),
-        backend_bootstrap_secret_path: Some(file.path().to_path_buf()),
-        ..VpnConfig::default()
-    };
+        .expect("create invalid issuer key");
+    std::fs::write(file.path(), "not-hex").expect("write invalid issuer key");
+    let (mut cfg, _credentials) = vpn_config_with_credentials(0xA9);
+    cfg.helper_ticket_issuer_public_key_path = Some(file.path().to_path_buf());
     match VpnOverlay::try_from_config(cfg) {
         Err(ConfigError::Vpn(message)) => assert!(
             message.contains("64 lowercase hexadecimal"),
@@ -2294,7 +2383,7 @@ fn vpn_overlay_try_from_config_rejects_invalid_helper_secret_without_panic() {
 }
 #[test]
 fn vpn_backend_endpoint_rejects_invalid_endpoint() {
-    let (mut cfg, _helper_secret) = vpn_config_with_secret(0xAB);
+    let (mut cfg, _issuer_key) = vpn_config_with_credentials(0xAB);
     cfg.backend_endpoint = Some("not-a-socket".to_string());
     let err = cfg
         .validate()
@@ -2311,17 +2400,57 @@ fn vpn_backend_endpoint_rejects_invalid_endpoint() {
 }
 #[test]
 fn vpn_receipt_spool_dir_preserves_operator_path() {
-    let (mut cfg, _helper_secret) = vpn_config_with_secret(0xAB);
-    cfg.receipt_spool_dir = Some(PathBuf::from("/var/spool/soranet/vpn-receipts"));
+    #[cfg(unix)]
+    use std::os::unix::fs::PermissionsExt as _;
+    let (mut cfg, _issuer_key) = vpn_config_with_credentials(0xAB);
+    let spool = tempfile::tempdir_in(std::env::current_dir().expect("current directory"))
+        .expect("create receipt spool directory");
+    #[cfg(unix)]
+    std::fs::set_permissions(spool.path(), std::fs::Permissions::from_mode(0o700))
+        .expect("protect receipt spool directory");
+    cfg.receipt_spool_dir = Some(spool.path().to_path_buf());
     cfg.validate().expect("vpn config should validate");
+    let canonical_spool = std::fs::canonicalize(spool.path()).expect("canonical spool path");
     assert_eq!(
         cfg.receipt_spool_dir.as_deref(),
-        Some(Path::new("/var/spool/soranet/vpn-receipts"))
+        Some(canonical_spool.as_path())
     );
 }
 #[test]
+fn enabled_vpn_requires_durable_receipt_spool() {
+    let (mut cfg, _credentials) = vpn_config_with_credentials(0xAE);
+    cfg.receipt_spool_dir = None;
+    let error = cfg
+        .validate()
+        .expect_err("enabled VPN must not discard settlement artifacts");
+    assert!(
+        matches!(error, ConfigError::Vpn(message) if message.contains("receipt_spool_dir must be set"))
+    );
+}
+#[cfg(unix)]
+#[test]
+fn vpn_receipt_spool_dir_rejects_relative_or_permissive_paths() {
+    use std::os::unix::fs::PermissionsExt as _;
+
+    let (mut cfg, _issuer_key) = vpn_config_with_credentials(0xAC);
+    cfg.receipt_spool_dir = Some(PathBuf::from("relative-vpn-receipts"));
+    let relative_error = cfg.validate().expect_err("relative spool must fail");
+    assert!(
+        matches!(relative_error, ConfigError::Vpn(message) if message.contains("must be absolute"))
+    );
+
+    let spool = tempfile::tempdir_in(std::env::current_dir().expect("current directory"))
+        .expect("create receipt spool directory");
+    std::fs::set_permissions(spool.path(), std::fs::Permissions::from_mode(0o755))
+        .expect("make receipt spool permissive");
+    let (mut cfg, _issuer_key) = vpn_config_with_credentials(0xAD);
+    cfg.receipt_spool_dir = Some(spool.path().to_path_buf());
+    let mode_error = cfg.validate().expect_err("permissive spool must fail");
+    assert!(matches!(mode_error, ConfigError::Vpn(message) if message.contains("mode 0700")));
+}
+#[test]
 fn vpn_control_plane_threads_routes_and_dns() {
-    let (mut cfg, _helper_secret) = vpn_config_with_secret(0xAB);
+    let (mut cfg, _issuer_key) = vpn_config_with_credentials(0xAB);
     cfg.lease_secs = 45;
     cfg.route_push = vec!["10.0.0.0/24".to_string()];
     cfg.dns_overrides = vec!["1.1.1.1".to_string()];

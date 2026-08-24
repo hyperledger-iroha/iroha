@@ -63,6 +63,32 @@ fn sorafs_provider_owner_transition_requires_full_parliament_gate() {
     );
 }
 #[test]
+fn sorafs_provider_governance_proposer_must_be_a_fully_bonded_citizen() {
+    blank_test_state_transaction!(state, block, state_transaction);
+    state_transaction.gov.citizenship_bond_amount = Quantity::from(10_u32);
+
+    assert!(
+        super::ensure_sorafs_provider_governance_proposer(&ALICE_ID, &state_transaction).is_err(),
+        "an unregistered account must not propose provider governance",
+    );
+
+    state_transaction.world.citizens.insert(
+        ALICE_ID.clone(),
+        crate::state::CitizenshipRecord::new(ALICE_ID.clone(), Quantity::from(9_u32), 1),
+    );
+    assert!(
+        super::ensure_sorafs_provider_governance_proposer(&ALICE_ID, &state_transaction).is_err(),
+        "an under-bonded citizen must not propose provider governance",
+    );
+
+    state_transaction.world.citizens.insert(
+        ALICE_ID.clone(),
+        crate::state::CitizenshipRecord::new(ALICE_ID.clone(), Quantity::from(10_u32), 1),
+    );
+    super::ensure_sorafs_provider_governance_proposer(&ALICE_ID, &state_transaction)
+        .expect("a fully bonded citizen may propose provider governance");
+}
+#[test]
 fn contract_subject_binding_materializes_missing_account_and_preserves_existing_account() {
     let state = State::new_for_testing(
         World::default(),

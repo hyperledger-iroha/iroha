@@ -7779,8 +7779,6 @@ mod sorafs_tests {
             "CanCompleteSorafsReplicationOrder",
             "CanSetSorafsPricing",
             "CanUpsertSorafsProviderCredit",
-            "CanRegisterSorafsProviderOwner",
-            "CanUnregisterSorafsProviderOwner",
         ] {
             perms.insert(AccountPermission::new(name.to_string(), Json::new(())));
         }

@@ -3,7 +3,8 @@ fn canonical_association_stage_append_peak_rejects_before_any_stage_or_block_mut
     let temp_dir = TempDir::new().expect("association append capacity temp dir");
     let config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
     let (mut kura, _) =
-        Kura::new(&config, &RuntimeLaneConfig::default()).expect("association append Kura");
+        Kura::open_test_kura_with_configured_lane_config(&config, &RuntimeLaneConfig::default())
+            .expect("association append Kura");
     let block = DummyBlocks::new().next();
     let stage_bytes = kura
         .canonical_association_stage_additional_bytes(block.as_ref(), None)
@@ -73,7 +74,8 @@ fn canonical_association_stage_replace_peak_keeps_old_top_untouched_on_rejection
     let temp_dir = TempDir::new().expect("association replace capacity temp dir");
     let config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
     let (mut kura, _) =
-        Kura::new(&config, &RuntimeLaneConfig::default()).expect("association replace Kura");
+        Kura::open_test_kura_with_configured_lane_config(&config, &RuntimeLaneConfig::default())
+            .expect("association replace Kura");
     let original = DummyBlocks::new().next();
     let original_hash = original.hash();
     kura.store_block(original.clone())
@@ -211,8 +213,9 @@ fn post_marker_association_failure_poison_gates_and_restart_completes_stage() {
         ));
         block_hash
     };
-    let (reopened, count) = Kura::new(&config, &RuntimeLaneConfig::default())
-        .expect("restart must finish the committed association stage");
+    let (reopened, count) =
+        Kura::open_test_kura_with_configured_lane_config(&config, &RuntimeLaneConfig::default())
+            .expect("restart must finish the committed association stage");
     assert_eq!(count.0, 1);
     assert_eq!(
         reopened.get_durable_block_hash(nonzero!(1_usize)),

@@ -885,11 +885,6 @@ def test_protected_service_rank_aggregate_cannot_drop_exact_leaf(
     ("current_id", "retired_id", "retired_symbol"),
     (
         (
-            "same-round-lock-and-commit-authorization",
-            "historical-tc-lock-commit",
-            "HistoricalTcLockedCommitAuthorizationObligation",
-        ),
-        (
             "locked-body-reproposal",
             "locked-body-reproposal-liveness",
             "LockedBodyReproposalProgressObligation",

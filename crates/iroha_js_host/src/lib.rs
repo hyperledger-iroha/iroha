@@ -146,7 +146,7 @@ use iroha_data_model::{
     soracloud::{
         SORACLOUD_XOR_SCALE, SecretEnvelopeV1, encode_agent_deploy_provenance_payload,
         encode_bundle_with_materials_provenance_payload,
-        encode_hf_shared_lease_join_provenance_payload,
+        encode_hf_shared_lease_join_provenance_payload, is_canonical_hf_commit_oid_v1,
     },
     sorafs::{
         orderbook_submission::{
@@ -1388,7 +1388,7 @@ fn soracloud_source_hash(repo_id: &str, resolved_revision: &str) -> napi::Result
 #[napi]
 pub fn soracloud_build_hf_deploy_request_json(
     repo_id: String,
-    revision: Option<String>,
+    revision: String,
     model_name: String,
     service_name: String,
     apartment_name: Option<String>,
@@ -1399,10 +1399,13 @@ pub fn soracloud_build_hf_deploy_request_json(
     private_key_hex: String,
 ) -> napi::Result<String> {
     let repo_id = repo_id.trim().to_owned();
-    let revision = revision
-        .map(|value| value.trim().to_owned())
-        .filter(|value| !value.is_empty());
-    let resolved_revision = revision.clone().unwrap_or_else(|| "main".to_owned());
+    if !is_canonical_hf_commit_oid_v1(&revision) {
+        return Err(napi::Error::new(
+            napi::Status::InvalidArg,
+            "revision must be the full 40-character lowercase hexadecimal commit OID",
+        ));
+    }
+    let resolved_revision = revision;
     let model_name = model_name.trim().to_owned();
     let service_name = service_name
         .trim()
@@ -1517,12 +1520,10 @@ pub fn soracloud_build_hf_deploy_request_json(
         "repo_id".to_owned(),
         json::to_value(&repo_id).map_err(norito_to_napi)?,
     );
-    if let Some(revision) = &revision {
-        payload.insert(
-            "revision".to_owned(),
-            json::to_value(revision).map_err(norito_to_napi)?,
-        );
-    }
+    payload.insert(
+        "revision".to_owned(),
+        json::to_value(&resolved_revision).map_err(norito_to_napi)?,
+    );
     payload.insert(
         "model_name".to_owned(),
         json::to_value(&model_name).map_err(norito_to_napi)?,
@@ -11071,86 +11072,36 @@ fn zk_json_value(tag: &str, payload: json::Value) -> json::Value {
     outer.insert("zk".to_owned(), json::Value::Object(variant));
     json::Value::Object(outer)
 }
-fn try_decode_signed_transaction_adaptive_with_flags(
-    payload: &[u8],
-    flags: u8,
-) -> Result<SignedTransaction, String> {
-    let attempt = catch_unwind(AssertUnwindSafe(|| {
-        let _guard = norito_core::DecodeFlagsGuard::enter_with_hint(flags, flags);
-        norito::codec::decode_adaptive::<SignedTransaction>(payload)
-    }));
-    match attempt {
-        Ok(Ok(tx)) => Ok(tx),
-        Ok(Err(err)) => Err(err.to_string()),
-        Err(_) => Err("panic".to_owned()),
-    }
+fn encode_canonical_signed_transaction_v1(
+    transaction: &SignedTransaction,
+) -> napi::Result<Vec<u8>> {
+    transaction.encode_wire_v1().map_err(norito_to_napi)
 }
-fn try_decode_signed_transaction_versioned(bytes: &[u8]) -> Result<SignedTransaction, String> {
-    use norito_core::DecodeFromSlice as _;
-    if let Ok(tx) =
-        <SignedTransaction as iroha_version::codec::DecodeVersioned>::decode_all_versioned(bytes)
-    {
-        return Ok(tx);
+fn decode_canonical_signed_transaction_v1(bytes: &[u8]) -> napi::Result<SignedTransaction> {
+    use iroha_version::codec::DecodeVersioned as _;
+
+    if bytes.first() != Some(&1) {
+        return Err(napi::Error::new(
+            napi::Status::InvalidArg,
+            "signed transaction must be canonical VersionedSignedTransaction V1 bytes",
+        ));
     }
-    let Some((&version, payload)) = bytes.split_first() else {
-        return Err("empty payload".to_owned());
-    };
-    if version != 1 {
-        return Err(format!("unsupported version byte {version}"));
+    let _canonical_flags =
+        norito::core::DecodeFlagsGuard::enter(norito::core::default_encode_flags());
+    let transaction = SignedTransaction::decode_all_versioned(bytes).map_err(|error| {
+        napi::Error::new(
+            napi::Status::InvalidArg,
+            format!("invalid canonical VersionedSignedTransaction V1: {error}"),
+        )
+    })?;
+    let canonical = encode_canonical_signed_transaction_v1(&transaction)?;
+    if canonical.as_slice() != bytes {
+        return Err(napi::Error::new(
+            napi::Status::InvalidArg,
+            "signed transaction is not the exact canonical VersionedSignedTransaction V1 encoding",
+        ));
     }
-    let (decoded, used) =
-        SignedTransaction::decode_from_slice(payload).map_err(|err| err.to_string())?;
-    if used != payload.len() {
-        return Err(format!("trailing bytes ({used} of {} used)", payload.len()));
-    }
-    Ok(decoded)
-}
-fn decode_signed_transaction(bytes: &[u8]) -> napi::Result<SignedTransaction> {
-    use norito_core::DecodeFromSlice as _;
-    let mut attempts = Vec::new();
-    match try_decode_signed_transaction_versioned(bytes) {
-        Ok(decoded) => return Ok(decoded),
-        Err(err) => attempts.push(format!("versioned: {err}")),
-    }
-    match SignedTransaction::decode_from_slice(bytes) {
-        Ok((decoded, used)) if used == bytes.len() => return Ok(decoded),
-        Ok((_, used)) => attempts.push(format!(
-            "bare adaptive: trailing bytes ({used} of {} used)",
-            bytes.len()
-        )),
-        Err(err) => attempts.push(format!("bare adaptive: {err}")),
-    }
-    match norito::decode_from_bytes::<SignedTransaction>(bytes) {
-        Ok(decoded) => return Ok(decoded),
-        Err(err) => attempts.push(format!("framed norito: {err}")),
-    }
-    if let Ok(view) = norito_core::from_bytes_view(bytes) {
-        let payload = view.as_bytes();
-        let packed = norito_core::header_flags::PACKED_STRUCT;
-        for (label, flags) in [
-            ("framed payload flags", view.flags() | view.flags_hint()),
-            ("framed payload no flags", 0),
-            ("framed payload packed-struct", packed),
-        ] {
-            match try_decode_signed_transaction_adaptive_with_flags(payload, flags) {
-                Ok(decoded) => return Ok(decoded),
-                Err(err) => attempts.push(format!("{label}: {err}")),
-            }
-        }
-    }
-    match try_decode_signed_transaction_adaptive_with_flags(bytes, 0) {
-        Ok(decoded) => Ok(decoded),
-        Err(err) => {
-            attempts.push(format!("headerless adaptive fallback: {err}"));
-            Err(napi::Error::new(
-                napi::Status::GenericFailure,
-                format!(
-                    "failed to decode signed transaction; attempts: {}",
-                    attempts.join("; ")
-                ),
-            ))
-        }
-    }
+    Ok(transaction)
 }
 #[allow(clippy::too_many_arguments)] // mirrors TransactionBuilder inputs for clarity
 fn configure_transaction_builder(
@@ -11231,7 +11182,7 @@ fn assemble_executable_transaction(
     let algorithm = parse_crypto_algorithm(algorithm.as_deref())?;
     let private_key = PrivateKey::from_bytes(algorithm, secret).map_err(norito_to_napi)?;
     let signed = sign_js_transaction(builder, &private_key, "JavaScript host assembled")?;
-    let signed_bytes = Encode::encode(&signed);
+    let signed_bytes = encode_canonical_signed_transaction_v1(&signed)?;
     let hash = Buffer::from(signed.hash().as_ref().to_vec());
     Ok(JsSignedTransaction {
         signed_transaction: Buffer::from(signed_bytes),
@@ -11290,11 +11241,11 @@ fn checked_batch_executable(
     }
     Ok(executable)
 }
-/// Compute the canonical pipeline hash for a Norito-serialized signed transaction.
+/// Compute the canonical pipeline hash for an exact `VersionedSignedTransaction` V1 wire.
 #[napi]
 #[allow(clippy::needless_pass_by_value)] // N-API typed arrays require ownership at the boundary
 pub fn hash_signed_transaction(bytes: Uint8Array) -> napi::Result<Buffer> {
-    let tx = decode_signed_transaction(bytes.as_ref())?;
+    let tx = decode_canonical_signed_transaction_v1(bytes.as_ref())?;
     let hash = tx.hash();
     Ok(Buffer::from(hash.as_ref().to_vec()))
 }
@@ -11303,7 +11254,7 @@ pub fn hash_signed_transaction(bytes: Uint8Array) -> napi::Result<Buffer> {
 #[napi]
 #[allow(clippy::needless_pass_by_value)] // N-API typed arrays require ownership at the boundary
 pub fn hash_signed_transaction_payload(bytes: Uint8Array) -> napi::Result<Buffer> {
-    let tx = decode_signed_transaction(bytes.as_ref())?;
+    let tx = decode_canonical_signed_transaction_v1(bytes.as_ref())?;
     let hash = iroha_crypto::HashOf::new(tx.payload());
     Ok(Buffer::from(hash.as_ref().to_vec()))
 }
@@ -11315,12 +11266,11 @@ pub fn hash_instruction_batch(instructions_json: Vec<String>) -> napi::Result<Bu
     let hash = iroha_crypto::HashOf::new(&instructions);
     Ok(Buffer::from(hash.as_ref().to_vec()))
 }
-/// Decode a Norito-serialized signed transaction into its JSON representation.
+/// Decode an exact canonical `VersionedSignedTransaction` V1 wire into JSON.
 #[napi]
 #[allow(clippy::needless_pass_by_value)] // Uint8Array boundary requires ownership
 pub fn decode_signed_transaction_json(bytes: Uint8Array) -> napi::Result<String> {
-    ensure_packed_struct_disabled();
-    let tx = decode_signed_transaction(bytes.as_ref())?;
+    let tx = decode_canonical_signed_transaction_v1(bytes.as_ref())?;
     json::to_json(&tx).map_err(norito_to_napi)
 }
 /// Encode one JSON contract-call payload with the exact Kotodama entrypoint
@@ -11339,30 +11289,12 @@ pub fn encode_contract_argument_record_json(
         iroha_core::encode_argument_record_from_json(&schema, &payload).map_err(norito_to_napi)?;
     Ok(Buffer::from(record))
 }
-/// Convert a versioned signed transaction payload into Norito bytes.
-///
-/// This is used by Torii deployments that expose legacy `/transaction` submit
-/// endpoints expecting `application/x-norito`.
-#[napi]
-#[allow(clippy::needless_pass_by_value)] // Uint8Array boundary requires ownership
-pub fn encode_signed_transaction_norito(bytes: Uint8Array) -> napi::Result<Buffer> {
-    ensure_packed_struct_disabled();
-    let tx = decode_signed_transaction(bytes.as_ref())?;
-    let encoded = norito::to_bytes(&tx).map_err(norito_to_napi)?;
-    Ok(Buffer::from(encoded))
-}
-/// Convert a signed transaction payload into versioned adaptive Norito bytes.
-///
-/// This is the public `/transaction` payload shape accepted by Torii routes
-/// that decode `SignedTransaction::decode_all_versioned`.
+/// Validate and return the exact canonical `VersionedSignedTransaction` V1 wire.
 #[napi]
 #[allow(clippy::needless_pass_by_value)] // Uint8Array boundary requires ownership
 pub fn encode_signed_transaction_versioned(bytes: Uint8Array) -> napi::Result<Buffer> {
-    ensure_packed_struct_disabled();
-    let tx = decode_signed_transaction(bytes.as_ref())?;
-    let encoded =
-        <SignedTransaction as iroha_version::codec::EncodeVersioned>::encode_versioned(&tx);
-    Ok(Buffer::from(encoded))
+    let tx = decode_canonical_signed_transaction_v1(bytes.as_ref())?;
+    Ok(Buffer::from(encode_canonical_signed_transaction_v1(&tx)?))
 }
 /// Encode a `/v1/pipeline/transactions/batch` payload as a framed Norito
 /// `Vec<Vec<u8>>`, where every item is a versioned signed transaction payload.
@@ -11383,7 +11315,7 @@ pub fn encode_transaction_payload_batch(payloads: Vec<Buffer>) -> napi::Result<B
     let encoded = norito::to_bytes(&payloads).map_err(norito_to_napi)?;
     Ok(Buffer::from(encoded))
 }
-/// Re-sign a Norito-serialized transaction with the provided Ed25519 private key
+/// Re-sign an exact canonical `VersionedSignedTransaction` V1 wire with the provided Ed25519 private key
 /// and return the updated signed transaction bytes.
 ///
 /// The caller must provide the exact expected genesis-derived network identity;
@@ -11396,7 +11328,7 @@ pub fn sign_transaction(
     secret: Uint8Array,
 ) -> napi::Result<Buffer> {
     let expected_network_id = parse_transaction_network_id_bytes(network_id.as_ref())?;
-    let tx = decode_signed_transaction(bytes.as_ref())?;
+    let tx = decode_canonical_signed_transaction_v1(bytes.as_ref())?;
     require_expected_transaction_network_id(
         tx.network_id(),
         &expected_network_id,
@@ -11406,7 +11338,9 @@ pub fn sign_transaction(
     let private_key =
         PrivateKey::from_bytes(Algorithm::Ed25519, secret.as_ref()).map_err(norito_to_napi)?;
     let signed = sign_js_transaction(builder, &private_key, "JavaScript host re-signed")?;
-    Ok(Buffer::from(Encode::encode(&signed)))
+    Ok(Buffer::from(encode_canonical_signed_transaction_v1(
+        &signed,
+    )?))
 }
 fn privacy_compiled_profile_catalog() -> napi::Result<PrivacyCompiledProfileCatalogV1> {
     let catalog = compiled_privacy_profile_catalog_v1().map_err(|error| {
@@ -11574,7 +11508,7 @@ pub fn privacy_require_exact12_capability_tuple_v1(
 /// Result of signing a transaction via the native helper.
 #[napi(object)]
 pub struct JsSignedTransaction {
-    /// Norito-encoded signed transaction bytes.
+    /// Exact canonical `VersionedSignedTransaction` V1 bytes.
     pub signed_transaction: Buffer,
     /// Canonical pipeline hash for the signed transaction.
     pub hash: Buffer,
@@ -12108,8 +12042,7 @@ pub fn finalize_signed_transaction(
         }
     }
     tx.verify_signature().map_err(norito_to_napi)?;
-    let signed_transaction =
-        <SignedTransaction as iroha_version::codec::EncodeVersioned>::encode_versioned(&tx);
+    let signed_transaction = encode_canonical_signed_transaction_v1(&tx)?;
     Ok(JsSignedTransaction {
         signed_transaction: Buffer::from(signed_transaction),
         hash: Buffer::from(tx.hash().as_ref().to_vec()),
@@ -12355,7 +12288,7 @@ pub fn sign_quoted_transaction_payload(
     let algorithm = parse_crypto_algorithm(private_key_algorithm.as_deref())?;
     let private_key = PrivateKey::from_bytes(algorithm, secret.as_ref()).map_err(norito_to_napi)?;
     let signed = sign_js_transaction(builder, &private_key, "quoted JavaScript payload")?;
-    let signed_bytes = Encode::encode(&signed);
+    let signed_bytes = encode_canonical_signed_transaction_v1(&signed)?;
     Ok(JsSignedTransaction {
         signed_transaction: Buffer::from(signed_bytes),
         hash: Buffer::from(signed.hash().as_ref().to_vec()),
@@ -12415,7 +12348,7 @@ pub fn sign_quoted_ivm_proved_transaction_payload(
         &private_key,
         "quoted proved-IVM JavaScript payload",
     )?;
-    let signed_bytes = Encode::encode(&signed);
+    let signed_bytes = encode_canonical_signed_transaction_v1(&signed)?;
     Ok(JsSignedTransaction {
         signed_transaction: Buffer::from(signed_bytes),
         hash: Buffer::from(signed.hash().as_ref().to_vec()),
@@ -13562,7 +13495,7 @@ mod tests {
     fn soracloud_hf_deploy_request_uses_current_quantity_contract() {
         let request_json = soracloud_build_hf_deploy_request_json(
             "openai/demo-model".to_owned(),
-            Some("main".to_owned()),
+            "0123456789abcdef0123456789abcdef01234567".to_owned(),
             "demo-model".to_owned(),
             "demo_model_service".to_owned(),
             Some("demo_agent".to_owned()),
@@ -13585,10 +13518,32 @@ mod tests {
         assert!(!payload.contains_key("base_fee_nanos"));
     }
     #[test]
+    fn soracloud_hf_deploy_request_rejects_mutable_or_noncanonical_revision() {
+        for revision in [
+            "main",
+            "0123456789abcdef",
+            "0123456789ABCDEF0123456789ABCDEF01234567",
+        ] {
+            soracloud_build_hf_deploy_request_json(
+                "openai/demo-model".to_owned(),
+                revision.to_owned(),
+                "demo-model".to_owned(),
+                "demo_model_service".to_owned(),
+                None,
+                "warm".to_owned(),
+                "86400000".to_owned(),
+                "4cuvDVPuLBKJyN6dPbRQhmLh68sU".to_owned(),
+                "10000".to_owned(),
+                "12".repeat(32),
+            )
+            .expect_err("HF deploy must require an immutable canonical commit OID");
+        }
+    }
+    #[test]
     fn soracloud_hf_draft_instruction_json_roundtrips() {
         let request_json = soracloud_build_hf_deploy_request_json(
             "openai/demo-model".to_owned(),
-            Some("main".to_owned()),
+            "0123456789abcdef0123456789abcdef01234567".to_owned(),
             "demo-model".to_owned(),
             "demo_model_service".to_owned(),
             None,
@@ -13609,7 +13564,7 @@ mod tests {
         .expect("decode deploy provenance");
         let instruction = iroha_data_model::isi::soracloud::JoinSoracloudHfSharedLease {
             repo_id: "openai/demo-model".to_owned(),
-            resolved_revision: "main".to_owned(),
+            resolved_revision: "0123456789abcdef0123456789abcdef01234567".to_owned(),
             model_name: "demo-model".to_owned(),
             service_name: "demo_model_service".parse().expect("service name"),
             apartment_name: None,
@@ -17221,7 +17176,7 @@ seiyaku Privacy {
         assert_eq!(reconstructed, instruction);
     }
     #[test]
-    fn decode_signed_transaction_accepts_supported_norito_rpc_fixture_subset() {
+    fn canonical_signed_transaction_decoder_rejects_framed_rpc_fixture() {
         let manifest_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
             .join("../../fixtures/norito_rpc/transaction_fixtures.manifest.json");
         let manifest_bytes = fs::read(&manifest_path)
@@ -17256,8 +17211,11 @@ seiyaku Privacy {
                 signed_base64,
                 "fixture {name} signed_base64 must be canonical"
             );
-            decode_signed_transaction(&signed_bytes)
-                .unwrap_or_else(|err| panic!("failed to decode fixture {name}: {err}"));
+            assert_eq!(&signed_bytes[..4], b"NRT0");
+            let error = decode_canonical_signed_transaction_v1(&signed_bytes)
+                .expect_err("framed signed-transaction fixtures are not the V1 submission wire");
+            assert_eq!(error.status, napi::Status::InvalidArg);
+            assert!(error.reason.contains("VersionedSignedTransaction V1"));
         }
     }
     #[test]
@@ -17346,7 +17304,7 @@ seiyaku Privacy {
             Some("ed25519".to_owned()),
         )
         .expect("sign quoted payload");
-        let signed = decode_signed_transaction(result.signed_transaction.as_ref())
+        let signed = decode_canonical_signed_transaction_v1(result.signed_transaction.as_ref())
             .expect("decode signed transaction");
         expected.fee_payment = quoted_intent;
         assert_eq!(signed.payload(), &expected);
@@ -17470,17 +17428,16 @@ seiyaku Privacy {
             authority: Some(authority_i105),
         })
         .expect("finalize externally signed transaction");
-        let transaction = decode_signed_transaction(finalized.signed_transaction.as_ref())
-            .expect("finalized versioned transaction must decode");
+        let transaction =
+            decode_canonical_signed_transaction_v1(finalized.signed_transaction.as_ref())
+                .expect("finalized versioned transaction must decode");
         transaction
             .verify_signature()
             .expect("finalized transaction signature must verify");
         assert_eq!(transaction.authority(), &authority);
         assert_eq!(
             finalized.signed_transaction.as_ref(),
-            <SignedTransaction as iroha_version::codec::EncodeVersioned>::encode_versioned(
-                &transaction
-            )
+            transaction.encode_wire_v1().expect("canonical V1 wire")
         );
         assert_eq!(finalized.hash.as_ref(), transaction.hash().as_ref());
     }
@@ -17663,7 +17620,7 @@ seiyaku Privacy {
         assert!(finalize_signed_transaction(valid_input()).is_ok());
     }
     #[test]
-    fn decode_signed_transaction_accepts_versioned_bytes() {
+    fn signed_transaction_codec_accepts_only_exact_canonical_v1_bytes() {
         let keypair = KeyPair::random_with_algorithm(Algorithm::Ed25519);
         let authority = AccountId::new(keypair.public_key().clone());
         let network_id = test_network_id(b"versioned-transaction");
@@ -17674,11 +17631,61 @@ seiyaku Privacy {
         );
         builder.set_creation_time(Duration::from_millis(1));
         let signed = builder.sign(keypair.private_key());
-        let mut versioned = vec![1];
-        versioned.extend(norito::codec::encode_adaptive(&signed));
-        let decoded = decode_signed_transaction(&versioned)
-            .expect("versioned signed transaction must decode");
+        let versioned = encode_canonical_signed_transaction_v1(&signed)
+            .expect("canonical signed transaction must encode");
+        let decoded = decode_canonical_signed_transaction_v1(&versioned)
+            .expect("canonical V1 signed transaction must decode");
         assert_eq!(decoded, signed);
+        assert_eq!(
+            encode_signed_transaction_versioned(Uint8Array::from(versioned.clone()))
+                .expect("public canonical V1 validator must accept exact bytes")
+                .as_ref(),
+            versioned.as_slice()
+        );
+
+        let bare = Encode::encode(&signed);
+        let framed = norito::to_bytes(&signed).expect("framed signed transaction");
+        let headerless = versioned[1..].to_vec();
+        let alternate_layout = {
+            let alternate_flags =
+                norito::core::default_encode_flags() ^ norito::core::header_flags::COMPACT_LEN;
+            let _alternate_flags = norito::core::DecodeFlagsGuard::enter(alternate_flags);
+            let mut bytes = vec![1];
+            norito::core::serialize_to_buffer(&signed, &mut bytes)
+                .expect("alternate-layout signed transaction");
+            bytes
+        };
+        assert_ne!(alternate_layout, versioned);
+        let packed_struct = {
+            let packed_flags =
+                norito::core::default_encode_flags() | norito::core::header_flags::PACKED_STRUCT;
+            let _packed_flags = norito::core::DecodeFlagsGuard::enter(packed_flags);
+            let mut bytes = vec![1];
+            norito::core::serialize_to_buffer(&signed, &mut bytes)
+                .expect("packed-struct signed transaction");
+            bytes
+        };
+        assert_ne!(packed_struct, versioned);
+        let mut unsupported = versioned.clone();
+        unsupported[0] = 2;
+        let mut trailing = versioned.clone();
+        trailing.push(0);
+        for (label, rejected) in [
+            ("bare", bare),
+            ("framed", framed),
+            ("headerless", headerless),
+            ("alternate-layout", alternate_layout),
+            ("packed-struct", packed_struct),
+            ("unsupported", unsupported),
+            ("trailing", trailing),
+        ] {
+            let error = decode_canonical_signed_transaction_v1(&rejected)
+                .expect_err("noncanonical signed transaction must fail closed");
+            assert_eq!(error.status, napi::Status::InvalidArg, "{label}");
+            let public_error = encode_signed_transaction_versioned(Uint8Array::from(rejected))
+                .expect_err("public canonical V1 validator must reject noncanonical bytes");
+            assert_eq!(public_error.status, napi::Status::InvalidArg, "{label}");
+        }
     }
     #[test]
     fn sign_js_transaction_checked_signing_verifies() {
@@ -17731,12 +17738,15 @@ seiyaku Privacy {
         let (_, secret) = keypair.private_key().to_bytes();
         let resigned = sign_transaction(
             Uint8Array::from(network_id.as_bytes().to_vec()),
-            Uint8Array::from(Encode::encode(&original)),
+            Uint8Array::from(
+                encode_canonical_signed_transaction_v1(&original)
+                    .expect("canonical original transaction"),
+            ),
             Uint8Array::from(secret),
         )
         .expect("re-sign transaction");
-        let decoded =
-            decode_signed_transaction(resigned.as_ref()).expect("decode re-signed transaction");
+        let decoded = decode_canonical_signed_transaction_v1(resigned.as_ref())
+            .expect("decode re-signed transaction");
         assert_eq!(decoded.fee_payment_intent(), &intent);
         decoded
             .verify_signature()
@@ -17761,7 +17771,10 @@ seiyaku Privacy {
         let (_, secret) = keypair.private_key().to_bytes();
         let foreign_error = sign_transaction(
             Uint8Array::from(network_id.as_bytes().to_vec()),
-            Uint8Array::from(Encode::encode(&foreign)),
+            Uint8Array::from(
+                encode_canonical_signed_transaction_v1(&foreign)
+                    .expect("canonical foreign transaction"),
+            ),
             Uint8Array::from(secret.clone()),
         )
         .err()
@@ -17770,7 +17783,10 @@ seiyaku Privacy {
         assert!(foreign_error.reason.contains("does not match"));
         let error = sign_transaction(
             Uint8Array::from(network_id.as_bytes().to_vec()),
-            Uint8Array::from(Encode::encode(&transaction)),
+            Uint8Array::from(
+                encode_canonical_signed_transaction_v1(&transaction)
+                    .expect("canonical genesis transaction"),
+            ),
             Uint8Array::from(secret),
         )
         .err()
@@ -17944,7 +17960,8 @@ seiyaku Privacy {
             },
         ))
         .sign(keypair.private_key());
-        let bytes = norito::to_bytes(&transaction).expect("encode signed transaction");
+        let bytes = encode_canonical_signed_transaction_v1(&transaction)
+            .expect("encode canonical signed transaction V1");
         let decoded = decode_signed_transaction_json(Uint8Array::from(bytes))
             .expect("decode signed transaction JSON");
         let value: json::Value = json::from_str(&decoded).expect("parse decoder JSON");
@@ -17992,7 +18009,8 @@ seiyaku Privacy {
             None,
         )
         .expect("transaction built");
-        let tx = decode_signed_transaction(result.signed_transaction.as_ref()).expect("decode");
+        let tx = decode_canonical_signed_transaction_v1(result.signed_transaction.as_ref())
+            .expect("decode");
         assert_eq!(tx.authority(), &authority);
         assert_eq!(tx.network_id(), Some(&network_id));
         tx.verify_signature()
@@ -18053,7 +18071,8 @@ seiyaku Privacy {
             Some("ed25519".to_owned()),
         )
         .expect("mixed batch transaction");
-        let tx = decode_signed_transaction(result.signed_transaction.as_ref()).expect("decode");
+        let tx = decode_canonical_signed_transaction_v1(result.signed_transaction.as_ref())
+            .expect("decode");
         assert_eq!(&tx.instructions().encode()[..4], &4_u32.to_le_bytes());
         let Executable::Batch(entries) = tx.instructions() else {
             panic!("expected batch executable")
@@ -18182,7 +18201,8 @@ seiyaku Privacy {
         )
         .expect("quoted transaction signed");
         let quoted_tx =
-            decode_signed_transaction(quoted_result.signed_transaction.as_ref()).expect("decode");
+            decode_canonical_signed_transaction_v1(quoted_result.signed_transaction.as_ref())
+                .expect("decode");
         assert_eq!(quoted_tx.fee_payment_intent(), &quoted);
         assert_eq!(
             quoted_tx.attachments(),
@@ -18208,7 +18228,8 @@ seiyaku Privacy {
             None,
         )
         .expect("transaction built");
-        let tx = decode_signed_transaction(result.signed_transaction.as_ref()).expect("decode");
+        let tx = decode_canonical_signed_transaction_v1(result.signed_transaction.as_ref())
+            .expect("decode");
         assert_eq!(tx.authority(), &authority);
         assert_eq!(tx.network_id(), Some(&network_id));
         match tx.instructions() {

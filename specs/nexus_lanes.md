@@ -243,7 +243,7 @@ LaneConfigEntry {
   elastic id range so it remains a stable base anchor. Live-state routing also
   requires `autoscale.enabled = true` and filters
   managed elastic candidates to the configured
-  `autoscale.min_lanes..autoscale.max_lanes` id range, so disabled autoscale
+  `autoscale.min_lane_id..autoscale.max_lane_id_exclusive` id range, so disabled autoscale
   or corrupted out-of-range managed lanes cannot receive
   default traffic. If that active elastic range contains a manual lane,
   malformed autoscale-managed lane, or managed lane outside the default
@@ -345,10 +345,10 @@ LaneConfigEntry {
   canonical lane for a dataspace. A dataspace with only autoscale-owned lanes
   fails closed with `no_lane_for_dataspace`.
   Corrupted runtime autoscale bounds or a default lane at or above
-  `autoscale.min_lanes` disable elastic sharding for routing and keep
+  `autoscale.min_lane_id` disable elastic sharding for routing and keep
   no-target default traffic on the configured default lane.
   Scale-out also requires a free id in the configured
-  `autoscale.min_lanes..autoscale.max_lanes` elastic range; hot windows fail
+  `autoscale.min_lane_id..autoscale.max_lane_id_exclusive` elastic range; hot windows fail
   closed without recording a transition once that range is exhausted, when the
   active elastic range is occupied by a manual or malformed managed lane, when
   the configured default route no longer resolves to the default dataspace, or
@@ -385,12 +385,12 @@ LaneConfigEntry {
   default-route capacity and complete historical sample-window preconditions as
   scale-out, and only retires when router-owned capacity is strictly above the
   configured default-route lane, so stale routing state or unrelated manual
-  lanes cannot retire an elastic lane. The `autoscale.min_lanes` and
-  `autoscale.max_lanes` values bound the autoscaler-owned elastic id range;
+  lanes cannot retire an elastic lane. The `autoscale.min_lane_id` and
+  `autoscale.max_lane_id_exclusive` values bound the autoscaler-owned elastic id range;
   they do not count unrelated public-profile base lanes as default-route
   capacity. Despite their compact names, these fields are not minimum and
-  maximum active-lane counts: `min_lanes` is the inclusive lane-id lower bound
-  and `max_lanes` is the exclusive upper bound. The range may contain vacant
+  maximum active-lane counts: `min_lane_id` is the inclusive lane-id lower bound
+  and `max_lane_id_exclusive` is the exclusive upper bound. The range may contain vacant
   ids, and it may start at the next id above the initial catalog namespace;
   lifecycle creation expands that namespace deterministically. The catalog's
   exclusive lane-id bound never shrinks when a lane is retired, so sparse lane
@@ -440,12 +440,12 @@ LaneConfigEntry {
   samples.
 - Autoscale configuration fails closed before runtime: lane bounds, block
   targets, decision windows, cooldown, and per-lane TPS must be positive;
-  `min_lanes < max_lanes` so the elastic id range is non-empty; and scale-in
+  `min_lane_id < max_lane_id_exclusive` so the elastic id range is non-empty; and scale-in
   thresholds must stay below scale-out thresholds so hysteresis cannot collapse
   into repeated lane churn. The block
   transition path repeats the lane-bound safety-cap and ratio sanity checks
   against the effective runtime state, so programmatic config swaps or
-  corrupted actual state cannot raise `max_lanes` above the compiled cap or
+  corrupted actual state cannot raise `max_lane_id_exclusive` above the compiled cap or
   reinterpret non-finite, zero, sub-permille, or collapsed thresholds as
   permissive scale-out/scale-in triggers. Raw scale-in ratios must remain
   strictly below scale-out ratios after conversion to the permille thresholds
@@ -509,15 +509,15 @@ LaneConfigEntry {
   explicit lifecycle retire so operators can repair corrupted ownership state.
   While
   `autoscale.enabled = true`, manual lanes also cannot be added inside the
-  configured `autoscale.min_lanes..autoscale.max_lanes` elastic id range; base,
+  configured `autoscale.min_lane_id..autoscale.max_lane_id_exclusive` elastic id range; base,
   governance, zk, or other operator-managed lanes must sit outside that range
   so they cannot consume deterministic scale-out capacity. The routing
-  `default_lane` must also remain below `autoscale.min_lanes`, giving the
+  `default_lane` must also remain below `autoscale.min_lane_id`, giving the
   default route a base anchor below the autoscale-owned elastic range. Config
   swaps may preserve an active autoscale-managed lane unchanged, but swaps that
   add, mutate, omit, or replace one fail atomically instead of silently converting
   it into a manual lane change. Preserved autoscale-managed lanes must stay inside
-  the configured `autoscale.min_lanes..autoscale.max_lanes` id range and remain
+  the configured `autoscale.min_lane_id..autoscale.max_lane_id_exclusive` id range and remain
   bound to `nexus.routing_policy.default_dataspace` so ownership cannot be
   stranded outside the autoscaler's create/retire range or default dataspace.
   Config swaps also cannot disable `autoscale.enabled` while owned elastic lanes

@@ -320,6 +320,8 @@ pub enum VegaMdlFigure9ArtifactSourceErrorV1 {
 }
 
 /// Fail-closed manifest, source, authentication, or installation failure.
+// Keep exact length diagnostics inline and allocation-free on this failure path.
+#[allow(variant_size_differences)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Error)]
 pub enum VegaMdlFigure9ArtifactQualificationErrorV1 {
     /// Manifest schema name or version differs from the sole released schema.

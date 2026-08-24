@@ -10,9 +10,8 @@ async fn dispatch_connect_session_status(
         &["sid", "token_management", "accept"],
         "connect.session.status",
     )?;
-    decode_canonical(arguments, "sid", 32)?;
+    let sid = canonical_connect_sid_argument(arguments)?;
     decode_canonical(arguments, "token_management", 32)?;
-    let sid = required_string(arguments, "sid")?;
     let token = required_string(arguments, "token_management")?;
     let path = format!("/v1/connect/status?sid={sid}");
     let headers = norito::json!({ "Authorization": (format!("Bearer {token}")) });

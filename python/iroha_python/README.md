@@ -756,7 +756,6 @@ if status_snapshot.status.lane_governance_sealed_total:
     print("sealed lanes remaining:", status_snapshot.status.lane_governance_sealed_total)
     if status_snapshot.status.lane_governance_sealed_aliases:
         print("sealed aliases:", ", ".join(status_snapshot.status.lane_governance_sealed_aliases))
-print("DA reschedules (delta):", status_snapshot.metrics.da_reschedule_delta)
 
 # Inspect governed consensus parameters
 params = client.get_sumeragi_params_typed()
@@ -1040,7 +1039,10 @@ print(session.helper_ticket_hex)
 
 Relay operators submit signed receipts with `submit_vpn_receipt`; the response
 returns earned/refund XOR fields plus a `SettleVpnLease` instruction skeleton in
-the optional `settle_lease_instruction` field.
+the optional `settle_lease_instruction` field. That submission response uses
+`status == "settlement_pending"` until the instruction commits; only a receipt
+read back from committed WSV state uses `status == "settled"`. Exact
+`disconnected`, `expired`, and `replaced` lifecycle statuses remain valid.
 
 ## Transaction helpers
 

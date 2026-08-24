@@ -2,7 +2,10 @@
 use super::SoracloudError;
 use futures_util::{Stream, StreamExt as _};
 use iroha_config::parameters::{actual::SoracloudRuntimeHuggingFace, defaults};
-use iroha_data_model::soracloud::{SoraHfBackendFamilyV1, SoraHfModelFormatV1};
+use iroha_data_model::soracloud::{
+    SORA_HF_GGUF_WEIGHT_FILE_EXTENSIONS_V1, SORA_HF_PYTORCH_WEIGHT_FILE_EXTENSIONS_V1,
+    SORA_HF_SAFETENSORS_WEIGHT_FILE_EXTENSIONS_V1, SoraHfBackendFamilyV1, SoraHfModelFormatV1,
+};
 use std::{collections::BTreeSet, fmt};
 const INITIAL_ALLOCATION_BYTES: usize = 16 * 1024;
 type WeightFileSelection = (SoraHfBackendFamilyV1, SoraHfModelFormatV1, Vec<String>);
@@ -72,28 +75,34 @@ pub(super) fn select_weight_files(
     repo_id: &str,
     resolved_revision: &str,
 ) -> Result<Option<WeightFileSelection>, SoracloudError> {
-    const GGUF: &[&str] = &[".gguf"];
-    const SAFETENSORS: &[&str] = &[".safetensors"];
-    const PYTORCH: &[&str] = &[".bin", ".pt", ".pth"];
     let maximum_files = configured_maximum_weight_files(config)?;
-    let (backend_family, model_format, extensions) =
-        if sibling_paths(model_info).any(|path| has_extension(path, GGUF)) {
-            (SoraHfBackendFamilyV1::Gguf, SoraHfModelFormatV1::Gguf, GGUF)
-        } else if sibling_paths(model_info).any(|path| has_extension(path, SAFETENSORS)) {
-            (
-                SoraHfBackendFamilyV1::Transformers,
-                SoraHfModelFormatV1::Safetensors,
-                SAFETENSORS,
-            )
-        } else if sibling_paths(model_info).any(|path| has_extension(path, PYTORCH)) {
-            (
-                SoraHfBackendFamilyV1::Transformers,
-                SoraHfModelFormatV1::PyTorch,
-                PYTORCH,
-            )
-        } else {
-            return Ok(None);
-        };
+    let (backend_family, model_format, extensions) = if sibling_paths(model_info)
+        .any(|path| has_extension(path, SORA_HF_GGUF_WEIGHT_FILE_EXTENSIONS_V1))
+    {
+        (
+            SoraHfBackendFamilyV1::Gguf,
+            SoraHfModelFormatV1::Gguf,
+            SORA_HF_GGUF_WEIGHT_FILE_EXTENSIONS_V1,
+        )
+    } else if sibling_paths(model_info)
+        .any(|path| has_extension(path, SORA_HF_SAFETENSORS_WEIGHT_FILE_EXTENSIONS_V1))
+    {
+        (
+            SoraHfBackendFamilyV1::Transformers,
+            SoraHfModelFormatV1::Safetensors,
+            SORA_HF_SAFETENSORS_WEIGHT_FILE_EXTENSIONS_V1,
+        )
+    } else if sibling_paths(model_info)
+        .any(|path| has_extension(path, SORA_HF_PYTORCH_WEIGHT_FILE_EXTENSIONS_V1))
+    {
+        (
+            SoraHfBackendFamilyV1::Transformers,
+            SoraHfModelFormatV1::PyTorch,
+            SORA_HF_PYTORCH_WEIGHT_FILE_EXTENSIONS_V1,
+        )
+    } else {
+        return Ok(None);
+    };
     let mut seen = BTreeSet::new();
     let mut weight_files = Vec::new();
     weight_files

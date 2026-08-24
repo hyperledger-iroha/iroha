@@ -50,7 +50,10 @@ Schema and resource enforcement:
 - Typed decoders must reject payloads whose header schema hash does not match
   the expected type. `ArchiveView::decode` performs this check; use
   `ArchiveView::decode_unchecked` only for raw inspection tools. Both methods,
-  plus `decode_exact`, always install payload-derived resource limits.
+  plus `decode_exact`, always install payload-derived resource limits and
+  require the value decoder to consume the complete checksummed payload.
+  Zero-filled bytes are valid only as the exact alignment padding between the
+  header and payload; a zero-filled logical tail is not a second encoding.
 
 ## Header Flags
 
@@ -78,8 +81,9 @@ field is self-delimiting and therefore no explicit compact size prefix appears.
 Default v1 payloads use `COMPACT_LEN` (`flags = 0x02`) while keeping the minor
 version byte fixed at `0x00`. The header flag byte is therefore the source of
 truth for compact per-value lengths; decoders must not infer compactness from
-the version or from payload heuristics. Legacy fixed-width per-value prefixes
-remain supported when a caller explicitly encodes with `flags = 0x00`.
+the version or from payload heuristics. Fixed-width per-value prefixes are a
+distinct advertised V1 mode when a caller explicitly encodes with
+`flags = 0x00`.
 
 ## Length Prefixes
 
@@ -121,6 +125,9 @@ layout:
 - The plan returns element byte ranges in original sequence order and the total
   bytes consumed from the sequence payload. Semantic decode and validation still
   happen on CPU and must report failures in original index order.
+- Each declared element span is authoritative. A zero-length span is valid only
+  when that element type's canonical encoding is empty; it is never treated as
+  a missing length whose payload can be recovered from following bytes.
 - Optional Metal/CUDA helpers may compute the spans for large payloads, but
   helper results are self-tested and validated against the scalar planner before
   use. An unavailable backend falls back to the scalar planner for that call.
@@ -580,7 +587,7 @@ Norito record.
 Maps encode deterministically with the same active layout flags:
 
 - Entry count uses a fixed 8-byte little-endian u64 header.
-- Compat layout (`PACKED_SEQ` unset): for each entry,
+- Length-prefixed layout (`PACKED_SEQ` unset): for each entry,
   `[key_len][key_payload][value_len][value_payload]` with key/value lengths
   encoded via `COMPACT_LEN`.
 - Packed layout (`PACKED_SEQ` set): key sizes and value sizes precede the data,
@@ -633,7 +640,7 @@ payloads stay consistent with their parent Norito headers.
 When the `PACKED_STRUCT` flag is set, derive-generated structs/tuples are
 encoded as a single packed payload with one of two layouts:
 
-- Compat packed-struct (no `FIELD_BITSET`): `(field_count + 1)` little-endian
+- Offset-table packed-struct (no `FIELD_BITSET`): `(field_count + 1)` little-endian
   `u64` offsets followed by concatenated field payloads. Offsets start at 0,
   are cumulative byte lengths of each field payload in declaration order, and
   the final offset equals the total data length and must fit inside the active
@@ -652,18 +659,19 @@ encoded as a single packed payload with one of two layouts:
   is never reinterpreted as a fixed-width `u64`.
 
 Field payloads themselves use the active layout flags (e.g., `PACKED_SEQ`,
-`COMPACT_LEN`) when encoding nested collections or string/blob values.
-Length-framed enum fields are decoded only from the bytes inside their declared
-frame; there is no compatibility retry that can consume following variant
-fields.
+`COMPACT_LEN`) when encoding nested collections or string/blob values. Every
+derive-generated typed field with a declared frame or explicit size is decoded
+canonically and must consume exactly its declared span; fixed byte arrays use
+an equivalent exact-length copy. Trailing bytes inside a declared frame are
+rejected; there is no archived-value retry that can accept another field
+encoding or consume following fields.
 
-Fields annotated with `#[norito(default)]` or a custom default remain ordinary
-encoded fields when present and consume their declaration-order packed span.
-The default is used only when a compatible older positional payload ends before
-an appended trailing field; malformed present values are rejected rather than
-replaced by a default. Defaults do not make middle-field insertion or reordering
-compatible. Packed-struct field-count or bitset changes require a versioned
-layout.
+Fields annotated with `#[norito(default)]` or a custom default remain mandatory
+ordinary binary fields and consume their declaration-order packed span. Those
+attributes supply values only for absent JSON fields. A missing or malformed
+binary field is rejected; binary decoding never synthesizes an omitted
+positional value. Packed-struct field-count or bitset changes require a new
+advertised layout.
 
 Every derive-generated enum tag is a canonical little-endian `u32`. An explicit
 Rust discriminant selects the wire tag, and subsequent implicit variants follow

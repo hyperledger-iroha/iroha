@@ -1609,8 +1609,8 @@ fn lane_proof_scheme_rejects_future_created_autoscale_lane_before_committed_heig
         elastic_lane,
     ]));
     nexus.autoscale.enabled = true;
-    nexus.autoscale.min_lanes = NonZeroU32::new(1).expect("non-zero min lanes");
-    nexus.autoscale.max_lanes = NonZeroU32::new(3).expect("non-zero max lanes");
+    nexus.autoscale.min_lane_id = NonZeroU32::new(1).expect("non-zero min lanes");
+    nexus.autoscale.max_lane_id_exclusive = NonZeroU32::new(3).expect("non-zero max lanes");
     let err = lane_proof_scheme(&nexus, lane_id, 6)
         .expect_err("future-created autoscale lane must not resolve before creation height");
     assert_eq!(err.0, StatusCode::BAD_REQUEST);

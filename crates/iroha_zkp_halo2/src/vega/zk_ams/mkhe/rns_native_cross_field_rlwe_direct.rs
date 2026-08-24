@@ -79,8 +79,6 @@
 use core::{fmt, marker::PhantomData};
 use std::sync::OnceLock;
 
-#[cfg(test)]
-use super::rns_native_transcript::ZkAmsMkheRnsNativeCrossFieldRootClaimV1;
 use super::{
     collective::RnsNativeClaimedDirectNumericOriginV2,
     rns_native_claimed_successor::RnsNativeClaimedSuccessorV1,
@@ -1034,27 +1032,6 @@ impl RelationScheduleV1 {
             schedule: self,
             terminal_chronology,
         })
-    }
-
-    /// Bind the authenticated claimed root before the successor chain is
-    /// traversed.  The returned transcript is provisional; this schedule keeps
-    /// the sole equality obligation for the later direct-core verification.
-    #[cfg(test)]
-    pub(super) fn bind_claimed_cross_field_root_v1(
-        &mut self,
-        claim: ZkAmsMkheRnsNativeCrossFieldRootClaimV1,
-    ) -> Result<ZkAmsMkheRnsNativeCrossFieldBoundTranscriptV1, RnsNativeCrossFieldRlweDirectErrorV1>
-    {
-        if self.cross_field_root_equality_obligation.is_some() {
-            return Err(RnsNativeCrossFieldRlweDirectErrorV1::InvalidContext);
-        }
-        let (transcript, obligation) = self
-            .bound
-            .completed_qpcs
-            .bind_claimed_cross_field_root_v1(claim)
-            .map_err(map_qpcs_complete_error_v1)?;
-        self.cross_field_root_equality_obligation = Some(obligation);
-        Ok(transcript)
     }
 
     const fn has_claimed_cross_field_root_v1(&self) -> bool {
@@ -3808,23 +3785,6 @@ impl RnsNativeCrossFieldRlweFourCorePendingSealV1 {
         }
         Ok(())
     }
-
-    #[cfg(test)]
-    fn seal_preflighted_v1(
-        self,
-        successor: &[u8],
-        successor_preflight: SuccessorPreflightV1,
-    ) -> Result<Vec<u8>, RnsNativeCrossFieldRlweDirectErrorV1> {
-        self.validate_v1()?;
-        encode_wire_preflighted_v1(
-            &self.inputs,
-            &self.proofs,
-            &self.transcript_digests,
-            self.proof_set_digest,
-            successor,
-            successor_preflight,
-        )
-    }
 }
 
 /// Four-core owner after its opaque root has been consumed by the exact qPCS
@@ -4031,23 +3991,6 @@ where
     }
     drop(source);
     RnsNativeCrossFieldRlweFourCorePendingSealV1::from_parts_v1(inputs, proofs, transcript_digests)
-}
-
-#[cfg(test)]
-fn prove_kernel_for_suite_v1<S, P, R>(
-    schedule: RelationScheduleV1,
-    source: P,
-    successor: &[u8],
-    rng: &mut R,
-) -> Result<Vec<u8>, RnsNativeCrossFieldRlweDirectErrorV1>
-where
-    S: ProofSuite<Scalar = Scalar, Point = Point>,
-    P: RnsNativeCrossFieldQuotientOpeningSourceV1,
-    R: ProofRandomSource,
-{
-    let successor_preflight = SuccessorPreflightV1::new_v1(successor)?;
-    prove_pending_kernel_for_suite_v1::<S, P, R>(schedule, source, rng)?
-        .seal_preflighted_v1(successor, successor_preflight)
 }
 
 fn verify_kernel_for_suite_v1<'a, S, P>(

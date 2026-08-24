@@ -44,7 +44,8 @@ pub mod isi {
         domain::{CanModifyDomainMetadata, CanUnregisterDomain},
         executor::CanUpgradeExecutor,
         governance::{
-            CanEnactGovernance, CanManageParliament, CanManageVerifyingKeys,
+            CanEnactGovernance, CanManageConfidentialParams, CanManageConsensusKeys,
+            CanManageParliament, CanManageRuntimeUpgrades, CanManageVerifyingKeys,
             CanProposeContractDeployment, CanProposeRuntimeUpgrade, CanRecordCitizenService,
             CanRestituteGovernanceLock, CanSlashGovernanceLock, CanSubmitGovernanceBallot,
         },
@@ -53,7 +54,6 @@ pub mod isi {
         peer::CanManageLaneRelayEmergency,
         sccp::CanProposeSccpRouteGovernance,
         smart_contract::CanRegisterSmartContractCode,
-        sorafs::{CanRegisterSorafsProviderOwner, CanUnregisterSorafsProviderOwner},
     };
     use std::{
         collections::{BTreeMap, BTreeSet},
@@ -676,49 +676,6 @@ pub mod isi {
             }
         }
         Ok(())
-    }
-    /// Intentionally untyped legacy unit capabilities that have no executor-data-model token.
-    #[derive(Clone, Copy)]
-    enum LegacyUnscopedPermission {
-        RuntimeUpgrades,
-        ConsensusKeys,
-        ConfidentialParams,
-    }
-    impl LegacyUnscopedPermission {
-        const fn name(self) -> &'static str {
-            match self {
-                Self::RuntimeUpgrades => "CanManageRuntimeUpgrades",
-                Self::ConsensusKeys => "CanManageConsensusKeys",
-                Self::ConfidentialParams => "CanManageConfidentialParams",
-            }
-        }
-    }
-    /// Match one sealed, intentionally untyped legacy unit capability by name.
-    ///
-    /// Typed permissions, including unit structs, must use [`has_exact_permission`] so an
-    /// attacker-controlled same-name payload cannot authorize an operation. Taking the private
-    /// enum instead of `&str` prevents new typed-token checks from accidentally using this path.
-    fn has_legacy_unscoped_permission(
-        world: &WorldTransaction<'_, '_>,
-        who: &AccountId,
-        permission: LegacyUnscopedPermission,
-    ) -> bool {
-        let name = permission.name();
-        if world
-            .account_permissions
-            .get(who)
-            .is_some_and(|perms| perms.iter().any(|p| p.name() == name))
-        {
-            return true;
-        }
-        world
-            .account_roles_iter(who)
-            .filter_map(|role_id| world.roles.get(role_id))
-            .any(|role| {
-                role.permissions
-                    .iter()
-                    .any(|permission| permission.name() == name)
-            })
     }
     fn has_exact_permission(
         world: &WorldTransaction<'_, '_>,
@@ -2058,30 +2015,6 @@ pub mod isi {
             .try_mul_decimal(&Numeric::from(multiplier))
             .expect("bounded governance bond multiplier must remain representable")
     }
-    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-    enum GovernanceApprovalMode {
-        ParliamentSortitionJit,
-        LegacyCouncilEpoch,
-    }
-    fn resolve_governance_approval_mode(
-        state_transaction: &StateTransaction<'_, '_>,
-    ) -> GovernanceApprovalMode {
-        let catalog = &state_transaction.nexus.governance;
-        let Some(module_name) = catalog.default_module.as_deref() else {
-            return GovernanceApprovalMode::LegacyCouncilEpoch;
-        };
-        let module_type = catalog
-            .modules
-            .get(module_name)
-            .and_then(|module| module.module_type.as_deref())
-            .unwrap_or(module_name);
-        let normalized = module_type.trim().to_ascii_lowercase().replace('-', "_");
-        if normalized.contains("parliament") || normalized.contains("sortition") {
-            GovernanceApprovalMode::ParliamentSortitionJit
-        } else {
-            GovernanceApprovalMode::LegacyCouncilEpoch
-        }
-    }
     fn latest_governance_entropy_seed(state_transaction: &StateTransaction<'_, '_>) -> [u8; 32] {
         if let Some((_epoch, record)) = state_transaction.world.vrf_epochs.iter().last() {
             return record.seed;
@@ -2142,19 +2075,6 @@ pub mod isi {
         out.copy_from_slice(&digest[..32]);
         out
     }
-    fn compute_parliament_roster_root(
-        bodies: &iroha_data_model::governance::types::ParliamentBodies,
-    ) -> Result<[u8; 32], Error> {
-        let encoded = norito::encode_canonical(bodies).map_err(|_| {
-            InstructionExecutionError::InvariantViolation(
-                "failed to encode parliament roster commitment".into(),
-            )
-        })?;
-        let digest = Blake2b512::digest(encoded);
-        let mut root = [0u8; 32];
-        root.copy_from_slice(&digest[..32]);
-        Ok(root)
-    }
     fn derive_jit_parliament_snapshot(
         proposal_id: [u8; 32],
         created_height: u64,
@@ -2198,13 +2118,8 @@ pub mod isi {
                 .map(|(account_id, bond)| (account_id, bond.clone())),
             iroha_data_model::isi::governance::CouncilDerivationKind::Sortition,
         );
-        let roster_root = compute_parliament_roster_root(&bodies)?;
-        Ok(crate::state::GovernanceParliamentSnapshot {
-            selection_epoch,
-            beacon,
-            roster_root,
-            bodies,
-        })
+        crate::state::GovernanceParliamentSnapshot::try_new(beacon, bodies)
+            .map_err(|error| InstructionExecutionError::InvariantViolation(error.into()))
     }
     fn lock_voting_bond(
         ballot_amount: &Quantity,
@@ -2662,23 +2577,17 @@ pub mod isi {
             let rules = validation_fee_plain_electorate_rules(&proposal.kind)
                 .expect("validation-fee proposal helper must retain PLAIN electorate rules");
             let expected = validation_fee_lock_custody(rules);
-            return match rec.custody.as_ref() {
-                Some(actual) if actual == &expected => Ok(expected),
-                Some(_) => Err(InstructionExecutionError::InvariantViolation(
+            return if rec.custody == expected {
+                Ok(expected)
+            } else {
+                Err(InstructionExecutionError::InvariantViolation(
                     "validation-fee governance lock custody differs from its immutable proposal rules"
                         .into(),
                 )
-                .into()),
-                None => Err(InstructionExecutionError::InvariantViolation(
-                    "validation-fee governance lock is missing immutable proposal custody".into(),
-                )
-                .into()),
+                .into())
             };
         }
-        Ok(rec
-            .custody
-            .clone()
-            .unwrap_or_else(|| governance_lock_custody(&state_transaction.gov)))
+        Ok(rec.custody.clone())
     }
     fn ensure_manifest_signature(
         manifest: &ContractManifest,
@@ -3121,12 +3030,8 @@ pub mod isi {
                 referendum_snapshot.as_ref(),
                 &state_transaction.gov,
             );
-            let parliament_snapshot = match resolve_governance_approval_mode(state_transaction) {
-                GovernanceApprovalMode::ParliamentSortitionJit => Some(
-                    derive_jit_parliament_snapshot(id, created_height, state_transaction)?,
-                ),
-                GovernanceApprovalMode::LegacyCouncilEpoch => None,
-            };
+            let parliament_snapshot =
+                derive_jit_parliament_snapshot(id, created_height, state_transaction)?;
             let rec = crate::state::GovernanceProposalRecord {
                 proposer: authority.clone(),
                 kind: kind.clone(),
@@ -3214,21 +3119,8 @@ pub mod isi {
     }
     fn ensure_sorafs_provider_governance_proposer(
         authority: &AccountId,
-        action: &iroha_data_model::isi::sorafs::SorafsProviderGovernanceActionV1,
         state_transaction: &StateTransaction<'_, '_>,
     ) -> Result<(), Error> {
-        let required_permission: Permission = match action {
-            iroha_data_model::isi::sorafs::SorafsProviderGovernanceActionV1::Establish(_)
-            | iroha_data_model::isi::sorafs::SorafsProviderGovernanceActionV1::Rebind(_) => {
-                CanRegisterSorafsProviderOwner.into()
-            }
-            iroha_data_model::isi::sorafs::SorafsProviderGovernanceActionV1::Remove(_) => {
-                CanUnregisterSorafsProviderOwner.into()
-            }
-        };
-        if has_exact_permission(&state_transaction.world, authority, &required_permission) {
-            return Ok(());
-        }
         let required = &state_transaction.gov.citizenship_bond_amount;
         if state_transaction
             .world
@@ -3239,7 +3131,7 @@ pub mod isi {
             return Ok(());
         }
         Err(InstructionExecutionError::InvariantViolation(
-            "not permitted: a bonded citizen or legacy SoraFS provider-governance proposal permission is required"
+            "not permitted: a bonded citizen is required to propose SoraFS provider governance"
                 .into(),
         ))
     }
@@ -3364,12 +3256,8 @@ pub mod isi {
                 referendum_snapshot.as_ref(),
                 &state_transaction.gov,
             );
-            let parliament_snapshot = match resolve_governance_approval_mode(state_transaction) {
-                GovernanceApprovalMode::ParliamentSortitionJit => Some(
-                    derive_jit_parliament_snapshot(id, created_height, state_transaction)?,
-                ),
-                GovernanceApprovalMode::LegacyCouncilEpoch => None,
-            };
+            let parliament_snapshot =
+                derive_jit_parliament_snapshot(id, created_height, state_transaction)?;
             state_transaction.world.put_governance_proposal(
                 id,
                 crate::state::GovernanceProposalRecord {
@@ -3509,12 +3397,8 @@ pub mod isi {
                 referendum_snapshot.as_ref(),
                 &state_transaction.gov,
             );
-            let parliament_snapshot = match resolve_governance_approval_mode(state_transaction) {
-                GovernanceApprovalMode::ParliamentSortitionJit => Some(
-                    derive_jit_parliament_snapshot(id, created_height, state_transaction)?,
-                ),
-                GovernanceApprovalMode::LegacyCouncilEpoch => None,
-            };
+            let parliament_snapshot =
+                derive_jit_parliament_snapshot(id, created_height, state_transaction)?;
             state_transaction.world.put_governance_proposal(
                 id,
                 crate::state::GovernanceProposalRecord {
@@ -3546,7 +3430,7 @@ pub mod isi {
             authority: &AccountId,
             state_transaction: &mut StateTransaction<'_, '_>,
         ) -> Result<(), Error> {
-            ensure_sorafs_provider_governance_proposer(authority, &self.action, state_transaction)?;
+            ensure_sorafs_provider_governance_proposer(authority, state_transaction)?;
             self.action.validate().map_err(|error| {
                 InstructionExecutionError::InvalidParameter(InvalidParameterError::SmartContract(
                     error.to_string(),
@@ -3640,12 +3524,7 @@ pub mod isi {
                 referendum_snapshot.as_ref(),
                 &state_transaction.gov,
             );
-            let parliament_snapshot = match resolve_governance_approval_mode(state_transaction) {
-                GovernanceApprovalMode::ParliamentSortitionJit => Some(
-                    derive_jit_parliament_snapshot(id, h_now, state_transaction)?,
-                ),
-                GovernanceApprovalMode::LegacyCouncilEpoch => None,
-            };
+            let parliament_snapshot = derive_jit_parliament_snapshot(id, h_now, state_transaction)?;
             state_transaction.world.put_governance_proposal(
                 id,
                 crate::state::GovernanceProposalRecord {
@@ -3857,13 +3736,6 @@ pub mod isi {
             authority: &AccountId,
             state_transaction: &mut StateTransaction<'_, '_>,
         ) -> Result<(), Error> {
-            if resolve_governance_approval_mode(state_transaction)
-                != GovernanceApprovalMode::ParliamentSortitionJit
-            {
-                return Err(InstructionExecutionError::InvariantViolation(
-                    "validation-fee policy proposals require Parliament JIT sortition".into(),
-                ));
-            }
             let required_bond = &state_transaction.gov.citizenship_bond_amount;
             let bonded_citizen = state_transaction
                 .world
@@ -4022,8 +3894,7 @@ pub mod isi {
                 Some(&referendum),
                 &state_transaction.gov,
             );
-            let parliament_snapshot =
-                Some(derive_jit_parliament_snapshot(id, now, state_transaction)?);
+            let parliament_snapshot = derive_jit_parliament_snapshot(id, now, state_transaction)?;
             state_transaction.world.put_governance_proposal(
                 id,
                 crate::state::GovernanceProposalRecord {
@@ -4055,14 +3926,6 @@ pub mod isi {
             authority: &AccountId,
             state_transaction: &mut StateTransaction<'_, '_>,
         ) -> Result<(), Error> {
-            if resolve_governance_approval_mode(state_transaction)
-                != GovernanceApprovalMode::ParliamentSortitionJit
-            {
-                return Err(InstructionExecutionError::InvariantViolation(
-                    "validation-fee payout lifecycle proposals require Parliament JIT sortition"
-                        .into(),
-                ));
-            }
             let required_bond = &state_transaction.gov.citizenship_bond_amount;
             let bonded_citizen = state_transaction
                 .world
@@ -4243,8 +4106,7 @@ pub mod isi {
                 Some(&referendum),
                 &state_transaction.gov,
             );
-            let parliament_snapshot =
-                Some(derive_jit_parliament_snapshot(id, now, state_transaction)?);
+            let parliament_snapshot = derive_jit_parliament_snapshot(id, now, state_transaction)?;
             state_transaction.world.put_governance_proposal(
                 id,
                 crate::state::GovernanceProposalRecord {
@@ -5038,11 +4900,10 @@ pub mod isi {
                             ));
                         }
                     }
-                    let custody = locks
-                        .locks
-                        .get(&owner)
-                        .and_then(|record| record.custody.clone())
-                        .unwrap_or_else(|| governance_lock_custody(&state_transaction.gov));
+                    let custody = locks.locks.get(&owner).map_or_else(
+                        || governance_lock_custody(&state_transaction.gov),
+                        |record| record.custody.clone(),
+                    );
                     let minimum_bond = state_transaction.gov.min_bond_amount.clone();
                     lock_voting_bond(
                         &amount,
@@ -5065,7 +4926,7 @@ pub mod isi {
                         expiry_height: new_expiry,
                         direction,
                         duration_blocks,
-                        custody: Some(custody),
+                        custody,
                     };
                     locks.locks.insert(owner.clone(), rec.clone());
                     state_transaction
@@ -5414,9 +5275,9 @@ pub mod isi {
                     .cloned()
             });
         if let Some(proposal) = proposal {
-            let term_blocks = state_transaction.gov.parliament_term_blocks.max(1);
-            let fallback_epoch = now_h.saturating_sub(1).saturating_div(term_blocks);
-            let approval_epoch = proposal.approval_epoch(fallback_epoch);
+            let approval_epoch = proposal
+                .approval_epoch()
+                .map_err(|error| InstructionExecutionError::InvariantViolation(error.into()))?;
             let approvals = state_transaction
                 .world
                 .governance_stage_approvals
@@ -5559,16 +5420,15 @@ pub mod isi {
                 ));
             }
         }
-        let custody = locks
-            .locks
-            .get(authority)
-            .and_then(|record| record.custody.clone())
-            .unwrap_or_else(|| {
+        let custody = locks.locks.get(authority).map_or_else(
+            || {
                 validation_fee_rules.map_or_else(
                     || governance_lock_custody(&state_transaction.gov),
                     validation_fee_lock_custody,
                 )
-            });
+            },
+            |record| record.custody.clone(),
+        );
         if let Some(rules) = validation_fee_rules
             && custody != validation_fee_lock_custody(rules)
         {
@@ -5605,7 +5465,7 @@ pub mod isi {
             expiry_height,
             direction: ballot.direction,
             duration_blocks: ballot.duration_blocks,
-            custody: Some(custody),
+            custody,
         };
         locks.locks.insert(authority.clone(), rec.clone());
         state_transaction
@@ -5998,16 +5858,10 @@ pub mod isi {
                 "validation-fee proposal finalization evidence is not an exact approval".into(),
             ));
         }
-        let snapshot = proposal.parliament_snapshot.as_ref().ok_or_else(|| {
-            InstructionExecutionError::InvariantViolation(
-                "validation-fee proposal has no parliament snapshot".into(),
-            )
-        })?;
-        if compute_parliament_roster_root(&snapshot.bodies)? != snapshot.roster_root {
-            return Err(InstructionExecutionError::InvariantViolation(
-                "validation-fee proposal parliament roster commitment mismatch".into(),
-            ));
-        }
+        let snapshot = &proposal.parliament_snapshot;
+        proposal
+            .validate_v1()
+            .map_err(|error| InstructionExecutionError::InvariantViolation(error.into()))?;
         let referendum_id = hex::encode(proposal_id);
         let referendum = state_transaction
             .world
@@ -8395,16 +8249,10 @@ pub mod isi {
                         "validation-fee governance supports plain referendum voting only".into(),
                     ));
                 }
-                let snapshot = proposal.parliament_snapshot.as_ref().ok_or_else(|| {
-                    InstructionExecutionError::InvariantViolation(
-                        "validation-fee proposal is missing its parliament snapshot".into(),
-                    )
-                })?;
-                if compute_parliament_roster_root(&snapshot.bodies)? != snapshot.roster_root {
-                    return Err(InstructionExecutionError::InvariantViolation(
-                        "validation-fee parliament snapshot commitment mismatch".into(),
-                    ));
-                }
+                let snapshot = &proposal.parliament_snapshot;
+                proposal
+                    .validate_v1()
+                    .map_err(|error| InstructionExecutionError::InvariantViolation(error.into()))?;
                 let approvals = state_transaction
                     .world
                     .governance_stage_approvals
@@ -8507,8 +8355,7 @@ pub mod isi {
                                     || rec.amount != rules.ballot_amount
                                     || !rec.slashed.is_zero()
                                     || rec.duration_blocks != rules.ballot_duration_blocks
-                                    || rec.custody.as_ref()
-                                        != Some(&validation_fee_lock_custody(rules))
+                                    || rec.custody != validation_fee_lock_custody(rules)
                                     || rec.direction > 2)
                             {
                                 return Err(InstructionExecutionError::InvariantViolation(
@@ -8683,10 +8530,8 @@ pub mod isi {
         rid: String,
         referendum: crate::state::GovernanceReferendumRecord,
         proposal_kind: ProposalKind,
-        bodies: iroha_data_model::governance::types::ParliamentBodies,
         roster: iroha_data_model::governance::types::ParliamentRoster,
         epoch: u64,
-        persist_epoch_bodies: bool,
         now_h: u64,
         quorum_bps: u16,
     }
@@ -8699,9 +8544,6 @@ pub mod isi {
     ) -> Result<(), Error> {
         let ctx = load_approval_context(body, proposal_id, state_transaction)?;
         ensure_parliament_member(authority, &ctx.roster)?;
-        if ctx.persist_epoch_bodies {
-            persist_parliament_bodies_if_missing(&ctx, state_transaction);
-        }
         let Some(record) =
             record_parliament_decision(body, decision, authority, &ctx, state_transaction)
         else {
@@ -8795,89 +8637,12 @@ pub mod isi {
                 "parliament body is not required for this proposal".into(),
             ));
         }
-        let (bodies, epoch, persist_epoch_bodies) =
-            if resolve_governance_approval_mode(state_transaction)
-                == GovernanceApprovalMode::ParliamentSortitionJit
-            {
-                if let Some(snapshot) = proposal.parliament_snapshot.as_ref() {
-                    if snapshot.bodies.selection_epoch != snapshot.selection_epoch {
-                        return Err(InstructionExecutionError::InvariantViolation(
-                            "proposal parliament snapshot epoch mismatch".into(),
-                        ));
-                    }
-                    let roster_root = compute_parliament_roster_root(&snapshot.bodies)?;
-                    if roster_root != snapshot.roster_root {
-                        return Err(InstructionExecutionError::InvariantViolation(
-                            "proposal parliament snapshot commitment mismatch".into(),
-                        ));
-                    }
-                    (snapshot.bodies.clone(), snapshot.selection_epoch, false)
-                } else {
-                    let term_blocks = state_transaction.gov.parliament_term_blocks.max(1);
-                    let fallback_epoch = now_h.saturating_sub(1).saturating_div(term_blocks);
-                    let council = state_transaction
-                        .world
-                        .council
-                        .get(&fallback_epoch)
-                        .cloned()
-                        .ok_or_else(|| {
-                            InstructionExecutionError::InvariantViolation(
-                            "proposal parliament snapshot missing and council roster unavailable"
-                                .into(),
-                        )
-                        })?;
-                    let beacon = derive_epoch_parliament_beacon(fallback_epoch, state_transaction);
-                    let bodies = state_transaction
-                        .world
-                        .parliament_bodies
-                        .get(&fallback_epoch)
-                        .cloned()
-                        .unwrap_or_else(|| {
-                            derive_parliament_bodies(
-                                &state_transaction.gov,
-                                &state_transaction.network_id,
-                                fallback_epoch,
-                                &beacon,
-                                &council,
-                            )
-                        });
-                    (bodies, fallback_epoch, true)
-                }
-            } else {
-                let term_blocks = state_transaction.gov.parliament_term_blocks.max(1);
-                let epoch = now_h.saturating_sub(1).saturating_div(term_blocks);
-                let council = state_transaction
-                    .world
-                    .council
-                    .get(&epoch)
-                    .cloned()
-                    .ok_or_else(|| {
-                        InstructionExecutionError::InvariantViolation(
-                            "council roster missing for current epoch".into(),
-                        )
-                    })?;
-                let beacon = derive_epoch_parliament_beacon(epoch, state_transaction);
-                let bodies = state_transaction
-                    .world
-                    .parliament_bodies
-                    .get(&epoch)
-                    .cloned()
-                    .unwrap_or_else(|| {
-                        derive_parliament_bodies(
-                            &state_transaction.gov,
-                            &state_transaction.network_id,
-                            epoch,
-                            &beacon,
-                            &council,
-                        )
-                    });
-                (bodies, epoch, true)
-            };
-        if bodies.selection_epoch != epoch {
-            return Err(InstructionExecutionError::InvariantViolation(
-                "parliament roster epoch mismatch".into(),
-            ));
-        }
+        let snapshot = &proposal.parliament_snapshot;
+        proposal
+            .validate_v1()
+            .map_err(|error| InstructionExecutionError::InvariantViolation(error.into()))?;
+        let bodies = snapshot.bodies.clone();
+        let epoch = snapshot.selection_epoch;
         let Some(roster) = bodies.rosters.get(&body).cloned() else {
             return Err(InstructionExecutionError::InvariantViolation(
                 "parliament roster missing for requested body".into(),
@@ -8903,10 +8668,8 @@ pub mod isi {
             rid,
             referendum,
             proposal_kind: proposal.kind,
-            bodies,
             roster,
             epoch,
-            persist_epoch_bodies,
             now_h,
             quorum_bps: state_transaction.gov.parliament_quorum_bps,
         })
@@ -8922,22 +8685,6 @@ pub mod isi {
             Err(InstructionExecutionError::InvariantViolation(
                 "only seated parliament members may vote for this body".into(),
             ))
-        }
-    }
-    fn persist_parliament_bodies_if_missing(
-        ctx: &ApprovalContext,
-        state_transaction: &mut StateTransaction<'_, '_>,
-    ) {
-        if state_transaction
-            .world
-            .parliament_bodies
-            .get(&ctx.epoch)
-            .is_none()
-        {
-            state_transaction
-                .world
-                .parliament_bodies
-                .insert(ctx.epoch, ctx.bodies.clone());
         }
     }
     struct ParliamentDecisionRecord {
@@ -9531,11 +9278,8 @@ pub mod isi {
         authority: &AccountId,
         state_transaction: &StateTransaction<'_, '_>,
     ) -> Result<(), Error> {
-        if !has_legacy_unscoped_permission(
-            &state_transaction.world,
-            authority,
-            LegacyUnscopedPermission::RuntimeUpgrades,
-        ) {
+        let required: Permission = CanManageRuntimeUpgrades.into();
+        if !has_exact_permission(&state_transaction.world, authority, &required) {
             return Err(InstructionExecutionError::InvariantViolation(
                 "not permitted: CanManageRuntimeUpgrades".into(),
             ));
@@ -9994,15 +9738,7 @@ pub mod isi {
             authority: &AccountId,
             state_transaction: &mut StateTransaction<'_, '_>,
         ) -> Result<(), Error> {
-            if !has_legacy_unscoped_permission(
-                &state_transaction.world,
-                authority,
-                LegacyUnscopedPermission::RuntimeUpgrades,
-            ) {
-                return Err(InstructionExecutionError::InvariantViolation(
-                    "not permitted: CanManageRuntimeUpgrades".into(),
-                ));
-            }
+            require_runtime_upgrade_permission(authority, state_transaction)?;
             let id = *self.id();
             let Some(rec) = state_transaction.world.runtime_upgrades.get(&id).cloned() else {
                 return Err(FindError::Permission(Box::new(Permission::new(
@@ -10068,15 +9804,7 @@ pub mod isi {
             authority: &AccountId,
             state_transaction: &mut StateTransaction<'_, '_>,
         ) -> Result<(), Error> {
-            if !has_legacy_unscoped_permission(
-                &state_transaction.world,
-                authority,
-                LegacyUnscopedPermission::RuntimeUpgrades,
-            ) {
-                return Err(InstructionExecutionError::InvariantViolation(
-                    "not permitted: CanManageRuntimeUpgrades".into(),
-                ));
-            }
+            require_runtime_upgrade_permission(authority, state_transaction)?;
             let id = *self.id();
             let Some(rec) = state_transaction.world.runtime_upgrades.get(&id).cloned() else {
                 return Err(FindError::Permission(Box::new(Permission::new(
@@ -10199,15 +9927,25 @@ pub mod isi {
         authority: &AccountId,
         state_transaction: &StateTransaction<'_, '_>,
     ) -> Result<(), Error> {
-        if has_legacy_unscoped_permission(
-            &state_transaction.world,
-            authority,
-            LegacyUnscopedPermission::ConsensusKeys,
-        ) {
+        let required: Permission = CanManageConsensusKeys.into();
+        if has_exact_permission(&state_transaction.world, authority, &required) {
             Ok(())
         } else {
             Err(InstructionExecutionError::InvariantViolation(
                 "not permitted: CanManageConsensusKeys".into(),
+            ))
+        }
+    }
+    fn ensure_can_manage_confidential_params(
+        authority: &AccountId,
+        state_transaction: &StateTransaction<'_, '_>,
+    ) -> Result<(), Error> {
+        let required: Permission = CanManageConfidentialParams.into();
+        if has_exact_permission(&state_transaction.world, authority, &required) {
+            Ok(())
+        } else {
+            Err(InstructionExecutionError::InvariantViolation(
+                "not permitted: CanManageConfidentialParams".into(),
             ))
         }
     }
@@ -10246,11 +9984,9 @@ pub mod isi {
         id: &ConsensusKeyId,
         record: ConsensusKeyRecord,
     ) {
-        let lifecycle_record = record.clone();
         let log_id = id.clone();
-        let log_record = lifecycle_record.clone();
+        let log_record = record.clone();
         upsert_consensus_key(&mut state_transaction.world, id, record);
-        crate::sumeragi::status::record_consensus_key(lifecycle_record);
         iroha_logger::info!(
             key = %log_id,
             activation = log_record.activation_height,
@@ -10346,7 +10082,6 @@ pub mod isi {
     ) {
         prev_record.status = ConsensusKeyStatus::Retiring;
         let log_prev = prev_id.clone();
-        crate::sumeragi::status::record_consensus_key(prev_record.clone());
         state_transaction
             .world
             .consensus_keys
@@ -10356,11 +10091,9 @@ pub mod isi {
         } else {
             ConsensusKeyStatus::Active
         };
-        let lifecycle_record = new_record.clone();
         let log_new = new_id.clone();
-        let log_record = lifecycle_record.clone();
+        let log_record = new_record.clone();
         upsert_consensus_key(&mut state_transaction.world, new_id, new_record);
-        crate::sumeragi::status::record_consensus_key(lifecycle_record);
         iroha_logger::info!(
             replaced = %log_prev,
             key = %log_new,
@@ -10420,15 +10153,7 @@ pub mod isi {
             authority: &AccountId,
             state_transaction: &mut StateTransaction<'_, '_>,
         ) -> Result<(), Error> {
-            if !has_legacy_unscoped_permission(
-                &state_transaction.world,
-                authority,
-                LegacyUnscopedPermission::ConsensusKeys,
-            ) {
-                return Err(InstructionExecutionError::InvariantViolation(
-                    "not permitted: CanManageConsensusKeys".into(),
-                ));
-            }
+            ensure_can_manage_consensus_keys(authority, state_transaction)?;
             let id = self.id().clone();
             let Some(mut record) = state_transaction.world.consensus_keys.get(&id).cloned() else {
                 return Err(InstructionExecutionError::InvalidParameter(
@@ -10444,9 +10169,6 @@ pub mod isi {
                 .world
                 .consensus_keys
                 .insert(id.clone(), record);
-            if let Some(updated) = state_transaction.world.consensus_keys.get(&id).cloned() {
-                crate::sumeragi::status::record_consensus_key(updated);
-            }
             let mut by_pk = state_transaction
                 .world
                 .consensus_keys_by_pk
@@ -10478,15 +10200,7 @@ pub mod isi {
             authority: &AccountId,
             state_transaction: &mut StateTransaction<'_, '_>,
         ) -> Result<(), Error> {
-            if !has_legacy_unscoped_permission(
-                &state_transaction.world,
-                authority,
-                LegacyUnscopedPermission::ConfidentialParams,
-            ) {
-                return Err(InstructionExecutionError::InvariantViolation(
-                    "not permitted: CanManageConfidentialParams".into(),
-                ));
-            }
+            ensure_can_manage_confidential_params(authority, state_transaction)?;
             let params = self.params().clone();
             let id = params.params_id;
             if state_transaction.world.pedersen_params.get(&id).is_some() {
@@ -10511,15 +10225,7 @@ pub mod isi {
             authority: &AccountId,
             state_transaction: &mut StateTransaction<'_, '_>,
         ) -> Result<(), Error> {
-            if !has_legacy_unscoped_permission(
-                &state_transaction.world,
-                authority,
-                LegacyUnscopedPermission::ConfidentialParams,
-            ) {
-                return Err(InstructionExecutionError::InvariantViolation(
-                    "not permitted: CanManageConfidentialParams".into(),
-                ));
-            }
+            ensure_can_manage_confidential_params(authority, state_transaction)?;
             let id = self.params_id();
             let Some(mut current) = state_transaction.world.pedersen_params.get(id).cloned() else {
                 return Err(FindError::Permission(Box::new(Permission::new(
@@ -10547,15 +10253,7 @@ pub mod isi {
             authority: &AccountId,
             state_transaction: &mut StateTransaction<'_, '_>,
         ) -> Result<(), Error> {
-            if !has_legacy_unscoped_permission(
-                &state_transaction.world,
-                authority,
-                LegacyUnscopedPermission::ConfidentialParams,
-            ) {
-                return Err(InstructionExecutionError::InvariantViolation(
-                    "not permitted: CanManageConfidentialParams".into(),
-                ));
-            }
+            ensure_can_manage_confidential_params(authority, state_transaction)?;
             let params = self.params().clone();
             let id = params.params_id;
             if state_transaction.world.poseidon_params.get(&id).is_some() {
@@ -10580,15 +10278,7 @@ pub mod isi {
             authority: &AccountId,
             state_transaction: &mut StateTransaction<'_, '_>,
         ) -> Result<(), Error> {
-            if !has_legacy_unscoped_permission(
-                &state_transaction.world,
-                authority,
-                LegacyUnscopedPermission::ConfidentialParams,
-            ) {
-                return Err(InstructionExecutionError::InvariantViolation(
-                    "not permitted: CanManageConfidentialParams".into(),
-                ));
-            }
+            ensure_can_manage_confidential_params(authority, state_transaction)?;
             let id = self.params_id();
             let Some(mut current) = state_transaction.world.poseidon_params.get(id).cloned() else {
                 return Err(FindError::Permission(Box::new(Permission::new(
@@ -15306,7 +14996,6 @@ pub mod isi {
                 .into());
             }
             upsert_consensus_key(world, &lifecycle_record.id, lifecycle_record.clone());
-            crate::sumeragi::status::record_consensus_key(lifecycle_record);
             world.emit_events(Some(PeerEvent::Added(peer_id)));
             Ok(())
         }
@@ -15372,7 +15061,6 @@ pub mod isi {
                 status: ConsensusKeyStatus::Disabled,
             };
             upsert_consensus_key(world, &lifecycle_record.id, lifecycle_record.clone());
-            crate::sumeragi::status::record_consensus_key(lifecycle_record.clone());
             let mut ids = consensus_key_ids_for_public_key(world, &key_label);
             if !ids.contains(&lifecycle_record.id) {
                 ids.push(lifecycle_record.id.clone());
@@ -15388,8 +15076,7 @@ pub mod isi {
                     if !matches!(record.status, ConsensusKeyStatus::Disabled) {
                         record.status = ConsensusKeyStatus::Disabled;
                         record.expiry_height.get_or_insert(block_height);
-                        world.consensus_keys.insert(id.clone(), record.clone());
-                        crate::sumeragi::status::record_consensus_key(record);
+                        world.consensus_keys.insert(id.clone(), record);
                     }
                 }
             }
@@ -15809,15 +15496,7 @@ pub mod isi {
             authority: &AccountId,
             state_transaction: &mut StateTransaction<'_, '_>,
         ) -> Result<(), Error> {
-            if !has_legacy_unscoped_permission(
-                &state_transaction.world,
-                authority,
-                LegacyUnscopedPermission::ConsensusKeys,
-            ) {
-                return Err(InstructionExecutionError::InvariantViolation(
-                    "not permitted: CanManageConsensusKeys".into(),
-                ));
-            }
+            ensure_can_manage_consensus_keys(authority, state_transaction)?;
             let committee = self.committee().clone();
             if !committee.is_valid() {
                 return Err(InstructionExecutionError::InvalidParameter(
@@ -15893,15 +15572,7 @@ pub mod isi {
             authority: &AccountId,
             state_transaction: &mut StateTransaction<'_, '_>,
         ) -> Result<(), Error> {
-            if !has_legacy_unscoped_permission(
-                &state_transaction.world,
-                authority,
-                LegacyUnscopedPermission::ConsensusKeys,
-            ) {
-                return Err(InstructionExecutionError::InvariantViolation(
-                    "not permitted: CanManageConsensusKeys".into(),
-                ));
-            }
+            ensure_can_manage_consensus_keys(authority, state_transaction)?;
             let domain = self.domain().clone();
             if state_transaction.world.domains.get(&domain).is_none() {
                 return Err(InstructionExecutionError::InvalidParameter(
@@ -18114,10 +17785,8 @@ pub mod isi {
                     .iter()
                     .find(|(_, locks)| {
                         locks.locks.values().any(|record| {
-                            record.custody.as_ref().is_some_and(|custody| {
-                                custody.bond_escrow_account == *account_id
-                                    || custody.slash_receiver_account == *account_id
-                            })
+                            record.custody.bond_escrow_account == *account_id
+                                || record.custody.slash_receiver_account == *account_id
                         })
                     })
                 {
@@ -18162,9 +17831,7 @@ pub mod isi {
                     .iter()
                     .find(|(_, locks)| {
                         locks.locks.values().any(|record| {
-                            record.custody.as_ref().is_some_and(|custody| {
-                                custody.asset_definition_id == *asset_definition_id
-                            })
+                            record.custody.asset_definition_id == *asset_definition_id
                         })
                     })
                 {
@@ -19295,9 +18962,9 @@ pub mod isi {
         macro_rules! consensus_test_parameters {
             ($state_block:ident) => {{
                 let mut stx = $state_block.transaction();
-                grant_alice_account_permission(
+                grant_alice_typed_permission(
                     &mut stx,
-                    "CanManageConsensusKeys",
+                    CanManageConsensusKeys,
                     "grant manage consensus keys",
                 );
                 let params = stx.world.parameters.get().sumeragi.clone();
@@ -19306,9 +18973,9 @@ pub mod isi {
             }};
             (require_hsm $state_block:ident) => {{
                 let mut stx = $state_block.transaction();
-                grant_alice_account_permission(
+                grant_alice_typed_permission(
                     &mut stx,
-                    "CanManageConsensusKeys",
+                    CanManageConsensusKeys,
                     "grant manage consensus keys",
                 );
                 let params = stx.world.parameters.get_mut();
@@ -20860,7 +20527,7 @@ pub mod isi {
                     expiry_height: 100,
                     direction: 0,
                     duration_blocks: 10,
-                    custody: None,
+                    custody: governance_lock_custody(&state_transaction.gov),
                 },
             );
             state_transaction
@@ -21779,8 +21446,8 @@ pub mod isi {
             .expect("future autoscale SCCP lane catalog");
             configure_universal_dataspace(&mut stx);
             stx.nexus.autoscale.enabled = true;
-            stx.nexus.autoscale.min_lanes = NonZeroU32::new(1).expect("nonzero min lanes");
-            stx.nexus.autoscale.max_lanes = NonZeroU32::new(8).expect("nonzero max lanes");
+            stx.nexus.autoscale.min_lane_id = NonZeroU32::new(1).expect("nonzero min lanes");
+            stx.nexus.autoscale.max_lane_id_exclusive = NonZeroU32::new(8).expect("nonzero max lanes");
             stx.nexus.lane_config = RuntimeLaneConfig::from_catalog(&lane_catalog);
             stx.nexus.lane_catalog = lane_catalog;
             enable_sccp_recording_for_test(&mut stx, future_lane);
@@ -24370,6 +24037,16 @@ seiyaku GovernanceLifecycle {
                 .execute(&ALICE_ID, stx)
                 .expect(expectation);
         }
+        fn grant_alice_typed_permission(
+            stx: &mut StateTransaction<'_, '_>,
+            permission: impl Into<Permission>,
+            expectation: &str,
+        ) {
+            bootstrap_alice_account(stx);
+            Grant::account_permission(permission.into(), ALICE_ID.clone())
+                .execute(&ALICE_ID, stx)
+                .expect(expectation);
+        }
         fn configure_universal_dataspace(stx: &mut StateTransaction<'_, '_>) {
             let dataspace_catalog = DataSpaceCatalog::new(vec![DataSpaceMetadata {
                 id: DataSpaceId::UNIVERSAL,
@@ -25627,12 +25304,12 @@ seiyaku GovernanceLifecycle {
                     expiry_height: 10,
                     direction: 0,
                     duration_blocks: 3_600,
-                    custody: Some(crate::state::GovernanceLockCustody {
+                    custody: crate::state::GovernanceLockCustody {
                         escrowed: true,
                         asset_definition_id: custody_definition.clone(),
                         bond_escrow_account: (*ALICE_ID).clone(),
                         slash_receiver_account: (*ALICE_ID).clone(),
-                    }),
+                    },
                 },
             );
             stx.world
@@ -26077,25 +25754,8 @@ seiyaku GovernanceLifecycle {
                     created_height: 1,
                     status: crate::state::GovernanceProposalStatus::Proposed,
                     pipeline: crate::state::GovernancePipeline::default(),
-                    parliament_snapshot: Some(crate::state::GovernanceParliamentSnapshot {
-                        selection_epoch: 1,
-                        beacon: [0x91; 32],
-                        roster_root: [0x92; 32],
-                        bodies: iroha_data_model::governance::types::ParliamentBodies {
-                            selection_epoch: 1,
-                            rosters: std::collections::BTreeMap::from([(
-                                iroha_data_model::governance::types::ParliamentBody::AgendaCouncil,
-                                iroha_data_model::governance::types::ParliamentRoster {
-                                    body: iroha_data_model::governance::types::ParliamentBody::AgendaCouncil,
-                                    epoch: 1,
-                                    members: vec![account_id.clone()],
-                                    alternates: Vec::new(),
-                                    candidate_count: 0,
-                                    derived_by: Default::default(),
-                                },
-                            )]),
-                        },
-                    }),
+                    parliament_snapshot:
+                        crate::state::governance_parliament_snapshot_for_tests(&account_id, 1),
                     finalization_evidence: None,
                     enacted_at_height: None,
                 },
@@ -28508,8 +28168,8 @@ seiyaku GovernanceLifecycle {
             let mut stx = state_block.transaction();
             bootstrap_alice_account(&mut stx);
             stx.nexus.autoscale.enabled = true;
-            stx.nexus.autoscale.min_lanes = NonZeroU32::new(1).expect("nonzero min lanes");
-            stx.nexus.autoscale.max_lanes = NonZeroU32::new(3).expect("nonzero max lanes");
+            stx.nexus.autoscale.min_lane_id = NonZeroU32::new(1).expect("nonzero min lanes");
+            stx.nexus.autoscale.max_lane_id_exclusive = NonZeroU32::new(3).expect("nonzero max lanes");
             stx.nexus.lane_relay_emergency.enabled = true;
             configure_universal_dataspace(&mut stx);
             let authority = register_multisig_authority(&mut stx, 3, 5);
@@ -30626,9 +30286,9 @@ seiyaku GovernanceLifecycle {
             let mut state_block = state.block(block.as_ref().header());
             let params = {
                 let mut stx = state_block.transaction();
-                grant_alice_account_permission(
+                grant_alice_typed_permission(
                     &mut stx,
-                    "CanManageConsensusKeys",
+                    CanManageConsensusKeys,
                     "grant manage consensus keys",
                 );
                 let params = stx.world.parameters.get().sumeragi.clone();
@@ -30773,9 +30433,8 @@ seiyaku GovernanceLifecycle {
                 "consensus key algorithm ed25519 is not allowed; allowed: [bls_normal]"
             );
         });
-        world_test!(register_consensus_key_records_lifecycle_history {
+        world_test!(register_consensus_key_persists_in_authoritative_world_state {
             let state = blank_state();
-            crate::sumeragi::status::reset_consensus_keys_for_tests();
             let block = new_dummy_block();
             let mut state_block = state.block(block.as_ref().header());
             let params = consensus_test_parameters!(state_block);
@@ -30808,10 +30467,10 @@ seiyaku GovernanceLifecycle {
             .into();
             exec.execute_instruction(&mut stx, &ALICE_ID.clone(), instr)
                 .expect("register consensus key");
-            let history = crate::sumeragi::status::consensus_key_history();
-            assert!(
-                history.iter().any(|rec| rec.id == id),
-                "expected lifecycle history to include registered key"
+            assert_eq!(
+                stx.world.consensus_keys.get(&id).map(|entry| &entry.id),
+                Some(&id),
+                "registered consensus key must live in authoritative world state"
             );
         });
         #[test]
@@ -30938,7 +30597,6 @@ seiyaku GovernanceLifecycle {
         }
         world_test!(rotate_consensus_key_requires_hsm_when_configured {
             let state = blank_state();
-            crate::sumeragi::status::reset_consensus_keys_for_tests();
             let block = new_dummy_block();
             let mut state_block = state.block(block.as_ref().header());
             let params = consensus_test_parameters!(require_hsm state_block);
@@ -31019,7 +30677,6 @@ seiyaku GovernanceLifecycle {
                 key_allowed_hsm_providers: ["pkcs11".to_owned()].into_iter().collect(),
             };
             state.set_sumeragi_parameters(sumeragi_cfg.clone());
-            crate::sumeragi::status::reset_consensus_keys_for_tests();
             let block = new_dummy_block();
             let mut state_block = state.block(block.as_ref().header());
             let params = consensus_test_parameters!(state_block);
@@ -31085,12 +30742,7 @@ seiyaku GovernanceLifecycle {
                 .expect("rotated key stored");
             assert_eq!(prev.status, ConsensusKeyStatus::Retiring);
             assert_eq!(next.status, ConsensusKeyStatus::Pending);
-            assert!(
-                crate::sumeragi::status::consensus_key_history()
-                    .iter()
-                    .any(|entry| entry.id == id_b && entry.hsm.is_none()),
-                "lifecycle history should record rotation without HSM when optional"
-            );
+            assert!(next.hsm.is_none());
         }
         #[test]
         #[allow(clippy::too_many_lines)]
@@ -31115,14 +30767,9 @@ seiyaku GovernanceLifecycle {
                 let mut state_block = state.block(block.as_ref().header());
                 let params = {
                     let mut stx = state_block.transaction();
-                    bootstrap_alice_account(&mut stx);
-                    let perm = Permission::new(
-                        "CanManageConsensusKeys".parse().unwrap(),
-                        iroha_primitives::json::Json::new(()),
-                    );
-                    Grant::account_permission(perm, ALICE_ID.clone()).expect_execute(
-                        &ALICE_ID,
+                    grant_alice_typed_permission(
                         &mut stx,
+                        CanManageConsensusKeys,
                         "grant manage consensus keys",
                     );
                     let params = stx.world.parameters.get().sumeragi.clone();
@@ -31174,14 +30821,9 @@ seiyaku GovernanceLifecycle {
                 let mut state_block = state.block(block.as_ref().header());
                 let params = {
                     let mut stx = state_block.transaction();
-                    bootstrap_alice_account(&mut stx);
-                    let perm = Permission::new(
-                        "CanManageConsensusKeys".parse().unwrap(),
-                        iroha_primitives::json::Json::new(()),
-                    );
-                    Grant::account_permission(perm, ALICE_ID.clone()).expect_execute(
-                        &ALICE_ID,
+                    grant_alice_typed_permission(
                         &mut stx,
+                        CanManageConsensusKeys,
                         "grant manage consensus keys",
                     );
                     let params = stx.world.parameters.get().sumeragi.clone();
@@ -31232,14 +30874,9 @@ seiyaku GovernanceLifecycle {
                 let mut state_block = state.block(block.as_ref().header());
                 let params = {
                     let mut stx = state_block.transaction();
-                    bootstrap_alice_account(&mut stx);
-                    let perm = Permission::new(
-                        "CanManageConsensusKeys".parse().unwrap(),
-                        iroha_primitives::json::Json::new(()),
-                    );
-                    Grant::account_permission(perm, ALICE_ID.clone()).expect_execute(
-                        &ALICE_ID,
+                    grant_alice_typed_permission(
                         &mut stx,
+                        CanManageConsensusKeys,
                         "grant manage consensus keys",
                     );
                     let params = stx.world.parameters.get().sumeragi.clone();
@@ -31600,6 +31237,71 @@ seiyaku GovernanceLifecycle {
                 .expect_err("a non-unit same-name token must not manage verifying keys");
             let msg = smart_contract_error_message(err);
             assert_contains!(msg, "not permitted: CanManageVerifyingKeys", "unexpected msg: {msg}");
+        });
+        world_test!(operational_governance_guards_require_exact_typed_tokens {
+            alice_state_transaction!(state, block, state_block, stx);
+            let role_id: RoleId = "OPERATIONAL_GOVERNANCE".parse().expect("role id");
+            Register::role(Role::new(role_id.clone(), ALICE_ID.clone()))
+                .expect_execute(&ALICE_ID, &mut stx, "register governance role");
+            Grant::account_role(role_id.clone(), ALICE_ID.clone())
+                .expect_execute(&ALICE_ID, &mut stx, "assign governance role");
+
+            for name in [
+                "CanManageRuntimeUpgrades",
+                "CanManageConsensusKeys",
+                "CanManageConfidentialParams",
+            ] {
+                let malformed = Permission::new(
+                    name.parse().expect("permission name"),
+                    Json::from("invented-scope-must-not-authorize"),
+                );
+                Grant::account_permission(malformed.clone(), ALICE_ID.clone()).expect_execute(
+                    &ALICE_ID,
+                    &mut stx,
+                    "store adversarial account permission",
+                );
+                Grant::role_permission(malformed, role_id.clone()).expect_execute(
+                    &ALICE_ID,
+                    &mut stx,
+                    "store adversarial role permission",
+                );
+            }
+
+            for (name, result) in [
+                (
+                    "CanManageRuntimeUpgrades",
+                    require_runtime_upgrade_permission(&ALICE_ID, &stx),
+                ),
+                (
+                    "CanManageConsensusKeys",
+                    ensure_can_manage_consensus_keys(&ALICE_ID, &stx),
+                ),
+                (
+                    "CanManageConfidentialParams",
+                    ensure_can_manage_confidential_params(&ALICE_ID, &stx),
+                ),
+            ] {
+                let error = result.expect_err("same-name non-unit payload must not authorize");
+                assert_contains!(error.to_string(), name, "unexpected {name} rejection: {error}");
+            }
+
+            for permission in [
+                Permission::from(CanManageRuntimeUpgrades),
+                Permission::from(CanManageConsensusKeys),
+                Permission::from(CanManageConfidentialParams),
+            ] {
+                Grant::role_permission(permission, role_id.clone()).expect_execute(
+                    &ALICE_ID,
+                    &mut stx,
+                    "grant canonical role permission",
+                );
+            }
+            require_runtime_upgrade_permission(&ALICE_ID, &stx)
+                .expect("canonical role token must authorize runtime upgrades");
+            ensure_can_manage_consensus_keys(&ALICE_ID, &stx)
+                .expect("canonical role token must authorize consensus-key management");
+            ensure_can_manage_confidential_params(&ALICE_ID, &stx)
+                .expect("canonical role token must authorize confidential-parameter management");
         });
         world_test!(update_vk_rejects_circuit_identity_change_without_rewriting_index {
             alice_state_transaction!(state, block, state_block, stx);

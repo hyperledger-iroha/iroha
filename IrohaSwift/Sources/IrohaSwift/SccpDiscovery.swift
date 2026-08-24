@@ -1099,7 +1099,7 @@ private enum SccpExactParser {
               try network(object(item, "source_network"), label: "\(label).source_network") == .soraTaira
         else { throw SccpV1Error.invalid("\(label) must be a V1 Taira anchor") }
         let protocolVersion = try SccpStrictJSON.uint32(
-            item, "protocol_version", minimum: 3, maximum: 4
+            item, "protocol_version", minimum: 4, maximum: 4
         )
         let chainHash = try upperFixed(item, "chain_id_hash", bytes: 32)
         guard chainHash == irohaKeccak256(tairaChainId) else { throw SccpV1Error.invalid("\(label).chain_id_hash is not Taira") }

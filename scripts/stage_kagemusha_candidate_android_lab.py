@@ -383,8 +383,8 @@ SOURCE_IDENTITY_KEYS = frozenset(
         "untracked_file_count",
         "untracked_path_mode_blob_oid_manifest",
         "untracked_path_mode_blob_oid_manifest_sha256",
-        "ignored_cargo_lock_size_bytes",
-        "ignored_cargo_lock_sha256",
+        "tracked_cargo_lock_size_bytes",
+        "tracked_cargo_lock_sha256",
         "combined_source_fingerprint_sha256",
     }
 )

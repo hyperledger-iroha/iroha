@@ -449,20 +449,11 @@ request directly with `application/x-norito` and the signed lowercase operation 
 `Idempotency-Key`; responses must be typed Norito as well. Top-up
 bodies are limited to 512 KiB and redemption bodies to 48 MiB, exposed as
 `MAX_TORII_TOP_UP_REQUEST_BYTES_V4` and `MAX_TORII_REDEEM_REQUEST_BYTES_V4`.
-`projectReadiness` returns the live asset scale, committed height/hash, all role-specific verifier
-commitments and activation windows, and the required nullable authenticated `artifactSet`. A
-present set binds the V4 generation, manifest, release-policy and release-attestation digests,
-issuance window, proof-pair bound, and asset scale to exact logical roles
-`kagemusha_recursive_step_eq_v4_verifier_record` and
-`kagemusha_recursive_step_ep_v4_verifier_record` with circuits
-`kagemusha-recursive-spend-step-eq-compact-layout-v5` and
-`kagemusha-recursive-spend-step-ep-compact-lineage-v5`, respectively. An absent artifact set
-requires both recursive records and backend construction to be unavailable with exactly one
-`recursive_v4_registry_unavailable` or `recursive_v4_registry_malformed` blocker; a present set
-forbids both. `proofBackendAvailable` reports exact backend construction independently.
-`recursiveLineageSupported` additionally requires the authenticated artifact set and distinct
-active Eq/Ep records, while `ready` is true only when the complete blocker set is empty.
-`recursive_lineage_unavailable` is present exactly when lineage is false. `prepareTopUp` accepts Torii's authoritative
+`getOfflineCapability` takes no selector and accepts only the four-field
+`cash_handoff_v1` response: bridge ABI 22, maximum hop count 8, and
+`ready=true`. Asset scale, committed snapshot, verifier identities, and
+release bindings are supplied through the exact command and proof types that
+consume them. `prepareTopUp` accepts Torii's authoritative
 `next_zero_path`; the resulting recursive init persists its own native membership witness rather
 than the earlier shield-tree witness. Typed decoders restore the opening and exact canonical
 top-up/redemption submissions for idempotent restart retries. Secret-bearing append/redemption
@@ -1306,7 +1297,8 @@ the account, exit class, client metering key, XOR fee asset, escrow account, and
 operator account, then return native `OpenVpnLeaseEscrow` instructions. Session
 creation requires the committed hash of the exact quote-bound lease-open
 transaction, and operator receipt submission returns a native `SettleVpnLease`
-instruction with earned/refunded XOR amounts:
+instruction with earned/refunded XOR amounts and provisional status
+`settlement_pending`:
 
 ```java
 java.util.function.Function<
@@ -1344,15 +1336,17 @@ VpnSession session = transport.createVpnSession(
 ToriiCanonicalRequestAuth operatorAuth =
     new ToriiCanonicalRequestAuth(
         "<operator_i105>", signerFor.apply(operatorKeyPair.getPrivate()));
-VpnReceipt settled = transport.submitVpnReceipt(
+VpnReceipt pending = transport.submitVpnReceipt(
     new VpnReceiptSubmitRequest("<relay_receipt_hex>", "<client_voucher_hex>", quote.leaseIdHex()),
     operatorAuth).join();
 ```
 
-Submit `quote.openLeaseInstruction()` and `settled.settleLeaseInstruction()` as
+Submit `quote.openLeaseInstruction()` and `pending.settleLeaseInstruction()` as
 normal signed native instruction transactions. This keeps prepaid VPN funds in
 XOR escrow until usage receipts and client vouchers prove the amount earned by
-the operator.
+the operator. Only a receipt subsequently read from committed WSV state uses
+status `settled`; the parser retains exact `disconnected`, `expired`, and
+`replaced` lifecycle statuses as well.
 
 ### Pipeline Hashes
 

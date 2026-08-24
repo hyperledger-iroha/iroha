@@ -151,7 +151,7 @@ mod resource;
 mod rns_native_centering_subtraction_relation;
 #[allow(
     dead_code,
-    reason = "the sealed compatibility facade is intentionally unconstructible after retirement"
+    reason = "the sealed claimed-successor carrier is inactive until the direct chronology is wired"
 )]
 #[path = "mkhe/rns_native_claimed_successor.rs"]
 mod rns_native_claimed_successor;
@@ -291,10 +291,6 @@ pub use collective_eval_keys::{
     zk_ams_mkhe_compact_key_switch_ring_multiplications_v1,
     zk_ams_mkhe_seekable_evaluated_key_accounting_v1,
     zk_ams_mkhe_streaming_collective_automorphism_accounting_v1,
-};
-#[cfg(test)]
-pub use collective_eval_keys::{
-    automorphism_switch_zk_ams_mkhe_collective_v1, relinearize_zk_ams_mkhe_collective_v1,
 };
 pub use collective_keys::{
     ZkAmsMkheCollectiveEvaluatedKeyEntryV1, ZkAmsMkheCollectiveEvaluatedKeyManifestV1,

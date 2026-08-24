@@ -12,6 +12,7 @@ use crate::{
     account::AccountId,
     asset::AssetDefinitionId,
     name::Name,
+    peer::PeerId,
     proof::ProofAttachment,
     sorafs::pin_registry::{
         MANIFEST_ROOT_CID_LENGTH, ManifestDigest, ManifestRootCid, StorageClass,
@@ -231,10 +232,64 @@ pub const SORA_PRIVATE_MODEL_ARTIFACT_REF_VERSION_V1: u16 = 1;
 pub const SORA_PRIVATE_UPLOADED_MODEL_EXECUTION_RECEIPT_VERSION_V1: u16 = 1;
 /// Schema version for [`SoraHfSourceRecordV1`].
 pub const SORA_HF_SOURCE_RECORD_VERSION_V1: u16 = 1;
+/// Maximum byte length of one canonical, fully-qualified Hugging Face repository identifier.
+pub const SORA_HF_REPO_ID_MAX_BYTES_V1: usize = 96;
+/// Exact lowercase hexadecimal length of a first-release Hugging Face commit OID.
+pub const SORA_HF_COMMIT_OID_HEX_BYTES_V1: usize = 40;
+/// Return whether `value` is one canonical, fully-qualified Hugging Face repository identifier.
+///
+/// V1 requires the exact `namespace/repository` spelling returned by the Hub. Both components use
+/// the Hub's portable ASCII alphabet, while unqualified aliases, URL encodings, path traversal,
+/// repeated punctuation aliases, and Git transport suffixes are rejected.
+#[must_use]
+pub fn is_canonical_hf_repo_id_v1(value: &str) -> bool {
+    if value.is_empty()
+        || value.len() > SORA_HF_REPO_ID_MAX_BYTES_V1
+        || value.trim() != value
+        || value.contains("--")
+        || value.contains("..")
+        || value.ends_with(".git")
+    {
+        return false;
+    }
+    let mut components = value.split('/');
+    let Some(namespace) = components.next() else {
+        return false;
+    };
+    let Some(repository) = components.next() else {
+        return false;
+    };
+    if components.next().is_some() {
+        return false;
+    }
+    [namespace, repository].into_iter().all(|component| {
+        !component.is_empty()
+            && !matches!(component, "." | "..")
+            && !component.starts_with(['.', '-'])
+            && !component.ends_with(['.', '-'])
+            && component
+                .bytes()
+                .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'-'))
+    })
+}
+/// Return whether `value` is a canonical immutable Hugging Face commit OID.
+///
+/// V1 accepts only the full 40-character lowercase SHA-1 object identifier;
+/// branch names, tags, abbreviated OIDs, and case aliases are not canonical.
+#[must_use]
+pub fn is_canonical_hf_commit_oid_v1(value: &str) -> bool {
+    value.len() == SORA_HF_COMMIT_OID_HEX_BYTES_V1
+        && value
+            .as_bytes()
+            .iter()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(byte))
+}
 /// Schema version for [`SoraModelHostCapabilityRecordV1`].
 pub const SORA_MODEL_HOST_CAPABILITY_RECORD_VERSION_V1: u16 = 1;
 /// Schema version for [`SoraInrouHostCapabilityRecordV1`].
 pub const SORA_INROU_HOST_CAPABILITY_RECORD_VERSION_V1: u16 = 1;
+/// Exact hosted-replica capacity of one qualified Inrou V1 host advert.
+pub const SORA_INROU_HOSTED_REPLICA_CAPACITY_V1: u16 = 1;
 /// Fixed signature-domain tag for Soracloud runtime provenance preimages.
 pub const SORACLOUD_RUNTIME_PROVENANCE_DOMAIN_V1: &[u8] =
     b"iroha:soracloud:runtime-provenance:v1\x00";

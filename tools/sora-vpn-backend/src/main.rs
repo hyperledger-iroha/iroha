@@ -20,11 +20,11 @@ use std::{
     ffi::OsStr,
     fs::{self, File, OpenOptions},
     io::{self, Read as _, Seek as _, SeekFrom, Write as _},
-    net::{IpAddr, SocketAddr},
+    net::{IpAddr, Ipv4Addr, Ipv6Addr},
     path::PathBuf,
     process::{Child, Command as ProcessCommand, ExitCode, ExitStatus, Stdio},
     sync::{
-        Arc, Mutex,
+        Arc, Mutex, OnceLock,
         atomic::{AtomicBool, Ordering},
     },
     thread,
@@ -35,7 +35,7 @@ use std::{ffi::CStr, os::fd::FromRawFd};
 use thiserror::Error;
 use tokio::{
     io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, unix::AsyncFd},
-    net::{TcpListener, UnixListener, UnixStream},
+    net::{UnixListener, UnixStream},
     signal::unix::{SignalKind, signal},
     sync::{OwnedSemaphorePermit, Semaphore, watch},
     task::JoinSet,
@@ -73,6 +73,44 @@ const TRUSTED_COMMAND_TIMEOUT_V1: Duration = Duration::from_secs(10);
 const TRUSTED_COMMAND_MAX_OUTPUT_BYTES_V1: usize = 64 * 1024;
 const TRUSTED_COMMAND_MAX_ARGUMENTS_V1: usize = 32;
 const TRUSTED_COMMAND_MAX_ARGUMENT_BYTES_V1: usize = 256;
+// The first-release backend is a public-Internet exit, not a route into the
+// host's control plane or adjacent networks. These ranges are denied even
+// when they are reachable through the same interface as the default route.
+const IPV4_PROTECTED_DESTINATION_CIDRS_V1: &[&str] = &[
+    "0.0.0.0/8",
+    "10.0.0.0/8",
+    "100.64.0.0/10",
+    "127.0.0.0/8",
+    "169.254.0.0/16",
+    "172.16.0.0/12",
+    "192.0.0.0/24",
+    "192.0.2.0/24",
+    "192.88.99.0/24",
+    "192.168.0.0/16",
+    "198.18.0.0/15",
+    "198.51.100.0/24",
+    "203.0.113.0/24",
+    "224.0.0.0/4",
+    "240.0.0.0/4",
+];
+const IPV6_PROTECTED_DESTINATION_CIDRS_V1: &[&str] = &[
+    "::/96",
+    "::ffff:0:0/96",
+    "64:ff9b::/96",
+    "64:ff9b:1::/48",
+    "100::/64",
+    "2001:2::/48",
+    "2001:10::/28",
+    "2001:20::/28",
+    "2001:db8::/32",
+    "2002::/16",
+    "3fff::/20",
+    "5f00::/16",
+    "fc00::/7",
+    "fec0::/10",
+    "fe80::/10",
+    "ff00::/8",
+];
 #[cfg(target_os = "linux")]
 const LINUX_IFF_TUN: nix::libc::c_short = 0x0001;
 #[cfg(target_os = "linux")]
@@ -150,10 +188,7 @@ struct DurableBootstrapReplay {
     durability_failed: bool,
 }
 #[derive(Debug, Clone, PartialEq, Eq)]
-enum BackendEndpoint {
-    Unix(PathBuf),
-    Tcp(String),
-}
+struct BackendEndpoint(PathBuf);
 impl BackendConfig {
     fn from_cli(cli: Cli) -> Result<Self, BackendError> {
         let endpoint = parse_backend_endpoint(&cli.endpoint)?;
@@ -168,24 +203,26 @@ impl BackendConfig {
         let interface_prefix =
             validate_linux_interface_name(&cli.interface_prefix, "interface_prefix")?;
         let default_mtu = normalize_mtu(cli.mtu)?;
-        let egress_v4_interface = if cli.enable_ipv4_nat {
+        let egress_v4_interface = if cli.ipv4_forward || cli.enable_ipv4_nat {
             Some(
                 resolve_egress_interface(cli.egress_interface.as_deref(), IpFamily::V4)?
                     .ok_or_else(|| {
                         BackendError::InvalidConfig(
-                            "could not resolve IPv4 default egress interface".to_owned(),
+                            "could not resolve IPv4 default egress interface while forwarding or NAT is enabled"
+                                .to_owned(),
                         )
                     })?,
             )
         } else {
             None
         };
-        let egress_v6_interface = if cli.enable_ipv6_nat {
+        let egress_v6_interface = if cli.ipv6_forward || cli.enable_ipv6_nat {
             Some(
                 resolve_egress_interface(cli.egress_interface.as_deref(), IpFamily::V6)?
                     .ok_or_else(|| {
                         BackendError::InvalidConfig(
-                            "could not resolve IPv6 default egress interface".to_owned(),
+                            "could not resolve IPv6 default egress interface while forwarding or NAT is enabled"
+                                .to_owned(),
                         )
                     })?,
             )
@@ -239,10 +276,7 @@ fn zeroize_secret(secret: &mut [u8; 32]) {
 }
 impl BackendEndpoint {
     fn label(&self) -> String {
-        match self {
-            Self::Unix(path) => format!("unix:{}", path.display()),
-            Self::Tcp(addr) => format!("tcp://{addr}"),
-        }
+        format!("unix:{}", self.0.display())
     }
 }
 fn parse_backend_endpoint(endpoint: &str) -> Result<BackendEndpoint, BackendError> {
@@ -254,25 +288,11 @@ fn parse_backend_endpoint(endpoint: &str) -> Result<BackendEndpoint, BackendErro
                 "backend endpoint unix form must be unix:/absolute/path".to_owned(),
             ));
         }
-        return Ok(BackendEndpoint::Unix(PathBuf::from(path)));
-    }
-    if let Some(addr) = trimmed.strip_prefix("tcp://") {
-        let addr = addr.trim();
-        let socket_addr = addr.parse::<SocketAddr>().map_err(|_| {
-            BackendError::InvalidConfig(
-                "backend endpoint tcp form must be tcp://IP:port".to_owned(),
-            )
-        })?;
-        if !socket_addr.ip().is_loopback() {
-            return Err(BackendError::InvalidConfig(
-                "backend TCP endpoints must use a loopback address because packet frames are not a remote transport security boundary"
-                    .to_owned(),
-            ));
-        }
-        return Ok(BackendEndpoint::Tcp(socket_addr.to_string()));
+        return Ok(BackendEndpoint(PathBuf::from(path)));
     }
     Err(BackendError::InvalidConfig(
-        "backend endpoint must start with unix:/path or tcp://host:port".to_owned(),
+        "backend endpoint must use unix:/absolute/path; TCP is not an authenticated local peer boundary"
+            .to_owned(),
     ))
 }
 fn read_bootstrap_secret(path: &std::path::Path) -> Result<[u8; 32], BackendError> {
@@ -543,6 +563,8 @@ fn verify_unix_peer_credentials(
 struct VpnBackendBootstrap {
     session_id_hex: String,
     server_tunnel_addresses: Vec<String>,
+    client_ipv4_address: [u8; 4],
+    client_ipv6_address: [u8; 16],
     session_routes: Vec<String>,
     mtu_bytes: u16,
 }
@@ -561,6 +583,7 @@ struct SessionRuntimeConfig {
     tunnel_addresses: Vec<ParsedCidr>,
     session_routes: Vec<ParsedCidr>,
     nat_cidrs: Vec<ParsedCidr>,
+    client_addresses: ClientTunnelAddresses,
 }
 impl SessionRuntimeConfig {
     fn from_bootstrap(
@@ -572,7 +595,20 @@ impl SessionRuntimeConfig {
         let interface_name = derive_interface_name(&config.interface_prefix, &session_id_hex)?;
         let tunnel_addresses = parse_cidr_list(&bootstrap.server_tunnel_addresses)?;
         let session_routes = parse_cidr_list(&bootstrap.session_routes)?;
-        let nat_cidrs = session_routes.clone();
+        let client_addresses = ClientTunnelAddresses {
+            ipv4: Ipv4Addr::from(bootstrap.client_ipv4_address),
+            ipv6: Ipv6Addr::from(bootstrap.client_ipv6_address),
+        };
+        let nat_cidrs = vec![
+            ParsedCidr {
+                address: IpAddr::V4(client_addresses.ipv4),
+                prefix: 32,
+            },
+            ParsedCidr {
+                address: IpAddr::V6(client_addresses.ipv6),
+                prefix: 128,
+            },
+        ];
         let mtu = if bootstrap.mtu_bytes == 0 {
             config.default_mtu
         } else {
@@ -584,6 +620,7 @@ impl SessionRuntimeConfig {
             tunnel_addresses,
             session_routes,
             nat_cidrs,
+            client_addresses,
         })
     }
 }
@@ -609,6 +646,33 @@ fn validate_bootstrap_semantics(bootstrap: &VpnBackendBootstrap) -> Result<(), B
         &bootstrap.session_routes,
         VPN_BACKEND_BOOTSTRAP_MAX_SESSION_ROUTES_V1,
     )?;
+    let client_addresses = ClientTunnelAddresses {
+        ipv4: Ipv4Addr::from(bootstrap.client_ipv4_address),
+        ipv6: Ipv6Addr::from(bootstrap.client_ipv6_address),
+    };
+    if client_addresses.ipv4.is_unspecified()
+        || client_addresses.ipv4.is_multicast()
+        || client_addresses.ipv6.is_unspecified()
+        || client_addresses.ipv6.is_multicast()
+    {
+        return Err(BackendError::InvalidConfig(
+            "bootstrap client tunnel addresses must be exact unicast IPv4 and IPv6 addresses"
+                .to_owned(),
+        ));
+    }
+    let routes = parse_cidr_list(&bootstrap.session_routes)?;
+    if !routes
+        .iter()
+        .any(|route| cidr_contains_ip(route, IpAddr::V4(client_addresses.ipv4)))
+        || !routes
+            .iter()
+            .any(|route| cidr_contains_ip(route, IpAddr::V6(client_addresses.ipv6)))
+    {
+        return Err(BackendError::InvalidConfig(
+            "bootstrap client tunnel addresses must belong to their authenticated session routes"
+                .to_owned(),
+        ));
+    }
     Ok(())
 }
 fn validate_bootstrap_cidr_list(
@@ -648,12 +712,14 @@ struct PreparedTunnel {
     device: Arc<LinuxTunDevice>,
     applied_network: AppliedNetworkState,
     packet_read_mtu: usize,
+    client_addresses: ClientTunnelAddresses,
 }
 #[derive(Debug, Clone)]
 struct AppliedNetworkState {
     interface_name: String,
     forwarding_leases: Vec<IpFamily>,
     nat_rules: Vec<NatRule>,
+    firewall_rules: Vec<FirewallRule>,
 }
 #[derive(Debug, Clone)]
 struct ForwardingReservation {
@@ -670,6 +736,17 @@ struct NatRule {
     family: IpFamily,
     source_cidr: String,
     egress_interface: String,
+}
+#[derive(Debug, Clone)]
+struct FirewallRule {
+    family: IpFamily,
+    chain: &'static str,
+    arguments: Vec<String>,
+}
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct ClientTunnelAddresses {
+    ipv4: Ipv4Addr,
+    ipv6: Ipv6Addr,
 }
 #[derive(Debug)]
 struct LinuxTunDevice {
@@ -712,6 +789,12 @@ impl IpFamily {
             Self::V6 => "ip6tables",
         }
     }
+    const fn protected_destination_cidrs(self) -> &'static [&'static str] {
+        match self {
+            Self::V4 => IPV4_PROTECTED_DESTINATION_CIDRS_V1,
+            Self::V6 => IPV6_PROTECTED_DESTINATION_CIDRS_V1,
+        }
+    }
 }
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct ParsedCidr {
@@ -735,6 +818,8 @@ enum BackendError {
     InvalidConfig(String),
     #[error("invalid cidr: {0}")]
     InvalidCidr(String),
+    #[error("invalid VPN packet: {0}")]
+    InvalidPacket(String),
     #[error("io error: {0}")]
     Io(#[from] io::Error),
     #[error("backend state error: {0}")]
@@ -773,97 +858,58 @@ async fn run(cli: Cli) -> Result<(), BackendError> {
     );
     let mut sigterm = signal(SignalKind::terminate())?;
     let mut sigint = signal(SignalKind::interrupt())?;
-    let accept_result = match &config.endpoint {
-        BackendEndpoint::Tcp(addr) => {
-            let listener = TcpListener::bind(addr.as_str()).await?;
-            loop {
-                tokio::select! {
-                    _ = sigterm.recv() => break Ok(()),
-                    _ = sigint.recv() => break Ok(()),
-                    Some(result) = sessions.join_next(), if !sessions.is_empty() => {
-                        report_session_task_result(result);
-                    }
-                    accept = listener.accept() => {
-                        let (stream, _remote) = match accept {
-                            Ok(accepted) => accepted,
-                            Err(error) => break Err(error.into()),
-                        };
-                        let Some(permit) = try_session_permit(&session_permits) else {
-                            eprintln!("vpn backend rejected TCP peer: session capacity reached");
-                            continue;
-                        };
-                        let session_config = Arc::clone(&config);
-                        let session_shared = Arc::clone(&shared_network);
-                        let session_shutdown = shutdown_rx.clone();
-                        let session_shutdown_requested = Arc::clone(&shutdown_requested);
-                        sessions.spawn(async move {
-                            let _permit = permit;
-                            if let Err(error) = serve_connection(
-                                stream,
-                                session_config,
-                                &session_shared,
-                                session_shutdown,
-                                session_shutdown_requested,
-                            ).await {
-                                eprintln!("vpn backend TCP session failed: {error}");
-                            }
-                        });
-                    }
+    let path = &config.endpoint.0;
+    let accept_result = {
+        ensure_unix_socket_path_available(path)?;
+        let listener = UnixListener::bind(path)?;
+        let mut socket_guard = UnixSocketGuard::capture(path)?;
+        fs::set_permissions(path, fs::Permissions::from_mode(0o660))?;
+        let result = loop {
+            tokio::select! {
+                _ = sigterm.recv() => break Ok(()),
+                _ = sigint.recv() => break Ok(()),
+                Some(result) = sessions.join_next(), if !sessions.is_empty() => {
+                    report_session_task_result(result);
                 }
-            }
-        }
-        BackendEndpoint::Unix(path) => {
-            ensure_unix_socket_path_available(path)?;
-            let listener = UnixListener::bind(path)?;
-            let mut socket_guard = UnixSocketGuard::capture(path)?;
-            fs::set_permissions(path, fs::Permissions::from_mode(0o660))?;
-            let result = loop {
-                tokio::select! {
-                    _ = sigterm.recv() => break Ok(()),
-                    _ = sigint.recv() => break Ok(()),
-                    Some(result) = sessions.join_next(), if !sessions.is_empty() => {
-                        report_session_task_result(result);
+                accept = listener.accept() => {
+                    let (stream, _addr) = match accept {
+                        Ok(accepted) => accepted,
+                        Err(error) => break Err(error.into()),
+                    };
+                    if let Err(error) = verify_unix_peer_credentials(&stream, config.allowed_uid, config.allowed_gid) {
+                        eprintln!("vpn backend rejected unix peer: {error}");
+                        continue;
                     }
-                    accept = listener.accept() => {
-                        let (stream, _addr) = match accept {
-                            Ok(accepted) => accepted,
-                            Err(error) => break Err(error.into()),
-                        };
-                        if let Err(error) = verify_unix_peer_credentials(&stream, config.allowed_uid, config.allowed_gid) {
-                            eprintln!("vpn backend rejected unix peer: {error}");
-                            continue;
+                    let Some(permit) = try_session_permit(&session_permits) else {
+                        eprintln!("vpn backend rejected unix peer: session capacity reached");
+                        continue;
+                    };
+                    let session_config = Arc::clone(&config);
+                    let session_shared = Arc::clone(&shared_network);
+                    let session_shutdown = shutdown_rx.clone();
+                    let session_shutdown_requested = Arc::clone(&shutdown_requested);
+                    sessions.spawn(async move {
+                        let _permit = permit;
+                        if let Err(error) = serve_connection(
+                            stream,
+                            session_config,
+                            &session_shared,
+                            session_shutdown,
+                            session_shutdown_requested,
+                        ).await {
+                            eprintln!("vpn backend session from unix-peer failed: {error}");
                         }
-                        let Some(permit) = try_session_permit(&session_permits) else {
-                            eprintln!("vpn backend rejected unix peer: session capacity reached");
-                            continue;
-                        };
-                        let session_config = Arc::clone(&config);
-                        let session_shared = Arc::clone(&shared_network);
-                        let session_shutdown = shutdown_rx.clone();
-                        let session_shutdown_requested = Arc::clone(&shutdown_requested);
-                        sessions.spawn(async move {
-                            let _permit = permit;
-                            if let Err(error) = serve_connection(
-                                stream,
-                                session_config,
-                                &session_shared,
-                                session_shutdown,
-                                session_shutdown_requested,
-                            ).await {
-                                eprintln!("vpn backend session from unix-peer failed: {error}");
-                            }
-                        });
-                    }
+                    });
                 }
-            };
-            drop(listener);
-            match (result, socket_guard.cleanup()) {
-                (result, Ok(())) => result,
-                (Ok(()), Err(error)) => Err(error.into()),
-                (Err(run_error), Err(cleanup_error)) => Err(BackendError::State(format!(
-                    "{run_error}; Unix socket cleanup failed: {cleanup_error}"
-                ))),
             }
+        };
+        drop(listener);
+        match (result, socket_guard.cleanup()) {
+            (result, Ok(())) => result,
+            (Ok(()), Err(error)) => Err(error.into()),
+            (Err(run_error), Err(cleanup_error)) => Err(BackendError::State(format!(
+                "{run_error}; Unix socket cleanup failed: {cleanup_error}"
+            ))),
         }
     };
     shutdown_requested.store(true, Ordering::Release);
@@ -1054,6 +1100,7 @@ where
         Arc::clone(&prepared.device),
         stream,
         prepared.packet_read_mtu,
+        prepared.client_addresses,
         shutdown,
     )
     .await;
@@ -1078,11 +1125,14 @@ fn prepare_tunnel(
     shutdown_requested: &AtomicBool,
 ) -> Result<PreparedTunnel, BackendError> {
     ensure_backend_running(shutdown_requested)?;
+    let ipv4_forward_egress = forwarding_egress_interface(config, IpFamily::V4)?;
+    let ipv6_forward_egress = forwarding_egress_interface(config, IpFamily::V6)?;
     let device = Arc::new(LinuxTunDevice::create(&session_config.interface_name)?);
     let mut applied_network = AppliedNetworkState {
         interface_name: device.name().to_owned(),
         forwarding_leases: Vec::new(),
         nat_rules: Vec::new(),
+        firewall_rules: Vec::new(),
     };
     if let Err(error) = apply_tunnel_link_config(
         &applied_network.interface_name,
@@ -1098,6 +1148,22 @@ fn prepare_tunnel(
         shutdown_requested,
     ) {
         return Err(network_setup_error(error, &applied_network, shared_network));
+    }
+    for rule in session_firewall_rules(
+        &applied_network.interface_name,
+        session_config.client_addresses,
+        ipv4_forward_egress,
+        ipv6_forward_egress,
+    ) {
+        ensure_backend_running(shutdown_requested)
+            .map_err(|error| network_setup_error(error, &applied_network, shared_network))?;
+        match apply_firewall_rule(&rule) {
+            Ok(true) => applied_network.firewall_rules.push(rule),
+            Ok(false) => {}
+            Err(error) => {
+                return Err(network_setup_error(error, &applied_network, shared_network));
+            }
+        }
     }
     if config.ipv4_forward && has_family(&session_config.session_routes, IpFamily::V4) {
         match acquire_forwarding(shared_network, IpFamily::V4, shutdown_requested) {
@@ -1180,6 +1246,7 @@ fn prepare_tunnel(
         device,
         applied_network,
         packet_read_mtu: usize::from(session_config.mtu),
+        client_addresses: session_config.client_addresses,
     })
 }
 fn network_setup_error(
@@ -1209,6 +1276,7 @@ fn cleanup_network(
     cleanup_network_with(
         applied,
         remove_nat_rule,
+        remove_firewall_rule,
         |family| match release_forwarding(shared_network, family) {
             Ok(()) => Ok(()),
             Err(first_error) => release_forwarding(shared_network, family).map_err(|retry_error| {
@@ -1241,14 +1309,16 @@ fn cleanup_network(
         },
     )
 }
-fn cleanup_network_with<FN, FF, FD>(
+fn cleanup_network_with<FN, FW, FF, FD>(
     applied: &AppliedNetworkState,
     mut remove_nat: FN,
+    mut remove_firewall: FW,
     mut release_forwarding_lease: FF,
     mut bring_link_down: FD,
 ) -> Result<(), BackendError>
 where
     FN: FnMut(&NatRule) -> Result<(), BackendError>,
+    FW: FnMut(&FirewallRule) -> Result<(), BackendError>,
     FF: FnMut(IpFamily) -> Result<(), BackendError>,
     FD: FnMut(&str) -> Result<(), BackendError>,
 {
@@ -1261,6 +1331,11 @@ where
     for family in applied.forwarding_leases.iter().rev() {
         if let Err(error) = release_forwarding_lease(*family) {
             failures.push(format!("forwarding rollback failed: {error}"));
+        }
+    }
+    for rule in applied.firewall_rules.iter().rev() {
+        if let Err(error) = remove_firewall(rule) {
+            failures.push(format!("firewall rollback failed: {error}"));
         }
     }
     if let Err(error) = bring_link_down(&applied.interface_name) {
@@ -1280,14 +1355,20 @@ async fn backend_packet_loop<S>(
     device: Arc<LinuxTunDevice>,
     stream: S,
     packet_read_mtu: usize,
+    client_addresses: ClientTunnelAddresses,
     mut shutdown: watch::Receiver<bool>,
 ) -> Result<(), BackendError>
 where
     S: AsyncRead + AsyncWrite + Unpin,
 {
     let (mut reader, mut writer) = tokio::io::split(stream);
-    let upstream = tun_to_socket_loop(Arc::clone(&device), &mut writer, packet_read_mtu);
-    let downstream = socket_to_tun_loop(device, &mut reader, packet_read_mtu);
+    let upstream = tun_to_socket_loop(
+        Arc::clone(&device),
+        &mut writer,
+        packet_read_mtu,
+        client_addresses,
+    );
+    let downstream = socket_to_tun_loop(device, &mut reader, packet_read_mtu, client_addresses);
     tokio::pin!(upstream);
     tokio::pin!(downstream);
     tokio::select! {
@@ -1921,6 +2002,7 @@ async fn tun_to_socket_loop<W: AsyncWriteExt + Unpin>(
     device: Arc<LinuxTunDevice>,
     writer: &mut W,
     packet_read_mtu: usize,
+    client_addresses: ClientTunnelAddresses,
 ) -> Result<(), BackendError> {
     let mut packet_buf = vec![0u8; packet_read_mtu.max(512)];
     loop {
@@ -1928,6 +2010,11 @@ async fn tun_to_socket_loop<W: AsyncWriteExt + Unpin>(
         if packet_len == 0 {
             continue;
         }
+        validate_vpn_packet(
+            &packet_buf[..packet_len],
+            client_addresses,
+            PacketDirection::BackendToClient,
+        )?;
         let encoded = encode_packet_stream_frame(&packet_buf[..packet_len])?;
         timeout(VPN_BACKEND_SOCKET_WRITE_TIMEOUT, writer.write_all(&encoded))
             .await
@@ -1938,6 +2025,7 @@ async fn socket_to_tun_loop<R: AsyncReadExt + Unpin>(
     device: Arc<LinuxTunDevice>,
     reader: &mut R,
     maximum_packet_bytes: usize,
+    client_addresses: ClientTunnelAddresses,
 ) -> Result<(), BackendError> {
     let mut decoder = PacketStreamDecoder::new(maximum_packet_bytes);
     let mut buf = vec![0u8; 4096];
@@ -1949,9 +2037,254 @@ async fn socket_to_tun_loop<R: AsyncReadExt + Unpin>(
             return Ok(());
         }
         for packet in decoder.ingest(&buf[..read])? {
-            device.send(&packet).await?;
+            validate_vpn_packet(&packet, client_addresses, PacketDirection::ClientToBackend)?;
+            let written = device.send(&packet).await?;
+            if written != packet.len() {
+                return Err(BackendError::State(format!(
+                    "vpn backend TUN write accepted {written} of {} packet bytes",
+                    packet.len()
+                )));
+            }
         }
     }
+}
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PacketDirection {
+    ClientToBackend,
+    BackendToClient,
+}
+fn validate_vpn_packet(
+    packet: &[u8],
+    client_addresses: ClientTunnelAddresses,
+    direction: PacketDirection,
+) -> Result<(), BackendError> {
+    let Some(version) = packet.first().map(|byte| byte >> 4) else {
+        return Err(BackendError::InvalidPacket("packet is empty".to_owned()));
+    };
+    match version {
+        4 => validate_ipv4_packet(packet, client_addresses.ipv4, direction),
+        6 => validate_ipv6_packet(packet, client_addresses.ipv6, direction),
+        _ => Err(BackendError::InvalidPacket(format!(
+            "IP version nibble {version} is unsupported"
+        ))),
+    }
+}
+fn validate_ipv4_packet(
+    packet: &[u8],
+    client_address: Ipv4Addr,
+    direction: PacketDirection,
+) -> Result<(), BackendError> {
+    const IPV4_HEADER_BYTES: usize = 20;
+    if packet.len() < IPV4_HEADER_BYTES {
+        return Err(BackendError::InvalidPacket(
+            "IPv4 packet is shorter than its minimum header".to_owned(),
+        ));
+    }
+    let header_bytes = usize::from(packet[0] & 0x0f) * 4;
+    if header_bytes != IPV4_HEADER_BYTES {
+        return Err(BackendError::InvalidPacket(format!(
+            "IPv4 IHL must be exactly {IPV4_HEADER_BYTES} bytes in the V1 corridor (got {header_bytes})"
+        )));
+    }
+    let total_length = usize::from(u16::from_be_bytes([packet[2], packet[3]]));
+    if total_length != packet.len() {
+        return Err(BackendError::InvalidPacket(format!(
+            "IPv4 total length {total_length} does not match packet frame length {}",
+            packet.len()
+        )));
+    }
+    let fragment = u16::from_be_bytes([packet[6], packet[7]]);
+    if fragment & 0x8000 != 0 {
+        return Err(BackendError::InvalidPacket(
+            "IPv4 reserved fragment flag is set".to_owned(),
+        ));
+    }
+    if fragment & 0x3fff != 0 {
+        return Err(BackendError::InvalidPacket(
+            "fragmented IPv4 packets are outside the V1 anti-spoof corridor".to_owned(),
+        ));
+    }
+    if !ipv4_header_checksum_valid(&packet[..header_bytes]) {
+        return Err(BackendError::InvalidPacket(
+            "IPv4 header checksum is invalid".to_owned(),
+        ));
+    }
+    let source = Ipv4Addr::new(packet[12], packet[13], packet[14], packet[15]);
+    let destination = Ipv4Addr::new(packet[16], packet[17], packet[18], packet[19]);
+    validate_packet_endpoint(
+        IpAddr::V4(source),
+        IpAddr::V4(destination),
+        IpAddr::V4(client_address),
+        direction,
+    )
+}
+fn ipv4_header_checksum_valid(header: &[u8]) -> bool {
+    let mut sum = 0u32;
+    for word in header.chunks_exact(2) {
+        sum = sum.saturating_add(u32::from(u16::from_be_bytes([word[0], word[1]])));
+    }
+    while sum >> 16 != 0 {
+        sum = (sum & 0xffff) + (sum >> 16);
+    }
+    sum == 0xffff
+}
+fn validate_ipv6_packet(
+    packet: &[u8],
+    client_address: Ipv6Addr,
+    direction: PacketDirection,
+) -> Result<(), BackendError> {
+    const IPV6_HEADER_BYTES: usize = 40;
+    if packet.len() < IPV6_HEADER_BYTES {
+        return Err(BackendError::InvalidPacket(
+            "IPv6 packet is shorter than its fixed header".to_owned(),
+        ));
+    }
+    let payload_length = usize::from(u16::from_be_bytes([packet[4], packet[5]]));
+    let total_length = IPV6_HEADER_BYTES
+        .checked_add(payload_length)
+        .ok_or_else(|| {
+            BackendError::InvalidPacket("IPv6 payload length overflowed packet size".to_owned())
+        })?;
+    if total_length != packet.len() {
+        return Err(BackendError::InvalidPacket(format!(
+            "IPv6 payload length {payload_length} does not match packet frame length {}",
+            packet.len()
+        )));
+    }
+    validate_ipv6_extension_chain(packet, packet[6])?;
+    let mut source = [0u8; 16];
+    source.copy_from_slice(&packet[8..24]);
+    let mut destination = [0u8; 16];
+    destination.copy_from_slice(&packet[24..40]);
+    validate_packet_endpoint(
+        IpAddr::V6(Ipv6Addr::from(source)),
+        IpAddr::V6(Ipv6Addr::from(destination)),
+        IpAddr::V6(client_address),
+        direction,
+    )
+}
+fn validate_ipv6_extension_chain(packet: &[u8], mut next_header: u8) -> Result<(), BackendError> {
+    let mut offset = 40usize;
+    for _ in 0..8 {
+        match next_header {
+            44 => {
+                return Err(BackendError::InvalidPacket(
+                    "IPv6 fragment headers are outside the V1 anti-spoof corridor".to_owned(),
+                ));
+            }
+            43 => {
+                return Err(BackendError::InvalidPacket(
+                    "IPv6 routing headers are outside the V1 packet corridor".to_owned(),
+                ));
+            }
+            0 | 60 | 135 | 139 | 140 => {
+                if packet.len().saturating_sub(offset) < 2 {
+                    return Err(BackendError::InvalidPacket(
+                        "IPv6 extension header is truncated".to_owned(),
+                    ));
+                }
+                let extension_length = (usize::from(packet[offset + 1]) + 1)
+                    .checked_mul(8)
+                    .ok_or_else(|| {
+                        BackendError::InvalidPacket(
+                            "IPv6 extension header length overflowed".to_owned(),
+                        )
+                    })?;
+                next_header = packet[offset];
+                offset = offset.checked_add(extension_length).ok_or_else(|| {
+                    BackendError::InvalidPacket("IPv6 extension chain overflowed".to_owned())
+                })?;
+                if offset > packet.len() {
+                    return Err(BackendError::InvalidPacket(
+                        "IPv6 extension header exceeds packet length".to_owned(),
+                    ));
+                }
+            }
+            51 => {
+                if packet.len().saturating_sub(offset) < 2 {
+                    return Err(BackendError::InvalidPacket(
+                        "IPv6 authentication header is truncated".to_owned(),
+                    ));
+                }
+                let extension_length = (usize::from(packet[offset + 1]) + 2)
+                    .checked_mul(4)
+                    .ok_or_else(|| {
+                        BackendError::InvalidPacket(
+                            "IPv6 authentication header length overflowed".to_owned(),
+                        )
+                    })?;
+                next_header = packet[offset];
+                offset = offset.checked_add(extension_length).ok_or_else(|| {
+                    BackendError::InvalidPacket("IPv6 extension chain overflowed".to_owned())
+                })?;
+                if offset > packet.len() {
+                    return Err(BackendError::InvalidPacket(
+                        "IPv6 authentication header exceeds packet length".to_owned(),
+                    ));
+                }
+            }
+            59 if offset != packet.len() => {
+                return Err(BackendError::InvalidPacket(
+                    "IPv6 no-next-header packet carries trailing payload".to_owned(),
+                ));
+            }
+            _ => return Ok(()),
+        }
+    }
+    Err(BackendError::InvalidPacket(
+        "IPv6 extension chain exceeds the V1 depth limit".to_owned(),
+    ))
+}
+fn validate_packet_endpoint(
+    source: IpAddr,
+    destination: IpAddr,
+    client_address: IpAddr,
+    direction: PacketDirection,
+) -> Result<(), BackendError> {
+    let (observed, label) = match direction {
+        PacketDirection::ClientToBackend => (source, "source"),
+        PacketDirection::BackendToClient => (destination, "destination"),
+    };
+    if observed != client_address {
+        return Err(BackendError::InvalidPacket(format!(
+            "packet {label} {observed} does not match assigned client address {client_address}"
+        )));
+    }
+    if direction == PacketDirection::ClientToBackend
+        && is_protected_public_exit_destination(destination)
+    {
+        return Err(BackendError::InvalidPacket(format!(
+            "public-exit packet destination {destination} belongs to a protected local, private, special-use, or non-unicast range"
+        )));
+    }
+    Ok(())
+}
+
+fn is_protected_public_exit_destination(address: IpAddr) -> bool {
+    let family = match address {
+        IpAddr::V4(_) => IpFamily::V4,
+        IpAddr::V6(_) => IpFamily::V6,
+    };
+    protected_destination_cidrs(family)
+        .iter()
+        .any(|cidr| cidr_contains_ip(cidr, address))
+}
+
+fn protected_destination_cidrs(family: IpFamily) -> &'static [ParsedCidr] {
+    static IPV4: OnceLock<Vec<ParsedCidr>> = OnceLock::new();
+    static IPV6: OnceLock<Vec<ParsedCidr>> = OnceLock::new();
+    let (slot, values) = match family {
+        IpFamily::V4 => (&IPV4, IPV4_PROTECTED_DESTINATION_CIDRS_V1),
+        IpFamily::V6 => (&IPV6, IPV6_PROTECTED_DESTINATION_CIDRS_V1),
+    };
+    slot.get_or_init(|| {
+        values
+            .iter()
+            .map(|value| {
+                parse_cidr(value).expect("static protected public-exit CIDRs must be canonical")
+            })
+            .collect()
+    })
 }
 impl PacketStreamDecoder {
     fn new(maximum_packet_bytes: usize) -> Self {
@@ -2249,6 +2582,203 @@ fn forwarding_slot_mut(
         IpFamily::V6 => &mut shared_network.ipv6_forwarding,
     }
 }
+fn forwarding_egress_interface(
+    config: &BackendConfig,
+    family: IpFamily,
+) -> Result<Option<&str>, BackendError> {
+    let (forwarding_enabled, egress_interface) = match family {
+        IpFamily::V4 => (config.ipv4_forward, config.egress_v4_interface.as_deref()),
+        IpFamily::V6 => (config.ipv6_forward, config.egress_v6_interface.as_deref()),
+    };
+    if !forwarding_enabled {
+        return Ok(None);
+    }
+    egress_interface.map(Some).ok_or_else(|| {
+        BackendError::InvalidConfig(format!(
+            "{} forwarding requires a resolved egress interface",
+            match family {
+                IpFamily::V4 => "IPv4",
+                IpFamily::V6 => "IPv6",
+            }
+        ))
+    })
+}
+fn session_firewall_rules(
+    interface_name: &str,
+    client_addresses: ClientTunnelAddresses,
+    ipv4_forward_egress: Option<&str>,
+    ipv6_forward_egress: Option<&str>,
+) -> Vec<FirewallRule> {
+    let mut rules = Vec::with_capacity(
+        12 + IPV4_PROTECTED_DESTINATION_CIDRS_V1.len() + IPV6_PROTECTED_DESTINATION_CIDRS_V1.len(),
+    );
+    for (family, address, forward_egress) in [
+        (
+            IpFamily::V4,
+            format!("{}/32", client_addresses.ipv4),
+            ipv4_forward_egress,
+        ),
+        (
+            IpFamily::V6,
+            format!("{}/128", client_addresses.ipv6),
+            ipv6_forward_egress,
+        ),
+    ] {
+        rules.push(FirewallRule {
+            family,
+            chain: "INPUT",
+            arguments: vec![
+                "-i".to_owned(),
+                interface_name.to_owned(),
+                "-j".to_owned(),
+                "DROP".to_owned(),
+            ],
+        });
+        rules.push(FirewallRule {
+            family,
+            chain: "OUTPUT",
+            arguments: vec![
+                "-o".to_owned(),
+                interface_name.to_owned(),
+                "!".to_owned(),
+                "-d".to_owned(),
+                address.clone(),
+                "-j".to_owned(),
+                "DROP".to_owned(),
+            ],
+        });
+
+        // Rules are installed with `iptables -I ... 1`, so append each
+        // direction's catch-all before its allow rule. The resulting chain
+        // permits only the pinned egress path and keeps every other host
+        // interface fail-closed.
+        rules.push(FirewallRule {
+            family,
+            chain: "FORWARD",
+            arguments: vec![
+                "-o".to_owned(),
+                interface_name.to_owned(),
+                "-j".to_owned(),
+                "DROP".to_owned(),
+            ],
+        });
+        if let Some(egress_interface) = forward_egress {
+            rules.push(FirewallRule {
+                family,
+                chain: "FORWARD",
+                arguments: vec![
+                    "-i".to_owned(),
+                    egress_interface.to_owned(),
+                    "-o".to_owned(),
+                    interface_name.to_owned(),
+                    "-d".to_owned(),
+                    address.clone(),
+                    "-m".to_owned(),
+                    "conntrack".to_owned(),
+                    "--ctstate".to_owned(),
+                    "ESTABLISHED,RELATED".to_owned(),
+                    "-j".to_owned(),
+                    "ACCEPT".to_owned(),
+                ],
+            });
+        }
+        rules.push(FirewallRule {
+            family,
+            chain: "FORWARD",
+            arguments: vec![
+                "-i".to_owned(),
+                interface_name.to_owned(),
+                "-j".to_owned(),
+                "DROP".to_owned(),
+            ],
+        });
+        if let Some(egress_interface) = forward_egress {
+            rules.push(FirewallRule {
+                family,
+                chain: "FORWARD",
+                arguments: vec![
+                    "-i".to_owned(),
+                    interface_name.to_owned(),
+                    "-o".to_owned(),
+                    egress_interface.to_owned(),
+                    "-s".to_owned(),
+                    address.clone(),
+                    "-m".to_owned(),
+                    "conntrack".to_owned(),
+                    "--ctstate".to_owned(),
+                    "NEW,ESTABLISHED,RELATED".to_owned(),
+                    "-j".to_owned(),
+                    "ACCEPT".to_owned(),
+                ],
+            });
+            // Each rule is inserted at chain position one. Append protected
+            // destinations after the allow so the kernel evaluates every
+            // same-interface SSRF/lateral-movement deny before that allow.
+            for destination in family.protected_destination_cidrs() {
+                rules.push(FirewallRule {
+                    family,
+                    chain: "FORWARD",
+                    arguments: vec![
+                        "-i".to_owned(),
+                        interface_name.to_owned(),
+                        "-o".to_owned(),
+                        egress_interface.to_owned(),
+                        "-s".to_owned(),
+                        address.clone(),
+                        "-d".to_owned(),
+                        (*destination).to_owned(),
+                        "-j".to_owned(),
+                        "DROP".to_owned(),
+                    ],
+                });
+            }
+        }
+    }
+    rules
+}
+fn apply_firewall_rule(rule: &FirewallRule) -> Result<bool, BackendError> {
+    let program = rule.family.nat_program();
+    if !command_exists(program) {
+        return Err(BackendError::State(format!(
+            "{program} is required for VPN anti-spoofing"
+        )));
+    }
+    match classify_rule_check(run_command(program, firewall_rule_args("-C", rule)))? {
+        RuleCheck::Exists => Ok(false),
+        RuleCheck::Missing => {
+            run_command(program, firewall_rule_args("-I", rule))?;
+            Ok(true)
+        }
+    }
+}
+fn remove_firewall_rule(rule: &FirewallRule) -> Result<(), BackendError> {
+    let result = run_command(rule.family.nat_program(), firewall_rule_args("-D", rule));
+    match result {
+        Ok(_) => Ok(()),
+        Err(BackendError::CommandFailed { detail, .. })
+            if detail.contains("Bad rule")
+                || detail.contains("No chain/target/match")
+                || detail.contains("does a matching rule exist") =>
+        {
+            Ok(())
+        }
+        Err(error) => Err(error),
+    }
+}
+fn firewall_rule_args(action: &str, rule: &FirewallRule) -> Vec<String> {
+    let mut args = vec![
+        "-w".to_owned(),
+        "-t".to_owned(),
+        "filter".to_owned(),
+        action.to_owned(),
+        rule.chain.to_owned(),
+    ];
+    if action == "-I" {
+        args.push("1".to_owned());
+    }
+    args.extend(rule.arguments.iter().cloned());
+    args
+}
 fn apply_nat_rule(
     family: IpFamily,
     source_cidr: &str,
@@ -2267,9 +2797,9 @@ fn apply_nat_rule(
         )));
     }
     let args = nat_rule_args("-C", source_cidr, egress_interface);
-    match classify_nat_rule_check(run_command(program, args))? {
-        NatRuleCheck::Exists => return Ok(None),
-        NatRuleCheck::Missing => {
+    match classify_rule_check(run_command(program, args))? {
+        RuleCheck::Exists => return Ok(None),
+        RuleCheck::Missing => {
             run_command(program, nat_rule_args("-A", source_cidr, egress_interface))?;
         }
     }
@@ -2280,18 +2810,16 @@ fn apply_nat_rule(
     }))
 }
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum NatRuleCheck {
+enum RuleCheck {
     Exists,
     Missing,
 }
-fn classify_nat_rule_check(
-    result: Result<String, BackendError>,
-) -> Result<NatRuleCheck, BackendError> {
+fn classify_rule_check(result: Result<String, BackendError>) -> Result<RuleCheck, BackendError> {
     match result {
-        Ok(_) => Ok(NatRuleCheck::Exists),
+        Ok(_) => Ok(RuleCheck::Exists),
         Err(BackendError::CommandFailed {
             exit_code: Some(1), ..
-        }) => Ok(NatRuleCheck::Missing),
+        }) => Ok(RuleCheck::Missing),
         Err(error) => Err(error),
     }
 }
@@ -2430,6 +2958,27 @@ fn parse_cidr(value: &str) -> Result<ParsedCidr, BackendError> {
         return Err(BackendError::InvalidCidr(trimmed.to_owned()));
     }
     Ok(ParsedCidr { address, prefix })
+}
+fn cidr_contains_ip(cidr: &ParsedCidr, address: IpAddr) -> bool {
+    match (cidr.address, address) {
+        (IpAddr::V4(network), IpAddr::V4(address)) => {
+            let mask = if cidr.prefix == 0 {
+                0
+            } else {
+                u32::MAX << (32 - u32::from(cidr.prefix))
+            };
+            u32::from(network) & mask == u32::from(address) & mask
+        }
+        (IpAddr::V6(network), IpAddr::V6(address)) => {
+            let mask = if cidr.prefix == 0 {
+                0
+            } else {
+                u128::MAX << (128 - u32::from(cidr.prefix))
+            };
+            u128::from(network) & mask == u128::from(address) & mask
+        }
+        _ => false,
+    }
 }
 fn has_family(values: &[ParsedCidr], family: IpFamily) -> bool {
     values.iter().any(|value| value.family() == family)
@@ -2752,10 +3301,7 @@ fn kill_trusted_command_process_group(child_pid: u32) -> io::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::{
-        net::{Ipv4Addr, Ipv6Addr},
-        sync::atomic::AtomicU64,
-    };
+    use std::sync::atomic::AtomicU64;
     static TEST_DIRECTORY_SEQUENCE: AtomicU64 = AtomicU64::new(0);
     struct TestDirectory(PathBuf);
     impl TestDirectory {
@@ -2796,6 +3342,48 @@ mod tests {
             exit_code: Some(exit_code),
             detail: "test failure".to_owned(),
         }
+    }
+    fn test_client_addresses() -> ClientTunnelAddresses {
+        ClientTunnelAddresses {
+            ipv4: Ipv4Addr::new(10, 208, 0, 2),
+            ipv6: "fd53:7261:6574::2".parse().expect("canonical client IPv6"),
+        }
+    }
+    fn test_ipv4_packet(source: Ipv4Addr, destination: Ipv4Addr) -> Vec<u8> {
+        let mut packet = vec![0u8; 24];
+        packet[0] = 0x45;
+        let packet_len = u16::try_from(packet.len()).expect("test IPv4 packet length");
+        packet[2..4].copy_from_slice(&packet_len.to_be_bytes());
+        packet[6..8].copy_from_slice(&0x4000u16.to_be_bytes());
+        packet[8] = 64;
+        packet[9] = 17;
+        packet[12..16].copy_from_slice(&source.octets());
+        packet[16..20].copy_from_slice(&destination.octets());
+        packet[20..].copy_from_slice(b"test");
+        set_test_ipv4_checksum(&mut packet);
+        packet
+    }
+    fn set_test_ipv4_checksum(packet: &mut [u8]) {
+        packet[10..12].fill(0);
+        let mut sum = 0u32;
+        for word in packet[..20].chunks_exact(2) {
+            sum += u32::from(u16::from_be_bytes([word[0], word[1]]));
+        }
+        while sum >> 16 != 0 {
+            sum = (sum & 0xffff) + (sum >> 16);
+        }
+        packet[10..12].copy_from_slice(&(!(sum as u16)).to_be_bytes());
+    }
+    fn test_ipv6_packet(source: Ipv6Addr, destination: Ipv6Addr) -> Vec<u8> {
+        let mut packet = vec![0u8; 44];
+        packet[0] = 0x60;
+        packet[4..6].copy_from_slice(&4u16.to_be_bytes());
+        packet[6] = 17;
+        packet[7] = 64;
+        packet[8..24].copy_from_slice(&source.octets());
+        packet[24..40].copy_from_slice(&destination.octets());
+        packet[40..].copy_from_slice(b"test");
+        packet
     }
     #[test]
     fn backend_config_requires_bootstrap_secret_for_unix_endpoints() {
@@ -2866,17 +3454,389 @@ mod tests {
         assert!(!route_add_args("svpn0", &cidr).contains(&"replace".to_owned()));
     }
     #[test]
-    fn nat_check_tracks_only_rules_created_by_this_session() {
+    fn packet_boundary_accepts_only_the_assigned_endpoint_in_each_direction() {
+        let assigned = test_client_addresses();
+        let remote_v4 = Ipv4Addr::new(1, 1, 1, 1);
+        let remote_v6 = "2606:4700:4700::1111"
+            .parse::<Ipv6Addr>()
+            .expect("remote IPv6");
+        let client_v4 = test_ipv4_packet(assigned.ipv4, remote_v4);
+        validate_vpn_packet(&client_v4, assigned, PacketDirection::ClientToBackend)
+            .expect("assigned IPv4 source");
+        let server_v4 = test_ipv4_packet(remote_v4, assigned.ipv4);
+        validate_vpn_packet(&server_v4, assigned, PacketDirection::BackendToClient)
+            .expect("assigned IPv4 destination");
+        let client_v6 = test_ipv6_packet(assigned.ipv6, remote_v6);
+        validate_vpn_packet(&client_v6, assigned, PacketDirection::ClientToBackend)
+            .expect("assigned IPv6 source");
+        let server_v6 = test_ipv6_packet(remote_v6, assigned.ipv6);
+        validate_vpn_packet(&server_v6, assigned, PacketDirection::BackendToClient)
+            .expect("assigned IPv6 destination");
+
+        let spoofed_v4 = test_ipv4_packet(Ipv4Addr::new(10, 208, 0, 3), remote_v4);
+        assert!(
+            validate_vpn_packet(&spoofed_v4, assigned, PacketDirection::ClientToBackend).is_err()
+        );
+        let leaked_v4 = test_ipv4_packet(remote_v4, Ipv4Addr::new(10, 208, 0, 3));
+        assert!(
+            validate_vpn_packet(&leaked_v4, assigned, PacketDirection::BackendToClient).is_err()
+        );
+        let spoofed_v6 = test_ipv6_packet(
+            "fd53:7261:6574::3".parse().expect("spoofed IPv6"),
+            remote_v6,
+        );
+        assert!(
+            validate_vpn_packet(&spoofed_v6, assigned, PacketDirection::ClientToBackend).is_err()
+        );
+        let leaked_v6 =
+            test_ipv6_packet(remote_v6, "fd53:7261:6574::3".parse().expect("leaked IPv6"));
+        assert!(
+            validate_vpn_packet(&leaked_v6, assigned, PacketDirection::BackendToClient).is_err()
+        );
+    }
+    #[test]
+    fn public_exit_rejects_same_egress_private_special_and_mapped_destinations() {
+        let assigned = test_client_addresses();
+        for destination in [
+            Ipv4Addr::UNSPECIFIED,
+            Ipv4Addr::new(10, 1, 2, 3),
+            Ipv4Addr::new(100, 64, 0, 1),
+            Ipv4Addr::LOCALHOST,
+            Ipv4Addr::new(169, 254, 169, 254),
+            Ipv4Addr::new(172, 31, 0, 1),
+            Ipv4Addr::new(192, 0, 2, 1),
+            Ipv4Addr::new(192, 168, 1, 1),
+            Ipv4Addr::new(198, 18, 0, 1),
+            Ipv4Addr::new(198, 51, 100, 1),
+            Ipv4Addr::new(203, 0, 113, 1),
+            Ipv4Addr::new(224, 0, 0, 1),
+            Ipv4Addr::BROADCAST,
+        ] {
+            let packet = test_ipv4_packet(assigned.ipv4, destination);
+            let error = validate_vpn_packet(&packet, assigned, PacketDirection::ClientToBackend)
+                .expect_err("protected IPv4 destination must not leave the public exit");
+            assert!(error.to_string().contains("protected"));
+        }
+
+        for destination in [
+            Ipv6Addr::UNSPECIFIED,
+            Ipv6Addr::LOCALHOST,
+            "::ffff:10.1.2.3".parse().expect("mapped private IPv4"),
+            "64:ff9b::a01:203".parse().expect("well-known NAT64"),
+            "64:ff9b:1::1".parse().expect("local-use NAT64"),
+            "100::1".parse().expect("discard-only IPv6"),
+            "2001:2::1".parse().expect("benchmark IPv6"),
+            "2001:db8::1".parse().expect("documentation IPv6"),
+            "3fff::1".parse().expect("documentation IPv6"),
+            "fc00::1".parse().expect("unique-local IPv6"),
+            "fec0::1".parse().expect("deprecated site-local IPv6"),
+            "fe80::1".parse().expect("link-local IPv6"),
+            "ff02::1".parse().expect("multicast IPv6"),
+        ] {
+            let packet = test_ipv6_packet(assigned.ipv6, destination);
+            let error = validate_vpn_packet(&packet, assigned, PacketDirection::ClientToBackend)
+                .expect_err("protected IPv6 destination must not leave the public exit");
+            assert!(error.to_string().contains("protected"));
+        }
+
+        validate_vpn_packet(
+            &test_ipv4_packet(assigned.ipv4, Ipv4Addr::new(1, 1, 1, 1)),
+            assigned,
+            PacketDirection::ClientToBackend,
+        )
+        .expect("globally routed IPv4 destination");
+        validate_vpn_packet(
+            &test_ipv6_packet(
+                assigned.ipv6,
+                "2606:4700:4700::1111"
+                    .parse()
+                    .expect("globally routed IPv6"),
+            ),
+            assigned,
+            PacketDirection::ClientToBackend,
+        )
+        .expect("globally routed IPv6 destination");
+    }
+    #[test]
+    fn ipv4_packet_boundary_rejects_malformed_lengths_checksum_and_fragments() {
+        let assigned = test_client_addresses();
+        let mut bad_ihl = test_ipv4_packet(assigned.ipv4, Ipv4Addr::new(1, 1, 1, 1));
+        bad_ihl[0] = 0x44;
+        assert!(validate_vpn_packet(&bad_ihl, assigned, PacketDirection::ClientToBackend).is_err());
+
+        let mut bad_length = test_ipv4_packet(assigned.ipv4, Ipv4Addr::new(1, 1, 1, 1));
+        bad_length[2..4].copy_from_slice(&20u16.to_be_bytes());
+        assert!(
+            validate_vpn_packet(&bad_length, assigned, PacketDirection::ClientToBackend).is_err()
+        );
+
+        let mut bad_checksum = test_ipv4_packet(assigned.ipv4, Ipv4Addr::new(1, 1, 1, 1));
+        bad_checksum[8] ^= 1;
+        assert!(
+            validate_vpn_packet(&bad_checksum, assigned, PacketDirection::ClientToBackend).is_err()
+        );
+
+        let mut fragment = test_ipv4_packet(assigned.ipv4, Ipv4Addr::new(1, 1, 1, 1));
+        fragment[6..8].copy_from_slice(&0x2000u16.to_be_bytes());
+        set_test_ipv4_checksum(&mut fragment);
+        assert!(
+            validate_vpn_packet(&fragment, assigned, PacketDirection::ClientToBackend).is_err()
+        );
+    }
+    #[test]
+    fn ipv6_packet_boundary_rejects_malformed_payload_lengths_and_fragments() {
+        let assigned = test_client_addresses();
+        let remote = "2606:4700:4700::1111"
+            .parse::<Ipv6Addr>()
+            .expect("remote IPv6");
+        let mut bad_length = test_ipv6_packet(assigned.ipv6, remote);
+        bad_length[4..6].copy_from_slice(&3u16.to_be_bytes());
+        assert!(
+            validate_vpn_packet(&bad_length, assigned, PacketDirection::ClientToBackend).is_err()
+        );
+
+        let mut fragment = vec![0u8; 48];
+        fragment[0] = 0x60;
+        fragment[4..6].copy_from_slice(&8u16.to_be_bytes());
+        fragment[6] = 44;
+        fragment[7] = 64;
+        fragment[8..24].copy_from_slice(&assigned.ipv6.octets());
+        fragment[24..40].copy_from_slice(&remote.octets());
+        fragment[40] = 17;
+        assert!(
+            validate_vpn_packet(&fragment, assigned, PacketDirection::ClientToBackend).is_err()
+        );
+    }
+    #[test]
+    fn per_session_firewall_rules_are_interface_and_address_scoped() {
+        let rules =
+            session_firewall_rules("svpn0", test_client_addresses(), Some("wan0"), Some("wan6"));
         assert_eq!(
-            classify_nat_rule_check(Ok(String::new())).expect("preexisting rule"),
-            NatRuleCheck::Exists
+            rules.len(),
+            12 + IPV4_PROTECTED_DESTINATION_CIDRS_V1.len()
+                + IPV6_PROTECTED_DESTINATION_CIDRS_V1.len()
+        );
+        assert!(rules.iter().any(|rule| {
+            rule.family == IpFamily::V4
+                && rule.chain == "INPUT"
+                && rule
+                    .arguments
+                    .iter()
+                    .map(String::as_str)
+                    .eq(["-i", "svpn0", "-j", "DROP"])
+        }));
+        assert!(rules.iter().any(|rule| {
+            rule.family == IpFamily::V6
+                && rule.chain == "OUTPUT"
+                && rule
+                    .arguments
+                    .iter()
+                    .any(|argument| argument == "fd53:7261:6574::2/128")
+        }));
+        let outbound_allow = rules
+            .iter()
+            .find(|rule| {
+                rule.family == IpFamily::V4
+                    && rule.chain == "FORWARD"
+                    && rule.arguments.last().map(String::as_str) == Some("ACCEPT")
+                    && rule.arguments.first().map(String::as_str) == Some("-i")
+                    && rule.arguments.get(1).map(String::as_str) == Some("svpn0")
+            })
+            .expect("IPv4 outbound allow rule");
+        assert!(outbound_allow.arguments.iter().map(String::as_str).eq([
+            "-i",
+            "svpn0",
+            "-o",
+            "wan0",
+            "-s",
+            "10.208.0.2/32",
+            "-m",
+            "conntrack",
+            "--ctstate",
+            "NEW,ESTABLISHED,RELATED",
+            "-j",
+            "ACCEPT",
+        ]));
+        assert!(rules.iter().any(|rule| {
+            rule.family == IpFamily::V4
+                && rule.chain == "FORWARD"
+                && rule.arguments.iter().map(String::as_str).eq([
+                    "-i",
+                    "wan0",
+                    "-o",
+                    "svpn0",
+                    "-d",
+                    "10.208.0.2/32",
+                    "-m",
+                    "conntrack",
+                    "--ctstate",
+                    "ESTABLISHED,RELATED",
+                    "-j",
+                    "ACCEPT",
+                ])
+        }));
+        for destination in IPV4_PROTECTED_DESTINATION_CIDRS_V1 {
+            assert!(rules.iter().any(|rule| {
+                rule.family == IpFamily::V4
+                    && rule.chain == "FORWARD"
+                    && rule.arguments.iter().map(String::as_str).eq([
+                        "-i",
+                        "svpn0",
+                        "-o",
+                        "wan0",
+                        "-s",
+                        "10.208.0.2/32",
+                        "-d",
+                        *destination,
+                        "-j",
+                        "DROP",
+                    ])
+            }));
+        }
+        for destination in IPV6_PROTECTED_DESTINATION_CIDRS_V1 {
+            assert!(rules.iter().any(|rule| {
+                rule.family == IpFamily::V6
+                    && rule.chain == "FORWARD"
+                    && rule.arguments.iter().map(String::as_str).eq([
+                        "-i",
+                        "svpn0",
+                        "-o",
+                        "wan6",
+                        "-s",
+                        "fd53:7261:6574::2/128",
+                        "-d",
+                        *destination,
+                        "-j",
+                        "DROP",
+                    ])
+            }));
+        }
+        let insert = firewall_rule_args("-I", outbound_allow);
+        assert!(
+            insert[..6]
+                .iter()
+                .map(String::as_str)
+                .eq(["-w", "-t", "filter", "-I", "FORWARD", "1"])
+        );
+    }
+    #[test]
+    fn forwarding_rules_drop_wrong_interfaces_and_disabled_families() {
+        let enabled = session_firewall_rules("svpn0", test_client_addresses(), Some("wan0"), None);
+        let ipv4_effective = enabled
+            .iter()
+            .rev()
+            .filter(|rule| rule.family == IpFamily::V4 && rule.chain == "FORWARD")
+            .collect::<Vec<_>>();
+        let protected_count = IPV4_PROTECTED_DESTINATION_CIDRS_V1.len();
+        assert_eq!(ipv4_effective.len(), protected_count + 4);
+        assert!(ipv4_effective[..protected_count].iter().all(|rule| {
+            rule.arguments.last().map(String::as_str) == Some("DROP")
+                && rule
+                    .arguments
+                    .windows(2)
+                    .any(|window| window[0] == "-o" && window[1] == "wan0")
+                && rule
+                    .arguments
+                    .windows(2)
+                    .any(|window| window[0] == "-s" && window[1] == "10.208.0.2/32")
+                && rule.arguments.iter().any(|argument| argument == "-d")
+        }));
+        assert_eq!(
+            ipv4_effective[protected_count]
+                .arguments
+                .last()
+                .map(String::as_str),
+            Some("ACCEPT")
+        );
+        assert!(
+            ipv4_effective[protected_count]
+                .arguments
+                .windows(2)
+                .any(|window| { window[0] == "-o" && window[1] == "wan0" })
+        );
+        assert!(
+            ipv4_effective[protected_count + 1]
+                .arguments
+                .iter()
+                .map(String::as_str)
+                .eq(["-i", "svpn0", "-j", "DROP"])
         );
         assert_eq!(
-            classify_nat_rule_check(Err(command_failure(1))).expect("missing rule"),
-            NatRuleCheck::Missing
+            ipv4_effective[protected_count + 2]
+                .arguments
+                .last()
+                .map(String::as_str),
+            Some("ACCEPT")
         );
-        assert!(classify_nat_rule_check(Err(command_failure(2))).is_err());
-        assert!(classify_nat_rule_check(Err(BackendError::State("timeout".to_owned()))).is_err());
+        assert!(
+            ipv4_effective[protected_count + 2]
+                .arguments
+                .windows(2)
+                .any(|window| { window[0] == "-i" && window[1] == "wan0" })
+        );
+        assert!(
+            ipv4_effective[protected_count + 3]
+                .arguments
+                .iter()
+                .map(String::as_str)
+                .eq(["-o", "svpn0", "-j", "DROP"])
+        );
+
+        let ipv6_effective = enabled
+            .iter()
+            .rev()
+            .filter(|rule| rule.family == IpFamily::V6 && rule.chain == "FORWARD")
+            .collect::<Vec<_>>();
+        assert_eq!(ipv6_effective.len(), 2);
+        assert!(ipv6_effective.iter().all(|rule| {
+            rule.arguments.last().map(String::as_str) == Some("DROP")
+                && !rule.arguments.iter().any(|argument| argument == "wan0")
+        }));
+        assert!(
+            ipv6_effective[0]
+                .arguments
+                .iter()
+                .map(String::as_str)
+                .eq(["-i", "svpn0", "-j", "DROP"])
+        );
+        assert!(
+            ipv6_effective[1]
+                .arguments
+                .iter()
+                .map(String::as_str)
+                .eq(["-o", "svpn0", "-j", "DROP"])
+        );
+    }
+    #[test]
+    fn forwarding_requires_a_pinned_family_egress_interface() {
+        let (_secret_directory, mut config) = test_backend_config();
+        assert_eq!(
+            forwarding_egress_interface(&config, IpFamily::V4)
+                .expect("configured IPv4 forwarding egress"),
+            Some("eth0")
+        );
+
+        config.ipv4_forward = false;
+        assert_eq!(
+            forwarding_egress_interface(&config, IpFamily::V4).expect("disabled IPv4 forwarding"),
+            None
+        );
+
+        config.ipv6_forward = true;
+        assert!(forwarding_egress_interface(&config, IpFamily::V6).is_err());
+    }
+    #[test]
+    fn firewall_and_nat_checks_track_only_rules_created_by_this_session() {
+        assert_eq!(
+            classify_rule_check(Ok(String::new())).expect("preexisting rule"),
+            RuleCheck::Exists
+        );
+        assert_eq!(
+            classify_rule_check(Err(command_failure(1))).expect("missing rule"),
+            RuleCheck::Missing
+        );
+        assert!(classify_rule_check(Err(command_failure(2))).is_err());
+        assert!(classify_rule_check(Err(BackendError::State("timeout".to_owned()))).is_err());
     }
     #[test]
     fn forwarding_restore_failure_preserves_state_for_retry() {
@@ -2916,8 +3876,19 @@ mod tests {
                     egress_interface: "eth0".to_owned(),
                 },
             ],
+            firewall_rules: vec![FirewallRule {
+                family: IpFamily::V4,
+                chain: "INPUT",
+                arguments: vec![
+                    "-i".to_owned(),
+                    "svpn0".to_owned(),
+                    "-j".to_owned(),
+                    "DROP".to_owned(),
+                ],
+            }],
         };
         let mut nat_attempts = 0;
+        let mut firewall_attempts = 0;
         let mut forwarding_attempts = 0;
         let mut link_attempts = 0;
         let error = cleanup_network_with(
@@ -2925,6 +3896,10 @@ mod tests {
             |_| {
                 nat_attempts += 1;
                 Err(BackendError::State("NAT cleanup fixture".to_owned()))
+            },
+            |_| {
+                firewall_attempts += 1;
+                Err(BackendError::State("firewall cleanup fixture".to_owned()))
             },
             |_| {
                 forwarding_attempts += 1;
@@ -2937,9 +3912,10 @@ mod tests {
         )
         .expect_err("aggregate cleanup failure");
         assert_eq!(nat_attempts, 2);
+        assert_eq!(firewall_attempts, 1);
         assert_eq!(forwarding_attempts, 1);
         assert_eq!(link_attempts, 1);
-        assert!(error.to_string().contains("2 failure(s)"));
+        assert!(error.to_string().contains("3 failure(s)"));
     }
     #[test]
     fn parse_cidr_accepts_ipv4() {
@@ -3000,13 +3976,15 @@ mod tests {
         assert!(parse_route_device("default dev -injected").is_err());
     }
     #[test]
-    fn backend_tcp_endpoint_is_loopback_only() {
+    fn backend_endpoint_is_unix_only() {
         assert_eq!(
-            parse_backend_endpoint("tcp://127.0.0.1:19090").expect("loopback endpoint"),
-            BackendEndpoint::Tcp("127.0.0.1:19090".to_owned())
+            parse_backend_endpoint("unix:/run/sora-vpn-backend.sock")
+                .expect("absolute Unix endpoint"),
+            BackendEndpoint(PathBuf::from("/run/sora-vpn-backend.sock"))
         );
+        assert!(parse_backend_endpoint("unix:relative.sock").is_err());
+        assert!(parse_backend_endpoint("tcp://127.0.0.1:19090").is_err());
         assert!(parse_backend_endpoint("tcp://192.0.2.1:19090").is_err());
-        assert!(parse_backend_endpoint("tcp://backend.example:19090").is_err());
     }
     #[test]
     fn command_resolution_ignores_untrusted_paths() {
@@ -3298,8 +4276,16 @@ mod tests {
     async fn bootstrap_round_trips_from_framed_norito() {
         let bootstrap = VpnBackendBootstrap {
             session_id_hex: "aabbccddaabbccddaabbccddaabbccdd".to_owned(),
-            server_tunnel_addresses: vec!["10.10.0.1/30".to_owned()],
-            session_routes: vec!["10.10.0.0/30".to_owned()],
+            server_tunnel_addresses: vec![
+                "10.10.0.1/30".to_owned(),
+                "fd53:7261:6574::1/126".to_owned(),
+            ],
+            client_ipv4_address: [10, 10, 0, 2],
+            client_ipv6_address: "fd53:7261:6574::2"
+                .parse::<Ipv6Addr>()
+                .expect("client IPv6")
+                .octets(),
+            session_routes: vec!["10.10.0.0/30".to_owned(), "fd53:7261:6574::/126".to_owned()],
             mtu_bytes: 1280,
         };
         let envelope = VpnBackendBootstrapEnvelope {
@@ -3334,34 +4320,58 @@ mod tests {
     }
     #[test]
     fn bootstrap_semantics_bound_privileged_network_operations() {
-        let mut bootstrap = VpnBackendBootstrap {
+        let bootstrap = VpnBackendBootstrap {
             session_id_hex: "aabbccddaabbccddaabbccddaabbccdd".to_owned(),
-            server_tunnel_addresses: vec!["10.10.0.1/30".to_owned()],
-            session_routes: vec!["10.10.0.0/30".to_owned()],
+            server_tunnel_addresses: vec![
+                "10.10.0.1/30".to_owned(),
+                "fd53:7261:6574::1/126".to_owned(),
+            ],
+            client_ipv4_address: [10, 10, 0, 2],
+            client_ipv6_address: "fd53:7261:6574::2"
+                .parse::<Ipv6Addr>()
+                .expect("client IPv6")
+                .octets(),
+            session_routes: vec!["10.10.0.0/30".to_owned(), "fd53:7261:6574::/126".to_owned()],
             mtu_bytes: 1280,
         };
         validate_bootstrap_semantics(&bootstrap).expect("bounded canonical bootstrap");
-        bootstrap.session_routes =
+
+        let mut oversized_routes = bootstrap.clone();
+        oversized_routes.session_routes =
             vec!["10.10.0.0/30".to_owned(); VPN_BACKEND_BOOTSTRAP_MAX_SESSION_ROUTES_V1 + 1];
-        assert!(validate_bootstrap_semantics(&bootstrap).is_err());
-        bootstrap.session_routes = vec!["10.10.0.0/30".to_owned()];
-        bootstrap.server_tunnel_addresses = vec![format!(
+        assert!(validate_bootstrap_semantics(&oversized_routes).is_err());
+
+        let mut oversized_address = bootstrap.clone();
+        oversized_address.server_tunnel_addresses = vec![format!(
             "10.10.0.1/30{}",
             "0".repeat(VPN_BACKEND_BOOTSTRAP_MAX_CIDR_BYTES_V1)
         )];
-        assert!(validate_bootstrap_semantics(&bootstrap).is_err());
-        bootstrap.server_tunnel_addresses = vec!["10.10.0.1/30".to_owned()];
-        bootstrap.session_id_hex = "AABBCCDDAABBCCDDAABBCCDDAABBCCDD".to_owned();
-        assert!(validate_bootstrap_semantics(&bootstrap).is_err());
+        assert!(validate_bootstrap_semantics(&oversized_address).is_err());
+
+        let mut uppercase_session = bootstrap.clone();
+        uppercase_session.session_id_hex = "AABBCCDDAABBCCDDAABBCCDDAABBCCDD".to_owned();
+        assert!(validate_bootstrap_semantics(&uppercase_session).is_err());
+
+        let mut outside_authenticated_routes = bootstrap;
+        outside_authenticated_routes.client_ipv4_address = [10, 10, 1, 2];
+        assert!(validate_bootstrap_semantics(&outside_authenticated_routes).is_err());
     }
     #[tokio::test]
-    async fn tcp_bootstrap_rejects_bad_mac_and_replay() {
+    async fn bootstrap_rejects_bad_mac_and_replay() {
         let secret = [0xA5; 32];
         let (secret_directory, secret_path) = write_test_secret(0xA5);
         let bootstrap = VpnBackendBootstrap {
             session_id_hex: "aabbccddaabbccddaabbccddaabbccdd".to_owned(),
-            server_tunnel_addresses: vec!["10.10.0.1/30".to_owned()],
-            session_routes: vec!["10.10.0.0/30".to_owned()],
+            server_tunnel_addresses: vec![
+                "10.10.0.1/30".to_owned(),
+                "fd53:7261:6574::1/126".to_owned(),
+            ],
+            client_ipv4_address: [10, 10, 0, 2],
+            client_ipv6_address: "fd53:7261:6574::2"
+                .parse::<Ipv6Addr>()
+                .expect("client IPv6")
+                .octets(),
+            session_routes: vec!["10.10.0.0/30".to_owned(), "fd53:7261:6574::/126".to_owned()],
             mtu_bytes: 1280,
         };
         let timestamp_ms = unix_time_ms().expect("test clock");
@@ -3374,7 +4384,6 @@ mod tests {
         };
         envelope.mac = vpn_backend_bootstrap_mac(&secret, &bootstrap, timestamp_ms, &nonce);
         let config = BackendConfig::from_cli(Cli {
-            endpoint: "tcp://127.0.0.1:19090".to_owned(),
             bootstrap_secret_path: Some(secret_path),
             replay_directory: secret_directory.path().join("replay"),
             ..test_cli()
@@ -3738,6 +4747,11 @@ mod tests {
                     "10.10.0.1/30".to_owned(),
                     "fd53:7261:6574::1/126".to_owned(),
                 ],
+                client_ipv4_address: [10, 10, 0, 2],
+                client_ipv6_address: "fd53:7261:6574::2"
+                    .parse::<Ipv6Addr>()
+                    .expect("client IPv6")
+                    .octets(),
                 session_routes: vec!["10.10.0.0/30".to_owned(), "fd53:7261:6574::/126".to_owned()],
                 mtu_bytes: 1400,
             },
@@ -3745,7 +4759,13 @@ mod tests {
         .expect("session config");
         assert_eq!(session.mtu, 1400);
         assert_eq!(session.tunnel_addresses.len(), 2);
-        assert_eq!(session.nat_cidrs, session.session_routes);
+        assert_eq!(
+            session.nat_cidrs,
+            vec![
+                parse_cidr("10.10.0.2/32").expect("exact client IPv4 CIDR"),
+                parse_cidr("fd53:7261:6574::2/128").expect("exact client IPv6 CIDR"),
+            ]
+        );
         assert!(session.interface_name.starts_with(DEFAULT_INTERFACE_PREFIX));
     }
 }

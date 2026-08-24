@@ -235,10 +235,6 @@ pub use mkhe::{
 pub use mkhe::{
     ZkAmsMkheCollectiveCiphertextV1, ZkAmsMkheCollectiveLevelOneV1, ZkAmsMkheCollectivePublicKeyV1,
 };
-#[cfg(test)]
-pub use mkhe::{
-    automorphism_switch_zk_ams_mkhe_collective_v1, relinearize_zk_ams_mkhe_collective_v1,
-};
 /// Exact number of public T256 scalars in one admission relation instance.
 pub const ZK_AMS_ADMISSION_PUBLIC_INPUTS_V1: usize = 89;
 /// Hard cap checked before Norito decoding of a batch relation proof.

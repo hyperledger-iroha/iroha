@@ -219,7 +219,7 @@ if [[ "$RUN_SCOPE" == "multilane-four-peer" && "$PROFILE" != "release" ]]; then
 fi
 for extra in ${EXTRA_ENV[@]+"${EXTRA_ENV[@]}"}; do
   case "${extra%%=*}" in
-    CARGO_HOME|CARGO_TARGET_DIR|PATH|RUSTUP_HOME|RUSTUP_TOOLCHAIN|IROHA_RELEASE_ARTIFACT_ROOT|IROHA_RELEASE_CANCEL_REQUEST_PATH|IROHA_TEST_SKIP_BUILD|IROHA_TEST_ALLOW_REENTRANT_BUILD|IROHA_TEST_NETWORK_BASE_SEED|IROHA_NEXUS_CROSS_REQUIRE_SEED|IROHA_NEXUS_CROSS_FAULT_SOAK_DURATION_SECS|IROHA_MULTILANE_RELEASE_MODE|IROHA_RUN_IGNORED|IROHA_RELEASE_PREBUILT_MANIFEST_SHA256)
+    CARGO_HOME|CARGO_TARGET_DIR|PATH|RUSTUP_HOME|RUSTUP_TOOLCHAIN|IROHA_RELEASE_ARTIFACT_ROOT|IROHA_RELEASE_CANCEL_REQUEST_PATH|IROHA_TEST_SKIP_BUILD|IROHA_TEST_NETWORK_BASE_SEED|IROHA_NEXUS_CROSS_REQUIRE_SEED|IROHA_NEXUS_CROSS_FAULT_SOAK_DURATION_SECS|IROHA_MULTILANE_RELEASE_MODE|IROHA_RUN_IGNORED|IROHA_RELEASE_PREBUILT_MANIFEST_SHA256)
       echo "--env may not override reserved cross-dataspace evidence control ${extra%%=*}" >&2
       exit 2
       ;;
@@ -310,7 +310,6 @@ done
 # Test processes must consume the top-level attested bundle. Keep these final so
 # neither inherited state nor caller-supplied extras can reopen Cargo-under-Cargo.
 ENV_VARS+=("IROHA_TEST_SKIP_BUILD=1")
-ENV_VARS+=("IROHA_TEST_ALLOW_REENTRANT_BUILD=0")
 # This proof launcher must never translate a sandbox-denied localnet into a
 # successful test. Append the requirement after caller-supplied values so an
 # `--env` override cannot weaken it.

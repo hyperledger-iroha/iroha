@@ -25,6 +25,7 @@ use iroha_core::soracloud_runtime::{
     SoracloudRuntimeHfSourcePlan, SoracloudRuntimeHfSourceStatus,
     build_soracloud_hf_generated_agent_manifest, build_soracloud_hf_generated_service_bundle,
     execute_private_uploaded_model_quantized_cpu_v1, soracloud_hf_generated_source_binding,
+    validate_soracloud_apartment_autonomy_execution_summary_v1,
 };
 use iroha_core::state::{StateReadOnly, WorldReadOnly};
 use iroha_crypto::{Algorithm, Hash, PublicKey, Signature};
@@ -92,7 +93,7 @@ use iroha_data_model::{
         encode_training_job_retry_provenance_payload, encode_training_job_start_provenance_payload,
         encode_uploaded_model_bundle_register_provenance_payload,
         encode_uploaded_model_finalize_provenance_payload,
-        hf_shared_lease_max_compute_reservation_fee_v1,
+        hf_shared_lease_max_compute_reservation_fee_v1, is_canonical_hf_commit_oid_v1,
     },
     sorafs::pin_registry::{PinManifestRecord, PinStatus, StorageClass},
 };
@@ -106,6 +107,7 @@ use std::{
     collections::{BTreeMap, BTreeSet},
     fs,
     io::{self, Read as _},
+    net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr, ToSocketAddrs as _},
     num::NonZeroU64,
     path::{Path as FsPath, PathBuf},
     time::Duration,
@@ -136,9 +138,12 @@ const MODEL_ARTIFACT_STATUS_SCHEMA_VERSION_V1: u16 = 1;
 const UPLOADED_MODEL_STATUS_SCHEMA_VERSION_V1: u16 = 1;
 const HF_SHARED_LEASE_STATUS_SCHEMA_VERSION_V1: u16 = 1;
 const HF_REPO_ID_MAX_BYTES: usize = 256;
-const HF_REVISION_MAX_BYTES: usize = 160;
 const HF_MODEL_NAME_MAX_BYTES: usize = 128;
-const HF_DEFAULT_RESOLVED_REVISION: &str = "main";
+const HF_PROFILE_DNS_MAX_ADDRESSES_V1: usize = 32;
+const HF_PROFILE_DNS_MAX_IN_FLIGHT_V1: usize = 8;
+const HF_PROFILE_DNS_TIMEOUT_V1: Duration = Duration::from_secs(5);
+static HF_PROFILE_DNS_GATE_V1: tokio::sync::Semaphore =
+    tokio::sync::Semaphore::const_new(HF_PROFILE_DNS_MAX_IN_FLIGHT_V1);
 const SCR_HOST_MAX_CPU_MILLIS: u32 = 64_000;
 const SCR_HOST_MAX_MEMORY_BYTES: u64 = 512 * 1024 * 1024 * 1024;
 const SCR_HOST_MAX_EPHEMERAL_STORAGE_BYTES: u64 = 2 * 1024 * 1024 * 1024 * 1024;
@@ -158,6 +163,7 @@ const SCR_HOST_MAX_STOP_GRACE_SECS: u32 = 600;
     NoritoSerialize,
 )]
 #[norito(tag = "action", content = "value")]
+#[norito(deny_unknown_fields)]
 pub(crate) enum SoracloudAction {
     Deploy,
     Upgrade,
@@ -185,6 +191,7 @@ pub(crate) enum SoracloudAction {
     NoritoSerialize,
 )]
 #[norito(tag = "action", content = "value")]
+#[norito(deny_unknown_fields)]
 pub(crate) enum AgentApartmentAction {
     Deploy,
     LeaseRenew,
@@ -210,6 +217,7 @@ pub(crate) enum AgentApartmentAction {
     NoritoSerialize,
 )]
 #[norito(tag = "status", content = "value")]
+#[norito(deny_unknown_fields)]
 pub(crate) enum AgentRuntimeStatus {
     Running,
     LeaseExpired,
@@ -226,6 +234,7 @@ pub(crate) enum AgentRuntimeStatus {
     NoritoSerialize,
 )]
 #[norito(tag = "action", content = "value")]
+#[norito(deny_unknown_fields)]
 pub(crate) enum TrainingJobAction {
     Start,
     Checkpoint,
@@ -243,6 +252,7 @@ pub(crate) enum TrainingJobAction {
     NoritoSerialize,
 )]
 #[norito(tag = "status", content = "value")]
+#[norito(deny_unknown_fields)]
 pub(crate) enum TrainingJobStatus {
     Running,
     Completed,
@@ -261,6 +271,7 @@ pub(crate) enum TrainingJobStatus {
     NoritoSerialize,
 )]
 #[norito(tag = "action", content = "value")]
+#[norito(deny_unknown_fields)]
 pub(crate) enum ModelWeightAction {
     Register,
     Promote,
@@ -278,6 +289,7 @@ pub(crate) enum ModelWeightAction {
     NoritoSerialize,
 )]
 #[norito(tag = "action", content = "value")]
+#[norito(deny_unknown_fields)]
 pub(crate) enum ModelArtifactAction {
     Register,
 }
@@ -293,6 +305,7 @@ pub(crate) enum ModelArtifactAction {
     NoritoSerialize,
 )]
 #[norito(tag = "action", content = "value")]
+#[norito(deny_unknown_fields)]
 pub(crate) enum UploadedModelAction {
     Register,
 }
@@ -305,23 +318,20 @@ enum MutationMode {
 #[norito(deny_unknown_fields)]
 pub(crate) struct SignedBundleRequest {
     pub bundle: SoraDeploymentBundleV1,
-    #[norito(default)]
     pub initial_service_configs: BTreeMap<String, Json>,
-    #[norito(default)]
     pub initial_service_secrets: BTreeMap<String, SecretEnvelopeV1>,
     pub provenance: ManifestProvenance,
 }
 #[derive(Clone, Debug, JsonDeserialize, NoritoDeserialize, NoritoSerialize)]
 #[norito(deny_unknown_fields)]
 pub(crate) struct SignedAppInfraRequest {
-    #[norito(default)]
     pub deploy_services: Vec<SignedBundleRequest>,
-    #[norito(default)]
     pub upgrade_services: Vec<SignedBundleRequest>,
     pub manifest: SoraAppInfraManifestV1,
     pub provenance: ManifestProvenance,
 }
 #[derive(Clone, Debug, JsonDeserialize, NoritoDeserialize)]
+#[norito(deny_unknown_fields)]
 pub(crate) struct AppInfraStatusQuery {
     #[norito(default)]
     pub app_name: Option<String>,
@@ -337,10 +347,10 @@ pub(crate) struct AppInfraStatusResponse {
     pub recent_audit_events: Vec<SoraAppInfraAuditEventV1>,
 }
 #[derive(Clone, Debug, JsonDeserialize, NoritoDeserialize, NoritoSerialize)]
+#[norito(deny_unknown_fields)]
 pub(crate) struct RollbackPayload {
     pub service_name: String,
-    #[norito(default)]
-    pub target_version: Option<String>,
+    pub target_version: String,
 }
 #[derive(Clone, Debug, JsonDeserialize, NoritoDeserialize, NoritoSerialize)]
 #[norito(deny_unknown_fields)]
@@ -360,23 +370,25 @@ pub(crate) struct SignedRollbackRequest {
     NoritoSerialize,
 )]
 #[norito(tag = "operation", content = "value")]
+#[norito(deny_unknown_fields)]
 pub(crate) enum StateMutationOperation {
     Upsert,
     Delete,
 }
 #[derive(Clone, Debug, JsonDeserialize, NoritoDeserialize, NoritoSerialize)]
+#[norito(deny_unknown_fields)]
 pub(crate) struct StateMutationRequest {
     pub service_name: String,
     pub binding_name: String,
     pub key: String,
     pub operation: StateMutationOperation,
-    #[norito(default)]
+    #[norito(required)]
     pub value_size_bytes: Option<u64>,
-    #[norito(default)]
+    #[norito(required)]
     pub value_payload_hex: Option<String>,
     pub encryption: SoraStateEncryptionV1,
     pub governance_tx_hash: Hash,
-    #[norito(default)]
+    #[norito(required)]
     pub fhe_input_admission_proof: Option<SoracloudFheInputAdmissionProofV1>,
 }
 #[derive(Clone, Debug, JsonDeserialize, NoritoDeserialize, NoritoSerialize)]
@@ -386,6 +398,7 @@ pub(crate) struct SignedStateMutationRequest {
     pub provenance: ManifestProvenance,
 }
 #[derive(Clone, Debug, JsonDeserialize, NoritoDeserialize, NoritoSerialize)]
+#[norito(deny_unknown_fields)]
 pub(crate) struct ServiceConfigSetRequest {
     pub service_name: String,
     pub config_name: String,
@@ -398,6 +411,7 @@ pub(crate) struct SignedServiceConfigSetRequest {
     pub provenance: ManifestProvenance,
 }
 #[derive(Clone, Debug, JsonDeserialize, NoritoDeserialize, NoritoSerialize)]
+#[norito(deny_unknown_fields)]
 pub(crate) struct ServiceConfigDeleteRequest {
     pub service_name: String,
     pub config_name: String,
@@ -409,6 +423,7 @@ pub(crate) struct SignedServiceConfigDeleteRequest {
     pub provenance: ManifestProvenance,
 }
 #[derive(Clone, Debug, JsonDeserialize, NoritoDeserialize, NoritoSerialize)]
+#[norito(deny_unknown_fields)]
 pub(crate) struct ServiceSecretSetRequest {
     pub service_name: String,
     pub secret_name: String,
@@ -421,6 +436,7 @@ pub(crate) struct SignedServiceSecretSetRequest {
     pub provenance: ManifestProvenance,
 }
 #[derive(Clone, Debug, JsonDeserialize, NoritoDeserialize, NoritoSerialize)]
+#[norito(deny_unknown_fields)]
 pub(crate) struct ServiceSecretDeleteRequest {
     pub service_name: String,
     pub secret_name: String,
@@ -443,17 +459,19 @@ pub(crate) struct SignedServiceSecretDeleteRequest {
     NoritoSerialize,
 )]
 #[norito(tag = "stage", content = "value")]
+#[norito(deny_unknown_fields)]
 pub(crate) enum RolloutStage {
     Canary,
     Promoted,
     RolledBack,
 }
 #[derive(Clone, Debug, JsonDeserialize, NoritoDeserialize, NoritoSerialize)]
+#[norito(deny_unknown_fields)]
 pub(crate) struct RolloutAdvancePayload {
     pub service_name: String,
     pub rollout_handle: String,
     pub healthy: bool,
-    #[norito(default)]
+    #[norito(required)]
     pub promote_to_percent: Option<u8>,
     pub governance_tx_hash: Hash,
 }
@@ -463,12 +481,12 @@ pub(crate) struct SignedRolloutAdvanceRequest {
     pub payload: RolloutAdvancePayload,
     pub provenance: ManifestProvenance,
 }
-#[derive(Clone, Debug, JsonDeserialize, NoritoDeserialize, NoritoSerialize)]
+#[derive(Clone, Debug, JsonSerialize, JsonDeserialize, NoritoDeserialize, NoritoSerialize)]
+#[norito(deny_unknown_fields)]
 pub(crate) struct AgentDeployPayload {
     pub manifest: AgentApartmentManifestV1,
     pub lease_ticks: u64,
-    #[norito(default)]
-    pub autonomy_budget_units: Option<u64>,
+    pub autonomy_budget_units: u64,
 }
 #[derive(Clone, Debug, JsonDeserialize, NoritoDeserialize, NoritoSerialize)]
 #[norito(deny_unknown_fields)]
@@ -477,6 +495,7 @@ pub(crate) struct SignedAgentDeployRequest {
     pub provenance: ManifestProvenance,
 }
 #[derive(Clone, Debug, JsonDeserialize, NoritoDeserialize, NoritoSerialize)]
+#[norito(deny_unknown_fields)]
 pub(crate) struct AgentLeaseRenewPayload {
     pub apartment_name: String,
     pub lease_ticks: u64,
@@ -488,39 +507,39 @@ pub(crate) struct SignedAgentLeaseRenewRequest {
     pub provenance: ManifestProvenance,
 }
 #[derive(Clone, Debug, JsonDeserialize, JsonSerialize, NoritoDeserialize, NoritoSerialize)]
+#[norito(deny_unknown_fields)]
 pub(crate) struct HfDeployPayload {
     pub repo_id: String,
-    #[norito(default)]
-    pub revision: Option<String>,
+    pub revision: String,
     pub model_name: String,
     pub service_name: String,
-    #[norito(default)]
+    #[norito(required)]
     pub apartment_name: Option<String>,
     pub storage_class: StorageClass,
     pub lease_term_ms: u64,
     pub lease_asset_definition_id: AssetDefinitionId,
     pub base_fee: Quantity,
 }
-#[derive(Clone, Debug, JsonDeserialize, NoritoDeserialize, NoritoSerialize)]
+#[derive(Clone, Debug, JsonSerialize, JsonDeserialize, NoritoDeserialize, NoritoSerialize)]
 #[norito(deny_unknown_fields)]
 pub(crate) struct SignedHfDeployRequest {
     pub payload: HfDeployPayload,
     pub provenance: ManifestProvenance,
-    #[norito(default)]
+    #[norito(required)]
     pub generated_service_provenance: Option<ManifestProvenance>,
-    #[norito(default)]
+    #[norito(required)]
     pub generated_apartment_provenance: Option<ManifestProvenance>,
 }
-#[derive(Clone, Debug, JsonDeserialize, NoritoDeserialize, NoritoSerialize)]
+#[derive(Clone, Debug, JsonSerialize, JsonDeserialize, NoritoDeserialize, NoritoSerialize)]
+#[norito(deny_unknown_fields)]
 pub(crate) struct HfLeaseLeavePayload {
     pub repo_id: String,
-    #[norito(default)]
-    pub revision: Option<String>,
+    pub revision: String,
     pub storage_class: StorageClass,
     pub lease_term_ms: u64,
-    #[norito(default)]
+    #[norito(required)]
     pub service_name: Option<String>,
-    #[norito(default)]
+    #[norito(required)]
     pub apartment_name: Option<String>,
 }
 #[derive(Clone, Debug, JsonDeserialize, NoritoDeserialize, NoritoSerialize)]
@@ -529,31 +548,32 @@ pub(crate) struct SignedHfLeaseLeaveRequest {
     pub payload: HfLeaseLeavePayload,
     pub provenance: ManifestProvenance,
 }
-#[derive(Clone, Debug, JsonDeserialize, NoritoDeserialize, NoritoSerialize)]
+#[derive(Clone, Debug, JsonSerialize, JsonDeserialize, NoritoDeserialize, NoritoSerialize)]
+#[norito(deny_unknown_fields)]
 pub(crate) struct HfLeaseRenewPayload {
     pub repo_id: String,
-    #[norito(default)]
-    pub revision: Option<String>,
+    pub revision: String,
     pub model_name: String,
     pub service_name: String,
-    #[norito(default)]
+    #[norito(required)]
     pub apartment_name: Option<String>,
     pub storage_class: StorageClass,
     pub lease_term_ms: u64,
     pub lease_asset_definition_id: AssetDefinitionId,
     pub base_fee: Quantity,
 }
-#[derive(Clone, Debug, JsonDeserialize, NoritoDeserialize, NoritoSerialize)]
+#[derive(Clone, Debug, JsonSerialize, JsonDeserialize, NoritoDeserialize, NoritoSerialize)]
 #[norito(deny_unknown_fields)]
 pub(crate) struct SignedHfLeaseRenewRequest {
     pub payload: HfLeaseRenewPayload,
     pub provenance: ManifestProvenance,
-    #[norito(default)]
+    #[norito(required)]
     pub generated_service_provenance: Option<ManifestProvenance>,
-    #[norito(default)]
+    #[norito(required)]
     pub generated_apartment_provenance: Option<ManifestProvenance>,
 }
 #[derive(Clone, Debug, JsonDeserialize, NoritoDeserialize, NoritoSerialize)]
+#[norito(deny_unknown_fields)]
 pub(crate) struct ModelHostAdvertisePayload {
     pub capability: SoraModelHostCapabilityRecordV1,
 }
@@ -564,6 +584,7 @@ pub(crate) struct SignedModelHostAdvertiseRequest {
     pub provenance: ManifestProvenance,
 }
 #[derive(Clone, Debug, JsonDeserialize, NoritoDeserialize, NoritoSerialize)]
+#[norito(deny_unknown_fields)]
 pub(crate) struct ModelHostHeartbeatPayload {
     pub validator_account_id: AccountId,
     pub heartbeat_expires_at_ms: u64,
@@ -575,6 +596,7 @@ pub(crate) struct SignedModelHostHeartbeatRequest {
     pub provenance: ManifestProvenance,
 }
 #[derive(Clone, Debug, JsonDeserialize, NoritoDeserialize, NoritoSerialize)]
+#[norito(deny_unknown_fields)]
 pub(crate) struct ModelHostWithdrawPayload {
     pub validator_account_id: AccountId,
 }
@@ -585,6 +607,7 @@ pub(crate) struct SignedModelHostWithdrawRequest {
     pub provenance: ManifestProvenance,
 }
 #[derive(Clone, Debug, JsonDeserialize, NoritoDeserialize, NoritoSerialize)]
+#[norito(deny_unknown_fields)]
 pub(crate) struct AgentRestartPayload {
     pub apartment_name: String,
     pub reason: String,
@@ -595,11 +618,12 @@ pub(crate) struct SignedAgentRestartRequest {
     pub payload: AgentRestartPayload,
     pub provenance: ManifestProvenance,
 }
-#[derive(Clone, Debug, JsonDeserialize, NoritoDeserialize, NoritoSerialize)]
+#[derive(Clone, Debug, JsonSerialize, JsonDeserialize, NoritoDeserialize, NoritoSerialize)]
+#[norito(deny_unknown_fields)]
 pub(crate) struct AgentPolicyRevokePayload {
     pub apartment_name: String,
     pub capability: String,
-    #[norito(default)]
+    #[norito(required)]
     pub reason: Option<String>,
 }
 #[derive(Clone, Debug, JsonDeserialize, NoritoDeserialize, NoritoSerialize)]
@@ -609,6 +633,7 @@ pub(crate) struct SignedAgentPolicyRevokeRequest {
     pub provenance: ManifestProvenance,
 }
 #[derive(Clone, Debug, JsonDeserialize, JsonSerialize, NoritoDeserialize, NoritoSerialize)]
+#[norito(deny_unknown_fields)]
 pub(crate) struct AgentWalletSpendPayload {
     pub apartment_name: String,
     pub asset_definition: String,
@@ -621,6 +646,7 @@ pub(crate) struct SignedAgentWalletSpendRequest {
     pub provenance: ManifestProvenance,
 }
 #[derive(Clone, Debug, JsonDeserialize, NoritoDeserialize, NoritoSerialize)]
+#[norito(deny_unknown_fields)]
 pub(crate) struct AgentWalletApprovePayload {
     pub apartment_name: String,
     pub request_id: String,
@@ -632,6 +658,7 @@ pub(crate) struct SignedAgentWalletApproveRequest {
     pub provenance: ManifestProvenance,
 }
 #[derive(Clone, Debug, JsonDeserialize, NoritoDeserialize, NoritoSerialize)]
+#[norito(deny_unknown_fields)]
 pub(crate) struct AgentMessageSendPayload {
     pub from_apartment: String,
     pub to_apartment: String,
@@ -645,6 +672,7 @@ pub(crate) struct SignedAgentMessageSendRequest {
     pub provenance: ManifestProvenance,
 }
 #[derive(Clone, Debug, JsonDeserialize, NoritoDeserialize, NoritoSerialize)]
+#[norito(deny_unknown_fields)]
 pub(crate) struct AgentMessageAckPayload {
     pub apartment_name: String,
     pub message_id: String,
@@ -655,11 +683,12 @@ pub(crate) struct SignedAgentMessageAckRequest {
     pub payload: AgentMessageAckPayload,
     pub provenance: ManifestProvenance,
 }
-#[derive(Clone, Debug, JsonDeserialize, NoritoDeserialize, NoritoSerialize)]
+#[derive(Clone, Debug, JsonSerialize, JsonDeserialize, NoritoDeserialize, NoritoSerialize)]
+#[norito(deny_unknown_fields)]
 pub(crate) struct AgentArtifactAllowPayload {
     pub apartment_name: String,
     pub artifact_hash: String,
-    #[norito(default)]
+    #[norito(required)]
     pub provenance_hash: Option<String>,
 }
 #[derive(Clone, Debug, JsonDeserialize, NoritoDeserialize, NoritoSerialize)]
@@ -668,15 +697,16 @@ pub(crate) struct SignedAgentArtifactAllowRequest {
     pub payload: AgentArtifactAllowPayload,
     pub provenance: ManifestProvenance,
 }
-#[derive(Clone, Debug, JsonDeserialize, NoritoDeserialize, NoritoSerialize)]
+#[derive(Clone, Debug, JsonSerialize, JsonDeserialize, NoritoDeserialize, NoritoSerialize)]
+#[norito(deny_unknown_fields)]
 pub(crate) struct AgentAutonomyRunPayload {
     pub apartment_name: String,
     pub artifact_hash: String,
-    #[norito(default)]
+    #[norito(required)]
     pub provenance_hash: Option<String>,
     pub budget_units: u64,
     pub run_label: String,
-    #[norito(default)]
+    #[norito(required)]
     pub workflow_input_json: Option<String>,
 }
 #[derive(Clone, Debug, JsonDeserialize, NoritoDeserialize, NoritoSerialize)]
@@ -698,11 +728,10 @@ pub(crate) struct FheJobRunPayload {
     pub binding_name: String,
     pub job: FheJobSpecV1,
     pub policy_reference: SoracloudFhePolicyReferenceV1,
-    #[norito(default)]
+    #[norito(required)]
     pub public_key_proof: Option<SoracloudFhePublicKeyProofV1>,
-    #[norito(default)]
+    #[norito(required)]
     pub bootstrap_key_zero_refresh_proof: Option<SoracloudFheBootstrapKeyProofV1>,
-    #[norito(default)]
     pub full_bootstrap_execution_proofs: Vec<SoracloudFheFullBootstrapExecutionProofV1>,
 }
 #[derive(Clone, Debug, JsonDeserialize, NoritoDeserialize, NoritoSerialize)]
@@ -712,6 +741,7 @@ pub(crate) struct SignedFheJobRunRequest {
     pub provenance: ManifestProvenance,
 }
 #[derive(Clone, Debug, JsonDeserialize, NoritoDeserialize, NoritoSerialize)]
+#[norito(deny_unknown_fields)]
 pub(crate) struct TrainingJobStartPayload {
     pub service_name: String,
     pub model_name: String,
@@ -731,6 +761,7 @@ pub(crate) struct SignedTrainingJobStartRequest {
     pub provenance: ManifestProvenance,
 }
 #[derive(Clone, Debug, JsonDeserialize, NoritoDeserialize, NoritoSerialize)]
+#[norito(deny_unknown_fields)]
 pub(crate) struct TrainingJobCheckpointPayload {
     pub service_name: String,
     pub job_id: String,
@@ -745,6 +776,7 @@ pub(crate) struct SignedTrainingJobCheckpointRequest {
     pub provenance: ManifestProvenance,
 }
 #[derive(Clone, Debug, JsonDeserialize, NoritoDeserialize, NoritoSerialize)]
+#[norito(deny_unknown_fields)]
 pub(crate) struct TrainingJobRetryPayload {
     pub service_name: String,
     pub job_id: String,
@@ -756,13 +788,14 @@ pub(crate) struct SignedTrainingJobRetryRequest {
     pub payload: TrainingJobRetryPayload,
     pub provenance: ManifestProvenance,
 }
-#[derive(Clone, Debug, JsonDeserialize, NoritoDeserialize, NoritoSerialize)]
+#[derive(Clone, Debug, JsonSerialize, JsonDeserialize, NoritoDeserialize, NoritoSerialize)]
+#[norito(deny_unknown_fields)]
 pub(crate) struct ModelWeightRegisterPayload {
     pub service_name: String,
     pub model_name: String,
     pub weight_version: String,
     pub training_job_id: String,
-    #[norito(default)]
+    #[norito(required)]
     pub parent_version: Option<String>,
     pub weight_artifact_hash: Hash,
     pub dataset_ref: String,
@@ -777,6 +810,7 @@ pub(crate) struct SignedModelWeightRegisterRequest {
     pub provenance: ManifestProvenance,
 }
 #[derive(Clone, Debug, JsonDeserialize, NoritoDeserialize, NoritoSerialize)]
+#[norito(deny_unknown_fields)]
 pub(crate) struct ModelWeightPromotePayload {
     pub service_name: String,
     pub model_name: String,
@@ -791,6 +825,7 @@ pub(crate) struct SignedModelWeightPromoteRequest {
     pub provenance: ManifestProvenance,
 }
 #[derive(Clone, Debug, JsonDeserialize, NoritoDeserialize, NoritoSerialize)]
+#[norito(deny_unknown_fields)]
 pub(crate) struct ModelWeightRollbackPayload {
     pub service_name: String,
     pub model_name: String,
@@ -804,6 +839,7 @@ pub(crate) struct SignedModelWeightRollbackRequest {
     pub provenance: ManifestProvenance,
 }
 #[derive(Clone, Debug, JsonDeserialize, NoritoDeserialize, NoritoSerialize)]
+#[norito(deny_unknown_fields)]
 pub(crate) struct ModelArtifactRegisterPayload {
     pub service_name: String,
     pub model_name: String,
@@ -821,6 +857,7 @@ pub(crate) struct SignedModelArtifactRegisterRequest {
     pub provenance: ManifestProvenance,
 }
 #[derive(Clone, Debug, JsonDeserialize, NoritoDeserialize, NoritoSerialize)]
+#[norito(deny_unknown_fields)]
 pub(crate) struct UploadedModelRegisterPayload {
     pub bundle: SoraUploadedModelBundleV1,
     pub model_name: String,
@@ -839,6 +876,7 @@ pub(crate) struct SignedUploadedModelRegisterRequest {
     pub finalize_provenance: ManifestProvenance,
 }
 #[derive(Clone, Debug, JsonDeserialize, NoritoDeserialize, NoritoSerialize)]
+#[norito(deny_unknown_fields)]
 pub(crate) struct DecryptionRequestPayload {
     pub service_name: String,
     pub policy: DecryptionAuthorityPolicyV1,
@@ -857,6 +895,7 @@ pub(crate) struct SignedCiphertextQueryRequest {
     pub provenance: ManifestProvenance,
 }
 #[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
+#[norito(deny_unknown_fields)]
 pub(crate) struct RolloutResponse {
     pub action: SoracloudAction,
     pub service_name: String,
@@ -872,6 +911,7 @@ pub(crate) struct RolloutResponse {
     pub signed_by: String,
 }
 #[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
+#[norito(deny_unknown_fields)]
 pub(crate) struct StateMutationResponse {
     pub action: SoracloudAction,
     pub service_name: String,
@@ -898,11 +938,13 @@ pub(crate) struct StateMutationResponse {
     NoritoSerialize,
 )]
 #[norito(tag = "operation", content = "value")]
+#[norito(deny_unknown_fields)]
 pub(crate) enum ServiceMaterialMutationOperation {
     Upsert,
     Delete,
 }
 #[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
+#[norito(deny_unknown_fields)]
 pub(crate) struct ServiceConfigMutationResponse {
     pub action: SoracloudAction,
     pub service_name: String,
@@ -912,13 +954,13 @@ pub(crate) struct ServiceConfigMutationResponse {
     pub current_version: String,
     pub config_generation: u64,
     pub config_entry_count: u32,
-    #[norito(default)]
-    #[norito(skip_serializing_if = "Option::is_none")]
+    #[norito(required)]
     pub value_hash: Option<Hash>,
     pub audit_event_count: u32,
     pub signed_by: String,
 }
 #[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
+#[norito(deny_unknown_fields)]
 pub(crate) struct ServiceSecretMutationResponse {
     pub action: SoracloudAction,
     pub service_name: String,
@@ -928,31 +970,28 @@ pub(crate) struct ServiceSecretMutationResponse {
     pub current_version: String,
     pub secret_generation: u64,
     pub secret_entry_count: u32,
-    #[norito(default)]
-    #[norito(skip_serializing_if = "Option::is_none")]
+    #[norito(required)]
     pub encryption: Option<SecretEnvelopeEncryptionV1>,
-    #[norito(default)]
-    #[norito(skip_serializing_if = "Option::is_none")]
+    #[norito(required)]
     pub key_id: Option<String>,
-    #[norito(default)]
-    #[norito(skip_serializing_if = "Option::is_none")]
+    #[norito(required)]
     pub key_version: Option<u32>,
-    #[norito(default)]
-    #[norito(skip_serializing_if = "Option::is_none")]
+    #[norito(required)]
     pub commitment: Option<Hash>,
-    #[norito(default)]
-    #[norito(skip_serializing_if = "Option::is_none")]
+    #[norito(required)]
     pub ciphertext_bytes: Option<u64>,
     pub audit_event_count: u32,
     pub signed_by: String,
 }
 #[derive(Clone, Debug, JsonSerialize, JsonDeserialize, NoritoDeserialize, NoritoSerialize)]
+#[norito(deny_unknown_fields)]
 pub(crate) struct ServiceConfigStatusQuery {
     pub service_name: String,
     #[norito(default)]
     pub config_name: Option<String>,
 }
 #[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
+#[norito(deny_unknown_fields)]
 pub(crate) struct ServiceConfigStatusEntry {
     pub config_name: String,
     pub value_hash: Hash,
@@ -960,6 +999,7 @@ pub(crate) struct ServiceConfigStatusEntry {
     pub last_update_sequence: u64,
 }
 #[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
+#[norito(deny_unknown_fields)]
 pub(crate) struct ServiceConfigStatusResponse {
     pub schema_version: u16,
     pub service_name: String,
@@ -969,12 +1009,14 @@ pub(crate) struct ServiceConfigStatusResponse {
     pub configs: Vec<ServiceConfigStatusEntry>,
 }
 #[derive(Clone, Debug, JsonSerialize, JsonDeserialize, NoritoDeserialize, NoritoSerialize)]
+#[norito(deny_unknown_fields)]
 pub(crate) struct ServiceSecretStatusQuery {
     pub service_name: String,
     #[norito(default)]
     pub secret_name: Option<String>,
 }
 #[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
+#[norito(deny_unknown_fields)]
 pub(crate) struct ServiceSecretStatusEntry {
     pub secret_name: String,
     pub encryption: SecretEnvelopeEncryptionV1,
@@ -985,6 +1027,7 @@ pub(crate) struct ServiceSecretStatusEntry {
     pub last_update_sequence: u64,
 }
 #[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
+#[norito(deny_unknown_fields)]
 pub(crate) struct ServiceSecretStatusResponse {
     pub schema_version: u16,
     pub service_name: String,
@@ -994,6 +1037,7 @@ pub(crate) struct ServiceSecretStatusResponse {
     pub secrets: Vec<ServiceSecretStatusEntry>,
 }
 #[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
+#[norito(deny_unknown_fields)]
 pub(crate) struct FheJobRunResponse {
     pub action: SoracloudAction,
     pub service_name: String,
@@ -1012,6 +1056,7 @@ pub(crate) struct FheJobRunResponse {
     pub signed_by: String,
 }
 #[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
+#[norito(deny_unknown_fields)]
 pub(crate) struct DecryptionRequestResponse {
     pub action: SoracloudAction,
     pub service_name: String,
@@ -1021,12 +1066,10 @@ pub(crate) struct DecryptionRequestResponse {
     pub state_key: String,
     pub jurisdiction_tag: String,
     pub policy_snapshot_hash: Hash,
-    #[norito(default)]
-    #[norito(skip_serializing_if = "Option::is_none")]
+    #[norito(required)]
     pub consent_evidence_hash: Option<Hash>,
     pub break_glass: bool,
-    #[norito(default)]
-    #[norito(skip_serializing_if = "Option::is_none")]
+    #[norito(required)]
     pub break_glass_reason: Option<String>,
     pub sequence: u64,
     pub governance_tx_hash: Hash,
@@ -1035,12 +1078,14 @@ pub(crate) struct DecryptionRequestResponse {
     pub signed_by: String,
 }
 #[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
+#[norito(deny_unknown_fields)]
 pub(crate) struct CiphertextQueryResponse {
     pub action: SoracloudAction,
     pub response: CiphertextQueryResponseV1,
     pub signed_by: String,
 }
 #[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
+#[norito(deny_unknown_fields)]
 pub(crate) struct TrainingJobMutationResponse {
     pub action: TrainingJobAction,
     pub service_name: String,
@@ -1052,8 +1097,7 @@ pub(crate) struct TrainingJobMutationResponse {
     pub target_steps: u32,
     pub completed_steps: u32,
     pub checkpoint_interval_steps: u32,
-    #[norito(default)]
-    #[norito(skip_serializing_if = "Option::is_none")]
+    #[norito(required)]
     pub last_checkpoint_step: Option<u32>,
     pub checkpoint_count: u32,
     pub retry_count: u8,
@@ -1065,21 +1109,21 @@ pub(crate) struct TrainingJobMutationResponse {
     pub storage_budget_bytes: u64,
     pub storage_consumed_bytes: u64,
     pub storage_remaining_bytes: u64,
-    #[norito(default)]
-    #[norito(skip_serializing_if = "Option::is_none")]
+    #[norito(required)]
     pub latest_metrics_hash: Option<Hash>,
-    #[norito(default)]
-    #[norito(skip_serializing_if = "Option::is_none")]
+    #[norito(required)]
     pub last_failure_reason: Option<String>,
     pub training_event_count: u32,
     pub signed_by: String,
 }
 #[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
+#[norito(deny_unknown_fields)]
 pub(crate) struct TrainingJobStatusResponse {
     pub schema_version: u16,
     pub job: TrainingJobStatusEntry,
 }
 #[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
+#[norito(deny_unknown_fields)]
 pub(crate) struct TrainingJobStatusEntry {
     pub service_name: String,
     pub model_name: String,
@@ -1089,8 +1133,7 @@ pub(crate) struct TrainingJobStatusEntry {
     pub target_steps: u32,
     pub completed_steps: u32,
     pub checkpoint_interval_steps: u32,
-    #[norito(default)]
-    #[norito(skip_serializing_if = "Option::is_none")]
+    #[norito(required)]
     pub last_checkpoint_step: Option<u32>,
     pub checkpoint_count: u32,
     pub retry_count: u8,
@@ -1102,26 +1145,23 @@ pub(crate) struct TrainingJobStatusEntry {
     pub storage_budget_bytes: u64,
     pub storage_consumed_bytes: u64,
     pub storage_remaining_bytes: u64,
-    #[norito(default)]
-    #[norito(skip_serializing_if = "Option::is_none")]
+    #[norito(required)]
     pub latest_metrics_hash: Option<Hash>,
-    #[norito(default)]
-    #[norito(skip_serializing_if = "Option::is_none")]
+    #[norito(required)]
     pub last_failure_reason: Option<String>,
     pub created_sequence: u64,
     pub updated_sequence: u64,
 }
 #[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
+#[norito(deny_unknown_fields)]
 pub(crate) struct ModelWeightMutationResponse {
     pub action: ModelWeightAction,
     pub service_name: String,
     pub model_name: String,
     pub target_version: String,
-    #[norito(default)]
-    #[norito(skip_serializing_if = "Option::is_none")]
+    #[norito(required)]
     pub current_version: Option<String>,
-    #[norito(default)]
-    #[norito(skip_serializing_if = "Option::is_none")]
+    #[norito(required)]
     pub parent_version: Option<String>,
     pub sequence: u64,
     pub version_count: u32,
@@ -1129,26 +1169,26 @@ pub(crate) struct ModelWeightMutationResponse {
     pub signed_by: String,
 }
 #[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
+#[norito(deny_unknown_fields)]
 pub(crate) struct ModelWeightStatusResponse {
     pub schema_version: u16,
     pub model: ModelWeightStatusEntry,
 }
 #[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
+#[norito(deny_unknown_fields)]
 pub(crate) struct ModelWeightStatusEntry {
     pub service_name: String,
     pub model_name: String,
-    #[norito(default)]
-    #[norito(skip_serializing_if = "Option::is_none")]
+    #[norito(required)]
     pub current_version: Option<String>,
     pub version_count: u32,
-    #[norito(default)]
     pub versions: Vec<ModelWeightVersionEntry>,
 }
 #[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
+#[norito(deny_unknown_fields)]
 pub(crate) struct ModelWeightVersionEntry {
     pub weight_version: String,
-    #[norito(default)]
-    #[norito(skip_serializing_if = "Option::is_none")]
+    #[norito(required)]
     pub parent_version: Option<String>,
     pub training_job_id: String,
     pub weight_artifact_hash: Hash,
@@ -1157,47 +1197,43 @@ pub(crate) struct ModelWeightVersionEntry {
     pub reproducibility_hash: Hash,
     pub provenance_attestation_hash: Hash,
     pub registered_sequence: u64,
-    #[norito(default)]
-    #[norito(skip_serializing_if = "Option::is_none")]
+    #[norito(required)]
     pub promoted_sequence: Option<u64>,
-    #[norito(default)]
-    #[norito(skip_serializing_if = "Option::is_none")]
+    #[norito(required)]
     pub gate_report_hash: Option<Hash>,
 }
 #[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
+#[norito(deny_unknown_fields)]
 pub(crate) struct ModelArtifactMutationResponse {
     pub action: ModelArtifactAction,
     pub service_name: String,
     pub model_name: String,
     pub training_job_id: String,
-    #[norito(default)]
-    #[norito(skip_serializing_if = "String::is_empty")]
     pub artifact_id: String,
-    #[norito(default)]
-    #[norito(skip_serializing_if = "Option::is_none")]
+    #[norito(required)]
     pub weight_version: Option<String>,
     pub sequence: u64,
     pub model_artifact_count: u32,
     pub signed_by: String,
 }
 #[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
+#[norito(deny_unknown_fields)]
 pub(crate) struct ModelArtifactStatusResponse {
     pub schema_version: u16,
     pub service_name: String,
     pub model_name: String,
     pub artifact_count: u32,
     pub artifact: ModelArtifactStatusEntry,
-    #[norito(default)]
     pub artifacts: Vec<ModelArtifactStatusEntry>,
 }
 #[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
+#[norito(deny_unknown_fields)]
 pub(crate) struct ModelArtifactStatusEntry {
     pub service_name: String,
     pub model_name: String,
     pub artifact_id: String,
     pub training_job_id: String,
-    #[norito(default)]
-    #[norito(skip_serializing_if = "Option::is_none")]
+    #[norito(required)]
     pub weight_version: Option<String>,
     pub weight_artifact_hash: Hash,
     pub dataset_ref: String,
@@ -1205,26 +1241,26 @@ pub(crate) struct ModelArtifactStatusEntry {
     pub reproducibility_hash: Hash,
     pub provenance_attestation_hash: Hash,
     pub registered_sequence: u64,
-    #[norito(default)]
-    #[norito(skip_serializing_if = "Option::is_none")]
+    #[norito(required)]
     pub consumed_by_version: Option<String>,
-    #[norito(default)]
-    #[norito(skip_serializing_if = "Option::is_none")]
+    #[norito(required)]
     pub chunk_manifest_root: Option<Hash>,
 }
 #[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
+#[norito(deny_unknown_fields)]
 pub(crate) struct UploadedModelStatusResponse {
     pub schema_version: u16,
     pub bundle: SoraUploadedModelBundleV1,
-    #[norito(default)]
-    #[norito(skip_serializing_if = "Option::is_none")]
+    #[norito(required)]
     pub artifact: Option<ModelArtifactStatusEntry>,
 }
 #[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
+#[norito(deny_unknown_fields)]
 pub(crate) struct UploadedModelEncryptionRecipientResponse {
     pub recipient: SoraUploadedModelEncryptionRecipientV1,
 }
-#[derive(Clone, Debug, JsonDeserialize, NoritoDeserialize, NoritoSerialize)]
+#[derive(Clone, Debug, JsonSerialize, JsonDeserialize, NoritoDeserialize, NoritoSerialize)]
+#[norito(deny_unknown_fields)]
 pub(crate) struct PrivateUploadedModelQuantizedCpuModelDto {
     pub input_len: u64,
     pub output_len: u64,
@@ -1234,19 +1270,19 @@ pub(crate) struct PrivateUploadedModelQuantizedCpuModelDto {
     pub output_min: i32,
     pub output_max: i32,
 }
-#[derive(Clone, Debug, JsonDeserialize, NoritoDeserialize, NoritoSerialize)]
+#[derive(Clone, Debug, JsonSerialize, JsonDeserialize, NoritoDeserialize, NoritoSerialize)]
 #[norito(deny_unknown_fields)]
 pub(crate) struct PrivateUploadedModelExecuteRequest {
     pub service_name: String,
     pub weight_version: String,
-    #[norito(default)]
+    #[norito(required)]
     pub model_id: Option<String>,
-    #[norito(default)]
+    #[norito(required)]
     pub model_name: Option<String>,
-    #[norito(default)]
+    #[norito(required)]
     pub bundle_root: Option<Hash>,
     pub policy_id: String,
-    #[norito(default)]
+    #[norito(required)]
     pub decryption_request_id: Option<String>,
     pub model: PrivateUploadedModelQuantizedCpuModelDto,
     pub plaintext_input_i32: Vec<i32>,
@@ -1255,6 +1291,7 @@ pub(crate) struct PrivateUploadedModelExecuteRequest {
     pub emitted_sequence: u64,
 }
 #[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
+#[norito(deny_unknown_fields)]
 pub(crate) struct PrivateUploadedModelExecuteResponse {
     pub schema_version: u16,
     pub status: UploadedModelStatusResponse,
@@ -1262,6 +1299,7 @@ pub(crate) struct PrivateUploadedModelExecuteResponse {
     pub tx_instructions: Vec<SoracloudTxInstr>,
 }
 #[derive(Clone, Debug, Default, JsonDeserialize)]
+#[norito(deny_unknown_fields)]
 pub(crate) struct PrivateUploadedModelReceiptQuery {
     #[norito(default)]
     pub receipt_id: Option<Hash>,
@@ -1277,18 +1315,17 @@ pub(crate) struct PrivateUploadedModelReceiptQuery {
     pub count_mode: Option<String>,
 }
 #[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
+#[norito(deny_unknown_fields)]
 pub(crate) struct PrivateUploadedModelReceiptListResponse {
     pub schema_version: u16,
     pub receipts: Vec<SoraPrivateUploadedModelExecutionReceiptV1>,
-    #[norito(default)]
-    #[norito(skip_serializing_if = "Option::is_none")]
+    #[norito(required)]
     pub total: Option<u32>,
     pub returned_items: u32,
     pub remaining_items: u32,
     pub has_more: bool,
     pub count_mode: String,
-    #[norito(default)]
-    #[norito(skip_serializing_if = "Option::is_none")]
+    #[norito(required)]
     pub continue_cursor: Option<String>,
 }
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -1306,44 +1343,36 @@ impl PrivateUploadedModelReceiptCountMode {
 }
 fn private_uploaded_model_receipt_count_mode(
     raw: Option<&str>,
-) -> PrivateUploadedModelReceiptCountMode {
+) -> Result<PrivateUploadedModelReceiptCountMode, SoracloudError> {
     match raw {
-        Some("exact") => PrivateUploadedModelReceiptCountMode::Exact,
-        Some("bounded") | None => PrivateUploadedModelReceiptCountMode::Bounded,
-        Some(other) => {
-            iroha_logger::warn!(
-                endpoint = "/v1/soracloud/model/upload/private/receipts",
-                count_mode = other,
-                "unknown app query count_mode; using bounded"
-            );
-            PrivateUploadedModelReceiptCountMode::Bounded
-        }
+        Some("exact") => Ok(PrivateUploadedModelReceiptCountMode::Exact),
+        Some("bounded") | None => Ok(PrivateUploadedModelReceiptCountMode::Bounded),
+        Some(other) => Err(SoracloudError::bad_request(format!(
+            "invalid count_mode `{other}`; expected `bounded` or `exact`"
+        ))),
     }
 }
 #[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
+#[norito(deny_unknown_fields)]
 pub(crate) struct UploadedModelMutationResponse {
     pub action: UploadedModelAction,
     pub status: UploadedModelStatusResponse,
     pub signed_by: String,
 }
 #[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
+#[norito(deny_unknown_fields)]
 pub(crate) struct HfSharedLeaseStatusResponse {
     pub schema_version: u16,
     pub source: SoraHfSourceRecordV1,
-    #[norito(default)]
-    #[norito(skip_serializing_if = "Option::is_none")]
+    #[norito(required)]
     pub runtime_projection: Option<SoracloudRuntimeHfSourcePlan>,
-    #[norito(default)]
-    #[norito(skip_serializing_if = "Option::is_none")]
+    #[norito(required)]
     pub pool: Option<SoraHfSharedLeasePoolV1>,
-    #[norito(default)]
-    #[norito(skip_serializing_if = "Option::is_none")]
+    #[norito(required)]
     pub member: Option<SoraHfSharedLeaseMemberV1>,
-    #[norito(default)]
-    #[norito(skip_serializing_if = "Option::is_none")]
+    #[norito(required)]
     pub placement: Option<SoraHfPlacementRecordV1>,
-    #[norito(default)]
-    #[norito(skip_serializing_if = "Option::is_none")]
+    #[norito(required)]
     pub latest_audit_event: Option<SoraHfSharedLeaseAuditEventV1>,
     pub audit_event_count: u32,
     pub storage_base_fee: Quantity,
@@ -1353,20 +1382,18 @@ pub(crate) struct HfSharedLeaseStatusResponse {
     pub importer_pending: bool,
 }
 #[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
+#[norito(deny_unknown_fields)]
 pub(crate) struct HfSharedLeaseMutationResponse {
     pub schema_version: u16,
     pub action: SoraHfSharedLeaseActionV1,
     pub source: SoraHfSourceRecordV1,
-    #[norito(default)]
-    #[norito(skip_serializing_if = "Option::is_none")]
+    #[norito(required)]
     pub runtime_projection: Option<SoracloudRuntimeHfSourcePlan>,
     pub pool: SoraHfSharedLeasePoolV1,
     pub member: SoraHfSharedLeaseMemberV1,
-    #[norito(default)]
-    #[norito(skip_serializing_if = "Option::is_none")]
+    #[norito(required)]
     pub placement: Option<SoraHfPlacementRecordV1>,
-    #[norito(default)]
-    #[norito(skip_serializing_if = "Option::is_none")]
+    #[norito(required)]
     pub latest_audit_event: Option<SoraHfSharedLeaseAuditEventV1>,
     pub storage_base_fee: Quantity,
     pub compute_reservation_fee: Quantity,
@@ -1376,28 +1403,30 @@ pub(crate) struct HfSharedLeaseMutationResponse {
 }
 #[derive(Clone, Copy, Debug, JsonSerialize, JsonDeserialize)]
 #[norito(tag = "action", content = "value")]
+#[norito(deny_unknown_fields)]
 pub(crate) enum ModelHostMutationAction {
     Advertise,
     Heartbeat,
     Withdraw,
 }
 #[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
+#[norito(deny_unknown_fields)]
 pub(crate) struct ModelHostStatusResponse {
     pub schema_version: u16,
-    #[norito(default)]
-    #[norito(skip_serializing_if = "Option::is_none")]
+    #[norito(required)]
     pub validator_account_id: Option<AccountId>,
     pub active_host_count: u32,
-    #[norito(default)]
     pub hosts: Vec<SoraModelHostCapabilityRecordV1>,
 }
 #[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
+#[norito(deny_unknown_fields)]
 pub(crate) struct ModelHostMutationResponse {
     pub action: ModelHostMutationAction,
     pub status: ModelHostStatusResponse,
     pub signed_by: String,
 }
 #[derive(Clone, Debug, Default, JsonDeserialize)]
+#[norito(deny_unknown_fields)]
 pub(crate) struct HealthComplianceReportQuery {
     #[norito(default)]
     pub service_name: Option<String>,
@@ -1407,16 +1436,19 @@ pub(crate) struct HealthComplianceReportQuery {
     pub limit: Option<u32>,
 }
 #[derive(Clone, Debug, JsonDeserialize)]
+#[norito(deny_unknown_fields)]
 pub(crate) struct TrainingJobStatusQuery {
     pub service_name: String,
     pub job_id: String,
 }
 #[derive(Clone, Debug, JsonDeserialize)]
+#[norito(deny_unknown_fields)]
 pub(crate) struct ModelWeightStatusQuery {
     pub service_name: String,
     pub model_name: String,
 }
 #[derive(Clone, Debug, Default, JsonDeserialize)]
+#[norito(deny_unknown_fields)]
 pub(crate) struct ModelArtifactStatusQuery {
     pub service_name: String,
     #[norito(default)]
@@ -1429,6 +1461,7 @@ pub(crate) struct ModelArtifactStatusQuery {
     pub weight_version: Option<String>,
 }
 #[derive(Clone, Debug, Default, JsonDeserialize)]
+#[norito(deny_unknown_fields)]
 pub(crate) struct UploadedModelStatusQuery {
     pub service_name: String,
     pub weight_version: String,
@@ -1440,10 +1473,10 @@ pub(crate) struct UploadedModelStatusQuery {
     pub bundle_root: Option<Hash>,
 }
 #[derive(Clone, Debug, JsonDeserialize)]
+#[norito(deny_unknown_fields)]
 pub(crate) struct HfSharedLeaseStatusQuery {
     pub repo_id: String,
-    #[norito(default)]
-    pub revision: Option<String>,
+    pub revision: String,
     pub storage_class: String,
     pub lease_term_ms: u64,
     #[norito(default)]
@@ -1451,30 +1484,34 @@ pub(crate) struct HfSharedLeaseStatusQuery {
     pub account_id: Option<String>,
 }
 #[derive(Clone, Debug, Default, JsonDeserialize)]
+#[norito(deny_unknown_fields)]
 pub(crate) struct ModelHostStatusQuery {
     #[norito(default)]
     /// Optional validator filter as canonical I105 or on-chain account alias.
     pub account_id: Option<String>,
 }
 #[derive(Clone, Debug, JsonDeserialize)]
+#[norito(deny_unknown_fields)]
 pub(crate) struct AgentAutonomyStatusQuery {
     pub apartment_name: String,
 }
 #[derive(Clone, Debug, Default, JsonDeserialize)]
+#[norito(deny_unknown_fields)]
 pub(crate) struct AgentStatusQuery {
     #[norito(default)]
     pub apartment_name: Option<String>,
 }
 #[derive(Clone, Debug, JsonDeserialize)]
+#[norito(deny_unknown_fields)]
 pub(crate) struct AgentMailboxStatusQuery {
     pub apartment_name: String,
 }
 #[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
+#[norito(deny_unknown_fields)]
 pub(crate) struct MutationResponse {
     pub action: SoracloudAction,
     pub service_name: String,
-    #[norito(default)]
-    #[norito(skip_serializing_if = "Option::is_none")]
+    #[norito(required)]
     pub previous_version: Option<String>,
     pub current_version: String,
     pub sequence: u64,
@@ -1483,24 +1520,20 @@ pub(crate) struct MutationResponse {
     pub revision_count: u32,
     pub audit_event_count: u32,
     pub signed_by: String,
-    #[norito(default)]
-    #[norito(skip_serializing_if = "Option::is_none")]
+    #[norito(required)]
     pub rollout_handle: Option<String>,
-    #[norito(default)]
-    #[norito(skip_serializing_if = "Option::is_none")]
+    #[norito(required)]
     pub rollout_stage: Option<RolloutStage>,
-    #[norito(default)]
-    #[norito(skip_serializing_if = "Option::is_none")]
+    #[norito(required)]
     pub rollout_percent: Option<u8>,
 }
 #[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
+#[norito(deny_unknown_fields)]
 pub(crate) struct ControlPlaneSnapshot {
     pub schema_version: u16,
     pub service_count: u32,
     pub audit_event_count: u32,
-    #[norito(default)]
     pub services: Vec<ControlPlaneServiceSnapshot>,
-    #[norito(default)]
     pub recent_audit_events: Vec<ControlPlaneAuditEvent>,
 }
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -1535,13 +1568,12 @@ pub(crate) enum PublicRouteMatch {
     OrderedMailbox(OrderedMailboxRouteMatch),
 }
 #[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
+#[norito(deny_unknown_fields)]
 pub(crate) struct HealthComplianceReportResponse {
     pub schema_version: u16,
-    #[norito(default)]
-    #[norito(skip_serializing_if = "Option::is_none")]
+    #[norito(required)]
     pub service_name: Option<String>,
-    #[norito(default)]
-    #[norito(skip_serializing_if = "Option::is_none")]
+    #[norito(required)]
     pub jurisdiction_tag: Option<String>,
     pub generated_at_sequence: u64,
     pub total_access_events: u32,
@@ -1549,16 +1581,13 @@ pub(crate) struct HealthComplianceReportResponse {
     pub non_break_glass_events: u32,
     pub consent_evidence_present_events: u32,
     pub consent_evidence_coverage_bps: u16,
-    #[norito(default)]
     pub recent_access_events: Vec<HealthAccessAuditEntry>,
-    #[norito(default)]
     pub jurisdiction_stats: Vec<HealthJurisdictionStat>,
-    #[norito(default)]
     pub data_flow_attestations: Vec<HealthDataFlowAttestation>,
-    #[norito(default)]
     pub policy_diff_history: Vec<HealthPolicyDiffEntry>,
 }
 #[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
+#[norito(deny_unknown_fields)]
 pub(crate) struct HealthAccessAuditEntry {
     pub sequence: u64,
     pub service_name: String,
@@ -1566,23 +1595,23 @@ pub(crate) struct HealthAccessAuditEntry {
     pub state_key: String,
     pub policy_name: String,
     pub jurisdiction_tag: String,
-    #[norito(default)]
-    #[norito(skip_serializing_if = "Option::is_none")]
+    #[norito(required)]
     pub consent_evidence_hash: Option<Hash>,
     pub break_glass: bool,
-    #[norito(default)]
-    #[norito(skip_serializing_if = "Option::is_none")]
+    #[norito(required)]
     pub break_glass_reason: Option<String>,
     pub governance_tx_hash: Hash,
     pub signed_by: String,
 }
 #[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
+#[norito(deny_unknown_fields)]
 pub(crate) struct HealthJurisdictionStat {
     pub jurisdiction_tag: String,
     pub access_event_count: u32,
     pub break_glass_event_count: u32,
 }
 #[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
+#[norito(deny_unknown_fields)]
 pub(crate) struct HealthDataFlowAttestation {
     pub service_name: String,
     pub current_version: String,
@@ -1592,6 +1621,7 @@ pub(crate) struct HealthDataFlowAttestation {
     pub mutability: SoraStateMutabilityV1,
 }
 #[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
+#[norito(deny_unknown_fields)]
 pub(crate) struct HealthPolicyDiffEntry {
     pub policy_name: String,
     pub jurisdiction_tag: String,
@@ -1601,6 +1631,7 @@ pub(crate) struct HealthPolicyDiffEntry {
     pub event_count: u32,
 }
 #[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
+#[norito(deny_unknown_fields)]
 pub(crate) struct SoracloudPublicServiceDiscoveryV1 {
     pub schema_version: u16,
     pub service_name: String,
@@ -1610,11 +1641,9 @@ pub(crate) struct SoracloudPublicServiceDiscoveryV1 {
     pub route_host: String,
     pub path_prefix: String,
     pub base_url: String,
-    #[norito(default)]
-    #[norito(skip_serializing_if = "Option::is_none")]
+    #[norito(required)]
     pub healthcheck_path: Option<String>,
-    #[norito(default)]
-    #[norito(skip_serializing_if = "Option::is_none")]
+    #[norito(required)]
     pub healthcheck_url: Option<String>,
     pub service_manifest_hash: Hash,
     pub container_manifest_hash: Hash,
@@ -1623,11 +1652,11 @@ pub(crate) struct SoracloudPublicServiceDiscoveryV1 {
     pub public_discovery_url: String,
     pub public_discovery_cid_host_url: String,
     pub manifest_digest_hex: String,
-    #[norito(default)]
-    #[norito(skip_serializing_if = "Option::is_none")]
+    #[norito(required)]
     pub manifest_id_hex: Option<String>,
 }
 #[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
+#[norito(deny_unknown_fields)]
 pub(crate) struct SoracloudPublicServiceDiscoveryRegistryV1 {
     pub schema_version: u16,
     pub service_name: String,
@@ -1635,6 +1664,7 @@ pub(crate) struct SoracloudPublicServiceDiscoveryRegistryV1 {
     pub revisions: BTreeMap<String, SoracloudPublicServiceDiscoveryV1>,
 }
 #[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
+#[norito(deny_unknown_fields)]
 pub(crate) struct ServicePublicDiscoveryResponse {
     pub schema_version: u16,
     pub service_name: String,
@@ -1643,49 +1673,36 @@ pub(crate) struct ServicePublicDiscoveryResponse {
     pub discovery: SoracloudPublicServiceDiscoveryV1,
 }
 #[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
+#[norito(deny_unknown_fields)]
 pub(crate) struct ControlPlaneServiceSnapshot {
     pub service_name: String,
     pub current_version: String,
     pub revision_count: u32,
-    #[norito(default)]
     pub config_generation: u64,
-    #[norito(default)]
     pub secret_generation: u64,
-    #[norito(default)]
     pub config_entry_count: u32,
-    #[norito(default)]
     pub secret_entry_count: u32,
-    #[norito(default)]
-    #[norito(skip_serializing_if = "Option::is_none")]
+    #[norito(required)]
     pub quota_class: Option<String>,
-    #[norito(default)]
-    #[norito(skip_serializing_if = "Option::is_none")]
+    #[norito(required)]
     pub service_lease_status: Option<SoraServiceLeaseStatusV1>,
-    #[norito(default)]
-    #[norito(skip_serializing_if = "Option::is_none")]
+    #[norito(required)]
     pub lease_expires_sequence: Option<u64>,
-    #[norito(default)]
-    #[norito(skip_serializing_if = "Option::is_none")]
+    #[norito(required)]
     pub prepaid_runtime_balance: Option<Quantity>,
-    #[norito(default)]
-    #[norito(skip_serializing_if = "Option::is_none")]
+    #[norito(required)]
     pub remaining_runtime_balance: Option<Quantity>,
-    #[norito(default)]
-    #[norito(skip_serializing_if = "Option::is_none")]
+    #[norito(required)]
     pub public_discovery_content_cid: Option<String>,
-    #[norito(default)]
-    #[norito(skip_serializing_if = "Option::is_none")]
+    #[norito(required)]
     pub public_discovery_url: Option<String>,
-    #[norito(default)]
-    #[norito(skip_serializing_if = "Option::is_none")]
+    #[norito(required)]
     pub public_discovery_cid_host_url: Option<String>,
-    #[norito(default)]
+    #[norito(required)]
     pub latest_revision: Option<ControlPlaneServiceRevision>,
-    #[norito(default)]
-    #[norito(skip_serializing_if = "Option::is_none")]
+    #[norito(required)]
     pub active_rollout: Option<RolloutRuntimeState>,
-    #[norito(default)]
-    #[norito(skip_serializing_if = "Option::is_none")]
+    #[norito(required)]
     pub last_rollout: Option<RolloutRuntimeState>,
 }
 #[derive(Clone, Debug)]
@@ -1707,6 +1724,7 @@ struct ScrHostAdmission {
     sandbox_profile_hash: Hash,
 }
 #[derive(Clone, Debug, JsonSerialize, JsonDeserialize, NoritoDeserialize, NoritoSerialize)]
+#[norito(deny_unknown_fields)]
 pub(crate) struct ControlPlaneServiceRevision {
     pub sequence: u64,
     pub action: SoracloudAction,
@@ -1715,35 +1733,24 @@ pub(crate) struct ControlPlaneServiceRevision {
     pub container_manifest_hash: Hash,
     pub replicas: u16,
     pub execution_plane: SoraServiceExecutionPlaneV1,
-    #[norito(default)]
-    #[norito(skip_serializing_if = "Option::is_none")]
+    #[norito(required)]
     pub route_host: Option<String>,
-    #[norito(default)]
-    #[norito(skip_serializing_if = "Option::is_none")]
+    #[norito(required)]
     pub route_path_prefix: Option<String>,
-    #[norito(default)]
-    #[norito(skip_serializing_if = "Option::is_none")]
+    #[norito(required)]
     pub base_url: Option<String>,
-    #[norito(default)]
-    #[norito(skip_serializing_if = "Option::is_none")]
+    #[norito(required)]
     pub healthcheck_url: Option<String>,
-    #[norito(default)]
-    #[norito(skip_serializing_if = "Option::is_none")]
+    #[norito(required)]
     pub public_discovery_content_cid: Option<String>,
-    #[norito(default)]
-    #[norito(skip_serializing_if = "Option::is_none")]
+    #[norito(required)]
     pub public_discovery_url: Option<String>,
-    #[norito(default)]
-    #[norito(skip_serializing_if = "Option::is_none")]
+    #[norito(required)]
     pub public_discovery_cid_host_url: Option<String>,
     pub state_binding_count: u32,
-    #[norito(default)]
     pub state_bindings: Vec<SoraStateBindingV1>,
-    #[norito(default)]
     pub lease_volumes: Vec<SoraLeaseVolumeBindingV1>,
-    #[norito(default)]
     pub allow_model_inference: bool,
-    #[norito(default)]
     pub allow_model_training: bool,
     /// Runtime type admitted by SCR for this revision.
     pub runtime: SoraContainerRuntimeV1,
@@ -1768,17 +1775,13 @@ pub(crate) struct ControlPlaneServiceRevision {
     /// SCR shutdown grace period in seconds.
     pub stop_grace_secs: u32,
     /// Optional healthcheck path enforced by SCR.
-    #[norito(default)]
-    #[norito(skip_serializing_if = "Option::is_none")]
+    #[norito(required)]
     pub healthcheck_path: Option<String>,
     /// Required service-scoped configs declared by the container manifest.
-    #[norito(default)]
     pub required_config_names: Vec<String>,
     /// Required service-scoped secrets declared by the container manifest.
-    #[norito(default)]
     pub required_secret_names: Vec<String>,
     /// Explicit config exports declared by the container manifest.
-    #[norito(default)]
     pub config_exports: Vec<SoraConfigExportV1>,
     /// Deterministic hash of sandbox/capability/resource admission inputs.
     pub sandbox_profile_hash: Hash,
@@ -1789,55 +1792,44 @@ pub(crate) struct ControlPlaneServiceRevision {
     pub signed_by: String,
 }
 #[derive(Clone, Debug, JsonSerialize, JsonDeserialize, NoritoDeserialize, NoritoSerialize)]
+#[norito(deny_unknown_fields)]
 pub(crate) struct ControlPlaneAuditEvent {
     pub sequence: u64,
     pub action: SoracloudAction,
     pub service_name: String,
-    #[norito(default)]
-    #[norito(skip_serializing_if = "Option::is_none")]
+    #[norito(required)]
     pub from_version: Option<String>,
     pub to_version: String,
     pub service_manifest_hash: Hash,
     pub container_manifest_hash: Hash,
-    #[norito(default)]
-    #[norito(skip_serializing_if = "Option::is_none")]
+    #[norito(required)]
     pub binding_name: Option<String>,
-    #[norito(default)]
-    #[norito(skip_serializing_if = "Option::is_none")]
+    #[norito(required)]
     pub state_key: Option<String>,
-    #[norito(default)]
-    #[norito(skip_serializing_if = "Option::is_none")]
+    #[norito(required)]
     pub config_name: Option<String>,
-    #[norito(default)]
-    #[norito(skip_serializing_if = "Option::is_none")]
+    #[norito(required)]
     pub secret_name: Option<String>,
-    #[norito(default)]
-    #[norito(skip_serializing_if = "Option::is_none")]
+    #[norito(required)]
     pub governance_tx_hash: Option<Hash>,
-    #[norito(default)]
-    #[norito(skip_serializing_if = "Option::is_none")]
+    #[norito(required)]
     pub rollout_handle: Option<String>,
-    #[norito(default)]
-    #[norito(skip_serializing_if = "Option::is_none")]
+    #[norito(required)]
     pub policy_name: Option<String>,
-    #[norito(default)]
-    #[norito(skip_serializing_if = "Option::is_none")]
+    #[norito(required)]
     pub policy_snapshot_hash: Option<Hash>,
-    #[norito(default)]
-    #[norito(skip_serializing_if = "Option::is_none")]
+    #[norito(required)]
     pub jurisdiction_tag: Option<String>,
-    #[norito(default)]
-    #[norito(skip_serializing_if = "Option::is_none")]
+    #[norito(required)]
     pub consent_evidence_hash: Option<Hash>,
-    #[norito(default)]
-    #[norito(skip_serializing_if = "Option::is_none")]
+    #[norito(required)]
     pub break_glass: Option<bool>,
-    #[norito(default)]
-    #[norito(skip_serializing_if = "Option::is_none")]
+    #[norito(required)]
     pub break_glass_reason: Option<String>,
     pub signed_by: String,
 }
 #[derive(Clone, Debug, JsonSerialize, JsonDeserialize, NoritoDeserialize, NoritoSerialize)]
+#[norito(deny_unknown_fields)]
 struct CiphertextRuntimeRecord {
     encryption: SoraStateEncryptionV1,
     payload_bytes: u64,
@@ -1847,10 +1839,10 @@ struct CiphertextRuntimeRecord {
     source_action: SoracloudAction,
 }
 #[derive(Clone, Debug, JsonSerialize, JsonDeserialize, NoritoDeserialize, NoritoSerialize)]
+#[norito(deny_unknown_fields)]
 pub(crate) struct RolloutRuntimeState {
     pub rollout_handle: String,
-    #[norito(default)]
-    #[norito(skip_serializing_if = "Option::is_none")]
+    #[norito(required)]
     pub baseline_version: Option<String>,
     pub candidate_version: String,
     pub canary_percent: u8,
@@ -1863,6 +1855,7 @@ pub(crate) struct RolloutRuntimeState {
     pub updated_sequence: u64,
 }
 #[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
+#[norito(deny_unknown_fields)]
 pub(crate) struct AgentMutationResponse {
     pub action: AgentApartmentAction,
     pub apartment_name: String,
@@ -1880,36 +1873,32 @@ pub(crate) struct AgentMutationResponse {
     pub process_generation: u64,
     pub process_started_sequence: u64,
     pub last_active_sequence: u64,
-    #[norito(default)]
-    #[norito(skip_serializing_if = "Option::is_none")]
+    #[norito(required)]
     pub last_checkpoint_sequence: Option<u64>,
     pub checkpoint_count: u32,
     pub persistent_state_total_bytes: u64,
     pub persistent_state_key_count: u32,
     pub audit_event_count: u32,
     pub signed_by: String,
-    #[norito(default)]
-    #[norito(skip_serializing_if = "Option::is_none")]
+    #[norito(required)]
     pub capability: Option<String>,
-    #[norito(default)]
-    #[norito(skip_serializing_if = "Option::is_none")]
+    #[norito(required)]
     pub reason: Option<String>,
-    #[norito(default)]
-    #[norito(skip_serializing_if = "Option::is_none")]
+    #[norito(required)]
     pub last_restart_sequence: Option<u64>,
-    #[norito(default)]
-    #[norito(skip_serializing_if = "Option::is_none")]
+    #[norito(required)]
     pub last_restart_reason: Option<String>,
 }
 #[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
+#[norito(deny_unknown_fields)]
 pub(crate) struct AgentStatusResponse {
     pub schema_version: u16,
     pub apartment_count: u32,
     pub event_count: u32,
-    #[norito(default)]
     pub apartments: Vec<AgentApartmentStatusEntry>,
 }
 #[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
+#[norito(deny_unknown_fields)]
 pub(crate) struct AgentApartmentStatusEntry {
     pub apartment_name: String,
     pub manifest_hash: Hash,
@@ -1931,48 +1920,39 @@ pub(crate) struct AgentApartmentStatusEntry {
     pub process_generation: u64,
     pub process_started_sequence: u64,
     pub last_active_sequence: u64,
-    #[norito(default)]
-    #[norito(skip_serializing_if = "Option::is_none")]
+    #[norito(required)]
     pub last_checkpoint_sequence: Option<u64>,
     pub checkpoint_count: u32,
     pub persistent_state_total_bytes: u64,
     pub persistent_state_key_count: u32,
     pub spend_limit_count: u32,
     pub upgrade_policy: iroha_data_model::soracloud::AgentUpgradePolicyV1,
-    #[norito(default)]
-    #[norito(skip_serializing_if = "Option::is_none")]
+    #[norito(required)]
     pub last_restart_sequence: Option<u64>,
-    #[norito(default)]
-    #[norito(skip_serializing_if = "Option::is_none")]
+    #[norito(required)]
     pub last_restart_reason: Option<String>,
 }
 #[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
+#[norito(deny_unknown_fields)]
 pub(crate) struct AgentWalletMutationResponse {
     pub action: AgentApartmentAction,
     pub apartment_name: String,
     pub sequence: u64,
     pub manifest_hash: Hash,
     pub status: AgentRuntimeStatus,
-    #[norito(default)]
-    #[norito(skip_serializing_if = "Option::is_none")]
+    #[norito(required)]
     pub request_id: Option<String>,
-    #[norito(default)]
-    #[norito(skip_serializing_if = "Option::is_none")]
+    #[norito(required)]
     pub asset_definition: Option<String>,
-    #[norito(default)]
-    #[norito(skip_serializing_if = "Option::is_none")]
+    #[norito(required)]
     pub amount: Option<Quantity>,
-    #[norito(default)]
-    #[norito(skip_serializing_if = "Option::is_none")]
+    #[norito(required)]
     pub day_bucket: Option<u64>,
-    #[norito(default)]
-    #[norito(skip_serializing_if = "Option::is_none")]
+    #[norito(required)]
     pub day_spent: Option<Quantity>,
-    #[norito(default)]
-    #[norito(skip_serializing_if = "Option::is_none")]
+    #[norito(required)]
     pub capability: Option<String>,
-    #[norito(default)]
-    #[norito(skip_serializing_if = "Option::is_none")]
+    #[norito(required)]
     pub reason: Option<String>,
     pub pending_request_count: u32,
     pub revoked_policy_capability_count: u32,
@@ -1980,16 +1960,15 @@ pub(crate) struct AgentWalletMutationResponse {
     pub signed_by: String,
 }
 #[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
+#[norito(deny_unknown_fields)]
 pub(crate) struct AgentMailboxMutationResponse {
     pub action: AgentApartmentAction,
     pub apartment_name: String,
     pub sequence: u64,
     pub message_id: String,
-    #[norito(default)]
-    #[norito(skip_serializing_if = "Option::is_none")]
+    #[norito(required)]
     pub from_apartment: Option<String>,
-    #[norito(default)]
-    #[norito(skip_serializing_if = "Option::is_none")]
+    #[norito(required)]
     pub to_apartment: Option<String>,
     pub channel: String,
     pub payload_hash: Hash,
@@ -1999,16 +1978,17 @@ pub(crate) struct AgentMailboxMutationResponse {
     pub signed_by: String,
 }
 #[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
+#[norito(deny_unknown_fields)]
 pub(crate) struct AgentMailboxStatusResponse {
     pub schema_version: u16,
     pub apartment_name: String,
     pub status: AgentRuntimeStatus,
     pub pending_message_count: u32,
     pub event_count: u32,
-    #[norito(default)]
     pub messages: Vec<AgentMailboxMessageEntry>,
 }
 #[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
+#[norito(deny_unknown_fields)]
 pub(crate) struct AgentMailboxMessageEntry {
     pub message_id: String,
     pub from_apartment: String,
@@ -2018,6 +1998,7 @@ pub(crate) struct AgentMailboxMessageEntry {
     pub enqueued_sequence: u64,
 }
 #[derive(Clone, Debug, JsonSerialize, JsonDeserialize, NoritoDeserialize, NoritoSerialize)]
+#[norito(deny_unknown_fields)]
 pub(crate) struct AgentRuntimeReceiptRecord {
     pub receipt_id: Hash,
     pub service_name: String,
@@ -2028,108 +2009,85 @@ pub(crate) struct AgentRuntimeReceiptRecord {
     pub result_commitment: Hash,
     pub certified_by: SoraCertifiedResponsePolicyV1,
     pub emitted_sequence: u64,
-    #[norito(default)]
-    #[norito(skip_serializing_if = "Option::is_none")]
+    #[norito(required)]
     pub placement_id: Option<Hash>,
-    #[norito(default)]
-    #[norito(skip_serializing_if = "Option::is_none")]
+    #[norito(required)]
     pub selected_validator_account_id: Option<AccountId>,
-    #[norito(default)]
-    #[norito(skip_serializing_if = "Option::is_none")]
+    #[norito(required)]
     pub selected_peer_id: Option<String>,
-    #[norito(default)]
-    #[norito(skip_serializing_if = "Option::is_none")]
+    #[norito(required)]
     pub journal_artifact_hash: Option<Hash>,
-    #[norito(default)]
-    #[norito(skip_serializing_if = "Option::is_none")]
+    #[norito(required)]
     pub checkpoint_artifact_hash: Option<Hash>,
 }
 #[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
+#[norito(deny_unknown_fields)]
 pub(crate) struct AgentRuntimeWorkflowStepSummary {
     pub step_index: u32,
-    #[norito(default)]
-    #[norito(skip_serializing_if = "Option::is_none")]
+    #[norito(required)]
     pub step_id: Option<String>,
     pub request_commitment: Hash,
     pub result_commitment: Hash,
-    #[norito(default)]
-    #[norito(skip_serializing_if = "Option::is_none")]
+    #[norito(required)]
     pub runtime_receipt: Option<AgentRuntimeReceiptRecord>,
-    #[norito(default)]
-    #[norito(skip_serializing_if = "Option::is_none")]
+    #[norito(required)]
     pub content_type: Option<String>,
-    #[norito(default)]
-    #[norito(skip_serializing_if = "Option::is_none")]
+    #[norito(required)]
     pub response_json: Option<norito::json::Value>,
-    #[norito(default)]
-    #[norito(skip_serializing_if = "Option::is_none")]
+    #[norito(required)]
     pub response_text: Option<String>,
 }
 #[derive(Clone, Debug, JsonSerialize, JsonDeserialize, NoritoDeserialize, NoritoSerialize)]
+#[norito(deny_unknown_fields)]
 pub(crate) struct AgentAutonomyExecutionAuditRecord {
     pub sequence: u64,
     pub succeeded: bool,
     pub result_commitment: Hash,
-    #[norito(default)]
-    #[norito(skip_serializing_if = "Option::is_none")]
+    #[norito(required)]
     pub service_name: Option<String>,
-    #[norito(default)]
-    #[norito(skip_serializing_if = "Option::is_none")]
+    #[norito(required)]
     pub service_version: Option<String>,
-    #[norito(default)]
-    #[norito(skip_serializing_if = "Option::is_none")]
+    #[norito(required)]
     pub handler_name: Option<String>,
-    #[norito(default)]
-    #[norito(skip_serializing_if = "Option::is_none")]
+    #[norito(required)]
     pub runtime_receipt_id: Option<Hash>,
-    #[norito(default)]
-    #[norito(skip_serializing_if = "Option::is_none")]
+    #[norito(required)]
     pub journal_artifact_hash: Option<Hash>,
-    #[norito(default)]
-    #[norito(skip_serializing_if = "Option::is_none")]
+    #[norito(required)]
     pub checkpoint_artifact_hash: Option<Hash>,
-    #[norito(default)]
-    #[norito(skip_serializing_if = "Option::is_none")]
+    #[norito(required)]
     pub reason: Option<String>,
 }
 #[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
+#[norito(deny_unknown_fields)]
 pub(crate) struct AgentRuntimeExecutionSummary {
     pub apartment_name: String,
     pub run_id: String,
-    #[norito(default)]
-    #[norito(skip_serializing_if = "Option::is_none")]
+    #[norito(required)]
     pub service_name: Option<String>,
-    #[norito(default)]
-    #[norito(skip_serializing_if = "Option::is_none")]
+    #[norito(required)]
     pub service_version: Option<String>,
-    #[norito(default)]
-    #[norito(skip_serializing_if = "Option::is_none")]
+    #[norito(required)]
     pub handler_name: Option<String>,
     pub succeeded: bool,
     pub result_commitment: Hash,
     pub journal_artifact_hash: Hash,
-    #[norito(default)]
-    #[norito(skip_serializing_if = "Option::is_none")]
+    #[norito(required)]
     pub checkpoint_artifact_hash: Option<Hash>,
-    #[norito(default)]
-    #[norito(skip_serializing_if = "Option::is_none")]
+    #[norito(required)]
     pub runtime_receipt: Option<AgentRuntimeReceiptRecord>,
-    #[norito(default)]
     pub workflow_steps: Vec<AgentRuntimeWorkflowStepSummary>,
-    #[norito(default)]
-    #[norito(skip_serializing_if = "Option::is_none")]
+    #[norito(required)]
     pub content_type: Option<String>,
-    #[norito(default)]
-    #[norito(skip_serializing_if = "Option::is_none")]
+    #[norito(required)]
     pub response_json: Option<norito::json::Value>,
-    #[norito(default)]
-    #[norito(skip_serializing_if = "Option::is_none")]
+    #[norito(required)]
     pub response_text: Option<String>,
-    #[norito(default)]
-    #[norito(skip_serializing_if = "Option::is_none")]
+    #[norito(required)]
     pub error: Option<String>,
 }
 #[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
+#[norito(deny_unknown_fields)]
 pub(crate) struct AgentAutonomyMutationResponse {
     pub action: AgentApartmentAction,
     pub apartment_name: String,
@@ -2139,20 +2097,15 @@ pub(crate) struct AgentAutonomyMutationResponse {
     pub lease_remaining_ticks: u64,
     pub manifest_hash: Hash,
     pub artifact_hash: String,
-    #[norito(default)]
-    #[norito(skip_serializing_if = "Option::is_none")]
+    #[norito(required)]
     pub provenance_hash: Option<String>,
-    #[norito(default)]
-    #[norito(skip_serializing_if = "Option::is_none")]
+    #[norito(required)]
     pub run_id: Option<String>,
-    #[norito(default)]
-    #[norito(skip_serializing_if = "Option::is_none")]
+    #[norito(required)]
     pub run_label: Option<String>,
-    #[norito(default)]
-    #[norito(skip_serializing_if = "Option::is_none")]
+    #[norito(required)]
     pub workflow_input_json: Option<String>,
-    #[norito(default)]
-    #[norito(skip_serializing_if = "Option::is_none")]
+    #[norito(required)]
     pub budget_units: Option<u64>,
     pub budget_remaining_units: u64,
     pub allowlist_count: u32,
@@ -2160,34 +2113,28 @@ pub(crate) struct AgentAutonomyMutationResponse {
     pub process_generation: u64,
     pub process_started_sequence: u64,
     pub last_active_sequence: u64,
-    #[norito(default)]
-    #[norito(skip_serializing_if = "Option::is_none")]
+    #[norito(required)]
     pub last_checkpoint_sequence: Option<u64>,
     pub checkpoint_count: u32,
     pub persistent_state_total_bytes: u64,
     pub persistent_state_key_count: u32,
     pub audit_event_count: u32,
     pub signed_by: String,
-    #[norito(default)]
-    #[norito(skip_serializing_if = "Option::is_none")]
+    #[norito(required)]
     pub runtime_execution: Option<AgentRuntimeExecutionSummary>,
-    #[norito(default)]
-    #[norito(skip_serializing_if = "Option::is_none")]
+    #[norito(required)]
     pub runtime_execution_error: Option<String>,
-    #[norito(default)]
-    #[norito(skip_serializing_if = "Option::is_none")]
+    #[norito(required)]
     pub authoritative_runtime_receipt: Option<AgentRuntimeReceiptRecord>,
-    #[norito(default)]
-    #[norito(skip_serializing_if = "Option::is_none")]
+    #[norito(required)]
     pub authoritative_runtime_receipt_error: Option<String>,
-    #[norito(default)]
-    #[norito(skip_serializing_if = "Option::is_none")]
+    #[norito(required)]
     pub authoritative_execution_audit: Option<AgentAutonomyExecutionAuditRecord>,
-    #[norito(default)]
-    #[norito(skip_serializing_if = "Option::is_none")]
+    #[norito(required)]
     pub authoritative_execution_audit_error: Option<String>,
 }
 #[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
+#[norito(deny_unknown_fields)]
 pub(crate) struct AgentAutonomyStatusResponse {
     pub apartment_name: String,
     pub sequence: u64,
@@ -2203,45 +2150,38 @@ pub(crate) struct AgentAutonomyStatusResponse {
     pub process_generation: u64,
     pub process_started_sequence: u64,
     pub last_active_sequence: u64,
-    #[norito(default)]
-    #[norito(skip_serializing_if = "Option::is_none")]
+    #[norito(required)]
     pub last_checkpoint_sequence: Option<u64>,
     pub checkpoint_count: u32,
     pub persistent_state_total_bytes: u64,
     pub persistent_state_key_count: u32,
-    #[norito(default)]
     pub allowlist: Vec<AgentAutonomyAllowlistEntry>,
-    #[norito(default)]
     pub recent_runs: Vec<AgentAutonomyRunRecord>,
-    #[norito(default)]
     pub runtime_recent_runs: Vec<AgentRuntimeExecutionSummary>,
 }
 #[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
+#[norito(deny_unknown_fields)]
 pub(crate) struct AgentAutonomyAllowlistEntry {
     pub artifact_hash: String,
-    #[norito(default)]
-    #[norito(skip_serializing_if = "Option::is_none")]
+    #[norito(required)]
     pub provenance_hash: Option<String>,
     pub added_sequence: u64,
 }
 #[derive(Clone, Debug, JsonSerialize, JsonDeserialize, NoritoDeserialize, NoritoSerialize)]
+#[norito(deny_unknown_fields)]
 pub(crate) struct AgentAutonomyRunRecord {
     pub run_id: String,
     pub artifact_hash: String,
-    #[norito(default)]
-    #[norito(skip_serializing_if = "Option::is_none")]
+    #[norito(required)]
     pub provenance_hash: Option<String>,
     pub budget_units: u64,
     pub run_label: String,
-    #[norito(default)]
-    #[norito(skip_serializing_if = "Option::is_none")]
+    #[norito(required)]
     pub workflow_input_json: Option<String>,
     pub approved_sequence: u64,
-    #[norito(default)]
-    #[norito(skip_serializing_if = "Option::is_none")]
+    #[norito(required)]
     pub authoritative_runtime_receipt: Option<AgentRuntimeReceiptRecord>,
-    #[norito(default)]
-    #[norito(skip_serializing_if = "Option::is_none")]
+    #[norito(required)]
     pub authoritative_execution_audit: Option<AgentAutonomyExecutionAuditRecord>,
 }
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -2310,6 +2250,19 @@ impl SoracloudError {
             SoracloudErrorKind::Conflict => StatusCode::CONFLICT,
             SoracloudErrorKind::Internal => StatusCode::INTERNAL_SERVER_ERROR,
         }
+    }
+}
+impl std::fmt::Display for SoracloudError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(&self.message)
+    }
+}
+impl std::error::Error for SoracloudError {}
+impl From<NumericOperationError> for SoracloudError {
+    fn from(error: NumericOperationError) -> Self {
+        Self::internal(format!(
+            "failed to project authoritative Soracloud economic state: {error}"
+        ))
     }
 }
 impl IntoResponse for SoracloudError {
@@ -2514,17 +2467,12 @@ fn parse_hf_repo_id(repo_id: &str) -> Result<String, SoracloudError> {
     normalize_hf_token("repo_id", repo_id, HF_REPO_ID_MAX_BYTES)
 }
 fn parse_hf_revision(resolved_revision: &str) -> Result<String, SoracloudError> {
-    normalize_hf_token(
-        "resolved_revision",
-        resolved_revision,
-        HF_REVISION_MAX_BYTES,
-    )
-}
-fn parse_hf_resolved_revision(resolved_revision: Option<&str>) -> Result<String, SoracloudError> {
-    resolved_revision
-        .map(parse_hf_revision)
-        .transpose()
-        .map(|resolved| resolved.unwrap_or_else(|| HF_DEFAULT_RESOLVED_REVISION.to_owned()))
+    if !is_canonical_hf_commit_oid_v1(resolved_revision) {
+        return Err(SoracloudError::bad_request(
+            "resolved_revision must be the full 40-character lowercase hexadecimal commit OID",
+        ));
+    }
+    Ok(resolved_revision.to_owned())
 }
 fn parse_hf_model_name(model_name: &str) -> Result<String, SoracloudError> {
     normalize_hf_token("model_name", model_name, HF_MODEL_NAME_MAX_BYTES)
@@ -2575,18 +2523,33 @@ fn hf_shared_lease_pool_id(
 }
 fn hf_profile_http_client(
     config: &iroha_config::parameters::actual::SoracloudRuntimeHuggingFace,
+    hostname: &str,
+    pinned_addresses: &[SocketAddr],
 ) -> Result<reqwest::Client, SoracloudError> {
-    reqwest::Client::builder()
+    let builder = reqwest::Client::builder()
         .timeout(config.request_timeout)
-        .build()
-        .map_err(|err| {
-            SoracloudError::internal(format!(
-                "failed to build Hugging Face profile-derivation client: {err}"
-            ))
-        })
+        .connect_timeout(HF_PROFILE_DNS_TIMEOUT_V1.min(config.request_timeout))
+        .no_proxy()
+        .redirect(reqwest::redirect::Policy::none())
+        .retry(reqwest::retry::never());
+    let builder = if hostname.parse::<IpAddr>().is_ok() {
+        builder
+    } else {
+        builder.resolve_to_addrs(hostname, pinned_addresses)
+    };
+    builder.build().map_err(|err| {
+        SoracloudError::internal(format!(
+            "failed to build Hugging Face profile-derivation client: {err}"
+        ))
+    })
 }
 fn normalize_hf_base_url(base_url: &str) -> Result<reqwest::Url, SoracloudError> {
     let trimmed = base_url.trim();
+    if trimmed.is_empty() || trimmed != base_url {
+        return Err(SoracloudError::bad_request(
+            "Hugging Face base URL must be non-empty and have no surrounding whitespace",
+        ));
+    }
     let with_scheme = if trimmed.contains("://") {
         trimmed.to_owned()
     } else {
@@ -2595,12 +2558,285 @@ fn normalize_hf_base_url(base_url: &str) -> Result<reqwest::Url, SoracloudError>
     let mut url = reqwest::Url::parse(&with_scheme).map_err(|err| {
         SoracloudError::bad_request(format!("invalid Hugging Face base URL: {err}"))
     })?;
+    validate_hf_profile_url_transport(&url)?;
+    if url.query().is_some() || url.fragment().is_some() {
+        return Err(SoracloudError::bad_request(
+            "Hugging Face base URL must not contain a query or fragment",
+        ));
+    }
     let normalized_path = match url.path().trim_end_matches('/') {
         "" => "/".to_owned(),
         path => path.to_owned(),
     };
     url.set_path(&normalized_path);
     Ok(url)
+}
+fn validate_hf_profile_url_transport(url: &reqwest::Url) -> Result<(), SoracloudError> {
+    if !url.username().is_empty()
+        || url.password().is_some()
+        || url.host_str().is_none()
+        || url.port() == Some(0)
+        || url.fragment().is_some()
+    {
+        return Err(SoracloudError::bad_request(
+            "Hugging Face profile URL must have one credential-free network authority",
+        ));
+    }
+    if url.scheme() == "https" {
+        return Ok(());
+    }
+    #[cfg(test)]
+    if url.scheme() == "http"
+        && url
+            .host_str()
+            .and_then(|host| host.parse::<IpAddr>().ok())
+            .is_some_and(|address| address.is_loopback())
+    {
+        return Ok(());
+    }
+    Err(SoracloudError::bad_request(
+        "Hugging Face profile URLs must use HTTPS",
+    ))
+}
+fn hf_profile_url_origin(url: &reqwest::Url) -> Result<String, SoracloudError> {
+    validate_hf_profile_url_transport(url)?;
+    let origin = url.origin().ascii_serialization();
+    if origin == "null" {
+        return Err(SoracloudError::bad_request(
+            "Hugging Face profile URL must have a tuple origin",
+        ));
+    }
+    Ok(origin)
+}
+fn hf_profile_allowed_redirect_origins(
+    config: &iroha_config::parameters::actual::SoracloudRuntimeHuggingFace,
+) -> Result<BTreeSet<String>, SoracloudError> {
+    if config.import_redirect_allowed_origins.len()
+        > iroha_config::parameters::defaults::soracloud_runtime::hf::IMPORT_REDIRECT_ALLOWED_ORIGINS_LIMIT
+    {
+        return Err(SoracloudError::bad_request(format!(
+            "Hugging Face redirect-origin allowlist exceeds its fixed {}-entry bound",
+            iroha_config::parameters::defaults::soracloud_runtime::hf::IMPORT_REDIRECT_ALLOWED_ORIGINS_LIMIT
+        )));
+    }
+    let mut allowed = BTreeSet::new();
+    for base in [&config.hub_base_url, &config.api_base_url] {
+        allowed.insert(hf_profile_url_origin(&normalize_hf_base_url(base)?)?);
+    }
+    for raw in &config.import_redirect_allowed_origins {
+        let url = reqwest::Url::parse(raw).map_err(|err| {
+            SoracloudError::bad_request(format!(
+                "invalid Hugging Face redirect origin `{raw}`: {err}"
+            ))
+        })?;
+        validate_hf_profile_url_transport(&url)?;
+        if url.path() != "/" || url.query().is_some() || url.fragment().is_some() {
+            return Err(SoracloudError::bad_request(format!(
+                "Hugging Face redirect allowlist entry `{raw}` must be one exact origin"
+            )));
+        }
+        let origin = hf_profile_url_origin(&url)?;
+        if origin != raw.trim_end_matches('/') {
+            return Err(SoracloudError::bad_request(format!(
+                "Hugging Face redirect allowlist entry `{raw}` is not canonical; expected `{origin}`"
+            )));
+        }
+        allowed.insert(origin);
+    }
+    Ok(allowed)
+}
+fn hf_profile_ipv4_is_public(address: Ipv4Addr) -> bool {
+    let [first, second, third, _] = address.octets();
+    !address.is_private()
+        && !address.is_loopback()
+        && !address.is_link_local()
+        && !address.is_broadcast()
+        && !address.is_documentation()
+        && !address.is_unspecified()
+        && !address.is_multicast()
+        && first != 0
+        && !(first == 100 && (64..=127).contains(&second))
+        && !(first == 192 && second == 0 && third == 0)
+        && !(first == 192 && second == 88 && third == 99)
+        && !(first == 198 && (18..=19).contains(&second))
+        && first < 240
+}
+fn hf_profile_ipv6_is_public(address: Ipv6Addr) -> bool {
+    if let Some(mapped) = address.to_ipv4_mapped() {
+        return hf_profile_ipv4_is_public(mapped);
+    }
+    let segments = address.segments();
+    let global_unicast = segments[0] & 0xe000 == 0x2000;
+    let documentation = (segments[0] == 0x2001 && segments[1] == 0x0db8)
+        || (segments[0] == 0x3fff && segments[1] & 0xf000 == 0);
+    let special_purpose = segments[0] == 0x2001 && segments[1] <= 0x01ff;
+    let six_to_four = segments[0] == 0x2002;
+    global_unicast
+        && !documentation
+        && !special_purpose
+        && !six_to_four
+        && !address.is_loopback()
+        && !address.is_unspecified()
+        && !address.is_multicast()
+}
+fn hf_profile_ip_is_allowed(address: IpAddr) -> bool {
+    #[cfg(test)]
+    if address.is_loopback() {
+        return true;
+    }
+    match address {
+        IpAddr::V4(address) => hf_profile_ipv4_is_public(address),
+        IpAddr::V6(address) => hf_profile_ipv6_is_public(address),
+    }
+}
+async fn resolve_hf_profile_socket_addrs(
+    url: &reqwest::Url,
+    timeout: Duration,
+) -> Result<Vec<SocketAddr>, SoracloudError> {
+    let hostname = url
+        .host_str()
+        .ok_or_else(|| SoracloudError::bad_request("Hugging Face profile URL has no host"))?
+        .to_owned();
+    let port = url.port_or_known_default().ok_or_else(|| {
+        SoracloudError::bad_request("Hugging Face profile URL has no effective port")
+    })?;
+    if let Ok(address) = hostname.parse::<IpAddr>() {
+        if !hf_profile_ip_is_allowed(address) {
+            return Err(SoracloudError::bad_request(
+                "Hugging Face profile URL targets a non-public address",
+            ));
+        }
+        return Ok(vec![SocketAddr::new(address, port)]);
+    }
+    let timeout = timeout.min(HF_PROFILE_DNS_TIMEOUT_V1);
+    let permit = tokio::time::timeout(timeout, HF_PROFILE_DNS_GATE_V1.acquire())
+        .await
+        .map_err(|_| SoracloudError::internal("Hugging Face DNS admission timed out"))?
+        .map_err(|_| SoracloudError::internal("Hugging Face DNS admission gate closed"))?;
+    let lookup_hostname = hostname.clone();
+    let lookup = tokio::task::spawn_blocking(move || {
+        let _permit = permit;
+        let mut addresses = Vec::new();
+        let resolved = (lookup_hostname.as_str(), port)
+            .to_socket_addrs()
+            .map_err(|err| err.to_string())?;
+        for address in resolved {
+            if addresses.len() == HF_PROFILE_DNS_MAX_ADDRESSES_V1 {
+                return Err(format!(
+                    "DNS answer exceeds the fixed {HF_PROFILE_DNS_MAX_ADDRESSES_V1}-address bound"
+                ));
+            }
+            if !addresses.contains(&address) {
+                addresses.push(address);
+            }
+        }
+        Ok::<_, String>(addresses)
+    });
+    let addresses = tokio::time::timeout(timeout, lookup)
+        .await
+        .map_err(|_| SoracloudError::internal("Hugging Face DNS lookup timed out"))?
+        .map_err(|err| SoracloudError::internal(format!("Hugging Face DNS task failed: {err}")))?
+        .map_err(|err| {
+            SoracloudError::internal(format!("Hugging Face DNS lookup failed: {err}"))
+        })?;
+    if addresses.is_empty()
+        || addresses
+            .iter()
+            .any(|address| !hf_profile_ip_is_allowed(address.ip()))
+    {
+        return Err(SoracloudError::bad_request(format!(
+            "Hugging Face origin `{hostname}` did not resolve exclusively to bounded public addresses"
+        )));
+    }
+    Ok(addresses)
+}
+async fn send_hf_profile_request_with_vetted_redirects(
+    config: &iroha_config::parameters::actual::SoracloudRuntimeHuggingFace,
+    method: reqwest::Method,
+    initial_url: reqwest::Url,
+) -> Result<reqwest::Response, SoracloudError> {
+    if method != reqwest::Method::GET && method != reqwest::Method::HEAD {
+        return Err(SoracloudError::bad_request(
+            "Hugging Face profile derivation permits only GET and HEAD",
+        ));
+    }
+    let allowed_origins = hf_profile_allowed_redirect_origins(config)?;
+    let mut pinned_addresses = BTreeMap::<(String, u16), Vec<SocketAddr>>::new();
+    let mut url = initial_url;
+    for redirect_count in
+        0..=iroha_config::parameters::defaults::soracloud_runtime::hf::IMPORT_MAX_REDIRECTS
+    {
+        let origin = hf_profile_url_origin(&url)?;
+        if !allowed_origins.contains(&origin) {
+            return Err(SoracloudError::bad_request(format!(
+                "Hugging Face profile redirect targeted unapproved origin `{origin}`"
+            )));
+        }
+        let hostname = url
+            .host_str()
+            .ok_or_else(|| SoracloudError::bad_request("Hugging Face profile URL has no host"))?
+            .to_owned();
+        let port = url.port_or_known_default().ok_or_else(|| {
+            SoracloudError::bad_request("Hugging Face profile URL has no effective port")
+        })?;
+        let address_key = (hostname.clone(), port);
+        let addresses = if let Some(addresses) = pinned_addresses.get(&address_key) {
+            addresses.clone()
+        } else {
+            let addresses = resolve_hf_profile_socket_addrs(&url, config.request_timeout).await?;
+            pinned_addresses.insert(address_key, addresses.clone());
+            addresses
+        };
+        let client = hf_profile_http_client(config, &hostname, &addresses)?;
+        // Build each hop from only method and URL, so no authorization or
+        // cookie header can cross a redirect origin boundary.
+        let response = client
+            .request(method.clone(), url.clone())
+            .send()
+            .await
+            .map_err(|err| {
+                SoracloudError::internal(format!(
+                    "failed to fetch Hugging Face profile resource from {url}: {err}"
+                ))
+            })?;
+        let status = response.status();
+        if !matches!(
+            status,
+            reqwest::StatusCode::MOVED_PERMANENTLY
+                | reqwest::StatusCode::FOUND
+                | reqwest::StatusCode::SEE_OTHER
+                | reqwest::StatusCode::TEMPORARY_REDIRECT
+                | reqwest::StatusCode::PERMANENT_REDIRECT
+        ) {
+            return Ok(response);
+        }
+        if redirect_count
+            == iroha_config::parameters::defaults::soracloud_runtime::hf::IMPORT_MAX_REDIRECTS
+        {
+            return Err(SoracloudError::conflict(
+                "Hugging Face profile request exceeded its fixed redirect bound",
+            ));
+        }
+        let mut locations = response.headers().get_all(reqwest::header::LOCATION).iter();
+        let location = locations
+            .next()
+            .ok_or_else(|| SoracloudError::conflict("Hugging Face redirect omitted Location"))?
+            .to_str()
+            .map_err(|_| {
+                SoracloudError::conflict("Hugging Face redirect Location is not visible ASCII")
+            })?;
+        if locations.next().is_some() {
+            return Err(SoracloudError::conflict(
+                "Hugging Face redirect returned multiple Location headers",
+            ));
+        }
+        url = url.join(location).map_err(|err| {
+            SoracloudError::conflict(format!(
+                "invalid Hugging Face redirect Location `{location}`: {err}"
+            ))
+        })?;
+    }
+    unreachable!("bounded Hugging Face redirect loop always returns or errors")
 }
 fn hf_model_info_url(
     config: &iroha_config::parameters::actual::SoracloudRuntimeHuggingFace,
@@ -2644,18 +2880,18 @@ fn hf_repo_file_url(
     Ok(url)
 }
 async fn hf_content_length_bytes(
-    client: &reqwest::Client,
     config: &iroha_config::parameters::actual::SoracloudRuntimeHuggingFace,
     repo_id: &str,
     resolved_revision: &str,
     file_path: &str,
 ) -> Result<u64, SoracloudError> {
     let file_url = hf_repo_file_url(config, repo_id, resolved_revision, file_path)?;
-    let response = client.head(file_url.clone()).send().await.map_err(|err| {
-        SoracloudError::internal(format!(
-            "failed to query Hugging Face file headers from {file_url}: {err}"
-        ))
-    })?;
+    let response = send_hf_profile_request_with_vetted_redirects(
+        config,
+        reqwest::Method::HEAD,
+        file_url.clone(),
+    )
+    .await?;
     if !response.status().is_success() {
         return Err(SoracloudError::conflict(format!(
             "Hugging Face file `{file_path}` for `{repo_id}@{resolved_revision}` returned {}",
@@ -2673,18 +2909,45 @@ async fn hf_content_length_bytes(
             ))
         })
 }
+fn validate_hf_profile_model_info_commit(
+    model_info: &norito::json::Value,
+    expected_commit: &str,
+) -> Result<(), SoracloudError> {
+    if !is_canonical_hf_commit_oid_v1(expected_commit) {
+        return Err(SoracloudError::bad_request(
+            "requested Hugging Face revision is not a full lowercase commit OID",
+        ));
+    }
+    let resolved_commit = model_info
+        .get("sha")
+        .and_then(norito::json::Value::as_str)
+        .ok_or_else(|| {
+            SoracloudError::conflict("Hugging Face model-info response omitted string `sha`")
+        })?;
+    if !is_canonical_hf_commit_oid_v1(resolved_commit) {
+        return Err(SoracloudError::conflict(
+            "Hugging Face model-info `sha` is not a full lowercase commit OID",
+        ));
+    }
+    if resolved_commit != expected_commit {
+        return Err(SoracloudError::conflict(format!(
+            "Hugging Face model-info commit `{resolved_commit}` does not match requested commit `{expected_commit}`"
+        )));
+    }
+    Ok(())
+}
 async fn derive_hf_resource_profile(
     config: &iroha_config::parameters::actual::SoracloudRuntimeHuggingFace,
     repo_id: &str,
     resolved_revision: &str,
 ) -> Result<SoraHfResourceProfileV1, SoracloudError> {
-    let client = hf_profile_http_client(config)?;
     let info_url = hf_model_info_url(config, repo_id, resolved_revision)?;
-    let response = client.get(info_url.clone()).send().await.map_err(|err| {
-        SoracloudError::internal(format!(
-            "failed to fetch Hugging Face model info from {info_url}: {err}"
-        ))
-    })?;
+    let response = send_hf_profile_request_with_vetted_redirects(
+        config,
+        reqwest::Method::GET,
+        info_url.clone(),
+    )
+    .await?;
     if !response.status().is_success() {
         return Err(SoracloudError::conflict(format!(
             "Hugging Face model info request for `{repo_id}@{resolved_revision}` returned {}",
@@ -2696,6 +2959,7 @@ async fn derive_hf_resource_profile(
     // The decoded tree owns its strings, so the bounded wire buffer need not
     // remain resident while the provider-controlled sibling list is handled.
     drop(body);
+    validate_hf_profile_model_info_commit(&model_info, resolved_revision)?;
     let Some((backend_family, model_format, weight_files)) =
         hf_model_info_response::select_weight_files(
             &model_info,
@@ -2714,7 +2978,7 @@ async fn derive_hf_resource_profile(
     let mut required_model_bytes = 0_u64;
     for file_path in &weight_files {
         required_model_bytes = required_model_bytes.saturating_add(
-            hf_content_length_bytes(&client, config, repo_id, resolved_revision, file_path).await?,
+            hf_content_length_bytes(config, repo_id, resolved_revision, file_path).await?,
         );
     }
     if required_model_bytes == 0 {
@@ -3498,7 +3762,7 @@ fn encode_bundle_signature_payload(
 fn encode_rollback_signature_payload(payload: &RollbackPayload) -> Result<Vec<u8>, SoracloudError> {
     encode_rollback_provenance_payload(
         payload.service_name.as_str(),
-        payload.target_version.as_deref(),
+        payload.target_version.as_str(),
     )
     .map_err(|err| SoracloudError::internal(format!("failed to encode rollback payload: {err}")))
 }
@@ -3893,7 +4157,7 @@ fn encode_agent_deploy_signature_payload(
     encode_agent_deploy_provenance_payload(
         payload.manifest.clone(),
         payload.lease_ticks,
-        payload.autonomy_budget_units,
+        Some(payload.autonomy_budget_units),
     )
     .map_err(|err| {
         SoracloudError::internal(format!("failed to encode agent deploy payload: {err}"))
@@ -4023,7 +4287,7 @@ fn encode_hf_deploy_signature_payload(
     payload: &HfDeployPayload,
 ) -> Result<Vec<u8>, SoracloudError> {
     let repo_id = parse_hf_repo_id(&payload.repo_id)?;
-    let resolved_revision = parse_hf_resolved_revision(payload.revision.as_deref())?;
+    let resolved_revision = parse_hf_revision(&payload.revision)?;
     let model_name = parse_hf_model_name(&payload.model_name)?;
     let service_name = parse_service_name(&payload.service_name)?.to_string();
     let apartment_name = payload
@@ -4058,7 +4322,7 @@ fn encode_hf_lease_leave_signature_payload(
     payload: &HfLeaseLeavePayload,
 ) -> Result<Vec<u8>, SoracloudError> {
     let repo_id = parse_hf_repo_id(&payload.repo_id)?;
-    let resolved_revision = parse_hf_resolved_revision(payload.revision.as_deref())?;
+    let resolved_revision = parse_hf_revision(&payload.revision)?;
     let service_name = payload
         .service_name
         .as_deref()
@@ -4092,7 +4356,7 @@ fn encode_hf_lease_renew_signature_payload(
     payload: &HfLeaseRenewPayload,
 ) -> Result<Vec<u8>, SoracloudError> {
     let repo_id = parse_hf_repo_id(&payload.repo_id)?;
-    let resolved_revision = parse_hf_resolved_revision(payload.revision.as_deref())?;
+    let resolved_revision = parse_hf_revision(&payload.revision)?;
     let model_name = parse_hf_model_name(&payload.model_name)?;
     let service_name = parse_service_name(&payload.service_name)?.to_string();
     let apartment_name = payload
@@ -4173,6 +4437,7 @@ struct SoracloudMutationSigner {
     request_signer: PublicKey,
 }
 #[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
+#[norito(deny_unknown_fields)]
 struct SoracloudMutationDraftResponse {
     ok: bool,
     authority: String,
@@ -4180,6 +4445,7 @@ struct SoracloudMutationDraftResponse {
     tx_instructions: Vec<SoracloudTxInstr>,
 }
 #[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
+#[norito(deny_unknown_fields)]
 pub(crate) struct SoracloudTxInstr {
     wire_id: String,
     payload_hex: String,
@@ -4566,16 +4832,28 @@ fn state_mutation_operation_to_model(
         StateMutationOperation::Delete => SoraStateMutationOperationV1::Delete,
     }
 }
-fn authoritative_audit_log(app: &SharedAppState) -> Vec<ControlPlaneAuditEvent> {
+fn authoritative_audit_log(
+    app: &SharedAppState,
+) -> Result<Vec<ControlPlaneAuditEvent>, SoracloudError> {
     let state_view = app.state.view();
     let world = state_view.world();
-    let mut audit_log = world
-        .soracloud_service_audit_events()
-        .iter()
-        .map(|(_sequence, event)| audit_event_to_control_plane_audit_event(event))
-        .collect::<Vec<_>>();
+    let mut audit_log = Vec::new();
+    for (sequence, event) in world.soracloud_service_audit_events().iter() {
+        if *sequence != event.sequence {
+            return Err(SoracloudError::internal(format!(
+                "authoritative Soracloud audit event key {sequence} does not bind event sequence {}",
+                event.sequence
+            )));
+        }
+        event.validate().map_err(|error| {
+            SoracloudError::internal(format!(
+                "authoritative Soracloud audit event {sequence} is invalid: {error}"
+            ))
+        })?;
+        audit_log.push(audit_event_to_control_plane_audit_event(event));
+    }
     audit_log.sort_by_key(|event| event.sequence);
-    audit_log
+    Ok(audit_log)
 }
 fn authoritative_training_job_status_response(
     app: &SharedAppState,
@@ -4995,7 +5273,7 @@ fn authoritative_private_uploaded_model_receipts_response(
     app: &SharedAppState,
     query: PrivateUploadedModelReceiptQuery,
 ) -> Result<PrivateUploadedModelReceiptListResponse, SoracloudError> {
-    let count_mode = private_uploaded_model_receipt_count_mode(query.count_mode.as_deref());
+    let count_mode = private_uploaded_model_receipt_count_mode(query.count_mode.as_deref())?;
     let service_name = query
         .service_name
         .map(|literal| {
@@ -5336,6 +5614,12 @@ fn authoritative_service_deployment_bundle(
                 "service `{service_name}` not found in authoritative Soracloud state"
             ))
         })?;
+    if deployment.service_name != service_id {
+        return Err(SoracloudError::internal(format!(
+            "service `{service_name}` deployment record has substituted identity `{}`",
+            deployment.service_name
+        )));
+    }
     let bundle = world
         .soracloud_service_revisions()
         .get(&(
@@ -5344,16 +5628,38 @@ fn authoritative_service_deployment_bundle(
         ))
         .cloned()
         .ok_or_else(|| {
-            SoracloudError::conflict(format!(
+            SoracloudError::internal(format!(
                 "service `{service_name}` active revision `{}` is missing from authoritative state",
                 deployment.current_service_version
             ))
         })?;
+    if bundle.service.service_name != deployment.service_name
+        || bundle.service.service_version != deployment.current_service_version
+        || bundle.service_manifest_hash() != deployment.current_service_manifest_hash
+        || bundle.container_manifest_hash() != deployment.current_container_manifest_hash
+    {
+        return Err(SoracloudError::internal(format!(
+            "service `{service_name}` deployment record does not bind active revision `{}`",
+            deployment.current_service_version
+        )));
+    }
+    bundle.validate_for_admission().map_err(|error| {
+        SoracloudError::internal(format!(
+            "service `{service_name}` active revision `{}` is not an admitted V1 bundle: {error}",
+            deployment.current_service_version
+        ))
+    })?;
     Ok((deployment, bundle))
 }
 fn decode_public_service_discovery_registry(
     entry: &SoraServiceConfigEntryV1,
 ) -> Result<SoracloudPublicServiceDiscoveryRegistryV1, SoracloudError> {
+    if entry.config_name != PUBLIC_SERVICE_DISCOVERY_CONFIG_NAME {
+        return Err(SoracloudError::internal(format!(
+            "authoritative public discovery config has substituted name `{}`",
+            entry.config_name
+        )));
+    }
     let value_json = entry
         .value_json
         .clone()
@@ -5363,22 +5669,61 @@ fn decode_public_service_discovery_registry(
                 "failed to decode authoritative public discovery config json: {err}"
             ))
         })?;
+    let canonical_bytes = norito::json::to_vec(&value_json).map_err(|err| {
+        SoracloudError::internal(format!(
+            "failed to encode authoritative public discovery config json: {err}"
+        ))
+    })?;
+    if Hash::new(&canonical_bytes) != entry.value_hash {
+        return Err(SoracloudError::internal(
+            "authoritative public discovery config hash does not bind its JSON value",
+        ));
+    }
     let registry: SoracloudPublicServiceDiscoveryRegistryV1 = norito::json::from_value(value_json)
         .map_err(|err| {
             SoracloudError::internal(format!(
                 "failed to parse authoritative public discovery registry: {err}"
             ))
         })?;
+    if registry.schema_version != PUBLIC_SERVICE_DISCOVERY_SCHEMA_VERSION_V1 {
+        return Err(SoracloudError::internal(format!(
+            "authoritative public discovery registry uses schema version {}; expected {}",
+            registry.schema_version, PUBLIC_SERVICE_DISCOVERY_SCHEMA_VERSION_V1
+        )));
+    }
+    for (version, discovery) in &registry.revisions {
+        if discovery.schema_version != PUBLIC_SERVICE_DISCOVERY_SCHEMA_VERSION_V1
+            || discovery.service_name != registry.service_name
+            || discovery.service_version != *version
+        {
+            return Err(SoracloudError::internal(format!(
+                "authoritative public discovery revision `{version}` is not bound to its registry identity"
+            )));
+        }
+    }
     Ok(registry)
 }
 fn authoritative_public_service_discovery_registry(
     deployment: &SoraServiceDeploymentStateV1,
 ) -> Result<Option<SoracloudPublicServiceDiscoveryRegistryV1>, SoracloudError> {
-    deployment
+    let registry = deployment
         .service_configs
         .get(PUBLIC_SERVICE_DISCOVERY_CONFIG_NAME)
         .map(decode_public_service_discovery_registry)
-        .transpose()
+        .transpose()?;
+    if let Some(registry) = registry.as_ref()
+        && (registry.service_name != deployment.service_name.as_ref()
+            || registry.current_version != deployment.current_service_version
+            || !registry
+                .revisions
+                .contains_key(&deployment.current_service_version))
+    {
+        return Err(SoracloudError::internal(format!(
+            "authoritative public discovery registry for service `{}` does not bind its active revision `{}`",
+            deployment.service_name, deployment.current_service_version
+        )));
+    }
+    Ok(registry)
 }
 fn authoritative_public_service_discovery_for_version(
     deployment: &SoraServiceDeploymentStateV1,
@@ -5388,6 +5733,81 @@ fn authoritative_public_service_discovery_for_version(
         return Ok(None);
     };
     Ok(registry.revisions.get(service_version).cloned())
+}
+fn validate_public_service_discovery_for_bundle(
+    deployment: &SoraServiceDeploymentStateV1,
+    bundle: &SoraDeploymentBundleV1,
+    discovery: &SoracloudPublicServiceDiscoveryV1,
+) -> Result<(), SoracloudError> {
+    bundle.validate_for_admission().map_err(|error| {
+        SoracloudError::internal(format!(
+            "service `{}` public discovery revision `{}` is not an admitted V1 bundle: {error}",
+            deployment.service_name, bundle.service.service_version
+        ))
+    })?;
+    admit_scr_host_bundle(bundle).map_err(|error| {
+        SoracloudError::internal(format!(
+            "service `{}` public discovery revision `{}` fails authoritative SCR admission: {}",
+            deployment.service_name, bundle.service.service_version, error.message
+        ))
+    })?;
+    let route = bundle.service.route.as_ref().ok_or_else(|| {
+        SoracloudError::internal(format!(
+            "service `{}` has public discovery without an admitted route",
+            deployment.service_name
+        ))
+    })?;
+    let expected_base_url = bundle_base_url(bundle).ok_or_else(|| {
+        SoracloudError::internal(format!(
+            "service `{}` active route cannot form its authoritative base URL",
+            deployment.service_name
+        ))
+    })?;
+    let expected_healthcheck_url = bundle_healthcheck_url(bundle);
+    let expected_bundle_hash = Hash::new(Encode::encode(bundle));
+    let fields_match = discovery.schema_version == PUBLIC_SERVICE_DISCOVERY_SCHEMA_VERSION_V1
+        && discovery.service_name == deployment.service_name.as_ref()
+        && bundle.service.service_name == deployment.service_name
+        && discovery.service_version == bundle.service.service_version
+        && discovery.execution_plane == format!("{:?}", bundle.service.execution_plane)
+        && discovery.runtime == format!("{:?}", bundle.container.runtime)
+        && discovery.route_host == route.host
+        && discovery.path_prefix == route.path_prefix
+        && discovery.base_url == expected_base_url
+        && discovery.healthcheck_path == bundle.container.lifecycle.healthcheck_path
+        && discovery.healthcheck_url == expected_healthcheck_url
+        && discovery.service_manifest_hash == bundle.service_manifest_hash()
+        && discovery.container_manifest_hash == bundle.container_manifest_hash()
+        && discovery.deployment_bundle_hash == expected_bundle_hash;
+    if !fields_match {
+        return Err(SoracloudError::internal(format!(
+            "service `{}` authoritative public discovery record does not bind admitted revision `{}`",
+            deployment.service_name, bundle.service.service_version
+        )));
+    }
+    for (field, value) in [
+        ("content_cid", discovery.content_cid.as_str()),
+        (
+            "public_discovery_url",
+            discovery.public_discovery_url.as_str(),
+        ),
+        (
+            "public_discovery_cid_host_url",
+            discovery.public_discovery_cid_host_url.as_str(),
+        ),
+        (
+            "manifest_digest_hex",
+            discovery.manifest_digest_hex.as_str(),
+        ),
+    ] {
+        if value.trim().is_empty() {
+            return Err(SoracloudError::internal(format!(
+                "service `{}` authoritative public discovery field `{field}` is empty",
+                deployment.service_name
+            )));
+        }
+    }
+    Ok(())
 }
 fn bundle_base_url(bundle: &SoraDeploymentBundleV1) -> Option<String> {
     let route = bundle.service.route.as_ref()?;
@@ -5669,13 +6089,14 @@ fn authoritative_agent_autonomy_mutation_response(
     let workflow_input_json = approved_run.and_then(|run| run.workflow_input_json.clone());
     let authoritative_runtime_receipt =
         approved_run.and_then(|run| authoritative_agent_runtime_receipt_for_run(world, run));
-    let authoritative_execution_audit = approved_run.and_then(|run| {
-        authoritative_agent_execution_audit_for_run(
+    let authoritative_execution_audit = match approved_run {
+        Some(run) => authoritative_agent_execution_audit_for_run(
             world,
             record.manifest.apartment_name.as_ref(),
             run,
-        )
-    });
+        )?,
+        None => None,
+    };
     Ok(AgentAutonomyMutationResponse {
         action: authoritative_agent_action(event.action),
         apartment_name: record.manifest.apartment_name.to_string(),
@@ -5776,6 +6197,11 @@ fn authoritative_rollout_mutation_response(
                 "rollout `{requested_rollout_handle}` not found for service `{service_name}` in authoritative Soracloud state"
             ))
         })?;
+    rollout.validate().map_err(|error| {
+        SoracloudError::internal(format!(
+            "authoritative rollout `{requested_rollout_handle}` for service `{service_name}` is invalid: {error}"
+        ))
+    })?;
     let event = world
         .soracloud_service_audit_events()
         .get(&rollout.updated_sequence)
@@ -5791,6 +6217,21 @@ fn authoritative_rollout_mutation_response(
                 "authoritative rollout audit event for service `{service_name}` was not observed after mutation"
             ))
         })?;
+    event.validate().map_err(|error| {
+        SoracloudError::internal(format!(
+            "authoritative rollout audit event for service `{service_name}` is invalid: {error}"
+        ))
+    })?;
+    let authoritative_governance_tx_hash = event.governance_tx_hash.ok_or_else(|| {
+        SoracloudError::conflict(format!(
+            "authoritative rollout audit event for service `{service_name}` is missing governance_tx_hash"
+        ))
+    })?;
+    if authoritative_governance_tx_hash != governance_tx_hash {
+        return Err(SoracloudError::conflict(format!(
+            "authoritative rollout audit event for service `{service_name}` does not bind the requested governance_tx_hash"
+        )));
+    }
     Ok(RolloutResponse {
         action: audit_action_to_control_plane_action(event.action),
         service_name: deployment.service_name.to_string(),
@@ -5801,7 +6242,7 @@ fn authoritative_rollout_mutation_response(
         health_failures: rollout.health_failures,
         max_health_failures: rollout.max_health_failures,
         sequence: event.sequence,
-        governance_tx_hash: event.governance_tx_hash.unwrap_or(governance_tx_hash),
+        governance_tx_hash: authoritative_governance_tx_hash,
         audit_event_count: authoritative_service_event_count(world, service_name),
         signed_by: event.signer.to_string(),
     })
@@ -6021,7 +6462,8 @@ fn authoritative_service_public_discovery_response(
 ) -> Result<ServicePublicDiscoveryResponse, SoracloudError> {
     let state_view = app.state.view();
     let world = state_view.world();
-    let (deployment, _bundle) = authoritative_service_deployment_bundle(world, service_name)?;
+    let (deployment, _active_bundle) =
+        authoritative_service_deployment_bundle(world, service_name)?;
     let registry =
         authoritative_public_service_discovery_registry(&deployment)?.ok_or_else(|| {
             SoracloudError::not_found(format!(
@@ -6041,6 +6483,16 @@ fn authoritative_service_public_discovery_response(
                 "service `{service_name}` has no public discovery record for revision `{requested_version}`"
             ))
         })?;
+    let bundle = world
+        .soracloud_service_revisions()
+        .get(&(deployment.service_name.to_string(), requested_version.clone()))
+        .cloned()
+        .ok_or_else(|| {
+            SoracloudError::internal(format!(
+                "service `{service_name}` public discovery revision `{requested_version}` is missing its admitted bundle"
+            ))
+        })?;
+    validate_public_service_discovery_for_bundle(&deployment, &bundle, &discovery)?;
     Ok(ServicePublicDiscoveryResponse {
         schema_version: PUBLIC_SERVICE_DISCOVERY_SCHEMA_VERSION_V1,
         service_name: deployment.service_name.to_string(),
@@ -6960,13 +7412,23 @@ fn authoritative_agent_runtime_receipt_record(
 }
 fn authoritative_agent_execution_audit_record(
     event: &SoraAgentApartmentAuditEventV1,
-) -> AgentAutonomyExecutionAuditRecord {
-    AgentAutonomyExecutionAuditRecord {
+) -> Result<AgentAutonomyExecutionAuditRecord, SoracloudError> {
+    let succeeded = event.succeeded.ok_or_else(|| {
+        SoracloudError::internal(format!(
+            "authoritative agent execution audit event {} is missing `succeeded`",
+            event.sequence
+        ))
+    })?;
+    let result_commitment = event.result_commitment.ok_or_else(|| {
+        SoracloudError::internal(format!(
+            "authoritative agent execution audit event {} is missing `result_commitment`",
+            event.sequence
+        ))
+    })?;
+    Ok(AgentAutonomyExecutionAuditRecord {
         sequence: event.sequence,
-        succeeded: event.succeeded.unwrap_or(false),
-        result_commitment: event
-            .result_commitment
-            .expect("execution audit records must carry result commitments"),
+        succeeded,
+        result_commitment,
         service_name: event.service_name.clone(),
         service_version: event.service_version.clone(),
         handler_name: event.handler_name.clone(),
@@ -6974,7 +7436,7 @@ fn authoritative_agent_execution_audit_record(
         journal_artifact_hash: event.journal_artifact_hash,
         checkpoint_artifact_hash: event.checkpoint_artifact_hash,
         reason: event.reason.clone(),
-    }
+    })
 }
 fn authoritative_agent_runtime_receipt_for_run(
     world: &impl WorldReadOnly,
@@ -6997,25 +7459,42 @@ fn authoritative_agent_execution_audit_for_run(
     world: &impl WorldReadOnly,
     apartment_name: &str,
     run: &SoraAgentAutonomyRunRecordV1,
-) -> Option<AgentAutonomyExecutionAuditRecord> {
-    world
-        .soracloud_agent_apartment_audit_events()
-        .iter()
-        .filter_map(|(_sequence, event)| {
-            (event.action == SoraAgentApartmentActionV1::AutonomyRunExecuted
-                && event.apartment_name.as_ref() == apartment_name
-                && event.run_id.as_deref() == Some(run.run_id.as_str()))
-            .then_some(event)
-        })
-        .max_by_key(|event| event.sequence)
+) -> Result<Option<AgentAutonomyExecutionAuditRecord>, SoracloudError> {
+    let mut latest = None;
+    for (sequence, event) in world.soracloud_agent_apartment_audit_events().iter() {
+        if event.action != SoraAgentApartmentActionV1::AutonomyRunExecuted
+            || event.apartment_name.as_ref() != apartment_name
+            || event.run_id.as_deref() != Some(run.run_id.as_str())
+        {
+            continue;
+        }
+        if *sequence != event.sequence {
+            return Err(SoracloudError::internal(format!(
+                "authoritative agent execution audit key {sequence} does not bind event sequence {}",
+                event.sequence
+            )));
+        }
+        event.validate().map_err(|error| {
+            SoracloudError::internal(format!(
+                "authoritative agent execution audit event {sequence} is invalid: {error}"
+            ))
+        })?;
+        if latest.is_none_or(|current: &SoraAgentApartmentAuditEventV1| {
+            event.sequence > current.sequence
+        }) {
+            latest = Some(event);
+        }
+    }
+    latest
         .map(authoritative_agent_execution_audit_record)
+        .transpose()
 }
 fn authoritative_agent_run_record(
     world: &impl WorldReadOnly,
     apartment_name: &str,
     record: &SoraAgentAutonomyRunRecordV1,
-) -> AgentAutonomyRunRecord {
-    AgentAutonomyRunRecord {
+) -> Result<AgentAutonomyRunRecord, SoracloudError> {
+    Ok(AgentAutonomyRunRecord {
         run_id: record.run_id.clone(),
         artifact_hash: record.artifact_hash.clone(),
         provenance_hash: record.provenance_hash.clone(),
@@ -7028,15 +7507,15 @@ fn authoritative_agent_run_record(
             world,
             apartment_name,
             record,
-        ),
-    }
+        )?,
+    })
 }
 fn authoritative_agent_runtime_recent_runs(
     app: &SharedAppState,
     apartment_name: &str,
-) -> Vec<AgentRuntimeExecutionSummary> {
+) -> Result<Vec<AgentRuntimeExecutionSummary>, SoracloudError> {
     let Some(runtime) = app.soracloud_runtime.as_ref() else {
-        return Vec::new();
+        return Ok(Vec::new());
     };
     let state_view = app.state.view();
     let Some(record) = state_view
@@ -7045,23 +7524,26 @@ fn authoritative_agent_runtime_recent_runs(
         .get(apartment_name)
         .cloned()
     else {
-        return Vec::new();
+        return Ok(Vec::new());
     };
-    record
+    let mut summaries = Vec::new();
+    for run in record
         .autonomy_run_history
         .iter()
         .rev()
         .take(AGENT_AUTONOMY_RECENT_RUN_LIMIT)
-        .filter_map(|run| {
-            read_agent_runtime_execution_summary(
-                runtime.state_dir().as_path(),
-                apartment_name,
-                &run.run_id,
-            )
-            .ok()
-            .flatten()
-        })
-        .collect()
+    {
+        if let Some(summary) = read_agent_runtime_execution_summary(
+            runtime.state_dir().as_path(),
+            apartment_name,
+            &run.run_id,
+            run.approved_process_generation,
+            run.request_commitment,
+        )? {
+            summaries.push(summary);
+        }
+    }
+    Ok(summaries)
 }
 #[cfg(unix)]
 fn same_agent_runtime_summary_file(left: &fs::Metadata, right: &fs::Metadata) -> bool {
@@ -7164,6 +7646,8 @@ fn read_agent_runtime_execution_summary(
     state_dir: &std::path::Path,
     apartment_name: &str,
     run_id: &str,
+    process_generation: u64,
+    request_commitment: Hash,
 ) -> Result<Option<AgentRuntimeExecutionSummary>, SoracloudError> {
     let summary_path = state_dir
         .join("apartments")
@@ -7189,6 +7673,19 @@ fn read_agent_runtime_execution_summary(
                     summary_path.display()
                 ))
             })?;
+    validate_soracloud_apartment_autonomy_execution_summary_v1(
+        &summary,
+        apartment_name,
+        run_id,
+        process_generation,
+        request_commitment,
+    )
+    .map_err(|error| {
+        SoracloudError::internal(format!(
+            "invalid runtime execution summary {}: {error}",
+            summary_path.display()
+        ))
+    })?;
     Ok(Some(AgentRuntimeExecutionSummary {
         apartment_name: summary.apartment_name,
         run_id: summary.run_id,
@@ -7366,7 +7863,8 @@ fn authoritative_agent_autonomy_status_response(
                 "apartment `{apartment_name}` not found in authoritative Soracloud state"
             ))
         })?;
-    let runtime_recent_runs = authoritative_agent_runtime_recent_runs(app, apartment_name.as_ref());
+    let runtime_recent_runs =
+        authoritative_agent_runtime_recent_runs(app, apartment_name.as_ref())?;
     Ok(AgentAutonomyStatusResponse {
         apartment_name,
         sequence,
@@ -7399,7 +7897,7 @@ fn authoritative_agent_autonomy_status_response(
             .rev()
             .take(AGENT_AUTONOMY_RECENT_RUN_LIMIT)
             .map(|run| authoritative_agent_run_record(world, apartment_name_for_runs.as_ref(), run))
-            .collect(),
+            .collect::<Result<Vec<_>, _>>()?,
         runtime_recent_runs,
     })
 }
@@ -7465,7 +7963,7 @@ fn authoritative_ciphertext_query_response(
             request.query.state_key_prefix, binding.key_prefix
         )));
     }
-    let audit_log = authoritative_audit_log(app);
+    let audit_log = authoritative_audit_log(app)?;
     let served_sequence = audit_log
         .iter()
         .map(|event| event.sequence)
@@ -7567,7 +8065,7 @@ fn authoritative_health_compliance_report(
         })
         .transpose()?;
     let limit = limit.max(1).min(MAX_HEALTH_COMPLIANCE_LIMIT);
-    let audit_log = authoritative_audit_log(app);
+    let audit_log = authoritative_audit_log(app)?;
     let generated_at_sequence = audit_log
         .iter()
         .map(|event| event.sequence)
@@ -7585,60 +8083,114 @@ fn authoritative_health_compliance_report(
             jurisdiction_tag.is_none_or(|filter| event.jurisdiction_tag.as_deref() == Some(filter))
         })
         .collect::<Vec<_>>();
-    let total_access_events = u32::try_from(access_events.len()).unwrap_or(u32::MAX);
+    for event in &access_events {
+        for (field, present) in [
+            ("binding_name", event.binding_name.is_some()),
+            ("state_key", event.state_key.is_some()),
+            ("policy_name", event.policy_name.is_some()),
+            ("policy_snapshot_hash", event.policy_snapshot_hash.is_some()),
+            ("jurisdiction_tag", event.jurisdiction_tag.is_some()),
+            ("break_glass", event.break_glass.is_some()),
+            ("governance_tx_hash", event.governance_tx_hash.is_some()),
+        ] {
+            if !present {
+                return Err(SoracloudError::internal(format!(
+                    "authoritative decryption audit event {} is missing `{field}`",
+                    event.sequence
+                )));
+            }
+        }
+    }
+    let total_access_events = u32::try_from(access_events.len()).map_err(|_| {
+        SoracloudError::internal(
+            "authoritative decryption audit count exceeds the V1 u32 response range",
+        )
+    })?;
     let break_glass_events = u32::try_from(
         access_events
             .iter()
-            .filter(|event| event.break_glass.unwrap_or(false))
+            .filter(|event| event.break_glass == Some(true))
             .count(),
     )
-    .unwrap_or(u32::MAX);
-    let non_break_glass_events = total_access_events.saturating_sub(break_glass_events);
+    .map_err(|_| {
+        SoracloudError::internal(
+            "authoritative break-glass audit count exceeds the V1 u32 response range",
+        )
+    })?;
+    let non_break_glass_events = total_access_events
+        .checked_sub(break_glass_events)
+        .ok_or_else(|| {
+            SoracloudError::internal(
+                "authoritative break-glass audit count exceeds total access events",
+            )
+        })?;
     let consent_evidence_present_events = u32::try_from(
         access_events
             .iter()
             .filter(|event| event.consent_evidence_hash.is_some())
             .count(),
     )
-    .unwrap_or(u32::MAX);
+    .map_err(|_| {
+        SoracloudError::internal(
+            "authoritative consent-evidence audit count exceeds the V1 u32 response range",
+        )
+    })?;
     let consent_evidence_coverage_bps = if total_access_events == 0 {
         0
     } else {
-        let numerator = u128::from(consent_evidence_present_events).saturating_mul(10_000);
+        let numerator = u128::from(consent_evidence_present_events) * 10_000;
         let denominator = u128::from(total_access_events);
-        u16::try_from(numerator / denominator).unwrap_or(u16::MAX)
+        u16::try_from(numerator / denominator).map_err(|_| {
+            SoracloudError::internal(
+                "authoritative consent-evidence coverage exceeds the V1 u16 response range",
+            )
+        })?
     };
-    let recent_access_events = access_events
-        .iter()
-        .rev()
-        .take(limit)
-        .map(|event| HealthAccessAuditEntry {
+    let mut recent_access_events = Vec::with_capacity(access_events.len().min(limit));
+    for event in access_events.iter().rev().take(limit) {
+        recent_access_events.push(HealthAccessAuditEntry {
             sequence: event.sequence,
             service_name: event.service_name.clone(),
-            binding_name: event.binding_name.clone().unwrap_or_default(),
-            state_key: event.state_key.clone().unwrap_or_default(),
-            policy_name: event.policy_name.clone().unwrap_or_default(),
-            jurisdiction_tag: event.jurisdiction_tag.clone().unwrap_or_default(),
+            binding_name: event.binding_name.clone().ok_or_else(|| {
+                SoracloudError::internal("validated decryption event lost binding_name")
+            })?,
+            state_key: event.state_key.clone().ok_or_else(|| {
+                SoracloudError::internal("validated decryption event lost state_key")
+            })?,
+            policy_name: event.policy_name.clone().ok_or_else(|| {
+                SoracloudError::internal("validated decryption event lost policy_name")
+            })?,
+            jurisdiction_tag: event.jurisdiction_tag.clone().ok_or_else(|| {
+                SoracloudError::internal("validated decryption event lost jurisdiction_tag")
+            })?,
             consent_evidence_hash: event.consent_evidence_hash,
-            break_glass: event.break_glass.unwrap_or(false),
+            break_glass: event.break_glass.ok_or_else(|| {
+                SoracloudError::internal("validated decryption event lost break_glass")
+            })?,
             break_glass_reason: event.break_glass_reason.clone(),
-            governance_tx_hash: event.governance_tx_hash.unwrap_or_else(|| {
-                Hash::new(Encode::encode(&(
-                    "soracloud.health_compliance.synthetic_governance_hash.v1",
-                    event.sequence,
-                    event.service_name.as_str(),
-                )))
-            }),
+            governance_tx_hash: event.governance_tx_hash.ok_or_else(|| {
+                SoracloudError::internal("validated decryption event lost governance_tx_hash")
+            })?,
             signed_by: event.signed_by.clone(),
-        })
-        .collect::<Vec<_>>();
+        });
+    }
     let mut jurisdiction_stats_acc: BTreeMap<String, (u32, u32)> = BTreeMap::new();
     for event in &access_events {
-        let tag = event.jurisdiction_tag.clone().unwrap_or_default();
+        let tag = event.jurisdiction_tag.clone().ok_or_else(|| {
+            SoracloudError::internal("validated decryption event lost jurisdiction_tag")
+        })?;
         let entry = jurisdiction_stats_acc.entry(tag).or_insert((0, 0));
-        entry.0 = entry.0.saturating_add(1);
-        if event.break_glass.unwrap_or(false) {
-            entry.1 = entry.1.saturating_add(1);
+        entry.0 = entry.0.checked_add(1).ok_or_else(|| {
+            SoracloudError::internal(
+                "authoritative jurisdiction access count exceeds the V1 u32 response range",
+            )
+        })?;
+        if event.break_glass == Some(true) {
+            entry.1 = entry.1.checked_add(1).ok_or_else(|| {
+                SoracloudError::internal(
+                    "authoritative jurisdiction break-glass count exceeds the V1 u32 response range",
+                )
+            })?;
         }
     }
     let jurisdiction_stats = jurisdiction_stats_acc
@@ -7656,13 +8208,15 @@ fn authoritative_health_compliance_report(
     let mut policy_history_acc: BTreeMap<(String, String, String), HealthPolicyDiffEntry> =
         BTreeMap::new();
     for event in &access_events {
-        let Some(policy_name) = event.policy_name.clone() else {
-            continue;
-        };
-        let Some(policy_snapshot_hash) = event.policy_snapshot_hash else {
-            continue;
-        };
-        let jurisdiction = event.jurisdiction_tag.clone().unwrap_or_default();
+        let policy_name = event.policy_name.clone().ok_or_else(|| {
+            SoracloudError::internal("validated decryption event lost policy_name")
+        })?;
+        let policy_snapshot_hash = event.policy_snapshot_hash.ok_or_else(|| {
+            SoracloudError::internal("validated decryption event lost policy_snapshot_hash")
+        })?;
+        let jurisdiction = event.jurisdiction_tag.clone().ok_or_else(|| {
+            SoracloudError::internal("validated decryption event lost jurisdiction_tag")
+        })?;
         let key = (
             policy_name.clone(),
             jurisdiction.clone(),
@@ -7680,7 +8234,11 @@ fn authoritative_health_compliance_report(
             });
         entry.first_seen_sequence = entry.first_seen_sequence.min(event.sequence);
         entry.last_seen_sequence = entry.last_seen_sequence.max(event.sequence);
-        entry.event_count = entry.event_count.saturating_add(1);
+        entry.event_count = entry.event_count.checked_add(1).ok_or_else(|| {
+            SoracloudError::internal(
+                "authoritative policy history count exceeds the V1 u32 response range",
+            )
+        })?;
     }
     let mut policy_diff_history = policy_history_acc.into_values().collect::<Vec<_>>();
     policy_diff_history.sort_by(|left, right| {
@@ -7705,18 +8263,47 @@ fn authoritative_health_compliance_report(
     }
     let mut data_flow_attestations = Vec::new();
     for service_name in data_flow_services {
-        let Ok(service_id) = service_name.parse::<Name>() else {
-            continue;
-        };
-        let Some(deployment) = world.soracloud_service_deployments().get(&service_id) else {
-            continue;
-        };
-        let Some(bundle) = world.soracloud_service_revisions().get(&(
-            service_name.clone(),
-            deployment.current_service_version.clone(),
-        )) else {
-            continue;
-        };
+        let service_id = service_name.parse::<Name>().map_err(|error| {
+            SoracloudError::internal(format!(
+                "authoritative health audit references invalid service `{service_name}`: {error}"
+            ))
+        })?;
+        let deployment = world
+            .soracloud_service_deployments()
+            .get(&service_id)
+            .ok_or_else(|| {
+                SoracloudError::internal(format!(
+                    "authoritative health audit references missing service `{service_name}`"
+                ))
+            })?;
+        let bundle = world
+            .soracloud_service_revisions()
+            .get(&(
+                service_name.clone(),
+                deployment.current_service_version.clone(),
+            ))
+            .ok_or_else(|| {
+                SoracloudError::internal(format!(
+                    "authoritative health audit service `{service_name}` is missing active revision `{}`",
+                    deployment.current_service_version
+                ))
+            })?;
+        if deployment.service_name != service_id
+            || bundle.service.service_name != service_id
+            || bundle.service.service_version != deployment.current_service_version
+            || deployment.current_service_manifest_hash != bundle.service_manifest_hash()
+            || deployment.current_container_manifest_hash != bundle.container_manifest_hash()
+        {
+            return Err(SoracloudError::internal(format!(
+                "authoritative health audit service `{service_name}` does not bind its active revision `{}`",
+                deployment.current_service_version
+            )));
+        }
+        bundle.validate_for_admission().map_err(|error| {
+            SoracloudError::internal(format!(
+                "authoritative health audit service `{service_name}` has an invalid active revision: {error}"
+            ))
+        })?;
         for binding in &bundle.service.state_bindings {
             if binding.encryption == SoraStateEncryptionV1::Plaintext {
                 continue;
@@ -7752,22 +8339,78 @@ fn deployment_bundle_to_control_plane_revision(
     bundle: &SoraDeploymentBundleV1,
     latest_audit: Option<&SoraServiceAuditEventV1>,
     public_discovery: Option<&SoracloudPublicServiceDiscoveryV1>,
-) -> ControlPlaneServiceRevision {
-    let host_admission = admit_scr_host_bundle(bundle).ok();
+) -> Result<ControlPlaneServiceRevision, SoracloudError> {
+    if deployment.service_name != bundle.service.service_name
+        || deployment.current_service_version != bundle.service.service_version
+        || deployment.current_service_manifest_hash != bundle.service_manifest_hash()
+        || deployment.current_container_manifest_hash != bundle.container_manifest_hash()
+    {
+        return Err(SoracloudError::internal(format!(
+            "service `{}` deployment state does not bind active revision `{}`",
+            deployment.service_name, deployment.current_service_version
+        )));
+    }
+    bundle.validate_for_admission().map_err(|error| {
+        SoracloudError::internal(format!(
+            "service `{}` active revision `{}` is not an admitted V1 bundle: {error}",
+            deployment.service_name, deployment.current_service_version
+        ))
+    })?;
+    let host_admission = admit_scr_host_bundle(bundle).map_err(|error| {
+        SoracloudError::internal(format!(
+            "service `{}` active revision `{}` fails authoritative SCR admission: {}",
+            deployment.service_name, deployment.current_service_version, error.message
+        ))
+    })?;
+    let latest_audit = latest_audit.ok_or_else(|| {
+        SoracloudError::internal(format!(
+            "service `{}` active revision `{}` has no authoritative lifecycle audit event",
+            deployment.service_name, deployment.current_service_version
+        ))
+    })?;
+    latest_audit.validate().map_err(|error| {
+        SoracloudError::internal(format!(
+            "service `{}` active revision `{}` lifecycle audit event is invalid: {error}",
+            deployment.service_name, deployment.current_service_version
+        ))
+    })?;
+    if latest_audit.action == SoraServiceLifecycleActionV1::Rollout
+        && (latest_audit.governance_tx_hash.is_none() || latest_audit.rollout_handle.is_none())
+    {
+        return Err(SoracloudError::internal(format!(
+            "service `{}` active revision `{}` rollout audit event is missing governance or rollout identity",
+            deployment.service_name, deployment.current_service_version
+        )));
+    }
+    if !matches!(
+        latest_audit.action,
+        SoraServiceLifecycleActionV1::Deploy
+            | SoraServiceLifecycleActionV1::Upgrade
+            | SoraServiceLifecycleActionV1::Rollout
+            | SoraServiceLifecycleActionV1::Rollback
+    ) || latest_audit.service_name != deployment.service_name
+        || latest_audit.to_version != deployment.current_service_version
+        || latest_audit.service_manifest_hash != bundle.service_manifest_hash()
+        || latest_audit.container_manifest_hash != bundle.container_manifest_hash()
+    {
+        return Err(SoracloudError::internal(format!(
+            "service `{}` active revision `{}` lifecycle audit event does not bind the admitted bundle",
+            deployment.service_name, deployment.current_service_version
+        )));
+    }
+    if let Some(public_discovery) = public_discovery {
+        validate_public_service_discovery_for_bundle(deployment, bundle, public_discovery)?;
+    }
     let route = bundle.service.route.as_ref();
-    let network = host_admission
-        .as_ref()
-        .map(|admission| admission.network.clone())
-        .unwrap_or_else(|| bundle.container.capabilities.network.clone());
-    let sandbox_profile_hash = host_admission
-        .as_ref()
-        .map(|admission| admission.sandbox_profile_hash)
-        .unwrap_or_else(|| bundle.container_manifest_hash());
-    ControlPlaneServiceRevision {
-        sequence: latest_audit.map_or(deployment.process_started_sequence, |event| event.sequence),
-        action: latest_audit
-            .map(|event| audit_action_to_control_plane_action(event.action))
-            .unwrap_or(SoracloudAction::Deploy),
+    let state_binding_count = u32::try_from(bundle.service.state_bindings.len()).map_err(|_| {
+        SoracloudError::internal(format!(
+            "service `{}` active revision `{}` state-binding count exceeds the V1 u32 response range",
+            deployment.service_name, deployment.current_service_version
+        ))
+    })?;
+    Ok(ControlPlaneServiceRevision {
+        sequence: latest_audit.sequence,
+        action: audit_action_to_control_plane_action(latest_audit.action),
         service_version: bundle.service.service_version.clone(),
         service_manifest_hash: bundle.service_manifest_hash(),
         container_manifest_hash: bundle.container_manifest_hash(),
@@ -7781,33 +8424,31 @@ fn deployment_bundle_to_control_plane_revision(
         public_discovery_url: public_discovery.map(|entry| entry.public_discovery_url.clone()),
         public_discovery_cid_host_url: public_discovery
             .map(|entry| entry.public_discovery_cid_host_url.clone()),
-        state_binding_count: u32::try_from(bundle.service.state_bindings.len()).unwrap_or(u32::MAX),
+        state_binding_count,
         state_bindings: bundle.service.state_bindings.clone(),
         lease_volumes: bundle.service.lease_volumes.clone(),
-        allow_model_inference: bundle.container.capabilities.allow_model_inference,
-        allow_model_training: bundle.container.capabilities.allow_model_training,
-        runtime: bundle.container.runtime,
-        allow_wallet_signing: bundle.container.capabilities.allow_wallet_signing,
-        allow_state_writes: bundle.container.capabilities.allow_state_writes,
-        network,
-        cpu_millis: bundle.container.resources.cpu_millis.get(),
-        memory_bytes: bundle.container.resources.memory_bytes.get(),
-        ephemeral_storage_bytes: bundle.container.resources.ephemeral_storage_bytes.get(),
-        max_open_files: bundle.container.resources.max_open_files.get(),
-        max_tasks: bundle.container.resources.max_tasks.get(),
-        start_grace_secs: bundle.container.lifecycle.start_grace_secs.get(),
-        stop_grace_secs: bundle.container.lifecycle.stop_grace_secs.get(),
-        healthcheck_path: bundle.container.lifecycle.healthcheck_path.clone(),
+        allow_model_inference: host_admission.allow_model_inference,
+        allow_model_training: host_admission.allow_model_training,
+        runtime: host_admission.runtime,
+        allow_wallet_signing: host_admission.allow_wallet_signing,
+        allow_state_writes: host_admission.allow_state_writes,
+        network: host_admission.network,
+        cpu_millis: host_admission.cpu_millis,
+        memory_bytes: host_admission.memory_bytes,
+        ephemeral_storage_bytes: host_admission.ephemeral_storage_bytes,
+        max_open_files: host_admission.max_open_files,
+        max_tasks: host_admission.max_tasks,
+        start_grace_secs: host_admission.start_grace_secs,
+        stop_grace_secs: host_admission.stop_grace_secs,
+        healthcheck_path: host_admission.healthcheck_path,
         required_config_names: bundle.container.required_config_names.clone(),
         required_secret_names: bundle.container.required_secret_names.clone(),
         config_exports: bundle.container.config_exports.clone(),
-        sandbox_profile_hash,
+        sandbox_profile_hash: host_admission.sandbox_profile_hash,
         process_generation: deployment.process_generation,
         process_started_sequence: deployment.process_started_sequence,
-        signed_by: latest_audit
-            .map(|event| event.signer.to_string())
-            .unwrap_or_else(|| "<unknown>".to_string()),
-    }
+        signed_by: latest_audit.signer.to_string(),
+    })
 }
 pub(crate) fn resolve_public_local_read_route(
     app: &SharedAppState,
@@ -8125,7 +8766,8 @@ pub(crate) fn control_plane_snapshot(
     app: &SharedAppState,
     service_name: Option<&str>,
     audit_limit: usize,
-) -> Result<ControlPlaneSnapshot, NumericOperationError> {
+) -> Result<ControlPlaneSnapshot, SoracloudError> {
+    let validated_audit_log = authoritative_audit_log(app)?;
     let state_view = app.state.view();
     let world = state_view.world();
     let current_sequence = current_soracloud_service_sequence(world);
@@ -8142,13 +8784,27 @@ pub(crate) fn control_plane_snapshot(
         let current_bundle = world
             .soracloud_service_revisions()
             .get(&revision_key)
-            .cloned();
+            .cloned()
+            .ok_or_else(|| {
+                SoracloudError::internal(format!(
+                    "service `{service_label}` active revision `{}` is missing from authoritative state",
+                    deployment.current_service_version
+                ))
+            })?;
+        if &deployment.service_name != service_id
+            || deployment.current_service_manifest_hash != current_bundle.service_manifest_hash()
+            || deployment.current_container_manifest_hash
+                != current_bundle.container_manifest_hash()
+        {
+            return Err(SoracloudError::internal(format!(
+                "service `{service_label}` deployment state does not bind its active revision `{}`",
+                deployment.current_service_version
+            )));
+        }
         let current_public_discovery = authoritative_public_service_discovery_for_version(
             deployment,
             deployment.current_service_version.as_str(),
-        )
-        .ok()
-        .flatten();
+        )?;
         let latest_audit = world
             .soracloud_service_audit_events()
             .iter()
@@ -8163,7 +8819,13 @@ pub(crate) fn control_plane_snapshot(
                     )
             })
             .map(|(_sequence, event)| event)
-            .max_by_key(|event| event.sequence);
+            .max_by_key(|event| event.sequence)
+            .ok_or_else(|| {
+                SoracloudError::internal(format!(
+                    "service `{service_label}` active revision `{}` has no authoritative lifecycle audit event",
+                    deployment.current_service_version
+                ))
+            })?;
         let service_lease_status = deployment.hosted_service_lease_status_at(current_sequence)?;
         let remaining_runtime_balance =
             deployment.hosted_service_remaining_balance(current_sequence)?;
@@ -8173,8 +8835,16 @@ pub(crate) fn control_plane_snapshot(
             revision_count: deployment.revision_count,
             config_generation: deployment.config_generation,
             secret_generation: deployment.secret_generation,
-            config_entry_count: u32::try_from(deployment.service_configs.len()).unwrap_or(u32::MAX),
-            secret_entry_count: u32::try_from(deployment.service_secrets.len()).unwrap_or(u32::MAX),
+            config_entry_count: u32::try_from(deployment.service_configs.len()).map_err(|_| {
+                SoracloudError::internal(format!(
+                    "service `{service_label}` config count exceeds the V1 u32 response range"
+                ))
+            })?,
+            secret_entry_count: u32::try_from(deployment.service_secrets.len()).map_err(|_| {
+                SoracloudError::internal(format!(
+                    "service `{service_label}` secret count exceeds the V1 u32 response range"
+                ))
+            })?,
             quota_class: deployment
                 .service_lease
                 .as_ref()
@@ -8198,14 +8868,12 @@ pub(crate) fn control_plane_snapshot(
             public_discovery_cid_host_url: current_public_discovery
                 .as_ref()
                 .map(|entry| entry.public_discovery_cid_host_url.clone()),
-            latest_revision: current_bundle.as_ref().map(|bundle| {
-                deployment_bundle_to_control_plane_revision(
-                    deployment,
-                    bundle,
-                    latest_audit,
-                    current_public_discovery.as_ref(),
-                )
-            }),
+            latest_revision: Some(deployment_bundle_to_control_plane_revision(
+                deployment,
+                &current_bundle,
+                Some(latest_audit),
+                current_public_discovery.as_ref(),
+            )?),
             active_rollout: deployment
                 .active_rollout
                 .as_ref()
@@ -8217,21 +8885,23 @@ pub(crate) fn control_plane_snapshot(
         });
     }
     let limit = audit_limit.max(1).min(MAX_AUDIT_LIMIT);
-    let mut recent_audit_events = world
-        .soracloud_service_audit_events()
-        .iter()
-        .filter(|(_sequence, event)| {
-            service_name.is_none_or(|filter| filter == event.service_name.as_ref())
-        })
-        .map(|(_sequence, event)| audit_event_to_control_plane_audit_event(event))
+    let validated_audit_event_count = validated_audit_log.len();
+    let mut recent_audit_events = validated_audit_log
+        .into_iter()
+        .filter(|event| service_name.is_none_or(|filter| filter == event.service_name))
         .collect::<Vec<_>>();
     recent_audit_events.sort_by_key(|event| std::cmp::Reverse(event.sequence));
     recent_audit_events.truncate(limit);
     Ok(ControlPlaneSnapshot {
         schema_version: CONTROL_PLANE_SCHEMA_VERSION,
-        service_count: u32::try_from(services.len()).unwrap_or(u32::MAX),
-        audit_event_count: u32::try_from(world.soracloud_service_audit_events().iter().count())
-            .unwrap_or(u32::MAX),
+        service_count: u32::try_from(services.len()).map_err(|_| {
+            SoracloudError::internal("Soracloud service count exceeds the V1 u32 response range")
+        })?,
+        audit_event_count: u32::try_from(validated_audit_event_count).map_err(|_| {
+            SoracloudError::internal(
+                "Soracloud audit event count exceeds the V1 u32 response range",
+            )
+        })?,
         services,
         recent_audit_events,
     })
@@ -9996,7 +10666,7 @@ pub(crate) async fn handle_hf_deploy(
         Ok(repo_id) => repo_id,
         Err(err) => return err.into_response(),
     };
-    let resolved_revision = match parse_hf_resolved_revision(request.payload.revision.as_deref()) {
+    let resolved_revision = match parse_hf_revision(&request.payload.revision) {
         Ok(resolved_revision) => resolved_revision,
         Err(err) => return err.into_response(),
     };
@@ -10142,7 +10812,7 @@ pub(crate) async fn handle_hf_status(
         Ok(repo_id) => repo_id,
         Err(err) => return err.into_response(),
     };
-    let resolved_revision = match parse_hf_resolved_revision(query.revision.as_deref()) {
+    let resolved_revision = match parse_hf_revision(&query.revision) {
         Ok(resolved_revision) => resolved_revision,
         Err(err) => return err.into_response(),
     };
@@ -10200,7 +10870,7 @@ pub(crate) async fn handle_hf_lease_leave(
         Ok(repo_id) => repo_id,
         Err(err) => return err.into_response(),
     };
-    let resolved_revision = match parse_hf_resolved_revision(request.payload.revision.as_deref()) {
+    let resolved_revision = match parse_hf_revision(&request.payload.revision) {
         Ok(resolved_revision) => resolved_revision,
         Err(err) => return err.into_response(),
     };
@@ -10287,7 +10957,7 @@ pub(crate) async fn handle_hf_lease_renew(
         Ok(repo_id) => repo_id,
         Err(err) => return err.into_response(),
     };
-    let resolved_revision = match parse_hf_resolved_revision(request.payload.revision.as_deref()) {
+    let resolved_revision = match parse_hf_revision(&request.payload.revision) {
         Ok(resolved_revision) => resolved_revision,
         Err(err) => return err.into_response(),
     };
@@ -10603,10 +11273,7 @@ pub(crate) async fn handle_agent_deploy(
         Ok(signer) => signer,
         Err(err) => return err.into_response(),
     };
-    let autonomy_budget_units = request
-        .payload
-        .autonomy_budget_units
-        .unwrap_or(AGENT_AUTONOMY_DEFAULT_BUDGET_UNITS);
+    let autonomy_budget_units = request.payload.autonomy_budget_units;
     let apartment_name = request.payload.manifest.apartment_name.to_string();
     match submit_confirm_and_respond(
         &app,
@@ -11174,6 +11841,8 @@ fn execute_runtime_agent_autonomy_run(
                 response.apartment_name
             )
         })?;
+    let approved_process_generation = approved_run.approved_process_generation;
+    let approved_request_commitment = approved_run.request_commitment;
     let observed_height = u64::try_from(state_view.height()).unwrap_or(u64::MAX);
     let observed_block_hash = state_view.latest_block_hash().map(Hash::from);
     drop(state_view);
@@ -11183,7 +11852,7 @@ fn execute_runtime_agent_autonomy_run(
         apartment_name: response.apartment_name.clone(),
         process_generation: record.process_generation,
         operation: format!("autonomy-run:{run_id}"),
-        request_commitment: approved_run.request_commitment,
+        request_commitment: approved_request_commitment,
     };
     runtime.execute_apartment(request).map_err(|error| {
         format!(
@@ -11195,6 +11864,8 @@ fn execute_runtime_agent_autonomy_run(
         runtime.state_dir().as_path(),
         &response.apartment_name,
         run_id,
+        approved_process_generation,
+        approved_request_commitment,
     )
     .map_err(|error| error.message)
 }
@@ -11544,6 +12215,7 @@ pub(crate) async fn handle_health_compliance_report(
 #[cfg(test)]
 mod tests {
     use super::*;
+    const TEST_HF_COMMIT_OID: &str = "0123456789abcdef0123456789abcdef01234567";
     use crate::tests_runtime_handlers::mk_app_state_for_tests_with_world;
     use iroha_core::soracloud_runtime::{
         SORACLOUD_APARTMENT_AUTONOMY_EXECUTION_SUMMARY_VERSION_V1,
@@ -11552,6 +12224,7 @@ mod tests {
         SoracloudOrderedMailboxExecutionRequest, SoracloudOrderedMailboxExecutionResult,
         SoracloudRuntime, SoracloudRuntimeExecutionError, SoracloudRuntimeExecutionErrorKind,
         SoracloudRuntimeReadHandle, SoracloudRuntimeSnapshot,
+        derive_soracloud_apartment_autonomy_result_commitment_v1,
     };
     use iroha_crypto::{Algorithm, KeyPair, Signature};
     use iroha_data_model::{
@@ -11623,6 +12296,391 @@ mod tests {
         let error = read_agent_runtime_execution_summary_bytes(&path)
             .expect_err("the first byte beyond the V1 summary ceiling must fail");
         assert_eq!(error.kind(), io::ErrorKind::InvalidData);
+    }
+    fn agent_runtime_receipt_json_fixture() -> AgentRuntimeReceiptRecord {
+        AgentRuntimeReceiptRecord {
+            receipt_id: Hash::new(b"agent runtime receipt"),
+            service_name: "hf_agent_service".to_owned(),
+            service_version: "hf.generated.v1".to_owned(),
+            handler_name: "infer".to_owned(),
+            handler_class: SoraServiceHandlerClassV1::Query,
+            request_commitment: Hash::new(b"agent runtime request"),
+            result_commitment: Hash::new(b"agent runtime result"),
+            certified_by: SoraCertifiedResponsePolicyV1::AuditReceipt,
+            emitted_sequence: 9,
+            placement_id: None,
+            selected_validator_account_id: None,
+            selected_peer_id: None,
+            journal_artifact_hash: None,
+            checkpoint_artifact_hash: None,
+        }
+    }
+    fn agent_autonomy_execution_audit_json_fixture() -> AgentAutonomyExecutionAuditRecord {
+        AgentAutonomyExecutionAuditRecord {
+            sequence: 10,
+            succeeded: true,
+            result_commitment: Hash::new(b"agent autonomy audit result"),
+            service_name: None,
+            service_version: None,
+            handler_name: None,
+            runtime_receipt_id: None,
+            journal_artifact_hash: None,
+            checkpoint_artifact_hash: None,
+            reason: None,
+        }
+    }
+    fn agent_runtime_execution_summary_json_fixture() -> AgentRuntimeExecutionSummary {
+        AgentRuntimeExecutionSummary {
+            apartment_name: "ops_agent".to_owned(),
+            run_id: "ops_agent:autonomy:9".to_owned(),
+            service_name: None,
+            service_version: None,
+            handler_name: None,
+            succeeded: true,
+            result_commitment: Hash::new(b"agent autonomy result"),
+            journal_artifact_hash: Hash::new(b"agent autonomy journal"),
+            checkpoint_artifact_hash: None,
+            runtime_receipt: Some(agent_runtime_receipt_json_fixture()),
+            workflow_steps: vec![AgentRuntimeWorkflowStepSummary {
+                step_index: 0,
+                step_id: None,
+                request_commitment: Hash::new(b"agent workflow request"),
+                result_commitment: Hash::new(b"agent workflow result"),
+                runtime_receipt: None,
+                content_type: None,
+                response_json: None,
+                response_text: None,
+            }],
+            content_type: None,
+            response_json: None,
+            response_text: None,
+            error: None,
+        }
+    }
+    fn json_object_at_mut<'a>(
+        value: &'a mut norito::json::Value,
+        pointer: &str,
+    ) -> &'a mut norito::json::Map {
+        let target = if pointer.is_empty() {
+            value
+        } else {
+            value.pointer_mut(pointer).expect("JSON pointer exists")
+        };
+        target
+            .as_object_mut()
+            .expect("JSON pointer names an object")
+    }
+    #[test]
+    fn agent_autonomy_mutation_json_graph_requires_exact_v1_fields() {
+        let canonical = AgentAutonomyMutationResponse {
+            action: AgentApartmentAction::AutonomyRunExecuted,
+            apartment_name: "ops_agent".to_owned(),
+            sequence: 10,
+            status: AgentRuntimeStatus::Running,
+            lease_expires_sequence: 100,
+            lease_remaining_ticks: 90,
+            manifest_hash: Hash::new(b"agent manifest"),
+            artifact_hash: "hash:agent#1".to_owned(),
+            provenance_hash: None,
+            run_id: Some("ops_agent:autonomy:9".to_owned()),
+            run_label: None,
+            workflow_input_json: None,
+            budget_units: Some(10),
+            budget_remaining_units: 90,
+            allowlist_count: 1,
+            run_count: 1,
+            process_generation: 3,
+            process_started_sequence: 1,
+            last_active_sequence: 10,
+            last_checkpoint_sequence: None,
+            checkpoint_count: 1,
+            persistent_state_total_bytes: 64,
+            persistent_state_key_count: 1,
+            audit_event_count: 2,
+            signed_by: "signer".to_owned(),
+            runtime_execution: Some(agent_runtime_execution_summary_json_fixture()),
+            runtime_execution_error: None,
+            authoritative_runtime_receipt: Some(agent_runtime_receipt_json_fixture()),
+            authoritative_runtime_receipt_error: None,
+            authoritative_execution_audit: Some(agent_autonomy_execution_audit_json_fixture()),
+            authoritative_execution_audit_error: None,
+        };
+        let canonical_value =
+            norito::json::to_value(&canonical).expect("encode canonical agent autonomy mutation");
+        norito::json::from_value::<AgentAutonomyMutationResponse>(canonical_value.clone())
+            .expect("decode canonical agent autonomy mutation");
+        for (pointer, required_field) in [
+            ("", "provenance_hash"),
+            ("", "run_id"),
+            ("", "run_label"),
+            ("", "workflow_input_json"),
+            ("", "budget_units"),
+            ("", "last_checkpoint_sequence"),
+            ("", "runtime_execution"),
+            ("", "runtime_execution_error"),
+            ("", "authoritative_runtime_receipt"),
+            ("", "authoritative_runtime_receipt_error"),
+            ("", "authoritative_execution_audit"),
+            ("", "authoritative_execution_audit_error"),
+            ("/runtime_execution", "service_name"),
+            ("/runtime_execution", "service_version"),
+            ("/runtime_execution", "handler_name"),
+            ("/runtime_execution", "checkpoint_artifact_hash"),
+            ("/runtime_execution", "runtime_receipt"),
+            ("/runtime_execution", "workflow_steps"),
+            ("/runtime_execution", "content_type"),
+            ("/runtime_execution", "response_json"),
+            ("/runtime_execution", "response_text"),
+            ("/runtime_execution", "error"),
+            ("/runtime_execution/runtime_receipt", "placement_id"),
+            (
+                "/runtime_execution/runtime_receipt",
+                "selected_validator_account_id",
+            ),
+            ("/runtime_execution/runtime_receipt", "selected_peer_id"),
+            (
+                "/runtime_execution/runtime_receipt",
+                "journal_artifact_hash",
+            ),
+            (
+                "/runtime_execution/runtime_receipt",
+                "checkpoint_artifact_hash",
+            ),
+            ("/runtime_execution/workflow_steps/0", "step_id"),
+            ("/runtime_execution/workflow_steps/0", "runtime_receipt"),
+            ("/runtime_execution/workflow_steps/0", "content_type"),
+            ("/runtime_execution/workflow_steps/0", "response_json"),
+            ("/runtime_execution/workflow_steps/0", "response_text"),
+            ("/authoritative_execution_audit", "service_name"),
+            ("/authoritative_execution_audit", "service_version"),
+            ("/authoritative_execution_audit", "handler_name"),
+            ("/authoritative_execution_audit", "runtime_receipt_id"),
+            ("/authoritative_execution_audit", "journal_artifact_hash"),
+            ("/authoritative_execution_audit", "checkpoint_artifact_hash"),
+            ("/authoritative_execution_audit", "reason"),
+        ] {
+            let mut missing = canonical_value.clone();
+            assert!(
+                json_object_at_mut(&mut missing, pointer)
+                    .remove(required_field)
+                    .is_some(),
+                "fixture must contain {pointer}/{required_field}"
+            );
+            assert!(
+                norito::json::from_value::<AgentAutonomyMutationResponse>(missing).is_err(),
+                "agent autonomy graph must require {pointer}/{required_field}"
+            );
+        }
+        for pointer in [
+            "",
+            "/runtime_execution",
+            "/runtime_execution/runtime_receipt",
+            "/runtime_execution/workflow_steps/0",
+            "/authoritative_execution_audit",
+        ] {
+            let mut unknown = canonical_value.clone();
+            json_object_at_mut(&mut unknown, pointer)
+                .insert("legacy_field".to_owned(), norito::json::Value::Null);
+            assert!(
+                norito::json::from_value::<AgentAutonomyMutationResponse>(unknown).is_err(),
+                "agent autonomy graph must reject unknown fields at {pointer}"
+            );
+        }
+    }
+    #[test]
+    fn agent_autonomy_status_json_graph_requires_exact_v1_fields() {
+        let canonical = AgentAutonomyStatusResponse {
+            apartment_name: "ops_agent".parse().expect("valid apartment name"),
+            sequence: 10,
+            status: AgentRuntimeStatus::Running,
+            lease_expires_sequence: 100,
+            lease_remaining_ticks: 90,
+            manifest_hash: Hash::new(b"agent manifest"),
+            revoked_policy_capability_count: 0,
+            budget_ceiling_units: 100,
+            budget_remaining_units: 90,
+            allowlist_count: 1,
+            run_count: 1,
+            process_generation: 3,
+            process_started_sequence: 1,
+            last_active_sequence: 10,
+            last_checkpoint_sequence: None,
+            checkpoint_count: 1,
+            persistent_state_total_bytes: 64,
+            persistent_state_key_count: 1,
+            allowlist: vec![AgentAutonomyAllowlistEntry {
+                artifact_hash: "hash:agent#1".to_owned(),
+                provenance_hash: None,
+                added_sequence: 2,
+            }],
+            recent_runs: vec![AgentAutonomyRunRecord {
+                run_id: "ops_agent:autonomy:9".to_owned(),
+                artifact_hash: "hash:agent#1".to_owned(),
+                provenance_hash: None,
+                budget_units: 10,
+                run_label: "fixture".to_owned(),
+                workflow_input_json: None,
+                approved_sequence: 9,
+                authoritative_runtime_receipt: Some(agent_runtime_receipt_json_fixture()),
+                authoritative_execution_audit: Some(agent_autonomy_execution_audit_json_fixture()),
+            }],
+            runtime_recent_runs: vec![agent_runtime_execution_summary_json_fixture()],
+        };
+        let canonical_value =
+            norito::json::to_value(&canonical).expect("encode canonical agent autonomy status");
+        norito::json::from_value::<AgentAutonomyStatusResponse>(canonical_value.clone())
+            .expect("decode canonical agent autonomy status");
+        for (pointer, required_field) in [
+            ("", "last_checkpoint_sequence"),
+            ("", "allowlist"),
+            ("", "recent_runs"),
+            ("", "runtime_recent_runs"),
+            ("/allowlist/0", "provenance_hash"),
+            ("/recent_runs/0", "provenance_hash"),
+            ("/recent_runs/0", "workflow_input_json"),
+            ("/recent_runs/0", "authoritative_runtime_receipt"),
+            ("/recent_runs/0", "authoritative_execution_audit"),
+        ] {
+            let mut missing = canonical_value.clone();
+            assert!(
+                json_object_at_mut(&mut missing, pointer)
+                    .remove(required_field)
+                    .is_some(),
+                "fixture must contain {pointer}/{required_field}"
+            );
+            assert!(
+                norito::json::from_value::<AgentAutonomyStatusResponse>(missing).is_err(),
+                "agent autonomy status graph must require {pointer}/{required_field}"
+            );
+        }
+        for pointer in ["", "/allowlist/0", "/recent_runs/0"] {
+            let mut unknown = canonical_value.clone();
+            json_object_at_mut(&mut unknown, pointer)
+                .insert("legacy_field".to_owned(), norito::json::Value::Null);
+            assert!(
+                norito::json::from_value::<AgentAutonomyStatusResponse>(unknown).is_err(),
+                "agent autonomy status graph must reject unknown fields at {pointer}"
+            );
+        }
+    }
+    #[test]
+    fn agent_runtime_summary_reader_binds_v1_path_and_authoritative_run() {
+        let directory = tempfile::tempdir().expect("temporary autonomy summary directory");
+        let apartment_name = "ops_agent";
+        let run_id = "ops_agent:autonomy:9";
+        let process_generation = 3;
+        let request_commitment = Hash::new(b"authoritative agent autonomy request");
+        let summary_path = directory
+            .path()
+            .join("apartments")
+            .join(sanitize_runtime_path_component(apartment_name))
+            .join("runs")
+            .join(sanitize_runtime_path_component(run_id))
+            .join("execution_summary.json");
+        fs::create_dir_all(summary_path.parent().expect("summary parent"))
+            .expect("create summary parent");
+        let mut summary = SoracloudApartmentAutonomyExecutionSummaryV1 {
+            schema_version: SORACLOUD_APARTMENT_AUTONOMY_EXECUTION_SUMMARY_VERSION_V1,
+            apartment_name: apartment_name.to_owned(),
+            run_id: run_id.to_owned(),
+            service_name: None,
+            service_version: None,
+            handler_name: None,
+            succeeded: false,
+            result_commitment: Hash::new(b"placeholder"),
+            checkpoint_artifact_hash: None,
+            runtime_receipt: None,
+            workflow_steps: Vec::new(),
+            content_type: None,
+            response_json: None,
+            response_text: None,
+            error: Some("fixture failure".to_owned()),
+        };
+        summary.result_commitment = derive_soracloud_apartment_autonomy_result_commitment_v1(
+            &summary,
+            process_generation,
+            request_commitment,
+        )
+        .expect("derive canonical result commitment");
+        fs::write(
+            &summary_path,
+            norito::json::to_vec(&summary).expect("encode summary"),
+        )
+        .expect("write summary");
+        assert!(
+            read_agent_runtime_execution_summary(
+                directory.path(),
+                apartment_name,
+                run_id,
+                process_generation,
+                request_commitment,
+            )
+            .expect("read canonical summary")
+            .is_some()
+        );
+        assert!(
+            read_agent_runtime_execution_summary(
+                directory.path(),
+                apartment_name,
+                run_id,
+                process_generation.saturating_add(1),
+                request_commitment,
+            )
+            .is_err()
+        );
+        assert!(
+            read_agent_runtime_execution_summary(
+                directory.path(),
+                apartment_name,
+                run_id,
+                process_generation,
+                Hash::new(b"different authoritative request"),
+            )
+            .is_err()
+        );
+
+        let mut wrong_path = summary.clone();
+        wrong_path.apartment_name = "other_agent".to_owned();
+        wrong_path.result_commitment = derive_soracloud_apartment_autonomy_result_commitment_v1(
+            &wrong_path,
+            process_generation,
+            request_commitment,
+        )
+        .expect("derive wrong-path commitment");
+        fs::write(
+            &summary_path,
+            norito::json::to_vec(&wrong_path).expect("encode wrong-path summary"),
+        )
+        .expect("write wrong-path summary");
+        assert!(
+            read_agent_runtime_execution_summary(
+                directory.path(),
+                apartment_name,
+                run_id,
+                process_generation,
+                request_commitment,
+            )
+            .is_err()
+        );
+
+        let mut wrong_schema = summary;
+        wrong_schema.schema_version =
+            SORACLOUD_APARTMENT_AUTONOMY_EXECUTION_SUMMARY_VERSION_V1.saturating_add(1);
+        fs::write(
+            &summary_path,
+            norito::json::to_vec(&wrong_schema).expect("encode wrong-schema summary"),
+        )
+        .expect("write wrong-schema summary");
+        assert!(
+            read_agent_runtime_execution_summary(
+                directory.path(),
+                apartment_name,
+                run_id,
+                process_generation,
+                request_commitment,
+            )
+            .is_err()
+        );
     }
     fn checked_test_signature(private_key: &iroha_crypto::PrivateKey, payload: &[u8]) -> Signature {
         Signature::try_new(private_key, payload).expect("test fixture signing should succeed")
@@ -11841,6 +12899,33 @@ mod tests {
             lease_volume_states: Vec::new(),
         }
     }
+    fn fixture_service_deploy_audit_event(
+        bundle: &SoraDeploymentBundleV1,
+    ) -> SoraServiceAuditEventV1 {
+        SoraServiceAuditEventV1 {
+            schema_version: iroha_data_model::soracloud::SORA_SERVICE_AUDIT_EVENT_VERSION_V1,
+            sequence: 1,
+            action: SoraServiceLifecycleActionV1::Deploy,
+            service_name: bundle.service.service_name.clone(),
+            from_version: None,
+            to_version: bundle.service.service_version.clone(),
+            service_manifest_hash: bundle.service_manifest_hash(),
+            container_manifest_hash: bundle.container_manifest_hash(),
+            governance_tx_hash: None,
+            binding_name: None,
+            state_key: None,
+            config_name: None,
+            secret_name: None,
+            rollout_handle: None,
+            policy_name: None,
+            policy_snapshot_hash: None,
+            jurisdiction_tag: None,
+            consent_evidence_hash: None,
+            break_glass: None,
+            break_glass_reason: None,
+            signer: checked_test_keypair(0x5A).public_key().clone(),
+        }
+    }
     fn insert_revision(
         world: &mut iroha_core::state::World,
         bundle: &SoraDeploymentBundleV1,
@@ -11898,12 +12983,12 @@ mod tests {
     }
     fn signed_rollback_request(
         service_name: &str,
-        target_version: Option<&str>,
+        target_version: &str,
         key_pair: &KeyPair,
     ) -> SignedRollbackRequest {
         let payload = RollbackPayload {
             service_name: service_name.to_string(),
-            target_version: target_version.map(ToOwned::to_owned),
+            target_version: target_version.to_owned(),
         };
         let encoded = encode_rollback_signature_payload(&payload).expect("encode rollback payload");
         let signature = checked_test_signature(key_pair.private_key(), &encoded);
@@ -12084,6 +13169,30 @@ mod tests {
             succeeded: None,
         }
     }
+    #[test]
+    fn agent_execution_audit_projection_fails_closed_without_authoritative_outcome_fields() {
+        let signer = checked_test_keypair(0x5B);
+        let run = fixture_agent_run_record("ops_agent", "ops_agent:autonomy:1", 1, 1);
+        let mut event = fixture_autonomy_approval_event(
+            "ops_agent",
+            Hash::new(b"agent manifest"),
+            &signer,
+            &run,
+        );
+        event.action = SoraAgentApartmentActionV1::AutonomyRunExecuted;
+        event.result_commitment = Some(Hash::new(b"execution result"));
+        let error = authoritative_agent_execution_audit_record(&event)
+            .expect_err("missing authoritative succeeded projection must fail closed");
+        assert_eq!(error.kind, SoracloudErrorKind::Internal);
+        assert!(error.message.contains("missing `succeeded`"));
+
+        event.succeeded = Some(false);
+        event.result_commitment = None;
+        let error = authoritative_agent_execution_audit_record(&event)
+            .expect_err("missing authoritative result commitment must fail closed");
+        assert_eq!(error.kind, SoracloudErrorKind::Internal);
+        assert!(error.message.contains("missing `result_commitment`"));
+    }
     fn attach_test_runtime(app: &mut SharedAppState, state_dir: PathBuf) {
         Arc::get_mut(app)
             .expect("unique app state")
@@ -12119,13 +13228,16 @@ mod tests {
     #[test]
     fn signed_mutation_request_rejects_inline_signing_material() {
         let key_pair = checked_test_keypair(0x60);
-        let request = signed_rollback_request("inline-secret-test", None, &key_pair);
+        let request = signed_rollback_request("inline-secret-test", "1.0.0", &key_pair);
         let mut payload = norito::json::Map::new();
         payload.insert(
             "service_name".to_owned(),
             norito::json::Value::from(request.payload.service_name),
         );
-        payload.insert("target_version".to_owned(), norito::json::Value::Null);
+        payload.insert(
+            "target_version".to_owned(),
+            norito::json::Value::from(request.payload.target_version),
+        );
         let mut fields = norito::json::Map::new();
         fields.insert("payload".to_owned(), norito::json::Value::Object(payload));
         fields.insert(
@@ -12143,6 +13255,1276 @@ mod tests {
         assert!(
             error.to_string().contains("unknown field `authority`"),
             "unexpected inline-authority rejection: {error}"
+        );
+    }
+    #[test]
+    fn rollback_payload_requires_explicit_target_version() {
+        for payload in [
+            r#"{"service_name":"web_portal"}"#,
+            r#"{"service_name":"web_portal","target_version":null}"#,
+        ] {
+            norito::json::from_str::<RollbackPayload>(payload)
+                .expect_err("missing or null target_version must be rejected");
+        }
+    }
+    #[test]
+    fn rollback_payload_rejects_retired_history_fields() {
+        let error = norito::json::from_str::<RollbackPayload>(
+            r#"{"service_name":"web_portal","target_version":"1.0.0","previous_service_version":"0.9.0"}"#,
+        )
+        .expect_err("retired rollback history inference field must be rejected");
+        assert!(
+            error
+                .to_string()
+                .contains("unknown field `previous_service_version`"),
+            "unexpected retired rollback field rejection: {error}"
+        );
+    }
+    #[test]
+    fn signed_bundle_request_requires_explicit_material_maps() {
+        let request = SignedBundleRequest {
+            bundle: fixture_bundle("1.0.0"),
+            initial_service_configs: BTreeMap::new(),
+            initial_service_secrets: BTreeMap::new(),
+            provenance: signed_rollback_request(
+                "web_portal",
+                "1.0.0",
+                &iroha_test_samples::ALICE_KEYPAIR,
+            )
+            .provenance,
+        };
+        let mut fields = norito::json::Map::new();
+        fields.insert(
+            "bundle".to_owned(),
+            norito::json::to_value(&request.bundle).expect("serialize bundle"),
+        );
+        fields.insert(
+            "initial_service_configs".to_owned(),
+            norito::json::to_value(&request.initial_service_configs)
+                .expect("serialize initial configs"),
+        );
+        fields.insert(
+            "initial_service_secrets".to_owned(),
+            norito::json::to_value(&request.initial_service_secrets)
+                .expect("serialize initial secrets"),
+        );
+        fields.insert(
+            "provenance".to_owned(),
+            norito::json::to_value(&request.provenance).expect("serialize provenance"),
+        );
+        let canonical = norito::json::Value::Object(fields);
+        norito::json::from_value::<SignedBundleRequest>(canonical.clone())
+            .expect("canonical signed bundle request must decode");
+
+        for field in ["initial_service_configs", "initial_service_secrets"] {
+            let mut missing = canonical.clone();
+            assert!(
+                missing
+                    .as_object_mut()
+                    .expect("signed bundle request JSON object")
+                    .remove(field)
+                    .is_some()
+            );
+            norito::json::from_value::<SignedBundleRequest>(missing)
+                .expect_err("omitted initial material map must be rejected");
+
+            let mut null = canonical.clone();
+            null.as_object_mut()
+                .expect("signed bundle request JSON object")
+                .insert(field.to_owned(), norito::json::Value::Null);
+            norito::json::from_value::<SignedBundleRequest>(null)
+                .expect_err("null initial material map must be rejected");
+        }
+    }
+    #[test]
+    fn signed_app_infra_request_requires_explicit_service_vectors_and_closed_fields() {
+        let manifest = SoraAppInfraManifestV1 {
+            schema_version: iroha_data_model::soracloud::SORA_APP_INFRA_MANIFEST_VERSION_V1,
+            app_name: "web_portal".parse().expect("valid app name"),
+            app_version: "1.0.0".to_owned(),
+            public_url: "https://web-portal.example".to_owned(),
+            static_site: None,
+            services: Vec::new(),
+        };
+        let provenance =
+            signed_rollback_request("web_portal", "1.0.0", &iroha_test_samples::ALICE_KEYPAIR)
+                .provenance;
+        let mut fields = norito::json::Map::new();
+        fields.insert("deploy_services".to_owned(), norito::json!([]));
+        fields.insert("upgrade_services".to_owned(), norito::json!([]));
+        fields.insert(
+            "manifest".to_owned(),
+            norito::json::to_value(&manifest).expect("serialize app manifest"),
+        );
+        fields.insert(
+            "provenance".to_owned(),
+            norito::json::to_value(&provenance).expect("serialize app provenance"),
+        );
+        let canonical = norito::json::Value::Object(fields);
+        norito::json::from_value::<SignedAppInfraRequest>(canonical.clone())
+            .expect("canonical signed app request must decode");
+
+        for field in ["deploy_services", "upgrade_services"] {
+            let mut missing = canonical.clone();
+            assert!(
+                missing
+                    .as_object_mut()
+                    .expect("signed app request JSON object")
+                    .remove(field)
+                    .is_some()
+            );
+            norito::json::from_value::<SignedAppInfraRequest>(missing)
+                .expect_err("signed app request must reject an omitted service vector");
+
+            let mut null = canonical.clone();
+            null.as_object_mut()
+                .expect("signed app request JSON object")
+                .insert(field.to_owned(), norito::json::Value::Null);
+            norito::json::from_value::<SignedAppInfraRequest>(null)
+                .expect_err("signed app request must reject a null service vector");
+        }
+
+        let mut unknown = canonical;
+        unknown
+            .as_object_mut()
+            .expect("signed app request JSON object")
+            .insert("retired_v0".to_owned(), norito::json::Value::from(true));
+        norito::json::from_value::<SignedAppInfraRequest>(unknown)
+            .expect_err("signed app request must reject unknown fields");
+    }
+    #[test]
+    fn service_control_payloads_are_closed_and_state_nulls_are_explicit() {
+        macro_rules! assert_closed_value {
+            ($value:expr, $ty:ty, $label:literal) => {{
+                let value = $value;
+                norito::json::from_value::<$ty>(value.clone()).expect(concat!(
+                    "canonical ",
+                    $label,
+                    " must decode"
+                ));
+                let mut unknown = value;
+                unknown
+                    .as_object_mut()
+                    .expect(concat!($label, " JSON object"))
+                    .insert("retired_v0".to_owned(), norito::json::Value::from(true));
+                norito::json::from_value::<$ty>(unknown)
+                    .expect_err(concat!($label, " must reject unknown fields"));
+            }};
+        }
+
+        let operation =
+            norito::json::to_value(&StateMutationOperation::Delete).expect("serialize operation");
+        assert_closed_value!(
+            operation.clone(),
+            StateMutationOperation,
+            "state mutation operation"
+        );
+        let encryption = norito::json::to_value(&SoraStateEncryptionV1::ClientCiphertext)
+            .expect("serialize state encryption");
+        let governance_tx_hash = Hash::new(b"governance");
+        let mut state_fields = norito::json::Map::new();
+        state_fields.insert(
+            "service_name".to_owned(),
+            norito::json::Value::from("web_portal"),
+        );
+        state_fields.insert(
+            "binding_name".to_owned(),
+            norito::json::Value::from("private_state"),
+        );
+        state_fields.insert("key".to_owned(), norito::json::Value::from("/state/1"));
+        state_fields.insert("operation".to_owned(), operation);
+        state_fields.insert("value_size_bytes".to_owned(), norito::json::Value::Null);
+        state_fields.insert("value_payload_hex".to_owned(), norito::json::Value::Null);
+        state_fields.insert("encryption".to_owned(), encryption);
+        state_fields.insert(
+            "governance_tx_hash".to_owned(),
+            norito::json::to_value(&governance_tx_hash).expect("serialize governance hash"),
+        );
+        state_fields.insert(
+            "fhe_input_admission_proof".to_owned(),
+            norito::json::Value::Null,
+        );
+        let state = norito::json::Value::Object(state_fields);
+        assert_closed_value!(
+            state.clone(),
+            StateMutationRequest,
+            "state mutation payload"
+        );
+        for field in [
+            "value_size_bytes",
+            "value_payload_hex",
+            "fhe_input_admission_proof",
+        ] {
+            let mut missing = state.clone();
+            assert!(
+                missing
+                    .as_object_mut()
+                    .expect("state mutation JSON object")
+                    .remove(field)
+                    .is_some()
+            );
+            norito::json::from_value::<StateMutationRequest>(missing)
+                .expect_err("state mutation payload must reject an omitted nullable key");
+
+            let mut explicit_null = state.clone();
+            explicit_null
+                .as_object_mut()
+                .expect("state mutation JSON object")
+                .insert(field.to_owned(), norito::json::Value::Null);
+            norito::json::from_value::<StateMutationRequest>(explicit_null)
+                .expect("state mutation payload must accept an explicit null key");
+        }
+
+        assert_closed_value!(
+            norito::json!({
+                "service_name": "web_portal",
+                "config_name": "runtime",
+                "value_json": {"workers": 2_u64}
+            }),
+            ServiceConfigSetRequest,
+            "service config set payload"
+        );
+        assert_closed_value!(
+            norito::json!({
+                "service_name": "web_portal",
+                "config_name": "runtime"
+            }),
+            ServiceConfigDeleteRequest,
+            "service config delete payload"
+        );
+        let secret = SecretEnvelopeV1 {
+            schema_version: iroha_data_model::soracloud::SECRET_ENVELOPE_VERSION_V1,
+            encryption: SecretEnvelopeEncryptionV1::ClientCiphertext,
+            key_id: "kms/test".to_owned(),
+            key_version: std::num::NonZeroU32::new(1).expect("non-zero key version"),
+            nonce: vec![1],
+            ciphertext: vec![2],
+            commitment: Hash::new(b"secret"),
+            aad_digest: None,
+        };
+        let mut secret_set = norito::json::Map::new();
+        secret_set.insert(
+            "service_name".to_owned(),
+            norito::json::Value::from("web_portal"),
+        );
+        secret_set.insert(
+            "secret_name".to_owned(),
+            norito::json::Value::from("api_token"),
+        );
+        secret_set.insert(
+            "secret".to_owned(),
+            norito::json::to_value(&secret).expect("serialize secret envelope"),
+        );
+        assert_closed_value!(
+            norito::json::Value::Object(secret_set),
+            ServiceSecretSetRequest,
+            "service secret set payload"
+        );
+        assert_closed_value!(
+            norito::json!({
+                "service_name": "web_portal",
+                "secret_name": "api_token"
+            }),
+            ServiceSecretDeleteRequest,
+            "service secret delete payload"
+        );
+    }
+    #[test]
+    fn signed_soracloud_mutation_graph_rejects_unknown_fields() {
+        macro_rules! assert_unknown_rejected {
+            ($($ty:ty),+ $(,)?) => {
+                $(
+                    let error = norito::json::from_str::<$ty>(r#"{"retired_v0":true}"#)
+                        .expect_err(concat!(stringify!($ty), " must reject unknown fields"));
+                    assert!(
+                        matches!(
+                            error,
+                            norito::json::Error::UnknownField { ref field }
+                                if field == "retired_v0"
+                        ),
+                        "{} reported the wrong error: {error}",
+                        stringify!($ty)
+                    );
+                )+
+            };
+        }
+        assert_unknown_rejected!(
+            SignedBundleRequest,
+            SignedAppInfraRequest,
+            RollbackPayload,
+            SignedRollbackRequest,
+            StateMutationOperation,
+            StateMutationRequest,
+            SignedStateMutationRequest,
+            ServiceConfigSetRequest,
+            SignedServiceConfigSetRequest,
+            ServiceConfigDeleteRequest,
+            SignedServiceConfigDeleteRequest,
+            ServiceSecretSetRequest,
+            SignedServiceSecretSetRequest,
+            ServiceSecretDeleteRequest,
+            SignedServiceSecretDeleteRequest,
+            RolloutAdvancePayload,
+            SignedRolloutAdvanceRequest,
+            AgentDeployPayload,
+            SignedAgentDeployRequest,
+            AgentLeaseRenewPayload,
+            SignedAgentLeaseRenewRequest,
+            HfDeployPayload,
+            SignedHfDeployRequest,
+            HfLeaseLeavePayload,
+            SignedHfLeaseLeaveRequest,
+            HfLeaseRenewPayload,
+            SignedHfLeaseRenewRequest,
+            ModelHostAdvertisePayload,
+            SignedModelHostAdvertiseRequest,
+            ModelHostHeartbeatPayload,
+            SignedModelHostHeartbeatRequest,
+            ModelHostWithdrawPayload,
+            SignedModelHostWithdrawRequest,
+            AgentRestartPayload,
+            SignedAgentRestartRequest,
+            AgentPolicyRevokePayload,
+            SignedAgentPolicyRevokeRequest,
+            AgentWalletSpendPayload,
+            SignedAgentWalletSpendRequest,
+            AgentWalletApprovePayload,
+            SignedAgentWalletApproveRequest,
+            AgentMessageSendPayload,
+            SignedAgentMessageSendRequest,
+            AgentMessageAckPayload,
+            SignedAgentMessageAckRequest,
+            AgentArtifactAllowPayload,
+            SignedAgentArtifactAllowRequest,
+            AgentAutonomyRunPayload,
+            SignedAgentAutonomyRunRequest,
+            AgentAutonomyFinalizeRequest,
+            FheJobRunPayload,
+            SignedFheJobRunRequest,
+            TrainingJobStartPayload,
+            SignedTrainingJobStartRequest,
+            TrainingJobCheckpointPayload,
+            SignedTrainingJobCheckpointRequest,
+            TrainingJobRetryPayload,
+            SignedTrainingJobRetryRequest,
+            ModelWeightRegisterPayload,
+            SignedModelWeightRegisterRequest,
+            ModelWeightPromotePayload,
+            SignedModelWeightPromoteRequest,
+            ModelWeightRollbackPayload,
+            SignedModelWeightRollbackRequest,
+            ModelArtifactRegisterPayload,
+            SignedModelArtifactRegisterRequest,
+            UploadedModelRegisterPayload,
+            SignedUploadedModelRegisterRequest,
+            DecryptionRequestPayload,
+            SignedDecryptionRequest,
+            SignedCiphertextQueryRequest,
+            PrivateUploadedModelQuantizedCpuModelDto,
+            PrivateUploadedModelExecuteRequest,
+        );
+    }
+    #[test]
+    fn signed_soracloud_mutation_graph_requires_explicit_optional_keys() {
+        macro_rules! assert_required_nullable {
+            ($value:expr, $ty:ty, [$($field:literal),+ $(,)?], $label:literal) => {{
+                let canonical = norito::json::to_value(&$value)
+                    .expect(concat!("serialize canonical ", $label));
+                norito::json::from_value::<$ty>(canonical.clone())
+                    .expect(concat!("canonical ", $label, " must decode"));
+                for field in [$($field),+] {
+                    assert!(
+                        canonical.get(field).is_some_and(norito::json::Value::is_null),
+                        "{} must serialize `{field}` as explicit null",
+                        $label
+                    );
+                    let mut missing = canonical.clone();
+                    missing
+                        .as_object_mut()
+                        .expect(concat!($label, " JSON object"))
+                        .remove(field);
+                    norito::json::from_value::<$ty>(missing)
+                        .expect_err(concat!($label, " must reject an omitted nullable key"));
+
+                    let mut explicit_null = canonical.clone();
+                    explicit_null
+                        .as_object_mut()
+                        .expect(concat!($label, " JSON object"))
+                        .insert(field.to_owned(), norito::json::Value::Null);
+                    norito::json::from_value::<$ty>(explicit_null)
+                        .expect(concat!($label, " must accept explicit null"));
+                }
+            }};
+        }
+
+        let agent_deploy = AgentDeployPayload {
+            manifest: fixture_agent_manifest(),
+            lease_ticks: 120,
+            autonomy_budget_units: 500,
+        };
+        let mut missing_budget =
+            norito::json::to_value(&agent_deploy).expect("serialize agent deploy payload");
+        missing_budget
+            .as_object_mut()
+            .expect("agent deploy payload object")
+            .remove("autonomy_budget_units");
+        norito::json::from_value::<AgentDeployPayload>(missing_budget)
+            .expect_err("agent deployment must not infer an autonomy budget");
+
+        let hf_deploy = HfDeployPayload {
+            repo_id: "openai/gpt-oss".to_owned(),
+            revision: "0123456789abcdef0123456789abcdef01234567".to_owned(),
+            model_name: "gpt_oss_20b".to_owned(),
+            service_name: "vision_portal".to_owned(),
+            apartment_name: None,
+            storage_class: StorageClass::Warm,
+            lease_term_ms: 604_800_000,
+            lease_asset_definition_id: hf_shared_lease_asset_definition(),
+            base_fee: "0.0000000001".parse().expect("canonical quantity"),
+        };
+        assert_required_nullable!(
+            hf_deploy.clone(),
+            HfDeployPayload,
+            ["apartment_name"],
+            "HF deploy payload"
+        );
+        assert_required_nullable!(
+            HfLeaseLeavePayload {
+                repo_id: hf_deploy.repo_id.clone(),
+                revision: hf_deploy.revision.clone(),
+                storage_class: StorageClass::Warm,
+                lease_term_ms: hf_deploy.lease_term_ms,
+                service_name: None,
+                apartment_name: None,
+            },
+            HfLeaseLeavePayload,
+            ["service_name", "apartment_name"],
+            "HF lease-leave payload"
+        );
+        let hf_renew = HfLeaseRenewPayload {
+            repo_id: hf_deploy.repo_id.clone(),
+            revision: hf_deploy.revision.clone(),
+            model_name: hf_deploy.model_name.clone(),
+            service_name: hf_deploy.service_name.clone(),
+            apartment_name: None,
+            storage_class: hf_deploy.storage_class,
+            lease_term_ms: hf_deploy.lease_term_ms,
+            lease_asset_definition_id: hf_deploy.lease_asset_definition_id.clone(),
+            base_fee: hf_deploy.base_fee.clone(),
+        };
+        assert_required_nullable!(
+            hf_renew.clone(),
+            HfLeaseRenewPayload,
+            ["apartment_name"],
+            "HF lease-renew payload"
+        );
+
+        let key_pair = checked_test_keypair(0xE1);
+        let provenance = signed_generated_service_provenance(&fixture_bundle("1.0.0"), &key_pair);
+        assert_required_nullable!(
+            SignedHfDeployRequest {
+                payload: hf_deploy,
+                provenance: provenance.clone(),
+                generated_service_provenance: None,
+                generated_apartment_provenance: None,
+            },
+            SignedHfDeployRequest,
+            [
+                "generated_service_provenance",
+                "generated_apartment_provenance",
+            ],
+            "signed HF deploy request"
+        );
+        assert_required_nullable!(
+            SignedHfLeaseRenewRequest {
+                payload: hf_renew,
+                provenance,
+                generated_service_provenance: None,
+                generated_apartment_provenance: None,
+            },
+            SignedHfLeaseRenewRequest,
+            [
+                "generated_service_provenance",
+                "generated_apartment_provenance",
+            ],
+            "signed HF lease-renew request"
+        );
+        assert_required_nullable!(
+            AgentPolicyRevokePayload {
+                apartment_name: "ops_agent".to_owned(),
+                capability: "agent.autonomy.run".to_owned(),
+                reason: None,
+            },
+            AgentPolicyRevokePayload,
+            ["reason"],
+            "agent policy-revoke payload"
+        );
+        assert_required_nullable!(
+            AgentArtifactAllowPayload {
+                apartment_name: "ops_agent".to_owned(),
+                artifact_hash: "hash:ABCD0123#01".to_owned(),
+                provenance_hash: None,
+            },
+            AgentArtifactAllowPayload,
+            ["provenance_hash"],
+            "agent artifact-allow payload"
+        );
+        assert_required_nullable!(
+            AgentAutonomyRunPayload {
+                apartment_name: "ops_agent".to_owned(),
+                artifact_hash: "hash:ABCD0123#01".to_owned(),
+                provenance_hash: None,
+                budget_units: 120,
+                run_label: "nightly".to_owned(),
+                workflow_input_json: None,
+            },
+            AgentAutonomyRunPayload,
+            ["provenance_hash", "workflow_input_json"],
+            "agent autonomy-run payload"
+        );
+        assert_required_nullable!(
+            ModelWeightRegisterPayload {
+                service_name: "web_portal".to_owned(),
+                model_name: "model-1".to_owned(),
+                weight_version: "1.0.0".to_owned(),
+                training_job_id: "job-1".to_owned(),
+                parent_version: None,
+                weight_artifact_hash: Hash::new(b"weight-artifact"),
+                dataset_ref: "dataset://synthetic/v2".to_owned(),
+                training_config_hash: Hash::new(b"train-config"),
+                reproducibility_hash: Hash::new(b"repro"),
+                provenance_attestation_hash: Hash::new(b"attestation"),
+            },
+            ModelWeightRegisterPayload,
+            ["parent_version"],
+            "model-weight register payload"
+        );
+        assert_required_nullable!(
+            PrivateUploadedModelExecuteRequest {
+                service_name: "private_model_host".to_owned(),
+                weight_version: "v1".to_owned(),
+                model_id: None,
+                model_name: None,
+                bundle_root: None,
+                policy_id: "policy-1".to_owned(),
+                decryption_request_id: None,
+                model: PrivateUploadedModelQuantizedCpuModelDto {
+                    input_len: 2,
+                    output_len: 1,
+                    weights_i8: vec![3, -2],
+                    bias_i32: vec![1],
+                    output_shift: 1,
+                    output_min: -16,
+                    output_max: 16,
+                },
+                plaintext_input_i32: vec![5, -3],
+                input_artifact: sample_private_model_artifact_ref("input", 0xD1),
+                output_artifact: sample_private_model_artifact_ref("output", 0xD2),
+                emitted_sequence: 17,
+            },
+            PrivateUploadedModelExecuteRequest,
+            [
+                "model_id",
+                "model_name",
+                "bundle_root",
+                "decryption_request_id",
+            ],
+            "private uploaded-model execute request"
+        );
+    }
+    #[test]
+    fn rollout_response_mirrors_are_closed_and_require_explicit_baseline() {
+        macro_rules! assert_closed {
+            ($value:expr, $ty:ty, $label:literal) => {{
+                let mut value =
+                    norito::json::to_value(&$value).expect(concat!("serialize canonical ", $label));
+                norito::json::from_value::<$ty>(value.clone()).expect(concat!(
+                    "canonical ",
+                    $label,
+                    " must decode"
+                ));
+                value
+                    .as_object_mut()
+                    .expect(concat!($label, " JSON object"))
+                    .insert("retired_v0".to_owned(), norito::json::Value::from(true));
+                norito::json::from_value::<$ty>(value)
+                    .expect_err(concat!($label, " must reject unknown fields"));
+            }};
+        }
+        assert_closed!(SoracloudAction::Deploy, SoracloudAction, "Soracloud action");
+        assert_closed!(RolloutStage::Canary, RolloutStage, "rollout stage");
+
+        let state = RolloutRuntimeState {
+            rollout_handle: "web_portal:rollout:2".to_owned(),
+            baseline_version: None,
+            candidate_version: "2.0.0".to_owned(),
+            canary_percent: 10,
+            traffic_percent: 10,
+            stage: RolloutStage::Canary,
+            health_failures: 0,
+            max_health_failures: 3,
+            health_window_secs: 30,
+            created_sequence: 1,
+            updated_sequence: 1,
+        };
+        assert_closed!(state.clone(), RolloutRuntimeState, "rollout runtime state");
+        let canonical = norito::json::to_value(&state).expect("serialize rollout runtime state");
+        assert!(
+            canonical
+                .get("baseline_version")
+                .is_some_and(norito::json::Value::is_null)
+        );
+        let mut missing = canonical.clone();
+        assert!(
+            missing
+                .as_object_mut()
+                .expect("rollout runtime state JSON object")
+                .remove("baseline_version")
+                .is_some()
+        );
+        norito::json::from_value::<RolloutRuntimeState>(missing)
+            .expect_err("rollout runtime state must reject omitted baseline_version");
+        let mut explicit_null = canonical;
+        explicit_null
+            .as_object_mut()
+            .expect("rollout runtime state JSON object")
+            .insert("baseline_version".to_owned(), norito::json::Value::Null);
+        norito::json::from_value::<RolloutRuntimeState>(explicit_null)
+            .expect("rollout runtime state must accept explicit null baseline_version");
+    }
+    #[test]
+    fn service_control_response_types_reject_unknown_fields() {
+        macro_rules! assert_unknown_rejected {
+            ($($ty:ty),+ $(,)?) => {
+                $(
+                    let error = norito::json::from_str::<$ty>(r#"{"retired_v0":true}"#)
+                        .expect_err(concat!(stringify!($ty), " must reject unknown fields"));
+                    assert!(
+                        matches!(
+                            error,
+                            norito::json::Error::UnknownField { ref field }
+                                if field == "retired_v0"
+                        ),
+                        "{} reported the wrong error: {error}",
+                        stringify!($ty)
+                    );
+                )+
+            };
+        }
+        assert_unknown_rejected!(
+            RolloutResponse,
+            StateMutationResponse,
+            ServiceMaterialMutationOperation,
+            ServiceConfigMutationResponse,
+            ServiceSecretMutationResponse,
+            ServiceConfigStatusQuery,
+            ServiceConfigStatusEntry,
+            ServiceConfigStatusResponse,
+            ServiceSecretStatusQuery,
+            ServiceSecretStatusEntry,
+            ServiceSecretStatusResponse,
+            FheJobRunResponse,
+            DecryptionRequestResponse,
+            CiphertextQueryResponse,
+            MutationResponse,
+            ControlPlaneSnapshot,
+            ControlPlaneServiceSnapshot,
+            ControlPlaneServiceRevision,
+            ControlPlaneAuditEvent,
+        );
+    }
+    #[test]
+    fn soracloud_torii_json_graph_rejects_unknown_fields() {
+        macro_rules! assert_unknown_rejected {
+            ($($ty:ty),+ $(,)?) => {
+                $(
+                    let error = norito::json::from_str::<$ty>(r#"{"retired_v0":true}"#)
+                        .expect_err(concat!(stringify!($ty), " must reject unknown fields"));
+                    assert!(
+                        matches!(
+                            error,
+                            norito::json::Error::UnknownField { ref field }
+                                if field == "retired_v0"
+                        ),
+                        "{} reported the wrong error: {error}",
+                        stringify!($ty)
+                    );
+                )+
+            };
+        }
+
+        assert_unknown_rejected!(
+            AgentApartmentAction,
+            AgentRuntimeStatus,
+            TrainingJobAction,
+            TrainingJobStatus,
+            ModelWeightAction,
+            ModelArtifactAction,
+            UploadedModelAction,
+            AppInfraStatusQuery,
+            TrainingJobMutationResponse,
+            TrainingJobStatusResponse,
+            TrainingJobStatusEntry,
+            ModelWeightMutationResponse,
+            ModelWeightStatusResponse,
+            ModelWeightStatusEntry,
+            ModelWeightVersionEntry,
+            ModelArtifactMutationResponse,
+            ModelArtifactStatusResponse,
+            ModelArtifactStatusEntry,
+            UploadedModelStatusResponse,
+            UploadedModelEncryptionRecipientResponse,
+            PrivateUploadedModelExecuteResponse,
+            PrivateUploadedModelReceiptQuery,
+            PrivateUploadedModelReceiptListResponse,
+            UploadedModelMutationResponse,
+            HfSharedLeaseStatusResponse,
+            HfSharedLeaseMutationResponse,
+            ModelHostMutationAction,
+            ModelHostStatusResponse,
+            ModelHostMutationResponse,
+            HealthComplianceReportQuery,
+            TrainingJobStatusQuery,
+            ModelWeightStatusQuery,
+            ModelArtifactStatusQuery,
+            UploadedModelStatusQuery,
+            HfSharedLeaseStatusQuery,
+            ModelHostStatusQuery,
+            AgentAutonomyStatusQuery,
+            AgentStatusQuery,
+            AgentMailboxStatusQuery,
+            HealthComplianceReportResponse,
+            HealthAccessAuditEntry,
+            HealthJurisdictionStat,
+            HealthDataFlowAttestation,
+            HealthPolicyDiffEntry,
+            SoracloudPublicServiceDiscoveryV1,
+            SoracloudPublicServiceDiscoveryRegistryV1,
+            ServicePublicDiscoveryResponse,
+            CiphertextRuntimeRecord,
+            AgentMutationResponse,
+            AgentStatusResponse,
+            AgentApartmentStatusEntry,
+            AgentWalletMutationResponse,
+            AgentMailboxMutationResponse,
+            AgentMailboxStatusResponse,
+            AgentMailboxMessageEntry,
+            SoracloudMutationDraftResponse,
+            SoracloudTxInstr,
+        );
+    }
+    #[test]
+    fn soracloud_torii_body_keys_are_explicit_and_query_absence_is_semantic() {
+        macro_rules! assert_explicit_body_keys {
+            ($value:expr, $ty:ty, nulls = [$($nullable:literal),* $(,)?], collections = [$($collection:literal),* $(,)?], $label:literal) => {{
+                let canonical = norito::json::to_value(&$value)
+                    .expect(concat!("serialize canonical ", $label));
+                norito::json::from_value::<$ty>(canonical.clone())
+                    .expect(concat!("canonical ", $label, " must decode"));
+                $(
+                    assert!(
+                        canonical
+                            .get($nullable)
+                            .is_some_and(norito::json::Value::is_null),
+                        "{} must serialize `{}` as explicit null",
+                        $label,
+                        $nullable
+                    );
+                    let mut missing = canonical.clone();
+                    missing
+                        .as_object_mut()
+                        .expect(concat!($label, " JSON object"))
+                        .remove($nullable);
+                    norito::json::from_value::<$ty>(missing)
+                        .expect_err(concat!($label, " must reject an omitted nullable key"));
+                )*
+                $(
+                    assert!(
+                        canonical
+                            .get($collection)
+                            .and_then(norito::json::Value::as_array)
+                            .is_some_and(Vec::is_empty),
+                        "{} must serialize `{}` as an explicit empty list",
+                        $label,
+                        $collection
+                    );
+                    let mut missing = canonical.clone();
+                    missing
+                        .as_object_mut()
+                        .expect(concat!($label, " JSON object"))
+                        .remove($collection);
+                    norito::json::from_value::<$ty>(missing)
+                        .expect_err(concat!($label, " must reject an omitted collection key"));
+                )*
+            }};
+        }
+
+        assert_explicit_body_keys!(
+            ModelWeightStatusEntry {
+                service_name: "model_host".to_owned(),
+                model_name: "model-1".to_owned(),
+                current_version: None,
+                version_count: 0,
+                versions: Vec::new(),
+            },
+            ModelWeightStatusEntry,
+            nulls = ["current_version"],
+            collections = ["versions"],
+            "model-weight status entry"
+        );
+        assert_explicit_body_keys!(
+            HealthComplianceReportResponse {
+                schema_version: CONTROL_PLANE_SCHEMA_VERSION,
+                service_name: None,
+                jurisdiction_tag: None,
+                generated_at_sequence: 0,
+                total_access_events: 0,
+                break_glass_events: 0,
+                non_break_glass_events: 0,
+                consent_evidence_present_events: 0,
+                consent_evidence_coverage_bps: 0,
+                recent_access_events: Vec::new(),
+                jurisdiction_stats: Vec::new(),
+                data_flow_attestations: Vec::new(),
+                policy_diff_history: Vec::new(),
+            },
+            HealthComplianceReportResponse,
+            nulls = ["service_name", "jurisdiction_tag"],
+            collections = [
+                "recent_access_events",
+                "jurisdiction_stats",
+                "data_flow_attestations",
+                "policy_diff_history",
+            ],
+            "health compliance report"
+        );
+        assert_explicit_body_keys!(
+            AgentWalletMutationResponse {
+                action: AgentApartmentAction::PolicyRevoked,
+                apartment_name: "ops_agent".to_owned(),
+                sequence: 1,
+                manifest_hash: Hash::new(b"agent manifest"),
+                status: AgentRuntimeStatus::Running,
+                request_id: None,
+                asset_definition: None,
+                amount: None,
+                day_bucket: None,
+                day_spent: None,
+                capability: None,
+                reason: None,
+                pending_request_count: 0,
+                revoked_policy_capability_count: 1,
+                audit_event_count: 1,
+                signed_by: "signer".to_owned(),
+            },
+            AgentWalletMutationResponse,
+            nulls = [
+                "request_id",
+                "asset_definition",
+                "amount",
+                "day_bucket",
+                "day_spent",
+                "capability",
+                "reason",
+            ],
+            collections = [],
+            "agent wallet mutation response"
+        );
+        assert_explicit_body_keys!(
+            PrivateUploadedModelReceiptListResponse {
+                schema_version: iroha_data_model::soracloud::SORA_PRIVATE_UPLOADED_MODEL_EXECUTION_RECEIPT_VERSION_V1,
+                receipts: Vec::new(),
+                total: None,
+                returned_items: 0,
+                remaining_items: 0,
+                has_more: false,
+                count_mode: "bounded".to_owned(),
+                continue_cursor: None,
+            },
+            PrivateUploadedModelReceiptListResponse,
+            nulls = ["total", "continue_cursor"],
+            collections = ["receipts"],
+            "private uploaded-model receipt list"
+        );
+
+        let empty_query = norito::json::from_str::<PrivateUploadedModelReceiptQuery>("{}")
+            .expect("an empty private receipt query has semantic filter absence");
+        assert!(empty_query.receipt_id.is_none());
+        assert!(empty_query.service_name.is_none());
+        assert!(empty_query.model_id.is_none());
+        assert!(empty_query.weight_version.is_none());
+        assert!(empty_query.limit.is_none());
+        assert!(empty_query.count_mode.is_none());
+
+        let partial_query =
+            norito::json::from_str::<PrivateUploadedModelReceiptQuery>(r#"{"limit":10}"#)
+                .expect("a partial private receipt query must decode present filters only");
+        assert_eq!(partial_query.limit, Some(10));
+        let unknown =
+            norito::json::from_str::<PrivateUploadedModelReceiptQuery>(r#"{"retired_v0":true}"#)
+                .expect_err("a private receipt query must reject unknown keys");
+        assert!(
+            matches!(
+                unknown,
+                norito::json::Error::UnknownField { ref field } if field == "retired_v0"
+            ),
+            "unexpected private receipt query error: {unknown}"
+        );
+        let invalid_count = norito::json::from_str::<PrivateUploadedModelReceiptQuery>(
+            r#"{"count_mode":"surprise"}"#,
+        )
+        .expect("the query decoder leaves semantic count validation to the handler");
+        private_uploaded_model_receipt_count_mode(invalid_count.count_mode.as_deref())
+            .expect_err("an unknown private receipt count_mode must be rejected");
+    }
+    #[test]
+    fn service_control_response_keys_are_explicit() {
+        macro_rules! assert_required_nullable {
+            ($value:expr, $ty:ty, [$($field:literal),+ $(,)?], $label:literal) => {{
+                let canonical = norito::json::to_value(&$value)
+                    .expect(concat!("serialize canonical ", $label));
+                norito::json::from_value::<$ty>(canonical.clone())
+                    .expect(concat!("canonical ", $label, " must decode"));
+                for field in [$($field),+] {
+                    let mut missing = canonical.clone();
+                    assert!(
+                        missing
+                            .as_object_mut()
+                            .expect(concat!($label, " JSON object"))
+                            .remove(field)
+                            .is_some()
+                    );
+                    norito::json::from_value::<$ty>(missing)
+                        .expect_err(concat!($label, " must reject an omitted nullable key"));
+
+                    let mut explicit_null = canonical.clone();
+                    explicit_null
+                        .as_object_mut()
+                        .expect(concat!($label, " JSON object"))
+                        .insert(field.to_owned(), norito::json::Value::Null);
+                    norito::json::from_value::<$ty>(explicit_null)
+                        .expect(concat!($label, " must accept an explicit null key"));
+                }
+            }};
+        }
+        macro_rules! assert_required_collection {
+            ($value:expr, $ty:ty, [$($field:literal),+ $(,)?], $label:literal) => {{
+                let canonical = norito::json::to_value(&$value)
+                    .expect(concat!("serialize canonical ", $label));
+                norito::json::from_value::<$ty>(canonical.clone())
+                    .expect(concat!("canonical ", $label, " must decode"));
+                for field in [$($field),+] {
+                    let mut missing = canonical.clone();
+                    assert!(
+                        missing
+                            .as_object_mut()
+                            .expect(concat!($label, " JSON object"))
+                            .remove(field)
+                            .is_some()
+                    );
+                    norito::json::from_value::<$ty>(missing)
+                        .expect_err(concat!($label, " must reject an omitted collection key"));
+
+                    let mut null = canonical.clone();
+                    null.as_object_mut()
+                        .expect(concat!($label, " JSON object"))
+                        .insert(field.to_owned(), norito::json::Value::Null);
+                    norito::json::from_value::<$ty>(null)
+                        .expect_err(concat!($label, " must reject a null collection key"));
+                }
+            }};
+        }
+
+        let config_mutation = ServiceConfigMutationResponse {
+            action: SoracloudAction::ConfigMutation,
+            service_name: "web_portal".to_owned(),
+            config_name: "runtime".to_owned(),
+            operation: ServiceMaterialMutationOperation::Delete,
+            sequence: 1,
+            current_version: "1.0.0".to_owned(),
+            config_generation: 1,
+            config_entry_count: 0,
+            value_hash: None,
+            audit_event_count: 1,
+            signed_by: "signer".to_owned(),
+        };
+        assert_required_nullable!(
+            config_mutation,
+            ServiceConfigMutationResponse,
+            ["value_hash"],
+            "config mutation response"
+        );
+        let secret_mutation = ServiceSecretMutationResponse {
+            action: SoracloudAction::SecretMutation,
+            service_name: "web_portal".to_owned(),
+            secret_name: "api_token".to_owned(),
+            operation: ServiceMaterialMutationOperation::Delete,
+            sequence: 1,
+            current_version: "1.0.0".to_owned(),
+            secret_generation: 1,
+            secret_entry_count: 0,
+            encryption: None,
+            key_id: None,
+            key_version: None,
+            commitment: None,
+            ciphertext_bytes: None,
+            audit_event_count: 1,
+            signed_by: "signer".to_owned(),
+        };
+        assert_required_nullable!(
+            secret_mutation,
+            ServiceSecretMutationResponse,
+            [
+                "encryption",
+                "key_id",
+                "key_version",
+                "commitment",
+                "ciphertext_bytes",
+            ],
+            "secret mutation response"
+        );
+        let mutation = MutationResponse {
+            action: SoracloudAction::Deploy,
+            service_name: "web_portal".to_owned(),
+            previous_version: None,
+            current_version: "1.0.0".to_owned(),
+            sequence: 1,
+            service_manifest_hash: Hash::new(b"service"),
+            container_manifest_hash: Hash::new(b"container"),
+            revision_count: 1,
+            audit_event_count: 1,
+            signed_by: "signer".to_owned(),
+            rollout_handle: None,
+            rollout_stage: None,
+            rollout_percent: None,
+        };
+        assert_required_nullable!(
+            mutation,
+            MutationResponse,
+            [
+                "previous_version",
+                "rollout_handle",
+                "rollout_stage",
+                "rollout_percent",
+            ],
+            "service mutation response"
+        );
+
+        let bundle = fixture_bundle("1.0.0");
+        let deployment = fixture_service_deployment(&bundle);
+        let audit = fixture_service_deploy_audit_event(&bundle);
+        let revision =
+            deployment_bundle_to_control_plane_revision(&deployment, &bundle, Some(&audit), None)
+                .expect("valid fixture revision should project");
+        assert_required_nullable!(
+            revision.clone(),
+            ControlPlaneServiceRevision,
+            [
+                "route_host",
+                "route_path_prefix",
+                "base_url",
+                "healthcheck_url",
+                "public_discovery_content_cid",
+                "public_discovery_url",
+                "public_discovery_cid_host_url",
+                "healthcheck_path",
+            ],
+            "control-plane service revision"
+        );
+        assert_required_collection!(
+            revision,
+            ControlPlaneServiceRevision,
+            [
+                "state_bindings",
+                "lease_volumes",
+                "required_config_names",
+                "required_secret_names",
+                "config_exports",
+            ],
+            "control-plane service revision"
+        );
+
+        let service = ControlPlaneServiceSnapshot {
+            service_name: "web_portal".to_owned(),
+            current_version: "1.0.0".to_owned(),
+            revision_count: 1,
+            config_generation: 0,
+            secret_generation: 0,
+            config_entry_count: 0,
+            secret_entry_count: 0,
+            quota_class: None,
+            service_lease_status: None,
+            lease_expires_sequence: None,
+            prepaid_runtime_balance: None,
+            remaining_runtime_balance: None,
+            public_discovery_content_cid: None,
+            public_discovery_url: None,
+            public_discovery_cid_host_url: None,
+            latest_revision: None,
+            active_rollout: None,
+            last_rollout: None,
+        };
+        assert_required_nullable!(
+            service.clone(),
+            ControlPlaneServiceSnapshot,
+            [
+                "quota_class",
+                "service_lease_status",
+                "lease_expires_sequence",
+                "prepaid_runtime_balance",
+                "remaining_runtime_balance",
+                "public_discovery_content_cid",
+                "public_discovery_url",
+                "public_discovery_cid_host_url",
+                "latest_revision",
+                "active_rollout",
+                "last_rollout",
+            ],
+            "control-plane service snapshot"
+        );
+        let audit = ControlPlaneAuditEvent {
+            sequence: 1,
+            action: SoracloudAction::Deploy,
+            service_name: "web_portal".to_owned(),
+            from_version: None,
+            to_version: "1.0.0".to_owned(),
+            service_manifest_hash: Hash::new(b"service"),
+            container_manifest_hash: Hash::new(b"container"),
+            binding_name: None,
+            state_key: None,
+            config_name: None,
+            secret_name: None,
+            governance_tx_hash: None,
+            rollout_handle: None,
+            policy_name: None,
+            policy_snapshot_hash: None,
+            jurisdiction_tag: None,
+            consent_evidence_hash: None,
+            break_glass: None,
+            break_glass_reason: None,
+            signed_by: "signer".to_owned(),
+        };
+        assert_required_nullable!(
+            audit.clone(),
+            ControlPlaneAuditEvent,
+            [
+                "from_version",
+                "binding_name",
+                "state_key",
+                "config_name",
+                "secret_name",
+                "governance_tx_hash",
+                "rollout_handle",
+                "policy_name",
+                "policy_snapshot_hash",
+                "jurisdiction_tag",
+                "consent_evidence_hash",
+                "break_glass",
+                "break_glass_reason",
+            ],
+            "control-plane audit event"
+        );
+        let snapshot = ControlPlaneSnapshot {
+            schema_version: CONTROL_PLANE_SCHEMA_VERSION,
+            service_count: 1,
+            audit_event_count: 1,
+            services: vec![service],
+            recent_audit_events: vec![audit],
+        };
+        assert_required_collection!(
+            snapshot,
+            ControlPlaneSnapshot,
+            ["services", "recent_audit_events"],
+            "control-plane snapshot"
+        );
+
+        assert_required_collection!(
+            ServiceConfigStatusResponse {
+                schema_version: CONTROL_PLANE_SCHEMA_VERSION,
+                service_name: "web_portal".to_owned(),
+                current_version: "1.0.0".to_owned(),
+                config_generation: 0,
+                config_entry_count: 0,
+                configs: Vec::new(),
+            },
+            ServiceConfigStatusResponse,
+            ["configs"],
+            "service config status response"
+        );
+        assert_required_collection!(
+            ServiceSecretStatusResponse {
+                schema_version: CONTROL_PLANE_SCHEMA_VERSION,
+                service_name: "web_portal".to_owned(),
+                current_version: "1.0.0".to_owned(),
+                secret_generation: 0,
+                secret_entry_count: 0,
+                secrets: Vec::new(),
+            },
+            ServiceSecretStatusResponse,
+            ["secrets"],
+            "service secret status response"
+        );
+    }
+    #[test]
+    fn rollout_advance_payload_rejects_unknown_fields() {
+        let governance_tx_hash = Hash::new(b"governance");
+        let mut fields = norito::json::Map::new();
+        fields.insert(
+            "service_name".to_owned(),
+            norito::json::Value::from("web_portal"),
+        );
+        fields.insert(
+            "rollout_handle".to_owned(),
+            norito::json::Value::from("web_portal:rollout:2"),
+        );
+        fields.insert("healthy".to_owned(), norito::json::Value::from(true));
+        fields.insert(
+            "promote_to_percent".to_owned(),
+            norito::json::Value::from(100_u64),
+        );
+        fields.insert(
+            "governance_tx_hash".to_owned(),
+            norito::json::to_value(&governance_tx_hash).expect("serialize governance hash"),
+        );
+        let canonical = norito::json::Value::Object(fields);
+        norito::json::from_value::<RolloutAdvancePayload>(canonical.clone())
+            .expect("canonical rollout advance payload must decode");
+
+        let mut missing = canonical.clone();
+        assert!(
+            missing
+                .as_object_mut()
+                .expect("rollout advance payload JSON object")
+                .remove("promote_to_percent")
+                .is_some()
+        );
+        norito::json::from_value::<RolloutAdvancePayload>(missing)
+            .expect_err("omitted rollout promotion target must be rejected");
+
+        let mut null = canonical.clone();
+        null.as_object_mut()
+            .expect("rollout advance payload JSON object")
+            .insert("promote_to_percent".to_owned(), norito::json::Value::Null);
+        assert!(
+            norito::json::from_value::<RolloutAdvancePayload>(null)
+                .expect("explicit null rollout promotion target must decode")
+                .promote_to_percent
+                .is_none()
+        );
+
+        let mut unknown = canonical;
+        unknown
+            .as_object_mut()
+            .expect("rollout advance payload JSON object")
+            .insert("retired_v0".to_owned(), norito::json::Value::from(true));
+        let error = norito::json::from_value::<RolloutAdvancePayload>(unknown)
+            .expect_err("rollout advance payload must reject unknown fields");
+        assert!(
+            matches!(
+                error,
+                norito::json::Error::UnknownField { ref field } if field == "retired_v0"
+            ),
+            "unexpected rollout unknown-field rejection: {error}"
         );
     }
     #[test]
@@ -12409,6 +14791,93 @@ mod tests {
                 .contains("container.resources.cpu_millis exceeds SCR cap")
         );
     }
+    #[test]
+    fn control_plane_revision_fails_closed_without_lifecycle_or_scr_admission_evidence() {
+        let bundle = fixture_bundle("1.0.0");
+        let deployment = fixture_service_deployment(&bundle);
+        let error = deployment_bundle_to_control_plane_revision(&deployment, &bundle, None, None)
+            .expect_err("a revision without lifecycle audit evidence must fail closed");
+        assert_eq!(error.kind, SoracloudErrorKind::Internal);
+        assert!(
+            error
+                .message
+                .contains("no authoritative lifecycle audit event")
+        );
+
+        let mut over_cap_bundle = fixture_bundle("1.0.0");
+        over_cap_bundle.container.resources.cpu_millis =
+            NonZeroU32::new(SCR_HOST_MAX_CPU_MILLIS + 1).expect("non-zero cpu");
+        over_cap_bundle.service.container.manifest_hash = over_cap_bundle.container_manifest_hash();
+        let over_cap_deployment = fixture_service_deployment(&over_cap_bundle);
+        let audit = fixture_service_deploy_audit_event(&over_cap_bundle);
+        let error = deployment_bundle_to_control_plane_revision(
+            &over_cap_deployment,
+            &over_cap_bundle,
+            Some(&audit),
+            None,
+        )
+        .expect_err("an active revision that fails SCR admission must fail closed");
+        assert_eq!(error.kind, SoracloudErrorKind::Internal);
+        assert!(error.message.contains("fails authoritative SCR admission"));
+    }
+    #[test]
+    fn rollout_projection_fails_closed_on_substituted_governance_hash() {
+        use iroha_core::state::World;
+
+        let mut world = World::default();
+        let bundle = fixture_bundle("1.0.0");
+        let service_name = bundle.service.service_name.clone();
+        let rollout_handle = format!("{}:rollout:2", service_name);
+        let rollout = SoraServiceRolloutStateV1 {
+            schema_version: iroha_data_model::soracloud::SORA_SERVICE_ROLLOUT_STATE_VERSION_V1,
+            rollout_handle: rollout_handle.clone(),
+            baseline_version: Some("0.9.0".to_owned()),
+            candidate_version: bundle.service.service_version.clone(),
+            canary_percent: 10,
+            traffic_percent: 10,
+            stage: SoraRolloutStageV1::Canary,
+            health_failures: 0,
+            max_health_failures: 2,
+            health_window_secs: 60,
+            created_sequence: 2,
+            updated_sequence: 2,
+        };
+        let mut deployment = fixture_service_deployment(&bundle);
+        deployment.active_rollout = Some(rollout.clone());
+        deployment.last_rollout = Some(rollout);
+        insert_revision(&mut world, &bundle, service_name.to_string());
+        world
+            .soracloud_service_deployments_mut_for_testing()
+            .insert(service_name.clone(), deployment);
+        let authoritative_governance = Hash::new(b"authoritative rollout governance");
+        let mut audit = fixture_service_deploy_audit_event(&bundle);
+        audit.sequence = 2;
+        audit.action = SoraServiceLifecycleActionV1::Rollout;
+        audit.from_version = Some("0.9.0".to_owned());
+        audit.governance_tx_hash = Some(authoritative_governance);
+        audit.rollout_handle = Some(rollout_handle.clone());
+        world
+            .soracloud_service_audit_events_mut_for_testing()
+            .insert(2, audit);
+        let app = mk_app_state_for_tests_with_world(world);
+        let error = authoritative_rollout_mutation_response(
+            &app,
+            &SoracloudAuditBaseline {
+                service_max: 1,
+                ..SoracloudAuditBaseline::default()
+            },
+            service_name.as_ref(),
+            &rollout_handle,
+            Hash::new(b"substituted rollout governance"),
+        )
+        .expect_err("substituted rollout governance hash must fail closed");
+        assert_eq!(error.kind, SoracloudErrorKind::Conflict);
+        assert!(
+            error
+                .message
+                .contains("does not bind the requested governance_tx_hash")
+        );
+    }
     #[tokio::test]
     async fn resolve_public_local_read_route_uses_authoritative_service_route_state() {
         use iroha_core::state::World;
@@ -12491,6 +14960,7 @@ mod tests {
                         lease_started_sequence: 0,
                         lease_expires_sequence: 100,
                         last_billed_sequence: 0,
+                        egress_reporter_checkpoints: Vec::new(),
                         accounted_egress_bytes: 0,
                         last_status_reason: None,
                     }),
@@ -12623,6 +15093,7 @@ mod tests {
                                 lease_started_sequence: 0,
                                 lease_expires_sequence: 100,
                                 last_billed_sequence: 0,
+                                egress_reporter_checkpoints: Vec::new(),
                                 accounted_egress_bytes: 0,
                                 last_status_reason: None,
                             })
@@ -12711,6 +15182,7 @@ mod tests {
                         lease_started_sequence: 0,
                         lease_expires_sequence: 0,
                         last_billed_sequence: 0,
+                        egress_reporter_checkpoints: Vec::new(),
                         accounted_egress_bytes: 0,
                         last_status_reason: None,
                     }),
@@ -12997,6 +15469,47 @@ mod tests {
             Ok(())
         })
     }
+    #[test]
+    fn health_compliance_projection_fails_closed_without_authoritative_governance() {
+        use iroha_core::state::World;
+
+        let mut world = World::default();
+        let bundle = fixture_bundle("1.0.0");
+        world
+            .soracloud_service_audit_events_mut_for_testing()
+            .insert(
+                1,
+                SoraServiceAuditEventV1 {
+                    schema_version:
+                        iroha_data_model::soracloud::SORA_SERVICE_AUDIT_EVENT_VERSION_V1,
+                    sequence: 1,
+                    action: SoraServiceLifecycleActionV1::DecryptionRequest,
+                    service_name: bundle.service.service_name.clone(),
+                    from_version: None,
+                    to_version: bundle.service.service_version.clone(),
+                    service_manifest_hash: bundle.service_manifest_hash(),
+                    container_manifest_hash: bundle.container_manifest_hash(),
+                    governance_tx_hash: None,
+                    binding_name: Some("patient_records".parse().expect("binding name")),
+                    state_key: Some("/state/health/patient-1".to_owned()),
+                    config_name: None,
+                    secret_name: None,
+                    rollout_handle: None,
+                    policy_name: Some("health_policy".parse().expect("policy name")),
+                    policy_snapshot_hash: Some(Hash::new(b"health policy")),
+                    jurisdiction_tag: Some("us_hipaa".to_owned()),
+                    consent_evidence_hash: None,
+                    break_glass: Some(false),
+                    break_glass_reason: None,
+                    signer: checked_test_keypair(0x74).public_key().clone(),
+                },
+            );
+        let app = mk_app_state_for_tests_with_world(world);
+        let error = authoritative_health_compliance_report(&app, None, None, 20)
+            .expect_err("missing authoritative governance linkage must fail closed");
+        assert_eq!(error.kind, SoracloudErrorKind::Internal);
+        assert!(error.message.contains("missing `governance_tx_hash`"));
+    }
     #[tokio::test]
     async fn health_compliance_report_rate_limit_keys_transport_remote_when_internal_header_missing()
      {
@@ -13138,7 +15651,8 @@ mod tests {
         })
     }
     #[test]
-    fn authoritative_service_public_discovery_reads_world_state() -> Result<(), eyre::Report> {
+    fn authoritative_service_public_discovery_reads_world_state_and_fails_closed_on_substitution()
+    -> Result<(), eyre::Report> {
         use iroha_core::state::World;
         let runtime = test_runtime()?;
         runtime.block_on(async move {
@@ -13165,9 +15679,9 @@ mod tests {
                     .expect("fixture route")
                     .path_prefix
                     .clone(),
-                base_url: "https://web_portal.taira.sora.org/api/v1/".to_owned(),
+                base_url: bundle_base_url(&bundle).expect("fixture base URL"),
                 healthcheck_path: bundle.container.lifecycle.healthcheck_path.clone(),
-                healthcheck_url: Some("https://web_portal.taira.sora.org/api/v1/health".to_owned()),
+                healthcheck_url: bundle_healthcheck_url(&bundle),
                 service_manifest_hash: bundle.service_manifest_hash(),
                 container_manifest_hash: bundle.container_manifest_hash(),
                 deployment_bundle_hash: Hash::new(Encode::encode(&bundle)),
@@ -13177,61 +15691,104 @@ mod tests {
                         .to_owned(),
                 public_discovery_cid_host_url:
                     "https://bafytestpublicdiscovery.sorafs.taira.sora.org/index.json".to_owned(),
-                manifest_digest_hex: "deadbeef".to_owned(),
+                manifest_digest_hex: "de".repeat(32),
                 manifest_id_hex: Some("feedface".to_owned()),
             };
+            let mut substituted_discovery = discovery.clone();
+            substituted_discovery.deployment_bundle_hash = Hash::new(b"substituted bundle");
+            let error = validate_public_service_discovery_for_bundle(
+                &fixture_service_deployment(&bundle),
+                &bundle,
+                &substituted_discovery,
+            )
+            .expect_err("substituted public discovery bundle binding must fail closed");
+            assert_eq!(error.kind, SoracloudErrorKind::Internal);
+            assert!(error.message.contains("does not bind admitted revision"));
+            let historical_bundle = fixture_bundle("0.9.0");
+            let mut historical_discovery = discovery.clone();
+            historical_discovery.service_version =
+                historical_bundle.service.service_version.clone();
+            historical_discovery.service_manifest_hash = historical_bundle.service_manifest_hash();
+            historical_discovery.container_manifest_hash =
+                historical_bundle.container_manifest_hash();
+            historical_discovery.deployment_bundle_hash =
+                Hash::new(Encode::encode(&historical_bundle));
+            historical_discovery.content_cid = "bafytestpublicdiscoveryhistorical".to_owned();
+            historical_discovery.public_discovery_url =
+                "https://taira.sora.org/sorafs/cid/bafytestpublicdiscoveryhistorical/index.json"
+                    .to_owned();
+            historical_discovery.public_discovery_cid_host_url =
+                "https://bafytestpublicdiscoveryhistorical.sorafs.taira.sora.org/index.json"
+                    .to_owned();
             let registry = SoracloudPublicServiceDiscoveryRegistryV1 {
                 schema_version: PUBLIC_SERVICE_DISCOVERY_SCHEMA_VERSION_V1,
                 service_name: service_name.to_string(),
                 current_version: bundle.service.service_version.clone(),
-                revisions: BTreeMap::from([(
-                    bundle.service.service_version.clone(),
-                    discovery.clone(),
-                )]),
+                revisions: BTreeMap::from([
+                    (
+                        historical_bundle.service.service_version.clone(),
+                        historical_discovery,
+                    ),
+                    (bundle.service.service_version.clone(), discovery.clone()),
+                ]),
             };
+            let registry_json = Json::from(
+                norito::json::to_json(&registry)
+                    .expect("registry json should encode")
+                    .as_str(),
+            );
+            let registry_entry = SoraServiceConfigEntryV1 {
+                schema_version: iroha_data_model::soracloud::SORA_SERVICE_CONFIG_ENTRY_VERSION_V1,
+                config_name: PUBLIC_SERVICE_DISCOVERY_CONFIG_NAME.to_string(),
+                value_hash: Hash::new(
+                    norito::json::to_vec(&registry_json).expect("registry json should encode"),
+                ),
+                value_json: registry_json,
+                last_update_sequence: 21,
+            };
+            let mut substituted_registry_entry = registry_entry.clone();
+            substituted_registry_entry.value_hash = Hash::new(b"substituted registry");
+            let error = decode_public_service_discovery_registry(&substituted_registry_entry)
+                .expect_err("substituted public discovery registry hash must fail closed");
+            assert_eq!(error.kind, SoracloudErrorKind::Internal);
+            assert!(error.message.contains("hash does not bind its JSON value"));
             insert_revision(&mut world, &bundle, service_name.as_ref().to_owned());
+            insert_revision(
+                &mut world,
+                &historical_bundle,
+                service_name.as_ref().to_owned(),
+            );
             world
                 .soracloud_service_deployments_mut_for_testing()
                 .insert(
-                service_name.clone(),
-                SoraServiceDeploymentStateV1 {
-                    schema_version:
-                        iroha_data_model::soracloud::SORA_SERVICE_DEPLOYMENT_STATE_VERSION_V1,
-                    service_name: service_name.clone(),
-                    current_service_version: bundle.service.service_version.clone(),
-                    current_service_manifest_hash: bundle.service_manifest_hash(),
-                    current_container_manifest_hash: bundle.container_manifest_hash(),
-                    revision_count: 1,
-                    process_generation: 1,
-                    process_started_sequence: 1,
-                    active_rollout: None,
-                    last_rollout: None,
-                    config_generation: 1,
-                    secret_generation: 0,
-                    service_configs: BTreeMap::from([(
-                        PUBLIC_SERVICE_DISCOVERY_CONFIG_NAME.to_string(),
-                        SoraServiceConfigEntryV1 {
-                            schema_version:
-                                iroha_data_model::soracloud::SORA_SERVICE_CONFIG_ENTRY_VERSION_V1,
-                            config_name: PUBLIC_SERVICE_DISCOVERY_CONFIG_NAME.to_string(),
-                            value_hash: Hash::new(
-                                norito::json::to_vec(&registry)
-                                    .expect("registry json should encode"),
-                            ),
-                            value_json: Json::from(
-                                norito::json::to_json(&registry)
-                                    .expect("registry json should encode")
-                                    .as_str(),
-                            ),
-                            last_update_sequence: 21,
-                        },
-                    )]),
-                    service_secrets: BTreeMap::new(),
-                    fhe_policy_records: BTreeMap::new(),
-                    service_lease: None,
-                    lease_volume_states: Vec::new(),
-                },
-            );
+                    service_name.clone(),
+                    SoraServiceDeploymentStateV1 {
+                        schema_version:
+                            iroha_data_model::soracloud::SORA_SERVICE_DEPLOYMENT_STATE_VERSION_V1,
+                        service_name: service_name.clone(),
+                        current_service_version: bundle.service.service_version.clone(),
+                        current_service_manifest_hash: bundle.service_manifest_hash(),
+                        current_container_manifest_hash: bundle.container_manifest_hash(),
+                        revision_count: 1,
+                        process_generation: 1,
+                        process_started_sequence: 1,
+                        active_rollout: None,
+                        last_rollout: None,
+                        config_generation: 1,
+                        secret_generation: 0,
+                        service_configs: BTreeMap::from([(
+                            PUBLIC_SERVICE_DISCOVERY_CONFIG_NAME.to_string(),
+                            registry_entry,
+                        )]),
+                        service_secrets: BTreeMap::new(),
+                        fhe_policy_records: BTreeMap::new(),
+                        service_lease: None,
+                        lease_volume_states: Vec::new(),
+                    },
+                );
+            world
+                .soracloud_service_audit_events_mut_for_testing()
+                .insert(1, fixture_service_deploy_audit_event(&bundle));
             let app = mk_app_state_for_tests_with_world(world);
             let response =
                 authoritative_service_public_discovery_response(&app, service_name.as_ref(), None)
@@ -13242,6 +15799,16 @@ mod tests {
             assert_eq!(
                 response.discovery.public_discovery_cid_host_url,
                 "https://bafytestpublicdiscovery.sorafs.taira.sora.org/index.json"
+            );
+            let historical_response = authoritative_service_public_discovery_response(
+                &app,
+                service_name.as_ref(),
+                Some("0.9.0"),
+            )
+            .map_err(|err| eyre::eyre!("historical public discovery query failed: {err:?}"))?;
+            assert_eq!(
+                historical_response.discovery.content_cid,
+                "bafytestpublicdiscoveryhistorical"
             );
             let snapshot = control_plane_snapshot(&app, Some(service_name.as_ref()), 10)?;
             assert_eq!(snapshot.services.len(), 1);
@@ -14089,7 +16656,7 @@ mod tests {
         .expect("exact count mode should be accepted");
         assert_eq!(exact_receipts.count_mode, "exact");
         assert_eq!(exact_receipts.total, Some(1));
-        let unknown_mode_receipts = authoritative_private_uploaded_model_receipts_response(
+        let unknown_mode_error = authoritative_private_uploaded_model_receipts_response(
             &receipt_app,
             PrivateUploadedModelReceiptQuery {
                 service_name: Some(service_name.to_string()),
@@ -14098,9 +16665,13 @@ mod tests {
                 ..PrivateUploadedModelReceiptQuery::default()
             },
         )
-        .expect("unknown count mode should fall back to bounded");
-        assert_eq!(unknown_mode_receipts.count_mode, "bounded");
-        assert_eq!(unknown_mode_receipts.total, None);
+        .expect_err("unknown count mode must be rejected");
+        assert!(
+            unknown_mode_error
+                .message
+                .contains("invalid count_mode `surprise`"),
+            "unexpected unknown count-mode error: {unknown_mode_error:?}"
+        );
     }
     #[test]
     fn private_uploaded_model_execute_binds_committed_decryption_request() {
@@ -14442,6 +17013,69 @@ mod tests {
         assert_eq!(encoded, expected);
     }
     #[test]
+    fn fhe_job_and_decryption_payloads_are_closed_and_require_explicit_proof_keys() {
+        let job = fixture_fhe_job_spec();
+        let policy_reference = fixture_fhe_policy_reference();
+        let canonical = norito::json!({
+            "service_name": "health_portal",
+            "binding_name": "private_state",
+            "job": (norito::json::to_value(&job).expect("serialize FHE job spec")),
+            "policy_reference": (norito::json::to_value(&policy_reference)
+                .expect("serialize FHE policy reference")),
+            "public_key_proof": null,
+            "bootstrap_key_zero_refresh_proof": null,
+            "full_bootstrap_execution_proofs": [],
+        });
+        norito::json::from_value::<FheJobRunPayload>(canonical.clone())
+            .expect("canonical FHE job payload must decode");
+        for field in [
+            "public_key_proof",
+            "bootstrap_key_zero_refresh_proof",
+            "full_bootstrap_execution_proofs",
+        ] {
+            let mut missing = canonical.clone();
+            missing
+                .as_object_mut()
+                .expect("FHE job payload object")
+                .remove(field);
+            norito::json::from_value::<FheJobRunPayload>(missing)
+                .expect_err("an omitted FHE proof key must fail");
+        }
+        let mut null_proof_list = canonical.clone();
+        null_proof_list
+            .as_object_mut()
+            .expect("FHE job payload object")
+            .insert(
+                "full_bootstrap_execution_proofs".to_owned(),
+                norito::json::Value::Null,
+            );
+        norito::json::from_value::<FheJobRunPayload>(null_proof_list)
+            .expect_err("a null FHE execution-proof list must fail");
+        let mut unknown_job = canonical;
+        unknown_job
+            .as_object_mut()
+            .expect("FHE job payload object")
+            .insert("legacy_proof".to_owned(), norito::json::Value::Null);
+        norito::json::from_value::<FheJobRunPayload>(unknown_job)
+            .expect_err("an unknown FHE job payload key must fail");
+
+        let mut unknown_decryption = norito::json!({
+            "service_name": "health_portal",
+            "policy": (norito::json::to_value(&fixture_decryption_authority_policy())
+                .expect("serialize decryption policy")),
+            "request": (norito::json::to_value(&fixture_decryption_request())
+                .expect("serialize decryption request")),
+        });
+        norito::json::from_value::<DecryptionRequestPayload>(unknown_decryption.clone())
+            .expect("canonical decryption payload must decode");
+        unknown_decryption
+            .as_object_mut()
+            .expect("decryption payload object")
+            .insert("legacy_request".to_owned(), norito::json::Value::Null);
+        norito::json::from_value::<DecryptionRequestPayload>(unknown_decryption)
+            .expect_err("an unknown decryption payload key must fail");
+    }
+    #[test]
     fn fhe_job_run_signature_rejects_policy_reference_substitution() {
         let payload = FheJobRunPayload {
             service_name: "health_portal".to_owned(),
@@ -14506,13 +17140,13 @@ mod tests {
     fn rollback_signature_payload_layout_is_canonical_tuple() {
         let payload = RollbackPayload {
             service_name: "web_portal".to_owned(),
-            target_version: Some("1.0.0".to_owned()),
+            target_version: "1.0.0".to_owned(),
         };
         let encoded =
             encode_rollback_signature_payload(&payload).expect("encode signature payload");
         let expected = norito::to_bytes(&(
             payload.service_name.as_str(),
-            payload.target_version.as_deref(),
+            payload.target_version.as_str(),
         ))
         .expect("encode canonical tuple");
         assert_eq!(encoded, expected);
@@ -14544,7 +17178,7 @@ mod tests {
         let payload = AgentDeployPayload {
             manifest: manifest.clone(),
             lease_ticks: 120,
-            autonomy_budget_units: Some(500),
+            autonomy_budget_units: 500,
         };
         let encoded =
             encode_agent_deploy_signature_payload(&payload).expect("encode signature payload");
@@ -14646,6 +17280,18 @@ mod tests {
         };
         let value = norito::json::to_value(&snapshot).expect("serialize control-plane snapshot");
         let object = value.as_object().expect("control-plane snapshot object");
+        assert!(
+            object
+                .get("active_rollout")
+                .is_some_and(norito::json::Value::is_null),
+            "inactive rollout state must serialize as explicit null"
+        );
+        assert!(
+            object
+                .get("last_rollout")
+                .is_some_and(norito::json::Value::is_null),
+            "missing rollout history must serialize as explicit null"
+        );
         assert_eq!(
             object
                 .get("prepaid_runtime_balance")
@@ -14934,7 +17580,7 @@ mod tests {
     fn hf_deploy_signature_payload_layout_is_canonical_tuple() {
         let payload = HfDeployPayload {
             repo_id: "openai/gpt-oss".to_owned(),
-            revision: None,
+            revision: "0123456789abcdef0123456789abcdef01234567".to_owned(),
             model_name: "gpt_oss_20b".to_owned(),
             service_name: "vision_portal".to_owned(),
             apartment_name: Some("ops_agent".to_owned()),
@@ -14947,7 +17593,7 @@ mod tests {
             encode_hf_deploy_signature_payload(&payload).expect("encode signature payload");
         let expected = norito::to_bytes(&(
             "openai/gpt-oss",
-            "main",
+            "0123456789abcdef0123456789abcdef01234567",
             "gpt_oss_20b",
             "vision_portal",
             Some("ops_agent"),
@@ -14963,6 +17609,17 @@ mod tests {
         )
         .expect("HF deploy JSON is UTF-8");
         assert!(canonical_json.contains(r#""base_fee":"0.0000000001""#));
+        assert!(
+            canonical_json.contains(r#""revision":"0123456789abcdef0123456789abcdef01234567""#)
+        );
+        let missing_revision = canonical_json.replace(
+            r#""revision":"0123456789abcdef0123456789abcdef01234567","#,
+            "",
+        );
+        assert!(
+            norito::json::from_str::<HfDeployPayload>(&missing_revision).is_err(),
+            "HF deploy revision must be explicit"
+        );
         assert!(!canonical_json.contains("base_fee_nanos"));
         for hostile in [
             canonical_json.replace(r#""base_fee":"0.0000000001""#, r#""base_fee":1"#),
@@ -14975,10 +17632,24 @@ mod tests {
         }
     }
     #[test]
+    fn hf_revision_parser_requires_immutable_canonical_commit_oid() {
+        assert!(parse_hf_revision("0123456789abcdef0123456789abcdef01234567").is_ok());
+        for revision in [
+            "main",
+            "refs/pr/7",
+            "0123456789abcdef",
+            "0123456789ABCDEF0123456789ABCDEF01234567",
+            " 0123456789abcdef0123456789abcdef01234567",
+        ] {
+            parse_hf_revision(revision)
+                .expect_err("mutable or noncanonical revision must be rejected");
+        }
+    }
+    #[test]
     fn hf_lease_leave_signature_payload_layout_is_canonical_tuple() {
         let payload = HfLeaseLeavePayload {
             repo_id: "openai/gpt-oss".to_owned(),
-            revision: Some("refs/pr/7".to_owned()),
+            revision: "1123456789abcdef0123456789abcdef01234567".to_owned(),
             storage_class: StorageClass::Warm,
             lease_term_ms: 604_800_000,
             service_name: Some("vision_portal".to_owned()),
@@ -14988,7 +17659,7 @@ mod tests {
             encode_hf_lease_leave_signature_payload(&payload).expect("encode signature payload");
         let expected = norito::to_bytes(&(
             "openai/gpt-oss",
-            "refs/pr/7",
+            "1123456789abcdef0123456789abcdef01234567",
             StorageClass::Warm,
             604_800_000_u64,
             Some("vision_portal"),
@@ -15001,7 +17672,7 @@ mod tests {
     fn hf_lease_renew_signature_payload_layout_is_canonical_tuple() {
         let payload = HfLeaseRenewPayload {
             repo_id: "openai/gpt-oss".to_owned(),
-            revision: Some("0123456789abcdef".to_owned()),
+            revision: "2123456789abcdef0123456789abcdef01234567".to_owned(),
             model_name: "gpt_oss_20b".to_owned(),
             service_name: "vision_portal".to_owned(),
             apartment_name: Some("ops_agent".to_owned()),
@@ -15016,7 +17687,7 @@ mod tests {
             encode_hf_lease_renew_signature_payload(&payload).expect("encode signature payload");
         let expected = norito::to_bytes(&(
             "openai/gpt-oss",
-            "0123456789abcdef",
+            "2123456789abcdef0123456789abcdef01234567",
             "gpt_oss_20b",
             "vision_portal",
             Some("ops_agent"),
@@ -15034,13 +17705,13 @@ mod tests {
         use iroha_core::state::World;
         let runtime = test_runtime()?;
         runtime.block_on(async move {
-            let source_id = hf_source_id("openai/gpt-oss", "main")
+            let source_id = hf_source_id("openai/gpt-oss", TEST_HF_COMMIT_OID)
                 .map_err(|err| eyre::eyre!("hf source id failed: {}", err.message))?;
             let bundle = build_soracloud_hf_generated_service_bundle(
                 "hf_generated_service".parse().expect("valid service name"),
                 &source_id.to_string(),
                 "openai/gpt-oss",
-                "main",
+                TEST_HF_COMMIT_OID,
                 "gpt_oss_20b",
             );
             let mut world = World::default();
@@ -15062,7 +17733,7 @@ mod tests {
                 &bundle,
                 &source_id,
                 "openai/gpt-oss",
-                "main",
+                TEST_HF_COMMIT_OID,
                 "gpt_oss_20b",
                 None,
             )
@@ -15076,12 +17747,12 @@ mod tests {
         use iroha_core::state::World;
         let runtime = required_test_runtime("runtime");
         runtime.block_on(async move {
-            let source_id = hf_source_id("openai/gpt-oss", "main").expect("source id");
+            let source_id = hf_source_id("openai/gpt-oss", TEST_HF_COMMIT_OID).expect("source id");
             let bundle = build_soracloud_hf_generated_service_bundle(
                 "hf_generated_service".parse().expect("valid service name"),
                 &source_id.to_string(),
                 "openai/gpt-oss",
-                "main",
+                TEST_HF_COMMIT_OID,
                 "gpt_oss_20b",
             );
             let app = mk_app_state_for_tests_with_world(World::default());
@@ -15092,7 +17763,7 @@ mod tests {
                 &bundle,
                 &source_id,
                 "openai/gpt-oss",
-                "main",
+                TEST_HF_COMMIT_OID,
                 "gpt_oss_20b",
                 None,
             )
@@ -15112,12 +17783,12 @@ mod tests {
         runtime.block_on(async move {
             let key_pair = checked_test_keypair(0xA1);
             let signer = test_soracloud_mutation_signer(&key_pair);
-            let source_id = hf_source_id("openai/gpt-oss", "main").expect("source id");
+            let source_id = hf_source_id("openai/gpt-oss", TEST_HF_COMMIT_OID).expect("source id");
             let bundle = build_soracloud_hf_generated_service_bundle(
                 "hf_generated_service".parse().expect("valid service name"),
                 &source_id.to_string(),
                 "openai/gpt-oss",
-                "main",
+                TEST_HF_COMMIT_OID,
                 "gpt_oss_20b",
             );
             let provenance = signed_generated_service_provenance(&bundle, &key_pair);
@@ -15128,7 +17799,7 @@ mod tests {
                 &bundle,
                 &source_id,
                 "openai/gpt-oss",
-                "main",
+                TEST_HF_COMMIT_OID,
                 "gpt_oss_20b",
                 Some(&provenance),
             )
@@ -15144,12 +17815,12 @@ mod tests {
             let signer_keypair = checked_test_keypair(0xA2);
             let provenance_keypair = checked_test_keypair(0xA3);
             let signer = test_soracloud_mutation_signer(&signer_keypair);
-            let source_id = hf_source_id("openai/gpt-oss", "main").expect("source id");
+            let source_id = hf_source_id("openai/gpt-oss", TEST_HF_COMMIT_OID).expect("source id");
             let bundle = build_soracloud_hf_generated_service_bundle(
                 "hf_generated_service".parse().expect("valid service name"),
                 &source_id.to_string(),
                 "openai/gpt-oss",
-                "main",
+                TEST_HF_COMMIT_OID,
                 "gpt_oss_20b",
             );
             let provenance = signed_generated_service_provenance(&bundle, &provenance_keypair);
@@ -15160,7 +17831,7 @@ mod tests {
                 &bundle,
                 &source_id,
                 "openai/gpt-oss",
-                "main",
+                TEST_HF_COMMIT_OID,
                 "gpt_oss_20b",
                 Some(&provenance),
             )
@@ -15178,12 +17849,12 @@ mod tests {
         use iroha_core::state::World;
         let runtime = required_test_runtime("runtime");
         runtime.block_on(async move {
-            let source_id = hf_source_id("openai/gpt-oss", "main").expect("source id");
+            let source_id = hf_source_id("openai/gpt-oss", TEST_HF_COMMIT_OID).expect("source id");
             let expected_bundle = build_soracloud_hf_generated_service_bundle(
                 "web_portal".parse().expect("valid service name"),
                 &source_id.to_string(),
                 "openai/gpt-oss",
-                "main",
+                TEST_HF_COMMIT_OID,
                 "gpt_oss_20b",
             );
             let mut existing_bundle = fixture_bundle("1.0.0");
@@ -15214,7 +17885,7 @@ mod tests {
                 &expected_bundle,
                 &source_id,
                 "openai/gpt-oss",
-                "main",
+                TEST_HF_COMMIT_OID,
                 "gpt_oss_20b",
                 None,
             )
@@ -15232,13 +17903,13 @@ mod tests {
         use iroha_core::state::World;
         let runtime = test_runtime()?;
         runtime.block_on(async move {
-            let source_id = hf_source_id("openai/gpt-oss", "main")
+            let source_id = hf_source_id("openai/gpt-oss", TEST_HF_COMMIT_OID)
                 .map_err(|err| eyre::eyre!("hf source id failed: {}", err.message))?;
             let bundle = build_soracloud_hf_generated_service_bundle(
                 "hf_generated_service".parse().expect("valid service name"),
                 &source_id.to_string(),
                 "openai/gpt-oss",
-                "main",
+                TEST_HF_COMMIT_OID,
                 "gpt_oss_20b",
             );
             let manifest = build_soracloud_hf_generated_agent_manifest(
@@ -15298,12 +17969,12 @@ mod tests {
         use iroha_core::state::World;
         let runtime = required_test_runtime("runtime");
         runtime.block_on(async move {
-            let source_id = hf_source_id("openai/gpt-oss", "main").expect("source id");
+            let source_id = hf_source_id("openai/gpt-oss", TEST_HF_COMMIT_OID).expect("source id");
             let bundle = build_soracloud_hf_generated_service_bundle(
                 "hf_generated_service".parse().expect("valid service name"),
                 &source_id.to_string(),
                 "openai/gpt-oss",
-                "main",
+                TEST_HF_COMMIT_OID,
                 "gpt_oss_20b",
             );
             let manifest = build_soracloud_hf_generated_agent_manifest(
@@ -15329,12 +18000,12 @@ mod tests {
         runtime.block_on(async move {
             let key_pair = checked_test_keypair(0xA5);
             let signer = test_soracloud_mutation_signer(&key_pair);
-            let source_id = hf_source_id("openai/gpt-oss", "main").expect("source id");
+            let source_id = hf_source_id("openai/gpt-oss", TEST_HF_COMMIT_OID).expect("source id");
             let bundle = build_soracloud_hf_generated_service_bundle(
                 "hf_generated_service".parse().expect("valid service name"),
                 &source_id.to_string(),
                 "openai/gpt-oss",
-                "main",
+                TEST_HF_COMMIT_OID,
                 "gpt_oss_20b",
             );
             let manifest = build_soracloud_hf_generated_agent_manifest(
@@ -15357,12 +18028,12 @@ mod tests {
             let signer_keypair = checked_test_keypair(0xA6);
             let provenance_keypair = checked_test_keypair(0xA7);
             let signer = test_soracloud_mutation_signer(&signer_keypair);
-            let source_id = hf_source_id("openai/gpt-oss", "main").expect("source id");
+            let source_id = hf_source_id("openai/gpt-oss", TEST_HF_COMMIT_OID).expect("source id");
             let bundle = build_soracloud_hf_generated_service_bundle(
                 "hf_generated_service".parse().expect("valid service name"),
                 &source_id.to_string(),
                 "openai/gpt-oss",
-                "main",
+                TEST_HF_COMMIT_OID,
                 "gpt_oss_20b",
             );
             let manifest = build_soracloud_hf_generated_agent_manifest(
@@ -15390,8 +18061,10 @@ mod tests {
         let admission = admit_scr_host_bundle(&bundle).expect("SCR admission should succeed");
         assert!(admission.allow_model_inference);
         let deployment = fixture_service_deployment(&bundle);
+        let audit = fixture_service_deploy_audit_event(&bundle);
         let revision =
-            deployment_bundle_to_control_plane_revision(&deployment, &bundle, None, None);
+            deployment_bundle_to_control_plane_revision(&deployment, &bundle, Some(&audit), None)
+                .expect("admitted fixture revision should project");
         assert!(revision.allow_model_inference);
     }
     #[test]
@@ -15407,12 +18080,153 @@ mod tests {
         assert!(parse_storage_class_query("archive").is_err());
     }
     #[test]
+    fn hf_profile_model_info_requires_exact_canonical_commit() {
+        const COMMIT: &str = "0123456789abcdef0123456789abcdef01234567";
+        validate_hf_profile_model_info_commit(&norito::json!({"sha": COMMIT}), COMMIT)
+            .expect("matching canonical commit");
+        for model_info in [
+            norito::json!({}),
+            norito::json!({"sha": 7}),
+            norito::json!({"sha": "main"}),
+            norito::json!({"sha": "0123456789ABCDEF0123456789ABCDEF01234567"}),
+            norito::json!({"sha": "1123456789abcdef0123456789abcdef01234567"}),
+        ] {
+            validate_hf_profile_model_info_commit(&model_info, COMMIT)
+                .expect_err("missing, noncanonical, or mismatched provider SHA must fail");
+        }
+        validate_hf_profile_model_info_commit(&norito::json!({"sha": COMMIT}), "main")
+            .expect_err("mutable requested revision must fail before profile derivation");
+    }
+    #[test]
+    fn hf_profile_public_address_policy_rejects_special_purpose_ranges() {
+        assert!(hf_profile_ipv4_is_public(Ipv4Addr::new(8, 8, 8, 8)));
+        for address in [
+            Ipv4Addr::LOCALHOST,
+            Ipv4Addr::new(10, 0, 0, 1),
+            Ipv4Addr::new(100, 64, 0, 1),
+            Ipv4Addr::new(192, 0, 0, 1),
+            Ipv4Addr::new(192, 88, 99, 1),
+            Ipv4Addr::new(198, 18, 0, 1),
+            Ipv4Addr::new(203, 0, 113, 1),
+            Ipv4Addr::new(240, 0, 0, 1),
+        ] {
+            assert!(
+                !hf_profile_ipv4_is_public(address),
+                "special-purpose IPv4 address {address} must fail closed"
+            );
+        }
+
+        assert!(hf_profile_ipv6_is_public(
+            "2606:4700:4700::1111".parse().expect("public IPv6")
+        ));
+        for raw in [
+            "::1",
+            "fc00::1",
+            "fe80::1",
+            "2001::1",
+            "2001:db8::1",
+            "2002::1",
+            "3fff::1",
+            "::ffff:10.0.0.1",
+        ] {
+            let address = raw.parse().expect("valid special-purpose IPv6");
+            assert!(
+                !hf_profile_ipv6_is_public(address),
+                "special-purpose IPv6 address {address} must fail closed"
+            );
+        }
+        assert!(hf_profile_ipv6_is_public(
+            "::ffff:8.8.8.8".parse().expect("public mapped IPv4")
+        ));
+
+        // Test-only loopback admission is needed by the bounded local HTTP fixture.
+        assert!(hf_profile_ip_is_allowed(IpAddr::V4(Ipv4Addr::LOCALHOST)));
+        assert!(!hf_profile_ip_is_allowed(IpAddr::V4(Ipv4Addr::new(
+            10, 0, 0, 1
+        ))));
+    }
+    #[test]
+    fn hf_profile_fetch_uses_bounded_manual_redirects_and_rejects_private_targets()
+    -> Result<(), eyre::Report> {
+        use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
+
+        let runtime = test_runtime()?;
+        runtime.block_on(async move {
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
+            let address = listener.local_addr()?;
+            let server = tokio::spawn(async move {
+                let (mut first, _) = listener.accept().await?;
+                let mut request = [0_u8; 2_048];
+                let request_bytes = first.read(&mut request).await?;
+                let request_text = String::from_utf8_lossy(&request[..request_bytes]);
+                assert!(request_text.starts_with("GET /source HTTP/1.1"));
+                assert!(
+                    !request_text
+                        .to_ascii_lowercase()
+                        .contains("authorization:")
+                );
+                first
+                    .write_all(
+                        b"HTTP/1.1 302 Found\r\nLocation: /final\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
+                    )
+                    .await?;
+                drop(first);
+                let (mut second, _) = listener.accept().await?;
+                let request_bytes = second.read(&mut request).await?;
+                let request_text = String::from_utf8_lossy(&request[..request_bytes]);
+                assert!(request_text.starts_with("GET /final HTTP/1.1"));
+                assert!(
+                    !request_text
+                        .to_ascii_lowercase()
+                        .contains("authorization:")
+                );
+                second
+                    .write_all(
+                        b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\nok",
+                    )
+                    .await?;
+                Ok::<_, io::Error>(())
+            });
+            let origin = format!("http://{address}");
+            let mut config =
+                iroha_config::parameters::actual::SoracloudRuntimeHuggingFace::default();
+            config.hub_base_url = origin.clone();
+            config.api_base_url = origin.clone();
+            config.import_redirect_allowed_origins.clear();
+            config.request_timeout = Duration::from_secs(2);
+            let response = send_hf_profile_request_with_vetted_redirects(
+                &config,
+                reqwest::Method::GET,
+                reqwest::Url::parse(&format!("{origin}/source"))?,
+            )
+            .await
+            .map_err(|error| eyre::eyre!("profile request failed: {error:?}"))?;
+            assert_eq!(response.status(), reqwest::StatusCode::OK);
+            assert_eq!(response.text().await?, "ok");
+            server.await??;
+
+            resolve_hf_profile_socket_addrs(
+                &reqwest::Url::parse("https://10.0.0.1/model")?,
+                Duration::from_secs(1),
+            )
+            .await
+            .expect_err("private address must be rejected before contact");
+            resolve_hf_profile_socket_addrs(
+                &reqwest::Url::parse("https://[::ffff:10.0.0.1]/model")?,
+                Duration::from_secs(1),
+            )
+            .await
+            .expect_err("IPv4-mapped private address must be rejected before contact");
+            Ok(())
+        })
+    }
+    #[test]
     fn authoritative_hf_shared_lease_status_reads_world_state() -> Result<(), eyre::Report> {
         use iroha_core::state::World;
         let runtime = test_runtime()?;
         runtime.block_on(async move {
             let repo_id = "openai/gpt-oss";
-            let resolved_revision = "0123456789abcdef";
+            let resolved_revision = TEST_HF_COMMIT_OID;
             let model_name = "gpt_oss_20b";
             let storage_class = StorageClass::Warm;
             let lease_term_ms = 604_800_000_u64;
@@ -15481,6 +18295,10 @@ mod tests {
                                                     iroha_data_model::soracloud::SoraHfBackendFamilyV1::Transformers,
                                                 model_format:
                                                     iroha_data_model::soracloud::SoraHfModelFormatV1::Safetensors,
+                                                selected_weight_file_count: 1,
+                                                weight_selection_commitment: Hash::new(
+                                                    b"queued-hf-weight-selection",
+                                                ),
                                                 disk_cache_bytes_floor: 8_192,
                                                 ram_bytes_floor: 8_192,
                                                 vram_bytes_floor: 0,
@@ -15654,7 +18472,7 @@ mod tests {
         let runtime = test_runtime()?;
         runtime.block_on(async move {
             let repo_id = "openai/gpt-oss";
-            let resolved_revision = "0123456789abcdef";
+            let resolved_revision = TEST_HF_COMMIT_OID;
             let model_name = "gpt_oss_20b";
             let storage_class = StorageClass::Warm;
             let lease_term_ms = 604_800_000_u64;
@@ -15786,7 +18604,7 @@ mod tests {
         let runtime = test_runtime()?;
         runtime.block_on(async move {
             let repo_id = "openai/gpt-oss";
-            let resolved_revision = "0123456789abcdef";
+            let resolved_revision = TEST_HF_COMMIT_OID;
             let source_id = hf_source_id(repo_id, resolved_revision)
                 .map_err(|err| eyre::eyre!("failed to derive hf source id: {err:?}"))?;
             let mut world = World::default();
@@ -15873,7 +18691,7 @@ mod tests {
             schema_version: SORA_HF_SOURCE_RECORD_VERSION_V1,
             source_id: Hash::new(b"hf-source"),
             repo_id: "openai/gpt-oss".to_owned(),
-            resolved_revision: "main".to_owned(),
+            resolved_revision: TEST_HF_COMMIT_OID.to_owned(),
             model_name: "gpt_oss_20b".to_owned(),
             adapter_id: "hf.shared.v1".to_owned(),
             normalized_runtime_hash: Hash::new(b"hf-runtime"),

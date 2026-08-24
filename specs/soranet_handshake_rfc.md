@@ -84,7 +84,7 @@ Capability TLVs MUST conform to the registry:
 | 0x0101 | `snnet.pqkem` | MUST appear in both ClientHello and ServerHello |
 | 0x0102 | `snnet.pqsig` | MUST contain exactly one Dilithium3 (`0x01`) entry |
 | 0x0103 | `snnet.transcript_commit` | Relay MUST include commitment hash |
-| 0x0104 | `snnet.suite_list` | MUST contain at least one suite identifier; `0x04` and `0x05` are the v1 suites |
+| 0x0104 | `snnet.suite_list` | MUST contain one or both unique v1 suite identifiers (`0x04`, `0x05`); unknown, retired, or duplicate identifiers reject the entire list |
 | 0x0201 | `snnet.role` | Relay MUST declare role bitfield |
 | 0x0202 | `snnet.padding` | MUST be `0x0400` (1024-byte cells) |
 | 0x0203 | `snnet.constant_rate` | When present, MUST be exactly `version:u8, flags:u8, cell_bytes:u16 LE`; v1 uses 1024-byte cells |
@@ -107,6 +107,11 @@ big-endian) | value`. Clients MUST use nondecreasing type order. Unknown types
 in the GREASE range (`0x7F00–0x7FFF`) MUST be ignored for negotiation but MUST
 remain part of the transcript hash; every other unknown type is rejected. The
 complete encoded vector is limited to 4,096 bytes.
+
+The relay identity in each authenticated response has one V1 encoding:
+`algorithm_tag:u8 || public_key_payload`. Ed25519 is encoded as tag `0x00`
+followed by its 32-byte public key. Parsers MUST reject the retired untagged
+32-byte representation and unknown algorithm tags.
 
 ## 6. Salt Rotation
 

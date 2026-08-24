@@ -91,7 +91,7 @@ Accepted` with a typed operation reference and `Location`. They do not accept
 JSON or whole-request base64 wrapper objects. The Python surface is
 transport-only: it does not install recursive artifacts or claim a native
 prover. Top-up requests are limited to 512 KiB and redemption requests to 48
-MiB. The legacy-named readiness route is query-free and reports the universal,
+MiB. The capability route is query-free and reports the universal,
 asset-neutral application capability. It is not backend readiness and does not
 evaluate an asset or dataspace.
 
@@ -109,11 +109,9 @@ print(
 )
 ```
 
-The closed response is always `mandatory=False`,
+The closed response contains exactly
 `cash_handoff_capability="cash_handoff_v1"`, bridge ABI `22`, maximum hop count
-`8`, `ready=True`, and empty `assets` and `blockers`. The deprecated
-`get_kagemusha_readiness(asset_definition_id)` method ignores its selector and
-returns the same status. Wallet/device peer handoff must not depend on network
+`8`, and `ready=True`. Wallet/device peer handoff must not depend on network
 discovery. Missing proof material for a particular online top-up or redemption
 rejects that command only; it cannot make a node, asset, or dataspace “not
 offline ready.”

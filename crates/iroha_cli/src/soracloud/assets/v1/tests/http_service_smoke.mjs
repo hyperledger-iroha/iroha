@@ -29,14 +29,19 @@ async function freePort() {
   });
 }
 
-function startServer(port) {
+function startServer(port, serviceVersion) {
+  const env = {
+    ...process.env,
+    PORT: String(port),
+    SORACLOUD_HTTP_PORT: String(port),
+    SORACLOUD_LEASE_VOLUME_APP_DATA_DIR: APP_DATA_DIR
+  };
+  delete env.SORACLOUD_SERVICE_VERSION;
+  if (serviceVersion !== undefined) {
+    env.SORACLOUD_SERVICE_VERSION = serviceVersion;
+  }
   const child = spawn(process.execPath, [SERVER_PATH], {
-    env: {
-      ...process.env,
-      PORT: String(port),
-      SORACLOUD_HTTP_PORT: String(port),
-      SORACLOUD_LEASE_VOLUME_APP_DATA_DIR: APP_DATA_DIR
-    },
+    env,
     stdio: ["ignore", "pipe", "pipe"]
   });
   let logs = "";
@@ -101,16 +106,47 @@ async function jsonRequest(port, method, route, body) {
   };
 }
 
+async function assertInvalidServiceVersionFails(serviceVersion) {
+  const port = await freePort();
+  const server = startServer(port, serviceVersion);
+  try {
+    await waitForExit(server.child, 800);
+    assert(
+      server.child.exitCode !== null,
+      "server accepted a missing service version"
+    );
+    assert(
+      server.child.exitCode !== 0,
+      "server exited successfully without a service version"
+    );
+    assert(
+      server.logs().includes("SORACLOUD_SERVICE_VERSION is required"),
+      "startup error must name the required service-version input"
+    );
+  } finally {
+    await stopServer(server);
+  }
+}
+
 async function main() {
   let server = null;
   try {
+    await assertInvalidServiceVersionFails(undefined);
+    await assertInvalidServiceVersionFails("");
     const port = await freePort();
-    server = startServer(port);
+    server = startServer(port, "1.0.0");
     await waitForHealth(port);
 
     const health = await jsonRequest(port, "GET", "/health");
     assert(health.status === 200, `health failed: ${JSON.stringify(health)}`);
-    assert(health.body.lease_volumes.app_data === APP_DATA_DIR, "health must expose app_data lease path");
+    assert(
+      health.body.service_version === "1.0.0",
+      "health must expose the deployed service version"
+    );
+    assert(
+      health.body.lease_volumes.app_data === APP_DATA_DIR,
+      "health must expose app_data lease path"
+    );
 
     const echo = await jsonRequest(port, "POST", "/echo", { message: "hello" });
     assert(echo.status === 200, `echo failed: ${JSON.stringify(echo)}`);

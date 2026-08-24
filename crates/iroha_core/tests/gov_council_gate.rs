@@ -1,4 +1,4 @@
-//! Council gating for governance proposals: referenda open only after quorum.
+//! Proposal-time Parliament snapshot gating for governance proposals.
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 use iroha_core::{
     governance::draw,
@@ -22,7 +22,6 @@ use iroha_data_model::{
 use iroha_test_samples::{ALICE_ID, BOB_ID};
 use mv::storage::StorageReadOnly;
 use nonzero_ext::nonzero;
-use std::collections::BTreeMap;
 use std::num::NonZeroU64;
 fn sample_contract_address(
     account_id: &iroha_data_model::account::AccountId,
@@ -57,13 +56,6 @@ fn setup_council_state() -> State {
     state.gov.parliament_quorum_bps = 5_000;
     state
 }
-fn enable_parliament_module(state: &mut State) {
-    let nexus = state.nexus.get_mut();
-    let mut parliament_module = iroha_config::parameters::actual::GovernanceModule::default();
-    parliament_module.module_type = Some("parliament".to_string());
-    nexus.governance.default_module = Some("parliament".to_string());
-    nexus.governance.modules = BTreeMap::from([("parliament".to_string(), parliament_module)]);
-}
 fn deployment_stage_bodies() -> [ParliamentBody; 6] {
     [
         ParliamentBody::RulesCommittee,
@@ -86,7 +78,7 @@ fn all_stage_bodies() -> [ParliamentBody; 7] {
     ]
 }
 fn roster_root(bodies: &iroha_data_model::governance::types::ParliamentBodies) -> [u8; 32] {
-    let encoded = norito::to_bytes(bodies).expect("encode roster bodies");
+    let encoded = norito::encode_canonical(bodies).expect("canonically encode roster bodies");
     let digest = Blake2b512::digest(encoded);
     let mut root = [0u8; 32];
     root.copy_from_slice(&digest[..32]);
@@ -127,35 +119,6 @@ fn seed_referendum_and_proposal_with_kind(
     let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
     let mut block = state.block(header);
     let mut stx = block.transaction();
-    let council = iroha_core::governance::state::ParliamentTerm {
-        epoch: 0,
-        members: vec![ALICE_ID.clone(), BOB_ID.clone()],
-        candidate_count: 2,
-        ..Default::default()
-    };
-    stx.world.council_mut().insert(0, council);
-    stx.world.parliament_bodies_mut().insert(
-        0,
-        ParliamentBodies {
-            selection_epoch: 0,
-            rosters: all_stage_bodies()
-                .into_iter()
-                .map(|body| {
-                    (
-                        body,
-                        ParliamentRoster {
-                            body,
-                            epoch: 0,
-                            members: vec![ALICE_ID.clone(), BOB_ID.clone()],
-                            alternates: Vec::new(),
-                            candidate_count: 2,
-                            derived_by: CouncilDerivationKind::Manual,
-                        },
-                    )
-                })
-                .collect(),
-        },
-    );
     let h_start = header
         .height()
         .get()
@@ -175,13 +138,36 @@ fn seed_referendum_and_proposal_with_kind(
         Some(&referendum),
         &stx.gov,
     );
+    let selection_epoch = header.height().get();
+    let bodies = ParliamentBodies {
+        selection_epoch,
+        rosters: all_stage_bodies()
+            .into_iter()
+            .map(|body| {
+                (
+                    body,
+                    ParliamentRoster {
+                        body,
+                        epoch: selection_epoch,
+                        members: vec![ALICE_ID.clone(), BOB_ID.clone()],
+                        alternates: Vec::new(),
+                        candidate_count: 2,
+                        derived_by: CouncilDerivationKind::Sortition,
+                    },
+                )
+            })
+            .collect(),
+    };
     let proposal = iroha_core::state::GovernanceProposalRecord {
         proposer: ALICE_ID.clone(),
         kind,
         created_height: header.height().get(),
         status: iroha_core::state::GovernanceProposalStatus::Proposed,
         pipeline,
-        parliament_snapshot: None,
+        parliament_snapshot: iroha_core::state::GovernanceParliamentSnapshot::try_new(
+            [0x41; 32], bodies,
+        )
+        .expect("canonical proposal Parliament snapshot"),
         finalization_evidence: None,
         enacted_at_height: None,
     };
@@ -196,37 +182,28 @@ fn seed_proposal_without_referendum(state: &mut State, pid: [u8; 32]) {
     let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
     let mut block = state.block(header);
     let mut stx = block.transaction();
-    let council = iroha_core::governance::state::ParliamentTerm {
-        epoch: 0,
-        members: vec![ALICE_ID.clone(), BOB_ID.clone()],
-        candidate_count: 2,
-        ..Default::default()
-    };
-    stx.world.council_mut().insert(0, council);
-    stx.world.parliament_bodies_mut().insert(
-        0,
-        ParliamentBodies {
-            selection_epoch: 0,
-            rosters: all_stage_bodies()
-                .into_iter()
-                .map(|body| {
-                    (
-                        body,
-                        ParliamentRoster {
-                            body,
-                            epoch: 0,
-                            members: vec![ALICE_ID.clone(), BOB_ID.clone()],
-                            alternates: Vec::new(),
-                            candidate_count: 2,
-                            derived_by: CouncilDerivationKind::Manual,
-                        },
-                    )
-                })
-                .collect(),
-        },
-    );
     let pipeline =
         iroha_core::state::GovernancePipeline::seeded(header.height().get(), None, &stx.gov);
+    let selection_epoch = header.height().get();
+    let bodies = ParliamentBodies {
+        selection_epoch,
+        rosters: all_stage_bodies()
+            .into_iter()
+            .map(|body| {
+                (
+                    body,
+                    ParliamentRoster {
+                        body,
+                        epoch: selection_epoch,
+                        members: vec![ALICE_ID.clone(), BOB_ID.clone()],
+                        alternates: Vec::new(),
+                        candidate_count: 2,
+                        derived_by: CouncilDerivationKind::Sortition,
+                    },
+                )
+            })
+            .collect(),
+    };
     stx.world.governance_proposals_mut().insert(
         pid,
         iroha_core::state::GovernanceProposalRecord {
@@ -235,7 +212,10 @@ fn seed_proposal_without_referendum(state: &mut State, pid: [u8; 32]) {
             created_height: header.height().get(),
             status: iroha_core::state::GovernanceProposalStatus::Proposed,
             pipeline,
-            parliament_snapshot: None,
+            parliament_snapshot: iroha_core::state::GovernanceParliamentSnapshot::try_new(
+                [0x42; 32], bodies,
+            )
+            .expect("canonical proposal Parliament snapshot"),
             finalization_evidence: None,
             enacted_at_height: None,
         },
@@ -316,7 +296,7 @@ fn expect_ballot_error_at_height(
 fn set_body_roster_at_height(
     state: &mut State,
     height: u64,
-    epoch: u64,
+    _epoch: u64,
     body: ParliamentBody,
     members: Vec<AccountId>,
     alternates: Vec<AccountId>,
@@ -324,53 +304,80 @@ fn set_body_roster_at_height(
     let height = NonZeroU64::new(height).expect("non-zero height");
     let mut block = state.block(BlockHeader::new(height, None, None, None, 0, 0));
     let mut stx = block.transaction();
-    let mut bodies = stx
+    let (proposal_id, mut proposal) = stx
         .world
-        .parliament_bodies()
-        .get(&epoch)
-        .cloned()
-        .expect("parliament bodies present");
-    let roster = bodies.rosters.get_mut(&body).expect("body roster present");
+        .governance_proposals()
+        .iter()
+        .next()
+        .map(|(proposal_id, proposal)| (*proposal_id, proposal.clone()))
+        .expect("governance proposal present");
+    let roster = proposal
+        .parliament_snapshot
+        .bodies
+        .rosters
+        .get_mut(&body)
+        .expect("body roster present");
     roster.members = members;
     roster.alternates = alternates;
-    stx.world.parliament_bodies_mut().insert(epoch, bodies);
+    proposal.parliament_snapshot.roster_root = roster_root(&proposal.parliament_snapshot.bodies);
+    stx.world
+        .governance_proposals_mut()
+        .insert(proposal_id, proposal);
     stx.apply();
     block.commit().expect("commit roster update block");
 }
-fn remove_body_roster_at_height(state: &mut State, height: u64, epoch: u64, body: ParliamentBody) {
+fn remove_body_roster_at_height(state: &mut State, height: u64, _epoch: u64, body: ParliamentBody) {
     let height = NonZeroU64::new(height).expect("non-zero height");
     let mut block = state.block(BlockHeader::new(height, None, None, None, 0, 0));
     let mut stx = block.transaction();
-    let mut bodies = stx
+    let (proposal_id, mut proposal) = stx
         .world
-        .parliament_bodies()
-        .get(&epoch)
-        .cloned()
-        .expect("parliament bodies present");
-    bodies.rosters.remove(&body).expect("body roster present");
-    stx.world.parliament_bodies_mut().insert(epoch, bodies);
+        .governance_proposals()
+        .iter()
+        .next()
+        .map(|(proposal_id, proposal)| (*proposal_id, proposal.clone()))
+        .expect("governance proposal present");
+    proposal
+        .parliament_snapshot
+        .bodies
+        .rosters
+        .remove(&body)
+        .expect("body roster present");
+    proposal.parliament_snapshot.roster_root = roster_root(&proposal.parliament_snapshot.bodies);
+    stx.world
+        .governance_proposals_mut()
+        .insert(proposal_id, proposal);
     stx.apply();
     block.commit().expect("commit roster removal block");
 }
 fn mutate_body_roster_at_height(
     state: &mut State,
     height: u64,
-    epoch: u64,
+    _epoch: u64,
     body: ParliamentBody,
     mutate: impl FnOnce(&mut ParliamentRoster),
 ) {
     let height = NonZeroU64::new(height).expect("non-zero height");
     let mut block = state.block(BlockHeader::new(height, None, None, None, 0, 0));
     let mut stx = block.transaction();
-    let mut bodies = stx
+    let (proposal_id, mut proposal) = stx
         .world
-        .parliament_bodies()
-        .get(&epoch)
-        .cloned()
-        .expect("parliament bodies present");
-    let roster = bodies.rosters.get_mut(&body).expect("body roster present");
+        .governance_proposals()
+        .iter()
+        .next()
+        .map(|(proposal_id, proposal)| (*proposal_id, proposal.clone()))
+        .expect("governance proposal present");
+    let roster = proposal
+        .parliament_snapshot
+        .bodies
+        .rosters
+        .get_mut(&body)
+        .expect("body roster present");
     mutate(roster);
-    stx.world.parliament_bodies_mut().insert(epoch, bodies);
+    proposal.parliament_snapshot.roster_root = roster_root(&proposal.parliament_snapshot.bodies);
+    stx.world
+        .governance_proposals_mut()
+        .insert(proposal_id, proposal);
     stx.apply();
     block.commit().expect("commit roster mutation block");
 }
@@ -389,10 +396,7 @@ fn mutate_snapshot_at_height(
         .get(&pid)
         .cloned()
         .expect("proposal present");
-    let snapshot = proposal
-        .parliament_snapshot
-        .as_mut()
-        .expect("proposal snapshot present");
+    let snapshot = &mut proposal.parliament_snapshot;
     mutate(snapshot);
     stx.world.governance_proposals_mut().insert(pid, proposal);
     stx.apply();
@@ -406,7 +410,7 @@ fn assert_quorum_records(state: &State, rid: &str) {
         .get(rid)
         .expect("approval record");
     for body in deployment_stage_bodies() {
-        assert!(approvals.quorum_met(body, 0), "{body:?} quorum recorded");
+        assert!(approvals.quorum_met(body, 1), "{body:?} quorum recorded");
     }
 }
 fn seed_snapshot_proposal(
@@ -459,12 +463,12 @@ fn seed_snapshot_proposal(
             created_height: header.height().get(),
             status: iroha_core::state::GovernanceProposalStatus::Proposed,
             pipeline,
-            parliament_snapshot: Some(iroha_core::state::GovernanceParliamentSnapshot {
+            parliament_snapshot: iroha_core::state::GovernanceParliamentSnapshot {
                 selection_epoch,
                 beacon,
                 roster_root: roster_root_override.unwrap_or_else(|| roster_root(&bodies)),
                 bodies: bodies.clone(),
-            }),
+            },
             finalization_evidence: None,
             enacted_at_height: None,
         },
@@ -474,7 +478,7 @@ fn seed_snapshot_proposal(
     bodies
 }
 #[test]
-fn referendum_opens_after_council_quorum() {
+fn referendum_opens_after_snapshot_parliament_quorum() {
     let mut state = setup_council_state();
     let pid = [0xAA; 32];
     let rid = hex::encode(pid);
@@ -1279,33 +1283,27 @@ fn missing_proposal_or_referendum_rejects_ballot_without_records() {
     );
 }
 #[test]
-fn epoch_rollover_rejects_ballots_without_fresh_council_roster() {
+fn epoch_rollover_does_not_replace_the_proposal_snapshot() {
     let mut state = setup_council_state();
     state.gov.parliament_term_blocks = 2;
     let pid = [0xEE; 32];
     let rid = hex::encode(pid);
     seed_referendum_and_proposal(&mut state, pid, &rid);
-    let err = expect_ballot_error_at_height(
-        &state,
+    approve_at_height(
+        &mut state,
         3,
         ParliamentBody::RulesCommittee,
         pid,
         &ALICE_ID,
-        ParliamentDecision::Approve,
     );
-    assert!(
-        err.contains("council roster missing for current epoch"),
-        "unexpected epoch-rollover error: {err}"
-    );
-    assert!(
-        state
-            .view()
-            .world()
-            .governance_stage_approvals()
-            .get(&rid)
-            .is_none(),
-        "stale previous-epoch roster must not be reused for a new epoch ballot"
-    );
+    let approvals = state
+        .view()
+        .world()
+        .governance_stage_approvals()
+        .get(&rid)
+        .cloned()
+        .expect("proposal snapshot approval must be recorded");
+    assert!(approvals.quorum_met(ParliamentBody::RulesCommittee, 1));
     assert_eq!(
         referendum_status(&state, &rid),
         iroha_core::state::GovernanceReferendumStatus::Proposed
@@ -1330,7 +1328,7 @@ fn malformed_body_rosters_reject_ballots_without_records() {
         .execute(&ALICE_ID, &mut stx)
         .expect_err("missing body roster must reject ballots");
         assert!(
-            format!("{err:?}").contains("parliament roster missing"),
+            format!("{err:?}").contains("exactly all seven Parliament bodies"),
             "unexpected missing-roster error: {err:?}"
         );
         assert!(
@@ -1363,7 +1361,7 @@ fn malformed_body_rosters_reject_ballots_without_records() {
     .execute(&ALICE_ID, &mut stx)
     .expect_err("empty body roster must reject ballots");
     assert!(
-        format!("{err:?}").contains("parliament roster empty"),
+        format!("{err:?}").contains("Parliament roster has no members"),
         "unexpected empty-roster error: {err:?}"
     );
     assert!(
@@ -1400,7 +1398,7 @@ fn spoofed_roster_metadata_rejects_ballots_without_records() {
         ParliamentDecision::Approve,
     );
     assert!(
-        err.contains("roster body mismatch"),
+        err.contains("stored under the wrong key"),
         "unexpected body-mismatch error: {err}"
     );
     assert!(
@@ -1436,7 +1434,7 @@ fn spoofed_roster_metadata_rejects_ballots_without_records() {
         ParliamentDecision::Approve,
     );
     assert!(
-        err.contains("body roster epoch mismatch"),
+        err.contains("has the wrong selection epoch"),
         "unexpected roster-epoch error: {err}"
     );
     assert!(
@@ -1452,7 +1450,6 @@ fn spoofed_roster_metadata_rejects_ballots_without_records() {
 #[test]
 fn parliament_snapshot_allows_approvals_without_council_state() {
     let mut state = setup_council_state();
-    enable_parliament_module(&mut state);
     let pid = [0xBC; 32];
     let rid = hex::encode(pid);
     let bodies = seed_snapshot_proposal(&mut state, pid, &rid, 1, None);
@@ -1483,7 +1480,6 @@ fn parliament_snapshot_allows_approvals_without_council_state() {
 #[test]
 fn tampered_parliament_snapshot_commitment_rejects_ballots() {
     let mut state = setup_council_state();
-    enable_parliament_module(&mut state);
     let pid = [0xBD; 32];
     let rid = hex::encode(pid);
     let bodies = seed_snapshot_proposal(&mut state, pid, &rid, 2, Some([0xFF; 32]));
@@ -1503,7 +1499,7 @@ fn tampered_parliament_snapshot_commitment_rejects_ballots() {
     .execute(&signer, &mut stx)
     .expect_err("tampered snapshot root must reject ballots");
     assert!(
-        format!("{err:?}").contains("snapshot commitment mismatch"),
+        format!("{err:?}").contains("roster commitment differs"),
         "unexpected snapshot commitment error: {err:?}"
     );
     assert!(
@@ -1518,7 +1514,6 @@ fn tampered_parliament_snapshot_commitment_rejects_ballots() {
 #[test]
 fn mismatched_snapshot_epoch_rejects_ballots_before_roster_use() {
     let mut state = setup_council_state();
-    enable_parliament_module(&mut state);
     let pid = [0xBE; 32];
     let rid = hex::encode(pid);
     let bodies = seed_snapshot_proposal(&mut state, pid, &rid, 3, None);
@@ -1541,7 +1536,7 @@ fn mismatched_snapshot_epoch_rejects_ballots_before_roster_use() {
     .execute(&signer, &mut stx)
     .expect_err("snapshot epoch mismatch must reject ballots");
     assert!(
-        format!("{err:?}").contains("snapshot epoch mismatch"),
+        format!("{err:?}").contains("selection epoch differs"),
         "unexpected snapshot epoch error: {err:?}"
     );
     assert!(
@@ -1556,7 +1551,6 @@ fn mismatched_snapshot_epoch_rejects_ballots_before_roster_use() {
 #[test]
 fn snapshot_roster_metadata_mismatch_rejects_ballots_even_with_matching_root() {
     let mut state = setup_council_state();
-    enable_parliament_module(&mut state);
     let pid = [0xBF; 32];
     let rid = hex::encode(pid);
     let bodies = seed_snapshot_proposal(&mut state, pid, &rid, 4, None);
@@ -1585,7 +1579,7 @@ fn snapshot_roster_metadata_mismatch_rejects_ballots_even_with_matching_root() {
     .execute(&signer, &mut stx)
     .expect_err("snapshot roster body mismatch must reject ballots");
     assert!(
-        format!("{err:?}").contains("roster body mismatch"),
+        format!("{err:?}").contains("stored under the wrong key"),
         "unexpected snapshot roster-mismatch error: {err:?}"
     );
     assert!(

@@ -169,10 +169,7 @@ use iroha_data_model::{
         },
         pricing::{PricingScheduleRecord, ProviderCreditRecord},
     },
-    soranet::vpn::{
-        VpnAddressSlotV1, VpnLeaseRecordV1, VpnLeaseStatusV1, derive_vpn_address_plan_v1,
-        derive_vpn_lease_id_v1, derive_vpn_session_id_v1,
-    },
+    soranet::vpn::{VpnAddressSlotV1, VpnLeaseRecordV1, VpnLeaseStatusV1},
     state_path::StatePath,
     transaction::signed::{SignedTransaction, TransactionEntrypoint, TransactionResult},
     validation_fee::{
@@ -2855,53 +2852,57 @@ pub enum LaneLifecycleError {
     ReservedAutoscaleManagedLane(LaneId),
     /// External lane configuration attempted to occupy an autoscale elastic lane id.
     #[error(
-        "manual lane {lane} is inside reserved autoscale elastic lane id range [{min_lanes}, {max_lanes})"
+        "manual lane {lane} is inside reserved autoscale elastic lane id range [{min_lane_id}, {max_lane_id_exclusive})"
     )]
     ReservedAutoscaleElasticLaneId {
         /// Manual lane id inside the autoscale elastic range.
         lane: LaneId,
         /// Inclusive lower bound for autoscale elastic lane ids.
-        min_lanes: u32,
+        min_lane_id: u32,
         /// Exclusive upper bound for autoscale elastic lane ids.
-        max_lanes: u32,
+        max_lane_id_exclusive: u32,
     },
     /// Autoscale-managed lane id is outside the configured autoscale id range.
     #[error(
-        "autoscale-managed lane {lane} is outside configured autoscale lane id range [{min_lanes}, {max_lanes})"
+        "autoscale-managed lane {lane} is outside configured autoscale lane id range [{min_lane_id}, {max_lane_id_exclusive})"
     )]
     AutoscaleManagedLaneOutOfBounds {
         /// Lane id carrying autoscale-managed metadata.
         lane: LaneId,
         /// Inclusive lower bound for autoscale-managed lane ids.
-        min_lanes: u32,
+        min_lane_id: u32,
         /// Exclusive upper bound for autoscale-managed lane ids.
-        max_lanes: u32,
+        max_lane_id_exclusive: u32,
     },
     /// Autoscale lane bounds are empty or inverted in runtime state.
-    #[error("nexus.autoscale.min_lanes {min_lanes} must be < max_lanes {max_lanes}")]
+    #[error(
+        "nexus.autoscale.min_lane_id {min_lane_id} must be < max_lane_id_exclusive {max_lane_id_exclusive}"
+    )]
     AutoscaleInvalidLaneBounds {
         /// Inclusive lower lane-id bound of the autoscale-owned range.
-        min_lanes: u32,
+        min_lane_id: u32,
         /// Exclusive upper lane-id bound of the autoscale-owned range.
-        max_lanes: u32,
+        max_lane_id_exclusive: u32,
     },
     /// Autoscale exclusive upper lane-id bound exceeds the compiled deterministic safety cap.
-    #[error("nexus.autoscale.max_lanes {max_lanes} exceeds compiled safety cap {cap}")]
-    AutoscaleMaxLanesExceedsCap {
+    #[error(
+        "nexus.autoscale.max_lane_id_exclusive {max_lane_id_exclusive} exceeds compiled safety cap {cap}"
+    )]
+    AutoscaleMaxLaneIdExclusiveExceedsCap {
         /// Exclusive upper lane-id bound of the autoscale-owned range.
-        max_lanes: u32,
+        max_lane_id_exclusive: u32,
         /// Compiled maximum supported exclusive lane-id bound.
         cap: u32,
     },
     /// The default route must be a base lane below the autoscale-owned elastic id range.
     #[error(
-        "nexus.routing_policy.default_lane {lane} must be below nexus.autoscale.min_lanes {min_lanes} when autoscale is enabled"
+        "nexus.routing_policy.default_lane {lane} must be below nexus.autoscale.min_lane_id {min_lane_id} when autoscale is enabled"
     )]
     AutoscaleDefaultLaneNotBase {
         /// Default lane id at or above the autoscale elastic range.
         lane: LaneId,
         /// Inclusive lower bound for autoscale elastic lane ids.
-        min_lanes: u32,
+        min_lane_id: u32,
     },
     /// The autoscale routing base depends on lane-specific policy that cannot be cloned safely.
     #[error("nexus autoscale base lane {lane} is not self-contained: {reason}")]
@@ -8575,9 +8576,8 @@ pub struct GovernanceProposalRecord {
     /// Pipeline stage statuses for SLA enforcement.
     #[norito(default)]
     pub pipeline: GovernancePipeline,
-    /// Proposal-time parliament draw snapshot used for JIT sortition approvals.
-    #[norito(default)]
-    pub parliament_snapshot: Option<GovernanceParliamentSnapshot>,
+    /// Exact proposal-time Parliament draw used for every V1 approval.
+    pub parliament_snapshot: GovernanceParliamentSnapshot,
     /// Deterministic referendum result retained for caller-independent enactment.
     #[norito(default)]
     pub finalization_evidence:
@@ -8598,7 +8598,167 @@ pub struct GovernanceParliamentSnapshot {
     /// Multi-body roster snapshot bound to this proposal.
     pub bodies: iroha_data_model::governance::types::ParliamentBodies,
 }
+impl GovernanceParliamentSnapshot {
+    /// Build and validate a canonical V1 proposal-time Parliament snapshot.
+    pub fn try_new(
+        beacon: [u8; 32],
+        bodies: iroha_data_model::governance::types::ParliamentBodies,
+    ) -> core::result::Result<Self, String> {
+        let selection_epoch = bodies.selection_epoch;
+        let roster_root = Self::canonical_roster_root(&bodies)?;
+        let snapshot = Self {
+            selection_epoch,
+            beacon,
+            roster_root,
+            bodies,
+        };
+        snapshot.validate_v1()?;
+        Ok(snapshot)
+    }
+
+    /// Compute the canonical commitment to a Parliament body snapshot.
+    pub(crate) fn canonical_roster_root(
+        bodies: &iroha_data_model::governance::types::ParliamentBodies,
+    ) -> core::result::Result<[u8; 32], String> {
+        let encoded = norito::encode_canonical(bodies)
+            .map_err(|error| format!("failed to encode Parliament roster snapshot: {error}"))?;
+        let digest = Blake2b512::digest(encoded);
+        let mut root = [0_u8; 32];
+        root.copy_from_slice(&digest[..32]);
+        Ok(root)
+    }
+
+    /// Validate the single first-release proposal-time Parliament representation.
+    pub fn validate_v1(&self) -> core::result::Result<(), String> {
+        const BODIES: [ParliamentBody; 7] = [
+            ParliamentBody::RulesCommittee,
+            ParliamentBody::AgendaCouncil,
+            ParliamentBody::InterestPanel,
+            ParliamentBody::ReviewPanel,
+            ParliamentBody::PolicyJury,
+            ParliamentBody::OversightCommittee,
+            ParliamentBody::FmaCommittee,
+        ];
+
+        if self.bodies.selection_epoch != self.selection_epoch {
+            return Err(
+                "Parliament body selection epoch differs from its proposal snapshot".into(),
+            );
+        }
+        if Self::canonical_roster_root(&self.bodies)? != self.roster_root {
+            return Err("Parliament roster commitment differs from its proposal snapshot".into());
+        }
+        if self.bodies.rosters.len() != BODIES.len() {
+            return Err(
+                "proposal snapshot must contain exactly all seven Parliament bodies".into(),
+            );
+        }
+        let mut candidate_count = None;
+        for body in BODIES {
+            let roster = self.bodies.rosters.get(&body).ok_or_else(|| {
+                format!("proposal snapshot is missing the {body:?} Parliament roster")
+            })?;
+            if roster.body != body {
+                return Err(format!(
+                    "{body:?} Parliament roster is stored under the wrong key"
+                ));
+            }
+            if roster.epoch != self.selection_epoch {
+                return Err(format!(
+                    "{body:?} Parliament roster has the wrong selection epoch"
+                ));
+            }
+            if roster.derived_by
+                != iroha_data_model::isi::governance::CouncilDerivationKind::Sortition
+            {
+                return Err(format!(
+                    "{body:?} Parliament roster was not produced by proposal-time sortition"
+                ));
+            }
+            if roster.members.is_empty() {
+                return Err(format!("{body:?} Parliament roster has no members"));
+            }
+            let mut seated = BTreeSet::new();
+            if roster
+                .members
+                .iter()
+                .chain(&roster.alternates)
+                .any(|account| !seated.insert(account))
+            {
+                return Err(format!(
+                    "{body:?} Parliament roster repeats a member or alternate"
+                ));
+            }
+            let seated_count = u32::try_from(seated.len()).map_err(|_| {
+                format!("{body:?} Parliament roster exceeds the V1 candidate bound")
+            })?;
+            if roster.candidate_count == 0 || seated_count > roster.candidate_count {
+                return Err(format!(
+                    "{body:?} Parliament roster exceeds its eligible candidate count"
+                ));
+            }
+            if candidate_count
+                .replace(roster.candidate_count)
+                .is_some_and(|expected| expected != roster.candidate_count)
+            {
+                return Err("Parliament body rosters disagree on the candidate count".into());
+            }
+        }
+        Ok(())
+    }
+}
+/// Build one canonical single-member Parliament snapshot for unit-test state seeding.
+#[cfg(test)]
+pub(crate) fn governance_parliament_snapshot_for_tests(
+    member: &AccountId,
+    selection_epoch: u64,
+) -> GovernanceParliamentSnapshot {
+    let rosters = [
+        ParliamentBody::RulesCommittee,
+        ParliamentBody::AgendaCouncil,
+        ParliamentBody::InterestPanel,
+        ParliamentBody::ReviewPanel,
+        ParliamentBody::PolicyJury,
+        ParliamentBody::OversightCommittee,
+        ParliamentBody::FmaCommittee,
+    ]
+    .into_iter()
+    .map(|body| {
+        (
+            body,
+            iroha_data_model::governance::types::ParliamentRoster {
+                body,
+                epoch: selection_epoch,
+                members: vec![member.clone()],
+                alternates: Vec::new(),
+                candidate_count: 1,
+                derived_by: iroha_data_model::isi::governance::CouncilDerivationKind::Sortition,
+            },
+        )
+    })
+    .collect();
+    GovernanceParliamentSnapshot::try_new(
+        [0xA5; 32],
+        iroha_data_model::governance::types::ParliamentBodies {
+            selection_epoch,
+            rosters,
+        },
+    )
+    .expect("canonical unit-test Parliament snapshot")
+}
 impl GovernanceProposalRecord {
+    /// Validate the mandatory first-release proposal-time governance snapshot.
+    pub fn validate_v1(&self) -> core::result::Result<(), String> {
+        self.parliament_snapshot.validate_v1()?;
+        if self.parliament_snapshot.selection_epoch != self.created_height {
+            return Err(
+                "proposal Parliament selection epoch differs from the proposal creation height"
+                    .into(),
+            );
+        }
+        Ok(())
+    }
+
     /// Access the deploy-contract payload when the proposal represents a contract deployment.
     pub fn as_deploy_contract(
         &self,
@@ -8725,12 +8885,10 @@ impl GovernanceProposalRecord {
             }
         }
     }
-    /// Resolve which approval epoch should gate stage quorum checks.
-    #[must_use]
-    pub fn approval_epoch(&self, fallback_epoch: u64) -> u64 {
-        self.parliament_snapshot
-            .as_ref()
-            .map_or(fallback_epoch, |snapshot| snapshot.selection_epoch)
+    /// Return the only V1 approval epoch after validating the retained snapshot.
+    pub(crate) fn approval_epoch(&self) -> core::result::Result<u64, String> {
+        self.validate_v1()?;
+        Ok(self.parliament_snapshot.selection_epoch)
     }
 }
 /// Lifecycle status of a governance proposal.
@@ -9067,9 +9225,6 @@ fn update_governance_pipeline_slas(
     gov_cfg: &iroha_config::parameters::actual::Governance,
 ) {
     let trace_pipeline = gov_cfg.debug_trace_pipeline;
-    let fallback_epoch = now_h
-        .saturating_sub(1)
-        .saturating_div(gov_cfg.parliament_term_blocks.max(1));
     let proposals: Vec<([u8; 32], GovernanceProposalRecord)> = wtx
         .governance_proposals
         .iter()
@@ -9084,22 +9239,28 @@ fn update_governance_pipeline_slas(
         let mut changed = false;
         trace_pipeline_proposal(trace_pipeline, &rid_hex, &rec);
         let approvals_view = wtx.governance_stage_approvals.get(&rid_hex);
-        let approval_epoch = rec.approval_epoch(fallback_epoch);
+        let approval_epoch = rec.approval_epoch().ok();
         let approvals = StageApprovals::from_readiness(StageReadiness([
             approvals_view.is_some_and(|approvals| {
-                approvals.quorum_met(ParliamentBody::RulesCommittee, approval_epoch)
+                approval_epoch.is_some_and(|epoch| {
+                    approvals.quorum_met(ParliamentBody::RulesCommittee, epoch)
+                })
             }),
             approvals_view.is_some_and(|approvals| {
-                approvals.quorum_met(ParliamentBody::AgendaCouncil, approval_epoch)
+                approval_epoch
+                    .is_some_and(|epoch| approvals.quorum_met(ParliamentBody::AgendaCouncil, epoch))
             }),
             approvals_view.is_some_and(|approvals| {
-                approvals.quorum_met(ParliamentBody::InterestPanel, approval_epoch)
+                approval_epoch
+                    .is_some_and(|epoch| approvals.quorum_met(ParliamentBody::InterestPanel, epoch))
             }),
             approvals_view.is_some_and(|approvals| {
-                approvals.quorum_met(ParliamentBody::ReviewPanel, approval_epoch)
+                approval_epoch
+                    .is_some_and(|epoch| approvals.quorum_met(ParliamentBody::ReviewPanel, epoch))
             }),
             approvals_view.is_some_and(|approvals| {
-                approvals.quorum_met(ParliamentBody::PolicyJury, approval_epoch)
+                approval_epoch
+                    .is_some_and(|epoch| approvals.quorum_met(ParliamentBody::PolicyJury, epoch))
             }),
         ]));
         let ctx = StageContext {
@@ -9545,11 +9706,7 @@ pub struct GovernanceLockRecord {
     #[norito(default)]
     pub duration_blocks: u64,
     /// Immutable custody identities used for lock, slash, restitution, and release.
-    ///
-    /// Legacy records decode as `None` and continue to use the active governance
-    /// configuration. New records always retain `Some`.
-    #[norito(default)]
-    pub custody: Option<GovernanceLockCustody>,
+    pub custody: GovernanceLockCustody,
 }
 /// Locks for a single referendum keyed by voter account id
 #[derive(
@@ -14435,8 +14592,8 @@ mod stake_snapshot_tests {
             ..Default::default()
         };
         nexus.autoscale.enabled = true;
-        nexus.autoscale.min_lanes = nonzero!(1_u32);
-        nexus.autoscale.max_lanes = nonzero!(3_u32);
+        nexus.autoscale.min_lane_id = nonzero!(1_u32);
+        nexus.autoscale.max_lane_id_exclusive = nonzero!(3_u32);
         nexus.lane_config = DerivedLaneConfig::from_catalog(&nexus.lane_catalog);
         assert_eq!(
             nexus_active_lane_ids(&nexus),
@@ -14478,8 +14635,8 @@ mod stake_snapshot_tests {
             ..Default::default()
         };
         nexus.autoscale.enabled = true;
-        nexus.autoscale.min_lanes = nonzero!(1_u32);
-        nexus.autoscale.max_lanes = nonzero!(3_u32);
+        nexus.autoscale.min_lane_id = nonzero!(1_u32);
+        nexus.autoscale.max_lane_id_exclusive = nonzero!(3_u32);
         nexus.lane_config = DerivedLaneConfig::from_catalog(&nexus.lane_catalog);
         assert_eq!(
             nexus_active_lane_dataspace_at_height(autoscale_lane, &nexus, 6),
@@ -25073,7 +25230,6 @@ impl State {
             debug_trace_scheduler_inputs:
                 iroha_config::parameters::defaults::pipeline::DEBUG_TRACE_SCHEDULER_INPUTS,
             debug_trace_tx_eval: iroha_config::parameters::defaults::pipeline::DEBUG_TRACE_TX_EVAL,
-            signature_batch_max: iroha_config::parameters::defaults::pipeline::SIGNATURE_BATCH_MAX,
             signature_batch_max_ed25519:
                 iroha_config::parameters::defaults::pipeline::SIGNATURE_BATCH_MAX_ED25519,
             signature_batch_max_secp256k1:
@@ -26462,8 +26618,6 @@ impl State {
                     }
                 }
             }
-            let term_blocks = sb.gov.parliament_term_blocks.max(1);
-            let fallback_epoch = now_h.saturating_sub(1).saturating_div(term_blocks);
             // Freeze the validation-fee citizen electorate from the state committed
             // immediately before the inclusive referendum start block. Missing or
             // inconsistent gate/roster state deliberately leaves no snapshot, so
@@ -26503,13 +26657,15 @@ impl State {
                     );
                     continue;
                 };
-                let Some(parliament_snapshot) = proposal.parliament_snapshot.as_ref() else {
+                let parliament_snapshot = &proposal.parliament_snapshot;
+                if let Err(reason) = proposal.validate_v1() {
                     warn!(
                         referendum_id = %rid,
-                        "validation-fee electorate snapshot omitted: Parliament snapshot is missing"
+                        %reason,
+                        "validation-fee electorate snapshot omitted: Parliament snapshot is malformed"
                     );
                     continue;
-                };
+                }
                 let selection_epoch = parliament_snapshot.selection_epoch;
                 let seven_body_gate_retained = approval_gate_height < now_h
                     && parliament_snapshot.bodies.selection_epoch == selection_epoch
@@ -26580,7 +26736,9 @@ impl State {
                                 });
                             match proposal {
                                 Some(proposal) => {
-                                    let approval_epoch = proposal.approval_epoch(fallback_epoch);
+                                    let Ok(approval_epoch) = proposal.approval_epoch() else {
+                                        return false;
+                                    };
                                     let required_bodies: &[ParliamentBody] = match proposal.kind {
                                         iroha_data_model::governance::types::ProposalKind::DeployContract(_) => &[
                                             ParliamentBody::RulesCommittee,
@@ -26906,36 +27064,19 @@ impl State {
                             sweep_failed = true;
                             continue;
                         }
-                        let custody = match (&rec.custody, &validation_fee_custody) {
-                            (Some(actual), Some(expected)) if actual != expected => {
-                                warn!(
-                                    %rid,
-                                    owner = %owner,
-                                    "retaining validation-fee governance lock with mismatched immutable custody"
-                                );
-                                sweep_failed = true;
-                                continue;
-                            }
-                            (None, Some(_)) => {
-                                warn!(
-                                    %rid,
-                                    owner = %owner,
-                                    "retaining validation-fee governance lock without immutable custody"
-                                );
-                                sweep_failed = true;
-                                continue;
-                            }
-                            (Some(custody), _) => custody.clone(),
-                            (None, None) => {
-                                warn!(
-                                    %rid,
-                                    owner = %owner,
-                                    "retaining governance lock without immutable custody"
-                                );
-                                sweep_failed = true;
-                                continue;
-                            }
-                        };
+                        if validation_fee_custody
+                            .as_ref()
+                            .is_some_and(|expected| &rec.custody != expected)
+                        {
+                            warn!(
+                                %rid,
+                                owner = %owner,
+                                "retaining validation-fee governance lock with mismatched immutable custody"
+                            );
+                            sweep_failed = true;
+                            continue;
+                        }
+                        let custody = rec.custody.clone();
                         let release = if custody.escrowed && !rec.amount.is_zero() {
                             let owner_asset_id = iroha_data_model::asset::AssetId::new(
                                 custody.asset_definition_id.clone(),
@@ -29239,29 +29380,6 @@ impl State {
         let view = self.view();
         StateReadOnly::resolve_lane_committee_at_height(&view, route, authority_height)
     }
-    /// Test-only lane-keyed compatibility helper.
-    #[cfg(test)]
-    pub fn authoritative_lane_peer_ids(&self, lane_id: LaneId) -> Vec<PeerId> {
-        self.authoritative_lane_peer_ids_at_height(lane_id, self.lane_authority_height())
-    }
-    /// Test-only lane-keyed compatibility helper.
-    #[cfg(test)]
-    pub fn authoritative_lane_peer_ids_at_height(
-        &self,
-        lane_id: LaneId,
-        block_height: u64,
-    ) -> Vec<PeerId> {
-        let nexus = self.nexus_snapshot();
-        let manifest_registry = self.lane_manifests.read().clone();
-        Self::authoritative_lane_peer_ids_from_sources(
-            &self.world.view(),
-            lane_id,
-            nexus.staking.validator_mode(lane_id, &nexus.lane_catalog),
-            manifest_registry.as_ref(),
-            &nexus,
-            block_height,
-        )
-    }
     /// Return whether a lane is active at the committed lane-authority height.
     pub fn is_lane_active_for_authority(&self, lane_id: LaneId) -> bool {
         let nexus = self.nexus_snapshot();
@@ -29397,29 +29515,6 @@ impl State {
             block_height,
         )
     }
-    #[cfg(test)]
-    fn authoritative_lane_peer_ids_from_sources(
-        world: &impl WorldReadOnly,
-        lane_id: LaneId,
-        validator_mode: iroha_config::parameters::actual::LaneValidatorMode,
-        manifest_registry: &LaneManifestRegistry,
-        nexus: &iroha_config::parameters::actual::Nexus,
-        block_height: u64,
-    ) -> Vec<PeerId> {
-        let Some(inputs) =
-            lane_authority::inputs_from_nexus(lane_id, validator_mode, nexus, block_height)
-        else {
-            return Vec::new();
-        };
-        lane_authority::peer_pool_with_inputs(
-            world,
-            lane_id,
-            manifest_registry,
-            &inputs,
-            block_height,
-        )
-        .unwrap_or_default()
-    }
     /// Derive the initial committee for a brand-new autoscale lane incarnation.
     ///
     /// This is the only path allowed to consult mutable manifests, stake, and
@@ -29452,8 +29547,8 @@ impl State {
             || lane.dataspace_id != nexus.routing_policy.default_dataspace
             || ensure_autoscale_managed_lane_in_range(
                 lane.id,
-                nexus.autoscale.min_lanes.get(),
-                nexus.autoscale.max_lanes.get(),
+                nexus.autoscale.min_lane_id.get(),
+                nexus.autoscale.max_lane_id_exclusive.get(),
             )
             .is_err()
             || ensure_autoscale_managed_lane_inherits_default_profile(lane, nexus).is_err()
@@ -31068,8 +31163,8 @@ impl State {
         }
         let expected_lane = autoscale_managed_lane_for_retire(
             nexus.lane_catalog.lanes(),
-            nexus.autoscale.min_lanes.get(),
-            nexus.autoscale.max_lanes.get(),
+            nexus.autoscale.min_lane_id.get(),
+            nexus.autoscale.max_lane_id_exclusive.get(),
             nexus.routing_policy.default_dataspace,
         )?;
         let lane_incarnations = self.lane_incarnations_snapshot();
@@ -41874,8 +41969,8 @@ fn ensure_autoscale_managed_lane_owned_by_nexus(
     }
     ensure_autoscale_managed_lane_in_range(
         lane.id,
-        nexus.autoscale.min_lanes.get(),
-        nexus.autoscale.max_lanes.get(),
+        nexus.autoscale.min_lane_id.get(),
+        nexus.autoscale.max_lane_id_exclusive.get(),
     )?;
     ensure_autoscale_managed_lane_default_dataspace(lane, nexus.routing_policy.default_dataspace)?;
     let committee = decode_autoscale_lane_committee(lane).ok().flatten().ok_or(
@@ -42073,8 +42168,8 @@ fn ensure_autoscale_transition_capacity_matches_nexus(
     let current_capacity = autoscale_default_route_capacity_lanes(
         &nexus.routing_policy,
         nexus.lane_catalog.lanes(),
-        nexus.autoscale.min_lanes.get(),
-        nexus.autoscale.max_lanes.get(),
+        nexus.autoscale.min_lane_id.get(),
+        nexus.autoscale.max_lane_id_exclusive.get(),
     );
     if current_capacity != 0
         && *active_lanes == current_capacity
@@ -42121,17 +42216,17 @@ fn nexus_fee_asset_selector_is_xor(value: &str) -> bool {
 }
 fn ensure_autoscale_managed_lane_in_range(
     lane: LaneId,
-    min_lanes: u32,
-    max_lanes: u32,
+    min_lane_id: u32,
+    max_lane_id_exclusive: u32,
 ) -> Result<(), LaneLifecycleError> {
     let lane_id = lane.as_u32();
-    if lane_id >= min_lanes && lane_id < max_lanes {
+    if lane_id >= min_lane_id && lane_id < max_lane_id_exclusive {
         return Ok(());
     }
     Err(LaneLifecycleError::AutoscaleManagedLaneOutOfBounds {
         lane,
-        min_lanes,
-        max_lanes,
+        min_lane_id,
+        max_lane_id_exclusive,
     })
 }
 fn ensure_manual_lane_outside_autoscale_elastic_range(
@@ -42142,15 +42237,15 @@ fn ensure_manual_lane_outside_autoscale_elastic_range(
         return Ok(());
     }
     let lane_id = lane.as_u32();
-    let min_lanes = nexus.autoscale.min_lanes.get();
-    let max_lanes = nexus.autoscale.max_lanes.get();
-    if lane_id < min_lanes || lane_id >= max_lanes {
+    let min_lane_id = nexus.autoscale.min_lane_id.get();
+    let max_lane_id_exclusive = nexus.autoscale.max_lane_id_exclusive.get();
+    if lane_id < min_lane_id || lane_id >= max_lane_id_exclusive {
         return Ok(());
     }
     Err(LaneLifecycleError::ReservedAutoscaleElasticLaneId {
         lane,
-        min_lanes,
-        max_lanes,
+        min_lane_id,
+        max_lane_id_exclusive,
     })
 }
 fn ensure_autoscale_default_lane_is_base(
@@ -42161,11 +42256,11 @@ fn ensure_autoscale_default_lane_is_base(
     }
     let lane = nexus.routing_policy.default_lane;
     let lane_id = lane.as_u32();
-    let min_lanes = nexus.autoscale.min_lanes.get();
-    if lane_id < min_lanes {
+    let min_lane_id = nexus.autoscale.min_lane_id.get();
+    if lane_id < min_lane_id {
         return Ok(());
     }
-    Err(LaneLifecycleError::AutoscaleDefaultLaneNotBase { lane, min_lanes })
+    Err(LaneLifecycleError::AutoscaleDefaultLaneNotBase { lane, min_lane_id })
 }
 fn ensure_autoscale_base_profile_supported(
     nexus: &iroha_config::parameters::actual::Nexus,
@@ -42241,17 +42336,20 @@ fn rebind_lane_manifests_for_lifecycle(
 fn ensure_autoscale_runtime_lane_bounds(
     autoscale: &iroha_config::parameters::actual::Autoscale,
 ) -> Result<(), LaneLifecycleError> {
-    let min_lanes = autoscale.min_lanes.get();
-    let max_lanes = autoscale.max_lanes.get();
-    if min_lanes >= max_lanes {
+    let min_lane_id = autoscale.min_lane_id.get();
+    let max_lane_id_exclusive = autoscale.max_lane_id_exclusive.get();
+    if min_lane_id >= max_lane_id_exclusive {
         return Err(LaneLifecycleError::AutoscaleInvalidLaneBounds {
-            min_lanes,
-            max_lanes,
+            min_lane_id,
+            max_lane_id_exclusive,
         });
     }
-    let cap = iroha_config::parameters::defaults::nexus::autoscale::MAX_LANES;
-    if max_lanes > cap {
-        return Err(LaneLifecycleError::AutoscaleMaxLanesExceedsCap { max_lanes, cap });
+    let cap = iroha_config::parameters::defaults::nexus::autoscale::MAX_LANE_ID_EXCLUSIVE;
+    if max_lane_id_exclusive > cap {
+        return Err(LaneLifecycleError::AutoscaleMaxLaneIdExclusiveExceedsCap {
+            max_lane_id_exclusive,
+            cap,
+        });
     }
     Ok(())
 }
@@ -42262,11 +42360,11 @@ fn ensure_autoscale_runtime_elastic_range(
         return Ok(());
     }
     ensure_autoscale_default_lane_is_base(nexus)?;
-    let min_lanes = nexus.autoscale.min_lanes.get();
-    let max_lanes = nexus.autoscale.max_lanes.get();
+    let min_lane_id = nexus.autoscale.min_lane_id.get();
+    let max_lane_id_exclusive = nexus.autoscale.max_lane_id_exclusive.get();
     for lane in nexus.lane_catalog.lanes() {
         let lane_id = lane.id.as_u32();
-        if lane_id < min_lanes || lane_id >= max_lanes {
+        if lane_id < min_lane_id || lane_id >= max_lane_id_exclusive {
             if lane_claims_autoscale_managed(lane) {
                 ensure_autoscale_managed_lane_owned_by_nexus(lane, nexus)?;
             } else {
@@ -42278,8 +42376,8 @@ fn ensure_autoscale_runtime_elastic_range(
             ensure_manual_lane_has_no_reserved_autoscale_metadata(lane)?;
             return Err(LaneLifecycleError::ReservedAutoscaleElasticLaneId {
                 lane: lane.id,
-                min_lanes,
-                max_lanes,
+                min_lane_id,
+                max_lane_id_exclusive,
             });
         }
         ensure_autoscale_managed_lane_owned_by_nexus(lane, nexus)?;
@@ -42377,7 +42475,8 @@ fn nexus_lane_id_in_active_autoscale_elastic_range(
         return false;
     }
     let lane_id = lane_id.as_u32();
-    lane_id >= nexus.autoscale.min_lanes.get() && lane_id < nexus.autoscale.max_lanes.get()
+    lane_id >= nexus.autoscale.min_lane_id.get()
+        && lane_id < nexus.autoscale.max_lane_id_exclusive.get()
 }
 fn nexus_autoscale_lane_active_for_authority(
     lane: &iroha_data_model::nexus::LaneConfig,
@@ -42942,20 +43041,6 @@ pub trait StateReadOnly: WorldStateSnapshot {
     }
     /// Cached snapshot of all account identifiers currently known to the state view.
     fn accounts_snapshot(&self) -> Arc<Vec<AccountId>>;
-    /// Test-only lane-keyed compatibility resolver.
-    #[cfg(test)]
-    fn authoritative_lane_peer_ids(&self, lane_id: LaneId) -> Vec<PeerId>;
-    /// Test-only lane-keyed compatibility resolver at an explicit height.
-    ///
-    /// Callers validating a proposed height must not silently substitute the
-    /// pre-state height: key activation, lane lifecycle, and autoscale
-    /// ownership are height-sensitive consensus inputs.
-    #[cfg(test)]
-    fn authoritative_lane_peer_ids_at_height(
-        &self,
-        lane_id: LaneId,
-        block_height: u64,
-    ) -> Vec<PeerId>;
     /// Resolve the exact canonical `3f+1` committee for a lane/dataspace route
     /// at an explicit consensus height.
     ///
@@ -43218,30 +43303,6 @@ macro_rules! impl_state_ro {
                             .collect(),
                     )
                 }))
-            }
-            #[cfg(test)]
-            fn authoritative_lane_peer_ids(&self, lane_id: LaneId) -> Vec<PeerId> {
-                let block_height = u64::try_from(self.height()).unwrap_or(u64::MAX);
-                self.authoritative_lane_peer_ids_at_height(lane_id, block_height)
-            }
-            #[cfg(test)]
-            fn authoritative_lane_peer_ids_at_height(
-                &self,
-                lane_id: LaneId,
-                block_height: u64,
-            ) -> Vec<PeerId> {
-                let validator_mode = self
-                    .nexus
-                    .staking
-                    .validator_mode(lane_id, &self.nexus.lane_catalog);
-                State::authoritative_lane_peer_ids_from_sources(
-                    self.world(),
-                    lane_id,
-                    validator_mode,
-                    self.lane_manifests.as_ref(),
-                    &self.nexus,
-                    block_height,
-                )
             }
             fn resolve_lane_committee_at_height(
                 &self,
@@ -45575,15 +45636,15 @@ fn autoscale_cooldown_active(
 }
 fn autoscale_managed_lane_for_retire(
     lanes: &[iroha_data_model::nexus::LaneConfig],
-    min_lanes: u32,
-    max_lanes: u32,
+    min_lane_id: u32,
+    max_lane_id_exclusive: u32,
     default_dataspace: DataSpaceId,
 ) -> Option<LaneId> {
     lanes
         .iter()
         .filter(|lane| {
-            lane.id.as_u32() >= min_lanes
-                && lane.id.as_u32() < max_lanes
+            lane.id.as_u32() >= min_lane_id
+                && lane.id.as_u32() < max_lane_id_exclusive
                 && lane.dataspace_id == default_dataspace
                 && lane.is_autoscale_managed_elastic()
         })
@@ -45593,8 +45654,8 @@ fn autoscale_managed_lane_for_retire(
 fn autoscale_default_route_capacity_lanes(
     policy: &LaneRoutingPolicy,
     lanes: &[iroha_data_model::nexus::LaneConfig],
-    min_lanes: u32,
-    max_lanes: u32,
+    min_lane_id: u32,
+    max_lane_id_exclusive: u32,
 ) -> u64 {
     let Some(default_lane) = lanes.iter().find(|lane| lane.id == policy.default_lane) else {
         return 0;
@@ -45611,8 +45672,8 @@ fn autoscale_default_route_capacity_lanes(
         .filter(|lane| {
             lane.id != policy.default_lane
                 && lane.dataspace_id == policy.default_dataspace
-                && lane.id.as_u32() >= min_lanes
-                && lane.id.as_u32() < max_lanes
+                && lane.id.as_u32() >= min_lane_id
+                && lane.id.as_u32() < max_lane_id_exclusive
                 && lane.is_autoscale_managed_elastic()
         })
         .count();
@@ -45620,14 +45681,14 @@ fn autoscale_default_route_capacity_lanes(
 }
 fn autoscale_next_lane_id(
     lanes: &[iroha_data_model::nexus::LaneConfig],
-    min_lanes: u32,
-    max_lanes: u32,
+    min_lane_id: u32,
+    max_lane_id_exclusive: u32,
 ) -> Option<LaneId> {
-    if min_lanes >= max_lanes {
+    if min_lane_id >= max_lane_id_exclusive {
         return None;
     }
     let existing: BTreeSet<u32> = lanes.iter().map(|lane| lane.id.as_u32()).collect();
-    (min_lanes..max_lanes)
+    (min_lane_id..max_lane_id_exclusive)
         .find(|candidate| !existing.contains(candidate))
         .map(LaneId::new)
 }
@@ -49343,8 +49404,8 @@ impl<'state> StateBlock<'state> {
         if let PendingAutoscaleTransition::ScaleIn { lane, .. } = &transition {
             if autoscale_managed_lane_for_retire(
                 self.nexus.lane_catalog.lanes(),
-                self.nexus.autoscale.min_lanes.get(),
-                self.nexus.autoscale.max_lanes.get(),
+                self.nexus.autoscale.min_lane_id.get(),
+                self.nexus.autoscale.max_lane_id_exclusive.get(),
                 self.nexus.routing_policy.default_dataspace,
             ) != Some(*lane)
             {
@@ -49613,8 +49674,8 @@ impl<'state> StateBlock<'state> {
         let autoscale_capacity_lanes = autoscale_default_route_capacity_lanes(
             &self.nexus.routing_policy,
             self.nexus.lane_catalog.lanes(),
-            autoscale.min_lanes.get(),
-            autoscale.max_lanes.get(),
+            autoscale.min_lane_id.get(),
+            autoscale.max_lane_id_exclusive.get(),
         );
         if autoscale_capacity_lanes == 0 {
             return;
@@ -49675,8 +49736,10 @@ impl<'state> StateBlock<'state> {
         ) {
             return;
         }
-        let next_scale_out_lane_id =
-            self.next_autoscale_lane_id(autoscale.min_lanes.get(), autoscale.max_lanes.get());
+        let next_scale_out_lane_id = self.next_autoscale_lane_id(
+            autoscale.min_lane_id.get(),
+            autoscale.max_lane_id_exclusive.get(),
+        );
         let can_scale_out = next_scale_out_lane_id.is_some();
         let can_scale_in = matches!(
             scale_in_action,
@@ -49836,8 +49899,16 @@ impl<'state> StateBlock<'state> {
         #[cfg(feature = "telemetry")]
         self.telemetry.record_lane_lifecycle_outcome("autoscale");
     }
-    fn next_autoscale_lane_id(&self, min_lanes: u32, max_lanes: u32) -> Option<LaneId> {
-        autoscale_next_lane_id(self.nexus.lane_catalog.lanes(), min_lanes, max_lanes)
+    fn next_autoscale_lane_id(
+        &self,
+        min_lane_id: u32,
+        max_lane_id_exclusive: u32,
+    ) -> Option<LaneId> {
+        autoscale_next_lane_id(
+            self.nexus.lane_catalog.lanes(),
+            min_lane_id,
+            max_lane_id_exclusive,
+        )
     }
     #[cfg(test)]
     fn stage_autoscale_sample_record(&mut self, block: &CommittedBlock) -> bool {
@@ -49904,8 +49975,8 @@ impl<'state> StateBlock<'state> {
     ) -> Option<AutoscaleScaleInAction> {
         let candidate = autoscale_managed_lane_for_retire(
             self.nexus.lane_catalog.lanes(),
-            self.nexus.autoscale.min_lanes.get(),
-            self.nexus.autoscale.max_lanes.get(),
+            self.nexus.autoscale.min_lane_id.get(),
+            self.nexus.autoscale.max_lane_id_exclusive.get(),
             self.nexus.routing_policy.default_dataspace,
         )?;
         let lane = self
@@ -50004,8 +50075,8 @@ impl<'state> StateBlock<'state> {
         let capacity = autoscale_default_route_capacity_lanes(
             &self.nexus.routing_policy,
             self.nexus.lane_catalog.lanes(),
-            self.nexus.autoscale.min_lanes.get(),
-            self.nexus.autoscale.max_lanes.get(),
+            self.nexus.autoscale.min_lane_id.get(),
+            self.nexus.autoscale.max_lane_id_exclusive.get(),
         );
         if capacity <= 1 {
             return Ok(None);

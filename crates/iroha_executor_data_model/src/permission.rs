@@ -944,6 +944,21 @@ pub mod governance {
         pub struct CanManageVerifyingKeys;
     }
     permission! {
+        /// Allow activating and cancelling runtime upgrades.
+        #[derive(Copy)]
+        pub struct CanManageRuntimeUpgrades;
+    }
+    permission! {
+        /// Allow managing consensus keys and endorsement committees.
+        #[derive(Copy)]
+        pub struct CanManageConsensusKeys;
+    }
+    permission! {
+        /// Allow publishing and changing lifecycle state for confidential parameters.
+        #[derive(Copy)]
+        pub struct CanManageConfidentialParams;
+    }
+    permission! {
         /// Allow recording citizen service discipline events.
         pub struct CanRecordCitizenService {
             /// Citizen account targeted by the record.
@@ -1065,22 +1080,6 @@ pub mod sorafs {
         #[derive(Copy)]
         pub struct CanResolveSorafsCapacityDispute;
     }
-    permission! {
-        /// Legacy permission accepted only for submitting a `SoraFS` provider-governance proposal.
-        ///
-        /// Holding or transferring this token never mutates provider ownership;
-        /// the proposal must still pass the native Parliament referendum.
-        #[derive(Copy)]
-        pub struct CanRegisterSorafsProviderOwner;
-    }
-    permission! {
-        /// Legacy permission accepted only for submitting a `SoraFS` provider-removal proposal.
-        ///
-        /// Holding or transferring this token never mutates provider ownership;
-        /// the proposal must still pass the native Parliament referendum.
-        #[derive(Copy)]
-        pub struct CanUnregisterSorafsProviderOwner;
-    }
 }
 /// Permission tokens governing `SoraNet` services.
 pub mod soranet {
@@ -1146,7 +1145,10 @@ mod tests {
         CanSetAssetHoldingLimit, CanSetAssetTransferAvailability, CanSetAssetTransferDailyLimit,
     };
     use super::escrow::CanResolveEscrowDispute;
-    use super::governance::{CanManageVerifyingKeys, CanProposeRuntimeUpgrade};
+    use super::governance::{
+        CanManageConfidentialParams, CanManageConsensusKeys, CanManageRuntimeUpgrades,
+        CanManageVerifyingKeys, CanProposeRuntimeUpgrade,
+    };
     use super::oracle::{
         CanManageTwitterBindings, CanRegisterOracleFeed, CanVoteOracleChangeStage,
     };
@@ -1275,6 +1277,45 @@ mod tests {
         assert!(
             CanManageVerifyingKeys::try_from(&malformed).is_err(),
             "the global capability must not accept an invented resource scope"
+        );
+    }
+    #[test]
+    fn operational_governance_permissions_are_exact_unit_capabilities() {
+        macro_rules! assert_exact_unit_capability {
+            ($permission:ty, $value:expr, $name:literal) => {{
+                let canonical: iroha_data_model::permission::Permission =
+                    $value.into();
+                assert_eq!(canonical.name(), $name);
+                assert_eq!(
+                    <$permission>::try_from(&canonical).expect("decode canonical unit payload"),
+                    $value,
+                );
+                let malformed = iroha_data_model::permission::Permission::new(
+                    $name.into(),
+                    norito::json!({"invented_scope": "must-not-authorize"}),
+                );
+                assert!(
+                    <$permission>::try_from(&malformed).is_err(),
+                    "{} must reject an invented resource scope",
+                    $name,
+                );
+            }};
+        }
+
+        assert_exact_unit_capability!(
+            CanManageRuntimeUpgrades,
+            CanManageRuntimeUpgrades,
+            "CanManageRuntimeUpgrades"
+        );
+        assert_exact_unit_capability!(
+            CanManageConsensusKeys,
+            CanManageConsensusKeys,
+            "CanManageConsensusKeys"
+        );
+        assert_exact_unit_capability!(
+            CanManageConfidentialParams,
+            CanManageConfidentialParams,
+            "CanManageConfidentialParams"
         );
     }
     #[test]

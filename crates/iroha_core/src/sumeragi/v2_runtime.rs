@@ -72,8 +72,8 @@ use super::{
         AuthenticatedRecoveredWalValidateLedgerParent, AuthenticatedRecoveredWalVoteProjection,
         DurableCertifiedFetchPendingMintPermit, DurableLifecycleOutputPendingMintPermit,
         DurableStandaloneValidatePendingMintPermit, DurableValidateReplayEvidenceV1,
-        PreparedReadyDurableValidateAdapterPreview, PreparedReadyDurableValidateExecution,
-        ReadyDurableValidateAdapterPreviewError,
+        LifecycleDecisionApplyLineageV1, PreparedReadyDurableValidateAdapterPreview,
+        PreparedReadyDurableValidateExecution, ReadyDurableValidateAdapterPreviewError,
         RecoveredLifecycleNextWalVoteCandidateProjectionV1, RecoveredLifecycleNextWalVoteSealV1,
         RecoveredWalVoteReplayEvidenceV1, RuntimeLifecycleOrdinalAuthority,
         runtime_lifecycle_ordinal_authority_after_high_watermark,
@@ -380,6 +380,7 @@ pub(crate) enum RuntimeError<E> {
     /// The runner attempted live scheduling before startup finished.
     ClocksNotArmed,
     /// Interrupted-tip recovery was attempted after live scheduling began.
+    #[cfg(test)]
     RecoveryAfterClocksArmed,
 }
 impl<E: fmt::Display> fmt::Display for RuntimeError<E> {
@@ -390,6 +391,7 @@ impl<E: fmt::Display> fmt::Display for RuntimeError<E> {
             Self::ClocksNotArmed => {
                 formatter.write_str("Sumeragi v2 pacemaker clocks are not armed")
             }
+            #[cfg(test)]
             Self::RecoveryAfterClocksArmed => formatter.write_str(
                 "Sumeragi v2 interrupted-tip recovery cannot run after pacemaker clocks are armed",
             ),
@@ -403,7 +405,9 @@ where
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
             Self::Driver(error) => Some(error),
-            Self::FailClosed | Self::ClocksNotArmed | Self::RecoveryAfterClocksArmed => None,
+            Self::FailClosed | Self::ClocksNotArmed => None,
+            #[cfg(test)]
+            Self::RecoveryAfterClocksArmed => None,
         }
     }
 }
@@ -4864,11 +4868,14 @@ pub(crate) enum RuntimeSelectedOwnerKind {
     /// No live owner was ready.
     Idle,
     /// One startup-recovery FIFO command.
+    #[cfg(test)]
     RecoveryFifo,
     /// A startup-recovery FIFO command encountered retryable adapter
     /// backpressure and was restored without minting a new owner.
+    #[cfg(test)]
     RecoveryFifoRetryRetained,
     /// Startup recovery had no ready owner.
+    #[cfg(test)]
     RecoveryIdle,
 }
 /// Validation result for a retained scheduler ownership carrier.
@@ -4994,9 +5001,12 @@ impl RuntimeSelectedOwnerKind {
             Self::PeriodicTimer => 3,
             Self::Fifo => 4,
             Self::Idle => 5,
+            #[cfg(test)]
             Self::RecoveryFifo => 6,
+            #[cfg(test)]
             Self::RecoveryIdle => 7,
             Self::FifoRetryRetained => 8,
+            #[cfg(test)]
             Self::RecoveryFifoRetryRetained => 9,
             Self::FenceCompletion => 10,
             Self::PacemakerProgress => 11,
@@ -5656,66 +5666,63 @@ impl RuntimeSchedulerOwnershipEvidence {
         if schedule_after.fifo_owed != self.fifo_owed_after {
             return Err(RuntimeSchedulerEvidenceError::InvalidProjection);
         }
-        match (&self.selected, &self.candidate) {
-            (
-                RuntimeSelectedOwnerKind::Fifo
-                | RuntimeSelectedOwnerKind::FifoRetryRetained
-                | RuntimeSelectedOwnerKind::RecoveryFifo
-                | RuntimeSelectedOwnerKind::RecoveryFifoRetryRetained,
-                RuntimeSelectedCandidateOwnership::Exact(candidate),
-            ) => {
-                let (recovery, retry_retained) = match self.selected {
-                    RuntimeSelectedOwnerKind::Fifo => (false, false),
-                    RuntimeSelectedOwnerKind::FifoRetryRetained => (false, true),
-                    RuntimeSelectedOwnerKind::RecoveryFifo => (true, false),
-                    RuntimeSelectedOwnerKind::RecoveryFifoRetryRetained => (true, true),
-                    _ => unreachable!("match arm contains only FIFO selections"),
-                };
-                let service = select_bounded_service_class(
-                    self.queue_before.service_cursor,
-                    self.completion_ready,
-                    self.progress_ready,
-                    self.normal_ready,
-                );
-                let exact = candidate.identity.validate_exact()
-                    && candidate.kind == candidate.identity.kind
-                    && candidate.admission_ordinal != 0
-                    && candidate.lifecycle_ordinal != 0
-                    && candidate.lifecycle_ordinal <= candidate.admission_ordinal
-                    && runtime_fifo_candidate_ingress_is_exact(candidate)
-                    && candidate.projection_hash
-                        == runtime_fifo_candidate_projection_hash(candidate)
-                    && candidate.causal_origin.validate_exact()
-                    && candidate.causal_origin.root_lifecycle_ordinal
-                        == Some(candidate.lifecycle_ordinal)
-                    && candidate.class != SERVICE_CLASS_NONE
-                    && service.selected == candidate.class
-                    && service.next == self.queue_after.service_cursor
-                    && candidate.fifo_position < self.queue_before.len
-                    && candidate.eligible_skips_before <= self.queue_before.max_service_debt
-                    && candidate.eligible_skips_after == 0
-                    && self.queue_after.max_service_debt
-                        <= self.queue_before.max_service_debt.saturating_add(1)
-                    && if retry_retained {
-                        self.queue_after.len == self.queue_before.len
-                    } else {
-                        self.queue_after.len.checked_add(1) == Some(self.queue_before.len)
-                    }
-                    && scheduled == ScheduledWork::Fifo
-                    && self.live_mode != recovery
-                    && candidate.selection_seal.matches_scheduler_occurrence(
-                        candidate,
-                        &self.queue_before_snapshot,
-                        &self.queue_after_snapshot,
-                        RuntimeQueueSelectionKind::Ordinary,
-                        retry_retained,
-                    );
-                if exact {
-                    Ok(())
+        let fifo_mode = match self.selected {
+            RuntimeSelectedOwnerKind::Fifo => Some((false, false)),
+            RuntimeSelectedOwnerKind::FifoRetryRetained => Some((false, true)),
+            #[cfg(test)]
+            RuntimeSelectedOwnerKind::RecoveryFifo => Some((true, false)),
+            #[cfg(test)]
+            RuntimeSelectedOwnerKind::RecoveryFifoRetryRetained => Some((true, true)),
+            _ => None,
+        };
+        if let (
+            Some((recovery, retry_retained)),
+            RuntimeSelectedCandidateOwnership::Exact(candidate),
+        ) = (fifo_mode, &self.candidate)
+        {
+            let service = select_bounded_service_class(
+                self.queue_before.service_cursor,
+                self.completion_ready,
+                self.progress_ready,
+                self.normal_ready,
+            );
+            let exact = candidate.identity.validate_exact()
+                && candidate.kind == candidate.identity.kind
+                && candidate.admission_ordinal != 0
+                && candidate.lifecycle_ordinal != 0
+                && candidate.lifecycle_ordinal <= candidate.admission_ordinal
+                && runtime_fifo_candidate_ingress_is_exact(candidate)
+                && candidate.projection_hash == runtime_fifo_candidate_projection_hash(candidate)
+                && candidate.causal_origin.validate_exact()
+                && candidate.causal_origin.root_lifecycle_ordinal
+                    == Some(candidate.lifecycle_ordinal)
+                && candidate.class != SERVICE_CLASS_NONE
+                && service.selected == candidate.class
+                && service.next == self.queue_after.service_cursor
+                && candidate.fifo_position < self.queue_before.len
+                && candidate.eligible_skips_before <= self.queue_before.max_service_debt
+                && candidate.eligible_skips_after == 0
+                && self.queue_after.max_service_debt
+                    <= self.queue_before.max_service_debt.saturating_add(1)
+                && if retry_retained {
+                    self.queue_after.len == self.queue_before.len
                 } else {
-                    Err(RuntimeSchedulerEvidenceError::InvalidProjection)
+                    self.queue_after.len.checked_add(1) == Some(self.queue_before.len)
                 }
-            }
+                && scheduled == ScheduledWork::Fifo
+                && self.live_mode != recovery
+                && candidate.selection_seal.matches_scheduler_occurrence(
+                    candidate,
+                    &self.queue_before_snapshot,
+                    &self.queue_after_snapshot,
+                    RuntimeQueueSelectionKind::Ordinary,
+                    retry_retained,
+                );
+            return exact
+                .then_some(())
+                .ok_or(RuntimeSchedulerEvidenceError::InvalidProjection);
+        }
+        match (&self.selected, &self.candidate) {
             (
                 RuntimeSelectedOwnerKind::Timeout,
                 RuntimeSelectedCandidateOwnership::NotApplicable,
@@ -5741,6 +5748,7 @@ impl RuntimeSchedulerOwnershipEvidence {
             {
                 Ok(())
             }
+            #[cfg(test)]
             (
                 RuntimeSelectedOwnerKind::RecoveryIdle,
                 RuntimeSelectedCandidateOwnership::NotApplicable,
@@ -14105,6 +14113,7 @@ impl<D: RuntimeDriver> SerializedV2Runtime<D> {
     /// operation, and elapsed wall time must not manufacture a timeout vote or
     /// retransmission. The runner consumes this runtime after finalization and
     /// constructs a fresh, normally armed successor-height runtime.
+    #[cfg(test)]
     pub(crate) fn step_recovery(
         &mut self,
         now: Instant,

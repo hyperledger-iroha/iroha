@@ -23,6 +23,12 @@ use norito::codec::{Decode, Encode};
 #[cfg(feature = "json")]
 use norito::json;
 use std::net::{Ipv4Addr, Ipv6Addr};
+
+fn vpn_domain_hash_v1(context: &'static str, payload: &[u8]) -> [u8; 32] {
+    let mut hasher = blake3::Hasher::new_derive_key(context);
+    hasher.update(payload);
+    *hasher.finalize().as_bytes()
+}
 /// Fixed-length cell size used by the VPN tunnel.
 pub const VPN_CELL_LEN: usize = 1_024;
 /// Magic prefix used by helper-authenticated VPN tickets.
@@ -32,7 +38,10 @@ pub const VPN_HELPER_TICKET_MAGIC: &[u8; 8] = b"SVPNHT1\0";
 /// Each tariff quantity occupies a length byte plus a zero-padded canonical
 /// V1 quantity frame. Fixed slots retain constant-time framing while allowing
 /// the full bounded quantity domain without an integer nano-XOR side channel.
-pub const VPN_HELPER_TICKET_LEN: usize = 696;
+pub const VPN_HELPER_TICKET_LEN: usize = 788;
+/// Exact lowercase-hex length of a helper-authenticated VPN ticket.
+pub const VPN_HELPER_TICKET_HEX_LEN: usize = VPN_HELPER_TICKET_LEN * 2;
+const VPN_HELPER_TICKET_SIGNATURE_LEN: usize = 64;
 /// Magic prefix for VPN control cells that carry client-signed usage vouchers.
 pub const VPN_USAGE_VOUCHER_CONTROL_MAGIC: &[u8; 8] = b"SVPNUV1\0";
 /// Default MTU advertised to Sora VPN clients and local tunnel helpers.
@@ -95,6 +104,10 @@ pub struct VpnSessionAddressPlanV1 {
     pub server_tunnel_addresses: Vec<String>,
     /// Tunnel addresses assigned to the client/helper side of the point-to-point link.
     pub client_tunnel_addresses: Vec<String>,
+    /// Exact IPv4 source address assigned to the client/helper side of the link.
+    pub client_ipv4_address: [u8; 4],
+    /// Exact IPv6 source address assigned to the client/helper side of the link.
+    pub client_ipv6_address: [u8; 16],
     /// Session-local subnet routes that should point at the tunnel interface on the backend.
     pub session_routes: Vec<String>,
 }
@@ -698,14 +711,18 @@ pub fn derive_vpn_address_plan_v1(slot: VpnAddressSlotV1) -> VpnSessionAddressPl
     let v4_network = VPN_SESSION_IPV4_BASE + (v4_index << 2);
     let v4_route = format!("{}/30", Ipv4Addr::from(v4_network));
     let v4_server = format!("{}/30", Ipv4Addr::from(v4_network + 1));
-    let v4_client = format!("{}/30", Ipv4Addr::from(v4_network + 2));
+    let v4_client_address = Ipv4Addr::from(v4_network + 2);
+    let v4_client = format!("{v4_client_address}/30");
     let v6_network = VPN_SESSION_IPV6_BASE | (u128::from(v4_index) << 2);
     let v6_route = format!("{}/126", Ipv6Addr::from(v6_network));
     let v6_server = format!("{}/126", Ipv6Addr::from(v6_network | 1));
-    let v6_client = format!("{}/126", Ipv6Addr::from(v6_network | 2));
+    let v6_client_address = Ipv6Addr::from(v6_network | 2);
+    let v6_client = format!("{v6_client_address}/126");
     VpnSessionAddressPlanV1 {
         server_tunnel_addresses: vec![v4_server, v6_server],
         client_tunnel_addresses: vec![v4_client, v6_client],
+        client_ipv4_address: v4_client_address.octets(),
+        client_ipv6_address: v6_client_address.octets(),
         session_routes: vec![v4_route, v6_route],
     }
 }
@@ -763,8 +780,9 @@ pub fn derive_vpn_session_id_v1(
 pub fn derive_vpn_session_address_plan_v1(session_id: [u8; 16]) -> VpnSessionAddressPlanV1 {
     derive_vpn_address_plan_v1(VpnAddressSlotV1::from_session_id(session_id))
 }
-/// Client-signed cumulative usage voucher used to release escrowed XOR to an operator.
+/// Client-signed cumulative prepaid authorization used to release escrowed XOR to an operator.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct VpnUsageVoucherBodyV1 {
     /// Session identifier bound to the tunnel runtime.
     #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
@@ -777,36 +795,42 @@ pub struct VpnUsageVoucherBodyV1 {
     pub relay_id: RelayId,
     /// Monotonic voucher sequence.
     pub sequence: u64,
-    /// Cumulative client-to-relay payload bytes.
+    /// Cumulative client-to-relay payload-byte ceiling authorized before forwarding.
     pub ingress_bytes: u64,
-    /// Cumulative relay-to-client payload bytes.
+    /// Cumulative relay-to-client payload-byte ceiling authorized before forwarding.
     pub egress_bytes: u64,
-    /// Cumulative active service time covered by this voucher.
+    /// Cumulative active service-time ceiling authorized before service elapses.
     pub active_ms: u64,
     /// Client timestamp in milliseconds since the Unix epoch.
     pub issued_at_ms: u64,
 }
 /// Signed client usage voucher used for VPN escrow settlement.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct VpnUsageVoucherV1 {
-    /// Cumulative usage body signed by the client.
+    /// Cumulative prepaid authorization body signed by the client.
     pub body: VpnUsageVoucherBodyV1,
     /// Client metering public key registered when the session was created.
     pub client_public_key: PublicKey,
-    /// Signature over the Norito-encoded voucher body.
+    /// Ed25519 signature over the domain-separated fixed-width V1 voucher body.
     pub signature: Signature,
 }
 impl VpnUsageVoucherV1 {
     /// Sign a cumulative usage body with the client's metering private key.
     ///
     /// # Errors
-    /// Returns an error when the configured signing backend rejects the private
-    /// key or Norito-encoded voucher body.
+    /// Returns an error when the private key is not Ed25519 or the configured
+    /// signing backend rejects the domain-separated fixed-width voucher body.
     pub fn try_sign(
         body: VpnUsageVoucherBodyV1,
         private_key: &PrivateKey,
     ) -> Result<Self, iroha_crypto::Error> {
-        let signature = Signature::try_new(private_key, &body.encode())?;
+        if private_key.algorithm() != Algorithm::Ed25519 {
+            return Err(iroha_crypto::Error::Other(
+                "VPN usage voucher signing key must use Ed25519".to_owned(),
+            ));
+        }
+        let signature = Signature::try_new(private_key, &vpn_usage_voucher_signing_bytes(&body))?;
         Ok(Self {
             body,
             client_public_key: PublicKey::from(private_key.clone()),
@@ -816,33 +840,56 @@ impl VpnUsageVoucherV1 {
     /// Verify that the voucher signature matches the embedded public key and body.
     ///
     /// # Errors
-    /// Returns an error when signature verification fails.
+    /// Returns an error when the embedded key is not Ed25519, the signature is
+    /// malformed, or signature verification fails.
     pub fn verify(&self) -> Result<(), iroha_crypto::Error> {
-        let signature = match self.client_public_key.try_algorithm() {
-            Ok(Algorithm::Ed25519) => {
-                iroha_crypto::ed25519_parse_signature(self.signature.payload())?
-            }
-            Ok(Algorithm::MlDsa) => {
-                iroha_crypto::mldsa65_parse_signature(self.signature.payload())?
-            }
-            _ => Signature::try_from_bytes(self.signature.payload())?,
-        };
-        signature.verify(&self.client_public_key, &self.body.encode())
+        if self.client_public_key.try_algorithm() != Ok(Algorithm::Ed25519) {
+            return Err(iroha_crypto::Error::Other(
+                "VPN usage voucher public key must use Ed25519".to_owned(),
+            ));
+        }
+        let signature = iroha_crypto::ed25519_parse_signature(self.signature.payload())?;
+        signature.verify(
+            &self.client_public_key,
+            &vpn_usage_voucher_signing_bytes(&self.body),
+        )
     }
     /// Deterministic hash of the signed voucher used by relay receipts.
     #[must_use]
     pub fn hash(&self) -> [u8; 32] {
-        let encoded = self.encode();
-        *blake3::hash(&encoded).as_bytes()
+        vpn_domain_hash_v1("iroha.soranet.vpn.usage-voucher-hash.v1", &self.encode())
     }
 }
-/// Client-signed voucher plus the client-computed earned XOR for relay receipt construction.
+impl VpnUsageVoucherBodyV1 {
+    /// Return whether this prepaid voucher covers the supplied cumulative usage.
+    #[must_use]
+    pub fn authorizes(&self, ingress_bytes: u64, egress_bytes: u64, active_ms: u64) -> bool {
+        ingress_bytes <= self.ingress_bytes
+            && egress_bytes <= self.egress_bytes
+            && active_ms <= self.active_ms
+    }
+}
+fn vpn_usage_voucher_signing_bytes(body: &VpnUsageVoucherBodyV1) -> Vec<u8> {
+    let domain = b"iroha.soranet.vpn.usage-voucher.v1";
+    let mut bytes = Vec::with_capacity(domain.len() + 120);
+    bytes.extend_from_slice(domain);
+    bytes.extend_from_slice(&body.session_id);
+    bytes.extend_from_slice(&body.quote_id);
+    bytes.extend_from_slice(&body.relay_id);
+    bytes.extend_from_slice(&body.sequence.to_be_bytes());
+    bytes.extend_from_slice(&body.ingress_bytes.to_be_bytes());
+    bytes.extend_from_slice(&body.egress_bytes.to_be_bytes());
+    bytes.extend_from_slice(&body.active_ms.to_be_bytes());
+    bytes.extend_from_slice(&body.issued_at_ms.to_be_bytes());
+    bytes
+}
+/// Client-signed prepaid voucher plus its client-computed maximum XOR charge.
 #[derive(Debug, Clone, PartialEq, Eq, Decode, Encode, IntoSchema)]
 pub struct VpnUsageVoucherEnvelopeV1 {
-    /// Highest cumulative voucher signed by the client.
+    /// Highest cumulative prepaid voucher signed by the client.
     pub voucher: VpnUsageVoucherV1,
-    /// Nominal earned fee that the relay should mirror in its receipt.
-    pub earned_fee: Quantity,
+    /// Maximum fee authorized by the voucher ceilings under the signed tariff.
+    pub fee_ceiling: Quantity,
 }
 /// Deterministic XOR tariff used to settle a VPN lease from a client usage voucher.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
@@ -930,9 +977,10 @@ pub struct VpnQuoteBodyV1 {
     pub address_slot: VpnAddressSlotV1,
     /// Exact client account allowed to fund this quote.
     pub client_account_id: AccountId,
-    /// Exact operator account that signed and may settle this quote.
+    /// Exact single-signatory Ed25519 operator account that signs this quote
+    /// and its helper tickets and may settle the lease.
     pub operator_account_id: AccountId,
-    /// Client public key authorized to sign cumulative usage vouchers.
+    /// Client public key authorized to sign cumulative prepaid usage ceilings.
     pub metering_public_key: PublicKey,
     /// Asset definition to escrow. V1 native leases require XOR.
     pub asset_definition: AssetDefinitionId,
@@ -947,25 +995,31 @@ pub struct VpnQuoteBodyV1 {
     /// Additional operator settlement window after service expiry.
     pub settlement_grace_ms: u64,
 }
-/// Operator signature over a canonical, domain-separated VPN quote body.
+/// Ed25519 operator signature over a canonical, domain-separated VPN quote body.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct VpnSignedQuoteV1 {
     /// Complete quote body covered by the operator signature.
     pub body: VpnQuoteBodyV1,
-    /// Signature by the single-signatory operator account.
+    /// Ed25519 signature by the single-signatory operator account.
     pub signature: Signature,
 }
 impl VpnSignedQuoteV1 {
-    /// Build and sign a canonical VPN quote.
+    /// Build and sign a canonical VPN quote with its Ed25519 operator key.
     ///
     /// # Errors
-    /// Returns an error when the private key does not control the quote's
-    /// operator account or when the cryptographic backend rejects signing.
+    /// Returns an error when the private key is not Ed25519, does not control
+    /// the quote's operator account, or the cryptographic backend rejects
+    /// signing.
     pub fn try_sign(
         body: VpnQuoteBodyV1,
         private_key: &PrivateKey,
     ) -> Result<Self, iroha_crypto::Error> {
+        if private_key.algorithm() != Algorithm::Ed25519 {
+            return Err(iroha_crypto::Error::Other(
+                "VPN quote operator signing key must use Ed25519".to_owned(),
+            ));
+        }
         let public_key = PublicKey::from(private_key.clone());
         if body.operator_account_id.try_signatory() != Some(&public_key) {
             return Err(iroha_crypto::Error::Other(
@@ -975,25 +1029,26 @@ impl VpnSignedQuoteV1 {
         let signature = Signature::try_new(private_key, &vpn_quote_signing_bytes(&body))?;
         Ok(Self { body, signature })
     }
-    /// Verify the operator signature over the canonical quote body.
+    /// Verify the Ed25519 operator signature over the canonical quote body.
     ///
     /// # Errors
-    /// Returns [`VpnQuoteSignatureError`] for multisignature operators,
-    /// malformed signatures, or a failed signature check.
+    /// Returns [`VpnQuoteSignatureError`] for multisignature or non-Ed25519
+    /// operators, malformed signatures, or a failed signature check.
     pub fn verify(&self) -> Result<(), VpnQuoteSignatureError> {
         let public_key = self
             .body
             .operator_account_id
             .try_signatory()
             .ok_or(VpnQuoteSignatureError::MultisignatureOperator)?;
-        let signature = match public_key.try_algorithm() {
-            Ok(Algorithm::Ed25519) => {
-                iroha_crypto::ed25519_parse_signature(self.signature.payload())?
+        if public_key.try_algorithm() != Ok(Algorithm::Ed25519) {
+            return Err(VpnQuoteSignatureError::NonEd25519Operator);
+        }
+        let signature = match iroha_crypto::ed25519_parse_signature(self.signature.payload()) {
+            Ok(signature) => signature,
+            Err(iroha_crypto::Error::Parse(error)) => {
+                return Err(VpnQuoteSignatureError::MalformedSignature(error));
             }
-            Ok(Algorithm::MlDsa) => {
-                iroha_crypto::mldsa65_parse_signature(self.signature.payload())?
-            }
-            _ => Signature::try_from_bytes(self.signature.payload())?,
+            Err(error) => return Err(VpnQuoteSignatureError::Signature(error)),
         };
         signature
             .verify(public_key, &vpn_quote_signing_bytes(&self.body))
@@ -1013,7 +1068,10 @@ pub enum VpnQuoteSignatureError {
     /// The V1 quote format requires one unambiguous operator signatory.
     #[error("VPN quote operator account must use a single-signature controller")]
     MultisignatureOperator,
-    /// The opaque signature payload failed admission parsing for the operator's algorithm.
+    /// The V1 helper-ticket issuer and its operator quote must use the same Ed25519 key.
+    #[error("VPN quote operator signing key must use Ed25519")]
+    NonEd25519Operator,
+    /// The opaque Ed25519 signature payload failed admission parsing.
     #[error("VPN quote signature payload is malformed: {0}")]
     MalformedSignature(#[from] iroha_crypto::error::ParseError),
     /// Algorithm-specific signature parsing or cryptographic verification failed.
@@ -1024,7 +1082,7 @@ impl VpnTariffV1 {
     const MILLIS_PER_MINUTE: u64 = 60_000;
     const BYTES_PER_MIB: u64 = 1_048_576;
     const XOR_SCALE: u32 = 9;
-    /// Compute the nominal earned fee from a cumulative client usage voucher.
+    /// Compute the maximum nominal fee authorized by a cumulative client voucher.
     ///
     /// Every non-zero partial minute or MiB is rounded up so all nodes agree on
     /// quantity arithmetic without undercharging short sessions.
@@ -1032,9 +1090,31 @@ impl VpnTariffV1 {
     /// # Errors
     /// Returns a bounded-decimal error if an exact intermediate or rounded
     /// component falls outside the quantity domain.
-    pub fn earned_fee(
+    pub fn fee_ceiling(
         &self,
         voucher: &VpnUsageVoucherBodyV1,
+    ) -> Result<Quantity, NumericOperationError> {
+        self.fee_for_usage(
+            voucher.ingress_bytes,
+            voucher.egress_bytes,
+            voucher.active_ms,
+        )
+    }
+    /// Compute the nominal fee for relay-observed cumulative usage.
+    ///
+    /// Every non-zero partial minute or MiB is rounded up identically to
+    /// [`Self::fee_ceiling`]. Settlement uses this method for the actual receipt
+    /// usage after proving that the signed prepaid voucher covers all three
+    /// counters.
+    ///
+    /// # Errors
+    /// Returns a bounded-decimal error if an exact intermediate or rounded
+    /// component falls outside the quantity domain.
+    pub fn fee_for_usage(
+        &self,
+        ingress_bytes: u64,
+        egress_bytes: u64,
+        active_ms: u64,
     ) -> Result<Quantity, NumericOperationError> {
         fn component(
             rate: &Quantity,
@@ -1053,19 +1133,15 @@ impl VpnTariffV1 {
         }
         let active = component(
             &self.active_fee_per_minute,
-            voucher.active_ms,
+            active_ms,
             Self::MILLIS_PER_MINUTE,
         )?;
         let ingress = component(
             &self.ingress_fee_per_mib,
-            voucher.ingress_bytes,
+            ingress_bytes,
             Self::BYTES_PER_MIB,
         )?;
-        let egress = component(
-            &self.egress_fee_per_mib,
-            voucher.egress_bytes,
-            Self::BYTES_PER_MIB,
-        )?;
+        let egress = component(&self.egress_fee_per_mib, egress_bytes, Self::BYTES_PER_MIB)?;
         let earned = active.checked_add(&ingress)?.checked_add(&egress)?;
         Ok(if earned > self.lease_fee {
             self.lease_fee.clone()
@@ -1073,6 +1149,37 @@ impl VpnTariffV1 {
             earned
         })
     }
+}
+/// Derive the canonical meter-manifest commitment for a signed VPN tariff.
+///
+/// Settlement receipts use this domain-separated digest instead of accepting
+/// an operator-selected telemetry label. This makes the receipt commitment a
+/// deterministic consequence of the operator-signed quote and helper ticket.
+#[must_use]
+pub fn vpn_tariff_meter_hash_v1(tariff: &VpnTariffV1) -> [u8; 32] {
+    let mut material = Vec::new();
+    for quantity in [
+        &tariff.lease_fee,
+        &tariff.active_fee_per_minute,
+        &tariff.ingress_fee_per_mib,
+        &tariff.egress_fee_per_mib,
+    ] {
+        let canonical = quantity.to_string();
+        let length = u64::try_from(canonical.len())
+            .expect("canonical VPN tariff quantities are bounded below u64::MAX");
+        material.extend_from_slice(&length.to_be_bytes());
+        material.extend_from_slice(canonical.as_bytes());
+    }
+    vpn_domain_hash_v1("iroha.soranet.vpn.tariff-meter.v1", &material)
+}
+/// Derive the canonical account commitment carried by VPN tickets and receipts.
+///
+/// The commitment uses the domainless account identity's Norito bytes rather
+/// than its I105 display form, which is parameterized by the active chain
+/// discriminant.
+#[must_use]
+pub fn vpn_account_hash_v1(account_id: &AccountId) -> [u8; 32] {
+    vpn_domain_hash_v1("iroha.soranet.vpn.account-hash.v1", &account_id.encode())
 }
 /// Lifecycle status for an on-chain VPN lease escrow.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
@@ -1103,7 +1210,7 @@ pub struct VpnLeaseRecordV1 {
     pub client_account_id: AccountId,
     /// Operator account allowed to settle the lease.
     pub operator_account_id: AccountId,
-    /// Client public key authorized to sign cumulative usage vouchers.
+    /// Client public key authorized to sign cumulative prepaid usage ceilings.
     pub metering_public_key: PublicKey,
     /// Escrowed asset definition. Native VPN leases require XOR.
     pub asset_definition: AssetDefinitionId,
@@ -1147,6 +1254,9 @@ pub struct VpnLeaseRecordV1 {
         norito(json = "crate::json_helpers::fixed_bytes::option")
     )]
     pub client_voucher_hash: Option<[u8; 32]>,
+    /// Full client voucher accepted during settlement.
+    #[cfg_attr(feature = "json", norito(skip_serializing_if = "Option::is_none"))]
+    pub settled_client_voucher: Option<VpnUsageVoucherV1>,
     /// Hash of the relay receipt used for settlement.
     #[cfg_attr(
         feature = "json",
@@ -1155,7 +1265,7 @@ pub struct VpnLeaseRecordV1 {
     pub relay_receipt_hash: Option<[u8; 32]>,
     /// Full relay receipt accepted during settlement.
     #[cfg_attr(feature = "json", norito(skip_serializing_if = "Option::is_none"))]
-    pub settled_relay_receipt: Option<VpnSessionReceiptV1>,
+    pub settled_relay_receipt: Option<VpnSignedSessionReceiptV1>,
     /// Nominal fee released to the relay.
     pub earned_fee: Quantity,
     /// Nominal fee refunded to the client.
@@ -1167,6 +1277,133 @@ impl VpnLeaseRecordV1 {
     pub fn refund_available_at_ms(&self) -> u64 {
         self.expires_at_ms.saturating_add(self.settlement_grace_ms)
     }
+
+    /// Verify the complete two-party evidence bundle for lease settlement.
+    ///
+    /// This authenticates both the relay receipt and client voucher, binds all
+    /// identities and hashes to the lease, and recomputes deterministic time,
+    /// meter, and tariff projections. Callers remain responsible for checking
+    /// the block-time settlement deadline and lifecycle transition.
+    ///
+    /// # Errors
+    /// Returns [`VpnSettlementEvidenceError`] when any signature, identity,
+    /// prepaid ceiling, timestamp, or deterministic accounting invariant fails.
+    pub fn verify_settlement_evidence(
+        &self,
+        signed_receipt: &VpnSignedSessionReceiptV1,
+        voucher: &VpnUsageVoucherV1,
+    ) -> Result<Quantity, VpnSettlementEvidenceError> {
+        fn invalid(message: impl Into<String>) -> VpnSettlementEvidenceError {
+            VpnSettlementEvidenceError {
+                message: message.into(),
+            }
+        }
+
+        signed_receipt.verify().map_err(|error| {
+            invalid(format!(
+                "vpn relay receipt signature verification failed: {error}"
+            ))
+        })?;
+        let receipt = &signed_receipt.receipt;
+        if receipt.session_id != self.session_id || voucher.body.session_id != self.session_id {
+            return Err(invalid("vpn settlement session id mismatch"));
+        }
+        if receipt.quote_id != self.quote_id || voucher.body.quote_id != self.quote_id {
+            return Err(invalid("vpn settlement quote id mismatch"));
+        }
+        if receipt.relay_id != self.relay_id || voucher.body.relay_id != self.relay_id {
+            return Err(invalid("vpn settlement relay id mismatch"));
+        }
+        if receipt.payment_tx_hash != self.open_tx_hash {
+            return Err(invalid("vpn settlement payment transaction mismatch"));
+        }
+        if receipt.account_hash != vpn_account_hash_v1(&self.client_account_id) {
+            return Err(invalid("vpn settlement client account mismatch"));
+        }
+        if voucher.client_public_key != self.metering_public_key {
+            return Err(invalid("vpn voucher public key mismatch"));
+        }
+        voucher.verify().map_err(|error| {
+            invalid(format!(
+                "vpn voucher signature verification failed: {error}"
+            ))
+        })?;
+        if receipt.client_voucher_hash != voucher.hash() {
+            return Err(invalid("vpn receipt voucher hash mismatch"));
+        }
+        if receipt.highest_voucher_sequence != voucher.body.sequence {
+            return Err(invalid("vpn receipt voucher sequence mismatch"));
+        }
+        let active_ms = receipt
+            .ended_at_ms
+            .checked_sub(receipt.started_at_ms)
+            .ok_or_else(|| invalid("vpn receipt service interval is inverted"))?;
+        if !voucher
+            .body
+            .authorizes(receipt.ingress_bytes, receipt.egress_bytes, active_ms)
+        {
+            return Err(invalid(
+                "vpn receipt usage exceeds the signed prepaid voucher ceilings",
+            ));
+        }
+        let expected_uptime_secs = u32::try_from(active_ms.div_ceil(1_000))
+            .map_err(|_| invalid("vpn receipt active time exceeds receipt range"))?;
+        if receipt.uptime_secs != expected_uptime_secs {
+            return Err(invalid(
+                "vpn receipt uptime must equal its observed service interval rounded up",
+            ));
+        }
+        if voucher.body.issued_at_ms > receipt.ended_at_ms {
+            return Err(invalid(
+                "vpn receipt ends before the highest prepaid voucher was issued",
+            ));
+        }
+        if receipt.exit_class != self.quote_policy.exit_class {
+            return Err(invalid("vpn receipt exit class mismatch"));
+        }
+        if receipt.cover_bytes != 0 {
+            return Err(invalid(
+                "vpn settlement receipt must not carry unauthenticated cover telemetry",
+            ));
+        }
+        if receipt.meter_hash != vpn_tariff_meter_hash_v1(&self.tariff) {
+            return Err(invalid(
+                "vpn receipt meter hash does not match the signed tariff",
+            ));
+        }
+        if receipt.earned_fee > self.lease_fee {
+            return Err(invalid(
+                "vpn receipt earned fee exceeds the escrowed lease fee",
+            ));
+        }
+        if receipt.started_at_ms < self.opened_at_ms || receipt.ended_at_ms > self.expires_at_ms {
+            return Err(invalid(
+                "vpn receipt service interval falls outside the signed lease",
+            ));
+        }
+        if voucher.body.issued_at_ms < self.opened_at_ms
+            || voucher.body.issued_at_ms >= self.expires_at_ms
+        {
+            return Err(invalid(
+                "vpn voucher issuance timestamp falls outside the signed lease",
+            ));
+        }
+        let earned_fee = self
+            .tariff
+            .fee_for_usage(receipt.ingress_bytes, receipt.egress_bytes, active_ms)
+            .map_err(|error| invalid(format!("vpn tariff arithmetic failed: {error}")))?;
+        if receipt.earned_fee != earned_fee {
+            return Err(invalid("vpn receipt earned fee does not match tariff"));
+        }
+        Ok(earned_fee)
+    }
+}
+
+/// Failure while verifying the complete client-and-relay VPN settlement evidence.
+#[derive(Debug, thiserror::Error)]
+#[error("{message}")]
+pub struct VpnSettlementEvidenceError {
+    message: String,
 }
 /// Billing and telemetry receipt emitted by an exit gateway.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
@@ -1187,24 +1424,24 @@ pub struct VpnSessionReceiptV1 {
     /// Relay fingerprint that emitted the receipt.
     #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
     pub relay_id: RelayId,
-    /// Total ingress bytes (user payloads only).
+    /// Relay-observed ingress bytes actually forwarded (user payloads only).
     pub ingress_bytes: u64,
-    /// Total egress bytes (user payloads only).
+    /// Relay-observed egress bytes actually forwarded (user payloads only).
     pub egress_bytes: u64,
     /// Total cover bytes emitted for the session.
     pub cover_bytes: u64,
-    /// Session uptime in seconds.
+    /// Relay-observed service interval rounded up to whole seconds.
     pub uptime_secs: u32,
-    /// Session start timestamp in milliseconds since the Unix epoch.
+    /// Backend-ready service start timestamp in milliseconds since the Unix epoch.
     pub started_at_ms: u64,
-    /// Session end timestamp in milliseconds since the Unix epoch.
+    /// Start plus relay-monotonic elapsed service time, in Unix milliseconds.
     pub ended_at_ms: u64,
     /// Exit class applied for billing.
     pub exit_class: VpnExitClassV1,
     /// Hash of the meter manifest applied to this session.
     #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
     pub meter_hash: [u8; 32],
-    /// Nominal fee earned by the relay for the verified usage window.
+    /// Nominal fee earned from actual usage within the signed prepaid ceilings.
     pub earned_fee: Quantity,
     /// Highest client usage voucher sequence accepted by the relay.
     pub highest_voucher_sequence: u64,
@@ -1212,32 +1449,137 @@ pub struct VpnSessionReceiptV1 {
     #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
     pub client_voucher_hash: [u8; 32],
 }
-impl VpnSessionReceiptV1 {
-    /// Deterministic hash of the relay receipt used by lease settlement records.
+/// Relay-authenticated settlement envelope for a VPN session receipt.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+pub struct VpnSignedSessionReceiptV1 {
+    /// Complete relay-observed receipt body covered by the signature.
+    pub receipt: VpnSessionReceiptV1,
+    /// Ed25519 signature made by the relay identity encoded in [`VpnSessionReceiptV1::relay_id`].
+    pub relay_signature: Signature,
+}
+impl VpnSignedSessionReceiptV1 {
+    /// Sign a receipt with the exact Ed25519 relay identity named by its `relay_id`.
+    ///
+    /// # Errors
+    /// Returns [`VpnRelayReceiptSignatureError`] when the private key is not
+    /// Ed25519, its derived public key differs from `receipt.relay_id`, or
+    /// signing fails.
+    pub fn try_sign(
+        receipt: VpnSessionReceiptV1,
+        relay_private_key: &PrivateKey,
+    ) -> Result<Self, VpnRelayReceiptSignatureError> {
+        if relay_private_key.algorithm() != Algorithm::Ed25519 {
+            return Err(VpnRelayReceiptSignatureError::NonEd25519RelayKey);
+        }
+        let relay_public_key = PublicKey::from_private_key(relay_private_key)
+            .map_err(VpnRelayReceiptSignatureError::Signature)?;
+        let (algorithm, relay_public_key_bytes) = relay_public_key
+            .try_to_bytes()
+            .map_err(VpnRelayReceiptSignatureError::MalformedRelayId)?;
+        if algorithm != Algorithm::Ed25519 || relay_public_key_bytes != receipt.relay_id {
+            return Err(VpnRelayReceiptSignatureError::RelayIdMismatch);
+        }
+        let relay_signature = Signature::try_new(
+            relay_private_key,
+            &vpn_relay_receipt_signing_bytes(&receipt),
+        )
+        .map_err(VpnRelayReceiptSignatureError::Signature)?;
+        Ok(Self {
+            receipt,
+            relay_signature,
+        })
+    }
+
+    /// Verify the mandatory Ed25519 signature against the receipt's relay identity.
+    ///
+    /// # Errors
+    /// Returns [`VpnRelayReceiptSignatureError`] when the relay identifier or
+    /// signature is malformed, or when signature verification fails.
+    pub fn verify(&self) -> Result<(), VpnRelayReceiptSignatureError> {
+        let relay_public_key = PublicKey::from_bytes(Algorithm::Ed25519, &self.receipt.relay_id)
+            .map_err(VpnRelayReceiptSignatureError::MalformedRelayId)?;
+        let relay_signature =
+            match iroha_crypto::ed25519_parse_signature(self.relay_signature.payload()) {
+                Ok(signature) => signature,
+                Err(iroha_crypto::Error::Parse(error)) => {
+                    return Err(VpnRelayReceiptSignatureError::MalformedSignature(error));
+                }
+                Err(error) => return Err(VpnRelayReceiptSignatureError::Signature(error)),
+            };
+        relay_signature
+            .verify(
+                &relay_public_key,
+                &vpn_relay_receipt_signing_bytes(&self.receipt),
+            )
+            .map_err(VpnRelayReceiptSignatureError::Signature)
+    }
+
+    /// Deterministic settlement hash committing to both receipt and relay signature.
     #[must_use]
     pub fn hash(&self) -> [u8; 32] {
-        *blake3::hash(&self.encode()).as_bytes()
+        vpn_domain_hash_v1(
+            "iroha.soranet.vpn.signed-session-receipt-hash.v1",
+            &self.encode(),
+        )
     }
 }
-/// Helper-authenticated ticket carried by the local VPN controller when opening a relay session.
+
+fn vpn_relay_receipt_signing_bytes(receipt: &VpnSessionReceiptV1) -> Vec<u8> {
+    let encoded = receipt.encode();
+    let mut bytes =
+        Vec::with_capacity(b"soranet-vpn-relay-session-receipt-v1".len() + encoded.len());
+    bytes.extend_from_slice(b"soranet-vpn-relay-session-receipt-v1");
+    bytes.extend_from_slice(&encoded);
+    bytes
+}
+
+/// Relay receipt signature construction or verification failure.
+#[derive(Debug, thiserror::Error)]
+pub enum VpnRelayReceiptSignatureError {
+    /// V1 relay identifiers encode Ed25519 public keys and reject algorithm substitution.
+    #[error("VPN relay receipt signing key must use Ed25519")]
+    NonEd25519RelayKey,
+    /// The supplied private key does not own the relay identity named by the receipt.
+    #[error("VPN relay receipt signing key does not match receipt relay_id")]
+    RelayIdMismatch,
+    /// The fixed-width relay identifier is not a valid canonical Ed25519 public key.
+    #[error("VPN relay receipt relay_id is malformed: {0}")]
+    MalformedRelayId(#[source] iroha_crypto::error::ParseError),
+    /// The opaque Ed25519 signature payload failed admission parsing.
+    #[error("VPN relay receipt signature payload is malformed: {0}")]
+    MalformedSignature(#[source] iroha_crypto::error::ParseError),
+    /// Public-key derivation, signing, or cryptographic verification failed.
+    #[error("VPN relay receipt signature operation failed: {0}")]
+    Signature(#[source] iroha_crypto::Error),
+}
+/// Operator-signed ticket carried by the local VPN controller when opening a relay session.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct VpnHelperTicketV1 {
     /// Session identifier bound to the tunnel runtime.
     pub session_id: [u8; 16],
     /// Quote identifier that fixed pricing and route policy.
     pub quote_id: [u8; 32],
+    /// Consensus lease identifier authorized for eventual settlement.
+    pub lease_id: [u8; 32],
     /// Hash of the account that paid for the session.
     pub account_hash: [u8; 32],
     /// Relay fingerprint allowed to redeem the ticket.
     pub relay_id: RelayId,
     /// Committed XOR escrow payment transaction hash.
     pub payment_tx_hash: [u8; 32],
-    /// Ed25519 public key authorized to sign cumulative usage vouchers.
+    /// Ed25519 public key authorized to sign cumulative prepaid usage ceilings.
     pub metering_public_key: PublicKey,
     /// Deterministic usage tariff fixed by the native lease.
     pub tariff: VpnTariffV1,
-    /// Canonical digest of every privileged route, DNS, address, and MTU input.
+    /// Exact IPv4 source address assigned to this client session.
+    pub client_ipv4_address: [u8; 4],
+    /// Exact IPv6 source address assigned to this client session.
+    pub client_ipv6_address: [u8; 16],
+    /// Canonical digest of the complete relay trust, padding, route, DNS, address, and MTU policy.
     pub network_policy_hash: [u8; 32],
+    /// Earliest valid voucher issue time in milliseconds since the Unix epoch.
+    pub valid_after_ms: u64,
     /// Absolute expiry time in milliseconds since the Unix epoch.
     pub expires_at_ms: u64,
 }
@@ -1246,12 +1588,25 @@ impl VpnHelperTicketV1 {
     ///
     /// # Errors
     ///
-    /// Returns an error when the metering key is not Ed25519 or a tariff
-    /// quantity cannot be encoded as its canonical V1 frame.
+    /// Returns an error when the issuer or metering key is not Ed25519, the
+    /// assigned client addresses are not canonical for the session, signing
+    /// fails, or a tariff quantity cannot be encoded as its canonical V1 frame.
     pub fn try_to_bytes(
         &self,
-        secret: &[u8; 32],
+        issuer_private_key: &PrivateKey,
     ) -> Result<[u8; VPN_HELPER_TICKET_LEN], VpnHelperTicketError> {
+        if issuer_private_key.algorithm() != Algorithm::Ed25519 {
+            return Err(VpnHelperTicketError::InvalidIssuerPrivateKey);
+        }
+        if self.valid_after_ms >= self.expires_at_ms {
+            return Err(VpnHelperTicketError::InvalidValidityWindow {
+                valid_after_ms: self.valid_after_ms,
+                expires_at_ms: self.expires_at_ms,
+            });
+        }
+        if !self.has_canonical_client_addresses() {
+            return Err(VpnHelperTicketError::InvalidClientAddresses);
+        }
         let mut bytes = [0u8; VPN_HELPER_TICKET_LEN];
         bytes[..VPN_HELPER_TICKET_MAGIC.len()].copy_from_slice(VPN_HELPER_TICKET_MAGIC);
         let mut cursor = VPN_HELPER_TICKET_MAGIC.len();
@@ -1259,6 +1614,8 @@ impl VpnHelperTicketV1 {
         cursor += self.session_id.len();
         bytes[cursor..cursor + self.quote_id.len()].copy_from_slice(&self.quote_id);
         cursor += self.quote_id.len();
+        bytes[cursor..cursor + self.lease_id.len()].copy_from_slice(&self.lease_id);
+        cursor += self.lease_id.len();
         bytes[cursor..cursor + self.account_hash.len()].copy_from_slice(&self.account_hash);
         cursor += self.account_hash.len();
         bytes[cursor..cursor + self.relay_id.len()].copy_from_slice(&self.relay_id);
@@ -1282,72 +1639,96 @@ impl VpnHelperTicketV1 {
         ] {
             encode_helper_ticket_quantity(&mut bytes, &mut cursor, quantity)?;
         }
+        bytes[cursor..cursor + self.client_ipv4_address.len()]
+            .copy_from_slice(&self.client_ipv4_address);
+        cursor += self.client_ipv4_address.len();
+        bytes[cursor..cursor + self.client_ipv6_address.len()]
+            .copy_from_slice(&self.client_ipv6_address);
+        cursor += self.client_ipv6_address.len();
         bytes[cursor..cursor + self.network_policy_hash.len()]
             .copy_from_slice(&self.network_policy_hash);
         cursor += self.network_policy_hash.len();
+        bytes[cursor..cursor + 8].copy_from_slice(&self.valid_after_ms.to_be_bytes());
+        cursor += 8;
         bytes[cursor..cursor + 8].copy_from_slice(&self.expires_at_ms.to_be_bytes());
         cursor += 8;
-        let mac = helper_ticket_mac(secret, &bytes[..cursor]);
-        let mac_bytes = mac.as_bytes();
-        bytes[cursor..cursor + mac_bytes.len()].copy_from_slice(mac_bytes);
+        let signing_digest = helper_ticket_signing_digest(&bytes[..cursor]);
+        let signature = Signature::try_new(issuer_private_key, signing_digest.as_bytes())
+            .map_err(|_| VpnHelperTicketError::InvalidIssuerPrivateKey)?;
+        if signature.payload().len() != VPN_HELPER_TICKET_SIGNATURE_LEN {
+            return Err(VpnHelperTicketError::InvalidIssuerPrivateKey);
+        }
+        bytes[cursor..cursor + VPN_HELPER_TICKET_SIGNATURE_LEN]
+            .copy_from_slice(signature.payload());
         Ok(bytes)
     }
     /// Serialize the helper ticket into its fixed-length on-wire representation.
     #[must_use]
-    pub fn to_bytes(&self, secret: &[u8; 32]) -> [u8; VPN_HELPER_TICKET_LEN] {
-        self.try_to_bytes(secret)
-            .expect("invalid VPN helper ticket metering public key")
+    pub fn to_bytes(&self, issuer_private_key: &PrivateKey) -> [u8; VPN_HELPER_TICKET_LEN] {
+        self.try_to_bytes(issuer_private_key)
+            .expect("invalid VPN helper ticket issuer, metering key, addresses, or tariff")
     }
     /// Fallibly serialize the helper ticket as hex for transport through JSON control-plane payloads.
     ///
     /// # Errors
     ///
-    /// Returns an error when ticket bytes cannot be constructed from its key
-    /// or canonical tariff quantities.
-    pub fn try_to_hex(&self, secret: &[u8; 32]) -> Result<String, VpnHelperTicketError> {
-        Ok(hex::encode(self.try_to_bytes(secret)?))
+    /// Returns an error when ticket bytes cannot be constructed from its key,
+    /// canonical client addresses, or canonical tariff quantities.
+    pub fn try_to_hex(
+        &self,
+        issuer_private_key: &PrivateKey,
+    ) -> Result<String, VpnHelperTicketError> {
+        Ok(hex::encode(self.try_to_bytes(issuer_private_key)?))
     }
     /// Serialize the helper ticket as hex for transport through JSON control-plane payloads.
     #[must_use]
-    pub fn to_hex(&self, secret: &[u8; 32]) -> String {
-        self.try_to_hex(secret)
-            .expect("invalid VPN helper ticket metering public key")
+    pub fn to_hex(&self, issuer_private_key: &PrivateKey) -> String {
+        self.try_to_hex(issuer_private_key)
+            .expect("invalid VPN helper ticket issuer, metering key, addresses, or tariff")
     }
     /// Return `true` when the supplied bytes look like a helper-auth ticket.
     #[must_use]
     pub fn looks_like(bytes: &[u8]) -> bool {
         bytes.len() == VPN_HELPER_TICKET_LEN && bytes.starts_with(VPN_HELPER_TICKET_MAGIC)
     }
-    /// Decode the client-visible ticket metadata without authenticating its MAC.
-    ///
-    /// This is only for the local client helper, which needs the metering key and tariff in order
-    /// to sign usage vouchers but does not possess the relay's MAC secret. It must never be used to
-    /// authorize service; relays must call [`Self::parse`] so the MAC and expiry are verified
-    /// before trusting any decoded field.
+    /// Parse and verify an issuer-signed helper ticket.
     ///
     /// # Errors
-    /// Returns an error when the frame length, magic prefix, metering key, or a
-    /// canonical tariff quantity is invalid.
-    pub fn decode_unverified(bytes: &[u8]) -> Result<Self, VpnHelperTicketError> {
-        validate_helper_ticket_frame(bytes)?;
-        decode_helper_ticket_fields(bytes)
-    }
-    /// Parse and verify a helper-authenticated ticket.
-    ///
-    /// # Errors
-    /// Returns an error when the frame length, magic prefix, MAC, or expiry are invalid.
+    /// Returns an error when the frame length, magic prefix, issuer signature,
+    /// decoded fields, or expiry are invalid.
     pub fn parse(
         bytes: &[u8],
-        secret: &[u8; 32],
+        issuer_public_key: &PublicKey,
         now_ms: u64,
     ) -> Result<Self, VpnHelperTicketError> {
         validate_helper_ticket_frame(bytes)?;
-        let mac_offset = VPN_HELPER_TICKET_LEN - blake3::OUT_LEN;
-        let expected_mac = helper_ticket_mac(secret, &bytes[..mac_offset]);
-        if !helper_ticket_mac_matches(&expected_mac, &bytes[mac_offset..]) {
-            return Err(VpnHelperTicketError::InvalidMac);
+        if issuer_public_key
+            .try_algorithm()
+            .map_err(|_| VpnHelperTicketError::InvalidIssuerPublicKey)?
+            != Algorithm::Ed25519
+        {
+            return Err(VpnHelperTicketError::InvalidIssuerPublicKey);
         }
+        let signature_offset = VPN_HELPER_TICKET_LEN - VPN_HELPER_TICKET_SIGNATURE_LEN;
+        let signing_digest = helper_ticket_signing_digest(&bytes[..signature_offset]);
+        let signature = Signature::try_from_bytes(&bytes[signature_offset..])
+            .map_err(|_| VpnHelperTicketError::InvalidSignature)?;
+        signature
+            .verify(issuer_public_key, signing_digest.as_bytes())
+            .map_err(|_| VpnHelperTicketError::InvalidSignature)?;
         let ticket = decode_helper_ticket_fields(bytes)?;
+        if ticket.valid_after_ms >= ticket.expires_at_ms {
+            return Err(VpnHelperTicketError::InvalidValidityWindow {
+                valid_after_ms: ticket.valid_after_ms,
+                expires_at_ms: ticket.expires_at_ms,
+            });
+        }
+        if now_ms < ticket.valid_after_ms {
+            return Err(VpnHelperTicketError::NotYetValid {
+                valid_after_ms: ticket.valid_after_ms,
+                now_ms,
+            });
+        }
         if ticket.expires_at_ms <= now_ms {
             return Err(VpnHelperTicketError::Expired {
                 expires_at_ms: ticket.expires_at_ms,
@@ -1356,17 +1737,38 @@ impl VpnHelperTicketV1 {
         }
         Ok(ticket)
     }
+
+    fn has_canonical_client_addresses(&self) -> bool {
+        let plan = derive_vpn_session_address_plan_v1(self.session_id);
+        self.client_ipv4_address == plan.client_ipv4_address
+            && self.client_ipv6_address == plan.client_ipv6_address
+    }
     /// Parse and verify a helper-authenticated ticket encoded as hex.
     ///
     /// # Errors
-    /// Returns an error when the hex input or the decoded ticket is invalid.
+    /// Returns an error unless the input is the exact canonical lowercase-hex
+    /// representation of a valid ticket for the supplied issuer and time.
     pub fn parse_hex(
         hex_ticket: &str,
-        secret: &[u8; 32],
+        issuer_public_key: &PublicKey,
         now_ms: u64,
     ) -> Result<Self, VpnHelperTicketError> {
-        let decoded = hex::decode(hex_ticket).map_err(VpnHelperTicketError::Hex)?;
-        Self::parse(&decoded, secret, now_ms)
+        if hex_ticket.len() != VPN_HELPER_TICKET_HEX_LEN {
+            return Err(VpnHelperTicketError::InvalidHexLength {
+                expected: VPN_HELPER_TICKET_HEX_LEN,
+                actual: hex_ticket.len(),
+            });
+        }
+        if !hex_ticket
+            .as_bytes()
+            .iter()
+            .all(|byte| byte.is_ascii_digit() || matches!(byte, b'a'..=b'f'))
+        {
+            return Err(VpnHelperTicketError::NonCanonicalHex);
+        }
+        let mut decoded = [0u8; VPN_HELPER_TICKET_LEN];
+        hex::decode_to_slice(hex_ticket, &mut decoded).map_err(VpnHelperTicketError::Hex)?;
+        Self::parse(&decoded, issuer_public_key, now_ms)
     }
 }
 fn validate_helper_ticket_frame(bytes: &[u8]) -> Result<(), VpnHelperTicketError> {
@@ -1390,6 +1792,9 @@ fn decode_helper_ticket_fields(bytes: &[u8]) -> Result<VpnHelperTicketV1, VpnHel
     let mut quote_id = [0u8; 32];
     quote_id.copy_from_slice(&bytes[cursor..cursor + 32]);
     cursor += 32;
+    let mut lease_id = [0u8; 32];
+    lease_id.copy_from_slice(&bytes[cursor..cursor + 32]);
+    cursor += 32;
     let mut account_hash = [0u8; 32];
     account_hash.copy_from_slice(&bytes[cursor..cursor + 32]);
     cursor += 32;
@@ -1407,16 +1812,29 @@ fn decode_helper_ticket_fields(bytes: &[u8]) -> Result<VpnHelperTicketV1, VpnHel
     let active_fee_per_minute = decode_helper_ticket_quantity(bytes, &mut cursor)?;
     let ingress_fee_per_mib = decode_helper_ticket_quantity(bytes, &mut cursor)?;
     let egress_fee_per_mib = decode_helper_ticket_quantity(bytes, &mut cursor)?;
+    let mut client_ipv4_address = [0u8; 4];
+    client_ipv4_address.copy_from_slice(&bytes[cursor..cursor + 4]);
+    cursor += 4;
+    let mut client_ipv6_address = [0u8; 16];
+    client_ipv6_address.copy_from_slice(&bytes[cursor..cursor + 16]);
+    cursor += 16;
     let mut network_policy_hash = [0u8; 32];
     network_policy_hash.copy_from_slice(&bytes[cursor..cursor + 32]);
     cursor += 32;
+    let mut valid_after = [0u8; 8];
+    valid_after.copy_from_slice(&bytes[cursor..cursor + 8]);
+    cursor += 8;
     let mut expires = [0u8; 8];
     expires.copy_from_slice(&bytes[cursor..cursor + 8]);
     cursor += 8;
-    debug_assert_eq!(cursor, VPN_HELPER_TICKET_LEN - blake3::OUT_LEN);
-    Ok(VpnHelperTicketV1 {
+    debug_assert_eq!(
+        cursor,
+        VPN_HELPER_TICKET_LEN - VPN_HELPER_TICKET_SIGNATURE_LEN
+    );
+    let ticket = VpnHelperTicketV1 {
         session_id,
         quote_id,
+        lease_id,
         account_hash,
         relay_id,
         payment_tx_hash,
@@ -1427,39 +1845,70 @@ fn decode_helper_ticket_fields(bytes: &[u8]) -> Result<VpnHelperTicketV1, VpnHel
             ingress_fee_per_mib,
             egress_fee_per_mib,
         },
+        client_ipv4_address,
+        client_ipv6_address,
         network_policy_hash,
+        valid_after_ms: u64::from_be_bytes(valid_after),
         expires_at_ms: u64::from_be_bytes(expires),
-    })
+    };
+    if !ticket.has_canonical_client_addresses() {
+        return Err(VpnHelperTicketError::InvalidClientAddresses);
+    }
+    Ok(ticket)
 }
 
-/// Compute the canonical digest authorized by a V1 VPN helper ticket.
+/// Compute the canonical privileged tunnel-policy digest authorized by a V1 VPN helper ticket.
 ///
-/// Sequence order is significant because overlapping routes are applied in order. Every string is
-/// length-delimited, each sequence has an explicit element count, and the MTU is big-endian, so no
-/// two policy tuples share a serialization. Callers must separately enforce the canonical CIDR and
-/// IP-address syntax required by the VPN control plane.
+/// The digest covers the selected relay transport and directory trust tuple as well as every host
+/// route, DNS, address, MTU, and padding input. Sequence order is significant because overlapping
+/// routes are applied in order. Every variable-length value is length-delimited, each sequence has
+/// an explicit element count, and integers are big-endian, so no two policy tuples share a
+/// serialization. The V1 QUIC ALPN is protocol-fixed rather than caller-controlled and is also
+/// authenticated by the SoraNet handshake. Callers must separately enforce canonical endpoint,
+/// server-name, CIDR, and IP-address syntax.
 #[must_use]
+#[allow(clippy::too_many_arguments)]
 pub fn vpn_helper_network_policy_hash_v1(
+    relay_endpoint: &str,
+    relay_id: &[u8; 32],
+    descriptor_commit: &[u8; 32],
+    tls_server_name: &str,
+    relay_tls_spki_sha256: &[u8; 32],
+    relay_certificate_sha256: &[u8; 32],
+    directory_snapshot_digest: &[u8; 32],
+    padding_budget_ms: u16,
     route_pushes: &[String],
     excluded_routes: &[String],
     dns_servers: &[String],
     tunnel_addresses: &[String],
     mtu_bytes: u64,
 ) -> [u8; 32] {
+    fn update_value(hasher: &mut blake3::Hasher, value: &[u8]) {
+        let len = u64::try_from(value.len())
+            .expect("VPN helper policy values are protocol-bounded below u64::MAX");
+        hasher.update(&len.to_be_bytes());
+        hasher.update(value);
+    }
+
     fn update_sequence(hasher: &mut blake3::Hasher, values: &[String]) {
         let count = u64::try_from(values.len())
             .expect("VPN network policy sequences are protocol-bounded below u64::MAX");
         hasher.update(&count.to_be_bytes());
         for value in values {
-            let len = u64::try_from(value.len())
-                .expect("VPN network policy strings are protocol-bounded below u64::MAX");
-            hasher.update(&len.to_be_bytes());
-            hasher.update(value.as_bytes());
+            update_value(hasher, value.as_bytes());
         }
     }
 
     let mut hasher = blake3::Hasher::new();
     hasher.update(b"iroha.soranet.vpn.helper-network-policy.v1");
+    update_value(&mut hasher, relay_endpoint.as_bytes());
+    update_value(&mut hasher, relay_id);
+    update_value(&mut hasher, descriptor_commit);
+    update_value(&mut hasher, tls_server_name.as_bytes());
+    update_value(&mut hasher, relay_tls_spki_sha256);
+    update_value(&mut hasher, relay_certificate_sha256);
+    update_value(&mut hasher, directory_snapshot_digest);
+    hasher.update(&padding_budget_ms.to_be_bytes());
     update_sequence(&mut hasher, route_pushes);
     update_sequence(&mut hasher, excluded_routes);
     update_sequence(&mut hasher, dns_servers);
@@ -1507,16 +1956,13 @@ fn decode_helper_ticket_quantity(
     *cursor += VPN_HELPER_TICKET_QUANTITY_SLOT_LEN;
     Ok(quantity)
 }
-fn helper_ticket_mac(secret: &[u8; 32], payload: &[u8]) -> blake3::Hash {
-    let mut hasher = blake3::Hasher::new_keyed(secret);
-    hasher.update(b"soranet-vpn-helper-ticket-v1");
+fn helper_ticket_signing_digest(payload: &[u8]) -> blake3::Hash {
+    let mut hasher = blake3::Hasher::new();
+    hasher.update(b"iroha.soranet.vpn.helper-ticket.signature.v1");
     hasher.update(payload);
     hasher.finalize()
 }
-fn helper_ticket_mac_matches(expected: &blake3::Hash, encoded: &[u8]) -> bool {
-    blake3::Hash::from_slice(encoded).is_ok_and(|actual| expected == &actual)
-}
-/// Errors surfaced while parsing or verifying helper-authenticated VPN tickets.
+/// Errors surfaced while signing, parsing, or verifying operator-issued VPN helper tickets.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum VpnHelperTicketError {
     /// Ticket length did not match the pinned helper-ticket size.
@@ -1526,18 +1972,47 @@ pub enum VpnHelperTicketError {
         /// Actual decoded ticket length.
         actual: usize,
     },
+    /// Hex transport length did not match the pinned helper-ticket size.
+    InvalidHexLength {
+        /// Expected fixed helper-ticket hex length.
+        expected: usize,
+        /// Actual helper-ticket hex length.
+        actual: usize,
+    },
+    /// Hex transport was not the canonical lowercase ASCII spelling.
+    NonCanonicalHex,
     /// Helper ticket did not carry the expected versioned magic prefix.
     InvalidMagic,
-    /// Helper ticket MAC did not verify against the shared secret.
-    InvalidMac,
+    /// Issuer signing key is not a valid Ed25519 private key.
+    InvalidIssuerPrivateKey,
+    /// Issuer verification key is not a valid Ed25519 public key.
+    InvalidIssuerPublicKey,
+    /// Helper-ticket signature did not verify against the configured issuer.
+    InvalidSignature,
     /// Helper ticket did not contain a valid Ed25519 metering public key.
     InvalidMeteringPublicKey,
     /// Helper ticket contains a malformed, noncanonical, or negative tariff quantity.
     InvalidTariffQuantity,
+    /// Helper ticket client addresses do not match its canonical session allocation.
+    InvalidClientAddresses,
+    /// Helper-ticket validity bounds are empty or reversed.
+    InvalidValidityWindow {
+        /// Inclusive lower validity bound in milliseconds since the Unix epoch.
+        valid_after_ms: u64,
+        /// Exclusive upper validity bound in milliseconds since the Unix epoch.
+        expires_at_ms: u64,
+    },
     /// Helper ticket was minted for a different relay id.
     InvalidRelay,
     /// Helper ticket has already been redeemed.
     Replayed,
+    /// Helper ticket was presented before its signed validity window opened.
+    NotYetValid {
+        /// Ticket lower validity bound in milliseconds since the Unix epoch.
+        valid_after_ms: u64,
+        /// Current verifier clock in milliseconds since the Unix epoch.
+        now_ms: u64,
+    },
     /// Helper ticket expired before verification completed.
     Expired {
         /// Ticket expiry timestamp in milliseconds since the Unix epoch.
@@ -1557,18 +2032,52 @@ impl fmt::Display for VpnHelperTicketError {
                     "vpn helper ticket length must be {expected} bytes (got {actual})"
                 )
             }
+            Self::InvalidHexLength { expected, actual } => {
+                write!(
+                    f,
+                    "vpn helper ticket hex length must be {expected} characters (got {actual})"
+                )
+            }
+            Self::NonCanonicalHex => {
+                f.write_str("vpn helper ticket must use canonical lowercase hexadecimal")
+            }
             Self::InvalidMagic => f.write_str("vpn helper ticket magic prefix is invalid"),
-            Self::InvalidMac => f.write_str("vpn helper ticket MAC verification failed"),
+            Self::InvalidIssuerPrivateKey => {
+                f.write_str("vpn helper ticket issuer private key must be Ed25519")
+            }
+            Self::InvalidIssuerPublicKey => {
+                f.write_str("vpn helper ticket issuer public key must be Ed25519")
+            }
+            Self::InvalidSignature => {
+                f.write_str("vpn helper ticket issuer signature verification failed")
+            }
             Self::InvalidMeteringPublicKey => {
                 f.write_str("vpn helper ticket metering public key is invalid")
             }
             Self::InvalidTariffQuantity => {
                 f.write_str("vpn helper ticket tariff quantity is invalid")
             }
+            Self::InvalidClientAddresses => f.write_str(
+                "vpn helper ticket client addresses do not match its session allocation",
+            ),
+            Self::InvalidValidityWindow {
+                valid_after_ms,
+                expires_at_ms,
+            } => write!(
+                f,
+                "vpn helper ticket validity window must satisfy valid_after_ms < expires_at_ms (got {valid_after_ms}..{expires_at_ms})"
+            ),
             Self::InvalidRelay => {
                 f.write_str("vpn helper ticket relay id does not match this relay")
             }
             Self::Replayed => f.write_str("vpn helper ticket has already been redeemed"),
+            Self::NotYetValid {
+                valid_after_ms,
+                now_ms,
+            } => write!(
+                f,
+                "vpn helper ticket is not valid until {valid_after_ms}ms (current time {now_ms}ms)"
+            ),
             Self::Expired {
                 expires_at_ms,
                 now_ms,
@@ -1735,7 +2244,13 @@ mod tests {
     use std::{fs, path::PathBuf};
     const FIXTURE_PATH: &str = "../../IrohaSwift/Tests/IrohaSwiftTests/Fixtures/vpn_vectors.json";
     const HELPER_TICKET_METERING_PUBLIC_KEY_OFFSET: usize =
-        VPN_HELPER_TICKET_MAGIC.len() + 16 + 32 + 32 + 32 + 32;
+        VPN_HELPER_TICKET_MAGIC.len() + 16 + 32 + 32 + 32 + 32 + 32;
+    const HELPER_TICKET_CLIENT_IPV4_OFFSET: usize =
+        HELPER_TICKET_METERING_PUBLIC_KEY_OFFSET + 32 + (4 * VPN_HELPER_TICKET_QUANTITY_SLOT_LEN);
+    const HELPER_TICKET_CLIENT_IPV6_OFFSET: usize = HELPER_TICKET_CLIENT_IPV4_OFFSET + 4;
+    const HELPER_TICKET_POLICY_HASH_OFFSET: usize = HELPER_TICKET_CLIENT_IPV6_OFFSET + 16;
+    const HELPER_TICKET_VALID_AFTER_OFFSET: usize = HELPER_TICKET_POLICY_HASH_OFFSET + 32;
+    const HELPER_TICKET_EXPIRES_AT_OFFSET: usize = HELPER_TICKET_VALID_AFTER_OFFSET + 8;
     const SMALL_ORDER_ED25519_POINT: [u8; 32] = [
         1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
         0, 0,
@@ -1755,6 +2270,41 @@ mod tests {
     }
     fn checked_random_public_key() -> iroha_crypto::PublicKey {
         checked_random_keypair().public_key().clone()
+    }
+    fn relay_receipt_keypair(seed: u8) -> KeyPair {
+        KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519)
+            .expect("derive checked VPN relay-receipt fixture keypair")
+    }
+    fn sample_relay_receipt() -> (KeyPair, VpnSignedSessionReceiptV1) {
+        let relay_key = relay_receipt_keypair(0xA1);
+        let (algorithm, relay_public_key) = relay_key
+            .public_key()
+            .try_to_bytes()
+            .expect("checked VPN relay public key");
+        assert_eq!(algorithm, Algorithm::Ed25519);
+        let mut relay_id = [0_u8; 32];
+        relay_id.copy_from_slice(relay_public_key);
+        let receipt = VpnSessionReceiptV1 {
+            session_id: [0x11; 16],
+            quote_id: [0x22; 32],
+            payment_tx_hash: [0x33; 32],
+            account_hash: [0x44; 32],
+            relay_id,
+            ingress_bytes: 1,
+            egress_bytes: 2,
+            cover_bytes: 0,
+            uptime_secs: 1,
+            started_at_ms: 1_700_000_000_000,
+            ended_at_ms: 1_700_000_000_001,
+            exit_class: VpnExitClassV1::Standard,
+            meter_hash: [0x55; 32],
+            earned_fee: Quantity::zero(),
+            highest_voucher_sequence: 7,
+            client_voucher_hash: [0x66; 32],
+        };
+        let signed = VpnSignedSessionReceiptV1::try_sign(receipt, relay_key.private_key())
+            .expect("checked VPN relay receipt signs");
+        (relay_key, signed)
     }
     fn test_network_id(seed: u8) -> NetworkId {
         NetworkId::from_genesis_hash(HashOf::<crate::block::BlockHeader>::from_untyped_unchecked(
@@ -1852,9 +2402,12 @@ mod tests {
     fn sample_helper_ticket(expires_at_ms: u64) -> VpnHelperTicketV1 {
         let metering_key_pair = KeyPair::try_from_seed(vec![0x66; 32], Algorithm::Ed25519)
             .expect("fixture seed derives Ed25519 keypair");
+        let session_id = [0xAB; 16];
+        let address_plan = derive_vpn_session_address_plan_v1(session_id);
         VpnHelperTicketV1 {
-            session_id: [0xAB; 16],
+            session_id,
             quote_id: [0xBC; 32],
+            lease_id: [0xBD; 32],
             account_hash: [0xCD; 32],
             relay_id: [0xDE; 32],
             payment_tx_hash: [0xEF; 32],
@@ -1865,9 +2418,27 @@ mod tests {
                 ingress_fee_per_mib: quantity_nanos(10),
                 egress_fee_per_mib: quantity_nanos(20),
             },
+            client_ipv4_address: address_plan.client_ipv4_address,
+            client_ipv6_address: address_plan.client_ipv6_address,
             network_policy_hash: [0xF0; 32],
+            valid_after_ms: 1,
             expires_at_ms,
         }
+    }
+    fn helper_ticket_issuer(seed: u8) -> KeyPair {
+        KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519)
+            .expect("fixture seed derives helper-ticket issuer keypair")
+    }
+    fn resign_helper_ticket_fields(
+        bytes: &mut [u8; VPN_HELPER_TICKET_LEN],
+        issuer_private_key: &PrivateKey,
+    ) {
+        let signature_offset = VPN_HELPER_TICKET_LEN - VPN_HELPER_TICKET_SIGNATURE_LEN;
+        let digest = helper_ticket_signing_digest(&bytes[..signature_offset]);
+        let signature = Signature::try_new(issuer_private_key, digest.as_bytes())
+            .expect("fixture issuer signs helper ticket");
+        assert_eq!(signature.payload().len(), VPN_HELPER_TICKET_SIGNATURE_LEN);
+        bytes[signature_offset..].copy_from_slice(signature.payload());
     }
     fn sample_usage_voucher() -> (KeyPair, VpnUsageVoucherV1) {
         let key_pair = checked_random_keypair();
@@ -1884,6 +2455,15 @@ mod tests {
         let voucher =
             VpnUsageVoucherV1::try_sign(body, key_pair.private_key()).expect("checked voucher");
         (key_pair, voucher)
+    }
+    #[cfg(feature = "json")]
+    #[test]
+    fn usage_voucher_json_roundtrip_preserves_settlement_evidence() {
+        let (_, voucher) = sample_usage_voucher();
+        let encoded = json::to_json(&voucher).expect("serialize VPN usage voucher");
+        let decoded: VpnUsageVoucherV1 =
+            json::from_str(&encoded).expect("deserialize VPN usage voucher");
+        assert_eq!(decoded, voucher);
     }
     const SMALL_ORDER_ED25519_SIGNATURE_R: [u8; 32] = [
         1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
@@ -1948,119 +2528,189 @@ mod tests {
         ));
     }
     #[test]
-    fn helper_ticket_roundtrips_and_verifies_mac() {
-        let secret = [0x42; 32];
+    fn helper_ticket_roundtrips_and_verifies_signature() {
+        let issuer = helper_ticket_issuer(0x42);
         let ticket = sample_helper_ticket(1_700_000_000_000);
         let checked_bytes = ticket
-            .try_to_bytes(&secret)
+            .try_to_bytes(issuer.private_key())
             .expect("checked helper ticket serialization");
-        let bytes = ticket.to_bytes(&secret);
+        let bytes = ticket.to_bytes(issuer.private_key());
         assert_eq!(checked_bytes, bytes);
         assert!(VpnHelperTicketV1::looks_like(&bytes));
-        let parsed = VpnHelperTicketV1::parse(&bytes, &secret, 1_699_999_999_000)
+        let parsed = VpnHelperTicketV1::parse(&bytes, issuer.public_key(), 1_699_999_999_000)
             .expect("helper ticket should verify");
         assert_eq!(ticket, parsed);
         let checked_hex = ticket
-            .try_to_hex(&secret)
+            .try_to_hex(issuer.private_key())
             .expect("checked helper ticket hex serialization");
-        let hex = ticket.to_hex(&secret);
+        let hex = ticket.to_hex(issuer.private_key());
         assert_eq!(checked_hex, hex);
-        let parsed_hex = VpnHelperTicketV1::parse_hex(&hex, &secret, 1_699_999_999_000)
+        let parsed_hex = VpnHelperTicketV1::parse_hex(&hex, issuer.public_key(), 1_699_999_999_000)
             .expect("helper ticket hex should verify");
         assert_eq!(ticket, parsed_hex);
     }
     #[test]
-    fn helper_network_policy_hash_is_canonical_and_complete() {
-        let routes = vec!["0.0.0.0/0".to_owned(), "::/0".to_owned()];
-        let exclusions = vec!["192.0.2.0/24".to_owned()];
-        let dns = vec!["1.1.1.1".to_owned()];
-        let addresses = vec!["10.208.0.2/32".to_owned()];
-        let expected =
-            vpn_helper_network_policy_hash_v1(&routes, &exclusions, &dns, &addresses, 1_280);
+    fn helper_ticket_rejects_empty_or_reversed_validity_window() {
+        let issuer = helper_ticket_issuer(0x42);
+        let mut ticket = sample_helper_ticket(1_000);
+        ticket.valid_after_ms = 1_000;
         assert_eq!(
-            expected,
-            vpn_helper_network_policy_hash_v1(&routes, &exclusions, &dns, &addresses, 1_280)
+            ticket.try_to_bytes(issuer.private_key()),
+            Err(VpnHelperTicketError::InvalidValidityWindow {
+                valid_after_ms: 1_000,
+                expires_at_ms: 1_000,
+            })
         );
 
+        let ticket = sample_helper_ticket(2_000);
+        let mut bytes = ticket.to_bytes(issuer.private_key());
+        bytes[HELPER_TICKET_VALID_AFTER_OFFSET..HELPER_TICKET_VALID_AFTER_OFFSET + 8]
+            .copy_from_slice(&2_001u64.to_be_bytes());
+        resign_helper_ticket_fields(&mut bytes, issuer.private_key());
+        assert_eq!(
+            VpnHelperTicketV1::parse(&bytes, issuer.public_key(), 1_500),
+            Err(VpnHelperTicketError::InvalidValidityWindow {
+                valid_after_ms: 2_001,
+                expires_at_ms: 2_000,
+            })
+        );
+    }
+    #[test]
+    fn helper_ticket_rejects_noncanonical_client_addresses_even_when_issuer_signed() {
+        let issuer = helper_ticket_issuer(0x42);
+        let mut ticket = sample_helper_ticket(2_000);
+        ticket.client_ipv4_address[3] ^= 1;
+        assert_eq!(
+            ticket.try_to_bytes(issuer.private_key()),
+            Err(VpnHelperTicketError::InvalidClientAddresses)
+        );
+
+        let ticket = sample_helper_ticket(2_000);
+        let mut bytes = ticket.to_bytes(issuer.private_key());
+        bytes[HELPER_TICKET_CLIENT_IPV6_OFFSET + 15] ^= 1;
+        resign_helper_ticket_fields(&mut bytes, issuer.private_key());
+        assert_eq!(
+            VpnHelperTicketV1::parse(&bytes, issuer.public_key(), 1_500),
+            Err(VpnHelperTicketError::InvalidClientAddresses)
+        );
+    }
+    #[test]
+    fn helper_ticket_rejects_presentation_before_validity_window() {
+        let issuer = helper_ticket_issuer(0x42);
+        let mut ticket = sample_helper_ticket(2_000);
+        ticket.valid_after_ms = 1_000;
+        let bytes = ticket.to_bytes(issuer.private_key());
+        assert_eq!(
+            VpnHelperTicketV1::parse(&bytes, issuer.public_key(), 999),
+            Err(VpnHelperTicketError::NotYetValid {
+                valid_after_ms: 1_000,
+                now_ms: 999,
+            })
+        );
+    }
+    #[test]
+    fn helper_network_policy_hash_is_canonical_and_complete() {
+        #[derive(Clone)]
+        struct Policy {
+            relay_endpoint: String,
+            relay_id: [u8; 32],
+            descriptor_commit: [u8; 32],
+            tls_server_name: String,
+            relay_tls_spki_sha256: [u8; 32],
+            relay_certificate_sha256: [u8; 32],
+            directory_snapshot_digest: [u8; 32],
+            padding_budget_ms: u16,
+            routes: Vec<String>,
+            exclusions: Vec<String>,
+            dns: Vec<String>,
+            addresses: Vec<String>,
+            mtu_bytes: u64,
+        }
+        impl Policy {
+            fn hash(&self) -> [u8; 32] {
+                vpn_helper_network_policy_hash_v1(
+                    &self.relay_endpoint,
+                    &self.relay_id,
+                    &self.descriptor_commit,
+                    &self.tls_server_name,
+                    &self.relay_tls_spki_sha256,
+                    &self.relay_certificate_sha256,
+                    &self.directory_snapshot_digest,
+                    self.padding_budget_ms,
+                    &self.routes,
+                    &self.exclusions,
+                    &self.dns,
+                    &self.addresses,
+                    self.mtu_bytes,
+                )
+            }
+        }
+        let policy = Policy {
+            relay_endpoint: "/dns/relay.example/udp/9443/quic".to_owned(),
+            relay_id: [0x11; 32],
+            descriptor_commit: [0x22; 32],
+            tls_server_name: "relay.example".to_owned(),
+            relay_tls_spki_sha256: [0x33; 32],
+            relay_certificate_sha256: [0x44; 32],
+            directory_snapshot_digest: [0x55; 32],
+            padding_budget_ms: 15,
+            routes: vec!["0.0.0.0/0".to_owned(), "::/0".to_owned()],
+            exclusions: vec!["192.0.2.0/24".to_owned()],
+            dns: vec!["1.1.1.1".to_owned()],
+            addresses: vec!["10.208.0.2/32".to_owned()],
+            mtu_bytes: 1_280,
+        };
+        let expected = policy.hash();
+        assert_eq!(expected, policy.hash());
+
         let mut variants = Vec::new();
-        let mut changed = routes.clone();
-        changed.reverse();
-        variants.push(vpn_helper_network_policy_hash_v1(
-            &changed,
-            &exclusions,
-            &dns,
-            &addresses,
-            1_280,
-        ));
-        variants.push(vpn_helper_network_policy_hash_v1(
-            &routes,
-            &[],
-            &dns,
-            &addresses,
-            1_280,
-        ));
-        variants.push(vpn_helper_network_policy_hash_v1(
-            &routes,
-            &exclusions,
-            &[],
-            &addresses,
-            1_280,
-        ));
-        variants.push(vpn_helper_network_policy_hash_v1(
-            &routes,
-            &exclusions,
-            &dns,
-            &[],
-            1_280,
-        ));
-        variants.push(vpn_helper_network_policy_hash_v1(
-            &routes,
-            &exclusions,
-            &dns,
-            &addresses,
-            1_400,
-        ));
+        macro_rules! changed {
+            ($field:ident, $value:expr) => {{
+                let mut variant = policy.clone();
+                variant.$field = $value;
+                variants.push(variant.hash());
+            }};
+        }
+        changed!(
+            relay_endpoint,
+            "/dns/other.example/udp/9443/quic".to_owned()
+        );
+        changed!(relay_id, [0x12; 32]);
+        changed!(descriptor_commit, [0x23; 32]);
+        changed!(tls_server_name, "other.example".to_owned());
+        changed!(relay_tls_spki_sha256, [0x34; 32]);
+        changed!(relay_certificate_sha256, [0x45; 32]);
+        changed!(directory_snapshot_digest, [0x56; 32]);
+        changed!(padding_budget_ms, 16);
+        let mut reordered_routes = policy.routes.clone();
+        reordered_routes.reverse();
+        changed!(routes, reordered_routes);
+        changed!(exclusions, Vec::new());
+        changed!(dns, Vec::new());
+        changed!(addresses, Vec::new());
+        changed!(mtu_bytes, 1_400);
         assert!(variants.into_iter().all(|variant| variant != expected));
     }
     #[test]
-    fn helper_ticket_mac_comparison_checks_the_complete_digest() {
-        let expected = helper_ticket_mac(&[0x42; 32], b"helper-ticket-payload");
-        assert!(helper_ticket_mac_matches(&expected, expected.as_bytes()));
-        for index in [0, blake3::OUT_LEN / 2, blake3::OUT_LEN - 1] {
-            let mut altered = *expected.as_bytes();
-            altered[index] ^= 0x01;
-            assert!(!helper_ticket_mac_matches(&expected, &altered));
-        }
-        assert!(!helper_ticket_mac_matches(
-            &expected,
-            &expected.as_bytes()[..blake3::OUT_LEN - 1]
-        ));
-    }
-    #[test]
-    fn helper_ticket_unverified_decode_is_structural_only() {
-        let secret = [0x42; 32];
+    fn helper_ticket_signature_covers_the_complete_frame() {
+        let issuer = helper_ticket_issuer(0x42);
         let ticket = sample_helper_ticket(1_700_000_000_000);
-        let mut bytes = ticket.to_bytes(&secret);
-        let mac_offset = VPN_HELPER_TICKET_LEN - blake3::OUT_LEN;
-        bytes[mac_offset] ^= 0x01;
-        let decoded = VpnHelperTicketV1::decode_unverified(&bytes)
-            .expect("client metadata decoder deliberately ignores the MAC");
-        assert_eq!(decoded, ticket);
-        assert_eq!(
-            VpnHelperTicketV1::parse(&bytes, &secret, 1_699_999_999_000),
-            Err(VpnHelperTicketError::InvalidMac)
-        );
-        let tariff_offset = VPN_HELPER_TICKET_MAGIC.len() + 16 + 32 + 32 + 32 + 32 + 32;
-        bytes = ticket.to_bytes(&secret);
-        bytes[tariff_offset] = 0;
-        assert_eq!(
-            VpnHelperTicketV1::decode_unverified(&bytes),
-            Err(VpnHelperTicketError::InvalidTariffQuantity)
-        );
+        for index in [
+            VPN_HELPER_TICKET_MAGIC.len(),
+            320,
+            VPN_HELPER_TICKET_LEN - 1,
+        ] {
+            let mut bytes = ticket.to_bytes(issuer.private_key());
+            bytes[index] ^= 0x01;
+            assert_eq!(
+                VpnHelperTicketV1::parse(&bytes, issuer.public_key(), 1_699_999_999_000),
+                Err(VpnHelperTicketError::InvalidSignature)
+            );
+        }
     }
     #[test]
     fn helper_ticket_try_to_bytes_rejects_non_ed25519_metering_key() {
-        let secret = [0x42; 32];
+        let issuer = helper_ticket_issuer(0x42);
         let mut ticket = sample_helper_ticket(1_700_000_000_000);
         let secp_key_pair = checked_random_keypair_with_algorithm(Algorithm::Secp256k1);
         assert_eq!(
@@ -2072,56 +2722,70 @@ mod tests {
         );
         ticket.metering_public_key = secp_key_pair.public_key().clone();
         assert_eq!(
-            ticket.try_to_bytes(&secret),
+            ticket.try_to_bytes(issuer.private_key()),
             Err(VpnHelperTicketError::InvalidMeteringPublicKey)
         );
         assert_eq!(
-            ticket.try_to_hex(&secret),
+            ticket.try_to_hex(issuer.private_key()),
             Err(VpnHelperTicketError::InvalidMeteringPublicKey)
         );
     }
     #[test]
-    fn helper_ticket_rejects_old_length_ticket() {
-        let secret = [0x42; 32];
+    fn helper_ticket_rejects_non_ed25519_issuer_keys() {
+        let issuer = helper_ticket_issuer(0x42);
+        let wrong_algorithm = checked_random_keypair_with_algorithm(Algorithm::Secp256k1);
         let ticket = sample_helper_ticket(1_700_000_000_000);
-        let bytes = ticket.to_bytes(&secret);
-        let old_len = bytes[..664].to_vec();
-        let err = VpnHelperTicketV1::parse(&old_len, &secret, 1_699_999_999_000)
+        assert_eq!(
+            ticket.try_to_bytes(wrong_algorithm.private_key()),
+            Err(VpnHelperTicketError::InvalidIssuerPrivateKey)
+        );
+        let bytes = ticket.to_bytes(issuer.private_key());
+        assert_eq!(
+            VpnHelperTicketV1::parse(&bytes, wrong_algorithm.public_key(), 1),
+            Err(VpnHelperTicketError::InvalidIssuerPublicKey)
+        );
+    }
+    #[test]
+    fn helper_ticket_rejects_old_length_ticket() {
+        let issuer = helper_ticket_issuer(0x42);
+        let ticket = sample_helper_ticket(1_700_000_000_000);
+        let bytes = ticket.to_bytes(issuer.private_key());
+        let old_len = bytes[..728].to_vec();
+        let err = VpnHelperTicketV1::parse(&old_len, issuer.public_key(), 1_699_999_999_000)
             .expect_err("old ticket length must fail");
         assert_eq!(
             VpnHelperTicketError::InvalidLength {
                 expected: VPN_HELPER_TICKET_LEN,
-                actual: 664,
+                actual: 728,
             },
             err
         );
     }
     #[test]
     fn helper_ticket_rejects_tampering() {
-        let secret = [0x24; 32];
+        let issuer = helper_ticket_issuer(0x24);
         let ticket = sample_helper_ticket(55_000);
-        let mut bytes = ticket.to_bytes(&secret);
+        let mut bytes = ticket.to_bytes(issuer.private_key());
         bytes[VPN_HELPER_TICKET_MAGIC.len() + 3] ^= 0xFF;
-        let err = VpnHelperTicketV1::parse(&bytes, &secret, 1).expect_err("tamper must fail");
-        assert_eq!(VpnHelperTicketError::InvalidMac, err);
+        let err =
+            VpnHelperTicketV1::parse(&bytes, issuer.public_key(), 1).expect_err("tamper must fail");
+        assert_eq!(VpnHelperTicketError::InvalidSignature, err);
     }
     #[test]
     fn helper_ticket_parse_rejects_inert_metering_public_key_material() {
-        let secret = [0x42; 32];
+        let issuer = helper_ticket_issuer(0x42);
         let ticket = sample_helper_ticket(55_000);
         for (label, public_key) in [
             ("all-zero", [0u8; 32]),
             ("small-order", SMALL_ORDER_ED25519_POINT),
             ("noncanonical", NONCANONICAL_ED25519_POINT),
         ] {
-            let mut bytes = ticket.to_bytes(&secret);
+            let mut bytes = ticket.to_bytes(issuer.private_key());
             bytes[HELPER_TICKET_METERING_PUBLIC_KEY_OFFSET
                 ..HELPER_TICKET_METERING_PUBLIC_KEY_OFFSET + 32]
                 .copy_from_slice(&public_key);
-            let mac_offset = VPN_HELPER_TICKET_LEN - blake3::OUT_LEN;
-            let mac = helper_ticket_mac(&secret, &bytes[..mac_offset]);
-            bytes[mac_offset..].copy_from_slice(mac.as_bytes());
-            let err = VpnHelperTicketV1::parse(&bytes, &secret, 1)
+            resign_helper_ticket_fields(&mut bytes, issuer.private_key());
+            let err = VpnHelperTicketV1::parse(&bytes, issuer.public_key(), 1)
                 .expect_err("authenticated inert metering key must fail admission");
             assert_eq!(
                 VpnHelperTicketError::InvalidMeteringPublicKey,
@@ -2131,111 +2795,157 @@ mod tests {
         }
     }
     #[test]
-    fn helper_ticket_rejects_wrong_secret() {
-        let secret = [0x24; 32];
-        let wrong_secret = [0x25; 32];
+    fn helper_ticket_parse_rejects_authenticated_noncanonical_tariff() {
+        let issuer = helper_ticket_issuer(0x42);
         let ticket = sample_helper_ticket(55_000);
-        let bytes = ticket.to_bytes(&secret);
-        let err =
-            VpnHelperTicketV1::parse(&bytes, &wrong_secret, 1).expect_err("wrong secret must fail");
-        assert_eq!(VpnHelperTicketError::InvalidMac, err);
+        let mut bytes = ticket.to_bytes(issuer.private_key());
+        let tariff_offset = VPN_HELPER_TICKET_MAGIC.len() + 16 + 32 + 32 + 32 + 32 + 32 + 32;
+        bytes[tariff_offset] = 0;
+        resign_helper_ticket_fields(&mut bytes, issuer.private_key());
+        assert_eq!(
+            VpnHelperTicketV1::parse(&bytes, issuer.public_key(), 1),
+            Err(VpnHelperTicketError::InvalidTariffQuantity)
+        );
+    }
+    #[test]
+    fn helper_ticket_rejects_wrong_issuer() {
+        let issuer = helper_ticket_issuer(0x24);
+        let wrong_issuer = helper_ticket_issuer(0x25);
+        let ticket = sample_helper_ticket(55_000);
+        let bytes = ticket.to_bytes(issuer.private_key());
+        let err = VpnHelperTicketV1::parse(&bytes, wrong_issuer.public_key(), 1)
+            .expect_err("wrong issuer must fail");
+        assert_eq!(VpnHelperTicketError::InvalidSignature, err);
     }
     #[test]
     fn helper_ticket_rejects_bad_magic_at_valid_length() {
-        let secret = [0x24; 32];
+        let issuer = helper_ticket_issuer(0x24);
         let ticket = sample_helper_ticket(55_000);
-        let mut bytes = ticket.to_bytes(&secret);
+        let mut bytes = ticket.to_bytes(issuer.private_key());
         bytes[0] ^= 0xFF;
         assert!(!VpnHelperTicketV1::looks_like(&bytes));
-        let err = VpnHelperTicketV1::parse(&bytes, &secret, 1).expect_err("bad magic must fail");
+        let err = VpnHelperTicketV1::parse(&bytes, issuer.public_key(), 1)
+            .expect_err("bad magic must fail");
         assert_eq!(VpnHelperTicketError::InvalidMagic, err);
     }
     #[test]
     fn helper_ticket_parse_hex_rejects_non_hex() {
-        let secret = [0x24; 32];
-        let err = VpnHelperTicketV1::parse_hex("not-hex", &secret, 1)
+        let issuer = helper_ticket_issuer(0x24);
+        let invalid = "g".repeat(VPN_HELPER_TICKET_HEX_LEN);
+        let err = VpnHelperTicketV1::parse_hex(&invalid, issuer.public_key(), 1)
             .expect_err("non-hex ticket must fail");
-        assert!(matches!(err, VpnHelperTicketError::Hex(_)));
+        assert_eq!(VpnHelperTicketError::NonCanonicalHex, err);
     }
     #[test]
     fn helper_ticket_parse_hex_rejects_valid_hex_wrong_length() {
-        let secret = [0x24; 32];
+        let issuer = helper_ticket_issuer(0x24);
         let short_ticket = hex::encode(vec![0u8; VPN_HELPER_TICKET_LEN - 1]);
-        let err = VpnHelperTicketV1::parse_hex(&short_ticket, &secret, 1)
+        let err = VpnHelperTicketV1::parse_hex(&short_ticket, issuer.public_key(), 1)
             .expect_err("wrong-length hex ticket must fail");
         assert_eq!(
-            VpnHelperTicketError::InvalidLength {
-                expected: VPN_HELPER_TICKET_LEN,
-                actual: VPN_HELPER_TICKET_LEN - 1,
+            VpnHelperTicketError::InvalidHexLength {
+                expected: VPN_HELPER_TICKET_HEX_LEN,
+                actual: VPN_HELPER_TICKET_HEX_LEN - 2,
             },
             err
         );
     }
     #[test]
-    fn helper_ticket_mac_covers_metering_public_key() {
-        let secret = [0x24; 32];
+    fn helper_ticket_parse_hex_rejects_uppercase() {
+        let issuer = helper_ticket_issuer(0x24);
+        let uppercase = "A".repeat(VPN_HELPER_TICKET_HEX_LEN);
+        let err = VpnHelperTicketV1::parse_hex(&uppercase, issuer.public_key(), 1)
+            .expect_err("uppercase helper ticket must fail");
+        assert_eq!(VpnHelperTicketError::NonCanonicalHex, err);
+    }
+    #[test]
+    fn helper_ticket_signature_covers_metering_public_key() {
+        let issuer = helper_ticket_issuer(0x24);
         let ticket = sample_helper_ticket(55_000);
-        let mut bytes = ticket.to_bytes(&secret);
-        let metering_offset = VPN_HELPER_TICKET_MAGIC.len() + 16 + 32 + 32 + 32 + 32;
+        let mut bytes = ticket.to_bytes(issuer.private_key());
+        let metering_offset = VPN_HELPER_TICKET_MAGIC.len() + 16 + 32 + 32 + 32 + 32 + 32;
         bytes[metering_offset] ^= 0x01;
-        let err = VpnHelperTicketV1::parse(&bytes, &secret, 1)
+        let err = VpnHelperTicketV1::parse(&bytes, issuer.public_key(), 1)
             .expect_err("metering key tamper must fail");
-        assert_eq!(VpnHelperTicketError::InvalidMac, err);
+        assert_eq!(VpnHelperTicketError::InvalidSignature, err);
     }
     #[test]
-    fn helper_ticket_mac_covers_tariff_fields() {
-        let secret = [0x24; 32];
+    fn helper_ticket_signature_covers_lease_id() {
+        let issuer = helper_ticket_issuer(0x24);
         let ticket = sample_helper_ticket(55_000);
-        let mut bytes = ticket.to_bytes(&secret);
-        let tariff_offset = VPN_HELPER_TICKET_MAGIC.len() + 16 + 32 + 32 + 32 + 32 + 32;
+        let mut bytes = ticket.to_bytes(issuer.private_key());
+        let lease_id_offset = VPN_HELPER_TICKET_MAGIC.len() + 16 + 32;
+        bytes[lease_id_offset] ^= 0x01;
+        assert_eq!(
+            VpnHelperTicketV1::parse(&bytes, issuer.public_key(), 1),
+            Err(VpnHelperTicketError::InvalidSignature)
+        );
+    }
+    #[test]
+    fn helper_ticket_signature_covers_tariff_fields() {
+        let issuer = helper_ticket_issuer(0x24);
+        let ticket = sample_helper_ticket(55_000);
+        let mut bytes = ticket.to_bytes(issuer.private_key());
+        let tariff_offset = VPN_HELPER_TICKET_MAGIC.len() + 16 + 32 + 32 + 32 + 32 + 32 + 32;
         bytes[tariff_offset + 7] ^= 0x01;
-        let err =
-            VpnHelperTicketV1::parse(&bytes, &secret, 1).expect_err("tariff tamper must fail");
-        assert_eq!(VpnHelperTicketError::InvalidMac, err);
+        let err = VpnHelperTicketV1::parse(&bytes, issuer.public_key(), 1)
+            .expect_err("tariff tamper must fail");
+        assert_eq!(VpnHelperTicketError::InvalidSignature, err);
     }
     #[test]
-    fn helper_ticket_mac_covers_expiry() {
-        let secret = [0x24; 32];
+    fn helper_ticket_signature_covers_expiry() {
+        let issuer = helper_ticket_issuer(0x24);
         let ticket = sample_helper_ticket(55_000);
-        let mut bytes = ticket.to_bytes(&secret);
-        let expiry_offset = VPN_HELPER_TICKET_MAGIC.len()
-            + 16
-            + 32
-            + 32
-            + 32
-            + 32
-            + 32
-            + (4 * VPN_HELPER_TICKET_QUANTITY_SLOT_LEN);
-        let expiry_offset = expiry_offset + 32;
-        bytes[expiry_offset + 7] ^= 0x01;
-        let err =
-            VpnHelperTicketV1::parse(&bytes, &secret, 1).expect_err("expiry tamper must fail");
-        assert_eq!(VpnHelperTicketError::InvalidMac, err);
+        let mut bytes = ticket.to_bytes(issuer.private_key());
+        bytes[HELPER_TICKET_EXPIRES_AT_OFFSET + 7] ^= 0x01;
+        let err = VpnHelperTicketV1::parse(&bytes, issuer.public_key(), 1)
+            .expect_err("expiry tamper must fail");
+        assert_eq!(VpnHelperTicketError::InvalidSignature, err);
     }
     #[test]
-    fn helper_ticket_mac_covers_network_policy_hash() {
-        let secret = [0x24; 32];
+    fn helper_ticket_signature_covers_valid_after() {
+        let issuer = helper_ticket_issuer(0x24);
         let ticket = sample_helper_ticket(55_000);
-        let mut bytes = ticket.to_bytes(&secret);
-        let policy_offset = VPN_HELPER_TICKET_MAGIC.len()
-            + 16
-            + 32
-            + 32
-            + 32
-            + 32
-            + 32
-            + (4 * VPN_HELPER_TICKET_QUANTITY_SLOT_LEN);
-        bytes[policy_offset] ^= 0x01;
-        let err = VpnHelperTicketV1::parse(&bytes, &secret, 1)
+        let mut bytes = ticket.to_bytes(issuer.private_key());
+        bytes[HELPER_TICKET_VALID_AFTER_OFFSET + 7] ^= 0x01;
+        assert_eq!(
+            VpnHelperTicketV1::parse(&bytes, issuer.public_key(), 1),
+            Err(VpnHelperTicketError::InvalidSignature)
+        );
+    }
+    #[test]
+    fn helper_ticket_signature_covers_network_policy_hash() {
+        let issuer = helper_ticket_issuer(0x24);
+        let ticket = sample_helper_ticket(55_000);
+        let mut bytes = ticket.to_bytes(issuer.private_key());
+        bytes[HELPER_TICKET_POLICY_HASH_OFFSET] ^= 0x01;
+        let err = VpnHelperTicketV1::parse(&bytes, issuer.public_key(), 1)
             .expect_err("network policy tamper must fail");
-        assert_eq!(VpnHelperTicketError::InvalidMac, err);
+        assert_eq!(VpnHelperTicketError::InvalidSignature, err);
+    }
+    #[test]
+    fn helper_ticket_signature_covers_exact_client_addresses() {
+        let issuer = helper_ticket_issuer(0x24);
+        let ticket = sample_helper_ticket(55_000);
+        for offset in [
+            HELPER_TICKET_CLIENT_IPV4_OFFSET,
+            HELPER_TICKET_CLIENT_IPV6_OFFSET,
+        ] {
+            let mut bytes = ticket.to_bytes(issuer.private_key());
+            bytes[offset] ^= 0x01;
+            assert_eq!(
+                VpnHelperTicketV1::parse(&bytes, issuer.public_key(), 1),
+                Err(VpnHelperTicketError::InvalidSignature)
+            );
+        }
     }
     #[test]
     fn helper_ticket_rejects_expired_ticket() {
-        let secret = [0x99; 32];
+        let issuer = helper_ticket_issuer(0x99);
         let ticket = sample_helper_ticket(999);
-        let bytes = ticket.to_bytes(&secret);
-        let err = VpnHelperTicketV1::parse(&bytes, &secret, 1_000).expect_err("expiry must fail");
+        let bytes = ticket.to_bytes(issuer.private_key());
+        let err = VpnHelperTicketV1::parse(&bytes, issuer.public_key(), 1_000)
+            .expect_err("expiry must fail");
         assert_eq!(
             VpnHelperTicketError::Expired {
                 expires_at_ms: 999,
@@ -2249,6 +2959,27 @@ mod tests {
         let (_key_pair, voucher) = sample_usage_voucher();
         voucher.verify().expect("voucher signature must verify");
         assert_ne!([0u8; 32], voucher.hash());
+    }
+    #[test]
+    fn usage_voucher_body_is_a_cumulative_prepaid_ceiling() {
+        let (_, voucher) = sample_usage_voucher();
+        let body = voucher.body;
+        assert!(body.authorizes(body.ingress_bytes, body.egress_bytes, body.active_ms));
+        assert!(!body.authorizes(
+            body.ingress_bytes.saturating_add(1),
+            body.egress_bytes,
+            body.active_ms,
+        ));
+        assert!(!body.authorizes(
+            body.ingress_bytes,
+            body.egress_bytes.saturating_add(1),
+            body.active_ms,
+        ));
+        assert!(!body.authorizes(
+            body.ingress_bytes,
+            body.egress_bytes,
+            body.active_ms.saturating_add(1),
+        ));
     }
     #[test]
     fn usage_voucher_try_sign_uses_checked_signature_and_verifies() {
@@ -2297,7 +3028,7 @@ mod tests {
         }
     }
     #[test]
-    fn usage_voucher_rejects_malformed_mldsa_signature_lengths() {
+    fn usage_voucher_v1_rejects_non_ed25519_signers() {
         let key_pair = checked_random_keypair_with_algorithm(Algorithm::MlDsa);
         let body = VpnUsageVoucherBodyV1 {
             session_id: [0x41; 16],
@@ -2309,31 +3040,47 @@ mod tests {
             active_ms: 2_500,
             issued_at_ms: 1_700_000_000_555,
         };
-        let voucher =
-            VpnUsageVoucherV1::try_sign(body, key_pair.private_key()).expect("checked voucher");
-        voucher
+        let signing_error = VpnUsageVoucherV1::try_sign(body, key_pair.private_key())
+            .expect_err("V1 voucher construction must reject ML-DSA");
+        assert!(signing_error.to_string().contains("must use Ed25519"));
+
+        let voucher = VpnUsageVoucherV1 {
+            body,
+            client_public_key: key_pair.public_key().clone(),
+            signature: Signature::try_new(
+                key_pair.private_key(),
+                &vpn_usage_voucher_signing_bytes(&body),
+            )
+            .expect("construct otherwise valid ML-DSA substitution"),
+        };
+        let verification_error = voucher
             .verify()
-            .expect("valid ML-DSA usage voucher signature verifies");
-        let valid_signature = voucher.signature.payload().to_vec();
-        for (label, replacement_signature) in [
-            (
-                "short",
-                valid_signature[..valid_signature.len() - 1].to_vec(),
-            ),
-            ("overlong", {
-                let mut payload = valid_signature.clone();
-                payload.push(0x60);
-                payload
-            }),
-        ] {
-            let mut invalid_voucher = voucher.clone();
-            invalid_voucher.signature = Signature::from_bytes(&replacement_signature);
-            assert_eq!(
-                invalid_voucher.verify().unwrap_err(),
-                iroha_crypto::Error::BadSignature,
-                "{label} usage voucher ML-DSA signature length was not rejected"
-            );
-        }
+            .expect_err("V1 voucher verification must reject ML-DSA");
+        assert!(verification_error.to_string().contains("must use Ed25519"));
+    }
+    #[test]
+    fn usage_voucher_rejects_undomained_body_signature() {
+        let key_pair = checked_random_keypair();
+        let body = VpnUsageVoucherBodyV1 {
+            session_id: [0x51; 16],
+            quote_id: [0x52; 32],
+            relay_id: [0x53; 32],
+            sequence: 9,
+            ingress_bytes: 1,
+            egress_bytes: 2,
+            active_ms: 3,
+            issued_at_ms: 1_700_000_000_777,
+        };
+        let voucher = VpnUsageVoucherV1 {
+            body,
+            client_public_key: key_pair.public_key().clone(),
+            signature: Signature::try_new(key_pair.private_key(), &body.encode())
+                .expect("construct undomained signature fixture"),
+        };
+        assert!(
+            voucher.verify().is_err(),
+            "a signature valid in another bare-body protocol must not authorize VPN usage"
+        );
     }
     #[test]
     fn usage_voucher_rejects_body_tampering() {
@@ -2381,7 +3128,128 @@ mod tests {
         assert_ne!(base_hash, signature_changed.hash());
     }
     #[test]
-    fn tariff_computes_earned_fee_with_integer_ceiling_and_cap() {
+    fn relay_receipt_signature_authenticates_every_receipt_field() {
+        let (_relay_key, receipt) = sample_relay_receipt();
+        receipt.verify().expect("exact relay receipt verifies");
+
+        let mut substitutions = Vec::new();
+        let mut changed = receipt.clone();
+        changed.receipt.session_id[0] ^= 1;
+        substitutions.push(changed);
+        let mut changed = receipt.clone();
+        changed.receipt.quote_id[0] ^= 1;
+        substitutions.push(changed);
+        let mut changed = receipt.clone();
+        changed.receipt.payment_tx_hash[0] ^= 1;
+        substitutions.push(changed);
+        let mut changed = receipt.clone();
+        changed.receipt.account_hash[0] ^= 1;
+        substitutions.push(changed);
+        let mut changed = receipt.clone();
+        changed.receipt.relay_id[0] ^= 1;
+        substitutions.push(changed);
+        let mut changed = receipt.clone();
+        changed.receipt.ingress_bytes += 1;
+        substitutions.push(changed);
+        let mut changed = receipt.clone();
+        changed.receipt.egress_bytes += 1;
+        substitutions.push(changed);
+        let mut changed = receipt.clone();
+        changed.receipt.cover_bytes += 1;
+        substitutions.push(changed);
+        let mut changed = receipt.clone();
+        changed.receipt.uptime_secs += 1;
+        substitutions.push(changed);
+        let mut changed = receipt.clone();
+        changed.receipt.started_at_ms += 1;
+        substitutions.push(changed);
+        let mut changed = receipt.clone();
+        changed.receipt.ended_at_ms += 1;
+        substitutions.push(changed);
+        let mut changed = receipt.clone();
+        changed.receipt.exit_class = VpnExitClassV1::HighSecurity;
+        substitutions.push(changed);
+        let mut changed = receipt.clone();
+        changed.receipt.meter_hash[0] ^= 1;
+        substitutions.push(changed);
+        let mut changed = receipt.clone();
+        changed.receipt.earned_fee = Quantity::one();
+        substitutions.push(changed);
+        let mut changed = receipt.clone();
+        changed.receipt.highest_voucher_sequence += 1;
+        substitutions.push(changed);
+        let mut changed = receipt.clone();
+        changed.receipt.client_voucher_hash[0] ^= 1;
+        substitutions.push(changed);
+
+        for substituted in substitutions {
+            assert!(
+                substituted.verify().is_err(),
+                "every receipt field substitution must invalidate relay authentication"
+            );
+        }
+    }
+    #[test]
+    fn relay_receipt_rejects_wrong_key_and_algorithm_substitution() {
+        let (_relay_key, receipt) = sample_relay_receipt();
+        let wrong_key = relay_receipt_keypair(0xA2);
+        assert!(matches!(
+            VpnSignedSessionReceiptV1::try_sign(receipt.receipt.clone(), wrong_key.private_key()),
+            Err(VpnRelayReceiptSignatureError::RelayIdMismatch)
+        ));
+
+        let non_ed25519 = checked_random_keypair_with_algorithm(Algorithm::Secp256k1);
+        assert!(matches!(
+            VpnSignedSessionReceiptV1::try_sign(receipt.receipt.clone(), non_ed25519.private_key()),
+            Err(VpnRelayReceiptSignatureError::NonEd25519RelayKey)
+        ));
+
+        let (_, wrong_receipt) = sample_relay_receipt();
+        let mut substituted = receipt;
+        let wrong_signature = VpnSignedSessionReceiptV1::try_sign(
+            {
+                let mut body = wrong_receipt.receipt;
+                let (_, wrong_public_key) = wrong_key
+                    .public_key()
+                    .try_to_bytes()
+                    .expect("wrong relay public key");
+                body.relay_id.copy_from_slice(wrong_public_key);
+                body
+            },
+            wrong_key.private_key(),
+        )
+        .expect("wrong relay signs its own receipt")
+        .relay_signature;
+        substituted.relay_signature = wrong_signature;
+        assert!(substituted.verify().is_err());
+    }
+    #[test]
+    fn relay_receipt_rejects_absent_default_or_malformed_authentication() {
+        use norito::codec::DecodeAll as _;
+
+        let (_relay_key, receipt) = sample_relay_receipt();
+        let unsigned = receipt.receipt.encode();
+        let mut unsigned_bytes = unsigned.as_slice();
+        assert!(
+            VpnSignedSessionReceiptV1::decode_all(&mut unsigned_bytes).is_err(),
+            "an unsigned receipt body must not decode as the settlement envelope"
+        );
+
+        let base_hash = receipt.hash();
+        let mut default_signature = receipt.clone();
+        default_signature.relay_signature = Signature::from_bytes(&[0_u8; 64]);
+        assert!(default_signature.verify().is_err());
+        assert_ne!(base_hash, default_signature.hash());
+
+        let mut malformed_identity = receipt;
+        malformed_identity.receipt.relay_id = SMALL_ORDER_ED25519_POINT;
+        assert!(matches!(
+            malformed_identity.verify(),
+            Err(VpnRelayReceiptSignatureError::MalformedRelayId(_))
+        ));
+    }
+    #[test]
+    fn tariff_computes_fee_ceiling_with_integer_rounding_and_cap() {
         let tariff = VpnTariffV1 {
             lease_fee: quantity_nanos(1_000),
             active_fee_per_minute: quantity_nanos(60),
@@ -2399,7 +3267,7 @@ mod tests {
             issued_at_ms: 1_700_000_000_000,
         };
         assert_eq!(
-            tariff.earned_fee(&voucher).expect("bounded fee"),
+            tariff.fee_ceiling(&voucher).expect("bounded fee"),
             quantity_nanos(103)
         );
         let capped = VpnUsageVoucherBodyV1 {
@@ -2409,9 +3277,56 @@ mod tests {
             ..voucher
         };
         assert_eq!(
-            tariff.earned_fee(&capped).expect("bounded capped fee"),
+            tariff.fee_ceiling(&capped).expect("bounded capped fee"),
             tariff.lease_fee
         );
+    }
+    #[test]
+    fn tariff_meter_hash_is_deterministic_and_complete() {
+        let tariff = VpnTariffV1 {
+            lease_fee: quantity_nanos(1_000),
+            active_fee_per_minute: quantity_nanos(60),
+            ingress_fee_per_mib: quantity_nanos(100),
+            egress_fee_per_mib: quantity_nanos(200),
+        };
+        let expected = vpn_tariff_meter_hash_v1(&tariff);
+        assert_eq!(expected, vpn_tariff_meter_hash_v1(&tariff));
+        for changed in [
+            VpnTariffV1 {
+                lease_fee: quantity_nanos(999),
+                ..tariff.clone()
+            },
+            VpnTariffV1 {
+                active_fee_per_minute: quantity_nanos(59),
+                ..tariff.clone()
+            },
+            VpnTariffV1 {
+                ingress_fee_per_mib: quantity_nanos(99),
+                ..tariff.clone()
+            },
+            VpnTariffV1 {
+                egress_fee_per_mib: quantity_nanos(199),
+                ..tariff.clone()
+            },
+        ] {
+            assert_ne!(expected, vpn_tariff_meter_hash_v1(&changed));
+        }
+    }
+    #[test]
+    fn account_hash_uses_identity_bytes_not_chain_scoped_display_text() {
+        let key_pair = KeyPair::try_from_seed(vec![0xA7; 32], Algorithm::Ed25519)
+            .expect("fixture seed derives an Ed25519 account");
+        let account_id = AccountId::new(key_pair.public_key().clone());
+        let (first_literal, first_hash) = {
+            let _guard = crate::account::address::ChainDiscriminantGuard::enter(73);
+            (account_id.to_string(), vpn_account_hash_v1(&account_id))
+        };
+        let (second_literal, second_hash) = {
+            let _guard = crate::account::address::ChainDiscriminantGuard::enter(74);
+            (account_id.to_string(), vpn_account_hash_v1(&account_id))
+        };
+        assert_ne!(first_literal, second_literal);
+        assert_eq!(first_hash, second_hash);
     }
     #[test]
     fn tariff_component_bounds_only_the_final_ratio_result() {
@@ -2434,7 +3349,7 @@ mod tests {
         };
         assert_eq!(
             tariff
-                .earned_fee(&voucher)
+                .fee_ceiling(&voucher)
                 .expect("minute numerator and denominator cancel before bounding"),
             maximum
         );
@@ -2521,7 +3436,7 @@ mod tests {
         );
     }
     #[test]
-    fn operator_quote_reports_malformed_generic_algorithm_signature_payload() {
+    fn operator_quote_rejects_non_ed25519_operator_at_sign_and_verify_boundaries() {
         let operator = checked_random_keypair_with_algorithm(Algorithm::Secp256k1);
         let body = sample_quote_body(
             test_network_id(0x51),
@@ -2531,8 +3446,35 @@ mod tests {
             AccountId::new(operator.public_key().clone()),
             checked_random_public_key(),
         );
+        let signing_error = VpnSignedQuoteV1::try_sign(body.clone(), operator.private_key())
+            .expect_err("non-Ed25519 operator must not sign a V1 quote");
+        assert!(signing_error.to_string().contains("Ed25519"));
+
+        let signing_bytes = vpn_quote_signing_bytes(&body);
+        let signature = Signature::try_new(operator.private_key(), &signing_bytes)
+            .expect("secp256k1 fixture signs the canonical quote bytes");
+        signature
+            .verify(operator.public_key(), &signing_bytes)
+            .expect("secp256k1 fixture signature is otherwise valid");
+        let quote = VpnSignedQuoteV1 { body, signature };
+        assert!(matches!(
+            quote.verify(),
+            Err(VpnQuoteSignatureError::NonEd25519Operator)
+        ));
+    }
+    #[test]
+    fn operator_quote_reports_malformed_ed25519_signature_payload() {
+        let operator = checked_random_keypair();
+        let body = sample_quote_body(
+            test_network_id(0x52),
+            [0x74; 32],
+            VpnAddressSlotV1::new(20).expect("fixture slot"),
+            AccountId::new(checked_random_public_key()),
+            AccountId::new(operator.public_key().clone()),
+            checked_random_public_key(),
+        );
         let mut quote = VpnSignedQuoteV1::try_sign(body, operator.private_key())
-            .expect("secp256k1 operator signs canonical quote");
+            .expect("Ed25519 operator signs canonical quote");
         quote.signature = Signature::from_bytes(&[0_u8; 64]);
         assert!(matches!(
             quote.verify(),

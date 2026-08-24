@@ -125,7 +125,7 @@ fn recovered_decision_fetch_classifier_authenticates_exact_absent_manifest_and_s
         .expect("deterministic direct pending Kura signer");
     let ledger_root = direct_storage.path().join("ledger");
     let serve_root = direct_storage.path().join("serve");
-    let owner = direct_pending
+    let mut owner = direct_pending
         .open_production_lifecycle_owner_v1_with_store_for_test(
             &lifecycle_owner_config(),
             4,

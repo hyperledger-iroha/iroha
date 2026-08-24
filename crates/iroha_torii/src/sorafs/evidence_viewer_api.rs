@@ -1999,9 +1999,8 @@ mod tests {
     }
     #[test]
     fn opaque_request_secrets_reject_duplicate_header_lines() {
-        let grant_parser: fn(
-            &HeaderMap,
-        ) -> Result<OpaqueEvidenceViewerSecretV1, Response> = grant_from_headers;
+        let grant_parser: fn(&HeaderMap) -> Result<OpaqueEvidenceViewerSecretV1, Response> =
+            grant_from_headers;
         for (name, parse) in [
             (HEADER_EVIDENCE_GRANT, grant_parser),
             (HEADER_EVIDENCE_CHALLENGE, challenge_from_headers),

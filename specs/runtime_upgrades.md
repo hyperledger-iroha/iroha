@@ -74,8 +74,10 @@ Admission Rules
   `ProposeRuntimeUpgradeProposal` requires the exact typed
   `CanProposeRuntimeUpgrade { abi_version, abi_hash }` capability matching its
   manifest. The low-level `ProposeRuntimeUpgrade`, `ActivateRuntimeUpgrade`, and
-  `CancelRuntimeUpgrade` instructions require `CanManageRuntimeUpgrades` and
-  must satisfy their window and overlap constraints.
+  `CancelRuntimeUpgrade` instructions require the exact canonical typed unit
+  capability `CanManageRuntimeUpgrades`; a same-name token with any other JSON
+  payload is rejected. The instructions must also satisfy their window and
+  overlap constraints.
 
 Provenance Enforcement
 - Runtime-upgrade manifests may carry SBOM digests (`sbom_digests`), SLSA attestation bytes (`slsa_attestation`), and signer metadata (`provenance` signatures). Signatures cover the canonical `RuntimeUpgradeManifestSignaturePayload` (all manifest fields except the `provenance` signatures list).

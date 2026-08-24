@@ -1881,14 +1881,6 @@ PROOF
          DEF IndexedHistoricalCertificateDiscoveryRunnerResidualProperty
   <1> QED BY <1>1
 
-THEOREM IndexedHistoricalFixedClockLeavesCloseCertificateDiscoveryRank ==
-  /\ IndexedChainSpec
-  /\ IndexedHistoricalFixedClockTemporalLeafProperties
-  => IndexedHistoricalCertificateDiscoveryRunnerResidualProperty
-BY IndexedHistoricalFixedClockLeavesEstablishPrerequisiteSurface,
-   IndexedHistoricalFixedClockPrerequisitesCloseDiscoveryClockProgress,
-   IndexedChainSpecClosesHistoricalCertificateDiscoveryRank
-
 THEOREM IndexedHistoricalFixedClockExactResidualsCloseCertificateDiscoveryRank ==
   /\ IndexedChainSpec
   /\ IndexedHistoricalFixedClockPacketCorridorTemporalResidual
@@ -3309,13 +3301,13 @@ PROOF
 (***************************************************************************
 Exact certificate-rank residual surface.
 
-The compatibility aggregate above is useful for local rank composition, but
-it is not the release dependency boundary.  Fixed-kind Serve service is now a
-theorem of `IndexedChainSpec`; route-neutral Candidate service is conditional
-on its explicit cross-instance starvation lift.  The boundary below therefore
-names the remaining concrete packet-action service, that neutral Candidate
-lift, and the exact Commit transport kernels through the combined fixed-clock
-residual.
+The fixed-clock prerequisite compositor above is useful for local rank
+composition, but it is not the release dependency boundary.  Fixed-kind Serve
+service is a theorem of `IndexedChainSpec`; route-neutral Candidate service is
+conditional on its explicit cross-instance starvation lift.  The boundary
+below therefore names the remaining concrete packet-action service, that
+neutral Candidate lift, and the exact Commit transport kernels through the
+combined fixed-clock residual.
 Fixed-clock non-packet service and the two target-local receipt/WAL entry
 handoffs are theorems of `IndexedChainSpec`; archive Serve response is also
 proved and is supplied by the transport-kernel reduction.

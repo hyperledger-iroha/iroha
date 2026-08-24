@@ -21,7 +21,7 @@ fn inrou_portable_smoke_boots_external_bundle_and_serves_healthcheck() -> Result
         .unwrap_or_else(|_| "/health".to_owned());
     let temp_dir = tempfile::tempdir()?;
     let selected_guest_isa = current_host_inrou_guest_isa();
-    let local_peer_id = "12D3KooWPortableVmExternalBundlePeer";
+    let local_peer_id = canonical_inrou_test_peer_id();
     let mut config = test_runtime_manager_config(temp_dir.path().to_path_buf())
         .with_local_host_identity(ALICE_ID.clone(), local_peer_id);
     config.inrou.start_grace = Duration::from_secs(240);
@@ -140,7 +140,6 @@ fn inrou_portable_smoke_boots_external_bundle_and_serves_healthcheck() -> Result
                         replica_slot: 1,
                         validator_account_id: ALICE_ID.clone(),
                         peer_id: local_peer_id.to_owned(),
-                        selected_backend: SoraInrouRuntimeBackendV1::PortableVm,
                         selected_guest_isa,
                         selected_geography_tag: None,
                         selection_latency_ms: None,

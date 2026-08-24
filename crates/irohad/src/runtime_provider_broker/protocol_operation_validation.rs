@@ -1393,28 +1393,43 @@ fn validate_operation_result(
                 {
                     return Err(BrokerError::BindingMismatch);
                 }
-                let maximum_response_bytes = {
-                    let request_wire =
-                        decode_canonical::<SoracloudHfAuthenticatedInferenceRequestWireV1>(
-                            &request.payload,
-                            MAX_SORACLOUD_HF_INFERENCE_FRAME_BYTES_V1,
-                        )?;
-                    request_wire.maximum_response_bytes
-                };
+                let mut request_wire =
+                    decode_canonical::<SoracloudHfAuthenticatedInferenceRequestWireV1>(
+                        &request.payload,
+                        MAX_SORACLOUD_HF_INFERENCE_FRAME_BYTES_V1,
+                    )?;
+                let provider_request = crate::soracloud_hf_credential::
+                    SoracloudHfAuthenticatedInferenceRequestV1::try_new(
+                        std::mem::take(&mut request_wire.repo_id),
+                        std::mem::take(&mut request_wire.resolved_revision),
+                        std::mem::take(&mut request_wire.url),
+                        std::mem::take(&mut request_wire.content_type),
+                        request_wire.accept.take(),
+                        std::mem::take(&mut request_wire.body),
+                        request_wire.maximum_response_bytes,
+                    )
+                    .map_err(|_| BrokerError::Protocol)?;
                 let mut response_wire = decode_canonical::<
                     SoracloudHfAuthenticatedInferenceResponseWireV1,
                 >(
                     result, MAX_SORACLOUD_HF_INFERENCE_FRAME_BYTES_V1
                 )?;
-                crate::soracloud_hf_credential::
+                let provider_response = crate::soracloud_hf_credential::
                     SoracloudHfAuthenticatedInferenceResponseV1::try_new(
+                        std::mem::take(&mut response_wire.served_repo_id),
+                        std::mem::take(&mut response_wire.served_revision),
                         response_wire.status,
                         response_wire.content_type.take(),
                         response_wire.content_encoding.take(),
                         std::mem::take(&mut response_wire.body),
-                        maximum_response_bytes,
+                        provider_request.maximum_response_bytes(),
                     )
                     .map_err(|_| BrokerError::Protocol)?;
+                if provider_response.served_repo_id() != provider_request.repo_id()
+                    || provider_response.served_revision() != provider_request.resolved_revision()
+                {
+                    return Err(BrokerError::Protocol);
+                }
             }
             OPERATION_QUALIFY_V1
                 if request.binding.slot

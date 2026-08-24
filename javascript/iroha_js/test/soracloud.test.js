@@ -14,14 +14,17 @@ import {
 } from "../src/index.js";
 
 const CANONICAL_XOR_ASSET_DEFINITION_ID = "61CtjvNd9T3THAR65GsMVHr82Bjc";
+const HF_COMMIT_OID = "0123456789abcdef0123456789abcdef01234567";
 const PRIVATE_RECEIPT_WIRE_ID =
   "iroha_data_model::isi::soracloud::RecordSoracloudPrivateUploadedModelExecutionReceipt";
 
 function validHfDeployInput(overrides = {}) {
   return {
     repoId: "sentence-transformers/all-MiniLM-L6-v2",
+    revision: HF_COMMIT_OID,
     modelName: "all-MiniLM-L6-v2",
     serviceName: "all_minilm_l6_v2",
+    apartmentName: null,
     storageClass: "warm",
     leaseTermMs: "3600000",
     leaseAssetDefinitionId: CANONICAL_XOR_ASSET_DEFINITION_ID,
@@ -46,7 +49,10 @@ function validPrivateExecuteInput(overrides = {}) {
     serviceName: "portal",
     weightVersion: "v1",
     modelId: "upload-1",
+    modelName: null,
+    bundleRoot: null,
     policyId: "policy-1",
+    decryptionRequestId: null,
     model: {
       inputLen: 2,
       outputLen: 1,
@@ -64,10 +70,36 @@ function validPrivateExecuteInput(overrides = {}) {
   };
 }
 
+function validAppServiceInput(overrides = {}) {
+  return {
+    name: "portal",
+    serviceVersion: "v1",
+    serviceManifestHash: "hash-service",
+    containerManifestHash: "hash-container",
+    runtime: "Inrou",
+    executionPlane: "HttpService",
+    routes: [],
+    leaseVolumes: [],
+    shards: null,
+    ...overrides,
+  };
+}
+
+function validAppInfraInput(overrides = {}) {
+  return {
+    appName: "portal_app",
+    appVersion: "v1",
+    publicUrl: "https://portal.sora.example",
+    staticSite: null,
+    services: [validAppServiceInput()],
+    ...overrides,
+  };
+}
+
 test("buildSoracloudHfDeployDraft returns unsigned payloads", () => {
   const draft = buildSoracloudHfDeployDraft({
     repoId: "sentence-transformers/all-MiniLM-L6-v2",
-    revision: "main",
+    revision: HF_COMMIT_OID,
     modelName: "all-MiniLM-L6-v2",
     serviceName: "all_minilm_l6_v2",
     apartmentName: "all_minilm_agent",
@@ -95,11 +127,80 @@ test("buildSoracloudHfDeployDraft returns unsigned payloads", () => {
   );
 });
 
+test("buildSoracloudHfDeployDraft requires an immutable canonical commit OID", () => {
+  for (const revision of [
+    undefined,
+    "main",
+    "0123456789abcdef",
+    "0123456789ABCDEF0123456789ABCDEF01234567",
+    ` ${HF_COMMIT_OID}`,
+  ]) {
+    assert.throws(
+      () => buildSoracloudHfDeployDraft(validHfDeployInput({ revision })),
+      /revision.*(?:non-empty|required|40-character lowercase hexadecimal commit OID)/,
+    );
+  }
+});
+
+test("buildSoracloudHfDeployDraft uses one exact input shape and explicit null apartment fields", () => {
+  const draft = buildSoracloudHfDeployDraft(validHfDeployInput());
+  assert.equal(draft.payload.apartment_name, null);
+  assert.equal(draft.provenancePayloads.generatedApartment, null);
+
+  const omittedApartment = validHfDeployInput();
+  delete omittedApartment.apartmentName;
+  assert.throws(
+    () => buildSoracloudHfDeployDraft(omittedApartment),
+    /input\.apartmentName is required/,
+  );
+
+  for (const alias of [
+    "repo_id",
+    "model_name",
+    "service_name",
+    "apartment_name",
+    "storage_class",
+    "lease_term_ms",
+    "lease_asset_definition_id",
+    "base_fee_nanos",
+  ]) {
+    assert.throws(
+      () => buildSoracloudHfDeployDraft({ ...validHfDeployInput(), [alias]: "alias" }),
+      new RegExp(`input\\.${alias} is not accepted`),
+    );
+  }
+
+  const inherited = Object.create({ retiredField: true });
+  Object.assign(inherited, validHfDeployInput());
+  assert.throws(
+    () => buildSoracloudHfDeployDraft(inherited),
+    /input inherited properties are not accepted/,
+  );
+
+  const nonEnumerable = validHfDeployInput();
+  Object.defineProperty(nonEnumerable, "apartmentName", {
+    value: null,
+    enumerable: false,
+  });
+  assert.throws(
+    () => buildSoracloudHfDeployDraft(nonEnumerable),
+    /input\.apartmentName must be enumerable/,
+  );
+
+  assert.throws(
+    () =>
+      buildSoracloudHfDeployDraft({
+        ...validHfDeployInput(),
+        [Symbol.for("retiredField")]: true,
+      }),
+    /input symbols are not accepted/,
+  );
+});
+
 test("buildSoracloudAppInfraDraft expands sharded decentralized app services", () => {
   const draft = buildSoracloudAppInfraDraft({
     appName: "hayahi",
     appVersion: "2026.05.20",
-    metadata: { purpose: "owned-data-plane" },
     services: [
       {
         name: "hayahi_live",
@@ -108,7 +209,11 @@ test("buildSoracloudAppInfraDraft expands sharded decentralized app services", (
         containerManifestHash: "hash-live-container",
         runtime: "Inrou",
         executionPlane: "HttpService",
-        routes: [{ path: "/api/v1", publicHost: "hayahi.sora" }],
+        routes: [
+          { path: "/api/v1", publicHost: "hayahi.sora", internalUrl: null },
+        ],
+        leaseVolumes: [],
+        shards: null,
       },
       {
         name: "hayahi_data",
@@ -117,6 +222,7 @@ test("buildSoracloudAppInfraDraft expands sharded decentralized app services", (
         containerManifestHash: "hash-data-container",
         runtime: "Inrou",
         executionPlane: "HttpService",
+        routes: [],
         leaseVolumes: [
           {
             name: "owned_data",
@@ -125,6 +231,7 @@ test("buildSoracloudAppInfraDraft expands sharded decentralized app services", (
             temperature: "hot",
           },
         ],
+        shards: null,
       },
       {
         name: "hayahi_crawler",
@@ -133,6 +240,8 @@ test("buildSoracloudAppInfraDraft expands sharded decentralized app services", (
         containerManifestHash: "hash-crawler-container",
         runtime: "Inrou",
         executionPlane: "HttpService",
+        routes: [],
+        leaseVolumes: [],
         shards: {
           count: 8,
           shardIdEnv: "HAYAHI_CRAWLER_SHARD_ID",
@@ -144,6 +253,7 @@ test("buildSoracloudAppInfraDraft expands sharded decentralized app services", (
     staticSite: {
       publicUrl: "https://hayahi.sora.org",
       contentCid: "bafyhayahi",
+      manifestDigestHex: null,
       mountPath: "/",
       apiBasePath: "/api",
     },
@@ -152,14 +262,195 @@ test("buildSoracloudAppInfraDraft expands sharded decentralized app services", (
   assert.equal(draft.payload.app_name, "hayahi");
   assert.equal(draft.payload.public_url, "https://hayahi.sora.org");
   assert.equal(draft.payload.static_site.content_cid, "bafyhayahi");
+  assert.equal(draft.payload.static_site.manifest_digest_hex, null);
   assert.equal(draft.payload.services.length, 10);
   assert.equal(draft.payload.services[2].service_name, "hayahi_crawler_00");
   assert.equal(draft.payload.services[9].service_name, "hayahi_crawler_07");
   assert.equal(draft.payload.services[9].shard, "HAYAHI_CRAWLER_SHARD_ID=7;HAYAHI_CRAWLER_SHARD_COUNT=8");
   assert.equal(draft.payload.services[1].lease_volumes[0], "owned_data");
+  assert.deepEqual(draft.payload.services[1].routes, []);
+  assert.equal(draft.payload.services[0].shard, null);
   assert.equal(draft.payload.services[0].routes[0].path_prefix, "/api/v1");
+  assert.equal(draft.payload.services[0].routes[0].internal_url, null);
   assert.equal(draft.provenancePayloads.deploy.schema, "soracloud.app.infra.provenance.v1");
   assert.equal(draft.provenancePayloads.services.length, 10);
+});
+
+test("buildSoracloudAppInfraDraft rejects aliases, omissions, and inferred V1 values", () => {
+  const canonical = buildSoracloudAppInfraDraft(validAppInfraInput());
+  assert.equal(canonical.payload.static_site, null);
+  assert.deepEqual(canonical.payload.services[0].routes, []);
+  assert.deepEqual(canonical.payload.services[0].lease_volumes, []);
+  assert.equal(canonical.payload.services[0].shard, null);
+
+  for (const field of ["appVersion", "staticSite"]) {
+    const input = validAppInfraInput();
+    delete input[field];
+    assert.throws(
+      () => buildSoracloudAppInfraDraft(input),
+      new RegExp(`input\\.${field} is required`),
+    );
+  }
+
+  for (const field of ["runtime", "executionPlane", "routes", "leaseVolumes", "shards"]) {
+    const service = validAppServiceInput();
+    delete service[field];
+    assert.throws(
+      () => buildSoracloudAppInfraDraft(validAppInfraInput({ services: [service] })),
+      new RegExp(`services\\[0\\]\\.${field} is required`),
+    );
+  }
+
+  assert.throws(
+    () =>
+      buildSoracloudAppInfraDraft(
+        validAppInfraInput({
+          services: [validAppServiceInput({ executionPlane: "Ivm" })],
+        }),
+      ),
+    /executionPlane must be HttpService or DeterministicService/,
+  );
+
+  for (const [scope, input] of [
+    ["input.static_site", { ...validAppInfraInput(), static_site: null }],
+    [
+      "services[0].service_version",
+      validAppInfraInput({
+        services: [
+          { ...validAppServiceInput(), service_version: "v1" },
+        ],
+      }),
+    ],
+    [
+      "services[0].execution_plane",
+      validAppInfraInput({
+        services: [
+          { ...validAppServiceInput(), execution_plane: "HttpService" },
+        ],
+      }),
+    ],
+    [
+      "services[0].lease_volumes",
+      validAppInfraInput({
+        services: [
+          { ...validAppServiceInput(), lease_volumes: [] },
+        ],
+      }),
+    ],
+  ]) {
+    assert.throws(
+      () => buildSoracloudAppInfraDraft(input),
+      new RegExp(`${scope.replaceAll("[", "\\[").replaceAll("]", "\\]")} is not accepted`),
+    );
+  }
+
+  const route = { path: "/api", publicHost: null, internalUrl: null };
+  const routeDraft = buildSoracloudAppInfraDraft(
+    validAppInfraInput({
+      services: [validAppServiceInput({ routes: [route] })],
+    }),
+  );
+  assert.equal(routeDraft.payload.services[0].routes[0].public_host, null);
+  assert.equal(routeDraft.payload.services[0].routes[0].internal_url, null);
+  for (const field of ["publicHost", "internalUrl"]) {
+    const missing = { ...route };
+    delete missing[field];
+    assert.throws(
+      () =>
+        buildSoracloudAppInfraDraft(
+          validAppInfraInput({
+            services: [validAppServiceInput({ routes: [missing] })],
+          }),
+        ),
+      new RegExp(`routes\\[0\\]\\.${field} is required`),
+    );
+  }
+  assert.throws(
+    () =>
+      buildSoracloudAppInfraDraft(
+        validAppInfraInput({
+          services: [
+            validAppServiceInput({
+              routes: [{ ...route, public_host: "alias" }],
+            }),
+          ],
+        }),
+      ),
+    /routes\[0\]\.public_host is not accepted/,
+  );
+
+  const staticSite = {
+    publicUrl: "https://portal.sora.example",
+    contentCid: null,
+    manifestDigestHex: null,
+    mountPath: "/",
+    apiBasePath: null,
+  };
+  const staticDraft = buildSoracloudAppInfraDraft(
+    validAppInfraInput({ staticSite }),
+  );
+  assert.equal(staticDraft.payload.static_site.content_cid, null);
+  assert.equal(staticDraft.payload.static_site.manifest_digest_hex, null);
+  assert.equal(staticDraft.payload.static_site.api_base_path, null);
+  for (const field of ["contentCid", "manifestDigestHex", "mountPath", "apiBasePath"]) {
+    const missing = { ...staticSite };
+    delete missing[field];
+    assert.throws(
+      () => buildSoracloudAppInfraDraft(validAppInfraInput({ staticSite: missing })),
+      new RegExp(`staticSite\\.${field} is required`),
+    );
+  }
+
+  const volume = {
+    name: "owned_data",
+    mountPath: "/data",
+    maxTotalBytes: 1024,
+    temperature: "hot",
+  };
+  for (const field of ["mountPath", "maxTotalBytes", "temperature"]) {
+    const missing = { ...volume };
+    delete missing[field];
+    assert.throws(
+      () =>
+        buildSoracloudAppInfraDraft(
+          validAppInfraInput({
+            services: [validAppServiceInput({ leaseVolumes: [missing] })],
+          }),
+        ),
+      new RegExp(`leaseVolumes\\[0\\]\\.${field} is required`),
+    );
+  }
+
+  const shards = { count: 2, shardIdEnv: "SHARD_ID", shardCountEnv: "SHARD_COUNT" };
+  for (const field of ["shardIdEnv", "shardCountEnv"]) {
+    const missing = { ...shards };
+    delete missing[field];
+    assert.throws(
+      () =>
+        buildSoracloudAppInfraDraft(
+          validAppInfraInput({
+            services: [validAppServiceInput({ shards: missing })],
+          }),
+        ),
+      new RegExp(`shards\\.${field} is required`),
+    );
+  }
+
+  const inherited = Object.create({ retiredField: true });
+  Object.assign(inherited, validAppInfraInput());
+  assert.throws(
+    () => buildSoracloudAppInfraDraft(inherited),
+    /input inherited properties are not accepted/,
+  );
+  const nonEnumerable = validAppInfraInput();
+  Object.defineProperty(nonEnumerable, "staticSite", {
+    value: null,
+    enumerable: false,
+  });
+  assert.throws(
+    () => buildSoracloudAppInfraDraft(nonEnumerable),
+    /input\.staticSite must be enumerable/,
+  );
 });
 
 test("buildSoracloudAppInfraDraft rejects nested signing secrets", () => {
@@ -167,14 +458,27 @@ test("buildSoracloudAppInfraDraft rejects nested signing secrets", () => {
     () =>
       buildSoracloudAppInfraDraft({
         appName: "bad",
+        appVersion: "v1",
         publicUrl: "https://bad.example",
+        staticSite: null,
         services: [
           {
             name: "bad_worker",
             serviceVersion: "v1",
             serviceManifestHash: "hash-service",
             containerManifestHash: "hash-container",
-            routes: [{ path: "/api", privateKeyHex: "00" }],
+            runtime: "Inrou",
+            executionPlane: "HttpService",
+            routes: [
+              {
+                path: "/api",
+                publicHost: null,
+                internalUrl: null,
+                privateKeyHex: "00",
+              },
+            ],
+            leaseVolumes: [],
+            shards: null,
           },
         ],
       }),
@@ -187,18 +491,27 @@ test("assembleSoracloudAppInfraRequest and instruction helpers use canonical man
     appName: "hayahi",
     appVersion: "2026.05.20",
     publicUrl: "https://hayahi.sora.org",
+    staticSite: null,
     services: [
       {
         name: "hayahi_live",
         serviceVersion: "2026.05.20",
         serviceManifestHash: "hash-live-service",
         containerManifestHash: "hash-live-container",
-        routes: [{ path: "/api" }],
+        runtime: "Inrou",
+        executionPlane: "HttpService",
+        routes: [{ path: "/api", publicHost: null, internalUrl: null }],
+        leaseVolumes: [],
+        shards: null,
       },
     ],
   });
   const provenance = { signer: "signer", signature: "ABCD" };
-  const request = assembleSoracloudAppInfraRequest(draft, { deploy: provenance });
+  const request = assembleSoracloudAppInfraRequest(
+    draft,
+    { deploy: provenance },
+    { deployServices: [], upgradeServices: [] },
+  );
 
   assert.deepEqual(request.provenance, provenance);
   assert.equal(request.manifest.app_name, "hayahi");
@@ -213,25 +526,86 @@ test("assembleSoracloudAppInfraRequest and instruction helpers use canonical man
   );
 });
 
+test("assembleSoracloudAppInfraRequest requires exact explicit service collections", () => {
+  const draft = buildSoracloudAppInfraDraft(validAppInfraInput());
+  const provenances = { deploy: { signer: "signer", signature: "ABCD" } };
+  assert.throws(
+    () => assembleSoracloudAppInfraRequest(draft, provenances),
+    /options must be an object/,
+  );
+  assert.throws(
+    () =>
+      assembleSoracloudAppInfraRequest(draft, provenances, {
+        deployServices: [],
+      }),
+    /options\.upgradeServices is required/,
+  );
+  assert.throws(
+    () =>
+      assembleSoracloudAppInfraRequest(draft, provenances, {
+        deployServices: [],
+        upgradeServices: [],
+        deploy_services: [],
+      }),
+    /options\.deploy_services is not accepted/,
+  );
+});
+
 test("assembleSoracloudHfDeployRequest uses external provenances", () => {
   const draft = buildSoracloudHfDeployDraft({
     repoId: "sentence-transformers/all-MiniLM-L6-v2",
+    revision: HF_COMMIT_OID,
     modelName: "all-MiniLM-L6-v2",
     serviceName: "all_minilm_l6_v2",
+    apartmentName: null,
     storageClass: "warm",
     leaseTermMs: "3600000",
     leaseAssetDefinitionId: CANONICAL_XOR_ASSET_DEFINITION_ID,
     baseFeeNanos: "1",
   });
 
-  const request = assembleSoracloudHfDeployRequest(draft, {
+  const provenances = {
     deploy: { signer: "signer", signature: "ABCD" },
     generatedService: { signer: "signer", signature: "CDEF" },
-  });
+    generatedApartment: null,
+  };
+  const request = assembleSoracloudHfDeployRequest(draft, provenances);
 
   assert.equal(request.provenance.signature, "ABCD");
   assert.equal(request.generated_service_provenance.signature, "CDEF");
-  assert.equal(Object.hasOwn(request, "generated_apartment_provenance"), false);
+  assert.equal(request.generated_apartment_provenance, null);
+
+  const { generatedApartment: _generatedApartment, ...omittedApartment } = provenances;
+  assert.throws(
+    () => assembleSoracloudHfDeployRequest(draft, omittedApartment),
+    /generatedApartment provenance is required/,
+  );
+});
+
+test("assembleSoracloudHfDeployRequest rejects unknown and non-enumerable provenance keys", () => {
+  const draft = buildSoracloudHfDeployDraft(validHfDeployInput());
+  assert.throws(
+    () =>
+      assembleSoracloudHfDeployRequest(draft, {
+        deploy: { signer: "signer", signature: "ABCD", note: "alias" },
+        generatedService: { signer: "signer", signature: "CDEF" },
+      }),
+    /deploy provenance\.note is not accepted/,
+  );
+
+  const deploy = { signer: "signer", signature: "ABCD" };
+  Object.defineProperty(deploy, "signature", {
+    value: "ABCD",
+    enumerable: false,
+  });
+  assert.throws(
+    () =>
+      assembleSoracloudHfDeployRequest(draft, {
+        deploy,
+        generatedService: { signer: "signer", signature: "CDEF" },
+      }),
+    /deploy provenance\.signature must be enumerable/,
+  );
 });
 
 test("buildSoracloudHfDeployDraft rejects raw private keys", () => {
@@ -524,7 +898,11 @@ test("assembleSoracloudHfDeployRequest rejects inherited signing payload interna
 });
 
 test("assembleSoracloudHfDeployRequest rejects incomplete hand-built drafts with signing payloads", () => {
-  const payload = { repo_id: "repo", service_name: "service" };
+  const payload = {
+    repo_id: "repo",
+    revision: HF_COMMIT_OID,
+    service_name: "service",
+  };
   const draft = {
     payload,
     provenancePayloads: {
@@ -539,7 +917,7 @@ test("assembleSoracloudHfDeployRequest rejects incomplete hand-built drafts with
         payload: {
           service_name: "service",
           repo_id: "repo",
-          revision: null,
+          revision: HF_COMMIT_OID,
         },
       },
     },
@@ -724,8 +1102,10 @@ test("buildSoracloudPrivateUploadedModelExecuteRequest normalizes deterministic 
 
   assert.equal(request.service_name, "portal");
   assert.equal(request.model_id, "upload-1");
+  assert.equal(request.model_name, null);
   assert.equal(request.weight_version, "v1");
   assert.equal(request.bundle_root, "bundle-root");
+  assert.equal(request.decryption_request_id, null);
   assert.deepEqual(request.model, {
     input_len: 2,
     output_len: 1,
@@ -746,16 +1126,86 @@ test("buildSoracloudPrivateUploadedModelExecuteRequest normalizes deterministic 
   assert.equal(Object.hasOwn(request, "private_key"), false);
 });
 
+test("buildSoracloudPrivateUploadedModelExecuteRequest rejects aliases, omissions, and exotic keys", () => {
+  for (const field of ["modelName", "bundleRoot", "decryptionRequestId"]) {
+    const input = validPrivateExecuteInput();
+    delete input[field];
+    assert.throws(
+      () => buildSoracloudPrivateUploadedModelExecuteRequest(input),
+      new RegExp(`input\\.${field} is required`),
+    );
+  }
+
+  for (const alias of [
+    "service_name",
+    "weight_version",
+    "model_id",
+    "model_name",
+    "bundle_root",
+    "policy_id",
+    "decryption_request_id",
+    "plaintext_input_i32",
+    "input_artifact",
+    "output_artifact",
+    "emitted_sequence",
+  ]) {
+    assert.throws(
+      () =>
+        buildSoracloudPrivateUploadedModelExecuteRequest({
+          ...validPrivateExecuteInput(),
+          [alias]: "alias",
+        }),
+      new RegExp(`input\\.${alias} is not accepted`),
+    );
+  }
+
+  assert.throws(
+    () =>
+      buildSoracloudPrivateUploadedModelExecuteRequest({
+        ...validPrivateExecuteInput(),
+        model: { ...validPrivateExecuteInput().model, input_len: 2 },
+      }),
+    /model\.input_len is not accepted/,
+  );
+  assert.throws(
+    () =>
+      buildSoracloudPrivateUploadedModelExecuteRequest({
+        ...validPrivateExecuteInput(),
+        inputArtifact: {
+          ...validPrivateArtifact("input"),
+          artifact_hash: "alias",
+        },
+      }),
+    /inputArtifact\.artifact_hash is not accepted/,
+  );
+
+  const inherited = Object.create({ retiredField: true });
+  Object.assign(inherited, validPrivateExecuteInput());
+  assert.throws(
+    () => buildSoracloudPrivateUploadedModelExecuteRequest(inherited),
+    /input inherited properties are not accepted/,
+  );
+  const nonEnumerable = validPrivateExecuteInput();
+  Object.defineProperty(nonEnumerable, "bundleRoot", {
+    value: null,
+    enumerable: false,
+  });
+  assert.throws(
+    () => buildSoracloudPrivateUploadedModelExecuteRequest(nonEnumerable),
+    /input\.bundleRoot must be enumerable/,
+  );
+});
+
 test("buildSoracloudPrivateUploadedModelExecuteRequest accepts modelName selector", () => {
   const request = buildSoracloudPrivateUploadedModelExecuteRequest(
     validPrivateExecuteInput({
-      modelId: undefined,
+      modelId: null,
       modelName: "vision",
     }),
   );
 
   assert.equal(request.model_name, "vision");
-  assert.equal(Object.hasOwn(request, "model_id"), false);
+  assert.equal(request.model_id, null);
 });
 
 test("buildSoracloudPrivateUploadedModelExecuteRequest rejects malformed deterministic CPU requests", () => {
@@ -823,6 +1273,19 @@ test("buildSoracloudPrivateUploadedModelReceiptQuery rejects unknown count mode"
   );
 });
 
+test("buildSoracloudPrivateUploadedModelReceiptQuery preserves genuine option omission only", () => {
+  assert.deepEqual(buildSoracloudPrivateUploadedModelReceiptQuery({}), {});
+  assert.throws(
+    () => buildSoracloudPrivateUploadedModelReceiptQuery({ model_id: "alias" }),
+    /input\.model_id is not accepted/,
+  );
+  const inherited = Object.create({ modelId: "upload-1" });
+  assert.throws(
+    () => buildSoracloudPrivateUploadedModelReceiptQuery(inherited),
+    /input inherited properties are not accepted/,
+  );
+});
+
 test("privateUploadedModelReceiptInstruction extracts receipt transaction skeleton", () => {
   const instruction = privateUploadedModelReceiptInstruction({
     receipt: { receipt_id: "receipt" },
@@ -857,7 +1320,7 @@ test("privateUploadedModelReceiptInstruction rejects unrelated instruction skele
   );
 });
 
-test("assembleSoracloudHfDeployRequest rejects inherited required draft fields", () => {
+test("assembleSoracloudHfDeployRequest rejects inherited model and lease draft fields", () => {
   const draft = buildSoracloudHfDeployDraft(validHfDeployInput());
   const inheritedPayload = Object.create({
     model_name: draft.payload.model_name,
@@ -904,12 +1367,16 @@ test("assembleSoracloudHfDeployRequest rejects inherited required draft fields",
   );
 });
 
-test("assembleSoracloudHfDeployRequest rejects inherited optional draft fields", () => {
+test("assembleSoracloudHfDeployRequest rejects inherited revision and non-enumerable draft fields", () => {
   const draft = buildSoracloudHfDeployDraft(validHfDeployInput());
   const inheritedPayload = Object.create({
-    revision: "prototype-revision",
+    revision: HF_COMMIT_OID,
   });
-  Object.assign(inheritedPayload, draft.payload);
+  for (const [field, value] of Object.entries(draft.payload)) {
+    if (field !== "revision") {
+      inheritedPayload[field] = value;
+    }
+  }
 
   assert.throws(
     () =>
@@ -986,7 +1453,7 @@ test("assembleSoracloudHfDeployRequest rejects inherited provenance entries", ()
 
   assert.throws(
     () => assembleSoracloudHfDeployRequest(draft, provenances),
-    /deploy provenance must include signer and signature/,
+    /provenances inherited properties are not accepted/,
   );
 });
 
@@ -998,7 +1465,7 @@ test("assembleSoracloudHfDeployRequest rejects array-like provenances", () => {
 
   assert.throws(
     () => assembleSoracloudHfDeployRequest(draft, provenances),
-    /deploy provenance must include signer and signature/,
+    /provenances must be an object/,
   );
 });
 
@@ -1057,7 +1524,7 @@ test("buildSoracloudHfDeployDraft rejects non-canonical lease asset aliases", ()
     () =>
       buildSoracloudHfDeployDraft({
         repoId: "sentence-transformers/all-MiniLM-L6-v2",
-        revision: "main",
+        revision: HF_COMMIT_OID,
         modelName: "all-MiniLM-L6-v2",
         serviceName: "all_minilm_l6_v2",
         apartmentName: "all_minilm_agent",

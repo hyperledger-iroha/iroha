@@ -31,16 +31,13 @@ def _canonical_hash(seed: int) -> str:
 
 
 def offline_capability_payload(**overrides: Any) -> Dict[str, Any]:
-    """Build one closed universal offline-readiness response fixture."""
+    """Build one closed universal offline-capability response fixture."""
 
     payload = {
-        "mandatory": False,
         "cash_handoff_capability": "cash_handoff_v1",
         "required_bridge_abi_version": 22,
         "max_hops": 8,
         "ready": True,
-        "assets": [],
-        "blockers": [],
     }
     payload.update(overrides)
     return payload

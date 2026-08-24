@@ -129,25 +129,41 @@ impl ProductionReadyValidateDispatchRow {
         }
     }
 
-    fn expected_dispatch(self, ordinal: u128) -> super::super::ProductionCompletionDispatchV1 {
+    fn expected_dispatch(
+        self,
+        ordinal: u128,
+        expected_reducer_wait: WaitToken,
+    ) -> super::super::ProductionCompletionDispatchV1 {
         use super::super::ProductionCompletionDispatchV1 as Dispatch;
 
         match self {
-            Self::ValidatedBusy | Self::RejectedBusy => Dispatch::ReducerFenceWait { ordinal },
+            Self::ValidatedBusy | Self::RejectedBusy => Dispatch::ReducerFenceWait {
+                ordinal,
+                wait: expected_reducer_wait,
+            },
             Self::ValidatedInactive
             | Self::ValidatedNoEffect
             | Self::RejectedInactive
             | Self::RejectedNoEffect => Dispatch::ValidateNoSuccessor { ordinal },
             Self::ValidatedApply => Dispatch::BodyStageAdvanced {
                 parent_ordinal: ordinal,
+                child_ordinal: ordinal
+                    .checked_add(1)
+                    .expect("fixture successor ordinal remains representable"),
                 child: LifecycleWorkClass::Apply,
             },
             Self::ValidatedPersist => Dispatch::BodyStageAdvanced {
                 parent_ordinal: ordinal,
+                child_ordinal: ordinal
+                    .checked_add(1)
+                    .expect("fixture successor ordinal remains representable"),
                 child: LifecycleWorkClass::SignVote,
             },
             Self::RejectedReport => Dispatch::BodyStageAdvanced {
                 parent_ordinal: ordinal,
+                child_ordinal: ordinal
+                    .checked_add(1)
+                    .expect("fixture successor ordinal remains representable"),
                 child: LifecycleWorkClass::InvalidBodyReport,
             },
         }
@@ -547,6 +563,10 @@ fn production_completion_dispatch_publishes_all_ready_validate_outcomes_fixture(
                 "{row:?}: fixture must force the requested adapter publication"
             );
         }
+        let expected_reducer_wait = WaitToken::new(
+            super::super::reducer_fence_wait_source(coordinator.active_context),
+            adapter.reducer_fence_generation(),
+        );
         let ReadyDurableValidateFixture {
             fixture,
             _directory,
@@ -592,7 +612,7 @@ fn production_completion_dispatch_publishes_all_ready_validate_outcomes_fixture(
         let (mut services, _keys) = crate::sumeragi::v2_worker::tests::fixture();
         let output_guard = crate::sumeragi::output_guard::ConsensusOutputGuard::isolated();
         let (mut executor, mut planner_io) = owner
-            .bind_body_store_to_recovered_completion_io_for_test(
+            .bind_body_store_to_lifecycle_completion_io_for_test(
                 &mut services,
                 runtime,
                 std::sync::Arc::clone(&output_guard),
@@ -618,11 +638,11 @@ fn production_completion_dispatch_publishes_all_ready_validate_outcomes_fixture(
                 executor.runtime_queue_snapshot_for_test(now)
             });
         let dispatched = owner
-            .dispatch_completion_for_test(&services, &mut executor, 0)
+            .dispatch_completion_for_test(&mut services, &mut executor, 0)
             .unwrap_or_else(|error| panic!("{row:?}: production Completion dispatch: {error:?}"));
         assert_eq!(
             dispatched,
-            row.expected_dispatch(lease.ordinal()),
+            row.expected_dispatch(lease.ordinal(), expected_reducer_wait),
             "{row:?}"
         );
         if matches!(row, ProductionReadyValidateDispatchRow::ValidatedApply) {
@@ -631,7 +651,7 @@ fn production_completion_dispatch_publishes_all_ready_validate_outcomes_fixture(
                 .checked_add(1)
                 .expect("Validate-to-Apply child ordinal remains representable");
             let dispatched = owner
-                .dispatch_completion_for_test(&services, &mut executor, 0)
+                .dispatch_completion_for_test(&mut services, &mut executor, 0)
                 .unwrap_or_else(|error| {
                     panic!("{row:?}: dispatch typed live Decision Apply: {error:?}")
                 });
@@ -642,14 +662,8 @@ fn production_completion_dispatch_publishes_all_ready_validate_outcomes_fixture(
                 },
                 "{row:?}: live Validate child must enter the dedicated Apply worker"
             );
-            let (_, apply_service, _) = recovered_apply
-                .as_ref()
-                .expect("ValidatedApply retains its matching State/Kura service");
-            planner_io.execute_one_recovered_decision_apply(
-                &context,
-                apply_service,
-                std::sync::Arc::clone(&output_guard),
-            );
+            planner_io
+                .execute_one_lifecycle_decision_apply_fixture(std::sync::Arc::clone(&output_guard));
             let completion = match services
                 .take_next_lifecycle_completion()
                 .expect("classify typed live Apply worker completion")
@@ -663,7 +677,7 @@ fn production_completion_dispatch_publishes_all_ready_validate_outcomes_fixture(
                 }
             };
             assert!(matches!(
-                super::super::settle_applied_decision_apply_completion(
+                super::super::settle_applied_lifecycle_decision_apply_completion_for_test(
                     &mut owner,
                     &mut executor,
                     completion,

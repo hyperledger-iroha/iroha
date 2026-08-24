@@ -223,30 +223,24 @@ fn records_sns_registrar_status_metrics() {
     );
 }
 #[test]
-fn records_rbc_rebroadcast_skips_by_kind() {
-    let metrics = Metrics::default();
-    metrics
-        .sumeragi_rbc_rebroadcast_skipped_total
-        .with_label_values(&["payload"])
-        .inc();
-    metrics
-        .sumeragi_rbc_rebroadcast_skipped_total
-        .with_label_values(&["ready"])
-        .inc();
-    assert_eq!(
-        metrics
-            .sumeragi_rbc_rebroadcast_skipped_total
-            .with_label_values(&["payload"])
-            .get(),
-        1
+fn catalog_retires_global_rbc_metrics_and_keeps_signed_da_metrics() {
+    let catalog = include_str!("catalog_v2.tsv");
+    assert!(
+        !catalog.contains("sumeragi_rbc_"),
+        "retired global-RBC metrics must not remain in the public catalog"
     );
-    assert_eq!(
-        metrics
-            .sumeragi_rbc_rebroadcast_skipped_total
-            .with_label_values(&["ready"])
-            .get(),
-        1
-    );
+    for current in [
+        "sumeragi_da_manifest_guard_total",
+        "sumeragi_da_manifest_cache_total",
+        "sumeragi_da_spool_cache_total",
+        "sumeragi_da_pin_intent_spool_total",
+        "sumeragi_da_votes_ingested_total",
+    ] {
+        assert!(
+            catalog.lines().any(|line| line.starts_with(current)),
+            "signed DA metric `{current}` must remain catalogued"
+        );
+    }
 }
 #[test]
 fn records_alias_cache_metrics() {
@@ -1995,7 +1989,6 @@ fn sample_status() -> Status {
         blocks: 5,
         blocks_non_empty: 3,
         commit_time_ms: 130,
-        da_reschedule_total: 7,
         txs_approved: 31,
         txs_rejected: 3,
         last_rejection_at_ms: Some(1_234_890),
@@ -2072,13 +2065,6 @@ fn sample_status() -> Status {
             view_change_proof_rejected_total: 0,
             view_change_install_total: 0,
             view_change_suggest_total: 0,
-            da_reschedule_total: 0,
-            rbc_store_sessions: 3,
-            rbc_store_bytes: 8192,
-            rbc_store_pressure_level: 1,
-            rbc_store_backpressure_deferrals_total: 4,
-            rbc_store_persist_drops_total: 3,
-            rbc_store_evictions_total: 2,
             prf_epoch_seed: Some("cafebabe42".to_string()),
             prf_height: 11,
             prf_view: 2,
@@ -2224,7 +2210,6 @@ fn serialize_status_json() {
         "blocks": 5,
         "blocks_non_empty": 3,
         "commit_time_ms": 130,
-        "da_reschedule_total": 7,
         "txs_approved": 31,
         "txs_rejected": 3,
         "last_rejection_at_ms": 1_234_890,
@@ -2301,15 +2286,6 @@ fn serialize_status_json() {
             "prf_epoch_seed": "cafebabe42",
             "prf_height": 11,
             "prf_view": 2,
-            "da_reschedule_total": 0,
-            "rbc_deliver_defer_ready_total": 0,
-            "rbc_deliver_defer_chunks_total": 0,
-            "rbc_store_sessions": 3,
-            "rbc_store_bytes": 8192,
-            "rbc_store_pressure_level": 1,
-            "rbc_store_backpressure_deferrals_total": 4,
-            "rbc_store_persist_drops_total": 3,
-            "rbc_store_evictions_total": 2,
             "view_change_proof_accepted_total": 4,
             "view_change_proof_stale_total": 1,
             "view_change_proof_rejected_total": 0,
@@ -2371,17 +2347,7 @@ fn serialize_status_json() {
         "taikai_ingest": [],
         "da_receipt_cursors": []
     });
-    let actual_da = actual_value
-        .as_object()
-        .and_then(|map| map.get("da_reschedule_total"))
-        .cloned()
-        .expect("status payload should include da_reschedule_total");
-    let expected_da = expected_value
-        .as_object()
-        .and_then(|map| map.get("da_reschedule_total"))
-        .cloned()
-        .expect("expected payload should include da_reschedule_total");
-    assert_eq!(actual_da, expected_da, "da_reschedule_total mismatch");
+    assert_eq!(actual_value, expected_value);
     let actual = actual
         .replace("[\n    \n  ]", "[\n  ]")
         .replace("[\n      \n    ]", "[\n  ]");

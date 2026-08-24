@@ -4,6 +4,11 @@ All notable changes to `@iroha/iroha-js` are documented in this file.
 
 ## [Unreleased]
 
+- Hard-cut the Node/native signed-transaction boundary to the exact canonical
+  `VersionedSignedTransaction` V1 wire. Native builders now emit that wire,
+  submission and SoraFS pin registration validate it before network I/O, and
+  framed, bare, headerless, alternate-layout, opaque-prefix, and raw-entrypoint
+  submission fallbacks are removed.
 - Require per-request canonical account authentication for the legacy SoraFS
   alias and replication inventory helpers, and require an immutable
   exact-network `OperatorSigningContext` for storage-state and legacy
@@ -295,10 +300,11 @@ All notable changes to `@iroha/iroha-js` are documented in this file.
 - `ToriiClient.callContract` now requires a `gasLimit` in the request payload so
   callers always supply the on-chain gas cap; typings, README docs, and test
   coverage reflect the stricter contract.【javascript/iroha_js/src/toriiClient.js:15360】【javascript/iroha_js/index.d.ts:4477】【javascript/iroha_js/test/toriiClient.test.js:13919】【javascript/iroha_js/test/integrationTorii.test.js:2701】【javascript/iroha_js/README.md:1909】
-- Added the complete sharp first-release Offline JSON API: asset-scoped
-  `getOfflineReadiness`, directly structured `submitOfflineTopUp` and
-  `submitOfflineRedeem` commands with signed-operation-derived idempotency, and
-  typed polling through `getOfflineOperationStatus`. Node and browser clients
+- Added the complete sharp first-release Offline JSON API: universal
+  `getOfflineCapability`, manifest-V4 `submitKagemushaTopUpV4` and
+  `submitKagemushaRedeemV4` commands with signed-operation-derived idempotency, and
+  typed polling through `getKagemushaOperationStatus`. Capability discovery has no
+  selector and returns exactly the four asset-neutral fields. Node and browser clients
   reject malformed IDs, contradictory tagged states, mismatched `Location`
   headers, and whole-payload wrappers before exposing results.
 - Constrained the JS SDK to the first-release surface: Connect WebSocket URLs no longer accept token
@@ -391,11 +397,6 @@ All notable changes to `@iroha/iroha-js` are documented in this file.
   README now documents the new environment toggles and the CI workflow emits
   runtime/cache telemetry so JS-10’s “docs + tests + metrics” gate exercises
   more real-world scenarios.【javascript/iroha_js/test/integrationTorii.test.js:1】【javascript/iroha_js/README.md:1325】【.github/workflows/javascript-sdk.yml:56】
-- Added an optional RBC sampling integration test driven by
-  `IROHA_TORII_INTEGRATION_RBC_SAMPLE`; when set, the suite now calls
-  `ToriiClient.sampleRbcChunks()` against the live node and validates the typed
-  chunk proofs/audit paths so JS-10 coverage includes the RBC observability
-  surface, and the README explains the new behaviour.【javascript/iroha_js/test/integrationTorii.test.js:1】【javascript/iroha_js/README.md:1325】
 - Hardened `ToriiClient.createConnectSession`/`deleteConnectSession` by
   normalising `sid`, enforcing the 32-byte base64url/hex requirement, surfacing
   `extra` metadata, and rejecting malformed Torii responses so the Connect
@@ -430,8 +431,6 @@ All notable changes to `@iroha/iroha-js` are documented in this file.
   for `getBlock`), added TypeScript definitions/README docs, and extended the
   Jest suite so the explorer block endpoints enjoy the same JS-04 validation
   guarantees as the rest of the Torii query surface.
-- Tightened `sampleRbcChunks` validation so block/hash/proof fields must be
-  hex-encoded like the Rust/Python clients.
 - Added `ToriiClient.listTelemetryPeersInfo` plus the corresponding DTOs,
   TypeScript declarations, README usage example, and unit tests so the JS SDK
   exposes the `/v1/telemetry/peers-info` surface that Rust/Python clients rely
@@ -444,7 +443,7 @@ All notable changes to `@iroha/iroha-js` are documented in this file.
   `hashHex` inputs and reusing the existing pipeline polling logic.
 - Added `ToriiClient` helpers for Sumeragi telemetry endpoints
   (`getSumeragiPacemaker`, `getSumeragiQc`, `getSumeragiBlsKeys`,
-  `getSumeragiLeader`, `getSumeragiCollectors`, `getSumeragiParams`) with README
+  `getSumeragiLeader`, `getSumeragiParams`) with README
   examples, TypeScript definitions, and tests
   so JS SDK consumers can inspect the same `/v1/sumeragi/*` diagnostics that
   Rust tooling relies on for roadmap JS-08 coverage.
@@ -506,7 +505,7 @@ All notable changes to `@iroha/iroha-js` are documented in this file.
   extending the JS-07 query wrapper work to the storage APIs.【javascript/iroha_js/src/toriiClient.js:681】【javascript/iroha_js/index.d.ts:3408】【javascript/iroha_js/test/toriiClient.test.js:760】【javascript/iroha_js/README.md:732】
 - Tightened the Sumeragi telemetry helpers by normalising the
   `getSumeragiPacemaker`, `getSumeragiQc`, `getSumeragiBlsKeys`,
-  `getSumeragiLeader`, `getSumeragiCollectors`, and `getSumeragiParams`
+  `getSumeragiLeader` and `getSumeragiParams`
   responses (raising type errors on malformed telemetry)
   and corrected the `getSumeragiStatus` TypeScript declaration to reflect that
   it returns the raw Torii payload while `getSumeragiStatusTyped` provides the

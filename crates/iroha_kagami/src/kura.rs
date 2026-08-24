@@ -384,7 +384,7 @@ mod tests {
         use iroha_core::kura::Kura;
         // Prepare a temp store and write a synthetic sidecar via Kura
         let temp = tempfile::tempdir().unwrap();
-        let (kura, _count) = Kura::new(
+        let (kura, _count) = Kura::new_fresh_single_lane(
             &KuraConfig {
                 init_mode: InitMode::Strict,
                 store_dir: WithOrigin::inline(temp.path().to_owned()),

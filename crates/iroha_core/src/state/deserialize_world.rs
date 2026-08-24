@@ -23,6 +23,555 @@ struct MusubiPersistedState<'a> {
     resolver_index_revision: u64,
     replication_shortfall_releases: u64,
 }
+
+struct SoracloudInrouPersistedStateV1<'a> {
+    service_revisions: &'a Storage<(String, String), SoraDeploymentBundleV1>,
+    service_deployments: &'a Storage<Name, SoraServiceDeploymentStateV1>,
+    app_infra_states: &'a Storage<Name, SoraAppInfraStateV1>,
+    service_runtime: &'a Storage<Name, SoraServiceRuntimeStateV1>,
+    inrou_replica_runtime: &'a Storage<(String, String, String), SoraInrouReplicaRuntimeStateV1>,
+    service_audit_events: &'a Storage<u64, SoraServiceAuditEventV1>,
+    app_infra_audit_events: &'a Storage<u64, SoraAppInfraAuditEventV1>,
+    training_job_audit_events: &'a Storage<u64, SoraTrainingJobAuditEventV1>,
+    model_weight_audit_events: &'a Storage<u64, SoraModelWeightAuditEventV1>,
+    model_artifact_audit_events: &'a Storage<u64, SoraModelArtifactAuditEventV1>,
+    hf_shared_lease_audit_events: &'a Storage<u64, SoraHfSharedLeaseAuditEventV1>,
+    model_host_violation_evidence: &'a Storage<Hash, SoraModelHostViolationEvidenceRecordV1>,
+    agent_apartment_audit_events: &'a Storage<u64, SoraAgentApartmentAuditEventV1>,
+    service_state_entries: &'a Storage<(String, String, String), SoraServiceStateEntryV1>,
+    inrou_host_capabilities: &'a Storage<AccountId, SoraInrouHostCapabilityRecordV1>,
+    inrou_service_placements: &'a Storage<(String, String), SoraInrouServicePlacementRecordV1>,
+    mailbox_messages: &'a Storage<Hash, SoraServiceMailboxMessageV1>,
+    runtime_receipts: &'a Storage<Hash, SoraRuntimeReceiptV1>,
+}
+
+impl SoracloudInrouPersistedStateV1<'_> {
+    #[allow(
+        clippy::too_many_lines,
+        reason = "first-release restore validation keeps every authoritative Inrou-reachable store in one fail-closed boundary"
+    )]
+    fn validate(self) -> Result<(), json::Error> {
+        let service_revisions = self.service_revisions.view();
+        for (key, bundle) in service_revisions.iter() {
+            bundle.validate_for_admission().map_err(|error| {
+                invalid_soracloud_state("soracloud_service_revisions", error.to_string())
+            })?;
+            let expected_key = (
+                bundle.service.service_name.as_ref().to_owned(),
+                bundle.service.service_version.clone(),
+            );
+            if key != &expected_key {
+                return Err(invalid_soracloud_state(
+                    "soracloud_service_revisions",
+                    "storage key must match the embedded service_name and service_version",
+                ));
+            }
+        }
+
+        let service_deployments = self.service_deployments.view();
+        for (key, deployment) in service_deployments.iter() {
+            deployment.validate().map_err(|error| {
+                invalid_soracloud_state("soracloud_service_deployments", error.to_string())
+            })?;
+            if key != &deployment.service_name {
+                return Err(invalid_soracloud_state(
+                    "soracloud_service_deployments",
+                    "storage key must match the embedded service_name",
+                ));
+            }
+            let exact_revision_count = u32::try_from(
+                service_revisions
+                    .iter()
+                    .filter(|((service_name, _), _)| {
+                        service_name.as_str() == deployment.service_name.as_ref()
+                    })
+                    .count(),
+            )
+            .map_err(|error| {
+                invalid_soracloud_state(
+                    "soracloud_service_deployments",
+                    format!(
+                        "service `{}` admitted revision count does not fit u32: {error}",
+                        deployment.service_name
+                    ),
+                )
+            })?;
+            if deployment.revision_count != exact_revision_count {
+                return Err(invalid_soracloud_state(
+                    "soracloud_service_deployments",
+                    format!(
+                        "service `{}` revision_count {} must equal its exact admitted revision count {exact_revision_count}",
+                        deployment.service_name, deployment.revision_count
+                    ),
+                ));
+            }
+            let current_revision_key = (
+                deployment.service_name.as_ref().to_owned(),
+                deployment.current_service_version.clone(),
+            );
+            let current_bundle = service_revisions.get(&current_revision_key).ok_or_else(|| {
+                invalid_soracloud_state(
+                    "soracloud_service_deployments",
+                    format!(
+                        "service `{}` current revision `{}` is missing from soracloud_service_revisions",
+                        deployment.service_name, deployment.current_service_version
+                    ),
+                )
+            })?;
+            if deployment.current_service_manifest_hash != current_bundle.service_manifest_hash()
+                || deployment.current_container_manifest_hash
+                    != current_bundle.container_manifest_hash()
+            {
+                return Err(invalid_soracloud_state(
+                    "soracloud_service_deployments",
+                    format!(
+                        "service `{}` current revision `{}` manifest hashes must exactly match its admitted bundle",
+                        deployment.service_name, deployment.current_service_version
+                    ),
+                ));
+            }
+            for (rollout_field, rollout) in [
+                ("active_rollout", deployment.active_rollout.as_ref()),
+                ("last_rollout", deployment.last_rollout.as_ref()),
+            ] {
+                let Some(rollout) = rollout else {
+                    continue;
+                };
+                for (version_field, version) in [
+                    (
+                        "candidate_version",
+                        Some(rollout.candidate_version.as_str()),
+                    ),
+                    ("baseline_version", rollout.baseline_version.as_deref()),
+                ] {
+                    let Some(version) = version else {
+                        continue;
+                    };
+                    let revision_key = (
+                        deployment.service_name.as_ref().to_owned(),
+                        version.to_owned(),
+                    );
+                    if service_revisions.get(&revision_key).is_none() {
+                        return Err(invalid_soracloud_state(
+                            "soracloud_service_deployments",
+                            format!(
+                                "service `{}` {rollout_field}.{version_field} `{version}` is missing from soracloud_service_revisions",
+                                deployment.service_name
+                            ),
+                        ));
+                    }
+                }
+            }
+        }
+
+        let app_infra_audit_events = self.app_infra_audit_events.view();
+        for (sequence, event) in app_infra_audit_events.iter() {
+            event.validate().map_err(|error| {
+                invalid_soracloud_state("soracloud_app_infra_audit_events", error.to_string())
+            })?;
+            if sequence != &event.sequence {
+                return Err(invalid_soracloud_state(
+                    "soracloud_app_infra_audit_events",
+                    "storage key must match the embedded audit sequence",
+                ));
+            }
+        }
+        for (key, state) in self.app_infra_states.view().iter() {
+            state.validate().map_err(|error| {
+                invalid_soracloud_state("soracloud_app_infra_states", error.to_string())
+            })?;
+            if key != &state.app_name {
+                return Err(invalid_soracloud_state(
+                    "soracloud_app_infra_states",
+                    "storage key must match the embedded app_name",
+                ));
+            }
+            let updated_event = app_infra_audit_events
+                .get(&state.updated_sequence)
+                .ok_or_else(|| {
+                    invalid_soracloud_state(
+                        "soracloud_app_infra_audit_events",
+                        "app state is missing its exact updated_sequence audit event",
+                    )
+                })?;
+            if updated_event.app_name != state.app_name
+                || updated_event.to_version != state.current_app_version
+                || updated_event.app_manifest_hash != state.current_manifest_hash
+            {
+                return Err(invalid_soracloud_state(
+                    "soracloud_app_infra_audit_events",
+                    "app state's current revision does not match its updated_sequence audit event",
+                ));
+            }
+            let deployed_event = app_infra_audit_events
+                .get(&state.deployed_sequence)
+                .ok_or_else(|| {
+                    invalid_soracloud_state(
+                        "soracloud_app_infra_audit_events",
+                        "app state is missing its exact deployed_sequence audit event",
+                    )
+                })?;
+            if deployed_event.app_name != state.app_name {
+                return Err(invalid_soracloud_state(
+                    "soracloud_app_infra_audit_events",
+                    "app state's deployed_sequence audit event belongs to another app",
+                ));
+            }
+            for service_ref in &state.manifest.services {
+                let deployment = service_deployments
+                    .get(&service_ref.service_name)
+                    .ok_or_else(|| {
+                        invalid_soracloud_state(
+                            "soracloud_app_infra_states",
+                            format!(
+                                "app `{}` service `{}` has no authoritative deployment",
+                                state.app_name, service_ref.service_name
+                            ),
+                        )
+                    })?;
+                if deployment.current_service_version != service_ref.service_version
+                    || deployment.current_service_manifest_hash != service_ref.service_manifest_hash
+                    || deployment.current_container_manifest_hash
+                        != service_ref.container_manifest_hash
+                {
+                    return Err(invalid_soracloud_state(
+                        "soracloud_app_infra_states",
+                        format!(
+                            "app `{}` service `{}` must exactly match its active deployment revision and manifest hashes",
+                            state.app_name, service_ref.service_name
+                        ),
+                    ));
+                }
+                let revision_key = (
+                    service_ref.service_name.as_ref().to_owned(),
+                    service_ref.service_version.clone(),
+                );
+                let admitted_bundle = service_revisions.get(&revision_key).ok_or_else(|| {
+                    invalid_soracloud_state(
+                        "soracloud_app_infra_states",
+                        format!(
+                            "app `{}` service `{}` revision `{}` has no admitted bundle",
+                            state.app_name, service_ref.service_name, service_ref.service_version
+                        ),
+                    )
+                })?;
+                if admitted_bundle.service.execution_plane != service_ref.execution_plane
+                    || admitted_bundle.container.runtime != service_ref.runtime
+                {
+                    return Err(invalid_soracloud_state(
+                        "soracloud_app_infra_states",
+                        format!(
+                            "app `{}` service `{}` execution plane and runtime must match its admitted bundle",
+                            state.app_name, service_ref.service_name
+                        ),
+                    ));
+                }
+            }
+        }
+
+        for (key, state) in self.service_runtime.view().iter() {
+            state.validate().map_err(|error| {
+                invalid_soracloud_state("soracloud_service_runtime", error.to_string())
+            })?;
+            if key != &state.service_name {
+                return Err(invalid_soracloud_state(
+                    "soracloud_service_runtime",
+                    "storage key must match the embedded service_name",
+                ));
+            }
+            let deployment = service_deployments.get(key).ok_or_else(|| {
+                invalid_soracloud_state(
+                    "soracloud_service_runtime",
+                    format!("service `{key}` runtime state has no authoritative deployment"),
+                )
+            })?;
+            if state.active_service_version != deployment.current_service_version {
+                return Err(invalid_soracloud_state(
+                    "soracloud_service_runtime",
+                    format!(
+                        "service `{key}` runtime revision `{}` must equal its active deployment revision `{}`",
+                        state.active_service_version, deployment.current_service_version
+                    ),
+                ));
+            }
+        }
+
+        let inrou_service_placements = self.inrou_service_placements.view();
+        for (key, state) in self.inrou_replica_runtime.view().iter() {
+            state.validate().map_err(|error| {
+                invalid_soracloud_state("soracloud_inrou_replica_runtime", error.to_string())
+            })?;
+            let canonical_slot = state.replica_slot.to_string();
+            let parsed_slot = key.2.parse::<u16>().map_err(|error| {
+                invalid_soracloud_state(
+                    "soracloud_inrou_replica_runtime",
+                    format!("replica-slot storage key is not a canonical u16: {error}"),
+                )
+            })?;
+            if key.0.as_str() != state.service_name.as_ref()
+                || key.1.as_str() != state.service_version.as_str()
+                || parsed_slot != state.replica_slot
+                || key.2.as_str() != canonical_slot.as_str()
+            {
+                return Err(invalid_soracloud_state(
+                    "soracloud_inrou_replica_runtime",
+                    "storage key must exactly match the embedded service revision and canonical replica slot",
+                ));
+            }
+            let placement_record = inrou_service_placements
+                .get(&(
+                    state.service_name.as_ref().to_owned(),
+                    state.service_version.clone(),
+                ))
+                .ok_or_else(|| {
+                    invalid_soracloud_state(
+                        "soracloud_inrou_replica_runtime",
+                        format!(
+                            "service `{}` revision `{}` replica {} has no authoritative placement record",
+                            state.service_name, state.service_version, state.replica_slot
+                        ),
+                    )
+                })?;
+            let assignment = placement_record
+                .placements
+                .iter()
+                .find(|placement| placement.replica_slot == state.replica_slot)
+                .ok_or_else(|| {
+                    invalid_soracloud_state(
+                        "soracloud_inrou_replica_runtime",
+                        format!(
+                            "service `{}` revision `{}` replica {} has no authoritative placement assignment",
+                            state.service_name, state.service_version, state.replica_slot
+                        ),
+                    )
+                })?;
+            if state.validator_account_id != assignment.validator_account_id
+                || state.peer_id != assignment.peer_id
+                || state.selected_guest_isa != assignment.selected_guest_isa
+            {
+                return Err(invalid_soracloud_state(
+                    "soracloud_inrou_replica_runtime",
+                    "replica runtime identity must exactly match its authoritative placement assignment",
+                ));
+            }
+        }
+
+        for (sequence, event) in self.service_audit_events.view().iter() {
+            event.validate().map_err(|error| {
+                invalid_soracloud_state("soracloud_service_audit_events", error.to_string())
+            })?;
+            if sequence != &event.sequence {
+                return Err(invalid_soracloud_state(
+                    "soracloud_service_audit_events",
+                    "storage key must match the embedded audit sequence",
+                ));
+            }
+        }
+
+        for (sequence, event) in self.training_job_audit_events.view().iter() {
+            event.validate().map_err(|error| {
+                invalid_soracloud_state("soracloud_training_job_audit_events", error.to_string())
+            })?;
+            if sequence != &event.sequence {
+                return Err(invalid_soracloud_state(
+                    "soracloud_training_job_audit_events",
+                    "storage key must match the embedded audit sequence",
+                ));
+            }
+        }
+
+        for (sequence, event) in self.model_weight_audit_events.view().iter() {
+            event.validate().map_err(|error| {
+                invalid_soracloud_state("soracloud_model_weight_audit_events", error.to_string())
+            })?;
+            if sequence != &event.sequence {
+                return Err(invalid_soracloud_state(
+                    "soracloud_model_weight_audit_events",
+                    "storage key must match the embedded audit sequence",
+                ));
+            }
+        }
+
+        for (sequence, event) in self.model_artifact_audit_events.view().iter() {
+            event.validate().map_err(|error| {
+                invalid_soracloud_state("soracloud_model_artifact_audit_events", error.to_string())
+            })?;
+            if sequence != &event.sequence {
+                return Err(invalid_soracloud_state(
+                    "soracloud_model_artifact_audit_events",
+                    "storage key must match the embedded audit sequence",
+                ));
+            }
+        }
+
+        for (sequence, event) in self.hf_shared_lease_audit_events.view().iter() {
+            event.validate().map_err(|error| {
+                invalid_soracloud_state("soracloud_hf_shared_lease_audit_events", error.to_string())
+            })?;
+            if sequence != &event.sequence {
+                return Err(invalid_soracloud_state(
+                    "soracloud_hf_shared_lease_audit_events",
+                    "storage key must match the embedded audit sequence",
+                ));
+            }
+        }
+
+        for (_, record) in self.model_host_violation_evidence.view().iter() {
+            record.validate().map_err(|error| {
+                invalid_soracloud_state(
+                    "soracloud_model_host_violation_evidence",
+                    error.to_string(),
+                )
+            })?;
+        }
+
+        for (sequence, event) in self.agent_apartment_audit_events.view().iter() {
+            event.validate().map_err(|error| {
+                invalid_soracloud_state("soracloud_agent_apartment_audit_events", error.to_string())
+            })?;
+            if sequence != &event.sequence {
+                return Err(invalid_soracloud_state(
+                    "soracloud_agent_apartment_audit_events",
+                    "storage key must match the embedded audit sequence",
+                ));
+            }
+        }
+
+        for (key, entry) in self.service_state_entries.view().iter() {
+            entry.validate().map_err(|error| {
+                invalid_soracloud_state("soracloud_service_state_entries", error.to_string())
+            })?;
+            let expected_key = (
+                entry.service_name.as_ref().to_owned(),
+                entry.binding_name.as_ref().to_owned(),
+                entry.state_key.clone(),
+            );
+            if key != &expected_key {
+                return Err(invalid_soracloud_state(
+                    "soracloud_service_state_entries",
+                    "storage key must match the embedded service_name, binding_name, and state_key",
+                ));
+            }
+        }
+
+        for (key, capability) in self.inrou_host_capabilities.view().iter() {
+            capability.validate().map_err(|error| {
+                invalid_soracloud_state("soracloud_inrou_host_capabilities", error.to_string())
+            })?;
+            if key != &capability.validator_account_id {
+                return Err(invalid_soracloud_state(
+                    "soracloud_inrou_host_capabilities",
+                    "storage key must match the embedded validator_account_id",
+                ));
+            }
+        }
+
+        for (key, placement) in inrou_service_placements.iter() {
+            placement.validate().map_err(|error| {
+                invalid_soracloud_state("soracloud_inrou_service_placements", error.to_string())
+            })?;
+            let expected_key = (
+                placement.service_name.as_ref().to_owned(),
+                placement.service_version.clone(),
+            );
+            if key != &expected_key {
+                return Err(invalid_soracloud_state(
+                    "soracloud_inrou_service_placements",
+                    "storage key must match the embedded service_name and service_version",
+                ));
+            }
+            let admitted_key = (
+                placement.service_name.as_ref().to_owned(),
+                placement.service_version.clone(),
+            );
+            let admitted_bundle = service_revisions.get(&admitted_key).ok_or_else(|| {
+                invalid_soracloud_state(
+                    "soracloud_inrou_service_placements",
+                    format!(
+                        "service `{}` revision `{}` placement has no admitted bundle",
+                        placement.service_name, placement.service_version
+                    ),
+                )
+            })?;
+            if admitted_bundle.container.runtime
+                != iroha_data_model::soracloud::SoraContainerRuntimeV1::Inrou
+                || admitted_bundle.service.execution_plane
+                    != iroha_data_model::soracloud::SoraServiceExecutionPlaneV1::HttpService
+            {
+                return Err(invalid_soracloud_state(
+                    "soracloud_inrou_service_placements",
+                    "Inrou placement must reference an admitted Inrou HTTP-service revision",
+                ));
+            }
+            if placement.desired_replica_count != admitted_bundle.service.replicas.get() {
+                return Err(invalid_soracloud_state(
+                    "soracloud_inrou_service_placements",
+                    format!(
+                        "service `{}` revision `{}` desired replica count {} must equal admitted manifest count {}",
+                        placement.service_name,
+                        placement.service_version,
+                        placement.desired_replica_count,
+                        admitted_bundle.service.replicas.get()
+                    ),
+                ));
+            }
+            let inrou = admitted_bundle.container.inrou.as_ref().ok_or_else(|| {
+                invalid_soracloud_state(
+                    "soracloud_inrou_service_placements",
+                    "admitted Inrou revision is missing its canonical Inrou manifest",
+                )
+            })?;
+            for assignment in &placement.placements {
+                if !inrou
+                    .guest_images
+                    .contains_key(&assignment.selected_guest_isa)
+                {
+                    return Err(invalid_soracloud_state(
+                        "soracloud_inrou_service_placements",
+                        format!(
+                            "service `{}` revision `{}` replica {} selects a guest ISA absent from its admitted Inrou manifest",
+                            placement.service_name,
+                            placement.service_version,
+                            assignment.replica_slot
+                        ),
+                    ));
+                }
+            }
+        }
+
+        for (key, message) in self.mailbox_messages.view().iter() {
+            message.validate().map_err(|error| {
+                invalid_soracloud_state("soracloud_mailbox_messages", error.to_string())
+            })?;
+            if key != &message.message_id {
+                return Err(invalid_soracloud_state(
+                    "soracloud_mailbox_messages",
+                    "storage key must match the embedded message_id",
+                ));
+            }
+        }
+
+        for (key, receipt) in self.runtime_receipts.view().iter() {
+            receipt.validate().map_err(|error| {
+                invalid_soracloud_state("soracloud_runtime_receipts", error.to_string())
+            })?;
+            if key != &receipt.receipt_id {
+                return Err(invalid_soracloud_state(
+                    "soracloud_runtime_receipts",
+                    "storage key must match the embedded receipt_id",
+                ));
+            }
+        }
+        Ok(())
+    }
+}
+
+fn invalid_soracloud_state(field: &str, message: impl Into<String>) -> json::Error {
+    json::Error::InvalidField {
+        field: format!("world.{field}"),
+        message: message.into(),
+    }
+}
 impl MusubiPersistedState<'_> {
     #[allow(clippy::too_many_lines)]
     fn validate(self) -> Result<(), json::Error> {
@@ -1524,54 +2073,73 @@ fn parse_world(
     let musubi_replication_shortfall_releases =
         take_musubi_replication_shortfall_releases(&mut map)?;
     let soracloud_service_revisions = take_required(&mut map, "soracloud_service_revisions")?;
-    let soracloud_service_deployments =
-        take_optional_default(&mut map, "soracloud_service_deployments")?;
-    let soracloud_app_infra_states = take_optional_default(&mut map, "soracloud_app_infra_states")?;
-    let soracloud_service_runtime = take_optional_default(&mut map, "soracloud_service_runtime")?;
+    let soracloud_service_deployments = take_required(&mut map, "soracloud_service_deployments")?;
+    let soracloud_app_infra_states = take_required(&mut map, "soracloud_app_infra_states")?;
+    let soracloud_service_runtime = take_required(&mut map, "soracloud_service_runtime")?;
     let soracloud_inrou_replica_runtime =
-        take_optional_default(&mut map, "soracloud_inrou_replica_runtime")?;
-    let soracloud_service_audit_events =
-        take_optional_default(&mut map, "soracloud_service_audit_events")?;
+        take_required(&mut map, "soracloud_inrou_replica_runtime")?;
+    let soracloud_service_audit_events = take_required(&mut map, "soracloud_service_audit_events")?;
     let soracloud_app_infra_audit_events =
-        take_optional_default(&mut map, "soracloud_app_infra_audit_events")?;
+        take_required(&mut map, "soracloud_app_infra_audit_events")?;
     let soracloud_service_state_entries =
-        take_optional_default(&mut map, "soracloud_service_state_entries")?;
+        take_required(&mut map, "soracloud_service_state_entries")?;
     let soracloud_decryption_request_records =
         take_optional_default(&mut map, "soracloud_decryption_request_records")?;
     let soracloud_agent_apartments = take_optional_default(&mut map, "soracloud_agent_apartments")?;
     let soracloud_agent_apartment_audit_events =
-        take_optional_default(&mut map, "soracloud_agent_apartment_audit_events")?;
+        take_required(&mut map, "soracloud_agent_apartment_audit_events")?;
     let soracloud_training_jobs = take_optional_default(&mut map, "soracloud_training_jobs")?;
     let soracloud_training_job_audit_events =
-        take_optional_default(&mut map, "soracloud_training_job_audit_events")?;
+        take_required(&mut map, "soracloud_training_job_audit_events")?;
     let soracloud_model_registries = take_optional_default(&mut map, "soracloud_model_registries")?;
     let soracloud_model_weight_versions =
         take_optional_default(&mut map, "soracloud_model_weight_versions")?;
     let soracloud_model_weight_audit_events =
-        take_optional_default(&mut map, "soracloud_model_weight_audit_events")?;
+        take_required(&mut map, "soracloud_model_weight_audit_events")?;
     let soracloud_model_artifacts = take_optional_default(&mut map, "soracloud_model_artifacts")?;
     let soracloud_model_artifact_audit_events =
-        take_optional_default(&mut map, "soracloud_model_artifact_audit_events")?;
+        take_required(&mut map, "soracloud_model_artifact_audit_events")?;
     let soracloud_uploaded_model_bundles =
         take_optional_default(&mut map, "soracloud_uploaded_model_bundles")?;
     let soracloud_model_host_capabilities =
         take_optional_default(&mut map, "soracloud_model_host_capabilities")?;
     let soracloud_inrou_host_capabilities =
-        take_optional_default(&mut map, "soracloud_inrou_host_capabilities")?;
+        take_required(&mut map, "soracloud_inrou_host_capabilities")?;
     let soracloud_hf_sources = take_optional_default(&mut map, "soracloud_hf_sources")?;
     let soracloud_hf_shared_lease_pools =
         take_optional_default(&mut map, "soracloud_hf_shared_lease_pools")?;
     let soracloud_hf_shared_lease_members =
         take_optional_default(&mut map, "soracloud_hf_shared_lease_members")?;
     let soracloud_hf_shared_lease_audit_events =
-        take_optional_default(&mut map, "soracloud_hf_shared_lease_audit_events")?;
+        take_required(&mut map, "soracloud_hf_shared_lease_audit_events")?;
     let soracloud_model_host_violation_evidence =
-        take_optional_default(&mut map, "soracloud_model_host_violation_evidence")?;
+        take_required(&mut map, "soracloud_model_host_violation_evidence")?;
     let soracloud_hf_placements = take_optional_default(&mut map, "soracloud_hf_placements")?;
     let soracloud_inrou_service_placements =
-        take_optional_default(&mut map, "soracloud_inrou_service_placements")?;
-    let soracloud_mailbox_messages = take_optional_default(&mut map, "soracloud_mailbox_messages")?;
-    let soracloud_runtime_receipts = take_optional_default(&mut map, "soracloud_runtime_receipts")?;
+        take_required(&mut map, "soracloud_inrou_service_placements")?;
+    let soracloud_mailbox_messages = take_required(&mut map, "soracloud_mailbox_messages")?;
+    let soracloud_runtime_receipts = take_required(&mut map, "soracloud_runtime_receipts")?;
+    SoracloudInrouPersistedStateV1 {
+        service_revisions: &soracloud_service_revisions,
+        service_deployments: &soracloud_service_deployments,
+        app_infra_states: &soracloud_app_infra_states,
+        service_runtime: &soracloud_service_runtime,
+        inrou_replica_runtime: &soracloud_inrou_replica_runtime,
+        service_audit_events: &soracloud_service_audit_events,
+        app_infra_audit_events: &soracloud_app_infra_audit_events,
+        training_job_audit_events: &soracloud_training_job_audit_events,
+        model_weight_audit_events: &soracloud_model_weight_audit_events,
+        model_artifact_audit_events: &soracloud_model_artifact_audit_events,
+        hf_shared_lease_audit_events: &soracloud_hf_shared_lease_audit_events,
+        model_host_violation_evidence: &soracloud_model_host_violation_evidence,
+        agent_apartment_audit_events: &soracloud_agent_apartment_audit_events,
+        service_state_entries: &soracloud_service_state_entries,
+        inrou_host_capabilities: &soracloud_inrou_host_capabilities,
+        inrou_service_placements: &soracloud_inrou_service_placements,
+        mailbox_messages: &soracloud_mailbox_messages,
+        runtime_receipts: &soracloud_runtime_receipts,
+    }
+    .validate()?;
     let soracloud_private_uploaded_model_execution_receipts = take_optional_default(
         &mut map,
         "soracloud_private_uploaded_model_execution_receipts",
@@ -1585,20 +2153,32 @@ fn parse_world(
     )?;
     let pin_manifests = take_optional_default(&mut map, "pin_manifests")?;
     let zk_assets = take_optional_default(&mut map, "zk_assets")?;
-    let elections = take_optional_default(&mut map, "elections")?;
-    let citizens = take_optional_default(&mut map, "citizens")?;
-    let ministry_agenda_proposals = take_optional_default(&mut map, "ministry_agenda_proposals")?;
-    let governance_proposals = take_optional_default(&mut map, "governance_proposals")?;
-    let governance_referenda = take_optional_default(&mut map, "governance_referenda")?;
-    let governance_stage_approvals = take_optional_default(&mut map, "governance_stage_approvals")?;
-    let governance_locks = take_optional_default(&mut map, "governance_locks")?;
-    let governance_slashes = take_optional_default(&mut map, "governance_slashes")?;
+    let elections = take_required(&mut map, "elections")?;
+    let citizens = take_required(&mut map, "citizens")?;
+    let ministry_agenda_proposals = take_required(&mut map, "ministry_agenda_proposals")?;
+    let governance_proposals: Storage<[u8; 32], GovernanceProposalRecord> =
+        take_required(&mut map, "governance_proposals")?;
+    for (proposal_id, proposal) in governance_proposals.view().iter() {
+        proposal
+            .validate_v1()
+            .map_err(|message| json::Error::InvalidField {
+                field: "world.governance_proposals".to_owned(),
+                message: format!(
+                    "governance proposal {} has an invalid V1 Parliament snapshot: {message}",
+                    hex::encode(proposal_id)
+                ),
+            })?;
+    }
+    let governance_referenda = take_required(&mut map, "governance_referenda")?;
+    let governance_stage_approvals = take_required(&mut map, "governance_stage_approvals")?;
+    let governance_locks = take_required(&mut map, "governance_locks")?;
+    let governance_slashes = take_required(&mut map, "governance_slashes")?;
     let governance_last_unlock_sweep_height =
-        take_optional_default(&mut map, "governance_last_unlock_sweep_height")?;
-    let governance_unlock_stats = take_optional_default(&mut map, "governance_unlock_stats")?;
-    let council = take_optional_default(&mut map, "council")?;
-    let parliament_bodies = take_optional_default(&mut map, "parliament_bodies")?;
-    let vrf_epochs = take_optional_default(&mut map, "vrf_epochs")?;
+        take_required(&mut map, "governance_last_unlock_sweep_height")?;
+    let governance_unlock_stats = take_required(&mut map, "governance_unlock_stats")?;
+    let council = take_required(&mut map, "council")?;
+    let parliament_bodies = take_required(&mut map, "parliament_bodies")?;
+    let vrf_epochs = take_required(&mut map, "vrf_epochs")?;
     let repo_agreements = take_optional_default(&mut map, "repo_agreements")?;
     let settlement_receipts = take_optional_default(&mut map, "settlement_receipts")?;
     let kagemusha_replay_keys = take_required(&mut map, "kagemusha_replay_keys")?;
@@ -2187,7 +2767,6 @@ fn default_pipeline() -> iroha_config::parameters::actual::Pipeline {
         debug_trace_scheduler_inputs:
             iroha_config::parameters::defaults::pipeline::DEBUG_TRACE_SCHEDULER_INPUTS,
         debug_trace_tx_eval: iroha_config::parameters::defaults::pipeline::DEBUG_TRACE_TX_EVAL,
-        signature_batch_max: iroha_config::parameters::defaults::pipeline::SIGNATURE_BATCH_MAX,
         signature_batch_max_ed25519:
             iroha_config::parameters::defaults::pipeline::SIGNATURE_BATCH_MAX_ED25519,
         signature_batch_max_secp256k1:
@@ -2520,7 +3099,10 @@ mod decode_tests {
                 created_height: 1,
                 status: GovernanceProposalStatus::Enacted,
                 pipeline: GovernancePipeline::default(),
-                parliament_snapshot: None,
+                parliament_snapshot: governance_parliament_snapshot_for_tests(
+                    &musubi_account(60),
+                    1,
+                ),
                 finalization_evidence: None,
                 enacted_at_height: Some(enacted_at_height),
             },

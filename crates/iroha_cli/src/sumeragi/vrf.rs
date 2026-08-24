@@ -1,7 +1,7 @@
 #![allow(clippy::redundant_pub_crate, clippy::needless_pass_by_value)]
-use eyre::Result;
-use crate::{CliOutputFormat, RunContext};
 use super::commands::{VrfEpochArgs, VrfPenaltiesArgs};
+use crate::{CliOutputFormat, RunContext};
+use eyre::Result;
 pub(crate) fn penalties<C: RunContext>(context: &mut C, args: VrfPenaltiesArgs) -> Result<()> {
     let client = context.client_from_config();
     let epoch = parse_epoch(&args.epoch);

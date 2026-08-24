@@ -1661,30 +1661,6 @@ where
     })
 }
 
-// Compatibility wrapper: its transcript and canonical wire remain byte-for-
-// byte identical; an unused aggregate opening is zeroized when the pending
-// owner is sealed and dropped.
-#[allow(clippy::too_many_arguments)]
-fn prove_kernel_for_suite_v1<S, P, R>(
-    geometry: KernelGeometryV1,
-    context: KernelContextV1,
-    commitments: KernelCommitmentsV1<'_>,
-    source: P,
-    downstream_residual: &[u8],
-    rng: &mut R,
-) -> Result<Vec<u8>, RnsNativeGlobalInverseProductErrorV1>
-where
-    S: ProofSuite<Scalar = Scalar, Point = Point>,
-    P: RnsNativeGlobalInverseProductOpeningSourceV1,
-    R: ProofRandomSource,
-{
-    if downstream_residual.is_empty() {
-        return Err(RnsNativeGlobalInverseProductErrorV1::InvalidGeometry);
-    }
-    prove_pending_kernel_for_suite_v1::<S, _, _>(geometry, context, commitments, source, rng)?
-        .seal_v1(downstream_residual)
-}
-
 fn endpoint_core_bytes_v1(
     geometry: KernelGeometryV1,
 ) -> Result<usize, RnsNativeGlobalInverseProductErrorV1> {
@@ -2050,14 +2026,14 @@ where
     P: RnsNativeGlobalInverseProductOpeningSourceV1,
     R: ProofRandomSource,
 {
-    prove_kernel_for_suite_v1::<ZkAmsT256BulletproofSuiteV1, _, _>(
+    prove_pending_kernel_for_suite_v1::<ZkAmsT256BulletproofSuiteV1, _, _>(
         KernelGeometryV1::PRODUCTION,
         context,
         commitments,
         source,
-        downstream_residual,
         rng,
-    )
+    )?
+    .seal_v1(downstream_residual)
 }
 
 fn collect_production_commitments_v1<'source, 'proof, S>(

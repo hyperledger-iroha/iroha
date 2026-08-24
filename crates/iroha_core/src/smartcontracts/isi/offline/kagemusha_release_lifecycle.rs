@@ -11,6 +11,7 @@ use iroha_data_model::offline::{
     KagemushaV4ReleaseEnabledV1, KagemushaV4ReleaseLifecyclePhaseV1,
     KagemushaV4ReleaseLifecycleStateV1, kagemusha_v4_release_lifecycle_state_key,
 };
+use iroha_data_model::proof::VerifyingKeyId;
 
 const KAGEMUSHA_V4_RELEASE_TRANSITION_DOMAIN: &str = "kagemusha-v4-release-transition";
 
@@ -81,8 +82,19 @@ fn require_distinct_governance_signers(
     Ok(())
 }
 
+fn require_no_proof_attachments(
+    transaction: &SignedTransaction,
+) -> Result<(), iroha_data_model::ValidationFail> {
+    if transaction.attachments().is_some() {
+        return Err(iroha_data_model::ValidationFail::NotPermitted(
+            "Kagemusha V4 lifecycle transactions must not carry proof attachments".to_owned(),
+        ));
+    }
+    Ok(())
+}
+
 /// Derive lifecycle context only from one ordinary, direct native instruction carrying at least
-/// two verified canonical distinct governance signatures.
+/// two verified canonical distinct governance signatures and no proof attachments.
 pub(crate) fn signed_lifecycle_entrypoint_context(
     transaction: &SignedTransaction,
 ) -> Result<Option<LifecycleEntrypointContext>, iroha_data_model::ValidationFail> {
@@ -102,6 +114,7 @@ pub(crate) fn signed_lifecycle_entrypoint_context(
             "Kagemusha V4 lifecycle mutation requires ordinary transaction admission".to_owned(),
         ));
     }
+    require_no_proof_attachments(transaction)?;
     require_distinct_governance_signers(transaction, kind)?;
     Ok(Some(LifecycleEntrypointContext {
         kind,
@@ -178,6 +191,68 @@ fn load_lifecycle_by_manifest(
     }))
 }
 
+fn exact_lifecycle_verifier_record<'world>(
+    world: &'world impl WorldReadOnly,
+    state: &KagemushaV4ReleaseLifecycleStateV1,
+    id: &VerifyingKeyId,
+    parity: iroha_data_model::offline::KagemushaPastaCycleParityV1,
+    role: &str,
+) -> Result<&'world VerifyingKeyRecord, String> {
+    let record = world
+        .verifying_keys()
+        .get(id)
+        .ok_or_else(|| format!("Kagemusha V4 lifecycle {role} verifier is absent"))?;
+    ensure_release_qualified_kagemusha_v4_verifier_id(id, record, parity, role)?;
+    let expected_index = (
+        kagemusha_v4_circuit_id(parity).to_owned(),
+        state.verifier_version,
+    );
+    if record.version != state.verifier_version
+        || record.status != ConfidentialStatus::Active
+        || world.verifying_keys_by_circuit().get(&expected_index) != Some(id)
+    {
+        return Err(format!(
+            "Kagemusha V4 lifecycle {role} verifier record changed"
+        ));
+    }
+    Ok(record)
+}
+
+fn exact_lifecycle_verifier_records<'world>(
+    world: &'world impl WorldReadOnly,
+    state: &KagemushaV4ReleaseLifecycleStateV1,
+) -> Result<[&'world VerifyingKeyRecord; 2], String> {
+    let binding = &state.artifact_binding;
+    let expected_eq = iroha_data_model::offline::kagemusha_recursive_spend_verifier_key_id_v4(
+        iroha_data_model::offline::KagemushaPastaCycleParityV1::StepEq,
+        binding.manifest_sha256,
+    );
+    let expected_ep = iroha_data_model::offline::kagemusha_recursive_spend_verifier_key_id_v4(
+        iroha_data_model::offline::KagemushaPastaCycleParityV1::StepEp,
+        binding.manifest_sha256,
+    );
+    if state.step_eq_verifier_key_id != expected_eq || state.step_ep_verifier_key_id != expected_ep
+    {
+        return Err("Kagemusha V4 lifecycle verifier identities changed".to_owned());
+    }
+    Ok([
+        exact_lifecycle_verifier_record(
+            world,
+            state,
+            &state.step_eq_verifier_key_id,
+            iroha_data_model::offline::KagemushaPastaCycleParityV1::StepEq,
+            "Eq",
+        )?,
+        exact_lifecycle_verifier_record(
+            world,
+            state,
+            &state.step_ep_verifier_key_id,
+            iroha_data_model::offline::KagemushaPastaCycleParityV1::StepEp,
+            "Ep",
+        )?,
+    ])
+}
+
 fn require_bound_consensus_artifacts(
     world: &impl WorldReadOnly,
     state: &KagemushaV4ReleaseLifecycleStateV1,
@@ -205,48 +280,7 @@ fn require_bound_consensus_artifacts(
             return Err("Kagemusha V4 lifecycle device policy identity changed".to_owned());
         }
     }
-
-    let expected_eq = iroha_data_model::offline::kagemusha_recursive_spend_verifier_key_id_v4(
-        iroha_data_model::offline::KagemushaPastaCycleParityV1::StepEq,
-        binding.manifest_sha256,
-    );
-    let expected_ep = iroha_data_model::offline::kagemusha_recursive_spend_verifier_key_id_v4(
-        iroha_data_model::offline::KagemushaPastaCycleParityV1::StepEp,
-        binding.manifest_sha256,
-    );
-    if state.step_eq_verifier_key_id != expected_eq || state.step_ep_verifier_key_id != expected_ep
-    {
-        return Err("Kagemusha V4 lifecycle verifier identities changed".to_owned());
-    }
-    for (id, parity, role) in [
-        (
-            &state.step_eq_verifier_key_id,
-            iroha_data_model::offline::KagemushaPastaCycleParityV1::StepEq,
-            "Eq",
-        ),
-        (
-            &state.step_ep_verifier_key_id,
-            iroha_data_model::offline::KagemushaPastaCycleParityV1::StepEp,
-            "Ep",
-        ),
-    ] {
-        let record = world
-            .verifying_keys()
-            .get(id)
-            .ok_or_else(|| format!("Kagemusha V4 lifecycle {role} verifier is absent"))?;
-        ensure_release_qualified_kagemusha_v4_verifier_id(id, record, parity, role)?;
-        if record.version != state.verifier_version
-            || record.status != ConfidentialStatus::Active
-            || world
-                .verifying_keys_by_circuit()
-                .get(&(record.circuit_id.clone(), record.version))
-                != Some(id)
-        {
-            return Err(format!(
-                "Kagemusha V4 lifecycle {role} verifier record changed"
-            ));
-        }
-    }
+    exact_lifecycle_verifier_records(world, state)?;
     Ok(())
 }
 
@@ -924,31 +958,40 @@ impl Execute for EnableKagemushaRecursiveIssuanceV4 {
     }
 }
 
-fn withdraw_cancelled_verifiers(
+struct CancelledVerifierWithdrawalPlan {
+    records: [(VerifyingKeyId, VerifyingKeyRecord); 2],
+}
+
+impl CancelledVerifierWithdrawalPlan {
+    fn apply(self, state_transaction: &mut StateTransaction<'_, '_>) {
+        for (id, record) in self.records {
+            state_transaction.world.verifying_keys.remove(id.clone());
+            state_transaction.world.verifying_keys.insert(id, record);
+        }
+    }
+}
+
+fn plan_cancelled_verifier_withdrawal(
     state: &KagemushaV4ReleaseLifecycleStateV1,
     current_height: u64,
-    state_transaction: &mut StateTransaction<'_, '_>,
-) {
-    for id in [
-        &state.step_eq_verifier_key_id,
-        &state.step_ep_verifier_key_id,
-    ] {
-        let Some(mut record) = state_transaction.world.verifying_keys.get(id).cloned() else {
-            continue;
-        };
-        if record.version != state.verifier_version {
-            continue;
-        }
+    world: &impl WorldReadOnly,
+) -> Result<CancelledVerifierWithdrawalPlan, String> {
+    let [step_eq, step_ep] = exact_lifecycle_verifier_records(world, state)?;
+    let mut records = [
+        (state.step_eq_verifier_key_id.clone(), step_eq.clone()),
+        (state.step_ep_verifier_key_id.clone(), step_ep.clone()),
+    ];
+    for (_, record) in &mut records {
         record.status = ConfidentialStatus::Withdrawn;
+        // A staged release is cancelled before its scheduled activation. Clear
+        // that never-reached boundary so the retained tombstone cannot encode
+        // an inverted activation/withdrawal interval.
+        record.activation_height = None;
         record.withdraw_height = Some(current_height);
         record.key = None;
         record.vk_len = 0;
-        state_transaction.world.verifying_keys.remove(id.clone());
-        state_transaction
-            .world
-            .verifying_keys
-            .insert(id.clone(), record);
     }
+    Ok(CancelledVerifierWithdrawalPlan { records })
 }
 
 impl Execute for CancelKagemushaRecursiveReleaseV4 {
@@ -997,8 +1040,15 @@ impl Execute for CancelKagemushaRecursiveReleaseV4 {
         next.phase = KagemushaV4ReleaseLifecyclePhaseV1::Cancelled(Box::new(cancelled));
         next.validate()
             .map_err(|error| invalid(format!("invalid cancellation transition: {error}")))?;
-        withdraw_cancelled_verifiers(&loaded.state, current_height, state_transaction);
-        commit_transition(marker, loaded, next, state_transaction)
+        let withdrawal = plan_cancelled_verifier_withdrawal(
+            &loaded.state,
+            current_height,
+            &state_transaction.world,
+        )
+        .map_err(invalid)?;
+        commit_transition(marker, loaded, next, state_transaction)?;
+        withdrawal.apply(state_transaction);
+        Ok(())
     }
 }
 
@@ -1052,7 +1102,7 @@ impl Execute for DeactivateKagemushaRecursiveIssuanceV4 {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use crate::{
         kura::Kura,
@@ -1071,7 +1121,10 @@ mod tests {
             KagemushaV4ReleaseDeactivationV1, KagemushaV4ReleaseLifecycleReasonV1,
         },
         permission::{Permission, Permissions},
-        transaction::{FeePaymentIntent, TransactionAdmissionIntent, TransactionBuilder},
+        transaction::{
+            FeePaymentIntent, TransactionAdmissionIntent, TransactionBuilder,
+            TransactionEntrypoint, signed::SealedTransactionReveal,
+        },
     };
     use iroha_primitives::json::Json;
 
@@ -1327,6 +1380,59 @@ mod tests {
                 .expect("canonical lifecycle key"),
             norito::encode_canonical(lifecycle).expect("canonical lifecycle fixture"),
         );
+        world.smart_contract_state.insert(
+            kagemusha_terminal_registry_v4::release_state_key(&lifecycle.artifact_binding)
+                .expect("canonical release-state key"),
+            b"release-record".to_vec(),
+        );
+        let owner =
+            kagemusha_terminal_registry_v4::verifier_owner_manifest_id(&lifecycle.artifact_binding)
+                .expect("canonical verifier owner");
+        for (id, parity, curve, key_byte) in [
+            (
+                &lifecycle.step_eq_verifier_key_id,
+                iroha_data_model::offline::KagemushaPastaCycleParityV1::StepEq,
+                iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_STEP_EQ_VERIFIER_CURVE_V4,
+                0x41,
+            ),
+            (
+                &lifecycle.step_ep_verifier_key_id,
+                iroha_data_model::offline::KagemushaPastaCycleParityV1::StepEp,
+                iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_STEP_EP_VERIFIER_CURVE_V4,
+                0x42,
+            ),
+        ] {
+            let key_bytes = vec![key_byte; 32];
+            let key = VerifyingKeyBox::new(
+                iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_BACKEND_V4.into(),
+                key_bytes,
+            );
+            let commitment = crate::zk::hash_vk(&key);
+            let mut record = VerifyingKeyRecord::new_with_owner(
+                lifecycle.verifier_version,
+                kagemusha_v4_circuit_id(parity),
+                Some(owner.clone()),
+                iroha_data_model::offline::KAGEMUSHA_VERIFIER_NAMESPACE,
+                BackendTag::Halo2IpaPasta,
+                curve,
+                [0x31; 32],
+                commitment,
+            );
+            record.vk_len = u32::try_from(key.bytes.len()).expect("bounded verifier fixture");
+            record.max_proof_bytes = 1_024;
+            record.activation_height = Some(
+                lifecycle
+                    .staged_at_height
+                    .checked_add(10)
+                    .expect("future verifier activation height"),
+            );
+            record.key = Some(key);
+            record.status = ConfidentialStatus::Active;
+            world
+                .verifying_keys_by_circuit
+                .insert((record.circuit_id.clone(), record.version), id.clone());
+            world.verifying_keys.insert(id.clone(), record);
+        }
         State::new_with_chain_and_network_id_for_testing(
             world,
             Kura::blank_kura_for_testing(),
@@ -1334,6 +1440,247 @@ mod tests {
             ChainId::from("kagemusha-lifecycle-execution-test"),
             lifecycle.promotion_binding.network_id,
         )
+    }
+
+    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+    enum CancelVerifierCorruption {
+        MissingRecord,
+        SubstitutedLifecycleId,
+        OwnerMismatch,
+        EpOwnerMismatch,
+        VersionMismatch,
+        StatusMismatch,
+        IndexMismatch,
+    }
+
+    fn assert_cancel_verifier_corruption_is_atomic(
+        corruption: CancelVerifierCorruption,
+        expected_error: &str,
+    ) {
+        use iroha_data_model::offline::KagemushaPastaCycleParityV1;
+
+        let network_id =
+            NetworkId::from_genesis_hash(HashOf::<BlockHeader>::from_untyped_unchecked(Hash::new(
+                b"kagemusha-invalid-cancel-verifier-network",
+            )));
+        let lifecycle = staged_lifecycle_for_test([0x55; 32], network_id);
+        let mut persisted_lifecycle = lifecycle.clone();
+        if corruption == CancelVerifierCorruption::SubstitutedLifecycleId {
+            persisted_lifecycle.step_eq_verifier_key_id =
+                iroha_data_model::offline::kagemusha_recursive_spend_verifier_key_id_v4(
+                    KagemushaPastaCycleParityV1::StepEq,
+                    [0xE1; 32],
+                );
+            persisted_lifecycle
+                .validate()
+                .expect("portable substituted lifecycle verifier id remains structural");
+        }
+        let predecessor = persisted_lifecycle
+            .exact_bytes_digest()
+            .expect("staged lifecycle identity");
+        let transition_id = [0xD1; 32];
+        let instruction =
+            CancelKagemushaRecursiveReleaseV4::new(KagemushaV4ReleaseCancellationV1 {
+                schema: KAGEMUSHA_V4_RELEASE_CANCELLATION_SCHEMA_V1.to_owned(),
+                version: KAGEMUSHA_V4_RELEASE_LIFECYCLE_VERSION_V1,
+                promotion_id: persisted_lifecycle.promotion_binding.promotion_id,
+                manifest_sha256: persisted_lifecycle.promotion_binding.manifest_sha256,
+                expected_predecessor_lifecycle: predecessor,
+                transition_id,
+                reason: KagemushaV4ReleaseLifecycleReasonV1::GovernanceCancelled,
+                evidence: None,
+            });
+        let signed = lifecycle_transaction(&persisted_lifecycle, instruction.clone().into());
+        let state = lifecycle_state(&lifecycle);
+        let header = BlockHeader::new(
+            core::num::NonZeroU64::new(3).expect("nonzero lifecycle height"),
+            None,
+            None,
+            None,
+            1_800_000_000_002,
+            0,
+        );
+        let mut block = state.block(header);
+        let mut transaction = block.transaction();
+        transaction.kagemusha_taira_canary_external_entrypoint = true;
+        transaction.current_tx_hash = Some(signed.hash());
+        transaction.kagemusha_release_lifecycle_entrypoint =
+            signed_lifecycle_entrypoint_context(&signed)
+                .expect("authenticate direct lifecycle transaction");
+
+        let lifecycle_key = lifecycle_key(&lifecycle.artifact_binding.manifest_sha256)
+            .expect("canonical lifecycle key");
+        if corruption == CancelVerifierCorruption::SubstitutedLifecycleId {
+            transaction
+                .world
+                .smart_contract_state
+                .remove(lifecycle_key.clone());
+            transaction.world.smart_contract_state.insert(
+                lifecycle_key.clone(),
+                norito::encode_canonical(&persisted_lifecycle)
+                    .expect("canonical substituted lifecycle fixture"),
+            );
+        }
+
+        let eq_id = lifecycle.step_eq_verifier_key_id.clone();
+        let ep_id = lifecycle.step_ep_verifier_key_id.clone();
+        let eq_index = (
+            kagemusha_v4_circuit_id(KagemushaPastaCycleParityV1::StepEq).to_owned(),
+            lifecycle.verifier_version,
+        );
+        let ep_index = (
+            kagemusha_v4_circuit_id(KagemushaPastaCycleParityV1::StepEp).to_owned(),
+            lifecycle.verifier_version,
+        );
+        match corruption {
+            CancelVerifierCorruption::MissingRecord => {
+                transaction.world.verifying_keys.remove(eq_id.clone());
+            }
+            CancelVerifierCorruption::SubstitutedLifecycleId => {}
+            CancelVerifierCorruption::OwnerMismatch => {
+                let mut record = transaction
+                    .world
+                    .verifying_keys
+                    .get(&eq_id)
+                    .expect("Eq verifier fixture")
+                    .clone();
+                record.owner_manifest_id = Some(
+                    iroha_data_model::offline::kagemusha_recursive_spend_verifier_owner_manifest_id_v4(
+                        [0xE2; 32],
+                    ),
+                );
+                transaction.world.verifying_keys.remove(eq_id.clone());
+                transaction
+                    .world
+                    .verifying_keys
+                    .insert(eq_id.clone(), record);
+            }
+            CancelVerifierCorruption::EpOwnerMismatch => {
+                let mut record = transaction
+                    .world
+                    .verifying_keys
+                    .get(&ep_id)
+                    .expect("Ep verifier fixture")
+                    .clone();
+                record.owner_manifest_id = Some(
+                    iroha_data_model::offline::kagemusha_recursive_spend_verifier_owner_manifest_id_v4(
+                        [0xE3; 32],
+                    ),
+                );
+                transaction.world.verifying_keys.remove(ep_id.clone());
+                transaction
+                    .world
+                    .verifying_keys
+                    .insert(ep_id.clone(), record);
+            }
+            CancelVerifierCorruption::VersionMismatch => {
+                let mut record = transaction
+                    .world
+                    .verifying_keys
+                    .get(&eq_id)
+                    .expect("Eq verifier fixture")
+                    .clone();
+                record.version = record.version.saturating_add(1);
+                transaction.world.verifying_keys.remove(eq_id.clone());
+                transaction
+                    .world
+                    .verifying_keys
+                    .insert(eq_id.clone(), record);
+            }
+            CancelVerifierCorruption::StatusMismatch => {
+                let mut record = transaction
+                    .world
+                    .verifying_keys
+                    .get(&eq_id)
+                    .expect("Eq verifier fixture")
+                    .clone();
+                record.status = ConfidentialStatus::Proposed;
+                transaction.world.verifying_keys.remove(eq_id.clone());
+                transaction
+                    .world
+                    .verifying_keys
+                    .insert(eq_id.clone(), record);
+            }
+            CancelVerifierCorruption::IndexMismatch => {
+                transaction
+                    .world
+                    .verifying_keys_by_circuit
+                    .remove(eq_index.clone());
+                transaction
+                    .world
+                    .verifying_keys_by_circuit
+                    .insert(eq_index.clone(), ep_id.clone());
+            }
+        }
+
+        let lifecycle_before = transaction
+            .world
+            .smart_contract_state
+            .get(&lifecycle_key)
+            .expect("staged lifecycle exists")
+            .clone();
+        let verifiers_before = [
+            transaction.world.verifying_keys.get(&eq_id).cloned(),
+            transaction.world.verifying_keys.get(&ep_id).cloned(),
+        ];
+        let indexes_before = [
+            transaction
+                .world
+                .verifying_keys_by_circuit
+                .get(&eq_index)
+                .cloned(),
+            transaction
+                .world
+                .verifying_keys_by_circuit
+                .get(&ep_index)
+                .cloned(),
+        ];
+        let marker = kagemusha_v2_marker(KAGEMUSHA_V4_RELEASE_TRANSITION_DOMAIN, &[&transition_id]);
+
+        let error = instruction
+            .execute(&lifecycle.governance_authority, &mut transaction)
+            .expect_err("unqualified cancellation verifier state must fail closed");
+        assert!(
+            error.to_string().contains(expected_error),
+            "unexpected {corruption:?} error: {error}"
+        );
+        assert_eq!(
+            transaction.world.smart_contract_state.get(&lifecycle_key),
+            Some(&lifecycle_before),
+            "{corruption:?} must not terminalize the lifecycle"
+        );
+        assert!(
+            transaction
+                .world
+                .kagemusha_replay_keys
+                .get(&marker)
+                .is_none(),
+            "{corruption:?} must not consume the transition id"
+        );
+        assert_eq!(
+            [
+                transaction.world.verifying_keys.get(&eq_id).cloned(),
+                transaction.world.verifying_keys.get(&ep_id).cloned(),
+            ],
+            verifiers_before,
+            "{corruption:?} must not partially tombstone either verifier"
+        );
+        assert_eq!(
+            [
+                transaction
+                    .world
+                    .verifying_keys_by_circuit
+                    .get(&eq_index)
+                    .cloned(),
+                transaction
+                    .world
+                    .verifying_keys_by_circuit
+                    .get(&ep_index)
+                    .cloned(),
+            ],
+            indexes_before,
+            "{corruption:?} must not change either verifier index"
+        );
     }
 
     fn enabled_lifecycle_for_test(network_id: NetworkId) -> KagemushaV4ReleaseLifecycleStateV1 {
@@ -1398,6 +1745,7 @@ mod tests {
         let predecessor = lifecycle
             .exact_bytes_digest()
             .expect("staged lifecycle identity");
+        let transition_id = [0xB1; 32];
         let instruction =
             CancelKagemushaRecursiveReleaseV4::new(KagemushaV4ReleaseCancellationV1 {
                 schema: KAGEMUSHA_V4_RELEASE_CANCELLATION_SCHEMA_V1.to_owned(),
@@ -1405,7 +1753,7 @@ mod tests {
                 promotion_id: lifecycle.promotion_binding.promotion_id,
                 manifest_sha256: lifecycle.promotion_binding.manifest_sha256,
                 expected_predecessor_lifecycle: predecessor,
-                transition_id: [0xB1; 32],
+                transition_id,
                 reason: KagemushaV4ReleaseLifecycleReasonV1::GovernanceCancelled,
                 evidence: None,
             });
@@ -1426,6 +1774,20 @@ mod tests {
         transaction.kagemusha_release_lifecycle_entrypoint =
             signed_lifecycle_entrypoint_context(&signed)
                 .expect("authenticate direct lifecycle transaction");
+        for id in [
+            &lifecycle.step_eq_verifier_key_id,
+            &lifecycle.step_ep_verifier_key_id,
+        ] {
+            let verifier = transaction
+                .world
+                .verifying_keys
+                .get(id)
+                .expect("active release verifier fixture");
+            assert_eq!(verifier.status, ConfidentialStatus::Active);
+            assert!(verifier.activation_height.is_some_and(|height| height > 3));
+            assert!(verifier.key.is_some());
+            assert!(verifier.vk_len > 0);
+        }
 
         instruction
             .execute(&lifecycle.governance_authority, &mut transaction)
@@ -1442,6 +1804,93 @@ mod tests {
         };
         assert_eq!(cancelled.cancellation_transaction_intent, signed.hash());
         assert!(transaction.kagemusha_release_lifecycle_entrypoint.is_none());
+        let marker = kagemusha_v2_marker(KAGEMUSHA_V4_RELEASE_TRANSITION_DOMAIN, &[&transition_id]);
+        assert!(
+            transaction
+                .world
+                .kagemusha_replay_keys
+                .get(&marker)
+                .is_some()
+        );
+        for id in [
+            &lifecycle.step_eq_verifier_key_id,
+            &lifecycle.step_ep_verifier_key_id,
+        ] {
+            let verifier = transaction
+                .world
+                .verifying_keys
+                .get(id)
+                .expect("cancelled release retains a withdrawn verifier tombstone");
+            assert_eq!(verifier.status, ConfidentialStatus::Withdrawn);
+            assert_eq!(verifier.activation_height, None);
+            assert_eq!(verifier.withdraw_height, Some(3));
+            assert!(verifier.key.is_none());
+            assert_eq!(verifier.vk_len, 0);
+            assert_eq!(
+                transaction
+                    .world
+                    .verifying_keys_by_circuit
+                    .get(&(verifier.circuit_id.clone(), lifecycle.verifier_version)),
+                Some(id),
+                "cancellation must retain the original release verifier index"
+            );
+        }
+    }
+
+    #[test]
+    fn cancellation_rejects_missing_verifier_record_atomically() {
+        assert_cancel_verifier_corruption_is_atomic(
+            CancelVerifierCorruption::MissingRecord,
+            "Eq verifier is absent",
+        );
+    }
+
+    #[test]
+    fn cancellation_rejects_substituted_lifecycle_verifier_id_atomically() {
+        assert_cancel_verifier_corruption_is_atomic(
+            CancelVerifierCorruption::SubstitutedLifecycleId,
+            "verifier identities changed",
+        );
+    }
+
+    #[test]
+    fn cancellation_rejects_verifier_owner_mismatch_atomically() {
+        assert_cancel_verifier_corruption_is_atomic(
+            CancelVerifierCorruption::OwnerMismatch,
+            "not the exact release-qualified registry identity",
+        );
+    }
+
+    #[test]
+    fn cancellation_rejects_ep_owner_mismatch_after_valid_eq_atomically() {
+        assert_cancel_verifier_corruption_is_atomic(
+            CancelVerifierCorruption::EpOwnerMismatch,
+            "not the exact release-qualified registry identity",
+        );
+    }
+
+    #[test]
+    fn cancellation_rejects_verifier_version_mismatch_atomically() {
+        assert_cancel_verifier_corruption_is_atomic(
+            CancelVerifierCorruption::VersionMismatch,
+            "Eq verifier record changed",
+        );
+    }
+
+    #[test]
+    fn cancellation_rejects_inactive_verifier_atomically() {
+        assert_cancel_verifier_corruption_is_atomic(
+            CancelVerifierCorruption::StatusMismatch,
+            "Eq verifier record changed",
+        );
+    }
+
+    #[test]
+    fn cancellation_rejects_verifier_index_mismatch_atomically() {
+        assert_cancel_verifier_corruption_is_atomic(
+            CancelVerifierCorruption::IndexMismatch,
+            "Eq verifier record changed",
+        );
     }
 
     #[test]
@@ -1454,6 +1903,7 @@ mod tests {
         let predecessor = lifecycle
             .exact_bytes_digest()
             .expect("enabled lifecycle identity");
+        let transition_id = [0xB2; 32];
         let instruction =
             DeactivateKagemushaRecursiveIssuanceV4::new(KagemushaV4ReleaseDeactivationV1 {
                 schema: KAGEMUSHA_V4_RELEASE_DEACTIVATION_SCHEMA_V1.to_owned(),
@@ -1461,7 +1911,7 @@ mod tests {
                 promotion_id: lifecycle.promotion_binding.promotion_id,
                 manifest_sha256: lifecycle.promotion_binding.manifest_sha256,
                 expected_predecessor_lifecycle: predecessor,
-                transition_id: [0xB2; 32],
+                transition_id,
                 reason: KagemushaV4ReleaseLifecycleReasonV1::EmergencyDeactivation,
                 evidence: None,
             });
@@ -1499,6 +1949,137 @@ mod tests {
         };
         assert_eq!(deactivated.deactivation_transaction_intent, signed.hash());
         assert!(transaction.kagemusha_release_lifecycle_entrypoint.is_none());
+        let marker = kagemusha_v2_marker(KAGEMUSHA_V4_RELEASE_TRANSITION_DOMAIN, &[&transition_id]);
+        assert!(
+            transaction
+                .world
+                .kagemusha_replay_keys
+                .get(&marker)
+                .is_some()
+        );
+        for id in [
+            &lifecycle.step_eq_verifier_key_id,
+            &lifecycle.step_ep_verifier_key_id,
+        ] {
+            let verifier = transaction
+                .world
+                .verifying_keys
+                .get(id)
+                .expect("deactivated release retains its verifier");
+            assert_eq!(verifier.status, ConfidentialStatus::Active);
+            assert_eq!(verifier.withdraw_height, None);
+            assert!(verifier.key.is_some());
+            assert!(verifier.vk_len > 0);
+            assert_eq!(
+                transaction
+                    .world
+                    .verifying_keys_by_circuit
+                    .get(&(verifier.circuit_id.clone(), lifecycle.verifier_version,)),
+                Some(id)
+            );
+        }
+    }
+
+    #[test]
+    fn terminal_lifecycle_rejects_repeated_and_cross_terminal_transitions() {
+        let (_, lifecycle, _) = terminal_lifecycle_with_retained_policy();
+        let lifecycle_key = lifecycle_key(&lifecycle.artifact_binding.manifest_sha256)
+            .expect("canonical lifecycle key");
+        let predecessor = lifecycle
+            .exact_bytes_digest()
+            .expect("cancelled lifecycle identity");
+
+        let cancellation_transition_id = [0xC1; 32];
+        let cancellation =
+            CancelKagemushaRecursiveReleaseV4::new(KagemushaV4ReleaseCancellationV1 {
+                schema: KAGEMUSHA_V4_RELEASE_CANCELLATION_SCHEMA_V1.to_owned(),
+                version: KAGEMUSHA_V4_RELEASE_LIFECYCLE_VERSION_V1,
+                promotion_id: lifecycle.promotion_binding.promotion_id,
+                manifest_sha256: lifecycle.promotion_binding.manifest_sha256,
+                expected_predecessor_lifecycle: predecessor,
+                transition_id: cancellation_transition_id,
+                reason: KagemushaV4ReleaseLifecycleReasonV1::GovernanceCancelled,
+                evidence: None,
+            });
+        let signed = lifecycle_transaction(&lifecycle, cancellation.clone().into());
+        let state = lifecycle_state(&lifecycle);
+        let header = BlockHeader::new(
+            core::num::NonZeroU64::new(4).expect("nonzero lifecycle height"),
+            None,
+            None,
+            None,
+            1_800_000_000_002,
+            0,
+        );
+        let mut block = state.block(header);
+        let mut transaction = block.transaction();
+        transaction.kagemusha_taira_canary_external_entrypoint = true;
+        transaction.current_tx_hash = Some(signed.hash());
+        transaction.kagemusha_release_lifecycle_entrypoint =
+            signed_lifecycle_entrypoint_context(&signed)
+                .expect("authenticate repeated terminal transition");
+        let lifecycle_before = transaction
+            .world
+            .smart_contract_state
+            .get(&lifecycle_key)
+            .expect("terminal lifecycle exists")
+            .clone();
+        let error = cancellation
+            .execute(&lifecycle.governance_authority, &mut transaction)
+            .expect_err("cancelled lifecycle cannot be cancelled again");
+        assert!(error.to_string().contains("exact staged state"));
+        assert_eq!(
+            transaction.world.smart_contract_state.get(&lifecycle_key),
+            Some(&lifecycle_before)
+        );
+        let cancellation_marker = kagemusha_v2_marker(
+            KAGEMUSHA_V4_RELEASE_TRANSITION_DOMAIN,
+            &[&cancellation_transition_id],
+        );
+        assert!(
+            transaction
+                .world
+                .kagemusha_replay_keys
+                .get(&cancellation_marker)
+                .is_none()
+        );
+
+        let deactivation_transition_id = [0xC2; 32];
+        let deactivation =
+            DeactivateKagemushaRecursiveIssuanceV4::new(KagemushaV4ReleaseDeactivationV1 {
+                schema: KAGEMUSHA_V4_RELEASE_DEACTIVATION_SCHEMA_V1.to_owned(),
+                version: KAGEMUSHA_V4_RELEASE_LIFECYCLE_VERSION_V1,
+                promotion_id: lifecycle.promotion_binding.promotion_id,
+                manifest_sha256: lifecycle.promotion_binding.manifest_sha256,
+                expected_predecessor_lifecycle: predecessor,
+                transition_id: deactivation_transition_id,
+                reason: KagemushaV4ReleaseLifecycleReasonV1::EmergencyDeactivation,
+                evidence: None,
+            });
+        let signed = lifecycle_transaction(&lifecycle, deactivation.clone().into());
+        transaction.current_tx_hash = Some(signed.hash());
+        transaction.kagemusha_release_lifecycle_entrypoint =
+            signed_lifecycle_entrypoint_context(&signed)
+                .expect("authenticate cross-terminal transition");
+        let error = deactivation
+            .execute(&lifecycle.governance_authority, &mut transaction)
+            .expect_err("cancelled lifecycle cannot be deactivated");
+        assert!(error.to_string().contains("only enabled"));
+        assert_eq!(
+            transaction.world.smart_contract_state.get(&lifecycle_key),
+            Some(&lifecycle_before)
+        );
+        let deactivation_marker = kagemusha_v2_marker(
+            KAGEMUSHA_V4_RELEASE_TRANSITION_DOMAIN,
+            &[&deactivation_transition_id],
+        );
+        assert!(
+            transaction
+                .world
+                .kagemusha_replay_keys
+                .get(&deactivation_marker)
+                .is_none()
+        );
     }
 
     #[test]
@@ -1674,6 +2255,75 @@ mod tests {
         assert!(
             signed_lifecycle_entrypoint_context(&one_signer).is_err(),
             "the direct carrier must apply the distinct-signer gate"
+        );
+    }
+
+    #[test]
+    fn sealed_reveal_cannot_gain_direct_external_lifecycle_provenance() {
+        let instruction = cancellation(0x4c);
+        instruction.validate().expect("valid cancellation");
+        let signed = signed([instruction.clone()]);
+        assert_eq!(
+            signed.admission_intent(),
+            TransactionAdmissionIntent::Ordinary
+        );
+        assert_eq!(
+            signed
+                .multisig_signatures()
+                .expect("multisig signature bundle")
+                .signatures
+                .len(),
+            2
+        );
+        assert!(
+            signed_lifecycle_entrypoint_context(&signed)
+                .expect("classify direct lifecycle carrier")
+                .is_some(),
+            "the signed inner transaction must independently qualify for direct lifecycle use"
+        );
+
+        let lifecycle = staged_lifecycle_for_test(
+            [0x55; 32],
+            *signed.network_id().expect("ordinary transaction network"),
+        );
+        let state = lifecycle_state(&lifecycle);
+        let header = BlockHeader::new(
+            core::num::NonZeroU64::new(3).expect("nonzero lifecycle height"),
+            None,
+            None,
+            None,
+            1_800_000_000_002,
+            0,
+        );
+        let mut block = state.block(header);
+        let mut transaction = block.transaction();
+        let replay_keys_before = transaction.world.kagemusha_replay_keys.iter().count();
+        let signed_hash = signed.hash();
+        let authority = signed.authority().clone();
+        let reveal = TransactionEntrypoint::SealedReveal(SealedTransactionReveal::new(
+            Hash::new(b"sealed lifecycle provenance"),
+            signed,
+            [0xDA; 32],
+        ));
+
+        crate::state::seed_committed_transaction_context(&mut transaction, &reveal, 0);
+
+        assert!(!transaction.kagemusha_taira_canary_external_entrypoint);
+        assert!(transaction.kagemusha_release_lifecycle_entrypoint.is_none());
+        assert_eq!(transaction.current_tx_hash, Some(signed_hash));
+        let error = instruction
+            .execute(&authority, &mut transaction)
+            .expect_err("sealed reveal must not execute a direct lifecycle mutation");
+        assert!(
+            error
+                .to_string()
+                .contains("requires one exact direct External instruction"),
+            "unexpected sealed lifecycle error: {error}"
+        );
+        assert_eq!(
+            transaction.world.kagemusha_replay_keys.iter().count(),
+            replay_keys_before,
+            "rejected sealed lifecycle execution must not consume a replay marker"
         );
     }
 

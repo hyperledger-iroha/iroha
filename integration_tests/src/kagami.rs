@@ -91,7 +91,7 @@ fn kagami_candidates(repo: &Path, profile: &str, bin: &str) -> Vec<PathBuf> {
     };
     // Prefer the exact root that `build_kagami` validates. In particular, the
     // release corridor sets both target variables to keep the outer test build
-    // and re-entrant program builds on separate Cargo locks.
+    // and the source-bound prebuilt program bundle on separate paths.
     push_root(kagami_build_target_dir(repo));
     if let Ok(path) = env::var("CARGO_TARGET_DIR") {
         push_root(resolve_target_dir(repo, PathBuf::from(path)).join(IROHA_TEST_TARGET_SUBDIR));

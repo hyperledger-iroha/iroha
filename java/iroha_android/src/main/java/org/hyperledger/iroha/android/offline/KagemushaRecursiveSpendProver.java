@@ -277,13 +277,6 @@ public final class KagemushaRecursiveSpendProver {
     return offer;
   }
 
-  /** Restores an exact persisted readiness archive and forces native canonical validation. */
-  public static Readiness decodeReadiness(final byte[] archive) {
-    final Readiness readiness = new Readiness(archive);
-    projectReadiness(readiness);
-    return readiness;
-  }
-
   public static PeerPayment decodePeerPayment(final byte[] archive) {
     return new PeerPayment(archive);
   }
@@ -630,54 +623,6 @@ public final class KagemushaRecursiveSpendProver {
         state == OperationState.PENDING ? heightOrSubmittedAt : null,
         state == OperationState.APPLIED ? heightOrSubmittedAt : null,
         serverTime, finalizedTopUp, rejection);
-  }
-
-  /** Decode the authoritative, snapshot-bound Torii Kagemusha capability response. */
-  public static ReadinessProjection projectReadiness(final Readiness readiness) {
-    requireArtifactBridge();
-    final byte[][] fields =
-        nativeProjectReadinessV4(Objects.requireNonNull(readiness, "readiness").noritoEncoded());
-    if (fields == null || fields.length < 17) {
-      throw new IllegalStateException(
-          "native Kagemusha readiness projection returned invalid fields");
-    }
-    for (final byte[] field : fields) {
-      if (field == null) {
-        throw new IllegalStateException(
-            "native Kagemusha readiness projection returned a null field");
-      }
-    }
-    final int blockerCount = integer(fields[16], "blockerCount");
-    if (blockerCount < 0 || fields.length != 17 + blockerCount * 2) {
-      throw new IllegalStateException(
-          "native Kagemusha readiness projection returned invalid blockers");
-    }
-    final java.util.ArrayList<ReadinessBlocker> blockers =
-        new java.util.ArrayList<>(blockerCount);
-    for (int index = 0; index < blockerCount; index++) {
-      blockers.add(
-          new ReadinessBlocker(
-              canonicalText(fields[17 + index * 2], "blockerCode"),
-              canonicalText(fields[18 + index * 2], "blockerMessage")));
-    }
-    return new ReadinessProjection(
-        canonicalText(fields[0], "cashHandoffCapability"),
-        integer(fields[1], "requiredBridgeAbiVersion"),
-        integer(fields[2], "maximumHops"),
-        canonicalText(fields[3], "assetDefinitionId"),
-        fields[4].length == 0 ? null : integer(fields[4], "assetScale"),
-        longInteger(fields[5], "evaluatedBlockHeight"),
-        requireDigest(fields[6], "evaluatedBlockHash"),
-        bool(fields[7], "proofBackendAvailable"),
-        bool(fields[8], "recursiveLineageSupported"),
-        bool(fields[9], "ready"),
-        activeVerifier(fields[10]),
-        activeVerifier(fields[11]),
-        activeVerifier(fields[12]),
-        activeVerifier(fields[13]),
-        activeVerifier(fields[14]),
-        authenticatedArtifactSet(fields[15]),
-        blockers);
   }
 
   public static RequestAuthorizationPreparation prepareRequestAuthorization(
@@ -2089,41 +2034,6 @@ public final class KagemushaRecursiveSpendProver {
       }
     }
     return text;
-  }
-
-  private static ActiveVerifier activeVerifier(final byte[] archive) {
-    if (archive.length == 0) {
-      return null;
-    }
-    final byte[][] fields = nativeProjectActiveVerifierV2(archive);
-    requireFieldCount(fields, 9, "active verifier projection");
-    return new ActiveVerifier(
-        canonicalText(fields[0], "verifierBackend"),
-        canonicalText(fields[1], "verifierName"),
-        integer(fields[2], "verifierVersion"),
-        canonicalText(fields[3], "verifierCircuitId"),
-        requireDigest(fields[4], "verifierCommitment"),
-        requireDigest(fields[5], "publicInputsSchemaHash"),
-        integer(fields[6], "maximumProofBytes"),
-        longInteger(fields[7], "activationHeight"),
-        fields[8].length == 0 ? null : longInteger(fields[8], "withdrawalHeight"));
-  }
-
-  private static AuthenticatedArtifactSet authenticatedArtifactSet(final byte[] archive) {
-    if (archive.length == 0) {
-      return null;
-    }
-    final byte[][] fields = nativeProjectAuthenticatedArtifactSetV4(archive);
-    requireFieldCount(fields, 8, "authenticated artifact-set projection");
-    return new AuthenticatedArtifactSet(
-        canonicalText(fields[0], "artifactGeneration"),
-        requireDigest(fields[1], "artifactManifestSha256"),
-        requireDigest(fields[2], "artifactReleasePolicySha256"),
-        requireDigest(fields[3], "artifactReleaseAttestationSha256"),
-        longInteger(fields[4], "artifactActivationHeight"),
-        longInteger(fields[5], "artifactWithdrawalHeight"),
-        integer(fields[6], "artifactMaximumProofBytes"),
-        integer(fields[7], "artifactAssetScale"));
   }
 
   private static boolean bool(final byte[] value, final String field) {
@@ -4010,34 +3920,21 @@ public final class KagemushaRecursiveSpendProver {
   public static final class OfflineStatus {
     private static final List<String> FIELDS = Collections.unmodifiableList(
         Arrays.asList(
-            "mandatory",
             "cash_handoff_capability",
             "required_bridge_abi_version",
             "max_hops",
-            "ready",
-            "assets",
-            "blockers"));
+            "ready"));
 
-    private final boolean mandatory;
     private final String cashHandoffCapability;
     private final int requiredBridgeAbiVersion;
     private final int maximumHops;
     private final boolean ready;
-    private final List<Object> assets;
-    private final List<ReadinessBlocker> blockers;
 
     private OfflineStatus(
-        final boolean mandatory,
         final String cashHandoffCapability,
         final int requiredBridgeAbiVersion,
         final int maximumHops,
-        final boolean ready,
-        final List<Object> assets,
-        final List<ReadinessBlocker> blockers) {
-      if (mandatory) {
-        throw new IllegalArgumentException(
-            "mandatory must be false for universal offline capability");
-      }
+        final boolean ready) {
       if (!CASH_HANDOFF_CAPABILITY_V1.equals(cashHandoffCapability)) {
         throw new IllegalArgumentException(
             "cashHandoffCapability must be the exact cash_handoff_v1 contract");
@@ -4053,21 +3950,10 @@ public final class KagemushaRecursiveSpendProver {
         throw new IllegalArgumentException(
             "ready must be true for universal offline capability");
       }
-      if (!assets.isEmpty()) {
-        throw new IllegalArgumentException(
-            "assets must be empty because capability is asset-neutral");
-      }
-      if (!blockers.isEmpty()) {
-        throw new IllegalArgumentException(
-            "blockers must be empty for universal offline capability");
-      }
-      this.mandatory = mandatory;
       this.cashHandoffCapability = cashHandoffCapability;
       this.requiredBridgeAbiVersion = requiredBridgeAbiVersion;
       this.maximumHops = maximumHops;
       this.ready = ready;
-      this.assets = Collections.unmodifiableList(new ArrayList<>(assets));
-      this.blockers = Collections.unmodifiableList(new ArrayList<>(blockers));
     }
 
     private static OfflineStatus decode(final byte[] payload) {
@@ -4078,334 +3964,26 @@ public final class KagemushaRecursiveSpendProver {
         throw new IllegalStateException(
             "offline capability response must contain exactly the universal fields");
       }
-      final Object mandatoryValue = root.get("mandatory");
       final Object capabilityValue = root.get("cash_handoff_capability");
       final Object readyValue = root.get("ready");
-      final Object assetsValue = root.get("assets");
-      final Object blockersValue = root.get("blockers");
-      if (!(mandatoryValue instanceof Boolean mandatory)
-          || !(capabilityValue instanceof String capability)
-          || !(readyValue instanceof Boolean ready)
-          || !(assetsValue instanceof List<?> parsedAssets)
-          || !(blockersValue instanceof List<?> parsedBlockers)) {
+      if (!(capabilityValue instanceof String capability)
+          || !(readyValue instanceof Boolean ready)) {
         throw new IllegalStateException(
             "offline capability response has an invalid universal field type");
       }
-      if (!parsedAssets.isEmpty() || !parsedBlockers.isEmpty()) {
-        throw new IllegalStateException(
-            "offline capability assets and blockers must be empty");
-      }
       return new OfflineStatus(
-          mandatory,
           capability,
           JsonNumbers.asInt(
               root.get("required_bridge_abi_version"),
               "offline capability required_bridge_abi_version"),
           JsonNumbers.asInt(root.get("max_hops"), "offline capability max_hops"),
-          ready,
-          Collections.emptyList(),
-          Collections.emptyList());
-    }
-
-    public boolean mandatory() { return mandatory; }
-    public String cashHandoffCapability() { return cashHandoffCapability; }
-    public int requiredBridgeAbiVersion() { return requiredBridgeAbiVersion; }
-    public int maximumHops() { return maximumHops; }
-    public boolean ready() { return ready; }
-    public List<Object> assets() { return assets; }
-    public List<ReadinessBlocker> blockers() { return blockers; }
-  }
-
-  /** Legacy command-specific artifact diagnostics; not a discovery response. */
-  public static final class Readiness extends CanonicalArchive {
-    private Readiness(final byte[] archive) {
-      super(archive, "OfflineReadiness", "readiness", MAX_TORII_RESPONSE_BYTES);
-    }
-  }
-
-  public static final class ActiveVerifier {
-    private final String backend;
-    private final String name;
-    private final int version;
-    private final String circuitId;
-    private final byte[] commitment;
-    private final byte[] publicInputsSchemaHash;
-    private final int maximumProofBytes;
-    private final long activationHeight;
-    private final Long withdrawalHeight;
-
-    ActiveVerifier(
-        final String backend,
-        final String name,
-        final int version,
-        final String circuitId,
-        final byte[] commitment,
-        final byte[] publicInputsSchemaHash,
-        final int maximumProofBytes,
-        final long activationHeight,
-        final Long withdrawalHeight) {
-      this.backend = backend;
-      this.name = name;
-      this.version = version;
-      this.circuitId = circuitId;
-      this.commitment = requireDigest(commitment, "verifierCommitment");
-      this.publicInputsSchemaHash =
-          requireDigest(publicInputsSchemaHash, "publicInputsSchemaHash");
-      this.maximumProofBytes = maximumProofBytes;
-      this.activationHeight = activationHeight;
-      this.withdrawalHeight = withdrawalHeight;
-    }
-
-    public String backend() { return backend; }
-    public String name() { return name; }
-    public int version() { return version; }
-    public String circuitId() { return circuitId; }
-    public byte[] commitment() { return Arrays.copyOf(commitment, commitment.length); }
-    public byte[] publicInputsSchemaHash() {
-      return Arrays.copyOf(publicInputsSchemaHash, publicInputsSchemaHash.length);
-    }
-    public int maximumProofBytes() { return maximumProofBytes; }
-    public long activationHeight() { return activationHeight; }
-    public Long withdrawalHeight() { return withdrawalHeight; }
-    public boolean isActiveAt(final long blockHeight) {
-      return blockHeight >= activationHeight
-          && (withdrawalHeight == null || blockHeight < withdrawalHeight);
-    }
-  }
-
-  /** Authenticated ABI-21 V4 release identity selected at the readiness snapshot. */
-  public static final class AuthenticatedArtifactSet {
-    private final String generation;
-    private final byte[] manifestSha256;
-    private final byte[] releasePolicySha256;
-    private final byte[] releaseAttestationSha256;
-    private final long activationHeight;
-    private final long withdrawalHeight;
-    private final int maximumProofBytes;
-    private final int assetScale;
-
-    AuthenticatedArtifactSet(
-        final String generation,
-        final byte[] manifestSha256,
-        final byte[] releasePolicySha256,
-        final byte[] releaseAttestationSha256,
-        final long activationHeight,
-        final long withdrawalHeight,
-        final int maximumProofBytes,
-        final int assetScale) {
-      if (!isPortableArtifactGeneration(generation)) {
-        throw new IllegalArgumentException(
-            "artifactGeneration must be a portable V4 identifier");
-      }
-      final String basename = generation.split("\\.", 2)[0].toLowerCase(Locale.ROOT);
-      if (basename.equals("con") || basename.equals("prn")
-          || basename.equals("aux") || basename.equals("nul")
-          || (basename.length() == 4
-              && (basename.startsWith("com") || basename.startsWith("lpt"))
-              && basename.charAt(3) >= '1' && basename.charAt(3) <= '9')) {
-        throw new IllegalArgumentException(
-            "artifactGeneration must not use a Windows reserved basename");
-      }
-      this.generation = generation;
-      this.manifestSha256 = requireDigest(manifestSha256, "artifactManifestSha256");
-      this.releasePolicySha256 =
-          requireDigest(releasePolicySha256, "artifactReleasePolicySha256");
-      this.releaseAttestationSha256 =
-          requireDigest(releaseAttestationSha256, "artifactReleaseAttestationSha256");
-      if (Arrays.equals(this.manifestSha256, this.releasePolicySha256)
-          || Arrays.equals(this.manifestSha256, this.releaseAttestationSha256)
-          || Arrays.equals(this.releasePolicySha256, this.releaseAttestationSha256)) {
-        throw new IllegalArgumentException(
-            "authenticated artifact digests must be pairwise distinct");
-      }
-      if (activationHeight <= 0 || withdrawalHeight <= activationHeight) {
-        throw new IllegalArgumentException(
-            "authenticated artifact activation window is invalid");
-      }
-      if (maximumProofBytes <= 0
-          || maximumProofBytes > MAXIMUM_RECURSIVE_PROOF_PAIR_BYTES_V4) {
-        throw new IllegalArgumentException(
-            "artifactMaximumProofBytes exceeds the ABI-21 V4 release limit");
-      }
-      if (assetScale < 0 || assetScale > KagemushaScaledAmount.MAXIMUM_SCALE) {
-        throw new IllegalArgumentException(
-            "artifactAssetScale exceeds the offline payment limit");
-      }
-      this.activationHeight = activationHeight;
-      this.withdrawalHeight = withdrawalHeight;
-      this.maximumProofBytes = maximumProofBytes;
-      this.assetScale = assetScale;
-    }
-
-    private static boolean isPortableArtifactGeneration(final String generation) {
-      if (generation == null || generation.isEmpty() || generation.length() > 128
-          || !isAsciiAlphanumeric(generation.charAt(0))
-          || !isAsciiAlphanumeric(generation.charAt(generation.length() - 1))) {
-        return false;
-      }
-      for (int index = 0; index < generation.length(); index++) {
-        final char character = generation.charAt(index);
-        if (!isAsciiAlphanumeric(character)
-            && character != '.' && character != '_' && character != '-') {
-          return false;
-        }
-      }
-      return true;
-    }
-
-    private static boolean isAsciiAlphanumeric(final char character) {
-      return (character >= 'a' && character <= 'z')
-          || (character >= 'A' && character <= 'Z')
-          || (character >= '0' && character <= '9');
-    }
-
-    public String generation() { return generation; }
-    public byte[] manifestSha256() {
-      return Arrays.copyOf(manifestSha256, manifestSha256.length);
-    }
-    public byte[] releasePolicySha256() {
-      return Arrays.copyOf(releasePolicySha256, releasePolicySha256.length);
-    }
-    public byte[] releaseAttestationSha256() {
-      return Arrays.copyOf(releaseAttestationSha256, releaseAttestationSha256.length);
-    }
-    public long activationHeight() { return activationHeight; }
-    public long withdrawalHeight() { return withdrawalHeight; }
-    public int maximumProofBytes() { return maximumProofBytes; }
-    public int assetScale() { return assetScale; }
-    public boolean isActiveAt(final long blockHeight) {
-      return blockHeight >= activationHeight && blockHeight < withdrawalHeight;
-    }
-  }
-
-  public static final class ReadinessBlocker {
-    private final String code;
-    private final String message;
-
-    ReadinessBlocker(final String code, final String message) {
-      this.code = code;
-      this.message = message;
-    }
-
-    public String code() { return code; }
-    public String message() { return message; }
-  }
-
-  public static final class ReadinessProjection {
-    private final String cashHandoffCapability;
-    private final int requiredBridgeAbiVersion;
-    private final int maximumHops;
-    private final String assetDefinitionId;
-    private final Integer assetScale;
-    private final long evaluatedBlockHeight;
-    private final byte[] evaluatedBlockHash;
-    private final boolean proofBackendAvailable;
-    private final boolean recursiveLineageSupported;
-    private final boolean ready;
-    private final ActiveVerifier transferVerifier;
-    private final ActiveVerifier topUpShieldVerifier;
-    private final ActiveVerifier unshieldVerifier;
-    private final ActiveVerifier recursiveStepEqVerifier;
-    private final ActiveVerifier recursiveStepEpVerifier;
-    private final AuthenticatedArtifactSet artifactSet;
-    private final List<ReadinessBlocker> blockers;
-
-    ReadinessProjection(
-        final String cashHandoffCapability,
-        final int requiredBridgeAbiVersion,
-        final int maximumHops,
-        final String assetDefinitionId,
-        final Integer assetScale,
-        final long evaluatedBlockHeight,
-        final byte[] evaluatedBlockHash,
-        final boolean proofBackendAvailable,
-        final boolean recursiveLineageSupported,
-        final boolean ready,
-        final ActiveVerifier transferVerifier,
-        final ActiveVerifier topUpShieldVerifier,
-        final ActiveVerifier unshieldVerifier,
-        final ActiveVerifier recursiveStepEqVerifier,
-        final ActiveVerifier recursiveStepEpVerifier,
-        final AuthenticatedArtifactSet artifactSet,
-        final List<ReadinessBlocker> blockers) {
-      if (!CASH_HANDOFF_CAPABILITY_V1.equals(cashHandoffCapability)) {
-        throw new IllegalArgumentException(
-            "cashHandoffCapability must be the exact cash_handoff_v1 contract");
-      }
-      this.cashHandoffCapability = cashHandoffCapability;
-      this.requiredBridgeAbiVersion = requiredBridgeAbiVersion;
-      this.maximumHops = maximumHops;
-      this.assetDefinitionId = assetDefinitionId;
-      this.assetScale = assetScale;
-      this.evaluatedBlockHeight = evaluatedBlockHeight;
-      this.evaluatedBlockHash = requireDigest(evaluatedBlockHash, "evaluatedBlockHash");
-      this.proofBackendAvailable = proofBackendAvailable;
-      this.recursiveLineageSupported = recursiveLineageSupported;
-      this.ready = ready;
-      this.transferVerifier = transferVerifier;
-      this.topUpShieldVerifier = topUpShieldVerifier;
-      this.unshieldVerifier = unshieldVerifier;
-      this.recursiveStepEqVerifier = recursiveStepEqVerifier;
-      this.recursiveStepEpVerifier = recursiveStepEpVerifier;
-      this.artifactSet = artifactSet;
-      this.blockers = Collections.unmodifiableList(new java.util.ArrayList<>(blockers));
+          ready);
     }
 
     public String cashHandoffCapability() { return cashHandoffCapability; }
     public int requiredBridgeAbiVersion() { return requiredBridgeAbiVersion; }
     public int maximumHops() { return maximumHops; }
-    public String assetDefinitionId() { return assetDefinitionId; }
-    public Integer assetScale() { return assetScale; }
-    public long evaluatedBlockHeight() { return evaluatedBlockHeight; }
-    public byte[] evaluatedBlockHash() {
-      return Arrays.copyOf(evaluatedBlockHash, evaluatedBlockHash.length);
-    }
-    public boolean proofBackendAvailable() { return proofBackendAvailable; }
-    public boolean recursiveLineageSupported() { return recursiveLineageSupported; }
     public boolean ready() { return ready; }
-    public ActiveVerifier transferVerifier() { return transferVerifier; }
-    public ActiveVerifier topUpShieldVerifier() { return topUpShieldVerifier; }
-    public ActiveVerifier unshieldVerifier() { return unshieldVerifier; }
-    public ActiveVerifier recursiveStepEqVerifier() { return recursiveStepEqVerifier; }
-    public ActiveVerifier recursiveStepEpVerifier() { return recursiveStepEpVerifier; }
-    public AuthenticatedArtifactSet artifactSet() { return artifactSet; }
-    public List<ReadinessBlocker> blockers() { return blockers; }
-    public boolean bridgeCompatible() {
-      return requiredBridgeAbiVersion == REQUIRED_NATIVE_BRIDGE_ABI_VERSION;
-    }
-    /** Every role-specific verifier is present and active at the same committed snapshot. */
-    public boolean allVerifiersActive() {
-      return transferVerifier != null && transferVerifier.isActiveAt(evaluatedBlockHeight)
-          && topUpShieldVerifier != null && topUpShieldVerifier.isActiveAt(evaluatedBlockHeight)
-          && unshieldVerifier != null && unshieldVerifier.isActiveAt(evaluatedBlockHeight)
-          && recursiveStepEqVerifier != null
-          && recursiveStepEqVerifier.isActiveAt(evaluatedBlockHeight)
-          && recursiveStepEpVerifier != null
-          && recursiveStepEpVerifier.isActiveAt(evaluatedBlockHeight);
-    }
-    public boolean chainArtifactSetReady() {
-      return proofBackendAvailable && artifactSet != null
-          && artifactSet.isActiveAt(evaluatedBlockHeight)
-          && recursiveStepEqVerifier != null
-          && recursiveStepEqVerifier.isActiveAt(evaluatedBlockHeight)
-          && recursiveStepEpVerifier != null
-          && recursiveStepEpVerifier.isActiveAt(evaluatedBlockHeight);
-    }
-    /** Whether native holds the exact manifest authenticated by this Torii snapshot. */
-    public boolean localArtifactSetMatches() {
-      if (artifactSet == null) return false;
-      final byte[] installed = installedArtifactManifestSha256V4();
-      return installed != null && Arrays.equals(installed, artifactSet.manifestSha256());
-    }
-    public boolean offlineReady() {
-      return ready && CASH_HANDOFF_CAPABILITY_V1.equals(cashHandoffCapability)
-          && recursiveLineageSupported && bridgeCompatible()
-          && chainArtifactSetReady() && allVerifiersActive() && assetScale != null
-          && assetScale >= 0 && assetScale <= KagemushaScaledAmount.MAXIMUM_SCALE
-          && evaluatedBlockHeight > 0
-          && maximumHops == MAXIMUM_PEER_HOPS
-          && isProofBackendAvailable() && localArtifactSetMatches() && blockers.isEmpty();
-    }
   }
 
   public static final class OperationReference extends CanonicalArchive {
@@ -4509,7 +4087,7 @@ public final class KagemushaRecursiveSpendProver {
 
   /** Strict typed client for the five first-release Kagemusha Torii routes. */
   public static final class ToriiClient {
-    public static final String READINESS_PATH = "/v1/offline/readiness";
+    public static final String CAPABILITY_PATH = "/v1/offline/readiness";
     public static final String TOP_UP_PATH = "/v1/offline/top-up";
     public static final String REDEEM_PATH = "/v1/offline/redeem";
     public static final String OPERATIONS_PATH = "/v1/offline/operations";
@@ -4546,7 +4124,7 @@ public final class KagemushaRecursiveSpendProver {
       return execute(
               TransportRequest.builder()
                   .setMethod("GET")
-                  .setUri(URI.create(baseUri + READINESS_PATH))
+                  .setUri(URI.create(baseUri + CAPABILITY_PATH))
                   .addHeader("Accept", JSON_MEDIA_TYPE)
                   .setMaximumResponseBytes((long) MAX_TORII_RESPONSE_BYTES)
                   .build(),
@@ -5069,9 +4647,6 @@ public final class KagemushaRecursiveSpendProver {
       byte[] payload, byte[] signature, byte[] request, byte[] payment);
   private static native byte[][] nativeVerifyAcknowledgementV2(
       byte[] acknowledgement, byte[] request, byte[] payment);
-  private static native byte[][] nativeProjectReadinessV4(byte[] readiness);
-  private static native byte[][] nativeProjectAuthenticatedArtifactSetV4(byte[] artifactSet);
-  private static native byte[][] nativeProjectActiveVerifierV2(byte[] verifier);
   private static native byte[][] nativePrepareAuthorizationV2(
       byte[] authority, int chainDiscriminant, byte[] deviceId, byte[] assetDefinitionId, byte[] operationId,
       long issuedAtMilliseconds, long expiresAtMilliseconds, byte[] nonce, byte[] payloadDigest,

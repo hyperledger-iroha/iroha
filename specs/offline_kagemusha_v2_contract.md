@@ -124,12 +124,12 @@ The complete first-release route set is:
 - `POST /v1/offline/redeem`
 - `GET /v1/offline/operations/{operation_id}`
 
-The legacy-named readiness route reports the universal, asset-neutral
-application protocol: `mandatory = false`,
+The capability route reports the universal, asset-neutral application protocol:
 `cash_handoff_capability = "cash_handoff_v1"`, bridge ABI 22, maximum hop count
-8, `ready = true`, and empty `assets` and `blockers`. It takes no required query
+8, and `ready = true`. These are its only response fields. It takes no query
 and never evaluates an asset, domain, dataspace, verifier catalog, or proof
-backend. Wallet/device handoff must continue without network discovery.
+backend. Wallet/device handoff must
+continue without network discovery.
 
 Top-up and redemption accept no JSON body or encoded-byte wrapper. A canonical
 lowercase 64-hex `Idempotency-Key` equals the signed operation id. Identical

@@ -94,16 +94,25 @@ RUN <<EOT
     command -v bwrap >/dev/null
     test -f /etc/ssl/certs/ca-certificates.crt
     if [ "$CONFIG_PROFILE" = "taira" ]; then
+      command -v python3 >/dev/null
       command -v qemu-img >/dev/null
       command -v mkfs.ext4 >/dev/null
       command -v ip >/dev/null
       command -v iptables >/dev/null
+      test -x /usr/bin/bwrap
+      test -x /usr/bin/nsenter
+      test -x /usr/bin/socat
+      test -x /usr/bin/setpriv
+      test -x /usr/bin/ldd
     fi
   else
     apt-get update -y
     apt-get install -y curl ca-certificates jq bubblewrap
     if [ "$CONFIG_PROFILE" = "taira" ]; then
-      apt-get install -y qemu-system-x86 qemu-system-arm qemu-utils e2fsprogs iproute2 iptables
+      apt-get install -y \
+        python3-minimal util-linux socat \
+        qemu-system-x86 qemu-system-arm qemu-utils \
+        e2fsprogs iproute2 iptables
     fi
   fi
   addgroup --gid "$GID" "$USER"
@@ -111,10 +120,13 @@ RUN <<EOT
   mkdir -p "$APP_DIR" "$CONFIG_DIR" "$STORAGE" "$APP_DIR/configs/soranexus"
   chown "$USER:$USER" "$STORAGE" "$CONFIG_DIR"
   chown -R "$USER:$USER" "$APP_DIR"
+  chown root:root "$APP_DIR"
+  chmod 0755 "$APP_DIR"
 EOT
 
 COPY --from=builder /outbin/ $BIN_PATH
 COPY --from=builder /app/scripts/docker_entrypoint.sh $BIN_PATH
+COPY --from=builder /app/scripts/ci/package_inrou_runtime_v1.py /usr/local/libexec/package_inrou_runtime_v1.py
 COPY --from=builder /app/configs/soranexus/taira $APP_DIR/configs/soranexus/taira
 COPY --from=builder /app/configs/sorafs/external_software_signer $APP_DIR/install/sorafs/external_software_signer
 COPY --from=builder /app/configs/sorafs/runtime_provider_broker $APP_DIR/install/sorafs/runtime_provider_broker
@@ -153,6 +165,12 @@ RUN set -eu; \
             ;; \
     esac; \
     chown -R "${UID}:${GID}" "${APP_DIR}"; \
+    chown root:root "${APP_DIR}"; \
+    chmod 0755 "${APP_DIR}"; \
+    chmod 0555 /usr/local/libexec/package_inrou_runtime_v1.py; \
+    if [ "${CONFIG_PROFILE}" = "taira" ]; then \
+        python3 /usr/local/libexec/package_inrou_runtime_v1.py; \
+    fi; \
     chmod 755 "${BIN_PATH}/docker_entrypoint.sh"; \
     rm -rf /tmp/defaults
 

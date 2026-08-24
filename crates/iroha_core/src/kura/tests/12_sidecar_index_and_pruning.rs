@@ -307,7 +307,8 @@ fn hash_only_snapshot_rejects_divergent_existing_prefix() {
     populate_store(&temp_dir, 3);
     let config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
     let (kura, BlockCount(block_count)) =
-        Kura::new(&config, &RuntimeLaneConfig::default()).expect("kura init");
+        Kura::open_test_kura_with_configured_lane_config(&config, &RuntimeLaneConfig::default())
+            .expect("kura init");
     assert_eq!(block_count, 3);
     let first_hash = kura
         .block_hash_at_height(nonzero!(1_usize))
@@ -337,7 +338,8 @@ fn hard_fork_extend_hash_only_marks_matching_snapshot_suffix_without_rewrite() {
     populate_store(&temp_dir, 2);
     let config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
     let (kura, BlockCount(block_count)) =
-        Kura::new(&config, &RuntimeLaneConfig::default()).expect("kura init");
+        Kura::open_test_kura_with_configured_lane_config(&config, &RuntimeLaneConfig::default())
+            .expect("kura init");
     assert_eq!(block_count, 2);
     let first_hash = kura
         .block_hash_at_height(nonzero!(1_usize))
@@ -400,7 +402,10 @@ fn hard_fork_extend_hash_only_marks_matching_snapshot_suffix_without_rewrite() {
         let mut reopen_config = config.clone();
         reopen_config.init_mode = init_mode;
         assert!(matches!(
-            Kura::new(&reopen_config, &RuntimeLaneConfig::default()),
+            Kura::open_test_kura_with_configured_lane_config(
+                &reopen_config,
+                &RuntimeLaneConfig::default()
+            ),
             Err(Error::InvalidSnapshotBootstrapMarker { .. })
         ));
         let (reopened, BlockCount(reopened_count)) = Kura::new_inner(
@@ -426,7 +431,8 @@ fn hash_only_snapshot_rejects_shorter_existing_prefix() {
     populate_store(&temp_dir, 3);
     let config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
     let (kura, BlockCount(block_count)) =
-        Kura::new(&config, &RuntimeLaneConfig::default()).expect("kura init");
+        Kura::open_test_kura_with_configured_lane_config(&config, &RuntimeLaneConfig::default())
+            .expect("kura init");
     assert_eq!(block_count, 3);
     let first_hash = kura
         .block_hash_at_height(nonzero!(1_usize))
@@ -489,7 +495,9 @@ fn extend_hash_only_prefix_publishes_marker_with_batched_fsync() {
     populate_store(&temp_dir, 2);
     let mut config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
     config.fsync_mode = FsyncMode::Batched;
-    let (kura, BlockCount(count)) = Kura::new(&config, &RuntimeLaneConfig::default()).unwrap();
+    let (kura, BlockCount(count)) =
+        Kura::open_test_kura_with_configured_lane_config(&config, &RuntimeLaneConfig::default())
+            .unwrap();
     assert_eq!(count, 2);
     let mut snapshot_hashes = vec![
         kura.get_block_hash(nonzero!(1_usize)).unwrap(),
@@ -643,7 +651,9 @@ fn ambiguous_hash_only_marker_poison_gates_live_mutation_until_restart() {
         let snapshot_tail_hash =
             HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0x9c; 32]));
         {
-            let (kura, BlockCount(count)) = Kura::new(&config, &lane_config).expect("open Kura");
+            let (kura, BlockCount(count)) =
+                Kura::open_test_kura_with_configured_lane_config(&config, &lane_config)
+                    .expect("open Kura");
             assert_eq!(count, 2);
             let snapshot_hashes = vec![
                 kura.get_block_hash(nonzero!(1_usize)).expect("height one"),
@@ -690,7 +700,7 @@ fn ambiguous_hash_only_marker_poison_gates_live_mutation_until_restart() {
             );
         }
         assert!(matches!(
-            Kura::new(&config, &lane_config),
+            Kura::open_test_kura_with_configured_lane_config(&config, &lane_config),
             Err(Error::InvalidSnapshotBootstrapMarker { .. })
         ));
         {
@@ -732,7 +742,8 @@ fn verified_snapshot_tail_survives_batched_fsync_reopen_and_second_restart() {
     let mut config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
     config.fsync_mode = FsyncMode::Batched;
     let lane_config = RuntimeLaneConfig::default();
-    let (kura, BlockCount(count)) = Kura::new(&config, &lane_config).unwrap();
+    let (kura, BlockCount(count)) =
+        Kura::open_test_kura_with_configured_lane_config(&config, &lane_config).unwrap();
     assert_eq!(count, 2);
     let mut snapshot_hashes = vec![
         kura.get_block_hash(nonzero!(1_usize)).unwrap(),
@@ -749,7 +760,7 @@ fn verified_snapshot_tail_survives_batched_fsync_reopen_and_second_restart() {
     drop(kura);
     for restart in 1..=2 {
         assert!(matches!(
-            Kura::new(&config, &lane_config),
+            Kura::open_test_kura_with_configured_lane_config(&config, &lane_config),
             Err(Error::InvalidSnapshotBootstrapMarker { .. })
         ));
         let (reopened, BlockCount(count)) = Kura::new_inner(
@@ -789,7 +800,8 @@ fn unmarked_zero_length_tail_is_pruned_with_batched_fsync() {
     store.write_block_index(2, EVICTED_BLOCK_START, 0).unwrap();
     store.write_block_hash(2, unverified_hash).unwrap();
     drop(store);
-    let (reopened, BlockCount(count)) = Kura::new(&config, &lane_config).unwrap();
+    let (reopened, BlockCount(count)) =
+        Kura::open_test_kura_with_configured_lane_config(&config, &lane_config).unwrap();
     assert_eq!(count, 2);
     drop(reopened);
     let mut reopened = BlockStore::with_fsync(&blocks_dir, FsyncMode::Batched, FSYNC_INTERVAL);
@@ -804,7 +816,8 @@ fn verified_snapshot_tail_with_mismatched_hash_digest_is_pruned() {
     let mut config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
     config.fsync_mode = FsyncMode::Batched;
     let lane_config = RuntimeLaneConfig::default();
-    let (kura, _) = Kura::new(&config, &lane_config).unwrap();
+    let (kura, _) =
+        Kura::open_test_kura_with_configured_lane_config(&config, &lane_config).unwrap();
     let mut snapshot_hashes = vec![
         kura.get_block_hash(nonzero!(1_usize)).unwrap(),
         kura.get_block_hash(nonzero!(2_usize)).unwrap(),
@@ -825,7 +838,7 @@ fn verified_snapshot_tail_with_mismatched_hash_digest_is_pruned() {
         .unwrap();
     drop(tampered);
     assert!(matches!(
-        Kura::new(&config, &lane_config),
+        Kura::open_test_kura_with_configured_lane_config(&config, &lane_config),
         Err(Error::InvalidSnapshotBootstrapMarker { .. })
     ));
     let provisional_error = Kura::new_inner(
@@ -857,7 +870,8 @@ fn malformed_verified_snapshot_tail_marker_is_pruned() {
     let mut config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
     config.fsync_mode = FsyncMode::Batched;
     let lane_config = RuntimeLaneConfig::default();
-    let (kura, _) = Kura::new(&config, &lane_config).unwrap();
+    let (kura, _) =
+        Kura::open_test_kura_with_configured_lane_config(&config, &lane_config).unwrap();
     let mut snapshot_hashes = vec![
         kura.get_block_hash(nonzero!(1_usize)).unwrap(),
         kura.get_block_hash(nonzero!(2_usize)).unwrap(),
@@ -875,7 +889,7 @@ fn malformed_verified_snapshot_tail_marker_is_pruned() {
     )
     .unwrap();
     assert!(matches!(
-        Kura::new(&config, &lane_config),
+        Kura::open_test_kura_with_configured_lane_config(&config, &lane_config),
         Err(Error::InvalidSnapshotBootstrapMarker { .. })
     ));
     let provisional_error = Kura::new_inner(
@@ -926,7 +940,9 @@ fn strict_init_prunes_corrupted_index_end_to_end() {
     let store_dir = temp_dir.path().to_path_buf();
     drop(store);
     let config = kura_config_for_path(&store_dir, BLOCKS_IN_MEMORY);
-    let (kura, BlockCount(count)) = Kura::new(&config, &RuntimeLaneConfig::default()).unwrap();
+    let (kura, BlockCount(count)) =
+        Kura::open_test_kura_with_configured_lane_config(&config, &RuntimeLaneConfig::default())
+            .unwrap();
     assert_eq!(count, 0);
     assert_eq!(kura.blocks_count(), 0);
 }
@@ -1001,7 +1017,9 @@ fn populate_prune_recovery_fixture(
     temp_dir: &TempDir,
 ) -> (KuraConfig, Vec<Arc<SignedBlock>>, Vec<MergeLedgerEntry>) {
     let config = kura_config_for_dir(temp_dir, nonzero!(1_usize));
-    let (kura, _) = Kura::new(&config, &RuntimeLaneConfig::default()).expect("kura init");
+    let (kura, _) =
+        Kura::open_test_kura_with_configured_lane_config(&config, &RuntimeLaneConfig::default())
+            .expect("kura init");
     let mut generator = DummyBlocks::new();
     let mut blocks = Vec::new();
     let mut merge_entries = Vec::new();
@@ -1073,7 +1091,8 @@ fn active_prune_rejects_consensus_sidecar_enqueues_without_queue_mutation() {
     let temp_dir = TempDir::new().expect("tempdir");
     let (config, blocks, _) = populate_prune_recovery_fixture(&temp_dir);
     let (kura, _) =
-        Kura::new(&config, &RuntimeLaneConfig::default()).expect("reopen prune fixture");
+        Kura::open_test_kura_with_configured_lane_config(&config, &RuntimeLaneConfig::default())
+            .expect("reopen prune fixture");
     // The recovery fixture keeps one block body in memory, which also
     // configures a one-entry pipeline queue. This test needs two retained
     // entries to prove that pruning filters the existing queue without
@@ -1207,7 +1226,8 @@ fn readers_blocked_behind_inflight_prune_fail_closed_after_durable_intent() {
     let temp_dir = TempDir::new().expect("tempdir");
     let (config, blocks, _) = populate_prune_recovery_fixture(&temp_dir);
     let (kura, _) =
-        Kura::new(&config, &RuntimeLaneConfig::default()).expect("reopen prune fixture");
+        Kura::open_test_kura_with_configured_lane_config(&config, &RuntimeLaneConfig::default())
+            .expect("reopen prune fixture");
     assert_eq!(
         kura.get_block_hash(nonzero!(4_usize)),
         Some(blocks[3].hash()),
@@ -1368,7 +1388,11 @@ fn prune_crash_boundaries_recover_forward_and_poison_live_kura() {
     for stage in PRUNE_STAGE_INTENT..=PRUNE_STAGE_MEMORY {
         let temp_dir = TempDir::new().expect("tempdir");
         let (config, blocks, merge_entries) = populate_prune_recovery_fixture(&temp_dir);
-        let (kura, _) = Kura::new(&config, &RuntimeLaneConfig::default()).expect("reopen");
+        let (kura, _) = Kura::open_test_kura_with_configured_lane_config(
+            &config,
+            &RuntimeLaneConfig::default(),
+        )
+        .expect("reopen");
         let retained_finality = v2_finality_artifact_for_block(&blocks[0]);
         let retained_receipt = kura
             .store_v2_finality_artifact(&retained_finality)
@@ -1443,8 +1467,11 @@ fn prune_crash_boundaries_recover_forward_and_poison_live_kura() {
             Err(Error::PruneRecoveryRequired)
         ));
         drop(kura);
-        let (recovered, BlockCount(count)) =
-            Kura::new(&config, &RuntimeLaneConfig::default()).expect("recover prune intent");
+        let (recovered, BlockCount(count)) = Kura::open_test_kura_with_configured_lane_config(
+            &config,
+            &RuntimeLaneConfig::default(),
+        )
+        .expect("recover prune intent");
         assert_eq!(count, 2, "stage {stage}");
         assert_eq!(recovered.blocks_count(), 2, "stage {stage}");
         assert_eq!(
@@ -1521,7 +1548,11 @@ fn prune_indexed_sidecar_promotion_failures_preserve_recovery_and_reject_stale_t
     for promotion_stage in [PRUNE_SIDECAR_PROMOTION_DATA, PRUNE_SIDECAR_PROMOTION_INDEX] {
         let temp_dir = TempDir::new().expect("tempdir");
         let (config, blocks, _) = populate_prune_recovery_fixture(&temp_dir);
-        let (kura, _) = Kura::new(&config, &RuntimeLaneConfig::default()).expect("reopen");
+        let (kura, _) = Kura::open_test_kura_with_configured_lane_config(
+            &config,
+            &RuntimeLaneConfig::default(),
+        )
+        .expect("reopen");
         kura.fail_prune_sidecar_promotion_for_tests(promotion_stage);
         let crash = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             let _ = kura.prune_to_height(2);
@@ -1549,8 +1580,11 @@ fn prune_indexed_sidecar_promotion_failures_preserve_recovery_and_reject_stale_t
             "the only authoritative compact index must survive failed promotion"
         );
         drop(kura);
-        let (recovered, BlockCount(count)) =
-            Kura::new(&config, &RuntimeLaneConfig::default()).expect("retry prune recovery");
+        let (recovered, BlockCount(count)) = Kura::open_test_kura_with_configured_lane_config(
+            &config,
+            &RuntimeLaneConfig::default(),
+        )
+        .expect("retry prune recovery");
         assert_eq!(count, 2);
         assert_eq!(
             recovered
@@ -1592,8 +1626,9 @@ fn prune_intent_tampering_fails_closed() {
     let temp_dir = TempDir::new().expect("tempdir");
     let (config, blocks, merge_entries) = populate_prune_recovery_fixture(&temp_dir);
     let intent_path = Kura::prune_intent_path_for(temp_dir.path());
-    let (kura, _) = Kura::new(&config, &RuntimeLaneConfig::default())
-        .expect("open tampering fixture for exact sidecar projection");
+    let (kura, _) =
+        Kura::open_test_kura_with_configured_lane_config(&config, &RuntimeLaneConfig::default())
+            .expect("open tampering fixture for exact sidecar projection");
     let sidecar_rewrite = {
         let _guard = kura.sidecar_lock.lock();
         kura.reconcile_and_project_prune_sidecar_rewrites_locked(2)
@@ -1624,7 +1659,7 @@ fn prune_intent_tampering_fails_closed() {
     )
     .expect("write tampered intent");
     assert!(matches!(
-        Kura::new(&config, &RuntimeLaneConfig::default()),
+        Kura::open_test_kura_with_configured_lane_config(&config, &RuntimeLaneConfig::default()),
         Err(Error::PruneIntentConflict(_))
     ));
     assert!(
@@ -1634,7 +1669,7 @@ fn prune_intent_tampering_fails_closed() {
     std::fs::write(&intent_path, vec![0_u8; PRUNE_INTENT_MAX_BYTES + 1])
         .expect("write oversized intent");
     assert!(matches!(
-        Kura::new(&config, &RuntimeLaneConfig::default()),
+        Kura::open_test_kura_with_configured_lane_config(&config, &RuntimeLaneConfig::default()),
         Err(Error::PruneIntentConflict(message)) if message.contains("invalid byte length")
     ));
     let temp_intent_path = Kura::prune_intent_temp_path_for(temp_dir.path());
@@ -1649,7 +1684,7 @@ fn prune_intent_tampering_fails_closed() {
     )
     .expect("write disagreeing temporary intent");
     assert!(matches!(
-        Kura::new(&config, &RuntimeLaneConfig::default()),
+        Kura::open_test_kura_with_configured_lane_config(&config, &RuntimeLaneConfig::default()),
         Err(Error::PruneIntentConflict(message))
             if message.contains("not one authenticated two-link publication object")
     ));
@@ -1657,7 +1692,7 @@ fn prune_intent_tampering_fails_closed() {
     std::fs::remove_file(&intent_path).expect("remove canonical intent");
     std::fs::create_dir(&intent_path).expect("create non-file intent");
     assert!(matches!(
-        Kura::new(&config, &RuntimeLaneConfig::default()),
+        Kura::open_test_kura_with_configured_lane_config(&config, &RuntimeLaneConfig::default()),
         Err(Error::PruneIntentConflict(message)) if message.contains("regular no-follow")
     ));
     std::fs::remove_dir(&intent_path).expect("remove non-file intent");
@@ -1672,7 +1707,7 @@ fn prune_intent_tampering_fails_closed() {
         .expect("write symlink target intent");
         symlink(&symlink_target, &intent_path).expect("create intent symlink");
         assert!(matches!(
-            Kura::new(&config, &RuntimeLaneConfig::default()),
+            Kura::open_test_kura_with_configured_lane_config(&config, &RuntimeLaneConfig::default()),
             Err(Error::PruneIntentConflict(message)) if message.contains("regular no-follow")
         ));
         std::fs::remove_file(&intent_path).expect("remove intent symlink");
@@ -1684,7 +1719,8 @@ fn prune_intent_tampering_fails_closed() {
     )
     .expect("write valid intent");
     let (recovered, BlockCount(count)) =
-        Kura::new(&config, &RuntimeLaneConfig::default()).expect("retry valid prune recovery");
+        Kura::open_test_kura_with_configured_lane_config(&config, &RuntimeLaneConfig::default())
+            .expect("retry valid prune recovery");
     assert_eq!(count, 2);
     assert_eq!(
         recovered.get_block_hash(nonzero!(2_usize)),
@@ -1693,13 +1729,16 @@ fn prune_intent_tampering_fails_closed() {
     assert!(!intent_path.exists());
     drop(recovered);
     let (_, BlockCount(repeated_count)) =
-        Kura::new(&config, &RuntimeLaneConfig::default()).expect("idempotent recovered reopen");
+        Kura::open_test_kura_with_configured_lane_config(&config, &RuntimeLaneConfig::default())
+            .expect("idempotent recovered reopen");
     assert_eq!(repeated_count, 2);
 }
 #[test]
 fn concurrent_store_waits_for_prune_and_revalidates_the_tip() {
     let (_temp_dir, config) = kura_storage_fixture("tempdir", BLOCKS_IN_MEMORY);
-    let (kura, _) = Kura::new(&config, &RuntimeLaneConfig::default()).expect("kura init");
+    let (kura, _) =
+        Kura::open_test_kura_with_configured_lane_config(&config, &RuntimeLaneConfig::default())
+            .expect("kura init");
     let mut blocks = DummyBlocks::new();
     kura.store_block(blocks.next()).expect("store block 1");
     kura.store_block(blocks.next()).expect("store block 2");
@@ -1771,7 +1810,9 @@ fn prune_intent_fault_matrix_reopens_at_one_coherent_committed_boundary() {
 fn prune_unfinalized_suffix_removes_stale_sidecars_above_new_tip() {
     let (_temp_dir, config) =
         unwrapped_kura_storage_fixture(NonZeroUsize::new(1).expect("non-zero"));
-    let (kura, _) = Kura::new(&config, &RuntimeLaneConfig::default()).expect("kura init");
+    let (kura, _) =
+        Kura::open_test_kura_with_configured_lane_config(&config, &RuntimeLaneConfig::default())
+            .expect("kura init");
     let blocks = store_dummy_block_arcs(&kura, 4);
     let block2_hash = blocks[1].hash();
     let block3_hash = blocks[2].hash();
@@ -2154,8 +2195,11 @@ fn kura_reopen_rejects_missing_or_corrupt_published_manifest_binding() {
         let (_temp_dir, config) =
             kura_storage_fixture("tempdir", NonZeroUsize::new(1).expect("non-zero"));
         {
-            let (kura, _) =
-                Kura::new(&config, &RuntimeLaneConfig::default()).expect("initialize Kura");
+            let (kura, _) = Kura::open_test_kura_with_configured_lane_config(
+                &config,
+                &RuntimeLaneConfig::default(),
+            )
+            .expect("initialize Kura");
             let blocks = store_dummy_block_arcs(&kura, 1);
             let block_hash = blocks[0].hash();
             let state_hash = Hash::new(b"published reopen state");
@@ -2178,7 +2222,10 @@ fn kura_reopen_rejects_missing_or_corrupt_published_manifest_binding() {
                     .expect("remove published manifest");
             }
         }
-        let error = match Kura::new(&config, &RuntimeLaneConfig::default()) {
+        let error = match Kura::open_test_kura_with_configured_lane_config(
+            &config,
+            &RuntimeLaneConfig::default(),
+        ) {
             Ok(_) => panic!("published binding corruption must fail Kura reopen"),
             Err(error) => error,
         };
@@ -2201,7 +2248,11 @@ fn commit_manifest_survives_kura_reopen_and_is_validated_on_init() {
     let (_temp_dir, config) =
         kura_storage_fixture("tempdir", NonZeroUsize::new(1).expect("non-zero"));
     let blocks = {
-        let (kura, _) = Kura::new(&config, &RuntimeLaneConfig::default()).expect("kura init");
+        let (kura, _) = Kura::open_test_kura_with_configured_lane_config(
+            &config,
+            &RuntimeLaneConfig::default(),
+        )
+        .expect("kura init");
         let blocks = store_dummy_block_arcs(&kura, 2);
         kura.store_commit_manifest(CommitManifest::new(
             1,
@@ -2223,7 +2274,9 @@ fn commit_manifest_survives_kura_reopen_and_is_validated_on_init() {
         .expect("store commit manifest");
         blocks
     };
-    let (reopened, _) = Kura::new(&config, &RuntimeLaneConfig::default()).expect("reopen kura");
+    let (reopened, _) =
+        Kura::open_test_kura_with_configured_lane_config(&config, &RuntimeLaneConfig::default())
+            .expect("reopen kura");
     let stored = reopened
         .commit_manifest(2)
         .expect("read manifest after reopen")
@@ -2236,7 +2289,11 @@ fn kura_init_rejects_mismatched_retained_commit_manifest() {
     let (_temp_dir, config) =
         kura_storage_fixture("tempdir", NonZeroUsize::new(1).expect("non-zero"));
     {
-        let (kura, _) = Kura::new(&config, &RuntimeLaneConfig::default()).expect("kura init");
+        let (kura, _) = Kura::open_test_kura_with_configured_lane_config(
+            &config,
+            &RuntimeLaneConfig::default(),
+        )
+        .expect("kura init");
         let blocks = store_dummy_block_arcs(&kura, 2);
         let path = kura.commit_manifest_path(1);
         std::fs::create_dir_all(path.parent().expect("manifest parent"))
@@ -2251,7 +2308,10 @@ fn kura_init_rejects_mismatched_retained_commit_manifest() {
         );
         std::fs::write(&path, bad_manifest.encode()).expect("write bad manifest");
     }
-    let error = match Kura::new(&config, &RuntimeLaneConfig::default()) {
+    let error = match Kura::open_test_kura_with_configured_lane_config(
+        &config,
+        &RuntimeLaneConfig::default(),
+    ) {
         Ok(_) => panic!("retained manifest mismatch must fail Kura initialization"),
         Err(error) => error,
     };
@@ -2265,7 +2325,11 @@ fn kura_init_rejects_mismatched_retained_checkpoint_and_manifest() {
     let (_temp_dir, config) =
         kura_storage_fixture("tempdir", NonZeroUsize::new(1).expect("non-zero"));
     {
-        let (kura, _) = Kura::new(&config, &RuntimeLaneConfig::default()).expect("kura init");
+        let (kura, _) = Kura::open_test_kura_with_configured_lane_config(
+            &config,
+            &RuntimeLaneConfig::default(),
+        )
+        .expect("kura init");
         let blocks = store_dummy_block_arcs(&kura, 1);
         let block_hash = blocks[0].hash();
         kura.store_wsv_checkpoint(1, block_hash, Hash::new(b"checkpoint"))
@@ -2283,7 +2347,10 @@ fn kura_init_rejects_mismatched_retained_checkpoint_and_manifest() {
         );
         std::fs::write(&path, bad_manifest.encode()).expect("write bad manifest");
     }
-    let error = match Kura::new(&config, &RuntimeLaneConfig::default()) {
+    let error = match Kura::open_test_kura_with_configured_lane_config(
+        &config,
+        &RuntimeLaneConfig::default(),
+    ) {
         Ok(_) => panic!("retained checkpoint/manifest mismatch must fail Kura initialization"),
         Err(error) => error,
     };
@@ -2294,7 +2361,11 @@ fn kura_init_prunes_checkpoint_above_durable_blocks_without_manifests() {
     let (_temp_dir, config) =
         kura_storage_fixture("tempdir", NonZeroUsize::new(1).expect("non-zero"));
     {
-        let (kura, _) = Kura::new(&config, &RuntimeLaneConfig::default()).expect("kura init");
+        let (kura, _) = Kura::open_test_kura_with_configured_lane_config(
+            &config,
+            &RuntimeLaneConfig::default(),
+        )
+        .expect("kura init");
         let blocks = store_dummy_block_arcs(&kura, 1);
         let path = kura.wsv_checkpoint_path(2);
         std::fs::create_dir_all(path.parent().expect("checkpoint parent"))
@@ -2302,7 +2373,9 @@ fn kura_init_prunes_checkpoint_above_durable_blocks_without_manifests() {
         let stale = WsvCheckpoint::new(2, blocks[0].hash(), Hash::new(b"stale checkpoint"));
         std::fs::write(&path, stale.encode()).expect("write stale checkpoint");
     }
-    let (reopened, count) = Kura::new(&config, &RuntimeLaneConfig::default()).expect("reopen kura");
+    let (reopened, count) =
+        Kura::open_test_kura_with_configured_lane_config(&config, &RuntimeLaneConfig::default())
+            .expect("reopen kura");
     assert_eq!(count.0, 1);
     assert!(
         reopened
@@ -2316,7 +2389,11 @@ fn kura_init_prunes_commit_manifests_above_recovered_tip() {
     let (_temp_dir, config) =
         kura_storage_fixture("tempdir", NonZeroUsize::new(1).expect("non-zero"));
     {
-        let (kura, _) = Kura::new(&config, &RuntimeLaneConfig::default()).expect("kura init");
+        let (kura, _) = Kura::open_test_kura_with_configured_lane_config(
+            &config,
+            &RuntimeLaneConfig::default(),
+        )
+        .expect("kura init");
         let blocks = store_dummy_block_arcs(&kura, 2);
         kura.store_commit_manifest(CommitManifest::new(
             1,
@@ -2349,7 +2426,9 @@ fn kura_init_prunes_commit_manifests_above_recovered_tip() {
         );
         std::fs::write(&path, stale_manifest.encode()).expect("write stale manifest");
     }
-    let (reopened, count) = Kura::new(&config, &RuntimeLaneConfig::default()).expect("reopen kura");
+    let (reopened, count) =
+        Kura::open_test_kura_with_configured_lane_config(&config, &RuntimeLaneConfig::default())
+            .expect("reopen kura");
     assert_eq!(count.0, 2);
     assert!(
         reopened

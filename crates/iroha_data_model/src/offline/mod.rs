@@ -246,7 +246,7 @@ pub const KAGEMUSHA_REVIEWED_SOURCE_CLOSURE_SCHEMA_V2: &str =
 pub const KAGEMUSHA_REVIEWED_SOURCE_CLOSURE_MAX_UNTRACKED_FILES_V1: usize = 0;
 /// Maximum untracked regular-file entries in a tracked-lock source closure.
 pub const KAGEMUSHA_REVIEWED_SOURCE_CLOSURE_MAX_UNTRACKED_FILES_V2: usize = 0;
-/// Maximum tracked root `Cargo.lock` bytes admitted by the legacy V1 lock fields.
+/// Maximum tracked root `Cargo.lock` bytes admitted by the V1 source closure.
 pub const KAGEMUSHA_REVIEWED_SOURCE_CLOSURE_MAX_CARGO_LOCK_BYTES_V1: u64 = 16 * 1024 * 1024;
 /// Maximum tracked root `Cargo.lock` bytes admitted by the reviewed closure.
 pub const KAGEMUSHA_REVIEWED_SOURCE_CLOSURE_MAX_CARGO_LOCK_BYTES_V2: u64 = 16 * 1024 * 1024;
@@ -2944,7 +2944,7 @@ impl KagemushaReviewedSourceClosureV1 {
             self.source_tree_sha256,
             self.tracked_binary_diff_sha256,
             self.untracked_path_mode_blob_oid_manifest_sha256,
-            self.ignored_cargo_lock_sha256,
+            self.tracked_cargo_lock_sha256,
             self.combined_source_fingerprint_sha256,
         ]
         .into_iter()
@@ -2958,8 +2958,8 @@ impl KagemushaReviewedSourceClosureV1 {
             || untracked_count.is_none_or(|count| {
                 count > KAGEMUSHA_REVIEWED_SOURCE_CLOSURE_MAX_UNTRACKED_FILES_V1
             })
-            || self.ignored_cargo_lock_size_bytes == 0
-            || self.ignored_cargo_lock_size_bytes
+            || self.tracked_cargo_lock_size_bytes == 0
+            || self.tracked_cargo_lock_size_bytes
                 > KAGEMUSHA_REVIEWED_SOURCE_CLOSURE_MAX_CARGO_LOCK_BYTES_V1
         {
             return Err(KagemushaValidationError::InvalidRecursiveSpendProof {
@@ -3043,10 +3043,10 @@ impl KagemushaReviewedSourceClosureV1 {
         append_python_ascii_json_string(&mut out, &self.base_commit);
         out.push_str(",\"combined_source_fingerprint_sha256\":\"");
         out.push_str(&hex::encode(self.combined_source_fingerprint_sha256));
-        out.push_str("\",\"ignored_cargo_lock_sha256\":\"");
-        out.push_str(&hex::encode(self.ignored_cargo_lock_sha256));
-        out.push_str("\",\"ignored_cargo_lock_size_bytes\":");
-        out.push_str(&self.ignored_cargo_lock_size_bytes.to_string());
+        out.push_str("\",\"tracked_cargo_lock_sha256\":\"");
+        out.push_str(&hex::encode(self.tracked_cargo_lock_sha256));
+        out.push_str("\",\"tracked_cargo_lock_size_bytes\":");
+        out.push_str(&self.tracked_cargo_lock_size_bytes.to_string());
         out.push_str(",\"schema\":");
         append_python_ascii_json_string(&mut out, &self.schema);
         out.push_str(",\"source_commit\":");
@@ -3799,8 +3799,8 @@ mod kagemusha_v4_artifact_contract_tests {
             untracked_file_count: 0,
             untracked_path_mode_blob_oid_manifest: Vec::new(),
             untracked_path_mode_blob_oid_manifest_sha256: manifest_sha256,
-            ignored_cargo_lock_size_bytes: 123,
-            ignored_cargo_lock_sha256: digest(b"reviewed ignored Cargo.lock"),
+            tracked_cargo_lock_size_bytes: 123,
+            tracked_cargo_lock_sha256: digest(b"reviewed tracked Cargo.lock"),
             combined_source_fingerprint_sha256: combined.finalize().into(),
         }
     }
@@ -4230,28 +4230,30 @@ mod kagemusha_v4_artifact_contract_tests {
         };
         finalized.release_attestation_sha256 =
             digest(&norito::encode_canonical(&attestation).expect("canonical V5 attestation"));
-        let authenticated = KagemushaAuthenticatedReleaseV5::verify(
-            &finalized,
-            &policy,
-            &attestation,
-            &benchmark,
-            &review_bytes,
-        )
-        .expect("fully authenticated V5 release");
-        assert_eq!(authenticated.manifest(), &finalized);
+        assert_eq!(
+            KagemushaAuthenticatedReleaseV5::verify(
+                &finalized,
+                &policy,
+                &attestation,
+                &benchmark,
+                &review_bytes,
+            ),
+            Err(KagemushaReleaseVerificationError::InvalidInternalValidationReceipt),
+            "V5 must remain fail-closed until it binds a signed internal-validation receipt",
+        );
 
         let mut wrong_attestation_schema = attestation.clone();
         wrong_attestation_schema.schema =
             KAGEMUSHA_RECURSIVE_SPEND_RELEASE_ATTESTATION_SCHEMA_V4.to_owned();
-        assert!(
+        assert_eq!(
             KagemushaAuthenticatedReleaseV5::verify(
                 &finalized,
                 &policy,
                 &wrong_attestation_schema,
                 &benchmark,
                 &review_bytes,
-            )
-            .is_err()
+            ),
+            Err(KagemushaReleaseVerificationError::InvalidAttestation),
         );
         let mut wrong_review_domain = review.clone();
         wrong_review_domain.payload.domain =
@@ -4265,44 +4267,6 @@ mod kagemusha_v4_artifact_contract_tests {
                 qualified_candidate_sha256,
             )
             .is_err()
-        );
-
-        let promotion = KagemushaRecursiveSpendPromotedReleaseV5 {
-            schema: KAGEMUSHA_RECURSIVE_SPEND_PROMOTED_RELEASE_SCHEMA_V5.to_owned(),
-            version: KAGEMUSHA_RECURSIVE_SPEND_RELEASE_AUTH_VERSION_V5,
-            generation: finalized.generation.clone(),
-            candidate_sha256: candidate.sha256().expect("V5 candidate identity"),
-            qualification_receipt_sha256,
-            qualified_candidate_sha256,
-            manifest_sha256: authenticated.manifest_sha256(),
-            release_attestation_sha256: authenticated.release_attestation_sha256(),
-            release_policy_sha256: authenticated.release_policy_sha256(),
-            approved_signers: authenticated.approved_signers().to_vec(),
-            artifact_inventory_verified: true,
-            bridge_abi_version: KAGEMUSHA_RECURSIVE_SPEND_NATIVE_BRIDGE_ABI_V4,
-            artifact_roles: KAGEMUSHA_RECURSIVE_SPEND_ARTIFACT_ROLES_V4
-                .map(str::to_owned)
-                .to_vec(),
-            max_proof_bytes: finalized.max_proof_bytes,
-        };
-        promotion
-            .validate_against_candidate_and_authenticated_release(&candidate, &authenticated)
-            .expect("V5 promotion binds candidate and release");
-        let record = KagemushaRecursiveSpendReleaseRecordV5 {
-            manifest: finalized,
-            release_attestation: attestation,
-            physical_device_benchmark_summary: benchmark,
-            cryptographic_review_summary: review_bytes,
-            promotion_record: promotion,
-        };
-        record
-            .validate_structure()
-            .expect("V5 release record structure");
-        assert_eq!(
-            record
-                .authenticate(&policy)
-                .expect("authenticate complete V5 release record"),
-            authenticated
         );
     }
     fn circuit_params() -> KagemushaStepCircuitParamsV4 {
@@ -5314,7 +5278,7 @@ mod kagemusha_v4_artifact_contract_tests {
                     [0xD4; 32],
                     manifest
                         .reviewed_source_closure
-                        .ignored_cargo_lock_size_bytes
+                        .tracked_cargo_lock_size_bytes
                         + 1,
                 ),
         )

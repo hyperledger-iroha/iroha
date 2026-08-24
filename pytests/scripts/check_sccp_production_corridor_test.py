@@ -159,11 +159,10 @@ def test_evidence_phase_builds_and_uses_production_validator() -> None:
         "--bin sccp_release_evidence"
     ) in trace
     assert "pytests/scripts/sccp_release_tooling_test.py" in trace
-    assert "pytests/scripts/sccp_release_fixture_reseal_test.py" in trace
     assert "scripts/sccp_release_fixture.py" in trace
-    assert " validate" in trace
-    assert " build --output-dir" in trace
-    assert " verify " in trace
+    assert "sccp_release_fixture.py reject" in trace
+    assert " build --output-dir" not in trace
+    assert " verify " not in trace
     assert "--features test-fixtures" not in trace
 
 
@@ -285,7 +284,7 @@ def test_dry_run_never_creates_fixture_bundle(tmp_path: Path) -> None:
     environment = os.environ.copy()
     environment["TMPDIR"] = str(tmp_path)
     trace = dry_run("evidence-scripts", env=environment).stdout
-    assert "iroha-sccp-release-fixture.dry-run/bundle" in trace
+    assert "iroha-sccp-release-fixture" not in trace
     assert list(tmp_path.iterdir()) == []
 
 
@@ -296,14 +295,12 @@ def test_retired_operator_surface_is_physically_absent() -> None:
         "sccp_release_bundle.py",
         "sccp_release_common.py",
         "sccp_release_fixture.py",
-        "sccp_release_fixture_reseal.py",
         "sccp_release_readiness_report.py",
         "sccp_verify_release_bundle.py",
     }
     actual = {path.name for path in (ROOT / "scripts").glob("sccp*")}
     assert actual == allowed
     assert {path.name for path in (ROOT / "pytests" / "scripts").glob("sccp*_test.py")} == {
-        "sccp_release_fixture_reseal_test.py",
         "sccp_release_tooling_test.py",
     }
 

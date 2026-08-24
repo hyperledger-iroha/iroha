@@ -77,24 +77,15 @@ after Cargo exits. If any input changes during the build,
 successful invocation exits with status 3. Never compare a report unless
 `valid` is true.
 
-The authoritative report schema is version 3. The legacy named-scenario
-wrapper emits schema version 2 after removal of process-table RSS sampling.
+The authoritative report schema is version 3.
 
 Keep the report together with its adjacent `.jsonl` Cargo message stream,
 `.stderr.log`, and the Cargo timing HTML below the target directory. Compare
 reports only when their input manifests differ by the intended change and the
 host characteristics are suitable for the metric being compared.
 
-`scripts/profile_build.sh` and `scripts/profile_build.py` remain as legacy
-compatibility entry points for callers using the named `data-model`, `daemon`,
-`cli`, and `workspace` scenarios. They use the same source/cache/Rustup/tool
-snapshot boundary, accept `--root` for a non-default repository, require
-`--cargo-home` and `--rustup-home` plus an absent external `--output`, run
-locked and offline, and report elapsed time, completed child CPU usage, and
-target size without observing the host process table. New
-automation and retained profiling evidence should use
-`scripts/profile_cargo_build.py`, whose source and toolchain fingerprints and
-post-run drift check are authoritative.
+`scripts/profile_cargo_build.py` is the only build-profiling entry point. Its
+source and toolchain fingerprints and post-run drift check are authoritative.
 
 The target directory and report bundle are deliberate mutable outputs. Reads
 of caller inputs can still update filesystem access times on hosts that track

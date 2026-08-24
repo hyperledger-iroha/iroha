@@ -120,9 +120,6 @@ fn collect_soracloud_hf_credential_provider_binding(
         Some(binding) => bindings.push(
             IrohaRuntimeProviderBindingV1::try_new_soracloud_hf_credential_provider(binding)?,
         ),
-        None if config.soracloud_runtime.hf.allow_inference_bridge_fallback => {
-            return Err(IrohaRuntimeProviderRegistryErrorV1::InvalidBinding(slot));
-        }
         None => {}
     }
     Ok(())

@@ -571,9 +571,6 @@ def copy_acyclic_liveness_debt_topology_fixture(
     formal_dir.mkdir(parents=True)
     for name in (
         "SumeragiV2LivenessProofs.tla",
-        "SumeragiV2Stage2BusyRankScratch.tla",
-        "SumeragiV2Stage3CursorKernelScratch.tla",
-        "SumeragiV2Stage6CapacityScratch.tla",
         "SumeragiV2LockedBodyProposalActionProofs.tla",
         "SumeragiV2AsyncHistoricalRecoveryLivenessProofs.tla",
         "SumeragiV2AsyncOutstandingLivenessDebt.tla",
@@ -27761,15 +27758,6 @@ def test_new_fixed_obligation_property_bodies_cannot_weaken_to_true(
         ),
         (
             "SumeragiV2IndexedHistoricalRecoveryTransportClosureProofs",
-            "IndexedHistoricalFixedClockTemporalLeafProperties",
-            (
-                "      HistoricalTemporalFixedClockLeaves("
-                "IndexedChainSpec)"
-            ),
-            "      TRUE",
-        ),
-        (
-            "SumeragiV2IndexedHistoricalRecoveryTransportClosureProofs",
             "IndexedHistoricalFixedClockPacketCorridorTemporalResidual",
             (
                 "  /\\ "
@@ -28482,12 +28470,6 @@ def test_receipt_agreement_proof_cannot_use_chain_history_as_oracle() -> None:
             "IndexedChainSpecClosesHistoricalFixedClockNonPacketService",
             "    => IndexedHistoricalFixedClockNonPacketServiceProperty",
             "    => TRUE",
-        ),
-        (
-            "SumeragiV2IndexedHistoricalRecoveryTransportClosureProofs",
-            "IndexedHistoricalFixedClockLeavesEstablishPrerequisiteSurface",
-            "  => IndexedHistoricalFixedClockPrerequisiteSurface",
-            "  => TRUE",
         ),
         (
             "SumeragiV2IndexedHistoricalRecoveryTransportClosureProofs",
@@ -29392,11 +29374,6 @@ def test_historical_certificate_request_projection_dependency_fails_closed() -> 
         ),
         (
             "SumeragiV2IndexedHistoricalRecoveryTransportClosureProofs",
-            "IndexedHistoricalFixedClockLeavesEstablishPrerequisiteSurface",
-            "HistoricalTemporalFixedClockLeavesAreExact",
-        ),
-        (
-            "SumeragiV2IndexedHistoricalRecoveryTransportClosureProofs",
             "IndexedHistoricalFixedClockExactResidualsEstablishPrerequisiteSurface",
             "IndexedHistoricalFixedClockPacketResidualClosesPacketLeaves",
         ),
@@ -29544,7 +29521,8 @@ def test_new_obligation_composition_proof_dependencies_fail_closed(
     ), errors
 
 
-def test_historical_exact_physical_boundary_rejects_compatibility_surface() -> None:
+def test_historical_exact_physical_boundary_rejects_broad_fixed_clock_aggregate(
+) -> None:
     module = load_checker()
     ledger = module.load_ledger()
     target_module = "SumeragiV2HistoricalRecoveryTemporalClosureProofs"
@@ -29559,7 +29537,7 @@ def test_historical_exact_physical_boundary_rejects_compatibility_surface() -> N
             source,
             symbol,
             "IndexedHistoricalFixedClockExactResidualsEstablishPrerequisiteSurface",
-            "IndexedHistoricalFixedClockLeavesEstablishPrerequisiteSurface",
+            "HistoricalTemporalFixedClockLeaves",
         )
     }
 
@@ -29572,8 +29550,7 @@ def test_historical_exact_physical_boundary_rejects_compatibility_surface() -> N
         symbol in error
         and "must consume the exact five-group historical physical residual inventory"
         in error
-        and "IndexedHistoricalFixedClockLeavesEstablishPrerequisiteSurface"
-        in error
+        and "HistoricalTemporalFixedClockLeaves" in error
         for error in errors
     ), errors
 
@@ -33919,7 +33896,6 @@ def test_acyclic_liveness_debt_topology_is_pinned(tmp_path: Path) -> None:
 @pytest.mark.parametrize(
     "module_name",
     (
-        "SumeragiV2Stage2BusyRankScratch",
         "SumeragiV2LockedBodyProposalActionProofs",
         "SumeragiV2AsyncHistoricalRecoveryLivenessProofs",
     ),

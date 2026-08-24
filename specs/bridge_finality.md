@@ -203,14 +203,11 @@ artifact's frozen roster.
 
 Self-consistency is not the SCCP trust decision. Each governed outbound route
 pins an `SccpSoraFinalityAnchorV1` containing the exact Taira source network,
-protocol version `3` for a retained historical anchor or `4` for a fresh
-checkpoint, Taira chain-id hash, checkpoint height and block hash, checkpoint
-`HeightContextId`, and a domain-separated hash of the canonical checkpoint
-finality artifact. The governed semantic circuit exposes the hash of this typed
-anchor as its final public signal. SCCP admits exactly revisions `3` and `4` so
-existing signed route fixtures remain verifiable, but fresh anchors and live
-finality artifacts use revision `4`; this compatibility policy does not permit
-live consensus or status to negotiate revision `3`.
+protocol version `4`, Taira chain-id hash, checkpoint height and block hash,
+checkpoint `HeightContextId`, and a domain-separated hash of the canonical
+checkpoint finality artifact. The governed semantic circuit exposes the hash of
+this typed anchor as its final public signal. SCCP admits only revision `4`;
+revision-3 anchors are invalid even when they were previously signed.
 
 Admission must resolve that anchor from historical governed route state,
 authenticate the checkpoint artifact, and establish an immediate-successor

@@ -1,9 +1,5 @@
 //! Compute lane helpers for SDK/CLI parity.
-use std::{
-    collections::BTreeMap,
-    fs,
-    path::{Path, PathBuf},
-};
+use crate::{Run, RunContext};
 use base64::Engine as _;
 use eyre::{Result, WrapErr, eyre};
 use iroha::data_model::compute::{
@@ -15,7 +11,11 @@ use iroha_config::parameters::defaults::compute as compute_defaults;
 use iroha_crypto::Hash;
 use norito::derive::{JsonDeserialize, JsonSerialize};
 use norito::json;
-use crate::{Run, RunContext};
+use std::{
+    collections::BTreeMap,
+    fs,
+    path::{Path, PathBuf},
+};
 const DEFAULT_MANIFEST: &str = "fixtures/compute/manifest_compute_payments.json";
 const DEFAULT_CALL: &str = "fixtures/compute/call_compute_payments.json";
 const DEFAULT_PAYLOAD: &str = "fixtures/compute/payload_compute_payments.json";

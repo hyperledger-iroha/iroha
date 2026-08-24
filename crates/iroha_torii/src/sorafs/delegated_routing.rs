@@ -972,27 +972,17 @@ fn parse_peer_id(value: &str) -> Result<String, RoutingError> {
             RoutingError::InvalidPeerId
         });
     }
-    let multihash = if let Some(payload) = value.strip_prefix('b') {
-        let cid = decode_base32_lower(payload).ok_or(RoutingError::InvalidPeerId)?;
-        if format!("b{}", encode_base32_lower(&cid)) != value {
-            return Err(RoutingError::InvalidPeerId);
-        }
-        peer_multihash_from_cid(&cid)?
-    } else if let Some(payload) = value.strip_prefix('k') {
-        let cid = decode_base36_lower(payload).ok_or(RoutingError::InvalidPeerId)?;
-        if format!("k{}", encode_base36_lower(&cid)) != value {
-            return Err(RoutingError::InvalidPeerId);
-        }
-        peer_multihash_from_cid(&cid)?
-    } else {
-        let decoded = decode_base58btc(value).ok_or(RoutingError::InvalidPeerId)?;
-        if encode_base58btc(&decoded) != value {
-            return Err(RoutingError::InvalidPeerId);
-        }
-        decoded
-    };
+    let payload = value.strip_prefix('b').ok_or(RoutingError::InvalidPeerId)?;
+    let cid = decode_base32_lower(payload).ok_or(RoutingError::InvalidPeerId)?;
+    if format!("b{}", encode_base32_lower(&cid)) != value {
+        return Err(RoutingError::InvalidPeerId);
+    }
+    let multihash = peer_multihash_from_cid(&cid)?;
     validate_peer_multihash(&multihash)?;
-    Ok(canonical_peer_id_from_multihash(&multihash))
+    if canonical_peer_id_from_multihash(&multihash) != value {
+        return Err(RoutingError::InvalidPeerId);
+    }
+    Ok(value.to_owned())
 }
 fn peer_multihash_from_cid(cid: &[u8]) -> Result<Vec<u8>, RoutingError> {
     if cid.len() < 3 || cid[0] != 1 || cid[1] != 0x72 {
@@ -1466,15 +1456,19 @@ mod tests {
         );
     }
     #[test]
-    fn peer_id_parser_normalizes_all_official_encodings() {
+    fn peer_id_parser_accepts_only_canonical_base32_cid_v1() {
         let canonical = peer_id_from_ed25519_key([0xA5; 32]);
         assert_eq!(parse_peer_id(&canonical), Ok(canonical.clone()));
         let cid = decode_base32_lower(&canonical[1..]).expect("decode canonical peer CID");
         let multihash = &cid[2..];
         let legacy = encode_base58btc(multihash);
-        assert_eq!(parse_peer_id(&legacy), Ok(canonical.clone()));
+        assert_eq!(parse_peer_id(&legacy), Err(RoutingError::InvalidPeerId));
         let base36 = format!("k{}", encode_base36_lower(&cid));
-        assert_eq!(parse_peer_id(&base36), Ok(canonical));
+        assert_eq!(parse_peer_id(&base36), Err(RoutingError::InvalidPeerId));
+        assert_eq!(
+            parse_peer_id(&canonical.to_ascii_uppercase()),
+            Err(RoutingError::InvalidPeerId)
+        );
     }
     #[test]
     fn peer_id_parser_rejects_malformed_noncanonical_and_oversized_inputs() {

@@ -37,7 +37,10 @@ fn find_role_ids_start_with_predicate(
     let erased =
         iroha_data_model::query::ErasedIterQuery::<RoleId>::new(predicate, selector, payload);
     let qbox: iroha_data_model::query::QueryBox<_> = Box::new(erased);
-    QueryRequest::Start(iroha_data_model::query::QueryWithParams::new(&qbox, params))
+    QueryRequest::Start(
+        iroha_data_model::query::QueryWithParams::new(&qbox, params)
+            .expect("role-id query type has a canonical mapping"),
+    )
 }
 #[cfg(not(feature = "fast_dsl"))]
 #[test]
@@ -212,10 +215,10 @@ fn canonical_roles_by_large_multisig_rejects_before_concrete_payload_decode() {
         payload,
     );
     let qbox: iroha_data_model::query::QueryBox<_> = Box::new(erased);
-    let request = QueryRequest::Start(iroha_data_model::query::QueryWithParams::new(
-        &qbox,
-        QueryParams::default(),
-    ));
+    let request = QueryRequest::Start(
+        iroha_data_model::query::QueryWithParams::new(&qbox, QueryParams::default())
+            .expect("role-id query type has a canonical mapping"),
+    );
     let world = World::with([], [alice_account()], []);
     let store = LiveQueryStore::start_test();
     let state = Arc::new(State::new_with_chain(

@@ -24,7 +24,8 @@ fn canonical_prune_intent_scanners_account_stable_temp_crash_inode_once() {
     let temp_dir = TempDir::new().expect("prune accounting temp dir");
     let config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
     let (kura, _) =
-        Kura::new(&config, &RuntimeLaneConfig::default()).expect("prune accounting Kura");
+        Kura::open_test_kura_with_configured_lane_config(&config, &RuntimeLaneConfig::default())
+            .expect("prune accounting Kura");
     let baseline_enforced = kura
         .kura_disk_usage_bytes()
         .expect("scan baseline enforced bytes");
@@ -95,7 +96,8 @@ fn canonical_prune_publication_updates_both_live_usage_counters() {
     let temp_dir = TempDir::new().expect("prune live-accounting temp dir");
     let config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
     let (kura, _) =
-        Kura::new(&config, &RuntimeLaneConfig::default()).expect("prune live-accounting Kura");
+        Kura::open_test_kura_with_configured_lane_config(&config, &RuntimeLaneConfig::default())
+            .expect("prune live-accounting Kura");
     let intent = canonical_prune_intent_artifact_fixture();
     let intent_len = u64::try_from(canonical_prune_intent_artifact_bytes().len())
         .expect("prune intent fixture length fits u64");
@@ -206,7 +208,8 @@ fn canonical_prune_publication_consumes_the_exact_reserved_boundary() {
     let temp_dir = TempDir::new().expect("prune reserved-boundary temp dir");
     let config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
     let (mut kura, _) =
-        Kura::new(&config, &RuntimeLaneConfig::default()).expect("prune boundary Kura");
+        Kura::open_test_kura_with_configured_lane_config(&config, &RuntimeLaneConfig::default())
+            .expect("prune boundary Kura");
     let blocks = store_dummy_block_arcs(&kura, 2);
     let preview = admit_prune_intent_fixture(
         &kura,
@@ -251,7 +254,8 @@ fn canonical_prune_temp_crash_restarts_without_stale_disk_accounting() {
     let temp_dir = TempDir::new().expect("prune temp-crash temp dir");
     let config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
     let (kura, _) =
-        Kura::new(&config, &RuntimeLaneConfig::default()).expect("prune temp-crash Kura");
+        Kura::open_test_kura_with_configured_lane_config(&config, &RuntimeLaneConfig::default())
+            .expect("prune temp-crash Kura");
     let mut generator = DummyBlocks::new();
     let blocks: Vec<_> = (0..3).map(|_| generator.next()).collect();
     for block in &blocks[..2] {
@@ -308,8 +312,9 @@ fn canonical_prune_temp_crash_restarts_without_stale_disk_accounting() {
             .expect("scan total accounting after temp crash"),
     );
     drop(kura);
-    let (reopened, BlockCount(block_count)) = Kura::new(&config, &RuntimeLaneConfig::default())
-        .expect("startup removes the authenticated unpublished prune temp");
+    let (reopened, BlockCount(block_count)) =
+        Kura::open_test_kura_with_configured_lane_config(&config, &RuntimeLaneConfig::default())
+            .expect("startup removes the authenticated unpublished prune temp");
     assert_eq!(block_count, 2);
     assert!(!temporary_path.exists());
     assert!(!stable_path.exists());
@@ -334,8 +339,9 @@ fn canonical_prune_temp_crash_restarts_without_stale_disk_accounting() {
 fn canonical_prune_stable_temp_publication_crash_recovers_forward_on_startup() {
     let temp_dir = TempDir::new().expect("prune publication-crash temp dir");
     let (config, blocks, merge_entries) = populate_prune_recovery_fixture(&temp_dir);
-    let (kura, _) = Kura::new(&config, &RuntimeLaneConfig::default())
-        .expect("open publication-crash fixture for exact sidecar projection");
+    let (kura, _) =
+        Kura::open_test_kura_with_configured_lane_config(&config, &RuntimeLaneConfig::default())
+            .expect("open publication-crash fixture for exact sidecar projection");
     let sidecar_rewrite = {
         let _guard = kura.sidecar_lock.lock();
         kura.reconcile_and_project_prune_sidecar_rewrites_locked(2)
@@ -370,8 +376,9 @@ fn canonical_prune_stable_temp_publication_crash_recovers_forward_on_startup() {
             .expect("account publication crash inventory"),
         u64::try_from(bytes.len()).expect("publication-crash intent length fits u64"),
     );
-    let (recovered, BlockCount(block_count)) = Kura::new(&config, &RuntimeLaneConfig::default())
-        .expect("startup normalizes publication and completes the durable prune");
+    let (recovered, BlockCount(block_count)) =
+        Kura::open_test_kura_with_configured_lane_config(&config, &RuntimeLaneConfig::default())
+            .expect("startup normalizes publication and completes the durable prune");
     assert_eq!(block_count, 2);
     assert_eq!(recovered.blocks_count(), 2);
     assert_eq!(
@@ -401,8 +408,9 @@ fn canonical_prune_stable_temp_publication_crash_recovers_forward_on_startup() {
 fn active_prune_recovery_never_allocates_missing_retained_merge_carrier() {
     let temp_dir = TempDir::new().expect("missing retained-carrier temp dir");
     let (config, blocks, merge_entries) = populate_prune_recovery_fixture(&temp_dir);
-    let (kura, _) = Kura::new(&config, &RuntimeLaneConfig::default())
-        .expect("open missing retained-carrier fixture");
+    let (kura, _) =
+        Kura::open_test_kura_with_configured_lane_config(&config, &RuntimeLaneConfig::default())
+            .expect("open missing retained-carrier fixture");
     let sidecar_rewrite = {
         let _guard = kura.sidecar_lock.lock();
         kura.reconcile_and_project_prune_sidecar_rewrites_locked(2)
@@ -434,7 +442,7 @@ fn active_prune_recovery_never_allocates_missing_retained_merge_carrier() {
     .expect("sync missing retained-carrier fixture");
     drop(kura);
     assert!(matches!(
-        Kura::new(&config, &RuntimeLaneConfig::default()),
+        Kura::open_test_kura_with_configured_lane_config(&config, &RuntimeLaneConfig::default()),
         Err(Error::PruneIntentConflict(message))
             if message.contains("cannot allocate missing retained merge carrier")
     ));
@@ -596,7 +604,8 @@ fn empty_current_tip_cleanup_authenticates_header_only_retained_index() {
     let temp_dir = TempDir::new().expect("empty current-tip prune temp dir");
     let config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
     let (kura, _) =
-        Kura::new(&config, &RuntimeLaneConfig::default()).expect("empty current-tip Kura");
+        Kura::open_test_kura_with_configured_lane_config(&config, &RuntimeLaneConfig::default())
+            .expect("empty current-tip Kura");
     let directory = kura.active_blocks_dir.lock().join(PIPELINE_DIR_NAME);
     fs::create_dir_all(&directory).expect("create empty current-tip pipeline directory");
     let data_path = directory.join(PIPELINE_SIDECARS_DATA_FILE);
@@ -640,8 +649,9 @@ fn empty_current_tip_cleanup_authenticates_header_only_retained_index() {
         INDEXED_SIDECAR_BASE_HEADER_SIZE_U64
     );
     drop(kura);
-    let (recovered, BlockCount(count)) = Kura::new(&config, &RuntimeLaneConfig::default())
-        .expect("recover empty current-tip sidecar cleanup");
+    let (recovered, BlockCount(count)) =
+        Kura::open_test_kura_with_configured_lane_config(&config, &RuntimeLaneConfig::default())
+            .expect("recover empty current-tip sidecar cleanup");
     assert_eq!(count, 0);
     assert_eq!(
         fs::metadata(&data_path)
@@ -665,7 +675,8 @@ fn current_tip_sidecar_rewrite_uses_v3_intent_and_exact_peak_capacity() {
     let temp_dir = TempDir::new().expect("current-tip prune-capacity temp dir");
     let config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
     let (mut kura, _) =
-        Kura::new(&config, &RuntimeLaneConfig::default()).expect("current-tip Kura");
+        Kura::open_test_kura_with_configured_lane_config(&config, &RuntimeLaneConfig::default())
+            .expect("current-tip Kura");
     let blocks = store_dummy_block_arcs(&kura, 1);
     seed_large_current_tip_sidecar_rewrite(&kura, blocks[0].hash());
     let projection = {
@@ -734,8 +745,9 @@ fn current_tip_sidecar_rewrite_uses_v3_intent_and_exact_peak_capacity() {
     assert_eq!(intent.capacity, preview.capacity);
     assert_eq!(canonical_prune_sidecar_files(&kura), before);
     drop(kura);
-    let (recovered, BlockCount(count)) = Kura::new(&config, &RuntimeLaneConfig::default())
-        .expect("recover current-tip V3 sidecar intent");
+    let (recovered, BlockCount(count)) =
+        Kura::open_test_kura_with_configured_lane_config(&config, &RuntimeLaneConfig::default())
+            .expect("recover current-tip V3 sidecar intent");
     assert_eq!(count, 1);
     assert_eq!(recovered.blocks_count(), 1);
     assert!(recovered.read_pipeline_metadata(2).is_none());
@@ -749,7 +761,8 @@ fn startup_rewrite_capacity_rejects_one_under_without_sidecar_mutation() {
     let temp_dir = TempDir::new().expect("startup prune-capacity temp dir");
     let mut config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
     let (kura, _) =
-        Kura::new(&config, &RuntimeLaneConfig::default()).expect("startup-capacity Kura");
+        Kura::open_test_kura_with_configured_lane_config(&config, &RuntimeLaneConfig::default())
+            .expect("startup-capacity Kura");
     let blocks = store_dummy_block_arcs(&kura, 1);
     seed_large_current_tip_sidecar_rewrite(&kura, blocks[0].hash());
     let sidecar_rewrite = {
@@ -785,7 +798,7 @@ fn startup_rewrite_capacity_rejects_one_under_without_sidecar_mutation() {
     drop(kura);
     config.max_disk_usage_bytes = iroha_config::base::util::Bytes(exact - 1);
     assert!(matches!(
-        Kura::new(&config, &RuntimeLaneConfig::default()),
+        Kura::open_test_kura_with_configured_lane_config(&config, &RuntimeLaneConfig::default()),
         Err(Error::StorageBudgetExceeded { limit, required, .. })
             if limit == exact - 1 && required == exact
     ));
@@ -806,8 +819,9 @@ fn startup_rewrite_capacity_rejects_one_under_without_sidecar_mutation() {
             .exists()
     );
     config.max_disk_usage_bytes = iroha_config::base::util::Bytes(exact);
-    let (inspection, _) = Kura::new(&config, &RuntimeLaneConfig::default())
-        .expect("exact startup recovery succeeds with sufficient capacity");
+    let (inspection, _) =
+        Kura::open_test_kura_with_configured_lane_config(&config, &RuntimeLaneConfig::default())
+            .expect("exact startup recovery succeeds with sufficient capacity");
     assert_eq!(inspection.blocks_count(), 1);
     inspection
         .validate_pipeline_sidecars_for_prune(1, true)

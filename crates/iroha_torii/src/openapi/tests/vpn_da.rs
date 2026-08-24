@@ -1,7 +1,7 @@
 const OPENAPI_STATIC_CONTRACT_ASSET_VERSION: &str = "IROHA_STATIC_CONTRACT_ROWS_V1";
-const OPENAPI_STATIC_CONTRACT_ASSET_LEN: usize = 117_747;
+const OPENAPI_STATIC_CONTRACT_ASSET_LEN: usize = 116_607;
 const OPENAPI_STATIC_CONTRACT_ASSET_SHA256: &str =
-    "9eaf67a4d5200e3eb80f61b7d8933e5c3e8fd2c3a3939d375631a813760f2ca2";
+    "05069a6278ba5fba3a64c41d09b59e55fa4e75d7cabde26055cce9065abdc474";
 const OPENAPI_STATIC_CONTRACT_ASSET: &[u8] = include_bytes!(concat!(
     env!("CARGO_MANIFEST_DIR"),
     "/src/openapi/tests/openapi_static_contracts_v1.txt"
@@ -168,28 +168,36 @@ fn vpn_openapi_paths_are_typed_signed_and_use_runtime_success_statuses() {
             );
         }
     }
-    for method in ["get", "delete"] {
-        let operation = openapi_operation(&document, "/v1/vpn/sessions/{session_id}", method);
-        let session_id = operation
-            .get("parameters")
-            .and_then(Value::as_array)
-            .and_then(|parameters| {
-                parameters.iter().find(|parameter| {
-                    parameter.get("name").and_then(Value::as_str) == Some("session_id")
-                        && parameter.get("in").and_then(Value::as_str) == Some("path")
-                })
+    let session_operations = document
+        .get("paths")
+        .and_then(Value::as_object)
+        .and_then(|paths| paths.get("/v1/vpn/sessions/{session_id}"))
+        .and_then(Value::as_object)
+        .expect("VPN session detail operations");
+    assert!(
+        !session_operations.contains_key("delete"),
+        "Torii must not publish a local-only deletion operation that cannot revoke the relay ticket or on-chain lease"
+    );
+    let operation = openapi_operation(&document, "/v1/vpn/sessions/{session_id}", "get");
+    let session_id = operation
+        .get("parameters")
+        .and_then(Value::as_array)
+        .and_then(|parameters| {
+            parameters.iter().find(|parameter| {
+                parameter.get("name").and_then(Value::as_str) == Some("session_id")
+                    && parameter.get("in").and_then(Value::as_str) == Some("path")
             })
-            .expect("session_id path parameter");
-        assert_eq!(
-            session_id
-                .get("schema")
-                .and_then(Value::as_object)
-                .and_then(|schema| schema.get("pattern"))
-                .and_then(Value::as_str),
-            Some("^[0-9a-f]{64}$"),
-            "{method} session id must use the canonical lowercase 32-byte hex form"
-        );
-    }
+        })
+        .expect("session_id path parameter");
+    assert_eq!(
+        session_id
+            .get("schema")
+            .and_then(Value::as_object)
+            .and_then(|schema| schema.get("pattern"))
+            .and_then(Value::as_str),
+        Some("^[0-9a-f]{32}$"),
+        "GET session id must use the canonical lowercase 16-byte hex form"
+    );
 }
 #[test]
 fn vpn_openapi_schemas_are_strict_and_use_canonical_quantities() {
@@ -280,15 +288,15 @@ fn vpn_openapi_schemas_are_strict_and_use_canonical_quantities() {
         .expect("VPN helper ticket schema");
     assert_eq!(
         helper_ticket.get("pattern").and_then(Value::as_str),
-        Some("^[0-9a-f]{1392}$")
+        Some("^[0-9a-f]{1576}$")
     );
     assert_eq!(
         helper_ticket.get("minLength").and_then(Value::as_u64),
-        Some(1392)
+        Some(1576)
     );
     assert_eq!(
         helper_ticket.get("maxLength").and_then(Value::as_u64),
-        Some(1392)
+        Some(1576)
     );
     let receipt_fields = openapi_contract_strings(
         "vpn.vpn_openapi_schemas_are_strict_and_use_canonical_quantities.strings.4",
@@ -296,6 +304,21 @@ fn vpn_openapi_schemas_are_strict_and_use_canonical_quantities() {
     .collect::<Vec<_>>();
     assert_strict_object_schema(schemas, "VpnReceiptResponse", &receipt_fields, &[]);
     assert_strict_object_schema(schemas, "VpnReceiptListResponse", &["items", "total"], &[]);
+    for schema_name in ["VpnSessionResponse", "VpnReceiptResponse"] {
+        assert_eq!(
+            schemas
+                .get(schema_name)
+                .and_then(Value::as_object)
+                .and_then(|schema| schema.get("properties"))
+                .and_then(Value::as_object)
+                .and_then(|properties| properties.get("session_id"))
+                .and_then(Value::as_object)
+                .and_then(|property| property.get("pattern"))
+                .and_then(Value::as_str),
+            Some("^[0-9a-f]{32}$"),
+            "{schema_name}.session_id must advertise canonical lowercase 16-byte hex"
+        );
+    }
     for [schema_name, field] in openapi_contract_fixed_rows::<2>(
         "vpn.vpn_openapi_schemas_are_strict_and_use_canonical_quantities.rows.3",
     ) {

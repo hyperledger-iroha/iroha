@@ -1326,7 +1326,7 @@ fn durable_validate_store_fixture_from_existing(
     fixture.store_ownership = store_ownership;
     assert!(work.validates_at(fixture.address));
     assert!(fixture.registry.entries.insert(address, work).is_none());
-    (fixture, durable)
+    (fixture, directory, store, durable)
 }
 
 #[cfg(feature = "bls")]

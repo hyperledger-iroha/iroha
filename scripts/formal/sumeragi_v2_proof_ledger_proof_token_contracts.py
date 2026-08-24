@@ -3297,15 +3297,6 @@ FIXED_PROOF_REQUIRED_PROOF_TOKENS = {
         "HistoricalDiscoveryFixedClockNonPacketServiceProperty",
     ),
     (
-        "SumeragiV2IndexedHistoricalRecoveryTransportClosureProofs",
-        "IndexedHistoricalFixedClockLeavesEstablishPrerequisiteSurface",
-    ): (
-        "IndexedChainSpecProvidesHistoricalFixedClockIdentityBridge",
-        "HistoricalTemporalFixedClockLeavesAreExact",
-        "IndexedHistoricalFixedClockTemporalLeafProperties",
-        "IndexedHistoricalFixedClockPrerequisiteSurface",
-    ),
-    (
         "SumeragiV2AsyncHistoricalRecoveryClockTemporalProofs",
         "HistoricalDiscoveryPacketCorridorResidualClosesPacketLeaves",
     ): (

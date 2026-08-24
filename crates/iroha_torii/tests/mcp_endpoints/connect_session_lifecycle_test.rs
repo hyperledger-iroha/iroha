@@ -6,7 +6,6 @@ async fn mcp_jsonrpc_connect_session_lifecycle_dispatches_routes() {
     enable_writer_mcp(&mut cfg);
     cfg.torii.connect.enabled = true;
     let app = build_router(cfg);
-    let sid = B64.encode([0x55u8; 32]);
     let (status, create_call) = post_mcp(
         &app,
         norito::json!({
@@ -16,7 +15,9 @@ async fn mcp_jsonrpc_connect_session_lifecycle_dispatches_routes() {
             "params": {
                 "name": "connect.session.create",
                 "arguments": {
-                    "session_id": sid
+                    "network_id": "hash:4141414141414141414141414141414141414141414141414141414141414141#7023",
+                    "app_pk": "VVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVU",
+                    "nonce": "VlZWVlZWVlZWVlZWVlZWVg"
                 }
             }
         }),
@@ -36,10 +37,11 @@ async fn mcp_jsonrpc_connect_session_lifecycle_dispatches_routes() {
         .get("body")
         .and_then(Value::as_object)
         .expect("session create body");
-    assert_eq!(
-        create_body.get("sid").and_then(Value::as_str),
-        Some(sid.as_str())
-    );
+    let sid = create_body
+        .get("sid")
+        .and_then(Value::as_str)
+        .expect("canonical session sid")
+        .to_owned();
     assert!(
         create_body
             .get("token_app")
@@ -85,7 +87,7 @@ async fn mcp_jsonrpc_connect_session_lifecycle_dispatches_routes() {
             "params": {
                 "name": "connect.ws.ticket",
                 "arguments": {
-                    "session_id": sid,
+                    "sid": sid,
                     "role": "app",
                     "token_app": token_app,
                     "node_url": "https://node.example"
@@ -102,9 +104,7 @@ async fn mcp_jsonrpc_connect_session_lifecycle_dispatches_routes() {
     let ws_ticket_app = structured_content(&ws_ticket_app_call);
     assert_eq!(
         ws_ticket_app.get("ws_url").and_then(Value::as_str),
-        Some(
-            "wss://node.example/v1/connect/ws?sid=VVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVU&role=app"
-        )
+        Some(format!("wss://node.example/v1/connect/ws?sid={sid}&role=app").as_str())
     );
     assert_eq!(
         ws_ticket_app
@@ -189,9 +189,7 @@ async fn mcp_jsonrpc_connect_session_lifecycle_dispatches_routes() {
             "params": {
                 "name": "connect.session.delete",
                 "arguments": {
-                    "path": {
-                        "session_id": sid
-                    },
+                    "sid": sid,
                     "token_management": token_management
                 }
             }
@@ -257,9 +255,11 @@ async fn mcp_jsonrpc_connect_session_create_and_ticket_surfaces_create_error() {
                 "params": {
                     "name": tool_name,
                     "arguments": {
-                        "sid": "not_base64url",
+                        "network_id": "not-a-network-id",
+                        "app_pk": "AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE",
+                        "nonce": "AgICAgICAgICAgICAgICAg",
                         "role": "app",
-                        "node_url": "https://node.example"
+                        "ticket_node_url": "https://node.example"
                     }
                 }
             }),

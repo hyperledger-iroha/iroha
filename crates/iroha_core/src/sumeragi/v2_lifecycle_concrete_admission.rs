@@ -19,13 +19,14 @@ use super::{
         LiveLifecycleDecisionApplyReconciliationAuthorityV1, LiveWalRegistryPublicationErrorV1,
         OpenedRecoveredWalValidateLedger, PendingDurableValidateAdmissionV1,
         PendingLifecycleOutputAdmissionV1, PendingLiveWalSignAdmissionV1,
-        PreparedLifecycleAdmissionErrorV1, PreparedLifecycleAdmissionOwnerV1,
-        PreparedLifecycleAdmissionV1, PreparedLifecycleDecisionApplyDispatchV1,
-        PreparedLifecycleOutputExecutionV1, PreparedLifecycleOutputRegistryRetirementV1,
-        PublishedDurableValidateCompletion, ReadyLifecycleDecisionApplyAttestationErrorV1,
-        ReadyLifecycleDecisionApplyAttestationV1, ReadyValidateCarrierError,
-        RecoveredDurableValidateRetryCensusV1, RecoveredDurableValidateRetryOwnerErrorV1,
-        RecoveredWalParentFactoryError, RegistryError, reconstruct_recovered_wal_validate_parent,
+        PreparedCertifiedFetchAdmissionV1, PreparedLifecycleAdmissionErrorV1,
+        PreparedLifecycleAdmissionOwnerV1, PreparedLifecycleAdmissionV1,
+        PreparedLifecycleDecisionApplyDispatchV1, PreparedLifecycleOutputExecutionV1,
+        PreparedLifecycleOutputRegistryRetirementV1, PublishedDurableValidateCompletion,
+        ReadyLifecycleDecisionApplyAttestationErrorV1, ReadyLifecycleDecisionApplyAttestationV1,
+        ReadyValidateCarrierError, RecoveredDurableValidateRetryCensusV1,
+        RecoveredDurableValidateRetryOwnerErrorV1, RecoveredWalParentFactoryError, RegistryError,
+        reconstruct_recovered_wal_validate_parent,
     },
 };
 use crate::sumeragi::{
@@ -54,6 +55,14 @@ impl LifecycleWorkRegistryHolder {
     /// Borrow the concrete map only for one coordinator-owned composite transaction.
     pub(super) fn registry_mut(&mut self) -> &mut ConcreteLifecycleWorkRegistry {
         &mut self.registry
+    }
+    /// Return the exact Ready ordinal retained by recovered Decision Apply startup.
+    pub(super) fn exact_recovered_decision_apply_ready_ordinal(
+        &self,
+        coordinator: &LifecycleCoordinator,
+    ) -> Option<u128> {
+        self.registry
+            .exact_recovered_decision_apply_ready_ordinal(coordinator)
     }
     /// Project the complete recovered Ready Validate retry-owner census.
     pub(super) fn project_recovered_durable_validate_retry_census(
@@ -1374,7 +1383,8 @@ impl ProductionLifecycleOwnerV1 {
                 | LifecycleOutputRegistryJoinV1::RecoveredBroadcastOwned
                 | LifecycleOutputRegistryJoinV1::TerminalDirectOutputDuplicate
                 | LifecycleOutputRegistryJoinV1::TerminalInstalledDuplicate(_),
-            ) => {
+            )
+            | Err(_) => {
                 return ProductionLifecycleOutputAdmissionSettlementV1::Failed {
                     failure: ProductionLifecycleOutputAdmissionFailureV1::Registry(
                         LifecycleOutputRegistryFailureV1::ReadyRejoin,
@@ -1446,7 +1456,7 @@ impl ProductionLifecycleOwnerV1 {
         ) {
             return ProductionLifecycleOutputAdmissionSettlementV1::Failed {
                 failure: ProductionLifecycleOutputAdmissionFailureV1::Registry(
-                    RegistryError::CorruptWork,
+                    LifecycleOutputRegistryFailureV1::TerminalProjection,
                 ),
                 pending: execution.into_pending(),
             };

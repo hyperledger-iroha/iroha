@@ -2609,8 +2609,8 @@ fn certified_response_queue_refresh_retries_without_closing_output() {
 
     let ownership = source_region(
         response_path,
-        "let response_owner = match self",
-        "match response_owner",
+        "let selected_priority = match self",
+        "match selected_priority",
     );
     let ownership_retry = source_region(
         ownership,
@@ -2629,8 +2629,8 @@ fn certified_response_queue_refresh_retries_without_closing_output() {
 
     let ordinary = source_region(
         response_path,
-        "SelectedCertifiedBodyResponseOwnerV1::OrdinaryWinner",
-        "SelectedCertifiedBodyResponseOwnerV1::RecoveredWinner",
+        "SelectedCertifiedResponsePriorityV1::OrdinaryClaimed",
+        "SelectedCertifiedResponsePriorityV1::RecoveredClaimed",
     );
     let ordinary_retry = source_region(
         ordinary,
@@ -2648,7 +2648,7 @@ fn certified_response_queue_refresh_retries_without_closing_output() {
 
     let recovered = source_region(
         response_path,
-        "SelectedCertifiedBodyResponseOwnerV1::RecoveredWinner",
+        "SelectedCertifiedResponsePriorityV1::RecoveredClaimed",
         "self.drive_recovered_ingress_selector(selector, runner)",
     );
     let recovered_retry = source_region(

@@ -41,8 +41,6 @@ pub(in crate::sumeragi) use turn_driver::{
     ProductionPreparedOrdinaryIngressTurnV1, ProductionRecoveredLifecycleSignCompletionSelectionV1,
 };
 
-use super::authority::lifecycle_ordinal_authorities_after_high_watermark;
-use super::selector::SelectedCertifiedBodyResponseOwnerV1;
 use super::{
     CertifiedFetchBodyPersistenceCompletionError, PreparedLifecycleIngressSelector,
     ProductionCompletionDispatchErrorV1, ProductionCompletionDispatchV1,
@@ -54,7 +52,10 @@ use super::{
     ProductionRecoveredLifecycleSignedBroadcastRefanoutV1, ReadyValidateSuccessorV1,
     RegisteredLifecycleValidateSidecarWaitV1,
     ingress_position::{FairIngressTurnContextCut, FairIngressTurnCut},
-    work_registry::LifecycleDecisionApplyTerminalPublicationErrorV1,
+    work_registry::{
+        LifecycleDecisionApplyTerminalPublicationErrorV1,
+        RecoveredLifecycleSignCancellationPublicationError,
+    },
 };
 use crate::sumeragi::v2_runner::LifecycleCurrentRunnerTurn;
 #[cfg(test)]
@@ -1549,6 +1550,24 @@ impl LaunchedProductionLifecycleV1 {
             LifecycleDecisionApplyStatusPublicationV1::PublishActiveHeight,
         )
     }
+}
+
+/// Settle one applied lifecycle Decision carrier through the shared active-height durable cut.
+#[cfg(test)]
+pub(in crate::sumeragi) fn settle_applied_lifecycle_decision_apply_completion_for_test(
+    owner: &mut ProductionLifecycleOwnerV1,
+    executor: &mut V2EffectExecutor<SerializedV2Runtime>,
+    completion: PreparedLifecycleDecisionApplyCompletionV1,
+) -> Result<
+    ProductionLifecycleDecisionApplyCompletionV1,
+    ProductionLifecycleDecisionApplyCompletionErrorV1,
+> {
+    settle_applied_lifecycle_decision_apply_completion_with_status(
+        owner,
+        executor,
+        completion,
+        LifecycleDecisionApplyStatusPublicationV1::PublishActiveHeight,
+    )
 }
 
 /// Settle pending-Kura Apply while retaining status for no-clock activation.

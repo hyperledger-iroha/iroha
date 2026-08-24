@@ -1385,10 +1385,8 @@ pub mod isi {
                     .iter()
                     .find(|(_, locks)| {
                         locks.locks.values().any(|record| {
-                            record.custody.as_ref().is_some_and(|custody| {
-                                custody.bond_escrow_account == account_id
-                                    || custody.slash_receiver_account == account_id
-                            })
+                            record.custody.bond_escrow_account == account_id
+                                || record.custody.slash_receiver_account == account_id
                         })
                     })
             {
@@ -2084,12 +2082,12 @@ pub mod isi {
                 .find(|(_, proposal)| {
                     proposal
                         .parliament_snapshot
-                        .as_ref()
-                        .is_some_and(|snapshot| {
-                            snapshot.bodies.rosters.values().any(|roster| {
-                                roster.members.contains(&account_id)
-                                    || roster.alternates.contains(&account_id)
-                            })
+                        .bodies
+                        .rosters
+                        .values()
+                        .any(|roster| {
+                            roster.members.contains(&account_id)
+                                || roster.alternates.contains(&account_id)
                         })
                 })
             {
@@ -2391,11 +2389,10 @@ pub mod isi {
                     .governance_locks
                     .iter()
                     .find(|(_, locks)| {
-                        locks.locks.values().any(|record| {
-                            record.custody.as_ref().is_some_and(|custody| {
-                                custody.asset_definition_id == asset_definition_id
-                            })
-                        })
+                        locks
+                            .locks
+                            .values()
+                            .any(|record| record.custody.asset_definition_id == asset_definition_id)
                     })
             {
                 return Err(InstructionExecutionError::InvariantViolation(
@@ -3791,7 +3788,7 @@ mod tests {
                         members: vec![(*ALICE_ID).clone()],
                         alternates: Vec::new(),
                         candidate_count: 1,
-                        derived_by: CouncilDerivationKind::Manual,
+                        derived_by: CouncilDerivationKind::Sortition,
                     },
                 )
             })
@@ -3800,7 +3797,8 @@ mod tests {
             selection_epoch: 1,
             rosters,
         };
-        let encoded = norito::to_bytes(&bodies).expect("encode unregister guard Parliament bodies");
+        let encoded = norito::encode_canonical(&bodies)
+            .expect("canonically encode unregister guard Parliament bodies");
         let digest = Blake2b512::digest(encoded);
         let mut roster_root = [0_u8; 32];
         roster_root.copy_from_slice(&digest[..32]);
@@ -3851,7 +3849,7 @@ mod tests {
                 created_height: 1,
                 status,
                 pipeline: GovernancePipeline::default(),
-                parliament_snapshot: Some(validation_fee_unregister_parliament_snapshot()),
+                parliament_snapshot: validation_fee_unregister_parliament_snapshot(),
                 finalization_evidence,
                 enacted_at_height: None,
             },
@@ -7367,12 +7365,12 @@ mod tests {
                 expiry_height: 10,
                 direction: 0,
                 duration_blocks: 3_600,
-                custody: Some(GovernanceLockCustody {
+                custody: GovernanceLockCustody {
                     escrowed: true,
                     asset_definition_id: tx.gov.voting_asset_id.clone(),
                     bond_escrow_account: custody_account.clone(),
                     slash_receiver_account: custody_account.clone(),
-                }),
+                },
             },
         );
         tx.world
@@ -8664,7 +8662,9 @@ mod tests {
                         created_height: 1,
                         status: crate::state::GovernanceProposalStatus::Proposed,
                         pipeline: crate::state::GovernancePipeline::default(),
-                        parliament_snapshot: None,
+                        parliament_snapshot: crate::state::governance_parliament_snapshot_for_tests(
+                            account_id, 1,
+                        ),
                         finalization_evidence: None,
                         enacted_at_height: None,
                     },
@@ -8920,14 +8920,6 @@ mod tests {
                         manifest_provenance: None,
                     },
                 );
-                let roster = iroha_data_model::governance::types::ParliamentRoster {
-                    body: iroha_data_model::governance::types::ParliamentBody::AgendaCouncil,
-                    epoch: 1,
-                    members: vec![account_id.clone()],
-                    alternates: Vec::new(),
-                    candidate_count: 0,
-                    derived_by: Default::default(),
-                };
                 tx.world.put_governance_proposal(
                     proposal_id,
                     crate::state::GovernanceProposalRecord {
@@ -8936,18 +8928,9 @@ mod tests {
                         created_height: 1,
                         status: crate::state::GovernanceProposalStatus::Proposed,
                         pipeline: crate::state::GovernancePipeline::default(),
-                        parliament_snapshot: Some(crate::state::GovernanceParliamentSnapshot {
-                            selection_epoch: 1,
-                            beacon: [0x71; 32],
-                            roster_root: [0x72; 32],
-                            bodies: iroha_data_model::governance::types::ParliamentBodies {
-                                selection_epoch: 1,
-                                rosters: std::collections::BTreeMap::from([(
-                                    iroha_data_model::governance::types::ParliamentBody::AgendaCouncil,
-                                    roster,
-                                )]),
-                            },
-                        }),
+                        parliament_snapshot: crate::state::governance_parliament_snapshot_for_tests(
+                            account_id, 1,
+                        ),
                         finalization_evidence: None,
                         enacted_at_height: None,
                     },
@@ -10820,12 +10803,12 @@ mod tests {
                 expiry_height: 10,
                 direction: 0,
                 duration_blocks: 3_600,
-                custody: Some(GovernanceLockCustody {
+                custody: GovernanceLockCustody {
                     escrowed: true,
                     asset_definition_id: asset_definition_id.clone(),
                     bond_escrow_account: authority.clone(),
                     slash_receiver_account: authority.clone(),
-                }),
+                },
             },
         );
         tx.world

@@ -1028,19 +1028,6 @@ where
     })
 }
 
-/// Test-only compatibility entry for the pre-direct raw-inventory chronology.
-#[cfg(test)]
-#[allow(dead_code, reason = "legacy raw-inventory entry is test-only")]
-fn verify_rns_native_comparator_product_from_inventory_v1<'source, 'proof, S>(
-    inventory: &RnsNativeCrossFieldInventoryPrerequisiteV1<'source, 'proof, S>,
-) -> Result<(), RnsNativeComparatorProductErrorV1>
-where
-    S: ZkAmsMkheRnsNativeSourceSnapshotV1,
-{
-    let _ = verify_comparator_product_parts_v1(inventory, inventory.continuation())?;
-    Ok(())
-}
-
 #[cfg(test)]
 #[path = "rns_native_comparator_product_tests.rs"]
 mod tests;

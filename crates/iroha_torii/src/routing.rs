@@ -327,7 +327,6 @@ pub(crate) struct PipelinePreflightBlock {
 }
 ( Clone, Debug, crate::json_macros::JsonSerialize, crate::json_macros::JsonDeserialize, norito::derive::NoritoSerialize, norito::derive::NoritoDeserialize,)
 pub(crate) struct PipelinePreflightPipeline {
-    pub signature_batch_max: u64,
     pub signature_batch_max_ed25519: u64,
     pub signature_batch_max_secp256k1: u64,
     pub signature_batch_max_pqc: u64,
@@ -7982,21 +7981,6 @@ pub(crate) async fn handle_v1_sccp_messages_recent(
     })
     .await
 }
-/// GET /v1/sumeragi/key-lifecycle — Bounded history of consensus key records (newest first)
-#[iroha_futures::telemetry_future]
-pub async fn handle_v1_sumeragi_key_lifecycle(
-    accept: Option<axum::http::HeaderValue>,
-) -> Result<Response> {
-    let records = sumeragi::status::consensus_key_history();
-    let format = match crate::utils::negotiate_response_format(accept.as_ref()) {
-        Ok(fmt) => fmt,
-        Err(resp) => return Ok(resp),
-    };
-    if matches!(format, crate::utils::ResponseFormat::Norito) {
-        return Ok(crate::NoritoBody(records).into_response());
-    }
-    pretty_json_response(&records)
-}
 /// Maximum voting-roster identities returned by the BLS-key operator snapshot.
 const BLS_KEY_RESPONSE_CAP: usize =
     iroha_data_model::block::consensus_v2::MAX_VALIDATORS_PER_HEIGHT;
@@ -8141,7 +8125,6 @@ pub(crate) fn build_pipeline_preflight_response(
             max_transactions: block_params.max_transactions().get(),
         },
         pipeline: PipelinePreflightPipeline {
-            signature_batch_max: usize_to_u64(pipeline.signature_batch_max),
             signature_batch_max_ed25519: usize_to_u64(pipeline.signature_batch_max_ed25519),
             signature_batch_max_secp256k1: usize_to_u64(pipeline.signature_batch_max_secp256k1),
             signature_batch_max_pqc: usize_to_u64(pipeline.signature_batch_max_pqc),
@@ -11108,6 +11091,66 @@ pub(crate) fn push_accepted_transaction_for_ingress_with_routing_plan_strict_dur
             );
         })
 }
+pub(crate) fn push_accepted_ordinary_kagemusha_lifecycle_for_ingress_strict_durable_claim(
+    queue: Arc<Queue>,
+    state: Arc<CoreState>,
+    accepted_tx: iroha_core::tx::AcceptedTransaction<'static>,
+    routing_plan: RoutingPlan,
+    expected_binding: &iroha_core::torii_proxy::OrdinaryKagemushaLifecycleAdmissionBindingV1,
+) -> Result<iroha_core::queue::QueuePlanDurableAdmissionV2> {
+    let pressure = {
+        let block_time = state.sumeragi_block_cadence();
+        queue.refresh_pressure_budget_from_block_time(block_time)
+    };
+    if pressure.saturated_by_age {
+        iroha_logger::debug!(
+            tx_hash = %accepted_tx.hash(),
+            queued = pressure.queued_tx_count,
+            tracked = pressure.tracked_tx_count,
+            capacity = pressure.capacity.get(),
+            oldest_queued_tx_age_ms = pressure.oldest_queued_tx_age_ms,
+            "local queue is latency-saturated; keeping ordinary lifecycle durable ingress open until capacity is exhausted"
+        );
+    }
+    queue
+        .push_with_lane_with_state_and_routing_plan_strict_durable_claim(
+            accepted_tx,
+            state.as_ref(),
+            routing_plan,
+            &expected_binding.admission_context,
+        )
+        .map_err(|queue::Failure { tx, err }| {
+            if matches!(err, queue::Error::Full) {
+                iroha_logger::debug!(
+                    tx_hash = %tx.as_ref().hash(),
+                    "queue rejected ordinary lifecycle durable transaction due to backpressure"
+                );
+            } else {
+                iroha_logger::warn!(
+                    tx_hash = %tx.as_ref().hash(),
+                    ?err,
+                    "failed to durably admit an ordinary lifecycle transaction"
+                );
+            }
+            drop(tx);
+            (err, queue.current_backpressure())
+        })
+        .map_err(|(err, backpressure)| Error::PushIntoQueue {
+            source: Box::new(err),
+            backpressure,
+        })
+        .inspect(|claim| {
+            let route = claim.routing_plan.coordinator_route();
+            iroha_logger::debug!(
+                lane = route.lane_id.as_u32(),
+                dataspace = route.dataspace_id.as_u64(),
+                authority_height = claim.context.authority_height,
+                proposal_height = claim.context.proposal_height,
+                globally_bound = claim.global_admission_identity.is_some(),
+                "ordinary lifecycle transaction enqueued with a durable unbound journal claim"
+            );
+        })
+}
 enum IngressRouting {
     Derived,
     Planned(RoutingPlan),
@@ -11223,17 +11266,11 @@ pub(crate) fn push_accepted_transactions_for_ingress_with_routing_plans(
     if accepted.is_empty() {
         return Ok(0);
     }
-    if accepted.iter().any(|(transaction, _)| {
-        transaction.entrypoint().admission_intent()
-            == iroha_data_model::transaction::TransactionAdmissionIntent::QueuePlanSynced
-    }) {
-        return Err(Error::PushIntoQueue {
-            source: Box::new(iroha_core::queue::Error::UnresolvedRoute {
-                reason: "QueuePlanSynced transaction batch requires per-entry globally certified admission"
-                    .to_owned(),
-            }),
-            backpressure: queue.current_backpressure(),
-        });
+    for (transaction, _) in &accepted {
+        ensure_generic_transaction_batch_entrypoint_allowed(
+            queue.as_ref(),
+            transaction.entrypoint(),
+        )?;
     }
     let pressure = {
         let block_time = state.sumeragi_block_cadence();
@@ -11271,6 +11308,58 @@ pub(crate) fn push_accepted_transactions_for_ingress_with_routing_plans(
                 "transaction batch enqueued successfully"
             );
         })
+}
+
+const GENERIC_BATCH_ORDINARY_KAGEMUSHA_LIFECYCLE_REASON: &str = "ordinary Kagemusha lifecycle transaction batch entries require the dedicated authenticated durable submission route";
+const GENERIC_BATCH_QUEUE_PLAN_SYNCED_REASON: &str =
+    "QueuePlanSynced transaction batch requires per-entry globally certified admission";
+
+fn generic_transaction_batch_unresolved_route(queue: &Queue, reason: &str) -> Error {
+    Error::PushIntoQueue {
+        source: Box::new(iroha_core::queue::Error::UnresolvedRoute {
+            reason: reason.to_owned(),
+        }),
+        backpressure: queue.current_backpressure(),
+    }
+}
+
+pub(crate) fn ensure_generic_transaction_batch_not_ordinary_kagemusha_lifecycle(
+    queue: &Queue,
+    transaction: &SignedTransaction,
+) -> Result<()> {
+    if iroha_core::torii_proxy::validate_ordinary_kagemusha_lifecycle_signed_transaction(
+        transaction,
+    )
+    .is_ok()
+    {
+        return Err(generic_transaction_batch_unresolved_route(
+            queue,
+            GENERIC_BATCH_ORDINARY_KAGEMUSHA_LIFECYCLE_REASON,
+        ));
+    }
+    Ok(())
+}
+
+pub(crate) fn ensure_generic_transaction_batch_entrypoint_allowed(
+    queue: &Queue,
+    entrypoint: &TransactionEntrypoint,
+) -> Result<()> {
+    if iroha_core::torii_proxy::validate_ordinary_kagemusha_lifecycle_entrypoint(entrypoint).is_ok()
+    {
+        return Err(generic_transaction_batch_unresolved_route(
+            queue,
+            GENERIC_BATCH_ORDINARY_KAGEMUSHA_LIFECYCLE_REASON,
+        ));
+    }
+    if entrypoint.admission_intent()
+        == iroha_data_model::transaction::TransactionAdmissionIntent::QueuePlanSynced
+    {
+        return Err(generic_transaction_batch_unresolved_route(
+            queue,
+            GENERIC_BATCH_QUEUE_PLAN_SYNCED_REASON,
+        ));
+    }
+    Ok(())
 }
 fn handle_transaction_inner_sync(
     queue: Arc<Queue>,
@@ -44713,7 +44802,7 @@ mod validation_fee_torii_ingress_tests {
                     members: vec![member.clone()],
                     alternates: Vec::new(),
                     candidate_count: 1,
-                    derived_by: Default::default(),
+                    derived_by: iroha_data_model::isi::governance::CouncilDerivationKind::Sortition,
                 },
             )
         })
@@ -44723,7 +44812,8 @@ mod validation_fee_torii_ingress_tests {
             rosters,
         };
         let roster_digest = Blake2b512::digest(
-            norito::to_bytes(&bodies).expect("encode validation-fee Parliament bodies"),
+            norito::encode_canonical(&bodies)
+                .expect("canonically encode validation-fee Parliament bodies"),
         );
         let mut roster_root = [0; 32];
         roster_root.copy_from_slice(&roster_digest[..32]);
@@ -44933,12 +45023,12 @@ mod validation_fee_torii_ingress_tests {
                     created_height: TEST_REFERENDUM_START_HEIGHT,
                     status: iroha_core::state::GovernanceProposalStatus::Enacted,
                     pipeline: iroha_core::state::GovernancePipeline::default(),
-                    parliament_snapshot: Some(iroha_core::state::GovernanceParliamentSnapshot {
+                    parliament_snapshot: iroha_core::state::GovernanceParliamentSnapshot {
                         selection_epoch: 1,
                         beacon: [0x55; 32],
                         roster_root,
                         bodies: bodies.clone(),
-                    }),
+                    },
                     finalization_evidence: Some(GovernanceFinalizationEvidence {
                         proposal_id,
                         referendum_id: authorization.finalization.referendum_id,
@@ -53591,7 +53681,7 @@ fn build_account_onboarding_plan(
 pub async fn handle_v1_accounts_onboard_plan(
     app: crate::SharedAppState,
     authenticated_scope: crate::AuthenticatedOnboardingScope,
-    crate::CanonicalJsonOnly(request): crate::CanonicalJsonOnly<AccountOnboardingPlanRequestDto>,
+    crate::JsonOnly(request): crate::JsonOnly<AccountOnboardingPlanRequestDto>,
 ) -> Result<impl IntoResponse> {
     let receipt = build_account_onboarding_plan(&app, &authenticated_scope, request)?;
     let body =
@@ -53606,7 +53696,7 @@ pub async fn handle_v1_accounts_onboard_plan(
 pub async fn handle_v1_accounts_onboard_apply(
     app: crate::SharedAppState,
     authenticated_scope: crate::AuthenticatedOnboardingScope,
-    crate::CanonicalJsonOnly(request): crate::CanonicalJsonOnly<AccountOnboardingApplyRequestDto>,
+    crate::JsonOnly(request): crate::JsonOnly<AccountOnboardingApplyRequestDto>,
     telemetry: MaybeTelemetry,
 ) -> Result<impl IntoResponse> {
     use iroha_data_model::{alias_setup::AliasPlanDispositionV1, isi::alias_setup::EnsureAlias};
@@ -60557,8 +60647,8 @@ routing_test! { async public_lane_handlers_hide_future_created_autoscale_stale_r
         .expect("future-created autoscale lane catalog");
         let mut nexus = state.nexus.write();
         nexus.autoscale.enabled = true;
-        nexus.autoscale.min_lanes = nonzero_ext::nonzero!(1_u32);
-        nexus.autoscale.max_lanes = nonzero_ext::nonzero!(2_u32);
+        nexus.autoscale.min_lane_id = nonzero_ext::nonzero!(1_u32);
+        nexus.autoscale.max_lane_id_exclusive = nonzero_ext::nonzero!(2_u32);
         nexus.lane_catalog = lane_catalog;
         nexus.lane_config =
             iroha_config::parameters::actual::LaneConfig::from_catalog(&nexus.lane_catalog);

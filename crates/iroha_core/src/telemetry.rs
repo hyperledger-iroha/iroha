@@ -703,17 +703,6 @@ impl StateTelemetry {
         self.metrics
             .state_commit_write_lock_hold_ms
             .observe(u64_to_f64(hold_ms));
-        // Keep the legacy view_lock histograms populated for existing dashboards.
-        self.metrics
-            .state_commit_view_lock_wait_ms
-            .observe(u64_to_f64(wait_ms));
-        self.metrics
-            .state_commit_view_lock_hold_ms
-            .observe(u64_to_f64(hold_ms));
-    }
-    /// Observe legacy view_lock wait/hold durations during block commit.
-    pub fn observe_state_commit_view_lock(&self, wait: Duration, hold: Duration) {
-        self.observe_state_commit_write_lock(wait, hold);
     }
     /// Replace the cached Nexus lane/dataspace metadata used for telemetry labels.
     pub fn set_nexus_catalogs(
@@ -2292,17 +2281,7 @@ impl StateTelemetry {
             .with_label_values(&[name])
             .observe(u64_to_f64(elapsed_ms));
     }
-    fn record_lane_placeholders(&self, lane_id: LaneId) {
-        self.record_lane_with_dataspace(lane_id, DataSpaceId::UNIVERSAL);
-    }
-    fn record_lane_with_dataspace(&self, lane_id: LaneId, dataspace_id: DataSpaceId) {
-        self.metrics
-            .nexus_lane_id_placeholder
-            .set(u64::from(lane_id));
-        self.metrics
-            .nexus_dataspace_id_placeholder
-            .set(dataspace_id.as_u64());
-    }
+    #[cfg(feature = "telemetry")]
     fn lane_label_values(&self, lane_id: LaneId) -> (String, String) {
         let lane_label = lane_id.as_u32().to_string();
         let dataspace_label = self
@@ -2491,9 +2470,9 @@ impl StateTelemetry {
         if !self.is_enabled() {
             return;
         }
-        self.record_lane_with_dataspace(lane_id, dataspace_id);
         let lag = head_height.saturating_sub(block_height);
-        let (lane_label, dataspace_label) = self.lane_label_values(lane_id);
+        let lane_label = lane_id.as_u32().to_string();
+        let dataspace_label = dataspace_id.as_u64().to_string();
         self.metrics.set_lane_block_height(
             lane_label.as_str(),
             dataspace_label.as_str(),
@@ -2517,8 +2496,8 @@ impl StateTelemetry {
         if !self.is_enabled() {
             return;
         }
-        self.record_lane_with_dataspace(lane_id, dataspace_id);
-        let (lane_label, dataspace_label) = self.lane_label_values(lane_id);
+        let lane_label = lane_id.as_u32().to_string();
+        let dataspace_label = dataspace_id.as_u64().to_string();
         self.metrics
             .lane_relay_emergency_override_total
             .with_label_values(&[lane_label.as_str(), dataspace_label.as_str(), outcome])
@@ -2942,13 +2921,11 @@ impl StateTelemetry {
     pub fn record_fraud_missing_assessment(
         &self,
         lane_id: LaneId,
-        dataspace_id: DataSpaceId,
         dataspace_label: &str,
         tenant: &str,
         cause: &'static str,
     ) {
         if self.is_enabled() {
-            self.record_lane_with_dataspace(lane_id, dataspace_id);
             let tenant_trimmed = tenant.trim();
             let tenant_label = if tenant_trimmed.is_empty() {
                 "unknown"
@@ -3061,7 +3038,6 @@ impl StateTelemetry {
     /// Record per-lane TEU metrics for the latest scheduler envelope.
     pub fn record_nexus_scheduler_lane_teu(&self, lane_id: LaneId, update: LaneTeuGaugeUpdate) {
         if self.is_enabled() {
-            self.record_lane_placeholders(lane_id);
             let lane_label = lane_id.as_u32().to_string();
             self.metrics
                 .nexus_scheduler_lane_teu_capacity
@@ -3113,7 +3089,6 @@ impl StateTelemetry {
         amount: u64,
     ) {
         if self.is_enabled() {
-            self.record_lane_placeholders(lane_id);
             let lane_label = lane_id.as_u32().to_string();
             self.metrics
                 .nexus_scheduler_lane_teu_deferral_total
@@ -3127,7 +3102,6 @@ impl StateTelemetry {
     /// Increment the must-serve truncation counter for the provided lane.
     pub fn inc_nexus_scheduler_must_serve_truncations(&self, lane_id: LaneId, amount: u64) {
         if self.is_enabled() {
-            self.record_lane_placeholders(lane_id);
             let lane_label = lane_id.as_u32().to_string();
             self.metrics
                 .nexus_scheduler_must_serve_truncations_total
@@ -3147,7 +3121,6 @@ impl StateTelemetry {
         update: DataspaceTeuGaugeUpdate,
     ) {
         if self.is_enabled() {
-            self.record_lane_placeholders(lane_id);
             let lane_label = lane_id.as_u32().to_string();
             let ds_label = dataspace_id.as_u64().to_string();
             self.metrics
@@ -3173,13 +3146,11 @@ impl StateTelemetry {
     pub fn record_fraud_invalid_metadata(
         &self,
         lane_id: LaneId,
-        dataspace_id: DataSpaceId,
         dataspace_label: &str,
         tenant: &str,
         field: &'static str,
     ) {
         if self.is_enabled() {
-            self.record_lane_with_dataspace(lane_id, dataspace_id);
             let tenant_trimmed = tenant.trim();
             let tenant_label = if tenant_trimmed.is_empty() {
                 "unknown"
@@ -3195,11 +3166,9 @@ impl StateTelemetry {
         }
     }
     /// Record PSP fraud assessment metrics (counts, score/latency histograms).
-    #[allow(clippy::too_many_arguments)]
     pub fn record_fraud_assessment(
         &self,
         lane_id: LaneId,
-        dataspace_id: DataSpaceId,
         dataspace_label: &str,
         tenant: &str,
         band: &str,
@@ -3207,7 +3176,6 @@ impl StateTelemetry {
         latency_ms: Option<u64>,
     ) {
         if self.is_enabled() {
-            self.record_lane_with_dataspace(lane_id, dataspace_id);
             let tenant_trimmed = tenant.trim();
             let tenant_label = if tenant_trimmed.is_empty() {
                 "unknown"
@@ -3310,13 +3278,11 @@ impl StateTelemetry {
     pub fn record_fraud_outcome_mismatch(
         &self,
         lane_id: LaneId,
-        dataspace_id: DataSpaceId,
         dataspace_label: &str,
         tenant: &str,
         direction: &'static str,
     ) {
         if self.is_enabled() {
-            self.record_lane_with_dataspace(lane_id, dataspace_id);
             let tenant_trimmed = tenant.trim();
             let tenant_label = if tenant_trimmed.is_empty() {
                 "unknown"
@@ -3340,7 +3306,6 @@ impl StateTelemetry {
     pub fn record_fraud_attestation(
         &self,
         lane_id: LaneId,
-        dataspace_id: DataSpaceId,
         dataspace_label: &str,
         tenant: &str,
         engine_id: &str,
@@ -3349,7 +3314,6 @@ impl StateTelemetry {
         if !self.is_enabled() {
             return;
         }
-        self.record_lane_with_dataspace(lane_id, dataspace_id);
         let tenant_trimmed = tenant.trim();
         let tenant_label = if tenant_trimmed.is_empty() {
             "unknown"
@@ -3380,24 +3344,21 @@ impl StateTelemetry {
     [observe_tx_amount(value: f64) => .tx_amounts.observe(value);]
     }
     /// Set DAG vertices/edges for the latest validated block.
-    pub fn set_pipeline_dag(&self, lane_id: LaneId, vertices: u64, edges: u64) {
+    pub fn set_pipeline_dag(&self, vertices: u64, edges: u64) {
         if self.is_enabled() {
-            self.record_lane_placeholders(lane_id);
             self.metrics.pipeline_dag_vertices.set(vertices);
             self.metrics.pipeline_dag_edges.set(edges);
         }
     }
     /// Set DAG conflict rate in basis points for the latest validated block.
-    pub fn set_pipeline_conflict_rate_bps(&self, lane_id: LaneId, bps: u64) {
+    pub fn set_pipeline_conflict_rate_bps(&self, bps: u64) {
         if self.is_enabled() {
-            self.record_lane_placeholders(lane_id);
             self.metrics.pipeline_conflict_rate_bps.set(bps);
         }
     }
     /// Set overlay counters for the latest validated block.
-    pub fn set_pipeline_overlays(&self, lane_id: LaneId, overlays: u64, total_instructions: u64) {
+    pub fn set_pipeline_overlays(&self, overlays: u64, total_instructions: u64) {
         if self.is_enabled() {
-            self.record_lane_placeholders(lane_id);
             self.metrics.pipeline_overlay_count.set(overlays);
             self.metrics
                 .pipeline_overlay_instructions
@@ -3594,15 +3555,8 @@ impl StateTelemetry {
     }
     /// Set component partitioning stats (component count, max size, histogram buckets by `le`).
     /// Buckets correspond to `le` in [1,2,4,8,16,32,64,128]. Values are component counts per bucket.
-    pub fn set_pipeline_components(
-        &self,
-        lane_id: LaneId,
-        count: u64,
-        max_size: u64,
-        buckets: [u64; 8],
-    ) {
+    pub fn set_pipeline_components(&self, count: u64, max_size: u64, buckets: [u64; 8]) {
         if self.is_enabled() {
-            self.record_lane_placeholders(lane_id);
             self.metrics.pipeline_comp_count.set(count);
             self.metrics.pipeline_comp_max.set(max_size);
             // Emit histogram-style buckets with `le` labels
@@ -3615,24 +3569,21 @@ impl StateTelemetry {
         }
     }
     /// Set peak layer width (max txs in any layer) for the latest validated block.
-    pub fn set_pipeline_peak_layer_width(&self, lane_id: LaneId, width: u64) {
+    pub fn set_pipeline_peak_layer_width(&self, width: u64) {
         if self.is_enabled() {
-            self.record_lane_placeholders(lane_id);
             self.metrics.pipeline_peak_layer_width.set(width);
         }
     }
     /// Set average and median layer widths (rounded to integers).
-    pub fn set_pipeline_layer_avg_median(&self, lane_id: LaneId, avg: u64, median: u64) {
+    pub fn set_pipeline_layer_avg_median(&self, avg: u64, median: u64) {
         if self.is_enabled() {
-            self.record_lane_placeholders(lane_id);
             self.metrics.pipeline_layer_avg_width.set(avg);
             self.metrics.pipeline_layer_median_width.set(median);
         }
     }
     /// Set layer-width histogram buckets. Buckets `le` = [1,2,4,8,16,32,64,128]. Values are layer counts per bucket.
-    pub fn set_pipeline_layer_width_hist(&self, lane_id: LaneId, buckets: [u64; 8]) {
+    pub fn set_pipeline_layer_width_hist(&self, buckets: [u64; 8]) {
         if self.is_enabled() {
-            self.record_lane_placeholders(lane_id);
             for (le, val) in PIPELINE_BUCKET_LABELS.iter().zip(buckets.iter()) {
                 self.metrics
                     .pipeline_layer_width_hist_bucket
@@ -3642,58 +3593,46 @@ impl StateTelemetry {
         }
     }
     /// Set scheduler layer count for the latest validated block.
-    pub fn set_pipeline_layer_count(&self, lane_id: LaneId, count: u64) {
+    pub fn set_pipeline_layer_count(&self, count: u64) {
         if self.is_enabled() {
-            self.record_lane_placeholders(lane_id);
             self.metrics.pipeline_layer_count.set(count);
         }
     }
     /// Set scheduler utilization (percent 0..100) for the latest validated block.
-    pub fn set_pipeline_scheduler_utilization_pct(&self, lane_id: LaneId, pct: u64) {
+    pub fn set_pipeline_scheduler_utilization_pct(&self, pct: u64) {
         if self.is_enabled() {
-            self.record_lane_placeholders(lane_id);
             self.metrics
                 .pipeline_scheduler_utilization_pct
                 .set(pct.min(100));
         }
     }
     /// Set total Norito-encoded overlay bytes for the latest validated block.
-    pub fn set_pipeline_overlay_bytes(&self, lane_id: LaneId, total_bytes: u64) {
+    pub fn set_pipeline_overlay_bytes(&self, total_bytes: u64) {
         if self.is_enabled() {
-            self.record_lane_placeholders(lane_id);
             self.metrics.pipeline_overlay_bytes.set(total_bytes);
         }
     }
     /// Set detached pipeline counters for the latest validated block.
-    pub fn set_pipeline_detached_prepared(&self, lane_id: LaneId, count: u64) {
+    pub fn set_pipeline_detached_prepared(&self, count: u64) {
         if self.is_enabled() {
-            self.record_lane_placeholders(lane_id);
             self.metrics.pipeline_detached_prepared.set(count);
         }
     }
     /// Set detached-merged counter for the latest validated block.
-    pub fn set_pipeline_detached_merged(&self, lane_id: LaneId, count: u64) {
+    pub fn set_pipeline_detached_merged(&self, count: u64) {
         if self.is_enabled() {
-            self.record_lane_placeholders(lane_id);
             self.metrics.pipeline_detached_merged.set(count);
         }
     }
     /// Set detached-fallback counter for the latest validated block.
-    pub fn set_pipeline_detached_fallback(&self, lane_id: LaneId, count: u64) {
+    pub fn set_pipeline_detached_fallback(&self, count: u64) {
         if self.is_enabled() {
-            self.record_lane_placeholders(lane_id);
             self.metrics.pipeline_detached_fallback.set(count);
         }
     }
     /// Set detached-fallback count for a specific reason in the latest validated block.
-    pub fn set_pipeline_detached_fallback_reason(
-        &self,
-        lane_id: LaneId,
-        reason: &'static str,
-        count: u64,
-    ) {
+    pub fn set_pipeline_detached_fallback_reason(&self, reason: &'static str, count: u64) {
         if self.is_enabled() {
-            self.record_lane_placeholders(lane_id);
             self.metrics
                 .pipeline_detached_fallback_reason
                 .with_label_values(&[reason])
@@ -3732,7 +3671,6 @@ impl StateTelemetry {
     /// Observe a pipeline stage timing (milliseconds) labeled by `stage`.
     pub fn observe_pipeline_stage_ms(&self, lane_id: LaneId, stage: &'static str, ms: f64) {
         if self.is_enabled() {
-            self.record_lane_placeholders(lane_id);
             let lane_label = lane_id.as_u32().to_string();
             self.metrics
                 .pipeline_stage_ms
@@ -3743,7 +3681,6 @@ impl StateTelemetry {
     /// Observe AMX prepare latency (milliseconds) for the provided lane.
     pub fn observe_amx_prepare_ms(&self, lane_id: LaneId, ms: f64) {
         if self.is_enabled() {
-            self.record_lane_placeholders(lane_id);
             let lane_label = lane_id.as_u32().to_string();
             self.metrics
                 .amx_prepare_ms
@@ -3754,7 +3691,6 @@ impl StateTelemetry {
     /// Observe AMX commit latency (milliseconds) for the provided lane.
     pub fn observe_amx_commit_ms(&self, lane_id: LaneId, ms: f64) {
         if self.is_enabled() {
-            self.record_lane_placeholders(lane_id);
             let lane_label = lane_id.as_u32().to_string();
             self.metrics
                 .amx_commit_ms
@@ -3765,7 +3701,6 @@ impl StateTelemetry {
     /// Observe IVM execution latency (milliseconds) for the provided lane.
     pub fn observe_ivm_exec_ms(&self, lane_id: LaneId, ms: f64) {
         if self.is_enabled() {
-            self.record_lane_placeholders(lane_id);
             let lane_label = lane_id.as_u32().to_string();
             self.metrics
                 .ivm_exec_ms
@@ -3776,7 +3711,6 @@ impl StateTelemetry {
     /// Increment the AMX abort counter for the provided lane/stage.
     pub fn inc_amx_abort(&self, lane_id: LaneId, stage: &'static str) {
         if self.is_enabled() {
-            self.record_lane_placeholders(lane_id);
             let lane_label = lane_id.as_u32().to_string();
             self.metrics
                 .amx_abort_total
@@ -3787,13 +3721,11 @@ impl StateTelemetry {
     /// Set BLS signature verification counters for the latest validated block.
     pub fn set_pipeline_sig_bls_counts(
         &self,
-        lane_id: LaneId,
         same_msg_agg: u64,
         multi_msg_agg: u64,
         deterministic: u64,
     ) {
         if self.is_enabled() {
-            self.record_lane_placeholders(lane_id);
             self.metrics.pipeline_sig_bls_agg_same.set(same_msg_agg);
             self.metrics.pipeline_sig_bls_agg_multi.set(multi_msg_agg);
             self.metrics
@@ -3804,7 +3736,6 @@ impl StateTelemetry {
     /// Increment cumulative BLS aggregate verification counters for the provided lane/result.
     pub fn inc_pipeline_sig_bls_result(&self, lane_id: LaneId, same_message: bool, success: bool) {
         if self.is_enabled() {
-            self.record_lane_placeholders(lane_id);
             let lane_label = lane_id.as_u32().to_string();
             let result_label = if success { "success" } else { "failure" };
             let counter = if same_message {
@@ -3826,13 +3757,13 @@ impl StateTelemetry {
             self.metrics.pipeline_sig_bls_deterministic.get(),
         )
     }
-    /// Get cumulative BLS aggregate counters broken down by result (success, failure).
+    /// Get cumulative BLS aggregate counters for `lane_id`, broken down by result.
     /// Returns ((`same_success`, `same_failure`), (`multi_success`, `multi_failure`)).
-    pub fn pipeline_sig_bls_result_totals(&self) -> ((u64, u64), (u64, u64)) {
+    pub fn pipeline_sig_bls_result_totals(&self, lane_id: LaneId) -> ((u64, u64), (u64, u64)) {
         if !self.is_enabled() {
             return ((0, 0), (0, 0));
         }
-        let lane_label = self.metrics.nexus_lane_id_placeholder.get().to_string();
+        let lane_label = lane_id.as_u32().to_string();
         let same_success = self
             .metrics
             .pipeline_sig_bls_agg_same_total
@@ -4017,23 +3948,20 @@ impl StateTelemetry {
     ) {
     }
     /// Set number of transactions classified into the quarantine lane for the latest block.
-    pub fn set_pipeline_quarantine_classified(&self, lane_id: LaneId, count: u64) {
+    pub fn set_pipeline_quarantine_classified(&self, count: u64) {
         if self.is_enabled() {
-            self.record_lane_placeholders(lane_id);
             self.metrics.pipeline_quarantine_classified.set(count);
         }
     }
     /// Set number of transactions rejected due to quarantine overflow for the latest block.
-    pub fn set_pipeline_quarantine_overflow(&self, lane_id: LaneId, count: u64) {
+    pub fn set_pipeline_quarantine_overflow(&self, count: u64) {
         if self.is_enabled() {
-            self.record_lane_placeholders(lane_id);
             self.metrics.pipeline_quarantine_overflow.set(count);
         }
     }
     /// Set number of transactions executed in quarantine lane for the latest block.
-    pub fn set_pipeline_quarantine_executed(&self, lane_id: LaneId, count: u64) {
+    pub fn set_pipeline_quarantine_executed(&self, count: u64) {
         if self.is_enabled() {
-            self.record_lane_placeholders(lane_id);
             self.metrics.pipeline_quarantine_executed.set(count);
         }
     }
@@ -4619,7 +4547,6 @@ pub struct Telemetry {
     soranet_privacy: Arc<SoranetSecureAggregator>,
     #[cfg_attr(not(feature = "telemetry"), allow(dead_code))]
     micropayment_samples: MicropaymentSampleStore,
-    da_slot_rescheduled: Arc<AtomicBool>,
     da_slots_total: Arc<AtomicU64>,
     da_slots_quorum_met: Arc<AtomicU64>,
 }
@@ -4639,7 +4566,6 @@ impl Clone for Telemetry {
             time_source: self.time_source.clone(),
             soranet_privacy: Arc::clone(&self.soranet_privacy),
             micropayment_samples,
-            da_slot_rescheduled: Arc::clone(&self.da_slot_rescheduled),
             da_slots_total: Arc::clone(&self.da_slots_total),
             da_slots_quorum_met: Arc::clone(&self.da_slots_quorum_met),
         }
@@ -4991,7 +4917,6 @@ impl Telemetry {
             time_source: TimeSource::new_system(),
             soranet_privacy,
             micropayment_samples: Self::default_micropayment_samples(),
-            da_slot_rescheduled: Arc::new(AtomicBool::new(false)),
             da_slots_total: Arc::new(AtomicU64::new(0)),
             da_slots_quorum_met: Arc::new(AtomicU64::new(0)),
         };
@@ -5981,130 +5906,6 @@ impl Telemetry {
                 .set(count);
         }
     }
-    telemetry_atomic_enabled_metric_methods! {
-    /// Set current RBC sessions active gauge.
-    [set_rbc_sessions_active(active: u64) => .sumeragi_rbc_sessions_active.set(active);]
-    }
-    /// Increment RBC sessions pruned counter by `delta`.
-    pub fn inc_rbc_sessions_pruned(&self, delta: u64) {
-        if self.enabled.load(Ordering::Relaxed) {
-            for _ in 0..delta {
-                self.metrics.sumeragi_rbc_sessions_pruned_total.inc();
-            }
-        }
-    }
-    telemetry_atomic_enabled_metric_methods! {
-    /// Increment RBC targeted INIT repair requests counter.
-    [inc_rbc_init_requests() => .sumeragi_rbc_init_requests_total.inc();]
-    /// Increment RBC targeted chunk repair requests counter.
-    [inc_rbc_chunk_requests() => .sumeragi_rbc_chunk_requests_total.inc();]
-    /// Add to the total number of encoded chunk indices requested via targeted repair.
-    [add_rbc_requested_chunks(count: u64) => .sumeragi_rbc_requested_chunks_total.inc_by(count);]
-    }
-    /// Add initial RBC chunk target counters grouped by encoding/fanout policy.
-    pub fn add_rbc_initial_chunk_targets(
-        &self,
-        encoding: &'static str,
-        fanout: &'static str,
-        planned: u64,
-        posted: u64,
-        skipped: u64,
-    ) {
-        if !self.enabled.load(Ordering::Relaxed) {
-            return;
-        }
-        if planned != 0 {
-            self.metrics
-                .sumeragi_rbc_initial_chunk_targets_total
-                .with_label_values(&[encoding, fanout, "planned"])
-                .inc_by(planned);
-        }
-        if posted != 0 {
-            self.metrics
-                .sumeragi_rbc_initial_chunk_targets_total
-                .with_label_values(&[encoding, fanout, "posted"])
-                .inc_by(posted);
-        }
-        if skipped != 0 {
-            self.metrics
-                .sumeragi_rbc_initial_chunk_targets_total
-                .with_label_values(&[encoding, fanout, "skipped"])
-                .inc_by(skipped);
-        }
-    }
-    telemetry_atomic_enabled_metric_methods! {
-    /// Increment RBC targeted-repair fallback counter labeled by kind.
-    [inc_rbc_repair_fallback(kind: &'static str) =>
-        .sumeragi_rbc_repair_fallback_total.with_label_values(&[kind]).inc();]
-    /// Increment RBC READY broadcasts counter.
-    [inc_rbc_ready_broadcasts() => .sumeragi_rbc_ready_broadcasts_total.inc();]
-    /// Increment RBC rebroadcast skip counter labeled by kind (payload|ready).
-    [inc_rbc_rebroadcast_skipped(kind: &'static str) =>
-        .sumeragi_rbc_rebroadcast_skipped_total.with_label_values(&[kind]).inc();]
-    /// Increment RBC DELIVER broadcasts counter.
-    [inc_rbc_deliver_broadcasts() => .sumeragi_rbc_deliver_broadcasts_total.inc();]
-    }
-    /// Add to RBC payload bytes delivered (cumulative gauge).
-    pub fn add_rbc_payload_bytes_delivered(&self, bytes: u64) {
-        if self.enabled.load(Ordering::Relaxed) {
-            let cur = self
-                .metrics
-                .sumeragi_rbc_payload_bytes_delivered_total
-                .get();
-            self.metrics
-                .sumeragi_rbc_payload_bytes_delivered_total
-                .set(cur.saturating_add(bytes));
-        }
-    }
-    telemetry_atomic_enabled_metric_methods! {
-    /// Add to the cumulative RS16 stripes reconstructed from parity.
-    [add_rbc_reconstructed_stripes(count: u64) =>
-        .sumeragi_rbc_reconstructed_stripes_total.inc_by(count);]
-    /// Observe RBC seed/preprocessing latency in milliseconds.
-    [observe_rbc_seed_latency(duration: Duration) =>
-        .sumeragi_rbc_seed_latency_ms.observe(duration.as_secs_f64() * 1_000.0);]
-    /// Increment counter for RBC DELIVER deferrals waiting on READY quorum.
-    [inc_rbc_deliver_defer_ready() => .sumeragi_rbc_deliver_defer_ready_total.inc();]
-    /// Increment counter for RBC DELIVER deferrals waiting on missing chunks.
-    [inc_rbc_deliver_defer_chunks() => .sumeragi_rbc_deliver_defer_chunks_total.inc();]
-    }
-    /// Increment RBC mismatch counter for the given peer and mismatch kind.
-    pub fn inc_rbc_mismatch(
-        &self,
-        peer: &iroha_data_model::peer::PeerId,
-        kind: status::RbcMismatchKind,
-    ) {
-        if self.enabled.load(Ordering::Relaxed) {
-            let peer_label = peer.to_string();
-            let kind_label = kind.label();
-            self.metrics
-                .sumeragi_rbc_mismatch_total
-                .with_label_values(&[peer_label.as_str(), kind_label])
-                .inc();
-        }
-    }
-    /// Increment DA deadline reschedule counter when transactions are re-queued.
-    pub fn inc_da_reschedule(&self, mode_tag: &str) {
-        if self.enabled.load(Ordering::Relaxed) {
-            self.metrics.set_sumeragi_mode_tag(mode_tag);
-            self.metrics.sumeragi_rbc_da_reschedule_total.inc();
-            self.metrics
-                .sumeragi_rbc_da_reschedule_by_mode_total
-                .with_label_values(&[mode_tag])
-                .inc();
-            self.da_slot_rescheduled.store(true, Ordering::Relaxed);
-        }
-    }
-    /// Record an RBC abort (e.g., DA deadline or payload eviction) labeled by consensus mode.
-    pub fn inc_rbc_abort(&self, mode_tag: &str) {
-        if self.enabled.load(Ordering::Relaxed) {
-            self.metrics.set_sumeragi_mode_tag(mode_tag);
-            self.metrics
-                .sumeragi_rbc_abort_total
-                .with_label_values(&[mode_tag])
-                .inc();
-        }
-    }
     /// Record when the commit pipeline runs from the pacemaker tick loop.
     pub fn note_commit_pipeline_tick(&self, mode_tag: &str, has_pending: bool) {
         if !self.enabled.load(Ordering::Relaxed) {
@@ -6220,117 +6021,6 @@ impl Telemetry {
             self.metrics
                 .sumeragi_pacemaker_propose_ms
                 .observe(ms.max(0.0));
-        }
-    }
-    /// Update RBC backlog gauges derived from active sessions.
-    pub fn set_rbc_backlog(&self, total_missing: u64, max_missing: u64, pending: u64) {
-        if self.enabled.load(Ordering::Relaxed) {
-            self.metrics
-                .sumeragi_rbc_backlog_chunks_total
-                .set(total_missing);
-            self.metrics
-                .sumeragi_rbc_backlog_chunks_max
-                .set(max_missing);
-            self.metrics
-                .sumeragi_rbc_backlog_sessions_pending
-                .set(pending);
-        }
-    }
-    /// Update gauges for pending RBC stashes awaiting INIT.
-    pub fn set_rbc_pending(&self, sessions: u64, chunks: u64, bytes: u64) {
-        if self.enabled.load(Ordering::Relaxed) {
-            self.metrics.sumeragi_rbc_pending_sessions.set(sessions);
-            self.metrics.sumeragi_rbc_pending_chunks.set(chunks);
-            self.metrics.sumeragi_rbc_pending_bytes.set(bytes);
-        }
-    }
-    /// Record dropped pending RBC frames by reason (`cap/session_cap/ttl`).
-    pub fn inc_rbc_pending_drop(&self, reason: &str, frames: u64, bytes: u64) {
-        if !self.enabled.load(Ordering::Relaxed) {
-            return;
-        }
-        let frames = frames.max(1);
-        self.metrics
-            .sumeragi_rbc_pending_drops_total
-            .with_label_values(&[reason])
-            .inc_by(frames);
-        self.metrics
-            .sumeragi_rbc_pending_dropped_bytes_total
-            .with_label_values(&[reason])
-            .inc_by(bytes);
-    }
-    /// Record pending RBC stash evictions (sessions).
-    pub fn inc_rbc_pending_evicted(&self, sessions: u64) {
-        if sessions == 0 || !self.enabled.load(Ordering::Relaxed) {
-            return;
-        }
-        self.metrics
-            .sumeragi_rbc_pending_evicted_total
-            .inc_by(sessions);
-    }
-    /// Update per-lane RBC backlog gauges.
-    pub fn set_rbc_lane_backlog(&self, entries: &[crate::sumeragi::status::LaneRbcSnapshot]) {
-        if !self.is_enabled() {
-            return;
-        }
-        let metrics = &self.metrics;
-        metrics.sumeragi_rbc_lane_tx_count.reset();
-        metrics.sumeragi_rbc_lane_total_chunks.reset();
-        metrics.sumeragi_rbc_lane_pending_chunks.reset();
-        metrics.sumeragi_rbc_lane_bytes_total.reset();
-        for entry in entries {
-            let lane = entry.lane_id.to_string();
-            metrics
-                .sumeragi_rbc_lane_tx_count
-                .with_label_values(&[lane.as_str()])
-                .set(entry.tx_count);
-            metrics
-                .sumeragi_rbc_lane_total_chunks
-                .with_label_values(&[lane.as_str()])
-                .set(entry.total_chunks);
-            metrics
-                .sumeragi_rbc_lane_pending_chunks
-                .with_label_values(&[lane.as_str()])
-                .set(entry.pending_chunks);
-            metrics
-                .sumeragi_rbc_lane_bytes_total
-                .with_label_values(&[lane.as_str()])
-                .set(entry.rbc_bytes_total);
-        }
-    }
-    /// Update per-dataspace RBC backlog gauges.
-    pub fn set_rbc_dataspace_backlog(
-        &self,
-        entries: &[crate::sumeragi::status::DataspaceRbcSnapshot],
-    ) {
-        if !self.enabled.load(Ordering::Relaxed) {
-            return;
-        }
-        let metrics = &self.metrics;
-        metrics.sumeragi_rbc_dataspace_tx_count.reset();
-        metrics.sumeragi_rbc_dataspace_total_chunks.reset();
-        metrics.sumeragi_rbc_dataspace_pending_chunks.reset();
-        metrics.sumeragi_rbc_dataspace_bytes_total.reset();
-        for entry in entries {
-            let lane = entry.lane_id.to_string();
-            let dataspace = entry.dataspace_id.to_string();
-            let labels = [lane.as_str(), dataspace.as_str()];
-            metrics
-                .sumeragi_rbc_dataspace_tx_count
-                .with_label_values(&labels)
-                .set(entry.tx_count);
-            metrics
-                .sumeragi_rbc_dataspace_total_chunks
-                .with_label_values(&labels)
-                .set(entry.total_chunks);
-            metrics
-                .sumeragi_rbc_dataspace_pending_chunks
-                .with_label_values(&labels)
-                .set(entry.pending_chunks);
-            metrics
-                .sumeragi_rbc_dataspace_bytes_total
-                .with_label_values(&labels)
-                .set(entry.rbc_bytes_total);
         }
     }
     telemetry_atomic_enabled_metric_methods! {
@@ -7054,12 +6744,10 @@ impl Telemetry {
             self.metrics.commit_time_ms.observe(commit_time);
             self.metrics.slot_duration_ms.observe(commit_time);
             self.metrics.slot_duration_ms_latest.set(commit_time_u64);
-            let slot_had_reschedule = self.da_slot_rescheduled.swap(false, Ordering::Relaxed);
             let total = self.da_slots_total.fetch_add(1, Ordering::Relaxed) + 1;
-            if !slot_had_reschedule {
-                self.da_slots_quorum_met.fetch_add(1, Ordering::Relaxed);
-            }
-            let successes = self.da_slots_quorum_met.load(Ordering::Relaxed);
+            // Revision-4 admission makes signed RS16 availability mandatory for every
+            // committed block; failed gates never reach this commit reporter.
+            let successes = self.da_slots_quorum_met.fetch_add(1, Ordering::Relaxed) + 1;
             let ratio = if total == 0 {
                 1.0
             } else {
@@ -7217,7 +6905,6 @@ impl From<StateTelemetry> for Telemetry {
             time_source: TimeSource::new_system(),
             soranet_privacy: st.soranet_privacy(),
             micropayment_samples: Self::default_micropayment_samples(),
-            da_slot_rescheduled: Arc::new(AtomicBool::new(false)),
             da_slots_total: Arc::new(AtomicU64::new(0)),
             da_slots_quorum_met: Arc::new(AtomicU64::new(0)),
         }
@@ -7887,7 +7574,6 @@ pub fn start(
             time_source: time_source.clone(),
             soranet_privacy: Arc::clone(&soranet_privacy),
             micropayment_samples: Telemetry::default_micropayment_samples(),
-            da_slot_rescheduled: Arc::new(AtomicBool::new(false)),
             da_slots_total: Arc::new(AtomicU64::new(0)),
             da_slots_quorum_met: Arc::new(AtomicU64::new(0)),
         },
@@ -9100,33 +8786,6 @@ mod tests {
                 .with_label_values(&["receipts", "hit"])
                 .get(),
             1
-        );
-    }
-    #[test]
-    fn rbc_initial_chunk_target_metrics_record_outcomes() {
-        let metrics = Arc::new(Metrics::default());
-        let telemetry = Telemetry::new(metrics.clone(), true);
-        telemetry.add_rbc_initial_chunk_targets("rs16", "data_plus_one", 10, 7, 3);
-        assert_eq!(
-            metrics
-                .sumeragi_rbc_initial_chunk_targets_total
-                .with_label_values(&["rs16", "data_plus_one", "planned"])
-                .get(),
-            10
-        );
-        assert_eq!(
-            metrics
-                .sumeragi_rbc_initial_chunk_targets_total
-                .with_label_values(&["rs16", "data_plus_one", "posted"])
-                .get(),
-            7
-        );
-        assert_eq!(
-            metrics
-                .sumeragi_rbc_initial_chunk_targets_total
-                .with_label_values(&["rs16", "data_plus_one", "skipped"])
-                .get(),
-            3
         );
     }
     #[test]
@@ -10513,10 +10172,10 @@ mod tests {
     fn state_telemetry_detached_counters_set() {
         let metrics = Arc::new(iroha_telemetry::metrics::Metrics::default());
         let st = StateTelemetry::new(metrics.clone(), true);
-        st.set_pipeline_detached_prepared(LaneId::SINGLE, 3);
-        st.set_pipeline_detached_merged(LaneId::SINGLE, 2);
-        st.set_pipeline_detached_fallback(LaneId::SINGLE, 1);
-        st.set_pipeline_detached_fallback_reason(LaneId::SINGLE, "fee_postprocessing", 1);
+        st.set_pipeline_detached_prepared(3);
+        st.set_pipeline_detached_merged(2);
+        st.set_pipeline_detached_fallback(1);
+        st.set_pipeline_detached_fallback_reason("fee_postprocessing", 1);
         assert_eq!(metrics.pipeline_detached_prepared.get(), 3);
         assert_eq!(metrics.pipeline_detached_merged.get(), 2);
         assert_eq!(metrics.pipeline_detached_fallback.get(), 1);
@@ -10532,7 +10191,7 @@ mod tests {
     fn state_telemetry_pipeline_dag_emits() {
         let metrics = Arc::new(Metrics::default());
         let st = StateTelemetry::new(metrics.clone(), true);
-        st.set_pipeline_dag(LaneId::SINGLE, 7, 3);
+        st.set_pipeline_dag(7, 3);
         assert_eq!(metrics.pipeline_dag_vertices.get(), 7);
         assert_eq!(metrics.pipeline_dag_edges.get(), 3);
     }
@@ -10542,7 +10201,7 @@ mod tests {
         let st = StateTelemetry::new(metrics.clone(), true);
         st.inc_pipeline_access_set_source(AccessSetSource::ManifestHints, 2);
         st.inc_pipeline_access_set_source(AccessSetSource::PrepassMerge, 1);
-        st.set_pipeline_conflict_rate_bps(LaneId::SINGLE, 250);
+        st.set_pipeline_conflict_rate_bps(250);
         assert_eq!(
             metrics
                 .pipeline_access_set_source_total
@@ -10558,6 +10217,26 @@ mod tests {
             1
         );
         assert_eq!(metrics.pipeline_conflict_rate_bps.get(), 250);
+    }
+    #[test]
+    fn pipeline_sig_bls_result_totals_are_selected_by_exact_lane() {
+        let metrics = Arc::new(Metrics::default());
+        let telemetry = StateTelemetry::new(metrics, true);
+        let first_lane = LaneId::new(1);
+        let second_lane = LaneId::new(2);
+
+        telemetry.inc_pipeline_sig_bls_result(first_lane, true, true);
+        telemetry.inc_pipeline_sig_bls_result(first_lane, false, false);
+        telemetry.inc_pipeline_sig_bls_result(second_lane, true, false);
+
+        assert_eq!(
+            telemetry.pipeline_sig_bls_result_totals(first_lane),
+            ((1, 0), (0, 1))
+        );
+        assert_eq!(
+            telemetry.pipeline_sig_bls_result_totals(second_lane),
+            ((0, 1), (0, 0))
+        );
     }
     #[test]
     fn consensus_message_counters_update() {
@@ -11568,25 +11247,6 @@ mod tests {
             metrics.state_commit_write_lock_hold_ms.get_sample_count(),
             1
         );
-        assert_eq!(metrics.state_commit_view_lock_wait_ms.get_sample_count(), 1);
-        assert_eq!(metrics.state_commit_view_lock_hold_ms.get_sample_count(), 1);
-    }
-    #[test]
-    fn state_commit_view_lock_metrics_remain_compatibility_aliases() {
-        let metrics = Arc::new(Metrics::default());
-        let telemetry = StateTelemetry::new(Arc::clone(&metrics), true);
-        telemetry
-            .observe_state_commit_view_lock(Duration::from_millis(12), Duration::from_millis(34));
-        assert_eq!(
-            metrics.state_commit_write_lock_wait_ms.get_sample_count(),
-            1
-        );
-        assert_eq!(
-            metrics.state_commit_write_lock_hold_ms.get_sample_count(),
-            1
-        );
-        assert_eq!(metrics.state_commit_view_lock_wait_ms.get_sample_count(), 1);
-        assert_eq!(metrics.state_commit_view_lock_hold_ms.get_sample_count(), 1);
     }
     #[test]
     fn view_change_proof_metrics_increment() {
@@ -11954,10 +11614,8 @@ mod tests {
         assert!(total > base_total);
     }
     #[tokio::test]
-    async fn da_quorum_ratio_tracks_reschedules() {
-        const CORRECTION: u64 = 1;
+    async fn da_quorum_ratio_tracks_committed_slots() {
         let sut = SystemUnderTest::new();
-        // First block: no reschedules, ratio should be 1.0.
         let block = sut.create_block();
         sut.mock_time_handle.advance(Duration::from_millis(100));
         let block = sut.commit_block(block);
@@ -11967,71 +11625,6 @@ mod tests {
         assert!(
             (metrics.da_quorum_ratio.get() - 1.0).abs() < f64::EPSILON,
             "expected quorum ratio to start at 1.0"
-        );
-        // Second block: mark a DA reschedule before commit, ratio drops to 0.5.
-        let block = sut.create_block();
-        sut.mock_time_handle.advance(Duration::from_millis(150));
-        sut.telemetry.inc_da_reschedule("npos");
-        let block = sut.commit_block(block);
-        sut.report_commit_block(&block.as_ref().header()).await;
-        let metrics = sut.telemetry.metrics().await;
-        assert_eq!(metrics.last_commit_time_ms.get(), 150 - CORRECTION);
-        assert!(
-            (metrics.da_quorum_ratio.get() - 0.5).abs() < 1e-9,
-            "expected quorum ratio of 0.5 after one reschedule"
-        );
-        assert_eq!(
-            metrics
-                .sumeragi_rbc_da_reschedule_by_mode_total
-                .with_label_values(&["npos"])
-                .get(),
-            1,
-            "mode-tagged DA reschedule counter should increment"
-        );
-    }
-    #[tokio::test]
-    async fn rbc_abort_counter_tracks_mode_tag() {
-        let sut = SystemUnderTest::new();
-        sut.telemetry.inc_rbc_abort("npos");
-        let metrics = sut.telemetry.metrics().await;
-        assert_eq!(
-            metrics
-                .sumeragi_rbc_abort_total
-                .with_label_values(&["npos"])
-                .get(),
-            1,
-            "mode-tagged RBC abort counter should increment"
-        );
-    }
-    #[tokio::test]
-    async fn rbc_rebroadcast_skipped_counter_tracks_kinds() {
-        let sut = SystemUnderTest::new();
-        let metrics = sut.telemetry.metrics().await;
-        let payload_base = metrics
-            .sumeragi_rbc_rebroadcast_skipped_total
-            .with_label_values(&["payload"])
-            .get();
-        let ready_base = metrics
-            .sumeragi_rbc_rebroadcast_skipped_total
-            .with_label_values(&["ready"])
-            .get();
-        sut.telemetry.inc_rbc_rebroadcast_skipped("payload");
-        sut.telemetry.inc_rbc_rebroadcast_skipped("ready");
-        assert_eq!(
-            metrics
-                .sumeragi_rbc_rebroadcast_skipped_total
-                .with_label_values(&["payload"])
-                .get(),
-            payload_base + 1,
-            "payload rebroadcast skip counter should increment"
-        );
-        assert_eq!(
-            metrics
-                .sumeragi_rbc_rebroadcast_skipped_total
-                .with_label_values(&["ready"])
-                .get(),
-            ready_base + 1,
-            "READY rebroadcast skip counter should increment"
         );
     }
     #[tokio::test]
@@ -12360,20 +11953,6 @@ mod tests {
         assert_eq!(gauge.get(), 1);
         telemetry.clear_membership_mismatch(&peer_id);
         assert_eq!(gauge.get(), 0);
-    }
-    #[test]
-    fn rbc_mismatch_metrics_toggle() {
-        let metrics = Arc::new(Metrics::default());
-        let telemetry = Telemetry::new(Arc::clone(&metrics), true);
-        let peer_id = checked_peer_id();
-        let peer_label = peer_id.to_string();
-        let kind = status::RbcMismatchKind::PayloadHash;
-        let counter = metrics
-            .sumeragi_rbc_mismatch_total
-            .with_label_values(&[peer_label.as_str(), kind.label()]);
-        assert_eq!(counter.get(), 0);
-        telemetry.inc_rbc_mismatch(&peer_id, kind);
-        assert_eq!(counter.get(), 1);
     }
     #[test]
     fn membership_view_hash_metrics_update() {

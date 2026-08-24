@@ -1106,19 +1106,14 @@ public final class SccpClientExactTests {
     assert request.soraFinalityAnchor.anchorHash.equals(
         "0x" + finalityAnchorHash().toLowerCase());
 
-    final Map<String, Object> historical = proofRequest();
-    final Map<String, Object> historicalAnchor =
-        object(historical.get("sora_finality_anchor"));
-    historicalAnchor.put("protocol_version", 3);
-    historical.put(
-        "sora_finality_anchor_hash", "0x" + finalityAnchorHash(historicalAnchor).toLowerCase());
-    final SccpModels.Groth16ProofRequestV1 historicalRequest =
-        SccpJsonParser.parseProofRequest(jsonBytes(historical));
-    assert historicalRequest.soraFinalityAnchor.protocolVersion == 3;
-    assert historicalRequest.soraFinalityAnchor.anchorHash.equals(
-        "0xec6c821caf5fa74368c08e9101ab310f132fb7f627a09f6f9481aa9484054bba");
-    assert !historicalRequest.soraFinalityAnchor.anchorHash.equals(
-        request.soraFinalityAnchor.anchorHash);
+    final Map<String, Object> retiredProtocol = proofRequest();
+    final Map<String, Object> retiredProtocolAnchor =
+        object(retiredProtocol.get("sora_finality_anchor"));
+    retiredProtocolAnchor.put("protocol_version", 3);
+    retiredProtocol.put(
+        "sora_finality_anchor_hash",
+        "0x" + finalityAnchorHash(retiredProtocolAnchor).toLowerCase());
+    expectFailure(() -> SccpJsonParser.parseProofRequest(jsonBytes(retiredProtocol)));
 
     final Map<String, Object> wrongProtocol = proofRequest();
     object(wrongProtocol.get("sora_finality_anchor")).put("protocol_version", 1);

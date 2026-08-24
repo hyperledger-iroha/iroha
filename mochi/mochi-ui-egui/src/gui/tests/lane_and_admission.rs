@@ -287,9 +287,15 @@ fn admission_mode_label_matches_variants() {
     );
 }
 #[test]
+fn account_admission_policy_requires_set_parameters_permission() {
+    assert_eq!(
+        ComposerInstructionKind::AccountAdmissionPolicy.permission(),
+        InstructionPermission::SetParameters
+    );
+}
+#[test]
 fn parse_account_admission_policy_builds_policy() {
     let mut app = MochiApp::default();
-    app.composer_admission_domain = "wonderland.universal".to_owned();
     app.composer_admission_mode = AccountAdmissionMode::ImplicitReceive;
     app.composer_admission_max_per_tx = "2".to_owned();
     app.composer_admission_max_per_block = "5".to_owned();
@@ -300,10 +306,9 @@ fn parse_account_admission_policy_builds_policy() {
     app.composer_admission_fee_destination_account = account_literal(&ALICE_ID);
     app.composer_admission_min_initial_amounts = format!("{} = 5", sample_rose_definition_id());
     app.composer_admission_default_role = "basic_user".to_owned();
-    let (domain, policy) = app
+    let policy = app
         .parse_account_admission_policy()
         .expect("policy should parse");
-    assert_eq!(domain, "wonderland.universal");
     assert_eq!(policy.mode, AccountAdmissionMode::ImplicitReceive);
     assert_eq!(policy.max_implicit_creations_per_tx, Some(2));
     assert_eq!(policy.max_implicit_creations_per_block, Some(5));

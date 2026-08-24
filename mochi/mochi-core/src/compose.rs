@@ -6,25 +6,24 @@ use iroha_crypto::KeyPair;
 use iroha_data_model::{
     NetworkId,
     account::{
-        ACCOUNT_ADMISSION_POLICY_METADATA_KEY, Account, AccountAdmissionMode,
-        AccountAdmissionPolicy, AccountId, admission::ImplicitAccountFeeDestination,
+        Account, AccountAdmissionMode, AccountAdmissionPolicy, AccountId,
+        admission::ImplicitAccountFeeDestination,
     },
     asset::{
         definition::{AssetDefinition, Mintable, NewAssetDefinition, validate_asset_name},
         id::{AssetDefinitionId, AssetId},
     },
-    domain::DomainId,
     isi::{
-        Burn, Grant, InstructionBox, Mint, Register, Revoke, SetKeyValue, Transfer,
+        Burn, Grant, InstructionBox, Mint, Register, Revoke, SetParameter, Transfer,
         sorafs::RegisterPinManifest, space_directory::PublishSpaceDirectoryManifest,
     },
-    name::Name,
     nexus::AssetPermissionManifest,
+    parameter::Parameter,
     role::RoleId,
     transaction::{Executable, ExecutableBatchItem, SignedTransaction, TransactionBuilder},
 };
 use iroha_executor_data_model::isi::multisig::MultisigPropose;
-use iroha_primitives::{json::Json, numeric::Quantity};
+use iroha_primitives::numeric::Quantity;
 use iroha_test_samples::{ALICE_ID, ALICE_KEYPAIR, BOB_ID, BOB_KEYPAIR};
 use iroha_version::codec::EncodeVersioned;
 use norito::json::{self, Map, Value};
@@ -53,8 +52,6 @@ pub enum InstructionPermission {
     PublishSpaceDirectoryManifest,
     /// Register SoraFS pin manifests (DA pin intents).
     RegisterPinManifest,
-    /// Set account admission policies on domains.
-    AccountAdmissionPolicy,
     /// Grant roles to accounts.
     GrantRole,
     /// Revoke roles from accounts.
@@ -67,7 +64,7 @@ pub enum InstructionPermission {
 impl InstructionPermission {
     /// Return a static list containing every permission variant.
     #[must_use]
-    pub const fn all() -> [Self; 12] {
+    pub const fn all() -> [Self; 11] {
         [
             Self::MintAsset,
             Self::BurnAsset,
@@ -76,7 +73,6 @@ impl InstructionPermission {
             Self::RegisterAssetDefinition,
             Self::PublishSpaceDirectoryManifest,
             Self::RegisterPinManifest,
-            Self::AccountAdmissionPolicy,
             Self::GrantRole,
             Self::RevokeRole,
             Self::MultisigPropose,
@@ -94,7 +90,6 @@ impl InstructionPermission {
             Self::RegisterAssetDefinition => "register asset definitions",
             Self::PublishSpaceDirectoryManifest => "publish space directory manifests",
             Self::RegisterPinManifest => "register pin manifests",
-            Self::AccountAdmissionPolicy => "set account admission policies",
             Self::GrantRole => "grant roles",
             Self::RevokeRole => "revoke roles",
             Self::MultisigPropose => "propose multisig transactions",
@@ -112,7 +107,6 @@ impl InstructionPermission {
             Self::RegisterAssetDefinition => "register_asset_definition",
             Self::PublishSpaceDirectoryManifest => "publish_space_directory_manifest",
             Self::RegisterPinManifest => "register_pin_manifest",
-            Self::AccountAdmissionPolicy => "account_admission_policy",
             Self::GrantRole => "grant_role",
             Self::RevokeRole => "revoke_role",
             Self::MultisigPropose => "multisig_propose",
@@ -130,7 +124,6 @@ impl InstructionPermission {
             "register_asset_definition" => Some(Self::RegisterAssetDefinition),
             "publish_space_directory_manifest" => Some(Self::PublishSpaceDirectoryManifest),
             "register_pin_manifest" => Some(Self::RegisterPinManifest),
-            "account_admission_policy" => Some(Self::AccountAdmissionPolicy),
             "grant_role" => Some(Self::GrantRole),
             "revoke_role" => Some(Self::RevokeRole),
             "multisig_propose" => Some(Self::MultisigPropose),
@@ -168,14 +161,6 @@ pub enum ComposeError {
     InvalidQuantity {
         /// Text entered by the user.
         quantity: String,
-        /// Human readable failure reason.
-        reason: String,
-    },
-    /// The provided domain identifier could not be parsed.
-    #[error("failed to parse domain id `{domain}`: {reason}")]
-    InvalidDomainId {
-        /// String representation of the domain identifier that failed to parse.
-        domain: String,
         /// Human readable failure reason.
         reason: String,
     },
@@ -338,11 +323,6 @@ static DEVELOPMENT_AUTHORITIES: LazyLock<Vec<SigningAuthority>> = LazyLock::new(
             [InstructionPermission::TransferAsset].into_iter(),
         ),
     ]
-});
-static ACCOUNT_ADMISSION_POLICY_KEY: LazyLock<Name> = LazyLock::new(|| {
-    ACCOUNT_ADMISSION_POLICY_METADATA_KEY
-        .parse()
-        .expect("account admission policy metadata key must be valid")
 });
 fn default_authority() -> &'static SigningAuthority {
     DEVELOPMENT_AUTHORITIES
@@ -643,10 +623,8 @@ pub enum InstructionDraft {
         /// Pin manifest registration payload.
         request: RegisterPinManifest,
     },
-    /// Set the account admission policy for a domain.
+    /// Set the chain-global account admission policy.
     SetAccountAdmissionPolicy {
-        /// Target domain for the policy.
-        domain: DomainId,
         /// Policy configuration payload.
         policy: AccountAdmissionPolicy,
     },
@@ -771,17 +749,10 @@ impl InstructionDraft {
             })?;
         Ok(Self::RegisterPinManifest { request })
     }
-    /// Create an account admission policy draft by parsing textual inputs.
-    ///
-    /// # Errors
-    ///
-    /// Returns a [`ComposeError`] if the domain identifier fails to parse.
-    pub fn account_admission_policy_from_input(
-        domain: &str,
-        policy: AccountAdmissionPolicy,
-    ) -> Result<Self, ComposeError> {
-        let domain = parse_domain_id(domain)?;
-        Ok(Self::SetAccountAdmissionPolicy { domain, policy })
+    /// Create a chain-global account admission policy draft.
+    #[must_use]
+    pub fn account_admission_policy(policy: AccountAdmissionPolicy) -> Self {
+        Self::SetAccountAdmissionPolicy { policy }
     }
     /// Create a grant role draft by parsing textual inputs.
     ///
@@ -854,7 +825,7 @@ impl InstructionDraft {
                 InstructionPermission::RegisterPinManifest
             }
             InstructionDraft::SetAccountAdmissionPolicy { .. } => {
-                InstructionPermission::AccountAdmissionPolicy
+                InstructionPermission::SetParameters
             }
             InstructionDraft::GrantRole { .. } => InstructionPermission::GrantRole,
             InstructionDraft::RevokeRole { .. } => InstructionPermission::RevokeRole,
@@ -901,8 +872,8 @@ impl InstructionDraft {
                     request.manifest_payload.len()
                 )
             }
-            InstructionDraft::SetAccountAdmissionPolicy { domain, policy } => format!(
-                "Set account admission policy for {domain} ({})",
+            InstructionDraft::SetAccountAdmissionPolicy { policy } => format!(
+                "Set chain-global account admission policy ({})",
                 format_admission_policy_summary(policy)
             ),
             InstructionDraft::GrantRole { role, account } => {
@@ -963,12 +934,9 @@ impl InstructionDraft {
             InstructionDraft::RegisterPinManifest { request } => {
                 InstructionBox::from(request.clone())
             }
-            InstructionDraft::SetAccountAdmissionPolicy { domain, policy } => SetKeyValue::domain(
-                domain.clone(),
-                ACCOUNT_ADMISSION_POLICY_KEY.clone(),
-                Json::new(policy.clone()),
-            )
-            .into(),
+            InstructionDraft::SetAccountAdmissionPolicy { policy } => {
+                SetParameter::new(Parameter::Custom(policy.clone().into_custom_parameter())).into()
+            }
             InstructionDraft::GrantRole { role, account } => {
                 Grant::account_role(role.clone(), account.clone()).into()
             }
@@ -1066,12 +1034,11 @@ impl InstructionDraft {
                 let value = json::to_value(request).expect("pin manifest request should serialize");
                 object.insert("request".to_owned(), value);
             }
-            InstructionDraft::SetAccountAdmissionPolicy { domain, policy } => {
+            InstructionDraft::SetAccountAdmissionPolicy { policy } => {
                 object.insert(
                     "kind".to_owned(),
                     Value::String("account_admission_policy".to_owned()),
                 );
-                object.insert("domain".to_owned(), Value::String(domain.to_string()));
                 let value =
                     json::to_value(policy).expect("account admission policy should serialize");
                 object.insert("policy".to_owned(), value);
@@ -1193,7 +1160,12 @@ impl InstructionDraft {
                 Ok(InstructionDraft::RegisterPinManifest { request })
             }
             "account_admission_policy" => {
-                let domain = extract_string(map, "domain")?;
+                if map.contains_key("domain") {
+                    return Err(ComposeError::InvalidRawDraft {
+                        reason: "field `domain` is not supported; account admission policy is chain-global"
+                            .to_owned(),
+                    });
+                }
                 let Some(policy_value) = map.get("policy") else {
                     return Err(ComposeError::InvalidRawDraft {
                         reason: "field `policy` is required".to_owned(),
@@ -1203,7 +1175,7 @@ impl InstructionDraft {
                     .map_err(|err| ComposeError::InvalidRawDraft {
                         reason: format!("invalid account admission policy: {err}"),
                     })?;
-                InstructionDraft::account_admission_policy_from_input(&domain, policy)
+                Ok(InstructionDraft::account_admission_policy(policy))
             }
             "grant_role" => {
                 let role = extract_string(map, "role")?;
@@ -1306,12 +1278,6 @@ fn parse_account_id(value: &str) -> Result<AccountId, ComposeError> {
 fn parse_quantity(value: &str) -> Result<Quantity, ComposeError> {
     Quantity::from_str(value).map_err(|err| ComposeError::InvalidQuantity {
         quantity: value.to_owned(),
-        reason: err.to_string(),
-    })
-}
-fn parse_domain_id(value: &str) -> Result<DomainId, ComposeError> {
-    DomainId::parse_fully_qualified(value).map_err(|err| ComposeError::InvalidDomainId {
-        domain: value.to_owned(),
         reason: err.to_string(),
     })
 }
@@ -1505,10 +1471,10 @@ mod tests {
         env!("CARGO_MANIFEST_DIR"),
         "/../fixtures/composer/draft_pin_manifest.json"
     ));
+    const TEST_NETWORK_ID: &str =
+        "32c903e5b3497e34c2b844ebfe8a39c19e6cf8f95d44c1ffb8ba9dcb42f91149";
     fn test_network_id() -> NetworkId {
-        "hash:32C903E5B3497E34C2B844EBFE8A39C19E6CF8F95D44C1FFB8BA9DCB42F91149#A2F0"
-            .parse()
-            .expect("test network id")
+        TEST_NETWORK_ID.parse().expect("test network id")
     }
     fn draft_from_fixture(fixture: &str) -> InstructionDraft {
         let value: Value = json::from_str(fixture).expect("fixture json");
@@ -1538,6 +1504,16 @@ mod tests {
         assert!(
             SignedTransaction::supported_versions().contains(&preview.encoded_bytes()[0]),
             "unexpected signed transaction version"
+        );
+    }
+    #[test]
+    fn test_network_id_uses_exact_unprefixed_genesis_hash() {
+        assert_eq!(test_network_id().to_string(), TEST_NETWORK_ID);
+        assert!(
+            "hash:32C903E5B3497E34C2B844EBFE8A39C19E6CF8F95D44C1FFB8BA9DCB42F91149#A2F0"
+                .parse::<NetworkId>()
+                .is_err(),
+            "retired tagged-and-checksummed network id must be rejected"
         );
     }
     #[test]
@@ -1630,9 +1606,7 @@ mod tests {
         )
         .into();
         let contract_address = iroha_data_model::smart_contract::ContractAddress::derive(
-            &"hash:32C903E5B3497E34C2B844EBFE8A39C19E6CF8F95D44C1FFB8BA9DCB42F91149#A2F0"
-                .parse()
-                .expect("canonical test network id"),
+            &TEST_NETWORK_ID.parse().expect("canonical test network id"),
             &ALICE_ID,
             1,
             iroha_data_model::nexus::DataSpaceId::UNIVERSAL,
@@ -1703,7 +1677,6 @@ mod tests {
         let asset_id = AssetId::new(asset_def.clone(), ALICE_ID.clone());
         let asset_id_str = asset_literal(&asset_id);
         let account = account_literal(&ALICE_ID);
-        let domain = "wonderland.universal";
         let mint = InstructionDraft::mint_from_input(&asset_id_str, "10").expect("mint draft");
         let burn = InstructionDraft::burn_from_input(&asset_id_str, "1").expect("burn draft");
         let transfer = InstructionDraft::transfer_from_input(&asset_id_str, "5", &account)
@@ -1726,8 +1699,7 @@ mod tests {
             min_initial_amounts: BTreeMap::new(),
             default_role_on_create: None,
         };
-        let admission = InstructionDraft::account_admission_policy_from_input(domain, policy)
-            .expect("policy draft");
+        let admission = InstructionDraft::account_admission_policy(policy);
         let grant_role =
             InstructionDraft::grant_role_from_input("council", &account).expect("grant draft");
         let revoke_role =
@@ -1835,15 +1807,44 @@ mod tests {
         );
     }
     #[test]
-    fn account_admission_policy_draft_parses_domain() {
+    fn account_admission_policy_draft_is_chain_global() {
         let policy = AccountAdmissionPolicy::default();
-        let draft =
-            InstructionDraft::account_admission_policy_from_input("wonderland.universal", policy)
-                .expect("policy draft");
+        let draft = InstructionDraft::account_admission_policy(policy);
         assert!(
-            draft.summary().contains("wonderland.universal"),
-            "summary should mention domain"
+            draft.summary().contains("chain-global"),
+            "summary should identify the global scope"
         );
+    }
+    #[test]
+    fn account_admission_policy_instruction_sets_canonical_global_parameter() {
+        let policy = AccountAdmissionPolicy::default();
+        let instruction = InstructionDraft::account_admission_policy(policy.clone()).instruction();
+        let instruction_ref: &dyn iroha_data_model::isi::Instruction = &*instruction;
+        let set_parameter = instruction_ref
+            .as_any()
+            .downcast_ref::<SetParameter>()
+            .expect("account admission draft must emit SetParameter");
+        let Parameter::Custom(custom) = set_parameter.inner() else {
+            panic!("account admission draft must emit a custom parameter");
+        };
+        assert_eq!(custom.id, AccountAdmissionPolicy::parameter_id());
+        assert_eq!(
+            AccountAdmissionPolicy::from_custom_parameter(custom),
+            Some(policy)
+        );
+    }
+    #[test]
+    fn account_admission_policy_json_rejects_retired_domain_field() {
+        let mut value =
+            InstructionDraft::account_admission_policy(AccountAdmissionPolicy::default())
+                .to_json_value();
+        value.as_object_mut().expect("draft object").insert(
+            "domain".to_owned(),
+            Value::String("wonderland.universal".to_owned()),
+        );
+        let error = InstructionDraft::from_json_value(&value)
+            .expect_err("retired domain-scoped draft must be rejected");
+        assert!(error.to_string().contains("chain-global"));
     }
     #[test]
     fn multisig_propose_from_json_requires_instructions() {
@@ -1892,6 +1893,10 @@ mod tests {
             InstructionPermission::from_key("unknown").is_none(),
             "unknown permission keys should be rejected"
         );
+        assert!(
+            InstructionPermission::from_key("account_admission_policy").is_none(),
+            "retired domain-policy permission key should be rejected"
+        );
     }
     #[test]
     fn draft_fixtures_parse_to_expected_variants() {
@@ -1939,10 +1944,7 @@ mod tests {
             min_initial_amounts: BTreeMap::new(),
             default_role_on_create: Some("basic_user".parse().expect("role id")),
         };
-        let draft = InstructionDraft::SetAccountAdmissionPolicy {
-            domain: DomainId::try_new("wonderland", "universal").expect("domain"),
-            policy,
-        };
+        let draft = InstructionDraft::SetAccountAdmissionPolicy { policy };
         let summary = draft.summary();
         assert!(summary.contains("tx cap 3"));
         assert!(summary.contains("block cap 10"));

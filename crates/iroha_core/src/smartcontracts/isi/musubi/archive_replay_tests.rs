@@ -1,11 +1,11 @@
-use iroha_crypto::{Algorithm, Hash, KeyPair, SignatureOf};
-use mv::cell::Cell;
 use super::*;
 use crate::{
     kura::Kura,
     query::store::LiveQueryStore,
     state::{GovernancePipeline, GovernanceProposalRecord, State, World},
 };
+use iroha_crypto::{Algorithm, Hash, KeyPair, SignatureOf};
+use mv::cell::Cell;
 const GOVERNANCE_EXECUTION_HEIGHT: u64 = 42;
 fn location_fixture(
     archive_byte: u8,
@@ -618,15 +618,20 @@ fn insert_enacted_proposal(
     enacted_at_height: u64,
     transaction: &mut StateTransaction<'_, '_>,
 ) {
+    let proposer = account(80);
+    let created_height = enacted_at_height.saturating_sub(1).max(1);
     transaction.world.put_governance_proposal(
         decision_id,
         GovernanceProposalRecord {
-            proposer: account(80),
+            parliament_snapshot: crate::state::governance_parliament_snapshot_for_tests(
+                &proposer,
+                created_height,
+            ),
+            proposer,
             kind,
-            created_height: enacted_at_height.saturating_sub(1).max(1),
+            created_height,
             status: GovernanceProposalStatus::Enacted,
             pipeline: GovernancePipeline::default(),
-            parliament_snapshot: None,
             finalization_evidence: None,
             enacted_at_height: Some(enacted_at_height),
         },

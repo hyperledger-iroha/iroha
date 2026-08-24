@@ -3,11 +3,11 @@ use crate::isi::governance;
 mod wire_ids;
 use crate::{
     isi::{
-        InstructionRegistry, account_alias_lease, account_recovery, alias_setup, asset_alias,
-        asset_transfer_control, bridge, confidential, consensus_keys, content, contract_alias,
-        defi, domain_link, endorsement, escrow, identifier, kaigi, ministry, musubi, nexus,
-        offline, oracle, privacy, ram_lfe, repo, runtime_upgrade, rwa, settlement,
-        smart_contract_code, social, soracloud, soradns, sorafs, space_directory,
+        InstructionRegistry, account_recovery, alias_setup, asset_alias, asset_transfer_control,
+        bridge, confidential, consensus_keys, content, contract_alias, defi, endorsement, escrow,
+        identifier, kaigi, ministry, musubi, nexus, offline, oracle, privacy, ram_lfe, repo,
+        runtime_upgrade, rwa, settlement, smart_contract_code, social, soracloud, soradns, sorafs,
+        space_directory,
         transparent::{
             AddSignatory, InvalidInstruction, RemoveAssetKeyValue, RemoveSignatory,
             SetAccountQuorum, SetAssetKeyValue,
@@ -477,13 +477,11 @@ mod tests {
         ));
     }
     #[test]
-    fn required_boi_alias_compatibility_ids_are_registered_without_reopening_retired_mutations() {
+    fn only_declarative_alias_instruction_ids_are_registered() {
         let registry = default();
-        assert!(registry.contains(core::any::type_name::<
-            account_alias_lease::AcquireAccountAliasLease,
-        >()));
-        assert!(registry.contains("identity::SetAccountAliasBinding"));
         let removed_ids = [
+            "iroha_data_model::isi::account_alias_lease::AcquireAccountAliasLease",
+            "identity::SetAccountAliasBinding",
             "iroha.account.alias.lease.renew",
             "iroha.account.alias.binding.set",
             "iroha.account.alias.primary.set",

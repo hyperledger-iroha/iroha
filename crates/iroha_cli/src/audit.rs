@@ -9,6 +9,10 @@
     clippy::map_unwrap_or,
     clippy::cast_possible_truncation
 )]
+use crate::{
+    Run, RunContext,
+    json_utils::{json_array, json_object, json_value},
+};
 use clap::ArgAction;
 use eyre::Result;
 use fastpq_prover::{OperationKind, RowUsage, StateTransition, TransitionBatch, build_trace};
@@ -22,10 +26,6 @@ use std::{
     collections::{BTreeMap, BTreeSet},
     fs,
     path::Path,
-};
-use crate::{
-    Run, RunContext,
-    json_utils::{json_array, json_object, json_value},
 };
 #[derive(clap::Subcommand, Debug)]
 pub enum Command {

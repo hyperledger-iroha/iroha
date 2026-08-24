@@ -5,8 +5,10 @@
 //! inside the deployment-owned provider, which executes the authenticated
 //! request without returning credential material to `irohad`.
 use iroha_config::parameters::validate_production_runtime_handle;
+use iroha_data_model::soracloud::is_canonical_hf_commit_oid_v1;
 use std::{fmt, sync::Arc};
 const MAX_HF_INFERENCE_URL_BYTES_V1: usize = 8 * 1024;
+const MAX_HF_REPO_ID_BYTES_V1: usize = 256;
 const MAX_HF_INFERENCE_HEADER_BYTES_V1: usize = 8 * 1024;
 const MAX_HF_INFERENCE_BODY_BYTES_V1: usize = 64 * 1024 * 1024;
 const MAX_HF_INFERENCE_RESPONSE_BYTES_V1: u64 = 64 * 1024 * 1024;
@@ -167,8 +169,10 @@ pub enum SoracloudHfCredentialProviderQualificationErrorV1 {
     /// Provider identity or posture changed across startup probes.
     ProviderDrift,
 }
-/// Bounded authenticated Hugging Face inference request.
+/// Bounded authenticated Hugging Face inference request bound to one immutable model commit.
 pub struct SoracloudHfAuthenticatedInferenceRequestV1 {
+    repo_id: String,
+    resolved_revision: String,
     url: String,
     content_type: String,
     accept: Option<String>,
@@ -179,6 +183,8 @@ impl fmt::Debug for SoracloudHfAuthenticatedInferenceRequestV1 {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
             .debug_struct("SoracloudHfAuthenticatedInferenceRequestV1")
+            .field("repo_id_len", &self.repo_id.len())
+            .field("has_exact_revision", &true)
             .field("url_len", &self.url.len())
             .field("content_type_len", &self.content_type.len())
             .field("has_accept", &self.accept.is_some())
@@ -193,17 +199,25 @@ impl SoracloudHfAuthenticatedInferenceRequestV1 {
     /// # Errors
     ///
     /// Returns [`SoracloudHfCredentialProviderOperationErrorV1::Refused`] for
-    /// empty, malformed, or oversized public metadata and request bodies.
+    /// empty, malformed, incoherent, or oversized public metadata and request
+    /// bodies. The URL must be credential-free HTTPS, end in the exact
+    /// `repo_id`, and contain exactly one matching `revision` query value.
     pub fn try_new(
+        repo_id: impl Into<String>,
+        resolved_revision: impl Into<String>,
         url: impl Into<String>,
         content_type: impl Into<String>,
         accept: Option<String>,
         body: Vec<u8>,
         maximum_response_bytes: u64,
     ) -> Result<Self, SoracloudHfCredentialProviderOperationErrorV1> {
+        let repo_id = repo_id.into();
+        let resolved_revision = resolved_revision.into();
         let url = url.into();
         let content_type = content_type.into();
-        if !valid_bounded_text(&url, MAX_HF_INFERENCE_URL_BYTES_V1)
+        if !valid_hf_repo_id(&repo_id)
+            || !is_canonical_hf_commit_oid_v1(&resolved_revision)
+            || !valid_inference_url_identity(&url, &repo_id, &resolved_revision)
             || !valid_bounded_text(&content_type, MAX_HF_INFERENCE_HEADER_BYTES_V1)
             || accept
                 .as_deref()
@@ -215,12 +229,24 @@ impl SoracloudHfAuthenticatedInferenceRequestV1 {
             return Err(SoracloudHfCredentialProviderOperationErrorV1::Refused);
         }
         Ok(Self {
+            repo_id,
+            resolved_revision,
             url,
             content_type,
             accept,
             body,
             maximum_response_bytes,
         })
+    }
+    /// Return the exact Hugging Face repository identity.
+    #[must_use]
+    pub fn repo_id(&self) -> &str {
+        &self.repo_id
+    }
+    /// Return the immutable 40-character lowercase commit OID.
+    #[must_use]
+    pub fn resolved_revision(&self) -> &str {
+        &self.resolved_revision
     }
     /// Return the exact public inference URL.
     #[must_use]
@@ -254,8 +280,10 @@ impl Drop for SoracloudHfAuthenticatedInferenceRequestV1 {
         let _ = std::hint::black_box(&self.body);
     }
 }
-/// Bounded response returned by the authenticated provider.
+/// Bounded response with the exact model identity attested by the provider.
 pub struct SoracloudHfAuthenticatedInferenceResponseV1 {
+    served_repo_id: String,
+    served_revision: String,
     status: u16,
     content_type: Option<String>,
     content_encoding: Option<String>,
@@ -265,6 +293,8 @@ impl fmt::Debug for SoracloudHfAuthenticatedInferenceResponseV1 {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
             .debug_struct("SoracloudHfAuthenticatedInferenceResponseV1")
+            .field("served_repo_id_len", &self.served_repo_id.len())
+            .field("has_exact_served_revision", &true)
             .field("status", &self.status)
             .field("has_content_type", &self.content_type.is_some())
             .field("has_content_encoding", &self.content_encoding.is_some())
@@ -277,16 +307,23 @@ impl SoracloudHfAuthenticatedInferenceResponseV1 {
     ///
     /// # Errors
     ///
-    /// Rejects invalid status codes, unsafe header values, and responses larger
-    /// than `maximum_response_bytes`.
+    /// Rejects invalid or non-canonical model attestations, invalid status
+    /// codes, unsafe header values, and responses larger than
+    /// `maximum_response_bytes`.
     pub fn try_new(
+        served_repo_id: impl Into<String>,
+        served_revision: impl Into<String>,
         status: u16,
         content_type: Option<String>,
         content_encoding: Option<String>,
         body: Vec<u8>,
         maximum_response_bytes: u64,
     ) -> Result<Self, SoracloudHfCredentialProviderOperationErrorV1> {
-        if !(100..=599).contains(&status)
+        let served_repo_id = served_repo_id.into();
+        let served_revision = served_revision.into();
+        if !valid_hf_repo_id(&served_repo_id)
+            || !is_canonical_hf_commit_oid_v1(&served_revision)
+            || !(100..=599).contains(&status)
             || maximum_response_bytes == 0
             || content_type
                 .as_deref()
@@ -302,11 +339,23 @@ impl SoracloudHfAuthenticatedInferenceResponseV1 {
             return Err(SoracloudHfCredentialProviderOperationErrorV1::InvalidResponse);
         }
         Ok(Self {
+            served_repo_id,
+            served_revision,
             status,
             content_type,
             content_encoding,
             body,
         })
+    }
+    /// Return the exact repository identity attested by the provider.
+    #[must_use]
+    pub fn served_repo_id(&self) -> &str {
+        &self.served_repo_id
+    }
+    /// Return the immutable commit OID attested by the provider.
+    #[must_use]
+    pub fn served_revision(&self) -> &str {
+        &self.served_revision
     }
     /// Return the HTTP status code.
     #[must_use]
@@ -363,8 +412,10 @@ pub trait SoracloudHfInferenceCredentialProviderV1: Send + Sync {
     /// Execute one bounded authenticated inference request.
     ///
     /// Implementations must authenticate only endpoints admitted by the exact
-    /// qualified public policy, reject redirects or endpoint substitution, and
-    /// keep request metadata, bodies, and credentials out of diagnostics.
+    /// qualified public policy, execute the exact requested repository commit,
+    /// attest that served repository and commit in the response, reject
+    /// redirects or endpoint/model substitution, and keep request metadata,
+    /// bodies, and credentials out of diagnostics.
     ///
     /// # Errors
     ///
@@ -435,6 +486,8 @@ impl SoracloudHfInferenceCredentialProviderV1
         let response = self.provider.execute_authenticated(request)?;
         if !u64::try_from(response.body.len())
             .is_ok_and(|length| length <= request.maximum_response_bytes())
+            || response.served_repo_id() != request.repo_id()
+            || response.served_revision() != request.resolved_revision()
         {
             return Err(SoracloudHfCredentialProviderOperationErrorV1::InvalidResponse);
         }
@@ -469,6 +522,59 @@ fn valid_bounded_text(value: &str, maximum_bytes: usize) -> bool {
         && value.len() <= maximum_bytes
         && value.trim() == value
         && !value.chars().any(char::is_control)
+}
+fn valid_hf_repo_id(value: &str) -> bool {
+    if !valid_bounded_text(value, MAX_HF_REPO_ID_BYTES_V1) {
+        return false;
+    }
+    let mut components = value.split('/');
+    let Some(owner) = components.next() else {
+        return false;
+    };
+    let Some(repository) = components.next() else {
+        return false;
+    };
+    components.next().is_none()
+        && valid_hf_repo_component(owner)
+        && valid_hf_repo_component(repository)
+}
+fn valid_hf_repo_component(value: &str) -> bool {
+    !value.is_empty()
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.'))
+}
+fn valid_inference_url_identity(url: &str, repo_id: &str, resolved_revision: &str) -> bool {
+    if !valid_bounded_text(url, MAX_HF_INFERENCE_URL_BYTES_V1) {
+        return false;
+    }
+    let Ok(url) = reqwest::Url::parse(url) else {
+        return false;
+    };
+    if url.scheme() != "https"
+        || !url.username().is_empty()
+        || url.password().is_some()
+        || url.host_str().is_none()
+        || url.port() == Some(0)
+        || url.fragment().is_some()
+    {
+        return false;
+    }
+    let repo_components = repo_id.split('/').collect::<Vec<_>>();
+    let Some(path_segments) = url.path_segments() else {
+        return false;
+    };
+    let path_segments = path_segments.collect::<Vec<_>>();
+    if !path_segments.ends_with(&repo_components) {
+        return false;
+    }
+    let mut revisions = url
+        .query_pairs()
+        .filter(|(key, _)| key.eq_ignore_ascii_case("revision"));
+    revisions
+        .next()
+        .is_some_and(|(_, value)| value == resolved_revision)
+        && revisions.next().is_none()
 }
 fn probe_provider(
     provider: &dyn SoracloudHfInferenceCredentialProviderV1,
@@ -513,11 +619,14 @@ fn qualification_probe_error(
 mod tests {
     use super::*;
     use std::sync::Mutex;
+    const TEST_REPO_ID: &str = "example/model";
+    const TEST_REVISION: &str = "0123456789abcdef0123456789abcdef01234567";
     const QUALIFICATION: SoracloudHfCredentialProviderQualificationV1 =
         SoracloudHfCredentialProviderQualificationV1::new(7, [0xA7; 32], true, false);
     struct TestProvider {
         handle: String,
         qualification: Mutex<SoracloudHfCredentialProviderQualificationV1>,
+        attested_identity: Mutex<Option<(String, String)>>,
         ready: bool,
     }
     impl SoracloudHfInferenceCredentialProviderV1 for TestProvider {
@@ -544,7 +653,20 @@ mod tests {
             SoracloudHfAuthenticatedInferenceResponseV1,
             SoracloudHfCredentialProviderOperationErrorV1,
         > {
+            let attested_identity = self
+                .attested_identity
+                .lock()
+                .expect("attested identity lock")
+                .clone()
+                .unwrap_or_else(|| {
+                    (
+                        request.repo_id().to_owned(),
+                        request.resolved_revision().to_owned(),
+                    )
+                });
             SoracloudHfAuthenticatedInferenceResponseV1::try_new(
+                attested_identity.0,
+                attested_identity.1,
                 200,
                 Some("application/json".to_owned()),
                 None,
@@ -564,6 +686,7 @@ mod tests {
             Arc::new(TestProvider {
                 handle,
                 qualification: Mutex::new(qualification),
+                attested_identity: Mutex::new(None),
                 ready,
             }),
         )
@@ -605,7 +728,11 @@ mod tests {
         let qualified = qualify_soracloud_hf_inference_credential_provider_v1(binding, raw)
             .expect("provider must qualify");
         let request = SoracloudHfAuthenticatedInferenceRequestV1::try_new(
-            "https://router.huggingface.co/models/example",
+            TEST_REPO_ID,
+            TEST_REVISION,
+            format!(
+                "https://router.huggingface.co/models/{TEST_REPO_ID}?revision={TEST_REVISION}"
+            ),
             "application/json",
             Some("application/json".to_owned()),
             br#"{"input":"private"}"#.to_vec(),
@@ -616,6 +743,25 @@ mod tests {
             .execute_authenticated(&request)
             .expect("qualified request");
         assert_eq!(response.status(), 200);
+        assert_eq!(response.served_repo_id(), TEST_REPO_ID);
+        assert_eq!(response.served_revision(), TEST_REVISION);
+        *provider
+            .attested_identity
+            .lock()
+            .expect("attested identity lock") = Some((
+            TEST_REPO_ID.to_owned(),
+            "1123456789abcdef0123456789abcdef01234567".to_owned(),
+        ));
+        assert_eq!(
+            qualified
+                .execute_authenticated(&request)
+                .expect_err("mismatched served revision must fail"),
+            SoracloudHfCredentialProviderOperationErrorV1::InvalidResponse
+        );
+        *provider
+            .attested_identity
+            .lock()
+            .expect("attested identity lock") = None;
         *provider.qualification.lock().expect("qualification lock") =
             SoracloudHfCredentialProviderQualificationV1::new(8, [0xA8; 32], true, false);
         assert_eq!(
@@ -628,7 +774,11 @@ mod tests {
     #[test]
     fn debug_output_redacts_private_request_and_response_bodies() {
         let request = SoracloudHfAuthenticatedInferenceRequestV1::try_new(
-            "https://router.huggingface.co/models/example?private-query-value",
+            TEST_REPO_ID,
+            TEST_REVISION,
+            format!(
+                "https://router.huggingface.co/models/{TEST_REPO_ID}?private-query-value=redacted&revision={TEST_REVISION}"
+            ),
             "application/json",
             None,
             b"private-model-input".to_vec(),
@@ -636,6 +786,8 @@ mod tests {
         )
         .expect("valid request");
         let response = SoracloudHfAuthenticatedInferenceResponseV1::try_new(
+            TEST_REPO_ID,
+            TEST_REVISION,
             200,
             Some("application/json".to_owned()),
             None,
@@ -647,5 +799,32 @@ mod tests {
         assert!(!request_debug.contains("private-model-input"));
         assert!(!request_debug.contains("private-query-value"));
         assert!(!format!("{response:?}").contains("private-model-output"));
+    }
+    #[test]
+    fn request_rejects_transport_path_and_revision_substitution() {
+        let request = |url: &str| {
+            SoracloudHfAuthenticatedInferenceRequestV1::try_new(
+                TEST_REPO_ID,
+                TEST_REVISION,
+                url,
+                "application/json",
+                None,
+                b"{}".to_vec(),
+                1024,
+            )
+        };
+        for url in [
+            "http://router.huggingface.co/models/example/model?revision=0123456789abcdef0123456789abcdef01234567",
+            "https://user:secret@router.huggingface.co/models/example/model?revision=0123456789abcdef0123456789abcdef01234567",
+            "https://router.huggingface.co/models/example/other?revision=0123456789abcdef0123456789abcdef01234567",
+            "https://router.huggingface.co/models/example/model?revision=1123456789abcdef0123456789abcdef01234567",
+            "https://router.huggingface.co/models/example/model?revision=0123456789abcdef0123456789abcdef01234567&revision=0123456789abcdef0123456789abcdef01234567",
+        ] {
+            assert_eq!(
+                request(url).expect_err("substituted request identity must fail"),
+                SoracloudHfCredentialProviderOperationErrorV1::Refused,
+                "unexpectedly admitted {url}"
+            );
+        }
     }
 }

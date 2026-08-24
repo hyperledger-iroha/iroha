@@ -461,7 +461,7 @@ Sumeragi metrics
 - VRF emission: `sumeragi_vrf_commits_emitted_total`, `sumeragi_vrf_reveals_emitted_total`, and `sumeragi_vrf_reveals_late_total` count how many commit/reveal messages this validator broadcast (including late reveals accepted after the window). Pair with `sumeragi_vrf_non_reveal_*` counters to monitor participation health at epoch boundaries.
 - Collector fan-out: `sumeragi_redundant_sends_total` (aggregate), `sumeragi_redundant_sends_by_peer{peer="…"}`, and `sumeragi_redundant_sends_by_collector{idx="…"}` highlight redundant collector sends; investigate sustained spikes to locate congested collectors or unhealthy peers.
 - Collector targeting: `sumeragi_collectors_targeted_current` (gauge) tracks the in-flight collector count for the current block; `sumeragi_collectors_targeted_per_block` histogram (`*_bucket`) records how many collectors were targeted per committed block.
-- DA availability warnings: `sumeragi_rbc_da_reschedule_total` (and `/v1/sumeragi/status → da_reschedule_total`) is legacy and no longer increments; use `sumeragi_da_gate_block_total{reason="missing_local_data"}` for missing local payloads.
+- Signed DA availability: use `sumeragi_da_gate_block_total{reason="missing_local_data"}` for missing local payloads and the `sumeragi_da_manifest_*`/`sumeragi_da_spool_*` families for revision-4 manifest and chunk-spool handling. Retired global-RBC INIT/READY/DELIVER counters are not exported.
 - Channel pressure: `sumeragi_dropped_block_messages_total` and `sumeragi_dropped_control_messages_total` partition channel drops; `dropped_messages` remains the aggregate counter for existing dashboards.
 
 Sumeragi additions (new series)
@@ -1079,7 +1079,7 @@ Operator workflow:
 1. Tail `journalctl -u irohad -o json | jq 'select(.msg==\"nexus.lane.topology\")'` (or subscribe via the OTLP bridge) whenever the governance catalog changes so you capture an immutable record of the storage changes.
 2. Store the JSON payloads with the change request; auditors cross-check them with `nexus_lane_configured_total` and Kura’s directory layout.
 3. Add alert rules when unexpected events arrive (for example, `action="retired"` outside a maintenance window). A simple Loki/Grafana expression is `count_over_time({job="irohad"} |= "nexus.lane.topology" | json | action="retired" [5m]) > 0`.
-4. Feed the events into automation such as `scripts/nexus_lane_smoke.py --from-telemetry telemetry.ndjson --require-alias-migration alpha:payments` so the smoke tests can assert that relabeling occurred after a rename. The helper rejects telemetry logs that do not contain the expected alias entries, making it safe to gate CI on the recorded `nexus.lane.topology` payloads.
+4. Feed the events into automation such as `scripts/nexus_lane_smoke.py --telemetry-file telemetry.ndjson --require-alias-migration alpha:payments` so the smoke tests can assert that relabeling occurred after a rename. The helper rejects telemetry logs that do not contain the expected alias entries, making it safe to gate CI on the recorded `nexus.lane.topology` payloads.
 
 ##### Lane headroom telemetry log
 
@@ -1145,7 +1145,6 @@ the Nexus cut-over. All metrics back the Grafana board stored in
 | `histogram_quantile(0.95, iroha_slot_duration_ms)` | Slot-duration histogram derived from the end of every Sumeragi slot. | Keep p95 ≤ 1 000 ms (warning at 950 ms). Breaches must trigger the slot runbook and be recorded in the NX-18 drill log. |
 | `iroha_slot_duration_ms_latest` | Gauge of the most recent slot duration. | Capture alongside the histogram whenever filing incidents; sustained spikes > 1 100 ms indicate an unhealthy validator even if quantiles remain green. |
 | `iroha_da_quorum_ratio` | Rolling fraction of slots that satisfied the DA quorum window. | Target ≥ 0.95; combine with `increase(sumeragi_da_gate_block_total{reason="missing_local_data"}[5m])` to locate failing attesters or timeouts. |
-| `sumeragi_rbc_da_reschedule_total` | Legacy counter for DA-driven slot reschedules (no longer incremented). | Keep at zero; investigate missing-availability counters instead (see `ops/runbooks/da-quorum.md`). |
 | `iroha_oracle_price_local_per_xor` | Latest TWAP reported by the lane-specific oracle. | Watch for spikes when swap lines are thin; tie haircuts to treasury reports. |
 | `iroha_oracle_staleness_seconds` | Seconds since the last oracle refresh. | Alert at ≥ 75 s; fail the NX-18 gate at ≥ 90 s until the feed is restarted. |
 | `iroha_oracle_twap_window_seconds` | Effective TWAP window length. | Should remain at 60 s ± 5 s; deviations mean the oracle config drifted. |

@@ -1045,6 +1045,165 @@ fn sample_agent_apartment_audit_event() -> SoraAgentApartmentAuditEventV1 {
         succeeded: None,
     }
 }
+#[cfg(feature = "json")]
+#[test]
+fn canonical_agent_hosting_records_require_explicit_null_and_empty_keys() {
+    macro_rules! assert_required_keys {
+        (
+            $value:expr,
+            $ty:ty,
+            [$($field:literal),+ $(,)?],
+            [$($nullable:literal),* $(,)?],
+            $label:literal
+        ) => {{
+            let canonical =
+                norito::json::to_value(&$value).expect(concat!("serialize ", $label));
+            norito::json::from_value::<$ty>(canonical.clone())
+                .expect(concat!("canonical ", $label, " must decode"));
+            $(
+                let mut missing = canonical.clone();
+                assert!(
+                    missing
+                        .as_object_mut()
+                        .expect(concat!($label, " JSON object"))
+                        .remove($field)
+                        .is_some(),
+                    "canonical {} must contain `{}`",
+                    $label,
+                    $field
+                );
+                norito::json::from_value::<$ty>(missing).expect_err(concat!(
+                    $label,
+                    " must reject an omitted canonical key"
+                ));
+            )+
+            $(
+                let mut explicit_null = canonical.clone();
+                explicit_null
+                    .as_object_mut()
+                    .expect(concat!($label, " JSON object"))
+                    .insert($nullable.to_owned(), norito::json::Value::Null);
+                norito::json::from_value::<$ty>(explicit_null).expect(concat!(
+                    $label,
+                    " must accept an explicit nullable key"
+                ));
+            )*
+        }};
+    }
+
+    assert_required_keys!(
+        SoraAgentArtifactAllowRuleV1 {
+            artifact_hash: "hash:ABCD0123#01".to_owned(),
+            provenance_hash: None,
+            added_sequence: 20,
+        },
+        SoraAgentArtifactAllowRuleV1,
+        ["provenance_hash"],
+        ["provenance_hash"],
+        "agent artifact allow rule"
+    );
+    assert_required_keys!(
+        SoraAgentAutonomyRunRecordV1 {
+            run_id: "ops_agent:autonomy:33".to_owned(),
+            artifact_hash: "hash:ABCD0123#01".to_owned(),
+            provenance_hash: None,
+            budget_units: 180,
+            run_label: "nightly".to_owned(),
+            workflow_input_json: None,
+            approved_process_generation: 1,
+            request_commitment: sample_hash(167),
+            approved_sequence: 33,
+        },
+        SoraAgentAutonomyRunRecordV1,
+        ["provenance_hash", "workflow_input_json"],
+        ["provenance_hash", "workflow_input_json"],
+        "agent autonomy-run record"
+    );
+    assert_required_keys!(
+        SoraAgentPersistentStateV1 {
+            total_bytes: 0,
+            key_sizes: BTreeMap::new(),
+        },
+        SoraAgentPersistentStateV1,
+        ["key_sizes"],
+        [],
+        "agent persistent state"
+    );
+    assert_required_keys!(
+        sample_agent_apartment_record(),
+        SoraAgentApartmentRecordV1,
+        [
+            "last_restart_sequence",
+            "last_restart_reason",
+            "last_checkpoint_sequence",
+            "revoked_policy_capabilities",
+            "pending_wallet_requests",
+            "wallet_daily_spend",
+            "mailbox_queue",
+            "artifact_allowlist",
+            "autonomy_run_history",
+        ],
+        [
+            "last_restart_sequence",
+            "last_restart_reason",
+            "last_checkpoint_sequence",
+        ],
+        "agent apartment record"
+    );
+    assert_required_keys!(
+        sample_agent_apartment_audit_event(),
+        SoraAgentApartmentAuditEventV1,
+        [
+            "request_id",
+            "asset_definition",
+            "amount",
+            "capability",
+            "reason",
+            "from_apartment",
+            "to_apartment",
+            "channel",
+            "payload_hash",
+            "artifact_hash",
+            "provenance_hash",
+            "run_id",
+            "run_label",
+            "budget_units",
+            "service_name",
+            "service_version",
+            "handler_name",
+            "result_commitment",
+            "runtime_receipt_id",
+            "journal_artifact_hash",
+            "checkpoint_artifact_hash",
+            "succeeded",
+        ],
+        [
+            "request_id",
+            "asset_definition",
+            "amount",
+            "capability",
+            "reason",
+            "from_apartment",
+            "to_apartment",
+            "channel",
+            "payload_hash",
+            "artifact_hash",
+            "provenance_hash",
+            "run_id",
+            "run_label",
+            "budget_units",
+            "service_name",
+            "service_version",
+            "handler_name",
+            "result_commitment",
+            "runtime_receipt_id",
+            "journal_artifact_hash",
+            "checkpoint_artifact_hash",
+            "succeeded",
+        ],
+        "agent apartment audit event"
+    );
+}
 fn sample_fhe_param_set() -> FheParamSetV1 {
     FheParamSetV1 {
         schema_version: FHE_PARAM_SET_VERSION_V1,
@@ -1559,6 +1718,103 @@ fn sample_runtime_receipt() -> SoraRuntimeReceiptV1 {
         checkpoint_artifact_hash: Some(sample_hash(169)),
     }
 }
+#[cfg(feature = "json")]
+#[test]
+fn service_world_records_are_closed_and_require_explicit_nullable_keys() {
+    macro_rules! assert_closed_and_required_nullable {
+        ($value:expr, $ty:ty, [$($field:literal),+ $(,)?], $label:literal) => {{
+            let canonical =
+                norito::json::to_value(&$value).expect(concat!("serialize canonical ", $label));
+            norito::json::from_value::<$ty>(canonical.clone())
+                .expect(concat!("canonical ", $label, " must decode"));
+
+            let mut unknown = canonical.clone();
+            unknown
+                .as_object_mut()
+                .expect(concat!($label, " JSON object"))
+                .insert("retired_v0".to_owned(), norito::json::Value::from(true));
+            let error = norito::json::from_value::<$ty>(unknown)
+                .expect_err(concat!($label, " must reject unknown fields"));
+            assert!(
+                matches!(
+                    error,
+                    norito::json::Error::UnknownField { ref field } if field == "retired_v0"
+                ),
+                "{} reported the wrong unknown-field error: {error}",
+                $label
+            );
+
+            for field in [$($field),+] {
+                let mut missing = canonical.clone();
+                assert!(
+                    missing
+                        .as_object_mut()
+                        .expect(concat!($label, " JSON object"))
+                        .remove(field)
+                        .is_some(),
+                    "canonical {} must contain `{field}`",
+                    $label
+                );
+                norito::json::from_value::<$ty>(missing)
+                    .expect_err(concat!($label, " must reject an omitted nullable key"));
+
+                let mut explicit_null = canonical.clone();
+                explicit_null
+                    .as_object_mut()
+                    .expect(concat!($label, " JSON object"))
+                    .insert(field.to_owned(), norito::json::Value::Null);
+                norito::json::from_value::<$ty>(explicit_null)
+                    .expect(concat!($label, " must accept an explicit null key"));
+            }
+        }};
+    }
+
+    assert_closed_and_required_nullable!(
+        sample_service_audit_event(),
+        SoraServiceAuditEventV1,
+        [
+            "from_version",
+            "governance_tx_hash",
+            "binding_name",
+            "state_key",
+            "config_name",
+            "secret_name",
+            "rollout_handle",
+            "policy_name",
+            "policy_snapshot_hash",
+            "jurisdiction_tag",
+            "consent_evidence_hash",
+            "break_glass",
+            "break_glass_reason",
+        ],
+        "service audit event"
+    );
+    assert_closed_and_required_nullable!(
+        sample_service_runtime_state(),
+        SoraServiceRuntimeStateV1,
+        ["rollout_handle", "last_receipt_id"],
+        "service runtime state"
+    );
+    assert_closed_and_required_nullable!(
+        sample_service_mailbox_message(),
+        SoraServiceMailboxMessageV1,
+        ["expires_at_sequence"],
+        "service mailbox message"
+    );
+    assert_closed_and_required_nullable!(
+        sample_runtime_receipt(),
+        SoraRuntimeReceiptV1,
+        [
+            "placement_id",
+            "selected_validator_account_id",
+            "selected_peer_id",
+            "mailbox_message_id",
+            "journal_artifact_hash",
+            "checkpoint_artifact_hash",
+        ],
+        "runtime receipt"
+    );
+}
 fn sample_host_state_mutation_request_envelope() -> SoracloudHostRequestEnvelopeV1 {
     let payload = vec![1, 2, 3, 4];
     SoracloudHostRequestEnvelopeV1 {
@@ -1609,6 +1865,727 @@ fn sample_host_egress_response_envelope() -> SoracloudHostResponseEnvelopeV1 {
         }),
     )
 }
+#[cfg(feature = "json")]
+#[test]
+fn host_protocol_v1_json_rejects_unknown_fields_across_the_direct_graph() {
+    macro_rules! assert_unknown_rejected {
+        ($value:expr, $ty:ty, $label:literal) => {{
+            let mut value = norito::json::to_value(&$value).expect(concat!("serialize ", $label));
+            value
+                .as_object_mut()
+                .expect(concat!($label, " JSON object"))
+                .insert("retired_v0".to_owned(), norito::json!(true));
+            let error = norito::json::from_value::<$ty>(value)
+                .expect_err(concat!($label, " must reject unknown fields"));
+            assert!(
+                matches!(
+                    error,
+                    json::Error::UnknownField { ref field } if field == "retired_v0"
+                ),
+                "{} reported the wrong error: {error:?}",
+                $label
+            );
+        }};
+    }
+
+    let state_mutation_request = SoracloudEmitStateMutationRequestV1 {
+        binding_name: "private_state".parse().expect("valid name"),
+        state_key: "/state/private/patient-1".to_owned(),
+        operation: SoraStateMutationOperationV1::Delete,
+        encryption: SoraStateEncryptionV1::FheCiphertext,
+        payload_bytes: None,
+        payload: None,
+        payload_commitment: None,
+    };
+    let mailbox_request = SoracloudEmitMailboxMessageRequestV1 {
+        to_service: "audit".parse().expect("valid name"),
+        to_handler: "update".parse().expect("valid name"),
+        payload_bytes: Vec::new(),
+        available_after_sequence: 1,
+        expires_at_sequence: None,
+    };
+    let egress_response = SoracloudEgressFetchResponseV1 {
+        status_code: 204,
+        content_type: None,
+        body: Vec::new(),
+        body_hash: Hash::new([]),
+    };
+
+    assert_unknown_rejected!(
+        SoracloudHostOperationV1::ReadConfig,
+        SoracloudHostOperationV1,
+        "host operation"
+    );
+    assert_unknown_rejected!(
+        sample_host_state_mutation_request_envelope(),
+        SoracloudHostRequestEnvelopeV1,
+        "host request envelope"
+    );
+    assert_unknown_rejected!(
+        SoracloudHostRequestPayloadV1::ReadConfig(SoracloudReadConfigRequestV1 {
+            config_name: "runtime/theme".to_owned(),
+        }),
+        SoracloudHostRequestPayloadV1,
+        "host request payload"
+    );
+    assert_unknown_rejected!(
+        sample_host_egress_response_envelope(),
+        SoracloudHostResponseEnvelopeV1,
+        "host response envelope"
+    );
+    assert_unknown_rejected!(
+        SoracloudHostResponsePayloadV1::EgressFetch(egress_response.clone()),
+        SoracloudHostResponsePayloadV1,
+        "host response payload"
+    );
+    assert_unknown_rejected!(
+        SoracloudReadCommittedStateRequestV1 {
+            binding_name: "private_state".parse().expect("valid name"),
+            state_key: "/state/private/patient-1".to_owned(),
+        },
+        SoracloudReadCommittedStateRequestV1,
+        "read committed state request"
+    );
+    assert_unknown_rejected!(
+        SoracloudReadCommittedStateResponseV1 { entry: None },
+        SoracloudReadCommittedStateResponseV1,
+        "read committed state response"
+    );
+    assert_unknown_rejected!(
+        state_mutation_request,
+        SoracloudEmitStateMutationRequestV1,
+        "emit state mutation request"
+    );
+    assert_unknown_rejected!(
+        SoracloudEmitStateMutationResponseV1 {
+            mutation_commitment: sample_hash(211),
+        },
+        SoracloudEmitStateMutationResponseV1,
+        "emit state mutation response"
+    );
+    assert_unknown_rejected!(
+        mailbox_request,
+        SoracloudEmitMailboxMessageRequestV1,
+        "emit mailbox message request"
+    );
+    assert_unknown_rejected!(
+        SoracloudEmitMailboxMessageResponseV1 {
+            message_id: sample_hash(212),
+            payload_commitment: sample_hash(213),
+        },
+        SoracloudEmitMailboxMessageResponseV1,
+        "emit mailbox message response"
+    );
+    assert_unknown_rejected!(
+        SoracloudAppendJournalRequestV1 {
+            artifact_path: "/journal/1".to_owned(),
+            payload_bytes: Vec::new(),
+        },
+        SoracloudAppendJournalRequestV1,
+        "append journal request"
+    );
+    assert_unknown_rejected!(
+        SoracloudAppendJournalResponseV1 {
+            artifact_hash: sample_hash(214),
+        },
+        SoracloudAppendJournalResponseV1,
+        "append journal response"
+    );
+    assert_unknown_rejected!(
+        SoracloudPublishCheckpointRequestV1 {
+            artifact_path: "/checkpoint/1".to_owned(),
+            payload_bytes: Vec::new(),
+        },
+        SoracloudPublishCheckpointRequestV1,
+        "publish checkpoint request"
+    );
+    assert_unknown_rejected!(
+        SoracloudPublishCheckpointResponseV1 {
+            artifact_hash: sample_hash(215),
+        },
+        SoracloudPublishCheckpointResponseV1,
+        "publish checkpoint response"
+    );
+    assert_unknown_rejected!(
+        SoracloudReadConfigRequestV1 {
+            config_name: "runtime/theme".to_owned(),
+        },
+        SoracloudReadConfigRequestV1,
+        "read config request"
+    );
+    assert_unknown_rejected!(
+        SoracloudReadConfigResponseV1 {
+            found: false,
+            payload_bytes: Vec::new(),
+        },
+        SoracloudReadConfigResponseV1,
+        "read config response"
+    );
+    assert_unknown_rejected!(
+        SoracloudReadSecretEnvelopeRequestV1 {
+            secret_name: "db/password".to_owned(),
+        },
+        SoracloudReadSecretEnvelopeRequestV1,
+        "read secret envelope request"
+    );
+    assert_unknown_rejected!(
+        SoracloudReadSecretEnvelopeResponseV1 { envelope: None },
+        SoracloudReadSecretEnvelopeResponseV1,
+        "read secret envelope response"
+    );
+    assert_unknown_rejected!(
+        SoracloudReadSecretRequestV1 {
+            secret_name: "db/password".to_owned(),
+        },
+        SoracloudReadSecretRequestV1,
+        "read secret request"
+    );
+    assert_unknown_rejected!(
+        SoracloudReadSecretResponseV1 {
+            found: false,
+            payload_bytes: Vec::new(),
+        },
+        SoracloudReadSecretResponseV1,
+        "read secret response"
+    );
+    assert_unknown_rejected!(
+        SoracloudReadCredentialRequestV1 {
+            credential_name: "service-account".to_owned(),
+        },
+        SoracloudReadCredentialRequestV1,
+        "read credential request"
+    );
+    assert_unknown_rejected!(
+        SoracloudReadCredentialResponseV1 {
+            found: false,
+            payload_bytes: Vec::new(),
+        },
+        SoracloudReadCredentialResponseV1,
+        "read credential response"
+    );
+    assert_unknown_rejected!(
+        SoracloudEgressFetchRequestV1 {
+            url: "https://oracle.example/data.json".to_owned(),
+            max_bytes: 4096,
+            expected_hash: None,
+        },
+        SoracloudEgressFetchRequestV1,
+        "egress fetch request"
+    );
+    assert_unknown_rejected!(
+        egress_response,
+        SoracloudEgressFetchResponseV1,
+        "egress fetch response"
+    );
+}
+#[cfg(feature = "json")]
+#[test]
+fn host_protocol_v1_json_requires_explicit_null_and_empty_keys() {
+    macro_rules! assert_required_fields {
+        ($value:expr, $ty:ty, [$($field:literal),+ $(,)?], $label:literal) => {{
+            let value = $value;
+            let canonical = norito::json::to_value(&value).expect(concat!("serialize ", $label));
+            assert_eq!(
+                norito::json::from_value::<$ty>(canonical.clone())
+                    .expect(concat!("decode canonical ", $label)),
+                value
+            );
+            $(
+                assert!(canonical.get($field).is_some(), "canonical {} must emit `{}`", $label, $field);
+                let mut missing = canonical.clone();
+                assert!(
+                    missing
+                        .as_object_mut()
+                        .expect(concat!($label, " JSON object"))
+                        .remove($field)
+                        .is_some()
+                );
+                norito::json::from_value::<$ty>(missing)
+                    .expect_err(concat!($label, " must reject omitted V1 fields"));
+            )+
+        }};
+    }
+    macro_rules! assert_required_nulls {
+        ($value:expr, $ty:ty, [$($field:literal),+ $(,)?], $label:literal) => {{
+            let value = $value;
+            let canonical = norito::json::to_value(&value).expect(concat!("serialize ", $label));
+            $(
+                assert!(
+                    canonical.get($field).is_some_and(norito::json::Value::is_null),
+                    "canonical {} must emit nullable `{}` as null",
+                    $label,
+                    $field
+                );
+                let mut missing = canonical.clone();
+                assert!(
+                    missing
+                        .as_object_mut()
+                        .expect(concat!($label, " JSON object"))
+                        .remove($field)
+                        .is_some()
+                );
+                norito::json::from_value::<$ty>(missing)
+                    .expect_err(concat!($label, " must reject omitted nullable V1 fields"));
+            )+
+            assert_eq!(
+                norito::json::from_value::<$ty>(canonical)
+                    .expect(concat!("decode explicit-null ", $label)),
+                value
+            );
+        }};
+    }
+
+    assert_required_nulls!(
+        SoracloudReadCommittedStateResponseV1 { entry: None },
+        SoracloudReadCommittedStateResponseV1,
+        ["entry"],
+        "read committed state response"
+    );
+    assert_required_nulls!(
+        SoracloudEmitStateMutationRequestV1 {
+            binding_name: "private_state".parse().expect("valid name"),
+            state_key: "/state/private/patient-1".to_owned(),
+            operation: SoraStateMutationOperationV1::Delete,
+            encryption: SoraStateEncryptionV1::FheCiphertext,
+            payload_bytes: None,
+            payload: None,
+            payload_commitment: None,
+        },
+        SoracloudEmitStateMutationRequestV1,
+        ["payload_bytes", "payload", "payload_commitment"],
+        "emit state mutation request"
+    );
+    assert_required_fields!(
+        SoracloudEmitMailboxMessageRequestV1 {
+            to_service: "audit".parse().expect("valid name"),
+            to_handler: "update".parse().expect("valid name"),
+            payload_bytes: Vec::new(),
+            available_after_sequence: 1,
+            expires_at_sequence: None,
+        },
+        SoracloudEmitMailboxMessageRequestV1,
+        ["payload_bytes"],
+        "emit mailbox message request"
+    );
+    assert_required_nulls!(
+        SoracloudEmitMailboxMessageRequestV1 {
+            to_service: "audit".parse().expect("valid name"),
+            to_handler: "update".parse().expect("valid name"),
+            payload_bytes: Vec::new(),
+            available_after_sequence: 1,
+            expires_at_sequence: None,
+        },
+        SoracloudEmitMailboxMessageRequestV1,
+        ["expires_at_sequence"],
+        "emit mailbox message request"
+    );
+    assert_required_fields!(
+        SoracloudAppendJournalRequestV1 {
+            artifact_path: "/journal/1".to_owned(),
+            payload_bytes: Vec::new(),
+        },
+        SoracloudAppendJournalRequestV1,
+        ["payload_bytes"],
+        "append journal request"
+    );
+    assert_required_fields!(
+        SoracloudPublishCheckpointRequestV1 {
+            artifact_path: "/checkpoint/1".to_owned(),
+            payload_bytes: Vec::new(),
+        },
+        SoracloudPublishCheckpointRequestV1,
+        ["payload_bytes"],
+        "publish checkpoint request"
+    );
+    assert_required_fields!(
+        SoracloudReadConfigResponseV1 {
+            found: false,
+            payload_bytes: Vec::new(),
+        },
+        SoracloudReadConfigResponseV1,
+        ["payload_bytes"],
+        "read config response"
+    );
+    assert_required_nulls!(
+        SoracloudReadSecretEnvelopeResponseV1 { envelope: None },
+        SoracloudReadSecretEnvelopeResponseV1,
+        ["envelope"],
+        "read secret envelope response"
+    );
+    assert_required_fields!(
+        SoracloudReadSecretResponseV1 {
+            found: false,
+            payload_bytes: Vec::new(),
+        },
+        SoracloudReadSecretResponseV1,
+        ["payload_bytes"],
+        "read secret response"
+    );
+    assert_required_fields!(
+        SoracloudReadCredentialResponseV1 {
+            found: false,
+            payload_bytes: Vec::new(),
+        },
+        SoracloudReadCredentialResponseV1,
+        ["payload_bytes"],
+        "read credential response"
+    );
+    assert_required_nulls!(
+        SoracloudEgressFetchRequestV1 {
+            url: "https://oracle.example/data.json".to_owned(),
+            max_bytes: 4096,
+            expected_hash: None,
+        },
+        SoracloudEgressFetchRequestV1,
+        ["expected_hash"],
+        "egress fetch request"
+    );
+    assert_required_fields!(
+        SoracloudEgressFetchResponseV1 {
+            status_code: 204,
+            content_type: None,
+            body: Vec::new(),
+            body_hash: Hash::new([]),
+        },
+        SoracloudEgressFetchResponseV1,
+        ["body"],
+        "egress fetch response"
+    );
+    assert_required_nulls!(
+        SoracloudEgressFetchResponseV1 {
+            status_code: 204,
+            content_type: None,
+            body: Vec::new(),
+            body_hash: Hash::new([]),
+        },
+        SoracloudEgressFetchResponseV1,
+        ["content_type"],
+        "egress fetch response"
+    );
+}
+#[cfg(feature = "json")]
+#[test]
+fn signed_fhe_request_model_v1_json_is_closed_and_requires_canonical_keys() {
+    macro_rules! assert_closed {
+        ($value:expr, $ty:ty, $label:literal) => {{
+            let value = $value;
+            let canonical =
+                norito::json::to_value(&value).expect(concat!("serialize ", $label));
+            assert_eq!(
+                norito::json::from_value::<$ty>(canonical.clone())
+                    .expect(concat!("decode canonical ", $label)),
+                value
+            );
+
+            let mut unknown = canonical;
+            unknown
+                .as_object_mut()
+                .expect(concat!($label, " JSON object"))
+                .insert("retired_v0".to_owned(), norito::json!(true));
+            let error = norito::json::from_value::<$ty>(unknown)
+                .expect_err(concat!($label, " must reject unknown fields"));
+            assert!(
+                matches!(
+                    error,
+                    json::Error::UnknownField { ref field } if field == "retired_v0"
+                ),
+                "{} reported the wrong unknown-field error: {error:?}",
+                $label
+            );
+        }};
+    }
+    macro_rules! assert_required_fields {
+        ($value:expr, $ty:ty, [$($field:literal),+ $(,)?], $label:literal) => {{
+            let value = $value;
+            let canonical =
+                norito::json::to_value(&value).expect(concat!("serialize ", $label));
+            assert_eq!(
+                norito::json::from_value::<$ty>(canonical.clone())
+                    .expect(concat!("decode canonical ", $label)),
+                value
+            );
+            $(
+                assert!(canonical.get($field).is_some(), "canonical {} must emit `{}`", $label, $field);
+                let mut missing = canonical.clone();
+                assert!(
+                    missing
+                        .as_object_mut()
+                        .expect(concat!($label, " JSON object"))
+                        .remove($field)
+                        .is_some()
+                );
+                norito::json::from_value::<$ty>(missing)
+                    .expect_err(concat!($label, " must reject omitted V1 fields"));
+            )+
+        }};
+    }
+    macro_rules! assert_required_nulls {
+        ($value:expr, $ty:ty, [$($field:literal),+ $(,)?], $label:literal) => {{
+            let value = $value;
+            let canonical =
+                norito::json::to_value(&value).expect(concat!("serialize ", $label));
+            $(
+                assert!(
+                    canonical.get($field).is_some_and(norito::json::Value::is_null),
+                    "canonical {} must emit nullable `{}` as null",
+                    $label,
+                    $field
+                );
+                let mut missing = canonical.clone();
+                assert!(
+                    missing
+                        .as_object_mut()
+                        .expect(concat!($label, " JSON object"))
+                        .remove($field)
+                        .is_some()
+                );
+                norito::json::from_value::<$ty>(missing)
+                    .expect_err(concat!($label, " must reject omitted nullable V1 fields"));
+            )+
+            assert_eq!(
+                norito::json::from_value::<$ty>(canonical)
+                    .expect(concat!("decode explicit-null ", $label)),
+                value
+            );
+        }};
+    }
+
+    let job = sample_fhe_job_spec();
+    assert_closed!(
+        FheJobOperationV1::Add,
+        FheJobOperationV1,
+        "FHE job operation"
+    );
+    assert_closed!(
+        job.inputs[0].clone(),
+        FheJobInputRefV1,
+        "FHE job input reference"
+    );
+    assert_closed!(job.clone(), FheJobSpecV1, "FHE job specification");
+    assert_required_fields!(job, FheJobSpecV1, ["inputs"], "FHE job specification");
+
+    assert_closed!(
+        sample_fhe_policy_reference(),
+        SoracloudFhePolicyReferenceV1,
+        "FHE policy reference"
+    );
+    assert_closed!(
+        sample_fhe_public_key_proof(),
+        SoracloudFhePublicKeyProofV1,
+        "FHE public-key proof"
+    );
+    assert_closed!(
+        sample_fhe_bootstrap_key_proof(),
+        SoracloudFheBootstrapKeyProofV1,
+        "FHE bootstrap-key proof"
+    );
+    assert_closed!(
+        sample_fhe_full_bootstrap_execution_proof(),
+        SoracloudFheFullBootstrapExecutionProofV1,
+        "FHE full-bootstrap execution proof"
+    );
+
+    let input_admission_with_key = sample_fhe_input_admission_proof();
+    let public_key = input_admission_with_key
+        .public_key
+        .clone()
+        .expect("sample input admission has a public key");
+    assert_closed!(public_key, BfvPublicKey, "BFV public key");
+    assert_closed!(
+        BfvCiphertextBoundModeV1::ExactResidualMultiple,
+        BfvCiphertextBoundModeV1,
+        "BFV ciphertext bound mode"
+    );
+
+    let mut input_admission = input_admission_with_key;
+    input_admission.public_key = None;
+    input_admission.ciphertext_proof_statement_digests.clear();
+    assert_closed!(
+        input_admission.clone(),
+        SoracloudFheInputAdmissionProofV1,
+        "FHE input admission proof"
+    );
+    assert_required_nulls!(
+        input_admission.clone(),
+        SoracloudFheInputAdmissionProofV1,
+        ["public_key"],
+        "FHE input admission proof"
+    );
+    assert_required_fields!(
+        input_admission,
+        SoracloudFheInputAdmissionProofV1,
+        ["ciphertext_proof_statement_digests", "bound_mode"],
+        "FHE input admission proof"
+    );
+
+    let policy = sample_decryption_authority_policy();
+    assert_closed!(
+        DecryptionAuthorityModeV1::ThresholdService,
+        DecryptionAuthorityModeV1,
+        "decryption authority mode"
+    );
+    assert_closed!(
+        policy.clone(),
+        DecryptionAuthorityPolicyV1,
+        "decryption authority policy"
+    );
+    assert_required_fields!(
+        policy,
+        DecryptionAuthorityPolicyV1,
+        ["approver_ids"],
+        "decryption authority policy"
+    );
+
+    let mut request = sample_decryption_request();
+    request.consent_evidence_hash = None;
+    request.break_glass_reason = None;
+    assert_closed!(request.clone(), DecryptionRequestV1, "decryption request");
+    assert_required_nulls!(
+        request,
+        DecryptionRequestV1,
+        ["consent_evidence_hash", "break_glass_reason"],
+        "decryption request"
+    );
+
+    assert_closed!(
+        CiphertextQueryMetadataLevelV1::Minimal,
+        CiphertextQueryMetadataLevelV1,
+        "ciphertext query metadata level"
+    );
+    assert_closed!(
+        sample_ciphertext_query_spec(),
+        CiphertextQuerySpecV1,
+        "ciphertext query specification"
+    );
+}
+#[cfg(feature = "json")]
+#[test]
+fn ciphertext_query_response_v1_json_is_closed_and_requires_null_and_empty_keys() {
+    macro_rules! assert_closed {
+        ($value:expr, $ty:ty, $label:literal) => {{
+            let value = $value;
+            let canonical =
+                norito::json::to_value(&value).expect(concat!("serialize ", $label));
+            assert_eq!(
+                norito::json::from_value::<$ty>(canonical.clone())
+                    .expect(concat!("decode canonical ", $label)),
+                value
+            );
+            let mut unknown = canonical;
+            unknown
+                .as_object_mut()
+                .expect(concat!($label, " JSON object"))
+                .insert("retired_v0".to_owned(), norito::json!(true));
+            let error = norito::json::from_value::<$ty>(unknown)
+                .expect_err(concat!($label, " must reject unknown fields"));
+            assert!(
+                matches!(
+                    error,
+                    json::Error::UnknownField { ref field } if field == "retired_v0"
+                ),
+                "{} reported the wrong unknown-field error: {error:?}",
+                $label
+            );
+        }};
+    }
+
+    let mut response = sample_ciphertext_query_response();
+    response.results[0].proof = None;
+    assert_closed!(
+        response.results[0].clone(),
+        CiphertextQueryResultItemV1,
+        "ciphertext query result item"
+    );
+
+    let canonical_item = norito::json::to_value(&response.results[0])
+        .expect("serialize ciphertext query result item");
+    for field in ["state_key", "proof"] {
+        assert!(
+            canonical_item
+                .get(field)
+                .is_some_and(norito::json::Value::is_null),
+            "canonical nullable `{field}` must be explicit null"
+        );
+        let mut missing = canonical_item.clone();
+        assert!(
+            missing
+                .as_object_mut()
+                .expect("ciphertext query result item JSON object")
+                .remove(field)
+                .is_some()
+        );
+        norito::json::from_value::<CiphertextQueryResultItemV1>(missing)
+            .expect_err("ciphertext query result item must reject omitted nullable fields");
+    }
+    assert_eq!(
+        norito::json::from_value::<CiphertextQueryResultItemV1>(canonical_item)
+            .expect("ciphertext query result item accepts explicit nulls"),
+        response.results[0]
+    );
+
+    assert_closed!(
+        response.clone(),
+        CiphertextQueryResponseV1,
+        "ciphertext query response"
+    );
+    let inclusion_proof = sample_ciphertext_query_response().results[0]
+        .proof
+        .clone()
+        .expect("sample response includes a proof");
+    assert_closed!(
+        inclusion_proof,
+        CiphertextInclusionProofV1,
+        "ciphertext inclusion proof"
+    );
+
+    response.results.clear();
+    response.result_count = 0;
+    let canonical_response =
+        norito::json::to_value(&response).expect("serialize empty ciphertext query response");
+    assert_eq!(
+        canonical_response
+            .get("results")
+            .and_then(norito::json::Value::as_array)
+            .map(Vec::len),
+        Some(0),
+        "canonical empty ciphertext query results must be explicit"
+    );
+    assert_eq!(
+        norito::json::from_value::<CiphertextQueryResponseV1>(canonical_response.clone())
+            .expect("explicit empty ciphertext query results must decode"),
+        response
+    );
+    let mut missing_results = canonical_response;
+    assert!(
+        missing_results
+            .as_object_mut()
+            .expect("ciphertext query response JSON object")
+            .remove("results")
+            .is_some()
+    );
+    norito::json::from_value::<CiphertextQueryResponseV1>(missing_results)
+        .expect_err("ciphertext query response must reject omitted results");
+}
+#[test]
+fn decryption_request_non_break_glass_reason_must_be_null() {
+    let mut request = sample_decryption_request();
+    request.break_glass = false;
+    request.break_glass_reason = Some("legacy implicit reason".to_owned());
+    let error = request
+        .validate()
+        .expect_err("non-break-glass request must reject a non-null reason");
+    assert!(
+        matches!(
+            error,
+            SoracloudManifestError::InvalidField {
+                manifest: "decryption request",
+                field: "break_glass_reason",
+                ref reason,
+            } if reason == "must be null when break_glass=false"
+        ),
+        "unexpected non-break-glass reason error: {error:?}"
+    );
+}
 #[test]
 fn state_binding_validate_rejects_plaintext_confidential_scope() {
     let mut binding = sample_binding("private_state");
@@ -1649,6 +2626,81 @@ fn canonical_request_witness_roundtrips_through_norito() {
     let decoded: CanonicalRequestWitnessV1 =
         norito::decode_from_bytes(&encoded).expect("decode witness");
     assert_eq!(decoded, witness);
+}
+#[cfg(feature = "json")]
+#[test]
+fn canonical_request_witness_v1_json_requires_explicit_signatures_and_closed_fields() {
+    let witness = CanonicalRequestWitnessV1 {
+        schema_version: CANONICAL_REQUEST_WITNESS_VERSION_V1,
+        subject_account: sample_account_id(9),
+        timestamp_ms: 1_717_171_717,
+        nonce: "witness-json-closure".to_owned(),
+        canonical_request_hash: sample_hash(62),
+        signatures: Vec::new(),
+    };
+    let canonical = norito::json::to_value(&witness).expect("serialize canonical request witness");
+    assert_eq!(
+        canonical
+            .get("signatures")
+            .and_then(norito::json::Value::as_array)
+            .map(Vec::len),
+        Some(0),
+        "canonical empty signature list must be explicit"
+    );
+    assert_eq!(
+        norito::json::from_value::<CanonicalRequestWitnessV1>(canonical.clone())
+            .expect("explicit empty signature list must decode"),
+        witness
+    );
+
+    let mut missing_signatures = canonical.clone();
+    assert!(
+        missing_signatures
+            .as_object_mut()
+            .expect("canonical request witness JSON object")
+            .remove("signatures")
+            .is_some()
+    );
+    norito::json::from_value::<CanonicalRequestWitnessV1>(missing_signatures)
+        .expect_err("omitted canonical request signatures must be rejected");
+
+    let mut unknown_witness = canonical;
+    unknown_witness
+        .as_object_mut()
+        .expect("canonical request witness JSON object")
+        .insert("retired_v0".to_owned(), norito::json!(true));
+    let error = norito::json::from_value::<CanonicalRequestWitnessV1>(unknown_witness)
+        .expect_err("canonical request witness must reject unknown fields");
+    assert!(
+        matches!(
+            error,
+            json::Error::UnknownField { ref field } if field == "retired_v0"
+        ),
+        "unexpected canonical request witness unknown-field rejection: {error}"
+    );
+
+    let signer = KeyPair::try_random_with_algorithm(Algorithm::Ed25519)
+        .expect("generate canonical request signature witness fixture keypair");
+    let signature = Signature::try_new(signer.private_key(), b"canonical-request-signature-json")
+        .expect("create canonical request signature witness fixture");
+    let mut signature_json = norito::json::to_value(&CanonicalRequestSignatureWitnessV1 {
+        signer: signer.public_key().clone(),
+        signature,
+    })
+    .expect("serialize canonical request signature witness");
+    signature_json
+        .as_object_mut()
+        .expect("canonical request signature witness JSON object")
+        .insert("retired_v0".to_owned(), norito::json!(true));
+    let error = norito::json::from_value::<CanonicalRequestSignatureWitnessV1>(signature_json)
+        .expect_err("canonical request signature witness must reject unknown fields");
+    assert!(
+        matches!(
+            error,
+            json::Error::UnknownField { ref field } if field == "retired_v0"
+        ),
+        "unexpected canonical request signature unknown-field rejection: {error}"
+    );
 }
 #[test]
 fn host_request_envelope_validation_accepts_consistent_payload() {

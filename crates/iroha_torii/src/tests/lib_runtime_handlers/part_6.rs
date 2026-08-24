@@ -71,7 +71,8 @@ async fn sccp_recent_endpoint_never_reads_or_verifies_finality_sidecars() {
     )
     .await
     .expect("malformed finality remains outside recent metadata path");
-    let recent_after = torii_body_bytes(recent_response, "recent body after sidecar corruption").await;
+    let recent_after =
+        torii_body_bytes(recent_response, "recent body after sidecar corruption").await;
     assert_eq!(recent_after, recent_before);
     assert!(matches!(
         routing::handle_v1_sccp_message_bundle(
@@ -559,7 +560,9 @@ async fn signed_query_authority_admission_isolated_by_verified_identity() {
 }
 #[tokio::test]
 async fn signed_query_token_rotation_cannot_escape_origin_and_authority_budgets() {
-    use iroha_data_model::query::{QueryRequest, SingularQueryBox, runtime::prelude::FindAbiVersion};
+    use iroha_data_model::query::{
+        QueryRequest, SingularQueryBox, runtime::prelude::FindAbiVersion,
+    };
     let key_pair =
         checked_torii_test_ed25519_keypair(0x73, "derive signed-query admission fixture authority");
     let authority = AccountId::new(key_pair.public_key().clone());
@@ -1231,8 +1234,6 @@ fn sample_soracloud_runtime_snapshot(
                     "/tmp/soracloud/runtime/web_portal/1.0.0/config_exports".to_string(),
                 secret_envelopes_materialization_dir:
                     "/tmp/soracloud/runtime/web_portal/1.0.0/secret_envelopes".to_string(),
-                secret_payload_materialization_dir:
-                    "/tmp/soracloud/runtime/secrets/web_portal/1.0.0".to_string(),
                 lease_volumes: Vec::new(),
                 mailboxes: vec![],
                 artifacts: vec![
@@ -1465,8 +1466,9 @@ fn seed_generated_hf_public_world(primary_peer_id: &str) -> (World, String, Stri
         checked_torii_test_account_id(0x3a, "derive generated-HF primary validator fixture key");
     let replica_validator =
         checked_torii_test_account_id(0x3b, "derive generated-HF replica validator fixture key");
-    let replica_peer_id = checked_torii_test_peer_id(0x3c, "derive generated-HF replica peer fixture key")
-    .to_string();
+    let replica_peer_id =
+        checked_torii_test_peer_id(0x3c, "derive generated-HF replica peer fixture key")
+            .to_string();
     world.soracloud_service_revisions_mut_for_testing().insert(
         (service_name_string.clone(), service_version.clone()),
         bundle.clone(),
@@ -1552,6 +1554,8 @@ fn seed_generated_hf_public_world(primary_peer_id: &str) -> (World, String, Stri
                 required_model_bytes: 1_024,
                 backend_family: SoraHfBackendFamilyV1::Transformers,
                 model_format: SoraHfModelFormatV1::Safetensors,
+                selected_weight_file_count: 1,
+                weight_selection_commitment: Hash::new(b"generated-hf-weight-selection"),
                 disk_cache_bytes_floor: 2_048,
                 ram_bytes_floor: 2_048,
                 vram_bytes_floor: 0,
@@ -1645,10 +1649,6 @@ fn hosted_http_runtime_plan(
             .join("secret_envelopes")
             .display()
             .to_string(),
-        secret_payload_materialization_dir: materialization_dir
-            .join("secret_payloads")
-            .display()
-            .to_string(),
         lease_volumes: Vec::new(),
         mailboxes: Vec::new(),
         artifacts: Vec::new(),
@@ -1723,8 +1723,6 @@ fn seed_authoritative_hosted_http_revision(
                     replica_slot: *replica_slot,
                     validator_account_id: validator_account_id.clone(),
                     peer_id: peer_id.clone(),
-                    selected_backend:
-                        iroha_data_model::soracloud::SoraInrouRuntimeBackendV1::PortableVm,
                     selected_guest_isa: iroha_data_model::soracloud::SoraInrouGuestIsaV1::X8664,
                     selected_geography_tag: None,
                     selection_latency_ms: None,
@@ -1770,7 +1768,6 @@ fn seed_authoritative_hosted_http_revision(
                     replica_slot: *replica_slot,
                     validator_account_id: validator_account_id.clone(),
                     peer_id: peer_id.clone(),
-                    selected_backend: placement.selected_backend,
                     selected_guest_isa: placement.selected_guest_isa,
                     health_status: *health_status,
                     load_factor_bps: 0,
@@ -1824,7 +1821,7 @@ fn seed_public_hosted_http_rollout_app_with_service_lease(
             Some("http://127.0.0.1:18081"),
             Some(201),
         )],
-        None,
+        Some(hosted_http_rollout_local_peer_id().to_string()),
         service_lease,
     )
 }
@@ -1841,7 +1838,7 @@ fn seed_public_hosted_http_rollout_app_with_local_replicas(
         candidate_health,
         baseline_local_replicas,
         candidate_local_replicas,
-        None,
+        Some(hosted_http_rollout_local_peer_id().to_string()),
         Some(hosted_http_service_lease_state(
             iroha_data_model::soracloud::SoraServiceLeaseStatusV1::Active,
             "50".parse().expect("runtime balance"),
@@ -1866,9 +1863,13 @@ fn hosted_http_service_lease_state(
         lease_started_sequence: 0,
         lease_expires_sequence,
         last_billed_sequence: 0,
+        egress_reporter_checkpoints: Vec::new(),
         accounted_egress_bytes: 0,
         last_status_reason: None,
     }
+}
+fn hosted_http_rollout_local_peer_id() -> PeerId {
+    checked_torii_test_peer_id(0x3e, "derive hosted-http rollout peer fixture key")
 }
 fn seed_public_hosted_http_rollout_app_with_local_replicas_and_snapshot_peer_id(
     temp: &tempfile::TempDir,
@@ -1934,9 +1935,9 @@ fn seed_public_hosted_http_rollout_app_with_local_replicas_and_snapshot_peer_id(
                 schema_version:
                     iroha_data_model::soracloud::SORA_SERVICE_DEPLOYMENT_STATE_VERSION_V1,
                 service_name: service_name.parse().expect("service"),
-                current_service_version: baseline_version.to_owned(),
-                current_service_manifest_hash: baseline_bundle.service_manifest_hash(),
-                current_container_manifest_hash: baseline_bundle.container_manifest_hash(),
+                current_service_version: candidate_version.to_owned(),
+                current_service_manifest_hash: candidate_bundle.service_manifest_hash(),
+                current_container_manifest_hash: candidate_bundle.container_manifest_hash(),
                 revision_count: 2,
                 process_generation: 1,
                 process_started_sequence: 1,
@@ -1967,7 +1968,7 @@ fn seed_public_hosted_http_rollout_app_with_local_replicas_and_snapshot_peer_id(
         );
     let local_validator_account_id =
         checked_torii_test_account_id(0x3d, "derive hosted-http rollout validator fixture key");
-    let local_peer_id = checked_torii_test_peer_id(0x3e, "derive hosted-http rollout peer fixture key");
+    let local_peer_id = hosted_http_rollout_local_peer_id();
     let baseline_assignments = baseline_local_replicas
         .iter()
         .map(|replica| {
@@ -2073,7 +2074,7 @@ where
     }
     panic!("failed to find a rollout bucket match for hosted-http routing test");
 }
-fn hosted_http_replica_test_ip<P>(
+fn hosted_http_baseline_replica_test_ip<P>(
     service_name: &str,
     service_version: &str,
     method: &HttpMethod,
@@ -2085,6 +2086,9 @@ where
 {
     for octet in 1..=254 {
         let ip = IpAddr::from([198, 51, 100, octet]);
+        if super::hosted_http_rollout_bucket(service_name, Some(ip), method, uri) < 20 {
+            continue;
+        }
         let digest = super::hosted_http_request_hash(
             "soracloud:hosted-http-replica:v1",
             service_name,
@@ -2103,10 +2107,7 @@ where
 #[derive(Clone, Copy)]
 enum PublicLocalReadRouteCase {
     Direct,
-    SoradnsPath,
     TairaMonHost,
-    SoradnsRoot,
-    SoradnsNonSora,
 }
 struct PublicLocalReadRouteSpec {
     state_dir: &'static str,
@@ -2116,7 +2117,6 @@ struct PublicLocalReadRouteSpec {
     artifact_hash_seed: Option<&'static [u8]>,
     result_seed: &'static [u8],
     certified_by: iroha_data_model::soracloud::SoraCertifiedResponsePolicyV1,
-    route_host: Option<&'static str>,
     bound_alias: Option<&'static str>,
     request_uri: &'static str,
     request_host: &'static str,
@@ -2131,19 +2131,12 @@ fn public_local_read_route_spec(case: PublicLocalReadRouteCase) -> PublicLocalRe
         artifact_hash_seed: Some(b"asset-hash"),
         result_seed: b"result",
         certified_by: SoraCertifiedResponsePolicyV1::StateCommitment,
-        route_host: None,
         bound_alias: None,
         request_uri: "/app/assets",
         request_host: "portal.sora",
     };
     match case {
         PublicLocalReadRouteCase::Direct => {}
-        PublicLocalReadRouteCase::SoradnsPath => {
-            spec.state_dir = "/tmp/test-soradns-public-runtime";
-            spec.bound_alias = Some("portal.sora");
-            spec.request_uri = "/soradns/portal.sora/app/assets?fresh=1";
-            spec.request_host = "taira.sora.org";
-        }
         PublicLocalReadRouteCase::TairaMonHost => {
             spec.state_dir = "/tmp/test-taira-mon-public-runtime";
             spec.response_bytes = b"mon-asset-body";
@@ -2152,32 +2145,6 @@ fn public_local_read_route_spec(case: PublicLocalReadRouteCase) -> PublicLocalRe
             spec.bound_alias = Some("portal.sora");
             spec.request_uri = "/app/assets?fresh=1";
             spec.request_host = "portal.sora.mon.taira.sora.net:443";
-        }
-        PublicLocalReadRouteCase::SoradnsRoot => {
-            spec.state_dir = "/tmp/test-soradns-public-root";
-            spec.response_bytes = b"docs-root";
-            spec.content_type = "text/plain";
-            spec.cache_control = None;
-            spec.artifact_hash_seed = None;
-            spec.result_seed = b"docs-root-result";
-            spec.certified_by = SoraCertifiedResponsePolicyV1::None;
-            spec.route_host = Some("docs.sora");
-            spec.bound_alias = Some("docs.sora");
-            spec.request_uri = "/soradns/docs.sora";
-            spec.request_host = "taira.sora.org";
-        }
-        PublicLocalReadRouteCase::SoradnsNonSora => {
-            spec.state_dir = "/tmp/test-soradns-public-dao";
-            spec.response_bytes = b"dao-alias";
-            spec.content_type = "text/plain";
-            spec.cache_control = None;
-            spec.artifact_hash_seed = None;
-            spec.result_seed = b"dao-alias-result";
-            spec.certified_by = SoraCertifiedResponsePolicyV1::None;
-            spec.route_host = Some("portal.dao");
-            spec.bound_alias = Some("portal.dao");
-            spec.request_uri = "/soradns/portal.dao/app/assets";
-            spec.request_host = "taira.sora.org";
         }
     }
     assert_eq!(
@@ -2190,52 +2157,7 @@ fn public_local_read_route_spec(case: PublicLocalReadRouteCase) -> PublicLocalRe
 async fn run_public_local_read_route_case(case: PublicLocalReadRouteCase) {
     use tower::ServiceExt as _;
     let spec = public_local_read_route_spec(case);
-    let mut world = seed_public_soracloud_world();
-    if let Some(route_host) = spec.route_host {
-        let mut bundle = world
-            .view()
-            .soracloud_service_revisions()
-            .get(&("web_portal".to_owned(), "2026.02.0".to_owned()))
-            .cloned()
-            .expect("seed bundle");
-        bundle.service.route.as_mut().expect("public route").host = route_host.to_owned();
-        if matches!(case, PublicLocalReadRouteCase::SoradnsRoot) {
-            bundle
-                .service
-                .route
-                .as_mut()
-                .expect("public route")
-                .path_prefix = "/".to_owned();
-            bundle.service.handlers = vec![
-                iroha_data_model::soracloud::SoraServiceHandlerV1 {
-                    handler_name: "root".parse().expect("handler"),
-                    class: iroha_data_model::soracloud::SoraServiceHandlerClassV1::Asset,
-                    entrypoint: "serve_root".to_owned(),
-                    route_path: Some("/".to_owned()),
-                    certified_response: iroha_data_model::soracloud::SoraCertifiedResponsePolicyV1::StateCommitment,
-                    mailbox: None,
-                },
-            ];
-        }
-        bundle.service.container.manifest_hash = bundle.container_manifest_hash();
-        world.soracloud_service_revisions_mut_for_testing().insert(
-            ("web_portal".to_owned(), "2026.02.0".to_owned()),
-            bundle.clone(),
-        );
-        let deployment_service_name: iroha_data_model::name::Name =
-            "web_portal".parse().expect("service");
-        let mut deployment = world
-            .view()
-            .soracloud_service_deployments()
-            .get(&deployment_service_name)
-            .cloned()
-            .expect("deployment");
-        deployment.current_service_manifest_hash = bundle.service_manifest_hash();
-        deployment.current_container_manifest_hash = bundle.container_manifest_hash();
-        world
-            .soracloud_service_deployments_mut_for_testing()
-            .insert(deployment_service_name, deployment);
-    }
+    let world = seed_public_soracloud_world();
     let bindings = match spec.artifact_hash_seed {
         Some(seed) => vec![iroha_core::soracloud_runtime::SoracloudLocalReadBinding {
             binding_name: None,
@@ -2273,13 +2195,9 @@ async fn run_public_local_read_route_case(case: PublicLocalReadRouteCase) {
     if let Some(alias) = spec.bound_alias {
         bind_domain_name_for_test(&app, alias);
     }
-    let router = if spec.bound_alias.is_some() {
-        soradns_public_alias_router(app)
-    } else {
-        axum::Router::new()
-            .fallback(any(handler_soracloud_public_local_read))
-            .with_state(app)
-    };
+    let router = axum::Router::new()
+        .fallback(any(handler_soracloud_public_local_read))
+        .with_state(app);
     let response = router
         .oneshot(
             axum::http::Request::builder()
@@ -2309,25 +2227,12 @@ async fn run_public_local_read_route_case(case: PublicLocalReadRouteCase) {
             assert_eq!(captured[0].request_path, "/app/assets");
             assert_eq!(captured[0].handler_path, "/");
         }
-        PublicLocalReadRouteCase::SoradnsPath | PublicLocalReadRouteCase::TairaMonHost => {
+        PublicLocalReadRouteCase::TairaMonHost => {
             assert_eq!(captured[0].request_path, "/app/assets");
             assert_eq!(captured[0].request_query.as_deref(), Some("fresh=1"));
             assert_eq!(
                 captured[0].request_headers.get("host").map(String::as_str),
                 Some("portal.sora")
-            );
-        }
-        PublicLocalReadRouteCase::SoradnsRoot => {
-            assert_eq!(captured[0].request_path, "/");
-            assert_eq!(
-                captured[0].request_headers.get("host").map(String::as_str),
-                Some("docs.sora")
-            );
-        }
-        PublicLocalReadRouteCase::SoradnsNonSora => {
-            assert_eq!(
-                captured[0].request_headers.get("host").map(String::as_str),
-                Some("portal.dao")
             );
         }
     }
@@ -2337,48 +2242,17 @@ async fn soracloud_public_local_read_route_invokes_runtime_with_authoritative_co
     run_public_local_read_route_case(PublicLocalReadRouteCase::Direct).await;
 }
 #[tokio::test]
-async fn soradns_public_alias_gateway_routes_local_read_requests() {
-    run_public_local_read_route_case(PublicLocalReadRouteCase::SoradnsPath).await;
-}
-#[tokio::test]
 async fn taira_mon_gateway_host_routes_local_read_requests() {
     run_public_local_read_route_case(PublicLocalReadRouteCase::TairaMonHost).await;
 }
 #[tokio::test]
-async fn soradns_public_alias_gateway_maps_empty_tail_to_root_path() {
-    run_public_local_read_route_case(PublicLocalReadRouteCase::SoradnsRoot).await;
-}
-#[tokio::test]
-async fn soradns_public_alias_gateway_rejects_invalid_aliases() {
+async fn path_encoded_soradns_alias_is_not_routed() {
     use tower::ServiceExt as _;
     let app = mk_app_state_for_tests_with_world(seed_public_soracloud_world());
-    let router = soradns_public_alias_router(app);
-    let response = router
-        .oneshot(
-            axum::http::Request::builder()
-                .uri("/soradns/bad%20name.sora/app/assets")
-                .header(axum::http::header::HOST, "taira.sora.org")
-                .extension(crate::loopback_connect_info())
-                .body(Body::empty())
-                .expect("request"),
-        )
-        .await
-        .expect("response");
-    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
-}
-#[tokio::test]
-async fn soradns_public_alias_gateway_rejects_inactive_aliases() {
-    use tower::ServiceExt as _;
-    let app = mk_app_state_for_tests_with_world(seed_public_soracloud_world());
-    bind_domain_name_for_test_with_status(
-        &app,
-        "portal.sora",
-        iroha_data_model::sns::NameStatus::Frozen(iroha_data_model::sns::NameFrozenStateV1 {
-            reason: "guardian hold".to_owned(),
-            until_ms: u64::MAX,
-        }),
-    );
-    let router = soradns_public_alias_router(app);
+    bind_domain_name_for_test(&app, "portal.sora");
+    let router = axum::Router::new()
+        .fallback(any(handler_soracloud_public_local_read))
+        .with_state(app);
     let response = router
         .oneshot(
             axum::http::Request::builder()
@@ -2392,10 +2266,6 @@ async fn soradns_public_alias_gateway_rejects_inactive_aliases() {
         .expect("response");
     assert_eq!(response.status(), StatusCode::NOT_FOUND);
 }
-#[tokio::test]
-async fn soradns_public_alias_gateway_accepts_non_sora_alias_hosts() {
-    run_public_local_read_route_case(PublicLocalReadRouteCase::SoradnsNonSora).await;
-}
 #[derive(Clone, Copy)]
 enum TravelSplitVaultMode {
     LocalRead,
@@ -2408,16 +2278,11 @@ struct TravelSplitTopologyFixture {
     live_peer_id: PeerId,
     upstream_task: tokio::task::JoinHandle<()>,
 }
-async fn travel_split_topology_fixture(
-    mode: TravelSplitVaultMode,
-) -> TravelSplitTopologyFixture {
+async fn travel_split_topology_fixture(mode: TravelSplitVaultMode) -> TravelSplitTopologyFixture {
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
         .await
         .expect("bind upstream listener");
-    let listen_base_url = format!(
-        "http://{}",
-        listener.local_addr().expect("upstream addr")
-    );
+    let listen_base_url = format!("http://{}", listener.local_addr().expect("upstream addr"));
     let upstream = axum::Router::new().route(
         "/search",
         get(|| async {
@@ -2491,33 +2356,28 @@ async fn travel_split_topology_fixture(
         tls_mode: iroha_data_model::soracloud::SoraTlsModeV1::Required,
     });
     vault_bundle.service.handlers = vec![match mode {
-        TravelSplitVaultMode::LocalRead => {
-            iroha_data_model::soracloud::SoraServiceHandlerV1 {
-                handler_name: "auth_me".parse().expect("handler"),
-                class: iroha_data_model::soracloud::SoraServiceHandlerClassV1::Query,
-                entrypoint: "serve_auth_me".to_owned(),
-                route_path: Some("/auth/me".to_owned()),
-                certified_response:
-                    iroha_data_model::soracloud::SoraCertifiedResponsePolicyV1::AuditReceipt,
-                mailbox: None,
-            }
-        }
-        TravelSplitVaultMode::OrderedMailbox => {
-            iroha_data_model::soracloud::SoraServiceHandlerV1 {
-                handler_name: "preferences_put".parse().expect("handler"),
-                class: iroha_data_model::soracloud::SoraServiceHandlerClassV1::PrivateUpdate,
-                entrypoint: "store_user_preferences".to_owned(),
-                route_path: Some("/v1/user/preferences".to_owned()),
-                certified_response:
-                    iroha_data_model::soracloud::SoraCertifiedResponsePolicyV1::None,
-                mailbox: Some(iroha_data_model::soracloud::SoraMailboxContractV1 {
-                    queue_name: "private_updates".parse().expect("queue"),
-                    max_pending_messages: std::num::NonZeroU32::new(128).expect("pending"),
-                    max_message_bytes: std::num::NonZeroU64::new(131_072).expect("bytes"),
-                    retention_blocks: std::num::NonZeroU32::new(64).expect("retention"),
-                }),
-            }
-        }
+        TravelSplitVaultMode::LocalRead => iroha_data_model::soracloud::SoraServiceHandlerV1 {
+            handler_name: "auth_me".parse().expect("handler"),
+            class: iroha_data_model::soracloud::SoraServiceHandlerClassV1::Query,
+            entrypoint: "serve_auth_me".to_owned(),
+            route_path: Some("/auth/me".to_owned()),
+            certified_response:
+                iroha_data_model::soracloud::SoraCertifiedResponsePolicyV1::AuditReceipt,
+            mailbox: None,
+        },
+        TravelSplitVaultMode::OrderedMailbox => iroha_data_model::soracloud::SoraServiceHandlerV1 {
+            handler_name: "preferences_put".parse().expect("handler"),
+            class: iroha_data_model::soracloud::SoraServiceHandlerClassV1::PrivateUpdate,
+            entrypoint: "store_user_preferences".to_owned(),
+            route_path: Some("/v1/user/preferences".to_owned()),
+            certified_response: iroha_data_model::soracloud::SoraCertifiedResponsePolicyV1::None,
+            mailbox: Some(iroha_data_model::soracloud::SoraMailboxContractV1 {
+                queue_name: "private_updates".parse().expect("queue"),
+                max_pending_messages: std::num::NonZeroU32::new(128).expect("pending"),
+                max_message_bytes: std::num::NonZeroU64::new(131_072).expect("bytes"),
+                retention_blocks: std::num::NonZeroU32::new(64).expect("retention"),
+            }),
+        },
     }];
     vault_bundle.service.container.manifest_hash = vault_bundle.container_manifest_hash();
 

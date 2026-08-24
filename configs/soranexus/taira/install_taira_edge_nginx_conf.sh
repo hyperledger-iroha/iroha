@@ -9,8 +9,6 @@ TARGET_CONF="${TARGET_CONF:-}"
 NGINX_BIN="${NGINX_BIN:-nginx}"
 INSTALL=0
 RELOAD=0
-ALLOW_BACKUP_CONFS=0
-SKIP_NGINX_TEST=0
 ALIAS_ROUTES=()
 REQUIRED_ALIASES=()
 NGINX_TEST_DIRS=()
@@ -50,8 +48,6 @@ Usage: install_taira_edge_nginx_conf.sh [--roster PATH] [--output PATH]
                                        [--require-alias ALIAS]
                                        [--install] [--reload]
                                        [--nginx-bin PATH]
-                                       [--allow-backup-confs]
-                                       [--skip-nginx-test]
 
 Render and optionally install/reload the shared Taira edge nginx config.
 
@@ -131,14 +127,6 @@ while [[ $# -gt 0 ]]; do
       NGINX_BIN="$2"
       shift 2
       ;;
-    --allow-backup-confs)
-      ALLOW_BACKUP_CONFS=1
-      shift
-      ;;
-    --skip-nginx-test)
-      SKIP_NGINX_TEST=1
-      shift
-      ;;
     -h|--help)
       usage
       exit 0
@@ -188,31 +176,6 @@ require_in_rendered_conf() {
   fi
 }
 
-alias_path_regex() {
-  local alias="$1"
-  local output=""
-  local char
-  local index
-  for ((index = 0; index < ${#alias}; index += 1)); do
-    char="${alias:index:1}"
-    case "$char" in
-      [a-zA-Z0-9_])
-        output+="$char"
-        ;;
-      .)
-        output+='\\?\.'
-        ;;
-      -)
-        output+='\\?-'
-        ;;
-      *)
-        output+="\\?\\${char}"
-        ;;
-    esac
-  done
-  printf '%s' "$output"
-}
-
 validate_rendered_nginx_conf() {
   local test_dir
   local test_conf
@@ -257,28 +220,106 @@ EOF
 }
 
 target_needs_sudo_write() {
-  local path="$1"
   local dir
-  dir="$(dirname -- "$path")"
+  dir="$(dirname -- "$1")"
+  [[ ! -w "$dir" ]]
+}
 
-  if [[ -e "$path" ]]; then
-    [[ ! -w "$path" ]]
-  else
-    [[ ! -w "$dir" ]]
+file_link_count() {
+  local path="$1"
+  stat -c '%h' "$path" 2>/dev/null || stat -f '%l' "$path"
+}
+
+require_safe_target_directory() {
+  local owner
+  local permissions
+
+  if [[ -L "$target_dir" || ! -d "$target_dir" ]]; then
+    echo "target nginx include directory must be direct: $target_dir" >&2
+    return 1
+  fi
+  owner="$(stat -c '%u' "$target_dir" 2>/dev/null || stat -f '%u' "$target_dir")" || return 1
+  permissions="$(stat -c '%a' "$target_dir" 2>/dev/null || stat -f '%Lp' "$target_dir")" || return 1
+  if [[ "$owner" != 0 && "$owner" != "$EUID" ]] || \
+     (( (8#$permissions & 8#022) != 0 )); then
+    echo "target nginx include directory must be root/operator-owned and non-writable by group/other: $target_dir" >&2
+    return 1
+  fi
+}
+
+require_safe_regular_file() {
+  local path="$1"
+  local label="$2"
+  local links
+
+  if [[ -L "$path" || ! -f "$path" ]]; then
+    echo "${label} must be one direct regular file: $path" >&2
+    return 1
+  fi
+  links="$(file_link_count "$path")" || {
+    echo "cannot inspect ${label} hard-link count: $path" >&2
+    return 1
+  }
+  if [[ "$links" != 1 ]]; then
+    echo "${label} must have exactly one hard link: $path" >&2
+    return 1
+  fi
+}
+
+require_safe_target_leaf() {
+  if [[ -e "$TARGET_CONF" || -L "$TARGET_CONF" ]]; then
+    require_safe_regular_file "$TARGET_CONF" "target nginx config"
   fi
 }
 
 copy_to_target_conf() {
   local source_path="$1"
+  local candidate=""
+  local use_sudo=0
 
-  if target_needs_sudo_write "$TARGET_CONF"; then
-    sudo cp "$source_path" "$TARGET_CONF"
+  require_safe_regular_file "$source_path" "nginx config source" || return 1
+  require_safe_target_leaf || return 1
+  if [[ ! -r "$source_path" ]] || target_needs_sudo_write "$TARGET_CONF"; then
+    use_sudo=1
+    candidate="$(sudo mktemp "${target_dir}/.taira-edge-install.XXXXXX")" || return 1
+    sudo chmod 0600 "$candidate" || return 1
+    sudo cp -pP "$source_path" "$candidate" || {
+      sudo rm -f "$candidate" || true
+      return 1
+    }
   else
-    cp "$source_path" "$TARGET_CONF"
+    candidate="$(mktemp "${target_dir}/.taira-edge-install.XXXXXX")" || return 1
+    chmod 0600 "$candidate" || return 1
+    cp -pP "$source_path" "$candidate" || {
+      rm -f "$candidate" || true
+      return 1
+    }
+  fi
+
+  if ! require_safe_regular_file "$candidate" "nginx config candidate" || \
+     ! require_safe_target_leaf; then
+    if [[ $use_sudo -eq 1 ]]; then
+      sudo rm -f "$candidate" || true
+    else
+      rm -f "$candidate" || true
+    fi
+    return 1
+  fi
+  if [[ $use_sudo -eq 1 ]]; then
+    if ! sudo mv -f "$candidate" "$TARGET_CONF"; then
+      sudo rm -f "$candidate" || true
+      return 1
+    fi
+  else
+    if ! mv -f "$candidate" "$TARGET_CONF"; then
+      rm -f "$candidate" || true
+      return 1
+    fi
   fi
 }
 
 remove_target_conf() {
+  require_safe_target_leaf || return 1
   if [[ ! -w "$target_dir" ]]; then
     sudo rm -f "$TARGET_CONF"
   else
@@ -290,26 +331,25 @@ backup_target_conf() {
   TARGET_CONF_EXISTED=0
   INSTALL_BACKUP_CONF=""
 
-  if [[ ! -e "$TARGET_CONF" ]]; then
+  if [[ ! -e "$TARGET_CONF" && ! -L "$TARGET_CONF" ]]; then
     return 0
   fi
 
+  require_safe_target_leaf
   TARGET_CONF_EXISTED=1
   INSTALL_BACKUP_DIR="$(mktemp -d "${TMPDIR:-/tmp}/taira-edge-nginx-install.XXXXXX")"
   INSTALL_BACKUP_CONF="${INSTALL_BACKUP_DIR}/previous.conf"
   if [[ ! -r "$TARGET_CONF" ]]; then
-    sudo cp -p "$TARGET_CONF" "$INSTALL_BACKUP_CONF"
+    sudo cp -pP "$TARGET_CONF" "$INSTALL_BACKUP_CONF"
   else
-    cp -p "$TARGET_CONF" "$INSTALL_BACKUP_CONF"
+    cp -pP "$TARGET_CONF" "$INSTALL_BACKUP_CONF"
   fi
+  require_safe_regular_file "$INSTALL_BACKUP_CONF" "nginx config rollback copy"
 }
 
 restore_target_conf() {
-  if [[ ! -r "$INSTALL_BACKUP_CONF" ]] || target_needs_sudo_write "$TARGET_CONF"; then
-    sudo cp -p "$INSTALL_BACKUP_CONF" "$TARGET_CONF"
-  else
-    cp -p "$INSTALL_BACKUP_CONF" "$TARGET_CONF"
-  fi
+  require_safe_regular_file "$INSTALL_BACKUP_CONF" "nginx config rollback copy" || return 1
+  copy_to_target_conf "$INSTALL_BACKUP_CONF"
 }
 
 rollback_installed_conf() {
@@ -339,15 +379,13 @@ if ((${#REQUIRED_ALIASES[@]} > 0)); then
     escaped_alias="$(printf '%s' "$alias" | sed 's/[.[\*^$()+?{}|\\]/\\&/g')"
     pretty_host="${alias}.mon.taira.sora.net"
     escaped_pretty="$(printf '%s' "$pretty_host" | sed 's/[.[\*^$()+?{}|\\]/\\&/g')"
-    escaped_alias_path="$(alias_path_regex "$alias")"
     require_in_rendered_conf "server_name[[:space:]]+${escaped_pretty};" "exact Mon host for ${alias}"
     require_in_rendered_conf "proxy_set_header[[:space:]]+Host[[:space:]]+${escaped_alias};" "Host header pin for ${alias}"
-    require_in_rendered_conf "soradns/${escaped_alias_path}" "pinned /soradns route for ${alias}"
   done
 fi
 
 target_dir="$(dirname -- "$TARGET_CONF")"
-if [[ $ALLOW_BACKUP_CONFS -ne 1 && -d "$target_dir" ]]; then
+if [[ -d "$target_dir" ]]; then
   backup_confs=()
   while IFS= read -r path; do
     backup_confs+=("$path")
@@ -365,7 +403,7 @@ if [[ $ALLOW_BACKUP_CONFS -ne 1 && -d "$target_dir" ]]; then
     {
       echo "refusing to continue while backup nginx conf files are in the include directory:"
       printf '  %s\n' "${backup_confs[@]}"
-      echo "move them out of ${target_dir} or rerun with --allow-backup-confs after confirming nginx does not include them."
+      echo "move them out of ${target_dir} before installing or validating this configuration."
     } >&2
     exit 1
   fi
@@ -375,10 +413,18 @@ if [[ $INSTALL -eq 1 && ! -d "$target_dir" ]]; then
   echo "target nginx include directory does not exist: $target_dir" >&2
   exit 1
 fi
-
-if [[ $SKIP_NGINX_TEST -ne 1 ]]; then
-  validate_rendered_nginx_conf
+if [[ $INSTALL -eq 1 ]]; then
+  target_dir_logical="$(cd -L -- "$target_dir" && pwd -L)"
+  target_dir_physical="$(cd -P -- "$target_dir" && pwd -P)"
+  if [[ -L "$target_dir" || "$target_dir_logical" != "$target_dir_physical" ]]; then
+    echo "target nginx include directory must be direct: $target_dir" >&2
+    exit 1
+  fi
+  require_safe_target_directory
+  require_safe_target_leaf
 fi
+
+validate_rendered_nginx_conf
 
 if [[ $INSTALL -eq 1 ]]; then
   backup_target_conf
@@ -387,21 +433,24 @@ if [[ $INSTALL -eq 1 ]]; then
     echo "failed to install nginx config candidate: $TARGET_CONF" >&2
     exit 1
   fi
-  if [[ $SKIP_NGINX_TEST -ne 1 ]]; then
-    if ! "$NGINX_BIN" -t; then
-      echo "live nginx validation failed after installing candidate; rolling back: $TARGET_CONF" >&2
+  if ! "$NGINX_BIN" -t; then
+    echo "live nginx validation failed after installing candidate; rolling back: $TARGET_CONF" >&2
+    exit 1
+  fi
+  if [[ $RELOAD -eq 1 ]]; then
+    if ! "$NGINX_BIN" -s reload; then
+      echo "nginx reload failed after installing candidate; rolling back: $TARGET_CONF" >&2
       exit 1
     fi
+    INSTALL_ROLLBACK_NEEDED=0
+    echo "installed nginx config: $TARGET_CONF"
+    echo "nginx reloaded"
+  else
+    INSTALL_ROLLBACK_NEEDED=0
+    echo "installed nginx config: $TARGET_CONF"
   fi
-  INSTALL_ROLLBACK_NEEDED=0
-  echo "installed nginx config: $TARGET_CONF"
 else
   echo "rendered nginx config: $OUTPUT"
   echo "target nginx config: $TARGET_CONF"
   echo "dry run only; rerun with --install to copy and --reload to reload nginx"
-fi
-
-if [[ $RELOAD -eq 1 ]]; then
-  "$NGINX_BIN" -s reload
-  echo "nginx reloaded"
 fi

@@ -541,8 +541,8 @@ REVIEWED_SOURCE_CLOSURE_FIELDS = frozenset(
         "untracked_file_count",
         "untracked_path_mode_blob_oid_manifest",
         "untracked_path_mode_blob_oid_manifest_sha256",
-        "ignored_cargo_lock_size_bytes",
-        "ignored_cargo_lock_sha256",
+        "tracked_cargo_lock_size_bytes",
+        "tracked_cargo_lock_sha256",
         "combined_source_fingerprint_sha256",
     }
 )
@@ -1711,7 +1711,7 @@ def _validate_reviewed_source_closure(
         label,
         errors,
     )
-    _require_digest(closure, "ignored_cargo_lock_sha256", label, errors)
+    _require_digest(closure, "tracked_cargo_lock_sha256", label, errors)
     combined_digest = _require_digest(
         closure,
         "combined_source_fingerprint_sha256",
@@ -1729,13 +1729,13 @@ def _validate_reviewed_source_closure(
         errors.append(f"{label} untracked_file_count must be 0")
     lock_size = _require_int(
         closure,
-        "ignored_cargo_lock_size_bytes",
+        "tracked_cargo_lock_size_bytes",
         label,
         errors,
         minimum=1,
     )
     if lock_size is not None and lock_size > 16 * 1024 * 1024:
-        errors.append(f"{label} ignored_cargo_lock_size_bytes exceeds 16 MiB")
+        errors.append(f"{label} tracked_cargo_lock_size_bytes exceeds 16 MiB")
 
     raw_manifest = closure.get("untracked_path_mode_blob_oid_manifest")
     if not isinstance(raw_manifest, list):

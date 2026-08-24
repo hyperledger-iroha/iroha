@@ -1498,8 +1498,6 @@ phase_rust_sccp() {
 
 phase_evidence_scripts() {
   local validator
-  local fixture_bundle_parent
-  local fixture_bundle
   if [[ "$CARGO_TARGET_DIR" == /* ]]; then
     validator="$CARGO_TARGET_DIR/debug/sccp_release_evidence"
   else
@@ -1511,23 +1509,8 @@ phase_evidence_scripts() {
   run_cmd env "SCCP_RELEASE_RUST_VALIDATOR=$validator" \
     "$SCCP_CORRIDOR_PYTHON_BIN" -m pytest -q \
     pytests/scripts/check_sccp_production_corridor_test.py \
-    pytests/scripts/sccp_release_fixture_reseal_test.py \
     pytests/scripts/sccp_release_tooling_test.py
-  if [[ "$DRY_RUN" -eq 1 ]]; then
-    fixture_bundle_parent="${TMPDIR:-/tmp}/iroha-sccp-release-fixture.dry-run"
-  else
-    fixture_bundle_parent="$(mktemp -d "${TMPDIR:-/tmp}/iroha-sccp-release-fixture.XXXXXX")"
-  fi
-  fixture_bundle="$fixture_bundle_parent/bundle"
-  run_cmd "$SCCP_CORRIDOR_PYTHON_BIN" scripts/sccp_release_fixture.py \
-    --rust-validator "$validator" validate
-  run_cmd "$SCCP_CORRIDOR_PYTHON_BIN" scripts/sccp_release_fixture.py \
-    --rust-validator "$validator" build --output-dir "$fixture_bundle"
-  run_cmd "$SCCP_CORRIDOR_PYTHON_BIN" scripts/sccp_release_fixture.py \
-    --rust-validator "$validator" verify "$fixture_bundle"
-  if [[ "$DRY_RUN" -eq 0 ]]; then
-    rm -rf "$fixture_bundle_parent"
-  fi
+  run_cmd "$SCCP_CORRIDOR_PYTHON_BIN" scripts/sccp_release_fixture.py reject
 }
 
 phase_js_sdk() {
