@@ -20,12 +20,12 @@ export const BUNDLE_TARGETS = Object.freeze([
     target: "node18",
     // This direct entrypoint intentionally exposes the complete Torii surface. The
     // protected pre-reset tree measured 945,975 bytes on the same pinned runner;
-    // The eager code-split closure is 991,842 bytes. Sumeragi's three existing
+    // The eager code-split closure is 990,506 bytes. Sumeragi's three existing
     // async typed methods load their reviewed 73,354-byte incremental closure
-    // on demand. The unchanged 983 KiB eager ceiling leaves 14,750 bytes.
+    // on demand. The unchanged 983 KiB eager ceiling leaves 16,086 bytes.
     limitKb: 983,
-    reviewedEagerBytes: 991_842,
-    reviewedCombinedBytes: 1_065_196,
+    reviewedEagerBytes: 990_506,
+    reviewedCombinedBytes: 1_063_860,
     lazyChunks: Object.freeze([
       Object.freeze({
         specifier: "./sumeragiTyped.js",
@@ -104,14 +104,14 @@ export const BUNDLE_TARGETS = Object.freeze([
     platform: "browser",
     target: "es2020",
     // The protected pre-reset browser aggregate measured 458,081 bytes on the
-    // same pinned runner. Its reviewed eager code-split closure is 480,380 bytes
-    // (+4.87%) after shared validation paths are interned. The 470 KiB eager
-    // ceiling leaves 900 bytes while the measured graph remains below the protected
+    // same pinned runner. Its reviewed eager code-split closure is 480,045 bytes
+    // (+4.80%) after shared validation paths are interned. The 470 KiB eager
+    // ceiling leaves 1,235 bytes while the measured graph remains below the protected
     // 5% predecessor regression. The typed Sumeragi parser and deployment submit
     // continuation are audited below as non-overlapping lazy closures.
     limitKb: 470,
-    reviewedEagerBytes: 480_380,
-    reviewedCombinedBytes: 563_249,
+    reviewedEagerBytes: 480_045,
+    reviewedCombinedBytes: 562_914,
     lazyChunks: Object.freeze([
       Object.freeze({
         specifier: "./sumeragiTyped.js",
