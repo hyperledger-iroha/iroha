@@ -28,13 +28,10 @@ function jsonResponse(payload, { status = 200, headers = {} } = {}) {
 
 function universalCapability(overrides = {}) {
   return {
-    mandatory: false,
     cash_handoff_capability: "cash_handoff_v1",
     required_bridge_abi_version: 22,
     max_hops: 8,
     ready: true,
-    assets: [],
-    blockers: [],
     ...overrides,
   };
 }
@@ -88,6 +85,18 @@ test("Kagemusha JavaScript surface is transport-only ABI-22/V4", () => {
   assert.throws(
     () => normalizeOfflineStatus(universalCapability({ required_bridge_abi_version: 19 })),
     /required_bridge_abi_version must be 22/u,
+  );
+  assert.throws(
+    () => normalizeOfflineStatus(universalCapability({ mandatory: false })),
+    /missing or unknown fields/u,
+  );
+  assert.throws(
+    () => normalizeOfflineStatus(universalCapability({ assets: [] })),
+    /missing or unknown fields/u,
+  );
+  assert.throws(
+    () => normalizeOfflineStatus(universalCapability({ blockers: [] })),
+    /missing or unknown fields/u,
   );
   assert.throws(
     () => normalizeKagemushaTopUpRequestV4({ ...requestV4(), version: 3 }),

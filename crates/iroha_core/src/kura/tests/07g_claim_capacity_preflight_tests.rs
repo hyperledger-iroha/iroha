@@ -11,7 +11,8 @@ fn autonomous_claim_initial_staging_preflights_the_whole_named_temp_set() {
         1,
         &signer,
     );
-    let (mut kura, _) = Kura::new(&config, &lane_config).expect("claim staging Kura");
+    let (mut kura, _) = Kura::open_test_kura_with_configured_lane_config(&config, &lane_config)
+        .expect("claim staging Kura");
     let staged_bytes = payload
         .entrypoint_hashes
         .iter()
@@ -110,7 +111,8 @@ fn autonomous_claim_release_cas_preflights_promotions_removals_and_atomic_peak()
         1,
         &signer,
     );
-    let (mut kura, _) = Kura::new(&config, &lane_config).expect("claim release Kura");
+    let (mut kura, _) = Kura::open_test_kura_with_configured_lane_config(&config, &lane_config)
+        .expect("claim release Kura");
     install_autonomous_lane_marker_for_kura(&kura, &lane_config, &payload);
     kura.persist_lane_executable_payload(&payload, network_id, epoch)
         .expect("persist release payload");

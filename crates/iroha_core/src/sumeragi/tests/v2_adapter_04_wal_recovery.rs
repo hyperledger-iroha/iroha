@@ -2509,8 +2509,6 @@ fn bls_unified_decision_body_publishes_apply_or_rejects_before_storage_open() {
 #[test]
 fn bls_pending_kura_durable_body_without_validation_marker_fails_owner_open() {
     let _status_guard = crate::sumeragi::status::rbc_status_test_guard();
-    let local_signer = KeyPair::try_from_seed(vec![1; 32], Algorithm::BlsNormal)
-        .expect("deterministic durable-only pending Decision retainer");
     crate::sumeragi::status::clear_v2_status();
     let safety = TempDir::new().expect("temporary durable-only pending Decision WAL");
     let storage = TempDir::new().expect("temporary durable-only pending Decision stores");
@@ -2520,6 +2518,7 @@ fn bls_pending_kura_durable_body_without_validation_marker_fails_owner_open() {
         0xD8,
         DecisionBodyMarkerFixture::DurableOnly,
     );
+    let context = startup.adapter.wire_context.clone();
     let (context_id, height, block_hash) = match startup.effects.as_slice() {
         [
             AdapterEffect::FetchBody {
@@ -2538,27 +2537,61 @@ fn bls_pending_kura_durable_body_without_validation_marker_fails_owner_open() {
         .unwrap_or_else(|(error, _)| panic!("bind durable-only pending Decision: {error}"))
         .authenticate_final_wal_startup_authority()
         .unwrap_or_else(|error| panic!("authenticate durable-only pending Decision: {error}"));
-    assert!(pending.retains_decision_fetch_for_test());
-    let body_store = body_store
-        .into_revalidated_startup()
-        .expect("seal durable-only pending Decision store");
-    let ledger_root = storage.path().join("ledger");
-    let serve_root = storage.path().join("serve");
-    let Err(error) = pending.open_production_lifecycle_owner_v1_with_store_for_test(
-        &lifecycle_owner_config(),
-        4,
-        &ledger_root,
-        &serve_root,
-        body_store,
-        &local_signer,
-    ) else {
-        panic!("pending Kura startup without a validation marker must reject Fetch-only owner open")
+    assert!(pending.is_storage_only_for_test());
+    assert_eq!(pending.expected_for_test(), expected);
+    assert_eq!(
+        body_store
+            .recovery_catalog()
+            .expect("read durable-only pending Decision catalog")
+            .len(),
+        1
+    );
+    assert!(body_store.validated_recovery_catalog().is_empty());
+    drop(
+        body_store
+            .into_revalidated_startup()
+            .expect("seal durable-only pending Decision store"),
+    );
+    let mut runtime_startup = pending.into_runtime_startup_for_test();
+    let ProductionLifecycleAdapterStartupStateV1::Recovered {
+        pending_kura_apply,
+        leader_wire_launch_prepared,
+        ..
+    } = &mut runtime_startup.state
+    else {
+        panic!("durable-only pending Kura startup must remain recovered")
     };
-    assert!(
-        error.to_string().contains(
-            "pending Kura startup did not reconstruct the exact recovered Decision Apply carrier"
-        ),
-        "unexpected durable-only pending startup failure: {error}"
+    assert!(pending_kura_apply.is_some());
+    *leader_wire_launch_prepared = true;
+    let (runtime, prepared, local_proposal_attempt) = runtime_startup
+        .into_serialized_runtime(
+            Instant::now(),
+            Duration::from_secs(10),
+            super::super::v2_runtime::RuntimeQueueConfig::new(8, 2, 2),
+            super::super::v2_runtime::RuntimeLifecycleOrdinalSource::after_high_watermark(0),
+        )
+        .expect("move durable-only pending Kura startup into the runtime shell");
+    assert!(local_proposal_attempt.is_none());
+    let prepared = prepared.expect("runtime returns the opaque pending Kura replay seal");
+    assert!(!prepared.validated_marker_was_deferred());
+    let mut executor = super::super::v2_effects::V2EffectExecutor::with_runtime(
+        runtime,
+        std::collections::BTreeMap::new(),
+        context.clone(),
+        context.roster[0].validator.clone(),
+        Some(0),
+        super::super::v2_effects::EffectQueueConfig::default(),
+    )
+    .expect("open a durable-only pending Kura executor");
+    let (mut services, _planner_io) = super::super::v2_worker::tests::fixture();
+    let Err(super::super::v2_effects::EffectExecutorError::PendingApplyRecoveryMismatch(detail)) =
+        prepared.install(&mut executor, &mut services)
+    else {
+        panic!("pending Kura replay without its deferred validation marker must fail closed")
+    };
+    assert_eq!(
+        detail,
+        "pending Kura replay omitted its exact deferred validation marker"
     );
     assert!(crate::sumeragi::status::v2_status().is_none());
 }

@@ -1,7 +1,9 @@
 #[test]
 fn cache_block_body_rejects_same_header_equal_length_wire_substitution_before_write() {
     let (_temp_dir, config) = unwrapped_kura_storage_fixture(nonzero!(1_usize));
-    let (kura, _) = Kura::new(&config, &RuntimeLaneConfig::default()).expect("kura init");
+    let (kura, _) =
+        Kura::open_test_kura_with_configured_lane_config(&config, &RuntimeLaneConfig::default())
+            .expect("kura init");
     let blocks = store_dummy_block_arcs(&kura, 4);
     let height = nonzero!(2_usize);
     let canonical = Arc::clone(&blocks[1]);
@@ -143,8 +145,11 @@ fn reopened_evicted_read_never_enters_memory_cache_or_survives_finality_loss() {
     let temp_dir = TempDir::new().expect("create Kura root");
     let small_config = kura_config_for_dir(&temp_dir, nonzero!(1_usize));
     let (canonical, finality_bytes) = {
-        let (kura, _) =
-            Kura::new(&small_config, &RuntimeLaneConfig::default()).expect("open small Kura");
+        let (kura, _) = Kura::open_test_kura_with_configured_lane_config(
+            &small_config,
+            &RuntimeLaneConfig::default(),
+        )
+        .expect("open small Kura");
         let blocks = store_dummy_block_arcs(&kura, 4);
         let canonical = Arc::clone(&blocks[1]);
         let height = nonzero!(2_usize);
@@ -165,8 +170,11 @@ fn reopened_evicted_read_never_enters_memory_cache_or_survives_finality_loss() {
         (canonical, finality_bytes)
     };
     let large_config = kura_config_for_dir(&temp_dir, nonzero!(16_usize));
-    let (kura, _) =
-        Kura::new(&large_config, &RuntimeLaneConfig::default()).expect("reopen large Kura");
+    let (kura, _) = Kura::open_test_kura_with_configured_lane_config(
+        &large_config,
+        &RuntimeLaneConfig::default(),
+    )
+    .expect("reopen large Kura");
     let height = nonzero!(2_usize);
     assert_eq!(
         kura.get_block(height).as_deref(),
@@ -511,7 +519,9 @@ fn cache_block_body_rejects_wrong_rehydrated_hash() {
     let temp_dir = TempDir::new().unwrap();
     populate_store(&temp_dir, 4);
     let config = kura_config_for_dir(&temp_dir, NonZeroUsize::new(1).expect("non-zero"));
-    let (kura, _) = Kura::new(&config, &RuntimeLaneConfig::default()).expect("kura init");
+    let (kura, _) =
+        Kura::open_test_kura_with_configured_lane_config(&config, &RuntimeLaneConfig::default())
+            .expect("kura init");
     let height = nonzero!(2_usize);
     let block_hash = kura
         .get_block_hash(height)
@@ -585,7 +595,9 @@ fn cache_block_body_rejects_length_mismatch() {
     let temp_dir = TempDir::new().unwrap();
     populate_store(&temp_dir, 4);
     let config = kura_config_for_dir(&temp_dir, NonZeroUsize::new(1).expect("non-zero"));
-    let (kura, _) = Kura::new(&config, &RuntimeLaneConfig::default()).expect("kura init");
+    let (kura, _) =
+        Kura::open_test_kura_with_configured_lane_config(&config, &RuntimeLaneConfig::default())
+            .expect("kura init");
     let height = nonzero!(2_usize);
     let block = kura
         .get_block(height)
@@ -630,7 +642,11 @@ fn evicted_remote_body_rehydrates_after_restart_and_new_adverts() {
         unwrapped_kura_storage_fixture(NonZeroUsize::new(1).expect("non-zero"));
     let height = nonzero!(2_usize);
     let (block, block_hash) = {
-        let (kura, _) = Kura::new(&config, &RuntimeLaneConfig::default()).expect("kura init");
+        let (kura, _) = Kura::open_test_kura_with_configured_lane_config(
+            &config,
+            &RuntimeLaneConfig::default(),
+        )
+        .expect("kura init");
         let blocks = store_dummy_block_arcs(&kura, 4);
         let block = Arc::clone(&blocks[1]);
         let block_hash = block.hash();
@@ -653,7 +669,9 @@ fn evicted_remote_body_rehydrates_after_restart_and_new_adverts() {
         );
         (block, block_hash)
     };
-    let (kura, _) = Kura::new(&config, &RuntimeLaneConfig::default()).expect("kura reopen");
+    let (kura, _) =
+        Kura::open_test_kura_with_configured_lane_config(&config, &RuntimeLaneConfig::default())
+            .expect("kura reopen");
     assert_eq!(
         kura.get_durable_block_hash(height),
         Some(block_hash),
@@ -683,7 +701,11 @@ fn fast_init_preserves_remote_only_metadata_after_restart() {
     config.init_mode = InitMode::Fast;
     let height = nonzero!(2_usize);
     let block_hash = {
-        let (kura, _) = Kura::new(&config, &RuntimeLaneConfig::default()).expect("kura init");
+        let (kura, _) = Kura::open_test_kura_with_configured_lane_config(
+            &config,
+            &RuntimeLaneConfig::default(),
+        )
+        .expect("kura init");
         let blocks = store_dummy_block_arcs(&kura, 4);
         let block_hash = blocks[1].hash();
         advertise_required_replicas(&kura, height);
@@ -702,7 +724,8 @@ fn fast_init_preserves_remote_only_metadata_after_restart() {
         block_hash
     };
     let (kura, block_count) =
-        Kura::new(&config, &RuntimeLaneConfig::default()).expect("fast reopen");
+        Kura::open_test_kura_with_configured_lane_config(&config, &RuntimeLaneConfig::default())
+            .expect("fast reopen");
     assert_eq!(block_count.0, 4);
     assert_eq!(
         kura.get_durable_block_hash(height),
@@ -721,7 +744,11 @@ fn strict_init_prunes_remote_only_tail_without_hash_metadata() {
         unwrapped_kura_storage_fixture(NonZeroUsize::new(1).expect("non-zero"));
     let height = nonzero!(2_usize);
     let block_hash = {
-        let (kura, _) = Kura::new(&config, &RuntimeLaneConfig::default()).expect("kura init");
+        let (kura, _) = Kura::open_test_kura_with_configured_lane_config(
+            &config,
+            &RuntimeLaneConfig::default(),
+        )
+        .expect("kura init");
         let blocks = store_dummy_block_arcs(&kura, 4);
         let block_hash = blocks[1].hash();
         advertise_required_replicas(&kura, height);
@@ -749,7 +776,7 @@ fn strict_init_prunes_remote_only_tail_without_hash_metadata() {
         .set_len(SIZE_OF_BLOCK_HASH)
         .expect("truncate hashes below index height");
     assert!(matches!(
-        Kura::new(&config, &RuntimeLaneConfig::default()),
+        Kura::open_test_kura_with_configured_lane_config(&config, &RuntimeLaneConfig::default()),
         Err(Error::FinalizedV2BlockMutation {
             rewrite_from_height: 2,
             finalized_height: 2,
@@ -780,7 +807,11 @@ fn malformed_sidecar_status_is_missing_without_fresh_adverts() {
         unwrapped_kura_storage_fixture(NonZeroUsize::new(1).expect("non-zero"));
     let height = nonzero!(2_usize);
     let (block_hash, da_path) = {
-        let (kura, _) = Kura::new(&config, &RuntimeLaneConfig::default()).expect("kura init");
+        let (kura, _) = Kura::open_test_kura_with_configured_lane_config(
+            &config,
+            &RuntimeLaneConfig::default(),
+        )
+        .expect("kura init");
         let blocks = store_dummy_block_arcs(&kura, 4);
         let block = Arc::clone(&blocks[1]);
         let block_hash = block.hash();
@@ -800,7 +831,9 @@ fn malformed_sidecar_status_is_missing_without_fresh_adverts() {
         (block_hash, da_path)
     };
     std::fs::write(&da_path, b"short").expect("corrupt local sidecar length");
-    let (kura, _) = Kura::new(&config, &RuntimeLaneConfig::default()).expect("kura reopen");
+    let (kura, _) =
+        Kura::open_test_kura_with_configured_lane_config(&config, &RuntimeLaneConfig::default())
+            .expect("kura reopen");
     assert_eq!(
         kura.get_durable_block_hash(height),
         Some(block_hash),
@@ -822,7 +855,11 @@ fn strict_init_removes_malformed_sidecar_with_matching_length() {
         unwrapped_kura_storage_fixture(NonZeroUsize::new(1).expect("non-zero"));
     let height = nonzero!(2_usize);
     let (block_hash, da_path) = {
-        let (kura, _) = Kura::new(&config, &RuntimeLaneConfig::default()).expect("kura init");
+        let (kura, _) = Kura::open_test_kura_with_configured_lane_config(
+            &config,
+            &RuntimeLaneConfig::default(),
+        )
+        .expect("kura init");
         let blocks = store_dummy_block_arcs(&kura, 4);
         let block = Arc::clone(&blocks[1]);
         let block_hash = block.hash();
@@ -855,7 +892,8 @@ fn strict_init_removes_malformed_sidecar_with_matching_length() {
         (block_hash, da_path)
     };
     let (kura, block_count) =
-        Kura::new(&config, &RuntimeLaneConfig::default()).expect("strict reopen");
+        Kura::open_test_kura_with_configured_lane_config(&config, &RuntimeLaneConfig::default())
+            .expect("strict reopen");
     assert_eq!(
         block_count.0, 4,
         "malformed sidecar cache must not truncate canonical hash metadata"
@@ -881,7 +919,11 @@ fn strict_init_rejects_conflicting_sidecar_hash_without_rewriting_chain() {
         unwrapped_kura_storage_fixture(NonZeroUsize::new(1).expect("non-zero"));
     let height = nonzero!(2_usize);
     let (canonical_hash, conflicting_hash, da_path) = {
-        let (kura, _) = Kura::new(&config, &RuntimeLaneConfig::default()).expect("kura init");
+        let (kura, _) = Kura::open_test_kura_with_configured_lane_config(
+            &config,
+            &RuntimeLaneConfig::default(),
+        )
+        .expect("kura init");
         let blocks = store_dummy_block_arcs(&kura, 4);
         let genesis_hash = blocks[0].hash();
         let canonical_hash = blocks[1].hash();
@@ -916,7 +958,8 @@ fn strict_init_rejects_conflicting_sidecar_hash_without_rewriting_chain() {
         (canonical_hash, conflicting_hash, da_path)
     };
     let (kura, block_count) =
-        Kura::new(&config, &RuntimeLaneConfig::default()).expect("strict reopen");
+        Kura::open_test_kura_with_configured_lane_config(&config, &RuntimeLaneConfig::default())
+            .expect("strict reopen");
     assert_eq!(
         block_count.0, 4,
         "conflicting sidecar cache must not truncate the canonical chain"
@@ -937,7 +980,9 @@ fn block_payload_available_by_hash_requires_local_body_after_eviction() {
     let temp_dir = TempDir::new().unwrap();
     populate_store(&temp_dir, 4);
     let config = kura_config_for_dir(&temp_dir, NonZeroUsize::new(1).expect("non-zero"));
-    let (kura, _) = Kura::new(&config, &RuntimeLaneConfig::default()).expect("kura init");
+    let (kura, _) =
+        Kura::open_test_kura_with_configured_lane_config(&config, &RuntimeLaneConfig::default())
+            .expect("kura init");
     let height = nonzero!(2_usize);
     let block = kura
         .get_block(height)
@@ -975,7 +1020,9 @@ fn evicted_blocks_survive_restart() {
     let temp_dir = TempDir::new().unwrap();
     populate_store(&temp_dir, 4);
     let config = kura_config_for_dir(&temp_dir, NonZeroUsize::new(1).expect("non-zero"));
-    let (kura, _) = Kura::new(&config, &RuntimeLaneConfig::default()).expect("kura init");
+    let (kura, _) =
+        Kura::open_test_kura_with_configured_lane_config(&config, &RuntimeLaneConfig::default())
+            .expect("kura init");
     let height = NonZeroUsize::new(2).expect("non-zero");
     let block = kura
         .get_block(height)
@@ -990,7 +1037,9 @@ fn evicted_blocks_survive_restart() {
     kura.cache_block_body(block.as_ref())
         .expect("cache rehydrated block");
     drop(kura);
-    let (kura, _) = Kura::new(&config, &RuntimeLaneConfig::default()).expect("kura reopen");
+    let (kura, _) =
+        Kura::open_test_kura_with_configured_lane_config(&config, &RuntimeLaneConfig::default())
+            .expect("kura reopen");
     let expected_hash = kura.get_block_hash(height).expect("hash available");
     let block = kura
         .get_block(height)
@@ -1012,7 +1061,9 @@ fn deep_history_get_block_uses_cached_bytes() {
     }
     drop(store);
     let config = kura_config_for_dir(&temp_dir, nonzero!(16_usize));
-    let (kura, _) = Kura::new(&config, &RuntimeLaneConfig::default()).unwrap();
+    let (kura, _) =
+        Kura::open_test_kura_with_configured_lane_config(&config, &RuntimeLaneConfig::default())
+            .unwrap();
     let heights: Vec<_> = (1..=BLOCK_COUNT)
         .map(|height| NonZeroUsize::new(height).expect("nonzero height"))
         .collect();
@@ -1047,7 +1098,9 @@ fn debug_output_new_blocks_writes_jsonl() {
     let rt = tokio::runtime::Runtime::new().expect("runtime");
     let mut config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
     config.debug_output_new_blocks = true;
-    let (kura, _) = Kura::new(&config, &RuntimeLaneConfig::default()).unwrap();
+    let (kura, _) =
+        Kura::open_test_kura_with_configured_lane_config(&config, &RuntimeLaneConfig::default())
+            .unwrap();
     kura.bind_local_peer_id(checked_peer_id())
         .expect("bind local peer before Kura start");
     let _handle = {
@@ -1093,7 +1146,9 @@ fn create_blocks(rt: &tokio::runtime::Runtime, temp_dir: &TempDir) -> Vec<Commit
         LiveQueryStore::start_test()
     };
     let config = kura_config_for_dir(temp_dir, BLOCKS_IN_MEMORY);
-    let (kura, block_count) = Kura::new(&config, &RuntimeLaneConfig::default()).unwrap();
+    let (kura, block_count) =
+        Kura::open_test_kura_with_configured_lane_config(&config, &RuntimeLaneConfig::default())
+            .unwrap();
     assert_eq!(block_count.0, 0);
     let state = State::new(
         World::with([domain, genesis_domain], [account, genesis_account], []),
@@ -1770,7 +1825,9 @@ fn expect_default_kura_fixture(
     open_context: &str,
 ) -> DefaultKuraFixture {
     let (temp_dir, config) = kura_storage_fixture(temp_context, blocks_in_memory);
-    let (kura, _) = Kura::new(&config, &RuntimeLaneConfig::default()).expect(open_context);
+    let (kura, _) =
+        Kura::open_test_kura_with_configured_lane_config(&config, &RuntimeLaneConfig::default())
+            .expect(open_context);
     (temp_dir, config, kura)
 }
 
@@ -1780,7 +1837,9 @@ fn kura_root_fixture(blocks_in_memory: NonZeroUsize) -> DefaultKuraFixture {
 
 fn unwrapped_kura_fixture() -> DefaultKuraFixture {
     let (temp_dir, config) = unwrapped_kura_storage_fixture(BLOCKS_IN_MEMORY);
-    let (kura, _) = Kura::new(&config, &RuntimeLaneConfig::default()).unwrap();
+    let (kura, _) =
+        Kura::open_test_kura_with_configured_lane_config(&config, &RuntimeLaneConfig::default())
+            .unwrap();
     (temp_dir, config, kura)
 }
 
@@ -1788,7 +1847,9 @@ fn unwrapped_inline_kura_fixture_with_fsync(fsync_mode: FsyncMode) -> (TempDir, 
     let temp_dir = TempDir::new().unwrap();
     let mut config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
     config.fsync_mode = fsync_mode;
-    let (kura, _) = Kura::new(&config, &RuntimeLaneConfig::default()).unwrap();
+    let (kura, _) =
+        Kura::open_test_kura_with_configured_lane_config(&config, &RuntimeLaneConfig::default())
+            .unwrap();
     (temp_dir, kura)
 }
 
@@ -1799,7 +1860,8 @@ fn expect_configured_kura_fixture(
 ) -> ConfiguredKuraFixture {
     let (temp_dir, config) = kura_storage_fixture(temp_context, blocks_in_memory);
     let lane_config = RuntimeLaneConfig::default();
-    let (kura, _) = Kura::new(&config, &lane_config).expect(open_context);
+    let (kura, _) = Kura::open_test_kura_with_configured_lane_config(&config, &lane_config)
+        .expect(open_context);
     (temp_dir, config, lane_config, kura)
 }
 
@@ -1945,7 +2007,8 @@ fn test_kura_with_default_lane_markers(
     config: &Config,
     lane_config: &RuntimeLaneConfig,
 ) -> (Arc<Kura>, BlockCount) {
-    let (kura, block_count) = Kura::new(config, lane_config).expect("init Kura test fixture");
+    let (kura, block_count) = Kura::open_test_kura_with_configured_lane_config(config, lane_config)
+        .expect("init Kura test fixture");
     for entry in lane_config.entries() {
         let incarnation = Hash::new(
             format!(
@@ -2322,7 +2385,8 @@ fn prune_poison_rejects_lane_sidecar_writers_before_mutation() {
     let signer = checked_keypair_with_algorithm(Algorithm::BlsNormal);
     let (network_id, epoch, payload) =
         autonomous_lane_payload_for_kura(lane_id, dataspace_id, 1, &signer);
-    let (kura, _) = Kura::new(&config, &lane_config).expect("Kura");
+    let (kura, _) =
+        Kura::open_test_kura_with_configured_lane_config(&config, &lane_config).expect("Kura");
     install_autonomous_lane_marker_for_kura(&kura, &lane_config, &payload);
     kura.persist_lane_executable_payload(&payload, network_id, epoch)
         .expect("seed autonomous payload");
@@ -2420,7 +2484,8 @@ fn lane_sidecar_writer_waits_for_geometry_transition_lock() {
     let signer = checked_keypair_with_algorithm(Algorithm::BlsNormal);
     let (network_id, epoch, payload) =
         autonomous_lane_payload_for_kura(lane_id, dataspace_id, 1, &signer);
-    let (kura, _) = Kura::new(&config, &lane_config).expect("Kura");
+    let (kura, _) =
+        Kura::open_test_kura_with_configured_lane_config(&config, &lane_config).expect("Kura");
     install_autonomous_lane_marker_for_kura(&kura, &lane_config, &payload);
     let geometry_guard = kura.lane_geometry_lock.lock();
     let (started_tx, started_rx) = std::sync::mpsc::sync_channel(0);
@@ -2470,7 +2535,8 @@ fn autonomous_lane_availability_deliver_is_durable_and_fails_closed() {
     let signer = checked_keypair_with_algorithm(Algorithm::BlsNormal);
     let (network_id, epoch, payload) =
         autonomous_lane_payload_for_kura(lane_id, lane_entry.dataspace_id, 1, &signer);
-    let (kura, _) = Kura::new(&config, &lane_config).expect("Kura");
+    let (kura, _) =
+        Kura::open_test_kura_with_configured_lane_config(&config, &lane_config).expect("Kura");
     install_autonomous_lane_marker_for_kura(&kura, &lane_config, &payload);
     kura.persist_lane_executable_payload(&payload, network_id, epoch)
         .expect("persist payload before READY");
@@ -2571,7 +2637,8 @@ fn autonomous_lane_availability_deliver_is_durable_and_fails_closed() {
         "a conflicting body must not replace a durable DELIVER certificate"
     );
     drop(kura);
-    let (reopened, _) = Kura::new(&config, &lane_config).expect("reopen Kura");
+    let (reopened, _) = Kura::open_test_kura_with_configured_lane_config(&config, &lane_config)
+        .expect("reopen Kura");
     assert!(reopened.autonomous_lane_payload_availability_delivered(
         &payload.origin_proposal,
         network_id,
@@ -2609,7 +2676,8 @@ fn autonomous_lane_slot_retirement_is_terminal_idempotent_and_restart_durable() 
     let signer = checked_keypair_with_algorithm(Algorithm::BlsNormal);
     let (network_id, epoch, payload) =
         autonomous_lane_payload_for_kura(lane_id, lane_entry.dataspace_id, 1, &signer);
-    let (kura, _) = Kura::new(&config, &lane_config).expect("Kura");
+    let (kura, _) =
+        Kura::open_test_kura_with_configured_lane_config(&config, &lane_config).expect("Kura");
     install_autonomous_lane_marker_for_kura(&kura, &lane_config, &payload);
     kura.persist_lane_executable_payload(&payload, network_id, epoch)
         .expect("persist autonomous payload");
@@ -2684,7 +2752,8 @@ fn autonomous_lane_slot_retirement_is_terminal_idempotent_and_restart_durable() 
         "the same payload cannot reclaim a terminal slot",
     );
     drop(kura);
-    let (reopened, _) = Kura::new(&config, &lane_config).expect("reopen Kura");
+    let (reopened, _) = Kura::open_test_kura_with_configured_lane_config(&config, &lane_config)
+        .expect("reopen Kura");
     assert_eq!(
         reopened
             .read_autonomous_lane_slot_retirement(lane_id, 1, network_id, epoch)

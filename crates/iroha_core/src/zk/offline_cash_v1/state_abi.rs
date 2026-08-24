@@ -289,6 +289,11 @@ impl OfflineCashStatePublicInstancesV1 {
         &self.words
     }
 
+    /// Recover the exact parity-typed history already committed by this ABI.
+    pub(super) fn history_bytes(&self) -> [u8; OFFLINE_CASH_HISTORY_ACCUMULATOR_BYTES_V1] {
+        history_bytes(&self.words)
+    }
+
     /// Exact operation encoded in word four.
     pub(super) fn operation(
         &self,

@@ -1173,10 +1173,7 @@ fn production_seekable_switch_source_forbids_full_digit_materialization() {
     let core = source
         .split_once("fn apply_compact_switch_streamed_core_with_automorphism")
         .unwrap()
-        .1
-        .split_once("fn apply_compact_switch_with_seekable_provider")
-        .unwrap()
-        .0;
+        .1;
     for forbidden in [
         "let plaintext_digit",
         "stored_b_digit(",
@@ -1198,6 +1195,16 @@ fn production_seekable_switch_source_forbids_full_digit_materialization() {
     }
     assert!(source.contains("read_seekable_evaluated_key_limb"));
     assert!(source.contains("derive_target_a_limb"));
+    for removed in [
+        "fn apply_compact_switch_with_seekable_provider",
+        "fn apply_compact_switch_with_provider",
+        "fn apply_compact_switch(",
+    ] {
+        assert!(
+            !source.contains(removed),
+            "retired whole-value path: {removed}"
+        );
+    }
     let stored_limb = source
         .split_once("fn stored_b_limb")
         .unwrap()
@@ -1280,7 +1287,7 @@ fn streaming_automorphism_is_the_only_production_facade_surface() {
         "automorphism_switch_zk_ams_mkhe_collective_streaming_v1",
         "zk_ams_mkhe_streaming_collective_automorphism_accounting_v1",
     ];
-    let legacy = [
+    let removed = [
         "automorphism_switch_zk_ams_mkhe_collective_v1",
         "relinearize_zk_ams_mkhe_collective_v1",
     ];
@@ -1297,16 +1304,16 @@ fn streaming_automorphism_is_the_only_production_facade_surface() {
                 .map(str::trim);
             assert_ne!(preceding_line, Some("#[cfg(test)]"), "{name} is test-only");
         }
-        for name in legacy {
-            assert_eq!(source.matches(name).count(), 1, "legacy facade item {name}");
-            let position = source.find(name).expect("legacy facade item");
-            let gate = source[..position]
-                .rfind("#[cfg(test)]")
-                .expect("legacy facade cfg(test)");
-            let gated_use = &source[gate..position];
-            assert!(gated_use.contains("pub use "));
-            assert!(gated_use.len() < 192, "detached cfg(test) for {name}");
+        for name in removed {
+            assert!(!source.contains(name), "retired facade item {name}");
         }
+    }
+    let runtime = include_str!("collective_eval_keys/runtime.rs");
+    for name in removed {
+        assert!(
+            !runtime.contains(&format!("fn {name}")),
+            "retired runtime entry {name}"
+        );
     }
 }
 #[test]
@@ -1414,18 +1421,17 @@ fn generate_publish_validate_and_streamed_switch_are_exact_end_to_end() {
     let seeded_digits = (0..profile.gadget_digits)
         .map(|digit_index| deterministic_a(&profile, digit_index + 37))
         .collect::<Vec<_>>();
-    let full_pairs = stored_digits
-        .iter()
-        .cloned()
-        .zip(seeded_digits.iter().cloned())
-        .collect::<Vec<_>>();
-    let reference = apply_compact_switch_with_provider(
+    let reference = apply_compact_switch_streamed_core(
         &profile,
-        &constant,
-        &linear,
+        clone_rns_exact(&profile, &constant).unwrap(),
+        clone_rns_exact(&profile, &linear).unwrap(),
         &switched,
-        profile.gadget_digits,
-        |digit_index| Ok(full_pairs[digit_index].clone()),
+        |digit_index, limb_index, output| {
+            fill_test_limb(&profile, &stored_digits[digit_index], limb_index, output)
+        },
+        |digit_index, limb_index, output| {
+            fill_test_limb(&profile, &seeded_digits[digit_index], limb_index, output)
+        },
     )
     .unwrap();
     let observed = apply_compact_switch_streamed_core(

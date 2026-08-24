@@ -856,37 +856,12 @@ public struct KagemushaTopUpShieldVerifierBinding: Equatable, Sendable {
         self.withdrawalHeight = withdrawalHeight
     }
 
-    public init(_ verifier: ToriiKagemushaActiveTopUpShieldVerifier) throws {
-        try self.init(
-            backend: verifier.id.backend,
-            name: verifier.id.name,
-            version: verifier.version,
-            circuitID: verifier.circuitId,
-            commitment: verifier.commitment,
-            publicInputsSchemaHash: verifier.publicInputsSchemaHash,
-            maximumProofBytes: verifier.maxProofBytes,
-            activationHeight: verifier.activationHeight,
-            withdrawalHeight: verifier.withdrawalHeight
-        )
-    }
-
-    fileprivate func matches(_ verifier: ToriiKagemushaActiveTopUpShieldVerifier) -> Bool {
-        backend == verifier.id.backend
-            && name == verifier.id.name
-            && version == verifier.version
-            && circuitID == verifier.circuitId
-            && commitment == verifier.commitment
-            && publicInputsSchemaHash == verifier.publicInputsSchemaHash
-            && maximumProofBytes == verifier.maxProofBytes
-            && activationHeight == verifier.activationHeight
-            && withdrawalHeight == verifier.withdrawalHeight
-    }
 }
 
-/// Legacy-named product expectation supplied by the app for an online top-up.
-/// It binds the selected asset and verifier lifecycle; it is not universal
-/// offline discovery or backend readiness.
-public struct KagemushaTopUpShieldReadinessExpectation: Equatable, Sendable {
+/// Product capability supplied by the app for an online top-up.
+/// It binds the selected asset and verifier lifecycle independently from
+/// universal offline protocol discovery.
+public struct KagemushaTopUpShieldCapability: Equatable, Sendable {
     public let assetDefinitionID: String
     public let assetScale: UInt32
     public let minimumEvaluatedBlockHeight: UInt64
@@ -902,7 +877,7 @@ public struct KagemushaTopUpShieldReadinessExpectation: Equatable, Sendable {
               assetScale <= KagemushaScaledAmount.maximumScale,
               verifier.activationHeight <= minimumEvaluatedBlockHeight,
               verifier.withdrawalHeight.map({ minimumEvaluatedBlockHeight < $0 }) != false else {
-            throw KagemushaRecursiveSpendError.invalidField("topUpReadinessExpectation")
+            throw KagemushaRecursiveSpendError.invalidField("topUpCapability")
         }
         self.assetDefinitionID = assetDefinitionID
         self.assetScale = assetScale
@@ -922,7 +897,7 @@ public struct KagemushaTopUpShieldSnapshotBinding: Equatable, Sendable {
     public let leafIndex: UInt32
 }
 
-/// Unsigned top-up plus the exact live readiness/tree observation used to
+/// Unsigned top-up plus the exact live capability/tree observation used to
 /// construct it. Wallets persist this atomically with note secrets before
 /// signing or submitting the request.
 public struct KagemushaTopUpShieldPreparation: Equatable, Sendable {
@@ -1043,7 +1018,7 @@ public final class IrohaSDK: @unchecked Sendable {
         operationId: Data,
         opening: KagemushaNoteOpening,
         artifactBinding: KagemushaRecursiveSpendArtifactBindingV4,
-        expectedReadiness: KagemushaTopUpShieldReadinessExpectation,
+        productCapability: KagemushaTopUpShieldCapability,
         canonicalAuth: ToriiCanonicalRequestAuth
     ) async throws -> KagemushaTopUpShieldPreparation {
         guard let toriiRestClient else {
@@ -1058,9 +1033,9 @@ public final class IrohaSDK: @unchecked Sendable {
             throw KagemushaRecursiveSpendError.invalidField("assetId")
         }
         let assetDefinitionId = String(assetParts[0])
-        let verifier = expectedReadiness.verifier
-        guard assetDefinitionId == expectedReadiness.assetDefinitionID,
-              amount.scale == expectedReadiness.assetScale,
+        let verifier = productCapability.verifier
+        guard assetDefinitionId == productCapability.assetDefinitionID,
+              amount.scale == productCapability.assetScale,
               let verifierCommitment = Data(hexString: verifier.commitment),
               verifierCommitment.count == 32 else {
             throw KagemushaRecursiveSpendError.invalidField("topUp.productCapability")
@@ -1071,7 +1046,7 @@ public final class IrohaSDK: @unchecked Sendable {
             commitments: [],
             canonicalAuth: canonicalAuth
         )
-        guard snapshot.evaluatedBlockHeight >= expectedReadiness.minimumEvaluatedBlockHeight,
+        guard snapshot.evaluatedBlockHeight >= productCapability.minimumEvaluatedBlockHeight,
               verifier.activationHeight <= snapshot.evaluatedBlockHeight,
               verifier.withdrawalHeight.map({ snapshot.evaluatedBlockHeight < $0 }) != false else {
             throw KagemushaRecursiveSpendError.invalidField("topUp.productCapability.snapshot")
@@ -1127,7 +1102,7 @@ public final class IrohaSDK: @unchecked Sendable {
                 assetScale: amount.scale,
                 evaluatedBlockHeight: snapshot.evaluatedBlockHeight,
                 evaluatedBlockHash: snapshot.evaluatedBlockHash,
-                verifier: expectedReadiness.verifier,
+                verifier: productCapability.verifier,
                 initialRoot: zeroPath.rootAtHeight,
                 leafIndex: UInt32(zeroPath.leafIndex)
             )

@@ -7402,29 +7402,29 @@ fn is_autoscale_managed_elastic_lane(lane: &iroha_data_model::nexus::LaneConfig)
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct AutoscaleElasticRange {
-    min_lanes: u32,
-    max_lanes: u32,
+    min_lane_id: u32,
+    max_lane_id_exclusive: u32,
     current_height: Option<u64>,
     required_active_height: Option<u64>,
 }
 impl AutoscaleElasticRange {
     fn from_nexus(nexus: &iroha_config::parameters::actual::Nexus) -> Self {
-        let min_lanes = nexus.autoscale.min_lanes.get();
-        let mut max_lanes = min_lanes;
+        let min_lane_id = nexus.autoscale.min_lane_id.get();
+        let mut max_lane_id_exclusive = min_lane_id;
         if nexus.autoscale.enabled {
-            let configured_max_lanes = nexus.autoscale.max_lanes.get();
+            let configured_max_lane_id_exclusive = nexus.autoscale.max_lane_id_exclusive.get();
             let default_lane = nexus.routing_policy.default_lane.as_u32();
-            let cap = iroha_config::parameters::defaults::nexus::autoscale::MAX_LANES;
-            if min_lanes < configured_max_lanes
-                && configured_max_lanes <= cap
-                && default_lane < min_lanes
+            let cap = iroha_config::parameters::defaults::nexus::autoscale::MAX_LANE_ID_EXCLUSIVE;
+            if min_lane_id < configured_max_lane_id_exclusive
+                && configured_max_lane_id_exclusive <= cap
+                && default_lane < min_lane_id
             {
-                max_lanes = configured_max_lanes;
+                max_lane_id_exclusive = configured_max_lane_id_exclusive;
             }
         }
         Self {
-            min_lanes,
-            max_lanes,
+            min_lane_id,
+            max_lane_id_exclusive,
             current_height: None,
             required_active_height: None,
         }
@@ -7451,7 +7451,7 @@ impl AutoscaleElasticRange {
     }
     const fn contains_lane(self, lane_id: LaneId) -> bool {
         let lane = lane_id.as_u32();
-        lane >= self.min_lanes && lane < self.max_lanes
+        lane >= self.min_lane_id && lane < self.max_lane_id_exclusive
     }
     fn lane_created_height_active(self, lane: &iroha_data_model::nexus::LaneConfig) -> bool {
         self.current_height.is_none_or(|current_height| {
@@ -9234,15 +9234,15 @@ mod tests {
     fn set_nexus_autoscale_range(
         state: &crate::state::State,
         enabled: bool,
-        min_lanes: u32,
-        max_lanes: u32,
+        min_lane_id: u32,
+        max_lane_id_exclusive: u32,
     ) {
         let mut nexus = state.nexus.write();
         nexus.autoscale.enabled = enabled;
-        nexus.autoscale.min_lanes =
-            std::num::NonZeroU32::new(min_lanes).expect("autoscale test min_lanes must be nonzero");
-        nexus.autoscale.max_lanes =
-            std::num::NonZeroU32::new(max_lanes).expect("autoscale test max_lanes must be nonzero");
+        nexus.autoscale.min_lane_id = std::num::NonZeroU32::new(min_lane_id)
+            .expect("autoscale test min_lane_id must be nonzero");
+        nexus.autoscale.max_lane_id_exclusive = std::num::NonZeroU32::new(max_lane_id_exclusive)
+            .expect("autoscale test max_lane_id_exclusive must be nonzero");
     }
     fn dataspace_catalog(entries: &[(DataSpaceId, &str)]) -> DataSpaceCatalog {
         let mut metadata = vec![iroha_data_model::nexus::DataSpaceMetadata::default()];
@@ -9857,8 +9857,8 @@ mod tests {
             ..Default::default()
         };
         nexus.autoscale.enabled = true;
-        nexus.autoscale.min_lanes = nonzero!(1_u32);
-        nexus.autoscale.max_lanes = nonzero!(8_u32);
+        nexus.autoscale.min_lane_id = nonzero!(1_u32);
+        nexus.autoscale.max_lane_id_exclusive = nonzero!(8_u32);
         nexus.lane_catalog = lane_catalog_from_configs(vec![
             default_lane_config(),
             autoscale_elastic_lane_config(LaneId::new(1), DataSpaceId::UNIVERSAL, 7),
@@ -10280,7 +10280,7 @@ mod tests {
         }
     }
     #[test]
-    fn default_route_sharding_fails_closed_when_autoscale_max_lanes_exceeds_cap() {
+    fn default_route_sharding_fails_closed_when_autoscale_max_lane_id_exclusive_exceeds_cap() {
         let (alice_id, alice_keypair) = gen_account_in("wonderland");
         let policy = default_routing_policy();
         let lane_catalog = lane_catalog_from_configs(vec![
@@ -10294,7 +10294,7 @@ mod tests {
             &state,
             true,
             1,
-            iroha_config::parameters::defaults::nexus::autoscale::MAX_LANES + 1,
+            iroha_config::parameters::defaults::nexus::autoscale::MAX_LANE_ID_EXCLUSIVE + 1,
         );
         for idx in 0..64 {
             let tx = sample_transaction(

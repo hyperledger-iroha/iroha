@@ -12,8 +12,11 @@
 //! parity-typed 576-byte public value is an aggregate predecessor lineage, not
 //! the current proof's terminal accumulator. It also freezes the exact
 //! 336-word/48-cell GuardBundle ABI, 237-word/34-cell STATE ABI, ordered helper
-//! and STATE folds, and fail-closed terminal order. They do not implement
-//! recursion, folding, artifacts, or a verifier.
+//! and STATE folds, and fail-closed terminal order. A private native relation
+//! kernel verifies only the exact six-input BGH19 Eq-then-Ep fold and retains
+//! the complete provenance-bound candidate in a move-only seal. It does not
+//! implement recursive circuits, ordinary child-proof verification, terminal
+//! accumulator decisions, artifacts, persistence, or a production backend.
 //!
 //! Session framing, final-STATE pair qualification, V2 wire/release types,
 //! compact SHA-256, DER/KeyMint/root closure, recursion bootstrap,
@@ -38,6 +41,8 @@ mod registered_platform_p256_statement;
 mod state_lineage;
 #[path = "offline_cash_v2/state_recursive_fold.rs"]
 mod state_recursive_fold;
+#[path = "offline_cash_v2/state_recursive_fold_native.rs"]
+mod state_recursive_fold_native;
 #[path = "offline_cash_v2/state_semantic_parent_provenance.rs"]
 mod state_semantic_parent_provenance;
 #[path = "offline_cash_v2/state_terminal_candidate.rs"]

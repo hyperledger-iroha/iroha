@@ -227,7 +227,7 @@ fn seeded_eviction_bench(
     let dir = tempfile::tempdir().expect("create Kura eviction benchmark directory");
     let cfg = eviction_bench_config(&dir);
     let retained_tail = cfg.blocks_in_memory.get();
-    let (kura, _) = iroha_core::kura::Kura::new(&cfg, &LaneConfig::default())
+    let (kura, _) = iroha_core::kura::Kura::new_fresh_single_lane(&cfg, &LaneConfig::default())
         .expect("initialize Kura for eviction benchmark");
     let mut blocks = BenchBlocks::new();
     let persisted_blocks = 1_usize
@@ -270,7 +270,8 @@ fn measure_block_size_for_n_executors(n_executors: u32) {
         fsync_interval: iroha_config::parameters::defaults::kura::FSYNC_INTERVAL,
         replica_advert: iroha_config::parameters::defaults::kura::REPLICA_ADVERT_POLICY,
     };
-    let (kura, _) = iroha_core::kura::Kura::new(&cfg, &LaneConfig::default()).unwrap();
+    let (kura, _) =
+        iroha_core::kura::Kura::new_fresh_single_lane(&cfg, &LaneConfig::default()).unwrap();
     // Use a lightweight, test-friendly handle that doesn't require a running Tokio runtime
     let query_handle = LiveQueryStore::start_test();
     let state = Box::new(
@@ -371,8 +372,9 @@ fn bench_storage_budget_cached_pending_depth(c: &mut Criterion) {
         group.bench_function(format!("pending_depth_{pending_depth}"), |b| {
             let dir = tempfile::tempdir().expect("create Kura benchmark directory");
             let cfg = budget_bench_config(&dir);
-            let (kura, _) = iroha_core::kura::Kura::new(&cfg, &LaneConfig::default())
-                .expect("initialize Kura for budget benchmark");
+            let (kura, _) =
+                iroha_core::kura::Kura::new_fresh_single_lane(&cfg, &LaneConfig::default())
+                    .expect("initialize Kura for budget benchmark");
             let mut blocks = BenchBlocks::new();
             for _ in 0..pending_depth {
                 kura.append_pending_block_for_bench(blocks.next());

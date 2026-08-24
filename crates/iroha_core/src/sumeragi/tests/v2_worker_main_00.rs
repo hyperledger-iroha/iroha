@@ -334,6 +334,12 @@ impl EffectRuntime for SaturatedCompletionRuntime {
     fn step_effects(&mut self, _now: Instant) -> Result<RuntimeStep<AdapterEffect>, String> {
         Ok(RuntimeStep::Idle)
     }
+    fn step_recovery_effects(
+        &mut self,
+        _now: Instant,
+    ) -> Result<RuntimeStep<AdapterEffect>, String> {
+        Err("synthetic runtime cannot drive pending-tip recovery".to_owned())
+    }
     fn take_effect_ownership(
         &mut self,
         effects: &[AdapterEffect],

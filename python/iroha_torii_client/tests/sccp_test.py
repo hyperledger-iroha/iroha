@@ -208,7 +208,7 @@ def _finality_anchor() -> Dict[str, Any]:
     }
 
 
-def test_finality_anchor_accepts_historical_v3_and_current_v4() -> None:
+def test_finality_anchor_accepts_only_protocol_v4() -> None:
     current = _finality_anchor()
     current_hash, current_roles = sccp._sora_finality_anchor(  # noqa: SLF001
         current, "current anchor"
@@ -218,16 +218,10 @@ def test_finality_anchor_accepts_historical_v3_and_current_v4() -> None:
         "4410EE4CCFD06F2D0E3A658615D516AC8CF65255D8A8716CE511EA95E135C8C3"
     )
 
-    historical = copy.deepcopy(current)
-    historical["protocol_version"] = 3
-    historical_hash, historical_roles = sccp._sora_finality_anchor(  # noqa: SLF001
-        historical, "historical anchor"
-    )
-    assert historical_roles == current_roles
-    assert historical_hash.hex().upper() == (
-        "EC6C821CAF5FA74368C08E9101AB310F132FB7F627A09F6F9481AA9484054BBA"
-    )
-    assert historical_hash != current_hash
+    retired = copy.deepcopy(current)
+    retired["protocol_version"] = 3
+    with pytest.raises(ValueError, match="protocol_version"):
+        sccp._sora_finality_anchor(retired, "retired v3 anchor")  # noqa: SLF001
 
 
 def _outbound_policy() -> Dict[str, Any]:

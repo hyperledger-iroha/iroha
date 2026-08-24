@@ -52,6 +52,12 @@ pub const QUEUE_PLAN_ADMISSION_BINDING_VERSION_V2: u16 = 2;
 pub const QUEUE_PLAN_ADMISSION_ATTESTATION_VERSION_V2: u16 = 2;
 /// Current first-release QueuePlan admission-certificate layout.
 pub const QUEUE_PLAN_ADMISSION_CERTIFICATE_VERSION_V2: u16 = 2;
+/// Current first-release ordinary Kagemusha lifecycle admission-binding layout.
+pub const KAGEMUSHA_LIFECYCLE_ADMISSION_BINDING_VERSION_V1: u16 = 1;
+/// Current first-release ordinary Kagemusha lifecycle authority-attestation layout.
+pub const KAGEMUSHA_LIFECYCLE_ADMISSION_ATTESTATION_VERSION_V1: u16 = 1;
+/// Current first-release ordinary Kagemusha lifecycle admission-certificate layout.
+pub const KAGEMUSHA_LIFECYCLE_ADMISSION_CERTIFICATE_VERSION_V1: u16 = 1;
 /// Schema version for peer-to-peer publication of a certified QueuePlan admission.
 pub const QUEUE_PLAN_ADMISSION_PUBLICATION_VERSION_V1: u16 = 1;
 const QUEUE_PLAN_ADMISSION_NETWORK_DOMAIN_V2: &[u8] =
@@ -61,6 +67,13 @@ const QUEUE_PLAN_ADMISSION_BINDING_DOMAIN_V2: &[u8] =
 const QUEUE_PLAN_ADMISSION_ATTESTATION_DOMAIN_V2: &[u8] =
     b"iroha:torii:queue-plan-admission-attestation:v2\0";
 const QUEUE_PLAN_SYNCED_REQUEST_DOMAIN_V5: &str = "torii:proxy:queue-plan-synced:v5";
+const KAGEMUSHA_LIFECYCLE_ADMISSION_NETWORK_DOMAIN_V1: &[u8] =
+    b"iroha:torii:kagemusha-lifecycle-admission-network:v1\0";
+const KAGEMUSHA_LIFECYCLE_ADMISSION_BINDING_DOMAIN_V1: &[u8] =
+    b"iroha:torii:kagemusha-lifecycle-admission-binding:v1\0";
+const KAGEMUSHA_LIFECYCLE_ADMISSION_ATTESTATION_DOMAIN_V1: &[u8] =
+    b"iroha:torii:kagemusha-lifecycle-admission-attestation:v1\0";
+const KAGEMUSHA_LIFECYCLE_REQUEST_DOMAIN_V1: &str = "torii:proxy:ordinary-kagemusha-lifecycle:v1";
 /// Return the exact network identity carried by every QueuePlan admission binding.
 #[must_use]
 pub fn queue_plan_admission_network_id_digest(network_id: &NetworkId) -> Hash {
@@ -102,6 +115,81 @@ pub fn queue_plan_synced_request_id_from_network_digest(
         ))
         .expect("deterministic QueuePlanSynced request identity must encode"),
     )
+}
+
+/// Return the exact network identity carried by ordinary Kagemusha lifecycle admission bindings.
+#[must_use]
+pub fn kagemusha_lifecycle_admission_network_id_digest(network_id: &NetworkId) -> Hash {
+    Hash::new_from_chunks(&[
+        KAGEMUSHA_LIFECYCLE_ADMISSION_NETWORK_DOMAIN_V1,
+        network_id.as_bytes(),
+    ])
+}
+
+/// Derive the deterministic ordinary Kagemusha lifecycle proxy request identity.
+#[must_use]
+pub fn ordinary_kagemusha_lifecycle_request_id(
+    network_id: &NetworkId,
+    entrypoint_hash: HashOf<TransactionEntrypoint>,
+) -> Hash {
+    ordinary_kagemusha_lifecycle_request_id_from_network_digest(
+        kagemusha_lifecycle_admission_network_id_digest(network_id),
+        entrypoint_hash,
+    )
+}
+
+/// Derive the deterministic ordinary Kagemusha lifecycle request identity from its network digest.
+#[must_use]
+pub fn ordinary_kagemusha_lifecycle_request_id_from_network_digest(
+    network_id_digest: Hash,
+    entrypoint_hash: HashOf<TransactionEntrypoint>,
+) -> Hash {
+    Hash::new(
+        norito::encode_canonical(&(
+            KAGEMUSHA_LIFECYCLE_REQUEST_DOMAIN_V1,
+            network_id_digest,
+            entrypoint_hash,
+        ))
+        .expect("deterministic Kagemusha lifecycle request identity must encode"),
+    )
+}
+
+/// Require the exact ordinary signed Kagemusha lifecycle carrier enforced by Core execution.
+///
+/// This validates the signed transaction itself when the caller already knows it came from an
+/// external transaction wire.
+///
+/// # Errors
+/// Returns an error for QueuePlan, attached, non-lifecycle, multi-instruction, invalid-signature,
+/// or fewer-than-two-distinct-governor carriers.
+pub fn validate_ordinary_kagemusha_lifecycle_signed_transaction(
+    transaction: &SignedTransaction,
+) -> Result<(), String> {
+    match crate::smartcontracts::isi::offline::signed_lifecycle_entrypoint_context(transaction) {
+        Ok(Some(_)) => Ok(()),
+        Ok(None) => Err(
+            "transaction is not exactly one direct native Kagemusha V4 lifecycle instruction"
+                .to_owned(),
+        ),
+        Err(error) => Err(error.to_string()),
+    }
+}
+
+/// Require the exact ordinary external Kagemusha lifecycle carrier enforced by Core execution.
+///
+/// # Errors
+/// Returns an error for sealed, scheduled, QueuePlan, attached, non-lifecycle, multi-instruction,
+/// invalid-signature, or fewer-than-two-distinct-governor carriers.
+pub fn validate_ordinary_kagemusha_lifecycle_entrypoint(
+    entrypoint: &TransactionEntrypoint,
+) -> Result<(), String> {
+    let TransactionEntrypoint::External(transaction) = entrypoint else {
+        return Err(
+            "ordinary Kagemusha lifecycle admission requires an external signed transaction"
+                .to_owned(),
+        );
+    };
+    validate_ordinary_kagemusha_lifecycle_signed_transaction(transaction)
 }
 /// Globally unique registry key for one transaction-entrypoint admission.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode)]
@@ -633,6 +721,397 @@ pub fn decode_and_validate_queue_plan_admission_certificate_v2(
         certificate,
         QueuePlanAdmissionCertificateStrengthV2::Quorum,
     )
+}
+
+/// Exact request identity shared by ordinary Kagemusha lifecycle durability attestations.
+///
+/// Unlike [`QueuePlanAdmissionBindingV2`], this binding deliberately carries no global-admission
+/// identity, common enqueue timestamp, or common journal digest. Each validator persists and
+/// attests its own ordinary FIFO journal claim, and the resulting certificate is transport-only:
+/// it cannot authorize QueuePlan registry publication, autonomous reservation, or merge replay.
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
+pub struct OrdinaryKagemushaLifecycleAdmissionBindingV1 {
+    /// Binding layout version.
+    pub version: u16,
+    /// Domain-separated exact network identity.
+    pub network_id_digest: Hash,
+    /// Deterministic lifecycle proxy request identity.
+    pub request_id: Hash,
+    /// Typed canonical transaction-entrypoint identity.
+    pub entrypoint_hash: HashOf<TransactionEntrypoint>,
+    /// Exact caller-signed transaction identity.
+    pub signed_transaction_hash: HashOf<SignedTransaction>,
+    /// Complete canonical routing-plan digest.
+    pub routing_plan_digest: Hash,
+    /// Exact lifecycle, incarnation, and ordered authority context.
+    pub admission_context: crate::queue::QueuePlanAdmissionContextV2,
+}
+
+impl OrdinaryKagemushaLifecycleAdmissionBindingV1 {
+    /// Construct an exact ordinary lifecycle admission binding.
+    ///
+    /// # Errors
+    /// Returns an error unless the entrypoint is the exact Core lifecycle carrier or the supplied
+    /// routing context is noncanonical.
+    pub fn new(
+        network_id: &NetworkId,
+        transaction: &TransactionEntrypoint,
+        routing_plan: &crate::queue::RoutingPlan,
+        admission_context: crate::queue::QueuePlanAdmissionContextV2,
+    ) -> Result<Self, String> {
+        validate_ordinary_kagemusha_lifecycle_entrypoint(transaction)?;
+        admission_context.validate_for_routing_plan(routing_plan)?;
+        let entrypoint_hash = transaction.hash();
+        let signed_transaction_hash = crate::tx::exact_signed_transaction_hash(transaction)
+            .ok_or_else(|| {
+                "ordinary Kagemusha lifecycle binding has no external signed transaction".to_owned()
+            })?;
+        let network_id_digest = kagemusha_lifecycle_admission_network_id_digest(network_id);
+        Ok(Self {
+            version: KAGEMUSHA_LIFECYCLE_ADMISSION_BINDING_VERSION_V1,
+            network_id_digest,
+            request_id: ordinary_kagemusha_lifecycle_request_id_from_network_digest(
+                network_id_digest,
+                entrypoint_hash.clone(),
+            ),
+            entrypoint_hash,
+            signed_transaction_hash,
+            routing_plan_digest: routing_plan.digest(),
+            admission_context,
+        })
+    }
+
+    /// Return the canonical routing plan carried redundantly by this binding.
+    ///
+    /// # Errors
+    /// Returns an error when the context is malformed or its plan digest differs.
+    pub fn routing_plan(&self) -> Result<crate::queue::RoutingPlan, String> {
+        let routing_plan = self.admission_context.routing_plan()?;
+        self.admission_context
+            .validate_for_routing_plan(&routing_plan)?;
+        if routing_plan.digest() != self.routing_plan_digest {
+            return Err(
+                "ordinary Kagemusha lifecycle binding has a different routing-plan digest"
+                    .to_owned(),
+            );
+        }
+        Ok(routing_plan)
+    }
+
+    /// Validate all fields that do not require the exact request transaction.
+    ///
+    /// # Errors
+    /// Returns an error for unsupported versions, zero identities, or malformed routing context.
+    pub fn validate_structure(&self) -> Result<(), String> {
+        if self.version != KAGEMUSHA_LIFECYCLE_ADMISSION_BINDING_VERSION_V1 {
+            return Err(
+                "ordinary Kagemusha lifecycle admission-binding version is unsupported".to_owned(),
+            );
+        }
+        if self.network_id_digest == Hash::prehashed([0; Hash::LENGTH])
+            || self.request_id == Hash::prehashed([0; Hash::LENGTH])
+        {
+            return Err(
+                "ordinary Kagemusha lifecycle admission binding contains a zero identity hash"
+                    .to_owned(),
+            );
+        }
+        if self.request_id
+            != ordinary_kagemusha_lifecycle_request_id_from_network_digest(
+                self.network_id_digest,
+                self.entrypoint_hash.clone(),
+            )
+        {
+            return Err(
+                "ordinary Kagemusha lifecycle binding has a noncanonical request identity"
+                    .to_owned(),
+            );
+        }
+        self.routing_plan().map(|_| ())
+    }
+
+    /// Validate this binding against the exact network, transaction, and routing plan.
+    ///
+    /// # Errors
+    /// Returns an error for any lifecycle, network, transaction, route, or context mismatch.
+    pub fn validate_for_request(
+        &self,
+        network_id: &NetworkId,
+        transaction: &TransactionEntrypoint,
+        routing_plan: &crate::queue::RoutingPlan,
+    ) -> Result<(), String> {
+        validate_ordinary_kagemusha_lifecycle_entrypoint(transaction)?;
+        self.validate_structure()?;
+        if self.network_id_digest != kagemusha_lifecycle_admission_network_id_digest(network_id) {
+            return Err(
+                "ordinary Kagemusha lifecycle admission binding belongs to another network"
+                    .to_owned(),
+            );
+        }
+        if self.request_id
+            != ordinary_kagemusha_lifecycle_request_id(network_id, transaction.hash())
+            || self.entrypoint_hash != transaction.hash()
+            || Some(self.signed_transaction_hash.clone())
+                != crate::tx::exact_signed_transaction_hash(transaction)
+        {
+            return Err(
+                "ordinary Kagemusha lifecycle binding has a different transaction identity"
+                    .to_owned(),
+            );
+        }
+        if self.routing_plan_digest != routing_plan.digest() {
+            return Err(
+                "ordinary Kagemusha lifecycle binding has a different routing plan".to_owned(),
+            );
+        }
+        self.admission_context
+            .validate_for_routing_plan(routing_plan)
+    }
+
+    /// Validate one exact locally durable ordinary queue claim against this request binding.
+    ///
+    /// # Errors
+    /// Returns an error if the claim is globally bound or any transaction, plan, context,
+    /// timestamp-dependent journal digest, or version field differs.
+    pub fn validate_durable_admission(
+        &self,
+        network_id: &NetworkId,
+        transaction: &TransactionEntrypoint,
+        durable: &crate::queue::QueuePlanDurableAdmissionV2,
+    ) -> Result<(), String> {
+        self.validate_for_request(network_id, transaction, &durable.routing_plan)?;
+        if durable.version != crate::queue::QUEUE_PLAN_DURABLE_ADMISSION_VERSION_V2 {
+            return Err(
+                "ordinary Kagemusha lifecycle durable-admission version is unsupported".to_owned(),
+            );
+        }
+        if durable.global_admission_identity.is_some() {
+            return Err(
+                "ordinary Kagemusha lifecycle durable admission must remain globally unbound"
+                    .to_owned(),
+            );
+        }
+        if durable.context != self.admission_context
+            || durable.entrypoint_hash != self.entrypoint_hash
+            || durable.signed_transaction_hash.as_ref() != Some(&self.signed_transaction_hash)
+        {
+            return Err(
+                "ordinary Kagemusha lifecycle durable claim has a different request binding"
+                    .to_owned(),
+            );
+        }
+        let expected_digest = crate::queue::queue_plan_journal_record_claim_digest(
+            transaction.clone(),
+            durable.routing_plan.clone(),
+            durable.context.clone(),
+            durable.enqueue_timestamp_ms,
+            None,
+        )
+        .map_err(|error| format!("ordinary lifecycle journal claim cannot be encoded: {error}"))?;
+        if expected_digest != durable.journal_record_digest {
+            return Err(
+                "ordinary Kagemusha lifecycle durable claim has a different journal digest"
+                    .to_owned(),
+            );
+        }
+        Ok(())
+    }
+
+    /// Return the domain-separated hash signed by lifecycle durability authorities.
+    #[must_use]
+    pub fn canonical_hash(&self) -> Hash {
+        let bytes = norito::encode_canonical(self)
+            .expect("ordinary Kagemusha lifecycle admission binding must encode");
+        Hash::new_from_chunks(&[
+            KAGEMUSHA_LIFECYCLE_ADMISSION_BINDING_DOMAIN_V1,
+            bytes.as_slice(),
+        ])
+    }
+}
+
+/// One validator's signature over its exact locally durable ordinary lifecycle journal claim.
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
+pub struct OrdinaryKagemushaLifecycleAdmissionAttestationV1 {
+    /// Attestation layout version.
+    pub version: u16,
+    /// Signer's index in the exact ordered coordinator validator set.
+    pub validator_index: u16,
+    /// Exact local enqueue timestamp persisted in the validator's unbound journal record.
+    pub enqueue_timestamp_ms: u64,
+    /// Domain-separated digest of that exact unbound journal record.
+    pub journal_record_digest: Hash,
+    /// Signature over the common binding and validator-local durable claim.
+    pub signature: Signature,
+}
+
+/// Exact `f + 1` transport-only evidence for ordinary Kagemusha lifecycle durability.
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
+pub struct OrdinaryKagemushaLifecycleAdmissionCertificateV1 {
+    /// Certificate layout version.
+    pub version: u16,
+    /// Common network, transaction, route, and authority binding.
+    pub binding: OrdinaryKagemushaLifecycleAdmissionBindingV1,
+    /// Strictly increasing validator-index attestations.
+    pub attestations: Vec<OrdinaryKagemushaLifecycleAdmissionAttestationV1>,
+}
+
+/// Strength required while validating an ordinary lifecycle admission certificate.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum OrdinaryKagemushaLifecycleAdmissionCertificateStrengthV1 {
+    /// A bounded nonempty subset, used for authenticated authority responses.
+    Partial,
+    /// Exactly the context's `f + 1` durability threshold.
+    Quorum,
+}
+
+/// Fully authenticated ordinary lifecycle admission certificate.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ValidatedOrdinaryKagemushaLifecycleAdmissionCertificateV1 {
+    /// Exact decoded certificate.
+    pub certificate: OrdinaryKagemushaLifecycleAdmissionCertificateV1,
+    /// Domain-separated common binding identity.
+    pub binding_hash: Hash,
+    /// Exact coordinator route authorized by the binding.
+    pub coordinator_route: crate::queue::RoutingDecision,
+    /// Number of distinct attestations required for durable availability.
+    pub durability_threshold: usize,
+}
+
+#[derive(Encode)]
+struct OrdinaryKagemushaLifecycleAdmissionAttestationPayloadV1 {
+    version: u16,
+    binding_hash: Hash,
+    validator_index: u16,
+    enqueue_timestamp_ms: u64,
+    journal_record_digest: Hash,
+}
+
+/// Return canonical domain-separated signing bytes for one validator-local lifecycle claim.
+///
+/// # Errors
+/// Returns a Norito encoding error if the fixed attestation payload cannot be encoded.
+pub fn ordinary_kagemusha_lifecycle_admission_attestation_signing_bytes_v1(
+    binding_hash: Hash,
+    validator_index: u16,
+    enqueue_timestamp_ms: u64,
+    journal_record_digest: Hash,
+) -> Result<Vec<u8>, norito::Error> {
+    let payload = OrdinaryKagemushaLifecycleAdmissionAttestationPayloadV1 {
+        version: KAGEMUSHA_LIFECYCLE_ADMISSION_ATTESTATION_VERSION_V1,
+        binding_hash,
+        validator_index,
+        enqueue_timestamp_ms,
+        journal_record_digest,
+    };
+    let encoded = norito::encode_canonical(&payload)?;
+    let mut bytes = Vec::with_capacity(
+        KAGEMUSHA_LIFECYCLE_ADMISSION_ATTESTATION_DOMAIN_V1.len() + encoded.len(),
+    );
+    bytes.extend_from_slice(KAGEMUSHA_LIFECYCLE_ADMISSION_ATTESTATION_DOMAIN_V1);
+    bytes.extend_from_slice(&encoded);
+    Ok(bytes)
+}
+
+/// Validate one ordinary lifecycle certificate against its exact request transaction.
+///
+/// # Errors
+/// Returns the first lifecycle, network, transaction, route, journal, roster, threshold,
+/// ordering, or signature failure.
+pub fn validate_ordinary_kagemusha_lifecycle_admission_certificate_v1(
+    network_id: &NetworkId,
+    transaction: &TransactionEntrypoint,
+    certificate: OrdinaryKagemushaLifecycleAdmissionCertificateV1,
+    strength: OrdinaryKagemushaLifecycleAdmissionCertificateStrengthV1,
+) -> Result<ValidatedOrdinaryKagemushaLifecycleAdmissionCertificateV1, String> {
+    if certificate.version != KAGEMUSHA_LIFECYCLE_ADMISSION_CERTIFICATE_VERSION_V1 {
+        return Err(
+            "ordinary Kagemusha lifecycle admission-certificate version is unsupported".to_owned(),
+        );
+    }
+    let routing_plan = certificate.binding.routing_plan()?;
+    certificate
+        .binding
+        .validate_for_request(network_id, transaction, &routing_plan)?;
+    let coordinator = certificate
+        .binding
+        .admission_context
+        .route_incarnations
+        .first()
+        .ok_or_else(|| {
+            "ordinary Kagemusha lifecycle binding has no coordinator route".to_owned()
+        })?;
+    let durability_threshold = usize::from(coordinator.durability_threshold);
+    let attestation_count = certificate.attestations.len();
+    if attestation_count == 0 || attestation_count > durability_threshold {
+        return Err(
+            "ordinary Kagemusha lifecycle certificate has an empty or oversized attestation set"
+                .to_owned(),
+        );
+    }
+    if strength == OrdinaryKagemushaLifecycleAdmissionCertificateStrengthV1::Quorum
+        && attestation_count != durability_threshold
+    {
+        return Err(
+            "ordinary Kagemusha lifecycle certificate does not contain the exact durability quorum"
+                .to_owned(),
+        );
+    }
+    let binding_hash = certificate.binding.canonical_hash();
+    let mut previous_index = None;
+    for attestation in &certificate.attestations {
+        if attestation.version != KAGEMUSHA_LIFECYCLE_ADMISSION_ATTESTATION_VERSION_V1 {
+            return Err(
+                "ordinary Kagemusha lifecycle admission-attestation version is unsupported"
+                    .to_owned(),
+            );
+        }
+        if previous_index.is_some_and(|previous| previous >= attestation.validator_index) {
+            return Err(
+                "ordinary Kagemusha lifecycle attestations are duplicated or not canonically ordered"
+                    .to_owned(),
+            );
+        }
+        previous_index = Some(attestation.validator_index);
+        let validator = coordinator
+            .validator_set
+            .get(usize::from(attestation.validator_index))
+            .ok_or_else(|| {
+                "ordinary Kagemusha lifecycle attestation index is out of bounds".to_owned()
+            })?;
+        let expected_digest = crate::queue::queue_plan_journal_record_claim_digest(
+            transaction.clone(),
+            routing_plan.clone(),
+            certificate.binding.admission_context.clone(),
+            attestation.enqueue_timestamp_ms,
+            None,
+        )
+        .map_err(|error| format!("ordinary lifecycle journal claim cannot be encoded: {error}"))?;
+        if expected_digest != attestation.journal_record_digest {
+            return Err(
+                "ordinary Kagemusha lifecycle attestation has a different journal digest"
+                    .to_owned(),
+            );
+        }
+        let signing_bytes = ordinary_kagemusha_lifecycle_admission_attestation_signing_bytes_v1(
+            binding_hash,
+            attestation.validator_index,
+            attestation.enqueue_timestamp_ms,
+            attestation.journal_record_digest,
+        )
+        .map_err(|error| format!("ordinary lifecycle attestation cannot be encoded: {error}"))?;
+        attestation
+            .signature
+            .verify(validator.public_key(), &signing_bytes)
+            .map_err(|error| {
+                format!("ordinary Kagemusha lifecycle admission attestation is invalid: {error}")
+            })?;
+    }
+    Ok(ValidatedOrdinaryKagemushaLifecycleAdmissionCertificateV1 {
+        coordinator_route: routing_plan.coordinator_route(),
+        certificate,
+        binding_hash,
+        durability_threshold,
+    })
 }
 /// Stable lane/dataspace assignment determined at ingress.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode)]
@@ -1262,7 +1741,7 @@ pub struct ToriiHostedHttpProxyRequestV1 {
     pub remote_ip: Option<String>,
 }
 /// First-release queue admission contract for a proxied transaction.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode)]
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
 pub enum ToriiProxyTransactionAdmissionV2 {
     /// Acknowledge after the exact `f + 1` QueuePlan certificate is durable.
     ///
@@ -1274,6 +1753,13 @@ pub enum ToriiProxyTransactionAdmissionV2 {
     /// reinterpreted under the first-release contract.
     #[codec(index = 2)]
     QueuePlanSynced,
+    /// Acknowledge only after an exact `f + 1` certificate over validator-local unbound ordinary
+    /// journal claims for one exact Kagemusha lifecycle transaction.
+    ///
+    /// The embedded binding is transport-only and can never be interpreted as a QueuePlan global
+    /// admission identity, registry entry, autonomous reservation, or merge certificate.
+    #[codec(index = 3)]
+    OrdinaryKagemushaLifecycleDurable(OrdinaryKagemushaLifecycleAdmissionBindingV1),
 }
 /// Canonical version-4 Torii request body forwarded over the P2P control plane.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
@@ -1290,7 +1776,8 @@ pub enum ToriiProxyRequestKindV4 {
         /// Exact shared journal binding required for a durable admission.
         ///
         /// This must be present only for `QueuePlanSynced` and is revalidated by
-        /// every forwarding and admitting authority.
+        /// every forwarding and admitting authority. The ordinary lifecycle admission embeds its
+        /// separate transport-only binding inside the admission variant instead.
         admission_binding: Option<QueuePlanAdmissionBindingV2>,
     },
     /// Execute a signed query on the authoritative lane validator.
@@ -1391,6 +1878,143 @@ mod tests {
             HashOf::<iroha_data_model::block::BlockHeader>::from_untyped_unchecked(Hash::new(seed)),
         )
     }
+    fn ordinary_lifecycle_transaction(
+        network_id: NetworkId,
+        transition_byte: u8,
+    ) -> TransactionEntrypoint {
+        use iroha_data_model::{
+            account::{AccountId, MultisigMember, MultisigPolicy},
+            isi::offline::CancelKagemushaRecursiveReleaseV4,
+            offline::{
+                KAGEMUSHA_V4_RELEASE_CANCELLATION_SCHEMA_V1,
+                KAGEMUSHA_V4_RELEASE_LIFECYCLE_VERSION_V1, KagemushaExactBytesDigestV1,
+                KagemushaV4ReleaseCancellationV1, KagemushaV4ReleaseLifecycleReasonV1,
+            },
+            transaction::{FeePaymentIntent, TransactionBuilder},
+        };
+
+        let signers = [0x61_u8, 0x62].map(|seed| {
+            iroha_crypto::KeyPair::from_seed(vec![seed; 32], iroha_crypto::Algorithm::Ed25519)
+        });
+        let authority = AccountId::new_multisig(
+            MultisigPolicy::new(
+                2,
+                signers
+                    .iter()
+                    .map(|signer| {
+                        MultisigMember::new(signer.public_key().clone(), 1)
+                            .expect("valid lifecycle fixture member")
+                    })
+                    .collect(),
+            )
+            .expect("valid lifecycle fixture policy"),
+        );
+        let cancellation =
+            CancelKagemushaRecursiveReleaseV4::new(KagemushaV4ReleaseCancellationV1 {
+                schema: KAGEMUSHA_V4_RELEASE_CANCELLATION_SCHEMA_V1.to_owned(),
+                version: KAGEMUSHA_V4_RELEASE_LIFECYCLE_VERSION_V1,
+                promotion_id: [0x11; 32],
+                manifest_sha256: [0x22; 32],
+                expected_predecessor_lifecycle: KagemushaExactBytesDigestV1 {
+                    byte_len: 1,
+                    sha256: [0x33; 32],
+                },
+                transition_id: [transition_byte; 32],
+                reason: KagemushaV4ReleaseLifecycleReasonV1::GovernanceCancelled,
+                evidence: None,
+            });
+        TransactionEntrypoint::External(
+            TransactionBuilder::new(
+                network_id,
+                authority,
+                FeePaymentIntent::authority(Vec::new(), None),
+            )
+            .with_instructions([cancellation])
+            .sign_multisig([signers[0].private_key(), signers[1].private_key()]),
+        )
+    }
+    fn ordinary_lifecycle_admission_fixture() -> (
+        NetworkId,
+        TransactionEntrypoint,
+        RoutingPlan,
+        OrdinaryKagemushaLifecycleAdmissionBindingV1,
+        Vec<iroha_crypto::KeyPair>,
+    ) {
+        let network_id = torii_proxy_test_network_id(b"ordinary-lifecycle-admission-fixture");
+        let transaction = ordinary_lifecycle_transaction(network_id, 0x44);
+        let validators = (0_u8..4)
+            .map(|offset| {
+                iroha_crypto::KeyPair::from_seed(
+                    vec![0x70_u8.saturating_add(offset); 32],
+                    iroha_crypto::Algorithm::Ed25519,
+                )
+            })
+            .collect::<Vec<_>>();
+        let validator_set = validators
+            .iter()
+            .map(|validator| PeerId::new(validator.public_key().clone()))
+            .collect::<Vec<_>>();
+        let route = RoutingDecision::new(LaneId::new(7), DataSpaceId::new(11));
+        let routing_plan = RoutingPlan::single(route);
+        let context = crate::queue::QueuePlanAdmissionContextV2 {
+            version: crate::queue::QUEUE_PLAN_ADMISSION_CONTEXT_VERSION_V2,
+            authority_height: 0,
+            proposal_height: 1,
+            predecessor_block_hash: None,
+            routing_plan_digest: routing_plan.digest(),
+            route_incarnations: vec![crate::queue::QueuePlanRouteIncarnationV2 {
+                leg: RouteLeg::new(route, RouteLegRole::Coordinator),
+                lane_incarnation: Hash::new(b"ordinary-lifecycle-lane-incarnation"),
+                validator_set_hash_version:
+                    iroha_data_model::consensus::VALIDATOR_SET_HASH_VERSION_V1,
+                validator_set_hash: HashOf::new(&validator_set),
+                validator_count: u16::try_from(validator_set.len())
+                    .expect("fixture validator count fits u16"),
+                durability_threshold: 2,
+                validator_set,
+            }],
+        };
+        let binding = OrdinaryKagemushaLifecycleAdmissionBindingV1::new(
+            &network_id,
+            &transaction,
+            &routing_plan,
+            context,
+        )
+        .expect("construct exact ordinary lifecycle binding");
+        (network_id, transaction, routing_plan, binding, validators)
+    }
+    fn ordinary_lifecycle_attestation(
+        transaction: &TransactionEntrypoint,
+        routing_plan: &RoutingPlan,
+        binding: &OrdinaryKagemushaLifecycleAdmissionBindingV1,
+        validator_index: u16,
+        signer: &iroha_crypto::KeyPair,
+        enqueue_timestamp_ms: u64,
+    ) -> OrdinaryKagemushaLifecycleAdmissionAttestationV1 {
+        let journal_record_digest = crate::queue::queue_plan_journal_record_claim_digest(
+            transaction.clone(),
+            routing_plan.clone(),
+            binding.admission_context.clone(),
+            enqueue_timestamp_ms,
+            None,
+        )
+        .expect("encode ordinary lifecycle journal claim");
+        let signing_bytes = ordinary_kagemusha_lifecycle_admission_attestation_signing_bytes_v1(
+            binding.canonical_hash(),
+            validator_index,
+            enqueue_timestamp_ms,
+            journal_record_digest,
+        )
+        .expect("encode ordinary lifecycle attestation");
+        OrdinaryKagemushaLifecycleAdmissionAttestationV1 {
+            version: KAGEMUSHA_LIFECYCLE_ADMISSION_ATTESTATION_VERSION_V1,
+            validator_index,
+            enqueue_timestamp_ms,
+            journal_record_digest,
+            signature: Signature::try_new(signer.private_key(), &signing_bytes)
+                .expect("sign ordinary lifecycle attestation"),
+        }
+    }
     /// Frozen test-only copy of the checked-in V2 Submit body.
     #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
     enum HistoricalToriiProxyRequestKindV1 {
@@ -1473,12 +2097,10 @@ mod tests {
     }
     fn torii_transaction_admission_wire_index(admission: ToriiProxyTransactionAdmissionV2) -> u32 {
         let encoded = norito::codec::Encode::encode(&admission);
-        assert_eq!(
-            encoded.len(),
-            4,
-            "ToriiProxyTransactionAdmissionV2 should encode as a u32 variant index"
-        );
-        u32::from_le_bytes(encoded.try_into().expect("four-byte variant index"))
+        let discriminant = encoded
+            .get(..4)
+            .expect("ToriiProxyTransactionAdmissionV2 starts with a u32 variant index");
+        u32::from_le_bytes(discriminant.try_into().expect("four-byte variant index"))
     }
     #[test]
     fn queue_plan_synced_request_identity_is_semantic_and_exact_network_bound() {
@@ -1551,6 +2173,286 @@ mod tests {
                 ToriiProxyTransactionAdmissionV2::QueuePlanSynced
             ),
             2
+        );
+        let (_, _, _, binding, _) = ordinary_lifecycle_admission_fixture();
+        assert_eq!(
+            torii_transaction_admission_wire_index(
+                ToriiProxyTransactionAdmissionV2::OrdinaryKagemushaLifecycleDurable(binding)
+            ),
+            3
+        );
+    }
+    #[test]
+    fn ordinary_kagemusha_lifecycle_scope_accepts_exact_and_rejects_near_matches() {
+        use iroha_data_model::{
+            account::{AccountId, MultisigMember, MultisigPolicy},
+            isi::{Log, offline::CancelKagemushaRecursiveReleaseV4},
+            level::Level,
+            offline::{
+                KAGEMUSHA_V4_RELEASE_CANCELLATION_SCHEMA_V1,
+                KAGEMUSHA_V4_RELEASE_LIFECYCLE_VERSION_V1, KagemushaExactBytesDigestV1,
+                KagemushaV4ReleaseCancellationV1, KagemushaV4ReleaseLifecycleReasonV1,
+            },
+            transaction::{FeePaymentIntent, TransactionAdmissionIntent, TransactionBuilder},
+        };
+
+        let network_id = torii_proxy_test_network_id(b"ordinary-lifecycle-scope");
+        let exact = ordinary_lifecycle_transaction(network_id, 0x45);
+        validate_ordinary_kagemusha_lifecycle_entrypoint(&exact)
+            .expect("exact ordinary lifecycle transaction must classify");
+        let TransactionEntrypoint::External(exact_signed) = &exact else {
+            panic!("ordinary lifecycle fixture must remain externally signed");
+        };
+        validate_ordinary_kagemusha_lifecycle_signed_transaction(exact_signed)
+            .expect("exact signed ordinary lifecycle transaction must classify");
+
+        let signers = [0x63_u8, 0x64].map(|seed| {
+            iroha_crypto::KeyPair::from_seed(vec![seed; 32], iroha_crypto::Algorithm::Ed25519)
+        });
+        let authority = AccountId::new_multisig(
+            MultisigPolicy::new(
+                2,
+                signers
+                    .iter()
+                    .map(|signer| {
+                        MultisigMember::new(signer.public_key().clone(), 1)
+                            .expect("valid near-match lifecycle member")
+                    })
+                    .collect(),
+            )
+            .expect("valid near-match lifecycle policy"),
+        );
+        let cancellation = || {
+            CancelKagemushaRecursiveReleaseV4::new(KagemushaV4ReleaseCancellationV1 {
+                schema: KAGEMUSHA_V4_RELEASE_CANCELLATION_SCHEMA_V1.to_owned(),
+                version: KAGEMUSHA_V4_RELEASE_LIFECYCLE_VERSION_V1,
+                promotion_id: [0x11; 32],
+                manifest_sha256: [0x22; 32],
+                expected_predecessor_lifecycle: KagemushaExactBytesDigestV1 {
+                    byte_len: 1,
+                    sha256: [0x33; 32],
+                },
+                transition_id: [0x46; 32],
+                reason: KagemushaV4ReleaseLifecycleReasonV1::GovernanceCancelled,
+                evidence: None,
+            })
+        };
+        let multiple = TransactionEntrypoint::External(
+            TransactionBuilder::new(
+                network_id,
+                authority.clone(),
+                FeePaymentIntent::authority(Vec::new(), None),
+            )
+            .with_instructions([
+                iroha_data_model::isi::InstructionBox::from(cancellation()),
+                iroha_data_model::isi::InstructionBox::from(Log::new(
+                    Level::INFO,
+                    "near match".to_owned(),
+                )),
+            ])
+            .sign_multisig([signers[0].private_key(), signers[1].private_key()]),
+        );
+        assert!(validate_ordinary_kagemusha_lifecycle_entrypoint(&multiple).is_err());
+        let queue_plan = TransactionEntrypoint::External(
+            TransactionBuilder::new(
+                network_id,
+                authority,
+                FeePaymentIntent::authority(Vec::new(), None),
+            )
+            .with_instructions([cancellation()])
+            .with_admission_intent(TransactionAdmissionIntent::QueuePlanSynced)
+            .sign_multisig([signers[0].private_key(), signers[1].private_key()]),
+        );
+        assert!(validate_ordinary_kagemusha_lifecycle_entrypoint(&queue_plan).is_err());
+    }
+    #[test]
+    fn ordinary_kagemusha_lifecycle_certificate_requires_two_distinct_of_four() {
+        let (network_id, transaction, routing_plan, binding, validators) =
+            ordinary_lifecycle_admission_fixture();
+        let attestations = validators
+            .iter()
+            .enumerate()
+            .map(|(index, signer)| {
+                ordinary_lifecycle_attestation(
+                    &transaction,
+                    &routing_plan,
+                    &binding,
+                    u16::try_from(index).expect("fixture index fits u16"),
+                    signer,
+                    1_000_u64.saturating_add(u64::try_from(index).unwrap_or(u64::MAX)),
+                )
+            })
+            .collect::<Vec<_>>();
+        let one = OrdinaryKagemushaLifecycleAdmissionCertificateV1 {
+            version: KAGEMUSHA_LIFECYCLE_ADMISSION_CERTIFICATE_VERSION_V1,
+            binding: binding.clone(),
+            attestations: vec![attestations[0].clone()],
+        };
+        validate_ordinary_kagemusha_lifecycle_admission_certificate_v1(
+            &network_id,
+            &transaction,
+            one.clone(),
+            OrdinaryKagemushaLifecycleAdmissionCertificateStrengthV1::Partial,
+        )
+        .expect("one exact attestation is a valid partial certificate");
+        assert!(
+            validate_ordinary_kagemusha_lifecycle_admission_certificate_v1(
+                &network_id,
+                &transaction,
+                one,
+                OrdinaryKagemushaLifecycleAdmissionCertificateStrengthV1::Quorum,
+            )
+            .is_err(),
+            "one of four must not satisfy f+1"
+        );
+        let quorum = OrdinaryKagemushaLifecycleAdmissionCertificateV1 {
+            version: KAGEMUSHA_LIFECYCLE_ADMISSION_CERTIFICATE_VERSION_V1,
+            binding: binding.clone(),
+            attestations: attestations[..2].to_vec(),
+        };
+        let validated = validate_ordinary_kagemusha_lifecycle_admission_certificate_v1(
+            &network_id,
+            &transaction,
+            quorum,
+            OrdinaryKagemushaLifecycleAdmissionCertificateStrengthV1::Quorum,
+        )
+        .expect("two distinct exact attestations satisfy f+1 for four validators");
+        assert_eq!(validated.durability_threshold, 2);
+        let duplicate = OrdinaryKagemushaLifecycleAdmissionCertificateV1 {
+            version: KAGEMUSHA_LIFECYCLE_ADMISSION_CERTIFICATE_VERSION_V1,
+            binding: binding.clone(),
+            attestations: vec![attestations[0].clone(), attestations[0].clone()],
+        };
+        assert!(
+            validate_ordinary_kagemusha_lifecycle_admission_certificate_v1(
+                &network_id,
+                &transaction,
+                duplicate,
+                OrdinaryKagemushaLifecycleAdmissionCertificateStrengthV1::Quorum,
+            )
+            .is_err(),
+            "duplicate validator indexes must not count twice"
+        );
+        let reversed = OrdinaryKagemushaLifecycleAdmissionCertificateV1 {
+            version: KAGEMUSHA_LIFECYCLE_ADMISSION_CERTIFICATE_VERSION_V1,
+            binding,
+            attestations: vec![attestations[1].clone(), attestations[0].clone()],
+        };
+        assert!(
+            validate_ordinary_kagemusha_lifecycle_admission_certificate_v1(
+                &network_id,
+                &transaction,
+                reversed,
+                OrdinaryKagemushaLifecycleAdmissionCertificateStrengthV1::Quorum,
+            )
+            .is_err(),
+            "attestation order must be canonical"
+        );
+    }
+    #[test]
+    fn ordinary_kagemusha_lifecycle_certificate_rejects_binding_roster_route_and_journal_drift() {
+        let (network_id, transaction, routing_plan, binding, validators) =
+            ordinary_lifecycle_admission_fixture();
+        let exact = ordinary_lifecycle_attestation(
+            &transaction,
+            &routing_plan,
+            &binding,
+            0,
+            &validators[0],
+            2_000,
+        );
+        let certificate = |binding, attestation| OrdinaryKagemushaLifecycleAdmissionCertificateV1 {
+            version: KAGEMUSHA_LIFECYCLE_ADMISSION_CERTIFICATE_VERSION_V1,
+            binding,
+            attestations: vec![attestation],
+        };
+
+        let mut wrong_binding = binding.clone();
+        wrong_binding.signed_transaction_hash =
+            HashOf::from_untyped_unchecked(Hash::new(b"different lifecycle signed transaction"));
+        assert!(
+            validate_ordinary_kagemusha_lifecycle_admission_certificate_v1(
+                &network_id,
+                &transaction,
+                certificate(wrong_binding, exact.clone()),
+                OrdinaryKagemushaLifecycleAdmissionCertificateStrengthV1::Partial,
+            )
+            .is_err()
+        );
+        let mut wrong_roster = binding.clone();
+        wrong_roster.admission_context.route_incarnations[0].validator_set[0] =
+            PeerId::new(validators[3].public_key().clone());
+        wrong_roster.admission_context.route_incarnations[0].validator_set_hash =
+            HashOf::new(&wrong_roster.admission_context.route_incarnations[0].validator_set);
+        assert!(
+            validate_ordinary_kagemusha_lifecycle_admission_certificate_v1(
+                &network_id,
+                &transaction,
+                certificate(wrong_roster, exact.clone()),
+                OrdinaryKagemushaLifecycleAdmissionCertificateStrengthV1::Partial,
+            )
+            .is_err()
+        );
+        let mut wrong_route = binding.clone();
+        wrong_route.routing_plan_digest = Hash::new(b"different lifecycle route");
+        assert!(
+            validate_ordinary_kagemusha_lifecycle_admission_certificate_v1(
+                &network_id,
+                &transaction,
+                certificate(wrong_route, exact.clone()),
+                OrdinaryKagemushaLifecycleAdmissionCertificateStrengthV1::Partial,
+            )
+            .is_err()
+        );
+        let mut wrong_journal = exact;
+        wrong_journal.journal_record_digest = Hash::new(b"different unbound journal claim");
+        assert!(
+            validate_ordinary_kagemusha_lifecycle_admission_certificate_v1(
+                &network_id,
+                &transaction,
+                certificate(binding, wrong_journal),
+                OrdinaryKagemushaLifecycleAdmissionCertificateStrengthV1::Partial,
+            )
+            .is_err()
+        );
+    }
+    #[test]
+    fn ordinary_kagemusha_lifecycle_durable_claim_must_remain_globally_unbound() {
+        let (network_id, transaction, routing_plan, binding, _) =
+            ordinary_lifecycle_admission_fixture();
+        let enqueue_timestamp_ms = 3_000;
+        let journal_record_digest = crate::queue::queue_plan_journal_record_claim_digest(
+            transaction.clone(),
+            routing_plan.clone(),
+            binding.admission_context.clone(),
+            enqueue_timestamp_ms,
+            None,
+        )
+        .expect("encode exact unbound claim");
+        let mut durable = crate::queue::QueuePlanDurableAdmissionV2 {
+            version: crate::queue::QUEUE_PLAN_DURABLE_ADMISSION_VERSION_V2,
+            context: binding.admission_context.clone(),
+            global_admission_identity: None,
+            routing_plan,
+            entrypoint_hash: binding.entrypoint_hash.clone(),
+            signed_transaction_hash: Some(binding.signed_transaction_hash.clone()),
+            enqueue_timestamp_ms,
+            journal_record_digest,
+        };
+        binding
+            .validate_durable_admission(&network_id, &transaction, &durable)
+            .expect("exact unbound lifecycle durable claim must validate");
+        durable.global_admission_identity =
+            Some(crate::queue::QueuePlanGlobalAdmissionIdentityV2 {
+                version: crate::queue::QUEUE_PLAN_GLOBAL_ADMISSION_IDENTITY_VERSION_V2,
+                network_id_digest: binding.network_id_digest,
+                request_id: binding.request_id,
+            });
+        assert!(
+            binding
+                .validate_durable_admission(&network_id, &transaction, &durable)
+                .expect_err("globally bound lifecycle claim must fail")
+                .contains("globally unbound")
         );
     }
     #[test]

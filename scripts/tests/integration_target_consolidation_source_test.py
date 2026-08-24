@@ -296,7 +296,7 @@ WAVE_TWO_SOURCE_SHA256 = {
     "crates/iroha_version_derive/tests/json.rs": "8092c6769cdeec5ffde1cacf13626193c88324ae8d76a940cc41a5d29d21a041",
     "crates/iroha_version_derive/tests/ui.rs": "72fcf2f051e0f9d9d85a5918820d62e2d65168d4ad00d8cb7eb7584236776823",
     "crates/iroha_zkp_halo2/tests/vega_engine_reachability.rs": "6350e46bd567e6eb2ea523e725e50fb93d76878c76244b27220456a692a520f9",
-    "crates/iroha_zkp_halo2/tests/vega_microsoft_cross_conformance.rs": "a2e9e478e3ff26826c5bf7ea4fc72762312cc3a464f8dfeb4171cc69e1e60c34",
+    "crates/iroha_zkp_halo2/tests/vega_microsoft_cross_conformance.rs": "5cde89a58cffa1e77d578b20c44a92b30e924b6fe80eb9a3d56cc84b81039d23",
     "crates/soranet_pq/tests/kat_vectors.rs": "84b89d698051989013d4147dffd10d5261c741e352f213ad9150aa0b1c28321c",
     "crates/soranet_pq/tests/pq_kat.rs": "69491d6c86e58a8f3edb74d40ca46cd261801fbfbd2f459cfcd86cfe64fcc98a",
     "crates/sorafs_node/tests/cli.rs": "7e8d976e7fc2e1496d4d5524191faa0d8f0268138c13ad8e6c61273d9703ff43",

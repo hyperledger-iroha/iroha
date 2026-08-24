@@ -798,99 +798,29 @@ const SUBSCRIPTION_LIST_OPTION_KEYS = new Set([
   "offset",
   "signal",
 ]);
-const NORITO_FRAME_HEADER_LENGTH = 40;
-const VERSIONED_TRANSACTION_PAYLOAD_VERSION = 1;
-function isNrt0NoritoFrame(payload) {
-  return (
-    payload.length >= NORITO_FRAME_HEADER_LENGTH &&
-    payload.subarray(0, 4).toString("ascii") === "NRT0"
-  );
-}
-
-function unwrapNrt0NoritoFrame(payload) {
-  if (!isNrt0NoritoFrame(payload)) {
-    return payload;
-  }
-  if (payload[4] !== 0 || payload[5] !== 0) {
-    throw new Error("Unsupported NRT0 transaction frame version.");
-  }
-  const payloadLength = payload.readBigUInt64LE(23);
-  if (payloadLength > BigInt(Number.MAX_SAFE_INTEGER)) {
-    throw new Error("NRT0 transaction frame payload is too large.");
-  }
-  const payloadStart = payload.length - Number(payloadLength);
-  if (payloadStart < NORITO_FRAME_HEADER_LENGTH) {
-    throw new Error("Malformed NRT0 transaction frame payload length.");
-  }
-  return payload.subarray(payloadStart);
-}
-
-function toVersionedTransactionPayload(payload, nativeBinding) {
-  const rawPayload = unwrapNrt0NoritoFrame(payload);
-  const native = resolveOptionalNativeBinding(nativeBinding);
+function encodeCanonicalVersionedSignedTransactionV1(payload, nativeBinding) {
+  const native = resolveNativeBinding(nativeBinding);
   if (
-    native &&
-    typeof native.encodeSignedTransactionVersioned === "function"
+    !native ||
+    typeof native.encodeSignedTransactionVersioned !== "function"
   ) {
-    try {
-      const encoded = Buffer.from(native.encodeSignedTransactionVersioned(rawPayload));
-      if (encoded.length > 0) {
-        return encoded;
-      }
-    } catch {
-      // Preserve the pre-native path for opaque or foreign signed payload bytes.
-    }
+    throw new Error(
+      "Canonical VersionedSignedTransaction V1 validation requires native encodeSignedTransactionVersioned.",
+    );
   }
-  if (
-    native &&
-    typeof native.encodeSignedTransactionNorito === "function"
-  ) {
-    try {
-      return Buffer.concat([
-        Buffer.from([VERSIONED_TRANSACTION_PAYLOAD_VERSION]),
-        unwrapNrt0NoritoFrame(Buffer.from(native.encodeSignedTransactionNorito(rawPayload))),
-      ]);
-    } catch {
-      // Preserve the pre-native path for opaque or foreign signed payload bytes.
-    }
+  const input = Buffer.from(payload);
+  const encoded = Buffer.from(native.encodeSignedTransactionVersioned(input));
+  if (encoded.length === 0 || encoded[0] !== 1) {
+    throw new Error(
+      "Native signed transaction encoder did not return VersionedSignedTransaction V1 bytes.",
+    );
   }
-  return Buffer.concat([
-    Buffer.from([VERSIONED_TRANSACTION_PAYLOAD_VERSION]),
-    rawPayload,
-  ]);
-}
-
-function toVersionedTransactionPayloadStrict(payload, nativeBinding) {
-  const rawPayload = unwrapNrt0NoritoFrame(payload);
-  const native = resolveOptionalNativeBinding(nativeBinding);
-  if (
-    native &&
-    typeof native.encodeSignedTransactionVersioned === "function"
-  ) {
-    const encoded = Buffer.from(native.encodeSignedTransactionVersioned(rawPayload));
-    if (encoded.length === 0) {
-      throw new Error("Native signed transaction version encoder returned an empty payload.");
-    }
-    return encoded;
+  if (!encoded.equals(input)) {
+    throw new Error(
+      "Signed transaction input was not the exact canonical VersionedSignedTransaction V1 encoding.",
+    );
   }
-  if (
-    native &&
-    typeof native.encodeSignedTransactionNorito === "function"
-  ) {
-    const encoded = Buffer.from(native.encodeSignedTransactionNorito(rawPayload));
-    const noritoPayload = unwrapNrt0NoritoFrame(encoded);
-    if (noritoPayload.length === 0) {
-      throw new Error("Native signed transaction Norito encoder returned an empty payload.");
-    }
-    return Buffer.concat([
-      Buffer.from([VERSIONED_TRANSACTION_PAYLOAD_VERSION]),
-      noritoPayload,
-    ]);
-  }
-  return Buffer.concat([
-    Buffer.from([VERSIONED_TRANSACTION_PAYLOAD_VERSION]),
-    rawPayload,
-  ]);
+  return encoded;
 }
 
 function encodeTransactionPayloadBatch(payloads, nativeBinding) {
@@ -4697,7 +4627,7 @@ export class ToriiClient {
   }
 
   /**
-   * Submit one caller-signed SoraFS pin-registration transaction.
+   * Submit one exact canonical VersionedSignedTransaction V1 for SoraFS pin registration.
    * @param {ArrayBufferView | ArrayBuffer | Buffer} signedTransaction
    * @param {{signal?: AbortSignal}} [options]
    * @returns {Promise<Record<string, unknown>>}
@@ -4718,12 +4648,12 @@ export class ToriiClient {
     }
     const rawTransaction = toBuffer(signedTransaction, "signedTransaction");
     throwIfAborted(signal);
-    await waitForPromiseWithSignal(this._ensureDataModelValidation(), signal);
-    throwIfAborted(signal);
-    const body = toVersionedTransactionPayload(
+    const body = encodeCanonicalVersionedSignedTransactionV1(
       rawTransaction,
       this._nativeBinding,
     );
+    await waitForPromiseWithSignal(this._ensureDataModelValidation(), signal);
+    throwIfAborted(signal);
     const response = await this._request("POST", "/v1/sorafs/pin/register", {
       headers: {
         "Content-Type": APPLICATION_NORITO,
@@ -5561,7 +5491,7 @@ export class ToriiClient {
   }
 
   /**
-   * Submit a Norito-encoded transaction payload.
+   * Submit one exact canonical VersionedSignedTransaction V1 payload.
    * Throws ToriiDataModelMismatchError when the node data model version mismatches.
    * @param {ArrayBufferView | ArrayBuffer | Buffer} payload
    * @param {{signal?: AbortSignal}} [options]
@@ -5570,10 +5500,13 @@ export class ToriiClient {
   async submitTransaction(payload, options = {}) {
     const { signal } = normalizeSignalOnlyOption(options, "submitTransaction");
     throwIfAborted(signal);
+    const rawPayload = toBuffer(payload);
+    const pipelinePayload = encodeCanonicalVersionedSignedTransactionV1(
+      rawPayload,
+      this._nativeBinding,
+    );
     await waitForPromiseWithSignal(this._ensureDataModelValidation(), signal);
     throwIfAborted(signal);
-    const rawPayload = toBuffer(payload);
-    const pipelinePayload = toVersionedTransactionPayload(rawPayload, this._nativeBinding);
     const requestOptions = {
       headers: {
         "Content-Type": "application/x-norito",
@@ -5639,7 +5572,7 @@ export class ToriiClient {
   }
 
   /**
-   * Submit an input-ordered batch of Norito-encoded signed transaction payloads.
+   * Submit an input-ordered batch of exact canonical VersionedSignedTransaction V1 payloads.
    * Throws ToriiDataModelMismatchError when the node data model version mismatches.
    * @param {ReadonlyArray<ArrayBufferView | ArrayBuffer | Buffer>} payloads
    * @param {{signal?: AbortSignal}} [options]
@@ -5654,7 +5587,10 @@ export class ToriiClient {
       throw new TypeError("submitTransactionBatch requires at least one payload");
     }
     const versionedPayloads = payloads.map((payload) =>
-      toVersionedTransactionPayloadStrict(toBuffer(payload), this._nativeBinding),
+      encodeCanonicalVersionedSignedTransactionV1(
+        toBuffer(payload),
+        this._nativeBinding,
+      ),
     );
     throwIfAborted(signal);
     await waitForPromiseWithSignal(this._ensureDataModelValidation(), signal);
@@ -7041,12 +6977,12 @@ export class ToriiClient {
   /**
    * Fetch an authenticated active Sora VPN session (`GET /v1/vpn/sessions/{session_id}`).
    * Returns null when the session is already absent.
-   * @param {string} sessionId
+   * @param {string} sessionId canonical 16-byte session ID as hexadecimal text
    * @param {{signal?: AbortSignal, canonicalAuth: CanonicalRequestAuth}} options
    * @returns {Promise<ToriiVpnSession | null>}
    */
   async getVpnSession(sessionId, options) {
-    const normalizedSessionId = normalizeHex32String(sessionId, "sessionId");
+    const normalizedSessionId = normalizeHex16String(sessionId, "sessionId");
     const { signal, canonicalAuth } = normalizeVpnSessionOptions(
       options,
       "getVpnSession",
@@ -7069,39 +7005,6 @@ export class ToriiClient {
       throw new Error("vpn session status endpoint returned no payload");
     }
     return normalizeVpnSessionResponse(payload, "vpn session status response");
-  }
-
-  /**
-   * Delete a signed Sora VPN session (`DELETE /v1/vpn/sessions/{session_id}`).
-   * Returns null when the session is already absent.
-   * @param {string} sessionId
-   * @param {{signal?: AbortSignal, canonicalAuth: CanonicalRequestAuth}} options
-   * @returns {Promise<ToriiVpnReceipt | null>}
-   */
-  async deleteVpnSession(sessionId, options) {
-    const normalizedSessionId = normalizeHex32String(sessionId, "sessionId");
-    const { signal, canonicalAuth } = normalizeVpnSessionOptions(
-      options,
-      "deleteVpnSession",
-    );
-    const response = await this._vpnRequest(
-      "DELETE",
-      `/v1/vpn/sessions/${encodeURIComponent(normalizedSessionId)}`,
-      {
-        headers: JSON_ACCEPT_HEADERS,
-        signal,
-        canonicalAuth,
-      },
-    );
-    if (response.status === 404) {
-      return null;
-    }
-    await this._expectStatus(response, [200]);
-    const payload = await this._maybeJson(response);
-    if (!payload) {
-      throw new Error("vpn delete endpoint returned no payload");
-    }
-    return normalizeVpnReceiptResponse(payload, "vpn delete response");
   }
 
   /**
@@ -7751,23 +7654,6 @@ export class ToriiClient {
    * @param {{signal?: AbortSignal}} [options]
    * @returns {Promise<any>}
    */
-
-  /**
-   * Fetch consensus key lifecycle records (newest first) via `/v1/sumeragi/key-lifecycle`.
-   */
-  async listSumeragiKeyLifecycle() {
-    const response = await this._request("GET", "/v1/sumeragi/key-lifecycle", {
-      headers: { Accept: this._acceptHeader() },
-      operatorSigningContext: requireOperatorSigningContext(
-        this._operatorSigningContext,
-        "listSumeragiKeyLifecycle",
-      ),
-    });
-    if (!response) {
-      throw new Error("sumeragi key lifecycle endpoint returned no payload");
-    }
-    return response;
-  }
 
   async getSumeragiStatus(options = {}) {
     const { signal } = normalizeSignalOnlyOption(options, "getSumeragiStatus");
@@ -14205,10 +14091,6 @@ function parseStatusPayload(payload) {
       "status.time_since_last_non_empty_block_ms",
     ),
     commit_time_ms: coerceStatusInt(payload.commit_time_ms, "status.commit_time_ms"),
-    da_reschedule_total: coerceStatusInt(
-      payload.da_reschedule_total,
-      "status.da_reschedule_total",
-    ),
     txs_approved: coerceStatusInt(payload.txs_approved, "status.txs_approved"),
     txs_rejected: coerceStatusInt(payload.txs_rejected, "status.txs_rejected"),
     view_changes: coerceStatusInt(payload.view_changes, "status.view_changes"),
@@ -15791,7 +15673,11 @@ function normalizeVpnSessionResponse(payload, context = "vpn session response") 
   assertVpnResponseFields(record, VPN_SESSION_RESPONSE_FIELDS, context);
   const trust = normalizeVpnTrustTuple(record, context);
   return {
-    sessionId: requireExactLowerHex32String(record.session_id, `${context}.session_id`),
+    sessionId: requireExactLowerHexBytesString(
+      record.session_id,
+      `${context}.session_id`,
+      16,
+    ),
     accountId: requireNonEmptyString(record.account_id, `${context}.account_id`),
     exitClass: requireVpnEnum(
       record.exit_class,
@@ -15888,7 +15774,11 @@ function normalizeVpnReceiptResponse(payload, context = "vpn receipt response") 
   const record = ensureRecord(payload ?? {}, context);
   assertVpnResponseFields(record, VPN_RECEIPT_RESPONSE_FIELDS, context);
   return {
-    sessionId: requireExactLowerHex32String(record.session_id, `${context}.session_id`),
+    sessionId: requireExactLowerHexBytesString(
+      record.session_id,
+      `${context}.session_id`,
+      16,
+    ),
     accountId: requireNonEmptyString(record.account_id, `${context}.account_id`),
     exitClass: requireVpnEnum(
       record.exit_class,
@@ -17373,9 +17263,6 @@ function computeStatusMetrics(previous, current) {
     time_since_last_block_ms: current.time_since_last_block_ms,
     time_since_last_non_empty_block_ms:
       current.time_since_last_non_empty_block_ms,
-    da_reschedule_delta: previous
-      ? Math.max(0, current.da_reschedule_total - previous.da_reschedule_total)
-      : 0,
     tx_approved_delta: previous
       ? Math.max(0, current.txs_approved - previous.txs_approved)
       : 0,
@@ -17388,7 +17275,6 @@ function computeStatusMetrics(previous, current) {
   };
   metrics.has_activity = Boolean(
     metrics.queue_delta ||
-      metrics.da_reschedule_delta ||
       metrics.tx_approved_delta ||
       metrics.tx_rejected_delta ||
       metrics.view_change_delta,
@@ -19734,6 +19620,37 @@ function normalizeHex32String(value, name, options = {}) {
     throw createValidationError(
       ValidationErrorCode.INVALID_HEX,
       `${name} must be a 32-byte hex string`,
+      name,
+    );
+  }
+  return hex.toLowerCase();
+}
+
+function normalizeHex16String(value, name) {
+  if (Buffer.isBuffer(value)) {
+    return normalizeHex16String(value.toString("hex"), name);
+  }
+  if (ArrayBuffer.isView(value)) {
+    return normalizeHex16String(
+      Buffer.from(value.buffer, value.byteOffset, value.byteLength).toString("hex"),
+      name,
+    );
+  }
+  if (value instanceof ArrayBuffer) {
+    return normalizeHex16String(Buffer.from(value).toString("hex"), name);
+  }
+  if (Array.isArray(value)) {
+    return normalizeHex16String(normalizeByteArray(value, name).toString("hex"), name);
+  }
+  const normalized = requireNonEmptyString(value, name);
+  const hex =
+    normalized.startsWith("0x") || normalized.startsWith("0X")
+      ? normalized.slice(2)
+      : normalized;
+  if (hex.length !== 32 || !/^[0-9a-fA-F]+$/u.test(hex)) {
+    throw createValidationError(
+      ValidationErrorCode.INVALID_HEX,
+      `${name} must be a 16-byte hex string`,
       name,
     );
   }
@@ -26935,6 +26852,24 @@ function normalizePipelinePreflight(payload, context = "pipeline preflight respo
   const admission = ensureRecord(record.admission, `${context}.admission`);
   const block = ensureRecord(record.block, `${context}.block`);
   const pipeline = ensureRecord(record.pipeline, `${context}.pipeline`);
+  const allowedPipelineFields = new Set([
+    "signature_batch_max_ed25519",
+    "signature_batch_max_secp256k1",
+    "signature_batch_max_pqc",
+    "signature_batch_max_bls",
+    "overlay_max_instructions",
+    "ivm_max_cycles_upper_bound",
+    "ivm_admission_cycle_limit",
+    "ivm_max_decoded_instructions",
+  ]);
+  const unknownPipelineField = Object.keys(pipeline).find(
+    (field) => !allowedPipelineFields.has(field),
+  );
+  if (unknownPipelineField !== undefined) {
+    throw new TypeError(
+      `${context}.pipeline contains unknown field ${unknownPipelineField}`,
+    );
+  }
   const queue = ensureRecord(record.queue, `${context}.queue`);
   const fees = ensureRecord(record.fees, `${context}.fees`);
   const normalized = {
@@ -26968,11 +26903,6 @@ function normalizePipelinePreflight(payload, context = "pipeline preflight respo
       max_transactions: coerceNestedInt(block, "max_transactions", `${context}.block`),
     },
     pipeline: {
-      signature_batch_max: coerceNestedInt(
-        pipeline,
-        "signature_batch_max",
-        `${context}.pipeline`,
-      ),
       signature_batch_max_ed25519: coerceNestedInt(
         pipeline,
         "signature_batch_max_ed25519",

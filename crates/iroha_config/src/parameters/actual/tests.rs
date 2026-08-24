@@ -7,6 +7,20 @@ mod tests {
     };
 
     #[test]
+    #[should_panic(expected = "inrou.enabled requires soracloud_runtime.production_mode = true")]
+    fn soracloud_actual_posture_rejects_nonproduction_inrou() {
+        let mut runtime = SoracloudRuntime {
+            production_mode: false,
+            ..SoracloudRuntime::default()
+        };
+        runtime.inrou.enabled = true;
+        runtime.inrou.portable_vm_uid = NonZeroU32::new(70_000);
+        runtime.inrou.portable_vm_gid = NonZeroU32::new(70_000);
+
+        runtime.assert_runtime_posture();
+    }
+
+    #[test]
     fn sora_profile_keeps_logical_lanes_in_the_universal_dataspace() {
         let lanes = sora_lane_catalog();
         let lane_bindings: Vec<_> = lanes
@@ -462,8 +476,10 @@ mod tests {
         operational.pipeline.cache_size = operational.pipeline.cache_size.saturating_add(1);
         operational.pipeline.ivm_prover_threads =
             operational.pipeline.ivm_prover_threads.saturating_add(1);
-        operational.pipeline.signature_batch_max =
-            operational.pipeline.signature_batch_max.saturating_add(1);
+        operational.pipeline.signature_batch_max_ed25519 = operational
+            .pipeline
+            .signature_batch_max_ed25519
+            .saturating_add(1);
         operational.pipeline.debug_trace_tx_eval = !operational.pipeline.debug_trace_tx_eval;
         operational.crypto.enable_sm_openssl_preview =
             !operational.crypto.enable_sm_openssl_preview;

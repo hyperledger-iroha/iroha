@@ -204,7 +204,9 @@ impl TempDir {
 }
 fn open_kura(root: &Path, lane_config: &RuntimeLaneConfig) -> Arc<Kura> {
     let config = kura_config(root);
-    Kura::new(&config, lane_config).expect("open test Kura").0
+    Kura::open_test_kura_with_configured_lane_config(&config, lane_config)
+        .expect("open test Kura")
+        .0
 }
 fn wait_for_total_usage_scan_pause(kura: &Kura) {
     let deadline = Instant::now() + Duration::from_secs(5);

@@ -7,6 +7,7 @@ use super::{
     engine::{VEGA_MDL_CANONICAL_VERIFIER_DIGEST_V1, VegaRandomSourceErrorV1, VegaRandomSourceV1},
     figure9::Figure9McMaterial,
 };
+#[cfg(test)]
 type ValidatedFixture = (
     [u8; 32],
     VegaMdlProofDimensionsV1,
@@ -506,7 +507,8 @@ pub(super) fn scan_canonical_figure9_proof(proof: &[u8]) -> Result<(), wire::McC
     Ok(())
 }
 /// Decode, re-encode, and verify an independent Microsoft fixture pair.
-pub(super) fn validate_fixture(
+#[cfg(test)]
+fn validate_fixture(
     verifier_key: &[u8],
     proof: &[u8],
 ) -> Result<ValidatedFixture, wire::McCodecError> {
@@ -528,6 +530,10 @@ mod tests {
     const PYTHON_VK: &[u8] = include_bytes!(concat!(
         env!("CARGO_MANIFEST_DIR"),
         "/../../vendor/vega-prover/reference/fixtures/cubic/python_vk.bin"
+    ));
+    const PYTHON_PROOF: &[u8] = include_bytes!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../vendor/vega-prover/reference/fixtures/cubic/python_standalone_proof.bin"
     ));
 
     fn proving_key_artifact(verifier_key: &verifier_key::McVerifierKeyWire) -> Vec<u8> {
@@ -558,6 +564,54 @@ mod tests {
             canonical_figure9_verifier_digest(),
             VEGA_MDL_CANONICAL_VERIFIER_DIGEST_V1
         );
+    }
+
+    #[test]
+    fn independent_fixture_pair_validates_at_private_test_boundary() {
+        assert_eq!(PYTHON_VK.len(), 200_292);
+        assert_eq!(PYTHON_PROOF.len(), 73_484);
+        let (digest, dimensions, steps, core) =
+            validate_fixture(PYTHON_VK, PYTHON_PROOF).expect("independent Microsoft fixture");
+        assert_eq!(
+            digest,
+            hex_literal::hex!("b752511606285b40d5a1ea19ba3f6b4e7d6f90cc29036cf4b59cfd5121dc2729")
+        );
+        assert_eq!(dimensions.num_steps, 2);
+        assert_eq!(steps.len(), 2);
+        assert_eq!(core.len(), 1);
+    }
+
+    #[test]
+    fn private_fixture_boundary_rejects_truncated_and_trailing_bytes() {
+        assert!(validate_fixture(&PYTHON_VK[..PYTHON_VK.len() - 1], PYTHON_PROOF).is_err());
+        assert!(validate_fixture(PYTHON_VK, &PYTHON_PROOF[..PYTHON_PROOF.len() - 1]).is_err());
+
+        let mut trailing_key = PYTHON_VK.to_vec();
+        trailing_key.push(0);
+        assert!(validate_fixture(&trailing_key, PYTHON_PROOF).is_err());
+        let mut trailing_proof = PYTHON_PROOF.to_vec();
+        trailing_proof.push(0);
+        assert!(validate_fixture(PYTHON_VK, &trailing_proof).is_err());
+    }
+
+    #[test]
+    fn private_fixture_boundary_rejects_equation_corruption() {
+        let key = verifier_key::McVerifierKeyWire::decode(PYTHON_VK)
+            .expect("independent canonical verifier key");
+        let dimensions = key.proof_dimensions().expect("fixture dimensions");
+        let mut corrupted = PYTHON_PROOF.to_vec();
+        let final_scalar_low_byte = corrupted
+            .len()
+            .checked_sub(32)
+            .expect("fixture contains its final scalar");
+        corrupted[final_scalar_low_byte] ^= 1;
+        let decoded = wire::McProofWire::decode(&corrupted, &dimensions)
+            .expect("equation corruption remains canonical proof wire");
+        assert_eq!(
+            decoded.encode().expect("canonical corrupted proof"),
+            corrupted
+        );
+        assert!(validate_fixture(PYTHON_VK, &corrupted).is_err());
     }
 
     #[test]

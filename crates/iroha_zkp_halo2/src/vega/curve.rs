@@ -4,13 +4,11 @@ use core::{
     fmt,
     ops::{Add, Neg as _, Sub},
 };
-#[cfg(test)]
-use halo2curves::t256::Fp;
 use halo2curves::{
     Coordinates, CurveAffine, CurveExt,
     ff::PrimeField,
     group::{Curve as _, Group as _, GroupEncoding as _},
-    t256::{T256, T256Affine},
+    t256::{Fp, T256, T256Affine},
 };
 use thiserror::Error;
 /// Big-endian modulus of the canonical T256 coordinate field.
@@ -72,6 +70,31 @@ pub enum VegaCurveError {
 /// protocol's x=3 generator is constructed and checked explicitly.
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub struct VegaT256PointV1(pub(super) T256);
+
+const _: () = {
+    assert!(Fp::NUM_LIMBS == 4);
+    assert!(core::mem::size_of::<Fp>() == 32);
+    assert!(core::mem::size_of::<T256>() == 96);
+};
+
+#[inline(always)]
+fn ct_select_fp(a: &Fp, b: &Fp, mask: u64) -> Fp {
+    Fp(core::array::from_fn(|index| {
+        a.0[index] ^ (mask & (a.0[index] ^ b.0[index]))
+    }))
+}
+
+#[inline(always)]
+fn ct_select_t256(a: &T256, b: &T256, choice: u8) -> T256 {
+    let bit = u64::from(core::hint::black_box(choice)) & 1;
+    let mask = 0_u64.wrapping_sub(bit);
+    T256 {
+        x: ct_select_fp(&a.x, &b.x, mask),
+        y: ct_select_fp(&a.y, &b.y, mask),
+        z: ct_select_fp(&a.z, &b.z, mask),
+    }
+}
+
 impl VegaT256PointV1 {
     /// Construct Vega's canonical x=3 generator.
     ///
@@ -228,11 +251,12 @@ impl VegaT256PointV1 {
     }
     /// Select `a` for zero and `b` for one without secret-dependent branches.
     ///
-    /// Only the low bit of `choice` is used. Multiplication by that scalar uses the linked curve's
-    /// constant-time scalar multiplication and avoids a secret-dependent branch or table lookup.
+    /// Only the low bit of `choice` is used. The pinned T256 Montgomery limbs are copied with one
+    /// all-zero/all-one mask and fixed memory access, without normalization, allocation, a
+    /// secret-dependent branch, or a table lookup.
     #[must_use]
     pub fn conditional_select(a: &Self, b: &Self, choice: u8) -> Self {
-        *a + (*b - *a).mul_scalar(VegaT256ScalarV1::from_u64(u64::from(choice & 1)))
+        Self(ct_select_t256(&a.0, &b.0, choice))
     }
     /// Replace this complete projective point instance with the identity.
     ///
@@ -389,6 +413,95 @@ mod tests {
         let mut cleared = generator;
         cleared.clear_secret();
         assert_eq!(cleared, identity);
+    }
+    #[test]
+    fn conditional_selection_is_branchless_allocation_free_and_raw_exact() {
+        let generator = VegaT256PointV1::canonical_generator().expect("canonical generator");
+        let a = generator.mul_scalar(VegaT256ScalarV1::from_u64(2));
+        let b = generator.mul_scalar(VegaT256ScalarV1::from_u64(7));
+        let identity = VegaT256PointV1::identity();
+        let projective_scale = Fp::from(7);
+        let scaled_a = VegaT256PointV1(T256 {
+            x: a.0.x * projective_scale,
+            y: a.0.y * projective_scale,
+            z: a.0.z * projective_scale,
+        });
+        let raw = |point: &VegaT256PointV1| [point.0.x.0, point.0.y.0, point.0.z.0];
+        assert_eq!(Fp::NUM_LIMBS, 4);
+        assert_eq!(core::mem::size_of::<Fp>(), 32);
+        assert_eq!(core::mem::size_of::<T256>(), 96);
+        assert_eq!(scaled_a, a);
+        assert_ne!(raw(&scaled_a), raw(&a));
+        assert!(bool::from(scaled_a.0.is_on_curve()));
+
+        for (left, right) in [(identity, a), (a, b), (a, scaled_a)] {
+            for choice in u8::MIN..=u8::MAX {
+                let selected = VegaT256PointV1::conditional_select(&left, &right, choice);
+                let expected = if choice & 1 == 0 { left } else { right };
+                assert_eq!(raw(&selected), raw(&expected));
+                assert_eq!(selected, expected);
+                assert!(bool::from(selected.0.is_on_curve()));
+            }
+        }
+
+        let production = include_str!("curve.rs")
+            .split_once("#[cfg(test)]\nmod tests")
+            .expect("production curve source")
+            .0;
+        let helper = production
+            .split_once("const _: () = {")
+            .expect("constant-time selector helper")
+            .1
+            .split_once("impl VegaT256PointV1")
+            .expect("selector helper boundary")
+            .0;
+        for required in [
+            "assert!(Fp::NUM_LIMBS == 4)",
+            "assert!(core::mem::size_of::<Fp>() == 32)",
+            "assert!(core::mem::size_of::<T256>() == 96)",
+            "Fp(core::array::from_fn(|index|",
+            "a.0[index] ^ (mask & (a.0[index] ^ b.0[index]))",
+            "u64::from(core::hint::black_box(choice)) & 1",
+            "0_u64.wrapping_sub(bit)",
+            "T256 {",
+        ] {
+            assert!(helper.contains(required), "selector omitted {required}");
+        }
+        assert_eq!(helper.matches("ct_select_fp(&").count(), 3);
+        let selector = production
+            .split_once("pub fn conditional_select(a: &Self, b: &Self, choice: u8) -> Self {")
+            .expect("point selector")
+            .1
+            .split_once("/// Replace this complete projective point instance")
+            .expect("point selector boundary")
+            .0;
+        assert!(selector.contains("Self(ct_select_t256(&a.0, &b.0, choice))"));
+        for forbidden in [
+            "conditional_select",
+            "mul_scalar",
+            "from_raw",
+            "from_repr",
+            "to_repr",
+            "to_bytes",
+            "from_bytes",
+            "jacobian_coordinates",
+            "new_jacobian",
+            "if ",
+            "match ",
+            "bool",
+            "Vec",
+            "collect",
+            "unsafe",
+            "transmute",
+            " as ",
+            ".as_ptr",
+            ".get(",
+        ] {
+            assert!(
+                !helper.contains(forbidden) && !selector.contains(forbidden),
+                "constant-time selector gained forbidden source: {forbidden}"
+            );
+        }
     }
     #[test]
     fn generator_derivation_matches_independent_rfc9380_vector() {

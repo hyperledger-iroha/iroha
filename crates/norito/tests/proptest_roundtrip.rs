@@ -74,7 +74,8 @@ fn roundtrip_enums() {
     for value in cases {
         let bytes = to_bytes(&value).unwrap();
         let archived = from_bytes::<TestEnum>(&bytes).unwrap();
-        let decoded = <TestEnum as NoritoDeserialize>::deserialize(archived);
+        let decoded = <TestEnum as NoritoDeserialize>::try_deserialize(archived)
+            .unwrap_or_else(|error| panic!("failed to decode {value:?}: {error:?}"));
         assert_eq!(value, decoded);
     }
 }

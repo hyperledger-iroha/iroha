@@ -9,7 +9,10 @@
 use super::*;
 use crate::vega::zk_ams::mkhe::{
     active::{ZkAmsMkheActivePartySecretV1, ZkAmsMkheGovernedActiveRosterV1},
-    collective::generate_zk_ams_mkhe_collective_party_state_v1,
+    collective::{
+        generate_zk_ams_mkhe_collective_party_state_with_prepared_public_a_v1,
+        prepare_zk_ams_mkhe_collective_public_a_v1,
+    },
     manifest::zk_ams_mkhe_resource_certificate_v1,
 };
 
@@ -40,9 +43,11 @@ fn release_cks_proof_size_kat_emits_candidate_digest() {
     let roster = ZkAmsMkheGovernedActiveRosterV1::new(101, secret_refs, &mut random)
         .expect("release governed roster");
     let transcript_digest = keccak256(b"iroha.zk-ams.v1.mkhe.cks-release-proof-size-transcript");
-    let (state, share) = generate_zk_ams_mkhe_collective_party_state_v1(
+    let prepared_public_a = prepare_zk_ams_mkhe_collective_public_a_v1(&roster, transcript_digest)
+        .expect("prepared collective public a");
+    let (state, share) = generate_zk_ams_mkhe_collective_party_state_with_prepared_public_a_v1(
         &roster,
-        transcript_digest,
+        &prepared_public_a,
         0,
         &secrets[0],
         &mut random,

@@ -46,7 +46,7 @@ enum NamedDecision {
 }
 
 #[derive(NoritoSerialize)]
-enum RetiredNamedDecision {
+enum IncompleteNamedDecision {
     Accepted { source: u32 },
 }
 
@@ -60,8 +60,13 @@ enum TupleDecision {
 }
 
 #[derive(NoritoSerialize)]
-enum RetiredTupleDecision {
+enum IncompleteTupleDecision {
     Accepted(u32),
+}
+
+#[derive(NoritoSerialize)]
+struct IncompleteSkipDefault {
+    a: u32,
 }
 
 #[derive(Debug, Default, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
@@ -147,34 +152,38 @@ fn default_fields_are_decoded_in_packed_layouts() {
 
 #[test]
 fn tuple_struct_default_fields_roundtrip_in_all_layouts() {
-    assert_roundtrip_in_all_layouts(&TupleDefaults(5, Some(7), 73));
+    assert_roundtrip_in_all_layouts(&TupleDefaults(5, Some(7), custom_default()));
 }
 
 #[test]
-fn enum_default_fields_roundtrip_and_fallback_in_all_layouts() {
+fn enum_default_fields_roundtrip_in_all_layouts() {
     assert_roundtrip_in_all_layouts(&NamedDecision::Accepted {
         source: 5,
         program_revision: Some(7),
-        marker: 73,
+        marker: custom_default(),
     });
-    assert_roundtrip_in_all_layouts(&TupleDecision::Accepted(5, Some(7), 73));
+    assert_roundtrip_in_all_layouts(&TupleDecision::Accepted(5, Some(7), custom_default()));
+}
 
+#[test]
+fn binary_default_attributes_reject_omitted_fields_in_all_layouts() {
     for flags in binary_layouts() {
-        let named = encode_bare_with_flags(&RetiredNamedDecision::Accepted { source: 5 }, flags);
-        assert_eq!(
-            decode_bare_with_flags::<NamedDecision>(&named, flags),
-            NamedDecision::Accepted {
-                source: 5,
-                program_revision: None,
-                marker: custom_default(),
-            },
-            "named default fallback with flags {flags:#04x}",
+        let incomplete_struct = encode_bare_with_flags(&IncompleteSkipDefault { a: 5 }, flags);
+        let incomplete_named =
+            encode_bare_with_flags(&IncompleteNamedDecision::Accepted { source: 5 }, flags);
+        let incomplete_tuple = encode_bare_with_flags(&IncompleteTupleDecision::Accepted(5), flags);
+        let _flags = DecodeFlagsGuard::enter(flags);
+        assert!(
+            decode_field_canonical::<SkipDefault>(&incomplete_struct).is_err(),
+            "a missing struct field must be rejected with flags {flags:#04x}",
         );
-        let tuple = encode_bare_with_flags(&RetiredTupleDecision::Accepted(5), flags);
-        assert_eq!(
-            decode_bare_with_flags::<TupleDecision>(&tuple, flags),
-            TupleDecision::Accepted(5, None, custom_default()),
-            "tuple default fallback with flags {flags:#04x}",
+        assert!(
+            decode_field_canonical::<NamedDecision>(&incomplete_named).is_err(),
+            "a missing named-enum field must be rejected with flags {flags:#04x}",
+        );
+        assert!(
+            decode_field_canonical::<TupleDecision>(&incomplete_tuple).is_err(),
+            "a missing tuple-enum field must be rejected with flags {flags:#04x}",
         );
     }
 }

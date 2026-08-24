@@ -1,13 +1,13 @@
 //! Confidential asset CLI helpers (wallet/offline tooling).
-use std::{fs, path::PathBuf};
+use crate::{Run, RunContext};
 use base64::Engine as _;
 use clap::Subcommand;
 use eyre::{Context, Result};
 use hex::encode as hex_encode;
 use iroha_crypto::{ConfidentialKeyset, derive_keyset_from_slice};
 use rand::{rand_core::TryCryptoRng, rngs::OsRng};
+use std::{fs, path::PathBuf};
 use zeroize::Zeroizing;
-use crate::{Run, RunContext};
 /// Confidential CLI subcommands.
 #[derive(Subcommand, Debug)]
 pub enum Command {
@@ -144,7 +144,6 @@ fn parse_hex_32(hex_str: &str) -> Result<[u8; 32]> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::fmt::{self, Display};
     use iroha::{
         config::Config,
         crypto::{Algorithm, KeyPair},
@@ -153,6 +152,7 @@ mod tests {
     use iroha_i18n::{Bundle, Language, Localizer};
     use norito::json::{self, JsonSerialize};
     use rand::rand_core::{TryCryptoRng, TryRngCore};
+    use std::fmt::{self, Display};
     use url::Url;
     struct FailingConfidentialSeedRng;
     #[derive(Debug)]

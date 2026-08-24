@@ -264,6 +264,12 @@ impl<'a, S: ZkAmsMkheRnsNativeSourceSnapshotV1>
         &self.source
     }
 
+    /// Purpose-bound mutable forwarding for the source-packing replay.  The
+    /// source statement, terminal kernel, and zero-padding owner remain joined.
+    pub(super) fn source_packing_snapshot_mut_v2(&mut self) -> &mut S {
+        self.source.snapshot_mut()
+    }
+
     pub(super) const fn terminal(&self) -> &RnsNativeTerminalCrossBasisKernelPrerequisiteV1 {
         &self.terminal
     }

@@ -456,11 +456,43 @@ fn source_guards_keep_the_candidate_privately_declared_sealed_and_non_live() {
             .count(),
         1
     );
+    assert_eq!(
+        parent
+            .lines()
+            .filter(|line| line.trim_end().ends_with("mod state_recursive_fold;"))
+            .count(),
+        1
+    );
     assert!(parent.contains("#[path = \"offline_cash_v2/state_recursive_fold.rs\"]"));
     assert!(!parent.contains("pub mod state_recursive_fold"));
     assert!(source.contains("Privately declared, non-authorizing"));
     assert!(source.contains("BGH19 transcript bytes remain opaque"));
-    assert!(source.contains("mod sealed"));
+    assert_eq!(
+        source
+            .lines()
+            .filter(|line| line.trim() == "mod sealed {")
+            .count(),
+        1
+    );
+    assert_eq!(
+        source
+            .lines()
+            .filter(|line| line.trim_end().ends_with("mod sealed {"))
+            .count(),
+        1
+    );
+    assert!(source.contains("mod sealed {\n    pub trait Sealed {}\n}"));
+    assert!(!source.contains("pub(super) mod sealed"));
+    assert!(
+        !source
+            .lines()
+            .any(|line| line.trim() == "pub(super) trait Sealed {}")
+    );
+    assert!(
+        !source
+            .lines()
+            .any(|line| { line.trim() == "pub(in crate::zk::offline_cash_v2) trait Sealed {}" })
+    );
     assert!(source.contains("enum StateRecursiveCompilerAdapterV2 {}"));
     assert!(source.contains("enum StateRecursiveCircuitAdapterV2 {}"));
     assert!(source.contains("enum StateRecursiveArtifactAdapterV2 {}"));

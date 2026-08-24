@@ -1140,7 +1140,7 @@ VPN_QUOTE_SESSION_ID = "44" * 16
 VPN_PAYMENT_HASH = "22" * 32
 VPN_METERING_KEY = "33" * 32
 VPN_LEASE_ID = VPN_QUOTE_ID
-VPN_HELPER_TICKET_HEX = "5356504e48543100" + "00" * 688
+VPN_HELPER_TICKET_HEX = "5356504e48543100" + "00" * 780
 VPN_RELAY_ID_HEX = "d75a980182b10ab7d54bfed3c964073a0ee172f3daa62325af021a68f707511a"
 
 
@@ -1216,7 +1216,7 @@ def _vpn_quote_payload() -> Dict[str, Any]:
 def _vpn_session_payload() -> Dict[str, Any]:
     quote_payload = _vpn_quote_payload()
     return {
-        "session_id": VPN_QUOTE_ID,
+        "session_id": VPN_QUOTE_SESSION_ID,
         "account_id": VPN_ACCOUNT,
         "exit_class": quote_payload["exit_class"],
         "relay_endpoint": quote_payload["relay_endpoint"],
@@ -1249,7 +1249,7 @@ def _vpn_session_payload() -> Dict[str, Any]:
 def _vpn_receipt_payload(status: str = "settled") -> Dict[str, Any]:
     session_payload = _vpn_session_payload()
     return {
-        "session_id": VPN_QUOTE_ID,
+        "session_id": VPN_QUOTE_SESSION_ID,
         "account_id": VPN_ACCOUNT,
         "exit_class": session_payload["exit_class"],
         "relay_endpoint": session_payload["relay_endpoint"],
@@ -1260,7 +1260,9 @@ def _vpn_receipt_payload(status: str = "settled") -> Dict[str, Any]:
         "bytes_in": 1024,
         "bytes_out": 2048,
         "status": status,
-        "receipt_source": "relay" if status == "settled" else "torii",
+        "receipt_source": (
+            "relay" if status in {"settlement_pending", "settled"} else "torii"
+        ),
         "quote_id": VPN_QUOTE_ID,
         "payment_tx_hash": VPN_PAYMENT_HASH,
         "fee_asset_id": session_payload["fee_asset_id"],
@@ -1302,8 +1304,7 @@ def test_signed_vpn_methods_require_canonical_auth_before_dispatch() -> None:
                 metering_public_key_hex=VPN_METERING_KEY,
             )
         ),
-        lambda: client.get_vpn_session(VPN_QUOTE_ID),
-        lambda: client.delete_vpn_session(VPN_QUOTE_ID),
+        lambda: client.get_vpn_session(VPN_QUOTE_SESSION_ID),
         lambda: client.submit_vpn_receipt(
             VpnReceiptSubmitRequest(
                 relay_receipt_hex="abcd",
@@ -1331,11 +1332,7 @@ def test_signed_vpn_methods_require_canonical_auth_before_dispatch() -> None:
             canonical_auth=None,  # type: ignore[arg-type]
         ),
         lambda: client.get_vpn_session(
-            VPN_QUOTE_ID,
-            canonical_auth=None,  # type: ignore[arg-type]
-        ),
-        lambda: client.delete_vpn_session(
-            VPN_QUOTE_ID,
+            VPN_QUOTE_SESSION_ID,
             canonical_auth=None,  # type: ignore[arg-type]
         ),
         lambda: client.submit_vpn_receipt(
@@ -1574,14 +1571,14 @@ def test_canonical_request_auth_rejects_padded_fields_before_send() -> None:
     assert session.calls == []
 
 
-def test_vpn_session_accepts_exact_lowercase_696_byte_helper_ticket() -> None:
+def test_vpn_session_accepts_exact_lowercase_788_byte_helper_ticket() -> None:
     parsed = ToriiClient._parse_vpn_session(
         _vpn_session_payload(),
         context="vpn session response",
     )
 
     assert parsed.helper_ticket_hex == VPN_HELPER_TICKET_HEX
-    assert len(parsed.helper_ticket_hex) == 1392
+    assert len(parsed.helper_ticket_hex) == 1576
 
 
 @pytest.mark.parametrize(
@@ -1589,10 +1586,11 @@ def test_vpn_session_accepts_exact_lowercase_696_byte_helper_ticket() -> None:
     [
         "0x" + VPN_HELPER_TICKET_HEX,
         VPN_HELPER_TICKET_HEX.upper(),
+        VPN_HELPER_TICKET_HEX[:1456],
         VPN_HELPER_TICKET_HEX[:-1],
         VPN_HELPER_TICKET_HEX[:-2],
     ],
-    ids=["prefix", "uppercase", "odd-length", "wrong-even-length"],
+    ids=["prefix", "uppercase", "previous-728-byte-length", "odd-length", "wrong-even-length"],
 )
 def test_vpn_session_rejects_noncanonical_helper_ticket(helper_ticket_hex: str) -> None:
     payload = _vpn_session_payload()
@@ -1600,7 +1598,7 @@ def test_vpn_session_rejects_noncanonical_helper_ticket(helper_ticket_hex: str) 
 
     with pytest.raises(
         RuntimeError,
-        match=r"helper_ticket_hex must contain exactly 1392 lowercase hexadecimal characters",
+        match=r"helper_ticket_hex must contain exactly 1576 lowercase hexadecimal characters",
     ):
         ToriiClient._parse_vpn_session(payload, context="vpn session response")
 
@@ -1911,6 +1909,19 @@ def test_vpn_response_parsers_require_json_uint64_integers() -> None:
 
 
 @pytest.mark.parametrize(
+    "status",
+    ["disconnected", "expired", "replaced", "settlement_pending", "settled"],
+)
+def test_vpn_receipt_parser_accepts_exact_status_values(status: str) -> None:
+    receipt = ToriiClient._parse_vpn_receipt(
+        _vpn_receipt_payload(status),
+        context="vpn receipt",
+    )
+
+    assert receipt.status == status
+
+
+@pytest.mark.parametrize(
     ("parser", "payload", "field", "value", "context"),
     [
         (
@@ -1945,8 +1956,22 @@ def test_vpn_response_parsers_require_json_uint64_integers() -> None:
             ToriiClient._parse_vpn_session,
             _vpn_session_payload(),
             "session_id",
-            "0X" + VPN_QUOTE_ID,
+            "0X" + VPN_QUOTE_SESSION_ID,
             "vpn session",
+        ),
+        (
+            ToriiClient._parse_vpn_session,
+            _vpn_session_payload(),
+            "session_id",
+            VPN_QUOTE_ID,
+            "vpn session",
+        ),
+        (
+            ToriiClient._parse_vpn_receipt,
+            _vpn_receipt_payload(),
+            "session_id",
+            VPN_QUOTE_ID,
+            "vpn receipt",
         ),
         (
             ToriiClient._parse_vpn_session,
@@ -1969,6 +1994,8 @@ def test_vpn_response_parsers_require_json_uint64_integers() -> None:
         "quote-prefixed-session-id",
         "quote-uppercase-metering-key",
         "session-prefixed-id",
+        "session-overlong-id",
+        "receipt-overlong-session-id",
         "session-uppercase-payment-hash",
         "receipt-prefixed-lease-id",
     ],
@@ -1986,11 +2013,23 @@ def test_vpn_response_parsers_reject_noncanonical_ids_and_hashes(
         parser(payload, context=context)
 
 
-def test_vpn_session_delete_and_receipt_listing_use_native_receipts() -> None:
+def test_vpn_session_route_rejects_32_byte_ids_before_dispatch() -> None:
+    session = RecordingSession()
+    client = ToriiClient("https://node.test", session=session)
+
+    with pytest.raises(
+        RuntimeError,
+        match=r"vpn session_id must contain 32 hex characters",
+    ):
+        client.get_vpn_session(VPN_QUOTE_ID, canonical_auth=_vpn_auth([]))
+
+    assert session.calls == []
+
+
+def test_vpn_session_lookup_and_receipt_listing_use_native_receipts() -> None:
     session = RecordingSession()
     session.queue(StubResponse(status_code=201, payload=_vpn_session_payload()))
     session.queue(StubResponse(payload=_vpn_session_payload()))
-    session.queue(StubResponse(status_code=200, payload=_vpn_receipt_payload("disconnected")))
     session.queue(
         StubResponse(
             payload={
@@ -2012,25 +2051,26 @@ def test_vpn_session_delete_and_receipt_listing_use_native_receipts() -> None:
         ),
         canonical_auth=auth,
     )
-    fetched = client.get_vpn_session(VPN_QUOTE_ID, canonical_auth=auth)
-    deleted = client.delete_vpn_session(VPN_QUOTE_ID, canonical_auth=auth)
+    fetched = client.get_vpn_session(VPN_QUOTE_SESSION_ID, canonical_auth=auth)
     receipts = client.list_vpn_receipts(canonical_auth=auth)
-    missing = client.get_vpn_session(VPN_QUOTE_ID, canonical_auth=auth)
+    missing = client.get_vpn_session(VPN_QUOTE_SESSION_ID, canonical_auth=auth)
 
-    assert created.session_id == VPN_QUOTE_ID
+    assert created.session_id == VPN_QUOTE_SESSION_ID
     assert fetched is not None and fetched.payment_tx_hash == VPN_PAYMENT_HASH
-    assert deleted is not None and deleted.status == "disconnected"
-    assert deleted.settle_lease_instruction is not None
-    assert deleted.settle_lease_instruction.wire_id == "SettleVpnLease"
     assert receipts.total == 1
     assert receipts.items[0].refunded_fee == "75.125"
     assert missing is None
-    assert [call["method"] for call in session.calls] == ["POST", "GET", "DELETE", "GET", "GET"]
+    assert [call["method"] for call in session.calls] == ["POST", "GET", "GET", "GET"]
 
 
 def test_submit_vpn_receipt_parses_settlement_instruction() -> None:
     session = RecordingSession()
-    session.queue(StubResponse(status_code=201, payload=_vpn_receipt_payload()))
+    session.queue(
+        StubResponse(
+            status_code=201,
+            payload=_vpn_receipt_payload("settlement_pending"),
+        )
+    )
     client = ToriiClient("https://node.test", session=session)
     captured: List[bytes] = []
 
@@ -2049,7 +2089,7 @@ def test_submit_vpn_receipt_parses_settlement_instruction() -> None:
         "lease_id_hex": VPN_LEASE_ID,
         "relay_receipt_hex": "aa" * 12,
     }
-    assert receipt.status == "settled"
+    assert receipt.status == "settlement_pending"
     assert receipt.earned_fee == "25.125"
     assert receipt.refunded_fee == "75.125"
     assert receipt.settle_lease_instruction is not None
@@ -2129,7 +2169,11 @@ def test_fee_quote_posts_exact_payload_with_authority_signature() -> None:
 
 def test_fee_quote_rejects_authority_substitution_before_dispatch() -> None:
     session = RecordingSession()
-    client = ToriiClient("http://node.test", session=session)
+    client = ToriiClient(
+        "http://node.test",
+        session=session,
+        operator_signing_context=_operator_context(),
+    )
     auth = ToriiCanonicalRequestAuth(
         network_id=GOVERNANCE_NETWORK_ID,
         account_id="another-account",
@@ -4017,11 +4061,7 @@ def test_sumeragi_endpoint_methods_reject_swapped_payload_contracts() -> None:
     for endpoint, response, error_type, message in sumeragi_exact_json_response_cases():
         session = RecordingSession()
         session.queue(response)
-        client = ToriiClient(
-            "http://node.test",
-            session=session,
-            operator_signing_context=_operator_context(),
-        )
+        client = ToriiClient("http://node.test", session=session)
         with pytest.raises(error_type, match=message):
             getattr(client, f"get_sumeragi_{endpoint}")()
         assert response.was_closed is True, endpoint
@@ -5601,8 +5641,8 @@ def test_get_sumeragi_qc_requires_both_nullable_slots() -> None:
 
 def test_get_status_snapshot_parses_payload_and_computes_metrics() -> None:
     session = RecordingSession()
-    session.queue(StubResponse(payload=_status_payload(queue_size=4, da_total=1, approved=3, rejected=1, views=2)))
-    session.queue(StubResponse(payload=_status_payload(queue_size=9, da_total=4, approved=5, rejected=2, views=5)))
+    session.queue(StubResponse(payload=_status_payload(queue_size=4, approved=3, rejected=1, views=2)))
+    session.queue(StubResponse(payload=_status_payload(queue_size=9, approved=5, rejected=2, views=5)))
     client = ToriiClient("http://node.test", session=session)
 
     first = client.get_status_snapshot()
@@ -5624,7 +5664,6 @@ def test_get_status_snapshot_parses_payload_and_computes_metrics() -> None:
     assert second.metrics.queue_queued == 7
     assert second.metrics.queue_inflight == 2
     assert second.metrics.queue_delta == 5
-    assert second.metrics.da_reschedule_delta == 3
     assert second.metrics.tx_approved_delta == 2
     assert second.metrics.tx_rejected_delta == 1
     assert second.metrics.view_change_delta == 3
@@ -5665,7 +5704,6 @@ def test_get_pipeline_preflight_parses_payload_and_liveness_helper() -> None:
                 },
                 "block": {"max_transactions": 512},
                 "pipeline": {
-                    "signature_batch_max": 0,
                     "signature_batch_max_ed25519": 64,
                     "signature_batch_max_secp256k1": 16,
                     "signature_batch_max_pqc": 8,
@@ -5690,7 +5728,6 @@ def test_get_pipeline_preflight_parses_payload_and_liveness_helper() -> None:
     )
     status_payload = _status_payload(
         queue_size=2,
-        da_total=0,
         approved=0,
         rejected=0,
         views=0,
@@ -5719,10 +5756,34 @@ def test_get_pipeline_preflight_parses_payload_and_liveness_helper() -> None:
     assert session.calls[0]["url"].endswith("/v1/pipeline/preflight")
 
 
+def test_get_pipeline_preflight_rejects_retired_signature_batch_alias() -> None:
+    session = RecordingSession()
+    session.queue(
+        StubResponse(
+            payload={
+                "sumeragi": {},
+                "admission": {},
+                "block": {},
+                "pipeline": {"signature_batch_max": 0},
+            }
+        )
+    )
+    client = ToriiClient(
+        "http://node.test",
+        session=session,
+        operator_signing_context=_operator_context(),
+    )
+
+    with pytest.raises(
+        RuntimeError,
+        match=r"pipeline contains unsupported fields: signature_batch_max",
+    ):
+        client.get_pipeline_preflight()
+
+
 def _status_payload(
     *,
     queue_size: int,
-    da_total: int,
     approved: int,
     rejected: int,
     views: int,
@@ -5834,7 +5895,6 @@ def _status_payload(
         "time_since_last_block_ms": 100,
         "time_since_last_non_empty_block_ms": 1_000,
         "commit_time_ms": 250,
-        "da_reschedule_total": da_total,
         "txs_approved": approved,
         "txs_rejected": rejected,
         "view_changes": views,
@@ -6722,13 +6782,10 @@ def test_get_offline_capability_is_asset_neutral_and_exact() -> None:
     capability = client.get_offline_capability()
 
     assert isinstance(capability, OfflineStatus)
-    assert capability.mandatory is False
     assert capability.cash_handoff_capability == "cash_handoff_v1"
     assert capability.required_bridge_abi_version == 22
     assert capability.max_hops == 8
     assert capability.ready is True
-    assert capability.assets == ()
-    assert capability.blockers == ()
     call = session.calls[0]
     assert call["method"] == "GET"
     assert call["url"].endswith("/v1/offline/readiness")
@@ -7723,7 +7780,6 @@ def test_status_snapshot_parses_mode_and_consensus_caps() -> None:
                 "peers": 1,
                 "queue_size": 2,
                 "commit_time_ms": 3,
-                "da_reschedule_total": 4,
                 "txs_approved": 5,
                 "txs_rejected": 6,
                 "view_changes": 7,

@@ -2,6 +2,8 @@
 //! Router-level test for governance read endpoint wiring (`/v1/gov/proposals/{id}`).
 #![allow(clippy::similar_names)]
 #![cfg(feature = "app_api")]
+#[path = "common/governance.rs"]
+mod governance_fixture;
 use axum::{Router, routing::get};
 use http_body_util::BodyExt as _;
 use iroha_core::{
@@ -57,7 +59,7 @@ async fn gov_proposal_get_router_mapping() {
     }
     let proposer = checked_router_proposer_fixture();
     let rec = iroha_core::state::GovernanceProposalRecord {
-        proposer,
+        proposer: proposer.clone(),
         kind: ProposalKind::DeployContract(DeployContractProposal {
             contract_address: "irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw"
                 .parse()
@@ -70,7 +72,7 @@ async fn gov_proposal_get_router_mapping() {
         created_height: 0,
         status: iroha_core::state::GovernanceProposalStatus::Proposed,
         pipeline: iroha_core::state::GovernancePipeline::default(),
-        parliament_snapshot: None,
+        parliament_snapshot: governance_fixture::single_member_parliament_snapshot(&proposer, 0),
         finalization_evidence: None,
         enacted_at_height: None,
     };

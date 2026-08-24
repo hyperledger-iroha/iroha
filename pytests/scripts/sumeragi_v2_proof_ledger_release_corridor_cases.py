@@ -3275,7 +3275,6 @@ def test_release_corridor_prebuilds_and_publishes_source_bound_binaries() -> Non
         assert "TEST_NETWORK_IROHAD_FEATURES TEST_NETWORK_CARGO" in source
         assert "CARGO_BIN_EXE_iroha" in source
         assert "export IROHA_TEST_SKIP_BUILD=1" in source
-        assert "export IROHA_TEST_ALLOW_REENTRANT_BUILD=0" in source
         assert "IROHA_TEST_BUILD_TIMEOUT_MS=3600" in source
         assert "sumeragi-v2-release/${" in source
         assert "ensure_source_bound_localnet_binaries" in source

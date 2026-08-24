@@ -216,7 +216,10 @@ fn raw_core_query_response(
                 norito::codec::Encode::encode(&query),
             );
             let boxed: QueryBox<_> = Box::new(erased);
-            QueryRequest::Start(QueryWithParams::new(&boxed, params.clone()))
+            QueryRequest::Start(
+                QueryWithParams::new(&boxed, params.clone())
+                    .expect("benchmark query type has a canonical mapping"),
+            )
         }};
     }
     let request = match tag {
@@ -493,7 +496,8 @@ fn bench_snapshot_vs_live_find_domains_first_batch(c: &mut Criterion) {
     c.bench_function("snapshot_ephemeral_find_domains_first_batch", |b| {
         b.iter(|| {
             let request = iroha_data_model::query::QueryRequest::Start(
-                iroha_data_model::query::QueryWithParams::new(&qbox, params.clone()),
+                iroha_data_model::query::QueryWithParams::new(&qbox, params.clone())
+                    .expect("domain query type has a canonical mapping"),
             );
             let resp = run_on_snapshot(
                 &state,
@@ -521,7 +525,8 @@ fn bench_snapshot_vs_live_find_domains_first_batch(c: &mut Criterion) {
     c.bench_function("snapshot_stored_find_domains_first_batch", |b| {
         b.iter(|| {
             let request = iroha_data_model::query::QueryRequest::Start(
-                iroha_data_model::query::QueryWithParams::new(&qbox, params.clone()),
+                iroha_data_model::query::QueryWithParams::new(&qbox, params.clone())
+                    .expect("domain query type has a canonical mapping"),
             );
             let resp = run_on_snapshot_with_mode(
                 &state,
@@ -559,7 +564,8 @@ fn bench_snapshot_vs_live_find_domains_first_batch(c: &mut Criterion) {
             |b, limits| {
                 b.iter(|| {
                     let request = iroha_data_model::query::QueryRequest::Start(
-                        iroha_data_model::query::QueryWithParams::new(&qbox, params.clone()),
+                        iroha_data_model::query::QueryWithParams::new(&qbox, params.clone())
+                            .expect("domain query type has a canonical mapping"),
                     );
                     let resp =
                         run_on_snapshot(&state, &query_handle, &authority_id, request, *limits)
@@ -582,7 +588,8 @@ fn bench_snapshot_vs_live_find_domains_first_batch(c: &mut Criterion) {
         count_group.bench_with_input(BenchmarkId::new("stored", label), &limits, |b, limits| {
             b.iter(|| {
                 let request = iroha_data_model::query::QueryRequest::Start(
-                    iroha_data_model::query::QueryWithParams::new(&qbox, params.clone()),
+                    iroha_data_model::query::QueryWithParams::new(&qbox, params.clone())
+                        .expect("domain query type has a canonical mapping"),
                 );
                 let resp = run_on_snapshot_with_mode(
                     &state,
@@ -676,7 +683,8 @@ fn bench_snapshot_vs_live_find_assets_first_batch(c: &mut Criterion) {
     c.bench_function("snapshot_ephemeral_find_assets_first_batch", |b| {
         b.iter(|| {
             let request = iroha_data_model::query::QueryRequest::Start(
-                iroha_data_model::query::QueryWithParams::new(&qbox, params.clone()),
+                iroha_data_model::query::QueryWithParams::new(&qbox, params.clone())
+                    .expect("asset query type has a canonical mapping"),
             );
             let resp = run_on_snapshot(
                 &state,
@@ -703,7 +711,8 @@ fn bench_snapshot_vs_live_find_assets_first_batch(c: &mut Criterion) {
     c.bench_function("snapshot_stored_find_assets_first_batch", |b| {
         b.iter(|| {
             let request = iroha_data_model::query::QueryRequest::Start(
-                iroha_data_model::query::QueryWithParams::new(&qbox, params.clone()),
+                iroha_data_model::query::QueryWithParams::new(&qbox, params.clone())
+                    .expect("asset query type has a canonical mapping"),
             );
             let resp = run_on_snapshot_with_mode(
                 &state,
@@ -779,7 +788,8 @@ fn bench_snapshot_sorted_asset_defs_first_batch(c: &mut Criterion) {
     c.bench_function("snapshot_ephemeral_sorted_asset_defs_first_batch", |b| {
         b.iter(|| {
             let request = iroha_data_model::query::QueryRequest::Start(
-                iroha_data_model::query::QueryWithParams::new(&qbox, params.clone()),
+                iroha_data_model::query::QueryWithParams::new(&qbox, params.clone())
+                    .expect("asset-definition query type has a canonical mapping"),
             );
             let resp = run_on_snapshot(
                 &state,
@@ -806,7 +816,8 @@ fn bench_snapshot_sorted_asset_defs_first_batch(c: &mut Criterion) {
     c.bench_function("snapshot_stored_sorted_asset_defs_first_batch", |b| {
         b.iter(|| {
             let request = iroha_data_model::query::QueryRequest::Start(
-                iroha_data_model::query::QueryWithParams::new(&qbox, params.clone()),
+                iroha_data_model::query::QueryWithParams::new(&qbox, params.clone())
+                    .expect("asset-definition query type has a canonical mapping"),
             );
             let resp = run_on_snapshot_with_mode(
                 &state,
@@ -834,7 +845,8 @@ fn bench_snapshot_sorted_asset_defs_first_batch(c: &mut Criterion) {
     c.bench_function("snapshot_stored_sorted_asset_defs_first_continue", |b| {
         b.iter(|| {
             let request = iroha_data_model::query::QueryRequest::Start(
-                iroha_data_model::query::QueryWithParams::new(&qbox, params.clone()),
+                iroha_data_model::query::QueryWithParams::new(&qbox, params.clone())
+                    .expect("asset-definition query type has a canonical mapping"),
             );
             let first = run_on_snapshot_with_mode(
                 &state,

@@ -426,8 +426,8 @@ fn install_future_created_autoscale_lane(
         .expect("future-created lane count must be nonzero");
 
     state_transaction.nexus.autoscale.enabled = true;
-    state_transaction.nexus.autoscale.min_lanes = NonZeroU32::new(1).expect("nonzero min");
-    state_transaction.nexus.autoscale.max_lanes = lane_count;
+    state_transaction.nexus.autoscale.min_lane_id = NonZeroU32::new(1).expect("nonzero min");
+    state_transaction.nexus.autoscale.max_lane_id_exclusive = lane_count;
     state_transaction.nexus.lane_catalog =
         LaneCatalog::new(lane_count, vec![LaneConfig::default(), lane])
             .expect("future-created autoscale lane catalog");
@@ -769,18 +769,19 @@ fn sample_inrou_replica_runtime_state_for(
     replica_slot: u16,
     validator_account_id: AccountId,
 ) -> SoraInrouReplicaRuntimeStateV1 {
+    let peer_id = PeerId::from(validator_account_id.expect_single_signatory().clone()).to_string();
     SoraInrouReplicaRuntimeStateV1 {
         schema_version: SORA_INROU_REPLICA_RUNTIME_STATE_VERSION_V1,
         service_name,
         service_version: service_version.to_string(),
         replica_slot,
         validator_account_id,
-        peer_id: "12D3KooWInrouRuntimePeer".to_string(),
-        selected_backend: SoraInrouRuntimeBackendV1::PortableVm,
+        peer_id,
         selected_guest_isa: SoraInrouGuestIsaV1::Aarch64,
         health_status: iroha_data_model::soracloud::SoraServiceHealthStatusV1::Healthy,
         load_factor_bps: 250,
         materialized_bundle_hash: Hash::new(b"inrou-runtime-state-test-bundle"),
+        reporting_epoch: 1,
         accounted_egress_bytes: 0,
         pending_mailbox_message_count: 0,
         last_receipt_id: None,
@@ -803,7 +804,6 @@ fn sample_inrou_service_placement_record_for(
             replica_slot: runtime_state.replica_slot,
             validator_account_id: runtime_state.validator_account_id.clone(),
             peer_id: runtime_state.peer_id.clone(),
-            selected_backend: runtime_state.selected_backend,
             selected_guest_isa: runtime_state.selected_guest_isa,
             selected_geography_tag: None,
             selection_latency_ms: None,
@@ -948,10 +948,18 @@ fn service_runtime_mutations_require_exact_validator_placement() -> Result<(), e
         .get(&victim_name)
         .cloned()
         .expect("victim deployment");
+    let reporting_epoch = deployment_before_usage
+        .service_lease
+        .as_ref()
+        .expect("victim hosted-service lease")
+        .reporting_epoch;
     let lease_error = isi::ReportSoracloudServiceLeaseUsage {
         service_name: victim_name.clone(),
+        reporting_epoch,
         active_service_version: victim_version.to_owned(),
-        accounted_egress_bytes: u64::MAX,
+        replica_slot: 1,
+        replica_accounted_egress_bytes: u64::MAX,
+        finalize_reporter: false,
     }
     .execute(&BOB_ID, &mut stx)
     .expect_err("a validator assigned elsewhere must not inflate lease usage");
@@ -1244,7 +1252,7 @@ fn bundle_provenance(bundle: &SoraDeploymentBundleV1) -> ManifestProvenance {
 }
 fn rollback_provenance(
     service_name: &iroha_data_model::name::Name,
-    target_version: Option<&str>,
+    target_version: &str,
 ) -> ManifestProvenance {
     let payload = encode_rollback_provenance_payload(service_name.as_ref(), target_version)
         .expect("rollback payload");

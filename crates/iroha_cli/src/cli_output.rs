@@ -1,7 +1,7 @@
 //! CLI output helpers for text/JSON normalization.
+use crate::{CliOutputFormat, RunContext};
 use eyre::Result;
 use norito::json::JsonSerialize;
-use crate::{CliOutputFormat, RunContext};
 /// Emit JSON output or a text summary, depending on the CLI output format.
 pub fn print_with_optional_text<C, T>(context: &mut C, text: Option<String>, json: &T) -> Result<()>
 where

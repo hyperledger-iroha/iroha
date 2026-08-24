@@ -2749,36 +2749,6 @@ fn remaining_progress_witness_kernels_reject_primitive_trace_mutations() {
     assert!(recovery.expected_height - recovery.state_height <= 1);
     assert_eq!(recovery.durable_body.height, recovery.frozen_height);
     assert_eq!(recovery.stage, 1);
-    let apply_startup = ProductionDecisionApplyStartupTraceProjection {
-        recovery: ProductionDecisionRecoveryTraceProjection {
-            stage: 4,
-            ..recovery
-        },
-        apply_carrier_installed: true,
-    };
-    assert!(production_decision_apply_startup_refines_recovery_witness_kernel(apply_startup));
-    assert_eq!(
-        check_production_decision_apply_startup_transition(apply_startup)
-            .expect("exact recovered Apply carrier authorizes direct-Apply startup")
-            .into_projection(),
-        apply_startup
-    );
-    assert!(
-        !production_decision_apply_startup_refines_recovery_witness_kernel(
-            ProductionDecisionApplyStartupTraceProjection {
-                apply_carrier_installed: false,
-                ..apply_startup
-            }
-        )
-    );
-    assert!(
-        !production_decision_apply_startup_refines_recovery_witness_kernel(
-            ProductionDecisionApplyStartupTraceProjection {
-                recovery,
-                ..apply_startup
-            }
-        )
-    );
     let split_round_body = ProductionDurableBodyIdentityProjection {
         view: 2,
         ..durable_body

@@ -55,7 +55,6 @@ use iroha_data_model::{
     oracle::KeyedHash,
     peer::{Peer, PeerId},
     privacy::{PrivacyIssuerIdV1, PrivacyPolicyIdV1},
-    soracloud::SoraInrouRuntimeBackendV1,
     sorafs::{
         capacity::ProviderId,
         pin_registry::{
@@ -234,9 +233,15 @@ impl SoracloudRuntime {
     /// runtime posture checks performed by user-config parsing.
     pub fn assert_runtime_posture(&self) {
         self.inrou.assert_archive_resource_bounds();
+        self.inrou.assert_lifecycle_grace_bounds();
+        self.inrou.assert_portable_vm_v1_shape();
         assert!(
-            !self.inrou.enabled,
-            "first-release iroha3d forbids soracloud_runtime.inrou.enabled = true until PortableVM has mandatory mount, network, IPC, and MAC isolation; QEMU seccomp and uid firewalls alone are insufficient"
+            !self.inrou.enabled || self.production_mode,
+            "soracloud_runtime.inrou.enabled requires soracloud_runtime.production_mode = true"
+        );
+        assert!(
+            !self.hf.local_execution_enabled,
+            "soracloud_runtime.hf.local_execution_enabled is unavailable until generated HF execution is isolated by Inrou"
         );
         if !self.production_mode {
             return;
@@ -252,11 +257,6 @@ impl SoracloudRuntime {
         assert!(
             self.egress.max_bytes_per_minute.is_some(),
             "soracloud_runtime.production_mode requires soracloud_runtime.egress.max_bytes_per_minute"
-        );
-        assert!(
-            !self.hf.allow_inference_bridge_fallback
-                || self.hf.inference_credential_provider.is_some(),
-            "soracloud_runtime.hf.allow_inference_bridge_fallback requires soracloud_runtime.hf.inference_credential_provider"
         );
         assert!(
             self.submission.signer.is_some(),
@@ -291,17 +291,13 @@ impl_default!(SoracloudRuntimeCacheBudgets => {
         }
 });
 /// Resource ceilings for mutable Inrou microVM workloads.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct SoracloudRuntimeInrou {
-    /// Maximum number of Inrou VMs hosted concurrently (exactly one for PortableVM V1).
-    pub max_concurrent_vms: NonZeroU16,
     /// Whether this node advertises and materializes local Inrou workloads.
     pub enabled: bool,
-    /// Exact runtime backends this node is permitted to advertise and use.
-    pub backends: BTreeSet<SoraInrouRuntimeBackendV1>,
-    /// Fixed-corridor uid of the locked local `iroha-inrou` service account.
+    /// Canonical slot uid of the locked local `iroha-inrou-{slot}` service account.
     pub portable_vm_uid: Option<NonZeroU32>,
-    /// Fixed-corridor gid of the locked local `iroha-inrou` primary group.
+    /// Canonical slot gid of the locked local `iroha-inrou-{slot}` primary group.
     pub portable_vm_gid: Option<NonZeroU32>,
     /// Maximum aggregate hosted CPU budget in millicores.
     pub max_cpu_millis: NonZeroU32,
@@ -319,16 +315,18 @@ pub struct SoracloudRuntimeInrou {
     pub bundle_archive_max_file_bytes: NonZeroU64,
     /// Maximum aggregate decoded file size accepted from one bundle archive.
     pub bundle_archive_max_total_file_bytes: NonZeroU64,
-    /// Startup grace window before the manager treats the VM as failed.
+    /// Operator minimum startup grace before the manager treats the VM as failed.
+    ///
+    /// The effective worker grace is the maximum of this value and the workload manifest value.
     pub start_grace: Duration,
-    /// Shutdown grace window before the manager force-stops the VMM process.
+    /// Operator minimum shutdown grace before the manager force-stops the VMM process.
+    ///
+    /// The effective worker grace is the maximum of this value and the workload manifest value.
     pub stop_grace: Duration,
 }
 impl_default!(SoracloudRuntimeInrou => {
         Self {
-            max_concurrent_vms: defaults::soracloud_runtime::INROU_MAX_CONCURRENT_VMS,
             enabled: defaults::soracloud_runtime::INROU_ENABLED,
-            backends: BTreeSet::new(),
             portable_vm_uid: defaults::soracloud_runtime::INROU_PORTABLE_VM_UID,
             portable_vm_gid: defaults::soracloud_runtime::INROU_PORTABLE_VM_GID,
             max_cpu_millis: defaults::soracloud_runtime::INROU_MAX_CPU_MILLIS,
@@ -349,6 +347,30 @@ impl_default!(SoracloudRuntimeInrou => {
         }
 });
 impl SoracloudRuntimeInrou {
+    fn assert_portable_vm_v1_shape(&self) {
+        if !self.enabled {
+            assert!(
+                self.portable_vm_uid.is_none() && self.portable_vm_gid.is_none(),
+                "disabled soracloud_runtime.inrou must not retain a PortableVM identity"
+            );
+            return;
+        }
+        let uid = self
+            .portable_vm_uid
+            .expect("enabled soracloud_runtime.inrou requires portable_vm_uid")
+            .get();
+        let gid = self
+            .portable_vm_gid
+            .expect("enabled soracloud_runtime.inrou requires portable_vm_gid")
+            .get();
+        assert!(
+            defaults::soracloud_runtime::inrou_portable_vm_identity_slot(uid, gid).is_some(),
+            "soracloud_runtime.inrou PortableVM uid/gid must be one equal canonical slot pair in {}..{} (upper bound exclusive)",
+            defaults::soracloud_runtime::INROU_PORTABLE_VM_ID_BASE,
+            defaults::soracloud_runtime::INROU_PORTABLE_VM_ID_MAX_EXCLUSIVE,
+        );
+    }
+
     fn assert_archive_resource_bounds(&self) {
         assert!(
             self.bundle_archive_max_compressed_bytes.get()
@@ -383,6 +405,24 @@ impl SoracloudRuntimeInrou {
             self.bundle_archive_max_total_file_bytes <= self.bundle_archive_max_decoded_bytes,
             "soracloud_runtime.inrou.bundle_archive_max_total_file_bytes must not exceed bundle_archive_max_decoded_bytes"
         );
+    }
+
+    fn assert_lifecycle_grace_bounds(&self) {
+        let minimum =
+            Duration::from_millis(defaults::soracloud_runtime::INROU_LIFECYCLE_GRACE_MIN_MS);
+        let maximum =
+            Duration::from_millis(defaults::soracloud_runtime::INROU_LIFECYCLE_GRACE_MAX_MS);
+        for (field, value) in [
+            ("start_grace", self.start_grace),
+            ("stop_grace", self.stop_grace),
+        ] {
+            assert!(
+                (minimum..=maximum).contains(&value),
+                "soracloud_runtime.inrou.{field} must be between {} and {} milliseconds inclusive",
+                defaults::soracloud_runtime::INROU_LIFECYCLE_GRACE_MIN_MS,
+                defaults::soracloud_runtime::INROU_LIFECYCLE_GRACE_MAX_MS,
+            );
+        }
     }
 }
 /// Runtime-originated transaction submission settings.
@@ -473,16 +513,16 @@ pub struct SoracloudRuntimeHuggingFace {
     pub inference_base_url: String,
     /// Timeout applied to Hugging Face API and file requests.
     pub request_timeout: Duration,
-    /// Whether generated HF services should prefer the on-node local adapter path.
+    /// Exact HTTPS origins admitted for cross-origin importer redirects.
+    pub import_redirect_allowed_origins: Vec<String>,
+    /// Reserved host-local execution switch; V1 requires this to be `false`.
     pub local_execution_enabled: bool,
-    /// Program used to invoke the embedded local HF runner script.
+    /// Reserved local runner program; host-local execution is unavailable in V1.
     pub local_runner_program: String,
     /// Timeout applied to one local runner invocation.
     pub local_runner_timeout: Duration,
-    /// TTL used when the runtime emits authoritative model-host heartbeats after a successful local probe.
+    /// Reserved local-probe heartbeat TTL; host-local probing is unavailable in V1.
     pub model_host_heartbeat_ttl: Duration,
-    /// Whether the runtime may fall back to HF Inference when local execution fails.
-    pub allow_inference_bridge_fallback: bool,
     /// Maximum number of files imported into the node-local shared cache for one source.
     pub import_max_files: u32,
     /// Maximum size of one imported Hub file.
@@ -520,6 +560,8 @@ impl_default!(SoracloudRuntimeHuggingFace => {
             request_timeout: Duration::from_millis(
                 defaults::soracloud_runtime::hf::REQUEST_TIMEOUT_MS,
             ),
+            import_redirect_allowed_origins:
+                defaults::soracloud_runtime::hf::import_redirect_allowed_origins(),
             local_execution_enabled: defaults::soracloud_runtime::hf::LOCAL_EXECUTION_ENABLED,
             local_runner_program: defaults::soracloud_runtime::hf::LOCAL_RUNNER_PROGRAM.to_owned(),
             local_runner_timeout: Duration::from_millis(
@@ -528,8 +570,6 @@ impl_default!(SoracloudRuntimeHuggingFace => {
             model_host_heartbeat_ttl: Duration::from_millis(
                 defaults::soracloud_runtime::hf::MODEL_HOST_HEARTBEAT_TTL_MS,
             ),
-            allow_inference_bridge_fallback:
-                defaults::soracloud_runtime::hf::ALLOW_INFERENCE_BRIDGE_FALLBACK,
             import_max_files: defaults::soracloud_runtime::hf::IMPORT_MAX_FILES,
             import_max_file_bytes: defaults::soracloud_runtime::hf::IMPORT_MAX_FILE_BYTES,
             import_max_total_bytes: defaults::soracloud_runtime::hf::IMPORT_MAX_TOTAL_BYTES,
@@ -1209,10 +1249,10 @@ pub struct SoranetVpn {
     pub exit_class: String,
     /// Meter family identifier for billing receipts.
     pub meter_family: String,
-    /// Optional 32-byte shared secret used to mint helper-authenticated VPN tickets.
-    pub helper_ticket_secret: Option<[u8; 32]>,
     /// Relay operator account eligible for receipt settlement.
     pub operator_account_id: AccountId,
+    /// Dedicated Ed25519 signer for VPN quotes and helper tickets.
+    pub operator_key_pair: Option<KeyPair>,
     /// Fixed prepaid XOR lease fee.
     pub lease_fee: Quantity,
     /// Grace window after disconnect before unearned escrow can be refunded.
@@ -1230,8 +1270,8 @@ pub struct SoranetVpn {
     /// Externally provisioned digest authenticating the exact snapshot bytes.
     pub guard_directory_digest: Option<[u8; 32]>,
 }
-struct RedactedHelperTicketSecret(bool);
-impl fmt::Debug for RedactedHelperTicketSecret {
+struct RedactedVpnOperatorSigner(bool);
+impl fmt::Debug for RedactedVpnOperatorSigner {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter.write_str(if self.0 { "Some([REDACTED])" } else { "None" })
     }
@@ -1253,11 +1293,11 @@ impl fmt::Debug for SoranetVpn {
             .field("dns_push_interval", &self.dns_push_interval)
             .field("exit_class", &self.exit_class)
             .field("meter_family", &self.meter_family)
-            .field(
-                "helper_ticket_secret",
-                &RedactedHelperTicketSecret(self.helper_ticket_secret.is_some()),
-            )
             .field("operator_account_id", &self.operator_account_id)
+            .field(
+                "operator_signer",
+                &RedactedVpnOperatorSigner(self.operator_key_pair.is_some()),
+            )
             .field("lease_fee", &self.lease_fee)
             .field("settlement_grace", &self.settlement_grace)
             .field("route_pushes", &self.route_pushes)
@@ -1268,17 +1308,6 @@ impl fmt::Debug for SoranetVpn {
             .field("guard_directory_digest", &self.guard_directory_digest)
             .finish()
     }
-}
-#[cfg(test)]
-#[test]
-fn soranet_vpn_debug_redacts_helper_ticket_secret() {
-    let vpn = SoranetVpn {
-        helper_ticket_secret: Some([0xA5; 32]),
-        ..SoranetVpn::default()
-    };
-    let rendered = format!("{vpn:?}");
-    assert!(rendered.contains("helper_ticket_secret: Some([REDACTED])"));
-    assert!(!rendered.contains("[165, 165, 165"));
 }
 impl_default!(SoranetVpn => {
         Self {
@@ -1295,12 +1324,12 @@ impl_default!(SoranetVpn => {
             dns_push_interval: defaults::soranet::vpn::dns_push_interval_secs(),
             exit_class: defaults::soranet::vpn::EXIT_CLASS.to_string(),
             meter_family: defaults::soranet::vpn::METER_FAMILY.to_string(),
-            helper_ticket_secret: None,
             operator_account_id: AccountId::parse_encoded(
                 &defaults::soranet::vpn::operator_account_id(),
             )
             .expect("default vpn operator account id")
             .into_account_id(),
+            operator_key_pair: None,
             lease_fee: defaults::soranet::vpn::lease_fee(),
             settlement_grace: Duration::from_secs(defaults::soranet::vpn::SETTLEMENT_GRACE_SECS),
             route_pushes: defaults::soranet::vpn::route_pushes(),
@@ -1568,26 +1597,6 @@ pub struct LaneProfileLimits {
     /// Optional per-peer low-priority message rate.
     pub low_priority_rate_per_sec: Option<NonZeroU32>,
 }
-/// SCION routing configuration for P2P outbound dials.
-#[derive(Debug, Clone)]
-pub struct ScionConfig {
-    /// Enable SCION-guided outbound peer dialing.
-    pub enabled: bool,
-    /// Fallback to legacy transports when SCION route dialing fails or is unavailable.
-    pub fallback_to_legacy: bool,
-    /// Optional SCION listener endpoint hint (reserved for future inbound support).
-    pub listen_endpoint: Option<String>,
-    /// Per-peer SCION routes keyed by peer id.
-    pub routes: BTreeMap<PeerId, SocketAddr>,
-}
-impl_default!(ScionConfig => {
-        Self {
-            enabled: defaults::network::SCION_ENABLED,
-            fallback_to_legacy: defaults::network::SCION_FALLBACK_TO_LEGACY,
-            listen_endpoint: None,
-            routes: BTreeMap::new(),
-        }
-});
 /// Network options.
 #[derive(Debug, Clone)]
 #[allow(clippy::struct_excessive_bools)]
@@ -1691,8 +1700,6 @@ pub struct Network {
     pub quic_datagram_receive_buffer_bytes: usize,
     /// Send buffer reserved for QUIC datagrams per active QUIC connection (bytes).
     pub quic_datagram_send_buffer_bytes: usize,
-    /// SCION guided dialing options for outbound peer connections.
-    pub scion: ScionConfig,
     /// Enable TLS-over-TCP transport for outbound dials (feature-gated).
     /// When enabled and built with the `iroha_p2p/p2p_tls` feature, the dialer will
     /// attempt to establish a TLS 1.3 session to the peer's host:port and run the
@@ -3111,8 +3118,8 @@ struct NexusConsensusFusionV1 {
 #[derive(Encode)]
 struct NexusConsensusAutoscaleV1 {
     enabled: bool,
-    min_lanes: u32,
-    max_lanes: u32,
+    min_lane_id: u32,
+    max_lane_id_exclusive: u32,
     target_block_ms: u64,
     scale_out_latency_ratio_bits: u64,
     scale_in_latency_ratio_bits: u64,
@@ -3390,8 +3397,8 @@ pub fn nexus_consensus_policy_digest_with_runtime_policies(
         },
         autoscale: NexusConsensusAutoscaleV1 {
             enabled: autoscale.enabled,
-            min_lanes: autoscale.min_lanes.get(),
-            max_lanes: autoscale.max_lanes.get(),
+            min_lane_id: autoscale.min_lane_id.get(),
+            max_lane_id_exclusive: autoscale.max_lane_id_exclusive.get(),
             target_block_ms: autoscale.target_block_ms.get(),
             scale_out_latency_ratio_bits: nexus_consensus_ratio_bits(
                 "nexus.autoscale.scale_out_latency_ratio",
@@ -4557,13 +4564,9 @@ pub struct Autoscale {
     /// Whether consensus-driven lane autoscaling is enabled.
     pub enabled: bool,
     /// Inclusive lower lane-id bound reserved for autoscale-managed elastic lanes.
-    ///
-    /// Despite the legacy field name, this is not an active-lane count.
-    pub min_lanes: NonZeroU32,
+    pub min_lane_id: NonZeroU32,
     /// Exclusive upper lane-id bound reserved for autoscale-managed elastic lanes.
-    ///
-    /// Despite the legacy field name, this is not an active-lane count.
-    pub max_lanes: NonZeroU32,
+    pub max_lane_id_exclusive: NonZeroU32,
     /// Target block interval used by the autoscaler (milliseconds).
     pub target_block_ms: NonZeroU64,
     /// Scale-out latency ratio threshold versus target block interval.
@@ -4588,22 +4591,22 @@ pub struct Autoscale {
 impl Autoscale {
     /// Return whether `lane` is inside the autoscaler-owned elastic lane-id range.
     ///
-    /// The range is half-open: `min_lanes <= lane < max_lanes`. Callers that may
+    /// The range is half-open: `min_lane_id <= lane < max_lane_id_exclusive`. Callers that may
     /// receive programmatically constructed runtime state must validate that
-    /// `min_lanes < max_lanes` separately.
+    /// `min_lane_id < max_lane_id_exclusive` separately.
     #[must_use]
     pub fn contains_elastic_lane_id(&self, lane: LaneId) -> bool {
         let lane = lane.as_u32();
-        lane >= self.min_lanes.get() && lane < self.max_lanes.get()
+        lane >= self.min_lane_id.get() && lane < self.max_lane_id_exclusive.get()
     }
 }
 impl_default!(Autoscale => {
         Self {
             enabled: defaults::nexus::autoscale::ENABLED,
-            min_lanes: NonZeroU32::new(defaults::nexus::autoscale::MIN_LANES)
-                .expect("default autoscale min_lanes > 0"),
-            max_lanes: NonZeroU32::new(defaults::nexus::autoscale::MAX_LANES)
-                .expect("default autoscale max_lanes > 0"),
+            min_lane_id: NonZeroU32::new(defaults::nexus::autoscale::MIN_LANE_ID)
+                .expect("default autoscale min_lane_id > 0"),
+            max_lane_id_exclusive: NonZeroU32::new(defaults::nexus::autoscale::MAX_LANE_ID_EXCLUSIVE)
+                .expect("default autoscale max_lane_id_exclusive > 0"),
             target_block_ms: NonZeroU64::new(defaults::nexus::autoscale::TARGET_BLOCK_MS)
                 .expect("default autoscale target_block_ms > 0"),
             scale_out_latency_ratio: defaults::nexus::autoscale::SCALE_OUT_LATENCY_RATIO,
@@ -4832,8 +4835,6 @@ pub struct Pipeline {
     pub debug_trace_scheduler_inputs: bool,
     /// Emit transaction evaluation traces during overlay application (developer diagnostics).
     pub debug_trace_tx_eval: bool,
-    /// Maximum size for deterministic signature micro-batches (0 disables; historical alias for Ed25519).
-    pub signature_batch_max: usize,
     /// Per-scheme caps (0 disables) for signature batch verification.
     pub signature_batch_max_ed25519: usize,
     /// Maximum batch size for secp256k1 signatures (0 disables).
@@ -4897,7 +4898,6 @@ impl_default!(Pipeline => {
             gpu_key_bucket: defaults::pipeline::GPU_KEY_BUCKET,
             debug_trace_scheduler_inputs: defaults::pipeline::DEBUG_TRACE_SCHEDULER_INPUTS,
             debug_trace_tx_eval: defaults::pipeline::DEBUG_TRACE_TX_EVAL,
-            signature_batch_max: defaults::pipeline::SIGNATURE_BATCH_MAX,
             signature_batch_max_ed25519: defaults::pipeline::SIGNATURE_BATCH_MAX_ED25519,
             signature_batch_max_secp256k1: defaults::pipeline::SIGNATURE_BATCH_MAX_SECP256K1,
             signature_batch_max_pqc: defaults::pipeline::SIGNATURE_BATCH_MAX_PQC,
@@ -5230,13 +5230,13 @@ pub fn sumeragi_v2_nexus_amx_context_hash(
     );
     append(
         &mut preimage,
-        "nexus.autoscale.min_lanes",
-        &nexus.autoscale.min_lanes.get(),
+        "nexus.autoscale.min_lane_id",
+        &nexus.autoscale.min_lane_id.get(),
     );
     append(
         &mut preimage,
-        "nexus.autoscale.max_lanes",
-        &nexus.autoscale.max_lanes.get(),
+        "nexus.autoscale.max_lane_id_exclusive",
+        &nexus.autoscale.max_lane_id_exclusive.get(),
     );
     append(
         &mut preimage,
@@ -7582,8 +7582,6 @@ pub struct Push {
     pub fcm_project_id: Option<String>,
     /// Path to a Firebase service-account JSON key used to mint FCM OAuth tokens.
     pub fcm_service_account_path: Option<PathBuf>,
-    /// Deprecated FCM legacy API key. Kept for configuration compatibility only.
-    pub fcm_api_key: Option<String>,
     /// APNs environment (`sandbox` or `production`).
     pub apns_environment: String,
     /// APNs topic, usually the app bundle identifier.
@@ -7596,8 +7594,6 @@ pub struct Push {
     pub apns_private_key_path: Option<PathBuf>,
     /// Optional APNs endpoint base URL override for tests or private deployments.
     pub apns_endpoint: Option<String>,
-    /// Deprecated static APNs auth token. Kept for configuration compatibility only.
-    pub apns_auth_token: Option<String>,
 }
 impl_default!(Push => {
         Self {
@@ -7613,14 +7609,12 @@ impl_default!(Push => {
             .expect("default push max topics non-zero"),
             fcm_project_id: None,
             fcm_service_account_path: None,
-            fcm_api_key: None,
             apns_environment: defaults::torii::PUSH_APNS_ENVIRONMENT.to_string(),
             apns_topic: None,
             apns_team_id: None,
             apns_key_id: None,
             apns_private_key_path: None,
             apns_endpoint: None,
-            apns_auth_token: None,
         }
 });
 /// Torii API configuration.
@@ -10995,6 +10989,14 @@ impl_default!(SorafsPinPolicyConstraints => {
                 super::defaults::governance::sorafs_pin_policy::MAX_SUCCESSOR_FANOUT,
         }
 });
+/// Exact first-release Connect relay strategy.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ConnectRelayStrategy {
+    /// Re-broadcast Connect envelopes across the peer network.
+    Broadcast,
+    /// Keep Connect delivery inside the local Torii process.
+    LocalOnly,
+}
 /// Iroha Connect configuration.
 #[derive(Debug, Clone, Copy)]
 pub struct Connect {
@@ -11024,8 +11026,8 @@ pub struct Connect {
     pub dedupe_cap: usize,
     /// Enable P2P re-broadcast relay.
     pub relay_enabled: bool,
-    /// Relay strategy string (`broadcast` or `local_only`).
-    pub relay_strategy: &'static str,
+    /// Exact relay strategy.
+    pub relay_strategy: ConnectRelayStrategy,
     /// Hop TTL for Connect relay envelopes (0 disables cross-node rebroadcast).
     pub p2p_ttl_hops: u8,
 }

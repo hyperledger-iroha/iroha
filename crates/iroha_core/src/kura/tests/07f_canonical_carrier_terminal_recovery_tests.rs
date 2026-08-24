@@ -454,7 +454,8 @@ fn lifecycle_release_terminal_outcomes_are_exact_idempotent_and_ordered() {
         .collect::<Vec<_>>();
     let network_id = payloads[0].network_id;
     let epoch = payloads[0].epoch;
-    let (kura, _) = Kura::new(&config, &lane_config).expect("terminal-outcome Kura");
+    let (kura, _) = Kura::open_test_kura_with_configured_lane_config(&config, &lane_config)
+        .expect("terminal-outcome Kura");
     kura.bind_local_peer_id(local_peer.clone())
         .expect("bind terminal-outcome local peer");
     let generation = kura
@@ -807,7 +808,8 @@ fn lifecycle_release_terminal_outcomes_are_exact_idempotent_and_ordered() {
             .is_empty()
     );
     drop(kura);
-    let (reopened, _) = Kura::new(&config, &lane_config).expect("reopen completed outcomes");
+    let (reopened, _) = Kura::open_test_kura_with_configured_lane_config(&config, &lane_config)
+        .expect("reopen completed outcomes");
     assert!(
         reopened
             .pending_autonomous_lifecycle_terminal_outcome_inventory()
@@ -866,7 +868,8 @@ fn canonical_carrier_terminal_recovery_materializes_and_partitions_the_full_lane
     );
     let network_id = payloads[0].network_id;
     let epoch = payloads[0].epoch;
-    let (kura, _) = Kura::new(&config, &lane_config).expect("canonical terminal Kura");
+    let (kura, _) = Kura::open_test_kura_with_configured_lane_config(&config, &lane_config)
+        .expect("canonical terminal Kura");
     kura.bind_local_peer_id(local_peer.clone())
         .expect("bind canonical terminal local peer");
     let generation = kura

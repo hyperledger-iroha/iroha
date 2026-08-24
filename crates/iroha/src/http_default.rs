@@ -30,6 +30,7 @@ struct PendingRequest {
     body: Option<Vec<u8>>,
     timeout: Option<std::time::Duration>,
     max_response_bytes: usize,
+    direct_loopback: bool,
 }
 #[derive(Debug)]
 struct PreparedRequest {
@@ -39,6 +40,7 @@ struct PreparedRequest {
     body: Vec<u8>,
     timeout: Option<std::time::Duration>,
     max_response_bytes: usize,
+    direct_loopback: bool,
 }
 /// Default request builder implemented on top of `reqwest`.
 #[derive(Debug)]
@@ -65,6 +67,7 @@ impl DefaultRequestBuilder {
                 body: pending.body.unwrap_or_default(),
                 timeout: pending.timeout,
                 max_response_bytes: pending.max_response_bytes,
+                direct_loopback: pending.direct_loopback,
             },
         })
     }
@@ -90,6 +93,25 @@ impl DefaultRequestBuilder {
             Ok(pending)
         })
     }
+
+    /// Require a direct, proxy-free cleartext connection to an exact loopback host.
+    pub(crate) fn direct_loopback(self) -> Self {
+        self.and_then(|mut pending| {
+            let loopback = match pending.url.host() {
+                Some(url::Host::Domain(domain)) => domain == "localhost",
+                Some(url::Host::Ipv4(address)) => address.is_loopback(),
+                Some(url::Host::Ipv6(address)) => address.is_loopback(),
+                None => false,
+            };
+            if pending.url.scheme() != "http" || !loopback {
+                return Err(eyre!(
+                    "direct cleartext HTTP is restricted to exact localhost, 127/8, or ::1 loopback hosts"
+                ));
+            }
+            pending.direct_loopback = true;
+            Ok(pending)
+        })
+    }
 }
 /// Request built by [`DefaultRequestBuilder`].
 #[derive(Debug)]
@@ -105,6 +127,7 @@ pub struct RequestSnapshot {
     pub body: Vec<u8>,
     pub timeout: Option<std::time::Duration>,
     pub max_response_bytes: usize,
+    pub direct_loopback: bool,
 }
 #[cfg(test)]
 type SendHook = Arc<dyn Fn(RequestSnapshot) -> Result<Response<Bytes>> + Send + Sync + 'static>;
@@ -166,6 +189,7 @@ impl DefaultRequest {
             body: self.prepared.body.clone(),
             timeout: self.prepared.timeout,
             max_response_bytes: self.prepared.max_response_bytes,
+            direct_loopback: self.prepared.direct_loopback,
         }
     }
 }
@@ -206,8 +230,15 @@ impl DefaultRequest {
             body,
             timeout,
             max_response_bytes,
+            direct_loopback,
         } = self.prepared;
-        let client = http_client();
+        let direct_client = direct_loopback
+            .then(|| build_direct_loopback_http_client(&url))
+            .transpose()?;
+        let client = match &direct_client {
+            Some(client) => client,
+            None => http_client(),
+        };
         let mut builder = client.request(method.clone(), url.clone());
         for (name, value) in &headers {
             builder = builder.header(name.clone(), value.clone());
@@ -238,6 +269,7 @@ impl RequestBuilder for DefaultRequestBuilder {
                 body: None,
                 timeout: None,
                 max_response_bytes: DEFAULT_MAX_RESPONSE_BYTES,
+                direct_loopback: false,
             }),
         }
     }
@@ -345,7 +377,7 @@ fn http_client() -> &'static BlockingClient {
     static CLIENT: OnceLock<BlockingClient> = OnceLock::new();
     CLIENT.get_or_init(build_http_client)
 }
-fn build_http_client() -> BlockingClient {
+fn blocking_http_client_builder() -> reqwest::blocking::ClientBuilder {
     BlockingClient::builder()
         // This transport carries one-shot signed requests. Following a redirect
         // could replay a body after the original endpoint already admitted it.
@@ -353,8 +385,29 @@ fn build_http_client() -> BlockingClient {
         .retry(reqwest::retry::never())
         .connect_timeout(std::time::Duration::from_secs(10))
         .timeout(std::time::Duration::from_secs(60))
+}
+fn build_http_client() -> BlockingClient {
+    blocking_http_client_builder()
         .build()
         .expect("Failed to build blocking HTTP client")
+}
+fn build_direct_loopback_http_client(url: &Url) -> Result<BlockingClient> {
+    let mut builder = blocking_http_client_builder().no_proxy();
+    match url.host() {
+        Some(url::Host::Domain("localhost")) => {
+            let addresses = [
+                std::net::SocketAddr::from(([127, 0, 0, 1], 0)),
+                std::net::SocketAddr::from(([0, 0, 0, 0, 0, 0, 0, 1], 0)),
+            ];
+            builder = builder.resolve_to_addrs("localhost", &addresses);
+        }
+        Some(url::Host::Ipv4(address)) if address.is_loopback() => {}
+        Some(url::Host::Ipv6(address)) if address.is_loopback() => {}
+        _ => return Err(eyre!("direct HTTP client requires an exact loopback URL")),
+    }
+    builder
+        .build()
+        .wrap_err("failed to build direct loopback HTTP client")
 }
 struct ClientResponse {
     response: reqwest::blocking::Response,
@@ -486,6 +539,148 @@ mod tests {
         sync::Arc,
         time::{Duration, Instant},
     };
+
+    #[test]
+    fn direct_loopback_builder_is_fail_closed_and_leaves_https_proxy_capable() {
+        for allowed in [
+            "http://localhost:8080/v1/fees/quote",
+            "http://127.44.55.66:8080/v1/fees/quote",
+            "http://[::1]:8080/v1/fees/quote",
+        ] {
+            let request = DefaultRequestBuilder::new(
+                crate::http::Method::POST,
+                Url::parse(allowed).expect("loopback URL"),
+            )
+            .direct_loopback()
+            .build()
+            .expect("direct loopback request");
+            assert!(request.snapshot().direct_loopback);
+        }
+        for rejected in [
+            "http://example.com/v1/fees/quote",
+            "http://[::2]/v1/fees/quote",
+            "https://localhost:8080/v1/fees/quote",
+        ] {
+            assert!(
+                DefaultRequestBuilder::new(
+                    crate::http::Method::POST,
+                    Url::parse(rejected).expect("rejected URL"),
+                )
+                .direct_loopback()
+                .build()
+                .is_err(),
+                "direct-loopback mode admitted {rejected}"
+            );
+        }
+        let https = DefaultRequestBuilder::new(
+            crate::http::Method::POST,
+            Url::parse("https://fees.example/v1/fees/quote").expect("HTTPS URL"),
+        )
+        .build()
+        .expect("ordinary HTTPS request");
+        assert!(
+            !https.snapshot().direct_loopback,
+            "HTTPS must retain the ordinary system-proxy-capable transport"
+        );
+    }
+
+    #[test]
+    fn kagemusha_lifecycle_loopback_transport_ignores_proxy_environment() {
+        const CHILD: &str = "IROHA_LOOPBACK_PROXY_TEST_CHILD";
+        const TARGET: &str = "IROHA_LOOPBACK_PROXY_TEST_TARGET";
+        if std::env::var_os(CHILD).is_some() {
+            let url = std::env::var(TARGET).expect("child target URL");
+            let response = DefaultRequestBuilder::new(
+                crate::http::Method::POST,
+                Url::parse(&url).expect("child target URL parse"),
+            )
+            .direct_loopback()
+            .body(b"authenticated fee quote".to_vec())
+            .timeout(Duration::from_secs(2))
+            .build()
+            .expect("child direct request")
+            .send()
+            .expect("child direct response");
+            assert_eq!(response.status(), http::StatusCode::OK);
+            return;
+        }
+
+        fn serve_once(listener: TcpListener, status: &str) -> bool {
+            listener
+                .set_nonblocking(true)
+                .expect("nonblocking listener");
+            let deadline = Instant::now() + Duration::from_secs(3);
+            loop {
+                match listener.accept() {
+                    Ok((mut stream, _)) => {
+                        stream
+                            .set_read_timeout(Some(Duration::from_secs(1)))
+                            .expect("proxy test stream read timeout");
+                        let mut request = [0_u8; 2048];
+                        let read = stream.read(&mut request).expect("read proxy test request");
+                        assert!(read > 0, "proxy test request must not be empty");
+                        write!(
+                            stream,
+                            "HTTP/1.1 {status}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+                        )
+                        .expect("write proxy test response");
+                        return true;
+                    }
+                    Err(error) if error.kind() == ErrorKind::WouldBlock => {
+                        if Instant::now() >= deadline {
+                            return false;
+                        }
+                        thread::sleep(Duration::from_millis(10));
+                    }
+                    Err(error) => panic!("proxy test listener failed: {error}"),
+                }
+            }
+        }
+
+        let target_listener = TcpListener::bind("127.0.0.1:0").expect("target listener");
+        let target_address = target_listener.local_addr().expect("target address");
+        let proxy_listener = TcpListener::bind("127.0.0.1:0").expect("proxy listener");
+        let proxy_address = proxy_listener.local_addr().expect("proxy address");
+        let target_server = thread::spawn(move || serve_once(target_listener, "200 OK"));
+        let proxy_server = thread::spawn(move || serve_once(proxy_listener, "502 Bad Gateway"));
+        let proxy_url = format!("http://{proxy_address}");
+        let child = std::process::Command::new(std::env::current_exe().expect("test executable"))
+            .args([
+                "--exact",
+                "http_default::tests::kagemusha_lifecycle_loopback_transport_ignores_proxy_environment",
+                "--nocapture",
+            ])
+            .env(CHILD, "1")
+            .env(
+                TARGET,
+                format!("http://localhost:{}/v1/fees/quote", target_address.port()),
+            )
+            .env("HTTP_PROXY", &proxy_url)
+            .env("http_proxy", &proxy_url)
+            .env("ALL_PROXY", &proxy_url)
+            .env("all_proxy", &proxy_url)
+            .env_remove("NO_PROXY")
+            .env_remove("no_proxy")
+            .env_remove("REQUEST_METHOD")
+            .output()
+            .expect("run isolated proxy child");
+        let target_received = target_server.join().expect("target server");
+        let proxy_received = proxy_server.join().expect("proxy server");
+        assert!(
+            child.status.success(),
+            "isolated direct-loopback child failed: {}",
+            String::from_utf8_lossy(&child.stderr)
+        );
+        assert!(
+            target_received,
+            "direct loopback target received no request"
+        );
+        assert!(
+            !proxy_received,
+            "HTTP_PROXY/ALL_PROXY captured the cleartext loopback request"
+        );
+    }
+
     #[test]
     fn owned_http_client_does_not_follow_signed_body_redirects() {
         for (status_code, reason) in [

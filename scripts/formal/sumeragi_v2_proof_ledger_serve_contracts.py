@@ -1455,7 +1455,7 @@ _SERVICED_CANDIDATE_V4_RUNTIME_ITEM_SHA256 = {
         "a9dcc40ab11d2af33c91c5449a24bd524289d8a00e89ea2cdfafe99b27ed2a86"
     ),
     "with_driver_and_lifecycle_ordinals": (
-        "9153d6ea1ec623e67ceb28226b5eaa65a36c0a7a5522e220f3e3646ccb41cc1e"
+        "1696486255d16af1779a46c10dee8e213104aa4c900d089f3ab0f962b11607eb"
     ),
     "freeze_due_clock_owners": (
         "86b2abb4734419e69faafa8bd5fd0473626fb2441b94469a81a448e5f661c76e"
@@ -1493,8 +1493,8 @@ _SERVICED_CANDIDATE_V4_RUNTIME_ITEM_SHA256 = {
     ),
 }
 _SERVICED_CANDIDATE_V4_LIFECYCLE_ITEM_SHA256 = {
-    "launch": "93b7ee656bf767b3e41bb2a6d4436a770bccbe8b7c7f41155a2ab4fa76188f88",
-    "into_serialized_runtime": "e895a7575f49a1f4e5247abda656b4ad6618bf1aefb6cd98f73cd3f6c5245b03",
+    "launch": "d3b9a9f68ce361cb3609c5b181869ae483ca76ac3eea33c0a72ad6f57ba76b48",
+    "into_serialized_runtime": "87068a8d2dee32dfba73139870cb7c2cd3128d452ad38f5c478be9c4503bd192",
 }
 _SAFETY_WAL_DIRECTORY_CAPABILITY_REGRESSION_TEST_SHA256 = {
     "open_rejects_a_preexisting_symlink_for_the_owned_wal_directory": (

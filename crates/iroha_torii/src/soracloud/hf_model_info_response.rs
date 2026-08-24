@@ -2,10 +2,9 @@
 use super::SoracloudError;
 use futures_util::{Stream, StreamExt as _};
 use iroha_config::parameters::{actual::SoracloudRuntimeHuggingFace, defaults};
-use iroha_data_model::soracloud::{SoraHfBackendFamilyV1, SoraHfModelFormatV1};
-use std::{collections::BTreeSet, fmt};
+use iroha_data_model::soracloud::{SoraHfWeightSelectionV1, derive_hf_weight_selection_v1};
+use std::fmt;
 const INITIAL_ALLOCATION_BYTES: usize = 16 * 1024;
-type WeightFileSelection = (SoraHfBackendFamilyV1, SoraHfModelFormatV1, Vec<String>);
 /// Read provider-controlled model metadata under its source configuration cap.
 ///
 /// The same `soracloud_runtime.hf.model_info_max_response_bytes` value bounds
@@ -59,75 +58,24 @@ pub(super) fn decode(
         ))
     })
 }
-/// Select the canonical weight format without cloning the full path list.
-///
-/// Format precedence matches the first-release profile contract: GGUF, then SafeTensors, then
-/// PyTorch. Only selected strings are copied from the decoded tree; the full provider-controlled
-/// sibling list is never duplicated. Unique weight paths are capped by the same `import_max_files`
-/// source policy that bounds the runtime importer, preventing one draft from amplifying into an
-/// unbounded sequence of provider HEAD requests.
-pub(super) fn select_weight_files(
+/// Derive the shared immutable weight selection used by Torii and the runtime importer.
+pub(super) fn derive_weight_selection(
     model_info: &norito::json::Value,
     config: &SoracloudRuntimeHuggingFace,
     repo_id: &str,
     resolved_revision: &str,
-) -> Result<Option<WeightFileSelection>, SoracloudError> {
-    const GGUF: &[&str] = &[".gguf"];
-    const SAFETENSORS: &[&str] = &[".safetensors"];
-    const PYTORCH: &[&str] = &[".bin", ".pt", ".pth"];
-    let maximum_files = configured_maximum_weight_files(config)?;
-    let (backend_family, model_format, extensions) =
-        if sibling_paths(model_info).any(|path| has_extension(path, GGUF)) {
-            (SoraHfBackendFamilyV1::Gguf, SoraHfModelFormatV1::Gguf, GGUF)
-        } else if sibling_paths(model_info).any(|path| has_extension(path, SAFETENSORS)) {
-            (
-                SoraHfBackendFamilyV1::Transformers,
-                SoraHfModelFormatV1::Safetensors,
-                SAFETENSORS,
-            )
-        } else if sibling_paths(model_info).any(|path| has_extension(path, PYTORCH)) {
-            (
-                SoraHfBackendFamilyV1::Transformers,
-                SoraHfModelFormatV1::PyTorch,
-                PYTORCH,
-            )
-        } else {
-            return Ok(None);
-        };
-    let mut seen = BTreeSet::new();
-    let mut weight_files = Vec::new();
-    weight_files
-        .try_reserve_exact(maximum_files)
-        .map_err(|err| {
-            SoracloudError::internal(format!(
-                "failed to reserve bounded Hugging Face weight-file list: {err}"
-            ))
-        })?;
-    for path in sibling_paths(model_info).filter(|path| has_extension(path, extensions)) {
-        if !seen.insert(path) {
-            continue;
-        }
-        if weight_files.len() == maximum_files {
-            return Err(SoracloudError::conflict(format!(
-                "Hugging Face model info for `{repo_id}@{resolved_revision}` contains more than the configured {maximum_files} unique weight files"
-            )));
-        }
-        weight_files.push(path.to_owned());
-    }
-    Ok(Some((backend_family, model_format, weight_files)))
-}
-fn sibling_paths(model_info: &norito::json::Value) -> impl Iterator<Item = &str> {
-    model_info
-        .get("siblings")
-        .and_then(norito::json::Value::as_array)
-        .into_iter()
-        .flatten()
-        .filter_map(|entry| entry.get("rfilename").and_then(norito::json::Value::as_str))
-}
-fn has_extension(path: &str, extensions: &[&str]) -> bool {
-    extensions.iter().any(|extension| {
-        path.get(path.len().saturating_sub(extension.len())..)
-            .is_some_and(|suffix| suffix.eq_ignore_ascii_case(extension))
+) -> Result<Option<SoraHfWeightSelectionV1>, SoracloudError> {
+    configured_maximum_weight_files(config)?;
+    derive_hf_weight_selection_v1(
+        model_info,
+        config.import_max_files,
+        config.import_max_file_bytes,
+        config.import_max_total_bytes,
+    )
+    .map_err(|error| {
+        SoracloudError::conflict(format!(
+            "invalid immutable Hugging Face weight metadata for `{repo_id}@{resolved_revision}`: {error}"
+        ))
     })
 }
 fn configured_maximum_bytes(config: &SoracloudRuntimeHuggingFace) -> Result<u64, SoracloudError> {
@@ -142,7 +90,7 @@ fn configured_maximum_bytes(config: &SoracloudRuntimeHuggingFace) -> Result<u64,
 }
 fn configured_maximum_weight_files(
     config: &SoracloudRuntimeHuggingFace,
-) -> Result<usize, SoracloudError> {
+) -> Result<(), SoracloudError> {
     let maximum_files = config.import_max_files;
     let hard_maximum = defaults::soracloud_runtime::hf::IMPORT_MAX_FILES_LIMIT;
     if maximum_files == 0 || maximum_files > hard_maximum {
@@ -150,11 +98,18 @@ fn configured_maximum_weight_files(
             "soracloud_runtime.hf.import_max_files must be within 1..={hard_maximum}, found {maximum_files}"
         )));
     }
-    usize::try_from(maximum_files).map_err(|_| {
-        SoracloudError::internal(format!(
-            "configured Hugging Face import file limit {maximum_files} does not fit this host"
-        ))
-    })
+    if config.import_max_file_bytes == 0
+        || config.import_max_file_bytes
+            > defaults::soracloud_runtime::hf::IMPORT_MAX_FILE_BYTES_LIMIT
+        || config.import_max_total_bytes == 0
+        || config.import_max_total_bytes
+            > defaults::soracloud_runtime::hf::IMPORT_MAX_TOTAL_BYTES_LIMIT
+    {
+        return Err(SoracloudError::internal(
+            "configured Hugging Face import byte limits are outside their first-release bounds",
+        ));
+    }
+    Ok(())
 }
 fn declared_content_length(
     response: &reqwest::Response,
@@ -352,24 +307,38 @@ mod tests {
         assert!(error.message.contains("before JSON decode"));
     }
     #[test]
-    fn weight_selection_preserves_precedence_case_and_order_without_full_clone() {
+    fn weight_selection_uses_shared_authenticated_precedence_and_sorted_set() {
         let model_info = norito::json!({
             "siblings": [
-                {"rfilename": "fallback.safetensors"},
-                {"rfilename": "shard-2.GGUF"},
+                {"rfilename": "fallback.safetensors", "lfs": {"sha256": "33".repeat(32), "size": 3}},
+                {"rfilename": "shard-2.GGUF", "lfs": {"sha256": "22".repeat(32), "size": 2}},
                 {"rfilename": "notes.txt"},
-                {"rfilename": "shard-1.gguf"}
+                {"rfilename": "shard-1.gguf", "lfs": {"sha256": "11".repeat(32), "size": 1}}
             ]
         });
         let config = config_with_limit(1024);
-        let selected = select_weight_files(&model_info, &config, REPO_ID, REVISION)
+        let selected = derive_weight_selection(&model_info, &config, REPO_ID, REVISION)
             .expect("valid selection")
             .expect("supported weights");
-        assert_eq!(selected.0, SoraHfBackendFamilyV1::Gguf);
-        assert_eq!(selected.1, SoraHfModelFormatV1::Gguf);
-        assert_eq!(selected.2, ["shard-2.GGUF", "shard-1.gguf"]);
+        assert_eq!(
+            selected.backend_family,
+            iroha_data_model::soracloud::SoraHfBackendFamilyV1::Gguf
+        );
+        assert_eq!(
+            selected.model_format,
+            iroha_data_model::soracloud::SoraHfModelFormatV1::Gguf
+        );
+        assert_eq!(selected.required_model_bytes, 3);
+        assert_eq!(
+            selected
+                .required_weight_files
+                .iter()
+                .map(|weight| weight.path.as_str())
+                .collect::<Vec<_>>(),
+            ["shard-1.gguf", "shard-2.GGUF"]
+        );
         assert!(
-            select_weight_files(
+            derive_weight_selection(
                 &norito::json!({"siblings": [{"rfilename": "notes.txt"}]}),
                 &config,
                 REPO_ID,
@@ -383,15 +352,15 @@ mod tests {
     fn weight_selection_deduplicates_then_enforces_the_import_file_cap() {
         let model_info = norito::json!({
             "siblings": [
-                {"rfilename": "same.gguf"},
-                {"rfilename": "same.gguf"},
-                {"rfilename": "second.gguf"}
+                {"rfilename": "same.gguf", "lfs": {"sha256": "11".repeat(32), "size": 1}},
+                {"rfilename": "same.gguf", "lfs": {"sha256": "11".repeat(32), "size": 1}},
+                {"rfilename": "second.gguf", "lfs": {"sha256": "22".repeat(32), "size": 1}}
             ]
         });
         let mut config = config_with_limit(1024);
         config.import_max_files = 1;
-        let error = select_weight_files(&model_info, &config, REPO_ID, REVISION)
+        let error = derive_weight_selection(&model_info, &config, REPO_ID, REVISION)
             .expect_err("second unique weight must exceed the source file cap");
-        assert!(error.message.contains("configured 1 unique weight files"));
+        assert!(error.message.contains("outside 1..=1"));
     }
 }

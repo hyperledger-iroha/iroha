@@ -14,7 +14,7 @@ final class ToriiKagemushaAPIModelsTests: XCTestCase {
     }
 
     func testEndpointConstantsUseSharpFirstReleaseRoutes() throws {
-        XCTAssertEqual(KagemushaToriiAPI.Endpoint.readiness.path, "/v1/offline/readiness")
+        XCTAssertEqual(KagemushaToriiAPI.Endpoint.capability.path, "/v1/offline/readiness")
         XCTAssertEqual(KagemushaToriiAPI.Endpoint.topUp.path, "/v1/offline/top-up")
         XCTAssertEqual(KagemushaToriiAPI.Endpoint.redeem.path, "/v1/offline/redeem")
         XCTAssertEqual(KagemushaToriiAPI.Endpoint.operations.path, "/v1/offline/operations")

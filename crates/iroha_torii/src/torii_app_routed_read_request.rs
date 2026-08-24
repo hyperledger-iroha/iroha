@@ -126,14 +126,14 @@ where
             TORII_ROUTED_READ_MAX_QUERY_PAIRS_V1,
         ));
     }
+    validate_app_routed_read_form(raw.as_bytes(), plan)?;
     // The checked serializer performs an allocation-free count, then writes
     // one exact intermediate JSON allocation. It owns at most one exact
-    // decoded key or value component at a time; duplicate detection streams
-    // future keys without allocating. The component is dropped before the
-    // typed decode starts, so the peak is raw request representations + one
-    // component + the two-unit JSON document, or raw representations + the
-    // JSON document + one typed-decode phase. Both fit the admitted App
-    // request geometry.
+    // decoded key or value component at a time. The component is dropped
+    // before the typed decode starts, so the peak is raw request
+    // representations + one component + the two-unit JSON document, or raw
+    // representations + the JSON document + one typed-decode phase. Both fit
+    // the admitted App request geometry.
     let query = ToriiRoutedReadFormJson {
         raw,
         plan,
@@ -673,17 +673,11 @@ impl norito::json::FastJsonWrite for ToriiRoutedReadFormJson<'_> {
         output.begin_container()?;
         output.push('{')?;
         let mut first = true;
-        for (index, pair) in torii_form_pairs(self.raw.as_bytes()).enumerate() {
+        for pair in torii_form_pairs(self.raw.as_bytes()) {
             let key = torii_exact_form_component(pair.key, self.plan.component_limit_bytes)?;
             // SAFETY: `torii_exact_form_component` constructs UTF-8 solely
             // from Unicode scalar encodings.
             let key_text = unsafe { std::str::from_utf8_unchecked(&key) };
-            let superseded = torii_form_pairs(self.raw.as_bytes())
-                .skip(index + 1)
-                .any(|later| key_text.chars().eq(ToriiFormLossyChars::new(later.key)));
-            if superseded {
-                continue;
-            }
             if !first {
                 output.push(',')?;
             }
@@ -756,28 +750,63 @@ mod torii_routed_read_request_tests {
         }
     }
     #[test]
-    fn query_pair_limit_is_exact_and_duplicate_last_wins() {
+    fn query_pair_limit_is_exact_with_unique_keys() {
         let phase = 64 * 1024;
         let plan =
             ToriiRoutedReadMemoryBudget::new(routed_read_working_set_for_phase(phase), phase)
                 .expect("test geometry")
                 .request_decode_plan()
                 .expect("request plan");
-        let exact = std::iter::repeat_n("limit=7", TORII_ROUTED_READ_MAX_QUERY_PAIRS_V1)
+        let exact = (0..TORII_ROUTED_READ_MAX_QUERY_PAIRS_V1)
+            .map(|index| format!("k{index}={index}"))
             .collect::<Vec<_>>()
             .join("&");
-        let decoded = decode_torii_proxy_query::<routing::ListFilterParams>(plan, Some(&exact))
+        let decoded = decode_torii_proxy_query::<norito::json::Value>(plan, Some(&exact))
             .expect("exact pair count decodes");
-        assert_eq!(decoded.limit, Some(7));
-        let decoded_key_duplicate =
-            decode_torii_proxy_query::<routing::ListFilterParams>(plan, Some("%6cimit=7&limit=9"))
-                .expect("decoded duplicate keys retain the final value");
-        assert_eq!(decoded_key_duplicate.limit, Some(9));
-        let oversized = format!("{exact}&limit=8");
-        let response =
-            decode_torii_proxy_query::<routing::ListFilterParams>(plan, Some(&oversized))
-                .expect_err("pair limit plus one is rejected");
+        assert_eq!(
+            decoded.as_object().map(norito::json::Map::len),
+            Some(TORII_ROUTED_READ_MAX_QUERY_PAIRS_V1)
+        );
+        let oversized = format!("{exact}&overflow=1");
+        let response = decode_torii_proxy_query::<norito::json::Value>(plan, Some(&oversized))
+            .expect_err("pair limit plus one is rejected");
         assert_eq!(response.status(), StatusCode::PAYLOAD_TOO_LARGE);
+    }
+    #[test]
+    fn proxy_queries_reject_duplicate_decoded_keys_and_malformed_percent_encoding() {
+        let phase = 64 * 1024;
+        let plan =
+            ToriiRoutedReadMemoryBudget::new(routed_read_working_set_for_phase(phase), phase)
+                .expect("test geometry")
+                .request_decode_plan()
+                .expect("request plan");
+        for query in ["limit=7&limit=9", "%6cimit=7&limit=9", "limit=%"] {
+            let response = decode_torii_proxy_query::<routing::ListFilterParams>(plan, Some(query))
+                .expect_err("noncanonical query must fail");
+            assert_eq!(response.status(), StatusCode::BAD_REQUEST, "query={query}");
+            assert_eq!(
+                response
+                    .headers()
+                    .get("x-iroha-reject-code")
+                    .and_then(|value| value.to_str().ok()),
+                Some("request_query_invalid"),
+                "query={query}"
+            );
+        }
+        for query in ["hash=a&hash=b", "%68ash=a&hash=b", "hash=%"] {
+            let response =
+                decode_torii_proxy_string_query::<PipelineStatusQuery>(plan, Some(query))
+                    .expect_err("noncanonical string query must fail");
+            assert_eq!(response.status(), StatusCode::BAD_REQUEST, "query={query}");
+            assert_eq!(
+                response
+                    .headers()
+                    .get("x-iroha-reject-code")
+                    .and_then(|value| value.to_str().ok()),
+                Some("request_query_invalid"),
+                "query={query}"
+            );
+        }
     }
     #[test]
     fn string_query_mode_preserves_decimal_and_whitespace_values() {

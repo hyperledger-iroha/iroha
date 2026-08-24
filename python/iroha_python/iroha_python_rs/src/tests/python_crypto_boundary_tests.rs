@@ -535,24 +535,85 @@ fn component_python_nonzero_digest_boundary_rejects_ambiguous_encodings() {
     assert!(python_nonzero_privacy_digest_v1(&[0; 32], "digest").is_err());
 }
 #[test]
-fn vega_python_device_digest_binds_intent_and_session() {
+fn exported_vega_python_device_digest_fails_closed_with_unavailable_profile() {
     use iroha_core::privacy_engines::verange::{VeRangeBitLengthV1, VeRangeParametersV1};
-    let profile =
-        python_compiled_privacy_profile_v1(PrivacyProtocolIdV1::VegaExistingCredentialZkV0, "Vega")
-            .expect("compiled Vega profile");
+
+    let protocol_id = PrivacyProtocolIdV1::VegaExistingCredentialZkV0;
+    assert!(matches!(
+        compiled_privacy_profile_v1(protocol_id),
+        Err(
+            iroha_core::privacy_profiles::CompiledPrivacyProfileErrorV1::EngineUnavailable {
+                protocol_id: unavailable,
+            }
+        ) if unavailable == protocol_id
+    ));
     let issuer_public_key = *VeRangeParametersV1::for_profile(VeRangeBitLengthV1::Bits32)
         .expect("P-256 parameters")
         .value_generator()
         .as_bytes();
+
+    ensure_python();
+    Python::attach(|py| {
+        let error = privacy_vega_device_authentication_digest_v1_py(
+            py,
+            &python_test_network_id(),
+            &[0xD2; 32],
+            &[0xA1; 32],
+            1,
+            &[0xA2; 32],
+            &issuer_public_key,
+            2026,
+            7,
+            28,
+            18,
+            &[0xB4; 32],
+            &[0xC3; 32],
+        )
+        .expect_err("the exported Vega digest boundary must reject an unavailable profile");
+        assert!(error.is_instance_of::<PyRuntimeError>(py));
+        let message = error.value(py).to_string();
+        assert!(
+            message.contains("compiled Vega privacy profile is unavailable"),
+            "unexpected public error: {message}"
+        );
+        assert!(
+            message.contains(
+                "native privacy engine for VegaExistingCredentialZkV0 is not governance-available"
+            ),
+            "the EngineUnavailable cause must remain observable: {message}"
+        );
+    });
+}
+#[test]
+fn vega_python_profile_is_unavailable_while_low_level_device_digest_binds_intent_and_session() {
+    use iroha_core::privacy_engines::verange::{VeRangeBitLengthV1, VeRangeParametersV1};
+    assert!(
+        python_compiled_privacy_profile_v1(
+            PrivacyProtocolIdV1::VegaExistingCredentialZkV0,
+            "Vega",
+        )
+        .is_err(),
+        "Vega must remain unavailable until its full-shape artifacts and evidence are authenticated"
+    );
+    let issuer_public_key = *VeRangeParametersV1::for_profile(VeRangeBitLengthV1::Bits32)
+        .expect("P-256 parameters")
+        .value_generator()
+        .as_bytes();
+    // Explicit nonzero bindings exercise only the low-level hash boundary;
+    // they are not a compiled profile or candidate admission authority.
     let context = |intent: [u8; 32]| PrivacyStatementContextV1 {
         network_id: python_test_network_id().inner,
         action_index: 0,
         transaction_intent_digest: PrivacyTransactionIntentDigestV1::new(intent),
-        parameter_id: profile.parameter_id,
-        parameter_digest: profile.parameter_digest,
-        verifier_digest: profile.verifier_digest,
-        statement_schema_digest: profile.statement_schema_digest,
-        engine_manifest_digest: profile.engine_manifest_digest,
+        parameter_id: iroha_data_model::privacy::PrivacyParameterIdV1::new([0x11; 32]),
+        parameter_digest: iroha_data_model::privacy::PrivacyParameterDigestV1::new([0x22; 32]),
+        verifier_digest: iroha_data_model::privacy::PrivacyVerifierDigestV1::new([0x33; 32]),
+        statement_schema_digest: iroha_data_model::privacy::PrivacyStatementSchemaDigestV1::new(
+            [0x44; 32],
+        ),
+        engine_manifest_digest: iroha_data_model::privacy::PrivacyEngineManifestDigestV1::new(
+            [0x55; 32],
+        ),
     };
     let statement = |intent, challenge| {
         python_vega_statement_v1(

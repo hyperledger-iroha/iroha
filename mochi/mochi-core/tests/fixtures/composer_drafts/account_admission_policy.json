@@ -1,10 +1,10 @@
 [
   {
     "kind": "account_admission_policy",
-    "domain": "wonderland.universal",
     "policy": {
       "mode": {
-        "mode": "ImplicitReceive"
+        "mode": "implicit_receive",
+        "value": null
       },
       "max_implicit_creations_per_tx": 3,
       "max_implicit_creations_per_block": 10,
@@ -12,7 +12,8 @@
         "asset_definition_id": "6pEP9RjNoZ7beWkT3pLfKoM1dyfi",
         "amount": "1",
         "destination": {
-          "destination": "Burn"
+          "destination": "Burn",
+          "value": null
         }
       },
       "min_initial_amounts": {

@@ -4164,14 +4164,6 @@ EXACT_FIXED_PROOF_PROPERTY_OPERATOR_BODIES = {
     ),
     (
         "SumeragiV2IndexedHistoricalRecoveryTransportClosureProofs",
-        "IndexedHistoricalFixedClockTemporalLeafProperties",
-    ): (
-        "\\A initialContext \\in AdmissibleContextRecords: "
-        "IndexedHistoricalTransport(initialContext)! "
-        "HistoricalTemporalFixedClockLeaves(IndexedChainSpec)"
-    ),
-    (
-        "SumeragiV2IndexedHistoricalRecoveryTransportClosureProofs",
         "IndexedHistoricalFixedClockPacketActionSelectionProperties",
     ): (
         "\\A initialContext \\in AdmissibleContextRecords: "

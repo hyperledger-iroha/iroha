@@ -286,7 +286,7 @@ _REMOTE_PROPOSAL_REPLAY_ITEM_SHA256 = {
     "authority_match": "fffb59ff81f0cdf5b0f8c1c222693c0fb586af021b2c68746ca5e846bf0ba8e5",
     "authority_pending": "cbea73229aa28cb8524d08e36bc0e89dabfe803f16791dfb1ea9519376082b82",
     "authority_fetch": "95992baebcab3fd7ecce16e4530609d27197b10e58b222764d0abc3e3acc3aae",
-    "runtime_regression": "68f986966b3caad71b570b0ebdff5e2aafdf08e8594c2a70b294cc2edb5c3a2b",
+    "runtime_regression": "9ae4b804a0b5bcae727b7ee1a6839099bf5c8b7b2d2704cd6e849b14fa406f69",
     "set_b_regression": "ab363d30b5f8743b4b26b2bb5e52d7db9bbfb61aa43bcac2a8452a16c091a231",
     "protected_rebind_regression": "779d05e40b2afedee904dcf6d7396de85ce1a8d4e33c2e168e2d9b2fb07e3144",
 }

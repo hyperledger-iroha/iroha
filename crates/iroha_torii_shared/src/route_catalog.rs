@@ -1062,6 +1062,9 @@ pub mod offline {
     pub const TOP_UP_PATH: &str = "/v1/offline/top-up";
     /// Submit a signed offline redemption operation.
     pub const REDEEM_PATH: &str = "/v1/offline/redeem";
+    /// Submit one exact ordinary Kagemusha V4 lifecycle transaction.
+    pub const KAGEMUSHA_LIFECYCLE_TRANSACTION_PATH: &str =
+        "/v1/offline/kagemusha/lifecycle-v4/transactions";
     /// Fetch one offline operation by its canonical operation ID.
     pub const OPERATION_PATH: &str = "/v1/offline/operations/{operation_id}";
     /// Descriptor for universal offline-wallet capability discovery.
@@ -1120,6 +1123,20 @@ pub mod offline {
     .with_feature_gate(FeatureGate::Feature("app_api"))
     .with_projections(RouteProjections::ALL)
     .with_cors_options(true);
+    /// Descriptor for exact ordinary Kagemusha V4 lifecycle submission.
+    pub const KAGEMUSHA_LIFECYCLE_TRANSACTION: RouteDescriptor = RouteDescriptor::new(
+        "offline.kagemusha_lifecycle_transaction",
+        HttpMethod::Post,
+        KAGEMUSHA_LIFECYCLE_TRANSACTION_PATH,
+        ApiSurface::Public,
+        Listener::Torii,
+        RouteEffect::Mutation,
+        AdmissionPolicy::AuthenticatedAccount,
+    )
+    .with_authentication(AuthenticationPolicy::CanonicalSignedBody)
+    .with_feature_gate(FeatureGate::Feature("app_api"))
+    .with_projections(RouteProjections::ALL)
+    .with_cors_options(true);
     /// Descriptor for reading one offline operation.
     pub const OPERATION: RouteDescriptor = RouteDescriptor::new(
         "offline.operation",
@@ -1135,8 +1152,14 @@ pub mod offline {
     .with_implicit_head(true)
     .with_cors_options(true);
     /// Canonical first-release offline API catalog.
-    pub const ROUTES: &[RouteDescriptor] =
-        &[READINESS, RECIPIENT_LINEAGE, TOP_UP, REDEEM, OPERATION];
+    pub const ROUTES: &[RouteDescriptor] = &[
+        READINESS,
+        RECIPIENT_LINEAGE,
+        TOP_UP,
+        REDEEM,
+        KAGEMUSHA_LIFECYCLE_TRANSACTION,
+        OPERATION,
+    ];
 }
 /// Alias lookup, private evaluation, and recipient-resolution descriptors.
 pub mod aliases {
@@ -1574,19 +1597,6 @@ pub mod core {
     .with_projections(RouteProjections::OPENAPI_AND_SDK)
     .with_implicit_head(true)
     .with_cors_options(true);
-    /// Delete one VPN session.
-    pub const VPN_SESSION_DELETE: RouteDescriptor = RouteDescriptor::new(
-        "vpn.session.delete",
-        HttpMethod::Delete,
-        "/v1/vpn/sessions/{session_id}",
-        ApiSurface::Public,
-        Listener::Torii,
-        RouteEffect::Mutation,
-        AdmissionPolicy::AuthenticatedAccount,
-    )
-    .with_authentication(AuthenticationPolicy::CanonicalAccountSignature)
-    .with_projections(RouteProjections::OPENAPI_AND_SDK)
-    .with_cors_options(true);
     /// Read the node's wall-clock sample.
     pub const TIME_NOW: RouteDescriptor = RouteDescriptor::new(
         "time.now",
@@ -1635,7 +1645,6 @@ pub mod core {
         VPN_RECEIPTS,
         VPN_RECEIPT_SUBMIT,
         VPN_SESSION,
-        VPN_SESSION_DELETE,
     ];
     /// Time routes registered by `add_time_routes`.
     pub const TIME_ROUTES: &[RouteDescriptor] = &[TIME_NOW, TIME_STATUS];
@@ -2525,9 +2534,6 @@ pub mod sumeragi {
     /// List registered consensus keys as an authenticated operator.
     pub const CONSENSUS_KEYS: RouteDescriptor =
         telemetry_operator_get("sumeragi.consensus_key.list", "/v1/sumeragi/consensus-keys");
-    /// List consensus-key lifecycle records as an authenticated operator.
-    pub const KEY_LIFECYCLE: RouteDescriptor =
-        telemetry_operator_get("sumeragi.key_lifecycle.list", "/v1/sumeragi/key-lifecycle");
     /// Read effective Sumeragi parameters as an authenticated operator.
     pub const PARAMETERS: RouteDescriptor =
         telemetry_operator_get("sumeragi.parameter.read", "/v1/sumeragi/params");
@@ -2553,7 +2559,6 @@ pub mod sumeragi {
         BRIDGE_FINALITY_ATTESTATION,
         BRIDGE_FINALITY_BUNDLE,
         CONSENSUS_KEYS,
-        KEY_LIFECYCLE,
         PARAMETERS,
     ];
 }
@@ -3766,8 +3771,8 @@ pub mod application_api {
         SNS_NAMES_BY_NAMESPACE_BY_LITERAL_GET => app_get("application.sns_names_by_namespace_by_literal_get", "/v1/sns/names/{namespace}/{literal}");
         SNS_POLICIES_BY_SUFFIX_ID_GET => app_get("application.sns_policies_by_suffix_id_get", "/v1/sns/policies/{suffix_id}");
         SORACLOUD_STATUS_GET => account_read_get("application.soracloud_status_get", "/v1/soracloud/status");
-        SORACLOUD_SERVICES_BY_SERVICE_NAME_PUBLIC_DISCOVERY_GET => app_sdk_get("application.soracloud_services_by_service_name_public_discovery_get", "/v1/soracloud/services/{service_name}/public-discovery");
-        SORACLOUD_SERVICES_BY_SERVICE_NAME_REVISIONS_BY_SERVICE_VERSION_PUBLIC_DISCOVERY_GET => app_sdk_get("application.soracloud_services_by_service_name_revisions_by_service_version_public_discovery_get", "/v1/soracloud/services/{service_name}/revisions/{service_version}/public-discovery");
+        SORACLOUD_SERVICES_BY_SERVICE_NAME_PUBLIC_DISCOVERY_GET => app_get("application.soracloud_services_by_service_name_public_discovery_get", "/v1/soracloud/services/{service_name}/public-discovery");
+        SORACLOUD_SERVICES_BY_SERVICE_NAME_REVISIONS_BY_SERVICE_VERSION_PUBLIC_DISCOVERY_GET => app_get("application.soracloud_services_by_service_name_revisions_by_service_version_public_discovery_get", "/v1/soracloud/services/{service_name}/revisions/{service_version}/public-discovery");
         SORACLOUD_DEPLOY_POST => soracloud_mutation_post("application.soracloud_deploy_post", "/v1/soracloud/deploy");
         SORACLOUD_UPGRADE_POST => soracloud_mutation_post("application.soracloud_upgrade_post", "/v1/soracloud/upgrade");
         SORACLOUD_APPS_DEPLOY_POST => soracloud_mutation_post("application.soracloud_apps_deploy_post", "/v1/soracloud/apps/deploy");
@@ -3799,7 +3804,7 @@ pub mod application_api {
         SORACLOUD_MODEL_ARTIFACT_REGISTER_POST => soracloud_mutation_post("application.soracloud_model_artifact_register_post", "/v1/soracloud/model/artifact/register");
         SORACLOUD_MODEL_ARTIFACT_STATUS_GET => account_read_sdk_get("application.soracloud_model_artifact_status_get", "/v1/soracloud/model/artifact/status");
         SORACLOUD_MODEL_UPLOAD_REGISTER_POST => soracloud_mutation_post("application.soracloud_model_upload_register_post", "/v1/soracloud/model/upload/register");
-        SORACLOUD_MODEL_UPLOAD_ENCRYPTION_RECIPIENT_GET => app_sdk_get("application.soracloud_model_upload_encryption_recipient_get", "/v1/soracloud/model/upload/encryption-recipient");
+        SORACLOUD_MODEL_UPLOAD_ENCRYPTION_RECIPIENT_GET => app_get("application.soracloud_model_upload_encryption_recipient_get", "/v1/soracloud/model/upload/encryption-recipient");
         SORACLOUD_MODEL_UPLOAD_STATUS_GET => account_read_sdk_get("application.soracloud_model_upload_status_get", "/v1/soracloud/model/upload/status");
         SORACLOUD_MODEL_UPLOAD_PRIVATE_EXECUTE_POST => soracloud_compute_post("application.soracloud_model_upload_private_execute_post", "/v1/soracloud/model/upload/private/execute");
         SORACLOUD_MODEL_UPLOAD_PRIVATE_RECEIPTS_GET => account_read_get("application.soracloud_model_upload_private_receipts_get", "/v1/soracloud/model/upload/private/receipts");
@@ -4187,37 +4192,6 @@ pub mod soracloud_gateway {
         AdmissionPolicy, ApiSurface, AuthenticationPolicy, FeatureGate, HttpMethod, Listener,
         PathPolicy, RouteDescriptor, RouteEffect, RouteMatch,
     };
-    /// Resolve a `SoraDNS` name to the root of its active public runtime.
-    pub const SORADNS_ROOT: RouteDescriptor = RouteDescriptor::new(
-        "protocol.soracloud.soradns_root",
-        HttpMethod::Any,
-        "/soradns/{fqdn}",
-        ApiSurface::Protocol,
-        Listener::Torii,
-        RouteEffect::ReadOnly,
-        AdmissionPolicy::Public,
-    )
-    .with_authentication(AuthenticationPolicy::Unauthenticated)
-    .with_feature_gate(FeatureGate::Feature("app_api"))
-    .with_path_policy(PathPolicy::ProtocolException {
-        reason: "public SoraDNS virtual-host gateway",
-    });
-    /// Forward a path under a `SoraDNS` public runtime.
-    pub const SORADNS_PATH: RouteDescriptor = RouteDescriptor::new(
-        "protocol.soracloud.soradns_path",
-        HttpMethod::Any,
-        "/soradns/{fqdn}/{*path}",
-        ApiSurface::Protocol,
-        Listener::Torii,
-        RouteEffect::ReadOnly,
-        AdmissionPolicy::Public,
-    )
-    .with_authentication(AuthenticationPolicy::Unauthenticated)
-    .with_feature_gate(FeatureGate::Feature("app_api"))
-    .with_route_match(RouteMatch::Wildcard)
-    .with_path_policy(PathPolicy::ProtocolException {
-        reason: "public SoraDNS virtual-host gateway wildcard",
-    });
     /// Forward the root path for a local `SoraCloud` public runtime.
     pub const LOCAL_ROOT: RouteDescriptor = RouteDescriptor::new(
         "protocol.soracloud.local_root",
@@ -4250,7 +4224,7 @@ pub mod soracloud_gateway {
         reason: "public SoraCloud runtime gateway wildcard",
     });
     /// Canonical public-runtime gateway route set.
-    pub const ROUTES: &[RouteDescriptor] = &[SORADNS_ROOT, SORADNS_PATH, LOCAL_ROOT, LOCAL_PATH];
+    pub const ROUTES: &[RouteDescriptor] = &[LOCAL_ROOT, LOCAL_PATH];
 }
 /// Raw content and `SoraDNS` directory routes.
 pub mod content_directory {

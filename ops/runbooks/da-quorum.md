@@ -71,7 +71,7 @@ summary: Operator procedure for responding to DA quorum degradation, missing-ava
 ### Step 4 — Verify Recovery
 
 1. Wait for at least two consecutive `iroha_da_quorum_ratio` samples ≥0.99.
-2. Confirm `increase(sumeragi_rbc_da_reschedule_total[5m])` returns to ≈0.
+2. Confirm `increase(sumeragi_da_gate_block_total{reason="missing_local_data"}[5m])` returns to ≈0.
 3. Check `nexus_lane_finality_lag_slots` ≤1 and `iroha_slot_duration_ms_latest` ≤1000 ms.
 4. Capture before/after dashboards and attach to the incident ticket.
 

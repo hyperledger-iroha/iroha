@@ -23,6 +23,9 @@ Domain endorsements let operators gate domain creation and reuse under a committ
 
 - Committees can be registered on‑chain (`RegisterDomainCommittee`) or derived from config defaults (`nexus.endorsement.committee_keys` + `nexus.endorsement.quorum`, id = `default`).
 - Per‑domain policies are configured via `SetDomainEndorsementPolicy` (committee id, `max_endorsement_age`, `required` flag). When absent, Nexus defaults are used.
+- Registering a committee or changing a policy requires the exact canonical
+  typed unit capability `CanManageConsensusKeys`; a same-name token carrying a
+  different JSON payload has no authority.
 
 ## CLI helpers
 

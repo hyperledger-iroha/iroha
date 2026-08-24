@@ -6,17 +6,13 @@ use crate::{
 };
 use iroha_data_model::{
     alias_setup::{
-        AccountAliasName, AccountAliasRoleV1, AccountProvisionV1, AliasAccountIntentV1,
         AliasAutoRenewConfigV1, AliasAutoRenewStateV1, AliasIntentV1, AliasPlanDispositionV1,
-        AliasTargetV1, ResolvedAccountAliasV1,
     },
     isi::{
-        account_alias_lease::AcquireAccountAliasLease,
         alias_setup::{
             CompareAndSetPrimaryAccountAlias, ConfigureAliasAutoRenew, EnsureAlias,
             RebindAccountAlias, RenewAliasLease,
         },
-        domain_link::SetAccountAliasBinding,
         error::{InstructionExecutionError, InvalidParameterError},
     },
     query::{error::QueryExecutionFail as QueryError, sns::prelude::*},
@@ -91,32 +87,6 @@ fn account_controller_for(
             )
         })
 }
-fn resolved_legacy_account_alias(
-    alias: &iroha_data_model::account::rekey::AccountAlias,
-    state_transaction: &StateTransaction<'_, '_>,
-) -> Result<ResolvedAccountAliasV1, Error> {
-    let literal = alias
-        .to_literal(&state_transaction.nexus.dataspace_catalog)
-        .map_err(|error| {
-            InstructionExecutionError::InvalidParameter(InvalidParameterError::SmartContract(
-                error.to_string().into(),
-            ))
-        })?;
-    let canonical_name = literal.parse::<AccountAliasName>().map_err(|error| {
-        InstructionExecutionError::InvalidParameter(InvalidParameterError::SmartContract(
-            error.to_string().into(),
-        ))
-    })?;
-    let resolved = ResolvedAccountAliasV1::new(canonical_name, alias.dataspace);
-    crate::alias_setup::validate_resolved_alias_target(
-        state_transaction.world(),
-        &state_transaction.nexus.dataspace_catalog,
-        &AliasTargetV1::AccountAlias(resolved.clone()),
-        state_transaction.block_unix_timestamp_ms(),
-    )
-    .map_err(alias_setup_instruction_error)?;
-    Ok(resolved)
-}
 fn charge_sns_quote(
     quote: &crate::sns::LeaseQuote,
     payer: AccountId,
@@ -131,182 +101,6 @@ fn charge_sns_quote(
     )
     .execute(authority, state_transaction)?;
     Ok(crate::sns::native_payment_for_quote(quote))
-}
-impl Execute for AcquireAccountAliasLease {
-    #[metrics(+"acquire_account_alias_lease_compat")]
-    fn execute(
-        self,
-        authority: &AccountId,
-        state_transaction: &mut StateTransaction<'_, '_>,
-    ) -> Result<(), Error> {
-        let Self {
-            alias,
-            owner,
-            payer,
-            term_years,
-            pricing_class_hint,
-        } = self;
-        if payer != *authority {
-            return Err(InstructionExecutionError::InvalidParameter(
-                InvalidParameterError::SmartContract(
-                    "AcquireAccountAliasLease payer must match transaction authority"
-                        .to_owned()
-                        .into(),
-                ),
-            )
-            .into());
-        }
-        if owner != *authority
-            && !crate::alias::authority_can_manage_account_alias(
-                state_transaction.world(),
-                authority,
-                &alias,
-            )
-        {
-            return Err(InstructionExecutionError::InvariantViolation(
-                "transaction authority must own the alias or hold exact CanManageAccountAlias"
-                    .to_owned()
-                    .into(),
-            )
-            .into());
-        }
-        let resolved = resolved_legacy_account_alias(&alias, state_transaction)?;
-        ensure_configured_policy_payment_asset(
-            state_transaction,
-            crate::sns::SnsNamespace::AccountAlias,
-        )?;
-        let now_ms = state_transaction.block_unix_timestamp_ms();
-        let quote = crate::sns::quote_account_alias_registration(
-            state_transaction.world(),
-            &state_transaction.nexus.dataspace_catalog,
-            &alias,
-            &owner,
-            term_years,
-            pricing_class_hint,
-            now_ms,
-        )
-        .map_err(alias_lease_instruction_error)?;
-        let payment = charge_sns_quote(&quote, payer, authority, state_transaction)?;
-        let target = AliasTargetV1::AccountAlias(resolved);
-        let metadata = crate::alias_setup::alias_registration_metadata(&target)
-            .map_err(alias_setup_instruction_error)?;
-        crate::sns::register_resolved_name(
-            state_transaction,
-            RegisterNameInput {
-                selector: quote.selector,
-                owner: owner.clone(),
-                controllers: vec![account_controller_for(&owner)?],
-                term_years,
-                pricing_class_hint: Some(quote.pricing_class),
-                payment,
-                metadata,
-            },
-        )
-        .map(|_| ())
-        .map_err(alias_lease_instruction_error)
-        .map_err(Into::into)
-    }
-}
-impl Execute for SetAccountAliasBinding {
-    #[metrics(+"set_account_alias_binding_compat")]
-    fn execute(
-        self,
-        authority: &AccountId,
-        state_transaction: &mut StateTransaction<'_, '_>,
-    ) -> Result<(), Error> {
-        let Self {
-            account,
-            alias,
-            lease_expiry_ms,
-        } = self;
-        if lease_expiry_ms.is_some() {
-            return Err(InstructionExecutionError::InvalidParameter(
-                InvalidParameterError::SmartContract(
-                    "legacy alias binding cannot mutate lease expiry; use RenewAliasLease"
-                        .to_owned()
-                        .into(),
-                ),
-            )
-            .into());
-        }
-        let primary = state_transaction.world.account(&account)?.label().cloned();
-        let Some(alias) = alias else {
-            let existing = state_transaction
-                .world
-                .account_aliases_by_account
-                .get(&account)
-                .cloned()
-                .unwrap_or_default();
-            for candidate in existing
-                .iter()
-                .filter(|candidate| Some(*candidate) != primary.as_ref())
-            {
-                if !crate::alias::authority_can_manage_account_alias(
-                    state_transaction.world(),
-                    authority,
-                    candidate,
-                ) {
-                    return Err(InstructionExecutionError::InvariantViolation(
-                        "authority lacks exact permission to clear a non-primary account alias"
-                            .to_owned()
-                            .into(),
-                    )
-                    .into());
-                }
-            }
-            for candidate in existing
-                .into_iter()
-                .filter(|candidate| Some(candidate) != primary.as_ref())
-            {
-                state_transaction
-                    .world
-                    .remove_account_alias_binding(&candidate);
-                state_transaction
-                    .world
-                    .account_rekey_records
-                    .remove(candidate);
-            }
-            return Ok(());
-        };
-        let resolved = resolved_legacy_account_alias(&alias, state_transaction)?;
-        let intent = AliasIntentV1::AccountAlias(AliasAccountIntentV1 {
-            alias: resolved,
-            target_account: account,
-            provision: AccountProvisionV1::Existing,
-            role: AccountAliasRoleV1::Additional,
-        });
-        crate::alias_setup::validate_alias_intent_authority(
-            state_transaction.world(),
-            authority,
-            &intent,
-        )
-        .map_err(alias_setup_instruction_error)?;
-        match crate::alias_setup::classify_alias_intent(
-            state_transaction.world(),
-            &state_transaction.nexus.dataspace_catalog,
-            &intent,
-            state_transaction.block_unix_timestamp_ms(),
-        )
-        .map_err(alias_setup_instruction_error)?
-        {
-            AliasPlanDispositionV1::NoOp => Ok(()),
-            AliasPlanDispositionV1::Repair => {
-                repair_alias_intent_resource(&intent, state_transaction)
-            }
-            AliasPlanDispositionV1::Create => Err(InstructionExecutionError::InvariantViolation(
-                "account alias binding requires an existing active SNS lease"
-                    .to_owned()
-                    .into(),
-            )
-            .into()),
-            AliasPlanDispositionV1::Conflict => Err(InstructionExecutionError::InvariantViolation(
-                "alias.binding.conflict: legacy binding cannot overwrite authoritative state"
-                    .to_owned()
-                    .into(),
-            )
-            .into()),
-        }
-    }
 }
 fn repair_alias_intent_resource(
     intent: &AliasIntentV1,

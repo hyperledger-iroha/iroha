@@ -472,6 +472,7 @@ python3 "$repo_root/scripts/copy_release_file.py" \
   --mode 0644
 mkdir -m 0755 \
   "$build_context/scripts" \
+  "$build_context/scripts/ci" \
   "$build_context/dist" \
   "$build_context/configs" \
   "$build_context/configs/sorafs" \
@@ -482,6 +483,10 @@ python3 "$repo_root/scripts/copy_release_file.py" \
   --output "$build_context/scripts/docker_entrypoint.sh" \
   --mode 0755 \
   --require-executable
+python3 "$repo_root/scripts/copy_release_file.py" \
+  --source "$repo_root/scripts/ci/package_inrou_runtime_v1.py" \
+  --output "$build_context/scripts/ci/package_inrou_runtime_v1.py" \
+  --mode 0644
 mkdir -m 0755 "$build_context/dist/docker-bin"
 for binary in "${binary_inventory[@]}"; do
   python3 "$repo_root/scripts/copy_release_file.py" \

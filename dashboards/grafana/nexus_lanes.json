@@ -88,14 +88,14 @@
     },
     {
       "type": "timeseries",
-      "title": "DA Reschedules (5m)",
-      "description": "Increase of sumeragi_rbc_da_reschedule_total — should stay near zero outside drills.",
+      "title": "DA Gate Blocks (5m)",
+      "description": "Revision-4 commits gated by missing signed DA payloads during the last five minutes.",
       "id": 4,
       "datasource": "Prometheus",
       "targets": [
         {
-          "expr": "increase(sumeragi_rbc_da_reschedule_total[5m])",
-          "legendFormat": "reschedules/5m",
+          "expr": "increase(sumeragi_da_gate_block_total{reason=\"missing_local_data\"}[5m])",
+          "legendFormat": "gate blocks/5m",
           "refId": "A"
         }
       ],

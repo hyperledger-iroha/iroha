@@ -6,7 +6,6 @@ async fn mcp_jsonrpc_connect_alias_lifecycle_dispatches_routes() {
     enable_writer_mcp(&mut cfg);
     cfg.torii.connect.enabled = true;
     let app = build_router(cfg);
-    let sid = B64.encode([0x66u8; 32]);
     let (status, create_call) = post_mcp(
         &app,
         norito::json!({
@@ -16,7 +15,9 @@ async fn mcp_jsonrpc_connect_alias_lifecycle_dispatches_routes() {
             "params": {
                 "name": "iroha.connect.session.create",
                 "arguments": {
-                    "session_id": sid
+                    "network_id": "hash:4141414141414141414141414141414141414141414141414141414141414141#7023",
+                    "app_pk": "ZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmY",
+                    "nonce": "Z2dnZ2dnZ2dnZ2dnZ2dnZw"
                 }
             }
         }),
@@ -36,6 +37,11 @@ async fn mcp_jsonrpc_connect_alias_lifecycle_dispatches_routes() {
         .get("body")
         .and_then(Value::as_object)
         .expect("session create body");
+    let sid = create_body
+        .get("sid")
+        .and_then(Value::as_str)
+        .expect("canonical session sid")
+        .to_owned();
     let token_app = create_body
         .get("token_app")
         .and_then(Value::as_str)
@@ -55,7 +61,7 @@ async fn mcp_jsonrpc_connect_alias_lifecycle_dispatches_routes() {
             "params": {
                 "name": "iroha.connect.ws.ticket",
                 "arguments": {
-                    "session_id": sid,
+                    "sid": sid,
                     "role": "app",
                     "token_app": token_app,
                     "node_url": "https://node.example"
@@ -72,9 +78,7 @@ async fn mcp_jsonrpc_connect_alias_lifecycle_dispatches_routes() {
     let ticket_structured = structured_content(&ticket_call);
     assert_eq!(
         ticket_structured.get("ws_url").and_then(Value::as_str),
-        Some(
-            "wss://node.example/v1/connect/ws?sid=ZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmY&role=app"
-        )
+        Some(format!("wss://node.example/v1/connect/ws?sid={sid}&role=app").as_str())
     );
     let (status, status_call) = post_mcp(
         &app,
@@ -111,9 +115,7 @@ async fn mcp_jsonrpc_connect_alias_lifecycle_dispatches_routes() {
             "params": {
                 "name": "iroha.connect.session.delete",
                 "arguments": {
-                    "path": {
-                        "session_id": sid
-                    },
+                    "sid": sid,
                     "token_management": token_management
                 }
             }

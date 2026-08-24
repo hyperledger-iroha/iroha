@@ -1,5 +1,7 @@
 //! Governance pipeline SLA enforcement tests.
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
+#[path = "common/governance.rs"]
+mod governance_fixture;
 use iroha_core::{
     kura::Kura,
     query::store::LiveQueryStore,
@@ -63,7 +65,9 @@ fn pipeline_rejects_when_referendum_missing_at_study_deadline() {
             created_height: 1,
             status: GovernanceProposalStatus::Proposed,
             pipeline: GovernancePipeline::seeded(1, None, &tx1.gov),
-            parliament_snapshot: None,
+            parliament_snapshot: governance_fixture::single_member_parliament_snapshot(
+                &ALICE_ID, 1,
+            ),
             finalization_evidence: None,
             enacted_at_height: None,
         },
@@ -74,7 +78,7 @@ fn pipeline_rejects_when_referendum_missing_at_study_deadline() {
         ParliamentBody::AgendaCouncil,
         ParliamentBody::InterestPanel,
     ] {
-        let approval_stage = approvals.ensure_stage(body, 0, 1, tx1.gov.parliament_quorum_bps);
+        let approval_stage = approvals.ensure_stage(body, 1, 1, tx1.gov.parliament_quorum_bps);
         approval_stage.record(ALICE_ID.clone());
     }
     tx1.world
@@ -141,18 +145,20 @@ fn pipeline_marks_enactment_overdue() {
             created_height: 1,
             status: GovernanceProposalStatus::Approved,
             pipeline: GovernancePipeline::seeded(1, referendum_snapshot.as_ref(), &tx1.gov),
-            parliament_snapshot: None,
+            parliament_snapshot: governance_fixture::single_member_parliament_snapshot(
+                &ALICE_ID, 1,
+            ),
             finalization_evidence: None,
             enacted_at_height: None,
         },
     );
     let mut approvals = GovernanceStageApprovals::default();
     for (body, epoch) in [
-        (ParliamentBody::RulesCommittee, 0),
-        (ParliamentBody::AgendaCouncil, 0),
-        (ParliamentBody::InterestPanel, 0),
-        (ParliamentBody::ReviewPanel, 0),
-        (ParliamentBody::PolicyJury, 0),
+        (ParliamentBody::RulesCommittee, 1),
+        (ParliamentBody::AgendaCouncil, 1),
+        (ParliamentBody::InterestPanel, 1),
+        (ParliamentBody::ReviewPanel, 1),
+        (ParliamentBody::PolicyJury, 1),
     ] {
         let approval_stage = approvals.ensure_stage(body, epoch, 1, tx1.gov.parliament_quorum_bps);
         approval_stage.record(ALICE_ID.clone());
@@ -208,7 +214,9 @@ fn pipeline_rejects_when_rules_quorum_missing() {
             created_height: 1,
             status: GovernanceProposalStatus::Proposed,
             pipeline: GovernancePipeline::seeded(1, None, &tx1.gov),
-            parliament_snapshot: None,
+            parliament_snapshot: governance_fixture::single_member_parliament_snapshot(
+                &ALICE_ID, 1,
+            ),
             finalization_evidence: None,
             enacted_at_height: None,
         },

@@ -1,6 +1,8 @@
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 //! Torii handler tests for governance read endpoints: proposal/referendum/locks/tally.
 #![allow(unexpected_cfgs, clippy::similar_names, clippy::too_many_lines)]
+#[path = "common/governance.rs"]
+mod governance_fixture;
 use axum::{extract::Path as AxPath, response::IntoResponse};
 use http_body_util::BodyExt as _;
 use iroha_core::{
@@ -42,7 +44,7 @@ async fn gov_proposal_get_returns_record() {
     let proposer: iroha_data_model::account::AccountId =
         iroha_data_model::account::AccountId::new(kp.public_key().clone());
     let rec = iroha_core::state::GovernanceProposalRecord {
-        proposer,
+        proposer: proposer.clone(),
         kind: ProposalKind::DeployContract(DeployContractProposal {
             contract_address: "irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw"
                 .parse()
@@ -55,7 +57,7 @@ async fn gov_proposal_get_returns_record() {
         created_height: 0,
         status: iroha_core::state::GovernanceProposalStatus::Proposed,
         pipeline: iroha_core::state::GovernancePipeline::default(),
-        parliament_snapshot: None,
+        parliament_snapshot: governance_fixture::single_member_parliament_snapshot(&proposer, 0),
         finalization_evidence: None,
         enacted_at_height: None,
     };
@@ -204,7 +206,12 @@ async fn gov_referendum_and_locks_and_tally_endpoints() {
         expiry_height: 1_000,
         direction: 0, // approve
         duration_blocks,
-        custody: None,
+        custody: iroha_core::state::GovernanceLockCustody {
+            escrowed: !raw_state.gov.min_bond_amount.is_zero(),
+            asset_definition_id: raw_state.gov.voting_asset_id.clone(),
+            bond_escrow_account: raw_state.gov.bond_escrow_account.clone(),
+            slash_receiver_account: raw_state.gov.slash_receiver_account.clone(),
+        },
     };
     locks.locks.insert(owner, rec);
     let prev_height = raw_state.view().height();

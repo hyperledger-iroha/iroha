@@ -1838,6 +1838,18 @@ class HttpClientTransportTest {
     }
 
     @Test
+    fun vpnSessionIdNormalizerAccepts16BytesAndRejects32Bytes() {
+        val sessionId = "ab".repeat(16)
+        assertEquals(
+            sessionId,
+            HttpClientTransport.normalizeHex16("0X${sessionId.uppercase()}", "sessionId"),
+        )
+        assertFailsWith<IllegalArgumentException> {
+            HttpClientTransport.normalizeHex16("ab".repeat(32), "sessionId")
+        }
+    }
+
+    @Test
     fun quoteFeesSignsExactUnsignedPayloadAndPreservesPayer() {
         val executor = StubResponseExecutor(
             statusCode = 200,
@@ -2129,16 +2141,21 @@ class HttpClientTransportTest {
 
     @Test
     fun vpnSessionAndReceiptMethodsUseNativeLeaseDtos() {
-        val sessionId = "33".repeat(32)
+        val sessionId = "33".repeat(16)
+        val quoteId = "34".repeat(32)
+        val leaseId = "35".repeat(32)
         val paymentTxHash = "44".repeat(32)
         val meteringKey = validEd25519PublicKeyHex
-        val receiptJson = vpnReceiptJson(sessionId, paymentTxHash, settled = true)
+        val receiptJson = vpnReceiptJson(sessionId, quoteId, leaseId, paymentTxHash, settled = true)
+        val pendingReceiptJson = receiptJson.replace(
+            "\"status\": \"settled\"",
+            "\"status\": \"settlement_pending\"",
+        )
         val executor = QueueResponseExecutor(
             listOf(
-                201 to vpnSessionJson(sessionId, paymentTxHash),
-                200 to vpnSessionJson(sessionId, paymentTxHash),
-                200 to vpnReceiptJson(sessionId, paymentTxHash, settled = false),
-                201 to receiptJson,
+                201 to vpnSessionJson(sessionId, quoteId, paymentTxHash),
+                200 to vpnSessionJson(sessionId, quoteId, paymentTxHash),
+                201 to pendingReceiptJson,
                 200 to """{"items":[$receiptJson],"total":1}""",
             )
         )
@@ -2150,37 +2167,34 @@ class HttpClientTransportTest {
         )
 
         val session = transport.createVpnSession(
-            VpnSessionCreateRequest("standard", sessionId, "0x$paymentTxHash", meteringKey),
+            VpnSessionCreateRequest("standard", quoteId, "0x$paymentTxHash", meteringKey),
             auth,
         ).join()
         val fetched = transport.getVpnSession(sessionId, auth).join()
-        val deleted = transport.deleteVpnSession("0x$sessionId", auth).join()
         val submitted = transport.submitVpnReceipt(
-            VpnReceiptSubmitRequest("0xCAFE", "BEEF", "0x$sessionId"),
+            VpnReceiptSubmitRequest("0xCAFE", "BEEF", "0x$leaseId"),
             auth,
         ).join()
         val receipts = transport.listVpnReceipts(auth).join()
 
         assertEquals(sessionId, session.sessionId)
         assertEquals(vpnHelperTicketHex(), session.helperTicketHex)
-        assertEquals(1_392, session.helperTicketHex.length)
+        assertEquals(1_576, session.helperTicketHex.length)
         assertTrue(fetched.isPresent)
-        assertEquals(sessionId, fetched.get().quoteId)
-        assertTrue(deleted.isPresent)
-        assertEquals("disconnected", deleted.get().status)
-        assertEquals("settled", submitted.status)
+        assertEquals(quoteId, fetched.get().quoteId)
+        assertEquals("settlement_pending", submitted.status)
         assertEquals("750000.125", submitted.earnedFee)
         assertEquals("250000.125", submitted.refundedFee)
         assertEquals("iroha_data_model::isi::vpn::SettleVpnLease", submitted.settleLeaseInstruction?.wireId)
         assertEquals(1L, receipts.total)
-        assertEquals(sessionId, receipts.items.first().leaseIdHex)
+        assertEquals(leaseId, receipts.items.first().leaseIdHex)
+        assertEquals("settled", receipts.items.first().status)
 
-        assertEquals("""{"exit_class":"standard","metering_public_key_hex":"$meteringKey","payment_tx_hash":"$paymentTxHash","quote_id":"$sessionId"}""", readBody(executor.requests[0]))
+        assertEquals("""{"exit_class":"standard","metering_public_key_hex":"$meteringKey","payment_tx_hash":"$paymentTxHash","quote_id":"$quoteId"}""", readBody(executor.requests[0]))
         assertEquals("GET", executor.requests[1].method)
         assertEquals("https://torii.example/v1/vpn/sessions/$sessionId", executor.requests[1].uri.toString())
-        assertEquals("DELETE", executor.requests[2].method)
-        assertEquals("""{"client_voucher_hex":"beef","lease_id_hex":"$sessionId","relay_receipt_hex":"cafe"}""", readBody(executor.requests[3]))
-        assertEquals("https://torii.example/v1/vpn/receipts", executor.requests[4].uri.toString())
+        assertEquals("""{"client_voucher_hex":"beef","lease_id_hex":"$leaseId","relay_receipt_hex":"cafe"}""", readBody(executor.requests[2]))
+        assertEquals("https://torii.example/v1/vpn/receipts", executor.requests[3].uri.toString())
     }
 
     @Test
@@ -3513,9 +3527,9 @@ class HttpClientTransportTest {
             }
         """.trimIndent()
 
-    private fun vpnHelperTicketHex(): String = "5356504e48543100" + "00".repeat(688)
+    private fun vpnHelperTicketHex(): String = "5356504e48543100" + "00".repeat(780)
 
-    private fun vpnSessionJson(sessionId: String, paymentTxHash: String): String =
+    private fun vpnSessionJson(sessionId: String, quoteId: String, paymentTxHash: String): String =
         """
             {
               "session_id": "$sessionId",
@@ -3526,8 +3540,8 @@ class HttpClientTransportTest {
               "expires_at_ms": 1700000600000,
               "connected_at_ms": 1700000000000,
               "meter_family": "soranet.vpn.standard",
-              "quote_id": "$sessionId",
-              "payment_reference": "$sessionId",
+              "quote_id": "$quoteId",
+              "payment_reference": "$quoteId",
               "payment_tx_hash": "$paymentTxHash",
               "fee_asset_id": "xor#universal.universal",
               "escrow_account_id": "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV",
@@ -3553,7 +3567,13 @@ class HttpClientTransportTest {
             }
         """.trimIndent()
 
-    private fun vpnReceiptJson(sessionId: String, paymentTxHash: String, settled: Boolean): String {
+    private fun vpnReceiptJson(
+        sessionId: String,
+        quoteId: String,
+        leaseId: String,
+        paymentTxHash: String,
+        settled: Boolean,
+    ): String {
         val status = if (settled) "settled" else "disconnected"
         val source = if (settled) "relay" else "torii"
         val earned = if (settled) "750000.125" else "0"
@@ -3582,7 +3602,7 @@ class HttpClientTransportTest {
               "bytes_out": 2048,
               "status": "$status",
               "receipt_source": "$source",
-              "quote_id": "$sessionId",
+              "quote_id": "$quoteId",
               "payment_tx_hash": "$paymentTxHash",
               "fee_asset_id": "xor#universal.universal",
               "escrow_account_id": "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV",
@@ -3590,7 +3610,7 @@ class HttpClientTransportTest {
               "lease_fee": "1000000.25",
               "earned_fee": "$earned",
               "refunded_fee": "$refunded",
-              "lease_id_hex": "$sessionId"$settle
+              "lease_id_hex": "$leaseId"$settle
             }
         """.trimIndent()
     }

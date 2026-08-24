@@ -1041,6 +1041,73 @@ mod query_errors_handling {
             "query request must not be sent after compatibility mismatch"
         );
     }
+    #[test]
+    fn execute_signed_query_raw_rejects_unavailable_capabilities_before_query_request() {
+        for status in [
+            HttpStatusCode::NOT_FOUND,
+            HttpStatusCode::TOO_MANY_REQUESTS,
+            HttpStatusCode::SERVICE_UNAVAILABLE,
+        ] {
+            let (account_id, key_pair) = gen_account_in("wonderland");
+            let client = Client {
+                chain: ChainId::from("00000000-0000-0000-0000-000000000000"),
+                network_id: crate::client::test_network_id(),
+                torii_url: Url::parse("http://localhost:8081").expect("torii url"),
+                key_pair,
+                transaction_ttl: Some(Duration::from_secs(5)),
+                transaction_status_timeout: Duration::from_secs(5),
+                torii_request_timeout: crate::config::DEFAULT_TORII_REQUEST_TIMEOUT,
+                account: account_id,
+                headers: HashMap::new(),
+                operator_key_pair: None,
+                add_transaction_nonce: false,
+                alias_cache_policy: sample_alias_policy(),
+                default_anonymity_policy: AnonymityPolicy::GuardPq,
+                rollout_phase: SorafsRolloutPhase::Default,
+                data_model_compatibility: Arc::new(Mutex::new(DataModelCompatibility::Unchecked)),
+                wire_format_preference: crate::client::WireFormatPreference::default(),
+            };
+            let request_paths = Arc::new(Mutex::new(Vec::new()));
+            let observed_paths = Arc::clone(&request_paths);
+            with_mock_http(
+                move |snapshot| {
+                    let path = snapshot.url.path().to_owned();
+                    observed_paths
+                        .lock()
+                        .expect("request paths lock")
+                        .push(path);
+                    Ok(Response::builder()
+                        .status(status)
+                        .header("content-type", "text/plain")
+                        .body(b"capabilities unavailable".to_vec())
+                        .expect("capabilities response"))
+                },
+                || {
+                    let error = client
+                        .execute_signed_query_raw(&[])
+                        .expect_err("unavailable capabilities must reject query");
+                    let QueryError::Other(report) = error else {
+                        panic!("expected QueryError::Other");
+                    };
+                    let rendered = format!("{report:#}");
+                    assert!(rendered.contains(&status.to_string()), "{rendered}");
+                    assert!(rendered.contains("capabilities unavailable"), "{rendered}");
+                },
+            );
+            assert_eq!(
+                request_paths.lock().expect("request paths lock").clone(),
+                vec!["/v1/node/capabilities".to_owned()],
+                "failed capability probe must not send a query request"
+            );
+            assert!(matches!(
+                &*client
+                    .data_model_compatibility
+                    .lock()
+                    .expect("data model compatibility lock"),
+                DataModelCompatibility::Unchecked
+            ));
+        }
+    }
     fn compatible_client_with_conflicting_wire_headers() -> Client {
         let (account_id, key_pair) = gen_account_in("wonderland");
         Client {

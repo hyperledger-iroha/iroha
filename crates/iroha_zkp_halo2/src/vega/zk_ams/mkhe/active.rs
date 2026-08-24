@@ -22,7 +22,7 @@ use super::{
     ArtifactAuthentication, AuthenticationSecret, MKHE_VERSION_V1, Scalar,
     ZeroizingScalarEntropyV1, ZeroizingScalarV1, ZkAmsMkheErrorV1, ZkAmsMkhePartyIdV1,
     auth_generator,
-    cpk_relation::derive_active_collective_public_a_limb_v1,
+    cpk_relation::prepare_active_collective_public_a_v1,
     manifest::{ZK_AMS_MKHE_RELEASE_ROSTER_SIZE_V1, release_profile_v1},
 };
 use crate::generalized_bulletproof::try_exact_capacity_vec_v1;
@@ -2319,16 +2319,25 @@ fn derive_active_collective_public_a(
     roster: &ZkAmsMkheGovernedActiveRosterV1,
     transcript_digest: [u8; 32],
 ) -> Result<super::RnsPolynomial, ZkAmsMkheErrorV1> {
-    roster.validate()?;
-    if transcript_digest == [0; 32] || roster.profile_digest != profile.digest()? {
-        return Err(ZkAmsMkheErrorV1::InvalidKeyMaterial);
+    let prepared = prepare_active_collective_public_a_v1(profile, roster, transcript_digest)
+        .map_err(|_| ZkAmsMkheErrorV1::InvalidKeyMaterial)?;
+    let mut remaining_candidates = prepared
+        .candidate_budget_for_limbs_v1(profile.moduli.len())
+        .map_err(|_| ZkAmsMkheErrorV1::InvalidKeyMaterial)?;
+    let coefficient_count = profile
+        .ring_degree
+        .checked_mul(profile.moduli.len())
+        .ok_or(ZkAmsMkheErrorV1::ResourceCeilingExceeded)?;
+    let mut coefficients = try_exact_capacity_vec_v1(coefficient_count)
+        .map_err(|_| ZkAmsMkheErrorV1::ResourceCeilingExceeded)?;
+    for limb in 0..profile.moduli.len() {
+        coefficients.extend(
+            prepared
+                .derive_limb_budgeted_v1(limb, &mut remaining_candidates)
+                .map_err(|_| ZkAmsMkheErrorV1::InvalidKeyMaterial)?,
+        );
     }
-    let mut context = Vec::with_capacity(74);
-    context.push(MKHE_VERSION_V1);
-    context.extend_from_slice(&roster.roster_digest);
-    context.extend_from_slice(&roster.epoch.to_be_bytes());
-    context.extend_from_slice(&transcript_digest);
-    super::derive_uniform_rns_from_context(profile, ACTIVE_COLLECTIVE_PUBLIC_A_DOMAIN_V1, &context)
+    super::RnsPolynomial::from_flat(profile, coefficients)
 }
 fn validate_collective_public_a(
     profile: &super::BgvProfile,
@@ -2342,6 +2351,11 @@ fn validate_collective_public_a(
     if transcript_digest == [0; 32] || roster.profile_digest != profile.digest()? {
         return Err(ZkAmsMkheErrorV1::InvalidKeyMaterial);
     }
+    let prepared = prepare_active_collective_public_a_v1(profile, roster, transcript_digest)
+        .map_err(|_| ZkAmsMkheErrorV1::InvalidKeyMaterial)?;
+    let mut remaining_candidates = prepared
+        .candidate_budget_for_limbs_v1(profile.moduli.len())
+        .map_err(|_| ZkAmsMkheErrorV1::InvalidKeyMaterial)?;
     for limb in 0..profile.moduli.len() {
         let start = limb
             .checked_mul(profile.ring_degree)
@@ -2349,9 +2363,9 @@ fn validate_collective_public_a(
         let end = start
             .checked_add(profile.ring_degree)
             .ok_or(ZkAmsMkheErrorV1::ResourceCeilingExceeded)?;
-        let expected =
-            derive_active_collective_public_a_limb_v1(profile, roster, transcript_digest, limb)
-                .map_err(|_| ZkAmsMkheErrorV1::InvalidKeyMaterial)?;
+        let expected = prepared
+            .derive_limb_budgeted_v1(limb, &mut remaining_candidates)
+            .map_err(|_| ZkAmsMkheErrorV1::InvalidKeyMaterial)?;
         if public_a.residues().get(start..end) != Some(expected.as_slice()) {
             return Err(ZkAmsMkheErrorV1::InvalidKeyMaterial);
         }

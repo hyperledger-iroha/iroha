@@ -295,7 +295,6 @@ class _MockState:
                 },
                 "block": {"max_transactions": 512},
                 "pipeline": {
-                    "signature_batch_max": 0,
                     "signature_batch_max_ed25519": 64,
                     "signature_batch_max_secp256k1": 16,
                     "signature_batch_max_pqc": 8,

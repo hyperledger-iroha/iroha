@@ -1221,26 +1221,20 @@ class SccpClientExactTest {
         )
         assertEquals("0x${finalityAnchorHash().lowercase()}", request.soraFinalityAnchor.anchorHash)
 
-        val historicalValue = proofRequest()
+        val retiredValue = proofRequest()
         @Suppress("UNCHECKED_CAST")
-        val historicalAnchor =
-            historicalValue["sora_finality_anchor"] as MutableMap<String, Any?>
-        historicalAnchor["protocol_version"] = 3
-        historicalValue["sora_finality_anchor_hash"] =
+        val retiredAnchor =
+            retiredValue["sora_finality_anchor"] as MutableMap<String, Any?>
+        retiredAnchor["protocol_version"] = 3
+        retiredValue["sora_finality_anchor_hash"] =
             "0x${finalityAnchorHash(3).lowercase()}"
-        val historicalRequest = SccpJsonParser.parseProofRequest(jsonBytes(historicalValue))
-        assertEquals(3, historicalRequest.soraFinalityAnchor.protocolVersion)
-        assertEquals(
-            "0xec6c821caf5fa74368c08e9101ab310f132fb7f627a09f6f9481aa9484054bba",
-            historicalRequest.soraFinalityAnchor.anchorHash,
-        )
-        assertFalse(
-            historicalRequest.soraFinalityAnchor.anchorHash ==
-                request.soraFinalityAnchor.anchorHash,
-        )
+        assertFailsWith<IllegalArgumentException> {
+            SccpJsonParser.parseProofRequest(jsonBytes(retiredValue))
+        }
 
         val invalidFinalityAnchors: List<(MutableMap<String, Any?>) -> Unit> = listOf(
             { it["protocol_version"] = 1 },
+            { it["protocol_version"] = 3 },
             { it["protocol_version"] = "4" },
             { it["protocol_version"] = 4.0 },
             { it["protocol_version"] = 5 },

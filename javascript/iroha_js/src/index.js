@@ -337,7 +337,6 @@ export {
   buildTimeTriggerAction,
   buildPrecommitTriggerAction,
   submitSignedTransaction,
-  submitTransactionEntrypoint,
 } from "./transaction.js";
 export {
   BrowserTransactionCodecError,

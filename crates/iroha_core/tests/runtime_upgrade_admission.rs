@@ -15,7 +15,7 @@ use iroha_data_model::{
     prelude::*,
     runtime::{RuntimeUpgradeRecord, RuntimeUpgradeStatus},
 };
-use iroha_primitives::json::Json;
+use iroha_executor_data_model::permission::governance::CanManageRuntimeUpgrades;
 use ivm::ProgramMetadata;
 use mv::storage::StorageReadOnly;
 use nonzero_ext::nonzero;
@@ -72,7 +72,7 @@ fn runtime_upgrade_rejects_non_v1_manifest() {
     let header = iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
     let mut block = state.block(header);
     let mut stx = block.transaction();
-    let perm = Permission::new("CanManageRuntimeUpgrades".to_string(), Json::new(()));
+    let perm = Permission::from(CanManageRuntimeUpgrades);
     use iroha_data_model::prelude::Grant;
     Grant::account_permission(perm, account_id.clone())
         .execute(&account_id, &mut stx)
@@ -122,7 +122,7 @@ fn propose_runtime_upgrade_allows_v1_when_v1_active() {
         iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
     let mut block1 = state.block(header1);
     let mut stx1 = block1.transaction();
-    let perm = Permission::new("CanManageRuntimeUpgrades".to_string(), Json::new(()));
+    let perm = Permission::from(CanManageRuntimeUpgrades);
     Grant::account_permission(perm, account_id.clone())
         .execute(&account_id, &mut stx1)
         .expect("grant permission");
@@ -194,7 +194,7 @@ fn propose_runtime_upgrade_rejects_non_matching_abi_hash() {
     let header = iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
     let mut block = state.block(header);
     let mut stx = block.transaction();
-    let perm = Permission::new("CanManageRuntimeUpgrades".to_string(), Json::new(()));
+    let perm = Permission::from(CanManageRuntimeUpgrades);
     Grant::account_permission(perm, account_id.clone())
         .execute(&account_id, &mut stx)
         .expect("grant permission");
@@ -238,7 +238,7 @@ fn propose_runtime_upgrade_rejects_incorrect_added_sets() {
     let header = iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
     let mut block = state.block(header);
     let mut stx = block.transaction();
-    let perm = Permission::new("CanManageRuntimeUpgrades".to_string(), Json::new(()));
+    let perm = Permission::from(CanManageRuntimeUpgrades);
     Grant::account_permission(perm, account_id.clone())
         .execute(&account_id, &mut stx)
         .expect("grant permission");
@@ -281,7 +281,7 @@ fn propose_runtime_upgrade_is_idempotent_for_identical_manifest() {
     let header = iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
     let mut block = state.block(header);
     let mut stx = block.transaction();
-    let perm = Permission::new("CanManageRuntimeUpgrades".to_string(), Json::new(()));
+    let perm = Permission::from(CanManageRuntimeUpgrades);
     Grant::account_permission(perm, account_id.clone())
         .execute(&account_id, &mut stx)
         .expect("grant permission");
@@ -338,7 +338,7 @@ fn activate_runtime_upgrade_is_idempotent_at_start_height() {
         iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
     let mut block1 = state.block(header1);
     let mut stx1 = block1.transaction();
-    let perm = Permission::new("CanManageRuntimeUpgrades".to_string(), Json::new(()));
+    let perm = Permission::from(CanManageRuntimeUpgrades);
     Grant::account_permission(perm, account_id.clone())
         .execute(&account_id, &mut stx1)
         .expect("grant permission");
@@ -407,7 +407,7 @@ fn activation_allows_v1_in_same_block() {
         iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
     let mut block1 = state.block(header1);
     let mut stx1 = block1.transaction();
-    let perm = Permission::new("CanManageRuntimeUpgrades".to_string(), Json::new(()));
+    let perm = Permission::from(CanManageRuntimeUpgrades);
     Grant::account_permission(perm, account_id.clone())
         .execute(&account_id, &mut stx1)
         .expect("grant permission");
@@ -524,7 +524,7 @@ fn propose_runtime_upgrade_rejects_missing_provenance_when_required() {
     let header = iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
     let mut block = state.block(header);
     let mut stx = block.transaction();
-    let perm = Permission::new("CanManageRuntimeUpgrades".to_string(), Json::new(()));
+    let perm = Permission::from(CanManageRuntimeUpgrades);
     Grant::account_permission(perm, account_id.clone())
         .execute(&account_id, &mut stx)
         .expect("grant permission");
@@ -576,7 +576,7 @@ fn propose_runtime_upgrade_rejects_untrusted_signer() {
     let header = iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
     let mut block = state.block(header);
     let mut stx = block.transaction();
-    let perm = Permission::new("CanManageRuntimeUpgrades".to_string(), Json::new(()));
+    let perm = Permission::from(CanManageRuntimeUpgrades);
     Grant::account_permission(perm, account_id.clone())
         .execute(&account_id, &mut stx)
         .expect("grant permission");

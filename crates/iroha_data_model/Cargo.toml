@@ -18,8 +18,6 @@ dev-tools = []
 # Public application model; node-only additions are requested by node crates.
 application-model = ["governance", "json", "pqc"]
 bridge = []
-# Retained for compatibility dependencies; no additional behavior is gated by `std` in this crate.
-std = []
 # Enable JSON-related functionality
 json = [
     "iroha_version/json",

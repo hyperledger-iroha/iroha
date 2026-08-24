@@ -70,11 +70,11 @@ mod tests {
     use super::*;
     #[test]
     fn supervisor_builder_uses_requested_profile() {
-        let builder = SupervisorBuilder::new(ProfilePreset::SinglePeer);
+        let builder = SupervisorBuilder::new(ProfilePreset::FourPeerBft);
         assert_eq!(
             builder.profile(),
             &NetworkProfile {
-                preset: Some(ProfilePreset::SinglePeer),
+                preset: Some(ProfilePreset::FourPeerBft),
                 topology: NetworkTopology::four_peer_bft(),
                 consensus_mode:
                     iroha_data_model::parameter::system::SumeragiConsensusMode::Permissioned,

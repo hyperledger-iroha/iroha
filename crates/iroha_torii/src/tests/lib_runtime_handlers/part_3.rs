@@ -707,10 +707,7 @@ fn incoming_proxy_submit_fixture_with_validator_signers(
             topology.push(peer_id.clone());
         }
         topology.commit();
-        install_lane_manifest_registry_for_test(
-            state,
-            &[(LaneId::SINGLE, validator_bindings)],
-        );
+        install_lane_manifest_registry_for_test(state, &[(LaneId::SINGLE, validator_bindings)]);
     }
     let admission_intent = if admission == ToriiProxyTransactionAdmissionV2::QueuePlanSynced {
         iroha_data_model::transaction::TransactionAdmissionIntent::QueuePlanSynced
@@ -784,6 +781,337 @@ fn single_route_queue_plan_authorities(
         "fixture coordinator roster must not be empty"
     );
     route.validator_set.clone()
+}
+#[cfg(any(feature = "p2p_ws", feature = "connect"))]
+fn ordinary_kagemusha_lifecycle_proxy_fixture() -> (
+    NetworkId,
+    RoutingDecision,
+    ToriiProxyRequestV6,
+    Vec<KeyPair>,
+    Vec<PeerId>,
+) {
+    use iroha_data_model::{
+        account::{MultisigMember, MultisigPolicy},
+        isi::offline::CancelKagemushaRecursiveReleaseV4,
+        offline::{
+            KAGEMUSHA_V4_RELEASE_CANCELLATION_SCHEMA_V1, KAGEMUSHA_V4_RELEASE_LIFECYCLE_VERSION_V1,
+            KagemushaExactBytesDigestV1, KagemushaV4ReleaseCancellationV1,
+            KagemushaV4ReleaseLifecycleReasonV1,
+        },
+    };
+
+    let network_id = NetworkId::from_genesis_hash(HashOf::from_untyped_unchecked(Hash::new(
+        b"Torii ordinary lifecycle proxy fixture",
+    )));
+    let governors = [0x61_u8, 0x62].map(|seed| {
+        checked_torii_test_ed25519_keypair(seed, "derive lifecycle proxy governor fixture key")
+    });
+    let authority = AccountId::new_multisig(
+        MultisigPolicy::new(
+            2,
+            governors
+                .iter()
+                .map(|governor| {
+                    MultisigMember::new(governor.public_key().clone(), 1)
+                        .expect("valid lifecycle proxy governor")
+                })
+                .collect(),
+        )
+        .expect("valid lifecycle proxy policy"),
+    );
+    let cancellation = CancelKagemushaRecursiveReleaseV4::new(KagemushaV4ReleaseCancellationV1 {
+        schema: KAGEMUSHA_V4_RELEASE_CANCELLATION_SCHEMA_V1.to_owned(),
+        version: KAGEMUSHA_V4_RELEASE_LIFECYCLE_VERSION_V1,
+        promotion_id: [0x11; 32],
+        manifest_sha256: [0x22; 32],
+        expected_predecessor_lifecycle: KagemushaExactBytesDigestV1 {
+            byte_len: 1,
+            sha256: [0x33; 32],
+        },
+        transition_id: [0x44; 32],
+        reason: KagemushaV4ReleaseLifecycleReasonV1::GovernanceCancelled,
+        evidence: None,
+    });
+    let transaction = TransactionEntrypoint::External(
+        TransactionBuilder::new(
+            network_id,
+            authority,
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .with_instructions([cancellation])
+        .sign_multisig([governors[0].private_key(), governors[1].private_key()]),
+    );
+    let validator_signers = (0_u8..4)
+        .map(|offset| {
+            checked_torii_test_ed25519_keypair(
+                0x70_u8.saturating_add(offset),
+                "derive lifecycle proxy validator fixture key",
+            )
+        })
+        .collect::<Vec<_>>();
+    let validators = validator_signers
+        .iter()
+        .map(|signer| PeerId::new(signer.public_key().clone()))
+        .collect::<Vec<_>>();
+    let route = RoutingDecision::new(LaneId::SINGLE, DataSpaceId::UNIVERSAL);
+    let routing_plan = RoutingPlan::single(route);
+    let context = iroha_core::queue::QueuePlanAdmissionContextV2 {
+        version: iroha_core::queue::QUEUE_PLAN_ADMISSION_CONTEXT_VERSION_V2,
+        authority_height: 0,
+        proposal_height: 1,
+        predecessor_block_hash: None,
+        routing_plan_digest: routing_plan.digest(),
+        route_incarnations: vec![iroha_core::queue::QueuePlanRouteIncarnationV2 {
+            leg: iroha_core::queue::RouteLeg::new(
+                route,
+                iroha_core::queue::RouteLegRole::Coordinator,
+            ),
+            lane_incarnation: Hash::new(b"Torii ordinary lifecycle lane incarnation"),
+            validator_set_hash_version: VALIDATOR_SET_HASH_VERSION_V1,
+            validator_set_hash: HashOf::new(&validators),
+            validator_count: 4,
+            durability_threshold: 2,
+            validator_set: validators.clone(),
+        }],
+    };
+    let binding = OrdinaryKagemushaLifecycleAdmissionBindingV1::new(
+        &network_id,
+        &transaction,
+        &routing_plan,
+        context,
+    )
+    .expect("construct lifecycle proxy binding");
+    let request = ToriiProxyRequestV6 {
+        schema_version: TORII_PROXY_REQUEST_VERSION_V6,
+        request_id: binding.request_id,
+        deadline_unix_ms: super::torii_proxy_test_deadline_unix_ms(),
+        hop_count: 1,
+        max_hops: 3,
+        visited_peer_ids: Vec::new(),
+        request: ToriiProxyRequestKindV4::SubmitTransaction {
+            transaction,
+            expected_plan: ToriiRoutingPlanHintV1::from(routing_plan),
+            admission: ToriiProxyTransactionAdmissionV2::OrdinaryKagemushaLifecycleDurable(binding),
+            admission_binding: None,
+        },
+    };
+    (network_id, route, request, validator_signers, validators)
+}
+#[cfg(any(feature = "p2p_ws", feature = "connect"))]
+fn ordinary_kagemusha_lifecycle_test_attestation(
+    request: &ToriiProxyRequestV6,
+    validator_index: u16,
+    signer: &KeyPair,
+    enqueue_timestamp_ms: u64,
+) -> OrdinaryKagemushaLifecycleAdmissionAttestationV1 {
+    let ToriiProxyRequestKindV4::SubmitTransaction {
+        transaction,
+        expected_plan,
+        admission: ToriiProxyTransactionAdmissionV2::OrdinaryKagemushaLifecycleDurable(binding),
+        admission_binding: None,
+    } = &request.request
+    else {
+        panic!("lifecycle attestation fixture requires its exact dedicated proxy request");
+    };
+    let routing_plan = expected_plan
+        .clone()
+        .try_into_routing_plan()
+        .expect("fixture routing plan");
+    let journal_record_digest = iroha_core::queue::queue_plan_journal_record_claim_digest(
+        transaction.clone(),
+        routing_plan,
+        binding.admission_context.clone(),
+        enqueue_timestamp_ms,
+        None,
+    )
+    .expect("encode unbound lifecycle journal claim");
+    let signing_bytes = ordinary_kagemusha_lifecycle_admission_attestation_signing_bytes_v1(
+        binding.canonical_hash(),
+        validator_index,
+        enqueue_timestamp_ms,
+        journal_record_digest,
+    )
+    .expect("encode lifecycle attestation preimage");
+    OrdinaryKagemushaLifecycleAdmissionAttestationV1 {
+        version: KAGEMUSHA_LIFECYCLE_ADMISSION_ATTESTATION_VERSION_V1,
+        validator_index,
+        enqueue_timestamp_ms,
+        journal_record_digest,
+        signature: Signature::try_new(signer.private_key(), &signing_bytes)
+            .expect("sign lifecycle attestation"),
+    }
+}
+#[cfg(any(feature = "p2p_ws", feature = "connect"))]
+fn ordinary_kagemusha_lifecycle_test_snapshot(
+    request: &ToriiProxyRequestV6,
+    attestations: Vec<OrdinaryKagemushaLifecycleAdmissionAttestationV1>,
+) -> ToriiProxyHttpResponseV1 {
+    let ToriiProxyRequestKindV4::SubmitTransaction {
+        transaction,
+        admission: ToriiProxyTransactionAdmissionV2::OrdinaryKagemushaLifecycleDurable(binding),
+        ..
+    } = &request.request
+    else {
+        panic!("lifecycle snapshot fixture requires its exact dedicated proxy request");
+    };
+    let signed_hash = super::signed_transaction_hash_for_entrypoint(transaction)
+        .expect("lifecycle fixture is externally signed");
+    let certificate = OrdinaryKagemushaLifecycleAdmissionCertificateV1 {
+        version: KAGEMUSHA_LIFECYCLE_ADMISSION_CERTIFICATE_VERSION_V1,
+        binding: binding.clone(),
+        attestations,
+    };
+    ToriiProxyHttpResponseV1 {
+        status_code: StatusCode::ACCEPTED.as_u16(),
+        headers: vec![
+            iroha_core::torii_proxy::ToriiProxyHeaderV1 {
+                name: "content-type".to_owned(),
+                value: utils::NORITO_MIME_TYPE.as_bytes().to_vec(),
+            },
+            iroha_core::torii_proxy::ToriiProxyHeaderV1 {
+                name: "x-iroha-entrypoint-hash".to_owned(),
+                value: transaction.hash().to_string().into_bytes(),
+            },
+            iroha_core::torii_proxy::ToriiProxyHeaderV1 {
+                name: "x-iroha-signed-transaction-hash".to_owned(),
+                value: signed_hash.to_string().into_bytes(),
+            },
+        ],
+        body: norito::to_bytes(&certificate).expect("encode lifecycle certificate snapshot"),
+    }
+}
+#[cfg(any(feature = "p2p_ws", feature = "connect"))]
+fn incoming_ordinary_kagemusha_lifecycle_proxy_fixture(
+    validator_signers: &[KeyPair],
+) -> (SharedAppState, ToriiProxyRequestV6, KeyPair) {
+    use iroha_data_model::{
+        account::{MultisigMember, MultisigPolicy},
+        isi::offline::CancelKagemushaRecursiveReleaseV4,
+        offline::{
+            KAGEMUSHA_V4_RELEASE_CANCELLATION_SCHEMA_V1, KAGEMUSHA_V4_RELEASE_LIFECYCLE_VERSION_V1,
+            KagemushaExactBytesDigestV1, KagemushaV4ReleaseCancellationV1,
+            KagemushaV4ReleaseLifecycleReasonV1,
+        },
+    };
+
+    let local_signer = validator_signers
+        .first()
+        .expect("lifecycle receiver fixture requires a local validator");
+    let governors = [0x81_u8, 0x82].map(|seed| {
+        checked_torii_test_ed25519_keypair(seed, "derive lifecycle receiver governor fixture key")
+    });
+    let authority = AccountId::new_multisig(
+        MultisigPolicy::new(
+            2,
+            governors
+                .iter()
+                .map(|governor| {
+                    MultisigMember::new(governor.public_key().clone(), 1)
+                        .expect("valid lifecycle receiver governor")
+                })
+                .collect(),
+        )
+        .expect("valid lifecycle receiver policy"),
+    );
+    let ordinary_prefix_signer = checked_torii_test_ed25519_keypair(
+        0x83,
+        "derive lifecycle receiver ordinary-prefix fixture key",
+    );
+    let ordinary_prefix_authority = AccountId::new(ordinary_prefix_signer.public_key().clone());
+    let domain_id = DomainId::try_new("wonderland", "universal").expect("domain id");
+    let domain = Domain::new(domain_id).build(&authority);
+    let authority_account = Account::new(authority.clone()).build(&authority);
+    let ordinary_prefix_account =
+        Account::new(ordinary_prefix_authority.clone()).build(&ordinary_prefix_authority);
+    let mut app = mk_app_state_for_tests_with_world(World::with(
+        [domain],
+        [authority_account, ordinary_prefix_account],
+        [],
+    ));
+    let validator_bindings = validator_signers
+        .iter()
+        .map(|signer| {
+            (
+                AccountId::new(signer.public_key().clone()),
+                PeerId::new(signer.public_key().clone()),
+            )
+        })
+        .collect::<Vec<_>>();
+    {
+        let app = Arc::get_mut(&mut app).expect("lifecycle receiver app is uniquely owned");
+        app.torii_proxy_bridge_signer = local_signer.clone();
+        app.local_peer_id = Some(PeerId::new(local_signer.public_key().clone()));
+        let state = Arc::get_mut(&mut app.state).expect("lifecycle receiver state is unique");
+        for (index, (signer, (validator, _))) in validator_signers
+            .iter()
+            .zip(&validator_bindings)
+            .enumerate()
+        {
+            ensure_runtime_peer_binding_for_test(
+                state,
+                validator,
+                signer,
+                &format!("ordinary-lifecycle-receiver-{index}"),
+            );
+        }
+        let mut topology = state.commit_topology.block();
+        topology.clear();
+        for (_, peer_id) in &validator_bindings {
+            topology.push(peer_id.clone());
+        }
+        topology.commit();
+        install_lane_manifest_registry_for_test(state, &[(LaneId::SINGLE, validator_bindings)]);
+    }
+    let cancellation = CancelKagemushaRecursiveReleaseV4::new(KagemushaV4ReleaseCancellationV1 {
+        schema: KAGEMUSHA_V4_RELEASE_CANCELLATION_SCHEMA_V1.to_owned(),
+        version: KAGEMUSHA_V4_RELEASE_LIFECYCLE_VERSION_V1,
+        promotion_id: [0x11; 32],
+        manifest_sha256: [0x22; 32],
+        expected_predecessor_lifecycle: KagemushaExactBytesDigestV1 {
+            byte_len: 1,
+            sha256: [0x33; 32],
+        },
+        transition_id: [0x55; 32],
+        reason: KagemushaV4ReleaseLifecycleReasonV1::GovernanceCancelled,
+        evidence: None,
+    });
+    let transaction = TransactionEntrypoint::External(
+        TransactionBuilder::new(
+            *app.state.network_id_ref(),
+            authority,
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .with_instructions([cancellation])
+        .sign_multisig([governors[0].private_key(), governors[1].private_key()]),
+    );
+    let routing_plan =
+        RoutingPlan::single(RoutingDecision::new(LaneId::SINGLE, DataSpaceId::UNIVERSAL));
+    let context = app
+        .queue
+        .plan_admission_context_with_state(app.state.as_ref(), &routing_plan)
+        .expect("capture lifecycle receiver admission context");
+    let binding = OrdinaryKagemushaLifecycleAdmissionBindingV1::new(
+        app.state.network_id_ref(),
+        &transaction,
+        &routing_plan,
+        context,
+    )
+    .expect("bind lifecycle receiver request");
+    let request = ToriiProxyRequestV6 {
+        schema_version: TORII_PROXY_REQUEST_VERSION_V6,
+        request_id: binding.request_id,
+        deadline_unix_ms: super::torii_proxy_test_deadline_unix_ms(),
+        hop_count: 1,
+        max_hops: 3,
+        visited_peer_ids: Vec::new(),
+        request: ToriiProxyRequestKindV4::SubmitTransaction {
+            transaction,
+            expected_plan: ToriiRoutingPlanHintV1::from(routing_plan),
+            admission: ToriiProxyTransactionAdmissionV2::OrdinaryKagemushaLifecycleDurable(binding),
+            admission_binding: None,
+        },
+    };
+    (app, request, ordinary_prefix_signer)
 }
 #[cfg(any(feature = "p2p_ws", feature = "connect"))]
 fn set_proxy_fixture_latest_block_height(app: &SharedAppState, height: u64) {
@@ -1235,6 +1563,411 @@ async fn queue_plan_synced_certificate_requires_canonical_distinct_authority_quo
 }
 #[cfg(any(feature = "p2p_ws", feature = "connect"))]
 #[tokio::test]
+async fn ordinary_kagemusha_lifecycle_proxy_requires_exact_f_plus_one_unbound_certificate() {
+    let (network_id, route, request, validator_signers, validators) =
+        ordinary_kagemusha_lifecycle_proxy_fixture();
+    let expectation = super::ordinary_kagemusha_lifecycle_acceptance_expectation(&request)
+        .expect("lifecycle expectation must be valid")
+        .expect("dedicated lifecycle request must require strict durability");
+    assert_eq!(expectation.durability_threshold, 2);
+    let attestations = validator_signers
+        .iter()
+        .enumerate()
+        .map(|(index, signer)| {
+            ordinary_kagemusha_lifecycle_test_attestation(
+                &request,
+                u16::try_from(index).expect("fixture validator index fits u16"),
+                signer,
+                20_000_u64.saturating_add(u64::try_from(index).unwrap_or(u64::MAX)),
+            )
+        })
+        .collect::<Vec<_>>();
+    let one_snapshot =
+        ordinary_kagemusha_lifecycle_test_snapshot(&request, vec![attestations[0].clone()]);
+    assert_eq!(
+        super::validate_ordinary_kagemusha_lifecycle_acceptance(&one_snapshot, &expectation)
+            .expect("one exact authority claim is a valid partial certificate")
+            .len(),
+        1
+    );
+    let one_response = super::execute_torii_proxy_request_across_candidates(
+        vec![ToriiProxyCandidate::P2p(validators[0].clone())],
+        route,
+        request.clone(),
+        TORII_PROXY_REQUEST_MAX_ENCODED_BYTES_V1,
+        Duration::ZERO,
+        {
+            let one_snapshot = one_snapshot.clone();
+            move |_candidate, _request| {
+                let snapshot = one_snapshot.clone();
+                async move { Ok::<ToriiProxyHttpResponseV1, ToriiProxyAttemptError>(snapshot) }
+            }
+        },
+        |_request_id| async move {},
+    )
+    .await;
+    assert_eq!(one_response.status(), StatusCode::SERVICE_UNAVAILABLE);
+    assert!(super::is_queue_plan_outcome_unknown_response(&one_response));
+
+    let snapshots = validators
+        .iter()
+        .cloned()
+        .zip(attestations.iter().cloned())
+        .map(|(validator, attestation)| {
+            (
+                validator,
+                ordinary_kagemusha_lifecycle_test_snapshot(&request, vec![attestation]),
+            )
+        })
+        .collect::<BTreeMap<_, _>>();
+    let quorum_response = super::execute_torii_proxy_request_across_candidates(
+        validators
+            .iter()
+            .cloned()
+            .map(ToriiProxyCandidate::P2p)
+            .collect(),
+        route,
+        request.clone(),
+        TORII_PROXY_REQUEST_MAX_ENCODED_BYTES_V1,
+        Duration::ZERO,
+        move |candidate, _request| {
+            let snapshot = snapshots
+                .get(candidate.peer_id())
+                .expect("candidate has a lifecycle attestation")
+                .clone();
+            async move { Ok::<ToriiProxyHttpResponseV1, ToriiProxyAttemptError>(snapshot) }
+        },
+        |_request_id| async move {},
+    )
+    .await;
+    assert_eq!(quorum_response.status(), StatusCode::ACCEPTED);
+    let quorum_body = axum::body::to_bytes(quorum_response.into_body(), usize::MAX)
+        .await
+        .expect("read aggregated lifecycle certificate");
+    let certificate = super::decode_ordinary_kagemusha_lifecycle_certificate(&quorum_body)
+        .expect("decode canonical aggregated lifecycle certificate");
+    assert_eq!(certificate.attestations.len(), 2);
+    let ToriiProxyRequestKindV4::SubmitTransaction { transaction, .. } = &request.request else {
+        panic!("fixture must remain a transaction submission");
+    };
+    validate_ordinary_kagemusha_lifecycle_admission_certificate_v1(
+        &network_id,
+        transaction,
+        certificate,
+        OrdinaryKagemushaLifecycleAdmissionCertificateStrengthV1::Quorum,
+    )
+    .expect("aggregated lifecycle certificate must be an exact f+1 quorum");
+}
+#[cfg(any(feature = "p2p_ws", feature = "connect"))]
+#[tokio::test]
+async fn generic_transaction_proxy_rejects_ordinary_lifecycle_and_dedicated_route_rejects_bare_202()
+{
+    let (network_id, route, request, _, _) = ordinary_kagemusha_lifecycle_proxy_fixture();
+    let ToriiProxyRequestKindV4::SubmitTransaction {
+        transaction,
+        expected_plan,
+        admission: ToriiProxyTransactionAdmissionV2::OrdinaryKagemushaLifecycleDurable(binding),
+        ..
+    } = &request.request
+    else {
+        panic!("fixture must remain a dedicated lifecycle transaction");
+    };
+    let routing_plan = expected_plan
+        .clone()
+        .try_into_routing_plan()
+        .expect("fixture routing plan");
+    let app = mk_app_state_for_tests();
+    let generic_response = super::execute_torii_transaction_via_proxy(
+        &app,
+        transaction.clone(),
+        routing_plan.clone(),
+        None,
+        false,
+        ResponseFormat::Norito,
+    )
+    .await;
+    assert_eq!(generic_response.status(), StatusCode::CONFLICT);
+    assert_eq!(
+        torii_response_header(&generic_response, "x-iroha-reject-code"),
+        Some("queue_plan_admission_intent_mismatch")
+    );
+
+    let mut bare = Response::new(Body::empty());
+    *bare.status_mut() = StatusCode::ACCEPTED;
+    let dedicated_response =
+        super::validate_ordinary_kagemusha_lifecycle_admission_quorum_response(
+            bare,
+            &network_id,
+            transaction,
+            binding,
+        )
+        .await;
+    assert_eq!(dedicated_response.status(), StatusCode::SERVICE_UNAVAILABLE);
+    assert!(super::is_queue_plan_outcome_unknown_response(
+        &dedicated_response
+    ));
+    assert_eq!(route, routing_plan.coordinator_route());
+}
+#[cfg(any(feature = "p2p_ws", feature = "connect"))]
+#[tokio::test]
+async fn generic_transaction_batch_rejects_ordinary_lifecycle_without_enqueuing() {
+    let validator_signers = (0_u8..4)
+        .map(|offset| {
+            checked_torii_test_keypair_from_seed_byte(
+                0xa0_u8.saturating_add(offset),
+                Algorithm::BlsNormal,
+                "derive lifecycle batch-rejection validator fixture key",
+            )
+        })
+        .collect::<Vec<_>>();
+    let (app, request, ordinary_prefix_signer) =
+        incoming_ordinary_kagemusha_lifecycle_proxy_fixture(&validator_signers);
+    let ToriiProxyRequestKindV4::SubmitTransaction { transaction, .. } = &request.request else {
+        panic!("lifecycle batch-rejection fixture must remain a transaction submission");
+    };
+    let TransactionEntrypoint::External(signed_transaction) = transaction else {
+        panic!("lifecycle batch-rejection fixture must remain externally signed");
+    };
+    let ordinary = signed_log_transaction_for_test(
+        *app.state.network_id_ref(),
+        AccountId::new(ordinary_prefix_signer.public_key().clone()),
+        "ordinary-prefix-before-lifecycle-batch-rejection",
+        &ordinary_prefix_signer,
+    );
+    let error = match super::handler_post_transactions_batch(
+        State(app.clone()),
+        HeaderMap::new(),
+        transaction_batch_body_for_test(vec![
+            <SignedTransaction as iroha_version::codec::EncodeVersioned>::encode_versioned(
+                &ordinary,
+            ),
+            <SignedTransaction as iroha_version::codec::EncodeVersioned>::encode_versioned(
+                signed_transaction,
+            ),
+        ]),
+    )
+    .await
+    {
+        Ok(_) => panic!("generic batch submission must reject an ordinary lifecycle transaction"),
+        Err(error) => error,
+    };
+    assert!(
+        matches!(
+            &error,
+            Error::PushIntoQueue { source, .. }
+                if matches!(
+                    source.as_ref(),
+                    iroha_core::queue::Error::UnresolvedRoute { reason }
+                        if reason.contains("dedicated authenticated durable submission route")
+                )
+        ),
+        "batch rejection must identify the dedicated lifecycle route boundary: {error:?}"
+    );
+    assert_eq!(
+        app.queue.active_len(),
+        0,
+        "batch rejection must not enqueue either the ordinary prefix or lifecycle transaction"
+    );
+}
+#[cfg(any(feature = "p2p_ws", feature = "connect"))]
+#[tokio::test]
+async fn generic_transaction_batch_rejects_queue_plan_synced_before_routing() {
+    let validator_signers = (0_u8..4)
+        .map(|offset| {
+            checked_torii_test_keypair_from_seed_byte(
+                0xb4_u8.saturating_add(offset),
+                Algorithm::BlsNormal,
+                "derive QueuePlanSynced batch-rejection validator fixture key",
+            )
+        })
+        .collect::<Vec<_>>();
+    let (app, request) = incoming_proxy_submit_fixture_with_validator_signers(
+        0xa4,
+        ToriiProxyTransactionAdmissionV2::QueuePlanSynced,
+        &validator_signers,
+    );
+    let ToriiProxyRequestKindV4::SubmitTransaction { transaction, .. } = &request.request else {
+        panic!("QueuePlanSynced batch-rejection fixture must remain a transaction submission");
+    };
+    let TransactionEntrypoint::External(signed_transaction) = transaction else {
+        panic!("QueuePlanSynced batch-rejection fixture must remain externally signed");
+    };
+    let error = match super::handler_post_transactions_batch(
+        State(app.clone()),
+        HeaderMap::new(),
+        transaction_batch_body_for_test(vec![
+            <SignedTransaction as iroha_version::codec::EncodeVersioned>::encode_versioned(
+                signed_transaction,
+            ),
+        ]),
+    )
+    .await
+    {
+        Ok(_) => panic!("generic batch submission must reject QueuePlanSynced admission"),
+        Err(error) => error,
+    };
+    assert!(
+        matches!(
+            &error,
+            Error::PushIntoQueue { source, .. }
+                if matches!(
+                    source.as_ref(),
+                    iroha_core::queue::Error::UnresolvedRoute { reason }
+                        if reason.contains("per-entry globally certified admission")
+                )
+        ),
+        "batch rejection must identify the globally certified admission boundary: {error:?}"
+    );
+    assert_eq!(
+        app.queue.active_len(),
+        0,
+        "QueuePlanSynced batch rejection must not enqueue the reserved transaction"
+    );
+}
+#[cfg(any(feature = "p2p_ws", feature = "connect"))]
+#[tokio::test]
+async fn ordinary_kagemusha_lifecycle_receiver_rolls_durable_retry_without_queue_plan_publication()
+{
+    let validator_signers = (0_u8..4)
+        .map(|offset| {
+            checked_torii_test_keypair_from_seed_byte(
+                0x90_u8.saturating_add(offset),
+                Algorithm::BlsNormal,
+                "derive lifecycle durable-retry validator fixture key",
+            )
+        })
+        .collect::<Vec<_>>();
+    let (app, mut request, _ordinary_prefix_signer) =
+        incoming_ordinary_kagemusha_lifecycle_proxy_fixture(&validator_signers);
+    let journal_dir = tempfile::tempdir().expect("create lifecycle retry journal directory");
+    app.queue
+        .install_plan_journal(
+            &journal_dir.path().join("ordinary_lifecycle_retry.norito"),
+            1024 * 1024,
+            true,
+        )
+        .expect("install lifecycle retry journal");
+
+    let first_response =
+        super::execute_incoming_torii_proxy_request(&app, request.clone(), None).await;
+    assert_eq!(first_response.status(), StatusCode::ACCEPTED);
+    let first_snapshot = super::response_to_torii_proxy_snapshot(
+        first_response,
+        QUEUE_PLAN_SYNCED_CERTIFICATE_MAX_BODY_BYTES_V2,
+    )
+    .await;
+    let first_certificate =
+        super::decode_ordinary_kagemusha_lifecycle_certificate(&first_snapshot.body)
+            .expect("decode first lifecycle durable receipt");
+    assert_eq!(first_certificate.attestations.len(), 1);
+    let first_context = first_certificate.binding.admission_context.clone();
+    let first_timestamp = first_certificate.attestations[0].enqueue_timestamp_ms;
+    let entrypoint_hash = first_certificate.binding.entrypoint_hash.clone();
+    assert_eq!(
+        app.state
+            .queue_plan_admission_registry_entrypoint_present(entrypoint_hash.clone())
+            .expect("inspect QueuePlan registry"),
+        false,
+        "lifecycle receipt must not populate the QueuePlan registry"
+    );
+    assert_eq!(
+        app.kura
+            .pending_queue_plan_admission_certificate(Hash::new(&first_snapshot.body))
+            .expect("inspect QueuePlan certificate carrier"),
+        None,
+        "lifecycle receipt must not be persisted as a QueuePlan publication carrier"
+    );
+
+    record_latest_committed_header_for_test(&app, 1, 1_000);
+    let ToriiProxyRequestKindV4::SubmitTransaction {
+        transaction,
+        expected_plan,
+        admission,
+        admission_binding,
+    } = &mut request.request
+    else {
+        panic!("lifecycle retry fixture must remain a transaction submission");
+    };
+    let routing_plan = expected_plan
+        .clone()
+        .try_into_routing_plan()
+        .expect("retry routing plan");
+    let current_context = app
+        .queue
+        .plan_admission_context_with_state(app.state.as_ref(), &routing_plan)
+        .expect("capture height-advanced lifecycle context");
+    assert_ne!(current_context, first_context);
+    let current_binding = OrdinaryKagemushaLifecycleAdmissionBindingV1::new(
+        app.state.network_id_ref(),
+        transaction,
+        &routing_plan,
+        current_context.clone(),
+    )
+    .expect("construct height-advanced lifecycle retry binding");
+    request.request_id = current_binding.request_id;
+    *admission = ToriiProxyTransactionAdmissionV2::OrdinaryKagemushaLifecycleDurable(
+        current_binding.clone(),
+    );
+    *admission_binding = None;
+    request.deadline_unix_ms = super::torii_proxy_test_deadline_unix_ms();
+
+    let retry_response =
+        super::execute_incoming_torii_proxy_request(&app, request.clone(), None).await;
+    assert_eq!(retry_response.status(), StatusCode::ACCEPTED);
+    let retry_snapshot = super::response_to_torii_proxy_snapshot(
+        retry_response,
+        QUEUE_PLAN_SYNCED_CERTIFICATE_MAX_BODY_BYTES_V2,
+    )
+    .await;
+    let retry_certificate =
+        super::decode_ordinary_kagemusha_lifecycle_certificate(&retry_snapshot.body)
+            .expect("decode rolled-over lifecycle durable receipt");
+    assert_eq!(retry_certificate.binding, current_binding);
+    assert_eq!(retry_certificate.attestations.len(), 1);
+    assert_eq!(
+        retry_certificate.attestations[0].enqueue_timestamp_ms, first_timestamp,
+        "height-advanced durable rollover must preserve FIFO ownership time"
+    );
+    assert_ne!(
+        retry_certificate.attestations[0].journal_record_digest,
+        first_certificate.attestations[0].journal_record_digest,
+        "the re-bound historical claim must attest its exact new durable record"
+    );
+
+    let parameters = app.state.world.view().parameters().clone();
+    let accepted = AcceptedTransaction::accept_entrypoint(
+        match &request.request {
+            ToriiProxyRequestKindV4::SubmitTransaction { transaction, .. } => transaction.clone(),
+            _ => unreachable!("lifecycle retry fixture is a transaction"),
+        },
+        app.state.network_id_ref(),
+        parameters.sumeragi().max_clock_drift(),
+        parameters.transaction(),
+        app.state.crypto().as_ref(),
+    )
+    .expect("reaccept exact lifecycle retry transaction");
+    let durable = app
+        .queue
+        .durable_plan_admission_claim_with_state(&accepted, app.state.as_ref())
+        .expect("recover rolled-over lifecycle claim")
+        .expect("rolled-over lifecycle claim remains queue-owned");
+    assert_eq!(durable.context, current_context);
+    assert_eq!(durable.global_admission_identity, None);
+    assert_eq!(
+        app.state
+            .queue_plan_admission_registry_entrypoint_present(entrypoint_hash)
+            .expect("reinspect QueuePlan registry"),
+        false
+    );
+    assert_eq!(
+        app.kura
+            .pending_queue_plan_admission_certificate(Hash::new(&retry_snapshot.body))
+            .expect("reinspect QueuePlan certificate carrier"),
+        None
+    );
+}
+#[cfg(any(feature = "p2p_ws", feature = "connect"))]
+#[tokio::test]
 async fn queue_plan_synced_max_roster_reaches_honest_quorum_past_byzantine_prefix() {
     let route = RoutingDecision::new(LaneId::SINGLE, DataSpaceId::UNIVERSAL);
     let (_app, mut request) =
@@ -1651,7 +2384,10 @@ async fn queue_plan_synced_real_local_journal_receipt_combines_with_remote_quoru
         .expect("capture real-local quorum admission context");
     let admission_authorities = single_route_queue_plan_authorities(&admission_context);
     assert_eq!(
-        admission_authorities.iter().cloned().collect::<BTreeSet<_>>(),
+        admission_authorities
+            .iter()
+            .cloned()
+            .collect::<BTreeSet<_>>(),
         authorities.iter().cloned().collect::<BTreeSet<_>>(),
         "the durable receiver and aggregator must bind the exact same n=4 authority set"
     );
@@ -1780,9 +2516,7 @@ async fn queue_plan_synced_real_local_journal_receipt_combines_with_remote_quoru
     let certificate_signers = certificate
         .attestations
         .iter()
-        .map(|attestation| {
-            admission_authorities[usize::from(attestation.validator_index)].clone()
-        })
+        .map(|attestation| admission_authorities[usize::from(attestation.validator_index)].clone())
         .collect::<BTreeSet<_>>();
     assert_eq!(
         certificate_signers,
@@ -2150,14 +2884,14 @@ async fn queue_plan_synced_response_bounds_reject_headers_body_encoding_and_deco
             .clone(),
     );
     let (tx, rx) = tokio::sync::oneshot::channel();
-    app.torii_proxy_pending.lock().await.insert(
+    let _waiter_token = super::register_torii_proxy_pending_waiter(
+        &app,
         (request_id, responder.clone()),
-        PendingToriiProxyRequest {
-            sender: tx,
-            max_body_bytes: 4,
-            strict_queue_plan_synced: true,
-        },
-    );
+        tx,
+        4,
+        true,
+    )
+    .await;
     super::process_incoming_torii_proxy_response(
         &app,
         responder,

@@ -1837,8 +1837,8 @@ fn staged_prover_source_is_capability_owned_semantic_and_fail_closed() {
         streaming
             .matches("derive_prepared_common_a_limb_v1(")
             .count(),
-        4,
-        "one narrow adapter plus prefix, per-attempt mask, and semantic-replay derivation sites"
+        5,
+        "one narrow adapter plus prefix, per-attempt mask, semantic replay, and public verification"
     );
     assert!(streaming.contains(".published_object_identity()"));
     assert!(streaming.contains("const STAGED_PROVER_MAXIMUM_FS_ATTEMPTS_V1: usize = 120;"));
@@ -1946,6 +1946,8 @@ fn staged_prover_source_is_capability_owned_semantic_and_fail_closed() {
             .contains("pub(in super::super) struct ZkAmsMkhePreparedCollectivePublicAContextV1")
     );
     assert!(common_a.contains("pub(in super::super) fn derive_limb_budgeted_v1("));
+    assert!(common_a.contains("pub(in super::super) fn candidate_budget_for_limbs_v1("));
+    assert!(!common_a.contains("derive_active_collective_public_a_limb_v1"));
     assert!(common_a.contains("validate_profile_digest_axis_v1("));
     assert!(!common_a.contains("derive(Clone"));
 }

@@ -782,7 +782,6 @@ class KagemushaRecursiveSpendProverTest {
                 "decodeNoteOpening",
                 "decodeOutputMembershipFrontierV4",
                 "decodePeerPayment",
-                "decodeReadiness",
                 "decodeRedeemRequestV4",
                 "decodeReceiverAcknowledgement",
                 "decodeRecipientPaymentRequest",
@@ -822,7 +821,6 @@ class KagemushaRecursiveSpendProverTest {
                 "projectRedeemBuildResultV4",
                 "projectRecipientPaymentRequest",
                 "projectRecipientReceiveOfferV2",
-                "projectReadiness",
                 "projectSplitResultV4",
                 "projectVerifyResultV4",
                 "restoreInitBranchV4",
@@ -853,6 +851,11 @@ class KagemushaRecursiveSpendProverTest {
             "buildVerifyRequest",
             "nativeProjectInitResultV2",
             "nativeRestoreSpendableBranchV2",
+            "decodeReadiness",
+            "projectReadiness",
+            "nativeProjectReadinessV4",
+            "nativeProjectAuthenticatedArtifactSetV4",
+            "nativeProjectActiveVerifierV2",
         )) {
             assertFalse(retired in declaredNames, "$retired must remain absent from the exact-state JVM surface")
         }
@@ -1276,141 +1279,6 @@ class KagemushaRecursiveSpendProverTest {
     }
 
     @Test
-    fun readinessPreservesExactReleaseCapabilitiesIndependently() {
-        fun verifier(
-            name: String,
-            circuitId: String,
-            seed: Int,
-            withdrawalHeight: Long? = null,
-        ) =
-            KagemushaRecursiveSpendProver.ActiveVerifier(
-                "halo2/ipa",
-                name,
-                1,
-                circuitId,
-                ByteArray(32) { seed.toByte() },
-                ByteArray(32) { (seed + 16).toByte() },
-                12 * 1024,
-                10,
-                withdrawalHeight,
-            )
-        fun artifactSet() = KagemushaRecursiveSpendProver.AuthenticatedArtifactSet(
-            "release-v4",
-            ByteArray(32) { 0x31 },
-            ByteArray(32) { 0x32 },
-            ByteArray(32) { 0x33 },
-            10,
-            30,
-            12 * 1024,
-            9,
-        )
-        val transfer = verifier(
-            "confidential_transfer_v2_verifier_record",
-            "halo2/pasta/ipa/confidential-transfer-2x2-merkle16-axiom-poseidon-v3",
-            1,
-        )
-        val topUp = verifier(
-            "kagemusha_topup_shield_v2_verifier_record",
-            "halo2/pasta/ipa/kagemusha-topup-shield-merkle16-axiom-poseidon-v3",
-            2,
-        )
-        val unshield = verifier(
-            "confidential_unshield_v3_verifier_record",
-            "halo2/pasta/ipa/confidential-unshield-change-merkle16-axiom-poseidon-v4",
-            3,
-        )
-        val stepEq = verifier(
-            "kagemusha_recursive_step_eq_v4_verifier_record",
-            "kagemusha-recursive-spend-step-eq-compact-layout-v5",
-            4,
-            30,
-        )
-        val stepEp = verifier(
-            "kagemusha_recursive_step_ep_v4_verifier_record",
-            "kagemusha-recursive-spend-step-ep-compact-lineage-v5",
-            5,
-            30,
-        )
-        fun readiness(
-            cashHandoffCapability: String = KagemushaRecursiveSpendProver.CASH_HANDOFF_CAPABILITY_V1,
-            transferVerifier: KagemushaRecursiveSpendProver.ActiveVerifier? = transfer,
-            unshieldVerifier: KagemushaRecursiveSpendProver.ActiveVerifier? = unshield,
-            recursiveStepEqVerifier: KagemushaRecursiveSpendProver.ActiveVerifier? = stepEq,
-            artifact: KagemushaRecursiveSpendProver.AuthenticatedArtifactSet? = artifactSet(),
-            proofBackendAvailable: Boolean = true,
-        ) = KagemushaRecursiveSpendProver.ReadinessProjection(
-            cashHandoffCapability,
-            21,
-            8,
-            "xor#sora",
-            9,
-            20,
-            ByteArray(32) { 0x41 },
-            proofBackendAvailable,
-            true,
-            true,
-            transferVerifier,
-            topUp,
-            unshieldVerifier,
-            recursiveStepEqVerifier,
-            stepEp,
-            artifact,
-            emptyList(),
-        )
-
-        assertTrue(readiness().allVerifiersActive)
-        assertTrue(readiness().chainArtifactSetReady)
-        assertFalse(readiness().offlineReady)
-        assertFailsWith<IllegalArgumentException> {
-            readiness(cashHandoffCapability = "")
-        }
-        assertFailsWith<IllegalArgumentException> {
-            readiness(cashHandoffCapability = "cash_handoff_v2")
-        }
-        assertFalse(readiness(transferVerifier = null).allVerifiersActive)
-        assertTrue(readiness(transferVerifier = null).chainArtifactSetReady)
-        assertFalse(
-            readiness(
-                unshieldVerifier = verifier(
-                    "confidential_unshield_v3_verifier_record",
-                    "halo2/pasta/ipa/confidential-unshield-change-merkle16-axiom-poseidon-v4",
-                    3,
-                    20,
-                ),
-            ).allVerifiersActive,
-        )
-        assertFalse(
-            readiness(
-                recursiveStepEqVerifier = verifier(
-                    "kagemusha_recursive_step_eq_v4_verifier_record",
-                    "kagemusha-recursive-spend-step-eq-compact-layout-v5",
-                    4,
-                    20,
-                ),
-            ).chainArtifactSetReady,
-        )
-        assertFalse(readiness(artifact = null).chainArtifactSetReady)
-        assertFalse(readiness(proofBackendAvailable = false).chainArtifactSetReady)
-
-        val artifact = artifactSet()
-        val exposedManifestDigest = artifact.manifestSha256()
-        exposedManifestDigest.fill(0)
-        assertEquals(0x31, artifact.manifestSha256()[0].toInt())
-        assertFailsWith<IllegalArgumentException> {
-            KagemushaRecursiveSpendProver.AuthenticatedArtifactSet(
-                "release-v4",
-                ByteArray(32) { 0x31 },
-                ByteArray(32) { 0x31 },
-                ByteArray(32) { 0x33 },
-                10,
-                30,
-                12 * 1024,
-                9,
-            )
-        }
-    }
-
-    @Test
     fun scaledAmountsAreExactAndNeverRound() {
         val amount = KagemushaScaledAmount.fromDecimal("10.75", 9)
         assertEquals("10750000000", amount.atomicUnits)
@@ -1786,7 +1654,7 @@ class KagemushaRecursiveSpendProverTest {
                             )
                             .setBody(
                                 if (capability) {
-                                    """{"mandatory":false,"cash_handoff_capability":"cash_handoff_v1","required_bridge_abi_version":22,"max_hops":8,"ready":true,"assets":[],"blockers":[]}"""
+                                    """{"cash_handoff_capability":"cash_handoff_v1","required_bridge_abi_version":22,"max_hops":8,"ready":true}"""
                                         .toByteArray(StandardCharsets.UTF_8)
                                 } else {
                                     archive(
@@ -1816,13 +1684,10 @@ class KagemushaRecursiveSpendProverTest {
             },
             "selector-taking offline readiness alias must remain absent",
         )
-        assertFalse(status.mandatory)
         assertEquals("cash_handoff_v1", status.cashHandoffCapability)
         assertEquals(22, status.requiredBridgeAbiVersion)
         assertEquals(8, status.maximumHops)
         assertTrue(status.ready)
-        assertTrue(status.assets.isEmpty())
-        assertTrue(status.blockers.isEmpty())
         assertEquals(
             "https://torii.example/api/v1/offline/readiness",
             captured.get().uri.toString(),
@@ -1903,16 +1768,16 @@ class KagemushaRecursiveSpendProverTest {
     }
 
     @Test
-    fun offlineCapabilityRejectsBackendReadinessClaims() {
+    fun offlineCapabilityRejectsRetiredReadinessClaims() {
         val invalidPayloads = listOf(
             """{"mandatory":true,"cash_handoff_capability":"cash_handoff_v1","required_bridge_abi_version":22,"max_hops":8,"ready":true,"assets":[],"blockers":[]}""",
-            """{"mandatory":false,"cash_handoff_capability":"cash_handoff_v2","required_bridge_abi_version":22,"max_hops":8,"ready":true,"assets":[],"blockers":[]}""",
-            """{"mandatory":false,"cash_handoff_capability":"cash_handoff_v1","required_bridge_abi_version":21,"max_hops":8,"ready":true,"assets":[],"blockers":[]}""",
-            """{"mandatory":false,"cash_handoff_capability":"cash_handoff_v1","required_bridge_abi_version":22,"max_hops":9,"ready":true,"assets":[],"blockers":[]}""",
-            """{"mandatory":false,"cash_handoff_capability":"cash_handoff_v1","required_bridge_abi_version":22,"max_hops":8,"ready":false,"assets":[],"blockers":[]}""",
-            """{"mandatory":false,"cash_handoff_capability":"cash_handoff_v1","required_bridge_abi_version":22,"max_hops":8,"ready":true,"assets":[{}],"blockers":[]}""",
-            """{"mandatory":false,"cash_handoff_capability":"cash_handoff_v1","required_bridge_abi_version":22,"max_hops":8,"ready":true,"assets":[],"blockers":[{"code":"unexpected","message":"unexpected"}]}""",
-            """{"mandatory":false,"cash_handoff_capability":"cash_handoff_v1","required_bridge_abi_version":22,"max_hops":8,"ready":true,"assets":[],"blockers":[],"future":true}""",
+            """{"cash_handoff_capability":"cash_handoff_v2","required_bridge_abi_version":22,"max_hops":8,"ready":true}""",
+            """{"cash_handoff_capability":"cash_handoff_v1","required_bridge_abi_version":21,"max_hops":8,"ready":true}""",
+            """{"cash_handoff_capability":"cash_handoff_v1","required_bridge_abi_version":22,"max_hops":9,"ready":true}""",
+            """{"cash_handoff_capability":"cash_handoff_v1","required_bridge_abi_version":22,"max_hops":8,"ready":false}""",
+            """{"cash_handoff_capability":"cash_handoff_v1","required_bridge_abi_version":22,"max_hops":8,"ready":true,"assets":[{}],"blockers":[]}""",
+            """{"cash_handoff_capability":"cash_handoff_v1","required_bridge_abi_version":22,"max_hops":8,"ready":true,"assets":[],"blockers":[{"code":"unexpected","message":"unexpected"}]}""",
+            """{"cash_handoff_capability":"cash_handoff_v1","required_bridge_abi_version":22,"max_hops":8,"ready":true,"future":true}""",
         )
         invalidPayloads.forEach { payload ->
             assertFailsWith<RuntimeException> {

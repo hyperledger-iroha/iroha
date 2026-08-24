@@ -1,6 +1,6 @@
 //! Internal helpers shared across governance CLI submodules.
-use core::mem;
 use crate::{CliOutputFormat, RunContext};
+use core::mem;
 use eyre::{Result, eyre};
 use iroha::client::Client;
 use iroha_crypto::{

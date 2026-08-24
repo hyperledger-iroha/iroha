@@ -108,7 +108,7 @@ internal static class ToriiVpnJson
     {
         ArgumentNullException.ThrowIfNull(response);
 
-        ToriiSseEventJson.RequireExactSizedHex(response.SessionId, $"{context}.session_id", 32);
+        ToriiSseEventJson.RequireExactSizedHex(response.SessionId, $"{context}.session_id", 16);
         RequireCanonicalAccountId(response.AccountId, $"{context}.account_id");
         RequireVpnExitClass(response.ExitClass, $"{context}.exit_class");
         RequireVpnRelayEndpoint(response.RelayEndpoint, $"{context}.relay_endpoint");
@@ -152,7 +152,7 @@ internal static class ToriiVpnJson
     {
         ArgumentNullException.ThrowIfNull(response);
 
-        ToriiSseEventJson.RequireExactSizedHex(response.SessionId, $"{context}.session_id", 32);
+        ToriiSseEventJson.RequireExactSizedHex(response.SessionId, $"{context}.session_id", 16);
         RequireCanonicalAccountId(response.AccountId, $"{context}.account_id");
         RequireVpnExitClass(response.ExitClass, $"{context}.exit_class");
         ToriiSseEventJson.RequireExactTokenText(response.RelayEndpoint, $"{context}.relay_endpoint");
@@ -744,10 +744,11 @@ internal static class ToriiVpnJson
     private static void RequireVpnReceiptStatus(string value, string field)
     {
         ToriiSseEventJson.RequireExactTokenText(value, field);
-        if (value is not ("disconnected" or "expired" or "replaced" or "settled"))
+        if (value is not (
+            "disconnected" or "expired" or "replaced" or "settlement_pending" or "settled"))
         {
             throw new JsonException(
-                $"{field} must be one of disconnected, expired, replaced, or settled.");
+                $"{field} must be one of disconnected, expired, replaced, settlement_pending, or settled.");
         }
     }
 

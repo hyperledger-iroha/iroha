@@ -20,7 +20,7 @@ use super::{
     checked_coefficient_work, checked_ring_multiplication_work,
     cpk_relation::{
         ZK_AMS_MKHE_CPK_PARTY_B_OBJECT_BYTES_V1, ZkAmsMkheCpkPartyBPointerV1,
-        derive_active_collective_public_a_limb_v1,
+        prepare_active_collective_public_a_v1,
     },
     manifest::{
         ZK_AMS_MKHE_RELEASE_ROSTER_SIZE_V1, release_profile_v1, zk_ams_mkhe_release_manifest_v1,
@@ -1449,35 +1449,6 @@ impl ZkAmsMkheCollectivePublicKeyV1 {
         Ok(())
     }
 }
-/// Test-only one-party constructor retained for isolated native fixtures.
-///
-/// Production callers must start [`super::cpk_ceremony::ZkAmsMkheCpkCeremonyV1`]
-/// first and use its sole prepared common-`a` owner. Repeating this wrapper
-/// eight times creates eight independent `P`-sized owners and is therefore not
-/// a supported public construction topology.
-#[cfg(test)]
-pub(super) fn generate_zk_ams_mkhe_collective_party_state_v1<R: MaskedRelaxedRandomSourceV1>(
-    roster: &ZkAmsMkheGovernedActiveRosterV1,
-    transcript_digest: [u8; 32],
-    party_index: usize,
-    party_secret: &ZkAmsMkheActivePartySecretV1,
-    random: &mut R,
-) -> Result<
-    (
-        ZkAmsMkheCollectivePartyStateV1,
-        ZkAmsMkheCollectivePublicKeyShareV1,
-    ),
-    ZkAmsMkheErrorV1,
-> {
-    let prepared = prepare_zk_ams_mkhe_collective_public_a_v1(roster, transcript_digest)?;
-    generate_zk_ams_mkhe_collective_party_state_with_prepared_public_a_v1(
-        roster,
-        &prepared,
-        party_index,
-        party_secret,
-        random,
-    )
-}
 /// Generate one party state from the ceremony-owned prepared common `a`.
 ///
 /// Production code obtains `prepared` by borrowing the live move-only CPK
@@ -1830,10 +1801,16 @@ pub(super) fn finalize_collective_public_key_from_staged_v1(
             return Err(ZkAmsMkheErrorV1::InvalidKeyMaterial);
         }
     }
+    let prepared_public_a =
+        prepare_active_collective_public_a_v1(&profile, roster, transcript_digest)
+            .map_err(|_| ZkAmsMkheErrorV1::InvalidKeyMaterial)?;
+    let mut remaining_public_a_candidates = prepared_public_a
+        .candidate_budget_for_limbs_v1(profile.moduli.len())
+        .map_err(|_| ZkAmsMkheErrorV1::InvalidKeyMaterial)?;
     for limb in 0..profile.moduli.len() {
-        let expected =
-            derive_active_collective_public_a_limb_v1(&profile, roster, transcript_digest, limb)
-                .map_err(|_| ZkAmsMkheErrorV1::InvalidKeyMaterial)?;
+        let expected = prepared_public_a
+            .derive_limb_budgeted_v1(limb, &mut remaining_public_a_candidates)
+            .map_err(|_| ZkAmsMkheErrorV1::InvalidKeyMaterial)?;
         if public_a.0.limb(&profile, limb) != expected.as_slice() {
             return Err(ZkAmsMkheErrorV1::InvalidKeyMaterial);
         }
@@ -2174,6 +2151,12 @@ pub(super) fn validate_collective_public_key_share_for_verified_cpk_compact_v1(
     {
         return Err(ZkAmsMkheErrorV1::InvalidKeyMaterial);
     }
+    let prepared_public_a =
+        prepare_active_collective_public_a_v1(&profile, roster, transcript_digest)
+            .map_err(|_| ZkAmsMkheErrorV1::InvalidKeyMaterial)?;
+    let mut remaining_public_a_candidates = prepared_public_a
+        .candidate_budget_for_limbs_v1(profile.moduli.len())
+        .map_err(|_| ZkAmsMkheErrorV1::InvalidKeyMaterial)?;
     for limb in 0..profile.moduli.len() {
         let start = limb
             .checked_mul(profile.ring_degree)
@@ -2181,9 +2164,9 @@ pub(super) fn validate_collective_public_key_share_for_verified_cpk_compact_v1(
         let end = start
             .checked_add(profile.ring_degree)
             .ok_or(ZkAmsMkheErrorV1::ResourceCeilingExceeded)?;
-        let expected =
-            derive_active_collective_public_a_limb_v1(&profile, roster, transcript_digest, limb)
-                .map_err(|_| ZkAmsMkheErrorV1::InvalidKeyMaterial)?;
+        let expected = prepared_public_a
+            .derive_limb_budgeted_v1(limb, &mut remaining_public_a_candidates)
+            .map_err(|_| ZkAmsMkheErrorV1::InvalidKeyMaterial)?;
         if share.public_a.residues().get(start..end) != Some(expected.as_slice()) {
             return Err(ZkAmsMkheErrorV1::InvalidKeyMaterial);
         }
@@ -2246,10 +2229,16 @@ pub(super) fn collective_public_key_digest_from_bounded_cpk_v1(
             .map_err(|_| ZkAmsMkheErrorV1::ResourceCeilingExceeded)?
             .to_be_bytes(),
     );
+    let prepared_public_a =
+        prepare_active_collective_public_a_v1(&profile, roster, transcript_digest)
+            .map_err(|_| ZkAmsMkheErrorV1::InvalidKeyMaterial)?;
+    let mut remaining_public_a_candidates = prepared_public_a
+        .candidate_budget_for_limbs_v1(profile.moduli.len())
+        .map_err(|_| ZkAmsMkheErrorV1::InvalidKeyMaterial)?;
     for limb in 0..profile.moduli.len() {
-        let public_a =
-            derive_active_collective_public_a_limb_v1(&profile, roster, transcript_digest, limb)
-                .map_err(|_| ZkAmsMkheErrorV1::InvalidKeyMaterial)?;
+        let public_a = prepared_public_a
+            .derive_limb_budgeted_v1(limb, &mut remaining_public_a_candidates)
+            .map_err(|_| ZkAmsMkheErrorV1::InvalidKeyMaterial)?;
         for residue in public_a {
             hash.update(&residue.to_be_bytes());
         }

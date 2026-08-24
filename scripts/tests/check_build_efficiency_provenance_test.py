@@ -195,7 +195,7 @@ def test_checked_in_manifest_has_the_complete_strict_schema() -> None:
 
     MODULE.validate_manifest_schema(manifest)
 
-    assert len(manifest["selected_paths"]) == 17
+    assert len(manifest["selected_paths"]) == 14
     assert manifest["signed_lock_anchor"]["signature"]["cryptographic_signer_authentication"] is False
 
 
@@ -208,7 +208,7 @@ def test_valid_mocked_object_graph_passes(
 
     assert report == {
         "roles": 5,
-        "selected_paths": 17,
+        "selected_paths": 14,
         "historical_rust_paths": 19_456,
         "cargo_lock_bytes": len(store.lock_bytes),
     }

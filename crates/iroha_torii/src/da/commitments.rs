@@ -577,8 +577,8 @@ mod tests {
         .expect("future-created autoscale lane catalog");
         let mut nexus = app.state.nexus.write();
         nexus.autoscale.enabled = true;
-        nexus.autoscale.min_lanes = NonZeroU32::new(1).expect("nonzero min lanes");
-        nexus.autoscale.max_lanes = NonZeroU32::new(3).expect("nonzero max lanes");
+        nexus.autoscale.min_lane_id = NonZeroU32::new(1).expect("nonzero min lanes");
+        nexus.autoscale.max_lane_id_exclusive = NonZeroU32::new(3).expect("nonzero max lanes");
         nexus.lane_config = ConfigLaneConfig::from_catalog(&lane_catalog);
         nexus.lane_catalog = lane_catalog;
     }

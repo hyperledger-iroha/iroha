@@ -1484,7 +1484,6 @@ def _seed_run_logs(
             "IROHA_TEST_REQUIRE_NETWORK=1 "
             "IROHA_TEST_NETWORK_START_ATTEMPTS=1 "
             "IROHA_TEST_SKIP_BUILD=1 "
-            "IROHA_TEST_ALLOW_REENTRANT_BUILD=0 "
             "IROHA_TEST_BUILD_PROFILE=release "
             "PROFILE=release "
             "IROHA_TEST_BUILD_TIMEOUT_MS=3600 "

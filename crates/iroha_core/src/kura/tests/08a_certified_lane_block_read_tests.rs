@@ -12,7 +12,8 @@ fn certified_lane_block_persists_under_lane_segment_and_reloads() {
         lane_entry.dataspace_id,
         lane_block_height,
     );
-    let (kura, _) = Kura::new(&config, &lane_config).expect("init Kura");
+    let (kura, _) =
+        Kura::open_test_kura_with_configured_lane_config(&config, &lane_config).expect("init Kura");
     assert!(
         kura.persist_committed_lane_block_session(&session, &signer_pops)
             .is_err(),
@@ -58,7 +59,8 @@ fn certified_lane_block_persists_under_lane_segment_and_reloads() {
         "certified lane block index file missing"
     );
     drop(kura);
-    let (reloaded, _) = Kura::new(&config, &lane_config).expect("reopen kura");
+    let (reloaded, _) = Kura::open_test_kura_with_configured_lane_config(&config, &lane_config)
+        .expect("reopen kura");
     assert_eq!(
         reloaded.read_certified_lane_block_artifact(lane_id, lane_block_height),
         Some(artifact)
@@ -99,7 +101,8 @@ fn latest_certified_frontier_reloads_and_repairs_a_missing_progress_pair() {
         Some(expected.clone())
     );
     drop(kura);
-    let (reopened, _) = Kura::new(&config, &lane_config).expect("reopen Kura");
+    let (reopened, _) = Kura::open_test_kura_with_configured_lane_config(&config, &lane_config)
+        .expect("reopen Kura");
     assert_eq!(
         reopened.latest_certified_lane_block_frontier(lane_id),
         Some(expected)
@@ -363,7 +366,8 @@ fn latest_certified_frontier_reset_authority_crosses_height_and_repairs_crash() 
         "fault must interrupt after the lower post-reset frontier wins but before pair replacement"
     );
     drop(kura);
-    let (reopened, _) = Kura::new(&config, &lane_config).expect("reopen after frontier crash");
+    let (reopened, _) = Kura::open_test_kura_with_configured_lane_config(&config, &lane_config)
+        .expect("reopen after frontier crash");
     assert_eq!(
         reopened.latest_certified_lane_block_frontier_with_authority(lane_id, &authority,),
         Some(expected.clone()),
@@ -419,7 +423,8 @@ fn read_only_certified_frontier_preflight_plans_reused_slot_without_mutation() {
         "fixture must leave the fresh frontier over the stale ordinary slot"
     );
     drop(kura);
-    let (reopened, _) = Kura::new(&config, &lane_config).expect("reopen after frontier crash");
+    let (reopened, _) = Kura::open_test_kura_with_configured_lane_config(&config, &lane_config)
+        .expect("reopen after frontier crash");
     let (data_path, index_path) =
         Kura::certified_lane_block_paths_for_entry(lane_entry, temp_dir.path());
     let (frontier_path, build_path) =
@@ -615,7 +620,8 @@ fn certified_lane_block_strict_retry_reissues_every_barrier() {
             lane_block_height,
         );
         let expected = CertifiedLaneBlockArtifact::new(session.clone(), signer_pops.clone());
-        let (kura, _) = Kura::new(&config, &lane_config).expect("init Kura");
+        let (kura, _) = Kura::open_test_kura_with_configured_lane_config(&config, &lane_config)
+            .expect("init Kura");
         kura.install_lane_incarnation_marker_for_test(
             lane_entry,
             session.proposal.descriptor.lane_incarnation,
@@ -643,7 +649,8 @@ fn certified_lane_block_strict_retry_reissues_every_barrier() {
             .expect("certified lane data metadata")
             .len();
         drop(kura);
-        let (kura, _) = Kura::new(&config, &lane_config).expect("reopen Kura after fault");
+        let (kura, _) = Kura::open_test_kura_with_configured_lane_config(&config, &lane_config)
+            .expect("reopen Kura after fault");
         failure.inject();
         assert_eq!(
             kura.read_certified_lane_block_artifact(lane_id, lane_block_height),

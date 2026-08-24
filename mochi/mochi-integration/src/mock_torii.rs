@@ -149,7 +149,6 @@ impl Default for MockToriiData {
             blocks: 5,
             blocks_non_empty: 3,
             commit_time_ms: 42,
-            da_reschedule_total: 0,
             txs_approved: 7,
             txs_rejected: 1,
             last_rejection_at_ms: None,

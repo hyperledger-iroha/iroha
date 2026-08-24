@@ -390,7 +390,7 @@ fn minimal_actual_config(connect_enabled: bool) -> iroha_config::parameters::act
         dedupe_ttl: defaults::connect::DEDUPE_TTL,
         dedupe_cap: defaults::connect::DEDUPE_CAP,
         relay_enabled: defaults::connect::RELAY_ENABLED,
-        relay_strategy: defaults::connect::RELAY_STRATEGY,
+        relay_strategy: A::ConnectRelayStrategy::Broadcast,
         p2p_ttl_hops: defaults::connect::P2P_TTL_HOPS,
     };
     cfg.torii.sorafs_gateway = A::SorafsGateway::default();
@@ -563,9 +563,9 @@ async fn connect_status_present_when_enabled() {
     assert!(!relay_p2p_attached);
 }
 #[tokio::test]
-async fn connect_status_forces_unknown_relay_strategy_to_local_only() {
+async fn connect_status_reports_exact_local_only_strategy() {
     let mut cfg = minimal_actual_config(true);
-    cfg.torii.connect.relay_strategy = "bogus_strategy";
+    cfg.torii.connect.relay_strategy = A::ConnectRelayStrategy::LocalOnly;
     let torii = build_torii(&cfg);
     let app = torii.api_router_for_tests();
     let payload = connect_aggregate_status_json(&app, &cfg).await;
@@ -582,45 +582,9 @@ async fn connect_status_forces_unknown_relay_strategy_to_local_only() {
     assert!(!relay_p2p_attached);
 }
 #[tokio::test]
-async fn connect_status_normalizes_relay_strategy_aliases() {
-    for (raw_strategy, expected) in [
-        ("local_only", "local_only"),
-        ("local-only", "local_only"),
-        ("local", "local_only"),
-        ("  BROADCAST  ", "broadcast"),
-    ] {
-        let mut cfg = minimal_actual_config(true);
-        cfg.torii.connect.relay_strategy = raw_strategy;
-        let torii = build_torii(&cfg);
-        let app = torii.api_router_for_tests();
-        let payload = connect_aggregate_status_json(&app, &cfg).await;
-        let relay_strategy = relay_strategy(&payload);
-        let ConnectStatusCounters {
-            p2p_rebroadcasts_total,
-            p2p_rebroadcast_skipped_total,
-            relay_effective_strategy,
-            relay_p2p_attached,
-        } = connect_status_counters(&payload);
-        assert_eq!(
-            relay_strategy, expected,
-            "raw relay strategy {raw_strategy:?} should normalize"
-        );
-        assert_eq!(
-            p2p_rebroadcasts_total, 0,
-            "status-only probe should not rebroadcast p2p frames"
-        );
-        assert_eq!(p2p_rebroadcast_skipped_total, 0);
-        assert_eq!(
-            relay_effective_strategy, "local_only",
-            "without a connected P2P network, status should report effective local-only relay"
-        );
-        assert!(!relay_p2p_attached);
-    }
-}
-#[tokio::test]
 async fn connect_status_reports_broadcast_effective_when_p2p_attached() {
     let mut cfg = minimal_actual_config(true);
-    cfg.torii.connect.relay_strategy = "broadcast";
+    cfg.torii.connect.relay_strategy = A::ConnectRelayStrategy::Broadcast;
     let torii = build_torii(&cfg).with_p2p(iroha_core::IrohaNetwork::closed_for_tests());
     let app = torii.api_router_for_tests();
     let AttachedConnectRelayStatus {
@@ -640,7 +604,7 @@ async fn connect_status_reports_broadcast_effective_when_p2p_attached() {
 async fn connect_status_reports_local_only_when_relay_disabled_with_p2p_attached() {
     let mut cfg = minimal_actual_config(true);
     cfg.torii.connect.relay_enabled = false;
-    cfg.torii.connect.relay_strategy = "broadcast";
+    cfg.torii.connect.relay_strategy = A::ConnectRelayStrategy::Broadcast;
     let torii = build_torii(&cfg).with_p2p(iroha_core::IrohaNetwork::closed_for_tests());
     let app = torii.api_router_for_tests();
     let AttachedConnectRelayStatus {
@@ -651,25 +615,6 @@ async fn connect_status_reports_local_only_when_relay_disabled_with_p2p_attached
         p2p_rebroadcast_skipped_total,
     } = attached_connect_relay_status(&await_connect_p2p_attachment(&app, &cfg).await);
     assert_eq!(relay_strategy, "broadcast");
-    assert_eq!(relay_effective_strategy, "local_only");
-    assert!(relay_p2p_attached);
-    assert_eq!(p2p_rebroadcasts_total, 0);
-    assert_eq!(p2p_rebroadcast_skipped_total, 0);
-}
-#[tokio::test]
-async fn connect_status_reports_unknown_strategy_as_local_only_with_p2p_attached() {
-    let mut cfg = minimal_actual_config(true);
-    cfg.torii.connect.relay_strategy = "bogus_strategy";
-    let torii = build_torii(&cfg).with_p2p(iroha_core::IrohaNetwork::closed_for_tests());
-    let app = torii.api_router_for_tests();
-    let AttachedConnectRelayStatus {
-        relay_strategy,
-        relay_effective_strategy,
-        relay_p2p_attached,
-        p2p_rebroadcasts_total,
-        p2p_rebroadcast_skipped_total,
-    } = attached_connect_relay_status(&await_connect_p2p_attachment(&app, &cfg).await);
-    assert_eq!(relay_strategy, "local_only");
     assert_eq!(relay_effective_strategy, "local_only");
     assert!(relay_p2p_attached);
     assert_eq!(p2p_rebroadcasts_total, 0);
@@ -1328,7 +1273,7 @@ async fn connect_ws_broadcast_relay_updates_p2p_rebroadcast_counter() {
     use tokio::time::{Duration, sleep};
     use tokio_tungstenite::tungstenite::Message;
     let mut cfg = minimal_actual_config(true);
-    cfg.torii.connect.relay_strategy = "broadcast";
+    cfg.torii.connect.relay_strategy = A::ConnectRelayStrategy::Broadcast;
     cfg.torii.connect.p2p_ttl_hops = 1;
     let torii = build_torii(&cfg).with_p2p(iroha_core::IrohaNetwork::closed_for_tests());
     let app = torii.api_router_for_tests();
@@ -1391,7 +1336,7 @@ async fn connect_ws_broadcast_without_p2p_increments_skipped_rebroadcast_counter
     use tokio::time::{Duration, sleep};
     use tokio_tungstenite::tungstenite::Message;
     let mut cfg = minimal_actual_config(true);
-    cfg.torii.connect.relay_strategy = "broadcast";
+    cfg.torii.connect.relay_strategy = A::ConnectRelayStrategy::Broadcast;
     cfg.torii.connect.p2p_ttl_hops = 1;
     let torii = build_torii(&cfg);
     let app = torii.api_router_for_tests();
@@ -1452,7 +1397,7 @@ async fn connect_ws_local_only_with_p2p_does_not_rebroadcast() {
     use tokio::time::{Duration, sleep};
     use tokio_tungstenite::tungstenite::Message;
     let mut cfg = minimal_actual_config(true);
-    cfg.torii.connect.relay_strategy = "local_only";
+    cfg.torii.connect.relay_strategy = A::ConnectRelayStrategy::LocalOnly;
     let torii = build_torii(&cfg).with_p2p(iroha_core::IrohaNetwork::closed_for_tests());
     let app = torii.api_router_for_tests();
     let Some((listener, addr)) =
@@ -1511,7 +1456,7 @@ async fn connect_ws_relay_disabled_with_p2p_does_not_rebroadcast() {
     use tokio_tungstenite::tungstenite::Message;
     let mut cfg = minimal_actual_config(true);
     cfg.torii.connect.relay_enabled = false;
-    cfg.torii.connect.relay_strategy = "broadcast";
+    cfg.torii.connect.relay_strategy = A::ConnectRelayStrategy::Broadcast;
     let torii = build_torii(&cfg).with_p2p(iroha_core::IrohaNetwork::closed_for_tests());
     let app = torii.api_router_for_tests();
     let Some((listener, addr)) =

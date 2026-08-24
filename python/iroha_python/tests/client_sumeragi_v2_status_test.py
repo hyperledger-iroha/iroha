@@ -728,6 +728,8 @@ def test_retired_global_sumeragi_rbc_and_telemetry_surfaces_are_absent() -> None
         "SumeragiAvailabilitySnapshot",
         "SumeragiQcLatencyEntry",
         "SumeragiRbcBacklog",
+        "SumeragiRbcEviction",
+        "SumeragiRbcStoreStatus",
         "SumeragiTelemetrySnapshot",
         "SumeragiVrfLateReveal",
         "SumeragiVrfSummary",
@@ -737,42 +739,6 @@ def test_retired_global_sumeragi_rbc_and_telemetry_surfaces_are_absent() -> None
         assert name not in client_module.__all__, name
         assert not hasattr(iroha_python, name), name
         assert name not in iroha_python.__all__, name
-
-    retained_telemetry_models = ("SumeragiRbcEviction", "SumeragiRbcStoreStatus")
-    for name in retained_telemetry_models:
-        assert hasattr(client_module, name), name
-        assert hasattr(iroha_python, name), name
-
-
-def test_retained_rbc_store_telemetry_models_parse_snapshot() -> None:
-    status = client_module.SumeragiRbcStoreStatus.from_payload(
-        {
-            "sessions": 3,
-            "bytes": 4096,
-            "pressure_level": 1,
-            "backpressure_deferrals_total": 2,
-            "persist_drops_total": 4,
-            "evictions_total": 5,
-            "recent_evictions": [
-                {
-                    "block_hash": "hash:EVICTED#0001",
-                    "height": 14,
-                    "view": 3,
-                }
-            ],
-        }
-    )
-
-    assert status.sessions == 3
-    assert status.bytes == 4096
-    assert status.recent_evictions == [
-        client_module.SumeragiRbcEviction(
-            block_hash="hash:EVICTED#0001",
-            height=14,
-            view=3,
-        )
-    ]
-
 
 @pytest.mark.parametrize(
     ("mutate", "error"),

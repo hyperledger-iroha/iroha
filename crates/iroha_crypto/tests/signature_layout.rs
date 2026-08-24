@@ -100,17 +100,24 @@ fn signature_bare_hybrid_is_bitset_plus_constvec() {
     assert_eq!(decoded, sig);
 }
 #[test]
-fn signature_bare_compat_is_len_prefixed_then_payload() {
-    // Force non-hybrid path by clearing flags and using core::NoritoSerialize
+fn signature_bare_unpacked_layout_frames_each_payload_byte() {
+    // Select the advertised unpacked path by clearing the packed-sequence flag.
     let sig = Signature::from_bytes(&[1, 2, 3]);
     let _fg = core::DecodeFlagsGuard::enter(0);
     let mut out = Vec::new();
     norito::core::serialize_to_buffer(&sig, &mut out).expect("serialize");
     assert!(out.len() > sig.payload().len());
-    // The compat bare format still prefixes the payload length as a little-endian u64.
+    // The unpacked layout starts with a little-endian sequence count.
     let mut len_bytes = [0u8; 8];
     len_bytes.copy_from_slice(&out[..8]);
     assert_eq!(u64::from_le_bytes(len_bytes), sig.payload().len() as u64);
+    let mut expected = Vec::new();
+    expected.extend_from_slice(&(sig.payload().len() as u64).to_le_bytes());
+    for byte in sig.payload() {
+        expected.extend_from_slice(&1_u64.to_le_bytes());
+        expected.push(*byte);
+    }
+    assert_eq!(out, expected);
     let (decoded, consumed) =
         Signature::decode_from_slice(out.as_slice()).expect("decode compat body");
     assert_eq!(consumed, out.len());
@@ -132,7 +139,7 @@ fn signature_of_delegates_to_signature_layout() {
         wrapped.encode(),
         "SignatureOf must delegate to Signature encoding"
     );
-    // Compat path also the same shape
+    // The advertised unpacked path also has the same shape.
     let _fg = core::DecodeFlagsGuard::enter(0);
     let mut s1 = Vec::new();
     norito::core::serialize_to_buffer(&base, &mut s1).expect("serialize sig");

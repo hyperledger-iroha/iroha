@@ -506,18 +506,18 @@ fn full_capacity_certified_fetch_retains_its_exact_owner_until_capacity_releases
     let fixture = Fixture::new();
     let mut executor = fixture.executor(EffectQueueConfig::new(1, 4, 1 << 20, 4));
     let mut services = fixture.services();
+    let proposal_a = AdapterEffect::FetchBody {
+        tag: tag(0),
+        round: fixture.manifest.round,
+        subject: fixture.manifest.subject,
+        manifest: Some(fixture.manifest.clone()),
+        certified_sources: Vec::new(),
+        certificate: None,
+    };
+    let proposal_a_ownership = authenticated_proposal_fetch_ownership(&fixture, &proposal_a, 9_017);
+    executor.runtime.exact_effect_ownership = Some((proposal_a.clone(), proposal_a_ownership));
     executor
-        .consume_effects(
-            vec![AdapterEffect::FetchBody {
-                tag: tag(0),
-                round: fixture.manifest.round,
-                subject: fixture.manifest.subject,
-                manifest: Some(fixture.manifest.clone()),
-                certified_sources: Vec::new(),
-                certificate: None,
-            }],
-            &mut services,
-        )
+        .consume_effects(vec![proposal_a], &mut services)
         .expect("fill the only slot with Proposal A reconstruction");
     let proposal_a_task = services.fetch_tasks[0].clone();
     let (subject_b, _) = distinct_body(&fixture);

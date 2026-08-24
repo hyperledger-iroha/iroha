@@ -108,10 +108,10 @@ fn v4_internal_validation_receipt_rejects_tracked_cargo_lock_substitution() {
     let candidate = unsigned_candidate(&finalized_manifest);
     let expected_lock_sha256 = finalized_manifest
         .reviewed_source_closure
-        .ignored_cargo_lock_sha256;
+        .tracked_cargo_lock_sha256;
     let expected_lock_size_bytes = finalized_manifest
         .reviewed_source_closure
-        .ignored_cargo_lock_size_bytes;
+        .tracked_cargo_lock_size_bytes;
     let mut substituted_lock_sha256 = expected_lock_sha256;
     substituted_lock_sha256[0] ^= 1;
     for (case, lock_sha256, lock_size_bytes) in [

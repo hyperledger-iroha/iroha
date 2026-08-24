@@ -227,9 +227,8 @@ The external target and report bundle are intentional mutable outputs. Input
 reads may update filesystem access times. The profiler provides path isolation,
 not an OS sandbox: transitive helpers selected from the recorded PATH and
 hostile processes already able to address unrelated absolute paths are outside
-the guarantee. The legacy `scripts/profile_build.py` named-scenario wrapper now
-uses the same snapshot boundary, but authoritative evidence remains schema-v3
-output from `scripts/profile_cargo_build.py`.
+the guarantee. Authoritative evidence is schema-v3 output from
+`scripts/profile_cargo_build.py`.
 
 ### Featured checks
 - `check_rust_1_92_lints.sh` – runs `cargo check` with the Rust 1.92 lint set (including the new never-type fallback and macro-export checks) so stricter diagnostics surface before CI.
