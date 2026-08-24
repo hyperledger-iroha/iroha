@@ -1749,6 +1749,39 @@ def canary_source_errors(
  return e
 
 
+def workflow_has_exact_release_rust_filter(workflow: str, command: str) -> bool:
+ lines = workflow.splitlines()
+ inline = re.compile(
+  rf"^ *-\s+run:\s+{re.escape(command)}\s*$"
+ )
+ folded_header = re.compile(r"^(?P<indent> *)-\s+run:\s+>-\s*$")
+ for index, line in enumerate(lines):
+  if inline.fullmatch(line):
+   return True
+  header = folded_header.fullmatch(line)
+  if header is None or index + 1 >= len(lines):
+   continue
+  body_line = lines[index + 1]
+  body_indent = len(body_line) - len(body_line.lstrip(" "))
+  if not body_line.strip() or body_indent <= len(header.group("indent")):
+   continue
+  body_end = index + 2
+  has_continuation = False
+  while body_end < len(lines):
+   continuation = lines[body_end]
+   if not continuation.strip():
+    body_end += 1
+    continue
+   continuation_indent = len(continuation) - len(continuation.lstrip(" "))
+   if continuation_indent < body_indent:
+    break
+   has_continuation = True
+   break
+  if not has_continuation and body_line.strip() == command:
+   return True
+ return False
+
+
 def release_closure_source_errors(
  core: str, schema: str, workflow: str, overrides: dict[str, str]
 ) -> list[str]:
@@ -1936,9 +1969,10 @@ def release_closure_source_errors(
    rp(suite, WORKFLOW, e, rf"(?m)^\s+{re.escape(path)}\s*$",
     f"active Kagemusha release Python test {path}")
  for command in KAGEMUSHA_RELEASE_RUST_TEST_FILTERS:
-  rp(workflow, WORKFLOW, e,
-   rf"(?m)^\s*-\s+run:\s+{re.escape(command)}\s*$",
-   f"active Kagemusha release Rust filter {command}")
+  if not workflow_has_exact_release_rust_filter(workflow, command):
+   e.append(
+    f"{WORKFLOW}: missing active Kagemusha release Rust filter {command}"
+   )
  return e
 
 

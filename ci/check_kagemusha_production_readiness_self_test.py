@@ -2796,9 +2796,33 @@ for (required_filter, retired_filter, label) in (('cargo test -p iroha_data_mode
     'activation-policy parity'), ('cargo test -p iroha_kagami --bin kagami backing_',
     'cargo test -p iroha_kagami --bin kagami retired_backing_filter', 'ordered Taira backing')):
     expect_static_mutation(WORKFLOW, required_filter, retired_filter, f'reject a missing {label} workflow filter', (required_filter,))
+folded_acceptance_filter = KAGEMUSHA_RELEASE_RUST_TEST_FILTERS[0]
+folded_acceptance_inline = f'- run: {folded_acceptance_filter}'
+folded_acceptance_step = f'- run: >-\n          {folded_acceptance_filter}'
+if folded_acceptance_inline not in baseline[WORKFLOW]:
+    errors.append('self-test could not locate an inline Kagemusha release Rust filter')
+elif static_errors({WORKFLOW: baseline[WORKFLOW].replace(
+        folded_acceptance_inline, folded_acceptance_step, 1)}):
+    errors.append('self-test failed to accept an exact single-command folded Kagemusha Rust filter')
 for required_filter in KAGEMUSHA_RELEASE_RUST_TEST_FILTERS:
-    expect_static_mutation(WORKFLOW, f'- run: {required_filter}', f'# - run: {required_filter}',
-        'reject a missing Kagemusha release Rust filter', (required_filter,))
+    inline_step = f'- run: {required_filter}'
+    folded_step = f'- run: >-\n          {required_filter}'
+    if folded_step in baseline[WORKFLOW]:
+        expect_static_mutation(WORKFLOW, folded_step,
+            f'- run: >-\n          retired {required_filter}',
+            'reject a missing folded Kagemusha release Rust filter', (required_filter,))
+    else:
+        expect_static_mutation(WORKFLOW, inline_step, f'# {inline_step}',
+            'reject a missing Kagemusha release Rust filter', (required_filter,))
+folded_continuation_filter = next(
+    command for command in KAGEMUSHA_RELEASE_RUST_TEST_FILTERS
+    if 'kagemusha::tests::' in command
+)
+folded_continuation_step = f'- run: >-\n          {folded_continuation_filter}'
+expect_static_mutation(WORKFLOW, folded_continuation_step,
+    f'{folded_continuation_step}\n          echo unexpected continuation',
+    'reject an extra folded Kagemusha Rust filter continuation',
+    (folded_continuation_filter,))
 for required_path in KAGEMUSHA_RELEASE_PYTHON_TEST_PATHS:
     expect_static_mutation(WORKFLOW, required_path, f'# {required_path}',
         'reject a missing Kagemusha release Python test', (required_path,), -1)
