@@ -225,14 +225,11 @@ fn core_host_rejects_duplicate_use_of_one_proof_claim() {
     vm.set_register(11, touch_ptr);
     assert_ok_gas!(host.syscall(ivm::syscalls::SYSCALL_AXT_TOUCH, &mut vm));
     let proof_ptr = store_tlv_norito(&mut vm, PointerType::ProofBlob, &proof);
-    vm.set_register(10, dsid_ptr);
-    vm.set_register(11, proof_ptr);
-    assert_ok_gas!(host.syscall(ivm::syscalls::SYSCALL_VERIFY_DS_PROOF, &mut vm));
     let handle_ptr = store_tlv_norito(&mut vm, PointerType::AssetHandle, &handle);
     let intent_ptr = store_tlv_norito(&mut vm, PointerType::NoritoBytes, &intent);
     vm.set_register(10, handle_ptr);
     vm.set_register(11, intent_ptr);
-    vm.set_register(12, 0);
+    vm.set_register(12, proof_ptr);
     assert_ok_gas!(host.syscall(ivm::syscalls::SYSCALL_USE_ASSET_HANDLE, &mut vm));
     vm.set_register(10, handle_ptr);
     vm.set_register(11, intent_ptr);
@@ -692,14 +689,11 @@ fn core_host_resolves_hidden_amount_from_verified_dataspace_proof() {
         Some(5),
     );
     let proof_ptr = store_tlv_norito(&mut vm, PointerType::ProofBlob, &short_proof);
-    vm.set_register(10, ds_ptr);
-    vm.set_register(11, proof_ptr);
-    assert_ok_gas!(host.syscall(ivm::syscalls::SYSCALL_VERIFY_DS_PROOF, &mut vm));
     let handle_ptr = store_tlv_norito(&mut vm, PointerType::AssetHandle, &handle);
     let intent_ptr = store_tlv_norito(&mut vm, PointerType::NoritoBytes, &intent);
     vm.set_register(10, handle_ptr);
     vm.set_register(11, intent_ptr);
-    vm.set_register(12, 0);
+    vm.set_register(12, proof_ptr);
     assert_eq!(
         host.syscall(ivm::syscalls::SYSCALL_USE_ASSET_HANDLE, &mut vm),
         Err(VMError::PermissionDenied),
@@ -709,17 +703,14 @@ fn core_host_resolves_hidden_amount_from_verified_dataspace_proof() {
     assert_eq!(reject.reason, AxtRejectReason::Expiry);
 
     let proof_ptr = store_tlv_norito(&mut vm, PointerType::ProofBlob, &proof);
-    vm.set_register(10, ds_ptr);
-    vm.set_register(11, proof_ptr);
-    assert_ok_gas!(host.syscall(ivm::syscalls::SYSCALL_VERIFY_DS_PROOF, &mut vm));
     vm.set_register(10, handle_ptr);
     vm.set_register(11, intent_ptr);
-    vm.set_register(12, 0);
+    vm.set_register(12, proof_ptr);
     assert_ok_gas!(host.syscall(ivm::syscalls::SYSCALL_USE_ASSET_HANDLE, &mut vm));
     assert_ok_gas!(host.syscall(ivm::syscalls::SYSCALL_AXT_COMMIT, &mut vm));
 }
 #[test]
-fn core_host_rejects_final_dataspace_proof_that_changes_expiry_or_amount() {
+fn core_host_rejects_standalone_replacement_of_handle_bound_proof() {
     let authority = fixture_authority();
     let dsid = DataSpaceId::new(74);
     let manifest_root = [0x74; 32];
@@ -796,15 +787,13 @@ fn core_host_rejects_final_dataspace_proof_that_changes_expiry_or_amount() {
         &effective_amount,
     );
     let initial_ptr = store_tlv_norito(&mut vm, PointerType::ProofBlob, &initial_proof);
-    vm.set_register(10, ds_ptr);
-    vm.set_register(11, initial_ptr);
-    assert_ok_gas!(host.syscall(ivm::syscalls::SYSCALL_VERIFY_DS_PROOF, &mut vm));
     let handle_ptr = store_tlv_norito(&mut vm, PointerType::AssetHandle, &handle);
     let intent_ptr = store_tlv_norito(&mut vm, PointerType::NoritoBytes, &intent);
     vm.set_register(10, handle_ptr);
     vm.set_register(11, intent_ptr);
-    vm.set_register(12, 0);
+    vm.set_register(12, initial_ptr);
     assert_ok_gas!(host.syscall(ivm::syscalls::SYSCALL_USE_ASSET_HANDLE, &mut vm));
+    let cache_before = host.axt_proof_cache_snapshot();
     let short_replacement = proof_blob_for_remote_spend(
         dsid,
         manifest_root,
@@ -817,37 +806,27 @@ fn core_host_rejects_final_dataspace_proof_that_changes_expiry_or_amount() {
     let replacement_ptr = store_tlv_norito(&mut vm, PointerType::ProofBlob, &short_replacement);
     vm.set_register(10, ds_ptr);
     vm.set_register(11, replacement_ptr);
-    assert_ok_gas!(host.syscall(ivm::syscalls::SYSCALL_VERIFY_DS_PROOF, &mut vm));
     assert_eq!(
-        host.syscall(ivm::syscalls::SYSCALL_AXT_COMMIT, &mut vm),
+        host.syscall(ivm::syscalls::SYSCALL_VERIFY_DS_PROOF, &mut vm),
         Err(VMError::PermissionDenied),
-        "a replacement proof must cover the already-recorded handle lifetime"
+        "caller-carried FASTPQ must not replace an issuer-authenticated proof"
     );
     let reject = host.take_axt_reject_for_tests().expect("reject context");
-    assert_eq!(reject.reason, AxtRejectReason::Expiry);
-
-    let replacement = proof_blob_for_remote_spends_with_committed_amount(
-        dsid,
-        manifest_root,
-        vec![0x75],
-        25,
-        &[(&handle, &intent, &effective_amount)],
-        Some(7),
+    assert_eq!(reject.reason, AxtRejectReason::Proof);
+    assert!(
+        reject
+            .detail
+            .contains("authoritative finalized source-state anchor")
     );
-    let replacement_ptr = store_tlv_norito(&mut vm, PointerType::ProofBlob, &replacement);
-    vm.set_register(10, ds_ptr);
-    vm.set_register(11, replacement_ptr);
-    assert_ok_gas!(host.syscall(ivm::syscalls::SYSCALL_VERIFY_DS_PROOF, &mut vm));
     assert_eq!(
-        host.syscall(ivm::syscalls::SYSCALL_AXT_COMMIT, &mut vm),
-        Err(VMError::PermissionDenied)
+        host.axt_proof_cache_snapshot(),
+        cache_before,
+        "the rejected standalone replacement must not change the authenticated cache entry"
     );
-    let reject = host.take_axt_reject_for_tests().expect("reject context");
-    assert_eq!(reject.reason, AxtRejectReason::Budget);
-    assert!(reject.detail.contains("intent amount does not match"));
+    assert_ok_gas!(host.syscall(ivm::syscalls::SYSCALL_AXT_COMMIT, &mut vm));
 }
 #[test]
-fn core_host_rejects_proof_envelope_for_other_dataspace() {
+fn core_host_rejects_unanchored_proof_before_using_envelope_dataspace() {
     let authority = fixture_authority();
     let dsid = DataSpaceId::new(17);
     let other_dsid = DataSpaceId::new(18);
@@ -885,11 +864,15 @@ fn core_host_rejects_proof_envelope_for_other_dataspace() {
     let reject = host
         .take_axt_reject_for_tests()
         .expect("proof rejection context");
-    assert_eq!(reject.reason, AxtRejectReason::Manifest);
-    assert!(reject.detail.contains("proof does not match policy"));
+    assert_eq!(reject.reason, AxtRejectReason::Proof);
+    assert!(
+        reject
+            .detail
+            .contains("authoritative finalized source-state anchor")
+    );
 }
 #[test]
-fn core_host_rejects_fastpq_binding_source_dsid_mismatch() {
+fn core_host_rejects_unanchored_proof_before_using_fastpq_binding() {
     let authority = fixture_authority();
     let dsid = DataSpaceId::new(19);
     let manifest_root = [0x32; 32];
@@ -935,12 +918,16 @@ fn core_host_rejects_fastpq_binding_source_dsid_mismatch() {
         .take_axt_reject_for_tests()
         .expect("proof rejection context");
     assert_eq!(reject.reason, AxtRejectReason::Proof);
-    assert!(reject.detail.contains("source_dsid mismatch"));
+    assert!(
+        reject
+            .detail
+            .contains("authoritative finalized source-state anchor")
+    );
 }
 
 #[cfg(feature = "app_api")]
 #[test]
-fn core_host_binds_proof_to_manifest_root() {
+fn core_host_rejects_standalone_proof_without_finalized_anchor() {
     let authority = fixture_authority();
     let dsid = DataSpaceId::new(77);
     let manifest_root = [0xAB; 32];
@@ -984,35 +971,20 @@ fn core_host_binds_proof_to_manifest_root() {
     vm.set_register(11, manifest_ptr);
     host.syscall(ivm::syscalls::SYSCALL_AXT_TOUCH, &mut vm)
         .expect("touch");
-    let bad_proof = axt::ProofBlob {
-        payload: vec![0x01, 0x02],
-        expiry_slot: Some(10),
-    };
-    let bad_ptr = store_tlv_norito(&mut vm, PointerType::ProofBlob, &bad_proof);
-    vm.set_register(10, ds_ptr);
-    vm.set_register(11, bad_ptr);
-    assert_eq!(
-        host.syscall(ivm::syscalls::SYSCALL_VERIFY_DS_PROOF, &mut vm),
-        Err(VMError::NoritoInvalid)
-    );
-    let raw_root_proof = axt::ProofBlob {
-        payload: manifest_root.to_vec(),
-        expiry_slot: Some(10),
-    };
-    let raw_root_ptr = store_tlv_norito(&mut vm, PointerType::ProofBlob, &raw_root_proof);
-    vm.set_register(10, ds_ptr);
-    vm.set_register(11, raw_root_ptr);
-    assert_eq!(
-        host.syscall(ivm::syscalls::SYSCALL_VERIFY_DS_PROOF, &mut vm),
-        Err(VMError::NoritoInvalid)
-    );
     let ok_proof = proof_blob_for(dsid, manifest_root, vec![0x03, 0x04], 10);
     let ok_ptr = store_tlv_norito(&mut vm, PointerType::ProofBlob, &ok_proof);
     vm.set_register(10, ds_ptr);
     vm.set_register(11, ok_ptr);
-    assert_ok_gas!(host.syscall(ivm::syscalls::SYSCALL_VERIFY_DS_PROOF, &mut vm));
-    // Cache hit in the same slot should also succeed.
-    vm.set_register(10, ds_ptr);
-    vm.set_register(11, ok_ptr);
-    assert_ok_gas!(host.syscall(ivm::syscalls::SYSCALL_VERIFY_DS_PROOF, &mut vm));
+    assert_eq!(
+        host.syscall(ivm::syscalls::SYSCALL_VERIFY_DS_PROOF, &mut vm),
+        Err(VMError::PermissionDenied)
+    );
+    assert!(host.axt_proof_cache_snapshot().is_empty());
+    let reject = host.take_axt_reject_for_tests().expect("reject context");
+    assert_eq!(reject.reason, AxtRejectReason::Proof);
+    assert!(
+        reject
+            .detail
+            .contains("authoritative finalized source-state anchor")
+    );
 }

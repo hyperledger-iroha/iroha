@@ -1680,6 +1680,7 @@ fn sample_service_audit_event() -> SoraServiceAuditEventV1 {
         consent_evidence_hash: Some(sample_hash(178)),
         break_glass: Some(true),
         break_glass_reason: Some("emergency review".to_string()),
+        lease_reporting_epoch_rollover: None,
         signer: sample_signer(),
     }
 }

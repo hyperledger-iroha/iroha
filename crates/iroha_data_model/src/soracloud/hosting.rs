@@ -137,9 +137,23 @@ pub fn derive_hf_weight_selection_v1(
     }
     let mut records = BTreeMap::<String, Option<(String, u64)>>::new();
     for entry in siblings {
-        let Some(path) = entry.get("rfilename").and_then(Value::as_str) else {
-            continue;
-        };
+        let entry = entry.as_object().ok_or_else(|| {
+            invalid_field(
+                manifest,
+                "siblings",
+                "every sibling entry must be an object with a string `rfilename`",
+            )
+        })?;
+        let path = entry
+            .get("rfilename")
+            .and_then(Value::as_str)
+            .ok_or_else(|| {
+                invalid_field(
+                    manifest,
+                    "siblings",
+                    "every sibling entry must contain a string `rfilename`",
+                )
+            })?;
         if path.len() > SORA_HF_MODEL_INFO_MAX_STRING_BYTES_V1 {
             return Err(invalid_field(
                 manifest,
@@ -171,6 +185,7 @@ pub fn derive_hf_weight_selection_v1(
                     || !sha256
                         .bytes()
                         .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+                    || sha256.bytes().all(|byte| byte == b'0')
                 {
                     return Err(invalid_field(
                         manifest,
@@ -231,9 +246,7 @@ pub fn derive_hf_weight_selection_v1(
         return Err(invalid_field(
             manifest,
             "siblings",
-            format!(
-                "selected weight set has {selected_count} files, outside 1..={maximum_files}"
-            ),
+            format!("selected weight set has {selected_count} files, outside 1..={maximum_files}"),
         ));
     }
     let mut required_weight_files = Vec::new();
@@ -1259,8 +1272,14 @@ impl SoraHfSourceRecordV1 {
             "normalized_runtime_hash",
             self.normalized_runtime_hash,
         )?;
+        if !is_canonical_hf_repo_id_v1(&self.repo_id) {
+            return Err(invalid_field(
+                "sora hf source record",
+                "repo_id",
+                "must be one exact fully-qualified `namespace/repository` identifier",
+            ));
+        }
         for (field, value) in [
-            ("repo_id", self.repo_id.as_str()),
             ("model_name", self.model_name.as_str()),
             ("adapter_id", self.adapter_id.as_str()),
         ] {
@@ -1271,6 +1290,14 @@ impl SoraHfSourceRecordV1 {
                 "sora hf source record",
                 "resolved_revision",
                 "must be the full 40-character lowercase hexadecimal commit OID",
+            ));
+        }
+        let expected_source_id = derive_hf_source_id_v1(&self.repo_id, &self.resolved_revision)?;
+        if self.source_id != expected_source_id {
+            return Err(invalid_field(
+                "sora hf source record",
+                "source_id",
+                "must equal the canonical repository-and-commit source identifier",
             ));
         }
         if let Some(resource_profile) = &self.resource_profile {
@@ -2896,6 +2923,10 @@ pub struct SoraServiceAuditEventV1 {
     /// Break-glass justification; the wire key is explicitly null when absent.
     #[norito(required)]
     pub break_glass_reason: Option<String>,
+    /// Hosted-service reporting-epoch rollover payload; the wire key is
+    /// explicitly null for every other lifecycle action.
+    #[norito(required)]
+    pub lease_reporting_epoch_rollover: Option<SoraServiceLeaseReportingEpochRolloverV1>,
     /// Provenance signer that authorized the lifecycle action.
     pub signer: PublicKey,
 }
@@ -2907,7 +2938,8 @@ impl SoraServiceAuditEventV1 {
     pub fn validate(&self) -> Result<(), SoracloudManifestError> {
         self.validate_required_fields()?;
         self.validate_optional_fields()?;
-        self.validate_break_glass_fields()
+        self.validate_break_glass_fields()?;
+        self.validate_reporting_epoch_rollover()
     }
     fn validate_required_fields(&self) -> Result<(), SoracloudManifestError> {
         validate_schema_version(
@@ -3048,6 +3080,60 @@ impl SoraServiceAuditEventV1 {
         }
         Ok(())
     }
+    fn validate_reporting_epoch_rollover(&self) -> Result<(), SoracloudManifestError> {
+        match (self.action, self.lease_reporting_epoch_rollover.as_ref()) {
+            (SoraServiceLifecycleActionV1::LeaseReportingEpochRollover, Some(rollover)) => {
+                rollover.validate()?;
+                if rollover.reporter_account_id.try_signatory() != Some(&self.signer) {
+                    return Err(invalid_field(
+                        "sora service audit event",
+                        "lease_reporting_epoch_rollover.reporter_account_id",
+                        "single-signatory reporter must match the audit signer",
+                    ));
+                }
+                if self.from_version.as_deref() != Some(self.to_version.as_str()) {
+                    return Err(invalid_field(
+                        "sora service audit event",
+                        "from_version",
+                        "reporting rollover must bind an unchanged deployment version",
+                    ));
+                }
+                if self.governance_tx_hash.is_some()
+                    || self.binding_name.is_some()
+                    || self.state_key.is_some()
+                    || self.config_name.is_some()
+                    || self.secret_name.is_some()
+                    || self.rollout_handle.is_some()
+                    || self.policy_name.is_some()
+                    || self.policy_snapshot_hash.is_some()
+                    || self.jurisdiction_tag.is_some()
+                    || self.consent_evidence_hash.is_some()
+                    || self.break_glass.is_some()
+                    || self.break_glass_reason.is_some()
+                {
+                    return Err(invalid_field(
+                        "sora service audit event",
+                        "lease_reporting_epoch_rollover",
+                        "reporting rollover must not carry fields from another lifecycle action",
+                    ));
+                }
+                Ok(())
+            }
+            (SoraServiceLifecycleActionV1::LeaseReportingEpochRollover, None) => {
+                Err(invalid_field(
+                    "sora service audit event",
+                    "lease_reporting_epoch_rollover",
+                    "must be present for LeaseReportingEpochRollover",
+                ))
+            }
+            (_, Some(_)) => Err(invalid_field(
+                "sora service audit event",
+                "lease_reporting_epoch_rollover",
+                "must be null for non-rollover lifecycle actions",
+            )),
+            (_, None) => Ok(()),
+        }
+    }
 }
 /// Runtime health status observed for a materialized service revision.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, IntoSchema, Default)]
@@ -3164,6 +3250,8 @@ pub struct SoraInrouReplicaRuntimeStateV1 {
     pub load_factor_bps: u16,
     /// Active materialized bundle hash.
     pub materialized_bundle_hash: Hash,
+    /// Hosted-service reporting epoch acknowledged before this replica serves.
+    pub reporting_epoch: u64,
     /// Total authoritative egress bytes accounted for the placed replica so far.
     pub accounted_egress_bytes: u64,
     /// Pending ordered mailbox messages projected for the placed replica.
@@ -3213,6 +3301,13 @@ impl SoraInrouReplicaRuntimeStateV1 {
             return Err(invalid_field(
                 "sora inrou replica runtime state",
                 "updated_at_ms",
+                "must be greater than zero",
+            ));
+        }
+        if self.reporting_epoch == 0 {
+            return Err(invalid_field(
+                "sora inrou replica runtime state",
+                "reporting_epoch",
                 "must be greater than zero",
             ));
         }

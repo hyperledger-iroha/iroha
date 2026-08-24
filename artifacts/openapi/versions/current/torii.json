@@ -69834,7 +69834,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/SoracloudPublicServiceDiscoveryV1"
+                  "$ref": "#/components/schemas/ServicePublicDiscoveryResponse"
                 }
               }
             },

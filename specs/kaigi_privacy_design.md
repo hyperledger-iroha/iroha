@@ -1,8 +1,9 @@
 # Kaigi Privacy & Relay Design
 
-This document captures the privacy-focused evolution that introduces zero-knowledge
+This document captures the privacy-focused evolution toward zero-knowledge
 participation proofs and onion-style relays without sacrificing determinism or
-ledger auditability.
+ledger auditability. Production `ZkRosterV1` joins are currently unavailable;
+the exact fail-closed boundary is described below.
 
 # Overview
 
@@ -114,13 +115,18 @@ Stop the demo by pressing `Ctrl+C`; the trap in the script terminates `iroha3d` 
 - Validates `privacy_mode` against host permissions.
 - If a `relay_manifest` is supplied, enforce ≥3 hops, non-zero weights, HPKE key presence, and uniqueness so on-chain manifests remain auditable.
 - Validate `room_policy` input from SDKs/CLI (`public` vs `authenticated`) and propagate it to SoraNet provisioning so relay caches expose the correct GAR categories (`stream.kaigi.public` vs `stream.kaigi.authenticated`). Hosts wire this via `iroha kaigi create --room-policy …`, the JS SDK’s `roomPolicy` field, or by setting `room_policy` when Swift clients assemble the Norito payload prior to submission.
-- Stores empty commitment/nullifier logs.
+- Starts with an empty participant-commitment log. If the host supplies the
+  optional privacy proof at creation, stores the host commitment and records
+  its nullifier immediately so it cannot authorize a later action again.
 
 ## `JoinKaigi`
 
 Parameters:
 
-- `proof: ZkProof` (Norito bytes wrapper) – Halo2/IPA proof attesting the caller knows `(account_id, domain_salt, nullifier_seed)` whose domain-separated Poseidon hashes equal the supplied `commitment` and `nullifier`.
+- `proof: ZkProof` (Norito bytes wrapper) – candidate Halo2/IPA proof of an
+  `(account_id, domain_salt, nullifier_seed)` witness whose domain-separated
+  Poseidon hashes equal the supplied `commitment` and `nullifier`. The current
+  circuit does not attest that this witness is the signed caller.
 - `commitment: FixedBinary<32>`
 - `nullifier: FixedBinary<32>`
 - `relay_hint: Option<KaigiRelayHop>` – optional per-participant override for the next hop.
@@ -128,15 +134,15 @@ Parameters:
 Execution steps:
 
 1. If `record.privacy_mode == Transparent`, fallback to current behavior.
-2. Verify the Groth16 proof against the circuit registry entry `KAIGI_ROSTER_V1`.
-3. Ensure `nullifier` has not appeared in `record.nullifier_log`.
-4. Append commitment/nullifier entries; if `relay_hint` is supplied, patch the relay manifest view for this participant (stored only in in-memory session state, not on-chain).
+2. `ZkRosterV1` currently fails closed before proof dispatch. Its candidate
+   Halo2 statement does not bind a public input derived from the signed
+   participant, so a copied NIZK could be submitted by another signer.
+3. A future versioned roster circuit must bind the canonical transaction
+   authority, then check the nullifier and append commitment/nullifier entries.
 
 ## `LeaveKaigi`
 
 Transparent mode matches current logic.
-
-Private mode requires:
 
 Private leave is intentionally unavailable on-chain in the first-release
 `ZkRosterV1` profile. A participant disconnects from the local session, or the
@@ -155,23 +161,22 @@ Hosts can still submit transparent totals; privacy mode only makes the commitmen
 
 # Verification & Circuits
 
-- `iroha_core::smartcontracts::isi::kaigi::privacy` now performs full roster
-  verification by default. It resolves `zk.kaigi_roster_join_vk` (joins) and
-  `zk.kaigi_roster_leave_vk` (leaves) from configuration,
-  looks up the corresponding `VerifyingKeyRef` in WSV (ensuring the record is
+- `iroha_core::smartcontracts::isi::kaigi::privacy` keeps candidate roster
+  validation helpers but production join admission is unavailable until the
+  signed participant is part of the circuit statement. Usage and host proof
+  paths resolve their configured keys from configuration and look up the
+  corresponding `VerifyingKeyRef` in WSV (ensuring the record is
   `Active`, backend/circuit identifiers match, and commitments align), charges
   byte accounting, and dispatches to the configured ZK backend.
-- The `kaigi_privacy_mocks` feature retains the deterministic stub verifier so
-  unit/integration tests and constrained CI jobs can run without a Halo2 backend.
-  Production builds must keep the feature disabled to enforce real proofs.
-- The crate emits a compile-time error if `kaigi_privacy_mocks` is enabled on a
-  non-test, non-`debug_assertions` build, preventing accidental release binaries
-  from shipping with the stub.
-- Operators need to (1) register the roster verifier set through governance, and
-  (2) set `zk.kaigi_roster_join_vk`, `zk.kaigi_roster_leave_vk`, and
-  `zk.kaigi_usage_vk` in `iroha_config` so hosts can resolve them at runtime.
-  Until the keys are present, privacy joins, host proof actions, and usage calls
-  fail deterministically.
+- The `kaigi_privacy_mocks` feature retains deterministic stubs for in-crate
+  unit tests only. Any non-test library build with the feature is a compile-time
+  error, including debug builds, so a runnable node cannot ship the stub.
+- Operators need to register the host/usage verifier set through governance and
+  configure `zk.kaigi_roster_join_vk`, `zk.kaigi_roster_leave_vk`, and
+  `zk.kaigi_usage_vk` so those still-supported proof paths can resolve keys at
+  runtime. Missing keys reject host proof actions and usage calls
+  deterministically. Roster joins reject regardless of key configuration until
+  the authority-bound statement is implemented.
 - `crates/kaigi_zk` now ships Halo2 circuits for roster joins and usage
   commitments alongside the reusable, domain-separated Poseidon compressors
   (`commitment`, `nullifier`, `usage`). The roster join circuit exposes the
@@ -186,7 +191,18 @@ Hosts can still submit transparent totals; privacy mode only makes the commitmen
   of the Merkle root for the roster commitment tree (the roster remains
   off-chain, but the root is bound into the transcript). Admission requires
   exactly those six single-row columns and compares the first two values
-  byte-for-byte with the instruction artifacts before verification.
+  byte-for-byte with the instruction artifacts before verification. This
+  candidate shape is insufficient for production because it omits the signed
+  participant authority.
+- Host lifecycle authorization is not delegated to a transferable proof:
+  `EndKaigi` always requires the stored host account's transaction signature.
+  If host privacy artifacts were supplied at creation, their nullifier is
+  recorded immediately and cannot be reused by a later host action.
+- Kaigi verifier-key carriers use strict ZK1 `IPAK`/`CID1`/`H2VK` metadata in
+  that exact order, and outer envelopes use the exact owner-crate schema tag
+  plus a nonzero hash of the complete registered key carrier. The public JS
+  roster builder rejects while roster join admission is unavailable; its
+  internal candidate fixture remains test-only.
 - Determinism: we fix Poseidon parameters, circuit versions, and indexes in the
   registry. Any change bumps `KaigiPrivacyMode` to `ZkRosterV2` with matching
   tests/golden files.
@@ -229,7 +245,7 @@ Extend `DomainEvent` variants:
 Events serialize with Norito, exposing only commitment hashes and counts.
 
 CLI tooling (`iroha kaigi …`) wraps each ISI so operators can register relay
-descriptors, create sessions, submit roster updates, replace relay manifests,
+descriptors, create sessions, submit transparent roster updates, replace relay manifests,
 report relay health, and record usage without hand-crafting transactions.
 Relay manifests and privacy proofs are loaded from JSON/hex files passed
 through the CLI’s normal submission path, making it straightforward to script
@@ -239,9 +255,11 @@ contract admission in staging environments.
 
 - New constants in `crates/iroha_core/src/gas.rs`:
   - `BASE_KAIGI_JOIN_ZK`, `BASE_KAIGI_LEAVE_ZK`, and `BASE_KAIGI_USAGE_ZK`
-    calibrated against the Halo2 verification timings (≈1.6 ms for roster
-    joins/leaves, ≈1.2 ms for usage on Apple M2 Ultra). Surcharges continue to
-    scale with proof byte size via `PER_KAIGI_PROOF_BYTE`.
+    retain candidate roster calibration and the active usage calibration
+    (≈1.6 ms for candidate roster proofs, ≈1.2 ms for usage on Apple M2 Ultra).
+    Surcharges continue to scale with proof byte size via
+    `PER_KAIGI_PROOF_BYTE`; disabled roster transitions do not dispatch a
+    verifier.
 - `RecordKaigiUsage` commits pay an extra fee based on commitment size and proof verification.
 - Calibration harness will reuse the confidential asset infrastructure with fixed seeds.
 
@@ -249,9 +267,10 @@ contract admission in staging environments.
 
 - Unit tests verifying Norito encode/decode for `KaigiParticipantCommitment`, `KaigiRelayManifest`.
 - Golden tests for JSON view ensuring canonical ordering.
-- Integration tests spinning up a mini-network with (see
-  `crates/iroha_core/tests/kaigi_privacy.rs` for the current coverage):
-  - Private join/leave cycles using mock proofs (feature flag `kaigi_privacy_mocks`).
+- Unit and integration tests cover (see
+  `crates/iroha_core/tests/kaigi_privacy.rs` and the in-module Kaigi tests):
+  - Fail-closed private join admission, strict candidate carriers, host-signature
+    enforcement, and create-nullifier replay rejection.
   - Relay manifest updates propagated via metadata events.
 - Trybuild UI tests covering host misconfiguration (e.g., missing relay manifest in privacy mode).
 - When running unit/integration tests in constrained environments (e.g., the Codex
@@ -261,12 +280,14 @@ contract admission in staging environments.
 # Migration Plan
 
 1. ✅ Ship data model additions behind `KaigiPrivacyMode::Transparent` defaults.
-2. ✅ Wire dual-path verification: production disables `kaigi_privacy_mocks`,
-   resolves `zk.kaigi_roster_vk`, and runs real envelope verification; tests can
-   still enable the feature for deterministic stubs.
-3. ✅ Introduced the dedicated `kaigi_zk` Halo2 crate, calibrated gas, and wired
-   integration coverage to run real proofs end-to-end (mocks are now test-only).
-4. ⬜ Deprecate the transparent `participants` vector once all consumers understand commitments.
+2. ✅ Make `kaigi_privacy_mocks` unit-test-only and fail closed in every runnable
+   build.
+3. ✅ Introduce the dedicated `kaigi_zk` candidate Halo2 circuits and strict
+   carrier validation.
+4. ⬜ Version the roster statement with signed-participant public-input binding,
+   regenerate the deterministic key/schema/SDK fixtures, and only then enable
+   production private joins.
+5. ⬜ Deprecate the transparent `participants` vector once all consumers understand commitments.
 
 # Open Questions
 

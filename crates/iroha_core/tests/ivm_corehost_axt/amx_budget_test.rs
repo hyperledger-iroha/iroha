@@ -90,13 +90,10 @@ fn axt_commit_enforces_amx_budget() {
         &amount,
     );
     let proof_ptr = store_tlv_norito(&mut vm, PointerType::ProofBlob, &proof);
-    vm.set_register(10, ds_ptr);
-    vm.set_register(11, proof_ptr);
-    assert_ok_gas!(host.syscall(ivm::syscalls::SYSCALL_VERIFY_DS_PROOF, &mut vm));
     let intent_ptr = store_tlv_norito(&mut vm, PointerType::NoritoBytes, &intent);
     vm.set_register(10, handle_ptr);
     vm.set_register(11, intent_ptr);
-    vm.set_register(12, 0);
+    vm.set_register(12, proof_ptr);
     assert_ok_gas!(host.syscall(ivm::syscalls::SYSCALL_USE_ASSET_HANDLE, &mut vm));
     match host.syscall(ivm::syscalls::SYSCALL_AXT_COMMIT, &mut vm) {
         Err(VMError::AmxBudgetExceeded { stage, .. }) => {

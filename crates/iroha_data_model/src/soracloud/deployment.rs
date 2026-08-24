@@ -30,6 +30,8 @@ pub enum SoraServiceLifecycleActionV1 {
     Rollout,
     /// Reversion to an already admitted baseline revision.
     Rollback,
+    /// Atomic settlement and successor opening of a hosted-service reporting epoch.
+    LeaseReportingEpochRollover,
 }
 /// Mutation mode recorded for authoritative Soracloud state updates.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
@@ -371,6 +373,18 @@ impl SoraServiceDeploymentStateV1 {
                 "sora service deployment state",
                 "lease_volume_states",
                 "lease-backed volume state requires an active hosted-service lease",
+            ));
+        }
+        if let Some(lease) = self.service_lease.as_ref()
+            && self.lease_volume_states.iter().any(|volume| {
+                volume.lease_started_sequence != lease.lease_started_sequence
+                    || volume.lease_expires_sequence != lease.lease_expires_sequence
+            })
+        {
+            return Err(invalid_field(
+                "sora service deployment state",
+                "lease_volume_states",
+                "every volume economic start and expiry must exactly match the hosted-service lease",
             ));
         }
         Ok(())

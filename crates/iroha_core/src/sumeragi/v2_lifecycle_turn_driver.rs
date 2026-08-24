@@ -1,13 +1,12 @@
 //! Unified lifecycle ownership for one outer Completion or Ingress turn.
 
 use super::super::{
-    ingress_position::FairIngressQueueCutError,
-    selector::{CertifiedServeExactDequeueErrorV1, LifecycleIngressSelectorError},
+    ingress_position::FairIngressQueueCutError, selector::CertifiedServeExactDequeueErrorV1,
 };
 use super::*;
 use crate::sumeragi::v2_lifecycle_coordinator::{
-    AdmissionDecision, CertifiedServeSchedulerObservationV1, LifecycleLedgerV1,
-    LifecycleValidateSidecarDriveV1, ReadyValidateSuccessorDispatchV1,
+    AdmissionDecision, CertifiedServeSchedulerObservationV1, LifecycleIngressSelectorError,
+    LifecycleLedgerV1, LifecycleValidateSidecarDriveV1, ReadyValidateSuccessorDispatchV1,
     SelectedCertifiedResponsePriorityV1, WaitToken, claim_certified_serve_turn_v1,
 };
 #[cfg(test)]
@@ -1694,16 +1693,6 @@ impl LaunchedProductionLifecycleV1 {
                     .classify_selected_certified_response_priority(&cut)
                 {
                     Ok(selected_priority) => selected_priority,
-                    Err(LifecycleIngressSelectorError::QueueCutChanged) => {
-                        iroha_logger::debug!(
-                            "certified-response fair-ingress census changed during priority classification; retrying"
-                        );
-                        drop(cut);
-                        drop(runner);
-                        return ProductionLifecycleIngressTurnV1::Selected(
-                            ProductionLifecycleIngressSelectionV1::CertifiedFetchRetry,
-                        );
-                    }
                     Err(error) => {
                         let reason = error.detail();
                         iroha_logger::error!(
@@ -1732,15 +1721,6 @@ impl LaunchedProductionLifecycleV1 {
                     SelectedCertifiedResponsePriorityV1::OrdinaryClaimed => {
                         let selector = match self.executor.capture_lifecycle_ingress_selector(cut) {
                             Ok(selector) => selector,
-                            Err(LifecycleIngressSelectorError::QueueCutChanged) => {
-                                iroha_logger::debug!(
-                                    "ordinary certified-Fetch fair-ingress census changed during selector capture; retrying"
-                                );
-                                drop(runner);
-                                return ProductionLifecycleIngressTurnV1::Selected(
-                                    ProductionLifecycleIngressSelectionV1::CertifiedFetchRetry,
-                                );
-                            }
                             Err(error) => {
                                 let reason = error.detail();
                                 iroha_logger::error!(
@@ -1762,15 +1742,6 @@ impl LaunchedProductionLifecycleV1 {
                             .prepare_recovered_decision_fetch_from_selected_cut(cut)
                         {
                             Ok(selector) => selector,
-                            Err(LifecycleIngressSelectorError::QueueCutChanged) => {
-                                iroha_logger::debug!(
-                                    "recovered Fetch fair-ingress census changed during selector preparation; retrying"
-                                );
-                                drop(runner);
-                                return ProductionLifecycleIngressTurnV1::Selected(
-                                    ProductionLifecycleIngressSelectionV1::CertifiedFetchRetry,
-                                );
-                            }
                             Err(error) => {
                                 let reason = error.detail();
                                 iroha_logger::error!(

@@ -442,6 +442,159 @@ fn sample_hf_resource_profile() -> SoraHfResourceProfileV1 {
     }
 }
 #[test]
+fn canonical_hf_repo_ids_require_exact_qualified_provider_spelling() {
+    for repo_id in [
+        "OpenAI/GPT-OSS",
+        "openai-community/gpt2",
+        "owner_1/model.v1",
+    ] {
+        assert!(
+            is_canonical_hf_repo_id_v1(repo_id),
+            "canonical repository ID `{repo_id}` must be admitted"
+        );
+    }
+    let oversized = format!("owner/{}", "a".repeat(SORA_HF_REPO_ID_MAX_BYTES_V1));
+    for repo_id in [
+        "",
+        "model",
+        "/model",
+        "owner/",
+        "owner//model",
+        "owner/./model",
+        "./model",
+        "../model",
+        "owner/..",
+        "owner/.model",
+        "owner/model-",
+        "owner/model--alias",
+        "owner/model..alias",
+        "owner/model.git",
+        "owner%2falias/model",
+        "owner\\alias/model",
+        " owner/model",
+        oversized.as_str(),
+    ] {
+        assert!(
+            !is_canonical_hf_repo_id_v1(repo_id),
+            "noncanonical repository ID `{repo_id}` must be rejected"
+        );
+    }
+}
+#[test]
+fn canonical_hf_source_id_binds_repo_spelling_and_immutable_commit() {
+    const COMMIT: &str = "0123456789abcdef0123456789abcdef01234567";
+    let upper = derive_hf_source_id_v1("OpenAI/GPT-OSS", COMMIT)
+        .expect("uppercase canonical provider spelling is valid");
+    let lower = derive_hf_source_id_v1("openai/gpt-oss", COMMIT)
+        .expect("lowercase canonical provider spelling is valid");
+    let expected = Hash::new(
+        norito::to_bytes(&("soracloud:hf-source-id:v1", "OpenAI/GPT-OSS", COMMIT))
+            .expect("canonical domain-separated preimage"),
+    );
+    let retired_undomained = Hash::new(
+        norito::to_bytes(&("OpenAI/GPT-OSS", COMMIT)).expect("retired undomained preimage"),
+    );
+    assert_eq!(upper, expected);
+    assert_ne!(upper, retired_undomained);
+    assert_ne!(upper, lower, "case-sensitive identities must not alias");
+    assert!(derive_hf_source_id_v1("gpt-oss", COMMIT).is_err());
+    assert!(derive_hf_source_id_v1("openai/gpt-oss", "main").is_err());
+}
+#[test]
+fn hf_weight_selection_is_sorted_authenticated_bounded_and_committed() {
+    let gguf_a = "11".repeat(32);
+    let gguf_b = "22".repeat(32);
+    let safetensors = "33".repeat(32);
+    let model_info = norito::json!({
+        "siblings": [
+            {"rfilename": "fallback.safetensors", "lfs": {"sha256": safetensors, "size": 99}},
+            {"rfilename": "weights/z.GGUF", "lfs": {"sha256": gguf_b, "size": 7}},
+            {"rfilename": "weights/a.gguf", "lfs": {"sha256": gguf_a, "size": 5}},
+            {"rfilename": "weights/a.gguf", "lfs": {"sha256": "11".repeat(32), "size": 5}}
+        ]
+    });
+    let selection = derive_hf_weight_selection_v1(&model_info, 4, 8, 12)
+        .expect("bounded canonical model-info")
+        .expect("supported weight set");
+    assert_eq!(selection.backend_family, SoraHfBackendFamilyV1::Gguf);
+    assert_eq!(selection.model_format, SoraHfModelFormatV1::Gguf);
+    assert_eq!(selection.required_model_bytes, 12);
+    assert_eq!(selection.required_weight_files.len(), 2);
+    assert_eq!(selection.required_weight_files[0].path, "weights/a.gguf");
+    assert_eq!(selection.required_weight_files[1].path, "weights/z.GGUF");
+    let changed = derive_hf_weight_selection_v1(
+        &norito::json!({
+            "siblings": [
+                {"rfilename": "weights/a.gguf", "lfs": {"sha256": "44".repeat(32), "size": 5}},
+                {"rfilename": "weights/z.GGUF", "lfs": {"sha256": "22".repeat(32), "size": 7}}
+            ]
+        }),
+        4,
+        8,
+        12,
+    )
+    .expect("changed bounded model-info")
+    .expect("changed supported weight set");
+    assert_ne!(
+        selection.weight_selection_commitment, changed.weight_selection_commitment,
+        "the exact LFS digest set must be committed"
+    );
+}
+#[test]
+fn hf_weight_selection_rejects_unauthenticated_ambiguous_or_over_budget_shards() {
+    let digest = "11".repeat(32);
+    for malformed in [
+        norito::json!({"siblings": ["model.gguf"]}),
+        norito::json!({"siblings": [{"lfs": {"sha256": "11".repeat(32), "size": 8}}]}),
+        norito::json!({"siblings": [{"rfilename": 7}]}),
+    ] {
+        assert!(
+            derive_hf_weight_selection_v1(&malformed, 1, 8, 8).is_err(),
+            "malformed sibling entries must not be omitted from an exact selection"
+        );
+    }
+    let missing_lfs = norito::json!({"siblings": [{"rfilename": "model.gguf"}]});
+    assert!(derive_hf_weight_selection_v1(&missing_lfs, 1, 8, 8).is_err());
+    let uppercase_digest = norito::json!({
+        "siblings": [{"rfilename": "model.gguf", "lfs": {"sha256": "AA".repeat(32), "size": 8}}]
+    });
+    assert!(derive_hf_weight_selection_v1(&uppercase_digest, 1, 8, 8).is_err());
+    let zero_digest = norito::json!({
+        "siblings": [{"rfilename": "model.gguf", "lfs": {"sha256": "00".repeat(32), "size": 8}}]
+    });
+    assert!(derive_hf_weight_selection_v1(&zero_digest, 1, 8, 8).is_err());
+    let conflicting = norito::json!({
+        "siblings": [
+            {"rfilename": "model.gguf", "lfs": {"sha256": digest, "size": 8}},
+            {"rfilename": "model.gguf", "lfs": {"sha256": "22".repeat(32), "size": 8}}
+        ]
+    });
+    assert!(derive_hf_weight_selection_v1(&conflicting, 1, 8, 8).is_err());
+    let traversal = norito::json!({
+        "siblings": [{"rfilename": "../model.gguf", "lfs": {"sha256": "11".repeat(32), "size": 8}}]
+    });
+    assert!(derive_hf_weight_selection_v1(&traversal, 1, 8, 8).is_err());
+    let two_shards = norito::json!({
+        "siblings": [
+            {"rfilename": "a.gguf", "lfs": {"sha256": "11".repeat(32), "size": 5}},
+            {"rfilename": "b.gguf", "lfs": {"sha256": "22".repeat(32), "size": 5}}
+        ]
+    });
+    assert!(derive_hf_weight_selection_v1(&two_shards, 1, 8, 10).is_err());
+    assert!(derive_hf_weight_selection_v1(&two_shards, 2, 4, 10).is_err());
+    assert!(derive_hf_weight_selection_v1(&two_shards, 2, 8, 9).is_err());
+    assert!(derive_hf_weight_selection_v1(&two_shards, 0, 8, 10).is_err());
+}
+#[test]
+fn hf_resource_profile_requires_a_nonempty_committed_weight_set() {
+    let mut profile = sample_hf_resource_profile();
+    profile.selected_weight_file_count = 0;
+    assert!(profile.validate().is_err());
+    profile.selected_weight_file_count = 1;
+    profile.weight_selection_commitment = Hash::prehashed([0; Hash::LENGTH]);
+    assert!(profile.validate().is_err());
+}
+#[test]
 fn hf_shared_lease_compute_reservation_caps_are_exact_for_each_size_bucket() {
     let profile =
         |required_model_bytes, disk_cache_bytes_floor, ram_bytes_floor| SoraHfResourceProfileV1 {
@@ -473,11 +626,14 @@ fn hf_shared_lease_compute_reservation_cap_rejects_zero_term() {
     assert!(error.to_string().contains("lease_term_ms"));
 }
 fn sample_hf_source_record() -> SoraHfSourceRecordV1 {
+    let repo_id = "openai/demo-model";
+    let resolved_revision = "4f9d72c4f9d72c4f9d72c4f9d72c4f9d72c4f9d";
     SoraHfSourceRecordV1 {
         schema_version: SORA_HF_SOURCE_RECORD_VERSION_V1,
-        source_id: sample_hash(21),
-        repo_id: "openai/demo-model".to_string(),
-        resolved_revision: "4f9d72c4f9d72c4f9d72c4f9d72c4f9d72c4f9d".to_string(),
+        source_id: derive_hf_source_id_v1(repo_id, resolved_revision)
+            .expect("sample HF source identity is canonical"),
+        repo_id: repo_id.to_string(),
+        resolved_revision: resolved_revision.to_string(),
         model_name: "demo_model".to_string(),
         adapter_id: "text-generation".to_string(),
         normalized_runtime_hash: sample_hash(22),
@@ -487,6 +643,23 @@ fn sample_hf_source_record() -> SoraHfSourceRecordV1 {
         updated_at_ms: 1_500,
         last_error: None,
     }
+}
+#[test]
+fn hf_source_record_rejects_repo_aliases_and_mismatched_source_ids() {
+    let mut source = sample_hf_source_record();
+    source.validate().expect("canonical sample source");
+    source.repo_id = "OpenAI/demo-model".to_owned();
+    assert!(
+        source.validate().is_err(),
+        "case drift must not retain the lowercase source identifier"
+    );
+    source.repo_id = "demo-model".to_owned();
+    source.source_id = derive_hf_source_id_v1("openai/demo-model", &source.resolved_revision)
+        .expect("canonical comparison identity");
+    assert!(
+        source.validate().is_err(),
+        "unqualified provider aliases must fail"
+    );
 }
 fn sample_hf_shared_lease_pool() -> SoraHfSharedLeasePoolV1 {
     SoraHfSharedLeasePoolV1 {
@@ -695,6 +868,7 @@ fn sample_inrou_replica_runtime_state() -> SoraInrouReplicaRuntimeStateV1 {
         health_status: SoraServiceHealthStatusV1::Healthy,
         load_factor_bps: 375,
         materialized_bundle_hash: sample_hash(28),
+        reporting_epoch: 1,
         accounted_egress_bytes: 4_096,
         pending_mailbox_message_count: 2,
         last_receipt_id: Some(sample_hash(29)),
@@ -1143,7 +1317,11 @@ fn canonical_deployment_and_hosting_json_graph_requires_explicit_keys() {
     assert_required_keys!(
         sample_hf_resource_profile(),
         SoraHfResourceProfileV1,
-        ["vram_bytes_floor"],
+        [
+            "selected_weight_file_count",
+            "weight_selection_commitment",
+            "vram_bytes_floor",
+        ],
         [],
         "HF resource profile"
     );

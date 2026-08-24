@@ -6,9 +6,12 @@
 use super::v2_core as reducer;
 #[path = "v2_pending_kura_recovery.rs"]
 mod pending_kura_recovery;
+pub(crate) use pending_kura_recovery::{
+    DeferredPendingKuraValidatedMarkerV1, PendingKuraValidatedApplySuccessorV1,
+};
 pub(in crate::sumeragi) use pending_kura_recovery::{
-    InstalledPendingKuraApplyV1, PreparedRecoveredPendingKuraApplyReplayV1,
-    RecoveredPendingKuraApplyReplayV1,
+    InstalledPendingKuraApplyV1, PreparedPendingKuraValidatedApplyV1,
+    PreparedRecoveredPendingKuraApplyReplayV1, RecoveredPendingKuraApplyReplayV1,
 };
 
 #[cfg(test)]
@@ -2040,6 +2043,44 @@ impl ProductionLifecycleAdapterStartupV1 {
             }
         }
     }
+    /// Consume one pristine recovered Apply startup into its exact runtime for
+    /// executor-lineage non-substitution tests.
+    #[cfg(test)]
+    pub(in crate::sumeragi) fn into_lifecycle_apply_runtime_for_lineage_test(
+        mut self,
+        lifecycle_ordinals: crate::sumeragi::v2_runtime::RuntimeLifecycleOrdinalSource,
+    ) -> crate::sumeragi::v2_runtime::SerializedV2Runtime {
+        match &mut self.state {
+            ProductionLifecycleAdapterStartupStateV1::Recovered {
+                effects,
+                pending_kura_apply,
+                local_proposal_attempt,
+                leader_wire_launch_prepared,
+                ..
+            } if effects.is_empty()
+                && pending_kura_apply.is_none()
+                && local_proposal_attempt.is_none()
+                && !*leader_wire_launch_prepared =>
+            {
+                *leader_wire_launch_prepared = true;
+            }
+            ProductionLifecycleAdapterStartupStateV1::Recovered { .. }
+            | ProductionLifecycleAdapterStartupStateV1::Fixture => {
+                panic!("lineage test requires one pristine recovered Apply startup")
+            }
+        }
+        let (runtime, pending_kura_apply, local_proposal_attempt) = self
+            .into_serialized_runtime(
+                std::time::Instant::now(),
+                std::time::Duration::from_secs(10),
+                crate::sumeragi::v2_runtime::RuntimeQueueConfig::new(8, 2, 2),
+                lifecycle_ordinals,
+            )
+            .expect("open exact recovered Apply runtime for lineage test");
+        assert!(pending_kura_apply.is_none());
+        assert!(local_proposal_attempt.is_none());
+        runtime
+    }
     #[cfg(test)]
     pub(in crate::sumeragi) const fn fixture_for_test() -> Self {
         Self {
@@ -2164,10 +2205,6 @@ enum ProductionLifecycleOwnerStartupErrorKindV1 {
 impl ProductionLifecycleOwnerStartupErrorV1 {
     fn new(kind: ProductionLifecycleOwnerStartupErrorKindV1) -> Self {
         Self { kind }
-    }
-    /// Classify a pending-Kura join that did not open the recovered Apply branch.
-    pub(in crate::sumeragi) fn pending_kura_recovered_apply(reason: &'static str) -> Self {
-        Self::new(ProductionLifecycleOwnerStartupErrorKindV1::RecoveredDecisionApply(reason))
     }
 }
 /// Startup cut whose recovered vote has joined one exact lifecycle repair.
@@ -2645,46 +2682,6 @@ impl RecoveredWalLifecycleSignInstallError<'_> {
     }
 }
 // RECOVERED_WAL_VOTE_SIGN_SEAL_END
-impl ProductionLifecycleAdapterStartupV1 {
-    /// Consume one pristine recovered Apply startup into its exact runtime for
-    /// executor-lineage non-substitution tests.
-    #[cfg(test)]
-    pub(in crate::sumeragi) fn into_lifecycle_apply_runtime_for_lineage_test(
-        mut self,
-        lifecycle_ordinals: crate::sumeragi::v2_runtime::RuntimeLifecycleOrdinalSource,
-    ) -> crate::sumeragi::v2_runtime::SerializedV2Runtime {
-        match &mut self.state {
-            ProductionLifecycleAdapterStartupStateV1::Recovered {
-                effects,
-                pending_kura_apply,
-                local_proposal_attempt,
-                leader_wire_launch_prepared,
-                ..
-            } if effects.is_empty()
-                && pending_kura_apply.is_none()
-                && local_proposal_attempt.is_none()
-                && !*leader_wire_launch_prepared =>
-            {
-                *leader_wire_launch_prepared = true;
-            }
-            ProductionLifecycleAdapterStartupStateV1::Recovered { .. }
-            | ProductionLifecycleAdapterStartupStateV1::Fixture => {
-                panic!("lineage test requires one pristine recovered Apply startup")
-            }
-        }
-        let (runtime, pending_kura_apply, local_proposal_attempt) = self
-            .into_serialized_runtime(
-                std::time::Instant::now(),
-                std::time::Duration::from_secs(10),
-                crate::sumeragi::v2_runtime::RuntimeQueueConfig::new(8, 2, 2),
-                lifecycle_ordinals,
-            )
-            .expect("open exact recovered Apply runtime for lineage test");
-        assert!(pending_kura_apply.is_none());
-        assert!(local_proposal_attempt.is_none());
-        runtime
-    }
-}
 // RECOVERED_WAL_SIGN_STATUS_PUBLICATION_BEGIN
 /// Fully opened recovered-WAL startup after adapter status publication.
 ///
@@ -6142,11 +6139,6 @@ impl RecoveredDecisionApplyStagedStorageV1 {
     }
 }
 impl RecoveredDecisionApplyRegistryCarrierV1 {
-    /// Confirm the origin fixed by this dedicated recovered-only carrier type.
-    pub(in crate::sumeragi) const fn is_recovered(&self) -> bool {
-        true
-    }
-
     fn exact_body_binding(&self) -> bool {
         self.lineage
             .exactly_matches_validated_receipt(self.context, &self.validated_receipt)

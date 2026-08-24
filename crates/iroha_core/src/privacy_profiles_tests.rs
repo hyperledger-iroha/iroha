@@ -1,11 +1,11 @@
 #[cfg(test)]
 mod tests {
+    use super::*;
     use iroha_data_model::privacy::{
         AnonymousPgcActivationLimitsV1, PRIVACY_PGC_BOOTSTRAP_INITIAL_EPOCH_V1,
         PrivacyProposedLifecycleV1,
     };
     use iroha_schema::{Declaration, MetaMap, NamedFieldsMeta, TypeId};
-    use super::*;
     struct SchemaOrderAb;
     impl TypeId for SchemaOrderAb {
         fn id() -> String {
@@ -178,17 +178,6 @@ mod tests {
                 },
             ))
     }
-    #[cfg(feature = "zk-stark")]
-    fn zk_ace_activation() -> PrivacyProtocolActivationRecordV1 {
-        compiled_privacy_profile_v1(PrivacyProtocolIdV1::ZkAcePqAuthorizationV0)
-            .expect("fixed ZK-ACE profile derives")
-            .activation_record(PrivacyProtocolLifecycleV1::Proposed(
-                PrivacyProposedLifecycleV1 {
-                    proposed_at_height: 100,
-                    activate_at_height: 400,
-                },
-            ))
-    }
     fn pgc_activation() -> PrivacyProtocolActivationRecordV1 {
         compiled_privacy_profile_v1(PrivacyProtocolIdV1::AnonymousPgcKOutOfNV1)
             .expect("fixed Anonymous-PGC parameters derive")
@@ -202,16 +191,6 @@ mod tests {
     fn jindo_activation() -> PrivacyProtocolActivationRecordV1 {
         compiled_privacy_profile_v1(PrivacyProtocolIdV1::IrohaJindoPolynomialCommitmentV0)
             .expect("fixed Jindo parameters derive")
-            .activation_record(PrivacyProtocolLifecycleV1::Proposed(
-                PrivacyProposedLifecycleV1 {
-                    proposed_at_height: 100,
-                    activate_at_height: 400,
-                },
-            ))
-    }
-    fn vega_activation() -> PrivacyProtocolActivationRecordV1 {
-        compiled_privacy_profile_v1(PrivacyProtocolIdV1::VegaExistingCredentialZkV0)
-            .expect("fixed Vega profile derives")
             .activation_record(PrivacyProtocolLifecycleV1::Proposed(
                 PrivacyProposedLifecycleV1 {
                     proposed_at_height: 100,
@@ -292,7 +271,7 @@ mod tests {
         #[cfg(feature = "zk-stark")]
         assert_eq!(
             ZK_ACE_PARAMETER_SET_LABEL_V1,
-            b"goldilocks-poseidon2-transparent-stark-v1"
+            b"goldilocks-dense-mds-poseidon-x7-transparent-stark-candidate-v1"
         );
         for stale_geometry in [
             b"mask255".as_slice(),
@@ -496,11 +475,8 @@ mod tests {
             .filter(|protocol_id| compiled_privacy_profile_v1(*protocol_id).is_ok())
             .collect::<Vec<_>>();
         let mut expected = vec![
-            #[cfg(feature = "zk-stark")]
-            PrivacyProtocolIdV1::ZkAcePqAuthorizationV0,
             PrivacyProtocolIdV1::AnonymousPgcKOutOfNV1,
             PrivacyProtocolIdV1::VeRangeTransparentRangeV1,
-            PrivacyProtocolIdV1::VegaExistingCredentialZkV0,
             PrivacyProtocolIdV1::IrohaJindoPolynomialCommitmentV0,
             PrivacyProtocolIdV1::IrohaBootleLanternAnoncredV1,
             PrivacyProtocolIdV1::OrchardHalo2ActionsV1,
@@ -514,6 +490,10 @@ mod tests {
         assert!(
             zk_x509_release_candidate_profile_material_v1().is_ok(),
             "X.509 candidate material must derive independently of governance release"
+        );
+        assert!(
+            vega_release_candidate_profile_material_v1().is_ok(),
+            "Vega candidate material must derive independently of governance release"
         );
         assert_eq!(available, expected);
     }
@@ -1237,115 +1217,13 @@ mod tests {
             assert!(validate_compiled_privacy_activation_v1(&changed).is_err());
         }
     }
-    #[cfg(not(feature = "zk-stark"))]
     #[test]
-    fn zk_ace_remains_fail_closed_without_a_sound_compiled_profile() {
+    fn zk_ace_remains_fail_closed_without_a_128_bit_commitment_profile() {
         let protocol_id = PrivacyProtocolIdV1::ZkAcePqAuthorizationV0;
         assert_eq!(
             compiled_privacy_profile_v1(protocol_id),
             Err(CompiledPrivacyProfileErrorV1::EngineUnavailable { protocol_id })
         );
-    }
-    #[cfg(feature = "zk-stark")]
-    #[test]
-    fn zk_ace_profile_is_deterministic_complete_and_bounded() {
-        let first = compiled_privacy_profile_v1(PrivacyProtocolIdV1::ZkAcePqAuthorizationV0)
-            .expect("profile");
-        let second = compiled_privacy_profile_v1(PrivacyProtocolIdV1::ZkAcePqAuthorizationV0)
-            .expect("profile");
-        assert_eq!(first, second);
-        assert_eq!(
-            first.proof_system_id,
-            PrivacyProofSystemIdV1::StarkFriSha256Goldilocks
-        );
-        assert_eq!(first.engine_id, PrivacyEngineIdV1::NativeGoldilocksStarkFri);
-        assert_eq!(
-            first.protocol_limits,
-            PrivacyProtocolActivationLimitsV1::ZkAcePqAuthorizationV0
-        );
-        assert!(ZK_ACE_PRIVACY_MAX_PROOF_BYTES_V1 <= TAIRA_PRIVACY_MAX_PROOF_BYTES_PER_ACTION_V1);
-        assert_ne!(zk_ace_compiled_profile_digest_v1(), [0; 32]);
-        for digest in [
-            *first.parameter_id.as_bytes(),
-            *first.parameter_digest.as_bytes(),
-            *first.verifier_digest.as_bytes(),
-            *first.statement_schema_digest.as_bytes(),
-            *first.engine_manifest_digest.as_bytes(),
-        ] {
-            assert_ne!(digest, [0; 32]);
-        }
-        assert_eq!(
-            (
-                hex::encode(first.parameter_id.as_bytes()),
-                hex::encode(first.parameter_digest.as_bytes()),
-                hex::encode(first.verifier_digest.as_bytes()),
-                hex::encode(first.statement_schema_digest.as_bytes()),
-                hex::encode(first.engine_manifest_digest.as_bytes()),
-            ),
-            (
-                "7f6efa99b249c5a95d2828338ffd533bd3e2e3cb8748f9bef984d34783cd727c".to_owned(),
-                "eccf8e390650afa055dd617a18094f064eea06b1a9116fe9d6443d2f8ffb184f".to_owned(),
-                "c6862c2f31dd4121b92af8fb272580101cc79344aea739a1b90f6cf8501b7509".to_owned(),
-                "fc01374c09dc173e7c184f790fb959c495457ee8490eb3b18b48a802e5aa1d4e".to_owned(),
-                "a94a0f8cfa1762a38921c47777c1c8ce22a82f0e9bb8ebf0857f51347ed73531".to_owned(),
-            )
-        );
-    }
-    #[cfg(feature = "zk-stark")]
-    #[test]
-    fn zk_ace_compiled_profile_rejects_every_binding_mismatch() {
-        let valid = zk_ace_activation();
-        validate_compiled_privacy_activation_v1(&valid).expect("exact profile");
-        let mutations: [(
-            CompiledPrivacyProfileValidationErrorV1,
-            fn(&mut PrivacyProtocolActivationRecordV1),
-        ); 8] = [
-            (
-                CompiledPrivacyProfileValidationErrorV1::ProofSystemMismatch,
-                |record| {
-                    record.proof_system_id = PrivacyProofSystemIdV1::JindoPolynomialCommitment;
-                },
-            ),
-            (
-                CompiledPrivacyProfileValidationErrorV1::EngineMismatch,
-                |record| record.engine_id = PrivacyEngineIdV1::NativeJindo,
-            ),
-            (
-                CompiledPrivacyProfileValidationErrorV1::ParameterIdMismatch,
-                |record| record.parameter_id.0[0] ^= 1,
-            ),
-            (
-                CompiledPrivacyProfileValidationErrorV1::ParameterDigestMismatch,
-                |record| record.parameter_digest.0[0] ^= 1,
-            ),
-            (
-                CompiledPrivacyProfileValidationErrorV1::VerifierDigestMismatch,
-                |record| record.verifier_digest.0[0] ^= 1,
-            ),
-            (
-                CompiledPrivacyProfileValidationErrorV1::StatementSchemaDigestMismatch,
-                |record| record.statement_schema_digest.0[0] ^= 1,
-            ),
-            (
-                CompiledPrivacyProfileValidationErrorV1::EngineManifestDigestMismatch,
-                |record| record.engine_manifest_digest.0[0] ^= 1,
-            ),
-            (
-                CompiledPrivacyProfileValidationErrorV1::ProtocolLimitsMismatch,
-                |record| {
-                    record.protocol_limits =
-                        PrivacyProtocolActivationLimitsV1::VegaExistingCredentialZkV0;
-                },
-            ),
-        ];
-        for (expected, mutate) in mutations {
-            let mut changed = valid;
-            mutate(&mut changed);
-            assert_eq!(
-                validate_compiled_privacy_activation_v1(&changed),
-                Err(expected)
-            );
-        }
     }
     #[test]
     fn zk_ams_profile_is_unavailable_until_every_mkhe_gate_closes() {
@@ -1560,11 +1438,14 @@ mod tests {
         );
     }
     #[test]
-    fn vega_profile_is_deterministic_complete_and_bounded() {
-        let first = compiled_privacy_profile_v1(PrivacyProtocolIdV1::VegaExistingCredentialZkV0)
-            .expect("profile");
-        let second = compiled_privacy_profile_v1(PrivacyProtocolIdV1::VegaExistingCredentialZkV0)
-            .expect("profile");
+    fn vega_candidate_is_deterministic_bounded_and_not_governance_available() {
+        let protocol_id = PrivacyProtocolIdV1::VegaExistingCredentialZkV0;
+        assert_eq!(
+            compiled_privacy_profile_v1(protocol_id),
+            Err(CompiledPrivacyProfileErrorV1::EngineUnavailable { protocol_id })
+        );
+        let first = vega_release_candidate_profile_material_v1().expect("candidate profile");
+        let second = vega_release_candidate_profile_material_v1().expect("candidate profile");
         assert_eq!(first, second);
         assert_eq!(
             first.proof_system_id,
@@ -1591,31 +1472,35 @@ mod tests {
         ] {
             assert_ne!(digest, [0; 32]);
         }
-        assert_eq!(
-            (
-                hex::encode(first.parameter_id.as_bytes()),
-                hex::encode(first.parameter_digest.as_bytes()),
-                hex::encode(first.verifier_digest.as_bytes()),
-                hex::encode(first.statement_schema_digest.as_bytes()),
-                hex::encode(first.engine_manifest_digest.as_bytes()),
-            ),
-            (
-                "9fa2a07d17989e07bb7ff804bb408e95e127b80ab5e01258b77af9b00c82607d".to_owned(),
-                "cf6bb53805e982444751db072c04d8b52dd9e14712cb90bbf23f68bbf2650c82".to_owned(),
-                "6056ad21ff647212dcc81ff5508e5348400ca734a230073ac6367fa9c7b5ba3f".to_owned(),
-                "f45032acceaf4b65e5afe114ca1f87fde477a73040e07c60a2c99e831f4cdc63".to_owned(),
-                "c701b59a7083969770841a85a784608543c61e5849fed0670bfd97c2aa845009".to_owned(),
-            )
-        );
     }
     #[test]
     #[ignore = "operator-only KAT regeneration after an intentional compiled-profile change"]
-    fn print_all_compiled_profile_tuples() {
+    fn print_available_and_release_candidate_profile_tuples() {
         for protocol_id in PrivacyProtocolIdV1::ALL {
-            let profile = if protocol_id == PrivacyProtocolIdV1::IrohaZkX509StarkP256V0 {
-                zk_x509_release_candidate_profile_material_v1()
-            } else {
-                compiled_privacy_profile_v1(protocol_id)
+            let profile = match protocol_id {
+                PrivacyProtocolIdV1::ZkAcePqAuthorizationV0 => {
+                    // ZK-ACE has no authenticated release-candidate tuple. Report the exact
+                    // production unavailability instead of manufacturing synthetic material.
+                    match compiled_privacy_profile_v1(protocol_id) {
+                        Err(
+                            error @ CompiledPrivacyProfileErrorV1::EngineUnavailable {
+                                protocol_id: unavailable,
+                            },
+                        ) if unavailable == protocol_id => {
+                            eprintln!("{}=unavailable|{error}", protocol_id.canonical_label());
+                            continue;
+                        }
+                        result => result,
+                    }
+                }
+                PrivacyProtocolIdV1::IrohaZkAmsV1 => zk_ams_release_candidate_profile_material_v1(),
+                PrivacyProtocolIdV1::IrohaZkX509StarkP256V0 => {
+                    zk_x509_release_candidate_profile_material_v1()
+                }
+                PrivacyProtocolIdV1::VegaExistingCredentialZkV0 => {
+                    vega_release_candidate_profile_material_v1()
+                }
+                _ => compiled_privacy_profile_v1(protocol_id),
             }
             .unwrap_or_else(|error| {
                 panic!(
@@ -1635,9 +1520,24 @@ mod tests {
         }
     }
     #[test]
-    fn vega_compiled_profile_rejects_every_binding_mismatch() {
-        let valid = vega_activation();
-        validate_compiled_privacy_activation_v1(&valid).expect("exact profile");
+    fn vega_candidate_rejects_every_binding_mismatch_while_admission_fails_closed() {
+        let protocol_id = PrivacyProtocolIdV1::VegaExistingCredentialZkV0;
+        let candidate =
+            vega_release_candidate_profile_material_v1().expect("candidate profile material");
+        let valid = candidate.activation_record(PrivacyProtocolLifecycleV1::Proposed(
+            PrivacyProposedLifecycleV1 {
+                proposed_at_height: 100,
+                activate_at_height: 400,
+            },
+        ));
+        validate_compiled_privacy_activation_against_profile_v1(&valid, &candidate)
+            .expect("exact candidate binding");
+        assert_eq!(
+            validate_compiled_privacy_activation_v1(&valid),
+            Err(CompiledPrivacyProfileValidationErrorV1::Profile(
+                CompiledPrivacyProfileErrorV1::EngineUnavailable { protocol_id }
+            ))
+        );
         let mutations: [(
             CompiledPrivacyProfileValidationErrorV1,
             fn(&mut PrivacyProtocolActivationRecordV1),
@@ -1677,7 +1577,7 @@ mod tests {
             let mut changed = valid;
             mutate(&mut changed);
             assert_eq!(
-                validate_compiled_privacy_activation_v1(&changed),
+                validate_compiled_privacy_activation_against_profile_v1(&changed, &candidate),
                 Err(expected)
             );
         }

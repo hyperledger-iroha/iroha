@@ -1223,7 +1223,7 @@ pub enum KagemushaV4PostCanaryValidatorLivenessValidationError {
 }
 
 #[cfg(test)]
-pub(super) mod tests {
+pub(super) mod post_canary_validator_liveness_tests {
     use std::num::NonZeroU64;
 
     use crate::{

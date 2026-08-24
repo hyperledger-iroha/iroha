@@ -11505,7 +11505,7 @@ export function verifySm2(
 
 export function buildKaigiRosterJoinProof(
   options: KaigiRosterJoinProofOptions,
-): KaigiRosterJoinProof;
+): never;
 
 export function signEd25519(
   message: ArrayBufferView | ArrayBuffer | Buffer | string,

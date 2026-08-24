@@ -47,6 +47,10 @@ def read_reviewed_model(errors: list[str], overrides: dict[str, str]) -> str:
     for module, relative in (
         (MODEL_VERIFIER_MODULE, MODEL_VERIFIER_COMPONENT),
         (MODEL_PROMOTION_RECEIPT_MODULE, MODEL_PROMOTION_RECEIPT_COMPONENT),
+        (
+            MODEL_INTERNAL_VALIDATION_RECEIPT_MODULE,
+            MODEL_INTERNAL_VALIDATION_RECEIPT_COMPONENT,
+        ),
         (MODEL_CANARY_EVIDENCE_MODULE, MODEL_CANARY_EVIDENCE_COMPONENT),
         (MODEL_CANARY_LIVENESS_MODULE, MODEL_CANARY_LIVENESS_COMPONENT),
     ):
@@ -192,6 +196,7 @@ def static_errors(o: dict[str, str] | None = None) -> list[str]:
             KR,
             KAGEMUSHA_ROLLOUT_LIVENESS_COMPONENT,
             MODEL_PROMOTION_RECEIPT_COMPONENT,
+            MODEL_INTERNAL_VALIDATION_RECEIPT_COMPONENT,
             MODEL_CANARY_EVIDENCE_COMPONENT,
             MODEL_CANARY_LIVENESS_COMPONENT,
             MODEL_ISI_OFFLINE,
@@ -258,6 +263,7 @@ def static_errors(o: dict[str, str] | None = None) -> list[str]:
         "def source_provider_pipeline_errors(",
         'MODEL = "crates/iroha_data_model/src/offline/mod.rs"',
         "MODEL_PROMOTION_RECEIPT_COMPONENT",
+        "MODEL_INTERNAL_VALIDATION_RECEIPT_COMPONENT",
         "MODEL_CANARY_EVIDENCE_COMPONENT",
         "MODEL_CANARY_LIVENESS_COMPONENT",
         "MODEL_ISI_OFFLINE",
@@ -315,6 +321,7 @@ def static_errors(o: dict[str, str] | None = None) -> list[str]:
         "def expect_static_mutation(",
         "run_bounded_authenticated_process(",
         "expect_static_mutation(READINESS, *mutation)",
+        "MODEL_INTERNAL_VALIDATION_RECEIPT_COMPONENT: read(",
         "MODEL_CANARY_EVIDENCE_COMPONENT: read(",
         "MODEL_CANARY_LIVENESS_COMPONENT: read(",
         "MODEL_ISI_OFFLINE: read(",
@@ -387,6 +394,50 @@ def static_errors(o: dict[str, str] | None = None) -> list[str]:
         e,
         *RETIRED_RECURSIVE_LIFECYCLE_TYPES,
         *RETIRED_RECURSIVE_V3_MARKERS,
+    )
+    internal_validation = t[MODEL_INTERNAL_VALIDATION_RECEIPT_COMPONENT]
+    rp(
+        internal_validation,
+        MODEL_INTERNAL_VALIDATION_RECEIPT_COMPONENT,
+        e,
+        (
+            r"pub fn decode_canonical\(.*?decode_canonical_with_limits\(bytes, limits\).*?"
+            r"receipt\.validate\(\)\?;.*?if canonical != bytes.*?Ok\(receipt\).*?"
+            r"pub fn validate\(&self\).*?self\.body\.validate\(\)\?;.*?"
+            r"self\.signature\s*\.verify\(&self\.body\.validation_runner_public_key, "
+            r"&self\.body\).*?InvalidSignature"
+        ),
+        "internal-validation receipt canonical signature/body validation",
+    )
+    rp(
+        internal_validation,
+        MODEL_INTERNAL_VALIDATION_RECEIPT_COMPONENT,
+        e,
+        (
+            r"impl KagemushaRecursiveSpendInternalValidationReceiptBodyV1.*?"
+            r"pub fn validate\(&self\).*?self\.validate_identity\(\)\?;.*?"
+            r"self\.validate_tools\(\)\?;.*?self\.validate_commands\(\).*?"
+            r"fn validate_commands\(&self\).*?self\.commands\.len\(\).*?"
+            r"KAGEMUSHA_RECURSIVE_SPEND_INTERNAL_VALIDATION_REQUIRED_COMMANDS_V1\.len\(\).*?"
+            r"command\.command_id != spec\.command_id.*?!argv_matches.*?"
+            r"command\.exit_code != 0.*?command\.termination_signal\.is_some\(\).*?"
+            r"command\.timed_out.*?fuzz_targets != \[true, true\]"
+        ),
+        "internal-validation exact command outcomes",
+    )
+    rp(
+        internal_validation,
+        MODEL_INTERNAL_VALIDATION_RECEIPT_COMPONENT,
+        e,
+        (
+            r'command_id: "core-final-release-inventory".*?program: CARGO,.*?'
+            r'argv: &\[\s*"test",\s*"--locked",\s*"-p",\s*"iroha_core",\s*'
+            r'"--features",\s*"dev-tools,zk-halo2-ipa,kagemusha-candidate-evidence-lab",\s*'
+            r'"--bin",\s*"kagemusha_recursive_spend_v4_bundle",\s*'
+            r'"final_release_inventory_is_exact_and_includes_both_receipts",\s*\],\s*'
+            r"fuzz_target: None"
+        ),
+        "exact internal-validation final-inventory command",
     )
     fb(
         "\n".join(
@@ -2284,6 +2335,33 @@ def static_errors(o: dict[str, str] | None = None) -> list[str]:
         ),
         "bounded opaque internal-validation receipt staging",
     )
+    rp(
+        t[R],
+        R,
+        e,
+        (
+            r"def validate_kagami_verification_report\(.*?"
+            r"internal_validation_receipt_sha256: str,.*?"
+            r'"internal_validation_receipt_sha256",.*?'
+            r"report\.get\(\"internal_validation_receipt_sha256\"\)\s*"
+            r"!= internal_validation_receipt_sha256.*?"
+            r'raise ValueError\(\"Kagami verified a different internal-validation receipt\"\)'
+        ),
+        "internal-validation report digest binding",
+    )
+    rp(
+        t[R],
+        R,
+        e,
+        (
+            r"internal_validation_receipt_sha256: str \| None = None.*?"
+            r'elif name == "internal-validation-receipt-v1\.norito":\s*'
+            r"internal_validation_receipt_sha256 = hashlib\.sha256\(payload\)\.hexdigest\(\).*?"
+            r"or internal_validation_receipt_sha256 is None.*?"
+            r"internal_validation_receipt_sha256=internal_validation_receipt_sha256,"
+        ),
+        "internal-validation staged-byte digest forwarding",
+    )
     opaque_metadata_section = t[R].split(
         "BOUNDED_AUTHENTICATED_METADATA = (", 1
     )[-1].split("READ_CHUNK_BYTES =", 1)[0]
@@ -2327,7 +2405,7 @@ def static_errors(o: dict[str, str] | None = None) -> list[str]:
         "inherited promotion gate differs from its reviewed SHA-256",
         'KAGEMUSHA_PRODUCTION_READINESS_GATE_SHA256',
         'READINESS_SOURCE_CONTRACT = "ci/check_kagemusha_production_readiness_source_contract.py"',
-        "MAX_READINESS_SOURCE_CONTRACT_BYTES = 136 * 1024",
+        "MAX_READINESS_SOURCE_CONTRACT_BYTES = 140 * 1024",
         "authenticated_readiness_source_contract_bytes: dict[str, bytes] = {}",
         "READINESS_SOURCE_PROVIDERS = (",
         "def pin_authenticated_reviewed_source_file(",

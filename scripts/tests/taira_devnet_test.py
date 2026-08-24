@@ -1453,6 +1453,18 @@ class TairaDevnetTests(unittest.TestCase):
         with self.assertRaisesRegex(module.DevnetError, "run `up` first"):
             module.down(args, run=FakeRuntime().run)
 
+    def test_down_accepts_an_already_absent_runtime_signer_directory(self) -> None:
+        state = module.managed_root(self.root / "state", create=True)
+        target = state / "network"
+        target.mkdir()
+        (target / "stop.sh").write_text("#!/bin/sh\n", encoding="utf-8")
+
+        args = module.parser().parse_args(["--dir", str(state), "down"])
+        report = module.down(args, run=FakeRuntime().run)
+
+        self.assertTrue(report["stopped"])
+        self.assertTrue(report["runtime_signers_deleted"])
+
     def test_up_preserves_incomplete_network_with_residual_pid_evidence(self) -> None:
         state = module.managed_root(self.root / "state", create=True)
         target = state / "network"

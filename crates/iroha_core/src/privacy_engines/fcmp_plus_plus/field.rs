@@ -107,7 +107,7 @@ impl<F: Copy + Zeroize> SecretCycleScalarV1<F> {
         core::mem::swap(destination, self.0.as_mut());
         drop(self);
     }
-    #[cfg(test)]
+    #[cfg(any(test, feature = "privacy-release-evidence"))]
     pub(super) fn expose_ref(&self) -> &F {
         self.as_ref()
     }

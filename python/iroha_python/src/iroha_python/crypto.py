@@ -2412,14 +2412,17 @@ def privacy_vega_device_authentication_digest_v1(
     reader_challenge: bytes | bytearray | memoryview,
     session_transcript_digest: bytes | bytearray | memoryview,
 ) -> bytes:
-    """Derive Vega ``H_dev`` for an explicit prepared transaction intent.
+    """Request Vega ``H_dev`` for an explicit prepared transaction intent.
 
-    The native derivation fixes the ISO 18013-5 document profile, action index,
-    governed Vega artifacts, exact NetworkId, date, threshold, reader challenge,
-    session transcript, and canonical nonzero transaction intent. This helper
-    handles public binding data only; generic Vega construction and every
-    credential-bearing operation must use
-    :class:`PrivacyWalletWorkerControllerV1`.
+    This public entry point fails closed while the binary has no exact
+    governance-available compiled Vega profile. In that state, otherwise-valid
+    inputs raise :class:`RuntimeError`; candidate or placeholder profile material
+    is never used. If the compiled profile becomes available, the native
+    derivation fixes the ISO 18013-5 document profile, action index, governed
+    Vega artifacts, exact NetworkId, date, threshold, reader challenge, session
+    transcript, and canonical nonzero transaction intent. This helper handles
+    public binding data only; generic Vega construction and every
+    credential-bearing operation must use :class:`PrivacyWalletWorkerControllerV1`.
     """
 
     network_id = _require_network_id(network_id)
@@ -2454,6 +2457,10 @@ def privacy_vega_device_authentication_digest_v1(
             "iroha_python._crypto is missing "
             "privacy_vega_device_authentication_digest_v1; rebuild the extension"
         ) from exc
+    except RuntimeError:
+        # Compiled-profile/engine unavailability is a public fail-closed state,
+        # not an invalid statement. Preserve the native exception and detail.
+        raise
     except Exception:
         raise ValueError("invalid Vega device-authentication statement") from None
     if not isinstance(result, bytes) or len(result) != 32 or result == bytes(32):

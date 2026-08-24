@@ -124,7 +124,7 @@ where
     C: CurveAffine,
     C::Scalar: PrimeField,
 {
-    fn parse(bytes: &[u8]) -> Result<Self, OfflineCashHalo2PrimitiveErrorV1> {
+    pub(super) fn parse(bytes: &[u8]) -> Result<Self, OfflineCashHalo2PrimitiveErrorV1> {
         if bytes.len() != OFFLINE_CASH_HISTORY_ACCUMULATOR_BYTES_V1 {
             return Err(OfflineCashHalo2PrimitiveErrorV1::InvalidHistory);
         }

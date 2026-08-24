@@ -319,6 +319,44 @@ pub enum VegaMdlFigure9ArtifactSourceErrorV1 {
     CallbackRejected,
 }
 
+/// Semantic reason that a lent artifact violated its bounded length contract.
+///
+/// The manifest already owns the exact numeric length. Qualification reports
+/// the actionable relationship to that binding without retaining duplicate
+/// attacker-controlled lengths in the top-level error.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Error)]
+#[repr(u8)]
+pub enum VegaMdlFigure9ArtifactLengthMismatchV1 {
+    /// The source lent an empty artifact.
+    #[error("is empty")]
+    Empty,
+    /// The artifact ended before its exact manifest-bound length.
+    #[error("is shorter than its exact manifest binding")]
+    ShorterThanManifest,
+    /// The artifact continued beyond its exact manifest-bound length.
+    #[error("is longer than its exact manifest binding")]
+    LongerThanManifest,
+    /// The artifact exceeded the independent decoder safety ceiling.
+    #[error("exceeds the absolute artifact byte ceiling")]
+    ExceedsMaximum,
+}
+
+impl VegaMdlFigure9ArtifactLengthMismatchV1 {
+    const fn classify(expected: u64, actual: u64) -> Option<Self> {
+        if actual == 0 {
+            Some(Self::Empty)
+        } else if actual > VEGA_MDL_FIGURE9_KEY_ARTIFACT_MAX_BYTES_V1 {
+            Some(Self::ExceedsMaximum)
+        } else if actual < expected {
+            Some(Self::ShorterThanManifest)
+        } else if actual > expected {
+            Some(Self::LongerThanManifest)
+        } else {
+            None
+        }
+    }
+}
+
 /// Fail-closed manifest, source, authentication, or installation failure.
 // Keep exact length diagnostics inline and allocation-free on this failure path.
 #[allow(variant_size_differences)]
@@ -357,15 +395,13 @@ pub enum VegaMdlFigure9ArtifactQualificationErrorV1 {
     /// Source changed its manifest during qualification.
     #[error("Vega Figure 9 artifact source changed its manifest during qualification")]
     ManifestChanged,
-    /// Lent artifact length differed from its exact manifest binding.
-    #[error("Vega Figure 9 {role:?} artifact length {actual} differs from exact length {expected}")]
+    /// Lent artifact length violated its exact, bounded manifest binding.
+    #[error("Vega Figure 9 {role:?} artifact length {mismatch}")]
     LengthMismatch {
         /// Artifact role.
         role: VegaMdlFigure9ArtifactRoleV1,
-        /// Exact manifest length.
-        expected: u64,
-        /// Lent byte length.
-        actual: u64,
+        /// Semantic relationship between the lent and permitted lengths.
+        mismatch: VegaMdlFigure9ArtifactLengthMismatchV1,
     },
     /// Raw SHA-256 of the complete canonical artifact file differed.
     #[error("Vega Figure 9 {role:?} raw canonical artifact SHA-256 mismatch")]
@@ -495,14 +531,12 @@ fn authenticate_and_copy_artifact(
     expected: VegaMdlFigure9ArtifactBindingV1,
 ) -> Result<Vec<u8>, VegaMdlFigure9ArtifactQualificationErrorV1> {
     let actual = u64::try_from(bytes.len()).unwrap_or(u64::MAX);
-    if actual != expected.exact_byte_len
-        || actual == 0
-        || actual > VEGA_MDL_FIGURE9_KEY_ARTIFACT_MAX_BYTES_V1
+    if let Some(mismatch) =
+        VegaMdlFigure9ArtifactLengthMismatchV1::classify(expected.exact_byte_len, actual)
     {
         return Err(VegaMdlFigure9ArtifactQualificationErrorV1::LengthMismatch {
             role: expected.role,
-            expected: expected.exact_byte_len,
-            actual,
+            mismatch,
         });
     }
     if <[u8; 32]>::from(Sha256::digest(bytes)) != expected.raw_canonical_sha256 {
@@ -1013,6 +1047,38 @@ mod tests {
     }
 
     #[test]
+    fn artifact_length_mismatch_classifies_every_bounded_relationship() {
+        use VegaMdlFigure9ArtifactLengthMismatchV1::{
+            Empty, ExceedsMaximum, LongerThanManifest, ShorterThanManifest,
+        };
+
+        let expected = 17;
+        assert_eq!(
+            VegaMdlFigure9ArtifactLengthMismatchV1::classify(expected, expected),
+            None
+        );
+        assert_eq!(
+            VegaMdlFigure9ArtifactLengthMismatchV1::classify(expected, 0),
+            Some(Empty)
+        );
+        assert_eq!(
+            VegaMdlFigure9ArtifactLengthMismatchV1::classify(expected, expected - 1),
+            Some(ShorterThanManifest)
+        );
+        assert_eq!(
+            VegaMdlFigure9ArtifactLengthMismatchV1::classify(expected, expected + 1),
+            Some(LongerThanManifest)
+        );
+        assert_eq!(
+            VegaMdlFigure9ArtifactLengthMismatchV1::classify(
+                VEGA_MDL_FIGURE9_KEY_ARTIFACT_MAX_BYTES_V1 + 1,
+                VEGA_MDL_FIGURE9_KEY_ARTIFACT_MAX_BYTES_V1 + 1,
+            ),
+            Some(ExceedsMaximum)
+        );
+    }
+
+    #[test]
     fn verifier_source_contract_rejects_omission_provider_failure_and_repetition() {
         let omitted = VerifierSource::new(SourceBehavior::Omit, SYNTHETIC_VERIFIER_KEY.to_vec());
         assert!(matches!(
@@ -1060,7 +1126,7 @@ mod tests {
             qualify_and_install_vega_mdl_figure9_verifier_artifact_v1(&propagated),
             Err(VegaMdlFigure9ArtifactQualificationErrorV1::LengthMismatch {
                 role: VegaMdlFigure9ArtifactRoleV1::VerifierKey,
-                ..
+                mismatch: VegaMdlFigure9ArtifactLengthMismatchV1::ShorterThanManifest,
             })
         ));
 
@@ -1072,7 +1138,7 @@ mod tests {
             qualify_and_install_vega_mdl_figure9_verifier_artifact_v1(&source),
             Err(VegaMdlFigure9ArtifactQualificationErrorV1::LengthMismatch {
                 role: VegaMdlFigure9ArtifactRoleV1::VerifierKey,
-                ..
+                mismatch: VegaMdlFigure9ArtifactLengthMismatchV1::ShorterThanManifest,
             })
         ));
         assert_eq!(source.callback_count.load(Ordering::SeqCst), 1);
@@ -1136,7 +1202,7 @@ mod tests {
             qualify_and_install_vega_mdl_figure9_prover_artifacts_v1(&propagated),
             Err(VegaMdlFigure9ArtifactQualificationErrorV1::LengthMismatch {
                 role: VegaMdlFigure9ArtifactRoleV1::ProvingKey,
-                ..
+                mismatch: VegaMdlFigure9ArtifactLengthMismatchV1::ShorterThanManifest,
             })
         ));
 
@@ -1149,7 +1215,7 @@ mod tests {
             qualify_and_install_vega_mdl_figure9_prover_artifacts_v1(&swallowed),
             Err(VegaMdlFigure9ArtifactQualificationErrorV1::LengthMismatch {
                 role: VegaMdlFigure9ArtifactRoleV1::ProvingKey,
-                ..
+                mismatch: VegaMdlFigure9ArtifactLengthMismatchV1::ShorterThanManifest,
             })
         ));
 

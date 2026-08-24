@@ -14398,7 +14398,8 @@ def test_locked_body_reproposal_source_fidelity_rejects_formal_and_production_mu
             "runner_non_validator_requests_locked_body",
             "crates/iroha_core/src/sumeragi/v2_runner/lifecycle_run_inner.rs",
             "run_lifecycle_active_height",
-            "if lock_outcome == GlobalBodyLockOutcome::Inserted && local_validator.is_some()",
+            "if lock_outcome == GlobalBodyLockOutcome::Inserted\n"
+            "                            && local_validator.is_some()",
             "if lock_outcome == GlobalBodyLockOutcome::Inserted",
             "locked-body refinement evidence must be requested only by a local validator at exact first admission",
         ),

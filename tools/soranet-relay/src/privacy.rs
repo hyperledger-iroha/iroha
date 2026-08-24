@@ -1079,6 +1079,7 @@ impl From<PrivacyTelemetryConfig> for PrivacyConfig {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::config::GAR_CATEGORY_MAX_BYTES_V1;
     fn base_time() -> SystemTime {
         UNIX_EPOCH + Duration::from_secs(1_000)
     }
@@ -1444,7 +1445,11 @@ mod tests {
     fn privacy_category_retention_is_bounded() {
         let mut bucket = BucketStats::default();
         for index in 0..=PRIVACY_GAR_CATEGORIES_PER_BUCKET_MAX_V1 {
-            bucket.record_gar_category(format!("{index:016x}"));
+            bucket.record_gar_category(
+                u64::try_from(index)
+                    .expect("bounded category index fits u64")
+                    .to_be_bytes(),
+            );
         }
         assert_eq!(
             bucket.gar_counts.len(),

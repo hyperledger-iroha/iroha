@@ -781,6 +781,7 @@ fn sample_inrou_replica_runtime_state_for(
         health_status: iroha_data_model::soracloud::SoraServiceHealthStatusV1::Healthy,
         load_factor_bps: 250,
         materialized_bundle_hash: Hash::new(b"inrou-runtime-state-test-bundle"),
+        reporting_epoch: 1,
         accounted_egress_bytes: 0,
         pending_mailbox_message_count: 0,
         last_receipt_id: None,
@@ -947,14 +948,14 @@ fn service_runtime_mutations_require_exact_validator_placement() -> Result<(), e
         .get(&victim_name)
         .cloned()
         .expect("victim deployment");
-    let lease_started_sequence = deployment_before_usage
+    let reporting_epoch = deployment_before_usage
         .service_lease
         .as_ref()
         .expect("victim hosted-service lease")
-        .lease_started_sequence;
+        .reporting_epoch;
     let lease_error = isi::ReportSoracloudServiceLeaseUsage {
         service_name: victim_name.clone(),
-        lease_started_sequence,
+        reporting_epoch,
         active_service_version: victim_version.to_owned(),
         replica_slot: 1,
         replica_accounted_egress_bytes: u64::MAX,

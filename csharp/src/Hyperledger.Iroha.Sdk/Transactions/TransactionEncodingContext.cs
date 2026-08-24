@@ -11,11 +11,11 @@ internal sealed class TransactionEncodingContext
 {
     private const byte AssetDefinitionVersion = 1;
 
-    private static readonly Dictionary<CurveId, ulong> PublicKeyMultihashCodes = new()
+    private static readonly Dictionary<CurveId, byte> PublicKeyAlgorithmTags = new()
     {
-        [CurveId.Ed25519] = 0xED,
-        [CurveId.MlDsa] = 0xEE,
-        [CurveId.Sm2] = 0x1306,
+        [CurveId.Ed25519] = 0,
+        [CurveId.MlDsa] = 4,
+        [CurveId.Sm2] = 10,
     };
 
     private static readonly Dictionary<char, int> Base58Alphabet = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz"
@@ -40,9 +40,7 @@ internal sealed class TransactionEncodingContext
 
     public byte[] EncodeAccountId(string accountId)
     {
-        var writer = new CanonicalNoritoWriter();
-        writer.WriteField(EncodeAccountController(accountId));
-        return writer.ToArray();
+        return EncodeAccountController(accountId);
     }
 
     public byte[] EncodeAccountController(string accountId)
@@ -53,17 +51,18 @@ internal sealed class TransactionEncodingContext
             throw new ArgumentException("Multisig account controllers are not yet supported by the managed transaction encoder.", nameof(accountId));
         }
 
-        if (!PublicKeyMultihashCodes.TryGetValue(parsed.CurveIdentifier.Value, out var multihashCode))
+        if (!PublicKeyAlgorithmTags.TryGetValue(parsed.CurveIdentifier.Value, out var algorithmTag))
         {
             throw new ArgumentException($"Unsupported account curve `{parsed.CurveIdentifier}` for managed Norito encoding.", nameof(accountId));
         }
 
-        var multihash = FormatPublicKeyMultihash(multihashCode, parsed.PublicKey);
-        var keyPayload = EncodeString(multihash);
+        var compactKey = new byte[parsed.PublicKey.Length + 1];
+        compactKey[0] = algorithmTag;
+        parsed.PublicKey.CopyTo(compactKey, 1);
 
         var writer = new CanonicalNoritoWriter();
         writer.WriteUInt32LittleEndian(0);
-        writer.WriteField(keyPayload);
+        writer.WriteField(EncodeConstVec(compactKey));
         return writer.ToArray();
     }
 
@@ -500,33 +499,6 @@ internal sealed class TransactionEncodingContext
         {
             throw new ArgumentException("Account id must be a canonical I105 account id.", paramName, exception);
         }
-    }
-
-    private static string FormatPublicKeyMultihash(ulong functionCode, ReadOnlySpan<byte> payload)
-    {
-        var functionHex = Convert.ToHexString(EncodeVarint(functionCode)).ToLowerInvariant();
-        var lengthHex = Convert.ToHexString(EncodeVarint((ulong)payload.Length)).ToLowerInvariant();
-        var payloadHex = Convert.ToHexString(payload).ToUpperInvariant();
-        return functionHex + lengthHex + payloadHex;
-    }
-
-    private static byte[] EncodeVarint(ulong value)
-    {
-        var bytes = new List<byte>();
-        do
-        {
-            var current = (byte)(value & 0x7F);
-            value >>= 7;
-            if (value != 0)
-            {
-                current |= 0x80;
-            }
-
-            bytes.Add(current);
-        }
-        while (value != 0);
-
-        return [.. bytes];
     }
 
     private static byte[] DecodeBase58(string literal, string paramName)

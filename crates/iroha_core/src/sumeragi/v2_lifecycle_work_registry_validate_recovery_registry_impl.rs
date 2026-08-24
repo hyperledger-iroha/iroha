@@ -2528,9 +2528,7 @@ impl ConcreteLifecycleWorkRegistry {
                     Some(RecoveredWalRegistrySlotV1::DecisionStore(address))
                 }
                 ConcreteLifecycleWorkKind::DurableRecoveredDecisionApply(apply)
-                    if apply.carrier.is_recovered()
-                        && work.validates_at(address)
-                        && apply.validates_at(address, work.digest) =>
+                    if work.validates_at(address) && apply.validates_at(address, work.digest) =>
                 {
                     Some(RecoveredWalRegistrySlotV1::DecisionApply(address))
                 }
@@ -2814,23 +2812,6 @@ impl ConcreteLifecycleWorkRegistry {
                 sign,
                 &owner_held_outputs,
             )
-    }
-    /// Return the exact Ready ordinal retained by recovered Decision Apply startup.
-    ///
-    /// The ordinary live Apply carrier is intentionally excluded: only the
-    /// recovered WAL slot, its exact Ready row, and the complete unrelated
-    /// recovered-work census can authorize pending-Kura direct-Apply startup.
-    pub(super) fn exact_recovered_decision_apply_ready_ordinal(
-        &self,
-        coordinator: &LifecycleCoordinator,
-    ) -> Option<u128> {
-        let Some(extra @ RecoveredWalRegistrySlotV1::DecisionApply(address)) =
-            self.exact_recovered_wal_registry_slot()
-        else {
-            return None;
-        };
-        self.exactly_covers_recovered_ready_work_with_extra(coordinator, extra)
-            .then_some(address.ordinal)
     }
     /// Verify WAL-authority startup coverage beside authenticated cold outputs.
     pub(super) fn exactly_covers_recovered_ready_work_and_wal_authority_with_owner_held_outputs(

@@ -1,3 +1,5 @@
+//! Memory verifier circuit regressions.
+
 #![cfg(feature = "ivm_zk_tests")]
 use ivm::{
     Memory,
@@ -24,6 +26,24 @@ fn test_load_circuit_ok() {
         heap_limit: Memory::HEAP_SIZE,
     };
     assert!(c.verify().is_ok());
+}
+#[test]
+fn load_circuit_rejects_overflowing_heap_limit_without_panicking() {
+    let circuit = LoadCircuit {
+        root: [0; 32],
+        addr: Memory::HEAP_START,
+        value: 0,
+        size: 4,
+        leaf: [0; 32],
+        path: Vec::new(),
+        code_len: 0,
+        heap_limit: u64::MAX,
+    };
+    let result = std::panic::catch_unwind(|| circuit.verify());
+    assert_eq!(
+        result.expect("verification must not panic"),
+        Err("access violation")
+    );
 }
 #[test]
 fn test_store_circuit_updates_root() {

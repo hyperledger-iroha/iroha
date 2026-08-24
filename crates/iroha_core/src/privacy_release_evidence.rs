@@ -61,6 +61,8 @@ fn release_network_id_from_genesis_hash(hash: [u8; 32]) -> iroha_data_model::Net
         hash,
     )))
 }
+#[cfg(test)]
+use crate::privacy_engines::vega::prepare_vega_release_candidate_privacy_action_with_rng_v1;
 use crate::privacy_engines::{
     anonymous_pgc::{
         AnonymousPgcParametersV1, AnonymousPgcPoolInvariantV1, TwistedElGamalCiphertextV1,
@@ -1636,7 +1638,12 @@ fn zk_ace_fixture_v1()
         .parse()
         .map_err(|_| PrivacyReleaseEvidenceErrorClassV1::FixtureConstructionFailed)?;
     let profile = compiled_privacy_profile_v1(PrivacyProtocolIdV1::ZkAcePqAuthorizationV0)
-        .map_err(|_| PrivacyReleaseEvidenceErrorClassV1::FixtureConstructionFailed)?;
+        .map_err(|error| match error {
+            crate::privacy_profiles::CompiledPrivacyProfileErrorV1::EngineUnavailable {
+                ..
+            } => PrivacyReleaseEvidenceErrorClassV1::ProtocolUnavailable,
+            _ => PrivacyReleaseEvidenceErrorClassV1::FixtureConstructionFailed,
+        })?;
     let statement = ZkAcePqAuthorizationStatementV1 {
         context: release_statement_context_from_compiled_profile_v1(
             &profile,

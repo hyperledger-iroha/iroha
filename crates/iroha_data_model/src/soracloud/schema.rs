@@ -1421,21 +1421,20 @@ pub enum SoraServiceLeaseStatusV1 {
     /// Lease was suspended by policy and must fail closed.
     Suspended,
 }
-/// Maximum authenticated reporter identities retained in one service lease.
+/// Maximum authenticated reporter identities retained in one reporting epoch.
 ///
 /// This consensus constant bounds world-state and Norito growth under repeated
-/// revision rollout or validator churn. A future compaction protocol may fold
-/// finalized reporters into a historical aggregate before admitting more.
-/// At the limit, existing identities may still update/finalize, but a new
-/// identity requires a fresh service-lease incarnation.
+/// revision rollout or validator churn. Once the bound is reached, the exact
+/// newly assigned reporter may advance the reporting epoch only after every
+/// prior checkpoint is terminal and no prior reporter remains actively placed.
 pub const SORA_SERVICE_LEASE_MAX_EGRESS_REPORTER_CHECKPOINTS_V1: usize = 4_096;
-/// One lease-incarnation-bound replica reporter's monotonic egress checkpoint.
+/// One reporting-epoch-bound replica reporter's monotonic egress checkpoint.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
 pub struct SoraServiceLeaseEgressCheckpointV1 {
-    /// Immutable sequence identifying the service-lease incarnation.
-    pub lease_started_sequence: u64,
+    /// Reporting epoch in which this checkpoint was admitted.
+    pub reporting_epoch: u64,
     /// Service revision for which the replica emitted this usage.
     pub active_service_version: String,
     /// One-based placed replica slot.
@@ -1449,6 +1448,96 @@ pub struct SoraServiceLeaseEgressCheckpointV1 {
     /// An identical active placement may reopen the checkpoint before serving
     /// again. A former reporter may only replay the exact terminal value.
     pub finalize_reporter: bool,
+}
+/// Typed audit payload for one hosted-service reporting-epoch rollover.
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[norito(deny_unknown_fields)]
+pub struct SoraServiceLeaseReportingEpochRolloverV1 {
+    /// Schema version; must equal
+    /// [`SORA_SERVICE_LEASE_REPORTING_EPOCH_ROLLOVER_VERSION_V1`].
+    pub schema_version: u16,
+    /// Immutable economic lease incarnation to which the rollover belongs.
+    pub lease_started_sequence: u64,
+    /// Epoch whose terminal counters were settled.
+    pub previous_reporting_epoch: u64,
+    /// Exact successor epoch opened by the rollover.
+    pub new_reporting_epoch: u64,
+    /// Active validator that opened the successor epoch.
+    pub reporter_account_id: AccountId,
+    /// Active service revision assigned to the successor reporter.
+    pub active_service_version: String,
+    /// One-based replica slot assigned to the successor reporter.
+    pub replica_slot: u16,
+    /// Number of terminal prior-epoch checkpoints folded into settlement.
+    pub finalized_checkpoint_count: u32,
+    /// Exact prior-epoch bytes added to the settlement baseline.
+    pub settled_egress_bytes_delta: u128,
+    /// Exact cumulative settled bytes after the rollover.
+    pub settled_egress_bytes: u128,
+}
+impl SoraServiceLeaseReportingEpochRolloverV1 {
+    /// Validate the bound rollover transition.
+    ///
+    /// # Errors
+    /// Returns [`SoracloudManifestError`] when the epoch transition, trigger,
+    /// or settlement fields do not describe one exact rollover.
+    pub fn validate(&self) -> Result<(), SoracloudManifestError> {
+        validate_schema_version(
+            "sora service lease reporting epoch rollover",
+            self.schema_version,
+            SORA_SERVICE_LEASE_REPORTING_EPOCH_ROLLOVER_VERSION_V1,
+        )?;
+        if self.lease_started_sequence == 0 {
+            return Err(invalid_field(
+                "sora service lease reporting epoch rollover",
+                "lease_started_sequence",
+                "must be greater than zero",
+            ));
+        }
+        if self.previous_reporting_epoch == 0
+            || self.previous_reporting_epoch.checked_add(1) != Some(self.new_reporting_epoch)
+        {
+            return Err(invalid_field(
+                "sora service lease reporting epoch rollover",
+                "new_reporting_epoch",
+                "must be the checked successor of a non-zero previous_reporting_epoch",
+            ));
+        }
+        validate_nonblank_field(
+            "sora service lease reporting epoch rollover",
+            "active_service_version",
+            &self.active_service_version,
+        )?;
+        if self.replica_slot == 0 {
+            return Err(invalid_field(
+                "sora service lease reporting epoch rollover",
+                "replica_slot",
+                "must be greater than zero",
+            ));
+        }
+        if usize::try_from(self.finalized_checkpoint_count).ok()
+            != Some(SORA_SERVICE_LEASE_MAX_EGRESS_REPORTER_CHECKPOINTS_V1)
+        {
+            return Err(invalid_field(
+                "sora service lease reporting epoch rollover",
+                "finalized_checkpoint_count",
+                "must equal the reporting-epoch checkpoint limit",
+            ));
+        }
+        if self
+            .settled_egress_bytes
+            .checked_sub(self.settled_egress_bytes_delta)
+            .is_none()
+        {
+            return Err(invalid_field(
+                "sora service lease reporting epoch rollover",
+                "settled_egress_bytes",
+                "must be greater than or equal to settled_egress_bytes_delta",
+            ));
+        }
+        Ok(())
+    }
 }
 /// Authoritative lease and accounting state for a hosted HTTP service.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
@@ -1475,31 +1564,45 @@ pub struct SoraServiceLeaseStateV1 {
     pub lease_started_sequence: u64,
     /// Sequence after which the lease must fail closed.
     pub lease_expires_sequence: u64,
-    /// Most recent authoritative billing checkpoint.
-    pub last_billed_sequence: u64,
-    /// Canonically sorted reporter checkpoints keyed by lease incarnation,
-    /// revision, slot, and validator.
+    /// Monotonic reporting epoch, independent of the economic lease clock.
+    pub reporting_epoch: u64,
+    /// Exact bytes settled from all finalized prior reporting epochs.
+    pub settled_egress_bytes: u128,
+    /// Canonically sorted reporter checkpoints keyed by reporting epoch,
+    /// revision, slot, and validator. Every retained checkpoint belongs to the
+    /// current reporting epoch.
     pub egress_reporter_checkpoints: Vec<SoraServiceLeaseEgressCheckpointV1>,
-    /// Cached saturated sum of all reporter checkpoints.
-    pub accounted_egress_bytes: u64,
+    /// Cached exact sum of settled bytes and all current-epoch checkpoints.
+    pub accounted_egress_bytes: u128,
     /// Human-readable reason when the lease is not active.
     #[norito(required)]
     pub last_status_reason: Option<String>,
 }
 impl SoraServiceLeaseStateV1 {
-    /// Recompute the deterministic aggregate egress total.
+    /// Recompute the deterministic exact aggregate egress total.
     #[must_use]
-    pub fn recomputed_accounted_egress_bytes(&self) -> u64 {
+    pub fn recomputed_accounted_egress_bytes(&self) -> Option<u128> {
         self.egress_reporter_checkpoints
             .iter()
-            .fold(0_u64, |total, checkpoint| {
-                total.saturating_add(checkpoint.accounted_egress_bytes)
+            .try_fold(self.settled_egress_bytes, |total, checkpoint| {
+                total.checked_add(u128::from(checkpoint.accounted_egress_bytes))
             })
     }
 
     /// Refresh the cached aggregate egress total after a checkpoint mutation.
-    pub fn refresh_accounted_egress_bytes(&mut self) {
-        self.accounted_egress_bytes = self.recomputed_accounted_egress_bytes();
+    ///
+    /// # Errors
+    /// Returns [`SoracloudManifestError`] if the exact `u128` aggregate overflows.
+    pub fn refresh_accounted_egress_bytes(&mut self) -> Result<(), SoracloudManifestError> {
+        self.accounted_egress_bytes =
+            self.recomputed_accounted_egress_bytes().ok_or_else(|| {
+                invalid_field(
+                    "sora service lease state",
+                    "accounted_egress_bytes",
+                    "settled and current-epoch egress total overflows u128",
+                )
+            })?;
+        Ok(())
     }
 
     /// Validate lease-accounting invariants.
@@ -1536,7 +1639,7 @@ impl SoraServiceLeaseStateV1 {
         for (field, value) in [
             ("lease_started_sequence", self.lease_started_sequence),
             ("lease_expires_sequence", self.lease_expires_sequence),
-            ("last_billed_sequence", self.last_billed_sequence),
+            ("reporting_epoch", self.reporting_epoch),
         ] {
             if value == 0 {
                 return Err(invalid_field(
@@ -1553,15 +1656,6 @@ impl SoraServiceLeaseStateV1 {
                 "must be greater than lease_started_sequence",
             ));
         }
-        if self.last_billed_sequence < self.lease_started_sequence
-            || self.last_billed_sequence > self.lease_expires_sequence
-        {
-            return Err(invalid_field(
-                "sora service lease state",
-                "last_billed_sequence",
-                "must be within lease_started_sequence..=lease_expires_sequence",
-            ));
-        }
         if self
             .last_status_reason
             .as_ref()
@@ -1574,11 +1668,11 @@ impl SoraServiceLeaseStateV1 {
             ));
         }
         for checkpoint in &self.egress_reporter_checkpoints {
-            if checkpoint.lease_started_sequence != self.lease_started_sequence {
+            if checkpoint.reporting_epoch != self.reporting_epoch {
                 return Err(invalid_field(
                     "sora service lease state",
                     "egress_reporter_checkpoints",
-                    "lease incarnation must match lease_started_sequence",
+                    "checkpoint reporting_epoch must match the active reporting_epoch",
                 ));
             }
             if checkpoint.active_service_version.trim().is_empty() {
@@ -1610,13 +1704,13 @@ impl SoraServiceLeaseStateV1 {
             .windows(2)
             .any(|checkpoints| {
                 let left = (
-                    checkpoints[0].lease_started_sequence,
+                    checkpoints[0].reporting_epoch,
                     checkpoints[0].active_service_version.as_str(),
                     checkpoints[0].replica_slot,
                     &checkpoints[0].validator_account_id,
                 );
                 let right = (
-                    checkpoints[1].lease_started_sequence,
+                    checkpoints[1].reporting_epoch,
                     checkpoints[1].active_service_version.as_str(),
                     checkpoints[1].replica_slot,
                     &checkpoints[1].validator_account_id,
@@ -1627,14 +1721,22 @@ impl SoraServiceLeaseStateV1 {
             return Err(invalid_field(
                 "sora service lease state",
                 "egress_reporter_checkpoints",
-                "must be strictly sorted by lease incarnation, revision, slot, and validator",
+                "must be strictly sorted by reporting epoch, revision, slot, and validator",
             ));
         }
-        if self.accounted_egress_bytes != self.recomputed_accounted_egress_bytes() {
+        let recomputed_accounted_egress_bytes =
+            self.recomputed_accounted_egress_bytes().ok_or_else(|| {
+                invalid_field(
+                    "sora service lease state",
+                    "accounted_egress_bytes",
+                    "settled and current-epoch egress total overflows u128",
+                )
+            })?;
+        if self.accounted_egress_bytes != recomputed_accounted_egress_bytes {
             return Err(invalid_field(
                 "sora service lease state",
                 "accounted_egress_bytes",
-                "must equal the saturated reporter checkpoint sum",
+                "must equal the exact settled and current-epoch checkpoint sum",
             ));
         }
         Ok(())

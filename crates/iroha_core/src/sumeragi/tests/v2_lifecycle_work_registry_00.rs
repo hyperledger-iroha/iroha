@@ -132,14 +132,16 @@ impl ProductionReadyValidateDispatchRow {
     fn expected_dispatch(
         self,
         ordinal: u128,
-        expected_reducer_wait: WaitToken,
+        reducer_fence_wait: Option<super::super::WaitToken>,
+        successor_ordinal: Option<u128>,
     ) -> super::super::ProductionCompletionDispatchV1 {
         use super::super::ProductionCompletionDispatchV1 as Dispatch;
 
         match self {
             Self::ValidatedBusy | Self::RejectedBusy => Dispatch::ReducerFenceWait {
                 ordinal,
-                wait: expected_reducer_wait,
+                wait: reducer_fence_wait
+                    .expect("busy Ready Validate row retains its exact reducer fence"),
             },
             Self::ValidatedInactive
             | Self::ValidatedNoEffect
@@ -147,23 +149,20 @@ impl ProductionReadyValidateDispatchRow {
             | Self::RejectedNoEffect => Dispatch::ValidateNoSuccessor { ordinal },
             Self::ValidatedApply => Dispatch::BodyStageAdvanced {
                 parent_ordinal: ordinal,
-                child_ordinal: ordinal
-                    .checked_add(1)
-                    .expect("fixture successor ordinal remains representable"),
+                child_ordinal: successor_ordinal
+                    .expect("ValidatedApply reserves one actor-global successor"),
                 child: LifecycleWorkClass::Apply,
             },
             Self::ValidatedPersist => Dispatch::BodyStageAdvanced {
                 parent_ordinal: ordinal,
-                child_ordinal: ordinal
-                    .checked_add(1)
-                    .expect("fixture successor ordinal remains representable"),
+                child_ordinal: successor_ordinal
+                    .expect("ValidatedPersist reserves one actor-global successor"),
                 child: LifecycleWorkClass::SignVote,
             },
             Self::RejectedReport => Dispatch::BodyStageAdvanced {
                 parent_ordinal: ordinal,
-                child_ordinal: ordinal
-                    .checked_add(1)
-                    .expect("fixture successor ordinal remains representable"),
+                child_ordinal: successor_ordinal
+                    .expect("RejectedReport reserves one actor-global successor"),
                 child: LifecycleWorkClass::InvalidBodyReport,
             },
         }
@@ -176,6 +175,7 @@ fn assert_production_ready_validate_cold_open(
     ledger_root: &std::path::Path,
     active_context: LifecycleContext,
     parent_ordinal: u128,
+    expected_successor_ordinal: Option<u128>,
 ) {
     use super::super::schema::DurableContinuation;
 
@@ -220,9 +220,9 @@ fn assert_production_ready_validate_cold_open(
             );
         }
         Some((edge, child_class)) => {
-            let child_ordinal = parent_ordinal
-                .checked_add(1)
-                .expect("fixture successor ordinal remains representable");
+            let child_ordinal = expected_successor_ordinal
+                .expect("successor publication sampled one actor-global ordinal");
+            assert!(child_ordinal > parent_ordinal, "{row:?}");
             assert_eq!(records.len(), 2, "{row:?}");
             assert_eq!(ledger.high_water(), child_ordinal, "{row:?}");
             assert_eq!(
@@ -270,7 +270,6 @@ fn owned_production_ready_validate_fixture(
 struct ProductionRecoveredApplyReadyFixture {
     owned: OwnedReadyDurableValidateFixture,
     commit_qc: wire::QuorumCertificate,
-    apply_service: crate::sumeragi::v2_apply::V2ApplyService,
     validator_keys: Vec<KeyPair>,
 }
 
@@ -283,7 +282,6 @@ fn production_recovered_apply_ready_fixture(marker: u8) -> ProductionRecoveredAp
         body_store,
         durable,
         commit_qc,
-        apply_service,
         validator_keys,
         directory,
     } = crate::sumeragi::v2_apply::production_recovered_decision_apply_fixture_v1();
@@ -305,7 +303,6 @@ fn production_recovered_apply_ready_fixture(marker: u8) -> ProductionRecoveredAp
     ProductionRecoveredApplyReadyFixture {
         owned,
         commit_qc,
-        apply_service,
         validator_keys,
     }
 }
@@ -469,10 +466,9 @@ fn production_completion_dispatch_publishes_all_ready_validate_outcomes_fixture(
                 let ProductionRecoveredApplyReadyFixture {
                     owned,
                     commit_qc,
-                    apply_service,
                     validator_keys,
                 } = production_recovered_apply_ready_fixture(marker);
-                (owned, Some((commit_qc, apply_service, validator_keys)))
+                (owned, Some((commit_qc, validator_keys)))
             } else {
                 (owned_production_ready_validate_fixture(row, marker), None)
             };
@@ -537,7 +533,7 @@ fn production_completion_dispatch_publishes_all_ready_validate_outcomes_fixture(
                 row,
                 marker,
                 &ready,
-                recovered_apply.as_ref().map(|(commit_qc, _, _)| commit_qc),
+                recovered_apply.as_ref().map(|(commit_qc, _)| commit_qc),
                 &mut adapter,
             );
         }
@@ -563,10 +559,6 @@ fn production_completion_dispatch_publishes_all_ready_validate_outcomes_fixture(
                 "{row:?}: fixture must force the requested adapter publication"
             );
         }
-        let expected_reducer_wait = WaitToken::new(
-            super::super::reducer_fence_wait_source(coordinator.active_context),
-            adapter.reducer_fence_generation(),
-        );
         let ReadyDurableValidateFixture {
             fixture,
             _directory,
@@ -577,10 +569,21 @@ fn production_completion_dispatch_publishes_all_ready_validate_outcomes_fixture(
         let wal_before = std::fs::read(&wal_path)
             .unwrap_or_else(|error| panic!("{row:?}: read pre-dispatch WAL: {error}"));
         let now = std::time::Instant::now();
-        let lifecycle_ordinals =
-            crate::sumeragi::v2_runtime::RuntimeLifecycleOrdinalSource::after_high_watermark(
-                lease.ordinal(),
+        let owner_directory = TempDir::new().expect("temporary Ready Validate owner");
+        let active_context = coordinator.active_context;
+        let (mut owner, runtime_ordinal_authority) =
+            super::super::ProductionLifecycleOwnerV1::ready_validate_completion_owner_for_test(
+                fixture.verified.clone(),
+                coordinator,
+                holder,
+                store,
+                owner_directory.path(),
             );
+        let lifecycle_ordinals =
+            crate::sumeragi::v2_runtime::RuntimeLifecycleOrdinalSource::from_authority(
+                runtime_ordinal_authority,
+            );
+        let lifecycle_ordinal_observer = lifecycle_ordinals.clone();
         let (runtime, returned_startup) =
             crate::sumeragi::v2_runtime::SerializedV2Runtime::new_with_lifecycle_ordinals(
                 adapter,
@@ -595,16 +598,6 @@ fn production_completion_dispatch_publishes_all_ready_validate_outcomes_fixture(
             returned_startup.is_empty(),
             "{row:?}: empty WAL cannot return startup effects"
         );
-        let owner_directory = TempDir::new().expect("temporary Ready Validate owner");
-        let active_context = coordinator.active_context;
-        let mut owner =
-            super::super::ProductionLifecycleOwnerV1::ready_validate_completion_owner_for_test(
-                fixture.verified.clone(),
-                coordinator,
-                holder,
-                store,
-                owner_directory.path(),
-            );
         let ledger_root = owner_directory.path().join("ledger");
         let ledger_path = ledger_root.join("lifecycle-ledger-v1.norito");
         let ledger_before = std::fs::read(&ledger_path)
@@ -625,31 +618,98 @@ fn production_completion_dispatch_publishes_all_ready_validate_outcomes_fixture(
                 now,
             )
             .unwrap_or_else(|error| panic!("{row:?}: arm exact runtime clocks: {error}"));
+        if matches!(row, ProductionReadyValidateDispatchRow::ValidatedApply) {
+            let commit_qc = &recovered_apply
+                .as_ref()
+                .expect("ValidatedApply retains its exact production fixture")
+                .0;
+            let validate_attestation = owner
+                .coordinator
+                .attest_ready_validate_demand(&owner.registry, lease.ordinal())
+                .expect("attest the exact pre-publication Validate carrier");
+            executor
+                .arm_live_lifecycle_validate_successor(
+                    validate_attestation.dispatch_key(),
+                    commit_qc.proposal_round,
+                    commit_qc.subject,
+                    true,
+                )
+                .expect("restore the exact Validate successor before Decision import");
+            assert_eq!(
+                executor
+                    .reconcile_reopened_decision_for_lifecycle_apply_lineage_test(&mut services)
+                    .expect("import the adapter's exact durable Decision into the executor"),
+                (
+                    commit_qc.round,
+                    commit_qc.proposal_round,
+                    commit_qc.subject,
+                    commit_qc.execution_commitment,
+                ),
+                "{row:?}: executor protection must match the adapter's decided body"
+            );
+        }
         let queued_apply_snapshot =
             matches!(row, ProductionReadyValidateDispatchRow::ValidatedApply).then(|| {
                 let keys = &recovered_apply
                     .as_ref()
                     .expect("ValidatedApply retains its exact production fixture")
-                    .2;
+                    .1;
                 let unrelated = signed_ready_validate_timeout_vote(&context, keys, row.view(), 3);
                 executor
                     .enqueue_network(unrelated)
                     .expect("queue authenticated runtime ingress beside typed live Apply");
                 executor.runtime_queue_snapshot_for_test(now)
             });
+        let expected_reducer_fence_wait = row.is_busy().then(|| {
+            let reducer_fence = executor.lifecycle_reducer_fence_observation();
+            super::super::WaitToken::new(
+                super::super::reducer_fence_wait_source(active_context),
+                reducer_fence.generation(),
+            )
+        });
+        let expected_successor_ordinal = row.successor().map(|_| {
+            lifecycle_ordinal_observer
+                .next_ordinal_for_test()
+                .expect("inspect the paired actor-global ordinal source")
+                .expect("Ready Validate successor ordinal remains representable")
+        });
         let dispatched = owner
             .dispatch_completion_for_test(&mut services, &mut executor, 0)
             .unwrap_or_else(|error| panic!("{row:?}: production Completion dispatch: {error:?}"));
         assert_eq!(
             dispatched,
-            row.expected_dispatch(lease.ordinal(), expected_reducer_wait),
+            row.expected_dispatch(
+                lease.ordinal(),
+                expected_reducer_fence_wait,
+                expected_successor_ordinal,
+            ),
             "{row:?}"
         );
+        if let Some(child_ordinal) = expected_successor_ordinal {
+            assert_eq!(owner.coordinator.high_water(), child_ordinal, "{row:?}");
+            assert!(
+                owner.coordinator.records.contains_key(&child_ordinal),
+                "{row:?}: sampled actor-global successor must be the installed child"
+            );
+            for runtime_ordinal in lease.ordinal() + 1..child_ordinal {
+                assert!(
+                    !owner.coordinator.records.contains_key(&runtime_ordinal),
+                    "{row:?}: runtime-owned actor-global ordinals cannot enter LedgerV1"
+                );
+            }
+        }
         if matches!(row, ProductionReadyValidateDispatchRow::ValidatedApply) {
-            let apply_ordinal = lease
-                .ordinal()
-                .checked_add(1)
-                .expect("Validate-to-Apply child ordinal remains representable");
+            let apply_ordinal = expected_successor_ordinal
+                .expect("Validate-to-Apply sampled its actor-global child ordinal");
+            let apply_attestation = owner
+                .registry
+                .attest_ready_lifecycle_decision_apply(&owner.coordinator, apply_ordinal)
+                .expect("attest the exact sampled live Apply child");
+            assert_eq!(
+                apply_attestation.dispatch_key().lifecycle_ordinal(),
+                apply_ordinal,
+                "{row:?}: registry Apply authority must bind the sampled shared ordinal"
+            );
             let dispatched = owner
                 .dispatch_completion_for_test(&mut services, &mut executor, 0)
                 .unwrap_or_else(|error| {
@@ -677,7 +737,7 @@ fn production_completion_dispatch_publishes_all_ready_validate_outcomes_fixture(
                 }
             };
             assert!(matches!(
-                super::super::settle_applied_lifecycle_decision_apply_completion_for_test(
+                super::super::settle_applied_live_lifecycle_decision_apply_completion_for_test(
                     &mut owner,
                     &mut executor,
                     completion,
@@ -730,6 +790,7 @@ fn production_completion_dispatch_publishes_all_ready_validate_outcomes_fixture(
             &ledger_root,
             active_context,
             lease.ordinal(),
+            expected_successor_ordinal,
         );
         drop(adapter_directory);
         drop(_directory);

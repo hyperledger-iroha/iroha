@@ -2607,67 +2607,40 @@ fn certified_response_queue_refresh_retries_without_closing_output() {
     );
     assert!(!narrowing_retry.contains("close_output_for_restart()"));
 
-    let ownership = source_region(
+    assert_source_tokens_in_order(
+        response_path,
+        &[
+            "classify_selected_certified_response_priority(&cut)",
+            "SelectedCertifiedResponsePriorityV1::DefinitelyNonPriority",
+            "cut.into_ordinary_turn_cut()",
+            "SelectedCertifiedResponsePriorityV1::OrdinaryClaimed",
+            "capture_lifecycle_ingress_selector(cut)",
+            "self.drive_certified_fetch_ingress_selector(selector, runner)",
+            "SelectedCertifiedResponsePriorityV1::RecoveredClaimed",
+            "prepare_recovered_decision_fetch_from_selected_cut(cut)",
+            "self.drive_recovered_ingress_selector(selector, runner)",
+        ],
+    );
+
+    let priority = source_region(
         response_path,
         "let selected_priority = match self",
         "match selected_priority",
     );
-    let ownership_retry = source_region(
-        ownership,
-        "Err(LifecycleIngressSelectorError::QueueCutChanged)",
-        "Err(error)",
-    );
-    assert_source_tokens_in_order(
-        ownership_retry,
-        &[
-            "drop(cut);",
-            "drop(runner);",
-            "ProductionLifecycleIngressSelectionV1::CertifiedFetchRetry",
-        ],
-    );
-    assert!(!ownership_retry.contains("close_output_for_restart()"));
-
     let ordinary = source_region(
         response_path,
         "SelectedCertifiedResponsePriorityV1::OrdinaryClaimed",
         "SelectedCertifiedResponsePriorityV1::RecoveredClaimed",
     );
-    let ordinary_retry = source_region(
-        ordinary,
-        "Err(LifecycleIngressSelectorError::QueueCutChanged)",
-        "Err(error)",
-    );
-    assert_source_tokens_in_order(
-        ordinary_retry,
-        &[
-            "drop(runner);",
-            "ProductionLifecycleIngressSelectionV1::CertifiedFetchRetry",
-        ],
-    );
-    assert!(!ordinary_retry.contains("close_output_for_restart()"));
-
     let recovered = source_region(
         response_path,
         "SelectedCertifiedResponsePriorityV1::RecoveredClaimed",
         "self.drive_recovered_ingress_selector(selector, runner)",
     );
-    let recovered_retry = source_region(
-        recovered,
-        "Err(LifecycleIngressSelectorError::QueueCutChanged)",
-        "Err(error)",
-    );
-    assert_source_tokens_in_order(
-        recovered_retry,
-        &[
-            "drop(runner);",
-            "ProductionLifecycleIngressSelectionV1::CertifiedFetchRetry",
-        ],
-    );
-    assert!(!recovered_retry.contains("close_output_for_restart()"));
 
     for structural_failure in [
         source_region(narrowing, "Err((error, retained))", "};"),
-        source_region(ownership, "Err(error)", "};"),
+        source_region(priority, "Err(error)", "};"),
         source_region(ordinary, "Err(error)", "};"),
         source_region(recovered, "Err(error)", "};"),
     ] {

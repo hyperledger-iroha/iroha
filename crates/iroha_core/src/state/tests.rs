@@ -32737,6 +32737,7 @@ fn sample_snapshot_inrou_replica_runtime(service_name: Name) -> SoraInrouReplica
         health_status: SoraServiceHealthStatusV1::Healthy,
         load_factor_bps: 250,
         materialized_bundle_hash: Hash::new(b"snapshot-inrou-replica-bundle"),
+        reporting_epoch: 1,
         accounted_egress_bytes: 0,
         pending_mailbox_message_count: 0,
         last_receipt_id: None,

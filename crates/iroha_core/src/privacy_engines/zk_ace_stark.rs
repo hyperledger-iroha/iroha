@@ -6,7 +6,7 @@
 //! reconnects it to the private row. ZK-ACE therefore uses the self-contained construction below:
 //!
 //! - every witness byte is range constrained through a bit decomposition;
-//! - the two Poseidon2 sponge computations are represented by a complete
+//! - the two dense-MDS Poseidon `x^7` sponge computations are represented by a complete
 //!   quadratic execution trace;
 //! - trace columns are interpolated and masked with random multiples of the
 //!   trace-domain vanishing polynomial before the verifier sees any opening;
@@ -50,8 +50,8 @@ use iroha_data_model::{
     zk::{
         ZK_ACE_PQ_AUTHORIZATION_V0_ACTION_TRANSFER, ZK_ACE_PQ_AUTHORIZATION_V0_BACKEND,
         ZK_ACE_PQ_AUTHORIZATION_V0_CIRCUIT_ID, ZK_ACE_PQ_AUTHORIZATION_V0_DOMAIN_TAG,
-        derive_zk_ace_transfer_digest, zk_ace_pack_bytes_to_field_limbs,
-        zk_ace_poseidon2_domain_hash,
+        derive_zk_ace_transfer_digest, zk_ace_dense_mds_goldilocks_x7_domain_hash_v1,
+        zk_ace_pack_bytes_to_field_limbs,
     },
 };
 use rand::{TryCryptoRng, TryRngCore};
@@ -118,9 +118,10 @@ impl ZkAceAirRelationInputsV1 {
 /// Exact, type-name-independent public transcript schema.
 ///
 /// The schema descriptor is itself the first framed part. Every following part is ordered and
-/// independently length-framed by [`zk_ace_poseidon2_domain_hash`], whose byte packing is fixed to
-/// seven-byte little-endian Goldilocks limbs.
-pub(super) const AIR_PUBLIC_TRANSCRIPT_SCHEMA_V1: &[u8] = b"framing=poseidon2-domain-words:domain-length-u64+7byte-le-limbs:part-count-u64:each-part-length-u64+7byte-le-limbs|part0=this-schema|part1=version:u16be|part2=identity-commitment:bytes32|part3=transfer-digest:bytes32|part4=authorization-digest:bytes32|part5=network-id:bytes32|part6=fixed-domain:utf8|part7=fixed-action:utf8|part8=replay-nullifier:bytes32|part9=policy-digest:bytes32|part10=source:account-canonical-hex-v1-utf8|part11=destination:account-canonical-hex-v1-utf8|part12=asset-definition-id:uuid-bytes16|part13=amount:u128be|part14=fixed-verifier-backend:utf8|part15=fixed-verifier-circuit:utf8";
+/// independently length-framed by
+/// [`zk_ace_dense_mds_goldilocks_x7_domain_hash_v1`], whose byte packing is
+/// fixed to seven-byte little-endian Goldilocks limbs.
+pub(super) const AIR_PUBLIC_TRANSCRIPT_SCHEMA_V1: &[u8] = b"framing=poseidon-domain-words:dense-mds-goldilocks-x7:domain-length-u64+7byte-le-limbs:part-count-u64:each-part-length-u64+7byte-le-limbs|part0=this-schema|part1=version:u16be|part2=identity-commitment:bytes32|part3=transfer-digest:bytes32|part4=authorization-digest:bytes32|part5=network-id:bytes32|part6=fixed-domain:utf8|part7=fixed-action:utf8|part8=replay-nullifier:bytes32|part9=policy-digest:bytes32|part10=source:account-canonical-hex-v1-utf8|part11=destination:account-canonical-hex-v1-utf8|part12=asset-definition-id:uuid-bytes16|part13=amount:u128be|part14=fixed-verifier-backend:utf8|part15=fixed-verifier-circuit:utf8";
 const AIR_PUBLIC_TRANSCRIPT_DOMAIN_V1: &[u8] = b"iroha:privacy:zk-ace:air-public-digest:v1";
 fn air_public_transcript_parts_v1(
     public_inputs: &ZkAceAirRelationInputsV1,
@@ -161,7 +162,7 @@ fn air_public_transcript_parts_v1(
 }
 fn hash_air_public_transcript_parts_v1(parts: &[Vec<u8>]) -> [u8; 32] {
     let parts = parts.iter().map(Vec::as_slice).collect::<Vec<_>>();
-    zk_ace_poseidon2_domain_hash(AIR_PUBLIC_TRANSCRIPT_DOMAIN_V1, &parts)
+    zk_ace_dense_mds_goldilocks_x7_domain_hash_v1(AIR_PUBLIC_TRANSCRIPT_DOMAIN_V1, &parts)
 }
 fn derive_zk_ace_air_public_digest(
     public_inputs: &ZkAceAirRelationInputsV1,
@@ -183,7 +184,7 @@ const FIELD_MODULUS: u64 = crate::privacy_engines::transparent_stark::GOLDILOCKS
 const FIELD_GENERATOR: u64 = GOLDILOCKS_GENERATOR_V1;
 // Symbolic degree ledger for every constraint family emitted by
 // `constraint_quotient_value_with_factors`: affine state/limb equations,
-// the three lowered Poseidon power equations, Booleanity, selector-gated
+// the four lowered Poseidon `x^7` power equations, Booleanity, selector-gated
 // local equations, state transitions, and queue transitions.
 const AIR_CONSTRAINT_DEGREE_LEDGER_V1: [usize; 8] = [1, 2, 2, 2, 2, 2, 2, 2];
 const fn maximum_air_constraint_degree_v1() -> usize {
@@ -247,7 +248,7 @@ pub(crate) const AIR_TOTAL_DEGREE_V1: usize = maximum_air_constraint_degree_v1()
 pub(crate) const REDUCED_AIR_DEGREE_V1: usize = AIR_TOTAL_DEGREE_V1 - 1;
 const _: () = assert!(AIR_TOTAL_DEGREE_V1 == 2);
 /// Complete consensus-relevant algebraic and commitment profile.
-pub(crate) const COMPILED_STARK_PROFILE_DESCRIPTOR_V1: &[u8] = b"version=1|base-field=goldilocks:0xffffffff00000001|challenge-field=goldilocks-fp4:w4=7:coefficients-c0-c3:u64be|generator=7|field_challenge=sha256:four-u64be-canonical-rejection:framed-u64be-attempt:max-attempts256:distinct270:max-hash-calls69120|poseidon2=width3:rate2:full8:partial57|air-public-transcript=poseidon2-domain-words:domain=iroha:privacy:zk-ace:air-public-digest:v1:schema=compiled-air-relation-schema-v1:parts16:ordered:length-framed:type-name-independent|air-total-degree=2|trace_rows=4096|trace_width=88|trace_mask_degree=511|trace_mask_coefficients=512|zk-bound=fft-decomposition:d-air2:d1:e4:n-deep1:n-fri108:formula=2d(e*n-deep+n-fri)+n-fri:required332:provided512|lde_rows=65536|blowup=16|constraint_lanes=1-fp4|deep-ali=one-point:z-uniform-outside-D-H-zero:excluded69633:sampling-cardinality=p^4-69633:trace-z-gz:composition-z:multi-point-trace-quotients|queries=108|query_schedule=sha256-prefix-u64be-mask16:unique-without-replacement:hypergeometric<=independent-power|merkle=sha256:binary:trace-u64be:fp4-c0-c3-u64be|fri=fp4-fold2:rounds12:terminal16:degree1:code-degree-exclusive8192:domain65536:rho=1/8:m=3:theta=1-7/(12sqrt2):unique-radius<theta<johnson-radius:gs-correlated-agreement:affine-oracles90:affine-random-coefficients89:fold-arities=12x2:sum-a=24|fri_mask=fp4:coefficients8191:degree-exclusive8191:protocol3-optimized-k5120:actual-rounded-k8192:max-structured-batch-degree5117:root-before-batch-challenges|soundness=haboeck-2022-1216-theorem2+theorem8:field-size=p^4:rho=1/8:m=3:D=65536:sum-a=24:fri-commit-1<2^-207:fri-commit-2<2^-230:fri-query=(7/(12sqrt2))^108<2^-135:deep-k-plus8194:deep-list-factor=(7/2)/sqrt(8194/65536):deep-constraint-count168:deep-identity-degree-bound24577:deep-weighted-numerator<245000:deep-denominator=p^4-69633:deep-link<2^-238:rbr-total<2^-134:rbr-certified-bits=129:block-et-al-2023-1071-bcs+block-tiwari-2024-1161:classical-rom:work-normalized:q-ro-max2^124:fs-over-q=eps-rbr+3(q+1/q)/2^256<2^-128:qrom-not-claimed:rom-bits-lower-bound128|wire=ZKA1:fixed-shape:big-endian:1341142|max_proof_bytes=1341142|domains=iroha:privacy:zk-ace:{transparent-stark,air-public-digest,trace-leaf,composition-leaf,fri-mask-leaf,batch-transcript,deep-transcript,fri-leaf,merkle-node,field-challenge,composition-transcript,fri-lane-transcript,fri-round-transcript,query-transcript,query-index}:v1";
+pub(crate) const COMPILED_STARK_PROFILE_DESCRIPTOR_V1: &[u8] = b"version=1|base-field=goldilocks:0xffffffff00000001|challenge-field=goldilocks-fp4:w4=7:coefficients-c0-c3:u64be|generator=7|field_challenge=sha256:four-u64be-canonical-rejection:framed-u64be-attempt:max-attempts256:distinct270:max-hash-calls69120|poseidon=dense-mds:goldilocks:x7:width3:rate2:full8:partial57:constants-sha256=99bef7760fcc80c2d4c47e720cf28a156f106a0fa389f2be55a34493a0ca4c21:outputs=4-sequential-state0:binding-ceiling32:activation-disabled|air-public-transcript=poseidon-domain-words:domain=iroha:privacy:zk-ace:air-public-digest:v1:schema=compiled-air-relation-schema-v1:parts16:ordered:length-framed:type-name-independent|air-total-degree=2|trace_rows=4096|trace_width=88|trace_mask_degree=511|trace_mask_coefficients=512|zk-bound=fft-decomposition:d-air2:d1:e4:n-deep1:n-fri108:formula=2d(e*n-deep+n-fri)+n-fri:required332:provided512|lde_rows=65536|blowup=16|constraint_lanes=1-fp4|deep-ali=one-point:z-uniform-outside-D-H-zero:excluded69633:sampling-cardinality=p^4-69633:trace-z-gz:composition-z:multi-point-trace-quotients|queries=108|query_schedule=sha256-prefix-u64be-mask16:unique-without-replacement:hypergeometric<=independent-power|merkle=sha256:binary:trace-u64be:fp4-c0-c3-u64be|fri=fp4-fold2:rounds12:terminal16:degree1:code-degree-exclusive8192:domain65536:rho=1/8:m=3:theta=1-7/(12sqrt2):unique-radius<theta<johnson-radius:gs-correlated-agreement:affine-oracles90:affine-random-coefficients89:fold-arities=12x2:sum-a=24|fri_mask=fp4:coefficients8191:degree-exclusive8191:protocol3-optimized-k5120:actual-rounded-k8192:max-structured-batch-degree5117:root-before-batch-challenges|soundness=haboeck-2022-1216-theorem2+theorem8:field-size=p^4:rho=1/8:m=3:D=65536:sum-a=24:fri-commit-1<2^-207:fri-commit-2<2^-230:fri-query=(7/(12sqrt2))^108<2^-135:deep-k-plus8194:deep-list-factor=(7/2)/sqrt(8194/65536):deep-constraint-count168:deep-identity-degree-bound24577:deep-weighted-numerator<245000:deep-denominator=p^4-69633:deep-link<2^-238:rbr-total<2^-134:rbr-certified-bits=129:block-et-al-2023-1071-bcs+block-tiwari-2024-1161:classical-rom:work-normalized:q-ro-max2^124:fs-over-q=eps-rbr+3(q+1/q)/2^256<2^-128:qrom-not-claimed:rom-bits-lower-bound128|wire=ZKA1:fixed-shape:big-endian:1341142|max_proof_bytes=1341142|domains=iroha:privacy:zk-ace:{transparent-stark,air-public-digest,trace-leaf,composition-leaf,fri-mask-leaf,batch-transcript,deep-transcript,fri-leaf,merkle-node,field-challenge,composition-transcript,fri-lane-transcript,fri-round-transcript,query-transcript,query-index}:v1";
 /// Degree of the random trace masking polynomial.
 const MASK_DEGREE: usize = 511;
 const TRACE_MASK_COEFFICIENTS: usize = MASK_DEGREE + 1;
@@ -303,11 +304,11 @@ const MAX_QUERY_DERIVATION_ATTEMPTS: usize = LDE_SIZE * 2;
 /// point in either evaluation domain.
 const MAX_FIELD_CHALLENGE_DERIVATION_ATTEMPTS: usize = 256;
 const STATE_OFFSET: usize = 0;
-const A_OFFSET: usize = STATE_OFFSET + 3;
-const X2_OFFSET: usize = A_OFFSET + 3;
-const X4_OFFSET: usize = X2_OFFSET + 3;
-const X5_OFFSET: usize = X4_OFFSET + 3;
-const QUEUE_OFFSET: usize = X5_OFFSET + 3;
+const X2_OFFSET: usize = STATE_OFFSET + 3;
+const X3_OFFSET: usize = X2_OFFSET + 3;
+const X6_OFFSET: usize = X3_OFFSET + 3;
+const X7_OFFSET: usize = X6_OFFSET + 3;
+const QUEUE_OFFSET: usize = X7_OFFSET + 3;
 const LIMB_OFFSET: usize = QUEUE_OFFSET + PRIVATE_LIMBS;
 const MESSAGE_OFFSET: usize = LIMB_OFFSET + 1;
 const BIT_OFFSET: usize = MESSAGE_OFFSET + 1;
@@ -1185,10 +1186,10 @@ fn public_output_words(
         .chain(public_inputs.replay_nullifier.chunks_exact(8))
         .enumerate()
     {
-        // Data-model Poseidon2 digests are four canonical Goldilocks residues
-        // encoded little-endian. Proof-field elements use big-endian on the
-        // outer ZKA1 wire, but changing byte order at this relation boundary
-        // would compare the AIR against different field elements.
+        // Candidate data-model Poseidon digests are four sequential canonical
+        // Goldilocks residues encoded little-endian. Proof-field elements use
+        // big-endian on the outer ZKA1 wire, but changing byte order at this
+        // relation boundary would compare the AIR against different elements.
         let raw = u64::from_le_bytes(
             chunk
                 .try_into()
@@ -1236,12 +1237,13 @@ fn trace_row(
     for index in 0..3 {
         let a = state[index].add(round_constants[index]);
         let x2 = a.mul(a);
-        let x4 = x2.mul(x2);
-        let x5 = x4.mul(a);
-        row[A_OFFSET + index] = a;
+        let x3 = x2.mul(a);
+        let x6 = x3.mul(x3);
+        let x7 = x6.mul(a);
         row[X2_OFFSET + index] = x2;
-        row[X4_OFFSET + index] = x4;
-        row[X5_OFFSET + index] = x5;
+        row[X3_OFFSET + index] = x3;
+        row[X6_OFFSET + index] = x6;
+        row[X7_OFFSET + index] = x7;
     }
     row
 }
@@ -1327,10 +1329,14 @@ fn build_trace_material(
                 state[position] = state[position].add(message);
             }
             ScheduleOp::FullRound { .. } => {
-                state = apply_mds([row[X5_OFFSET], row[X5_OFFSET + 1], row[X5_OFFSET + 2]]);
+                state = apply_mds([row[X7_OFFSET], row[X7_OFFSET + 1], row[X7_OFFSET + 2]]);
             }
             ScheduleOp::PartialRound { .. } => {
-                state = apply_mds([row[X5_OFFSET], row[A_OFFSET + 1], row[A_OFFSET + 2]]);
+                state = apply_mds([
+                    row[X7_OFFSET],
+                    state[1].add(round_constants[1]),
+                    state[2].add(round_constants[2]),
+                ]);
             }
         }
         if let ScheduleOp::Output { output_index } = schedule_row.op {
@@ -1917,20 +1923,13 @@ fn constraint_quotient_value_with_factors(
         alpha_index += 1;
     };
     for word in 0..3 {
+        let a = current[STATE_OFFSET + word].add(fixed[FIX_RC_OFFSET + word]);
+        absorb_local(current[X2_OFFSET + word].sub(a.mul(a)));
+        absorb_local(current[X3_OFFSET + word].sub(current[X2_OFFSET + word].mul(a)));
         absorb_local(
-            current[A_OFFSET + word]
-                .sub(current[STATE_OFFSET + word])
-                .sub(fixed[FIX_RC_OFFSET + word]),
+            current[X6_OFFSET + word].sub(current[X3_OFFSET + word].mul(current[X3_OFFSET + word])),
         );
-        absorb_local(
-            current[X2_OFFSET + word].sub(current[A_OFFSET + word].mul(current[A_OFFSET + word])),
-        );
-        absorb_local(
-            current[X4_OFFSET + word].sub(current[X2_OFFSET + word].mul(current[X2_OFFSET + word])),
-        );
-        absorb_local(
-            current[X5_OFFSET + word].sub(current[X4_OFFSET + word].mul(current[A_OFFSET + word])),
-        );
+        absorb_local(current[X7_OFFSET + word].sub(current[X6_OFFSET + word].mul(a)));
     }
     for bit in 0..LIMB_BITS {
         let value = current[BIT_OFFSET + bit];
@@ -1974,14 +1973,14 @@ fn constraint_quotient_value_with_factors(
         .sub(absorb_1)
         .sub(reset);
     let full_state = apply_mds_extension([
-        current[X5_OFFSET],
-        current[X5_OFFSET + 1],
-        current[X5_OFFSET + 2],
+        current[X7_OFFSET],
+        current[X7_OFFSET + 1],
+        current[X7_OFFSET + 2],
     ]);
     let partial_state = apply_mds_extension([
-        current[X5_OFFSET],
-        current[A_OFFSET + 1],
-        current[A_OFFSET + 2],
+        current[X7_OFFSET],
+        current[STATE_OFFSET + 1].add(fixed[FIX_RC_OFFSET + 1]),
+        current[STATE_OFFSET + 2].add(fixed[FIX_RC_OFFSET + 2]),
     ]);
     for word in 0..3 {
         let expected = full
@@ -3153,9 +3152,9 @@ mod tests {
         assert_eq!(
             expected,
             [
-                0xec, 0x26, 0x70, 0x2c, 0xee, 0xb4, 0xf0, 0x37, 0x8f, 0x00, 0x67, 0x62, 0x10, 0x5e,
-                0xdf, 0x1f, 0x12, 0x9b, 0x24, 0x38, 0x65, 0xea, 0x5a, 0xcc, 0x6a, 0xd9, 0x38, 0x99,
-                0x38, 0xab, 0x17, 0x38,
+                0x9d, 0x3a, 0xa6, 0x3e, 0xc9, 0xb1, 0xcd, 0x37, 0xdc, 0x31, 0x0b, 0xea, 0x4a, 0xe8,
+                0xb9, 0x11, 0x10, 0xca, 0xa0, 0x79, 0xc0, 0xef, 0x5a, 0xfc, 0x47, 0x52, 0x01, 0x78,
+                0x31, 0x33, 0x36, 0x8c,
             ]
         );
         let mut permuted = parts.clone();
@@ -3241,8 +3240,100 @@ mod tests {
             assert_eq!(values, expected);
         }
     }
+
+    fn legacy_pow5(value: F) -> F {
+        let x2 = value.mul(value);
+        let x4 = x2.mul(x2);
+        x4.mul(value)
+    }
+
+    fn legacy_poseidon_permute(state: &mut [F; 3]) {
+        for (round, constants) in poseidon_manifest().round_constants().iter().enumerate() {
+            for (word, constant) in state.iter_mut().zip(constants) {
+                *word = word.add(F(*constant));
+            }
+            if round < POSEIDON_FULL_ROUNDS_HALF || round >= POSEIDON_FULL_ROUNDS_HALF + 57 {
+                for word in state.iter_mut() {
+                    *word = legacy_pow5(*word);
+                }
+            } else {
+                state[0] = legacy_pow5(state[0]);
+            }
+            *state = apply_mds(*state);
+        }
+    }
+
+    fn legacy_poseidon_domain_hash(domain: &[u8], parts: &[&[u8]]) -> [u8; 32] {
+        let words =
+            iroha_data_model::zk::zk_ace_dense_mds_goldilocks_x7_domain_words_v1(domain, parts);
+        let mut state = [F::ZERO; 3];
+        let mut rate_index = 0usize;
+        let absorb = |word: F, state: &mut [F; 3], rate_index: &mut usize| {
+            state[*rate_index] = state[*rate_index].add(word);
+            *rate_index += 1;
+            if *rate_index == 2 {
+                legacy_poseidon_permute(state);
+                *rate_index = 0;
+            }
+        };
+        for word in words {
+            absorb(F(word), &mut state, &mut rate_index);
+        }
+        absorb(F::ONE, &mut state, &mut rate_index);
+        while rate_index != 0 {
+            absorb(F::ZERO, &mut state, &mut rate_index);
+        }
+        let mut output = [0u8; 32];
+        for chunk in output.chunks_exact_mut(FIELD_BYTES) {
+            chunk.copy_from_slice(&state[0].0.to_le_bytes());
+            legacy_poseidon_permute(&mut state);
+        }
+        output
+    }
+
     #[test]
-    fn complete_trace_matches_both_poseidon_relations() {
+    fn reachable_legacy_identity_collision_is_separated_by_x7() {
+        let mut left_root = [0u8; 32];
+        left_root[0] = 0x50;
+        let mut right_root = [0u8; 32];
+        right_root[..7].copy_from_slice(&[0x45, 0xa8, 0x65, 0xa3, 0xb5, 0x38, 0xff]);
+        let mut blinding = [0u8; 32];
+        blinding[0] = 1;
+        let domain_tag = ZK_ACE_PQ_AUTHORIZATION_V0_DOMAIN_TAG.as_bytes();
+        let legacy_left = legacy_poseidon_domain_hash(
+            b"zk-ace.identity-commitment.v1",
+            &[&left_root, &blinding, domain_tag],
+        );
+        let legacy_right = legacy_poseidon_domain_hash(
+            b"zk-ace.identity-commitment.v1",
+            &[&right_root, &blinding, domain_tag],
+        );
+        assert_ne!(left_root, right_root);
+        assert_eq!(legacy_left, legacy_right);
+        assert_eq!(
+            legacy_left,
+            [
+                0xda, 0xd3, 0x8e, 0x9e, 0xc1, 0x57, 0x22, 0x80, 0x46, 0xbe, 0x88, 0xf0, 0x35, 0x93,
+                0x5f, 0xe7, 0x79, 0xba, 0xd1, 0x48, 0xcd, 0x3e, 0x06, 0x76, 0x5f, 0x60, 0xb1, 0x44,
+                0xe6, 0x30, 0x10, 0xfd,
+            ]
+        );
+        assert_ne!(
+            derive_zk_ace_identity_commitment(
+                &left_root,
+                &blinding,
+                ZK_ACE_PQ_AUTHORIZATION_V0_DOMAIN_TAG,
+            ),
+            derive_zk_ace_identity_commitment(
+                &right_root,
+                &blinding,
+                ZK_ACE_PQ_AUTHORIZATION_V0_DOMAIN_TAG,
+            )
+        );
+    }
+
+    #[test]
+    fn complete_trace_constrains_x7_chain_and_matches_both_poseidon_relations() {
         let (public_inputs, witness) = public_inputs_and_witness();
         let material = build_trace_material(&public_inputs, &witness).expect("valid trace");
         let expected_public_outputs = public_inputs
@@ -3275,6 +3366,21 @@ mod tests {
                 .iter()
                 .all(|column| column.len() == TRACE_SIZE)
         );
+        let round_row = (0..TRACE_SIZE)
+            .find(|row| material.fixed_columns[FIX_FULL][*row] == F::ONE)
+            .expect("compiled schedule contains a full Poseidon round");
+        for word in 0..3 {
+            let a = material.trace_columns[STATE_OFFSET + word][round_row]
+                .add(material.fixed_columns[FIX_RC_OFFSET + word][round_row]);
+            let x2 = a.mul(a);
+            let x3 = x2.mul(a);
+            let x6 = x3.mul(x3);
+            let x7 = x6.mul(a);
+            assert_eq!(material.trace_columns[X2_OFFSET + word][round_row], x2);
+            assert_eq!(material.trace_columns[X3_OFFSET + word][round_row], x3);
+            assert_eq!(material.trace_columns[X6_OFFSET + word][round_row], x6);
+            assert_eq!(material.trace_columns[X7_OFFSET + word][round_row], x7);
+        }
     }
     #[test]
     fn verifier_barycentric_fixed_rows_match_full_lde() {

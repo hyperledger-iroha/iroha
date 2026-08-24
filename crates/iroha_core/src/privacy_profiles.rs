@@ -5,11 +5,17 @@
 //! derived statement-schema, engine-manifest, and limit bindings exactly match the proposed
 //! activation record. A protocol whose complete verifier is not compiled is rejected before it
 //! enters world state.
+#[cfg(any(test, feature = "privacy-release-evidence"))]
+use crate::privacy_engines::vega::{
+    VEGA_MDL_DEVICE_AUTHENTICATION_DOMAIN_V1, VEGA_MDL_DEVICE_AUTHENTICATION_FRAME_VERSION_V1,
+};
 #[cfg(feature = "zk-stark")]
 use crate::privacy_engines::zk_ace::{
     ZK_ACE_AIR_RELATION_SCHEMA_V1, ZK_ACE_AUTHORIZATION_PROJECTION_V1,
-    ZK_ACE_POSEIDON_MANIFEST_SHA256_V1, ZK_ACE_PRIVACY_MAX_PROOF_BYTES_V1,
-    ZK_ACE_PRIVACY_TRANSCRIPT_LABEL_V1, ZK_ACE_PROOF_WIRE_V1, ZK_ACE_SOURCE_PROFILE_V1,
+    ZK_ACE_FULL_ENGINE_AVAILABLE_V1, ZK_ACE_POSEIDON_MANIFEST_SHA256_V1,
+    ZK_ACE_POSEIDON_PROFILE_V1, ZK_ACE_PRIVACY_MAX_PROOF_BYTES_V1,
+    ZK_ACE_PRIVACY_TRANSCRIPT_LABEL_V1, ZK_ACE_PROOF_WIRE_V1,
+    ZK_ACE_REQUIRED_COMMITMENT_REMEDIATION_V1, ZK_ACE_SOURCE_PROFILE_V1,
     zk_ace_compiled_profile_digest_v1, zk_ace_stark_profile_descriptor_v1,
 };
 use crate::privacy_engines::{
@@ -144,9 +150,6 @@ use crate::privacy_engines::{
     prover_randomness::{
         CURVE_PROVER_RANDOMNESS_POLICY_V1, TRY_CRYPTO_PROVER_RANDOMNESS_POLICY_V1,
     },
-    vega::{
-        VEGA_MDL_DEVICE_AUTHENTICATION_DOMAIN_V1, VEGA_MDL_DEVICE_AUTHENTICATION_FRAME_VERSION_V1,
-    },
     verange::{
         VERANGE_TYPE1_PROOF_VERSION_V1, VERANGE_TYPE1_SOURCE_PROFILE_V1, VERANGE_TYPE1_SUITE_V1,
         VeRangeBitLengthV1, VeRangeParametersV1,
@@ -203,29 +206,34 @@ use iroha_data_model::privacy::{
     PrivacyProtocolActivationLimitsV1, PrivacyProtocolActivationRecordV1, PrivacyProtocolIdV1,
     PrivacyProtocolLifecycleV1, PrivacyStatementSchemaDigestV1, PrivacyVerifierDigestV1,
     TAIRA_PRIVACY_MAX_COMMITMENTS_PER_ACTION_V1, TAIRA_PRIVACY_MAX_NULLIFIERS_PER_ACTION_V1,
-    TAIRA_PRIVACY_MAX_PROOF_BYTES_PER_ACTION_V1, VEGA_ISSUER_GOVERNANCE_RECORD_VERSION_V1,
-    VEGA_ISSUER_RECORD_DIGEST_DOMAIN_V1, VEGA_ISSUER_RECORD_HASH_FRAME_DOMAIN_V1,
-    VEGA_MAX_ISSUER_RECORD_REVISIONS_PER_LINEAGE_V1, VEGA_MAX_ISSUER_RECORDS_V1,
-    VEGA_MDL_BIRTH_DATE_ISSUER_SIGNED_ITEM_BYTES_V1, VEGA_MDL_BIRTH_RANDOM_BYTES_V1,
-    VEGA_MDL_FULL_DATE_TEXT_BYTES_V1, VEGA_MDL_ISSUER_AUTHENTICATION_SIG_STRUCTURE_BYTES_V1,
-    VEGA_MDL_MAX_AGE_THRESHOLD_YEARS_V1, VEGA_MDL_MAX_PRESENTATION_YEAR_V1,
-    VEGA_MDL_MIN_AGE_THRESHOLD_YEARS_V1, VEGA_MDL_MIN_PRESENTATION_YEAR_V1,
-    VEGA_MDL_MSO_PAYLOAD_BYTES_V1, VEGA_MDL_RFC3339_UTC_SECONDS_TEXT_BYTES_V1,
-    VERANGE_HARD_MAX_AGGREGATION_COUNT_V1, VeRangeActivationLimitsV1,
-    VeRangeTransparentRangeStatementV1, VegaExistingCredentialStatementV1,
-    ZK_AMS_MAX_BATCH_SIZE_V1, ZK_AMS_MAX_RING_SIZE_V1,
-    ZK_AMS_RING_SIZES_V1 as ZK_AMS_MODEL_RING_SIZES_V1, ZkAmsActivationLimitsV1,
-    validate_privacy_compiled_profile_catalog_archive_v1,
+    TAIRA_PRIVACY_MAX_PROOF_BYTES_PER_ACTION_V1, VERANGE_HARD_MAX_AGGREGATION_COUNT_V1,
+    VeRangeActivationLimitsV1, VeRangeTransparentRangeStatementV1, ZK_AMS_MAX_BATCH_SIZE_V1,
+    ZK_AMS_MAX_RING_SIZE_V1, ZK_AMS_RING_SIZES_V1 as ZK_AMS_MODEL_RING_SIZES_V1,
+    ZkAmsActivationLimitsV1, validate_privacy_compiled_profile_catalog_archive_v1,
+};
+#[cfg(any(test, feature = "privacy-release-evidence"))]
+use iroha_data_model::privacy::{
+    VEGA_ISSUER_GOVERNANCE_RECORD_VERSION_V1, VEGA_ISSUER_RECORD_DIGEST_DOMAIN_V1,
+    VEGA_ISSUER_RECORD_HASH_FRAME_DOMAIN_V1, VEGA_MAX_ISSUER_RECORD_REVISIONS_PER_LINEAGE_V1,
+    VEGA_MAX_ISSUER_RECORDS_V1, VEGA_MDL_BIRTH_DATE_ISSUER_SIGNED_ITEM_BYTES_V1,
+    VEGA_MDL_BIRTH_RANDOM_BYTES_V1, VEGA_MDL_FULL_DATE_TEXT_BYTES_V1,
+    VEGA_MDL_ISSUER_AUTHENTICATION_SIG_STRUCTURE_BYTES_V1, VEGA_MDL_MAX_AGE_THRESHOLD_YEARS_V1,
+    VEGA_MDL_MAX_PRESENTATION_YEAR_V1, VEGA_MDL_MIN_AGE_THRESHOLD_YEARS_V1,
+    VEGA_MDL_MIN_PRESENTATION_YEAR_V1, VEGA_MDL_MSO_PAYLOAD_BYTES_V1,
+    VEGA_MDL_RFC3339_UTC_SECONDS_TEXT_BYTES_V1, VegaExistingCredentialStatementV1,
 };
 use iroha_schema::{FloatMode, IntMode, IntoSchema, MetaMapEntry, Metadata};
 #[cfg(test)]
 use iroha_zkp_halo2::vega::vega_mdl_verifier_digest_v1;
+#[cfg(any(test, feature = "privacy-release-evidence"))]
 use iroha_zkp_halo2::vega::{
-    MAX_VEGA_PROOF_BYTES_V1, MAX_ZK_AMS_ADMISSION_RELATION_PROOF_BYTES_V1,
-    VEGA_EXISTING_CREDENTIAL_PROTOCOL_LABEL_V1, VEGA_INTERNAL_TRANSCRIPT_PERSONA_V1,
-    VEGA_MDL_CANONICAL_VERIFIER_DIGEST_V1, ZK_AMS_ADMISSION_PUBLIC_INPUTS_V1,
-    ZK_AMS_PHC_CANONICAL_PAYLOAD_BYTES_V1, vega_mdl_canonical_relation_digest_v1,
-    vega_mdl_compiled_profile_digest_v1, zk_ams_admission_relation_dimensions_v1,
+    MAX_VEGA_PROOF_BYTES_V1, VEGA_EXISTING_CREDENTIAL_PROTOCOL_LABEL_V1,
+    VEGA_INTERNAL_TRANSCRIPT_PERSONA_V1, VEGA_MDL_CANONICAL_VERIFIER_DIGEST_V1,
+    vega_mdl_canonical_relation_digest_v1, vega_mdl_compiled_profile_digest_v1,
+};
+use iroha_zkp_halo2::vega::{
+    MAX_ZK_AMS_ADMISSION_RELATION_PROOF_BYTES_V1, ZK_AMS_ADMISSION_PUBLIC_INPUTS_V1,
+    ZK_AMS_PHC_CANONICAL_PAYLOAD_BYTES_V1, zk_ams_admission_relation_dimensions_v1,
     zk_ams_compiled_profile_digest_v1, zk_ams_mkhe_readiness_v1,
     zk_ams_release_candidate_profile_digest_v1, zk_ams_t256_generator_digest_v1,
 };
@@ -316,14 +324,21 @@ const PQ_MASP_RUNTIME_CONTEXT_SCHEMA_V1: &[u8] = b"stark-public-input:sha256-fra
 const PQ_MASP_FRONTIER_SCHEMA_V1: &[u8] = b"namespace:norito|bootstrap-digest:32|root-role:note-commitment-anchor|epoch:u64|root:sha256-depth32|tree-size:u64|frontier[ordered-option<node32>]";
 const PQ_MASP_AUTHORIZATION_SCHEMA_V1: &[u8] = b"authorization-context:pq-masp-stark-v0|message:sha256-domain+statement-digest32+native-consensus-binding-digest32+inner-length-u64be+inner-sha256|authorization-key-digest:statement-bound+derived-from-canonical-pk1952|mldsa65:canonical-pk1952+canonical-signature3309|outer-wire:PQA1+u32be-inner-len+pk+signature+PQS1";
 const PQ_MASP_VERIFIED_EFFECT_SCHEMA_V1: &[u8] = b"namespace:norito|bootstrap-digest:32|asset-definition-id:norito|current-root:32|current-epoch:u64|next-root:32|next-epoch:u64|transition:pq-masp{ordered-nullifiers[32]+ordered-output-commitments[32]+validator-derived-successor-frontier}|value-balance:none";
+#[cfg(any(test, feature = "privacy-release-evidence"))]
 const VEGA_PARAMETER_SET_LABEL_V1: &[u8] = b"vega-figure9-mdl-age-microsoft-mc-2+6-sha256-t256-v1";
+#[cfg(any(test, feature = "privacy-release-evidence"))]
 const VEGA_PROOF_WIRE_LABEL_V1: &[u8] =
     b"IROVEGMC:version-u8+context-keccak32+bincode-1.3.3-fixed-le-microsoft-vega-mc:strict-exact:v1";
+#[cfg(any(test, feature = "privacy-release-evidence"))]
 const VEGA_IMPLEMENTATION_PROVENANCE_V1: &[u8] =
     b"iroha-native-rust:microsoft-vega-prover:c0ee259053cd12eaf43ed71b5cde375452b3ee4d:vega-mc:figure9-2+6-sha256:external-rng-fail-closed-patch:v1";
+#[cfg(any(test, feature = "privacy-release-evidence"))]
 const VEGA_AUTHORITATIVE_ISSUER_RUNTIME_SCHEMA_V1: &[u8] = b"issuer-governance:record-v1:issuer-id32+epoch-u64be+compressed-p256-33+document-policy+namespace-policy+digest-policy+issuer-auth-policy+device-auth-policy+predecessor-option32+lifecycle+self-digest32|lineage:immutable-append-only+epoch-one-origin+one-step-cas-rotation+terminal-preserving-revocation+bounded-global-and-per-lineage+permanent-global-p256-key-ownership+retired-p256-key-never-reactivated|statement:exact-issuer-id+record-epoch+record-digest+key+all-algorithm-policy|ledger-verifier:current-active-exact-record-before-native-proof";
+#[cfg(any(test, feature = "privacy-release-evidence"))]
 const VEGA_DEVICE_AUTHENTICATION_GOVERNANCE_FRAME_SCHEMA_V1: &[u8] = b"length-framed:domain+frame-version+upstream-commit+chain-id+genesis-hash+action-index+transaction-intent-digest+parameter-id+parameter-digest+verifier-digest+statement-schema-digest+engine-manifest-digest+issuer-id+issuer-record-epoch+issuer-record-digest+document-type+namespace+digest-algorithm+issuer-authentication+device-authentication+issuer-public-key+presentation-date+minimum-age+reader-challenge+session-transcript-digest";
+#[cfg(any(test, feature = "privacy-release-evidence"))]
 const VEGA_CANONICAL_MDL_WITNESS_SCHEMA_V1: &[u8] = b"figure9-v1:issuer-sig-structure-exact+embedded-mso-exact+birth-item-exact+birth-random-exact+full-date10+rfc3339-utc-seconds20+signed-not-after-valid-from-full-seconds+presentation-validity-date-granularity+presentation-year-closed+satisfiable-valid-until+age-threshold-closed";
+#[cfg(any(test, feature = "privacy-release-evidence"))]
 const VEGA_CANONICAL_SIGNATURE_PREFLIGHT_POLICY_V1: &[u8] = b"native-witness-preflight:issuer-and-device-es256-signatures:p1363-r32s32+canonical-nonzero-scalars+low-s-required+reject-high-s-without-normalization+verify-prehash-before-r-s-inverse:v1";
 const ZK_AMS_PROTOCOL_LABEL_V1: &[u8] = b"iroha-zk-ams-v1";
 const ZK_AMS_PARAMETER_SET_LABEL_V1: &[u8] =
@@ -339,7 +354,8 @@ const ZK_AMS_PROVISION_EFFECT_SCHEMA_V1: &[u8] = b"issuer_id:32|registry_id:32|c
 #[cfg(feature = "zk-stark")]
 const ZK_ACE_PROTOCOL_LABEL_V1: &[u8] = b"zk-ace-pq-authorization-v0";
 #[cfg(feature = "zk-stark")]
-const ZK_ACE_PARAMETER_SET_LABEL_V1: &[u8] = b"goldilocks-poseidon2-transparent-stark-v1";
+const ZK_ACE_PARAMETER_SET_LABEL_V1: &[u8] =
+    b"goldilocks-dense-mds-poseidon-x7-transparent-stark-candidate-v1";
 const ZK_X509_PARAMETER_SET_LABEL_V1: &[u8] =
     b"goldilocks-fp4-sha256-p256-rfc5280-fixed-capacity-v1";
 const ZK_X509_PROOF_WIRE_LABEL_V1: &[u8] =
@@ -555,7 +571,9 @@ pub fn compiled_privacy_profile_v1(
         PrivacyProtocolIdV1::IrohaZkAmsV1 => compiled_zk_ams_profile_v1(),
         PrivacyProtocolIdV1::IrohaJindoPolynomialCommitmentV0 => compiled_jindo_profile_v1(),
         PrivacyProtocolIdV1::IrohaBootleLanternAnoncredV1 => compiled_bootle_lantern_profile_v1(),
-        PrivacyProtocolIdV1::VegaExistingCredentialZkV0 => compiled_vega_profile_v1(),
+        PrivacyProtocolIdV1::VegaExistingCredentialZkV0 => {
+            Err(CompiledPrivacyProfileErrorV1::EngineUnavailable { protocol_id })
+        }
         PrivacyProtocolIdV1::OrchardHalo2ActionsV1 => compiled_orchard_profile_v1(),
         PrivacyProtocolIdV1::MoneroFcmpPlusPlusV1 => compiled_fcmp_profile_v1(),
         PrivacyProtocolIdV1::IrohaIvmPrivateNoteStarkV1 => compiled_ivm_private_note_profile_v1(),
@@ -1531,6 +1549,9 @@ pub(crate) fn validate_compiled_privacy_activation_against_profile_v1(
 #[cfg(feature = "zk-stark")]
 fn compiled_zk_ace_profile_v1() -> Result<CompiledPrivacyProfileV1, CompiledPrivacyProfileErrorV1> {
     let protocol_id = PrivacyProtocolIdV1::ZkAcePqAuthorizationV0;
+    if !ZK_ACE_FULL_ENGINE_AVAILABLE_V1 {
+        return Err(CompiledPrivacyProfileErrorV1::EngineUnavailable { protocol_id });
+    }
     let compiled_profile_digest = zk_ace_compiled_profile_digest_v1();
     let proof_bytes = u64::from(ZK_ACE_PRIVACY_MAX_PROOF_BYTES_V1);
     if compiled_profile_digest == [0; 32]
@@ -1542,6 +1563,7 @@ fn compiled_zk_ace_profile_v1() -> Result<CompiledPrivacyProfileV1, CompiledPriv
     let proof_bytes_encoded = proof_bytes.to_be_bytes();
     let global_proof_cap = TAIRA_PRIVACY_MAX_PROOF_BYTES_PER_ACTION_V1.to_be_bytes();
     let poseidon_manifest = ZK_ACE_POSEIDON_MANIFEST_SHA256_V1.as_bytes();
+    let poseidon_profile = ZK_ACE_POSEIDON_PROFILE_V1;
     let stark_profile = zk_ace_stark_profile_descriptor_v1();
     let parameter_id = digest_fields_v1(
         PARAMETER_ID_DOMAIN_V1,
@@ -1551,6 +1573,8 @@ fn compiled_zk_ace_profile_v1() -> Result<CompiledPrivacyProfileV1, CompiledPriv
             ZK_ACE_SOURCE_PROFILE_V1,
             TRY_CRYPTO_PROVER_RANDOMNESS_POLICY_V1,
             poseidon_manifest,
+            poseidon_profile,
+            ZK_ACE_REQUIRED_COMMITMENT_REMEDIATION_V1,
             stark_profile,
             &compiled_profile_digest,
             &proof_bytes_encoded,
@@ -1566,6 +1590,8 @@ fn compiled_zk_ace_profile_v1() -> Result<CompiledPrivacyProfileV1, CompiledPriv
             ZK_ACE_AIR_RELATION_SCHEMA_V1,
             ZK_ACE_AUTHORIZATION_PROJECTION_V1,
             poseidon_manifest,
+            poseidon_profile,
+            ZK_ACE_REQUIRED_COMMITMENT_REMEDIATION_V1,
             stark_profile,
             &compiled_profile_digest,
             &proof_bytes_encoded,
@@ -1590,6 +1616,8 @@ fn compiled_zk_ace_profile_v1() -> Result<CompiledPrivacyProfileV1, CompiledPriv
             ZK_ACE_AIR_RELATION_SCHEMA_V1,
             ZK_ACE_AUTHORIZATION_PROJECTION_V1,
             poseidon_manifest,
+            poseidon_profile,
+            ZK_ACE_REQUIRED_COMMITMENT_REMEDIATION_V1,
             stark_profile,
             &compiled_profile_digest,
             &proof_bytes_encoded,
@@ -1611,6 +1639,8 @@ fn compiled_zk_ace_profile_v1() -> Result<CompiledPrivacyProfileV1, CompiledPriv
             ZK_ACE_AIR_RELATION_SCHEMA_V1,
             ZK_ACE_AUTHORIZATION_PROJECTION_V1,
             poseidon_manifest,
+            poseidon_profile,
+            ZK_ACE_REQUIRED_COMMITMENT_REMEDIATION_V1,
             stark_profile,
             &compiled_profile_digest,
             &proof_bytes_encoded,
@@ -1851,7 +1881,16 @@ fn zk_ams_profile_material_v1(
         }),
     })
 }
-fn compiled_vega_profile_v1() -> Result<CompiledPrivacyProfileV1, CompiledPrivacyProfileErrorV1> {
+/// Derive deterministic, non-authorizing Vega release-candidate profile material.
+///
+/// This crate-internal accessor exists only for pre-activation KATs, release evidence, and isolated
+/// verifier fixtures. Success does not establish authenticated full-shape key identity, compiled
+/// readiness, governance availability, or permission to prove, admit, sign, or submit a Vega
+/// action. Production paths must use [`compiled_privacy_profile_v1`], which remains unavailable
+/// until those independent release gates are satisfied.
+#[cfg(any(test, feature = "privacy-release-evidence"))]
+pub(crate) fn vega_release_candidate_profile_material_v1()
+-> Result<CompiledPrivacyProfileV1, CompiledPrivacyProfileErrorV1> {
     let protocol_id = PrivacyProtocolIdV1::VegaExistingCredentialZkV0;
     let canonical_relation_digest = vega_mdl_canonical_relation_digest_v1();
     let compiled_profile_digest = vega_mdl_compiled_profile_digest_v1();

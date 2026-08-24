@@ -9251,7 +9251,7 @@ mod tests {
         (
             $factory:expr, $variant:path;
             $(
-                $fixture:ident, prepare [$($prepare:tt)*],
+                $fixture:ident, prepare [$($prepare:stmt)*],
                 $key:ident = $key_expression:expr,
                 $record_label:literal, $field:ident mutate $mutation:block,
                 $mismatch:literal, $rejection:literal, $needle:literal;
@@ -9282,7 +9282,7 @@ mod tests {
         (
             $loader:expr, $key:expr;
             $(
-                $storage:ident { $($prepare:tt)* } => $record:expr;
+                $storage:ident { $($prepare:stmt)* } => $record:expr;
                 reject $rejection:literal, $needle:literal $(, $message:literal)?;
             )+
         ) => {

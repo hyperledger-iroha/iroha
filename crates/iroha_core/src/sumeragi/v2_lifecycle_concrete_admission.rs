@@ -56,14 +56,6 @@ impl LifecycleWorkRegistryHolder {
     pub(super) fn registry_mut(&mut self) -> &mut ConcreteLifecycleWorkRegistry {
         &mut self.registry
     }
-    /// Return the exact Ready ordinal retained by recovered Decision Apply startup.
-    pub(super) fn exact_recovered_decision_apply_ready_ordinal(
-        &self,
-        coordinator: &LifecycleCoordinator,
-    ) -> Option<u128> {
-        self.registry
-            .exact_recovered_decision_apply_ready_ordinal(coordinator)
-    }
     /// Project the complete recovered Ready Validate retry-owner census.
     pub(super) fn project_recovered_durable_validate_retry_census(
         &self,
@@ -1383,8 +1375,15 @@ impl ProductionLifecycleOwnerV1 {
                 | LifecycleOutputRegistryJoinV1::RecoveredBroadcastOwned
                 | LifecycleOutputRegistryJoinV1::TerminalDirectOutputDuplicate
                 | LifecycleOutputRegistryJoinV1::TerminalInstalledDuplicate(_),
-            )
-            | Err(_) => {
+            ) => {
+                return ProductionLifecycleOutputAdmissionSettlementV1::Failed {
+                    failure: ProductionLifecycleOutputAdmissionFailureV1::Registry(
+                        LifecycleOutputRegistryFailureV1::ReadyRejoin,
+                    ),
+                    pending: execution.into_pending(),
+                };
+            }
+            Err(_) => {
                 return ProductionLifecycleOutputAdmissionSettlementV1::Failed {
                     failure: ProductionLifecycleOutputAdmissionFailureV1::Registry(
                         LifecycleOutputRegistryFailureV1::ReadyRejoin,

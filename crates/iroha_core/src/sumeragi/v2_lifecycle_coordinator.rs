@@ -11,7 +11,6 @@ use super::{v2, v2_runner};
 mod authority;
 #[path = "v2_lifecycle_coordinator_support.rs"]
 mod coordinator_support;
-pub(in crate::sumeragi) use coordinator_support::RecoveredPendingKuraApplyCarrierPermitV1;
 #[cfg(test)]
 pub(crate) use coordinator_support::{
     reviewed_lifecycle_ledger_source_for_test, reviewed_lifecycle_work_registry_source_for_test,
@@ -125,7 +124,7 @@ pub(in crate::sumeragi) use launch::{
 #[cfg(test)]
 pub(in crate::sumeragi) use launch::{
     ProductionPreparedCertifiedServeTestSettlementV1,
-    settle_applied_lifecycle_decision_apply_completion_for_test,
+    settle_applied_live_lifecycle_decision_apply_completion_for_test,
 };
 pub(crate) use ledger::AuthenticatedRecoveredWalValidateLedgerParent;
 pub(crate) use ledger::ProductionLifecycleStartupErrorV1;
@@ -515,6 +514,7 @@ impl LifecycleCoordinator {
         self.lifecycle_ordinal_authority = Some(authority);
         Ok(())
     }
+    /// Bind a launch-equivalent ordinal authority for durable coordinator tests.
     #[cfg(test)]
     pub(super) fn bind_test_lifecycle_ordinal_authority(&mut self) -> Result<(), String> {
         let (_, authority) =

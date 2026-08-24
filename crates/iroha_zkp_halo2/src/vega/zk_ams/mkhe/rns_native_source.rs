@@ -118,7 +118,7 @@ pub enum ZkAmsMkheRnsNativeSourceErrorV1 {
     UnexpectedWrite,
     /// Sealing was requested before the exact fixed layout was complete.
     Incomplete,
-    /// An encrypted record failed authentication or context binding.
+    /// An encrypted record failed cryptographic processing or authentication.
     Authentication,
     /// A prior operational failure permanently poisoned the handle.
     Poisoned,
@@ -387,10 +387,11 @@ pub trait ZkAmsMkheRnsNativeSourceSnapshotV1 {
 /// authentication failure.  Concrete implementations must not implement
 /// `Clone` or `Copy`.
 ///
-/// The current crate declares no production implementation.  In particular,
+/// The proof crate itself declares no blanket implementation.  In particular,
 /// the one-pass source-statement fixture does not satisfy this contract.  A
-/// future confidential-spool adapter must provide separate conformance
-/// evidence before any downstream replay or release gate can use it.
+/// downstream confidential-spool adapter may implement it only with separate
+/// repeatability, receipt-stability, and fail-stop conformance evidence; the
+/// marker alone grants no replay acceptance or release authority.
 pub trait ZkAmsMkheRnsNativeRepeatableSourceSnapshotV1: ZkAmsMkheRnsNativeSourceSnapshotV1 {}
 
 /// Move-only sequential source writer.

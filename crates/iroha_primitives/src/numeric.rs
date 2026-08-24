@@ -1378,8 +1378,9 @@ impl Quantity {
             let mut carry = u16::from(digit - b'0');
             for byte in &mut magnitude[..magnitude_len] {
                 let product = u16::from(*byte) * 10 + carry;
-                *byte = product as u8;
-                carry = product >> 8;
+                let [low, high] = product.to_le_bytes();
+                *byte = low;
+                carry = u16::from(high);
             }
             while carry != 0 {
                 if magnitude_len == magnitude.len() {
@@ -1387,9 +1388,10 @@ impl Quantity {
                         "quantity mantissa exceeds the signed 512-bit domain",
                     ));
                 }
-                magnitude[magnitude_len] = carry as u8;
+                let [low, high] = carry.to_le_bytes();
+                magnitude[magnitude_len] = low;
                 magnitude_len += 1;
-                carry >>= 8;
+                carry = u16::from(high);
             }
         }
         if magnitude_len == MAX_MANTISSA_BYTES && magnitude[MAX_MANTISSA_BYTES - 1] & 0x80 != 0 {

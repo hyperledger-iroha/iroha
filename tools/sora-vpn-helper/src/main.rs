@@ -45,10 +45,10 @@ use std::{
 iroha_crypto::define_soranet_record_io_adapters!(soranet_record_io);
 use iroha_data_model::soranet::vpn::{
     VPN_CELL_LEN, VPN_DEFAULT_TUNNEL_MTU_BYTES, VPN_HELPER_TICKET_LEN,
-    VPN_USAGE_VOUCHER_CONTROL_MAGIC, VpnCellClassV1, VpnCellError, VpnCellFlagsV1,
-    VpnCellHeaderV1, VpnCellV1, VpnFlowLabelV1, VpnHelperTicketV1, VpnPaddedCellV1,
-    VpnUsageVoucherBodyV1, VpnUsageVoucherEnvelopeV1, VpnUsageVoucherV1,
-    derive_vpn_session_address_plan_v1, vpn_helper_network_policy_hash_v1,
+    VPN_USAGE_VOUCHER_CONTROL_MAGIC, VpnCellClassV1, VpnCellError, VpnCellFlagsV1, VpnCellHeaderV1,
+    VpnCellV1, VpnFlowLabelV1, VpnHelperTicketV1, VpnPaddedCellV1, VpnUsageVoucherBodyV1,
+    VpnUsageVoucherEnvelopeV1, VpnUsageVoucherV1, derive_vpn_session_address_plan_v1,
+    vpn_helper_network_policy_hash_v1,
 };
 use norito::{
     codec::{Decode, Encode},
@@ -59,7 +59,9 @@ use quinn::{
     ReadExactError, RecvStream, SendStream, Side, StreamId, TransportConfig, VarInt,
     crypto::rustls::QuicClientConfig as QuinnRustlsClientConfig,
 };
-use rand::{RngCore, SeedableRng, rngs::StdRng};
+#[cfg(target_os = "linux")]
+use rand::RngCore;
+use rand::{SeedableRng, rngs::StdRng};
 use rustls::{
     RootCertStore,
     client::WebPkiServerVerifier,
@@ -91,6 +93,9 @@ const SYSTEM_COMMAND_TIMEOUT: Duration = Duration::from_secs(10);
 const SYSTEM_COMMAND_POLL_INTERVAL: Duration = Duration::from_millis(25);
 const MAX_SYSTEM_COMMAND_STDOUT_BYTES: usize = 256 * 1024;
 const MAX_SYSTEM_COMMAND_STDERR_BYTES: usize = 64 * 1024;
+#[cfg(target_os = "linux")]
+const SYSTEM_COMMAND_CGROUP_PATH: &str =
+    "/sys/fs/cgroup/sora-vpn-controller.system-command-v1";
 const CONTROLLER_KIND: &str = "linux-helperd";
 const PACKET_LEN_PREFIX_BYTES: usize = 2;
 const TUNNEL_LAUNCH_FRAME_MAGIC: &[u8; 8] = b"SVPNTUN1";
@@ -178,12 +183,8 @@ enum Command {
     InstallCheck,
     Status,
     Connect,
-    Disconnect {
-        session_id: String,
-    },
-    Repair {
-        session_id: String,
-    },
+    Disconnect { session_id: String },
+    Repair { session_id: String },
     RunTunnel,
     RunNetworkWorker,
 }
@@ -242,7 +243,7 @@ enum WorkerRole {
     Network,
 }
 impl WorkerRole {
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", test))]
     const fn subcommand(self) -> &'static str {
         match self {
             Self::Tunnel => "run-tunnel",
@@ -556,9 +557,10 @@ fn encode_authenticated_network_plan(
         .copy_from_slice(&payload.padding_budget_ms.to_be_bytes());
     frame[PLAN_ROUTE_COUNT_OFFSET] = u8::try_from(payload.route_pushes.len())
         .map_err(|_| ControllerError::State("route count exceeds fixed plan width".to_owned()))?;
-    frame[PLAN_EXCLUDED_COUNT_OFFSET] = u8::try_from(payload.excluded_routes.len()).map_err(
-        |_| ControllerError::State("excluded-route count exceeds fixed plan width".to_owned()),
-    )?;
+    frame[PLAN_EXCLUDED_COUNT_OFFSET] =
+        u8::try_from(payload.excluded_routes.len()).map_err(|_| {
+            ControllerError::State("excluded-route count exceeds fixed plan width".to_owned())
+        })?;
     frame[PLAN_DNS_COUNT_OFFSET] = u8::try_from(payload.dns_servers.len())
         .map_err(|_| ControllerError::State("DNS count exceeds fixed plan width".to_owned()))?;
     let session_id = parse_canonical_session_id(payload.session_id.as_str())?;
@@ -688,11 +690,10 @@ fn decode_authenticated_network_plan(
             "network-worker fixed plan has invalid string bounds or padding".to_owned(),
         ));
     }
-    let relay_endpoint = std::str::from_utf8(
-        &frame[PLAN_RELAY_RANGE.start..PLAN_RELAY_RANGE.start + relay_length],
-    )
-    .map_err(|_| ControllerError::State("fixed relay endpoint is not UTF-8".to_owned()))?
-    .to_owned();
+    let relay_endpoint =
+        std::str::from_utf8(&frame[PLAN_RELAY_RANGE.start..PLAN_RELAY_RANGE.start + relay_length])
+            .map_err(|_| ControllerError::State("fixed relay endpoint is not UTF-8".to_owned()))?
+            .to_owned();
     let tls_server_name = std::str::from_utf8(
         &frame[PLAN_TLS_NAME_RANGE.start..PLAN_TLS_NAME_RANGE.start + tls_name_length],
     )
@@ -987,7 +988,7 @@ fn validate_worker_sent_frame(
         (WorkerIpcPhase::Connecting, NetworkIpcKind::Isolated, 0)
             if frame.value_a == 0 && frame.value_b == 0 =>
         {
-            phase
+            Ok(phase)
         }
         (WorkerIpcPhase::Connecting, NetworkIpcKind::WorkerExit, 0)
         | (WorkerIpcPhase::Ready, NetworkIpcKind::WorkerExit, 0)
@@ -1319,10 +1320,9 @@ impl Drop for NetworkWorkerProcess {
     fn drop(&mut self) {
         if self.reaped_status.is_none() {
             let _ = pidfd_send_signal(&self.pidfd, nix::libc::SIGKILL);
-            if let Ok(status) = kill_and_reap_direct_child_bounded(
-                &mut self.child,
-                "unprivileged network worker",
-            ) {
+            if let Ok(status) =
+                kill_and_reap_direct_child_bounded(&mut self.child, "unprivileged network worker")
+            {
                 self.reaped_status = Some(status);
             }
         }
@@ -1486,9 +1486,7 @@ impl NetworkIpcSocket {
     ) -> Result<(), ControllerError> {
         loop {
             let mut guard = self.fd.writable().await?;
-            match guard.try_io(|inner| {
-                send_network_plan_once(inner.get_ref().as_raw_fd(), frame)
-            }) {
+            match guard.try_io(|inner| send_network_plan_once(inner.get_ref().as_raw_fd(), frame)) {
                 Ok(result) => return result.map_err(Into::into),
                 Err(_) => continue,
             }
@@ -2008,6 +2006,8 @@ enum ControllerError {
     Handshake(String),
     #[error("state error: {0}")]
     State(String),
+    #[error("privileged system-command custody is uncertain: {0}")]
+    CommandCustody(String),
 }
 fn main() -> ExitCode {
     let result = match exact_hidden_command_from_argv() {
@@ -2074,9 +2074,7 @@ fn parse_fixed_cli_arguments(mut arguments: Vec<String>) -> Result<Cli, Controll
         [command] if command == "install-check" => Command::InstallCheck,
         [command] if command == "status" => Command::Status,
         [command] if command == "connect" => Command::Connect,
-        [command, option, session_id]
-            if command == "disconnect" && option == "--session-id" =>
-        {
+        [command, option, session_id] if command == "disconnect" && option == "--session-id" => {
             let _ = parse_canonical_session_id(session_id)?;
             Command::Disconnect {
                 session_id: session_id.clone(),
@@ -2102,10 +2100,88 @@ fn parse_fixed_cli_arguments(mut arguments: Vec<String>) -> Result<Cli, Controll
     };
     Ok(Cli { command })
 }
+fn write_child_stdin_until(
+    stdin: &mut std::process::ChildStdin,
+    chunks: &[&[u8]],
+    deadline: Instant,
+    label: &str,
+) -> Result<(), ControllerError> {
+    #[cfg(target_os = "linux")]
+    {
+        let fd = stdin.as_raw_fd();
+        // SAFETY: F_GETFL/F_SETFL inspect and update only this live pipe descriptor.
+        let flags = unsafe { nix::libc::fcntl(fd, nix::libc::F_GETFL) };
+        if flags < 0
+            || unsafe { nix::libc::fcntl(fd, nix::libc::F_SETFL, flags | nix::libc::O_NONBLOCK) }
+                < 0
+        {
+            return Err(io::Error::last_os_error().into());
+        }
+        for chunk in chunks {
+            let mut offset = 0;
+            while offset < chunk.len() {
+                let remaining = deadline
+                    .checked_duration_since(Instant::now())
+                    .ok_or_else(|| ControllerError::State(format!("timed out writing {label}")))?;
+                let timeout_ms =
+                    remaining.as_millis().max(1).min(i32::MAX as u128) as nix::libc::c_int;
+                let mut descriptor = nix::libc::pollfd {
+                    fd,
+                    events: nix::libc::POLLOUT,
+                    revents: 0,
+                };
+                // SAFETY: descriptor names one live pollfd for the duration of the call.
+                let ready = unsafe { nix::libc::poll(&raw mut descriptor, 1, timeout_ms) };
+                if ready == 0 {
+                    return Err(ControllerError::State(format!("timed out writing {label}")));
+                }
+                if ready < 0 {
+                    let error = io::Error::last_os_error();
+                    if error.kind() == io::ErrorKind::Interrupted {
+                        continue;
+                    }
+                    return Err(error.into());
+                }
+                if descriptor.revents
+                    & (nix::libc::POLLERR | nix::libc::POLLHUP | nix::libc::POLLNVAL)
+                    != 0
+                {
+                    return Err(ControllerError::State(format!(
+                        "child pipe closed while writing {label}"
+                    )));
+                }
+                match stdin.write(&chunk[offset..]) {
+                    Ok(0) => {
+                        return Err(io::Error::new(
+                            io::ErrorKind::WriteZero,
+                            format!("child pipe made no progress writing {label}"),
+                        )
+                        .into());
+                    }
+                    Ok(written) => offset += written,
+                    Err(error)
+                        if error.kind() == io::ErrorKind::Interrupted
+                            || error.kind() == io::ErrorKind::WouldBlock => {}
+                    Err(error) => return Err(error.into()),
+                }
+            }
+        }
+        return Ok(());
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        let _ = deadline;
+        let _ = label;
+        for chunk in chunks {
+            stdin.write_all(chunk)?;
+        }
+        Ok(())
+    }
+}
 fn run(cli: Cli) -> Result<(), ControllerError> {
     match cli.command {
         Command::InstallCheck => {
-            print_state(&install_check_display_state(&State::default()))?;
+            print_state(&install_check_display_state())?;
             Ok(())
         }
         Command::Status => {
@@ -2170,11 +2246,10 @@ fn encode_tunnel_launch_frame(
     frame[16..20].copy_from_slice(&caller.gid.to_be_bytes());
     frame
 }
-fn read_and_validate_tunnel_launch_frame(
-    caller: PrivilegedCaller,
-) -> Result<(), ControllerError> {
+fn read_and_validate_tunnel_launch_frame(caller: PrivilegedCaller) -> Result<(), ControllerError> {
     let mut frame = [0_u8; TUNNEL_LAUNCH_FRAME_BYTES];
     let mut stdin = io::stdin().lock();
+    #[cfg(target_os = "linux")]
     let deadline = Instant::now() + CONNECT_INPUT_TIMEOUT;
     let mut offset = 0;
     while offset < frame.len() {
@@ -2207,15 +2282,8 @@ fn read_and_validate_tunnel_launch_frame(
     }
     Ok(())
 }
-fn install_check_display_state(state: &State) -> State {
-    State {
-        installed: state.installed,
-        controller_kind: state.controller_kind.clone(),
-        version: state.version.clone(),
-        controller_path: state.controller_path.clone(),
-        message: "ready".to_owned(),
-        ..State::default()
-    }
+fn install_check_display_state() -> State {
+    State::default()
 }
 fn connect_payload_network_policy_hash(
     payload: &ConnectPayload,
@@ -2271,10 +2339,7 @@ fn authorize_connect_replacement(
     }
     Ok(())
 }
-fn authorize_status_access(
-    state: &State,
-    caller: PrivilegedCaller,
-) -> Result<(), ControllerError> {
+fn authorize_status_access(state: &State, caller: PrivilegedCaller) -> Result<(), ControllerError> {
     if state_has_session_binding(state) && state.owner_uid != Some(caller.uid) {
         return Err(ControllerError::State(
             "refusing to disclose VPN session state owned by a different local UID".to_owned(),
@@ -2362,12 +2427,7 @@ fn finalize_failed_connect_after_reap(
         }
     }
     state = quiesce_persisted_workers(state)?;
-    finalize_failed_connect_state_with(
-        reaped,
-        &mut state,
-        &mut SystemNetworkCleanupOps,
-        failure,
-    )
+    finalize_failed_connect_state_with(reaped, &mut state, &mut SystemNetworkCleanupOps, failure)
 }
 struct ReapedControllerChild {
     warning: Option<String>,
@@ -2554,10 +2614,8 @@ fn connect_command(
     state.worker_identity = Some(child_identity.clone());
     if let Err(error) = persist_state(&state) {
         drop(child.stdin.take());
-        return match kill_and_reap_direct_child_bounded(
-            &mut child,
-            "blocked VPN tunnel supervisor",
-        ) {
+        return match kill_and_reap_direct_child_bounded(&mut child, "blocked VPN tunnel supervisor")
+        {
             Ok(_) => Err(error),
             Err(reap_error) => Err(ControllerError::State(format!(
                 "{error}; exact child termination/reaping failed: {reap_error}"
@@ -2570,17 +2628,17 @@ fn connect_command(
         .as_mut()
         .ok_or_else(|| ControllerError::State("failed to open worker stdin".to_owned()))
         .and_then(|stdin| {
-            stdin
-                .write_all(&launch_frame)
-                .and_then(|()| stdin.write_all(&raw_payload))
-                .map_err(Into::into)
+            write_child_stdin_until(
+                stdin,
+                &[&launch_frame, &raw_payload],
+                Instant::now() + CONNECT_INPUT_TIMEOUT,
+                "fixed tunnel launch and opaque connect payload",
+            )
         });
     if let Err(error) = payload_write {
         drop(child.stdin.take());
-        let reap_result = kill_and_reap_direct_child_bounded(
-            &mut child,
-            "blocked VPN tunnel supervisor",
-        );
+        let reap_result =
+            kill_and_reap_direct_child_bounded(&mut child, "blocked VPN tunnel supervisor");
         if let Err(reap_error) = reap_result {
             return Err(ControllerError::State(format!(
                 "{error}; exact child termination/reaping failed: {reap_error}; retained persisted supervisor identity"
@@ -2689,11 +2747,8 @@ fn connect_command(
         }
     }
     let failure = "timed out waiting for VPN tunnel worker to report readiness";
-    let reaped = terminate_and_reap_controller_child(
-        &mut child,
-        &child_identity,
-        Duration::from_secs(2),
-    )?;
+    let reaped =
+        terminate_and_reap_controller_child(&mut child, &child_identity, Duration::from_secs(2))?;
     Err(failed_connect_error_after_reap(
         &reaped,
         caller,
@@ -2709,7 +2764,6 @@ fn disconnect_command(
     let mut state = current_state()?;
     authorize_session_control(&state, caller, session_id)?;
     state = quiesce_persisted_workers(state)?;
-    authorize_session_control(&state, caller, session_id)?;
     cleanup_persisted_network(&mut state)?;
     state.active = false;
     state.repair_required = false;
@@ -2724,7 +2778,6 @@ fn repair_command(caller: PrivilegedCaller, session_id: &str) -> Result<(), Cont
     let mut state = current_state()?;
     authorize_session_control(&state, caller, session_id)?;
     state = quiesce_persisted_workers(state)?;
-    authorize_session_control(&state, caller, session_id)?;
     cleanup_persisted_network(&mut state)?;
     state.active = false;
     state.repair_required = false;
@@ -2770,10 +2823,7 @@ fn spawn_network_worker(
         .arg("run-network-worker")
         .env_clear()
         .env(NETWORK_WORKER_TOKEN_ENV, hex::encode(token))
-        .env(
-            NETWORK_WORKER_ISSUER_ENV,
-            hex::encode(issuer_public_key),
-        )
+        .env(NETWORK_WORKER_ISSUER_ENV, hex::encode(issuer_public_key))
         .stdin(Stdio::piped())
         .stdout(Stdio::null())
         .stderr(Stdio::null());
@@ -2810,22 +2860,22 @@ fn spawn_network_worker(
     let mut child = command.spawn()?;
     drop(worker_fd);
     let worker_pid = child.id();
-    let (identity, pidfd) = match capture_worker_identity_with_pidfd(worker_pid, WorkerRole::Network)
-    {
-        Ok(captured) => captured,
-        Err(error) => {
-            drop(child.stdin.take());
-            return match kill_and_reap_direct_child_bounded(
-                &mut child,
-                "blocked unprivileged network worker",
-            ) {
-                Ok(_) => Err(error),
-                Err(reap_error) => Err(ControllerError::State(format!(
-                    "{error}; exact child termination/reaping failed: {reap_error}"
-                ))),
-            };
-        }
-    };
+    let (identity, pidfd) =
+        match capture_worker_identity_with_pidfd(worker_pid, WorkerRole::Network) {
+            Ok(captured) => captured,
+            Err(error) => {
+                drop(child.stdin.take());
+                return match kill_and_reap_direct_child_bounded(
+                    &mut child,
+                    "blocked unprivileged network worker",
+                ) {
+                    Ok(_) => Err(error),
+                    Err(reap_error) => Err(ControllerError::State(format!(
+                        "{error}; exact child termination/reaping failed: {reap_error}"
+                    ))),
+                };
+            }
+        };
     let mut process = NetworkWorkerProcess {
         child,
         identity,
@@ -3332,6 +3382,43 @@ async fn stop_network_worker_before_tun(
     }
 }
 #[cfg(target_os = "linux")]
+fn confirm_network_worker_reaped(
+    process: &NetworkWorkerProcess,
+    state: &mut State,
+    context: &str,
+) -> Result<(), ControllerError> {
+    if process.is_reaped() {
+        state.network_worker_identity = None;
+        return Ok(());
+    }
+    state.active = false;
+    // A full authenticated binding may enter repair state. The earlier pending-authentication
+    // state has a deliberately narrower invariant, but still retains both exact identities and
+    // refuses every global cleanup path.
+    state.repair_required = state.session_id.is_some();
+    state.message = format!(
+        "{context}; exact network-worker exit was not proven; retaining both identities and the privileged network journal"
+    );
+    let persist_result = persist_state(state);
+    match persist_result {
+        Ok(()) => Err(ControllerError::State(state.message.clone())),
+        Err(error) => Err(ControllerError::State(format!(
+            "{}; failed to persist fail-closed process custody: {error}",
+            state.message
+        ))),
+    }
+}
+#[cfg(target_os = "linux")]
+async fn force_reap_network_worker(
+    process: &mut NetworkWorkerProcess,
+    state: &mut State,
+    context: &str,
+) -> Result<(), ControllerError> {
+    let stop_result = process.stop_and_reap(NETWORK_WORKER_STOP_TIMEOUT).await;
+    confirm_network_worker_reaped(process, state, context)?;
+    stop_result.map(|_| ())
+}
+#[cfg(target_os = "linux")]
 async fn run_tunnel_command(
     raw_payload: WipeBytes,
     caller: PrivilegedCaller,
@@ -3344,22 +3431,26 @@ async fn run_tunnel_command(
     authorize_unvalidated_worker_start(&state, &supervisor_identity, caller)?;
     let issuer_public_key = load_helper_ticket_issuer_public_key()?;
     let issuer_public_key_bytes = ed25519_public_key_bytes(&issuer_public_key)?;
-    let (mut network_worker, ipc, token) =
-        match spawn_network_worker(issuer_public_key_bytes) {
-            Ok(result) => result,
-            Err(error) => {
-                state.worker_identity = None;
-                state.message = error.to_string();
-                clear_session_binding(&mut state);
-                persist_state(&state)?;
-                return Err(error);
-            }
-        };
+    let (mut network_worker, ipc, token) = match spawn_network_worker(issuer_public_key_bytes) {
+        Ok(result) => result,
+        Err(error) => {
+            state.worker_identity = None;
+            state.message = error.to_string();
+            clear_session_binding(&mut state);
+            persist_state(&state)?;
+            return Err(error);
+        }
+    };
     state.network_worker_identity = Some(network_worker.identity.clone());
     if let Err(error) = persist_state(&state) {
-        let _ = network_worker
-            .stop_and_reap(NETWORK_WORKER_STOP_TIMEOUT)
-            .await;
+        let context = error.to_string();
+        if let Err(reap_error) =
+            force_reap_network_worker(&mut network_worker, &mut state, context.as_str()).await
+        {
+            return Err(ControllerError::State(format!(
+                "{error}; exact unprivileged worker reaping failed: {reap_error}"
+            )));
+        }
         return Err(error);
     }
     let expected_worker = NetworkPeerCredentials {
@@ -3379,17 +3470,12 @@ async fn run_tunnel_command(
     .await
     .and_then(|()| verify_network_worker_isolation(&network_worker, caller));
     if let Err(error) = isolation_result {
-        if let Err(reap_error) = network_worker
-            .stop_and_reap(NETWORK_WORKER_STOP_TIMEOUT)
-            .await
-        {
-            state.message = format!(
-                "{error}; exact unprivileged worker reaping failed: {reap_error}"
-            );
-            persist_state(&state)?;
-            return Err(ControllerError::State(state.message.clone()));
-        }
-        state.worker_identity = None;
+        force_reap_network_worker(
+            &mut network_worker,
+            &mut state,
+            "network-worker isolation failed",
+        )
+        .await?;
         clear_session_binding(&mut state);
         persist_state(&state)?;
         return Err(error);
@@ -3399,21 +3485,23 @@ async fn run_tunnel_command(
         .stdin
         .as_mut()
         .ok_or_else(|| ControllerError::State("network-worker stdin is unavailable".to_owned()))
-        .and_then(|stdin| stdin.write_all(&raw_payload).map_err(Into::into));
+        .and_then(|stdin| {
+            write_child_stdin_until(
+                stdin,
+                &[&raw_payload],
+                Instant::now() + CONNECT_INPUT_TIMEOUT,
+                "opaque connect payload to isolated worker",
+            )
+        });
     drop(network_worker.child.stdin.take());
     drop(raw_payload);
     if let Err(error) = payload_write {
-        if let Err(reap_error) = network_worker
-            .stop_and_reap(NETWORK_WORKER_STOP_TIMEOUT)
-            .await
-        {
-            state.message = format!(
-                "{error}; exact unprivileged worker reaping failed: {reap_error}"
-            );
-            persist_state(&state)?;
-            return Err(ControllerError::State(state.message.clone()));
-        }
-        state.worker_identity = None;
+        force_reap_network_worker(
+            &mut network_worker,
+            &mut state,
+            "opaque payload delivery to the isolated worker failed",
+        )
+        .await?;
         clear_session_binding(&mut state);
         persist_state(&state)?;
         return Err(error);
@@ -3430,18 +3518,12 @@ async fn run_tunnel_command(
     {
         Ok(payload) => payload,
         Err(error) => {
-            if let Err(reap_error) = network_worker
-                .stop_and_reap(NETWORK_WORKER_STOP_TIMEOUT)
-                .await
-            {
-                state.message = format!(
-                    "{error}; exact unprivileged worker reaping failed: {reap_error}"
-                );
-                persist_state(&state)?;
-                return Err(ControllerError::State(state.message.clone()));
-            }
-            state.worker_identity = None;
-            state.message = error.to_string();
+            force_reap_network_worker(
+                &mut network_worker,
+                &mut state,
+                "authenticated fixed-plan admission failed",
+            )
+            .await?;
             clear_session_binding(&mut state);
             persist_state(&state)?;
             return Err(error);
@@ -3483,17 +3565,14 @@ async fn run_tunnel_command(
     {
         Ok(readiness) => readiness,
         Err(error) => {
-            let _ = network_worker
-                .stop_and_reap(NETWORK_WORKER_STOP_TIMEOUT)
-                .await;
-            update_terminal_state(
-                false,
-                false,
-                None,
-                payload.session_id.as_str(),
-                payload.relay_endpoint.as_str(),
-                error.to_string(),
-            )?;
+            force_reap_network_worker(
+                &mut network_worker,
+                &mut state,
+                "network worker failed before readiness",
+            )
+            .await?;
+            clear_session_binding(&mut state);
+            persist_state(&state)?;
             return Err(error);
         }
     };
@@ -3509,47 +3588,46 @@ async fn run_tunnel_command(
                 &mut state,
             )
             .await;
+            confirm_network_worker_reaped(
+                &network_worker,
+                &mut state,
+                "network worker did not stop before TUN creation",
+            )?;
             let message = stop_result
                 .map(network_worker_exit_message)
                 .unwrap_or("unprivileged network worker failed while stopping")
                 .to_owned();
-            update_terminal_state(
-                false,
-                false,
-                None,
-                payload.session_id.as_str(),
-                payload.relay_endpoint.as_str(),
-                message,
-            )?;
-            return Ok(());
+            clear_session_binding(&mut state);
+            persist_state(&state)?;
+            return stop_result.map(|_| ()).map_err(|error| {
+                ControllerError::State(format!("{message}; worker stop protocol failed: {error}"))
+            });
         }
         NetworkWorkerReady::Exited(code) => {
             let _ = network_worker.reap_after_protocol_exit().await?;
-            let message = network_worker_exit_message(code).to_owned();
-            update_terminal_state(
-                false,
-                false,
-                None,
-                payload.session_id.as_str(),
-                payload.relay_endpoint.as_str(),
-                message.clone(),
+            confirm_network_worker_reaped(
+                &network_worker,
+                &mut state,
+                "network worker exit before TUN creation was not reaped",
             )?;
+            let message = network_worker_exit_message(code).to_owned();
+            clear_session_binding(&mut state);
+            persist_state(&state)?;
             return Err(ControllerError::State(message));
         }
     }
 
     // No host-network state is changed until an exact unprivileged child, proven by SCM
     // credentials, has completed DNS/QUIC/TLS/handshake/voucher setup and reported READY.
-    let prepared_result = match ensure_authenticated_ticket_unexpired_at(
-        payload.ticket_expires_at_ms,
-    ) {
-        Ok(()) => prepare_tunnel(&payload, &mut state),
-        Err(error) => Err(error),
-    };
+    let prepared_result =
+        match ensure_authenticated_ticket_unexpired_at(payload.ticket_expires_at_ms) {
+            Ok(()) => prepare_tunnel(&payload, &mut state),
+            Err(error) => Err(error),
+        };
     let prepared = match prepared_result {
         Ok(prepared) => CleanupGuard::new(prepared, cleanup_tunnel),
         Err(error) => {
-            let _ = stop_network_worker_before_tun(
+            let stop_result = stop_network_worker_before_tun(
                 &mut network_worker,
                 &ipc,
                 token,
@@ -3558,9 +3636,13 @@ async fn run_tunnel_command(
                 &mut state,
             )
             .await;
+            confirm_network_worker_reaped(
+                &network_worker,
+                &mut state,
+                "network worker was not reaped after privileged preparation failed",
+            )?;
             let cleanup_error = cleanup_persisted_network(&mut state).err();
             state.active = false;
-            state.worker_identity = None;
             state.repair_required = cleanup_error.is_some();
             state.message = cleanup_error.as_ref().map_or_else(
                 || error.to_string(),
@@ -3571,7 +3653,12 @@ async fn run_tunnel_command(
                 clear_session_binding(&mut state);
             }
             persist_state(&state)?;
-            return Err(error);
+            return match stop_result {
+                Ok(_) => Err(error),
+                Err(stop_error) => Err(ControllerError::State(format!(
+                    "{error}; worker stop protocol failed: {stop_error}"
+                ))),
+            };
         }
     };
 
@@ -3593,24 +3680,16 @@ async fn run_tunnel_command(
             .stop_and_reap(NETWORK_WORKER_STOP_TIMEOUT)
             .await
             .err();
-        let cleanup_result = cleanup_prepared_tunnel(prepared, &mut state, &network_worker);
-        let repair_required = cleanup_result.is_err();
         let mut message = error.to_string();
         if let Some(reap_error) = reap_error {
             message = format!("{message}; exact child reaping failed: {reap_error}");
         }
-        if let Err(cleanup_error) = cleanup_result {
-            message = format!("{message}; cleanup failed: {cleanup_error}");
-        }
-        update_terminal_state(
-            false,
-            repair_required,
-            None,
-            payload.session_id.as_str(),
-            payload.relay_endpoint.as_str(),
-            message,
-        )?;
-        return Err(error);
+        return match finish_prepared_tunnel(prepared, &mut state, &network_worker, message) {
+            Ok(()) => Err(error),
+            Err(cleanup_error) => Err(ControllerError::State(format!(
+                "{error}; safe tunnel cleanup failed: {cleanup_error}"
+            ))),
+        };
     }
 
     let tun_ack = await_network_worker_tun_ack(
@@ -3634,62 +3713,38 @@ async fn run_tunnel_command(
                 &mut state,
             )
             .await;
-            let cleanup_result = cleanup_prepared_tunnel(prepared, &mut state, &network_worker);
-            let repair_required = cleanup_result.is_err();
-            let mut message = stop_result
-                .map(network_worker_exit_message)
+            let message = stop_result
+                .as_ref()
+                .map(|code| network_worker_exit_message(*code))
                 .unwrap_or("unprivileged network worker failed while stopping")
                 .to_owned();
-            if let Err(cleanup_error) = cleanup_result {
-                message = format!("{message}; cleanup failed: {cleanup_error}");
-            }
-            update_terminal_state(
-                false,
-                repair_required,
-                None,
-                payload.session_id.as_str(),
-                payload.relay_endpoint.as_str(),
-                message,
-            )?;
-            return Ok(());
+            finish_prepared_tunnel(prepared, &mut state, &network_worker, message)?;
+            return stop_result.map(|_| ());
         }
         Ok(NetworkWorkerReady::Exited(code)) => {
-            let _ = network_worker.reap_after_protocol_exit().await;
-            let cleanup_result = cleanup_prepared_tunnel(prepared, &mut state, &network_worker);
-            let repair_required = cleanup_result.is_err();
+            let reap_error = network_worker.reap_after_protocol_exit().await.err();
             let mut message = network_worker_exit_message(code).to_owned();
-            if let Err(cleanup_error) = cleanup_result {
-                message = format!("{message}; cleanup failed: {cleanup_error}");
+            if let Some(reap_error) = reap_error {
+                message = format!("{message}; exact child reaping failed: {reap_error}");
             }
-            update_terminal_state(
-                false,
-                repair_required,
-                None,
-                payload.session_id.as_str(),
-                payload.relay_endpoint.as_str(),
-                message.clone(),
-            )?;
+            finish_prepared_tunnel(prepared, &mut state, &network_worker, message.clone())?;
             return Err(ControllerError::State(message));
         }
         Err(error) => {
-            let _ = network_worker
+            let reap_error = network_worker
                 .stop_and_reap(NETWORK_WORKER_STOP_TIMEOUT)
-                .await;
-            let cleanup_result = cleanup_prepared_tunnel(prepared, &mut state, &network_worker);
-            let repair_required = cleanup_result.is_err();
+                .await
+                .err();
             let mut message = error.to_string();
-            if let Err(cleanup_error) = cleanup_result {
-                message = format!("{message}; cleanup failed: {cleanup_error}");
+            if let Some(reap_error) = reap_error {
+                message = format!("{message}; exact child reaping failed: {reap_error}");
             }
-            update_terminal_state(
-                false,
-                repair_required,
-                None,
-                payload.session_id.as_str(),
-                payload.relay_endpoint.as_str(),
-                message,
-            )?;
-            return Err(error);
+            return match finish_prepared_tunnel(prepared, &mut state, &network_worker, message) {
+                Ok(()) => Err(error),
+                Err(cleanup_error) => Err(ControllerError::State(format!(
+                    "{error}; safe tunnel cleanup failed: {cleanup_error}"
+                ))),
+            };
         }
     }
 
@@ -3700,24 +3755,16 @@ async fn run_tunnel_command(
             .stop_and_reap(NETWORK_WORKER_STOP_TIMEOUT)
             .await
             .err();
-        let cleanup_result = cleanup_prepared_tunnel(prepared, &mut state, &network_worker);
-        let repair_required = cleanup_result.is_err();
         let mut message = error.to_string();
         if let Some(reap_error) = reap_error {
             message = format!("{message}; exact child reaping failed: {reap_error}");
         }
-        if let Err(cleanup_error) = cleanup_result {
-            message = format!("{message}; cleanup failed: {cleanup_error}");
-        }
-        update_terminal_state(
-            false,
-            repair_required,
-            None,
-            payload.session_id.as_str(),
-            payload.relay_endpoint.as_str(),
-            message,
-        )?;
-        return Err(error);
+        return match finish_prepared_tunnel(prepared, &mut state, &network_worker, message) {
+            Ok(()) => Err(error),
+            Err(cleanup_error) => Err(ControllerError::State(format!(
+                "{error}; safe tunnel cleanup failed: {cleanup_error}"
+            ))),
+        };
     }
     let started = await_network_worker_started(
         &mut network_worker,
@@ -3731,7 +3778,7 @@ async fn run_tunnel_command(
     match started {
         Ok(NetworkWorkerReady::Ready) => {}
         Ok(NetworkWorkerReady::StopRequested) => {
-            let _ = stop_network_worker_before_tun(
+            let stop_result = stop_network_worker_before_tun(
                 &mut network_worker,
                 &ipc,
                 token,
@@ -3740,59 +3787,38 @@ async fn run_tunnel_command(
                 &mut state,
             )
             .await;
-            let cleanup_result = cleanup_prepared_tunnel(prepared, &mut state, &network_worker);
-            let repair_required = cleanup_result.is_err();
-            let mut message = "idle".to_owned();
-            if let Err(cleanup_error) = cleanup_result {
-                message = format!("{message}; cleanup failed: {cleanup_error}");
-            }
-            update_terminal_state(
-                false,
-                repair_required,
-                None,
-                payload.session_id.as_str(),
-                payload.relay_endpoint.as_str(),
-                message,
-            )?;
-            return Ok(());
+            let message = stop_result
+                .as_ref()
+                .map(|code| network_worker_exit_message(*code))
+                .unwrap_or("unprivileged network worker failed while stopping")
+                .to_owned();
+            finish_prepared_tunnel(prepared, &mut state, &network_worker, message)?;
+            return stop_result.map(|_| ());
         }
         Ok(NetworkWorkerReady::Exited(code)) => {
-            let _ = network_worker.reap_after_protocol_exit().await;
-            let cleanup_result = cleanup_prepared_tunnel(prepared, &mut state, &network_worker);
-            let repair_required = cleanup_result.is_err();
+            let reap_error = network_worker.reap_after_protocol_exit().await.err();
             let mut message = network_worker_exit_message(code).to_owned();
-            if let Err(cleanup_error) = cleanup_result {
-                message = format!("{message}; cleanup failed: {cleanup_error}");
+            if let Some(reap_error) = reap_error {
+                message = format!("{message}; exact child reaping failed: {reap_error}");
             }
-            update_terminal_state(
-                false,
-                repair_required,
-                None,
-                payload.session_id.as_str(),
-                payload.relay_endpoint.as_str(),
-                message.clone(),
-            )?;
+            finish_prepared_tunnel(prepared, &mut state, &network_worker, message.clone())?;
             return Err(ControllerError::State(message));
         }
         Err(error) => {
-            let _ = network_worker
+            let reap_error = network_worker
                 .stop_and_reap(NETWORK_WORKER_STOP_TIMEOUT)
-                .await;
-            let cleanup_result = cleanup_prepared_tunnel(prepared, &mut state, &network_worker);
-            let repair_required = cleanup_result.is_err();
+                .await
+                .err();
             let mut message = error.to_string();
-            if let Err(cleanup_error) = cleanup_result {
-                message = format!("{message}; cleanup failed: {cleanup_error}");
+            if let Some(reap_error) = reap_error {
+                message = format!("{message}; exact child reaping failed: {reap_error}");
             }
-            update_terminal_state(
-                false,
-                repair_required,
-                None,
-                payload.session_id.as_str(),
-                payload.relay_endpoint.as_str(),
-                message,
-            )?;
-            return Err(error);
+            return match finish_prepared_tunnel(prepared, &mut state, &network_worker, message) {
+                Ok(()) => Err(error),
+                Err(cleanup_error) => Err(ControllerError::State(format!(
+                    "{error}; safe tunnel cleanup failed: {cleanup_error}"
+                ))),
+            };
         }
     }
 
@@ -3815,29 +3841,17 @@ async fn run_tunnel_command(
         )
         .await
         .err();
-        let cleanup_result = cleanup_prepared_tunnel(prepared, &mut state, &network_worker);
-        state.active = false;
-        state.worker_identity = None;
-        let cleanup_error = cleanup_result.err();
-        state.repair_required = cleanup_error.is_some() || stop_error.is_some();
         let mut message = format!("failed to persist connected state: {persist_error}");
         if let Some(stop_error) = &stop_error {
             message = format!("{message}; worker shutdown failed: {stop_error}");
         }
-        if let Some(cleanup_error) = &cleanup_error {
-            message = format!("{message}; cleanup also failed: {cleanup_error}");
-        }
-        state.message = message;
-        if !state.repair_required {
-            clear_session_binding(&mut state);
-        }
-        let recovery_persist = persist_state(&state);
-        return match recovery_persist {
-            Ok(()) if cleanup_error.is_none() && stop_error.is_none() => Err(persist_error),
-            Ok(()) => Err(ControllerError::State(state.message.clone())),
-            Err(recovery_error) => Err(ControllerError::State(format!(
-                "{}; failed to persist terminal repair state: {recovery_error}",
-                state.message
+        return match finish_prepared_tunnel(prepared, &mut state, &network_worker, message) {
+            Ok(()) if stop_error.is_none() => Err(persist_error),
+            Ok(()) => Err(ControllerError::State(format!(
+                "{persist_error}; worker stop protocol failed"
+            ))),
+            Err(cleanup_error) => Err(ControllerError::State(format!(
+                "{persist_error}; safe tunnel cleanup failed: {cleanup_error}"
             ))),
         };
     }
@@ -3876,28 +3890,20 @@ async fn run_tunnel_command(
             (None, Some(error))
         }
     };
-    let cleanup_result = cleanup_prepared_tunnel(prepared, &mut state, &network_worker);
-    let mut repair_required = cleanup_result.is_err();
     let mut message = worker_code
         .map(network_worker_exit_message)
         .unwrap_or("unprivileged network worker failed")
         .to_owned();
+    let had_worker_error = worker_error.is_some();
     if let Some(error) = worker_error {
         message = error.to_string();
     }
-    if let Err(cleanup_error) = cleanup_result {
-        repair_required = true;
-        message = format!("{message}; cleanup failed: {cleanup_error}");
+    finish_prepared_tunnel(prepared, &mut state, &network_worker, message.clone())?;
+    if had_worker_error {
+        Err(ControllerError::State(message))
+    } else {
+        Ok(())
     }
-    update_terminal_state(
-        false,
-        repair_required,
-        None,
-        payload.session_id.as_str(),
-        payload.relay_endpoint.as_str(),
-        message,
-    )?;
-    Ok(())
 }
 #[cfg(not(target_os = "linux"))]
 async fn run_tunnel_command(
@@ -4520,9 +4526,18 @@ fn prepare_tunnel_with<O: NetworkPrepareOps>(
         dns_backend: None,
         excluded_route_snapshots: Vec::new(),
     };
-    // This durable repair plan precedes the first TUN ioctl or host-network command. The TUN and
+    // Snapshot every exclusion against the pre-VPN route table. In particular, a pushed default
+    // route must not become the gateway used to construct the exclusions that are supposed to
+    // bypass it. The complete rollback set is durable before the first TUN or route mutation.
+    let mut excluded_route_mutations = Vec::with_capacity(payload.excluded_routes.len());
+    for route in &payload.excluded_routes {
+        let (snapshot, mutation) = operations.plan_excluded_route(route)?;
+        applied_network.excluded_route_snapshots.push(snapshot);
+        excluded_route_mutations.push(mutation);
+    }
+    // This durable repair plan precedes the first TUN ioctl or host-network mutation. The TUN and
     // its link-local routes disappear when the supervisor fd closes; every host-global mutation
-    // is added to this journal before it is attempted.
+    // already has enough journaled state to be undone after a crash.
     persist_network_prepare_journal(state, &applied_network, "preparing tunnel", operations)?;
 
     let device = operations.create_tun(&interface_name)?;
@@ -4548,17 +4563,7 @@ fn prepare_tunnel_with<O: NetworkPrepareOps>(
         operations,
     )?;
 
-    for route in &payload.excluded_routes {
-        let (snapshot, mutation) = operations.plan_excluded_route(route)?;
-        applied_network.excluded_route_snapshots.push(snapshot);
-        // Restoring a not-yet-mutated route is idempotent, so recording intent before the route
-        // replacement closes both mutation-before-persist and persist-before-mutation crash gaps.
-        persist_network_prepare_journal(
-            state,
-            &applied_network,
-            "journaled excluded-route mutation",
-            operations,
-        )?;
+    for mutation in excluded_route_mutations {
         operations.apply_excluded_route(mutation)?;
     }
     applied_network.journal_phase = NetworkJournalPhase::ExcludedRoutesConfigured;
@@ -4626,6 +4631,37 @@ fn cleanup_prepared_tunnel(
     state.network_worker_identity = None;
     drop(prepared.take());
     cleanup_persisted_network(state)
+}
+#[cfg(target_os = "linux")]
+fn finish_prepared_tunnel(
+    prepared: CleanupGuard<PreparedTunnel>,
+    state: &mut State,
+    network_worker: &NetworkWorkerProcess,
+    message: String,
+) -> Result<(), ControllerError> {
+    let cleanup_result = cleanup_prepared_tunnel(prepared, state, network_worker);
+    state.active = false;
+    match cleanup_result {
+        Ok(()) => {
+            state.worker_identity = None;
+            clear_session_binding(state);
+            persist_state(state)
+        }
+        Err(cleanup_error) => {
+            // `cleanup_prepared_tunnel` never touches global routes/DNS until the exact child is
+            // reaped. Keep the supervisor identity, any live network identity, owner, and journal
+            // durable so a later owner-authorized repair can prove process death before retrying.
+            state.repair_required = true;
+            state.message = format!("{message}; cleanup deferred or failed: {cleanup_error}");
+            persist_state(state).map_err(|persist_error| {
+                ControllerError::State(format!(
+                    "{}; failed to persist repair state: {persist_error}",
+                    state.message
+                ))
+            })?;
+            Err(cleanup_error)
+        }
+    }
 }
 impl TunnelShutdownSignals {
     fn install() -> Result<Self, ControllerError> {
@@ -5843,6 +5879,204 @@ fn resolv_conf_backup_path() -> PathBuf {
 fn command_exists(program: &str) -> bool {
     resolve_trusted_command(program).is_some()
 }
+#[cfg(target_os = "linux")]
+fn validate_system_command_cgroup_directory(
+    path: &Path,
+    metadata: &fs::Metadata,
+) -> Result<(), ControllerError> {
+    if !metadata.file_type().is_dir() || metadata.uid() != 0 || metadata.mode() & 0o022 != 0 {
+        return Err(ControllerError::CommandCustody(format!(
+            "fixed command cgroup {} is not a root-custodied directory",
+            path.display()
+        )));
+    }
+    Ok(())
+}
+#[cfg(target_os = "linux")]
+fn system_command_cgroup_path() -> PathBuf {
+    PathBuf::from(SYSTEM_COMMAND_CGROUP_PATH)
+}
+#[cfg(target_os = "linux")]
+fn ensure_system_command_cgroup() -> Result<PathBuf, ControllerError> {
+    let root = Path::new("/sys/fs/cgroup");
+    let controllers = root.join("cgroup.controllers");
+    let root_metadata = fs::symlink_metadata(root).map_err(|error| {
+        ControllerError::CommandCustody(format!(
+            "Linux cgroup-v2 root is unavailable: {error}"
+        ))
+    })?;
+    validate_system_command_cgroup_directory(root, &root_metadata)?;
+    let controllers_metadata = fs::symlink_metadata(&controllers).map_err(|error| {
+        ControllerError::CommandCustody(format!(
+            "Linux cgroup-v2 controller marker is unavailable: {error}"
+        ))
+    })?;
+    if !controllers_metadata.file_type().is_file() {
+        return Err(ControllerError::CommandCustody(
+            "Linux privileged command custody requires a cgroup-v2 mount".to_owned(),
+        ));
+    }
+
+    let path = system_command_cgroup_path();
+    match fs::create_dir(&path) {
+        Ok(()) => {}
+        Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {}
+        Err(error) => {
+            return Err(ControllerError::CommandCustody(format!(
+                "failed to create fixed command cgroup {}: {error}",
+                path.display()
+            )));
+        }
+    }
+    let metadata = fs::symlink_metadata(&path).map_err(|error| {
+        ControllerError::CommandCustody(format!(
+            "failed to inspect fixed command cgroup {}: {error}",
+            path.display()
+        ))
+    })?;
+    validate_system_command_cgroup_directory(&path, &metadata)?;
+    for control in ["cgroup.events", "cgroup.kill", "cgroup.procs"] {
+        let control_path = path.join(control);
+        let metadata = fs::symlink_metadata(&control_path).map_err(|error| {
+            ControllerError::CommandCustody(format!(
+                "fixed command cgroup control {} is unavailable: {error}",
+                control_path.display()
+            ))
+        })?;
+        if !metadata.file_type().is_file() {
+            return Err(ControllerError::CommandCustody(format!(
+                "fixed command cgroup control {} is not a direct regular control file",
+                control_path.display()
+            )));
+        }
+    }
+    Ok(path)
+}
+#[cfg(any(target_os = "linux", test))]
+fn parse_system_command_cgroup_populated(events: &str) -> Result<bool, ControllerError> {
+    let mut populated = None;
+    for line in events.lines() {
+        let mut fields = line.split_ascii_whitespace();
+        let Some(key) = fields.next() else {
+            continue;
+        };
+        let Some(value) = fields.next() else {
+            return Err(ControllerError::CommandCustody(
+                "fixed command cgroup events contain a truncated entry".to_owned(),
+            ));
+        };
+        if fields.next().is_some() {
+            return Err(ControllerError::CommandCustody(
+                "fixed command cgroup events contain a malformed entry".to_owned(),
+            ));
+        }
+        if key == "populated" {
+            if populated.is_some() {
+                return Err(ControllerError::CommandCustody(
+                    "fixed command cgroup events duplicate populated state".to_owned(),
+                ));
+            }
+            populated = Some(match value {
+                "0" => false,
+                "1" => true,
+                _ => {
+                    return Err(ControllerError::CommandCustody(
+                        "fixed command cgroup populated state is not 0 or 1".to_owned(),
+                    ));
+                }
+            });
+        }
+    }
+    populated.ok_or_else(|| {
+        ControllerError::CommandCustody(
+            "fixed command cgroup events omit populated state".to_owned(),
+        )
+    })
+}
+#[cfg(target_os = "linux")]
+fn system_command_cgroup_populated(path: &Path) -> Result<bool, ControllerError> {
+    let events_path = path.join("cgroup.events");
+    let mut options = fs::OpenOptions::new();
+    options
+        .read(true)
+        .custom_flags(nix::libc::O_CLOEXEC | nix::libc::O_NOFOLLOW);
+    let mut events = options.open(&events_path).map_err(|error| {
+        ControllerError::CommandCustody(format!(
+            "failed to open fixed command cgroup events: {error}"
+        ))
+    })?;
+    let bytes = read_bounded(&mut events, 4 * 1024, "fixed command cgroup events").map_err(
+        |error| ControllerError::CommandCustody(error.to_string()),
+    )?;
+    let events = std::str::from_utf8(&bytes).map_err(|error| {
+        ControllerError::CommandCustody(format!(
+            "fixed command cgroup events are not UTF-8: {error}"
+        ))
+    })?;
+    parse_system_command_cgroup_populated(events)
+}
+#[cfg(target_os = "linux")]
+fn write_system_command_cgroup_control(
+    path: &Path,
+    control: &str,
+    value: &[u8],
+) -> Result<(), ControllerError> {
+    let control_path = path.join(control);
+    let mut options = fs::OpenOptions::new();
+    options
+        .write(true)
+        .custom_flags(nix::libc::O_CLOEXEC | nix::libc::O_NOFOLLOW);
+    let mut file = options.open(&control_path).map_err(|error| {
+        ControllerError::CommandCustody(format!(
+            "failed to open fixed command cgroup control {}: {error}",
+            control_path.display()
+        ))
+    })?;
+    file.write_all(value).map_err(|error| {
+        ControllerError::CommandCustody(format!(
+            "failed to update fixed command cgroup control {}: {error}",
+            control_path.display()
+        ))
+    })
+}
+#[cfg(target_os = "linux")]
+fn open_system_command_cgroup_procs(path: &Path) -> Result<fs::File, ControllerError> {
+    let procs_path = path.join("cgroup.procs");
+    let mut options = fs::OpenOptions::new();
+    options
+        .write(true)
+        .custom_flags(nix::libc::O_CLOEXEC | nix::libc::O_NOFOLLOW);
+    options.open(&procs_path).map_err(|error| {
+        ControllerError::CommandCustody(format!(
+            "failed to open fixed command cgroup membership control {}: {error}",
+            procs_path.display()
+        ))
+    })
+}
+#[cfg(target_os = "linux")]
+fn quiesce_system_command_cgroup_until(deadline: Instant) -> Result<(), ControllerError> {
+    let path = ensure_system_command_cgroup()?;
+    if !system_command_cgroup_populated(&path)? {
+        return Ok(());
+    }
+    write_system_command_cgroup_control(&path, "cgroup.kill", b"1\n")?;
+    loop {
+        if !system_command_cgroup_populated(&path)? {
+            return Ok(());
+        }
+        if Instant::now() >= deadline {
+            return Err(ControllerError::CommandCustody(format!(
+                "fixed command cgroup {} remained populated after cgroup.kill",
+                path.display()
+            )));
+        }
+        sleep_blocking(
+            deadline
+                .saturating_duration_since(Instant::now())
+                .min(SYSTEM_COMMAND_POLL_INTERVAL),
+        );
+    }
+}
 fn run_command<I, S>(program: &str, args: I) -> Result<String, ControllerError>
 where
     I: IntoIterator<Item = S>,
@@ -6160,27 +6394,6 @@ fn parse_route_via_dev(line: &str) -> (Option<String>, Option<String>) {
     }
     (via, dev)
 }
-fn update_terminal_state(
-    active: bool,
-    repair_required: bool,
-    worker_identity: Option<WorkerProcessIdentity>,
-    session_id: &str,
-    relay_endpoint: &str,
-    message: String,
-) -> Result<(), ControllerError> {
-    let mut state = current_state()?;
-    state.active = active;
-    state.repair_required = repair_required;
-    if worker_identity.is_some() || state.network_worker_identity.is_none() {
-        state.worker_identity = worker_identity;
-    }
-    state.session_id = Some(session_id.to_owned());
-    state.relay_endpoint = Some(relay_endpoint.to_owned());
-    apply_terminal_network_lifecycle(&mut state, active, repair_required);
-    state.message = message;
-    persist_state(&state)?;
-    Ok(())
-}
 fn apply_terminal_network_lifecycle(state: &mut State, active: bool, repair_required: bool) {
     if !active && !repair_required {
         state.applied_network = None;
@@ -6461,8 +6674,7 @@ fn validate_state_invariants(state: &State) -> Result<(), ControllerError> {
         && state.session_id.is_none()
         && state.relay_endpoint.is_none()
         && state.relay_id.is_none()
-        && state.network_policy_hash.is_none()
-        && state.message == "authenticating unprivileged connect payload";
+        && state.network_policy_hash.is_none();
     if state_has_session_binding(state)
         && !binding_is_complete
         && !binding_is_pending_authentication
@@ -6955,8 +7167,7 @@ fn install_network_worker_parser_containment() -> Result<(), ControllerError> {
     linux_prctl(nix::libc::PR_SET_DUMPABLE, 0, 0)?;
 
     let deny = 0x0005_0000 | u32::try_from(nix::libc::EPERM).expect("errno is positive");
-    let unavailable =
-        0x0005_0000 | u32::try_from(nix::libc::ENOSYS).expect("errno is positive");
+    let unavailable = 0x0005_0000 | u32::try_from(nix::libc::ENOSYS).expect("errno is positive");
     let allow = 0x7fff_0000;
     let kill_process = 0x8000_0000;
     let audit_arch = if cfg!(target_arch = "x86_64") {
@@ -7090,9 +7301,8 @@ impl PrivilegeDropOps for LinuxPrivilegeDropOps {
     fn clear_bounding_capabilities(&mut self) -> io::Result<()> {
         for capability in 0_u32..=255 {
             // SAFETY: PR_CAPBSET_READ/DROP accept one numeric capability and retain no pointers.
-            let present = unsafe {
-                nix::libc::prctl(nix::libc::PR_CAPBSET_READ, capability, 0, 0, 0)
-            };
+            let present =
+                unsafe { nix::libc::prctl(nix::libc::PR_CAPBSET_READ, capability, 0, 0, 0) };
             if present < 0 {
                 let error = io::Error::last_os_error();
                 if error.raw_os_error() == Some(nix::libc::EINVAL) {
@@ -7101,9 +7311,7 @@ impl PrivilegeDropOps for LinuxPrivilegeDropOps {
                 return Err(error);
             }
             if present == 1
-                && unsafe {
-                    nix::libc::prctl(nix::libc::PR_CAPBSET_DROP, capability, 0, 0, 0)
-                } != 0
+                && unsafe { nix::libc::prctl(nix::libc::PR_CAPBSET_DROP, capability, 0, 0, 0) } != 0
             {
                 return Err(io::Error::last_os_error());
             }
@@ -7219,9 +7427,7 @@ fn dropped_privilege_snapshot() -> io::Result<DroppedPrivilegeSnapshot> {
     let mut bounding_clear = true;
     for capability in 0_u32..=255 {
         // SAFETY: PR_CAPBSET_READ reads one numeric capability from the calling process.
-        let present = unsafe {
-            nix::libc::prctl(nix::libc::PR_CAPBSET_READ, capability, 0, 0, 0)
-        };
+        let present = unsafe { nix::libc::prctl(nix::libc::PR_CAPBSET_READ, capability, 0, 0, 0) };
         if present < 0 {
             let error = io::Error::last_os_error();
             if error.raw_os_error() == Some(nix::libc::EINVAL) {
@@ -7329,9 +7535,8 @@ fn authenticate_network_worker_supervisor(
 ) -> Result<u32, ControllerError> {
     // SAFETY: `getppid` has no preconditions.
     let parent_pid = unsafe { nix::libc::getppid() };
-    let parent_pid = u32::try_from(parent_pid).map_err(|_| {
-        ControllerError::State("network-worker parent PID is invalid".to_owned())
-    })?;
+    let parent_pid = u32::try_from(parent_pid)
+        .map_err(|_| ControllerError::State("network-worker parent PID is invalid".to_owned()))?;
     if parent_pid <= 1 {
         return Err(ControllerError::State(
             "network-worker parent is not a live supervisor process".to_owned(),
@@ -7360,8 +7565,7 @@ fn authenticate_network_worker_supervisor(
     if peer_pid != parent_pid || peer.uid != 0 || peer.gid != caller.gid {
         return Err(ControllerError::State(format!(
             "network-worker IPC supervisor credentials pid={peer_pid} uid={} gid={} are not the exact root supervisor/caller binding",
-            peer.uid,
-            peer.gid
+            peer.uid, peer.gid
         )));
     }
     // `SO_PEERCRED` snapshots the peer's effective credentials. This is the launch-time root
@@ -7445,10 +7649,7 @@ where
     read_launch()
 }
 #[cfg(target_os = "linux")]
-fn read_fixed_hex_environment_32(
-    name: &str,
-    label: &str,
-) -> Result<[u8; 32], ControllerError> {
+fn read_fixed_hex_environment_32(name: &str, label: &str) -> Result<[u8; 32], ControllerError> {
     let value = env::var(name).map_err(|_| {
         ControllerError::State(format!("isolated network worker is missing {label}"))
     })?;
@@ -7477,13 +7678,12 @@ fn read_network_worker_bootstrap_after_drop()
     let token = read_fixed_hex_environment_32(NETWORK_WORKER_TOKEN_ENV, "IPC token")?;
     let issuer_bytes =
         read_fixed_hex_environment_32(NETWORK_WORKER_ISSUER_ENV, "issuer public key")?;
-    let issuer_public_key = PublicKey::from_bytes(Algorithm::Ed25519, &issuer_bytes).map_err(
-        |error| {
+    let issuer_public_key =
+        PublicKey::from_bytes(Algorithm::Ed25519, &issuer_bytes).map_err(|error| {
             ControllerError::InvalidPayload(format!(
                 "network-worker issuer public key is invalid: {error}"
             ))
-        },
-    )?;
+        })?;
     Ok(UnprivilegedNetworkWorkerInput {
         token,
         issuer_public_key,
@@ -7496,9 +7696,7 @@ fn read_authenticated_network_worker_payload(
     let raw_payload = read_connect_payload_json_from_stdin_with_deadline()?;
     let parsed = std::str::from_utf8(&raw_payload)
         .map_err(|error| {
-            ControllerError::InvalidPayload(format!(
-                "connect payload stdin is not UTF-8: {error}"
-            ))
+            ControllerError::InvalidPayload(format!("connect payload stdin is not UTF-8: {error}"))
         })
         .and_then(|raw| parse_connect_payload(Some(raw)));
     drop(raw_payload);
@@ -7540,8 +7738,7 @@ fn run_network_worker_entry() -> Result<(), ControllerError> {
             0,
         )
         .await?;
-        let authenticated =
-            read_authenticated_network_worker_payload(&input.issuer_public_key)?;
+        let authenticated = read_authenticated_network_worker_payload(&input.issuer_public_key)?;
         run_network_worker_command(authenticated, ipc, token, expected_supervisor).await
     })
 }
@@ -7789,8 +7986,8 @@ fn scrub_stale_process(state: &mut State) -> Result<(), ControllerError> {
     }
     if state.worker_identity.is_none() {
         state.active = false;
-        state.repair_required = state.applied_network.is_some()
-            || state.network_worker_identity.is_some();
+        state.repair_required =
+            state.applied_network.is_some() || state.network_worker_identity.is_some();
         if !state.repair_required {
             clear_session_binding(state);
         } else {
@@ -7852,17 +8049,14 @@ fn observe_linux_process_start_time(pid: u32) -> Result<Option<u64>, ControllerE
     Ok((process_state != 'Z').then_some(start_time))
 }
 #[cfg(target_os = "linux")]
-fn unique_proc_status_value<'a>(
-    status: &'a str,
-    label: &str,
-) -> Result<&'a str, ControllerError> {
+fn unique_proc_status_value<'a>(status: &'a str, label: &str) -> Result<&'a str, ControllerError> {
     let prefix = format!("{label}:");
     let mut matches = status
         .lines()
         .filter_map(|line| line.strip_prefix(prefix.as_str()));
-    let value = matches.next().ok_or_else(|| {
-        ControllerError::State(format!("network-worker status omits {label}"))
-    })?;
+    let value = matches
+        .next()
+        .ok_or_else(|| ControllerError::State(format!("network-worker status omits {label}")))?;
     if matches.next().is_some() {
         return Err(ControllerError::State(format!(
             "network-worker status duplicates {label}"
@@ -7930,12 +8124,12 @@ fn verify_network_worker_isolation_status(
             "network-worker created threads before the isolation barrier".to_owned(),
         ));
     }
-    if status
-        .lines()
-        .any(|line| line.strip_prefix("CoreDumping:").is_some_and(|value| value.trim() != "0"))
-    {
+    if status.lines().any(|line| {
+        line.strip_prefix("CoreDumping:")
+            .is_some_and(|value| value.trim() != "0")
+    }) {
         return Err(ControllerError::State(
-            "network-worker is currently dumpable".to_owned(),
+            "network-worker is actively dumping core".to_owned(),
         ));
     }
     Ok(())
@@ -8017,11 +8211,7 @@ fn observe_linux_worker_identity(
         Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
         Err(error) => return Err(error.into()),
     };
-    let mut args = cmdline
-        .split(|byte| *byte == 0)
-        .filter(|arg| !arg.is_empty());
-    let _program = args.next();
-    if args.next() != Some(role.subcommand().as_bytes()) || args.next().is_some() {
+    if !worker_cmdline_has_exact_role(&cmdline, role) {
         return Ok(None);
     }
     let executable = match fs::metadata(format!("/proc/{pid}/exe")) {
@@ -8036,6 +8226,14 @@ fn observe_linux_worker_identity(
         executable_inode: executable.ino(),
         role,
     }))
+}
+#[cfg(any(target_os = "linux", test))]
+fn worker_cmdline_has_exact_role(cmdline: &[u8], role: WorkerRole) -> bool {
+    let mut args = cmdline
+        .split(|byte| *byte == 0)
+        .filter(|arg| !arg.is_empty());
+    let _program = args.next();
+    args.next() == Some(role.subcommand().as_bytes()) && args.next().is_none()
 }
 #[cfg(any(target_os = "linux", test))]
 fn parse_linux_process_stat(stat: &str) -> Result<(char, u64), &'static str> {
@@ -8085,6 +8283,10 @@ enum BoundPersistedProcess {
         identity_matches: bool,
     },
 }
+#[cfg(any(target_os = "linux", test))]
+fn persisted_start_time_matches(expected: u64, observed: Option<u64>) -> bool {
+    observed == Some(expected)
+}
 #[cfg(target_os = "linux")]
 fn bind_persisted_process(
     identity: &WorkerProcessIdentity,
@@ -8095,10 +8297,10 @@ fn bind_persisted_process(
     if !pidfd_send_signal(&pidfd, 0)? {
         return Ok(BoundPersistedProcess::Gone);
     }
-    let Some(start_time) = observe_linux_process_start_time(identity.pid)? else {
-        return Ok(BoundPersistedProcess::Gone);
-    };
-    if start_time != identity.start_time_ticks {
+    if !persisted_start_time_matches(
+        identity.start_time_ticks,
+        observe_linux_process_start_time(identity.pid)?,
+    ) {
         // A different start time proves PID reuse. Never signal the unrelated process.
         return Ok(BoundPersistedProcess::Gone);
     }
@@ -8748,13 +8950,10 @@ fn read_connect_payload_json_from_stdin() -> Result<WipeBytes, ControllerError> 
 #[cfg(target_os = "linux")]
 fn wait_for_stdin_until(deadline: Instant, label: &str) -> Result<(), ControllerError> {
     loop {
-        let remaining = deadline.checked_duration_since(Instant::now()).ok_or_else(|| {
-            ControllerError::State(format!("timed out reading {label}"))
-        })?;
-        let timeout_ms = remaining
-            .as_millis()
-            .max(1)
-            .min(i32::MAX as u128) as nix::libc::c_int;
+        let remaining = deadline
+            .checked_duration_since(Instant::now())
+            .ok_or_else(|| ControllerError::State(format!("timed out reading {label}")))?;
+        let timeout_ms = remaining.as_millis().max(1).min(i32::MAX as u128) as nix::libc::c_int;
         let mut descriptor = nix::libc::pollfd {
             fd: nix::libc::STDIN_FILENO,
             events: nix::libc::POLLIN | nix::libc::POLLHUP,
@@ -8771,9 +8970,7 @@ fn wait_for_stdin_until(deadline: Instant, label: &str) -> Result<(), Controller
             return Ok(());
         }
         if result == 0 {
-            return Err(ControllerError::State(format!(
-                "timed out reading {label}"
-            )));
+            return Err(ControllerError::State(format!("timed out reading {label}")));
         }
         let error = io::Error::last_os_error();
         if error.kind() != io::ErrorKind::Interrupted {
@@ -9428,13 +9625,14 @@ mod tests {
 
     #[cfg(target_os = "linux")]
     #[test]
-    fn network_worker_decodes_launch_only_after_permanent_isolation() {
+    fn network_worker_reads_fixed_bootstrap_only_after_permanent_containment() {
         use std::{cell::RefCell, rc::Rc};
 
         let calls = Rc::new(RefCell::new(Vec::new()));
         let install_calls = Rc::clone(&calls);
         let drop_calls = Rc::clone(&calls);
-        let decode_calls = Rc::clone(&calls);
+        let containment_calls = Rc::clone(&calls);
+        let read_calls = Rc::clone(&calls);
         let caller = PrivilegedCaller {
             uid: 1_000,
             gid: 1_001,
@@ -9451,7 +9649,11 @@ mod tests {
                 Ok(())
             },
             move || {
-                decode_calls.borrow_mut().push("decode-launch");
+                containment_calls.borrow_mut().push("parser-containment");
+                Ok(())
+            },
+            move || {
+                read_calls.borrow_mut().push("read-fixed-bootstrap");
                 Ok(7_u8)
             },
         )
@@ -9463,9 +9665,57 @@ mod tests {
                 "pdeathsig",
                 "permanent-drop",
                 "pdeathsig",
-                "decode-launch",
+                "parser-containment",
+                "read-fixed-bootstrap",
             ]
         );
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn scm_credentials_do_not_replace_irreversible_process_posture_proof() {
+        let caller = PrivilegedCaller {
+            uid: 1_000,
+            gid: 1_001,
+        };
+        let isolated = "Uid:\t1000\t1000\t1000\t1000\n\
+                        Gid:\t1001\t1001\t1001\t1001\n\
+                        Groups:\t\n\
+                        CapInh:\t0000000000000000\n\
+                        CapPrm:\t0000000000000000\n\
+                        CapEff:\t0000000000000000\n\
+                        CapBnd:\t0000000000000000\n\
+                        CapAmb:\t0000000000000000\n\
+                        NoNewPrivs:\t1\n\
+                        Seccomp:\t2\n\
+                        TracerPid:\t0\n\
+                        Threads:\t1\n\
+                        CoreDumping:\t0\n";
+        verify_network_worker_isolation_status(isolated, caller)
+            .expect("complete irreversible posture is accepted");
+
+        let still_effective_root =
+            isolated.replacen("Uid:\t1000\t1000\t1000\t1000", "Uid:\t1000\t0\t0\t0", 1);
+        assert!(
+            verify_network_worker_isolation_status(&still_effective_root, caller).is_err(),
+            "matching real-UID SCM_CREDENTIALS cannot hide effective/saved/fs root"
+        );
+        for (needle, replacement) in [
+            ("Threads:\t1", "Threads:\t2"),
+            ("TracerPid:\t0", "TracerPid:\t42"),
+            ("CapBnd:\t0000000000000000", "CapBnd:\t0000000000000001"),
+            ("NoNewPrivs:\t1", "NoNewPrivs:\t0"),
+            ("Seccomp:\t2", "Seccomp:\t0"),
+        ] {
+            assert!(
+                verify_network_worker_isolation_status(
+                    &isolated.replacen(needle, replacement, 1),
+                    caller,
+                )
+                .is_err(),
+                "unsafe posture mutation {needle} must fail closed"
+            );
+        }
     }
 
     #[cfg(target_os = "linux")]
@@ -9483,6 +9733,7 @@ mod tests {
     #[cfg(target_os = "linux")]
     #[test]
     fn direct_controller_child_is_dead_and_reaped_before_cleanup_proof() {
+        let started = Instant::now();
         let mut child = ProcessCommand::new("/bin/sleep")
             .arg("30")
             .spawn()
@@ -9498,8 +9749,15 @@ mod tests {
             .expect("terminate and reap exact direct child");
         assert!(proof.warning.is_none());
         assert!(
-            child.try_wait().expect("inspect reaped direct child").is_some(),
+            child
+                .try_wait()
+                .expect("inspect reaped direct child")
+                .is_some(),
             "cleanup proof is returned only after the direct child has been reaped"
+        );
+        assert!(
+            started.elapsed() < PROCESS_KILL_REAP_TIMEOUT + Duration::from_secs(1),
+            "exact-child cleanup proof is bounded even when graceful identity signaling fails"
         );
     }
 
@@ -9690,7 +9948,7 @@ mod tests {
         assert!(!state.repair_required);
         assert!(state.owner_uid.is_none());
         assert!(state.session_id.is_none());
-        assert_eq!(state.message, "supervisor crashed before readiness");
+        assert_eq!(state.message, "ready");
         assert_eq!(operations.resolv_restores, 1);
         assert_eq!(operations.backup_removals, 1);
         assert_eq!(operations.restored_routes.len(), 2);
@@ -9762,12 +10020,7 @@ mod tests {
                 NetworkJournalPhase::Planned => "persist-planned",
                 NetworkJournalPhase::TunCreated => "persist-tun-created",
                 NetworkJournalPhase::LinkConfigured => "persist-link-configured",
-                NetworkJournalPhase::RoutesConfigured
-                    if applied.excluded_route_snapshots.is_empty() =>
-                {
-                    "persist-routes-configured"
-                }
-                NetworkJournalPhase::RoutesConfigured => "persist-excluded-intent",
+                NetworkJournalPhase::RoutesConfigured => "persist-routes-configured",
                 NetworkJournalPhase::ExcludedRoutesConfigured => "persist-exclusions-configured",
                 NetworkJournalPhase::DnsPlanned => "persist-dns-intent",
                 NetworkJournalPhase::Prepared => "persist-prepared",
@@ -9808,6 +10061,7 @@ mod tests {
             &mut self,
             route: &str,
         ) -> Result<(ExcludedRouteSnapshot, Self::ExcludedRouteMutation), ControllerError> {
+            self.step("plan-excluded-route")?;
             Ok((
                 ExcludedRouteSnapshot {
                     cidr: route.to_owned(),
@@ -9885,6 +10139,7 @@ mod tests {
         assert_eq!(
             expected_events,
             [
+                "plan-excluded-route",
                 "persist-planned",
                 "create-tun",
                 "persist-tun-created",
@@ -9892,7 +10147,6 @@ mod tests {
                 "persist-link-configured",
                 "mutate-routes",
                 "persist-routes-configured",
-                "persist-excluded-intent",
                 "mutate-excluded-route",
                 "persist-exclusions-configured",
                 "persist-dns-intent",
@@ -10069,11 +10323,20 @@ mod tests {
         assert_eq!(decoded.session_id, TEST_SESSION_ID);
         assert_eq!(decoded.relay_endpoint, authenticated.payload.relay_endpoint);
         assert_eq!(decoded.relay_id, authenticated.ticket.relay_id);
-        assert_eq!(decoded.network_policy_hash, authenticated.ticket.network_policy_hash);
+        assert_eq!(
+            decoded.network_policy_hash,
+            authenticated.ticket.network_policy_hash
+        );
         assert_eq!(decoded.route_pushes, authenticated.payload.route_pushes);
-        assert_eq!(decoded.excluded_routes, authenticated.payload.excluded_routes);
+        assert_eq!(
+            decoded.excluded_routes,
+            authenticated.payload.excluded_routes
+        );
         assert_eq!(decoded.dns_servers, authenticated.payload.dns_servers);
-        assert_eq!(decoded.tunnel_addresses, authenticated.payload.tunnel_addresses);
+        assert_eq!(
+            decoded.tunnel_addresses,
+            authenticated.payload.tunnel_addresses
+        );
         assert_eq!(decoded.mtu_bytes, u64::from(VPN_DEFAULT_TUNNEL_MTU_BYTES));
     }
     #[test]
@@ -10093,32 +10356,21 @@ mod tests {
         let mut bad_signature = canonical;
         bad_signature[PLAN_TICKET_RANGE.end - 1] ^= 1;
         assert!(
-            decode_authenticated_network_plan(
-                &bad_signature,
-                &token,
-                issuer.public_key(),
-                now_ms,
-            )
-            .is_err(),
+            decode_authenticated_network_plan(&bad_signature, &token, issuer.public_key(), now_ms,)
+                .is_err(),
             "root independently verifies the exact signed helper ticket"
         );
         let mut bad_policy = canonical;
         encode_plan_cidr(
-            &mut bad_policy
-                [PLAN_ROUTE_RANGE.start..PLAN_ROUTE_RANGE.start + PLAN_ROUTE_SLOT_BYTES],
+            &mut bad_policy[PLAN_ROUTE_RANGE.start..PLAN_ROUTE_RANGE.start + PLAN_ROUTE_SLOT_BYTES],
             ParsedCidr {
                 address: IpAddr::V4(Ipv4Addr::new(10, 0, 0, 0)),
                 prefix: 8,
             },
         );
         assert!(
-            decode_authenticated_network_plan(
-                &bad_policy,
-                &token,
-                issuer.public_key(),
-                now_ms,
-            )
-            .is_err(),
+            decode_authenticated_network_plan(&bad_policy, &token, issuer.public_key(), now_ms,)
+                .is_err(),
             "root recomputes the signed policy hash instead of trusting the parser"
         );
     }
@@ -10152,13 +10404,8 @@ mod tests {
             let mut mutated = canonical;
             mutated[index] = 1;
             assert!(
-                decode_authenticated_network_plan(
-                    &mutated,
-                    &token,
-                    issuer.public_key(),
-                    now_ms,
-                )
-                .is_err(),
+                decode_authenticated_network_plan(&mutated, &token, issuer.public_key(), now_ms,)
+                    .is_err(),
                 "noncanonical {label} byte {index} must be rejected"
             );
         }
@@ -10176,7 +10423,10 @@ mod tests {
         for (label, mutate) in [
             (
                 "route count",
-                (PLAN_ROUTE_COUNT_OFFSET, (VPN_MAX_ROUTE_ENTRIES_V1 + 1) as u8),
+                (
+                    PLAN_ROUTE_COUNT_OFFSET,
+                    (VPN_MAX_ROUTE_ENTRIES_V1 + 1) as u8,
+                ),
             ),
             ("relay length", (PLAN_RELAY_LENGTH_OFFSET, 0xFF)),
         ] {
@@ -10984,6 +11234,20 @@ mod tests {
         }
     }
     #[test]
+    fn public_connect_deadline_covers_every_bounded_v1_child_phase() {
+        let conservative_system_commands =
+            VPN_MAX_ROUTE_ENTRIES_V1 + 2 * VPN_MAX_ROUTE_ENTRIES_V1 + 16;
+        let child_bound = NETWORK_WORKER_READY_TIMEOUT
+            + NETWORK_WORKER_READY_TIMEOUT
+            + NETWORK_WORKER_TUN_TIMEOUT
+            + SYSTEM_COMMAND_TIMEOUT
+                * u32::try_from(conservative_system_commands).expect("small V1 command count");
+        assert!(
+            CONNECT_READY_TIMEOUT > child_bound,
+            "the public parent must never kill a legitimate bounded child phase early"
+        );
+    }
+    #[test]
     fn cli_requires_connect_payload_on_stdin() {
         let payload = r#"{"sessionId":"session-1","relayEndpoint":"/ip4/127.0.0.1/udp/7777/quic","exitClass":"standard","helperTicketHex":"aa","relayTlsSpkiSha256Hex":"abababababababababababababababababababababababababababababababab","paddingBudgetMs":15,"routePushes":[],"excludedRoutes":[],"dnsServers":[],"tunnelAddresses":["10.208.0.2/32"],"mtuBytes":1280}"#;
         parse_fixed_cli_arguments(vec!["connect".to_owned(), payload.to_owned()])
@@ -10998,23 +11262,14 @@ mod tests {
             message: "persisted message".to_owned(),
             ..State::default()
         };
-        let display = install_check_display_state(&original);
+        let display = install_check_display_state();
         assert_eq!(display.message, "ready");
         assert!(!display.active);
         assert_eq!(display.bytes_in, 0);
         assert_eq!(display.bytes_out, 0);
         assert_eq!(original.message, "persisted message");
 
-        let repair = State {
-            active: true,
-            repair_required: true,
-            ..State::default()
-        };
-        assert_eq!(install_check_display_state(&repair).message, "ready");
-        assert_eq!(
-            install_check_display_state(&State::default()).message,
-            "ready"
-        );
+        assert_eq!(install_check_display_state().message, "ready");
     }
     #[test]
     fn privileged_commands_require_an_explicit_session_id() {
@@ -11291,7 +11546,7 @@ mod tests {
         )
         .expect("the authenticated owning UID may inspect its session");
 
-        let display = install_check_display_state(&state);
+        let display = install_check_display_state();
         assert!(!display.active);
         assert!(display.owner_uid.is_none());
         assert!(display.session_id.is_none());
@@ -11332,6 +11587,11 @@ mod tests {
             relay_endpoint: Some("/ip4/127.0.0.1/udp/7777/quic".to_owned()),
             relay_id: Some([0x22; 32]),
             network_policy_hash: Some([0x11; 32]),
+            interface_name: Some("srvpn0000000000".to_owned()),
+            network_service: Some("resolvectl".to_owned()),
+            bytes_in: 123,
+            bytes_out: 456,
+            message: "private relay handshake failure".to_owned(),
             ..State::default()
         };
         apply_terminal_network_lifecycle(&mut exiting, false, false);
@@ -11339,6 +11599,19 @@ mod tests {
         exiting.worker_identity = None;
         apply_terminal_network_lifecycle(&mut exiting, false, false);
         assert!(!state_has_session_binding(&exiting));
+        assert_eq!(exiting.bytes_in, 0);
+        assert_eq!(exiting.bytes_out, 0);
+        assert!(exiting.interface_name.is_none());
+        assert!(exiting.network_service.is_none());
+        assert_eq!(exiting.message, "ready");
+        authorize_status_access(
+            &exiting,
+            PrivilegedCaller {
+                uid: 2_000,
+                gid: 2_001,
+            },
+        )
+        .expect("sanitized terminal state is safe for any local caller");
     }
     #[test]
     fn state_rejects_active_or_invalid_unbound_worker_identity() {
@@ -11389,9 +11662,7 @@ mod tests {
         state.session_id = None;
         state.worker_identity.as_mut().expect("identity").pid += 1;
         assert!(authorize_unvalidated_worker_start(&state, &identity, caller).is_err());
-        assert!(
-            authorize_unvalidated_worker_start(&State::default(), &identity, caller).is_err()
-        );
+        assert!(authorize_unvalidated_worker_start(&State::default(), &identity, caller).is_err());
         state.worker_identity = Some(identity.clone());
         assert!(
             authorize_unvalidated_worker_start(
@@ -11465,6 +11736,28 @@ mod tests {
         );
         assert_eq!(parse_linux_process_stat(&stat), Ok(('S', 4242)));
         assert!(parse_linux_process_stat("123 malformed").is_err());
+    }
+    #[test]
+    fn persisted_process_start_time_not_argv_drift_is_the_exit_boundary() {
+        assert!(persisted_start_time_matches(77, Some(77)));
+        assert!(!persisted_start_time_matches(77, Some(78)));
+        assert!(!persisted_start_time_matches(77, None));
+
+        assert!(worker_cmdline_has_exact_role(
+            b"/proc/self/exe\0run-tunnel\0",
+            WorkerRole::Tunnel,
+        ));
+        assert!(
+            !worker_cmdline_has_exact_role(
+                b"/proc/self/exe\0run-tunnel\0extra\0",
+                WorkerRole::Tunnel,
+            ),
+            "extra argv is identity drift, never an exact internal launch"
+        );
+        assert!(
+            !worker_cmdline_has_exact_role(b"/bin/other\0changed-role\0", WorkerRole::Tunnel,),
+            "same start time with exec/argv drift stays a live process for pidfd termination but fails status authentication"
+        );
     }
     #[test]
     #[cfg(target_os = "linux")]

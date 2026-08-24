@@ -1,11 +1,14 @@
 //! Serialized runtime shell for the authoritative Sumeragi v2 adapter.
 //!
-//! This module owns scheduling and backpressure, not consensus state.
-//! A class-aware arbiter serially delivers admitted commands to [`SumeragiV2Adapter`]
-//! and returns every [`AdapterEffect`] unchanged. Only `EnterView` is inspected:
-//! installing a certified view alone may restart round and retransmission clocks.
-//! The round deadline grows to a finite ceiling while retransmission stays fixed,
-//! giving post-GST service more room without making a long-idle height wait hours.
+//! This module owns scheduling and backpressure, not consensus state. Every
+//! admitted command is delivered to [`SumeragiV2Adapter`] by one serialized
+//! class-aware arbiter, and all
+//! returned [`AdapterEffect`] values are handed to callers unchanged. The only
+//! effect inspected here is `EnterView`, because installing a certified view is
+//! the sole event allowed to restart the round and retransmission clocks. The
+//! round deadline grows linearly through a finite protocol ceiling while
+//! retransmission stays fixed. This gives post-GST service additional room
+//! without turning a long-idle height's view into an hours-long wait.
 //! Every admitted owner freezes both its receiver-local physical predecessor
 //! cut and its logical lifecycle ordinal. A replay admitted at or after that
 //! cut cannot overtake the owner even when the replay retains an older logical
@@ -380,7 +383,6 @@ pub(crate) enum RuntimeError<E> {
     /// The runner attempted live scheduling before startup finished.
     ClocksNotArmed,
     /// Interrupted-tip recovery was attempted after live scheduling began.
-    #[cfg(test)]
     RecoveryAfterClocksArmed,
 }
 impl<E: fmt::Display> fmt::Display for RuntimeError<E> {
@@ -391,7 +393,6 @@ impl<E: fmt::Display> fmt::Display for RuntimeError<E> {
             Self::ClocksNotArmed => {
                 formatter.write_str("Sumeragi v2 pacemaker clocks are not armed")
             }
-            #[cfg(test)]
             Self::RecoveryAfterClocksArmed => formatter.write_str(
                 "Sumeragi v2 interrupted-tip recovery cannot run after pacemaker clocks are armed",
             ),
@@ -405,9 +406,7 @@ where
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
             Self::Driver(error) => Some(error),
-            Self::FailClosed | Self::ClocksNotArmed => None,
-            #[cfg(test)]
-            Self::RecoveryAfterClocksArmed => None,
+            Self::FailClosed | Self::ClocksNotArmed | Self::RecoveryAfterClocksArmed => None,
         }
     }
 }
@@ -4868,14 +4867,11 @@ pub(crate) enum RuntimeSelectedOwnerKind {
     /// No live owner was ready.
     Idle,
     /// One startup-recovery FIFO command.
-    #[cfg(test)]
     RecoveryFifo,
     /// A startup-recovery FIFO command encountered retryable adapter
     /// backpressure and was restored without minting a new owner.
-    #[cfg(test)]
     RecoveryFifoRetryRetained,
     /// Startup recovery had no ready owner.
-    #[cfg(test)]
     RecoveryIdle,
 }
 /// Validation result for a retained scheduler ownership carrier.
@@ -5001,12 +4997,9 @@ impl RuntimeSelectedOwnerKind {
             Self::PeriodicTimer => 3,
             Self::Fifo => 4,
             Self::Idle => 5,
-            #[cfg(test)]
             Self::RecoveryFifo => 6,
-            #[cfg(test)]
             Self::RecoveryIdle => 7,
             Self::FifoRetryRetained => 8,
-            #[cfg(test)]
             Self::RecoveryFifoRetryRetained => 9,
             Self::FenceCompletion => 10,
             Self::PacemakerProgress => 11,
@@ -5666,63 +5659,66 @@ impl RuntimeSchedulerOwnershipEvidence {
         if schedule_after.fifo_owed != self.fifo_owed_after {
             return Err(RuntimeSchedulerEvidenceError::InvalidProjection);
         }
-        let fifo_mode = match self.selected {
-            RuntimeSelectedOwnerKind::Fifo => Some((false, false)),
-            RuntimeSelectedOwnerKind::FifoRetryRetained => Some((false, true)),
-            #[cfg(test)]
-            RuntimeSelectedOwnerKind::RecoveryFifo => Some((true, false)),
-            #[cfg(test)]
-            RuntimeSelectedOwnerKind::RecoveryFifoRetryRetained => Some((true, true)),
-            _ => None,
-        };
-        if let (
-            Some((recovery, retry_retained)),
-            RuntimeSelectedCandidateOwnership::Exact(candidate),
-        ) = (fifo_mode, &self.candidate)
-        {
-            let service = select_bounded_service_class(
-                self.queue_before.service_cursor,
-                self.completion_ready,
-                self.progress_ready,
-                self.normal_ready,
-            );
-            let exact = candidate.identity.validate_exact()
-                && candidate.kind == candidate.identity.kind
-                && candidate.admission_ordinal != 0
-                && candidate.lifecycle_ordinal != 0
-                && candidate.lifecycle_ordinal <= candidate.admission_ordinal
-                && runtime_fifo_candidate_ingress_is_exact(candidate)
-                && candidate.projection_hash == runtime_fifo_candidate_projection_hash(candidate)
-                && candidate.causal_origin.validate_exact()
-                && candidate.causal_origin.root_lifecycle_ordinal
-                    == Some(candidate.lifecycle_ordinal)
-                && candidate.class != SERVICE_CLASS_NONE
-                && service.selected == candidate.class
-                && service.next == self.queue_after.service_cursor
-                && candidate.fifo_position < self.queue_before.len
-                && candidate.eligible_skips_before <= self.queue_before.max_service_debt
-                && candidate.eligible_skips_after == 0
-                && self.queue_after.max_service_debt
-                    <= self.queue_before.max_service_debt.saturating_add(1)
-                && if retry_retained {
-                    self.queue_after.len == self.queue_before.len
-                } else {
-                    self.queue_after.len.checked_add(1) == Some(self.queue_before.len)
-                }
-                && scheduled == ScheduledWork::Fifo
-                && self.live_mode != recovery
-                && candidate.selection_seal.matches_scheduler_occurrence(
-                    candidate,
-                    &self.queue_before_snapshot,
-                    &self.queue_after_snapshot,
-                    RuntimeQueueSelectionKind::Ordinary,
-                    retry_retained,
-                );
-            return exact
-                .then_some(())
-                .ok_or(RuntimeSchedulerEvidenceError::InvalidProjection);
-        }
         match (&self.selected, &self.candidate) {
+            (
+                RuntimeSelectedOwnerKind::Fifo
+                | RuntimeSelectedOwnerKind::FifoRetryRetained
+                | RuntimeSelectedOwnerKind::RecoveryFifo
+                | RuntimeSelectedOwnerKind::RecoveryFifoRetryRetained,
+                RuntimeSelectedCandidateOwnership::Exact(candidate),
+            ) => {
+                let (recovery, retry_retained) = match self.selected {
+                    RuntimeSelectedOwnerKind::Fifo => (false, false),
+                    RuntimeSelectedOwnerKind::FifoRetryRetained => (false, true),
+                    RuntimeSelectedOwnerKind::RecoveryFifo => (true, false),
+                    RuntimeSelectedOwnerKind::RecoveryFifoRetryRetained => (true, true),
+                    _ => unreachable!("match arm contains only FIFO selections"),
+                };
+                let service = select_bounded_service_class(
+                    self.queue_before.service_cursor,
+                    self.completion_ready,
+                    self.progress_ready,
+                    self.normal_ready,
+                );
+                let exact = candidate.identity.validate_exact()
+                    && candidate.kind == candidate.identity.kind
+                    && candidate.admission_ordinal != 0
+                    && candidate.lifecycle_ordinal != 0
+                    && candidate.lifecycle_ordinal <= candidate.admission_ordinal
+                    && runtime_fifo_candidate_ingress_is_exact(candidate)
+                    && candidate.projection_hash
+                        == runtime_fifo_candidate_projection_hash(candidate)
+                    && candidate.causal_origin.validate_exact()
+                    && candidate.causal_origin.root_lifecycle_ordinal
+                        == Some(candidate.lifecycle_ordinal)
+                    && candidate.class != SERVICE_CLASS_NONE
+                    && service.selected == candidate.class
+                    && service.next == self.queue_after.service_cursor
+                    && candidate.fifo_position < self.queue_before.len
+                    && candidate.eligible_skips_before <= self.queue_before.max_service_debt
+                    && candidate.eligible_skips_after == 0
+                    && self.queue_after.max_service_debt
+                        <= self.queue_before.max_service_debt.saturating_add(1)
+                    && if retry_retained {
+                        self.queue_after.len == self.queue_before.len
+                    } else {
+                        self.queue_after.len.checked_add(1) == Some(self.queue_before.len)
+                    }
+                    && scheduled == ScheduledWork::Fifo
+                    && self.live_mode != recovery
+                    && candidate.selection_seal.matches_scheduler_occurrence(
+                        candidate,
+                        &self.queue_before_snapshot,
+                        &self.queue_after_snapshot,
+                        RuntimeQueueSelectionKind::Ordinary,
+                        retry_retained,
+                    );
+                if exact {
+                    Ok(())
+                } else {
+                    Err(RuntimeSchedulerEvidenceError::InvalidProjection)
+                }
+            }
             (
                 RuntimeSelectedOwnerKind::Timeout,
                 RuntimeSelectedCandidateOwnership::NotApplicable,
@@ -5748,7 +5744,6 @@ impl RuntimeSchedulerOwnershipEvidence {
             {
                 Ok(())
             }
-            #[cfg(test)]
             (
                 RuntimeSelectedOwnerKind::RecoveryIdle,
                 RuntimeSelectedCandidateOwnership::NotApplicable,
@@ -14113,7 +14108,7 @@ impl<D: RuntimeDriver> SerializedV2Runtime<D> {
     /// operation, and elapsed wall time must not manufacture a timeout vote or
     /// retransmission. The runner consumes this runtime after finalization and
     /// constructs a fresh, normally armed successor-height runtime.
-    #[cfg(test)]
+    #[allow(dead_code, reason = "retained by formal contracts")]
     pub(crate) fn step_recovery(
         &mut self,
         now: Instant,
@@ -14852,6 +14847,37 @@ impl<D: RuntimeDriver> SerializedV2Runtime<D> {
 include!("v2_runtime_ready_validate_publication.rs");
 
 impl SerializedV2Runtime<SumeragiV2Adapter> {
+    /// Stage the deferred pending-Kura validation and its exact Apply successor.
+    ///
+    /// This no-clock seam is available only after the startup Validate effect's
+    /// positional ownership has left the runtime shell. Failure returns the
+    /// move-only marker unchanged; success retains it inside the adapter's
+    /// drop-inert prepared transition.
+    #[allow(clippy::result_large_err)]
+    pub(in crate::sumeragi) fn prepare_pending_kura_validated_apply(
+        &mut self,
+        marker: super::v2::DeferredPendingKuraValidatedMarkerV1,
+        predecessor: &AdapterEffect,
+        ownership: &RuntimeEffectOwnership,
+    ) -> Result<
+        super::v2::PreparedPendingKuraValidatedApplyV1<'_>,
+        (
+            super::v2::DeferredPendingKuraValidatedMarkerV1,
+            AdapterError,
+        ),
+    > {
+        if self.fail_closed
+            || self.clocks_armed
+            || self.ingress.len() != 0
+            || self.pending_effect_ownership.is_some()
+            || self.last_scheduler_ownership.is_some()
+            || !self.pending_leader_wire_terminals.is_empty()
+        {
+            return Err((marker, AdapterError::RecoveredPendingKuraApplyMismatch));
+        }
+        marker.prepare_apply(&mut self.driver, predecessor, ownership)
+    }
+
     /// Freeze the serialized shell around one ordinary Fetch-to-Store preview.
     pub(in crate::sumeragi) fn prepare_certified_fetch_store(
         &mut self,

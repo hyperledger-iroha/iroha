@@ -945,7 +945,7 @@ mod tests {
                 .get(FINALITY_CHALLENGE_HEADER)
                 .unwrap()
                 .to_str()
-                .expect("ASCII challenge header"),
+                .expect("challenge header is canonical ASCII"),
             hex::encode([0x42; 32])
         );
         assert!(

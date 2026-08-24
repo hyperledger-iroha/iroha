@@ -189,6 +189,16 @@ heartbeats, or project a fully hydrated source as locally `Ready`. Re-enabling
 execution requires routing the worker through the same authenticated Inrou
 isolation and resource corridor used for hostile service workloads.
 
+HF source admission uses one exact case-sensitive `namespace/repository`
+identity and one full lowercase commit OID. Model-info must return that same
+`modelId` and commit byte-for-byte and must be requested with `blobs=true`.
+Torii and the importer select GGUF, then SafeTensors, then PyTorch, require
+canonical LFS SHA-256 and positive size metadata for every selected shard, and
+apply identical file-count, per-file, and aggregate byte limits. The consensus
+resource profile records the selected shard count, authenticated byte total,
+format/backend family, and domain-separated commitment to the sorted exact
+path/size/digest set.
+
 Production behavior is sourced from configuration, not environment variables.
 An unqualified or disabled node does not advertise or materialize Inrou
 capacity and actively withdraws a pre-existing local advert. Code-path

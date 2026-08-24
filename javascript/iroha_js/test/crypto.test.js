@@ -57,9 +57,6 @@ const SM2_FIXTURE = hasSm2Binding()
 
 const MESSAGE = Buffer.from("hyperledger iroha");
 const nativeTest = makeNativeTest(test, { require: sm2RequiredMethods });
-const kaigiNativeTest = makeNativeTest(test, {
-  require: "buildKaigiRosterJoinProof",
-});
 
 function withNativeBinding(binding, fn) {
   const previous = globalThis.__IROHA_NATIVE_BINDING__;
@@ -611,33 +608,26 @@ test("deriveConfidentialNullifierV2 binds the exact NetworkId bytes", () => {
   assert.notDeepEqual(calls[0][0], calls[1][0]);
 });
 
-test("buildKaigiRosterJoinProof delegates to native binding", () => {
-  const expected = {
-    commitment: Buffer.alloc(32, 0x11),
-    nullifier: Buffer.alloc(32, 0x22),
-    roster_root: Buffer.alloc(32, 0x33),
-    proof: Buffer.from("proof-bytes"),
-  };
-
-  withNativeBinding({ buildKaigiRosterJoinProof: () => expected }, () => {
-    const proof = buildKaigiRosterJoinProof({
-      seed: Buffer.from("seed"),
-      rosterRootHex: "44".repeat(32),
-    });
-    assert.equal(proof.commitmentHex, expected.commitment.toString("hex"));
-    assert.equal(proof.nullifierHex, expected.nullifier.toString("hex"));
-    assert.equal(proof.rosterRootHex, expected.roster_root.toString("hex"));
-    assert.equal(proof.proofBase64, expected.proof.toString("base64"));
+test("buildKaigiRosterJoinProof fails closed before native dispatch", () => {
+  let called = false;
+  withNativeBinding({ buildKaigiRosterJoinProof: () => { called = true; } }, () => {
+    assert.throws(
+      () => buildKaigiRosterJoinProof({
+        seed: Buffer.from("seed"),
+        rosterRootHex: "44".repeat(32),
+      }),
+      /binds the signed participant authority/u,
+    );
   });
+  assert.equal(called, false);
 });
 
-kaigiNativeTest("buildKaigiRosterJoinProof returns a native proof envelope", () => {
-  const proof = buildKaigiRosterJoinProof({
-    seed: Buffer.alloc(32, 0x44),
-    rosterRootHex: "00".repeat(32),
-  });
-  assert.equal(proof.commitment.length, 32);
-  assert.equal(proof.nullifier.length, 32);
-  assert.equal(proof.rosterRoot.length, 32);
-  assert.ok(proof.proof.length > 0);
+test("buildKaigiRosterJoinProof remains unavailable for well-formed inputs", () => {
+  assert.throws(
+    () => buildKaigiRosterJoinProof({
+      seed: Buffer.alloc(32, 0x44),
+      rosterRootHex: "00".repeat(32),
+    }),
+    /binds the signed participant authority/u,
+  );
 });

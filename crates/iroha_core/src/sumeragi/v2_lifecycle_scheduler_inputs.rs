@@ -722,9 +722,7 @@ pub(in crate::sumeragi) enum ProductionCompletionDispatchErrorV1 {
     Service(String),
     /// A Fetch executor owner conflicted with the exact request catalogs.
     Executor(RecoveredDecisionFetchRequestRegistrationErrorV1),
-    /// The Apply executor was closed or retained an active mutation owner.
-    ApplyExecutor(EffectExecutorError),
-    /// A Ready live Apply could not retire its exact competing executor work.
+    /// A Ready Apply could not reconcile or reserve its exact executor work.
     LiveApplyReconciliation(EffectExecutorError),
     /// Planning selected no authenticated physical row or another work class.
     UnexpectedPlan,
@@ -2089,7 +2087,7 @@ impl ProductionLifecycleOwnerV1 {
                     let key = attestation.dispatch_key();
                     let executor_available = executor
                         .lifecycle_decision_apply_dispatch_available()
-                        .map_err(ProductionCompletionDispatchErrorV1::ApplyExecutor)?;
+                        .map_err(ProductionCompletionDispatchErrorV1::LiveApplyReconciliation)?;
                     (
                         AuthenticatedLifecycleCompletionReadyV1::Apply(attestation),
                         Some(LifecycleCompletionCapacityProbeV1::Apply {
@@ -2420,7 +2418,7 @@ impl ProductionLifecycleOwnerV1 {
                 }
                 let executor_dispatch = executor
                     .prepare_lifecycle_decision_apply_executor_dispatch(&prepared)
-                    .map_err(ProductionCompletionDispatchErrorV1::ApplyExecutor)?;
+                    .map_err(ProductionCompletionDispatchErrorV1::LiveApplyReconciliation)?;
                 reservation.commit(prepared, executor_dispatch);
                 Ok(ProductionCompletionDispatchV1::ApplyQueued { ordinal })
             }
@@ -5121,31 +5119,44 @@ impl ProductionLifecycleOwnerV1 {
         registry: LifecycleWorkRegistryHolder,
         body_store: crate::sumeragi::v2_body_store::V2BodyStore,
         root: &std::path::Path,
-    ) -> Self {
+    ) -> (
+        Self,
+        crate::sumeragi::v2_lifecycle_coordinator::RuntimeLifecycleOrdinalAuthority,
+    ) {
         coordinator
             .attach_empty_test_ledger(&root.join("ledger"))
             .expect("attach exact Ready Validate lifecycle ledger");
+        let (runtime_ordinal_authority, coordinator_ordinal_authority) =
+            super::authority::lifecycle_ordinal_authorities_after_high_watermark(
+                coordinator.high_water(),
+            );
+        coordinator
+            .bind_live_lifecycle_ordinal_authority(coordinator_ordinal_authority)
+            .expect("bind paired Ready Validate ordinal authority");
         let (payload_store, serve_payloads) = crate::sumeragi::v2_certified_serve_payload_store::CertifiedServePayloadStoreV1::open_lifecycle_fixture_for_test(
             &root.join("serve"),
             verified.context(),
         )
         .expect("open empty Ready Validate Serve payload owner");
-        Self {
-            verified,
-            coordinator,
-            registry,
-            recovered_lifecycle_outputs: None,
-            payload_store,
-            serve_payloads,
-            body_store: Some(body_store),
-            body_store_identity: None,
-            kura_binding: None,
-            apply_service: None,
-            adapter_startup: Some(
-                crate::sumeragi::v2::ProductionLifecycleAdapterStartupV1::fixture_for_test(),
-            ),
-            timeout_supersession_successor: None,
-        }
+        (
+            Self {
+                verified,
+                coordinator,
+                registry,
+                recovered_lifecycle_outputs: None,
+                payload_store,
+                serve_payloads,
+                body_store: Some(body_store),
+                body_store_identity: None,
+                kura_binding: None,
+                apply_service: None,
+                adapter_startup: Some(
+                    crate::sumeragi::v2::ProductionLifecycleAdapterStartupV1::fixture_for_test(),
+                ),
+                timeout_supersession_successor: None,
+            },
+            runtime_ordinal_authority,
+        )
     }
 
     /// Open one clean production executor before moving this owner's body
@@ -5182,6 +5193,7 @@ impl ProductionLifecycleOwnerV1 {
                 runtime,
                 body_store,
                 recovered_validate_retry_census,
+                None,
                 context.clone(),
                 requester,
                 Some(local_validator),

@@ -52,7 +52,9 @@ const POLICY_ID_DOMAIN_V1: &[u8] = b"iroha.taira.privacy.bootle-lantern.policy.v
 const BROKER_EXPORT_SCHEMA_V1: &str = "iroha.taira.privacy.bootle-lantern-broker-public.v1";
 const ROLLOUT_PLAN_PATH_V1: &str = "configs/soranexus/taira/privacy_rollout_plan_v1.json";
 const ROLLOUT_PLAN_SHA256_V1: &str =
-    "6db9c54ebfa147a57199b02f476929389b0751d59c8387da2e0104d16200ce65";
+    "19654e999793036517f56eb61d8b0d4906c7c686504264ecb83bbb6e65b0f92f";
+const CANONICAL_ROLLOUT_PLAN_V1: &[u8] =
+    include_bytes!("../../../../configs/soranexus/taira/privacy_rollout_plan_v1.json");
 const CANONICAL_PLAN_TEMPLATE_V1: &[u8] =
     include_bytes!("../../../../configs/soranexus/taira/privacy_bootstrap_plan.json");
 const CANONICAL_CONFIG_TEMPLATE_V1: &[u8] =
@@ -1088,6 +1090,12 @@ fn validate_staging_plan_v1(plan: &JsonValue) -> color_eyre::Result<()> {
         ROLLOUT_PLAN_SHA256_V1,
         "governance rollout",
     )?;
+    let actual_rollout_plan_sha256 = hex::encode(sha256(CANONICAL_ROLLOUT_PLAN_V1));
+    if actual_rollout_plan_sha256 != ROLLOUT_PLAN_SHA256_V1 {
+        bail!(
+            "canonical Taira privacy rollout plan SHA-256 differs from its compiled pin: expected {ROLLOUT_PLAN_SHA256_V1}, got {actual_rollout_plan_sha256}"
+        );
+    }
     if rollout
         .get("controller_observation_required")
         .and_then(JsonValue::as_bool)
@@ -1822,14 +1830,13 @@ mod tests {
     use super::*;
     use crate::privacy_bootstrap::{
         TairaPrivacyBootstrapArtifactsV1, build_artifacts_from_profiles_v1,
+        exact12_non_authorizing_test_profile_v1,
     };
     use iroha_core::{
         privacy_engines::bootle_lantern::issuer::{
             BootleLanternIssuerKeyPairV1, BootleLanternIssuerPolicyMetadataV1,
         },
-        privacy_profiles::{
-            compiled_privacy_profile_v1, zk_x509_release_candidate_profile_material_v1,
-        },
+        privacy_profiles::compiled_privacy_profile_v1,
     };
     use iroha_crypto::{Hash, HashOf};
     use iroha_data_model::{
@@ -1950,17 +1957,9 @@ mod tests {
             .get_or_init(|| {
                 let profiles = PrivacyProtocolIdV1::ALL
                     .into_iter()
-                    .map(|protocol_id| {
-                        compiled_privacy_profile_v1(protocol_id).or_else(|error| {
-                            if protocol_id == PrivacyProtocolIdV1::IrohaZkX509StarkP256V0 {
-                                zk_x509_release_candidate_profile_material_v1()
-                            } else {
-                                Err(error)
-                            }
-                        })
-                    })
+                    .map(exact12_non_authorizing_test_profile_v1)
                     .collect::<Result<Vec<_>, _>>()
-                    .expect("derive exact-12 release-composer fixtures");
+                    .expect("derive exact-12 non-authorizing release-composer fixtures");
                 build_artifacts_from_profiles_v1(&profiles)
                     .expect("build exact-12 release-composer artifacts")
             })
@@ -2111,7 +2110,11 @@ mod tests {
     fn complete_release_composition_is_native_deterministic_and_secret_free() {
         let activations = activation_fixture_v1();
         let export = broker_export_fixture_v1();
-        if compiled_privacy_profile_v1(PrivacyProtocolIdV1::IrohaZkX509StarkP256V0).is_err() {
+        let unavailable = PrivacyProtocolIdV1::ALL
+            .into_iter()
+            .filter(|protocol_id| compiled_privacy_profile_v1(*protocol_id).is_err())
+            .collect::<Vec<_>>();
+        if !unavailable.is_empty() {
             let error = compose_release_artifacts_v1(
                 &activations.instructions_json,
                 &activations.report_json,
@@ -2121,10 +2124,10 @@ mod tests {
                 GENESIS_TEMPLATE_V1,
                 None,
             )
-            .expect_err("closed ZK-X509 evidence gate must prevent release composition");
+            .expect_err("closed compiled-profile gates must prevent release composition");
             assert!(
                 error.to_string().contains("not governance-available"),
-                "unexpected closed-gate error: {error}"
+                "unexpected closed-gate error for {unavailable:?}: {error}"
             );
             return;
         }
@@ -2187,6 +2190,68 @@ mod tests {
         assert!(!String::from_utf8_lossy(&first.plan).contains("issuer_seed"));
         assert!(!String::from_utf8_lossy(&first.config).contains("bearer_token"));
         assert!(!String::from_utf8_lossy(&first.genesis).contains("principal_seed"));
+    }
+    #[test]
+    fn rollout_plan_hash_and_fail_closed_rows_are_source_bound() {
+        let bootstrap: JsonValue =
+            norito::json::from_slice(PLAN_TEMPLATE_V1).expect("parse staging plan");
+        validate_staging_plan_v1(&bootstrap)
+            .expect("bootstrap anchor, compiled pin, and rollout bytes must agree");
+
+        let rollout: JsonValue = norito::json::from_slice(CANONICAL_ROLLOUT_PLAN_V1)
+            .expect("parse canonical rollout plan");
+        let protocols = rollout
+            .get("protocols")
+            .and_then(JsonValue::as_array)
+            .expect("rollout protocol rows");
+        assert_eq!(protocols.len(), PrivacyProtocolIdV1::COUNT);
+        let unavailable = [
+            (
+                "zk-ace-pq-authorization-v0",
+                "ZkAceNativeErrorV1::EngineUnavailable",
+            ),
+            ("iroha-zk-ams-v1", "ZkAmsMkheErrorV1::ReleaseUnavailable"),
+            (
+                "vega-existing-credential-zk-v0",
+                "MissingGovernedFigure9ProverArtifacts",
+            ),
+            (
+                "iroha-zk-x509-stark-p256-v0",
+                "ZkX509ProfileErrorV1::EngineIncomplete",
+            ),
+        ];
+        let waves = rollout
+            .get("waves")
+            .and_then(JsonValue::as_array)
+            .expect("rollout waves");
+        assert_eq!(waves.len(), 4);
+        for (label, blocker) in unavailable {
+            let row = protocols
+                .iter()
+                .find(|row| row.get("label").and_then(JsonValue::as_str) == Some(label))
+                .unwrap_or_else(|| panic!("missing rollout row `{label}`"));
+            assert_eq!(
+                row.get("assurance").and_then(JsonValue::as_str),
+                Some("unavailable")
+            );
+            assert_eq!(
+                row.get("release_status").and_then(JsonValue::as_str),
+                Some("retained-required")
+            );
+            let missing_evidence = row
+                .get("missing_evidence")
+                .and_then(JsonValue::as_array)
+                .expect("missing-evidence array");
+            assert_eq!(missing_evidence.len(), 1);
+            assert_eq!(missing_evidence[0].as_str(), Some(blocker));
+            let scheduled = waves
+                .iter()
+                .filter_map(|wave| wave.get("protocols").and_then(JsonValue::as_array))
+                .flatten()
+                .filter(|protocol| protocol.as_str() == Some(label))
+                .count();
+            assert_eq!(scheduled, 1, "`{label}` must remain in exactly one wave");
+        }
     }
     #[test]
     fn release_plan_requires_null_staging_network_and_binds_broker_network() {

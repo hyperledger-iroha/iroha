@@ -76,7 +76,7 @@ pub use engine::{
     install_vega_mdl_figure9_prover_artifacts_v1, install_vega_mdl_figure9_verifier_key_v1,
     prove_vega_mdl_figure9_v1, vega_mdl_canonical_relation_digest_v1,
     vega_mdl_compiled_profile_digest_v1, vega_mdl_proof_dimensions_v1, vega_mdl_verifier_digest_v1,
-    vega_microsoft_fixture_conformance_v1, verify_vega_mdl_figure9_v1,
+    verify_vega_mdl_figure9_v1,
 };
 pub use figure9::{
     VEGA_MDL_FIGURE9_PUBLIC_INPUTS_V1, VegaMdlFigure9ErrorV1, VegaMdlFigure9WitnessV1,
@@ -172,7 +172,8 @@ pub use zk_ams::{
     ZkAmsMkheProofEnvelopeWireV1, ZkAmsMkheProofKindV1, ZkAmsMkheReadinessV1,
     ZkAmsMkheReleaseKatEvidenceV1, ZkAmsMkheReleaseManifestV1, ZkAmsMkheResourceCertificateV1,
     ZkAmsMkheResourceEvidenceV1, ZkAmsMkheRnsNativeFamilyV1, ZkAmsMkheRnsNativeProfileManifestV1,
-    ZkAmsMkheRnsNativeProfileV1, ZkAmsMkheRnsNativeSecretChunkV1, ZkAmsMkheRnsNativeSourceArenaV1,
+    ZkAmsMkheRnsNativeProfileV1, ZkAmsMkheRnsNativeRepeatableSourceSnapshotV1,
+    ZkAmsMkheRnsNativeSecretChunkV1, ZkAmsMkheRnsNativeSourceArenaV1,
     ZkAmsMkheRnsNativeSourceErrorV1, ZkAmsMkheRnsNativeSourceLayoutV1,
     ZkAmsMkheRnsNativeSourceProviderV1, ZkAmsMkheRnsNativeSourceReceiptV1,
     ZkAmsMkheRnsNativeSourceSnapshotV1, ZkAmsMkheRnsNativeSourceWriterV1,

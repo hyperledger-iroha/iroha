@@ -5,9 +5,10 @@
 //! `incremental_source_rns_native_basis_extension_v2`, publishes only
 //! `A[38..40]`, `B[38..40]`, and the 43 record-local `C0/C1[38..40]` tails,
 //! and retains every real [`ZkAmsMkheDirectObjectPublicationReceiptV1`]. It
-//! never republishes the frozen 3,344-object V1 prefix. The exact whole V1
-//! authority/manifest shape is represented below, but has no constructor or
-//! production adapter: Phase-23 and the synchronous V1 callback remain absent.
+//! never republishes the frozen 3,344-object V1 prefix. A private compiled
+//! coordinator owns the exact V1 authority, providers, callback chronology,
+//! and 43 manifests until it can construct the whole owner and reader bridge.
+//! Phase-23 correspondence and every live/release gate remain absent.
 //!
 //! The composite reader provider derives fresh domain-separated identities
 //! from the current key/ciphertext provider sessions and snapshots. Historical
@@ -16,16 +17,19 @@
 //! rejects current-axis drift, unknown pointers, route confusion, length
 //! mutation, and short reads.
 //!
-//! This module closes no integration, resource-evidence, readiness, qPCS,
-//! admission, or release gate.
+//! This module closes only the source-level V1 callback/pre-entropy contract.
+//! It closes no liveness, resource-evidence, readiness, qPCS, admission, or
+//! release gate.
 
 #![allow(
     dead_code,
     reason = "private source-only tail publication contract awaits the live V1/Phase-23 owner"
 )]
 
-use core::convert::Infallible;
-use std::collections::{BTreeMap, BTreeSet};
+use std::{
+    cell::Cell,
+    collections::{BTreeMap, BTreeSet},
+};
 
 use super::super::super::{
     ZkAmsMkheErrorV1,
@@ -50,7 +54,10 @@ use super::super::super::{
     rns_native_qpcs_prefix::RnsNativeQpcsRelationScheduleV1,
 };
 use super::{
-    ZkAmsMkheStreamingCollectiveCiphertextV1, ZkAmsMkheStreamingCollectiveEncryptionKeyAuthorityV1,
+    MaskedRelaxedRandomSourceV1, ZkAmsMkheStreamingCollectiveCiphertextV1,
+    ZkAmsMkheStreamingCollectiveEncryptionKeyAuthorityV1, ZkAmsT256PackedPlaintextV1,
+    ZkAmsT256PackingLayoutV1,
+    encrypt_zk_ams_mkhe_collective_packed_streaming_borrowed_with_prepublication_v1,
     incremental_source_rns_native_basis_extension_v2::{
         RnsNativeBasisExtensionErrorV2, RnsNativeCiphertextTailAggregateChecksumV2,
         RnsNativeCiphertextTailCompletionV2, RnsNativeCiphertextTailLifecycleV2,
@@ -115,9 +122,13 @@ pub(super) const RNS_NATIVE_WHOLE_V1_OWNER_CONTRACT_IMPLEMENTED_V2: bool = true;
 pub(super) const RNS_NATIVE_COMPOSITE_PROVIDER_CONTRACT_IMPLEMENTED_V2: bool = true;
 pub(super) const RNS_NATIVE_EXISTING_READER_BRIDGE_CONTRACT_IMPLEMENTED_V2: bool = true;
 pub(super) const RNS_NATIVE_SINGLE_QPCS_BATCH_CONTRACT_IMPLEMENTED_V2: bool = true;
+/// The private coordinator is inhabited by the real V1 authority, providers,
+/// packed plaintext, and tail owner. This source contract is not a live owner.
+pub(super) const RNS_NATIVE_V1_TAIL_COORDINATOR_IMPLEMENTED_V2: bool = true;
 
-/// Live and evidence gates remain fail-closed.
-pub(super) const RNS_NATIVE_TAIL_V1_CALLBACK_INTEGRATED_V2: bool = false;
+/// The callback value records only compiled source-contract integration.
+/// Phase-23, production, evidence, readiness, and release gates remain closed.
+pub(super) const RNS_NATIVE_TAIL_V1_CALLBACK_INTEGRATED_V2: bool = true;
 pub(super) const RNS_NATIVE_TAIL_PHASE23_OWNER_AVAILABLE_V2: bool = false;
 pub(super) const RNS_NATIVE_KEY_TAIL_CAS_OWNER_AVAILABLE_V2: bool = false;
 pub(super) const RNS_NATIVE_TAIL_PRODUCTION_OWNER_AVAILABLE_V2: bool = false;
@@ -214,7 +225,8 @@ const _: () = {
     assert!(RNS_NATIVE_COMPOSITE_PROVIDER_CONTRACT_IMPLEMENTED_V2);
     assert!(RNS_NATIVE_EXISTING_READER_BRIDGE_CONTRACT_IMPLEMENTED_V2);
     assert!(RNS_NATIVE_SINGLE_QPCS_BATCH_CONTRACT_IMPLEMENTED_V2);
-    assert!(!RNS_NATIVE_TAIL_V1_CALLBACK_INTEGRATED_V2);
+    assert!(RNS_NATIVE_V1_TAIL_COORDINATOR_IMPLEMENTED_V2);
+    assert!(RNS_NATIVE_TAIL_V1_CALLBACK_INTEGRATED_V2);
     assert!(!RNS_NATIVE_TAIL_PHASE23_OWNER_AVAILABLE_V2);
     assert!(!RNS_NATIVE_KEY_TAIL_CAS_OWNER_AVAILABLE_V2);
     assert!(!RNS_NATIVE_TAIL_PRODUCTION_OWNER_AVAILABLE_V2);
@@ -241,8 +253,8 @@ pub(super) const RNS_NATIVE_TAIL_PUBLICATION_BLOCKERS_V2: &[RnsNativeTailPublica
         required_delta: "consume a CPK-finalization K:CasPublication owner for A/B tails; the retained Phase23 K is read-only and cannot be promoted",
     },
     RnsNativeTailPublicationBlockerV2 {
-        code: "LIVE_V1_SAME_OPENING_CALLBACK",
-        required_delta: "allocate each two-limb workspace before V1 entropy and synchronously move the exact m,r,e0,e1,nonce opening through this private lifecycle",
+        code: "LIVE_PHASE23_CONFIDENTIAL_SINK",
+        required_delta: "connect the compiled same-opening callback to the disabled Phase23 confidential-source owner without weakening its correspondence seal",
     },
     RnsNativeTailPublicationBlockerV2 {
         code: "WHOLE_PHASE23_V1_OWNER",
@@ -276,6 +288,18 @@ pub(super) enum RnsNativeTailPublicationErrorV2 {
     ResourceCeiling,
     Incomplete,
     Poisoned,
+}
+
+/// Closed failure vocabulary for the compiled V1/tail coordinator. Callback
+/// failures retain their exact origin even though the parent encryption core
+/// uses the narrower public MKHE error vocabulary.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum RnsNativeV1TailCoordinatorErrorV2 {
+    Encryption(ZkAmsMkheErrorV1),
+    ConfidentialSink(ZkAmsMkheErrorV1),
+    Tail(RnsNativeTailPublicationErrorV2),
+    Poisoned,
+    Incomplete,
 }
 
 fn reader_role_v2(position: RnsNativeTailSourcePositionV2) -> RnsNativePublicPolynomialRoleV1 {
@@ -549,6 +573,46 @@ pub(super) struct RnsNativePublishedTailRecordV2 {
     objects: Box<[RnsNativePublishedTailObjectV2]>,
 }
 
+/// All fallible record-local publication storage established before V1
+/// entropy. Moving this owner into the callback creates no collection and
+/// performs no reserve operation.
+struct RnsNativePreparedTailRecordPublicationV2 {
+    record_ordinal: u8,
+    expected: Box<[RnsNativeTailSourcePositionV2]>,
+    objects: Vec<RnsNativePublishedTailObjectV2>,
+}
+
+impl RnsNativePreparedTailRecordPublicationV2 {
+    fn new_before_entropy_v2(record_ordinal: u8) -> Result<Self, RnsNativeTailPublicationErrorV2> {
+        if usize::from(record_ordinal) >= RECORDS_V2 {
+            return Err(RnsNativeTailPublicationErrorV2::InvalidOrder);
+        }
+        let physical_start =
+            KEY_TAIL_OBJECTS_V2 + usize::from(record_ordinal) * TAIL_OBJECTS_PER_RECORD_V2;
+        let mut expected = Vec::new();
+        expected
+            .try_reserve_exact(TAIL_OBJECTS_PER_RECORD_V2)
+            .map_err(|_| RnsNativeTailPublicationErrorV2::ResourceCeiling)?;
+        let mut objects = Vec::new();
+        objects
+            .try_reserve_exact(TAIL_OBJECTS_PER_RECORD_V2)
+            .map_err(|_| RnsNativeTailPublicationErrorV2::ResourceCeiling)?;
+        if expected.capacity() != TAIL_OBJECTS_PER_RECORD_V2
+            || objects.capacity() != TAIL_OBJECTS_PER_RECORD_V2
+        {
+            return Err(RnsNativeTailPublicationErrorV2::ResourceCeiling);
+        }
+        for physical in physical_start..physical_start + TAIL_OBJECTS_PER_RECORD_V2 {
+            expected.push(physical_tail_position_v2(physical)?);
+        }
+        Ok(Self {
+            record_ordinal,
+            expected: expected.into_boxed_slice(),
+            objects,
+        })
+    }
+}
+
 /// Stateful 4+43*4 publication run. Any fallible transition poisons before
 /// entering caller/backend code and cannot be retried.
 pub(super) struct RnsNativeTailPublicationLifecycleV2<K, P>
@@ -566,6 +630,95 @@ where
     poisoned: bool,
 }
 
+#[allow(clippy::too_many_arguments)]
+fn publish_next_record_from_v1_callback_parts_v2<P>(
+    key_tail: &RnsNativePublishedCollectiveKeyTailOwnerV2,
+    basis_lifecycle: &mut RnsNativeCiphertextTailLifecycleV2,
+    records: &mut Vec<RnsNativePublishedTailRecordV2>,
+    next_record: &mut u8,
+    poisoned: &mut bool,
+    publisher: &mut P,
+    prepared_publication: RnsNativePreparedTailRecordPublicationV2,
+    workspace: RnsNativeCiphertextTailWorkspaceOwnerV2,
+    record_ordinal: u8,
+    sample_index: u64,
+    canonical_plaintext: &[[u8; 32]],
+    ephemeral: &[i64],
+    error_zero: &[i64],
+    error_one: &[i64],
+    encryption_nonce: &[u8; 32],
+) -> Result<(), RnsNativeTailPublicationErrorV2>
+where
+    P: ZkAmsMkheDirectObjectCasPublicationV1 + ?Sized,
+{
+    if *poisoned {
+        return Err(RnsNativeTailPublicationErrorV2::Poisoned);
+    }
+    *poisoned = true;
+    if record_ordinal != *next_record || sample_index != u64::from(record_ordinal) {
+        return Err(RnsNativeTailPublicationErrorV2::InvalidOrder);
+    }
+    if prepared_publication.record_ordinal != record_ordinal
+        || prepared_publication.expected.len() != TAIL_OBJECTS_PER_RECORD_V2
+        || prepared_publication.objects.capacity() != TAIL_OBJECTS_PER_RECORD_V2
+        || !prepared_publication.objects.is_empty()
+    {
+        return Err(RnsNativeTailPublicationErrorV2::InvalidOrder);
+    }
+    let opening = key_tail
+        .bind_v1_synchronous_callback_v2(
+            workspace,
+            record_ordinal,
+            sample_index,
+            canonical_plaintext,
+            ephemeral,
+            error_zero,
+            error_one,
+            encryption_nonce,
+        )
+        .map_err(|_| RnsNativeTailPublicationErrorV2::Basis)?;
+    let mut visitor = RnsNativeTailCasVisitorV2 {
+        publisher,
+        expected: prepared_publication.expected,
+        objects: prepared_publication.objects,
+        failure: None,
+        poisoned: false,
+    };
+    let completion_result = key_tail.emit_ciphertext_tail_once_v2(opening, &mut visitor);
+    let completion: RnsNativeCiphertextTailCompletionV2 = match completion_result {
+        Ok(completion) => completion,
+        Err(_) => {
+            return Err(visitor
+                .failure
+                .unwrap_or(RnsNativeTailPublicationErrorV2::Basis));
+        }
+    };
+    let objects = visitor.finish_v2()?.into_boxed_slice();
+    if completion.record_ordinal_v2() != record_ordinal
+        || completion.sample_index_v2() != sample_index
+        || usize::from(completion.emitted_limb_count_v2()) != TAIL_OBJECTS_PER_RECORD_V2
+        || completion.coefficient_digest_v2() == [0; 32]
+        || objects.len() != TAIL_OBJECTS_PER_RECORD_V2
+    {
+        return Err(RnsNativeTailPublicationErrorV2::InvalidReceipt);
+    }
+    let coefficient_digest = completion.coefficient_digest_v2();
+    basis_lifecycle
+        .accept_record_completion_v2(completion)
+        .map_err(|_| RnsNativeTailPublicationErrorV2::Basis)?;
+    records.push(RnsNativePublishedTailRecordV2 {
+        record_ordinal,
+        sample_index,
+        coefficient_digest,
+        objects,
+    });
+    *next_record = (*next_record)
+        .checked_add(1)
+        .ok_or(RnsNativeTailPublicationErrorV2::ResourceCeiling)?;
+    *poisoned = false;
+    Ok(())
+}
+
 impl<K, P> RnsNativeTailPublicationLifecycleV2<K, P>
 where
     K: ZkAmsMkheDirectObjectCasPublicationV1,
@@ -576,6 +729,16 @@ where
         mut key_publisher: K,
         ciphertext_publisher: P,
     ) -> Result<Self, RnsNativeTailPublicationErrorV2> {
+        let mut records = Vec::new();
+        records
+            .try_reserve_exact(RECORDS_V2)
+            .map_err(|_| RnsNativeTailPublicationErrorV2::ResourceCeiling)?;
+        if records.capacity() != RECORDS_V2 {
+            return Err(RnsNativeTailPublicationErrorV2::ResourceCeiling);
+        }
+        let basis_lifecycle = key_tail
+            .begin_ciphertext_tail_lifecycle_v2()
+            .map_err(|_| RnsNativeTailPublicationErrorV2::Basis)?;
         let expected = (0..KEY_TAIL_OBJECTS_V2)
             .map(physical_tail_position_v2)
             .collect::<Result<Vec<_>, _>>()?
@@ -594,13 +757,6 @@ where
         if key_objects.len() != KEY_TAIL_OBJECTS_V2 {
             return Err(RnsNativeTailPublicationErrorV2::Incomplete);
         }
-        let basis_lifecycle = key_tail
-            .begin_ciphertext_tail_lifecycle_v2()
-            .map_err(|_| RnsNativeTailPublicationErrorV2::Basis)?;
-        let mut records = Vec::new();
-        records
-            .try_reserve_exact(RECORDS_V2)
-            .map_err(|_| RnsNativeTailPublicationErrorV2::ResourceCeiling)?;
         Ok(Self {
             key_tail,
             basis_lifecycle,
@@ -614,8 +770,9 @@ where
     }
 
     #[allow(clippy::too_many_arguments)]
-    pub(super) fn publish_next_record_from_v1_callback_v2(
+    fn publish_next_record_from_v1_callback_v2(
         &mut self,
+        prepared_publication: RnsNativePreparedTailRecordPublicationV2,
         workspace: RnsNativeCiphertextTailWorkspaceOwnerV2,
         record_ordinal: u8,
         sample_index: u64,
@@ -625,70 +782,23 @@ where
         error_one: &[i64],
         encryption_nonce: &[u8; 32],
     ) -> Result<(), RnsNativeTailPublicationErrorV2> {
-        if self.poisoned {
-            return Err(RnsNativeTailPublicationErrorV2::Poisoned);
-        }
-        self.poisoned = true;
-        if record_ordinal != self.next_record || sample_index != u64::from(record_ordinal) {
-            return Err(RnsNativeTailPublicationErrorV2::InvalidOrder);
-        }
-        let opening = self
-            .key_tail
-            .bind_v1_synchronous_callback_v2(
-                workspace,
-                record_ordinal,
-                sample_index,
-                canonical_plaintext,
-                ephemeral,
-                error_zero,
-                error_one,
-                encryption_nonce,
-            )
-            .map_err(|_| RnsNativeTailPublicationErrorV2::Basis)?;
-        let physical_start =
-            KEY_TAIL_OBJECTS_V2 + usize::from(record_ordinal) * TAIL_OBJECTS_PER_RECORD_V2;
-        let expected = (physical_start..physical_start + TAIL_OBJECTS_PER_RECORD_V2)
-            .map(physical_tail_position_v2)
-            .collect::<Result<Vec<_>, _>>()?
-            .into_boxed_slice();
-        let mut visitor =
-            RnsNativeTailCasVisitorV2::new_v2(&mut self.ciphertext_publisher, expected)?;
-        let completion_result = self
-            .key_tail
-            .emit_ciphertext_tail_once_v2(opening, &mut visitor);
-        let completion: RnsNativeCiphertextTailCompletionV2 = match completion_result {
-            Ok(completion) => completion,
-            Err(_) => {
-                return Err(visitor
-                    .failure
-                    .unwrap_or(RnsNativeTailPublicationErrorV2::Basis));
-            }
-        };
-        let objects = visitor.finish_v2()?.into_boxed_slice();
-        if completion.record_ordinal_v2() != record_ordinal
-            || completion.sample_index_v2() != sample_index
-            || usize::from(completion.emitted_limb_count_v2()) != TAIL_OBJECTS_PER_RECORD_V2
-            || completion.coefficient_digest_v2() == [0; 32]
-            || objects.len() != TAIL_OBJECTS_PER_RECORD_V2
-        {
-            return Err(RnsNativeTailPublicationErrorV2::InvalidReceipt);
-        }
-        let coefficient_digest = completion.coefficient_digest_v2();
-        self.basis_lifecycle
-            .accept_record_completion_v2(completion)
-            .map_err(|_| RnsNativeTailPublicationErrorV2::Basis)?;
-        self.records.push(RnsNativePublishedTailRecordV2 {
+        publish_next_record_from_v1_callback_parts_v2(
+            &self.key_tail,
+            &mut self.basis_lifecycle,
+            &mut self.records,
+            &mut self.next_record,
+            &mut self.poisoned,
+            &mut self.ciphertext_publisher,
+            prepared_publication,
+            workspace,
             record_ordinal,
             sample_index,
-            coefficient_digest,
-            objects,
-        });
-        self.next_record = self
-            .next_record
-            .checked_add(1)
-            .ok_or(RnsNativeTailPublicationErrorV2::ResourceCeiling)?;
-        self.poisoned = false;
-        Ok(())
+            canonical_plaintext,
+            ephemeral,
+            error_zero,
+            error_one,
+            encryption_nonce,
+        )
     }
 
     pub(super) fn finish_v2(
@@ -914,10 +1024,282 @@ pub(super) struct RnsNativeCompletedTailPublicationV2<K, P> {
     ciphertext_provider: P,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum RnsNativeV1TailCallbackFailureV2 {
+    ConfidentialSink(ZkAmsMkheErrorV1),
+    Tail(RnsNativeTailPublicationErrorV2),
+}
+
+/// Inhabited, move-only source contract joining the exact V1 authority to the
+/// 38-to-40-limb tail lifecycle. It is intentionally private and exposes no
+/// authority, provider, manifest, callback, or raw-parts accessor.
+///
+/// This owner does not make Phase-23 live. A future Phase-23 transition must
+/// supply its confidential sink through the pre-entropy factory and retain its
+/// own correspondence owner beside the resulting reader bridge.
+#[must_use = "the V1/tail coordinator must finish into the existing-reader bridge"]
+pub(super) struct RnsNativeV1TailPublicationCoordinatorV2<K, P>
+where
+    K: ZkAmsMkheDirectObjectCasPublicationV1,
+    P: ZkAmsMkheDirectObjectCasPublicationV1,
+{
+    authority: ZkAmsMkheStreamingCollectiveEncryptionKeyAuthorityV1,
+    tails: RnsNativeTailPublicationLifecycleV2<K, P>,
+    records: Vec<RnsNativeWholeV1RecordPublicationOwnerV2>,
+    poisoned: bool,
+}
+
+impl<K, P> RnsNativeV1TailPublicationCoordinatorV2<K, P>
+where
+    K: ZkAmsMkheDirectObjectCasPublicationV1 + ZkAmsMkheDirectObjectReadAtProviderV1,
+    P: ZkAmsMkheDirectObjectCasPublicationV1 + ZkAmsMkheDirectObjectReadAtProviderV1,
+{
+    /// Consume the exact providers only after all local record capacity and
+    /// governed authority/tail axes validate. A mismatch performs no tail CAS.
+    pub(super) fn begin_v2(
+        authority: ZkAmsMkheStreamingCollectiveEncryptionKeyAuthorityV1,
+        key_tail: RnsNativeCollectiveKeyTailOwnerV2,
+        key_publisher: K,
+        ciphertext_publisher: P,
+    ) -> Result<Self, RnsNativeV1TailCoordinatorErrorV2> {
+        let mut records = Vec::new();
+        records.try_reserve_exact(RECORDS_V2).map_err(|_| {
+            RnsNativeV1TailCoordinatorErrorV2::Tail(
+                RnsNativeTailPublicationErrorV2::ResourceCeiling,
+            )
+        })?;
+        if records.capacity() != RECORDS_V2
+            || authority.failed
+            || authority.next_sample_index() != 0
+        {
+            return Err(RnsNativeV1TailCoordinatorErrorV2::Incomplete);
+        }
+        authority
+            .validate_release_v1()
+            .map_err(RnsNativeV1TailCoordinatorErrorV2::Encryption)?;
+        key_tail
+            .validate_v1_authority_binding_v2(&authority)
+            .map_err(|_| {
+                RnsNativeV1TailCoordinatorErrorV2::Tail(RnsNativeTailPublicationErrorV2::Basis)
+            })?;
+        let tails = RnsNativeTailPublicationLifecycleV2::begin_v2(
+            key_tail,
+            key_publisher,
+            ciphertext_publisher,
+        )
+        .map_err(RnsNativeV1TailCoordinatorErrorV2::Tail)?;
+        Ok(Self {
+            authority,
+            tails,
+            records,
+            poisoned: false,
+        })
+    }
+
+    /// Encrypt the sole next packed record and synchronously persist the exact
+    /// opening through the caller's confidential sink before publishing its
+    /// four tail objects and then its 76 frozen-prefix objects.
+    ///
+    /// The sink factory, two-limb tail workspace, and exact four-object
+    /// publication containers are established by the parent's validated
+    /// pre-entropy hook. Any failure or caught unwind leaves this whole
+    /// coordinator permanently poisoned.
+    pub(super) fn encrypt_next_with_confidential_sink_v2<R, Prepare, Hook>(
+        &mut self,
+        layout: ZkAmsT256PackingLayoutV1,
+        plaintext: ZkAmsT256PackedPlaintextV1,
+        random: &mut R,
+        prepare_sink: Prepare,
+    ) -> Result<(), RnsNativeV1TailCoordinatorErrorV2>
+    where
+        R: MaskedRelaxedRandomSourceV1,
+        Prepare: FnOnce() -> Result<Hook, ZkAmsMkheErrorV1>,
+        Hook:
+            FnOnce(&[[u8; 32]], &[i64], &[i64], &[i64], &[u8; 32]) -> Result<(), ZkAmsMkheErrorV1>,
+    {
+        if self.poisoned {
+            return Err(RnsNativeV1TailCoordinatorErrorV2::Poisoned);
+        }
+        self.poisoned = true;
+        let record_ordinal = u8::try_from(self.records.len())
+            .map_err(|_| RnsNativeV1TailCoordinatorErrorV2::Incomplete)?;
+        if usize::from(record_ordinal) >= RECORDS_V2
+            || self.records.capacity() != RECORDS_V2
+            || self.authority.next_sample_index() != u64::from(record_ordinal)
+            || self.tails.next_record != record_ordinal
+            || self.tails.records.len() != usize::from(record_ordinal)
+            || self.tails.poisoned
+        {
+            return Err(RnsNativeV1TailCoordinatorErrorV2::Incomplete);
+        }
+
+        let callback_failure = Cell::new(None);
+        let callback_failure_ref = &callback_failure;
+        let RnsNativeTailPublicationLifecycleV2 {
+            key_tail,
+            basis_lifecycle,
+            key_publisher,
+            ciphertext_publisher,
+            key_objects: _,
+            records: tail_records,
+            next_record,
+            poisoned: tail_poisoned,
+        } = &mut self.tails;
+        let encryption_result =
+            encrypt_zk_ams_mkhe_collective_packed_streaming_borrowed_with_prepublication_v1(
+                &mut self.authority,
+                layout,
+                &plaintext,
+                random,
+                key_publisher,
+                ciphertext_publisher,
+                || {
+                    let workspace =
+                        match RnsNativeCiphertextTailWorkspaceOwnerV2::allocate_workspace_v2() {
+                            Ok(workspace) => workspace,
+                            Err(_) => {
+                                callback_failure_ref.set(Some(
+                                    RnsNativeV1TailCallbackFailureV2::Tail(
+                                        RnsNativeTailPublicationErrorV2::Basis,
+                                    ),
+                                ));
+                                return Err(ZkAmsMkheErrorV1::ResourceCeilingExceeded);
+                            }
+                        };
+                    let prepared_publication =
+                        match RnsNativePreparedTailRecordPublicationV2::new_before_entropy_v2(
+                            record_ordinal,
+                        ) {
+                            Ok(prepared) => prepared,
+                            Err(error) => {
+                                callback_failure_ref
+                                    .set(Some(RnsNativeV1TailCallbackFailureV2::Tail(error)));
+                                return Err(ZkAmsMkheErrorV1::ResourceCeilingExceeded);
+                            }
+                        };
+                    let sink = match prepare_sink() {
+                        Ok(sink) => sink,
+                        Err(error) => {
+                            callback_failure_ref.set(Some(
+                                RnsNativeV1TailCallbackFailureV2::ConfidentialSink(error),
+                            ));
+                            return Err(error);
+                        }
+                    };
+                    Ok(
+                        move |publisher: &mut P,
+                              canonical_plaintext: &[[u8; 32]],
+                              ephemeral: &[i64],
+                              error_zero: &[i64],
+                              error_one: &[i64],
+                              encryption_nonce: &[u8; 32]| {
+                            if let Err(error) = sink(
+                                canonical_plaintext,
+                                ephemeral,
+                                error_zero,
+                                error_one,
+                                encryption_nonce,
+                            ) {
+                                callback_failure_ref.set(Some(
+                                    RnsNativeV1TailCallbackFailureV2::ConfidentialSink(error),
+                                ));
+                                return Err(error);
+                            }
+                            if let Err(error) = publish_next_record_from_v1_callback_parts_v2(
+                                key_tail,
+                                basis_lifecycle,
+                                tail_records,
+                                next_record,
+                                tail_poisoned,
+                                publisher,
+                                prepared_publication,
+                                workspace,
+                                record_ordinal,
+                                u64::from(record_ordinal),
+                                canonical_plaintext,
+                                ephemeral,
+                                error_zero,
+                                error_one,
+                                encryption_nonce,
+                            ) {
+                                callback_failure_ref
+                                    .set(Some(RnsNativeV1TailCallbackFailureV2::Tail(error)));
+                                return Err(ZkAmsMkheErrorV1::InvalidCiphertext);
+                            }
+                            Ok(())
+                        },
+                    )
+                },
+            );
+
+        let manifest = match encryption_result {
+            Ok(manifest) if callback_failure.get().is_none() => manifest,
+            Ok(_) => return Err(RnsNativeV1TailCoordinatorErrorV2::Poisoned),
+            Err(encryption_error) => {
+                return Err(match callback_failure.get() {
+                    Some(RnsNativeV1TailCallbackFailureV2::ConfidentialSink(error)) => {
+                        RnsNativeV1TailCoordinatorErrorV2::ConfidentialSink(error)
+                    }
+                    Some(RnsNativeV1TailCallbackFailureV2::Tail(error)) => {
+                        RnsNativeV1TailCoordinatorErrorV2::Tail(error)
+                    }
+                    None => RnsNativeV1TailCoordinatorErrorV2::Encryption(encryption_error),
+                });
+            }
+        };
+        if manifest.sample_index() != u64::from(record_ordinal)
+            || self.authority.next_sample_index() != u64::from(record_ordinal) + 1
+            || self.tails.next_record != record_ordinal + 1
+            || self.tails.records.len() != usize::from(record_ordinal) + 1
+        {
+            return Err(RnsNativeV1TailCoordinatorErrorV2::Incomplete);
+        }
+        self.records.push(RnsNativeWholeV1RecordPublicationOwnerV2 {
+            record_ordinal,
+            ciphertext: manifest,
+        });
+        self.poisoned = false;
+        Ok(())
+    }
+
+    /// Consume the exact 43-record chronology directly into the complete
+    /// existing-reader bridge. No independently constructible whole-V1 owner
+    /// or completed-tail tuple crosses this boundary.
+    pub(super) fn finish_v2(
+        self,
+    ) -> Result<RnsNativeExistingReaderBridgeV2<K, P>, RnsNativeV1TailCoordinatorErrorV2> {
+        let Self {
+            authority,
+            tails,
+            records,
+            poisoned,
+        } = self;
+        if poisoned
+            || records.len() != RECORDS_V2
+            || records.capacity() != RECORDS_V2
+            || authority.next_sample_index() != RECORDS_V2 as u64
+        {
+            return Err(RnsNativeV1TailCoordinatorErrorV2::Incomplete);
+        }
+        let tails = tails
+            .finish_v2()
+            .map_err(RnsNativeV1TailCoordinatorErrorV2::Tail)?;
+        let v1 = RnsNativeWholeV1PublicationOwnersV2 {
+            key: RnsNativeWholeV1KeyPublicationOwnerV2 {
+                key_authority: authority,
+            },
+            records: records.into_boxed_slice(),
+        };
+        tails
+            .into_existing_reader_bridge_v2(v1)
+            .map_err(RnsNativeV1TailCoordinatorErrorV2::Tail)
+    }
+}
+
 /// Exact future production shape: one whole streaming key authority and every
-/// whole record manifest. There is intentionally no constructor in this
-/// tranche, so the absent Phase-23/callback bridge cannot be replaced by
-/// pointers, copied digests, or independently recreated receipts.
+/// whole record manifest. Only the private coordinator above can construct
+/// this owner, so the absent Phase-23 bridge cannot be replaced by pointers,
+/// copied digests, or independently recreated receipts.
 pub(super) struct RnsNativeWholeV1KeyPublicationOwnerV2 {
     key_authority: ZkAmsMkheStreamingCollectiveEncryptionKeyAuthorityV1,
 }
@@ -1298,13 +1680,6 @@ fn pair_whole_publication_owners_v2(
     };
     owners.validate_v2()?;
     Ok(owners)
-}
-
-/// Explicitly uninhabited production adapter. A future live delta must consume
-/// the Phase-23 owner and the synchronous callback rather than add a raw
-/// constructor to `RnsNativeWholeV1PublicationOwnersV2`.
-pub(super) struct RnsNativeWholeV1ProductionAdapterV2 {
-    never: Infallible,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

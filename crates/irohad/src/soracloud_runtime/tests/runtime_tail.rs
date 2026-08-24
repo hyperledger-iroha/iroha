@@ -1,5 +1,4 @@
 const INROU_HEALTH_SERVER_PY: &str = include_str!("fixtures/inrou_health_server.py");
-const INROU_SHARED_VOLUME_SERVER_PY: &str = include_str!("fixtures/inrou_shared_volume_server.py");
 
 #[test]
 #[ignore = "requires an unprivileged guest plus a complete canonical IROHA_INROU_PORTABLE_SMOKE_BUNDLE_FILE"]

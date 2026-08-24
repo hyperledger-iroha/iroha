@@ -4424,7 +4424,7 @@ mod kagemusha_v4_artifact_contract_tests {
         finalized_manifest: &KagemushaRecursiveSpendArtifactManifestV4,
     ) -> Vec<u8> {
         norito::encode_canonical(
-            &kagemusha_internal_validation_receipt::tests::signed_receipt_for_v4_candidate(
+            &kagemusha_internal_validation_receipt::internal_validation_receipt_tests::signed_receipt_for_v4_candidate(
                 candidate,
                 finalized_manifest,
             ),
@@ -5271,7 +5271,7 @@ mod kagemusha_v4_artifact_contract_tests {
             Err(KagemushaReleaseVerificationError::InvalidInternalValidationReceipt)
         );
         let mismatched_lock_receipt = norito::encode_canonical(
-            &kagemusha_internal_validation_receipt::tests::
+            &kagemusha_internal_validation_receipt::internal_validation_receipt_tests::
                 signed_receipt_for_v4_candidate_with_tracked_cargo_lock(
                     &candidate,
                     &manifest,

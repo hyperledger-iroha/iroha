@@ -688,6 +688,7 @@ fn soracloud_runtime_records_are_visible_through_world_view() {
                 consent_evidence_hash: None,
                 break_glass: None,
                 break_glass_reason: None,
+                lease_reporting_epoch_rollover: None,
                 signer: crate::state::checked_keypair().public_key().clone(),
             },
         );

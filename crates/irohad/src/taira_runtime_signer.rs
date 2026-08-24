@@ -26,6 +26,7 @@ use iroha_data_model::{
     transaction::{SignedTransaction, TransactionBuilder, TransactionPayload},
 };
 use std::{
+    ffi::OsStr,
     fmt,
     fs::{File, OpenOptions},
     io::{Read as _, Seek as _, Write as _},
@@ -36,6 +37,13 @@ use std::{
     },
     sync::Arc,
 };
+
+fn invocation_does_not_start_a_node(argument: &OsStr) -> bool {
+    matches!(
+        argument.to_str(),
+        Some("--check-config" | "--help" | "-h" | "--version" | "-V")
+    )
+}
 
 /// Fixed inherited descriptor containing the Taira runtime signer key.
 pub const TAIRA_RUNTIME_SIGNER_FD_V1: RawFd = 198;
@@ -524,11 +532,11 @@ impl IrohaRuntimeProviderRegistryV1 for TairaRuntimeProviderRegistryV1 {
 
 /// Run the Taira daemon with the exact signer inherited at descriptor 198.
 ///
-/// `--check-config` remains offline and therefore does not read the descriptor.
-/// Every node-starting invocation resolves the one configured signer through
-/// [`crate::run_with_runtime_provider_registry`].
+/// Config validation, help, and version introspection remain offline and do not
+/// read the descriptor. Every node-starting invocation resolves the one
+/// configured signer through [`crate::run_with_runtime_provider_registry`].
 pub fn main_entry() {
-    if std::env::args_os().any(|argument| argument == "--check-config") {
+    if std::env::args_os().any(|argument| invocation_does_not_start_a_node(&argument)) {
         if let Err(report) = crate::run_with_config_guard(validate_taira_launcher_config_v1) {
             eprintln!("{report:?}");
             std::process::exit(1);
@@ -562,7 +570,7 @@ mod tests {
     };
     use std::{
         fs,
-        num::{NonZeroU32, NonZeroU64},
+        num::NonZeroU32,
         os::unix::fs::{OpenOptionsExt as _, PermissionsExt as _},
     };
 
@@ -584,6 +592,16 @@ mod tests {
         runtime.egress.max_bytes_per_minute =
             NonZeroU64::new(TAIRA_INROU_EGRESS_MAX_BYTES_PER_MINUTE_V1);
         runtime
+    }
+
+    #[test]
+    fn offline_introspection_never_requires_the_runtime_signer() {
+        for argument in ["--check-config", "--help", "-h", "--version", "-V"] {
+            assert!(invocation_does_not_start_a_node(OsStr::new(argument)));
+        }
+        for argument in ["--config", "--sora", "--genesis-manifest-json"] {
+            assert!(!invocation_does_not_start_a_node(OsStr::new(argument)));
+        }
     }
 
     #[test]

@@ -102,11 +102,13 @@ use iroha_data_model::{
         SORA_MODEL_WEIGHT_AUDIT_EVENT_VERSION_V1, SORA_MODEL_WEIGHT_VERSION_RECORD_VERSION_V1,
         SORA_SERVICE_AUDIT_EVENT_VERSION_V1, SORA_SERVICE_CONFIG_ENTRY_VERSION_V1,
         SORA_SERVICE_DEPLOYMENT_STATE_VERSION_V1,
-        SORA_SERVICE_LEASE_MAX_EGRESS_REPORTER_CHECKPOINTS_V1, SORA_SERVICE_LEASE_STATE_VERSION_V1,
-        SORA_SERVICE_LEASE_VOLUME_STATE_VERSION_V1, SORA_SERVICE_ROLLOUT_STATE_VERSION_V1,
-        SORA_SERVICE_SECRET_ENTRY_VERSION_V1, SORA_SERVICE_STATE_ENTRY_VERSION_V1,
-        SORA_TRAINING_JOB_AUDIT_EVENT_VERSION_V1, SORA_TRAINING_JOB_RECORD_VERSION_V1,
-        SORA_UPLOADED_MODEL_BUNDLE_VERSION_V1, SORACLOUD_FHE_BOOTSTRAP_KEY_PROOF_CIRCUIT_ID_V1,
+        SORA_SERVICE_LEASE_MAX_EGRESS_REPORTER_CHECKPOINTS_V1,
+        SORA_SERVICE_LEASE_REPORTING_EPOCH_ROLLOVER_VERSION_V1,
+        SORA_SERVICE_LEASE_STATE_VERSION_V1, SORA_SERVICE_LEASE_VOLUME_STATE_VERSION_V1,
+        SORA_SERVICE_ROLLOUT_STATE_VERSION_V1, SORA_SERVICE_SECRET_ENTRY_VERSION_V1,
+        SORA_SERVICE_STATE_ENTRY_VERSION_V1, SORA_TRAINING_JOB_AUDIT_EVENT_VERSION_V1,
+        SORA_TRAINING_JOB_RECORD_VERSION_V1, SORA_UPLOADED_MODEL_BUNDLE_VERSION_V1,
+        SORACLOUD_FHE_BOOTSTRAP_KEY_PROOF_CIRCUIT_ID_V1,
         SORACLOUD_FHE_BOOTSTRAP_KEY_PROOF_GAS_SCHEDULE_ID_V1,
         SORACLOUD_FHE_BOOTSTRAP_KEY_PROOF_MAX_NATIVE_ENVELOPE_BYTES,
         SORACLOUD_FHE_BOOTSTRAP_KEY_PROOF_MAX_OPEN_VERIFY_BYTES,
@@ -150,17 +152,19 @@ use iroha_data_model::{
         SoraModelWeightVersionRecordV1, SoraPrivateUploadedModelExecutionReceiptV1,
         SoraRolloutStageV1, SoraRuntimeReceiptV1, SoraServiceAuditEventV1,
         SoraServiceConfigEntryV1, SoraServiceDeploymentStateV1, SoraServiceExecutionPlaneV1,
-        SoraServiceLeaseEgressCheckpointV1, SoraServiceLeaseStateV1, SoraServiceLeaseStatusV1,
-        SoraServiceLeaseVolumeStateV1, SoraServiceLifecycleActionV1, SoraServiceMailboxMessageV1,
-        SoraServiceRolloutStateV1, SoraServiceRuntimeStateV1, SoraServiceSecretEntryV1,
-        SoraServiceStateEntryV1, SoraStateEncryptionV1, SoraStateMutationOperationV1,
-        SoraTrainingJobActionV1, SoraTrainingJobAuditEventV1, SoraTrainingJobRecordV1,
-        SoraTrainingJobStatusV1, SoraUploadedModelBundleV1, SoracloudFheBootstrapKeyProofV1,
-        SoracloudFheFullBootstrapExecutionProofV1, SoracloudFheGovernancePermissionScopeV1,
-        SoracloudFheGovernedMaterialV1, SoracloudFheInputAdmissionProofV1,
-        SoracloudFhePolicyRecordV1, SoracloudFhePolicyReferenceV1,
-        SoracloudFhePolicyVersionLifecycleV1, SoracloudFhePolicyVersionStateV1,
-        SoracloudFhePublicKeyProofV1, derive_agent_autonomy_request_commitment,
+        SoraServiceHealthStatusV1, SoraServiceLeaseEgressCheckpointV1,
+        SoraServiceLeaseReportingEpochRolloverV1, SoraServiceLeaseStateV1,
+        SoraServiceLeaseStatusV1, SoraServiceLeaseVolumeStateV1, SoraServiceLifecycleActionV1,
+        SoraServiceMailboxMessageV1, SoraServiceRolloutStateV1, SoraServiceRuntimeStateV1,
+        SoraServiceSecretEntryV1, SoraServiceStateEntryV1, SoraStateEncryptionV1,
+        SoraStateMutationOperationV1, SoraTrainingJobActionV1, SoraTrainingJobAuditEventV1,
+        SoraTrainingJobRecordV1, SoraTrainingJobStatusV1, SoraUploadedModelBundleV1,
+        SoracloudFheBootstrapKeyProofV1, SoracloudFheFullBootstrapExecutionProofV1,
+        SoracloudFheGovernancePermissionScopeV1, SoracloudFheGovernedMaterialV1,
+        SoracloudFheInputAdmissionProofV1, SoracloudFhePolicyRecordV1,
+        SoracloudFhePolicyReferenceV1, SoracloudFhePolicyVersionLifecycleV1,
+        SoracloudFhePolicyVersionStateV1, SoracloudFhePublicKeyProofV1,
+        derive_agent_autonomy_request_commitment, derive_hf_source_id_v1,
         derive_soracloud_fhe_input_admission_statement_hash_with_bound_mode,
         encode_agent_artifact_allow_provenance_payload,
         encode_agent_autonomy_run_provenance_payload, encode_agent_deploy_provenance_payload,
@@ -193,7 +197,7 @@ use iroha_data_model::{
         encode_uploaded_model_bundle_register_provenance_payload,
         encode_uploaded_model_finalize_provenance_payload,
         hf_shared_lease_max_compute_reservation_fee_v1, is_canonical_hf_commit_oid_v1,
-        soracloud_fhe_bootstrap_key_proof_open_verify_bounds,
+        is_canonical_hf_repo_id_v1, soracloud_fhe_bootstrap_key_proof_open_verify_bounds,
         soracloud_fhe_bootstrap_key_proof_public_inputs_schema_hash_v1,
         soracloud_fhe_full_bootstrap_execution_proof_open_verify_bounds,
         soracloud_fhe_full_bootstrap_execution_proof_public_inputs_schema_hash_v1,
@@ -226,7 +230,6 @@ const TRAINING_MAX_IDENTIFIER_BYTES: usize = 128;
 const MODEL_WEIGHT_MAX_DATASET_REF_BYTES: usize = 512;
 const MODEL_WEIGHT_MAX_REASON_BYTES: usize = 512;
 const MODEL_HOST_VIOLATION_MAX_DETAIL_BYTES: usize = 512;
-const HF_REPO_ID_MAX_BYTES: usize = 256;
 const HF_MODEL_NAME_MAX_BYTES: usize = 128;
 const AGENT_WALLET_DAY_TICKS: u64 = 10_000;
 const AGENT_MAILBOX_MAX_PAYLOAD_BYTES: usize = 8 * 1024;
@@ -627,24 +630,28 @@ fn require_active_public_lane_validator(
     authority: &AccountId,
     state_transaction: &StateTransaction<'_, '_>,
 ) -> Result<(), InstructionExecutionError> {
-    let is_active_validator =
-        state_transaction
-            .world
-            .public_lane_validators
-            .iter()
-            .any(|(key, record)| {
-                public_lane_validator_record_matches_key(key, record)
-                    && key.1 == *authority
-                    && record.status == PublicLaneValidatorStatus::Active
-                    && state_transaction.is_lane_active_for_authority(key.0)
-            });
-    if is_active_validator {
+    if is_active_public_lane_validator(authority, state_transaction) {
         Ok(())
     } else {
         Err(InstructionExecutionError::InvariantViolation(
             format!("account `{authority}` is not an active public-lane validator").into(),
         ))
     }
+}
+fn is_active_public_lane_validator(
+    authority: &AccountId,
+    state_transaction: &StateTransaction<'_, '_>,
+) -> bool {
+    state_transaction
+        .world
+        .public_lane_validators
+        .iter()
+        .any(|(key, record)| {
+            public_lane_validator_record_matches_key(key, record)
+                && key.1 == *authority
+                && record.status == PublicLaneValidatorStatus::Active
+                && state_transaction.is_lane_active_for_authority(key.0)
+        })
 }
 fn require_inrou_host_peer_binding(
     authority: &AccountId,
@@ -2578,7 +2585,7 @@ fn verify_soracloud_fhe_full_bootstrap_arithmetic_stark_air(
             "{label} native BFV AIR governed trace context is required"
         ))
     })?;
-    if !crate::zk_stark::verify_stark_fri_bfv_full_bootstrap_air_public_padding_envelope_with_limits(
+    if !crate::zk_stark::verify_stark_fri_bfv_full_bootstrap_air_public_padding_structure_with_limits(
         &open.envelope_bytes,
         &limits,
         statement_hash,
@@ -4751,7 +4758,7 @@ fn verify_uploaded_model_finalize_provenance(
     )?;
     Ok(())
 }
-pub(crate) fn next_soracloud_audit_sequence(state_transaction: &StateTransaction<'_, '_>) -> u64 {
+fn latest_soracloud_audit_sequence(state_transaction: &StateTransaction<'_, '_>) -> u64 {
     [
         state_transaction
             .world
@@ -4820,7 +4827,20 @@ pub(crate) fn next_soracloud_audit_sequence(state_transaction: &StateTransaction
     .into_iter()
     .max()
     .unwrap_or(0)
-    .saturating_add(1)
+}
+pub(crate) fn next_soracloud_audit_sequence(state_transaction: &StateTransaction<'_, '_>) -> u64 {
+    latest_soracloud_audit_sequence(state_transaction).saturating_add(1)
+}
+fn next_unique_soracloud_audit_sequence(
+    state_transaction: &StateTransaction<'_, '_>,
+) -> Result<u64, InstructionExecutionError> {
+    latest_soracloud_audit_sequence(state_transaction)
+        .checked_add(1)
+        .ok_or_else(|| {
+            InstructionExecutionError::InvariantViolation(
+                "Soracloud audit sequence space is exhausted".into(),
+            )
+        })
 }
 fn parse_training_model_name(model_name: &str) -> Result<String, InstructionExecutionError> {
     let normalized = model_name.trim();
@@ -5054,7 +5074,12 @@ fn normalize_hf_token(
     Ok(normalized.to_owned())
 }
 fn parse_hf_repo_id(repo_id: &str) -> Result<String, InstructionExecutionError> {
-    normalize_hf_token("repo_id", repo_id, HF_REPO_ID_MAX_BYTES)
+    if !is_canonical_hf_repo_id_v1(repo_id) {
+        return Err(invalid_parameter(
+            "repo_id must be one exact fully-qualified `namespace/repository` identifier",
+        ));
+    }
+    Ok(repo_id.to_owned())
 }
 fn parse_hf_revision(revision: &str) -> Result<String, InstructionExecutionError> {
     if !is_canonical_hf_commit_oid_v1(revision) {
@@ -5449,7 +5474,7 @@ pub(crate) fn write_soracloud_service_lease_usage(
     state_transaction: &mut StateTransaction<'_, '_>,
     reporter: &AccountId,
     service_name: Name,
-    lease_started_sequence: u64,
+    reporting_epoch: u64,
     active_service_version: String,
     replica_slot: u16,
     replica_accounted_egress_bytes: u64,
@@ -5485,90 +5510,198 @@ pub(crate) fn write_soracloud_service_lease_usage(
     }
     let accounted_storage_bytes = deployment.accounted_storage_bytes();
     let current_sequence = next_soracloud_audit_sequence(state_transaction);
+    let mut reporting_epoch_rollover = None;
     let lease = deployment.service_lease.as_mut().ok_or_else(|| {
         InstructionExecutionError::InvariantViolation(
             format!("service `{service_name}` does not have an active hosted-service lease").into(),
         )
     })?;
-    if lease.lease_started_sequence != lease_started_sequence {
-        return Err(invalid_parameter(format!(
-            "service `{service_name}` lease incarnation {lease_started_sequence} does not match the current incarnation {}",
-            lease.lease_started_sequence
-        )));
-    }
-    if let Some(checkpoint) = lease
-        .egress_reporter_checkpoints
-        .iter_mut()
-        .find(|checkpoint| {
-            checkpoint.lease_started_sequence == lease_started_sequence
-                && checkpoint.active_service_version == active_service_version
-                && checkpoint.replica_slot == replica_slot
-                && checkpoint.validator_account_id == *reporter
-        })
-    {
-        if replica_accounted_egress_bytes < checkpoint.accounted_egress_bytes {
-            return Err(invalid_parameter(format!(
-                "service `{service_name}` revision `{active_service_version}` replica {replica_slot} reporter `{reporter}` must not decrease egress bytes from {} to {replica_accounted_egress_bytes}",
-                checkpoint.accounted_egress_bytes
-            )));
-        }
-        if !reporter_has_active_assignment {
-            if !finalize_reporter {
+    if reporting_epoch == lease.reporting_epoch {
+        if let Some(checkpoint) = lease
+            .egress_reporter_checkpoints
+            .iter_mut()
+            .find(|checkpoint| {
+                checkpoint.reporting_epoch == reporting_epoch
+                    && checkpoint.active_service_version == active_service_version
+                    && checkpoint.replica_slot == replica_slot
+                    && checkpoint.validator_account_id == *reporter
+            })
+        {
+            if replica_accounted_egress_bytes < checkpoint.accounted_egress_bytes {
                 return Err(invalid_parameter(format!(
-                    "former reporter `{reporter}` for service `{service_name}` revision `{active_service_version}` replica {replica_slot} may only submit a terminal checkpoint"
-                )));
-            }
-            if checkpoint.finalize_reporter {
-                if replica_accounted_egress_bytes == checkpoint.accounted_egress_bytes {
-                    return Ok(());
-                }
-                return Err(invalid_parameter(format!(
-                    "former reporter `{reporter}` for service `{service_name}` revision `{active_service_version}` replica {replica_slot} is already finalized at {} bytes",
+                    "service `{service_name}` revision `{active_service_version}` replica {replica_slot} reporter `{reporter}` must not decrease egress bytes from {} to {replica_accounted_egress_bytes}",
                     checkpoint.accounted_egress_bytes
                 )));
             }
+            if !reporter_has_active_assignment {
+                if !finalize_reporter {
+                    return Err(invalid_parameter(format!(
+                        "former reporter `{reporter}` for service `{service_name}` revision `{active_service_version}` replica {replica_slot} may only submit a terminal checkpoint"
+                    )));
+                }
+                if checkpoint.finalize_reporter {
+                    if replica_accounted_egress_bytes == checkpoint.accounted_egress_bytes {
+                        return Ok(());
+                    }
+                    return Err(invalid_parameter(format!(
+                        "former reporter `{reporter}` for service `{service_name}` revision `{active_service_version}` replica {replica_slot} is already finalized at {} bytes",
+                        checkpoint.accounted_egress_bytes
+                    )));
+                }
+            }
+            checkpoint.accounted_egress_bytes = replica_accounted_egress_bytes;
+            checkpoint.finalize_reporter = finalize_reporter;
+        } else {
+            if !reporter_has_active_assignment {
+                return Err(invalid_parameter(format!(
+                    "former reporter `{reporter}` for service `{service_name}` revision `{active_service_version}` replica {replica_slot} has no admitted checkpoint to finalize"
+                )));
+            }
+            if replica_accounted_egress_bytes != 0 || finalize_reporter {
+                return Err(invalid_parameter(
+                    "a newly assigned Inrou reporter must open its current-epoch checkpoint at zero before serving",
+                ));
+            }
+            if lease.egress_reporter_checkpoints.len()
+                >= SORA_SERVICE_LEASE_MAX_EGRESS_REPORTER_CHECKPOINTS_V1
+            {
+                return Err(invalid_parameter(format!(
+                    "service `{service_name}` reporting epoch {reporting_epoch} reached the protocol limit of {SORA_SERVICE_LEASE_MAX_EGRESS_REPORTER_CHECKPOINTS_V1} reporter checkpoints"
+                )));
+            }
+            lease
+                .egress_reporter_checkpoints
+                .push(SoraServiceLeaseEgressCheckpointV1 {
+                    reporting_epoch,
+                    active_service_version: active_service_version.clone(),
+                    replica_slot,
+                    validator_account_id: reporter.clone(),
+                    accounted_egress_bytes: 0,
+                    finalize_reporter: false,
+                });
         }
-        checkpoint.accounted_egress_bytes = replica_accounted_egress_bytes;
-        checkpoint.finalize_reporter = finalize_reporter;
     } else {
         if !reporter_has_active_assignment {
             return Err(invalid_parameter(format!(
-                "former reporter `{reporter}` for service `{service_name}` revision `{active_service_version}` replica {replica_slot} has no admitted checkpoint to finalize"
+                "former reporter `{reporter}` cannot advance service `{service_name}` reporting epoch"
             )));
+        }
+        let successor_epoch = lease.reporting_epoch.checked_add(1).ok_or_else(|| {
+            InstructionExecutionError::InvariantViolation(
+                format!("service `{service_name}` reporting epoch space is exhausted").into(),
+            )
+        })?;
+        if reporting_epoch != successor_epoch {
+            return Err(invalid_parameter(format!(
+                "service `{service_name}` reporting epoch CAS expected {} or exact successor {successor_epoch}, got {reporting_epoch}",
+                lease.reporting_epoch
+            )));
+        }
+        if replica_accounted_egress_bytes != 0 || finalize_reporter {
+            return Err(invalid_parameter(
+                "a reporting-epoch rollover must open the successor reporter at zero",
+            ));
         }
         if lease.egress_reporter_checkpoints.len()
-            >= SORA_SERVICE_LEASE_MAX_EGRESS_REPORTER_CHECKPOINTS_V1
+            != SORA_SERVICE_LEASE_MAX_EGRESS_REPORTER_CHECKPOINTS_V1
         {
             return Err(invalid_parameter(format!(
-                "service `{service_name}` lease incarnation {lease_started_sequence} reached the protocol limit of {SORA_SERVICE_LEASE_MAX_EGRESS_REPORTER_CHECKPOINTS_V1} reporter checkpoints"
+                "service `{service_name}` may roll reporting epoch only at exactly {SORA_SERVICE_LEASE_MAX_EGRESS_REPORTER_CHECKPOINTS_V1} checkpoints"
             )));
         }
+        if lease
+            .egress_reporter_checkpoints
+            .iter()
+            .any(|checkpoint| !checkpoint.finalize_reporter)
+        {
+            return Err(invalid_parameter(
+                "every prior-epoch reporter checkpoint must be finalized before rollover",
+            ));
+        }
+        if lease.egress_reporter_checkpoints.iter().any(|checkpoint| {
+            find_inrou_replica_assignment(
+                state_transaction,
+                &service_name,
+                &checkpoint.active_service_version,
+                checkpoint.replica_slot,
+            )
+            .is_some_and(|assignment| {
+                assignment.validator_account_id == checkpoint.validator_account_id
+            })
+        }) {
+            return Err(invalid_parameter(
+                "a prior-epoch reporter checkpoint remains actively placed",
+            ));
+        }
+        let settled_egress_bytes_delta = lease
+            .egress_reporter_checkpoints
+            .iter()
+            .try_fold(0_u128, |total, checkpoint| {
+                total.checked_add(u128::from(checkpoint.accounted_egress_bytes))
+            })
+            .ok_or_else(|| {
+                InstructionExecutionError::InvariantViolation(
+                    format!(
+                        "service `{service_name}` prior-epoch egress settlement overflows u128"
+                    )
+                    .into(),
+                )
+            })?;
+        let settled_egress_bytes = lease
+            .settled_egress_bytes
+            .checked_add(settled_egress_bytes_delta)
+            .ok_or_else(|| {
+                InstructionExecutionError::InvariantViolation(
+                    format!("service `{service_name}` cumulative egress settlement overflows u128")
+                        .into(),
+                )
+            })?;
+        reporting_epoch_rollover = Some(SoraServiceLeaseReportingEpochRolloverV1 {
+            schema_version: SORA_SERVICE_LEASE_REPORTING_EPOCH_ROLLOVER_VERSION_V1,
+            lease_started_sequence: lease.lease_started_sequence,
+            previous_reporting_epoch: lease.reporting_epoch,
+            new_reporting_epoch: successor_epoch,
+            reporter_account_id: reporter.clone(),
+            active_service_version: active_service_version.clone(),
+            replica_slot,
+            finalized_checkpoint_count: u32::try_from(
+                SORA_SERVICE_LEASE_MAX_EGRESS_REPORTER_CHECKPOINTS_V1,
+            )
+            .expect("reporter checkpoint protocol limit fits u32"),
+            settled_egress_bytes_delta,
+            settled_egress_bytes,
+        });
+        lease.reporting_epoch = successor_epoch;
+        lease.settled_egress_bytes = settled_egress_bytes;
+        lease.egress_reporter_checkpoints.clear();
         lease
             .egress_reporter_checkpoints
             .push(SoraServiceLeaseEgressCheckpointV1 {
-                lease_started_sequence,
+                reporting_epoch: successor_epoch,
                 active_service_version: active_service_version.clone(),
                 replica_slot,
                 validator_account_id: reporter.clone(),
-                accounted_egress_bytes: replica_accounted_egress_bytes,
-                finalize_reporter,
+                accounted_egress_bytes: 0,
+                finalize_reporter: false,
             });
     }
     lease.egress_reporter_checkpoints.sort_by(|left, right| {
         (
-            left.lease_started_sequence,
+            left.reporting_epoch,
             left.active_service_version.as_str(),
             left.replica_slot,
             &left.validator_account_id,
         )
             .cmp(&(
-                right.lease_started_sequence,
+                right.reporting_epoch,
                 right.active_service_version.as_str(),
                 right.replica_slot,
                 &right.validator_account_id,
             ))
     });
-    lease.refresh_accounted_egress_bytes();
+    lease
+        .refresh_accounted_egress_bytes()
+        .map_err(|error| invalid_parameter(error.to_string()))?;
     match lease
         .status_at(current_sequence, accounted_storage_bytes)
         .map_err(|error| {
@@ -5593,7 +5726,40 @@ pub(crate) fn write_soracloud_service_lease_usage(
         }
         SoraServiceLeaseStatusV1::Suspended => {}
     }
-    record_deployment_state(state_transaction, deployment)
+    let audit_event = if let Some(rollover) = reporting_epoch_rollover {
+        let sequence = next_unique_soracloud_audit_sequence(state_transaction)?;
+        Some(SoraServiceAuditEventV1 {
+            schema_version: SORA_SERVICE_AUDIT_EVENT_VERSION_V1,
+            sequence,
+            action: SoraServiceLifecycleActionV1::LeaseReportingEpochRollover,
+            service_name: service_name.clone(),
+            from_version: Some(deployment.current_service_version.clone()),
+            to_version: deployment.current_service_version.clone(),
+            service_manifest_hash: deployment.current_service_manifest_hash,
+            container_manifest_hash: deployment.current_container_manifest_hash,
+            governance_tx_hash: None,
+            binding_name: None,
+            state_key: None,
+            config_name: None,
+            secret_name: None,
+            rollout_handle: None,
+            policy_name: None,
+            policy_snapshot_hash: None,
+            jurisdiction_tag: None,
+            consent_evidence_hash: None,
+            break_glass: None,
+            break_glass_reason: None,
+            lease_reporting_epoch_rollover: Some(rollover),
+            signer: single_signatory_authority(reporter)?.clone(),
+        })
+    } else {
+        None
+    };
+    record_deployment_state(state_transaction, deployment)?;
+    if let Some(audit_event) = audit_event {
+        record_audit_event(state_transaction, audit_event)?;
+    }
+    Ok(())
 }
 pub(crate) fn write_soracloud_mailbox_message(
     state_transaction: &mut StateTransaction<'_, '_>,
@@ -6034,6 +6200,15 @@ fn build_http_service_lease_state(
     }
     let economics = &bundle.service.economics;
     let existing_lease = existing.and_then(|deployment| deployment.service_lease.as_ref());
+    if let Some(lease) = existing_lease
+        && (lease.runtime_price_per_sequence != economics.runtime_price_per_sequence
+            || lease.storage_price_per_gib_sequence != economics.storage_price_per_gib_sequence
+            || lease.egress_price_per_mib != economics.egress_price_per_mib)
+    {
+        return Err(invalid_parameter(
+            "hosted-service runtime, storage, and egress unit prices are immutable for one economic lease",
+        ));
+    }
     let quota_class = economics.quota_class.clone();
     let deployment_deposit = existing_lease.map_or_else(
         || economics.deployment_deposit.clone(),
@@ -6059,19 +6234,19 @@ fn build_http_service_lease_state(
     };
     let lease_started_sequence =
         existing_lease.map_or(sequence, |lease| lease.lease_started_sequence);
-    let lease_expires_sequence = existing_lease.map_or(
-        sequence.saturating_add(economics.lease_duration_sequences.get()),
-        |lease| {
-            if extend_terms {
-                lease
-                    .lease_expires_sequence
-                    .max(sequence)
-                    .saturating_add(economics.lease_duration_sequences.get())
-            } else {
-                lease.lease_expires_sequence
-            }
-        },
-    );
+    let lease_expires_sequence = match existing_lease {
+        Some(lease) if extend_terms => lease
+            .lease_expires_sequence
+            .max(sequence)
+            .checked_add(economics.lease_duration_sequences.get())
+            .ok_or_else(|| {
+                invalid_parameter("hosted-service lease expiry sequence overflow while extending")
+            })?,
+        Some(lease) => lease.lease_expires_sequence,
+        None => sequence
+            .checked_add(economics.lease_duration_sequences.get())
+            .ok_or_else(|| invalid_parameter("hosted-service lease expiry sequence overflow"))?,
+    };
     let existing_status =
         existing_lease.map_or(SoraServiceLeaseStatusV1::Active, |lease| lease.status);
     let status = if existing_status == SoraServiceLeaseStatusV1::Suspended {
@@ -6087,14 +6262,22 @@ fn build_http_service_lease_state(
         quota_class,
         deployment_deposit,
         prepaid_runtime_balance,
-        runtime_price_per_sequence: economics.runtime_price_per_sequence.clone(),
-        storage_price_per_gib_sequence: economics.storage_price_per_gib_sequence.clone(),
-        egress_price_per_mib: economics.egress_price_per_mib.clone(),
+        runtime_price_per_sequence: existing_lease.map_or_else(
+            || economics.runtime_price_per_sequence.clone(),
+            |lease| lease.runtime_price_per_sequence.clone(),
+        ),
+        storage_price_per_gib_sequence: existing_lease.map_or_else(
+            || economics.storage_price_per_gib_sequence.clone(),
+            |lease| lease.storage_price_per_gib_sequence.clone(),
+        ),
+        egress_price_per_mib: existing_lease.map_or_else(
+            || economics.egress_price_per_mib.clone(),
+            |lease| lease.egress_price_per_mib.clone(),
+        ),
         lease_started_sequence,
         lease_expires_sequence,
-        last_billed_sequence: existing_lease
-            .map_or(sequence, |lease| lease.last_billed_sequence)
-            .clamp(lease_started_sequence, lease_expires_sequence),
+        reporting_epoch: existing_lease.map_or(1, |lease| lease.reporting_epoch),
+        settled_egress_bytes: existing_lease.map_or(0, |lease| lease.settled_egress_bytes),
         egress_reporter_checkpoints: existing_lease
             .map_or_else(Vec::new, |lease| lease.egress_reporter_checkpoints.clone()),
         accounted_egress_bytes: existing_lease.map_or(0, |lease| lease.accounted_egress_bytes),
@@ -7528,9 +7711,8 @@ fn record_hf_shared_lease_audit_event(
     Ok(())
 }
 fn hf_source_id(repo_id: &str, resolved_revision: &str) -> Result<Hash, InstructionExecutionError> {
-    let payload = norito::to_bytes(&(repo_id, resolved_revision))
-        .map_err(|err| invalid_parameter(format!("failed to encode hf source id: {err}")))?;
-    Ok(Hash::new(payload))
+    derive_hf_source_id_v1(repo_id, resolved_revision)
+        .map_err(|error| invalid_parameter(error.to_string()))
 }
 fn hf_shared_lease_pool_id(
     source_id: Hash,
@@ -10154,6 +10336,7 @@ fn admit_bundle(
             consent_evidence_hash: None,
             break_glass: None,
             break_glass_reason: None,
+            lease_reporting_epoch_rollover: None,
             signer: provenance.signer,
         },
     )
@@ -10458,6 +10641,7 @@ impl Execute for isi::RollbackSoracloudService {
                 consent_evidence_hash: None,
                 break_glass: None,
                 break_glass_reason: None,
+                lease_reporting_epoch_rollover: None,
                 signer: self.provenance.signer,
             },
         )
@@ -10508,6 +10692,7 @@ impl Execute for isi::SetSoracloudServiceConfig {
                 consent_evidence_hash: None,
                 break_glass: None,
                 break_glass_reason: None,
+                lease_reporting_epoch_rollover: None,
                 signer: self.provenance.signer,
             },
         )
@@ -10557,6 +10742,7 @@ impl Execute for isi::DeleteSoracloudServiceConfig {
                 consent_evidence_hash: None,
                 break_glass: None,
                 break_glass_reason: None,
+                lease_reporting_epoch_rollover: None,
                 signer: self.provenance.signer,
             },
         )
@@ -10607,6 +10793,7 @@ impl Execute for isi::SetSoracloudServiceSecret {
                 consent_evidence_hash: None,
                 break_glass: None,
                 break_glass_reason: None,
+                lease_reporting_epoch_rollover: None,
                 signer: self.provenance.signer,
             },
         )
@@ -10656,6 +10843,7 @@ impl Execute for isi::DeleteSoracloudServiceSecret {
                 consent_evidence_hash: None,
                 break_glass: None,
                 break_glass_reason: None,
+                lease_reporting_epoch_rollover: None,
                 signer: self.provenance.signer,
             },
         )
@@ -10773,6 +10961,7 @@ impl Execute for isi::MutateSoracloudState {
                 consent_evidence_hash: None,
                 break_glass: None,
                 break_glass_reason: None,
+                lease_reporting_epoch_rollover: None,
                 signer: provenance.signer,
             },
         )
@@ -10873,6 +11062,7 @@ impl Execute for isi::RegisterSoracloudFhePolicy {
                 consent_evidence_hash: None,
                 break_glass: None,
                 break_glass_reason: None,
+                lease_reporting_epoch_rollover: None,
                 signer: self.provenance.signer,
             },
         )
@@ -10976,6 +11166,7 @@ impl Execute for isi::RotateSoracloudFhePolicy {
                 consent_evidence_hash: None,
                 break_glass: None,
                 break_glass_reason: None,
+                lease_reporting_epoch_rollover: None,
                 signer: self.provenance.signer,
             },
         )
@@ -11045,6 +11236,7 @@ impl Execute for isi::RevokeSoracloudFhePolicy {
                 consent_evidence_hash: None,
                 break_glass: None,
                 break_glass_reason: None,
+                lease_reporting_epoch_rollover: None,
                 signer: self.provenance.signer,
             },
         )
@@ -11340,6 +11532,7 @@ impl Execute for isi::RunSoracloudFheJob {
                 consent_evidence_hash: None,
                 break_glass: None,
                 break_glass_reason: None,
+                lease_reporting_epoch_rollover: None,
                 signer: self.provenance.signer,
             },
         )
@@ -11458,6 +11651,7 @@ impl Execute for isi::RecordSoracloudDecryptionRequest {
                 consent_evidence_hash: self.request.consent_evidence_hash,
                 break_glass: Some(self.request.break_glass),
                 break_glass_reason: self.request.break_glass_reason,
+                lease_reporting_epoch_rollover: None,
                 signer: self.provenance.signer,
             },
         )
@@ -15668,6 +15862,7 @@ impl Execute for isi::AdvanceSoracloudRollout {
                 consent_evidence_hash: None,
                 break_glass: None,
                 break_glass_reason: None,
+                lease_reporting_epoch_rollover: None,
                 signer: self.provenance.signer,
             },
         )
@@ -15729,6 +15924,53 @@ impl Execute for isi::SetSoracloudInrouReplicaRuntimeState {
             return Err(invalid_parameter(
                 "Inrou replica runtime state identity must exactly match its authoritative placement",
             ));
+        }
+        let lease = state_transaction
+            .world
+            .soracloud_service_deployments
+            .get(&state.service_name)
+            .and_then(|deployment| deployment.service_lease.as_ref())
+            .ok_or_else(|| {
+                InstructionExecutionError::InvariantViolation(
+                    format!(
+                        "service `{}` has no hosted-service lease for its Inrou replica",
+                        state.service_name
+                    )
+                    .into(),
+                )
+            })?;
+        if state.reporting_epoch != lease.reporting_epoch {
+            return Err(invalid_parameter(format!(
+                "Inrou replica runtime reporting epoch {} does not match hosted-service epoch {}",
+                state.reporting_epoch, lease.reporting_epoch
+            )));
+        }
+        let checkpoint = lease.egress_reporter_checkpoints.iter().find(|checkpoint| {
+            checkpoint.reporting_epoch == state.reporting_epoch
+                && checkpoint.active_service_version == state.service_version
+                && checkpoint.replica_slot == state.replica_slot
+                && checkpoint.validator_account_id == *authority
+        });
+        if matches!(
+            state.health_status,
+            SoraServiceHealthStatusV1::Healthy | SoraServiceHealthStatusV1::Degraded
+        ) {
+            let checkpoint = checkpoint.ok_or_else(|| {
+                InstructionExecutionError::InvariantViolation(
+                    "an assigned Inrou replica must open its zero usage checkpoint before serving"
+                        .into(),
+                )
+            })?;
+            if checkpoint.finalize_reporter {
+                return Err(InstructionExecutionError::InvariantViolation(
+                    "a finalized Inrou usage checkpoint cannot authorize serving".into(),
+                ));
+            }
+            if state.accounted_egress_bytes != checkpoint.accounted_egress_bytes {
+                return Err(invalid_parameter(
+                    "Inrou runtime egress projection must equal its accepted reporter checkpoint",
+                ));
+            }
         }
         write_soracloud_inrou_replica_runtime_state(state_transaction, state)
     }
@@ -15794,12 +16036,17 @@ impl Execute for isi::ReportSoracloudServiceLeaseUsage {
                 "replica_slot must be greater than zero".to_string(),
             ));
         }
-        let current_lease_started_sequence = state_transaction
+        if self.reporting_epoch == 0 {
+            return Err(invalid_parameter(
+                "reporting_epoch must be greater than zero".to_string(),
+            ));
+        }
+        let current_reporting_epoch = state_transaction
             .world
             .soracloud_service_deployments
             .get(&self.service_name)
             .and_then(|deployment| deployment.service_lease.as_ref())
-            .map(|lease| lease.lease_started_sequence)
+            .map(|lease| lease.reporting_epoch)
             .ok_or_else(|| {
                 InstructionExecutionError::InvariantViolation(
                     format!(
@@ -15809,12 +16056,6 @@ impl Execute for isi::ReportSoracloudServiceLeaseUsage {
                     .into(),
                 )
             })?;
-        if self.lease_started_sequence != current_lease_started_sequence {
-            return Err(invalid_parameter(format!(
-                "service `{}` lease usage incarnation {} does not match the current incarnation {current_lease_started_sequence}",
-                self.service_name, self.lease_started_sequence
-            )));
-        }
         let assignment = find_inrou_replica_assignment(
             state_transaction,
             &self.service_name,
@@ -15848,7 +16089,7 @@ impl Execute for isi::ReportSoracloudServiceLeaseUsage {
                 .and_then(|deployment| deployment.service_lease.as_ref())
                 .is_some_and(|lease| {
                     lease.egress_reporter_checkpoints.iter().any(|checkpoint| {
-                        checkpoint.lease_started_sequence == self.lease_started_sequence
+                        checkpoint.reporting_epoch == self.reporting_epoch
                             && checkpoint.active_service_version == self.active_service_version
                             && checkpoint.replica_slot == self.replica_slot
                             && checkpoint.validator_account_id == *authority
@@ -15864,11 +16105,16 @@ impl Execute for isi::ReportSoracloudServiceLeaseUsage {
                 ));
             }
         }
+        if !reporter_has_active_assignment && self.reporting_epoch != current_reporting_epoch {
+            return Err(invalid_parameter(format!(
+                "former reporter `{authority}` may finalize only current reporting epoch {current_reporting_epoch}"
+            )));
+        }
         write_soracloud_service_lease_usage(
             state_transaction,
             authority,
             self.service_name,
-            self.lease_started_sequence,
+            self.reporting_epoch,
             self.active_service_version,
             self.replica_slot,
             self.replica_accounted_egress_bytes,
@@ -16163,7 +16409,7 @@ fn validate_soracloud_fhe_full_bootstrap_execution_native_air_envelope_bytes_for
         Some(public_padding_context.clone()),
         &limits,
     )?;
-    if !crate::zk_stark::verify_stark_fri_bfv_full_bootstrap_air_public_padding_envelope_with_limits(
+    if !crate::zk_stark::verify_stark_fri_bfv_full_bootstrap_air_public_padding_structure_with_limits(
         envelope_bytes,
         &limits,
         statement_hash,

@@ -121,12 +121,21 @@ upstream deployment degradation before investigating a signer or payload.
 Prefer curated `iroha.*` tools over raw route wrappers. Use each tool's current
 `inputSchema`; rediscover tools when the server reports a changed tool set.
 
+The first-release public contract is exact:
+
+- chain id: `fc56984b-2be7-431d-840e-21514d1883f0`
+- native/fee XOR asset definition: `6TEAJqbb8oEPmLncoNiMRbLEK6tw`
+- public XOR alias: `xor#universal`
+- XOR numeric scale: `9`
+
+Reject the retired `iroha3-taira` chain alias and legacy `<name>#<domain>`
+asset-definition literals in Taira signing inputs.
+
 ## Public-node triage
 
 Before long or stateful writes, sample:
 
-- `iroha.status`
-- `iroha.sumeragi.status`
+- `iroha.health`
 - `iroha.blocks.list`
 - `iroha.transactions.status` or `iroha.transactions.wait`
 - `GET https://taira.sora.org/status`
@@ -188,13 +197,18 @@ For a pre-signed transaction envelope, prefer
 
 ```json
 {
-  "signed_tx_base64": "<base64-encoded SignedTransaction>",
+  "body_base64": "<base64-encoded versioned SignedTransaction>",
+  "hash": "<64-character lowercase transaction hash>",
   "status_accept": "application/json",
+  "terminal_statuses": ["Applied"],
   "timeout_ms": 120000
 }
 ```
 
-Do not pass more than one envelope encoding.
+Compute the expected hash locally and require the submit receipt hash, returned
+hash fields, and final `Applied` status to match it. `Rejected`, `Expired`, a
+timeout, or a successful submit without terminal `Applied` is not success. Do
+not pass more than one envelope encoding.
 
 For Musubi reads, prefer:
 
@@ -234,10 +248,14 @@ visibility, not a bad CID.
 
 ## Response handling and safety
 
-1. Report transaction hashes and terminal status for successful writes.
-2. Surface server errors and classify them as authentication, validation,
+1. Treat a routed read as incomplete when the
+   `x-iroha-fanout-routes-*` headers show any failed, denied, unavailable, or
+   not-found route, even when HTTP status is 2xx. Do not reconcile or zero
+   cached wallet state from an incomplete read.
+2. Report transaction hashes and terminal status for successful writes.
+3. Surface server errors and classify them as authentication, validation,
    missing-tool exposure, endpoint availability, or chain-health failures.
-3. Do not invent operator credentials or direct validator hostnames.
-4. Do not assume operator-only routes are exposed publicly.
-5. Persist a newly generated signer only when the user explicitly requests it,
+4. Do not invent operator credentials or direct validator hostnames.
+5. Do not assume operator-only routes are exposed publicly.
+6. Persist a newly generated signer only when the user explicitly requests it,
    and then only in an ignored owner-only runtime file.

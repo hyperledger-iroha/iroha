@@ -248,7 +248,9 @@ pub fn is_canonical_hf_repo_id_v1(value: &str) -> bool {
         || value.trim() != value
         || value.contains("--")
         || value.contains("..")
-        || value.ends_with(".git")
+        || value
+            .get(value.len().saturating_sub(4)..)
+            .is_some_and(|suffix| suffix.eq_ignore_ascii_case(".git"))
     {
         return false;
     }
@@ -265,8 +267,10 @@ pub fn is_canonical_hf_repo_id_v1(value: &str) -> bool {
     [namespace, repository].into_iter().all(|component| {
         !component.is_empty()
             && !matches!(component, "." | "..")
-            && !component.starts_with(['.', '-'])
-            && !component.ends_with(['.', '-'])
+            && !component.starts_with('.')
+            && !component.starts_with('-')
+            && !component.ends_with('.')
+            && !component.ends_with('-')
             && component
                 .bytes()
                 .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'-'))
@@ -283,6 +287,38 @@ pub fn is_canonical_hf_commit_oid_v1(value: &str) -> bool {
             .as_bytes()
             .iter()
             .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(byte))
+}
+/// Derive the canonical source identifier for one fully-qualified repository and immutable commit.
+///
+/// # Errors
+/// Returns [`SoracloudManifestError`] when either identity component is not canonical.
+pub fn derive_hf_source_id_v1(
+    repo_id: &str,
+    resolved_revision: &str,
+) -> Result<Hash, SoracloudManifestError> {
+    if !is_canonical_hf_repo_id_v1(repo_id) {
+        return Err(invalid_field(
+            "sora hf source identity",
+            "repo_id",
+            "must be one exact fully-qualified `namespace/repository` identifier",
+        ));
+    }
+    if !is_canonical_hf_commit_oid_v1(resolved_revision) {
+        return Err(invalid_field(
+            "sora hf source identity",
+            "resolved_revision",
+            "must be the full 40-character lowercase hexadecimal commit OID",
+        ));
+    }
+    let payload = norito::to_bytes(&("soracloud:hf-source-id:v1", repo_id, resolved_revision))
+        .map_err(|error| {
+            invalid_field(
+                "sora hf source identity",
+                "source_id",
+                format!("failed to encode the canonical source preimage: {error}"),
+            )
+        })?;
+    Ok(Hash::new(payload))
 }
 /// Schema version for [`SoraModelHostCapabilityRecordV1`].
 pub const SORA_MODEL_HOST_CAPABILITY_RECORD_VERSION_V1: u16 = 1;
@@ -331,6 +367,8 @@ pub const SORA_SERVICE_ROLLOUT_STATE_VERSION_V1: u16 = 1;
 pub const SORA_SERVICE_DEPLOYMENT_STATE_VERSION_V1: u16 = 1;
 /// Schema version for [`SoraServiceLeaseStateV1`].
 pub const SORA_SERVICE_LEASE_STATE_VERSION_V1: u16 = 1;
+/// Schema version for [`SoraServiceLeaseReportingEpochRolloverV1`].
+pub const SORA_SERVICE_LEASE_REPORTING_EPOCH_ROLLOVER_VERSION_V1: u16 = 1;
 /// Schema version for [`SoraServiceLeaseVolumeStateV1`].
 pub const SORA_SERVICE_LEASE_VOLUME_STATE_VERSION_V1: u16 = 1;
 /// Schema version for [`SoraServiceAuditEventV1`].

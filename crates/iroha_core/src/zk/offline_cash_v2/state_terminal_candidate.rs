@@ -379,7 +379,7 @@ pub(super) const STATE_TERMINAL_CANDIDATE_BLOCKERS_V2: [StateTerminalCandidateBl
 ];
 
 mod sealed {
-    pub(super) trait Sealed {}
+    pub trait Sealed {}
 }
 
 /// Marker implemented only by uninhabited terminal adapters in this module.

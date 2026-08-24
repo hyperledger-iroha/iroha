@@ -17,8 +17,11 @@ use super::{
         OFFLINE_CASH_STATE_DIGEST_WORDS_V2, OFFLINE_CASH_STATE_PARENT_LINEAGE_WORD_START_V2,
         OFFLINE_CASH_STATE_PROTOCOL_WORD_START_V2, OfflineCashStatePublicInstancesV2,
     },
-    state_recursive_fold::{CanonicalStateAccumulatorV2, StateRecursiveFoldParityV2},
+    state_recursive_fold::CanonicalStateAccumulatorV2,
 };
+
+#[cfg(test)]
+use super::state_recursive_fold::StateRecursiveFoldParityV2;
 
 const STATE_PARITY_WORD_V2: usize = 3;
 const STATE_PROTOCOL_WORD_END_V2: usize =

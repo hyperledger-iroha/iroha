@@ -401,7 +401,7 @@ impl ApplyFixture {
             false,
             false,
             false,
-            false,
+            true,
             Some(([0x55; 32], Some([0x55; 32]))),
         )
     }

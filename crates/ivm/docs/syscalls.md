@@ -411,7 +411,7 @@ AXT host flow
 - 0xB0 AXT_BEGIN — Args: `r10=&AxtDescriptor`. Resets any in‑progress envelope and records the descriptor; hosts derive the canonical binding used by capability handles from this descriptor. Gas: G_axt + bytes.
 - 0xB1 AXT_TOUCH — Args: `r10=&DataSpaceId`, `r11=&NoritoBytes(TouchManifest)` or `0`. Declares the manifest of keys touched for the dataspace within the current envelope. Gas: G_axt + bytes.
 - 0xB2 AXT_COMMIT — Args: none. Validates recorded handles, manifests, and proofs for the active envelope and clears host state on success. Gas: G_axt + entries.
-- 0xB3 VERIFY_DS_PROOF — Args: `r10=&DataSpaceId`, `r11=&ProofBlob` (or `0` to clear). Associates dataspace proof material with the active envelope. Gas: G_verify + bytes.
+- 0xB3 VERIFY_DS_PROOF — Args: `r10=&DataSpaceId`, `r11=&ProofBlob` (or `0` to clear). A zero proof pointer clears the recorded proof and cache entry. Iroha's production CoreHost rejects every non-zero standalone proof with `PermissionDenied` and an `AxtRejectReason::Proof` context until the proof is bound to an authoritative finalized source-state anchor; rejection does not record the proof or alter an existing verified-proof cache entry. Gas: G_verify + bytes.
 - 0xB4 USE_ASSET_HANDLE — Args: `r10=&AssetHandle`, `r11=&NoritoBytes(RemoteSpendIntent)`, `r12=&ProofBlob` (optional). Validates the issuer-signed asset identity and exact non-zero registration incarnation, capability bindings/budgets, and records spend intents for later commit checks. Gas: G_axt + bytes.
 - Default and WSV hosts enforce descriptor membership, exact equality between the issuer-signed handle asset/incarnation and committed registry state, exact intent/proof asset equality, capability binding equality, asset-scoped budget checks, and proof presence before permitting commit. The incarnation changes only on absent-to-present registration or re-registration of that exact asset; unrelated registry activity cannot revoke the handle.
 
@@ -445,6 +445,20 @@ opaque-effect profile and do not themselves prove authority; such proofs cannot
 authorize a remote spend. A handle/intent asset mismatch fails at both USE and
 COMMIT and during block admission. Pre-change handles, claims, proofs, and JSON
 fixtures must be regenerated together.
+
+`VERIFY_DS_PROOF` is not a standalone authorization primitive. FASTPQ's current
+one-field commitment has only a roughly 32-bit collision-binding ceiling, and
+the verifier reconstructs the complete caller-carried witness rather than
+authenticating a finalized remote state. Production CoreHost admission therefore
+fails closed for a non-zero standalone proof. Proofs may still enter the
+specialized `USE_ASSET_HANDLE` flow only after issuer capability authentication;
+however, the handle signature does not cover the `RemoteSpendIntent`, proof, or
+effective amount. Those facts remain bound only by FASTPQ metadata, so the
+handle path is not release-qualified as a ledger authorization boundary until
+that binding reaches at least 128-bit security or an authoritative finalized
+source-state statement independently authenticates the exact facts. Native lane
+relay and fee-vault admissions use separate finalized/current-state anchors and
+do not derive authority from standalone `VERIFY_DS_PROOF` success.
 
 Native asset escrow
 - 0xB8 ESCROW_OPEN_OFFER — Args: `r10=&Name(escrow)`, `r11=&AssetDefinitionId`, `r12=&Quantity`, `r13=&NoritoBytes(Vec<Hash>)` or `0` → 0. Gas: G_escrow + bytes. Queues `OpenAssetEscrow`; the seller authority locks funds into the deterministic protocol custody account.
@@ -655,7 +669,7 @@ node enforces that policy unconditionally.
 | 0xB0 | AXT_BEGIN | r10=&AxtDescriptor | u64=0 | asset:gas/G_axt@ivm.core/v2 + bytes |
 | 0xB1 | AXT_TOUCH | r10=&DataSpaceId, r11=&NoritoBytes(TouchManifest) or 0 | u64=0 | asset:gas/G_axt@ivm.core/v2 + bytes |
 | 0xB2 | AXT_COMMIT | - | u64=0 | asset:gas/G_axt@ivm.core/v2 + entries |
-| 0xB3 | VERIFY_DS_PROOF | r10=&DataSpaceId, r11=&ProofBlob or 0 | u64=0/1 | asset:gas/G_verify@ivm.core/v2 + bytes |
+| 0xB3 | VERIFY_DS_PROOF | r10=&DataSpaceId, r11=&ProofBlob or 0 (production CoreHost accepts only `0` until an authoritative finalized source anchor is implemented) | u64=0/1 | asset:gas/G_verify@ivm.core/v2 + bytes |
 | 0xB4 | USE_ASSET_HANDLE | r10=&AssetHandle, r11=&NoritoBytes(RemoteSpendIntent), r12=&ProofBlob? | u64=0 | asset:gas/G_axt@ivm.core/v2 + bytes |
 | 0xB8 | ESCROW_OPEN_OFFER | r10=&Name(escrow), r11=&AssetDefinitionId, r12=&Quantity, r13=&NoritoBytes(Vec<Hash>) or 0 | u64=0 | asset:gas/G_escrow@ivm.core/v2 + bytes |
 | 0xB9 | ESCROW_ACCEPT | r10=&Name(escrow) | u64=0 | asset:gas/G_escrow@ivm.core/v2 + bytes |

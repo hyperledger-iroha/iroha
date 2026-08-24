@@ -1126,7 +1126,7 @@ CROSS_TOOL_REFINEMENT_CONTRACTS = (
                     CrossToolLinkedConsumerContract(
                         source="crates/iroha_core/src/sumeragi/v2_effects.rs",
                         item="install_view",
-                        item_token_sha256="d081de0f396bcb685e76d4f6906eff37347ae7da907a699616925deea89af379",
+                        item_token_sha256="09d31e09f4aa305f555b38165e6a27646096c9e2f858c06d3e43191f8d5bbdc8",
                         required_expression="""
                             let stale_body_cleanup =
                                 self.plan_certified_view_body_cleanup(
@@ -1239,7 +1239,7 @@ CROSS_TOOL_REFINEMENT_CONTRACTS = (
                         source="crates/iroha_core/src/sumeragi/v2_runtime.rs",
                         item="step_recovery",
                         item_token_sha256=(
-                            "818947b3b1356bfe825b34f2b4ee35f8293b24d9a12ef21fdd0d4f5d97c4ef0e"
+                            "a4afc9d28aab61fcffcc52cb7576854877c7c4d81ff3e39f694ae2c2896d97e6"
                         ),
                         brace_context=((
                             "impl", "<", "D", ":", "RuntimeDriver", ">",

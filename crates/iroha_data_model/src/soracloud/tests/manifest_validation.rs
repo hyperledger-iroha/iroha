@@ -961,6 +961,80 @@ fn inrou_manifest_json_serialize_emits_valid_string_keyed_guest_images() {
     );
 }
 #[cfg(feature = "json")]
+fn assert_inrou_manifest_field_is_required(canonical: &Value, field: &str) {
+    let mut value = canonical.clone();
+    assert!(
+        value
+            .as_object_mut()
+            .expect("manifest object")
+            .remove(field)
+            .is_some()
+    );
+    let error = norito::json::from_value::<SoraInrouManifestV1>(value)
+        .expect_err("first-release Inrou fields must not be omitted");
+    assert!(
+        matches!(&error, json::Error::MissingField { field: missing } if missing == field),
+        "missing `{field}` reported the wrong error: {error:?}"
+    );
+}
+
+#[cfg(feature = "json")]
+fn assert_inrou_guest_image_field_is_required(canonical: &Value, field: &str) {
+    let mut value = canonical.clone();
+    let guest = value
+        .get_mut("guest_images")
+        .and_then(Value::as_object_mut)
+        .and_then(|images| images.get_mut("x86_64"))
+        .and_then(Value::as_object_mut)
+        .expect("x86_64 guest image object");
+    assert!(guest.remove(field).is_some());
+    let error = norito::json::from_value::<SoraInrouManifestV1>(value)
+        .expect_err("first-release guest-image fields must not be omitted");
+    assert!(
+        matches!(&error, json::Error::MissingField { field: missing } if missing == field),
+        "missing guest-image `{field}` reported the wrong error: {error:?}"
+    );
+}
+
+#[cfg(feature = "json")]
+fn assert_inrou_distribution_field_is_required(canonical: &Value, field: &str) {
+    let mut value = canonical.clone();
+    let distribution = value
+        .get_mut("guest_images")
+        .and_then(Value::as_object_mut)
+        .and_then(|images| images.get_mut("x86_64"))
+        .and_then(|guest| guest.get_mut("distribution"))
+        .and_then(Value::as_object_mut)
+        .expect("x86_64 distribution object");
+    assert!(distribution.remove(field).is_some());
+    let error = norito::json::from_value::<SoraInrouManifestV1>(value)
+        .expect_err("first-release distribution fields must not be omitted");
+    assert!(
+        matches!(&error, json::Error::Message(message) if message == &format!("missing field `{field}`")),
+        "missing distribution `{field}` reported the wrong error: {error:?}"
+    );
+}
+
+#[cfg(feature = "json")]
+fn assert_inrou_published_artifact_field_is_required(published: &Value, field: &str) {
+    let mut value = published.clone();
+    let artifact = value
+        .get_mut("guest_images")
+        .and_then(Value::as_object_mut)
+        .and_then(|images| images.get_mut("x86_64"))
+        .and_then(|guest| guest.get_mut("published_artifact"))
+        .and_then(Value::as_object_mut)
+        .expect("published guest-image artifact object");
+    assert!(artifact.remove(field).is_some());
+    let error = norito::json::from_value::<SoraInrouManifestV1>(value)
+        .expect_err("first-release published-artifact fields must not be omitted");
+    assert!(
+        matches!(&error, json::Error::Message(message) if message == &format!("missing field `{field}`")),
+        "missing published-artifact `{field}` reported the wrong error: {error:?}"
+    );
+}
+
+#[cfg(feature = "json")]
 #[test]
 fn inrou_v1_tagged_enum_envelopes_reject_unknown_fields() {
     macro_rules! assert_unknown_rejected {
@@ -1107,20 +1181,7 @@ fn inrou_manifest_json_requires_the_exact_v1_shape() {
         "bootstrap_user_data_path",
         "ssh_authorized_keys",
     ] {
-        let mut value = canonical.clone();
-        assert!(
-            value
-                .as_object_mut()
-                .expect("manifest object")
-                .remove(field)
-                .is_some()
-        );
-        let error = norito::json::from_value::<SoraInrouManifestV1>(value)
-            .expect_err("first-release Inrou fields must not be omitted");
-        assert!(
-            matches!(&error, json::Error::MissingField { field: missing } if missing == field),
-            "missing `{field}` reported the wrong error: {error:?}"
-        );
+        assert_inrou_manifest_field_is_required(&canonical, field);
     }
 
     let mut shorthand = canonical.clone();
@@ -1138,20 +1199,7 @@ fn inrou_manifest_json_requires_the_exact_v1_shape() {
         "distribution",
         "published_artifact",
     ] {
-        let mut value = canonical.clone();
-        let guest = value
-            .get_mut("guest_images")
-            .and_then(Value::as_object_mut)
-            .and_then(|images| images.get_mut("x86_64"))
-            .and_then(Value::as_object_mut)
-            .expect("x86_64 guest image object");
-        assert!(guest.remove(field).is_some());
-        let error = norito::json::from_value::<SoraInrouManifestV1>(value)
-            .expect_err("first-release guest-image fields must not be omitted");
-        assert!(
-            matches!(&error, json::Error::MissingField { field: missing } if missing == field),
-            "missing guest-image `{field}` reported the wrong error: {error:?}"
-        );
+        assert_inrou_guest_image_field_is_required(&canonical, field);
     }
 
     for field in [
@@ -1159,21 +1207,7 @@ fn inrou_manifest_json_requires_the_exact_v1_shape() {
         "prefer_low_latency",
         "fallback_to_low_latency_when_geography_unknown",
     ] {
-        let mut value = canonical.clone();
-        let distribution = value
-            .get_mut("guest_images")
-            .and_then(Value::as_object_mut)
-            .and_then(|images| images.get_mut("x86_64"))
-            .and_then(|guest| guest.get_mut("distribution"))
-            .and_then(Value::as_object_mut)
-            .expect("x86_64 distribution object");
-        assert!(distribution.remove(field).is_some());
-        let error = norito::json::from_value::<SoraInrouManifestV1>(value)
-            .expect_err("first-release distribution fields must not be omitted");
-        assert!(
-            matches!(&error, json::Error::Message(message) if message == &format!("missing field `{field}`")),
-            "missing distribution `{field}` reported the wrong error: {error:?}"
-        );
+        assert_inrou_distribution_field_is_required(&canonical, field);
     }
     let mut unknown_distribution = canonical.clone();
     unknown_distribution
@@ -1198,21 +1232,7 @@ fn inrou_manifest_json_requires_the_exact_v1_shape() {
         "manifest_id_hex",
         "distribution",
     ] {
-        let mut value = published.clone();
-        let artifact = value
-            .get_mut("guest_images")
-            .and_then(Value::as_object_mut)
-            .and_then(|images| images.get_mut("x86_64"))
-            .and_then(|guest| guest.get_mut("published_artifact"))
-            .and_then(Value::as_object_mut)
-            .expect("published guest-image artifact object");
-        assert!(artifact.remove(field).is_some());
-        let error = norito::json::from_value::<SoraInrouManifestV1>(value)
-            .expect_err("first-release published-artifact fields must not be omitted");
-        assert!(
-            matches!(&error, json::Error::Message(message) if message == &format!("missing field `{field}`")),
-            "missing published-artifact `{field}` reported the wrong error: {error:?}"
-        );
+        assert_inrou_published_artifact_field_is_required(&published, field);
     }
     let mut unknown_artifact = published;
     unknown_artifact
@@ -1734,7 +1754,8 @@ fn service_lease_v1_json_requires_explicit_null_empty_and_closed_fields() {
         egress_price_per_mib: economics.egress_price_per_mib,
         lease_started_sequence: 1,
         lease_expires_sequence: 100,
-        last_billed_sequence: 1,
+        reporting_epoch: 1,
+        settled_egress_bytes: 0,
         egress_reporter_checkpoints: Vec::new(),
         accounted_egress_bytes: 0,
         last_status_reason: None,
@@ -1752,7 +1773,7 @@ fn service_lease_v1_json_requires_explicit_null_empty_and_closed_fields() {
         last_materialized_sequence: None,
     };
     let checkpoint = SoraServiceLeaseEgressCheckpointV1 {
-        lease_started_sequence: 1,
+        reporting_epoch: 1,
         active_service_version: "1.0.0".to_owned(),
         replica_slot: 1,
         validator_account_id: sample_account_id(202),
@@ -2144,6 +2165,7 @@ fn service_audit_event_validate_rejects_zero_sequence() {
         consent_evidence_hash: None,
         break_glass: None,
         break_glass_reason: None,
+        lease_reporting_epoch_rollover: None,
         signer: sample_signer(),
     };
     let error = event
@@ -2295,6 +2317,7 @@ fn service_audit_event_validate_requires_break_glass_reason_when_enabled() {
         consent_evidence_hash: None,
         break_glass: Some(true),
         break_glass_reason: None,
+        lease_reporting_epoch_rollover: None,
         signer: sample_signer(),
     };
     let error = event

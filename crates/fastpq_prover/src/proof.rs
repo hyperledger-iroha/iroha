@@ -16,6 +16,13 @@ use iroha_crypto::Hash;
 use norito::{NoritoDeserialize, NoritoSerialize};
 /// Protocol version advertised by the V1 prover implementation.
 const PROTOCOL_VERSION: u16 = 1;
+/// First catalogue version using coherent trace/LDE roots with the bijective
+/// Goldilocks `x^7` Poseidon S-box.
+///
+/// Versions 1 and 2 used the non-permuting `x^5` S-box. Versions 3 and 4 used
+/// independently generated trace/LDE roots, so a blowup-stride AIR opening did
+/// not reach the next trace point. All four are intentionally rejected.
+const X7_PARAMS_VERSION_BASE: u16 = 5;
 /// Domain tag for permission root fallback commitments.
 const PERM_ROOT_DOMAIN: &[u8] = b"fastpq:v1:perm_root";
 /// Domain tag for transaction set hash fallback commitments.
@@ -80,7 +87,9 @@ pub struct FriRoundOpening {
     pub round: u32,
     /// Index inside the current round domain.
     pub index: u32,
-    /// Full arity-sized group opened at this round.
+    /// Multiplicative-coset values ordered as `f(x · ζ^k)` for increasing `k`.
+    ///
+    /// The final reduction may use an effective arity smaller than the configured arity.
     pub values: Vec<u64>,
     /// Folded value carried into the next round.
     pub folded_value: u64,
@@ -97,7 +106,10 @@ pub struct FriQueryOpening {
     pub rounds: Vec<FriRoundOpening>,
     /// Index inside the final FRI layer.
     pub final_index: u32,
-    /// Final FRI leaf values authenticated under the terminal root.
+    /// Complete terminal-domain evaluations authenticated under the terminal root.
+    ///
+    /// V1 stops before the terminal layer would collapse to one value, so this
+    /// vector is interpolated and checked against the reduced degree bound.
     pub final_values: Vec<u64>,
     /// Merkle authentication path for `final_values` under the terminal root.
     pub final_merkle_path: Vec<u64>,
@@ -323,12 +335,12 @@ impl Prover {
     }
 
     fn prove_raw(&self, batch: &TransitionBatch) -> Result<Proof> {
+        let params_version = canonical_params_version(&self.params)
+            .ok_or_else(|| Error::UnknownParameter(self.params.name.to_string()))?;
         let commitment = trace_commitment(&self.params, batch)?;
         let ordering = ordering::ordering_hash(batch)?;
         let permission_hashes = collect_permission_hashes(batch)?;
         let public_io = build_public_io(batch, ordering, permission_hashes);
-        let params_version = canonical_params_version(&self.params)
-            .ok_or_else(|| Error::UnknownParameter(self.params.name.to_string()))?;
         let artifact = self
             .backend
             .prove(batch, &public_io, PROTOCOL_VERSION, params_version)?;
@@ -698,6 +710,12 @@ fn verify_after_limits(batch: &TransitionBatch, proof: &Proof) -> Result<()> {
     );
     let fri_layer_lengths =
         expected_fri_layer_lengths(lde_domain_size, params.fri.arity, params.fri.max_reductions)?;
+    let terminal_degree_bound = fri_terminal_degree_bound(
+        lde_domain_size,
+        params.fri.blowup_factor,
+        params.fri.arity,
+        &fri_layer_lengths,
+    )?;
     if proof.fri_layers.len() != fri_layer_lengths.len() {
         return Err(Error::FriLayerLengthMismatch {
             expected: fri_layer_lengths.len(),
@@ -858,6 +876,7 @@ fn verify_after_limits(batch: &TransitionBatch, proof: &Proof) -> Result<()> {
                 fri_layers: &proof.fri_layers,
                 betas: &proof.betas,
                 fri_layer_lengths: &fri_layer_lengths,
+                terminal_degree_bound,
                 arity: params.fri.arity,
                 domain: fri_domain,
             },
@@ -1014,6 +1033,7 @@ struct FriQueryVerification<'a> {
     fri_layers: &'a [[u8; 32]],
     betas: &'a [u64],
     fri_layer_lengths: &'a [usize],
+    terminal_degree_bound: usize,
     arity: u32,
     domain: backend::FriDomain,
 }
@@ -1040,6 +1060,7 @@ fn verify_fri_query_chain(
         fri_layers,
         betas,
         fri_layer_lengths,
+        terminal_degree_bound,
         arity,
         mut domain,
     } = context;
@@ -1121,7 +1142,13 @@ fn verify_fri_query_chain(
             round: final_round,
             arity,
         },
-    )
+    )?;
+    if !domain.evaluations_have_degree_below(&fri_query.final_values, terminal_degree_bound)? {
+        return Err(Error::FriTerminalDegreeMismatch {
+            degree_bound: terminal_degree_bound,
+        });
+    }
+    Ok(())
 }
 
 fn verify_fri_final_opening(
@@ -1179,14 +1206,66 @@ fn expected_fri_layer_lengths(
     let mut current = domain_size;
     let mut rounds = 0usize;
     let mut lengths = Vec::new();
-    while current > 1 && rounds < max_rounds {
+    while current > arity && rounds < max_rounds {
         lengths.push(current);
         let round_arity = backend::fri_round_arity(current, arity)?;
         current /= round_arity;
         rounds += 1;
     }
+    if current > arity {
+        return Err(Error::FriReductionLimit {
+            max_reductions,
+            remaining: current,
+            arity,
+        });
+    }
     lengths.push(current);
     Ok(lengths)
+}
+
+fn fri_terminal_degree_bound(
+    domain_size: usize,
+    blowup_factor: u32,
+    arity: u32,
+    layer_lengths: &[usize],
+) -> Result<usize> {
+    let blowup = usize::try_from(blowup_factor).expect("FRI blowup factor fits usize");
+    if blowup == 0 || domain_size % blowup != 0 || layer_lengths.is_empty() {
+        return Err(Error::FriDomainSize {
+            length: domain_size,
+            arity: blowup,
+        });
+    }
+    let configured_arity = usize::try_from(arity).map_err(|_| Error::FriArity(arity))?;
+    let trace_len = domain_size / blowup;
+    // Every implemented FASTPQ residue is at most quadratic in trace columns.
+    // A trace column has degree < trace_len, so 2 * trace_len is a conservative
+    // exclusive bound for the unquotiented composition polynomial.
+    let mut degree_bound = trace_len
+        .checked_mul(backend::AIR_MAX_CONSTRAINT_DEGREE_V1)
+        .ok_or(Error::TraceLengthOverflow { rows: trace_len })?;
+    for lengths in layer_lengths.windows(2) {
+        let current = lengths[0];
+        let next = lengths[1];
+        let round_arity = backend::fri_round_arity(current, configured_arity)?;
+        if current / round_arity != next {
+            return Err(Error::FriLayerLengthMismatch {
+                expected: current / round_arity,
+                actual: next,
+            });
+        }
+        degree_bound = degree_bound.div_ceil(round_arity);
+    }
+    let terminal_len = *layer_lengths
+        .last()
+        .expect("non-empty FRI layer schedule checked above");
+    if degree_bound == 0 || degree_bound >= terminal_len {
+        return Err(Error::FriTerminalDegreeBound {
+            degree_bound,
+            domain_len: terminal_len,
+        });
+    }
+    Ok(degree_bound)
 }
 fn pad_len_to_arity(len: usize, arity: usize) -> Result<usize> {
     if arity == 0 {
@@ -1509,8 +1588,9 @@ fn collect_permission_hashes(batch: &TransitionBatch) -> Result<Vec<[u8; 32]>> {
 fn canonical_params_version(params: &StarkParameterSet) -> Option<u16> {
     CANONICAL_PARAMETER_SETS
         .iter()
-        .position(|candidate| candidate.name == params.name)
-        .and_then(|idx| u16::try_from(idx + 1).ok())
+        .position(|candidate| candidate == params)
+        .and_then(|idx| u16::try_from(idx).ok())
+        .and_then(|idx| X7_PARAMS_VERSION_BASE.checked_add(idx))
 }
 mod hash_norito {
     pub mod core {
@@ -1820,6 +1900,28 @@ mod tests {
         fri_layer_lengths: &[usize],
         arity: u32,
     ) -> Result<()> {
+        verify_fri_query_chain_with_terminal_bound_for_test(
+            initial_index,
+            initial_value,
+            fri_query,
+            fri_layers,
+            betas,
+            fri_layer_lengths,
+            fri_layer_lengths.last().copied().unwrap_or(1),
+            arity,
+        )
+    }
+    #[allow(clippy::too_many_arguments)]
+    fn verify_fri_query_chain_with_terminal_bound_for_test(
+        initial_index: usize,
+        initial_value: u64,
+        fri_query: &FriQueryOpening,
+        fri_layers: &[[u8; 32]],
+        betas: &[u64],
+        fri_layer_lengths: &[usize],
+        terminal_degree_bound: usize,
+        arity: u32,
+    ) -> Result<()> {
         let params = fastpq_isi::CANONICAL_PARAMETER_SETS[0];
         let domain_size = fri_layer_lengths.first().copied().unwrap_or(1);
         let domain = backend::FriDomain::from_lde_parameters(
@@ -1837,6 +1939,7 @@ mod tests {
                 fri_layers,
                 betas,
                 fri_layer_lengths,
+                terminal_degree_bound,
                 arity,
                 domain,
             },
@@ -2281,15 +2384,33 @@ mod tests {
     fn canonical_params_versions_track_catalogue_order() {
         let sets = Prover::canonical_parameter_sets();
         assert_eq!(sets, CANONICAL_PARAMETER_SETS.as_slice());
+        assert_eq!(
+            sets.iter()
+                .map(canonical_params_version)
+                .collect::<Vec<_>>(),
+            vec![Some(5), Some(6)]
+        );
         for (idx, params) in sets.iter().enumerate() {
             assert_eq!(
                 canonical_params_version(params),
-                Some(u16::try_from(idx + 1).expect("test catalogue version fits u16"))
+                Some(
+                    X7_PARAMS_VERSION_BASE
+                        + u16::try_from(idx).expect("test catalogue version fits u16")
+                )
             );
         }
         let mut custom = sets[0];
         custom.name = "fastpq-local-test-parameter";
         assert_eq!(canonical_params_version(&custom), None);
+
+        let mut same_name_custom = sets[0];
+        same_name_custom.trace_root ^= 1;
+        assert_eq!(canonical_params_version(&same_name_custom), None);
+        let prover = Prover::new(same_name_custom);
+        assert!(matches!(
+            prover.prove_raw_statement(&sample_batch()),
+            Err(Error::UnknownParameter(parameter)) if parameter == sets[0].name
+        ));
     }
     #[test]
     fn materialise_proof_maps_backend_artifact_fields() {
@@ -4148,9 +4269,8 @@ mod tests {
         assert!(matches!(err, Error::FriArity(0)));
     }
     #[test]
-    fn balanced_fri_schedule_reaches_one_without_padding() {
-        let params = fastpq_isi::find_by_name("fastpq-lane-balanced")
-            .expect("balanced parameters are canonical");
+    fn balanced_fri_schedule_preserves_a_complete_terminal_domain() {
+        let params = fastpq_isi::params::FASTPQ_CANONICAL_BALANCED;
         let lengths = expected_fri_layer_lengths(
             1usize << params.lde_log_size,
             params.fri.arity,
@@ -4159,7 +4279,38 @@ mod tests {
         .expect("balanced FRI schedule");
         assert_eq!(
             lengths,
-            vec![1 << 19, 1 << 16, 1 << 13, 1 << 10, 1 << 7, 1 << 4, 2, 1]
+            vec![1 << 19, 1 << 16, 1 << 13, 1 << 10, 1 << 7, 1 << 4, 2]
+        );
+        assert_eq!(
+            fri_terminal_degree_bound(
+                1usize << params.lde_log_size,
+                params.fri.blowup_factor,
+                params.fri.arity,
+                &lengths,
+            )
+            .expect("balanced terminal degree bound"),
+            1
+        );
+    }
+    #[test]
+    fn latency_fri_schedule_authenticates_a_linear_terminal_bound() {
+        let params = fastpq_isi::params::FASTPQ_CANONICAL_LATENCY;
+        let lengths = expected_fri_layer_lengths(
+            1usize << params.lde_log_size,
+            params.fri.arity,
+            params.fri.max_reductions,
+        )
+        .expect("latency FRI schedule");
+        assert_eq!(lengths, vec![1 << 20, 1 << 16, 1 << 12, 1 << 8, 1 << 4]);
+        assert_eq!(
+            fri_terminal_degree_bound(
+                1usize << params.lde_log_size,
+                params.fri.blowup_factor,
+                params.fri.arity,
+                &lengths,
+            )
+            .expect("latency terminal degree bound"),
+            2
         );
     }
     #[test]
@@ -4175,6 +4326,34 @@ mod tests {
             final_merkle_path: final_path,
         };
         verify_fri_query_chain_for_test(0, 42, &fri_query, &fri_layers, &[], &[1], 2).unwrap();
+    }
+    #[test]
+    fn verify_fri_query_chain_rejects_authenticated_terminal_high_degree() {
+        let final_values = vec![42, 43];
+        let (final_root, final_path) = single_fri_leaf_root_and_path(0, 0, &final_values);
+        let fri_layers = vec![final_root];
+        let fri_query = FriQueryOpening {
+            initial_index: 0,
+            rounds: Vec::new(),
+            final_index: 0,
+            final_values,
+            final_merkle_path: final_path,
+        };
+        let error = verify_fri_query_chain_with_terminal_bound_for_test(
+            0,
+            42,
+            &fri_query,
+            &fri_layers,
+            &[],
+            &[2],
+            1,
+            2,
+        )
+        .expect_err("non-constant terminal evaluations must violate degree < 1");
+        assert!(matches!(
+            error,
+            Error::FriTerminalDegreeMismatch { degree_bound: 1 }
+        ));
     }
     #[test]
     fn verify_fri_query_chain_accepts_single_fold_round() {

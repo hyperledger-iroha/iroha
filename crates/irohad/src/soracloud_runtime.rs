@@ -62,24 +62,25 @@ use iroha_data_model::{
     name::Name,
     smart_contract::manifest::ManifestProvenance,
     soracloud::{
-        SORA_HF_GGUF_WEIGHT_FILE_EXTENSIONS_V1, SORA_HF_PYTORCH_WEIGHT_FILE_EXTENSIONS_V1,
-        SORA_HF_SAFETENSORS_WEIGHT_FILE_EXTENSIONS_V1, SORA_HF_WEIGHT_FILE_EXTENSIONS_V1,
+        SORA_HF_WEIGHT_FILE_EXTENSIONS_V1,
         SORA_INROU_HOST_CAPABILITY_RECORD_VERSION_V1, SORA_INROU_HOSTED_REPLICA_CAPACITY_V1,
         SORA_INROU_REPLICA_RUNTIME_STATE_VERSION_V1, SORA_RUNTIME_RECEIPT_VERSION_V1,
         SORA_SERVICE_MAILBOX_MESSAGE_VERSION_V1,
         SORA_UPLOADED_MODEL_ENCRYPTION_RECIPIENT_VERSION_V1, SORACLOUD_HOST_RESPONSE_VERSION_V1,
         SoraAgentApartmentRecordV1, SoraAgentRuntimeStatusV1, SoraArtifactKindV1,
         SoraCapabilityPolicyV1, SoraCertifiedResponsePolicyV1, SoraConfigExportTargetV1,
-        SoraContainerRuntimeV1, SoraDeploymentBundleV1, SoraHfPlacementHostAssignmentV1,
-        SoraHfPlacementHostRoleV1, SoraHfPlacementHostStatusV1, SoraHfPlacementRecordV1,
+        SoraContainerRuntimeV1, SoraDeploymentBundleV1, SoraHfModelFormatV1,
+        SoraHfPlacementHostAssignmentV1, SoraHfPlacementHostRoleV1, SoraHfPlacementHostStatusV1,
+        SoraHfPlacementRecordV1, SoraHfRequiredWeightFileV1, SoraHfResourceProfileV1,
         SoraHfSharedLeaseMemberStatusV1, SoraHfSharedLeaseStatusV1, SoraHfSourceStatusV1,
-        SoraInrouGuestIsaV1, SoraInrouHostCapabilityRecordV1, SoraInrouReplicaPlacementV1,
-        SoraInrouReplicaRuntimeStateV1, SoraLeaseVolumeKindV1, SoraModelHostViolationKindV1,
-        SoraNetworkPolicyV1, SoraRolloutStageV1, SoraRouteVisibilityV1, SoraRuntimeReceiptV1,
-        SoraServiceDeploymentStateV1, SoraServiceHandlerClassV1, SoraServiceHandlerV1,
-        SoraServiceHealthStatusV1, SoraServiceLeaseStatusV1, SoraServiceLifecycleActionV1,
-        SoraServiceMailboxMessageV1, SoraServiceRuntimeStateV1, SoraServiceStateEntryV1,
-        SoraStateBindingV1, SoraStateMutationOperationV1, SoraUploadedModelKeyEncapsulationV1,
+        SoraHfWeightSelectionV1, SoraInrouGuestIsaV1, SoraInrouHostCapabilityRecordV1,
+        SoraInrouReplicaPlacementV1, SoraInrouReplicaRuntimeStateV1, SoraLeaseVolumeKindV1,
+        SoraModelHostViolationKindV1, SoraNetworkPolicyV1, SoraRolloutStageV1,
+        SoraRouteVisibilityV1, SoraRuntimeReceiptV1, SoraServiceDeploymentStateV1,
+        SoraServiceHandlerClassV1, SoraServiceHandlerV1, SoraServiceHealthStatusV1,
+        SoraServiceLeaseStatusV1, SoraServiceLifecycleActionV1, SoraServiceMailboxMessageV1,
+        SoraServiceRuntimeStateV1, SoraServiceStateEntryV1, SoraStateBindingV1,
+        SoraStateMutationOperationV1, SoraUploadedModelKeyEncapsulationV1,
         SoraUploadedModelKeyWrapAeadV1, SoracloudAppendJournalResponseV1,
         SoracloudEgressFetchRequestV1, SoracloudEgressFetchResponseV1,
         SoracloudEmitMailboxMessageRequestV1, SoracloudEmitMailboxMessageResponseV1,
@@ -89,9 +90,10 @@ use iroha_data_model::{
         SoracloudPublishCheckpointResponseV1, SoracloudReadCommittedStateResponseV1,
         SoracloudReadConfigResponseV1, SoracloudReadCredentialResponseV1,
         SoracloudReadSecretEnvelopeResponseV1, SoracloudReadSecretResponseV1,
-        encode_inrou_host_advertise_provenance_payload,
+        derive_hf_weight_selection_v1, encode_inrou_host_advertise_provenance_payload,
         encode_inrou_host_withdraw_provenance_payload,
         encode_model_host_heartbeat_provenance_payload, is_canonical_hf_commit_oid_v1,
+        is_canonical_hf_repo_id_v1,
     },
     sorafs::pin_registry::ManifestDigest,
     transaction::{TransactionBuilder, TransactionPayload},
@@ -142,7 +144,7 @@ use std::{
     cmp::{Ordering, Reverse},
     collections::{BTreeMap, BTreeSet},
     fs,
-    io::{self, Read as _, Seek as _, Write as _},
+    io::{self, BufRead as _, Read as _, Seek as _, Write as _},
     net::{IpAddr, Ipv4Addr, Shutdown, SocketAddr, TcpListener, TcpStream, ToSocketAddrs as _},
     num::NonZeroUsize,
     ops::{Deref, DerefMut},
@@ -150,7 +152,7 @@ use std::{
     process::{ChildStdin, Command, Stdio},
     str::FromStr,
     sync::{
-        Arc,
+        Arc, OnceLock, Weak,
         atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering as AtomicOrdering},
         mpsc,
     },
@@ -295,6 +297,11 @@ const SORACLOUD_HF_IMPORT_MANIFEST_MAX_FILES: usize = 128;
 const SORACLOUD_HF_IMPORT_MAX_PATH_COMPONENTS_V1: usize = 64;
 const SORACLOUD_HF_IMPORT_CACHE_MAX_ENTRIES_V1: usize =
     SORACLOUD_HF_IMPORT_MANIFEST_MAX_FILES * (SORACLOUD_HF_IMPORT_MAX_PATH_COMPONENTS_V1 + 1) + 1;
+const SORACLOUD_HF_IMPORT_GENERATIONS_DIRECTORY_V1: &str = "generations";
+const SORACLOUD_HF_IMPORT_CURRENT_GENERATION_FILE_V1: &str = "current";
+const SORACLOUD_HF_IMPORT_GENERATION_PREFIX_V1: &str = "generation-";
+const SORACLOUD_HF_IMPORT_GENERATION_RANDOM_BYTES_V1: usize = 16;
+const SORACLOUD_HF_IMPORT_GENERATION_MAX_DIRECTORY_ENTRIES_V1: usize = 32;
 const SORACLOUD_HF_IMPORT_MANIFEST_MAX_TOTAL_FILE_BYTES: u64 = 4 * 1024 * 1024 * 1024;
 const SORACLOUD_HF_IMPORT_MANIFEST_MAX_ERROR_BYTES: usize = 64 * 1024;
 const SORACLOUD_HF_IMPORT_MANIFEST_MAX_TEXT_BYTES: usize = 8 * 1024;
@@ -4674,16 +4681,6 @@ struct HfRequiredWeightFileV1 {
     content_length: u64,
     lfs_sha256: String,
 }
-#[derive(Clone, Debug, PartialEq, Eq)]
-struct HfLfsIntegrityV1 {
-    sha256: [u8; 32],
-    size: u64,
-}
-#[derive(Clone, Debug, PartialEq, Eq)]
-struct HfModelInfoSiblingV1 {
-    path: String,
-    lfs: Option<HfLfsIntegrityV1>,
-}
 #[derive(Clone, Debug, norito::derive::JsonDeserialize)]
 #[norito(deny_unknown_fields)]
 struct ApartmentAutonomyWorkflowV1 {
@@ -4732,7 +4729,7 @@ struct HfLocalImportManifestV1 {
     #[norito(required)]
     model_info_payload_hash: Option<String>,
     #[norito(required)]
-    selected_weight_format: Option<HfImportWeightFormatV1>,
+    selected_weight_format: Option<SoraHfModelFormatV1>,
     required_weight_files: Vec<HfRequiredWeightFileV1>,
     #[norito(required)]
     weight_selection_commitment: Option<String>,
@@ -4741,6 +4738,39 @@ struct HfLocalImportManifestV1 {
     #[norito(required)]
     import_error: Option<String>,
 }
+#[derive(Clone)]
+struct PinnedHfImportGeneration {
+    name: String,
+    root: PathBuf,
+    files_root: PathBuf,
+    manifest: HfLocalImportManifestV1,
+    _pin: Arc<()>,
+}
+struct HfImportGenerationStaging {
+    name: String,
+    source_root: PathBuf,
+    generations_root: PathBuf,
+    staging_root: PathBuf,
+    files_root: PathBuf,
+    published: bool,
+}
+impl Drop for HfImportGenerationStaging {
+    fn drop(&mut self) {
+        if self.published {
+            return;
+        }
+        if let Ok(metadata) = fs::symlink_metadata(&self.staging_root)
+            && metadata.is_dir()
+            && !metadata.file_type().is_symlink()
+        {
+            let _ = fs::remove_dir_all(&self.staging_root);
+            #[cfg(unix)]
+            let _ =
+                fs::File::open(&self.generations_root).and_then(|directory| directory.sync_all());
+        }
+    }
+}
+static HF_IMPORT_GENERATION_PINS_V1: OnceLock<Mutex<BTreeMap<PathBuf, Weak<()>>>> = OnceLock::new();
 type SharedHfLocalRunnerWorkers = Arc<Mutex<BTreeMap<String, Arc<Mutex<HfLocalRunnerWorker>>>>>;
 fn stop_hf_local_runner_worker_for_source(workers: &SharedHfLocalRunnerWorkers, source_id: &str) {
     if let Some(worker) = workers.lock().remove(source_id) {
@@ -5411,6 +5441,7 @@ impl SoracloudRuntimeManager {
                 &self.config.state_dir,
                 self.artifacts_root(),
                 &self.config.cache_budgets,
+                &self.config.hf,
                 self.config.local_validator_account_id.as_ref(),
                 self.config.local_peer_id.as_deref(),
                 inrou_hosting_available,
@@ -5461,6 +5492,7 @@ impl SoracloudRuntimeManager {
                 &self.config.state_dir,
                 self.artifacts_root(),
                 &self.config.cache_budgets,
+                &self.config.hf,
                 self.config.local_validator_account_id.as_ref(),
                 self.config.local_peer_id.as_deref(),
                 inrou_hosting_available,
@@ -7890,9 +7922,10 @@ impl SoracloudRuntimeManager {
         source_id: &str,
         source: &iroha_data_model::soracloud::SoraHfSourceRecordV1,
     ) -> eyre::Result<()> {
-        let source_root = self.hf_source_root(source_id);
-        let manifest_path = source_root.join("import_manifest.json");
-        let existing = match read_hf_import_manifest(&self.config.state_dir, source_id) {
+        let profile = source.resource_profile.as_ref().ok_or_else(|| {
+            eyre::eyre!("Hugging Face source `{source_id}` has no authoritative resource profile")
+        })?;
+        let existing = match read_hf_import_generation(&self.config.state_dir, source_id) {
             Ok(existing) => existing,
             Err(error) => {
                 self.stop_hf_local_worker_for_source(source_id);
@@ -7905,18 +7938,19 @@ impl SoracloudRuntimeManager {
             }
         };
         if let Some(existing) = existing.as_ref()
-            && existing.source_id == source_id
-            && existing.repo_id == source.repo_id
-            && existing.requested_revision == source.resolved_revision
-            && existing.model_name == source.model_name
-            && existing.adapter_id == source.adapter_id
-            && existing.import_error.is_none()
+            && existing.manifest.source_id == source_id
+            && existing.manifest.repo_id == source.repo_id
+            && existing.manifest.requested_revision == source.resolved_revision
+            && existing.manifest.model_name == source.model_name
+            && existing.manifest.adapter_id == source.adapter_id
+            && existing.manifest.import_error.is_none()
         {
             match validate_hf_import_cache(
-                &self.config.state_dir,
-                source_id,
                 existing,
+                profile,
+                self.config.hf.import_max_files,
                 self.config.hf.import_max_file_bytes,
+                self.config.hf.import_max_total_bytes,
             ) {
                 Ok(()) => return Ok(()),
                 Err(error) => {
@@ -7930,8 +7964,6 @@ impl SoracloudRuntimeManager {
             }
         }
         self.stop_hf_local_worker_for_source(source_id);
-        let files_root = reset_hf_import_files_root(&self.config.state_dir, source_id)
-            .wrap_err_with(|| format!("reset {}", source_root.join("files").display()))?;
         let info_url = hf_model_info_url(
             &self.config.hf.api_base_url,
             &source.repo_id,
@@ -7962,98 +7994,45 @@ impl SoracloudRuntimeManager {
         let model_info_payload_hash = Hash::new(&model_info_bytes).to_string();
         let model_info: norito::json::Value =
             norito::json::from_slice(&model_info_bytes).wrap_err("decode HF model info JSON")?;
-        let resolved_commit =
-            validate_hf_model_info_resolved_commit(&model_info, &source.resolved_revision)?;
-        let raw_model_info_path = source_root.join("model_info.json");
-        write_bytes_atomic(&raw_model_info_path, &model_info_bytes)
-            .wrap_err_with(|| format!("write {}", raw_model_info_path.display()))?;
-        drop(model_info_bytes);
+        let resolved_commit = validate_hf_model_info_identity(
+            &model_info,
+            &source.repo_id,
+            &source.resolved_revision,
+        )?;
+        let selection = derive_hf_weight_selection_v1(
+            &model_info,
+            self.config.hf.import_max_files,
+            self.config.hf.import_max_file_bytes,
+            self.config.hf.import_max_total_bytes,
+        )
+        .wrap_err("derive canonical Hugging Face weight selection")?
+        .ok_or_else(|| {
+            eyre::eyre!(
+                "Hugging Face model `{}` revision `{}` exposes no supported weight files",
+                source.repo_id,
+                source.resolved_revision
+            )
+        })?;
+        validate_hf_weight_selection_against_profile(&selection, profile)?;
         let pipeline_tag = bounded_hf_model_info_string(&model_info, "pipeline_tag")?;
         let library_name = bounded_hf_model_info_string(&model_info, "library_name")?;
         let tags =
             bounded_hf_model_info_strings(&model_info, "tags", SORACLOUD_HF_MODEL_INFO_MAX_TAGS)?;
         let mut imported_files = Vec::new();
-        let mut skipped_files = Vec::new();
         let mut imported_total_bytes = 0_u64;
-        let siblings = bounded_hf_model_info_siblings(&model_info)?;
         drop(model_info);
-        let selected_weight_format =
-            selected_hf_import_weight_format(&siblings).ok_or_else(|| {
-                eyre::eyre!(
-                    "Hugging Face model `{}` revision `{}` exposes no supported weight files",
-                    source.repo_id,
-                    source.resolved_revision
-                )
-            })?;
-        let required_weight_files =
-            required_hf_weight_file_records(&siblings, selected_weight_format)?;
-        let mut required_weights = Vec::new();
-        let mut optional_files = Vec::new();
-        for sibling in siblings {
-            match hf_import_weight_format(&sibling.path) {
-                Some(format) if format == selected_weight_format => required_weights.push(sibling),
-                Some(_) => {
-                    // A repository may publish alternate model formats. Import
-                    // exactly the same precedence-selected family that Torii
-                    // profiled; lower-precedence executable material is not an
-                    // ancillary file and must not consume this source's budget.
-                }
-                None if hf_import_file_selected(
-                    &sibling.path,
-                    &self.config.hf.import_file_allowlist,
-                ) =>
-                {
-                    optional_files.push(sibling);
-                }
-                None => {}
-            }
-        }
-        let maximum_files = usize::try_from(self.config.hf.import_max_files)
-            .wrap_err("configured Hugging Face import file limit does not fit this host")?;
-        if required_weights.len() > maximum_files {
-            eyre::bail!(
-                "Hugging Face model requires {} authenticated weight files, exceeding the configured {maximum_files}-file import limit",
-                required_weights.len()
-            );
-        }
-        let mut required_weight_bytes = 0_u64;
-        for weight in &required_weight_files {
-            if weight.content_length > self.config.hf.import_max_file_bytes {
-                eyre::bail!(
-                    "required Hugging Face model file `{}` has authenticated size {} exceeding the configured per-file cap {}",
-                    weight.path,
-                    weight.content_length,
-                    self.config.hf.import_max_file_bytes
-                );
-            }
-            required_weight_bytes = required_weight_bytes
-                .checked_add(weight.content_length)
-                .ok_or_else(|| eyre::eyre!("required Hugging Face model byte total overflow"))?;
-            if required_weight_bytes > self.config.hf.import_max_total_bytes {
-                eyre::bail!(
-                    "required Hugging Face model weights total {required_weight_bytes} bytes, exceeding the configured aggregate import cap {}",
-                    self.config.hf.import_max_total_bytes
-                );
-            }
-        }
-        let weight_selection_commitment =
-            hf_weight_selection_commitment(selected_weight_format, &required_weight_files);
-        let mut imported_weight_files = 0_usize;
-        for (required_weight, sibling) in required_weights
-            .into_iter()
-            .map(|sibling| (true, sibling))
-            .chain(optional_files.into_iter().map(|sibling| (false, sibling)))
-        {
-            let path = sibling.path;
-            if imported_files.len() >= maximum_files {
-                debug_assert!(!required_weight, "required weights are imported first");
-                record_hf_import_skip(
-                    &mut skipped_files,
-                    "remaining optional files omitted after the configured file limit was reached"
-                        .to_owned(),
-                );
-                break;
-            }
+        let required_weight_files = local_hf_required_weight_records(&selection);
+        let mut staging = begin_hf_import_generation(&self.config.state_dir, source_id)
+            .wrap_err("begin private Hugging Face import generation")?;
+        write_bytes_atomic(
+            &staging.staging_root.join("model_info.json"),
+            &model_info_bytes,
+        )
+        .wrap_err("write staged Hugging Face model-info")?;
+        drop(model_info_bytes);
+        let files_root = staging.files_root.clone();
+        for weight in &selection.required_weight_files {
+            let path = weight.path.clone();
             let file_url = hf_repo_file_url(
                 &self.config.hf.hub_base_url,
                 &source.repo_id,
@@ -8067,17 +8046,10 @@ impl SoracloudRuntimeManager {
             )
             .wrap_err_with(|| format!("query HF file headers from {file_url}"))?;
             if !head.status().is_success() {
-                if required_weight {
-                    eyre::bail!(
-                        "required Hugging Face model file `{path}` HEAD returned {}",
-                        head.status()
-                    );
-                }
-                record_hf_import_skip(
-                    &mut skipped_files,
-                    format!("{path} (skipped: HEAD returned {})", head.status()),
+                eyre::bail!(
+                    "required Hugging Face model file `{path}` HEAD returned {}",
+                    head.status()
                 );
-                continue;
             }
             let Some(content_length) = head
                 .headers()
@@ -8085,59 +8057,30 @@ impl SoracloudRuntimeManager {
                 .and_then(|value| value.to_str().ok())
                 .and_then(|value| value.parse::<u64>().ok())
             else {
-                if required_weight {
-                    eyre::bail!(
-                        "required Hugging Face model file `{path}` HEAD omitted a canonical Content-Length"
-                    );
-                }
-                record_hf_import_skip(
-                    &mut skipped_files,
-                    format!("{path} (skipped: missing Content-Length)"),
+                eyre::bail!(
+                    "required Hugging Face model file `{path}` HEAD omitted a canonical Content-Length"
                 );
-                continue;
             };
-            if let Some(lfs) = sibling.lfs.as_ref()
-                && content_length != lfs.size
-            {
+            if content_length != weight.content_length {
                 eyre::bail!(
                     "Hugging Face file `{path}` HEAD length {content_length} does not match authenticated LFS size {}",
-                    lfs.size
+                    weight.content_length
                 );
             }
             if content_length > self.config.hf.import_max_file_bytes {
-                if required_weight {
-                    eyre::bail!(
-                        "required Hugging Face model file `{path}` has {content_length} bytes, exceeding the configured per-file cap {}",
-                        self.config.hf.import_max_file_bytes
-                    );
-                }
-                record_hf_import_skip(
-                    &mut skipped_files,
-                    format!(
-                        "{path} (skipped: {content_length} bytes exceeds per-file cap {})",
-                        self.config.hf.import_max_file_bytes
-                    ),
+                eyre::bail!(
+                    "required Hugging Face model file `{path}` has {content_length} bytes, exceeding the configured per-file cap {}",
+                    self.config.hf.import_max_file_bytes
                 );
-                continue;
             }
             let next_total = imported_total_bytes
                 .checked_add(content_length)
                 .ok_or_else(|| eyre::eyre!("Hugging Face import byte total overflow"))?;
             if next_total > self.config.hf.import_max_total_bytes {
-                if required_weight {
-                    eyre::bail!(
-                        "required Hugging Face model file `{path}` would exceed the configured aggregate import cap {}",
-                        self.config.hf.import_max_total_bytes
-                    );
-                }
-                record_hf_import_skip(
-                    &mut skipped_files,
-                    format!(
-                        "{path} (skipped: aggregate import cap {} bytes reached)",
-                        self.config.hf.import_max_total_bytes
-                    ),
+                eyre::bail!(
+                    "required Hugging Face model file `{path}` would exceed the configured aggregate import cap {}",
+                    self.config.hf.import_max_total_bytes
                 );
-                continue;
             }
             let response = send_hf_import_request_with_vetted_redirects(
                 &self.config.hf,
@@ -8146,34 +8089,18 @@ impl SoracloudRuntimeManager {
             )
             .wrap_err_with(|| format!("download HF file from {file_url}"))?;
             if !response.status().is_success() {
-                if required_weight {
-                    eyre::bail!(
-                        "required Hugging Face model file `{path}` GET returned {}",
-                        response.status()
-                    );
-                }
-                record_hf_import_skip(
-                    &mut skipped_files,
-                    format!("{path} (skipped: GET returned {})", response.status()),
+                eyre::bail!(
+                    "required Hugging Face model file `{path}` GET returned {}",
+                    response.status()
                 );
-                continue;
             }
             if response
                 .content_length()
                 .is_some_and(|declared| declared != content_length)
             {
-                if required_weight {
-                    eyre::bail!(
-                        "required Hugging Face model file `{path}` GET Content-Length did not match HEAD length {content_length}"
-                    );
-                }
-                record_hf_import_skip(
-                    &mut skipped_files,
-                    format!(
-                        "{path} (skipped: GET Content-Length did not match HEAD length {content_length})"
-                    ),
+                eyre::bail!(
+                    "required Hugging Face model file `{path}` GET Content-Length did not match HEAD length {content_length}"
                 );
-                continue;
             }
             let relative_path = hf_import_relative_path(&path)?;
             let local_path = files_root.join(&relative_path);
@@ -8186,24 +8113,27 @@ impl SoracloudRuntimeManager {
                 response,
                 content_length,
                 self.config.hf.import_max_file_bytes,
-                sibling.lfs.as_ref().map(|lfs| lfs.sha256),
+                Some(parse_canonical_hf_lfs_sha256(&weight.lfs_sha256).ok_or_else(
+                    || eyre::eyre!("canonical Hugging Face selection contains an invalid SHA-256"),
+                )?),
             )
             .wrap_err_with(|| format!("stream HF file response from {file_url}"))?;
             imported_total_bytes = next_total;
-            if required_weight {
-                imported_weight_files = imported_weight_files
-                    .checked_add(1)
-                    .ok_or_else(|| eyre::eyre!("imported Hugging Face weight count overflow"))?;
-            }
             imported_files.push(HfImportedFileV1 {
                 path,
                 content_length,
                 payload_hash: payload_hash.to_string(),
-                lfs_sha256: sibling.lfs.map(|lfs| hex::encode(lfs.sha256)),
+                lfs_sha256: Some(weight.lfs_sha256.clone()),
             });
         }
-        if imported_weight_files == 0 {
-            eyre::bail!("Hugging Face import produced no authenticated model weights");
+        if imported_files.len() != selection.required_weight_files.len()
+            || imported_total_bytes != selection.required_model_bytes
+        {
+            eyre::bail!(
+                "Hugging Face import did not produce the complete authenticated weight set of {} files and {} bytes",
+                selection.required_weight_files.len()
+                , selection.required_model_bytes
+            );
         }
         let manifest = HfLocalImportManifestV1 {
             schema_version: HF_LOCAL_IMPORT_SCHEMA_VERSION_V1,
@@ -8219,29 +8149,27 @@ impl SoracloudRuntimeManager {
             imported_at_ms: source.updated_at_ms,
             model_info_content_length: Some(model_info_content_length),
             model_info_payload_hash: Some(model_info_payload_hash),
-            selected_weight_format: Some(selected_weight_format),
+            selected_weight_format: Some(selection.model_format),
             required_weight_files,
-            weight_selection_commitment: Some(weight_selection_commitment.to_string()),
+            weight_selection_commitment: Some(selection.weight_selection_commitment.to_string()),
             imported_files,
-            skipped_files,
+            skipped_files: Vec::new(),
             import_error: None,
         };
         validate_hf_import_manifest_bounds(&manifest)
             .wrap_err("validate bounded Hugging Face import manifest")?;
-        validate_hf_import_cache(
-            &self.config.state_dir,
-            source_id,
+        validate_hf_import_cache_at_generation(
+            &staging.staging_root,
+            &staging.files_root,
             &manifest,
+            profile,
+            self.config.hf.import_max_files,
             self.config.hf.import_max_file_bytes,
+            self.config.hf.import_max_total_bytes,
         )
-        .wrap_err("verify published Hugging Face import cache")?;
-        write_json_atomic_bounded(
-            &manifest_path,
-            &manifest,
-            SORACLOUD_HF_IMPORT_MANIFEST_MAX_BYTES,
-            "Hugging Face import manifest",
-        )
-        .wrap_err_with(|| format!("write {}", manifest_path.display()))?;
+        .wrap_err("verify staged Hugging Face import cache")?;
+        publish_hf_import_generation(&mut staging, &manifest)
+            .wrap_err("atomically publish complete Hugging Face import generation")?;
         Ok(())
     }
     fn write_hf_import_error_manifest(
@@ -8251,10 +8179,8 @@ impl SoracloudRuntimeManager {
         error: &str,
     ) -> eyre::Result<()> {
         self.stop_hf_local_worker_for_source(source_id);
-        let source_root = self.hf_source_root(source_id);
-        reset_hf_import_files_root(&self.config.state_dir, source_id).wrap_err_with(|| {
-            format!("discard partial HF import under {}", source_root.display())
-        })?;
+        let mut staging = begin_hf_import_generation(&self.config.state_dir, source_id)
+            .wrap_err("begin private Hugging Face error generation")?;
         let manifest = HfLocalImportManifestV1 {
             schema_version: HF_LOCAL_IMPORT_SCHEMA_VERSION_V1,
             source_id: source_id.to_owned(),
@@ -8278,14 +8204,8 @@ impl SoracloudRuntimeManager {
         };
         validate_hf_import_manifest_bounds(&manifest)
             .wrap_err("validate bounded Hugging Face import error manifest")?;
-        let manifest_path = source_root.join("import_manifest.json");
-        write_json_atomic_bounded(
-            &manifest_path,
-            &manifest,
-            SORACLOUD_HF_IMPORT_MANIFEST_MAX_BYTES,
-            "Hugging Face import manifest",
-        )
-        .wrap_err_with(|| format!("write {}", manifest_path.display()))?;
+        publish_hf_import_generation(&mut staging, &manifest)
+            .wrap_err("atomically publish Hugging Face import error generation")?;
         Ok(())
     }
     fn hydrate_missing_artifacts(
@@ -10412,14 +10332,14 @@ fn execute_generated_hf_inference_bridge_local_read(
                 format!("build generated HF inference URL: {error}"),
             )
         })?;
-    url.set_query(request.request_query.as_deref());
-    if url
-        .query_pairs()
-        .any(|(key, _)| key.eq_ignore_ascii_case("revision"))
+    if request
+        .request_query
+        .as_deref()
+        .is_some_and(|query| !query.is_empty())
     {
         return Err(SoracloudRuntimeExecutionError::new(
             SoracloudRuntimeExecutionErrorKind::InvalidRequest,
-            "generated HF inference query must not override the authoritative revision",
+            "generated HF inference does not accept caller-supplied provider query parameters",
         ));
     }
     // The qualified provider receives the immutable source commit on every
@@ -10540,7 +10460,7 @@ fn execute_generated_hf_local_runner(
             HF_HOST_LOCAL_EXECUTION_DISABLED_REASON_V1,
         ));
     }
-    let Some(import_manifest) = read_hf_import_manifest(state_dir, &binding.source_id).map_err(|error| {
+    let Some(generation) = read_hf_import_generation(state_dir, &binding.source_id).map_err(|error| {
         SoracloudRuntimeExecutionError::new(
             SoracloudRuntimeExecutionErrorKind::Internal,
             format!(
@@ -10557,6 +10477,7 @@ fn execute_generated_hf_local_runner(
             ),
         ));
     };
+    let import_manifest = &generation.manifest;
     if let Some(import_error) = import_manifest.import_error.as_ref() {
         return Err(SoracloudRuntimeExecutionError::new(
             SoracloudRuntimeExecutionErrorKind::Unavailable,
@@ -10566,23 +10487,9 @@ fn execute_generated_hf_local_runner(
             ),
         ));
     }
-    if !hf_local_workers.lock().contains_key(&binding.source_id)
-        && let Err(error) = validate_hf_import_cache(
-            state_dir,
-            &binding.source_id,
-            &import_manifest,
-            hf_config.import_max_file_bytes,
-        )
-    {
-        stop_hf_local_runner_worker_for_source(hf_local_workers, &binding.source_id);
-        return Err(SoracloudRuntimeExecutionError::new(
-            SoracloudRuntimeExecutionErrorKind::Unavailable,
-            format!(
-                "generated HF cache for source `{}` failed integrity verification before runner launch: {error}",
-                binding.source_id
-            ),
-        ));
-    }
+    // TODO: If host-local execution is ever admitted, carry the authoritative
+    // resource profile in the execution context and validate this pinned
+    // generation against it before removing the V1 fail-closed return above.
     let request_body = if request.request_body.is_empty() {
         norito::json::Value::Object(norito::json::Map::new())
     } else {
@@ -10602,7 +10509,7 @@ fn execute_generated_hf_local_runner(
             ),
         )
     })?;
-    let source_files_dir = hf_local_source_files_root(state_dir, &binding.source_id);
+    let source_files_dir = generation.files_root.clone();
     let mut runner_request = norito::json::Map::new();
     runner_request.insert(
         "schema_version".to_owned(),
@@ -10811,7 +10718,7 @@ fn probe_hf_local_runner_for_source(
             ),
         ));
     }
-    let Some(import_manifest) = read_hf_import_manifest(state_dir, source_id).map_err(|error| {
+    let Some(generation) = read_hf_import_generation(state_dir, source_id).map_err(|error| {
         SoracloudRuntimeExecutionError::new(
             SoracloudRuntimeExecutionErrorKind::Internal,
             format!(
@@ -10826,6 +10733,7 @@ fn probe_hf_local_runner_for_source(
             ),
         ));
     };
+    let import_manifest = &generation.manifest;
     if let Some(import_error) = import_manifest.import_error.as_ref() {
         return Err(SoracloudRuntimeExecutionError::new(
             SoracloudRuntimeExecutionErrorKind::Unavailable,
@@ -10834,11 +10742,18 @@ fn probe_hf_local_runner_for_source(
             ),
         ));
     }
+    let profile = source.resource_profile.as_ref().ok_or_else(|| {
+        SoracloudRuntimeExecutionError::new(
+            SoracloudRuntimeExecutionErrorKind::Unavailable,
+            format!("generated HF source `{source_id}` has no authoritative resource profile"),
+        )
+    })?;
     if let Err(error) = validate_hf_import_cache(
-        state_dir,
-        source_id,
-        &import_manifest,
+        &generation,
+        profile,
+        hf_config.import_max_files,
         hf_config.import_max_file_bytes,
+        hf_config.import_max_total_bytes,
     ) {
         stop_hf_local_runner_worker_for_source(hf_local_workers, source_id);
         return Err(SoracloudRuntimeExecutionError::new(
@@ -10854,7 +10769,7 @@ fn probe_hf_local_runner_for_source(
             format!("materialize embedded HF local runner for source `{source_id}`: {error}"),
         )
     })?;
-    let source_files_dir = hf_local_source_files_root(state_dir, source_id);
+    let source_files_dir = generation.files_root.clone();
     let mut runner_request = norito::json::Map::new();
     runner_request.insert(
         "schema_version".to_owned(),
@@ -11334,8 +11249,8 @@ fn parse_apartment_autonomy_workflow_spec(
     if !object.contains_key("workflow_version") && !object.contains_key("steps") {
         return Ok(None);
     }
-    let workflow: ApartmentAutonomyWorkflowV1 =
-        norito::json::from_value(request_value.clone()).map_err(|error| {
+    let workflow: ApartmentAutonomyWorkflowV1 = norito::json::from_value(request_value.clone())
+        .map_err(|error| {
             SoracloudRuntimeExecutionError::new(
                 SoracloudRuntimeExecutionErrorKind::InvalidRequest,
                 format!("apartment autonomy workflow is not canonical V1 JSON: {error}"),
@@ -12924,6 +12839,7 @@ fn build_runtime_snapshot(
     state_dir: &Path,
     artifacts_root: PathBuf,
     cache_budgets: &iroha_config::parameters::actual::SoracloudRuntimeCacheBudgets,
+    hf_config: &iroha_config::parameters::actual::SoracloudRuntimeHuggingFace,
     local_validator_account_id: Option<&AccountId>,
     local_peer_id: Option<&str>,
     local_inrou_hosting_enabled: bool,
@@ -13217,7 +13133,7 @@ fn build_runtime_snapshot(
             )
         })
         .collect();
-    let hf_sources = build_hf_source_plans(world, &services, &apartments, state_dir);
+    let hf_sources = build_hf_source_plans(world, &services, &apartments, state_dir, hf_config);
     Ok(SoracloudRuntimeSnapshot {
         schema_version: SoracloudRuntimeSnapshot::default().schema_version,
         observed_height: u64::try_from(view.height()).unwrap_or(u64::MAX),
@@ -13233,19 +13149,58 @@ fn build_hf_source_plans(
     services: &BTreeMap<String, BTreeMap<String, SoracloudRuntimeServicePlan>>,
     apartments: &BTreeMap<String, SoracloudRuntimeApartmentPlan>,
     state_dir: &Path,
+    hf_config: &iroha_config::parameters::actual::SoracloudRuntimeHuggingFace,
 ) -> BTreeMap<String, SoracloudRuntimeHfSourcePlan> {
     let mut plans = BTreeMap::new();
     for (source_id, source) in world.soracloud_hf_sources().iter() {
         let source_id_string = source_id.to_string();
-        let import_manifest = match read_hf_import_manifest(state_dir, &source_id_string) {
-            Ok(manifest) => manifest,
+        let (import_manifest, import_integrity_error) = match read_hf_import_generation(
+            state_dir,
+            &source_id_string,
+        ) {
+            Ok(Some(generation)) => {
+                let import_integrity_error = if generation.manifest.import_error.is_none() {
+                    source.resource_profile.as_ref().map_or_else(
+                        || {
+                            Some(
+                                "authoritative Hugging Face source omits its resource profile"
+                                    .to_owned(),
+                            )
+                        },
+                        |profile| {
+                            validate_hf_import_cache(
+                                &generation,
+                                profile,
+                                hf_config.import_max_files,
+                                hf_config.import_max_file_bytes,
+                                hf_config.import_max_total_bytes,
+                            )
+                            .err()
+                            .map(|error| {
+                                format!(
+                                    "local Hugging Face import failed integrity validation: {error}"
+                                )
+                            })
+                        },
+                    )
+                } else {
+                    None
+                };
+                (Some(generation.manifest.clone()), import_integrity_error)
+            }
+            Ok(None) => (None, None),
             Err(error) => {
                 iroha_logger::warn!(
                     ?error,
                     source_id = %source_id_string,
-                    "failed to read local HF import manifest while building runtime snapshot"
+                    "failed to read a coherent local HF import generation while building runtime snapshot"
                 );
-                None
+                (
+                    None,
+                    Some(format!(
+                        "local Hugging Face import generation is invalid: {error}"
+                    )),
+                )
             }
         };
         let pool_records = world
@@ -13335,10 +13290,12 @@ fn build_hf_source_plans(
             u32::try_from(materialized_apartment_names.len()).unwrap_or(u32::MAX);
         let import_complete = import_manifest
             .as_ref()
-            .is_some_and(|manifest| manifest.import_error.is_none());
+            .is_some_and(|manifest| manifest.import_error.is_none())
+            && import_integrity_error.is_none();
         let import_failed = import_manifest
             .as_ref()
-            .is_some_and(|manifest| manifest.import_error.is_some());
+            .is_some_and(|manifest| manifest.import_error.is_some())
+            || import_integrity_error.is_some();
         let runtime_status = derive_hf_runtime_status(
             source.status,
             import_complete,
@@ -13383,14 +13340,16 @@ fn build_hf_source_plans(
                 materialized_apartment_names,
                 bundle_cache_miss_count,
                 artifact_cache_miss_count,
-                last_error: import_manifest
-                    .as_ref()
-                    .and_then(|manifest| manifest.import_error.clone())
-                    .or_else(|| source.last_error.clone())
-                    .or_else(|| {
-                        local_execution_unavailable
-                            .then(|| HF_HOST_LOCAL_EXECUTION_DISABLED_REASON_V1.to_owned())
-                    }),
+                last_error: import_integrity_error.or_else(|| {
+                    import_manifest
+                        .as_ref()
+                        .and_then(|manifest| manifest.import_error.clone())
+                        .or_else(|| source.last_error.clone())
+                        .or_else(|| {
+                            local_execution_unavailable
+                                .then(|| HF_HOST_LOCAL_EXECUTION_DISABLED_REASON_V1.to_owned())
+                        })
+                }),
             },
         );
     }
@@ -14489,16 +14448,6 @@ fn hf_inference_url(inference_base_url: &str, repo_id: &str) -> eyre::Result<req
     }
     Ok(url)
 }
-fn hf_import_file_selected(path: &str, allowlist: &[String]) -> bool {
-    let normalized_path = path.trim().to_ascii_lowercase();
-    allowlist.iter().any(|pattern| {
-        if let Some(suffix) = pattern.strip_prefix("*.") {
-            normalized_path.ends_with(&format!(".{suffix}"))
-        } else {
-            normalized_path == *pattern
-        }
-    })
-}
 fn bounded_hf_model_info_string(
     model_info: &norito::json::Value,
     field: &str,
@@ -14532,6 +14481,23 @@ fn validate_hf_model_info_resolved_commit(
         );
     }
     Ok(resolved_commit)
+}
+fn validate_hf_model_info_identity(
+    model_info: &norito::json::Value,
+    expected_repo_id: &str,
+    expected_commit: &str,
+) -> eyre::Result<String> {
+    if !is_canonical_hf_repo_id_v1(expected_repo_id) {
+        eyre::bail!("authoritative Hugging Face repository ID is not canonical");
+    }
+    let model_id = bounded_hf_model_info_string(model_info, "modelId")?
+        .ok_or_else(|| eyre::eyre!("Hugging Face model-info response omitted `modelId`"))?;
+    if model_id != expected_repo_id {
+        eyre::bail!(
+            "Hugging Face model-info `modelId` `{model_id}` does not exactly match authoritative repository `{expected_repo_id}`"
+        );
+    }
+    validate_hf_model_info_resolved_commit(model_info, expected_commit)
 }
 fn bounded_hf_model_info_strings(
     model_info: &norito::json::Value,
@@ -14580,190 +14546,48 @@ fn parse_canonical_hf_lfs_sha256(value: &str) -> Option<[u8; 32]> {
     hex::decode_to_slice(value, &mut digest).ok()?;
     Some(digest)
 }
-#[derive(
-    Clone,
-    Copy,
-    Debug,
-    PartialEq,
-    Eq,
-    norito::derive::JsonSerialize,
-    norito::derive::JsonDeserialize,
-)]
-#[norito(tag = "weight_format", content = "value")]
-#[norito(deny_unknown_fields)]
-enum HfImportWeightFormatV1 {
-    Gguf,
-    Safetensors,
-    PyTorch,
-}
-impl HfImportWeightFormatV1 {
-    const fn label(self) -> &'static str {
-        match self {
-            Self::Gguf => "gguf",
-            Self::Safetensors => "safetensors",
-            Self::PyTorch => "pytorch",
-        }
-    }
-}
 fn hf_path_has_extension(path: &str, extensions: &[&str]) -> bool {
     extensions.iter().any(|extension| {
         path.get(path.len().saturating_sub(extension.len())..)
             .is_some_and(|suffix| suffix.eq_ignore_ascii_case(extension))
     })
 }
-fn hf_import_weight_format(path: &str) -> Option<HfImportWeightFormatV1> {
-    if hf_path_has_extension(path, SORA_HF_GGUF_WEIGHT_FILE_EXTENSIONS_V1) {
-        Some(HfImportWeightFormatV1::Gguf)
-    } else if hf_path_has_extension(path, SORA_HF_SAFETENSORS_WEIGHT_FILE_EXTENSIONS_V1) {
-        Some(HfImportWeightFormatV1::Safetensors)
-    } else if hf_path_has_extension(path, SORA_HF_PYTORCH_WEIGHT_FILE_EXTENSIONS_V1) {
-        Some(HfImportWeightFormatV1::PyTorch)
-    } else {
-        None
-    }
-}
-fn selected_hf_import_weight_format(
-    siblings: &[HfModelInfoSiblingV1],
-) -> Option<HfImportWeightFormatV1> {
-    [
-        HfImportWeightFormatV1::Gguf,
-        HfImportWeightFormatV1::Safetensors,
-        HfImportWeightFormatV1::PyTorch,
-    ]
-    .into_iter()
-    .find(|format| {
-        siblings
-            .iter()
-            .any(|sibling| hf_import_weight_format(&sibling.path) == Some(*format))
-    })
-}
-fn required_hf_weight_file_records(
-    siblings: &[HfModelInfoSiblingV1],
-    selected_format: HfImportWeightFormatV1,
-) -> eyre::Result<Vec<HfRequiredWeightFileV1>> {
-    let selected_count = siblings
+fn local_hf_required_weight_records(
+    selection: &SoraHfWeightSelectionV1,
+) -> Vec<HfRequiredWeightFileV1> {
+    selection
+        .required_weight_files
         .iter()
-        .filter(|sibling| hf_import_weight_format(&sibling.path) == Some(selected_format))
-        .count();
-    if selected_count == 0 {
-        eyre::bail!("selected Hugging Face weight format has no sibling files");
-    }
-    let mut required = Vec::new();
-    required
-        .try_reserve_exact(selected_count)
-        .wrap_err("reserve bounded authenticated Hugging Face weight-file set")?;
-    for sibling in siblings
-        .iter()
-        .filter(|sibling| hf_import_weight_format(&sibling.path) == Some(selected_format))
-    {
-        let lfs = sibling.lfs.as_ref().ok_or_else(|| {
-            eyre::eyre!(
-                "selected Hugging Face model file `{}` lacks authenticated LFS SHA-256/size metadata",
-                sibling.path
-            )
-        })?;
-        required.push(HfRequiredWeightFileV1 {
-            path: sibling.path.clone(),
-            content_length: lfs.size,
-            lfs_sha256: hex::encode(lfs.sha256),
-        });
-    }
-    Ok(required)
-}
-fn hf_weight_selection_commitment(
-    format: HfImportWeightFormatV1,
-    required_weights: &[HfRequiredWeightFileV1],
-) -> Hash {
-    let records = required_weights
-        .iter()
-        .map(|weight| {
-            (
-                weight.path.as_str(),
-                weight.content_length,
-                weight.lfs_sha256.as_str(),
-            )
+        .map(|weight| HfRequiredWeightFileV1 {
+            path: weight.path.clone(),
+            content_length: weight.content_length,
+            lfs_sha256: weight.lfs_sha256.clone(),
         })
-        .collect::<Vec<_>>();
-    Hash::new(Encode::encode(&(
-        "soracloud:hf-weight-selection:v1",
-        format.label(),
-        records,
-    )))
+        .collect()
+}
+fn validate_hf_weight_selection_against_profile(
+    selection: &SoraHfWeightSelectionV1,
+    profile: &SoraHfResourceProfileV1,
+) -> eyre::Result<()> {
+    profile
+        .validate()
+        .wrap_err("validate authoritative Hugging Face resource profile")?;
+    let selected_weight_file_count = u32::try_from(selection.required_weight_files.len())
+        .wrap_err("selected Hugging Face weight-file count does not fit u32")?;
+    if selection.required_model_bytes != profile.required_model_bytes
+        || selection.backend_family != profile.backend_family
+        || selection.model_format != profile.model_format
+        || selected_weight_file_count != profile.selected_weight_file_count
+        || selection.weight_selection_commitment != profile.weight_selection_commitment
+    {
+        eyre::bail!(
+            "Hugging Face model-info weight selection does not exactly match the authoritative resource profile"
+        );
+    }
+    Ok(())
 }
 fn hf_import_file_requires_lfs_integrity(path: &str) -> bool {
     hf_path_has_extension(path, SORA_HF_WEIGHT_FILE_EXTENSIONS_V1)
-}
-fn bounded_hf_model_info_siblings(
-    model_info: &norito::json::Value,
-) -> eyre::Result<Vec<HfModelInfoSiblingV1>> {
-    let Some(siblings) = model_info
-        .get("siblings")
-        .and_then(norito::json::Value::as_array)
-    else {
-        return Ok(Vec::new());
-    };
-    if siblings.len() > SORACLOUD_HF_MODEL_INFO_MAX_SIBLINGS {
-        eyre::bail!(
-            "Hugging Face model-info contains {} sibling entries, exceeding the {}-entry limit",
-            siblings.len(),
-            SORACLOUD_HF_MODEL_INFO_MAX_SIBLINGS
-        );
-    }
-    let mut records = BTreeMap::<String, Option<HfLfsIntegrityV1>>::new();
-    for entry in siblings {
-        let Some(path) = entry.get("rfilename").and_then(norito::json::Value::as_str) else {
-            continue;
-        };
-        if path.len() > SORACLOUD_HF_MODEL_INFO_MAX_STRING_BYTES {
-            eyre::bail!(
-                "Hugging Face sibling path exceeds the {}-byte limit",
-                SORACLOUD_HF_MODEL_INFO_MAX_STRING_BYTES
-            );
-        }
-        let lfs = match entry.get("lfs") {
-            None | Some(norito::json::Value::Null) => None,
-            Some(lfs) => {
-                let lfs = lfs.as_object().ok_or_else(|| {
-                    eyre::eyre!("Hugging Face sibling `{path}` has non-object `lfs` metadata")
-                })?;
-                let sha256 = lfs
-                    .get("sha256")
-                    .and_then(norito::json::Value::as_str)
-                    .and_then(parse_canonical_hf_lfs_sha256)
-                    .ok_or_else(|| {
-                        eyre::eyre!(
-                            "Hugging Face sibling `{path}` lacks a canonical lowercase LFS SHA-256"
-                        )
-                    })?;
-                let size = lfs
-                    .get("size")
-                    .and_then(norito::json::Value::as_u64)
-                    .filter(|size| *size > 0)
-                    .ok_or_else(|| {
-                        eyre::eyre!(
-                            "Hugging Face sibling `{path}` lacks a positive integer LFS size"
-                        )
-                    })?;
-                Some(HfLfsIntegrityV1 { sha256, size })
-            }
-        };
-        if let Some(previous) = records.insert(path.to_owned(), lfs.clone())
-            && previous != lfs
-        {
-            eyre::bail!(
-                "Hugging Face model-info contains conflicting integrity metadata for sibling `{path}`"
-            );
-        }
-    }
-    Ok(records
-        .into_iter()
-        .map(|(path, lfs)| HfModelInfoSiblingV1 { path, lfs })
-        .collect())
-}
-fn record_hf_import_skip(skipped_files: &mut Vec<String>, message: String) {
-    if skipped_files.len() < SORACLOUD_HF_IMPORT_MAX_RECORDED_SKIPS {
-        skipped_files.push(message);
-    }
 }
 fn hf_import_relative_path(path: &str) -> io::Result<PathBuf> {
     if path.split('/').count() > SORACLOUD_HF_IMPORT_MAX_PATH_COMPONENTS_V1 {
@@ -14782,40 +14606,137 @@ fn hf_import_relative_path(path: &str) -> io::Result<PathBuf> {
         )
     })
 }
+fn hf_local_source_root(state_dir: &Path, source_id: &str) -> PathBuf {
+    state_dir
+        .join("hf_sources")
+        .join(storage_path_component(source_id))
+}
+fn hf_local_generations_root(state_dir: &Path, source_id: &str) -> PathBuf {
+    hf_local_source_root(state_dir, source_id).join(SORACLOUD_HF_IMPORT_GENERATIONS_DIRECTORY_V1)
+}
+fn hf_local_current_generation_path(state_dir: &Path, source_id: &str) -> PathBuf {
+    hf_local_source_root(state_dir, source_id).join(SORACLOUD_HF_IMPORT_CURRENT_GENERATION_FILE_V1)
+}
+fn valid_hf_import_generation_name(name: &str) -> bool {
+    name.strip_prefix(SORACLOUD_HF_IMPORT_GENERATION_PREFIX_V1)
+        .is_some_and(|suffix| {
+            suffix.len() == SORACLOUD_HF_IMPORT_GENERATION_RANDOM_BYTES_V1 * 2
+                && suffix
+                    .bytes()
+                    .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+        })
+}
+fn read_hf_current_generation_name(
+    state_dir: &Path,
+    source_id: &str,
+) -> io::Result<Option<String>> {
+    let path = hf_local_current_generation_path(state_dir, source_id);
+    let metadata = match fs::symlink_metadata(&path) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(error),
+    };
+    validate_hf_cache_entry_custody(&path, &metadata, true)?;
+    let name =
+        read_soracloud_regular_text_bounded(&path, 128, "Hugging Face current-generation pointer")?;
+    if !valid_hf_import_generation_name(&name) {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "Hugging Face current-generation pointer is not canonical",
+        ));
+    }
+    Ok(Some(name))
+}
+fn hf_generation_pin(root: &Path) -> Arc<()> {
+    let pins = HF_IMPORT_GENERATION_PINS_V1.get_or_init(|| Mutex::new(BTreeMap::new()));
+    let mut pins = pins.lock();
+    pins.retain(|_, pin| pin.strong_count() != 0);
+    if let Some(pin) = pins.get(root).and_then(Weak::upgrade) {
+        return pin;
+    }
+    let pin = Arc::new(());
+    pins.insert(root.to_path_buf(), Arc::downgrade(&pin));
+    pin
+}
+fn read_hf_import_generation(
+    state_dir: &Path,
+    source_id: &str,
+) -> io::Result<Option<PinnedHfImportGeneration>> {
+    for _ in 0..4 {
+        let Some(name) = read_hf_current_generation_name(state_dir, source_id)? else {
+            return Ok(None);
+        };
+        let root = hf_local_generations_root(state_dir, source_id).join(&name);
+        let pin = hf_generation_pin(&root);
+        let metadata = match fs::symlink_metadata(&root) {
+            Ok(metadata) => metadata,
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {
+                if read_hf_current_generation_name(state_dir, source_id)?.as_deref()
+                    != Some(name.as_str())
+                {
+                    continue;
+                }
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    "Hugging Face current-generation pointer names a missing generation",
+                ));
+            }
+            Err(error) => return Err(error),
+        };
+        validate_hf_cache_entry_custody(&root, &metadata, false)?;
+        let manifest_path = root.join("import_manifest.json");
+        let manifest = read_json_optional(
+            &manifest_path,
+            SORACLOUD_HF_IMPORT_MANIFEST_MAX_BYTES,
+            "Hugging Face import manifest",
+        )?
+        .ok_or_else(|| {
+            io::Error::new(
+                io::ErrorKind::InvalidData,
+                "published Hugging Face generation omits its import manifest",
+            )
+        })?;
+        if manifest.schema_version != HF_LOCAL_IMPORT_SCHEMA_VERSION_V1 {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!(
+                    "Hugging Face import manifest schema version {} does not match V1",
+                    manifest.schema_version
+                ),
+            ));
+        }
+        if manifest.source_id != source_id {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!(
+                    "Hugging Face import manifest source `{}` does not match requested source `{source_id}`",
+                    manifest.source_id
+                ),
+            ));
+        }
+        validate_hf_import_manifest_bounds(&manifest)?;
+        if read_hf_current_generation_name(state_dir, source_id)?.as_deref() != Some(name.as_str())
+        {
+            continue;
+        }
+        return Ok(Some(PinnedHfImportGeneration {
+            name,
+            files_root: root.join("files"),
+            root,
+            manifest,
+            _pin: pin,
+        }));
+    }
+    Err(io::Error::new(
+        io::ErrorKind::WouldBlock,
+        "Hugging Face current generation changed repeatedly while being pinned",
+    ))
+}
 fn read_hf_import_manifest(
     state_dir: &Path,
     source_id: &str,
 ) -> io::Result<Option<HfLocalImportManifestV1>> {
-    let path = hf_local_import_manifest_path(state_dir, source_id);
-    let manifest = read_json_optional(
-        &path,
-        SORACLOUD_HF_IMPORT_MANIFEST_MAX_BYTES,
-        "Hugging Face import manifest",
-    )?;
-    manifest
-        .map(|manifest| {
-            if manifest.schema_version != HF_LOCAL_IMPORT_SCHEMA_VERSION_V1 {
-                return Err(io::Error::new(
-                    io::ErrorKind::InvalidData,
-                    format!(
-                        "Hugging Face import manifest schema version {} does not match V1",
-                        manifest.schema_version
-                    ),
-                ));
-            }
-            if manifest.source_id != source_id {
-                return Err(io::Error::new(
-                    io::ErrorKind::InvalidData,
-                    format!(
-                        "Hugging Face import manifest source `{}` does not match requested source `{source_id}`",
-                        manifest.source_id
-                    ),
-                ));
-            }
-            validate_hf_import_manifest_bounds(&manifest)?;
-            Ok(manifest)
-        })
-        .transpose()
+    Ok(read_hf_import_generation(state_dir, source_id)?.map(|generation| generation.manifest))
 }
 fn validate_hf_import_manifest_bounds(manifest: &HfLocalImportManifestV1) -> io::Result<()> {
     if manifest.tags.len() > SORACLOUD_HF_MODEL_INFO_MAX_TAGS
@@ -14870,7 +14791,8 @@ fn validate_hf_import_manifest_bounds(manifest: &HfLocalImportManifestV1) -> io:
             "Hugging Face import manifest error exceeds its fixed byte limit",
         ));
     }
-    if !is_canonical_hf_commit_oid_v1(&manifest.requested_revision)
+    if !is_canonical_hf_repo_id_v1(&manifest.repo_id)
+        || !is_canonical_hf_commit_oid_v1(&manifest.requested_revision)
         || manifest.resolved_commit.as_deref().is_some_and(|commit| {
             !is_canonical_hf_commit_oid_v1(commit) || commit != manifest.requested_revision
         })
@@ -14921,7 +14843,7 @@ fn validate_hf_import_manifest_bounds(manifest: &HfLocalImportManifestV1) -> io:
             format!("invalid Hugging Face model-info payload hash: {error}"),
         )
     })?;
-    let selected_weight_format = manifest.selected_weight_format.ok_or_else(|| {
+    manifest.selected_weight_format.ok_or_else(|| {
         io::Error::new(
             io::ErrorKind::InvalidData,
             "successful Hugging Face import manifest omits its selected weight format",
@@ -14940,7 +14862,6 @@ fn validate_hf_import_manifest_bounds(manifest: &HfLocalImportManifestV1) -> io:
             || weight.lfs_sha256.len() != 64
             || weight.content_length == 0
             || parse_canonical_hf_lfs_sha256(&weight.lfs_sha256).is_none()
-            || hf_import_weight_format(&weight.path) != Some(selected_weight_format)
         {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidData,
@@ -14969,21 +14890,12 @@ fn validate_hf_import_manifest_bounds(manifest: &HfLocalImportManifestV1) -> io:
                 "successful Hugging Face import manifest omits its weight selection commitment",
             )
         })?;
-    let parsed_selection_commitment =
-        Hash::from_str(recorded_selection_commitment).map_err(|error| {
-            io::Error::new(
-                io::ErrorKind::InvalidData,
-                format!("invalid Hugging Face weight selection commitment: {error}"),
-            )
-        })?;
-    if parsed_selection_commitment
-        != hf_weight_selection_commitment(selected_weight_format, &manifest.required_weight_files)
-    {
-        return Err(io::Error::new(
+    Hash::from_str(recorded_selection_commitment).map_err(|error| {
+        io::Error::new(
             io::ErrorKind::InvalidData,
-            "Hugging Face import manifest weight selection commitment does not match its required set",
-        ));
-    }
+            format!("invalid Hugging Face weight selection commitment: {error}"),
+        )
+    })?;
     let mut total_file_bytes = 0_u64;
     let mut imported_paths = BTreeSet::new();
     for file in &manifest.imported_files {
@@ -15202,9 +15114,12 @@ fn validate_hf_cached_import_file(
 }
 
 fn validate_hf_cached_model_info(
-    state_dir: &Path,
-    source_id: &str,
+    generation_root: &Path,
     manifest: &HfLocalImportManifestV1,
+    profile: &SoraHfResourceProfileV1,
+    maximum_files: u32,
+    maximum_file_bytes: u64,
+    maximum_total_bytes: u64,
 ) -> io::Result<()> {
     let expected_length = manifest.model_info_content_length.ok_or_else(|| {
         io::Error::new(
@@ -15228,7 +15143,7 @@ fn validate_hf_cached_model_info(
                 format!("invalid Hugging Face model-info payload hash: {error}"),
             )
         })?;
-    let path = hf_local_source_root(state_dir, source_id).join("model_info.json");
+    let path = generation_root.join("model_info.json");
     let metadata = fs::symlink_metadata(&path)?;
     validate_hf_cache_entry_custody(&path, &metadata, true)?;
     let maximum_bytes =
@@ -15252,36 +15167,40 @@ fn validate_hf_cached_model_info(
             format!("decode cached Hugging Face model-info JSON: {error}"),
         )
     })?;
-    validate_hf_model_info_resolved_commit(&model_info, &manifest.requested_revision).map_err(
-        |error| {
-            io::Error::new(
-                io::ErrorKind::InvalidData,
-                format!("validate cached Hugging Face model-info commit: {error}"),
-            )
-        },
-    )?;
-    let siblings = bounded_hf_model_info_siblings(&model_info).map_err(|error| {
+    validate_hf_model_info_identity(&model_info, &manifest.repo_id, &manifest.requested_revision)
+        .map_err(|error| {
         io::Error::new(
             io::ErrorKind::InvalidData,
-            format!("validate cached Hugging Face model-info siblings: {error}"),
+            format!("validate cached Hugging Face model-info identity: {error}"),
         )
     })?;
-    let selected_format = selected_hf_import_weight_format(&siblings).ok_or_else(|| {
+    let selection = derive_hf_weight_selection_v1(
+        &model_info,
+        maximum_files,
+        maximum_file_bytes,
+        maximum_total_bytes,
+    )
+    .map_err(|error| {
+        io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!("derive cached Hugging Face weight selection: {error}"),
+        )
+    })?
+    .ok_or_else(|| {
         io::Error::new(
             io::ErrorKind::InvalidData,
             "cached Hugging Face model-info has no supported weight files",
         )
     })?;
-    let required_weights =
-        required_hf_weight_file_records(&siblings, selected_format).map_err(|error| {
-            io::Error::new(
-                io::ErrorKind::InvalidData,
-                format!("derive cached Hugging Face required weight set: {error}"),
-            )
-        })?;
-    let expected_selection_commitment =
-        hf_weight_selection_commitment(selected_format, &required_weights).to_string();
-    if manifest.selected_weight_format != Some(selected_format)
+    validate_hf_weight_selection_against_profile(&selection, profile).map_err(|error| {
+        io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!("validate cached Hugging Face resource profile: {error}"),
+        )
+    })?;
+    let required_weights = local_hf_required_weight_records(&selection);
+    let expected_selection_commitment = selection.weight_selection_commitment.to_string();
+    if manifest.selected_weight_format != Some(selection.model_format)
         || manifest.required_weight_files != required_weights
         || manifest.weight_selection_commitment.as_deref()
             != Some(expected_selection_commitment.as_str())
@@ -15295,10 +15214,30 @@ fn validate_hf_cached_model_info(
 }
 
 fn validate_hf_import_cache(
-    state_dir: &Path,
-    source_id: &str,
-    manifest: &HfLocalImportManifestV1,
+    generation: &PinnedHfImportGeneration,
+    profile: &SoraHfResourceProfileV1,
+    maximum_files: u32,
     maximum_file_bytes: u64,
+    maximum_total_bytes: u64,
+) -> io::Result<()> {
+    validate_hf_import_cache_at_generation(
+        &generation.root,
+        &generation.files_root,
+        &generation.manifest,
+        profile,
+        maximum_files,
+        maximum_file_bytes,
+        maximum_total_bytes,
+    )
+}
+fn validate_hf_import_cache_at_generation(
+    generation_root: &Path,
+    files_root: &Path,
+    manifest: &HfLocalImportManifestV1,
+    profile: &SoraHfResourceProfileV1,
+    maximum_files: u32,
+    maximum_file_bytes: u64,
+    maximum_total_bytes: u64,
 ) -> io::Result<()> {
     validate_hf_import_manifest_bounds(manifest)?;
     if manifest.import_error.is_some() {
@@ -15307,10 +15246,16 @@ fn validate_hf_import_cache(
             "Hugging Face import manifest records a failed import",
         ));
     }
-    validate_hf_cached_model_info(state_dir, source_id, manifest)?;
-    let files_root = hf_local_source_files_root(state_dir, source_id);
-    let root_metadata = fs::symlink_metadata(&files_root)?;
-    validate_hf_cache_entry_custody(&files_root, &root_metadata, false)?;
+    validate_hf_cached_model_info(
+        generation_root,
+        manifest,
+        profile,
+        maximum_files,
+        maximum_file_bytes,
+        maximum_total_bytes,
+    )?;
+    let root_metadata = fs::symlink_metadata(files_root)?;
+    validate_hf_cache_entry_custody(files_root, &root_metadata, false)?;
     let mut expected = BTreeMap::<PathBuf, &HfImportedFileV1>::new();
     for record in &manifest.imported_files {
         let relative = hf_import_relative_path(&record.path)?;
@@ -15321,7 +15266,7 @@ fn validate_hf_import_cache(
             ));
         }
     }
-    let mut stack = vec![files_root.clone()];
+    let mut stack = vec![files_root.to_path_buf()];
     let mut visited_entries = 0_usize;
     while let Some(directory) = stack.pop() {
         let metadata = fs::symlink_metadata(&directory)?;
@@ -15358,7 +15303,7 @@ fn validate_hf_import_cache(
                 continue;
             }
             validate_hf_cache_entry_custody(&path, &metadata, true)?;
-            let relative = path.strip_prefix(&files_root).map_err(|_| {
+            let relative = path.strip_prefix(files_root).map_err(|_| {
                 io::Error::new(
                     io::ErrorKind::InvalidData,
                     "Hugging Face cache entry escaped its anchored root",
@@ -15384,61 +15329,273 @@ fn validate_hf_import_cache(
     }
     Ok(())
 }
-fn hf_local_source_root(state_dir: &Path, source_id: &str) -> PathBuf {
-    state_dir
-        .join("hf_sources")
-        .join(storage_path_component(source_id))
-}
-fn hf_local_source_files_root(state_dir: &Path, source_id: &str) -> PathBuf {
-    hf_local_source_root(state_dir, source_id).join("files")
-}
-fn reset_hf_import_files_root(state_dir: &Path, source_id: &str) -> io::Result<PathBuf> {
-    let source_root = hf_local_source_root(state_dir, source_id);
-    let mut source_root_builder = fs::DirBuilder::new();
-    source_root_builder.recursive(true);
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::DirBuilderExt as _;
-        source_root_builder.mode(0o700);
-    }
-    source_root_builder.create(&source_root)?;
-    let source_root_metadata = fs::symlink_metadata(&source_root)?;
-    validate_hf_cache_entry_custody(&source_root, &source_root_metadata, false)?;
-    let files_root = source_root.join("files");
-    match fs::symlink_metadata(&files_root) {
-        Ok(_) => {
-            let sequence = SORACLOUD_ATOMIC_WRITE_SEQUENCE.fetch_add(1, AtomicOrdering::Relaxed);
-            let quarantine = source_root.join(format!(
-                ".files.invalid.{}.{}",
-                std::process::id(),
-                sequence
-            ));
-            fs::rename(&files_root, &quarantine)?;
-            let quarantined = fs::symlink_metadata(&quarantine)?;
-            if quarantined.is_dir() && !quarantined.file_type().is_symlink() {
-                fs::remove_dir_all(&quarantine)?;
-            } else {
-                fs::remove_file(&quarantine)?;
-            }
-        }
-        Err(error) if error.kind() == io::ErrorKind::NotFound => {}
-        Err(error) => return Err(error),
-    }
+// HF cache generations are immutable after the `current` pointer publishes them.
+fn create_hf_private_directory_all(path: &Path) -> io::Result<()> {
     let mut builder = fs::DirBuilder::new();
+    builder.recursive(true);
     #[cfg(unix)]
     {
         use std::os::unix::fs::DirBuilderExt as _;
         builder.mode(0o700);
     }
-    builder.create(&files_root)?;
-    let files_root_metadata = fs::symlink_metadata(&files_root)?;
-    validate_hf_cache_entry_custody(&files_root, &files_root_metadata, false)?;
-    #[cfg(unix)]
-    fs::File::open(&source_root)?.sync_all()?;
-    Ok(files_root)
+    builder.create(path)?;
+    validate_hf_cache_entry_custody(path, &fs::symlink_metadata(path)?, false)
 }
-fn hf_local_import_manifest_path(state_dir: &Path, source_id: &str) -> PathBuf {
-    hf_local_source_root(state_dir, source_id).join("import_manifest.json")
+fn remove_hf_generation_directory(path: &Path) -> io::Result<()> {
+    validate_hf_cache_entry_custody(path, &fs::symlink_metadata(path)?, false)?;
+    let mut stack = vec![path.to_path_buf()];
+    let mut visited = 0_usize;
+    while let Some(directory) = stack.pop() {
+        for entry in fs::read_dir(&directory)? {
+            let entry = entry?;
+            visited = visited.checked_add(1).ok_or_else(|| {
+                io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    "Hugging Face generation cleanup entry count overflow",
+                )
+            })?;
+            if visited > SORACLOUD_HF_IMPORT_CACHE_MAX_ENTRIES_V1.saturating_add(4) {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    "Hugging Face generation cleanup exceeded its fixed entry bound",
+                ));
+            }
+            let entry_path = entry.path();
+            let metadata = fs::symlink_metadata(&entry_path)?;
+            if metadata.file_type().is_symlink() {
+                return Err(io::Error::new(
+                    io::ErrorKind::PermissionDenied,
+                    format!(
+                        "Hugging Face generation cleanup rejected symlink {}",
+                        entry_path.display()
+                    ),
+                ));
+            }
+            if metadata.is_dir() {
+                validate_hf_cache_entry_custody(&entry_path, &metadata, false)?;
+                stack.push(entry_path);
+            } else {
+                validate_hf_cache_entry_custody(&entry_path, &metadata, true)?;
+            }
+        }
+    }
+    fs::remove_dir_all(path)
+}
+fn prepare_hf_generation_container(state_dir: &Path, source_id: &str) -> io::Result<PathBuf> {
+    let source_root = hf_local_source_root(state_dir, source_id);
+    create_hf_private_directory_all(&source_root)?;
+    let generations_root = hf_local_generations_root(state_dir, source_id);
+    create_hf_private_directory_all(&generations_root)?;
+    for entry in fs::read_dir(&source_root)? {
+        let entry = entry?;
+        let name = entry.file_name().to_string_lossy().into_owned();
+        if name == SORACLOUD_HF_IMPORT_GENERATIONS_DIRECTORY_V1
+            || name == SORACLOUD_HF_IMPORT_CURRENT_GENERATION_FILE_V1
+        {
+            continue;
+        }
+        if name.starts_with(&format!(
+            ".{}.",
+            SORACLOUD_HF_IMPORT_CURRENT_GENERATION_FILE_V1
+        )) && name.ends_with(".tmp")
+        {
+            let path = entry.path();
+            let metadata = fs::symlink_metadata(&path)?;
+            validate_hf_cache_entry_custody(&path, &metadata, true)?;
+            fs::remove_file(path)?;
+            continue;
+        }
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!("Hugging Face source cache contains an unrecognized entry `{name}`"),
+        ));
+    }
+    let current = read_hf_current_generation_name(state_dir, source_id)?;
+    let pins = HF_IMPORT_GENERATION_PINS_V1.get_or_init(|| Mutex::new(BTreeMap::new()));
+    let mut pins = pins.lock();
+    pins.retain(|_, pin| pin.strong_count() != 0);
+    let mut entries = fs::read_dir(&generations_root)?.collect::<Result<Vec<_>, _>>()?;
+    if entries.len() > SORACLOUD_HF_IMPORT_GENERATION_MAX_DIRECTORY_ENTRIES_V1 {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "Hugging Face source cache exceeds its fixed generation bound",
+        ));
+    }
+    entries.sort_by_key(fs::DirEntry::file_name);
+    for entry in entries {
+        let name = entry.file_name().to_string_lossy().into_owned();
+        let path = entry.path();
+        let metadata = fs::symlink_metadata(&path)?;
+        if metadata.file_type().is_symlink() || !metadata.is_dir() {
+            return Err(io::Error::new(
+                io::ErrorKind::PermissionDenied,
+                format!(
+                    "Hugging Face generation root contains an invalid entry {}",
+                    path.display()
+                ),
+            ));
+        }
+        validate_hf_cache_entry_custody(&path, &metadata, false)?;
+        let canonical_generation = valid_hf_import_generation_name(&name);
+        let stale_staging = name.starts_with(".generation-") && name.ends_with(".staging");
+        if !canonical_generation && !stale_staging {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!("unrecognized Hugging Face generation entry `{name}`"),
+            ));
+        }
+        if current.as_deref() == Some(name.as_str()) {
+            continue;
+        }
+        if pins.get(&path).and_then(Weak::upgrade).is_some() {
+            continue;
+        }
+        remove_hf_generation_directory(&path)?;
+    }
+    #[cfg(unix)]
+    {
+        fs::File::open(&generations_root)?.sync_all()?;
+        fs::File::open(&source_root)?.sync_all()?;
+    }
+    Ok(generations_root)
+}
+fn begin_hf_import_generation(
+    state_dir: &Path,
+    source_id: &str,
+) -> io::Result<HfImportGenerationStaging> {
+    let source_root = hf_local_source_root(state_dir, source_id);
+    let generations_root = prepare_hf_generation_container(state_dir, source_id)?;
+    for _ in 0..128 {
+        let mut random = [0_u8; SORACLOUD_HF_IMPORT_GENERATION_RANDOM_BYTES_V1];
+        OsRng
+            .try_fill_bytes(&mut random)
+            .map_err(|error| io::Error::other(format!("HF generation OS RNG failed: {error}")))?;
+        let name = format!(
+            "{SORACLOUD_HF_IMPORT_GENERATION_PREFIX_V1}{}",
+            hex::encode(random)
+        );
+        let staging_root = generations_root.join(format!(".{name}.staging"));
+        let mut builder = fs::DirBuilder::new();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::DirBuilderExt as _;
+            builder.mode(0o700);
+        }
+        match builder.create(&staging_root) {
+            Ok(()) => {
+                let files_root = staging_root.join("files");
+                create_hf_private_directory_all(&files_root)?;
+                return Ok(HfImportGenerationStaging {
+                    name,
+                    source_root,
+                    generations_root,
+                    staging_root,
+                    files_root,
+                    published: false,
+                });
+            }
+            Err(error) if error.kind() == io::ErrorKind::AlreadyExists => continue,
+            Err(error) => return Err(error),
+        }
+    }
+    Err(io::Error::new(
+        io::ErrorKind::AlreadyExists,
+        "exhausted exclusive Hugging Face generation names",
+    ))
+}
+fn sync_hf_generation_tree_bottom_up(root: &Path) -> io::Result<()> {
+    let mut stack = vec![root.to_path_buf()];
+    let mut directories = Vec::new();
+    let mut visited = 0_usize;
+    while let Some(directory) = stack.pop() {
+        validate_hf_cache_entry_custody(&directory, &fs::symlink_metadata(&directory)?, false)?;
+        directories.push(directory.clone());
+        for entry in fs::read_dir(&directory)? {
+            let entry = entry?;
+            visited = visited.checked_add(1).ok_or_else(|| {
+                io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    "Hugging Face generation sync entry count overflow",
+                )
+            })?;
+            if visited > SORACLOUD_HF_IMPORT_CACHE_MAX_ENTRIES_V1.saturating_add(4) {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    "Hugging Face generation sync exceeded its fixed entry bound",
+                ));
+            }
+            let path = entry.path();
+            let metadata = fs::symlink_metadata(&path)?;
+            if metadata.file_type().is_symlink() {
+                return Err(io::Error::new(
+                    io::ErrorKind::PermissionDenied,
+                    format!(
+                        "Hugging Face generation contains symlink {}",
+                        path.display()
+                    ),
+                ));
+            }
+            if metadata.is_dir() {
+                validate_hf_cache_entry_custody(&path, &metadata, false)?;
+                stack.push(path);
+            } else {
+                validate_hf_cache_entry_custody(&path, &metadata, true)?;
+                fs::File::open(&path)?.sync_all()?;
+            }
+        }
+    }
+    #[cfg(unix)]
+    for directory in directories.into_iter().rev() {
+        fs::File::open(directory)?.sync_all()?;
+    }
+    Ok(())
+}
+fn publish_hf_import_generation(
+    staging: &mut HfImportGenerationStaging,
+    manifest: &HfLocalImportManifestV1,
+) -> io::Result<()> {
+    validate_hf_import_manifest_bounds(manifest)?;
+    write_json_atomic_bounded(
+        &staging.staging_root.join("import_manifest.json"),
+        manifest,
+        SORACLOUD_HF_IMPORT_MANIFEST_MAX_BYTES,
+        "Hugging Face import manifest",
+    )?;
+    sync_hf_generation_tree_bottom_up(&staging.staging_root)?;
+    let final_root = staging.generations_root.join(&staging.name);
+    #[cfg(any(target_os = "linux", target_os = "android", target_vendor = "apple"))]
+    rustix::fs::renameat_with(
+        rustix::fs::CWD,
+        &staging.staging_root,
+        rustix::fs::CWD,
+        &final_root,
+        rustix::fs::RenameFlags::NOREPLACE,
+    )
+    .map_err(io::Error::other)?;
+    #[cfg(not(any(target_os = "linux", target_os = "android", target_vendor = "apple")))]
+    {
+        if fs::symlink_metadata(&final_root).is_ok() {
+            return Err(io::Error::new(
+                io::ErrorKind::AlreadyExists,
+                "Hugging Face generation destination already exists",
+            ));
+        }
+        fs::rename(&staging.staging_root, &final_root)?;
+    }
+    staging.staging_root = final_root.clone();
+    #[cfg(unix)]
+    fs::File::open(&staging.generations_root)?.sync_all()?;
+    let pointer_path = staging
+        .source_root
+        .join(SORACLOUD_HF_IMPORT_CURRENT_GENERATION_FILE_V1);
+    if let Err(error) = write_bytes_atomic(&pointer_path, staging.name.as_bytes()) {
+        remove_hf_generation_directory(&final_root)?;
+        #[cfg(unix)]
+        fs::File::open(&staging.generations_root)?.sync_all()?;
+        return Err(error);
+    }
+    staging.published = true;
+    Ok(())
 }
 fn hf_local_runner_script_path(state_dir: &Path) -> PathBuf {
     state_dir
@@ -18235,7 +18392,7 @@ fn acquire_inrou_write_lease(file: &fs::File) -> io::Result<InrouWriteLease<'_>>
     const F_SETOWN: i32 = 8;
     const F_SETSIG: i32 = 10;
     inrou_linux_fcntl_with_arg(file, F_SETOWN, rustix::process::getpid().as_raw_pid())?;
-    inrou_linux_fcntl_with_arg(file, F_SETSIG, rustix::runtime::Signal::URG.as_raw())?;
+    inrou_linux_fcntl_with_arg(file, F_SETSIG, rustix::process::Signal::URG.as_raw())?;
     set_inrou_linux_file_lease(file, rustix::process::FlockType::WriteLock)?;
     if let Err(error) = verify_inrou_linux_file_lease(file, rustix::process::FlockType::WriteLock) {
         let _ = set_inrou_linux_file_lease(file, rustix::process::FlockType::Unlocked);
@@ -24085,6 +24242,7 @@ mod tests {
     use super::*;
     const TEST_HF_COMMIT_OID: &str = "0123456789abcdef0123456789abcdef01234567";
     const OTHER_TEST_HF_COMMIT_OID: &str = "1123456789abcdef0123456789abcdef01234567";
+    const TEST_HF_WEIGHT_PAYLOAD: &[u8] = b"authenticated injected-test-runner model weights";
     use eyre::Result;
     use iroha_core::{kura::Kura, query::store::LiveQueryStore, state::World};
     use iroha_crypto::{
@@ -24100,6 +24258,8 @@ mod tests {
         soracloud::{
             AgentApartmentManifestV1, SECRET_ENVELOPE_VERSION_V1,
             SORA_AGENT_APARTMENT_RECORD_VERSION_V1, SORA_HF_PLACEMENT_RECORD_VERSION_V1,
+            SORA_HF_GGUF_WEIGHT_FILE_EXTENSIONS_V1, SORA_HF_PYTORCH_WEIGHT_FILE_EXTENSIONS_V1,
+            SORA_HF_SAFETENSORS_WEIGHT_FILE_EXTENSIONS_V1,
             SORA_HF_SHARED_LEASE_MEMBER_VERSION_V1, SORA_HF_SHARED_LEASE_POOL_VERSION_V1,
             SORA_HF_SOURCE_RECORD_VERSION_V1, SORA_MODEL_HOST_CAPABILITY_RECORD_VERSION_V1,
             SORA_SERVICE_DEPLOYMENT_STATE_VERSION_V1, SORA_SERVICE_MAILBOX_MESSAGE_VERSION_V1,
@@ -24127,7 +24287,6 @@ mod tests {
     use iroha_test_samples::{ALICE_ID, ALICE_KEYPAIR, BOB_ID};
     use iroha_torii::sorafs::AdmissionRegistry;
     use rand::rand_core::{TryCryptoRng, TryRngCore};
-    use serial_test::serial;
     use sorafs_car::{
         CarBuildPlan, FileEntry,
         bundle_archive::{BundleArchiveFile, write_gzip_ustar},
@@ -24157,6 +24316,23 @@ mod tests {
         static PEER_ID: OnceLock<String> = OnceLock::new();
         PEER_ID.get_or_init(|| ALICE_ID.expect_single_signatory().to_string())
     }
+
+    fn assert_eyre_error_contains(error: eyre::Report, expected: &str) {
+        let message = format!("{error:#}");
+        assert!(
+            message.contains(expected),
+            "expected error containing {expected:?}, got {message:?}"
+        );
+    }
+
+    fn assert_eyre_error_contains_any(error: eyre::Report, expected: &[&str]) {
+        let message = format!("{error:#}");
+        assert!(
+            expected.iter().any(|fragment| message.contains(fragment)),
+            "expected error containing one of {expected:?}, got {message:?}"
+        );
+    }
+
     #[test]
     fn storage_path_components_are_deterministic_and_collision_resistant() {
         let slash = storage_path_component("tenant/service");
@@ -24420,12 +24596,12 @@ mod tests {
             .insert("optional".to_owned(), norito::json::Value::Null);
         assert!(norito::json::from_value::<HfRequiredWeightFileV1>(unknown_required).is_err());
 
-        let mut unknown_format = norito::json::to_value(&HfImportWeightFormatV1::Safetensors)?;
+        let mut unknown_format = norito::json::to_value(&SoraHfModelFormatV1::Safetensors)?;
         unknown_format
             .as_object_mut()
             .expect("HF import weight format JSON object")
             .insert("legacy_format".to_owned(), norito::json::Value::Null);
-        assert!(norito::json::from_value::<HfImportWeightFormatV1>(unknown_format).is_err());
+        assert!(norito::json::from_value::<SoraHfModelFormatV1>(unknown_format).is_err());
 
         let metadata = HfGeneratedMetadataResponse {
             schema_version: HF_LOCAL_IMPORT_SCHEMA_VERSION_V1,
@@ -24481,14 +24657,12 @@ mod tests {
     fn read_hf_import_manifest_requires_exact_v1_schema_and_source() -> Result<()> {
         let temp_dir = tempfile::tempdir()?;
         let source_id = Hash::new(b"bound-hf-import-manifest").to_string();
-        let manifest_path = hf_local_import_manifest_path(temp_dir.path(), &source_id);
-        fs::create_dir_all(
-            manifest_path
-                .parent()
-                .expect("HF import manifest has a parent"),
-        )?;
         let canonical = failed_hf_import_manifest_fixture(&source_id);
-        write_json_atomic(&manifest_path, &canonical)?;
+        let mut staging = begin_hf_import_generation(temp_dir.path(), &source_id)?;
+        publish_hf_import_generation(&mut staging, &canonical)?;
+        let generation = read_hf_import_generation(temp_dir.path(), &source_id)?
+            .expect("published test generation");
+        let manifest_path = generation.root.join("import_manifest.json");
         assert_eq!(
             read_hf_import_manifest(temp_dir.path(), &source_id)?,
             Some(canonical.clone())
@@ -24595,31 +24769,21 @@ mod tests {
     fn hf_import_cache_revalidates_anchored_files_before_reuse() -> Result<()> {
         let temp_dir = tempfile::tempdir()?;
         let source_id = Hash::new(b"hf-cache-integrity-source").to_string();
-        let files_root = reset_hf_import_files_root(temp_dir.path(), &source_id)?;
         let payload = b"authenticated model weights";
         let relative_path = "model.safetensors";
+        let model_info = test_hf_model_info(
+            "openai-community/gpt2",
+            TEST_HF_COMMIT_OID,
+            &[(relative_path, payload)],
+        );
+        let selection = test_hf_selection(&model_info);
+        let profile = test_hf_resource_profile(&selection);
+        let model_info_payload = norito::json::to_vec(&model_info)?;
+        let mut staging = begin_hf_import_generation(temp_dir.path(), &source_id)?;
+        let files_root = staging.files_root.clone();
         let local_path = files_root.join(relative_path);
         write_bytes_atomic(&local_path, payload)?;
-        let required_weight_files = vec![HfRequiredWeightFileV1 {
-            path: relative_path.to_owned(),
-            content_length: u64::try_from(payload.len())?,
-            lfs_sha256: hex::encode(iroha_crypto::sha256(payload)),
-        }];
-        let model_info = norito::json!({
-            "sha": TEST_HF_COMMIT_OID,
-            "siblings": [{
-                "rfilename": relative_path,
-                "lfs": {
-                    "sha256": required_weight_files[0].lfs_sha256.clone(),
-                    "size": required_weight_files[0].content_length
-                }
-            }]
-        });
-        let model_info_payload = norito::json::to_vec(&model_info)?;
-        write_bytes_atomic(
-            &hf_local_source_root(temp_dir.path(), &source_id).join("model_info.json"),
-            &model_info_payload,
-        )?;
+        write_bytes_atomic(&staging.staging_root.join("model_info.json"), &model_info_payload)?;
         let manifest = HfLocalImportManifestV1 {
             schema_version: HF_LOCAL_IMPORT_SCHEMA_VERSION_V1,
             source_id: source_id.clone(),
@@ -24634,15 +24798,9 @@ mod tests {
             imported_at_ms: 1,
             model_info_content_length: Some(u64::try_from(model_info_payload.len())?),
             model_info_payload_hash: Some(Hash::new(&model_info_payload).to_string()),
-            selected_weight_format: Some(HfImportWeightFormatV1::Safetensors),
-            weight_selection_commitment: Some(
-                hf_weight_selection_commitment(
-                    HfImportWeightFormatV1::Safetensors,
-                    &required_weight_files,
-                )
-                .to_string(),
-            ),
-            required_weight_files,
+            selected_weight_format: Some(selection.model_format),
+            weight_selection_commitment: Some(selection.weight_selection_commitment.to_string()),
+            required_weight_files: local_hf_required_weight_records(&selection),
             imported_files: vec![HfImportedFileV1 {
                 path: relative_path.to_owned(),
                 content_length: payload.len() as u64,
@@ -24652,51 +24810,60 @@ mod tests {
             skipped_files: Vec::new(),
             import_error: None,
         };
-        validate_hf_import_cache(temp_dir.path(), &source_id, &manifest, 1_024)?;
+        validate_hf_import_cache_at_generation(
+            &staging.staging_root,
+            &staging.files_root,
+            &manifest,
+            &profile,
+            16,
+            1_024,
+            4_096,
+        )?;
+        publish_hf_import_generation(&mut staging, &manifest)?;
+        let generation = read_hf_import_generation(temp_dir.path(), &source_id)?
+            .expect("published test generation");
+        validate_hf_import_cache(&generation, &profile, 16, 1_024, 4_096)?;
 
         let second_payload = b"authenticated second shard";
-        let expanded_model_info_payload = norito::json::to_vec(&norito::json!({
-            "sha": TEST_HF_COMMIT_OID,
-            "siblings": [
-                {
-                    "rfilename": relative_path,
-                    "lfs": {
-                        "sha256": manifest.required_weight_files[0].lfs_sha256.clone(),
-                        "size": u64::try_from(payload.len())?
-                    }
-                },
-                {
-                    "rfilename": "model-00002.safetensors",
-                    "lfs": {
-                        "sha256": hex::encode(iroha_crypto::sha256(second_payload)),
-                        "size": u64::try_from(second_payload.len())?
-                    }
-                }
-            ]
-        }))?;
+        let expanded_model_info_payload = norito::json::to_vec(&test_hf_model_info(
+            "openai-community/gpt2",
+            TEST_HF_COMMIT_OID,
+            &[
+                (relative_path, payload.as_slice()),
+                ("model-00002.safetensors", second_payload.as_slice()),
+            ],
+        ))?;
         let mut incomplete = manifest.clone();
         incomplete.model_info_content_length =
             Some(u64::try_from(expanded_model_info_payload.len())?);
         incomplete.model_info_payload_hash =
             Some(Hash::new(&expanded_model_info_payload).to_string());
         write_bytes_atomic(
-            &hf_local_source_root(temp_dir.path(), &source_id).join("model_info.json"),
+            &generation.root.join("model_info.json"),
             &expanded_model_info_payload,
         )?;
-        validate_hf_import_cache(temp_dir.path(), &source_id, &incomplete, 1_024)
-            .expect_err("one-shard manifest must not satisfy a two-shard model-info commitment");
+        validate_hf_import_cache_at_generation(
+            &generation.root,
+            &generation.files_root,
+            &incomplete,
+            &profile,
+            16,
+            1_024,
+            4_096,
+        )
+        .expect_err("one-shard manifest must not satisfy a two-shard model-info commitment");
         write_bytes_atomic(
-            &hf_local_source_root(temp_dir.path(), &source_id).join("model_info.json"),
+            &generation.root.join("model_info.json"),
             &model_info_payload,
         )?;
 
         fs::write(&local_path, b"tampered model weight bytes")?;
-        validate_hf_import_cache(temp_dir.path(), &source_id, &manifest, 1_024)
+        validate_hf_import_cache(&generation, &profile, 16, 1_024, 4_096)
             .expect_err("same-path cache payload drift must fail closed");
         write_bytes_atomic(&local_path, payload)?;
         let unexpected = files_root.join("unexpected.py");
         write_bytes_atomic(&unexpected, b"untrusted")?;
-        validate_hf_import_cache(temp_dir.path(), &source_id, &manifest, 1_024)
+        validate_hf_import_cache(&generation, &profile, 16, 1_024, 4_096)
             .expect_err("unmanifested cache entries must fail closed");
         fs::remove_file(&unexpected)?;
 
@@ -24705,9 +24872,76 @@ mod tests {
             use std::os::unix::fs::symlink;
             fs::remove_file(&local_path)?;
             symlink(temp_dir.path().join("outside"), &local_path)?;
-            validate_hf_import_cache(temp_dir.path(), &source_id, &manifest, 1_024)
+            validate_hf_import_cache(&generation, &profile, 16, 1_024, 4_096)
                 .expect_err("symlinked cache payloads must fail without following them");
         }
+        Ok(())
+    }
+    #[test]
+    fn hf_import_generation_reader_pin_prevents_mixed_generation_cleanup() -> Result<()> {
+        let temp_dir = tempfile::tempdir()?;
+        let source_id = Hash::new(b"hf-generation-reader-pin").to_string();
+        let first = publish_single_weight_hf_test_generation(
+            temp_dir.path(),
+            &source_id,
+            "openai-community/gpt2",
+            "gpt2",
+            TEST_HF_WEIGHT_PAYLOAD,
+        )?;
+        let first_root = first.root.clone();
+        let first_weight = first.files_root.join("model.safetensors");
+        let second = publish_single_weight_hf_test_generation(
+            temp_dir.path(),
+            &source_id,
+            "openai-community/gpt2",
+            "gpt2",
+            TEST_HF_WEIGHT_PAYLOAD,
+        )?;
+        assert_ne!(first.name, second.name);
+        assert_eq!(
+            read_hf_import_generation(temp_dir.path(), &source_id)?
+                .expect("current generation")
+                .name,
+            second.name,
+        );
+        assert_eq!(fs::read(&first_weight)?, TEST_HF_WEIGHT_PAYLOAD);
+        assert!(first_root.exists(), "a pinned reader generation must survive publication");
+
+        drop(first);
+        let staging = begin_hf_import_generation(temp_dir.path(), &source_id)?;
+        assert!(
+            !first_root.exists(),
+            "an unpinned non-current generation should be reclaimed deterministically"
+        );
+        assert!(second.root.exists(), "the current generation must be retained");
+        drop(staging);
+        Ok(())
+    }
+    #[test]
+    fn hf_import_error_generation_hides_prior_executable_state_atomically() -> Result<()> {
+        let temp_dir = tempfile::tempdir()?;
+        let source_id = Hash::new(b"hf-error-generation").to_string();
+        let success = publish_single_weight_hf_test_generation(
+            temp_dir.path(),
+            &source_id,
+            "openai-community/gpt2",
+            "gpt2",
+            TEST_HF_WEIGHT_PAYLOAD,
+        )?;
+        let mut error_staging = begin_hf_import_generation(temp_dir.path(), &source_id)?;
+        let error_manifest = failed_hf_import_manifest_fixture(&source_id);
+        publish_hf_import_generation(&mut error_staging, &error_manifest)?;
+
+        let current = read_hf_import_generation(temp_dir.path(), &source_id)?
+            .expect("current error generation");
+        assert_ne!(current.name, success.name);
+        assert_eq!(current.manifest.import_error, error_manifest.import_error);
+        assert_eq!(fs::read_dir(&current.files_root)?.count(), 0);
+        assert!(!current.root.join("model_info.json").exists());
+        assert!(
+            success.files_root.join("model.safetensors").exists(),
+            "the prior pinned reader remains coherent but is no longer current"
+        );
         Ok(())
     }
     #[test]
@@ -26163,14 +26397,153 @@ mod tests {
         assert_eq!(intent.program_id, program_id);
         assert_eq!(intent.program_revision, 7);
     }
-    fn sample_hf_resource_profile_for_tests() -> SoraHfResourceProfileV1 {
+    fn test_hf_model_info(
+        repo_id: &str,
+        resolved_commit: &str,
+        weight_files: &[(&str, &[u8])],
+    ) -> norito::json::Value {
+        let siblings = weight_files
+            .iter()
+            .map(|(path, payload)| {
+                norito::json!({
+                    "rfilename": *path,
+                    "lfs": {
+                        "sha256": hex::encode(iroha_crypto::sha256(payload)),
+                        "size": u64::try_from(payload.len()).expect("test weight length fits u64")
+                    }
+                })
+            })
+            .collect::<Vec<_>>();
+        norito::json!({
+            "modelId": repo_id,
+            "sha": resolved_commit,
+            "pipeline_tag": "text-generation",
+            "library_name": "transformers",
+            "tags": ["text-generation"],
+            "siblings": siblings,
+        })
+    }
+    fn test_hf_selection(model_info: &norito::json::Value) -> SoraHfWeightSelectionV1 {
+        derive_hf_weight_selection_v1(model_info, 128, u64::MAX, u64::MAX)
+            .expect("test model-info selection is valid")
+            .expect("test model-info contains weights")
+    }
+    fn test_hf_resource_profile(
+        selection: &SoraHfWeightSelectionV1,
+    ) -> SoraHfResourceProfileV1 {
         SoraHfResourceProfileV1 {
-            required_model_bytes: 3 * 1024 * 1024 * 1024,
-            backend_family: SoraHfBackendFamilyV1::Transformers,
-            model_format: SoraHfModelFormatV1::Safetensors,
-            disk_cache_bytes_floor: 4 * 1024 * 1024 * 1024,
-            ram_bytes_floor: 4 * 1024 * 1024 * 1024,
+            required_model_bytes: selection.required_model_bytes,
+            backend_family: selection.backend_family,
+            model_format: selection.model_format,
+            selected_weight_file_count: u32::try_from(selection.required_weight_files.len())
+                .expect("test weight-file count fits u32"),
+            weight_selection_commitment: selection.weight_selection_commitment,
+            disk_cache_bytes_floor: selection.required_model_bytes,
+            ram_bytes_floor: 1,
             vram_bytes_floor: 0,
+        }
+    }
+    fn sample_hf_resource_profile_for_tests() -> SoraHfResourceProfileV1 {
+        let model_info = test_hf_model_info(
+            "openai-community/gpt2",
+            TEST_HF_COMMIT_OID,
+            &[("model.safetensors", TEST_HF_WEIGHT_PAYLOAD)],
+        );
+        test_hf_resource_profile(&test_hf_selection(&model_info))
+    }
+    fn publish_single_weight_hf_test_generation(
+        state_dir: &Path,
+        source_id: &str,
+        repo_id: &str,
+        model_name: &str,
+        payload: &[u8],
+    ) -> Result<PinnedHfImportGeneration> {
+        let model_info = test_hf_model_info(
+            repo_id,
+            TEST_HF_COMMIT_OID,
+            &[("model.safetensors", payload)],
+        );
+        let model_info_payload = norito::json::to_vec(&model_info)?;
+        let selection = test_hf_selection(&model_info);
+        let profile = test_hf_resource_profile(&selection);
+        let mut staging = begin_hf_import_generation(state_dir, source_id)?;
+        write_bytes_atomic(
+            &staging.staging_root.join("model_info.json"),
+            &model_info_payload,
+        )?;
+        write_bytes_atomic(&staging.files_root.join("model.safetensors"), payload)?;
+        let manifest = HfLocalImportManifestV1 {
+            schema_version: HF_LOCAL_IMPORT_SCHEMA_VERSION_V1,
+            source_id: source_id.to_owned(),
+            repo_id: repo_id.to_owned(),
+            requested_revision: TEST_HF_COMMIT_OID.to_owned(),
+            resolved_commit: Some(TEST_HF_COMMIT_OID.to_owned()),
+            model_name: model_name.to_owned(),
+            adapter_id: "hf.shared.v1".to_owned(),
+            pipeline_tag: Some("text-generation".to_owned()),
+            library_name: Some("transformers".to_owned()),
+            tags: vec!["text-generation".to_owned()],
+            imported_at_ms: 20,
+            model_info_content_length: Some(u64::try_from(model_info_payload.len())?),
+            model_info_payload_hash: Some(Hash::new(&model_info_payload).to_string()),
+            selected_weight_format: Some(selection.model_format),
+            required_weight_files: local_hf_required_weight_records(&selection),
+            weight_selection_commitment: Some(selection.weight_selection_commitment.to_string()),
+            imported_files: vec![HfImportedFileV1 {
+                path: "model.safetensors".to_owned(),
+                content_length: u64::try_from(payload.len())?,
+                payload_hash: Hash::new(payload).to_string(),
+                lfs_sha256: Some(hex::encode(iroha_crypto::sha256(payload))),
+            }],
+            skipped_files: Vec::new(),
+            import_error: None,
+        };
+        validate_hf_import_cache_at_generation(
+            &staging.staging_root,
+            &staging.files_root,
+            &manifest,
+            &profile,
+            16,
+            1_024 * 1_024,
+            16 * 1_024 * 1_024,
+        )?;
+        publish_hf_import_generation(&mut staging, &manifest)?;
+        read_hf_import_generation(state_dir, source_id)?
+            .ok_or_else(|| eyre::eyre!("published Hugging Face test generation is missing"))
+    }
+    #[test]
+    fn hf_import_selection_requires_full_authoritative_profile_equality() {
+        let model_info = test_hf_model_info(
+            "openai-community/gpt2",
+            TEST_HF_COMMIT_OID,
+            &[("model.safetensors", TEST_HF_WEIGHT_PAYLOAD)],
+        );
+        let selection = test_hf_selection(&model_info);
+        let profile = test_hf_resource_profile(&selection);
+        validate_hf_weight_selection_against_profile(&selection, &profile)
+            .expect("matching selection and profile");
+
+        let mut mismatches = Vec::new();
+        let mut bytes = profile;
+        bytes.required_model_bytes = bytes.required_model_bytes.saturating_add(1);
+        bytes.disk_cache_bytes_floor = bytes.required_model_bytes;
+        mismatches.push(bytes);
+        let mut backend = profile;
+        backend.backend_family = SoraHfBackendFamilyV1::Gguf;
+        mismatches.push(backend);
+        let mut format = profile;
+        format.model_format = SoraHfModelFormatV1::PyTorch;
+        mismatches.push(format);
+        let mut count = profile;
+        count.selected_weight_file_count = count.selected_weight_file_count.saturating_add(1);
+        mismatches.push(count);
+        let mut commitment = profile;
+        commitment.weight_selection_commitment = Hash::new(b"different weight selection");
+        mismatches.push(commitment);
+
+        for mismatch in mismatches {
+            validate_hf_weight_selection_against_profile(&selection, &mismatch)
+                .expect_err("every authoritative selection field must match exactly");
         }
     }
     fn sample_agent_record() -> Result<SoraAgentApartmentRecordV1> {
@@ -28463,23 +28836,17 @@ mod tests {
         resolved_commit: &str,
         config_json: &[u8],
     ) -> Result<BTreeMap<(String, String), HttpFixtureResponse>> {
-        let weights = b"authenticated injected-test-runner model weights";
-        let model_info = norito::json!({
-            "sha": resolved_commit,
-            "pipeline_tag": "text-generation",
-            "library_name": "transformers",
-            "tags": ["text-generation"],
-            "siblings": [
-                {"rfilename": "config.json"},
-                {
-                    "rfilename": "model.safetensors",
-                    "lfs": {
-                        "sha256": hex::encode(iroha_crypto::sha256(weights)),
-                        "size": u64::try_from(weights.len()).expect("fixture length fits in u64")
-                    }
-                }
-            ]
-        });
+        let weights = TEST_HF_WEIGHT_PAYLOAD;
+        let mut model_info = test_hf_model_info(
+            "openai-community/gpt2",
+            resolved_commit,
+            &[("model.safetensors", weights)],
+        );
+        model_info
+            .get_mut("siblings")
+            .and_then(norito::json::Value::as_array_mut)
+            .expect("test model-info siblings")
+            .insert(0, norito::json!({"rfilename": "config.json"}));
         Ok(BTreeMap::from([
             (
                 (
@@ -28650,8 +29017,10 @@ mod tests {
                 &test_hf_credential_provider_binding(),
             )
             .expect("test credential-provider binding must be valid");
-        let qualified = crate::soracloud_hf_credential::
-            qualify_soracloud_hf_inference_credential_provider_v1(binding, raw)
+        let qualified =
+            crate::soracloud_hf_credential::qualify_soracloud_hf_inference_credential_provider_v1(
+                binding, raw,
+            )
             .expect("test credential provider must qualify");
         (provider, qualified)
     }
@@ -29417,6 +29786,23 @@ mod tests {
                 local_status,
                 local_peer_id,
             )
+        }
+        fn set_resource_profile_from_model_info(
+            &mut self,
+            model_info: &norito::json::Value,
+        ) {
+            let profile = test_hf_resource_profile(&test_hf_selection(model_info));
+            let world = &mut Arc::get_mut(&mut self.state)
+                .expect("unique generated HF test state")
+                .world;
+            let sources = world.soracloud_hf_sources_mut_for_testing();
+            let mut source = sources
+                .view()
+                .get(&self.service.source_id)
+                .cloned()
+                .expect("generated HF source record");
+            source.resource_profile = Some(profile);
+            sources.insert(self.service.source_id, source);
         }
         fn local_runtime(
             &self,
@@ -31130,63 +31516,12 @@ mod tests {
                 .zip(artifact_payloads)
                 .map(|(artifact, payload)| (artifact.artifact_hash, payload)),
         )?;
-        let source_root = temp_dir
-            .path()
-            .join("hf_sources")
-            .join(storage_path_component(&source_id.to_string()));
-        let files_root = reset_hf_import_files_root(temp_dir.path(), &source_id.to_string())?;
-        let weight_payload = b"authenticated runtime-readiness test weights";
-        write_bytes_atomic(&files_root.join("model.safetensors"), weight_payload)?;
-        let required_weight_files = vec![HfRequiredWeightFileV1 {
-            path: "model.safetensors".to_owned(),
-            content_length: u64::try_from(weight_payload.len())?,
-            lfs_sha256: hex::encode(iroha_crypto::sha256(weight_payload)),
-        }];
-        let model_info_payload = norito::json::to_vec(&norito::json!({
-            "sha": TEST_HF_COMMIT_OID,
-            "siblings": [{
-                "rfilename": "model.safetensors",
-                "lfs": {
-                    "sha256": required_weight_files[0].lfs_sha256.clone(),
-                    "size": required_weight_files[0].content_length
-                }
-            }]
-        }))?;
-        write_bytes_atomic(&source_root.join("model_info.json"), &model_info_payload)?;
-        write_json_atomic(
-            &source_root.join("import_manifest.json"),
-            &HfLocalImportManifestV1 {
-                schema_version: HF_LOCAL_IMPORT_SCHEMA_VERSION_V1,
-                source_id: source_id.to_string(),
-                repo_id: "openai/gpt-oss".to_owned(),
-                requested_revision: TEST_HF_COMMIT_OID.to_owned(),
-                resolved_commit: Some(TEST_HF_COMMIT_OID.to_owned()),
-                model_name: "gpt_oss_20b".to_owned(),
-                adapter_id: "hf.shared.v1".to_owned(),
-                pipeline_tag: Some("text-generation".to_owned()),
-                library_name: Some("transformers".to_owned()),
-                tags: vec!["text-generation".to_owned()],
-                imported_at_ms: 20,
-                model_info_content_length: Some(u64::try_from(model_info_payload.len())?),
-                model_info_payload_hash: Some(Hash::new(&model_info_payload).to_string()),
-                selected_weight_format: Some(HfImportWeightFormatV1::Safetensors),
-                weight_selection_commitment: Some(
-                    hf_weight_selection_commitment(
-                        HfImportWeightFormatV1::Safetensors,
-                        &required_weight_files,
-                    )
-                    .to_string(),
-                ),
-                required_weight_files,
-                imported_files: vec![HfImportedFileV1 {
-                    path: "model.safetensors".to_owned(),
-                    content_length: u64::try_from(weight_payload.len())?,
-                    payload_hash: Hash::new(weight_payload).to_string(),
-                    lfs_sha256: Some(hex::encode(iroha_crypto::sha256(weight_payload))),
-                }],
-                skipped_files: Vec::new(),
-                import_error: None,
-            },
+        let _generation = publish_single_weight_hf_test_generation(
+            temp_dir.path(),
+            &source_id.to_string(),
+            "openai/gpt-oss",
+            "gpt_oss_20b",
+            TEST_HF_WEIGHT_PAYLOAD,
         )?;
         let manager = SoracloudRuntimeManager::new(
             test_runtime_manager_config(temp_dir.path().to_path_buf())
@@ -31302,63 +31637,12 @@ mod tests {
             );
         }
         let temp_dir = tempfile::tempdir()?;
-        let source_root = temp_dir
-            .path()
-            .join("hf_sources")
-            .join(storage_path_component(&source_id.to_string()));
-        let files_root = reset_hf_import_files_root(temp_dir.path(), &source_id.to_string())?;
-        let weight_payload = b"authenticated generated-service test weights";
-        write_bytes_atomic(&files_root.join("model.safetensors"), weight_payload)?;
-        let required_weight_files = vec![HfRequiredWeightFileV1 {
-            path: "model.safetensors".to_owned(),
-            content_length: u64::try_from(weight_payload.len())?,
-            lfs_sha256: hex::encode(iroha_crypto::sha256(weight_payload)),
-        }];
-        let model_info_payload = norito::json::to_vec(&norito::json!({
-            "sha": TEST_HF_COMMIT_OID,
-            "siblings": [{
-                "rfilename": "model.safetensors",
-                "lfs": {
-                    "sha256": required_weight_files[0].lfs_sha256.clone(),
-                    "size": required_weight_files[0].content_length
-                }
-            }]
-        }))?;
-        write_bytes_atomic(&source_root.join("model_info.json"), &model_info_payload)?;
-        write_json_atomic(
-            &source_root.join("import_manifest.json"),
-            &HfLocalImportManifestV1 {
-                schema_version: HF_LOCAL_IMPORT_SCHEMA_VERSION_V1,
-                source_id: source_id.to_string(),
-                repo_id: "openai/gpt-oss".to_owned(),
-                requested_revision: TEST_HF_COMMIT_OID.to_owned(),
-                resolved_commit: Some(TEST_HF_COMMIT_OID.to_owned()),
-                model_name: "gpt-oss".to_owned(),
-                adapter_id: "hf.shared.v1".to_owned(),
-                pipeline_tag: Some("text-generation".to_owned()),
-                library_name: Some("transformers".to_owned()),
-                tags: vec!["text-generation".to_owned()],
-                imported_at_ms: 20,
-                model_info_content_length: Some(u64::try_from(model_info_payload.len())?),
-                model_info_payload_hash: Some(Hash::new(&model_info_payload).to_string()),
-                selected_weight_format: Some(HfImportWeightFormatV1::Safetensors),
-                weight_selection_commitment: Some(
-                    hf_weight_selection_commitment(
-                        HfImportWeightFormatV1::Safetensors,
-                        &required_weight_files,
-                    )
-                    .to_string(),
-                ),
-                required_weight_files,
-                imported_files: vec![HfImportedFileV1 {
-                    path: "model.safetensors".to_owned(),
-                    content_length: u64::try_from(weight_payload.len())?,
-                    payload_hash: Hash::new(weight_payload).to_string(),
-                    lfs_sha256: Some(hex::encode(iroha_crypto::sha256(weight_payload))),
-                }],
-                skipped_files: Vec::new(),
-                import_error: None,
-            },
+        let _generation = publish_single_weight_hf_test_generation(
+            temp_dir.path(),
+            &source_id.to_string(),
+            "openai/gpt-oss",
+            "gpt-oss",
+            TEST_HF_WEIGHT_PAYLOAD,
         )?;
         let manager = SoracloudRuntimeManager::new(
             test_runtime_manager_config(temp_dir.path().to_path_buf()),
@@ -31406,19 +31690,6 @@ mod tests {
         Ok(())
     }
     #[test]
-    fn hf_import_file_selected_matches_exact_and_suffix_patterns() {
-        let allowlist = vec![
-            "config.json".to_owned(),
-            "*.safetensors".to_owned(),
-            "tokenizer.json".to_owned(),
-        ];
-        assert!(hf_import_file_selected("config.json", &allowlist));
-        assert!(hf_import_file_selected("MODEL.SAFETENSORS", &allowlist));
-        assert!(hf_import_file_selected("tokenizer.json", &allowlist));
-        assert!(!hf_import_file_selected("README.md", &allowlist));
-        assert!(!hf_import_file_selected("config.yaml", &allowlist));
-    }
-    #[test]
     fn hf_model_info_commit_must_match_authoritative_revision() -> Result<()> {
         let matching = norito::json!({"sha": TEST_HF_COMMIT_OID});
         assert_eq!(
@@ -31439,6 +31710,40 @@ mod tests {
             .expect_err("missing provider commit must fail before import");
         validate_hf_model_info_resolved_commit(&matching, "main")
             .expect_err("mutable authoritative revision must fail closed");
+        Ok(())
+    }
+    #[test]
+    fn hf_model_info_identity_requires_exact_canonical_repo_and_commit() -> Result<()> {
+        let matching = norito::json!({
+            "modelId": "OpenAI-Community/GPT2",
+            "sha": TEST_HF_COMMIT_OID,
+        });
+        assert_eq!(
+            validate_hf_model_info_identity(
+                &matching,
+                "OpenAI-Community/GPT2",
+                TEST_HF_COMMIT_OID,
+            )?,
+            TEST_HF_COMMIT_OID,
+        );
+        for invalid in [
+            norito::json!({"sha": TEST_HF_COMMIT_OID}),
+            norito::json!({"modelId": "openai-community/gpt2", "sha": TEST_HF_COMMIT_OID}),
+            norito::json!({"modelId": "OpenAI-Community/GPT2", "sha": OTHER_TEST_HF_COMMIT_OID}),
+        ] {
+            validate_hf_model_info_identity(
+                &invalid,
+                "OpenAI-Community/GPT2",
+                TEST_HF_COMMIT_OID,
+            )
+            .expect_err("provider identity aliases and substitutions must fail closed");
+        }
+        validate_hf_model_info_identity(
+            &matching,
+            "bad../repo",
+            TEST_HF_COMMIT_OID,
+        )
+        .expect_err("authoritative repository ID must use the shared canonical grammar");
         Ok(())
     }
     #[test]
@@ -31471,19 +31776,24 @@ mod tests {
                 .expect_err("malformed LFS integrity metadata must fail closed");
         }
         let format_contract = [
-            ("weights.gguf", HfImportWeightFormatV1::Gguf),
-            ("weights.safetensors", HfImportWeightFormatV1::Safetensors),
-            ("pytorch_model.bin", HfImportWeightFormatV1::PyTorch),
-            ("weights.pt", HfImportWeightFormatV1::PyTorch),
-            ("weights.pth", HfImportWeightFormatV1::PyTorch),
-            ("rust_model.ot", HfImportWeightFormatV1::PyTorch),
+            ("weights.gguf", SoraHfModelFormatV1::Gguf),
+            ("weights.safetensors", SoraHfModelFormatV1::Safetensors),
+            ("pytorch_model.bin", SoraHfModelFormatV1::PyTorch),
+            ("weights.pt", SoraHfModelFormatV1::PyTorch),
+            ("weights.pth", SoraHfModelFormatV1::PyTorch),
+            ("rust_model.ot", SoraHfModelFormatV1::PyTorch),
         ];
         for (path, expected_format) in format_contract {
             assert!(
                 hf_import_file_requires_lfs_integrity(path),
                 "supported weight file `{path}` must require LFS integrity"
             );
-            assert_eq!(hf_import_weight_format(path), Some(expected_format));
+            let selection = test_hf_selection(&test_hf_model_info(
+                "openai-community/gpt2",
+                TEST_HF_COMMIT_OID,
+                &[(path, TEST_HF_WEIGHT_PAYLOAD)],
+            ));
+            assert_eq!(selection.model_format, expected_format);
             assert!(hf_import_file_requires_lfs_integrity(
                 path.to_ascii_uppercase().as_str()
             ));
@@ -31543,12 +31853,13 @@ mod tests {
     }
     #[test]
     fn reconcile_once_imports_hf_source_into_shared_local_cache() -> Result<()> {
-        let fixture = GeneratedHfTestFixture::new("hf_import_service")?;
+        let mut fixture = GeneratedHfTestFixture::new("hf_import_service")?;
         let config_json = br#"{"model_type":"gpt2"}"#.to_vec();
         let tokenizer_json = br#"{"version":"1.0"}"#.to_vec();
         let weights = b"authenticated safetensors weights".to_vec();
         let weight_sha256 = hex::encode(iroha_crypto::sha256(&weights));
         let model_info = norito::json!({
+            "modelId": "openai-community/gpt2",
             "sha": TEST_HF_COMMIT_OID,
             "pipeline_tag": "text-generation",
             "library_name": "transformers",
@@ -31566,6 +31877,7 @@ mod tests {
                 {"rfilename": "README.md"}
             ]
         });
+        fixture.set_resource_profile_from_model_info(&model_info);
         let model_info_body = norito::json::to_vec(&model_info)?;
         let mut routes = BTreeMap::new();
         routes.insert(
@@ -31643,8 +31955,9 @@ mod tests {
         let manager = SoracloudRuntimeManager::new(config, Arc::clone(&fixture.state));
         manager.reconcile_once()?;
         let source_id = fixture.source_id.to_string();
-        let manifest = read_hf_import_manifest(temp_dir.path(), &source_id)?
-            .expect("reconcile should write an HF import manifest");
+        let generation = read_hf_import_generation(temp_dir.path(), &source_id)?
+            .expect("reconcile should publish an HF import generation");
+        let manifest = &generation.manifest;
         assert_eq!(manifest.source_id, source_id);
         assert_eq!(manifest.repo_id, "openai-community/gpt2");
         assert_eq!(manifest.requested_revision, TEST_HF_COMMIT_OID);
@@ -31668,7 +31981,7 @@ mod tests {
             ]
         );
         assert!(manifest.skipped_files.is_empty());
-        let imported_root = hf_local_source_files_root(temp_dir.path(), &source_id);
+        let imported_root = generation.files_root.clone();
         assert_eq!(
             fs::read(imported_root.join("weights.safetensors"))?,
             weights
@@ -31683,10 +31996,13 @@ mod tests {
             b"{\"model_type\":\"bad!\"}",
         )?;
         manager.reconcile_once()?;
+        let repaired = read_hf_import_generation(temp_dir.path(), &source_id)?
+            .expect("re-import should publish a replacement generation");
+        assert_ne!(generation.name, repaired.name);
         assert_eq!(
-            fs::read(imported_root.join("config.json"))?,
+            fs::read(repaired.files_root.join("config.json"))?,
             config_json,
-            "cache reuse must detect payload drift and perform a clean authenticated re-import"
+            "cache reuse must detect payload drift and publish a clean authenticated generation"
         );
         let projection = manager
             .snapshot
@@ -31707,16 +32023,18 @@ mod tests {
     }
     #[test]
     fn reconcile_once_authenticates_lfs_model_bytes_before_publication() -> Result<()> {
-        let fixture = GeneratedHfTestFixture::new("hf_lfs_integrity_service")?;
+        let mut fixture = GeneratedHfTestFixture::new("hf_lfs_integrity_service")?;
         let weights = b"authenticated safetensors fixture".to_vec();
         let lfs_sha256 = hex::encode(iroha_crypto::sha256(&weights));
         let model_info = norito::json!({
+            "modelId": "openai-community/gpt2",
             "sha": TEST_HF_COMMIT_OID,
             "siblings": [{
                 "rfilename": "model.safetensors",
                 "lfs": {"sha256": lfs_sha256, "size": weights.len() as u64}
             }]
         });
+        fixture.set_resource_profile_from_model_info(&model_info);
         let routes = BTreeMap::from([
             (
                 (
@@ -31755,8 +32073,9 @@ mod tests {
         let manager = SoracloudRuntimeManager::new(config, Arc::clone(&fixture.state));
         manager.reconcile_once()?;
         let source_id = fixture.source_id.to_string();
-        let manifest = read_hf_import_manifest(temp_dir.path(), &source_id)?
-            .expect("authenticated LFS import manifest");
+        let generation = read_hf_import_generation(temp_dir.path(), &source_id)?
+            .expect("authenticated LFS import generation");
+        let manifest = &generation.manifest;
         assert!(manifest.import_error.is_none());
         assert_eq!(manifest.imported_files.len(), 1);
         assert_eq!(
@@ -31764,19 +32083,18 @@ mod tests {
             Some(lfs_sha256.as_str())
         );
         assert_eq!(
-            fs::read(
-                hf_local_source_files_root(temp_dir.path(), &source_id).join("model.safetensors")
-            )?,
+            fs::read(generation.files_root.join("model.safetensors"))?,
             weights
         );
         Ok(())
     }
     #[test]
     fn reconcile_once_rejects_required_weight_set_above_file_limit_before_download() -> Result<()> {
-        let fixture = GeneratedHfTestFixture::new("hf_required_weight_count_limit")?;
+        let mut fixture = GeneratedHfTestFixture::new("hf_required_weight_count_limit")?;
         let first = b"authenticated shard one";
         let second = b"authenticated shard two";
         let model_info = norito::json!({
+            "modelId": "openai-community/gpt2",
             "sha": TEST_HF_COMMIT_OID,
             "siblings": [
                 {
@@ -31795,6 +32113,7 @@ mod tests {
                 }
             ]
         });
+        fixture.set_resource_profile_from_model_info(&model_info);
         let routes = BTreeMap::from([(
             (
                 "GET".to_owned(),
@@ -31820,7 +32139,7 @@ mod tests {
             manifest
                 .import_error
                 .as_deref()
-                .is_some_and(|error| { error.contains("requires 2 authenticated weight files") })
+                .is_some_and(|error| error.contains("selected weight set has 2 files"))
         );
         assert_eq!(
             captured.lock().expect("captured requests").len(),
@@ -31828,7 +32147,12 @@ mod tests {
             "required weight count must be rejected before ancillary or shard downloads"
         );
         assert_eq!(
-            fs::read_dir(hf_local_source_files_root(temp_dir.path(), &source_id))?.count(),
+            fs::read_dir(
+                read_hf_import_generation(temp_dir.path(), &source_id)?
+                    .expect("failed import generation")
+                    .files_root,
+            )?
+            .count(),
             0,
             "failed import must not retain a partial executable cache"
         );
@@ -31836,10 +32160,11 @@ mod tests {
     }
     #[test]
     fn reconcile_once_rejects_incomplete_weight_shards_atomically() -> Result<()> {
-        let fixture = GeneratedHfTestFixture::new("hf_incomplete_weight_shards")?;
+        let mut fixture = GeneratedHfTestFixture::new("hf_incomplete_weight_shards")?;
         let first = b"authenticated shard one".to_vec();
         let second = b"authenticated shard two".to_vec();
         let model_info = norito::json!({
+            "modelId": "openai-community/gpt2",
             "sha": TEST_HF_COMMIT_OID,
             "siblings": [
                 {
@@ -31858,6 +32183,7 @@ mod tests {
                 }
             ]
         });
+        fixture.set_resource_profile_from_model_info(&model_info);
         let first_path =
             format!("/openai-community/gpt2/resolve/{TEST_HF_COMMIT_OID}/model-00001.safetensors");
         let second_path =
@@ -31910,7 +32236,12 @@ mod tests {
         }));
         assert!(manifest.imported_files.is_empty());
         assert_eq!(
-            fs::read_dir(hf_local_source_files_root(temp_dir.path(), &source_id))?.count(),
+            fs::read_dir(
+                read_hf_import_generation(temp_dir.path(), &source_id)?
+                    .expect("failed import generation")
+                    .files_root,
+            )?
+            .count(),
             0,
             "terminal shard failure must discard every previously downloaded shard"
         );
@@ -32184,10 +32515,7 @@ mod tests {
             .execute_local_read(generated_hf_infer_request(
                 &fixture,
                 None,
-                BTreeMap::from([(
-                    HF_USE_INFERENCE_BRIDGE_HEADER_V1.to_owned(),
-                    "1".to_owned(),
-                )]),
+                BTreeMap::from([(HF_USE_INFERENCE_BRIDGE_HEADER_V1.to_owned(), "1".to_owned())]),
                 br#"{"inputs":"hello"}"#.to_vec(),
                 Hash::new(b"hf-infer-unconfigured-bridge"),
             ))
@@ -32751,8 +33079,7 @@ mod tests {
         );
         let temp_dir = tempfile::tempdir()?;
         let mut config = test_runtime_manager_config(temp_dir.path().to_path_buf());
-        config.hf.inference_base_url =
-            "https://inference.sora.test/hf-inference/models".to_owned();
+        config.hf.inference_base_url = "https://inference.sora.test/hf-inference/models".to_owned();
         config.hf.inference_credential_provider = Some(test_hf_credential_provider_binding());
         let response_body = br#"{"generated_text":"hello from authenticated bridge"}"#.to_vec();
         let (recording_provider, qualified_provider) =
@@ -32766,17 +33093,31 @@ mod tests {
         .with_mutation_sink(mutation_sink.clone());
         let handle = test_runtime_handle(&manager, Arc::clone(&fixture.state));
         let request_body = br#"{"inputs":"Hello from Soracloud"}"#.to_vec();
-        let response = handle
+        let rejected = handle
             .execute_local_read(generated_hf_infer_request(
                 &fixture,
                 Some("wait_for_model=true".to_owned()),
                 BTreeMap::from([
                     ("content-type".to_owned(), "application/json".to_owned()),
+                    (HF_USE_INFERENCE_BRIDGE_HEADER_V1.to_owned(), "1".to_owned()),
+                ]),
+                request_body.clone(),
+                Hash::new(b"hf-infer-query-rejection"),
+            ))
+            .expect_err("caller-supplied provider query parameters must fail closed");
+        assert_eq!(
+            rejected.kind,
+            SoracloudRuntimeExecutionErrorKind::InvalidRequest
+        );
+        assert!(recording_provider.requests.lock().expect("provider requests").is_empty());
+        let response = handle
+            .execute_local_read(generated_hf_infer_request(
+                &fixture,
+                Some(String::new()),
+                BTreeMap::from([
+                    ("content-type".to_owned(), "application/json".to_owned()),
                     ("accept".to_owned(), "application/json".to_owned()),
-                    (
-                        HF_USE_INFERENCE_BRIDGE_HEADER_V1.to_owned(),
-                        "1".to_owned(),
-                    ),
+                    (HF_USE_INFERENCE_BRIDGE_HEADER_V1.to_owned(), "1".to_owned()),
                 ]),
                 request_body.clone(),
                 Hash::new(b"hf-infer-request"),
@@ -32797,7 +33138,7 @@ mod tests {
         assert_eq!(
             captured[0].url,
             format!(
-                "https://inference.sora.test/hf-inference/models/openai-community/gpt2?wait_for_model=true&revision={TEST_HF_COMMIT_OID}"
+                "https://inference.sora.test/hf-inference/models/openai-community/gpt2?revision={TEST_HF_COMMIT_OID}"
             )
         );
         assert_eq!(captured[0].content_type, "application/json");
@@ -32986,6 +33327,7 @@ mod tests {
             &config.state_dir,
             config.state_dir.join("artifacts"),
             &config.cache_budgets,
+            &config.hf,
             config.local_validator_account_id.as_ref(),
             config.local_peer_id.as_deref(),
             true,
@@ -35538,15 +35880,24 @@ mod tests {
         let duplicate = format!(
             "{valid}  TCP[HOST_FORWARD]  14  127.0.0.1       41232  10.0.2.15     8080 0     0\n"
         );
-        parse_inrou_qmp_usernet_forward(&duplicate, 8080)
-            .expect_err("multiple forwards must fail closed");
-        parse_inrou_qmp_usernet_forward(
-            "TCP[HOST_FORWARD] 13 0.0.0.0 41231 10.0.2.15 8080 0 0\n",
-            8080,
-        )
-        .expect_err("a non-loopback forward must fail closed");
-        parse_inrou_qmp_usernet_forward(valid, 8081)
-            .expect_err("a forward to the wrong guest port must fail closed");
+        assert_eyre_error_contains(
+            parse_inrou_qmp_usernet_forward(&duplicate, 8080)
+                .expect_err("multiple forwards must fail closed"),
+            "exactly one process-owned TCP host forward",
+        );
+        assert_eyre_error_contains(
+            parse_inrou_qmp_usernet_forward(
+                "TCP[HOST_FORWARD] 13 0.0.0.0 41231 10.0.2.15 8080 0 0\n",
+                8080,
+            )
+            .expect_err("a non-loopback forward must fail closed"),
+            "outside its exact binding",
+        );
+        assert_eyre_error_contains(
+            parse_inrou_qmp_usernet_forward(valid, 8081)
+                .expect_err("a forward to the wrong guest port must fail closed"),
+            "outside its exact binding",
+        );
         Ok(())
     }
     #[test]
@@ -35658,18 +36009,30 @@ mod tests {
             },
         )?);
         validate_inrou_qemu_proc_status(valid, &identity)?;
-        validate_inrou_qemu_proc_status(
-            &valid.replace("CapBnd:\t0000000000000000", "CapBnd:\t1"),
-            &identity,
-        )
-        .expect_err("a retained bounding capability must fail closed");
-        validate_inrou_qemu_proc_status(
-            &valid.replace("Groups:\t108 109", "Groups:\t108 110"),
-            &identity,
-        )
-        .expect_err("supplementary group drift must fail closed");
-        validate_inrou_qemu_proc_status(&valid.replace("Seccomp:\t2", "Seccomp:\t0"), &identity)
-            .expect_err("QEMU must enter seccomp filter mode before QMP is trusted");
+        assert_eyre_error_contains(
+            validate_inrou_qemu_proc_status(
+                &valid.replace("CapBnd:\t0000000000000000", "CapBnd:\t1"),
+                &identity,
+            )
+            .expect_err("a retained bounding capability must fail closed"),
+            "retained capabilities in `CapBnd`",
+        );
+        assert_eyre_error_contains(
+            validate_inrou_qemu_proc_status(
+                &valid.replace("Groups:\t108 109", "Groups:\t108 110"),
+                &identity,
+            )
+            .expect_err("supplementary group drift must fail closed"),
+            "exact supplementary groups",
+        );
+        assert_eyre_error_contains(
+            validate_inrou_qemu_proc_status(
+                &valid.replace("Seccomp:\t2", "Seccomp:\t0"),
+                &identity,
+            )
+            .expect_err("QEMU must enter seccomp filter mode before QMP is trusted"),
+            "seccomp filter mode",
+        );
         Ok(())
     }
     struct TestPartialWriter {
@@ -36556,7 +36919,7 @@ mod tests {
             let _ = qmp_release_rx.recv_timeout(Duration::from_secs(5));
             Ok(())
         });
-        let qmp_control = Arc::new(Mutex::new(PortableVmQmpControl {
+        let qmp_control = Arc::new(parking_lot::Mutex::new(PortableVmQmpControl {
             reader: io::BufReader::new(supervisor_qmp),
         }));
         let public = TcpListener::bind((Ipv4Addr::LOCALHOST, 0))?;
@@ -36619,16 +36982,25 @@ mod tests {
         let base_url = format!("http://{}", listener.local_addr()?);
         probe_hosted_http_health(&base_url, None)?;
         drop(listener);
-        probe_hosted_http_health(&base_url, None)
-            .expect_err("a missing listener must not be reported as healthy");
-        probe_hosted_http_health(&format!("{base_url}/unexpected"), None)
-            .expect_err("listener probes must reject URLs outside the exact origin");
+        assert_eyre_error_contains(
+            probe_hosted_http_health(&base_url, None)
+                .expect_err("a missing listener must not be reported as healthy"),
+            "connect to hosted-HTTP listener",
+        );
+        assert_eyre_error_contains(
+            probe_hosted_http_health(&format!("{base_url}/unexpected"), None)
+                .expect_err("listener probes must reject URLs outside the exact origin"),
+            "must be an explicit IPv4 loopback HTTP origin",
+        );
         Ok(())
     }
     #[test]
     fn hosted_http_health_probe_rejects_redirects_and_non_loopback_origins() -> Result<()> {
-        probe_hosted_http_health("http://192.0.2.1:8080", Some("/health"))
-            .expect_err("health probes must remain on the explicit loopback origin");
+        assert_eyre_error_contains(
+            probe_hosted_http_health("http://192.0.2.1:8080", Some("/health"))
+                .expect_err("health probes must remain on the explicit loopback origin"),
+            "must be an explicit IPv4 loopback HTTP origin",
+        );
 
         let redirect_target = std::net::TcpListener::bind((Ipv4Addr::LOCALHOST, 0))?;
         redirect_target.set_nonblocking(true)?;
@@ -36659,8 +37031,11 @@ mod tests {
             }
         });
 
-        probe_hosted_http_health(&format!("http://{source_address}"), Some("/health"))
-            .expect_err("a redirect must not satisfy the health probe");
+        assert_eyre_error_contains(
+            probe_hosted_http_health(&format!("http://{source_address}"), Some("/health"))
+                .expect_err("a redirect must not satisfy the health probe"),
+            "returned 302",
+        );
         source.join().expect("redirect source thread");
         assert!(
             !target.join().expect("redirect target thread"),
@@ -36739,12 +37114,18 @@ mod tests {
         };
         validate_portable_vm_kvm_identity(&identity, kvm_device)?;
         identity.supplementary_gids.push(999);
-        validate_portable_vm_kvm_identity(&identity, kvm_device)
-            .expect_err("KVM must reject unrelated supplementary groups");
+        assert_eyre_error_contains(
+            validate_portable_vm_kvm_identity(&identity, kvm_device)
+                .expect_err("KVM must reject unrelated supplementary groups"),
+            "supplementary gids must be exactly",
+        );
         identity.gid = 108;
         identity.supplementary_gids.clear();
-        validate_portable_vm_kvm_identity(&identity, kvm_device)
-            .expect_err("the shared KVM group must not protect tenant disks");
+        assert_eyre_error_contains(
+            validate_portable_vm_kvm_identity(&identity, kvm_device)
+                .expect_err("the shared KVM group must not protect tenant disks"),
+            "must remain distinct",
+        );
         Ok(())
     }
     #[test]
@@ -36806,8 +37187,11 @@ mod tests {
                 supplementary_gids: vec![gid],
                 ..accepted.clone()
             };
-            validate_portable_vm_child_identity_values(&rejected)
-                .expect_err("Linux host-reserved supplementary gids must fail closed");
+            assert_eyre_error_contains(
+                validate_portable_vm_child_identity_values(&rejected)
+                    .expect_err("Linux host-reserved supplementary gids must fail closed"),
+                "Inrou QEMU supplementary gid",
+            );
         }
         Ok(())
     }
@@ -36828,8 +37212,16 @@ mod tests {
             "passwd: files\npasswd: files\ngroup: files\n",
             "passwd: files\ngroup: files\nSUBID: sss\n",
         ] {
-            validate_inrou_local_nsswitch(invalid)
-                .expect_err("remote, missing, or ambiguous NSS identity sources must fail closed");
+            assert_eyre_error_contains_any(
+                validate_inrou_local_nsswitch(invalid).expect_err(
+                    "remote, missing, or ambiguous NSS identity sources must fail closed",
+                ),
+                &[
+                    "/etc/nsswitch.conf",
+                    "NSS resolution",
+                    "requires deterministic `subid: files` resolution",
+                ],
+            );
         }
 
         let passwd = "root:x:0:0:root:/root:/bin/sh\niroha-inrou-0:x:70000:70000::/nonexistent:/usr/sbin/nologin\n";
@@ -36846,8 +37238,12 @@ mod tests {
             "root:x:0:0:root:/root:/bin/sh\niroha-inrou-0:x:70000:70000::/nonexistent:/bin/sh\n",
             "other:x:1234:70000::/nonexistent:/usr/sbin/nologin\niroha-inrou-0:x:70000:70000::/nonexistent:/usr/sbin/nologin\n",
         ] {
-            validate_inrou_reserved_passwd(invalid, &identity)
-                .expect_err("an ambiguous or login-capable service passwd row must fail closed");
+            assert_eyre_error_contains(
+                validate_inrou_reserved_passwd(invalid, &identity).expect_err(
+                    "an ambiguous or login-capable service passwd row must fail closed",
+                ),
+                "passwd",
+            );
         }
 
         let group = "root:x:0:\nkvm:x:108:\niroha-inrou-0:x:70000:\n";
@@ -36859,8 +37255,11 @@ mod tests {
             "root:x:0:\ndocker:x:999:iroha-inrou-0\niroha-inrou-0:x:70000:\n",
             "root:x:0:\niroha-inrou-0:x:70000:iroha-inrou-0\n",
         ] {
-            validate_inrou_reserved_group(invalid, &identity)
-                .expect_err("ambiguous identity groups or memberships must fail closed");
+            assert_eyre_error_contains(
+                validate_inrou_reserved_group(invalid, &identity)
+                    .expect_err("ambiguous identity groups or memberships must fail closed"),
+                "group",
+            );
         }
         validate_inrou_reserved_shadow("iroha-inrou-0:!:20000:0:99999:7:::\n", &identity)?;
         validate_inrou_reserved_shadow("iroha-inrou-0:$6$hash:20000:0:99999:7:::\n", &identity)
@@ -37014,8 +37413,11 @@ mod tests {
                 ..secure
             },
         ] {
-            validate_portable_vm_kvm_identity(&identity, insecure)
-                .expect_err("insecure `/dev/kvm` custody must fail closed");
+            assert_eyre_error_contains(
+                validate_portable_vm_kvm_identity(&identity, insecure)
+                    .expect_err("insecure `/dev/kvm` custody must fail closed"),
+                "`/dev/kvm`",
+            );
         }
     }
     #[cfg(target_os = "linux")]
@@ -37150,8 +37552,11 @@ mod tests {
             fs::set_permissions(&installed, fs::Permissions::from_mode(0o600))?;
         }
 
-        install_staged_inrou_disk(&staged, &installed, Some(4))
-            .expect_err("installing a staged disk must never replace existing lease state");
+        assert_eyre_error_contains(
+            install_staged_inrou_disk(&staged, &installed, Some(4))
+                .expect_err("installing a staged disk must never replace existing lease state"),
+            "without replacing existing state",
+        );
         assert_eq!(fs::read(&installed)?, b"old!");
         assert_eq!(fs::read(&staged)?, b"new!");
         Ok(())
@@ -37397,26 +37802,41 @@ mod tests {
         fs::write(&disk, b"disk")?;
         fs::set_permissions(&disk, fs::Permissions::from_mode(0o600))?;
         validate_reusable_inrou_disk(&disk, Some(4))?;
-        validate_reusable_inrou_disk(&disk, Some(5))
-            .expect_err("a reusable raw disk must retain its configured length");
+        assert_eyre_error_contains(
+            validate_reusable_inrou_disk(&disk, Some(5))
+                .expect_err("a reusable raw disk must retain its configured length"),
+            "instead of the required",
+        );
 
         let symbolic = temp_dir.path().join("symbolic.raw");
         std::os::unix::fs::symlink(&disk, &symbolic)?;
-        validate_reusable_inrou_disk(&symbolic, None)
-            .expect_err("a reusable disk must not follow symbolic links");
+        assert_eyre_error_contains(
+            validate_reusable_inrou_disk(&symbolic, None)
+                .expect_err("a reusable disk must not follow symbolic links"),
+            "must be a regular file",
+        );
 
         let hard = temp_dir.path().join("hard.raw");
         fs::hard_link(&disk, &hard)?;
-        validate_reusable_inrou_disk(&disk, None)
-            .expect_err("a multiply linked reusable disk must fail closed");
+        assert_eyre_error_contains(
+            validate_reusable_inrou_disk(&disk, None)
+                .expect_err("a multiply linked reusable disk must fail closed"),
+            "must have exactly one hard link",
+        );
         fs::remove_file(hard)?;
 
         fs::set_permissions(&disk, fs::Permissions::from_mode(0o622))?;
-        validate_reusable_inrou_disk(&disk, None)
-            .expect_err("a disk writable by other users must fail closed");
+        assert_eyre_error_contains(
+            validate_reusable_inrou_disk(&disk, None)
+                .expect_err("a disk writable by other users must fail closed"),
+            "owner-writable and inaccessible",
+        );
         fs::set_permissions(&disk, fs::Permissions::from_mode(0o400))?;
-        validate_reusable_inrou_disk(&disk, None)
-            .expect_err("a reusable disk must remain writable by its owner");
+        assert_eyre_error_contains(
+            validate_reusable_inrou_disk(&disk, None)
+                .expect_err("a reusable disk must remain writable by its owner"),
+            "owner-writable and inaccessible",
+        );
         Ok(())
     }
     #[cfg(target_os = "linux")]
@@ -37474,20 +37894,30 @@ mod tests {
         assert_eq!(fs::metadata(&secure)?.permissions().mode() & 0o777, 0o700);
 
         fs::set_permissions(&secure, fs::Permissions::from_mode(0o770))?;
-        ensure_secure_inrou_disk_directory(&secure)
-            .expect_err("a group-writable disk directory must fail closed");
+        assert_eyre_error_contains(
+            ensure_secure_inrou_disk_directory(&secure)
+                .expect_err("a group-writable disk directory must fail closed"),
+            "custody permits path replacement",
+        );
 
         let linked = temp_dir.path().join("linked-volume");
         std::os::unix::fs::symlink(temp_dir.path(), &linked)?;
-        ensure_secure_inrou_disk_directory(&linked)
-            .expect_err("a disk-directory symbolic link must fail closed");
+        assert_eyre_error_contains(
+            ensure_secure_inrou_disk_directory(&linked)
+                .expect_err("a disk-directory symbolic link must fail closed"),
+            "contains symlink component",
+        );
 
         let real_parent = temp_dir.path().join("real-parent");
         fs::create_dir(&real_parent)?;
         let linked_parent = temp_dir.path().join("linked-parent");
         std::os::unix::fs::symlink(&real_parent, &linked_parent)?;
-        ensure_secure_inrou_disk_directory(&linked_parent.join("nested-volume"))
-            .expect_err("a symbolic-link ancestor must fail before disk creation or delegation");
+        assert_eyre_error_contains(
+            ensure_secure_inrou_disk_directory(&linked_parent.join("nested-volume")).expect_err(
+                "a symbolic-link ancestor must fail before disk creation or delegation",
+            ),
+            "contains symlink component",
+        );
         Ok(())
     }
     #[test]
@@ -37504,8 +37934,11 @@ mod tests {
 
         let mut mismatched_plan = plan;
         mismatched_plan.rootfs_image_path = "/inrou/other-rootfs.ext4".to_owned();
-        inrou_rootfs_base_binding(&bundle, &mismatched_plan)
-            .expect_err("an unsigned rootfs plan substitution must fail closed");
+        assert_eyre_error_contains(
+            inrou_rootfs_base_binding(&bundle, &mismatched_plan)
+                .expect_err("an unsigned rootfs plan substitution must fail closed"),
+            "does not match the signed bundle",
+        );
         Ok(())
     }
     #[cfg(not(windows))]

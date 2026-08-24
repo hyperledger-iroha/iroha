@@ -15,9 +15,13 @@ fi
 "${DOTNET_BIN}" test \
   "${ROOT_DIR}/csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj" \
   --artifacts-path "${ARTIFACTS}" \
-  --filter "FullyQualifiedName~KagemushaToriiTests|FullyQualifiedName~VerifyingKeyBackendTagTests|FullyQualifiedName~ToriiClientTests|FullyQualifiedName~TransactionBuilderTests" \
   -p:ProduceReferenceAssembly=false \
-  --logger "console;verbosity=minimal"
+  -- \
+  --filter-class \
+    Hyperledger.Iroha.Sdk.Tests.KagemushaToriiTests \
+    Hyperledger.Iroha.Sdk.Tests.VerifyingKeyBackendTagTests \
+    Hyperledger.Iroha.Sdk.Tests.ToriiClientTests \
+    Hyperledger.Iroha.Sdk.Tests.TransactionBuilderTests
 
 client="${ROOT_DIR}/csharp/src/Hyperledger.Iroha.Sdk/Torii/ToriiKagemushaClient.cs"
 models="${ROOT_DIR}/csharp/src/Hyperledger.Iroha.Sdk/Torii/ToriiKagemushaModels.cs"
@@ -34,7 +38,8 @@ grep -Fq '"/v1/offline/top-up"' "${client}"
 grep -Fq '"/v1/offline/redeem"' "${client}"
 grep -Fq '"/v1/offline/operations/' "${client}"
 
-if grep -REni '(class|record|interface)[[:space:]]+[^[:space:]]*Kagemusha[^[:space:]]*Prover|DllImport.*Kagemusha|LibraryImport.*Kagemusha' \
+if grep -rEni --include='*.cs' --exclude-dir=bin --exclude-dir=obj \
+  '(class|record|interface)[[:space:]]+[^[:space:]]*Kagemusha[^[:space:]]*Prover|DllImport.*Kagemusha|LibraryImport.*Kagemusha' \
   "${ROOT_DIR}/csharp/src"; then
   echo "error: C# must remain a Torii DTO/transport client and must not claim a Kagemusha native prover" >&2
   exit 1

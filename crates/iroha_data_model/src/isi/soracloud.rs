@@ -1193,7 +1193,7 @@ impl PartialOrd for ClearSoracloudInrouReplicaRuntimeState {
 ///
 /// A live report requires the transaction authority to be an active
 /// public-lane validator assigned to the exact service revision and replica
-/// slot and immutable lease incarnation. A terminal report may instead come
+/// slot and current reporting epoch. A terminal report may instead come
 /// from the exact former authority of an existing reporter checkpoint; the
 /// first terminal update requires it to be open, while an exact finalized
 /// replay is idempotent. Manager authority is not a substitute for either
@@ -1204,8 +1204,9 @@ impl PartialOrd for ClearSoracloudInrouReplicaRuntimeState {
 pub struct ReportSoracloudServiceLeaseUsage {
     /// Service whose hosted-service lease should be updated.
     pub service_name: Name,
-    /// Immutable start sequence of the lease incarnation being reported.
-    pub lease_started_sequence: u64,
+    /// Current reporting epoch, or its exact successor when atomically opening
+    /// a new epoch at the reporter-checkpoint hard limit.
+    pub reporting_epoch: u64,
     /// Active service revision observed by the runtime.
     pub active_service_version: String,
     /// One-based placed replica slot whose reporter emitted the usage.
@@ -1645,7 +1646,7 @@ impl_soracloud_decode_from_slice!(ClearSoracloudInrouReplicaRuntimeState {
 });
 impl_soracloud_decode_from_slice!(ReportSoracloudServiceLeaseUsage {
     service_name: Name,
-    lease_started_sequence: u64,
+    reporting_epoch: u64,
     active_service_version: String,
     replica_slot: u16,
     replica_accounted_egress_bytes: u64,
@@ -1808,7 +1809,7 @@ mod tests {
         });
         assert_slice_roundtrip(ReportSoracloudServiceLeaseUsage {
             service_name: name("portal"),
-            lease_started_sequence: 42,
+            reporting_epoch: 1,
             active_service_version: "2026.5".to_owned(),
             replica_slot: 1,
             replica_accounted_egress_bytes: 4096,
@@ -2541,6 +2542,7 @@ mod tests {
                     health_status: crate::soracloud::SoraServiceHealthStatusV1::Healthy,
                     load_factor_bps: 0,
                     materialized_bundle_hash: hash("bundle"),
+                    reporting_epoch: 1,
                     accounted_egress_bytes: 0,
                     pending_mailbox_message_count: 0,
                     last_receipt_id: None,

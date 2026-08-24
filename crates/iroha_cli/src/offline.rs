@@ -103,30 +103,6 @@ impl Run for KagemushaCommand {
         }
     }
 }
-fn parse_canonical_sha256(value: &str) -> Result<[u8; 32], String> {
-    if value.len() != 64
-        || !value
-            .bytes()
-            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
-    {
-        return Err("expected exactly 64 lowercase hexadecimal characters".to_owned());
-    }
-    let mut digest = [0_u8; 32];
-    hex::decode_to_slice(value, &mut digest)
-        .map_err(|_| "expected exactly 64 lowercase hexadecimal characters".to_owned())?;
-    Ok(digest)
-}
-fn parse_promotion_id(value: &str) -> Result<[u8; 32], String> {
-    let digest = parse_nonzero_canonical_sha256(value)?;
-    Ok(digest)
-}
-fn parse_nonzero_canonical_sha256(value: &str) -> Result<[u8; 32], String> {
-    let digest = parse_canonical_sha256(value)?;
-    if digest == [0; 32] {
-        return Err("digest must be nonzero".to_owned());
-    }
-    Ok(digest)
-}
 #[derive(Subcommand, Debug)]
 pub(crate) enum PetalCommand {
     /// Encode one payload into a deterministic Petal PNG and manifest.
@@ -2554,25 +2530,6 @@ mod tests {
     use iroha_i18n::{Bundle, Language, Localizer};
     use norito::json::Value;
     use std::fmt::Display;
-    #[test]
-    fn kagemusha_manifest_digest_requires_canonical_lowercase_sha256() {
-        let canonical = "ab".repeat(32);
-        assert_eq!(parse_canonical_sha256(&canonical), Ok([0xab; 32]));
-        assert!(parse_canonical_sha256(&canonical.to_uppercase()).is_err());
-        assert!(parse_canonical_sha256(&canonical[..63]).is_err());
-        assert!(parse_canonical_sha256(&format!("0x{canonical}")).is_err());
-    }
-    #[test]
-    fn kagemusha_promotion_id_requires_nonzero_canonical_lowercase_sha256() {
-        assert_eq!(parse_promotion_id(&"ab".repeat(32)), Ok([0xab; 32]));
-        assert!(parse_promotion_id(&"00".repeat(32)).is_err());
-        assert!(parse_promotion_id(&"AB".repeat(32)).is_err());
-        assert_eq!(
-            parse_nonzero_canonical_sha256(&"cd".repeat(32)),
-            Ok([0xcd; 32]),
-        );
-        assert!(parse_nonzero_canonical_sha256(&"00".repeat(32)).is_err());
-    }
     struct TestContext {
         output_format: crate::CliOutputFormat,
         printed: Vec<String>,

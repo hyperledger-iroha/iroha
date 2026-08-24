@@ -394,6 +394,13 @@ owner
             error.reason(),
             error.detail(),
         ),
+        crate::sumeragi::v2_lifecycle_coordinator::CertifiedFetchBodyPersistenceCompletionError::RestartRequiredBeforeLedger(
+            error,
+        ) => panic!(
+            "A lost its productive ingress before persistence: {}: {}",
+            error.reason(),
+            error.detail(),
+        ),
         crate::sumeragi::v2_lifecycle_coordinator::CertifiedFetchBodyPersistenceCompletionError::RestartRequired(
             error,
         ) => panic!(
@@ -401,6 +408,9 @@ owner
             error.reason(),
             error.detail(),
         ),
+        crate::sumeragi::v2_lifecycle_coordinator::CertifiedFetchBodyPersistenceCompletionError::RestartRequiredAfterDequeue(
+            error,
+        ) => panic!("A lost its exact Runtime handoff after dequeue: {error}"),
         crate::sumeragi::v2_lifecycle_coordinator::CertifiedFetchBodyPersistenceCompletionError::RestartRequiredAfterCommit(
             error,
         ) => panic!("A failed after the persistence commit: {error}"),

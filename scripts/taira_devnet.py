@@ -606,10 +606,16 @@ def require_runtime_signer_files(target: Path) -> None:
 
 
 def delete_runtime_signer_files(target: Path) -> None:
-    """Delete the stopped cohort's persistent keys and validated launch remnants."""
+    """Idempotently delete the stopped cohort's validated signer material."""
 
-    require_runtime_signer_files(target)
     directory = target / RUNTIME_SIGNER_DIRECTORY
+    if directory.is_symlink():
+        fail(f"refusing symlinked Taira runtime signer directory: {directory}")
+    if not directory.exists():
+        return
+    if not directory.is_dir():
+        fail(f"Taira runtime signer path is not a directory: {directory}")
+    require_runtime_signer_files(target)
     source_paths = runtime_signer_paths(target)
     launch_paths = runtime_signer_launch_paths(target)
     expected = {path.name for path in (*source_paths, *launch_paths)}

@@ -24,6 +24,8 @@ mod protocol;
 mod state_abi;
 /// Exact Eq/Fp and Ep/Fq STATE relation circuit scaffolds.
 mod state_circuit;
+/// Direct, non-authorizing typed STATE verification candidate.
+mod state_direct_verifier;
 /// Private canonical balance/credit head and conservation relation.
 mod state_relation;
 /// Private fixed-geometry SHA-256 bridge used only by the STATE relation.

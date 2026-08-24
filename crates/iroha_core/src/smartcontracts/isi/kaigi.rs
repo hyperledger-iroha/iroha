@@ -127,6 +127,9 @@ impl ExecuteKaigiAuthorized for CreateKaigi {
         let mut record = KaigiRecord::from_new(&template, created_at_ms);
         if template.privacy_mode == KaigiPrivacyMode::ZkRosterV1 {
             record.host_commitment = commitment;
+            if let Some(nullifier) = nullifier {
+                record.push_nullifier(nullifier);
+            }
         }
         store_record(state_transaction, &domain_id, key, &record)?;
         emit_roster_summary(state_transaction, &record);
@@ -277,9 +280,12 @@ impl ExecuteKaigiAuthorized for EndKaigi {
                 if record.status == KaigiStatus::Ended {
                     return Err(Error::InvariantViolation("Kaigi already ended".into()));
                 }
+                let authority = authorization.signed_account();
+                if !same_account_subject(authority, &record.host) {
+                    return Err(unauthorized("only the host may end a Kaigi"));
+                }
                 match record.privacy_mode {
                     KaigiPrivacyMode::Transparent => {
-                        let authority = authorization.signed_account();
                         privacy::ensure_transparent_payload(&PrivacyArtifacts {
                             subject: authority,
                             host: &record.host,
@@ -288,39 +294,42 @@ impl ExecuteKaigiAuthorized for EndKaigi {
                             roster_root: roster_root.as_ref(),
                             proof: proof.as_deref(),
                         })?;
-                        if !same_account_subject(authority, &record.host) {
-                            return Err(unauthorized("only the host may end a Kaigi"));
-                        }
                     }
                     KaigiPrivacyMode::ZkRosterV1 => {
-                        let stored_commitment =
-                            record.host_commitment.as_ref().ok_or_else(|| {
-                                privacy_error("privacy mode requires a stored host commitment")
-                            })?;
-                        let provided_nullifier = nullifier
-                            .as_ref()
-                            .ok_or_else(|| privacy_error("privacy mode requires nullifier"))?;
-                        let host_artifacts = HostPrivacyArtifacts {
-                            commitment: commitment.as_ref(),
-                            nullifier: Some(provided_nullifier),
-                            roster_root: roster_root.as_ref(),
-                            proof: proof.as_deref(),
-                        };
-                        let expected_root = record.roster_root();
-                        privacy::verify_host_action(
-                            stx,
-                            &host_artifacts,
-                            &expected_root,
-                            stored_commitment,
-                        )?;
-                        if record.has_nullifier(provided_nullifier) {
-                            return Err(Error::InvalidParameter(
-                                InvalidParameterError::SmartContract(
-                                    "nullifier already used".into(),
-                                ),
+                        if let Some(stored_commitment) = record.host_commitment.as_ref() {
+                            let provided_nullifier = nullifier
+                                .as_ref()
+                                .ok_or_else(|| privacy_error("privacy mode requires nullifier"))?;
+                            let host_artifacts = HostPrivacyArtifacts {
+                                commitment: commitment.as_ref(),
+                                nullifier: Some(provided_nullifier),
+                                roster_root: roster_root.as_ref(),
+                                proof: proof.as_deref(),
+                            };
+                            let expected_root = record.roster_root();
+                            privacy::verify_host_action(
+                                stx,
+                                &host_artifacts,
+                                &expected_root,
+                                stored_commitment,
+                            )?;
+                            if record.has_nullifier(provided_nullifier) {
+                                return Err(Error::InvalidParameter(
+                                    InvalidParameterError::SmartContract(
+                                        "nullifier already used".into(),
+                                    ),
+                                ));
+                            }
+                            record.push_nullifier(provided_nullifier.clone());
+                        } else if commitment.is_some()
+                            || nullifier.is_some()
+                            || roster_root.is_some()
+                            || proof.is_some()
+                        {
+                            return Err(privacy_error(
+                                "privacy host artifacts require a stored host commitment",
                             ));
                         }
-                        record.push_nullifier(provided_nullifier.clone());
                     }
                 }
                 record.status = KaigiStatus::Ended;
@@ -1428,8 +1437,9 @@ mod tests {
         });
     }
     #[cfg(feature = "kaigi_privacy_mocks")]
+    #[cfg(feature = "kaigi_privacy_mocks")]
     #[test]
-    fn privacy_join_respects_max_participant_limit() {
+    fn mock_privacy_join_respects_max_participant_limit() {
         let (mut record, _host, participant) = new_record(KaigiPrivacyMode::ZkRosterV1);
         record.max_participants = Some(1);
         let first_commitment = sample_commitment();
@@ -1537,11 +1547,12 @@ mod tests {
                 .try_into_any_norito()
                 .expect("deserialize metadata");
             assert_eq!(record.host_commitment.as_ref(), Some(&commitment));
+            assert!(record.has_nullifier(&nullifier));
             assert_eq!(record.status, KaigiStatus::Active);
         });
     }
     #[test]
-    fn private_end_accepts_host_commitment_proof() {
+    fn private_end_requires_host_signature_even_with_valid_host_proof() {
         let (domain, host, participant) = sample_ids();
         let call = KaigiId::new(domain.clone(), Name::from_str("private-end").unwrap());
         let commitment = sample_commitment();
@@ -1563,12 +1574,27 @@ mod tests {
                 call_id: call.clone(),
                 ended_at_ms: Some(55),
                 commitment: Some(commitment.clone()),
-                nullifier: Some(end_nullifier.clone()),
+                nullifier: Some(create_nullifier.clone()),
                 roster_root: Some(kaigi_zk::empty_roster_root_hash()),
                 proof: Some(vec![7, 8, 9]),
             }
-            .execute(&participant, stx)
-            .expect("end privacy-mode Kaigi with host proof");
+            .execute(&host, stx)
+            .expect_err("the host-create nullifier must not be reusable");
+            let copied_proof = EndKaigi {
+                call_id: call.clone(),
+                ended_at_ms: Some(55),
+                commitment: Some(commitment.clone()),
+                nullifier: Some(end_nullifier.clone()),
+                roster_root: Some(kaigi_zk::empty_roster_root_hash()),
+                proof: Some(vec![7, 8, 9]),
+            };
+            copied_proof
+                .clone()
+                .execute(&participant, stx)
+                .expect_err("a copied host proof must not authorize another signer");
+            copied_proof
+                .execute(&host, stx)
+                .expect("the signed host may end a privacy-mode Kaigi");
             let key = kaigi_metadata_key(&call.call_name).expect("metadata key");
             let domain = stx.world.domain(&call.domain_id).expect("domain");
             let record: KaigiRecord = domain
@@ -1586,6 +1612,47 @@ mod tests {
                     .iter()
                     .any(|entry| entry.digest == end_nullifier.digest)
             );
+        });
+    }
+    #[test]
+    fn signed_host_can_end_private_call_created_without_host_commitment() {
+        let (domain, host, _participant) = sample_ids();
+        let call = KaigiId::new(
+            domain.clone(),
+            Name::from_str("private-end-signed").unwrap(),
+        );
+        with_seeded_kaigi_state_transaction(&domain, std::slice::from_ref(&host), |stx| {
+            let mut template = NewKaigi::with_defaults(call.clone(), host.clone());
+            template.privacy_mode = KaigiPrivacyMode::ZkRosterV1;
+            CreateKaigi {
+                call: template,
+                commitment: None,
+                nullifier: None,
+                roster_root: None,
+                proof: None,
+            }
+            .execute(&host, stx)
+            .expect("create privacy-mode Kaigi without host commitment");
+            EndKaigi {
+                call_id: call.clone(),
+                ended_at_ms: Some(55),
+                commitment: None,
+                nullifier: None,
+                roster_root: None,
+                proof: None,
+            }
+            .execute(&host, stx)
+            .expect("signed host may end without optional privacy artifacts");
+            let key = kaigi_metadata_key(&call.call_name).expect("metadata key");
+            let domain = stx.world.domain(&call.domain_id).expect("domain");
+            let record: KaigiRecord = domain
+                .metadata()
+                .get(&key)
+                .expect("record metadata")
+                .clone()
+                .try_into_any_norito()
+                .expect("deserialize metadata");
+            assert_eq!(record.status, KaigiStatus::Ended);
         });
     }
     #[test]
@@ -2055,8 +2122,9 @@ mod tests {
             assert_eq!(summary.nullifier_count, 0);
         });
     }
+    #[cfg(feature = "kaigi_privacy_mocks")]
     #[test]
-    fn privacy_join_updates_commitment_summary() {
+    fn mock_privacy_join_updates_commitment_summary() {
         let (mut record, _host, participant) = new_record(KaigiPrivacyMode::ZkRosterV1);
         let commitment = sample_commitment();
         let join_nullifier = sample_nullifier(0xCC);

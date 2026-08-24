@@ -16,6 +16,7 @@ use axum::{
     response::{IntoResponse, Response},
 };
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STANDARD};
+use futures_util::{StreamExt as _, TryStreamExt as _, stream};
 use iroha_core::soracloud_runtime::{
     HF_GENERATED_AGENT_AUTONOMY_BUDGET_UNITS, HF_GENERATED_AGENT_LEASE_TICKS,
     SORACLOUD_APARTMENT_AUTONOMY_EXECUTION_SUMMARY_MAX_BYTES_V1,
@@ -57,7 +58,8 @@ use iroha_data_model::{
         SoraNetworkPolicyV1, SoraPrivateModelArtifactRefV1,
         SoraPrivateUploadedModelExecutionReceiptV1, SoraRolloutStageV1, SoraRuntimeReceiptV1,
         SoraServiceAuditEventV1, SoraServiceConfigEntryV1, SoraServiceDeploymentStateV1,
-        SoraServiceExecutionPlaneV1, SoraServiceHandlerClassV1, SoraServiceLeaseStatusV1,
+        SoraServiceExecutionPlaneV1, SoraServiceHandlerClassV1,
+        SoraServiceLeaseReportingEpochRolloverV1, SoraServiceLeaseStatusV1,
         SoraServiceLifecycleActionV1, SoraServiceRolloutStateV1, SoraServiceSecretEntryV1,
         SoraStateBindingV1, SoraStateEncryptionV1, SoraStateMutabilityV1,
         SoraStateMutationOperationV1, SoraTlsModeV1, SoraTrainingJobActionV1,
@@ -65,7 +67,7 @@ use iroha_data_model::{
         SoraUploadedModelBundleV1, SoraUploadedModelEncryptionRecipientV1,
         SoraUploadedModelRuntimeFormatV1, SoracloudFheBootstrapKeyProofV1,
         SoracloudFheFullBootstrapExecutionProofV1, SoracloudFheInputAdmissionProofV1,
-        SoracloudFhePolicyReferenceV1, SoracloudFhePublicKeyProofV1,
+        SoracloudFhePolicyReferenceV1, SoracloudFhePublicKeyProofV1, derive_hf_source_id_v1,
         encode_agent_artifact_allow_provenance_payload,
         encode_agent_autonomy_run_provenance_payload, encode_agent_deploy_provenance_payload,
         encode_agent_lease_renew_provenance_payload, encode_agent_message_ack_provenance_payload,
@@ -94,6 +96,7 @@ use iroha_data_model::{
         encode_uploaded_model_bundle_register_provenance_payload,
         encode_uploaded_model_finalize_provenance_payload,
         hf_shared_lease_max_compute_reservation_fee_v1, is_canonical_hf_commit_oid_v1,
+        is_canonical_hf_repo_id_v1,
     },
     sorafs::pin_registry::{PinManifestRecord, PinStatus, StorageClass},
 };
@@ -137,13 +140,16 @@ const MODEL_WEIGHT_STATUS_SCHEMA_VERSION_V1: u16 = 1;
 const MODEL_ARTIFACT_STATUS_SCHEMA_VERSION_V1: u16 = 1;
 const UPLOADED_MODEL_STATUS_SCHEMA_VERSION_V1: u16 = 1;
 const HF_SHARED_LEASE_STATUS_SCHEMA_VERSION_V1: u16 = 1;
-const HF_REPO_ID_MAX_BYTES: usize = 256;
 const HF_MODEL_NAME_MAX_BYTES: usize = 128;
 const HF_PROFILE_DNS_MAX_ADDRESSES_V1: usize = 32;
 const HF_PROFILE_DNS_MAX_IN_FLIGHT_V1: usize = 8;
+const HF_PROFILE_DERIVATION_MAX_IN_FLIGHT_V1: usize = 4;
+const HF_PROFILE_HEAD_MAX_IN_FLIGHT_V1: usize = 8;
 const HF_PROFILE_DNS_TIMEOUT_V1: Duration = Duration::from_secs(5);
 static HF_PROFILE_DNS_GATE_V1: tokio::sync::Semaphore =
     tokio::sync::Semaphore::const_new(HF_PROFILE_DNS_MAX_IN_FLIGHT_V1);
+static HF_PROFILE_DERIVATION_GATE_V1: tokio::sync::Semaphore =
+    tokio::sync::Semaphore::const_new(HF_PROFILE_DERIVATION_MAX_IN_FLIGHT_V1);
 const SCR_HOST_MAX_CPU_MILLIS: u32 = 64_000;
 const SCR_HOST_MAX_MEMORY_BYTES: u64 = 512 * 1024 * 1024 * 1024;
 const SCR_HOST_MAX_EPHEMERAL_STORAGE_BYTES: u64 = 2 * 1024 * 1024 * 1024 * 1024;
@@ -178,6 +184,7 @@ pub(crate) enum SoracloudAction {
     DecryptionRequest,
     CiphertextQuery,
     Rollout,
+    LeaseReportingEpochRollover,
 }
 #[derive(
     Clone,
@@ -1826,6 +1833,8 @@ pub(crate) struct ControlPlaneAuditEvent {
     pub break_glass: Option<bool>,
     #[norito(required)]
     pub break_glass_reason: Option<String>,
+    #[norito(required)]
+    pub lease_reporting_epoch_rollover: Option<SoraServiceLeaseReportingEpochRolloverV1>,
     pub signed_by: String,
 }
 #[derive(Clone, Debug, JsonSerialize, JsonDeserialize, NoritoDeserialize, NoritoSerialize)]
@@ -2464,7 +2473,12 @@ fn normalize_hf_token(
     Ok(normalized.to_owned())
 }
 fn parse_hf_repo_id(repo_id: &str) -> Result<String, SoracloudError> {
-    normalize_hf_token("repo_id", repo_id, HF_REPO_ID_MAX_BYTES)
+    if !is_canonical_hf_repo_id_v1(repo_id) {
+        return Err(SoracloudError::bad_request(
+            "repo_id must be one exact fully-qualified `namespace/repository` identifier",
+        ));
+    }
+    Ok(repo_id.to_owned())
 }
 fn parse_hf_revision(resolved_revision: &str) -> Result<String, SoracloudError> {
     if !is_canonical_hf_commit_oid_v1(resolved_revision) {
@@ -2507,9 +2521,8 @@ fn parse_storage_class_query(storage_class: &str) -> Result<StorageClass, Soracl
     }
 }
 fn hf_source_id(repo_id: &str, resolved_revision: &str) -> Result<Hash, SoracloudError> {
-    let payload = norito::to_bytes(&(repo_id, resolved_revision))
-        .map_err(|err| SoracloudError::internal(format!("failed to encode hf source id: {err}")))?;
-    Ok(Hash::new(payload))
+    derive_hf_source_id_v1(repo_id, resolved_revision)
+        .map_err(|error| SoracloudError::bad_request(error.to_string()))
 }
 fn hf_shared_lease_pool_id(
     source_id: Hash,
@@ -2843,6 +2856,8 @@ fn hf_model_info_url(
     repo_id: &str,
     resolved_revision: &str,
 ) -> Result<reqwest::Url, SoracloudError> {
+    parse_hf_repo_id(repo_id)?;
+    parse_hf_revision(resolved_revision)?;
     let mut url = normalize_hf_base_url(&config.api_base_url)?;
     {
         let mut segments = url
@@ -2856,6 +2871,9 @@ fn hf_model_info_url(
             segments.push(component);
         }
     }
+    // Immutable LFS SHA-256 and size metadata is present only when the Hub is
+    // explicitly asked to expand blob records.
+    url.query_pairs_mut().append_pair("blobs", "true");
     Ok(url)
 }
 fn hf_repo_file_url(
@@ -2864,6 +2882,8 @@ fn hf_repo_file_url(
     resolved_revision: &str,
     file_path: &str,
 ) -> Result<reqwest::Url, SoracloudError> {
+    parse_hf_repo_id(repo_id)?;
+    parse_hf_revision(resolved_revision)?;
     let mut url = normalize_hf_base_url(&config.hub_base_url)?;
     {
         let mut segments = url
@@ -2884,7 +2904,8 @@ async fn hf_content_length_bytes(
     repo_id: &str,
     resolved_revision: &str,
     file_path: &str,
-) -> Result<u64, SoracloudError> {
+    expected_lfs_size: u64,
+) -> Result<(), SoracloudError> {
     let file_url = hf_repo_file_url(config, repo_id, resolved_revision, file_path)?;
     let response = send_hf_profile_request_with_vetted_redirects(
         config,
@@ -2898,21 +2919,86 @@ async fn hf_content_length_bytes(
             response.status()
         )));
     }
-    response
-        .headers()
-        .get(reqwest::header::CONTENT_LENGTH)
-        .and_then(|value| value.to_str().ok())
-        .and_then(|value| value.parse::<u64>().ok())
+    validate_hf_content_length_headers(
+        response.headers(),
+        repo_id,
+        resolved_revision,
+        file_path,
+        expected_lfs_size,
+    )
+}
+fn validate_hf_content_length_headers(
+    headers: &reqwest::header::HeaderMap,
+    repo_id: &str,
+    resolved_revision: &str,
+    file_path: &str,
+    expected_lfs_size: u64,
+) -> Result<(), SoracloudError> {
+    let mut lengths = headers.get_all(reqwest::header::CONTENT_LENGTH).iter();
+    let length = lengths
+        .next()
         .ok_or_else(|| {
             SoracloudError::conflict(format!(
                 "Hugging Face file `{file_path}` for `{repo_id}@{resolved_revision}` is missing Content-Length"
             ))
-        })
+        })?
+        .to_str()
+        .map_err(|_| {
+            SoracloudError::conflict(format!(
+                "Hugging Face file `{file_path}` for `{repo_id}@{resolved_revision}` has invalid Content-Length"
+            ))
+        })?;
+    if length.is_empty()
+        || (length.len() > 1 && length.starts_with('0'))
+        || !length.bytes().all(|byte| byte.is_ascii_digit())
+    {
+        return Err(SoracloudError::conflict(format!(
+            "Hugging Face file `{file_path}` for `{repo_id}@{resolved_revision}` has noncanonical Content-Length"
+        )));
+    }
+    let length = length.parse::<u64>().map_err(|_| {
+        SoracloudError::conflict(format!(
+            "Hugging Face file `{file_path}` for `{repo_id}@{resolved_revision}` has invalid Content-Length"
+        ))
+    })?;
+    if lengths.next().is_some() {
+        return Err(SoracloudError::conflict(format!(
+            "Hugging Face file `{file_path}` for `{repo_id}@{resolved_revision}` has duplicate Content-Length headers"
+        )));
+    }
+    if length != expected_lfs_size {
+        return Err(SoracloudError::conflict(format!(
+            "Hugging Face file `{file_path}` for `{repo_id}@{resolved_revision}` reports {length} bytes, but authenticated LFS metadata commits to {expected_lfs_size}"
+        )));
+    }
+    Ok(())
 }
-fn validate_hf_profile_model_info_commit(
+fn validate_hf_profile_model_info_identity(
     model_info: &norito::json::Value,
+    expected_repo_id: &str,
     expected_commit: &str,
 ) -> Result<(), SoracloudError> {
+    if !is_canonical_hf_repo_id_v1(expected_repo_id) {
+        return Err(SoracloudError::bad_request(
+            "requested Hugging Face repository identifier is not canonical",
+        ));
+    }
+    let resolved_repo_id = model_info
+        .get("modelId")
+        .and_then(norito::json::Value::as_str)
+        .ok_or_else(|| {
+            SoracloudError::conflict("Hugging Face model-info response omitted string `modelId`")
+        })?;
+    if !is_canonical_hf_repo_id_v1(resolved_repo_id) {
+        return Err(SoracloudError::conflict(
+            "Hugging Face model-info `modelId` is not canonical",
+        ));
+    }
+    if resolved_repo_id != expected_repo_id {
+        return Err(SoracloudError::conflict(format!(
+            "Hugging Face model-info repository `{resolved_repo_id}` does not exactly match requested repository `{expected_repo_id}`"
+        )));
+    }
     if !is_canonical_hf_commit_oid_v1(expected_commit) {
         return Err(SoracloudError::bad_request(
             "requested Hugging Face revision is not a full lowercase commit OID",
@@ -2941,6 +3027,27 @@ async fn derive_hf_resource_profile(
     repo_id: &str,
     resolved_revision: &str,
 ) -> Result<SoraHfResourceProfileV1, SoracloudError> {
+    tokio::time::timeout(
+        config.request_timeout,
+        async {
+            let _permit = HF_PROFILE_DERIVATION_GATE_V1.acquire().await.map_err(|_| {
+                SoracloudError::internal("Hugging Face profile admission gate closed")
+            })?;
+            derive_hf_resource_profile_within_deadline(config, repo_id, resolved_revision).await
+        },
+    )
+    .await
+    .map_err(|_| {
+        SoracloudError::internal(format!(
+            "Hugging Face profile derivation for `{repo_id}@{resolved_revision}` exceeded its fixed end-to-end deadline"
+        ))
+    })?
+}
+async fn derive_hf_resource_profile_within_deadline(
+    config: &iroha_config::parameters::actual::SoracloudRuntimeHuggingFace,
+    repo_id: &str,
+    resolved_revision: &str,
+) -> Result<SoraHfResourceProfileV1, SoracloudError> {
     let info_url = hf_model_info_url(config, repo_id, resolved_revision)?;
     let response = send_hf_profile_request_with_vetted_redirects(
         config,
@@ -2959,35 +3066,37 @@ async fn derive_hf_resource_profile(
     // The decoded tree owns its strings, so the bounded wire buffer need not
     // remain resident while the provider-controlled sibling list is handled.
     drop(body);
-    validate_hf_profile_model_info_commit(&model_info, resolved_revision)?;
-    let Some((backend_family, model_format, weight_files)) =
-        hf_model_info_response::select_weight_files(
-            &model_info,
-            config,
-            repo_id,
-            resolved_revision,
-        )?
+    validate_hf_profile_model_info_identity(&model_info, repo_id, resolved_revision)?;
+    let Some(weight_selection) = hf_model_info_response::derive_weight_selection(
+        &model_info,
+        config,
+        repo_id,
+        resolved_revision,
+    )?
     else {
         return Err(SoracloudError::conflict(format!(
             "no supported Hugging Face model weights were found for `{repo_id}@{resolved_revision}`"
         )));
     };
     // Release the decoded metadata before issuing one HEAD request per selected
-    // weight file; only the paths needed for deterministic profile derivation remain.
+    // weight file; the immutable LFS contract now owns every required field.
     drop(model_info);
-    let mut required_model_bytes = 0_u64;
-    for file_path in &weight_files {
-        required_model_bytes = required_model_bytes.saturating_add(
-            hf_content_length_bytes(config, repo_id, resolved_revision, file_path).await?,
-        );
-    }
-    if required_model_bytes == 0 {
-        return Err(SoracloudError::conflict(format!(
-            "derived Hugging Face model size for `{repo_id}@{resolved_revision}` was zero bytes"
-        )));
-    }
+    stream::iter(&weight_selection.required_weight_files)
+        .map(|weight| {
+            hf_content_length_bytes(
+                config,
+                repo_id,
+                resolved_revision,
+                &weight.path,
+                weight.content_length,
+            )
+        })
+        .buffer_unordered(HF_PROFILE_HEAD_MAX_IN_FLIGHT_V1)
+        .try_collect::<Vec<()>>()
+        .await?;
+    let required_model_bytes = weight_selection.required_model_bytes;
     let disk_cache_bytes_floor = required_model_bytes;
-    let ram_bytes_floor = match backend_family {
+    let ram_bytes_floor = match weight_selection.backend_family {
         SoraHfBackendFamilyV1::Gguf => required_model_bytes
             .saturating_mul(3)
             .saturating_div(2)
@@ -2998,8 +3107,11 @@ async fn derive_hf_resource_profile(
     };
     Ok(SoraHfResourceProfileV1 {
         required_model_bytes,
-        backend_family,
-        model_format,
+        backend_family: weight_selection.backend_family,
+        model_format: weight_selection.model_format,
+        selected_weight_file_count: u32::try_from(weight_selection.required_weight_files.len())
+            .map_err(|_| SoracloudError::internal("selected HF weight count does not fit u32"))?,
+        weight_selection_commitment: weight_selection.weight_selection_commitment,
         disk_cache_bytes_floor,
         ram_bytes_floor,
         vram_bytes_floor: 0,
@@ -3369,6 +3481,7 @@ fn soracloud_action_label(action: SoracloudAction) -> &'static str {
         SoracloudAction::DecryptionRequest => "decryption_request",
         SoracloudAction::CiphertextQuery => "ciphertext_query",
         SoracloudAction::Rollout => "rollout",
+        SoracloudAction::LeaseReportingEpochRollover => "lease_reporting_epoch_rollover",
     }
 }
 fn audit_event_leaf_hash(event: &ControlPlaneAuditEvent) -> Hash {
@@ -3399,6 +3512,7 @@ fn audit_event_leaf_hash(event: &ControlPlaneAuditEvent) -> Hash {
                 event.consent_evidence_hash,
                 event.break_glass,
                 event.break_glass_reason.as_deref(),
+                event.lease_reporting_epoch_rollover.as_ref(),
                 event.signed_by.as_str(),
             ),
         ),
@@ -4774,6 +4888,9 @@ fn audit_action_to_control_plane_action(action: SoraServiceLifecycleActionV1) ->
         SoraServiceLifecycleActionV1::CiphertextQuery => SoracloudAction::CiphertextQuery,
         SoraServiceLifecycleActionV1::Rollout => SoracloudAction::Rollout,
         SoraServiceLifecycleActionV1::Rollback => SoracloudAction::Rollback,
+        SoraServiceLifecycleActionV1::LeaseReportingEpochRollover => {
+            SoracloudAction::LeaseReportingEpochRollover
+        }
     }
 }
 fn rollout_stage_to_control_plane_stage(stage: SoraRolloutStageV1) -> RolloutStage {
@@ -4821,6 +4938,7 @@ fn audit_event_to_control_plane_audit_event(
         consent_evidence_hash: event.consent_evidence_hash,
         break_glass: event.break_glass,
         break_glass_reason: event.break_glass_reason.clone(),
+        lease_reporting_epoch_rollover: event.lease_reporting_epoch_rollover.clone(),
         signed_by: event.signer.to_string(),
     }
 }
@@ -12923,6 +13041,7 @@ mod tests {
             consent_evidence_hash: None,
             break_glass: None,
             break_glass_reason: None,
+            lease_reporting_epoch_rollover: None,
             signer: checked_test_keypair(0x5A).public_key().clone(),
         }
     }
@@ -14402,6 +14521,7 @@ mod tests {
             consent_evidence_hash: None,
             break_glass: None,
             break_glass_reason: None,
+            lease_reporting_epoch_rollover: None,
             signed_by: "signer".to_owned(),
         };
         assert_required_nullable!(
@@ -14421,6 +14541,7 @@ mod tests {
                 "consent_evidence_hash",
                 "break_glass",
                 "break_glass_reason",
+                "lease_reporting_epoch_rollover",
             ],
             "control-plane audit event"
         );
@@ -14959,7 +15080,8 @@ mod tests {
                         egress_price_per_mib: "0.000005".parse().expect("egress price quantity"),
                         lease_started_sequence: 0,
                         lease_expires_sequence: 100,
-                        last_billed_sequence: 0,
+                        reporting_epoch: 1,
+                        settled_egress_bytes: 0,
                         egress_reporter_checkpoints: Vec::new(),
                         accounted_egress_bytes: 0,
                         last_status_reason: None,
@@ -15092,7 +15214,8 @@ mod tests {
                                     .expect("egress price quantity"),
                                 lease_started_sequence: 0,
                                 lease_expires_sequence: 100,
-                                last_billed_sequence: 0,
+                                reporting_epoch: 1,
+                                settled_egress_bytes: 0,
                                 egress_reporter_checkpoints: Vec::new(),
                                 accounted_egress_bytes: 0,
                                 last_status_reason: None,
@@ -15181,7 +15304,8 @@ mod tests {
                         egress_price_per_mib: "0.000005".parse().expect("egress price quantity"),
                         lease_started_sequence: 0,
                         lease_expires_sequence: 0,
-                        last_billed_sequence: 0,
+                        reporting_epoch: 1,
+                        settled_egress_bytes: 0,
                         egress_reporter_checkpoints: Vec::new(),
                         accounted_egress_bytes: 0,
                         last_status_reason: None,
@@ -15330,6 +15454,7 @@ mod tests {
                         consent_evidence_hash: None,
                         break_glass: None,
                         break_glass_reason: None,
+                        lease_reporting_epoch_rollover: None,
                         signer: checked_test_keypair(0x70).public_key().clone(),
                     },
                 );
@@ -15434,6 +15559,7 @@ mod tests {
                             break_glass: Some(break_glass),
                             break_glass_reason: break_glass
                                 .then(|| "emergency override".to_string()),
+                            lease_reporting_epoch_rollover: None,
                             signer: checked_test_keypair(0x70u8.wrapping_add(sequence as u8))
                                 .public_key()
                                 .clone(),
@@ -15501,6 +15627,7 @@ mod tests {
                     consent_evidence_hash: None,
                     break_glass: Some(false),
                     break_glass_reason: None,
+                    lease_reporting_epoch_rollover: None,
                     signer: checked_test_keypair(0x74).public_key().clone(),
                 },
             );
@@ -18080,22 +18207,212 @@ mod tests {
         assert!(parse_storage_class_query("archive").is_err());
     }
     #[test]
-    fn hf_profile_model_info_requires_exact_canonical_commit() {
+    fn torii_hf_repo_parser_and_source_id_use_the_shared_canonical_identity() {
+        let repo_id =
+            parse_hf_repo_id("OpenAI/GPT-OSS").expect("case-sensitive canonical repository ID");
+        assert_eq!(repo_id, "OpenAI/GPT-OSS");
+        for alias in ["GPT-OSS", "OpenAI//GPT-OSS", "OpenAI/./GPT-OSS"] {
+            assert!(parse_hf_repo_id(alias).is_err());
+            assert!(hf_source_id(alias, TEST_HF_COMMIT_OID).is_err());
+        }
+        assert_ne!(
+            hf_source_id("OpenAI/GPT-OSS", TEST_HF_COMMIT_OID).expect("uppercase source identity"),
+            hf_source_id("openai/GPT-OSS", TEST_HF_COMMIT_OID).expect("lowercase source identity")
+        );
+    }
+    #[test]
+    fn hf_profile_model_info_requires_exact_canonical_repo_and_commit() {
         const COMMIT: &str = "0123456789abcdef0123456789abcdef01234567";
-        validate_hf_profile_model_info_commit(&norito::json!({"sha": COMMIT}), COMMIT)
-            .expect("matching canonical commit");
+        const REPO: &str = "OpenAI/GPT-OSS";
+        validate_hf_profile_model_info_identity(
+            &norito::json!({"modelId": REPO, "sha": COMMIT}),
+            REPO,
+            COMMIT,
+        )
+        .expect("matching case-sensitive repository and canonical commit");
+        validate_hf_profile_model_info_identity(
+            &norito::json!({"modelId": "openai/GPT-OSS", "sha": COMMIT}),
+            REPO,
+            COMMIT,
+        )
+        .expect_err("provider repository case drift must fail rather than alias");
         for model_info in [
             norito::json!({}),
-            norito::json!({"sha": 7}),
-            norito::json!({"sha": "main"}),
-            norito::json!({"sha": "0123456789ABCDEF0123456789ABCDEF01234567"}),
-            norito::json!({"sha": "1123456789abcdef0123456789abcdef01234567"}),
+            norito::json!({"modelId": REPO, "sha": 7}),
+            norito::json!({"modelId": REPO, "sha": "main"}),
+            norito::json!({"modelId": REPO, "sha": "0123456789ABCDEF0123456789ABCDEF01234567"}),
+            norito::json!({"modelId": REPO, "sha": "1123456789abcdef0123456789abcdef01234567"}),
         ] {
-            validate_hf_profile_model_info_commit(&model_info, COMMIT)
+            validate_hf_profile_model_info_identity(&model_info, REPO, COMMIT)
                 .expect_err("missing, noncanonical, or mismatched provider SHA must fail");
         }
-        validate_hf_profile_model_info_commit(&norito::json!({"sha": COMMIT}), "main")
-            .expect_err("mutable requested revision must fail before profile derivation");
+        validate_hf_profile_model_info_identity(
+            &norito::json!({"modelId": REPO, "sha": COMMIT}),
+            REPO,
+            "main",
+        )
+        .expect_err("mutable requested revision must fail before profile derivation");
+    }
+    #[test]
+    fn hf_profile_urls_require_canonical_identity_and_request_blob_metadata() {
+        const COMMIT: &str = "0123456789abcdef0123456789abcdef01234567";
+        let config = iroha_config::parameters::actual::SoracloudRuntimeHuggingFace::default();
+        let info =
+            hf_model_info_url(&config, "OpenAI/GPT-OSS", COMMIT).expect("canonical model-info URL");
+        assert_eq!(info.query(), Some("blobs=true"));
+        assert!(hf_model_info_url(&config, "GPT-OSS", COMMIT).is_err());
+        assert!(hf_repo_file_url(&config, "owner/../model", COMMIT, "model.gguf").is_err());
+    }
+    #[test]
+    fn hf_profile_head_length_must_exactly_match_authenticated_lfs_size() {
+        let mut headers = reqwest::header::HeaderMap::new();
+        headers.insert(
+            reqwest::header::CONTENT_LENGTH,
+            reqwest::header::HeaderValue::from_static("8"),
+        );
+        validate_hf_content_length_headers(
+            &headers,
+            "owner/model",
+            TEST_HF_COMMIT_OID,
+            "a.gguf",
+            8,
+        )
+        .expect("exact authenticated length");
+        validate_hf_content_length_headers(
+            &headers,
+            "owner/model",
+            TEST_HF_COMMIT_OID,
+            "a.gguf",
+            7,
+        )
+        .expect_err("LFS/HEAD mismatch must fail");
+        headers.append(
+            reqwest::header::CONTENT_LENGTH,
+            reqwest::header::HeaderValue::from_static("8"),
+        );
+        validate_hf_content_length_headers(
+            &headers,
+            "owner/model",
+            TEST_HF_COMMIT_OID,
+            "a.gguf",
+            8,
+        )
+        .expect_err("duplicate length headers must fail");
+        let mut noncanonical = reqwest::header::HeaderMap::new();
+        noncanonical.insert(
+            reqwest::header::CONTENT_LENGTH,
+            reqwest::header::HeaderValue::from_static("08"),
+        );
+        validate_hf_content_length_headers(
+            &noncanonical,
+            "owner/model",
+            TEST_HF_COMMIT_OID,
+            "a.gguf",
+            8,
+        )
+        .expect_err("alternate decimal spellings must fail");
+    }
+    #[test]
+    fn hf_profile_weight_heads_use_fixed_bounded_concurrency() -> Result<(), eyre::Report> {
+        use std::sync::{
+            Arc,
+            atomic::{AtomicUsize, Ordering},
+        };
+        use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
+
+        const SHARD_COUNT: usize = HF_PROFILE_HEAD_MAX_IN_FLIGHT_V1 + 1;
+        let runtime = test_runtime()?;
+        runtime.block_on(async move {
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
+            let address = listener.local_addr()?;
+            let siblings = (0..SHARD_COUNT)
+                .map(|index| {
+                    norito::json!({
+                        "rfilename": format!("shard-{index:02}.gguf"),
+                        "lfs": {
+                            "sha256": format!("{:064x}", index + 1),
+                            "size": 1,
+                        },
+                    })
+                })
+                .collect::<Vec<_>>();
+            let model_info = norito::json!({
+                "modelId": "owner/model",
+                "sha": TEST_HF_COMMIT_OID,
+                "siblings": siblings,
+            });
+            let model_body = norito::json::to_json(&model_info)?.into_bytes();
+            let active_heads = Arc::new(AtomicUsize::new(0));
+            let maximum_heads = Arc::new(AtomicUsize::new(0));
+            let server_active = Arc::clone(&active_heads);
+            let server_maximum = Arc::clone(&maximum_heads);
+            let server = tokio::spawn(async move {
+                let mut handlers = tokio::task::JoinSet::new();
+                for _ in 0..=SHARD_COUNT {
+                    let (mut stream, _) = listener.accept().await?;
+                    let body = model_body.clone();
+                    let active = Arc::clone(&server_active);
+                    let maximum = Arc::clone(&server_maximum);
+                    handlers.spawn(async move {
+                        let mut request = [0_u8; 4_096];
+                        let request_bytes = stream.read(&mut request).await?;
+                        let request = String::from_utf8_lossy(&request[..request_bytes]);
+                        if request.starts_with("GET ") {
+                            let header = format!(
+                                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                                body.len()
+                            );
+                            stream.write_all(header.as_bytes()).await?;
+                            stream.write_all(&body).await?;
+                        } else {
+                            assert!(request.starts_with("HEAD "));
+                            let current = active.fetch_add(1, Ordering::SeqCst) + 1;
+                            maximum.fetch_max(current, Ordering::SeqCst);
+                            tokio::time::sleep(Duration::from_millis(100)).await;
+                            active.fetch_sub(1, Ordering::SeqCst);
+                            stream
+                                .write_all(
+                                    b"HTTP/1.1 200 OK\r\nContent-Length: 1\r\nConnection: close\r\n\r\n",
+                                )
+                                .await?;
+                        }
+                        Ok::<_, io::Error>(())
+                    });
+                }
+                while let Some(result) = handlers.join_next().await {
+                    result??;
+                }
+                Ok::<_, eyre::Report>(())
+            });
+
+            let origin = format!("http://{address}");
+            let mut config =
+                iroha_config::parameters::actual::SoracloudRuntimeHuggingFace::default();
+            config.hub_base_url = origin.clone();
+            config.api_base_url = origin;
+            config.import_redirect_allowed_origins.clear();
+            config.request_timeout = Duration::from_secs(2);
+            config.import_max_files = u32::try_from(SHARD_COUNT)?;
+            let profile = derive_hf_resource_profile(
+                &config,
+                "owner/model",
+                TEST_HF_COMMIT_OID,
+            )
+            .await
+            .map_err(|error| eyre::eyre!("profile derivation failed: {error:?}"))?;
+            assert_eq!(
+                profile.selected_weight_file_count,
+                u32::try_from(SHARD_COUNT)?
+            );
+            server.await??;
+            assert_eq!(active_heads.load(Ordering::SeqCst), 0);
+            assert_eq!(
+                maximum_heads.load(Ordering::SeqCst),
+                HF_PROFILE_HEAD_MAX_IN_FLIGHT_V1,
+                "the ninth shard must wait for one of the fixed eight HEAD slots"
+            );
+            Ok(())
+        })
     }
     #[test]
     fn hf_profile_public_address_policy_rejects_special_purpose_ranges() {
@@ -18689,7 +19006,8 @@ mod tests {
     fn hf_importer_pending_false_for_failed_sources_without_runtime() {
         let source = SoraHfSourceRecordV1 {
             schema_version: SORA_HF_SOURCE_RECORD_VERSION_V1,
-            source_id: Hash::new(b"hf-source"),
+            source_id: hf_source_id("openai/gpt-oss", TEST_HF_COMMIT_OID)
+                .expect("canonical HF source ID"),
             repo_id: "openai/gpt-oss".to_owned(),
             resolved_revision: TEST_HF_COMMIT_OID.to_owned(),
             model_name: "gpt_oss_20b".to_owned(),
