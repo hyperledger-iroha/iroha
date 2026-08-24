@@ -11926,11 +11926,12 @@ mod pasta_tiny {
         }
     }
 }
-#[cfg(feature = "zk-halo2")]
-#[allow(
-    dead_code,
-    reason = "legacy raw-ZK1 verifier remains for direct developer-circuit tests"
-)]
+#[cfg(all(
+    test,
+    feature = "zk-tests",
+    feature = "halo2-dev-tests",
+    feature = "zk-halo2"
+))]
 #[allow(clippy::too_many_lines)]
 fn verify_halo2(backend: &str, proof: &ProofBox, vk: Option<&VerifyingKeyBox>) -> bool {
     use halo2_backend::Scalar;
@@ -12610,11 +12611,12 @@ fn verify_halo2_ipa(backend: &str, proof: &ProofBox, vk: Option<&VerifyingKeyBox
         _ => false,
     }
 }
-#[cfg(not(feature = "zk-halo2"))]
-#[allow(
-    dead_code,
-    reason = "feature-disabled counterpart of the legacy raw-ZK1 verifier"
-)]
+#[cfg(all(
+    test,
+    feature = "zk-tests",
+    feature = "halo2-dev-tests",
+    not(feature = "zk-halo2")
+))]
 fn verify_halo2(_backend: &str, _proof: &ProofBox, _vk: Option<&VerifyingKeyBox>) -> bool {
     // Feature disabled: refuse Halo2 proofs to avoid silent acceptance of forged transcripts.
     false

@@ -531,7 +531,7 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
         durable_receipt: &DurableBodyReceipt,
     ) -> Result<(), EffectExecutorError> {
         self.ensure_open()?;
-        if self.runtime.live_clocks_are_armed() {
+        if self.runtime.lifecycle_live_clocks_are_armed() {
             return Err(EffectExecutorError::Contract(
                 "recovered lifecycle Validate marker installation followed live clock activation"
                     .to_owned(),

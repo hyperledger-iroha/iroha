@@ -3795,6 +3795,7 @@ impl ConcreteLifecycleWorkRegistry {
         })
     }
 }
+
 /// One move-only concrete effect paired with its sealed pending authority.
 #[derive(Debug)]
 #[must_use = "dropping concrete lifecycle work abandons its exact physical owner"]

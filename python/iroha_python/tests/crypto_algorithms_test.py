@@ -631,3 +631,35 @@ def test_privacy_compiled_profile_catalog_native_exceptions_are_sanitized(
         privacy_compiled_profile_catalog_v1()
     assert "secret native implementation detail" not in str(error.value)
     assert error.value.__cause__ is None
+
+
+def test_vega_device_digest_preserves_compiled_profile_unavailability(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class UnavailableVegaNative:
+        @staticmethod
+        def privacy_vega_device_authentication_digest_v1(*_args: object) -> bytes:
+            raise RuntimeError(
+                "compiled Vega privacy profile is unavailable: "
+                "native privacy engine for VegaExistingCredentialZkV0 "
+                "is not governance-available"
+            )
+
+    monkeypatch.setattr(crypto_module, "_crypto", UnavailableVegaNative())
+    network_id = crypto_module.NetworkId.from_bytes(bytes([0xA5]) * 32)
+    with pytest.raises(RuntimeError, match="compiled Vega privacy profile is unavailable") as error:
+        crypto_module.privacy_vega_device_authentication_digest_v1(
+            network_id,
+            bytes([0xD2]) * 32,
+            bytes([0xA1]) * 32,
+            1,
+            bytes([0xA2]) * 32,
+            bytes.fromhex("02") + bytes([0x01]) * 32,
+            2026,
+            7,
+            28,
+            18,
+            bytes([0xB4]) * 32,
+            bytes([0xC3]) * 32,
+        )
+    assert "invalid Vega device-authentication statement" not in str(error.value)

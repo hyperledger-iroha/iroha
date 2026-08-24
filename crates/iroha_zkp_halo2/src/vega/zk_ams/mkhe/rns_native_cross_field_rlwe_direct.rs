@@ -1304,8 +1304,8 @@ impl<S: ZkAmsMkheRnsNativeSourceSnapshotV1> RnsNativeQMaskSCommitmentSourceV1
 }
 
 /// Ephemeral adapter assembled only after recovering the exact inventory from
-/// the membership-owned claimed carrier. It owns the authenticated radix alias
-/// and borrows both the inventory and live numeric cursor for one direct
+/// the membership-owned claimed carrier. It borrows the authenticated radix
+/// alias, inventory, and live numeric cursor for one direct
 /// traversal; no point bytes, numeric arrays, or raw owner parts escape it.
 ///
 /// Construction occurs only inside the atomic claimed-with-alias verifier,
@@ -1324,7 +1324,7 @@ struct RnsNativeMembershipBackedDirectSourceV1<
     N: RnsNativeCrossFieldNumericCursorV1,
 > {
     numeric: &'owner mut N,
-    existing_radix: RnsNativeExistingRadixDirectAliasV1<'proof>,
+    existing_radix: &'owner RnsNativeExistingRadixDirectAliasV1<'proof>,
     inventory: &'owner RnsNativeCrossFieldInventoryPrerequisiteV1<'source, 'proof, S>,
 }
 
@@ -4233,6 +4233,7 @@ pub(super) struct RnsNativeCrossFieldRlweAtomicVerifiedV2<
 > {
     direct: RnsNativeCrossFieldRlweTerminalBoundVerifiedV1<'proof>,
     inventory: RnsNativeCrossFieldInventoryPrerequisiteV1<'source, 'proof, S>,
+    existing_radix: RnsNativeExistingRadixDirectAliasV1<'proof>,
     terminal_chronology: ZkAmsMkheRnsNativeGlobalLookupRootEqualityPendingV1,
     numeric_sidecar: RnsNativeCrossFieldRlweNumericSidecarV2,
 }
@@ -4252,6 +4253,7 @@ pub(super) struct RnsNativeCrossFieldRlweAllRootsVerifiedV2<
 > {
     direct: RnsNativeCrossFieldRlweTerminalBoundVerifiedV1<'proof>,
     inventory: RnsNativeCrossFieldInventoryPrerequisiteV1<'source, 'proof, S>,
+    existing_radix: RnsNativeExistingRadixDirectAliasV1<'proof>,
     _terminal_roots_equal: ZkAmsMkheRnsNativeAllTerminalRootsEqualV1,
     _numeric_sidecar: RnsNativeCrossFieldRlweNumericSidecarV2,
 }
@@ -4282,6 +4284,7 @@ impl<'source, 'proof, S: ZkAmsMkheRnsNativeSourceSnapshotV1>
         Ok(RnsNativeCrossFieldRlweAllRootsVerifiedV2 {
             direct: self.direct,
             inventory: self.inventory,
+            existing_radix: self.existing_radix,
             _terminal_roots_equal: terminal_roots_equal,
             _numeric_sidecar: self.numeric_sidecar,
         })
@@ -4299,6 +4302,24 @@ impl<'source, 'proof, S: ZkAmsMkheRnsNativeSourceSnapshotV1>
         &self,
     ) -> &RnsNativeCrossFieldInventoryPrerequisiteV1<'source, 'proof, S> {
         &self.inventory
+    }
+
+    /// Decode one authenticated `D`-low point for the source-packing replay.
+    /// The alias remains owned by this all-roots token and no raw inventory or
+    /// cloneable point carrier is exposed.
+    pub(super) fn source_packing_difference_low_commitment_v2(
+        &self,
+        group: usize,
+        digit: usize,
+    ) -> Option<Point> {
+        self.existing_radix
+            .difference_low_commitment_v1(group, digit)
+    }
+
+    /// Borrow the exact live source snapshot only for the source-packing
+    /// replay which immediately follows this all-roots state.
+    pub(super) fn source_packing_snapshot_mut_v2(&mut self) -> &mut S {
+        self.inventory.source_packing_snapshot_mut_v2()
     }
 }
 
@@ -4346,7 +4367,7 @@ where
     let equality_pending = {
         let source = RnsNativeMembershipBackedDirectSourceV1 {
             numeric: &mut numeric_sidecar,
-            existing_radix,
+            existing_radix: &existing_radix,
             inventory: &inventory,
         };
         verify_preflighted_kernel_for_suite_v1::<ZkAmsT256BulletproofSuiteV1, _>(
@@ -4366,6 +4387,7 @@ where
     Ok(RnsNativeCrossFieldRlweAtomicVerifiedV2 {
         direct: terminal_bound,
         inventory,
+        existing_radix,
         terminal_chronology,
         numeric_sidecar,
     })

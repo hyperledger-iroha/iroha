@@ -10,10 +10,11 @@ pub use artifacts::{
     VEGA_MDL_FIGURE9_ARTIFACT_MANIFEST_SCHEMA_V1,
     VEGA_MDL_FIGURE9_ARTIFACT_MANIFEST_SCHEMA_VERSION_V1,
     VEGA_MDL_FIGURE9_KEY_ARTIFACT_MAX_BYTES_V1, VegaMdlFigure9ArtifactBindingV1,
-    VegaMdlFigure9ArtifactManifestV1, VegaMdlFigure9ArtifactQualificationErrorV1,
-    VegaMdlFigure9ArtifactRoleV1, VegaMdlFigure9ArtifactSourceErrorV1,
-    VegaMdlFigure9ProverArtifactInstallReceiptV1, VegaMdlFigure9ProverArtifactSourceV1,
-    VegaMdlFigure9VerifierArtifactInstallReceiptV1, VegaMdlFigure9VerifierArtifactSourceV1,
+    VegaMdlFigure9ArtifactLengthMismatchV1, VegaMdlFigure9ArtifactManifestV1,
+    VegaMdlFigure9ArtifactQualificationErrorV1, VegaMdlFigure9ArtifactRoleV1,
+    VegaMdlFigure9ArtifactSourceErrorV1, VegaMdlFigure9ProverArtifactInstallReceiptV1,
+    VegaMdlFigure9ProverArtifactSourceV1, VegaMdlFigure9VerifierArtifactInstallReceiptV1,
+    VegaMdlFigure9VerifierArtifactSourceV1,
     qualify_and_install_vega_mdl_figure9_prover_artifacts_v1,
     qualify_and_install_vega_mdl_figure9_verifier_artifact_v1,
 };
@@ -1177,6 +1178,75 @@ where
         PrivacyProtocolIdV1::VegaExistingCredentialZkV0,
     )
     .map_err(|_| VegaPrivacyActionBuildErrorV1::CompiledProfileUnavailable)?;
+    prepare_vega_privacy_action_with_profile_and_rng_v1(
+        context,
+        input,
+        witness_material,
+        device_signing_key,
+        canonical_genesis_hash,
+        trusted_block_timestamp_ms,
+        profile,
+        rng,
+    )
+}
+/// Prepare a non-authorizing Vega release candidate using explicit candidate profile material.
+///
+/// This entry point exists only for crate-internal tests and non-default release-evidence builds.
+/// It cannot make the candidate governance-available, and envelopes it produces remain rejected by
+/// the public compiled-profile admission path while Vega readiness is closed.
+///
+/// # Errors
+///
+/// Returns the same validation and proving errors as [`prepare_vega_privacy_action_with_rng_v1`],
+/// including `CompiledProfileUnavailable` when candidate material cannot be derived.
+#[cfg(feature = "privacy-release-evidence")]
+pub(crate) fn prepare_vega_release_candidate_privacy_action_with_rng_v1<R>(
+    context: VegaPrivacyActionTransactionContextV1,
+    input: VegaPrivacyActionPublicInputV1,
+    witness_material: VegaPrivacyActionWitnessMaterialV1,
+    device_signing_key: &P256SigningKey,
+    canonical_genesis_hash: [u8; 32],
+    trusted_block_timestamp_ms: u64,
+    rng: &mut R,
+) -> Result<VegaPreparedPrivacyActionV1, VegaPrivacyActionBuildErrorV1>
+where
+    R: CryptoRng + RngCore,
+{
+    if canonical_genesis_hash == [0; 32] {
+        return Err(VegaPrivacyActionBuildErrorV1::ZeroGenesisHash);
+    }
+    if context.network_id.as_bytes() != &canonical_genesis_hash {
+        return Err(VegaPrivacyActionBuildErrorV1::NetworkIdMismatch);
+    }
+    validate_vega_transaction_context_v1(&context)?;
+    validate_vega_public_input_v1(input)?;
+    let profile = crate::privacy_profiles::vega_release_candidate_profile_material_v1()
+        .map_err(|_| VegaPrivacyActionBuildErrorV1::CompiledProfileUnavailable)?;
+    prepare_vega_privacy_action_with_profile_and_rng_v1(
+        context,
+        input,
+        witness_material,
+        device_signing_key,
+        canonical_genesis_hash,
+        trusted_block_timestamp_ms,
+        profile,
+        rng,
+    )
+}
+#[allow(clippy::too_many_arguments)]
+fn prepare_vega_privacy_action_with_profile_and_rng_v1<R>(
+    context: VegaPrivacyActionTransactionContextV1,
+    input: VegaPrivacyActionPublicInputV1,
+    witness_material: VegaPrivacyActionWitnessMaterialV1,
+    device_signing_key: &P256SigningKey,
+    canonical_genesis_hash: [u8; 32],
+    trusted_block_timestamp_ms: u64,
+    profile: crate::privacy_profiles::CompiledPrivacyProfileV1,
+    rng: &mut R,
+) -> Result<VegaPreparedPrivacyActionV1, VegaPrivacyActionBuildErrorV1>
+where
+    R: CryptoRng + RngCore,
+{
     let draft_statement = vega_statement_v1(
         vega_statement_context_v1(
             &context,
@@ -1380,6 +1450,44 @@ where
     validate_vega_transaction_context_v1(&context)?;
     validate_vega_signing_authority_v1(&context.authority, private_key)?;
     let prepared = prepare_vega_privacy_action_with_rng_v1(
+        context,
+        input,
+        witness_material,
+        device_signing_key,
+        canonical_genesis_hash,
+        trusted_block_timestamp_ms,
+        rng,
+    )?;
+    sign_prepared_vega_privacy_action_v1(prepared, private_key)
+}
+/// Build and sign a non-authorizing Vega release candidate with caller-provided randomness.
+///
+/// This crate-only entry point is absent from default production builds. It preserves the public
+/// builder's transaction and signing-authority validation order, but deliberately selects
+/// candidate profile material that grants no governance or admission authority.
+///
+/// # Errors
+///
+/// Returns the same transaction, authority, candidate preparation, proving, and signing errors as
+/// [`build_signed_vega_privacy_action_with_rng_v1`].
+#[cfg(feature = "privacy-release-evidence")]
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn build_signed_vega_release_candidate_privacy_action_with_rng_v1<R>(
+    context: VegaPrivacyActionTransactionContextV1,
+    input: VegaPrivacyActionPublicInputV1,
+    witness_material: VegaPrivacyActionWitnessMaterialV1,
+    device_signing_key: &P256SigningKey,
+    canonical_genesis_hash: [u8; 32],
+    trusted_block_timestamp_ms: u64,
+    private_key: &PrivateKey,
+    rng: &mut R,
+) -> Result<SignedVegaPrivacyActionV1, VegaPrivacyActionBuildErrorV1>
+where
+    R: CryptoRng + RngCore,
+{
+    validate_vega_transaction_context_v1(&context)?;
+    validate_vega_signing_authority_v1(&context.authority, private_key)?;
+    let prepared = prepare_vega_release_candidate_privacy_action_with_rng_v1(
         context,
         input,
         witness_material,

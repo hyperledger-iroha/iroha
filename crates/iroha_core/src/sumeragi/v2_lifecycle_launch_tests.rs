@@ -2622,15 +2622,37 @@ fn certified_response_queue_refresh_retries_without_closing_output() {
         ],
     );
 
-    let structural_failure = source_region(narrowing, "Err((error, retained))", "};");
-    assert_source_tokens_in_order(
-        structural_failure,
-        &[
-            "close_output_for_restart();",
-            "drop(runner);",
-            "ProductionLifecycleIngressSelectionV1::RestartRequired",
-        ],
+    let priority = source_region(
+        response_path,
+        "let selected_priority = match self",
+        "match selected_priority",
     );
+    let ordinary = source_region(
+        response_path,
+        "SelectedCertifiedResponsePriorityV1::OrdinaryClaimed",
+        "SelectedCertifiedResponsePriorityV1::RecoveredClaimed",
+    );
+    let recovered = source_region(
+        response_path,
+        "SelectedCertifiedResponsePriorityV1::RecoveredClaimed",
+        "self.drive_recovered_ingress_selector(selector, runner)",
+    );
+
+    for structural_failure in [
+        source_region(narrowing, "Err((error, retained))", "};"),
+        source_region(priority, "Err(error)", "};"),
+        source_region(ordinary, "Err(error)", "};"),
+        source_region(recovered, "Err(error)", "};"),
+    ] {
+        assert_source_tokens_in_order(
+            structural_failure,
+            &[
+                "close_output_for_restart();",
+                "drop(runner);",
+                "ProductionLifecycleIngressSelectionV1::RestartRequired",
+            ],
+        );
+    }
 }
 
 #[test]

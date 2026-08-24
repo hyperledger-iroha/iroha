@@ -2927,12 +2927,6 @@ enum RestartEffectSource {
     DiagnosticOnly,
 }
 pub(crate) trait EffectRuntime {
-    /// Report whether live pacemaker clocks have crossed their one-way arm boundary.
-    /// Synthetic runtimes have no production clocks.
-    fn live_clocks_are_armed(&self) -> bool {
-        false
-    }
-
     /// Commit one exact deferred pending-Kura marker through the serialized adapter.
     ///
     /// Synthetic runtimes cannot mint this authority and retain the default
@@ -3041,6 +3035,11 @@ pub(crate) trait EffectRuntime {
     #[cfg(test)]
     fn last_scheduler_selection_for_test(&self) -> Option<RuntimeSelectedOwnerKind> {
         None
+    }
+    /// Whether any live reducer clock has been armed for this height.
+    /// Synthetic runtimes model cold recovery unless they opt into live clocks.
+    fn lifecycle_live_clocks_are_armed(&self) -> bool {
+        false
     }
     /// Return the reducer incarnation which currently owns effects.
     fn authoritative_tag(&self) -> Option<EventTag>;
@@ -3257,10 +3256,6 @@ pub(crate) trait EffectRuntime {
     fn watchdog_threshold(&self) -> Duration;
 }
 impl EffectRuntime for SerializedV2Runtime {
-    fn live_clocks_are_armed(&self) -> bool {
-        self.lifecycle_live_clocks_are_armed()
-    }
-
     fn commit_pending_kura_validated_apply(
         &mut self,
         marker: super::v2::DeferredPendingKuraValidatedMarkerV1,
@@ -3302,6 +3297,9 @@ impl EffectRuntime for SerializedV2Runtime {
 
     fn set_ingress_physical_cut(&mut self, physical_cut: u128) -> Result<(), String> {
         SerializedV2Runtime::set_ingress_physical_cut(self, physical_cut)
+    }
+    fn lifecycle_live_clocks_are_armed(&self) -> bool {
+        SerializedV2Runtime::lifecycle_live_clocks_are_armed(self)
     }
     fn step_effects(&mut self, now: Instant) -> Result<RuntimeStep<AdapterEffect>, String> {
         self.step(now).map_err(|error| error.to_string())
@@ -6269,6 +6267,7 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
         self.publish_status(services)
     }
     /// Consume startup or reducer effects in their exact emitted order.
+    #[cfg(test)]
     pub(crate) fn consume_effects<S: V2EffectServices>(
         &mut self,
         effects: Vec<AdapterEffect>,
@@ -7599,6 +7598,7 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
                 .map_err(EffectExecutorError::Runtime)?;
         }
         self.durable_validate_retry_seals = retained_validate_retry_seals;
+        self.published_lifecycle_validate_retry_markers = retained_published_validate_retry_markers;
         #[cfg(test)]
         if let Some(trace_root) = recovered_validate_retry_trace_root {
             self.last_recovered_validate_retry_trace_root = Some(trace_root);

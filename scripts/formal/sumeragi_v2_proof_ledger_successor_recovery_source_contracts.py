@@ -441,9 +441,11 @@ def _successor_recovery_source_fidelity_errors(repo_root: Path) -> list[str]:
                     "struct BoundRecoveredCompleteTipSuccessorOwnerV1 { owner: ProductionLifecycleOwnerV1, retirement: RetiredRecoveredCompleteTipActivationAuthorityV1, }",
                     "impl BoundRecoveredCompleteTipSuccessorOwnerV1",
                     "fn launch( self, inputs: super::launch::ProductionLifecycleLaunchInputsV1, )",
-                    "let Self { owner, retirement } = self",
-                    "let launched = owner.launch(inputs)?",
-                    "LaunchedRecoveredCompleteTipSuccessorLifecycleV1 { launched, retirement, }",
+                    "let Self { owner, mut retirement, } = self",
+                    "let mut launched = owner.launch(inputs)?",
+                    "launched.reauthenticate_recovered_complete_tip_successor(&mut retirement)",
+                    "map_err(|_| super::launch::ProductionLifecycleLaunchErrorV1::InvalidOwner)?",
+                    "Ok(Box::new(LaunchedRecoveredCompleteTipSuccessorLifecycleV1 {",
                     "struct LaunchedRecoveredCompleteTipSuccessorLifecycleV1 { launched: Box<super::launch::LaunchedProductionLifecycleV1>, retirement: RetiredRecoveredCompleteTipActivationAuthorityV1, }",
                     "impl LaunchedRecoveredCompleteTipSuccessorLifecycleV1",
                     "fn initialize_recovered_local_proposal( &mut self, runner: super::super::v2_runner::ProductionLifecyclePreActivationRunnerBorrowV1, )",
@@ -1212,11 +1214,13 @@ def _successor_recovery_source_fidelity_errors(repo_root: Path) -> list[str]:
                 cold_validate_seal,
                 ("Recovered(Arc<RecoveredDurableValidateRetryOwnerV1>)",),
             )
-            cold_validate_retry_projection = _require_rust_item(
+            cold_validate_retry_projection = _require_qualified_rust_item(
                 effects_path,
                 effects_source,
+                "DurableValidateRetrySealV1",
                 "project_retry",
                 errors,
+                "non-substitutable live and recovered Validate retry projection",
             )
             if cold_validate_retry_projection is not None:
                 require_order(
@@ -2349,6 +2353,7 @@ def _successor_recovery_source_fidelity_errors(repo_root: Path) -> list[str]:
                     "ingress_ready: Arc<AtomicBool>",
                     "block_ingress: Arc<FairV2Ingress>",
                     "impl Drop for ProductionLifecycleActivatedRunnerAuthoritySealV1",
+                    "fn close_ingress(",
                     "fn retire(",
                     "self.ingress_ready.store(false, Ordering::Release)",
                     "self.block_ingress.close()",
@@ -2373,14 +2378,14 @@ def _successor_recovery_source_fidelity_errors(repo_root: Path) -> list[str]:
                 "activated runner readiness retirement",
                 activated_runner_authority,
                 "self.ingress_ready.store(false, Ordering::Release)",
-                1,
+                2,
             )
             require_token_count(
                 runner_dependency_path,
                 "activated runner ingress retirement",
                 activated_runner_authority,
                 "self.block_ingress.close()",
-                1,
+                2,
             )
             shared_runner_ingress_retirement = region(
                 runner_dependency_path,
@@ -4008,12 +4013,37 @@ def _successor_recovery_source_fidelity_errors(repo_root: Path) -> list[str]:
                 "staged recovered Broadcast registry binding",
                 single_broadcast_bind,
                 (
+                    "exact_staged_recovered_lifecycle_broadcast_address(",
+                    "Ok(BoundRecoveredLifecycleSignBroadcastSuccessor",
+                    "pub(super) fn exact_staged_recovered_lifecycle_broadcast_address(",
                     "coordinator.records.get(&child_ordinal)",
                     "ConcreteWorkAddress::new(record.owner, child_ordinal, child_slot)",
-                    "self.registry.entries.contains_key(&broadcast_address)",
-                    ".validates_at(&self.verified, broadcast_address, child_digest)",
+                    "broadcast.matches_current_ready_record(",
+                    ".validates_at(verified, broadcast_address, child_digest)",
+                    "registry.entries.contains_key(&broadcast_address)",
+                    "Ok(broadcast_address)",
                 ),
             )
+            single_broadcast_address = _require_rust_item(
+                registry_path,
+                registry_source,
+                "exact_staged_recovered_lifecycle_broadcast_address",
+                errors,
+            )
+            if single_broadcast_address is not None:
+                require_order(
+                    registry_path,
+                    "staged recovered Broadcast address authentication",
+                    single_broadcast_address.source,
+                    (
+                        "coordinator.records.get(&child_ordinal)",
+                        "ConcreteWorkAddress::new(record.owner, child_ordinal, child_slot)",
+                        "broadcast.matches_current_ready_record(",
+                        "broadcast.validates_at(verified, broadcast_address, child_digest)",
+                        "registry.entries.contains_key(&broadcast_address)",
+                        "Ok(broadcast_address)",
+                    ),
+                )
             single_broadcast_transition = region(
                 body_pipeline_path,
                 body_pipeline_source,
@@ -4061,7 +4091,7 @@ def _successor_recovery_source_fidelity_errors(repo_root: Path) -> list[str]:
                 "adjacent fresh Certified-Serve pair after a shared gap",
                 fresh_serve_pair,
                 (
-                    "current.high_water >= serve",
+                    "serve <= current.high_water",
                     "serve.checked_add(1) != Some(producer)",
                     "producer != staged.high_water",
                 ),
@@ -4891,38 +4921,38 @@ def _successor_recovery_source_fidelity_errors(repo_root: Path) -> list[str]:
                     "target.matches_recovered_decision_fetch_key(task.dispatch_key())",
                 ),
             )
-            recovered_fetch_next_selector = region(
+            recovered_fetch_next_selector = _require_rust_item(
                 selector_path,
                 selector_source,
-                "queue-owned recovered Decision Fetch selector",
-                "pub(crate) fn prepare_next_recovered_decision_fetch_ingress_selector(",
-                "/// Decide whether an already selected exact cut is the recovered Fetch owner.",
+                "prepare_next_recovered_decision_fetch_ingress_selector",
+                errors,
             )
-            require_order(
-                selector_path,
-                "queue-owned recovered Decision Fetch selector",
-                recovered_fetch_next_selector,
-                (
-                    "self.lifecycle_terminal_subject()",
-                    "capture_next_lifecycle_queue_cut(",
-                    "v2_ingress_head_can_drain(occurrence.inbound(), self, terminal_subject)",
-                    "self.capture_lifecycle_ingress_selector(cut)",
-                    "prepared.queue_witness.selected_disposition()",
-                    "PreparedLifecycleIngressIoTarget::RecoveredDecisionFetchBodyPersistence",
-                    ".selected_claimed_response_family()",
-                ),
-            )
-            reject_tokens(
-                selector_path,
-                "queue-owned recovered Decision Fetch selector",
-                recovered_fetch_next_selector,
-                (
-                    "target_physical_ordinal:",
-                    "prepare_lifecycle_ingress_selector(",
-                    "try_recv",
-                    "commit_exact_dequeue",
-                ),
-            )
+            if recovered_fetch_next_selector is not None:
+                require_order(
+                    selector_path,
+                    "queue-owned recovered Decision Fetch selector",
+                    recovered_fetch_next_selector.source,
+                    (
+                        "self.lifecycle_terminal_subject()",
+                        "capture_next_lifecycle_queue_cut(",
+                        "v2_ingress_head_can_drain(occurrence.inbound(), self, terminal_subject)",
+                        "self.capture_lifecycle_ingress_selector(cut)",
+                        "prepared.queue_witness.selected_disposition()",
+                        "PreparedLifecycleIngressIoTarget::RecoveredDecisionFetchBodyPersistence",
+                        ".selected_claimed_response_family()",
+                    ),
+                )
+                reject_tokens(
+                    selector_path,
+                    "queue-owned recovered Decision Fetch selector",
+                    recovered_fetch_next_selector.source,
+                    (
+                        "target_physical_ordinal:",
+                        "prepare_lifecycle_ingress_selector(",
+                        "try_recv",
+                        "commit_exact_dequeue",
+                    ),
+                )
             recovered_fetch_queue_cut = region(
                 ingress_position_path,
                 ingress_position_source,
@@ -5148,12 +5178,36 @@ def _successor_recovery_source_fidelity_errors(repo_root: Path) -> list[str]:
                 "staged recovered Store registry binding",
                 single_store_bind,
                 (
+                    "exact_staged_recovered_decision_store_address(",
+                    "self.registry.entries.contains_key(&store_address)",
+                    "Ok(BoundRecoveredDecisionFetchStoreSuccessor",
+                    "pub(super) fn exact_staged_recovered_decision_store_address(",
                     "coordinator.records.get(&child_ordinal)",
                     "ConcreteWorkAddress::new(record.owner, child_ordinal, child_slot)",
-                    "self.registry.entries.contains_key(&store_address)",
-                    ".validates_at(coordinator.active_context, store_address, child_digest)",
+                    "store_address.owner != parent_owner",
+                    "store.matches_current_ready_record(",
+                    "Ok(store_address)",
                 ),
             )
+            single_store_address = _require_rust_item(
+                registry_path,
+                registry_source,
+                "exact_staged_recovered_decision_store_address",
+                errors,
+            )
+            if single_store_address is not None:
+                require_order(
+                    registry_path,
+                    "staged recovered Store address authentication",
+                    single_store_address.source,
+                    (
+                        "coordinator.records.get(&child_ordinal)",
+                        "ConcreteWorkAddress::new(record.owner, child_ordinal, child_slot)",
+                        "store_address.owner != parent_owner",
+                        "store.matches_current_ready_record(",
+                        "Ok(store_address)",
+                    ),
+                )
             single_store_transition = region(
                 body_pipeline_path,
                 body_pipeline_source,
@@ -5598,12 +5652,19 @@ def _successor_recovery_source_fidelity_errors(repo_root: Path) -> list[str]:
                 "runner lifecycle finalization preflight",
                 lifecycle_run_inner_source,
                 (
-                    "if !ready_to_finish || producer_turn.is_some()",
+                    "let apply_terminal_settled = producer_claim.apply_terminal_settled()",
+                    "if apply_terminal_settled && !ready_to_finish",
+                    "let producer_turn = if apply_terminal_settled",
+                    "if !apply_terminal_settled && (!ready_to_finish || producer_turn.is_some())",
                     "schedule_local_proposal(",
                     "let finalization_ready = ready_to_finish && activated.ready_for_finalized_rollover(&mut active_runner)",
                     "let rollover_ready = if finalization_ready",
                     "preflight_finalized_lane_rollover(",
                     "if ready_to_finish && !rollover_ready",
+                    "if rollover_ready",
+                    "close_runner_ingress_for_finalized_drain(",
+                    "drain_decided_lane_recovery_ingress(",
+                    "ensure_closed_drained_cut()",
                     "finalize_lifecycle_height(",
                 ),
             )

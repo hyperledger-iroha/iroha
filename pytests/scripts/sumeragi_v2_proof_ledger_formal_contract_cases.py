@@ -243,6 +243,7 @@ REVIEWED_RUST_INCLUDE_MANIFESTS = {
         Path('state/restored_staking_owner_tests.rs'),
         Path('state/confidential_policy_transition_index_tests.rs'),
         Path('state/passive_lane_diagnostic_methods.rs'),
+        Path('state/runtime_configuration.rs'),
         Path('state/lane_lifecycle_support.rs'),
         Path('state/diagnostic_state_generation.rs'),
         Path('state/autonomous_predecessor_application.rs'),
@@ -415,6 +416,7 @@ REVIEWED_RUST_INCLUDE_MANIFESTS = {
         Path('tests/v2_worker_main_02.rs'),
         Path('tests/v2_worker_main_04.rs'),
         Path('tests/v2_worker_main_05.rs'),
+        Path('tests/v2_worker_kagemusha_runtime_gate.rs'),
     ),
     Path('crates/iroha_core/src/sumeragi/v2_worker_io_execution.rs'): (
         Path('v2_worker/exact_output_rollover_claim.rs'),

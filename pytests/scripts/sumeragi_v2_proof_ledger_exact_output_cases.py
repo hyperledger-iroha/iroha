@@ -2306,7 +2306,7 @@ def _apply_exact_output_non_runtime_extended_mutations(
             "pub(in crate::sumeragi) fn commit_lifecycle_decision_apply_finality(",
             "&& self.recovered_decision_fetch_request_index_is_exact_and_empty()",
             "&& true",
-            "lifecycle Decision Apply finality must consume the exact live owner or prove recovered non-substitution",
+            "lifecycle Decision Apply finality must authenticate lineage, recovery, height, artifact, receipt, and drained runtime",
         ),
         (
             "crates/iroha_core/src/merge_sidecar.rs",
@@ -2418,9 +2418,30 @@ def _apply_exact_output_non_runtime_extended_mutations(
         (
             "crates/iroha_core/src/sumeragi/v2_effects.rs",
             "pub(in crate::sumeragi) fn prepare_lifecycle_decision_apply_completion(",
+            ".as_ref()\n                .is_some_and(|owner| {",
+            ".as_ref()\n                .is_none_or(|owner| {",
+            "lifecycle Decision Apply completion must authenticate its exact live owner",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_effects.rs",
+            "pub(in crate::sumeragi) fn prepare_lifecycle_decision_apply_completion(",
+            "LifecycleDecisionApplyLineageV1::Recovered => {\n                self.live_lifecycle_decision_apply.is_none()",
+            "LifecycleDecisionApplyLineageV1::Recovered => {\n                self.live_lifecycle_decision_apply.is_some()",
+            "direct recovered Decision Apply completion must prove live-owner non-substitution",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_effects.rs",
+            "pub(in crate::sumeragi) fn prepare_lifecycle_decision_apply_completion(",
+            "authority.exactly_matches_pending_kura_recovery(&self.context, evidence)",
+            "true",
+            "lifecycle Decision Apply completion must bind optional interrupted-tip evidence to the exact recovered lineage",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_effects.rs",
+            "pub(in crate::sumeragi) fn prepare_lifecycle_decision_apply_completion(",
             "|| !pending_recovery_is_exact",
             "|| false",
-            "lifecycle Decision Apply completion must retain exact pending-Kura recovery evidence",
+            "lifecycle Decision Apply completion must authenticate exact pending-Kura recovery evidence",
         ),
         (
             "crates/iroha_core/src/sumeragi/v2_effects.rs",
@@ -2428,6 +2449,27 @@ def _apply_exact_output_non_runtime_extended_mutations(
             "|| self.finality_completion.is_some()",
             "|| false",
             "lifecycle Decision Apply completion must not overtake retained work",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_effects.rs",
+            "pub(in crate::sumeragi) fn commit_lifecycle_decision_apply_finality(",
+            ".take()\n                .is_some_and(|owner| {",
+            ".take()\n                .is_none_or(|owner| {",
+            "lifecycle Decision Apply finality must consume its exact live owner",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_effects.rs",
+            "pub(in crate::sumeragi) fn commit_lifecycle_decision_apply_finality(",
+            "LifecycleDecisionApplyLineageV1::Recovered => {\n                self.live_lifecycle_decision_apply.is_none()",
+            "LifecycleDecisionApplyLineageV1::Recovered => {\n                self.live_lifecycle_decision_apply.is_some()",
+            "direct recovered Decision Apply finality must prove live-owner non-substitution",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_effects.rs",
+            "pub(in crate::sumeragi) fn commit_lifecycle_decision_apply_finality(",
+            "dispatch_key.lineage() == LifecycleDecisionApplyLineageV1::Recovered",
+            "true",
+            "lifecycle Decision Apply finality must bind pending-Kura evidence only to the recovered dispatched lineage",
         ),
         (
             "crates/iroha_core/src/sumeragi/v2_effects.rs",
@@ -2441,7 +2483,7 @@ def _apply_exact_output_non_runtime_extended_mutations(
             "pub(in crate::sumeragi) fn commit_lifecycle_decision_apply_finality(",
             "&& dispatch_key.matches_height_context(&self.context)",
             "&& true",
-            "lifecycle Decision Apply finality must consume the exact live owner or prove recovered non-substitution",
+            "lifecycle Decision Apply finality must authenticate lineage, recovery, height, artifact, receipt, and drained runtime",
         ),
         (
             "crates/iroha_core/src/sumeragi/v2_worker.rs",

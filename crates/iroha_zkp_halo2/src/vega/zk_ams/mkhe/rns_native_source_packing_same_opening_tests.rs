@@ -18,6 +18,10 @@ const EXPECTED_FOCUSED_PROOF_WIRES_V1: usize = 2;
 const EXPECTED_FOCUSED_RELATION_MSMS_V1: usize = 11;
 const EXPECTED_FOCUSED_SUCCESSFUL_REPLAYS_V1: usize = 13;
 const EXPECTED_FOCUSED_FULL_COMMITMENT_SCANS_V1: usize = 17;
+const FIXTURE_PUBLIC_OWNER_POINTS_V1: usize = 2;
+const FIXTURE_PUBLIC_RADIX_POINTS_PER_OWNER_V1: usize = RADIX_LOW_DIGITS_V1 + 1;
+const FIXTURE_PUBLIC_POINT_CACHE_POINTS_V1: usize = FIXTURE_PUBLIC_OWNER_POINTS_V1
+    + FIXTURE_PUBLIC_OWNER_POINTS_V1 * FIXTURE_PUBLIC_RADIX_POINTS_PER_OWNER_V1;
 
 const _: () = {
     assert!(RNS_NATIVE_SOURCE_PACKING_SAME_OPENING_SOURCE_SETTLED_V1);
@@ -119,11 +123,6 @@ fn owner_mask_v1(mode: FixtureModeV1, ordinal: usize) -> Scalar {
     }
 }
 
-fn owner_value_and_mask_commitment_v1(mode: FixtureModeV1, ordinal: usize) -> Point {
-    let generators = ZkAmsT256BulletproofSuiteV1::generators();
-    generators.g_bold[0] + generators.h.mul_scalar(owner_mask_v1(mode, ordinal))
-}
-
 fn radix_share_v1(digit: usize) -> Scalar {
     static SHARES_V1: OnceLock<[Scalar; RADIX_LOW_DIGITS_V1 + 1]> = OnceLock::new();
     SHARES_V1.get_or_init(|| {
@@ -139,6 +138,62 @@ fn radix_share_v1(digit: usize) -> Scalar {
         }
         shares
     })[digit]
+}
+
+fn owner_mask_index_v1(mode: FixtureModeV1, ordinal: usize) -> usize {
+    let mask = owner_mask_v1(mode, ordinal);
+    if mask == Scalar::zero() {
+        0
+    } else {
+        assert_eq!(
+            mask,
+            Scalar::one(),
+            "fixture cache only admits the public mask values zero and one"
+        );
+        1
+    }
+}
+
+/// Exact deterministic public fixture points retained process-locally.
+///
+/// This cache contains no witness, nonce, RNG state, replay owner, derived-mask
+/// provider, one-shot capability, or runtime mask. The two owner points and
+/// their public radix multiples are reconstructed with the exact operations
+/// previously repeated at every source access.
+fn fixture_public_points_v1() -> &'static [Point; FIXTURE_PUBLIC_POINT_CACHE_POINTS_V1] {
+    static POINTS_V1: OnceLock<[Point; FIXTURE_PUBLIC_POINT_CACHE_POINTS_V1]> = OnceLock::new();
+    POINTS_V1.get_or_init(|| {
+        let generators = ZkAmsT256BulletproofSuiteV1::generators();
+        let owners = [
+            generators.g_bold[0] + generators.h.mul_scalar(Scalar::zero()),
+            generators.g_bold[0] + generators.h.mul_scalar(Scalar::one()),
+        ];
+        let mut points = [owners[0]; FIXTURE_PUBLIC_POINT_CACHE_POINTS_V1];
+        points[0] = owners[0];
+        points[1] = owners[1];
+        for mask in 0..FIXTURE_PUBLIC_OWNER_POINTS_V1 {
+            for digit in 0..FIXTURE_PUBLIC_RADIX_POINTS_PER_OWNER_V1 {
+                points[FIXTURE_PUBLIC_OWNER_POINTS_V1
+                    + mask * FIXTURE_PUBLIC_RADIX_POINTS_PER_OWNER_V1
+                    + digit] = owners[mask].mul_scalar(radix_share_v1(digit));
+            }
+        }
+        points
+    })
+}
+
+fn owner_value_and_mask_commitment_v1(mode: FixtureModeV1, ordinal: usize) -> Point {
+    fixture_public_points_v1()[owner_mask_index_v1(mode, ordinal)]
+}
+
+fn radix_scaled_owner_value_and_mask_commitment_v1(
+    mode: FixtureModeV1,
+    ordinal: usize,
+    digit: usize,
+) -> Point {
+    let mask = owner_mask_index_v1(mode, ordinal);
+    fixture_public_points_v1()
+        [FIXTURE_PUBLIC_OWNER_POINTS_V1 + mask * FIXTURE_PUBLIC_RADIX_POINTS_PER_OWNER_V1 + digit]
 }
 
 struct FixtureReplaySourceV1 {
@@ -245,7 +300,9 @@ impl RnsNativeSourcePackingAggregateReplayV1 for FixtureReplaySourceV1 {
         }
         self.difference_low_reads
             .set(self.difference_low_reads.get() + 1);
-        Ok(owner_value_and_mask_commitment_v1(self.mode, group).mul_scalar(radix_share_v1(digit)))
+        Ok(radix_scaled_owner_value_and_mask_commitment_v1(
+            self.mode, group, digit,
+        ))
     }
 
     fn difference_top_commitment_v1(
@@ -258,8 +315,11 @@ impl RnsNativeSourcePackingAggregateReplayV1 for FixtureReplaySourceV1 {
         }
         self.difference_top_reads
             .set(self.difference_top_reads.get() + 1);
-        Ok(owner_value_and_mask_commitment_v1(self.mode, group)
-            .mul_scalar(radix_share_v1(RADIX_LOW_DIGITS_V1)))
+        Ok(radix_scaled_owner_value_and_mask_commitment_v1(
+            self.mode,
+            group,
+            RADIX_LOW_DIGITS_V1,
+        ))
     }
 
     fn signed_commitment_v1(
@@ -823,6 +883,45 @@ fn exact_owner_order_geometry_and_cap_are_settled() {
 }
 
 #[test]
+fn public_fixture_point_cache_matches_uncached_derivation_exactly() {
+    fn assert_send_sync<T: Send + Sync>() {}
+
+    assert_eq!(FIXTURE_PUBLIC_OWNER_POINTS_V1, 2);
+    assert_eq!(FIXTURE_PUBLIC_RADIX_POINTS_PER_OWNER_V1, 18);
+    assert_eq!(FIXTURE_PUBLIC_POINT_CACHE_POINTS_V1, 38);
+    assert_eq!(core::mem::size_of::<Point>(), 96);
+    assert_eq!(
+        core::mem::size_of::<[Point; FIXTURE_PUBLIC_POINT_CACHE_POINTS_V1]>(),
+        3_648
+    );
+    assert_send_sync::<[Point; FIXTURE_PUBLIC_POINT_CACHE_POINTS_V1]>();
+
+    let cached = fixture_public_points_v1();
+    assert_eq!(cached.len(), FIXTURE_PUBLIC_POINT_CACHE_POINTS_V1);
+    let generators = ZkAmsT256BulletproofSuiteV1::generators();
+    for mask in 0..FIXTURE_PUBLIC_OWNER_POINTS_V1 {
+        let expected_owner =
+            generators.g_bold[0] + generators.h.mul_scalar(Scalar::from_u64(mask as u64));
+        assert_eq!(cached[mask], expected_owner);
+        assert_eq!(
+            cached[mask].to_non_identity_wire_bytes(),
+            expected_owner.to_non_identity_wire_bytes()
+        );
+        for digit in 0..FIXTURE_PUBLIC_RADIX_POINTS_PER_OWNER_V1 {
+            let expected = expected_owner.mul_scalar(radix_share_v1(digit));
+            let cached_index = FIXTURE_PUBLIC_OWNER_POINTS_V1
+                + mask * FIXTURE_PUBLIC_RADIX_POINTS_PER_OWNER_V1
+                + digit;
+            assert_eq!(cached[cached_index], expected);
+            assert_eq!(
+                cached[cached_index].to_non_identity_wire_bytes(),
+                expected.to_non_identity_wire_bytes()
+            );
+        }
+    }
+}
+
+#[test]
 fn all_1376_owner_ordinals_match_an_independent_oracle() {
     for ordinal in 0..OWNERS_V1 {
         let expected = if ordinal < DIFFERENCE_GROUPS_V1 {
@@ -872,16 +971,16 @@ fn d_and_signed_source_transposes_pin_slots_offsets_coordinates_and_signed_value
     assert!(difference_source_index_v1(DIFFERENCE_GROUPS_V1, 0).is_err());
     assert!(difference_source_index_v1(0, VECTOR_COORDINATES_V1).is_err());
     assert_eq!(
-        difference_scalar_from_be_bytes_v1([0; DIFFERENCE_SCALAR_BYTES_V1])
+        difference_scalar_from_be_bytes_v1(&[0; DIFFERENCE_SCALAR_BYTES_V1])
             .expect("canonical zero"),
         Scalar::zero()
     );
     assert_eq!(
-        difference_scalar_from_be_bytes_v1(Scalar::one().to_be_bytes())
+        difference_scalar_from_be_bytes_v1(&Scalar::one().to_be_bytes())
             .expect("canonical positive"),
         Scalar::one()
     );
-    assert!(difference_scalar_from_be_bytes_v1(VEGA_T256_SCALAR_MODULUS_BE_V1).is_err());
+    assert!(difference_scalar_from_be_bytes_v1(&VEGA_T256_SCALAR_MODULUS_BE_V1).is_err());
 
     let signed_cases = [
         (0, 0, 0, RnsNativeSignedSourceRoleV1::R, 0, 0, 0, 512, 0),
@@ -973,7 +1072,7 @@ fn d_and_signed_source_transposes_pin_slots_offsets_coordinates_and_signed_value
         (i64::MAX, Scalar::from_u64(i64::MAX as u64)),
     ] {
         assert_eq!(
-            signed_scalar_from_twos_complement_be_i64_v1(signed.to_be_bytes()),
+            signed_scalar_from_twos_complement_be_i64_v1(&signed.to_be_bytes()),
             expected
         );
     }
@@ -2017,6 +2116,7 @@ fn entropy_failure_has_no_deterministic_fallback() {
 #[test]
 fn transcript_chronology_and_production_unavailability_are_explicit() {
     let source = include_str!("rns_native_source_packing_same_opening.rs");
+    let test_source = include_str!("rns_native_source_packing_same_opening_tests.rs");
     for needle in [
         "const PRODUCTION_COMBINED_DIRECT_MEMBERSHIP_PREDECESSOR_AVAILABLE_V1: bool = false;",
         "RNS_NATIVE_SOURCE_PACKING_SAME_OPENING_SOURCE_SETTLED_V1: bool = true;",
@@ -2327,6 +2427,31 @@ fn transcript_chronology_and_production_unavailability_are_explicit() {
         assert!(!schnorr.contains(excluded));
     }
 
+    let fixture_point_cache_index = test_source
+        .split_once("fn owner_mask_index_v1")
+        .expect("public fixture point cache index")
+        .1
+        .split_once("fn fixture_public_points_v1")
+        .expect("public fixture point cache index boundary")
+        .0;
+    for required in [
+        "if mask == Scalar::zero()",
+        "assert_eq!(\n            mask,\n            Scalar::one()",
+        "fixture cache only admits the public mask values zero and one",
+    ] {
+        assert!(
+            fixture_point_cache_index.contains(required),
+            "public fixture point cache index omitted {required}"
+        );
+    }
+
+    let detached_handoff = source
+        .find("pub(super) fn verify_rns_native_source_packing_same_opening_v1")
+        .expect("detached fixture handoff");
+    assert!(
+        source[detached_handoff.saturating_sub(80)..detached_handoff].contains("#[cfg(test)]"),
+        "detached context/replay entry must remain test-only"
+    );
     let handoff = source
         .split_once("pub(super) fn verify_rns_native_source_packing_same_opening_v1")
         .expect("combined handoff")
@@ -2350,6 +2475,52 @@ fn transcript_chronology_and_production_unavailability_are_explicit() {
         .find("finalize_verified_kernel_v1")
         .expect("post-equation finalization");
     assert!(successor < core && core < equation && equation < outer && outer < finalize);
+
+    let owned_handoff = source
+        .split_once("pub(super) fn verify_rns_native_source_packing_same_opening_owned_v2")
+        .expect("owned combined handoff")
+        .1
+        .split_once("#[cfg(test)]")
+        .expect("owned handoff boundary")
+        .0;
+    let owned_successor = owned_handoff
+        .find("previous.same_opening_successor_v1()")
+        .expect("owned successor");
+    let owned_context = owned_handoff
+        .find("previous.authenticated_same_opening_context_v2()")
+        .expect("owned context");
+    let owned_core = owned_handoff
+        .find("previous.successor_independent_safe_core_v1()")
+        .expect("owned safe core");
+    let owned_replay = owned_handoff
+        .find("previous.begin_authenticated_replay_v2()")
+        .expect("owned replay");
+    let owned_equation = owned_handoff
+        .find("verify_equation_kernel_v1")
+        .expect("owned equation");
+    let owned_outer = owned_handoff
+        .find("previous.combined_outer_bindings_v1()")
+        .expect("owned outer bindings");
+    let owned_finalize = owned_handoff
+        .find("finalize_verified_kernel_v1")
+        .expect("owned finalization");
+    assert!(
+        owned_successor < owned_context
+            && owned_context < owned_core
+            && owned_core < owned_replay
+            && owned_replay < owned_equation
+            && owned_equation < owned_outer
+            && owned_outer < owned_finalize
+    );
+    let owned_signature = source
+        .split_once("pub(super) fn verify_rns_native_source_packing_same_opening_owned_v2")
+        .expect("owned handoff signature")
+        .1
+        .split_once("where")
+        .expect("owned handoff signature boundary")
+        .0;
+    assert!(!owned_signature.contains("context:"));
+    assert!(!owned_signature.contains("replay_source:"));
 
     let finalizer = source
         .split_once("fn finalize_verified_kernel_v1")
@@ -2404,7 +2575,6 @@ fn transcript_chronology_and_production_unavailability_are_explicit() {
         "self.combined_outer_binding_digest\n                != self.canonical_combined_outer_binding_digest_v1()"
     ));
 
-    let test_source = include_str!("rns_native_source_packing_same_opening_tests.rs");
     let executable_tests = test_source
         .split_once(
             "#[test]\nfn transcript_chronology_and_production_unavailability_are_explicit()",
@@ -2451,6 +2621,53 @@ fn transcript_chronology_and_production_unavailability_are_explicit() {
             "cached artifact retains forbidden owner: {forbidden}"
         );
     }
+    let fixture_point_cache = test_source
+        .split_once("fn fixture_public_points_v1()")
+        .expect("public fixture point cache")
+        .1
+        .split_once("fn owner_value_and_mask_commitment_v1")
+        .expect("public fixture point cache boundary")
+        .0;
+    for required in [
+        "static POINTS_V1: OnceLock<[Point; FIXTURE_PUBLIC_POINT_CACHE_POINTS_V1]>",
+        "generators.h.mul_scalar(Scalar::zero())",
+        "generators.h.mul_scalar(Scalar::one())",
+        "owners[mask].mul_scalar(radix_share_v1(digit))",
+    ] {
+        assert!(
+            fixture_point_cache.contains(required),
+            "public fixture point cache omitted {required}"
+        );
+    }
+    for forbidden in [
+        "owner_value_and_mask_commitment_v1",
+        "FixtureReplaySourceV1",
+        "FixtureMaskSourceV1",
+        "Zeroizing",
+        "DeterministicRngV1",
+        "Rc<",
+        "Cell<",
+        "Vec",
+        "Box",
+        "unsafe",
+        "transmute",
+    ] {
+        assert!(
+            !fixture_point_cache.contains(forbidden),
+            "public fixture point cache retained forbidden state: {forbidden}"
+        );
+    }
+    assert_eq!(
+        test_source
+            .lines()
+            .filter(|line| {
+                line.trim_start().starts_with(
+                    "static POINTS_V1: OnceLock<[Point; FIXTURE_PUBLIC_POINT_CACHE_POINTS_V1]>",
+                )
+            })
+            .count(),
+        1
+    );
     for declaration in test_source
         .lines()
         .filter(|line| line.trim_start().starts_with("static ") && line.contains("OnceLock<"))
@@ -2458,7 +2675,10 @@ fn transcript_chronology_and_production_unavailability_are_explicit() {
         assert!(
             declaration.contains("OnceLock<[Scalar;")
                 || declaration.contains("OnceLock<[u8; DIGEST_BYTES_V1]>")
-                || declaration.contains("OnceLock<PublicFixtureArtifactV1>"),
+                || declaration.contains("OnceLock<PublicFixtureArtifactV1>")
+                || declaration.contains(
+                    "static POINTS_V1: OnceLock<[Point; FIXTURE_PUBLIC_POINT_CACHE_POINTS_V1]>",
+                ),
             "unexpected process-local cache: {declaration}"
         );
     }

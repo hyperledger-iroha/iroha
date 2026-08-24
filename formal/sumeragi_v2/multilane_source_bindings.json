@@ -7287,10 +7287,7 @@
           "symbol": "RecoveredPendingKuraApplyReplayV1",
           "required_tokens": [
             "expected: crate::sumeragi::v2_recovery::PendingKuraApply",
-            "wal_identity: RecoveredWalFrameIdentity",
-            "replay_evidence: RecoveredWalDecisionFetchReplayEvidenceV1",
-            "effect: AdapterEffect",
-            "apply_carrier:"
+            "fetch: RecoveredWalDecisionFetch"
           ]
         },
         {
@@ -7298,11 +7295,12 @@
           "kind": "method",
           "symbol": "PendingKuraRecoveredAdapterStartupV1::authenticate_final_wal_startup_authority",
           "required_tokens": [
-            "RecoveredWalStartupAuthorityV1::DecisionFetch(fetch)",
-            "replay_evidence: fetch.replay_evidence.clone()",
-            "effect: fetch.effect.clone()",
-            "apply_carrier: None",
-            "authority: RecoveredWalStartupAuthorityV1::DecisionFetch(fetch)"
+            ".authenticate_final_wal_startup_authority()",
+            "let RecoveredWalStartupAuthorityV1::DecisionFetch(fetch) = authority",
+            "if !effects.is_empty()",
+            "subject.block_hash == expected.block_hash()",
+            "authority: RecoveredWalStartupAuthorityV1::None",
+            "replay: RecoveredPendingKuraApplyReplayV1 { expected, fetch }"
           ]
         },
         {
@@ -7310,20 +7308,29 @@
           "kind": "method",
           "symbol": "ProductionLifecycleAdapterStartupV1::into_serialized_runtime",
           "required_tokens": [
-            "let pending = pending_kura_apply",
-            "let apply_carrier = apply_carrier.ok_or(",
-            "Vec::new()",
-            "if !returned_effects.is_empty()",
-            "Ok((runtime, pending, local_proposal_attempt))"
+            "let RecoveredPendingKuraApplyReplayV1 { expected, fetch } = replay",
+            "let RecoveredWalDecisionFetch {",
+            "replay_evidence.exactly_matches_recovered_decision_fetch(",
+            "vec![effect]",
+            "SerializedV2Runtime::new_with_lifecycle_ordinals(",
+            "returned_effects.len() == 1",
+            "PreparedRecoveredPendingKuraApplyReplayV1 {",
+            "deferred_validated_marker: None",
+            "Ok((runtime, replay, local_proposal_attempt))"
           ]
         },
         {
-          "path": "crates/iroha_core/src/sumeragi/v2_lifecycle_coordinator_support.rs",
+          "path": "crates/iroha_core/src/sumeragi/v2_pending_kura_recovery.rs",
           "kind": "struct",
-          "symbol": "RecoveredPendingKuraApplyCarrierPermitV1",
+          "symbol": "DeferredPendingKuraValidatedMarkerV1",
           "required_tokens": [
-            "lifecycle_ordinal: u128",
-            "_linearity: RecoveredPendingKuraApplyCarrierPermitLinearityV1"
+            "tag: crate::sumeragi::v2::reducer::EventTag",
+            "round: crate::sumeragi::v2::wire::ConsensusRound",
+            "subject: crate::sumeragi::v2::wire::BlockSubject",
+            "manifest_hash: iroha_crypto::HashOf<crate::sumeragi::v2::wire::PayloadManifest>",
+            "durable: crate::sumeragi::v2_body_store::DurableBodyReceipt",
+            "validated: crate::sumeragi::v2_body_store::ValidatedBodyReceipt",
+            "certificate: crate::sumeragi::v2::wire::QuorumCertificate"
           ]
         },
         {
@@ -7331,47 +7338,52 @@
           "kind": "method",
           "symbol": "ProductionLifecycleOwnerV1::with_pending_kura_apply_replay",
           "required_tokens": [
-            "exact_recovered_decision_apply_ready_ordinal",
-            "RecoveredPendingKuraApplyCarrierPermitV1",
-            "lifecycle_ordinal",
-            "bind_recovered_apply_carrier",
-            "startup.with_pending_kura_apply_replay(replay)"
+            ".adapter_startup",
+            ".take()",
+            "storage-only pending Kura owner retains adapter startup",
+            "startup.with_pending_kura_apply_replay(replay)",
+            "self.adapter_startup = Some("
           ]
         },
         {
-          "path": "crates/iroha_core/src/sumeragi/v2_lifecycle_work_registry_validate_recovery_registry_impl.rs",
+          "path": "crates/iroha_core/src/sumeragi/v2_pending_kura_recovery.rs",
           "kind": "method",
-          "symbol": "ConcreteLifecycleWorkRegistry::exact_recovered_decision_apply_ready_ordinal",
+          "symbol": "DeferredPendingKuraValidatedMarkerV1::prepare_apply",
           "required_tokens": [
-            "RecoveredWalRegistrySlotV1::DecisionApply(address)",
-            "self.exact_recovered_wal_registry_slot()",
-            "self.exactly_covers_recovered_ready_work_with_extra(coordinator, extra)",
-            ".then_some(address.ordinal)"
+            "ownership.binds_durable_decision_authority(",
+            "ownership.exact_pending_adapter_effect_binding(predecessor)",
+            "adapter.prepare_direct_validation_succeeded(",
+            "DirectValidationSucceededPreparation::Apply(prepared)",
+            "validate_pending.project_validate_apply_successor(predecessor, &apply_effect)",
+            "ownership.rebind_as_inherited_adapter_effect(&apply_effect)",
+            "PreparedPendingKuraValidatedApplyV1 {"
           ]
         },
         {
           "path": "crates/iroha_core/src/sumeragi/v2_core/refinement.rs",
           "kind": "macro",
-          "symbol": "production_decision_apply_startup_trace_body",
+          "symbol": "production_decision_recovery_trace_body",
           "required_tokens": [
-            "stage: 1u8",
-            "$projection.apply_carrier_installed",
-            "$projection.recovery.stage == 4u8",
-            "production_decision_recovery_trace_body!(primitive_recovery)"
+            "$projection.expected_height - $projection.state_height <= 1u64",
+            "canonical_identity_equal_body!(",
+            "tag_projection_equal_body!($projection.replay_tag, $projection.owner_tag)",
+            "production_quorum_certificate_is_canonical_body!($projection.commit_qc)",
+            "production_durable_body_equal_body!(",
+            "$projection.validated_execution_commitment",
+            "$projection.stage == 1u8"
           ]
         },
         {
           "path": "crates/iroha_core/src/sumeragi/v2_effects.rs",
           "kind": "method",
-          "symbol": "V2EffectExecutor<SerializedV2Runtime>::verify_pending_kura_recovered_apply_replay",
+          "symbol": "V2EffectExecutor<SerializedV2Runtime>::verify_pending_kura_apply_replay",
           "required_tokens": [
-            "let recovered_apply_ordinal = apply_carrier.consume_for_executor()",
-            "if recovered_apply_ordinal == 0",
-            "verify_pending_kura_apply_parts(",
-            "recovered_apply_ordinal",
-            "evidence.is_exact(&self.context)",
-            "ProductionDecisionApplyStartupTraceProjection",
-            "check_production_decision_apply_startup_transition(startup)",
+            "self.runtime.replayed_decision_key()",
+            "AdapterEffect::FetchBody {",
+            "certificate: Some(certificate)",
+            ".verify_certificate(&self.context, certificate)",
+            "verify_pending_kura_apply_parts_with_marker(",
+            "evidence.durable_round() != *round",
             "self.pending_tip_recovery = Some(evidence)"
           ]
         },
@@ -7539,13 +7551,12 @@
         {
           "path": "crates/iroha_core/src/sumeragi/v2_lifecycle_pending_kura.rs",
           "kind": "method",
-          "symbol": "PendingKuraProductionLifecycleV1::with_lifecycle_setup_transaction",
+          "symbol": "PendingKuraProductionLifecycleV1::with_runner_setup",
           "required_tokens": [
-            "ProductionLifecyclePreActivationFailStopScopeV1::new",
-            "&mut launched.owner",
-            "&mut launched.executor",
-            "&mut launched.services",
-            "setup.complete()"
+            "ProductionLifecyclePreActivationRunnerBorrowV1",
+            "&mut V2EffectExecutor<SerializedV2Runtime>",
+            "&mut ProductionV2Services",
+            "self.launched.with_runner_setup(runner, operation)"
           ]
         },
         {
@@ -7553,20 +7564,17 @@
           "kind": "method",
           "symbol": "PendingKuraProductionLifecycleV1::drive_apply_recovery_turn",
           "required_tokens": [
-            "self.with_lifecycle_setup_transaction",
-            "executor.begin_pending_tip_recovery_attempt()",
-            ".recovered_apply_ordinal()",
-            "dispatch_completion_requiring_ready_ordinal",
-            "ProductionCompletionDispatchV1::ApplyQueued { ordinal }",
-            "if ordinal == recovered_apply_ordinal",
-            "services.take_next_lifecycle_completion()",
-            "drain_one_ordinary_completion_after_lifecycle_pass_through",
-            "settle_pending_kura_applied_decision_apply_completion",
-            "owner.classify_completion_ready_work(fence)",
-            "evidence.stage() != Stage::ApplicationDispatched",
-            "executor.settle_pending_tip_recovery_attempt(AttemptResult::Waiting)",
-            "executor.settle_pending_tip_recovery_attempt(AttemptResult::Advanced)",
-            "executor.settle_pending_tip_recovery_attempt(AttemptResult::Completed)"
+            "self.launched.pending_kura_apply_replay.is_some()",
+            "close_admission_for_restart()",
+            ".with_runner_setup(runner, |executor, services|",
+            "pending_kura_apply_recovery_evidence()",
+            "services.drain_completions(executor)?",
+            "executor.step_pending_tip_recovery(Instant::now(), services)?",
+            "EffectExecutorStep::Advanced",
+            "executor.ready_to_finish()",
+            "ProductionPendingKuraApplyRecoveryProgressV1::Completed",
+            "ProductionPendingKuraApplyRecoveryProgressV1::Waiting",
+            "ProductionPendingKuraApplyRecoveryProgressV1::Advanced"
           ]
         },
         {
@@ -7591,15 +7599,14 @@
           "kind": "method",
           "symbol": "V2EffectExecutor<SerializedV2Runtime>::commit_lifecycle_decision_apply_finality",
           "required_tokens": [
-            "PendingKuraApplyRecoveryStage::ApplicationDispatched",
-            "evidence.is_exact(&self.context)",
-            "dispatch_key.lifecycle_ordinal() == evidence.recovered_apply_ordinal()",
-            "&& pending_recovery_is_exact",
-            "lineage_owner_is_exact",
-            "dispatch_key.matches_height_context(&self.context)",
-            "self.runtime.driver().ready_to_finish()",
-            "FinalityCompletionOwner::LifecycleDecisionApply(dispatch_key)",
-            "evidence.stage = PendingKuraApplyRecoveryStage::Completed"
+            "evidence.stage() == PendingKuraApplyRecoveryStage::ApplicationDispatched",
+            "tag == evidence.replay_tag()",
+            "artifact.subject == evidence.commit_subject()",
+            "&artifact.commit_qc == evidence.commit_qc()",
+            "receipt.certificate() == evidence.commit_qc().as_ref()",
+            "receipt.artifact_hash() == HashOf::new(&artifact)",
+            "evidence.stage = PendingKuraApplyRecoveryStage::Completed",
+            "self.pending_tip_recovery_last_result ="
           ]
         },
         {
@@ -7607,30 +7614,73 @@
           "kind": "method",
           "symbol": "LaunchedProductionLifecycleV1::settle_lifecycle_decision_apply_completion_owner",
           "required_tokens": [
-            "settle_applied_lifecycle_decision_apply_completion_with_status(",
-            "LifecycleDecisionApplyStatusPublicationV1::PublishActiveHeight"
+            "LifecycleDecisionApplyWorkerResultV1::Deferred { task, reference }",
+            "completion.authorizes_sidecar_owner(services, lane_work)",
+            "sidecar.register(lane_work)",
+            "ProductionLifecycleDecisionApplyCompletionV1::Deferred(",
+            "settle_applied_lifecycle_decision_apply_completion(owner, executor, completion)"
           ]
         },
         {
-          "path": "crates/iroha_core/src/sumeragi/v2_lifecycle_launch.rs",
-          "kind": "fn",
-          "symbol": "settle_pending_kura_applied_decision_apply_completion",
+          "path": "crates/iroha_core/src/sumeragi/v2_pending_kura_recovery.rs",
+          "kind": "method",
+          "symbol": "PreparedRecoveredPendingKuraApplyReplayV1::install",
           "required_tokens": [
-            "settle_applied_lifecycle_decision_apply_completion_with_status(",
-            "LifecycleDecisionApplyStatusPublicationV1::DeferUntilPendingKuraActivation"
+            "let Some(deferred_validated_marker) = deferred_validated_marker else",
+            "replay_evidence.exactly_matches_recovered_decision_fetch(",
+            "let effects = vec![effect]",
+            "executor.verify_pending_kura_apply_replay(",
+            "executor.consume_pending_tip_recovery_effects(effects, services)?",
+            "InstalledPendingKuraApplyV1 { expected, genesis }"
           ]
         },
         {
           "path": "crates/iroha_core/src/sumeragi/v2_lifecycle_launch.rs",
           "kind": "fn",
-          "symbol": "settle_applied_lifecycle_decision_apply_completion_with_status",
+          "symbol": "settle_applied_lifecycle_decision_apply_completion",
           "required_tokens": [
             "prepare_lifecycle_decision_apply_terminal_transition",
+            "executor.prepare_lifecycle_decision_apply_completion(authority)",
+            "staged.reduce_settle_turn(",
             "persist_exact_staged_successor(&staged)",
+            "owner.coordinator = staged",
+            "adapter.commit_after_durable_settlement()",
             "executor.commit_lifecycle_decision_apply_finality(finality)",
             "completion.acknowledge_after_owner_settlement()",
-            "LifecycleDecisionApplyStatusPublicationV1::PublishActiveHeight",
             "super::super::status::set_v2_status(status)"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/sumeragi/v2_pending_kura_recovery.rs",
+          "kind": "method",
+          "symbol": "PreparedRecoveredPendingKuraApplyReplayV1::classify_and_defer_validated_marker",
+          "required_tokens": [
+            "exactly_matches_recovered_decision_fetch(",
+            "deferred_validated_marker.is_some()",
+            "certificate.phase != crate::sumeragi::v2::wire::GlobalPhase::Commit",
+            "validated.execution_commitment() != certificate.execution_commitment",
+            "self.deferred_validated_marker = Some(DeferredPendingKuraValidatedMarkerV1 {"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/sumeragi/v2_runtime.rs",
+          "kind": "method",
+          "symbol": "SerializedV2Runtime<SumeragiV2Adapter>::prepare_pending_kura_validated_apply",
+          "required_tokens": [
+            "self.clocks_armed",
+            "self.ingress.len() != 0",
+            "marker.prepare_apply(&mut self.driver, predecessor, ownership)"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/sumeragi/v2_pending_kura_recovery.rs",
+          "kind": "method",
+          "symbol": "PreparedPendingKuraValidatedApplyV1<'_>::commit",
+          "required_tokens": [
+            "adapter.reducer = next_reducer",
+            "adapter.registry = next_registry",
+            "adapter.reducer_fence_generation = next_fence_generation",
+            "PendingKuraValidatedApplySuccessorV1 {"
           ]
         },
         {

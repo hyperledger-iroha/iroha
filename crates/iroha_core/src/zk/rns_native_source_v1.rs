@@ -13,10 +13,10 @@ use iroha_crypto::confidential_spool::{
     ConfidentialSpoolSnapshotV1, ConfidentialSpoolWriterV1,
 };
 use iroha_zkp_halo2::vega::{
-    ZkAmsMkheRnsNativeSecretChunkV1, ZkAmsMkheRnsNativeSourceArenaV1,
-    ZkAmsMkheRnsNativeSourceErrorV1, ZkAmsMkheRnsNativeSourceLayoutV1,
-    ZkAmsMkheRnsNativeSourceProviderV1, ZkAmsMkheRnsNativeSourceSnapshotV1,
-    ZkAmsMkheRnsNativeSourceWriterV1,
+    ZkAmsMkheRnsNativeRepeatableSourceSnapshotV1, ZkAmsMkheRnsNativeSecretChunkV1,
+    ZkAmsMkheRnsNativeSourceArenaV1, ZkAmsMkheRnsNativeSourceErrorV1,
+    ZkAmsMkheRnsNativeSourceLayoutV1, ZkAmsMkheRnsNativeSourceProviderV1,
+    ZkAmsMkheRnsNativeSourceSnapshotV1, ZkAmsMkheRnsNativeSourceWriterV1,
 };
 
 /// Core-owned factory for unlinked authenticated RNS-native source arenas.
@@ -106,8 +106,73 @@ pub struct CoreZkAmsMkheRnsNativeSourceWriterV1 {
 /// Core-owned pair of immutable authenticated confidential-spool snapshots.
 pub struct CoreZkAmsMkheRnsNativeSourceSnapshotV1 {
     layout: ZkAmsMkheRnsNativeSourceLayoutV1,
-    main: ConfidentialSpoolSnapshotV1,
-    nonce: ConfidentialSpoolSnapshotV1,
+    main: Option<ConfidentialSpoolSnapshotV1>,
+    nonce: Option<ConfidentialSpoolSnapshotV1>,
+    main_snapshot_digest: [u8; 32],
+    nonce_snapshot_digest: [u8; 32],
+    #[cfg(test)]
+    injected_read_error: Option<ConfidentialSpoolErrorV1>,
+    #[cfg(test)]
+    panic_on_next_read: bool,
+}
+
+impl CoreZkAmsMkheRnsNativeSourceSnapshotV1 {
+    fn poison_pair_v1(&mut self) {
+        drop(self.main.take());
+        drop(self.nonce.take());
+    }
+
+}
+
+/// Unwind guard which makes the two-spool snapshot one fail-stop owner.
+/// Successful and pure-preflight returns disarm it explicitly; every panic or
+/// poisoning raw read error drops both sibling files and keys.
+struct CoreZkAmsMkheRnsNativePairReadGuardV1<'a> {
+    snapshot: &'a mut CoreZkAmsMkheRnsNativeSourceSnapshotV1,
+    armed: bool,
+}
+
+impl<'a> CoreZkAmsMkheRnsNativePairReadGuardV1<'a> {
+    fn new(snapshot: &'a mut CoreZkAmsMkheRnsNativeSourceSnapshotV1) -> Self {
+        Self {
+            snapshot,
+            armed: true,
+        }
+    }
+
+    fn read_selected_v1(
+        &mut self,
+        arena: ZkAmsMkheRnsNativeSourceArenaV1,
+        slot: u64,
+        expected_context: [u8; 32],
+    ) -> Result<ConfidentialSpoolChunkV1, ConfidentialSpoolErrorV1> {
+        match arena {
+            ZkAmsMkheRnsNativeSourceArenaV1::Main => self
+                .snapshot
+                .main
+                .as_mut()
+                .ok_or(ConfidentialSpoolErrorV1::Poisoned)?
+                .read_slot_v1(slot, expected_context),
+            ZkAmsMkheRnsNativeSourceArenaV1::Nonce => self
+                .snapshot
+                .nonce
+                .as_mut()
+                .ok_or(ConfidentialSpoolErrorV1::Poisoned)?
+                .read_slot_v1(slot, expected_context),
+        }
+    }
+
+    fn disarm(&mut self) {
+        self.armed = false;
+    }
+}
+
+impl Drop for CoreZkAmsMkheRnsNativePairReadGuardV1<'_> {
+    fn drop(&mut self) {
+        if self.armed {
+            self.snapshot.poison_pair_v1();
+        }
+    }
 }
 
 impl ZkAmsMkheRnsNativeSourceProviderV1 for CoreZkAmsMkheRnsNativeSourceProviderV1 {
@@ -185,10 +250,18 @@ impl ZkAmsMkheRnsNativeSourceWriterV1 for CoreZkAmsMkheRnsNativeSourceWriterV1 {
             .ok_or(ZkAmsMkheRnsNativeSourceErrorV1::Poisoned)?
             .seal_v1()
             .map_err(map_spool_error_v1)?;
+        let main_snapshot_digest = *main.snapshot_digest_v1();
+        let nonce_snapshot_digest = *nonce.snapshot_digest_v1();
         Ok(CoreZkAmsMkheRnsNativeSourceSnapshotV1 {
             layout: self.layout,
-            main,
-            nonce,
+            main: Some(main),
+            nonce: Some(nonce),
+            main_snapshot_digest,
+            nonce_snapshot_digest,
+            #[cfg(test)]
+            injected_read_error: None,
+            #[cfg(test)]
+            panic_on_next_read: false,
         })
     }
 }
@@ -202,8 +275,8 @@ impl ZkAmsMkheRnsNativeSourceSnapshotV1 for CoreZkAmsMkheRnsNativeSourceSnapshot
 
     fn snapshot_digest(&self, arena: ZkAmsMkheRnsNativeSourceArenaV1) -> [u8; 32] {
         match arena {
-            ZkAmsMkheRnsNativeSourceArenaV1::Main => *self.main.snapshot_digest_v1(),
-            ZkAmsMkheRnsNativeSourceArenaV1::Nonce => *self.nonce.snapshot_digest_v1(),
+            ZkAmsMkheRnsNativeSourceArenaV1::Main => self.main_snapshot_digest,
+            ZkAmsMkheRnsNativeSourceArenaV1::Nonce => self.nonce_snapshot_digest,
         }
     }
 
@@ -212,21 +285,82 @@ impl ZkAmsMkheRnsNativeSourceSnapshotV1 for CoreZkAmsMkheRnsNativeSourceSnapshot
         arena: ZkAmsMkheRnsNativeSourceArenaV1,
         slot: u64,
     ) -> Result<Self::Chunk, ZkAmsMkheRnsNativeSourceErrorV1> {
+        if self.main.is_none() || self.nonce.is_none() {
+            return Err(ZkAmsMkheRnsNativeSourceErrorV1::Poisoned);
+        }
+        if slot >= arena.slot_count() {
+            return Err(ZkAmsMkheRnsNativeSourceErrorV1::UnexpectedWrite);
+        }
         let expected_context = self.layout.arena_context_digest(arena);
-        let inner = match arena {
-            ZkAmsMkheRnsNativeSourceArenaV1::Main => self
-                .main
-                .read_slot_v1(slot, expected_context)
-                .map_err(map_spool_error_v1)?,
-            ZkAmsMkheRnsNativeSourceArenaV1::Nonce => self
-                .nonce
-                .read_slot_v1(slot, expected_context)
-                .map_err(map_spool_error_v1)?,
+        #[cfg(test)]
+        let injected_read_error = self.injected_read_error.take();
+        #[cfg(test)]
+        let panic_on_next_read = core::mem::take(&mut self.panic_on_next_read);
+        let mut guard = CoreZkAmsMkheRnsNativePairReadGuardV1::new(self);
+        #[cfg(test)]
+        if panic_on_next_read {
+            panic!("injected Core RNS-native pair read unwind");
+        }
+        #[cfg(test)]
+        let result = match injected_read_error {
+            Some(error) => Err(error),
+            None => guard.read_selected_v1(arena, slot, expected_context),
         };
+        #[cfg(not(test))]
+        let result = guard.read_selected_v1(arena, slot, expected_context);
+        let inner = match result {
+            Ok(inner) => {
+                guard.disarm();
+                inner
+            }
+            Err(error) => {
+                if !read_error_poisons_v1(error) {
+                    guard.disarm();
+                }
+                let mapped = map_spool_error_v1(error);
+                drop(guard);
+                return Err(mapped);
+            }
+        };
+        drop(guard);
         Ok(CoreZkAmsMkheRnsNativeSecretChunkV1 {
             arena,
             inner: Some(inner),
         })
+    }
+}
+
+impl ZkAmsMkheRnsNativeRepeatableSourceSnapshotV1
+    for CoreZkAmsMkheRnsNativeSourceSnapshotV1
+{
+}
+
+fn read_error_poisons_v1(error: ConfidentialSpoolErrorV1) -> bool {
+    match error {
+        ConfidentialSpoolErrorV1::SlotOutOfRange { .. }
+        | ConfidentialSpoolErrorV1::ContextDigestMismatch => false,
+        ConfidentialSpoolErrorV1::EmptyLayout
+        | ConfidentialSpoolErrorV1::EmptyChunk
+        | ConfidentialSpoolErrorV1::GeometryOverflow
+        | ConfidentialSpoolErrorV1::AddressSpaceExceeded
+        | ConfidentialSpoolErrorV1::InertContextDigest
+        | ConfidentialSpoolErrorV1::LimitExceeded(_)
+        | ConfidentialSpoolErrorV1::CipherMessageLimit
+        | ConfidentialSpoolErrorV1::Allocation(_)
+        | ConfidentialSpoolErrorV1::UnsupportedPlatform
+        | ConfidentialSpoolErrorV1::FileOperation { .. }
+        | ConfidentialSpoolErrorV1::UnsafeTemporaryFile
+        | ConfidentialSpoolErrorV1::TemporaryFileIdentityMismatch
+        | ConfidentialSpoolErrorV1::UnsafeDetachedFile
+        | ConfidentialSpoolErrorV1::EntropyUnavailable
+        | ConfidentialSpoolErrorV1::WeakEntropy(_)
+        | ConfidentialSpoolErrorV1::UnexpectedWriteSlot { .. }
+        | ConfidentialSpoolErrorV1::ChunkLength { .. }
+        | ConfidentialSpoolErrorV1::Incomplete { .. }
+        | ConfidentialSpoolErrorV1::FileLength { .. }
+        | ConfidentialSpoolErrorV1::Encryption
+        | ConfidentialSpoolErrorV1::Authentication
+        | ConfidentialSpoolErrorV1::Poisoned => true,
     }
 }
 
@@ -271,9 +405,10 @@ fn map_spool_error_v1(error: ConfidentialSpoolErrorV1) -> ZkAmsMkheRnsNativeSour
         | ConfidentialSpoolErrorV1::ChunkLength { .. } => {
             ZkAmsMkheRnsNativeSourceErrorV1::UnexpectedWrite
         }
-        ConfidentialSpoolErrorV1::ContextDigestMismatch
-        | ConfidentialSpoolErrorV1::Encryption
-        | ConfidentialSpoolErrorV1::Authentication => {
+        ConfidentialSpoolErrorV1::ContextDigestMismatch => {
+            ZkAmsMkheRnsNativeSourceErrorV1::InvalidContext
+        }
+        ConfidentialSpoolErrorV1::Encryption | ConfidentialSpoolErrorV1::Authentication => {
             ZkAmsMkheRnsNativeSourceErrorV1::Authentication
         }
         ConfidentialSpoolErrorV1::Incomplete { .. } => ZkAmsMkheRnsNativeSourceErrorV1::Incomplete,
@@ -299,6 +434,205 @@ mod tests {
             [0x53; 32],
         )
         .expect("source layout")
+    }
+
+    #[cfg(unix)]
+    fn reduced_spool_v1(
+        directory: &std::path::Path,
+        arena: ZkAmsMkheRnsNativeSourceArenaV1,
+        context_digest: [u8; 32],
+        tags: [u8; 2],
+    ) -> ConfidentialSpoolSnapshotV1 {
+        let layout = ConfidentialSpoolLayoutV1::new_v1(
+            2,
+            arena.plaintext_bytes(),
+            context_digest,
+        )
+        .expect("reduced conformance layout");
+        let mut writer = ConfidentialSpoolWriterV1::create_in_v1(directory, layout)
+            .expect("reduced conformance writer");
+        for (slot, tag) in tags.into_iter().enumerate() {
+            let mut chunk = ConfidentialSpoolChunkV1::new_zeroed_v1(arena.plaintext_bytes())
+                .expect("reduced conformance chunk");
+            chunk.as_mut_slice_v1().fill(tag);
+            writer
+                .write_slot_v1(slot as u64, chunk)
+                .expect("reduced conformance write");
+        }
+        writer.seal_v1().expect("reduced conformance seal")
+    }
+
+    #[cfg(unix)]
+    fn reduced_snapshot_v1(
+        wrong_main_context: bool,
+    ) -> CoreZkAmsMkheRnsNativeSourceSnapshotV1 {
+        let directory = tempfile::tempdir().expect("reduced conformance directory");
+        let layout = source_layout();
+        let mut main_context = layout.arena_context_digest(ZkAmsMkheRnsNativeSourceArenaV1::Main);
+        if wrong_main_context {
+            main_context[0] ^= 1;
+        }
+        let main = reduced_spool_v1(
+            directory.path(),
+            ZkAmsMkheRnsNativeSourceArenaV1::Main,
+            main_context,
+            [0xA0, 0xA1],
+        );
+        let nonce = reduced_spool_v1(
+            directory.path(),
+            ZkAmsMkheRnsNativeSourceArenaV1::Nonce,
+            layout.arena_context_digest(ZkAmsMkheRnsNativeSourceArenaV1::Nonce),
+            [0xB0, 0xB1],
+        );
+        let main_snapshot_digest = *main.snapshot_digest_v1();
+        let nonce_snapshot_digest = *nonce.snapshot_digest_v1();
+        CoreZkAmsMkheRnsNativeSourceSnapshotV1 {
+            layout,
+            main: Some(main),
+            nonce: Some(nonce),
+            main_snapshot_digest,
+            nonce_snapshot_digest,
+            injected_read_error: None,
+            panic_on_next_read: false,
+        }
+    }
+
+    fn assert_repeatable_snapshot_v1<T: ZkAmsMkheRnsNativeRepeatableSourceSnapshotV1>() {}
+
+    #[cfg(unix)]
+    #[test]
+    fn snapshot_is_repeatable_out_of_order_and_receipt_stable() {
+        assert_repeatable_snapshot_v1::<CoreZkAmsMkheRnsNativeSourceSnapshotV1>();
+        let mut snapshot = reduced_snapshot_v1(false);
+        let layout = snapshot.layout();
+        let receipt = snapshot.structural_receipt().expect("initial receipt");
+        let main_digest = snapshot.snapshot_digest(ZkAmsMkheRnsNativeSourceArenaV1::Main);
+        let nonce_digest = snapshot.snapshot_digest(ZkAmsMkheRnsNativeSourceArenaV1::Nonce);
+
+        for (arena, slot, tag) in [
+            (ZkAmsMkheRnsNativeSourceArenaV1::Main, 1, 0xA1),
+            (ZkAmsMkheRnsNativeSourceArenaV1::Nonce, 0, 0xB0),
+            (ZkAmsMkheRnsNativeSourceArenaV1::Main, 0, 0xA0),
+            (ZkAmsMkheRnsNativeSourceArenaV1::Main, 1, 0xA1),
+            (ZkAmsMkheRnsNativeSourceArenaV1::Nonce, 1, 0xB1),
+            (ZkAmsMkheRnsNativeSourceArenaV1::Nonce, 0, 0xB0),
+        ] {
+            let chunk = snapshot.read_slot(arena, slot).expect("repeatable read");
+            assert_eq!(chunk.arena(), arena);
+            assert_eq!(chunk.as_slice().len() as u64, arena.plaintext_bytes());
+            assert!(chunk.as_slice().iter().all(|byte| *byte == tag));
+            assert_eq!(snapshot.layout(), layout);
+            assert_eq!(snapshot.structural_receipt(), Ok(receipt));
+            assert_eq!(
+                snapshot.snapshot_digest(ZkAmsMkheRnsNativeSourceArenaV1::Main),
+                main_digest
+            );
+            assert_eq!(
+                snapshot.snapshot_digest(ZkAmsMkheRnsNativeSourceArenaV1::Nonce),
+                nonce_digest
+            );
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn read_preflights_do_not_poison_the_pair() {
+        let mut snapshot = reduced_snapshot_v1(false);
+        let receipt = snapshot.structural_receipt().expect("initial receipt");
+        assert!(matches!(
+            snapshot.read_slot(
+                ZkAmsMkheRnsNativeSourceArenaV1::Main,
+                ZkAmsMkheRnsNativeSourceArenaV1::Main.slot_count(),
+            ),
+            Err(ZkAmsMkheRnsNativeSourceErrorV1::UnexpectedWrite)
+        ));
+        assert!(matches!(
+            snapshot.read_slot(
+                ZkAmsMkheRnsNativeSourceArenaV1::Nonce,
+                ZkAmsMkheRnsNativeSourceArenaV1::Nonce.slot_count(),
+            ),
+            Err(ZkAmsMkheRnsNativeSourceErrorV1::UnexpectedWrite)
+        ));
+        assert!(snapshot
+            .read_slot(ZkAmsMkheRnsNativeSourceArenaV1::Main, 0)
+            .is_ok());
+        assert_eq!(snapshot.structural_receipt(), Ok(receipt));
+        assert!(snapshot.main.is_some() && snapshot.nonce.is_some());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn context_preflight_is_distinct_from_record_authentication() {
+        let mut snapshot = reduced_snapshot_v1(true);
+        assert!(matches!(
+            snapshot.read_slot(ZkAmsMkheRnsNativeSourceArenaV1::Main, 0),
+            Err(ZkAmsMkheRnsNativeSourceErrorV1::InvalidContext)
+        ));
+        assert!(snapshot.main.is_some() && snapshot.nonce.is_some());
+        assert!(snapshot
+            .read_slot(ZkAmsMkheRnsNativeSourceArenaV1::Nonce, 1)
+            .is_ok());
+        assert_eq!(
+            map_spool_error_v1(ConfidentialSpoolErrorV1::ContextDigestMismatch),
+            ZkAmsMkheRnsNativeSourceErrorV1::InvalidContext
+        );
+        assert_eq!(
+            map_spool_error_v1(ConfidentialSpoolErrorV1::Authentication),
+            ZkAmsMkheRnsNativeSourceErrorV1::Authentication
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn operational_or_authentication_failure_poison_both_arenas() {
+        for raw_error in [
+            ConfidentialSpoolErrorV1::Authentication,
+            ConfidentialSpoolErrorV1::FileOperation {
+                operation: "read",
+                kind: std::io::ErrorKind::Other,
+            },
+        ] {
+            let mut snapshot = reduced_snapshot_v1(false);
+            snapshot.injected_read_error = Some(raw_error);
+            assert!(matches!(
+                snapshot.read_slot(ZkAmsMkheRnsNativeSourceArenaV1::Main, 0),
+                Err(
+                    ZkAmsMkheRnsNativeSourceErrorV1::Authentication
+                        | ZkAmsMkheRnsNativeSourceErrorV1::Storage
+                )
+            ));
+            assert!(snapshot.main.is_none() && snapshot.nonce.is_none());
+            for arena in [
+                ZkAmsMkheRnsNativeSourceArenaV1::Main,
+                ZkAmsMkheRnsNativeSourceArenaV1::Nonce,
+            ] {
+                assert!(matches!(
+                    snapshot.read_slot(arena, 0),
+                    Err(ZkAmsMkheRnsNativeSourceErrorV1::Poisoned)
+                ));
+            }
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn read_unwind_poison_drops_both_arenas() {
+        let mut snapshot = reduced_snapshot_v1(false);
+        snapshot.panic_on_next_read = true;
+        let unwind = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _ = snapshot.read_slot(ZkAmsMkheRnsNativeSourceArenaV1::Main, 0);
+        }));
+        assert!(unwind.is_err());
+        assert!(snapshot.main.is_none() && snapshot.nonce.is_none());
+        for arena in [
+            ZkAmsMkheRnsNativeSourceArenaV1::Main,
+            ZkAmsMkheRnsNativeSourceArenaV1::Nonce,
+        ] {
+            assert!(matches!(
+                snapshot.read_slot(arena, 0),
+                Err(ZkAmsMkheRnsNativeSourceErrorV1::Poisoned)
+            ));
+        }
     }
 
     #[cfg(unix)]

@@ -1074,6 +1074,11 @@ fn coordinator_preserves_callback_error_origin_and_every_live_gate_remains_close
     for required in [
         "ConfidentialSink(ZkAmsMkheErrorV1)",
         "Tail(RnsNativeTailPublicationErrorV2)",
+        "let callback_failure = Cell::new(None);",
+        "let callback_failure_slot = &callback_failure;",
+        "callback_failure_slot.set(Some(",
+        "callback_failure.get().is_none()",
+        "match callback_failure.get()",
         "RnsNativeV1TailCoordinatorErrorV2::Encryption(encryption_error)",
         "RnsNativeV1TailCoordinatorErrorV2::ConfidentialSink(error)",
         "RnsNativeV1TailCoordinatorErrorV2::Tail(error)",
@@ -1085,6 +1090,9 @@ fn coordinator_preserves_callback_error_origin_and_every_live_gate_remains_close
             "missing error/contract pin: {required}"
         );
     }
+    assert_eq!(source.matches("callback_failure_slot").count(), 6);
+    assert_eq!(source.matches(".set(Some(").count(), 5);
+    assert!(!source.contains("let mut callback_failure = None;"));
     for closed in [
         "RNS_NATIVE_TAIL_PHASE23_OWNER_AVAILABLE_V2: bool = false",
         "RNS_NATIVE_KEY_TAIL_CAS_OWNER_AVAILABLE_V2: bool = false",

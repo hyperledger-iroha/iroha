@@ -514,6 +514,7 @@ impl LifecycleCoordinator {
         self.lifecycle_ordinal_authority = Some(authority);
         Ok(())
     }
+    /// Bind a launch-equivalent ordinal authority for durable coordinator tests.
     #[cfg(test)]
     pub(super) fn bind_test_lifecycle_ordinal_authority(&mut self) -> Result<(), String> {
         let (_, authority) =

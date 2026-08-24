@@ -111,7 +111,10 @@ authorization headers in this repository.
   compiled Kagami/config/genesis tests. They are not inputs to the disposable
   generator.
 - `privacy_bootstrap_plan.json` and `privacy_rollout_plan_v1.json` remain
-  coupled to Kagami's compiled privacy bootstrap feature.
+  coupled to Kagami's compiled privacy bootstrap feature. The V1 rollout keeps
+  all twelve protocols retained-required, but records ZK-ACE, ZK-AMS, Vega, and
+  ZK-X509 as unavailable; `retained-protocol-unavailable` therefore halts the
+  exact-12 rollout until their independent release gates close.
 - `dns_records.json`, `explorer.runtime-config.json`, `sorafs_sites.json`, and
   `taira-canary-client.example.toml` describe the live public profile.
 - `validator_roster.example.toml`, the edge renderer, nginx template, and edge

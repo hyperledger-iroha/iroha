@@ -69,6 +69,7 @@ SUCCESSOR_PRODUCTION_SOURCE_FIXTURE_FILES = (
     "crates/iroha_core/src/sumeragi/tests/v2_adapter_04_wal_recovery.rs",
     "crates/iroha_core/src/sumeragi/tests/v2_adapter_04b_lifecycle_startup.rs",
     "crates/iroha_core/src/sumeragi/tests/v2_effects_main_04.rs",
+    "crates/iroha_core/src/sumeragi/tests/v2_runner_unsealed_00.rs",
     "crates/iroha_core/src/sumeragi/tests/v2_worker_main_01.rs",
     "crates/iroha_core/src/sumeragi/tests/v2_worker_lifecycle_capacity_cases.rs",
     "crates/iroha_core/src/sumeragi/tests/v2_worker_recovered_lifecycle_output_cases.rs",
@@ -79,7 +80,7 @@ SUCCESSOR_PRODUCTION_SOURCE_FIXTURE_FILES = (
 )
 assert len(SUCCESSOR_PRODUCTION_SOURCE_FIXTURE_FILES) == len(
     set(SUCCESSOR_PRODUCTION_SOURCE_FIXTURE_FILES)
-) == 75
+) == 76
 
 
 LIFECYCLE_DECISION_APPLY_LINEAGE_SOURCE_FILES = (
@@ -189,7 +190,14 @@ LIFECYCLE_DECISION_APPLY_LINEAGE_MUTATIONS = (
         "fn dispatch_completion_with_runner_debt_and_required_ordinal(",
         "executor.exactly_owns_live_lifecycle_decision_apply(&authority)",
         "false",
-        "live cleanup, complete Apply census, and neutral worker publication",
+        "live reconciliation, complete Apply census, and neutral worker publication",
+    ),
+    (
+        "crates/iroha_core/src/sumeragi/v2_lifecycle_scheduler_inputs.rs",
+        "fn dispatch_completion_with_runner_debt_and_required_ordinal(",
+        ".map_err(ProductionCompletionDispatchErrorV1::LiveApplyReconciliation)?;",
+        ".map_err(ProductionCompletionDispatchErrorV1::Service)?;",
+        "neutral Apply reservation must join executor evidence before one-shot queue publication",
     ),
     (
         "crates/iroha_core/src/sumeragi/v2_lifecycle_scheduler_inputs.rs",
@@ -218,6 +226,13 @@ LIFECYCLE_DECISION_APPLY_LINEAGE_MUTATIONS = (
         "persist_exact_staged_successor(&staged)",
         "persist_inexact_staged_successor(&staged)",
         "neutral lifecycle Apply durable terminal settlement",
+    ),
+    (
+        "crates/iroha_core/src/sumeragi/v2_lifecycle_launch.rs",
+        "fn settle_lifecycle_decision_apply_completion_owner(",
+        "settle_applied_lifecycle_decision_apply_completion(owner, executor, completion)",
+        "settle_pending_kura_applied_decision_apply_completion(owner, executor, completion)",
+        "terminal Apply corridor retains retired recovered-only aliases",
     ),
     (
         "crates/iroha_core/src/sumeragi/v2_lifecycle_launch.rs",
@@ -250,7 +265,7 @@ LIFECYCLE_DECISION_APPLY_LINEAGE_MUTATIONS = (
 )
 assert len(LIFECYCLE_DECISION_APPLY_LINEAGE_MUTATIONS) == len(
     set(LIFECYCLE_DECISION_APPLY_LINEAGE_MUTATIONS)
-) == 21
+) == 23
 
 
 @pytest.mark.parametrize(
@@ -743,6 +758,13 @@ SUCCESSOR_PRODUCTION_SOURCE_MAPPING_MUTATIONS = (
     (
         "crates/iroha_core/src/sumeragi/v2_runner/lifecycle_run_inner.rs",
         "fn run_lifecycle_active_height(",
+        "if !apply_terminal_settled && (!ready_to_finish || producer_turn.is_some()) {",
+        "if !ready_to_finish || producer_turn.is_some() {",
+        "runner lifecycle finalization preflight must preserve exact production order",
+    ),
+    (
+        "crates/iroha_core/src/sumeragi/v2_runner/lifecycle_run_inner.rs",
+        "fn run_lifecycle_active_height(",
         "let finalization_ready =\n            ready_to_finish && activated.ready_for_finalized_rollover(&mut active_runner);",
         "let finalization_ready = ready_to_finish;",
         "runner lifecycle finalization preflight must preserve exact production order",
@@ -1171,38 +1193,39 @@ SUCCESSOR_PRODUCTION_SOURCE_MAPPING_MUTATIONS = (
         "crates/iroha_core/src/sumeragi/v2_runner/decided_lane_recovery.rs",
         "fn prepare_decided_lane_recovery_ingress(",
         "if request.round.height == active_height {\n"
-        "        return DecidedLaneRecoveryIngressPreparation::CurrentServeRetain;\n"
+        "        return DecidedLaneRecoveryIngressPreparation::CurrentServe;\n"
         "    }",
         "if request.round.height == active_height {\n"
         "        return DecidedLaneRecoveryIngressPreparation::LeaderWireRetire;\n"
         "    }",
-        "terminal recovery classifies current Serve as retained",
+        "terminal recovery classifies exact current Serve for guarded service",
     ),
     (
         "crates/iroha_core/src/sumeragi/v2_runner/decided_lane_recovery.rs",
         "fn authorize_decided_lane_recovery_drain(",
-        "DecidedLaneRecoveryIngressPreparation::CurrentServeRetain => {\n"
-        "            DecidedLaneRecoveryDrainDecision::Retain\n"
+        "DecidedLaneRecoveryIngressPreparation::CurrentServe => {\n"
+        "            DecidedLaneRecoveryDrainAuthorization::CurrentServe\n"
         "        }",
-        "DecidedLaneRecoveryIngressPreparation::CurrentServeRetain => {\n"
-        "            DecidedLaneRecoveryDrainDecision::Authorized(\n"
-        "                DecidedLaneRecoveryDrainAuthorization::LeaderWireRetire,\n"
-        "            )\n"
+        "DecidedLaneRecoveryIngressPreparation::CurrentServe => {\n"
+        "            DecidedLaneRecoveryDrainAuthorization::LeaderWireRetire\n"
         "        }",
-        "terminal recovery denies current-Serve dequeue authority",
+        "terminal recovery authorizes exact current-Serve service",
     ),
     (
         "crates/iroha_core/src/sumeragi/v2_runner/decided_lane_recovery.rs",
         "fn drain_decided_lane_recovery_ingress(",
-        "DecidedLaneRecoveryDrainDecision::Retain => false,",
-        "DecidedLaneRecoveryDrainDecision::Retain => true,",
-        "live terminal drain retains current Serve before checked dequeue",
+        "commit_decided_lane_recovery_drain(authorization, &mut committer)?;",
+        "commit_decided_lane_recovery_drain(\n"
+        "        DecidedLaneRecoveryDrainAuthorization::LeaderWireRetire,\n"
+        "        &mut committer,\n"
+        "    )?;",
+        "live terminal drain directly serves authorized current recovery",
     ),
     (
         "crates/iroha_core/src/sumeragi/v2_runner/decided_lane_recovery.rs",
         "fn authorize_decided_lane_recovery_drain(",
-        ") -> DecidedLaneRecoveryDrainDecision {\n    match preparation {",
-        ") -> DecidedLaneRecoveryDrainDecision {\n"
+        ") -> DecidedLaneRecoveryDrainAuthorization {\n    match preparation {",
+        ") -> DecidedLaneRecoveryDrainAuthorization {\n"
         "    let _legacy = CertifiedServeAdmission;\n"
         "    match preparation {",
         "terminal recovery cannot mint coordinator-owned Serve authority",
@@ -1531,6 +1554,13 @@ SUCCESSOR_PRODUCTION_SOURCE_MAPPING_MUTATIONS = (
     ),
     (
         "crates/iroha_core/src/sumeragi/v2_lifecycle_ledger.rs",
+        "fn launch(",
+        "launched\n            .reauthenticate_recovered_complete_tip_successor(&mut retirement)\n            .map_err(|_| super::launch::ProductionLifecycleLaunchErrorV1::InvalidOwner)?;",
+        "let _ = &mut retirement;",
+        "CompleteTip sealed H+1 owner launch must preserve exact production order",
+    ),
+    (
+        "crates/iroha_core/src/sumeragi/v2_lifecycle_ledger.rs",
         "impl LaunchedRecoveredCompleteTipSuccessorLifecycleV1",
         "launched.activate_recovered_complete_tip(now, runner, retirement, local_proposal)",
         "launched.activate(now, runner, local_proposal)",
@@ -1607,6 +1637,34 @@ SUCCESSOR_PRODUCTION_SOURCE_MAPPING_MUTATIONS = (
         "opaque pending-Kura replay types expose forbidden surface",
     ),
     (
+        "crates/iroha_core/src/sumeragi/v2_lifecycle_work_registry_recovered_wal.rs",
+        "impl<'registry, 'adapter> PreparedRecoveredLifecycleSignBroadcastSuccessor<'registry, 'adapter>",
+        "exact_staged_recovered_lifecycle_broadcast_address(",
+        "inexact_staged_recovered_lifecycle_broadcast_address(",
+        "staged recovered Broadcast registry binding must preserve exact production order",
+    ),
+    (
+        "crates/iroha_core/src/sumeragi/v2_lifecycle_work_registry_recovered_wal.rs",
+        "pub(super) fn exact_staged_recovered_lifecycle_broadcast_address(",
+        "broadcast.validates_at(verified, broadcast_address, child_digest)",
+        "broadcast.validates_at_for_mutation(verified, broadcast_address, child_digest)",
+        "staged recovered Broadcast address authentication must preserve exact production order",
+    ),
+    (
+        "crates/iroha_core/src/sumeragi/v2_lifecycle_work_registry_recovered_wal.rs",
+        "impl<'registry, 'adapter> PreparedRecoveredDecisionFetchStoreSuccessor<'registry, 'adapter>",
+        "exact_staged_recovered_decision_store_address(",
+        "inexact_staged_recovered_decision_store_address(",
+        "staged recovered Store registry binding must preserve exact production order",
+    ),
+    (
+        "crates/iroha_core/src/sumeragi/v2_lifecycle_work_registry_recovered_wal.rs",
+        "pub(super) fn exact_staged_recovered_decision_store_address(",
+        "store.matches_current_ready_record(",
+        "store.matches_current_ready_record_for_mutation(",
+        "staged recovered Store address authentication must preserve exact production order",
+    ),
+    (
         "crates/iroha_core/src/sumeragi/v2_lifecycle_work_registry.rs",
         "fn exactly_matches_fresh_staged_append(",
         "serve <= current.high_water",
@@ -1630,58 +1688,128 @@ SUCCESSOR_PRODUCTION_SOURCE_MAPPING_MUTATIONS = (
     (
         "crates/iroha_core/src/sumeragi/v2_pending_kura_recovery.rs",
         "fn authenticate_final_wal_startup_authority(",
-        "authority: RecoveredWalStartupAuthorityV1::DecisionFetch(fetch),",
-        "authority: RecoveredWalStartupAuthorityV1::None,",
-        "pending-Kura retained Decision-Fetch authentication and inert provenance clone",
+        "let RecoveredWalStartupAuthorityV1::DecisionFetch(fetch) = authority else {",
+        "let RecoveredWalStartupAuthorityV1::None = authority else {",
+        "pending-Kura Decision-Fetch ownership transfer into storage-only startup",
     ),
     (
         "crates/iroha_core/src/sumeragi/v2_pending_kura_recovery.rs",
         "fn authenticate_final_wal_startup_authority(",
-        "wal_identity: fetch.wal_identity,",
-        "wal_identity: RecoveredWalFrameIdentity::default(),",
-        "pending-Kura retained Decision-Fetch authentication and inert provenance clone",
+        "replay: RecoveredPendingKuraApplyReplayV1 { expected, fetch },",
+        "replay: RecoveredPendingKuraApplyReplayV1 { expected, fetch: recovered_fetch },",
+        "pending-Kura Decision-Fetch ownership transfer into storage-only startup",
     ),
     (
         "crates/iroha_core/src/sumeragi/v2_pending_kura_recovery.rs",
         "fn into_serialized_runtime(",
-        "                        Vec::new(),",
-        "                        vec![effect],",
-        "pending-Kura inert provenance beside empty runtime ownership",
+        "let RecoveredWalDecisionFetch {",
+        "let RecoveredWalDecisionFetchRemoved {",
+        "pending-Kura exact Fetch ownership roundtrip through runtime startup",
     ),
     (
         "crates/iroha_core/src/sumeragi/v2_pending_kura_recovery.rs",
-        "fn bind_recovered_apply_carrier(",
-        "self.apply_carrier.is_none()",
+        "pub(in crate::sumeragi) struct PreparedPendingKuraValidatedApplyV1<'a> {",
+        "child_ownership: crate::sumeragi::v2_runtime::RuntimeEffectOwnership,",
+        "pub(in crate::sumeragi) child_ownership: crate::sumeragi::v2_runtime::RuntimeEffectOwnership,",
+        "move-only pending-Kura marker/child types expose forbidden surface",
+    ),
+    (
+        "crates/iroha_core/src/sumeragi/v2_pending_kura_recovery.rs",
+        "pub(in crate::sumeragi) fn classify_and_defer_validated_marker(",
+        "if self.deferred_validated_marker.is_some() {",
+        "if false {",
+        "pending-Kura validated-marker deferral",
+    ),
+    (
+        "crates/iroha_core/src/sumeragi/v2_pending_kura_recovery.rs",
+        "pub(in crate::sumeragi) fn exactly_matches_recovery(",
+        "self.tag == replay_tag",
         "true",
-        "one-shot recovered Apply carrier binding",
+        "pending-Kura exact deferred marker",
     ),
     (
-        "crates/iroha_core/src/sumeragi/v2_lifecycle_coordinator_support.rs",
-        "fn consume_for_executor(self) -> u128",
-        "self.lifecycle_ordinal",
-        "0",
-        "ordinal-bound recovered Apply carrier permit",
-    ),
-    (
-        "crates/iroha_core/src/sumeragi/v2_lifecycle_work_registry_validate_recovery_registry_impl.rs",
-        "fn exact_recovered_decision_apply_ready_ordinal(",
-        ".then_some(address.ordinal)",
-        ".then_some(1)",
-        "exact recovered Decision-Apply startup ordinal oracle",
-    ),
-    (
-        "crates/iroha_core/src/sumeragi/v2_lifecycle_coordinator_support.rs",
-        "fn with_pending_kura_apply_replay(",
-        ".exact_recovered_decision_apply_ready_ordinal(&self.coordinator)",
-        ".exactly_covers_recovered_ready_work(&self.coordinator)",
-        "exact recovered-Apply owner census and ordinal permit retention",
+        "crates/iroha_core/src/sumeragi/v2_pending_kura_recovery.rs",
+        "pub(in crate::sumeragi) fn prepare_apply<'a>(",
+        "validate_pending.project_validate_apply_successor(predecessor, &apply_effect)",
+        "validate_pending.project_validate_apply_successor_for_mutation(predecessor, &apply_effect)",
+        "pending-Kura marker-owned direct Validate-to-Apply preview",
     ),
     (
         "crates/iroha_core/src/sumeragi/v2_pending_kura_recovery.rs",
         "fn install(",
-        "let genesis = executor.verify_pending_kura_recovered_apply_replay(",
-        "let genesis = None; // bypassed direct owner-open\n        executor.ignore_pending_kura_replay(",
-        "pending-Kura carrier-gated verification-only install",
+        "let genesis = executor.verify_pending_kura_apply_replay(",
+        "let genesis = executor.verify_pending_kura_apply_replay_without_marker(",
+        "pending-Kura marker-verified direct pipeline install",
+    ),
+    (
+        "crates/iroha_core/src/sumeragi/v2_pending_kura_recovery.rs",
+        "fn classify_and_defer_validated_marker(",
+        "self.deferred_validated_marker = Some(DeferredPendingKuraValidatedMarkerV1 {",
+        "let _deferred_validated_marker = DeferredPendingKuraValidatedMarkerV1 {",
+        "move-only pending-Kura marker deferral",
+    ),
+    (
+        "crates/iroha_core/src/sumeragi/v2_pending_kura_recovery.rs",
+        "fn exactly_matches_recovery(",
+        "self.certificate == *certificate",
+        "true",
+        "exact pending-Kura marker authority",
+    ),
+    (
+        "crates/iroha_core/src/sumeragi/v2_pending_kura_recovery.rs",
+        "fn prepare_apply<'a>(",
+        "DirectValidationSucceededPreparation::Apply(prepared)",
+        "DirectValidationSucceededPreparation::Sign(prepared)",
+        "sealed pending-Kura ValidationCompleted Apply preview",
+    ),
+    (
+        "crates/iroha_core/src/sumeragi/v2_pending_kura_recovery.rs",
+        "fn prepare_apply<'a>(",
+        "project_validate_apply_successor(predecessor, &apply_effect)",
+        "project_store_validate_successor(predecessor, &apply_effect)",
+        "sealed pending-Kura ValidationCompleted Apply preview",
+    ),
+    (
+        "crates/iroha_core/src/sumeragi/v2_runtime.rs",
+        "pub(in crate::sumeragi) fn prepare_pending_kura_validated_apply(",
+        "|| self.clocks_armed",
+        "|| false",
+        "no-clock pending-Kura validation runtime seam",
+    ),
+    (
+        "crates/iroha_core/src/sumeragi/v2_effects_lifecycle_admission_settlement.rs",
+        "fn validate_body<S: V2EffectServices>(",
+        "take_deferred_validated_marker()?",
+        "clone_deferred_validated_marker()?",
+        "direct pending-Kura Validate-to-Apply child",
+    ),
+    (
+        "crates/iroha_core/src/sumeragi/v2_effects.rs",
+        "fn consume_one<S: V2EffectServices>(",
+        "if let Some(stage) = recovery_transition {",
+        "if false {",
+        "pending-Kura outer-stage-before-direct-child dispatch",
+    ),
+    (
+        "crates/iroha_core/src/sumeragi/v2_effects.rs",
+        "fn step_pending_tip_recovery<S: V2EffectServices>(",
+        "self.consume_pending_tip_recovery_effects(effects, services)?",
+        "self.consume_effects(effects, services)?",
+        "stage-complete direct-marker pending-tip recovery step",
+    ),
+    (
+        "crates/iroha_core/src/sumeragi/v2_effects.rs",
+        "fn step_pending_tip_recovery<S: V2EffectServices>(",
+        "RuntimeStep::Advanced(effects) => {",
+        "RuntimeStep::Advanced(effects) => {\n                let stage = PendingKuraApplyRecoveryStage::Apply;\n                if stage != PendingKuraApplyRecoveryStage::Apply { unreachable!(); }",
+        "stage-complete direct-marker pending-tip recovery step",
+    ),
+    (
+        "crates/iroha_core/src/sumeragi/v2_pending_kura_recovery.rs",
+        "fn consume_for_executor(",
+        "_permit: crate::sumeragi::v2_effects::PendingKuraApplySuccessorExecutorPermitV1",
+        "_permit: ()",
+        "executor-permit pending-Kura Apply child release",
     ),
     (
         "crates/iroha_core/src/sumeragi/v2_pending_kura_recovery.rs",
@@ -1695,28 +1823,35 @@ SUCCESSOR_PRODUCTION_SOURCE_MAPPING_MUTATIONS = (
         "fn authenticate_final_wal_startup_authority(",
         "subject.block_hash == expected.block_hash()",
         "true",
-        "pending-Kura exact Decision-Fetch authentication",
+        "pending-Kura Decision-Fetch ownership transfer into storage-only startup",
     ),
     (
         "crates/iroha_core/src/sumeragi/v2_pending_kura_recovery.rs",
         "fn authenticate_final_wal_startup_authority(",
         "authority: RecoveredWalStartupAuthorityV1::None,",
         "authority: RecoveredWalStartupAuthorityV1::DecisionFetch(fetch),",
-        "pending-Kura exact Decision-Fetch authentication",
+        "pending-Kura Decision-Fetch ownership transfer into storage-only startup",
     ),
     (
         "crates/iroha_core/src/sumeragi/v2_pending_kura_recovery.rs",
         "fn into_serialized_runtime(",
         "vec![effect],",
         "Vec::new(),",
-        "pending-Kura runtime sidecar ownership",
+        "pending-Kura exact Fetch ownership roundtrip through runtime startup",
     ),
     (
         "crates/iroha_core/src/sumeragi/v2_pending_kura_recovery.rs",
         "fn install(",
-        "            &effects,\n            apply_carrier,\n        )?;",
-        "            &effects,\n            unsafe { std::mem::zeroed() },\n        )?;",
-        "pending-Kura carrier-gated verification-only install",
+        "executor.consume_pending_tip_recovery_effects(effects, services)?;",
+        "executor.consume_effects(effects, services)?;",
+        "pending-Kura marker-verified direct pipeline install",
+    ),
+    (
+        "crates/iroha_core/src/sumeragi/v2_pending_kura_recovery.rs",
+        "fn install(",
+        "executor.verify_pending_kura_apply_replay(",
+        "executor.verify_pending_kura_apply_replay_unchecked(",
+        "pending-Kura marker-aware verification-before-dispatch install",
     ),
     (
         "crates/iroha_core/src/sumeragi/v2_lifecycle_preactivation.rs",
@@ -1751,6 +1886,13 @@ SUCCESSOR_PRODUCTION_SOURCE_MAPPING_MUTATIONS = (
         "pub(crate) fn complete_certified_fetch_body_persistence(",
         "CertifiedFetchBodyPersistenceCompletionError::RestartRequiredBeforeLedger(",
         "CertifiedFetchBodyPersistenceCompletionError::Retry(",
+        "complete_certified_fetch_body_persistence must preserve exact production order",
+    ),
+    (
+        "crates/iroha_core/src/sumeragi/v2_lifecycle_selector.rs",
+        "pub(crate) fn complete_certified_fetch_body_persistence(",
+        "durable_registry.durable_body_receipt(),",
+        "durable_registry.unchecked_body_receipt(),",
         "complete_certified_fetch_body_persistence must preserve exact production order",
     ),
     (
@@ -3314,53 +3456,74 @@ SUCCESSOR_PRODUCTION_SOURCE_MAPPING_MUTATIONS = (
         "gap-aware fresh Serve staged append",
     ),
     (
-        "crates/iroha_core/src/sumeragi/v2_effects.rs",
-        "fn verify_pending_kura_recovered_apply_replay(",
-        "if recovered_apply_ordinal == 0 {",
-        "if false {",
-        "ordinal-gated pending-Kura direct-Apply refinement",
+        "crates/iroha_core/src/sumeragi/v2_pending_kura_recovery.rs",
+        "pub(in crate::sumeragi) fn commit(self) -> PendingKuraValidatedApplySuccessorV1 {",
+        "adapter.reducer = next_reducer;",
+        "drop(next_reducer);",
+        "pending-Kura deferred validation commit",
+    ),
+    (
+        "crates/iroha_core/src/sumeragi/v2_pending_kura_recovery.rs",
+        "pub(in crate::sumeragi) fn consume_for_executor(",
+        "_permit: crate::sumeragi::v2_effects::PendingKuraApplySuccessorExecutorPermitV1,",
+        "_permit: (),",
+        "pending-Kura executor-only Apply child release",
     ),
     (
         "crates/iroha_core/src/sumeragi/v2_effects.rs",
-        "fn verify_pending_kura_recovered_apply_replay(",
-        "            recovered_apply_ordinal,\n        )?;",
-        "            1,\n        )?;",
-        "ordinal-gated pending-Kura direct-Apply refinement",
+        "pub(crate) fn verify_pending_kura_apply_replay(",
+        "verify_pending_kura_apply_parts_with_marker(",
+        "verify_pending_kura_apply_parts(",
+        "pending-Kura replay verification with deferred marker",
+    ),
+    (
+        "crates/iroha_core/src/sumeragi/v2_runtime.rs",
+        "pub(in crate::sumeragi) fn prepare_pending_kura_validated_apply(",
+        "|| self.clocks_armed",
+        "|| false",
+        "pending-Kura no-clock marker preparation",
     ),
     (
         "crates/iroha_core/src/sumeragi/v2_effects.rs",
-        "fn verify_pending_kura_recovered_apply_replay(",
-        "if !evidence.is_exact(&self.context) {",
-        "if false {",
-        "ordinal-gated pending-Kura direct-Apply refinement",
+        "pub(crate) trait EffectRuntime {",
+        '"runtime cannot commit a deferred pending-Kura validation marker"',
+        '"runtime accepted a fabricated pending-Kura validation marker"',
+        "generic runtime pending-Kura marker fail-closed default",
     ),
     (
         "crates/iroha_core/src/sumeragi/v2_effects.rs",
-        "fn verify_pending_kura_recovered_apply_replay(",
-        "apply_carrier_installed: true,",
-        "apply_carrier_installed: false,",
-        "ordinal-gated pending-Kura direct-Apply refinement",
+        "impl EffectRuntime for SerializedV2Runtime {",
+        "Ok(prepared) => Ok(prepared.commit()),",
+        "Ok(prepared) => Err((prepared.into_marker(), String::new())),",
+        "serialized pending-Kura marker commit",
+    ),
+    (
+        "crates/iroha_core/src/sumeragi/v2_effects_lifecycle_admission_settlement.rs",
+        "fn validate_body<S: V2EffectServices>(",
+        ".take_deferred_validated_marker()?;",
+        ".take_deferred_validated_marker_for_mutation()?;",
+        "pending-Kura Validate exact Apply child",
     ),
     (
         "crates/iroha_core/src/sumeragi/v2_effects.rs",
-        "fn begin_apply<S: V2EffectServices>(",
-        "if self.pending_tip_recovery.is_some() {",
-        "if false {",
-        "generic runtime Apply rejection of pending-Kura ownership",
+        "fn consume_one<S: V2EffectServices>(",
+        "result?;",
+        "result_for_mutation?;",
+        "pending-Kura stage-before-child dispatch",
     ),
     (
         "crates/iroha_core/src/sumeragi/v2_effects.rs",
-        "fn complete_application<S: V2EffectServices>(",
-        "if self.pending_tip_recovery.is_some() {",
-        "if false {",
-        "generic runtime application completion rejection of pending-Kura ownership",
+        "pub(crate) fn step_pending_tip_recovery<S: V2EffectServices>(",
+        "self.consume_pending_tip_recovery_effects(effects, services)?;",
+        "self.consume_effects(effects, services)?;",
+        "pending-Kura exact local stage consumer",
     ),
     (
         "crates/iroha_core/src/sumeragi/v2_lifecycle_pending_kura.rs",
-        "fn drive_apply_recovery_turn(",
-        "if ordinal == recovered_apply_ordinal =>",
-        "if true =>",
-        "one-item closed-ingress pending-Kura lifecycle Apply completion turn",
+        "pub(in crate::sumeragi) fn drive_apply_recovery_turn(",
+        "executor.step_pending_tip_recovery(Instant::now(), services)?",
+        "executor.step_effects(Instant::now(), services)?",
+        "bounded closed-ingress pending-Kura direct-pipeline turn",
     ),
     (
         "crates/iroha_core/src/sumeragi/v2_effects.rs",
@@ -3375,6 +3538,48 @@ SUCCESSOR_PRODUCTION_SOURCE_MAPPING_MUTATIONS = (
         "pending.evidence.stage = PendingKuraApplyRecoveryStage::ApplicationDispatched;",
         "pending.evidence.stage = PendingKuraApplyRecoveryStage::Completed;",
         "physical lifecycle Apply publication advances pending stage once",
+    ),
+    (
+        "crates/iroha_core/src/sumeragi/v2_pending_kura_recovery.rs",
+        "fn classify_and_defer_validated_marker(",
+        "self.expected.height() != context.height",
+        "self.expected.height() == context.height",
+        "move-only pending-Kura marker deferral",
+    ),
+    (
+        "crates/iroha_core/src/sumeragi/v2_pending_kura_recovery.rs",
+        "fn classify_and_defer_validated_marker(",
+        "certificate.proposal_round != *round",
+        "certificate.proposal_round == *round",
+        "move-only pending-Kura marker deferral",
+    ),
+    (
+        "crates/iroha_core/src/sumeragi/v2_effects_lifecycle_admission_settlement.rs",
+        "fn validate_body<S: V2EffectServices>(",
+        "self.ensure_pending_slot()?;",
+        "let _ = self.remaining_capacity();",
+        "direct pending-Kura Validate-to-Apply child",
+    ),
+    (
+        "crates/iroha_core/src/sumeragi/v2_effects_lifecycle_admission_settlement.rs",
+        "fn validate_body<S: V2EffectServices>(",
+        ".restore_deferred_validated_marker(marker);",
+        ".discard_deferred_validated_marker(marker);",
+        "direct pending-Kura Validate-to-Apply child",
+    ),
+    (
+        "crates/iroha_core/src/sumeragi/v2_effects.rs",
+        "pub(crate) trait EffectRuntime {",
+        "runtime cannot commit a deferred pending-Kura validation marker",
+        "runtime accepted a deferred pending-Kura validation marker",
+        "fail-closed generic pending-Kura validation hook",
+    ),
+    (
+        "crates/iroha_core/src/sumeragi/v2_effects.rs",
+        "fn consume_one<S: V2EffectServices>(",
+        "result?;",
+        "let _ = result;",
+        "pending-Kura outer-stage-before-direct-child dispatch",
     ),
     (
         "crates/iroha_core/src/sumeragi/v2_lifecycle_selector.rs",
@@ -3402,7 +3607,7 @@ SUCCESSOR_PRODUCTION_SOURCE_MAPPING_MUTATIONS = (
 
 assert len(SUCCESSOR_PRODUCTION_SOURCE_MAPPING_MUTATIONS) == len(
     set(SUCCESSOR_PRODUCTION_SOURCE_MAPPING_MUTATIONS)
-) == 402
+) == 429
 
 
 @pytest.mark.parametrize(

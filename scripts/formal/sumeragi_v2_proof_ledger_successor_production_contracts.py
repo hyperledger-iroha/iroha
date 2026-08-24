@@ -200,7 +200,7 @@ if dispatch_key.lineage() == LifecycleDecisionApplyLineageV1::Recovered {
     return Ok(None);
 }
 """,
-        "live Apply cleanup authority must derive from the exact neutral attestation and reject recovered substitution",
+        "live Apply reconciliation authority must derive from the exact neutral attestation and reject recovered substitution",
         errors,
     )
     _require_rust_token_sequence(
@@ -211,14 +211,14 @@ let ConcreteLifecycleWorkKind::DurableLiveWalApply(apply) = &work.kind else {
     return Err(ReadyLifecycleDecisionApplyAttestationErrorV1::WrongWorkKind);
 };
 """,
-        "live Apply cleanup authority must originate only from the live WAL carrier",
+        "live Apply reconciliation authority must originate only from the live WAL carrier",
         errors,
     )
     _require_rust_token_sequence(
         registry_impl_path,
         live_reconciliation,
         "apply.project_reconciliation(dispatch_key)",
-        "live Apply cleanup must retain the exact carrier key",
+        "live Apply reconciliation must retain the exact carrier key",
         errors,
     )
 
@@ -326,7 +326,7 @@ ConcreteLifecycleWorkKind::DurableRecoveredDecisionApply(apply)
             ".select_apply(ordinal)",
             ".prepare_lifecycle_decision_apply_dispatch(&self.coordinator, &lease)",
         ),
-        "live cleanup, complete Apply census, and neutral worker publication",
+        "live reconciliation, complete Apply census, and neutral worker publication",
     )
     _require_rust_token_sequence(
         scheduler_path,
@@ -337,7 +337,7 @@ if !reservation.preflight(&prepared) {
 }
 let executor_dispatch = executor
     .prepare_lifecycle_decision_apply_executor_dispatch(&prepared)
-    .map_err(ProductionCompletionDispatchErrorV1::ApplyExecutor)?;
+    .map_err(ProductionCompletionDispatchErrorV1::LiveApplyReconciliation)?;
 reservation.commit(prepared, executor_dispatch);
 Ok(ProductionCompletionDispatchV1::ApplyQueued { ordinal })
 """,
@@ -572,15 +572,14 @@ LifecycleCompletionCapacityProbeV1::Apply {
             "LifecycleDecisionApplyWorkerResultV1::Deferred",
             "completion.authorizes_sidecar_owner(services, lane_work)",
             "sidecar.register(lane_work)",
-            "settle_applied_lifecycle_decision_apply_completion_with_status(",
-            "LifecycleDecisionApplyStatusPublicationV1::PublishActiveHeight",
+            "settle_applied_lifecycle_decision_apply_completion(owner, executor, completion)",
         ),
-        "neutral lifecycle Apply result classification and live-height publication mode",
+        "lifecycle Apply result classification and direct live-height settlement",
     )
     shared_settlement = _require_rust_item(
         launch_path,
         launch_source,
-        "settle_applied_lifecycle_decision_apply_completion_with_status",
+        "settle_applied_lifecycle_decision_apply_completion",
         errors,
     )
     require_order(
@@ -595,23 +594,9 @@ LifecycleCompletionCapacityProbeV1::Apply {
             "adapter.commit_after_durable_settlement()",
             "executor.commit_lifecycle_decision_apply_finality(finality)",
             "completion.acknowledge_after_owner_settlement()",
-            "LifecycleDecisionApplyStatusPublicationV1::PublishActiveHeight",
             "super::super::status::set_v2_status(status)",
         ),
-        "neutral lifecycle Apply durable terminal settlement and mode-gated publication",
-    )
-    pending_settlement = _require_rust_item(
-        launch_path,
-        launch_source,
-        "settle_pending_kura_applied_decision_apply_completion",
-        errors,
-    )
-    _require_rust_token_sequence(
-        launch_path,
-        pending_settlement,
-        "LifecycleDecisionApplyStatusPublicationV1::DeferUntilPendingKuraActivation",
-        "pending-Kura lifecycle Apply must defer status until no-clock activation",
-        errors,
+        "lifecycle Apply durable terminal settlement and direct status publication",
     )
 
     _require_rust_source_token_sequence(
@@ -700,6 +685,10 @@ rejected_lifecycle_decision_apply_sidecars: BTreeMap::new(),
             "settle_recovered_decision_apply_completion_owner",
             "RetainedRecoveredDecisionApplyDeferredV1",
             "drive_recovered_decision_apply_deferred",
+            "settle_pending_kura_applied_decision_apply_completion",
+            "settle_applied_lifecycle_decision_apply_completion_with_status",
+            "LifecycleDecisionApplyStatusPublicationV1",
+            "DeferUntilPendingKuraActivation",
         ),
         "terminal Apply corridor",
     )
@@ -2247,44 +2236,19 @@ let status = launched
             errors,
             "lifecycle Decision Apply settlement publication",
         )
-        pending_applied_settlement = _require_rust_item(
-            lifecycle_launch_path,
-            lifecycle_launch_source,
-            "settle_pending_kura_applied_decision_apply_completion",
-            errors,
-        )
         shared_applied_settlement = _require_rust_item(
             lifecycle_launch_path,
             lifecycle_launch_source,
-            "settle_applied_lifecycle_decision_apply_completion_with_status",
+            "settle_applied_lifecycle_decision_apply_completion",
             errors,
         )
         _require_rust_token_sequence(
             lifecycle_launch_path,
             lifecycle_apply_settlement,
             """
-settle_applied_lifecycle_decision_apply_completion_with_status(
-    owner,
-    executor,
-    completion,
-    LifecycleDecisionApplyStatusPublicationV1::PublishActiveHeight,
-)
+settle_applied_lifecycle_decision_apply_completion(owner, executor, completion)
 """,
-            "live lifecycle Decision Apply settlement must select active-height status publication",
-            errors,
-        )
-        _require_rust_token_sequence(
-            lifecycle_launch_path,
-            pending_applied_settlement,
-            """
-settle_applied_lifecycle_decision_apply_completion_with_status(
-    owner,
-    executor,
-    completion,
-    LifecycleDecisionApplyStatusPublicationV1::DeferUntilPendingKuraActivation,
-)
-""",
-            "pending-Kura lifecycle Decision Apply settlement must defer status publication until activation",
+            "live lifecycle Decision Apply settlement must enter the sole direct settlement cut",
             errors,
         )
         _require_rust_token_sequence(
@@ -2297,15 +2261,10 @@ assert!(
     matches!(settled, LifecycleDecisionApplyWorkerResultV1::Applied(_)),
     "borrowed lifecycle Decision Apply result cannot change before acknowledgement"
 );
-if matches!(
-    status_publication,
-    LifecycleDecisionApplyStatusPublicationV1::PublishActiveHeight
-) {
-    super::super::status::set_v2_status(status);
-}
+super::super::status::set_v2_status(status);
 Ok(ProductionLifecycleDecisionApplyCompletionV1::Applied)
 """,
-            "shared lifecycle Decision Apply settlement must preserve its mode-gated final publication",
+            "lifecycle Decision Apply settlement must publish only after durable finality and acknowledgement",
             errors,
         )
         if shared_applied_settlement is not None:
@@ -2321,6 +2280,13 @@ Ok(ProductionLifecycleDecisionApplyCompletionV1::Applied)
                 "shared lifecycle Decision Apply settlement publication",
                 shared_applied_settlement.source,
                 "status_publication_enabled",
+                0,
+            )
+            require_token_count(
+                lifecycle_launch_path,
+                "shared lifecycle Decision Apply settlement publication",
+                shared_applied_settlement.source,
+                "LifecycleDecisionApplyStatusPublicationV1",
                 0,
             )
     block_sync_path, block_sync_source = load(
@@ -2429,7 +2395,7 @@ Ok(ProductionLifecycleDecisionApplyCompletionV1::Applied)
             effects_source,
             "consume_one",
             "fn consume_one<",
-            "\n    fn ensure_pending_tip_recovery_effect_is_local(",
+            "\n    fn bind_body_pipeline_owner(",
         )
         require_order(
             effects_path,
@@ -2683,7 +2649,7 @@ Ok(ProductionLifecycleDecisionApplyCompletionV1::Applied)
             (
                 ".prepare_selected_certified_fetch_completion(",
                 ".bind_durable_body_receipt(receipt)",
-                ".prepare_lifecycle_certified_fetch_completion(candidate, &authenticated)",
+                "executor.prepare_lifecycle_certified_fetch_completion( candidate, &authenticated, durable_registry.durable_body_receipt(), )",
                 "let output_guard = services.lifecycle_output_guard()",
                 "output_guard.close_admission_for_restart()",
                 "CertifiedFetchBodyPersistenceCompletionError::RestartRequiredBeforeLedger(",
