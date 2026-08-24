@@ -4,7 +4,7 @@
 
 secrets:
   iroha_genesis_expected_hash:
-    file: '${IROHA_GENESIS_EXPECTED_HASH_FILE:?set IROHA_GENESIS_EXPECTED_HASH_FILE to an owner-controlled exact genesis hash file}'
+    file: '${IROHA_GENESIS_EXPECTED_HASH_FILE:?set IROHA_GENESIS_EXPECTED_HASH_FILE to an owner-controlled checked genesis network-identity file}'
   iroha_genesis_public_key:
     file: '${IROHA_GENESIS_PUBLIC_KEY_FILE:?set IROHA_GENESIS_PUBLIC_KEY_FILE to an owner-controlled genesis public-key file}'
 services:
@@ -25,9 +25,9 @@ services:
           printf '%s\n' \"$$GENESIS_PUBLIC_KEY\" | grep -Eq '^[^[:space:]]+$$' && \\
           test \"$$(wc -l < \"$$GENESIS_EXPECTED_HASH_FILE\")\" -eq 1 && \\
           test -z \"$$(tail -c 1 < \"$$GENESIS_EXPECTED_HASH_FILE\")\" && \\
-          IFS= read -r GENESIS_EXPECTED_HASH < \"$$GENESIS_EXPECTED_HASH_FILE\" && \\
-          printf '%s\n' \"$$GENESIS_EXPECTED_HASH\" | grep -Eq '^[0-9a-f]{63}[13579bdf]$$' && \\
-          export GENESIS_PUBLIC_KEY GENESIS GENESIS_EXPECTED_HASH && exec iroha3d
+          IFS= read -r GENESIS_NETWORK_ID < \"$$GENESIS_EXPECTED_HASH_FILE\" && \\
+          printf '%s\n' \"$$GENESIS_NETWORK_ID\" | grep -Eq '^hash:[0-9A-F]{63}[13579BDF]#[0-9A-F]{4}$$' && \\
+          export GENESIS_PUBLIC_KEY GENESIS GENESIS_EXPECTED_HASH_FILE && exec iroha3d
       "
     environment:
       API_ADDRESS: 0.0.0.0:8080
@@ -78,9 +78,9 @@ services:
           printf '%s\n' \"$$GENESIS_PUBLIC_KEY\" | grep -Eq '^[^[:space:]]+$$' && \\
           test \"$$(wc -l < \"$$GENESIS_EXPECTED_HASH_FILE\")\" -eq 1 && \\
           test -z \"$$(tail -c 1 < \"$$GENESIS_EXPECTED_HASH_FILE\")\" && \\
-          IFS= read -r GENESIS_EXPECTED_HASH < \"$$GENESIS_EXPECTED_HASH_FILE\" && \\
-          printf '%s\n' \"$$GENESIS_EXPECTED_HASH\" | grep -Eq '^[0-9a-f]{63}[13579bdf]$$' && \\
-          export GENESIS_PUBLIC_KEY GENESIS GENESIS_EXPECTED_HASH && exec iroha3d
+          IFS= read -r GENESIS_NETWORK_ID < \"$$GENESIS_EXPECTED_HASH_FILE\" && \\
+          printf '%s\n' \"$$GENESIS_NETWORK_ID\" | grep -Eq '^hash:[0-9A-F]{63}[13579BDF]#[0-9A-F]{4}$$' && \\
+          export GENESIS_PUBLIC_KEY GENESIS GENESIS_EXPECTED_HASH_FILE && exec iroha3d
       "
     environment:
       API_ADDRESS: 0.0.0.0:8081
@@ -131,9 +131,9 @@ services:
           printf '%s\n' \"$$GENESIS_PUBLIC_KEY\" | grep -Eq '^[^[:space:]]+$$' && \\
           test \"$$(wc -l < \"$$GENESIS_EXPECTED_HASH_FILE\")\" -eq 1 && \\
           test -z \"$$(tail -c 1 < \"$$GENESIS_EXPECTED_HASH_FILE\")\" && \\
-          IFS= read -r GENESIS_EXPECTED_HASH < \"$$GENESIS_EXPECTED_HASH_FILE\" && \\
-          printf '%s\n' \"$$GENESIS_EXPECTED_HASH\" | grep -Eq '^[0-9a-f]{63}[13579bdf]$$' && \\
-          export GENESIS_PUBLIC_KEY GENESIS GENESIS_EXPECTED_HASH && exec iroha3d
+          IFS= read -r GENESIS_NETWORK_ID < \"$$GENESIS_EXPECTED_HASH_FILE\" && \\
+          printf '%s\n' \"$$GENESIS_NETWORK_ID\" | grep -Eq '^hash:[0-9A-F]{63}[13579BDF]#[0-9A-F]{4}$$' && \\
+          export GENESIS_PUBLIC_KEY GENESIS GENESIS_EXPECTED_HASH_FILE && exec iroha3d
       "
     environment:
       API_ADDRESS: 0.0.0.0:8082
@@ -184,9 +184,9 @@ services:
           printf '%s\n' \"$$GENESIS_PUBLIC_KEY\" | grep -Eq '^[^[:space:]]+$$' && \\
           test \"$$(wc -l < \"$$GENESIS_EXPECTED_HASH_FILE\")\" -eq 1 && \\
           test -z \"$$(tail -c 1 < \"$$GENESIS_EXPECTED_HASH_FILE\")\" && \\
-          IFS= read -r GENESIS_EXPECTED_HASH < \"$$GENESIS_EXPECTED_HASH_FILE\" && \\
-          printf '%s\n' \"$$GENESIS_EXPECTED_HASH\" | grep -Eq '^[0-9a-f]{63}[13579bdf]$$' && \\
-          export GENESIS_PUBLIC_KEY GENESIS GENESIS_EXPECTED_HASH && exec iroha3d
+          IFS= read -r GENESIS_NETWORK_ID < \"$$GENESIS_EXPECTED_HASH_FILE\" && \\
+          printf '%s\n' \"$$GENESIS_NETWORK_ID\" | grep -Eq '^hash:[0-9A-F]{63}[13579BDF]#[0-9A-F]{4}$$' && \\
+          export GENESIS_PUBLIC_KEY GENESIS GENESIS_EXPECTED_HASH_FILE && exec iroha3d
       "
     environment:
       API_ADDRESS: 0.0.0.0:8083

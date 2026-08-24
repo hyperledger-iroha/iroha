@@ -3081,9 +3081,8 @@ async fn derive_hf_resource_profile_within_deadline(
     // Release the decoded metadata before issuing one HEAD request per selected
     // weight file; the immutable LFS contract now owns every required field.
     drop(model_info);
-    let selected_weight_file_count =
-        u32::try_from(weight_selection.required_weight_files.len())
-            .map_err(|_| SoracloudError::internal("selected HF weight count does not fit u32"))?;
+    let selected_weight_file_count = u32::try_from(weight_selection.required_weight_files.len())
+        .map_err(|_| SoracloudError::internal("selected HF weight count does not fit u32"))?;
     let required_weight_files = std::mem::take(&mut weight_selection.required_weight_files);
     stream::iter(required_weight_files)
         .map(|weight| async move {
@@ -6516,22 +6515,24 @@ fn authoritative_service_config_status_response(
         .service_configs
         .values()
         .filter(|entry| config_name.is_none_or(|filter| filter == entry.config_name.as_str()))
-        .map(|entry| -> Result<ServiceConfigStatusEntry, SoracloudError> {
-            let value_json = entry
-                .value_json
-                .try_into_any_norito::<norito::json::Value>()
-                .map_err(|err| {
-                    SoracloudError::internal(format!(
-                        "failed to decode authoritative service config json: {err}"
-                    ))
-                })?;
-            Ok(ServiceConfigStatusEntry {
-                config_name: entry.config_name.clone(),
-                value_hash: entry.value_hash,
-                value_json,
-                last_update_sequence: entry.last_update_sequence,
-            })
-        })
+        .map(
+            |entry| -> Result<ServiceConfigStatusEntry, SoracloudError> {
+                let value_json = entry
+                    .value_json
+                    .try_into_any_norito::<norito::json::Value>()
+                    .map_err(|err| {
+                        SoracloudError::internal(format!(
+                            "failed to decode authoritative service config json: {err}"
+                        ))
+                    })?;
+                Ok::<_, SoracloudError>(ServiceConfigStatusEntry {
+                    config_name: entry.config_name.clone(),
+                    value_hash: entry.value_hash,
+                    value_json,
+                    last_update_sequence: entry.last_update_sequence,
+                })
+            },
+        )
         .collect::<Result<Vec<_>, _>>()?;
     if config_name.is_some() && configs.is_empty() {
         return Err(SoracloudError::not_found(format!(
@@ -13747,6 +13748,15 @@ mod tests {
             PrivateUploadedModelExecuteRequest,
         );
     }
+    fn sample_private_model_artifact_ref(role: &str, seed: u8) -> SoraPrivateModelArtifactRefV1 {
+        SoraPrivateModelArtifactRefV1 {
+            schema_version: iroha_data_model::soracloud::SORA_PRIVATE_MODEL_ARTIFACT_REF_VERSION_V1,
+            sorafs_manifest_digest: ManifestDigest::new([seed; 32]),
+            artifact_hash: Hash::new([seed; 16]),
+            ciphertext_bytes: 128,
+            artifact_role: role.to_owned(),
+        }
+    }
     #[test]
     fn signed_soracloud_mutation_graph_requires_explicit_optional_keys() {
         macro_rules! assert_required_nullable {
@@ -15863,11 +15873,7 @@ mod tests {
                     (bundle.service.service_version.clone(), discovery.clone()),
                 ]),
             };
-            let registry_json = Json::from(
-                norito::json::to_json(&registry)
-                    .expect("registry json should encode")
-                    .as_str(),
-            );
+            let registry_json = Json::new(registry);
             let registry_entry = SoraServiceConfigEntryV1 {
                 schema_version: iroha_data_model::soracloud::SORA_SERVICE_CONFIG_ENTRY_VERSION_V1,
                 config_name: PUBLIC_SERVICE_DISCOVERY_CONFIG_NAME.to_string(),
@@ -18332,9 +18338,9 @@ mod tests {
             let siblings = (0..SHARD_COUNT)
                 .map(|index| {
                     norito::json!({
-                        "rfilename": format!("shard-{index:02}.gguf"),
+                        "rfilename": (format!("shard-{index:02}.gguf")),
                         "lfs": {
-                            "sha256": format!("{:064x}", index + 1),
+                            "sha256": (format!("{:064x}", index + 1)),
                             "size": 1,
                         },
                     })

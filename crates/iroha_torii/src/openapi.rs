@@ -4680,6 +4680,53 @@ mod tests {
         }
     }
     #[test]
+    fn retired_validation_fee_plain_ballot_draft_is_absent() {
+        const RETIRED_PATH: &str =
+            "/v1/validation-fee/proposals/{proposal_id}/plain-ballot/draft";
+        for (surface, source) in [
+            ("Torii validation-fee implementation", include_str!("validation_fee_api.rs")),
+            ("Torii router mounts", include_str!("lib.rs")),
+            ("canonical route catalog", include_str!("../../iroha_torii_shared/src/route_catalog.rs")),
+        ] {
+            assert!(
+                !source.contains(RETIRED_PATH),
+                "retired validation-fee PLAIN ballot draft reappeared in {surface}"
+            );
+            assert!(
+                !source.contains("ValidationFeePlainBallotDraft"),
+                "retired validation-fee PLAIN ballot draft type reappeared in {surface}"
+            );
+        }
+        for (label, document) in [
+            ("canonical", canonical_document()),
+            ("compiled", generate_spec()),
+        ] {
+            let paths = document
+                .get("paths")
+                .and_then(Value::as_object)
+                .expect("OpenAPI paths section");
+            assert!(
+                !paths.contains_key(RETIRED_PATH),
+                "retired validation-fee PLAIN ballot draft remains in {label} OpenAPI"
+            );
+            let schemas = document
+                .get("components")
+                .and_then(Value::as_object)
+                .and_then(|components| components.get("schemas"))
+                .and_then(Value::as_object)
+                .expect("OpenAPI schemas section");
+            for retired_schema in [
+                "ValidationFeePlainBallotDraftRequestV1",
+                "ValidationFeePlainBallotDraftResponseV1",
+            ] {
+                assert!(
+                    !schemas.contains_key(retired_schema),
+                    "retired schema {retired_schema} remains in {label} OpenAPI"
+                );
+            }
+        }
+    }
+    #[test]
     fn pipeline_fastpq_recovery_documents_operator_auth_and_bounds() {
         use iroha_torii_shared::route_catalog::{ApiSurface, AuthenticationPolicy};
         let route = iroha_torii_shared::route_catalog::pipeline::RECOVERY_FASTPQ_PROOFS;

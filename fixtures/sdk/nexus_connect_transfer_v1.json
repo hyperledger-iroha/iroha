@@ -30,6 +30,26 @@
       "transfer_authority": "testuﾛ1Nﾛ5ﾃPefCWUﾆﾔaxCRﾈﾅｶubGPﾘｼX9hﾀ8vHGVﾗsﾒJｼF7HF5W"
     },
     {
+      "approval_frame": {
+        "account_id": "testuﾛ1PﾀR2LBﾃﾋQ8ﾅﾚHｱﾍmtX5Aﾉｽ2ｽヱﾙVｳﾁoJXWpﾄﾖFｸｼ8RC99U",
+        "signing_public_key_hex": "f80cccdce4ae1c07ae208a2adf99a310ae4207e0306fa0236110b06827bbb8d0"
+      },
+      "expected_code": "approval_account_mismatch",
+      "name": "approval signing key mismatch"
+    },
+    {
+      "approval_frame": {
+        "account_id": "testuﾛ1PﾀR2LBﾃﾋQ8ﾅﾚHｱﾍmtX5Aﾉｽ2ｽヱﾙVｳﾁoJXWpﾄﾖFｸｼ8RC99U",
+        "session": {
+          "sid": "sid-substituted",
+          "wallet_launch_uri": "iroha://connect?sid=sid-substituted&role=wallet"
+        },
+        "signing_public_key_hex": "c050c5637a44fa8629fff3cccce2300cb362a63d99d95fc54145266f4332445a"
+      },
+      "expected_code": "approval_session_mismatch",
+      "name": "approval session substitution"
+    },
+    {
       "expected_code": "connect_transport_unavailable",
       "name": "connect transport unavailable"
     },
@@ -76,6 +96,7 @@
   },
   "fixture": "nexus_connect_transfer_v1",
   "transfer_input": {
+    "account_chain_discriminant": 369,
     "authority": "testuﾛ1PﾀR2LBﾃﾋQ8ﾅﾚHｱﾍmtX5Aﾉｽ2ｽヱﾙVｳﾁoJXWpﾄﾖFｸｼ8RC99U",
     "creation_time_ms": 1700000000000,
     "destination_account_id": "testuﾛ1Nﾛ5ﾃPefCWUﾆﾔaxCRﾈﾅｶubGPﾘｼX9hﾀ8vHGVﾗsﾒJｼF7HF5W",

@@ -17,6 +17,7 @@ from .address import (
     decode_base_n,
     encode_base_n,
     i105_discriminant_from_sentinel,
+    normalize_i105_discriminant,
 )
 from .crypto import NetworkId, _require_network_id, hash_blake2b_32
 from .numeric_v1 import NumericV1Codec
@@ -337,6 +338,7 @@ class NexusAppConfig:
     """Static configuration for a Nexus app facade instance."""
 
     network_id: NetworkId
+    account_chain_discriminant: int
     authority: Optional[str] = None
     base_url: Optional[str] = None
     node: Optional[str] = None
@@ -348,6 +350,14 @@ class NexusAppConfig:
             self,
             "network_id",
             _require_network_id(self.network_id, "NexusAppConfig.network_id"),
+        )
+        object.__setattr__(
+            self,
+            "account_chain_discriminant",
+            normalize_i105_discriminant(
+                self.account_chain_discriminant,
+                "NexusAppConfig.account_chain_discriminant",
+            ),
         )
 
 
@@ -547,11 +557,84 @@ def _exact_transaction_hash_hex(value: Any, field: str) -> str:
     return _exact_hash_hex(value, field, "invalid_transaction_hash")
 
 
-def _account_ed25519_public_key(account_id: str) -> bytes:
+def _exact_account_id_for_chain(
+    account_id: Any,
+    expected_chain_discriminant: int,
+    context: str,
+) -> str:
+    if (
+        not isinstance(account_id, str)
+        or not account_id
+        or account_id.strip() != account_id
+        or "@" in account_id
+    ):
+        raise NexusAppError(
+            "invalid_account_id",
+            f"{context} must be an exact canonical I105 account for chain discriminant "
+            f"{expected_chain_discriminant}",
+        )
+    try:
+        address = AccountAddress.from_i105(
+            account_id,
+            expected_discriminant=expected_chain_discriminant,
+        )
+        if address.to_i105(expected_chain_discriminant) != account_id:
+            raise AccountAddressError("noncanonical I105 spelling")
+    except AccountAddressError as exc:
+        raise NexusAppError(
+            "invalid_account_id",
+            f"{context} must be an exact canonical I105 account for chain discriminant "
+            f"{expected_chain_discriminant}",
+        ) from exc
+    return account_id
+
+
+def _source_asset_owner(source_asset_id: Any) -> str:
+    if not isinstance(source_asset_id, str):
+        raise NexusAppError(
+            "invalid_account_id",
+            "transfer source asset must contain one canonical owner account",
+        )
+    parts = source_asset_id.split("#")
+    if len(parts) not in (2, 3) or not parts[1]:
+        raise NexusAppError(
+            "invalid_account_id",
+            "transfer source asset must contain one canonical owner account",
+        )
+    if len(parts) == 3:
+        prefix = "dataspace:"
+        scope = parts[2]
+        digits = scope[len(prefix) :] if scope.startswith(prefix) else ""
+        if (
+            not digits
+            or not digits.isascii()
+            or not digits.isdecimal()
+            or (len(digits) > 1 and digits[0] == "0")
+            or int(digits) > (1 << 64) - 1
+        ):
+            raise NexusAppError(
+                "invalid_account_id",
+                "transfer source asset scope must be a canonical dataspace:<u64> suffix",
+            )
+    return parts[1]
+
+
+def _account_ed25519_public_key(
+    account_id: str,
+    expected_chain_discriminant: int,
+) -> bytes:
     from .address import AccountAddress, CurveId
 
     try:
-        address = AccountAddress.from_i105(account_id)
+        exact = _exact_account_id_for_chain(
+            account_id,
+            expected_chain_discriminant,
+            "account",
+        )
+        address = AccountAddress.from_i105(
+            exact,
+            expected_discriminant=expected_chain_discriminant,
+        )
     except Exception as exc:
         raise NexusAppError(
             "missing_signing_public_key",
@@ -574,10 +657,37 @@ def _validate_ed25519_public_key(value: BytesLike, field: str) -> bytes:
     return public_key
 
 
-def _resolve_signing_public_key(authority: str, explicit: Optional[BytesLike]) -> bytes:
-    if explicit is not None:
-        return _validate_ed25519_public_key(explicit, "signing_public_key")
-    return _account_ed25519_public_key(authority)
+def _resolve_signing_public_key(
+    authority: str,
+    explicit: Optional[BytesLike],
+    expected_chain_discriminant: int,
+) -> bytes:
+    return _require_account_signing_key(
+        authority,
+        expected_chain_discriminant,
+        ("signing_public_key", explicit),
+    )
+
+
+def _require_account_signing_key(
+    authority: str,
+    expected_chain_discriminant: int,
+    *sources: tuple[str, Optional[BytesLike]],
+) -> bytes:
+    account_public_key = _account_ed25519_public_key(
+        authority,
+        expected_chain_discriminant,
+    )
+    for field, value in sources:
+        if value is None:
+            continue
+        supplied = _validate_ed25519_public_key(value, field)
+        if supplied != account_public_key:
+            raise NexusAppError(
+                "approval_account_mismatch",
+                f"{field} does not control the approved/authority account",
+            )
+    return account_public_key
 
 
 def _normalize_algorithm(algorithm: Any) -> str:
@@ -698,10 +808,35 @@ class DefaultNexusTransactionCodec:
     def build_transfer_payload(self, payload_input: Mapping[str, Any]) -> Mapping[str, Any]:
         from .tx import TransactionConfig, TransactionDraft
 
+        chain_discriminant = normalize_i105_discriminant(
+            payload_input["account_chain_discriminant"],
+            "payload_input.account_chain_discriminant",
+        )
+        authority = _exact_account_id_for_chain(
+            payload_input["authority"],
+            chain_discriminant,
+            "transfer authority",
+        )
+        destination = _exact_account_id_for_chain(
+            payload_input.get(
+                "destination_account_id",
+                payload_input.get("destinationAccountId"),
+            ),
+            chain_discriminant,
+            "transfer destination account",
+        )
+        source_asset_id = str(
+            payload_input.get("source_asset_id", payload_input.get("sourceAssetId"))
+        )
+        _exact_account_id_for_chain(
+            _source_asset_owner(source_asset_id),
+            chain_discriminant,
+            "transfer source asset owner",
+        )
         draft = TransactionDraft(
             TransactionConfig(
                 network_id=_require_network_id(payload_input["network_id"]),
-                authority=str(payload_input["authority"]),
+                authority=authority,
                 fee_payment=payload_input["fee_payment"],
                 creation_time_ms=payload_input.get("creation_time_ms"),
                 ttl_ms=payload_input.get("ttl_ms"),
@@ -710,9 +845,9 @@ class DefaultNexusTransactionCodec:
             )
         )
         draft.transfer_asset_quantity(
-            str(payload_input.get("source_asset_id", payload_input.get("sourceAssetId"))),
+            source_asset_id,
             payload_input["quantity"],
-            str(payload_input.get("destination_account_id", payload_input.get("destinationAccountId"))),
+            destination,
         )
         builder = draft.to_builder()
         return {
@@ -868,7 +1003,10 @@ class DefaultNexusConnectTransport:
                     "unsupported_signature_algorithm",
                     f"unsupported Connect approval signature algorithm {approval.algorithm}",
                 ) from exc
-            account_public_key = _account_ed25519_public_key(approval.account_id)
+            account_public_key = _account_ed25519_public_key(
+                approval.account_id,
+                config.account_chain_discriminant,
+            )
             if config.signing_public_key is not None:
                 configured_public_key = _validate_ed25519_public_key(
                     config.signing_public_key,
@@ -876,7 +1014,7 @@ class DefaultNexusConnectTransport:
                 )
                 if configured_public_key != account_public_key:
                     raise NexusAppError(
-                        "connect_approval_account_key_mismatch",
+                        "approval_account_mismatch",
                         "configured signing key does not control the approved account",
                     )
             signing_public_key = account_public_key
@@ -1052,25 +1190,43 @@ class NexusAppClient:
                 "Connect approval session does not match the configured exact NetworkId",
             )
         approved = self.connect_transport.await_approval(session, self.config)
+        if "session" in approved:
+            raise NexusAppError(
+                "approval_session_mismatch",
+                "wallet approval must not replace the caller's Connect session",
+            )
         account = approved.get("account_id")
         if not isinstance(account, str) or not account or account != account.strip():
             raise NexusAppError("approval_missing_account", "wallet approval did not include an account")
-        signing_public_key = approved.get("signing_public_key")
-        supplied_signing_public_key = (
-            _validate_ed25519_public_key(signing_public_key, "signing_public_key")
-            if signing_public_key is not None
-            else (
-                _validate_ed25519_public_key(self.config.signing_public_key, "config.signing_public_key")
-                if self.config.signing_public_key is not None
-                else _account_ed25519_public_key(account)
-            )
+        account = _exact_account_id_for_chain(
+            account,
+            self.config.account_chain_discriminant,
+            "wallet approval account",
         )
-        account_public_key = _account_ed25519_public_key(account)
-        if supplied_signing_public_key != account_public_key:
-            raise NexusAppError(
-                "connect_approval_account_key_mismatch",
-                "wallet approval signing key does not control the approved account",
+        for context, asserted_account in (
+            ("configured authority", self.config.authority),
+            ("Connect session approved account", session.approved_account),
+        ):
+            if asserted_account is None:
+                continue
+            asserted_account = _exact_account_id_for_chain(
+                asserted_account,
+                self.config.account_chain_discriminant,
+                context,
             )
+            if asserted_account != account:
+                raise NexusAppError(
+                    "approval_account_mismatch",
+                    f"{context} does not match the wallet approval account",
+                )
+        signing_public_key = approved.get("signing_public_key")
+        account_public_key = _require_account_signing_key(
+            account,
+            self.config.account_chain_discriminant,
+            ("wallet approval signing_public_key", signing_public_key),
+            ("Connect session signing_public_key", session.signing_public_key),
+            ("config.signing_public_key", self.config.signing_public_key),
+        )
         signing_public_key_bytes = account_public_key
         updated = replace(
             session,
@@ -1084,9 +1240,30 @@ class NexusAppClient:
 
         from .tx import _normalize_quantity
 
+        if self.config.authority is not None:
+            _exact_account_id_for_chain(
+                self.config.authority,
+                self.config.account_chain_discriminant,
+                "configured authority",
+            )
         authority = input.authority or self.config.authority
         if not authority:
             raise NexusAppError("missing_authority", "transfer authority is required")
+        authority = _exact_account_id_for_chain(
+            authority,
+            self.config.account_chain_discriminant,
+            "transfer authority",
+        )
+        destination = _exact_account_id_for_chain(
+            input.destination_account_id,
+            self.config.account_chain_discriminant,
+            "transfer destination account",
+        )
+        _exact_account_id_for_chain(
+            _source_asset_owner(input.source_asset_id),
+            self.config.account_chain_discriminant,
+            "transfer source asset owner",
+        )
         if self.transaction_codec is None or not hasattr(self.transaction_codec, "build_transfer_payload"):
             raise NexusAppError(
                 "transaction_codec_unavailable",
@@ -1098,17 +1275,22 @@ class NexusAppClient:
             raise NexusAppError("invalid_quantity", str(exc)) from exc
         payload_input = {
             "network_id": self.config.network_id,
+            "account_chain_discriminant": self.config.account_chain_discriminant,
             "authority": authority,
             "source_asset_id": input.source_asset_id,
             "quantity": quantity,
-            "destination_account_id": input.destination_account_id,
+            "destination_account_id": destination,
             "fee_payment": input.fee_payment,
             "metadata": input.metadata,
             "creation_time_ms": input.creation_time_ms,
             "ttl_ms": input.ttl_ms,
             "nonce": input.nonce,
         }
-        signing_public_key = _resolve_signing_public_key(authority, self.config.signing_public_key)
+        signing_public_key = _resolve_signing_public_key(
+            authority,
+            self.config.signing_public_key,
+            self.config.account_chain_discriminant,
+        )
         payload_result = self.transaction_codec.build_transfer_payload(payload_input)
         if isinstance(payload_result, Mapping):
             payload_bytes = _bytes(
@@ -1164,6 +1346,39 @@ class NexusAppClient:
 
         if self.connect_transport is None:
             raise NexusAppError("connect_transport_unavailable", "Connect transport is required")
+        _exact_account_id_for_chain(
+            signable.authority,
+            self.config.account_chain_discriminant,
+            "signable authority",
+        )
+        if self.config.authority is not None:
+            _exact_account_id_for_chain(
+                self.config.authority,
+                self.config.account_chain_discriminant,
+                "configured authority",
+            )
+        if session.approved_account is not None:
+            _exact_account_id_for_chain(
+                session.approved_account,
+                self.config.account_chain_discriminant,
+                "Connect session approved account",
+            )
+        for context, asserted_account in (
+            ("configured authority", self.config.authority),
+            ("Connect session approved account", session.approved_account),
+        ):
+            if asserted_account is not None and asserted_account != signable.authority:
+                raise NexusAppError(
+                    "approval_account_mismatch",
+                    f"{context} does not match the signable authority",
+                )
+        _require_account_signing_key(
+            signable.authority,
+            self.config.account_chain_discriminant,
+            ("signable.signing_public_key", signable.signing_public_key),
+            ("Connect session signing_public_key", session.signing_public_key),
+            ("config.signing_public_key", self.config.signing_public_key),
+        )
         _normalize_algorithm(signable.signature_algorithm)
         response = self.connect_transport.request_signature(session, signable, self.config)
         return _normalize_signature(response)
@@ -1191,11 +1406,11 @@ class NexusAppClient:
                 "transaction_codec_unavailable",
                 "transaction codec with finalize_signed_transaction is required",
             )
-        signing_public_key = _resolve_signing_public_key(
+        signing_public_key = _require_account_signing_key(
             signable.authority,
-            signable.signing_public_key
-            if signable.signing_public_key is not None
-            else self.config.signing_public_key,
+            self.config.account_chain_discriminant,
+            ("signable.signing_public_key", signable.signing_public_key),
+            ("config.signing_public_key", self.config.signing_public_key),
         )
         _validate_ed25519_signature_for_payload(
             signing_public_key,
@@ -1270,6 +1485,17 @@ class NexusAppClient:
     ) -> NexusTransferReceipt:
         """One-call transfer wrapper over draft, signature, finalization, submit, and wait."""
 
+        for context, account in (
+            ("Connect session approved account", session.approved_account),
+            ("transfer authority", input.authority),
+            ("configured authority", self.config.authority),
+        ):
+            if account is not None:
+                _exact_account_id_for_chain(
+                    account,
+                    self.config.account_chain_discriminant,
+                    context,
+                )
         authority = input.authority or session.approved_account or self.config.authority
         if not authority:
             raise NexusAppError("missing_authority", "transfer authority is required")

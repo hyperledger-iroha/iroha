@@ -610,11 +610,11 @@ fn network_parse_clamps_zero_periods() {
 #[test]
 fn sumeragi_v2_exact_output_geometry_accepts_network_source_boundary() {
     let mut table = base_table();
-    let network = table
+    table
         .get_mut("network")
         .and_then(Value::as_table_mut)
-        .expect("network table");
-    network.insert("max_total_connections".into(), Value::Integer(97));
+        .expect("network table")
+        .insert("max_total_connections".into(), Value::Integer(2));
     let sumeragi = table
         .entry("sumeragi")
         .or_insert_with(|| Value::Table(Table::new()))
@@ -626,6 +626,23 @@ fn sumeragi_v2_exact_output_geometry_accepts_network_source_boundary() {
         .as_table_mut()
         .expect("sumeragi.queues table");
     queues.insert("commands".into(), Value::Integer(8_192));
+    let provisional = load_root(table.clone());
+    let shared_capacity = actual::sumeragi_v2_exact_output_shared_ownership_capacity(
+        (provisional.sumeragi.queues.commands.get()
+            / defaults::sumeragi::V2_RUNTIME_COMPLETION_RESERVE_DIVISOR)
+            .max(1),
+        provisional.sumeragi.queues.bodies.get(),
+    )
+    .expect("fixture capacity must be representable");
+    let source_boundary = shared_capacity / defaults::sumeragi::V2_EXACT_OUTPUT_CLASS_COUNT;
+    table
+        .get_mut("network")
+        .and_then(Value::as_table_mut)
+        .expect("network table")
+        .insert(
+            "max_total_connections".into(),
+            Value::Integer(i64::try_from(source_boundary).expect("source boundary fits i64")),
+        );
     let actual = load_root(table.clone());
     assert_eq!(actual.sumeragi.queues.commands.get(), 8_192);
     assert_eq!(
@@ -633,20 +650,29 @@ fn sumeragi_v2_exact_output_geometry_accepts_network_source_boundary() {
             .network
             .max_total_connections
             .map(std::num::NonZeroUsize::get),
-        Some(97),
+        Some(source_boundary),
     );
+    let rejected_source_capacity = source_boundary + 1;
     table
         .get_mut("network")
         .and_then(Value::as_table_mut)
         .expect("network table")
-        .insert("max_total_connections".into(), Value::Integer(98));
+        .insert(
+            "max_total_connections".into(),
+            Value::Integer(
+                i64::try_from(rejected_source_capacity).expect("rejected source capacity fits i64"),
+            ),
+        );
     let error = actual::Root::from_toml_source(TomlSource::inline(table))
-        .expect_err("the next reply-source slot exceeds lifecycle capacity");
+        .expect_err("the next reply-source slot exceeds exact-output capacity");
     let report = format!("{error:?}");
+    let rejected_fanout = rejected_source_capacity
+        .checked_mul(defaults::sumeragi::V2_EXACT_OUTPUT_CLASS_COUNT)
+        .expect("fixture fanout fits usize");
     assert!(
-        report.contains(
-            "Sumeragi v2 lifecycle record capacity 66084 exceeds maximum 65536; configured network reply-source capacity is 98"
-        ),
+        report.contains(&format!(
+            "Sumeragi v2 outbound shared ownership capacity {shared_capacity} is below one maximum fanout {rejected_fanout}; configured network reply-source capacity is {rejected_source_capacity}"
+        )),
         "{report}",
     );
 }

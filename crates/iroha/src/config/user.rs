@@ -30,8 +30,9 @@ pub struct Root {
     #[config(env = "CHAIN")]
     pub chain: ChainId,
     /// Exact genesis-lineage identity used for signed protocol requests.
+    #[config(env = "NETWORK_ID")]
     pub network_id: Option<NetworkId>,
-    /// Public file containing the canonical exact genesis-lineage identity.
+    /// Public file containing exactly one LF-terminated canonical genesis-lineage identity.
     pub network_id_file: Option<WithOrigin<PathBuf>>,
     /// Torii API URL.
     #[config(env = "TORII_URL")]
@@ -337,21 +338,30 @@ fn resolve_network_id_source(
         );
         return None;
     }
-    let encoded = encoded
-        .strip_suffix("\r\n")
-        .or_else(|| encoded.strip_suffix('\n'))
-        .unwrap_or(&encoded);
-    if encoded.is_empty() || encoded.bytes().any(|byte| matches!(byte, b'\r' | b'\n')) {
+    let Some(identity_text) = encoded.strip_suffix('\n') else {
         emitter.emit(
             Report::new(ParseError::InvalidNetworkIdentity).attach(format!(
-                "network_id_file `{}` must contain exactly one canonical network identity",
+                "network_id_file `{}` must contain exactly one LF-terminated canonical network identity",
+                path.display()
+            )),
+        );
+        return None;
+    };
+    if identity_text.is_empty()
+        || identity_text
+            .bytes()
+            .any(|byte| matches!(byte, b'\r' | b'\n'))
+    {
+        emitter.emit(
+            Report::new(ParseError::InvalidNetworkIdentity).attach(format!(
+                "network_id_file `{}` must contain exactly one LF-terminated canonical network identity",
                 path.display()
             )),
         );
         return None;
     }
-    match encoded.parse::<NetworkId>() {
-        Ok(network_id) if network_id.to_string() == encoded => Some(network_id),
+    match identity_text.parse::<NetworkId>() {
+        Ok(network_id) if encoded == format!("{network_id}\n") => Some(network_id),
         Ok(_) => {
             emitter.emit(
                 Report::new(ParseError::InvalidNetworkIdentity).attach(format!(
@@ -939,6 +949,37 @@ mod tests {
         );
         assert_eq!(resolved, Some(expected));
         assert!(emitter.into_result().is_ok());
+    }
+    #[test]
+    fn network_id_file_rejects_noncanonical_record_bytes() {
+        let expected = NetworkId::from_genesis_hash(iroha_crypto::HashOf::<
+            crate::data_model::block::BlockHeader,
+        >::from_untyped_unchecked(
+            iroha_crypto::Hash::new(b"client canonical network identity file bytes"),
+        ));
+        let canonical = expected.to_string();
+        for (label, contents) in [
+            ("missing final LF", canonical.clone()),
+            ("CRLF terminator", format!("{canonical}\r\n")),
+            ("leading space", format!(" {canonical}\n")),
+            ("trailing space", format!("{canonical} \n")),
+            ("extra empty record", format!("{canonical}\n\n")),
+            ("multiple records", format!("{canonical}\n{canonical}\n")),
+        ] {
+            let identity_file = tempfile::NamedTempFile::new().expect("identity file");
+            fs::write(identity_file.path(), contents).expect("write malformed identity");
+            let mut emitter = Emitter::new();
+            assert!(
+                resolve_network_id_source(
+                    None,
+                    Some(WithOrigin::inline(identity_file.path().to_path_buf())),
+                    &mut emitter,
+                )
+                .is_none(),
+                "{label} must fail closed"
+            );
+            assert!(emitter.into_result().is_err(), "{label} must emit an error");
+        }
     }
     #[test]
     fn network_id_rejects_ambiguous_inline_and_file_sources() {

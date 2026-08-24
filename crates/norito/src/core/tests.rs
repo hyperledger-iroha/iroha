@@ -479,6 +479,24 @@ fn decode_vec_from_slice_serial_reports_prefix_used() {
     assert_eq!(used, bytes.len());
     reset_decode_state();
 }
+
+#[test]
+fn decode_vec_u8_from_slice_reports_prefix_used() {
+    reset_decode_state();
+    let value = vec![3_u8, 5, 8, 13];
+    let bytes = encode_adaptive(&value);
+    let mut with_tail = bytes.clone();
+    with_tail.extend_from_slice(&[0xAA, 0xBB]);
+    let (decoded, used) =
+        decode_field_prefix::<Vec<u8>>(&with_tail).expect("decode raw byte sequence prefix");
+    assert_eq!(decoded, value);
+    assert_eq!(used, bytes.len());
+    assert!(matches!(
+        decode_field_canonical::<Vec<u8>>(&with_tail),
+        Err(Error::LengthMismatch)
+    ));
+    reset_decode_state();
+}
 #[cfg(feature = "parallel-decode")]
 #[test]
 fn sequence_parallel_decode_threshold_requires_large_plans() {
@@ -2583,7 +2601,7 @@ fn vec_u8_decode_rejects_len_prefixed_elements() {
         payload.extend_from_slice(&1u64.to_le_bytes());
         payload.push(*byte);
     }
-    let result = <Vec<u8> as DecodeFromSlice>::decode_from_slice(&payload);
+    let result = decode_field_canonical::<Vec<u8>>(&payload);
     assert!(matches!(result, Err(Error::LengthMismatch)));
     drop(guard);
     reset_decode_state();

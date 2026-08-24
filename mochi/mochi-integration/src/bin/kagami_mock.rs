@@ -1,7 +1,7 @@
 //! Minimal stand-in for the `kagami` binary used by the MOCHI supervisor integration tests.
 use color_eyre::{Result, eyre::eyre};
 use iroha_crypto::{Algorithm, ExposedPrivateKey, KeyPair, PublicKey};
-use iroha_data_model::parameter::system::SumeragiConsensusMode;
+use iroha_data_model::{NetworkId, parameter::system::SumeragiConsensusMode};
 use mochi_core::sign_kagami_stub_genesis_from_config;
 use mochi_integration::kagami_default_manifest_json;
 use std::{env, fs, path::PathBuf, process};
@@ -81,7 +81,10 @@ fn sign(args: Vec<String>) -> Result<()> {
     if parsed.bound_manifest_out != parsed.manifest_path {
         fs::copy(&parsed.manifest_path, &parsed.bound_manifest_out)?;
     }
-    fs::write(&parsed.expected_hash_out, format!("{}\n", block.hash()))?;
+    fs::write(
+        &parsed.expected_hash_out,
+        format!("{}\n", NetworkId::from_genesis_hash(block.hash())),
+    )?;
     Ok(())
 }
 fn parse_sign_args(args: &[String]) -> Result<SignArgs> {
@@ -465,14 +468,15 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
         );
         assert_eq!(
             fs::read_to_string(expected_hash).expect("read exact hash"),
-            format!("{}\n", block.hash())
+            format!("{}\n", NetworkId::from_genesis_hash(block.hash()))
         );
-        let hash_body = block.hash().to_string().to_ascii_uppercase();
-        let exact_hash = norito::literal::format("hash", hash_body.as_str());
+        let identity_path = expected_hash.to_string_lossy().replace('\\', "\\\\");
         let exact_config =
-            peer_config("mock-sign-chain", key_pair.public_key(), &manifest, &signed)
-                .replace(GENESIS_EXPECTED_HASH_PLACEHOLDER, &exact_hash);
-        fs::write(&config, exact_config).expect("bind exact genesis hash in config");
+            peer_config("mock-sign-chain", key_pair.public_key(), &manifest, &signed).replace(
+                &format!("expected_hash = \"{GENESIS_EXPECTED_HASH_PLACEHOLDER}\""),
+                &format!("expected_hash_file = \"{identity_path}\""),
+            );
+        fs::write(&config, exact_config).expect("bind genesis identity file in config");
         let (expected_da_policies, expected_confidential_policy) =
             kagami_stub_genesis_policies_from_config(&config)
                 .expect("derive exact signing policies from config");

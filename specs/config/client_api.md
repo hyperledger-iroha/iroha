@@ -13,10 +13,12 @@ client rejects missing or duplicate signer sources before constructing the
 key pair.
 
 Clients likewise configure exactly one exact-network source: inline
-`network_id` or a canonical one-line `network_id_file`. Production templates
+`network_id` or a canonical `network_id_file`. Production templates
 point `network_id_file` at the same `/run/iroha/genesis.expected_hash` artifact
 used by validator `genesis.expected_hash_file`; missing, duplicate, multiline,
-or non-canonical values fail before a request can be signed.
+or non-canonical values fail before a request can be signed. The shared file's
+exact content is one checked `hash:<64 uppercase hex>#<CRC16>` NetworkId literal
+followed by one LF byte; CRLF and unterminated aliases are rejected.
 
 ### `torii.transport.norito_rpc`
 

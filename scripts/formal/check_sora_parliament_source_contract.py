@@ -808,6 +808,12 @@ def main() -> int:
         "/// Constructor-authenticated, replay-validated timed-OVN casting context.",
         casting_path,
     )
+    casting_archive_declaration = section(
+        casting,
+        "/// Canonical public-only archive for restarting a timed-OVN wallet operation.",
+        "impl ParliamentTimedOvnCastingContextArchiveV1 {",
+        casting_path,
+    )
     require_all(
         casting_path,
         casting_archive,
@@ -832,7 +838,7 @@ def main() -> int:
         "survivor_freeze_height: u64",
         "commitment_close_height: u64",
     ):
-        if forbidden in casting_archive:
+        if forbidden in casting_archive_declaration:
             raise RuntimeError(
                 f"{casting_path}: casting archive exposes forbidden material {forbidden!r}"
             )

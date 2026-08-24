@@ -859,8 +859,9 @@ fn private_service_accepts_plan_witness_larger_than_metadata_header() {
         .expect("large fixture source-tree digest");
     let semantic_release_bytes = semantic_release_bytes.expect("fixture semantic release");
     let verification_lock_bytes = verification_lock_bytes.expect("fixture verification lock");
-    let verification_lock: MusubiVerificationLockV1 =
-        norito::decode_canonical(&verification_lock_bytes).expect("fixture verification lock");
+    let verification_lock =
+        MusubiVerificationLockV1::decode_canonical_bundle_file(&verification_lock_bytes)
+            .expect("fixture verification lock");
     let descriptor = MusubiArtifactDescriptorV1::new(
         fixture.request.binding.semantic_release_manifest_digest,
         source_tree_digest,
@@ -1927,11 +1928,22 @@ fn durable_readback_journal_separates_replacement_and_renewal_targets() {
         .expect("private journal root permissions");
     let binding =
         MusubiPublicationServiceJournalBindingV1::from_configuration(&fixture.service.config);
+    // The journal must retain all three fixed-shape fixture responses while still reserving one
+    // full protocol-sized terminal response before the next backend call.
+    let retained_response_bytes = norito::encode_canonical(&fixture.readback_response)
+        .expect("canonical readback response")
+        .len()
+        .checked_mul(3)
+        .and_then(|bytes| u64::try_from(bytes).ok())
+        .expect("three retained readback responses fit u64");
+    let response_budget = MAX_CONTROL_RESPONSE_BYTES_U64
+        .checked_add(retained_response_bytes)
+        .expect("readback response budget fits u64");
     let limits = DurableMusubiPublicationServiceJournalLimitsV1::new(
         16,
         64,
-        MAX_CONTROL_RESPONSE_BYTES_U64,
-        MAX_CONTROL_RESPONSE_BYTES_U64 + 1024 * 1024,
+        response_budget,
+        response_budget + 1024 * 1024,
     )
     .expect("durable journal limits");
     fixture.service.journal = Box::new(

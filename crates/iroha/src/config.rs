@@ -533,6 +533,10 @@ mod tests {
         let key = checked_random_keypair();
         let env = MockEnv::new()
             .set("CHAIN", "wonder")
+            .set(
+                "NETWORK_ID",
+                "hash:32C903E5B3497E34C2B844EBFE8A39C19E6CF8F95D44C1FFB8BA9DCB42F91149#A2F0",
+            )
             .set("TORII_URL", "http://localhost:8080")
             .set("ACCOUNT_PROFILE", iroha_torii_shared::NETWORK_PROFILE_TAIRA)
             .set(
@@ -548,6 +552,10 @@ mod tests {
         let _config =
             Config::load_with_env(LoadPath::Default("non_existing_path"), env.clone()).unwrap();
         assert_eq!(env.unvisited(), HashSet::new());
-        assert_eq!(env.unknown(), HashSet::new());
+        assert_eq!(
+            env.unknown(),
+            HashSet::from(["ACCOUNT_PRIVATE_KEY_FILE".to_owned()]),
+            "the mutually exclusive file-backed private-key source must still be inspected"
+        );
     }
 }

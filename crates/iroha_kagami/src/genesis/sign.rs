@@ -57,11 +57,11 @@ pub struct Args {
     /// May point to `GENESIS_FILE` to replace the input only after binding succeeds.
     #[clap(long, value_name = "PATH")]
     bound_manifest_out: Option<PathBuf>,
-    /// Write the exact signed consensus-header hash as one lowercase line.
+    /// Write the canonical checked NetworkId derived from the exact signed consensus-header hash
+    /// as one line.
     ///
-    /// This also atomically publishes a sibling `*.identity.toml` containing the same exact value
-    /// as both client `network_id` and `genesis.expected_hash`. Deployment tooling must consume
-    /// that paired identity artifact rather than assembling the two trust domains independently.
+    /// Validators and clients must select this same file through `genesis.expected_hash_file` and
+    /// `network_id_file`, respectively.
     #[clap(long, value_name = "PATH")]
     expected_hash_out: Option<PathBuf>,
     /// Use this topology instead of specified in genesis.json.
@@ -117,49 +117,71 @@ const DEFAULT_NPOS_BOOTSTRAP_DOMAIN: &str = "nexus.universal";
 const DEFAULT_NPOS_BOOTSTRAP_STAKE_ASSET_NAME: &str = "xor";
 const DEFAULT_NPOS_BOOTSTRAP_STAKE_AMOUNT: u64 = 10_000;
 const GENESIS_EXPECTED_HASH_PLACEHOLDER: &str = "REPLACE_WITH_GENESIS_EXPECTED_HASH";
-const MAX_DEPLOYMENT_IDENTITY_BYTES: u64 = 4 * 1024;
+const MAX_GENESIS_NETWORK_IDENTITY_BYTES: u64 = 4 * 1024;
 struct StagedGenesisExecution {
     nexus_amx_context_hash: Hash,
     execution_policy_hash: Hash,
     executed_block: SignedBlock,
 }
-fn deployment_identity_path(expected_hash_path: &Path) -> PathBuf {
-    expected_hash_path.with_extension("identity.toml")
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum GenesisNetworkIdentityTarget {
+    Missing,
+    Exact,
 }
-fn publish_deployment_identity(path: &Path, expected_hash: &str) -> Outcome {
-    let body = format!(
-        "network_id = \"{expected_hash}\"\n\n[genesis]\nexpected_hash = \"{expected_hash}\"\n"
-    );
-    if body.len() as u64 > MAX_DEPLOYMENT_IDENTITY_BYTES {
+fn genesis_network_identity_body(network_id: NetworkId) -> String {
+    format!("{network_id}\n")
+}
+fn preflight_genesis_network_identity(
+    path: &Path,
+    network_id: NetworkId,
+) -> Result<GenesisNetworkIdentityTarget, color_eyre::eyre::Error> {
+    let body = genesis_network_identity_body(network_id);
+    if body.len() as u64 > MAX_GENESIS_NETWORK_IDENTITY_BYTES {
         return Err(eyre!(
-            "generated deployment identity exceeds the {MAX_DEPLOYMENT_IDENTITY_BYTES}-byte limit"
+            "generated genesis network identity exceeds the {MAX_GENESIS_NETWORK_IDENTITY_BYTES}-byte limit"
         ));
     }
-    if let Ok(metadata) = fs::symlink_metadata(path) {
-        if !metadata.is_file() || metadata.file_type().is_symlink() {
-            return Err(eyre!(
-                "deployment identity output must be a regular file: {}",
-                path.display()
-            ));
+    let metadata = match fs::symlink_metadata(path) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            return Ok(GenesisNetworkIdentityTarget::Missing);
         }
-        if metadata.len() > MAX_DEPLOYMENT_IDENTITY_BYTES {
-            return Err(eyre!(
-                "existing deployment identity exceeds the {MAX_DEPLOYMENT_IDENTITY_BYTES}-byte limit: {}",
-                path.display()
-            ));
+        Err(error) => {
+            return Err(error).wrap_err_with(|| {
+                format!("inspect genesis network identity output {}", path.display())
+            });
         }
-        let mut existing = String::new();
-        File::open(path)?
-            .take(MAX_DEPLOYMENT_IDENTITY_BYTES + 1)
-            .read_to_string(&mut existing)
-            .wrap_err_with(|| format!("read existing deployment identity {}", path.display()))?;
-        if existing == body {
-            return Ok(());
-        }
+    };
+    if !metadata.is_file() || metadata.file_type().is_symlink() {
         return Err(eyre!(
-            "refusing to replace a different deployment identity: {}",
+            "genesis network identity output must be a regular file: {}",
             path.display()
         ));
+    }
+    if metadata.len() > MAX_GENESIS_NETWORK_IDENTITY_BYTES {
+        return Err(eyre!(
+            "existing genesis network identity exceeds the {MAX_GENESIS_NETWORK_IDENTITY_BYTES}-byte limit: {}",
+            path.display()
+        ));
+    }
+    let mut existing = String::new();
+    File::open(path)?
+        .take(MAX_GENESIS_NETWORK_IDENTITY_BYTES + 1)
+        .read_to_string(&mut existing)
+        .wrap_err_with(|| format!("read existing genesis network identity {}", path.display()))?;
+    if existing != body {
+        return Err(eyre!(
+            "refusing to replace a different genesis network identity: {}",
+            path.display()
+        ));
+    }
+    Ok(GenesisNetworkIdentityTarget::Exact)
+}
+fn publish_genesis_network_identity(path: &Path, network_id: NetworkId) -> Outcome {
+    let body = genesis_network_identity_body(network_id);
+    if preflight_genesis_network_identity(path, network_id)? == GenesisNetworkIdentityTarget::Exact
+    {
+        return Ok(());
     }
     let parent = path
         .parent()
@@ -170,43 +192,45 @@ fn publish_deployment_identity(path: &Path, expected_hash: &str) -> Outcome {
         .tempfile_in(parent)
         .wrap_err_with(|| {
             format!(
-                "create temporary deployment identity beside {}",
+                "create temporary genesis network identity beside {}",
                 path.display()
             )
         })?;
     temporary
         .write_all(body.as_bytes())
-        .wrap_err("write temporary deployment identity")?;
+        .wrap_err("write temporary genesis network identity")?;
     temporary
         .flush()
-        .wrap_err("flush temporary deployment identity")?;
+        .wrap_err("flush temporary genesis network identity")?;
     temporary
         .as_file()
         .sync_all()
-        .wrap_err("sync temporary deployment identity")?;
+        .wrap_err("sync temporary genesis network identity")?;
     match temporary.persist_noclobber(path) {
         Ok(_) => {}
         Err(error) if error.error.kind() == std::io::ErrorKind::AlreadyExists => {
             let metadata = fs::symlink_metadata(path).wrap_err_with(|| {
-                format!("inspect raced deployment identity {}", path.display())
+                format!("inspect raced genesis network identity {}", path.display())
             })?;
             if !metadata.is_file()
                 || metadata.file_type().is_symlink()
-                || metadata.len() > MAX_DEPLOYMENT_IDENTITY_BYTES
+                || metadata.len() > MAX_GENESIS_NETWORK_IDENTITY_BYTES
             {
                 return Err(eyre!(
-                    "raced deployment identity is not the expected regular bounded file: {}",
+                    "raced genesis network identity is not the expected regular bounded file: {}",
                     path.display()
                 ));
             }
             let mut existing = String::new();
             File::open(path)?
-                .take(MAX_DEPLOYMENT_IDENTITY_BYTES + 1)
+                .take(MAX_GENESIS_NETWORK_IDENTITY_BYTES + 1)
                 .read_to_string(&mut existing)
-                .wrap_err_with(|| format!("read raced deployment identity {}", path.display()))?;
+                .wrap_err_with(|| {
+                    format!("read raced genesis network identity {}", path.display())
+                })?;
             if existing != body {
                 return Err(eyre!(
-                    "refusing raced deployment identity with different contents: {}",
+                    "refusing raced genesis network identity with different contents: {}",
                     path.display()
                 ));
             }
@@ -214,7 +238,7 @@ fn publish_deployment_identity(path: &Path, expected_hash: &str) -> Outcome {
         Err(error) => {
             return Err(error.error).wrap_err_with(|| {
                 format!(
-                    "publish deployment identity atomically to {}",
+                    "publish genesis network identity atomically to {}",
                     path.display()
                 )
             });
@@ -223,7 +247,58 @@ fn publish_deployment_identity(path: &Path, expected_hash: &str) -> Outcome {
     #[cfg(unix)]
     File::open(parent)
         .and_then(|directory| directory.sync_all())
-        .wrap_err_with(|| format!("sync deployment identity directory {}", parent.display()))?;
+        .wrap_err_with(|| {
+            format!(
+                "sync genesis network identity directory {}",
+                parent.display()
+            )
+        })?;
+    Ok(())
+}
+fn stage_genesis_output(
+    path: &Path,
+    bytes: &[u8],
+    label: &str,
+) -> Result<tempfile::NamedTempFile, color_eyre::eyre::Error> {
+    let parent = path
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+        .unwrap_or_else(|| Path::new("."));
+    let mut temporary = tempfile::Builder::new()
+        .prefix(".genesis-output-")
+        .tempfile_in(parent)
+        .wrap_err_with(|| format!("stage {label} beside {}", path.display()))?;
+    temporary
+        .write_all(bytes)
+        .wrap_err_with(|| format!("write staged {label} for {}", path.display()))?;
+    temporary
+        .flush()
+        .wrap_err_with(|| format!("flush staged {label} for {}", path.display()))?;
+    temporary
+        .as_file()
+        .sync_all()
+        .wrap_err_with(|| format!("sync staged {label} for {}", path.display()))?;
+    Ok(temporary)
+}
+fn publish_staged_genesis_output(
+    temporary: tempfile::NamedTempFile,
+    path: &Path,
+    label: &str,
+) -> Outcome {
+    temporary
+        .persist(path)
+        .map_err(|error| error.error)
+        .wrap_err_with(|| format!("publish staged {label} to {}", path.display()))?;
+    #[cfg(unix)]
+    {
+        let parent = path
+            .parent()
+            .filter(|parent| !parent.as_os_str().is_empty())
+            .unwrap_or_else(|| Path::new("."));
+        File::open(parent)
+            .and_then(|directory| directory.sync_all())
+            .wrap_err_with(|| format!("sync {label} directory {}", parent.display()))?;
+    }
     Ok(())
 }
 struct BootstrapRegistrations {
@@ -1041,12 +1116,6 @@ impl<T: Write> RunArgs<T> for Args {
             ));
         }
         if let Some(expected_hash) = self.expected_hash_out.as_deref() {
-            let deployment_identity = deployment_identity_path(expected_hash);
-            if deployment_identity == expected_hash {
-                return Err(eyre!(
-                    "genesis expected-hash output must not use the reserved `.identity.toml` deployment-identity path"
-                ));
-            }
             for (label, path) in [
                 ("signed genesis output", self.out_file.as_deref()),
                 ("bound manifest output", self.bound_manifest_out.as_deref()),
@@ -1055,11 +1124,6 @@ impl<T: Write> RunArgs<T> for Args {
                 if path == Some(expected_hash) {
                     return Err(eyre!(
                         "genesis expected-hash output and {label} must use different paths"
-                    ));
-                }
-                if path == Some(deployment_identity.as_path()) {
-                    return Err(eyre!(
-                        "paired deployment-identity output and {label} must use different paths"
                     ));
                 }
             }
@@ -1201,6 +1265,7 @@ impl<T: Write> RunArgs<T> for Args {
             .transpose()?;
         drop(bound_manifest);
         let genesis_expected_hash = genesis_block.0.hash();
+        let network_id = NetworkId::from_genesis_hash(genesis_expected_hash);
         let framed = genesis_block
             .0
             .encode_wire()
@@ -1213,27 +1278,50 @@ impl<T: Write> RunArgs<T> for Args {
                 SIGNED_GENESIS_MAX_BYTES_V1
             ));
         }
-        eprintln!("Genesis public key: {}", genesis_key_pair.public_key());
-        eprintln!("Genesis expected hash: {genesis_expected_hash}");
-        let mut writer: Box<dyn Write> = match self.out_file {
-            None => Box::new(writer),
-            Some(path) => Box::new(BufWriter::new(File::create(path)?)),
-        };
-        writer.write_all(&framed)?;
-        writer.flush()?;
-        if let (Some(path), Some(json)) = (
+        if let Some(path) = self.expected_hash_out.as_deref() {
+            preflight_genesis_network_identity(path, network_id)?;
+        }
+        let staged_signed_output = self
+            .out_file
+            .as_deref()
+            .map(|path| stage_genesis_output(path, &framed, "signed genesis output"))
+            .transpose()?;
+        let staged_bound_manifest = match (
             self.bound_manifest_out.as_deref(),
             bound_manifest_json.as_deref(),
         ) {
-            fs::write(path, json).wrap_err_with(|| {
-                format!("write config-bound genesis manifest to {}", path.display())
-            })?;
-        }
+            (Some(path), Some(json)) => Some(stage_genesis_output(
+                path,
+                json,
+                "config-bound genesis manifest",
+            )?),
+            (None, None) => None,
+            _ => unreachable!("bound manifest bytes exist exactly when an output path was set"),
+        };
         if let Some(path) = self.expected_hash_out.as_deref() {
-            fs::write(path, format!("{genesis_expected_hash}\n"))
-                .wrap_err_with(|| format!("write genesis expected hash to {}", path.display()))?;
-            let identity_path = deployment_identity_path(path);
-            publish_deployment_identity(&identity_path, &genesis_expected_hash.to_string())?;
+            // Publish the shared trust root before any requested signed or manifest output. The
+            // explicit preflight above rejects a stale identity before staging, while this second
+            // checked publication closes the race window before the remaining outputs commit.
+            publish_genesis_network_identity(path, network_id)?;
+        }
+        eprintln!("Genesis public key: {}", genesis_key_pair.public_key());
+        eprintln!("Genesis network identity: {network_id}");
+        match (self.out_file.as_deref(), staged_signed_output) {
+            (Some(path), Some(temporary)) => {
+                publish_staged_genesis_output(temporary, path, "signed genesis output")?;
+            }
+            (None, None) => {
+                writer.write_all(&framed)?;
+                writer.flush()?;
+            }
+            _ => unreachable!("signed output staging follows the requested output path"),
+        }
+        match (self.bound_manifest_out.as_deref(), staged_bound_manifest) {
+            (Some(path), Some(temporary)) => {
+                publish_staged_genesis_output(temporary, path, "config-bound genesis manifest")?
+            }
+            (None, None) => {}
+            _ => unreachable!("bound manifest staging follows the requested output path"),
         }
         tui::success("Genesis block signed");
         Ok(())
@@ -2534,10 +2622,75 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
         );
     }
     #[test]
+    fn identity_drift_leaves_every_requested_output_unchanged() {
+        let temp = tempfile::tempdir().expect("identity drift output temp dir");
+        let signed_path = temp.path().join("genesis.signed.nrt");
+        let bound_manifest_path = temp.path().join("genesis.bound.json");
+        let identity_path = temp.path().join("genesis.expected_hash");
+        let signed_sentinel = b"existing-signed-genesis";
+        let manifest_sentinel = b"existing-bound-manifest";
+        let foreign_network_id =
+            NetworkId::from_genesis_hash(iroha_crypto::HashOf::from_untyped_unchecked(Hash::new(
+                b"foreign pre-existing genesis identity",
+            )));
+        let identity_sentinel = format!("{foreign_network_id}\n");
+        fs::write(&signed_path, signed_sentinel).expect("write signed output sentinel");
+        fs::write(&bound_manifest_path, manifest_sentinel).expect("write manifest output sentinel");
+        fs::write(&identity_path, &identity_sentinel).expect("write identity sentinel");
+        let args = Args {
+            genesis_file: minimal_genesis_file(),
+            out_file: Some(signed_path.clone()),
+            bound_manifest_out: Some(bound_manifest_path.clone()),
+            expected_hash_out: Some(identity_path.clone()),
+            topology: None,
+            peer_pops: Vec::new(),
+            private_key: Some(test_private_key_hex()),
+            private_key_file: None,
+            expected_public_key: None,
+            seed: None,
+            creation_time_ms: None,
+            algorithm: Algorithm::Ed25519,
+            config: None,
+            consensus_mode: None,
+        };
+        let error = args
+            .run(&mut BufWriter::new(Vec::new()))
+            .expect_err("a different existing identity must stop publication");
+        assert!(
+            error
+                .to_string()
+                .contains("refusing to replace a different genesis network identity"),
+            "unexpected identity drift error: {error:#}"
+        );
+        assert_eq!(
+            fs::read(&signed_path).expect("read signed output sentinel"),
+            signed_sentinel,
+        );
+        assert_eq!(
+            fs::read(&bound_manifest_path).expect("read manifest output sentinel"),
+            manifest_sentinel,
+        );
+        assert_eq!(
+            fs::read_to_string(&identity_path).expect("read identity sentinel"),
+            identity_sentinel,
+        );
+        assert!(
+            fs::read_dir(temp.path())
+                .expect("list identity drift output directory")
+                .all(|entry| {
+                    !entry
+                        .expect("identity drift directory entry")
+                        .file_name()
+                        .to_string_lossy()
+                        .starts_with(".genesis-output-")
+                }),
+            "identity preflight must reject before output staging"
+        );
+    }
+    #[test]
     fn expected_hash_output_matches_the_signed_consensus_header() {
         let temp = tempfile::tempdir().expect("expected hash output temp dir");
         let expected_hash_path = temp.path().join("genesis.expected_hash");
-        let identity_path = deployment_identity_path(&expected_hash_path);
         let args = Args {
             genesis_file: minimal_genesis_file(),
             out_file: None,
@@ -2563,42 +2716,40 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
                 .expect("flush signed genesis output buffer"),
         )
         .expect("decode signed genesis output");
+        let network_id = NetworkId::from_genesis_hash(block.hash());
         assert_eq!(
             fs::read_to_string(expected_hash_path).expect("read expected hash output"),
-            format!("{}\n", block.hash()),
-        );
-        assert_eq!(
-            fs::read_to_string(identity_path).expect("read paired deployment identity"),
-            format!(
-                "network_id = \"{}\"\n\n[genesis]\nexpected_hash = \"{}\"\n",
-                block.hash(),
-                block.hash()
-            ),
+            format!("{network_id}\n"),
         );
     }
     #[test]
-    fn deployment_identity_publication_is_idempotent_and_refuses_drift() {
-        let temp = tempfile::tempdir().expect("deployment identity temp dir");
-        let identity_path = temp.path().join("genesis.identity.toml");
-        let expected_hash = Hash::new(b"deployment identity").to_string();
-        let different_hash = Hash::new(b"different deployment identity").to_string();
-        publish_deployment_identity(&identity_path, &expected_hash)
-            .expect("publish deployment identity");
-        let published = fs::read(&identity_path).expect("read deployment identity");
-        publish_deployment_identity(&identity_path, &expected_hash)
-            .expect("same deployment identity must be idempotent");
-        let _error = publish_deployment_identity(&identity_path, &different_hash)
-            .expect_err("different deployment identity must not replace the trust root");
+    fn network_identity_publication_is_idempotent_and_refuses_drift() {
+        let temp = tempfile::tempdir().expect("network identity temp dir");
+        let identity_path = temp.path().join("genesis.expected_hash");
+        let network_id = NetworkId::from_genesis_hash(
+            iroha_crypto::HashOf::from_untyped_unchecked(Hash::new(b"genesis network identity")),
+        );
+        let different_network_id =
+            NetworkId::from_genesis_hash(iroha_crypto::HashOf::from_untyped_unchecked(Hash::new(
+                b"different genesis network identity",
+            )));
+        publish_genesis_network_identity(&identity_path, network_id)
+            .expect("publish network identity");
+        let published = fs::read(&identity_path).expect("read network identity");
+        publish_genesis_network_identity(&identity_path, network_id)
+            .expect("same network identity must be idempotent");
+        let _error = publish_genesis_network_identity(&identity_path, different_network_id)
+            .expect_err("different network identity must not replace the trust root");
         assert_eq!(
-            fs::read(&identity_path).expect("reread deployment identity"),
+            fs::read(&identity_path).expect("reread network identity"),
             published,
         );
         assert!(
             fs::read_dir(temp.path())
-                .expect("list deployment identity directory")
+                .expect("list network identity directory")
                 .all(|entry| {
                     !entry
-                        .expect("deployment identity directory entry")
+                        .expect("network identity directory entry")
                         .file_name()
                         .to_string_lossy()
                         .starts_with(".genesis-identity-")

@@ -52,6 +52,7 @@ const NEXUS_CONNECT_FIXTURE_TTL_MS: u64 = 30_000;
 const NEXUS_CONNECT_FIXTURE_NONCE: u32 = 7;
 const NEXUS_CONNECT_FIXTURE_AUTHORITY_SEED: [u8; 32] = [0x51; 32];
 const NEXUS_CONNECT_FIXTURE_DESTINATION_SEED: [u8; 32] = [0x52; 32];
+const NEXUS_CONNECT_FIXTURE_ALTERNATE_SIGNER_SEED: [u8; 32] = [0x53; 32];
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 /// Requested operation for the Rust-owned Nexus Connect fixture.
 pub enum NexusConnectFixtureMode {
@@ -219,6 +220,8 @@ fn build_nexus_connect_fixture() -> Result<Vec<u8>, Box<dyn Error>> {
     let (authority_key_pair, authority) =
         nexus_connect_fixture_account(NEXUS_CONNECT_FIXTURE_AUTHORITY_SEED)?;
     let (_, destination) = nexus_connect_fixture_account(NEXUS_CONNECT_FIXTURE_DESTINATION_SEED)?;
+    let (alternate_signer, _) =
+        nexus_connect_fixture_account(NEXUS_CONNECT_FIXTURE_ALTERNATE_SIGNER_SEED)?;
     let asset_definition = AssetDefinitionId::from_uuid_bytes([
         0x22, 0x22, 0x22, 0x22, 0x22, 0x22, 0x42, 0x22, 0x82, 0x22, 0x22, 0x22, 0x22, 0x22, 0x22,
         0x22,
@@ -264,13 +267,16 @@ fn build_nexus_connect_fixture() -> Result<Vec<u8>, Box<dyn Error>> {
         NexusFinalizeOptions::default(),
     )?;
     let (_, public_key_bytes) = authority_key_pair.public_key().to_bytes();
+    let authority_public_key_hex = hex::encode(public_key_bytes);
+    let (_, alternate_public_key_bytes) = alternate_signer.public_key().to_bytes();
+    let alternate_public_key_hex = hex::encode(alternate_public_key_bytes);
     let authority_text = authority.to_string();
     let destination_text = destination.to_string();
     let approval_frame = nexus_connect_json_object([
         ("account_id", authority_text.clone().into()),
         (
             "signing_public_key_hex",
-            hex::encode(public_key_bytes).into(),
+            authority_public_key_hex.clone().into(),
         ),
         ("signature_algorithm", "ed25519".into()),
     ]);
@@ -293,6 +299,10 @@ fn build_nexus_connect_fixture() -> Result<Vec<u8>, Box<dyn Error>> {
     let metadata = nexus_connect_json_object([("purpose", "nexus-app-fixture".into())]);
     let transfer_input = nexus_connect_json_object([
         ("network_id", NEXUS_CONNECT_FIXTURE_NETWORK_ID.into()),
+        (
+            "account_chain_discriminant",
+            NEXUS_CONNECT_FIXTURE_CHAIN_DISCRIMINANT.into(),
+        ),
         ("source_asset_id", source_asset.to_string().into()),
         ("quantity", quantity.to_string().into()),
         ("destination_account_id", destination_text.clone().into()),
@@ -335,8 +345,40 @@ fn build_nexus_connect_fixture() -> Result<Vec<u8>, Box<dyn Error>> {
         ]),
         nexus_connect_json_object([
             ("name", "authority mismatch".into()),
-            ("transfer_authority", destination_text.into()),
+            ("transfer_authority", destination_text.clone().into()),
             ("expected_code", "approval_account_mismatch".into()),
+        ]),
+        nexus_connect_json_object([
+            ("name", "approval signing key mismatch".into()),
+            (
+                "approval_frame",
+                nexus_connect_json_object([
+                    ("account_id", authority_text.clone().into()),
+                    ("signing_public_key_hex", alternate_public_key_hex.into()),
+                ]),
+            ),
+            ("expected_code", "approval_account_mismatch".into()),
+        ]),
+        nexus_connect_json_object([
+            ("name", "approval session substitution".into()),
+            (
+                "approval_frame",
+                nexus_connect_json_object([
+                    ("account_id", authority_text.clone().into()),
+                    ("signing_public_key_hex", authority_public_key_hex.into()),
+                    (
+                        "session",
+                        nexus_connect_json_object([
+                            ("sid", "sid-substituted".into()),
+                            (
+                                "wallet_launch_uri",
+                                "iroha://connect?sid=sid-substituted&role=wallet".into(),
+                            ),
+                        ]),
+                    ),
+                ]),
+            ),
+            ("expected_code", "approval_session_mismatch".into()),
         ]),
         nexus_connect_json_object([
             ("name", "connect transport unavailable".into()),
@@ -1461,6 +1503,7 @@ mod tests {
         assert_eq!(
             transfer.keys().map(String::as_str).collect::<BTreeSet<_>>(),
             BTreeSet::from([
+                "account_chain_discriminant",
                 "authority",
                 "creation_time_ms",
                 "destination_account_id",
@@ -1476,6 +1519,12 @@ mod tests {
         assert_eq!(
             transfer.get("network_id").and_then(JsonValue::as_str),
             Some(NEXUS_CONNECT_FIXTURE_NETWORK_ID)
+        );
+        assert_eq!(
+            transfer
+                .get("account_chain_discriminant")
+                .and_then(JsonValue::as_u64),
+            Some(u64::from(NEXUS_CONNECT_FIXTURE_CHAIN_DISCRIMINANT))
         );
         for retired in ["chain", "chainId", "chain_id"] {
             assert!(!transfer.contains_key(retired));
@@ -1498,8 +1547,40 @@ mod tests {
             root.get("error_cases")
                 .and_then(JsonValue::as_array)
                 .map(Vec::len),
-            Some(11)
+            Some(13)
         );
+        let error_cases = root
+            .get("error_cases")
+            .and_then(JsonValue::as_array)
+            .expect("closed Nexus error cases");
+        let signing_key_mismatch = error_cases
+            .iter()
+            .find(|case| {
+                case.get("name").and_then(JsonValue::as_str)
+                    == Some("approval signing key mismatch")
+            })
+            .expect("approval signing-key mismatch case");
+        let alternate_key = signing_key_mismatch
+            .get("approval_frame")
+            .and_then(JsonValue::as_object)
+            .and_then(|frame| frame.get("signing_public_key_hex"))
+            .and_then(JsonValue::as_str)
+            .expect("alternate valid approval key");
+        assert_eq!(alternate_key.len(), 64);
+        assert_ne!(
+            alternate_key,
+            connect
+                .get("approval_frame")
+                .and_then(JsonValue::as_object)
+                .and_then(|frame| frame.get("signing_public_key_hex"))
+                .and_then(JsonValue::as_str)
+                .expect("authority approval key")
+        );
+        assert!(error_cases.iter().any(|case| {
+            case.get("name").and_then(JsonValue::as_str) == Some("approval session substitution")
+                && case.get("expected_code").and_then(JsonValue::as_str)
+                    == Some("approval_session_mismatch")
+        }));
     }
     #[test]
     fn nexus_connect_fixture_writes_only_to_external_staging_root() {

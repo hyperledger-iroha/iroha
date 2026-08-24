@@ -165,6 +165,22 @@ export function composeUpArgs(composeFile, composeService) {
   return args;
 }
 
+function isCanonicalCheckedNetworkIdRecord(record) {
+  const match = /^hash:([0-9A-F]{63}[13579BDF])#([0-9A-F]{4})\n$/.exec(record);
+  if (!match) {
+    return false;
+  }
+  const [, body, checksum] = match;
+  let crc = 0xffff;
+  for (const byte of Buffer.from(`hash:${body}`, "ascii")) {
+    crc ^= byte << 8;
+    for (let bit = 0; bit < 8; bit += 1) {
+      crc = crc & 0x8000 ? ((crc << 1) ^ 0x1021) & 0xffff : (crc << 1) & 0xffff;
+    }
+  }
+  return checksum === crc.toString(16).toUpperCase().padStart(4, "0");
+}
+
 export async function validateDefaultComposeGenesisArtifacts(env = process.env) {
   for (const name of [
     "IROHA_GENESIS_PUBLIC_KEY_FILE",
@@ -175,7 +191,7 @@ export async function validateDefaultComposeGenesisArtifacts(env = process.env) 
     if (!artifactPath) {
       throw new Error(
         `${name} is required by the default Compose stack; generate a signed genesis, ` +
-          "verifier key, and exact hash with kagami",
+          "verifier key, and checked network identity with kagami",
       );
     }
     if (!existsSync(artifactPath)) {
@@ -201,9 +217,9 @@ export async function validateDefaultComposeGenesisArtifacts(env = process.env) 
     }
     if (
       name === "IROHA_GENESIS_EXPECTED_HASH_FILE" &&
-      !/^[0-9a-f]{63}[13579bdf]\n$/.test(record)
+      !isCanonicalCheckedNetworkIdRecord(record)
     ) {
-      throw new Error(`${name} must contain one canonical lowercase Iroha hash record`);
+      throw new Error(`${name} must contain one canonical checked NetworkId record`);
     }
   }
 }

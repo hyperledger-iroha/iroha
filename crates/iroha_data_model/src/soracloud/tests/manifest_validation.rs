@@ -1209,14 +1209,26 @@ fn inrou_manifest_json_requires_the_exact_v1_shape() {
     ] {
         assert_inrou_distribution_field_is_required(&canonical, field);
     }
-    let mut unknown_distribution = canonical.clone();
-    unknown_distribution
-        .pointer_mut("/guest_images/x86_64/distribution")
-        .and_then(Value::as_object_mut)
-        .expect("x86_64 distribution object")
-        .insert("legacy_target".to_owned(), Value::Null);
-    norito::json::from_value::<SoraInrouManifestV1>(unknown_distribution)
-        .expect_err("first-release distribution fields must reject unknown aliases");
+    for (field, value) in [
+        ("future_distribution", Value::Bool(true)),
+        ("legacy_target", Value::Null),
+    ] {
+        let mut unknown_distribution = canonical.clone();
+        unknown_distribution
+            .pointer_mut("/guest_images/x86_64/distribution")
+            .and_then(Value::as_object_mut)
+            .expect("x86_64 distribution object")
+            .insert(field.to_owned(), value);
+        let error = norito::json::from_value::<SoraInrouManifestV1>(unknown_distribution)
+            .expect_err("first-release distribution fields must reject unknown keys");
+        assert!(
+            matches!(
+                &error,
+                json::Error::UnknownField { field: reported } if reported == field
+            ),
+            "unknown distribution field `{field}` reported the wrong error: {error:?}"
+        );
+    }
 
     let mut published_manifest = sample_inrou_manifest();
     published_manifest
@@ -1234,14 +1246,26 @@ fn inrou_manifest_json_requires_the_exact_v1_shape() {
     ] {
         assert_inrou_published_artifact_field_is_required(&published, field);
     }
-    let mut unknown_artifact = published;
-    unknown_artifact
-        .pointer_mut("/guest_images/x86_64/published_artifact")
-        .and_then(Value::as_object_mut)
-        .expect("published guest-image artifact object")
-        .insert("legacy_manifest_id".to_owned(), Value::Null);
-    norito::json::from_value::<SoraInrouManifestV1>(unknown_artifact)
-        .expect_err("first-release published-artifact fields must reject unknown aliases");
+    for (field, value) in [
+        ("future_artifact", Value::Bool(true)),
+        ("legacy_manifest_id", Value::Null),
+    ] {
+        let mut unknown_artifact = published.clone();
+        unknown_artifact
+            .pointer_mut("/guest_images/x86_64/published_artifact")
+            .and_then(Value::as_object_mut)
+            .expect("published guest-image artifact object")
+            .insert(field.to_owned(), value);
+        let error = norito::json::from_value::<SoraInrouManifestV1>(unknown_artifact)
+            .expect_err("first-release published-artifact fields must reject unknown keys");
+        assert!(
+            matches!(
+                &error,
+                json::Error::UnknownField { field: reported } if reported == field
+            ),
+            "unknown published-artifact field `{field}` reported the wrong error: {error:?}"
+        );
+    }
 }
 #[cfg(feature = "json")]
 #[test]

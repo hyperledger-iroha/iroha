@@ -7098,17 +7098,21 @@ fn decode_lane_lifecycle_status_response(
         .unwrap_or_else(core::convert::identity)
         .into());
     }
-    let is_json = resp
+    let content_type = resp
         .headers()
         .get("content-type")
         .and_then(|value| value.to_str().ok())
-        .is_some_and(|content_type| content_type.starts_with(APPLICATION_JSON));
-    let status = if is_json {
+        .unwrap_or_default();
+    let status = if Client::is_exact_json_content_type(content_type) {
         norito::json::from_slice::<LaneLifecycleStatusV1>(resp.body())
-            .wrap_err("failed to decode Nexus lane lifecycle status JSON")?
-    } else {
+            .map_err(|error| eyre!("failed to decode Nexus lane lifecycle status JSON: {error}"))?
+    } else if Client::is_norito_content_type(content_type) {
         decode_from_bytes::<LaneLifecycleStatusV1>(resp.body())
             .map_err(|err| eyre!("failed to decode Nexus lane lifecycle status Norito: {err}"))?
+    } else {
+        return Err(eyre!(
+            "failed to decode Nexus lane lifecycle status: invalid content-type `{content_type}` (expected {APPLICATION_NORITO} or {APPLICATION_JSON})"
+        ));
     };
     status
         .validate()
@@ -8415,6 +8419,17 @@ mod status_tests {
             .expect_err("the removed lifecycle field must fail as unknown");
         assert!(error.to_string().contains("nexus_enabled"));
     }
+    #[test]
+    fn lane_lifecycle_status_requires_declared_current_media_type() {
+        let status = lifecycle_status();
+        let body = norito::json::to_vec(&status).expect("encode lifecycle status JSON");
+        for content_type in [None, Some("application/json-legacy"), Some("text/json")] {
+            let response = mk_response(StatusCode::OK, body.clone(), content_type);
+            let error = Client::decode_lane_lifecycle_status_for_test(&response)
+                .expect_err("undeclared or noncanonical media type must fail closed");
+            assert!(error.to_string().contains("invalid content-type"));
+        }
+    }
 }
 #[cfg(test)]
 mod evidence_filter_tests {
@@ -8671,7 +8686,9 @@ mod evidence_http_tests {
             sorafs_anonymity_policy: AnonymityPolicy::GuardPq,
             sorafs_rollout_phase: SorafsRolloutPhase::Canary,
         };
-        Client::new(config)
+        let mut client = Client::new(config);
+        client.set_operator_key_pair(checked_random_keypair());
+        client
     }
     pub(super) fn mark_data_model_compatible(client: &Client) {
         *client
@@ -8821,34 +8838,6 @@ mod evidence_http_tests {
             headers.get("accept").map(String::as_str),
             Some(APPLICATION_JSON)
         );
-    }
-    #[test]
-    fn post_account_resolve_builds_request() {
-        let client = client_with_base_url(base_url());
-        let snapshots: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
-        let response = json_response(StatusCode::OK, "{}");
-        let literal = "alice@banka.dataspace";
-        with_mock_http(respond_with(&snapshots, response), || {
-            let resp = client
-                .post_account_resolve(literal)
-                .expect("post account resolve");
-            assert_eq!(resp.status(), StatusCode::OK);
-        });
-        let store = snapshots.lock().expect("lock snapshot store");
-        assert_eq!(store.len(), 1);
-        let snapshot = &store[0];
-        assert_eq!(snapshot.method, HttpMethod::POST);
-        assert_eq!(
-            snapshot.url.as_str(),
-            "http://mock.local/v1/accounts/resolve"
-        );
-        let body = String::from_utf8(snapshot.body.clone()).expect("utf8 body");
-        assert_eq!(body, format!("{{\"literal\":\"{literal}\"}}"));
-        let has_content_type = snapshot.headers.iter().any(|(name, value)| {
-            name.eq_ignore_ascii_case("content-type") && value == APPLICATION_JSON
-        });
-        assert!(has_content_type, "Content-Type header missing");
-        super::tests::assert_canonical_account_signed_json_request(&client, snapshot);
     }
     #[test]
     fn post_multisig_proposals_query_builds_request() {
@@ -10195,6 +10184,7 @@ mod evidence_http_tests {
                     && value == APPLICATION_JSON),
             "evidence count JSON helper must request JSON"
         );
+        super::tests::assert_operator_signature_headers(&snapshot);
     }
     #[test]
     fn get_evidence_list_includes_query_params() {
@@ -10370,12 +10360,15 @@ mod evidence_http_tests {
         );
     }
     fn sample_record() -> EvidenceRecord {
-        let roster = vec![ValidatorPower {
-            validator: iroha_data_model::peer::PeerId::new(
-                checked_random_keypair().public_key().clone(),
-            ),
-            power: 1,
-        }];
+        let mut roster = (0..4)
+            .map(|_| ValidatorPower {
+                validator: iroha_data_model::peer::PeerId::new(
+                    checked_random_keypair().public_key().clone(),
+                ),
+                power: 1,
+            })
+            .collect::<Vec<_>>();
+        roster.sort_by(|left, right| left.validator.cmp(&right.validator));
         let context = HeightContext {
             network_id: test_network_id(),
             protocol_version: PROTOCOL_VERSION,
@@ -14878,19 +14871,6 @@ impl Client {
     pub fn post_asset_alias_resolve(&self, alias: &str) -> Result<Response<Vec<u8>>> {
         let url = join_torii_url(&self.torii_url, "v1/assets/aliases/resolve");
         let body = norito::json::to_vec(&norito::json!({ "alias": alias }))?;
-        self.default_request(HttpMethod::POST, url)
-            .header("Content-Type", APPLICATION_JSON)
-            .body(body)
-            .build()?
-            .send()
-    }
-    /// Convenience: POST `/v1/accounts/resolve` with an account literal.
-    ///
-    /// # Errors
-    /// Returns an error if request construction, NORITO serialization, or the HTTP call fails.
-    pub fn post_account_resolve(&self, literal: &str) -> Result<Response<Vec<u8>>> {
-        let url = join_torii_url(&self.torii_url, "v1/accounts/resolve");
-        let body = norito::json::to_vec(&norito::json!({ "literal": literal }))?;
         self.default_request(HttpMethod::POST, url)
             .header("Content-Type", APPLICATION_JSON)
             .body(body)
@@ -21737,6 +21717,7 @@ mod tests {
     }
     include!("client/musubi_tests.rs");
     include!("client/zk_attachment_auth_tests.rs");
+    #[test]
     fn validation_fee_governance_integer_strings_are_canonical_and_full_width() {
         assert_eq!(
             parse_canonical_validation_fee_u64("18446744073709551615", "test_u64",)
@@ -23045,7 +23026,9 @@ mod tests {
         let client = client_with_base_url(base_url());
         let (_, receipt) = account_onboarding_plan_fixture(&client);
         let encoded = norito::json::to_json(&receipt).expect("encode onboarding receipt JSON");
-        let exact_field = format!("\"network_id\":\"{}\"", receipt.body.network_id);
+        let network_id_json =
+            norito::json::to_json(&receipt.body.network_id).expect("encode exact network identity");
+        let exact_field = format!("\"network_id\":{network_id_json}");
         assert!(encoded.contains(&exact_field));
         let genesis = encoded.replacen(&exact_field, "\"network_id\":\"genesis\"", 1);
         assert!(norito::json::from_str::<AccountOnboardingPlanReceiptV1>(&genesis).is_err());
@@ -23801,7 +23784,14 @@ mod tests {
             total_xor_after_haircut: "0.000004".parse().expect("valid settlement quantity"),
             total_xor_variance: "0.000001".parse().expect("valid settlement quantity"),
             swap_metadata: None,
-            receipts: Vec::new(),
+            receipts: vec![LaneSettlementReceipt {
+                source_id: [0x22; 32],
+                local_amount: "0.00001".parse().expect("valid settlement quantity"),
+                xor_due: "0.000005".parse().expect("valid settlement quantity"),
+                xor_after_haircut: "0.000004".parse().expect("valid settlement quantity"),
+                xor_variance: "0.000001".parse().expect("valid settlement quantity"),
+                timestamp_ms,
+            }],
             nexus_fee_receipts: Vec::new(),
             native_amx_receipts: Vec::new(),
         };
@@ -25371,23 +25361,9 @@ mod tests {
         let tx1 = build_transaction();
         let tx2 = build_transaction();
         assert_ne!(tx1.hash(), tx2.hash());
-        let tx2 = {
-            let mut tx = TransactionBuilder::new(
-                client.network_id,
-                client.account.clone(),
-                iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
-            )
-            .with_executable(tx1.instructions().clone())
-            .with_metadata(tx1.metadata().clone());
-            tx.set_creation_time(tx1.creation_time());
-            if let Some(nonce) = tx1.nonce() {
-                tx.set_nonce(nonce);
-            }
-            if let Some(transaction_ttl) = client.transaction_ttl {
-                tx.set_ttl(transaction_ttl);
-            }
-            client.sign_transaction(tx)
-        };
+        let tx2 = client
+            .try_sign_transaction_payload(tx1.payload().clone())
+            .expect("re-sign exact transaction payload");
         assert_eq!(tx1.hash(), tx2.hash());
     }
     #[test]
@@ -26373,7 +26349,7 @@ mod tests {
         assert_eq!(value, &expected_value);
     }
     include!("client/canonical_request_auth_tests.rs");
-    fn assert_operator_signature_headers(snapshot: &RequestSnapshot) {
+    pub(super) fn assert_operator_signature_headers(snapshot: &RequestSnapshot) {
         for (header, description) in [
             (HEADER_OPERATOR_PUBLIC_KEY, "public key"),
             (HEADER_OPERATOR_TIMESTAMP_MS, "timestamp"),
@@ -26405,6 +26381,7 @@ mod tests {
     }
     fn assert_sumeragi_json_request(snapshot: &RequestSnapshot, path: &str) {
         assert_request(snapshot, &HttpMethod::GET, path);
+        assert_operator_signature_headers(snapshot);
         assert!(
             snapshot
                 .headers
@@ -26742,6 +26719,7 @@ mod tests {
         assert_eq!(snapshot.method, HttpMethod::GET);
         assert_eq!(snapshot.url.path(), "/v1/sumeragi/status");
         assert_single_accept_header(&snapshot, ACCEPT_NORITO_PREFERRED);
+        assert_operator_signature_headers(&snapshot);
         let json_snapshots: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
         let json_body =
             norito::json::to_vec(&status).expect("serialize sumeragi status to JSON payload");
