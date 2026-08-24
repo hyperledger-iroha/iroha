@@ -194,6 +194,27 @@ def exact_symbol_inventory(_path: Path) -> tuple[str, ...]:
     return checker.APPROVED_PRIVACY_C_EXPORTS
 
 
+def test_direct_cli_loads_manifest_helper_under_isolated_python(tmp_path: Path) -> None:
+    """The hermetic JVM lane must load the adjacent helper under ``-I -S``."""
+
+    completed = subprocess.run(
+        (
+            sys.executable,
+            "-I",
+            "-S",
+            "-B",
+            str(REPO_ROOT / "scripts/check_native_sdk_abi22_artifact.py"),
+            "--help",
+        ),
+        cwd=tmp_path,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    assert completed.returncode == 0, completed.stderr
+    assert "{record,verify}" in completed.stdout
+
+
 @pytest.mark.parametrize(
     ("workflow_name", "workflow_specific"),
     NATIVE_ESCROW_WORKFLOW_SPECIFIC_TRIGGER_PATHS.items(),
