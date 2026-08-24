@@ -215,7 +215,7 @@ pub struct PreparedGenesisArtifacts<'a> {
     pub signed_block: &'a std::path::Path,
     /// Canonical one-line genesis verifier key.
     pub public_key: &'a std::path::Path,
-    /// Canonical one-line exact genesis header hash.
+    /// Canonical LF-terminated checked NetworkId for the exact genesis header hash.
     pub expected_hash: &'a std::path::Path,
 }
 /// Runtime genesis artifact paths, normalized relative to the Compose file.
@@ -802,9 +802,11 @@ mod tests {
             "every validator must reject public-key/hash files without a final newline"
         );
         assert_eq!(
-            output.matches("^[0-9a-f]{63}[13579bdf]$$").count(),
+            output
+                .matches("^hash:[0-9A-F]{63}[13579BDF]#[0-9A-F]{4}$$")
+                .count(),
             peer_count,
-            "every validator must enforce canonical exact-hash syntax"
+            "every validator must enforce canonical checked network-identity syntax"
         );
         for secret in [
             "- iroha_genesis_public_key",
@@ -833,7 +835,7 @@ mod tests {
             "every signed genesis bind must be read-only"
         );
         assert!(
-            output.contains("export GENESIS_PUBLIC_KEY GENESIS GENESIS_EXPECTED_HASH"),
+            output.contains("export GENESIS_PUBLIC_KEY GENESIS GENESIS_EXPECTED_HASH_FILE"),
             "validators must pass all approved artifacts into configuration"
         );
         for forbidden in [

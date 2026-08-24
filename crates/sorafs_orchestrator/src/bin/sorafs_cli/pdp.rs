@@ -139,11 +139,11 @@ pub(super) fn run(mut raw_args: Vec<String>) -> Result<(), String> {
 }
 fn usage() -> String {
     "Usage:
-  sorafs_cli pdp enqueue --torii-url=HTTPS_ORIGIN --network-id=GENESIS_HASH --operator-private-key-file=PATH --commitment=PATH --challenge=PATH --expected-epoch-id=N
-  sorafs_cli pdp next --torii-url=HTTPS_ORIGIN --network-id=GENESIS_HASH --operator-private-key-file=PATH --provider-id-hex=HEX32 --challenge-out=PATH
-  sorafs_cli pdp submit --torii-url=HTTPS_ORIGIN --network-id=GENESIS_HASH --operator-private-key-file=PATH --challenge-id-hex=HEX32 --proof=PATH
-  sorafs_cli pdp status --torii-url=HTTPS_ORIGIN --network-id=GENESIS_HASH --operator-private-key-file=PATH --challenge-id-hex=HEX32
-  sorafs_cli pdp export --torii-url=HTTPS_ORIGIN --network-id=GENESIS_HASH --operator-private-key-file=PATH --out=PATH [--after-sequence=N] [--limit=1..1000]"
+  sorafs_cli pdp enqueue --torii-url=HTTPS_ORIGIN --network-id=NETWORK_ID --operator-private-key-file=PATH --commitment=PATH --challenge=PATH --expected-epoch-id=N
+  sorafs_cli pdp next --torii-url=HTTPS_ORIGIN --network-id=NETWORK_ID --operator-private-key-file=PATH --provider-id-hex=HEX32 --challenge-out=PATH
+  sorafs_cli pdp submit --torii-url=HTTPS_ORIGIN --network-id=NETWORK_ID --operator-private-key-file=PATH --challenge-id-hex=HEX32 --proof=PATH
+  sorafs_cli pdp status --torii-url=HTTPS_ORIGIN --network-id=NETWORK_ID --operator-private-key-file=PATH --challenge-id-hex=HEX32
+  sorafs_cli pdp export --torii-url=HTTPS_ORIGIN --network-id=NETWORK_ID --operator-private-key-file=PATH --out=PATH [--after-sequence=N] [--limit=1..1000]"
         .to_owned()
 }
 fn enqueue(raw_args: Vec<String>) -> Result<(), String> {
@@ -428,9 +428,9 @@ fn take_common(
     let network_literal = take_required(options, "network-id", operation)?;
     let network_id = network_literal
         .parse::<NetworkId>()
-        .map_err(|_| "`--network-id` must be a canonical genesis hash".to_owned())?;
+        .map_err(|_| "`--network-id` must be a canonical checked NetworkId".to_owned())?;
     if network_id.to_string() != network_literal {
-        return Err("`--network-id` must use its exact canonical text form".to_owned());
+        return Err("`--network-id` must use its canonical checked NetworkId spelling".to_owned());
     }
     let operator_key_path = PathBuf::from(take_required(
         options,

@@ -24538,7 +24538,7 @@ seiyaku DurableOwner {
         .expect("QueuePlan admission marker key");
         let authority: AccountId = fixture_account("alice");
         let contract = ContractAddress::derive(
-            &"0000000000000000000000000000000000000000000000000000000000000001"
+            &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
                 .parse()
                 .expect("canonical test network id"),
             &authority,

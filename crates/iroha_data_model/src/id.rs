@@ -12,6 +12,8 @@ use iroha_schema::IntoSchema;
 use norito::codec::{Decode, Encode};
 use norito::core::{DecodeFromSlice, Error as NoritoError};
 use std::borrow::Borrow;
+const NETWORK_ID_LITERAL_BYTES: usize =
+    "hash:".len() + iroha_crypto::Hash::LENGTH * 2 + "#".len() + 4;
 /// Maximum byte length of a canonical [`ChainId`].
 ///
 /// Chain identifiers are ASCII, so this is also the maximum character count. The bound keeps every
@@ -24,8 +26,9 @@ mod model {
     ///
     /// Unlike [`ChainId`], this value is not an operator-selected label. Distinct genesis
     /// headers necessarily produce distinct network identities, so signed protocol messages can
-    /// use this type as an exact-lineage domain separator.
-    #[derive(Debug, Display, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, IntoSchema)]
+    /// use this type as an exact-lineage domain separator. Its only accepted text form is the
+    /// canonical checked `hash:<UPPERCASE_HEX>#<CHECKSUM>` literal used by Norito JSON.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, IntoSchema)]
     #[repr(transparent)]
     #[schema(transparent)]
     #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type(unsafe {robust}))]
@@ -63,9 +66,43 @@ mod model {
         }
     }
     impl core::str::FromStr for NetworkId {
-        type Err = iroha_crypto::error::ParseError;
+        type Err = ParseError;
         fn from_str(value: &str) -> Result<Self, Self::Err> {
-            value.parse::<HashOf<BlockHeader>>().map(Self::from)
+            if value.len() != NETWORK_ID_LITERAL_BYTES {
+                return Err(ParseError::new(
+                    "`NetworkId` must be one 74-byte canonical checked hash literal",
+                ));
+            }
+            let body = norito::literal::parse_without_diagnostics("hash", value).ok_or_else(|| {
+                ParseError::new(
+                    "`NetworkId` must be one canonical checksummed `hash:<UPPERCASE_HEX>#<CHECKSUM>` literal",
+                )
+            })?;
+            if body.len() != iroha_crypto::Hash::LENGTH * 2
+                || body
+                    .bytes()
+                    .any(|byte| !byte.is_ascii_digit() && !matches!(byte, b'A'..=b'F'))
+            {
+                return Err(ParseError::new(
+                    "`NetworkId` hash body must contain exactly 64 uppercase hexadecimal digits",
+                ));
+            }
+            let genesis_hash = body.parse::<HashOf<BlockHeader>>().map_err(|_| {
+                ParseError::new("`NetworkId` hash body is not a valid marked genesis hash")
+            })?;
+            let network_id = Self::from_genesis_hash(genesis_hash);
+            if network_id.to_string() != value {
+                return Err(ParseError::new(
+                    "`NetworkId` must use its canonical checksummed spelling",
+                ));
+            }
+            Ok(network_id)
+        }
+    }
+    impl core::fmt::Display for NetworkId {
+        fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+            let body = hex::encode_upper(self.as_bytes());
+            formatter.write_str(&norito::literal::format("hash", &body))
         }
     }
     #[cfg(feature = "json")]
@@ -85,8 +122,18 @@ mod model {
         fn json_deserialize(
             parser: &mut norito::json::Parser<'_>,
         ) -> Result<Self, norito::json::Error> {
-            <HashOf<BlockHeader> as norito::json::JsonDeserialize>::json_deserialize(parser)
-                .map(Self::from_genesis_hash)
+            let value = parser.parse_string()?;
+            value
+                .parse()
+                .map_err(|error: ParseError| norito::json::Error::Message(error.reason.into()))
+        }
+        fn json_from_value(value: &norito::json::Value) -> Result<Self, norito::json::Error> {
+            let value = value.as_str().ok_or_else(|| {
+                norito::json::Error::Message("`NetworkId` must be a JSON string".to_owned())
+            })?;
+            value
+                .parse()
+                .map_err(|error: ParseError| norito::json::Error::Message(error.reason.into()))
         }
     }
     /// Canonical, deployment-selected identifier of a blockchain.
@@ -477,6 +524,49 @@ mod tests {
             network_id
         );
     }
+    #[test]
+    fn network_id_text_uses_one_canonical_checked_literal() {
+        let network_id = network_id_fixture();
+        let canonical = network_id.to_string();
+        assert_eq!(
+            canonical,
+            norito::literal::format("hash", &hex::encode_upper(network_id.as_bytes()))
+        );
+        assert_eq!(
+            canonical
+                .parse::<NetworkId>()
+                .expect("canonical checked literal parses"),
+            network_id
+        );
+
+        let raw_hex = hex::encode_upper(network_id.as_bytes());
+        let lowercase_body = norito::literal::format("hash", &raw_hex.to_ascii_lowercase());
+        let mut bad_checksum = canonical.clone();
+        let replacement = if bad_checksum.ends_with('0') {
+            '1'
+        } else {
+            '0'
+        };
+        bad_checksum.pop();
+        bad_checksum.push(replacement);
+        for alias in [raw_hex, lowercase_body, bad_checksum] {
+            assert!(
+                alias.parse::<NetworkId>().is_err(),
+                "noncanonical network identity alias must reject: {alias}"
+            );
+        }
+    }
+    #[test]
+    fn network_id_rejects_oversized_text_before_literal_parsing() {
+        let oversized = format!("hash:{}#0000", "A".repeat(4_096));
+        let error = oversized
+            .parse::<NetworkId>()
+            .expect_err("oversized network identity must fail closed");
+        assert_eq!(
+            error.reason,
+            "`NetworkId` must be one 74-byte canonical checked hash literal"
+        );
+    }
     #[cfg(feature = "json")]
     #[test]
     fn network_id_json_is_the_canonical_hash_literal() {
@@ -486,9 +576,47 @@ mod tests {
             norito::json::to_json(network_id.as_genesis_hash()).expect("serialize genesis hash");
         assert_eq!(network_json, hash_json);
         assert!(network_json.starts_with("\"hash:"));
+        assert_eq!(network_json, format!("\"{network_id}\""));
         assert_eq!(
             norito::json::from_str::<NetworkId>(&network_json).expect("JSON roundtrip"),
             network_id
+        );
+
+        let raw_json = format!("\"{}\"", hex::encode_upper(network_id.as_bytes()));
+        let lowercase_json = format!(
+            "\"{}\"",
+            norito::literal::format(
+                "hash",
+                &hex::encode_upper(network_id.as_bytes()).to_ascii_lowercase()
+            )
+        );
+        for alias in [raw_json, lowercase_json] {
+            assert!(
+                norito::json::from_str::<NetworkId>(&alias).is_err(),
+                "Norito JSON must reject noncanonical NetworkId alias {alias}"
+            );
+            let value: norito::json::Value =
+                norito::json::from_str(&alias).expect("alias is valid generic JSON");
+            assert!(
+                <NetworkId as norito::json::JsonDeserialize>::json_from_value(&value).is_err(),
+                "Norito JSON value conversion must reject noncanonical NetworkId alias {alias}"
+            );
+        }
+    }
+    #[cfg(feature = "json")]
+    #[test]
+    fn network_id_json_rejects_oversized_text() {
+        let oversized = format!("hash:{}#0000", "A".repeat(4_096));
+        let encoded = format!("\"{oversized}\"");
+        assert!(
+            norito::json::from_str::<NetworkId>(&encoded).is_err(),
+            "Norito JSON must reject oversized NetworkId text"
+        );
+        let value: norito::json::Value =
+            norito::json::from_str(&encoded).expect("oversized identity is generic JSON text");
+        assert!(
+            <NetworkId as norito::json::JsonDeserialize>::json_from_value(&value).is_err(),
+            "Norito JSON value conversion must reject oversized NetworkId text"
         );
     }
     #[test]

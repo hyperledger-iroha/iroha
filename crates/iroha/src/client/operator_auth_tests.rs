@@ -11,7 +11,8 @@ use std::sync::{Arc, Mutex};
 #[test]
 fn operator_endpoint_requires_a_signing_key_before_dispatch() {
     let snapshots: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
-    let client = client_with_base_url(base_url());
+    let mut client = client_with_base_url(base_url());
+    client.operator_key_pair = None;
     let error = with_mock_http(
         respond_with(
             &snapshots,
@@ -36,7 +37,8 @@ fn operator_endpoint_requires_a_signing_key_before_dispatch() {
 #[test]
 fn proof_retention_requires_a_signing_key_before_dispatch() {
     let snapshots: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
-    let client = client_with_base_url(base_url());
+    let mut client = client_with_base_url(base_url());
+    client.operator_key_pair = None;
     let error = with_mock_http(
         respond_with(
             &snapshots,

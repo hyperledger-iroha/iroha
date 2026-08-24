@@ -218,7 +218,7 @@ fn verify_raw_v1(
     if network_id.to_string() != input.network_id {
         return Err(VerificationError::new(
             VerificationErrorCode::InvalidNetworkId,
-            "network_id must use the canonical lowercase genesis-hash encoding",
+            "network_id must use the canonical checked genesis-hash literal",
         ));
     }
     let trusted_context_id = parse_height_context_id(input.trusted_context_id)?;
@@ -431,7 +431,7 @@ mod tests {
     };
     use std::num::NonZeroU64;
     const FIXTURE_NETWORK_ID: &str =
-        "a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5";
+        "hash:A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5#95D7";
     struct Fixture {
         block: SignedBlock,
         finality: BridgeFinalityProof,
@@ -876,7 +876,7 @@ mod tests {
             &fixture.finality,
             &fixture.block,
             &fixture.block_proofs,
-            "b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5",
+            "hash:B5B5B5B5B5B5B5B5B5B5B5B5B5B5B5B5B5B5B5B5B5B5B5B5B5B5B5B5B5B5B5B5#87EB",
             &fixture.trusted_context_id,
         )
         .expect_err("wrong network must fail");

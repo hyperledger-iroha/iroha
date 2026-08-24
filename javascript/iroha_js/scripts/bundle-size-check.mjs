@@ -57,9 +57,10 @@ export const BUNDLE_TARGETS = Object.freeze([
     platform: "browser",
     target: "es2020",
     // The shipped browser-safe Nexus facade measured 371,403 bytes in the protected
-    // pre-reset tree. Canonical ProofAttachment handling and the shared
-    // asset-definition builder bring current V1 to 385,220 bytes (+3.72%). The
-    // 380 KiB ceiling remains below a 5% predecessor regression.
+    // pre-reset tree. Canonical ProofAttachment handling, the shared
+    // asset-definition builder, and controller/session validation bring current
+    // V1 to 388,013 bytes (+4.47%). The 380 KiB ceiling remains below a 5%
+    // predecessor regression.
     limitKb: 380,
     forbidNodeInputs: true,
     forbidGlobalBuffer: true,

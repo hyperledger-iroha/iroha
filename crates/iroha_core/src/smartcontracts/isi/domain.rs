@@ -3684,7 +3684,7 @@ mod tests {
         )
     }
     fn validation_fee_guard_network_id() -> iroha_data_model::NetworkId {
-        "0000000000000000000000000000000000000000000000000000000000000001"
+        "hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
             .parse()
             .expect("exact validation-fee guard network id")
     }

@@ -632,6 +632,7 @@ test("package Nexus browser defaults build, finalize, and submit the shared cano
   const submissions = [];
   const client = new PackageNexusAppClient({
     networkId: nexusFixtureNetworkId,
+    chainDiscriminant: nexusFixture.transfer_input.account_chain_discriminant,
     authority: nexusFixture.transfer_input.authority,
     signingPublicKey: hexBytes(
       nexusFixture.connect.approval_frame.signing_public_key_hex,

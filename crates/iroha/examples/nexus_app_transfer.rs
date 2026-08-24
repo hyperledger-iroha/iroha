@@ -39,7 +39,7 @@ impl NexusConnectTransport for DemoConnectTransport {
     }
     fn await_approval(
         &self,
-        _session: &mut NexusConnectSession,
+        _session: &NexusConnectSession,
     ) -> Result<NexusApprovedAccount, NexusAppError> {
         Ok(NexusApprovedAccount {
             account_id: AccountId::new(self.key_pair.public_key().clone()),

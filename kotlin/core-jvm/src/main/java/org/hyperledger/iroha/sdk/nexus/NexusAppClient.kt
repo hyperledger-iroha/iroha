@@ -3,6 +3,7 @@ package org.hyperledger.iroha.sdk.nexus
 import java.util.concurrent.CompletionException
 import org.bouncycastle.crypto.params.Ed25519PublicKeyParameters
 import org.bouncycastle.crypto.signers.Ed25519Signer
+import org.hyperledger.iroha.sdk.address.AccountAddress
 import org.hyperledger.iroha.sdk.client.ClientResponse
 import org.hyperledger.iroha.sdk.client.IrohaClient
 import org.hyperledger.iroha.sdk.client.PipelineStatusOptions
@@ -71,7 +72,7 @@ data class NexusConnectSession @JvmOverloads constructor(
     @JvmField val metadata: Map<String, String> = emptyMap(),
 )
 
-/** Wallet approval result for an app-role Connect session. */
+/** Wallet approval result; transports leave [session] null and the facade supplies its caller copy. */
 data class NexusApprovedAccount @JvmOverloads constructor(
     @JvmField val accountId: String,
     @JvmField val signingPublicKey: ByteArray? = null,
@@ -175,37 +176,71 @@ class NexusAppClient @JvmOverloads constructor(
             "Connect transport is required to await wallet approval",
         )
         val approved = transport.awaitApproval(session, config)
+        if (approved.session != null) {
+            throw NexusAppError(
+                "approval_session_mismatch",
+                "wallet approval must not replace the caller's Connect session",
+            )
+        }
         if (approved.accountId.isBlank()) {
             throw NexusAppError("approval_missing_account", "wallet approval did not include an account")
         }
-        val publicKey = approved.signingPublicKey
-            ?: session.signingPublicKey
-            ?: config.signingPublicKey
-            ?: throw NexusAppError(
-                "missing_signing_public_key",
-                "wallet approval did not include a signing public key",
-            )
-        if (publicKey.isEmpty()) {
-            throw NexusAppError("missing_signing_public_key", "signing public key must not be empty")
+        val accountId = requireCanonicalAccountId(
+            approved.accountId,
+            "wallet approval account",
+        )
+        for ((context, assertedAccount) in listOf(
+            "configured authority" to config.authority,
+            "Connect session approved account" to session.approvedAccount,
+        )) {
+            assertedAccount?.let {
+                requireCanonicalAccountId(it, context)
+            }
+            if (assertedAccount != null && assertedAccount != accountId) {
+                throw NexusAppError(
+                    "approval_account_mismatch",
+                    "$context does not match the wallet approval account",
+                )
+            }
         }
-        validateEd25519PublicKey(publicKey)
-        val approvedSession = approved.session ?: session.copy(
-            approvedAccount = approved.accountId,
+        val publicKey = requireAccountSigningKey(
+            accountId,
+            "wallet approval account",
+            "wallet approval signingPublicKey" to approved.signingPublicKey,
+            "Connect session signingPublicKey" to session.signingPublicKey,
+            "config.signingPublicKey" to config.signingPublicKey,
+        )
+        val approvedSession = session.copy(
+            approvedAccount = accountId,
             signingPublicKey = publicKey.copyOf(),
         )
-        return approved.copy(signingPublicKey = publicKey.copyOf(), session = approvedSession)
+        return approved.copy(
+            accountId = accountId,
+            signingPublicKey = publicKey.copyOf(),
+            session = approvedSession,
+        )
     }
 
     fun buildTransferDraft(input: NexusTransferInput): NexusTransferDraft {
+        config.authority?.let {
+            requireCanonicalAccountId(it, "configured authority")
+        }
         val authority = input.authority ?: config.authority ?: throw NexusAppError(
             "missing_authority",
             "transfer authority is required",
         )
-        val signingPublicKey = input.signingPublicKey ?: config.signingPublicKey ?: throw NexusAppError(
-            "missing_signing_public_key",
-            "signing public key is required for an externally signed transfer",
+        requireCanonicalAccountId(authority, "transfer authority")
+        requireCanonicalAccountId(input.destinationAccountId, "transfer destination account")
+        requireCanonicalAccountId(
+            sourceAssetOwner(input.sourceAssetId),
+            "transfer source asset owner",
         )
-        validateEd25519PublicKey(signingPublicKey)
+        val signingPublicKey = requireAccountSigningKey(
+            authority,
+            "transfer authority",
+            "transfer input signingPublicKey" to input.signingPublicKey,
+            "config.signingPublicKey" to config.signingPublicKey,
+        )
         val normalized = input.copy(
             authority = authority,
             signingPublicKey = signingPublicKey.copyOf(),
@@ -244,6 +279,31 @@ class NexusAppClient @JvmOverloads constructor(
             "connect_transport_unavailable",
             "Connect transport is required to request a wallet signature",
         )
+        requireCanonicalAccountId(signable.authority, "signable authority")
+        config.authority?.let {
+            requireCanonicalAccountId(it, "configured authority")
+        }
+        session.approvedAccount?.let {
+            requireCanonicalAccountId(it, "Connect session approved account")
+        }
+        for ((context, assertedAccount) in listOf(
+            "configured authority" to config.authority,
+            "Connect session approved account" to session.approvedAccount,
+        )) {
+            if (assertedAccount != null && assertedAccount != signable.authority) {
+                throw NexusAppError(
+                    "approval_account_mismatch",
+                    "$context does not match the signable authority",
+                )
+            }
+        }
+        requireAccountSigningKey(
+            signable.authority,
+            "signable authority",
+            "signable signingPublicKey" to signable.signingPublicKey,
+            "Connect session signingPublicKey" to session.signingPublicKey,
+            "config.signingPublicKey" to config.signingPublicKey,
+        )
         ensureEd25519(signable.signatureAlgorithm)
         val signature = transport.requestSignature(session, signable, config)
         ensureEd25519(signature.algorithm)
@@ -256,6 +316,12 @@ class NexusAppClient @JvmOverloads constructor(
         signature: NexusWalletSignature,
         options: NexusFinalizeOptions = NexusFinalizeOptions(),
     ): NexusTransferReceipt {
+        requireAccountSigningKey(
+            signable.authority,
+            "signable authority",
+            "signable signingPublicKey" to signable.signingPublicKey,
+            "config.signingPublicKey" to config.signingPublicKey,
+        )
         ensureEd25519(signable.signatureAlgorithm)
         ensureEd25519(signature.algorithm)
         validateEd25519PublicKey(signable.signingPublicKey)
@@ -313,6 +379,13 @@ class NexusAppClient @JvmOverloads constructor(
         input: NexusTransferInput,
         options: NexusFinalizeOptions = NexusFinalizeOptions(),
     ): NexusTransferReceipt {
+        for ((context, account) in listOf(
+            "Connect session approved account" to session.approvedAccount,
+            "transfer authority" to input.authority,
+            "configured authority" to config.authority,
+        )) {
+            account?.let { requireCanonicalAccountId(it, context) }
+        }
         val authority = input.authority
             ?: session.approvedAccount
             ?: config.authority
@@ -323,13 +396,13 @@ class NexusAppClient @JvmOverloads constructor(
                 "transfer authority does not match the approved wallet account",
             )
         }
-        val signingPublicKey = input.signingPublicKey
-            ?: session.signingPublicKey
-            ?: config.signingPublicKey
-            ?: throw NexusAppError(
-                "missing_signing_public_key",
-                "approved account did not provide a signing public key",
-            )
+        val signingPublicKey = requireAccountSigningKey(
+            authority,
+            "transfer authority",
+            "transfer input signingPublicKey" to input.signingPublicKey,
+            "Connect session signingPublicKey" to session.signingPublicKey,
+            "config.signingPublicKey" to config.signingPublicKey,
+        )
         val draft = buildTransferDraft(
             input.copy(
                 authority = authority,
@@ -338,6 +411,128 @@ class NexusAppClient @JvmOverloads constructor(
         )
         val walletSignature = requestSignature(session, draft.signable)
         return finalizeAndSubmit(draft.signable, walletSignature, options)
+    }
+
+    private fun requireCanonicalAccountId(value: String, context: String): String {
+        if (value != value.trim()) {
+            throw NexusAppError(
+                "invalid_account_id",
+                "$context must be an exact canonical I105 account for chain discriminant ${config.chainDiscriminant}",
+            )
+        }
+        val address = try {
+            AccountAddress.parseEncodedIgnoringCurveSupport(
+                value,
+                config.chainDiscriminant,
+            ).address
+        } catch (error: Exception) {
+            throw NexusAppError(
+                "invalid_account_id",
+                "$context must be an exact canonical I105 account for chain discriminant ${config.chainDiscriminant}",
+                error,
+            )
+        }
+        val canonical = try {
+            address.toI105(config.chainDiscriminant)
+        } catch (error: Exception) {
+            throw NexusAppError(
+                "invalid_account_id",
+                "$context could not be rendered for chain discriminant ${config.chainDiscriminant}",
+                error,
+            )
+        }
+        if (canonical != value) {
+            throw NexusAppError(
+                "invalid_account_id",
+                "$context must use its exact canonical I105 representation",
+            )
+        }
+        return value
+    }
+
+    private fun requireAccountSigningKey(
+        accountId: String,
+        context: String,
+        vararg sources: Pair<String, ByteArray?>,
+    ): ByteArray {
+        val address = try {
+            AccountAddress.parseEncodedIgnoringCurveSupport(
+                requireCanonicalAccountId(accountId, context),
+                config.chainDiscriminant,
+            ).address
+        } catch (error: NexusAppError) {
+            throw error
+        } catch (error: Exception) {
+            throw NexusAppError(
+                "missing_signing_public_key",
+                "$context must encode one Ed25519 controller",
+                error,
+            )
+        }
+        val controller = try {
+            address.singleKeyPayloadIgnoringCurveSupport()
+        } catch (error: Exception) {
+            throw NexusAppError(
+                "missing_signing_public_key",
+                "$context must encode one Ed25519 controller",
+                error,
+            )
+        }
+        if (controller == null || controller.curveId != 0x01) {
+            throw NexusAppError(
+                "missing_signing_public_key",
+                "$context must encode one Ed25519 controller",
+            )
+        }
+        val controllerKey = controller.publicKey
+        validateEd25519PublicKey(controllerKey)
+        var supplied = false
+        for ((field, value) in sources) {
+            if (value == null) continue
+            supplied = true
+            validateEd25519PublicKey(value)
+            if (!value.contentEquals(controllerKey)) {
+                throw NexusAppError(
+                    "approval_account_mismatch",
+                    "$field does not control $context",
+                )
+            }
+        }
+        if (!supplied) {
+            throw NexusAppError(
+                "missing_signing_public_key",
+                "$context did not provide a signing public key",
+            )
+        }
+        return controllerKey.copyOf()
+    }
+
+    private fun sourceAssetOwner(sourceAssetId: String): String {
+        val parts = sourceAssetId.split('#', limit = 4)
+        if (parts.size !in 2..3 || parts[1].isEmpty()) {
+            throw NexusAppError(
+                "invalid_account_id",
+                "transfer source asset must contain one canonical owner account",
+            )
+        }
+        if (parts.size == 3 && !isCanonicalDataspaceScope(parts[2])) {
+            throw NexusAppError(
+                "invalid_account_id",
+                "transfer source asset scope must be a canonical dataspace:<u64> suffix",
+            )
+        }
+        return parts[1]
+    }
+
+    private fun isCanonicalDataspaceScope(scope: String): Boolean {
+        val prefix = "dataspace:"
+        if (!scope.startsWith(prefix)) return false
+        val value = scope.substring(prefix.length)
+        if (value.isEmpty() || value.any { it !in '0'..'9' }) return false
+        if (value.length > 1 && value[0] == '0') return false
+        val maxU64 = "18446744073709551615"
+        return value.length < maxU64.length ||
+            (value.length == maxU64.length && value <= maxU64)
     }
 }
 

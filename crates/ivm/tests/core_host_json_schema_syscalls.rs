@@ -844,7 +844,7 @@ fn json_get_account_id_rejects_noncanonical_contract_address_literal() {
     vm.set_host(CoreHost::new());
     let authority = checked_contract_authority_fixture();
     let contract_address = ContractAddress::derive(
-        &"0000000000000000000000000000000000000000000000000000000000000001"
+        &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
             .parse()
             .expect("canonical test network id"),
         &authority,
