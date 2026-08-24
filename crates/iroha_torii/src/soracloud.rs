@@ -3081,8 +3081,14 @@ async fn derive_hf_resource_profile_within_deadline(
     // Release the decoded metadata before issuing one HEAD request per selected
     // weight file; the immutable LFS contract now owns every required field.
     drop(model_info);
-    stream::iter(&weight_selection.required_weight_files)
-        .map(|weight| {
+    let required_model_bytes = weight_selection.required_model_bytes;
+    let backend_family = weight_selection.backend_family;
+    let model_format = weight_selection.model_format;
+    let selected_weight_file_count = u32::try_from(weight_selection.required_weight_files.len())
+        .map_err(|_| SoracloudError::internal("selected HF weight count does not fit u32"))?;
+    let weight_selection_commitment = weight_selection.weight_selection_commitment;
+    stream::iter(weight_selection.required_weight_files)
+        .map(|weight| async move {
             hf_content_length_bytes(
                 config,
                 repo_id,
@@ -3090,13 +3096,13 @@ async fn derive_hf_resource_profile_within_deadline(
                 &weight.path,
                 weight.content_length,
             )
+            .await
         })
         .buffer_unordered(HF_PROFILE_HEAD_MAX_IN_FLIGHT_V1)
         .try_collect::<Vec<()>>()
         .await?;
-    let required_model_bytes = weight_selection.required_model_bytes;
     let disk_cache_bytes_floor = required_model_bytes;
-    let ram_bytes_floor = match weight_selection.backend_family {
+    let ram_bytes_floor = match backend_family {
         SoraHfBackendFamilyV1::Gguf => required_model_bytes
             .saturating_mul(3)
             .saturating_div(2)
@@ -3107,11 +3113,10 @@ async fn derive_hf_resource_profile_within_deadline(
     };
     Ok(SoraHfResourceProfileV1 {
         required_model_bytes,
-        backend_family: weight_selection.backend_family,
-        model_format: weight_selection.model_format,
-        selected_weight_file_count: u32::try_from(weight_selection.required_weight_files.len())
-            .map_err(|_| SoracloudError::internal("selected HF weight count does not fit u32"))?,
-        weight_selection_commitment: weight_selection.weight_selection_commitment,
+        backend_family,
+        model_format,
+        selected_weight_file_count,
+        weight_selection_commitment,
         disk_cache_bytes_floor,
         ram_bytes_floor,
         vram_bytes_floor: 0,
@@ -3512,7 +3517,7 @@ fn audit_event_leaf_hash(event: &ControlPlaneAuditEvent) -> Hash {
                 event.consent_evidence_hash,
                 event.break_glass,
                 event.break_glass_reason.as_deref(),
-                event.lease_reporting_epoch_rollover.as_ref(),
+                event.lease_reporting_epoch_rollover.clone(),
                 event.signed_by.as_str(),
             ),
         ),
@@ -6528,7 +6533,7 @@ fn authoritative_service_config_status_response(
                 last_update_sequence: entry.last_update_sequence,
             })
         })
-        .collect::<Result<Vec<_>, _>>()?;
+        .collect::<Result<Vec<_>, SoracloudError>>()?;
     if config_name.is_some() && configs.is_empty() {
         return Err(SoracloudError::not_found(format!(
             "service config `{}` not found for service `{service_name}`",
@@ -8947,22 +8952,24 @@ pub(crate) fn control_plane_snapshot(
         let service_lease_status = deployment.hosted_service_lease_status_at(current_sequence)?;
         let remaining_runtime_balance =
             deployment.hosted_service_remaining_balance(current_sequence)?;
+        let config_entry_count = u32::try_from(deployment.service_configs.len()).map_err(|_| {
+            SoracloudError::internal(format!(
+                "service `{service_label}` config count exceeds the V1 u32 response range"
+            ))
+        })?;
+        let secret_entry_count = u32::try_from(deployment.service_secrets.len()).map_err(|_| {
+            SoracloudError::internal(format!(
+                "service `{service_label}` secret count exceeds the V1 u32 response range"
+            ))
+        })?;
         services.push(ControlPlaneServiceSnapshot {
             service_name: service_label,
             current_version: deployment.current_service_version.clone(),
             revision_count: deployment.revision_count,
             config_generation: deployment.config_generation,
             secret_generation: deployment.secret_generation,
-            config_entry_count: u32::try_from(deployment.service_configs.len()).map_err(|_| {
-                SoracloudError::internal(format!(
-                    "service `{service_label}` config count exceeds the V1 u32 response range"
-                ))
-            })?,
-            secret_entry_count: u32::try_from(deployment.service_secrets.len()).map_err(|_| {
-                SoracloudError::internal(format!(
-                    "service `{service_label}` secret count exceeds the V1 u32 response range"
-                ))
-            })?,
+            config_entry_count,
+            secret_entry_count,
             quota_class: deployment
                 .service_lease
                 .as_ref()
@@ -16537,6 +16544,15 @@ mod tests {
             provenance_attestation_hash: Hash::new(b"prov"),
         }
     }
+    fn sample_private_model_artifact_ref(role: &str, seed: u8) -> SoraPrivateModelArtifactRefV1 {
+        SoraPrivateModelArtifactRefV1 {
+            schema_version: iroha_data_model::soracloud::SORA_PRIVATE_MODEL_ARTIFACT_REF_VERSION_V1,
+            sorafs_manifest_digest: ManifestDigest::new([seed; 32]),
+            artifact_hash: Hash::new([seed; 16]),
+            ciphertext_bytes: 128,
+            artifact_role: role.to_owned(),
+        }
+    }
     fn sample_uploaded_model_pin_record(
         digest: ManifestDigest,
         content_length: u64,
@@ -18328,9 +18344,9 @@ mod tests {
             let siblings = (0..SHARD_COUNT)
                 .map(|index| {
                     norito::json!({
-                        "rfilename": format!("shard-{index:02}.gguf"),
+                        "rfilename": (format!("shard-{index:02}.gguf")),
                         "lfs": {
-                            "sha256": format!("{:064x}", index + 1),
+                            "sha256": (format!("{:064x}", index + 1)),
                             "size": 1,
                         },
                     })

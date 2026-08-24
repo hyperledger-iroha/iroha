@@ -1011,7 +1011,11 @@ async fn fee_quote_endpoint_verifier_enforces_kagemusha_lifecycle_witness_floor_
     )
     .await
     .expect_err("query-bearing lifecycle fee quote must fail before generic authentication");
-    assert!(error.to_string().contains("query parameters"));
+    assert!(matches!(
+        &error,
+        Error::Query(iroha_data_model::ValidationFail::NotPermitted(reason))
+            if reason.contains("query parameters")
+    ));
     assert_eq!(error.into_response().status(), StatusCode::FORBIDDEN);
 
     let canonical = witness_for(&exact_uri, &[&signers[0], &signers[1]]);

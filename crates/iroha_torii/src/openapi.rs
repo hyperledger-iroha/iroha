@@ -164,7 +164,7 @@ mod tests {
         "offline_asset_scale_invalid",
         "offline_asset_scale_mismatch",
         "offline_authorization_invalid",
-        "offline_wrong_chain",
+        "offline_wrong_network",
     ];
     const OFFLINE_TOP_UP_BAD_REQUEST_REJECT_CODES: &[&str] = &[
         "offline_top_up_invalid",

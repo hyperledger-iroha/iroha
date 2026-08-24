@@ -17241,85 +17241,6 @@
           }
         ]
       },
-      "OfflineActiveTopUpShieldVerifier": {
-        "allOf": [
-          {
-            "$ref": "#/components/schemas/OfflineActiveTransferVerifier"
-          }
-        ],
-        "description": "Role-specific active verifier record for the zero-input public-to-confidential top-up shield circuit; it must not be substituted with the peer-transfer verifier."
-      },
-      "OfflineActiveTransferVerifier": {
-        "additionalProperties": false,
-        "properties": {
-          "activation_height": {
-            "description": "Inclusive activation height; zero means active since genesis.",
-            "format": "uint64",
-            "minimum": 0,
-            "type": "integer"
-          },
-          "circuit_id": {
-            "description": "Exact verifier circuit selected at the evaluated block.",
-            "minLength": 1,
-            "type": "string"
-          },
-          "commitment": {
-            "description": "Non-zero lowercase 32-byte commitment of the registered verifying key.",
-            "not": {
-              "const": "0000000000000000000000000000000000000000000000000000000000000000"
-            },
-            "pattern": "^[0-9a-f]{64}$",
-            "type": "string"
-          },
-          "id": {
-            "$ref": "#/components/schemas/OfflineVerifyingKeyId"
-          },
-          "max_proof_bytes": {
-            "description": "Maximum proof payload accepted by the active registry record.",
-            "format": "uint32",
-            "minimum": 1,
-            "type": "integer"
-          },
-          "public_inputs_schema_hash": {
-            "description": "Non-zero lowercase 32-byte public-input schema hash.",
-            "not": {
-              "const": "0000000000000000000000000000000000000000000000000000000000000000"
-            },
-            "pattern": "^[0-9a-f]{64}$",
-            "type": "string"
-          },
-          "version": {
-            "description": "Positive governance-managed monotonic verifier-record version.",
-            "format": "uint32",
-            "minimum": 1,
-            "type": "integer"
-          },
-          "withdrawal_height": {
-            "anyOf": [
-              {
-                "format": "uint64",
-                "minimum": 1,
-                "type": "integer"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "description": "Exclusive withdrawal height, or null when no withdrawal is scheduled."
-          }
-        },
-        "required": [
-          "id",
-          "version",
-          "circuit_id",
-          "commitment",
-          "public_inputs_schema_hash",
-          "max_proof_bytes",
-          "activation_height",
-          "withdrawal_height"
-        ],
-        "type": "object"
-      },
       "OfflineArtifactBinding": {
         "additionalProperties": false,
         "description": "Installed authenticated first-release artifact. Native code resolves the operation-specific key from this manifest identity.",
@@ -17343,86 +17264,6 @@
           "version",
           "generation",
           "manifest_sha256"
-        ],
-        "type": "object"
-      },
-      "OfflineAuthenticatedArtifactSet": {
-        "additionalProperties": false,
-        "description": "Exact authenticated ABI-21 V4 release identity selected at the readiness snapshot after Core authenticates its policy, attestation, evidence, manifest, verifier records, and verifier-side artifact bytes. The three non-zero SHA-256 digests identify distinct artifacts.",
-        "properties": {
-          "activation_height": {
-            "description": "First height at which this authenticated release may issue notes.",
-            "format": "uint64",
-            "minimum": 1,
-            "type": "integer"
-          },
-          "asset_scale": {
-            "description": "Authoritative fixed asset scale authenticated by this release.",
-            "format": "uint32",
-            "maximum": 28,
-            "minimum": 0,
-            "type": "integer"
-          },
-          "generation": {
-            "description": "Canonical cross-platform generation identifier: ASCII alphanumeric, dot, underscore, or hyphen; starts and ends alphanumeric; and excludes Windows reserved basenames.",
-            "maxLength": 128,
-            "minLength": 1,
-            "pattern": "^(?!(?:[Cc][Oo][Nn]|[Pp][Rr][Nn]|[Aa][Uu][Xx]|[Nn][Uu][Ll]|[Cc][Oo][Mm][1-9]|[Ll][Pp][Tt][1-9])(?:\\.|$))[A-Za-z0-9](?:[A-Za-z0-9._-]{0,126}[A-Za-z0-9])?$",
-            "type": "string"
-          },
-          "manifest_sha256": {
-            "description": "Lowercase hexadecimal SHA-256 digest of the canonical ABI-21 V4 release manifest.",
-            "maxLength": 64,
-            "minLength": 64,
-            "not": {
-              "const": "0000000000000000000000000000000000000000000000000000000000000000"
-            },
-            "pattern": "^[0-9a-f]{64}$",
-            "type": "string"
-          },
-          "max_proof_bytes": {
-            "description": "Authenticated upper bound for one canonical ABI-21 V4 proof-pair payload.",
-            "format": "uint32",
-            "maximum": 393216,
-            "minimum": 1,
-            "type": "integer"
-          },
-          "release_attestation_sha256": {
-            "description": "Lowercase hexadecimal SHA-256 digest of the canonical signed ABI-21 V4 release attestation.",
-            "maxLength": 64,
-            "minLength": 64,
-            "not": {
-              "const": "0000000000000000000000000000000000000000000000000000000000000000"
-            },
-            "pattern": "^[0-9a-f]{64}$",
-            "type": "string"
-          },
-          "release_policy_sha256": {
-            "description": "Lowercase hexadecimal SHA-256 digest of the locally trusted ABI-21 V4 release policy.",
-            "maxLength": 64,
-            "minLength": 64,
-            "not": {
-              "const": "0000000000000000000000000000000000000000000000000000000000000000"
-            },
-            "pattern": "^[0-9a-f]{64}$",
-            "type": "string"
-          },
-          "withdrawal_height": {
-            "description": "First height at which new issuance must stop; strictly greater than activation_height.",
-            "format": "uint64",
-            "minimum": 2,
-            "type": "integer"
-          }
-        },
-        "required": [
-          "generation",
-          "manifest_sha256",
-          "release_policy_sha256",
-          "release_attestation_sha256",
-          "activation_height",
-          "withdrawal_height",
-          "max_proof_bytes",
-          "asset_scale"
         ],
         "type": "object"
       },
@@ -17478,58 +17319,6 @@
           "type": "integer"
         },
         "type": "array"
-      },
-      "OfflineCapabilityStatus": {
-        "additionalProperties": false,
-        "description": "Universal, asset-neutral offline-wallet application interface capability.",
-        "properties": {
-          "assets": {
-            "description": "Always empty; universal capability discovery never enrolls or attests any asset.",
-            "maxItems": 0,
-            "type": "array"
-          },
-          "blockers": {
-            "description": "Always empty; application feature capability never blocks node health or readiness.",
-            "maxItems": 0,
-            "type": "array"
-          },
-          "cash_handoff_capability": {
-            "const": "cash_handoff_v1",
-            "description": "Client-facing irreversible cash-handoff interface implemented by every app-api deployment.",
-            "type": "string"
-          },
-          "mandatory": {
-            "const": false,
-            "description": "Always false: offline-wallet UI capability is universal and is never a deployment admission requirement.",
-            "type": "boolean"
-          },
-          "max_hops": {
-            "const": 8,
-            "format": "uint32",
-            "type": "integer"
-          },
-          "ready": {
-            "const": true,
-            "description": "Always true because this reports interface availability, not per-asset backend material.",
-            "type": "boolean"
-          },
-          "required_bridge_abi_version": {
-            "const": 22,
-            "description": "Native bridge ABI exposed to offline-wallet applications.",
-            "format": "uint32",
-            "type": "integer"
-          }
-        },
-        "required": [
-          "mandatory",
-          "cash_handoff_capability",
-          "required_bridge_abi_version",
-          "max_hops",
-          "ready",
-          "assets",
-          "blockers"
-        ],
-        "type": "object"
       },
       "OfflineFixed32Bytes": {
         "description": "Norito JSON representation of an internal 32-byte field.",
@@ -18119,189 +17908,6 @@
           "stark/fri/sha256_goldilocks.v1"
         ],
         "type": "string"
-      },
-      "OfflineReadiness": {
-        "additionalProperties": false,
-        "properties": {
-          "active_recursive_step_ep_verifier": {
-            "anyOf": [
-              {
-                "$ref": "#/components/schemas/OfflineActiveTransferVerifier"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "description": "Authoritative active ABI-21 V4 recursive StepEp verifier at the evaluated height, or null when the authenticated V4 release cannot be resolved."
-          },
-          "active_recursive_step_eq_verifier": {
-            "anyOf": [
-              {
-                "$ref": "#/components/schemas/OfflineActiveTransferVerifier"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "description": "Authoritative active ABI-21 V4 recursive StepEq verifier at the evaluated height, or null when the authenticated V4 release cannot be resolved."
-          },
-          "active_topup_shield_verifier": {
-            "anyOf": [
-              {
-                "$ref": "#/components/schemas/OfflineActiveTopUpShieldVerifier"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "description": "Authoritative active public-to-confidential top-up shield verifier at the evaluated height, or null with a topup_shield_verifier_unavailable blocker."
-          },
-          "active_transfer_verifier": {
-            "anyOf": [
-              {
-                "$ref": "#/components/schemas/OfflineActiveTransferVerifier"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "description": "Authoritative active confidential-transfer verifier at the evaluated height, or null with a transfer_verifier_unavailable blocker."
-          },
-          "active_unshield_verifier": {
-            "anyOf": [
-              {
-                "$ref": "#/components/schemas/OfflineActiveTransferVerifier"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "description": "Authoritative active confidential-unshield verifier at the evaluated height."
-          },
-          "artifact_set": {
-            "anyOf": [
-              {
-                "$ref": "#/components/schemas/OfflineAuthenticatedArtifactSet"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "description": "Exact authenticated ABI-21 V4 release identity selected atomically with the recursive verifiers, or null with an authenticated V4 registry blocker."
-          },
-          "asset_definition_id": {
-            "description": "Resolved canonical unprefixed Base58 asset-definition address; an alias selector is never echoed here.",
-            "pattern": "^[1-9A-HJ-NP-Za-km-z]{28}$",
-            "type": "string"
-          },
-          "asset_scale": {
-            "anyOf": [
-              {
-                "format": "uint32",
-                "minimum": 0,
-                "type": "integer"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "description": "Authoritative live asset-definition scale, including values above the Offline payment limit when asset_scale_unsupported is reported, or null with an asset_scale_unavailable blocker. A ready response always has scale at most 28."
-          },
-          "blockers": {
-            "description": "Empty exactly when ready is true; otherwise contains stable typed blockers for every unavailable requirement.",
-            "items": {
-              "$ref": "#/components/schemas/OfflineReadinessBlocker"
-            },
-            "type": "array"
-          },
-          "cash_handoff_capability": {
-            "description": "Mandatory sender-final peer-cash contract: inputs and the exact outgoing payment are committed before handoff; acknowledgements are evidence receipts only and cannot accept, roll back, or claw back value.",
-            "enum": [
-              "cash_handoff_v1"
-            ],
-            "type": "string"
-          },
-          "evaluated_block_hash": {
-            "description": "Lowercase hash of the evaluated committed block; clients may bind device-attestation registration to this exact snapshot.",
-            "pattern": "^[0-9a-f]{64}$",
-            "type": "string"
-          },
-          "evaluated_block_height": {
-            "description": "Committed height used for the evaluation.",
-            "format": "uint64",
-            "minimum": 0,
-            "type": "integer"
-          },
-          "max_hops": {
-            "format": "uint32",
-            "maximum": 8,
-            "minimum": 8,
-            "type": "integer"
-          },
-          "proof_backend_available": {
-            "description": "Whether the exact authenticated ABI-21 V4 artifacts constructed the production recursive verifier backend at this snapshot.",
-            "type": "boolean"
-          },
-          "ready": {
-            "description": "True exactly when no readiness blocker remains. False is a successfully evaluated domain state, not a service error and does not erase independently reported backend or lineage capabilities.",
-            "type": "boolean"
-          },
-          "recursive_lineage_supported": {
-            "description": "Whether the exact authenticated ABI-21 V4 artifact set, distinct active Eq/Ep records, and constructed backend support chain admission, parent/change recursive verification, and redemption at this snapshot.",
-            "type": "boolean"
-          },
-          "required_bridge_abi_version": {
-            "description": "Exact native bridge ABI required by the authenticated ABI-21 V4 recursive release.",
-            "format": "uint32",
-            "maximum": 22,
-            "minimum": 22,
-            "type": "integer"
-          }
-        },
-        "required": [
-          "cash_handoff_capability",
-          "required_bridge_abi_version",
-          "max_hops",
-          "asset_definition_id",
-          "asset_scale",
-          "evaluated_block_height",
-          "evaluated_block_hash",
-          "active_transfer_verifier",
-          "active_topup_shield_verifier",
-          "active_unshield_verifier",
-          "active_recursive_step_eq_verifier",
-          "active_recursive_step_ep_verifier",
-          "artifact_set",
-          "proof_backend_available",
-          "recursive_lineage_supported",
-          "ready",
-          "blockers"
-        ],
-        "type": "object"
-      },
-      "OfflineReadinessBlocker": {
-        "additionalProperties": false,
-        "properties": {
-          "code": {
-            "description": "Stable machine-readable blocker code.",
-            "maxLength": 64,
-            "minLength": 1,
-            "pattern": "^[a-z0-9][a-z0-9_]{0,63}$",
-            "type": "string"
-          },
-          "message": {
-            "description": "Non-empty human-readable and non-stable explanation without surrounding whitespace or control characters.",
-            "maxLength": 1024,
-            "minLength": 1,
-            "pattern": "^(?!\\s)(?:[^\\u0000-\\u001F\\u007F-\\u009F])*[^\\s\\u0000-\\u001F\\u007F-\\u009F]$",
-            "type": "string"
-          }
-        },
-        "required": [
-          "code",
-          "message"
-        ],
-        "type": "object"
       },
       "OfflineRecipientRegistrationLineage": {
         "additionalProperties": false,
@@ -18984,6 +18590,40 @@
           "note_commitment",
           "spend_nullifier",
           "amount"
+        ],
+        "type": "object"
+      },
+      "OfflineStatus": {
+        "additionalProperties": false,
+        "description": "Universal, asset-neutral offline-wallet application interface capability.",
+        "properties": {
+          "cash_handoff_capability": {
+            "const": "cash_handoff_v1",
+            "description": "Client-facing irreversible cash-handoff interface implemented by every app-api deployment.",
+            "type": "string"
+          },
+          "max_hops": {
+            "const": 8,
+            "format": "uint32",
+            "type": "integer"
+          },
+          "ready": {
+            "const": true,
+            "description": "Always true because this reports interface availability, not per-asset backend material.",
+            "type": "boolean"
+          },
+          "required_bridge_abi_version": {
+            "const": 22,
+            "description": "Native bridge ABI exposed to offline-wallet applications.",
+            "format": "uint32",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "cash_handoff_capability",
+          "required_bridge_abi_version",
+          "max_hops",
+          "ready"
         ],
         "type": "object"
       },
@@ -61356,8 +60996,8 @@
     },
     "/v1/offline/readiness": {
       "get": {
-        "description": "Report the offline-wallet protocol interface implemented by every Iroha app-api deployment. cash_handoff_v1 and native bridge ABI 22 are universally available to applications and do not require settlement flags, escrow catalogs, asset metadata, or dataspace enrollment. This capability response is deliberately asset-neutral: mandatory is false, ready is true, and assets and blockers are empty. Wallets must not gate offline UI or peer handoff on this discovery call; those flows continue without network connectivity. It does not claim that any particular asset has server-managed top-up, redemption, proof, or escrow material.",
-        "operationId": "offlineReadiness",
+        "description": "Report the offline-wallet protocol interface implemented by every Iroha app-api deployment. cash_handoff_v1 and native bridge ABI 22 are universally available to applications and do not require settlement flags, escrow catalogs, asset metadata, or dataspace enrollment. This capability response is deliberately asset-neutral and always reports ready=true. Wallets must not gate offline UI or peer handoff on this discovery call; those flows continue without network connectivity. It does not claim that any particular asset has server-managed top-up, redemption, proof, or escrow material.",
+        "operationId": "offlineCapability",
         "parameters": [
           {
             "description": "A strong or weak ETag returned by an earlier capability response, or *. A match for the selected representation returns 304.",
@@ -61374,26 +61014,26 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/OfflineCapabilityStatus"
+                  "$ref": "#/components/schemas/OfflineStatus"
                 }
               },
               "application/x-norito": {
                 "schema": {
-                  "$ref": "#/components/schemas/OfflineCapabilityStatus"
+                  "$ref": "#/components/schemas/OfflineStatus"
                 }
               }
             },
             "description": "The universal offline-wallet capability is available.",
             "headers": {
               "Cache-Control": {
-                "description": "Readiness responses require revalidation.",
+                "description": "Capability responses require revalidation.",
                 "schema": {
                   "example": "private, max-age=0, must-revalidate",
                   "type": "string"
                 }
               },
               "ETag": {
-                "description": "Strong readiness validator bound to the complete selected representation and evaluated block.",
+                "description": "Strong capability validator bound to the complete selected representation.",
                 "schema": {
                   "type": "string"
                 }
