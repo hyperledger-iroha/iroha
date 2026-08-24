@@ -200,7 +200,7 @@ def _validate_evidence(
         digest != manifest["artifact_sha256"]
         or size != manifest["artifact_size"]
     ):
-        fail(f"{asset.target}: native artifact bytes do not match their ABI-22 evidence")
+        fail(f"{asset.target}: native artifact bytes do not match their ABI-23 evidence")
     return manifest
 
 
@@ -339,7 +339,7 @@ def validate_package_manifest(value: object) -> dict[str, object]:
     if manifest["schema"] != SCHEMA or manifest["sdk"] != "csharp":
         fail("C# native package manifest schema or SDK is unsupported")
     if manifest["bridge_abi_version"] != artifact_checker.REQUIRED_BRIDGE_ABI_VERSION:
-        fail("C# native package manifest does not require exact bridge ABI 22")
+        fail("C# native package manifest does not require exact bridge ABI 23")
     commit = manifest["source_commit"]
     if type(commit) is not str or artifact_checker.COMMIT_RE.fullmatch(commit) is None:
         fail("C# native package source commit is not canonical")
@@ -620,7 +620,7 @@ def verify_package(
                     read_size != expected_size
                     or digest.hexdigest() != row["artifact_sha256"]
                 ):
-                    fail(f"{asset.package_path}: NuGet native bytes do not match ABI-22 evidence")
+                    fail(f"{asset.package_path}: NuGet native bytes do not match ABI-23 evidence")
     except zipfile.BadZipFile as error:
         raise CSharpNativePackageError(
             f"C# NuGet package is not a readable ZIP archive: {package_path}"

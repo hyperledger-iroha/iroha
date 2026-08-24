@@ -357,6 +357,12 @@ impl EffectRuntime for FakeRuntime {
         }
         step
     }
+    fn step_recovery_effects(
+        &mut self,
+        now: Instant,
+    ) -> Result<RuntimeStep<AdapterEffect>, String> {
+        self.step_effects(now)
+    }
     fn step_pacemaker_effects(
         &mut self,
         _now: Instant,

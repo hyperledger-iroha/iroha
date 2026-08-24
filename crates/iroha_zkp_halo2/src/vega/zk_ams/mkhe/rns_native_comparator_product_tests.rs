@@ -537,16 +537,13 @@ fn production_boundary_is_private_move_only_non_authorizing_and_fail_closed() {
         .split_once("pub(super) fn verify_rns_native_comparator_product_v1")
         .expect("claimed-successor comparator entry")
         .1
-        .split_once("/// Test-only compatibility entry")
+        .split_once("#[path = \"rns_native_comparator_product_tests.rs\"]")
         .expect("production comparator boundary")
         .0;
     assert!(production.contains("parent: RnsNativeClaimedSuccessorV1<"));
     assert!(production.contains("parent.successor()"));
     assert!(!production.contains("inventory.continuation()"));
-    let legacy = source
-        .find("fn verify_rns_native_comparator_product_from_inventory_v1")
-        .expect("legacy raw inventory entry");
-    assert!(source[legacy.saturating_sub(160)..legacy].contains("#[cfg(test)]"));
+    assert!(!source.contains("fn verify_rns_native_comparator_product_from_inventory_v1"));
 
     let parent = include_str!("../mkhe.rs");
     assert_eq!(

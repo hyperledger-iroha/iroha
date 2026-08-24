@@ -1361,10 +1361,6 @@ def test_receipt_requires_exact_nocapture_seed_diagnostic(tmp_path: Path) -> Non
             "CARGO_TARGET_DIR=/tmp/escaped-cargo-target",
         ),
         (r"IROHA_TEST_SKIP_BUILD=1", "IROHA_TEST_SKIP_BUILD=0"),
-        (
-            r"IROHA_TEST_ALLOW_REENTRANT_BUILD=0",
-            "IROHA_TEST_ALLOW_REENTRANT_BUILD=1",
-        ),
         (r"cargo test --locked --offline", "cargo test --locked"),
         (
             r"IROHA_TEST_TARGET_DIR=[^ ]+",

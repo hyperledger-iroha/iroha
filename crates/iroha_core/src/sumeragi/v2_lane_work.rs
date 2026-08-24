@@ -17913,7 +17913,12 @@ pub(super) mod tests {
         ));
         let mut validators = adapter
             .state
-            .authoritative_lane_peer_ids_at_height(lane_id, adapter.context.height);
+            .resolve_lane_committee_at_height(
+                crate::state::LaneAuthorityRoute::new(lane_id, dataspace_id),
+                adapter.context.height,
+            )
+            .expect("multi-lane fixture authority must resolve")
+            .into_validators();
         validators.sort();
         validators.dedup();
         assert_eq!(validators.len(), keys.len());
@@ -17935,7 +17940,7 @@ pub(super) mod tests {
         stmt_row! { adapter.context.execution_policy_hash = super::super::v2_recovery::committed_execution_policy_hash(adapter.state.as_ref()).expect("derive single custom-lane test execution policy"); }
         stmt_row! { assert!(!proposal_lookahead_enabled(&adapter.state.nexus_snapshot(), adapter.context.height,), "one custom route must retain the narrow proposal scan"); }
         stmt_row! { assert_eq!(adapter.state.consensus_lane_routes_at_height(adapter.context.height).into_keys().collect::<Vec<_>>(), vec![(lane_id, dataspace_id)], "fixture must expose exactly one enabled custom route"); }
-        stmt_row! { assert_eq!(adapter.state.authoritative_lane_peer_ids_at_height(lane_id, adapter.context.height), validators, "narrowing routing must preserve the custom lane authority"); }
+        stmt_row! { assert_eq!(adapter.state.resolve_lane_committee_at_height(crate::state::LaneAuthorityRoute::new(lane_id, dataspace_id), adapter.context.height).expect("single custom-lane authority must resolve").into_validators(), validators, "narrowing routing must preserve the custom lane authority"); }
         validators
     }
     #[test]

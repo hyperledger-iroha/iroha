@@ -7,12 +7,12 @@ use iroha_data_model::{
         consensus::{
             CertPhase, ConsensusBlockHeader, ConsensusGenesisModeParams, ConsensusGenesisParams,
             Evidence, EvidenceRecord, ExecKv, ExecWitness, ExecWitnessMsg, LaneBlockCommitment,
-            LaneSettlementReceipt, NposGenesisParams, PERMISSIONED_TAG, Proposal, Qc, QcAggregate,
-            QcRef, QcVote, SumeragiV2EquivocationEvidence, VrfCommit, VrfReveal,
+            LaneSettlementReceipt, NposGenesisParams, Proposal, Qc, QcAggregate, QcRef, QcVote,
+            SumeragiV2EquivocationEvidence, VrfCommit, VrfReveal,
         },
         consensus_v2::{
             BlockSubject, ConsensusMode, ConsensusRound, DataAvailabilityLayout, DualQuorum,
-            ExecutionCommitment, GlobalPhase, HeightContext, HeightContextId,
+            ExecutionCommitment, GlobalPhase, HeightContext, HeightContextId, PERMISSIONED_TAG,
             PROTOCOL_VERSION as V2_PROTOCOL_VERSION, PayloadEncoding, QuorumCertificateRef,
             SumeragiV2BodyState, SumeragiV2Equivocation, SumeragiV2GenesisContextParameters,
             SumeragiV2HeightContextStatus, SumeragiV2QcResponse, SumeragiV2Status,

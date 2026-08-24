@@ -24,14 +24,16 @@ use iroha_data_model::{
     confidential::{CONFIDENTIAL_ENCRYPTED_PAYLOAD_V1, ConfidentialEncryptedPayload},
     da::manifest::DaManifestV1,
     domain::DomainId,
-    governance::{is_valid_governance_selector_v1, types::AtWindow},
+    governance::{
+        is_valid_governance_selector_v1,
+        types::{AbiVersion, ContractAbiHash, ContractCodeHash},
+    },
     identifier::{IdentifierResolutionReceipt, IdentifierResolutionReceiptPayload},
     isi::{
         InstructionBox, RemoveAssetKeyValue, RemoveKeyValue, SetAssetKeyValue, SetKeyValue,
         decode_instruction_from_pair, framed_instruction_payload,
         governance::{
-            CastPlainBallot, CastZkBallot, EnactReferendum, FinalizeReferendum,
-            PersistCouncilForEpoch, ProposeDeployContract, VotingMode,
+            CastPlainBallot, CastZkBallot, PersistCouncilForEpoch, ProposeDeployContract,
         },
         identifier::ClaimIdentifier,
         mint_burn::{Burn, Mint},
@@ -53,7 +55,7 @@ use iroha_data_model::{
     ram_lfe::RamLfeReceiptAttestation,
     ram_lfe::{RamLfeExecutionReceiptPayload, RamLfeProgramId},
     rwa::RwaId,
-    smart_contract::manifest::ContractManifest,
+    smart_contract::manifest::ManifestProvenance,
     transaction::{
         Executable, FeePaymentIntent, SignedTransaction, TransactionAdmissionIntent,
         TransactionSubmissionReceipt, signed::TransactionBuilder,
@@ -109,6 +111,15 @@ use std::{
 use zeroize::{Zeroize, Zeroizing};
 mod account_onboarding;
 pub use account_onboarding::connect_norito_encode_account_onboarding_plan_body_v1;
+mod parliament_timed_ovn_ffi;
+pub use parliament_timed_ovn_ffi::{
+    CONNECT_NORITO_PARLIAMENT_TIMED_OVN_CASTING_PROOF_MAX_BYTES_V1,
+    CONNECT_NORITO_PARLIAMENT_TIMED_OVN_SEED_BYTES_V1,
+    CONNECT_NORITO_PARLIAMENT_TIMED_OVN_TRUST_ANCHOR_BYTES_V1,
+    connect_norito_parliament_timed_ovn_ballot_from_proof_v1,
+    connect_norito_parliament_timed_ovn_registration_from_proof_v1,
+    connect_norito_parliament_timed_ovn_verify_casting_proof_v1,
+};
 mod connect_approval_ffi;
 #[cfg(test)]
 use connect_approval_ffi::{
@@ -275,6 +286,7 @@ const ERR_DETACHED_TRANSACTION_SCAFFOLD: c_int = -501;
 const ERR_DETACHED_TRANSACTION_SIGNATURE: c_int = -502;
 const ERR_CANONICAL_JSON: c_int = -503;
 const ERR_VALIDATION_FEE_POLICY_PROOF: c_int = -504;
+const ERR_PARLIAMENT_TIMED_OVN: c_int = -505;
 #[allow(dead_code)]
 #[derive(Debug, Clone, Copy)]
 enum BridgeError {
@@ -323,6 +335,7 @@ enum BridgeError {
     DetachedTransactionSignature,
     CanonicalJson,
     ValidationFeePolicyProof,
+    ParliamentTimedOvn,
 }
 impl BridgeError {
     const fn code(self) -> c_int {
@@ -376,6 +389,7 @@ impl BridgeError {
             BridgeError::DetachedTransactionSignature => ERR_DETACHED_TRANSACTION_SIGNATURE,
             BridgeError::CanonicalJson => ERR_CANONICAL_JSON,
             BridgeError::ValidationFeePolicyProof => ERR_VALIDATION_FEE_POLICY_PROOF,
+            BridgeError::ParliamentTimedOvn => ERR_PARLIAMENT_TIMED_OVN,
         }
     }
 }
@@ -555,26 +569,41 @@ unsafe fn read_governance_selector_bridge(
     }
     Ok(selector)
 }
-unsafe fn read_exact_lower_hex32_bridge(
-    ptr: *const c_char,
+unsafe fn read_governance_hash32_bridge(
+    ptr: *const c_uchar,
     len: c_ulong,
-    invalid: BridgeError,
-) -> BridgeResult<String> {
-    let value = unsafe { read_string_bridge(ptr, len) }.map_err(|error| {
-        if matches!(error, BridgeError::Utf8) {
-            invalid
-        } else {
-            error
-        }
-    })?;
-    if value.len() != 64
-        || !value
-            .bytes()
-            .all(|byte| matches!(byte, b'0'..=b'9' | b'a'..=b'f'))
-    {
-        return Err(invalid);
+) -> BridgeResult<[u8; 32]> {
+    if usize::try_from(len).ok() != Some(ContractCodeHash::LENGTH) {
+        return Err(BridgeError::Governance);
     }
-    Ok(value)
+    if ptr.is_null() {
+        return Err(BridgeError::NullPtr);
+    }
+    let bytes = unsafe { slice::from_raw_parts(ptr, ContractCodeHash::LENGTH) };
+    bytes.try_into().map_err(|_| BridgeError::Governance)
+}
+unsafe fn read_manifest_provenance_bridge(
+    signer_ptr: *const c_char,
+    signer_len: c_ulong,
+    signature_ptr: *const c_char,
+    signature_len: c_ulong,
+    present: c_uchar,
+) -> BridgeResult<Option<ManifestProvenance>> {
+    match present {
+        0 if signer_len == 0 && signature_len == 0 => Ok(None),
+        0 => Err(BridgeError::Governance),
+        1 if signer_len == 0 || signature_len == 0 => Err(BridgeError::Governance),
+        1 => {
+            let signer = unsafe { read_string_bridge(signer_ptr, signer_len) }?
+                .parse::<PublicKey>()
+                .map_err(|_| BridgeError::Governance)?;
+            let signature_hex = unsafe { read_string_bridge(signature_ptr, signature_len) }?;
+            let signature =
+                Signature::try_from_hex(signature_hex).map_err(|_| BridgeError::Governance)?;
+            Ok(Some(ManifestProvenance { signer, signature }))
+        }
+        _ => Err(BridgeError::Governance),
+    }
 }
 unsafe fn write_bytes(
     out_ptr: *mut *mut c_uchar,
@@ -740,9 +769,6 @@ impl_kagemusha_canonical_decode_schema!(
     iroha_data_model::offline::KagemushaRecursiveSpendBranchClaimV2,
     iroha_data_model::offline::KagemushaRecursiveSpendTopUpAnchorV4,
     iroha_data_model::offline::KagemushaRecursiveSpendVerifyResultV4,
-    iroha_torii_shared::offline_api::OfflineActiveTransferVerifier,
-    iroha_torii_shared::offline_api::OfflineAuthenticatedArtifactSet,
-    iroha_torii_shared::offline_api::OfflineReadiness,
 );
 impl_kagemusha_canonical_decode_profile!(
     KAGEMUSHA_CANONICAL_STRUCTURAL_EXTRA_ALLOCATION_MULTIPLIER,
@@ -1305,13 +1331,6 @@ fn parse_nonce(nonce: u32, present: bool) -> BridgeResult<Option<NonZeroU32>> {
         .map(Some)
         .ok_or(BridgeError::InvalidNonce)
 }
-fn parse_voting_mode(code: u8) -> BridgeResult<VotingMode> {
-    match code {
-        0 => Ok(VotingMode::Zk),
-        1 => Ok(VotingMode::Plain),
-        _ => Err(BridgeError::Governance),
-    }
-}
 fn parse_name(value: String) -> BridgeResult<Name> {
     Name::from_str(&value).map_err(|_| BridgeError::MetadataKey)
 }
@@ -1427,10 +1446,6 @@ fn zk_hint_present(map: &JsonMap, key: &str) -> bool {
     map.get(key)
         .map(|value| !matches!(value, JsonValue::Null))
         .unwrap_or(false)
-}
-fn parse_hex_32(hex_str: &str) -> BridgeResult<[u8; 32]> {
-    let bytes = hex::decode(hex_str).map_err(|_| BridgeError::Hex)?;
-    bytes.try_into().map_err(|_| BridgeError::Hex)
 }
 fn parse_account_list(bytes: &[u8]) -> BridgeResult<Vec<AccountId>> {
     let raw: Vec<String> = norito::json::from_slice(bytes).map_err(|_| BridgeError::AccountList)?;
@@ -13823,6 +13838,13 @@ mod kagemusha_bridge_tests {
         manifest: &iroha_data_model::offline::KagemushaRecursiveSpendArtifactManifestV4,
     ) -> Vec<u8> {
         use iroha_data_model::offline::{
+            KAGEMUSHA_RECURSIVE_SPEND_INTERNAL_VALIDATION_CARGO_FUZZ_VERSION_OUTPUT_V1,
+            KAGEMUSHA_RECURSIVE_SPEND_INTERNAL_VALIDATION_CARGO_FUZZ_VERSION_V1,
+            KAGEMUSHA_RECURSIVE_SPEND_INTERNAL_VALIDATION_FUZZ_CARGO_PROXY_CONTRACT_V1,
+            KAGEMUSHA_RECURSIVE_SPEND_INTERNAL_VALIDATION_FUZZ_CARGO_PROXY_PROGRAM_V1,
+            KAGEMUSHA_RECURSIVE_SPEND_INTERNAL_VALIDATION_FUZZ_RUSTC_VERSION_OUTPUT_V1,
+            KAGEMUSHA_RECURSIVE_SPEND_INTERNAL_VALIDATION_FUZZ_RUSTC_VERSION_V1,
+            KAGEMUSHA_RECURSIVE_SPEND_INTERNAL_VALIDATION_FUZZ_TARGET_TRIPLE_V1,
             KAGEMUSHA_RECURSIVE_SPEND_INTERNAL_VALIDATION_MIN_FUZZ_EXECUTIONS_V1,
             KAGEMUSHA_RECURSIVE_SPEND_INTERNAL_VALIDATION_REQUIRED_COMMANDS_V1,
             KAGEMUSHA_RECURSIVE_SPEND_INTERNAL_VALIDATION_SIGNATURE_DOMAIN_V1,
@@ -13845,6 +13867,9 @@ mod kagemusha_bridge_tests {
         fn fuzz(
             target: KagemushaInternalValidationFuzzTargetV1,
             seed: u8,
+            source_tree_sha256: [u8; 32],
+            tracked_cargo_lock_sha256: [u8; 32],
+            standalone_fuzz_cargo_lock_sha256: [u8; 32],
         ) -> KagemushaInternalValidationFuzzOutcomeV1 {
             KagemushaInternalValidationFuzzOutcomeV1 {
                 target,
@@ -13855,6 +13880,9 @@ mod kagemusha_bridge_tests {
                 crashes: 0,
                 timeouts: 0,
                 out_of_memory: 0,
+                source_tree_sha256_after: source_tree_sha256,
+                tracked_cargo_lock_sha256_after: tracked_cargo_lock_sha256,
+                standalone_fuzz_cargo_lock_sha256_after: standalone_fuzz_cargo_lock_sha256,
                 initial_corpus: exact(seed),
                 final_corpus: exact(seed.wrapping_add(1)),
                 engine_report: exact(seed.wrapping_add(2)),
@@ -13863,6 +13891,11 @@ mod kagemusha_bridge_tests {
 
         let runner = fixture_key_pair(0xA7);
         let validator_binary = exact(14);
+        let reviewed_cargo_fuzz_binary_sha256 = [16; 32];
+        let reviewed_fuzz_cargo_proxy_binary_sha256 = [17; 32];
+        let reviewed_fuzz_rustc_binary_sha256 = [18; 32];
+        let tracked_cargo_lock_sha256 = manifest.reviewed_source_closure.tracked_cargo_lock_sha256;
+        let standalone_fuzz_cargo_lock_sha256 = [7; 32];
         let tool_roles = [
             KagemushaInternalValidationToolRoleV1::Cargo,
             KagemushaInternalValidationToolRoleV1::Rustc,
@@ -13870,6 +13903,8 @@ mod kagemusha_bridge_tests {
             KagemushaInternalValidationToolRoleV1::CargoClippy,
             KagemushaInternalValidationToolRoleV1::ClippyDriver,
             KagemushaInternalValidationToolRoleV1::CargoFuzz,
+            KagemushaInternalValidationToolRoleV1::FuzzCargoProxy,
+            KagemushaInternalValidationToolRoleV1::FuzzRustc,
             KagemushaInternalValidationToolRoleV1::ValidationRunner,
         ];
         let tools = tool_roles
@@ -13881,15 +13916,32 @@ mod kagemusha_bridge_tests {
                     executable.sha256 = manifest.reviewed_cargo_binary_sha256;
                 } else if role == KagemushaInternalValidationToolRoleV1::Rustc {
                     executable.sha256 = manifest.reviewed_rustc_binary_sha256;
+                } else if role == KagemushaInternalValidationToolRoleV1::CargoFuzz {
+                    executable.sha256 = reviewed_cargo_fuzz_binary_sha256;
+                } else if role == KagemushaInternalValidationToolRoleV1::FuzzCargoProxy {
+                    executable.sha256 = reviewed_fuzz_cargo_proxy_binary_sha256;
+                } else if role == KagemushaInternalValidationToolRoleV1::FuzzRustc {
+                    executable.sha256 = reviewed_fuzz_rustc_binary_sha256;
                 } else if role == KagemushaInternalValidationToolRoleV1::ValidationRunner {
                     executable = validator_binary;
                 }
+                let version_output = if role == KagemushaInternalValidationToolRoleV1::CargoFuzz {
+                    KagemushaExactBytesDigestV1::from_bytes(
+                        KAGEMUSHA_RECURSIVE_SPEND_INTERNAL_VALIDATION_CARGO_FUZZ_VERSION_OUTPUT_V1,
+                    )
+                    .expect("pinned cargo-fuzz version output")
+                } else if role == KagemushaInternalValidationToolRoleV1::FuzzRustc {
+                    KagemushaExactBytesDigestV1::from_bytes(
+                        KAGEMUSHA_RECURSIVE_SPEND_INTERNAL_VALIDATION_FUZZ_RUSTC_VERSION_OUTPUT_V1,
+                    )
+                    .expect("pinned fuzz rustc version output")
+                } else {
+                    exact(u8::try_from(index + 40).expect("version-output seed fits"))
+                };
                 KagemushaInternalValidationToolV1 {
                     role,
                     executable,
-                    version_output: exact(
-                        u8::try_from(index + 40).expect("version-output seed fits"),
-                    ),
+                    version_output,
                 }
             })
             .collect();
@@ -13915,7 +13967,13 @@ mod kagemusha_bridge_tests {
                     timed_out: false,
                     log_archive: exact(u8::try_from(index + 130).expect("log seed fits")),
                     fuzz: spec.fuzz_target.map(|target| {
-                        fuzz(target, u8::try_from(index + 190).expect("fuzz seed fits"))
+                        fuzz(
+                            target,
+                            u8::try_from(index + 190).expect("fuzz seed fits"),
+                            manifest.source_tree_sha256,
+                            tracked_cargo_lock_sha256,
+                            standalone_fuzz_cargo_lock_sha256,
+                        )
                     }),
                 },
             )
@@ -13946,18 +14004,39 @@ mod kagemusha_bridge_tests {
                 path: "Cargo.lock".to_owned(),
                 git_blob_oid: "3333333333333333333333333333333333333333".to_owned(),
                 git_mode: "100644".to_owned(),
-                sha256: manifest.reviewed_source_closure.ignored_cargo_lock_sha256,
+                sha256: tracked_cargo_lock_sha256,
                 size_bytes: manifest
                     .reviewed_source_closure
-                    .ignored_cargo_lock_size_bytes,
+                    .tracked_cargo_lock_size_bytes,
+            },
+            standalone_fuzz_cargo_lock: KagemushaReviewedTrackedCargoLockV2 {
+                path: "fuzz/Cargo.lock".to_owned(),
+                git_blob_oid: "4444444444444444444444444444444444444444".to_owned(),
+                git_mode: "100644".to_owned(),
+                sha256: standalone_fuzz_cargo_lock_sha256,
+                size_bytes: 2048,
             },
             reviewed_cargo_binary_sha256: manifest.reviewed_cargo_binary_sha256,
             reviewed_rustc_binary_sha256: manifest.reviewed_rustc_binary_sha256,
+            reviewed_cargo_fuzz_binary_sha256,
+            reviewed_fuzz_cargo_proxy_binary_sha256,
+            fuzz_cargo_proxy_program:
+                KAGEMUSHA_RECURSIVE_SPEND_INTERNAL_VALIDATION_FUZZ_CARGO_PROXY_PROGRAM_V1.to_owned(),
+            fuzz_cargo_proxy_contract:
+                KAGEMUSHA_RECURSIVE_SPEND_INTERNAL_VALIDATION_FUZZ_CARGO_PROXY_CONTRACT_V1
+                    .to_owned(),
+            reviewed_fuzz_rustc_binary_sha256,
+            cargo_fuzz_version: KAGEMUSHA_RECURSIVE_SPEND_INTERNAL_VALIDATION_CARGO_FUZZ_VERSION_V1
+                .to_owned(),
+            fuzz_rustc_version: KAGEMUSHA_RECURSIVE_SPEND_INTERNAL_VALIDATION_FUZZ_RUSTC_VERSION_V1
+                .to_owned(),
             generator_binary_sha256: manifest.generator_binary_sha256,
             sealed_candidate_build_report_sha256: manifest.sealed_candidate_build_report_sha256,
             candidate_validation_report: exact(12),
-            host_triple: "aarch64-apple-darwin".to_owned(),
-            target_triple: "aarch64-apple-darwin".to_owned(),
+            host_triple: KAGEMUSHA_RECURSIVE_SPEND_INTERNAL_VALIDATION_FUZZ_TARGET_TRIPLE_V1
+                .to_owned(),
+            target_triple: KAGEMUSHA_RECURSIVE_SPEND_INTERNAL_VALIDATION_FUZZ_TARGET_TRIPLE_V1
+                .to_owned(),
             validator_binary,
             toolchain_manifest: exact(15),
             tools,
@@ -13990,8 +14069,8 @@ mod kagemusha_bridge_tests {
             untracked_file_count: 0,
             untracked_path_mode_blob_oid_manifest: Vec::new(),
             untracked_path_mode_blob_oid_manifest_sha256,
-            ignored_cargo_lock_size_bytes: 1,
-            ignored_cargo_lock_sha256: Sha256::digest([seed.wrapping_add(1)]).into(),
+            tracked_cargo_lock_size_bytes: 1,
+            tracked_cargo_lock_sha256: Sha256::digest([seed.wrapping_add(1)]).into(),
             combined_source_fingerprint_sha256: combined.finalize().into(),
         };
         let descriptor_sha256 = closure
@@ -17844,158 +17923,6 @@ mod kagemusha_bridge_tests {
         eprintln!("KAGEMUSHA_TAIRA_RELEASE_STAGE_V4 release-key-step-count:verified");
     }
     #[cfg(feature = "privacy-production-enabled")]
-    fn production_ds_offline_readiness_v4(
-        fixture: &ProductionReleaseFixtureV4,
-        installed: &KagemushaRecursiveSpendInstalledArtifactSetV4,
-    ) -> iroha_torii_shared::offline_api::OfflineReadiness {
-        use iroha_core::zk::{
-            ZK_BACKEND_HALO2_IPA,
-            confidential_v2::{
-                CONFIDENTIAL_TRANSFER_V2_CIRCUIT_ID,
-                CONFIDENTIAL_TRANSFER_V2_PUBLIC_INPUTS_SCHEMA_V1,
-                CONFIDENTIAL_UNSHIELD_V3_CIRCUIT_ID,
-                CONFIDENTIAL_UNSHIELD_V3_PUBLIC_INPUTS_SCHEMA_V1, CONFIDENTIAL_V2_MAX_PROOF_BYTES,
-                KAGEMUSHA_TOPUP_SHIELD_V2_CIRCUIT_ID,
-                KAGEMUSHA_TOPUP_SHIELD_V2_PUBLIC_INPUTS_SCHEMA_V2, confidential_transfer_v2_vk_box,
-                confidential_unshield_v3_vk_box, kagemusha_topup_shield_v2_vk_box,
-            },
-            hash_vk,
-        };
-        use iroha_data_model::offline::{
-            KAGEMUSHA_RECURSIVE_SPEND_MAX_PEER_HOPS_V2,
-            KAGEMUSHA_RECURSIVE_SPEND_NATIVE_BRIDGE_ABI_V4,
-            KAGEMUSHA_RECURSIVE_SPEND_STEP_EP_CIRCUIT_ID_V4,
-            KAGEMUSHA_RECURSIVE_SPEND_STEP_EQ_CIRCUIT_ID_V4, KAGEMUSHA_VERIFIER_ROLE_STEP_EP_V4,
-            KAGEMUSHA_VERIFIER_ROLE_STEP_EQ_V4, KAGEMUSHA_VERIFIER_ROLE_TOPUP_SHIELD_V2,
-            KAGEMUSHA_VERIFIER_ROLE_TRANSFER_V2, KAGEMUSHA_VERIFIER_ROLE_UNSHIELD_V2,
-            kagemusha_recursive_spend_step_ep_public_inputs_schema_hash_v4,
-            kagemusha_recursive_spend_step_eq_public_inputs_schema_hash_v4,
-        };
-        use iroha_torii_shared::offline_api::{
-            OfflineActiveTransferVerifier, OfflineAuthenticatedArtifactSet, OfflineReadiness,
-            OfflineVerifierId,
-        };
-        let active = |name: &str,
-                      circuit_id: &str,
-                      commitment: [u8; 32],
-                      public_inputs_schema_hash: [u8; 32],
-                      max_proof_bytes: u32| {
-            OfflineActiveTransferVerifier {
-                id: OfflineVerifierId {
-                    backend: ZK_BACKEND_HALO2_IPA.to_owned(),
-                    name: name.to_owned(),
-                },
-                version: 4,
-                circuit_id: circuit_id.to_owned(),
-                commitment: hex::encode(commitment),
-                public_inputs_schema_hash: hex::encode(public_inputs_schema_hash),
-                max_proof_bytes,
-                activation_height: fixture.manifest.activation_height,
-                withdrawal_height: Some(fixture.manifest.withdrawal_height),
-            }
-        };
-        let transfer = active(
-            KAGEMUSHA_VERIFIER_ROLE_TRANSFER_V2,
-            CONFIDENTIAL_TRANSFER_V2_CIRCUIT_ID,
-            hash_vk(&confidential_transfer_v2_vk_box().expect("canonical transfer verifier")),
-            Hash::new(CONFIDENTIAL_TRANSFER_V2_PUBLIC_INPUTS_SCHEMA_V1).into(),
-            CONFIDENTIAL_V2_MAX_PROOF_BYTES,
-        );
-        let topup = active(
-            KAGEMUSHA_VERIFIER_ROLE_TOPUP_SHIELD_V2,
-            KAGEMUSHA_TOPUP_SHIELD_V2_CIRCUIT_ID,
-            hash_vk(&kagemusha_topup_shield_v2_vk_box().expect("canonical top-up verifier")),
-            Hash::new(KAGEMUSHA_TOPUP_SHIELD_V2_PUBLIC_INPUTS_SCHEMA_V2).into(),
-            CONFIDENTIAL_V2_MAX_PROOF_BYTES,
-        );
-        let unshield = active(
-            KAGEMUSHA_VERIFIER_ROLE_UNSHIELD_V2,
-            CONFIDENTIAL_UNSHIELD_V3_CIRCUIT_ID,
-            hash_vk(&confidential_unshield_v3_vk_box().expect("canonical unshield verifier")),
-            Hash::new(CONFIDENTIAL_UNSHIELD_V3_PUBLIC_INPUTS_SCHEMA_V1).into(),
-            CONFIDENTIAL_V2_MAX_PROOF_BYTES,
-        );
-        let recursive = |commitment: [u8; 32],
-                         role: &str,
-                         circuit_id: &str,
-                         public_inputs_schema_hash: [u8; 32]| {
-            active(
-                role,
-                circuit_id,
-                commitment,
-                public_inputs_schema_hash,
-                fixture.manifest.max_proof_bytes,
-            )
-        };
-        let step_eq = recursive(
-            installed
-                .qualified_source
-                .step_eq()
-                .verifying_key_commitment(),
-            KAGEMUSHA_VERIFIER_ROLE_STEP_EQ_V4,
-            KAGEMUSHA_RECURSIVE_SPEND_STEP_EQ_CIRCUIT_ID_V4,
-            kagemusha_recursive_spend_step_eq_public_inputs_schema_hash_v4(),
-        );
-        let step_ep = recursive(
-            installed
-                .qualified_source
-                .step_ep()
-                .verifying_key_commitment(),
-            KAGEMUSHA_VERIFIER_ROLE_STEP_EP_V4,
-            KAGEMUSHA_RECURSIVE_SPEND_STEP_EP_CIRCUIT_ID_V4,
-            kagemusha_recursive_spend_step_ep_public_inputs_schema_hash_v4(),
-        );
-        let readiness = OfflineReadiness {
-            cash_handoff_capability:
-                iroha_data_model::offline::KAGEMUSHA_CASH_HANDOFF_CAPABILITY_V1.to_owned(),
-            required_bridge_abi_version: KAGEMUSHA_RECURSIVE_SPEND_NATIVE_BRIDGE_ABI_V4,
-            max_hops: KAGEMUSHA_RECURSIVE_SPEND_MAX_PEER_HOPS_V2,
-            asset_definition_id: fixture.manifest.asset.to_string(),
-            asset_scale: Some(fixture.manifest.asset_scale),
-            evaluated_block_height: 43,
-            evaluated_block_hash: hex::encode(<[u8; 32]>::from(Hash::new(
-                b"production DS acceptance readiness block 43",
-            ))),
-            active_transfer_verifier: Some(transfer),
-            active_topup_shield_verifier: Some(topup),
-            active_unshield_verifier: Some(unshield),
-            active_recursive_step_eq_verifier: Some(step_eq),
-            active_recursive_step_ep_verifier: Some(step_ep),
-            artifact_set: Some(OfflineAuthenticatedArtifactSet {
-                generation: fixture.manifest.generation.clone(),
-                manifest_sha256: hex::encode(installed.manifest_sha256),
-                release_policy_sha256: hex::encode(
-                    installed
-                        .source
-                        .authenticated_release
-                        .release_policy_sha256(),
-                ),
-                release_attestation_sha256: hex::encode(
-                    installed
-                        .source
-                        .authenticated_release
-                        .release_attestation_sha256(),
-                ),
-                activation_height: fixture.manifest.activation_height,
-                withdrawal_height: fixture.manifest.withdrawal_height,
-                max_proof_bytes: fixture.manifest.max_proof_bytes,
-                asset_scale: fixture.manifest.asset_scale,
-            }),
-            proof_backend_available: true,
-            recursive_lineage_supported: true,
-            ready: true,
-            blockers: Vec::new(),
-        };
-        let projected = java_kagemusha_project_readiness_v4_fields(readiness.clone())
-            .expect("production DS readiness must satisfy the exact mobile projection");
-        assert_eq!(
-            projected.first().map(Vec::as_slice),
-            Some(iroha_data_model::offline::KAGEMUSHA_CASH_HANDOFF_CAPABILITY_V1.as_bytes()),
-            "mobile readiness must carry the authenticated cash-handoff capability instead of synthesizing it in an SDK",
-        );
-        readiness
-    }
-    #[cfg(feature = "privacy-production-enabled")]
     struct ProductionDsAcceptanceLifecycleV1 {
         artifact_binding: iroha_data_model::offline::KagemushaRecursiveSpendArtifactBindingV4,
         sender_opening: KagemushaNoteOpeningV2,
@@ -18019,7 +17946,6 @@ mod kagemusha_bridge_tests {
         acknowledgement: iroha_data_model::offline::KagemushaReceiverAcknowledgementV2,
         acknowledgement_verify_result:
             iroha_data_model::offline::KagemushaReceiverAcknowledgementVerifyResultV2,
-        offline_readiness: iroha_torii_shared::offline_api::OfflineReadiness,
     }
     #[cfg(feature = "privacy-production-enabled")]
     fn production_ds_acceptance_lifecycle_v1(
@@ -18523,7 +18449,6 @@ mod kagemusha_bridge_tests {
             .expect("decode production ACK ABI result"),
             acknowledgement_verify_result
         );
-        let offline_readiness = production_ds_offline_readiness_v4(fixture, installed);
         ProductionDsAcceptanceLifecycleV1 {
             artifact_binding,
             sender_opening,
@@ -18545,7 +18470,6 @@ mod kagemusha_bridge_tests {
             acknowledgement_signature_raw,
             acknowledgement,
             acknowledgement_verify_result,
-            offline_readiness,
         }
     }
     fn production_ds_acceptance_file_secret_v1(kind: &str, declared_secret: bool) -> bool {
@@ -19342,6 +19266,7 @@ mod kagemusha_bridge_tests {
     #[cfg(feature = "privacy-production-enabled")]
     fn export_production_ds_acceptance_bundle_v1(
         fixture: &ProductionReleaseFixtureV4,
+        installed: &KagemushaRecursiveSpendInstalledArtifactSetV4,
         lifecycle: &ProductionDsAcceptanceLifecycleV1,
     ) -> Option<std::path::PathBuf> {
         use std::{
@@ -19551,13 +19476,6 @@ mod kagemusha_bridge_tests {
             "input",
             "release/topup-finality-roster-v2.norito",
             &fixture.topup_roster,
-            false
-        );
-        archive!(
-            "offline_readiness_v4",
-            "input",
-            "release/offline-readiness-v4.norito",
-            &lifecycle.offline_readiness,
             false
         );
         let descriptors = fixture
@@ -19876,16 +19794,29 @@ mod kagemusha_bridge_tests {
             fixture.receiver_offer.request.amount,
             fixture.fresh_recipient_request.amount
         );
-        let readiness_artifact_set = lifecycle
-            .offline_readiness
-            .artifact_set
-            .as_ref()
-            .expect("production DS readiness artifact set");
-        let readiness_transfer = lifecycle
-            .offline_readiness
-            .active_transfer_verifier
-            .as_ref()
-            .expect("production DS readiness transfer verifier");
+        let evaluated_block_hash = hex::encode(<[u8; 32]>::from(Hash::new(
+            b"production DS acceptance block 43",
+        )));
+        let release_manifest_sha256 = hex::encode(installed.manifest_sha256);
+        let release_policy_sha256 = hex::encode(
+            installed
+                .source
+                .authenticated_release
+                .release_policy_sha256(),
+        );
+        let release_attestation_sha256 = hex::encode(
+            installed
+                .source
+                .authenticated_release
+                .release_attestation_sha256(),
+        );
+        let transfer_verifier_commitment = hex::encode(iroha_core::zk::hash_vk(
+            &iroha_core::zk::confidential_v2::confidential_transfer_v2_vk_box()
+                .expect("canonical transfer verifier"),
+        ));
+        let transfer_public_inputs_schema_hash = hex::encode(<[u8; 32]>::from(Hash::new(
+            iroha_core::zk::confidential_v2::CONFIDENTIAL_TRANSFER_V2_PUBLIC_INPUTS_SCHEMA_V1,
+        )));
         let manifest = format!(
             concat!(
                 "{{",
@@ -19957,29 +19888,27 @@ mod kagemusha_bridge_tests {
             iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_NATIVE_BRIDGE_ABI_V4,
             json_string(&fixture.manifest.network_id.to_string()),
             json_string(&fixture.manifest.asset.to_string()),
-            json_string(&lifecycle.offline_readiness.evaluated_block_hash),
+            json_string(&evaluated_block_hash),
             json_string(&lifecycle.topup_anchor.payer.to_string()),
             json_string(&fixture.fresh_recipient_request.recipient().to_string()),
             json_string(fixture.fresh_recipient_request.receiver_device_id()),
-            json_string(&readiness_artifact_set.generation),
-            json_string(&readiness_artifact_set.manifest_sha256),
-            json_string(&readiness_artifact_set.release_policy_sha256),
-            json_string(&readiness_artifact_set.release_attestation_sha256),
-            readiness_artifact_set.activation_height,
-            readiness_artifact_set.withdrawal_height,
-            readiness_artifact_set.max_proof_bytes,
-            readiness_artifact_set.asset_scale,
-            json_string(&readiness_transfer.id.backend),
-            json_string(&readiness_transfer.id.name),
-            readiness_transfer.version,
-            json_string(&readiness_transfer.circuit_id),
-            json_string(&readiness_transfer.commitment),
-            json_string(&readiness_transfer.public_inputs_schema_hash),
-            readiness_transfer.max_proof_bytes,
-            readiness_transfer.activation_height,
-            readiness_transfer
-                .withdrawal_height
-                .expect("production DS transfer verifier withdrawal"),
+            json_string(&fixture.manifest.generation),
+            json_string(&release_manifest_sha256),
+            json_string(&release_policy_sha256),
+            json_string(&release_attestation_sha256),
+            fixture.manifest.activation_height,
+            fixture.manifest.withdrawal_height,
+            fixture.manifest.max_proof_bytes,
+            fixture.manifest.asset_scale,
+            json_string(iroha_core::zk::ZK_BACKEND_HALO2_IPA),
+            json_string(iroha_data_model::offline::KAGEMUSHA_VERIFIER_ROLE_TRANSFER_V2),
+            4,
+            json_string(iroha_core::zk::confidential_v2::CONFIDENTIAL_TRANSFER_V2_CIRCUIT_ID),
+            json_string(&transfer_verifier_commitment),
+            json_string(&transfer_public_inputs_schema_hash),
+            iroha_core::zk::confidential_v2::CONFIDENTIAL_V2_MAX_PROOF_BYTES,
+            fixture.manifest.activation_height,
+            fixture.manifest.withdrawal_height,
             hex::encode(fixture.receiver_offer.request.request_id),
             hex::encode(previous_request_digest),
             hex::encode(fixture.fresh_recipient_request.request_id),
@@ -20257,7 +20186,9 @@ mod kagemusha_bridge_tests {
             700
         );
         assert!(lifecycle.acknowledgement_verify_result.valid);
-        if let Some(path) = export_production_ds_acceptance_bundle_v1(&fixture, &lifecycle) {
+        if let Some(path) =
+            export_production_ds_acceptance_bundle_v1(&fixture, installed.as_ref(), &lifecycle)
+        {
             eprintln!(
                 "wrote complete production DS mobile acceptance bundle to {}",
                 path.display()
@@ -20297,7 +20228,7 @@ mod kagemusha_bridge_tests {
             .split_once("fn production_release_key_step_count_regression_v1(")
             .expect("Taira release-key regression")
             .1
-            .split_once("fn production_ds_offline_readiness_v4(")
+            .split_once("struct ProductionDsAcceptanceLifecycleV1")
             .expect("end of Taira release-key regression")
             .0;
         for required in [
@@ -21321,7 +21252,7 @@ mod kagemusha_bridge_tests {
     }
     #[test]
     fn bridge_abi_version_advertises_sorafs_order_id_derivation() {
-        assert_eq!(unsafe { connect_norito_bridge_abi_version() }, 22);
+        assert_eq!(unsafe { connect_norito_bridge_abi_version() }, 23);
     }
     #[test]
     fn recursive_spend_v4_capabilities_reject_null_outputs_and_clear_available_state() {
@@ -23288,8 +23219,8 @@ define_ed25519_signed_transaction_wrapper! {
     }
 }
 define_ed25519_signed_transaction_wrapper! {
-    connect_norito_encode_governance_propose_deploy_signed_transaction =>
-        connect_norito_encode_governance_propose_deploy_signed_transaction_alg(
+    connect_norito_encode_governance_propose_deploy_v1_signed_transaction =>
+        connect_norito_encode_governance_propose_deploy_v1_signed_transaction_alg(
             network_id_ptr: *const c_char,
             network_id_len: c_ulong,
             authority_ptr: *const c_char,
@@ -23299,17 +23230,16 @@ define_ed25519_signed_transaction_wrapper! {
             ttl_present: c_uchar,
             contract_address_ptr: *const c_char,
             contract_address_len: c_ulong,
-            code_hash_ptr: *const c_char,
+            code_hash_ptr: *const c_uchar,
             code_hash_len: c_ulong,
-            abi_hash_ptr: *const c_char,
+            abi_hash_ptr: *const c_uchar,
             abi_hash_len: c_ulong,
-            abi_version_ptr: *const c_char,
-            abi_version_len: c_ulong,
-            window_lower: u64,
-            window_upper: u64,
-            window_present: c_uchar,
-            mode_code: u8,
-            mode_present: c_uchar,
+            abi_version: u16,
+            provenance_signer_ptr: *const c_char,
+            provenance_signer_len: c_ulong,
+            provenance_signature_ptr: *const c_char,
+            provenance_signature_len: c_ulong,
+            provenance_present: c_uchar,
             fee_payment_json_ptr: *const c_uchar,
             fee_payment_json_len: c_ulong,
             private_key_ptr: *const c_uchar,
@@ -23324,59 +23254,39 @@ define_ed25519_signed_transaction_wrapper! {
         let authority_str = unsafe { read_string_bridge(authority_ptr, authority_len) }?;
         let contract_address_raw =
             unsafe { read_string_bridge(contract_address_ptr, contract_address_len) }?;
-        let code_hash_raw = unsafe { read_string_bridge(code_hash_ptr, code_hash_len) }?;
-        let abi_hash_raw = unsafe { read_string_bridge(abi_hash_ptr, abi_hash_len) }?;
-        let abi_version = unsafe { read_string_bridge(abi_version_ptr, abi_version_len) }?;
+        let code_hash = ContractCodeHash::new(unsafe {
+            read_governance_hash32_bridge(code_hash_ptr, code_hash_len)?
+        });
+        let abi_hash = ContractAbiHash::new(unsafe {
+            read_governance_hash32_bridge(abi_hash_ptr, abi_hash_len)?
+        });
+        if abi_version != 1 {
+            return Err(BridgeError::Governance);
+        }
+        let abi_version = AbiVersion::new(abi_version);
+        let manifest_provenance = unsafe {
+            read_manifest_provenance_bridge(
+                provenance_signer_ptr,
+                provenance_signer_len,
+                provenance_signature_ptr,
+                provenance_signature_len,
+                provenance_present,
+            )?
+        };
         let network_id = unsafe { read_network_id_bridge(network_id_ptr, network_id_len) }?;
         let authority = parse_account_id(authority_str)?;
         let contract_address = contract_address_raw
             .parse()
             .map_err(|_| BridgeError::Governance)?;
         let ttl = parse_ttl(ttl_ms, ttl_present != 0)?;
-        let code_hash_arr = parse_hex_32(&code_hash_raw)?;
-        let abi_hash_arr = parse_hex_32(&abi_hash_raw)?;
-        let code_hash_hex = hex::encode(code_hash_arr);
-        let abi_hash_hex = hex::encode(abi_hash_arr);
-        let window = if window_present != 0 {
-            Some(AtWindow {
-                lower: window_lower,
-                upper: window_upper,
-            })
-        } else {
-            None
-        };
-        let mode = if mode_present != 0 {
-            Some(parse_voting_mode(mode_code)?)
-        } else {
-            None
-        };
         let key_slice = unsafe { slice::from_raw_parts(private_key_ptr, private_key_len as usize) };
         let private_key = parse_private_key_with_algorithm(key_slice, algorithm)?;
-        let key_pair = KeyPair::from(private_key.clone());
-        let manifest = ContractManifest {
-            seiyaku_name: None,
-            code_hash: Some(Hash::prehashed(code_hash_arr)),
-            abi_hash: Some(Hash::prehashed(abi_hash_arr)),
-            compiler_fingerprint: None,
-            features_bitmap: None,
-            access_set_hints: None,
-            entrypoints: None,
-            states: None,
-            kotoba: None,
-            error_codes: None,
-            provenance: None,
-        }
-        .try_signed(&key_pair)
-        .map_err(|_| BridgeError::Governance)?;
-        let manifest_provenance = manifest.provenance.clone().ok_or(BridgeError::Governance)?;
         let proposal = ProposeDeployContract {
             contract_address,
-            code_hash_hex,
-            abi_hash_hex,
+            code_hash,
+            abi_hash,
             abi_version,
-            window,
-            mode,
-            manifest_provenance: Some(manifest_provenance),
+            manifest_provenance,
         };
         let fee_payment =
             unsafe { parse_fee_payment_intent_bridge(fee_payment_json_ptr, fee_payment_json_len)? };
@@ -23519,128 +23429,6 @@ define_ed25519_signed_transaction_wrapper! {
             fee_payment,
             private_key,
             InstructionBox::from(ballot),
-        )?;
-    }
-}
-define_ed25519_signed_transaction_wrapper! {
-    connect_norito_encode_governance_enact_referendum_signed_transaction =>
-        connect_norito_encode_governance_enact_referendum_signed_transaction_alg(
-            network_id_ptr: *const c_char,
-            network_id_len: c_ulong,
-            authority_ptr: *const c_char,
-            authority_len: c_ulong,
-            creation_time_ms: u64,
-            ttl_ms: u64,
-            ttl_present: c_uchar,
-            referendum_id_ptr: *const c_char,
-            referendum_id_len: c_ulong,
-            preimage_hash_ptr: *const c_char,
-            preimage_hash_len: c_ulong,
-            window_lower: u64,
-            window_upper: u64,
-            fee_payment_json_ptr: *const c_uchar,
-            fee_payment_json_len: c_ulong,
-            private_key_ptr: *const c_uchar,
-            private_key_len: c_ulong,
-        )
-    identifiers: (algorithm_code, signed_bytes, hash_bytes);
-    {
-        if private_key_ptr.is_null() {
-            return Err(BridgeError::NullPtr);
-        }
-        let algorithm = parse_algorithm_code(algorithm_code)?;
-        let authority_str = unsafe { read_string_bridge(authority_ptr, authority_len) }?;
-        let referendum_hex = unsafe { read_string_bridge(referendum_id_ptr, referendum_id_len) }?;
-        let preimage_hex = unsafe { read_string_bridge(preimage_hash_ptr, preimage_hash_len) }?;
-        let network_id = unsafe { read_network_id_bridge(network_id_ptr, network_id_len) }?;
-        let authority = parse_account_id(authority_str)?;
-        let ttl = parse_ttl(ttl_ms, ttl_present != 0)?;
-        let referendum_id = parse_hex_32(&referendum_hex)?;
-        let preimage_hash = parse_hex_32(&preimage_hex)?;
-        let at_window = AtWindow {
-            lower: window_lower,
-            upper: window_upper,
-        };
-        let key_slice = unsafe { slice::from_raw_parts(private_key_ptr, private_key_len as usize) };
-        let private_key = parse_private_key_with_algorithm(key_slice, algorithm)?;
-        let enact = EnactReferendum {
-            referendum_id,
-            preimage_hash,
-            at_window,
-        };
-        let fee_payment =
-            unsafe { parse_fee_payment_intent_bridge(fee_payment_json_ptr, fee_payment_json_len)? };
-        let (signed_bytes, hash_bytes) = encode_instruction_transaction(
-            network_id,
-            authority,
-            creation_time_ms,
-            ttl,
-            fee_payment,
-            private_key,
-            InstructionBox::from(enact),
-        )?;
-    }
-}
-define_ed25519_signed_transaction_wrapper! {
-    connect_norito_encode_governance_finalize_referendum_signed_transaction =>
-        connect_norito_encode_governance_finalize_referendum_signed_transaction_alg(
-            network_id_ptr: *const c_char,
-            network_id_len: c_ulong,
-            authority_ptr: *const c_char,
-            authority_len: c_ulong,
-            creation_time_ms: u64,
-            ttl_ms: u64,
-            ttl_present: c_uchar,
-            referendum_id_ptr: *const c_char,
-            referendum_id_len: c_ulong,
-            proposal_id_ptr: *const c_char,
-            proposal_id_len: c_ulong,
-            fee_payment_json_ptr: *const c_uchar,
-            fee_payment_json_len: c_ulong,
-            private_key_ptr: *const c_uchar,
-            private_key_len: c_ulong,
-        )
-    identifiers: (algorithm_code, signed_bytes, hash_bytes);
-    clear_outputs: clear_signed_transaction_outputs;
-    {
-        if private_key_ptr.is_null() {
-            return Err(BridgeError::NullPtr);
-        }
-        let referendum_id = unsafe {
-            read_exact_lower_hex32_bridge(
-                referendum_id_ptr,
-                referendum_id_len,
-                BridgeError::Governance,
-            )
-        }?;
-        let proposal_hex = unsafe {
-            read_exact_lower_hex32_bridge(proposal_id_ptr, proposal_id_len, BridgeError::Hex)
-        }?;
-        if referendum_id != proposal_hex {
-            return Err(BridgeError::Governance);
-        }
-        let algorithm = parse_algorithm_code(algorithm_code)?;
-        let authority_str = unsafe { read_string_bridge(authority_ptr, authority_len) }?;
-        let network_id = unsafe { read_network_id_bridge(network_id_ptr, network_id_len) }?;
-        let authority = parse_account_id(authority_str)?;
-        let ttl = parse_ttl(ttl_ms, ttl_present != 0)?;
-        let proposal_id = parse_hex_32(&proposal_hex)?;
-        let key_slice = unsafe { slice::from_raw_parts(private_key_ptr, private_key_len as usize) };
-        let private_key = parse_private_key_with_algorithm(key_slice, algorithm)?;
-        let finalize = FinalizeReferendum {
-            referendum_id,
-            proposal_id,
-        };
-        let fee_payment =
-            unsafe { parse_fee_payment_intent_bridge(fee_payment_json_ptr, fee_payment_json_len)? };
-        let (signed_bytes, hash_bytes) = encode_instruction_transaction(
-            network_id,
-            authority,
-            creation_time_ms,
-            ttl,
-            fee_payment,
-            private_key,
-            InstructionBox::from(finalize),
         )?;
     }
 }
@@ -24154,11 +23942,9 @@ mod accel_tests {
             "register_zk_asset",
             "set_key_value",
             "remove_key_value",
-            "governance_propose_deploy",
+            "governance_propose_deploy_v1",
             "governance_cast_plain_ballot",
             "governance_cast_zk_ballot",
-            "governance_enact_referendum",
-            "governance_finalize_referendum",
             "governance_persist_council",
             "mint",
             "multisig_register",
@@ -24166,7 +23952,7 @@ mod accel_tests {
             "claim_identifier",
         ];
         let macro_marker = ["define_ed25519_signed_", "transaction_wrapper!{"].concat();
-        assert_eq!(compact_source.matches(macro_marker.as_str()).count(), 14);
+        assert_eq!(compact_source.matches(macro_marker.as_str()).count(), 12);
         for family in families {
             let default = format!("connect_norito_encode_{family}_signed_transaction");
             let with_algorithm = format!("{default}_alg");
@@ -24184,6 +23970,64 @@ mod accel_tests {
                 default_declaration, algorithm_declaration,
                 "C ABI pair differs by more than algorithm_code for {family}",
             );
+        }
+    }
+    #[test]
+    fn governance_deploy_v1_boundary_requires_exact_hashes_and_explicit_provenance() {
+        let hash = [0xA5_u8; 32];
+        assert_eq!(
+            unsafe { read_governance_hash32_bridge(hash.as_ptr(), hash.len() as c_ulong) }
+                .expect("exact raw hash"),
+            hash
+        );
+        assert!(matches!(
+            unsafe { read_governance_hash32_bridge(hash.as_ptr(), 31) },
+            Err(BridgeError::Governance)
+        ));
+
+        assert!(
+            unsafe { read_manifest_provenance_bridge(ptr::null(), 0, ptr::null(), 0, 0) }
+                .expect("explicitly absent provenance")
+                .is_none()
+        );
+        let signer = cstring(&fixture_key_pair(33).public_key().to_string());
+        let signature = cstring(&"11".repeat(64));
+        let provenance = unsafe {
+            read_manifest_provenance_bridge(
+                signer.as_ptr(),
+                signer.as_bytes().len() as c_ulong,
+                signature.as_ptr(),
+                signature.as_bytes().len() as c_ulong,
+                1,
+            )
+        }
+        .expect("explicitly present provenance")
+        .expect("present provenance value");
+        assert_eq!(provenance.signer, fixture_key_pair(33).public_key().clone());
+        assert_eq!(provenance.signature.payload(), &[0x11_u8; 64]);
+
+        for result in [
+            unsafe {
+                read_manifest_provenance_bridge(
+                    signer.as_ptr(),
+                    signer.as_bytes().len() as c_ulong,
+                    ptr::null(),
+                    0,
+                    1,
+                )
+            },
+            unsafe {
+                read_manifest_provenance_bridge(
+                    signer.as_ptr(),
+                    signer.as_bytes().len() as c_ulong,
+                    ptr::null(),
+                    0,
+                    0,
+                )
+            },
+            unsafe { read_manifest_provenance_bridge(ptr::null(), 0, ptr::null(), 0, 2) },
+        ] {
+            assert!(matches!(result, Err(BridgeError::Governance)));
         }
     }
     macro_rules! call_signed_transaction_encoder_pair {
@@ -24352,56 +24196,6 @@ mod accel_tests {
             )
         )
     }
-    fn call_finalize_referendum_encoder(
-        referendum_id: &str,
-        algorithm: Option<Algorithm>,
-        valid_private_key: bool,
-    ) -> (c_int, *mut u8, c_ulong, [u8; 32]) {
-        call_finalize_referendum_encoder_with_proposal(
-            referendum_id,
-            &"33".repeat(32),
-            algorithm,
-            valid_private_key,
-        )
-    }
-    fn call_finalize_referendum_encoder_with_proposal(
-        referendum_id: &str,
-        proposal_id: &str,
-        algorithm: Option<Algorithm>,
-        valid_private_key: bool,
-    ) -> (c_int, *mut u8, c_ulong, [u8; 32]) {
-        let chain = network_id_cstring("governance-finalize");
-        let (authority, private) = sample_account("governance", 33);
-        let proposal_id = cstring(proposal_id);
-        let invalid_private = [0xFF_u8];
-        let private = if valid_private_key {
-            private.as_slice()
-        } else {
-            invalid_private.as_slice()
-        };
-        call_signed_transaction_encoder_pair!(
-            algorithm,
-            connect_norito_encode_governance_finalize_referendum_signed_transaction,
-            connect_norito_encode_governance_finalize_referendum_signed_transaction_alg,
-            (
-                chain.as_ptr(),
-                chain.as_bytes().len() as c_ulong,
-                authority.as_ptr(),
-                authority.as_bytes().len() as c_ulong,
-                1,
-                0,
-                0,
-                referendum_id.as_ptr().cast::<c_char>(),
-                referendum_id.len() as c_ulong,
-                proposal_id.as_ptr(),
-                proposal_id.as_bytes().len() as c_ulong,
-                AUTHORITY_FEE_PAYMENT_JSON.as_ptr(),
-                AUTHORITY_FEE_PAYMENT_JSON.len() as c_ulong,
-                private.as_ptr(),
-                private.len() as c_ulong,
-            )
-        )
-    }
     type GovernanceSelectorEncoder =
         fn(&str, Option<Algorithm>, bool) -> (c_int, *mut u8, c_ulong, [u8; 32]);
     fn call_plain_ballot_selector_encoder(
@@ -24411,11 +24205,10 @@ mod accel_tests {
     ) -> (c_int, *mut u8, c_ulong, [u8; 32]) {
         call_plain_ballot_encoder(selector, "1", algorithm, valid_private_key)
     }
-    fn governance_selector_encoders() -> [(&'static str, GovernanceSelectorEncoder); 3] {
+    fn governance_selector_encoders() -> [(&'static str, GovernanceSelectorEncoder); 2] {
         [
             ("CastPlainBallot", call_plain_ballot_selector_encoder),
             ("CastZkBallot", call_zk_ballot_encoder),
-            ("FinalizeReferendum", call_finalize_referendum_encoder),
         ]
     }
     #[test]
@@ -24425,9 +24218,6 @@ mod accel_tests {
         for selector in ["a", maximum.as_str()] {
             for algorithm in [None, Some(Algorithm::Ed25519)] {
                 for (instruction, encode) in governance_selector_encoders() {
-                    if instruction == "FinalizeReferendum" {
-                        continue;
-                    }
                     let (result, out_signed_ptr, out_signed_len, out_hash) =
                         encode(selector, algorithm, true);
                     assert_eq!(
@@ -24440,63 +24230,6 @@ mod accel_tests {
                     assert_signed_hash_matches(out_hash, out_signed_ptr, out_signed_len);
                     unsafe { free(out_signed_ptr.cast()) };
                 }
-            }
-        }
-    }
-    #[test]
-    fn governance_finalize_encoder_requires_one_exact_proposal_fingerprint_before_crypto() {
-        let _guard = chain_guard();
-        let proposal_id = "ab".repeat(32);
-        let uppercase_referendum = proposal_id.to_uppercase();
-        for algorithm in [None, Some(Algorithm::Ed25519)] {
-            let (result, out_signed_ptr, out_signed_len, out_hash) =
-                call_finalize_referendum_encoder_with_proposal(
-                    &proposal_id,
-                    &proposal_id,
-                    algorithm,
-                    true,
-                );
-            assert_eq!(result, 0);
-            assert!(!out_signed_ptr.is_null());
-            assert_signed_hash_matches(out_hash, out_signed_ptr, out_signed_len);
-            unsafe { free(out_signed_ptr.cast()) };
-            for (case, referendum_id, candidate, expected) in [
-                (
-                    "mismatched referendum",
-                    proposal_id.as_str(),
-                    "44".repeat(32),
-                    ERR_GOVERNANCE,
-                ),
-                (
-                    "uppercase referendum",
-                    uppercase_referendum.as_str(),
-                    proposal_id.clone(),
-                    ERR_GOVERNANCE,
-                ),
-                (
-                    "uppercase proposal",
-                    proposal_id.as_str(),
-                    proposal_id.to_uppercase(),
-                    ERR_HEX,
-                ),
-                (
-                    "prefixed proposal",
-                    proposal_id.as_str(),
-                    format!("0x{proposal_id}"),
-                    ERR_HEX,
-                ),
-            ] {
-                let (result, out_signed_ptr, out_signed_len, out_hash) =
-                    call_finalize_referendum_encoder_with_proposal(
-                        referendum_id,
-                        &candidate,
-                        algorithm,
-                        false,
-                    );
-                assert_eq!(result, expected, "{case}");
-                assert!(out_signed_ptr.is_null(), "{case}");
-                assert_eq!(out_signed_len, 0, "{case}");
-                assert_eq!(out_hash, [0_u8; 32], "{case}");
             }
         }
     }

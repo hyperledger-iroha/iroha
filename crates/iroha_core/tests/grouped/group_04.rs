@@ -16,8 +16,6 @@ mod queue_regressions;
 mod queue_stress;
 #[path = "../runtime_upgrade_admission.rs"]
 mod runtime_upgrade_admission;
-#[path = "../sccp_route_governance_isi.rs"]
-mod sccp_route_governance_isi;
 #[path = "../settlement_overlay.rs"]
 mod settlement_overlay;
 #[path = "../social_viral_incentives.rs"]
@@ -26,6 +24,8 @@ mod social_viral_incentives;
 mod sparse_block_bytes;
 #[path = "../sumeragi_doc_sync.rs"]
 mod sumeragi_doc_sync;
+#[path = "../validation_fee_admission.rs"]
+mod validation_fee_admission;
 #[path = "../validation_fee_plain_ballot_gates.rs"]
 mod validation_fee_plain_ballot_gates;
 #[path = "../zk_backend_tags.rs"]

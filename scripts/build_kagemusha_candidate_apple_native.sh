@@ -344,7 +344,7 @@ manifest = {
     "do_not_ship_marker": "KAGEMUSHA_CANDIDATE_EVIDENCE_LAB_DO_NOT_SHIP_V2",
     "candidate_feature_enabled": True,
     "production_capability_enabled": False,
-    "bridge_abi_version": 22,
+    "bridge_abi_version": 23,
     "target_triple": "aarch64-apple-ios",
     "architectures": ["arm64"],
     "simulator_slice_present": False,

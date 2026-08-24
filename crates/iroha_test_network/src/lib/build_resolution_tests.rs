@@ -320,7 +320,6 @@ fn create_release_prebuilt_fixture() -> ReleasePrebuiltFixture {
 fn release_prebuilt_env(
     fixture: &ReleasePrebuiltFixture,
     manifest_sha256: &str,
-    reentrant: &str,
 ) -> Vec<EnvVarRestore> {
     vec![
         EnvVarRestore::set(
@@ -334,7 +333,6 @@ fn release_prebuilt_env(
         ),
         EnvVarRestore::set(IROHA_TEST_TARGET_DIR_ENV, fixture.target.as_os_str()),
         EnvVarRestore::set(IROHA_TEST_SKIP_BUILD_ENV, "1"),
-        EnvVarRestore::set(IROHA_TEST_ALLOW_REENTRANT_BUILD_ENV, reentrant),
         EnvVarRestore::set(IROHA_TEST_BUILD_PROFILE_ENV, "release"),
         EnvVarRestore::set("PROFILE", "release"),
     ]
@@ -352,7 +350,7 @@ fn rewrite_release_manifest(fixture: &ReleasePrebuiltFixture, from: &str, to: &s
 fn release_prebuilt_manifest_and_all_program_paths_validate_exactly() {
     let _guard = lock_env_guard(&PROGRAM_BIN_ENV_GUARD);
     let fixture = create_release_prebuilt_fixture();
-    let _env = release_prebuilt_env(&fixture, &fixture.manifest_sha256, "0");
+    let _env = release_prebuilt_env(&fixture, &fixture.manifest_sha256);
     let contract = release_program_contract(&fixture.repo)
         .expect("validate release contract")
         .expect("release contract active");
@@ -376,7 +374,7 @@ fn release_prebuilt_manifest_and_all_program_paths_validate_exactly() {
 fn release_prebuilt_manifest_rejects_forged_external_digest() {
     let _guard = lock_env_guard(&PROGRAM_BIN_ENV_GUARD);
     let fixture = create_release_prebuilt_fixture();
-    let _env = release_prebuilt_env(&fixture, &"f".repeat(64), "0");
+    let _env = release_prebuilt_env(&fixture, &"f".repeat(64));
     let err =
         release_program_contract(&fixture.repo).expect_err("forged manifest digest must fail");
     assert!(err.to_string().contains("manifest digest"));
@@ -407,7 +405,7 @@ fn release_prebuilt_manifest_rejects_wrong_binary_path_and_hash() {
         "irohad_relative_path\trelease/not-iroha3d",
     );
     {
-        let _env = release_prebuilt_env(&path_fixture, &path_manifest_sha256, "0");
+        let _env = release_prebuilt_env(&path_fixture, &path_manifest_sha256);
         assert!(
             release_program_contract(&path_fixture.repo).is_err(),
             "non-exact binary path must fail manifest parsing"
@@ -424,7 +422,7 @@ fn release_prebuilt_manifest_rejects_wrong_binary_path_and_hash() {
         &format!("irohad_sha256\t{irohad_hash}"),
         &format!("irohad_sha256\t{}", "0".repeat(64)),
     );
-    let _env = release_prebuilt_env(&hash_fixture, &hash_manifest_sha256, "0");
+    let _env = release_prebuilt_env(&hash_fixture, &hash_manifest_sha256);
     let contract = release_program_contract(&hash_fixture.repo)
         .expect("parse hash-forged manifest")
         .expect("release contract active");
@@ -444,7 +442,7 @@ fn release_prebuilt_binary_rejects_symlink() {
     use std::os::unix::fs::symlink;
     let _guard = lock_env_guard(&PROGRAM_BIN_ENV_GUARD);
     let fixture = create_release_prebuilt_fixture();
-    let _env = release_prebuilt_env(&fixture, &fixture.manifest_sha256, "0");
+    let _env = release_prebuilt_env(&fixture, &fixture.manifest_sha256);
     let contract = release_program_contract(&fixture.repo)
         .expect("parse release manifest")
         .expect("release contract active");
@@ -466,7 +464,7 @@ fn release_prebuilt_binary_rejects_symlink() {
 fn release_prebuilt_binary_revalidates_mutation_after_initial_resolution() {
     let _guard = lock_env_guard(&PROGRAM_BIN_ENV_GUARD);
     let fixture = create_release_prebuilt_fixture();
-    let _env = release_prebuilt_env(&fixture, &fixture.manifest_sha256, "0");
+    let _env = release_prebuilt_env(&fixture, &fixture.manifest_sha256);
     let contract = release_program_contract(&fixture.repo)
         .expect("parse release manifest")
         .expect("release contract active");
@@ -490,7 +488,7 @@ fn release_prebuilt_binary_rejects_mode_drift_and_hard_links() {
     let binary = mode_fixture.target.join("release/iroha3d");
     set_mode(&binary, 0o700);
     {
-        let _env = release_prebuilt_env(&mode_fixture, &mode_fixture.manifest_sha256, "0");
+        let _env = release_prebuilt_env(&mode_fixture, &mode_fixture.manifest_sha256);
         let contract = release_program_contract(&mode_fixture.repo)
             .expect("parse release manifest")
             .expect("release contract active");
@@ -504,7 +502,7 @@ fn release_prebuilt_binary_rejects_mode_drift_and_hard_links() {
     let binary = link_fixture.target.join("release/iroha3d");
     let extra_link = link_fixture.repo.join("iroha3d-hard-link");
     fs::hard_link(&binary, &extra_link).expect("create adversarial hard link");
-    let _env = release_prebuilt_env(&link_fixture, &link_fixture.manifest_sha256, "0");
+    let _env = release_prebuilt_env(&link_fixture, &link_fixture.manifest_sha256);
     let contract = release_program_contract(&link_fixture.repo)
         .expect("parse release manifest")
         .expect("release contract active");
@@ -512,17 +510,6 @@ fn release_prebuilt_binary_rejects_mode_drift_and_hard_links() {
         validate_release_program_candidate(&contract, ReleasePrebuiltBinary::Irohad, &binary)
             .is_err(),
         "multiple hard links must fail"
-    );
-}
-#[test]
-fn release_prebuilt_contract_rejects_reentrant_one() {
-    let _guard = lock_env_guard(&PROGRAM_BIN_ENV_GUARD);
-    let fixture = create_release_prebuilt_fixture();
-    let _env = release_prebuilt_env(&fixture, &fixture.manifest_sha256, "1");
-    let err = release_program_contract(&fixture.repo).expect_err("reentrant=1 must be rejected");
-    assert!(
-        err.to_string()
-            .contains(IROHA_TEST_ALLOW_REENTRANT_BUILD_ENV)
     );
 }
 #[test]
@@ -870,7 +857,7 @@ exit 0
     );
 }
 #[test]
-fn ensure_binary_fresh_refuses_reentrant_builds() {
+fn ensure_binary_fresh_refuses_forbidden_child_builds() {
     let _guard = lock_env_guard(&PROGRAM_BIN_ENV_GUARD);
     let temp = tempdir().expect("temporary workspace");
     let root = temp.path();
@@ -893,7 +880,7 @@ fn ensure_binary_fresh_refuses_reentrant_builds() {
         false,
         &[],
     )
-    .expect_err("re-entrant build should be rejected when building is disallowed");
+    .expect_err("child build should be rejected when building is disallowed");
     assert!(
         err.to_string().contains("cannot build `dummy`"),
         "unexpected error: {err}"
@@ -965,41 +952,16 @@ fn colocated_binary_candidate_for_ignores_missing_sibling_binary() {
     );
 }
 #[test]
-fn reentrant_builds_disabled_under_cargo_by_default() {
-    let _guard = lock_env_guard(&PROGRAM_BIN_ENV_GUARD);
-    let _override_guard = EnvVarGuard::cleared(IROHA_TEST_ALLOW_REENTRANT_BUILD_ENV);
-    assert!(!allow_reentrant_build(true, false));
-    assert!(allow_reentrant_build(false, false));
-    assert!(!allow_reentrant_build(true, true));
-    assert!(!allow_reentrant_build(false, true));
+fn child_builds_are_forbidden_under_cargo_and_in_release_corridors() {
+    assert!(!child_build_allowed(true, false));
+    assert!(child_build_allowed(false, false));
+    assert!(!child_build_allowed(true, true));
+    assert!(!child_build_allowed(false, true));
 }
 #[test]
-fn freshness_validation_cannot_be_bypassed_by_existing_candidates() {
-    assert!(must_validate_binary_freshness(false, false, false));
-    assert!(must_validate_binary_freshness(false, true, true));
-    assert!(!must_validate_binary_freshness(true, false, true));
-    assert!(!must_validate_binary_freshness(false, true, false));
-}
-#[test]
-fn reentrant_builds_can_be_enabled_via_env() {
-    let _guard = lock_env_guard(&PROGRAM_BIN_ENV_GUARD);
-    let _override_guard = EnvVarGuard::cleared(IROHA_TEST_ALLOW_REENTRANT_BUILD_ENV);
-    set_env_var(IROHA_TEST_ALLOW_REENTRANT_BUILD_ENV, "true");
-    assert!(allow_reentrant_build(true, false));
-    assert!(!allow_reentrant_build(true, true));
-}
-#[test]
-fn reentrant_builds_can_be_enabled_via_numeric_env() {
-    let _guard = lock_env_guard(&PROGRAM_BIN_ENV_GUARD);
-    let _override_guard = EnvVarGuard::cleared(IROHA_TEST_ALLOW_REENTRANT_BUILD_ENV);
-    set_env_var(IROHA_TEST_ALLOW_REENTRANT_BUILD_ENV, "1");
-    assert!(allow_reentrant_build(true, false));
-    assert!(!allow_reentrant_build(true, true));
-}
-#[test]
-fn reentrant_builds_can_be_disabled_via_env() {
-    let _guard = lock_env_guard(&PROGRAM_BIN_ENV_GUARD);
-    let _override_guard = EnvVarGuard::cleared(IROHA_TEST_ALLOW_REENTRANT_BUILD_ENV);
-    set_env_var(IROHA_TEST_ALLOW_REENTRANT_BUILD_ENV, "false");
-    assert!(!allow_reentrant_build(true, false));
+fn freshness_validation_runs_only_when_building_is_allowed() {
+    assert!(must_validate_binary_freshness(false, true));
+    assert!(!must_validate_binary_freshness(true, true));
+    assert!(!must_validate_binary_freshness(false, false));
+    assert!(!must_validate_binary_freshness(true, false));
 }

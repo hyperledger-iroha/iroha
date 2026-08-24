@@ -919,7 +919,7 @@ def build_receipt(
         or len(chaos_results) != 1
         or not re.fullmatch(
             r"test result: ok\. 1 passed; 0 failed; 0 ignored; 0 measured; "
-            r"9 filtered out; finished in .+",
+            r"11 filtered out; finished in .+",
             chaos_results[0],
         )
         or sum(chaos_test_prefix in line for line in chaos_lines) != 1

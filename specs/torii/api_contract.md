@@ -92,6 +92,15 @@ response representation can be selected. Router path and method misses are
 typed application errors; protocol streams remain documented transport
 exceptions after stream establishment.
 
+`POST /v1/mcp` is a JSON-only boundary and applies the same canonical JSON
+`Content-Type` rule before collecting its JSON-RPC body. `GET /v1/mcp` and CORS
+preflight remain bodyless and do not require `Content-Type`.
+
+Structured query DTOs accept at most one value for each decoded key. Literal
+duplicates and percent-encoded equivalents such as `limit` and `%6cimit` return
+`400 request_query_invalid`; only explicitly documented protocol parsers may
+define repeated-key semantics.
+
 ## Errors and correlation
 
 Application errors use the closed `ErrorEnvelope { code, message, details? }`
@@ -161,19 +170,19 @@ whose marker appears on another route is replaced by the ordinary typed
 envelope. Errors after a stream has started follow that stream's terminal
 framing instead of the finite HTTP envelope.
 
-`GET /v1/offline/readiness` is retained as a compatibility name for universal
-offline-wallet capability discovery. It does not evaluate a validator, asset,
+`GET /v1/offline/readiness` is the canonical universal offline-wallet
+capability discovery route. It does not evaluate a validator, asset,
 domain, dataspace, escrow account, verifier catalog, or deployment profile.
 Every app-API build returns the same asset-neutral ABI-21/V4
-`cash_handoff_v1` contract with `mandatory: false`, `ready: true`, and empty
-`assets` and `blockers` arrays. Clients must not use this response, `/health`,
+`cash_handoff_v1` contract. Its only fields are
+`cash_handoff_capability`, `required_bridge_abi_version`, `max_hops`, and
+`ready`; `ready` is always true. Clients must not use this response, `/health`,
 or `/readyz` as an offline-feature admission gate.
 
 Proof, authority, balance, release, and lineage errors belong to the specific
 top-up or redemption command that references them. Such an error uses the
 ordinary typed error-envelope contract and cannot make the process or node
-unready. Legacy per-asset readiness records remain decodeable only for wire
-history; Torii does not synthesize or serve them as capability state.
+unready. Torii has no per-asset readiness response or selector query.
 
 Every HTTP response carries `X-Request-Id`. A client may supply an identifier
 containing 1–128 ASCII letters, digits, `-`, `_`, `.`, or `:`; Torii echoes it.
@@ -244,7 +253,7 @@ authentication and network policy rather than by claiming a separate socket.
 | `GET /v1/ledger/block/{height}` and `GET /v1/ledger/block/{height}/proof/{entry_hash}` | public, OpenAPI and SDK | exact `application/x-norito` cryptographic carrier | listener policy | the executed `SignedBlockWire` and `BlockProofs` bytes must not be projected through a separately evolving JSON shape; the block carrier is finalized-state-bound and limited to 32 MiB |
 | `POST /v1/operator/auth/{registration,login}/{options,verify}` | operator, OpenAPI only | WebAuthn JSON | mTLS plus handler-enforced bootstrap/session, rate-limit, lockout, and WebAuthn challenge policy | credential exchange cannot require an already-established operator request signature; it never enters SDK or MCP projections |
 | `GET /v1/content/{bundle}/{*path}` and hosted-site reads | protocol | manifest-selected content type, ranges | content policy | raw/static content delivery; an empty wildcard is not a bundle-root alias |
-| any method on `/soradns/{fqdn}`, `/soradns/{fqdn}/{*path}`, `/api`, or `/api/{*tail}` | protocol | proxied SoraCloud HTTP runtime | no route-specific credential; listener-wide API-token and gateway rate/inflight policy apply | reviewed public-runtime gateways; not OpenAPI, SDK, or MCP operations |
+| any method on `/api` or `/api/{*tail}` with the registered alias or Taira Mon alias in `Host` | protocol | proxied SoraCloud HTTP runtime | no route-specific credential; listener-wide API-token and gateway rate/inflight policy apply | reviewed host-routed public-runtime gateways; path-encoded aliases are rejected and these are not OpenAPI, SDK, or MCP operations |
 | query-projection, attachment, and SoraFS export reads documented as binary | operator/protocol | `application/octet-stream` or declared artifact media | route policy | exact binary artifacts |
 | `/v1/events/sse`, `/v1/contracts/events/sse`, the documented `*/events/stream` and explorer/governance SSE routes | protocol stream | `text/event-stream` | route policy | long-lived SSE cannot switch to an HTTP error envelope after establishment |
 | `/v1/events/ws`, `/v1/blocks/stream`, `/p2p`, `/v1/connect/ws`, and documented `*/events/ws` routes | protocol stream | WebSocket upgrade/subprotocol | route policy | bidirectional framed protocol |

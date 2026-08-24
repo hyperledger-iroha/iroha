@@ -12,13 +12,13 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 ASSET_PATH = ROOT / "crates/iroha_core/src/sumeragi/source_contracts_v1.txt"
 SUPPORT_PATH = ROOT / "crates/iroha_core/src/sumeragi/v2_lifecycle_coordinator_support.rs"
-EXPECTED_CASE_COUNT = 50
+EXPECTED_CASE_COUNT = 52
 BASELINE_RUST_LINES = 5_779
-MAX_POSTIMAGE_RUST_LINES = 3_641
-MINIMUM_NET_REDUCTION = 2_138
-EXPECTED_ASSET_LENGTH = 467_828
-EXPECTED_ASSET_SHA256 = "5e9e2451f0d7f9aed03ff37f28b2ed28845186cae37baabe786ea59afbfc5463"
-EXPECTED_CASE_IDS_SHA256 = "c3f73d112d37828df1ab8c29af1c06b901e5284f1072aca80b9eb21d4c4f4131"
+MAX_POSTIMAGE_RUST_LINES = 3_606
+MINIMUM_NET_REDUCTION = 2_173
+EXPECTED_ASSET_LENGTH = 478_694
+EXPECTED_ASSET_SHA256 = "29cd5e5cb391e27b7768d5bbe383fdde4ccfe9ceb0f0b1bf196c49d6f11cf1b8"
+EXPECTED_CASE_IDS_SHA256 = "c00f7bf8c8c4a38b7cfa0a456ee10ec2bb8573ce6aac5330f5d377025ab298b6"
 
 HOST_PREIMAGE_SHA256 = {
     "crates/iroha_core/src/sumeragi/tests/v2_adapter_05_direct_lifecycle_recovered_wal_seal_case.rs": "fe0afaffcbabfeb1d2fdae88d871e380ca1484c80cc2cd0d3a8ce492c6949446",
@@ -32,7 +32,7 @@ HOST_POSTIMAGE_SHA256 = {
     "crates/iroha_core/src/sumeragi/tests/v2_lifecycle_replay_authority_cases.rs": "cafb63f1161f2cd95185b4c46ccb6bd7eb09cd0afee0f5c07afa894c39ad4678",
     "crates/iroha_core/src/sumeragi/tests/v2_lifecycle_work_registry_exact_registry_cases.rs": "d9d27eb348563245f606d5c0537df948b14d09bf29a9e4e99119e89a83dc8963",
     "crates/iroha_core/src/sumeragi/tests/v2_lifecycle_work_registry_replay_evidence_cases.rs": "c6427c6b098be208556e08222f31507d024f5c63524fb43a5e5c7822b65711e7",
-    "crates/iroha_core/src/sumeragi/v2_lifecycle_coordinator_support.rs": "11eda9035d81febbab660a02f9da7c0109684b92ecbae6f86419a8877684ea3e",
+    "crates/iroha_core/src/sumeragi/v2_lifecycle_coordinator_support.rs": "6c118646b68d797a3ba74ae6fb8f13fb8feda00a17e7328166e2bf72f11d9faa",
 }
 
 MIGRATED_TESTS = {
@@ -61,7 +61,7 @@ NEW_CASE_CONTRACT_COUNTS = {
     "certified_pipeline_replay_evidence_is_retained_by_every_closed_carrier": 35,
 }
 MIGRATED_CASE_SHA256 = {
-    "recovered_wal_vote_sign_seal_is_move_only_exact_and_owner_wired": "ee0bcd395cfd267eff5ead853ee70308528ebdf568f38a4ec6051e881cfc1f89",
+    "recovered_wal_vote_sign_seal_is_move_only_exact_and_owner_wired": "8d461314d4d76d1dddc42d4fc21f908c1369874d90c96256f3184eec0949d4f0",
     "ready_validate_execution_surface_is_closed_borrow_bound_and_scheduler_owned": "03b7d7a3a9843536bca8c686937561c0c12eea4281e9850de7ee7c841cf6ac48",
     "certified_pipeline_replay_evidence_is_retained_by_every_closed_carrier": "dc5a58896a12211ec735952b05a411112a8fda45ed60923b1b5f114913a14a12",
 }

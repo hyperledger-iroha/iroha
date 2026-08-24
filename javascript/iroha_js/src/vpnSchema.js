@@ -2,7 +2,7 @@ import { Buffer } from "buffer";
 import { assertValidEd25519PublicKey } from "./ed25519Strict.js";
 import { createValidationError, ValidationErrorCode } from "./validationError.js";
 
-const VPN_HELPER_TICKET_BYTES = 696;
+const VPN_HELPER_TICKET_BYTES = 788;
 const VPN_HELPER_TICKET_HEX_LENGTH = VPN_HELPER_TICKET_BYTES * 2;
 const VPN_EXIT_CLASSES = new Set(["standard", "low-latency", "high-security"]);
 const VPN_SESSION_STATUSES = new Set(["active"]);
@@ -10,6 +10,7 @@ const VPN_RECEIPT_STATUSES = new Set([
   "disconnected",
   "expired",
   "replaced",
+  "settlement_pending",
   "settled",
 ]);
 const VPN_RECEIPT_SOURCES = new Set(["torii", "relay", "wsv"]);

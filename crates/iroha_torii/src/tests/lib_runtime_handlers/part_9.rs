@@ -936,17 +936,16 @@ async fn soracloud_status_routing_counts_only_active_autoscale_capacity_lanes() 
         ..iroha_config::parameters::actual::Nexus::default()
     };
     nexus.autoscale.enabled = true;
-    nexus.autoscale.min_lanes = NonZeroU32::new(1).expect("nonzero min lanes");
-    nexus.autoscale.max_lanes = NonZeroU32::new(2).expect("nonzero max lanes");
+    nexus.autoscale.min_lane_id = NonZeroU32::new(1).expect("nonzero min lanes");
+    nexus.autoscale.max_lane_id_exclusive = NonZeroU32::new(2).expect("nonzero max lanes");
     let routing = soracloud_status_routing_for_test(nexus).await;
     assert_eq!(
         soracloud_routing_count(&routing, "configured_lane_count"),
         Some(2)
     );
-    assert_eq!(
-        soracloud_routing_count(&routing, "lane_count"),
-        Some(2),
-        "legacy lane_count remains the configured lane count"
+    assert!(
+        routing.get("lane_count").is_none(),
+        "first-release status must not expose the retired lane-count alias"
     );
     assert_eq!(
         soracloud_routing_count(&routing, "declared_lane_count"),
@@ -991,10 +990,9 @@ async fn soracloud_status_routing_reports_sparse_configured_lane_namespace() {
         Some(4),
         "configured count must report the lane namespace size"
     );
-    assert_eq!(
-        soracloud_routing_count(&routing, "lane_count"),
-        Some(4),
-        "legacy lane_count remains the configured namespace count"
+    assert!(
+        routing.get("lane_count").is_none(),
+        "first-release status must not expose the retired lane-count alias"
     );
     assert_eq!(
         soracloud_routing_count(&routing, "declared_lane_count"),
@@ -1025,16 +1023,22 @@ fn soracloud_hosted_http_topology_section_excludes_inactive_validator() {
         0x7d,
         "derive hosted HTTP topology second validator fixture key",
     );
-    for (validator_account_id, status, peer_seed) in [
+    let alice_peer_id =
+        checked_torii_test_peer_id(0x7e, "derive hosted HTTP topology validator peer fixture key")
+            .to_string();
+    let validator_two_peer_id =
+        checked_torii_test_peer_id(0x7f, "derive hosted HTTP topology validator peer fixture key")
+            .to_string();
+    for (validator_account_id, status, peer_id) in [
         (
             ALICE_ID.clone(),
             iroha_data_model::nexus::staking::PublicLaneValidatorStatus::Active,
-            0x7e,
+            alice_peer_id.clone(),
         ),
         (
             validator_two.clone(),
             iroha_data_model::nexus::staking::PublicLaneValidatorStatus::Exited,
-            0x7f,
+            validator_two_peer_id.clone(),
         ),
     ] {
         world.public_lane_validators_mut_for_testing().insert(
@@ -1045,10 +1049,7 @@ fn soracloud_hosted_http_topology_section_excludes_inactive_validator() {
             iroha_data_model::nexus::staking::PublicLaneValidatorRecord {
                 lane_id: iroha_data_model::nexus::LaneId::SINGLE,
                 validator: validator_account_id.clone(),
-                peer_id: checked_torii_test_peer_id(
-                    peer_seed,
-                    "derive hosted HTTP topology validator peer fixture key",
-                ),
+                peer_id: peer_id.parse().expect("validator peer id"),
                 stake_account: validator_account_id,
                 total_stake: Quantity::from(1_u64),
                 self_stake: Quantity::from(1_u64),
@@ -1068,14 +1069,12 @@ fn soracloud_hosted_http_topology_section_excludes_inactive_validator() {
                 schema_version:
                     iroha_data_model::soracloud::SORA_INROU_HOST_CAPABILITY_RECORD_VERSION_V1,
                 validator_account_id: ALICE_ID.clone(),
-                peer_id: "12D3KooWTopologyHostPortable".to_owned(),
-                supported_backends: std::collections::BTreeSet::from([
-                    iroha_data_model::soracloud::SoraInrouRuntimeBackendV1::PortableVm,
-                ]),
+                peer_id: alice_peer_id.clone(),
                 supported_guest_isas: std::collections::BTreeSet::from([
                     iroha_data_model::soracloud::SoraInrouGuestIsaV1::X8664,
                 ]),
-                max_hosted_replica_capacity: 2,
+                max_hosted_replica_capacity:
+                    iroha_data_model::soracloud::SORA_INROU_HOSTED_REPLICA_CAPACITY_V1,
                 max_cpu_millis: 2_000,
                 max_memory_bytes: 2 * 1024 * 1024 * 1024,
                 max_storage_bytes: 16 * 1024 * 1024 * 1024,
@@ -1093,14 +1092,12 @@ fn soracloud_hosted_http_topology_section_excludes_inactive_validator() {
                 schema_version:
                     iroha_data_model::soracloud::SORA_INROU_HOST_CAPABILITY_RECORD_VERSION_V1,
                 validator_account_id: validator_two.clone(),
-                peer_id: "12D3KooWTopologyHostPortableTwo".to_owned(),
-                supported_backends: std::collections::BTreeSet::from([
-                    iroha_data_model::soracloud::SoraInrouRuntimeBackendV1::PortableVm,
-                ]),
+                peer_id: validator_two_peer_id.clone(),
                 supported_guest_isas: std::collections::BTreeSet::from([
                     iroha_data_model::soracloud::SoraInrouGuestIsaV1::X8664,
                 ]),
-                max_hosted_replica_capacity: 1,
+                max_hosted_replica_capacity:
+                    iroha_data_model::soracloud::SORA_INROU_HOSTED_REPLICA_CAPACITY_V1,
                 max_cpu_millis: 1_000,
                 max_memory_bytes: 1024 * 1024 * 1024,
                 max_storage_bytes: 8 * 1024 * 1024 * 1024,
@@ -1125,9 +1122,7 @@ fn soracloud_hosted_http_topology_section_excludes_inactive_validator() {
                     iroha_data_model::soracloud::SoraInrouReplicaPlacementV1 {
                         replica_slot: 1,
                         validator_account_id: ALICE_ID.clone(),
-                        peer_id: "12D3KooWTopologyHostPortable".to_owned(),
-                        selected_backend:
-                            iroha_data_model::soracloud::SoraInrouRuntimeBackendV1::PortableVm,
+                        peer_id: alice_peer_id,
                         selected_guest_isa: iroha_data_model::soracloud::SoraInrouGuestIsaV1::X8664,
                         selected_geography_tag: None,
                         selection_latency_ms: None,
@@ -1135,9 +1130,7 @@ fn soracloud_hosted_http_topology_section_excludes_inactive_validator() {
                     iroha_data_model::soracloud::SoraInrouReplicaPlacementV1 {
                         replica_slot: 2,
                         validator_account_id: validator_two,
-                        peer_id: "12D3KooWTopologyHostPortableTwo".to_owned(),
-                        selected_backend:
-                            iroha_data_model::soracloud::SoraInrouRuntimeBackendV1::PortableVm,
+                        peer_id: validator_two_peer_id,
                         selected_guest_isa: iroha_data_model::soracloud::SoraInrouGuestIsaV1::X8664,
                         selected_geography_tag: None,
                         selection_latency_ms: None,
@@ -1170,16 +1163,7 @@ fn soracloud_hosted_http_topology_section_excludes_inactive_validator() {
         Some(1),
         "inactive validators must not contribute hosted replicas"
     );
-    let backend_mix = topology
-        .get("backend_mix")
-        .and_then(norito::json::Value::as_object)
-        .expect("backend mix object");
-    assert_eq!(
-        backend_mix
-            .get("portable_vm")
-            .and_then(norito::json::Value::as_u64),
-        Some(1)
-    );
+    assert!(topology.get("backend_mix").is_none());
 }
 #[tokio::test]
 async fn soracloud_runtime_status_sections_report_degraded_for_hydrating_snapshots() {

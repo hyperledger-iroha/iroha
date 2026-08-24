@@ -572,12 +572,12 @@ required|fresh_staged_append|current.capacity_geometry != staged.capacity_geomet
 required|fresh_staged_append|current.capacity_generation != staged.capacity_generation|fresh Serve staged append changed capacity generation
 required|fresh_staged_append|current.observed_generation != staged.observed_generation|fresh Serve staged append changed observed generation
 required|fresh_staged_append|current.fault != staged.fault|fresh Serve staged append changed the coordinator fault
-required|fresh_staged_append|.records\n                .iter()\n                .all(|fresh Serve staged append no longer retains every predecessor record
-required|fresh_staged_append|.durable_records\n                .iter()\n                .all(|fresh Serve staged append no longer retains every predecessor durable record
-required|fresh_staged_append|.key_index\n                .iter()\n                .all(|fresh Serve staged append no longer retains every predecessor key
-required|fresh_staged_append|.owner_index\n                .iter()\n                .all(|fresh Serve staged append no longer retains every predecessor owner
+required|fresh_staged_append|staged.records.get(ordinal) == Some(record)|fresh Serve staged append no longer retains every predecessor record
+required|fresh_staged_append|staged.durable_records.get(ordinal) == Some(metadata)|fresh Serve staged append no longer retains every predecessor durable record
+required|fresh_staged_append|staged.key_index.get(key) == Some(ordinal)|fresh Serve staged append no longer retains every predecessor key
+required|fresh_staged_append|staged.owner_index.get(root) == Some(owner)|fresh Serve staged append no longer retains every predecessor owner
 required|fresh_staged_append|current.ready_index.is_subset(&staged.ready_index)|fresh Serve staged append no longer retains the predecessor Ready set
-required|fresh_staged_append|.producer_debts\n                .iter()\n                .all(|fresh Serve staged append no longer retains every predecessor Producer debt
+required|fresh_staged_append|staged.producer_debts.get(serve) == Some(producer)|fresh Serve staged append no longer retains every predecessor Producer debt
 required|fresh_staged_append|staged.producer_debts.get(&serve) != Some(&producer)|fresh Serve staged append lost its exact new Serve/Producer debt
 required|fresh_staged_append|expected_capacity.get_mut(&CapacityClass::Serve)|fresh Serve staged append omitted Serve capacity ownership
 required|fresh_staged_append|serve_used.checked_add(1)|fresh Serve staged append omitted the exact Serve capacity increment
@@ -1509,9 +1509,9 @@ forbidden|validation|fn new(|durable Validate carrier acquired a raw authority s
 forbidden|validation|for_test|durable Validate carrier acquired a raw authority seam: {forbidden}
 forbidden|validation|derive(Clone|durable Validate carrier acquired a raw authority seam: {forbidden}
 forbidden|validation|fn commit(|durable Validate carrier acquired a raw authority seam: {forbidden}
-count|common_work|ConcreteLifecycleWorkKind::DurableValidateBody|8|Validate carrier must remain exhaustive in validation, address, causal-root, effect-borrow, pending-adapter, closed-carrier, and Ready-Broadcast classifier paths
-count|common_work|ConcreteLifecycleWorkKind::DurableRecoveredWalSign|6|recovered Sign must remain exhaustive in validation, address, causal-root, effect-borrow, and Ready-Broadcast classifier paths
-count|common_work|ConcreteLifecycleWorkKind::DurableRecoveredWalDecisionFetch|6|recovered Decision Fetch must remain exhaustive in validation, address, causal-root, typed-effect rejection, and Ready-Broadcast classifier paths
+count|common_work|ConcreteLifecycleWorkKind::DurableValidateBody|8|Validate carrier must remain exhaustive across validation, address, causal-root, effect-borrow, pending-adapter, closed-carrier, and expanded typed-consumer paths
+count|common_work|ConcreteLifecycleWorkKind::DurableRecoveredWalSign|6|recovered Sign must remain exhaustive across validation, address, causal-root, effect-borrow, and expanded typed-consumer paths
+count|common_work|ConcreteLifecycleWorkKind::DurableRecoveredWalDecisionFetch|6|recovered Decision Fetch must remain exhaustive across validation, address, causal-root, typed-effect rejection, and expanded typed-consumer paths
 required|common_work|let ConcreteLifecycleWorkKind::PendingAdapter {|generic adapter recovery must reject every closed carrier through exhaustive destructuring
 required|common_work|closed lifecycle work requires its dedicated typed consumer|generic adapter recovery lost its fail-stop rejection for closed carriers
 required|production|pub(super) struct ConcreteLifecycleWork {|concrete lifecycle work lost its registry-private declaration
@@ -1879,7 +1879,7 @@ region|rejected_digest|registry|after|fn rejected_body_completion_digest(|before
 region|validated_authority|registry|after|fn validate_validated_receipt_authority(|before|fn validated_body_completion_digest(
 region|declarations|registry|after|// DURABLE_VALIDATE_VOLATILE_COMPLETION_DECLARATIONS_BEGIN|before|// DURABLE_VALIDATE_VOLATILE_COMPLETION_DECLARATIONS_END
 region|implementation|registry|after|// DURABLE_VALIDATE_VOLATILE_COMPLETION_IMPLEMENTATION_BEGIN|before|// DURABLE_VALIDATE_VOLATILE_COMPLETION_IMPLEMENTATION_END
-region|commit|registry|after|pub(super) fn commit(self) -> PublishedDurableValidateCompletion {|before|#[cfg_attr(not(test), allow(dead_code))]\nimpl DeferredDurableValidateDispatch
+region|commit|registry|after|pub(super) fn commit(self) -> PublishedDurableValidateCompletion {|before|#[cfg_attr(not(test), allow(dead_code))]
 region|concrete_production|concrete_admission|begin|-|before|\n#[cfg(test)]\nmod tests {
 region|entrypoint|concrete_admission|after|pub(super) fn complete_durable_validate_dispatch(|before|/// Prepare one complete signed effect for mandatory replay-bound admission.
 region|waiting_exact|concrete_admission|after|fn waiting_durable_validate_record_is_exact(|before|fn staged_durable_validate_ready_is_exact(
@@ -1919,7 +1919,7 @@ required|validated_authority|statement.proposal_round() != *round|shared validat
 required|validated_authority|statement.subject() != Some(*subject)|shared validated authority helper omitted statement.subject() != Some(*subject)
 required|validated_authority|.execution_commitment()|shared validated authority helper omitted .execution_commitment()
 required|validated_authority|DurableValidateExecutionError::ConflictingValidationCommitment|shared validated authority helper omitted DurableValidateExecutionError::ConflictingValidationCommitment
-count|registry_production|validate_validated_receipt_authority(|7|carrier validation, classification, reattachment, Ready preflight, recovery fixture, and fixed adapter join must share one helper
+count|registry_production|validate_validated_receipt_authority(|7|carrier validation, classification, reattachment, Ready preflight, live Apply child, and fixed adapter join must share one helper
 required|declarations|struct DurableValidateCompletionAuthority|volatile completion declarations omitted struct DurableValidateCompletionAuthority
 required|declarations|lifecycle_key: LifecycleKey|volatile completion declarations omitted lifecycle_key: LifecycleKey
 required|declarations|lifecycle_stage: LifecycleStage|volatile completion declarations omitted lifecycle_stage: LifecycleStage
@@ -1945,17 +1945,16 @@ forbidden|staged_derive|Clone|pub(super) struct StagedDurableValidateCompletion<
 required|implementation|pub(super) fn stage_executable_carrier|volatile completion implementation omitted pub(super) fn stage_executable_carrier
 required|implementation|ConcreteLifecycleWorkKind::DurableValidateBody(incumbent)|volatile completion implementation omitted ConcreteLifecycleWorkKind::DurableValidateBody(incumbent)
 required|implementation|ConcreteLifecycleWorkKind::DurableValidateCompletion(completion)|volatile completion implementation omitted ConcreteLifecycleWorkKind::DurableValidateCompletion(completion)
-required|declarations|struct ArmedDurableValidateRollback<'a>|volatile completion declarations omitted the rollback-only owner
-required|implementation|impl Drop for ArmedDurableValidateRollback<'_>|volatile completion implementation omitted impl Drop for ArmedDurableValidateRollback<'_>
+required|implementation|impl Drop for ArmedDurableValidateRollback<'_>|volatile completion implementation omitted the armed rollback Drop guard
 required|implementation|drop(self.restore())|volatile completion implementation omitted drop(self.restore())
 required|implementation|pub(in crate::sumeragi) fn missing_reference|volatile completion implementation omitted pub(in crate::sumeragi) fn missing_reference
 count|implementation|pub(super) fn commit(|1|volatile completion implementation must expose one guarded commit
-required|commit|rollback.armed = false;|post-swap guard commit must disarm only its rollback owner
-required|commit|publication|post-swap guard commit must return its publication by value
+required|commit|let StagedDurableValidateCompletion {\n            mut rollback,\n            publication,\n        } = self;|post-swap guard commit must consume the staged guard and its move-only publication
+required|commit|rollback.armed = false;|post-swap guard commit must disarm the exact rollback owner
+required|commit|publication|post-swap guard commit must return its move-only publication
 forbidden|commit|.get(|post-swap guard commit acquired a fallible operation: .get(
 forbidden|commit|.insert(|post-swap guard commit acquired a fallible operation: .insert(
 forbidden|commit|.remove(|post-swap guard commit acquired a fallible operation: .remove(
-forbidden|commit|expect(|post-swap guard commit acquired a fallible operation: expect(
 forbidden|commit|assert|post-swap guard commit acquired a fallible operation: assert
 forbidden|commit|panic!|post-swap guard commit acquired a fallible operation: panic!
 forbidden|commit|?;|post-swap guard commit acquired a fallible operation: ?;
@@ -2005,6 +2004,7 @@ required|worker_completion|DeferredDurableValidateDispatch|worker completion los
 required|turn_driver_publication|completion.into_publication_parts()|turn driver must retain dispatch and acknowledgement together
 required|turn_driver_publication|complete_durable_validate_dispatch(|turn driver lost the sole volatile completion transaction
 required|turn_driver_publication|ack.acknowledge_after_publication()|worker completion must be acknowledged only after publication
+required|turn_driver_publication|drop((dispatch, ack))|publication failure must retire the exact retained owner before restart
 forbidden|caller|complete_durable_validate_dispatch|durable Validate completion escaped its closed caller surface: complete_durable_validate_dispatch
 forbidden|caller|DurableValidateCompletionPublication|durable Validate completion escaped its closed caller surface: DurableValidateCompletionPublication
 required|scheduler|reservation.commit(dispatch)|scheduler omitted exact lifecycle Validate queue publication
@@ -2046,6 +2046,210 @@ required|binding|durable_body.round()|durable Fetch binding omitted {required}
 required|binding|durable_body.subject()|durable Fetch binding omitted {required}
 required|binding|durable_body.manifest_hash()|durable Fetch binding omitted {required}
 required|binding|fetch_effect_matches_manifest|durable Fetch binding omitted {required}
+end
+case|cold_ready_validate_retry_census_is_complete_inert_and_installed_before_live_clocks
+region|owner|registry|after|pub(in crate::sumeragi) struct RecoveredDurableValidateRetryOwnerV1|before|impl RecoveredDurableValidateRetryOwnerV1
+region|owner_impl|registry|after|impl RecoveredDurableValidateRetryOwnerV1|before|pub(in crate::sumeragi) struct RecoveredDurableValidateRetryCensusV1
+region|census|registry|after|pub(in crate::sumeragi) struct RecoveredDurableValidateRetryCensusV1|before|impl RecoveredDurableValidateRetryCensusV1
+region|census_impl|registry|after|impl RecoveredDurableValidateRetryCensusV1|before|/// Closed failure while joining cold Validate retry authority at launch.
+region|projection|registry_recovery_impl|after|pub(super) fn project_recovered_durable_validate_retry_census(|before|/// Seal the complete current Ready census
+region|projection_source|registry_recovery_impl|begin|-|end|-
+region|pending_binding|runtime|after|pub(crate) struct PendingRuntimeEffectBinding|before|/// Move-only restart successor derived from one exact recovered WAL vote.
+region|pending_source|runtime|begin|-|end|-
+region|binding|runtime|after|pub(in crate::sumeragi) struct RecoveredDurableValidateRetryBindingV1|before|/// Mint the unique pending owner of one exact payload-free live-WAL continuation.
+region|frontier|runtime|after|pub(in crate::sumeragi) struct RecoveredDurableValidateRetryFrontierV1|before|impl RecoveredDurableValidateRetryBindingV1
+region|frontier_impl|runtime|after|impl RecoveredDurableValidateRetryFrontierV1|before|impl RecoveredDurableValidateRetryBindingV1
+region|seal|effects|after|enum DurableValidateRetrySealV1|before|struct DurableValidateRetryProjectionV1
+region|seal_projection|effects|after|impl DurableValidateRetrySealV1|before|impl<R: EffectRuntime> V2EffectExecutor<R>
+region|install|effects|after|pub(in crate::sumeragi) struct PreparedRecoveredDurableValidateRetryInstallV1|before|impl<R: EffectRuntime> V2EffectExecutor<R>
+region|runtime_decision|runtime|after|pub(crate) fn replayed_decision_key(|before|/// Rebind one independently durable validation marker before replayed
+region|catalog_open|effects|after|pub(in crate::sumeragi) fn open_with_body_store(|before|/// Preview one recovered signature and authenticate its next body in one borrow.
+region|marker_join|effects|after|fn record_lifecycle_validated_body(|before|/// Borrow the immutable context governing this executor height.
+region|retry_stutter|effects|after|if let AdapterEffect::ValidateBody { round, subject, .. } = effect\n                && let Some(seal) = retained_validate_retry_seals|before|let mut candidate_semantic_identity = evidence.candidate_semantic_identity();
+region|decision_cleanup|effects|after|fn reconcile_decision_work<S: V2EffectServices>(|before|fn plan_fetch_completion<S: V2EffectServices>(
+region|launch|launch|after|pub(in crate::sumeragi) fn launch(|before|\n}\n\n#[cfg(test)]
+region|launched|launch|after|pub(in crate::sumeragi) struct LaunchedProductionLifecycleV1|before|/// Sole parked lifecycle completion owner for this height.
+region|activation|launch|after|fn activate_with(|before|fn ready_for_finalized_rollover(
+required|owner|expected_decision: Option<(|cold Validate owner lost the exact replayed Decision ceiling associated with its body
+required|owner|effect: AdapterEffect|cold Validate owner lost the immutable Validate effect
+required|owner|durable_receipt: DurableBodyReceipt|cold Validate owner lost its checksummed body receipt
+required|owner|binding: RecoveredDurableValidateRetryBindingV1|cold Validate owner lost its exact runtime binding
+forbidden|owner|Clone|cold Validate owner became cloneable
+required|owner_impl|fn key(|cold Validate owner lost its exact proposal-round and subject key
+required|owner_impl|fn bind_validated_marker(|cold Validate owner lost its exact marker-binding oracle
+required|owner_impl|fn exactly_matches_validated_marker(|cold Validate owner lost post-binding marker revalidation
+required|owner_impl|self.key() == key|cold Validate marker deferral stopped checking the exact owner key
+required|owner_impl|validated.durable() == &self.durable_receipt|cold Validate marker deferral stopped checking the durable receipt
+required|owner_impl|bind_validated_marker_commitment(validated.execution_commitment())|cold Validate marker deferral stopped folding the exact marker commitment into its authority ceiling
+required|owner_impl|exactly_matches_validated_marker_commitment(|cold Validate owner installation stopped rechecking the folded marker ceiling
+required|owner_impl|fn initial_retry_frontier(|cold Validate owner lost its sole post-marker monotonic frontier constructor
+required|owner_impl|fn exactly_matches_retry(|cold Validate owner lost its retry-only projection
+required|owner_impl|frontier: &RecoveredDurableValidateRetryFrontierV1|cold Validate owner retry omitted its retained monotonic frontier
+required|owner_impl|.project_retry(&self.effect, frontier, effect, incoming)|cold Validate owner stopped delegating to its retained exact binding and frontier
+forbidden|owner_impl|fn into_|cold Validate owner exposed a reusable parts projection
+required|census|BTreeMap<(wire::ConsensusRound, wire::BlockSubject), RecoveredDurableValidateRetryOwnerV1>|cold Validate census lost its complete exact-key owner map
+forbidden|census|Clone|cold Validate census became cloneable
+required|census_impl|fn classify_and_bind_validated_marker(|cold Validate census lost its owner-exact mutating marker query
+required|census_impl|self.owners.get_mut(&key)|cold Validate census stopped binding marker authority into the sole exact owner
+required|census_impl|.bind_validated_marker(key, validated)|cold Validate census stopped delegating exact marker binding
+required|census_impl|fn install_into_executor|cold Validate census lost its consuming atomic executor installation
+required|census_impl|self.owners|cold Validate census stopped consuming its complete owner map
+required|census_impl|for owner in self.owners.into_values()|cold Validate census stopped consuming every owner without exposing a reusable subset
+forbidden|census_impl|fn iter(|cold Validate census exposed a caller-selectable subset iterator
+forbidden|census_impl|fn into_|cold Validate census exposed reusable parts or a caller-selected subset
+forbidden|census_impl|Vec<|cold Validate census reopened raw list ownership
+required|projection|coordinator.fault.is_some() \p\p coordinator.active_lease.is_some()|cold census admitted a faulted or leased coordinator
+required|projection|if let Some((decision_round, proposal_round, _, _)) = decision|cold census stopped validating the optional replayed Decision
+required|projection|decision_round != proposal_round|cold census admitted a noncanonical replayed Decision round
+required|projection|let mut logical_keys = std::collections::BTreeSet::new();|cold census lost its complete logical-key alias detector
+required|projection|for work in self.entries.values()|cold census stopped inspecting every registry carrier before projection
+required|projection|ConcreteLifecycleWorkKind::DurableValidateBody(validate)|cold census admitted a non-Validate registry carrier
+required|projection|candidate_statement()|cold census stopped using the retained opaque startup statement
+required|projection|logical_keys.insert((statement.proposal_round(), subject))|cold census stopped keying owners by exact proposal round and subject
+required|projection|RecoveredDurableValidateRetryOwnerErrorV1::MultipleCarriers|cold census stopped rejecting logical aliases
+required|projection|let mut owners = BTreeMap::new();|cold census lost its atomic ordered owner projection
+required|projection|for (address, work) in &self.entries|cold census stopped projecting every concrete Ready Validate carrier
+required|projection|let expected_key = LifecycleKey::new(|cold census stopped reconstructing the complete logical key
+required|projection|let matching_decision = decision.filter(|cold census stopped associating the exact replayed Decision ceiling with a matching weaker or Commit carrier
+required|projection|(Some(wire::GlobalPhase::Commit), Some(commitment))|cold census omitted Commit-refined carriers
+required|projection|decision != Some(carrier_decision)|Commit-refined cold carrier stopped joining the exact replayed Decision
+required|projection|Some(wire::GlobalPhase::Prepare)|Prepare-refined cold carriers lost their startup frontier
+required|projection|(None, None)|candidate or protected-lock cold carriers lost their weaker startup frontier
+required|projection|AdapterEffect::ValidateBody {|cold census admitted another effect stage
+required|projection|*round != statement.proposal_round()|cold census stopped binding the effect to its proposal round
+required|projection|*effect_subject != subject|cold census stopped binding the effect to its subject
+required|projection|statement.context_id() != statement.round().context_id|cold census stopped checking runtime statement context
+required|projection|statement.context_id() != statement.proposal_round().context_id|cold census stopped checking proposal statement context
+required|projection|record.state != super::LifecycleState::Ready|cold census admitted a non-Ready Validate row
+required|projection|record.work_class != LifecycleWorkClass::Validate|cold census admitted another lifecycle class
+required|projection|LifecycleStageKind::ValidateBody|cold census admitted another Validate stage
+required|projection|PredecessorScope::Independent|cold census admitted another Validate predecessor scope
+required|projection|record.key != expected_key|cold census omitted its complete logical-key equality
+required|projection|record.physical_slots != BTreeMap::from([(address.slot, work.digest)])|cold census omitted its exact physical slot and digest
+required|projection|coordinator.key_index.get(&record.key) != Some(&record.ordinal)|cold census omitted its logical-key index
+required|projection|coordinator.owner_index.get(&record.owner.causal_root()) != Some(&record.owner)|cold census omitted its exact owner index
+required|projection|coordinator.ready_index.contains(&record.ordinal)|cold census omitted the exact Ready index
+required|projection|validate.matches_recovered_record(|cold census omitted complete recovered-carrier validation
+required|projection|project_recovered_durable_validate_retry_binding(|cold census lost its opaque exact runtime binding
+required|projection|matching_decision|cold census failed to pass the associated Decision ceiling into retry binding
+required|projection|owners.insert(key, owner).is_some()|cold census stopped rejecting a second exact-key owner
+required|projection|RecoveredDurableValidateRetryCensusV1 {|cold census stopped sealing the complete owner map behind one opaque move-only value
+count|projection_source|pub(super) fn project_recovered_durable_validate_retry_census(|1|cold Validate census must have one registry mint
+required|pending_binding|causal_lifecycle_key: iroha_crypto::Hash|cold Validate pending binding lost its opaque causal coordinate
+required|pending_binding|effect_kind: u8|cold Validate pending binding lost its stable effect class
+required|pending_binding|candidate_kind: u8|cold Validate pending binding lost its stable candidate class
+required|pending_binding|projection_hash: iroha_crypto::Hash|cold Validate pending binding lost its integrity projection
+forbidden|pending_binding|ordinal:|cold Validate pending binding regained a runtime ordinal and blocked legitimate retransmit-origin reminting
+required|pending_source|integrity projection deliberately excludes the runtime lifecycle|cold Validate pending remint policy is no longer explicit
+required|binding|pending: PendingRuntimeEffectBinding|cold Validate binding lost its exact pending projection
+required|binding|expected_retry_statement: RuntimeCandidateSemanticStatement|cold Validate binding lost its exact replayed-Decision authority ceiling
+required|binding|authority_ceiling_commitment: Option<wire::ExecutionCommitment>|cold Validate binding lost its marker, Decision, or first-refinement commitment ceiling
+required|binding|fn bind_validated_marker_commitment(|cold Validate binding lost its exact marker-derived ceiling fold
+required|binding|self.authority_ceiling_commitment = Some(commitment)|cold Validate binding stopped latching the first exact marker commitment
+required|binding|fn exactly_matches_validated_marker_commitment(|cold Validate binding lost marker-ceiling revalidation
+required|binding|fn initial_frontier(|cold Validate binding lost its sole monotonic frontier constructor
+required|binding|fn project_retry(|cold Validate binding lost its sole retry oracle
+required|binding|frontier_tag != recovered_tag|cold Validate retry stopped validating its retained EventTag frontier against the recovered tag
+required|binding|incoming_tag != frontier_tag|cold Validate retry accepted EventTag rollback after an earlier advance
+required|binding|frontier_round != recovered_round|cold Validate retry stopped checking its retained round
+required|binding|frontier_subject != recovered_subject|cold Validate retry stopped checking its retained subject
+required|binding|incoming_round != recovered_round|cold Validate retry stopped checking the incoming round
+required|binding|incoming_subject != recovered_subject|cold Validate retry stopped checking the incoming subject
+required|binding|!self.pending.validate_exact(recovered_effect)|cold Validate retry stopped revalidating the recovered incumbent
+required|binding|!incoming.validate_exact()|cold Validate retry stopped validating the independently authenticated incoming owner
+required|binding|.commit_refinement_to(self.expected_retry_statement)|cold Validate retry lost the exact monotonic path from its weaker startup owner to the replayed Decision
+required|binding|recovered_statement.body_stage_authority_relation_to(frontier.statement)|cold Validate retry stopped authenticating the retained monotonic authority frontier
+required|binding|RuntimeFetchAuthorityRelation::Same \p RuntimeFetchAuthorityRelation::Upgrade|cold Validate retry accepted a frontier below or conflicting with its recovered startup authority
+required|binding|.body_stage_authority_relation_to(incoming_statement)|cold Validate retry stopped classifying stale, same, and exact Commit-strengthening authority
+required|binding|frontier.authority_ceiling_commitment|cold Validate retry lost its marker, Decision, or first-refinement commitment ceiling
+required|binding|.zip(incoming_commitment)|cold Validate retry stopped rejecting a commitment which conflicts with its sealed ceiling
+required|binding|RuntimeFetchAuthorityRelation::Upgrade => incoming_statement|cold Validate retry stopped advancing to an exact stronger authority
+required|binding|RuntimeFetchAuthorityRelation::Same \p RuntimeFetchAuthorityRelation::Stale|cold Validate retry stopped stuttering without authority downgrade
+required|binding|incoming_binding.candidate_semantic_identity|cold Validate retry stopped checking incoming semantic identity
+required|binding|incoming_binding.effect_identity != effect_identity|cold Validate retry stopped checking its exact incoming effect
+required|binding|RuntimeEffectOwnership::new_bound(|cold Validate retry stopped rebuilding an exact ownership from its retained authority lattice
+required|binding|effect: effect.clone()|cold Validate retry stopped persisting its accepted EventTag frontier
+required|binding|statement: retained_statement|cold Validate retry stopped persisting its accepted body-stage frontier
+required|binding|.or(incoming_commitment)|cold Validate retry stopped latching the first accepted commitment ceiling
+required|binding|changed its body or authority commitment|cold Validate retry stopped rejecting subject, round, or commitment conflicts
+forbidden|binding|incoming.exact_pending_adapter_effect_binding(effect)|cold Validate retry incorrectly rejected legitimate independently authenticated retransmit, FIFO, or ingress origins
+forbidden|binding|incoming_pending.causal_lifecycle_key != self.pending.causal_lifecycle_key|cold Validate retry incorrectly required a fresh runtime origin to reuse the recovered registry key
+forbidden|binding|fn into_|cold Validate binding exposed reusable pending authority
+required|frontier|effect: AdapterEffect|recovered retry frontier lost its highest accepted EventTag and exact effect
+required|frontier|statement: RuntimeCandidateSemanticStatement|recovered retry frontier lost its highest accepted body-stage authority
+required|frontier|authority_ceiling_commitment: Option<wire::ExecutionCommitment>|recovered retry frontier lost its non-substitutable commitment ceiling
+required|frontier_impl|fn project_commitment_ceiling(|recovered retry frontier lost its pure later durable-fact join
+required|frontier_impl|authority_ceiling_commitment|later durable-fact join stopped checking the retained commitment ceiling
+required|frontier_impl|expected != commitment|later durable-fact join accepted a conflicting marker or Decision commitment
+required|frontier_impl|let mut projected = self.clone();|later durable-fact join mutated the current recovered seal during preflight
+required|frontier_impl|projected.authority_ceiling_commitment = Some(commitment);|later durable-fact join stopped latching an empty ceiling or preserving an equal ceiling
+required|frontier_impl|Ok(projected)|later durable-fact join stopped returning a separately commit-able replacement frontier
+required|seal|Live {|Validate retry seal lost the distinct live lineage
+required|seal|Recovered {|Validate retry seal lost the distinct recovered lineage
+required|seal|owner:|recovered retry seal lost its immutable storage-authenticated owner
+required|seal|frontier:|recovered retry seal lost its persistent monotonic authority frontier
+forbidden|seal|Recovered(Arc<RecoveredDurableValidateRetryOwnerV1>)|recovered retry seal retained the immutable-startup tuple which permits effect or authority rollback
+required|seal_projection|Some(Self::Live {|normal admission stopped minting only the live retry lineage
+required|seal_projection|Self::Recovered {|retry projection stopped distinguishing recovered ownership
+required|seal_projection|frontier|recovered retry projection stopped consulting its retained authority and EventTag frontier
+required|seal_projection|exactly_matches_retry|recovered retry projection stopped proving its exact cold owner
+required|seal_projection|seal: Self::Recovered {|recovered retry projection substituted a live seal
+required|seal_projection|owner: Arc::clone(owner)|recovered retry projection adopted the ephemeral incoming trace origin instead of retaining its storage-authenticated owner
+required|seal_projection|frontier,|recovered retry projection failed to persist only the monotonic tag and authority frontier
+required|seal_projection|fn project_recovered_commitment_ceiling(|recovered retry seal lost its later marker and Decision preflight
+required|seal_projection|Self::Live { .. } => Ok(None)|later durable facts incorrectly minted recovered authority for a live retry seal
+required|seal_projection|.project_commitment_ceiling(commitment)|recovered retry seal stopped checking a later durable commitment before mutation
+forbidden|seal_projection|seal: Self::Recovered(Arc::clone(recovered))|recovered retry projection discarded its advanced authority or EventTag frontier
+forbidden|seal_projection|owner: Arc::new(incoming|recovered retry projection persisted a fresh retransmit, FIFO, or ingress origin
+required|install|owner.exactly_matches_validated_marker(key, validated)|cold owner installation stopped rechecking the marker-derived authority ceiling
+required|install|frontier: owner.initial_retry_frontier()|cold owner installation stopped sealing the marker-derived commitment and startup statement into its retry frontier
+required|install|DurableValidateRetrySealV1::Recovered {|cold owner installation lost its lineage-tagged persistent retry frontier
+required|install|owner: Arc::new(owner)|cold owner installation lost its immutable storage-authenticated owner
+forbidden|install|DurableValidateRetrySealV1::Recovered(Arc::new(owner))|cold owner installation retained immutable startup authority and accepted later conflicting refinements
+required|runtime_decision|self.driver.replayed_decision_key()|cold launch stopped reading the runtime's exact replayed Decision
+required|catalog_open|ensure_recovered_markers_revalidated()|body catalogs opened before marker authentication
+required|catalog_open|.recovery_catalog()|body catalogs lost their checksummed durable inventory
+required|catalog_open|let recovered_validations = body_store.validated_recovery_catalog()|cold marker deferral lost the validated catalog
+required|catalog_open|RecoveredDurableValidateRetryCensusV1|body-store open lost the opaque complete Ready Validate census
+required|catalog_open|mut recovered_validate_retry_census|body-store open cannot fold exact marker commitments into the sealed cold retry census
+required|catalog_open|for (key, validated_receipt) in &recovered_validations|cold marker deferral stopped classifying every validated marker
+required|catalog_open|validated_receipt.durable() != durable_receipt|cold marker deferral stopped joining the checksummed body receipt
+required|catalog_open|classify_and_bind_validated_marker(|cold marker deferral stopped binding the exact marker commitment into the sealed complete owner census
+required|catalog_open|.recover_validated_body(manifest, validated_receipt)|a marker without a Ready Validate carrier stopped entering runtime recovery
+required|catalog_open|Self::with_runtime_and_guard(|executor opened before every validated marker was classified
+required|catalog_open|install_recovered_validation_catalog(|executor lost the exact recovered validation, rejection, and retirement catalogs
+required|catalog_open|install_into_executor(|the opaque census was not consumed into the executor before return
+forbidden|catalog_open|Vec<RecoveredDurableValidateRetryOwnerV1>|body-store open regained a caller-selectable raw owner list
+forbidden|catalog_open|recovered_validate_retry_census.iter(|body-store open iterated or selected a census subset
+order|catalog_open|8|ensure_recovered_markers_revalidated()|recovery_catalog()|validated_recovery_catalog()|for (key, validated_receipt) in &recovered_validations|classify_and_bind_validated_marker(|Self::with_runtime_and_guard(|install_recovered_validation_catalog(|install_into_executor(|body catalogs, exact marker authority binding or recovery, executor open, catalog install, and sealed census consumption must remain ordered
+required|marker_join|self.validated_bodies|later validation marker join stopped preflighting the current catalog
+required|marker_join|let projected_recovered_seal =|later validation marker join stopped projecting a replacement recovered frontier before mutation
+required|marker_join|project_recovered_commitment_ceiling(validated.execution_commitment())|later validation marker join stopped latching or checking its exact commitment
+required|marker_join|.transpose()|later validation marker join stopped propagating a conflicting ceiling before mutation
+required|marker_join|self.validated_bodies.entry(key).or_insert(validated)|later validation marker join lost its idempotent exact catalog commit
+required|marker_join|self.durable_validate_retry_seals.insert(key, seal)|later validation marker join stopped publishing the preflighted replacement frontier
+order|marker_join|5|.is_some_and(\pexisting\p existing != &validated)|project_recovered_commitment_ceiling(validated.execution_commitment())|.map_err(EffectExecutorError::Contract)?|self.validated_bodies.entry(key).or_insert(validated)|self.durable_validate_retry_seals.insert(key, seal)|marker conflict checking must complete before catalog or frontier mutation
+order|retry_stutter|9|.project_retry(effect, evidence)|RuntimeCandidateAdmissionDisposition::CoalescedRetry|production_adapter_effect_candidate_trace_projection(|check_production_effect_to_candidate_transition(|*evidence = projected.ownership.clone()|retained_candidate_owners.insert(identity, projected.ownership.clone())|retained_validate_retry_seals.insert((*round, *subject), projected.seal)|retain_effect.push(false)|continue|exact cold Validate retry must refine the incumbent, retain its lineage, and stutter without redispatch
+forbidden|retry_stutter|install_pending_durable_validate_admission|cold Validate retry stutter re-entered lifecycle admission
+forbidden|retry_stutter|enqueue_|cold Validate retry stutter performed service I/O
+forbidden|retry_stutter|dispatch_|cold Validate retry stutter dispatched the ephemeral incoming trace ownership
+required|decision_cleanup|let projected_recovered_decision_seal =|Decision cleanup stopped projecting its recovered frontier before any retirement mutation
+required|decision_cleanup|project_recovered_commitment_ceiling(decision_commitment)|Decision cleanup stopped latching or checking the exact durable Decision commitment
+required|decision_cleanup|.transpose()|Decision cleanup stopped propagating a conflicting recovered ceiling before mutation
+required|decision_cleanup|!self.pending_durable_validate_admissions.is_empty()|Decision cleanup must not overtake live Validate admission ownership
+required|decision_cleanup|let Some(seal) = projected_recovered_decision_seal|Decision cleanup lost its preflighted replacement recovered frontier
+required|decision_cleanup|.insert(decision_body, seal);|Decision cleanup stopped committing the replacement frontier only after fallible retirement work
+required|decision_cleanup|self.durable_validate_retry_seals|Decision cleanup lost the inert retry-seal map
+required|decision_cleanup|.retain(\pkey, _\p !drain_decision_body && *key == decision_body);|Decision cleanup must retain only the exact selected-body stutter or drain it terminally
+order|decision_cleanup|7|project_recovered_commitment_ceiling(decision_commitment)|self.preflight_remote_proposal_replay_indexes()?|retire_proposal_work_after_decision(|let Some(seal) = projected_recovered_decision_seal|.insert(decision_body, seal);|.retain(\pkey, _\p !drain_decision_body && *key == decision_body);|self.protected_decision = Some(durable_decision)|Decision commitment conflict preflight must precede fallible retirement, and replacement frontier commit must precede final cleanup publication
+order|launch|4|.replayed_decision_key()|project_recovered_durable_validate_retry_census(|V2EffectExecutor::open_with_body_store(|ProductionV2Services::start_with_apply_service(|cold Validate census projection, closed marker deferral and installation, and service exposure must remain ordered
+required|launch|recovered_validate_retry_census|body-store open lost the exact opaque census by-value handoff
+forbidden|launch|&recovered_validate_retry_census|launch borrowed a reusable or caller-selectable cold owner census
+forbidden|launch|install_recovered_durable_validate_retry_owners|launch retained a second compatibility installation seam
+forbidden|launch|arm_live_clocks|launch must not arm clocks before the complete cold Validate census is installed
+required|launched|executor: V2EffectExecutor<SerializedV2Runtime>|only the fully installed executor may cross into launched ownership
+required|launched|services: ProductionV2Services|service ownership must remain inside the same launched cut
+order|activation|3|.arm_live_clocks(clock_activation, now)|.activate_effect_completion_observer(observer)|publication.open_and_publish(&self.leader_wire_ingress_binding.ingress, status)|live clocks, observer, and ingress must open only from the installed launched owner
 end
 case|lifecycle_decision_apply_scheduler_attestation_is_lineage_exact_and_io_bounded
 region|declaration|registry|after|pub(super) struct ReadyLifecycleDecisionApplyAttestationV1|before|impl ReadyLifecycleDecisionApplyAttestationV1
@@ -2218,7 +2422,6 @@ required|executor_prepare|!lineage_owner_is_exact|executor preparation stopped f
 required|executor_commit|LifecycleDecisionApplyLineageV1::Live|finality commit omitted exact live owner consumption
 required|executor_commit|LifecycleDecisionApplyLineageV1::Recovered|finality commit omitted recovered non-substitution
 required|executor_commit|FinalityCompletionOwner::LifecycleDecisionApply(dispatch_key)|finality commit lost its neutral lineage-aware owner
-required|executor_commit|dispatch_key.lifecycle_ordinal() == evidence.recovered_apply_ordinal()|pending finality changed the exact owner-open Apply ordinal
 order|completion_dispatch|3|self.services.take_next_lifecycle_completion()|LifecycleCompletionTakeV1::Apply(completion)|settle_lifecycle_decision_apply_completion_owner(completion, lane_work)|unified completion classification must transfer neutral Apply ownership directly to settlement
 required|settlement|LifecycleDecisionApplyWorkerResultV1::Deferred { task, reference }|settlement omitted typed deferred Apply ownership
 required|settlement|completion.authorizes_sidecar_owner(services, lane_work)|settlement omitted exact sidecar owner validation
@@ -2260,60 +2463,6 @@ forbidden|settlement|complete_application(|terminal settlement reopened generic 
 forbidden|settlement|EffectWorkId|terminal settlement reopened generic effect identity
 forbidden|settlement|RuntimeEffectOwnership|terminal settlement reopened generic runtime ownership
 forbidden|settlement|drain_completions(|terminal settlement reopened a broad completion drain
-required|pending_owner_join|lifecycle_ordinal: u128|pending-Kura carrier permit lost its exact nonoptional Apply ordinal
-required|pending_owner_join|pub(in crate::sumeragi) fn consume_for_executor(self) -> u128|pending-Kura carrier permit stopped consuming into its exact ordinal
-required|pending_owner_join|.exact_recovered_decision_apply_ready_ordinal(&self.coordinator)|pending-Kura owner join stopped deriving the sole exact Ready Apply ordinal
-required|pending_owner_join|RecoveredPendingKuraApplyCarrierPermitV1 {|pending-Kura owner join omitted its linear ordinal permit
-required|pending_owner_join|replay.bind_recovered_apply_carrier(apply_carrier)|pending-Kura owner join stopped nesting the permit in its replay
-forbidden|pending_owner_join|exactly_covers_recovered_decision_apply_ready_work|pending-Kura owner join retained the obsolete bool-only carrier proof
-required|pending_registry_ordinal|-> Option<u128>|recovered Apply census stopped returning its exact ordinal
-required|pending_registry_ordinal|RecoveredWalRegistrySlotV1::DecisionApply(address)|recovered Apply census stopped selecting the exact lineage-specific carrier
-required|pending_registry_ordinal|exactly_covers_recovered_ready_work_with_extra(coordinator, extra)|recovered Apply ordinal escaped the complete Ready-work census
-required|pending_registry_ordinal|.then_some(address.ordinal)|recovered Apply census stopped returning the authenticated address ordinal
-required|pending_replay|apply_carrier:\n        crate::sumeragi::v2_lifecycle_coordinator::RecoveredPendingKuraApplyCarrierPermitV1|prepared pending-Kura replay lost its nonoptional exact Apply permit
-required|pending_replay|verify_pending_kura_recovered_apply_replay(|pending-Kura install stopped entering the direct recovered Apply verifier
-forbidden|pending_replay|DeferredPendingKuraValidatedMarkerV1|pending-Kura replay retained the obsolete deferred marker path
-forbidden|pending_replay|classify_and_defer_validated_marker|pending-Kura replay retained deferred marker classification
-forbidden|pending_replay|prepare_pending_kura_validated_apply|pending-Kura replay retained the alternate Validate-to-Apply path
-required|pending_verify|let recovered_apply_ordinal = apply_carrier.consume_for_executor();|pending verifier stopped consuming the exact owner-open ordinal
-required|pending_verify|if recovered_apply_ordinal == 0|pending verifier stopped rejecting an invalid zero ordinal
-required|pending_verify|verify_pending_kura_apply_parts(|pending verifier stopped joining durable WAL/body identity to the exact Apply ordinal
-required|pending_verify|recovered_apply_ordinal,|pending verifier omitted the exact ordinal from structural evidence
-required|pending_verify|self.pending_tip_recovery = Some(evidence)|pending verifier stopped installing exact direct-Apply evidence
-order|pending_verify|4|let recovered_apply_ordinal = apply_carrier.consume_for_executor();|if recovered_apply_ordinal == 0|verify_pending_kura_apply_parts(|self.pending_tip_recovery = Some(evidence)|ordinal consumption and validation must precede direct pending evidence installation
-required|pending_dispatch|prepared.dispatch_key().lifecycle_ordinal() == evidence.recovered_apply_ordinal()|pending Apply worker preflight stopped joining the exact owner-open ordinal
-required|pending_dispatch|pending: Some(PendingKuraApplyDispatchTransitionV1 { evidence })|pending Apply dispatch stopped retaining its sole stage transition until worker publication
-required|effects_production|pending.evidence.stage = PendingKuraApplyRecoveryStage::ApplicationDispatched|only the committed lifecycle worker reservation may advance pending Apply dispatch
-forbidden|effects_production|transition_for_effect|raw reducer Apply must not advance pending-Kura lifecycle ownership
-required|pending_completion_exact|self.dispatch_key.lifecycle_ordinal() == evidence.recovered_apply_ordinal()|pending completion stopped joining the exact dispatched Apply ordinal
-required|pending_driver|dispatch_completion_requiring_ready_ordinal(|pending driver stopped targeting the exact recovered Apply ordinal
-required|pending_driver|Ok(ProductionCompletionDispatchV1::ApplyQueued { ordinal })|pending driver stopped matching the exact queued Apply carrier
-required|pending_driver|if ordinal == recovered_apply_ordinal =>|pending driver accepted a mismatched queued Apply identity
-order|pending_driver|2|Ok(ProductionCompletionDispatchV1::ApplyQueued { ordinal })|if ordinal == recovered_apply_ordinal =>|pending driver must bind the queued carrier before accepting its exact ordinal
-required|pending_driver|protected_live_apply_ordinal: None|pending driver stopped distinguishing ordinary capacity wait from a foreign live-Apply barrier
-required|pending_driver|Ok(_) \p Err(_)|pending driver stopped failing closed on foreign dispatch outcomes
-required|pending_driver|evidence.stage() != Stage::ApplicationDispatched|pending driver stopped rechecking the worker-committed stage
-required|pending_driver|executor.begin_pending_tip_recovery_attempt();|pending driver stopped opening one bounded attempt
-required|pending_driver|settle_pending_tip_recovery_attempt(AttemptResult::Waiting)|pending driver stopped recording bounded waiting turns
-required|pending_driver|settle_pending_tip_recovery_attempt(AttemptResult::Advanced)|pending driver stopped recording bounded advancing turns
-required|pending_driver|settle_pending_tip_recovery_attempt(AttemptResult::Completed)|pending driver stopped recording bounded completed turns
-forbidden|pending_driver|dispatch_completion_with_runner_debt(|pending driver retained broad scheduler dispatch
-forbidden|pending_driver|_limit: usize|direct pending Apply retained the obsolete broad effect limit
-forbidden|pending_driver|effect_limit|direct pending Apply retained the obsolete broad effect limit
-required|attempt_settlement|self.pending_tip_recovery_last_result = None;|attempt start stopped clearing stale prior status
-required|attempt_settlement|self.pending_tip_recovery_last_result.is_none()|attempt settlement stopped enforcing one result per turn
-required|attempt_settlement|self.pending_tip_recovery_last_result = Some(result);|attempt settlement stopped publishing its unique successful result
-required|generic_apply|if self.pending_tip_recovery.is_some()|generic Apply admission stopped recognizing pending-Kura lifecycle ownership
-required|generic_apply|generic Apply cannot consume pending-Kura lifecycle ownership|generic Apply admission stopped rejecting the pending lifecycle owner
-required|generic_completion|if self.pending_tip_recovery.is_some()|generic Apply completion stopped recognizing pending-Kura lifecycle ownership
-required|generic_completion|generic Apply completion cannot consume pending-Kura lifecycle ownership|generic Apply completion stopped rejecting the pending lifecycle owner
-required|pending_settlement|LifecycleDecisionApplyStatusPublicationV1::DeferUntilPendingKuraActivation|pending-Kura settlement stopped deferring status until no-clock activation
-required|pending_settlement|LifecycleDecisionApplyStatusPublicationV1::PublishActiveHeight|ordinary Apply settlement stopped publishing the active height
-required|pending_settlement|if matches!(\n        status_publication,\n        LifecycleDecisionApplyStatusPublicationV1::PublishActiveHeight|shared Apply settlement stopped gating status by explicit publication mode
-forbidden|effects_production|DeferredPendingKuraValidatedMarkerV1|effect executor retained the obsolete deferred pending marker
-forbidden|effects_production|PendingKuraValidatedApplySuccessorV1|effect executor retained the obsolete deferred Validate successor
-forbidden|effects_production|consume_pending_tip_recovery_effects|effect executor retained the alternate pending reducer-step path
-forbidden|runtime_all|prepare_pending_kura_validated_apply|runtime retained the alternate pending Validate-to-Apply path
 end
 case|recovered_next_wal_vote_completion_stays_closed_and_attests_its_ready_pair
 region|closed|replay_authority|after|struct RecoveredLifecycleNextWalVoteSignedBroadcastProjectionV1|before|/// Canonical structural evidence for a recovered ProposalIntent
@@ -2506,210 +2655,6 @@ required|api|persist_rejected_outcome|validation API lost durable rejected-outco
 required|error|fn rejection_identity(&self)|body validation error classification lost rejection identity
 required|error|BodyValidationRejectionIdentity::Rejected|body validation error classification lost rejected identity
 end
-case|cold_ready_validate_retry_census_is_complete_inert_and_installed_before_live_clocks
-region|owner|registry|after|pub(in crate::sumeragi) struct RecoveredDurableValidateRetryOwnerV1|before|impl RecoveredDurableValidateRetryOwnerV1
-region|owner_impl|registry|after|impl RecoveredDurableValidateRetryOwnerV1|before|pub(in crate::sumeragi) struct RecoveredDurableValidateRetryCensusV1
-region|census|registry|after|pub(in crate::sumeragi) struct RecoveredDurableValidateRetryCensusV1|before|impl RecoveredDurableValidateRetryCensusV1
-region|census_impl|registry|after|impl RecoveredDurableValidateRetryCensusV1|before|/// Closed failure while joining cold Validate retry authority at launch.
-region|projection|registry_recovery_impl|after|pub(super) fn project_recovered_durable_validate_retry_census(|before|/// Seal the complete current Ready census
-region|projection_source|registry_recovery_impl|begin|-|end|-
-region|pending_binding|runtime|after|pub(crate) struct PendingRuntimeEffectBinding|before|/// Move-only restart successor derived from one exact recovered WAL vote.
-region|pending_source|runtime|begin|-|end|-
-region|binding|runtime|after|pub(in crate::sumeragi) struct RecoveredDurableValidateRetryBindingV1|before|/// Mint the unique pending owner of one exact payload-free live-WAL continuation.
-region|frontier|runtime|after|pub(in crate::sumeragi) struct RecoveredDurableValidateRetryFrontierV1|before|impl RecoveredDurableValidateRetryBindingV1
-region|frontier_impl|runtime|after|impl RecoveredDurableValidateRetryFrontierV1|before|impl RecoveredDurableValidateRetryBindingV1
-region|seal|effects|after|enum DurableValidateRetrySealV1|before|struct DurableValidateRetryProjectionV1
-region|seal_projection|effects|after|impl DurableValidateRetrySealV1|before|impl<R: EffectRuntime> V2EffectExecutor<R>
-region|install|effects|after|pub(in crate::sumeragi) struct PreparedRecoveredDurableValidateRetryInstallV1|before|impl<R: EffectRuntime> V2EffectExecutor<R>
-region|runtime_decision|runtime|after|pub(crate) fn replayed_decision_key(|before|/// Rebind one independently durable validation marker before replayed
-region|catalog_open|effects|after|pub(in crate::sumeragi) fn open_with_body_store(|before|/// Preview one recovered signature and authenticate its next body in one borrow.
-region|marker_join|effects|after|fn record_lifecycle_validated_body(|before|/// Borrow the immutable context governing this executor height.
-region|retry_stutter|effects|after|if let AdapterEffect::ValidateBody { round, subject, .. } = effect\n                && let Some(seal) = retained_validate_retry_seals|before|let mut candidate_semantic_identity = evidence.candidate_semantic_identity();
-region|decision_cleanup|effects|after|fn reconcile_decision_work<S: V2EffectServices>(|before|fn plan_fetch_completion<S: V2EffectServices>(
-region|launch|launch|after|pub(in crate::sumeragi) fn launch(|before|\n}\n\n#[cfg(test)]
-region|launched|launch|after|pub(in crate::sumeragi) struct LaunchedProductionLifecycleV1|before|/// Sole parked lifecycle completion owner for this height.
-region|activation|launch|after|fn activate_with(|before|fn ready_for_finalized_rollover(
-required|owner|expected_decision: Option<(|cold Validate owner lost the exact replayed Decision ceiling associated with its body
-required|owner|effect: AdapterEffect|cold Validate owner lost the immutable Validate effect
-required|owner|durable_receipt: DurableBodyReceipt|cold Validate owner lost its checksummed body receipt
-required|owner|binding: RecoveredDurableValidateRetryBindingV1|cold Validate owner lost its exact runtime binding
-forbidden|owner|Clone|cold Validate owner became cloneable
-required|owner_impl|fn key(|cold Validate owner lost its exact proposal-round and subject key
-required|owner_impl|fn bind_validated_marker(|cold Validate owner lost its exact marker-binding oracle
-required|owner_impl|fn exactly_matches_validated_marker(|cold Validate owner lost post-binding marker revalidation
-required|owner_impl|self.key() == key|cold Validate marker deferral stopped checking the exact owner key
-required|owner_impl|validated.durable() == &self.durable_receipt|cold Validate marker deferral stopped checking the durable receipt
-required|owner_impl|bind_validated_marker_commitment(validated.execution_commitment())|cold Validate marker deferral stopped folding the exact marker commitment into its authority ceiling
-required|owner_impl|exactly_matches_validated_marker_commitment(|cold Validate owner installation stopped rechecking the folded marker ceiling
-required|owner_impl|fn initial_retry_frontier(|cold Validate owner lost its sole post-marker monotonic frontier constructor
-required|owner_impl|fn exactly_matches_retry(|cold Validate owner lost its retry-only projection
-required|owner_impl|frontier: &RecoveredDurableValidateRetryFrontierV1|cold Validate owner retry omitted its retained monotonic frontier
-required|owner_impl|.project_retry(&self.effect, frontier, effect, incoming)|cold Validate owner stopped delegating to its retained exact binding and frontier
-forbidden|owner_impl|fn into_|cold Validate owner exposed a reusable parts projection
-required|census|owners:\n        BTreeMap<|cold Validate census lost its complete exact-key owner map
-forbidden|census|Clone|cold Validate census became cloneable
-required|census_impl|fn classify_and_bind_validated_marker(|cold Validate census lost its owner-exact mutating marker query
-required|census_impl|self.owners.get_mut(&key)|cold Validate census stopped binding marker authority into the sole exact owner
-required|census_impl|.bind_validated_marker(key, validated)|cold Validate census stopped delegating exact marker binding
-required|census_impl|fn install_into_executor|cold Validate census lost its consuming atomic executor installation
-required|census_impl|self.owners|cold Validate census stopped consuming its complete owner map
-required|census_impl|for owner in self.owners.into_values()|cold Validate census stopped consuming every owner without exposing a reusable subset
-forbidden|census_impl|fn iter(|cold Validate census exposed a caller-selectable subset iterator
-forbidden|census_impl|fn into_|cold Validate census exposed reusable parts or a caller-selected subset
-forbidden|census_impl|Vec<|cold Validate census reopened raw list ownership
-required|projection|coordinator.fault.is_some() \p\p coordinator.active_lease.is_some()|cold census admitted a faulted or leased coordinator
-required|projection|if let Some((decision_round, proposal_round, _, _)) = decision|cold census stopped validating the optional replayed Decision
-required|projection|decision_round != proposal_round|cold census admitted a noncanonical replayed Decision round
-required|projection|let mut logical_keys = std::collections::BTreeSet::new();|cold census lost its complete logical-key alias detector
-required|projection|for work in self.entries.values()|cold census stopped inspecting every registry carrier before projection
-required|projection|ConcreteLifecycleWorkKind::DurableValidateBody(validate)|cold census admitted a non-Validate registry carrier
-required|projection|candidate_statement()|cold census stopped using the retained opaque startup statement
-required|projection|logical_keys.insert((statement.proposal_round(), subject))|cold census stopped keying owners by exact proposal round and subject
-required|projection|RecoveredDurableValidateRetryOwnerErrorV1::MultipleCarriers|cold census stopped rejecting logical aliases
-required|projection|let mut owners = BTreeMap::new();|cold census lost its atomic ordered owner projection
-required|projection|for (address, work) in &self.entries|cold census stopped projecting every concrete Ready Validate carrier
-required|projection|let expected_key = LifecycleKey::new(|cold census stopped reconstructing the complete logical key
-required|projection|let matching_decision = decision.filter(|cold census stopped associating the exact replayed Decision ceiling with a matching weaker or Commit carrier
-required|projection|(Some(wire::GlobalPhase::Commit), Some(commitment))|cold census omitted Commit-refined carriers
-required|projection|decision != Some(carrier_decision)|Commit-refined cold carrier stopped joining the exact replayed Decision
-required|projection|Some(wire::GlobalPhase::Prepare)|Prepare-refined cold carriers lost their startup frontier
-required|projection|(None, None)|candidate or protected-lock cold carriers lost their weaker startup frontier
-required|projection|AdapterEffect::ValidateBody {|cold census admitted another effect stage
-required|projection|*round != statement.proposal_round()|cold census stopped binding the effect to its proposal round
-required|projection|*effect_subject != subject|cold census stopped binding the effect to its subject
-required|projection|statement.context_id() != statement.round().context_id|cold census stopped checking runtime statement context
-required|projection|statement.context_id() != statement.proposal_round().context_id|cold census stopped checking proposal statement context
-required|projection|record.state != super::LifecycleState::Ready|cold census admitted a non-Ready Validate row
-required|projection|record.work_class != LifecycleWorkClass::Validate|cold census admitted another lifecycle class
-required|projection|LifecycleStageKind::ValidateBody|cold census admitted another Validate stage
-required|projection|PredecessorScope::Independent|cold census admitted another Validate predecessor scope
-required|projection|record.key != expected_key|cold census omitted its complete logical-key equality
-required|projection|record.physical_slots != BTreeMap::from([(address.slot, work.digest)])|cold census omitted its exact physical slot and digest
-required|projection|coordinator.key_index.get(&record.key) != Some(&record.ordinal)|cold census omitted its logical-key index
-required|projection|coordinator.owner_index.get(&record.owner.causal_root()) != Some(&record.owner)|cold census omitted its exact owner index
-required|projection|coordinator.ready_index.contains(&record.ordinal)|cold census omitted the exact Ready index
-required|projection|validate.matches_recovered_record(|cold census omitted complete recovered-carrier validation
-required|projection|project_recovered_durable_validate_retry_binding(|cold census lost its opaque exact runtime binding
-required|projection|matching_decision|cold census failed to pass the associated Decision ceiling into retry binding
-required|projection|owners.insert(key, owner).is_some()|cold census stopped rejecting a second exact-key owner
-required|projection|RecoveredDurableValidateRetryCensusV1 {|cold census stopped sealing the complete owner map behind one opaque move-only value
-count|projection_source|pub(super) fn project_recovered_durable_validate_retry_census(|1|cold Validate census must have one registry mint
-required|pending_binding|causal_lifecycle_key: iroha_crypto::Hash|cold Validate pending binding lost its opaque causal coordinate
-required|pending_binding|effect_kind: u8|cold Validate pending binding lost its stable effect class
-required|pending_binding|candidate_kind: u8|cold Validate pending binding lost its stable candidate class
-required|pending_binding|projection_hash: iroha_crypto::Hash|cold Validate pending binding lost its integrity projection
-forbidden|pending_binding|ordinal:|cold Validate pending binding regained a runtime ordinal and blocked legitimate retransmit-origin reminting
-required|pending_source|integrity projection deliberately excludes the runtime lifecycle|cold Validate pending remint policy is no longer explicit
-required|binding|pending: PendingRuntimeEffectBinding|cold Validate binding lost its exact pending projection
-required|binding|expected_retry_statement: RuntimeCandidateSemanticStatement|cold Validate binding lost its exact replayed-Decision authority ceiling
-required|binding|authority_ceiling_commitment: Option<wire::ExecutionCommitment>|cold Validate binding lost its marker, Decision, or first-refinement commitment ceiling
-required|binding|fn bind_validated_marker_commitment(|cold Validate binding lost its exact marker-derived ceiling fold
-required|binding|self.authority_ceiling_commitment = Some(commitment)|cold Validate binding stopped latching the first exact marker commitment
-required|binding|fn exactly_matches_validated_marker_commitment(|cold Validate binding lost marker-ceiling revalidation
-required|binding|fn initial_frontier(|cold Validate binding lost its sole monotonic frontier constructor
-required|binding|fn project_retry(|cold Validate binding lost its sole retry oracle
-required|binding|frontier_tag != recovered_tag|cold Validate retry stopped validating its retained EventTag frontier against the recovered tag
-required|binding|incoming_tag != frontier_tag|cold Validate retry accepted EventTag rollback after an earlier advance
-required|binding|frontier_round != recovered_round|cold Validate retry stopped checking its retained round
-required|binding|frontier_subject != recovered_subject|cold Validate retry stopped checking its retained subject
-required|binding|incoming_round != recovered_round|cold Validate retry stopped checking the incoming round
-required|binding|incoming_subject != recovered_subject|cold Validate retry stopped checking the incoming subject
-required|binding|!self.pending.validate_exact(recovered_effect)|cold Validate retry stopped revalidating the recovered incumbent
-required|binding|!incoming.validate_exact()|cold Validate retry stopped validating the independently authenticated incoming owner
-required|binding|.commit_refinement_to(self.expected_retry_statement)|cold Validate retry lost the exact monotonic path from its weaker startup owner to the replayed Decision
-required|binding|recovered_statement.body_stage_authority_relation_to(frontier.statement)|cold Validate retry stopped authenticating the retained monotonic authority frontier
-required|binding|RuntimeFetchAuthorityRelation::Same \p RuntimeFetchAuthorityRelation::Upgrade|cold Validate retry accepted a frontier below or conflicting with its recovered startup authority
-required|binding|.body_stage_authority_relation_to(incoming_statement)|cold Validate retry stopped classifying stale, same, and exact Commit-strengthening authority
-required|binding|frontier.authority_ceiling_commitment|cold Validate retry lost its marker, Decision, or first-refinement commitment ceiling
-required|binding|.zip(incoming_commitment)|cold Validate retry stopped rejecting a commitment which conflicts with its sealed ceiling
-required|binding|RuntimeFetchAuthorityRelation::Upgrade => incoming_statement|cold Validate retry stopped advancing to an exact stronger authority
-required|binding|RuntimeFetchAuthorityRelation::Same \p RuntimeFetchAuthorityRelation::Stale|cold Validate retry stopped stuttering without authority downgrade
-required|binding|incoming_binding.candidate_semantic_identity|cold Validate retry stopped checking incoming semantic identity
-required|binding|incoming_binding.effect_identity != effect_identity|cold Validate retry stopped checking its exact incoming effect
-required|binding|RuntimeEffectOwnership::new_bound(|cold Validate retry stopped rebuilding an exact ownership from its retained authority lattice
-required|binding|effect: effect.clone()|cold Validate retry stopped persisting its accepted EventTag frontier
-required|binding|statement: retained_statement|cold Validate retry stopped persisting its accepted body-stage frontier
-required|binding|.or(incoming_commitment)|cold Validate retry stopped latching the first accepted commitment ceiling
-required|binding|changed its body or authority commitment|cold Validate retry stopped rejecting subject, round, or commitment conflicts
-forbidden|binding|incoming.exact_pending_adapter_effect_binding(effect)|cold Validate retry incorrectly rejected legitimate independently authenticated retransmit, FIFO, or ingress origins
-forbidden|binding|incoming_pending.causal_lifecycle_key != self.pending.causal_lifecycle_key|cold Validate retry incorrectly required a fresh runtime origin to reuse the recovered registry key
-forbidden|binding|fn into_|cold Validate binding exposed reusable pending authority
-required|frontier|effect: AdapterEffect|recovered retry frontier lost its highest accepted EventTag and exact effect
-required|frontier|statement: RuntimeCandidateSemanticStatement|recovered retry frontier lost its highest accepted body-stage authority
-required|frontier|authority_ceiling_commitment: Option<wire::ExecutionCommitment>|recovered retry frontier lost its non-substitutable commitment ceiling
-required|frontier_impl|fn project_commitment_ceiling(|recovered retry frontier lost its pure later durable-fact join
-required|frontier_impl|authority_ceiling_commitment|later durable-fact join stopped checking the retained commitment ceiling
-required|frontier_impl|expected != commitment|later durable-fact join accepted a conflicting marker or Decision commitment
-required|frontier_impl|let mut projected = self.clone();|later durable-fact join mutated the current recovered seal during preflight
-required|frontier_impl|projected.authority_ceiling_commitment = Some(commitment);|later durable-fact join stopped latching an empty ceiling or preserving an equal ceiling
-required|frontier_impl|Ok(projected)|later durable-fact join stopped returning a separately commit-able replacement frontier
-required|seal|Live {|Validate retry seal lost the distinct live lineage
-required|seal|Recovered {|Validate retry seal lost the distinct recovered lineage
-required|seal|owner:|recovered retry seal lost its immutable storage-authenticated owner
-required|seal|frontier:|recovered retry seal lost its persistent monotonic authority frontier
-forbidden|seal|Recovered(Arc<RecoveredDurableValidateRetryOwnerV1>)|recovered retry seal retained the immutable-startup tuple which permits effect or authority rollback
-required|seal_projection|Some(Self::Live {|normal admission stopped minting only the live retry lineage
-required|seal_projection|Self::Recovered {|retry projection stopped distinguishing recovered ownership
-required|seal_projection|frontier|recovered retry projection stopped consulting its retained authority and EventTag frontier
-required|seal_projection|exactly_matches_retry|recovered retry projection stopped proving its exact cold owner
-required|seal_projection|seal: Self::Recovered {|recovered retry projection substituted a live seal
-required|seal_projection|owner: Arc::clone(owner)|recovered retry projection adopted the ephemeral incoming trace origin instead of retaining its storage-authenticated owner
-required|seal_projection|frontier,|recovered retry projection failed to persist only the monotonic tag and authority frontier
-required|seal_projection|fn project_recovered_commitment_ceiling(|recovered retry seal lost its later marker and Decision preflight
-required|seal_projection|Self::Live { .. } => Ok(None)|later durable facts incorrectly minted recovered authority for a live retry seal
-required|seal_projection|.project_commitment_ceiling(commitment)|recovered retry seal stopped checking a later durable commitment before mutation
-forbidden|seal_projection|seal: Self::Recovered(Arc::clone(recovered))|recovered retry projection discarded its advanced authority or EventTag frontier
-forbidden|seal_projection|owner: Arc::new(incoming|recovered retry projection persisted a fresh retransmit, FIFO, or ingress origin
-required|install|owner.exactly_matches_validated_marker(key, validated)|cold owner installation stopped rechecking the marker-derived authority ceiling
-required|install|frontier: owner.initial_retry_frontier()|cold owner installation stopped sealing the marker-derived commitment and startup statement into its retry frontier
-required|install|DurableValidateRetrySealV1::Recovered {|cold owner installation lost its lineage-tagged persistent retry frontier
-required|install|owner: Arc::new(owner)|cold owner installation lost its immutable storage-authenticated owner
-forbidden|install|DurableValidateRetrySealV1::Recovered(Arc::new(owner))|cold owner installation retained immutable startup authority and accepted later conflicting refinements
-required|runtime_decision|self.driver.replayed_decision_key()|cold launch stopped reading the runtime's exact replayed Decision
-required|catalog_open|ensure_recovered_markers_revalidated()|body catalogs opened before marker authentication
-required|catalog_open|.recovery_catalog()|body catalogs lost their checksummed durable inventory
-required|catalog_open|let recovered_validations = body_store.validated_recovery_catalog()|cold marker deferral lost the validated catalog
-required|catalog_open|RecoveredDurableValidateRetryCensusV1|body-store open lost the opaque complete Ready Validate census
-required|catalog_open|mut recovered_validate_retry_census|body-store open cannot fold exact marker commitments into the sealed cold retry census
-required|catalog_open|for (key, validated_receipt) in &recovered_validations|cold marker deferral stopped classifying every validated marker
-required|catalog_open|validated_receipt.durable() != durable_receipt|cold marker deferral stopped joining the checksummed body receipt
-required|catalog_open|classify_and_bind_validated_marker(|cold marker deferral stopped binding the exact marker commitment into the sealed complete owner census
-required|catalog_open|.recover_validated_body(manifest, validated_receipt)|a marker without a Ready Validate carrier stopped entering runtime recovery
-required|catalog_open|Self::with_runtime_and_guard(|executor opened before every validated marker was classified
-required|catalog_open|install_recovered_validation_catalog(|executor lost the exact recovered validation, rejection, and retirement catalogs
-required|catalog_open|install_into_executor(|the opaque census was not consumed into the executor before return
-forbidden|catalog_open|Vec<RecoveredDurableValidateRetryOwnerV1>|body-store open regained a caller-selectable raw owner list
-forbidden|catalog_open|recovered_validate_retry_census.iter(|body-store open iterated or selected a census subset
-order|catalog_open|8|ensure_recovered_markers_revalidated()|recovery_catalog()|validated_recovery_catalog()|for (key, validated_receipt) in &recovered_validations|classify_and_bind_validated_marker(|Self::with_runtime_and_guard(|install_recovered_validation_catalog(|install_into_executor(|body catalogs, exact marker authority binding or recovery, executor open, catalog install, and sealed census consumption must remain ordered
-required|marker_join|self.validated_bodies|later validation marker join stopped preflighting the current catalog
-required|marker_join|let projected_recovered_seal =|later validation marker join stopped projecting a replacement recovered frontier before mutation
-required|marker_join|project_recovered_commitment_ceiling(validated.execution_commitment())|later validation marker join stopped latching or checking its exact commitment
-required|marker_join|.transpose()|later validation marker join stopped propagating a conflicting ceiling before mutation
-required|marker_join|self.validated_bodies.entry(key).or_insert(validated)|later validation marker join lost its idempotent exact catalog commit
-required|marker_join|self.durable_validate_retry_seals.insert(key, seal)|later validation marker join stopped publishing the preflighted replacement frontier
-order|marker_join|5|.is_some_and(\pexisting\p existing != &validated)|project_recovered_commitment_ceiling(validated.execution_commitment())|.map_err(EffectExecutorError::Contract)?|self.validated_bodies.entry(key).or_insert(validated)|self.durable_validate_retry_seals.insert(key, seal)|marker conflict checking must complete before catalog or frontier mutation
-order|retry_stutter|9|.project_retry(effect, evidence)|RuntimeCandidateAdmissionDisposition::CoalescedRetry|production_adapter_effect_candidate_trace_projection(|check_production_effect_to_candidate_transition(|*evidence = projected.ownership.clone()|retained_candidate_owners.insert(identity, projected.ownership.clone())|retained_validate_retry_seals.insert((*round, *subject), projected.seal)|retain_effect.push(false)|continue|exact cold Validate retry must refine the incumbent, retain its lineage, and stutter without redispatch
-forbidden|retry_stutter|install_pending_durable_validate_admission|cold Validate retry stutter re-entered lifecycle admission
-forbidden|retry_stutter|enqueue_|cold Validate retry stutter performed service I/O
-forbidden|retry_stutter|dispatch_|cold Validate retry stutter dispatched the ephemeral incoming trace ownership
-required|decision_cleanup|let projected_recovered_decision_seal =|Decision cleanup stopped projecting its recovered frontier before any retirement mutation
-required|decision_cleanup|project_recovered_commitment_ceiling(decision_commitment)|Decision cleanup stopped latching or checking the exact durable Decision commitment
-required|decision_cleanup|.transpose()|Decision cleanup stopped propagating a conflicting recovered ceiling before mutation
-required|decision_cleanup|!self.pending_durable_validate_admissions.is_empty()|Decision cleanup must not overtake live Validate admission ownership
-required|decision_cleanup|let Some(seal) = projected_recovered_decision_seal|Decision cleanup lost its preflighted replacement recovered frontier
-required|decision_cleanup|.insert(decision_body, seal);|Decision cleanup stopped committing the replacement frontier only after fallible retirement work
-required|decision_cleanup|self.durable_validate_retry_seals|Decision cleanup lost the inert retry-seal map
-required|decision_cleanup|.retain(\pkey, _\p !drain_decision_body && *key == decision_body);|Decision cleanup must retain only the exact selected-body stutter or drain it terminally
-order|decision_cleanup|7|project_recovered_commitment_ceiling(decision_commitment)|self.preflight_remote_proposal_replay_indexes()?|retire_proposal_work_after_decision(|let Some(seal) = projected_recovered_decision_seal|.insert(decision_body, seal);|.retain(\pkey, _\p !drain_decision_body && *key == decision_body);|self.protected_decision = Some(durable_decision)|Decision commitment conflict preflight must precede fallible retirement, and replacement frontier commit must precede final cleanup publication
-order|launch|4|.replayed_decision_key()|project_recovered_durable_validate_retry_census(|V2EffectExecutor::open_with_body_store(|ProductionV2Services::start_with_apply_service(|cold Validate census projection, closed marker deferral and installation, and service exposure must remain ordered
-required|launch|recovered_validate_retry_census|body-store open lost the exact opaque census by-value handoff
-forbidden|launch|&recovered_validate_retry_census|launch borrowed a reusable or caller-selectable cold owner census
-forbidden|launch|install_recovered_durable_validate_retry_owners|launch retained a second compatibility installation seam
-forbidden|launch|arm_live_clocks|launch must not arm clocks before the complete cold Validate census is installed
-required|launched|executor: V2EffectExecutor<SerializedV2Runtime>|only the fully installed executor may cross into launched ownership
-required|launched|services: ProductionV2Services|service ownership must remain inside the same launched cut
-order|activation|3|.arm_live_clocks(clock_activation, now)|.activate_effect_completion_observer(observer)|publication.open_and_publish(&self.leader_wire_ingress_binding.ingress, status)|live clocks, observer, and ingress must open only from the installed launched owner
-end
 case|combined_recovered_sign_staging_is_two_child_affine_and_inert
 region|fetch_prepare|registry|after|pub(super) fn prepare_recovered_decision_fetch_store_successor|before|impl<'registry, 'adapter> PreparedRecoveredDecisionFetchStoreSuccessor<'registry, 'adapter>
 region|fetch_bind|registry|after|impl<'registry, 'adapter> PreparedRecoveredDecisionFetchStoreSuccessor<'registry, 'adapter>|before|impl<'adapter> BoundRecoveredDecisionFetchStoreSuccessor<'_, 'adapter>
@@ -2722,9 +2667,8 @@ region|serve_pair|registry|after|fn exactly_matches_fresh_staged_append(|before|
 forbidden|fetch_prepare|coordinator.high_water|recovered Fetch-to-Store preparation guessed a shared child ordinal
 forbidden|fetch_prepare|.checked_add(1)|recovered Fetch-to-Store preparation retained an absolute child offset
 forbidden|fetch_prepare|store_address|recovered Fetch-to-Store preparation minted a child address before staging
-order|fetch_bind|3|coordinator.records.get(&child_ordinal)|ConcreteWorkAddress::new(record.owner, child_ordinal, child_slot)|store.matches_current_ready_record(|recovered Store binding must derive and validate the exact staged child address
-required|fetch_bind|self.registry.entries.contains_key(&store_address)|recovered Store binding omitted its exact child-collision check
-order|broadcast_bind|4|coordinator.records.get(&child_ordinal)|ConcreteWorkAddress::new(record.owner, child_ordinal, child_slot)|broadcast.matches_current_ready_record(|registry.entries.contains_key(&broadcast_address)|recovered Broadcast binding must derive, validate, and collision-check the staged child address
+order|fetch_bind|6|exact_staged_recovered_decision_store_address(|self.registry.entries.contains_key(&store_address)|pub(super) fn exact_staged_recovered_decision_store_address(|coordinator.records.get(&child_ordinal)|ConcreteWorkAddress::new(record.owner, child_ordinal, child_slot)|store.matches_current_ready_record(|recovered Store binding must call its exact helper, collision-check, then derive and validate the staged child address
+order|broadcast_bind|6|exact_staged_recovered_lifecycle_broadcast_address(|pub(super) fn exact_staged_recovered_lifecycle_broadcast_address(|coordinator.records.get(&child_ordinal)|ConcreteWorkAddress::new(record.owner, child_ordinal, child_slot)|.validates_at(verified, broadcast_address, child_digest)|registry.entries.contains_key(&broadcast_address)|recovered Broadcast binding must call its exact helper, then derive, validate, and collision-check the staged child address
 forbidden|broadcast_prepare|coordinator.high_water|recovered Sign-to-Broadcast preparation guessed a shared child ordinal
 forbidden|broadcast_prepare|.checked_add(1)|recovered Sign-to-Broadcast preparation retained an absolute child offset
 forbidden|broadcast_prepare|broadcast_address|recovered Sign-to-Broadcast preparation minted a child address before staging
@@ -3189,6 +3133,8 @@ required|dispatch|LifecycleCompletionCapacityProbeV1::Validate {|ordinary Valida
 order|dispatch|6|attest_ready_validate_demand(&self.registry, *ordinal)|capture_lifecycle_completion_capacity_census(probes)|.select_validate(ordinal)|begin_durable_validate_dispatch(&mut self.registry, lease, &self.verified)|reservation.preflight(&dispatch)|reservation.commit(dispatch)|Ready Validate must authenticate, reserve its exact worker position, enter Waiting, and publish one command in order
 required|completion|complete_durable_validate_dispatch(|executed Validate completion no longer returns Waiting to one authenticated Ready carrier
 required|completion|ack.acknowledge_after_publication();|Validate completion acknowledgement escaped before Ready publication
+required|completion|let (dispatch, ack) = completion.into_publication_parts();|Validate completion stopped moving its exact dispatch and acknowledgement into the publication transaction
+required|completion|drop((dispatch, ack));|failed Validate completion publication no longer retires the exact guarded owner before restart
 required|completion|close_admission_for_restart();|invalid Validate completion ownership no longer closes output for restart
 required|worker|LifecycleValidateDispatchKeyV1|the dedicated Validate owner lost its address-keyed identity
 required|worker|BTreeMap<LifecycleValidateDispatchKeyV1, V2IoTrackedLifecycleValidateV1>|the dedicated Validate queue lost its exact keyed ownership index
@@ -3350,7 +3296,7 @@ forbidden|token|wal.append(|recovery token exposes forbidden surface {forbidden}
 forbidden|token|pub(crate) fn into_parts(|recovery token exposes forbidden surface {forbidden}
 forbidden|token|validate_effect: AdapterEffect|recovery token exposes forbidden surface {forbidden}
 forbidden|token|validate_pending: PendingRuntimeEffectBinding|recovery token exposes forbidden surface {forbidden}
-forbidden|token|RuntimeLifecycleOrdinalSource|recovery token exposes forbidden surface {forbidden}
+forbidden|production_open|RuntimeLifecycleOrdinalSource|paired production open accepts raw runtime ordinal authority
 forbidden|token|recovery: AuthenticatedLifecycleRecoveryCut|recovery token exposes forbidden surface {forbidden}
 forbidden|token|recovered_vote: Option<RecoveredWalVoteSign>,\n        recovery:|recovery token exposes forbidden surface {forbidden}
 forbidden|recovered_vote_impl|fn new(|the recovered WAL vote authority must have no caller-visible constructor
@@ -3861,4 +3807,142 @@ required|recovered_join|replay_evidence,|recovered Validate join dropped {requir
 required|recovered_join|completion.restore(effect, pending)|recovered Validate join dropped {required}
 required|restore|let DetachedValidateReplayEvidenceV1::Retained(replay_evidence) = self.replay_evidence|detached Validate restore lost retained evidence
 required|restore|replay_evidence,|detached Validate restore omitted evidence transfer
+end
+case|selected_certified_response_priority_is_closed_and_exactly_routed
+region|priority_enum|selector|at|pub(crate) enum SelectedCertifiedResponsePriorityV1 {|before|impl LifecycleIngressSelectorError
+region|classifier|selector|at|pub(super) fn classify_selected_certified_response_priority(|before|/// Convert the selected response family's cut into Phase-A authority.
+region|widen|ingress_position|at|pub(super) fn into_ordinary_turn_cut(self) -> FairIngressTurnCut<'a> {|before|impl<'a> FairIngressTurnCut<'a> {
+region|driver|turn_driver|at|pub(in crate::sumeragi) fn drive_ingress_turn<'cursor>(|before|fn drive_recovered_ingress_selector<'cursor>(
+required|priority_enum|DefinitelyNonPriority|selected certified-response priority omitted its nonpriority class
+required|priority_enum|OrdinaryClaimed|selected certified-response priority omitted its ordinary owner
+required|priority_enum|RecoveredClaimed|selected certified-response priority omitted its recovered owner
+forbidden|classifier|selected_cut_is_recovered_decision_fetch|retired boolean certified-response selector remains
+required|classifier|self.validate_lifecycle_ingress_selector_authority()|certified-response classifier omitted executor authority validation
+required|classifier|cut.selected_identity().context() != context|certified-response classifier omitted exact context validation
+required|classifier|response.request_hash != selected_request_hash|certified-response classifier admitted a foreign request family
+required|classifier|occurrence.queue_gate() == FairV2IngressQueueGateVerdict::Blocked|certified-response classifier admitted a blocked carrier
+required|classifier|message.validate_version().is_err()|certified-response classifier omitted version and drainability filtering
+required|classifier|CertifiedResponsePriorityProbe::DefinitelyNonPriority(_)|certified-response classifier promoted an explicitly nonpriority response
+required|classifier|response_error_is_remote_nonpriority(&error)|certified-response classifier turned remote nonpriority evidence into a fatal error
+required|classifier|response_candidates|certified-response classifier omitted its complete physical candidate census
+required|classifier|return Err(LifecycleIngressSelectorError::ExecutorAuthority {|certified-response classifier downgraded a fatal local authority error
+required|classifier|.is_some()|certified-response classifier allowed duplicate physical candidate replacement
+required|classifier|LifecycleIngressSelectorError::InvalidOccurrenceIdentity|certified-response classifier failed to reject duplicate physical identity
+required|classifier|lowest_physical_ordinal_per_family(|certified-response classifier omitted the lowest authenticated family winner
+required|classifier|let mut selected_priority = SelectedCertifiedResponsePriorityV1::DefinitelyNonPriority|certified-response classifier did not default closed to nonpriority
+required|classifier|revalidate_certified_response_priority_candidate(|certified-response classifier omitted ordinary exact-candidate reprobe
+required|classifier|revalidate_recovered_decision_fetch_response_candidate(|certified-response classifier omitted recovered exact-candidate reprobe
+required|classifier|if !exact|certified-response classifier ignored a failed exact candidate reprobe
+required|classifier|LifecycleIngressSelectorError::CandidateRevalidationDrift|certified-response classifier failed to close on reprobe drift
+required|classifier|if ordinal == selected_ordinal|certified-response classifier detached the physical winner
+required|classifier|if !cut.pre_cut_is_intact()|certified-response classifier omitted final cut integrity
+required|widen|let Self {|ordinary cut widening omitted the move-only lifecycle cut destructure
+required|widen|_service_guard|ordinary cut widening dropped its held service guard
+required|widen|let selected_physical_ordinal = selected_identity.physical_admission_ordinal|ordinary cut widening detached the selected identity
+required|widen|source_for_frozen_ordinal(&geometry, selected_physical_ordinal)|ordinary cut widening omitted the frozen source projection
+required|widen|.position(|ordinary cut widening omitted the frozen source-position lookup
+required|widen|source == selected_source|ordinary cut widening fabricated its selected source index
+required|widen|bound_context: Some(bound_context)|ordinary cut widening discarded its exact lifecycle context
+required|widen|selected_positions|ordinary cut widening discarded its exact queue positions
+required|widen|selected_disposition|ordinary cut widening discarded its exact dequeue disposition
+required|widen|leader_wire_projection|ordinary cut widening discarded its leader-wire projection
+order|driver|9|classify_selected_certified_response_priority(&cut)|SelectedCertifiedResponsePriorityV1::DefinitelyNonPriority|cut.into_ordinary_turn_cut()|SelectedCertifiedResponsePriorityV1::OrdinaryClaimed|capture_lifecycle_ingress_selector(cut)|self.drive_certified_fetch_ingress_selector(selector, runner)|SelectedCertifiedResponsePriorityV1::RecoveredClaimed|prepare_recovered_decision_fetch_from_selected_cut(cut)|self.drive_recovered_ingress_selector(selector, runner)|certified-response tri-state classification and exact handoffs must remain ordered
+count|driver|dequeue_prepared_ordinary_ingress(|4|certified-response tri-state routing changed the exact ordinary dequeue inventory
+forbidden|driver|selected_cut_is_recovered_decision_fetch|turn driver retained the retired boolean certified-response selector
+end
+case|pending_kura_validation_marker_is_move_only_and_commits_exact_apply_child
+region|marker_types|pending_kura|at|pub(crate) struct DeferredPendingKuraValidatedMarkerV1 {|before|pub(in crate::sumeragi) struct InstalledPendingKuraApplyV1 {
+region|marker_defer|pending_kura|at|pub(in crate::sumeragi) fn classify_and_defer_validated_marker(|before|/// Require the body-store open transaction to have deferred its sole marker.
+region|marker_exact|pending_kura|at|pub(in crate::sumeragi) fn exactly_matches_recovery(|before|/// Seal one exact direct successful-validation preview and its Apply owner.
+region|marker_prepare|pending_kura|at|pub(in crate::sumeragi) fn prepare_apply<'a>(|before|impl PreparedPendingKuraValidatedApplyV1<'_> {
+region|marker_commit|pending_kura|at|pub(in crate::sumeragi) fn commit(self) -> PendingKuraValidatedApplySuccessorV1 {|before|impl PendingKuraValidatedApplySuccessorV1 {
+region|child_release|pending_kura|at|pub(in crate::sumeragi) fn consume_for_executor(|before|#[allow(
+region|replay_verify|effects|at|pub(crate) fn verify_pending_kura_apply_replay(|before|/// Authenticate and enqueue one reducer-directed v2 network message while
+region|runtime_prepare|runtime|at|pub(in crate::sumeragi) fn prepare_pending_kura_validated_apply(|before|/// Freeze the serialized shell around one ordinary Fetch-to-Store preview.
+region|runtime_default|effects|after|pub(crate) trait EffectRuntime {|before|/// Decide whether the runtime accepts one exact fair-ingress ownership carrier.
+region|runtime_serialized|effects|after|impl EffectRuntime for SerializedV2Runtime {|before|fn can_admit_network_message_with_ingress_ownership(
+region|validate_child|effects|at|fn validate_body<S: V2EffectServices>(|before|fn begin_apply<S: V2EffectServices>(
+region|consume_child|effects|at|fn consume_one<S: V2EffectServices>(|before|fn ensure_pending_tip_recovery_effect_is_local(
+region|recovery_step|effects|at|pub(crate) fn step_pending_tip_recovery<S: V2EffectServices>(|before|/// Publish the terminal scheduler observation immediately before the runner
+region|retired_carrier|coordinator_support|begin|-|end|-
+region|retired_carrier|pending_kura|begin|-|end|-
+required|marker_types|DeferredPendingKuraValidatedMarkerV1|pending-Kura recovery omitted its deferred exact marker
+required|marker_types|PreparedPendingKuraValidatedApplyV1|pending-Kura recovery omitted its staged validation transition
+required|marker_types|PendingKuraValidatedApplySuccessorV1|pending-Kura recovery omitted its opaque Apply child
+required|marker_types|child_ownership: crate::sumeragi::v2_runtime::RuntimeEffectOwnership|pending-Kura Apply child omitted predecessor-derived ownership
+forbidden|marker_types|fn into_parts(|pending-Kura marker/child types exposed a parts API
+forbidden|marker_types|pub effect:|pending-Kura Apply child exposed its effect
+forbidden|marker_types|pub(crate) effect:|pending-Kura Apply child exposed its effect to the crate
+forbidden|marker_types|pub(in crate::sumeragi) effect:|pending-Kura Apply child exposed its effect to Sumeragi
+forbidden|marker_types|pub(crate) child_ownership:|pending-Kura Apply child exposed its ownership to the crate
+forbidden|marker_types|pub(in crate::sumeragi) child_ownership:|pending-Kura Apply child exposed its ownership to Sumeragi
+forbidden|marker_types|pub(crate) _marker:|pending-Kura preparation exposed its marker to the crate
+forbidden|marker_types|pub(in crate::sumeragi) _marker:|pending-Kura preparation exposed its marker to Sumeragi
+required|marker_defer|exactly_matches_recovered_decision_fetch(|pending-Kura marker deferral lost its sealed WAL replay authority
+required|marker_defer|if key != expected_key|pending-Kura marker deferral selected a foreign recovered body
+required|marker_defer|if self.deferred_validated_marker.is_some()|pending-Kura marker deferral admitted a second marker
+required|marker_defer|self.expected.context_id() != context.id()|pending-Kura marker deferral omitted the exact context
+required|marker_defer|self.expected.height() != context.height|pending-Kura marker deferral omitted the exact height
+required|marker_defer|self.expected.block_hash() != subject.block_hash|pending-Kura marker deferral omitted the exact block
+required|marker_defer|certificate.phase != crate::sumeragi::v2::wire::GlobalPhase::Commit|pending-Kura marker deferral accepted a non-Commit certificate
+required|marker_defer|certificate.proposal_round != *round|pending-Kura marker deferral omitted the certificate round
+required|marker_defer|certificate.subject != *subject|pending-Kura marker deferral omitted the certificate subject
+required|marker_defer|certificate.validate(context).is_err()|pending-Kura marker deferral omitted certificate validation
+required|marker_defer|manifest.validate(context).is_err()|pending-Kura marker deferral omitted manifest validation
+required|marker_defer|manifest.round != *round|pending-Kura marker deferral omitted the manifest round
+required|marker_defer|manifest.subject != *subject|pending-Kura marker deferral omitted the manifest subject
+required|marker_defer|advertised_manifest|pending-Kura marker deferral omitted the advertised-manifest join
+required|marker_defer|durable.context_id() != context.id()|pending-Kura marker deferral omitted durable context
+required|marker_defer|durable.round() != *round|pending-Kura marker deferral omitted durable round
+required|marker_defer|durable.subject() != *subject|pending-Kura marker deferral omitted durable subject
+required|marker_defer|durable.manifest_hash() != iroha_crypto::HashOf::new(manifest)|pending-Kura marker deferral omitted the durable manifest join
+required|marker_defer|validated.durable() != durable|pending-Kura marker deferral omitted the validated-to-durable join
+required|marker_defer|validated.execution_commitment() != certificate.execution_commitment|pending-Kura marker deferral omitted the exact Decision commitment
+required|marker_exact|self.tag == replay_tag|pending-Kura marker lost its exact reducer tag
+required|marker_exact|self.manifest_hash == iroha_crypto::HashOf::new(manifest)|pending-Kura marker lost its exact manifest
+required|marker_exact|self.validated.durable() == &self.durable|pending-Kura marker lost its exact validated body
+required|marker_exact|self.certificate.execution_commitment == self.validated.execution_commitment()|pending-Kura marker lost its exact Decision commitment
+required|marker_exact|self.certificate.proposal_round == self.round|pending-Kura marker lost its certificate round
+required|marker_exact|self.certificate.subject == self.subject|pending-Kura marker lost its certificate subject
+required|marker_prepare|ownership.binds_durable_decision_authority(|pending-Kura validation omitted durable Decision authority
+order|marker_prepare|5|ownership.binds_durable_decision_authority(|self.certificate.round|self.certificate.proposal_round|self.subject|self.certificate.execution_commitment|pending-Kura validation changed its exact durable Decision authority arguments
+required|marker_prepare|ownership.exact_pending_adapter_effect_binding(predecessor)|pending-Kura validation omitted exact predecessor ownership
+required|marker_prepare|prepare_direct_validation_succeeded(|pending-Kura validation bypassed the sealed direct ValidationCompleted preview
+required|marker_prepare|DirectValidationSucceededPreparation::Apply(prepared)|pending-Kura validation accepted a non-Apply preview
+required|marker_prepare|project_validate_apply_successor(predecessor, &apply_effect)|pending-Kura validation minted Apply without its Validate predecessor
+required|marker_prepare|rebind_as_inherited_adapter_effect(&apply_effect)|pending-Kura validation omitted inherited child ownership
+forbidden|marker_prepare|reducer::Event::ValidationCompleted|pending-Kura validation constructed a raw reducer event
+forbidden|marker_prepare|periodic_timer|pending-Kura validation reintroduced timer authority
+required|marker_commit|adapter.reducer = next_reducer|pending-Kura validation commit omitted reducer publication
+required|marker_commit|adapter.registry = next_registry|pending-Kura validation commit omitted registry publication
+required|marker_commit|PendingKuraValidatedApplySuccessorV1 {|pending-Kura validation commit omitted its opaque child
+required|child_release|PendingKuraApplySuccessorExecutorPermitV1|pending-Kura Apply child escaped its executor permit
+required|replay_verify|deferred_validated_marker: super::v2::DeferredPendingKuraValidatedMarkerV1|pending-Kura replay omitted marker ownership
+required|replay_verify|verify_pending_kura_apply_parts_with_marker(|pending-Kura replay omitted exact marker verification
+required|replay_verify|self.pending_tip_recovery = Some(evidence)|pending-Kura replay omitted sealed evidence installation
+required|runtime_prepare|self.clocks_armed|pending-Kura validation seam omitted the no-clock guard
+required|runtime_prepare|self.ingress.len() != 0|pending-Kura validation seam omitted the empty-ingress guard
+required|runtime_prepare|marker.prepare_apply(&mut self.driver, predecessor, ownership)|pending-Kura runtime bypassed the marker-owned preview
+required|runtime_default|Err((|generic EffectRuntime did not fail closed for pending-Kura marker commit
+required|runtime_default|runtime cannot commit a deferred pending-Kura validation marker|generic EffectRuntime fabricated pending-Kura validation authority
+order|runtime_serialized|3|self.prepare_pending_kura_validated_apply(marker, predecessor, ownership)|Ok(prepared) => Ok(prepared.commit())|Err((marker, error)) => Err((marker, error.to_string()))|serialized runtime stopped preparing before committing the exact pending-Kura child
+required|validate_child|take_deferred_validated_marker()?|pending-Kura Validate did not consume its move-only marker
+order|validate_child|8|recovery.stage() != PendingKuraApplyRecoveryStage::DeterministicValidation|recovery.replay_tag() != tag|recovery.durable_round() != round|recovery.durable_subject() != subject|recovery.durable_receipt() != &receipt|self.ensure_pending_slot()?|let _next_apply_work = self.plan_work_id()?|take_deferred_validated_marker()?|pending-Kura Validate omitted exact recovered coordinates or capacity-before-move ordering
+required|validate_child|commit_pending_kura_validated_apply(marker, &effect, &ownership)|pending-Kura Validate omitted the direct adapter commit
+required|validate_child|restore_deferred_validated_marker(marker)|pending-Kura precommit failure did not restore marker ownership
+required|consume_child|if let Some(stage) = recovery_transition {|pending-Kura child dispatch omitted the outer stage commit
+order|consume_child|4|result?|if let Some(stage) = recovery_transition {|.stage = stage|if let Some(successor) = pending_kura_successor|pending-Kura child dispatch did not commit the outer Apply stage before recursion
+required|consume_child|PendingKuraApplySuccessorExecutorPermitV1::new()|pending-Kura child dispatch omitted its private permit
+required|consume_child|self.consume_one(effect, ownership, services)|pending-Kura child dispatch omitted its bounded local continuation
+required|consume_child|EffectExecutorError::Contract(format!(|pending-Kura postcommit child failure did not fail stop
+forbidden|consume_child|periodic_timer|pending-Kura direct Apply child reintroduced timer dispatch
+required|recovery_step|self.consume_pending_tip_recovery_effects(effects, services)?|pending-Kura recovery step bypassed the exact stage-complete local consumer
+order|recovery_step|7|self.finish_runtime_step_reconciliation(services)|RuntimeStep::Idle|RuntimeStep::Advanced(effects)|self.consume_pending_tip_recovery_effects(effects, services)?|PendingTipRecoveryAttemptResult::Advanced|self.publish_status(services)|EffectExecutorStep::Advanced { effects: count }|pending-Kura recovery step stopped consuming every exact Advanced stage before publication
+forbidden|recovery_step|stage != PendingKuraApplyRecoveryStage::Apply|pending-Kura recovery step retained an Apply-only carrier-era gate
+forbidden|recovery_step|self.consume_effects(effects, services)?|pending-Kura recovery step substituted the generic effect consumer
+forbidden|recovery_step|self.consume_effects_with_runner_decision_cleanup(|pending-Kura recovery step substituted the ordinary runner-cleanup consumer
+forbidden|retired_carrier|RecoveredPendingKuraApplyCarrierPermitV1|pending-Kura retained the retired recovered-Apply carrier shortcut
+forbidden|retired_carrier|apply_carrier|pending-Kura retained the retired recovered-Apply carrier slot
+forbidden|retired_carrier|retains_decision_fetch_for_test|pending-Kura retained the retired Decision-Fetch compatibility probe
+forbidden|replay_verify|recovered_apply_ordinal|pending-Kura replay retained the retired recovered-Apply ordinal shortcut
 end

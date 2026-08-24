@@ -1032,9 +1032,9 @@ async fn soracloud_private_uploaded_model_receipt_survives_four_peer_restart() -
         output_artifact.clone(),
     );
     let receipt = post_private_uploaded_model_execute(&network.client(), &execute_request).await?;
-    receipt
-        .validate_submission()
-        .map_err(|err| eyre!("private uploaded-model receipt submission did not validate: {err}"))?;
+    receipt.validate_submission().map_err(|err| {
+        eyre!("private uploaded-model receipt submission did not validate: {err}")
+    })?;
     assert_eq!(receipt.service_name, uploaded_bundle.service_name);
     assert_eq!(receipt.model_id, uploaded_bundle.model_id);
     assert_eq!(receipt.weight_version, uploaded_bundle.weight_version);

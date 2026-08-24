@@ -20,10 +20,8 @@ use norito::codec::{Decode, Encode};
 use sha2::Sha256;
 use std::collections::{BTreeMap, BTreeSet};
 use thiserror::Error;
-/// Oldest authoritative Sumeragi wire revision retained in SCCP V1 anchors.
-pub const SCCP_V1_MIN_SUMERAGI_PROTOCOL_VERSION: u16 = 3;
-/// Newest authoritative Sumeragi wire revision accepted by SCCP V1 anchors.
-pub const SCCP_V1_MAX_SUMERAGI_PROTOCOL_VERSION: u16 = PROTOCOL_VERSION;
+/// Sole authoritative Sumeragi wire revision accepted by SCCP V1 anchors.
+pub const SCCP_V1_SUMERAGI_PROTOCOL_VERSION: u16 = PROTOCOL_VERSION;
 /// Maximum decimal scale accepted by first-release SCCP amount payloads.
 pub const SCCP_V1_MAX_PAYLOAD_AMOUNT_SCALE: u32 = 28;
 /// Exact decimal scale of the first-release XOR SCCP payload.
@@ -522,8 +520,7 @@ pub struct SccpSoraFinalityAnchorV1 {
     pub version: u8,
     /// Exact source chain. SCCP V1 outbound proofs require SORA Taira.
     pub source_network: SccpNetworkV1,
-    /// Authoritative Sumeragi wire protocol (`3` for historical anchors, `4`
-    /// for fresh revision-4 checkpoints).
+    /// Authoritative Sumeragi wire protocol (exactly revision `4`).
     pub protocol_version: u16,
     /// Keccak-256 of the canonical 16-byte Taira chain identifier.
     pub chain_id_hash: [u8; 32],
@@ -546,8 +543,7 @@ impl SccpSoraFinalityAnchorV1 {
     pub fn validate(self) -> Result<(), SccpRouteValidationError> {
         if self.version != 1
             || self.source_network != SccpNetworkV1::SoraTaira
-            || !(SCCP_V1_MIN_SUMERAGI_PROTOCOL_VERSION..=SCCP_V1_MAX_SUMERAGI_PROTOCOL_VERSION)
-                .contains(&self.protocol_version)
+            || self.protocol_version != SCCP_V1_SUMERAGI_PROTOCOL_VERSION
             || self.chain_id_hash != sccp_sora_taira_chain_id_hash_v1()
             || self.checkpoint_height == 0
             || validate_hash_roles(&[
@@ -1212,6 +1208,76 @@ pub struct SccpGovernedRouteV1 {
     pub settlement: SccpSoraSettlementV1,
 }
 impl SccpGovernedRouteV1 {
+    /// Return the first proposal-owned route value above the exact JSON integer maximum.
+    pub(crate) fn first_release_exact_json_u64_invariant_error(
+        &self,
+        maximum: u64,
+    ) -> Option<&'static str> {
+        if self
+            .inbound_finality_cutoff
+            .is_some_and(|cutoff| cutoff.max_anchor_interval_height > maximum)
+        {
+            return Some(
+                "SCCP proposal inbound finality cutoff exceeds the exact JSON integer maximum",
+            );
+        }
+        if self.sora_outbound_execution_policy.gas_limit > maximum {
+            return Some("SCCP proposal gas limit exceeds the exact JSON integer maximum");
+        }
+        if self
+            .destination
+            .outbound_proof_policy()
+            .sora_finality_anchor
+            .checkpoint_height
+            > maximum
+        {
+            return Some(
+                "SCCP proposal finality checkpoint exceeds the exact JSON integer maximum",
+            );
+        }
+        match &self.destination {
+            SccpDestinationDeploymentV1::Evm(deployment) => {
+                if deployment.taira_to_token_multiplier > maximum {
+                    return Some(
+                        "SCCP proposal EVM multiplier exceeds the exact JSON integer maximum",
+                    );
+                }
+            }
+            SccpDestinationDeploymentV1::Tron(deployment) => {
+                if deployment.taira_to_token_multiplier > maximum {
+                    return Some(
+                        "SCCP proposal TRON multiplier exceeds the exact JSON integer maximum",
+                    );
+                }
+            }
+            SccpDestinationDeploymentV1::Solana(deployment) => {
+                if deployment.route_program_data_slot > maximum {
+                    return Some(
+                        "SCCP proposal Solana route deployment slot exceeds the exact JSON integer maximum",
+                    );
+                }
+                if deployment.native_verifier_program_data_slot > maximum {
+                    return Some(
+                        "SCCP proposal Solana verifier deployment slot exceeds the exact JSON integer maximum",
+                    );
+                }
+                if deployment.taira_to_token_multiplier > maximum {
+                    return Some(
+                        "SCCP proposal Solana multiplier exceeds the exact JSON integer maximum",
+                    );
+                }
+            }
+        }
+        if let SccpSourceEmitterV1::Solana(emitter) = self.source_identity.emitter
+            && emitter.program_data_slot > maximum
+        {
+            return Some(
+                "SCCP proposal Solana source deployment slot exceeds the exact JSON integer maximum",
+            );
+        }
+        None
+    }
+
     /// Return the immutable lookup key of this route.
     #[must_use]
     pub fn key(&self) -> SccpRouteKeyV1 {
@@ -2704,7 +2770,7 @@ mod tests {
             sora_finality_anchor: SccpSoraFinalityAnchorV1 {
                 version: 1,
                 source_network: SccpNetworkV1::SoraTaira,
-                protocol_version: SCCP_V1_MIN_SUMERAGI_PROTOCOL_VERSION,
+                protocol_version: SCCP_V1_SUMERAGI_PROTOCOL_VERSION,
                 chain_id_hash: sccp_sora_taira_chain_id_hash_v1(),
                 checkpoint_height: 5,
                 checkpoint_block_hash: [0x73; 32],
@@ -2930,6 +2996,110 @@ mod tests {
                 iroha_crypto::Hash::prehashed([byte; iroha_crypto::Hash::LENGTH]),
             ),
         )
+    }
+    #[test]
+    fn governed_route_checks_every_number_encoded_u64_role() {
+        let maximum = crate::parliament_types::FIRST_RELEASE_MAX_EXACT_JSON_U64;
+        let hostile = maximum + 1;
+        assert_eq!(
+            route(1, SccpRouteActivationV1::Staged)
+                .first_release_exact_json_u64_invariant_error(maximum),
+            None
+        );
+
+        let mut cases = Vec::new();
+        let mut cutoff = route(1, SccpRouteActivationV1::Retired);
+        cutoff
+            .inbound_finality_cutoff
+            .as_mut()
+            .expect("retired route cutoff")
+            .max_anchor_interval_height = hostile;
+        cases.push(cutoff);
+
+        let mut gas = route(1, SccpRouteActivationV1::Staged);
+        gas.sora_outbound_execution_policy.gas_limit = hostile;
+        cases.push(gas);
+
+        let mut finality = route(1, SccpRouteActivationV1::Staged);
+        let SccpDestinationDeploymentV1::Evm(deployment) = &mut finality.destination else {
+            unreachable!("fixture is EVM")
+        };
+        deployment
+            .outbound_proof_policy
+            .sora_finality_anchor
+            .checkpoint_height = hostile;
+        cases.push(finality);
+
+        let mut evm_multiplier = route(1, SccpRouteActivationV1::Staged);
+        let SccpDestinationDeploymentV1::Evm(deployment) = &mut evm_multiplier.destination else {
+            unreachable!("fixture is EVM")
+        };
+        deployment.taira_to_token_multiplier = hostile;
+        cases.push(evm_multiplier);
+
+        let mut tron_multiplier = route(1, SccpRouteActivationV1::Staged);
+        let mut tron = tron_deployment();
+        tron.taira_to_token_multiplier = hostile;
+        tron_multiplier.destination = SccpDestinationDeploymentV1::Tron(tron);
+        cases.push(tron_multiplier);
+
+        for role in 0..3 {
+            let mut candidate = solana_route(SccpRouteActivationV1::Staged);
+            let SccpDestinationDeploymentV1::Solana(deployment) = &mut candidate.destination else {
+                unreachable!("fixture is Solana")
+            };
+            match role {
+                0 => deployment.route_program_data_slot = hostile,
+                1 => deployment.native_verifier_program_data_slot = hostile,
+                2 => deployment.taira_to_token_multiplier = hostile,
+                _ => unreachable!(),
+            }
+            cases.push(candidate);
+        }
+
+        let mut source_slot = solana_route(SccpRouteActivationV1::Staged);
+        let SccpSourceEmitterV1::Solana(emitter) = &mut source_slot.source_identity.emitter else {
+            unreachable!("fixture is Solana")
+        };
+        emitter.program_data_slot = hostile;
+        cases.push(source_slot);
+
+        for candidate in cases {
+            assert!(
+                candidate
+                    .first_release_exact_json_u64_invariant_error(maximum)
+                    .is_some()
+            );
+        }
+
+        let mut registration = crate::isi::bridge::SccpRouteGovernanceActionV1::Register(
+            crate::isi::bridge::SccpRegisterRouteV1 {
+                route: route(1, SccpRouteActivationV1::Staged),
+                native_trust_anchor: Some(SccpNativeTrustAnchorV1 {
+                    backend: BridgeNativeProofBackendV1::EthereumBeacon,
+                    anchor_hash: [0x91; 32],
+                    checkpoint_height: maximum,
+                }),
+            },
+        );
+        assert_eq!(
+            registration.first_release_exact_json_u64_invariant_error(maximum),
+            None
+        );
+        let crate::isi::bridge::SccpRouteGovernanceActionV1::Register(payload) = &mut registration
+        else {
+            unreachable!()
+        };
+        payload
+            .native_trust_anchor
+            .as_mut()
+            .expect("registration anchor")
+            .checkpoint_height = hostile;
+        assert!(
+            registration
+                .first_release_exact_json_u64_invariant_error(maximum)
+                .is_some()
+        );
     }
     #[test]
     fn route_escrow_derivation_is_stable_and_exact_network_bound() {
@@ -4020,11 +4190,6 @@ mod tests {
     fn outbound_proof_policy_rejects_every_malformed_or_aliased_role() {
         let policy = outbound_proof_policy();
         policy.validate().expect("exact fixture policy");
-        let mut revision_4 = policy;
-        revision_4.sora_finality_anchor.protocol_version = SCCP_V1_MAX_SUMERAGI_PROTOCOL_VERSION;
-        revision_4
-            .validate()
-            .expect("fresh revision-4 checkpoint policy");
         let profile_hash = policy.semantic_profile_hash().expect("profile hash");
         let anchor_hash = policy.sora_finality_anchor_hash().expect("anchor hash");
         assert_eq!(
@@ -4041,7 +4206,7 @@ mod tests {
         );
         assert_eq!(
             anchor_hash,
-            hex32("94be7710f3064ff4936d24f51355ca037bf53e653b7712abcd798ba47be20727")
+            hex32("31328ad8005a0f33e6050e8ae96f012b3285f7f14737486dce34f972686862f5")
         );
         assert_ne!(profile_hash, [0; 32]);
         assert_ne!(anchor_hash, [0; 32]);
@@ -4082,12 +4247,17 @@ mod tests {
             invalid.validate(),
             Err(SccpRouteValidationError::InvalidSemanticProofProfile)
         );
-        let anchor_mutations: [fn(&mut SccpSoraFinalityAnchorV1); 10] = [
+        let anchor_mutations: [fn(&mut SccpSoraFinalityAnchorV1); 11] = [
             |anchor: &mut SccpSoraFinalityAnchorV1| anchor.version = 0,
             |anchor: &mut SccpSoraFinalityAnchorV1| {
                 anchor.source_network = SccpNetworkV1::EthereumMainnet;
             },
-            |anchor: &mut SccpSoraFinalityAnchorV1| anchor.protocol_version = 1,
+            |anchor: &mut SccpSoraFinalityAnchorV1| {
+                anchor.protocol_version = SCCP_V1_SUMERAGI_PROTOCOL_VERSION - 1;
+            },
+            |anchor: &mut SccpSoraFinalityAnchorV1| {
+                anchor.protocol_version = SCCP_V1_SUMERAGI_PROTOCOL_VERSION + 1;
+            },
             |anchor: &mut SccpSoraFinalityAnchorV1| anchor.chain_id_hash[0] ^= 1,
             |anchor: &mut SccpSoraFinalityAnchorV1| anchor.checkpoint_height = 0,
             |anchor: &mut SccpSoraFinalityAnchorV1| anchor.checkpoint_block_hash = [0; 32],

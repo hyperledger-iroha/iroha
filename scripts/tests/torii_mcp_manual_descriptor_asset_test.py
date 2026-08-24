@@ -13,23 +13,23 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 SOURCE_PATH = ROOT / "crates/iroha_torii/src/mcp.rs"
 ASSET_PATH = ROOT / "crates/iroha_torii/src/mcp/manual_tool_descriptors_v1.json"
-EXPECTED_ASSET_LENGTH = 94_898
-EXPECTED_ASSET_SHA256 = "7babc1f2704affa3c0ce5c429607e00cfeb3536a0f01ba8c10daf242130e1e46"
-EXPECTED_SEMANTIC_SHA256 = "c83142260c79159f2a92fca149c218bf4af712d121dff798ed849a5631f3bcf9"
+EXPECTED_ASSET_LENGTH = 86_670
+EXPECTED_ASSET_SHA256 = "b903e0bb980a04db30a59615212c3cc677b596ecb0517e4da831da432e03435b"
+EXPECTED_SEMANTIC_SHA256 = "63b0d8b3f56a27663096948f0b7f3976ce6b9272f38a2c1dbee31c6fcf5efbd2"
 EXPECTED_HISTORICAL_RUST_PREIMAGE_SHA256 = (
     "1273686f98de21c686573d399d511be7606155b9d09de21869a8c060436242b4"
 )
 EXPECTED_RETAINED_DIRECT_SHA256 = (
-    "70b1951856692582c0ee024b6a338b63a27a3c39510b9755fa3cc2de93fc64c3"
+    "ddba529084533521983fb54e3fe96e182d35e27af54b3e20a8b625ab5cc037c4"
 )
 EXPECTED_LOADER_SOURCE_SHA256 = (
-    "e56ec234e33bed15c6c0068ddd6d5981a9e552f09aee9b1f48fa43973957bc30"
+    "ba2abb0410e37bc3fa1049c4312e29137193c77e28a0e16236f45acc758a4ca0"
 )
 EXPECTED_BLAKE3_BYTES = (
-    0x3D, 0xB7, 0x99, 0xE4, 0x4E, 0x3A, 0x76, 0x88,
-    0xD4, 0xEF, 0x6E, 0xC4, 0xDB, 0xA1, 0x40, 0x3C,
-    0xEB, 0x08, 0xEC, 0x74, 0x8C, 0x56, 0x38, 0xC1,
-    0x80, 0x90, 0x24, 0x78, 0x6C, 0x41, 0xDF, 0x98,
+    0x96, 0x9B, 0xC1, 0x7F, 0xAB, 0xE5, 0xEE, 0xF4,
+    0x13, 0xA8, 0xF2, 0x0F, 0x59, 0x2A, 0x66, 0xEA,
+    0x15, 0x74, 0x3C, 0x1C, 0xD0, 0xF7, 0x9B, 0xD4,
+    0xB6, 0x56, 0xE0, 0xE6, 0xB0, 0xD1, 0x47, 0x9D,
 )
 EXPECTED_WRAPPERS = (
     ('connect_ws_ticket_tool', 'connect.ws.ticket'),
@@ -111,7 +111,6 @@ RETAINED_DIRECT_BUILDERS = (
     "iroha_vpn_quotes_create_tool",
     "iroha_vpn_sessions_create_tool",
     "iroha_vpn_sessions_get_tool",
-    "iroha_vpn_sessions_delete_tool",
     "iroha_vpn_receipts_submit_tool",
     "iroha_vpn_receipts_list_tool",
     "iroha_gov_proposals_get_tool",

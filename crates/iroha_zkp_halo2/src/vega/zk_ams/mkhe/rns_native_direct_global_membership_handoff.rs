@@ -17,9 +17,10 @@
 //! bindings are admitted only through the source/packing child's post-equation
 //! outer bundle.
 //!
-//! No production numeric source, replay owner, mask owner, staged adapter,
-//! composite capability, readiness, receipt, or release authority is made
-//! available by this private handoff.
+//! The private handoff now lends its retained point inventory and repeatable
+//! authenticated source to the same-opening verifier without detached parts.
+//! No live production entry, mask owner, composite capability, readiness,
+//! receipt, or release authority is made available by this join.
 
 use core::fmt;
 
@@ -33,11 +34,32 @@ use super::{
         RnsNativeGlobalMembershipPrerequisiteV1,
         derive_rns_native_verified_global_lookup_core_root_v2,
     },
-    rns_native_source::ZkAmsMkheRnsNativeSourceSnapshotV1,
-    rns_native_source_packing_same_opening::{
-        RnsNativeSourcePackingCombinedDirectMembershipPredecessorV1,
-        RnsNativeSourcePackingCombinedOuterBindingsV1, RnsNativeSourcePackingSafeCoreV1,
+    rns_native_source::{
+        ZkAmsMkheRnsNativeRepeatableSourceSnapshotV1, ZkAmsMkheRnsNativeSecretChunkV1,
+        ZkAmsMkheRnsNativeSourceArenaV1, ZkAmsMkheRnsNativeSourceErrorV1,
+        ZkAmsMkheRnsNativeSourceLayoutV1, ZkAmsMkheRnsNativeSourceReceiptV1,
+        ZkAmsMkheRnsNativeSourceSnapshotV1,
     },
+    rns_native_source_packing_same_opening::{
+        DIFFERENCE_BLOCKS_PER_LOCAL_GROUP_V1, DIFFERENCE_GROUPS_V1, DIFFERENCE_SCALAR_BYTES_V1,
+        DIFFERENCE_SCALARS_PER_BLOCK_V1, MAIN_SOURCE_BLOCK_BYTES_V1, OWNERS_V1,
+        RnsNativeSignedSourceRoleV1, RnsNativeSourcePackingAggregateReplayV1,
+        RnsNativeSourcePackingAuthenticatedSourceAxesV1,
+        RnsNativeSourcePackingCombinedDirectMembershipPredecessorV1,
+        RnsNativeSourcePackingCombinedOuterBindingsV1,
+        RnsNativeSourcePackingOwnedReplayPredecessorV2, RnsNativeSourcePackingReplayReceiptV1,
+        RnsNativeSourcePackingSafeCoreV1, RnsNativeSourcePackingSameOpeningContextV1,
+        RnsNativeSourcePackingSameOpeningErrorV1, SIGNED_BLOCKS_PER_PLANE_V1, SIGNED_OWNERS_V1,
+        SIGNED_SCALAR_BYTES_V1, SIGNED_SCALARS_PER_BLOCK_V1, VECTOR_COORDINATES_V1,
+        canonical_profile_manifest_digest_v1, canonical_replay_schedule_digest_v1,
+        difference_scalar_from_be_bytes_v1, difference_source_index_v1,
+        signed_scalar_from_twos_complement_be_i64_v1, signed_source_index_v1,
+    },
+};
+
+use crate::vega::{
+    VegaT256PointV1 as Point, VegaT256ScalarV1 as Scalar,
+    bulletproof_t256::{ZeroizingT256ScalarCopyV1, ZeroizingT256ScalarVecV1},
 };
 
 const DIGEST_BYTES_V1: usize = 32;
@@ -148,6 +170,316 @@ impl<'source, 'proof, S: ZkAmsMkheRnsNativeSourceSnapshotV1>
 
     fn combined_outer_bindings_v1(&self) -> RnsNativeSourcePackingCombinedOuterBindingsV1 {
         self.outer_bindings
+    }
+}
+
+fn map_source_replay_error_v2(
+    error: ZkAmsMkheRnsNativeSourceErrorV1,
+) -> RnsNativeSourcePackingSameOpeningErrorV1 {
+    match error {
+        ZkAmsMkheRnsNativeSourceErrorV1::Allocation
+        | ZkAmsMkheRnsNativeSourceErrorV1::ResourceCeilingExceeded => {
+            RnsNativeSourcePackingSameOpeningErrorV1::ResourceExhausted
+        }
+        _ => RnsNativeSourcePackingSameOpeningErrorV1::SourceUnavailable,
+    }
+}
+
+fn source_packing_context_v2<'source, 'proof, S>(
+    atomic: &RnsNativeCrossFieldRlweAllRootsVerifiedV2<'source, 'proof, S>,
+    safe_core: RnsNativeSourcePackingSafeCoreV1,
+) -> Result<
+    (
+        RnsNativeSourcePackingSameOpeningContextV1,
+        ZkAmsMkheRnsNativeSourceLayoutV1,
+        ZkAmsMkheRnsNativeSourceReceiptV1,
+    ),
+    RnsNativeSourcePackingSameOpeningErrorV1,
+>
+where
+    S: ZkAmsMkheRnsNativeRepeatableSourceSnapshotV1,
+{
+    let source = atomic.inventory().linked().source();
+    let snapshot = source.snapshot();
+    let layout = snapshot.layout();
+    layout.validate().map_err(map_source_replay_error_v2)?;
+    let receipt = snapshot
+        .structural_receipt()
+        .map_err(map_source_replay_error_v2)?;
+    receipt
+        .validate(layout)
+        .map_err(map_source_replay_error_v2)?;
+    let context = RnsNativeSourcePackingSameOpeningContextV1 {
+        profile_manifest_digest: canonical_profile_manifest_digest_v1()?,
+        source_binding_digest: receipt.source_binding_digest,
+        main_snapshot_digest: receipt.main_snapshot_digest,
+        nonce_snapshot_digest: receipt.nonce_snapshot_digest,
+        source_receipt_digest: receipt.receipt_digest,
+        source_formula_digest: source.formula_digest(),
+        source_mapping_digest: source.mapping_digest(),
+        safe_core,
+    };
+    // This validates the complete context and freezes the sole owner order
+    // before any mutable source borrow can begin.
+    canonical_replay_schedule_digest_v1(context)?;
+    Ok((context, layout, receipt))
+}
+
+/// Borrow-backed replay minted only from the exact all-roots direct owner.
+/// It can neither outlive nor be substituted for that owner.
+pub(super) struct RnsNativeDirectGlobalMembershipReplayV2<
+    'owner,
+    'source,
+    'proof,
+    S: ZkAmsMkheRnsNativeRepeatableSourceSnapshotV1,
+> {
+    atomic: &'owner mut RnsNativeCrossFieldRlweAllRootsVerifiedV2<'source, 'proof, S>,
+    context: RnsNativeSourcePackingSameOpeningContextV1,
+    expected_layout: ZkAmsMkheRnsNativeSourceLayoutV1,
+    expected_receipt: ZkAmsMkheRnsNativeSourceReceiptV1,
+    schedule_digest: [u8; DIGEST_BYTES_V1],
+    replayed: bool,
+}
+
+impl<S: ZkAmsMkheRnsNativeRepeatableSourceSnapshotV1>
+    RnsNativeDirectGlobalMembershipReplayV2<'_, '_, '_, S>
+{
+    fn expected_replay_receipt_v2(&self) -> RnsNativeSourcePackingReplayReceiptV1 {
+        RnsNativeSourcePackingReplayReceiptV1 {
+            source_binding_digest: self.context.source_binding_digest,
+            canonical_replay_schedule_digest: self.schedule_digest,
+            owner_count: OWNERS_V1 as u16,
+            coordinates: VECTOR_COORDINATES_V1 as u16,
+        }
+    }
+
+    fn validate_snapshot_stability_v2(
+        &mut self,
+    ) -> Result<(), RnsNativeSourcePackingSameOpeningErrorV1> {
+        let snapshot = self.atomic.source_packing_snapshot_mut_v2();
+        if snapshot.layout() != self.expected_layout
+            || snapshot
+                .structural_receipt()
+                .map_err(map_source_replay_error_v2)?
+                != self.expected_receipt
+        {
+            return Err(RnsNativeSourcePackingSameOpeningErrorV1::SourceUnavailable);
+        }
+        Ok(())
+    }
+}
+
+impl<S: ZkAmsMkheRnsNativeRepeatableSourceSnapshotV1> RnsNativeSourcePackingAggregateReplayV1
+    for RnsNativeDirectGlobalMembershipReplayV2<'_, '_, '_, S>
+{
+    fn authenticated_source_axes_v1(&self) -> RnsNativeSourcePackingAuthenticatedSourceAxesV1 {
+        self.context.authenticated_source_axes_v1()
+    }
+
+    fn canonical_replay_schedule_digest_v1(&self) -> [u8; DIGEST_BYTES_V1] {
+        self.schedule_digest
+    }
+
+    fn difference_low_commitment_v1(
+        &self,
+        group: usize,
+        digit: usize,
+    ) -> Result<Point, RnsNativeSourcePackingSameOpeningErrorV1> {
+        self.atomic
+            .source_packing_difference_low_commitment_v2(group, digit)
+            .ok_or(RnsNativeSourcePackingSameOpeningErrorV1::SourceUnavailable)
+    }
+
+    fn difference_top_commitment_v1(
+        &self,
+        group: usize,
+    ) -> Result<Point, RnsNativeSourcePackingSameOpeningErrorV1> {
+        self.atomic
+            .inventory()
+            .comparator_top_commitments(group)
+            .map(|(difference, _)| difference)
+            .ok_or(RnsNativeSourcePackingSameOpeningErrorV1::SourceUnavailable)
+    }
+
+    fn signed_commitment_v1(
+        &self,
+        record: usize,
+        role: RnsNativeSignedSourceRoleV1,
+        plane: usize,
+    ) -> Result<Point, RnsNativeSourcePackingSameOpeningErrorV1> {
+        let owner = record
+            .checked_mul(3)
+            .and_then(|value| value.checked_add(role as usize))
+            .and_then(|value| value.checked_mul(8))
+            .and_then(|value| value.checked_add(plane))
+            .ok_or(RnsNativeSourcePackingSameOpeningErrorV1::ArithmeticOverflow)?;
+        self.atomic
+            .inventory()
+            .small_source_product_commitments(owner)
+            .map(|commitments| commitments.signed)
+            .ok_or(RnsNativeSourcePackingSameOpeningErrorV1::SourceUnavailable)
+    }
+
+    fn replay_tau_aggregate_v1(
+        &mut self,
+        tau: Scalar,
+        destination: &mut ZeroizingT256ScalarVecV1,
+    ) -> Result<RnsNativeSourcePackingReplayReceiptV1, RnsNativeSourcePackingSameOpeningErrorV1>
+    {
+        if self.replayed || destination.len() != VECTOR_COORDINATES_V1 {
+            return Err(RnsNativeSourcePackingSameOpeningErrorV1::InvalidGeometry);
+        }
+        destination.as_mut_slice().fill(Scalar::zero());
+        let snapshot = self.atomic.source_packing_snapshot_mut_v2();
+        let mut power = Scalar::one();
+        let mut reads = 0_usize;
+
+        for group in 0..DIFFERENCE_GROUPS_V1 {
+            for block in 0..DIFFERENCE_BLOCKS_PER_LOCAL_GROUP_V1 {
+                let first = difference_source_index_v1(group, block)?;
+                let chunk = snapshot
+                    .read_slot(
+                        ZkAmsMkheRnsNativeSourceArenaV1::Main,
+                        u64::from(first.source_slot),
+                    )
+                    .map_err(map_source_replay_error_v2)?;
+                if chunk.arena() != ZkAmsMkheRnsNativeSourceArenaV1::Main
+                    || chunk.as_slice().len() != MAIN_SOURCE_BLOCK_BYTES_V1
+                {
+                    return Err(RnsNativeSourcePackingSameOpeningErrorV1::SourceUnavailable);
+                }
+                reads = reads
+                    .checked_add(1)
+                    .ok_or(RnsNativeSourcePackingSameOpeningErrorV1::ArithmeticOverflow)?;
+                for scalar_in_block in 0..DIFFERENCE_SCALARS_PER_BLOCK_V1 {
+                    let coordinate = scalar_in_block
+                        .checked_mul(DIFFERENCE_BLOCKS_PER_LOCAL_GROUP_V1)
+                        .and_then(|value| value.checked_add(block))
+                        .ok_or(RnsNativeSourcePackingSameOpeningErrorV1::ArithmeticOverflow)?;
+                    let index = difference_source_index_v1(group, coordinate)?;
+                    if index.source_slot != first.source_slot {
+                        return Err(RnsNativeSourcePackingSameOpeningErrorV1::InvalidGeometry);
+                    }
+                    let offset = usize::from(index.byte_offset);
+                    let end = offset
+                        .checked_add(DIFFERENCE_SCALAR_BYTES_V1)
+                        .ok_or(RnsNativeSourcePackingSameOpeningErrorV1::ArithmeticOverflow)?;
+                    let encoded: &[u8; DIFFERENCE_SCALAR_BYTES_V1] = chunk
+                        .as_slice()
+                        .get(offset..end)
+                        .ok_or(RnsNativeSourcePackingSameOpeningErrorV1::SourceUnavailable)?
+                        .try_into()
+                        .map_err(|_| RnsNativeSourcePackingSameOpeningErrorV1::SourceUnavailable)?;
+                    let scalar = ZeroizingT256ScalarCopyV1::new(
+                        difference_scalar_from_be_bytes_v1(encoded)?,
+                    );
+                    destination.as_mut_slice()[coordinate] += power * scalar.get();
+                }
+            }
+            power *= tau;
+        }
+
+        for signed_unit in 0..SIGNED_OWNERS_V1 {
+            for block in 0..SIGNED_BLOCKS_PER_PLANE_V1 {
+                let first =
+                    signed_source_index_v1(signed_unit, block * SIGNED_SCALARS_PER_BLOCK_V1)?;
+                let chunk = snapshot
+                    .read_slot(
+                        ZkAmsMkheRnsNativeSourceArenaV1::Main,
+                        u64::from(first.source_slot),
+                    )
+                    .map_err(map_source_replay_error_v2)?;
+                if chunk.arena() != ZkAmsMkheRnsNativeSourceArenaV1::Main
+                    || chunk.as_slice().len() != MAIN_SOURCE_BLOCK_BYTES_V1
+                {
+                    return Err(RnsNativeSourcePackingSameOpeningErrorV1::SourceUnavailable);
+                }
+                reads = reads
+                    .checked_add(1)
+                    .ok_or(RnsNativeSourcePackingSameOpeningErrorV1::ArithmeticOverflow)?;
+                for coefficient in 0..SIGNED_SCALARS_PER_BLOCK_V1 {
+                    let coordinate = block
+                        .checked_mul(SIGNED_SCALARS_PER_BLOCK_V1)
+                        .and_then(|value| value.checked_add(coefficient))
+                        .ok_or(RnsNativeSourcePackingSameOpeningErrorV1::ArithmeticOverflow)?;
+                    let index = signed_source_index_v1(signed_unit, coordinate)?;
+                    if index.source_slot != first.source_slot {
+                        return Err(RnsNativeSourcePackingSameOpeningErrorV1::InvalidGeometry);
+                    }
+                    let offset = usize::from(index.byte_offset);
+                    let end = offset
+                        .checked_add(SIGNED_SCALAR_BYTES_V1)
+                        .ok_or(RnsNativeSourcePackingSameOpeningErrorV1::ArithmeticOverflow)?;
+                    let encoded: &[u8; SIGNED_SCALAR_BYTES_V1] = chunk
+                        .as_slice()
+                        .get(offset..end)
+                        .ok_or(RnsNativeSourcePackingSameOpeningErrorV1::SourceUnavailable)?
+                        .try_into()
+                        .map_err(|_| RnsNativeSourcePackingSameOpeningErrorV1::SourceUnavailable)?;
+                    let scalar = ZeroizingT256ScalarCopyV1::new(
+                        signed_scalar_from_twos_complement_be_i64_v1(encoded),
+                    );
+                    destination.as_mut_slice()[coordinate] += power * scalar.get();
+                }
+            }
+            power *= tau;
+        }
+
+        if reads
+            != usize::try_from(ZkAmsMkheRnsNativeSourceArenaV1::Main.slot_count())
+                .map_err(|_| RnsNativeSourcePackingSameOpeningErrorV1::InvalidGeometry)?
+        {
+            return Err(RnsNativeSourcePackingSameOpeningErrorV1::InvalidGeometry);
+        }
+        self.replayed = true;
+        self.validate_snapshot_stability_v2()?;
+        Ok(self.expected_replay_receipt_v2())
+    }
+
+    fn finish_v1(
+        mut self,
+    ) -> Result<RnsNativeSourcePackingReplayReceiptV1, RnsNativeSourcePackingSameOpeningErrorV1>
+    {
+        if !self.replayed {
+            return Err(RnsNativeSourcePackingSameOpeningErrorV1::SourceUnavailable);
+        }
+        self.validate_snapshot_stability_v2()?;
+        Ok(self.expected_replay_receipt_v2())
+    }
+}
+
+impl<'source, 'proof, S> RnsNativeSourcePackingOwnedReplayPredecessorV2<'proof>
+    for RnsNativeDirectGlobalMembershipHandoffV1<'source, 'proof, S>
+where
+    S: ZkAmsMkheRnsNativeRepeatableSourceSnapshotV1,
+{
+    type Replay<'owner>
+        = RnsNativeDirectGlobalMembershipReplayV2<'owner, 'source, 'proof, S>
+    where
+        Self: 'owner;
+
+    fn authenticated_same_opening_context_v2(
+        &self,
+    ) -> Result<RnsNativeSourcePackingSameOpeningContextV1, RnsNativeSourcePackingSameOpeningErrorV1>
+    {
+        source_packing_context_v2(&self._atomic_direct, self.safe_core)
+            .map(|(context, _, _)| context)
+    }
+
+    fn begin_authenticated_replay_v2(
+        &mut self,
+    ) -> Result<Self::Replay<'_>, RnsNativeSourcePackingSameOpeningErrorV1> {
+        let (context, expected_layout, expected_receipt) =
+            source_packing_context_v2(&self._atomic_direct, self.safe_core)?;
+        let schedule_digest = canonical_replay_schedule_digest_v1(context)?;
+        Ok(RnsNativeDirectGlobalMembershipReplayV2 {
+            atomic: &mut self._atomic_direct,
+            context,
+            expected_layout,
+            expected_receipt,
+            schedule_digest,
+            replayed: false,
+        })
     }
 }
 

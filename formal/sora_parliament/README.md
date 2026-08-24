@@ -1,0 +1,116 @@
+# SORA Parliament V1 lifecycle model
+
+`SoraParliamentV1.tla` is a finite safety model of the attempt reducer in
+`crates/iroha_core/src/governance/parliament.rs` and its native execution
+boundary in `crates/iroha_core/src/smartcontracts/isi/world.rs`.
+
+The model covers these consensus bindings:
+
+- the eligible-citizen snapshot is frozen before a strictly future finalized
+  threshold-beacon pulse, and the initially required bodies are consumed as one
+  simultaneous draw batch;
+- an absence is an authority-bound declaration for the member's exact seated
+  assignment, is immutable, and never lowers original-seat quorum; each seated
+  public-body assignment can endorse only one immutable result root, and Core
+  finalizes only at the original-seat two-thirds quorum while binding the
+  strict canonical endorser sequence, its derived root, count, and quorum into
+  the later certificate. After either a self-absence or endorsement, Core also
+  computes `eligible = original roster - absences`, `remaining = eligible -
+  immutable endorsements`, and the strongest existing root; if that root plus
+  every remaining seat cannot reach quorum, it deterministically sets the body
+  to `NoResult` and rejects the governance attempt;
+- entry into a public body's Reflection phase freezes an exact endorsement
+  deadline. Endorsements and any still-eligible self-absence declaration are
+  accepted through that height; after it, the payload-minimal permissionless
+  failure trigger derives `DeadlineExpired`, sets the body to `NoResult`, and
+  rejects the attempt;
+- registration, survivor freeze, and timed-commitment close only at their exact
+  derived heights, while release consumption and aggregate finalization remain
+  inside the inclusive `release_height + opening_phase_blocks` window;
+- a missed deadline or an objectively absent finalized release pulse becomes
+  `NoResult`; finalized-pulse availability is authoritative, a still-awaiting
+  or opening ballot becomes eligible for deadline failure after the frozen
+  window, an invalid aggregate opening is rejected without mutating state, and
+  no plaintext, manual-opening, or fallback transition exists;
+- a retry uses the exact next sequence, remains within the frozen retry bound,
+  and consumes a fresh TLE session no earlier than its predecessor failure;
+  failure of the final permitted ballot sequence rejects the governance
+  attempt instead of leaving an unretryable active attempt;
+- Core automatically constructs a certificate only from an approved aggregate
+  result and fixes `enact_at_height = certified_at_height +
+  min_enactment_delay` in the native execution boundary; and
+- enactment happens only at that exact height and only when the current
+  compare-and-set head equals the certified head. A different head yields
+  `Superseded` without applying the effect. With an equal head, the automatic
+  block-start step applies the effect in a rollback-isolated transaction. An
+  effect error drops that transaction, then a fresh transaction records
+  `ExecutionFailed` with a deterministic root derived by Core from the retained
+  certificate and exact due height. Certificate construction and all terminal
+  execution outcomes are absent from the public lifecycle transition enum.
+  The latter use the separate, domain-separated
+  `ParliamentAutomaticExecutionOutcomeV1` audit payload, which is not
+  submit-able. The automatic step cannot advance a still-certified attempt
+  past its due height.
+
+The abstraction treats domain-separated identifiers, canonical roots,
+zero-knowledge proofs, finalized beacon pulses, Das--Ren partial proofs, and
+the final threshold-BLS release signature as already verified inputs. It does
+not prove those primitives, network liveness, coercion resistance, receipt
+freeness, side-channel resistance, or operational key custody. TLC success is
+bounded counterexample-search evidence only, not deductive proof or release
+approval.
+
+The model admits split endorsements, but mirrors the reducer's deterministic
+terminal rule: once `max endorsements on one existing root + remaining
+eligible, uncommitted seats < ceil(2N/3)`, the body becomes `NoResult` and the
+attempt becomes `Rejected`. This closes mathematically irreversible splits
+without allowing a manager to choose a root. The model also covers
+post-deadline non-response rejection after the frozen Reflection window.
+Progress still depends on a
+permissionless caller eventually submitting the deadline trigger; TLC checks
+safety and does not prove that weak-fairness assumption.
+
+The small configuration uses two abstract bodies, two seated assignments, two
+competing public-finding roots, a two-block public-finding deadline, three TLE
+sessions (two with an authoritative release pulse and one with an objectively
+absent pulse), a two-block opening window, and two permitted retries. It is
+intentionally large enough to explore self-absence, early impossible-root
+rejection, conflicting and quorum-matching endorsements, post-deadline
+non-response rejection, success, private deadline/release failure, exhausted
+retry rejection, stale-head supersession, and rollback-isolated effect-failure
+paths.
+Run it with a compatible TLA2Tools installation:
+
+```text
+java -cp /path/to/tla2tools.jar tlc2.TLC \
+  -config formal/sora_parliament/SoraParliamentV1.cfg \
+  formal/sora_parliament/SoraParliamentV1.tla
+```
+
+Pinned TLA2Tools v1.7.4 (TLC2 2.19) exhaustively explored the checked
+configuration on 2026-08-24: 3,992,491 states generated, 2,747,236 distinct
+states, depth 39, and no invariant violation. These bounded results are tied to
+the model/config revision, not a proof about larger deployments.
+
+Run the deterministic implementation/model binding check independently:
+
+```text
+python3 scripts/formal/check_sora_parliament_source_contract.py
+```
+
+The source contract is deliberately structural. It detects accidental removal
+of the code-side guards represented by the model and separately pins the
+authority-bound registration/dropout and reducer-derived registration/survivor
+boundaries, authority-bound absence and public-finding endorsements. It also
+structurally pins the opaque Core release authorization, independently verified
+runtime partial, canonical combiner, authenticated bodyless local-partial route,
+non-enumerable multi-session software custody seam, and bounded public broker
+projection whose independently validated form cannot mint Core authorization.
+The projection is not evidence of committed-state origin. Those operating
+seams are outside the TLA state machine and the check is not a refinement proof.
+Release still requires a settled source revision, focused Rust tests, qualified
+live finalized-pulse production, consensus-enforced TLE key rotation, a genuine
+authenticated broker/HSM share provider, four-peer timed-release/restart/retry
+evidence, and the independently reviewed timed-OVN publication manifest
+described in the roadmap. Zeroizing software buffers are not secure-erasure or
+hardware-custody evidence.

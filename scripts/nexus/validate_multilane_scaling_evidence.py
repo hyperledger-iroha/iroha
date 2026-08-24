@@ -162,6 +162,12 @@ _SAMPLE_FIELDS = {
     "disk_bytes",
 }
 _FILE_REF_FIELDS = {"path", "sha256"}
+_NEXUS_LOAD_INPUT_FIELDS = {
+    "lifecycle_file",
+    "metrics_file",
+    "telemetry_file",
+    "alias_migrations",
+}
 _RUN_ARTIFACT_FIELDS = {
     "nexus_load_test_manifest",
     "lifecycle_snapshot",
@@ -602,6 +608,19 @@ def _validate_raw_run(
         _fail(f"{label} Nexus lane-load manifest lanes do not match active execution lanes")
     if nexus_manifest.get("workload_seed") != seed:
         _fail(f"{label} Nexus lane-load manifest workload_seed does not match the pair seed")
+    nexus_inputs = _require_object(
+        nexus_manifest.get("inputs"),
+        f"{label} Nexus lane-load manifest inputs",
+    )
+    _require_exact_fields(
+        nexus_inputs,
+        _NEXUS_LOAD_INPUT_FIELDS,
+        f"{label} Nexus lane-load manifest inputs",
+    )
+    _require_text(
+        nexus_inputs["lifecycle_file"],
+        f"{label} Nexus lane-load manifest inputs.lifecycle_file",
+    )
 
     raw_workload = _require_object(run["workload"], f"{label}.workload")
     _require_exact_fields(raw_workload, _WORKLOAD_FIELDS, f"{label}.workload")

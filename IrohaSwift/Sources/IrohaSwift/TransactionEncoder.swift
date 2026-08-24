@@ -13,11 +13,10 @@ public enum TransactionInputError: Error, LocalizedError, Equatable {
     case malformedLabel(field: String, value: String)
     case emptyAssetId
     case malformedAssetId(String)
-    case invalidGovernanceWindow(lower: UInt64, upper: UInt64)
-    case invalidGovernanceAbiVersion(String)
+    case invalidGovernanceAbiVersion(UInt16)
+    case invalidGovernanceHashLength(field: String, actual: Int)
+    case invalidGovernanceManifestProvenance(field: String)
     case invalidGovernanceSelector(field: String, value: String)
-    case invalidGovernanceFinalizationId(field: String, value: String)
-    case mismatchedGovernanceFinalizationIds
     case invalidZkBallotPublicInputs(String)
 
     public var errorDescription: String? {
@@ -46,16 +45,14 @@ public enum TransactionInputError: Error, LocalizedError, Equatable {
             return "Asset id must not be empty."
         case let .malformedAssetId(value):
             return "Asset id must use canonical unprefixed Base58 form with no whitespace (received '\(value)')."
-        case let .invalidGovernanceWindow(lower, upper):
-            return "Governance window upper bound \(upper) must not precede lower bound \(lower)."
         case let .invalidGovernanceAbiVersion(value):
-            return "Governance ABI version must be exactly '1' in the first release (received '\(value)')."
+            return "Governance ABI version must be exactly 1 in the first release (received \(value))."
+        case let .invalidGovernanceHashLength(field, actual):
+            return "Governance \(field) must contain exactly 32 bytes (received \(actual))."
+        case let .invalidGovernanceManifestProvenance(field):
+            return "Governance manifest provenance \(field) must be an exact non-empty string."
         case let .invalidGovernanceSelector(field, value):
             return "Governance selector for \(field) must be 1...128 RFC 3986 unreserved ASCII bytes and must not start with a dot (received '\(value)')."
-        case let .invalidGovernanceFinalizationId(field, value):
-            return "Governance finalization id for \(field) must be exactly 64 lowercase hexadecimal characters (received '\(value)')."
-        case .mismatchedGovernanceFinalizationIds:
-            return "Governance finalization referendum_id must equal proposal_id."
         case let .invalidZkBallotPublicInputs(reason):
             return "Governance ZK public inputs are invalid: \(reason)"
         }
@@ -94,20 +91,6 @@ struct TransactionInputValidator {
     static func sanitizeGovernanceSelector(_ value: String, field: String) throws -> String {
         guard GovernanceSelectorV1.isValid(value) else {
             throw TransactionInputError.invalidGovernanceSelector(field: field, value: value)
-        }
-        return value
-    }
-
-    static func sanitizeGovernanceFinalizationId(_ value: String, field: String) throws -> String {
-        let bytes = Array(value.utf8)
-        guard bytes.count == 64,
-              bytes.allSatisfy({ byte in
-                  (byte >= 48 && byte <= 57) || (byte >= 97 && byte <= 102)
-              }) else {
-            throw TransactionInputError.invalidGovernanceFinalizationId(
-                field: field,
-                value: value
-            )
         }
         return value
     }
@@ -1189,7 +1172,6 @@ struct SwiftTransactionEncoder {
         let ids = try TransactionInputValidator.validate(networkId: request.networkId,
                                                          authorityId: request.authority)
         let privateKey = try privateKeyBytes(from: signingKey)
-        let windowTuple = request.window.map { ($0.lower, $0.upper) }
         let native = try bridgeOrThrow {
             try NoritoNativeBridge.shared.encodeGovernanceProposeDeploy(
                 networkId: ids.networkId,
@@ -1197,11 +1179,10 @@ struct SwiftTransactionEncoder {
                 creationTimeMs: creationTimeMs,
                 ttlMs: request.ttlMs,
                 contractAddress: request.contractAddress,
-                codeHashHex: request.codeHashHex,
-                abiHashHex: request.abiHashHex,
+                codeHash: request.codeHash,
+                abiHash: request.abiHash,
                 abiVersion: request.abiVersion,
-                window: windowTuple,
-                modeCode: request.mode?.rawValue,
+                manifestProvenance: request.manifestProvenance,
                 feePaymentJSON: try request.feePayment.canonicalJSONData(),
                 privateKey: privateKey,
                 algorithm: signingKey.algorithm
@@ -1352,77 +1333,6 @@ struct SwiftTransactionEncoder {
                 )
             }
         }
-    }
-
-    static func encodeEnactReferendum(request: EnactReferendumRequest,
-                                      keypair: Keypair,
-                                      creationTimeMs: UInt64) throws -> SignedTransactionEnvelope {
-        let signingKey = try SigningKey.ed25519(privateKey: keypair.privateKeyBytes)
-        return try encodeEnactReferendum(request: request, signingKey: signingKey, creationTimeMs: creationTimeMs)
-    }
-
-    static func encodeEnactReferendum(request: EnactReferendumRequest,
-                                      signingKey: SigningKey,
-                                      creationTimeMs: UInt64) throws -> SignedTransactionEnvelope {
-        let ids = try TransactionInputValidator.validate(networkId: request.networkId,
-                                                         authorityId: request.authority)
-        let privateKey = try privateKeyBytes(from: signingKey)
-        let native = try bridgeOrThrow {
-            try NoritoNativeBridge.shared.encodeGovernanceEnactReferendum(
-                networkId: ids.networkId,
-                authority: ids.authorityId,
-                creationTimeMs: creationTimeMs,
-                ttlMs: request.ttlMs,
-                referendumIdHex: request.referendumIdHex,
-                preimageHashHex: request.preimageHashHex,
-                windowLower: request.window.lower,
-                windowUpper: request.window.upper,
-                feePaymentJSON: try request.feePayment.canonicalJSONData(),
-                privateKey: privateKey,
-                algorithm: signingKey.algorithm
-            )
-        }
-        return try wrap(native: native)
-    }
-
-    static func encodeFinalizeReferendum(request: FinalizeReferendumRequest,
-                                         keypair: Keypair,
-                                         creationTimeMs: UInt64) throws -> SignedTransactionEnvelope {
-        let signingKey = try SigningKey.ed25519(privateKey: keypair.privateKeyBytes)
-        return try encodeFinalizeReferendum(request: request, signingKey: signingKey, creationTimeMs: creationTimeMs)
-    }
-
-    static func encodeFinalizeReferendum(request: FinalizeReferendumRequest,
-                                         signingKey: SigningKey,
-                                         creationTimeMs: UInt64) throws -> SignedTransactionEnvelope {
-        let ids = try TransactionInputValidator.validate(networkId: request.networkId,
-                                                         authorityId: request.authority)
-        let referendumId = try TransactionInputValidator.sanitizeGovernanceFinalizationId(
-            request.referendumId,
-            field: "referendum_id"
-        )
-        let proposalIdHex = try TransactionInputValidator.sanitizeGovernanceFinalizationId(
-            request.proposalIdHex,
-            field: "proposal_id_hex"
-        )
-        guard referendumId == proposalIdHex else {
-            throw TransactionInputError.mismatchedGovernanceFinalizationIds
-        }
-        let privateKey = try privateKeyBytes(from: signingKey)
-        let native = try bridgeOrThrow {
-            try NoritoNativeBridge.shared.encodeGovernanceFinalizeReferendum(
-                networkId: ids.networkId,
-                authority: ids.authorityId,
-                creationTimeMs: creationTimeMs,
-                ttlMs: request.ttlMs,
-                referendumId: referendumId,
-                proposalIdHex: proposalIdHex,
-                feePaymentJSON: try request.feePayment.canonicalJSONData(),
-                privateKey: privateKey,
-                algorithm: signingKey.algorithm
-            )
-        }
-        return try wrap(native: native)
     }
 
     static func encodePersistCouncil(request: PersistCouncilRequest,

@@ -1270,23 +1270,6 @@ fn replace_account_id_in_governance(
             replace_account_id(&mut record.proposer, old, new);
         }
     }
-    let approval_ids: Vec<_> = state_transaction
-        .world
-        .governance_stage_approvals
-        .iter()
-        .map(|(id, _)| id.clone())
-        .collect();
-    for approval_id in approval_ids {
-        if let Some(approvals) = state_transaction
-            .world
-            .governance_stage_approvals
-            .get_mut(&approval_id)
-        {
-            for stage in approvals.stages.values_mut() {
-                replace_account_id_in_set(&mut stage.approvers, old, new);
-            }
-        }
-    }
     let lock_ids: Vec<_> = state_transaction
         .world
         .governance_locks
@@ -4475,7 +4458,9 @@ mod tests {
     }
     #[test]
     fn governance_lock_owner_rekey_keeps_expiry_index_exact() {
-        use crate::state::{GovernanceLockRecord, GovernanceLocksForReferendum};
+        use crate::state::{
+            GovernanceLockCustody, GovernanceLockRecord, GovernanceLocksForReferendum,
+        };
         let state = State::new_with_chain(
             World::new(),
             Kura::blank_kura_for_testing(),
@@ -4498,7 +4483,12 @@ mod tests {
                 expiry_height,
                 direction: 0,
                 duration_blocks: 1,
-                custody: None,
+                custody: GovernanceLockCustody {
+                    escrowed: !tx.gov.min_bond_amount.is_zero(),
+                    asset_definition_id: tx.gov.voting_asset_id.clone(),
+                    bond_escrow_account: tx.gov.bond_escrow_account.clone(),
+                    slash_receiver_account: tx.gov.slash_receiver_account.clone(),
+                },
             },
         );
         tx.world.put_governance_locks(referendum_id.clone(), locks);

@@ -4,7 +4,8 @@ use iroha_crypto::{Hash, HashOf, KeyPair};
 use iroha_data_model::{
     block::{
         BlockHeader,
-        consensus::{CertPhase, PERMISSIONED_TAG, Qc, QcAggregate},
+        consensus::{CertPhase, Qc, QcAggregate},
+        consensus_v2::PERMISSIONED_TAG,
     },
     consensus::{VrfEpochRecord, VrfLateRevealRecord, VrfParticipantRecord},
     peer::PeerId,

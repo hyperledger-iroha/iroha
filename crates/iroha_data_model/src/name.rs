@@ -263,9 +263,9 @@ impl Name {
         normalizer
             .normalize_to(tail, &mut output)
             .map_err(|_| name_json_error("NFC normalization exceeded audited output bound"))?;
-        let normalized = core::str::from_utf8(&output.bytes[..output.len])
+        let normalized_text = core::str::from_utf8(&output.bytes[..output.len])
             .map_err(|_| name_json_error("NFC normalization produced invalid UTF-8"))?;
-        retain_normalized(normalized)
+        retain_normalized(normalized_text)
     }
     fn decode_wire(bytes: &[u8]) -> Result<(Self, usize), NoritoError> {
         let (len, header_len) = norito::core::inspect_len_from_slice(bytes)?;

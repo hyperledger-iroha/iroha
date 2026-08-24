@@ -4,6 +4,7 @@ import java.util.Arrays;
 import java.util.Objects;
 import org.hyperledger.iroha.android.crypto.IrohaHash;
 import org.hyperledger.iroha.android.norito.NoritoException;
+import org.hyperledger.iroha.android.norito.NoritoJavaCodecAdapter;
 import org.hyperledger.iroha.android.norito.SignedTransactionEncoder;
 
 /** Canonical hashing helpers for signed transactions. */
@@ -21,6 +22,39 @@ public final class SignedTransactionHasher {
   /** Computes the canonical BLAKE2b-256 hash as a lowercase hex string. */
   public static String hashHex(final SignedTransaction transaction) {
     return toHex(hash(transaction));
+  }
+
+  /**
+   * Computes Iroha's canonical external transaction identity from one exact unsigned
+   * {@code TransactionPayload}.
+   *
+   * <p>The authorization proof is deliberately absent from Iroha transaction identity. This
+   * permits detached-signing clients to bind the eventual Torii {@code tx_hash_hex} before they
+   * release a signature.
+   */
+  public static byte[] hashCanonicalTransactionPayload(final byte[] canonicalTransactionPayload) {
+    Objects.requireNonNull(canonicalTransactionPayload, "canonicalTransactionPayload");
+    final byte[] snapshot = canonicalTransactionPayload.clone();
+    byte[] preimage = null;
+    try {
+      NoritoJavaCodecAdapter.validateCanonicalTransactionPayload(snapshot);
+      preimage = wrapExternalEntrypoint(snapshot);
+      return IrohaHash.prehash(preimage);
+    } catch (final NoritoException ex) {
+      throw new IllegalArgumentException(
+          "transaction payload bytes are not an exact canonical encoding", ex);
+    } finally {
+      Arrays.fill(snapshot, (byte) 0);
+      if (preimage != null) {
+        Arrays.fill(preimage, (byte) 0);
+      }
+    }
+  }
+
+  /** Computes the canonical external transaction identity as lowercase hexadecimal. */
+  public static String hashCanonicalTransactionPayloadHex(
+      final byte[] canonicalTransactionPayload) {
+    return toHex(hashCanonicalTransactionPayload(canonicalTransactionPayload));
   }
 
   /**

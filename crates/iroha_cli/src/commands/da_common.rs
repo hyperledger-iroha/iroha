@@ -1,6 +1,5 @@
 //! Shared data-availability ingest helpers reused by the Taikai tooling and the
 //! standalone `iroha da` commands.
-use std::path::Path;
 use eyre::{Result, WrapErr, eyre};
 use iroha::{config::Config, da::DaManifestBundle};
 use iroha_data_model::{
@@ -21,6 +20,7 @@ use reqwest::{
     blocking::Client as HttpClient,
     header::{ACCEPT, CONTENT_TYPE, HeaderValue},
 };
+use std::path::Path;
 use url::Url;
 const HEADER_SORA_PDP_COMMITMENT: &str = "sora-pdp-commitment";
 /// Blocking Torii publisher for `/v1/da/ingest`.

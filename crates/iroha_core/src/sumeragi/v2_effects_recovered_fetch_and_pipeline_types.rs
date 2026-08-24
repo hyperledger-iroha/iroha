@@ -752,6 +752,7 @@ pub(in crate::sumeragi) struct PreparedLifecycleDecisionApplyExecutorDispatchV1<
 }
 struct PendingKuraApplyDispatchTransitionV1<'executor> {
     evidence: &'executor mut PendingKuraApplyRecoveryEvidence,
+    last_result: &'executor mut Option<PendingTipRecoveryAttemptResult>,
 }
 impl PreparedLifecycleDecisionApplyExecutorDispatchV1<'_> {
     /// Advance exact pending-Kura evidence after the worker command is installed.
@@ -765,6 +766,7 @@ impl PreparedLifecycleDecisionApplyExecutorDispatchV1<'_> {
             "preflighted pending-Kura Apply remains at its dispatch boundary"
         );
         pending.evidence.stage = PendingKuraApplyRecoveryStage::ApplicationDispatched;
+        *pending.last_result = Some(PendingTipRecoveryAttemptResult::Advanced);
     }
 }
 /// Executor-authenticated global application-mode debt for lifecycle planning.

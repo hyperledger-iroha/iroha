@@ -1,0 +1,122 @@
+rule_files:
+  - ../sora_parliament_rules.yml
+
+evaluation_interval: 1m
+
+tests:
+  - name: active attempt without progress alerts after the complete window
+    interval: 1m
+    input_series:
+      - series: 'governance_parliament_attempts_by_status{status="active"}'
+        values: '1+0x50'
+      - series: 'governance_parliament_transitions_total{transition="advance_body_phase"}'
+        values: '10+0x50'
+    alert_rule_test:
+      - alertname: SoraParliamentActiveAttemptStalled
+        eval_time: 43m
+        exp_alerts: []
+      - alertname: SoraParliamentActiveAttemptStalled
+        eval_time: 45m
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+            exp_annotations:
+              summary: "Active SORA Parliament attempts are not progressing"
+              description: |
+                At least one committed Parliament attempt is active, but no accepted
+                lifecycle transition was observed for 45 minutes. Check finalized
+                height progress, phase-deadline trigger availability, threshold-beacon
+                production, and timed-release share transport. Metrics intentionally
+                omit attempt, proposal, account, and ballot identifiers.
+  - name: healthy progress suppresses the active stall alert
+    interval: 1m
+    input_series:
+      - series: 'governance_parliament_attempts_by_status{status="active"}'
+        values: '1+0x50'
+      - series: 'governance_parliament_transitions_total{transition="advance_body_phase"}'
+        values: '10+1x50'
+    alert_rule_test:
+      - alertname: SoraParliamentActiveAttemptStalled
+        eval_time: 45m
+        exp_alerts: []
+  - name: certified attempt without a terminal outcome alerts after the complete window
+    interval: 1m
+    input_series:
+      - series: 'governance_parliament_attempts_by_status{status="certified"}'
+        values: '1+0x50'
+      - series: 'governance_parliament_transitions_total{transition="mark_enacted"}'
+        values: '10+0x50'
+    alert_rule_test:
+      - alertname: SoraParliamentCertifiedAttemptStalled
+        eval_time: 43m
+        exp_alerts: []
+      - alertname: SoraParliamentCertifiedAttemptStalled
+        eval_time: 45m
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+            exp_annotations:
+              summary: "Certified SORA Parliament attempts are not terminalizing"
+              description: |
+                At least one committed Parliament attempt remains certified, but no
+                exact-height enactment, supersession, or isolated execution-failure
+                outcome was observed for 45 minutes. Verify finalized block progress
+                and the block-start automatic-enactment sweep.
+  - name: terminal progress suppresses the certified stall alert
+    interval: 1m
+    input_series:
+      - series: 'governance_parliament_attempts_by_status{status="certified"}'
+        values: '1+0x50'
+      - series: 'governance_parliament_transitions_total{transition="mark_enacted"}'
+        values: '10+1x50'
+    alert_rule_test:
+      - alertname: SoraParliamentCertifiedAttemptStalled
+        eval_time: 45m
+        exp_alerts: []
+  - name: deadline pulse and execution failures are classified independently
+    interval: 1m
+    input_series:
+      - series: 'governance_parliament_no_result_total{class="ballot_opening_deadline_expired"}'
+        values: '0 0 1 1 1'
+      - series: 'governance_parliament_no_result_total{class="ballot_release_pulse_unavailable"}'
+        values: '0 0 0 1 1'
+      - series: 'governance_parliament_transitions_total{transition="mark_execution_failed"}'
+        values: '0 0 0 0 1'
+    alert_rule_test:
+      - alertname: SoraParliamentDeadlineMiss
+        eval_time: 2m
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+            exp_annotations:
+              summary: "SORA Parliament phase deadline was missed"
+              description: |
+                A committed public-finding or private-ballot phase ended through its
+                deterministic deadline-expiry class in the last 15 minutes. Inspect
+                aggregate stage gauges and transition counters, then verify that
+                permissionless phase triggers and release coordinators are available.
+      - alertname: SoraParliamentReleasePulseUnavailable
+        eval_time: 3m
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+            exp_annotations:
+              summary: "SORA Parliament release pulse was unavailable"
+              description: |
+                A committed private ballot exhausted its release slot without the
+                required finalized threshold-beacon pulse. Check active DKG-session
+                bindings, validator signer custody, authenticated partial transport,
+                aggregation, and persisted pulse verification before new ballots reach
+                their release height.
+      - alertname: SoraParliamentExecutionFailed
+        eval_time: 4m
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+            exp_annotations:
+              summary: "SORA Parliament certified effect failed during enactment"
+              description: |
+                At least one consensus-owned enactment ran at its exact due height and
+                recorded an isolated execution failure in the last 15 minutes. Review
+                the bounded committed failure class and certificate/effect bindings;
+                do not replay or bypass the compare-and-set enactment path.

@@ -1610,6 +1610,7 @@ fn startup_enter_view_effect_restarts_clocks_and_is_returned_unchanged() {
     let _ = runtime.step_and_take_scheduler_ownership_for_test(start + Duration::from_secs(120));
     assert_eq!(runtime.driver.timeouts, vec![next]);
 }
+#[test]
 fn adapter_failure_closes_runtime_permanently() {
     let start = Instant::now();
     let initial = tag(0);

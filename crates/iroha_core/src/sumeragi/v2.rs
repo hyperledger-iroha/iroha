@@ -6,9 +6,12 @@
 use super::v2_core as reducer;
 #[path = "v2_pending_kura_recovery.rs"]
 mod pending_kura_recovery;
+pub(crate) use pending_kura_recovery::{
+    DeferredPendingKuraValidatedMarkerV1, PendingKuraValidatedApplySuccessorV1,
+};
 pub(in crate::sumeragi) use pending_kura_recovery::{
-    InstalledPendingKuraApplyV1, PreparedRecoveredPendingKuraApplyReplayV1,
-    RecoveredPendingKuraApplyReplayV1,
+    InstalledPendingKuraApplyV1, PreparedPendingKuraValidatedApplyV1,
+    PreparedRecoveredPendingKuraApplyReplayV1, RecoveredPendingKuraApplyReplayV1,
 };
 
 #[cfg(test)]
@@ -1767,6 +1770,44 @@ impl ProductionLifecycleAdapterStartupV1 {
             }
         }
     }
+    /// Consume one pristine recovered Apply startup into its exact runtime for
+    /// executor-lineage non-substitution tests.
+    #[cfg(test)]
+    pub(in crate::sumeragi) fn into_lifecycle_apply_runtime_for_lineage_test(
+        mut self,
+        lifecycle_ordinals: crate::sumeragi::v2_runtime::RuntimeLifecycleOrdinalSource,
+    ) -> crate::sumeragi::v2_runtime::SerializedV2Runtime {
+        match &mut self.state {
+            ProductionLifecycleAdapterStartupStateV1::Recovered {
+                effects,
+                pending_kura_apply,
+                local_proposal_attempt,
+                leader_wire_launch_prepared,
+                ..
+            } if effects.is_empty()
+                && pending_kura_apply.is_none()
+                && local_proposal_attempt.is_none()
+                && !*leader_wire_launch_prepared =>
+            {
+                *leader_wire_launch_prepared = true;
+            }
+            ProductionLifecycleAdapterStartupStateV1::Recovered { .. }
+            | ProductionLifecycleAdapterStartupStateV1::Fixture => {
+                panic!("lineage test requires one pristine recovered Apply startup")
+            }
+        }
+        let (runtime, pending_kura_apply, local_proposal_attempt) = self
+            .into_serialized_runtime(
+                std::time::Instant::now(),
+                std::time::Duration::from_secs(10),
+                crate::sumeragi::v2_runtime::RuntimeQueueConfig::new(8, 2, 2),
+                lifecycle_ordinals,
+            )
+            .expect("open exact recovered Apply runtime for lineage test");
+        assert!(pending_kura_apply.is_none());
+        assert!(local_proposal_attempt.is_none());
+        runtime
+    }
     #[cfg(test)]
     pub(in crate::sumeragi) const fn fixture_for_test() -> Self {
         Self {
@@ -1891,10 +1932,6 @@ enum ProductionLifecycleOwnerStartupErrorKindV1 {
 impl ProductionLifecycleOwnerStartupErrorV1 {
     fn new(kind: ProductionLifecycleOwnerStartupErrorKindV1) -> Self {
         Self { kind }
-    }
-    /// Classify a pending-Kura join that did not open the recovered Apply branch.
-    pub(in crate::sumeragi) fn pending_kura_recovered_apply(reason: &'static str) -> Self {
-        Self::new(ProductionLifecycleOwnerStartupErrorKindV1::RecoveredDecisionApply(reason))
     }
 }
 /// Startup cut whose recovered vote has joined one exact lifecycle repair.
@@ -2372,46 +2409,6 @@ impl RecoveredWalLifecycleSignInstallError<'_> {
     }
 }
 // RECOVERED_WAL_VOTE_SIGN_SEAL_END
-impl ProductionLifecycleAdapterStartupV1 {
-    /// Consume one pristine recovered Apply startup into its exact runtime for
-    /// executor-lineage non-substitution tests.
-    #[cfg(test)]
-    pub(in crate::sumeragi) fn into_lifecycle_apply_runtime_for_lineage_test(
-        mut self,
-        lifecycle_ordinals: crate::sumeragi::v2_runtime::RuntimeLifecycleOrdinalSource,
-    ) -> crate::sumeragi::v2_runtime::SerializedV2Runtime {
-        match &mut self.state {
-            ProductionLifecycleAdapterStartupStateV1::Recovered {
-                effects,
-                pending_kura_apply,
-                local_proposal_attempt,
-                leader_wire_launch_prepared,
-                ..
-            } if effects.is_empty()
-                && pending_kura_apply.is_none()
-                && local_proposal_attempt.is_none()
-                && !*leader_wire_launch_prepared =>
-            {
-                *leader_wire_launch_prepared = true;
-            }
-            ProductionLifecycleAdapterStartupStateV1::Recovered { .. }
-            | ProductionLifecycleAdapterStartupStateV1::Fixture => {
-                panic!("lineage test requires one pristine recovered Apply startup")
-            }
-        }
-        let (runtime, pending_kura_apply, local_proposal_attempt) = self
-            .into_serialized_runtime(
-                std::time::Instant::now(),
-                std::time::Duration::from_secs(10),
-                crate::sumeragi::v2_runtime::RuntimeQueueConfig::new(8, 2, 2),
-                lifecycle_ordinals,
-            )
-            .expect("open exact recovered Apply runtime for lineage test");
-        assert!(pending_kura_apply.is_none());
-        assert!(local_proposal_attempt.is_none());
-        runtime
-    }
-}
 // RECOVERED_WAL_SIGN_STATUS_PUBLICATION_BEGIN
 /// Fully opened recovered-WAL startup after adapter status publication.
 ///
@@ -4420,7 +4417,8 @@ impl RecoveredLifecycleSignBroadcastAndSignColdAdapterAuthorityV1 {
             | wire::ConsensusMessageV2Payload::CommitCertificateRequest(_)
             | wire::ConsensusMessageV2Payload::CommitCertificateResponse(_)
             | wire::ConsensusMessageV2Payload::VrfCommit(_)
-            | wire::ConsensusMessageV2Payload::VrfReveal(_) => false,
+            | wire::ConsensusMessageV2Payload::VrfReveal(_)
+            | wire::ConsensusMessageV2Payload::GlobalBeaconPartialSignature(_) => false,
         };
         relation_is_exact.then_some(Self {
             broadcast,
@@ -8782,7 +8780,8 @@ fn ingress_equivocation_identity(
         | wire::ConsensusMessageV2Payload::CommitCertificateRequest(_)
         | wire::ConsensusMessageV2Payload::CommitCertificateResponse(_)
         | wire::ConsensusMessageV2Payload::VrfCommit(_)
-        | wire::ConsensusMessageV2Payload::VrfReveal(_) => None,
+        | wire::ConsensusMessageV2Payload::VrfReveal(_)
+        | wire::ConsensusMessageV2Payload::GlobalBeaconPartialSignature(_) => None,
     }
 }
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -8810,7 +8809,8 @@ impl IngressEquivocationArtifact {
             | wire::ConsensusMessageV2Payload::CommitCertificateRequest(_)
             | wire::ConsensusMessageV2Payload::CommitCertificateResponse(_)
             | wire::ConsensusMessageV2Payload::VrfCommit(_)
-            | wire::ConsensusMessageV2Payload::VrfReveal(_) => None,
+            | wire::ConsensusMessageV2Payload::VrfReveal(_)
+            | wire::ConsensusMessageV2Payload::GlobalBeaconPartialSignature(_) => None,
         }
     }
     fn conflict_with(
@@ -9236,6 +9236,8 @@ pub(crate) struct SumeragiV2Adapter {
     /// Whether reducer transitions may publish current-height global status;
     /// recovered startup keeps this closed until lifecycle activation.
     status_publication_enabled: bool,
+    #[cfg(test)]
+    status_publication_attempts: usize,
     fail_closed: bool,
 }
 enum SafetyWalOpenTarget<'kura> {
@@ -9654,6 +9656,8 @@ impl SumeragiV2Adapter {
             reducer_fence_generation: 0,
             replay_complete: false,
             status_publication_enabled: publish_initial_status,
+            #[cfg(test)]
+            status_publication_attempts: 0,
             fail_closed: false,
         };
         adapter.reconcile_restored_reserved_producer_frontier()?;
@@ -11103,7 +11107,8 @@ impl SumeragiV2Adapter {
             | wire::ConsensusMessageV2Payload::CertifiedBodyResponse(_)
             | wire::ConsensusMessageV2Payload::CommitCertificateRequest(_)
             | wire::ConsensusMessageV2Payload::VrfCommit(_)
-            | wire::ConsensusMessageV2Payload::VrfReveal(_) => {}
+            | wire::ConsensusMessageV2Payload::VrfReveal(_)
+            | wire::ConsensusMessageV2Payload::GlobalBeaconPartialSignature(_) => {}
         }
         Ok(())
     }
@@ -11332,7 +11337,8 @@ impl SumeragiV2Adapter {
             | wire::ConsensusMessageV2Payload::CommitCertificateRequest(_)
             | wire::ConsensusMessageV2Payload::CommitCertificateResponse(_)
             | wire::ConsensusMessageV2Payload::VrfCommit(_)
-            | wire::ConsensusMessageV2Payload::VrfReveal(_) => {
+            | wire::ConsensusMessageV2Payload::VrfReveal(_)
+            | wire::ConsensusMessageV2Payload::GlobalBeaconPartialSignature(_) => {
                 return Ok((None, None));
             }
         }
@@ -11595,7 +11601,8 @@ impl SumeragiV2Adapter {
             | wire::ConsensusMessageV2Payload::CommitCertificateRequest(_)
             | wire::ConsensusMessageV2Payload::CommitCertificateResponse(_)
             | wire::ConsensusMessageV2Payload::VrfCommit(_)
-            | wire::ConsensusMessageV2Payload::VrfReveal(_) => {
+            | wire::ConsensusMessageV2Payload::VrfReveal(_)
+            | wire::ConsensusMessageV2Payload::GlobalBeaconPartialSignature(_) => {
                 return Err(AdapterError::TransportPayload);
             }
         }
@@ -11705,14 +11712,33 @@ impl SumeragiV2Adapter {
             validated_receipt.execution_commitment(),
         )?;
         self.registry = staged_registry;
+        let previous_active_subject = self.active_subject;
         self.active_subject = Some((round, subject));
-        self.step_with_completion_evidence(
+        let result = self.step_with_completion_evidence_and_status(
             reducer::Event::LocalProposalReady {
                 tag,
                 manifest: core_manifest,
             },
             Some(completion_evidence),
-        )
+            false,
+        );
+        match &result {
+            Ok(outcome) => {
+                let retain = outcome.disposition() == reducer::StepDisposition::Applied
+                    || (outcome.disposition()
+                        == reducer::StepDisposition::Ignored(reducer::IgnoreReason::Busy)
+                        && outcome.deferred_admission_ordinal().is_some());
+                if !retain {
+                    self.active_subject = previous_active_subject;
+                }
+                // Publish after deciding whether this completion owns the active
+                // subject. In particular, the no-effect stale path must not expose a
+                // provisional subject to the monotone external progress clock.
+                self.publish_status()?;
+            }
+            Err(_) => self.active_subject = previous_active_subject,
+        }
+        result
     }
     /// Bind an exact body-store validation marker into the wire registry.
     ///
@@ -16003,6 +16029,14 @@ impl SumeragiV2Adapter {
         event: reducer::Event,
         completion_evidence: Option<BodyPipelineCompletionEvidence>,
     ) -> Result<AdapterOutcome, AdapterError> {
+        self.step_with_completion_evidence_and_status(event, completion_evidence, true)
+    }
+    fn step_with_completion_evidence_and_status(
+        &mut self,
+        event: reducer::Event,
+        completion_evidence: Option<BodyPipelineCompletionEvidence>,
+        publish_status: bool,
+    ) -> Result<AdapterOutcome, AdapterError> {
         let priority = match &event {
             reducer::Event::ResumeAfterReplay { .. }
             | reducer::Event::LocalProposalReady { .. }
@@ -16021,8 +16055,16 @@ impl SumeragiV2Adapter {
             | reducer::Event::QuorumCertificateReceived { .. }
             | reducer::Event::TimeoutCertificateReceived { .. } => DeferredPriority::Normal,
         };
-        self.step_with_defer_policy(event, false, priority, None, completion_evidence, None)
-            .map(|result| result.outcome)
+        self.step_with_defer_policy(
+            event,
+            false,
+            priority,
+            None,
+            completion_evidence,
+            None,
+            publish_status,
+        )
+        .map(|result| result.outcome)
     }
     #[cfg(test)]
     fn step_authenticated_ingress(
@@ -16057,6 +16099,7 @@ impl SumeragiV2Adapter {
             admission,
             None,
             authenticated_wire_identity,
+            true,
         )
     }
     fn step_with_defer_policy(
@@ -16067,6 +16110,7 @@ impl SumeragiV2Adapter {
         admission: Option<IngressAdmission>,
         completion_evidence: Option<BodyPipelineCompletionEvidence>,
         authenticated_wire_identity: Option<Arc<[u8]>>,
+        publish_status: bool,
     ) -> Result<DeferPolicyOutcome, AdapterError> {
         self.ensure_ingress()?;
         let queued = event.clone();
@@ -16085,7 +16129,9 @@ impl SumeragiV2Adapter {
             }
             let disposition = reducer::StepDisposition::Ignored(reducer::IgnoreReason::Duplicate);
             self.record_disposition(disposition);
-            self.publish_status()?;
+            if publish_status {
+                self.publish_status()?;
+            }
             self.log_body_progress(&queued, disposition, 0);
             return Ok(DeferPolicyOutcome {
                 outcome: AdapterOutcome {
@@ -16134,7 +16180,9 @@ impl SumeragiV2Adapter {
             }
             let disposition = reducer::StepDisposition::Ignored(reducer::IgnoreReason::Duplicate);
             self.record_disposition(disposition);
-            self.publish_status()?;
+            if publish_status {
+                self.publish_status()?;
+            }
             self.log_body_progress(&queued, disposition, 0);
             return Ok(DeferPolicyOutcome {
                 outcome: AdapterOutcome {
@@ -16202,7 +16250,9 @@ impl SumeragiV2Adapter {
             {
                 self.record_ingress_delivery(admission);
             }
-            self.publish_status()?;
+            if publish_status {
+                self.publish_status()?;
+            }
             return Ok(DeferPolicyOutcome {
                 outcome: AdapterOutcome {
                     disposition,
@@ -16252,7 +16302,9 @@ impl SumeragiV2Adapter {
         if let Some(admission) = admission {
             self.record_ingress_delivery(admission);
         }
-        self.publish_status()?;
+        if publish_status {
+            self.publish_status()?;
+        }
         self.log_body_progress(&queued, disposition, effects.len());
         Ok(DeferPolicyOutcome {
             outcome: AdapterOutcome {
@@ -16798,7 +16850,8 @@ impl SumeragiV2Adapter {
             | wire::ConsensusMessageV2Payload::CommitCertificateRequest(_)
             | wire::ConsensusMessageV2Payload::CommitCertificateResponse(_)
             | wire::ConsensusMessageV2Payload::VrfCommit(_)
-            | wire::ConsensusMessageV2Payload::VrfReveal(_) => return false,
+            | wire::ConsensusMessageV2Payload::VrfReveal(_)
+            | wire::ConsensusMessageV2Payload::GlobalBeaconPartialSignature(_) => return false,
         };
         if let Some(key) = semantic_key {
             // Any existing semantic record can terminate as a duplicate or an
@@ -16855,7 +16908,8 @@ impl SumeragiV2Adapter {
             | wire::ConsensusMessageV2Payload::CommitCertificateRequest(_)
             | wire::ConsensusMessageV2Payload::CommitCertificateResponse(_)
             | wire::ConsensusMessageV2Payload::VrfCommit(_)
-            | wire::ConsensusMessageV2Payload::VrfReveal(_) => false,
+            | wire::ConsensusMessageV2Payload::VrfReveal(_)
+            | wire::ConsensusMessageV2Payload::GlobalBeaconPartialSignature(_) => false,
         }
     }
     /// Service at most one adapter-owned Busy-deferred reducer transition.
@@ -17251,6 +17305,10 @@ impl SumeragiV2Adapter {
         Ok(None)
     }
     fn publish_status(&mut self) -> Result<(), AdapterError> {
+        #[cfg(test)]
+        {
+            self.status_publication_attempts = self.status_publication_attempts.saturating_add(1);
+        }
         let status = self.status()?;
         if self.status_publication_enabled {
             super::status::set_v2_status(status);

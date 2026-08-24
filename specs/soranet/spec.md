@@ -71,16 +71,19 @@ This document satisfies **SNNet-1** (handshake, salt rotation, capability TLVs) 
   3. **Authenticated relay flight**: the relay intersects capabilities,
      returns the selected suite and KEM material, and signs the exact
      transcript with the Ed25519 identity pinned by the authenticated
-     directory entry. The client verifies that signature and descriptor
-     binding before KEM decapsulation or session-key acceptance. No
-     `ClientFinish` or legacy third flight is emitted.
+     directory entry. The identity uses the sole V1 key encoding,
+     `algorithm_tag:u8 || public_key_payload` (`0x00 || 32-byte public key` for
+     Ed25519); untagged keys and unknown algorithm tags are rejected. The client
+     verifies that signature and descriptor binding before KEM decapsulation or
+     session-key acceptance. No `ClientFinish` or legacy third flight is emitted.
   4. **Capability TLVs**: the transcript contains the governed
      `snnet.pqkem`, `snnet.pqsig`, `snnet.transcript_commit`,
      `snnet.suite_list`, relay-only `snnet.role`, `snnet.padding`, optional
      `snnet.constant_rate`, and reserved `0x7Fxx` GREASE entries. Unknown
      non-GREASE types, malformed payloads, duplicate singletons, repeated
-     algorithm identifiers, undefined flags, or vectors above 4,096 bytes are
-     rejected rather than assigned fallback meaning.
+     algorithm identifiers, unknown, retired, or duplicate suite identifiers,
+     undefined flags, or vectors above 4,096 bytes are rejected rather than
+     assigned fallback meaning.
 - When the directory publishes a puzzle policy, clients must send a
   `PowTicketV1` frame *before* the `ClientHello` unless they present a valid
   admission token. The frame is prefixed with a 16-bit length and carries:

@@ -1649,7 +1649,7 @@ def test_native_bridge_abi_must_equal_twenty_two(tmp_path: Path, abi: int) -> No
     payload = json.loads(summary.read_text(encoding="utf-8"))
     artifact = payload["required"]["native_bridge_release"]["artifacts"][0]
     assert (
-        "bridge_abi_version must equal the sole first-release ABI 22"
+        "bridge_abi_version must equal the sole first-release ABI 23"
         in artifact["errors"]
     )
 

@@ -2,6 +2,7 @@
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[cfg_attr(feature = "json", norito(tag = "backend_family", content = "value"))]
+#[norito(deny_unknown_fields)]
 pub enum SoraHfBackendFamilyV1 {
     /// Hugging Face Transformers-style local execution.
     Transformers,
@@ -12,18 +13,339 @@ pub enum SoraHfBackendFamilyV1 {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[cfg_attr(feature = "json", norito(tag = "model_format", content = "value"))]
+#[norito(deny_unknown_fields)]
 pub enum SoraHfModelFormatV1 {
     /// Safetensors checkpoint layout.
     Safetensors,
-    /// `PyTorch` `.bin` / `.pt` checkpoint layout.
+    /// `PyTorch` `.bin` / `.pt` / `.pth` / `.ot` checkpoint layout.
     PyTorch,
     /// GGUF layout.
     Gguf,
+}
+/// Canonical GGUF weight-file suffixes admitted by HF profile derivation and import.
+pub const SORA_HF_GGUF_WEIGHT_FILE_EXTENSIONS_V1: &[&str] = &[".gguf"];
+/// Canonical SafeTensors weight-file suffixes admitted by HF profile derivation and import.
+pub const SORA_HF_SAFETENSORS_WEIGHT_FILE_EXTENSIONS_V1: &[&str] = &[".safetensors"];
+/// Canonical PyTorch-compatible weight-file suffixes admitted by HF profile derivation and import.
+pub const SORA_HF_PYTORCH_WEIGHT_FILE_EXTENSIONS_V1: &[&str] = &[".bin", ".pt", ".pth", ".ot"];
+/// Complete canonical HF weight-file suffix contract for the first release.
+///
+/// Every file matching one of these suffixes is model executable material and
+/// therefore requires authenticated LFS SHA-256 and size metadata before it is
+/// imported. Keep format-specific selection and runtime integrity enforcement
+/// sourced from this table so a newly supported format cannot bypass either.
+pub const SORA_HF_WEIGHT_FILE_EXTENSIONS_V1: &[&str] =
+    &[".gguf", ".safetensors", ".bin", ".pt", ".pth", ".ot"];
+/// Maximum number of provider-controlled sibling entries decoded from one HF model-info response.
+pub const SORA_HF_MODEL_INFO_MAX_SIBLINGS_V1: usize = 4_096;
+/// Maximum byte length of one provider-controlled HF model-info string used as a file path.
+pub const SORA_HF_MODEL_INFO_MAX_STRING_BYTES_V1: usize = 4 * 1_024;
+/// Maximum number of `/`-separated components in one selected HF weight-file path.
+pub const SORA_HF_WEIGHT_PATH_MAX_COMPONENTS_V1: usize = 64;
+/// One immutable, authenticated weight shard selected from HF model-info metadata.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SoraHfRequiredWeightFileV1 {
+    /// Exact repository-relative sibling path.
+    pub path: String,
+    /// Positive byte length authenticated by the Hub LFS record.
+    pub content_length: u64,
+    /// Canonical lowercase LFS SHA-256 digest.
+    pub lfs_sha256: String,
+}
+/// Complete precedence-selected immutable HF weight contract.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SoraHfWeightSelectionV1 {
+    /// Runtime backend family implied by the selected format.
+    pub backend_family: SoraHfBackendFamilyV1,
+    /// Highest-precedence weight format present in the sibling set.
+    pub model_format: SoraHfModelFormatV1,
+    /// Exact sorted and deduplicated selected shard set.
+    pub required_weight_files: Vec<SoraHfRequiredWeightFileV1>,
+    /// Checked sum of all selected authenticated LFS sizes.
+    pub required_model_bytes: u64,
+    /// Domain-separated commitment to format, paths, sizes, and LFS digests.
+    pub weight_selection_commitment: Hash,
+}
+#[cfg(feature = "json")]
+fn hf_model_format_for_path_v1(path: &str) -> Option<SoraHfModelFormatV1> {
+    let has_extension = |extensions: &[&str]| {
+        extensions.iter().any(|extension| {
+            path.get(path.len().saturating_sub(extension.len())..)
+                .is_some_and(|suffix| suffix.eq_ignore_ascii_case(extension))
+        })
+    };
+    if has_extension(SORA_HF_GGUF_WEIGHT_FILE_EXTENSIONS_V1) {
+        Some(SoraHfModelFormatV1::Gguf)
+    } else if has_extension(SORA_HF_SAFETENSORS_WEIGHT_FILE_EXTENSIONS_V1) {
+        Some(SoraHfModelFormatV1::Safetensors)
+    } else if has_extension(SORA_HF_PYTORCH_WEIGHT_FILE_EXTENSIONS_V1) {
+        Some(SoraHfModelFormatV1::PyTorch)
+    } else {
+        None
+    }
+}
+#[cfg(feature = "json")]
+fn hf_weight_path_is_canonical_v1(path: &str) -> bool {
+    !path.is_empty()
+        && path.len() <= SORA_HF_MODEL_INFO_MAX_STRING_BYTES_V1
+        && path.trim() == path
+        && !path.contains('\\')
+        && !path.chars().any(char::is_control)
+        && path.split('/').count() <= SORA_HF_WEIGHT_PATH_MAX_COMPONENTS_V1
+        && path
+            .split('/')
+            .all(|component| !component.is_empty() && !matches!(component, "." | ".."))
+}
+/// Derive the exact first-release weight contract from one HF model-info response.
+///
+/// Selection precedence is GGUF, SafeTensors, then `PyTorch`. The complete provider sibling array
+/// is bounded before processing; duplicate paths are sorted and coalesced only when their LFS
+/// metadata is identical. Every selected shard must carry a positive LFS size and canonical
+/// lowercase SHA-256 digest and must fit the configured per-file and aggregate importer budgets.
+///
+/// # Errors
+/// Returns [`SoracloudManifestError`] when provider metadata is malformed, ambiguous, unbounded,
+/// unauthenticated, or exceeds the supplied import limits.
+#[cfg(feature = "json")]
+pub fn derive_hf_weight_selection_v1(
+    model_info: &Value,
+    maximum_files: u32,
+    maximum_file_bytes: u64,
+    maximum_total_bytes: u64,
+) -> Result<Option<SoraHfWeightSelectionV1>, SoracloudManifestError> {
+    let manifest = "Hugging Face model-info";
+    if maximum_files == 0 || maximum_file_bytes == 0 || maximum_total_bytes == 0 {
+        return Err(invalid_field(
+            manifest,
+            "import_limits",
+            "file count, per-file bytes, and aggregate bytes must all be greater than zero",
+        ));
+    }
+    let Some(siblings) = model_info.get("siblings").and_then(Value::as_array) else {
+        return Ok(None);
+    };
+    if siblings.len() > SORA_HF_MODEL_INFO_MAX_SIBLINGS_V1 {
+        return Err(invalid_field(
+            manifest,
+            "siblings",
+            format!(
+                "contains {} entries, exceeding the {}-entry limit",
+                siblings.len(),
+                SORA_HF_MODEL_INFO_MAX_SIBLINGS_V1
+            ),
+        ));
+    }
+    let mut records = BTreeMap::<String, Option<(String, u64)>>::new();
+    for entry in siblings {
+        let entry = entry.as_object().ok_or_else(|| {
+            invalid_field(
+                manifest,
+                "siblings",
+                "every sibling entry must be an object with a string `rfilename`",
+            )
+        })?;
+        let path = entry
+            .get("rfilename")
+            .and_then(Value::as_str)
+            .ok_or_else(|| {
+                invalid_field(
+                    manifest,
+                    "siblings",
+                    "every sibling entry must contain a string `rfilename`",
+                )
+            })?;
+        if path.len() > SORA_HF_MODEL_INFO_MAX_STRING_BYTES_V1 {
+            return Err(invalid_field(
+                manifest,
+                "siblings",
+                format!(
+                    "path exceeds the {}-byte limit",
+                    SORA_HF_MODEL_INFO_MAX_STRING_BYTES_V1
+                ),
+            ));
+        }
+        let lfs = match entry.get("lfs") {
+            None | Some(Value::Null) => None,
+            Some(lfs) => {
+                let lfs = lfs.as_object().ok_or_else(|| {
+                    invalid_field(
+                        manifest,
+                        "siblings",
+                        format!("sibling `{path}` has non-object LFS metadata"),
+                    )
+                })?;
+                let sha256 = lfs.get("sha256").and_then(Value::as_str).ok_or_else(|| {
+                    invalid_field(
+                        manifest,
+                        "siblings",
+                        format!("sibling `{path}` omits its LFS SHA-256 digest"),
+                    )
+                })?;
+                if sha256.len() != 64
+                    || !sha256
+                        .bytes()
+                        .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+                    || sha256.bytes().all(|byte| byte == b'0')
+                {
+                    return Err(invalid_field(
+                        manifest,
+                        "siblings",
+                        format!("sibling `{path}` has a noncanonical LFS SHA-256 digest"),
+                    ));
+                }
+                let size = lfs
+                    .get("size")
+                    .and_then(Value::as_u64)
+                    .filter(|size| *size > 0)
+                    .ok_or_else(|| {
+                        invalid_field(
+                            manifest,
+                            "siblings",
+                            format!("sibling `{path}` lacks a positive integer LFS size"),
+                        )
+                    })?;
+                Some((sha256.to_owned(), size))
+            }
+        };
+        if let Some(previous) = records.insert(path.to_owned(), lfs.clone())
+            && previous != lfs
+        {
+            return Err(invalid_field(
+                manifest,
+                "siblings",
+                format!("sibling `{path}` has conflicting integrity metadata"),
+            ));
+        }
+    }
+    let selected_format = [
+        SoraHfModelFormatV1::Gguf,
+        SoraHfModelFormatV1::Safetensors,
+        SoraHfModelFormatV1::PyTorch,
+    ]
+    .into_iter()
+    .find(|format| {
+        records
+            .keys()
+            .any(|path| hf_model_format_for_path_v1(path) == Some(*format))
+    });
+    let Some(model_format) = selected_format else {
+        return Ok(None);
+    };
+    let maximum_files = usize::try_from(maximum_files).map_err(|error| {
+        invalid_field(
+            manifest,
+            "import_limits",
+            format!("file-count limit does not fit this host: {error}"),
+        )
+    })?;
+    let selected_count = records
+        .keys()
+        .filter(|path| hf_model_format_for_path_v1(path) == Some(model_format))
+        .count();
+    if selected_count == 0 || selected_count > maximum_files {
+        return Err(invalid_field(
+            manifest,
+            "siblings",
+            format!("selected weight set has {selected_count} files, outside 1..={maximum_files}"),
+        ));
+    }
+    let mut required_weight_files = Vec::new();
+    required_weight_files
+        .try_reserve_exact(selected_count)
+        .map_err(|error| {
+            invalid_field(
+                manifest,
+                "siblings",
+                format!("failed to reserve the bounded selected weight set: {error}"),
+            )
+        })?;
+    let mut required_model_bytes = 0_u64;
+    for (path, lfs) in records
+        .into_iter()
+        .filter(|(path, _)| hf_model_format_for_path_v1(path) == Some(model_format))
+    {
+        if !hf_weight_path_is_canonical_v1(&path) {
+            return Err(invalid_field(
+                manifest,
+                "siblings",
+                format!("selected weight path `{path}` is not canonical"),
+            ));
+        }
+        let (lfs_sha256, content_length) = lfs.ok_or_else(|| {
+            invalid_field(
+                manifest,
+                "siblings",
+                format!("selected weight `{path}` lacks authenticated LFS metadata"),
+            )
+        })?;
+        if content_length > maximum_file_bytes {
+            return Err(invalid_field(
+                manifest,
+                "siblings",
+                format!(
+                    "selected weight `{path}` has {content_length} bytes, exceeding the {maximum_file_bytes}-byte per-file limit"
+                ),
+            ));
+        }
+        required_model_bytes = required_model_bytes
+            .checked_add(content_length)
+            .ok_or_else(|| {
+                invalid_field(manifest, "siblings", "selected weight byte total overflow")
+            })?;
+        if required_model_bytes > maximum_total_bytes {
+            return Err(invalid_field(
+                manifest,
+                "siblings",
+                format!(
+                    "selected weight total {required_model_bytes} exceeds the {maximum_total_bytes}-byte aggregate limit"
+                ),
+            ));
+        }
+        required_weight_files.push(SoraHfRequiredWeightFileV1 {
+            path,
+            content_length,
+            lfs_sha256,
+        });
+    }
+    let format_label = match model_format {
+        SoraHfModelFormatV1::Gguf => "gguf",
+        SoraHfModelFormatV1::Safetensors => "safetensors",
+        SoraHfModelFormatV1::PyTorch => "pytorch",
+    };
+    let commitment_records = required_weight_files
+        .iter()
+        .map(|weight| {
+            (
+                weight.path.as_str(),
+                weight.content_length,
+                weight.lfs_sha256.as_str(),
+            )
+        })
+        .collect::<Vec<_>>();
+    let weight_selection_commitment = Hash::new(Encode::encode(&(
+        "soracloud:hf-weight-selection:v1",
+        format_label,
+        commitment_records,
+    )));
+    let backend_family = match model_format {
+        SoraHfModelFormatV1::Gguf => SoraHfBackendFamilyV1::Gguf,
+        SoraHfModelFormatV1::Safetensors | SoraHfModelFormatV1::PyTorch => {
+            SoraHfBackendFamilyV1::Transformers
+        }
+    };
+    Ok(Some(SoraHfWeightSelectionV1 {
+        backend_family,
+        model_format,
+        required_weight_files,
+        required_model_bytes,
+        weight_selection_commitment,
+    }))
 }
 /// Deterministic size bucket used for adaptive placement and tariff lookup.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[cfg_attr(feature = "json", norito(tag = "size_bucket", content = "value"))]
+#[norito(deny_unknown_fields)]
 pub enum SoraHfModelSizeBucketV1 {
     /// Models up to and including 2 GiB.
     Small,
@@ -35,6 +357,7 @@ pub enum SoraHfModelSizeBucketV1 {
 /// Canonical resource profile derived from HF source/import metadata.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[norito(deny_unknown_fields)]
 pub struct SoraHfResourceProfileV1 {
     /// Canonical model bytes that must fit on a single assigned host.
     pub required_model_bytes: u64,
@@ -42,12 +365,15 @@ pub struct SoraHfResourceProfileV1 {
     pub backend_family: SoraHfBackendFamilyV1,
     /// Weight/layout format required to execute the source locally.
     pub model_format: SoraHfModelFormatV1,
+    /// Exact count of authenticated shards committed by `weight_selection_commitment`.
+    pub selected_weight_file_count: u32,
+    /// Domain-separated commitment to the exact selected paths, sizes, and LFS digests.
+    pub weight_selection_commitment: Hash,
     /// Minimum on-host disk cache bytes required to keep the model resident.
     pub disk_cache_bytes_floor: u64,
     /// Minimum system RAM bytes required to run the model.
     pub ram_bytes_floor: u64,
     /// Minimum accelerator VRAM bytes required to run the model.
-    #[norito(default)]
     pub vram_bytes_floor: u64,
 }
 impl SoraHfResourceProfileV1 {
@@ -71,6 +397,18 @@ impl SoraHfResourceProfileV1 {
                 "must be greater than or equal to required_model_bytes",
             ));
         }
+        if self.selected_weight_file_count == 0 {
+            return Err(invalid_field(
+                "sora hf resource profile",
+                "selected_weight_file_count",
+                "must be greater than zero",
+            ));
+        }
+        validate_soracloud_digest_hash(
+            "sora hf resource profile",
+            "weight_selection_commitment",
+            self.weight_selection_commitment,
+        )?;
         if self.ram_bytes_floor == 0 && self.vram_bytes_floor == 0 {
             return Err(invalid_field(
                 "sora hf resource profile",
@@ -132,6 +470,7 @@ pub fn hf_shared_lease_max_compute_reservation_fee_v1(
 /// Active opt-in validator host capability advert for authoritative HF placement.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[norito(deny_unknown_fields)]
 pub struct SoraModelHostCapabilityRecordV1 {
     /// Schema version; must equal [`SORA_MODEL_HOST_CAPABILITY_RECORD_VERSION_V1`].
     pub schema_version: u16,
@@ -150,7 +489,6 @@ pub struct SoraModelHostCapabilityRecordV1 {
     /// Maximum system RAM bytes reserved for resident models.
     pub max_ram_bytes: u64,
     /// Maximum accelerator VRAM bytes reserved for resident models.
-    #[norito(default)]
     pub max_vram_bytes: u64,
     /// Maximum concurrent resident-model slots.
     pub max_concurrent_resident_models: u16,
@@ -241,6 +579,7 @@ impl SoraModelHostCapabilityRecordV1 {
 /// Active opt-in validator host capability advert for authoritative Inrou placement.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[norito(deny_unknown_fields)]
 pub struct SoraInrouHostCapabilityRecordV1 {
     /// Schema version; must equal [`SORA_INROU_HOST_CAPABILITY_RECORD_VERSION_V1`].
     pub schema_version: u16,
@@ -248,8 +587,6 @@ pub struct SoraInrouHostCapabilityRecordV1 {
     pub validator_account_id: AccountId,
     /// Peer identifier used for Torii routing.
     pub peer_id: String,
-    /// Supported local runtime backends.
-    pub supported_backends: BTreeSet<SoraInrouRuntimeBackendV1>,
     /// Supported guest ISAs for locally materialized replicas.
     pub supported_guest_isas: BTreeSet<SoraInrouGuestIsaV1>,
     /// Maximum number of concurrently hosted placed replicas.
@@ -261,10 +598,9 @@ pub struct SoraInrouHostCapabilityRecordV1 {
     /// Maximum aggregate hosted writable storage budget in bytes.
     pub max_storage_bytes: u64,
     /// Optional geography labels advertised by the host or derived by telemetry.
-    #[norito(default)]
     pub geography_tags: BTreeSet<String>,
     /// Optional observed latency hint used when exact geography is unavailable.
-    #[norito(default)]
+    #[norito(required)]
     pub observed_latency_ms: Option<u32>,
     /// Timestamp when the advert was last refreshed.
     pub advertised_at_ms: u64,
@@ -283,27 +619,12 @@ impl SoraInrouHostCapabilityRecordV1 {
             self.schema_version,
             SORA_INROU_HOST_CAPABILITY_RECORD_VERSION_V1,
         )?;
-        validate_nonblank_field(
-            "sora inrou host capability record",
-            "peer_id",
-            &self.peer_id,
-        )?;
-        if self.supported_backends.len() != 1
-            || !self
-                .supported_backends
-                .contains(&SoraInrouRuntimeBackendV1::PortableVm)
-        {
-            return Err(invalid_field(
-                "sora inrou host capability record",
-                "supported_backends",
-                "Inrou V1 admits exactly the PortableVm backend",
-            ));
-        }
-        if self.supported_guest_isas.is_empty() {
+        validate_peer_id_field("sora inrou host capability record", &self.peer_id)?;
+        if self.supported_guest_isas.len() != 1 {
             return Err(invalid_field(
                 "sora inrou host capability record",
                 "supported_guest_isas",
-                "must not be empty",
+                "must contain exactly the qualified host-native guest ISA",
             ));
         }
         for tag in &self.geography_tags {
@@ -334,11 +655,14 @@ impl SoraInrouHostCapabilityRecordV1 {
                 "must be greater than advertised_at_ms",
             ));
         }
-        for (field, value) in [
-            (
+        if self.max_hosted_replica_capacity != SORA_INROU_HOSTED_REPLICA_CAPACITY_V1 {
+            return Err(invalid_field(
+                "sora inrou host capability record",
                 "max_hosted_replica_capacity",
-                u64::from(self.max_hosted_replica_capacity),
-            ),
+                "must equal the first-release capacity of one",
+            ));
+        }
+        for (field, value) in [
             ("max_cpu_millis", u64::from(self.max_cpu_millis)),
             ("max_memory_bytes", self.max_memory_bytes),
             ("max_storage_bytes", self.max_storage_bytes),
@@ -361,12 +685,13 @@ impl SoraInrouHostCapabilityRecordV1 {
     /// Return whether the advert may host placed replicas at the supplied timestamp.
     #[must_use]
     pub fn can_host_replicas_at(&self, now_ms: u64) -> bool {
-        self.is_active_at(now_ms) && self.max_hosted_replica_capacity > 0
+        self.validate().is_ok() && self.is_active_at(now_ms)
     }
 }
 /// Authoritative host assignment for one placed Inrou replica slot.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[norito(deny_unknown_fields)]
 pub struct SoraInrouReplicaPlacementV1 {
     /// One-based replica slot within the selected service revision.
     pub replica_slot: u16,
@@ -374,15 +699,13 @@ pub struct SoraInrouReplicaPlacementV1 {
     pub validator_account_id: AccountId,
     /// Peer identifier used for Torii proxy routing.
     pub peer_id: String,
-    /// Backend selected locally on the assigned host.
-    pub selected_backend: SoraInrouRuntimeBackendV1,
     /// Guest ISA selected locally on the assigned host.
     pub selected_guest_isa: SoraInrouGuestIsaV1,
     /// Geography tag that matched the requested distribution policy, when known.
-    #[norito(default)]
+    #[norito(required)]
     pub selected_geography_tag: Option<String>,
     /// Latency observation used by placement/hydration, when available.
-    #[norito(default)]
+    #[norito(required)]
     pub selection_latency_ms: Option<u32>,
 }
 impl SoraInrouReplicaPlacementV1 {
@@ -398,7 +721,7 @@ impl SoraInrouReplicaPlacementV1 {
                 "must be greater than zero",
             ));
         }
-        validate_nonblank_field("sora inrou replica placement", "peer_id", &self.peer_id)?;
+        validate_peer_id_field("sora inrou replica placement", &self.peer_id)?;
         if let Some(tag) = self.selected_geography_tag.as_ref() {
             validate_distribution_geography_tag(
                 "sora inrou replica placement",
@@ -419,6 +742,7 @@ impl SoraInrouReplicaPlacementV1 {
 /// Authoritative per-revision placement record for hosted Inrou replicas.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[norito(deny_unknown_fields)]
 pub struct SoraInrouServicePlacementRecordV1 {
     /// Schema version; must equal [`SORA_INROU_SERVICE_PLACEMENT_RECORD_VERSION_V1`].
     pub schema_version: u16,
@@ -431,12 +755,11 @@ pub struct SoraInrouServicePlacementRecordV1 {
     /// Number of currently active eligible validators considered during reconciliation.
     pub eligible_validator_count: u32,
     /// Assigned replica placements in deterministic slot order.
-    #[norito(default)]
     pub placements: Vec<SoraInrouReplicaPlacementV1>,
     /// Timestamp of the last placement reconciliation.
     pub reconciled_at_ms: u64,
     /// Latest placement error, when not all requested slots could be assigned.
-    #[norito(default)]
+    #[norito(required)]
     pub last_error: Option<String>,
 }
 impl SoraInrouServicePlacementRecordV1 {
@@ -470,25 +793,52 @@ impl SoraInrouServicePlacementRecordV1 {
                 "must be greater than zero",
             ));
         }
-        let mut seen_slots = BTreeSet::new();
-        for placement in &self.placements {
+        if self.placements.len() > usize::from(self.desired_replica_count) {
+            return Err(invalid_field(
+                "sora inrou service placement record",
+                "placements",
+                "placement count must not exceed desired_replica_count",
+            ));
+        }
+        if u32::try_from(self.placements.len())
+            .expect("placement count was bounded by desired_replica_count")
+            > self.eligible_validator_count
+        {
+            return Err(invalid_field(
+                "sora inrou service placement record",
+                "placements",
+                "placement count must not exceed eligible_validator_count",
+            ));
+        }
+        let mut seen_validators = BTreeSet::new();
+        let mut seen_peer_ids = BTreeSet::new();
+        for (index, placement) in self.placements.iter().enumerate() {
             placement.validate()?;
-            if placement.replica_slot > self.desired_replica_count {
+            let expected_slot = u16::try_from(index + 1)
+                .expect("placement count was bounded by desired_replica_count");
+            if placement.replica_slot != expected_slot {
                 return Err(SoracloudManifestError::InvalidField {
                     manifest: "sora inrou service placement record",
                     field: "placements",
                     reason: format!(
-                        "replica_slot {} exceeds desired_replica_count {}",
-                        placement.replica_slot, self.desired_replica_count
+                        "placements must use the sorted contiguous slot prefix 1..=len; expected replica_slot {expected_slot}, found {}",
+                        placement.replica_slot
                     ),
                 });
             }
-            if !seen_slots.insert(placement.replica_slot) {
-                return Err(SoracloudManifestError::InvalidField {
-                    manifest: "sora inrou service placement record",
-                    field: "placements",
-                    reason: format!("duplicate replica_slot {}", placement.replica_slot),
-                });
+            if !seen_validators.insert(placement.validator_account_id.clone()) {
+                return Err(invalid_field(
+                    "sora inrou service placement record",
+                    "placements",
+                    "each placement must use a distinct validator account",
+                ));
+            }
+            if !seen_peer_ids.insert(placement.peer_id.clone()) {
+                return Err(invalid_field(
+                    "sora inrou service placement record",
+                    "placements",
+                    "each placement must use a distinct peer ID",
+                ));
             }
         }
         Ok(())
@@ -498,6 +848,7 @@ impl SoraInrouServicePlacementRecordV1 {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[cfg_attr(feature = "json", norito(tag = "status", content = "value"))]
+#[norito(deny_unknown_fields)]
 pub enum SoraHfPlacementStatusV1 {
     /// The placement is being selected.
     Selecting,
@@ -516,6 +867,7 @@ pub enum SoraHfPlacementStatusV1 {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[cfg_attr(feature = "json", norito(tag = "role", content = "value"))]
+#[norito(deny_unknown_fields)]
 pub enum SoraHfPlacementHostRoleV1 {
     /// Primary execution host.
     Primary,
@@ -526,6 +878,7 @@ pub enum SoraHfPlacementHostRoleV1 {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[cfg_attr(feature = "json", norito(tag = "status", content = "value"))]
+#[norito(deny_unknown_fields)]
 pub enum SoraHfPlacementHostStatusV1 {
     /// Slot is reserved and the host is warming the model.
     Warming,
@@ -539,6 +892,7 @@ pub enum SoraHfPlacementHostStatusV1 {
 /// Host assignment persisted on the authoritative placement record.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[norito(deny_unknown_fields)]
 pub struct SoraHfPlacementHostAssignmentV1 {
     /// Validator assigned to the slot.
     pub validator_account_id: AccountId,
@@ -573,6 +927,7 @@ impl SoraHfPlacementHostAssignmentV1 {
 /// Authoritative placement record attached to the active HF lease window.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[norito(deny_unknown_fields)]
 pub struct SoraHfPlacementRecordV1 {
     /// Schema version; must equal [`SORA_HF_PLACEMENT_RECORD_VERSION_V1`].
     pub schema_version: u16,
@@ -593,7 +948,6 @@ pub struct SoraHfPlacementRecordV1 {
     /// Target assigned host count for the current model-size bucket.
     pub adaptive_target_host_count: u16,
     /// Assigned validator hosts in deterministic rank order.
-    #[norito(default)]
     pub assigned_hosts: Vec<SoraHfPlacementHostAssignmentV1>,
     /// Full-window nominal compute reservation tariff for the assigned host set.
     ///
@@ -603,7 +957,7 @@ pub struct SoraHfPlacementRecordV1 {
     /// Timestamp of the last placement rebalance.
     pub last_rebalance_at_ms: u64,
     /// Latest placement/runtime error.
-    #[norito(default)]
+    #[norito(required)]
     pub last_error: Option<String>,
 }
 impl SoraHfPlacementRecordV1 {
@@ -694,6 +1048,7 @@ impl SoraHfPlacementRecordV1 {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[cfg_attr(feature = "json", norito(tag = "kind", content = "value"))]
+#[norito(deny_unknown_fields)]
 pub enum SoraModelHostViolationKindV1 {
     /// The host was assigned to warm a model but never became ready before its advert expired.
     WarmupNoShow,
@@ -705,6 +1060,7 @@ pub enum SoraModelHostViolationKindV1 {
 /// Authoritative evidence record for a Soracloud model-host violation.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[norito(deny_unknown_fields)]
 pub struct SoraModelHostViolationEvidenceRecordV1 {
     /// Schema version; must equal [`SORA_MODEL_HOST_VIOLATION_EVIDENCE_RECORD_VERSION_V1`].
     pub schema_version: u16,
@@ -717,33 +1073,30 @@ pub struct SoraModelHostViolationEvidenceRecordV1 {
     /// Violation class.
     pub kind: SoraModelHostViolationKindV1,
     /// Placement implicated in the violation when applicable.
-    #[norito(default)]
+    #[norito(required)]
     pub placement_id: Option<Hash>,
     /// HF lease pool implicated in the violation when applicable.
-    #[norito(default)]
+    #[norito(required)]
     pub pool_id: Option<Hash>,
     /// Canonical HF source implicated in the violation when applicable.
-    #[norito(default)]
+    #[norito(required)]
     pub source_id: Option<Hash>,
     /// Reservation-window start timestamp used for strike counting when applicable.
-    #[norito(default)]
+    #[norito(required)]
     pub window_started_at_ms: Option<u64>,
     /// Block timestamp when the evidence was recorded.
     pub observed_at_ms: u64,
     /// Optional explanatory detail attached to the evidence.
-    #[norito(default)]
+    #[norito(required)]
     pub detail: Option<String>,
     /// Strike count for repeated heartbeat misses within one reservation window.
-    #[norito(default)]
     pub strike_count: u32,
     /// Whether the corresponding validator penalty was already applied.
-    #[norito(default)]
     pub penalty_applied: bool,
     /// Whether the host advert was evicted from future placement eligibility.
-    #[norito(default)]
     pub host_evicted: bool,
     /// Slash identifier applied through the public-lane validator slash path, if any.
-    #[norito(default)]
+    #[norito(required)]
     pub slash_id: Option<Hash>,
 }
 impl SoraModelHostViolationEvidenceRecordV1 {
@@ -861,6 +1214,7 @@ impl SoraModelHostViolationEvidenceRecordV1 {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[cfg_attr(feature = "json", norito(tag = "status", content = "value"))]
+#[norito(deny_unknown_fields)]
 pub enum SoraHfSourceStatusV1 {
     /// Metadata has been admitted and the import worker still needs to hydrate bytes.
     PendingImport,
@@ -874,6 +1228,7 @@ pub enum SoraHfSourceStatusV1 {
 /// Authoritative canonical Hugging Face import metadata.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[norito(deny_unknown_fields)]
 pub struct SoraHfSourceRecordV1 {
     /// Schema version; must equal [`SORA_HF_SOURCE_RECORD_VERSION_V1`].
     pub schema_version: u16,
@@ -890,7 +1245,7 @@ pub struct SoraHfSourceRecordV1 {
     /// Hash of the normalized runtime artifact layout.
     pub normalized_runtime_hash: Hash,
     /// Canonical resource profile derived from HF metadata when available.
-    #[norito(default)]
+    #[norito(required)]
     pub resource_profile: Option<SoraHfResourceProfileV1>,
     /// Source lifecycle status.
     pub status: SoraHfSourceStatusV1,
@@ -899,7 +1254,7 @@ pub struct SoraHfSourceRecordV1 {
     /// Block timestamp of the last lifecycle mutation.
     pub updated_at_ms: u64,
     /// Latest import/runtime error when status is [`SoraHfSourceStatusV1::Failed`].
-    #[norito(default)]
+    #[norito(required)]
     pub last_error: Option<String>,
 }
 impl SoraHfSourceRecordV1 {
@@ -920,13 +1275,33 @@ impl SoraHfSourceRecordV1 {
             "normalized_runtime_hash",
             self.normalized_runtime_hash,
         )?;
+        if !is_canonical_hf_repo_id_v1(&self.repo_id) {
+            return Err(invalid_field(
+                "sora hf source record",
+                "repo_id",
+                "must be one exact fully-qualified `namespace/repository` identifier",
+            ));
+        }
         for (field, value) in [
-            ("repo_id", self.repo_id.as_str()),
-            ("resolved_revision", self.resolved_revision.as_str()),
             ("model_name", self.model_name.as_str()),
             ("adapter_id", self.adapter_id.as_str()),
         ] {
             validate_nonblank_field("sora hf source record", field, value)?;
+        }
+        if !is_canonical_hf_commit_oid_v1(&self.resolved_revision) {
+            return Err(invalid_field(
+                "sora hf source record",
+                "resolved_revision",
+                "must be the full 40-character lowercase hexadecimal commit OID",
+            ));
+        }
+        let expected_source_id = derive_hf_source_id_v1(&self.repo_id, &self.resolved_revision)?;
+        if self.source_id != expected_source_id {
+            return Err(invalid_field(
+                "sora hf source record",
+                "source_id",
+                "must equal the canonical repository-and-commit source identifier",
+            ));
         }
         if let Some(resource_profile) = &self.resource_profile {
             resource_profile.validate()?;
@@ -963,6 +1338,7 @@ impl SoraHfSourceRecordV1 {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[cfg_attr(feature = "json", norito(tag = "status", content = "value"))]
+#[norito(deny_unknown_fields)]
 pub enum SoraHfSharedLeaseStatusV1 {
     /// The pool is accepting joins against the current window.
     Active,
@@ -977,6 +1353,7 @@ pub enum SoraHfSharedLeaseStatusV1 {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[cfg_attr(feature = "json", norito(tag = "status", content = "value"))]
+#[norito(deny_unknown_fields)]
 pub enum SoraHfSharedLeaseMemberStatusV1 {
     /// The account actively participates in the current window.
     Active,
@@ -987,6 +1364,7 @@ pub enum SoraHfSharedLeaseMemberStatusV1 {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[cfg_attr(feature = "json", norito(tag = "action", content = "value"))]
+#[norito(deny_unknown_fields)]
 pub enum SoraHfSharedLeaseActionV1 {
     /// A brand new window was opened by a sponsor.
     CreateWindow,
@@ -1006,6 +1384,7 @@ pub enum SoraHfSharedLeaseActionV1 {
 /// Queued next-window sponsorship metadata for a shared Hugging Face lease pool.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[norito(deny_unknown_fields)]
 pub struct SoraHfSharedLeaseQueuedWindowV1 {
     /// Account that sponsored the queued window and prepaid its storage charge.
     pub sponsor_account_id: AccountId,
@@ -1034,7 +1413,7 @@ pub struct SoraHfSharedLeaseQueuedWindowV1 {
     /// Service binding that should be preserved for the queued sponsor.
     pub service_name: Name,
     /// Optional apartment binding that should be preserved for the queued sponsor.
-    #[norito(default)]
+    #[norito(required)]
     pub apartment_name: Option<Name>,
 }
 impl SoraHfSharedLeaseQueuedWindowV1 {
@@ -1095,6 +1474,7 @@ impl SoraHfSharedLeaseQueuedWindowV1 {
 /// Shared-lease pool metadata keyed by canonical import and pricing dimensions.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[norito(deny_unknown_fields)]
 pub struct SoraHfSharedLeasePoolV1 {
     /// Schema version; must equal [`SORA_HF_SHARED_LEASE_POOL_VERSION_V1`].
     pub schema_version: u16,
@@ -1119,7 +1499,7 @@ pub struct SoraHfSharedLeasePoolV1 {
     /// Pool lifecycle status.
     pub status: SoraHfSharedLeaseStatusV1,
     /// Optional sponsorship for the next window after the current one expires.
-    #[norito(default)]
+    #[norito(required)]
     pub queued_next_window: Option<SoraHfSharedLeaseQueuedWindowV1>,
 }
 impl SoraHfSharedLeasePoolV1 {
@@ -1216,6 +1596,7 @@ impl SoraHfSharedLeasePoolV1 {
 /// Account-scoped shared-lease membership plus free service/apartment bindings.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[norito(deny_unknown_fields)]
 pub struct SoraHfSharedLeaseMemberV1 {
     /// Schema version; must equal [`SORA_HF_SHARED_LEASE_MEMBER_VERSION_V1`].
     pub schema_version: u16,
@@ -1238,19 +1619,14 @@ pub struct SoraHfSharedLeaseMemberV1 {
     /// Most recent nominal direct charge applied to this member.
     pub last_charge: Quantity,
     /// Total nominal compute reservation amount charged across joins/renewals.
-    #[norito(default)]
     pub total_compute_paid: Quantity,
     /// Total nominal compute reservation amount refunded by later joiners.
-    #[norito(default)]
     pub total_compute_refunded: Quantity,
     /// Most recent nominal direct compute reservation charge applied to this member.
-    #[norito(default)]
     pub last_compute_charge: Quantity,
     /// Bound Soracloud services that reuse this membership.
-    #[norito(default)]
     pub service_bindings: BTreeSet<String>,
     /// Bound Soracloud agent apartments that reuse this membership.
-    #[norito(default)]
     pub apartment_bindings: BTreeSet<String>,
 }
 impl SoraHfSharedLeaseMemberV1 {
@@ -1305,6 +1681,7 @@ impl SoraHfSharedLeaseMemberV1 {
 /// Audit record for shared Hugging Face lease lifecycle changes.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[norito(deny_unknown_fields)]
 pub struct SoraHfSharedLeaseAuditEventV1 {
     /// Schema version; must equal [`SORA_HF_SHARED_LEASE_AUDIT_EVENT_VERSION_V1`].
     pub schema_version: u16,
@@ -1332,10 +1709,10 @@ pub struct SoraHfSharedLeaseAuditEventV1 {
     #[norito(default)]
     pub failure_reason: Option<String>,
     /// Optional service binding touched by the mutation.
-    #[norito(default)]
+    #[norito(required)]
     pub service_name: Option<String>,
     /// Optional apartment binding touched by the mutation.
-    #[norito(default)]
+    #[norito(required)]
     pub apartment_name: Option<String>,
 }
 impl SoraHfSharedLeaseAuditEventV1 {
@@ -1425,6 +1802,7 @@ impl SoraHfSharedLeaseAuditEventV1 {
 /// Audit record for model-artifact lifecycle changes.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[norito(deny_unknown_fields)]
 pub struct SoraModelArtifactAuditEventV1 {
     /// Schema version; must equal [`SORA_MODEL_ARTIFACT_AUDIT_EVENT_VERSION_V1`].
     pub schema_version: u16,
@@ -1441,7 +1819,7 @@ pub struct SoraModelArtifactAuditEventV1 {
     /// Training job associated with the artifact.
     pub training_job_id: String,
     /// Model weight version that consumed the artifact, when any.
-    #[norito(default)]
+    #[norito(required)]
     pub consumed_by_version: Option<String>,
     /// Provenance signer that authorized the event.
     pub signer: PublicKey,
@@ -1490,6 +1868,7 @@ impl SoraModelArtifactAuditEventV1 {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[cfg_attr(feature = "json", norito(tag = "action", content = "value"))]
+#[norito(deny_unknown_fields)]
 pub enum SoraAgentApartmentActionV1 {
     /// A new apartment was deployed.
     Deploy,
@@ -1518,6 +1897,7 @@ pub enum SoraAgentApartmentActionV1 {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[cfg_attr(feature = "json", norito(tag = "status", content = "value"))]
+#[norito(deny_unknown_fields)]
 pub enum SoraAgentRuntimeStatusV1 {
     /// Apartment lease is active and the process is considered runnable.
     Running,
@@ -1527,6 +1907,7 @@ pub enum SoraAgentRuntimeStatusV1 {
 /// Pending wallet spend request tracked inside an authoritative apartment record.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[norito(deny_unknown_fields)]
 pub struct SoraAgentWalletSpendRequestV1 {
     /// Deterministic request identifier.
     pub request_id: String,
@@ -1540,6 +1921,7 @@ pub struct SoraAgentWalletSpendRequestV1 {
 /// Daily wallet-spend aggregate for an asset/day bucket pair.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[norito(deny_unknown_fields)]
 pub struct SoraAgentWalletDailySpendEntryV1 {
     /// Asset definition constrained by the apartment policy.
     pub asset_definition: String,
@@ -1551,6 +1933,7 @@ pub struct SoraAgentWalletDailySpendEntryV1 {
 /// Mailbox message queued for deterministic apartment-to-apartment delivery.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[norito(deny_unknown_fields)]
 pub struct SoraAgentMailboxMessageV1 {
     /// Deterministic message identifier.
     pub message_id: String,
@@ -1568,11 +1951,12 @@ pub struct SoraAgentMailboxMessageV1 {
 /// Allowlist entry authorizing an autonomy artifact for an apartment.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[norito(deny_unknown_fields)]
 pub struct SoraAgentArtifactAllowRuleV1 {
     /// Artifact hash that was approved.
     pub artifact_hash: String,
     /// Optional provenance hash bound to the artifact.
-    #[norito(default)]
+    #[norito(required)]
     pub provenance_hash: Option<String>,
     /// Audit sequence that added the rule.
     pub added_sequence: u64,
@@ -1580,20 +1964,21 @@ pub struct SoraAgentArtifactAllowRuleV1 {
 /// Historical autonomy-run approval recorded for an apartment.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[norito(deny_unknown_fields)]
 pub struct SoraAgentAutonomyRunRecordV1 {
     /// Deterministic run identifier.
     pub run_id: String,
     /// Artifact hash executed by the run.
     pub artifact_hash: String,
     /// Optional provenance hash bound to the artifact.
-    #[norito(default)]
+    #[norito(required)]
     pub provenance_hash: Option<String>,
     /// Approved budget units for the run.
     pub budget_units: u64,
     /// Human-readable run label.
     pub run_label: String,
     /// Optional canonical JSON body forwarded to the generated HF `/infer` handler.
-    #[norito(default)]
+    #[norito(required)]
     pub workflow_input_json: Option<String>,
     /// Apartment process generation active when the run was approved.
     pub approved_process_generation: u64,
@@ -1605,16 +1990,17 @@ pub struct SoraAgentAutonomyRunRecordV1 {
 /// Authoritative persistent-state accounting attached to an apartment.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[norito(deny_unknown_fields)]
 pub struct SoraAgentPersistentStateV1 {
     /// Total bytes consumed by apartment-owned state.
     pub total_bytes: u64,
     /// Per-key size accounting for deterministic quota tracking.
-    #[norito(default)]
     pub key_sizes: BTreeMap<String, u64>,
 }
 /// Authoritative runtime record for a Soracloud agent apartment.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[norito(deny_unknown_fields)]
 pub struct SoraAgentApartmentRecordV1 {
     /// Schema version; must equal [`SORA_AGENT_APARTMENT_RECORD_VERSION_V1`].
     pub schema_version: u16,
@@ -1635,10 +2021,10 @@ pub struct SoraAgentApartmentRecordV1 {
     /// Deterministic restart count.
     pub restart_count: u32,
     /// Audit sequence of the last restart, when any.
-    #[norito(default)]
+    #[norito(required)]
     pub last_restart_sequence: Option<u64>,
     /// Human-readable reason for the last restart, when any.
-    #[norito(default)]
+    #[norito(required)]
     pub last_restart_reason: Option<String>,
     /// Monotonic local-process generation.
     pub process_generation: u64,
@@ -1647,33 +2033,27 @@ pub struct SoraAgentApartmentRecordV1 {
     /// Audit sequence of the most recent activity.
     pub last_active_sequence: u64,
     /// Audit sequence of the latest checkpoint, when any.
-    #[norito(default)]
+    #[norito(required)]
     pub last_checkpoint_sequence: Option<u64>,
     /// Number of recorded checkpoints.
     pub checkpoint_count: u32,
     /// Deterministic persistent-state accounting.
     pub persistent_state: SoraAgentPersistentStateV1,
     /// Revoked policy capabilities.
-    #[norito(default)]
     pub revoked_policy_capabilities: BTreeSet<String>,
     /// Pending wallet requests keyed by request id.
-    #[norito(default)]
     pub pending_wallet_requests: BTreeMap<String, SoraAgentWalletSpendRequestV1>,
     /// Daily wallet-spend aggregates keyed by `<asset>:<day_bucket>`.
-    #[norito(default)]
     pub wallet_daily_spend: BTreeMap<String, SoraAgentWalletDailySpendEntryV1>,
     /// Pending mailbox queue for the apartment.
-    #[norito(default)]
     pub mailbox_queue: Vec<SoraAgentMailboxMessageV1>,
     /// Total autonomy budget allocated to the apartment.
     pub autonomy_budget_ceiling_units: u64,
     /// Remaining autonomy budget units.
     pub autonomy_budget_remaining_units: u64,
     /// Approved artifact allowlist keyed by artifact hash.
-    #[norito(default)]
     pub artifact_allowlist: BTreeMap<String, SoraAgentArtifactAllowRuleV1>,
     /// Historical autonomy-run approvals.
-    #[norito(default)]
     pub autonomy_run_history: Vec<SoraAgentAutonomyRunRecordV1>,
 }
 impl SoraAgentApartmentRecordV1 {
@@ -1940,6 +2320,7 @@ impl SoraAgentApartmentRecordV1 {
 /// Audit record for authoritative agent-apartment state transitions.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[norito(deny_unknown_fields)]
 pub struct SoraAgentApartmentAuditEventV1 {
     /// Schema version; must equal [`SORA_AGENT_APARTMENT_AUDIT_EVENT_VERSION_V1`].
     pub schema_version: u16,
@@ -1960,70 +2341,70 @@ pub struct SoraAgentApartmentAuditEventV1 {
     /// Provenance signer that authorized the event.
     pub signer: PublicKey,
     /// Optional wallet request id associated with the event.
-    #[norito(default)]
+    #[norito(required)]
     pub request_id: Option<String>,
     /// Optional asset definition associated with the event.
-    #[norito(default)]
+    #[norito(required)]
     pub asset_definition: Option<String>,
     /// Optional nominal wallet amount associated with the event.
-    #[norito(default)]
+    #[norito(required)]
     pub amount: Option<Quantity>,
     /// Optional capability associated with the event.
-    #[norito(default)]
+    #[norito(required)]
     pub capability: Option<String>,
     /// Optional reason associated with the event.
-    #[norito(default)]
+    #[norito(required)]
     pub reason: Option<String>,
     /// Optional sender apartment associated with the event.
-    #[norito(default)]
+    #[norito(required)]
     pub from_apartment: Option<String>,
     /// Optional recipient apartment associated with the event.
-    #[norito(default)]
+    #[norito(required)]
     pub to_apartment: Option<String>,
     /// Optional mailbox channel associated with the event.
-    #[norito(default)]
+    #[norito(required)]
     pub channel: Option<String>,
     /// Optional payload hash associated with the event.
-    #[norito(default)]
+    #[norito(required)]
     pub payload_hash: Option<Hash>,
     /// Optional artifact hash associated with the event.
-    #[norito(default)]
+    #[norito(required)]
     pub artifact_hash: Option<String>,
     /// Optional provenance hash associated with the event.
-    #[norito(default)]
+    #[norito(required)]
     pub provenance_hash: Option<String>,
     /// Optional run id associated with the event.
-    #[norito(default)]
+    #[norito(required)]
     pub run_id: Option<String>,
     /// Optional run label associated with the event.
-    #[norito(default)]
+    #[norito(required)]
     pub run_label: Option<String>,
     /// Optional run budget associated with the event.
-    #[norito(default)]
+    #[norito(required)]
     pub budget_units: Option<u64>,
     /// Optional generated service name used for execution.
-    #[norito(default)]
+    #[norito(required)]
     pub service_name: Option<String>,
     /// Optional generated service version used for execution.
-    #[norito(default)]
+    #[norito(required)]
     pub service_version: Option<String>,
     /// Optional service handler used for execution.
-    #[norito(default)]
+    #[norito(required)]
     pub handler_name: Option<String>,
     /// Optional execution result commitment recorded for the run.
-    #[norito(default)]
+    #[norito(required)]
     pub result_commitment: Option<Hash>,
     /// Optional authoritative runtime receipt identifier recorded for the run.
-    #[norito(default)]
+    #[norito(required)]
     pub runtime_receipt_id: Option<Hash>,
     /// Optional node-local journal artifact hash recorded for the run.
-    #[norito(default)]
+    #[norito(required)]
     pub journal_artifact_hash: Option<Hash>,
     /// Optional checkpoint artifact hash recorded for the run.
-    #[norito(default)]
+    #[norito(required)]
     pub checkpoint_artifact_hash: Option<Hash>,
     /// Optional success flag recorded for executed autonomy runs.
-    #[norito(default)]
+    #[norito(required)]
     pub succeeded: Option<bool>,
 }
 impl SoraAgentApartmentAuditEventV1 {
@@ -2156,6 +2537,7 @@ fn validate_absolute_path(
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[cfg_attr(feature = "json", norito(tag = "action", content = "value"))]
+#[norito(deny_unknown_fields)]
 pub enum SoraAppInfraActionV1 {
     /// First-time admission of an app topology.
     Deploy,
@@ -2165,21 +2547,22 @@ pub enum SoraAppInfraActionV1 {
 /// Static-site binding attached to a Soracloud app.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[norito(deny_unknown_fields)]
 pub struct SoraAppStaticSiteBindingV1 {
     /// Schema version; must equal [`SORA_APP_STATIC_SITE_BINDING_VERSION_V1`].
     pub schema_version: u16,
     /// Public URL exposed to browsers.
     pub public_url: String,
     /// Optional content-addressed site CID.
-    #[norito(default)]
+    #[norito(required)]
     pub content_cid: Option<String>,
     /// Optional static-site manifest digest.
-    #[norito(default)]
+    #[norito(required)]
     pub manifest_digest_hex: Option<String>,
     /// URL path where static content is mounted.
     pub mount_path: String,
     /// Optional API base path consumed by the static frontend.
-    #[norito(default)]
+    #[norito(required)]
     pub api_base_path: Option<String>,
 }
 impl SoraAppStaticSiteBindingV1 {
@@ -2225,16 +2608,17 @@ impl SoraAppStaticSiteBindingV1 {
 /// Route projection exposed by a service inside an app topology.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[norito(deny_unknown_fields)]
 pub struct SoraAppRouteProjectionV1 {
     /// Schema version; must equal [`SORA_APP_ROUTE_PROJECTION_VERSION_V1`].
     pub schema_version: u16,
     /// Public host name when the route is externally reachable.
-    #[norito(default)]
+    #[norito(required)]
     pub public_host: Option<String>,
     /// Public or internal path prefix.
     pub path_prefix: String,
     /// Optional internal service URL routed by Soracloud.
-    #[norito(default)]
+    #[norito(required)]
     pub internal_url: Option<String>,
 }
 impl SoraAppRouteProjectionV1 {
@@ -2268,6 +2652,7 @@ impl SoraAppRouteProjectionV1 {
 /// Reference to an admitted Soracloud service revision in an app topology.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[norito(deny_unknown_fields)]
 pub struct SoraAppInfraServiceRefV1 {
     /// Schema version; must equal [`SORA_APP_INFRA_SERVICE_REF_VERSION_V1`].
     pub schema_version: u16,
@@ -2284,13 +2669,11 @@ pub struct SoraAppInfraServiceRefV1 {
     /// Expected container runtime for the referenced service.
     pub runtime: SoraContainerRuntimeV1,
     /// Routes projected from this service into the app.
-    #[norito(default)]
     pub routes: Vec<SoraAppRouteProjectionV1>,
     /// Optional persistent lease-volume names the app topology depends on.
-    #[norito(default)]
     pub lease_volumes: Vec<Name>,
     /// Optional shard identifier for horizontally sharded app services.
-    #[norito(default)]
+    #[norito(required)]
     pub shard: Option<String>,
 }
 impl SoraAppInfraServiceRefV1 {
@@ -2348,6 +2731,7 @@ impl SoraAppInfraServiceRefV1 {
 /// Canonical app-level Soracloud infrastructure manifest.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[norito(deny_unknown_fields)]
 pub struct SoraAppInfraManifestV1 {
     /// Schema version; must equal [`SORA_APP_INFRA_MANIFEST_VERSION_V1`].
     pub schema_version: u16,
@@ -2358,7 +2742,7 @@ pub struct SoraAppInfraManifestV1 {
     /// Public URL for the application.
     pub public_url: String,
     /// Optional static-site binding.
-    #[norito(default)]
+    #[norito(required)]
     pub static_site: Option<SoraAppStaticSiteBindingV1>,
     /// Authoritative service topology.
     pub services: Vec<SoraAppInfraServiceRefV1>,
@@ -2427,6 +2811,7 @@ pub enum SoraAppInfraMutationPreconditionV1 {
 /// Authoritative app-level Soracloud infrastructure state.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[norito(deny_unknown_fields)]
 pub struct SoraAppInfraStateV1 {
     /// Schema version; must equal [`SORA_APP_INFRA_STATE_VERSION_V1`].
     pub schema_version: u16,
@@ -2491,6 +2876,7 @@ impl SoraAppInfraStateV1 {
 /// Audit record for an authoritative Soracloud app topology event.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[norito(deny_unknown_fields)]
 pub struct SoraAppInfraAuditEventV1 {
     /// Schema version; must equal [`SORA_APP_INFRA_AUDIT_EVENT_VERSION_V1`].
     pub schema_version: u16,
@@ -2501,7 +2887,7 @@ pub struct SoraAppInfraAuditEventV1 {
     /// Application affected by the transition.
     pub app_name: Name,
     /// Previous active app version, when applicable.
-    #[norito(default)]
+    #[norito(required)]
     pub from_version: Option<String>,
     /// Resulting active app version.
     pub to_version: String,
@@ -2553,6 +2939,7 @@ impl SoraAppInfraAuditEventV1 {
 /// Audit record for an authoritative Soracloud lifecycle event.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[norito(deny_unknown_fields)]
 pub struct SoraServiceAuditEventV1 {
     /// Schema version; must equal [`SORA_SERVICE_AUDIT_EVENT_VERSION_V1`].
     pub schema_version: u16,
@@ -2562,8 +2949,8 @@ pub struct SoraServiceAuditEventV1 {
     pub action: SoraServiceLifecycleActionV1,
     /// Service affected by the transition.
     pub service_name: Name,
-    /// Previous active version, when applicable.
-    #[norito(default)]
+    /// Previous active version; the wire key is explicitly null when not applicable.
+    #[norito(required)]
     pub from_version: Option<String>,
     /// Resulting active version after the transition.
     pub to_version: String,
@@ -2571,42 +2958,46 @@ pub struct SoraServiceAuditEventV1 {
     pub service_manifest_hash: Hash,
     /// Container manifest hash bound to the transition.
     pub container_manifest_hash: Hash,
-    /// Optional governance transaction hash associated with the transition.
-    #[norito(default)]
+    /// Governance transaction hash; the wire key is explicitly null when absent.
+    #[norito(required)]
     pub governance_tx_hash: Option<Hash>,
-    /// Optional binding associated with this audit event.
-    #[norito(default)]
+    /// Binding associated with this event; the wire key is explicitly null when absent.
+    #[norito(required)]
     pub binding_name: Option<Name>,
-    /// Optional state key associated with this audit event.
-    #[norito(default)]
+    /// State key associated with this event; the wire key is explicitly null when absent.
+    #[norito(required)]
     pub state_key: Option<String>,
-    /// Optional service config entry associated with this audit event.
-    #[norito(default)]
+    /// Service config entry; the wire key is explicitly null when absent.
+    #[norito(required)]
     pub config_name: Option<String>,
-    /// Optional service secret entry associated with this audit event.
-    #[norito(default)]
+    /// Service secret entry; the wire key is explicitly null when absent.
+    #[norito(required)]
     pub secret_name: Option<String>,
-    /// Optional rollout handle associated with the transition.
-    #[norito(default)]
+    /// Rollout handle; the wire key is explicitly null when absent.
+    #[norito(required)]
     pub rollout_handle: Option<String>,
-    /// Optional decryption policy name associated with the event.
-    #[norito(default)]
+    /// Decryption policy name; the wire key is explicitly null when absent.
+    #[norito(required)]
     pub policy_name: Option<Name>,
-    /// Optional hash of the snapshotted decryption policy.
-    #[norito(default)]
+    /// Snapshotted policy hash; the wire key is explicitly null when absent.
+    #[norito(required)]
     pub policy_snapshot_hash: Option<Hash>,
-    /// Optional jurisdiction/compliance tag associated with the event.
-    #[norito(default)]
+    /// Jurisdiction/compliance tag; the wire key is explicitly null when absent.
+    #[norito(required)]
     pub jurisdiction_tag: Option<String>,
-    /// Optional consent-evidence commitment associated with the event.
-    #[norito(default)]
+    /// Consent-evidence commitment; the wire key is explicitly null when absent.
+    #[norito(required)]
     pub consent_evidence_hash: Option<Hash>,
-    /// Optional break-glass flag for disclosure events.
-    #[norito(default)]
+    /// Break-glass flag; the wire key is explicitly null when not applicable.
+    #[norito(required)]
     pub break_glass: Option<bool>,
-    /// Optional break-glass justification.
-    #[norito(default)]
+    /// Break-glass justification; the wire key is explicitly null when absent.
+    #[norito(required)]
     pub break_glass_reason: Option<String>,
+    /// Hosted-service reporting-epoch rollover payload; the wire key is
+    /// explicitly null for every other lifecycle action.
+    #[norito(required)]
+    pub lease_reporting_epoch_rollover: Option<SoraServiceLeaseReportingEpochRolloverV1>,
     /// Provenance signer that authorized the lifecycle action.
     pub signer: PublicKey,
 }
@@ -2618,7 +3009,8 @@ impl SoraServiceAuditEventV1 {
     pub fn validate(&self) -> Result<(), SoracloudManifestError> {
         self.validate_required_fields()?;
         self.validate_optional_fields()?;
-        self.validate_break_glass_fields()
+        self.validate_break_glass_fields()?;
+        self.validate_reporting_epoch_rollover()
     }
     fn validate_required_fields(&self) -> Result<(), SoracloudManifestError> {
         validate_schema_version(
@@ -2747,7 +3139,7 @@ impl SoraServiceAuditEventV1 {
             return Err(invalid_field(
                 "sora service audit event",
                 "break_glass_reason",
-                "must be omitted when break_glass=false",
+                "must be null when break_glass=false",
             ));
         }
         if self.break_glass == Some(true) && self.break_glass_reason.is_none() {
@@ -2759,11 +3151,66 @@ impl SoraServiceAuditEventV1 {
         }
         Ok(())
     }
+    fn validate_reporting_epoch_rollover(&self) -> Result<(), SoracloudManifestError> {
+        match (self.action, self.lease_reporting_epoch_rollover.as_ref()) {
+            (SoraServiceLifecycleActionV1::LeaseReportingEpochRollover, Some(rollover)) => {
+                rollover.validate()?;
+                if rollover.reporter_account_id.try_signatory() != Some(&self.signer) {
+                    return Err(invalid_field(
+                        "sora service audit event",
+                        "lease_reporting_epoch_rollover.reporter_account_id",
+                        "single-signatory reporter must match the audit signer",
+                    ));
+                }
+                if self.from_version.as_deref() != Some(self.to_version.as_str()) {
+                    return Err(invalid_field(
+                        "sora service audit event",
+                        "from_version",
+                        "reporting rollover must bind an unchanged deployment version",
+                    ));
+                }
+                if self.governance_tx_hash.is_some()
+                    || self.binding_name.is_some()
+                    || self.state_key.is_some()
+                    || self.config_name.is_some()
+                    || self.secret_name.is_some()
+                    || self.rollout_handle.is_some()
+                    || self.policy_name.is_some()
+                    || self.policy_snapshot_hash.is_some()
+                    || self.jurisdiction_tag.is_some()
+                    || self.consent_evidence_hash.is_some()
+                    || self.break_glass.is_some()
+                    || self.break_glass_reason.is_some()
+                {
+                    return Err(invalid_field(
+                        "sora service audit event",
+                        "lease_reporting_epoch_rollover",
+                        "reporting rollover must not carry fields from another lifecycle action",
+                    ));
+                }
+                Ok(())
+            }
+            (SoraServiceLifecycleActionV1::LeaseReportingEpochRollover, None) => {
+                Err(invalid_field(
+                    "sora service audit event",
+                    "lease_reporting_epoch_rollover",
+                    "must be present for LeaseReportingEpochRollover",
+                ))
+            }
+            (_, Some(_)) => Err(invalid_field(
+                "sora service audit event",
+                "lease_reporting_epoch_rollover",
+                "must be null for non-rollover lifecycle actions",
+            )),
+            (_, None) => Ok(()),
+        }
+    }
 }
 /// Runtime health status observed for a materialized service revision.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, IntoSchema, Default)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[cfg_attr(feature = "json", norito(tag = "health_status", content = "value"))]
+#[norito(deny_unknown_fields)]
 pub enum SoraServiceHealthStatusV1 {
     /// Revision is still hydrating bundles or replay state.
     Hydrating,
@@ -2778,6 +3225,7 @@ pub enum SoraServiceHealthStatusV1 {
 /// Authoritative runtime state for the active revision of a service.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[norito(deny_unknown_fields)]
 pub struct SoraServiceRuntimeStateV1 {
     /// Schema version; must equal [`SORA_SERVICE_RUNTIME_STATE_VERSION_V1`].
     pub schema_version: u16,
@@ -2791,13 +3239,13 @@ pub struct SoraServiceRuntimeStateV1 {
     pub load_factor_bps: u16,
     /// Active materialized bundle hash.
     pub materialized_bundle_hash: Hash,
-    /// Optional rollout handle for the active rollout.
-    #[norito(default)]
+    /// Active rollout handle; the wire key is explicitly null when absent.
+    #[norito(required)]
     pub rollout_handle: Option<String>,
     /// Pending ordered mailbox messages for the service.
     pub pending_mailbox_message_count: u32,
-    /// Optional last emitted runtime receipt identifier.
-    #[norito(default)]
+    /// Last emitted runtime receipt identifier; the wire key is explicitly null when absent.
+    #[norito(required)]
     pub last_receipt_id: Option<Hash>,
 }
 impl SoraServiceRuntimeStateV1 {
@@ -2851,6 +3299,7 @@ impl SoraServiceRuntimeStateV1 {
 /// Authoritative runtime state for one placed Inrou replica slot.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[norito(deny_unknown_fields)]
 pub struct SoraInrouReplicaRuntimeStateV1 {
     /// Schema version; must equal [`SORA_INROU_REPLICA_RUNTIME_STATE_VERSION_V1`].
     pub schema_version: u16,
@@ -2864,8 +3313,6 @@ pub struct SoraInrouReplicaRuntimeStateV1 {
     pub validator_account_id: AccountId,
     /// Peer identifier currently hosting the replica.
     pub peer_id: String,
-    /// Backend currently materializing the replica.
-    pub selected_backend: SoraInrouRuntimeBackendV1,
     /// Guest ISA currently materializing the replica.
     pub selected_guest_isa: SoraInrouGuestIsaV1,
     /// Current health classification for the placed replica.
@@ -2874,18 +3321,19 @@ pub struct SoraInrouReplicaRuntimeStateV1 {
     pub load_factor_bps: u16,
     /// Active materialized bundle hash.
     pub materialized_bundle_hash: Hash,
+    /// Hosted-service reporting epoch acknowledged before this replica serves.
+    pub reporting_epoch: u64,
     /// Total authoritative egress bytes accounted for the placed replica so far.
-    #[norito(default)]
     pub accounted_egress_bytes: u64,
     /// Pending ordered mailbox messages projected for the placed replica.
     pub pending_mailbox_message_count: u32,
-    /// Optional last emitted runtime receipt identifier.
-    #[norito(default)]
+    /// Last emitted runtime receipt identifier; the wire key is explicitly null when absent.
+    #[norito(required)]
     pub last_receipt_id: Option<Hash>,
     /// Timestamp when this replica state was last refreshed.
     pub updated_at_ms: u64,
     /// Human-readable last runtime error, when present.
-    #[norito(default)]
+    #[norito(required)]
     pub last_error: Option<String>,
 }
 impl SoraInrouReplicaRuntimeStateV1 {
@@ -2912,7 +3360,7 @@ impl SoraInrouReplicaRuntimeStateV1 {
                 "must be greater than zero",
             ));
         }
-        validate_nonblank_field("sora inrou replica runtime state", "peer_id", &self.peer_id)?;
+        validate_peer_id_field("sora inrou replica runtime state", &self.peer_id)?;
         if self.load_factor_bps > 10_000 {
             return Err(invalid_field(
                 "sora inrou replica runtime state",
@@ -2924,6 +3372,13 @@ impl SoraInrouReplicaRuntimeStateV1 {
             return Err(invalid_field(
                 "sora inrou replica runtime state",
                 "updated_at_ms",
+                "must be greater than zero",
+            ));
+        }
+        if self.reporting_epoch == 0 {
+            return Err(invalid_field(
+                "sora inrou replica runtime state",
+                "reporting_epoch",
                 "must be greater than zero",
             ));
         }
@@ -2945,6 +3400,7 @@ impl SoraInrouReplicaRuntimeStateV1 {
 /// Ordered asynchronous mailbox message used for replicated cross-service calls.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[norito(deny_unknown_fields)]
 pub struct SoraServiceMailboxMessageV1 {
     /// Schema version; must equal [`SORA_SERVICE_MAILBOX_MESSAGE_VERSION_V1`].
     pub schema_version: u16,
@@ -2967,7 +3423,6 @@ pub struct SoraServiceMailboxMessageV1 {
     /// Commitment over the opaque message payload.
     pub payload_commitment: Hash,
     /// Relative delivery delay requested by the source runtime.
-    #[norito(default)]
     pub delivery_delay_sequences: u32,
     /// Ledger-assigned ordered sequence at which the message was enqueued.
     ///
@@ -3081,6 +3536,7 @@ impl SoraServiceMailboxMessageV1 {
 /// Exact Inrou replica assignment that executed a Soracloud workload.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[norito(deny_unknown_fields)]
 pub struct SoraRuntimeInrouReplicaHostV1 {
     /// One-based replica slot in the active service placement.
     pub replica_slot: u16,
@@ -3092,6 +3548,7 @@ pub struct SoraRuntimeInrouReplicaHostV1 {
 /// Exact HF model-host assignment that executed a Soracloud workload.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[norito(deny_unknown_fields)]
 pub struct SoraRuntimeHfModelHostV1 {
     /// Authoritative HF placement identifier.
     pub placement_id: Hash,
@@ -3104,6 +3561,7 @@ pub struct SoraRuntimeHfModelHostV1 {
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[cfg_attr(feature = "json", norito(tag = "host_kind", content = "value"))]
+#[norito(deny_unknown_fields)]
 pub enum SoraRuntimeExecutionHostV1 {
     /// One placed Inrou replica assigned to the executing validator.
     InrouReplica(SoraRuntimeInrouReplicaHostV1),
@@ -3148,6 +3606,7 @@ impl SoraRuntimeExecutionHostV1 {
 /// Authoritative execution receipt emitted by the generic Soracloud runtime.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[norito(deny_unknown_fields)]
 pub struct SoraRuntimeReceiptV1 {
     /// Schema version; must equal [`SORA_RUNTIME_RECEIPT_VERSION_V1`].
     pub schema_version: u16,
@@ -3174,16 +3633,16 @@ pub struct SoraRuntimeReceiptV1 {
     /// before validating and persisting the receipt.
     pub emitted_sequence: u64,
     /// Exact active placement assignment that selected the executing host, when host-attributed.
-    #[norito(default)]
+    #[norito(required)]
     pub execution_host: Option<SoraRuntimeExecutionHostV1>,
     /// Optional mailbox message that triggered the execution.
-    #[norito(default)]
+    #[norito(required)]
     pub mailbox_message_id: Option<Hash>,
-    /// Optional journal artifact hash referenced by the receipt.
-    #[norito(default)]
+    /// Journal artifact hash; the wire key is explicitly null when absent.
+    #[norito(required)]
     pub journal_artifact_hash: Option<Hash>,
-    /// Optional checkpoint artifact hash referenced by the receipt.
-    #[norito(default)]
+    /// Checkpoint artifact hash; the wire key is explicitly null when absent.
+    #[norito(required)]
     pub checkpoint_artifact_hash: Option<Hash>,
 }
 impl SoraRuntimeReceiptV1 {

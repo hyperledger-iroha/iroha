@@ -6,7 +6,7 @@ use std::{ffi::OsString, fs};
 
 /// Failure before or after the no-replace commit boundary.
 #[derive(Debug)]
-pub(super) enum RootOwnedArtifactPublicationError {
+pub enum RootOwnedArtifactPublicationError {
     /// Publication did not cross the no-replace rename boundary.
     PreCommit(String),
     /// Rename succeeded, but durable or semantic confirmation failed.
@@ -50,7 +50,7 @@ impl RootOwnedArtifactPublicationError {
 
 /// Pinned destination for one root-owned, non-replaceable artifact.
 #[derive(Debug)]
-pub(super) struct RootOwnedNoReplaceArtifactPublicationTarget {
+pub struct RootOwnedNoReplaceArtifactPublicationTarget {
     path: PathBuf,
     label: &'static str,
     #[cfg(unix)]
@@ -126,7 +126,7 @@ fn run_bounded_macos_acl_command(
 
 #[cfg(target_os = "macos")]
 /// Reject a path carrying any macOS extended ACL entries.
-pub(super) fn require_no_macos_extended_acl(path: &Path, label: &str) -> Result<(), String> {
+pub fn require_no_macos_extended_acl(path: &Path, label: &str) -> Result<(), String> {
     let output = run_bounded_macos_acl_command("/bin/ls", "-ldeq", path, label)?;
     let suffix = output.stdout.strip_suffix(b"\n");
     if !output.stderr.is_empty() || suffix.is_none_or(|body| body.contains(&b'\n')) {

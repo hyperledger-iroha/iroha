@@ -234,7 +234,9 @@ pub fn insert_gov_proposal_for_test(
     let header = iroha_data_model::block::BlockHeader::new(next_height_u64, None, None, None, 0, 0);
     let mut block = state.block(header);
     let mut stx = block.transaction();
-    stx.world.put_governance_proposal(id, rec);
+    stx.world
+        .put_governance_proposal(id, rec)
+        .expect("query-test proposal must satisfy first-release JSON bounds");
     stx.apply();
     block.transactions.insert_block(HashSet::new(), next_height);
     block.commit().expect("commit test block");

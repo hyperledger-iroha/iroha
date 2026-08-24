@@ -1864,7 +1864,6 @@ impl TransactionGossiper {
                     messages,
                     signatures,
                     public_keys,
-                    [0; 32],
                     scratch,
                 )
             }
@@ -1924,7 +1923,6 @@ impl TransactionGossiper {
                         batch_messages,
                         batch_signatures,
                         batch_public_keys,
-                        [0; 32],
                         &mut scratch,
                     )
                     .map_or_else(|| (0, err.to_string()), |bad| bad)
@@ -3788,7 +3786,7 @@ mod tests {
     };
     use tempfile::{TempDir, tempdir};
     fn test_network_id() -> NetworkId {
-        "0000000000000000000000000000000000000000000000000000000000000001"
+        "hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
             .parse()
             .expect("valid default test network id")
     }
@@ -4149,7 +4147,6 @@ deferred_send_ttl: Duration::from_millis(defaults::network::DEFERRED_SEND_TTL_MS
             p2p_no_proxy: Vec::new(),
             p2p_proxy_tls_verify: true,
             p2p_proxy_tls_pinned_cert_der_base64: None,
-            scion: iroha_config::parameters::actual::ScionConfig::default(),
             quic_enabled: false,
             quic_datagrams_enabled: defaults::network::QUIC_DATAGRAMS_ENABLED,
             quic_datagram_max_payload_bytes: defaults::network::QUIC_DATAGRAM_MAX_PAYLOAD_BYTES.get(),
@@ -4242,7 +4239,9 @@ deferred_send_ttl: Duration::from_millis(defaults::network::DEFERRED_SEND_TTL_MS
             fsync_mode: FsyncMode::Batched,
             fsync_interval: defaults::kura::FSYNC_INTERVAL,
         };
-        let (kura, _) = Kura::new(&kura_cfg, &LaneGeometry::default()).expect("init kura");
+        let (kura, _) =
+            Kura::open_test_kura_with_configured_lane_config(&kura_cfg, &LaneGeometry::default())
+                .expect("init kura");
         let live_query = LiveQueryStore::start_test();
         let state = Arc::new(State::new_for_testing(world_with_alice(), kura, live_query));
         install_active_single_lane_nexus(state.as_ref());
@@ -4609,7 +4608,9 @@ deferred_send_ttl: Duration::from_millis(defaults::network::DEFERRED_SEND_TTL_MS
             fsync_mode: FsyncMode::Batched,
             fsync_interval: defaults::kura::FSYNC_INTERVAL,
         };
-        let (kura, _) = Kura::new(&kura_cfg, &LaneGeometry::default()).expect("init kura");
+        let (kura, _) =
+            Kura::open_test_kura_with_configured_lane_config(&kura_cfg, &LaneGeometry::default())
+                .expect("init kura");
         let live_query = LiveQueryStore::start_test();
         let state = Arc::new(State::new_for_testing(World::new(), kura, live_query));
         let queue = Arc::new(Queue::test(
@@ -4659,7 +4660,9 @@ deferred_send_ttl: Duration::from_millis(defaults::network::DEFERRED_SEND_TTL_MS
             fsync_mode: FsyncMode::Batched,
             fsync_interval: defaults::kura::FSYNC_INTERVAL,
         };
-        let (kura, _) = Kura::new(&kura_cfg, &LaneGeometry::default()).expect("init kura");
+        let (kura, _) =
+            Kura::open_test_kura_with_configured_lane_config(&kura_cfg, &LaneGeometry::default())
+                .expect("init kura");
         let live_query = LiveQueryStore::start_test();
         let state = Arc::new(State::new_for_testing(World::new(), kura, live_query));
         install_active_single_lane_nexus(state.as_ref());
@@ -4771,7 +4774,9 @@ deferred_send_ttl: Duration::from_millis(defaults::network::DEFERRED_SEND_TTL_MS
             fsync_mode: FsyncMode::Batched,
             fsync_interval: defaults::kura::FSYNC_INTERVAL,
         };
-        let (kura, _) = Kura::new(&kura_cfg, &LaneGeometry::default()).expect("init kura");
+        let (kura, _) =
+            Kura::open_test_kura_with_configured_lane_config(&kura_cfg, &LaneGeometry::default())
+                .expect("init kura");
         let live_query = LiveQueryStore::start_test();
         let state = Arc::new(State::new_for_testing(World::new(), kura, live_query));
         let queue = Arc::new(Queue::test(
@@ -5387,7 +5392,9 @@ deferred_send_ttl: Duration::from_millis(defaults::network::DEFERRED_SEND_TTL_MS
             fsync_mode: FsyncMode::Batched,
             fsync_interval: defaults::kura::FSYNC_INTERVAL,
         };
-        let (kura, _) = Kura::new(&kura_cfg, &LaneGeometry::default()).expect("init kura");
+        let (kura, _) =
+            Kura::open_test_kura_with_configured_lane_config(&kura_cfg, &LaneGeometry::default())
+                .expect("init kura");
         let live_query = LiveQueryStore::start_test();
         let state = Arc::new(State::new_for_testing(World::new(), kura, live_query));
         install_active_single_lane_nexus(state.as_ref());
@@ -5918,8 +5925,8 @@ deferred_send_ttl: Duration::from_millis(defaults::network::DEFERRED_SEND_TTL_MS
             ..iroha_config::parameters::actual::Nexus::default()
         };
         nexus.autoscale.enabled = true;
-        nexus.autoscale.min_lanes = NonZeroU32::new(1).expect("nonzero min lanes");
-        nexus.autoscale.max_lanes = NonZeroU32::new(2).expect("nonzero max lanes");
+        nexus.autoscale.min_lane_id = NonZeroU32::new(1).expect("nonzero min lanes");
+        nexus.autoscale.max_lane_id_exclusive = NonZeroU32::new(2).expect("nonzero max lanes");
         {
             let mut current = gossiper.state.nexus.write();
             *current = nexus;
@@ -6054,7 +6061,9 @@ deferred_send_ttl: Duration::from_millis(defaults::network::DEFERRED_SEND_TTL_MS
             fsync_mode: FsyncMode::Batched,
             fsync_interval: defaults::kura::FSYNC_INTERVAL,
         };
-        let (kura, _) = Kura::new(&kura_cfg, &LaneGeometry::default()).expect("init kura");
+        let (kura, _) =
+            Kura::open_test_kura_with_configured_lane_config(&kura_cfg, &LaneGeometry::default())
+                .expect("init kura");
         let live_query = LiveQueryStore::start_test();
         let state = Arc::new(State::new_for_testing(World::new(), kura, live_query));
         install_active_single_lane_nexus(state.as_ref());
@@ -6135,7 +6144,9 @@ deferred_send_ttl: Duration::from_millis(defaults::network::DEFERRED_SEND_TTL_MS
             fsync_mode: FsyncMode::Batched,
             fsync_interval: defaults::kura::FSYNC_INTERVAL,
         };
-        let (kura, _) = Kura::new(&kura_cfg, &LaneGeometry::default()).expect("init kura");
+        let (kura, _) =
+            Kura::open_test_kura_with_configured_lane_config(&kura_cfg, &LaneGeometry::default())
+                .expect("init kura");
         let live_query = LiveQueryStore::start_test();
         let state = Arc::new(State::new_for_testing(World::new(), kura, live_query));
         let mismatched_lane = LaneId::new(1);
@@ -6234,7 +6245,9 @@ deferred_send_ttl: Duration::from_millis(defaults::network::DEFERRED_SEND_TTL_MS
             fsync_mode: FsyncMode::Batched,
             fsync_interval: defaults::kura::FSYNC_INTERVAL,
         };
-        let (kura, _) = Kura::new(&kura_cfg, &LaneGeometry::default()).expect("init kura");
+        let (kura, _) =
+            Kura::open_test_kura_with_configured_lane_config(&kura_cfg, &LaneGeometry::default())
+                .expect("init kura");
         let live_query = LiveQueryStore::start_test();
         let state = Arc::new(State::new_for_testing(world_with_alice(), kura, live_query));
         let first_dataspace = DataSpaceId::new(7);

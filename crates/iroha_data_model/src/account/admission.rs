@@ -12,12 +12,7 @@ use iroha_primitives::{json::Json, numeric::Quantity};
 use iroha_schema::IntoSchema;
 use norito::codec::{Decode, Encode};
 use std::collections::BTreeMap;
-/// Legacy domain metadata key previously used for account admission policy payloads.
-///
-/// Account admission is now configured globally via
-/// [`AccountAdmissionPolicy::PARAMETER_ID_STR`], and this key is retained only for compatibility
-/// with external tooling that may still reference the literal.
-pub const ACCOUNT_ADMISSION_POLICY_METADATA_KEY: &str = "iroha:account_admission_policy";
+
 /// Default cap for the number of implicit accounts that may be created in a single transaction.
 pub const DEFAULT_MAX_IMPLICIT_ACCOUNT_CREATIONS_PER_TX: u32 = 16;
 /// Admission mode for implicit account creation.

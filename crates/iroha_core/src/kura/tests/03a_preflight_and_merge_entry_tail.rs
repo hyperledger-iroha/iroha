@@ -2,7 +2,9 @@
 fn restart_publishes_complete_carrier_temp_for_durable_block() {
     let dir = TempDir::new().expect("tempdir");
     let config = kura_config_for_dir(&dir, BLOCKS_IN_MEMORY);
-    let (kura, _) = Kura::new(&config, &RuntimeLaneConfig::default()).expect("initialize Kura");
+    let (kura, _) =
+        Kura::open_test_kura_with_configured_lane_config(&config, &RuntimeLaneConfig::default())
+            .expect("initialize Kura");
     let (carrier, entry) = store_genesis_and_build_merge_carrier(&kura, 1);
     let carrier_hash = carrier.hash();
     let entry_hash = entry.canonical_hash();
@@ -14,7 +16,8 @@ fn restart_publishes_complete_carrier_temp_for_durable_block() {
     fs::rename(&path, &temp_path).expect("simulate crash before carrier rename");
     drop(kura);
     let (reopened, _) =
-        Kura::new(&config, &RuntimeLaneConfig::default()).expect("recover carrier temp");
+        Kura::open_test_kura_with_configured_lane_config(&config, &RuntimeLaneConfig::default())
+            .expect("recover carrier temp");
     assert!(path.exists());
     assert!(!temp_path.exists());
     assert_eq!(
@@ -30,7 +33,11 @@ fn restart_rolls_back_uncommitted_merge_publication_suffixes() {
     for boundary in ["log", "carrier", "carrier_temp"] {
         let dir = TempDir::new().expect("tempdir");
         let config = kura_config_for_dir(&dir, BLOCKS_IN_MEMORY);
-        let (kura, _) = Kura::new(&config, &RuntimeLaneConfig::default()).expect("initialize Kura");
+        let (kura, _) = Kura::open_test_kura_with_configured_lane_config(
+            &config,
+            &RuntimeLaneConfig::default(),
+        )
+        .expect("initialize Kura");
         let (carrier, entry) = store_genesis_and_build_merge_carrier(&kura, 1);
         let record = MergeLedgerCarrierRecord::new(&entry, &carrier);
         kura.append_merge_entry(&entry)
@@ -50,8 +57,11 @@ fn restart_rolls_back_uncommitted_merge_publication_suffixes() {
             .expect("stage complete carrier temporary");
         }
         drop(kura);
-        let (reopened, _) = Kura::new(&config, &RuntimeLaneConfig::default())
-            .unwrap_or_else(|err| panic!("recover {boundary} boundary: {err}"));
+        let (reopened, _) = Kura::open_test_kura_with_configured_lane_config(
+            &config,
+            &RuntimeLaneConfig::default(),
+        )
+        .unwrap_or_else(|err| panic!("recover {boundary} boundary: {err}"));
         assert!(
             reopened
                 .merge_ledger_all_entries()
@@ -74,7 +84,11 @@ fn restart_rejects_torn_or_noncanonical_carrier_temporary() {
     for bytes in [vec![0xAA, 0xBB], vec![0; MERGE_CARRIER_MAX_BYTES + 1]] {
         let dir = TempDir::new().expect("tempdir");
         let config = kura_config_for_dir(&dir, BLOCKS_IN_MEMORY);
-        let (kura, _) = Kura::new(&config, &RuntimeLaneConfig::default()).expect("initialize Kura");
+        let (kura, _) = Kura::open_test_kura_with_configured_lane_config(
+            &config,
+            &RuntimeLaneConfig::default(),
+        )
+        .expect("initialize Kura");
         let (_carrier, entry) = store_genesis_and_build_merge_carrier(&kura, 1);
         kura.append_merge_entry(&entry)
             .expect("stage merge log frame");
@@ -87,7 +101,11 @@ fn restart_rejects_torn_or_noncanonical_carrier_temporary() {
         .expect("write malformed carrier temporary");
         drop(kura);
         assert!(
-            Kura::new(&config, &RuntimeLaneConfig::default()).is_err(),
+            Kura::open_test_kura_with_configured_lane_config(
+                &config,
+                &RuntimeLaneConfig::default()
+            )
+            .is_err(),
             "malformed carrier temporary must fail closed"
         );
     }

@@ -120,7 +120,6 @@ fn parallel_apply_matches_sequential_for_log_and_mint() {
         debug_trace_scheduler_inputs:
             iroha_config::parameters::defaults::pipeline::DEBUG_TRACE_SCHEDULER_INPUTS,
         debug_trace_tx_eval: iroha_config::parameters::defaults::pipeline::DEBUG_TRACE_TX_EVAL,
-        signature_batch_max: iroha_config::parameters::defaults::pipeline::SIGNATURE_BATCH_MAX,
         signature_batch_max_ed25519:
             iroha_config::parameters::defaults::pipeline::SIGNATURE_BATCH_MAX_ED25519,
         signature_batch_max_secp256k1:
@@ -200,7 +199,6 @@ fn parallel_apply_matches_sequential_for_log_and_mint() {
         debug_trace_scheduler_inputs:
             iroha_config::parameters::defaults::pipeline::DEBUG_TRACE_SCHEDULER_INPUTS,
         debug_trace_tx_eval: iroha_config::parameters::defaults::pipeline::DEBUG_TRACE_TX_EVAL,
-        signature_batch_max: iroha_config::parameters::defaults::pipeline::SIGNATURE_BATCH_MAX,
         signature_batch_max_ed25519:
             iroha_config::parameters::defaults::pipeline::SIGNATURE_BATCH_MAX_ED25519,
         signature_batch_max_secp256k1:

@@ -1,0 +1,168 @@
+{
+  "schema": "iroha.governance.parliament.api_fixture.v1",
+  "api_version": 1,
+  "routes": {
+    "attempt_draft": "/v1/gov/parliament/attempts/draft",
+    "attempt_read": "/v1/gov/parliament/attempts/{governance_attempt_id}",
+    "timed_ovn_casting_context_read": "/v1/gov/parliament/ballots/{ballot_attempt_id}/casting-context",
+    "timed_ovn_casting_proof": "/v1/gov/parliament/ballots/{ballot_attempt_id}/casting-proof",
+    "tle_release_context_read": "/v1/gov/parliament/ballots/{ballot_attempt_id}/release-context",
+    "tle_partial_release": "/v1/gov/parliament/ballots/{ballot_attempt_id}/partial-release",
+    "transition_draft": "/v1/gov/parliament/transitions/draft"
+  },
+  "wire_ids": {
+    "attempt_create": "iroha.governance.parliament.attempt.create.v1",
+    "transition_submit": "iroha.governance.parliament.transition.submit.v1"
+  },
+  "proposal_kinds": [
+    "DeployContract",
+    "RuntimeUpgrade",
+    "SccpRouteGovernance",
+    "ValidationFeePolicy",
+    "ValidationFeePayoutLifecycle",
+    "MusubiRegistryGovernance",
+    "SorafsProviderGovernance"
+  ],
+  "limits": {
+    "attempt_state_bytes": 16777216,
+    "timed_ovn_registration_record_bytes": 3624,
+    "timed_ovn_ballot_record_bytes": 2858,
+    "timed_ovn_corpus_entries": 1000,
+    "timed_ovn_casting_proof_response_bytes": 8388608,
+    "timed_ovn_casting_proof_finality_entries": 64
+  },
+  "timed_ovn_native_wallet": {
+    "bridge_abi": 23,
+    "sole_input_schema": "ParliamentTimedOvnCastingProofResponseV1",
+    "request_norito_schema": "iroha.torii.v1.parliament.timed_ovn_casting_proof.request",
+    "response_norito_schema": "iroha.torii.v1.parliament.timed_ovn_casting_proof.response",
+    "route": "/v1/gov/parliament/ballots/{ballot_attempt_id}/casting-proof",
+    "required_external_trust_anchor": ["network_id", "trusted_checkpoint_height", "trusted_checkpoint_context_id", "expected_ballot_attempt_id"],
+    "verification_order": ["canonical_response", "terminal_page", "checkpoint_finality_chain", "fixed_ordinary_write_witness", "casting_context_membership", "canonical_core_archive", "core_archive_replay", "exact_compact_binding", "seed_access"],
+    "archive_only_wallet_input": "forbidden"
+  },
+  "public_transitions": [
+    {"norito_index": 0, "norito_prefix_hex": "00", "json_tag": "EscalateRisk", "json_payload": "required", "event_kind_index": 0},
+    {"norito_index": 1, "norito_prefix_hex": "01", "json_tag": "CompleteQualification", "json_payload": "forbidden", "event_kind_index": 1},
+    {"norito_index": 2, "norito_prefix_hex": "02", "json_tag": "RegisterSortitionRequest", "json_payload": "required", "event_kind_index": 2},
+    {"norito_index": 3, "norito_prefix_hex": "03", "json_tag": "ConsumeSortitionPulseBatch", "json_payload": "required", "event_kind_index": 3},
+    {"norito_index": 4, "norito_prefix_hex": "04", "json_tag": "BeginInvitationAcceptance", "json_payload": "required", "event_kind_index": 4},
+    {"norito_index": 5, "norito_prefix_hex": "05", "json_tag": "FailBodyElectionNoRoster", "json_payload": "required", "event_kind_index": 5},
+    {"norito_index": 6, "norito_prefix_hex": "06", "json_tag": "SealBodyRoster", "json_payload": "required", "event_kind_index": 6},
+    {"norito_index": 7, "norito_prefix_hex": "07", "json_tag": "AdvanceBodyPhase", "json_payload": "required", "event_kind_index": 7},
+    {"norito_index": 8, "norito_prefix_hex": "08", "json_tag": "RecordAttemptAbsence", "json_payload": "required", "event_kind_index": 8},
+    {"norito_index": 9, "norito_prefix_hex": "09", "json_tag": "EndorsePublicFinding", "json_payload": "required", "event_kind_index": 9},
+    {"norito_index": 10, "norito_prefix_hex": "0a", "json_tag": "RegisterBallotAttempt", "json_payload": "required", "event_kind_index": 10},
+    {"norito_index": 11, "norito_prefix_hex": "0b", "json_tag": "CloseBallotRegistration", "json_payload": "required", "event_kind_index": 11},
+    {"norito_index": 12, "norito_prefix_hex": "0c", "json_tag": "FreezeBallotSurvivors", "json_payload": "required", "event_kind_index": 12},
+    {"norito_index": 13, "norito_prefix_hex": "0d", "json_tag": "FreezeTimedOvnCorpus", "json_payload": "required", "event_kind_index": 13},
+    {"norito_index": 14, "norito_prefix_hex": "0e", "json_tag": "BeginBallotOpeningBatch", "json_payload": "required", "event_kind_index": 14},
+    {"norito_index": 15, "norito_prefix_hex": "0f", "json_tag": "FailBallotNoResult", "json_payload": "required", "event_kind_index": 15},
+    {"norito_index": 16, "norito_prefix_hex": "10", "json_tag": "FinalizeOpenedBallot", "json_payload": "required", "event_kind_index": 16},
+    {"norito_index": 17, "norito_prefix_hex": "11", "json_tag": "RecordInvitationResponse", "json_payload": "required", "event_kind_index": 20},
+    {"norito_index": 18, "norito_prefix_hex": "12", "json_tag": "RegisterBallotParticipant", "json_payload": "required", "event_kind_index": 21},
+    {"norito_index": 19, "norito_prefix_hex": "13", "json_tag": "RecordBallotDropout", "json_payload": "required", "event_kind_index": 22},
+    {"norito_index": 20, "norito_prefix_hex": "14", "json_tag": "FailPublicFindingNoResult", "json_payload": "required", "event_kind_index": 23}
+  ],
+  "automatic_execution_outcomes": [
+    {"norito_index": 0, "norito_prefix_hex": "00", "json_tag": "Enacted", "json_payload": "forbidden", "event_kind": "MarkEnacted", "event_kind_index": 17},
+    {"norito_index": 1, "norito_prefix_hex": "01", "json_tag": "Superseded", "json_payload": "required", "event_kind": "MarkSuperseded", "event_kind_index": 18},
+    {"norito_index": 2, "norito_prefix_hex": "02", "json_tag": "ExecutionFailed", "json_payload": "required", "event_kind": "MarkExecutionFailed", "event_kind_index": 19}
+  ],
+  "digest_domains": {
+    "public_transition": "iroha.governance.parliament.lifecycle_transition.digest.v1",
+    "automatic_execution_outcome": "iroha.governance.parliament.automatic_execution_outcome.digest.v1"
+  },
+  "no_result_kinds": [
+    {"norito_index": 0, "json_tag": "PublicFindingQuorumUnreachable"},
+    {"norito_index": 1, "json_tag": "PublicFindingDeadlineExpired"},
+    {"norito_index": 2, "json_tag": "BallotRegistrationDeadlineExpired"},
+    {"norito_index": 3, "json_tag": "BallotSurvivorDeadlineExpired"},
+    {"norito_index": 4, "json_tag": "BallotCommitmentDeadlineExpired"},
+    {"norito_index": 5, "json_tag": "BallotReleasePulseUnavailable"},
+    {"norito_index": 6, "json_tag": "BallotOpeningDeadlineExpired"}
+  ],
+  "attempt_read_body_state": {
+    "json_fields": [
+      "body",
+      "body_instance_id",
+      "status",
+      "public_finding_opened_at_height",
+      "public_finding_phase_blocks",
+      "public_finding_deadline_height",
+      "no_result_kind",
+      "no_result_height"
+    ],
+    "ordering": "exact required_bodies order",
+    "deadline_semantics": "inclusive",
+    "hidden_ballot_projection": "lifecycle status and no-result class/height only; no registrations, records, roots, shares, or openings"
+  },
+  "tle_release_context": {
+    "authorized_status": "Opening",
+    "deadline_semantics": "inclusive",
+    "identity_digest": "sha256 of the exact threshold-session-framed release message",
+    "identity_payload": "lowercase hexadecimal canonical application identity payload",
+    "transcript_public_state_fields": ["version", "key_session_id", "network_id", "roster_hash", "committee_size", "threshold", "generator_h", "generator_v", "qualified_dealers", "qualified_dealer_commitments", "dkg_event_hash", "group_public_key", "public_shares", "transcript_hash"],
+    "forbidden_fields": ["registration_records", "dropout_participant_hashes", "survivor_participant_hashes", "ballot_records", "secret_share", "partial_releases", "individual_openings"]
+  },
+  "tle_partial_release": {
+    "request_body": "forbidden",
+    "auth": "canonical app-signed account request",
+    "response_fields": ["key_session_id", "identity_digest", "participant_index", "sigma", "proof_x", "proof_y", "z_s", "z_r", "z_u"],
+    "coordinator_contract": "fetch configured peers, independently validate every public transcript and partial proof, canonicalize by participant_index, combine a threshold subset, then locally sign and submit FinalizeOpenedBallot",
+    "forbidden_fields": ["secret_share", "provider_handle", "proof_nonce", "release_identity_override", "transcript_override"]
+  },
+  "certificate_result_roots": [
+    {"name": "public_finding_result_root", "bytes": 32, "zero_forbidden": true, "derivation": "exact result_root endorsed by authority-authenticated seated assignments and finalized automatically at quorum"},
+    {"name": "public_finding_endorsement_root", "bytes": 32, "zero_forbidden": true, "domain": "iroha.governance.parliament.public_finding_endorsement.root.v1", "preimage": ["governance_attempt_id", "body_instance_id", "result_root", "endorsing_assignments"]},
+    {"name": "private_ballot_result_root", "bytes": 32, "zero_forbidden": true, "domain": "iroha.governance.parliament.ballot_result.root.v1", "preimage": ["governance_attempt_id", "body_instance_id", "ballot_attempt_id", "opening_root", "tally", "outcome", "result_height"]},
+    {"name": "private_ballot_failure_root", "bytes": 32, "zero_forbidden": true, "domain": "iroha.governance.parliament.ballot_failure.root.v1", "preimage": ["governance_attempt_id", "ballot_attempt_id", "failure_kind", "failure_height"]},
+    {"name": "execution_failure_root", "bytes": 32, "zero_forbidden": true, "domain": "iroha.governance.parliament.execution_failure.root.v1", "preimage": ["certificate", "enactment_height"]},
+    {"name": "governance_certificate_id", "bytes": 32, "zero_forbidden": true, "domain": "iroha.governance.certificate.id.v1", "preimage": ["certificate"]}
+  ],
+  "certificate_body_binding": {
+    "norito_field_order": [
+      "body_instance_id",
+      "election_attempt_id",
+      "election_attempt_sequence",
+      "sortition_request_id",
+      "sortition_request",
+      "body",
+      "original_seats",
+      "beacon_session_id",
+      "beacon_pulse_id",
+      "roster_root",
+      "assignment_root",
+      "result_root",
+      "result_height",
+      "public_finding",
+      "ballot"
+    ],
+    "original_seats": {"minimum": 1, "immutable": true},
+    "public_nonbinding_body": {
+      "public_finding": "required",
+      "ballot": "forbidden",
+      "public_finding_norito_field_order": ["endorsement_root", "endorsing_assignments", "endorsements", "quorum"],
+      "endorsement_root_bytes": 32,
+      "endorsement_root_zero_forbidden": true,
+      "endorsing_assignments": "strictly increasing distinct nonzero assignment ids",
+      "endorsements": "endorsing_assignments.length == quorum",
+      "quorum": "ceil(2 * original_seats / 3)"
+    },
+    "private_jury": {
+      "public_finding": "forbidden",
+      "ballot": "required",
+      "original_seats": "ballot.tally.original_seats"
+    }
+  },
+  "negative_json_cases": [
+    {"name": "unknown_outer_field", "expected": "reject"},
+    {"name": "camel_case_attempt_id_alias", "expected": "reject"},
+    {"name": "unsupported_version", "value": 2, "expected": "reject"},
+    {"name": "unknown_transition_tag", "value": "PlainBallotFallback", "expected": "reject"},
+    {"name": "removed_construct_certificate_tag", "value": "ConstructCertificate", "expected": "reject"},
+    {"name": "removed_mark_enacted_tag", "value": "MarkEnacted", "expected": "reject"},
+    {"name": "removed_mark_superseded_tag", "value": "MarkSuperseded", "expected": "reject"},
+    {"name": "removed_mark_execution_failed_tag", "value": "MarkExecutionFailed", "expected": "reject"}
+  ]
+}

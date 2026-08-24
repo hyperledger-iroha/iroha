@@ -1,10 +1,10 @@
-//! VRF sortition helper for governance bodies (seeding + ranked alternates).
+//! Future-beacon sortition helper for governance bodies (seeding + ranked alternates).
 use iroha_crypto::blake2::{Blake2b512, Digest as _};
 use iroha_data_model::{NetworkId, account::AccountId};
-/// VRF draw result: ranked winners plus alternates (descending output; ties by account id).
+/// Beacon-derived draw result: ranked winners plus alternates (descending output; ties by account id).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Draw {
-    #[doc = "Selected members in descending VRF output order."]
+    #[doc = "Selected members in descending beacon-derived score order."]
     pub members: Vec<AccountId>,
     #[doc = "Backup candidates to replace members that decline or are ineligible."]
     pub alternates: Vec<AccountId>,
@@ -44,7 +44,7 @@ mod tests {
         assert_ne!(first, second);
     }
 }
-/// Build VRF input = domain || seed || `encode(account_id)`.
+/// Build sortition input = domain || seed || `encode(account_id)`.
 pub fn build_input(domain: &[u8], seed: &[u8; 64], account_id: &AccountId) -> Vec<u8> {
     use iroha_data_model::Encode;
     let account_bytes = Encode::encode(account_id);

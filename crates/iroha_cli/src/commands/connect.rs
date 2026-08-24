@@ -1,18 +1,18 @@
 //! Connect diagnostics helpers (`iroha connect queue inspect`).
+use crate::{
+    CliOutputFormat, Run, RunContext,
+    json_macros::{JsonDeserialize, JsonSerialize},
+};
+use base64::Engine as _;
+use clap::{Args, Subcommand, ValueEnum};
+use eyre::{Context, Result, eyre};
+use norito::json;
 use std::{
     collections::BTreeMap,
     fmt::{self, Write as _},
     fs,
     io::{BufRead, BufReader},
     path::{Path, PathBuf},
-};
-use base64::Engine as _;
-use clap::{Args, Subcommand, ValueEnum};
-use eyre::{Context, Result, eyre};
-use norito::json;
-use crate::{
-    CliOutputFormat, Run, RunContext,
-    json_macros::{JsonDeserialize, JsonSerialize},
 };
 #[derive(Debug, Subcommand)]
 pub enum Command {

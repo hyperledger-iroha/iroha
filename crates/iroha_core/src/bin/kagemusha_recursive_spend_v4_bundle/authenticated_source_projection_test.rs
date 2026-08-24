@@ -21,8 +21,8 @@ fn authenticated_source_projection_decodes_once_and_binds_the_exact_closure() {
         untracked_file_count: 0,
         untracked_path_mode_blob_oid_manifest: Vec::new(),
         untracked_path_mode_blob_oid_manifest_sha256: empty_sha256,
-        ignored_cargo_lock_size_bytes: 1,
-        ignored_cargo_lock_sha256: [0x22; 32],
+        tracked_cargo_lock_size_bytes: 1,
+        tracked_cargo_lock_sha256: [0x22; 32],
         combined_source_fingerprint_sha256: combined_sha256,
     };
     closure.validate().expect("valid clean closure fixture");
@@ -30,8 +30,8 @@ fn authenticated_source_projection_decodes_once_and_binds_the_exact_closure() {
         concat!(
             "{{\"base_commit\":\"{}\",",
             "\"combined_source_fingerprint_sha256\":\"{}\",",
-            "\"ignored_cargo_lock_sha256\":\"{}\",",
-            "\"ignored_cargo_lock_size_bytes\":1,",
+            "\"tracked_cargo_lock_sha256\":\"{}\",",
+            "\"tracked_cargo_lock_size_bytes\":1,",
             "\"schema\":\"iroha.reviewed-source-closure.v1\",",
             "\"source_commit\":\"{}\",\"source_repo_dirty\":false,",
             "\"source_tree_sha256\":\"{}\",",
@@ -42,7 +42,7 @@ fn authenticated_source_projection_decodes_once_and_binds_the_exact_closure() {
         ),
         commit,
         hex::encode(combined_sha256),
-        hex::encode(closure.ignored_cargo_lock_sha256),
+        hex::encode(closure.tracked_cargo_lock_sha256),
         commit,
         source_tree_hex,
         hex::encode(empty_sha256),

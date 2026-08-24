@@ -51,6 +51,11 @@ struct FastRequiredOptional {
     optional: Option<u32>,
 }
 #[derive(Debug, PartialEq, Eq, norito_derive::FastJson)]
+struct FastRenamedRequired {
+    #[norito(rename = "wire_value")]
+    value: u32,
+}
+#[derive(Debug, PartialEq, Eq, norito_derive::FastJson)]
 struct FastRequiredWithFlatten {
     #[norito(required)]
     optional: Option<u32>,
@@ -90,6 +95,18 @@ fn assert_missing_field(error: impl core::fmt::Display, field: &str) {
         message.contains(&format!("missing field `{field}`")),
         "unexpected error: {message}"
     );
+}
+fn assert_structured_missing_field(error: Error, expected: &str) {
+    match error {
+        Error::MissingField { field } => assert_eq!(field, expected),
+        other => panic!("expected missing field `{expected}`, got {other:?}"),
+    }
+}
+fn assert_fast_structured_missing_field(error: norito::Error, expected: &str) {
+    match error {
+        norito::Error::Json(Error::MissingField { field }) => assert_eq!(field, expected),
+        other => panic!("expected missing field `{expected}`, got {other:?}"),
+    }
 }
 fn assert_unknown_field(error: Error, expected: &str) {
     match error {
@@ -132,6 +149,46 @@ fn strict_struct_keeps_optional_absence_and_explicit_null_semantics() {
     assert_eq!(
         json::from_slice::<StrictOptional>(br#"{"optional":null}"#).expect("explicit null option"),
         StrictOptional { optional: None }
+    );
+}
+#[test]
+fn derived_missing_fields_remain_structured_on_every_object_decode_path() {
+    assert_structured_missing_field(
+        json::from_slice::<StrictInner>(br#"{}"#).expect_err("direct omission must reject"),
+        "value",
+    );
+    let empty: json::Value = json::from_slice(br#"{}"#).expect("empty JSON object");
+    assert_structured_missing_field(
+        json::from_value::<StrictInner>(empty).expect_err("value omission must reject"),
+        "value",
+    );
+    assert_structured_missing_field(
+        json::from_str::<RequiredWithFlatten>(r#"{"label":"known"}"#)
+            .expect_err("flatten omission must reject"),
+        "optional",
+    );
+    assert_fast_structured_missing_field(
+        decode_fast::<FastRequiredOptional>(r#"{}"#).expect_err("fast omission must reject"),
+        "optional",
+    );
+    assert_fast_structured_missing_field(
+        decode_fast::<FastRenamedRequired>(r#"{}"#).expect_err("renamed fast omission must reject"),
+        "wire_value",
+    );
+    assert_fast_structured_missing_field(
+        decode_fast::<FastRequiredWithFlatten>(r#"{"label":"known"}"#)
+            .expect_err("fast flatten omission must reject"),
+        "optional",
+    );
+    assert_structured_missing_field(
+        json::from_str::<RequiredEvent>(r#"{"kind":"Record","payload":{}}"#)
+            .expect_err("enum omission must reject"),
+        "optional",
+    );
+    assert_fast_structured_missing_field(
+        decode_fast::<FastRequiredEvent>(r#"{"kind":"Record","payload":{}}"#)
+            .expect_err("fast enum omission must reject"),
+        "optional",
     );
 }
 #[test]

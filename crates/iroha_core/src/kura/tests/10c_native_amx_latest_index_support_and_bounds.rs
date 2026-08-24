@@ -2,8 +2,9 @@
 fn native_amx_finality_gate_rejects_same_depth_manifest_count_substitution() {
     let temp_dir = TempDir::new().expect("same-depth Native manifest Kura directory");
     let config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
-    let (kura, _) = Kura::new(&config, &RuntimeLaneConfig::default())
-        .expect("initialize same-depth Native manifest Kura");
+    let (kura, _) =
+        Kura::open_test_kura_with_configured_lane_config(&config, &RuntimeLaneConfig::default())
+            .expect("initialize same-depth Native manifest Kura");
     let entry = kura
         .lane_storage_entry(LaneId::SINGLE)
         .expect("same-depth Native manifest primary lane entry");
@@ -710,7 +711,8 @@ fn native_amx_latest_index_startup_rebuild_rejects_unbacked_corruption() {
     let temp_dir = TempDir::new().expect("temporary Kura directory");
     let config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
     let lane_config = RuntimeLaneConfig::default();
-    let (kura, _) = Kura::new(&config, &lane_config).expect("initialize Kura");
+    let (kura, _) = Kura::open_test_kura_with_configured_lane_config(&config, &lane_config)
+        .expect("initialize Kura");
     let entry = kura
         .lane_storage_entry(LaneId::SINGLE)
         .expect("primary lane storage entry");
@@ -722,7 +724,7 @@ fn native_amx_latest_index_startup_rebuild_rejects_unbacked_corruption() {
         vec![0x5A; NATIVE_AMX_PARTICIPANT_RECEIPTS_LATEST_INDEX_MAX_BYTES + 1],
     ] {
         fs::write(&latest_path, corrupt).expect("stage corrupt derived latest index");
-        let error = match Kura::new(&config, &lane_config) {
+        let error = match Kura::open_test_kura_with_configured_lane_config(&config, &lane_config) {
             Ok(_) => panic!("startup must reject an unbacked corrupt latest index"),
             Err(error) => error,
         };
@@ -739,7 +741,8 @@ fn native_amx_latest_index_startup_rebuild_rejects_unbacked_corruption() {
         let temp_dir = TempDir::new().expect("temporary Kura directory");
         let config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
         let lane_config = RuntimeLaneConfig::default();
-        let (kura, _) = Kura::new(&config, &lane_config).expect("initialize Kura");
+        let (kura, _) = Kura::open_test_kura_with_configured_lane_config(&config, &lane_config)
+            .expect("initialize Kura");
         let entry = kura
             .lane_storage_entry(LaneId::SINGLE)
             .expect("primary lane storage entry");
@@ -774,7 +777,8 @@ fn native_amx_latest_index_startup_rejects_legacy_v1_filename() {
     let temp_dir = TempDir::new().expect("temporary Kura directory");
     let config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
     let lane_config = RuntimeLaneConfig::default();
-    let (kura, _) = Kura::new(&config, &lane_config).expect("initialize Kura");
+    let (kura, _) = Kura::open_test_kura_with_configured_lane_config(&config, &lane_config)
+        .expect("initialize Kura");
     let entry = kura
         .lane_storage_entry(LaneId::SINGLE)
         .expect("primary lane storage entry");
@@ -783,7 +787,7 @@ fn native_amx_latest_index_startup_rejects_legacy_v1_filename() {
     let legacy_path = evidence_directory.join(legacy_name);
     fs::write(&legacy_path, [0xA5]).expect("stage unsupported legacy latest pointer");
     drop(kura);
-    let error = match Kura::new(&config, &lane_config) {
+    let error = match Kura::open_test_kura_with_configured_lane_config(&config, &lane_config) {
         Ok(_) => panic!("startup must reject a legacy Native latest-index filename"),
         Err(error) => error,
     };
@@ -804,7 +808,8 @@ fn native_amx_latest_index_startup_rejects_oversized_append_indexes_before_scann
         config.lane_history_retention =
             NonZeroUsize::new(2).expect("small Native history test bound");
         let lane_config = RuntimeLaneConfig::default();
-        let (kura, _) = Kura::new(&config, &lane_config).expect("initialize Kura");
+        let (kura, _) = Kura::open_test_kura_with_configured_lane_config(&config, &lane_config)
+            .expect("initialize Kura");
         let entry = kura
             .lane_storage_entry(LaneId::SINGLE)
             .expect("primary lane storage entry");
@@ -827,7 +832,7 @@ fn native_amx_latest_index_startup_rejects_oversized_append_indexes_before_scann
             .expect("stage excess standalone Native record");
         }
         drop(kura);
-        let error = match Kura::new(&config, &lane_config) {
+        let error = match Kura::open_test_kura_with_configured_lane_config(&config, &lane_config) {
             Ok(_) => panic!("startup must reject excess {artifact_kind} records"),
             Err(error) => error,
         };
@@ -841,8 +846,8 @@ fn native_amx_latest_index_startup_rejects_oversized_append_indexes_before_scann
     config.lane_history_retention =
         NonZeroUsize::new(2).expect("small Native compaction retention");
     let lane_config = RuntimeLaneConfig::default();
-    let (kura, _) =
-        Kura::new(&config, &lane_config).expect("initialize bounded Native compaction Kura");
+    let (kura, _) = Kura::open_test_kura_with_configured_lane_config(&config, &lane_config)
+        .expect("initialize bounded Native compaction Kura");
     let entry = kura
         .lane_storage_entry(LaneId::SINGLE)
         .expect("bounded Native compaction primary lane entry");
@@ -855,7 +860,7 @@ fn native_amx_latest_index_startup_rejects_oversized_append_indexes_before_scann
     let oldest_receipt =
         Kura::native_amx_participant_receipt_path_for_entry(&entry, &kura.store_root, 1);
     drop(kura);
-    let (reopened, _) = Kura::new(&config, &lane_config)
+    let (reopened, _) = Kura::open_test_kura_with_configured_lane_config(&config, &lane_config)
         .expect("retention plus one fully valid pair must compact at startup");
     let reopened_entry = reopened
         .lane_storage_entry(LaneId::SINGLE)
@@ -921,8 +926,9 @@ fn native_amx_latest_index_startup_rejects_oversized_append_indexes_before_scann
         .kura_total_disk_usage_bytes()
         .expect("scan exact Native compaction usage before idempotent reopen");
     drop(reopened);
-    let (reopened_again, _) = Kura::new(&config, &lane_config)
-        .expect("Native compaction startup repair must be idempotent");
+    let (reopened_again, _) =
+        Kura::open_test_kura_with_configured_lane_config(&config, &lane_config)
+            .expect("Native compaction startup repair must be idempotent");
     let reopened_again_entry = reopened_again
         .lane_storage_entry(LaneId::SINGLE)
         .expect("twice-reopened bounded Native compaction lane entry");
@@ -974,7 +980,8 @@ fn native_amx_latest_index_startup_rejects_oversized_aggregate_data_before_scann
         config.lane_history_retention =
             NonZeroUsize::new(2).expect("small Native history test bound");
         let lane_config = RuntimeLaneConfig::default();
-        let (kura, _) = Kura::new(&config, &lane_config).expect("initialize Kura");
+        let (kura, _) = Kura::open_test_kura_with_configured_lane_config(&config, &lane_config)
+            .expect("initialize Kura");
         let entry = kura
             .lane_storage_entry(LaneId::SINGLE)
             .expect("primary lane storage entry");
@@ -999,7 +1006,7 @@ fn native_amx_latest_index_startup_rejects_oversized_aggregate_data_before_scann
                 .set_len(hostile_len)
                 .expect("size sparse hostile Native evidence file");
         }
-        let error = match Kura::new(&config, &lane_config) {
+        let error = match Kura::open_test_kura_with_configured_lane_config(&config, &lane_config) {
             Ok(_) => panic!("startup must reject oversized {artifact_kind} aggregate data"),
             Err(error) => error,
         };
@@ -1015,7 +1022,8 @@ fn native_amx_latest_index_startup_truncates_unindexed_append_tail() {
         let temp_dir = TempDir::new().expect("temporary Kura directory");
         let config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
         let lane_config = RuntimeLaneConfig::default();
-        let (kura, _) = Kura::new(&config, &lane_config).expect("initialize Kura");
+        let (kura, _) = Kura::open_test_kura_with_configured_lane_config(&config, &lane_config)
+            .expect("initialize Kura");
         let entry = kura
             .lane_storage_entry(LaneId::SINGLE)
             .expect("primary lane storage entry");
@@ -1038,8 +1046,9 @@ fn native_amx_latest_index_startup_truncates_unindexed_append_tail() {
             .sync_all()
             .expect("sync Native publication temporary");
         drop(kura);
-        let (_reopened, _) = Kura::new(&config, &lane_config)
-            .expect("startup must mechanically recover a duplicate publication temporary");
+        let (_reopened, _) =
+            Kura::open_test_kura_with_configured_lane_config(&config, &lane_config)
+                .expect("startup must mechanically recover a duplicate publication temporary");
         assert_eq!(
             fs::read(&data_path).expect("read recovered Native evidence"),
             stable_bytes,
@@ -1063,8 +1072,8 @@ fn native_amx_latest_index_startup_truncates_unindexed_append_tail() {
         config.lane_history_retention =
             NonZeroUsize::new(2).expect("small Native prune-journal retention");
         let lane_config = RuntimeLaneConfig::default();
-        let (kura, _) =
-            Kura::new(&config, &lane_config).expect("initialize Native prune-journal Kura");
+        let (kura, _) = Kura::open_test_kura_with_configured_lane_config(&config, &lane_config)
+            .expect("initialize Native prune-journal Kura");
         let entry = kura
             .lane_storage_entry(LaneId::SINGLE)
             .expect("Native prune-journal primary lane entry");
@@ -1190,7 +1199,7 @@ fn native_amx_latest_index_startup_truncates_unindexed_append_tail() {
         }
         sync_dir(evidence_directory).expect("sync staged Native prune-journal crash boundary");
         drop(kura);
-        let (reopened, _) = Kura::new(&config, &lane_config)
+        let (reopened, _) = Kura::open_test_kura_with_configured_lane_config(&config, &lane_config)
             .unwrap_or_else(|error| panic!("{crash_stage} recovery failed: {error}"));
         let reopened_entry = reopened
             .lane_storage_entry(LaneId::SINGLE)
@@ -1243,8 +1252,9 @@ fn native_amx_latest_index_startup_truncates_unindexed_append_tail() {
             "{crash_stage} recovery must reconcile exact disk accounting"
         );
         drop(reopened);
-        let (reopened_again, _) = Kura::new(&config, &lane_config)
-            .unwrap_or_else(|error| panic!("{crash_stage} idempotent reopen failed: {error}"));
+        let (reopened_again, _) =
+            Kura::open_test_kura_with_configured_lane_config(&config, &lane_config)
+                .unwrap_or_else(|error| panic!("{crash_stage} idempotent reopen failed: {error}"));
         assert_eq!(
             reopened_again
                 .disk_usage_bytes()
@@ -1269,8 +1279,8 @@ fn native_amx_latest_index_startup_truncates_unindexed_append_tail() {
     config.lane_history_retention =
         NonZeroUsize::new(2).expect("latest-protected Native prune retention");
     let lane_config = RuntimeLaneConfig::default();
-    let (kura, _) =
-        Kura::new(&config, &lane_config).expect("initialize latest-protected Native prune Kura");
+    let (kura, _) = Kura::open_test_kura_with_configured_lane_config(&config, &lane_config)
+        .expect("initialize latest-protected Native prune Kura");
     let entry = kura
         .lane_storage_entry(LaneId::SINGLE)
         .expect("latest-protected Native prune lane entry");
@@ -1340,7 +1350,7 @@ fn native_amx_latest_index_startup_truncates_unindexed_append_tail() {
     )
     .expect("stage latest-targeting Native prune intent");
     drop(kura);
-    let error = match Kura::new(&config, &lane_config) {
+    let error = match Kura::open_test_kura_with_configured_lane_config(&config, &lane_config) {
         Ok(_) => panic!("startup must reject a prune intent targeting every retained pair"),
         Err(error) => error,
     };
@@ -1374,8 +1384,8 @@ fn native_amx_prune_intent_v2_temporary_cannot_delete_all_pointerless_pairs() {
     let temp_dir = TempDir::new().expect("hostile temporary Native prune Kura directory");
     let config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
     let lane_config = RuntimeLaneConfig::default();
-    let (kura, _) =
-        Kura::new(&config, &lane_config).expect("initialize hostile temporary Native prune Kura");
+    let (kura, _) = Kura::open_test_kura_with_configured_lane_config(&config, &lane_config)
+        .expect("initialize hostile temporary Native prune Kura");
     let entry = kura
         .lane_storage_entry(LaneId::SINGLE)
         .expect("hostile temporary Native prune lane entry");
@@ -1404,7 +1414,7 @@ fn native_amx_prune_intent_v2_temporary_cannot_delete_all_pointerless_pairs() {
         .map(|path| fs::read(path).expect("snapshot retained Native evidence"))
         .collect::<Vec<_>>();
     drop(kura);
-    let error = match Kura::new(&config, &lane_config) {
+    let error = match Kura::open_test_kura_with_configured_lane_config(&config, &lane_config) {
         Ok(_) => panic!("temporary V2 intent must not delete every pointerless pair"),
         Err(error) => error,
     };
@@ -1441,7 +1451,7 @@ fn native_amx_prune_intent_v2_requires_exact_protected_pair_and_metadata_join() 
         let temp_dir = TempDir::new().expect("protected Native prune damage directory");
         let config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
         let lane_config = RuntimeLaneConfig::default();
-        let (kura, _) = Kura::new(&config, &lane_config)
+        let (kura, _) = Kura::open_test_kura_with_configured_lane_config(&config, &lane_config)
             .expect("initialize protected Native prune damage Kura");
         let entry = kura
             .lane_storage_entry(LaneId::SINGLE)
@@ -1520,7 +1530,7 @@ fn native_amx_prune_intent_v2_requires_exact_protected_pair_and_metadata_join() 
         }
         sync_dir(&evidence_directory).expect("sync protected Native prune damage");
         drop(kura);
-        let error = match Kura::new(&config, &lane_config) {
+        let error = match Kura::open_test_kura_with_configured_lane_config(&config, &lane_config) {
             Ok(_) => panic!("{damage} must block Native prune recovery"),
             Err(error) => error,
         };
@@ -1546,7 +1556,8 @@ fn native_amx_latest_index_startup_leaves_missing_evidence_repair_pending() {
         let temp_dir = TempDir::new().expect("temporary Kura directory");
         let config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
         let lane_config = RuntimeLaneConfig::default();
-        let (kura, _) = Kura::new(&config, &lane_config).expect("initialize Kura");
+        let (kura, _) = Kura::open_test_kura_with_configured_lane_config(&config, &lane_config)
+            .expect("initialize Kura");
         let entry = kura
             .lane_storage_entry(LaneId::SINGLE)
             .expect("primary lane storage entry");
@@ -1670,7 +1681,7 @@ fn native_amx_latest_index_startup_leaves_missing_evidence_repair_pending() {
                 .expect("remove interrupted standalone Native receipt");
         }
         drop(kura);
-        let (reopened, _) = Kura::new(&config, &lane_config)
+        let (reopened, _) = Kura::open_test_kura_with_configured_lane_config(&config, &lane_config)
             .expect("missing structurally valid Native evidence must remain repair-pending");
         let reopened_entry = reopened
             .lane_storage_entry(LaneId::SINGLE)
@@ -1701,7 +1712,8 @@ fn native_amx_latest_index_startup_leaves_missing_evidence_repair_pending() {
     let temp_dir = TempDir::new().expect("temporary strict-removal Kura directory");
     let config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
     let lane_config = RuntimeLaneConfig::default();
-    let (kura, _) = Kura::new(&config, &lane_config).expect("initialize strict-removal Kura");
+    let (kura, _) = Kura::open_test_kura_with_configured_lane_config(&config, &lane_config)
+        .expect("initialize strict-removal Kura");
     let entry = kura
         .lane_storage_entry(LaneId::SINGLE)
         .expect("strict-removal primary lane storage entry");

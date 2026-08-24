@@ -209,6 +209,55 @@ def test_current_rust_contract_artifact_has_complete_unique_owner() -> None:
         assert "--rustc" not in command
 
 
+def test_cbsi_offline_fixture_has_closed_unique_staging_owner() -> None:
+    output = "fixtures/offline/cbsi_interop_contract.json"
+    manifest = tomllib.loads(
+        (ROOT / "generated-files.toml").read_text(encoding="utf-8")
+    )
+    owners = [entry for entry in manifest["generated"] if output in entry["outputs"]]
+
+    assert len(owners) == 1
+    owner = owners[0]
+    assert owner["name"] == "cbsi-offline-interop-fixture"
+    assert owner["kind"] == "file"
+    assert owner["outputs"] == [output]
+    assert owner["generator_sources"] == [
+        "crates/iroha_data_model/src/bin/cbsi_offline_vectors.rs"
+    ]
+    assert set(owner["inputs"]) == {
+        "Cargo.lock",
+        "Cargo.toml",
+        "crates/iroha_crypto/src/**/*.rs",
+        "crates/iroha_data_model/Cargo.toml",
+        "crates/iroha_data_model/src/**/*.rs",
+        "crates/iroha_primitives/src/**/*.rs",
+        "crates/norito/src/**/*.rs",
+        "rust-toolchain.toml",
+    }
+
+    generator = owner["generator"]
+    assert "cbsi_offline_vectors" in generator
+    assert "--output" in generator
+    assert "IROHA_CBSI_OFFLINE_FIXTURE_STAGE" in generator
+    assert "$PWD" not in generator
+    assert output not in generator
+
+    check = owner["check"]
+    assert "cbsi_offline_vectors" in check
+    assert "--check" in check
+    assert f'--output "$PWD/{output}"' in check
+    assert "IROHA_CBSI_OFFLINE_FIXTURE_STAGE" not in check
+
+    for command in (generator, check):
+        assert command.startswith("cargo run ")
+        assert "--locked" in command
+        assert "--offline" in command
+        assert "--jobs 1" in command
+        assert "-p iroha_data_model" in command
+        assert "--features dev-tools,test-fixtures,transparent_api" in command
+        assert "--bin cbsi_offline_vectors" in command
+
+
 def test_nexus_connect_transfer_fixture_has_closed_unique_staging_owner() -> None:
     output = "fixtures/sdk/nexus_connect_transfer_v1.json"
     manifest = tomllib.loads(

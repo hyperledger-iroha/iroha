@@ -48,6 +48,7 @@ def validate_candidate_stage_manifest_v2(
     stage_sha256: str,
     source_commit: str,
     source_tree_sha256: str,
+    reviewed_source_closure_descriptor_sha256: str | None = None,
     verify_entry_digests: bool = True,
 ) -> dict[str, Any]:
     """Verify the canonical stage manifest and every one of its 45 files.
@@ -56,6 +57,15 @@ def validate_candidate_stage_manifest_v2(
     authenticate every byte against the returned catalog while copying it. The
     default remains the full promotion-grade validation path.
     """
+
+    if reviewed_source_closure_descriptor_sha256 is not None and (
+        not isinstance(reviewed_source_closure_descriptor_sha256, str)
+        or not _SHA256_HEX_RE.fullmatch(reviewed_source_closure_descriptor_sha256)
+        or reviewed_source_closure_descriptor_sha256 == "0" * 64
+    ):
+        raise ValueError(
+            "reviewed source-closure descriptor digest must be non-zero lowercase SHA-256"
+        )
 
     def reject_duplicate_pairs(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
         result: dict[str, Any] = {}
@@ -373,7 +383,7 @@ def validate_candidate_stage_manifest_v2(
         "qualified_candidate_sha256": qualified_candidate_sha256,
         "source_commit": source_commit,
         "source_tree_sha256": source_tree_sha256,
-        "bridge_abi_version": 22,
+        "bridge_abi_version": 23,
         "artifact_count": len(contract.artifact_file_names),
         "topup_finality_roster_file_name": "topup-finality-roster-v4.norito",
     }
@@ -393,6 +403,15 @@ def validate_candidate_stage_manifest_v2(
             or value == "0" * 64
         ):
             raise ValueError(f"candidate validation report {key} is invalid")
+    if (
+        reviewed_source_closure_descriptor_sha256 is not None
+        and validation_report.get("reviewed_source_closure_descriptor_sha256")
+        != reviewed_source_closure_descriptor_sha256
+    ):
+        raise ValueError(
+            "candidate validation report reviewed source-closure descriptor digest "
+            "does not match its explicit pin"
+        )
     if not isinstance(validation_report.get("source_repo_dirty"), bool):
         raise ValueError("candidate validation report source_repo_dirty must be boolean")
     generation = validation_report.get("generation")

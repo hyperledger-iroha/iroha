@@ -20,7 +20,7 @@ import org.hyperledger.iroha.sdk.norito.NoritoHeader
 import org.hyperledger.iroha.sdk.norito.SchemaHash
 
 /**
- * Native bridge ABI 22 for Kagemusha ABI-21/V4 artifact streaming and capabilities.
+ * Native bridge ABI 23 for Kagemusha ABI-21/V4 artifact streaming and capabilities.
  *
  * This is the sole first-release offline-cash surface. It authenticates the opaque eight-file proof
  * artifact set and validates exact typed request/payment/acknowledgement and proof-bound membership
@@ -53,7 +53,7 @@ class KagemushaRecursiveSpendProver private constructor() {
     }
 
     companion object {
-        const val V4_REQUIRED_NATIVE_BRIDGE_ABI_VERSION: Int = 22
+        const val V4_REQUIRED_NATIVE_BRIDGE_ABI_VERSION: Int = 23
         const val REQUIRED_NATIVE_BRIDGE_ABI_VERSION: Int = V4_REQUIRED_NATIVE_BRIDGE_ABI_VERSION
         /** Mandatory sender-final peer-cash handoff/finality contract. */
         const val CASH_HANDOFF_CAPABILITY_V1: String = "cash_handoff_v1"
@@ -77,7 +77,9 @@ class KagemushaRecursiveSpendProver private constructor() {
         const val MAX_ARTIFACT_CHUNK_BYTES: Int = 1024 * 1024
         const val MAX_TRUSTED_RELEASE_POLICY_BYTES: Int = 64 * 1024
         const val MAX_RELEASE_ATTESTATION_BYTES: Int = 1024 * 1024
+        const val MAX_INTERNAL_VALIDATION_RECEIPT_BYTES: Int = 1024 * 1024
         const val MAX_RELEASE_EVIDENCE_BYTES: Int = 16 * 1024 * 1024
+        const val MAX_CRYPTOGRAPHIC_REVIEW_BYTES: Int = 1024 * 1024
         const val MAX_PROMOTION_RECORD_BYTES: Int = 1024 * 1024
         const val MAX_PEER_TEXT_ENVELOPE_BYTES: Int = 12 * 1024
         const val MAX_PEER_TEXT_ARCHIVE_BYTES: Int =
@@ -246,11 +248,6 @@ class KagemushaRecursiveSpendProver private constructor() {
         @JvmStatic
         fun decodeRecipientReceiveOfferV2(archive: ByteArray): RecipientReceiveOfferV2 =
             RecipientReceiveOfferV2(archive).also(::projectRecipientReceiveOfferV2)
-
-        /** Restore an exact persisted readiness archive and force native canonical validation. */
-        @JvmStatic
-        fun decodeReadiness(archive: ByteArray): Readiness =
-            Readiness(archive).also(::projectReadiness)
 
         @JvmStatic
         fun decodePeerPayment(archive: ByteArray): PeerPayment = PeerPayment(archive)
@@ -605,46 +602,6 @@ class KagemushaRecursiveSpendProver private constructor() {
                 serverTime,
                 finalizedTopUp,
                 rejection,
-            )
-        }
-
-        /** Decode the authoritative, snapshot-bound Torii Kagemusha capability response. */
-        @JvmStatic
-        fun projectReadiness(readiness: Readiness): ReadinessProjection {
-            requireArtifactBridge()
-            val fields = nativeProjectReadinessV4(readiness.noritoEncoded())
-            check(fields.size >= 17) { "native Kagemusha readiness projection returned invalid fields" }
-            val blockerCount = integer(fields[16], "blockerCount")
-            check(blockerCount >= 0 && fields.size == 17 + blockerCount * 2) {
-                "native Kagemusha readiness projection returned invalid blockers"
-            }
-            val blockers = ArrayList<ReadinessBlocker>(blockerCount)
-            repeat(blockerCount) { index ->
-                blockers.add(
-                    ReadinessBlocker(
-                        canonicalText(fields[17 + index * 2], "blockerCode"),
-                        canonicalText(fields[18 + index * 2], "blockerMessage"),
-                    ),
-                )
-            }
-            return ReadinessProjection(
-                cashHandoffCapability = canonicalText(fields[0], "cashHandoffCapability"),
-                requiredBridgeAbiVersion = integer(fields[1], "requiredBridgeAbiVersion"),
-                maximumHops = integer(fields[2], "maximumHops"),
-                assetDefinitionId = canonicalText(fields[3], "assetDefinitionId"),
-                assetScale = fields[4].takeIf { it.isNotEmpty() }?.let { integer(it, "assetScale") },
-                evaluatedBlockHeight = longInteger(fields[5], "evaluatedBlockHeight"),
-                evaluatedBlockHash = requireDigest(fields[6], "evaluatedBlockHash"),
-                proofBackendAvailable = bool(fields[7], "proofBackendAvailable"),
-                recursiveLineageSupported = bool(fields[8], "recursiveLineageSupported"),
-                ready = bool(fields[9], "ready"),
-                transferVerifier = activeVerifier(fields[10]),
-                topUpShieldVerifier = activeVerifier(fields[11]),
-                unshieldVerifier = activeVerifier(fields[12]),
-                recursiveStepEqVerifier = activeVerifier(fields[13]),
-                recursiveStepEpVerifier = activeVerifier(fields[14]),
-                artifactSet = authenticatedArtifactSet(fields[15]),
-                blockers = blockers,
             )
         }
 
@@ -2143,41 +2100,6 @@ class KagemushaRecursiveSpendProver private constructor() {
             return text
         }
 
-        private fun activeVerifier(archive: ByteArray): ActiveVerifier? {
-            if (archive.isEmpty()) return null
-            val fields = nativeProjectActiveVerifierV2(archive)
-            requireFieldCount(fields, 9, "active verifier projection")
-            return ActiveVerifier(
-                backend = canonicalText(fields[0], "verifierBackend"),
-                name = canonicalText(fields[1], "verifierName"),
-                version = integer(fields[2], "verifierVersion"),
-                circuitId = canonicalText(fields[3], "verifierCircuitId"),
-                commitment = requireDigest(fields[4], "verifierCommitment"),
-                publicInputsSchemaHash = requireDigest(fields[5], "publicInputsSchemaHash"),
-                maximumProofBytes = integer(fields[6], "maximumProofBytes"),
-                activationHeight = longInteger(fields[7], "activationHeight"),
-                withdrawalHeight = fields[8].takeIf { it.isNotEmpty() }
-                    ?.let { longInteger(it, "withdrawalHeight") },
-            )
-        }
-
-        private fun authenticatedArtifactSet(archive: ByteArray): AuthenticatedArtifactSet? {
-            if (archive.isEmpty()) return null
-            val fields = nativeProjectAuthenticatedArtifactSetV4(archive)
-            requireFieldCount(fields, 8, "authenticated artifact-set projection")
-            return AuthenticatedArtifactSet(
-                generation = canonicalText(fields[0], "artifactGeneration"),
-                manifestSha256 = requireDigest(fields[1], "artifactManifestSha256"),
-                releasePolicySha256 = requireDigest(fields[2], "artifactReleasePolicySha256"),
-                releaseAttestationSha256 =
-                    requireDigest(fields[3], "artifactReleaseAttestationSha256"),
-                activationHeight = longInteger(fields[4], "artifactActivationHeight"),
-                withdrawalHeight = longInteger(fields[5], "artifactWithdrawalHeight"),
-                maximumProofBytes = integer(fields[6], "artifactMaximumProofBytes"),
-                assetScale = integer(fields[7], "artifactAssetScale"),
-            )
-        }
-
         private fun bool(value: ByteArray, field: String): Boolean {
             check(value.size == 1 && (value[0] == 0.toByte() || value[0] == 1.toByte())) {
                 "native Kagemusha $field is invalid"
@@ -2355,6 +2277,7 @@ class KagemushaRecursiveSpendProver private constructor() {
             manifestSha256: ByteArray,
             trustedPolicyNorito: ByteArray,
             releaseAttestationNorito: ByteArray,
+            internalValidationReceiptNorito: ByteArray,
             benchmarkEvidence: ByteArray,
             cryptographicReview: ByteArray,
             promotionRecordNorito: ByteArray,
@@ -2438,9 +2361,6 @@ class KagemushaRecursiveSpendProver private constructor() {
         @JvmStatic private external fun nativePrepareAcknowledgementV2(request: ByteArray, payment: ByteArray, acceptedAtMilliseconds: Long): Array<ByteArray>
         @JvmStatic private external fun nativeCreateAcknowledgementV2(payload: ByteArray, signature: ByteArray, request: ByteArray, payment: ByteArray): ByteArray
         @JvmStatic private external fun nativeVerifyAcknowledgementV2(acknowledgement: ByteArray, request: ByteArray, payment: ByteArray): Array<ByteArray>
-        @JvmStatic private external fun nativeProjectReadinessV4(readiness: ByteArray): Array<ByteArray>
-        @JvmStatic private external fun nativeProjectAuthenticatedArtifactSetV4(artifactSet: ByteArray): Array<ByteArray>
-        @JvmStatic private external fun nativeProjectActiveVerifierV2(verifier: ByteArray): Array<ByteArray>
         @JvmStatic private external fun nativePrepareAuthorizationV2(authority: ByteArray, chainDiscriminant: Int, deviceId: ByteArray, assetDefinitionId: ByteArray, operationId: ByteArray, issuedAtMilliseconds: Long, expiresAtMilliseconds: Long, nonce: ByteArray, payloadDigest: ByteArray, registrationHash: ByteArray, hardwareAssertionPlatform: ByteArray): Array<ByteArray>
         @JvmStatic private external fun nativeFinalizeHardwareAuthorizationV2(preparation: ByteArray, authenticatorData: ByteArray, signatureDer: ByteArray): Array<ByteArray>
         @JvmStatic private external fun nativeFinalizeIosAppAttestAuthorizationV2(preparation: ByteArray, assertionObject: ByteArray): Array<ByteArray>
@@ -3837,39 +3757,30 @@ class KagemushaRecursiveSpendProver private constructor() {
 
     /** Asset-neutral offline protocol capability implemented by every app-api node. */
     class OfflineStatus internal constructor(
-        val mandatory: Boolean,
         val cashHandoffCapability: String,
         val requiredBridgeAbiVersion: Int,
         val maximumHops: Int,
         val ready: Boolean,
-        val assets: List<Any?>,
-        val blockers: List<ReadinessBlocker>,
     ) {
         init {
-            require(!mandatory) { "mandatory must be false for universal offline capability" }
             require(cashHandoffCapability == CASH_HANDOFF_CAPABILITY_V1) {
                 "cashHandoffCapability must be the exact cash_handoff_v1 contract"
             }
             require(requiredBridgeAbiVersion == REQUIRED_NATIVE_BRIDGE_ABI_VERSION) {
-                "requiredBridgeAbiVersion must be 22"
+                "requiredBridgeAbiVersion must be 23"
             }
             require(maximumHops == MAXIMUM_PEER_HOPS) {
                 "maximumHops must match the cash_handoff_v1 bound"
             }
             require(ready) { "ready must be true for universal offline capability" }
-            require(assets.isEmpty()) { "assets must be empty because capability is asset-neutral" }
-            require(blockers.isEmpty()) { "blockers must be empty for universal offline capability" }
         }
 
         internal companion object {
             private val fields = setOf(
-                "mandatory",
                 "cash_handoff_capability",
                 "required_bridge_abi_version",
                 "max_hops",
                 "ready",
-                "assets",
-                "blockers",
             )
 
             fun decode(payload: ByteArray): OfflineStatus {
@@ -3878,28 +3789,17 @@ class KagemushaRecursiveSpendProver private constructor() {
                 check(parsed.keys == fields) {
                     "offline capability response must contain exactly the universal fields"
                 }
-                val mandatory = parsed["mandatory"] as? Boolean
-                    ?: error("offline capability mandatory must be a boolean")
                 val capability = parsed["cash_handoff_capability"] as? String
                     ?: error("offline capability cash_handoff_capability must be a string")
                 val abi = exactInt(parsed["required_bridge_abi_version"], "required_bridge_abi_version")
                 val hops = exactInt(parsed["max_hops"], "max_hops")
                 val ready = parsed["ready"] as? Boolean
                     ?: error("offline capability ready must be a boolean")
-                val assets = parsed["assets"] as? List<*>
-                    ?: error("offline capability assets must be an array")
-                val blockers = parsed["blockers"] as? List<*>
-                    ?: error("offline capability blockers must be an array")
-                check(assets.isEmpty()) { "offline capability assets must be empty" }
-                check(blockers.isEmpty()) { "offline capability blockers must be empty" }
                 return OfflineStatus(
-                    mandatory = mandatory,
                     cashHandoffCapability = capability,
                     requiredBridgeAbiVersion = abi,
                     maximumHops = hops,
                     ready = ready,
-                    assets = emptyList(),
-                    blockers = emptyList(),
                 )
             }
 
@@ -3910,169 +3810,6 @@ class KagemushaRecursiveSpendProver private constructor() {
                 return value.toInt()
             }
         }
-    }
-
-    /** Legacy command-specific artifact diagnostics; not a discovery response. */
-    class Readiness internal constructor(archive: ByteArray) : CanonicalArchive(
-        archive,
-        "OfflineReadiness",
-        "readiness",
-        MAX_TORII_RESPONSE_BYTES,
-    )
-
-    class ActiveVerifier internal constructor(
-        val backend: String,
-        val name: String,
-        val version: Int,
-        val circuitId: String,
-        commitment: ByteArray,
-        publicInputsSchemaHash: ByteArray,
-        val maximumProofBytes: Int,
-        val activationHeight: Long,
-        val withdrawalHeight: Long?,
-    ) {
-        private val commitmentValue = requireDigest(commitment, "verifierCommitment")
-        private val publicInputsSchemaHashValue =
-            requireDigest(publicInputsSchemaHash, "publicInputsSchemaHash")
-
-        fun commitment(): ByteArray = commitmentValue.copyOf()
-
-        fun publicInputsSchemaHash(): ByteArray = publicInputsSchemaHashValue.copyOf()
-
-        fun isActiveAt(blockHeight: Long): Boolean =
-            blockHeight >= activationHeight &&
-                (withdrawalHeight == null || blockHeight < withdrawalHeight)
-    }
-
-    /** Authenticated ABI-21 V4 release identity selected at the readiness snapshot. */
-    class AuthenticatedArtifactSet internal constructor(
-        val generation: String,
-        manifestSha256: ByteArray,
-        releasePolicySha256: ByteArray,
-        releaseAttestationSha256: ByteArray,
-        val activationHeight: Long,
-        val withdrawalHeight: Long,
-        val maximumProofBytes: Int,
-        val assetScale: Int,
-    ) {
-        private val manifestSha256Value = requireDigest(manifestSha256, "artifactManifestSha256")
-        private val releasePolicySha256Value =
-            requireDigest(releasePolicySha256, "artifactReleasePolicySha256")
-        private val releaseAttestationSha256Value =
-            requireDigest(releaseAttestationSha256, "artifactReleaseAttestationSha256")
-
-        init {
-            val asciiAlphanumeric: (Char) -> Boolean = { character ->
-                character in 'a'..'z' || character in 'A'..'Z' || character in '0'..'9'
-            }
-            require(
-                generation.length in 1..128 &&
-                    asciiAlphanumeric(generation.first()) &&
-                    asciiAlphanumeric(generation.last()) &&
-                    generation.all { character ->
-                        asciiAlphanumeric(character) || character == '.' ||
-                            character == '_' || character == '-'
-                    },
-            ) { "artifactGeneration must be a portable V4 identifier" }
-            val basename = generation.substringBefore('.').lowercase()
-            require(
-                basename !in setOf("con", "prn", "aux", "nul") &&
-                    !(basename.length == 4 &&
-                        basename.substring(0, 3) in setOf("com", "lpt") &&
-                        basename[3] in '1'..'9'),
-            ) { "artifactGeneration must not use a Windows reserved basename" }
-            require(
-                !manifestSha256Value.contentEquals(releasePolicySha256Value) &&
-                    !manifestSha256Value.contentEquals(releaseAttestationSha256Value) &&
-                    !releasePolicySha256Value.contentEquals(releaseAttestationSha256Value),
-            ) { "authenticated artifact digests must be pairwise distinct" }
-            require(activationHeight > 0 && withdrawalHeight > activationHeight) {
-                "authenticated artifact activation window is invalid"
-            }
-            require(maximumProofBytes in 1..MAXIMUM_RECURSIVE_PROOF_PAIR_BYTES_V4) {
-                "artifactMaximumProofBytes exceeds the ABI-21 V4 release limit"
-            }
-            require(assetScale in 0..KagemushaScaledAmount.MAXIMUM_SCALE) {
-                "artifactAssetScale exceeds the offline payment limit"
-            }
-        }
-
-        fun manifestSha256(): ByteArray = manifestSha256Value.copyOf()
-
-        fun releasePolicySha256(): ByteArray = releasePolicySha256Value.copyOf()
-
-        fun releaseAttestationSha256(): ByteArray = releaseAttestationSha256Value.copyOf()
-
-        fun isActiveAt(blockHeight: Long): Boolean =
-            blockHeight >= activationHeight && blockHeight < withdrawalHeight
-    }
-
-    class ReadinessBlocker(val code: String, val message: String)
-
-    class ReadinessProjection internal constructor(
-        val cashHandoffCapability: String,
-        val requiredBridgeAbiVersion: Int,
-        val maximumHops: Int,
-        val assetDefinitionId: String,
-        val assetScale: Int?,
-        val evaluatedBlockHeight: Long,
-        evaluatedBlockHash: ByteArray,
-        val proofBackendAvailable: Boolean,
-        val recursiveLineageSupported: Boolean,
-        val ready: Boolean,
-        val transferVerifier: ActiveVerifier?,
-        val topUpShieldVerifier: ActiveVerifier?,
-        val unshieldVerifier: ActiveVerifier?,
-        val recursiveStepEqVerifier: ActiveVerifier?,
-        val recursiveStepEpVerifier: ActiveVerifier?,
-        val artifactSet: AuthenticatedArtifactSet?,
-        val blockers: List<ReadinessBlocker>,
-    ) {
-        private val evaluatedBlockHashValue = requireDigest(evaluatedBlockHash, "evaluatedBlockHash")
-
-        init {
-            require(cashHandoffCapability == CASH_HANDOFF_CAPABILITY_V1) {
-                "cashHandoffCapability must be the exact cash_handoff_v1 contract"
-            }
-        }
-
-        val bridgeCompatible: Boolean
-            get() = requiredBridgeAbiVersion == REQUIRED_NATIVE_BRIDGE_ABI_VERSION
-
-        /** Every role-specific verifier is present and active at the same committed snapshot. */
-        val allVerifiersActive: Boolean
-            get() = listOf(
-                transferVerifier,
-                topUpShieldVerifier,
-                unshieldVerifier,
-                recursiveStepEqVerifier,
-                recursiveStepEpVerifier,
-            ).all { verifier -> verifier?.isActiveAt(evaluatedBlockHeight) == true }
-
-        /** Chain-side recursive artifact/verifier set readiness at the evaluated snapshot. */
-        val chainArtifactSetReady: Boolean
-            get() = proofBackendAvailable && artifactSet?.isActiveAt(evaluatedBlockHeight) == true &&
-                recursiveStepEqVerifier?.isActiveAt(evaluatedBlockHeight) == true &&
-                recursiveStepEpVerifier?.isActiveAt(evaluatedBlockHeight) == true
-
-        /** Whether native holds the exact manifest authenticated by this Torii snapshot. */
-        val localArtifactSetMatches: Boolean
-            get() {
-                val expected = artifactSet?.manifestSha256() ?: return false
-                val installed = installedArtifactManifestSha256V4() ?: return false
-                return installed.contentEquals(expected)
-            }
-
-        /** Complete fail-closed wallet decision for the exact Torii-authenticated release. */
-        val offlineReady: Boolean
-            get() = ready && cashHandoffCapability == CASH_HANDOFF_CAPABILITY_V1 &&
-                recursiveLineageSupported && bridgeCompatible &&
-                chainArtifactSetReady && allVerifiersActive && assetScale != null &&
-                assetScale in 0..KagemushaScaledAmount.MAXIMUM_SCALE &&
-                evaluatedBlockHeight > 0 && maximumHops == MAXIMUM_PEER_HOPS &&
-                isProofBackendAvailable() && localArtifactSetMatches && blockers.isEmpty()
-
-        fun evaluatedBlockHash(): ByteArray = evaluatedBlockHashValue.copyOf()
     }
 
     class OperationReference internal constructor(archive: ByteArray) : CanonicalArchive(
@@ -4128,7 +3865,7 @@ class KagemushaRecursiveSpendProver private constructor() {
         private val localSigningContext: LocalSigningContext,
     ) {
         companion object {
-            const val READINESS_PATH: String = "/v1/offline/readiness"
+            const val CAPABILITY_PATH: String = "/v1/offline/readiness"
             const val TOP_UP_PATH: String = "/v1/offline/top-up"
             const val REDEEM_PATH: String = "/v1/offline/redeem"
             const val OPERATIONS_PATH: String = "/v1/offline/operations"
@@ -4170,7 +3907,7 @@ class KagemushaRecursiveSpendProver private constructor() {
             return execute(
                 TransportRequest.builder()
                     .setMethod("GET")
-                    .setUri(URI.create("$baseUri$READINESS_PATH"))
+                    .setUri(URI.create("$baseUri$CAPABILITY_PATH"))
                     .addHeader("Accept", JSON_MEDIA_TYPE)
                     .setMaximumResponseBytes(MAX_TORII_RESPONSE_BYTES.toLong())
                     .build(),
@@ -4361,13 +4098,14 @@ class KagemushaRecursiveSpendProver private constructor() {
      * Locally trusted material required to authenticate one published Kagemusha release.
      *
      * The policy must be provisioned from the deployment trust root, not copied from the
-     * downloaded release. Native verifies signer-role thresholds and hashes both evidence files
-     * before validating the candidate-bound promotion record and consuming any finalized artifact
-     * handle.
+     * downloaded release. Native authenticates the runner-signed internal-validation receipt,
+     * verifies signer-role thresholds, and hashes both external evidence files before validating
+     * the candidate-bound promotion record and consuming any finalized artifact handle.
      */
     class ReleaseAuthentication(
         trustedPolicyNorito: ByteArray,
         releaseAttestationNorito: ByteArray,
+        internalValidationReceiptNorito: ByteArray,
         benchmarkEvidence: ByteArray,
         cryptographicReview: ByteArray,
         promotionRecordNorito: ByteArray,
@@ -4382,6 +4120,11 @@ class KagemushaRecursiveSpendProver private constructor() {
             "releaseAttestationNorito",
             MAX_RELEASE_ATTESTATION_BYTES,
         )
+        internal val internalValidationReceiptNorito = requireBoundedBytes(
+            internalValidationReceiptNorito,
+            "internalValidationReceiptNorito",
+            MAX_INTERNAL_VALIDATION_RECEIPT_BYTES,
+        )
         internal val benchmarkEvidence = requireBoundedBytes(
             benchmarkEvidence,
             "benchmarkEvidence",
@@ -4390,7 +4133,7 @@ class KagemushaRecursiveSpendProver private constructor() {
         internal val cryptographicReview = requireBoundedBytes(
             cryptographicReview,
             "cryptographicReview",
-            MAX_RELEASE_EVIDENCE_BYTES,
+            MAX_CRYPTOGRAPHIC_REVIEW_BYTES,
         )
         internal val promotionRecordNorito = requireBoundedBytes(
             promotionRecordNorito,
@@ -4410,6 +4153,8 @@ class KagemushaRecursiveSpendProver private constructor() {
         private val trustedPolicyNorito = releaseAuthentication.trustedPolicyNorito.copyOf()
         private val releaseAttestationNorito =
             releaseAuthentication.releaseAttestationNorito.copyOf()
+        private val internalValidationReceiptNorito =
+            releaseAuthentication.internalValidationReceiptNorito.copyOf()
         private val benchmarkEvidence = releaseAuthentication.benchmarkEvidence.copyOf()
         private val cryptographicReview = releaseAuthentication.cryptographicReview.copyOf()
         private val promotionRecordNorito = releaseAuthentication.promotionRecordNorito.copyOf()
@@ -4459,6 +4204,7 @@ class KagemushaRecursiveSpendProver private constructor() {
                             manifestSha256,
                             trustedPolicyNorito,
                             releaseAttestationNorito,
+                            internalValidationReceiptNorito,
                             benchmarkEvidence,
                             cryptographicReview,
                             promotionRecordNorito,

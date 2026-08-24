@@ -1723,26 +1723,15 @@ final class TxBuilderTests: XCTestCase {
         XCTAssertEqual(normalized.norito, swift.norito)
     }
 
-    func testGovernanceWindowAndDeployAbiAreExactByConstruction() throws {
-        let fullRange = try GovernanceWindow(lower: 0, upper: UInt64.max)
-        XCTAssertEqual(fullRange.lower, 0)
-        XCTAssertEqual(fullRange.upper, UInt64.max)
-
-        XCTAssertThrowsError(try GovernanceWindow(lower: 2, upper: 1)) { error in
-            XCTAssertEqual(
-                error as? TransactionInputError,
-                .invalidGovernanceWindow(lower: 2, upper: 1)
-            )
-        }
-
-        for abiVersion in ["", "01", "2", " 1", "1 "] {
+    func testGovernanceDeployTypedFieldsAreExactByConstruction() throws {
+        for abiVersion: UInt16 in [0, 2, .max] {
             XCTAssertThrowsError(
                 try ProposeDeployContractRequest(
                     networkId: Self.fixtureNetworkId,
                     authority: "authority",
                     contractAddress: Self.fixtureGovernanceContractAddress,
-                    codeHashHex: String(repeating: "11", count: 32),
-                    abiHashHex: String(repeating: "22", count: 32),
+                    codeHash: Data(repeating: 0x11, count: 32),
+                    abiHash: Data(repeating: 0x22, count: 32),
                     abiVersion: abiVersion,
                     feePayment: .authority(chargeLimits: [], gasLimit: nil)
                 )
@@ -1750,6 +1739,23 @@ final class TxBuilderTests: XCTestCase {
                 XCTAssertEqual(
                     error as? TransactionInputError,
                     .invalidGovernanceAbiVersion(abiVersion)
+                )
+            }
+        }
+        for length in [0, 31, 33] {
+            XCTAssertThrowsError(
+                try ProposeDeployContractRequest(
+                    networkId: Self.fixtureNetworkId,
+                    authority: "authority",
+                    contractAddress: Self.fixtureGovernanceContractAddress,
+                    codeHash: Data(repeating: 0x11, count: length),
+                    abiHash: Data(repeating: 0x22, count: 32),
+                    feePayment: .authority(chargeLimits: [], gasLimit: nil)
+                )
+            ) { error in
+                XCTAssertEqual(
+                    error as? TransactionInputError,
+                    .invalidGovernanceHashLength(field: "codeHash", actual: length)
                 )
             }
         }
@@ -1765,15 +1771,16 @@ final class TxBuilderTests: XCTestCase {
         let authority = AccountId.make(publicKey: keypair.publicKey)
         let codeHash = Data(repeating: 0x11, count: 32)
         let abiHash = Data(repeating: 0x22, count: 32)
-        let window = try GovernanceWindow(lower: 4, upper: 8)
+        let provenance = ToriiContractManifestProvenance(
+            signer: "ed25519:public",
+            signature: "ed25519:signature"
+        )
         let request = try ProposeDeployContractRequest(networkId: Self.fixtureNetworkId,
                                                        authority: authority,
                                                        contractAddress: Self.fixtureGovernanceContractAddress,
-                                                       codeHashHex: hexEncoded(codeHash),
-                                                       abiHashHex: hexEncoded(abiHash),
-                                                       abiVersion: "1",
-                                                       window: window,
-                                                       mode: .plain,
+                                                       codeHash: codeHash,
+                                                       abiHash: abiHash,
+                                                       manifestProvenance: provenance,
                                                        feePayment: .authority(chargeLimits: [], gasLimit: nil),
                                                        ttlMs: 20)
 
@@ -1787,11 +1794,10 @@ final class TxBuilderTests: XCTestCase {
             creationTimeMs: Self.fixtureCreationTimeMs,
             ttlMs: request.ttlMs,
             contractAddress: request.contractAddress,
-            codeHashHex: request.codeHashHex,
-            abiHashHex: request.abiHashHex,
+            codeHash: request.codeHash,
+            abiHash: request.abiHash,
             abiVersion: request.abiVersion,
-            window: request.window.map { ($0.lower, $0.upper) },
-            modeCode: request.mode?.rawValue,
+            manifestProvenance: request.manifestProvenance,
             feePaymentJSON: try request.feePayment.canonicalJSONData(),
             privateKey: keypair.privateKeyBytes
         ) else {
@@ -2001,11 +2007,8 @@ final class TxBuilderTests: XCTestCase {
         let request = try ProposeDeployContractRequest(networkId: Self.fixtureNetworkId,
                                                        authority: authority,
                                                        contractAddress: Self.fixtureGovernanceContractAddress,
-                                                       codeHashHex: String(repeating: "aa", count: 32),
-                                                       abiHashHex: String(repeating: "bb", count: 32),
-                                                       abiVersion: "1",
-                                                       window: GovernanceWindow(lower: 1, upper: 5),
-                                                       mode: .zk,
+                                                       codeHash: Data(repeating: 0xAA, count: 32),
+                                                       abiHash: Data(repeating: 0xBB, count: 32),
                                                        feePayment: .authority(chargeLimits: [], gasLimit: nil),
                                                        ttlMs: nil)
         let signingKey = try SigningKey.ed25519(privateKey: keypair.privateKeyBytes)

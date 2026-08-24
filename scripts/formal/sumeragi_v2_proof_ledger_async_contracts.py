@@ -4412,12 +4412,7 @@ def _acyclic_liveness_debt_topology_errors(formal_dir: Path) -> list[str]:
     """Keep retained-lock proof leaves strictly below the async debt shard."""
 
     vocabulary_module = "SumeragiV2LivenessProofs"
-    lower_consumers = (
-        "SumeragiV2Stage2BusyRankScratch",
-        "SumeragiV2Stage3CursorKernelScratch",
-        "SumeragiV2Stage6CapacityScratch",
-        "SumeragiV2LockedBodyProposalActionProofs",
-    )
+    lower_consumers = ("SumeragiV2LockedBodyProposalActionProofs",)
     historical_kernel_module = "SumeragiV2AsyncHistoricalRecoveryLivenessProofs"
     topology_modules = (
         vocabulary_module,

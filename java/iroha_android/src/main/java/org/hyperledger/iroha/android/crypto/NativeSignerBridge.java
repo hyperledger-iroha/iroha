@@ -10,7 +10,7 @@ import org.hyperledger.iroha.android.model.instructions.RegisterZkAssetInstructi
 /** Thin JVM/JNI wrapper around {@code connect_norito_bridge} signing helpers. */
 public final class NativeSignerBridge {
   private static final String LIBRARY_NAME = "connect_norito_bridge";
-  public static final int REQUIRED_BRIDGE_ABI_VERSION = 22;
+  public static final int REQUIRED_BRIDGE_ABI_VERSION = 23;
   public static final int REQUIRED_NATIVE_SIGNER_CONTRACT_REVISION = 5;
   private static final int HASH_BYTES = 32;
   private static final boolean NATIVE_AVAILABLE = loadLibrary();

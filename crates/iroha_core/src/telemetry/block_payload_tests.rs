@@ -31,6 +31,7 @@ fn block_payload_detects_npos_consensus_effect_blocks() {
     };
     let mut block = empty_block(2);
     block.set_npos_consensus_effects(Some(NposConsensusEffects {
+        finalized_global_beacon_pulse: None,
         vrf_epoch_seals: Vec::new(),
         v2_evidence_admissions: Vec::new(),
         penalty_actions: vec![NposPenaltyAction::MarkVrfPenaltiesApplied(

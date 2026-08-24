@@ -268,6 +268,163 @@ public final class SccpJsonParser {
 
   private SccpJsonParser() {}
 
+  /** Validates one exact closed SCCP V1 route-governance action. */
+  public static void validateRouteGovernanceAction(final Map<String, Object> value) {
+    exactFields(value, governanceFields("action", "route"), "SCCP route governance action");
+    final String action = requiredText(value, "action");
+    final Map<String, Object> payload = requiredObject(value, "route");
+    switch (action) {
+      case "Register" -> {
+        exactFields(
+            payload, governanceFields("route", "native_trust_anchor"), "SCCP Register");
+        final Map<String, Object> route = requiredObject(payload, "route");
+        final SccpLaneIdV1 lane =
+            parseInboundLane(requiredObject(route, "lane_id"), "SCCP Register.route.lane_id");
+        final ParsedRoute parsed = parseGovernedRoute(route, lane, "SCCP Register.route");
+        if (!"staged".equals(parsed.activation())) {
+          throw new IllegalArgumentException("new SCCP routes must be staged");
+        }
+        if (payload.get("native_trust_anchor") != null) {
+          final NativeTrustAnchor anchor =
+              parseNativeTrustAnchor(
+                  objectValue(
+                      payload.get("native_trust_anchor"),
+                      "SCCP Register.native_trust_anchor"),
+                  lane,
+                  "SCCP Register.native_trust_anchor");
+          if (anchor.checkpointHeight().compareTo(MAX_JSON_SAFE_INTEGER) > 0) {
+            throw new IllegalArgumentException(
+                "SCCP Register.native_trust_anchor exceeds the exact JSON integer bound");
+          }
+        }
+      }
+      case "SetActivation" -> {
+        exactFields(
+            payload,
+            governanceFields("key", "expected_current", "next", "inbound_finality_cutoff"),
+            "SCCP SetActivation");
+        parseGovernanceRouteKey(requiredObject(payload, "key"), "SCCP SetActivation.key");
+        final String current =
+            parseGovernanceActivation(
+                requiredObject(payload, "expected_current"),
+                "SCCP SetActivation.expected_current");
+        final String next =
+            parseGovernanceActivation(
+                requiredObject(payload, "next"), "SCCP SetActivation.next");
+        validateGovernanceCutoff(
+            payload.get("inbound_finality_cutoff"),
+            next,
+            "SCCP SetActivation.inbound_finality_cutoff");
+        if (!canTransitionGovernanceActivation(current, next)) {
+          throw new IllegalArgumentException("SCCP activation transition is not legal");
+        }
+      }
+      case "SwitchRevision" -> {
+        exactFields(
+            payload,
+            governanceFields(
+                "previous_key",
+                "expected_previous",
+                "previous_next",
+                "previous_inbound_finality_cutoff",
+                "successor_key",
+                "successor_next"),
+            "SCCP SwitchRevision");
+        final GovernanceRouteKey previous =
+            parseGovernanceRouteKey(
+                requiredObject(payload, "previous_key"), "SCCP SwitchRevision.previous_key");
+        final GovernanceRouteKey successor =
+            parseGovernanceRouteKey(
+                requiredObject(payload, "successor_key"), "SCCP SwitchRevision.successor_key");
+        final String expected =
+            parseGovernanceActivation(
+                requiredObject(payload, "expected_previous"),
+                "SCCP SwitchRevision.expected_previous");
+        final String previousNext =
+            parseGovernanceActivation(
+                requiredObject(payload, "previous_next"),
+                "SCCP SwitchRevision.previous_next");
+        final String successorNext =
+            parseGovernanceActivation(
+                requiredObject(payload, "successor_next"),
+                "SCCP SwitchRevision.successor_next");
+        validateGovernanceCutoff(
+            payload.get("previous_inbound_finality_cutoff"),
+            previousNext,
+            "SCCP SwitchRevision.previous_inbound_finality_cutoff");
+        final boolean previousTransitionValid =
+            "retired".equals(previousNext)
+                ? governanceFields("bidirectional", "inbound_only", "paused").contains(expected)
+                : canTransitionGovernanceActivation(expected, previousNext);
+        if (!previous.lane().equals(successor.lane())
+            || !previous.routeId().equals(successor.routeId())
+            || !previous.assetKey().equals(successor.assetKey())
+            || successor.revision() != previous.revision() + 1
+            || !previousTransitionValid
+            || !governanceFields("inbound_only", "paused", "retired").contains(previousNext)
+            || !"bidirectional".equals(successorNext)) {
+          throw new IllegalArgumentException(
+              "SCCP revision switch is not a legal atomic cutover");
+        }
+      }
+      case "InitializeTrustAnchor" -> {
+        exactFields(
+            payload,
+            governanceFields("lane_id", "expected_current", "initial"),
+            "SCCP InitializeTrustAnchor");
+        final SccpLaneIdV1 lane =
+            parseInboundLane(
+                requiredObject(payload, "lane_id"),
+                "SCCP InitializeTrustAnchor.lane_id");
+        if (payload.get("expected_current") != null) {
+          throw new IllegalArgumentException(
+              "SCCP initial trust anchor must expect no current value");
+        }
+        final NativeTrustAnchor initial =
+            parseNativeTrustAnchor(
+                objectValue(payload.get("initial"), "SCCP InitializeTrustAnchor.initial"),
+                lane,
+                "SCCP InitializeTrustAnchor.initial");
+        if (initial.checkpointHeight().compareTo(MAX_JSON_SAFE_INTEGER) > 0) {
+          throw new IllegalArgumentException(
+              "SCCP InitializeTrustAnchor.initial exceeds the exact JSON integer bound");
+        }
+      }
+      case "AdvanceTrustAnchor" -> {
+        exactFields(
+            payload,
+            governanceFields("lane_id", "expected_current", "next"),
+            "SCCP AdvanceTrustAnchor");
+        final SccpLaneIdV1 lane =
+            parseInboundLane(
+                requiredObject(payload, "lane_id"), "SCCP AdvanceTrustAnchor.lane_id");
+        final NativeTrustAnchor current =
+            parseNativeTrustAnchor(
+                objectValue(
+                    payload.get("expected_current"),
+                    "SCCP AdvanceTrustAnchor.expected_current"),
+                lane,
+                "SCCP AdvanceTrustAnchor.expected_current");
+        final NativeTrustAnchor next =
+            parseNativeTrustAnchor(
+                objectValue(payload.get("next"), "SCCP AdvanceTrustAnchor.next"),
+                lane,
+                "SCCP AdvanceTrustAnchor.next");
+        if (!current.backend().equals(next.backend())
+            || current.anchorHash().equals(next.anchorHash())
+            || current.checkpointHeight().compareTo(MAX_JSON_SAFE_INTEGER) > 0
+            || next.checkpointHeight().compareTo(MAX_JSON_SAFE_INTEGER) > 0
+            || next.checkpointHeight().compareTo(current.checkpointHeight()) <= 0) {
+          throw new IllegalArgumentException(
+              "SCCP trust anchor must advance monotonically within one backend");
+        }
+      }
+      case "Remove" -> parseGovernanceRouteKey(payload, "SCCP Remove");
+      default ->
+          throw new IllegalArgumentException("SCCP route governance action is unsupported");
+    }
+  }
+
   public static SccpModels.Capabilities parseCapabilities(final byte[] bytes) {
     final Map<String, Object> root = rootObject(bytes, "SCCP capabilities");
     exactFields(root, CAPABILITY_FIELDS, CAPABILITY_REQUIRED, "SCCP capabilities");
@@ -871,6 +1028,64 @@ public final class SccpJsonParser {
         destination.routeConfigurationHash());
   }
 
+  private static GovernanceRouteKey parseGovernanceRouteKey(
+      final Map<String, Object> value, final String label) {
+    exactFields(
+        value, governanceFields("lane_id", "route_id", "asset_key", "revision"), label);
+    return new GovernanceRouteKey(
+        parseInboundLane(requiredObject(value, "lane_id"), label + ".lane_id"),
+        canonicalRouteKey(value, "route_id"),
+        canonicalRouteKey(value, "asset_key"),
+        requiredLong(value, "revision", 1, 0xffff_ffffL));
+  }
+
+  private static String parseGovernanceActivation(
+      final Map<String, Object> value, final String label) {
+    exactFields(value, governanceFields("activation", "direction"), label);
+    if (value.get("direction") != null) {
+      throw new IllegalArgumentException(label + ".direction must be null");
+    }
+    final String activation = requiredText(value, "activation");
+    if (!ACTIVATIONS.contains(activation)) {
+      throw new IllegalArgumentException(label + ".activation is unsupported");
+    }
+    return activation;
+  }
+
+  private static void validateGovernanceCutoff(
+      final Object value, final String activation, final String label) {
+    if ("retired".equals(activation)) {
+      final Map<String, Object> cutoff = objectValue(value, label);
+      exactFields(
+          cutoff,
+          governanceFields("trust_anchor_hash", "max_anchor_interval_height"),
+          label);
+      upperBytes(cutoff, "trust_anchor_hash", 32);
+      requiredUnsignedInteger(
+          cutoff, "max_anchor_interval_height", MAX_JSON_SAFE_INTEGER, true);
+    } else if (value != null) {
+      throw new IllegalArgumentException(
+          label + " must be null unless activation is retired");
+    }
+  }
+
+  private static boolean canTransitionGovernanceActivation(
+      final String current, final String next) {
+    return switch (current) {
+      case "staged" ->
+          governanceFields("bidirectional", "inbound_only", "retired").contains(next);
+      case "bidirectional" -> governanceFields("inbound_only", "paused").contains(next);
+      case "inbound_only" -> governanceFields("paused", "retired").contains(next);
+      case "paused" ->
+          governanceFields("bidirectional", "inbound_only", "retired").contains(next);
+      default -> false;
+    };
+  }
+
+  private static Set<String> governanceFields(final String... names) {
+    return new LinkedHashSet<>(Arrays.asList(names));
+  }
+
   private static SourceRoles parseSourceIdentity(
       final Map<String, Object> value, final SccpLaneIdV1 lane, final String label) {
     exactFields(value, Set.of("lane", "emitter"), label + ".source_identity");
@@ -1153,7 +1368,7 @@ public final class SccpJsonParser {
     if (!TAIRA_CHAIN_ID_HASH.equals(anchorRoles.get(0))) {
       throw new IllegalArgumentException(label + " Taira chain id hash mismatch");
     }
-    final int protocolVersion = requiredInt(anchor, "protocol_version", 3, 4);
+    final int protocolVersion = requiredInt(anchor, "protocol_version", 4, 4);
     final BigInteger checkpointHeight =
         requiredUnsignedInteger(anchor, "checkpoint_height", MAX_U64, true);
     requireDistinctRawHashes(anchorRoles, label + " finality anchor");
@@ -1909,6 +2124,9 @@ public final class SccpJsonParser {
       SccpModels.InboundFinalityCutoffV1 inboundFinalityCutoff,
       String destinationBindingHash,
       String routeConfigurationHash) {}
+
+  private record GovernanceRouteKey(
+      SccpLaneIdV1 lane, String routeId, String assetKey, long revision) {}
 
   private record SourceRoles(
       String family, String address, String runtimeHash, String configurationHash) {}

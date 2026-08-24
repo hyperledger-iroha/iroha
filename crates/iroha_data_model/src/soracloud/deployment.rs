@@ -2,6 +2,7 @@
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[cfg_attr(feature = "json", norito(tag = "action", content = "value"))]
+#[norito(deny_unknown_fields)]
 pub enum SoraServiceLifecycleActionV1 {
     /// First-time admission of a service.
     Deploy,
@@ -29,6 +30,8 @@ pub enum SoraServiceLifecycleActionV1 {
     Rollout,
     /// Reversion to an already admitted baseline revision.
     Rollback,
+    /// Atomic settlement and successor opening of a hosted-service reporting epoch.
+    LeaseReportingEpochRollover,
 }
 /// Exact authoritative service revision observed by an upgrade signer.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
@@ -67,6 +70,7 @@ pub enum SoraServiceMutationPreconditionV1 {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[cfg_attr(feature = "json", norito(tag = "operation", content = "value"))]
+#[norito(deny_unknown_fields)]
 pub enum SoraStateMutationOperationV1 {
     /// Create or replace a state entry.
     Upsert,
@@ -77,6 +81,7 @@ pub enum SoraStateMutationOperationV1 {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, IntoSchema, Default)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[cfg_attr(feature = "json", norito(tag = "stage", content = "value"))]
+#[norito(deny_unknown_fields)]
 pub enum SoraRolloutStageV1 {
     /// Candidate revision is serving a canary fraction of traffic.
     #[default]
@@ -89,6 +94,7 @@ pub enum SoraRolloutStageV1 {
 /// Authoritative rollout state tracked for a service deployment.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[norito(deny_unknown_fields)]
 pub struct SoraServiceRolloutStateV1 {
     /// Schema version; must equal [`SORA_SERVICE_ROLLOUT_STATE_VERSION_V1`].
     pub schema_version: u16,
@@ -225,6 +231,7 @@ impl SoraServiceRolloutStateV1 {
 /// Authoritative deployment state for the currently active Soracloud service.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[norito(deny_unknown_fields)]
 pub struct SoraServiceDeploymentStateV1 {
     /// Schema version; must equal [`SORA_SERVICE_DEPLOYMENT_STATE_VERSION_V1`].
     pub schema_version: u16,
@@ -243,31 +250,26 @@ pub struct SoraServiceDeploymentStateV1 {
     /// Audit sequence that started the current process generation.
     pub process_started_sequence: u64,
     /// Monotonic generation of service config updates.
-    #[norito(default)]
     pub config_generation: u64,
     /// Monotonic generation of service secret updates.
-    #[norito(default)]
     pub secret_generation: u64,
     /// Authoritative config entries scoped to the active service deployment.
-    #[norito(default)]
     pub service_configs: BTreeMap<String, SoraServiceConfigEntryV1>,
     /// Authoritative encrypted secret entries scoped to the active service deployment.
-    #[norito(default)]
     pub service_secrets: BTreeMap<String, SoraServiceSecretEntryV1>,
     /// Versioned governance-authenticated FHE policy material scoped to this service.
     pub fhe_policy_records: BTreeMap<Name, SoracloudFhePolicyRecordV1>,
     /// Active rollout, when the candidate is still under evaluation.
-    #[norito(default)]
+    #[norito(required)]
     pub active_rollout: Option<SoraServiceRolloutStateV1>,
     /// Most recent rollout observation for the service.
-    #[norito(default)]
+    #[norito(required)]
     pub last_rollout: Option<SoraServiceRolloutStateV1>,
     /// Authoritative hosted-service lease and prepaid economics, when this
     /// deployment targets the HTTP service plane.
-    #[norito(default)]
+    #[norito(required)]
     pub service_lease: Option<SoraServiceLeaseStateV1>,
     /// Authoritative lease-backed storage bindings attached to the deployment.
-    #[norito(default)]
     pub lease_volume_states: Vec<SoraServiceLeaseVolumeStateV1>,
 }
 impl SoraServiceDeploymentStateV1 {
@@ -404,6 +406,18 @@ impl SoraServiceDeploymentStateV1 {
                 "sora service deployment state",
                 "lease_volume_states",
                 "lease-backed volume state requires an active hosted-service lease",
+            ));
+        }
+        if let Some(lease) = self.service_lease.as_ref()
+            && self.lease_volume_states.iter().any(|volume| {
+                volume.lease_started_sequence != lease.lease_started_sequence
+                    || volume.lease_expires_sequence != lease.lease_expires_sequence
+            })
+        {
+            return Err(invalid_field(
+                "sora service deployment state",
+                "lease_volume_states",
+                "every volume economic start and expiry must exactly match the hosted-service lease",
             ));
         }
         Ok(())
@@ -881,6 +895,7 @@ fn validate_bundle_absolute_path(
 /// Authoritative config entry tracked for one Soracloud service deployment.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[norito(deny_unknown_fields)]
 pub struct SoraServiceConfigEntryV1 {
     /// Schema version; must equal [`SORA_SERVICE_CONFIG_ENTRY_VERSION_V1`].
     pub schema_version: u16,
@@ -958,6 +973,7 @@ fn canonical_service_config_json_payload(
 /// Authoritative encrypted secret entry tracked for one Soracloud service deployment.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[norito(deny_unknown_fields)]
 pub struct SoraServiceSecretEntryV1 {
     /// Schema version; must equal [`SORA_SERVICE_SECRET_ENTRY_VERSION_V1`].
     pub schema_version: u16,
@@ -998,6 +1014,7 @@ impl SoraServiceSecretEntryV1 {
 /// Authoritative service-state entry tracked for Soracloud bindings.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[norito(deny_unknown_fields)]
 pub struct SoraServiceStateEntryV1 {
     /// Schema version; must equal [`SORA_SERVICE_STATE_ENTRY_VERSION_V1`].
     pub schema_version: u16,
@@ -1018,19 +1035,19 @@ pub struct SoraServiceStateEntryV1 {
     /// Deterministic payload commitment.
     pub payload_commitment: Hash,
     /// Public-key digest bound to admitted FHE ciphertext rows.
-    #[norito(default)]
+    #[norito(required)]
     pub fhe_public_key_digest: Option<Hash>,
     /// Public BFV residual-multiple or noise bound for FHE ciphertext rows, when known.
     ///
     /// This is public deterministic metadata for chained validator-side FHE jobs. Client-provided
-    /// FHE rows may omit it until proof-carrying input admission is available.
-    #[norito(default)]
+    /// FHE rows may set it to `null` until proof-carrying input admission is available.
+    #[norito(required)]
     pub fhe_residual_multiple_bound: Option<u128>,
     /// Semantics of `fhe_residual_multiple_bound`.
     ///
-    /// `None` means no bound mode is available and is only valid when the row
-    /// also omits `fhe_residual_multiple_bound`.
-    #[norito(default)]
+    /// `null` means no bound mode is available and is only valid when
+    /// `fhe_residual_multiple_bound` is also `null`.
+    #[norito(required)]
     pub fhe_bound_mode: Option<BfvCiphertextBoundModeV1>,
     /// Audit sequence of the last update affecting this state key.
     pub last_update_sequence: u64,
@@ -1189,6 +1206,7 @@ fn validate_service_state_fhe_bound_metadata(
 /// Authoritative record of a policy-gated decryption or health-access request.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[norito(deny_unknown_fields)]
 pub struct SoraDecryptionRequestRecordV1 {
     /// Schema version; must equal [`SORA_DECRYPTION_REQUEST_RECORD_VERSION_V1`].
     pub schema_version: u16,
@@ -1242,6 +1260,7 @@ impl SoraDecryptionRequestRecordV1 {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[cfg_attr(feature = "json", norito(tag = "status", content = "value"))]
+#[norito(deny_unknown_fields)]
 pub enum SoraTrainingJobStatusV1 {
     /// Job is actively executing and may emit checkpoints.
     Running,
@@ -1256,6 +1275,7 @@ pub enum SoraTrainingJobStatusV1 {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[cfg_attr(feature = "json", norito(tag = "action", content = "value"))]
+#[norito(deny_unknown_fields)]
 pub enum SoraTrainingJobActionV1 {
     /// A new deterministic training job was created.
     Start,
@@ -1267,6 +1287,7 @@ pub enum SoraTrainingJobActionV1 {
 /// Authoritative training-job state tracked for Soracloud-managed model workflows.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[norito(deny_unknown_fields)]
 pub struct SoraTrainingJobRecordV1 {
     /// Schema version; must equal [`SORA_TRAINING_JOB_RECORD_VERSION_V1`].
     pub schema_version: u16,
@@ -1289,7 +1310,7 @@ pub struct SoraTrainingJobRecordV1 {
     /// Required checkpoint cadence in steps.
     pub checkpoint_interval_steps: u32,
     /// Latest checkpoint step, when any checkpoint has been recorded.
-    #[norito(default)]
+    #[norito(required)]
     pub last_checkpoint_step: Option<u32>,
     /// Number of checkpoints recorded for the job.
     pub checkpoint_count: u32,
@@ -1308,10 +1329,10 @@ pub struct SoraTrainingJobRecordV1 {
     /// Storage bytes consumed by checkpoints so far.
     pub storage_consumed_bytes: u64,
     /// Latest metrics hash recorded by a checkpoint.
-    #[norito(default)]
+    #[norito(required)]
     pub latest_metrics_hash: Option<Hash>,
     /// Latest failure/retry reason, when applicable.
-    #[norito(default)]
+    #[norito(required)]
     pub last_failure_reason: Option<String>,
     /// Audit sequence that created the job.
     pub created_sequence: u64,
@@ -1462,6 +1483,7 @@ impl SoraTrainingJobRecordV1 {
 /// Audit record for deterministic training-job lifecycle updates.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[norito(deny_unknown_fields)]
 pub struct SoraTrainingJobAuditEventV1 {
     /// Schema version; must equal [`SORA_TRAINING_JOB_AUDIT_EVENT_VERSION_V1`].
     pub schema_version: u16,
@@ -1490,13 +1512,13 @@ pub struct SoraTrainingJobAuditEventV1 {
     /// Storage bytes consumed after the event.
     pub storage_consumed_bytes: u64,
     /// Latest checkpoint step associated with the event.
-    #[norito(default)]
+    #[norito(required)]
     pub last_checkpoint_step: Option<u32>,
     /// Latest metrics hash associated with the event.
-    #[norito(default)]
+    #[norito(required)]
     pub latest_metrics_hash: Option<Hash>,
     /// Latest failure reason associated with the event.
-    #[norito(default)]
+    #[norito(required)]
     pub last_failure_reason: Option<String>,
     /// Provenance signer that authorized the event.
     pub signer: PublicKey,
@@ -1544,6 +1566,7 @@ impl SoraTrainingJobAuditEventV1 {
 /// Authoritative service-level model registry state.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[norito(deny_unknown_fields)]
 pub struct SoraModelRegistryV1 {
     /// Schema version; must equal [`SORA_MODEL_REGISTRY_VERSION_V1`].
     pub schema_version: u16,
@@ -1554,7 +1577,7 @@ pub struct SoraModelRegistryV1 {
     /// Logical model name.
     pub model_name: String,
     /// Current promoted version, when any.
-    #[norito(default)]
+    #[norito(required)]
     pub current_version: Option<String>,
     /// Audit sequence that last updated the registry.
     pub updated_sequence: u64,
@@ -1602,6 +1625,7 @@ impl SoraModelRegistryV1 {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[cfg_attr(feature = "json", norito(tag = "action", content = "value"))]
+#[norito(deny_unknown_fields)]
 pub enum SoraModelWeightActionV1 {
     /// A new weight version was registered.
     Register,
@@ -1614,6 +1638,7 @@ pub enum SoraModelWeightActionV1 {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[cfg_attr(feature = "json", norito(tag = "kind", content = "value"))]
+#[norito(deny_unknown_fields)]
 pub enum SoraModelProvenanceKindV1 {
     /// The model was produced by a Soracloud training job.
     TrainingJob,
@@ -1625,6 +1650,7 @@ pub enum SoraModelProvenanceKindV1 {
 /// Reference to the origin of a model artifact or weight version.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[norito(deny_unknown_fields)]
 pub struct SoraModelProvenanceRefV1 {
     /// Origin kind.
     pub kind: SoraModelProvenanceKindV1,
@@ -1645,6 +1671,7 @@ impl SoraModelProvenanceRefV1 {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, IntoSchema, Default)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[cfg_attr(feature = "json", norito(tag = "runtime_format", content = "value"))]
+#[norito(deny_unknown_fields)]
 pub enum SoraUploadedModelRuntimeFormatV1 {
     /// Hugging Face-style safetensors repository layout.
     #[default]
@@ -1655,6 +1682,7 @@ pub enum SoraUploadedModelRuntimeFormatV1 {
 /// Policy pricing for uploaded-model storage.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema, Default)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[norito(deny_unknown_fields)]
 pub struct SoraUploadedModelPricingPolicyV1 {
     /// Nominal XOR quantity charged for storing encrypted uploaded-model bytes.
     pub storage_price: Quantity,
@@ -1663,6 +1691,7 @@ pub struct SoraUploadedModelPricingPolicyV1 {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, IntoSchema, Default)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[cfg_attr(feature = "json", norito(tag = "kem", content = "value"))]
+#[norito(deny_unknown_fields)]
 pub enum SoraUploadedModelKeyEncapsulationV1 {
     /// X25519 shared-secret derivation with HKDF-SHA256 expansion.
     #[default]
@@ -1672,6 +1701,7 @@ pub enum SoraUploadedModelKeyEncapsulationV1 {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, IntoSchema, Default)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[cfg_attr(feature = "json", norito(tag = "aead", content = "value"))]
+#[norito(deny_unknown_fields)]
 pub enum SoraUploadedModelKeyWrapAeadV1 {
     /// AES-256-GCM symmetric key wrapping.
     #[default]
@@ -1705,6 +1735,7 @@ fn validate_uploaded_model_x25519_public_key(
 /// Soracloud-upload recipient metadata advertised for model bundle encryption.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[norito(deny_unknown_fields)]
 pub struct SoraUploadedModelEncryptionRecipientV1 {
     /// Schema version; must equal [`SORA_UPLOADED_MODEL_ENCRYPTION_RECIPIENT_VERSION_V1`].
     pub schema_version: u16,
@@ -1783,6 +1814,7 @@ impl SoraUploadedModelEncryptionRecipientV1 {
 /// Wrapped symmetric key used to decrypt one uploaded-model bundle on Soracloud.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[norito(deny_unknown_fields)]
 pub struct SoraUploadedModelWrappedKeyV1 {
     /// Schema version; must equal [`SORA_UPLOADED_MODEL_WRAPPED_KEY_VERSION_V1`].
     pub schema_version: u16,
@@ -1910,6 +1942,7 @@ impl SoraUploadedModelWrappedKeyV1 {
 /// Bundle storage reference and metadata for a user-uploaded Soracloud model.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[norito(deny_unknown_fields)]
 pub struct SoraUploadedModelBundleV1 {
     /// Schema version; must equal [`SORA_UPLOADED_MODEL_BUNDLE_VERSION_V1`].
     pub schema_version: u16,
@@ -1922,7 +1955,6 @@ pub struct SoraUploadedModelBundleV1 {
     /// Admitted model family.
     pub family: String,
     /// Admitted modalities.
-    #[norito(default)]
     pub modalities: Vec<String>,
     /// Deterministic commitment over the normalized plaintext upload bundle.
     pub plaintext_root: Hash,
@@ -2062,6 +2094,7 @@ impl SoraUploadedModelBundleV1 {
 /// SoraFS-backed encrypted artifact reference for private uploaded-model execution.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[norito(deny_unknown_fields)]
 pub struct SoraPrivateModelArtifactRefV1 {
     /// Schema version; must equal [`SORA_PRIVATE_MODEL_ARTIFACT_REF_VERSION_V1`].
     pub schema_version: u16,
@@ -2115,6 +2148,7 @@ impl SoraPrivateModelArtifactRefV1 {
 /// references. Plaintext input and output bytes remain outside chain state.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[norito(deny_unknown_fields)]
 pub struct SoraPrivateUploadedModelExecutionReceiptV1 {
     /// Schema version; must equal [`SORA_PRIVATE_UPLOADED_MODEL_EXECUTION_RECEIPT_VERSION_V1`].
     pub schema_version: u16,
@@ -2246,6 +2280,7 @@ impl SoraPrivateUploadedModelExecutionReceiptV1 {
 /// Immutable metadata for an admitted model-weight version.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[norito(deny_unknown_fields)]
 pub struct SoraModelWeightVersionRecordV1 {
     /// Schema version; must equal [`SORA_MODEL_WEIGHT_VERSION_RECORD_VERSION_V1`].
     pub schema_version: u16,
@@ -2258,13 +2293,12 @@ pub struct SoraModelWeightVersionRecordV1 {
     /// Weight version identifier.
     pub weight_version: String,
     /// Optional lineage parent version.
-    #[norito(default)]
+    #[norito(required)]
     pub parent_version: Option<String>,
     /// Training job that produced this weight version.
-    #[cfg_attr(feature = "json", norito(default))]
     pub training_job_id: String,
     /// Generic provenance source for this weight version.
-    #[norito(default)]
+    #[norito(required)]
     pub source_provenance: Option<SoraModelProvenanceRefV1>,
     /// Weight artifact hash.
     pub weight_artifact_hash: Hash,
@@ -2279,13 +2313,13 @@ pub struct SoraModelWeightVersionRecordV1 {
     /// Audit sequence that registered the version.
     pub registered_sequence: u64,
     /// Audit sequence that promoted the version, when promoted.
-    #[norito(default)]
+    #[norito(required)]
     pub promoted_sequence: Option<u64>,
     /// Gate report hash attached to the promotion, when promoted.
-    #[norito(default)]
+    #[norito(required)]
     pub gate_report_hash: Option<Hash>,
     /// Provenance signer that promoted the version, when promoted.
-    #[norito(default)]
+    #[norito(required)]
     pub promoted_by: Option<PublicKey>,
 }
 impl SoraModelWeightVersionRecordV1 {
@@ -2378,6 +2412,7 @@ impl SoraModelWeightVersionRecordV1 {
 /// Audit record for model-weight lifecycle changes.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[norito(deny_unknown_fields)]
 pub struct SoraModelWeightAuditEventV1 {
     /// Schema version; must equal [`SORA_MODEL_WEIGHT_AUDIT_EVENT_VERSION_V1`].
     pub schema_version: u16,
@@ -2394,16 +2429,16 @@ pub struct SoraModelWeightAuditEventV1 {
     /// Version targeted by the event.
     pub target_version: String,
     /// Resulting current version after the event.
-    #[norito(default)]
+    #[norito(required)]
     pub current_version: Option<String>,
     /// Optional lineage parent for the targeted version.
-    #[norito(default)]
+    #[norito(required)]
     pub parent_version: Option<String>,
     /// Promotion gate approval flag, when applicable.
-    #[norito(default)]
+    #[norito(required)]
     pub gate_approved: Option<bool>,
     /// Rollback reason, when applicable.
-    #[norito(default)]
+    #[norito(required)]
     pub rollback_reason: Option<String>,
     /// Provenance signer that authorized the event.
     pub signer: PublicKey,
@@ -2452,6 +2487,7 @@ impl SoraModelWeightAuditEventV1 {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[cfg_attr(feature = "json", norito(tag = "action", content = "value"))]
+#[norito(deny_unknown_fields)]
 pub enum SoraModelArtifactActionV1 {
     /// A completed training job registered an artifact description.
     Register,
@@ -2459,6 +2495,7 @@ pub enum SoraModelArtifactActionV1 {
 /// Authoritative record for model artifacts derived from completed training jobs.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[norito(deny_unknown_fields)]
 pub struct SoraModelArtifactRecordV1 {
     /// Schema version; must equal [`SORA_MODEL_ARTIFACT_RECORD_VERSION_V1`].
     pub schema_version: u16,
@@ -2471,13 +2508,12 @@ pub struct SoraModelArtifactRecordV1 {
     /// Stable artifact identifier under the owning service.
     pub artifact_id: String,
     /// Training job that produced this artifact.
-    #[cfg_attr(feature = "json", norito(default))]
     pub training_job_id: String,
     /// Weight version represented by this artifact, when already pinned.
-    #[norito(default)]
+    #[norito(required)]
     pub weight_version: Option<String>,
     /// Generic provenance source for this artifact.
-    #[norito(default)]
+    #[norito(required)]
     pub source_provenance: Option<SoraModelProvenanceRefV1>,
     /// Weight artifact hash.
     pub weight_artifact_hash: Hash,
@@ -2492,10 +2528,10 @@ pub struct SoraModelArtifactRecordV1 {
     /// Audit sequence that registered the artifact.
     pub registered_sequence: u64,
     /// Model weight version that consumed this artifact, when any.
-    #[norito(default)]
+    #[norito(required)]
     pub consumed_by_version: Option<String>,
     /// Referenced uploaded-model chunk-manifest root, when this artifact comes from a user upload.
-    #[norito(default)]
+    #[norito(required)]
     pub chunk_manifest_root: Option<Hash>,
 }
 impl SoraModelArtifactRecordV1 {

@@ -15,6 +15,29 @@ call an obligation `specified_unproved`, or set
 `machine_checked_completion: false` are historical snapshots retained as
 provenance; they do not override the current status declaration.
 
+The final source-only recovery audit covered every byte-and-mode entry in the
+1,745-path formal cone and all 15/15 combined postimages. The settled whole-cone
+digest is recorded outside this self-referential cone in `status.md`; it is
+intentionally not embedded here because this proof document is itself a cone
+member. The production shape retains one direct deferred pending-Kura validated
+marker and emits one opaque move-only direct Apply child only after successful
+validation; no recovered carrier or carrier alias is admitted.
+`crates/iroha_core/src/sumeragi/source_contracts_v1.txt` contains exactly
+52 cases, is 475,201 bytes, and hashes to
+`2366606c6c57c95a97ebd34b75a9edf89669b47aaee2d4a22005b0f8d76b5f6b`.
+
+On that frozen postimage, support-equivalent raw evaluation completed 52 cases
+with 0 failures; compaction passed 4/4; the reviewed-source mirror,
+release/source-seal, authoritative successor-production-fidelity, and
+same-round semantic kernel-source/caller filters passed; all 18/18 item seals
+matched; and all six tamper controls passed.
+
+These are source, structure, fidelity, and mutation results only. No fresh
+TLAPS proof, pinned-Verus proof, or external signing receipt exists for this
+postimage. No current-candidate four-peer network test ran, and source-drifted
+daemon or ABI attempts admitted no artifact. Earlier four-peer and Verus
+results below remain historical.
+
 ## Revision-4 argument
 
 Revision 4 is a fresh-genesis protocol. For each frozen height context, let
@@ -1185,9 +1208,13 @@ At the enclosing adapter boundary, a zero-to-one semantic candidate publishes
 its immutable owner, while a one-to-one retry must present that exact owner.
 A different owner for the same semantic lifecycle is rejected before the
 effect-to-candidate trace projection is constructed. The separate physical
-Fetch/Store/Validate lineage may retain a stronger carrier only after its
-distinct phase/commitment identity passes the typed monotone authority gate and
-the adopted lineage is re-projected. These source and mutation checks do not
+Fetch/Store/Validate lineage may advance only after its phase, commitment, and
+monotone authority checks succeed. Pending-Kura recovery uses the stricter
+storage-only projection: body-store open defers one exact validated marker,
+successful Validate commits the direct reducer transition, and the resulting
+move-only Apply child is released only to the local pending-tip executor after
+its stage advances. It cannot be reconstructed as a recovered Apply carrier or
+consumed by a generic settlement path. These source and mutation checks do not
 supply the fresh cross-tool release evidence required by the promoted status.
 Recovered publication requires absent
 process-visible predecessor ownership plus durable complete-tip authority. For

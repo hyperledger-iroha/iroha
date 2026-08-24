@@ -14,7 +14,7 @@ final class ToriiKagemushaAPIModelsTests: XCTestCase {
     }
 
     func testEndpointConstantsUseSharpFirstReleaseRoutes() throws {
-        XCTAssertEqual(KagemushaToriiAPI.Endpoint.readiness.path, "/v1/offline/readiness")
+        XCTAssertEqual(KagemushaToriiAPI.Endpoint.capability.path, "/v1/offline/readiness")
         XCTAssertEqual(KagemushaToriiAPI.Endpoint.topUp.path, "/v1/offline/top-up")
         XCTAssertEqual(KagemushaToriiAPI.Endpoint.redeem.path, "/v1/offline/redeem")
         XCTAssertEqual(KagemushaToriiAPI.Endpoint.operations.path, "/v1/offline/operations")
@@ -212,7 +212,7 @@ final class ToriiKagemushaAPIModelsTests: XCTestCase {
         #if canImport(Darwin)
         try requireNativeTestCapability(
             KagemushaRecursiveSpend.hasRequiredNativeSymbols,
-            "ABI-22 bridge is not linked in this test host"
+            "ABI-23 bridge is not linked in this test host"
         )
         let request = try KagemushaPeerTransportTestFixtures.paymentRequest()
 
@@ -238,7 +238,7 @@ final class ToriiKagemushaAPIModelsTests: XCTestCase {
         #if canImport(Darwin)
         try requireNativeTestCapability(
             KagemushaRecursiveSpend.hasRequiredNativeSymbols,
-            "ABI-22 bridge is not linked in this test host"
+            "ABI-23 bridge is not linked in this test host"
         )
         let request = try KagemushaPeerTransportTestFixtures.paymentRequest()
         let address = try AccountAddress.parseEncodedSwiftOnly(

@@ -104,15 +104,19 @@ async fn handler_post_transactions_batch(
             compute_permit,
             "transaction_batch_admission_worker_failed",
             move || {
-                let mut accepted = Vec::with_capacity(transactions.len());
+                let mut accepted_transactions = Vec::with_capacity(transactions.len());
                 let mut stateless_cache_warm = Vec::new();
                 let prechecks = precheck_transaction_batch_ed25519(
                     &transactions,
                     app.state.pipeline.signature_batch_max_ed25519,
                 );
-                #[cfg(any(feature = "p2p_ws", feature = "connect"))]
-                let mut local_route_cache = Vec::new();
                 for (transaction, precheck) in transactions.into_iter().zip(prechecks) {
+                    // Exact lifecycle multisig is intentionally outside generic transaction
+                    // admission, so preserve its dedicated-route error before that policy runs.
+                    routing::ensure_generic_transaction_batch_not_ordinary_kagemusha_lifecycle(
+                        app.queue.as_ref(),
+                        transaction.signed(),
+                    )?;
                     let accepted_tx =
                         routing::accept_decoded_signed_transaction_for_ingress_with_precheck(
                             app.state.clone(),
@@ -121,9 +125,21 @@ async fn handler_post_transactions_batch(
                             precheck.single_ed25519_prechecked,
                             precheck.precheck_rejection,
                         )?;
+                    // No route in the batch may mask a later reserved entrypoint's
+                    // dedicated admission boundary.
+                    routing::ensure_generic_transaction_batch_entrypoint_allowed(
+                        app.queue.as_ref(),
+                        accepted_tx.entrypoint(),
+                    )?;
                     if precheck.single_ed25519_prechecked {
                         stateless_cache_warm.push(accepted_tx.clone());
                     }
+                    accepted_transactions.push(accepted_tx);
+                }
+                let mut accepted = Vec::with_capacity(accepted_transactions.len());
+                #[cfg(any(feature = "p2p_ws", feature = "connect"))]
+                let mut local_route_cache = Vec::new();
+                for accepted_tx in accepted_transactions {
                     let routing_plan = app
                         .queue
                         .route_plan_with_state(&accepted_tx, app.state.as_ref())

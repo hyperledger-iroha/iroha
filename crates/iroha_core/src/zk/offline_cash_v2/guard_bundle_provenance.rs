@@ -20,6 +20,8 @@ use core::{convert::Infallible, fmt};
 use halo2_proofs::halo2curves::ff::PrimeField;
 use sha2::{Digest as _, Sha256};
 
+#[cfg(test)]
+use super::state_recursive_fold::StateRecursiveFoldParityV2;
 use super::{
     OFFLINE_CASH_CHILD_PROOF_ABSOLUTE_MAX_BYTES_V2, OFFLINE_CASH_HALO2_K_V2,
     OFFLINE_CASH_PARENT_LINEAGE_ACCUMULATOR_BYTES_V2, OfflineCashHalo2CircuitRoleV2,
@@ -33,9 +35,6 @@ use super::{
     },
     state_recursive_fold::CanonicalStateAccumulatorV2,
 };
-
-#[cfg(test)]
-use super::state_recursive_fold::StateRecursiveFoldParityV2;
 
 const PROTOCOL_DOMAIN_V2: &[u8] = b"iroha:offline-cash:v2:halo2-source-protocol";
 const HALO2_BACKEND_REVISION_V2: &[u8] = b"halo2-axiom/0.5.1";
@@ -1224,6 +1223,65 @@ impl VerifiedOfflineCashGuardBundleStateHandoffV2 {
             ep_prior: self.ep_prior,
         }
     }
+}
+
+/// Build the narrow, canonically absent-child GuardBundle handoff used only by
+/// the native relation ownership tests.
+#[cfg(test)]
+pub(super) fn guard_bundle_state_handoff_for_native_relation_test_v2(
+    eq_current: CanonicalStateAccumulatorV2,
+    eq_prior: &CanonicalStateAccumulatorV2,
+    ep_current: CanonicalStateAccumulatorV2,
+    ep_prior: &CanonicalStateAccumulatorV2,
+) -> Result<VerifiedOfflineCashGuardBundleStateHandoffV2, OfflineCashGuardBundleProvenanceErrorV2> {
+    if eq_prior.parity() != StateRecursiveFoldParityV2::Eq
+        || ep_prior.parity() != StateRecursiveFoldParityV2::Ep
+    {
+        return Err(OfflineCashGuardBundleProvenanceErrorV2::ParityMismatch);
+    }
+    let eq_prior = OfflineCashEqParentLineageV2::decode(eq_prior.as_bytes())
+        .map_err(|_| OfflineCashGuardBundleProvenanceErrorV2::InvalidPriorLineage)?;
+    let ep_prior = OfflineCashEpParentLineageV2::decode(ep_prior.as_bytes())
+        .map_err(|_| OfflineCashGuardBundleProvenanceErrorV2::InvalidPriorLineage)?;
+    let current_helper = AuthenticatedOfflineCashCurrentHelperOwnerV2::from_test_statement_v2(
+        OfflineCashGuardBundleStatementV2 {
+            operation: OfflineCashGuardBundleOperationV2::SendSplit,
+            android_key_cert_present: false,
+            p256_signature_present: false,
+            from_sequence: 7,
+            to_sequence: 8,
+            release_id: [0x11; 32],
+            context_digest: [0x12; 32],
+            current_head: [0x13; 32],
+            current_lineage_digest: [0x14; 32],
+            transition_digest: [0x15; 32],
+            wallet_binding: [0x16; 32],
+            hardware_policy_id: [0x17; 32],
+            guard_device_id: [0x18; 32],
+            current_guard_binding: [0x19; 32],
+            next_guard_binding: [0x1a; 32],
+            platform_key_digest: [0x1b; 32],
+            platform_message_digest: [0x1c; 32],
+            guard_use_claim_digest: [0x31; 32],
+            platform_bind_claim_digest: [0x32; 32],
+            android_certificate_digest: [0; 32],
+            android_tbs_digest: [0; 32],
+            android_issuer_key_digest: [0; 32],
+            android_attestation_digest: [0; 32],
+            android_key_cert_claim_digest: [0; 32],
+            registration_receipt_commitment: [0; 32],
+            guard_bundle_digest: [0x33; 32],
+        },
+    )?;
+    let provenance = assemble_unverified_offline_cash_guard_bundle_provenance_v2(
+        current_helper,
+        OfflineCashRegisteredP256ChildProvenanceV2::CanonicallyAbsent,
+        &eq_prior,
+        &ep_prior,
+    )?;
+    VerifiedOfflineCashGuardBundleStateHandoffV2::from_test_verified_parts_v2(
+        provenance, eq_current, ep_current,
+    )
 }
 
 /// Opaque ownership seal retained by the provenance-bound STATE input pair.

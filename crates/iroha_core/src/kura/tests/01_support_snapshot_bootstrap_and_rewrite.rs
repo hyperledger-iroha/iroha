@@ -280,7 +280,10 @@ fn kura_new_rejects_empty_production_store_root_before_persistence_initializatio
     let temp_dir = TempDir::new().expect("tempdir");
     let mut config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
     config.store_dir = WithOrigin::inline(PathBuf::new());
-    let err = match Kura::new(&config, &RuntimeLaneConfig::default()) {
+    let err = match Kura::open_test_kura_with_configured_lane_config(
+        &config,
+        &RuntimeLaneConfig::default(),
+    ) {
         Ok(_) => panic!("empty production Kura root must fail closed"),
         Err(err) => err,
     };
@@ -299,8 +302,11 @@ fn kura_startup_rejects_every_retired_roster_artifact() {
     ] {
         let temp_dir = TempDir::new().expect("retired-artifact tempdir");
         let config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
-        let (kura, _) = Kura::new(&config, &RuntimeLaneConfig::default())
-            .expect("initialize retired-artifact Kura");
+        let (kura, _) = Kura::open_test_kura_with_configured_lane_config(
+            &config,
+            &RuntimeLaneConfig::default(),
+        )
+        .expect("initialize retired-artifact Kura");
         let store_root = kura.store_root();
         let blocks_root = kura.active_blocks_dir.lock().clone();
         drop(kura);
@@ -316,7 +322,10 @@ fn kura_startup_rejects_every_retired_roster_artifact() {
         } else {
             fs::write(&path, b"retired artifact must remain").expect("write retired artifact");
         }
-        let err = match Kura::new(&config, &RuntimeLaneConfig::default()) {
+        let err = match Kura::open_test_kura_with_configured_lane_config(
+            &config,
+            &RuntimeLaneConfig::default(),
+        ) {
             Ok(_) => panic!("retired artifact {name} must abort Kura startup"),
             Err(err) => err,
         };
@@ -350,7 +359,8 @@ fn pending_v1_rollback_intents_are_rejected_before_mutation() {
         let temp_dir = TempDir::new().expect("V1 rollback tempdir");
         let config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
         let lane_config = RuntimeLaneConfig::default();
-        let (kura, _) = Kura::new(&config, &lane_config).expect("initialize rollback Kura");
+        let (kura, _) = Kura::open_test_kura_with_configured_lane_config(&config, &lane_config)
+            .expect("initialize rollback Kura");
         let hashes = store_dummy_blocks(&kura, 2);
         let blocks_root = kura.active_blocks_dir.lock().clone();
         drop(kura);
@@ -375,7 +385,7 @@ fn pending_v1_rollback_intents_are_rejected_before_mutation() {
         sync_dir(&blocks_root).expect("sync V1 rollback intent");
         let before = snapshot_regular_test_tree(&blocks_root);
         assert!(matches!(
-            Kura::new(&config, &lane_config),
+            Kura::open_test_kura_with_configured_lane_config(&config, &lane_config),
             Err(Error::RollbackIntentInvalid { .. })
         ));
         assert_eq!(
@@ -390,14 +400,15 @@ fn kura_startup_rejects_corrupt_rollback_intent_without_mutating_block_boundary(
     let temp_dir = TempDir::new().expect("tempdir");
     let config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
     let lane_config = RuntimeLaneConfig::default();
-    let (kura, _) = Kura::new(&config, &lane_config).expect("initial Kura");
+    let (kura, _) = Kura::open_test_kura_with_configured_lane_config(&config, &lane_config)
+        .expect("initial Kura");
     store_dummy_blocks(&kura, 2);
     let blocks_root = kura.active_blocks_dir.lock().clone();
     drop(kura);
     let intent_path = Kura::rollback_intent_path(&blocks_root);
     fs::write(&intent_path, b"corrupt rollback intent").expect("write corrupt intent");
     sync_dir(&blocks_root).expect("sync corrupt intent marker");
-    let err = match Kura::new(&config, &lane_config) {
+    let err = match Kura::open_test_kura_with_configured_lane_config(&config, &lane_config) {
         Ok(_) => panic!("corrupt rollback intent must block startup"),
         Err(err) => err,
     };
@@ -415,7 +426,8 @@ fn kura_startup_promotes_synced_temporary_rollback_intent_and_completes() {
     let temp_dir = TempDir::new().expect("tempdir");
     let config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
     let lane_config = RuntimeLaneConfig::default();
-    let (kura, _) = Kura::new(&config, &lane_config).expect("initial Kura");
+    let (kura, _) = Kura::open_test_kura_with_configured_lane_config(&config, &lane_config)
+        .expect("initial Kura");
     let hashes = store_dummy_blocks(&kura, 2);
     let blocks_root = kura.active_blocks_dir.lock().clone();
     drop(kura);
@@ -434,8 +446,9 @@ fn kura_startup_promotes_synced_temporary_rollback_intent_and_completes() {
         .sync_data()
         .expect("sync temporary intent");
     sync_dir(&blocks_root).expect("sync temporary intent directory entry");
-    let (reopened, BlockCount(block_count)) = Kura::new(&config, &lane_config)
-        .expect("startup should promote and complete valid temporary intent");
+    let (reopened, BlockCount(block_count)) =
+        Kura::open_test_kura_with_configured_lane_config(&config, &lane_config)
+            .expect("startup should promote and complete valid temporary intent");
     assert_eq!(block_count, 1);
     assert_eq!(
         reopened.block_hash_at_height(nonzero!(1_usize)),
@@ -1146,6 +1159,10 @@ fn kagemusha_topup_witness(
         iroha_data_model::validation_fee::ValidationFeePolicySnapshotCommitmentV1::from_registry(
             1, None,
         );
+    let casting_snapshot =
+        iroha_data_model::parliament_casting::ParliamentTimedOvnCastingSnapshotCommitmentV1::empty(
+            1,
+        );
     let witness = ExecWitness {
         reads: Vec::new(),
         writes: vec![
@@ -1164,6 +1181,11 @@ fn kagemusha_topup_witness(
                 value: norito::to_bytes(&validation_fee_snapshot)
                     .expect("encode validation-fee snapshot commitment"),
             },
+            ExecKv {
+                key: iroha_data_model::parliament_casting::PARLIAMENT_TIMED_OVN_CASTING_WITNESS_KEY_V1.to_vec(),
+                value: norito::to_bytes(&casting_snapshot)
+                    .expect("encode Parliament timed-OVN casting snapshot commitment"),
+            },
         ],
         fastpq_transcripts: Vec::new(),
         fastpq_batches: Vec::new(),
@@ -1181,6 +1203,13 @@ fn kagemusha_receiver_only_witness(
     height: u64,
     evaluated_at_ms: u64,
 ) -> (ExecWitness, ExecutionCommitment) {
+    kagemusha_receiver_only_witness_with_casting(height, evaluated_at_ms, &[])
+}
+fn kagemusha_receiver_only_witness_with_casting(
+    height: u64,
+    evaluated_at_ms: u64,
+    casting_bindings: &[iroha_data_model::parliament_casting::ParliamentTimedOvnCastingContextBindingV1],
+) -> (ExecWitness, ExecutionCommitment) {
     let receiver_snapshot =
         iroha_data_model::offline::KagemushaActiveReceiverSnapshotV1::unavailable(
             height,
@@ -1192,6 +1221,11 @@ fn kagemusha_receiver_only_witness(
         iroha_data_model::validation_fee::ValidationFeePolicySnapshotCommitmentV1::from_registry(
             height, None,
         );
+    let casting_snapshot = iroha_data_model::parliament_casting::ParliamentTimedOvnCastingSnapshotCommitmentV1::from_ordered_bindings(
+        height,
+        casting_bindings,
+    )
+    .expect("derive Parliament timed-OVN casting snapshot commitment");
     let witness = ExecWitness {
         reads: Vec::new(),
         writes: vec![
@@ -1206,6 +1240,11 @@ fn kagemusha_receiver_only_witness(
                 value: norito::to_bytes(&validation_fee_snapshot)
                     .expect("encode validation-fee snapshot commitment"),
             },
+            ExecKv {
+                key: iroha_data_model::parliament_casting::PARLIAMENT_TIMED_OVN_CASTING_WITNESS_KEY_V1.to_vec(),
+                value: norito::to_bytes(&casting_snapshot)
+                    .expect("encode Parliament timed-OVN casting snapshot commitment"),
+            },
         ],
         fastpq_transcripts: Vec::new(),
         fastpq_batches: Vec::new(),
@@ -1218,6 +1257,136 @@ fn kagemusha_receiver_only_witness(
         crate::sumeragi::exec::execution_commitment_from_witness_for_tests(&witness, &manifest)
             .expect("derive receiver-only execution commitment");
     (witness, commitment)
+}
+fn parliament_casting_binding(
+    height: u64,
+    ballot_index: u32,
+) -> iroha_data_model::parliament_casting::ParliamentTimedOvnCastingContextBindingV1 {
+    use iroha_data_model::{
+        parliament_casting::{
+            PARLIAMENT_TIMED_OVN_CASTING_COMMITMENT_VERSION_V1,
+            ParliamentTimedOvnCastingContextBindingV1, ParliamentTimedOvnCastingPhaseV1,
+            ParliamentTimedOvnRegistrationCorpusCommitmentV1,
+        },
+        parliament_types::{
+            BallotAttemptId, BodyInstanceId, GovernanceAttemptId, ProposalContentId,
+            TleKeySessionId,
+        },
+    };
+
+    let mut ballot_id = [0_u8; 32];
+    ballot_id[28..].copy_from_slice(&ballot_index.to_be_bytes());
+    ParliamentTimedOvnCastingContextBindingV1 {
+        version: PARLIAMENT_TIMED_OVN_CASTING_COMMITMENT_VERSION_V1,
+        evaluated_height: height,
+        phase: ParliamentTimedOvnCastingPhaseV1::Registered,
+        network_id: [1; 32],
+        proposal_content_id: ProposalContentId::new([2; 32]),
+        governance_attempt_id: GovernanceAttemptId::new([3; 32]),
+        body_instance_id: BodyInstanceId::new([4; 32]),
+        ballot_attempt_id: BallotAttemptId::new(ballot_id),
+        parameter_hash: [5; 32],
+        tle_key_session_id: TleKeySessionId::new([6; 32]),
+        tle_key_transcript_hash: [7; 32],
+        tle_master_public_key: [8; 96],
+        registration_opened_at_finalized_height: height,
+        registration_close_height: height + 1,
+        survivor_freeze_height: height + 2,
+        commitment_close_height: height + 3,
+        target_finalized_height: height + 4,
+        registration_corpus: ParliamentTimedOvnRegistrationCorpusCommitmentV1::from_records(&[])
+            .expect("empty casting registration corpus"),
+        survivor_count: None,
+        dropout_root: None,
+        release_identity: None,
+    }
+}
+fn parliament_frozen_casting_binding(
+    height: u64,
+    ballot_index: u32,
+) -> iroha_data_model::parliament_casting::ParliamentTimedOvnCastingContextBindingV1 {
+    use iroha_data_model::parliament_casting::{
+        ParliamentTimedOvnCastingPhaseV1, ParliamentTimedOvnRegistrationCorpusCommitmentV1,
+        ParliamentTimedOvnReleaseBindingV1,
+    };
+
+    assert!(height >= 3, "frozen fixture needs three schedule heights");
+    let mut binding = parliament_casting_binding(height, ballot_index);
+    binding.phase = ParliamentTimedOvnCastingPhaseV1::SurvivorsFrozen;
+    binding.registration_opened_at_finalized_height = height - 2;
+    binding.registration_close_height = height - 1;
+    binding.survivor_freeze_height = height;
+    binding.commitment_close_height = height + 1;
+    binding.target_finalized_height = height + 2;
+    binding.registration_corpus =
+        ParliamentTimedOvnRegistrationCorpusCommitmentV1::from_records(&[vec![0xA5]])
+            .expect("single-record casting corpus commitment");
+    binding.survivor_count = Some(1);
+    binding.dropout_root = Some([9; 32]);
+    binding.release_identity = Some(ParliamentTimedOvnReleaseBindingV1 {
+        tle_key_session_id: binding.tle_key_session_id,
+        governance_attempt_id: binding.governance_attempt_id,
+        body_instance_id: binding.body_instance_id,
+        ballot_attempt_id: binding.ballot_attempt_id,
+        survivor_corpus_root: [10; 32],
+        no_recovery_root: [11; 32],
+        target_finalized_height: binding.target_finalized_height,
+        parameter_hash: binding.parameter_hash,
+    });
+    binding
+}
+#[test]
+fn active_receiver_sidecar_decode_budget_is_protocol_bounded() {
+    let limits =
+        kagemusha_active_receiver_decode_limits(MAX_KAGEMUSHA_ACTIVE_RECEIVER_SIDECAR_BYTES);
+    assert_eq!(
+        limits.max_sequence_elements(),
+        usize::try_from(
+            iroha_data_model::parliament_casting::MAX_PARLIAMENT_CONCURRENT_CASTING_CONTEXTS_V1
+        )
+        .expect("u32 casting bound fits usize")
+    );
+    assert_eq!(
+        limits.max_field_bytes(),
+        MAX_KAGEMUSHA_ACTIVE_RECEIVER_SIDECAR_BYTES
+    );
+    assert_eq!(
+        limits.max_total_allocated_bytes(),
+        MAX_KAGEMUSHA_ACTIVE_RECEIVER_DECODE_ALLOCATED_BYTES
+    );
+    assert_eq!(
+        limits.max_nesting_depth(),
+        MAX_KAGEMUSHA_ACTIVE_RECEIVER_DECODE_DEPTH
+    );
+}
+#[test]
+fn maximum_frozen_casting_set_fits_the_durable_sidecar_bound() {
+    let height = 3;
+    let bindings = (1
+        ..=iroha_data_model::parliament_casting::MAX_PARLIAMENT_CONCURRENT_CASTING_CONTEXTS_V1)
+        .map(|index| parliament_frozen_casting_binding(height, index))
+        .collect::<Vec<_>>();
+    assert!(bindings.iter().all(|binding| binding.is_valid()));
+    let (witness, execution_commitment) =
+        kagemusha_receiver_only_witness_with_casting(height, 1, &bindings);
+    let kura = Kura::blank_kura_for_testing();
+    let block = DummyBlocks::new().next();
+    kura.stage_kagemusha_topup_finality_sidecar(
+        height,
+        block.hash(),
+        &witness,
+        execution_commitment,
+        &bindings,
+    )
+    .expect("maximum casting set fits the staged sidecar");
+    let encoded_len = std::fs::metadata(kura.kagemusha_active_receiver_staging_path(height))
+        .expect("maximum casting sidecar metadata")
+        .len();
+    assert!(
+        encoded_len
+            <= u64::try_from(MAX_KAGEMUSHA_ACTIVE_RECEIVER_SIDECAR_BYTES)
+                .expect("sidecar byte bound fits u64")
+    );
 }
 #[test]
 fn checked_keypair_helpers_preserve_requested_algorithm() {
@@ -1348,16 +1517,17 @@ fn store_root_lock_rejects_a_second_live_kura_and_releases_on_drop() {
     let temp_dir = TempDir::new().expect("create Kura store root");
     let config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
     let lane_config = RuntimeLaneConfig::default();
-    let (first, _) = Kura::new(&config, &lane_config).expect("open first Kura");
+    let (first, _) = Kura::open_test_kura_with_configured_lane_config(&config, &lane_config)
+        .expect("open first Kura");
     let expected_lock_path = std::fs::canonicalize(temp_dir.path())
         .expect("canonical Kura root")
         .join(STORE_ROOT_LOCK_FILE_NAME);
     assert!(matches!(
-        Kura::new(&config, &lane_config),
+        Kura::open_test_kura_with_configured_lane_config(&config, &lane_config),
         Err(Error::Locked(path)) if path == expected_lock_path
     ));
     drop(first);
-    let (reopened, _) = Kura::new(&config, &lane_config)
+    let (reopened, _) = Kura::open_test_kura_with_configured_lane_config(&config, &lane_config)
         .expect("the OS lock must be released when the first Kura is dropped");
     drop(reopened);
 }
@@ -1373,7 +1543,7 @@ fn store_root_lock_rejects_a_symlink_without_touching_its_target() {
     symlink(&victim, &lock_path).expect("plant lockfile symlink");
     let config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
     assert!(matches!(
-        Kura::new(&config, &RuntimeLaneConfig::default()),
+        Kura::open_test_kura_with_configured_lane_config(&config, &RuntimeLaneConfig::default()),
         Err(Error::IO(error, observed_path))
             if error.kind() == ErrorKind::InvalidData && observed_path == lock_path
     ));
@@ -1395,7 +1565,9 @@ fn store_root_lock_canonicalizes_a_symlinked_root_for_all_kura_paths() {
     alias_config.store_dir = WithOrigin::inline(alias_root);
     let real_config = kura_config_for_dir(&real_root, BLOCKS_IN_MEMORY);
     let lane_config = RuntimeLaneConfig::default();
-    let (aliased, _) = Kura::new(&alias_config, &lane_config).expect("open aliased Kura root");
+    let (aliased, _) =
+        Kura::open_test_kura_with_configured_lane_config(&alias_config, &lane_config)
+            .expect("open aliased Kura root");
     assert_eq!(aliased.store_root, canonical_root);
     assert!(
         aliased
@@ -1404,13 +1576,14 @@ fn store_root_lock_canonicalizes_a_symlinked_root_for_all_kura_paths() {
             .starts_with(&canonical_root)
     );
     assert!(matches!(
-        Kura::new(&real_config, &lane_config),
+        Kura::open_test_kura_with_configured_lane_config(&real_config, &lane_config),
         Err(Error::Locked(path))
             if path == canonical_root.join(STORE_ROOT_LOCK_FILE_NAME)
     ));
     drop(aliased);
-    let (reopened, _) = Kura::new(&real_config, &lane_config)
-        .expect("canonical root must reopen after aliased owner drops");
+    let (reopened, _) =
+        Kura::open_test_kura_with_configured_lane_config(&real_config, &lane_config)
+            .expect("canonical root must reopen after aliased owner drops");
     drop(reopened);
 }
 #[test]
@@ -1538,7 +1711,8 @@ fn telemetry_attach_hydrates_authenticated_durable_tip_after_restart() {
     let config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
     let lane_config = RuntimeLaneConfig::default();
     let artifact = {
-        let (kura, _) = Kura::new(&config, &lane_config).expect("open persistent telemetry Kura");
+        let (kura, _) = Kura::open_test_kura_with_configured_lane_config(&config, &lane_config)
+            .expect("open persistent telemetry Kura");
         let block = DummyBlocks::new().next();
         kura.store_block(Arc::clone(&block))
             .expect("store persistent telemetry fixture block");
@@ -1548,7 +1722,8 @@ fn telemetry_attach_hydrates_authenticated_durable_tip_after_restart() {
             .expect("store persistent telemetry fixture finality");
         artifact
     };
-    let (reopened, _) = Kura::new(&config, &lane_config).expect("reopen persistent telemetry Kura");
+    let (reopened, _) = Kura::open_test_kura_with_configured_lane_config(&config, &lane_config)
+        .expect("reopen persistent telemetry Kura");
     let metrics = Arc::new(Metrics::default());
     reopened.attach_telemetry(StateTelemetry::new(Arc::clone(&metrics), true));
     assert_v2_finality_telemetry(&metrics, &artifact);
@@ -1565,7 +1740,8 @@ fn telemetry_attach_hydrates_highest_finality_below_durable_tip_after_restart() 
     let config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
     let lane_config = RuntimeLaneConfig::default();
     let artifact = {
-        let (kura, _) = Kura::new(&config, &lane_config).expect("open persistent telemetry Kura");
+        let (kura, _) = Kura::open_test_kura_with_configured_lane_config(&config, &lane_config)
+            .expect("open persistent telemetry Kura");
         let mut generator = DummyBlocks::new();
         let blocks = vec![generator.next(), generator.next()];
         for block in &blocks {
@@ -1581,7 +1757,8 @@ fn telemetry_attach_hydrates_highest_finality_below_durable_tip_after_restart() 
             .expect("store finality below the durable block tip");
         artifact
     };
-    let (reopened, _) = Kura::new(&config, &lane_config).expect("reopen persistent telemetry Kura");
+    let (reopened, _) = Kura::open_test_kura_with_configured_lane_config(&config, &lane_config)
+        .expect("reopen persistent telemetry Kura");
     {
         let inventory = reopened.v2_startup_finality_verification_inventory.lock();
         let inventory = inventory
@@ -1645,6 +1822,7 @@ fn kagemusha_topup_witness_stage_promotes_only_after_exact_finality_persistence(
         artifact.block_hash,
         &witness,
         execution_commitment,
+        &[],
     )
     .expect("durably stage top-up witness projection");
     assert!(
@@ -1668,6 +1846,10 @@ fn kagemusha_topup_witness_stage_promotes_only_after_exact_finality_persistence(
             .exists(),
         "persisting finality alone must not silently publish witness bytes"
     );
+    assert!(matches!(
+        kura.parliament_timed_ovn_casting_snapshot_commitment_v1(artifact.height),
+        Err(Error::KagemushaActiveReceiverFinalitySidecar(_))
+    ));
     kura.promote_kagemusha_topup_finality_sidecar(&artifact, &receipt)
         .expect("promote exact staged sidecar");
     assert!(
@@ -1699,7 +1881,8 @@ fn active_receiver_witness_survives_finality_promotion_restart_and_retry() {
     let temp_dir = TempDir::new().expect("create persistent Kura root");
     let config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
     let lane_config = RuntimeLaneConfig::default();
-    let (kura, _) = Kura::new(&config, &lane_config).expect("open persistent Kura");
+    let (kura, _) = Kura::open_test_kura_with_configured_lane_config(&config, &lane_config)
+        .expect("open persistent Kura");
     let block = DummyBlocks::new().next();
     let (witness, mut execution_commitment) = kagemusha_topup_witness([0xC1; 32], [0xC2; 32]);
     execution_commitment.executed_block_wire_len = u64::try_from(
@@ -1718,6 +1901,7 @@ fn active_receiver_witness_survives_finality_promotion_restart_and_retry() {
         artifact.block_hash,
         &witness,
         execution_commitment,
+        &[],
     )
     .expect("stage receiver witness before finality");
     kura.store_block(Arc::clone(&block))
@@ -1735,13 +1919,101 @@ fn active_receiver_witness_survives_finality_promotion_restart_and_retry() {
     kura.promote_kagemusha_topup_finality_sidecar(&artifact, &receipt)
         .expect("exact promotion retry is idempotent");
     drop(kura);
-    let (reopened, _) = Kura::new(&config, &lane_config).expect("reopen persistent Kura");
+    let (reopened, _) = Kura::open_test_kura_with_configured_lane_config(&config, &lane_config)
+        .expect("reopen persistent Kura");
     let recovered = reopened
         .kagemusha_active_receiver_witness_proof_v1(artifact.height)
         .expect("read receiver witness after restart")
         .expect("receiver witness survives restart");
     assert_eq!(recovered, expected);
     assert!(recovered.verify(execution_commitment.ordinary_writes_root));
+}
+#[test]
+fn parliament_casting_membership_survives_restart_and_tampering_fails_closed() {
+    let temp_dir = TempDir::new().expect("create persistent Kura root");
+    let config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
+    let lane_config = RuntimeLaneConfig::default();
+    let (kura, _) = Kura::open_test_kura_with_configured_lane_config(&config, &lane_config)
+        .expect("open persistent Kura");
+    let block = DummyBlocks::new().next();
+    let height = block.header().height().get();
+    let bindings = vec![
+        parliament_casting_binding(height, 1),
+        parliament_casting_binding(height, 2),
+    ];
+    let requested_ballot = bindings[1].ballot_attempt_id;
+    let (witness, mut execution_commitment) =
+        kagemusha_receiver_only_witness_with_casting(height, 1, &bindings);
+    execution_commitment.executed_block_wire_len = u64::try_from(
+        block
+            .encode_wire()
+            .expect("canonical casting fixture wire")
+            .len(),
+    )
+    .expect("canonical casting fixture wire length fits u64");
+    execution_commitment.executed_block_wire_hash = block
+        .executed_block_wire_hash()
+        .expect("canonical casting fixture executed wire");
+    let artifact = v2_finality_artifact_for_block_with_execution(&block, execution_commitment);
+    kura.stage_kagemusha_topup_finality_sidecar(
+        artifact.height,
+        artifact.block_hash,
+        &witness,
+        execution_commitment,
+        &bindings,
+    )
+    .expect("stage bounded casting proof material");
+    kura.store_block(Arc::clone(&block))
+        .expect("persist casting fixture block");
+    let receipt = kura
+        .store_v2_finality_artifact(&artifact)
+        .expect("persist casting fixture finality");
+    kura.promote_kagemusha_topup_finality_sidecar(&artifact, &receipt)
+        .expect("promote casting proof material");
+
+    let expected = kura
+        .parliament_timed_ovn_finalized_casting_proof_v1(height, requested_ballot)
+        .expect("read finalized casting proof")
+        .expect("requested casting binding exists");
+    assert_eq!(expected.binding, bindings[1]);
+    assert!(expected.verify(execution_commitment.ordinary_writes_root));
+    assert_eq!(
+        kura.parliament_timed_ovn_casting_snapshot_commitment_v1(height)
+            .expect("read finalized casting snapshot")
+            .expect("casting snapshot exists")
+            .count,
+        2
+    );
+    assert!(
+        kura.parliament_timed_ovn_finalized_casting_proof_v1(
+            height,
+            iroha_data_model::parliament_types::BallotAttemptId::new([0xFF; 32]),
+        )
+        .expect("unknown ballot lookup is valid")
+        .is_none()
+    );
+    drop(kura);
+
+    let (reopened, _) = Kura::open_test_kura_with_configured_lane_config(&config, &lane_config)
+        .expect("reopen persistent Kura");
+    let recovered = reopened
+        .parliament_timed_ovn_finalized_casting_proof_v1(height, requested_ballot)
+        .expect("read casting proof after restart")
+        .expect("casting proof survives restart");
+    assert_eq!(recovered, expected);
+    assert!(recovered.verify(execution_commitment.ordinary_writes_root));
+
+    let sidecar_path = reopened.kagemusha_active_receiver_sidecar_path(height);
+    let (mut corrupted, _) = reopened
+        .decode_kagemusha_active_receiver_finality_sidecar(&sidecar_path)
+        .expect("decode durable casting sidecar")
+        .expect("durable casting sidecar exists");
+    corrupted.parliament_timed_ovn_casting_bindings[0].tle_key_transcript_hash[0] ^= 1;
+    std::fs::write(&sidecar_path, corrupted.encode()).expect("corrupt retained casting binding");
+    assert!(matches!(
+        reopened.parliament_timed_ovn_finalized_casting_proof_v1(height, requested_ballot),
+        Err(Error::KagemushaActiveReceiverFinalitySidecar(_))
+    ));
 }
 #[test]
 fn kagemusha_topup_stage_rejects_commitment_and_path_substitution() {
@@ -1762,15 +2034,21 @@ fn kagemusha_topup_stage_rejects_commitment_and_path_substitution() {
     let mut mismatched = execution_commitment;
     mismatched.ordinary_writes_root = Hash::new(b"substituted ordinary root");
     assert!(matches!(
-        kura.stage_kagemusha_topup_finality_sidecar(1, block.hash(), &witness, mismatched,),
+        kura.stage_kagemusha_topup_finality_sidecar(1, block.hash(), &witness, mismatched, &[]),
         Err(Error::KagemushaActiveReceiverFinalitySidecar(_))
     ));
     assert!(
         !kura.kagemusha_topup_finality_staging_path(1).exists(),
         "a commitment mismatch must not leave a stage"
     );
-    kura.stage_kagemusha_topup_finality_sidecar(1, block.hash(), &witness, execution_commitment)
-        .expect("stage canonical witness");
+    kura.stage_kagemusha_topup_finality_sidecar(
+        1,
+        block.hash(),
+        &witness,
+        execution_commitment,
+        &[],
+    )
+    .expect("stage canonical witness");
     let stage_path = kura.kagemusha_topup_finality_staging_path(1);
     let (mut staged, _) = kura
         .decode_staged_kagemusha_topup_finality(&stage_path)
@@ -1833,6 +2111,7 @@ fn non_topup_finality_rejects_orphan_staged_and_final_sidecars() {
         artifact.block_hash,
         &receiver_witness,
         execution_commitment,
+        &[],
     )
     .expect("stage mandatory receiver witness for non-top-up block");
     kura.store_block(Arc::clone(&block))
@@ -2877,7 +3156,11 @@ fn canonical_finality_path_rejects_raw_artifact_shape_on_read_and_restart() {
     let temp_dir = TempDir::new().expect("create Kura root");
     let config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
     {
-        let (kura, _) = Kura::new(&config, &RuntimeLaneConfig::default()).expect("open Kura");
+        let (kura, _) = Kura::open_test_kura_with_configured_lane_config(
+            &config,
+            &RuntimeLaneConfig::default(),
+        )
+        .expect("open Kura");
         let block = store_dummy_block_arcs(&kura, 1)
             .pop()
             .expect("canonical block");
@@ -2893,7 +3176,8 @@ fn canonical_finality_path_rejects_raw_artifact_shape_on_read_and_restart() {
         );
     }
     assert!(
-        Kura::new(&config, &RuntimeLaneConfig::default()).is_err(),
+        Kura::open_test_kura_with_configured_lane_config(&config, &RuntimeLaneConfig::default())
+            .is_err(),
         "startup must reject a raw artifact at the canonical private-record path"
     );
 }
@@ -2902,7 +3186,11 @@ fn canonical_finality_path_rejects_wrong_private_record_version_on_read_and_rest
     let temp_dir = TempDir::new().expect("create Kura root");
     let config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
     {
-        let (kura, _) = Kura::new(&config, &RuntimeLaneConfig::default()).expect("open Kura");
+        let (kura, _) = Kura::open_test_kura_with_configured_lane_config(
+            &config,
+            &RuntimeLaneConfig::default(),
+        )
+        .expect("open Kura");
         let block = store_dummy_block_arcs(&kura, 1)
             .pop()
             .expect("canonical block");
@@ -2923,7 +3211,7 @@ fn canonical_finality_path_rejects_wrong_private_record_version_on_read_and_rest
         ));
     }
     assert!(matches!(
-        Kura::new(&config, &RuntimeLaneConfig::default()),
+        Kura::open_test_kura_with_configured_lane_config(&config, &RuntimeLaneConfig::default()),
         Err(Error::IO(error, _)) if error.kind() == ErrorKind::InvalidData
     ));
 }
@@ -2932,7 +3220,11 @@ fn canonical_finality_path_rejects_legacy_v2_private_record_on_read_and_restart(
     let temp_dir = TempDir::new().expect("create Kura root");
     let config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
     {
-        let (kura, _) = Kura::new(&config, &RuntimeLaneConfig::default()).expect("open Kura");
+        let (kura, _) = Kura::open_test_kura_with_configured_lane_config(
+            &config,
+            &RuntimeLaneConfig::default(),
+        )
+        .expect("open Kura");
         let block = store_dummy_block_arcs(&kura, 1)
             .pop()
             .expect("canonical block");
@@ -2953,7 +3245,7 @@ fn canonical_finality_path_rejects_legacy_v2_private_record_on_read_and_restart(
         ));
     }
     assert!(matches!(
-        Kura::new(&config, &RuntimeLaneConfig::default()),
+        Kura::open_test_kura_with_configured_lane_config(&config, &RuntimeLaneConfig::default()),
         Err(Error::IO(error, _)) if error.kind() == ErrorKind::InvalidData
     ));
 }

@@ -141,8 +141,6 @@ define_instruction_handlers! {
     dispatch_instruction::<iroha_data_model::isi::alias_setup::ConfigureAliasAutoRenew>,
     dispatch_instruction::<iroha_data_model::isi::alias_setup::RebindAccountAlias>,
     dispatch_instruction::<iroha_data_model::isi::alias_setup::CompareAndSetPrimaryAccountAlias>,
-    dispatch_instruction::<iroha_data_model::isi::account_alias_lease::AcquireAccountAliasLease>,
-    dispatch_instruction::<iroha_data_model::isi::domain_link::SetAccountAliasBinding>,
     dispatch_instruction::<iroha_data_model::isi::InvalidInstruction>,
     dispatch_instruction::<iroha_data_model::isi::kaigi::CreateKaigi>,
     dispatch_instruction::<iroha_data_model::isi::kaigi::JoinKaigi>,
@@ -471,6 +469,9 @@ define_instruction_handlers! {
     dispatch_instruction::<iroha_data_model::isi::consensus_keys::RegisterConsensusKey>,
     dispatch_instruction::<iroha_data_model::isi::consensus_keys::RotateConsensusKey>,
     dispatch_instruction::<iroha_data_model::isi::consensus_keys::DisableConsensusKey>,
+    dispatch_instruction::<
+        iroha_data_model::isi::consensus_keys::ApplyThresholdKeyLifecycleCertificateV1
+    >,
     dispatch_instruction::<iroha_data_model::isi::endorsement::RegisterDomainCommittee>,
     dispatch_instruction::<iroha_data_model::isi::endorsement::SetDomainEndorsementPolicy>,
     dispatch_instruction::<iroha_data_model::isi::endorsement::SubmitDomainEndorsement>,
@@ -478,7 +479,6 @@ define_instruction_handlers! {
     dispatch_instruction::<iroha_data_model::isi::governance::ProposeDeployContract>,
     dispatch_instruction::<iroha_data_model::isi::governance::ProposeRuntimeUpgradeProposal>,
     dispatch_instruction::<iroha_data_model::isi::governance::ProposeSccpRouteGovernance>,
-    dispatch_instruction::<iroha_data_model::isi::governance::EnactSccpRouteGovernance>,
     dispatch_instruction::<iroha_data_model::isi::governance::ProposeSorafsProviderGovernance>,
     dispatch_instruction::<iroha_data_model::isi::governance::ProposeValidationFeePolicy>,
     dispatch_instruction::<
@@ -486,10 +486,12 @@ define_instruction_handlers! {
     >,
     dispatch_instruction::<iroha_data_model::isi::governance::CastZkBallot>,
     dispatch_instruction::<iroha_data_model::isi::governance::CastPlainBallot>,
-    dispatch_instruction::<iroha_data_model::isi::governance::EnactReferendum>,
-    dispatch_instruction::<iroha_data_model::isi::governance::FinalizeReferendum>,
-    dispatch_instruction::<iroha_data_model::isi::governance::ApproveGovernanceProposal>,
-    dispatch_instruction::<iroha_data_model::isi::governance::CastParliamentBallot>,
+    dispatch_instruction::<
+        iroha_data_model::isi::governance::CreateParliamentGovernanceAttemptV1
+    >,
+    dispatch_instruction::<
+        iroha_data_model::isi::governance::SubmitParliamentLifecycleTransitionV1
+    >,
     dispatch_instruction::<iroha_data_model::isi::governance::PersistCouncilForEpoch>,
     dispatch_instruction::<iroha_data_model::isi::governance::RecordCitizenServiceOutcome>,
     dispatch_instruction::<iroha_data_model::isi::governance::RegisterCitizen>,
@@ -584,6 +586,15 @@ mod registry_dispatch_tests {
         registered_native_instruction_type_names().contains(&type_name)
     }
     fn assert_native_registration<T: NativeInstructionRegistered>() {}
+    #[test]
+    fn parliament_lifecycle_and_standalone_ballots_have_native_handlers() {
+        use iroha_data_model::isi::governance;
+
+        assert_native_registration::<governance::CreateParliamentGovernanceAttemptV1>();
+        assert_native_registration::<governance::SubmitParliamentLifecycleTransitionV1>();
+        assert_native_registration::<governance::CastZkBallot>();
+        assert_native_registration::<governance::CastPlainBallot>();
+    }
     #[test]
     fn every_canonical_privacy_instruction_has_a_native_dispatch_impl() {
         use iroha_data_model::isi::privacy;
@@ -937,8 +948,8 @@ mod tests {
         nexus::{
             AxtEffectBinding, AxtFastpqBinding, AxtProofEnvelope, DataSpaceCatalog, DataSpaceId,
             DataSpaceMetadata, LANE_RELAY_FASTPQ_EFFECT_TYPE, LaneCatalog, LaneConfig,
-            LaneFastpqProofMaterial, LaneId, LaneRelayEnvelope, ProofBlob, VerifiedLaneRelayRecord,
-            lane_relay_fastpq_claim_digest,
+            LaneFastpqProofMaterial, LaneId, LaneRelayEnvelope, MAX_AXT_PROOF_BLOB_PAYLOAD_BYTES,
+            ProofBlob, VerifiedLaneRelayRecord, lane_relay_fastpq_claim_digest,
         },
         permission,
     };
@@ -1508,6 +1519,7 @@ mod tests {
         LaneDataspaceMismatch,
         UnknownDataspaceId,
         EmptyProofPayload,
+        OversizedProofPayload,
         MalformedProofEnvelope,
         ProofManifestRootMismatch,
         ProofDataspaceMismatch,
@@ -1569,6 +1581,10 @@ mod tests {
                 Case::EmptyProofPayload => (
                     "empty proof payload must be rejected",
                     &["proof payload is empty"],
+                ),
+                Case::OversizedProofPayload => (
+                    "oversized proof payload must be rejected before decode",
+                    &["proof payload exceeds", "decode limit"],
                 ),
                 Case::MalformedProofEnvelope => (
                     "malformed proof envelope must be rejected",
@@ -1720,6 +1736,7 @@ mod tests {
                 Case::MalformedExistingState => b"register-lane-relay-malformed-existing",
                 Case::ConflictingExistingState => b"register-lane-relay-conflicting-existing",
                 Case::EmptyProofPayload
+                | Case::OversizedProofPayload
                 | Case::MalformedProofEnvelope
                 | Case::EffectProofBeforeProofVerification => {
                     unreachable!("raw proof cases do not use a proof seed")
@@ -1792,6 +1809,10 @@ mod tests {
                 payload: Vec::new(),
                 expiry_slot: Some(state_transaction.block_height() + 10),
             }),
+            Case::OversizedProofPayload => Some(ProofBlob {
+                payload: vec![0xA5; MAX_AXT_PROOF_BLOB_PAYLOAD_BYTES + 1],
+                expiry_slot: Some(state_transaction.block_height() + 10),
+            }),
             Case::MalformedProofEnvelope => Some(ProofBlob {
                 payload: vec![0xFF, 0x00, 0xFE],
                 expiry_slot: Some(state_transaction.block_height() + 10),
@@ -1815,9 +1836,12 @@ mod tests {
             _ => [0x42; 32],
         };
         let proof_digest = match (&initial_proof_blob, case) {
-            (Some(proof_blob), Case::EmptyProofPayload | Case::MalformedProofEnvelope) => {
-                iroha_crypto::Hash::new(&proof_blob.payload)
-            }
+            (
+                Some(proof_blob),
+                Case::EmptyProofPayload
+                | Case::OversizedProofPayload
+                | Case::MalformedProofEnvelope,
+            ) => iroha_crypto::Hash::new(&proof_blob.payload),
             (_, Case::MismatchedFastpqDigest) => {
                 iroha_crypto::Hash::new(b"wrong-axt-proof-payload")
             }
@@ -1917,6 +1941,7 @@ mod tests {
 
         envelope = match case {
             Case::EmptyProofPayload
+            | Case::OversizedProofPayload
             | Case::MalformedProofEnvelope
             | Case::MismatchedFastpqDigest
             | Case::EffectProofBeforeProofVerification => envelope,
@@ -2113,6 +2138,8 @@ mod tests {
         register_verified_lane_relay_rejects_unknown_dataspace_id => UnknownDataspaceId;
         #[test]
         register_verified_lane_relay_rejects_empty_proof_payload => EmptyProofPayload;
+        #[test]
+        register_verified_lane_relay_rejects_oversized_proof_payload => OversizedProofPayload;
         #[test]
         register_verified_lane_relay_rejects_malformed_proof_envelope => MalformedProofEnvelope;
         #[test]

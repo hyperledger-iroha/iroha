@@ -166,6 +166,162 @@ data class SccpRecentMessages(
 
 /** Strict decoders for the closed first-release SCCP JSON API. */
 object SccpJsonParser {
+    /** Validate one exact closed SCCP V1 route-governance action. */
+    @JvmStatic
+    fun validateRouteGovernanceAction(value: Map<String, Any?>) {
+        exactFields(value, setOf("action", "route"), "SCCP route governance action")
+        val action = requiredText(value, "action")
+        val payload = requiredObject(value, "route")
+        when (action) {
+            "Register" -> {
+                exactFields(payload, setOf("route", "native_trust_anchor"), "SCCP Register")
+                val route = requiredObject(payload, "route")
+                val lane = parseInboundLane(requiredObject(route, "lane_id"), "SCCP Register.route.lane_id")
+                val parsed = parseGovernedRoute(route, lane, "SCCP Register.route")
+                require(parsed.activation == "staged") { "new SCCP routes must be staged" }
+                payload["native_trust_anchor"]?.let {
+                    val anchor = parseNativeTrustAnchor(
+                        it,
+                        lane,
+                        "SCCP Register.native_trust_anchor",
+                    )
+                    require(anchor.checkpointHeight <= MAX_JSON_SAFE_INTEGER) {
+                        "SCCP Register.native_trust_anchor exceeds the exact JSON integer bound"
+                    }
+                }
+            }
+            "SetActivation" -> {
+                exactFields(
+                    payload,
+                    setOf("key", "expected_current", "next", "inbound_finality_cutoff"),
+                    "SCCP SetActivation",
+                )
+                parseGovernanceRouteKey(requiredObject(payload, "key"), "SCCP SetActivation.key")
+                val current = parseGovernanceActivation(
+                    requiredObject(payload, "expected_current"),
+                    "SCCP SetActivation.expected_current",
+                )
+                val next = parseGovernanceActivation(
+                    requiredObject(payload, "next"),
+                    "SCCP SetActivation.next",
+                )
+                validateGovernanceCutoff(
+                    payload["inbound_finality_cutoff"],
+                    next,
+                    "SCCP SetActivation.inbound_finality_cutoff",
+                )
+                require(canTransitionGovernanceActivation(current, next)) {
+                    "SCCP activation transition is not legal"
+                }
+            }
+            "SwitchRevision" -> {
+                exactFields(
+                    payload,
+                    setOf(
+                        "previous_key",
+                        "expected_previous",
+                        "previous_next",
+                        "previous_inbound_finality_cutoff",
+                        "successor_key",
+                        "successor_next",
+                    ),
+                    "SCCP SwitchRevision",
+                )
+                val previous = parseGovernanceRouteKey(
+                    requiredObject(payload, "previous_key"),
+                    "SCCP SwitchRevision.previous_key",
+                )
+                val successor = parseGovernanceRouteKey(
+                    requiredObject(payload, "successor_key"),
+                    "SCCP SwitchRevision.successor_key",
+                )
+                val expected = parseGovernanceActivation(
+                    requiredObject(payload, "expected_previous"),
+                    "SCCP SwitchRevision.expected_previous",
+                )
+                val previousNext = parseGovernanceActivation(
+                    requiredObject(payload, "previous_next"),
+                    "SCCP SwitchRevision.previous_next",
+                )
+                val successorNext = parseGovernanceActivation(
+                    requiredObject(payload, "successor_next"),
+                    "SCCP SwitchRevision.successor_next",
+                )
+                validateGovernanceCutoff(
+                    payload["previous_inbound_finality_cutoff"],
+                    previousNext,
+                    "SCCP SwitchRevision.previous_inbound_finality_cutoff",
+                )
+                val previousTransitionValid = if (previousNext == "retired") {
+                    expected in setOf("bidirectional", "inbound_only", "paused")
+                } else {
+                    canTransitionGovernanceActivation(expected, previousNext)
+                }
+                require(
+                    previous.lane == successor.lane &&
+                        previous.routeId == successor.routeId &&
+                        previous.assetKey == successor.assetKey &&
+                        successor.revision == previous.revision + 1 &&
+                        previousTransitionValid &&
+                        previousNext in setOf("inbound_only", "paused", "retired") &&
+                        successorNext == "bidirectional",
+                ) { "SCCP revision switch is not a legal atomic cutover" }
+            }
+            "InitializeTrustAnchor" -> {
+                exactFields(
+                    payload,
+                    setOf("lane_id", "expected_current", "initial"),
+                    "SCCP InitializeTrustAnchor",
+                )
+                val lane = parseInboundLane(
+                    requiredObject(payload, "lane_id"),
+                    "SCCP InitializeTrustAnchor.lane_id",
+                )
+                require(payload["expected_current"] == null) {
+                    "SCCP initial trust anchor must expect no current value"
+                }
+                val initial = parseNativeTrustAnchor(
+                    payload["initial"],
+                    lane,
+                    "SCCP InitializeTrustAnchor.initial",
+                )
+                require(initial.checkpointHeight <= MAX_JSON_SAFE_INTEGER) {
+                    "SCCP InitializeTrustAnchor.initial exceeds the exact JSON integer bound"
+                }
+            }
+            "AdvanceTrustAnchor" -> {
+                exactFields(
+                    payload,
+                    setOf("lane_id", "expected_current", "next"),
+                    "SCCP AdvanceTrustAnchor",
+                )
+                val lane = parseInboundLane(
+                    requiredObject(payload, "lane_id"),
+                    "SCCP AdvanceTrustAnchor.lane_id",
+                )
+                val current = parseNativeTrustAnchor(
+                    payload["expected_current"],
+                    lane,
+                    "SCCP AdvanceTrustAnchor.expected_current",
+                )
+                val next = parseNativeTrustAnchor(
+                    payload["next"],
+                    lane,
+                    "SCCP AdvanceTrustAnchor.next",
+                )
+                require(
+                    current.backend == next.backend &&
+                        current.anchorHash != next.anchorHash &&
+                        current.checkpointHeight <= MAX_JSON_SAFE_INTEGER &&
+                        next.checkpointHeight <= MAX_JSON_SAFE_INTEGER &&
+                        next.checkpointHeight > current.checkpointHeight,
+                ) { "SCCP trust anchor must advance monotonically within one backend" }
+            }
+            "Remove" -> parseGovernanceRouteKey(payload, "SCCP Remove")
+            else -> throw IllegalArgumentException("SCCP route governance action is unsupported")
+        }
+    }
+
     @JvmStatic fun parseCapabilities(bytes: ByteArray): SccpCapabilities {
         val root = rootObject(bytes, "SCCP capabilities")
         exactFields(root, CAPABILITY_FIELDS, "SCCP capabilities", CAPABILITY_REQUIRED)
@@ -647,6 +803,59 @@ object SccpJsonParser {
         val anchorHash: String get() = soraFinalityAnchor.anchorHash.removePrefix("0x").uppercase()
     }
 
+    private data class GovernanceRouteKey(
+        val lane: SccpLaneIdV1,
+        val routeId: String,
+        val assetKey: String,
+        val revision: Long,
+    )
+
+    private fun parseGovernanceRouteKey(
+        value: Map<String, Any?>,
+        label: String,
+    ): GovernanceRouteKey {
+        exactFields(value, setOf("lane_id", "route_id", "asset_key", "revision"), label)
+        return GovernanceRouteKey(
+            parseInboundLane(requiredObject(value, "lane_id"), "$label.lane_id"),
+            canonicalRouteKey(value, "route_id"),
+            canonicalRouteKey(value, "asset_key"),
+            requiredLong(value, "revision", 1, 0xffff_ffffL),
+        )
+    }
+
+    private fun parseGovernanceActivation(value: Map<String, Any?>, label: String): String {
+        exactFields(value, setOf("activation", "direction"), label)
+        require(value["direction"] == null) { "$label.direction must be null" }
+        val activation = requiredText(value, "activation")
+        require(activation in ACTIVATIONS) { "$label.activation is unsupported" }
+        return activation
+    }
+
+    private fun validateGovernanceCutoff(value: Any?, activation: String, label: String) {
+        if (activation == "retired") {
+            val cutoff = objectValue(value, label)
+            exactFields(cutoff, setOf("trust_anchor_hash", "max_anchor_interval_height"), label)
+            upperBytes(cutoff, "trust_anchor_hash", 32)
+            requiredUnsignedInteger(
+                cutoff,
+                "max_anchor_interval_height",
+                MAX_JSON_SAFE_INTEGER,
+                true,
+            )
+        } else {
+            require(value == null) { "$label must be null unless activation is retired" }
+        }
+    }
+
+    private fun canTransitionGovernanceActivation(current: String, next: String): Boolean =
+        when (current) {
+            "staged" -> next in setOf("bidirectional", "inbound_only", "retired")
+            "bidirectional" -> next in setOf("inbound_only", "paused")
+            "inbound_only" -> next in setOf("paused", "retired")
+            "paused" -> next in setOf("bidirectional", "inbound_only", "retired")
+            else -> false
+        }
+
     private fun parseGovernedRoute(
         value: Map<String, Any?>,
         lane: SccpLaneIdV1,
@@ -1044,7 +1253,7 @@ object SccpJsonParser {
             upperBytes(anchor, "checkpoint_finality_artifact_hash", 32),
         )
         require(anchorRoles[0] == TAIRA_CHAIN_ID_HASH) { "$label Taira chain id hash mismatch" }
-        val protocolVersion = requiredInt(anchor, "protocol_version", 3, 4)
+        val protocolVersion = requiredInt(anchor, "protocol_version", 4, 4)
         val checkpointHeight = requiredUnsignedInteger(anchor, "checkpoint_height", MAX_U64, true)
         requireDistinctRawHashes(anchorRoles, "$label finality anchor")
         val canonicalAnchor = ByteArrayOutputStream().also { output ->

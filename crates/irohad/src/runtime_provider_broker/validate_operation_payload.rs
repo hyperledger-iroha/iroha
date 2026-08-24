@@ -91,6 +91,10 @@ fn validate_operation_payload(
         IrohaRuntimeProviderSlotV1::SoracloudHfInferenceCredentialProvider.wire_id();
     let bootle_lantern_issuance_slot =
         IrohaRuntimeProviderSlotV1::BootleLanternIssuanceProviderRegistry.wire_id();
+    let global_beacon_partial_signer_slot =
+        IrohaRuntimeProviderSlotV1::GlobalBeaconPartialSigner.wire_id();
+    let parliament_tle_partial_release_signer_slot =
+        IrohaRuntimeProviderSlotV1::ParliamentTlePartialReleaseSigner.wire_id();
     match (request.binding.slot, request.operation) {
         (slot, OPERATION_QUALIFY_V1)
             if slot == moderation_quarantine_slot
@@ -130,9 +134,25 @@ fn validate_operation_payload(
                 || slot == soracloud_runtime_signer_slot
                 || slot == soracloud_hf_credential_slot
                 || slot == bootle_lantern_issuance_slot
+                || slot == global_beacon_partial_signer_slot
+                || slot == parliament_tle_partial_release_signer_slot
                 || native_transaction_signer_role_for_slot(slot).is_some() =>
         {
             decode_canonical::<()>(&request.payload, MAX_OPERATION_FRAME_BYTES_V1)?;
+        }
+        (slot, OPERATION_GLOBAL_BEACON_PARTIAL_SIGN_V1)
+            if slot == global_beacon_partial_signer_slot =>
+        {
+            let _ =
+                decode_global_beacon_partial_sign_request(&request.payload, session_network_id)?;
+        }
+        (slot, OPERATION_PARLIAMENT_TLE_PARTIAL_RELEASE_SIGN_V1)
+            if slot == parliament_tle_partial_release_signer_slot =>
+        {
+            let _ = decode_parliament_tle_partial_release_sign_request(
+                &request.payload,
+                session_network_id,
+            )?;
         }
         (slot, OPERATION_BOOTLE_LANTERN_ISSUANCE_AUTHENTICATE_V1)
             if slot == bootle_lantern_issuance_slot =>
@@ -592,6 +612,8 @@ fn validate_operation_payload(
                 MAX_SORACLOUD_HF_INFERENCE_FRAME_BYTES_V1,
             )?;
             crate::soracloud_hf_credential::SoracloudHfAuthenticatedInferenceRequestV1::try_new(
+                std::mem::take(&mut wire.repo_id),
+                std::mem::take(&mut wire.resolved_revision),
                 std::mem::take(&mut wire.url),
                 std::mem::take(&mut wire.content_type),
                 wire.accept.take(),

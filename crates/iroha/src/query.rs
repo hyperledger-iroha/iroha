@@ -294,13 +294,19 @@ impl QueryCursor {
     }
 }
 /// Different errors as a result of query response handling
-#[derive(Debug, thiserror::Error, displaydoc::Display)]
+#[derive(Debug, thiserror::Error)]
 pub enum QueryError {
     /// Query validation error
+    #[error("query validation error: {0}")]
     Validation(#[from] ValidationFail),
     /// Iterable query response has an invalid batch shape: {0}
+    #[error("iterable query response has an invalid batch shape: {0}")]
     ResponseShape(#[from] iroha_data_model::query::builder::TypedBatchDowncastError),
-    /// Other error
+    /// Lower-level transport or decoding error, preserving its original diagnostic.
+    ///
+    /// This is an explicit source because transparent forwarding would skip an
+    /// [`eyre::Report`]'s root error when exposing the source chain.
+    #[error("{0}")]
     Other(#[from] eyre::Error),
 }
 impl From<ResponseReport> for QueryError {
@@ -719,6 +725,30 @@ mod query_errors_handling {
         ));
     }
     #[test]
+    fn other_query_error_preserves_the_underlying_diagnostic() {
+        let error = QueryError::from(eyre!(
+            "transaction-details response is not one canonical Norito payload"
+        ));
+        assert_eq!(
+            error.to_string(),
+            "transaction-details response is not one canonical Norito payload"
+        );
+    }
+    #[test]
+    fn other_query_error_preserves_the_report_root_in_its_source_chain() {
+        let error = QueryError::from(eyre::Report::from(std::io::Error::new(
+            std::io::ErrorKind::ConnectionRefused,
+            "torii down",
+        )));
+        let report = eyre::Report::new(error);
+
+        assert!(report.chain().any(|cause| {
+            cause
+                .downcast_ref::<std::io::Error>()
+                .is_some_and(|error| error.kind() == std::io::ErrorKind::ConnectionRefused)
+        }));
+    }
+    #[test]
     fn signed_query_transport_never_retries_ambiguous_decode_failure() {
         let sends = Arc::new(AtomicUsize::new(0));
         let observed = Arc::clone(&sends);
@@ -1040,6 +1070,73 @@ mod query_errors_handling {
             !query_seen.load(Ordering::Relaxed),
             "query request must not be sent after compatibility mismatch"
         );
+    }
+    #[test]
+    fn execute_signed_query_raw_rejects_unavailable_capabilities_before_query_request() {
+        for status in [
+            HttpStatusCode::NOT_FOUND,
+            HttpStatusCode::TOO_MANY_REQUESTS,
+            HttpStatusCode::SERVICE_UNAVAILABLE,
+        ] {
+            let (account_id, key_pair) = gen_account_in("wonderland");
+            let client = Client {
+                chain: ChainId::from("00000000-0000-0000-0000-000000000000"),
+                network_id: crate::client::test_network_id(),
+                torii_url: Url::parse("http://localhost:8081").expect("torii url"),
+                key_pair,
+                transaction_ttl: Some(Duration::from_secs(5)),
+                transaction_status_timeout: Duration::from_secs(5),
+                torii_request_timeout: crate::config::DEFAULT_TORII_REQUEST_TIMEOUT,
+                account: account_id,
+                headers: HashMap::new(),
+                operator_key_pair: None,
+                add_transaction_nonce: false,
+                alias_cache_policy: sample_alias_policy(),
+                default_anonymity_policy: AnonymityPolicy::GuardPq,
+                rollout_phase: SorafsRolloutPhase::Default,
+                data_model_compatibility: Arc::new(Mutex::new(DataModelCompatibility::Unchecked)),
+                wire_format_preference: crate::client::WireFormatPreference::default(),
+            };
+            let request_paths = Arc::new(Mutex::new(Vec::new()));
+            let observed_paths = Arc::clone(&request_paths);
+            with_mock_http(
+                move |snapshot| {
+                    let path = snapshot.url.path().to_owned();
+                    observed_paths
+                        .lock()
+                        .expect("request paths lock")
+                        .push(path);
+                    Ok(Response::builder()
+                        .status(status)
+                        .header("content-type", "text/plain")
+                        .body(b"capabilities unavailable".to_vec())
+                        .expect("capabilities response"))
+                },
+                || {
+                    let error = client
+                        .execute_signed_query_raw(&[])
+                        .expect_err("unavailable capabilities must reject query");
+                    let QueryError::Other(report) = error else {
+                        panic!("expected QueryError::Other");
+                    };
+                    let rendered = format!("{report:#}");
+                    assert!(rendered.contains(&status.to_string()), "{rendered}");
+                    assert!(rendered.contains("capabilities unavailable"), "{rendered}");
+                },
+            );
+            assert_eq!(
+                request_paths.lock().expect("request paths lock").clone(),
+                vec!["/v1/node/capabilities".to_owned()],
+                "failed capability probe must not send a query request"
+            );
+            assert!(matches!(
+                &*client
+                    .data_model_compatibility
+                    .lock()
+                    .expect("data model compatibility lock"),
+                DataModelCompatibility::Unchecked
+            ));
+        }
     }
     fn compatible_client_with_conflicting_wire_headers() -> Client {
         let (account_id, key_pair) = gen_account_in("wonderland");

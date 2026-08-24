@@ -1,7 +1,7 @@
 //! Crash-safe publication of immutable Mochi configuration generations.
 use crate::supervisor::{Result, SupervisorError};
 use iroha_crypto::{HashOf, PublicKey};
-use iroha_data_model::block::BlockHeader;
+use iroha_data_model::{NetworkId, block::BlockHeader};
 use norito::json::{self, Map, Value};
 use rand::{TryRngCore as _, rngs::OsRng};
 #[cfg(unix)]
@@ -443,7 +443,7 @@ impl GenerationTransaction {
         );
         inventory.insert(
             "expected_hash".to_owned(),
-            Value::String(context.expected_hash.to_string()),
+            Value::String(NetworkId::from_genesis_hash(context.expected_hash).to_string()),
         );
         inventory.insert("files".to_owned(), Value::Array(file_values));
         let mut bytes = json::to_json_bounded(
@@ -950,18 +950,12 @@ pub(crate) fn verify_selected_generation(root: &Path, id: &str) -> Result<Verifi
                 "generation inventory has no expected_hash".to_owned(),
             )
         })?;
-    let expected_hash = hash_record
-        .parse::<HashOf<BlockHeader>>()
-        .map_err(|error| {
-            SupervisorError::GenerationValidation(format!(
-                "generation inventory has invalid expected_hash: {error}"
-            ))
-        })?;
-    if expected_hash.to_string() != hash_record {
-        return Err(SupervisorError::GenerationValidation(
-            "generation inventory expected_hash is not canonical".to_owned(),
-        ));
-    }
+    let expected_network_id = hash_record.parse::<NetworkId>().map_err(|error| {
+        SupervisorError::GenerationValidation(format!(
+            "generation inventory has invalid expected_hash: {error}"
+        ))
+    })?;
+    let expected_hash = expected_network_id.into_genesis_hash();
     let recorded_entries = object
         .get("files")
         .and_then(Value::as_array)
@@ -1101,7 +1095,9 @@ pub(crate) fn verify_selected_generation(root: &Path, id: &str) -> Result<Verifi
         "generation expected-hash record",
         GENERATION_SMALL_RECORD_MAX_BYTES_V1,
     )?;
-    if expected_hash_bytes != format!("{expected_hash}\n").as_bytes() {
+    if expected_hash_bytes
+        != format!("{}\n", NetworkId::from_genesis_hash(expected_hash)).as_bytes()
+    {
         return Err(SupervisorError::GenerationValidation(format!(
             "selected generation `{id}` expected-hash record is not exact"
         )));
@@ -1709,7 +1705,7 @@ mod tests {
         chain_id: &ChainId,
         chain_discriminant: u16,
         genesis_public_key: &PublicKey,
-        expected_hash: &str,
+        bootstrap_expected_hash: Option<&str>,
     ) -> PathBuf {
         let managed_directory = peer_dir.join("managed");
         fs::create_dir_all(&managed_directory).expect("create managed fixture directory");
@@ -1737,7 +1733,14 @@ mod tests {
             "file = \"../../genesis/genesis.signed.nrt\"\nmanifest_json = \"../../genesis/genesis.json\"",
             1,
         );
-        config = config.replacen(FIXTURE_CONFIGURED_HASH, expected_hash, 1);
+        config = match bootstrap_expected_hash {
+            Some(expected_hash) => config.replacen(FIXTURE_CONFIGURED_HASH, expected_hash, 1),
+            None => config.replacen(
+                &format!("expected_hash = \"{FIXTURE_CONFIGURED_HASH}\""),
+                "expected_hash_file = \"../../genesis/genesis.expected_hash\"",
+                1,
+            ),
+        };
         config.push_str(
             r#"
 
@@ -1818,7 +1821,7 @@ revocation_store_path = "managed/soranet/revocations.norito"
             &chain_id,
             chain_discriminant,
             key_pair.public_key(),
-            izanami::genesis_support::UNRESOLVED_GENESIS_EXPECTED_HASH,
+            Some(izanami::genesis_support::UNRESOLVED_GENESIS_EXPECTED_HASH),
         );
         let block = crate::supervisor::sign_kagami_stub_genesis_from_config(
             &manifest_path,
@@ -1857,14 +1860,35 @@ revocation_store_path = "managed/soranet/revocations.norito"
             .verify_hash(key_pair.public_key(), block.hash())
             .expect("verify result-bearing generation fixture signature");
         let expected_hash = block.hash();
+        let network_id = NetworkId::from_genesis_hash(expected_hash);
+        fs::write(
+            genesis_dir.join("genesis.expected_hash"),
+            format!("{network_id}\n"),
+        )
+        .expect("write fixture hash");
         let finalized_config_path = write_genesis_execution_config(
             &peer_dir,
             &chain_id,
             chain_discriminant,
             key_pair.public_key(),
-            &expected_hash.to_string(),
+            None,
         );
         assert_eq!(finalized_config_path, config_path);
+        let finalized_config = fs::read_to_string(&finalized_config_path)
+            .expect("read finalized generation fixture config")
+            .parse::<toml::Table>()
+            .expect("parse finalized generation fixture config");
+        let finalized_genesis = finalized_config
+            .get("genesis")
+            .and_then(toml::Value::as_table)
+            .expect("finalized generation fixture genesis table");
+        assert_eq!(
+            finalized_genesis
+                .get("expected_hash_file")
+                .and_then(toml::Value::as_str),
+            Some("../../genesis/genesis.expected_hash")
+        );
+        assert!(!finalized_genesis.contains_key("expected_hash"));
         let wire = block.encode_wire().expect("encode fixture block");
         izanami::genesis_support::validate_prepared_genesis_for_startup(
             &wire,
@@ -1880,11 +1904,6 @@ revocation_store_path = "managed/soranet/revocations.norito"
             format!("{}\n", key_pair.public_key()),
         )
         .expect("write fixture key");
-        fs::write(
-            genesis_dir.join("genesis.expected_hash"),
-            format!("{expected_hash}\n"),
-        )
-        .expect("write fixture hash");
         (key_pair, expected_hash)
     }
     fn publish_complete_generation(root: &Path, chain_id: &str) -> String {

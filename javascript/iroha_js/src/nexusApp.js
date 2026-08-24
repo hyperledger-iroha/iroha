@@ -401,6 +401,7 @@ const SIGNABLE_FIELDS = new Set([
 ]);
 const CONFIG_FIELDS = new Set([
   "networkId",
+  "chainDiscriminant",
   "baseUrl",
   "toriiBaseUrl",
   "connectBaseUrl",
@@ -600,7 +601,17 @@ function irohaPrehashHex(payloadBytes) {
   return digest.toString("hex");
 }
 
-function accountEd25519PublicKey(accountId) {
+function normalizeAccountChainDiscriminant(value) {
+  if (!Number.isSafeInteger(value) || value < 0 || value > 0xffff) {
+    throw new NexusAppError(
+      "invalid_config",
+      "config.chainDiscriminant must be an exact unsigned 16-bit integer",
+    );
+  }
+  return value;
+}
+
+function canonicalAccountAddress(accountId, chainDiscriminant, context) {
   if (
     typeof accountId !== "string" ||
     accountId.length === 0 ||
@@ -609,17 +620,37 @@ function accountEd25519PublicKey(accountId) {
     Buffer.byteLength(accountId, "utf8") > 1536
   ) {
     throw new NexusAppError(
-      "missing_signing_public_key",
-      "approved account must be an exact bounded canonical I105 account",
+      "invalid_account_id",
+      `${context} must be an exact bounded canonical I105 account for chain discriminant ${chainDiscriminant}`,
     );
   }
+  try {
+    const address = AccountAddress.fromI105(accountId, chainDiscriminant);
+    if (address.toI105(chainDiscriminant) !== accountId) {
+      throw new Error("account does not use its exact canonical I105 form");
+    }
+    return address;
+  } catch (error) {
+    throw new NexusAppError(
+      "invalid_account_id",
+      `${context} must be an exact canonical I105 account for chain discriminant ${chainDiscriminant}`,
+      error,
+    );
+  }
+}
+
+function accountEd25519PublicKey(accountId, chainDiscriminant) {
   let address;
   try {
-    address = AccountAddress.fromI105(accountId);
+    address = canonicalAccountAddress(
+      accountId,
+      chainDiscriminant,
+      "approved account",
+    );
   } catch (error) {
     throw new NexusAppError(
       "missing_signing_public_key",
-      "approved account must be a canonical single-key Ed25519 I105 account",
+      `approved account must be a canonical single-key Ed25519 I105 account for chain discriminant ${chainDiscriminant}`,
       error,
     );
   }
@@ -636,6 +667,37 @@ function accountEd25519PublicKey(accountId) {
     );
   }
   return Buffer.from(controller.publicKey);
+}
+
+function transferSourceAccountId(sourceAssetHoldingId) {
+  if (
+    typeof sourceAssetHoldingId !== "string" ||
+    sourceAssetHoldingId.length === 0 ||
+    sourceAssetHoldingId.length > 1024 ||
+    sourceAssetHoldingId.trim() !== sourceAssetHoldingId
+  ) {
+    throw new NexusAppError(
+      "invalid_account_id",
+      "transfer source asset must contain one exact canonical owner account",
+    );
+  }
+  const parts = sourceAssetHoldingId.split("#");
+  if (parts.length < 2 || parts.length > 3 || parts[1].length === 0) {
+    throw new NexusAppError(
+      "invalid_account_id",
+      "transfer source asset must contain one exact canonical owner account",
+    );
+  }
+  if (parts.length === 3) {
+    const match = /^dataspace:(0|[1-9]\d*)$/u.exec(parts[2]);
+    if (match === null || BigInt(match[1]) > 0xffff_ffff_ffff_ffffn) {
+      throw new NexusAppError(
+        "invalid_account_id",
+        "transfer source asset scope must be a canonical dataspace:<u64> suffix",
+      );
+    }
+  }
+  return parts[1];
 }
 
 function validateEd25519PublicKey(publicKey, context) {
@@ -2035,6 +2097,7 @@ export class NexusAppClient {
       "config",
       "invalid_config",
     );
+    normalizeAccountChainDiscriminant(config.chainDiscriminant);
     this.config = config;
     this.connect = config.connectTransport ?? config.connect ?? null;
     this.transactionCodec = config.transactionCodec ?? null;
@@ -2046,6 +2109,16 @@ export class NexusAppClient {
             config.fetchImpl,
           )
         : null);
+  }
+
+  requireAccountChainDiscriminant() {
+    if (this.config.chainDiscriminant === undefined) {
+      throw new NexusAppError(
+        "invalid_config",
+        "config.chainDiscriminant is required for Nexus account operations",
+      );
+    }
+    return normalizeAccountChainDiscriminant(this.config.chainDiscriminant);
   }
 
   async startConnect(options = {}) {
@@ -2104,6 +2177,7 @@ export class NexusAppClient {
   }
 
   async awaitApproval(session) {
+    const chainDiscriminant = this.requireAccountChainDiscriminant();
     const normalized = normalizeConnectSession(session);
     let injected;
     try {
@@ -2174,6 +2248,12 @@ export class NexusAppClient {
       "wallet approval",
       "invalid_wallet_approval",
     );
+    if (approved.session !== undefined && approved.session !== null) {
+      throw new NexusAppError(
+        "approval_session_mismatch",
+        "wallet approval must not replace the caller's Connect session",
+      );
+    }
     const accountIdRaw = normalizeAliasFamily(
       approved,
       ["accountId", "account_id"],
@@ -2190,6 +2270,11 @@ export class NexusAppClient {
         "wallet approval did not include an exact account",
       );
     }
+    canonicalAccountAddress(
+      accountIdRaw,
+      chainDiscriminant,
+      "wallet approval account",
+    );
     const accountId = accountIdRaw;
     const configuredAuthority = normalizeAliasFamily(
       this.config,
@@ -2197,6 +2282,20 @@ export class NexusAppClient {
       "config",
       "invalid_config",
     );
+    if (configuredAuthority !== null) {
+      canonicalAccountAddress(
+        configuredAuthority,
+        chainDiscriminant,
+        "configured authority",
+      );
+    }
+    if (normalized.approvedAccountId !== null) {
+      canonicalAccountAddress(
+        normalized.approvedAccountId,
+        chainDiscriminant,
+        "Connect session approved account",
+      );
+    }
     for (const [context, assertedAccount] of [
       ["configured authority", configuredAuthority],
       ["Connect session approved account", normalized.approvedAccountId],
@@ -2231,11 +2330,11 @@ export class NexusAppClient {
             context: "wallet approval.signingPublicKey",
           },
           {
-            value: accountEd25519PublicKey(accountId),
+            value: accountEd25519PublicKey(accountId, chainDiscriminant),
             context: "wallet approval account controller",
           },
         ],
-        "approval_signing_key_mismatch",
+        "approval_account_mismatch",
         { maxBytes: 32 },
       ),
       "approved signingPublicKey",
@@ -2251,6 +2350,7 @@ export class NexusAppClient {
   }
 
   buildTransferDraft(input = {}) {
+    const chainDiscriminant = this.requireAccountChainDiscriminant();
     input = snapshotDataFields(
       input,
       TRANSFER_DRAFT_FIELDS,
@@ -2269,6 +2369,13 @@ export class NexusAppClient {
       "config",
       "invalid_config",
     );
+    if (configuredAuthority !== null) {
+      canonicalAccountAddress(
+        configuredAuthority,
+        chainDiscriminant,
+        "configured authority",
+      );
+    }
     const authority = inputAuthority ?? configuredAuthority;
     if (!authority) {
       throw new NexusAppError(
@@ -2287,6 +2394,21 @@ export class NexusAppClient {
       ["destinationAccountId", "destination", "to"],
       "transfer input",
       "invalid_transfer_input",
+    );
+    canonicalAccountAddress(
+      authority,
+      chainDiscriminant,
+      "transfer authority",
+    );
+    canonicalAccountAddress(
+      destinationAccountId,
+      chainDiscriminant,
+      "transfer destination account",
+    );
+    canonicalAccountAddress(
+      transferSourceAccountId(sourceAssetHoldingId),
+      chainDiscriminant,
+      "transfer source asset owner",
     );
     const networkId = input.networkId ?? this.config.networkId;
     try {
@@ -2307,6 +2429,7 @@ export class NexusAppClient {
     }
     const payloadInput = {
       networkId,
+      chainDiscriminant,
       authority,
       sourceAssetHoldingId,
       quantity,
@@ -2395,10 +2518,24 @@ export class NexusAppClient {
         );
       }
     }
-    const signingPublicKey =
-      input.signingPublicKey ??
-      this.config.signingPublicKey ??
-      accountEd25519PublicKey(authority);
+    const signingPublicKey = normalizeConsistentByteSources(
+      [
+        {
+          value: input.signingPublicKey,
+          context: "transfer input.signingPublicKey",
+        },
+        {
+          value: this.config.signingPublicKey,
+          context: "config.signingPublicKey",
+        },
+        {
+          value: accountEd25519PublicKey(authority, chainDiscriminant),
+          context: "transfer authority account controller",
+        },
+      ],
+      "approval_account_mismatch",
+      { maxBytes: 32 },
+    );
     return {
       input: { ...payloadInput, signingPublicKey },
       signable: {
@@ -2418,6 +2555,7 @@ export class NexusAppClient {
   }
 
   async requestSignature(session, signable) {
+    const chainDiscriminant = this.requireAccountChainDiscriminant();
     const normalizedSession = normalizeConnectSession(session);
     const configuredAuthority = normalizeAliasFamily(
       this.config,
@@ -2426,6 +2564,20 @@ export class NexusAppClient {
       "invalid_config",
     );
     const approvedAccount = normalizedSession.approvedAccountId;
+    if (configuredAuthority !== null) {
+      canonicalAccountAddress(
+        configuredAuthority,
+        chainDiscriminant,
+        "configured authority",
+      );
+    }
+    if (approvedAccount !== null) {
+      canonicalAccountAddress(
+        approvedAccount,
+        chainDiscriminant,
+        "Connect session approved account",
+      );
+    }
     if (
       approvedAccount !== null &&
       configuredAuthority !== null &&
@@ -2447,11 +2599,17 @@ export class NexusAppClient {
           context: "config.signingPublicKey",
         },
         {
-          value: approvedAccount === null ? null : accountEd25519PublicKey(approvedAccount),
-          context: "Connect session approved account controller",
+          value:
+            approvedAccount === null && configuredAuthority === null
+              ? null
+              : accountEd25519PublicKey(
+                  approvedAccount ?? configuredAuthority,
+                  chainDiscriminant,
+                ),
+          context: "approved/configured account controller",
         },
       ],
-      "approval_signing_key_mismatch",
+      "approval_account_mismatch",
       { maxBytes: 32 },
     );
     const canonicalSignable = validateNexusTransferSignable(signable, {
@@ -2459,6 +2617,28 @@ export class NexusAppClient {
       authority: approvedAccount ?? configuredAuthority,
       signingPublicKey: expectedSigningPublicKey,
     });
+    canonicalAccountAddress(
+      canonicalSignable.authority,
+      chainDiscriminant,
+      "signable authority",
+    );
+    normalizeConsistentByteSources(
+      [
+        {
+          value: canonicalSignable.signingPublicKey,
+          context: "signable.signingPublicKey",
+        },
+        {
+          value: accountEd25519PublicKey(
+            canonicalSignable.authority,
+            chainDiscriminant,
+          ),
+          context: "signable authority account controller",
+        },
+      ],
+      "approval_account_mismatch",
+      { maxBytes: 32 },
+    );
     let injected;
     try {
       const connect = this.connect;
@@ -2575,8 +2755,15 @@ export class NexusAppClient {
           value: this.config.signingPublicKey,
           context: "config.signingPublicKey",
         },
+        {
+          value: accountEd25519PublicKey(
+            signable.authority,
+            this.config.chainDiscriminant,
+          ),
+          context: "signable authority account controller",
+        },
       ],
-      "invalid_signing_public_key",
+      "approval_account_mismatch",
       { maxBytes: 32 },
     );
     if (!signingPublicKey) {
@@ -2598,6 +2785,11 @@ export class NexusAppClient {
         networkId: this.config.networkId ?? null,
         signingPublicKey: publicKey,
       },
+    );
+    canonicalAccountAddress(
+      canonicalSignable.authority,
+      this.config.chainDiscriminant,
+      "signable authority",
     );
     const { payloadBytes, payloadHashHex } = canonicalSignable;
     validateEd25519SignatureForPayload(
@@ -2857,6 +3049,7 @@ export class NexusAppClient {
   }
 
   async transferWithWallet(session, input, options = {}) {
+    const chainDiscriminant = this.requireAccountChainDiscriminant();
     input = snapshotDataFields(
       input,
       TRANSFER_DRAFT_FIELDS,
@@ -2880,6 +3073,15 @@ export class NexusAppClient {
       "config",
       "invalid_config",
     );
+    for (const [context, accountId] of [
+      ["Connect session approved account", approvedAccount],
+      ["transfer authority", inputAuthority],
+      ["configured authority", configuredAuthority],
+    ]) {
+      if (accountId !== null) {
+        canonicalAccountAddress(accountId, chainDiscriminant, context);
+      }
+    }
     if (approvedAccount && inputAuthority && approvedAccount !== inputAuthority) {
       throw new NexusAppError(
         "approval_account_mismatch",
@@ -2912,7 +3114,7 @@ export class NexusAppClient {
           context: "config.signingPublicKey",
         },
       ],
-      "approval_signing_key_mismatch",
+      "approval_account_mismatch",
       { maxBytes: 32 },
     );
     const draft = this.buildTransferDraft({

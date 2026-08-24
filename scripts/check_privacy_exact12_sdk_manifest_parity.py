@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Audit fail-closed Exact12 capability-manifest admission across SDKs.
 
-ABI22 intentionally has exactly five privacy C exports.  Its no-argument
+ABI23 intentionally has exactly five privacy C exports.  Its no-argument
 compiled-profile getter can expose only immutable local build metadata; it
 cannot manufacture Torii's committed height, lifecycle, or activation state.
 Consequently an SDK is release-ready only when it preserves Torii's canonical
@@ -317,17 +317,17 @@ def _header_exports(source: str) -> frozenset[str]:
     )
 
 
-def _require_exact_abi22(root: Path) -> None:
+def _require_exact_abi23(root: Path) -> None:
     rust = _rust_exports(_rust_bridge_source(root))
     header = _header_exports(_read(root, C_HEADER))
     if rust != APPROVED_PRIVACY_EXPORTS:
         raise AuditError(
-            "Rust ABI22 privacy exports differ from the exact approved five: "
+            "Rust ABI23 privacy exports differ from the exact approved five: "
             f"found {sorted(rust)}"
         )
     if header != APPROVED_PRIVACY_EXPORTS:
         raise AuditError(
-            "C ABI22 privacy declarations differ from the exact approved five: "
+            "C ABI23 privacy declarations differ from the exact approved five: "
             f"found {sorted(header)}"
         )
 
@@ -342,11 +342,11 @@ def _require_authority_boundary(root: Path) -> None:
         "iroha_privacy_exact12_capability_manifest_v1",
     )
     if any(symbol in combined for symbol in forbidden):
-        raise AuditError("ABI22 added a sixth capability export")
+        raise AuditError("ABI23 added a sixth capability export")
     if "compiled_privacy_profile_catalog_v1" not in bridge:
-        raise AuditError("ABI22 local catalog is no longer derived from native Rust profiles")
+        raise AuditError("ABI23 local catalog is no longer derived from native Rust profiles")
     if "contains no committed height" not in combined.lower():
-        raise AuditError("ABI22 local catalog lost its explicit non-authority contract")
+        raise AuditError("ABI23 local catalog lost its explicit non-authority contract")
 
 
 def _require_rust_manifest_contract(root: Path) -> None:
@@ -436,7 +436,7 @@ def _javascript_cutover_gates(root: Path) -> dict[str, bool]:
             "privacyValidateExact12CapabilityManifestV1",
             "privacyExact12CapabilityManifestJsonV1",
             "privacyRequireExact12CapabilityTupleV1",
-            "requires exact ABI22",
+            "requires exact ABI23",
         )
     )
     exact_tuple_match = all(
@@ -639,7 +639,7 @@ def _jvm_cutover_gates(root: Path) -> dict[str, bool]:
 
 
 def _swift_cutover_gates(root: Path) -> dict[str, bool]:
-    """Audit Swift's managed semantics plus its mandatory ABI22 catalog anchor.
+    """Audit Swift's managed semantics plus its mandatory ABI23 catalog anchor.
 
     The fixed five-export C ABI has no Rust manifest validator.  This gate is
     therefore true only when Swift strictly validates the Torii bytes and every
@@ -716,7 +716,7 @@ def _swift_cutover_gates(root: Path) -> dict[str, bool]:
             "privacyCompiledProfileCatalogValidationStatusV1(archive)" in bridge,
             "PrivacyExact12CapabilityManifestCodecV1.decode(" in bridge,
             "privacyCompiledProfileCatalogV1()" in bridge,
-            "requiredBridgeABIVersion: UInt32 = 22" in bridge,
+            "requiredBridgeABIVersion: UInt32 = 23" in bridge,
             "loadedBridgeAbiVersion == PrivacyNativeBridge.requiredBridgeABIVersion"
             in native,
             "privacyNativeProbeOk" in native,
@@ -852,7 +852,7 @@ def _sdk_result(root: Path, contract: SdkContract) -> dict[str, object]:
 
 def audit(root: Path) -> dict[str, object]:
     root = root.resolve()
-    _require_exact_abi22(root)
+    _require_exact_abi23(root)
     _require_authority_boundary(root)
     _require_rust_manifest_contract(root)
     sdks = {contract.name: _sdk_result(root, contract) for contract in SDK_CONTRACTS}
@@ -860,7 +860,7 @@ def audit(root: Path) -> dict[str, object]:
     return {
         "schema_version": 1,
         "evidence_level": "source-prerequisite-not-native-release-authority",
-        "abi22_privacy_exports": sorted(APPROVED_PRIVACY_EXPORTS),
+        "abi23_privacy_exports": sorted(APPROVED_PRIVACY_EXPORTS),
         "authority": "torii-committed-canonical-manifest-bytes",
         "local_catalog_authorizes_network": False,
         "ready": not blockers,
@@ -873,7 +873,7 @@ def _format_human(report: dict[str, object]) -> str:
     lines = [
         "Exact12 cross-SDK capability-manifest parity: "
         + ("READY" if report["ready"] else "NOT READY"),
-        "ABI22 privacy exports: exact five",
+        "ABI23 privacy exports: exact five",
         "Network authority: Torii committed canonical manifest bytes",
     ]
     sdks = report["sdk"]

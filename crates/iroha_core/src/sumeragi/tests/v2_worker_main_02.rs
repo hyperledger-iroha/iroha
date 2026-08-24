@@ -825,6 +825,77 @@ fn cancelling_fetch_consumes_live_session_and_manifest_owner() {
     assert!(!service.output_guard.restart_required());
 }
 #[test]
+fn duplicate_authenticated_chunk_skips_reconstruction() {
+    let (mut service, keys) = fixture();
+    let _chunk_root = install_temporary_chunk_root(&mut service);
+    allow_fixture_block_payload(&mut service.context);
+    service.context.da_layout.data_shards = 3;
+    service.context.da_layout.parity_shards = 2;
+    service
+        .context
+        .validate()
+        .expect("multi-shard fixture context");
+    let (_, payload, proposal) = proposal_body_and_payload(&service.context, &keys);
+    let (manifest, chunks) = payload.into_parts();
+    let tag = EventTag::new(
+        service.context.height,
+        proposal.round.view,
+        Generation::new(service.context.height),
+    );
+    let task = BodyFetchTask::ordinary_for_test(60, tag, manifest.clone());
+    service
+        .enqueue_body_fetch(task.clone())
+        .expect("open exact live reconstruction session");
+    let sender_index = usize::try_from(proposal.proposer).expect("small proposer index");
+    let sender = service.context.roster[sender_index].validator.clone();
+    let mut chunk = wire::PayloadChunk {
+        manifest_hash: HashOf::new(&manifest),
+        index: 0,
+        bytes: chunks[0].clone(),
+        sender: proposal.proposer,
+        signature: Vec::new(),
+    };
+    chunk.signature = Signature::new(
+        keys[sender_index].private_key(),
+        &chunk
+            .signature_preimage(&service.context, &manifest)
+            .expect("chunk preimage"),
+    )
+    .payload()
+    .to_vec();
+    let authenticated = authenticate_payload_chunk(&service.context, &manifest, chunk, &sender)
+        .expect("authenticate canonical chunk");
+    assert_eq!(
+        service
+            .accept_authenticated_chunk(&task, authenticated.clone())
+            .expect("accept first chunk"),
+        AuthenticatedChunkDisposition::Accepted
+    );
+    let attempts_after_first = service.fetches[&task.id()]
+        .chunks
+        .as_ref()
+        .expect("manifest-backed fetch session")
+        .reconstruction_attempts();
+    assert_eq!(attempts_after_first, 1);
+    assert_eq!(
+        service
+            .accept_authenticated_chunk(&task, authenticated)
+            .expect("accept exact duplicate"),
+        AuthenticatedChunkDisposition::Accepted
+    );
+    assert_eq!(
+        service.fetches[&task.id()]
+            .chunks
+            .as_ref()
+            .expect("duplicate retains the live fetch session")
+            .reconstruction_attempts(),
+        attempts_after_first,
+        "an exact duplicate must not trigger another reconstruction attempt"
+    );
+    assert!(service.local_completions.is_empty());
+    assert!(!service.output_guard.restart_required());
+}
+#[test]
 fn invalid_reconstruction_waits_for_reducer_authorized_retirement() {
     let (mut service, keys) = fixture();
     let _chunk_root = install_temporary_chunk_root(&mut service);

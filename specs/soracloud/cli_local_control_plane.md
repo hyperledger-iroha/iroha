@@ -4,8 +4,8 @@ Soracloud v1 ships an authoritative deterministic runtime:
 
 - deterministic services run on `SoraContainerRuntimeV1::Ivm`
 - hosted HTTP manifests use `execution_plane = HttpService` with
-  `runtime = Inrou`, but first-release admission rejects them in every shipping
-  mode until the mandatory confinement launcher is complete
+  `runtime = Inrou`; a node may host them only after explicit PortableVM V1
+  enablement and successful runtime qualification
 
 The control plane remains authoritative. Torii serves status and mutation
 routes directly from committed world state plus the embedded Soracloud runtime
@@ -37,12 +37,11 @@ sensitive Soracloud state is not part of the public discovery surface.
 
 - Use deterministic IVM services for wallet auth, confidential vault state,
   governance-sensitive mutations, and other replay-safe handlers.
-- `HttpService + Inrou` manifests and split-plane scaffolds are retained for
-  local planning and launcher qualification only. They cannot be released or
-  advertised by a first-release node.
-- The intended hosted topology uses authoritative longest-prefix routing, but
-  it is not a shipping deployment surface in this release.
-- Deferred hosted services declare persistent lease-backed storage through
+- `HttpService + Inrou` manifests and split-plane apps are shipping surfaces on
+  an explicitly enabled host. The default-disabled or unqualified posture
+  fails closed without advertising or materializing them.
+- Hosted topology uses authoritative longest-prefix routing.
+- Hosted services declare persistent lease-backed storage through
   `lease_volumes`.
 - `PersistentRootLeaseVolume` is required for `HttpService + Inrou`, must mount
   at `/`, and is materialized per replica.
@@ -93,18 +92,9 @@ fails verification.
   owned Mon browser gateway:
   - `https://docs.sora.mon.taira.sora.net/`
   - `https://solswap-indexer.sora.mon.taira.sora.net/api/indexer/v1/health`
-- Torii also exposes a legacy generic fallback path:
-  - `https://taira.sora.org/soradns/docs.sora/`
-  - `https://taira.sora.org/soradns/solswap-indexer.sora/api/indexer/v1/health`
-- On Taira, the shared public edge serves that fallback form generically for
-  active aliases. Do not replace it with invented per-service paths such as
-  `https://taira.sora.org/<service>/...`.
-- The `/soradns/<alias>/...` path is a compatibility gateway, not the
-  canonical app origin. App manifests, frontend env vars, and release notes
-  should continue to point at the vanity host itself; public browser examples
-  for Taira should use the Mon gateway when native SoraDNS is unavailable.
-- The fallback accepts any active registered alias FQDN, not only `.sora`
-  names. `.dao`, `.nexus`, and future suffixes follow the same rule.
+- Path-encoded aliases under `taira.sora.org` are rejected. App manifests,
+  frontend env vars, and release notes point at the vanity host itself; public
+  browser examples use the Mon gateway when native SoraDNS is unavailable.
 
 ## Offline Scaffolding Commands
 
@@ -124,7 +114,6 @@ fails verification.
   - templates now include:
     - `single-api`
     - `split-app`
-    - `nexus-split-app` as an alias for `split-app`
   - `single-api` produces a root-bound frontend plus one deterministic API
     service under `/api`
   - `split-app` produces a SoraFS frontend plus one hosted live API and one
@@ -273,6 +262,8 @@ Torii-backed and require `--torii-url`.
 - `iroha soracloud service rollback` and `iroha soracloud service rollout`
   - accept `--service-name` directly or resolve the target service from
     `--container` plus `--service`
+  - require rollback callers to select an already-admitted revision with
+    `--target-version`; no revision is inferred from audit history
   - keep rollback and rollout control aligned with manifest workspaces
   - when driven by `--container` plus `--service`, attach the same local
     `service_plan` projection that `plan` reports
@@ -347,25 +338,33 @@ the logical mount path declared in the manifest.
 
 Inrou V1 has one runtime backend: one Linux KVM `PortableVm`. Backend,
 accelerator, concurrency, and supplementary-group configuration selectors are
-retired; an enabled non-production host intrinsically runs at most one VM and
+retired; an enabled host intrinsically runs at most one VM and
 derives its sole supplementary gid from the validated `/dev/kvm` device.
+`backends` and `max_concurrent_vms` are unknown Inrou configuration keys.
 Firecracker and TCG labels are configuration and wire-schema errors; no mixed
-backend smoke mode is exposed. Every first-release shipping configuration and
-manager entry point rejects enabled Inrou hosting, and Taira advertises no
-hosting capability, because the QEMU boundary does not yet provide mandatory
-mount, network, IPC, and MAC confinement.
+backend smoke mode is exposed. `inrou.enabled` remains false by default.
+Explicit enablement selects only PortableVM V1, and the manager advertises or
+hosts nothing until its exact production preflight succeeds.
 
-The retained private test implementation reserves its configured uid/gid
-exclusively for the supervised QEMU process. Primary ids must lie in
-`65536..524288`; provision the exact locked local account and primary group
-name `iroha-inrou` (uid/gid `70000` is recommended) with password fields `x`, home
+Persisted V1 runtime state is exact rather than migratory. The top-level
+snapshot and every nested mailbox, artifact, lease-volume, apartment, HF-source,
+hosted-HTTP aggregate, and hosted-HTTP replica record reject unknown or missing
+keys. Nullable handler, error, listen, and pid values must be present as
+explicit JSON `null`; no decoder default or predecessor layout is inferred.
+
+The mandatory launcher reserves its configured uid/gid exclusively for the
+supervised QEMU process. The uid and primary gid must be one equal canonical
+slot pair: `70000` through `70003`; slot `i` deterministically requires the
+locked local account and primary group name `iroha-inrou-i`. Provision all four
+slots for a same-host four-validator Taira qualification. A single-validator
+public host uses slot 0 (`iroha-inrou-0`, uid/gid `70000`). Each identity has password fields `x`, home
 `/nonexistent`, a trusted literal nologin/false shell, locked shadow/gshadow
 passwords, and no extra group membership or administrator entry. The host must use exactly
 `passwd: files` and `group: files` in root-custodied `/etc/nsswitch.conf`;
 SSS, systemd, LDAP, compat, and other identity sources are rejected. The
 decimal identity names, duplicate records, and another account's use of the
 primary gid are rejected. `subid`, when declared, must also use only `files`;
-local `/etc/subuid` and `/etc/subgid` must not assign a range to the service
+local `/etc/subuid` and `/etc/subgid` must not assign a range to the selected service
 identity/numeric spelling or cover the child uid or any configured gid.
 The runtime refuses disk
 delegation while any process uses that uid or carries the primary gid as a
@@ -373,39 +372,47 @@ real, effective, saved, filesystem, or supplementary group.
 The validated identity retains exactly the direct root-owned `/dev/kvm` device
 group, and only when that character device is the
 Linux KVM misc device (major 10, minor 232) with group read/write access and no
-world access. The launch shim pins the working directory to `/` and closes all
-inherited descriptors above stderr before QEMU exec, so the child receives no
-validator capability other than its anonymous QMP stdin/stdout and bounded
-stderr channel.
+world access. Pinned bubblewrap and setpriv launch QEMU behind a token barrier
+in private mount, network, IPC, UTS, PID, and cgroup namespaces. The
+authenticated minimal root contains only the fixed QEMU runtime closure,
+`/dev/kvm`, exact read-only inputs, exact writable disks, private proc/tmp/dev
+state, anonymous QMP, and bounded stderr; it exposes no host `/run`, broad
+`/sys`, Unix socket, or unrelated descriptor.
 Reclaiming a writable disk requires an exclusive Linux write lease through
 inode/custody revalidation; unsupported filesystems fail closed.
 
-PortableVM also requires root-owned, non-writable `iptables` and `ip6tables`
-executables at standard Linux paths. The supervisor reserves both ports, holds
-a root-private global lock, and creates marker-owned IPv4 OUTPUT/INPUT and
-IPv6 OUTPUT chains. Any preexisting fixed chain or jump aborts startup without
-alteration and requires explicit operator cleanup. Rules admit only established QEMU IPv4 backend replies to
-the root proxy, reject every other packet owned by the child uid, reject
-non-root local backend/public access, and reject non-loopback backend input.
-QMP must attest the protected backend before serving. Graceful cleanup touches
-only chains installed by the current held firewall object; ambiguity aborts.
+PortableVM also requires root-owned, non-writable `iptables` for a
+defense-in-depth owner rule on the supervisor's public loopback listener. The
+QEMU namespace has only loopback and no external interface. Each bounded bridge
+session opens one socket through an attested network-namespace descriptor to
+one concrete loopback backend, then re-attests the namespaces, minimal root,
+cgroup membership, and endpoint before traffic. QMP and the broker receive no
+traffic before attestation. Pre-existing firewall ownership state fails closed
+for explicit operator cleanup.
 
-For private implementation qualification only, prepare verified native-ISA
-Debian guest assets and run the retained smoke:
+The dedicated cgroup-v2 subtree applies exact CPU, memory, swap, pids, and I/O
+limits including bounded QEMU overhead. Its launch barrier verifies a private
+token and exact procfs/cgroup membership before exec. Startup, QMP, bridge,
+shutdown, and cleanup all use bounded deadlines.
+
+To qualify a deployment, prepare verified native-ISA Debian guest assets and
+run the ignored privileged smoke on the target Linux/KVM host:
 
 ```bash
 eval "$(python3 scripts/ci/prepare_inrou_portable_guest_assets.py --print-env)"
 cargo xtask soracloud-inrou-smoke portable
 ```
 
-The test-only `IROHA_INROU_PORTABLE_KERNEL_IMAGE`,
+The smoke-only `IROHA_INROU_PORTABLE_KERNEL_IMAGE`,
 `IROHA_INROU_PORTABLE_ROOTFS_IMAGE`, and optional
 `IROHA_INROU_PORTABLE_INITRD_IMAGE` variables supply local guest assets; they
-do not select shipping behavior. No first-release configuration enables the
-private backend.
+do not select shipping behavior. Shipping enablement comes only from the exact
+`soracloud_runtime.inrou` configuration.
 
-PortableVm uses a verified base image with a mutable `qcow2` root overlay.
-Shared lease volumes are exact-size persistent raw block devices. Only a raw
+PortableVm atomically copies the verified base image into a standalone mutable
+raw root disk. The sandbox never needs the host base-image path, and startup
+never gives root `qemu-img` a guest-mutated root image to parse. Shared lease
+volumes are exact-size persistent raw block devices. Only a raw
 disk atomically created for the current launch may be formatted; an existing
 disk, filesystem mismatch, mount failure, or post-mount probe failure aborts
 startup without reformatting. The NoCloud seed and application archive remain
@@ -417,18 +424,20 @@ QEMU `guestfwd` path is built.
 
 Focused validation includes:
 
-- `enabled_inrou_backend_preflight_rejects_an_empty_allowlist`
-- `inrou_tap_firewall_plan_accepts_only_isolated`
-- `inrou_loopback_owner_rule_targets_the_dedicated_chain`
+- `inrou_v1_backend_and_capacity_are_unconditional_runtime_facts`
+- `bubblewrap_surface_unshares_every_mandatory_namespace`
+- `private_network_table_accepts_only_loopback`
+- `launch_barrier_blocks_exec_and_rejects_cgroup_drift`
+- `inrou_owner_firewall_setup_drains_preexisting_public_connections`
 - `build_inrou_user_data_never_formats_existing_portable_block_mounts`
 - `ensure_inrou_portable_lease_disks_create_reusable_raw_images`
-- `ensure_inrou_portable_root_disk_uses_qcow2_overlay_with_backing_file`
+- `ensure_inrou_portable_root_disk_is_a_standalone_authenticated_copy`
 
-## Deferred Hosted-Service Workflow
+## Hosted-Service Workflow
 
-The `http-service` scaffold describes one future hosted HTTP service without an
-app manifest wrapper. Use it only for local development, planning, and launcher
-qualification; first-release deploy and upgrade admission rejects it.
+The `http-service` scaffold describes one hosted HTTP service without an app
+manifest wrapper. Non-dry-run deploy and upgrade require a validator whose
+exact PortableVM V1 configuration and host preflight are qualified.
 
 Build and refresh the single service pair:
 
@@ -448,8 +457,9 @@ iroha soracloud service plan --container ./container_manifest.json --service ./s
 iroha soracloud service dev --container ./container_manifest.json --service ./service_manifest.json --dry-run
 ```
 
-Do not run the generated hosted `deploy.sh` or `upgrade.sh` wrappers against a
-first-release node. Their manifests are rejected before a VM can be launched.
+Run generated hosted `deploy.sh` or `upgrade.sh` wrappers only against an
+explicitly enabled, qualified PortableVM V1 host; default-disabled nodes retain
+no hosting capacity.
 
 ## Recommended Single-App Workflow
 
@@ -511,16 +521,16 @@ iroha soracloud app upgrade --manifest ./app_manifest.json --torii-url http://12
 This path keeps the frontend at `/` and the API at `/api/healthz` on the same
 hostname.
 
-## Deferred Mixed-App Workflow
+## Mixed-App Workflow
 
-The split-app scaffold models apps that will eventually need:
+The split-app scaffold models apps that need:
 
 - a static frontend published to SoraFS
 - a hosted live API on Inrou
 - a deterministic IVM vault or auth plane
 
-This workflow is local/planning-only in the first release. The hosted member
-prevents deploy, release, or upgrade from succeeding on a shipping node.
+Non-dry-run deploy, release, and upgrade require an explicitly enabled,
+qualified PortableVM V1 host for the hosted member.
 
 ```bash
 iroha soracloud app init \
@@ -544,7 +554,7 @@ For local development, the scaffold includes:
 - `./build-and-sync.sh` to rebuild all artifacts and refresh manifest hashes
 - `./doctor.sh` to rebuild and fail-close on the split-app release contract
 - `./release.sh` to rebuild, validate, and then deploy-or-upgrade the full app
-- `./deploy.sh` as the compatibility wrapper around `./release.sh`
+- `./deploy.sh` to rebuild and submit the exact create-deployment flow
 - `./upgrade.sh` to rerun the same rebuild path, validate, and submit the app upgrade
 
 The scaffolded Vite proxy strips the shared `/api` prefix before forwarding to
@@ -574,16 +584,16 @@ iroha soracloud app plan \
   --manifest .soracloud-hayahi/app_manifest.json
 ```
 
-Validate the deferred split-app release contract locally:
+Validate the split-app release contract locally:
 
 ```bash
 cd .soracloud-hayahi
 iroha soracloud app doctor --manifest ./app_manifest.json --dry-run
 ```
 
-Do not run `release.sh`, `deploy.sh`, `upgrade.sh`, or their non-dry-run CLI
-counterparts for this scaffold in the first release. Admission rejects the
-hosted member.
+Run `release.sh`, `deploy.sh`, `upgrade.sh`, or their non-dry-run CLI
+counterparts only when the target validator advertises a currently qualified
+PortableVM V1 capability.
 
 The generated local root scripts resolve `IROHA_BIN`, then `iroha` from `PATH`,
 then an explicit source checkout via `IROHA_SOURCE_DIR` or
@@ -598,7 +608,6 @@ Torii itself and use the gateway host only as:
 
 - the Torii/control-plane base URL
 - the public non-SoraDNS browser form `https://<alias>.mon.taira.sora.net/...`
-- the legacy fallback form `https://taira.sora.org/soradns/<alias>/...`
 - the SoraFS CID gateway for intentionally CID-only frontend assets
 
 Do not replace a stable Soracloud vanity host with a `taira.sora.org` path

@@ -3971,7 +3971,7 @@ pub(in crate::sumeragi) fn close_runner_ingress_for_finalized_drain(
         (
             "local_proposal_attempt",
             "pending_kura_apply.is_none() || local_proposal_attempt.is_none()",
-            "Ok((runtime, pending, local_proposal_attempt))",
+            "Ok((runtime, replay, local_proposal_attempt))",
         ),
     )
     proposal_initialize = item(
@@ -4137,39 +4137,36 @@ pub(in crate::sumeragi) fn close_runner_ingress_for_finalized_drain(
     )
 
     pending_source = sources["pending_kura"]
-    pending_types_start = pending_source.find(
+    pending_replay_types_start = pending_source.find(
         "pub(crate) struct PendingKuraRecoveredAdapterStartupV1"
     )
-    pending_types_end = pending_source.find(
-        "impl InstalledPendingKuraApplyV1", pending_types_start
+    pending_replay_types_end = pending_source.find(
+        "/// Move-only exact validation marker withheld from ordinary reducer replay.",
+        pending_replay_types_start,
     )
-    pending_types = (
-        pending_source[pending_types_start:pending_types_end]
-        if pending_types_start >= 0 and pending_types_end > pending_types_start
+    pending_replay_types = (
+        pending_source[pending_replay_types_start:pending_replay_types_end]
+        if pending_replay_types_start >= 0
+        and pending_replay_types_end > pending_replay_types_start
         else ""
     )
-    pending_type_tokens = rust_code_tokens(pending_types)
+    pending_replay_type_tokens = rust_code_tokens(pending_replay_types)
     for required in (
         "startup: RecoveredAdapterStartup",
         "expected: crate::sumeragi::v2_recovery::PendingKuraApply",
         "startup: AuthenticatedRecoveredAdapterStartup",
         "replay: RecoveredPendingKuraApplyReplayV1",
         "pub(in crate::sumeragi) struct RecoveredPendingKuraApplyReplayV1",
-        "wal_identity: RecoveredWalFrameIdentity",
-        "replay_evidence: RecoveredWalDecisionFetchReplayEvidenceV1",
-        "effect: AdapterEffect",
-        "apply_carrier: Option<crate::sumeragi::v2_lifecycle_coordinator::RecoveredPendingKuraApplyCarrierPermitV1>",
+        "fetch: RecoveredWalDecisionFetch",
         "pub(in crate::sumeragi) struct PreparedRecoveredPendingKuraApplyReplayV1",
-        "verified: VerifiedHeightContext",
         "wal_identity: RecoveredWalFrameIdentity",
         "replay_evidence: RecoveredWalDecisionFetchReplayEvidenceV1",
         "effect: AdapterEffect",
-        "apply_carrier: crate::sumeragi::v2_lifecycle_coordinator::RecoveredPendingKuraApplyCarrierPermitV1",
-        "pub(in crate::sumeragi) struct InstalledPendingKuraApplyV1",
-        "genesis: Option<crate::sumeragi::v2_effects::VerifiedPendingGenesisNexusAmxContext>",
+        "verified: VerifiedHeightContext",
+        "deferred_validated_marker: Option<DeferredPendingKuraValidatedMarkerV1>",
     ):
         if not _token_sequence_count(
-            pending_type_tokens, rust_code_tokens(required)
+            pending_replay_type_tokens, rust_code_tokens(required)
         ):
             errors.append(
                 f"{paths['pending_kura']}: opaque pending-Kura replay types "
@@ -4191,18 +4188,61 @@ pub(in crate::sumeragi) fn close_runner_ingress_for_finalized_drain(
         "fn effect(",
         "fn fetch(",
     ):
-        if forbidden in pending_types:
+        if forbidden in pending_replay_types:
             errors.append(
                 f"{paths['pending_kura']}: opaque pending-Kura replay types "
                 f"expose forbidden surface {forbidden!r}"
             )
-    if _token_sequence_count(
-        pending_type_tokens, rust_code_tokens("fetch: RecoveredWalDecisionFetch")
+
+    pending_marker_types_start = pending_source.find(
+        "pub(crate) struct DeferredPendingKuraValidatedMarkerV1"
+    )
+    pending_marker_types_end = pending_source.find(
+        "impl InstalledPendingKuraApplyV1", pending_marker_types_start
+    )
+    pending_marker_types = (
+        pending_source[pending_marker_types_start:pending_marker_types_end]
+        if pending_marker_types_start >= 0
+        and pending_marker_types_end > pending_marker_types_start
+        else ""
+    )
+    pending_marker_type_tokens = rust_code_tokens(pending_marker_types)
+    for required in (
+        "pub(crate) struct DeferredPendingKuraValidatedMarkerV1",
+        "pub(in crate::sumeragi) struct PreparedPendingKuraValidatedApplyV1<'a>",
+        "prepared: super::PreparedDirectValidationSucceededApply<'a>",
+        "child_ownership: crate::sumeragi::v2_runtime::RuntimeEffectOwnership",
+        "_marker: DeferredPendingKuraValidatedMarkerV1",
+        "pub(crate) struct PendingKuraValidatedApplySuccessorV1",
+        "effect: AdapterEffect",
+        "ownership: crate::sumeragi::v2_runtime::RuntimeEffectOwnership",
+        "pub(in crate::sumeragi) struct InstalledPendingKuraApplyV1",
+        "genesis: Option<crate::sumeragi::v2_effects::VerifiedPendingGenesisNexusAmxContext>",
     ):
-        errors.append(
-            f"{paths['pending_kura']}: inert pending-Kura provenance must not "
-            "own the move-only recovered Decision Fetch"
-        )
+        if not _token_sequence_count(
+            pending_marker_type_tokens, rust_code_tokens(required)
+        ):
+            errors.append(
+                f"{paths['pending_kura']}: move-only pending-Kura marker/child "
+                f"types omit {required!r}"
+            )
+    for forbidden in (
+        "fn into_parts(",
+        "pub effect:",
+        "pub(crate) effect:",
+        "pub(in crate::sumeragi) effect:",
+        "pub(crate) child_ownership:",
+        "pub(in crate::sumeragi) child_ownership:",
+        "pub(crate) _marker:",
+        "pub(in crate::sumeragi) _marker:",
+    ):
+        if _token_sequence_count(
+            pending_marker_type_tokens, rust_code_tokens(forbidden)
+        ):
+            errors.append(
+                f"{paths['pending_kura']}: move-only pending-Kura marker/child "
+                f"types expose forbidden surface {forbidden!r}"
+            )
     bind_pending = item("pending_kura", "bind_pending_kura_apply")
     require_order(
         "pending_kura",
@@ -4221,54 +4261,37 @@ pub(in crate::sumeragi) fn close_runner_ingress_for_finalized_drain(
     require_order(
         "pending_kura",
         pending_auth,
-        "pending-Kura retained Decision-Fetch authentication and inert provenance clone",
+        "pending-Kura Decision-Fetch ownership transfer into storage-only startup",
         (
             "startup.authenticate_final_wal_startup_authority()",
             "let RecoveredWalStartupAuthorityV1::DecisionFetch(fetch) = authority",
             "if !effects.is_empty()",
             "AdapterEffect::FetchBody { subject, .. } if subject.block_hash == expected.block_hash()",
-            "let replay = RecoveredPendingKuraApplyReplayV1",
-            "wal_identity: fetch.wal_identity",
-            "replay_evidence: fetch.replay_evidence.clone()",
-            "effect: fetch.effect.clone()",
-            "apply_carrier: None",
-            "authority: RecoveredWalStartupAuthorityV1::DecisionFetch(fetch)",
-            "replay,",
+            "authority: RecoveredWalStartupAuthorityV1::None",
+            "replay: RecoveredPendingKuraApplyReplayV1 { expected, fetch }",
         ),
-    )
-    reject_tokens(
-        "pending_kura",
-        pending_auth,
-        "pending-Kura authentication retains the move-only Decision Fetch",
-        ("authority: RecoveredWalStartupAuthorityV1::None",),
     )
     pending_runtime = item("pending_kura", "into_serialized_runtime")
     require_order(
         "pending_kura",
         pending_runtime,
-        "pending-Kura inert provenance beside empty runtime ownership",
+        "pending-Kura exact Fetch ownership roundtrip through runtime startup",
         (
             "let pending = pending_kura_apply",
-            "let RecoveredPendingKuraApplyReplayV1 { expected, wal_identity, replay_evidence, effect, apply_carrier, } = replay",
+            "let RecoveredPendingKuraApplyReplayV1 { expected, fetch } = replay",
+            "let RecoveredWalDecisionFetch { wal_identity, replay_evidence, effect, } = fetch",
             "replay_evidence.exactly_matches_recovered_decision_fetch",
-            "let apply_carrier = apply_carrier.ok_or(",
-            "PreparedRecoveredPendingKuraApplyReplayV1 { expected, verified, wal_identity, replay_evidence, effect, apply_carrier, }",
+            "Ok((expected, verified, wal_identity, replay_evidence, effect))",
             ".transpose()?",
-            "SerializedV2Runtime::new_with_lifecycle_ordinals(",
-            "adapter, Vec::new(),",
-            "if !returned_effects.is_empty()",
-            "Ok((runtime, pending, local_proposal_attempt))",
-        ),
-    )
-    reject_tokens(
-        "pending_kura",
-        pending_runtime,
-        "pending-Kura runtime owns no cloned Fetch effect",
-        (
-            "let RecoveredWalDecisionFetch",
+            "let (startup_effects, pending) = match pending",
             "vec![effect]",
+            "SerializedV2Runtime::new_with_lifecycle_ordinals(",
+            "adapter, startup_effects,",
             "returned_effects.len() == 1",
-            "take_effect_ownership(",
+            "returned_effects.pop()",
+            "PreparedRecoveredPendingKuraApplyReplayV1",
+            "deferred_validated_marker: None",
+            "Ok((runtime, replay, local_proposal_attempt))",
         ),
     )
     pending_attach = item("pending_kura", "with_pending_kura_apply_replay")
@@ -4285,24 +4308,127 @@ pub(in crate::sumeragi) fn close_runner_ingress_for_finalized_drain(
             "panic!(",
         ),
     )
+
+    pending_marker_defer = item(
+        "pending_kura", "classify_and_defer_validated_marker"
+    )
+    require_order(
+        "pending_kura",
+        pending_marker_defer,
+        "pending-Kura validated-marker deferral",
+        (
+            "replay_evidence.exactly_matches_recovered_decision_fetch(",
+            "if key != expected_key",
+            "if self.deferred_validated_marker.is_some()",
+            "self.expected.context_id() != context.id()",
+            "self.expected.height() != context.height",
+            "self.expected.block_hash() != subject.block_hash",
+            "certificate.phase != crate::sumeragi::v2::wire::GlobalPhase::Commit",
+            "certificate.proposal_round != *round",
+            "certificate.subject != *subject",
+            "certificate.validate(context).is_err()",
+            "manifest.validate(context).is_err()",
+            "manifest.round != *round",
+            "manifest.subject != *subject",
+            "advertised_manifest.as_ref()",
+            "durable.context_id() != context.id()",
+            "durable.round() != *round",
+            "durable.subject() != *subject",
+            "durable.manifest_hash() != iroha_crypto::HashOf::new(manifest)",
+            "validated.durable() != durable",
+            "validated.execution_commitment() != certificate.execution_commitment",
+            "self.deferred_validated_marker = Some(DeferredPendingKuraValidatedMarkerV1",
+        ),
+    )
+    pending_marker_exact = item("pending_kura", "exactly_matches_recovery")
+    require_order(
+        "pending_kura",
+        pending_marker_exact,
+        "pending-Kura exact deferred marker",
+        (
+            "self.tag == replay_tag",
+            "self.manifest_hash == iroha_crypto::HashOf::new(manifest)",
+            "self.validated.durable() == &self.durable",
+            "self.certificate.proposal_round == self.round",
+            "self.certificate.subject == self.subject",
+            "self.certificate.execution_commitment == self.validated.execution_commitment()",
+            "self.certificate.validate(context).is_ok()",
+        ),
+    )
+    pending_marker_prepare = item("pending_kura", "prepare_apply")
+    require_order(
+        "pending_kura",
+        pending_marker_prepare,
+        "pending-Kura marker-owned direct Validate-to-Apply preview",
+        (
+            "let AdapterEffect::ValidateBody",
+            "if *tag != self.tag || *round != self.round || *subject != self.subject",
+            "ownership.binds_durable_decision_authority(",
+            "self.certificate.round",
+            "self.certificate.proposal_round",
+            "self.subject",
+            "self.certificate.execution_commitment",
+            "ownership.exact_pending_adapter_effect_binding(predecessor)",
+            "adapter.prepare_direct_validation_succeeded(",
+            "DirectValidationSucceededPreparation::Apply(prepared)",
+            "validate_pending.project_validate_apply_successor(predecessor, &apply_effect)",
+            "ownership.rebind_as_inherited_adapter_effect(&apply_effect)",
+            "PreparedPendingKuraValidatedApplyV1",
+        ),
+    )
+    reject_tokens(
+        "pending_kura",
+        pending_marker_prepare,
+        "pending-Kura marker-owned direct Validate-to-Apply preview",
+        (
+            "reducer::Event::ValidationCompleted",
+            "periodic_timer",
+        ),
+    )
+    pending_marker_commit = item("pending_kura", "commit")
+    require_order(
+        "pending_kura",
+        pending_marker_commit,
+        "pending-Kura deferred validation commit",
+        (
+            "let super::PreparedDirectValidationSucceededApply",
+            "adapter.reducer = next_reducer",
+            "adapter.registry = next_registry",
+            "adapter.reducer_fence_generation = next_fence_generation",
+            "PendingKuraValidatedApplySuccessorV1 { effect: apply_effect, ownership: child_ownership, }",
+        ),
+    )
+    pending_child_release = item("pending_kura", "consume_for_executor")
+    require_order(
+        "pending_kura",
+        pending_child_release,
+        "pending-Kura executor-only Apply child release",
+        (
+            "PendingKuraApplySuccessorExecutorPermitV1",
+            "(self.effect, self.ownership)",
+        ),
+    )
+
     pending_install = item("pending_kura", "install")
     require_order(
         "pending_kura",
         pending_install,
-        "pending-Kura carrier-gated verification-only install",
+        "pending-Kura marker-verified direct pipeline install",
         (
+            "let Some(deferred_validated_marker) = deferred_validated_marker",
             "executor.context() != verified.context()",
             "replay_evidence.exactly_matches_recovered_decision_fetch",
             "let effects = vec![effect]",
-            "executor.verify_pending_kura_recovered_apply_replay( expected, &effects, apply_carrier, )?",
+            "executor.verify_pending_kura_apply_replay( expected, &effects, deferred_validated_marker, )?",
+            "executor.consume_pending_tip_recovery_effects(effects, services)?",
             "Ok(InstalledPendingKuraApplyV1 { expected, genesis })",
         ),
     )
     reject_tokens(
         "pending_kura",
         pending_install,
-        "pending-Kura install does not replay runtime Fetch/Store/Validate",
-        ("services: &mut",),
+        "pending-Kura marker-aware verification-before-dispatch install",
+        ("executor.verify_pending_kura_apply_replay_unchecked(",),
     )
     adapter_source = sources["adapter"]
     decision_fetch_start = adapter_source.find(
@@ -4345,80 +4471,11 @@ pub(in crate::sumeragi) fn close_runner_ingress_for_finalized_drain(
                 f"exposes forbidden surface {forbidden!r}"
             )
 
-    pending_carrier_bind = item(
-        "pending_kura", "bind_recovered_apply_carrier"
-    )
-    require_order(
-        "pending_kura",
-        pending_carrier_bind,
-        "one-shot recovered Apply carrier binding",
-        (
-            "self.apply_carrier.is_none()",
-            "self.apply_carrier = Some(permit)",
-            "self",
-        ),
-    )
-
-    permit_source = sources["coordinator_support"]
-    permit_start = permit_source.find(
-        "pub(in crate::sumeragi) struct RecoveredPendingKuraApplyCarrierPermitV1"
-    )
-    permit_end = permit_source.find("impl ProductionLifecycleOwnerV1", permit_start)
-    permit_declaration = (
-        permit_source[permit_start:permit_end]
-        if permit_start >= 0 and permit_end > permit_start
-        else ""
-    )
-    permit_tokens = rust_code_tokens(permit_declaration)
-    for required in (
-        "struct RecoveredPendingKuraApplyCarrierPermitV1 { lifecycle_ordinal: u128, _linearity: RecoveredPendingKuraApplyCarrierPermitLinearityV1, }",
-        "struct RecoveredPendingKuraApplyCarrierPermitLinearityV1;",
-        "impl Drop for RecoveredPendingKuraApplyCarrierPermitLinearityV1",
-        "fn consume_for_executor(self) -> u128 { self.lifecycle_ordinal }",
-    ):
-        if not _token_sequence_count(permit_tokens, rust_code_tokens(required)):
-            errors.append(
-                f"{paths['coordinator_support']}: ordinal-bound recovered Apply "
-                f"carrier permit omits {required!r}"
-            )
-    for forbidden in (
-        "derive(Clone)",
-        "derive(Copy)",
-        "pub lifecycle_ordinal:",
-        "pub(crate) lifecycle_ordinal:",
-        "pub(in crate::sumeragi) lifecycle_ordinal:",
-        "pub _linearity:",
-        "pub(crate) _linearity:",
-        "pub(in crate::sumeragi) _linearity:",
-    ):
-        if _token_sequence_count(permit_tokens, rust_code_tokens(forbidden)):
-            errors.append(
-                f"{paths['coordinator_support']}: ordinal-bound recovered Apply "
-                f"carrier permit exposes {forbidden!r}"
-            )
-
-    pending_owner_oracle = item(
-        "registry_recovery_impl",
-        "exact_recovered_decision_apply_ready_ordinal",
-    )
-    require_order(
-        "registry_recovery_impl",
-        pending_owner_oracle,
-        "exact recovered Decision-Apply startup ordinal oracle",
-        (
-            "let Some(extra @ RecoveredWalRegistrySlotV1::DecisionApply(address))",
-            "self.exact_recovered_wal_registry_slot()",
-            "return None",
-            "self.exactly_covers_recovered_ready_work_with_extra(coordinator, extra)",
-            ".then_some(address.ordinal)",
-        ),
-    )
-
     pending_owner = item("coordinator_support", "with_pending_kura_apply_replay")
     require_order(
         "coordinator_support",
         pending_owner,
-        "exact recovered-Apply owner census and ordinal permit retention",
+        "storage-only pending-Kura replay attachment",
         (
             "self.registry.registry().exact_recovered_decision_apply_ready_ordinal(&self.coordinator)",
             ".ok_or(",
@@ -4426,8 +4483,8 @@ pub(in crate::sumeragi) fn close_runner_ingress_for_finalized_drain(
             "lifecycle_ordinal,",
             "replay.bind_recovered_apply_carrier(apply_carrier)",
             "self.adapter_startup.take()",
-            "startup.with_pending_kura_apply_replay(replay)",
-            "Ok(self)",
+            "self.adapter_startup = Some(startup.with_pending_kura_apply_replay(replay))",
+            "self",
         ),
     )
     pending_factory = item(
@@ -4452,33 +4509,29 @@ pub(in crate::sumeragi) fn close_runner_ingress_for_finalized_drain(
             "self.services.lifecycle_output_guard()",
             "super::preactivation::missing_pending_kura_replay(output_guard.as_ref(),)",
             "self.with_runner_setup(runner",
-            "replay.install(executor)",
+            "replay.install(executor, services)",
             "PendingKuraProductionLifecycleV1 { installed, launched: self, }",
         ),
     )
     pending_apply_startup = item(
-        "effects", "verify_pending_kura_recovered_apply_replay"
+        "effects", "verify_pending_kura_apply_replay"
     )
     require_order(
         "effects",
         pending_apply_startup,
-        "ordinal-gated pending-Kura direct-Apply refinement",
+        "pending-Kura replay verification with deferred marker",
         (
             "self.ensure_open()?",
             "self.pending_tip_recovery.is_some()",
             "let decision = self.runtime.replayed_decision_key()",
             "let [ AdapterEffect::FetchBody",
+            "let owner_tag = self.current_tag()",
+            "if *tag != owner_tag",
+            "let expected_sources = self.frozen_archive_sources()",
             "self.runtime.verify_certificate(&self.context, certificate)",
-            "let recovered_apply_ordinal = apply_carrier.consume_for_executor()",
-            "if recovered_apply_ordinal == 0",
-            "let (genesis_context, evidence) = verify_pending_kura_apply_parts(",
-            "recovered_apply_ordinal,",
-            "if !evidence.is_exact(&self.context)",
-            "evidence.recovery_refinement_projection()",
-            "ProductionDecisionApplyStartupTraceProjection",
-            "apply_carrier_installed: true",
-            "check_production_decision_apply_startup_transition(startup)",
-            "checked.into_projection()",
+            "let (genesis_context, evidence) = verify_pending_kura_apply_parts_with_marker(",
+            "deferred_validated_marker",
+            "if evidence.durable_round() != *round",
             "self.pending_tip_recovery = Some(evidence)",
         ),
     )
@@ -4497,45 +4550,176 @@ pub(in crate::sumeragi) fn close_runner_ingress_for_finalized_drain(
     evidence_tokens = rust_code_tokens(evidence_declaration)
     for required in (
         "pub(crate) struct PendingKuraApplyRecoveryEvidence",
-        "recovered_apply_ordinal: u128",
+        "deferred_validated_marker: Option<super::v2::DeferredPendingKuraValidatedMarkerV1>",
         "stage: PendingKuraApplyRecoveryStage",
     ):
         if not _token_sequence_count(evidence_tokens, rust_code_tokens(required)):
             errors.append(
                 f"{paths['effects']}: direct pending-Kura evidence omits {required!r}"
             )
-    for forbidden in (
-        "recovered_apply_ordinal: Option<u128>",
-        "pub recovered_apply_ordinal:",
-        "pub(crate) recovered_apply_ordinal:",
-        "pub(in crate::sumeragi) recovered_apply_ordinal:",
+
+    evidence_impl_end = evidence_source.find(
+        "/// Explicit bounds for outstanding effect work", evidence_end
+    )
+    evidence_impl = (
+        evidence_source[evidence_end:evidence_impl_end]
+        if evidence_end >= 0 and evidence_impl_end > evidence_end
+        else ""
+    )
+    evidence_impl_tokens = rust_code_tokens(evidence_impl)
+    for required in (
+        "PendingKuraApplyRecoveryStage::CertifiedFetch | PendingKuraApplyRecoveryStage::DurableStore | PendingKuraApplyRecoveryStage::DeterministicValidation",
+        "marker.exactly_matches_recovery(",
+        "PendingKuraApplyRecoveryStage::Apply | PendingKuraApplyRecoveryStage::ApplicationDispatched | PendingKuraApplyRecoveryStage::Completed",
+        "self.deferred_validated_marker.is_none()",
+        "self.deferred_validated_marker.take()",
+        "self.deferred_validated_marker = Some(marker)",
     ):
-        if _token_sequence_count(evidence_tokens, rust_code_tokens(forbidden)):
+        if not _token_sequence_count(evidence_impl_tokens, rust_code_tokens(required)):
             errors.append(
-                f"{paths['effects']}: direct pending-Kura evidence exposes {forbidden!r}"
+                f"{paths['effects']}: pending-Kura evidence marker lifecycle "
+                f"omits {required!r}"
             )
-    generic_begin_apply = item("effects", "begin_apply")
+
+    pending_runtime_prepare = item(
+        "runtime", "prepare_pending_kura_validated_apply"
+    )
     require_order(
-        "effects",
-        generic_begin_apply,
-        "generic runtime Apply rejection of pending-Kura ownership",
+        "runtime",
+        pending_runtime_prepare,
+        "pending-Kura no-clock marker preparation",
         (
-            "if self.pending_tip_recovery.is_some()",
-            '"generic Apply cannot consume pending-Kura lifecycle ownership"',
-            "if tag.height() != self.context.height",
+            "self.fail_closed",
+            "self.clocks_armed",
+            "self.ingress.len() != 0",
+            "self.pending_effect_ownership.is_some()",
+            "self.last_scheduler_ownership.is_some()",
+            "self.pending_leader_wire_terminals.is_empty()",
+            "marker.prepare_apply(&mut self.driver, predecessor, ownership)",
         ),
     )
-    generic_complete_application = item("effects", "complete_application")
+
+    default_runtime_commit_candidates = tuple(
+        rust_item
+        for rust_item in rust_items(
+            sources["effects"], "commit_pending_kura_validated_apply"
+        )
+        if rust_item.brace_context
+        == (("pub", "(", "crate", ")", "trait", "EffectRuntime"),)
+    )
+    if len(default_runtime_commit_candidates) != 1:
+        errors.append(
+            f"{paths['effects']}: pending-Kura marker commit must retain one "
+            "EffectRuntime default; found "
+            f"{len(default_runtime_commit_candidates)}"
+        )
+        default_runtime_commit = None
+    else:
+        default_runtime_commit = default_runtime_commit_candidates[0]
     require_order(
         "effects",
-        generic_complete_application,
-        "generic runtime application completion rejection of pending-Kura ownership",
+        default_runtime_commit,
+        "generic runtime pending-Kura marker fail-closed default",
         (
-            "self.ensure_open()?",
-            "if self.pending_tip_recovery.is_some()",
-            '"generic Apply completion cannot consume pending-Kura lifecycle ownership"',
-            "services,",
-            "if !self.pending_applications.contains_key(&completion.work_id)",
+            "Err((",
+            "marker",
+            '"runtime cannot commit a deferred pending-Kura validation marker"',
+        ),
+    )
+
+    serialized_runtime_commit_candidates = tuple(
+        rust_item
+        for rust_item in rust_items(
+            sources["effects"], "commit_pending_kura_validated_apply"
+        )
+        if rust_item.brace_context
+        == (("impl", "EffectRuntime", "for", "SerializedV2Runtime"),)
+    )
+    if len(serialized_runtime_commit_candidates) != 1:
+        errors.append(
+            f"{paths['effects']}: pending-Kura marker commit must retain one "
+            "SerializedV2Runtime implementation; found "
+            f"{len(serialized_runtime_commit_candidates)}"
+        )
+        serialized_runtime_commit = None
+    else:
+        serialized_runtime_commit = serialized_runtime_commit_candidates[0]
+    require_order(
+        "effects",
+        serialized_runtime_commit,
+        "serialized pending-Kura marker commit",
+        (
+            "self.prepare_pending_kura_validated_apply(marker, predecessor, ownership)",
+            "Ok(prepared) => Ok(prepared.commit())",
+            "Err((marker, error)) => Err((marker, error.to_string()))",
+        ),
+    )
+
+    pending_validate_child = item("effects", "validate_body")
+    require_order(
+        "effects",
+        pending_validate_child,
+        "pending-Kura Validate exact Apply child",
+        (
+            "recovery.stage() != PendingKuraApplyRecoveryStage::DeterministicValidation",
+            "recovery.replay_tag() != tag",
+            "recovery.durable_round() != round",
+            "recovery.durable_subject() != subject",
+            "recovery.durable_receipt() != &receipt",
+            "self.ensure_pending_slot()?",
+            "let _next_apply_work = self.plan_work_id()?",
+            "take_deferred_validated_marker()?",
+            "commit_pending_kura_validated_apply(marker, &effect, &ownership)",
+            "restore_deferred_validated_marker(marker)",
+            "return Ok(Some(successor))",
+        ),
+    )
+
+    pending_consume_child = item("effects", "consume_one")
+    require_order(
+        "effects",
+        pending_consume_child,
+        "pending-Kura stage-before-child dispatch",
+        (
+            "result?",
+            "if let Some(stage) = recovery_transition",
+            ".stage = stage",
+            "if let Some(successor) = pending_kura_successor",
+            "PendingKuraApplySuccessorExecutorPermitV1::new()",
+            "self.consume_one(effect, ownership, services)",
+            "EffectExecutorError::Contract(format!(",
+        ),
+    )
+    reject_tokens(
+        "effects",
+        pending_consume_child,
+        "pending-Kura stage-before-child dispatch",
+        ("periodic_timer",),
+    )
+
+    pending_recovery_step = item("effects", "step_pending_tip_recovery")
+    require_order(
+        "effects",
+        pending_recovery_step,
+        "pending-Kura exact local stage consumer",
+        (
+            "self.finish_runtime_step_reconciliation(services)",
+            "RuntimeStep::Idle",
+            "RuntimeStep::Advanced(effects)",
+            "self.consume_pending_tip_recovery_effects(effects, services)?",
+            "PendingTipRecoveryAttemptResult::Advanced",
+            "self.publish_status(services)",
+            "EffectExecutorStep::Advanced { effects: count }",
+        ),
+    )
+    reject_tokens(
+        "effects",
+        pending_recovery_step,
+        "stage-complete direct-marker pending-tip recovery step",
+        (
+            "self.consume_effects(effects, services)?",
+            "let stage = PendingKuraApplyRecoveryStage::Apply",
+            "stage != PendingKuraApplyRecoveryStage::Apply",
         ),
     )
     apply_runtime_readiness = item(
@@ -4601,9 +4785,8 @@ pub(in crate::sumeragi) fn close_runner_ingress_for_finalized_drain(
             "evidence.stage() == PendingKuraApplyRecoveryStage::Apply",
             "evidence.is_exact(&self.context)",
             "evidence.replay_tag() == self.current_tag()",
-            "prepared.dispatch_key().lifecycle_ordinal() == evidence.recovered_apply_ordinal()",
             "prepared.exactly_matches_pending_kura_recovery(",
-            "PendingKuraApplyDispatchTransitionV1 { evidence }",
+            "PendingKuraApplyDispatchTransitionV1 { evidence, last_result:",
         ),
     )
     pending_apply_scheduler = item(
@@ -4624,7 +4807,7 @@ pub(in crate::sumeragi) fn close_runner_ingress_for_finalized_drain(
     require_order(
         "scheduler",
         pending_apply_scheduler,
-        "required recovered Apply ordinal scheduler selection",
+        "required Ready ordinal scheduler selection",
         (
             "let plan = match required_ordinal",
             "Some(ordinal) => self.coordinator.plan_turn_requiring_ordinal(inputs, ordinal)",
@@ -4708,61 +4891,6 @@ pub(in crate::sumeragi) fn close_runner_ingress_for_finalized_drain(
             "pending.evidence.stage = PendingKuraApplyRecoveryStage::ApplicationDispatched",
         ),
     )
-    pending_completion_classifier = item(
-        "worker_services", "take_next_lifecycle_completion"
-    )
-    require_order(
-        "worker_services",
-        pending_completion_classifier,
-        "one-item lifecycle completion ownership transfer",
-        (
-            "self.held_io_completion.take()",
-            "io.try_recv_completion_unacknowledged()",
-            "match completion",
-            "LifecycleCompletionTakeV1::Apply(",
-        ),
-    )
-    pending_ordinary_completion = item(
-        "worker_services",
-        "drain_one_ordinary_completion_after_lifecycle_pass_through",
-    )
-    require_order(
-        "worker_services",
-        pending_ordinary_completion,
-        "at-most-one ordinary completion after lifecycle pass-through",
-        (
-            "self.drain_completions_inner(executor, 1)?",
-            "self.require_no_unowned_lifecycle_completion(executor, outcome)",
-        ),
-    )
-    pending_owner_seam = item(
-        "pending_lifecycle", "with_lifecycle_setup_transaction"
-    )
-    require_order(
-        "pending_lifecycle",
-        pending_owner_seam,
-        "pending-only closed-setup owner borrow seam",
-        (
-            "let launched = &mut self.launched",
-            "let output_guard = launched.services.lifecycle_output_guard()",
-            "ProductionLifecyclePreActivationFailStopScopeV1::new(",
-            "matches_lifecycle_executor_output_guard(&launched.executor)",
-            "let value = operation( &mut launched.owner, &mut launched.executor, &mut launched.services, )?",
-            "matches_lifecycle_executor_output_guard(&launched.executor)",
-            "setup.complete()",
-            "Ok(value)",
-        ),
-    )
-    preactivation_owner_seam = rust_code_tokens(
-        "fn with_lifecycle_setup_transaction"
-    )
-    if _token_sequence_count(
-        rust_code_tokens(sources["preactivation"]), preactivation_owner_seam
-    ):
-        errors.append(
-            f"{paths['preactivation']}: ordinary preactivation must not expose "
-            "the pending-only lifecycle-owner borrow seam"
-        )
     pending_apply_turn = item("pending_lifecycle", "drive_apply_recovery_turn")
     _require_rust_item_context(
         paths["pending_lifecycle"],
@@ -4775,53 +4903,32 @@ pub(in crate::sumeragi) fn close_runner_ingress_for_finalized_drain(
     require_order(
         "pending_lifecycle",
         pending_apply_turn,
-        "one-item closed-ingress pending-Kura lifecycle Apply completion turn",
+        "bounded closed-ingress pending-Kura direct-pipeline turn",
         (
             "self.launched.pending_kura_apply_replay.is_some()",
             "close_admission_for_restart()",
-            "self.with_lifecycle_setup_transaction(runner",
-            "executor.begin_pending_tip_recovery_attempt()",
+            "self.launched.with_runner_setup(runner, |executor, services|",
             "executor.pending_kura_apply_recovery_evidence()",
-            "matches!(stage, Stage::Apply | Stage::ApplicationDispatched)",
-            "services.take_next_lifecycle_completion()",
-            "LifecycleCompletionTakeV1::PassThrough",
-            "services.drain_one_ordinary_completion_after_lifecycle_pass_through(",
-            "LifecycleCompletionTakeV1::Apply(completion)",
-            "stage == Stage::ApplicationDispatched",
-            "settle_pending_kura_applied_decision_apply_completion(",
-            "let recovered_apply_ordinal = executor.pending_kura_apply_recovery_evidence()",
-            "owner.classify_completion_ready_work(fence)",
-            "owner.dispatch_completion_requiring_ready_ordinal( services, executor, 0, recovered_apply_ordinal, )",
-            "ProductionCompletionDispatchV1::ApplyQueued { ordinal }",
-            "if ordinal == recovered_apply_ordinal",
-            "evidence.stage() != Stage::ApplicationDispatched",
-            "settle_pending_tip_recovery_attempt(AttemptResult::Advanced)",
+            "PendingKuraApplyRecoveryStage::Completed",
+            "executor.ready_to_finish()",
+            "let completions = services.drain_completions(executor)?",
+            "for _ in 0..limit.max(1)",
+            "executor.step_pending_tip_recovery(Instant::now(), services)?",
+            "let evidence = executor.pending_kura_apply_recovery_evidence()",
+            "let attempts = executor.pending_tip_recovery_attempts()",
+            "if completions == 0 && effects == 0",
+            "ProductionPendingKuraApplyRecoveryProgressV1::Waiting",
+            "ProductionPendingKuraApplyRecoveryProgressV1::Advanced",
         ),
     )
-    if pending_apply_turn is not None:
-        pending_turn_tokens = rust_code_tokens(pending_apply_turn.source)
-        for token in (
-            "services.take_next_lifecycle_completion()",
-            "services.drain_one_ordinary_completion_after_lifecycle_pass_through(",
-        ):
-            count = _token_sequence_count(
-                pending_turn_tokens, rust_code_tokens(token)
-            )
-            if count != 1:
-                errors.append(
-                    f"{paths['pending_lifecycle']}:{pending_apply_turn.line}: "
-                    "pending-Kura lifecycle Apply recovery must retain exactly one "
-                    f"{token!r} seam; found {count}"
-                )
     reject_tokens(
         "pending_lifecycle",
         pending_apply_turn,
-        "closed-ingress pending-Kura Apply recovery turn",
+        "closed-ingress pending-Kura direct-pipeline turn",
         (
             "arm_live_clocks(",
             "schedule_local_proposal(",
             "drive_ingress_turn(",
-            "drain_completions(",
             "drain_effects(limit)",
         ),
     )
@@ -4835,7 +4942,10 @@ pub(in crate::sumeragi) fn close_runner_ingress_for_finalized_drain(
         (
             "finality.consume_for_executor(",
             "evidence.stage() == PendingKuraApplyRecoveryStage::ApplicationDispatched",
-            "dispatch_key.lifecycle_ordinal() == evidence.recovered_apply_ordinal()",
+            "evidence.is_exact(&self.context)",
+            "tag == evidence.replay_tag()",
+            "artifact.subject == evidence.commit_subject()",
+            "receipt.block_hash() == evidence.commit_subject().block_hash",
             "self.finality_completion = Some(FinalityCompletion",
             "FinalityCompletionOwner::LifecycleDecisionApply(dispatch_key)",
             "evidence.stage = PendingKuraApplyRecoveryStage::Completed",
@@ -4905,30 +5015,6 @@ pub(in crate::sumeragi) fn close_runner_ingress_for_finalized_drain(
             "FinalizedProductionLifecycleRolloverV1",
             "lane_work",
         ),
-    )
-    pending_close = item(
-        "pending_lifecycle", "close_runner_ingress_for_finalized_drain"
-    )
-    _require_exact_rust_tokens(
-        paths["pending_lifecycle"],
-        pending_close,
-        """
-pub(in crate::sumeragi) fn close_runner_ingress_for_finalized_drain(
-    &self,
-    _runner: &mut crate::sumeragi::v2_runner::ProductionLifecycleActiveRunnerBorrowV1,
-    receiver: &Arc<FairV2Ingress>,
-) -> Result<(), crate::sumeragi::v2_runner::V2RunnerError> {
-    self.runner_activation.close_ingress(receiver)?;
-    if !Arc::ptr_eq(receiver, &self.launched.leader_wire_ingress_binding.ingress) {
-        return Err(
-            crate::sumeragi::v2_runner::V2RunnerError::LifecycleActivationIngressMismatch,
-        );
-    }
-    Ok(())
-}
-""",
-        "pending-Kura finalized drain must close the passed physical receiver and prove it is the common activated ingress without consuming lifecycle authority",
-        errors,
     )
     missing_pending = item("preactivation", "missing_pending_kura_replay")
     require_order(

@@ -7,12 +7,20 @@ use super::{
     stake_snapshot::{StrictV2StakeSnapshotError, strict_v2_voting_roster},
     v2::VerifiedHeightContext,
 };
-use crate::state::{
-    StateBlock, StateReadOnly, WorldReadOnly, epoch_validator_peer_ids_from_world,
-    live_consensus_key_pop_for_peer, nexus_active_lane_ids,
-    public_lane_validator_record_matches_key,
+use crate::{
+    beacon::{
+        GlobalThresholdBeaconSessionBindingV1, global_threshold_beacon_npos_successor_seed_v1,
+        validate_global_threshold_beacon_session_v1,
+        validate_persisted_global_threshold_beacon_pulse_v1,
+        verify_finalized_global_threshold_beacon_pulse_v1,
+    },
+    state::{
+        GLOBAL_THRESHOLD_BEACON_SINGLETON_KEY, StateBlock, StateReadOnly, WorldReadOnly,
+        epoch_validator_peer_ids_from_world_with_seed, live_consensus_key_pop_for_peer,
+        nexus_active_lane_ids, public_lane_validator_record_matches_key,
+    },
 };
-use iroha_crypto::{Algorithm, Hash};
+use iroha_crypto::{Algorithm, Hash, HashOf};
 use iroha_data_model::{
     NetworkId,
     block::{SignedBlock, consensus_v2 as wire},
@@ -631,6 +639,109 @@ pub(crate) fn build_successor_height_context_from_state(
         finalized_next_epoch_snapshot(state, &parent.height_context.network_id, height, &election)?;
     build_successor_height_context(parent, nexus_amx_context_hash, next_epoch_snapshot)
 }
+
+/// Resolve the exact finalized global-beacon pulse authorized to seed one NPoS
+/// successor epoch.
+///
+/// The pulse must be the unique history tail finalized in the last committed
+/// pre-boundary block. It must authenticate the immediately preceding canonical
+/// block hash, the key session active at the pulse height, and the exact network. Full
+/// threshold-BLS verification is repeated at this consensus consumption
+/// boundary so restored or directly seeded state cannot turn a shape-valid
+/// pulse into authoritative entropy.
+pub(crate) fn finalized_global_beacon_npos_successor_seed_from_sources(
+    world: &impl WorldReadOnly,
+    block_hashes: &[HashOf<iroha_data_model::block::BlockHeader>],
+    network_id: &NetworkId,
+    boundary_height: wire::Height,
+    successor_epoch: u64,
+) -> Result<[u8; 32], V2ContextBuildError> {
+    let pulse_height = boundary_height
+        .checked_sub(1)
+        .ok_or(V2ContextBuildError::InvalidPreBoundaryBeaconPulse)?;
+    let anchor_height = pulse_height
+        .checked_sub(1)
+        .ok_or(V2ContextBuildError::InvalidPreBoundaryBeaconPulse)?;
+
+    let mut exact_height = world
+        .global_beacon_pulses()
+        .iter()
+        .filter(|(_, pulse)| pulse.height == pulse_height);
+    let (storage_key, pulse) = exact_height
+        .next()
+        .ok_or(V2ContextBuildError::MissingPreBoundaryBeaconPulse)?;
+    if exact_height.next().is_some()
+        || storage_key != &pulse.pulse_id
+        || world
+            .global_beacon_pulses()
+            .iter()
+            .any(|(_, candidate)| candidate.height > pulse_height)
+    {
+        return Err(V2ContextBuildError::InvalidPreBoundaryBeaconPulse);
+    }
+
+    let committed_height = u64::try_from(block_hashes.len())
+        .map_err(|_| V2ContextBuildError::InvalidPreBoundaryBeaconPulse)?;
+    let anchor_index = usize::try_from(anchor_height)
+        .ok()
+        .and_then(|height| height.checked_sub(1))
+        .ok_or(V2ContextBuildError::InvalidPreBoundaryBeaconPulse)?;
+    let anchor_hash = block_hashes
+        .get(anchor_index)
+        .copied()
+        .ok_or(V2ContextBuildError::InvalidPreBoundaryBeaconPulse)?;
+    let expected_anchor = iroha_data_model::consensus::GlobalThresholdBeaconChainAnchorV1 {
+        height: anchor_height,
+        block_hash: anchor_hash,
+    };
+    if committed_height != pulse_height
+        || pulse.network_id != *network_id
+        || pulse.finalized_chain_anchor != expected_anchor
+    {
+        return Err(V2ContextBuildError::InvalidPreBoundaryBeaconPulse);
+    }
+
+    let key_session = world
+        .global_beacon_key_sessions()
+        .get(&pulse.session_id)
+        .ok_or(V2ContextBuildError::InvalidPreBoundaryBeaconPulse)?;
+    if !key_session.is_active_at(pulse.height) {
+        return Err(V2ContextBuildError::InvalidPreBoundaryBeaconPulse);
+    }
+    let binding = GlobalThresholdBeaconSessionBindingV1 {
+        network_id: *network_id,
+        session_id: pulse.session_id,
+        roster_hash: pulse.roster_hash,
+        transcript_hash: pulse.transcript_hash,
+    };
+    let validated_session =
+        validate_global_threshold_beacon_session_v1(key_session.session.clone(), &binding)
+            .map_err(|_| V2ContextBuildError::InvalidPreBoundaryBeaconPulse)?;
+
+    let verified_link = verify_finalized_global_threshold_beacon_pulse_v1(
+        &validated_session,
+        pulse,
+        expected_anchor,
+    )
+    .map_err(|_| V2ContextBuildError::InvalidPreBoundaryBeaconPulse)?;
+    let canonical_link = validate_persisted_global_threshold_beacon_pulse_v1(pulse)
+        .map_err(|_| V2ContextBuildError::InvalidPreBoundaryBeaconPulse)?;
+    if verified_link != canonical_link
+        || world
+            .global_beacon_latest_pulse()
+            .get(&GLOBAL_THRESHOLD_BEACON_SINGLETON_KEY)
+            != Some(&verified_link)
+    {
+        return Err(V2ContextBuildError::InvalidPreBoundaryBeaconPulse);
+    }
+
+    let seed =
+        global_threshold_beacon_npos_successor_seed_v1(pulse, boundary_height, successor_epoch);
+    if seed == [0; 32] {
+        return Err(V2ContextBuildError::InvalidPreBoundaryBeaconPulse);
+    }
+    Ok(seed)
+}
 /// Derive the complete transition committed by the old roster at an epoch's
 /// final height.
 ///
@@ -673,36 +784,29 @@ pub(crate) fn finalized_next_epoch_snapshot(
     } else {
         None
     };
-    let authenticated_npos_seed = if let Some(params) = npos_params {
-        let record = state
-            .world()
-            .vrf_epochs()
-            .get(&election.epoch)
-            .ok_or(V2ContextBuildError::MissingPreBoundaryVrfRecord)?;
-        Some(
-            super::v2_npos::authenticated_successor_seed(
-                network_id,
-                election.epoch,
-                election.epoch_end_height,
-                election.leader_seed,
-                &election.roster,
-                params,
-                record,
-            )
-            .map_err(|_| V2ContextBuildError::InvalidPreBoundaryVrfRecord)?,
-        )
+    let authenticated_npos_seed = if npos_params.is_some() {
+        Some(finalized_global_beacon_npos_successor_seed_from_sources(
+            state.world(),
+            state.block_hashes(),
+            network_id,
+            height,
+            epoch,
+        )?)
     } else {
         None
     };
     let roster = match election.mode {
         wire::ConsensusMode::Permissioned => election.roster.clone(),
         wire::ConsensusMode::Npos => {
-            let elected = epoch_validator_peer_ids_from_world(
+            let elected = epoch_validator_peer_ids_from_world_with_seed(
                 state.world(),
                 state.commit_topology().iter().cloned(),
                 successor_height,
                 state.nexus(),
                 epoch,
+                authenticated_npos_seed.expect(
+                    "NPoS branch authenticates the pre-boundary beacon before roster selection",
+                ),
             )
             .ok_or(V2ContextBuildError::MissingFinalizedEpochRoster)?;
             let active_lanes = nexus_active_lane_ids(state.nexus());
@@ -781,14 +885,14 @@ pub(crate) enum V2ContextBuildError {
     /// reveal cutoff.
     #[error("Sumeragi v2 NPoS boundary has an invalid committed epoch schedule")]
     InvalidNposParameters,
-    /// The finalized state before an NPoS boundary omitted its authenticated
-    /// current-epoch VRF record.
-    #[error("Sumeragi v2 NPoS boundary is missing its authenticated pre-boundary VRF record")]
-    MissingPreBoundaryVrfRecord,
-    /// The retained pre-boundary record is inconsistent with the frozen
-    /// epoch, roster, window schedule, or authenticated observations.
-    #[error("Sumeragi v2 NPoS boundary has an invalid authenticated VRF record")]
-    InvalidPreBoundaryVrfRecord,
+    /// The finalized state before an NPoS boundary omitted the exact global
+    /// threshold-beacon pulse required for successor entropy.
+    #[error("Sumeragi v2 NPoS boundary is missing its finalized pre-boundary beacon pulse")]
+    MissingPreBoundaryBeaconPulse,
+    /// The retained pre-boundary pulse is inconsistent with the exact network,
+    /// active key session, finalized-chain anchor, height, or threshold signature.
+    #[error("Sumeragi v2 NPoS boundary has an invalid finalized beacon pulse")]
+    InvalidPreBoundaryBeaconPulse,
     /// Exact NPoS voting-power extraction failed.
     #[error(transparent)]
     Stake(#[from] StrictV2StakeSnapshotError),
@@ -1472,7 +1576,7 @@ mod tests {
         .expect("newly activated key is cryptographically admitted");
     }
     #[test]
-    fn npos_boundary_fails_closed_without_authenticated_pre_boundary_record() {
+    fn npos_boundary_fails_closed_without_finalized_pre_boundary_beacon_pulse() {
         const BOUNDARY_HEIGHT: u64 = 7;
         let chain_id = ChainId::from("v2-npos-missing-pre-boundary-record");
         let world = World::new();
@@ -1504,7 +1608,7 @@ mod tests {
         };
         assert_eq!(
             finalized_next_epoch_snapshot(&view, view.network_id(), BOUNDARY_HEIGHT, &election,),
-            Err(V2ContextBuildError::MissingPreBoundaryVrfRecord)
+            Err(V2ContextBuildError::MissingPreBoundaryBeaconPulse)
         );
     }
     #[test]

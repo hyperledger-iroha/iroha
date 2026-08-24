@@ -1,6 +1,6 @@
 //! IVM/ABI helper subcommands for the CLI.
-use eyre::{Result, eyre};
 use crate::{Run, RunContext};
+use eyre::{Result, eyre};
 #[derive(clap::Subcommand, Debug)]
 pub enum Command {
     /// Print the current ABI hash for a given policy (default: v1)

@@ -1,9 +1,8 @@
 {
   "kind": "account_admission_policy",
-  "domain": "wonderland.universal",
   "policy": {
     "mode": {
-      "mode": "ImplicitReceive",
+      "mode": "implicit_receive",
       "value": null
     },
     "max_implicit_creations_per_tx": 3,

@@ -795,21 +795,13 @@ final class SccpV1Tests: XCTestCase {
         )
         XCTAssertEqual(currentRequest.soraFinalityAnchor.protocolVersion, 4)
         XCTAssertEqual(currentRequest.soraFinalityAnchor.anchorHash, finalityAnchor.anchorHash)
-        let historicalRequest = try SccpGroth16ProofRequestV1.parse(
+        XCTAssertThrowsError(try SccpGroth16ProofRequestV1.parse(
             try proofRequestJSON(protocolVersion: 3)
-        )
-        XCTAssertEqual(historicalRequest.soraFinalityAnchor.protocolVersion, 3)
-        XCTAssertEqual(
-            historicalRequest.soraFinalityAnchor.anchorHash,
-            Data(hexString: "EC6C821CAF5FA74368C08E9101AB310F132FB7F627A09F6F9481AA9484054BBA")
-        )
-        XCTAssertNotEqual(
-            historicalRequest.soraFinalityAnchor.anchorHash,
-            currentRequest.soraFinalityAnchor.anchorHash
-        )
+        ))
 
         let invalidFinalityAnchors: [(inout [String: Any]) -> Void] = [
             { $0["protocol_version"] = 1 },
+            { $0["protocol_version"] = 3 },
             { $0["protocol_version"] = "4" },
             { $0["protocol_version"] = 5 },
             { $0["protocol_version"] = "3" },

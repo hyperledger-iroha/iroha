@@ -46,6 +46,15 @@ function exactJsonObject(value, name) {
   return encoded;
 }
 
+function exactProposalOperator(value) {
+  if (typeof value !== "string" || value.length === 0 || value.trim() !== value) {
+    throw new TypeError(
+      "proposalOperator must be one canonical domainless AccountId",
+    );
+  }
+  return value;
+}
+
 function exactFingerprint(value, proposalName) {
   const fingerprint = Buffer.from(value);
   if (fingerprint.length !== 32) {
@@ -60,26 +69,30 @@ function exactFingerprint(value, proposalName) {
  * Compute the exact native Parliament fingerprint for a validation-fee policy.
  *
  * The policy must use the native snake-case `ValidationFeePolicyV1` JSON
- * contract. The electorate rules must use the exact first-release PLAIN
  * contract. Native validation rejects missing, unknown, and legacy fields.
  *
+ * @param {string} proposalOperator canonical domainless transaction authority
  * @param {Record<string, unknown>} policy
- * @param {string | null} payoutLifecycleProposalId
- * @param {Record<string, unknown>} plainElectorateRules
+ * @param {string | null} [payoutLifecycleProposalId]
  * @returns {string} lowercase 32-byte proposal fingerprint
  */
 export function computeValidationFeePolicyProposalFingerprintV1(
+  proposalOperator,
   policy,
-  payoutLifecycleProposalId,
-  plainElectorateRules,
+  payoutLifecycleProposalId = null,
 ) {
+  if (arguments.length < 2 || arguments.length > 3) {
+    throw new TypeError(
+      "computeValidationFeePolicyProposalFingerprintV1 accepts exactly two or three arguments",
+    );
+  }
   const fingerprint = nativeFunction(
     "validationFeePolicyProposalFingerprintV1",
     "validation_fee_policy_proposal_fingerprint_v1",
   )(
+    exactProposalOperator(proposalOperator),
     exactJsonObject(policy, "policy"),
     exactLifecycleProposalId(payoutLifecycleProposalId),
-    exactJsonObject(plainElectorateRules, "plainElectorateRules"),
   );
   return exactFingerprint(fingerprint, "validation-fee policy");
 }
@@ -87,23 +100,28 @@ export function computeValidationFeePolicyProposalFingerprintV1(
 /**
  * Compute the exact native Parliament fingerprint for a validation-fee payout lifecycle.
  *
- * Both arguments must use their exact native snake-case JSON contracts.
+ * The payout binding must use its exact native snake-case JSON contract.
  * Native validation rejects missing, unknown, legacy, and non-canonical fields.
  *
+ * @param {string} proposalOperator canonical domainless transaction authority
  * @param {Record<string, unknown>} payoutBinding
- * @param {Record<string, unknown>} plainElectorateRules
  * @returns {string} lowercase 32-byte proposal fingerprint
  */
 export function computeValidationFeePayoutLifecycleProposalFingerprintV1(
+  proposalOperator,
   payoutBinding,
-  plainElectorateRules,
 ) {
+  if (arguments.length !== 2) {
+    throw new TypeError(
+      "computeValidationFeePayoutLifecycleProposalFingerprintV1 accepts exactly two arguments",
+    );
+  }
   const fingerprint = nativeFunction(
     "validationFeePayoutLifecycleProposalFingerprintV1",
     "validation_fee_payout_lifecycle_proposal_fingerprint_v1",
   )(
+    exactProposalOperator(proposalOperator),
     exactJsonObject(payoutBinding, "payoutBinding"),
-    exactJsonObject(plainElectorateRules, "plainElectorateRules"),
   );
   return exactFingerprint(fingerprint, "validation-fee payout lifecycle");
 }

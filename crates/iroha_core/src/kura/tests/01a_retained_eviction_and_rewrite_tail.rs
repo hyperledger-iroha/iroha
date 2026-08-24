@@ -2,7 +2,9 @@
 fn finalized_remote_only_block_retains_header_across_restart() {
     let temp_dir = TempDir::new().expect("create Kura root");
     let config = kura_config_for_dir(&temp_dir, nonzero!(1_usize));
-    let (kura, _) = Kura::new(&config, &RuntimeLaneConfig::default()).expect("open Kura");
+    let (kura, _) =
+        Kura::open_test_kura_with_configured_lane_config(&config, &RuntimeLaneConfig::default())
+            .expect("open Kura");
     let mut generator = DummyBlocks::new();
     let blocks = (0..4).map(|_| generator.next()).collect::<Vec<_>>();
     for block in &blocks {
@@ -31,7 +33,8 @@ fn finalized_remote_only_block_retains_header_across_restart() {
     assert!(kura.get_block(height).is_none());
     drop(kura);
     let (reopened, _) =
-        Kura::new(&config, &RuntimeLaneConfig::default()).expect("reopen remote-only Kura");
+        Kura::open_test_kura_with_configured_lane_config(&config, &RuntimeLaneConfig::default())
+            .expect("reopen remote-only Kura");
     assert!(reopened.get_block(height).is_none());
     let finality_height = u64::try_from(height.get()).expect("height fits u64");
     let (retained_header, recovered) = reopened
@@ -48,7 +51,9 @@ fn finalized_remote_only_block_retains_header_across_restart() {
 fn eviction_requires_signed_complete_wire_finality_before_retaining_or_removing_body() {
     let temp_dir = TempDir::new().expect("create Kura root");
     let config = kura_config_for_dir(&temp_dir, nonzero!(1_usize));
-    let (kura, _) = Kura::new(&config, &RuntimeLaneConfig::default()).expect("open Kura");
+    let (kura, _) =
+        Kura::open_test_kura_with_configured_lane_config(&config, &RuntimeLaneConfig::default())
+            .expect("open Kura");
     store_dummy_block_arcs(&kura, 4);
     let height = nonzero!(2_usize);
     let (_, payload_len) = advertise_unfinalized_required_replicas(&kura, height);
@@ -79,7 +84,9 @@ fn eviction_requires_signed_complete_wire_finality_before_retaining_or_removing_
 fn eviction_scans_past_an_unfinalized_advertised_height() {
     let temp_dir = TempDir::new().expect("create Kura root");
     let config = kura_config_for_dir(&temp_dir, nonzero!(1_usize));
-    let (kura, _) = Kura::new(&config, &RuntimeLaneConfig::default()).expect("open Kura");
+    let (kura, _) =
+        Kura::open_test_kura_with_configured_lane_config(&config, &RuntimeLaneConfig::default())
+            .expect("open Kura");
     let blocks = store_dummy_block_arcs(&kura, 5);
     let finalized_height = nonzero!(3_usize);
     let artifact = v2_finality_artifacts_for_chain(&blocks[..3])
@@ -112,7 +119,9 @@ fn eviction_scans_past_an_unfinalized_advertised_height() {
 fn failed_top_replacement_restores_staged_retained_record_and_exact_accounting() {
     let temp_dir = TempDir::new().expect("create Kura root");
     let config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
-    let (kura, _) = Kura::new(&config, &RuntimeLaneConfig::default()).expect("open Kura");
+    let (kura, _) =
+        Kura::open_test_kura_with_configured_lane_config(&config, &RuntimeLaneConfig::default())
+            .expect("open Kura");
     let original = DummyBlocks::new().next();
     kura.store_block(Arc::clone(&original))
         .expect("store original top block");
@@ -162,7 +171,9 @@ fn failed_top_replacement_restores_staged_retained_record_and_exact_accounting()
 fn successful_top_replacement_discards_staged_record_with_exact_accounting() {
     let temp_dir = TempDir::new().expect("create Kura root");
     let config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
-    let (kura, _) = Kura::new(&config, &RuntimeLaneConfig::default()).expect("open Kura");
+    let (kura, _) =
+        Kura::open_test_kura_with_configured_lane_config(&config, &RuntimeLaneConfig::default())
+            .expect("open Kura");
     let original = DummyBlocks::new().next();
     kura.store_block(Arc::clone(&original))
         .expect("store original top block");
@@ -197,7 +208,11 @@ fn retained_rewrite_stage_restores_old_canonical_record_after_restart() {
     let temp_dir = TempDir::new().expect("create Kura root");
     let config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
     let retained_before = {
-        let (kura, _) = Kura::new(&config, &RuntimeLaneConfig::default()).expect("open Kura");
+        let (kura, _) = Kura::open_test_kura_with_configured_lane_config(
+            &config,
+            &RuntimeLaneConfig::default(),
+        )
+        .expect("open Kura");
         let block = DummyBlocks::new().next();
         kura.store_block(Arc::clone(&block))
             .expect("store canonical block");
@@ -217,7 +232,8 @@ fn retained_rewrite_stage_restores_old_canonical_record_after_restart() {
         retained_before
     };
     let (reopened, _) =
-        Kura::new(&config, &RuntimeLaneConfig::default()).expect("recover staged rewrite");
+        Kura::open_test_kura_with_configured_lane_config(&config, &RuntimeLaneConfig::default())
+            .expect("recover staged rewrite");
     assert_eq!(
         std::fs::read(reopened.retained_block_record_path(1))
             .expect("startup restored retained record for unchanged canonical hash"),
@@ -241,7 +257,11 @@ fn ambiguous_old_marker_keeps_retained_and_finality_evidence_for_startup() {
     let temp_dir = TempDir::new().expect("create Kura root");
     let config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
     let (retained_before, finality_before, original_hash, artifact) = {
-        let (kura, _) = Kura::new(&config, &RuntimeLaneConfig::default()).expect("open Kura");
+        let (kura, _) = Kura::open_test_kura_with_configured_lane_config(
+            &config,
+            &RuntimeLaneConfig::default(),
+        )
+        .expect("open Kura");
         let original = DummyBlocks::new().next();
         kura.store_block(Arc::clone(&original))
             .expect("store original block");
@@ -294,8 +314,9 @@ fn ambiguous_old_marker_keeps_retained_and_finality_evidence_for_startup() {
         drop(retained_stage);
         (retained_before, finality_before, original.hash(), artifact)
     };
-    let (reopened, _) = Kura::new(&config, &RuntimeLaneConfig::default())
-        .expect("startup resolves DA before retained and finality evidence");
+    let (reopened, _) =
+        Kura::open_test_kura_with_configured_lane_config(&config, &RuntimeLaneConfig::default())
+            .expect("startup resolves DA before retained and finality evidence");
     assert_eq!(
         reopened.get_durable_block_hash(nonzero!(1_usize)),
         Some(original_hash)
@@ -320,7 +341,11 @@ fn retained_rewrite_stage_discards_old_record_after_published_crash() {
     let temp_dir = TempDir::new().expect("create Kura root");
     let config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
     let replacement_hash = {
-        let (kura, _) = Kura::new(&config, &RuntimeLaneConfig::default()).expect("open Kura");
+        let (kura, _) = Kura::open_test_kura_with_configured_lane_config(
+            &config,
+            &RuntimeLaneConfig::default(),
+        )
+        .expect("open Kura");
         let original = DummyBlocks::new().next();
         kura.store_block(Arc::clone(&original))
             .expect("store original block");
@@ -347,8 +372,9 @@ fn retained_rewrite_stage_discards_old_record_after_published_crash() {
         drop(stage);
         replacement_hash
     };
-    let (reopened, _) = Kura::new(&config, &RuntimeLaneConfig::default())
-        .expect("restart after replacement publication crash");
+    let (reopened, _) =
+        Kura::open_test_kura_with_configured_lane_config(&config, &RuntimeLaneConfig::default())
+            .expect("restart after replacement publication crash");
     assert_eq!(
         reopened.get_durable_block_hash(nonzero!(1_usize)),
         Some(replacement_hash)
@@ -375,7 +401,11 @@ fn post_publication_rewrite_error_discards_old_evidence_and_restarts_cleanly() {
     let temp_dir = TempDir::new().expect("create Kura root");
     let config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
     let replacement_hash = {
-        let (kura, _) = Kura::new(&config, &RuntimeLaneConfig::default()).expect("open Kura");
+        let (kura, _) = Kura::open_test_kura_with_configured_lane_config(
+            &config,
+            &RuntimeLaneConfig::default(),
+        )
+        .expect("open Kura");
         let original = DummyBlocks::new().next();
         kura.store_block(Arc::clone(&original))
             .expect("store original block");
@@ -425,8 +455,9 @@ fn post_publication_rewrite_error_discards_old_evidence_and_restarts_cleanly() {
         );
         replacement_hash
     };
-    let (reopened, _) = Kura::new(&config, &RuntimeLaneConfig::default())
-        .expect("restart after post-publication rewrite error");
+    let (reopened, _) =
+        Kura::open_test_kura_with_configured_lane_config(&config, &RuntimeLaneConfig::default())
+            .expect("restart after post-publication rewrite error");
     assert_eq!(
         reopened.get_durable_block_hash(nonzero!(1_usize)),
         Some(replacement_hash)

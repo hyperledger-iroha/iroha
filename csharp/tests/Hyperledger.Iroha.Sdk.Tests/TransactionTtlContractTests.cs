@@ -11,6 +11,8 @@ public sealed class TransactionTtlContractTests
     private const string FixtureNetworkId = "hash:32C903E5B3497E34C2B844EBFE8A39C19E6CF8F95D44C1FFB8BA9DCB42F91149#A2F0";
     private const string FixtureAccountId = "sorauﾛ1NｲﾘｳdPBeｼRoｸQ2ﾔgｼQqeｶﾍｽﾁhRW2ｺｿZ9ﾕｦUﾅRX5NJYH53";
     private const string FixtureAssetDefinitionId = "62Fk4FPcMuLvW5QjDGNF2a4jAmjM";
+    private const string TransactionPayloadSchemaName =
+        "iroha_data_model::transaction::signed::model::TransactionPayload";
 
     [Fact]
     public void TransactionBuilderAssignsRequiredSignatureBoundDefaultTtl()
@@ -83,8 +85,9 @@ public sealed class TransactionTtlContractTests
             Assert.Equal(
                 descriptorTtl,
                 RequirePositiveTimeToLive(payload.GetProperty("payload"), $"{name}.payload"));
-            var payloadBytes = Convert.FromBase64String(
+            var archive = Convert.FromBase64String(
                 descriptor.GetProperty("payload_base64").GetString()!);
+            var payloadBytes = NoritoCodec.Decode(TransactionPayloadSchemaName, archive).Payload;
             Assert.Equal(
                 NetworkId.Parse(descriptorNetworkId).ToBytes(),
                 ReadNetworkId(payloadBytes));

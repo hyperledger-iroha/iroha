@@ -1,8 +1,8 @@
 
 [nexus.autoscale]
 enabled = true
-min_lanes = 3
-max_lanes = 5
+min_lane_id = 3
+max_lane_id_exclusive = 5
 target_block_ms = 2500
 scale_out_latency_ratio = 1.25
 scale_in_latency_ratio = 0.75

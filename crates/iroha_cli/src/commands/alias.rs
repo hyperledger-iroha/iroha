@@ -6,6 +6,8 @@
 use crate::cli_output::print_with_optional_text;
 use crate::{Run, RunContext};
 use eyre::{Result, WrapErr, eyre};
+#[cfg(test)]
+use iroha::client::AccountAliasListItemV1;
 use iroha::client::{
     AccountAliasIndexResolutionV1, AccountAliasResolutionV1, AccountAliasesByAccountRequestV1,
     AccountAliasesByAccountV1, Client,
@@ -18,16 +20,14 @@ use iroha::data_model::{
         AliasSetupStatusV1, AliasTransactionPlanV1,
     },
 };
+#[cfg(test)]
+use iroha_i18n::{Bundle, Language, Localizer};
 use std::{
     fmt::Write as _,
     fs,
     io::Write as _,
     path::{Path, PathBuf},
 };
-#[cfg(test)]
-use iroha::client::AccountAliasListItemV1;
-#[cfg(test)]
-use iroha_i18n::{Bundle, Language, Localizer};
 #[derive(clap::Subcommand, Debug)]
 pub enum Command {
     /// Inspect authenticated account-onboarding readiness.

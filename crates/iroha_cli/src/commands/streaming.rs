@@ -1,13 +1,13 @@
 //! Streaming helpers (HPKE fingerprinters, suite listings).
+use crate::cli_output::print_with_optional_text;
+use crate::json_macros::JsonSerialize;
+use crate::{Run, RunContext};
 use clap::{Args, Subcommand};
 use eyre::{Result, WrapErr, eyre};
 use iroha_crypto::streaming::STREAMING_DEFAULT_KEM_SUITE;
 use iroha_crypto::streaming::kyber_public_fingerprint_with_suite;
 use soranet_pq::{MlKemSuite, SuiteParseError};
 use std::fmt::Write as _;
-use crate::cli_output::print_with_optional_text;
-use crate::json_macros::JsonSerialize;
-use crate::{Run, RunContext};
 #[derive(Subcommand, Debug)]
 pub enum Command {
     /// Compute the ML-KEM fingerprint advertised in `EncryptionSuite::Kyber*`.

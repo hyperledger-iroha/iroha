@@ -238,7 +238,7 @@ pub struct FaultArgs {
 }
 impl FaultArgs {
     pub fn to_toggles(&self) -> FaultToggles {
-        FaultToggles::from_explicit_array_with_packet_loss([
+        FaultToggles::from_enabled_flags([
             self.crash_restart,
             self.wipe_storage,
             self.spam_invalid_transactions,
@@ -300,18 +300,8 @@ impl FaultToggles {
         | Self::NETWORK_PACKET_LOSS
         | Self::CPU_STRESS
         | Self::DISK_SATURATION;
-    /// Legacy helper preserving the historical "optional add-on faults" semantics used by tests.
-    pub const fn from_array(flags: [bool; 4]) -> Self {
-        Self::from_explicit_array_with_packet_loss([
-            true, true, true, flags[0], flags[1], false, flags[2], flags[3],
-        ])
-    }
-    pub const fn from_explicit_array(flags: [bool; 7]) -> Self {
-        Self::from_explicit_array_with_packet_loss([
-            flags[0], flags[1], flags[2], flags[3], flags[4], false, flags[5], flags[6],
-        ])
-    }
-    pub const fn from_explicit_array_with_packet_loss(flags: [bool; 8]) -> Self {
+    /// Build the exact V1 fault set in declaration order.
+    pub const fn from_enabled_flags(flags: [bool; 8]) -> Self {
         let mut bits = 0u8;
         if flags[0] {
             bits |= Self::CRASH_RESTART;
@@ -1282,6 +1272,22 @@ fn lane_rule_to_value(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn fault_toggles_use_the_exact_v1_flag_order() {
+        let toggles =
+            FaultToggles::from_enabled_flags([true, false, true, false, true, false, true, false]);
+
+        assert!(toggles.crash_restart());
+        assert!(!toggles.wipe_storage());
+        assert!(toggles.spam_invalid_transactions());
+        assert!(!toggles.network_latency());
+        assert!(toggles.network_partition());
+        assert!(!toggles.network_packet_loss());
+        assert!(toggles.cpu_stress());
+        assert!(!toggles.disk_saturation());
+    }
+
     #[test]
     fn chaos_config_rejects_invalid_faulty_counts() {
         let args = IzanamiArgs {

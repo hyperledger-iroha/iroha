@@ -792,7 +792,7 @@ def test_python_native_lane_covers_appeal_finance_and_provider_ingest_without_sk
         assert (
             f"python/iroha_python/src/iroha_python/{native_pattern}" in ignore_rules
         )
-    assert "Python native SDK artifacts must be rebuilt in the ABI-22 lane, not tracked" in runner
+    assert "Python native SDK artifacts must be rebuilt in the ABI-23 lane, not tracked" in runner
     assert 'export VIRTUAL_ENV="${SDK_SESSION}/venv"' in runner
     assert 'export PATH="${VIRTUAL_ENV}/bin:${PATH}"' in runner
     assert '"${VENV_PYTHON}" -m maturin develop --release --locked' in runner

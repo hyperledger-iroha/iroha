@@ -1,19 +1,18 @@
 #[test]
-fn unauthenticated_new_preflight_rejects_nonempty_root_without_mutation() {
+fn fresh_single_lane_preflight_rejects_nonempty_root_without_mutation() {
     let temp = TempDir::new().expect("temporary parent directory");
-    let store_root = temp.path().join("legacy-kura");
-    fs::create_dir(&store_root).expect("create legacy root");
+    let store_root = temp.path().join("nonempty-kura");
+    fs::create_dir(&store_root).expect("create nonempty root");
     let sentinel = store_root.join("blocks.data");
-    let sentinel_bytes = b"unbound legacy Kura bytes";
-    fs::write(&sentinel, sentinel_bytes).expect("write legacy sentinel");
+    let sentinel_bytes = b"unbound Kura bytes";
+    fs::write(&sentinel, sentinel_bytes).expect("write unbound sentinel");
     let entries_before = fs::read_dir(&store_root)
-        .expect("read legacy root")
-        .map(|entry| entry.expect("legacy entry").file_name())
+        .expect("read nonempty root")
+        .map(|entry| entry.expect("unbound entry").file_name())
         .collect::<Vec<_>>();
     let config = kura_config_for_path(&store_root, BLOCKS_IN_MEMORY);
-    let error =
-        Kura::validate_unauthenticated_fresh_store_inputs(&config, &RuntimeLaneConfig::default())
-            .expect_err("a nonempty root without a catalog journal must fail closed");
+    let error = Kura::new_fresh_single_lane(&config, &RuntimeLaneConfig::default())
+        .expect_err("a nonempty root without a catalog journal must fail closed");
     assert!(matches!(
         error,
         Error::IO(ref source, ref path)
@@ -28,28 +27,25 @@ fn unauthenticated_new_preflight_rejects_nonempty_root_without_mutation() {
     );
     assert_eq!(
         fs::read_dir(&store_root)
-            .expect("read rejected legacy root")
-            .map(|entry| entry.expect("legacy entry").file_name())
+            .expect("read rejected nonempty root")
+            .map(|entry| entry.expect("unbound entry").file_name())
             .collect::<Vec<_>>(),
         entries_before,
         "rejected nonempty root must not gain geometry or storage artifacts"
     );
 }
 #[test]
-fn unauthenticated_new_preflight_accepts_missing_or_empty_default_root_without_mutation() {
+fn fresh_single_lane_preflight_accepts_missing_or_empty_default_root_without_mutation() {
     let temp = TempDir::new().expect("temporary parent directory");
     let missing_root = temp.path().join("missing-kura");
     let missing_config = kura_config_for_path(&missing_root, BLOCKS_IN_MEMORY);
-    Kura::validate_unauthenticated_fresh_store_inputs(
-        &missing_config,
-        &RuntimeLaneConfig::default(),
-    )
-    .expect("missing canonical root is fresh");
+    Kura::validate_fresh_single_lane_store(&missing_config, &RuntimeLaneConfig::default())
+        .expect("missing canonical root is fresh");
     assert!(!missing_root.exists());
     let empty_root = temp.path().join("empty-kura");
     fs::create_dir(&empty_root).expect("create empty canonical root");
     let empty_config = kura_config_for_path(&empty_root, BLOCKS_IN_MEMORY);
-    Kura::validate_unauthenticated_fresh_store_inputs(&empty_config, &RuntimeLaneConfig::default())
+    Kura::validate_fresh_single_lane_store(&empty_config, &RuntimeLaneConfig::default())
         .expect("empty canonical root is fresh");
     assert!(
         fs::read_dir(&empty_root)
@@ -271,10 +267,10 @@ fn configured_catalog_preflight_rejects_drift_with_durable_genesis_and_state_zer
 fn configured_catalog_preflight_rejects_existing_journal_without_baseline() {
     let dir = TempDir::new().expect("temporary Kura root");
     let config = kura_config_for_dir(&dir, BLOCKS_IN_MEMORY);
-    let configured_a = configured_primary_catalog("unbound-a");
     let configured_b = configured_primary_catalog("unbound-b");
-    let lane_config_a = RuntimeLaneConfig::from_catalog(&configured_a);
-    let (kura, _) = Kura::new(&config, &lane_config_a).expect("legacy internal Kura open");
+    let lane_config_a = RuntimeLaneConfig::default();
+    let (kura, _) = Kura::new_fresh_single_lane(&config, &lane_config_a)
+        .expect("initialize canonical fresh Kura");
     let incarnations = BTreeMap::from([(LaneId::SINGLE, Hash::prehashed([0xB1; Hash::LENGTH]))]);
     let activation_heights = BTreeMap::from([(LaneId::SINGLE, 0)]);
     kura.mark_lane_geometry_catalog_published(
@@ -354,7 +350,9 @@ fn unauthenticated_replica_test_injection_requires_exact_finality_and_bounds() {
     let temp_dir = TempDir::new().unwrap();
     populate_store(&temp_dir, 2);
     let config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
-    let (kura, _) = Kura::new(&config, &RuntimeLaneConfig::default()).expect("kura init");
+    let (kura, _) =
+        Kura::open_test_kura_with_configured_lane_config(&config, &RuntimeLaneConfig::default())
+            .expect("kura init");
     let height = nonzero!(1_usize);
     let (block_hash, payload_len) = advertised_block_metadata(&kura, height);
     let peer = checked_peer_id();
@@ -380,7 +378,9 @@ fn unknown_hash_has_no_body_status_or_durable_payload_len() {
     let temp_dir = TempDir::new().unwrap();
     populate_store(&temp_dir, 2);
     let config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
-    let (kura, _) = Kura::new(&config, &RuntimeLaneConfig::default()).expect("kura init");
+    let (kura, _) =
+        Kura::open_test_kura_with_configured_lane_config(&config, &RuntimeLaneConfig::default())
+            .expect("kura init");
     let unknown_hash: HashOf<BlockHeader> = HashOf::from_untyped_unchecked(Hash::new([0xEE]));
     assert_eq!(kura.get_block_height_by_hash(unknown_hash), None);
     assert_eq!(kura.block_body_status_by_hash(unknown_hash), None);
@@ -1652,7 +1652,8 @@ fn pending_queue_plan_admission_survives_retired_purge_and_process_reopen() {
     let directory = TempDir::new().expect("temporary Kura root");
     let config = kura_config_for_dir(&directory, BLOCKS_IN_MEMORY);
     let lane_config = RuntimeLaneConfig::default();
-    let (kura, _) = Kura::new(&config, &lane_config).expect("initialize Kura");
+    let (kura, _) = Kura::open_test_kura_with_configured_lane_config(&config, &lane_config)
+        .expect("initialize Kura");
     let bytes = b"queue-plan-admission-v2:survive-purge-and-reopen".to_vec();
     let hash = kura
         .persist_pending_queue_plan_admission_certificate(&bytes)
@@ -1672,7 +1673,7 @@ fn pending_queue_plan_admission_survives_retired_purge_and_process_reopen() {
         Some(bytes.clone())
     );
     drop(kura);
-    let (reopened, _) = Kura::new(&config, &lane_config)
+    let (reopened, _) = Kura::open_test_kura_with_configured_lane_config(&config, &lane_config)
         .expect("reopen with durable pending admission certificate");
     assert_eq!(
         reopened
@@ -1814,7 +1815,9 @@ fn block_index_encoding_is_fixed_little_endian_layout() {
 fn merge_ledger_entries_persist_across_restart() {
     let dir = tempfile::tempdir().expect("tempdir");
     let config = kura_config_for_dir(&dir, BLOCKS_IN_MEMORY);
-    let (kura, _) = Kura::new(&config, &RuntimeLaneConfig::default()).expect("init kura");
+    let (kura, _) =
+        Kura::open_test_kura_with_configured_lane_config(&config, &RuntimeLaneConfig::default())
+            .expect("init kura");
     let mut blocks = DummyBlocks::new();
     let parent = blocks.next();
     let mut entry1 = sample_merge_entry(1);
@@ -1847,7 +1850,8 @@ fn merge_ledger_entries_persist_across_restart() {
     ];
     drop(kura);
     let (kura_reloaded, _) =
-        Kura::new(&config, &RuntimeLaneConfig::default()).expect("reopen kura");
+        Kura::open_test_kura_with_configured_lane_config(&config, &RuntimeLaneConfig::default())
+            .expect("reopen kura");
     let snapshot = kura_reloaded.merge_ledger_snapshot();
     assert_eq!(snapshot, vec![entry1.clone(), entry2.clone()]);
     for (entry_hash, carrier_hash) in carrier_records {
@@ -1880,7 +1884,8 @@ fn committed_merge_entry_lookup_reconstructs_from_canonical_indexes_after_restar
     let dir = TempDir::new().expect("tempdir");
     let config = kura_config_for_dir(&dir, nonzero!(2_usize));
     let lane_config = RuntimeLaneConfig::default();
-    let (kura, _) = Kura::new(&config, &lane_config).expect("open Kura");
+    let (kura, _) =
+        Kura::open_test_kura_with_configured_lane_config(&config, &lane_config).expect("open Kura");
     let (entrypoint_hash, reservation, _) = store_indexed_reservation_carrier(kura.as_ref(), 0x61);
     let assert_exact_reservation = |kura: &Kura| {
         let entry = kura
@@ -1895,7 +1900,8 @@ fn committed_merge_entry_lookup_reconstructs_from_canonical_indexes_after_restar
     };
     assert_exact_reservation(kura.as_ref());
     drop(kura);
-    let (reopened, _) = Kura::new(&config, &lane_config).expect("reopen Kura");
+    let (reopened, _) = Kura::open_test_kura_with_configured_lane_config(&config, &lane_config)
+        .expect("reopen Kura");
     reopened.reset_merge_query_read_counters_for_test();
     assert_exact_reservation(reopened.as_ref());
     let (full_history_scans, _, indexed_lookups) = reopened.merge_query_read_counters_for_test();
@@ -1913,7 +1919,7 @@ fn merge_frontier_startup_requires_geometry_only_after_committed_execution() {
     let dir = TempDir::new().expect("tempdir");
     let config = kura_config_for_dir(&dir, nonzero!(2_usize));
     let lane_config = RuntimeLaneConfig::default();
-    let (fresh, _) = Kura::new(&config, &lane_config).expect("open fresh Kura");
+    let (fresh, _) = Kura::new_fresh_single_lane(&config, &lane_config).expect("open fresh Kura");
     let entry = fresh
         .lane_storage_entry(LaneId::SINGLE)
         .expect("fresh primary lane storage entry");
@@ -1922,11 +1928,13 @@ fn merge_frontier_startup_requires_geometry_only_after_committed_execution() {
         .join(".lane-incarnation.norito");
     assert!(
         !marker_path.exists(),
-        "a fresh unauthenticated test route starts without execution geometry"
+        "a fresh single-lane route starts without execution geometry"
     );
     drop(fresh);
-    let (kura, _) = Kura::new(&config, &lane_config)
-        .expect("a fresh route without frontier or execution may reopen");
+    let configured_catalog = LaneCatalog::default();
+    let (kura, _) =
+        Kura::new_with_configured_lane_catalog(&config, &lane_config, &configured_catalog)
+            .expect("a fresh route without frontier or execution may reopen");
     let _ = store_indexed_reservation_carrier(kura.as_ref(), 0x62);
     assert!(
         kura.merge_log
@@ -1946,7 +1954,7 @@ fn merge_frontier_startup_requires_geometry_only_after_committed_execution() {
     )
     .expect("sync missing-geometry crash image");
     drop(kura);
-    let error = match Kura::new(&config, &lane_config) {
+    let error = match Kura::open_test_kura_with_configured_lane_config(&config, &lane_config) {
         Ok(_) => panic!("committed execution without its exact geometry must fail closed"),
         Err(error) => error,
     };
@@ -1965,7 +1973,8 @@ fn committed_merge_entry_lookup_fails_closed_on_log_mutation() {
         let dir = TempDir::new().expect("tempdir");
         let config = kura_config_for_dir(&dir, nonzero!(2_usize));
         let lane_config = RuntimeLaneConfig::default();
-        let (kura, _) = Kura::new(&config, &lane_config).expect("open Kura");
+        let (kura, _) = Kura::open_test_kura_with_configured_lane_config(&config, &lane_config)
+            .expect("open Kura");
         let (_, _, frame) = store_indexed_reservation_carrier(kura.as_ref(), 0x71);
         let path = kura.active_merge_path.lock().clone();
         let mut file = std::fs::OpenOptions::new()
@@ -2030,7 +2039,8 @@ fn canonical_transaction_index_exposes_completeness_and_all_carrier_heights() {
     let dir = TempDir::new().expect("tempdir");
     let config = kura_config_for_dir(&dir, nonzero!(2_usize));
     let lane_config = RuntimeLaneConfig::default();
-    let (kura, _) = Kura::new(&config, &lane_config).expect("open Kura");
+    let (kura, _) =
+        Kura::open_test_kura_with_configured_lane_config(&config, &lane_config).expect("open Kura");
     let (entrypoint_hash, _, _) = store_indexed_reservation_carrier(kura.as_ref(), 0x81);
     kura.transaction_entrypoint_index.lock().complete = false;
     assert_eq!(
@@ -2401,7 +2411,9 @@ fn finality_store_rejects_missing_or_wrong_merge_carrier_projection() {
 fn finality_authenticated_carrier_survives_body_removal_and_restart() {
     let dir = TempDir::new().expect("tempdir");
     let config = kura_config_for_dir(&dir, nonzero!(1_usize));
-    let (kura, _) = Kura::new(&config, &RuntimeLaneConfig::default()).expect("initialize Kura");
+    let (kura, _) =
+        Kura::open_test_kura_with_configured_lane_config(&config, &RuntimeLaneConfig::default())
+            .expect("initialize Kura");
     let mut blocks = DummyBlocks::new();
     let genesis = blocks.next();
     let mut entry = sample_merge_entry(1);
@@ -2440,7 +2452,8 @@ fn finality_authenticated_carrier_survives_body_removal_and_restart() {
     );
     drop(kura);
     let (reopened, _) =
-        Kura::new(&config, &RuntimeLaneConfig::default()).expect("reopen bodyless carrier");
+        Kura::open_test_kura_with_configured_lane_config(&config, &RuntimeLaneConfig::default())
+            .expect("reopen bodyless carrier");
     assert!(
         reopened
             .get_block_without_merge_sidecar(nonzero!(2_usize))
@@ -2458,7 +2471,9 @@ fn finality_authenticated_carrier_survives_body_removal_and_restart() {
 fn bodyless_finalized_execution_carrier_rebuilds_merge_entrypoint_index() {
     let dir = TempDir::new().expect("tempdir");
     let config = kura_config_for_dir(&dir, nonzero!(1_usize));
-    let (kura, _) = Kura::new(&config, &RuntimeLaneConfig::default()).expect("initialize Kura");
+    let (kura, _) =
+        Kura::open_test_kura_with_configured_lane_config(&config, &RuntimeLaneConfig::default())
+            .expect("initialize Kura");
     let entrypoint = offline_top_up_entrypoint_for_index([0x71; 32], [0x72; 32]);
     let entrypoint_hash = entrypoint.hash();
     let mut entry = merge_entry_with_indexed_entrypoint(entrypoint);
@@ -2521,7 +2536,8 @@ fn bodyless_finalized_execution_carrier_rebuilds_merge_entrypoint_index() {
         .expect("remove local remote-only carrier cache");
     drop(kura);
     let (reopened, _) =
-        Kura::new(&config, &RuntimeLaneConfig::default()).expect("reopen bodyless carrier");
+        Kura::open_test_kura_with_configured_lane_config(&config, &RuntimeLaneConfig::default())
+            .expect("reopen bodyless carrier");
     assert!(
         reopened
             .get_block_without_merge_sidecar(nonzero!(2_usize))
@@ -2617,7 +2633,9 @@ fn carrier_index_rejects_duplicate_height_or_entry_without_rescan() {
 fn carrier_index_reopen_rejects_duplicate_entry_hash_at_another_height() {
     let dir = TempDir::new().expect("tempdir");
     let config = kura_config_for_dir(&dir, BLOCKS_IN_MEMORY);
-    let (kura, _) = Kura::new(&config, &RuntimeLaneConfig::default()).expect("initialize Kura");
+    let (kura, _) =
+        Kura::open_test_kura_with_configured_lane_config(&config, &RuntimeLaneConfig::default())
+            .expect("initialize Kura");
     let (carrier, entry) = store_genesis_and_build_merge_carrier(&kura, 1);
     kura.store_block_with_merge_entry(carrier, &entry)
         .expect("store merge carrier");
@@ -2638,7 +2656,8 @@ fn carrier_index_reopen_rejects_duplicate_entry_hash_at_another_height() {
     .expect("inject duplicate carrier file");
     drop(kura);
     assert!(
-        Kura::new(&config, &RuntimeLaneConfig::default()).is_err(),
+        Kura::open_test_kura_with_configured_lane_config(&config, &RuntimeLaneConfig::default())
+            .is_err(),
         "restart must reject duplicate entry hashes in sparse carrier files"
     );
 }

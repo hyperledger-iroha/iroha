@@ -26,6 +26,9 @@ mod merkle;
 mod mldsa_seed;
 #[cfg(not(feature = "ffi_import"))]
 mod multihash;
+#[cfg(feature = "bls")]
+/// Reference Ristretto255 Open Vote Network primitives and known-answer tests.
+pub mod ovn;
 #[cfg(not(feature = "ffi_import"))]
 /// Lane privacy commitment registry (NX-10).
 pub mod privacy;
@@ -34,6 +37,15 @@ mod protocol_key;
 /// RAM-LFE commitment and evaluation interfaces.
 pub mod ram_lfe;
 pub(crate) mod rng;
+#[cfg(feature = "bls")]
+/// Fixed-suite threshold-BLS public transcript and signature validation.
+pub mod threshold_bls;
+#[cfg(feature = "bls")]
+/// Folded timed Open Vote Network ballots with intrinsic threshold release.
+pub mod timed_ovn;
+#[cfg(feature = "bls")]
+/// Generic timelock-encryption KEM/DEM helpers outside the folded ballot path.
+pub mod tle;
 /// Deterministic dual-`rand_core` RNG used by protocols that must replay an
 /// exact prover-randomness schedule from secret seed material.
 pub use rng::rng_from_seed_slice;
@@ -1024,7 +1036,6 @@ pub fn verify_signature_for_admission(
     }
 }
 /// Deterministic Ed25519 batch verification wrapper (per-signature).
-/// The `seed32` parameter is reserved for API compatibility and is ignored.
 /// # Errors
 /// Returns `Err(Error::BadSignature)` if any `(message, signature, public_key)` tuple fails verification,
 /// if the input slices have mismatched lengths, or if the input is empty.
@@ -1032,14 +1043,8 @@ pub fn ed25519_verify_batch_deterministic(
     messages: &[&[u8]],
     signatures: &[&[u8]],
     public_keys: &[&[u8]],
-    seed32: [u8; 32],
 ) -> Result<(), Error> {
-    signature::ed25519::Ed25519Sha512::verify_batch_deterministic(
-        messages,
-        signatures,
-        public_keys,
-        seed32,
-    )
+    signature::ed25519::Ed25519Sha512::verify_batch_deterministic(messages, signatures, public_keys)
 }
 /// Deterministic Ed25519 batch verification wrapper using pre-parsed public keys.
 ///
@@ -1053,14 +1058,12 @@ pub fn ed25519_verify_batch_preparsed_deterministic(
     messages: &[&[u8]],
     signatures: &[&[u8]],
     public_keys: &[Ed25519ParsedPublicKey],
-    seed32: [u8; 32],
 ) -> Result<(), Error> {
     let mut scratch = Ed25519BatchScratch::default();
     ed25519_verify_batch_preparsed_deterministic_with_scratch(
         messages,
         signatures,
         public_keys,
-        seed32,
         &mut scratch,
     )
 }
@@ -1076,14 +1079,12 @@ pub fn ed25519_verify_batch_preparsed_deterministic_with_scratch<'a>(
     messages: &[&'a [u8]],
     signatures: &[&'a [u8]],
     public_keys: &[Ed25519ParsedPublicKey],
-    seed32: [u8; 32],
     scratch: &mut Ed25519BatchScratch<'a>,
 ) -> Result<(), Error> {
     ed25519_verify_batch_preparsed_deterministic_with_scratch_inner(
         messages,
         signatures,
         public_keys,
-        seed32,
         scratch,
     )
 }
@@ -1091,7 +1092,6 @@ fn ed25519_verify_batch_preparsed_deterministic_with_scratch_inner<'a>(
     messages: &[&'a [u8]],
     signatures: &[&'a [u8]],
     public_keys: &[Ed25519ParsedPublicKey],
-    seed32: [u8; 32],
     scratch: &mut Ed25519BatchScratch<'a>,
 ) -> Result<(), Error> {
     if messages.is_empty()
@@ -1099,7 +1099,6 @@ fn ed25519_verify_batch_preparsed_deterministic_with_scratch_inner<'a>(
     {
         return Err(Error::BadSignature);
     }
-    let _ = seed32;
     scratch.clear();
     scratch
         .miss_original_indices
@@ -1170,14 +1169,12 @@ pub fn ed25519_first_bad_preparsed_deterministic_with_scratch<'a>(
     messages: &[&'a [u8]],
     signatures: &[&'a [u8]],
     public_keys: &[Ed25519ParsedPublicKey],
-    seed32: [u8; 32],
     scratch: &mut Ed25519BatchScratch<'a>,
 ) -> Option<(usize, String)> {
     ed25519_first_bad_preparsed_deterministic_with_scratch_inner(
         messages,
         signatures,
         public_keys,
-        seed32,
         scratch,
     )
 }
@@ -1185,7 +1182,6 @@ fn ed25519_first_bad_preparsed_deterministic_with_scratch_inner<'a>(
     messages: &[&'a [u8]],
     signatures: &[&'a [u8]],
     public_keys: &[Ed25519ParsedPublicKey],
-    seed32: [u8; 32],
     scratch: &mut Ed25519BatchScratch<'a>,
 ) -> Option<(usize, String)> {
     if messages.is_empty()
@@ -1193,7 +1189,6 @@ fn ed25519_first_bad_preparsed_deterministic_with_scratch_inner<'a>(
             messages,
             signatures,
             public_keys,
-            seed32,
             scratch,
         )
         .is_ok()
@@ -1205,7 +1200,6 @@ fn ed25519_first_bad_preparsed_deterministic_with_scratch_inner<'a>(
             messages,
             signatures,
             public_keys,
-            seed32,
             scratch,
         )
         .expect_err("single invalid Ed25519 item must fail")
@@ -1220,7 +1214,6 @@ fn ed25519_first_bad_preparsed_deterministic_with_scratch_inner<'a>(
         left_messages,
         left_signatures,
         left_public_keys,
-        seed32,
         scratch,
     )
     .or_else(|| {
@@ -1228,7 +1221,6 @@ fn ed25519_first_bad_preparsed_deterministic_with_scratch_inner<'a>(
             right_messages,
             right_signatures,
             right_public_keys,
-            seed32,
             scratch,
         )
         .map(|(idx, detail)| (idx + split, detail))
@@ -1774,7 +1766,7 @@ pub fn ed25519_verify_aggregate(
     signatures: &[&[u8]],
     public_keys: &[&[u8]],
 ) -> Result<(), Error> {
-    ed25519_verify_batch_deterministic(messages, signatures, public_keys, [0u8; 32])
+    ed25519_verify_batch_deterministic(messages, signatures, public_keys)
 }
 /// Aggregate-style check for ML-DSA-65: verifies each signature on the shared or unique message.
 ///
@@ -2224,21 +2216,6 @@ impl PublicKey {
             decoded.payload_hex,
         )
         .map(Self)
-    }
-
-    /// Compatibility alias for the bounded, cache-free decode constructor.
-    ///
-    /// # Errors
-    ///
-    /// Returns the same resource or fixed parse error as
-    /// [`Self::from_bytes_for_decode`].
-    #[doc(hidden)]
-    #[deprecated(note = "use `from_bytes_for_decode`")]
-    pub fn from_bytes_uncached_for_decode(
-        algorithm: Algorithm,
-        payload: &[u8],
-    ) -> Result<Self, norito::core::Error> {
-        Self::from_bytes_for_decode(algorithm, payload)
     }
 
     /// Fallibly clone a previously validated compact key for an admitted

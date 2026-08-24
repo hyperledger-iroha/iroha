@@ -1,4 +1,4 @@
-use super::{evidence, status, telemetry, vrf};
+use super::{evidence, status, telemetry};
 use crate::{Run, RunContext};
 use clap::ValueEnum;
 use eyre::Result;
@@ -19,10 +19,6 @@ pub enum Command {
     /// Evidence audit helpers (list/count)
     #[command(subcommand)]
     Evidence(EvidenceCommand),
-    /// Show VRF penalties for the given epoch
-    VrfPenalties(VrfPenaltiesArgs),
-    /// Show persisted VRF epoch snapshot (seed, participants, penalties)
-    VrfEpoch(VrfEpochArgs),
 }
 #[derive(clap::Subcommand, Debug)]
 pub enum EvidenceCommand {
@@ -69,18 +65,6 @@ impl EvidenceKindArg {
 pub struct QcArgs {}
 #[derive(clap::Args, Debug)]
 pub struct PacemakerArgs {}
-#[derive(clap::Args, Debug)]
-pub struct VrfPenaltiesArgs {
-    /// Epoch index (decimal or 0x-prefixed hex)
-    #[arg(long, value_name = "EPOCH")]
-    pub epoch: String,
-}
-#[derive(clap::Args, Debug)]
-pub struct VrfEpochArgs {
-    /// Epoch index (decimal or 0x-prefixed hex)
-    #[arg(long, value_name = "EPOCH")]
-    pub epoch: String,
-}
 impl Run for Command {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
         match self {
@@ -91,8 +75,6 @@ impl Run for Command {
             Command::Qc(args) => status::qc(context, args),
             Command::Pacemaker(args) => telemetry::pacemaker(context, args),
             Command::Evidence(cmd) => cmd.run(context),
-            Command::VrfPenalties(args) => vrf::penalties(context, args),
-            Command::VrfEpoch(args) => vrf::epoch(context, args),
         }
     }
 }
@@ -106,8 +88,26 @@ impl Run for EvidenceCommand {
 }
 #[cfg(test)]
 mod tests {
-    use super::EvidenceKindArg;
-    use clap::ValueEnum as _;
+    use super::{Command, EvidenceKindArg};
+    use clap::{Parser as _, ValueEnum as _};
+
+    #[derive(clap::Parser, Debug)]
+    struct SumeragiCommandFixture {
+        #[command(subcommand)]
+        command: Command,
+    }
+
+    #[test]
+    fn legacy_vrf_operator_commands_are_retired() {
+        for command in ["vrf-penalties", "vrf-epoch"] {
+            let error =
+                SumeragiCommandFixture::try_parse_from(["sumeragi", command, "--epoch", "1"])
+                    .expect_err("legacy consensus-VRF command must not parse");
+            assert_eq!(error.kind(), clap::error::ErrorKind::InvalidSubcommand);
+        }
+        assert!(SumeragiCommandFixture::try_parse_from(["sumeragi", "status"]).is_ok());
+    }
+
     #[test]
     fn evidence_kind_filter_maps_to_the_current_wire_name() {
         let cases = [(

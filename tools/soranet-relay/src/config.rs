@@ -8,14 +8,19 @@ use crate::{
 };
 use ed25519_dalek::VerifyingKey;
 use hex::FromHexError;
-use iroha_crypto::soranet::{
-    certificate::{CertificateValidationPhase, RelayCertificateBundleV2, SRC_V2_MAX_BUNDLE_BYTES},
-    handshake::{HandshakeSuite, update_suite_list},
-    pow, puzzle,
-    replay::REPLAY_LEDGER_MAX_ENTRIES_V1,
-    token::{
-        AdmissionTokenVerifier, PersistentTokenStore, TOKEN_STORE_MAX_ENTRIES_V1, TokenStore,
-        TokenStoreLimits,
+use iroha_crypto::{
+    Algorithm, PublicKey,
+    soranet::{
+        certificate::{
+            CertificateValidationPhase, RelayCertificateBundleV2, SRC_V2_MAX_BUNDLE_BYTES,
+        },
+        handshake::{HandshakeSuite, update_suite_list},
+        pow, puzzle,
+        replay::REPLAY_LEDGER_MAX_ENTRIES_V1,
+        token::{
+            AdmissionTokenVerifier, PersistentTokenStore, TOKEN_STORE_MAX_ENTRIES_V1, TokenStore,
+            TokenStoreLimits,
+        },
     },
 };
 use iroha_data_model::soranet::{
@@ -331,6 +336,135 @@ fn trusted_private_file_path(path: &Path, artifact: &str) -> io::Result<PathBuf>
     }
     Ok(canonical_parent.join(file_name))
 }
+#[cfg(unix)]
+pub(crate) fn trusted_vpn_backend_socket_path(
+    path: &Path,
+    expected_backend_uid: u32,
+) -> io::Result<PathBuf> {
+    use std::os::unix::fs::{MetadataExt as _, PermissionsExt as _};
+
+    if !path.is_absolute() {
+        return Err(io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            "VPN backend Unix socket path must be absolute",
+        ));
+    }
+    let file_name = path.file_name().ok_or_else(|| {
+        io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "VPN backend Unix socket path must name a socket",
+        )
+    })?;
+    let parent = path.parent().ok_or_else(|| {
+        io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "VPN backend Unix socket path must have a parent directory",
+        )
+    })?;
+    // Resolve the parent once and retain only the canonical path. The runtime
+    // repeats this custody check immediately after connecting, before sending
+    // any bootstrap bytes.
+    let canonical_parent = fs::canonicalize(parent)?;
+    let effective_uid = effective_uid()?;
+    for ancestor in canonical_parent.ancestors() {
+        let metadata = fs::symlink_metadata(ancestor)?;
+        if metadata.file_type().is_symlink() || !metadata.is_dir() {
+            return Err(io::Error::new(
+                io::ErrorKind::PermissionDenied,
+                format!(
+                    "VPN backend Unix socket parent {} must be a direct directory",
+                    ancestor.display()
+                ),
+            ));
+        }
+        let owner = metadata.uid();
+        let trusted_owner = owner == 0 || owner == effective_uid || owner == expected_backend_uid;
+        let root_owned_sticky_boundary = owner == 0 && metadata.permissions().mode() & 0o1000 != 0;
+        if !trusted_owner
+            || metadata.permissions().mode() & 0o022 != 0 && !root_owned_sticky_boundary
+        {
+            return Err(io::Error::new(
+                io::ErrorKind::PermissionDenied,
+                format!(
+                    "VPN backend Unix socket parent {} must be owned by root, the relay user, or the pinned backend UID and must not be unsafely writable",
+                    ancestor.display()
+                ),
+            ));
+        }
+    }
+    Ok(canonical_parent.join(file_name))
+}
+#[cfg(not(unix))]
+pub(crate) fn trusted_vpn_backend_socket_path(
+    _path: &Path,
+    _expected_backend_uid: u32,
+) -> io::Result<PathBuf> {
+    Err(io::Error::new(
+        io::ErrorKind::Unsupported,
+        "VPN backend Unix socket custody cannot be verified on this platform",
+    ))
+}
+#[cfg(unix)]
+pub(crate) fn trusted_private_directory_path(path: &Path, artifact: &str) -> io::Result<PathBuf> {
+    use std::os::unix::fs::{MetadataExt as _, PermissionsExt as _};
+
+    if !path.is_absolute() {
+        return Err(io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            format!("{artifact} path must be absolute"),
+        ));
+    }
+    let named = fs::symlink_metadata(path)?;
+    if named.file_type().is_symlink() || !named.is_dir() {
+        return Err(io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            format!("{artifact} must be an existing direct directory"),
+        ));
+    }
+    let canonical = fs::canonicalize(path)?;
+    let effective_uid = effective_uid()?;
+    for ancestor in canonical.ancestors() {
+        let metadata = fs::symlink_metadata(ancestor)?;
+        if metadata.file_type().is_symlink() || !metadata.is_dir() {
+            return Err(io::Error::new(
+                io::ErrorKind::PermissionDenied,
+                format!(
+                    "{artifact} ancestor {} must be a direct directory",
+                    ancestor.display()
+                ),
+            ));
+        }
+        if !trusted_private_ancestor(metadata.uid(), metadata.permissions().mode(), effective_uid) {
+            return Err(io::Error::new(
+                io::ErrorKind::PermissionDenied,
+                format!(
+                    "{artifact} ancestor {} must be owned by the effective user or root and must not be unsafely writable",
+                    ancestor.display()
+                ),
+            ));
+        }
+    }
+    let leaf = fs::symlink_metadata(&canonical)?;
+    if leaf.uid() != effective_uid || leaf.permissions().mode() & 0o777 != 0o700 {
+        return Err(io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            format!(
+                "{artifact} {} must be owned by the effective user with mode 0700",
+                canonical.display()
+            ),
+        ));
+    }
+    Ok(canonical)
+}
+#[cfg(not(unix))]
+pub(crate) fn trusted_private_directory_path(_path: &Path, artifact: &str) -> io::Result<PathBuf> {
+    Err(io::Error::new(
+        io::ErrorKind::Unsupported,
+        format!(
+            "{artifact} cannot be used securely on this platform because Unix owner/mode custody checks are unavailable"
+        ),
+    ))
+}
 #[cfg(not(unix))]
 fn trusted_private_file_path(_path: &Path, artifact: &str) -> io::Result<PathBuf> {
     Err(io::Error::new(
@@ -557,7 +691,14 @@ const DEFAULT_VPN_COVER_JITTER_MILLIS: u16 = 10;
 const DEFAULT_VPN_EXIT_CLASS: &str = "standard";
 const DEFAULT_VPN_LEASE_SECS: u32 = 10 * 60;
 const DEFAULT_VPN_DNS_PUSH_INTERVAL_SECS: u32 = 90;
-const DEFAULT_VPN_USAGE_VOUCHER_DEBT_WINDOW_BYTES: u64 = 1_048_576;
+const DEFAULT_VPN_USAGE_VOUCHER_CREDIT_WINDOW_BYTES: u64 = 1_048_576;
+const DEFAULT_VPN_USAGE_VOUCHER_MAX_AGE_MS: u64 = 5_000;
+const DEFAULT_VPN_USAGE_VOUCHER_SETUP_TIMEOUT_MS: u64 = 30_000;
+const VPN_USAGE_VOUCHER_MIN_CREDIT_WINDOW_BYTES_V1: u64 = 256 * 1_024;
+const VPN_USAGE_VOUCHER_MAX_CREDIT_WINDOW_BYTES_V1: u64 = 16 * 1_048_576;
+const VPN_USAGE_VOUCHER_MIN_AGE_MS_V1: u64 = 2_000;
+const VPN_USAGE_VOUCHER_MAX_AGE_MS_V1: u64 = 30_000;
+const VPN_USAGE_VOUCHER_MAX_SETUP_TIMEOUT_MS_V1: u64 = 120_000;
 const DEFAULT_VPN_HELPER_TICKET_REPLAY_STORE_CAPACITY: usize = 8_192;
 const DEFAULT_VPN_METER_HASH_HEX: &str =
     "0000000000000000000000000000000000000000000000000000000000000000";
@@ -847,8 +988,14 @@ fn default_vpn_lease_secs() -> u32 {
 fn default_vpn_dns_push_interval_secs() -> u32 {
     DEFAULT_VPN_DNS_PUSH_INTERVAL_SECS
 }
-fn default_vpn_usage_voucher_debt_window_bytes() -> u64 {
-    DEFAULT_VPN_USAGE_VOUCHER_DEBT_WINDOW_BYTES
+fn default_vpn_usage_voucher_credit_window_bytes() -> u64 {
+    DEFAULT_VPN_USAGE_VOUCHER_CREDIT_WINDOW_BYTES
+}
+fn default_vpn_usage_voucher_max_age_ms() -> u64 {
+    DEFAULT_VPN_USAGE_VOUCHER_MAX_AGE_MS
+}
+fn default_vpn_usage_voucher_setup_timeout_ms() -> u64 {
+    DEFAULT_VPN_USAGE_VOUCHER_SETUP_TIMEOUT_MS
 }
 fn default_vpn_helper_ticket_replay_store_capacity() -> usize {
     DEFAULT_VPN_HELPER_TICKET_REPLAY_STORE_CAPACITY
@@ -1035,9 +1182,9 @@ pub struct VpnConfig {
     /// DNS resolver overrides pushed into the VPN client on connect.
     #[norito(default)]
     pub dns_overrides: Vec<String>,
-    /// Owner-private file containing the 32-byte helper-ticket secret as hex.
+    /// Owner-private file containing the pinned Ed25519 helper-ticket issuer public key as hex.
     #[norito(default)]
-    pub helper_ticket_secret_path: Option<PathBuf>,
+    pub helper_ticket_issuer_public_key_path: Option<PathBuf>,
     /// Maximum active helper-ticket consumptions retained durably (65,536 in v1).
     #[norito(default = "default_vpn_helper_ticket_replay_store_capacity")]
     pub helper_ticket_replay_store_capacity: usize,
@@ -1046,18 +1193,31 @@ pub struct VpnConfig {
     pub helper_ticket_replay_store_path: PathBuf,
     /// Local backend endpoint used to bridge helper-authenticated VPN traffic.
     ///
-    /// Supported forms are `unix:/absolute/path` and `tcp://host:port`.
+    /// The endpoint must use `unix:/absolute/path` so filesystem custody and
+    /// peer credentials form the local authentication boundary.
     #[norito(default)]
     pub backend_endpoint: Option<String>,
+    /// Effective UID required for both the backend process and its Unix socket.
+    #[norito(default)]
+    pub backend_expected_uid: Option<u32>,
+    /// Effective GID required for both the backend process and its Unix socket.
+    #[norito(default)]
+    pub backend_expected_gid: Option<u32>,
     /// Owner-private file containing the backend bootstrap secret as hex.
     #[norito(default)]
     pub backend_bootstrap_secret_path: Option<PathBuf>,
-    /// Optional on-disk spool directory for operator-submitted VPN settlement artifacts.
+    /// Existing canonical absolute mode-0700 directory for VPN settlement artifacts.
     #[norito(default)]
     pub receipt_spool_dir: Option<PathBuf>,
-    /// Maximum observed payload bytes the relay will forward beyond the latest client voucher.
-    #[norito(default = "default_vpn_usage_voucher_debt_window_bytes")]
-    pub usage_voucher_debt_window_bytes: u64,
+    /// Maximum per-direction payload credit a voucher may authorize ahead of observed usage.
+    #[norito(default = "default_vpn_usage_voucher_credit_window_bytes")]
+    pub usage_voucher_credit_window_bytes: u64,
+    /// Maximum voucher age and active-time credit a voucher may authorize ahead of usage.
+    #[norito(default = "default_vpn_usage_voucher_max_age_ms")]
+    pub usage_voucher_max_age_ms: u64,
+    /// Maximum time allowed for authenticated client setup before the initial voucher.
+    #[norito(default = "default_vpn_usage_voucher_setup_timeout_ms")]
+    pub usage_voucher_setup_timeout_ms: u64,
     /// Cover traffic generation parameters.
     #[norito(default)]
     pub cover: VpnCoverTrafficConfig,
@@ -1078,13 +1238,17 @@ impl Default for VpnConfig {
             dns_push_interval_secs: default_vpn_dns_push_interval_secs(),
             route_push: Vec::new(),
             dns_overrides: Vec::new(),
-            helper_ticket_secret_path: None,
+            helper_ticket_issuer_public_key_path: None,
             helper_ticket_replay_store_capacity: default_vpn_helper_ticket_replay_store_capacity(),
             helper_ticket_replay_store_path: default_vpn_helper_ticket_replay_store_path(),
             backend_endpoint: None,
+            backend_expected_uid: None,
+            backend_expected_gid: None,
             backend_bootstrap_secret_path: None,
             receipt_spool_dir: None,
-            usage_voucher_debt_window_bytes: default_vpn_usage_voucher_debt_window_bytes(),
+            usage_voucher_credit_window_bytes: default_vpn_usage_voucher_credit_window_bytes(),
+            usage_voucher_max_age_ms: default_vpn_usage_voucher_max_age_ms(),
+            usage_voucher_setup_timeout_ms: default_vpn_usage_voucher_setup_timeout_ms(),
             cover: VpnCoverTrafficConfig::default(),
             billing: VpnBillingConfig::default(),
         }
@@ -1107,8 +1271,15 @@ impl VpnConfig {
         if self.dns_push_interval_secs == 0 {
             self.dns_push_interval_secs = default_vpn_dns_push_interval_secs();
         }
-        if self.usage_voucher_debt_window_bytes == 0 {
-            self.usage_voucher_debt_window_bytes = default_vpn_usage_voucher_debt_window_bytes();
+        if self.usage_voucher_credit_window_bytes == 0 {
+            self.usage_voucher_credit_window_bytes =
+                default_vpn_usage_voucher_credit_window_bytes();
+        }
+        if self.usage_voucher_max_age_ms == 0 {
+            self.usage_voucher_max_age_ms = default_vpn_usage_voucher_max_age_ms();
+        }
+        if self.usage_voucher_setup_timeout_ms == 0 {
+            self.usage_voucher_setup_timeout_ms = default_vpn_usage_voucher_setup_timeout_ms();
         }
         if self.helper_ticket_replay_store_capacity == 0 {
             self.helper_ticket_replay_store_capacity =
@@ -1139,6 +1310,28 @@ impl VpnConfig {
                     .to_string(),
             ));
         }
+        if !(VPN_USAGE_VOUCHER_MIN_AGE_MS_V1..=VPN_USAGE_VOUCHER_MAX_AGE_MS_V1)
+            .contains(&self.usage_voucher_max_age_ms)
+        {
+            return Err(ConfigError::Vpn(format!(
+                "vpn.usage_voucher_max_age_ms must be between {VPN_USAGE_VOUCHER_MIN_AGE_MS_V1} and {VPN_USAGE_VOUCHER_MAX_AGE_MS_V1} milliseconds"
+            )));
+        }
+        if !(VPN_USAGE_VOUCHER_MIN_CREDIT_WINDOW_BYTES_V1
+            ..=VPN_USAGE_VOUCHER_MAX_CREDIT_WINDOW_BYTES_V1)
+            .contains(&self.usage_voucher_credit_window_bytes)
+        {
+            return Err(ConfigError::Vpn(format!(
+                "vpn.usage_voucher_credit_window_bytes must be between {VPN_USAGE_VOUCHER_MIN_CREDIT_WINDOW_BYTES_V1} and {VPN_USAGE_VOUCHER_MAX_CREDIT_WINDOW_BYTES_V1} bytes"
+            )));
+        }
+        if self.usage_voucher_setup_timeout_ms < self.usage_voucher_max_age_ms
+            || self.usage_voucher_setup_timeout_ms > VPN_USAGE_VOUCHER_MAX_SETUP_TIMEOUT_MS_V1
+        {
+            return Err(ConfigError::Vpn(format!(
+                "vpn.usage_voucher_setup_timeout_ms must be at least usage_voucher_max_age_ms and at most {VPN_USAGE_VOUCHER_MAX_SETUP_TIMEOUT_MS_V1} milliseconds"
+            )));
+        }
         if !self.enabled {
             return Ok(());
         }
@@ -1164,14 +1357,15 @@ impl VpnConfig {
         }
         let routes = self.parse_route_push()?;
         let dns_overrides = self.parse_dns_overrides()?;
-        self.receipt_spool_dir = self.parse_receipt_spool_dir();
+        self.receipt_spool_dir = self.parse_receipt_spool_dir()?;
         if self
-            .helper_ticket_secret_path
+            .helper_ticket_issuer_public_key_path
             .as_ref()
             .is_none_or(|path| path.as_os_str().is_empty())
         {
             return Err(ConfigError::Vpn(
-                "vpn.helper_ticket_secret_path must be set when vpn.enabled is true".to_string(),
+                "vpn.helper_ticket_issuer_public_key_path must be set when vpn.enabled is true"
+                    .to_string(),
             ));
         }
         if self.helper_ticket_replay_store_capacity == 0 {
@@ -1182,6 +1376,18 @@ impl VpnConfig {
         if self.helper_ticket_replay_store_path.as_os_str().is_empty() {
             return Err(ConfigError::Vpn(
                 "vpn.helper_ticket_replay_store_path must not be empty".to_string(),
+            ));
+        }
+        if self.backend_expected_uid.is_none() {
+            return Err(ConfigError::Vpn(
+                "vpn.backend_expected_uid must explicitly pin the backend process when vpn.enabled is true"
+                    .to_owned(),
+            ));
+        }
+        if self.backend_expected_gid.is_none() {
+            return Err(ConfigError::Vpn(
+                "vpn.backend_expected_gid must explicitly pin the backend process when vpn.enabled is true"
+                    .to_owned(),
             ));
         }
         let backend_endpoint = self.parse_backend_endpoint()?;
@@ -1204,6 +1410,12 @@ impl VpnConfig {
         self.route_push = routes.into_iter().map(|route| route.cidr.clone()).collect();
         self.dns_overrides = dns_overrides;
         self.backend_endpoint = backend_endpoint;
+        if self.receipt_spool_dir.is_none() {
+            return Err(ConfigError::Vpn(
+                "vpn.receipt_spool_dir must be set to a secure durable directory when vpn.enabled is true"
+                    .to_owned(),
+            ));
+        }
         Ok(())
     }
     /// Return the configured meter hash as raw bytes.
@@ -1301,20 +1513,53 @@ impl VpnConfig {
             .map(str::trim)
             .filter(|endpoint| !endpoint.is_empty())
             .unwrap_or(DEFAULT_VPN_BACKEND_ENDPOINT);
-        let endpoint = parse_vpn_backend_endpoint(trimmed)?;
+        let mut endpoint = parse_vpn_backend_endpoint(trimmed)?;
+        if self.enabled {
+            let expected_uid = self.backend_expected_uid.ok_or_else(|| {
+                ConfigError::Vpn(
+                    "vpn.backend_expected_uid must be set before validating backend_endpoint"
+                        .to_owned(),
+                )
+            })?;
+            endpoint.path =
+                trusted_vpn_backend_socket_path(&endpoint.path, expected_uid).map_err(|error| {
+                    ConfigError::Vpn(format!(
+                        "vpn.backend_endpoint `{}` does not have trusted Unix custody: {error}",
+                        endpoint.path.display()
+                    ))
+                })?;
+        }
         Ok(Some(endpoint.to_string()))
     }
-    pub(crate) fn parse_receipt_spool_dir(&self) -> Option<PathBuf> {
-        self.receipt_spool_dir
+    pub(crate) fn parse_receipt_spool_dir(&self) -> Result<Option<PathBuf>, ConfigError> {
+        let Some(path) = self
+            .receipt_spool_dir
             .as_ref()
             .filter(|path| !path.as_os_str().is_empty())
-            .cloned()
-    }
-    pub fn try_helper_ticket_secret_bytes(&self) -> Result<Option<[u8; 32]>, ConfigError> {
-        let Some(path) = self.helper_ticket_secret_path.as_ref() else {
+        else {
             return Ok(None);
         };
-        read_vpn_shared_secret(path, "VPN helper-ticket secret").map(Some)
+        trusted_private_directory_path(path, "VPN receipt spool directory")
+            .map(Some)
+            .map_err(|error| {
+                ConfigError::Vpn(format!(
+                    "vpn.receipt_spool_dir `{}` is not secure: {error}",
+                    path.display()
+                ))
+            })
+    }
+    pub fn try_helper_ticket_issuer_public_key(&self) -> Result<Option<PublicKey>, ConfigError> {
+        let Some(path) = self.helper_ticket_issuer_public_key_path.as_ref() else {
+            return Ok(None);
+        };
+        let bytes = read_vpn_shared_secret(path, "VPN helper-ticket issuer public key")?;
+        PublicKey::from_bytes(Algorithm::Ed25519, &bytes)
+            .map(Some)
+            .map_err(|error| {
+                ConfigError::Vpn(format!(
+                    "VPN helper-ticket issuer public key must be canonical Ed25519: {error}"
+                ))
+            })
     }
     pub fn try_backend_endpoint(&self) -> Result<Option<VpnBackendEndpoint>, ConfigError> {
         self.parse_backend_endpoint()?
@@ -1325,6 +1570,13 @@ impl VpnConfig {
     pub fn backend_endpoint(&self) -> Option<VpnBackendEndpoint> {
         self.try_backend_endpoint()
             .expect("validated vpn.backend_endpoint to parse")
+    }
+    /// Return the explicitly pinned backend process UID and GID.
+    pub const fn backend_expected_peer_ids(&self) -> Option<(u32, u32)> {
+        match (self.backend_expected_uid, self.backend_expected_gid) {
+            (Some(uid), Some(gid)) => Some((uid, gid)),
+            _ => None,
+        }
     }
     pub fn try_backend_bootstrap_secret_bytes(&self) -> Result<Option<[u8; 32]>, ConfigError> {
         let Some(path) = self.backend_bootstrap_secret_path.as_ref() else {
@@ -1380,18 +1632,18 @@ fn read_vpn_shared_secret(path: &Path, artifact: &str) -> Result<[u8; 32], Confi
 }
 /// Parsed local VPN backend endpoint.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum VpnBackendEndpoint {
-    /// Permissioned Unix-domain socket endpoint.
-    Unix(PathBuf),
-    /// TCP endpoint protected by a bootstrap MAC.
-    Tcp(String),
+pub struct VpnBackendEndpoint {
+    path: PathBuf,
+}
+impl VpnBackendEndpoint {
+    /// Returns the absolute path of the permissioned Unix-domain socket.
+    pub fn path(&self) -> &Path {
+        &self.path
+    }
 }
 impl fmt::Display for VpnBackendEndpoint {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::Unix(path) => write!(f, "unix:{}", path.display()),
-            Self::Tcp(addr) => write!(f, "tcp://{addr}"),
-        }
+        write!(f, "unix:{}", self.path.display())
     }
 }
 fn parse_vpn_backend_endpoint(endpoint: &str) -> Result<VpnBackendEndpoint, ConfigError> {
@@ -1402,25 +1654,13 @@ fn parse_vpn_backend_endpoint(endpoint: &str) -> Result<VpnBackendEndpoint, Conf
                 "vpn.backend_endpoint unix endpoints must use unix:/absolute/path".to_string(),
             ));
         }
-        return Ok(VpnBackendEndpoint::Unix(PathBuf::from(path)));
-    }
-    if let Some(addr) = endpoint.strip_prefix("tcp://") {
-        let addr = addr.trim();
-        let socket_addr = addr.parse::<SocketAddr>().map_err(|_| {
-            ConfigError::Vpn(
-                "vpn.backend_endpoint TCP endpoints must use tcp://IP:port".to_string(),
-            )
-        })?;
-        if !socket_addr.ip().is_loopback() {
-            return Err(ConfigError::Vpn(
-                "vpn.backend_endpoint TCP endpoints must use a loopback address because packet frames are not a remote transport security boundary"
-                    .to_string(),
-            ));
-        }
-        return Ok(VpnBackendEndpoint::Tcp(socket_addr.to_string()));
+        return Ok(VpnBackendEndpoint {
+            path: PathBuf::from(path),
+        });
     }
     Err(ConfigError::Vpn(
-        "vpn.backend_endpoint must start with unix:/path or tcp://host:port".to_string(),
+        "vpn.backend_endpoint must use unix:/absolute/path; TCP is not an authenticated local peer boundary"
+            .to_string(),
     ))
 }
 /// Billing/telemetry settings for VPN sessions.

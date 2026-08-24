@@ -261,7 +261,8 @@ fn autonomous_lane_attempt_fixture(signer: &KeyPair, retire: bool) -> Autonomous
     let payload = repropose_autonomous_lane_payload_for_kura(&seed_payload, 1, signer);
     let network_id = payload.network_id;
     let epoch = payload.epoch;
-    let (kura, _) = Kura::new(&config, &lane_config).expect("initialize retired-attempt Kura");
+    let (kura, _) = Kura::open_test_kura_with_configured_lane_config(&config, &lane_config)
+        .expect("initialize retired-attempt Kura");
     install_autonomous_lane_marker_for_kura(&kura, &lane_config, &payload);
     kura.persist_lane_executable_payload(&payload, network_id, epoch)
         .expect("persist retired-attempt payload");
@@ -367,7 +368,8 @@ fn autonomous_entrypoint_claim_release_repairs_crash_and_allows_reproposal() {
         b"kura-autonomous-view-incarnation",
         &signer,
     );
-    let (kura, _) = Kura::new(&config, &lane_config).expect("Kura");
+    let (kura, _) =
+        Kura::open_test_kura_with_configured_lane_config(&config, &lane_config).expect("Kura");
     install_autonomous_lane_marker_for_kura(&kura, &lane_config, &payload);
     kura.persist_lane_executable_payload(&payload, network_id, epoch)
         .expect("persist first autonomous payload");
@@ -408,7 +410,8 @@ fn autonomous_entrypoint_claim_release_repairs_crash_and_allows_reproposal() {
     )
     .expect("restore interrupted active claim");
     drop(kura);
-    let (reopened, _) = Kura::new(&config, &lane_config).expect("reopen Kura");
+    let (reopened, _) = Kura::open_test_kura_with_configured_lane_config(&config, &lane_config)
+        .expect("reopen Kura");
     reopened
         .persist_autonomous_lane_slot_retirement(&retirement, network_id, epoch)
         .expect("startup retry completes ReleasePending");
@@ -512,7 +515,8 @@ fn autonomous_entrypoint_claim_release_repairs_crash_and_allows_reproposal() {
         "the delayed retired payload must not reclaim its old slot",
     );
     drop(reopened);
-    let (restarted, _) = Kura::new(&config, &lane_config).expect("restart after reproposal");
+    let (restarted, _) = Kura::open_test_kura_with_configured_lane_config(&config, &lane_config)
+        .expect("restart after reproposal");
     restarted
         .persist_lane_executable_payload(&successor, network_id, epoch)
         .expect("successor ownership remains idempotent after restart");
@@ -524,7 +528,8 @@ fn autonomous_claim_runtime_inventory_enforces_boundary_without_partial_staging(
     let signer = checked_keypair_with_algorithm(Algorithm::BlsNormal);
     let (_, _, payload) =
         autonomous_lane_payload_for_kura(lane.lane_id, lane.dataspace_id, 1, &signer);
-    let (kura, _) = Kura::new(&config, &lane_config).expect("Kura");
+    let (kura, _) =
+        Kura::open_test_kura_with_configured_lane_config(&config, &lane_config).expect("Kura");
     let first_filler = write_autonomous_claim_inventory_fixture(
         temp_dir.path(),
         &payload,
@@ -583,7 +588,8 @@ fn autonomous_claim_startup_inventory_bound_fails_before_temp_reconciliation() {
     let signer = checked_keypair_with_algorithm(Algorithm::BlsNormal);
     let (_, _, payload) =
         autonomous_lane_payload_for_kura(lane.lane_id, lane.dataspace_id, 1, &signer);
-    let (kura, _) = Kura::new(&config, &lane_config).expect("Kura");
+    let (kura, _) =
+        Kura::open_test_kura_with_configured_lane_config(&config, &lane_config).expect("Kura");
     let main = write_autonomous_claim_inventory_fixture(
         temp_dir.path(),
         &payload,
@@ -633,7 +639,8 @@ fn autonomous_claim_inventory_rejects_unexpected_artifacts_before_any_cleanup_or
     let signer = checked_keypair_with_algorithm(Algorithm::BlsNormal);
     let (_, _, payload) =
         autonomous_lane_payload_for_kura(lane.lane_id, lane.dataspace_id, 1, &signer);
-    let (kura, _) = Kura::new(&config, &lane_config).expect("Kura");
+    let (kura, _) =
+        Kura::open_test_kura_with_configured_lane_config(&config, &lane_config).expect("Kura");
     let orphan_temp = write_autonomous_claim_inventory_fixture(
         temp_dir.path(),
         &payload,
@@ -673,7 +680,7 @@ fn autonomous_claim_inventory_rejects_unexpected_artifacts_before_any_cleanup_or
     );
     drop(kura);
     assert!(
-        Kura::new(&config, &lane_config).is_err(),
+        Kura::open_test_kura_with_configured_lane_config(&config, &lane_config).is_err(),
         "a real restart must reject the unexpected claim artifact",
     );
 }
@@ -783,7 +790,8 @@ fn autonomous_lane_slot_retirement_rejects_conflict_and_incarnation_aba() {
     let signer = checked_keypair_with_algorithm(Algorithm::BlsNormal);
     let (network_id, epoch, payload) =
         autonomous_lane_payload_for_kura(lane_entry.lane_id, lane_entry.dataspace_id, 1, &signer);
-    let (kura, _) = Kura::new(&config, &lane_config).expect("Kura");
+    let (kura, _) =
+        Kura::open_test_kura_with_configured_lane_config(&config, &lane_config).expect("Kura");
     install_autonomous_lane_marker_for_kura(&kura, &lane_config, &payload);
     kura.persist_lane_executable_payload(&payload, network_id, epoch)
         .expect("persist autonomous payload");
@@ -839,7 +847,8 @@ fn autonomous_lane_slot_retirement_repairs_temp_and_rejects_bad_files() {
     let signer = checked_keypair_with_algorithm(Algorithm::BlsNormal);
     let (network_id, epoch, payload) =
         autonomous_lane_payload_for_kura(lane_id, lane_entry.dataspace_id, 1, &signer);
-    let (kura, _) = Kura::new(&config, &lane_config).expect("Kura");
+    let (kura, _) =
+        Kura::open_test_kura_with_configured_lane_config(&config, &lane_config).expect("Kura");
     install_autonomous_lane_marker_for_kura(&kura, &lane_config, &payload);
     kura.persist_lane_executable_payload(&payload, network_id, epoch)
         .expect("persist autonomous payload");
@@ -930,7 +939,8 @@ fn autonomous_lane_slot_retirement_rejects_already_certified_slot() {
     let signer = checked_keypair_with_algorithm(Algorithm::BlsNormal);
     let (network_id, epoch, payload) =
         autonomous_lane_payload_for_kura(lane_id, lane_entry.dataspace_id, 1, &signer);
-    let (kura, _) = Kura::new(&config, &lane_config).expect("Kura");
+    let (kura, _) =
+        Kura::open_test_kura_with_configured_lane_config(&config, &lane_config).expect("Kura");
     install_autonomous_lane_marker_for_kura(&kura, &lane_config, &payload);
     kura.persist_lane_executable_payload(&payload, network_id, epoch)
         .expect("persist autonomous payload");
@@ -1045,7 +1055,8 @@ fn autonomous_view_state_latest_read_only_selects_crash_temp_without_mutation() 
     let signer = checked_keypair_with_algorithm(Algorithm::BlsNormal);
     let (network_id, epoch, payload) =
         autonomous_lane_payload_for_kura(lane_id, lane_entry.dataspace_id, 1, &signer);
-    let (kura, _) = Kura::new(&config, &lane_config).expect("Kura");
+    let (kura, _) =
+        Kura::open_test_kura_with_configured_lane_config(&config, &lane_config).expect("Kura");
     install_autonomous_lane_marker_for_kura(&kura, &lane_config, &payload);
     kura.persist_lane_executable_payload(&payload, network_id, epoch)
         .expect("persist autonomous payload");
@@ -1106,7 +1117,8 @@ fn durable_autonomous_merge_source_requires_every_exact_component_and_survives_r
     let signer = checked_keypair_with_algorithm(Algorithm::BlsNormal);
     let (network_id, epoch, payload) =
         autonomous_lane_payload_for_kura(lane_id, lane_entry.dataspace_id, 1, &signer);
-    let (kura, _) = Kura::new(&config, &lane_config).expect("Kura");
+    let (kura, _) =
+        Kura::open_test_kura_with_configured_lane_config(&config, &lane_config).expect("Kura");
     install_autonomous_lane_marker_for_kura(&kura, &lane_config, &payload);
     kura.persist_lane_executable_payload(&payload, network_id, epoch)
         .expect("persist autonomous payload");
@@ -1159,7 +1171,8 @@ fn durable_autonomous_merge_source_requires_every_exact_component_and_survives_r
         "a certificate must not become merge eligible before the bundle's own barrier",
     );
     drop(kura);
-    let (kura, _) = Kura::new(&config, &lane_config).expect("repair bundle on startup");
+    let (kura, _) = Kura::open_test_kura_with_configured_lane_config(&config, &lane_config)
+        .expect("repair bundle on startup");
     let source = kura
         .durable_autonomous_lane_merge_source(lane_id, 1, network_id, epoch)
         .expect("read complete durable autonomous source");
@@ -1262,7 +1275,8 @@ fn durable_autonomous_merge_source_requires_every_exact_component_and_survives_r
         "merge admission must not choose a view while startup recovery can still replace it",
     );
     drop(kura);
-    let (reopened, _) = Kura::new(&config, &lane_config).expect("reopen Kura");
+    let (reopened, _) = Kura::open_test_kura_with_configured_lane_config(&config, &lane_config)
+        .expect("reopen Kura");
     assert_eq!(
         reopened
             .durable_autonomous_lane_merge_source(lane_id, 1, network_id, epoch)
@@ -1278,7 +1292,8 @@ fn durable_autonomous_merge_source_rejects_execution_input_drift() {
     let signer = checked_keypair_with_algorithm(Algorithm::BlsNormal);
     let (network_id, epoch, payload) =
         autonomous_lane_payload_for_kura(lane_id, lane_entry.dataspace_id, 1, &signer);
-    let (kura, _) = Kura::new(&config, &lane_config).expect("Kura");
+    let (kura, _) =
+        Kura::open_test_kura_with_configured_lane_config(&config, &lane_config).expect("Kura");
     install_autonomous_lane_marker_for_kura(&kura, &lane_config, &payload);
     kura.persist_lane_executable_payload(&payload, network_id, epoch)
         .expect("persist autonomous payload");
@@ -1336,7 +1351,8 @@ fn durable_autonomous_merge_source_rejects_persisted_bundle_drift() {
     let signer = checked_keypair_with_algorithm(Algorithm::BlsNormal);
     let (network_id, epoch, payload) =
         autonomous_lane_payload_for_kura(lane_id, lane_entry.dataspace_id, 1, &signer);
-    let (kura, _) = Kura::new(&config, &lane_config).expect("Kura");
+    let (kura, _) =
+        Kura::open_test_kura_with_configured_lane_config(&config, &lane_config).expect("Kura");
     install_autonomous_lane_marker_for_kura(&kura, &lane_config, &payload);
     kura.persist_lane_executable_payload(&payload, network_id, epoch)
         .expect("persist autonomous payload");
@@ -1404,7 +1420,8 @@ fn autonomous_merge_bundle_pair_rejects_malformed_truncated_oversized_partial_an
     let signer = checked_keypair_with_algorithm(Algorithm::BlsNormal);
     let (network_id, epoch, payload) =
         autonomous_lane_payload_for_kura(lane_id, lane_entry.dataspace_id, 1, &signer);
-    let (kura, _) = Kura::new(&config, &lane_config).expect("Kura");
+    let (kura, _) =
+        Kura::open_test_kura_with_configured_lane_config(&config, &lane_config).expect("Kura");
     install_autonomous_lane_marker_for_kura(&kura, &lane_config, &payload);
     kura.persist_lane_executable_payload(&payload, network_id, epoch)
         .expect("persist autonomous payload");
@@ -1513,7 +1530,7 @@ fn autonomous_merge_bundle_pair_rejects_malformed_truncated_oversized_partial_an
         assert_rejected("hardlinked bundle data");
         drop(kura);
         assert!(
-            Kura::new(&config, &lane_config).is_err(),
+            Kura::open_test_kura_with_configured_lane_config(&config, &lane_config).is_err(),
             "startup must reject a hardlinked canonical bundle pair",
         );
         fs::remove_file(&data_path).expect("remove hardlink fixture");
@@ -1527,7 +1544,8 @@ fn autonomous_execution_input_validation_does_not_repair_view_sidecars() {
     let signer = checked_keypair_with_algorithm(Algorithm::BlsNormal);
     let (network_id, epoch, payload) =
         autonomous_lane_payload_for_kura(lane_id, lane_entry.dataspace_id, 1, &signer);
-    let (kura, _) = Kura::new(&config, &lane_config).expect("Kura");
+    let (kura, _) =
+        Kura::open_test_kura_with_configured_lane_config(&config, &lane_config).expect("Kura");
     install_autonomous_lane_marker_for_kura(&kura, &lane_config, &payload);
     kura.persist_lane_executable_payload(&payload, network_id, epoch)
         .expect("persist autonomous payload");
@@ -1583,7 +1601,8 @@ fn autonomous_lane_view_compacts_at_257_and_recovers_crash_atomically() {
     let signer = checked_keypair_with_algorithm(Algorithm::BlsNormal);
     let (network_id, epoch, payload) =
         autonomous_lane_payload_for_kura(lane_id, lane_entry.dataspace_id, 1, &signer);
-    let (kura, _) = Kura::new(&config, &lane_config).expect("Kura");
+    let (kura, _) =
+        Kura::open_test_kura_with_configured_lane_config(&config, &lane_config).expect("Kura");
     install_autonomous_lane_marker_for_kura(&kura, &lane_config, &payload);
     kura.persist_lane_executable_payload(&payload, network_id, epoch)
         .expect("persist payload");
@@ -1662,7 +1681,8 @@ fn autonomous_lane_view_compacts_at_257_and_recovers_crash_atomically() {
     }
     assert_eq!(current.descriptor.lane_block_view, 258);
     drop(kura);
-    let (reopened, _) = Kura::new(&config, &lane_config).expect("reopen Kura");
+    let (reopened, _) = Kura::open_test_kura_with_configured_lane_config(&config, &lane_config)
+        .expect("reopen Kura");
     let recovered = reopened
         .current_autonomous_lane_payload(lane_id, 1, network_id, epoch)
         .expect("restart recovery");
@@ -1719,7 +1739,8 @@ fn autonomous_payload_promotes_hint_free_bytes_to_one_exact_carrier_hint() {
     let hinted = hint_free
         .attach_global_hint_exact(hint, network_id, epoch)
         .expect("attach exact carrier hint");
-    let (kura, _) = Kura::new(&config, &lane_config).expect("Kura");
+    let (kura, _) =
+        Kura::open_test_kura_with_configured_lane_config(&config, &lane_config).expect("Kura");
     install_autonomous_lane_marker_for_kura(&kura, &lane_config, &hint_free);
     kura.persist_lane_executable_payload(&hint_free, network_id, epoch)
         .expect("persist hint-free local payload");
@@ -1737,7 +1758,8 @@ fn autonomous_payload_promotes_hint_free_bytes_to_one_exact_carrier_hint() {
         "carrier-hint promotion must never be reversed",
     );
     drop(kura);
-    let (reopened, _) = Kura::new(&config, &lane_config).expect("reopen Kura");
+    let (reopened, _) = Kura::open_test_kura_with_configured_lane_config(&config, &lane_config)
+        .expect("reopen Kura");
     assert_eq!(
         reopened
             .current_autonomous_lane_payload(lane.lane_id, 1, network_id, epoch)
@@ -1771,7 +1793,8 @@ fn autonomous_payload_rejects_a_conflicting_carrier_hint_after_promotion() {
     let conflicting = hint_free
         .attach_global_hint_exact(conflicting_hint, network_id, epoch)
         .expect("build independently authenticated conflicting hint form");
-    let (kura, _) = Kura::new(&config, &lane_config).expect("Kura");
+    let (kura, _) =
+        Kura::open_test_kura_with_configured_lane_config(&config, &lane_config).expect("Kura");
     install_autonomous_lane_marker_for_kura(&kura, &lane_config, &hint_free);
     kura.persist_lane_executable_payload(&hint_free, network_id, epoch)
         .expect("persist hint-free local payload");
@@ -1827,7 +1850,8 @@ fn autonomous_first_attempt_uses_only_versioned_files_and_repairs_missing_pointe
     )
     .expect("construct height-context-bound lifecycle payload");
     let proposal_height = payload.origin_proposal.descriptor.proposal_height;
-    let (kura, _) = Kura::new(&config, &lane_config).expect("Kura");
+    let (kura, _) =
+        Kura::open_test_kura_with_configured_lane_config(&config, &lane_config).expect("Kura");
     kura.bind_local_peer_id(local_peer.clone())
         .expect("bind local lifecycle key identity");
     let generation_one = kura
@@ -2007,7 +2031,8 @@ fn autonomous_first_attempt_uses_only_versioned_files_and_repairs_missing_pointe
     let foreign_temp_dir = TempDir::new().expect("foreign Kura root");
     let foreign_config = kura_config_for_dir(&foreign_temp_dir, BLOCKS_IN_MEMORY);
     let (foreign_kura, _) =
-        Kura::new(&foreign_config, &lane_config).expect("foreign Kura instance");
+        Kura::open_test_kura_with_configured_lane_config(&foreign_config, &lane_config)
+            .expect("foreign Kura instance");
     foreign_kura
         .bind_local_peer_id(local_peer.clone())
         .expect("bind same local key in foreign Kura root");
@@ -2147,7 +2172,8 @@ fn autonomous_first_attempt_uses_only_versioned_files_and_repairs_missing_pointe
     );
     drop(execution_input_read);
     drop(kura);
-    let (kura, _) = Kura::new(&config, &lane_config).expect("restart before Crash observation");
+    let (kura, _) = Kura::open_test_kura_with_configured_lane_config(&config, &lane_config)
+        .expect("restart before Crash observation");
     kura.bind_local_peer_id(local_peer.clone())
         .expect("rebind exact lifecycle key identity");
     assert!(
@@ -2278,7 +2304,8 @@ fn autonomous_first_attempt_uses_only_versioned_files_and_repairs_missing_pointe
         "successful Recover preparation must return its exact durable cursor",
     );
     drop(kura);
-    let (kura, _) = Kura::new(&config, &lane_config).expect("restart over prepared Recover");
+    let (kura, _) = Kura::open_test_kura_with_configured_lane_config(&config, &lane_config)
+        .expect("restart over prepared Recover");
     kura.bind_local_peer_id(local_peer.clone())
         .expect("rebind exact lifecycle key identity after prepared Recover");
     let generation_three = kura
@@ -2321,7 +2348,8 @@ fn autonomous_first_attempt_uses_only_versioned_files_and_repairs_missing_pointe
         "successful generation-three takeover must return its exact durable cursor",
     );
     drop(kura);
-    let (kura, _) = Kura::new(&config, &lane_config).expect("restart over crashed takeover");
+    let (kura, _) = Kura::open_test_kura_with_configured_lane_config(&config, &lane_config)
+        .expect("restart over crashed takeover");
     kura.bind_local_peer_id(local_peer.clone())
         .expect("rebind exact lifecycle key identity after crashed takeover");
     let generation_four = kura
@@ -2579,7 +2607,7 @@ fn autonomous_first_attempt_uses_only_versioned_files_and_repairs_missing_pointe
         .expect("stage forbidden named cursor temporary");
     drop(kura);
     assert!(
-        Kura::new(&config, &lane_config).is_err(),
+        Kura::open_test_kura_with_configured_lane_config(&config, &lane_config).is_err(),
         "startup must reject a named lifecycle temporary rather than select it",
     );
     fs::remove_file(&named_cursor_temp).expect("remove rejected named cursor temporary");
@@ -2589,7 +2617,7 @@ fn autonomous_first_attempt_uses_only_versioned_files_and_repairs_missing_pointe
         fs::remove_file(&lifecycle_path).expect("remove cursor before symlink fixture");
         symlink(&attempt_path, &lifecycle_path).expect("install lifecycle cursor symlink");
         assert!(
-            Kura::new(&config, &lane_config).is_err(),
+            Kura::open_test_kura_with_configured_lane_config(&config, &lane_config).is_err(),
             "startup must reject a symlinked lifecycle cursor",
         );
         fs::remove_file(&lifecycle_path).expect("remove lifecycle cursor symlink");
@@ -2603,7 +2631,7 @@ fn autonomous_first_attempt_uses_only_versioned_files_and_repairs_missing_pointe
         .set_len(AUTONOMOUS_LIFECYCLE_CURSOR_MAX_BYTES as u64 + 1)
         .expect("extend startup oversized cursor fixture");
     assert!(
-        Kura::new(&config, &lane_config).is_err(),
+        Kura::open_test_kura_with_configured_lane_config(&config, &lane_config).is_err(),
         "startup must reject an oversized lifecycle cursor before decoding",
     );
     fs::write(&lifecycle_path, &canonical_cursor_bytes)
@@ -2611,7 +2639,7 @@ fn autonomous_first_attempt_uses_only_versioned_files_and_repairs_missing_pointe
     fs::remove_file(&process_generation_path)
         .expect("remove process generation for missing-record fixture");
     assert!(
-        Kura::new(&config, &lane_config).is_err(),
+        Kura::open_test_kura_with_configured_lane_config(&config, &lane_config).is_err(),
         "startup must reject a retained cursor whose Kura root lost its process-generation record",
     );
     fs::write(&process_generation_path, &process_generation_bytes)
@@ -2628,7 +2656,7 @@ fn autonomous_first_attempt_uses_only_versioned_files_and_repairs_missing_pointe
     fs::write(&process_generation_path, &rolled_back_generation_bytes)
         .expect("write rolled-back process generation");
     assert!(
-        Kura::new(&config, &lane_config).is_err(),
+        Kura::open_test_kura_with_configured_lane_config(&config, &lane_config).is_err(),
         "startup must reject process-generation rollback below an active cursor",
     );
     fs::write(&process_generation_path, &process_generation_bytes)
@@ -2645,10 +2673,11 @@ fn autonomous_first_attempt_uses_only_versioned_files_and_repairs_missing_pointe
     fs::remove_file(&lifecycle_path).expect("isolate retained archived cursor");
     fs::write(&process_generation_path, &rolled_back_generation_bytes)
         .expect("write rollback visible only to retained-cursor audit");
-    let archived_rollback_error = match Kura::new(&config, &lane_config) {
-        Ok(_) => panic!("startup accepted an archived cursor generation rollback"),
-        Err(error) => error,
-    };
+    let archived_rollback_error =
+        match Kura::open_test_kura_with_configured_lane_config(&config, &lane_config) {
+            Ok(_) => panic!("startup accepted an archived cursor generation rollback"),
+            Err(error) => error,
+        };
     assert!(
         matches!(
             archived_rollback_error,
@@ -2669,7 +2698,7 @@ fn autonomous_first_attempt_uses_only_versioned_files_and_repairs_missing_pointe
     fs::write(&process_generation_temp_path, &process_generation_bytes)
         .expect("write forbidden deterministic process-generation temporary");
     assert!(
-        Kura::new(&config, &lane_config).is_err(),
+        Kura::open_test_kura_with_configured_lane_config(&config, &lane_config).is_err(),
         "startup must reject a deterministic process-generation temporary",
     );
     fs::remove_file(&process_generation_temp_path)
@@ -2685,8 +2714,9 @@ fn autonomous_first_attempt_uses_only_versioned_files_and_repairs_missing_pointe
         .expect("encode unpublished generation-five successor");
     fs::write(&process_generation_atomic_temp, generation_five_bytes)
         .expect("stage pre-rename process-generation successor");
-    let (recovered_generation_kura, _) = Kura::new(&config, &lane_config)
-        .expect("startup cleans an exact unpublished process-generation successor");
+    let (recovered_generation_kura, _) =
+        Kura::open_test_kura_with_configured_lane_config(&config, &lane_config)
+            .expect("startup cleans an exact unpublished process-generation successor");
     assert!(!process_generation_atomic_temp.exists());
     assert_eq!(
         fs::read(&process_generation_path).expect("read authoritative process generation"),
@@ -2697,7 +2727,7 @@ fn autonomous_first_attempt_uses_only_versioned_files_and_repairs_missing_pointe
     fs::write(&process_generation_atomic_temp, &process_generation_bytes)
         .expect("write non-successor process-generation atomic temporary");
     assert!(
-        Kura::new(&config, &lane_config).is_err(),
+        Kura::open_test_kura_with_configured_lane_config(&config, &lane_config).is_err(),
         "startup must reject a process-generation temporary that is not the exact successor",
     );
     assert!(
@@ -2712,7 +2742,7 @@ fn autonomous_first_attempt_uses_only_versioned_files_and_repairs_missing_pointe
     )
     .expect("write truncated process generation");
     assert!(
-        Kura::new(&config, &lane_config).is_err(),
+        Kura::open_test_kura_with_configured_lane_config(&config, &lane_config).is_err(),
         "startup must reject a truncated process-generation record",
     );
     fs::write(&process_generation_path, &process_generation_bytes)
@@ -2727,7 +2757,7 @@ fn autonomous_first_attempt_uses_only_versioned_files_and_repairs_missing_pointe
     )
     .expect("write invalid-hash process generation");
     assert!(
-        Kura::new(&config, &lane_config).is_err(),
+        Kura::open_test_kura_with_configured_lane_config(&config, &lane_config).is_err(),
         "startup must reject a process-generation record whose self-hash is invalid",
     );
     fs::write(&process_generation_path, &process_generation_bytes)
@@ -2746,7 +2776,7 @@ fn autonomous_first_attempt_uses_only_versioned_files_and_repairs_missing_pointe
     )
     .expect("write zero process generation fixture");
     assert!(
-        Kura::new(&config, &lane_config).is_err(),
+        Kura::open_test_kura_with_configured_lane_config(&config, &lane_config).is_err(),
         "startup must reject generation zero even when its record hash is internally consistent",
     );
     fs::write(&process_generation_path, &process_generation_bytes)
@@ -2758,7 +2788,7 @@ fn autonomous_first_attempt_uses_only_versioned_files_and_repairs_missing_pointe
         .set_len(AUTONOMOUS_LIFECYCLE_PROCESS_GENERATION_MAX_BYTES as u64 + 1)
         .expect("extend oversized process-generation fixture");
     assert!(
-        Kura::new(&config, &lane_config).is_err(),
+        Kura::open_test_kura_with_configured_lane_config(&config, &lane_config).is_err(),
         "startup must reject an oversized process-generation record before decoding",
     );
     fs::write(&process_generation_path, &process_generation_bytes)
@@ -2767,7 +2797,7 @@ fn autonomous_first_attempt_uses_only_versioned_files_and_repairs_missing_pointe
     fs::hard_link(&process_generation_path, &process_generation_hardlink)
         .expect("create process-generation hardlink alias");
     assert!(
-        Kura::new(&config, &lane_config).is_err(),
+        Kura::open_test_kura_with_configured_lane_config(&config, &lane_config).is_err(),
         "startup must reject a multiply linked process-generation record",
     );
     fs::remove_file(&process_generation_hardlink)
@@ -2783,7 +2813,7 @@ fn autonomous_first_attempt_uses_only_versioned_files_and_repairs_missing_pointe
         symlink(&symlink_target, &process_generation_path)
             .expect("install process-generation symlink");
         assert!(
-            Kura::new(&config, &lane_config).is_err(),
+            Kura::open_test_kura_with_configured_lane_config(&config, &lane_config).is_err(),
             "startup must reject a symlinked process-generation record",
         );
         fs::remove_file(&process_generation_path).expect("remove process-generation symlink");
@@ -2806,7 +2836,7 @@ fn autonomous_first_attempt_uses_only_versioned_files_and_repairs_missing_pointe
     )
     .expect("write drifted process-generation chain");
     assert!(
-        Kura::new(&config, &lane_config).is_err(),
+        Kura::open_test_kura_with_configured_lane_config(&config, &lane_config).is_err(),
         "startup must reject process-generation chain identity drift against retained cursors",
     );
     fs::write(&process_generation_path, &process_generation_bytes)
@@ -2827,7 +2857,7 @@ fn autonomous_first_attempt_uses_only_versioned_files_and_repairs_missing_pointe
     )
     .expect("write drifted process-generation local peer");
     assert!(
-        Kura::new(&config, &lane_config).is_err(),
+        Kura::open_test_kura_with_configured_lane_config(&config, &lane_config).is_err(),
         "startup must reject process-generation local-peer identity drift against retained cursors",
     );
     fs::write(&process_generation_path, &process_generation_bytes)
@@ -2837,7 +2867,7 @@ fn autonomous_first_attempt_uses_only_versioned_files_and_repairs_missing_pointe
     fs::write(&obsolete_cursor_path, &canonical_cursor_bytes)
         .expect("write obsolete V1 cursor path fixture");
     assert!(
-        Kura::new(&config, &lane_config).is_err(),
+        Kura::open_test_kura_with_configured_lane_config(&config, &lane_config).is_err(),
         "startup must fail closed on a legacy V1 cursor path instead of decoding it",
     );
     fs::remove_file(&obsolete_cursor_path).expect("remove obsolete V1 cursor path fixture");
@@ -2854,8 +2884,9 @@ fn autonomous_first_attempt_uses_only_versioned_files_and_repairs_missing_pointe
             .expect("encode exhausted process generation"),
     )
     .expect("write exhausted process generation");
-    let (exhausted_kura, _) = Kura::new(&config, &lane_config)
-        .expect("generation maximum remains readable for fail-closed exhaustion");
+    let (exhausted_kura, _) =
+        Kura::open_test_kura_with_configured_lane_config(&config, &lane_config)
+            .expect("generation maximum remains readable for fail-closed exhaustion");
     exhausted_kura
         .bind_local_peer_id(local_peer.clone())
         .expect("bind local key before exhausted claim");
@@ -2868,8 +2899,8 @@ fn autonomous_first_attempt_uses_only_versioned_files_and_repairs_missing_pointe
     drop(exhausted_kura);
     fs::write(&process_generation_path, &process_generation_bytes)
         .expect("restore process generation after exhaustion rejection");
-    let (reopened, _) =
-        Kura::new(&config, &lane_config).expect("startup reconstructs the exact immutable attempt");
+    let (reopened, _) = Kura::open_test_kura_with_configured_lane_config(&config, &lane_config)
+        .expect("startup reconstructs the exact immutable attempt");
     assert!(!atomic_temp.exists());
     assert!(view_path.is_file());
     assert!(height_pointer.is_file());
@@ -2887,7 +2918,9 @@ fn autonomous_first_attempt_uses_only_versioned_files_and_repairs_missing_pointe
     );
     let pending_temp_dir = TempDir::new().expect("pending cursor temp dir");
     let pending_config = kura_config_for_dir(&pending_temp_dir, BLOCKS_IN_MEMORY);
-    let (pending_kura, _) = Kura::new(&pending_config, &lane_config).expect("pending cursor Kura");
+    let (pending_kura, _) =
+        Kura::open_test_kura_with_configured_lane_config(&pending_config, &lane_config)
+            .expect("pending cursor Kura");
     install_autonomous_lane_marker_for_kura(&pending_kura, &lane_config, &payload);
     let pending_cursor_path = Kura::autonomous_lifecycle_cursor_path_for_entry(
         lane,
@@ -2910,7 +2943,7 @@ fn autonomous_first_attempt_uses_only_versioned_files_and_repairs_missing_pointe
     .expect("write pending lifecycle cursor without payload");
     drop(pending_kura);
     assert!(
-        Kura::new(&pending_config, &lane_config).is_err(),
+        Kura::open_test_kura_with_configured_lane_config(&pending_config, &lane_config).is_err(),
         "startup must reject even a signed first cursor until the State/Queue adapter authenticates its exact payload",
     );
 }

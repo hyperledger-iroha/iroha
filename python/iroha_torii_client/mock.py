@@ -22,6 +22,18 @@ __all__ = ["ToriiMockServer", "main"]
 _CURRENT_DATA_MODEL_VERSION = 4
 
 
+def _default_governance_proposal_draft() -> Dict[str, Any]:
+    return {
+        "proposal_id": "11" * 32,
+        "tx_instructions": [
+            {
+                "wire_id": "iroha_data_model::isi::governance::ProposeDeployContract",
+                "payload_hex": "00ff",
+            }
+        ],
+    }
+
+
 @dataclass
 class _Response:
     status: int
@@ -124,8 +136,6 @@ class _MockState:
         self.contract_call_response: Dict[str, Any] = {}
         self.gov_proposals: Dict[str, Dict[str, Any]] = {}
         self.gov_propose_deploy_response: Dict[str, Any] = {}
-        self.gov_finalize_response: Dict[str, Any] = {}
-        self.gov_enact_response: Dict[str, Any] = {}
         self.gov_protected_namespaces: Dict[str, Any] = {}
         self.gov_locks: Dict[str, Dict[str, Any]] = {}
         self.gov_tallies: Dict[str, Dict[str, Any]] = {}
@@ -186,10 +196,6 @@ class _MockState:
             return self._gov_propose_deploy(body)
         if method == "POST" and path == "/v1/contracts/call":
             return self._contracts_call(body)
-        if method == "POST" and path == "/v1/gov/finalize":
-            return self._gov_finalize(body)
-        if method == "POST" and path == "/v1/gov/enact":
-            return self._gov_enact(body)
         if method == "POST" and path == "/v1/gov/protected-namespaces":
             return self._gov_protected_set(body)
         if method == "GET" and path == "/v1/gov/protected-namespaces":
@@ -295,7 +301,6 @@ class _MockState:
                 },
                 "block": {"max_transactions": 512},
                 "pipeline": {
-                    "signature_batch_max": 0,
                     "signature_batch_max_ed25519": 64,
                     "signature_batch_max_secp256k1": 16,
                     "signature_batch_max_pqc": 8,
@@ -364,9 +369,7 @@ class _MockState:
                 },
             }
             self.gov_proposals.clear()
-            self.gov_propose_deploy_response = {"ok": True, "proposal_id": "mock-proposal"}
-            self.gov_finalize_response = {"ok": True, "tx_instructions": []}
-            self.gov_enact_response = {"ok": True, "tx_instructions": []}
+            self.gov_propose_deploy_response = _default_governance_proposal_draft()
             self.gov_protected_namespaces = {"found": False, "namespaces": []}
             self.gov_locks.clear()
             self.gov_tallies.clear()
@@ -713,23 +716,7 @@ class _MockState:
                 raise ValueError("propose_deploy_response must be an object")
             self.gov_propose_deploy_response = dict(propose_payload)
         else:
-            self.gov_propose_deploy_response = {"ok": True, "proposal_id": "mock-proposal"}
-
-        finalize_payload = payload.get("finalize_response")
-        if finalize_payload is not None:
-            if not isinstance(finalize_payload, dict):
-                raise ValueError("finalize_response must be an object")
-            self.gov_finalize_response = dict(finalize_payload)
-        else:
-            self.gov_finalize_response = {"ok": True, "tx_instructions": []}
-
-        enact_payload = payload.get("enact_response")
-        if enact_payload is not None:
-            if not isinstance(enact_payload, dict):
-                raise ValueError("enact_response must be an object")
-            self.gov_enact_response = dict(enact_payload)
-        else:
-            self.gov_enact_response = {"ok": True, "tx_instructions": []}
+            self.gov_propose_deploy_response = _default_governance_proposal_draft()
 
         protected_payload = payload.get("protected_namespaces")
         if protected_payload is not None:
@@ -828,39 +815,37 @@ class _MockState:
                 raise ValueError("propose-deploy payload must be an object")
             if ("contract_address" in payload) == ("contract_alias" in payload):
                 raise ValueError("propose-deploy payload must include exactly one of contract_address or contract_alias")
+            allowed_fields = {
+                "contract_address",
+                "contract_alias",
+                "abi_version",
+                "code_hash",
+                "abi_hash",
+                "manifest_provenance",
+            }
+            unknown_fields = sorted(set(payload).difference(allowed_fields))
+            if unknown_fields:
+                raise ValueError(
+                    f"propose-deploy payload contains unknown field '{unknown_fields[0]}'"
+                )
+            if payload.get("abi_version") != 1 or isinstance(payload.get("abi_version"), bool):
+                raise ValueError("propose-deploy abi_version must be the integer 1")
             for key in ("code_hash", "abi_hash"):
-                if key not in payload:
-                    raise ValueError(f"propose-deploy payload missing '{key}'")
+                value = payload.get(key)
+                if not isinstance(value, str) or re.fullmatch(r"[0-9a-f]{64}", value) is None:
+                    raise ValueError(
+                        f"propose-deploy payload '{key}' must be 32 lowercase hexadecimal bytes"
+                    )
+            provenance = payload.get("manifest_provenance")
+            if provenance is not None:
+                if not isinstance(provenance, dict) or set(provenance) != {
+                    "signer",
+                    "signature",
+                }:
+                    raise ValueError(
+                        "propose-deploy manifest_provenance must contain exactly signer and signature"
+                    )
         response = json.loads(json.dumps(self.gov_propose_deploy_response))
-        return _json_response(HTTPStatus.OK, response)
-
-    def _gov_finalize(self, body: bytes) -> _Response:
-        try:
-            payload = json.loads(body.decode("utf-8") or "{}")
-        except json.JSONDecodeError as err:
-            raise ValueError(f"invalid finalize payload: {err}") from err
-        if not isinstance(payload, dict):
-            raise ValueError("finalize payload must be an object")
-        referendum_id = payload.get("referendum_id")
-        proposal_id = payload.get("proposal_id")
-        if not isinstance(referendum_id, str):
-            raise ValueError("referendum_id must be provided")
-        if not isinstance(proposal_id, str):
-            raise ValueError("proposal_id must be provided")
-        response = json.loads(json.dumps(self.gov_finalize_response))
-        return _json_response(HTTPStatus.OK, response)
-
-    def _gov_enact(self, body: bytes) -> _Response:
-        try:
-            payload = json.loads(body.decode("utf-8") or "{}")
-        except json.JSONDecodeError as err:
-            raise ValueError(f"invalid enact payload: {err}") from err
-        if not isinstance(payload, dict):
-            raise ValueError("enact payload must be an object")
-        proposal_id = payload.get("proposal_id")
-        if not isinstance(proposal_id, str):
-            raise ValueError("proposal_id must be provided")
-        response = json.loads(json.dumps(self.gov_enact_response))
         return _json_response(HTTPStatus.OK, response)
 
     def _gov_protected_set(self, body: bytes) -> _Response:

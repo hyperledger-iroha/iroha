@@ -235,6 +235,8 @@ scripts/run_kagemusha_candidate_android_lab.sh --build-only \
   --stage-sha256 "$STAGE_SHA256" \
   --source-commit "$SOURCE_COMMIT" \
   --source-tree-sha256 "$SOURCE_TREE_SHA256" \
+  --reviewed-source-closure "$REVIEWED_SOURCE_CLOSURE" \
+  --reviewed-source-closure-sha256 "$REVIEWED_SOURCE_CLOSURE_SHA256" \
   --generation "$GENERATION" --slot-id "$SLOT_ID"
 ```
 
@@ -311,6 +313,8 @@ scripts/run_kagemusha_candidate_android_lab.sh \
   --stage-sha256 "$STAGE_SHA256" \
   --source-commit "$SOURCE_COMMIT" \
   --source-tree-sha256 "$SOURCE_TREE_SHA256" \
+  --reviewed-source-closure "$REVIEWED_SOURCE_CLOSURE" \
+  --reviewed-source-closure-sha256 "$REVIEWED_SOURCE_CLOSURE_SHA256" \
   --generation "$GENERATION" --slot-id "$SLOT_ID" \
   --attestation-slot "$SLOT_PATH" \
   --trusted-signer-public-key "$TRUSTED_SIGNER_PUBLIC_KEY" \

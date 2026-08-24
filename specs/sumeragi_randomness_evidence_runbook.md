@@ -37,12 +37,13 @@ before it applies; this is governed chain state, not local `[sumeragi]` config.
 
    ```bash
    iroha --output-format text ops sumeragi status
-   iroha --output-format text ops sumeragi vrf-epoch --epoch <epoch>
    ```
 
    The status output records authoritative leader/view and durable consensus
-   state. The epoch command reads the committed VRF record for the selected
-   epoch; use `/metrics` separately for node-local observations.
+   state. The legacy `vrf-epoch` and `vrf-penalties` CLI commands are retired,
+   as are all `/v1/sumeragi/vrf/*` HTTP routes. They do not provide an
+   alternative snapshot or mutation path; use `/metrics` separately for
+   node-local participation observations.
 3. Capture the epoch number you intend to audit:
 
    ```bash
@@ -50,28 +51,22 @@ before it applies; this is governed chain state, not local `[sumeragi]` config.
    printf "auditing epoch %s\n" "$EPOCH"
    ```
 
-   Store the value (decimal or `0x` prefixed) for the VRF commands below.
+   Store the value for the status and telemetry captures below.
 
-## 2. Snapshot VRF epochs and penalties
+## 2. Capture current VRF participation evidence
 
-Use the dedicated CLI subcommands to pull the persisted VRF records from each
-validator:
+Capture the authenticated Sumeragi status from every validator and export the
+matching Prometheus series for the epoch under review:
 
 ```bash
-iroha --output-format text ops sumeragi vrf-epoch --epoch "$EPOCH"
-iroha ops sumeragi vrf-epoch --epoch "$EPOCH" > artifacts/vrf_epoch_${EPOCH}.json
-
-iroha --output-format text ops sumeragi vrf-penalties --epoch "$EPOCH"
-iroha ops sumeragi vrf-penalties --epoch "$EPOCH" > artifacts/vrf_penalties_${EPOCH}.json
+iroha ops sumeragi status > artifacts/sumeragi_status_epoch_${EPOCH}.json
 ```
 
-The summaries show whether the epoch is finalized, how many participants
-submitted commits/reveals, the roster length, and the derived seed. The JSON
-captures the participant list, per-signer penalty status, and the `seed_hex`
-value used for deterministic election. Compare the participant count against the staking
-roster, and verify that the penalty arrays reflect the alerts triggered during
-chaos testing (late reveals should appear under `late_reveals`, forfeited
-validators under `no_participation`).
+The persisted epoch record remains consensus-internal; first-release Torii does
+not expose its participant/reveal corpus. Do not restore or script the retired
+`vrf-epoch`/`vrf-penalties` commands or the former epoch/penalties GET routes.
+Correlate the status fingerprint, signed height context, current roster, and
+epoch with the bounded `sumeragi_vrf_*` counters exported by each validator.
 
 ## 3. Monitor VRF telemetry and alerts
 
@@ -81,9 +76,9 @@ Prometheus exposes the counters required by the roadmap:
 - `sumeragi_vrf_reveals_emitted_total`
 - `sumeragi_vrf_reveals_late_total`
 - `sumeragi_vrf_non_reveal_penalties_total`
-- `sumeragi_vrf_non_reveal_by_signer{signer="peer_id"}`
+- `sumeragi_vrf_non_reveal_by_signer{idx="<roster-index>"}`
 - `sumeragi_vrf_no_participation_total`
-- `sumeragi_vrf_no_participation_by_signer{signer="peer_id"}`
+- `sumeragi_vrf_no_participation_by_signer{idx="<roster-index>"}`
 - `sumeragi_vrf_rejects_total_by_reason{reason="..."}`
 
 Example PromQL for the weekly report:
@@ -96,8 +91,8 @@ During readiness drills confirm that:
 
 - `sumeragi_vrf_commits_emitted_total` and `..._reveals_emitted_total` increase
   for every block inside the commit/reveal windows.
-- Late-reveal scenarios trigger `sumeragi_vrf_reveals_late_total` and clear the
-  matching entry in the `vrf_penalties` JSON.
+- Late-reveal scenarios trigger `sumeragi_vrf_reveals_late_total`; correlate
+  that counter with the non-reveal and reject counters on the same validator.
 - `sumeragi_vrf_no_participation_total` spikes only when you intentionally
   withhold commits during chaos testing.
 
@@ -135,8 +130,8 @@ evidence kind and signer that appeared in the CLI output.
 
 For every rehearsal or release candidate:
 
-1. Store the CLI JSON files (`vrf_epoch_*.json`, `vrf_penalties_*.json`,
-   `evidence_snapshot.json`) under the run’s artifact directory (the same root
+1. Store each validator's `sumeragi_status_epoch_*.json` and the
+   `evidence_snapshot.json` under the run’s artifact directory (the same root
    used by the chaos/performance scripts).
 2. Record the Prometheus query results or snapshot exports for the counters
    listed above.
@@ -163,10 +158,10 @@ trail back to the captured metrics and CLI snapshots.
   `handle_vrf_*` errors, restore peer connectivity, and let the validator
   rebroadcast the frame through consensus.
 - **Unexpected penalties** — When `sumeragi_vrf_no_participation_total` spikes,
-  cross-check the `vrf_penalties_<epoch>.json` file to confirm the signer ID and
-  compare it with the staking roster. Penalties that do not align with chaos
-  drills indicate either a validator clock skew or Torii replay protection; fix
-  the offending peer before rerunning the test.
+  correlate the `*_by_signer{idx=...}` series with the signed roster and
+  authenticated consensus-ingress logs. Penalties that do not align with chaos
+  drills indicate a validator producer, key, or peer-connectivity fault; fix the
+  offending peer before rerunning the test. Torii is not a VRF ingress path.
 - **Evidence ingestion stalls** — When `sumeragi_evidence_records_total`
   plateaus while chaos tests emit faults, run `iroha ops sumeragi evidence count`
   on multiple validators and confirm `/v1/sumeragi/evidence/count` matches the

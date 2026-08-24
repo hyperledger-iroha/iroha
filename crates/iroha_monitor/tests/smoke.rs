@@ -152,7 +152,7 @@ fn spawn_status_metrics_stub() -> Option<std::net::SocketAddr> {
                 "/status",
                 get(|| async move {
                     const BODY: &str =
-                        "{\"alias\":\"祭りノード\",\"peers\":2,\"blocks\":4,\"blocks_non_empty\":3,\"commit_time_ms\":90,\"txs_approved\":12,\"txs_rejected\":0,\"queue_size\":0,\"uptime\":1,\"view_changes\":0,\"governance\":{\"proposals\":{\"proposed\":0,\"approved\":0,\"rejected\":0,\"enacted\":0},\"protected_namespace\":{\"total_checks\":0,\"allowed\":0,\"rejected\":0},\"manifest_quorum\":{\"total_checks\":0,\"satisfied\":0,\"rejected\":0},\"recent_manifest_activations\":[]}}";
+                        "{\"alias\":\"祭りノード\",\"peers\":2,\"blocks\":4,\"blocks_non_empty\":3,\"commit_time_ms\":90,\"txs_approved\":12,\"txs_rejected\":0,\"queue_size\":0,\"uptime\":1,\"view_changes\":0,\"governance\":{\"proposals\":{\"proposed\":0,\"rejected\":0,\"enacted\":0,\"superseded\":0,\"execution_failed\":0},\"protected_namespace\":{\"total_checks\":0,\"allowed\":0,\"rejected\":0},\"manifest_quorum\":{\"total_checks\":0,\"satisfied\":0,\"rejected\":0},\"recent_manifest_activations\":[]}}";
                     (
                         axum::http::StatusCode::OK,
                         [(axum::http::header::CONTENT_TYPE, "application/json")],

@@ -746,6 +746,7 @@ pub(in crate::sumeragi) fn drain_lifecycle_v2_ingress(
     block_sync: &mut V2BlockSyncDiscovery,
     block_sync_request: &mut Option<HashOf<wire::CommitCertificateRequest>>,
     npos_vrf: &mut V2NposVrfLifecycle,
+    npos_beacon: &mut V2GlobalBeaconLifecycle,
     limit: usize,
     mut producer_claim: LifecycleProducerClaimDispositionV1,
 ) -> Result<LifecycleV2IngressDrainDispositionV1, V2RunnerError> {
@@ -977,6 +978,7 @@ pub(in crate::sumeragi) fn drain_lifecycle_v2_ingress(
                             block_sync,
                             block_sync_request,
                             npos_vrf,
+                            npos_beacon,
                         );
                         if let Err(error) = consumed {
                             iroha_logger::error!(

@@ -151,39 +151,58 @@ external transaction signing pipeline.
 ## Production Gates
 
 Soracloud production deployments must enable `soracloud_runtime.production_mode`.
-The first release fails closed whenever Inrou hosting is enabled, in both
-production and non-production configuration. The current QEMU boundary does not yet provide mandatory mount,
-network, IPC, and MAC isolation; QEMU's deny-list seccomp sandbox and uid-based
-IP firewall cannot contain all host capabilities such as AF_UNIX. Production
-nodes, including Taira, therefore advertise no Inrou hosting capability.
-
-The built-in PortableVM implementation is retained only behind private unit
-test fixtures while a mandatory privileged confinement launcher is developed.
-It intrinsically means one Linux KVM VM; the former backend, accelerator,
-concurrency, and supplementary-group selectors are retired. Its defense-in-depth
-checks require dedicated `portable_vm_uid`/`portable_vm_gid` values in
-`65536..524288` and exact resource budgets, with the sole supplementary gid
-derived from the validated `/dev/kvm` device. A future qualified host must use
-exactly `passwd: files` and `group: files` in a
-root-custodied `/etc/nsswitch.conf`. The exact locked local account/group name
-is `iroha-inrou` (uid/gid `70000` is the recommended qualification profile): password fields `x`, home
+`soracloud_runtime.inrou.enabled` remains false by default. Explicit enablement
+accepts exactly one Linux KVM PortableVM V1 backend and requires an equal
+`portable_vm_uid`/`portable_vm_gid` pair selecting one of four canonical slots,
+`70000` through `70003`, plus exact CPU, memory, and storage budgets. Backend, accelerator, concurrency,
+supplementary-group, and control-path selectors are retired; `backends` and
+`max_concurrent_vms` are unknown Inrou configuration keys. A qualified host
+must use exactly `passwd: files` and `group: files` in a
+root-custodied `/etc/nsswitch.conf`. Slot `i` requires the exact locked local
+account/group name `iroha-inrou-i`; a same-host four-validator qualification
+provisions all four slots and a single-validator public host uses
+`iroha-inrou-0` at uid/gid `70000`: password fields `x`, home
 `/nonexistent`, trusted nologin/false shell, locked shadow/gshadow entries, and
 no extra membership, administrator entry, duplicate, decimal-name collision,
 or primary-gid reuse. `subid` NSS, when declared, must use only `files`; no
 subordinate range may belong to that identity/numeric spelling or cover a
-configured id. Reused disks require Linux write-lease support. Root-custodied
-`iptables` and `ip6tables` are required. PortableVM V1 accepts only `Isolated`
-networking until kernel-owned traffic counters provide complete egress
-accounting; `Open` and `Allowlist` are rejected.
+configured id. Reused disks require Linux write-lease support.
+
+Capability advertisement and local hosting activate only after the same
+startup invocation authenticates the fixed QEMU runtime closure and passes the
+KVM, identity, filesystem, anonymous-QMP, root-owned `iptables`, private
+mount/network/IPC/UTS/PID/cgroup namespace, loopback-only connector, and exact
+cgroup-v2 CPU/memory/swap/pids/I/O preflight. The minimal root exposes no host
+`/run`, broad `/sys`, Unix socket, or unrelated descriptor. PortableVM V1
+accepts only `Isolated` networking; `Open` and `Allowlist` are rejected.
 Production mode also rejects broad runtime egress, missing fail-closed egress
 budgets, and Hugging Face inference-bridge fallback. Production profiles should
 state the runtime fee payer explicitly; `authority` is the deterministic
 development default.
 
+Generated public Hugging Face imports are authenticated inert storage in V1;
+they are not a host-local execution backend. `local_execution_enabled = true`
+is a configuration error in every mode, direct actual/runtime-manager
+construction is checked again, and the resident Python worker boundary is
+closed. Import reconciliation must not probe the host model stack, emit warmth
+heartbeats, or project a fully hydrated source as locally `Ready`. Re-enabling
+execution requires routing the worker through the same authenticated Inrou
+isolation and resource corridor used for hostile service workloads.
+
+HF source admission uses one exact case-sensitive `namespace/repository`
+identity and one full lowercase commit OID. Model-info must return that same
+`modelId` and commit byte-for-byte and must be requested with `blobs=true`.
+Torii and the importer select GGUF, then SafeTensors, then PyTorch, require
+canonical LFS SHA-256 and positive size metadata for every selected shard, and
+apply identical file-count, per-file, and aggregate byte limits. The consensus
+resource profile records the selected shard count, authenticated byte total,
+format/backend family, and domain-separated commitment to the sorted exact
+path/size/digest set.
+
 Production behavior is sourced from configuration, not environment variables.
-Shipping configuration rejects enabled Inrou before startup or reconciliation.
-A disabled node does not advertise hosting capacity and actively withdraws a
-pre-existing local advert.
+An unqualified or disabled node does not advertise or materialize Inrou
+capacity and actively withdraws a pre-existing local advert. Code-path
+admission is not a claim of Linux/AArch64/KVM deployment qualification.
 
 ## Test Expectations
 
@@ -198,11 +217,12 @@ Focused V1 coverage should include:
   `CanManageSoracloud`;
 - receipt recording rejects non-deterministic uploaded-model formats and
   mismatched manifest, bundle-root, or policy bindings;
-- production config and programmatic manager construction reject enabled Inrou
-  hosting; retired backend, accelerator, concurrency, and supplementary-group
-  selectors are configuration errors;
-- non-production config and direct manager construction also reject enabled
-  Inrou; private runtime tests cover the KVM, identity, and custody checks;
+- production and non-production parsing accept only the exact opt-in
+  PortableVM V1 shape; retired selectors and programmatic shape drift are
+  configuration or startup errors;
+- capability publication remains absent until the exact production preflight
+  passes; runtime tests cover namespace, cgroup, KVM, identity, filesystem,
+  QMP, connector, and firewall checks;
 - unavailable PortableVm capability rejects startup, and capability loss withdraws
   the host advert and reconciles affected placements;
 - JavaScript Soracloud helpers expose unsigned drafts and do not accept raw

@@ -2406,6 +2406,7 @@ impl ActivatedProductionLifecycleV1 {
             iroha_crypto::HashOf<iroha_data_model::block::consensus_v2::CommitCertificateRequest>,
         >,
         npos_vrf: &mut crate::sumeragi::v2_npos::V2NposVrfLifecycle,
+        npos_beacon: &mut crate::sumeragi::v2_beacon::V2GlobalBeaconLifecycle,
     ) -> Result<
         ProductionPreparedOrdinaryIngressConsumptionV1,
         crate::sumeragi::v2_runner::V2RunnerError,
@@ -2434,6 +2435,7 @@ impl ActivatedProductionLifecycleV1 {
             block_sync,
             block_sync_request,
             npos_vrf,
+            npos_beacon,
         )
     }
 

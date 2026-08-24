@@ -93,9 +93,13 @@ Evidence mutation is deliberately absent from Torii. Evidence is admitted only
 through the authenticated consensus peer path and signed-block proof batches;
 HTTP, CLI, MCP, and SDK surfaces are read-only.
 `POST /v1/sumeragi/evidence` therefore returns `405 Method Not Allowed`.
-`/v1/sumeragi/vrf/commit` and `/v1/sumeragi/vrf/reveal` are not HTTP routes and
-return `404 Not Found`; the active `VrfCommit` and `VrfReveal` messages remain
-part of the authenticated consensus peer protocol.
+All former `/v1/sumeragi/vrf/*` HTTP routes are retired. In particular,
+`/v1/sumeragi/vrf/commit`, `/v1/sumeragi/vrf/reveal`,
+`/v1/sumeragi/vrf/epoch/{epoch}`, and
+`/v1/sumeragi/vrf/penalties/{epoch}` return `404 Not Found`; the corresponding
+operator CLI snapshot commands are also retired. The active `VrfCommit` and
+`VrfReveal` messages remain part of the authenticated consensus peer protocol,
+not a Torii mutation or snapshot surface.
 
 ## Proof & Pipeline SSE (`GET /v1/events/sse`)
 

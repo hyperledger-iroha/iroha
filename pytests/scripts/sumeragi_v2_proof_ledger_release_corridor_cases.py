@@ -3216,8 +3216,8 @@ kura.claim_autonomous_lifecycle_process_generation(
         "--lib -- --test-threads=1", unit_ignored_inventory
     )
     assert unit_branch < unit_inventory < unit_ignored_inventory < unit_run
-    assert "expected exactly 140 Sumeragi v2 reducer unit tests" in harness_source
-    assert "reducer unit gate requires all 140 tests to be runnable" in harness_source
+    assert "expected exactly 187 Sumeragi v2 reducer unit tests" in harness_source
+    assert "reducer unit gate requires all 187 tests to be runnable" in harness_source
 
     replay_branch = harness_source.index("--model-replay)")
     replay_inventory = harness_source.index("model_replay_test_list=", replay_branch)
@@ -3274,7 +3274,6 @@ def test_release_corridor_prebuilds_and_publishes_source_bound_binaries() -> Non
         assert "TEST_NETWORK_IROHAD_FEATURES TEST_NETWORK_CARGO" in source
         assert "CARGO_BIN_EXE_iroha" in source
         assert "export IROHA_TEST_SKIP_BUILD=1" in source
-        assert "export IROHA_TEST_ALLOW_REENTRANT_BUILD=0" in source
         assert "IROHA_TEST_BUILD_TIMEOUT_MS=3600" in source
         assert "sumeragi-v2-release/${" in source
         assert "ensure_source_bound_localnet_binaries" in source
@@ -3906,9 +3905,9 @@ def test_workspace_excluded_harness_pins_complete_unit_inventory() -> None:
     unit_run = source.index("--lib -- --test-threads=1", ignored_inventory)
 
     assert unit_branch < unit_inventory < ignored_inventory < unit_run
-    assert "if ((${#listed_unit_tests[@]} != 140)); then" in source
-    assert "expected exactly 140 Sumeragi v2 reducer unit tests" in source
-    assert "reducer unit gate requires all 140 tests to be runnable" in source
+    assert "if ((${#listed_unit_tests[@]} != 187)); then" in source
+    assert "expected exactly 187 Sumeragi v2 reducer unit tests" in source
+    assert "reducer unit gate requires all 187 tests to be runnable" in source
 
 
 def test_workspace_excluded_harness_names_every_required_fast_simulation() -> None:

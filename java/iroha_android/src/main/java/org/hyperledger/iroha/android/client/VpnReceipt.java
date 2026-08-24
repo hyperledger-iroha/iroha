@@ -2,7 +2,10 @@ package org.hyperledger.iroha.android.client;
 
 import java.util.Objects;
 
-/** VPN receipt response including earned/refunded XOR and native settlement instructions. */
+/**
+ * VPN receipt response including earned/refunded XOR and native settlement instructions.
+ * {@code settlement_pending} is provisional; only committed WSV receipts use {@code settled}.
+ */
 public final class VpnReceipt {
   private final String sessionId;
   private final String accountId;

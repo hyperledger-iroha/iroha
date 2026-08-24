@@ -96,7 +96,9 @@ All of the above share the same validation and consensus pipeline once they beco
 - Executor migration is guest-defined: every production upgrade runs the admitted
   IVM program and accepts only its canonical Norito migration result. Header
   fields, vector length, bytecode size, and other artifact shape do not select
-  host-side migration or permission behavior. Synthetic executor emulation is
+  host-side migration or permission behavior. The host applies the declared
+  executor data model exactly; it has no legacy permission-name purge or
+  pre-release grant migration step. Synthetic executor emulation is
   available only in builds that explicitly enable the non-default
   `iroha-core-tests` feature.
 
@@ -299,12 +301,12 @@ Iroha can group signatures by scheme during block validation and verify them in 
   - `signature_batch_max_secp256k1` (usize, default 16)
   - `signature_batch_max_pqc` (usize, default 8; ML‑DSA/Dilithium3)
   - `signature_batch_max_bls` (usize, default 16)
-  - The historical alias `signature_batch_max` applies to Ed25519 when explicit per‑scheme caps are 0.
+  - Each scheme uses only its own cap; there is no aggregate or cross-scheme fallback.
 
 - BLS support is behind a compile‑time feature in Core:
   - Enable with: `cargo build -p iroha_core --features bls`
   - This forwards to `iroha_crypto/bls` and compiles the BLS path in `block.rs`.
-  - Micro‑batching groups signatures deterministically: same‑message groups run fast‑aggregate verification, distinct messages use a multi‑message aggregate with deterministic bisection on failure, and per‑lane telemetry records both the latest block counters (`pipeline_sig_bls_agg_*`) and cumulative results (`pipeline_sig_bls_agg_{same,multi}_total`).
+  - Micro‑batching groups signatures deterministically: same‑message groups run fast‑aggregate verification, distinct messages use a multi‑message aggregate with deterministic bisection on failure. Telemetry records latest-block aggregate counters (`pipeline_sig_bls_agg_*`) and lane-labelled cumulative results (`pipeline_sig_bls_agg_{same,multi}_total`); cumulative lookups require the exact lane ID.
   - PoP requirement: batching expects a proof of possession in transaction metadata (`bls_pop` for BLS-normal, `bls_pop_small` for BLS-small). Missing or invalid PoPs fall back to individual verification while still enforcing the signature.
 - Validators register with BLS-Normal keys only; `trusted_peers_bls` no longer exists. `trusted_peers_pop` and genesis topology `pop_hex` entries mark trusted BLS peers that participate in consensus. Trusted BLS peers without PoPs remain network-trusted observers and are excluded from consensus, while non-BLS peers are always dropped from validator rosters. Config parsing rejects invalid PoP entries and PoPs for keys outside `trusted_peers`.
   - Validator peers MUST set `signature_batch_max_bls > 0`; peer registration is rejected otherwise to ensure validators can batch BLS signatures (votes/commit certificates) by configuration.

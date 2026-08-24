@@ -1592,6 +1592,7 @@ fn assert_lifecycle_decision_apply_live_recovered_substitution_matrix(
             live_runtime,
             live_body_store,
             recovered_validate_retry_census,
+            None,
             verified.context().clone(),
             verified.context().roster[0].validator.clone(),
             Some(0),

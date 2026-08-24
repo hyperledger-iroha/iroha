@@ -102,16 +102,16 @@ fn v4_release_record_binds_promotion_build_provenance_to_manifest() {
 
 #[test]
 fn v4_internal_validation_receipt_rejects_tracked_cargo_lock_substitution() {
-    use kagemusha_internal_validation_receipt::tests::signed_receipt_for_v4_candidate_with_tracked_cargo_lock;
+    use kagemusha_internal_validation_receipt::internal_validation_receipt_tests::signed_receipt_for_v4_candidate_with_tracked_cargo_lock;
 
     let finalized_manifest = manifest();
     let candidate = unsigned_candidate(&finalized_manifest);
     let expected_lock_sha256 = finalized_manifest
         .reviewed_source_closure
-        .ignored_cargo_lock_sha256;
+        .tracked_cargo_lock_sha256;
     let expected_lock_size_bytes = finalized_manifest
         .reviewed_source_closure
-        .ignored_cargo_lock_size_bytes;
+        .tracked_cargo_lock_size_bytes;
     let mut substituted_lock_sha256 = expected_lock_sha256;
     substituted_lock_sha256[0] ^= 1;
     for (case, lock_sha256, lock_size_bytes) in [

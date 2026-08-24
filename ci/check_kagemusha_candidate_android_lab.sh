@@ -165,7 +165,7 @@ if actual_kotlin_methods != kotlin_methods:
         f"missing={sorted(kotlin_methods - actual_kotlin_methods)} "
         f"extra={sorted(actual_kotlin_methods - kotlin_methods)}"
     )
-for needle in (f"package {package}", 'LIBRARY_NAME: String = "connect_norito_bridge_candidate_lab"', "REQUIRED_BRIDGE_ABI: Int = 22"):
+for needle in (f"package {package}", 'LIBRARY_NAME: String = "connect_norito_bridge_candidate_lab"', "REQUIRED_BRIDGE_ABI: Int = 23"):
     if needle not in text["native"]:
         errors.append(f"candidate lab Kotlin JNI contract is missing {needle}")
 
@@ -656,6 +656,8 @@ builder = text["native_builder"]
 for needle in (
     "kagemusha_source_tree_seal.py",
     "source_fingerprint",
+    "--reviewed-source-closure",
+    "--reviewed-source-closure-sha256",
     "source changed during the native build",
     '"$CARGO_NDK_BINARY" -t arm64-v8a',
     "build --locked --offline --release",
@@ -673,6 +675,9 @@ for needle in (
         errors.append(f"candidate native source-sealed build is missing {needle}")
 if "build_kagemusha_candidate_android_native.sh" not in runner:
     errors.append("candidate device runner must build the lab bridge from current source")
+for needle in ("--reviewed-source-closure", "--reviewed-source-closure-sha256"):
+    if needle not in runner:
+        errors.append(f"candidate device runner does not thread {needle}")
 if "norito_bridge_source_seal.py" in builder:
     errors.append("candidate Android build must not use the Apple-only bridge-closure source seal")
 

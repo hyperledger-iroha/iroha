@@ -45,16 +45,12 @@ from blake3 import blake3
 from iroha_torii_client.client import (
     ConfidentialGasSchedule,
     ConfigurationSnapshot,
+    GovernanceProposalDraft,
     MultisigResponse,
     NetworkTimeRttBucket,
     NetworkTimeSample,
     NetworkTimeSnapshot,
     NetworkTimeStatus,
-    OfflineActiveRecursiveStepEpVerifier,
-    OfflineActiveRecursiveStepEqVerifier,
-    OfflineActiveTopUpShieldVerifier,
-    OfflineActiveTransferVerifier,
-    OfflineActiveUnshieldVerifier,
     OfflineAppliedOperation,
     OfflineAppliedResult,
     OfflineAssetScale,
@@ -80,8 +76,6 @@ from iroha_torii_client.client import (
     OfflineProofBackend,
     OfflineProofBoxJson,
     OfflineQueueErrorDetails,
-    OfflineReadiness,
-    OfflineReadinessBlocker,
     OfflineStatus,
     OfflineRecursiveSpendBundleJson,
     OfflineRecursiveSpendProofJson,
@@ -110,7 +104,6 @@ from iroha_torii_client.client import (
     OfflineVerifiedFoldRecordBundleJson,
     OfflineVerifiedFoldStepJson,
     OfflineVerifiedFoldVerifierRecordJson,
-    OfflineVerifierId,
     OfflineVerifierKeyId,
     OfflineVerifierKeyIdJson,
     OfflineVerifierStatus,
@@ -146,6 +139,32 @@ from iroha_torii_client.client import (
     canonical_network_request_signature_message,
     canonical_query_string,
     canonical_request_message,
+)
+from iroha_torii_client.governance_proposals import (
+    GovernanceCanonicalObject,
+    GovernanceManifestProvenance,
+    GovernanceMusubiActionKind,
+    GovernanceProposalDeployContract,
+    GovernanceProposalKind,
+    GovernanceProposalKindTag,
+    GovernanceProposalLifecycleStatus as GovernanceProposalStatus,
+    GovernanceProposalMusubiRegistryGovernance,
+    GovernanceProposalRecord,
+    GovernanceProposalResult,
+    GovernanceProposalRuntimeUpgrade,
+    GovernanceProposalSccpRouteGovernance,
+    GovernanceProposalSorafsProviderGovernance,
+    GovernanceProposalValidationFeePayoutLifecycle,
+    GovernanceProposalValidationFeePolicy,
+    GovernanceRuntimeUpgradeManifest,
+    GovernanceSccpRouteAction,
+    GovernanceSccpRouteActionKind,
+    GovernanceSorafsProviderAction,
+    GovernanceSorafsProviderActionKind,
+    GovernanceValidationFeeChargingMode,
+    GovernanceValidationFeePayoutBinding,
+    GovernanceValidationFeePayoutRecipient,
+    GovernanceValidationFeePolicy,
 )
 from iroha_torii_client.client import (
     SumeragiAutonomousLaneExecution as _CanonicalSumeragiAutonomousLaneExecution,
@@ -2752,12 +2771,9 @@ _GOVERNANCE_DEPLOY_CONTRACT_FIELDS = frozenset(
         "abi_version",
         "code_hash",
         "abi_hash",
-        "window",
-        "mode",
         "manifest_provenance",
     }
 )
-_GOVERNANCE_WINDOW_FIELDS = frozenset({"lower", "upper"})
 _GOVERNANCE_MANIFEST_PROVENANCE_FIELDS = frozenset({"signer", "signature"})
 _GOVERNANCE_PLAIN_BALLOT_FIELDS = frozenset(
     {
@@ -2769,9 +2785,6 @@ _GOVERNANCE_PLAIN_BALLOT_FIELDS = frozenset(
         "duration_blocks",
         "direction",
     }
-)
-_GOVERNANCE_PARLIAMENT_BALLOT_FIELDS = frozenset(
-    {"authority", "network_id", "proposal_id", "body", "decision"}
 )
 _GOVERNANCE_ZK_BALLOT_V1_FIELDS = frozenset(
     {
@@ -2803,20 +2816,6 @@ _GOVERNANCE_BALLOT_PROOF_FIELDS = frozenset(
         "direction",
     }
 )
-_GOVERNANCE_FINALIZE_FIELDS = frozenset({"referendum_id", "proposal_id"})
-_GOVERNANCE_ENACT_FIELDS = frozenset({"proposal_id"})
-_GOVERNANCE_PARLIAMENT_BODIES = frozenset(
-    {
-        "rules-committee",
-        "agenda-council",
-        "interest-panel",
-        "review-panel",
-        "policy-jury",
-        "oversight-committee",
-        "fma-committee",
-    }
-)
-_GOVERNANCE_PARLIAMENT_DECISIONS = frozenset({"approve", "reject", "abstain"})
 _GOVERNANCE_BALLOT_DIRECTIONS = frozenset({"Aye", "Nay", "Abstain"})
 
 
@@ -2889,14 +2888,6 @@ def _normalize_governance_manifest_provenance(
         field: _require_exact_non_empty_string(record[field], f"{context}.{field}")
         for field in ("signer", "signature")
     }
-
-
-def _normalize_governance_u64_integer(value: Any, *, context: str) -> int:
-    if isinstance(value, bool) or not isinstance(value, int):
-        raise TypeError(f"{context} must be a JSON u64 integer")
-    if value < 0 or value > (1 << 64) - 1:
-        raise ValueError(f"{context} must fit in a u64")
-    return value
 
 
 def _normalize_governance_ballot_direction(
@@ -3029,45 +3020,19 @@ def _normalize_governance_deploy_contract_payload(
         )
         record.pop("contract_address", None)
 
-    abi_version = _require_exact_non_empty_string(
-        record.get("abi_version"),
-        f"{context}.abi_version",
-    )
-    if abi_version != "1":
+    abi_version = record.get("abi_version")
+    if isinstance(abi_version, bool) or not isinstance(abi_version, int):
+        raise TypeError(f"{context}.abi_version must be the integer 1")
+    if abi_version != 1:
         raise ValueError(f"{context}.abi_version must be 1")
-    record["abi_version"] = abi_version
     for hash_field in ("code_hash", "abi_hash"):
-        if record.get(hash_field) is None:
+        value = record.get(hash_field)
+        if value is None:
             raise ValueError(f"{context} is missing required field `{hash_field}`")
-        _normalize_governance_public_hex_hint(record, hash_field, context=context)
-
-    if record.get("window") is not None:
-        window = _copy_exact_governance_payload(
-            record["window"],
-            _GOVERNANCE_WINDOW_FIELDS,
-            context=f"{context}.window",
-        )
-        missing = sorted(_GOVERNANCE_WINDOW_FIELDS.difference(window))
-        if missing:
+        if not isinstance(value, str) or re.fullmatch(r"[0-9a-f]{64}", value) is None:
             raise ValueError(
-                f"{context}.window is missing required field `{missing[0]}`"
+                f"{context}.{hash_field} must be exactly 32 lowercase hexadecimal bytes"
             )
-        lower = _normalize_governance_u64_integer(
-            window["lower"],
-            context=f"{context}.window.lower",
-        )
-        upper = _normalize_governance_u64_integer(
-            window["upper"],
-            context=f"{context}.window.upper",
-        )
-        if upper < lower:
-            raise ValueError(f"{context}.window.upper must be at least window.lower")
-        record["window"] = {"lower": lower, "upper": upper}
-    if record.get("mode") is not None:
-        mode = _require_exact_non_empty_string(record["mode"], f"{context}.mode")
-        if mode not in {"Zk", "Plain"}:
-            raise ValueError(f"{context}.mode must be Zk or Plain")
-        record["mode"] = mode
     if record.get("manifest_provenance") is not None:
         record["manifest_provenance"] = _normalize_governance_manifest_provenance(
             record["manifest_provenance"],
@@ -3119,28 +3084,6 @@ def _normalize_governance_plain_ballot_payload(
         context=f"{context}.direction",
         required=True,
     )
-    return record
-
-
-def _normalize_governance_parliament_ballot_payload(
-    payload: Mapping[str, Any],
-    *,
-    context: str,
-) -> Dict[str, Any]:
-    record = _copy_exact_governance_payload(
-        payload,
-        _GOVERNANCE_PARLIAMENT_BALLOT_FIELDS,
-        context=context,
-    )
-    _normalize_governance_ballot_network_id(record, context=context)
-    record["authority"] = _require_exact_token_string(
-        record.get("authority"),
-        f"{context}.authority",
-    )
-    if record.get("body") not in _GOVERNANCE_PARLIAMENT_BODIES:
-        raise ValueError(f"{context}.body must name a canonical Parliament body")
-    if record.get("decision") not in _GOVERNANCE_PARLIAMENT_DECISIONS:
-        raise ValueError(f"{context}.decision must be approve, reject, or abstain")
     return record
 
 
@@ -3365,49 +3308,6 @@ def _normalize_governance_zk_ballot_proof_payload(
         else:
             ballot_record["direction"] = direction
     record["ballot"] = ballot_record
-    return record
-
-
-def _normalize_governance_finalize_payload(
-    payload: Mapping[str, Any],
-    *,
-    context: str,
-) -> Dict[str, Any]:
-    record = _copy_exact_governance_payload(
-        payload,
-        _GOVERNANCE_FINALIZE_FIELDS,
-        context=context,
-    )
-    record["referendum_id"] = _require_governance_proposal_id(
-        record.get("referendum_id"),
-        f"{context}.referendum_id",
-    )
-    record["proposal_id"] = _require_governance_proposal_id(
-        record.get("proposal_id"),
-        f"{context}.proposal_id",
-    )
-    if record["referendum_id"] != record["proposal_id"]:
-        raise ValueError(f"{context}.referendum_id must equal proposal_id")
-    return record
-
-
-def _normalize_governance_enact_payload(
-    payload: Mapping[str, Any],
-    *,
-    context: str,
-) -> Dict[str, Any]:
-    record = _copy_exact_governance_payload(
-        payload,
-        _GOVERNANCE_ENACT_FIELDS,
-        context=context,
-    )
-    proposal_id = record.get("proposal_id")
-    if proposal_id is None:
-        raise ValueError(f"{context} is missing required field `proposal_id`")
-    if not isinstance(proposal_id, str) or re.fullmatch(r"[0-9a-f]{64}", proposal_id) is None:
-        raise ValueError(
-            f"{context}.proposal_id must be exactly 64 lowercase hexadecimal characters"
-        )
     return record
 
 
@@ -4555,56 +4455,6 @@ class GovernanceTally:
         )
 
 
-class GovernanceProposalStatus(str, Enum):
-    """Governance proposal lifecycle status."""
-
-    PROPOSED = "Proposed"
-    APPROVED = "Approved"
-    REJECTED = "Rejected"
-    ENACTED = "Enacted"
-
-    @classmethod
-    def from_value(cls, value: str) -> "GovernanceProposalStatus":
-        try:
-            return cls(value)
-        except ValueError as exc:
-            raise TypeError(
-                "proposal status must be one of Proposed, Approved, Rejected, Enacted"
-            ) from exc
-
-
-@dataclass(frozen=True)
-class GovernanceProposalDeployContract:
-    """`DeployContract` payload embedded in governance proposals."""
-
-    contract_address: str
-    code_hash_hex: str
-    abi_hash_hex: str
-    abi_version: str
-
-    @classmethod
-    def from_payload(cls, payload: Mapping[str, Any]) -> "GovernanceProposalDeployContract":
-        if not isinstance(payload, Mapping):
-            raise TypeError("DeployContract payload must be an object")
-
-        def _require_str(field_name: str) -> str:
-            value = payload.get(field_name)
-            if not isinstance(value, str):
-                raise TypeError(f"DeployContract payload missing string `{field_name}` field")
-            return value
-
-        contract_address = _require_str("contract_address")
-        code_hash_hex = _require_str("code_hash_hex")
-        abi_hash_hex = _require_str("abi_hash_hex")
-        abi_version = _require_str("abi_version")
-        return cls(
-            contract_address=contract_address,
-            code_hash_hex=code_hash_hex,
-            abi_hash_hex=abi_hash_hex,
-            abi_version=abi_version,
-        )
-
-
 @dataclass(frozen=True)
 class GovernanceContractRecord:
     """Governance binding returned by `GET /v1/gov/contracts/{contract_address}`."""
@@ -4634,98 +4484,6 @@ class GovernanceContractRecord:
             dataspace=dataspace,
             code_hash_hex=code_hash_hex,
         )
-
-
-@dataclass(frozen=True)
-class GovernanceProposalKind:
-    """Normalized governance proposal kind."""
-
-    variant: str
-    deploy_contract: Optional[GovernanceProposalDeployContract]
-    raw: Dict[str, Any]
-
-    @classmethod
-    def from_payload(cls, payload: Mapping[str, Any]) -> "GovernanceProposalKind":
-        if not isinstance(payload, Mapping):
-            raise TypeError("proposal kind must be an object")
-        if len(payload) != 1:
-            raise TypeError("proposal kind must contain exactly one variant entry")
-        ((variant, details),) = payload.items()
-        if not isinstance(variant, str):
-            raise TypeError("proposal kind variant key must be a string")
-        raw: Dict[str, Any]
-        deploy_contract: Optional[GovernanceProposalDeployContract] = None
-        if isinstance(details, Mapping):
-            raw = dict(details)
-        else:
-            raw = {"value": details}
-        if variant == "DeployContract":
-            if not isinstance(details, Mapping):
-                raise TypeError("DeployContract proposal kind expects an object payload")
-            deploy_contract = GovernanceProposalDeployContract.from_payload(details)
-        return cls(variant=variant, deploy_contract=deploy_contract, raw=raw)
-
-
-@dataclass(frozen=True)
-class GovernanceProposalRecord:
-    """Structured governance proposal record."""
-
-    proposer: str
-    kind: GovernanceProposalKind
-    created_height: int
-    status: GovernanceProposalStatus
-
-    @classmethod
-    def from_payload(cls, payload: Mapping[str, Any]) -> "GovernanceProposalRecord":
-        if not isinstance(payload, Mapping):
-            raise TypeError("proposal record must be an object")
-        proposer = payload.get("proposer")
-        if not isinstance(proposer, str):
-            raise TypeError("proposal record missing string `proposer` field")
-        kind_payload = payload.get("kind")
-        if not isinstance(kind_payload, Mapping):
-            raise TypeError("proposal record missing object `kind` field")
-        created_height_raw = payload.get("created_height")
-        status_raw = payload.get("status")
-        if not isinstance(status_raw, str):
-            raise TypeError("proposal record missing string `status` field")
-        if created_height_raw is None:
-            raise TypeError("proposal record missing numeric `created_height` field")
-        try:
-            created_height = int(created_height_raw)
-        except (TypeError, ValueError) as exc:
-            raise TypeError("proposal record `created_height` must be numeric") from exc
-        status = GovernanceProposalStatus.from_value(status_raw)
-        kind = GovernanceProposalKind.from_payload(kind_payload)
-        return cls(
-            proposer=proposer,
-            kind=kind,
-            created_height=created_height,
-            status=status,
-        )
-
-
-@dataclass(frozen=True)
-class GovernanceProposalResult:
-    """Wrapper for `/v1/gov/proposals/{id}` responses."""
-
-    found: bool
-    proposal: Optional[GovernanceProposalRecord]
-
-    @classmethod
-    def from_payload(cls, payload: Mapping[str, Any]) -> "GovernanceProposalResult":
-        if not isinstance(payload, Mapping):
-            raise TypeError("proposal response must be an object")
-        found = payload.get("found")
-        if not isinstance(found, bool):
-            raise TypeError("proposal response missing bool `found` field")
-        proposal_payload = payload.get("proposal")
-        if proposal_payload is None:
-            return cls(found=found, proposal=None)
-        if not isinstance(proposal_payload, Mapping):
-            raise TypeError("proposal response `proposal` must be an object when present")
-        proposal = GovernanceProposalRecord.from_payload(proposal_payload)
-        return cls(found=found, proposal=proposal)
 
 
 @dataclass(frozen=True)
@@ -8234,78 +7992,6 @@ class TriggerCompletionList:
 
 
 @dataclass(frozen=True)
-class SumeragiRbcEviction:
-    """Evicted RBC payload metadata retained for status telemetry consumers."""
-
-    block_hash: Optional[str]
-    height: Optional[int]
-    view: Optional[int]
-
-    @classmethod
-    def from_payload(cls, payload: Mapping[str, Any]) -> "SumeragiRbcEviction":
-        if not isinstance(payload, Mapping):
-            raise TypeError("RBC eviction entry must be an object")
-        block_hash = payload.get("block_hash")
-        if block_hash is not None and not isinstance(block_hash, str):
-            raise TypeError("RBC eviction `block_hash` must be a string when present")
-        height_val = payload.get("height")
-        view_val = payload.get("view")
-        try:
-            height = None if height_val is None else int(height_val)
-        except (TypeError, ValueError) as exc:
-            raise TypeError("RBC eviction `height` must be numeric when present") from exc
-        try:
-            view = None if view_val is None else int(view_val)
-        except (TypeError, ValueError) as exc:
-            raise TypeError("RBC eviction `view` must be numeric when present") from exc
-        return cls(block_hash=block_hash, height=height, view=view)
-
-
-@dataclass(frozen=True)
-class SumeragiRbcStoreStatus:
-    """RBC on-disk store health retained as typed status telemetry."""
-
-    sessions: int
-    bytes: int
-    pressure_level: int
-    backpressure_deferrals_total: int
-    persist_drops_total: int
-    evictions_total: int
-    recent_evictions: List[SumeragiRbcEviction]
-
-    @classmethod
-    def from_payload(cls, payload: Mapping[str, Any]) -> "SumeragiRbcStoreStatus":
-        if not isinstance(payload, Mapping):
-            raise TypeError("RBC store payload must be an object")
-        try:
-            sessions = int(payload.get("sessions", 0))
-            bytes_used = int(payload.get("bytes", 0))
-            pressure_level = int(payload.get("pressure_level", 0))
-            backpressure_deferrals_total = int(payload.get("backpressure_deferrals_total", 0))
-            persist_drops_total = int(payload.get("persist_drops_total", 0))
-            evictions_total = int(payload.get("evictions_total", 0))
-        except (TypeError, ValueError) as exc:
-            raise TypeError("RBC store counters must be numeric") from exc
-        raw_evictions = payload.get("recent_evictions", [])
-        if raw_evictions is None:
-            evictions_payload: List[Any] = []
-        elif isinstance(raw_evictions, list):
-            evictions_payload = raw_evictions
-        else:
-            raise TypeError("RBC store `recent_evictions` must be a list when present")
-        recent_evictions = [SumeragiRbcEviction.from_payload(entry) for entry in evictions_payload]
-        return cls(
-            sessions=sessions,
-            bytes=bytes_used,
-            pressure_level=pressure_level,
-            backpressure_deferrals_total=backpressure_deferrals_total,
-            persist_drops_total=persist_drops_total,
-            evictions_total=evictions_total,
-            recent_evictions=recent_evictions,
-        )
-
-
-@dataclass(frozen=True)
 class SumeragiEvidenceRecord:
     """Evidence record returned by `/v1/sumeragi/evidence`."""
 
@@ -10857,7 +10543,6 @@ class ToriiStatusMetrics:
     queue_delta: int
     time_since_last_block_ms: int
     time_since_last_non_empty_block_ms: int
-    da_reschedule_delta: int
     tx_approved_delta: int
     tx_rejected_delta: int
     view_change_delta: int
@@ -10877,7 +10562,6 @@ class ToriiStatusMetrics:
                 queue_delta=0,
                 time_since_last_block_ms=current.time_since_last_block_ms,
                 time_since_last_non_empty_block_ms=current.time_since_last_non_empty_block_ms,
-                da_reschedule_delta=0,
                 tx_approved_delta=0,
                 tx_rejected_delta=0,
                 view_change_delta=0,
@@ -10890,7 +10574,6 @@ class ToriiStatusMetrics:
             queue_delta=current.queue_size - previous.queue_size,
             time_since_last_block_ms=current.time_since_last_block_ms,
             time_since_last_non_empty_block_ms=current.time_since_last_non_empty_block_ms,
-            da_reschedule_delta=max(0, current.da_reschedule_total - previous.da_reschedule_total),
             tx_approved_delta=max(0, current.txs_approved - previous.txs_approved),
             tx_rejected_delta=max(0, current.txs_rejected - previous.txs_rejected),
             view_change_delta=max(0, current.view_changes - previous.view_changes),
@@ -10904,7 +10587,6 @@ class ToriiStatusMetrics:
             value
             for value in (
                 self.queue_delta,
-                self.da_reschedule_delta,
                 self.tx_approved_delta,
                 self.tx_rejected_delta,
                 self.view_change_delta,
@@ -10915,9 +10597,10 @@ class ToriiStatusMetrics:
 @dataclass(frozen=True)
 class GovernanceProposalSnapshot:
     proposed: int
-    approved: int
     rejected: int
     enacted: int
+    superseded: int
+    execution_failed: int
 
 
 @dataclass(frozen=True)
@@ -11039,7 +10722,6 @@ class ToriiStatusPayload:
     time_since_last_block_ms: int
     time_since_last_non_empty_block_ms: int
     commit_time_ms: int
-    da_reschedule_total: int
     txs_approved: int
     txs_rejected: int
     view_changes: int
@@ -11170,9 +10852,14 @@ class ToriiStatusPayload:
 
             proposals = GovernanceProposalSnapshot(
                 proposed=_coerce_nested_int(proposals_payload, "proposed", "governance.proposals"),
-                approved=_coerce_nested_int(proposals_payload, "approved", "governance.proposals"),
                 rejected=_coerce_nested_int(proposals_payload, "rejected", "governance.proposals"),
                 enacted=_coerce_nested_int(proposals_payload, "enacted", "governance.proposals"),
+                superseded=_coerce_nested_int(
+                    proposals_payload, "superseded", "governance.proposals"
+                ),
+                execution_failed=_coerce_nested_int(
+                    proposals_payload, "execution_failed", "governance.proposals"
+                ),
             )
             protected = GovernanceProtectedNamespaceSnapshot(
                 total_checks=_coerce_nested_int(
@@ -11429,7 +11116,6 @@ class ToriiStatusPayload:
             time_since_last_block_ms=_coerce_int("time_since_last_block_ms"),
             time_since_last_non_empty_block_ms=_coerce_int("time_since_last_non_empty_block_ms"),
             commit_time_ms=_coerce_int("commit_time_ms"),
-            da_reschedule_total=_coerce_int("da_reschedule_total"),
             txs_approved=_coerce_int("txs_approved"),
             txs_rejected=_coerce_int("txs_rejected"),
             view_changes=_coerce_int("view_changes"),
@@ -11983,11 +11669,6 @@ __all__ = [
     "NetworkTimeStatus",
     "NetworkTimeSample",
     "NetworkTimeRttBucket",
-    "OfflineActiveTransferVerifier",
-    "OfflineActiveTopUpShieldVerifier",
-    "OfflineActiveUnshieldVerifier",
-    "OfflineActiveRecursiveStepEqVerifier",
-    "OfflineActiveRecursiveStepEpVerifier",
     "OfflineStatus",
     "NodeCapabilities",
     "NodeAdminSnapshot",
@@ -12028,8 +11709,6 @@ __all__ = [
     "SubscriptionActionResult",
     "SumeragiEvidenceRecord",
     "SumeragiEvidenceListPage",
-    "SumeragiRbcEviction",
-    "SumeragiRbcStoreStatus",
     "SumeragiPrfStatus",
     "SumeragiStatusSnapshot",
     "SumeragiDiagnosticsSnapshot",
@@ -12078,6 +11757,30 @@ __all__ = [
     "RuntimeUpgradeListPage",
     "RuntimeInstruction",
     "RuntimeUpgradeActionResponse",
+    "GovernanceCanonicalObject",
+    "GovernanceManifestProvenance",
+    "GovernanceMusubiActionKind",
+    "GovernanceProposalDeployContract",
+    "GovernanceProposalKind",
+    "GovernanceProposalKindTag",
+    "GovernanceProposalMusubiRegistryGovernance",
+    "GovernanceProposalRecord",
+    "GovernanceProposalResult",
+    "GovernanceProposalRuntimeUpgrade",
+    "GovernanceProposalSccpRouteGovernance",
+    "GovernanceProposalSorafsProviderGovernance",
+    "GovernanceProposalStatus",
+    "GovernanceProposalValidationFeePayoutLifecycle",
+    "GovernanceProposalValidationFeePolicy",
+    "GovernanceRuntimeUpgradeManifest",
+    "GovernanceSccpRouteAction",
+    "GovernanceSccpRouteActionKind",
+    "GovernanceSorafsProviderAction",
+    "GovernanceSorafsProviderActionKind",
+    "GovernanceValidationFeeChargingMode",
+    "GovernanceValidationFeePayoutBinding",
+    "GovernanceValidationFeePayoutRecipient",
+    "GovernanceValidationFeePolicy",
     "MultisigResponse",
     "ToriiCanonicalRequestAuth",
     "canonical_query_string",
@@ -12158,7 +11861,6 @@ _ToriiClientGovernanceBallotMixin = create_torii_client_governance_ballot_mixin(
     require_exact_non_empty_string=_require_exact_non_empty_string,
     normalize_canonical_auth=_normalize_sorafs_reputation_canonical_auth,
     normalize_plain_ballot=_normalize_governance_plain_ballot_payload,
-    normalize_parliament_ballot=_normalize_governance_parliament_ballot_payload,
     normalize_zk_ballot_v1=_normalize_governance_zk_ballot_v1_payload,
     normalize_zk_ballot_proof_v1=_normalize_governance_zk_ballot_proof_payload,
 )
@@ -20419,50 +20121,26 @@ class ToriiClient(
 
     def governance_deploy_contract_proposal(
         self, payload: Mapping[str, Any], *, canonical_auth: ToriiCanonicalRequestAuth
-    ) -> Optional[Any]:
-        """POST a closed deploy proposal with optional public manifest provenance.
+    ) -> GovernanceProposalDraft:
+        """Draft one strict V1 deploy proposal with optional public provenance.
 
         The retired opaque ``limits`` field and private-key material are rejected
-        before dispatch.
+        before dispatch. The response is accepted only when it contains the exact
+        proposal id and one canonical ``ProposeDeployContract`` instruction.
         """
 
-        return self._account_request_json(
-            "POST",
-            "/v1/gov/proposals/deploy-contract",
-            canonical_auth=canonical_auth,
-            json_body=_normalize_governance_deploy_contract_payload(
-                payload,
-                context="governance deploy-contract proposal",
-            ),
+        normalized = _normalize_governance_deploy_contract_payload(
+            payload,
             context="governance deploy-contract proposal",
         )
-
-    def governance_finalize_referendum(self, payload: Mapping[str, Any]) -> Optional[Any]:
-        """POST `/v1/gov/finalize`."""
-
-        return self.request_json(
-            "POST",
-            "/v1/gov/finalize",
-            json_body=_normalize_governance_finalize_payload(
-                payload,
-                context="governance finalize referendum",
-            ),
-        )
-
-    def governance_enact_proposal(
-        self, payload: Mapping[str, Any], *, canonical_auth: ToriiCanonicalRequestAuth
-    ) -> Optional[Any]:
-        """POST `/v1/gov/enact` with only the canonical proposal fingerprint."""
-
-        return self._account_request_json(
-            "POST",
-            "/v1/gov/enact",
+        return self.propose_contract_deploy(
             canonical_auth=canonical_auth,
-            json_body=_normalize_governance_enact_payload(
-                payload,
-                context="governance enact proposal",
-            ),
-            context="governance enact proposal",
+            contract_address=normalized.get("contract_address"),
+            contract_alias=normalized.get("contract_alias"),
+            abi_version=normalized["abi_version"],
+            code_hash=normalized["code_hash"],
+            abi_hash=normalized["abi_hash"],
+            manifest_provenance=normalized.get("manifest_provenance"),
         )
 
     def get_governance_proposal(

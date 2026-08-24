@@ -84,7 +84,7 @@ import org.hyperledger.iroha.android.client.transport.TransportRequest;
 import org.hyperledger.iroha.android.client.transport.TransportResponse;
 
 public final class HttpClientTransportTests {
-  private static final String VPN_HELPER_TICKET_HEX = "5356504e48543100" + "00".repeat(688);
+  private static final String VPN_HELPER_TICKET_HEX = "5356504e48543100" + "00".repeat(780);
   private static final String VALID_ED25519_PUBLIC_KEY_HEX = TestEd25519Keys.publicKeyHex(0x22);
   private static final String ED25519_IDENTITY_KEY_HEX = "01" + "00".repeat(31);
   private static final NetworkId OTHER_NETWORK_ID =
@@ -135,6 +135,7 @@ public final class HttpClientTransportTests {
     ramLfeResponseParsersRejectNonExactFields();
     HttpClientTransportVpnParserTests.runAll();
     vpnQuoteRequestSignsCanonicalBodyAndParsesOpenLeaseInstruction();
+    vpnSessionIdNormalizerAccepts16BytesAndRejects32Bytes();
     ed25519KeyRoutesRejectSmallOrderIdentityPoint();
     feeQuoteRequestSignsExactUnsignedPayloadAndPreservesPayer();
     feePaymentJsonRequiresExplicitNullableGasLimit();
@@ -157,6 +158,7 @@ public final class HttpClientTransportTests {
     proposeMultisigRequestParsesResponse();
     proposeMultisigRejectsAdversarialRequestShapes();
     multisigResponseParserRejectsMalformedFields();
+    multisigResponseParserBindsAbi22DraftFields();
     callContractRejectsAmbiguousTarget();
     governanceContractRequestParsesResponse();
     resolveAccountAliasRequestParsesResponse();
@@ -2260,6 +2262,20 @@ public final class HttpClientTransportTests {
     assertCanonicalSignature(request, keyPair.getPublic(), 1_700_000_000_000L, "vpn-nonce-1");
   }
 
+  private static void vpnSessionIdNormalizerAccepts16BytesAndRejects32Bytes() {
+    final String sessionId = "ab".repeat(16);
+    assert sessionId.equals(
+            HttpClientTransport.normalizeHex16(
+                "0X" + sessionId.toUpperCase(Locale.ROOT), "sessionId"))
+        : "VPN session ids must normalize as 16-byte hex";
+    try {
+      HttpClientTransport.normalizeHex16("ab".repeat(32), "sessionId");
+      assert false : "VPN session ids must reject 32-byte values";
+    } catch (final IllegalArgumentException expected) {
+      // Expected.
+    }
+  }
+
   private static void ed25519KeyRoutesRejectSmallOrderIdentityPoint() {
     expectIllegalArgument(
         () ->
@@ -2506,17 +2522,21 @@ public final class HttpClientTransportTests {
   }
 
   private static void vpnSessionAndReceiptRequestsUseNativeLeaseDtos() throws Exception {
-    final String sessionId = "33".repeat(32);
+    final String sessionId = "33".repeat(16);
+    final String quoteId = "34".repeat(32);
+    final String leaseId = "35".repeat(32);
     final String paymentTxHash = "44".repeat(32);
     final String meteringKey = VALID_ED25519_PUBLIC_KEY_HEX;
-    final String settledReceipt = vpnReceiptJson(sessionId, paymentTxHash, true);
+    final String settledReceipt =
+        vpnReceiptJson(sessionId, quoteId, leaseId, paymentTxHash, true);
+    final String pendingReceipt =
+        settledReceipt.replace("\"status\":\"settled\"", "\"status\":\"settlement_pending\"");
     final QueueResponseExecutor executor =
         new QueueResponseExecutor(
             List.of(
-                new QueuedResponse(201, vpnSessionJson(sessionId, paymentTxHash)),
-                new QueuedResponse(200, vpnSessionJson(sessionId, paymentTxHash)),
-                new QueuedResponse(200, vpnReceiptJson(sessionId, paymentTxHash, false)),
-                new QueuedResponse(201, settledReceipt),
+                new QueuedResponse(201, vpnSessionJson(sessionId, quoteId, paymentTxHash)),
+                new QueuedResponse(200, vpnSessionJson(sessionId, quoteId, paymentTxHash)),
+                new QueuedResponse(201, pendingReceipt),
                 new QueuedResponse(200, "{\"items\":[" + settledReceipt + "],\"total\":1}")));
     final KeyPair keyPair = KeyPairGenerator.getInstance("Ed25519").generateKeyPair();
     final ToriiCanonicalRequestAuth auth =
@@ -2529,31 +2549,32 @@ public final class HttpClientTransportTests {
     final VpnSession session =
         transport
             .createVpnSession(
-                new VpnSessionCreateRequest("standard", sessionId, "0x" + paymentTxHash, meteringKey),
+                new VpnSessionCreateRequest("standard", quoteId, "0x" + paymentTxHash, meteringKey),
                 auth)
             .join();
     final Optional<VpnSession> fetched = transport.getVpnSession(sessionId, auth).join();
-    final Optional<VpnReceipt> deleted = transport.deleteVpnSession("0x" + sessionId, auth).join();
     final VpnReceipt submitted =
         transport
-            .submitVpnReceipt(new VpnReceiptSubmitRequest("0xCAFE", "BEEF", "0x" + sessionId), auth)
+            .submitVpnReceipt(new VpnReceiptSubmitRequest("0xCAFE", "BEEF", "0x" + leaseId), auth)
             .join();
     final VpnReceiptListResponse receipts = transport.listVpnReceipts(auth).join();
 
     assert sessionId.equals(session.sessionId()) : "VPN session id mismatch";
     assert VPN_HELPER_TICKET_HEX.equals(session.helperTicketHex()) : "VPN helper ticket length mismatch";
-    assert session.helperTicketHex().length() == 1392 : "VPN helper ticket must be 696 bytes";
+    assert session.helperTicketHex().length() == 1576 : "VPN helper ticket must be 788 bytes";
     assert fetched.isPresent() : "VPN session lookup should be present";
-    assert deleted.isPresent() : "VPN delete receipt should be present";
-    assert "disconnected".equals(deleted.get().status()) : "VPN delete status mismatch";
-    assert "settled".equals(submitted.status()) : "VPN settled receipt status mismatch";
+    assert "settlement_pending".equals(submitted.status())
+        : "VPN pending settlement receipt status mismatch";
     assert "750000.125".equals(submitted.earnedFee()) : "VPN earned fee mismatch";
     assert "250000.125".equals(submitted.refundedFee()) : "VPN refund mismatch";
-    assert submitted.settleLeaseInstruction() != null : "VPN settled receipt must include settle instruction";
+    assert submitted.settleLeaseInstruction() != null
+        : "VPN pending receipt must include settle instruction";
     assert "iroha_data_model::isi::vpn::SettleVpnLease"
         .equals(submitted.settleLeaseInstruction().wireId()) : "VPN settle wire id mismatch";
     assert receipts.total() == 1L : "VPN receipt list total mismatch";
-    assert sessionId.equals(receipts.items().get(0).leaseIdHex()) : "VPN receipt lease id mismatch";
+    assert leaseId.equals(receipts.items().get(0).leaseIdHex()) : "VPN receipt lease id mismatch";
+    assert "settled".equals(receipts.items().get(0).status())
+        : "VPN committed receipt status mismatch";
 
     assert readBody(executor.requests().get(0))
         .equals(
@@ -2562,21 +2583,20 @@ public final class HttpClientTransportTests {
                 + "\",\"payment_tx_hash\":\""
                 + paymentTxHash
                 + "\",\"quote_id\":\""
-                + sessionId
+                + quoteId
                 + "\"}")
         : "VPN session create body mismatch";
     assert "GET".equals(executor.requests().get(1).method()) : "VPN session lookup method mismatch";
     assert executor.requests().get(1).uri().toString()
         .equals("https://torii.example/v1/vpn/sessions/" + sessionId)
         : "VPN session lookup URI mismatch";
-    assert "DELETE".equals(executor.requests().get(2).method()) : "VPN delete method mismatch";
-    assert readBody(executor.requests().get(3))
+    assert readBody(executor.requests().get(2))
         .equals(
             "{\"client_voucher_hex\":\"beef\",\"lease_id_hex\":\""
-                + sessionId
+                + leaseId
                 + "\",\"relay_receipt_hex\":\"cafe\"}")
         : "VPN receipt submit body mismatch";
-    assert executor.requests().get(4).uri().toString().equals("https://torii.example/v1/vpn/receipts")
+    assert executor.requests().get(3).uri().toString().equals("https://torii.example/v1/vpn/receipts")
         : "VPN receipt list URI mismatch";
   }
 
@@ -3087,7 +3107,8 @@ public final class HttpClientTransportTests {
   private static void callContractRequestParsesResponse() {
     final String contractAddress =
         "irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw";
-    final byte[] transactionPayload = transactionWithPayload((byte) 0x07).encodedPayload();
+    final byte[] transactionPayload =
+        transactionWithPayload((byte) 0x07, 1_712_345_678_901L, 5_000L).encodedPayload();
     final String transactionPayloadB64 = Base64.getEncoder().encodeToString(transactionPayload);
     final String signingMessageB64 = Base64.getEncoder().encodeToString(IrohaHash.prehash(transactionPayload));
     final StubResponseExecutor executor =
@@ -3252,7 +3273,9 @@ public final class HttpClientTransportTests {
     final byte[] instructionBytes = new byte[] {1, 2, 3, 4};
     final String proposalId = "aa".repeat(32);
     final String multisigAccountId = TestAccountIds.ed25519Authority(0x37);
-    final byte[] transactionPayload = transactionWithPayload((byte) 0x08).encodedPayload();
+    final long creationTimeMs = 1_700_000_000_008L;
+    final byte[] transactionPayload =
+        transactionWithPayload((byte) 0x08, creationTimeMs, 1L).encodedPayload();
     final String transactionPayloadB64 = Base64.getEncoder().encodeToString(transactionPayload);
     final String signingMessageB64 = Base64.getEncoder().encodeToString(IrohaHash.prehash(transactionPayload));
     final StubResponseExecutor executor =
@@ -3272,7 +3295,9 @@ public final class HttpClientTransportTests {
                     + "\","
                     + "\"tx_hash_hex\":null,"
                     + "\"executed_tx_hash_hex\":null,"
-                    + "\"creation_time_ms\":123,"
+                    + "\"creation_time_ms\":" + creationTimeMs + ","
+                    + "\"fee_payment\":{\"payer\":\"authority\","
+                    + "\"value\":{\"charge_limits\":[],\"gas_limit\":1}},"
                     + "\"transaction_payload_b64\":\"" + transactionPayloadB64 + "\","
                     + "\"signing_message_b64\":\""
                     + signingMessageB64
@@ -3287,13 +3312,13 @@ public final class HttpClientTransportTests {
     final MultisigResponse response =
         transport
             .proposeMultisig(
-                MultisigProposeRequest.builder().setFeePayment(org.hyperledger.iroha.android.model.FeePaymentIntent.authority(java.util.Collections.emptyList()))
+                MultisigProposeRequest.builder().setFeePayment(org.hyperledger.iroha.android.model.FeePaymentIntent.authority(java.util.Collections.emptyList(), 1L))
                     .setMultisigAccountAlias("cbdc@banka")
                     .setSignerAccountId("alice")
                     .addInstructionBytes(instructionBytes)
                     .setPublicKeyHex(
                         "0X" + VALID_ED25519_PUBLIC_KEY_HEX.toUpperCase(Locale.ROOT))
-                    .setCreationTimeMs(123L)
+                    .setCreationTimeMs(creationTimeMs)
                     .setMemo("QR invoice 42")
                     .setValidationFeePolicyVersion(7L)
                     .setValidationFeePolicyHash("AB".repeat(32))
@@ -3307,6 +3332,11 @@ public final class HttpClientTransportTests {
         : "resolved multisig account mismatch";
     assert Boolean.FALSE.equals(response.submitted()) : "submitted mismatch";
     assert proposalId.equals(response.instructionsHash()) : "instructions_hash mismatch";
+    assert response.feePayment().equals(
+        org.hyperledger.iroha.android.model.FeePaymentIntent.authority(
+            java.util.Collections.emptyList(), 1L)) : "fee_payment mismatch";
+    assert Long.valueOf(creationTimeMs).equals(response.creationTimeMs())
+        : "creation_time_ms mismatch";
     assert transactionPayloadB64.equals(response.transactionPayloadB64()) : "transaction_payload_b64 mismatch";
     assert signingMessageB64.equals(response.signingMessageB64())
         : "signing_message_b64 mismatch";
@@ -3336,7 +3366,7 @@ public final class HttpClientTransportTests {
         : "validation_fee_instruction_index mismatch";
     assert "2".equals(payload.get("validation_fee_transfer_entry_index"))
         : "validation_fee_transfer_entry_index mismatch";
-    assert Long.valueOf(123L).equals(((Number) payload.get("creation_time_ms")).longValue())
+    assert Long.valueOf(creationTimeMs).equals(((Number) payload.get("creation_time_ms")).longValue())
         : "creation_time_ms mismatch";
     @SuppressWarnings("unchecked")
     final List<String> instructions = (List<String>) payload.get("instructions");
@@ -3611,6 +3641,52 @@ public final class HttpClientTransportTests {
                         + "\"creation_time_ms\":-1}")
                     .getBytes(StandardCharsets.UTF_8)),
         "negative creation time must be rejected");
+  }
+
+  private static void multisigResponseParserBindsAbi22DraftFields() {
+    final String multisigAccountId = TestAccountIds.ed25519Authority(0x37);
+    final long creationTimeMs = 1_700_000_000_009L;
+    final byte[] transactionPayload =
+        transactionWithPayload((byte) 0x09, creationTimeMs, 1L).encodedPayload();
+    final String transactionPayloadB64 =
+        Base64.getEncoder().encodeToString(transactionPayload);
+    final String signingMessageB64 =
+        Base64.getEncoder().encodeToString(IrohaHash.prehash(transactionPayload));
+    final String valid =
+        "{"
+            + "\"ok\":true,"
+            + "\"resolved_multisig_account_id\":\"" + multisigAccountId + "\","
+            + "\"submitted\":false,"
+            + "\"tx_hash_hex\":null,"
+            + "\"executed_tx_hash_hex\":null,"
+            + "\"creation_time_ms\":" + creationTimeMs + ","
+            + "\"fee_payment\":{\"payer\":\"authority\","
+            + "\"value\":{\"charge_limits\":[],\"gas_limit\":1}},"
+            + "\"transaction_payload_b64\":\"" + transactionPayloadB64 + "\","
+            + "\"signing_message_b64\":\"" + signingMessageB64 + "\"}";
+
+    final MultisigResponse parsed =
+        ContractJsonParser.parseMultisigResponse(valid.getBytes(StandardCharsets.UTF_8));
+    assert parsed.feePayment().equals(FeePaymentIntent.authority(Collections.emptyList(), 1L))
+        : "fee_payment must be returned";
+    assert Long.valueOf(creationTimeMs).equals(parsed.creationTimeMs())
+        : "creation_time_ms must be returned";
+
+    for (final String tampered :
+        List.of(
+            valid.replace("\"gas_limit\":1", "\"gas_limit\":2"),
+            valid.replace(
+                "\"creation_time_ms\":" + creationTimeMs,
+                "\"creation_time_ms\":" + (creationTimeMs + 1L)),
+            valid.replace(
+                "\"executed_tx_hash_hex\":null",
+                "\"executed_tx_hash_hex\":\"" + "ab".repeat(32) + "\""),
+            valid.replace("\"fee_payment\"", "\"retired_fee_payment\""))) {
+      expectRuntimeException(
+          () -> ContractJsonParser.parseMultisigResponse(
+              tampered.getBytes(StandardCharsets.UTF_8)),
+          "ABI-22 multisig draft field tampering must be rejected");
+    }
   }
 
   private static void callContractRejectsAmbiguousTarget() {
@@ -5964,7 +6040,8 @@ public final class HttpClientTransportTests {
         + "}";
   }
 
-  static String vpnSessionJson(final String sessionId, final String paymentTxHash) {
+  static String vpnSessionJson(
+      final String sessionId, final String quoteId, final String paymentTxHash) {
     return "{"
         + "\"session_id\":\""
         + sessionId
@@ -5976,9 +6053,9 @@ public final class HttpClientTransportTests {
         + "\"connected_at_ms\":1700000000000,"
         + "\"meter_family\":\"soranet.vpn.standard\","
         + "\"quote_id\":\""
-        + sessionId
+        + quoteId
         + "\",\"payment_reference\":\""
-        + sessionId
+        + quoteId
         + "\",\"payment_tx_hash\":\""
         + paymentTxHash
         + "\",\"fee_asset_id\":\"xor#universal.universal\","
@@ -6017,7 +6094,11 @@ public final class HttpClientTransportTests {
   }
 
   static String vpnReceiptJson(
-      final String sessionId, final String paymentTxHash, final boolean settled) {
+      final String sessionId,
+      final String quoteId,
+      final String leaseId,
+      final String paymentTxHash,
+      final boolean settled) {
     final String status = settled ? "settled" : "disconnected";
     final String source = settled ? "relay" : "torii";
     final String earned = settled ? "750000.125" : "0";
@@ -6045,7 +6126,7 @@ public final class HttpClientTransportTests {
         + "\",\"receipt_source\":\""
         + source
         + "\",\"quote_id\":\""
-        + sessionId
+        + quoteId
         + "\",\"payment_tx_hash\":\""
         + paymentTxHash
         + "\",\"fee_asset_id\":\"xor#universal.universal\","
@@ -6057,7 +6138,7 @@ public final class HttpClientTransportTests {
         + "\",\"refunded_fee\":\""
         + refunded
         + "\",\"lease_id_hex\":\""
-        + sessionId
+        + leaseId
         + "\""
         + settlement
         + "}";
@@ -6277,19 +6358,25 @@ public final class HttpClientTransportTests {
   private static int aliasCounter = 0;
 
   private static SignedTransaction transactionWithPayload(final byte fillValue) {
+    return transactionWithPayload(
+        fillValue, 1_700_000_000_000L + (fillValue & 0xFF), 1L);
+  }
+
+  private static SignedTransaction transactionWithPayload(
+      final byte fillValue, final long creationTimeMs, final Long gasLimit) {
     final byte[] signature = new byte[64];
     final byte[] publicKey = new byte[32];
     java.util.Arrays.fill(signature, (byte) (fillValue + 1));
     java.util.Arrays.fill(publicKey, (byte) (fillValue + 2));
     final TransactionPayload payload =
-        TransactionPayload.builder().setFeePayment(org.hyperledger.iroha.android.model.FeePaymentIntent.authority(java.util.Collections.emptyList(), 1L))
+        TransactionPayload.builder().setFeePayment(org.hyperledger.iroha.android.model.FeePaymentIntent.authority(java.util.Collections.emptyList(), gasLimit))
             .setNetworkId(TestNetworkIds.fromSeed(fillValue & 0xffL))
             .setAuthority(TestAccountIds.ed25519Authority(0x26))
-            .setCreationTimeMs(1_700_000_000_000L + (fillValue & 0xFF))
+            .setCreationTimeMs(creationTimeMs)
             .setInstructionBytes(new byte[] {fillValue, (byte) (fillValue + 1)})
             .setTimeToLiveMs(5_000L)
             .setNonce(fillValue & 0xFF)
-            .setAdmissionIntent(TransactionAdmissionIntent.QUEUE_PLAN_SYNCED)
+            .setAdmissionIntent(TransactionAdmissionIntent.ORDINARY)
             .setMetadata(Map.of("note", "txn-" + fillValue))
             .build();
     final NoritoJavaCodecAdapter codec = new NoritoJavaCodecAdapter(org.hyperledger.iroha.android.address.AccountAddress.DEFAULT_I105_DISCRIMINANT);

@@ -116,13 +116,13 @@ class IrohaPeerTransportV1Test {
     }
 
     @Test
-    fun `Kagemusha adapter requires bridge ABI 22 and roundtrips exact bytes`() {
+    fun `Kagemusha adapter requires bridge ABI 23 and roundtrips exact bytes`() {
         assertEquals(0x0102, IrohaPeerKagemushaAdapterV1.NATIVE_ARCHIVE_SCHEMA_VERSION)
         val archive = portableOfferFixture()
         val nativeAvailable = KagemushaRecursiveSpendProver.isArtifactStreamingAvailable()
         assertTrue(
             nativeAvailable,
-            "A freshly built connect_norito_bridge ABI 22 artifact-streaming library is required",
+            "A freshly built connect_norito_bridge ABI 23 artifact-streaming library is required",
         )
 
         val typed = KagemushaPeerPayload.decode(

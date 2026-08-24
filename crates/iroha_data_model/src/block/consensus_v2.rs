@@ -11,6 +11,7 @@ use crate::{
     NetworkId,
     account::AccountId,
     block::consensus::LaneBlockCommitment,
+    consensus::GlobalThresholdBeaconPartialSignatureV1,
     merge::MergeLedgerEntry,
     nexus::{DataSpaceId, LaneFinalityStatement, LaneId, PublicLaneValidatorRecord},
     peer::PeerId,
@@ -2494,6 +2495,47 @@ pub struct VrfReveal {
     /// Signature over the canonical `NPoS` `VRF`-reveal preimage.
     pub bls_sig: Vec<u8>,
 }
+/// One adaptive threshold-beacon signature share for an exact consensus round.
+///
+/// The outer authenticated transport sender must be the validator occupying
+/// the one-based DKG seat named by [`GlobalThresholdBeaconPartialSignatureV1::signer_index`].
+/// The representation proof inside `partial` additionally binds the share to
+/// the active public DKG session and the fixed pulse-slot payload reconstructed
+/// from the height and finalized parent anchor. The outer consensus view only
+/// routes retries; it is not included in the threshold-signed payload.
+#[derive(Clone, Debug, PartialEq, Eq, Decode, Encode, IntoSchema)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[norito(deny_unknown_fields)]
+pub struct GlobalBeaconPartialSignature {
+    /// Exact active height context and view whose candidate will carry the pulse.
+    pub round: ConsensusRound,
+    /// Proof-carrying adaptive threshold-BLS signature share.
+    pub partial: GlobalThresholdBeaconPartialSignatureV1,
+}
+
+impl GlobalBeaconPartialSignature {
+    /// Validate the round and one-based DKG signer seat against a frozen context.
+    ///
+    /// Cryptographic proof verification is deliberately performed by the
+    /// threshold-beacon reducer after it reconstructs the exact pulse payload.
+    ///
+    /// # Errors
+    ///
+    /// Returns a structural validation error for another height context or an
+    /// out-of-range signer seat.
+    pub fn validate(&self, context: &HeightContext) -> Result<(), ValidationError> {
+        validate_round(self.round, context)?;
+        let zero_based = self
+            .partial
+            .signer_index
+            .checked_sub(1)
+            .ok_or(ValidationError::SignerOutOfRange)?;
+        if usize::from(zero_based) >= context.roster.len() {
+            return Err(ValidationError::SignerOutOfRange);
+        }
+        Ok(())
+    }
+}
 /// Payload variants accepted by the Sumeragi v2 network envelope.
 #[expect(
     clippy::large_enum_variant,
@@ -2534,6 +2576,8 @@ pub enum ConsensusMessageV2Payload {
     VrfCommit(VrfCommit),
     /// `NPoS` epoch-randomness reveal.
     VrfReveal(VrfReveal),
+    /// Adaptive global threshold-beacon share for one exact height and view.
+    GlobalBeaconPartialSignature(GlobalBeaconPartialSignature),
 }
 /// Explicitly versioned Sumeragi v2 network envelope.
 #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode, IntoSchema)]

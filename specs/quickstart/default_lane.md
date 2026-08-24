@@ -152,7 +152,7 @@ Set `--max-headroom-events 0` to ensure the scheduler’s headroom telemetry has
 load-shedding events, and use `--max-slot-p95/--max-slot-p99` (plus `--min-slot-samples`) to keep
 the NX-18 slot-duration SLO enforced before you expose the default lane to production traffic.
 
-For air-gapped rehearsals you can pass `--status-file` / `--metrics-file` and
+For air-gapped rehearsals you can pass `--lifecycle-file` / `--metrics-file` and
 reuse the recorded fixtures in `fixtures/nexus/lanes/`. The helper exits
 non-zero when the scheduler gauges or lane governance snapshots don’t line up
 with the catalog, making it ideal for gating CI.
@@ -162,7 +162,7 @@ event so auditors can trace the relabel: `journalctl -u irohad -o json |
 jq 'select(.msg=="nexus.lane.topology")'`. The payload includes the old/new
 aliases and slugs, proving Kura and the tiered-state backend moved the storage
 directories onto the canonical slug. Feed that NDJSON log into
-`scripts/nexus_lane_smoke.py --from-telemetry telemetry.ndjson` (optionally with
+`scripts/nexus_lane_smoke.py --telemetry-file telemetry.ndjson` (optionally with
 `--require-alias-migration old:new`) to prove the rename event was recorded in
 the automation-friendly evidence bundle.
 

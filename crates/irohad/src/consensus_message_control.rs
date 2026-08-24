@@ -91,6 +91,7 @@ enum MessageKind {
     CommitCertificateResponse,
     VrfCommit,
     VrfReveal,
+    GlobalBeaconPartialSignature,
 }
 impl MessageKind {
     fn parse(value: &Value) -> Result<Self, ControlError> {
@@ -116,6 +117,7 @@ impl MessageKind {
             "commit_certificate_response" => Ok(Self::CommitCertificateResponse),
             "vrf_commit" => Ok(Self::VrfCommit),
             "vrf_reveal" => Ok(Self::VrfReveal),
+            "global_beacon_partial_signature" => Ok(Self::GlobalBeaconPartialSignature),
             _ => Err(ControlError::InvalidField("kind")),
         }
     }
@@ -136,6 +138,7 @@ impl MessageKind {
             Self::CommitCertificateResponse => "commit_certificate_response",
             Self::VrfCommit => "vrf_commit",
             Self::VrfReveal => "vrf_reveal",
+            Self::GlobalBeaconPartialSignature => "global_beacon_partial_signature",
         }
     }
 }
@@ -1592,6 +1595,14 @@ fn message_meta(
                 Some(value.signer),
                 Vec::new(),
             ),
+            ConsensusMessageV2Payload::GlobalBeaconPartialSignature(value) => (
+                MessageKind::GlobalBeaconPartialSignature,
+                Some(value.round),
+                None,
+                None,
+                value.partial.signer_index.checked_sub(1).map(u32::from),
+                Vec::new(),
+            ),
         };
     let cited_responder = match &message.payload {
         ConsensusMessageV2Payload::CertifiedBodyResponse(value) => Some(value.responder),
@@ -1716,6 +1727,14 @@ fn validate_message_meta(meta: &MessageMeta) -> Result<(), ControlError> {
         MessageKind::VrfCommit | MessageKind::VrfReveal => {
             meta.height.is_none()
                 && meta.view.is_none()
+                && has_no_subject_or_execution
+                && has_single_signer
+                && !has_certificate_signers
+                && !has_manifest_hash
+                && !has_chunk_index
+        }
+        MessageKind::GlobalBeaconPartialSignature => {
+            has_round
                 && has_no_subject_or_execution
                 && has_single_signer
                 && !has_certificate_signers
@@ -2148,6 +2167,9 @@ mod tests {
             ),
             MessageKind::PayloadChunk | MessageKind::VrfCommit | MessageKind::VrfReveal => {
                 (None, None, None, None, Some(0), None, Vec::new())
+            }
+            MessageKind::GlobalBeaconPartialSignature => {
+                (Some(9), Some(2), None, None, Some(0), None, Vec::new())
             }
             MessageKind::CertifiedBodyResponse => (
                 Some(9),
@@ -2745,6 +2767,7 @@ mod tests {
             MessageKind::CommitCertificateResponse,
             MessageKind::VrfCommit,
             MessageKind::VrfReveal,
+            MessageKind::GlobalBeaconPartialSignature,
         ] {
             let meta = valid_meta(kind);
             validate_message_meta(&meta)

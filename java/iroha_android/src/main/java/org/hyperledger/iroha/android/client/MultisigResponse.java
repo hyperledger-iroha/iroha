@@ -1,5 +1,8 @@
 package org.hyperledger.iroha.android.client;
 
+import java.util.Objects;
+import org.hyperledger.iroha.android.model.FeePaymentIntent;
+
 /** Response emitted by Torii multisig participation endpoints. */
 public final class MultisigResponse {
   private final boolean ok;
@@ -10,6 +13,7 @@ public final class MultisigResponse {
   private final String txHashHex;
   private final String executedTxHashHex;
   private final Long creationTimeMs;
+  private final FeePaymentIntent feePayment;
   private final String transactionPayloadB64;
   private final String signingMessageB64;
 
@@ -22,6 +26,7 @@ public final class MultisigResponse {
       final String txHashHex,
       final String executedTxHashHex,
       final Long creationTimeMs,
+      final FeePaymentIntent feePayment,
       final String transactionPayloadB64,
       final String signingMessageB64) {
     this.ok = ok;
@@ -32,6 +37,7 @@ public final class MultisigResponse {
     this.txHashHex = txHashHex;
     this.executedTxHashHex = executedTxHashHex;
     this.creationTimeMs = creationTimeMs;
+    this.feePayment = Objects.requireNonNull(feePayment, "feePayment");
     this.transactionPayloadB64 = transactionPayloadB64;
     this.signingMessageB64 = signingMessageB64;
   }
@@ -44,6 +50,7 @@ public final class MultisigResponse {
   public String txHashHex() { return txHashHex; }
   public String executedTxHashHex() { return executedTxHashHex; }
   public Long creationTimeMs() { return creationTimeMs; }
+  public FeePaymentIntent feePayment() { return feePayment; }
   public String transactionPayloadB64() { return transactionPayloadB64; }
   public String signingMessageB64() { return signingMessageB64; }
 }

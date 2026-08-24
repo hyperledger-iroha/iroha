@@ -58,9 +58,9 @@ for the content and peer GET operations:
 - `GET /routing/v1/providers/{cid}` accepts a canonical SoraFS CIDv1 encoded
   as lowercase base32, base36, or base58btc multibase. Other layouts,
   including identity-multihash content CIDs, return `422`.
-- `GET /routing/v1/peers/{peer_id}` accepts canonical libp2p peer IDs in legacy
-  Base58btc or CIDv1 `libp2p-key` base32/base36 form. Responses normalize IDs
-  to CIDv1 base32.
+- `GET /routing/v1/peers/{peer_id}` accepts only the canonical lowercase
+  base32 CIDv1 `libp2p-key` form. Legacy Base58btc, base36, uppercase, and
+  otherwise non-canonical spellings return `422` without normalization.
 - `filter-addrs` supports case-insensitive positive OR filters, `!` negative
   AND filters, and the special `unknown` value. Address filtering changes only
   `Addrs`; a record with no surviving address is omitted.

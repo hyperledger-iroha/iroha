@@ -2,17 +2,21 @@
 mod audit;
 mod council;
 mod deploy;
+mod parliament;
 mod shared;
 mod vote;
-pub(crate) use shared::parse_governance_selector_v1;
 use self::council::CouncilArgs;
 use crate::{Run, RunContext};
-use eyre::Result;
 pub use audit::AuditDeployArgs;
 pub use deploy::{
-    DeployMetaArgs, EnactArgs, FinalizeArgs, ProposeDeployArgs, ProtectedApplyArgs,
-    ProtectedGetArgs, ProtectedSetArgs,
+    DeployMetaArgs, ProposeDeployArgs, ProtectedApplyArgs, ProtectedGetArgs, ProtectedSetArgs,
 };
+use eyre::Result;
+pub use parliament::{
+    DraftAttemptArgs, DraftTransitionArgs, FinalizeOpenedBallotArgs, GetAttemptArgs,
+    ParliamentCommand,
+};
+pub(crate) use shared::parse_governance_selector_v1;
 pub use vote::{
     LocksGetArgs, ProposalGetArgs, ReferendumGetArgs, TallyGetArgs, UnlockStatsArgs, VoteArgs,
 };
@@ -21,7 +25,7 @@ pub enum Command {
     /// Deployment helpers (propose/meta/audit). Propose deployment of IVM bytecode.
     #[command(subcommand)]
     Deploy(DeployCommand),
-    /// Submit a governance ballot; auto-detects referendum mode unless overridden
+    /// Submit a standalone referendum ballot; auto-detects its mode unless overridden.
     Vote(VoteArgs),
     /// Proposal helpers
     #[command(subcommand)]
@@ -40,13 +44,12 @@ pub enum Command {
     /// Tally helpers
     #[command(subcommand)]
     Tally(TallyCommand),
-    /// Build a finalize transaction for a referendum (server returns instruction skeleton)
-    Finalize(FinalizeArgs),
-    /// Build an enactment transaction for an approved proposal
-    Enact(EnactArgs),
     /// Protected namespace helpers
     #[command(subcommand)]
     Protected(ProtectedCommand),
+    /// Attempt-based private SORA Parliament helpers.
+    #[command(subcommand)]
+    Parliament(ParliamentCommand),
 }
 impl Run for Command {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
@@ -59,9 +62,8 @@ impl Run for Command {
             Command::Unlock(cmd) => cmd.run(context),
             Command::Referendum(cmd) => cmd.run(context),
             Command::Tally(cmd) => cmd.run(context),
-            Command::Finalize(args) => args.run(context),
-            Command::Enact(args) => args.run(context),
             Command::Protected(cmd) => cmd.run(context),
+            Command::Parliament(cmd) => cmd.run(context),
         }
     }
 }
@@ -159,5 +161,37 @@ impl Run for ProtectedCommand {
             ProtectedCommand::Apply(args) => args.run(context),
             ProtectedCommand::Get(args) => args.run(context),
         }
+    }
+}
+
+#[cfg(test)]
+mod cutover_tests {
+    use super::Command;
+    use clap::Parser as _;
+
+    #[derive(clap::Parser, Debug)]
+    struct GovernanceCommandFixture {
+        #[command(subcommand)]
+        command: Command,
+    }
+
+    #[test]
+    fn proposal_backed_finalize_and_enact_commands_are_retired() {
+        for command in ["finalize", "enact"] {
+            let error = GovernanceCommandFixture::try_parse_from(["gov", command])
+                .expect_err("legacy governance command must not parse");
+            assert_eq!(error.kind(), clap::error::ErrorKind::InvalidSubcommand);
+        }
+    }
+
+    #[test]
+    fn standalone_referendum_vote_command_remains_reachable() {
+        GovernanceCommandFixture::try_parse_from([
+            "gov",
+            "vote",
+            "--referendum-id",
+            "standalone-ref",
+        ])
+        .expect("standalone referendum vote command must remain registered");
     }
 }

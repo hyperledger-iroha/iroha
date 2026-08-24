@@ -83,12 +83,6 @@ metadata files are the inventory root and therefore are not self-listed.
 
 ## Required input inventory
 
-`offline_readiness_v4` below is a legacy bundle-v1 inventory name. Its payload
-is a fixture-owned, asset-specific operation-release projection used only by
-the acceptance harness. It is not validator readiness, does not enable offline
-support, and does not enroll an asset or dataspace. Renaming the inventory kind
-or file requires a future bundle-version bump.
-
 | Kind | Path | Secret |
 |---|---|---:|
 | `release_manifest_v4` | `release/manifest-v4.norito` | no |
@@ -98,7 +92,6 @@ or file requires a future bundle-version bump.
 | `cryptographic_review_v4` | `release/cryptographic-review-v4.norito` | no |
 | `promotion_record_v4` | `release/promotion-record-v4.norito` | no |
 | `topup_finality_roster_v2` | `release/topup-finality-roster-v2.norito` | no |
-| `offline_readiness_v4` | `release/offline-readiness-v4.norito` | no |
 | `recursive_step_eq_params_ipa_v4` | `release/artifacts/<manifest Eq params file_name>` | no |
 | `recursive_step_eq_proving_key_v4` | `release/artifacts/<manifest Eq proving-key file_name>` | no |
 | `recursive_step_eq_verifying_key_v4` | `release/artifacts/<manifest Eq verifying-key file_name>` | no |

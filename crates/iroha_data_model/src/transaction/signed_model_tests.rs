@@ -938,12 +938,12 @@ fn assert_canonical_privacy_intent_kat(
     );
     assert_eq!(
         normalized_bytes.len(),
-        50_201,
+        50_206,
         "the canonical fixture wire length is part of the cross-SDK KAT"
     );
     assert_eq!(
         hex::encode(expected.as_bytes()),
-        "72e54af5346fdba4d311f23bfcf6318b13a6d39a21e8bae5e8da661f1b31a170",
+        "b6fcc9f51d979881edf5e803fb48e628ac5a8bb95b742edf0957bd98160133e4",
         "canonical privacy transaction-intent V1 digest"
     );
 }
@@ -1246,7 +1246,7 @@ fn vega_intent_projection_zeroes_only_the_derived_hdev_and_breaks_its_cycle() {
         .expect("derive Vega draft intent");
     assert_eq!(
         hex::encode(expected.as_bytes()),
-        "6d058852d1270fccfea6fc72fcdf588043f563e9bb98a54fdd97df2374933384",
+        "855a4bf9e05cb7ccea44020ccc6cdbc1bea2ba9bb3a4a2e74d0a38abae84615b",
         "canonical Vega two-phase transaction-intent projection KAT"
     );
     let mut changed_hdev = payload.clone();
@@ -1420,13 +1420,28 @@ fn ivm_private_note_intent_projection_breaks_the_action_digest_fixed_point() {
 }
 #[test]
 #[ignore = "operator-only KAT regeneration after an intentional intent projection change"]
-fn print_vega_intent_projection_kat() {
-    let digest = draft_vega_privacy_payload()
+fn print_transaction_intent_projection_kats() {
+    let payload = finalized_privacy_payload();
+    let projection = payload
+        .privacy_transaction_intent_projection_bytes_v1()
+        .expect("privacy intent projection");
+    let digest = payload
+        .privacy_transaction_intent_digest_v1()
+        .expect("privacy intent projection digest");
+    eprintln!(
+        "PRIVACY_TRANSACTION_INTENT_PROJECTION_LEN_V1={}",
+        projection.len()
+    );
+    eprintln!(
+        "PRIVACY_TRANSACTION_INTENT_PROJECTION_KAT_V1={}",
+        hex::encode(digest.as_bytes())
+    );
+    let vega_digest = draft_vega_privacy_payload()
         .privacy_transaction_intent_digest_v1()
         .expect("Vega intent projection");
     eprintln!(
         "VEGA_TRANSACTION_INTENT_PROJECTION_KAT_V1={}",
-        hex::encode(digest.as_bytes())
+        hex::encode(vega_digest.as_bytes())
     );
 }
 #[test]
@@ -1471,6 +1486,9 @@ fn privacy_transaction_intent_binds_every_independent_payload_field() {
     });
     assert_bound!("fee intent", |changed: &mut TransactionPayload| {
         changed.fee_payment = FeePaymentIntent::authority(Vec::new(), NonZeroU64::new(11));
+    });
+    assert_bound!("admission intent", |changed: &mut TransactionPayload| {
+        changed.admission_intent = TransactionAdmissionIntent::QueuePlanSynced;
     });
     assert_bound!("metadata", |changed: &mut TransactionPayload| {
         changed.metadata.insert(

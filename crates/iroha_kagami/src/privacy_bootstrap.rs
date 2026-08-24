@@ -3,10 +3,19 @@ use crate::{Outcome, RunArgs};
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STANDARD};
 use clap::{Args as ClapArgs, Subcommand};
 use color_eyre::eyre::{WrapErr as _, bail, eyre};
+#[cfg(test)]
+use iroha_core::privacy_profiles::{
+    CompiledPrivacyProfileErrorV1, zk_ams_release_candidate_profile_material_v1,
+    zk_x509_release_candidate_profile_material_v1,
+};
 use iroha_core::privacy_profiles::{
     CompiledPrivacyProfileV1, compiled_privacy_profile_catalog_v1, compiled_privacy_profile_v1,
 };
 use iroha_crypto::sha256;
+#[cfg(test)]
+use iroha_data_model::privacy::{
+    PrivacyEngineIdV1, PrivacyProofSystemIdV1, PrivacyProtocolActivationLimitsV1,
+};
 use iroha_data_model::{
     isi::{InstructionBox, privacy::RegisterPrivacyProtocolActivationV1},
     privacy::{
@@ -638,9 +647,47 @@ fn remove_created_file_if_unchanged_v1(path: &Path, file: &File) {
     }
 }
 #[cfg(test)]
+fn exact12_non_authorizing_test_profile_v1(
+    protocol_id: PrivacyProtocolIdV1,
+) -> Result<CompiledPrivacyProfileV1, CompiledPrivacyProfileErrorV1> {
+    match compiled_privacy_profile_v1(protocol_id) {
+        Ok(profile) => Ok(profile),
+        Err(error) => match protocol_id {
+            PrivacyProtocolIdV1::IrohaZkAmsV1 => zk_ams_release_candidate_profile_material_v1(),
+            PrivacyProtocolIdV1::IrohaZkX509StarkP256V0 => {
+                zk_x509_release_candidate_profile_material_v1()
+            }
+            PrivacyProtocolIdV1::ZkAcePqAuthorizationV0 => {
+                // ZK-ACE has no public candidate accessor. This row is only structural fixture
+                // material for exact-12 serializer/mutation tests and cannot reach admission.
+                let mut fixture =
+                    compiled_privacy_profile_v1(PrivacyProtocolIdV1::AnonymousPgcKOutOfNV1)?;
+                fixture.protocol_id = protocol_id;
+                fixture.proof_system_id = PrivacyProofSystemIdV1::StarkFriSha256Goldilocks;
+                fixture.engine_id = PrivacyEngineIdV1::NativeGoldilocksStarkFri;
+                fixture.protocol_limits = PrivacyProtocolActivationLimitsV1::ZkAcePqAuthorizationV0;
+                Ok(fixture)
+            }
+            PrivacyProtocolIdV1::VegaExistingCredentialZkV0 => {
+                // Kagami's serializer and mutation tests need a structurally valid exact-12 row,
+                // not candidate authority. Keep Vega's real candidate crate-private and derive a
+                // clearly synthetic, test-only row from a released nonzero profile instead.
+                let mut fixture =
+                    compiled_privacy_profile_v1(PrivacyProtocolIdV1::AnonymousPgcKOutOfNV1)?;
+                fixture.protocol_id = protocol_id;
+                fixture.proof_system_id = PrivacyProofSystemIdV1::VegaNeutronNovaSpartanHyraxT256;
+                fixture.engine_id = PrivacyEngineIdV1::NativeVega;
+                fixture.protocol_limits =
+                    PrivacyProtocolActivationLimitsV1::VegaExistingCredentialZkV0;
+                Ok(fixture)
+            }
+            _ => Err(error),
+        },
+    }
+}
+#[cfg(test)]
 mod tests {
     use super::*;
-    use iroha_core::privacy_profiles::zk_x509_release_candidate_profile_material_v1;
     use iroha_data_model::{
         Level,
         isi::Log,
@@ -653,17 +700,9 @@ mod tests {
             .get_or_init(|| {
                 let profiles = PrivacyProtocolIdV1::ALL
                     .into_iter()
-                    .map(|protocol_id| {
-                        compiled_privacy_profile_v1(protocol_id).or_else(|error| {
-                            if protocol_id == PrivacyProtocolIdV1::IrohaZkX509StarkP256V0 {
-                                zk_x509_release_candidate_profile_material_v1()
-                            } else {
-                                Err(error)
-                            }
-                        })
-                    })
+                    .map(exact12_non_authorizing_test_profile_v1)
                     .collect::<Result<Vec<_>, _>>()
-                    .expect("derive twelve native test profiles");
+                    .expect("derive twelve non-authorizing test profiles");
                 build_artifacts_from_profiles_v1(&profiles).expect("build exact-12 fixture")
             })
             .clone()

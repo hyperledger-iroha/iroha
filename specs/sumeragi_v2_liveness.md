@@ -1634,7 +1634,7 @@ and its exact deterministic seed. The single permitted startup attempt passed
 retaining the exact view-9 locked Commit intent; the regression then observed
 genesis applied on every validator and a common awaiting-proposal successor
 height. All four peers exited with status 0, and libtest completed in 1192.57
-seconds including the cold re-entrant network binary build. The temporary log
+seconds including cold network binary preparation. The temporary log
 is `/tmp/iroha-root-genesis.1T17yY/run.log`, and the temporary localnet is
 `/tmp/iroha-root-genesis.1T17yY/irohad_test_network_FbEl6A`. This mutable-source
 diagnostic is not a clean signed or checkout-manifest-bound source-attested

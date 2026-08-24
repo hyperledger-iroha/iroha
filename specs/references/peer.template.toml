@@ -39,9 +39,9 @@ telemetry_profile = "operator"  # {disabled, operator, extended, developer, full
 # public_key =
 # A fresh node also needs this operator-provisioned signed artifact.
 # file =
-# Pin the exact signed consensus-header hash independently of the artifact. This field is required
-# on fresh starts and restarts; Kagami prints the value after signing.
-expected_hash = "<exact signed genesis block hash>"
+# Pin the exact signed consensus-header hash independently of the artifact. This file is required
+# on fresh starts and restarts and contains Kagami's canonical checked NetworkId plus one LF.
+expected_hash_file = "genesis.expected_hash"
 
 [network]
 # address =
@@ -69,12 +69,8 @@ expected_hash = "<exact signed genesis block hash>"
 #
 # # SCION capability gossip and dialing:
 # # SCION preference is automatic when both peers advertise support.
-# # Legacy/non-SCION peers keep using normal transport fallback automatically.
-# # The following legacy keys are ignored at runtime and kept only for compatibility:
-# # scion_enabled = false
-# # scion_fallback_to_legacy = true
-# # scion_listen_endpoint = "scion://0.0.0.0:30257" # reserved for future inbound support
-# # scion_routes = { "ed0120...peerkey..." = "scion-gateway.example.com:30257" }
+# # Peers without SCION support use the standard transport selection. There are
+# # no network.scion_* configuration keys.
 #
 # # Bounded queue capacities:
 # p2p_queue_cap_high = 8192     # consensus/control

@@ -1,6 +1,17 @@
 use soranet_relay::config::{ConfigError, VpnConfig, VpnCoverTrafficConfig};
+fn secure_receipt_spool() -> tempfile::TempDir {
+    let directory = tempfile::tempdir().expect("create receipt spool");
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt as _;
+        std::fs::set_permissions(directory.path(), std::fs::Permissions::from_mode(0o700))
+            .expect("protect receipt spool");
+    }
+    directory
+}
 #[test]
 fn vpn_defaults_apply_and_validate() {
+    let receipt_spool = secure_receipt_spool();
     let mut cfg = VpnConfig {
         enabled: true,
         cell_size_bytes: 0,
@@ -12,13 +23,19 @@ fn vpn_defaults_apply_and_validate() {
         dns_push_interval_secs: 0,
         route_push: vec!["10.0.0.0/24 ".to_string()],
         dns_overrides: vec![" 1.1.1.1 ".to_string()],
-        helper_ticket_secret_path: Some("/run/secrets/vpn-helper-ticket.hex".into()),
+        helper_ticket_issuer_public_key_path: Some(
+            "/run/secrets/vpn-helper-ticket-issuer-public-key.hex".into(),
+        ),
         helper_ticket_replay_store_capacity: 0,
         helper_ticket_replay_store_path: Default::default(),
-        backend_endpoint: None,
+        backend_endpoint: Some("unix:/tmp/soranet-vpn-config-defaults.sock".into()),
+        backend_expected_uid: Some(0),
+        backend_expected_gid: Some(0),
         backend_bootstrap_secret_path: Some("/run/secrets/vpn-backend-bootstrap.hex".into()),
-        usage_voucher_debt_window_bytes: 0,
-        receipt_spool_dir: None,
+        usage_voucher_credit_window_bytes: 0,
+        usage_voucher_max_age_ms: 0,
+        usage_voucher_setup_timeout_ms: 0,
+        receipt_spool_dir: Some(receipt_spool.path().to_path_buf()),
         cover: VpnCoverTrafficConfig {
             enabled: false,
             cover_to_data_per_mille: 0,
@@ -40,6 +57,9 @@ fn vpn_defaults_apply_and_validate() {
     assert_eq!(cfg.cover.max_jitter_millis, 10);
     assert_eq!(cfg.helper_ticket_replay_store_capacity, 8_192);
     assert!(!cfg.helper_ticket_replay_store_path.as_os_str().is_empty());
+    assert_eq!(cfg.usage_voucher_credit_window_bytes, 1_048_576);
+    assert_eq!(cfg.usage_voucher_max_age_ms, 5_000);
+    assert_eq!(cfg.usage_voucher_setup_timeout_ms, 30_000);
 }
 #[test]
 fn vpn_flow_label_bits_must_be_bounded() {
@@ -69,13 +89,19 @@ fn vpn_cover_jitter_guardrails() {
         dns_push_interval_secs: 60,
         route_push: vec![],
         dns_overrides: vec![],
-        helper_ticket_secret_path: Some("/run/secrets/vpn-helper-ticket.hex".into()),
+        helper_ticket_issuer_public_key_path: Some(
+            "/run/secrets/vpn-helper-ticket-issuer-public-key.hex".into(),
+        ),
         helper_ticket_replay_store_capacity: 8_192,
         helper_ticket_replay_store_path: "./storage/soranet/vpn_helper_ticket_replays.norito"
             .into(),
-        backend_endpoint: None,
+        backend_endpoint: Some("unix:/tmp/soranet-vpn-config-cover.sock".into()),
+        backend_expected_uid: Some(0),
+        backend_expected_gid: Some(0),
         backend_bootstrap_secret_path: Some("/run/secrets/vpn-backend-bootstrap.hex".into()),
-        usage_voucher_debt_window_bytes: 1_048_576,
+        usage_voucher_credit_window_bytes: 1_048_576,
+        usage_voucher_max_age_ms: 5_000,
+        usage_voucher_setup_timeout_ms: 30_000,
         receipt_spool_dir: None,
         cover: VpnCoverTrafficConfig {
             enabled: true,
@@ -106,6 +132,7 @@ fn vpn_runtime_available_allows_enable() {
 }
 #[test]
 fn vpn_config_json_roundtrip_preserves_fields() {
+    let receipt_spool = secure_receipt_spool();
     let mut cfg = VpnConfig {
         enabled: true,
         cell_size_bytes: 1_024,
@@ -117,13 +144,19 @@ fn vpn_config_json_roundtrip_preserves_fields() {
         dns_push_interval_secs: 120,
         route_push: vec!["10.0.0.0/24".into()],
         dns_overrides: vec!["8.8.8.8".into()],
-        helper_ticket_secret_path: Some("/run/secrets/vpn-helper-ticket.hex".into()),
+        helper_ticket_issuer_public_key_path: Some(
+            "/run/secrets/vpn-helper-ticket-issuer-public-key.hex".into(),
+        ),
         helper_ticket_replay_store_capacity: 4_096,
         helper_ticket_replay_store_path: "/var/lib/soranet/helper-replays.norito".into(),
-        backend_endpoint: None,
+        backend_endpoint: Some("unix:/tmp/soranet-vpn-config-roundtrip.sock".into()),
+        backend_expected_uid: Some(0),
+        backend_expected_gid: Some(0),
         backend_bootstrap_secret_path: Some("/run/secrets/vpn-backend-bootstrap.hex".into()),
-        usage_voucher_debt_window_bytes: 65_536,
-        receipt_spool_dir: None,
+        usage_voucher_credit_window_bytes: 256 * 1_024,
+        usage_voucher_max_age_ms: 7_000,
+        usage_voucher_setup_timeout_ms: 45_000,
+        receipt_spool_dir: Some(receipt_spool.path().to_path_buf()),
         cover: VpnCoverTrafficConfig::default(),
         billing: Default::default(),
     };
@@ -145,11 +178,70 @@ fn vpn_config_json_roundtrip_preserves_fields() {
         cfg.helper_ticket_replay_store_path,
         decoded.helper_ticket_replay_store_path
     );
+    assert_eq!(cfg.backend_expected_uid, decoded.backend_expected_uid);
+    assert_eq!(cfg.backend_expected_gid, decoded.backend_expected_gid);
     assert_eq!(
-        cfg.usage_voucher_debt_window_bytes,
-        decoded.usage_voucher_debt_window_bytes
+        cfg.usage_voucher_credit_window_bytes,
+        decoded.usage_voucher_credit_window_bytes
+    );
+    assert_eq!(
+        cfg.usage_voucher_max_age_ms,
+        decoded.usage_voucher_max_age_ms
+    );
+    assert_eq!(
+        cfg.usage_voucher_setup_timeout_ms,
+        decoded.usage_voucher_setup_timeout_ms
     );
     assert_eq!(cfg.receipt_spool_dir, decoded.receipt_spool_dir);
+}
+#[test]
+fn vpn_usage_voucher_freshness_is_bounded() {
+    for invalid in [1_999, 30_001] {
+        let mut cfg = VpnConfig {
+            enabled: true,
+            usage_voucher_max_age_ms: invalid,
+            ..VpnConfig::default()
+        };
+        let err = cfg
+            .validate()
+            .expect_err("unsafe voucher freshness window must fail");
+        assert!(
+            matches!(err, ConfigError::Vpn(message) if message.contains("usage_voucher_max_age_ms"))
+        );
+    }
+}
+#[test]
+fn vpn_usage_voucher_credit_window_is_bounded() {
+    for invalid in [256 * 1_024 - 1, 16 * 1_048_576 + 1] {
+        let mut cfg = VpnConfig {
+            enabled: true,
+            usage_voucher_credit_window_bytes: invalid,
+            ..VpnConfig::default()
+        };
+        let err = cfg
+            .validate()
+            .expect_err("out-of-range prepaid credit must fail");
+        assert!(
+            matches!(err, ConfigError::Vpn(message) if message.contains("usage_voucher_credit_window_bytes"))
+        );
+    }
+}
+#[test]
+fn vpn_usage_voucher_setup_timeout_is_bounded() {
+    for invalid in [4_999, 120_001] {
+        let mut cfg = VpnConfig {
+            enabled: true,
+            usage_voucher_max_age_ms: 5_000,
+            usage_voucher_setup_timeout_ms: invalid,
+            ..VpnConfig::default()
+        };
+        let err = cfg
+            .validate()
+            .expect_err("unsafe voucher setup timeout must fail");
+        assert!(
+            matches!(err, ConfigError::Vpn(message) if message.contains("usage_voucher_setup_timeout_ms"))
+        );
+    }
 }
 #[test]
 fn vpn_rejects_mismatched_cell_size() {

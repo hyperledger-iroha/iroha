@@ -72,6 +72,7 @@ use iroha_data_model::{
 use iroha_executor_data_model::permission::account::{
     AccountAliasPermissionScope, CanManageAccountAlias, CanResolveAccountAlias,
 };
+use iroha_executor_data_model::permission::governance::CanManageConsensusKeys;
 use iroha_primitives::{const_vec::ConstVec, json::Json, numeric::Quantity};
 use iroha_test_samples::ALICE_ID;
 use norito::codec::Encode;
@@ -744,12 +745,7 @@ fn ensure_runtime_peer_binding_for_test(
             .execute(&ALICE_ID, &mut tx)
             .expect("register validator authority account");
     }
-    let manage_consensus_keys = Permission::new(
-        "CanManageConsensusKeys"
-            .parse()
-            .expect("CanManageConsensusKeys permission token"),
-        Json::new(()),
-    );
+    let manage_consensus_keys = Permission::from(CanManageConsensusKeys);
     Grant::account_permission(manage_consensus_keys, validator.clone())
         .execute(validator, &mut tx)
         .expect("grant manage consensus keys");
@@ -1323,24 +1319,6 @@ pub(crate) fn bind_domain_name_for_test_with_status(
     tx.apply();
     block.commit().expect("commit domain alias for test");
 }
-#[cfg(feature = "app_api")]
-fn soradns_public_alias_router(app: SharedAppState) -> axum::Router {
-    axum::Router::new()
-        .route(
-            "/soradns/{fqdn}",
-            any(super::handler_soradns_public_alias_root),
-        )
-        .route(
-            "/soradns/{fqdn}/",
-            any(super::handler_soradns_public_alias_root),
-        )
-        .route(
-            "/soradns/{fqdn}/{*path}",
-            any(super::handler_soradns_public_alias_path),
-        )
-        .fallback(any(super::handler_soracloud_public_local_read))
-        .with_state(app)
-}
 pub(crate) fn signed_app_headers(
     account: &AccountId,
     key_pair: &KeyPair,
@@ -1605,7 +1583,7 @@ fn mk_app_state_for_tests_with_world_and_options_and_chain_id(
         dedupe_ttl: iroha_config::parameters::defaults::connect::DEDUPE_TTL,
         dedupe_cap: iroha_config::parameters::defaults::connect::DEDUPE_CAP,
         relay_enabled: false,
-        relay_strategy: iroha_config::parameters::defaults::connect::RELAY_STRATEGY,
+        relay_strategy: iroha_config::parameters::actual::ConnectRelayStrategy::Broadcast,
         p2p_ttl_hops: iroha_config::parameters::defaults::connect::P2P_TTL_HOPS,
     };
     #[cfg(feature = "push")]
@@ -1621,12 +1599,18 @@ fn mk_app_state_for_tests_with_world_and_options_and_chain_id(
     #[cfg(feature = "app_api")]
     // Test fixtures opt into an isolated storage directory explicitly. Never
     // let a unit-test helper inherit the production data path.
-    let sorafs_node = sorafs_node::NodeHandle::new(
-        sorafs_node::config::StorageConfig::builder()
-            .enabled(false)
-            .data_dir(kura.store_root().join("sorafs"))
-            .build(),
-    );
+    let sorafs_node = {
+        static SORAFS_NODE_INIT_LOCK: LazyLock<Mutex<()>> = LazyLock::new(|| Mutex::new(()));
+        let _init_guard = SORAFS_NODE_INIT_LOCK
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        sorafs_node::NodeHandle::new(
+            sorafs_node::config::StorageConfig::builder()
+                .enabled(false)
+                .data_dir(kura.store_root().join("sorafs"))
+                .build(),
+        )
+    };
     #[cfg(feature = "app_api")]
     let sorafs_limits = Arc::new(sorafs::SorafsQuotaEnforcer::unlimited());
     #[cfg(feature = "app_api")]
@@ -1929,6 +1913,7 @@ fn mk_app_state_for_tests_with_world_and_options_and_chain_id(
             0xb5,
             "derive Torii proxy bridge fixture signer",
         ),
+        vpn_operator_signer: None,
         #[cfg(feature = "app_api")]
         public_dataspace_upstreams: Arc::new(BTreeMap::new()),
         #[cfg(feature = "app_api")]
@@ -2032,7 +2017,6 @@ fn mk_app_state_for_tests_with_world_and_options_and_chain_id(
         offline_commands: None,
         #[cfg(feature = "app_api")]
         account_onboarding: None,
-        vpn_helper_ticket_secret: None,
         vpn_relay_trust: None,
         vpn_quotes: Arc::new(DashMap::new()),
         vpn_used_payments: Arc::new(DashMap::new()),

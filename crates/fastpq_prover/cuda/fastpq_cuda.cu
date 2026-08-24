@@ -37,6 +37,9 @@ static __device__ __constant__ uint64_t TRACE_NODE_DOMAIN_SEED = 606804015145902
 #define POSEIDON_PARTIAL_ROUNDS 57u
 #define BN254_LIMBS 4u
 
+static constexpr uint32_t GOLDILOCKS_TWO_ADICITY = 32u;
+static constexpr uint32_t BN254_TWO_ADICITY = 28u;
+
 static __device__ __constant__ uint64_t BN254_MODULUS[BN254_LIMBS] = {
     0x43e1f593f0000001ull,
     0x2833e84879b97091ull,
@@ -152,7 +155,6 @@ struct PendingTransform {
     int device;
     cudaEvent_t event;
     AsyncDispatchBuffers* buffers;
-    void* host_output;
     void* staging_output;
     size_t output_byte_len;
 
@@ -160,14 +162,12 @@ struct PendingTransform {
         int device_in,
         cudaEvent_t event_in,
         AsyncDispatchBuffers* buffers_in,
-        void* host_output_in,
         void* staging_output_in,
         size_t output_byte_len_in
     )
         : device(device_in),
           event(event_in),
           buffers(buffers_in),
-          host_output(host_output_in),
           staging_output(staging_output_in),
           output_byte_len(output_byte_len_in) {}
 };
@@ -562,6 +562,109 @@ static cudaError_t bn254_dense_buffer_bytes(
     return dense_buffer_bytes(column_count, element_count * BN254_LIMBS, byte_len);
 }
 
+static bool checked_size_add(size_t lhs, size_t rhs, size_t* out) {
+    if (out == nullptr || lhs > SIZE_MAX - rhs) {
+        return false;
+    }
+    *out = lhs + rhs;
+    return true;
+}
+
+static bool checked_size_mul(size_t lhs, size_t rhs, size_t* out) {
+    if (out == nullptr || (rhs != 0 && lhs > SIZE_MAX / rhs)) {
+        return false;
+    }
+    *out = lhs * rhs;
+    return true;
+}
+
+static bool checked_domain_len(uint32_t log_size, uint32_t max_log, uint64_t* len) {
+    if (len == nullptr || log_size > max_log || log_size >= 64u) {
+        return false;
+    }
+    *len = 1ull << log_size;
+    return true;
+}
+
+static bool checked_eval_domain_lengths(
+    uint32_t trace_log,
+    uint32_t blowup_log,
+    uint32_t max_log,
+    uint64_t* trace_len,
+    uint64_t* eval_len,
+    uint32_t* eval_log
+) {
+    if (
+        trace_len == nullptr || eval_len == nullptr || eval_log == nullptr || blowup_log == 0u
+        || trace_log > max_log || blowup_log > max_log - trace_log
+    ) {
+        return false;
+    }
+    *eval_log = trace_log + blowup_log;
+    return checked_domain_len(trace_log, max_log, trace_len)
+        && checked_domain_len(*eval_log, max_log, eval_len);
+}
+
+static bool checked_bn254_twiddle_limb_len(
+    uint32_t log_size,
+    uint64_t domain_len,
+    size_t* limb_len
+) {
+    size_t twiddle_count = 0;
+    if (log_size == 0u || domain_len == 0u || domain_len - 1u > (uint64_t)SIZE_MAX) {
+        return false;
+    }
+    twiddle_count = (size_t)(domain_len - 1u);
+    return checked_size_mul(twiddle_count, (size_t)BN254_LIMBS, limb_len);
+}
+
+static bool validate_poseidon_column_slices(
+    const PoseidonSlice* slices,
+    size_t column_count,
+    size_t block_count,
+    size_t* payload_bytes
+) {
+    size_t elements_per_column = 0;
+    if (
+        slices == nullptr || payload_bytes == nullptr
+        || !checked_size_mul(block_count, (size_t)POSEIDON_RATE, &elements_per_column)
+        || elements_per_column > (size_t)UINT32_MAX
+    ) {
+        return false;
+    }
+    size_t expected_offset = 0;
+    for (size_t column = 0; column < column_count; ++column) {
+        const PoseidonSlice slice = slices[column];
+        if ((size_t)slice.offset != expected_offset || (size_t)slice.len != elements_per_column) {
+            return false;
+        }
+        if (!checked_size_add(expected_offset, elements_per_column, &expected_offset)) {
+            return false;
+        }
+    }
+    return checked_size_mul(expected_offset, sizeof(uint64_t), payload_bytes);
+}
+
+static bool validate_poseidon_word_slices(
+    const PoseidonSlice* slices,
+    size_t batch_count,
+    size_t word_count
+) {
+    if (slices == nullptr) {
+        return false;
+    }
+    for (size_t index = 0; index < batch_count; ++index) {
+        size_t end = 0;
+        if (
+            !checked_size_add((size_t)slices[index].offset, (size_t)slices[index].len, &end)
+            || end > word_count
+        ) {
+            return false;
+        }
+    }
+    return true;
+}
+
 static TransformWorkspace* current_transform_workspace() {
     int device = 0;
     if (cudaGetDevice(&device) != cudaSuccess) {
@@ -618,7 +721,6 @@ static cudaError_t destroy_pending_transform(PendingTransform* pending) {
 static cudaError_t create_pending_transform(
     int device,
     AsyncDispatchBuffers* buffers,
-    void* host_output,
     void* staging_output,
     size_t output_byte_len,
     PendingTransform** pending_out
@@ -637,7 +739,6 @@ static cudaError_t create_pending_transform(
             device,
             event,
             buffers,
-            host_output,
             staging_output,
             output_byte_len
         );
@@ -1230,7 +1331,7 @@ __global__ void fastpq_bn254_fft_kernel(
     for (uint32_t stage = 0; stage < log_len; ++stage) {
         uint64_t len = 1ull << (stage + 1u);
         uint64_t half_len = len >> 1;
-        uint64_t stage_offset = (uint64_t)stage * stage_span;
+        uint64_t stage_offset = (1ull << stage) - 1ull;
         for (uint64_t pair_idx = threadIdx.x; pair_idx < stage_span; pair_idx += blockDim.x) {
             uint64_t block = pair_idx / half_len;
             uint64_t pair = pair_idx % half_len;
@@ -1312,7 +1413,7 @@ __global__ void fastpq_bn254_lde_kernel(
     for (uint32_t stage = 0; stage < log_len; ++stage) {
         const uint64_t len = 1ull << (stage + 1u);
         const uint64_t half_len = len >> 1;
-        const uint64_t stage_offset = (uint64_t)stage * stage_span;
+        const uint64_t stage_offset = (1ull << stage) - 1ull;
         for (uint64_t pair_idx = threadIdx.x; pair_idx < stage_span; pair_idx += blockDim.x) {
             const uint64_t block = pair_idx / half_len;
             const uint64_t pair = pair_idx % half_len;
@@ -1401,7 +1502,7 @@ __global__ void fastpq_poseidon_parent_kernel(
     uint64_t* parent_hashes
 ) {
     size_t parent_idx = blockIdx.x * blockDim.x + threadIdx.x;
-    size_t parent_count = (column_count + 1) / 2;
+    size_t parent_count = column_count / 2 + column_count % 2;
     if (parent_idx >= parent_count) {
         return;
     }
@@ -1577,7 +1678,11 @@ extern "C" cudaError_t fastpq_test_wait_timeout_cuda(uint32_t timeout_ms) {
     );
 }
 
-extern "C" cudaError_t fastpq_pending_wait_cuda(void* handle) {
+extern "C" cudaError_t fastpq_pending_wait_cuda(
+    void* handle,
+    uint64_t* output,
+    size_t output_len
+) {
     PendingTransform* pending = reinterpret_cast<PendingTransform*>(handle);
     if (pending == nullptr) {
         return cudaErrorInvalidValue;
@@ -1590,12 +1695,19 @@ extern "C" cudaError_t fastpq_pending_wait_cuda(void* handle) {
     }
 
     status = wait_for_event(pending->event);
-    if (status == cudaSuccess) {
-        if (pending->staging_output == nullptr || pending->host_output == nullptr) {
+    if (status == cudaSuccess && output != nullptr) {
+        size_t output_byte_len = 0;
+        if (
+            pending->staging_output == nullptr
+            || !checked_size_mul(output_len, sizeof(uint64_t), &output_byte_len)
+            || output_byte_len != pending->output_byte_len
+        ) {
             status = cudaErrorInvalidValue;
-        } else if (pending->staging_output != pending->host_output) {
-            memcpy(pending->host_output, pending->staging_output, pending->output_byte_len);
+        } else {
+            memcpy(output, pending->staging_output, pending->output_byte_len);
         }
+    } else if (status == cudaSuccess && output_len != 0) {
+        status = cudaErrorInvalidValue;
     }
     cudaError_t destroy_status = destroy_pending_transform(pending);
     if (status == cudaSuccess) {
@@ -1615,7 +1727,10 @@ extern "C" cudaError_t fastpq_fft_async_submit_cuda(
         return cudaErrorInvalidValue;
     }
     *out_handle = nullptr;
-    uint64_t n = 1ull << log_size;
+    uint64_t n = 0;
+    if (!checked_domain_len(log_size, GOLDILOCKS_TWO_ADICITY, &n)) {
+        return cudaErrorInvalidValue;
+    }
     size_t byte_len = 0;
     cudaError_t status = dense_buffer_bytes(column_count, n, &byte_len);
     if (status != cudaSuccess) {
@@ -1662,7 +1777,6 @@ extern "C" cudaError_t fastpq_fft_async_submit_cuda(
     status = create_pending_transform(
         device,
         buffers,
-        elements,
         staging_output,
         byte_len,
         &pending
@@ -1735,7 +1849,10 @@ extern "C" cudaError_t fastpq_ifft_async_submit_cuda(
         return cudaErrorInvalidValue;
     }
     *out_handle = nullptr;
-    uint64_t n = 1ull << log_size;
+    uint64_t n = 0;
+    if (!checked_domain_len(log_size, GOLDILOCKS_TWO_ADICITY, &n)) {
+        return cudaErrorInvalidValue;
+    }
     size_t byte_len = 0;
     cudaError_t status = dense_buffer_bytes(column_count, n, &byte_len);
     if (status != cudaSuccess) {
@@ -1782,7 +1899,6 @@ extern "C" cudaError_t fastpq_ifft_async_submit_cuda(
     status = create_pending_transform(
         device,
         buffers,
-        elements,
         staging_output,
         byte_len,
         &pending
@@ -1858,8 +1974,19 @@ extern "C" cudaError_t fastpq_lde_async_submit_cuda(
         return cudaErrorInvalidValue;
     }
     *out_handle = nullptr;
-    uint64_t trace_len = 1ull << trace_log;
-    uint64_t eval_len = 1ull << (trace_log + blowup_log);
+    uint64_t trace_len = 0;
+    uint64_t eval_len = 0;
+    uint32_t eval_log = 0;
+    if (!checked_eval_domain_lengths(
+            trace_log,
+            blowup_log,
+            GOLDILOCKS_TWO_ADICITY,
+            &trace_len,
+            &eval_len,
+            &eval_log
+        )) {
+        return cudaErrorInvalidValue;
+    }
 
     size_t coeff_byte_len = 0;
     cudaError_t status = dense_buffer_bytes(column_count, trace_len, &coeff_byte_len);
@@ -1931,7 +2058,6 @@ extern "C" cudaError_t fastpq_lde_async_submit_cuda(
     status = create_pending_transform(
         device,
         buffers,
-        out,
         staging_output,
         eval_byte_len,
         &pending
@@ -1961,7 +2087,7 @@ extern "C" cudaError_t fastpq_lde_async_submit_cuda(
         buffers->evals,
         trace_len,
         eval_len,
-        trace_log + blowup_log,
+        eval_log,
         lde_root,
         coset
     );
@@ -1999,7 +2125,10 @@ extern "C" cudaError_t fastpq_fft_cuda(
     if (elements == nullptr || column_count == 0) {
         return cudaErrorInvalidValue;
     }
-    uint64_t n = 1ull << log_size;
+    uint64_t n = 0;
+    if (!checked_domain_len(log_size, GOLDILOCKS_TWO_ADICITY, &n)) {
+        return cudaErrorInvalidValue;
+    }
     size_t byte_len = 0;
     cudaError_t status = dense_buffer_bytes(column_count, n, &byte_len);
     if (status != cudaSuccess) {
@@ -2091,7 +2220,10 @@ extern "C" cudaError_t fastpq_ifft_cuda(
     if (elements == nullptr || column_count == 0) {
         return cudaErrorInvalidValue;
     }
-    uint64_t n = 1ull << log_size;
+    uint64_t n = 0;
+    if (!checked_domain_len(log_size, GOLDILOCKS_TWO_ADICITY, &n)) {
+        return cudaErrorInvalidValue;
+    }
     size_t byte_len = 0;
     cudaError_t status = dense_buffer_bytes(column_count, n, &byte_len);
     if (status != cudaSuccess) {
@@ -2186,8 +2318,19 @@ extern "C" cudaError_t fastpq_lde_cuda(
     if (coeffs == nullptr || out == nullptr || column_count == 0) {
         return cudaErrorInvalidValue;
     }
-    uint64_t trace_len = 1ull << trace_log;
-    uint64_t eval_len = 1ull << (trace_log + blowup_log);
+    uint64_t trace_len = 0;
+    uint64_t eval_len = 0;
+    uint32_t eval_log = 0;
+    if (!checked_eval_domain_lengths(
+            trace_log,
+            blowup_log,
+            GOLDILOCKS_TWO_ADICITY,
+            &trace_len,
+            &eval_len,
+            &eval_log
+        )) {
+        return cudaErrorInvalidValue;
+    }
     size_t coeff_byte_len = 0;
     cudaError_t status = dense_buffer_bytes(column_count, trace_len, &coeff_byte_len);
     if (status != cudaSuccess) {
@@ -2262,7 +2405,7 @@ extern "C" cudaError_t fastpq_lde_cuda(
         workspace->evals,
         trace_len,
         eval_len,
-        trace_log + blowup_log,
+        eval_log,
         lde_root,
         coset
     );
@@ -2298,7 +2441,17 @@ extern "C" cudaError_t fastpq_bn254_fft_cuda(
     if (elements == nullptr || stage_twiddles == nullptr || column_count == 0 || stage_twiddle_len == 0) {
         return cudaErrorInvalidValue;
     }
-    uint64_t n = 1ull << log_size;
+    uint64_t n = 0;
+    if (log_size == 0u || !checked_domain_len(log_size, BN254_TWO_ADICITY, &n)) {
+        return cudaErrorInvalidValue;
+    }
+    size_t expected_twiddle_len = 0;
+    if (
+        !checked_bn254_twiddle_limb_len(log_size, n, &expected_twiddle_len)
+        || stage_twiddle_len != expected_twiddle_len
+    ) {
+        return cudaErrorInvalidValue;
+    }
     size_t dense_byte_len = 0;
     cudaError_t status = bn254_dense_buffer_bytes(column_count, n, &dense_byte_len);
     if (status != cudaSuccess) {
@@ -2425,8 +2578,29 @@ extern "C" cudaError_t fastpq_bn254_lde_cuda(
     ) {
         return cudaErrorInvalidValue;
     }
-    uint64_t trace_len = 1ull << trace_log;
-    uint64_t eval_len = 1ull << (trace_log + blowup_log);
+    uint64_t trace_len = 0;
+    uint64_t eval_len = 0;
+    uint32_t eval_log = 0;
+    if (
+        trace_log == 0u
+        || !checked_eval_domain_lengths(
+            trace_log,
+            blowup_log,
+            BN254_TWO_ADICITY,
+            &trace_len,
+            &eval_len,
+            &eval_log
+        )
+    ) {
+        return cudaErrorInvalidValue;
+    }
+    size_t expected_twiddle_len = 0;
+    if (
+        !checked_bn254_twiddle_limb_len(eval_log, eval_len, &expected_twiddle_len)
+        || stage_twiddle_len != expected_twiddle_len
+    ) {
+        return cudaErrorInvalidValue;
+    }
     size_t coeff_byte_len = 0;
     cudaError_t status = bn254_dense_buffer_bytes(column_count, trace_len, &coeff_byte_len);
     if (status != cudaSuccess) {
@@ -2598,15 +2772,18 @@ extern "C" cudaError_t fastpq_poseidon_permute_cuda(uint64_t* states, size_t sta
         return cudaErrorInvalidValue;
     }
 
-    const size_t total_elements = state_count * (size_t)POSEIDON_STATE_WIDTH;
-    const size_t byte_len = total_elements * sizeof(uint64_t);
+    size_t byte_len = 0;
+    cudaError_t status = dense_buffer_bytes(state_count, POSEIDON_STATE_WIDTH, &byte_len);
+    if (status != cudaSuccess) {
+        return status;
+    }
 
     std::lock_guard<std::mutex> guard(poseidon_workspace_mutex());
     PoseidonWorkspace* workspace = current_poseidon_workspace();
     if (workspace == nullptr) {
         return cudaErrorInvalidValue;
     }
-    cudaError_t status = ensure_workspace_buffer(
+    status = ensure_workspace_buffer(
         &workspace->states,
         &workspace->state_capacity_bytes,
         byte_len
@@ -2689,12 +2866,18 @@ extern "C" cudaError_t fastpq_poseidon_hash_columns_cuda(
     ) {
         return cudaErrorInvalidValue;
     }
-    size_t state_len = column_count * (size_t)POSEIDON_STATE_WIDTH;
-    size_t state_bytes = state_len * sizeof(uint64_t);
     size_t payload_bytes = 0;
-    if (column_count > 0) {
-        PoseidonSlice last = slices[column_count - 1];
-        payload_bytes = ((size_t)last.offset + (size_t)last.len) * sizeof(uint64_t);
+    if (!validate_poseidon_column_slices(slices, column_count, block_count, &payload_bytes)) {
+        return cudaErrorInvalidValue;
+    }
+    size_t state_bytes = 0;
+    cudaError_t status = dense_buffer_bytes(column_count, POSEIDON_STATE_WIDTH, &state_bytes);
+    if (status != cudaSuccess) {
+        return status;
+    }
+    size_t slice_bytes = 0;
+    if (!checked_size_mul(column_count, sizeof(PoseidonSlice), &slice_bytes)) {
+        return cudaErrorInvalidValue;
     }
 
     std::lock_guard<std::mutex> guard(poseidon_workspace_mutex());
@@ -2702,7 +2885,7 @@ extern "C" cudaError_t fastpq_poseidon_hash_columns_cuda(
     if (workspace == nullptr) {
         return cudaErrorInvalidValue;
     }
-    cudaError_t status = ensure_workspace_buffer(
+    status = ensure_workspace_buffer(
         &workspace->payloads,
         &workspace->payload_capacity_bytes,
         payload_bytes
@@ -2713,7 +2896,7 @@ extern "C" cudaError_t fastpq_poseidon_hash_columns_cuda(
     status = ensure_workspace_buffer(
         &workspace->slices,
         &workspace->slice_capacity_bytes,
-        column_count * sizeof(PoseidonSlice)
+        slice_bytes
     );
     if (status != cudaSuccess) {
         return status;
@@ -2741,7 +2924,7 @@ extern "C" cudaError_t fastpq_poseidon_hash_columns_cuda(
     status = ensure_pinned_workspace_buffer(
         &workspace->host_slices,
         &workspace->host_slice_capacity_bytes,
-        column_count * sizeof(PoseidonSlice)
+        slice_bytes
     );
     if (status != cudaSuccess) {
         return status;
@@ -2763,7 +2946,7 @@ extern "C" cudaError_t fastpq_poseidon_hash_columns_cuda(
         return status;
     }
     memcpy(workspace->host_payloads, payloads, payload_bytes);
-    memcpy(workspace->host_slices, slices, column_count * sizeof(PoseidonSlice));
+    memcpy(workspace->host_slices, slices, slice_bytes);
     status = cudaMemcpyAsync(
         device_payloads,
         workspace->host_payloads,
@@ -2777,7 +2960,7 @@ extern "C" cudaError_t fastpq_poseidon_hash_columns_cuda(
     status = cudaMemcpyAsync(
         device_slices,
         workspace->host_slices,
-        column_count * sizeof(PoseidonSlice),
+        slice_bytes,
         cudaMemcpyHostToDevice,
         workspace->stream
     );
@@ -2840,11 +3023,25 @@ extern "C" cudaError_t fastpq_bn254_poseidon_hash_words_cuda(
         return cudaErrorInvalidValue;
     }
 
-    size_t word_bytes = word_count * sizeof(uint64_t);
-    size_t slice_bytes = batch_count * sizeof(PoseidonSlice);
-    size_t round_bytes = round_constant_len * sizeof(uint64_t);
-    size_t mds_bytes = mds_len * sizeof(uint64_t);
-    size_t output_bytes = batch_count * (size_t)BN254_LIMBS * sizeof(uint64_t);
+    if (!validate_poseidon_word_slices(slices, batch_count, word_count)) {
+        return cudaErrorInvalidValue;
+    }
+    size_t word_bytes = 0;
+    size_t slice_bytes = 0;
+    size_t round_bytes = 0;
+    size_t mds_bytes = 0;
+    size_t output_elements = 0;
+    size_t output_bytes = 0;
+    if (
+        !checked_size_mul(word_count, sizeof(uint64_t), &word_bytes)
+        || !checked_size_mul(batch_count, sizeof(PoseidonSlice), &slice_bytes)
+        || !checked_size_mul(round_constant_len, sizeof(uint64_t), &round_bytes)
+        || !checked_size_mul(mds_len, sizeof(uint64_t), &mds_bytes)
+        || !checked_size_mul(batch_count, (size_t)BN254_LIMBS, &output_elements)
+        || !checked_size_mul(output_elements, sizeof(uint64_t), &output_bytes)
+    ) {
+        return cudaErrorInvalidValue;
+    }
 
     std::lock_guard<std::mutex> guard(poseidon_workspace_mutex());
     PoseidonWorkspace* workspace = current_poseidon_workspace();
@@ -3034,15 +3231,26 @@ extern "C" cudaError_t fastpq_poseidon_hash_columns_fused_cuda(
     ) {
         return cudaErrorInvalidValue;
     }
-    size_t parents = (column_count + 1) / 2;
+    size_t parents = column_count / 2 + column_count % 2;
     size_t payload_bytes = 0;
-    if (column_count > 0) {
-        PoseidonSlice last = slices[column_count - 1];
-        payload_bytes = ((size_t)last.offset + (size_t)last.len) * sizeof(uint64_t);
+    if (!validate_poseidon_column_slices(slices, column_count, block_count, &payload_bytes)) {
+        return cudaErrorInvalidValue;
     }
-    size_t state_bytes = column_count * (size_t)POSEIDON_STATE_WIDTH * sizeof(uint64_t);
-    size_t slice_bytes = column_count * sizeof(PoseidonSlice);
-    size_t hash_bytes = (column_count + parents) * sizeof(uint64_t);
+    size_t state_bytes = 0;
+    cudaError_t status = dense_buffer_bytes(column_count, POSEIDON_STATE_WIDTH, &state_bytes);
+    if (status != cudaSuccess) {
+        return status;
+    }
+    size_t slice_bytes = 0;
+    size_t hash_words = 0;
+    size_t hash_bytes = 0;
+    if (
+        !checked_size_mul(column_count, sizeof(PoseidonSlice), &slice_bytes)
+        || !checked_size_add(column_count, parents, &hash_words)
+        || !checked_size_mul(hash_words, sizeof(uint64_t), &hash_bytes)
+    ) {
+        return cudaErrorInvalidValue;
+    }
 
     const unsigned int threads_per_block = 128u;
     size_t grid_size_host = 0;
@@ -3052,7 +3260,7 @@ extern "C" cudaError_t fastpq_poseidon_hash_columns_fused_cuda(
     if (workspace == nullptr) {
         return cudaErrorInvalidValue;
     }
-    cudaError_t status = ensure_workspace_buffer(
+    status = ensure_workspace_buffer(
         &workspace->payloads,
         &workspace->payload_capacity_bytes,
         payload_bytes

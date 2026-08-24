@@ -1336,7 +1336,9 @@ fn soracloud_hf_inference_broker_is_bounded_and_redacts_payloads() {
         SORACLOUD_HF_DECODE_POLICY_V1
     );
     let request_wire = SoracloudHfAuthenticatedInferenceRequestWireV1 {
-        url: "https://router.huggingface.co/models/example?private-query-value".to_owned(),
+        repo_id: "example/model".to_owned(),
+        resolved_revision: "0123456789abcdef0123456789abcdef01234567".to_owned(),
+        url: "https://router.huggingface.co/models/example/model?private-query-value=redacted&revision=0123456789abcdef0123456789abcdef01234567".to_owned(),
         content_type: "application/json".to_owned(),
         accept: Some("application/json".to_owned()),
         body: b"private-hf-model-input".to_vec(),
@@ -1352,6 +1354,8 @@ fn soracloud_hf_inference_broker_is_bounded_and_redacts_payloads() {
             .expect("encode bounded HF inference request"),
     );
     let response_wire = SoracloudHfAuthenticatedInferenceResponseWireV1 {
+        served_repo_id: request_wire.repo_id.clone(),
+        served_revision: request_wire.resolved_revision.clone(),
         status: 200,
         content_type: Some("application/json".to_owned()),
         content_encoding: None,
@@ -1366,6 +1370,27 @@ fn soracloud_hf_inference_broker_is_bounded_and_redacts_payloads() {
     assert_eq!(
         validate_operation_response(&request, &response, &network_id(),),
         Ok(())
+    );
+    let mismatched_response_wire = SoracloudHfAuthenticatedInferenceResponseWireV1 {
+        served_repo_id: request_wire.repo_id.clone(),
+        served_revision: "1123456789abcdef0123456789abcdef01234567".to_owned(),
+        status: 200,
+        content_type: Some("application/json".to_owned()),
+        content_encoding: None,
+        body: b"mismatched-model-output".to_vec(),
+    };
+    let mismatched_response = operation_response(
+        &request,
+        STATUS_OK_V1,
+        encode_canonical(
+            &mismatched_response_wire,
+            MAX_SORACLOUD_HF_INFERENCE_FRAME_BYTES_V1,
+        )
+        .expect("encode mismatched HF inference response"),
+    );
+    assert_eq!(
+        validate_operation_response(&request, &mismatched_response, &network_id()),
+        Err(BrokerError::Protocol),
     );
     for rendered in [
         format!("{request_wire:?}"),

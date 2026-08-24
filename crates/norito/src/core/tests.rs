@@ -208,6 +208,29 @@ fn decode_field_canonical_rejects_trailing_bytes() {
         .expect_err("canonical field decode must consume the complete payload");
     assert!(matches!(error, Error::LengthMismatch));
 }
+
+#[test]
+fn decode_field_canonical_honors_payload_context_flags() {
+    reset_decode_state();
+    let expected = CanonicalStruct {
+        a: 0x0102_0304,
+        b: vec![5, 8, 13],
+        c: Some(vec![21, 34]),
+    };
+    let mut bytes = Vec::new();
+    {
+        let _flags = DecodeFlagsGuard::enter_with_hint(0, 0);
+        serialize_to_buffer(&expected, &mut bytes).expect("encode fixed-width field frames");
+    }
+    set_payload_ctx_state(&bytes, None, Some(0), Some(0));
+
+    let (decoded, used) =
+        decode_field_canonical::<CanonicalStruct>(&bytes).expect("decode advertised layout");
+
+    assert_eq!(decoded, expected);
+    assert_eq!(used, bytes.len());
+    reset_decode_state();
+}
 #[test]
 fn decode_field_prefix_allows_trailing_bytes_and_reports_consumption() {
     reset_decode_state();
@@ -456,6 +479,24 @@ fn decode_vec_from_slice_serial_reports_prefix_used() {
     assert_eq!(used, bytes.len());
     reset_decode_state();
 }
+
+#[test]
+fn decode_vec_u8_from_slice_reports_prefix_used() {
+    reset_decode_state();
+    let value = vec![3_u8, 5, 8, 13];
+    let bytes = encode_adaptive(&value);
+    let mut with_tail = bytes.clone();
+    with_tail.extend_from_slice(&[0xAA, 0xBB]);
+    let (decoded, used) =
+        decode_field_prefix::<Vec<u8>>(&with_tail).expect("decode raw byte sequence prefix");
+    assert_eq!(decoded, value);
+    assert_eq!(used, bytes.len());
+    assert!(matches!(
+        decode_field_canonical::<Vec<u8>>(&with_tail),
+        Err(Error::LengthMismatch)
+    ));
+    reset_decode_state();
+}
 #[cfg(feature = "parallel-decode")]
 #[test]
 fn sequence_parallel_decode_threshold_requires_large_plans() {
@@ -653,7 +694,8 @@ fn context_field_helpers_decode_framed_fields_and_require_full_consumption() {
         first
     );
     assert_eq!(
-        decode_context_field_archived::<u32>(payload.as_ptr(), &mut offset).expect("decode second"),
+        decode_context_field_canonical::<u32>(payload.as_ptr(), &mut offset)
+            .expect("decode second"),
         second
     );
     finish_context_fields(payload.as_ptr(), offset).expect("consume payload");
@@ -671,7 +713,7 @@ fn context_field_helpers_bound_declared_lengths_before_decoding() {
     let _guard = PayloadCtxGuard::enter(&payload);
     let mut offset = 0;
     assert!(matches!(
-        decode_context_field_archived::<u32>(payload.as_ptr(), &mut offset),
+        decode_context_field_canonical::<u32>(payload.as_ptr(), &mut offset),
         Err(Error::LengthMismatch)
     ));
     assert_eq!(offset, 0, "a rejected frame must not consume input");
@@ -688,6 +730,23 @@ fn context_field_helpers_bound_declared_lengths_before_decoding() {
         offset, 0,
         "a framed value that fails typed decoding must not consume input"
     );
+}
+#[test]
+fn canonical_context_field_rejects_trailing_bytes_inside_declared_frame() {
+    reset_decode_state();
+    let mut field = Vec::new();
+    serialize_to_buffer(&0x0102_0304_u32, &mut field).expect("encode field");
+    field.push(0xAA);
+    let mut payload = Vec::new();
+    write_len(&mut payload, field.len() as u64).expect("frame field");
+    payload.extend_from_slice(&field);
+    let _guard = PayloadCtxGuard::enter(&payload);
+    let mut offset = 0;
+    assert!(matches!(
+        decode_context_field_canonical::<u32>(payload.as_ptr(), &mut offset),
+        Err(Error::LengthMismatch)
+    ));
+    assert_eq!(offset, 0, "a non-canonical frame must not consume input");
 }
 #[test]
 fn context_field_prefix_and_fixed_array_helpers_advance_exactly() {
@@ -1222,7 +1281,7 @@ fn archived_from_slice_realigns_payload() {
     reset_decode_state();
 }
 #[test]
-fn decode_vec_recovers_from_zero_length_element_header() {
+fn sequence_decoders_reject_zero_length_header_for_nonempty_element() {
     let original: Vec<(String, Vec<u8>)> = vec![("kind".to_owned(), vec![1, 2, 3, 4])];
     let framed = to_bytes(&original).expect("serialize vec");
     let flags = framed[Header::SIZE - 1];
@@ -1244,15 +1303,23 @@ fn decode_vec_recovers_from_zero_length_element_header() {
     for byte in &mut payload[seq_hdr..seq_hdr + elem_hdr_len] {
         *byte = 0;
     }
-    let decoded = {
+    {
         let _guard = DecodeFlagsGuard::enter(flags);
-        let (value, used) =
-            decode_field_canonical::<Vec<(String, Vec<u8>)>>(&payload).expect("decode vec");
-        assert_eq!(used, payload.len());
-        value
-    };
+        assert!(matches!(
+            decode_field_canonical::<Vec<(String, Vec<u8>)>>(&payload),
+            Err(Error::LengthMismatch)
+        ));
+        let mut decoded = Vec::new();
+        assert!(matches!(
+            decode_sequence_elements::<(String, Vec<u8>), _>(&payload, |value| {
+                decoded.push(value);
+                Ok(())
+            }),
+            Err(Error::LengthMismatch)
+        ));
+        assert!(decoded.is_empty(), "rejected elements must not be emitted");
+    }
     reset_decode_state();
-    assert_eq!(decoded, original);
 }
 #[test]
 fn payload_slice_from_ptr_cannot_escape_the_active_field() {
@@ -2281,20 +2348,39 @@ fn archive_view_decode_installs_payload_derived_resource_limits() {
     ));
 }
 #[test]
-fn view_decode_exact_rejects_a_zero_filled_logical_tail() {
+fn archive_view_decoders_reject_a_zero_filled_logical_tail() {
     let value = 7_u8;
     let payload = [value, 0];
     let frame = frame_bare_with_header_flags::<u8>(&payload, V1_LAYOUT_FLAGS)
         .expect("frame scalar payload with a zero tail");
     let view = from_bytes_view(&frame).expect("validate tailed frame");
-    assert_eq!(
-        view.decode::<u8>()
-            .expect("compatibility decode accepts a zero tail"),
-        value
-    );
+    assert!(matches!(view.decode::<u8>(), Err(Error::LengthMismatch)));
     assert!(matches!(
         view.decode_exact::<u8>(),
         Err(Error::LengthMismatch)
+    ));
+    assert!(matches!(
+        view.decode_unchecked::<u8>(),
+        Err(Error::LengthMismatch)
+    ));
+    assert!(matches!(
+        decode_from_bytes::<u8>(&frame),
+        Err(Error::LengthMismatch)
+    ));
+}
+
+#[test]
+fn archive_view_rejects_noncanonical_boolean_tags() {
+    let frame = frame_bare_with_header_flags::<bool>(&[2], V1_LAYOUT_FLAGS)
+        .expect("frame an invalid Boolean tag");
+    let view = from_bytes_view(&frame).expect("validate the framed payload");
+    assert!(matches!(
+        view.decode::<bool>(),
+        Err(Error::InvalidTag { .. })
+    ));
+    assert!(matches!(
+        decode_from_bytes::<bool>(&frame),
+        Err(Error::InvalidTag { .. })
     ));
 }
 #[test]
@@ -2515,7 +2601,7 @@ fn vec_u8_decode_rejects_len_prefixed_elements() {
         payload.extend_from_slice(&1u64.to_le_bytes());
         payload.push(*byte);
     }
-    let result = <Vec<u8> as DecodeFromSlice>::decode_from_slice(&payload);
+    let result = decode_field_canonical::<Vec<u8>>(&payload);
     assert!(matches!(result, Err(Error::LengthMismatch)));
     drop(guard);
     reset_decode_state();

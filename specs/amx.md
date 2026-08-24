@@ -147,7 +147,7 @@ Norito fixtures for the descriptor, signed handle, policy snapshot, two-dimensio
 | Source | What to capture | Command / Path | Evidence expectations |
 |--------|-----------------|----------------|-----------------------|
 | Prometheus (`iroha_telemetry`) | Slot and AMX SLOs: `iroha_slot_duration_ms`, `iroha_amx_prepare_ms`, `iroha_amx_commit_ms`, `iroha_da_quorum_ratio`, `iroha_amx_abort_total{stage}` | Scrape `https://$TORII/metrics` or export from the dashboards described in `telemetry.md`. | Attach histogram snapshots and alert history to the run bundle so auditors can see p95/p99 values and alert states. |
-| Sumeragi status and transport metrics | Authenticated revision-4 reducer state plus node-local DA/transport counters such as `sumeragi_da_gate_block_total{reason="missing_local_data"}` and `sumeragi_rbc_da_reschedule_total`. | Capture `GET /v1/sumeragi/status` with an operator signature and scrape `/metrics`. | Store the signed height context, durable commit, queue state, and timestamped metrics with the incident bundle. Node-local metrics are operational observations, not consensus evidence. |
+| Sumeragi status and transport metrics | Authenticated revision-4 reducer state plus node-local signed-DA counters such as `sumeragi_da_gate_block_total{reason="missing_local_data"}` and `sumeragi_da_manifest_guard_total`. | Capture `GET /v1/sumeragi/status` with an operator signature and scrape `/metrics`. | Store the signed height context, durable commit, queue state, and timestamped metrics with the incident bundle. Node-local metrics are operational observations, not consensus evidence. |
 | AXT proof cache | `iroha_axt_proof_cache_events_total{event}` and `iroha_axt_proof_cache_state{dsid,status,manifest_root_hex,verified_slot}` | Scrape the Torii metrics endpoint and inspect `GET /v1/debug/axt/cache` when the telemetry/developer gate is enabled. | Capture the policy snapshot version, cache state, and last rejection without retaining proof payloads. |
 
 ### Troubleshooting playbook
@@ -175,12 +175,12 @@ The canonical data-model types live in
 
 | Type / field | Contract |
 |--------------|----------|
-| `ProofBlob.payload` | Canonical Norito bytes for an `AxtProofEnvelope`; empty payloads are rejected. |
+| `ProofBlob.payload` | Canonical Norito bytes for an `AxtProofEnvelope`; empty payloads and payloads larger than 2 MiB are rejected before envelope decoding. |
 | `ProofBlob.expiry_slot` | Outer mirror of the proof-bound expiry. `None` is the authenticated no-expiry value; verifiers require an exact match before applying freshness policy. |
 | `AxtProofEnvelope.dsid` | Dataspace whose policy validates the proof. |
 | `AxtProofEnvelope.manifest_root` | Non-zero outer mirror of the exact 32-byte `axt_fastpq_manifest_root_v1` proof metadata and, where required by admission, the active Space Directory policy root. |
 | `AxtProofEnvelope.da_commitment` | Outer mirror of the proof-bound optional DA commitment. `axt_fastpq_da_commitment_v1` is always present as 33 bytes: `0 || 32*0` for `None`, or `1 || digest` for `Some(digest)`. |
-| `AxtProofEnvelope.proof` | Non-empty backend proof bytes. |
+| `AxtProofEnvelope.proof` | Non-empty backend proof bytes, limited to 1 MiB before FastPQ payload decoding or verification. |
 | `AxtProofEnvelope.fastpq_binding` | Required FastPQ V1 source, claim, witness, policy, effect, verifier, and target-dataspace binding. |
 | `AxtFastpqBinding.remote_spend_intent_commitments` | Canonical strictly ordered, duplicate-free set of at most 65,536 V1 commitments. Each commitment covers the exact authenticated handle replay key (dataspace, asset-definition incarnation, descriptor binding, era, sub-nonce, and target lane), exact `AssetDefinitionId`, `transfer` operation, canonical `from`/`to` accounts, and effective `Quantity`. Generic proofs may leave the set empty; every proof consumed by `USE_ASSET_HANDLE` must contain and consume exactly one matching claim. |
 | `committed_amount` | Optional non-zero scalar that must exactly match the canonical 16-byte little-endian `u128` in `axt_fastpq_committed_amount_v1` metadata inserted before the FastPQ batch seal and proof are generated. Missing or mismatched proof-bound metadata is rejected. |

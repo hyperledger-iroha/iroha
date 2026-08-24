@@ -1,6 +1,74 @@
 struct EnvVarGuard {
     key: &'static str,
 }
+
+#[test]
+fn generated_genesis_record_reader_requires_exact_lf_framing() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let record = temp.path().join("record");
+    fs::write(&record, b"value\n").expect("write exact record");
+    assert_eq!(
+        read_generated_genesis_record(&record, "test record").expect("read exact record"),
+        "value\n"
+    );
+
+    fs::write(&record, b"value\r\n").expect("write CRLF record");
+    assert_eq!(
+        read_generated_genesis_record(&record, "test record")
+            .expect_err("CRLF must fail closed")
+            .kind(),
+        ErrorKind::InvalidData
+    );
+
+    fs::write(&record, b"value").expect("write unterminated record");
+    assert_eq!(
+        read_generated_genesis_record(&record, "test record")
+            .expect_err("unterminated record must fail closed")
+            .kind(),
+        ErrorKind::InvalidData
+    );
+}
+
+#[test]
+fn generated_genesis_record_reader_rejects_oversized_and_non_regular_inputs() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let oversized = temp.path().join("oversized");
+    fs::write(
+        &oversized,
+        vec![b'a'; GENERATED_GENESIS_RECORD_MAX_BYTES_V1 + 1],
+    )
+    .expect("write oversized record");
+    assert_eq!(
+        read_generated_genesis_record(&oversized, "test record")
+            .expect_err("oversized record must fail closed")
+            .kind(),
+        ErrorKind::InvalidData
+    );
+
+    let directory = temp.path().join("directory");
+    fs::create_dir(&directory).expect("create directory");
+    assert_eq!(
+        read_generated_genesis_record(&directory, "test record")
+            .expect_err("directory must fail closed")
+            .kind(),
+        ErrorKind::InvalidData
+    );
+
+    #[cfg(unix)]
+    {
+        let target = temp.path().join("target");
+        let link = temp.path().join("link");
+        fs::write(&target, b"value\n").expect("write symlink target");
+        symlink(&target, &link).expect("create record symlink");
+        assert_eq!(
+            read_generated_genesis_record(&link, "test record")
+                .expect_err("symlink must fail closed")
+                .kind(),
+            ErrorKind::InvalidData
+        );
+    }
+}
+
 impl EnvVarGuard {
     fn set(key: &'static str, value: &std::ffi::OsStr) -> Self {
         // SAFETY: tests serialize environment mutation within a single thread.
@@ -351,7 +419,7 @@ JSON
         test "$config_mode" = "600"
         grep -F 'expected_hash = "REPLACE_WITH_GENESIS_EXPECTED_HASH"' "$config_file" >/dev/null
         printf 'stub-signed-genesis' > "$out_file"
-        printf '0000000000000000000000000000000000000000000000000000000000000001\n' > "$expected_hash_out"
+        printf 'hash:0000000000000000000000000000000000000000000000000000000000000001#C50E\n' > "$expected_hash_out"
         if [ "$bound_manifest_out" != "$manifest_path" ]; then
           cp "$manifest_path" "$bound_manifest_out"
         fi
@@ -469,7 +537,7 @@ JSON
         test -s "$config_file"
         grep -F 'expected_hash = "REPLACE_WITH_GENESIS_EXPECTED_HASH"' "$config_file" >/dev/null
         printf 'stub-signed-genesis' > "$out_file"
-        printf '0000000000000000000000000000000000000000000000000000000000000001\n' > "$expected_hash_out"
+        printf 'hash:0000000000000000000000000000000000000000000000000000000000000001#C50E\n' > "$expected_hash_out"
         if [ "$bound_manifest_out" != "$manifest_path" ]; then
           cp "$manifest_path" "$bound_manifest_out"
         fi
@@ -560,8 +628,11 @@ fn test_genesis_material(paths: &NetworkPaths) -> GenesisMaterial {
     fs::create_dir_all(&genesis_dir).expect("genesis fixture dir");
     fs::write(&manifest_path, b"{}").expect("write manifest");
     fs::write(&block_path, b"norito-wire-stub").expect("write signed genesis");
-    fs::write(&expected_hash_path, format!("{expected_hash}\n"))
-        .expect("write genesis expected hash");
+    fs::write(
+        &expected_hash_path,
+        format!("{}\n", NetworkId::from_genesis_hash(expected_hash)),
+    )
+    .expect("write genesis expected hash");
     fs::write(&public_key_path, format!("{}\n", key_pair.public_key()))
         .expect("write genesis public key");
     GenesisMaterial {
@@ -832,14 +903,23 @@ fn builder_creates_peer_configs() {
                 .as_str()
         )
     );
+    let genesis = value
+        .get("genesis")
+        .and_then(toml::Value::as_table)
+        .expect("generated genesis config");
     assert_eq!(
-        value
-            .get("genesis")
-            .and_then(toml::Value::as_table)
-            .and_then(|table| table.get("expected_hash"))
+        genesis
+            .get("expected_hash_file")
             .and_then(toml::Value::as_str),
-        Some("hash:0000000000000000000000000000000000000000000000000000000000000001#C50E")
+        Some(
+            supervisor
+                .genesis
+                .expected_hash_path
+                .to_string_lossy()
+                .as_ref()
+        )
     );
+    assert!(!genesis.contains_key("expected_hash"));
     assert!(!contents.contains(GENESIS_EXPECTED_HASH_PLACEHOLDER));
     assert!(
         value
@@ -1258,17 +1338,6 @@ fn multi_peer_configs_bound_soranet_pow_for_local_full_mesh() {
         );
     }
     assert_eq!(revocation_paths.len(), 4);
-    let legacy = SupervisorBuilder::new(ProfilePreset::SinglePeer)
-        .data_root(temp.path().join("single-peer"))
-        .torii_base_port(30000)
-        .p2p_base_port(31000)
-        .build()
-        .expect("build historical profile alias");
-    assert_eq!(
-        legacy.peers().len(),
-        4,
-        "the historical profile name must still launch a safe committee"
-    );
 }
 #[test]
 fn custom_profile_supports_seven_peers_with_unique_ports() {
@@ -1312,8 +1381,8 @@ fn custom_profile_supports_seven_peers_with_unique_ports() {
 fn profile_preset_preserves_consensus_mode() {
     let profile = NetworkProfile::custom(7, SumeragiConsensusMode::Npos).expect("profile");
     let builder =
-        SupervisorBuilder::with_profile(profile).profile_preset(ProfilePreset::SinglePeer);
-    assert_eq!(builder.profile().preset, Some(ProfilePreset::SinglePeer));
+        SupervisorBuilder::with_profile(profile).profile_preset(ProfilePreset::FourPeerBft);
+    assert_eq!(builder.profile().preset, Some(ProfilePreset::FourPeerBft));
     assert_eq!(builder.profile().topology.peer_count, 4);
     assert_eq!(
         builder.profile().consensus_mode,
@@ -1347,7 +1416,7 @@ fn genesis_includes_topology() {
     let _env = env_lock().lock().expect("env lock");
     let temp = tempfile::tempdir().expect("tempdir");
     let _stub = KagamiStub::install(temp.path());
-    let supervisor = SupervisorBuilder::new(ProfilePreset::SinglePeer)
+    let supervisor = SupervisorBuilder::new(ProfilePreset::FourPeerBft)
         .data_root(temp.path())
         .build()
         .expect("build supervisor");
@@ -1377,7 +1446,7 @@ fn genesis_generation_invokes_kagami() {
     let _env = env_lock().lock().expect("env lock");
     let temp = tempfile::tempdir().expect("tempdir");
     let stub = KagamiStub::install(temp.path());
-    let supervisor = SupervisorBuilder::new(ProfilePreset::SinglePeer)
+    let supervisor = SupervisorBuilder::new(ProfilePreset::FourPeerBft)
         .data_root(temp.path())
         .build()
         .expect("build supervisor");
@@ -1431,10 +1500,7 @@ fn generated_genesis_binds_topology_specific_block_cadence() {
     let _env = env_lock().lock().expect("env lock");
     let temp = tempfile::tempdir().expect("tempdir");
     let _stub = KagamiStub::install(temp.path());
-    for (preset, expected_cadence_ms) in [
-        (ProfilePreset::SinglePeer, 1_000),
-        (ProfilePreset::FourPeerBft, 1_000),
-    ] {
+    for (preset, expected_cadence_ms) in [(ProfilePreset::FourPeerBft, 1_000)] {
         let supervisor = SupervisorBuilder::new(preset)
             .data_root(temp.path().join(format!("cadence-{}", preset.slug())))
             .build()
@@ -1499,7 +1565,7 @@ fn kagami_sign_failure_is_reported_and_removes_temporary_key() {
     let temp = tempfile::tempdir().expect("tempdir");
     let _stub = KagamiStub::install(temp.path());
     let _failure = EnvVarGuard::set("MOCHI_KAGAMI_FAIL_SIGN", OsStr::new("1"));
-    let error = match SupervisorBuilder::new(ProfilePreset::SinglePeer)
+    let error = match SupervisorBuilder::new(ProfilePreset::FourPeerBft)
         .data_root(temp.path())
         .build()
     {
@@ -1531,7 +1597,7 @@ fn genesis_profile_and_seed_forward_to_kagami() {
     let temp = tempfile::tempdir().expect("tempdir");
     let stub = KagamiStub::install(temp.path());
     let seed = "0102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f";
-    SupervisorBuilder::new(ProfilePreset::SinglePeer)
+    SupervisorBuilder::new(ProfilePreset::FourPeerBft)
         .data_root(temp.path())
         .genesis_profile(GenesisProfile::Iroha3Dev)
         .vrf_seed_hex(seed)
@@ -1559,7 +1625,7 @@ fn peer_config_records_chain_and_fingerprint_header() {
     let _env = env_lock().lock().expect("env lock");
     let temp = tempfile::tempdir().expect("tempdir");
     let _stub = KagamiStub::install(temp.path());
-    let supervisor = SupervisorBuilder::new(ProfilePreset::SinglePeer)
+    let supervisor = SupervisorBuilder::new(ProfilePreset::FourPeerBft)
         .data_root(temp.path())
         .genesis_profile(GenesisProfile::Iroha3Dev)
         .build()
@@ -1597,7 +1663,7 @@ fn readiness_smoke_plan_uses_primary_signer_and_unique_nonces() {
     let _env = env_lock().lock().expect("env lock");
     let temp = tempfile::tempdir().expect("tempdir");
     let _stub = KagamiStub::install(temp.path());
-    let supervisor = SupervisorBuilder::new(ProfilePreset::SinglePeer)
+    let supervisor = SupervisorBuilder::new(ProfilePreset::FourPeerBft)
         .data_root(temp.path())
         .build()
         .expect("build supervisor");
@@ -1764,7 +1830,7 @@ fn snapshot_export_and_restore_hold_shared_selection_lease() {
     let _env = env_lock().lock().expect("env lock");
     let temp = tempfile::tempdir().expect("tempdir");
     let _stub = KagamiStub::install(temp.path());
-    let mut supervisor = SupervisorBuilder::new(ProfilePreset::SinglePeer)
+    let mut supervisor = SupervisorBuilder::new(ProfilePreset::FourPeerBft)
         .data_root(temp.path())
         .build()
         .expect("build supervisor");
@@ -1844,7 +1910,7 @@ fn export_snapshot_failure_restores_full_running_set() {
     let _stub = KagamiStub::install(temp.path());
     let irohad = write_long_running_irohad_stub(temp.path());
     let _irohad = EnvVarGuard::set("MOCHI_IROHAD", irohad.as_os_str());
-    let mut supervisor = SupervisorBuilder::new(ProfilePreset::SinglePeer)
+    let mut supervisor = SupervisorBuilder::new(ProfilePreset::FourPeerBft)
         .data_root(temp.path())
         .build()
         .expect("build supervisor");
@@ -2034,7 +2100,7 @@ fn restore_snapshot_replaces_only_mutable_runtime_state() {
     let _env = env_lock().lock().expect("env lock");
     let temp = tempfile::tempdir().expect("tempdir");
     let _stub = KagamiStub::install(temp.path());
-    let mut supervisor = SupervisorBuilder::new(ProfilePreset::SinglePeer)
+    let mut supervisor = SupervisorBuilder::new(ProfilePreset::FourPeerBft)
         .data_root(temp.path())
         .build()
         .expect("build supervisor");
@@ -2110,7 +2176,7 @@ fn restore_snapshot_rejects_genesis_hash_mismatch() {
     let _env = env_lock().lock().expect("env lock");
     let temp = tempfile::tempdir().expect("tempdir");
     let _stub = KagamiStub::install(temp.path());
-    let mut supervisor = SupervisorBuilder::new(ProfilePreset::SinglePeer)
+    let mut supervisor = SupervisorBuilder::new(ProfilePreset::FourPeerBft)
         .data_root(temp.path())
         .build()
         .expect("build supervisor");
@@ -2142,7 +2208,7 @@ fn restore_snapshot_rejects_tampered_signed_genesis_before_storage_mutation() {
     let _env = env_lock().lock().expect("env lock");
     let temp = tempfile::tempdir().expect("tempdir");
     let _stub = KagamiStub::install(temp.path());
-    let mut supervisor = SupervisorBuilder::new(ProfilePreset::SinglePeer)
+    let mut supervisor = SupervisorBuilder::new(ProfilePreset::FourPeerBft)
         .data_root(temp.path())
         .build()
         .expect("build supervisor");
@@ -2183,7 +2249,7 @@ fn restore_snapshot_rejects_tampered_peer_config_before_storage_mutation() {
     let _env = env_lock().lock().expect("env lock");
     let temp = tempfile::tempdir().expect("tempdir");
     let _stub = KagamiStub::install(temp.path());
-    let mut supervisor = SupervisorBuilder::new(ProfilePreset::SinglePeer)
+    let mut supervisor = SupervisorBuilder::new(ProfilePreset::FourPeerBft)
         .data_root(temp.path())
         .build()
         .expect("build supervisor");
@@ -2226,7 +2292,7 @@ fn restore_snapshot_rejects_kura_hash_tampering() {
     let _env = env_lock().lock().expect("env lock");
     let temp = tempfile::tempdir().expect("tempdir");
     let _stub = KagamiStub::install(temp.path());
-    let mut supervisor = SupervisorBuilder::new(ProfilePreset::SinglePeer)
+    let mut supervisor = SupervisorBuilder::new(ProfilePreset::FourPeerBft)
         .data_root(temp.path())
         .build()
         .expect("build supervisor");
@@ -2255,7 +2321,7 @@ fn restore_snapshot_rejects_chain_mismatch() {
     let _env = env_lock().lock().expect("env lock");
     let temp = tempfile::tempdir().expect("tempdir");
     let _stub = KagamiStub::install(temp.path());
-    let mut supervisor = SupervisorBuilder::new(ProfilePreset::SinglePeer)
+    let mut supervisor = SupervisorBuilder::new(ProfilePreset::FourPeerBft)
         .data_root(temp.path())
         .build()
         .expect("build supervisor");
@@ -2299,7 +2365,7 @@ fn restore_snapshot_rejects_missing_storage_layout() {
     let _env = env_lock().lock().expect("env lock");
     let temp = tempfile::tempdir().expect("tempdir");
     let _stub = KagamiStub::install(temp.path());
-    let mut supervisor = SupervisorBuilder::new(ProfilePreset::SinglePeer)
+    let mut supervisor = SupervisorBuilder::new(ProfilePreset::FourPeerBft)
         .data_root(temp.path())
         .build()
         .expect("build supervisor");
@@ -2347,7 +2413,7 @@ fn restore_snapshot_rejects_unknown_storage_layout() {
     let _env = env_lock().lock().expect("env lock");
     let temp = tempfile::tempdir().expect("tempdir");
     let _stub = KagamiStub::install(temp.path());
-    let mut supervisor = SupervisorBuilder::new(ProfilePreset::SinglePeer)
+    let mut supervisor = SupervisorBuilder::new(ProfilePreset::FourPeerBft)
         .data_root(temp.path())
         .build()
         .expect("build supervisor");
@@ -2398,7 +2464,7 @@ fn start_rejects_intermediate_storage_generations_symlink_before_spawn() {
     let _kagami = KagamiStub::install(temp.path());
     let irohad = write_long_running_irohad_stub(temp.path());
     let _irohad = EnvVarGuard::set("MOCHI_IROHAD", irohad.as_os_str());
-    let mut supervisor = SupervisorBuilder::new(ProfilePreset::SinglePeer)
+    let mut supervisor = SupervisorBuilder::new(ProfilePreset::FourPeerBft)
         .data_root(temp.path())
         .build()
         .expect("build supervisor");
@@ -2425,7 +2491,7 @@ fn start_rejects_managed_kura_symlink_before_spawn() {
     let _kagami = KagamiStub::install(temp.path());
     let irohad = write_long_running_irohad_stub(temp.path());
     let _irohad = EnvVarGuard::set("MOCHI_IROHAD", irohad.as_os_str());
-    let mut supervisor = SupervisorBuilder::new(ProfilePreset::SinglePeer)
+    let mut supervisor = SupervisorBuilder::new(ProfilePreset::FourPeerBft)
         .data_root(temp.path())
         .build()
         .expect("build supervisor");
@@ -2454,7 +2520,7 @@ fn export_rejects_intermediate_storage_generations_symlink_before_copy() {
     let _env = env_lock().lock().expect("env lock");
     let temp = tempfile::tempdir().expect("tempdir");
     let _kagami = KagamiStub::install(temp.path());
-    let mut supervisor = SupervisorBuilder::new(ProfilePreset::SinglePeer)
+    let mut supervisor = SupervisorBuilder::new(ProfilePreset::FourPeerBft)
         .data_root(temp.path())
         .build()
         .expect("build supervisor");
@@ -2485,7 +2551,7 @@ fn restore_rejects_intermediate_storage_generations_symlink_before_wipe() {
     let _env = env_lock().lock().expect("env lock");
     let temp = tempfile::tempdir().expect("tempdir");
     let _kagami = KagamiStub::install(temp.path());
-    let mut supervisor = SupervisorBuilder::new(ProfilePreset::SinglePeer)
+    let mut supervisor = SupervisorBuilder::new(ProfilePreset::FourPeerBft)
         .data_root(temp.path())
         .build()
         .expect("build supervisor");

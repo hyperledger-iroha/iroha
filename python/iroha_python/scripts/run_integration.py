@@ -33,6 +33,22 @@ GENESIS_ARTIFACT_FILE_ENV = (
 )
 
 
+def _is_canonical_checked_network_id_record(record: str) -> bool:
+    match = re.fullmatch(r"hash:([0-9A-F]{63}[13579BDF])#([0-9A-F]{4})\n", record)
+    if match is None:
+        return False
+    body, checksum = match.groups()
+    crc = 0xFFFF
+    for byte in f"hash:{body}".encode("ascii"):
+        crc ^= byte << 8
+        for _ in range(8):
+            if crc & 0x8000:
+                crc = ((crc << 1) ^ 0x1021) & 0xFFFF
+            else:
+                crc = (crc << 1) & 0xFFFF
+    return checksum == f"{crc:04X}"
+
+
 def _validate_default_compose_genesis_artifacts(compose_file: pathlib.Path) -> None:
     if compose_file.resolve() != DEFAULT_COMPOSE_FILE.resolve():
         return
@@ -41,7 +57,7 @@ def _validate_default_compose_genesis_artifacts(compose_file: pathlib.Path) -> N
         if not raw_path:
             raise RuntimeError(
                 f"{name} is required by the default Compose stack; generate "
-                "a signed genesis, verifier key, and exact hash with kagami"
+                "a signed genesis, verifier key, and checked network identity with kagami"
             )
         path = pathlib.Path(raw_path)
         if name == "IROHA_GENESIS_SIGNED_FILE":
@@ -66,11 +82,12 @@ def _validate_default_compose_genesis_artifacts(compose_file: pathlib.Path) -> N
             raise RuntimeError(
                 f"{name} must contain exactly one non-empty record and a final newline"
             )
-        if name == "IROHA_GENESIS_EXPECTED_HASH_FILE" and re.fullmatch(
-            r"[0-9a-f]{63}[13579bdf]\n", record
-        ) is None:
+        if (
+            name == "IROHA_GENESIS_EXPECTED_HASH_FILE"
+            and not _is_canonical_checked_network_id_record(record)
+        ):
             raise RuntimeError(
-                f"{name} must contain one canonical lowercase Iroha hash record"
+                f"{name} must contain one canonical checked NetworkId record"
             )
 
 

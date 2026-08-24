@@ -607,7 +607,7 @@ pub mod fixed_bytes_hex {
         Ok(out)
     }
 }
-/// Serialize and deserialize a SoraNet privacy collector ID as one canonical lowercase hex value.
+/// Serialize and deserialize a `SoraNet` privacy collector ID as one canonical lowercase hex value.
 #[cfg(feature = "json")]
 #[allow(dead_code)]
 pub mod soranet_privacy_collector_id {

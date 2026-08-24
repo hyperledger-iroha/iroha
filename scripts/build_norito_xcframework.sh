@@ -1588,8 +1588,8 @@ for root, directories, files in os.walk(xcframework, followlinks=False):
 
 with manifest_path.open("r", encoding="utf-8") as handle:
     manifest = json.load(handle, object_pairs_hook=object_without_duplicates)
-if manifest.get("native_bridge_abi_version") != 22:
-    raise SystemExit("staged NoritoBridge manifest does not bind exact ABI 22")
+if manifest.get("native_bridge_abi_version") != 23:
+    raise SystemExit("staged NoritoBridge manifest does not bind exact ABI 23")
 hashes = manifest.get("hashes")
 if not isinstance(hashes, dict) or set(hashes) != set(expected_slices):
     raise SystemExit("staged NoritoBridge manifest has a non-canonical slice inventory")

@@ -79,6 +79,7 @@ const GENESIS_SIGNED_FILE_NAME: &str = "genesis.signed.nrt";
 const GENESIS_EXPECTED_HASH_FILE_NAME: &str = "genesis.expected_hash";
 const GENESIS_PUBLIC_KEY_FILE_NAME: &str = "genesis.public_key";
 const GENESIS_EXPECTED_HASH_PLACEHOLDER: &str = UNRESOLVED_GENESIS_EXPECTED_HASH;
+const GENERATED_GENESIS_RECORD_MAX_BYTES_V1: usize = 4 * 1024;
 #[cfg(any(test, feature = "test"))]
 const TEST_FINALIZE_KAGAMI_STUB_SIGNATURE: &str = "MOCHI_TEST_FINALIZE_KAGAMI_STUB_SIGNATURE";
 const SNAPSHOT_GENERATIONS_DIR_NAME: &str = "generations";
@@ -130,6 +131,132 @@ fn encode_hex(bytes: &[u8]) -> String {
         out.push(TABLE[(byte & 0x0F) as usize] as char);
     }
     out
+}
+fn read_generated_genesis_record(path: &Path, label: &str) -> io::Result<String> {
+    let named = fs::symlink_metadata(path)?;
+    if named.file_type().is_symlink() || !named.is_file() {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!("{label} `{}` is not a regular file", path.display()),
+        ));
+    }
+    let max_bytes = u64::try_from(GENERATED_GENESIS_RECORD_MAX_BYTES_V1).map_err(|_| {
+        io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "generated genesis record byte limit does not fit u64",
+        )
+    })?;
+    if named.len() > max_bytes {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!(
+                "{label} `{}` exceeds its {}-byte limit",
+                path.display(),
+                GENERATED_GENESIS_RECORD_MAX_BYTES_V1
+            ),
+        ));
+    }
+    let mut file = OpenOptions::new().read(true).open(path)?;
+    let opened = file.metadata()?;
+    if !generated_genesis_record_metadata_unchanged(&named, &opened) {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!("{label} `{}` changed while it was opened", path.display()),
+        ));
+    }
+    let read_limit = GENERATED_GENESIS_RECORD_MAX_BYTES_V1
+        .checked_add(1)
+        .ok_or_else(|| {
+            io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "generated genesis record read limit overflow",
+            )
+        })?;
+    let mut bytes = Vec::new();
+    bytes.try_reserve_exact(read_limit).map_err(|_| {
+        io::Error::new(
+            io::ErrorKind::OutOfMemory,
+            "generated genesis record allocation failed",
+        )
+    })?;
+    Read::by_ref(&mut file)
+        .take(u64::try_from(read_limit).map_err(|_| {
+            io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "generated genesis record read limit does not fit u64",
+            )
+        })?)
+        .read_to_end(&mut bytes)?;
+    if bytes.len() > GENERATED_GENESIS_RECORD_MAX_BYTES_V1 {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!(
+                "{label} `{}` exceeds its {}-byte limit",
+                path.display(),
+                GENERATED_GENESIS_RECORD_MAX_BYTES_V1
+            ),
+        ));
+    }
+    let opened_after = file.metadata()?;
+    let named_after = fs::symlink_metadata(path)?;
+    if named_after.file_type().is_symlink()
+        || !generated_genesis_record_metadata_unchanged(&opened, &opened_after)
+        || !generated_genesis_record_metadata_unchanged(&opened_after, &named_after)
+    {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!("{label} `{}` changed while it was read", path.display()),
+        ));
+    }
+    let record = String::from_utf8(bytes).map_err(|_| {
+        io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!("{label} `{}` is not UTF-8", path.display()),
+        )
+    })?;
+    let payload = record.strip_suffix('\n').ok_or_else(|| {
+        io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!(
+                "{label} `{}` must contain exactly one LF-terminated record",
+                path.display()
+            ),
+        )
+    })?;
+    if payload.is_empty()
+        || payload.as_bytes().contains(&b'\r')
+        || payload.as_bytes().contains(&b'\n')
+    {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!(
+                "{label} `{}` must contain exactly one LF-terminated record",
+                path.display()
+            ),
+        ));
+    }
+    Ok(record)
+}
+fn generated_genesis_record_metadata_unchanged(
+    expected: &fs::Metadata,
+    observed: &fs::Metadata,
+) -> bool {
+    if !expected.is_file() || !observed.is_file() || expected.len() != observed.len() {
+        return false;
+    }
+    #[cfg(unix)]
+    {
+        expected.dev() == observed.dev()
+            && expected.ino() == observed.ino()
+            && expected.mtime() == observed.mtime()
+            && expected.mtime_nsec() == observed.mtime_nsec()
+            && expected.ctime() == observed.ctime()
+            && expected.ctime_nsec() == observed.ctime_nsec()
+    }
+    #[cfg(not(unix))]
+    {
+        expected.modified().ok() == observed.modified().ok()
+    }
 }
 /// Result alias for supervisor operations.
 pub type Result<T> = std::result::Result<T, SupervisorError>;
@@ -3998,19 +4125,17 @@ impl PeerSpec {
             "manifest_json".into(),
             toml::Value::String(genesis.manifest_path.display().to_string()),
         );
-        genesis_table.insert(
-            "expected_hash".into(),
-            toml::Value::String(
-                genesis
-                    .expected_hash
-                    .as_ref()
-                    .map(|hash| {
-                        let hash = hash.to_string().to_ascii_uppercase();
-                        norito::literal::format("hash", hash.as_str())
-                    })
-                    .unwrap_or_else(|| GENESIS_EXPECTED_HASH_PLACEHOLDER.to_owned()),
-            ),
-        );
+        if genesis.expected_hash.is_some() {
+            genesis_table.insert(
+                "expected_hash_file".into(),
+                toml::Value::String(genesis.expected_hash_path.display().to_string()),
+            );
+        } else {
+            genesis_table.insert(
+                "expected_hash".into(),
+                toml::Value::String(GENESIS_EXPECTED_HASH_PLACEHOLDER.to_owned()),
+            );
+        }
         root.insert("genesis".into(), toml::Value::Table(genesis_table));
         let mut kura = toml::Table::new();
         kura.insert(
@@ -4052,6 +4177,33 @@ impl PeerSpec {
         }
         for overlay in extra_layers {
             merge_table(&mut root, overlay);
+        }
+        let configured_genesis = root
+            .get("genesis")
+            .and_then(toml::Value::as_table)
+            .ok_or_else(|| SupervisorError::Config("genesis must be a table".to_owned()))?;
+        if genesis.expected_hash.is_some() {
+            let expected_path = genesis.expected_hash_path.display().to_string();
+            if configured_genesis
+                .get("expected_hash_file")
+                .and_then(toml::Value::as_str)
+                != Some(expected_path.as_str())
+                || configured_genesis.contains_key("expected_hash")
+            {
+                return Err(SupervisorError::Config(format!(
+                    "runtime config must select only Mochi's generated genesis identity file `{expected_path}`"
+                )));
+            }
+        } else if configured_genesis
+            .get("expected_hash")
+            .and_then(toml::Value::as_str)
+            != Some(GENESIS_EXPECTED_HASH_PLACEHOLDER)
+            || configured_genesis.contains_key("expected_hash_file")
+        {
+            return Err(SupervisorError::Config(
+                "bootstrap config must select only Mochi's unresolved inline genesis identity"
+                    .to_owned(),
+            ));
         }
         // Apply the generator invariant after the shallow overlays have selected their effective
         // queue table. This preserves later authored values whenever they already cover the
@@ -4660,41 +4812,34 @@ impl GenesisMaterial {
                 self.block_path.display()
             )));
         }
-        let expected_hash_record =
-            fs::read_to_string(&self.expected_hash_path).map_err(|error| {
-                SupervisorError::KagamiInvocation(format!(
-                    "`kagami genesis sign` did not create exact genesis hash `{}`: {error}",
-                    self.expected_hash_path.display()
-                ))
-            })?;
-        let expected_hash_literal = expected_hash_record.strip_suffix('\n').ok_or_else(|| {
+        let expected_hash_record = read_generated_genesis_record(
+            &self.expected_hash_path,
+            "generated checked genesis network identity",
+        )
+        .map_err(|error| {
             SupervisorError::KagamiInvocation(format!(
-                "`kagami genesis sign` produced a non-canonical exact genesis hash at `{}`",
+                "`kagami genesis sign` did not create an exact checked genesis network identity `{}`: {error}",
                 self.expected_hash_path.display()
             ))
         })?;
-        if expected_hash_literal.is_empty()
-            || expected_hash_literal.chars().any(char::is_whitespace)
-        {
-            return Err(SupervisorError::KagamiInvocation(format!(
-                "`kagami genesis sign` produced a non-canonical exact genesis hash at `{}`",
-                self.expected_hash_path.display()
-            )));
-        }
-        let expected_hash = expected_hash_literal
-            .parse::<HashOf<BlockHeader>>()
+        let expected_hash_literal = expected_hash_record
+            .strip_suffix('\n')
+            .expect("exact-record reader preserves one trailing LF");
+        let expected_network_id = expected_hash_literal
+            .parse::<NetworkId>()
             .map_err(|error| {
                 SupervisorError::KagamiInvocation(format!(
-                    "failed to parse exact genesis hash `{}`: {error}",
+                    "failed to parse checked genesis network identity `{}`: {error}",
                     self.expected_hash_path.display()
                 ))
             })?;
-        if expected_hash.to_string() != expected_hash_literal {
+        if expected_hash_record != format!("{expected_network_id}\n") {
             return Err(SupervisorError::KagamiInvocation(format!(
-                "`kagami genesis sign` produced a non-canonical exact genesis hash at `{}`",
+                "`kagami genesis sign` produced a non-canonical checked genesis network identity at `{}`",
                 self.expected_hash_path.display()
             )));
         }
+        let expected_hash = expected_network_id.into_genesis_hash();
         let manifest = RawGenesisTransaction::from_path(&self.manifest_path)?;
         Ok((manifest, expected_hash))
     }
@@ -4716,7 +4861,10 @@ impl GenesisMaterial {
             ))
         })?;
         fs::write(&self.block_path, wire)?;
-        fs::write(&self.expected_hash_path, format!("{}\n", block.hash()))?;
+        fs::write(
+            &self.expected_hash_path,
+            format!("{}\n", NetworkId::from_genesis_hash(block.hash())),
+        )?;
         Ok(())
     }
     fn validate_generation(&self, chain_id: &str, peers: &[PeerSpec]) -> Result<()> {
@@ -4745,8 +4893,26 @@ impl GenesisMaterial {
                 "candidate generation has no exact genesis hash".to_owned(),
             )
         })?;
-        let public_record = fs::read_to_string(&self.public_key_path)?;
-        if public_record != format!("{}\n", self.public_key()) {
+        let public_record = read_generated_genesis_record(
+            &self.public_key_path,
+            "generated genesis public-key record",
+        )
+        .map_err(|error| {
+            SupervisorError::GenerationValidation(format!(
+                "failed to read candidate genesis public-key record `{}`: {error}",
+                self.public_key_path.display()
+            ))
+        })?;
+        let public_literal = public_record
+            .strip_suffix('\n')
+            .expect("exact-record reader preserves one trailing LF");
+        let public_key = public_literal.parse::<PublicKey>().map_err(|error| {
+            SupervisorError::GenerationValidation(format!(
+                "candidate genesis public-key record `{}` is invalid: {error}",
+                self.public_key_path.display()
+            ))
+        })?;
+        if public_record != format!("{public_key}\n") || &public_key != self.public_key() {
             return Err(SupervisorError::GenerationValidation(
                 "candidate genesis public-key record is not exact and canonical".to_owned(),
             ));

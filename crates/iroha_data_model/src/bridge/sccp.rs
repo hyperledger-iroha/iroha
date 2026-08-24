@@ -9,11 +9,6 @@ use crate::{DeriveJsonDeserialize, DeriveJsonSerialize};
 use core::cmp::Ordering;
 use iroha_schema::IntoSchema;
 use norito::codec::{Decode, Encode};
-/// Largest integer encoded as a JSON number by the closed SCCP V1 capability surface.
-///
-/// Capping advertised byte budgets at `2^53 - 1` keeps their exact value portable across every
-/// supported SDK, including runtimes whose JSON number type is IEEE-754 binary64.
-pub const SCCP_V1_JSON_SAFE_INTEGER_MAX: u64 = (1_u64 << 53) - 1;
 /// Maximum canonical SCCP application-payload bytes retained in one outbound record.
 ///
 /// This consensus-visible bound is shared by transaction admission, durable state, and

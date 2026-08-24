@@ -583,12 +583,8 @@ trusted_native_macos_build = sys.argv[13]
 trusted_native_os_tcb_sha256 = sys.argv[14]
 trusted_native_runtime_dependency_contract = sys.argv[15]
 READINESS = "ci/check_kagemusha_production_readiness.sh"
-READINESS_SOURCE_CONTRACT = (
-    "ci/check_kagemusha_production_readiness_source_contract.py"
-)
-READINESS_SOURCE_SUPPORT = (
-    "ci/check_kagemusha_production_readiness_source_support.py"
-)
+READINESS_SOURCE_CONTRACT = "ci/check_kagemusha_production_readiness_source_contract.py"
+READINESS_SOURCE_SUPPORT = "ci/check_kagemusha_production_readiness_source_support.py"
 READINESS_RECURSION_SOURCE_CONTRACT = "ci/check_kagemusha_recursion_source_contract.py"
 READINESS_LIFECYCLE_SOURCE_CONTRACT = "ci/check_kagemusha_lifecycle_source_contract.py"
 READINESS_SOURCE_PROVIDERS = (
@@ -814,8 +810,8 @@ REVIEWED_SOURCE_CLOSURE_KEYS = {
     "untracked_file_count",
     "untracked_path_mode_blob_oid_manifest",
     "untracked_path_mode_blob_oid_manifest_sha256",
-    "ignored_cargo_lock_size_bytes",
-    "ignored_cargo_lock_sha256",
+    "tracked_cargo_lock_size_bytes",
+    "tracked_cargo_lock_sha256",
     "combined_source_fingerprint_sha256",
 }
 SOURCE_SEAL_PROJECTION_KEYS = {
@@ -2618,8 +2614,8 @@ def validate_kagami_verification_report(
     }
     if set(report) != exact_keys:
         raise ValueError("Kagami verification report fields are not exact")
-    if report.get("status") != "verified" or report.get("bridge_abi_version") != 22:
-        raise ValueError("Kagami did not report one verified native-ABI-22 release")
+    if report.get("status") != "verified" or report.get("bridge_abi_version") != 23:
+        raise ValueError("Kagami did not report one verified native-ABI-23 release")
     if report.get("envelope_sha256") != directory.name:
         raise ValueError("Kagami manifest envelope differs from the release directory")
     if report.get("release_policy_sha256") != policy_sha256:
@@ -4563,7 +4559,7 @@ def promotion_errors() -> list[str]:
             continue
         if manifest.get("schema") != "kagemusha.offline.recursive_spend.artifact_manifest.v4":
             errors.append(f"{directory.name}: manifest schema is not V4")
-        if manifest.get("bridge_abi_version") != 22 or manifest.get("source_repo_dirty") is not False:
+        if manifest.get("bridge_abi_version") != 23 or manifest.get("source_repo_dirty") is not False:
             errors.append(f"{directory.name}: ABI/source-tree promotion binding is invalid")
         for field in (
             "authenticated_source_seal_projection_sha256",
@@ -4983,7 +4979,7 @@ if self_test:
             errors.append(f"readiness self-test helper failed unexpectedly: {error}")
 if errors:
     print(
-        f"Kagemusha ABI-21/V4 (native bridge ABI 22) {mode} corridor failed:",
+        f"Kagemusha ABI-21/V4 (native bridge ABI 23) {mode} corridor failed:",
         file=sys.stderr,
     )
     for error in errors:
@@ -4991,12 +4987,12 @@ if errors:
     raise SystemExit(1)
 if mode == "candidate":
     print(
-        "Kagemusha ABI-21/V4 (native bridge ABI 22) static candidate corridor passed; "
+        "Kagemusha ABI-21/V4 (native bridge ABI 23) static candidate corridor passed; "
         "production promotion was not evaluated."
     )
 else:
     print(
-        "Kagemusha ABI-21/V4 (native bridge ABI 22) production promotion verification "
+        "Kagemusha ABI-21/V4 (native bridge ABI 23) production promotion verification "
         "corridor passed; no publication or activation was performed."
     )
 PY

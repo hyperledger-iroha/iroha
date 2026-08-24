@@ -56,7 +56,8 @@ fuzz_target!(|input: LookupInput| {
         .map(|entry| if entry.selector { 1 } else { 0 })
         .collect();
     let witnesses: Vec<u64> = input.entries.iter().map(|entry| entry.witness).collect();
-    let result = compute_lookup_grand_product(&selectors, &witnesses, input.gamma);
+    let result = compute_lookup_grand_product(&selectors, &witnesses, input.gamma)
+        .expect("fuzz input constructs equal-length lookup columns");
     let mut acc = 1u64;
     let mut running = Vec::with_capacity(witnesses.len());
     for (&selector, &witness) in selectors.iter().zip(witnesses.iter()) {

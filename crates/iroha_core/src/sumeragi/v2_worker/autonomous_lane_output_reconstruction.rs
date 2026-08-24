@@ -825,6 +825,9 @@ fn applied_height_reconstruction_covers(
                     wire::ConsensusMessageV2Payload::VrfReveal(reveal) => {
                         reveal.epoch == artifact.height_context.epoch
                     }
+                    wire::ConsensusMessageV2Payload::GlobalBeaconPartialSignature(partial) => {
+                        round_matches(partial.round)
+                    }
                 }
             }
             lane_message @ (BlockMessage::LaneBlockProposal(_)

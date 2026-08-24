@@ -1,20 +1,21 @@
 //! Privately declared, non-authorizing recursive STATE-fold contract for Offline Cash V2.
 //!
-//! This private child freezes the field-neutral boundary a future implementation
-//! must satisfy; it does not
-//! implement a Halo2 circuit, BGH19 verification, artifact loading, or a
-//! production backend. For each Pasta parity, the one permitted predecessor
-//! fold order is
+//! This private framing child freezes the field-neutral boundary an authorized
+//! recursive implementation must satisfy; it does not itself implement a Halo2
+//! circuit, artifact loading, or a production backend. Its ownership carrier is
+//! consumed only by the private native BGH19 relation sibling. For each Pasta
+//! parity, the one permitted predecessor fold order is
 //! `[P0.current, P0.prior, P1.current, P1.prior, Guard.current, Guard.prior]`.
 //! A `current` accumulator is derived only after reading that child's proof and
 //! is never copied from the child's current public instances. A `prior` lineage
 //! is the canonical 576-byte tail beginning at STATE ABI word 93 for STATE
 //! parents and GuardBundle ABI word 192 for the GuardBundle parent.
 //!
-//! BGH19 transcript bytes remain opaque here. Exact length and canonical input
-//! accumulator codecs are useful fail-closed framing checks, but they are not
-//! proof verification. In particular, this module grants no recursion, STATE,
-//! GuardBundle, artifact, persistence, readiness, or release authority.
+//! BGH19 transcript bytes remain opaque to this framing module. Exact length and
+//! canonical input accumulator codecs are useful fail-closed framing checks,
+//! but they are not proof verification. In particular, this module grants no
+//! recursion, STATE, GuardBundle, artifact, persistence, readiness, or release
+//! authority.
 
 use core::{convert::Infallible, fmt};
 
@@ -464,7 +465,11 @@ where
     Ok(())
 }
 
-/// Opaque exact-length BGH19 bytes. Only a future verifier may interpret them.
+/// Opaque exact-length BGH19 bytes.
+///
+/// This codec grants no verification authority. The private native relation
+/// verifier is the sole current interpreter, and no recursive or production
+/// backend consumes these bytes.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) struct OpaqueStateBgh19ProofV2([u8; STATE_RECURSIVE_FOLD_BGH19_PROOF_BYTES_V2]);
 
@@ -498,7 +503,7 @@ pub(super) enum StateRecursiveFoldResultOwnershipErrorV2 {
     EqClaimedOutputParityMismatch,
     /// The second claimed output was not the Ep accumulator.
     EpClaimedOutputParityMismatch,
-    /// No recursive verifier can consume the ownership-bound result.
+    /// The structural/production boundary has no authorized verifier.
     VerificationUnavailable,
 }
 
@@ -512,7 +517,7 @@ impl fmt::Display for StateRecursiveFoldResultOwnershipErrorV2 {
                 "offline-cash V2 Ep recursive-fold claimed output has wrong parity"
             }
             Self::VerificationUnavailable => {
-                "offline-cash V2 recursive-fold result verification is unavailable"
+                "offline-cash V2 production recursive-fold result verification is unavailable"
             }
         })
     }
@@ -819,7 +824,10 @@ pub(super) fn assemble_provenance_bound_state_recursive_fold_result_v2(
     ProvenanceBoundStateRecursiveFoldResultV2 { inputs, result }
 }
 
-/// Fail closed before an ownership-bound claimed result can cross verification.
+/// Fail closed before a candidate can cross the structural production boundary.
+///
+/// The private native relation verifier is deliberately separate and grants no
+/// recursive-backend, readiness, release, or production authority.
 pub(super) fn fail_closed_provenance_bound_state_recursive_fold_result_v2(
     _candidate: ProvenanceBoundStateRecursiveFoldResultV2,
 ) -> Result<Infallible, StateRecursiveFoldResultOwnershipErrorV2> {
@@ -990,12 +998,12 @@ pub(super) fn unpack_state_cells_v2(
     Ok(words)
 }
 
-pub(super) mod sealed {
-    pub(in crate::zk::offline_cash_v2) trait Sealed {}
+mod sealed {
+    pub trait Sealed {}
 }
 
 /// Marker implemented only by uninhabited adapters in this source module.
-pub(super) trait SealedStateRecursiveAdapterV2: sealed::Sealed {}
+trait SealedStateRecursiveAdapterV2: sealed::Sealed {}
 
 /// Uninhabited move-only compiler adapter. No circuit compiler is wired.
 pub(super) enum StateRecursiveCompilerAdapterV2 {}

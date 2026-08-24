@@ -213,7 +213,6 @@ fn enable_bls_batching(state: &mut iroha_core::state::State) {
         debug_trace_scheduler_inputs:
             iroha_config::parameters::defaults::pipeline::DEBUG_TRACE_SCHEDULER_INPUTS,
         debug_trace_tx_eval: iroha_config::parameters::defaults::pipeline::DEBUG_TRACE_TX_EVAL,
-        signature_batch_max: iroha_config::parameters::defaults::pipeline::SIGNATURE_BATCH_MAX,
         signature_batch_max_ed25519:
             iroha_config::parameters::defaults::pipeline::SIGNATURE_BATCH_MAX_ED25519,
         signature_batch_max_secp256k1:
@@ -582,8 +581,10 @@ fn bls_multi_message_verification_fails_and_counts() {
     );
     #[cfg(feature = "telemetry")]
     {
-        let ((same_success, same_failure), (multi_success, multi_failure)) =
-            state.view().metrics().pipeline_sig_bls_result_totals();
+        let ((same_success, same_failure), (multi_success, multi_failure)) = state
+            .view()
+            .metrics()
+            .pipeline_sig_bls_result_totals(LaneId::SINGLE);
         assert_eq!(
             same_success + same_failure,
             0,

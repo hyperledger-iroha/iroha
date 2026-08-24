@@ -50,7 +50,9 @@ const POLICY_ID_DOMAIN_V1: &[u8] = b"iroha.taira.privacy.bootle-lantern.policy.v
 const BROKER_EXPORT_SCHEMA_V1: &str = "iroha.taira.privacy.bootle-lantern-broker-public.v1";
 const ROLLOUT_PLAN_PATH_V1: &str = "configs/soranexus/taira/privacy_rollout_plan_v1.json";
 const ROLLOUT_PLAN_SHA256_V1: &str =
-    "6db9c54ebfa147a57199b02f476929389b0751d59c8387da2e0104d16200ce65";
+    "19654e999793036517f56eb61d8b0d4906c7c686504264ecb83bbb6e65b0f92f";
+const CANONICAL_ROLLOUT_PLAN_V1: &[u8] =
+    include_bytes!("../../../../configs/soranexus/taira/privacy_rollout_plan_v1.json");
 const CANONICAL_PLAN_TEMPLATE_V1: &[u8] =
     include_bytes!("../../../../configs/soranexus/taira/privacy_bootstrap_plan.json");
 const CANONICAL_CONFIG_TEMPLATE_V1: &[u8] =
@@ -1081,6 +1083,12 @@ fn validate_staging_plan_v1(plan: &JsonValue) -> color_eyre::Result<()> {
         ROLLOUT_PLAN_SHA256_V1,
         "governance rollout",
     )?;
+    let actual_rollout_plan_sha256 = hex::encode(sha256(CANONICAL_ROLLOUT_PLAN_V1));
+    if actual_rollout_plan_sha256 != ROLLOUT_PLAN_SHA256_V1 {
+        bail!(
+            "canonical Taira privacy rollout plan SHA-256 differs from its compiled pin: expected {ROLLOUT_PLAN_SHA256_V1}, got {actual_rollout_plan_sha256}"
+        );
+    }
     if rollout
         .get("controller_observation_required")
         .and_then(JsonValue::as_bool)
@@ -2242,6 +2250,68 @@ mod tests {
         assert!(!String::from_utf8_lossy(&first.plan).contains("issuer_seed"));
         assert!(!String::from_utf8_lossy(&first.config).contains("bearer_token"));
         assert!(!String::from_utf8_lossy(&first.genesis).contains("principal_seed"));
+    }
+    #[test]
+    fn rollout_plan_hash_and_fail_closed_rows_are_source_bound() {
+        let bootstrap: JsonValue =
+            norito::json::from_slice(PLAN_TEMPLATE_V1).expect("parse staging plan");
+        validate_staging_plan_v1(&bootstrap)
+            .expect("bootstrap anchor, compiled pin, and rollout bytes must agree");
+
+        let rollout: JsonValue = norito::json::from_slice(CANONICAL_ROLLOUT_PLAN_V1)
+            .expect("parse canonical rollout plan");
+        let protocols = rollout
+            .get("protocols")
+            .and_then(JsonValue::as_array)
+            .expect("rollout protocol rows");
+        assert_eq!(protocols.len(), PrivacyProtocolIdV1::COUNT);
+        let unavailable = [
+            (
+                "zk-ace-pq-authorization-v0",
+                "ZkAceNativeErrorV1::EngineUnavailable",
+            ),
+            ("iroha-zk-ams-v1", "ZkAmsMkheErrorV1::ReleaseUnavailable"),
+            (
+                "vega-existing-credential-zk-v0",
+                "MissingGovernedFigure9ProverArtifacts",
+            ),
+            (
+                "iroha-zk-x509-stark-p256-v0",
+                "ZkX509ProfileErrorV1::EngineIncomplete",
+            ),
+        ];
+        let waves = rollout
+            .get("waves")
+            .and_then(JsonValue::as_array)
+            .expect("rollout waves");
+        assert_eq!(waves.len(), 4);
+        for (label, blocker) in unavailable {
+            let row = protocols
+                .iter()
+                .find(|row| row.get("label").and_then(JsonValue::as_str) == Some(label))
+                .unwrap_or_else(|| panic!("missing rollout row `{label}`"));
+            assert_eq!(
+                row.get("assurance").and_then(JsonValue::as_str),
+                Some("unavailable")
+            );
+            assert_eq!(
+                row.get("release_status").and_then(JsonValue::as_str),
+                Some("retained-required")
+            );
+            let missing_evidence = row
+                .get("missing_evidence")
+                .and_then(JsonValue::as_array)
+                .expect("missing-evidence array");
+            assert_eq!(missing_evidence.len(), 1);
+            assert_eq!(missing_evidence[0].as_str(), Some(blocker));
+            let scheduled = waves
+                .iter()
+                .filter_map(|wave| wave.get("protocols").and_then(JsonValue::as_array))
+                .flatten()
+                .filter(|protocol| protocol.as_str() == Some(label))
+                .count();
+            assert_eq!(scheduled, 1, "`{label}` must remain in exactly one wave");
+        }
     }
     #[test]
     fn release_plan_requires_null_staging_network_and_binds_broker_network() {

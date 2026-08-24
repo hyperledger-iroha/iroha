@@ -1155,13 +1155,13 @@ _SAME_ROUND_SEMANTIC_KERNEL_SOURCE_SHA256 = {
         "b78fe6b65194ff48919c35f8423f31714fb6da4a172d8a004720e5b23f0b0d50"
     ),
     "crates/iroha_core/src/sumeragi/v2_effects.rs": (
-        "33007d59cc1c0784e3f45e2aac6967f254296bc4787d6c2f39be807ab7b1e58e"
+        "b75cd269a9bcf8c379d7b72bc5d00b38bc35ea6010ec7bde8be93c22f4f97a31"
     ),
     "crates/iroha_core/src/sumeragi/v2_runner.rs": (
         "2e4b90347a928d08d95c7416f86f194f06258f5254448ba0d3ad9ee9396ce070"
     ),
     "crates/iroha_core/src/sumeragi/v2_worker.rs": (
-        "ea0458b6597de2ecd4394857dd006b8e2dc5bced3d1525958dea84d8b56a13d2"
+        "b22969477e93218eebbef1f28f464f86e545f393910d9ddf75d3001af09f0d25"
     ),
     "crates/iroha_sumeragi_core/src/verus_proofs.rs": (
         "78ae6f7721048780b66220419c7d59aa7af45ab0e6db62ca6e381e2eea85ea2e"

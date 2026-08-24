@@ -14,6 +14,7 @@ use std::{
     process::ExitCode,
 };
 type Result<T> = std::result::Result<T, ReportError>;
+const SIGNED_RS16_DA_SCHEMA: &str = "signed_rs16_da_v1";
 fn main() -> ExitCode {
     match emit_report(io::stdout().lock()) {
         Ok(()) => ExitCode::SUCCESS,
@@ -105,7 +106,7 @@ fn generate_report(root: &Path) -> Result<String> {
     writeln!(output, "\n## Summary\n")?;
     writeln!(
         output,
-        "| Scenario | Runs | Peers | Payload (MiB) | RBC deliver median (ms) | RBC deliver max (ms) | Commit median (ms) | Commit max (ms) | Throughput median (MiB/s) | Throughput min (MiB/s) | RBC<=Commit | BG queue max | P2P drops max |"
+        "| Scenario | Runs | Peers | Payload (MiB) | Signed DA available median (ms) | Signed DA available max (ms) | Commit median (ms) | Commit max (ms) | Throughput median (MiB/s) | Throughput min (MiB/s) | DA<=Commit | BG queue max | P2P drops max |"
     )?;
     writeln!(
         output,
@@ -115,17 +116,17 @@ fn generate_report(root: &Path) -> Result<String> {
         let summary = ScenarioSummary::from_runs(scenario, runs)?;
         writeln!(
             output,
-            "| {scenario} | {runs} | {peers} | {payload_mib:.2} | {rbc_median:.0} | {rbc_max:.0} | {commit_median:.0} | {commit_max:.0} | {throughput_median:.2} | {throughput_min:.2} | {deliver_guard} | {queue_bg_max} | {queue_p2p_max} |",
+            "| {scenario} | {runs} | {peers} | {payload_mib:.2} | {da_median:.0} | {da_max:.0} | {commit_median:.0} | {commit_max:.0} | {throughput_median:.2} | {throughput_min:.2} | {availability_guard} | {queue_bg_max} | {queue_p2p_max} |",
             runs = summary.runs,
             peers = summary.peers,
             payload_mib = summary.payload_mib,
-            rbc_median = summary.rbc_deliver.median,
-            rbc_max = summary.rbc_deliver.max,
+            da_median = summary.da_available.median,
+            da_max = summary.da_available.max,
             commit_median = summary.commit.median,
             commit_max = summary.commit.max,
             throughput_median = summary.throughput.median,
             throughput_min = summary.throughput.min,
-            deliver_guard = if summary.all_deliver_within_commit {
+            availability_guard = if summary.all_available_within_commit {
                 "yes"
             } else {
                 "no"
@@ -151,12 +152,12 @@ struct ScenarioSample {
     scenario: String,
     peers: u64,
     payload_bytes: u64,
-    rbc_deliver_ms: f64,
+    da_available_ms: f64,
     commit_ms: f64,
     throughput_mib_s: f64,
     total_chunks: u64,
     received_chunks: u64,
-    ready_count: u64,
+    availability_vote_count: u64,
     view: u64,
     height: u64,
     block_hash: String,
@@ -177,20 +178,27 @@ impl ScenarioSample {
             expected: "object",
             actual: value_type(&value),
         })?;
+        let schema = require_string(root, "schema", &path)?;
+        if schema != SIGNED_RS16_DA_SCHEMA {
+            return Err(ReportError::UnsupportedSchema {
+                path,
+                actual: schema,
+            });
+        }
         let scenario = require_string(root, "scenario", &path)?;
         let peers = require_u64(root, "peers", &path)?;
         let payload_bytes = require_u64(root, "payload_bytes", &path)?;
         let timings = require_object(root, "timings", &path)?;
-        let rbc_deliver_ms = require_f64(timings, "rbc_deliver_ms", &path)?;
+        let da_available_ms = require_f64(timings, "da_available_ms", &path)?;
         let commit_ms = require_f64(timings, "commit_ms", &path)?;
         let throughput_mib_s = require_f64(timings, "throughput_mib_s", &path)?;
-        let rbc = require_object(root, "rbc", &path)?;
-        let total_chunks = require_u64(rbc, "total_chunks", &path)?;
-        let received_chunks = require_u64(rbc, "received_chunks", &path)?;
-        let ready_count = require_u64(rbc, "ready_count", &path)?;
-        let view = require_u64(rbc, "view", &path)?;
-        let height = require_u64(rbc, "height", &path)?;
-        let block_hash = require_string(rbc, "block_hash", &path)?;
+        let signed_da = require_object(root, "signed_da", &path)?;
+        let total_chunks = require_u64(signed_da, "total_chunks", &path)?;
+        let received_chunks = require_u64(signed_da, "received_chunks", &path)?;
+        let availability_vote_count = require_u64(signed_da, "availability_vote_count", &path)?;
+        let view = require_u64(signed_da, "view", &path)?;
+        let height = require_u64(signed_da, "height", &path)?;
+        let block_hash = require_string(signed_da, "block_hash", &path)?;
         let peer_metrics = match root.get("per_peer_metrics") {
             Some(Value::Array(list)) => Some(PeerMetricsSummary::from_array(list, &path)?),
             Some(other) => {
@@ -230,12 +238,12 @@ impl ScenarioSample {
             scenario,
             peers,
             payload_bytes,
-            rbc_deliver_ms,
+            da_available_ms,
             commit_ms,
             throughput_mib_s,
             total_chunks,
             received_chunks,
-            ready_count,
+            availability_vote_count,
             view,
             height,
             block_hash,
@@ -265,10 +273,10 @@ struct PeerMetricsSummary {
     peers: usize,
     payload_bytes_min: f64,
     payload_bytes_max: f64,
-    deliver_total_min: f64,
-    deliver_total_max: f64,
-    ready_total_min: f64,
-    ready_total_max: f64,
+    manifest_guard_allowed_total_min: f64,
+    manifest_guard_allowed_total_max: f64,
+    votes_ingested_total_min: f64,
+    votes_ingested_total_max: f64,
 }
 impl PeerMetricsSummary {
     fn from_array(list: &[Value], path: &Path) -> Result<Self> {
@@ -280,10 +288,10 @@ impl PeerMetricsSummary {
         }
         let mut payload_bytes_min = f64::INFINITY;
         let mut payload_bytes_max = f64::NEG_INFINITY;
-        let mut deliver_total_min = f64::INFINITY;
-        let mut deliver_total_max = f64::NEG_INFINITY;
-        let mut ready_total_min = f64::INFINITY;
-        let mut ready_total_max = f64::NEG_INFINITY;
+        let mut manifest_guard_allowed_total_min = f64::INFINITY;
+        let mut manifest_guard_allowed_total_max = f64::NEG_INFINITY;
+        let mut votes_ingested_total_min = f64::INFINITY;
+        let mut votes_ingested_total_max = f64::NEG_INFINITY;
         for value in list {
             let obj = value.as_object().ok_or_else(|| ReportError::InvalidType {
                 path: path.to_path_buf(),
@@ -292,23 +300,25 @@ impl PeerMetricsSummary {
                 actual: value_type(value),
             })?;
             let payload = require_f64(obj, "payload_bytes", path)?;
-            let deliver = require_f64(obj, "deliver_total", path)?;
-            let ready = require_f64(obj, "ready_total", path)?;
+            let manifest_allowed = require_f64(obj, "manifest_guard_allowed_total", path)?;
+            let votes_ingested = require_f64(obj, "votes_ingested_total", path)?;
             payload_bytes_min = payload_bytes_min.min(payload);
             payload_bytes_max = payload_bytes_max.max(payload);
-            deliver_total_min = deliver_total_min.min(deliver);
-            deliver_total_max = deliver_total_max.max(deliver);
-            ready_total_min = ready_total_min.min(ready);
-            ready_total_max = ready_total_max.max(ready);
+            manifest_guard_allowed_total_min =
+                manifest_guard_allowed_total_min.min(manifest_allowed);
+            manifest_guard_allowed_total_max =
+                manifest_guard_allowed_total_max.max(manifest_allowed);
+            votes_ingested_total_min = votes_ingested_total_min.min(votes_ingested);
+            votes_ingested_total_max = votes_ingested_total_max.max(votes_ingested);
         }
         Ok(Self {
             peers: list.len(),
             payload_bytes_min,
             payload_bytes_max,
-            deliver_total_min,
-            deliver_total_max,
-            ready_total_min,
-            ready_total_max,
+            manifest_guard_allowed_total_min,
+            manifest_guard_allowed_total_max,
+            votes_ingested_total_min,
+            votes_ingested_total_max,
         })
     }
 }
@@ -318,12 +328,12 @@ struct ScenarioSummary {
     peers: u64,
     payload_bytes: u64,
     payload_mib: f64,
-    rbc_deliver: Stats,
+    da_available: Stats,
     commit: Stats,
     throughput: Stats,
-    all_deliver_within_commit: bool,
+    all_available_within_commit: bool,
     total_chunks: BTreeSet<u64>,
-    ready_counts: BTreeSet<u64>,
+    availability_vote_counts: BTreeSet<u64>,
     queue_bg_depth: Option<Stats>,
     queue_p2p_drops: Option<Stats>,
     peer_metrics: Option<AggregatePeerMetrics>,
@@ -341,12 +351,12 @@ impl ScenarioSummary {
         runs_detail.sort_by(|a, b| a.source.cmp(&b.source));
         let peers = runs_detail[0].peers;
         let payload_bytes = runs_detail[0].payload_bytes;
-        let mut rbc_times = Vec::with_capacity(runs.len());
+        let mut da_available_times = Vec::with_capacity(runs.len());
         let mut commit_times = Vec::with_capacity(runs.len());
         let mut throughputs = Vec::with_capacity(runs.len());
-        let mut all_deliver_within_commit = true;
+        let mut all_available_within_commit = true;
         let mut total_chunks = BTreeSet::new();
-        let mut ready_counts = BTreeSet::new();
+        let mut availability_vote_counts = BTreeSet::new();
         let mut peer_metrics: Option<AggregatePeerMetrics> = None;
         let mut queue_bg_values = Vec::new();
         let mut queue_p2p_values = Vec::new();
@@ -386,12 +396,12 @@ impl ScenarioSummary {
                     ),
                 });
             }
-            rbc_times.push(run.rbc_deliver_ms);
+            da_available_times.push(run.da_available_ms);
             commit_times.push(run.commit_ms);
             throughputs.push(run.throughput_mib_s);
-            all_deliver_within_commit &= run.rbc_deliver_ms <= run.commit_ms;
+            all_available_within_commit &= run.da_available_ms <= run.commit_ms;
             total_chunks.insert(run.total_chunks);
-            ready_counts.insert(run.ready_count);
+            availability_vote_counts.insert(run.availability_vote_count);
             if let Some(sample_peer_metrics) = &run.peer_metrics {
                 let aggregate = peer_metrics.get_or_insert_with(AggregatePeerMetrics::default);
                 aggregate.ingest(sample_peer_metrics);
@@ -416,12 +426,12 @@ impl ScenarioSummary {
             peers,
             payload_bytes,
             payload_mib: u64_to_f64(payload_bytes) / (1024.0 * 1024.0),
-            rbc_deliver: Stats::from_values(&rbc_times),
+            da_available: Stats::from_values(&da_available_times),
             commit: Stats::from_values(&commit_times),
             throughput: Stats::from_values(&throughputs),
-            all_deliver_within_commit,
+            all_available_within_commit,
             total_chunks,
-            ready_counts,
+            availability_vote_counts,
             queue_bg_depth,
             queue_p2p_drops,
             peer_metrics,
@@ -447,18 +457,18 @@ impl ScenarioSummary {
         )?;
         writeln!(
             output,
-            "- RBC chunks observed: {}",
+            "- Signed RS16 chunks observed: {}",
             format_u64_set(&self.total_chunks)
         )?;
         writeln!(
             output,
-            "- READY vote counts: {}",
-            format_u64_set(&self.ready_counts)
+            "- Availability vote counts: {}",
+            format_u64_set(&self.availability_vote_counts)
         )?;
         writeln!(
             output,
-            "- RBC<=Commit observed: {}",
-            if self.all_deliver_within_commit {
+            "- DA<=Commit observed: {}",
+            if self.all_available_within_commit {
                 "yes"
             } else {
                 "no"
@@ -466,8 +476,8 @@ impl ScenarioSummary {
         )?;
         writeln!(
             output,
-            "- RBC delivery mean (ms): {:.2}",
-            self.rbc_deliver.mean
+            "- Signed DA availability mean (ms): {:.2}",
+            self.da_available.mean
         )?;
         writeln!(output, "- Commit mean (ms): {:.2}", self.commit.mean)?;
         writeln!(
@@ -503,13 +513,13 @@ impl ScenarioSummary {
             )?;
             writeln!(
                 output,
-                "- per-peer deliver broadcasts: {:.0} - {:.0}",
-                peer.deliver_total_min, peer.deliver_total_max
+                "- per-peer allowed manifest guards: {:.0} - {:.0}",
+                peer.manifest_guard_allowed_total_min, peer.manifest_guard_allowed_total_max
             )?;
             writeln!(
                 output,
-                "- per-peer ready broadcasts: {:.0} - {:.0}",
-                peer.ready_total_min, peer.ready_total_max
+                "- per-peer availability votes ingested: {:.0} - {:.0}",
+                peer.votes_ingested_total_min, peer.votes_ingested_total_max
             )?;
         }
         Ok(())
@@ -517,7 +527,7 @@ impl ScenarioSummary {
     fn render_runs_table(&self, output: &mut String) -> Result<()> {
         writeln!(
             output,
-            "\n| Run | Source | Block | Height | View | RBC deliver (ms) | Commit (ms) | Throughput (MiB/s) | RBC<=Commit | READY | Total chunks | Received | BG queue max | P2P drops |"
+            "\n| Run | Source | Block | Height | View | Signed DA available (ms) | Commit (ms) | Throughput (MiB/s) | DA<=Commit | Availability votes | Total chunks | Received | BG queue max | P2P drops |"
         )?;
         writeln!(
             output,
@@ -541,15 +551,15 @@ impl ScenarioSummary {
                 shorten_hash(&run.block_hash),
                 run.height,
                 run.view,
-                run.rbc_deliver_ms,
+                run.da_available_ms,
                 run.commit_ms,
                 run.throughput_mib_s,
-                if run.rbc_deliver_ms <= run.commit_ms {
+                if run.da_available_ms <= run.commit_ms {
                     "yes"
                 } else {
                     "no"
                 },
-                run.ready_count,
+                run.availability_vote_count,
                 run.total_chunks,
                 run.received_chunks,
                 queue_bg_display,
@@ -563,10 +573,10 @@ impl ScenarioSummary {
 struct AggregatePeerMetrics {
     payload_bytes_min: f64,
     payload_bytes_max: f64,
-    deliver_total_min: f64,
-    deliver_total_max: f64,
-    ready_total_min: f64,
-    ready_total_max: f64,
+    manifest_guard_allowed_total_min: f64,
+    manifest_guard_allowed_total_max: f64,
+    votes_ingested_total_min: f64,
+    votes_ingested_total_max: f64,
     first: bool,
 }
 impl AggregatePeerMetrics {
@@ -574,18 +584,26 @@ impl AggregatePeerMetrics {
         if self.first {
             self.payload_bytes_min = metrics.payload_bytes_min;
             self.payload_bytes_max = metrics.payload_bytes_max;
-            self.deliver_total_min = metrics.deliver_total_min;
-            self.deliver_total_max = metrics.deliver_total_max;
-            self.ready_total_min = metrics.ready_total_min;
-            self.ready_total_max = metrics.ready_total_max;
+            self.manifest_guard_allowed_total_min = metrics.manifest_guard_allowed_total_min;
+            self.manifest_guard_allowed_total_max = metrics.manifest_guard_allowed_total_max;
+            self.votes_ingested_total_min = metrics.votes_ingested_total_min;
+            self.votes_ingested_total_max = metrics.votes_ingested_total_max;
             self.first = false;
         } else {
             self.payload_bytes_min = self.payload_bytes_min.min(metrics.payload_bytes_min);
             self.payload_bytes_max = self.payload_bytes_max.max(metrics.payload_bytes_max);
-            self.deliver_total_min = self.deliver_total_min.min(metrics.deliver_total_min);
-            self.deliver_total_max = self.deliver_total_max.max(metrics.deliver_total_max);
-            self.ready_total_min = self.ready_total_min.min(metrics.ready_total_min);
-            self.ready_total_max = self.ready_total_max.max(metrics.ready_total_max);
+            self.manifest_guard_allowed_total_min = self
+                .manifest_guard_allowed_total_min
+                .min(metrics.manifest_guard_allowed_total_min);
+            self.manifest_guard_allowed_total_max = self
+                .manifest_guard_allowed_total_max
+                .max(metrics.manifest_guard_allowed_total_max);
+            self.votes_ingested_total_min = self
+                .votes_ingested_total_min
+                .min(metrics.votes_ingested_total_min);
+            self.votes_ingested_total_max = self
+                .votes_ingested_total_max
+                .max(metrics.votes_ingested_total_max);
         }
     }
 }
@@ -594,10 +612,10 @@ impl Default for AggregatePeerMetrics {
         Self {
             payload_bytes_min: f64::INFINITY,
             payload_bytes_max: f64::NEG_INFINITY,
-            deliver_total_min: f64::INFINITY,
-            deliver_total_max: f64::NEG_INFINITY,
-            ready_total_min: f64::INFINITY,
-            ready_total_max: f64::NEG_INFINITY,
+            manifest_guard_allowed_total_min: f64::INFINITY,
+            manifest_guard_allowed_total_max: f64::NEG_INFINITY,
+            votes_ingested_total_min: f64::INFINITY,
+            votes_ingested_total_max: f64::NEG_INFINITY,
             first: true,
         }
     }
@@ -656,6 +674,10 @@ enum ReportError {
         expected: &'static str,
         actual: &'static str,
     },
+    UnsupportedSchema {
+        path: PathBuf,
+        actual: String,
+    },
     EmptyDataset(PathBuf),
     Inconsistent {
         scenario: String,
@@ -686,6 +708,11 @@ impl std::fmt::Display for ReportError {
                     path.display()
                 )
             }
+            Self::UnsupportedSchema { path, actual } => write!(
+                f,
+                "summary {} declares unsupported schema `{actual}`; expected `{SIGNED_RS16_DA_SCHEMA}`",
+                path.display()
+            ),
             Self::EmptyDataset(root) => {
                 write!(f, "no *.summary.json files found in {}", root.display())
             }
@@ -848,20 +875,21 @@ mod tests {
         fs::create_dir_all(&dir).unwrap();
         let path = dir.join("scenario.summary.json");
         let json = r#"{
+            "schema": "signed_rs16_da_v1",
             "scenario": "queue_test",
             "peers": 4,
             "payload_bytes": 1024,
             "timings": {
-                "rbc_deliver_ms": 900,
+                "da_available_ms": 900,
                 "commit_ms": 1100,
                 "throughput_mib_s": 3.7
             },
-            "rbc": {
+            "signed_da": {
                 "height": 2,
                 "view": 1,
                 "total_chunks": 10,
                 "received_chunks": 10,
-                "ready_count": 3,
+                "availability_vote_count": 3,
                 "block_hash": "abcdef"
             },
             "queue": {
@@ -882,12 +910,12 @@ mod tests {
             scenario: "test".into(),
             peers: 4,
             payload_bytes: 1024,
-            rbc_deliver_ms: 1_000.0,
+            da_available_ms: 1_000.0,
             commit_ms: 1_200.0,
             throughput_mib_s: 3.5,
             total_chunks: 10,
             received_chunks: 10,
-            ready_count: 3,
+            availability_vote_count: 3,
             view: 1,
             height: 2,
             block_hash: "abc".into(),
@@ -903,7 +931,7 @@ mod tests {
             bg_post_queue_depth_max: 5.0,
             p2p_queue_dropped_total_max: 0.0,
         });
-        second.rbc_deliver_ms = 900.0;
+        second.da_available_ms = 900.0;
         second.commit_ms = 1_100.0;
         second.source = PathBuf::from("sample2");
         let summary = ScenarioSummary::from_runs("test", &[base, second]).unwrap();
@@ -919,29 +947,30 @@ mod tests {
         let path = dir.join("scenario.summary.json");
         fs::create_dir_all(&dir).unwrap();
         let json = r#"{
-            "scenario": "sumeragi_rbc_da_large_payload_four_peers",
+            "schema": "signed_rs16_da_v1",
+            "scenario": "sumeragi_da_large_payload_four_peers",
             "peers": 4,
             "payload_bytes": 11010048,
             "timings": {
-                "rbc_deliver_ms": 3200,
+                "da_available_ms": 3200,
                 "commit_ms": 3500,
-                "rbc_delivered_seconds": 3.2,
+                "da_available_seconds": 3.2,
                 "commit_elapsed_seconds": 3.5,
                 "throughput_mib_s": 3.1
             },
-            "rbc": {
+            "signed_da": {
                 "height": 12,
                 "view": 2,
                 "total_chunks": 168,
                 "received_chunks": 168,
-                "ready_count": 4,
+                "availability_vote_count": 4,
                 "block_hash": "abcd1234efgh5678"
             },
             "per_peer_metrics": [
-                {"peer_index": 0, "payload_bytes": 11010048, "deliver_total": 1, "ready_total": 1},
-                {"peer_index": 1, "payload_bytes": 11010048, "deliver_total": 1, "ready_total": 1},
-                {"peer_index": 2, "payload_bytes": 11010048, "deliver_total": 1, "ready_total": 1},
-                {"peer_index": 3, "payload_bytes": 11010048, "deliver_total": 1, "ready_total": 1}
+                {"peer_index": 0, "payload_bytes": 11010048, "manifest_guard_allowed_total": 1, "votes_ingested_total": 1},
+                {"peer_index": 1, "payload_bytes": 11010048, "manifest_guard_allowed_total": 1, "votes_ingested_total": 1},
+                {"peer_index": 2, "payload_bytes": 11010048, "manifest_guard_allowed_total": 1, "votes_ingested_total": 1},
+                {"peer_index": 3, "payload_bytes": 11010048, "manifest_guard_allowed_total": 1, "votes_ingested_total": 1}
             ]
         }"#;
         File::create(&path)
@@ -949,10 +978,32 @@ mod tests {
             .write_all(json.as_bytes())
             .unwrap();
         let sample = ScenarioSample::from_path(path.clone()).unwrap();
-        assert_eq!(sample.scenario, "sumeragi_rbc_da_large_payload_four_peers");
+        assert_eq!(sample.scenario, "sumeragi_da_large_payload_four_peers");
         assert_eq!(sample.peers, 4);
         assert_eq!(sample.payload_bytes, 11_010_048);
         assert!(sample.peer_metrics.is_some());
+        let _ = fs::remove_dir_all(&dir);
+    }
+    #[test]
+    fn scenario_sample_rejects_legacy_global_rbc_schema() {
+        let dir = test_directory("legacy_schema");
+        let path = dir.join("scenario.summary.json");
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(
+            &path,
+            r#"{
+                "schema": "global_rbc_v1",
+                "scenario": "retired",
+                "peers": 4,
+                "payload_bytes": 1024,
+                "timings": {},
+                "signed_da": {}
+            }"#,
+        )
+        .unwrap();
+        let error = ScenarioSample::from_path(path.clone())
+            .expect_err("retired global-RBC schema must be rejected");
+        assert!(matches!(error, ReportError::UnsupportedSchema { .. }));
         let _ = fs::remove_dir_all(&dir);
     }
     #[test]
@@ -961,7 +1012,7 @@ mod tests {
         fs::create_dir_all(&dir).unwrap();
         write_summary(
             &dir.join("scenario-one.summary.json"),
-            "sumeragi_rbc_da_large_payload_four_peers",
+            "sumeragi_da_large_payload_four_peers",
             4,
             11_010_048,
             3_200,
@@ -970,7 +1021,7 @@ mod tests {
         );
         write_summary(
             &dir.join("scenario-two.summary.json"),
-            "sumeragi_rbc_da_large_payload_four_peers",
+            "sumeragi_da_large_payload_four_peers",
             4,
             11_010_048,
             3_000,
@@ -979,9 +1030,9 @@ mod tests {
         );
         let report = generate_report(&dir).unwrap();
         assert!(report.contains("# Sumeragi Data-Availability Report"));
-        assert!(report.contains("sumeragi_rbc_da_large_payload_four_peers"));
+        assert!(report.contains("sumeragi_da_large_payload_four_peers"));
         assert!(report.contains("Throughput (MiB/s)"));
-        assert!(report.contains("RBC deliver (ms)"));
+        assert!(report.contains("Signed DA available (ms)"));
         let _ = fs::remove_dir_all(&dir);
     }
     #[test]
@@ -1009,19 +1060,19 @@ mod tests {
         scenario: &str,
         peers: u64,
         payload: u64,
-        rbc_ms: u64,
+        da_ms: u64,
         commit_ms: u64,
         throughput: f64,
     ) {
         let json = format!(
-            "{{\n  \"scenario\": \"{scenario}\",\n  \"peers\": {peers},\n  \"payload_bytes\": {payload},\n  \"timings\": {{\n    \"rbc_deliver_ms\": {rbc_ms},\n    \"commit_ms\": {commit_ms},\n    \"rbc_delivered_seconds\": {rbc_s},\n    \"commit_elapsed_seconds\": {commit_s},\n    \"throughput_mib_s\": {throughput}\n  }},\n  \"rbc\": {{\n    \"height\": 10,\n    \"view\": 1,\n    \"total_chunks\": 168,\n    \"received_chunks\": 168,\n    \"ready_count\": 4,\n    \"block_hash\": \"deadbeefcafebabe{scenario}\"\n  }},\n  \"per_peer_metrics\": [\n    {{\"peer_index\": 0, \"payload_bytes\": {payload}, \"deliver_total\": 1, \"ready_total\": 1}},\n    {{\"peer_index\": 1, \"payload_bytes\": {payload}, \"deliver_total\": 1, \"ready_total\": 1}},\n    {{\"peer_index\": 2, \"payload_bytes\": {payload}, \"deliver_total\": 1, \"ready_total\": 1}},\n    {{\"peer_index\": 3, \"payload_bytes\": {payload}, \"deliver_total\": 1, \"ready_total\": 1}}\n  ]\n}}",
+            "{{\n  \"schema\": \"signed_rs16_da_v1\",\n  \"scenario\": \"{scenario}\",\n  \"peers\": {peers},\n  \"payload_bytes\": {payload},\n  \"timings\": {{\n    \"da_available_ms\": {da_ms},\n    \"commit_ms\": {commit_ms},\n    \"da_available_seconds\": {da_s},\n    \"commit_elapsed_seconds\": {commit_s},\n    \"throughput_mib_s\": {throughput}\n  }},\n  \"signed_da\": {{\n    \"height\": 10,\n    \"view\": 1,\n    \"total_chunks\": 168,\n    \"received_chunks\": 168,\n    \"availability_vote_count\": 4,\n    \"block_hash\": \"deadbeefcafebabe{scenario}\"\n  }},\n  \"per_peer_metrics\": [\n    {{\"peer_index\": 0, \"payload_bytes\": {payload}, \"manifest_guard_allowed_total\": 1, \"votes_ingested_total\": 1}},\n    {{\"peer_index\": 1, \"payload_bytes\": {payload}, \"manifest_guard_allowed_total\": 1, \"votes_ingested_total\": 1}},\n    {{\"peer_index\": 2, \"payload_bytes\": {payload}, \"manifest_guard_allowed_total\": 1, \"votes_ingested_total\": 1}},\n    {{\"peer_index\": 3, \"payload_bytes\": {payload}, \"manifest_guard_allowed_total\": 1, \"votes_ingested_total\": 1}}\n  ]\n}}",
             scenario = scenario,
             peers = peers,
             payload = payload,
-            rbc_ms = rbc_ms,
+            da_ms = da_ms,
             commit_ms = commit_ms,
             throughput = throughput,
-            rbc_s = u64_to_f64(rbc_ms) / 1000.0,
+            da_s = u64_to_f64(da_ms) / 1000.0,
             commit_s = u64_to_f64(commit_ms) / 1000.0,
         );
         fs::write(path, json).unwrap();

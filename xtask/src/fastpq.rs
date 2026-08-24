@@ -403,15 +403,29 @@ fn parse_bench_entry(bench: &BenchInput, constraints: &BenchManifestOptions) -> 
         .get("gpu_backend")
         .and_then(|v| v.as_str())
         .map(ToOwned::to_owned);
+    let operation_filter = benchmarks_value
+        .get("operation_filter")
+        .and_then(|v| v.as_str())
+        .map(ToOwned::to_owned);
     let poseidon_microbench =
         parse_poseidon_microbench_summary(benchmarks_value.get("poseidon_microbench"));
-    if gpu_backend.as_deref() == Some("metal") && poseidon_microbench.is_none() {
+    if gpu_backend.as_deref() == Some("metal")
+        && (metal_filter_requires_poseidon_microbench(operation_filter.as_deref())
+            || operation_map.contains_key("poseidon_hash_columns"))
+        && poseidon_microbench.is_none()
+    {
         bail!(
             "bench `{}` (label {}) missing `benchmarks.poseidon_microbench`; rerun scripts/fastpq/wrap_benchmark.py so Poseidon microbench evidence is captured",
             bench.path.display(),
             bench.label
         );
     }
+    validate_declared_operation_filter(
+        &bench.label,
+        operation_filter.as_deref(),
+        operations.len(),
+        &operation_map,
+    )?;
     Ok(BenchEntry {
         label: bench.label.clone(),
         path: benchmark_path,
@@ -419,10 +433,7 @@ fn parse_bench_entry(bench: &BenchInput, constraints: &BenchManifestOptions) -> 
         padded_rows: benchmarks_value.get("padded_rows").and_then(|v| v.as_u64()),
         iterations: benchmarks_value.get("iterations").and_then(|v| v.as_u64()),
         warmups: benchmarks_value.get("warmups").and_then(|v| v.as_u64()),
-        operation_filter: benchmarks_value
-            .get("operation_filter")
-            .and_then(|v| v.as_str())
-            .map(ToOwned::to_owned),
+        operation_filter,
         matrix_operation_filters: constraints
             .label_operation_filters
             .get(&bench.label)
@@ -438,6 +449,53 @@ fn parse_bench_entry(bench: &BenchInput, constraints: &BenchManifestOptions) -> 
             sha256_hex,
         },
     })
+}
+fn metal_filter_requires_poseidon_microbench(operation_filter: Option<&str>) -> bool {
+    !matches!(
+        operation_filter,
+        Some("fft" | "ifft" | "lde" | "poseidon_merkle_pairs" | "bn254_poseidon_words")
+    )
+}
+fn validate_declared_operation_filter(
+    label: &str,
+    operation_filter: Option<&str>,
+    operation_entry_count: usize,
+    operations: &BTreeMap<String, OperationStats>,
+) -> Result<()> {
+    let Some(operation_filter) = operation_filter else {
+        return Ok(());
+    };
+    ensure!(
+        operation_entry_count == operations.len(),
+        "bench `{label}` contains malformed or duplicate operation rows"
+    );
+    const CANONICAL_OPERATIONS: [&str; 6] = [
+        "fft",
+        "ifft",
+        "lde",
+        "poseidon_hash_columns",
+        "poseidon_merkle_pairs",
+        "bn254_poseidon_words",
+    ];
+    if operation_filter == "all" {
+        ensure!(
+            operations.len() == CANONICAL_OPERATIONS.len()
+                && CANONICAL_OPERATIONS
+                    .iter()
+                    .all(|operation| operations.contains_key(*operation)),
+            "bench `{label}` declares operation_filter `all` but does not contain every canonical operation"
+        );
+        return Ok(());
+    }
+    ensure!(
+        CANONICAL_OPERATIONS.contains(&operation_filter),
+        "bench `{label}` declares unknown operation_filter `{operation_filter}`"
+    );
+    ensure!(
+        operations.len() == 1 && operations.contains_key(operation_filter),
+        "bench `{label}` declares operation_filter `{operation_filter}` but its operation rows do not match"
+    );
+    Ok(())
 }
 fn parse_poseidon_microbench_summary(value: Option<&Value>) -> Option<PoseidonMicrobenchSummary> {
     let obj = value?.as_object()?;
@@ -1354,6 +1412,26 @@ mod tests {
                         "operation": "lde",
                         "gpu_mean_ms": 800.0,
                         "speedup_ratio": 1.05
+                    },
+                    {
+                        "operation": "ifft",
+                        "gpu_mean_ms": 430.0,
+                        "speedup_ratio": 1.15
+                    },
+                    {
+                        "operation": "poseidon_hash_columns",
+                        "gpu_mean_ms": 700.0,
+                        "speedup_ratio": 1.1
+                    },
+                    {
+                        "operation": "poseidon_merkle_pairs",
+                        "gpu_mean_ms": 300.0,
+                        "speedup_ratio": 1.2
+                    },
+                    {
+                        "operation": "bn254_poseidon_words",
+                        "gpu_mean_ms": 500.0,
+                        "speedup_ratio": 1.05
                     }
                 ]
             },
@@ -1635,6 +1713,161 @@ mod tests {
         let bench = manifest["payload"]["benches"][0].clone();
         assert_eq!(bench["label"], norito::json!("cuda-lde"));
         assert_eq!(bench["operation_filter"], norito::json!("lde"));
+    }
+    #[test]
+    fn manifest_accepts_focused_metal_fft_without_poseidon_microbench() {
+        let temp = TempDir::new().expect("tempdir");
+        let path = temp.path().join("metal_fft.json");
+        let mut bundle = sample_bundle(20_000);
+        if let Some(map) = bundle.get_mut("benchmarks").and_then(Value::as_object_mut) {
+            map.insert("operation_filter".into(), norito::json!("fft"));
+            map.insert(
+                "operations".into(),
+                norito::json!([{
+                    "operation": "fft",
+                    "gpu_mean_ms": 420.0,
+                    "speedup_ratio": 1.2
+                }]),
+            );
+            map.remove("poseidon_microbench");
+        }
+        fs::write(&path, norito::json::to_vec_pretty(&bundle).unwrap()).unwrap();
+        let options = BenchManifestOptions {
+            benches: vec![BenchInput {
+                label: "metal-fft".into(),
+                path,
+            }],
+            output: temp.path().join("manifest.json"),
+            signing_key: None,
+            require_rows: None,
+            max_operation_ms: BTreeMap::new(),
+            min_operation_speedup: BTreeMap::new(),
+            matrix_manifest: None,
+            label_max_operation_ms: BTreeMap::new(),
+            label_min_operation_speedup: BTreeMap::new(),
+            label_operation_filters: BTreeMap::new(),
+        };
+        write_bench_manifest(options).expect("focused FFT manifest succeeds");
+    }
+    #[test]
+    fn manifest_rejects_metal_poseidon_without_poseidon_microbench() {
+        let temp = TempDir::new().expect("tempdir");
+        let path = temp.path().join("metal_poseidon.json");
+        let mut bundle = sample_bundle(20_000);
+        if let Some(map) = bundle.get_mut("benchmarks").and_then(Value::as_object_mut) {
+            map.insert(
+                "operation_filter".into(),
+                norito::json!("poseidon_hash_columns"),
+            );
+            map.insert(
+                "operations".into(),
+                norito::json!([{
+                    "operation": "poseidon_hash_columns",
+                    "gpu_mean_ms": 700.0,
+                    "speedup_ratio": 1.1
+                }]),
+            );
+            map.remove("poseidon_microbench");
+        }
+        fs::write(&path, norito::json::to_vec_pretty(&bundle).unwrap()).unwrap();
+        let options = BenchManifestOptions {
+            benches: vec![BenchInput {
+                label: "metal-poseidon".into(),
+                path,
+            }],
+            output: temp.path().join("manifest.json"),
+            signing_key: None,
+            require_rows: None,
+            max_operation_ms: BTreeMap::new(),
+            min_operation_speedup: BTreeMap::new(),
+            matrix_manifest: None,
+            label_max_operation_ms: BTreeMap::new(),
+            label_min_operation_speedup: BTreeMap::new(),
+            label_operation_filters: BTreeMap::new(),
+        };
+        let error = write_bench_manifest(options).expect_err("missing microbench must fail");
+        assert!(
+            error
+                .to_string()
+                .contains("missing `benchmarks.poseidon_microbench`"),
+            "unexpected error: {error}"
+        );
+    }
+    #[test]
+    fn manifest_rejects_declared_metal_poseidon_without_operations_or_microbench() {
+        let temp = TempDir::new().expect("tempdir");
+        let path = temp.path().join("metal_poseidon_empty.json");
+        let mut bundle = sample_bundle(20_000);
+        if let Some(map) = bundle.get_mut("benchmarks").and_then(Value::as_object_mut) {
+            map.insert(
+                "operation_filter".into(),
+                norito::json!("poseidon_hash_columns"),
+            );
+            map.insert("operations".into(), norito::json!([]));
+            map.remove("poseidon_microbench");
+        }
+        fs::write(&path, norito::json::to_vec_pretty(&bundle).unwrap()).unwrap();
+        let options = BenchManifestOptions {
+            benches: vec![BenchInput {
+                label: "metal-poseidon-empty".into(),
+                path,
+            }],
+            output: temp.path().join("manifest.json"),
+            signing_key: None,
+            require_rows: None,
+            max_operation_ms: BTreeMap::new(),
+            min_operation_speedup: BTreeMap::new(),
+            matrix_manifest: None,
+            label_max_operation_ms: BTreeMap::new(),
+            label_min_operation_speedup: BTreeMap::new(),
+            label_operation_filters: BTreeMap::new(),
+        };
+        let error = write_bench_manifest(options).expect_err("missing microbench must fail");
+        assert!(
+            error
+                .to_string()
+                .contains("missing `benchmarks.poseidon_microbench`"),
+            "unexpected error: {error}"
+        );
+    }
+    #[test]
+    fn manifest_rejects_declared_filter_operation_mismatch() {
+        let temp = TempDir::new().expect("tempdir");
+        let path = temp.path().join("metal_fft_with_lde.json");
+        let mut bundle = sample_bundle(20_000);
+        if let Some(map) = bundle.get_mut("benchmarks").and_then(Value::as_object_mut) {
+            map.insert("operation_filter".into(), norito::json!("fft"));
+            map.insert(
+                "operations".into(),
+                norito::json!([{
+                    "operation": "lde",
+                    "gpu_mean_ms": 800.0,
+                    "speedup_ratio": 1.05
+                }]),
+            );
+            map.remove("poseidon_microbench");
+        }
+        fs::write(&path, norito::json::to_vec_pretty(&bundle).unwrap()).unwrap();
+        let options = BenchManifestOptions {
+            benches: vec![BenchInput {
+                label: "metal-fft-with-lde".into(),
+                path,
+            }],
+            output: temp.path().join("manifest.json"),
+            signing_key: None,
+            require_rows: None,
+            max_operation_ms: BTreeMap::new(),
+            min_operation_speedup: BTreeMap::new(),
+            matrix_manifest: None,
+            label_max_operation_ms: BTreeMap::new(),
+            label_min_operation_speedup: BTreeMap::new(),
+            label_operation_filters: BTreeMap::new(),
+        };
+        let error = write_bench_manifest(options).expect_err("filter mismatch must fail");
+        assert!(
+            error.to_string().contains("operation rows do not match"),
+            "unexpected error: {error}"
+        );
     }
     #[test]
     fn manifest_records_matrix_operation_filters() {

@@ -90,18 +90,51 @@ not release-wired and must not be reported as executed. There is no tracked `fuz
 nested lockfiles, and the root lock does not contain the standalone fuzz package, `libfuzzer-sys`, or `arbitrary`.
 Moving the package into the root workspace would therefore require changing the signed root `Cargo.lock`.
 
-The pinned `cargo-fuzz 0.13.2` implementation invokes Cargo internally against `fuzz/Cargo.toml` and exposes no
-`--locked`, `--frozen`, or generic Cargo-argument pass-through. The two exact internal-validation receipt commands
-also invoke `cargo fuzz run` from the source root. Without a separately reviewed lock contract, either invocation may
-create or resolve `fuzz/Cargo.lock`; it cannot be evidence for an immutable source snapshot.
+The pinned `cargo-fuzz 0.13.2` implementation invokes `cargo` internally against `fuzz/Cargo.toml` and exposes no
+`--locked`, `--frozen`, or generic Cargo-argument pass-through. `CARGO_NET_OFFLINE=true` can prevent network access,
+but Cargo has no configuration equivalent for `--locked`; offline resolution alone is not an immutable-lock proof.
+Without a separately reviewed lock contract, either nested Cargo invocation may create or resolve
+`fuzz/Cargo.lock`; it cannot be evidence for an immutable source snapshot.
 
-This is a source/gate blocker, not an execution-only gap. Before these seven targets can enter the release gate, the
-release owner must explicitly authorize a tracked standalone fuzz lock (including the required `.gitignore`
-exception), generate and review it with the pinned toolchain from the exact clean source, and commit it in a newly
-signed source tree. The runner must bind that exact lock, force offline/no-update use, prove it unchanged before and
-after both campaigns, and only then add pinned strict execution, resource bounds, crash artifact collection, and
-static target-inventory tests. Until that work lands, no workflow should simulate or claim these targets.
+The candidate-bound internal-validation receipt now fails closed on the missing production pieces instead of
+describing an unverifiable `cargo fuzz` dispatch. It launches an authenticated `cargo-fuzz` role directly, requires
+the exact `cargo-fuzz 0.13.2` version output, and separately binds the sanitizer rustc executable and its complete
+`rustc -Vv` output (full commit hash/date, host, release, and LLVM version). It also requires an authenticated
+locking/offline Cargo proxy for cargo-fuzz's nested launches, binds an exact tracked `fuzz/Cargo.lock`
+path/mode/OID/digest/size descriptor, remeasures both locks and the source tree after each campaign, and places target,
+corpus, and crash outputs under the sibling
+`kagemusha-internal-validation-v1` runtime tree. Cargo-fuzz still calls `create_dir_all` for its default per-target
+artifact directory before applying the supplied libFuzzer artifact prefix; the production runner must create those
+two empty directories before making the source projection read-only and must reject any file appearing there.
+The runner's closed environment manifest must likewise place `TMPDIR`, `HOME`, `CARGO_HOME`, cache locks, and every
+compiler/build temporary below its private external runtime root; reviewed dependency and toolchain inputs remain
+read-only, and `RUSTC_BOOTSTRAP` and compiler-wrapper variables must be absent.
+
+Those requirements describe mandatory candidate inputs, not local executable readiness. This checkout has no
+`cargo-fuzz` executable, its unqualified `nightly` is an older incompatible compiler, and it has no authenticated
+locking proxy or production validation runner. The separately named `nightly-2025-11-01` installation is useful only
+as the reviewed version-output candidate; its presence does not authenticate its bytes or satisfy the missing runner,
+proxy, and lock inputs.
+
+This is a source/gate blocker, not an execution-only gap. Repository policy currently forbids changing any
+`Cargo.lock`, so the mandatory standalone lock intentionally remains absent and the receipt cannot honestly be
+produced. The minimal external exception is explicit release-owner authorization to add only the reviewed
+`fuzz/Cargo.lock` plus its `.gitignore` exception, generated from the exact clean source with the reviewed nightly
+Cargo and committed in a newly signed source tree; the root `Cargo.lock` must remain byte-identical. Cargo-fuzz
+hardcodes the executable name `cargo`, so a production validation runner must select its authenticated proxy through a
+closed `PATH`, not merely set `CARGO`. That proxy must force locked/offline behavior for metadata, build, and run,
+while the runner binds the exact cargo-fuzz/proxy/nightly-rustc executable identities, proves the source and both locks
+unchanged before and after both campaigns, and retains the canonical external corpus, engine report, logs, and crash
+directory. Until that work lands, no workflow should simulate or claim these targets.
+
+The existing authenticated controller's generic `run-v1` contract cannot serve as that runner: it mandates
+`--deny-tool-process-spawn` and admits only the one selected executable, while cargo-fuzz necessarily launches Cargo,
+which launches rustc, linkers, and authenticated build-script executables. Merely teaching the controller to answer to
+the basename `cargo` would leave that process-tree and writable-root policy unauthenticated. A specialized controller
+operation therefore needs its own closed-PATH proxy dispatch, exact executable closure, external writable roots, and
+OS-isolation qualification before it can mint production evidence.
 
 TODO: obtain explicit authorization for the standalone fuzz-lock exception without modifying the repository's root
-`Cargo.lock`, then wire the two Kagemusha targets into the candidate-bound validation receipt with at least
-10,000,000 executions each and zero crashes, timeouts, or out-of-memory exits.
+`Cargo.lock`, implement and qualify the authenticated validation runner/Cargo proxy, and execute the two already
+receipt-wired Kagemusha targets with at least 10,000,000 executions each and zero crashes, timeouts, or out-of-memory
+exits.

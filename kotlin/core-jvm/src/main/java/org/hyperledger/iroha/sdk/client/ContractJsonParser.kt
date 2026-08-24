@@ -3,6 +3,7 @@ package org.hyperledger.iroha.sdk.client
 import java.nio.charset.StandardCharsets
 import java.util.Base64
 import org.hyperledger.iroha.sdk.address.requireCanonicalI105Address
+import org.hyperledger.iroha.sdk.core.model.FeePaymentIntent
 import org.hyperledger.iroha.sdk.core.model.TransactionAdmissionIntent
 import org.hyperledger.iroha.sdk.crypto.IrohaHash
 import org.hyperledger.iroha.sdk.tx.norito.NoritoJavaCodecAdapter
@@ -50,6 +51,9 @@ object ContractJsonParser {
         validateUnsignedTransactionState(
             submitted = response.submitted,
             txHashHex = response.txHashHex,
+            executedTxHashHex = null,
+            creationTimeMs = response.creationTimeMs,
+            feePayment = response.operationReceipt.feePayment,
             transactionPayloadB64 = response.transactionPayloadB64,
             signingMessageB64 = response.signingMessageB64,
             context = "contract call response",
@@ -113,12 +117,19 @@ object ContractJsonParser {
                 HttpClientTransport.normalizeHex32(requiredString(root["executed_tx_hash_hex"], "multisig response.executed_tx_hash_hex"), "executedTxHashHex")
             else null,
             creationTimeMs = asOptionalNonNegativeLong(root["creation_time_ms"], "multisig response.creation_time_ms"),
+            feePayment = FeePaymentJson.parse(
+                root["fee_payment"],
+                "multisig response.fee_payment",
+            ),
             transactionPayloadB64 = optionalBase64(root["transaction_payload_b64"], "multisig response.transaction_payload_b64"),
             signingMessageB64 = optionalBase64(root["signing_message_b64"], "multisig response.signing_message_b64"),
         )
         validateUnsignedTransactionState(
             submitted = response.submitted,
             txHashHex = response.txHashHex,
+            executedTxHashHex = response.executedTxHashHex,
+            creationTimeMs = response.creationTimeMs,
+            feePayment = response.feePayment,
             transactionPayloadB64 = response.transactionPayloadB64,
             signingMessageB64 = response.signingMessageB64,
             context = "multisig response",
@@ -254,6 +265,9 @@ object ContractJsonParser {
     private fun validateUnsignedTransactionState(
         submitted: Boolean,
         txHashHex: String?,
+        executedTxHashHex: String?,
+        creationTimeMs: Long?,
+        feePayment: FeePaymentIntent?,
         transactionPayloadB64: String?,
         signingMessageB64: String?,
         context: String,
@@ -269,10 +283,10 @@ object ContractJsonParser {
         }
         val transactionPayload = Base64.getDecoder().decode(transactionPayloadB64)
         val signingMessage = Base64.getDecoder().decode(signingMessageB64)
-        try {
-            NoritoJavaCodecAdapter.validateCanonicalTransactionPayload(
+        val decodedPayload = try {
+            NoritoJavaCodecAdapter.decodeCanonicalTransactionPayload(
                 transactionPayload,
-                TransactionAdmissionIntent.QUEUE_PLAN_SYNCED,
+                TransactionAdmissionIntent.ORDINARY,
             )
         } catch (ex: Exception) {
             throw IllegalStateException(
@@ -282,6 +296,15 @@ object ContractJsonParser {
         }
         check(signingMessage.size == 32 && signingMessage.contentEquals(IrohaHash.prehash(transactionPayload))) {
             "$context.signing_message_b64 must be the exact TransactionPayload hash"
+        }
+        check(feePayment != null && decodedPayload.feePayment == feePayment) {
+            "$context.fee_payment must match the exact TransactionPayload"
+        }
+        check(decodedPayload.creationTimeMs == creationTimeMs) {
+            "$context.creation_time_ms must match the exact TransactionPayload"
+        }
+        check(executedTxHashHex == null) {
+            "$context unsigned response must not contain transaction hashes"
         }
     }
 

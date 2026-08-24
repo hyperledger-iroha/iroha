@@ -1234,6 +1234,19 @@ CROSS_TOOL_REFINEMENT_CONTRACTS = (
                 theorem_projection_builder_item_sha256=(
                     "56ac93d71cbda0dd6a1b584062ec64db7bb5ae6fc9ddfb822aea1f7e6edcb4c4"
                 ),
+                source_item_seals=(
+                    CrossToolSourceItemSeal(
+                        source="crates/iroha_core/src/sumeragi/v2_runtime.rs",
+                        item="step_recovery",
+                        item_token_sha256=(
+                            "1eb3d1b0b66470838f73b59646a0a8df315d00f6d2913c826f29f19fceda1da1"
+                        ),
+                        brace_context=((
+                            "impl", "<", "D", ":", "RuntimeDriver", ">",
+                            "SerializedV2Runtime", "<", "D", ">",
+                        ),),
+                    ),
+                ),
                 production_call_sites=(
                     CrossToolProductionCallContract(
                         source="crates/iroha_core/src/sumeragi/v2_runtime.rs",

@@ -43,6 +43,10 @@ accel-cuda = ["fastpq-gpu", "iroha_core/cuda", "ivm/cuda", "norito/codec-gpu-cud
 # daemon binary in an isolated target directory when an adversarial network
 # test explicitly requests it.
 test-network-message-control = ["iroha_core/test-network-native-amx-fault-injection"]
+# Dedicated non-shipping daemon used only by the four-validator Parliament
+# integration corridor. It injects proof-valid beacon and TLE shares for this
+# daemon's exact roster seat and does not alter consensus verification.
+test-network-parliament-signers = ["iroha_core/test-network-parliament-signers"]
 fastpq-gpu = ["fastpq_prover/fastpq-gpu", "iroha_core/fastpq-gpu"]
 zk-stark = ["dep:sha2", "iroha_core/zk-stark", "iroha_torii/zk-stark"]
 sm = [

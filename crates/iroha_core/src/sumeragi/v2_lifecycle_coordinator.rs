@@ -11,7 +11,6 @@ use super::{v2, v2_runner};
 mod authority;
 #[path = "v2_lifecycle_coordinator_support.rs"]
 mod coordinator_support;
-pub(in crate::sumeragi) use coordinator_support::RecoveredPendingKuraApplyCarrierPermitV1;
 #[cfg(test)]
 pub(crate) use coordinator_support::{
     reviewed_lifecycle_ledger_source_for_test, reviewed_lifecycle_work_registry_source_for_test,
@@ -95,10 +94,6 @@ pub(in crate::sumeragi) use concrete_admission::{
     ProductionLifecycleOutputAdmissionFailureV1, ProductionLifecycleOutputAdmissionSettlementV1,
     ProductionLiveWalSignAdmissionFailureV1, ProductionLiveWalSignAdmissionSettlementV1,
 };
-#[cfg(test)]
-pub(in crate::sumeragi) use launch::ProductionPreparedCertifiedServeTestSettlementV1;
-#[cfg(test)]
-pub(in crate::sumeragi) use launch::settle_applied_lifecycle_decision_apply_completion_for_test;
 #[allow(unused_imports)]
 pub(in crate::sumeragi) use launch::{
     ActivatedProductionLifecycleV1, FinalizedProductionLifecycleRolloverV1,
@@ -126,6 +121,11 @@ pub(in crate::sumeragi) use launch::{
     ProductionRecoveredLifecycleVoteBroadcastAndSignSettlementV1,
     ProductionV2CompletionObserverActivationPermitV1, RetainedLifecycleDecisionApplyDeferredV1,
     settle_one_recovered_lifecycle_output,
+};
+#[cfg(test)]
+pub(in crate::sumeragi) use launch::{
+    ProductionPreparedCertifiedServeTestSettlementV1,
+    settle_applied_live_lifecycle_decision_apply_completion_for_test,
 };
 pub(crate) use ledger::AuthenticatedRecoveredWalValidateLedgerParent;
 pub(crate) use ledger::ProductionLifecycleStartupErrorV1;

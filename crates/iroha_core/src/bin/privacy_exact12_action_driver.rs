@@ -374,7 +374,7 @@ fn bounded_ed25519_authority_v1(
             "VeRange {label} authority account ID is not bounded ASCII"
         ));
     }
-    Ok((account_id, public_key_bytes))
+    Ok((account_id, public_key_bytes.to_vec()))
 }
 fn verange_setup_authority_v1(candidate: &[u8; 32]) -> Result<AccountId, String> {
     let seed = Zeroizing::new(derive_nonzero_verange_setup_seed(candidate));

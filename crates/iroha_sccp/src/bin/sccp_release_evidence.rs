@@ -915,7 +915,6 @@ fn verify_ed25519_signature(
         &[message],
         &[signature.as_slice()],
         &[key.as_slice()],
-        sha256(message),
     )
     .map_err(|_| "detached Ed25519 signature is invalid".to_owned())
 }
@@ -2231,7 +2230,6 @@ fn authenticate_destination_state(
         &[signed.as_slice()],
         &[signature.as_slice()],
         &[expected_attestor_public_key.as_slice()],
-        sha256(&signed),
     )
     .map_err(|_| "destination state has an invalid pinned-attestor signature".to_owned())?;
     let validated = match &available.statement {
@@ -3156,12 +3154,12 @@ mod tests {
         let validated = validate_sora_finality_anchor_policy(&anchor).unwrap();
         assert_eq!(
             lowercase_hex(&validated.anchor_hash),
-            "94be7710f3064ff4936d24f51355ca037bf53e653b7712abcd798ba47be20727"
+            "31328ad8005a0f33e6050e8ae96f012b3285f7f14737486dce34f972686862f5"
         );
         for mutation in 0..=10 {
             let mut candidate = anchor.clone();
             match mutation {
-                0 => candidate.protocol_version = 1,
+                0 => candidate.protocol_version = SUMERAGI_V2_PROTOCOL_VERSION - 1,
                 1 => {
                     candidate.protocol_version = SUMERAGI_V2_PROTOCOL_VERSION.saturating_add(1);
                 }
@@ -3273,13 +3271,14 @@ mod tests {
             .expect("mutated release trust policy must retain the typed JSON shape")
     }
     #[test]
-    fn full_release_trust_policy_json_path_rejects_diagnostic_circuit_forms() {
+    fn full_release_trust_policy_json_path_rejects_retired_v3_and_diagnostic_circuits() {
         let baseline = norito::json::from_str::<ReleaseTrustPolicyV1>(include_str!(
             "../../../../fixtures/sccp/release_evidence_v1/test-trust-policy.json"
         ))
         .expect("release trust-policy fixture must use the typed JSON schema");
-        validate_release_trust_policy(&baseline, "test-fixture", &mut BTreeSet::new())
-            .expect("release trust-policy fixture must remain a valid signed baseline");
+        let error = validate_release_trust_policy(&baseline, "test-fixture", &mut BTreeSet::new())
+            .expect_err("retired protocol-v3 fixture must fail current policy validation");
+        assert_eq!(error, "semantic proof-system policy is invalid");
         let forbidden_artifact_digest = lowercase_hex(&FORBIDDEN_SIGNAL_BINDING_CIRCUIT_SHA256);
         for (proof_index, field, replacement, expected_error) in [
             (

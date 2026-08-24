@@ -13,7 +13,7 @@ summary: Operational plan for bringing the core Nexus validator cluster online b
 ## Prerequisites
 - Governance key material (council multisig, committee keys) available in HSM or Vault.
 - Baseline infrastructure (Kubernetes clusters or bare-metal nodes) in primary/secondary regions.
-- Updated bootstrap configuration (`configs/nexus/bootstrap/*.toml`) reflecting latest consensus parameters.
+- Reviewed mainnet and testnet profile fixtures (`configs/soranexus/nexus/config.toml` and `configs/soranexus/taira/config.toml`) reflecting the intended consensus parameters.
 
 ## Network Environments
 - Operate two Nexus environments with distinct network prefixes:
@@ -21,14 +21,14 @@ summary: Operational plan for bringing the core Nexus validator cluster online b
 - **Sora Taira (testnet)** – staging network prefix `taira`, mirroring mainnet configuration for integration testing and pre-release validation (public Sumeragi-v2 chain UUID `fc56984b-2be7-431d-840e-21514d1883f0`; the pre-v2 UUID is archived).
 - Maintain separate genesis files, governance keys, and infrastructure footprints for each environment. Taira acts as the proving ground for all SoraFS/SoraNet rollouts before promotion to Nexus.
 - Operator-owned deployment pipelines should deploy to Taira first, execute automated smoke tests, and require manual promotion to Nexus once checks pass; this repository does not ship a public-network deployment pipeline.
-- Reference configuration bundles live under `configs/soranexus/nexus/` (mainnet) and `configs/soranexus/taira/` (testnet), each containing sample `config.toml`, `genesis.json`, and Torii admission directories.
+- Reference configuration bundles live under `configs/soranexus/nexus/` (mainnet) and `configs/soranexus/taira/` (testnet). Both contain `config.toml` and `genesis.json`; Taira also retains `configs/soranexus/taira/sorafs_admission/`. Minamoto admission material remains operator-owned.
 
 ## Step 1 – Configuration Review
 1. Audit existing documentation:
-   - `specs/nexus/architecture.md` (consensus, Torii layout).
-   - `specs/nexus/deployment_checklist.md` (infra requirements).
-   - `specs/nexus/governance_keys.md` (key custody procedures).
-2. Validate genesis files (`configs/nexus/genesis/*.json`) align with current validator roster and staking weights.
+   - `specs/nexus.md` (consensus and Nexus architecture).
+   - `specs/nexus_operations.md` (operational lifecycle and evidence requirements).
+   - `specs/sora_nexus_operator_onboarding.md` (configuration, key custody, and onboarding checks).
+2. Validate `configs/soranexus/nexus/genesis.json` and `configs/soranexus/taira/genesis.json` against the deployment's final validator roster and staking policy before signing.
 3. Confirm network parameters:
    - Consensus committee size & quorum.
    - Block interval / finality thresholds.
@@ -40,7 +40,7 @@ summary: Operational plan for bringing the core Nexus validator cluster online b
    - Ensure network firewall rules allow consensus & Torii traffic between nodes.
 2. Start Torii services (REST/WebSocket) on each validator with TLS.
 3. Deploy observer nodes (read-only) for extra resilience.
-4. Run bootstrap scripts (`scripts/nexus_bootstrap.sh`) to distribute genesis, start consensus, and register nodes.
+4. Use the operator-owned deployment pipeline to provision runtime secrets and the final signed genesis/topology, distribute per-node configs, and start `iroha3d`. This repository does not ship a public-network bootstrap script; `scripts/taira_devnet.py` is only for disposable local Taira networks.
 5. Execute smoke tests:
    - Submit test transactions via Torii (`iroha_cli tx submit`).
    - Verify block production/finality through telemetry.
@@ -49,7 +49,7 @@ summary: Operational plan for bringing the core Nexus validator cluster online b
 ## Step 3 – Governance & Key Management
 1. Load council multisig configuration; confirm governance proposals can be submitted and ratified.
 2. Securely store consensus/committee keys; configure automatic backups with access logging.
-3. Set up emergency key rotation procedures (`specs/nexus/key_rotation.md`) and verify runbook.
+3. Define and verify deployment-owned emergency key rotation procedures, following the change-management and evidence requirements in `specs/nexus_operations.md`.
 
 ## Step 4 – CI/CD Integration
 1. Configure pipelines:

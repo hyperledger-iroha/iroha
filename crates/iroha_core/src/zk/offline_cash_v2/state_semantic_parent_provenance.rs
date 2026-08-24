@@ -10,6 +10,8 @@
 
 use core::{convert::Infallible, fmt};
 
+#[cfg(test)]
+use super::state_recursive_fold::StateRecursiveFoldParityV2;
 use super::{
     OfflineCashHalo2CircuitRoleV2, OfflineCashHalo2ParityV2,
     guard_bundle_provenance::offline_cash_halo2_protocol_source_identity_v2,
@@ -19,9 +21,6 @@ use super::{
     },
     state_recursive_fold::CanonicalStateAccumulatorV2,
 };
-
-#[cfg(test)]
-use super::state_recursive_fold::StateRecursiveFoldParityV2;
 
 const STATE_PARITY_WORD_V2: usize = 3;
 const STATE_PROTOCOL_WORD_END_V2: usize =

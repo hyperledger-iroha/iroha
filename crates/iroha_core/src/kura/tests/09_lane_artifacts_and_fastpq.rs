@@ -422,7 +422,8 @@ fn lane_block_artifact_remains_canonical_when_post_commit_merge_append_fails() {
     );
     drop(kura);
     let (kura, BlockCount(count)) =
-        Kura::new(&config, &lane_config).expect("restart repairs committed association");
+        Kura::open_test_kura_with_configured_lane_config(&config, &lane_config)
+            .expect("restart repairs committed association");
     assert_eq!(count, 2);
     let _ = persist_v2_finality_chain_through(&kura, nonzero!(2_usize));
     let artifact = kura
@@ -1035,6 +1036,30 @@ fn fastpq_proof_snapshot_rejects_queue_overflow() {
     );
     assert_eq!(kura.fastpq_proof_queue.lock().len(), 1);
 }
+
+#[test]
+fn fastpq_proof_snapshot_rolls_back_when_shutdown_arrives_during_enqueue() {
+    use std::cell::Cell;
+
+    let kura = Kura::blank_kura_for_testing();
+    let block_hash = HashOf::<BlockHeader>::from_untyped_unchecked(Hash::new(b"block"));
+    let cancellation_checks = Cell::new(0usize);
+
+    let result =
+        kura.enqueue_fastpq_proof_snapshot_unless(sample_fastpq_snapshot(1, block_hash, 8), || {
+            let check = cancellation_checks.get();
+            cancellation_checks.set(check.saturating_add(1));
+            check == 1
+        });
+
+    assert_eq!(result, FastpqProofEnqueueResult::RejectedShutdown);
+    assert_eq!(cancellation_checks.get(), 2);
+    assert!(
+        kura.fastpq_proof_queue.lock().is_empty(),
+        "shutdown observed after insertion must roll the snapshot back"
+    );
+}
+
 #[test]
 fn fastpq_proof_snapshot_rejects_oversized_snapshot() {
     let kura = Kura::blank_kura_for_testing();
@@ -1062,6 +1087,60 @@ fn fastpq_proof_snapshot_retries_missing_sidecar_until_limit() {
     assert_eq!(kura.fastpq_proof_queue.lock().len(), 1);
     assert_eq!(kura.flush_fastpq_proof_snapshots(), 0);
     assert!(kura.fastpq_proof_queue.lock().is_empty());
+}
+
+#[test]
+fn fastpq_retry_requeue_respects_cap_during_concurrent_enqueue() {
+    let kura = Kura::blank_kura_for_testing();
+    kura.set_fastpq_proof_sidecar_limits_for_testing(1, usize::MAX, 2);
+    let block_hash = HashOf::<BlockHeader>::from_untyped_unchecked(Hash::new(b"block"));
+    let retry_snapshot = sample_fastpq_snapshot(1, block_hash, 8);
+    let concurrent_snapshot = sample_fastpq_snapshot(1, block_hash, 9);
+    let concurrent_entry_hash = concurrent_snapshot.entry_hash;
+    assert!(matches!(
+        kura.enqueue_fastpq_proof_snapshot(retry_snapshot),
+        FastpqProofEnqueueResult::Enqueued { queue_depth: 1 }
+    ));
+
+    // Hold the disk-mutation lock so the flusher drains the queue and then pauses before it can
+    // discover that the pipeline sidecar is absent. A concurrent enqueue can fill the newly empty
+    // queue in that window.
+    let sidecar_guard = kura.sidecar_lock.lock();
+    let flush_kura = Arc::clone(&kura);
+    let flusher = thread::spawn(move || flush_kura.flush_fastpq_proof_snapshots());
+    let deadline = std::time::Instant::now() + Duration::from_secs(2);
+    let drained = loop {
+        if kura.fastpq_proof_queue.lock().is_empty() {
+            break true;
+        }
+        if std::time::Instant::now() >= deadline {
+            break false;
+        }
+        thread::yield_now();
+    };
+    if !drained {
+        drop(sidecar_guard);
+        flusher.join().expect("flusher joins after lock release");
+        panic!("FASTPQ flusher did not drain its initial queue");
+    }
+    assert!(matches!(
+        kura.enqueue_fastpq_proof_snapshot(concurrent_snapshot),
+        FastpqProofEnqueueResult::Enqueued { queue_depth: 1 }
+    ));
+    drop(sidecar_guard);
+    assert_eq!(
+        flusher.join().expect("FASTPQ flusher joins"),
+        0,
+        "missing pipeline sidecar cannot persist a proof"
+    );
+
+    let queue = kura.fastpq_proof_queue.lock();
+    assert_eq!(queue.len(), 1, "retry merge must preserve the queue cap");
+    assert_eq!(
+        queue.front().map(|queued| queued.snapshot.entry_hash),
+        Some(concurrent_entry_hash),
+        "an already accepted concurrent enqueue keeps its queue position"
+    );
 }
 #[test]
 fn pipeline_sidecar_promotes_temp_index_on_read() {
@@ -1774,7 +1853,10 @@ fn sidecar_reader_rejects_oversized_payloads() {
     let temp_dir = TempDir::new().unwrap();
     let store_root = temp_dir.path().join("kura");
     let config = kura_config_for_path(&store_root, BLOCKS_IN_MEMORY);
-    let kura = Kura::new(&config, &RuntimeLaneConfig::default()).unwrap().0;
+    let kura =
+        Kura::open_test_kura_with_configured_lane_config(&config, &RuntimeLaneConfig::default())
+            .unwrap()
+            .0;
     let mut dir = kura.store_dir().expect("store dir");
     dir.push(PIPELINE_DIR_NAME);
     std::fs::create_dir_all(&dir).expect("create pipeline dir");
@@ -2223,7 +2305,8 @@ fn terminal_auxiliary_cleanup_resumes_after_each_mutation_budget() {
     let (temp_dir, config) = kura_storage_fixture("temporary Kura directory", BLOCKS_IN_MEMORY);
     let lane_config = RuntimeLaneConfig::default();
     let lane = lane_config.primary();
-    let (kura, _) = Kura::new(&config, &lane_config).expect("initialize Kura");
+    let (kura, _) = Kura::open_test_kura_with_configured_lane_config(&config, &lane_config)
+        .expect("initialize Kura");
     let artifact_dir = Kura::lane_artifact_dir(&lane.blocks_dir(temp_dir.path()));
     std::fs::create_dir_all(&artifact_dir).expect("create lane artifact directory");
     let paths = (1_u64..=3)

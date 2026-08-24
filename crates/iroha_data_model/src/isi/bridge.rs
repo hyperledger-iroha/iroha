@@ -116,6 +116,58 @@ pub struct SccpRouteGovernanceAnchorV1 {
     pub action: SccpRouteGovernanceActionV1,
 }
 impl SccpRouteGovernanceActionV1 {
+    /// Return the first action-owned value above the exact JSON integer maximum.
+    pub(crate) fn first_release_exact_json_u64_invariant_error(
+        &self,
+        maximum: u64,
+    ) -> Option<&'static str> {
+        match self {
+            Self::Register(registration) => {
+                if registration
+                    .native_trust_anchor
+                    .is_some_and(|anchor| anchor.checkpoint_height > maximum)
+                {
+                    return Some(
+                        "SCCP proposal native checkpoint exceeds the exact JSON integer maximum",
+                    );
+                }
+                registration
+                    .route
+                    .first_release_exact_json_u64_invariant_error(maximum)
+            }
+            Self::SetActivation(update) => update
+                .inbound_finality_cutoff
+                .filter(|cutoff| cutoff.max_anchor_interval_height > maximum)
+                .map(|_| "SCCP proposal activation cutoff exceeds the exact JSON integer maximum"),
+            Self::SwitchRevision(update) => update
+                .previous_inbound_finality_cutoff
+                .filter(|cutoff| cutoff.max_anchor_interval_height > maximum)
+                .map(|_| "SCCP proposal revision cutoff exceeds the exact JSON integer maximum"),
+            Self::InitializeTrustAnchor(update) => {
+                if update
+                    .expected_current
+                    .is_some_and(|anchor| anchor.checkpoint_height > maximum)
+                {
+                    Some("SCCP proposal expected checkpoint exceeds the exact JSON integer maximum")
+                } else if update.initial.checkpoint_height > maximum {
+                    Some("SCCP proposal initial checkpoint exceeds the exact JSON integer maximum")
+                } else {
+                    None
+                }
+            }
+            Self::AdvanceTrustAnchor(update) => {
+                if update.expected_current.checkpoint_height > maximum {
+                    Some("SCCP proposal expected checkpoint exceeds the exact JSON integer maximum")
+                } else if update.next.checkpoint_height > maximum {
+                    Some("SCCP proposal next checkpoint exceeds the exact JSON integer maximum")
+                } else {
+                    None
+                }
+            }
+            Self::Remove(_) => None,
+        }
+    }
+
     /// Validate invariants that do not require current world state.
     ///
     /// # Errors
@@ -277,7 +329,7 @@ isi! {
     /// Rejected direct SCCP route-governance mutation token.
     ///
     /// Core and the default executor reject this instruction unconditionally;
-    /// route actions execute only through `EnactSccpRouteGovernance`.
+    /// route actions execute only from an exact due Parliament certificate.
     #[cfg_attr(
         feature = "json",
         derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
@@ -479,6 +531,107 @@ mod sccp_governance_tests {
             asset_key: "xor".to_owned(),
             revision,
         }
+    }
+    #[test]
+    fn governance_actions_check_every_number_encoded_u64_role() {
+        let maximum = crate::parliament_types::FIRST_RELEASE_MAX_EXACT_JSON_U64;
+        let hostile = maximum + 1;
+
+        let set_activation = |height| {
+            SccpRouteGovernanceActionV1::SetActivation(SccpSetRouteActivationV1 {
+                key: key(1),
+                expected_current: SccpRouteActivationV1::InboundOnly,
+                next: SccpRouteActivationV1::Retired,
+                inbound_finality_cutoff: Some(crate::bridge::SccpInboundFinalityCutoffV1 {
+                    trust_anchor_hash: [0x91; 32],
+                    max_anchor_interval_height: height,
+                }),
+            })
+        };
+        let switch_revision = |height| {
+            SccpRouteGovernanceActionV1::SwitchRevision(SccpSwitchRouteRevisionV1 {
+                previous_key: key(1),
+                expected_previous: SccpRouteActivationV1::Bidirectional,
+                previous_next: SccpRouteActivationV1::Retired,
+                previous_inbound_finality_cutoff: Some(
+                    crate::bridge::SccpInboundFinalityCutoffV1 {
+                        trust_anchor_hash: [0x91; 32],
+                        max_anchor_interval_height: height,
+                    },
+                ),
+                successor_key: key(2),
+                successor_next: SccpRouteActivationV1::Bidirectional,
+            })
+        };
+        for (within, over) in [
+            (set_activation(maximum), set_activation(hostile)),
+            (switch_revision(maximum), switch_revision(hostile)),
+            (
+                SccpRouteGovernanceActionV1::InitializeTrustAnchor(
+                    SccpInitializeLaneTrustAnchorV1 {
+                        lane_id: lane(),
+                        expected_current: None,
+                        initial: anchor(1, maximum),
+                    },
+                ),
+                SccpRouteGovernanceActionV1::InitializeTrustAnchor(
+                    SccpInitializeLaneTrustAnchorV1 {
+                        lane_id: lane(),
+                        expected_current: None,
+                        initial: anchor(1, hostile),
+                    },
+                ),
+            ),
+            (
+                SccpRouteGovernanceActionV1::AdvanceTrustAnchor(SccpAdvanceLaneTrustAnchorV1 {
+                    lane_id: lane(),
+                    expected_current: anchor(1, maximum - 1),
+                    next: anchor(2, maximum),
+                }),
+                SccpRouteGovernanceActionV1::AdvanceTrustAnchor(SccpAdvanceLaneTrustAnchorV1 {
+                    lane_id: lane(),
+                    expected_current: anchor(1, maximum),
+                    next: anchor(2, hostile),
+                }),
+            ),
+        ] {
+            assert_eq!(
+                within.first_release_exact_json_u64_invariant_error(maximum),
+                None
+            );
+            assert!(
+                over.first_release_exact_json_u64_invariant_error(maximum)
+                    .is_some()
+            );
+        }
+
+        let expected_over =
+            SccpRouteGovernanceActionV1::InitializeTrustAnchor(SccpInitializeLaneTrustAnchorV1 {
+                lane_id: lane(),
+                expected_current: Some(anchor(1, hostile)),
+                initial: anchor(2, maximum),
+            });
+        assert!(
+            expected_over
+                .first_release_exact_json_u64_invariant_error(maximum)
+                .is_some()
+        );
+        let expected_advance_over =
+            SccpRouteGovernanceActionV1::AdvanceTrustAnchor(SccpAdvanceLaneTrustAnchorV1 {
+                lane_id: lane(),
+                expected_current: anchor(1, hostile),
+                next: anchor(2, hostile),
+            });
+        assert!(
+            expected_advance_over
+                .first_release_exact_json_u64_invariant_error(maximum)
+                .is_some()
+        );
+        assert_eq!(
+            SccpRouteGovernanceActionV1::Remove(key(1))
+                .first_release_exact_json_u64_invariant_error(maximum),
+            None
+        );
     }
     #[test]
     fn trust_anchor_initialize_is_strict_none_to_some_cas() {

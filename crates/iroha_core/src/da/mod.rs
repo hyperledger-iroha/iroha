@@ -688,8 +688,8 @@ fn lane_id_inside_enabled_autoscale_range(lane_id: LaneId, nexus: &Nexus) -> boo
     if !nexus.autoscale.enabled {
         return false;
     }
-    let min = nexus.autoscale.min_lanes.get();
-    let max = nexus.autoscale.max_lanes.get();
+    let min = nexus.autoscale.min_lane_id.get();
+    let max = nexus.autoscale.max_lane_id_exclusive.get();
     let lane_id = lane_id.as_u32();
     min < max && lane_id >= min && lane_id < max
 }
@@ -2164,8 +2164,8 @@ mod tests {
         ]);
         let mut nexus = nexus_with_catalog(lane_catalog);
         nexus.autoscale.enabled = true;
-        nexus.autoscale.min_lanes = NonZeroU32::new(1).expect("nonzero min lanes");
-        nexus.autoscale.max_lanes = NonZeroU32::new(3).expect("nonzero max lanes");
+        nexus.autoscale.min_lane_id = NonZeroU32::new(1).expect("nonzero min lanes");
+        nexus.autoscale.max_lane_id_exclusive = NonZeroU32::new(3).expect("nonzero max lanes");
         let bundle = active_proof_policy_bundle(&nexus);
         assert!(
             bundle.policies.iter().all(|policy| policy.lane_id != lane),
@@ -2203,8 +2203,8 @@ mod tests {
         let lane_catalog = lane_catalog_with(vec![ModelLaneConfig::default(), autoscale_lane]);
         let mut nexus = nexus_with_catalog(lane_catalog);
         nexus.autoscale.enabled = true;
-        nexus.autoscale.min_lanes = NonZeroU32::new(1).expect("nonzero min lanes");
-        nexus.autoscale.max_lanes = NonZeroU32::new(3).expect("nonzero max lanes");
+        nexus.autoscale.min_lane_id = NonZeroU32::new(1).expect("nonzero min lanes");
+        nexus.autoscale.max_lane_id_exclusive = NonZeroU32::new(3).expect("nonzero max lanes");
         let policy = active_lane_proof_policy(&nexus, lane)
             .expect("valid autoscale elastic lanes must advertise DA policy");
         assert_eq!(policy.lane_id, lane);
@@ -2237,8 +2237,8 @@ mod tests {
             let lane_catalog = lane_catalog_with(vec![ModelLaneConfig::default(), autoscale_lane]);
             let mut nexus = nexus_with_catalog(lane_catalog);
             nexus.autoscale.enabled = true;
-            nexus.autoscale.min_lanes = NonZeroU32::new(1).expect("nonzero min lanes");
-            nexus.autoscale.max_lanes = NonZeroU32::new(3).expect("nonzero max lanes");
+            nexus.autoscale.min_lane_id = NonZeroU32::new(1).expect("nonzero min lanes");
+            nexus.autoscale.max_lane_id_exclusive = NonZeroU32::new(3).expect("nonzero max lanes");
             assert!(matches!(
                 active_lane_proof_policy_at_height(&nexus, lane, 1),
                 Err(DaProofPolicyError::UnknownLane { lane: rejected }) if rejected == lane
@@ -2264,8 +2264,8 @@ mod tests {
         let lane_catalog = lane_catalog_with(vec![ModelLaneConfig::default(), autoscale_lane]);
         let mut nexus = nexus_with_catalog(lane_catalog);
         nexus.autoscale.enabled = true;
-        nexus.autoscale.min_lanes = NonZeroU32::new(1).expect("nonzero min lanes");
-        nexus.autoscale.max_lanes = NonZeroU32::new(3).expect("nonzero max lanes");
+        nexus.autoscale.min_lane_id = NonZeroU32::new(1).expect("nonzero min lanes");
+        nexus.autoscale.max_lane_id_exclusive = NonZeroU32::new(3).expect("nonzero max lanes");
         active_lane_proof_policy_at_height(&nexus, lane, 10)
             .expect("DA work at the exact close height remains admissible");
         assert!(matches!(
@@ -2295,8 +2295,8 @@ mod tests {
         let lane_catalog = lane_catalog_with(vec![ModelLaneConfig::default(), autoscale_lane]);
         let mut nexus = nexus_with_catalog(lane_catalog);
         nexus.autoscale.enabled = true;
-        nexus.autoscale.min_lanes = NonZeroU32::new(1).expect("nonzero min lanes");
-        nexus.autoscale.max_lanes = NonZeroU32::new(3).expect("nonzero max lanes");
+        nexus.autoscale.min_lane_id = NonZeroU32::new(1).expect("nonzero min lanes");
+        nexus.autoscale.max_lane_id_exclusive = NonZeroU32::new(3).expect("nonzero max lanes");
         let bundle = DaCommitmentBundle::new(vec![merkle_record(lane.as_u32())]);
         assert!(
             active_lane_proof_policy(&nexus, lane).is_ok(),
@@ -2353,8 +2353,8 @@ mod tests {
         let lane_catalog = lane_catalog_with(vec![ModelLaneConfig::default(), autoscale_lane]);
         let mut nexus = nexus_with_catalog(lane_catalog);
         nexus.autoscale.enabled = true;
-        nexus.autoscale.min_lanes = NonZeroU32::new(1).expect("nonzero min lanes");
-        nexus.autoscale.max_lanes = NonZeroU32::new(3).expect("nonzero max lanes");
+        nexus.autoscale.min_lane_id = NonZeroU32::new(1).expect("nonzero min lanes");
+        nexus.autoscale.max_lane_id_exclusive = NonZeroU32::new(3).expect("nonzero max lanes");
         let bundle = iroha_data_model::da::pin_intent::DaPinIntentBundle::new(vec![
             iroha_data_model::da::pin_intent::DaPinIntent::new(
                 lane,
@@ -2393,8 +2393,8 @@ mod tests {
         let lane_catalog = lane_catalog_with(vec![ModelLaneConfig::default(), malformed]);
         let mut nexus = nexus_with_catalog(lane_catalog);
         nexus.autoscale.enabled = true;
-        nexus.autoscale.min_lanes = NonZeroU32::new(1).expect("nonzero min lanes");
-        nexus.autoscale.max_lanes = NonZeroU32::new(3).expect("nonzero max lanes");
+        nexus.autoscale.min_lane_id = NonZeroU32::new(1).expect("nonzero min lanes");
+        nexus.autoscale.max_lane_id_exclusive = NonZeroU32::new(3).expect("nonzero max lanes");
         assert!(matches!(
             active_lane_proof_policy(&nexus, lane),
             Err(DaProofPolicyError::UnknownLane { lane: rejected }) if rejected == lane
@@ -2415,8 +2415,8 @@ mod tests {
             let lane_catalog = lane_catalog_with(vec![ModelLaneConfig::default(), malformed]);
             let mut nexus = nexus_with_catalog(lane_catalog);
             nexus.autoscale.enabled = true;
-            nexus.autoscale.min_lanes = NonZeroU32::new(1).expect("nonzero min lanes");
-            nexus.autoscale.max_lanes = NonZeroU32::new(3).expect("nonzero max lanes");
+            nexus.autoscale.min_lane_id = NonZeroU32::new(1).expect("nonzero min lanes");
+            nexus.autoscale.max_lane_id_exclusive = NonZeroU32::new(3).expect("nonzero max lanes");
             assert!(
                 matches!(
                     active_lane_proof_policy(&nexus, lane),

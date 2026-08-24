@@ -5348,7 +5348,8 @@ mod tests {
                 SelectorTuple::<Domain>::default(),
                 payload,
             ));
-        let qwp = iroha_data_model::query::QueryWithParams::new(&qbox, params);
+        let qwp = iroha_data_model::query::QueryWithParams::new(&qbox, params)
+            .expect("test query type has a canonical mapping");
         let request = QueryRequest::Start(qwp);
         let validated = ValidQueryRequest::validate_for_client_parts(
             request,
@@ -5433,7 +5434,8 @@ mod tests {
             SelectorTuple::default(),
             payload,
         ));
-        let boxed_qwp = QueryWithParams::new(&qbox, params.clone());
+        let boxed_qwp = QueryWithParams::new(&qbox, params.clone())
+            .expect("test query type has a canonical mapping");
         let boxed_req = ValidQueryRequest::validate_for_client_parts(
             QueryRequest::Start(boxed_qwp),
             &ALICE_ID,
@@ -5543,7 +5545,8 @@ mod tests {
             SelectorTuple::<iroha_data_model::asset::value::Asset>::default(),
             payload,
         ));
-        let boxed_qwp = QueryWithParams::new(&qbox, params.clone());
+        let boxed_qwp = QueryWithParams::new(&qbox, params.clone())
+            .expect("test query type has a canonical mapping");
         let boxed_req = ValidQueryRequest::validate_for_client_parts(
             QueryRequest::Start(boxed_qwp),
             &ALICE_ID,
@@ -5644,7 +5647,8 @@ mod tests {
             SelectorTuple::<iroha_data_model::nft::Nft>::default(),
             payload,
         ));
-        let boxed_qwp = QueryWithParams::new(&qbox, params.clone());
+        let boxed_qwp = QueryWithParams::new(&qbox, params.clone())
+            .expect("test query type has a canonical mapping");
         let boxed_req = ValidQueryRequest::validate_for_client_parts(
             QueryRequest::Start(boxed_qwp),
             &ALICE_ID,
@@ -5742,7 +5746,8 @@ mod tests {
             SelectorTuple::<iroha_data_model::account::Account>::default(),
             payload,
         ));
-        let boxed_qwp = QueryWithParams::new(&qbox, params.clone());
+        let boxed_qwp = QueryWithParams::new(&qbox, params.clone())
+            .expect("test query type has a canonical mapping");
         let boxed_req = ValidQueryRequest::validate_for_client_parts(
             QueryRequest::Start(boxed_qwp),
             &ALICE_ID,
@@ -5828,7 +5833,8 @@ mod tests {
             SelectorTuple::<iroha_data_model::block::BlockHeader>::default(),
             payload,
         ));
-        let boxed_qwp = QueryWithParams::new(&qbox, params.clone());
+        let boxed_qwp = QueryWithParams::new(&qbox, params.clone())
+            .expect("test query type has a canonical mapping");
         let boxed_req = ValidQueryRequest::validate_for_client_parts(
             QueryRequest::Start(boxed_qwp),
             &ALICE_ID,
@@ -5935,7 +5941,8 @@ mod tests {
                 SelectorTuple::<Domain>::default(),
                 payload,
             ));
-        let qwp = iroha_data_model::query::QueryWithParams::new(&qbox, params);
+        let qwp = iroha_data_model::query::QueryWithParams::new(&qbox, params)
+            .expect("test query type has a canonical mapping");
         let request = QueryRequest::Start(qwp);
         let validated = ValidQueryRequest::validate_for_client_parts(
             request,
@@ -6005,7 +6012,8 @@ mod tests {
         );
         let qbox: iroha_data_model::query::QueryBox<iroha_data_model::query::QueryOutputBatchBox> =
             Box::new(erased);
-        let qwp = iroha_data_model::query::QueryWithParams::new(&qbox, params);
+        let qwp = iroha_data_model::query::QueryWithParams::new(&qbox, params)
+            .expect("test query type has a canonical mapping");
         let request = QueryRequest::Start(qwp);
         let validated = ValidQueryRequest::validate_for_client_parts(
             request,
@@ -6086,7 +6094,8 @@ mod tests {
             );
         let qbox: iroha_data_model::query::QueryBox<iroha_data_model::query::QueryOutputBatchBox> =
             Box::new(erased);
-        let qwp = iroha_data_model::query::QueryWithParams::new(&qbox, params);
+        let qwp = iroha_data_model::query::QueryWithParams::new(&qbox, params)
+            .expect("test query type has a canonical mapping");
         let request = QueryRequest::Start(qwp);
         let validated = ValidQueryRequest::validate_for_client_parts(
             request,
@@ -6146,7 +6155,8 @@ mod tests {
             );
         let qbox: iroha_data_model::query::QueryBox<iroha_data_model::query::QueryOutputBatchBox> =
             Box::new(erased);
-        let qwp = iroha_data_model::query::QueryWithParams::new(&qbox, params);
+        let qwp = iroha_data_model::query::QueryWithParams::new(&qbox, params)
+            .expect("test query type has a canonical mapping");
         let request = QueryRequest::Start(qwp);
         let validated = ValidQueryRequest::validate_for_client_parts(
             request,
@@ -6205,7 +6215,8 @@ mod tests {
                 SelectorTuple::<Domain>::default(),
                 payload,
             ));
-        let qwp = iroha_data_model::query::QueryWithParams::new(&qbox, params);
+        let qwp = iroha_data_model::query::QueryWithParams::new(&qbox, params)
+            .expect("test query type has a canonical mapping");
         let request = QueryRequest::Start(qwp);
         let validated = ValidQueryRequest::validate_for_client_parts(
             request,
@@ -6309,7 +6320,8 @@ mod tests {
                 SelectorTuple::<Account>::default(),
                 payload_acc,
             ));
-        let qwp_acc = iroha_data_model::query::QueryWithParams::new(&qbox_acc, params.clone());
+        let qwp_acc = iroha_data_model::query::QueryWithParams::new(&qbox_acc, params.clone())
+            .expect("account query type has a canonical mapping");
         let request_acc = QueryRequest::Start(qwp_acc);
         let validated_acc = ValidQueryRequest::validate_for_client_parts(
             request_acc,
@@ -6341,7 +6353,8 @@ mod tests {
                 payload_ad,
             ),
         );
-        let qwp_ad = iroha_data_model::query::QueryWithParams::new(&qbox_ad, params);
+        let qwp_ad = iroha_data_model::query::QueryWithParams::new(&qbox_ad, params)
+            .expect("asset-definition query type has a canonical mapping");
         let request_ad = QueryRequest::Start(qwp_ad);
         let validated_ad = ValidQueryRequest::validate_for_client_parts(
             request_ad,
@@ -6498,9 +6511,10 @@ mod tests {
                         SelectorTuple::<$item>::default(),
                         payload,
                     ));
-                let request = QueryRequest::Start(iroha_data_model::query::QueryWithParams::new(
-                    &query, params,
-                ));
+                let request = QueryRequest::Start(
+                    iroha_data_model::query::QueryWithParams::new(&query, params)
+                        .expect("macro query type has a canonical mapping"),
+                );
                 let validated = ValidQueryRequest::validate_for_client_parts(
                     request,
                     &ALICE_ID,
@@ -6774,7 +6788,8 @@ mod tests {
                 SelectorTuple::<Trigger>::default(),
                 payload,
             ));
-        let qwp = iroha_data_model::query::QueryWithParams::new(&qbox, params);
+        let qwp = iroha_data_model::query::QueryWithParams::new(&qbox, params)
+            .expect("test query type has a canonical mapping");
         let request = QueryRequest::Start(qwp);
         let validated = ValidQueryRequest::validate_for_client_parts(
             request,
@@ -6894,7 +6909,8 @@ mod tests {
         let erased: ErasedIterQuery<iroha_data_model::domain::Domain> =
             ErasedIterQuery::new(CompoundPredicate::PASS, SelectorTuple::default(), payload);
         let boxed: QueryBox<QueryOutputBatchBox> = Box::new(erased);
-        let iter_query = QueryWithParams::new(&boxed, QueryParams::default());
+        let iter_query = QueryWithParams::new(&boxed, QueryParams::default())
+            .expect("domain query type has a canonical mapping");
         let request = ValidQueryRequest::validate_for_client_parts(
             QueryRequest::Start(iter_query),
             &ALICE_ID,
@@ -7056,7 +7072,8 @@ mod tests {
                 SelectorTuple::<Asset>::default(),
                 payload,
             ));
-        let qwp = iroha_data_model::query::QueryWithParams::new(&qbox, params);
+        let qwp = iroha_data_model::query::QueryWithParams::new(&qbox, params)
+            .expect("test query type has a canonical mapping");
         let request = QueryRequest::Start(qwp);
         let validated = ValidQueryRequest::validate_for_client_parts(
             request,
@@ -7279,7 +7296,8 @@ mod tests {
             SelectorTuple::default(),
             payload,
         ));
-        let boxed_qwp = QueryWithParams::new(&qbox, params.clone());
+        let boxed_qwp = QueryWithParams::new(&qbox, params.clone())
+            .expect("test query type has a canonical mapping");
         let boxed_req = ValidQueryRequest::validate_for_client_parts(
             QueryRequest::Start(boxed_qwp),
             &ALICE_ID,
@@ -8636,7 +8654,8 @@ mod tests {
             SelectorTuple::<Nft>::ids_only(),
         );
         let qbox: QueryBox<query::QueryOutputBatchBox> = qwf.into();
-        let qwp = QueryWithParams::new(&qbox, query::parameters::QueryParams::default());
+        let qwp = QueryWithParams::new(&qbox, query::parameters::QueryParams::default())
+            .expect("test query type has a canonical mapping");
         let req = ValidQueryRequest::validate_for_client_parts(
             QueryRequest::Start(qwp),
             &ALICE_ID,
@@ -8692,7 +8711,8 @@ mod tests {
             SelectorTuple::<Role>::ids_only(),
         );
         let qbox: QueryBox<query::QueryOutputBatchBox> = qwf.into();
-        let qwp = QueryWithParams::new(&qbox, query::parameters::QueryParams::default());
+        let qwp = QueryWithParams::new(&qbox, query::parameters::QueryParams::default())
+            .expect("test query type has a canonical mapping");
         let req = ValidQueryRequest::validate_for_client_parts(
             QueryRequest::Start(qwp),
             &ALICE_ID,
@@ -8759,7 +8779,8 @@ mod tests {
             SelectorTuple::<Trigger>::ids_only(),
         );
         let qbox: QueryBox<query::QueryOutputBatchBox> = qwf.into();
-        let qwp = QueryWithParams::new(&qbox, query::parameters::QueryParams::default());
+        let qwp = QueryWithParams::new(&qbox, query::parameters::QueryParams::default())
+            .expect("test query type has a canonical mapping");
         let req = ValidQueryRequest::validate_for_client_parts(
             QueryRequest::Start(qwp),
             &ALICE_ID,

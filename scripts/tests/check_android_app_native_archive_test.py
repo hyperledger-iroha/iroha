@@ -56,7 +56,7 @@ class AndroidAppNativeArchiveTest(unittest.TestCase):
 
         provenance = {
             "schema": "iroha.android-native-build-provenance.v1",
-            "native_bridge_abi_version": 22,
+            "native_bridge_abi_version": 23,
             "build_profile": "release",
             "cargo_locked": True,
             "privacy_production_enabled": True,

@@ -3,7 +3,7 @@
 //! `Consensus` trait is now implemented only by `Sumeragi` for now.
 use crate::{
     merge_sidecar::{CertifiedMergeSidecarMessage, MAX_CERTIFIED_MERGE_CHUNK_BYTES},
-    state::{State, StateReadOnly, StateView, WorldReadOnly},
+    state::{State, StateView, WorldReadOnly},
 };
 use eyre::Result;
 use iroha_config::parameters::{
@@ -17,12 +17,13 @@ use iroha_config::parameters::{
     },
 };
 use iroha_crypto::{Algorithm, Hash as CryptoHash, HashOf, PublicKey};
+#[cfg(test)]
+use iroha_data_model::consensus::VrfEpochRecord;
 use iroha_data_model::{
     NetworkId,
     block::consensus_v2::{
         BlockSubject, ConsensusMessageV2, ConsensusMessageV2Payload, ConsensusMode, ConsensusRound,
     },
-    consensus::VrfEpochRecord,
     merge::{
         MAX_MERGE_EXECUTION_CERTIFIED_SOURCE_BYTES, MAX_MERGE_EXECUTION_SOURCE_BUNDLE_BYTES,
         MergeCommitteeSignature,
@@ -37,7 +38,6 @@ use iroha_p2p::network::{
     NetworkReplyRoutesObservedMergeReceipt, NetworkReplyRoutesPruneReceipt,
     NetworkReplyRoutesStrictMergeReceipt,
 };
-use mv::storage::StorageReadOnly;
 use norito::codec::{Decode, Encode};
 use parking_lot::Mutex;
 use std::{
@@ -386,6 +386,25 @@ pub(crate) struct EpochScheduleSnapshot {
     fallback_epoch_length: u64,
 }
 impl EpochScheduleSnapshot {
+    #[cfg(not(test))]
+    pub(crate) fn from_world_with_fallback(
+        world: &impl WorldReadOnly,
+        fallback_epoch_length: u64,
+    ) -> Self {
+        let fallback_epoch_length = world
+            .sumeragi_npos_parameters()
+            .map(|params| params.epoch_length_blocks().get())
+            .unwrap_or(fallback_epoch_length)
+            .max(1);
+        Self {
+            finalized: Vec::new(),
+            last_finalized_epoch: None,
+            last_finalized_end: 0,
+            fallback_epoch_length,
+        }
+    }
+    /// Preserve historical VRF-boundary fixtures without a release consumer.
+    #[cfg(test)]
     pub(crate) fn from_world_with_fallback(
         world: &impl WorldReadOnly,
         fallback_epoch_length: u64,
@@ -464,15 +483,18 @@ pub(crate) fn resolve_npos_slashing_delay_blocks_from_world(
         .sumeragi_npos_parameters()
         .map(|params| params.slashing_delay_blocks())
 }
+#[cfg(test)]
 fn network_epoch_seed(network_id: &NetworkId) -> [u8; 32] {
     *network_id.as_bytes()
 }
+#[cfg(test)]
 fn npos_base_epoch_seed(world: &impl WorldReadOnly, network_id: &NetworkId) -> [u8; 32] {
     world
         .sumeragi_npos_parameters()
         .map(|params| params.epoch_seed())
         .unwrap_or_else(|| network_epoch_seed(network_id))
 }
+#[cfg(test)]
 fn next_epoch_seed_from_seed_and_reveals(
     seed: [u8; 32],
     reveals: impl IntoIterator<Item = (u32, [u8; 32])>,
@@ -489,9 +511,11 @@ fn next_epoch_seed_from_seed_and_reveals(
     out.copy_from_slice(&digest[..32]);
     out
 }
+#[cfg(test)]
 fn next_epoch_seed_from_seed(seed: [u8; 32]) -> [u8; 32] {
     next_epoch_seed_from_seed_and_reveals(seed, [])
 }
+#[cfg(test)]
 fn next_epoch_seed_from_record(record: &VrfEpochRecord) -> [u8; 32] {
     let mut reveals: Vec<(u32, [u8; 32])> = record
         .participants
@@ -501,6 +525,7 @@ fn next_epoch_seed_from_record(record: &VrfEpochRecord) -> [u8; 32] {
     reveals.sort_by_key(|(signer, _)| *signer);
     next_epoch_seed_from_seed_and_reveals(record.seed, reveals)
 }
+#[cfg(test)]
 pub(crate) fn deterministic_npos_seed_for_epoch_from_world(
     world: &impl WorldReadOnly,
     network_id: &NetworkId,
@@ -512,6 +537,7 @@ pub(crate) fn deterministic_npos_seed_for_epoch_from_world(
     }
     seed
 }
+#[cfg(test)]
 fn latest_epoch_seed_from_world(world: &impl WorldReadOnly, network_id: &NetworkId) -> [u8; 32] {
     if let Some((_epoch, record)) = world.vrf_epochs().iter().last() {
         return if record.finalized {
@@ -527,14 +553,17 @@ pub(crate) fn epoch_for_height_from_world(world: &impl WorldReadOnly, height: u6
     EpochScheduleSnapshot::from_world(world).epoch_for_height(height)
 }
 /// Resolve the `NPoS` PRF seed for the epoch containing `height`.
+#[cfg(test)]
 pub fn npos_seed_for_height(view: &StateView<'_>, height: u64) -> [u8; 32] {
     npos_seed_for_height_from_world(&view.world, view.network_id(), height)
 }
 /// Resolve the PRF seed for the epoch containing `height`.
+#[cfg(test)]
 pub fn prf_seed_for_height(view: &StateView<'_>, height: u64) -> [u8; 32] {
     prf_seed_for_height_from_world(&view.world, view.network_id(), height)
 }
 /// Resolve the `NPoS` PRF seed for the epoch containing `height` from any world snapshot.
+#[cfg(test)]
 pub fn npos_seed_for_height_from_world(
     world: &impl WorldReadOnly,
     network_id: &NetworkId,
@@ -547,6 +576,7 @@ pub fn npos_seed_for_height_from_world(
 ///
 /// Callers that already carry a finalized epoch number must use this rather
 /// than re-deriving an epoch from a possibly different height schedule.
+#[cfg(test)]
 pub(crate) fn npos_seed_for_epoch_from_world(
     world: &impl WorldReadOnly,
     network_id: &NetworkId,
@@ -576,6 +606,7 @@ pub(crate) fn npos_seed_for_epoch_from_world(
     }
 }
 /// Resolve the PRF seed for the epoch containing `height` from any world snapshot.
+#[cfg(test)]
 pub(crate) fn prf_seed_for_height_from_world(
     world: &impl WorldReadOnly,
     network_id: &NetworkId,
@@ -678,6 +709,7 @@ pub use v2_core::{
     check_production_two_stage_relay_retry_transition,
     production_two_stage_relay_retry_trace_refines_source_fairness_kernel,
 };
+pub(crate) mod v2_beacon;
 pub(crate) mod v2_effects;
 pub(crate) mod v2_first_release_recovery;
 pub(crate) mod v2_lane_work;
@@ -1132,6 +1164,7 @@ enum FairV2IngressMessageKind {
     V2CommitCertificateResponse,
     V2VrfCommit,
     V2VrfReveal,
+    V2GlobalBeaconPartialSignature,
     KuraReplicaAdvert,
     LaneBlockProposal,
     LaneExecutablePayload,
@@ -1179,7 +1212,8 @@ fn fair_v2_ingress_control_kind(message: &BlockMessage) -> Option<FairV2IngressC
         | ConsensusMessageV2Payload::CommitCertificateRequest(_)
         | ConsensusMessageV2Payload::CommitCertificateResponse(_)
         | ConsensusMessageV2Payload::VrfCommit(_)
-        | ConsensusMessageV2Payload::VrfReveal(_) => return None,
+        | ConsensusMessageV2Payload::VrfReveal(_)
+        | ConsensusMessageV2Payload::GlobalBeaconPartialSignature(_) => return None,
     })
 }
 fn fair_v2_ingress_same_control_slot(
@@ -1204,7 +1238,8 @@ fn fair_v2_ingress_same_control_slot(
             | ConsensusMessageV2Payload::CommitCertificateRequest(_)
             | ConsensusMessageV2Payload::CommitCertificateResponse(_)
             | ConsensusMessageV2Payload::VrfCommit(_)
-            | ConsensusMessageV2Payload::VrfReveal(_) => return None,
+            | ConsensusMessageV2Payload::VrfReveal(_)
+            | ConsensusMessageV2Payload::GlobalBeaconPartialSignature(_) => return None,
         })
     };
     let (Some(left_kind), Some(right_kind), Some(left_round), Some(right_round)) = (
@@ -1480,7 +1515,8 @@ fn fair_v2_ingress_leader_wire_identity(
         | ConsensusMessageV2Payload::CommitCertificateRequest(_)
         | ConsensusMessageV2Payload::CommitCertificateResponse(_)
         | ConsensusMessageV2Payload::VrfCommit(_)
-        | ConsensusMessageV2Payload::VrfReveal(_) => {
+        | ConsensusMessageV2Payload::VrfReveal(_)
+        | ConsensusMessageV2Payload::GlobalBeaconPartialSignature(_) => {
             return FairV2IngressLeaderWireDerivation::NotApplicable;
         }
     };
@@ -1721,6 +1757,7 @@ impl FairV2IngressMessageKind {
             Self::LaneBlockCertificate => 20,
             Self::LaneHistoricalRecoveryRequest => 21,
             Self::LaneHistoricalRecoveryResponse => 22,
+            Self::V2GlobalBeaconPartialSignature => 23,
         }
     }
     fn classify(message: &BlockMessage) -> Option<Self> {
@@ -1746,6 +1783,9 @@ impl FairV2IngressMessageKind {
                 }
                 ConsensusMessageV2Payload::VrfCommit(_) => Self::V2VrfCommit,
                 ConsensusMessageV2Payload::VrfReveal(_) => Self::V2VrfReveal,
+                ConsensusMessageV2Payload::GlobalBeaconPartialSignature(_) => {
+                    Self::V2GlobalBeaconPartialSignature
+                }
             }),
             BlockMessage::LaneBlockProposal(_) => Some(Self::LaneBlockProposal),
             BlockMessage::LaneExecutablePayload(_) => Some(Self::LaneExecutablePayload),
@@ -1779,6 +1819,7 @@ impl FairV2IngressMessageKind {
                 | Self::V2CommitCertificateResponse
                 | Self::V2VrfCommit
                 | Self::V2VrfReveal
+                | Self::V2GlobalBeaconPartialSignature
         )
     }
 }
@@ -1801,6 +1842,7 @@ fn fair_v2_ingress_consensus_round(
         ConsensusMessageV2Payload::CommitCertificateResponse(response) => {
             Some(response.certificate.round)
         }
+        ConsensusMessageV2Payload::GlobalBeaconPartialSignature(partial) => Some(partial.round),
         ConsensusMessageV2Payload::PayloadChunk(_)
         | ConsensusMessageV2Payload::CommitCertificateRequest(_)
         | ConsensusMessageV2Payload::VrfCommit(_)
@@ -2807,7 +2849,8 @@ impl FairV2IngressClass {
             | ConsensusMessageV2Payload::CommitCertificateRequest(_)
             | ConsensusMessageV2Payload::CommitCertificateResponse(_)
             | ConsensusMessageV2Payload::VrfCommit(_)
-            | ConsensusMessageV2Payload::VrfReveal(_) => Self::Progress,
+            | ConsensusMessageV2Payload::VrfReveal(_)
+            | ConsensusMessageV2Payload::GlobalBeaconPartialSignature(_) => Self::Progress,
             ConsensusMessageV2Payload::PayloadChunk(_)
             | ConsensusMessageV2Payload::CertifiedBodyResponse(_) => Self::TransportCompletion,
             ConsensusMessageV2Payload::Proposal(_)
@@ -4252,7 +4295,7 @@ impl FairV2Ingress {
     /// Queued messages belong to the preceding immutable height and are
     /// discarded while the public ingress gate is closed. The caller may open
     /// the queue only after context and safety-WAL recovery complete.
-    #[cfg(any(test, feature = "iroha-core-tests"))]
+    #[cfg(test)]
     pub(crate) fn configure_roster(
         &self,
         roster: impl IntoIterator<Item = PeerId>,
@@ -5987,7 +6030,7 @@ impl FairV2Ingress {
     /// becomes admissible, the head-first search selects it before later
     /// entries. When every entry is rejected, the source order and total length
     /// remain unchanged.
-    #[cfg(any(test, feature = "iroha-core-tests"))]
+    #[cfg(test)]
     pub(crate) fn try_recv_if(
         &self,
         predicate: impl FnMut(&InboundBlockMessage) -> bool,
@@ -6836,7 +6879,7 @@ impl SumeragiHandle {
         self.output_guard.restart_required()
     }
 }
-#[cfg(any(test, feature = "iroha-core-tests"))]
+#[cfg(test)]
 fn test_sumeragi_handle(
     block_capacity: usize,
 ) -> (
@@ -6846,7 +6889,7 @@ fn test_sumeragi_handle(
 ) {
     test_sumeragi_handle_with_source_geometry(block_capacity, None)
 }
-#[cfg(any(test, feature = "iroha-core-tests"))]
+#[cfg(test)]
 fn test_sumeragi_handle_with_source_geometry(
     block_capacity: usize,
     authenticated_non_validator_source_capacity: Option<usize>,
@@ -6914,6 +6957,12 @@ pub struct SumeragiStartArgs {
     /// commit boundary.
     pub reputation_finalized_archive:
         Option<Arc<crate::query::reputation_finalized::ReputationFinalizedArchive>>,
+    /// Runtime-only owner of this validator's adaptive global-beacon signing share.
+    ///
+    /// The owner is injected by the daemon/runtime boundary and is never
+    /// serialized into configuration or World state.
+    pub global_beacon_partial_signer:
+        Option<Arc<dyn crate::beacon::GlobalThresholdBeaconPartialSignerV1>>,
     /// Exact startup replay boundary authenticated before Kura replay and
     /// moved into active-height recovery without a historical rescan.
     pub startup_replay_plan: V2StartupReplayPlan,
@@ -6995,6 +7044,7 @@ impl SumeragiStartArgs {
             kura,
             provider_ingest_finalized_archive,
             reputation_finalized_archive,
+            global_beacon_partial_signer,
             startup_replay_plan,
             startup_replay_inventory_guard,
             network,
@@ -7095,6 +7145,7 @@ impl SumeragiStartArgs {
             kura,
             provider_ingest_finalized_archive,
             reputation_finalized_archive,
+            global_beacon_partial_signer,
             startup_replay_plan,
             startup_replay_inventory_guard,
             network,
@@ -7313,6 +7364,8 @@ struct SumeragiWorker {
         Option<Arc<crate::query::provider_ingest_finalized::ProviderIngestFinalizedArchiveV1>>,
     reputation_finalized_archive:
         Option<Arc<crate::query::reputation_finalized::ReputationFinalizedArchive>>,
+    global_beacon_partial_signer:
+        Option<Arc<dyn crate::beacon::GlobalThresholdBeaconPartialSignerV1>>,
     startup_replay_plan: V2StartupReplayPlan,
     startup_replay_inventory_guard: V2StartupReplayInventoryGuard,
     network: IrohaNetwork,

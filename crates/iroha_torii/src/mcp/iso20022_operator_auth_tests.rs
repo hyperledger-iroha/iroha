@@ -202,6 +202,24 @@ fn iso20022_mcp_schema_retires_raw_headers_and_requires_inner_operator_auth() {
             .and_then(Value::as_object)
             .expect("ISO properties");
         assert!(properties.contains_key("operator_auth"));
+        if tool.name == "iroha.iso20022.status.get" {
+            assert!(properties.contains_key("path"));
+            assert!(!properties.contains_key("msg_id"));
+            assert!(!properties.contains_key("message_id"));
+            assert!(!properties.contains_key("id"));
+        } else {
+            assert!(properties.contains_key("body_base64"));
+            assert!(!properties.contains_key("message_xml"));
+            assert!(!properties.contains_key("xml"));
+            assert!(!properties.contains_key("body"));
+            assert!(
+                required
+                    .iter()
+                    .any(|field| field.as_str() == Some("body_base64")),
+                "{} must require canonical XML bytes",
+                tool.name
+            );
+        }
         assert!(
             !properties.contains_key("headers"),
             "{} retains raw header injection",

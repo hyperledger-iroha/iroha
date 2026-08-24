@@ -10,6 +10,11 @@ import {
 } from "../src/authenticatedBlockProofs.js";
 import * as browser from "../src/browser.js";
 import * as root from "../src/index.js";
+import { NetworkId } from "../src/networkId.js";
+
+const NETWORK_ID = NetworkId.parse(
+  "hash:32C903E5B3497E34C2B844EBFE8A39C19E6CF8F95D44C1FFB8BA9DCB42F91149#A2F0",
+);
 
 function minimallyShapedInput(overrides = {}) {
   const context = Buffer.alloc(32);
@@ -18,7 +23,7 @@ function minimallyShapedInput(overrides = {}) {
   expectedEntryHash[31] = 1;
   return {
     version: 1,
-    networkId: "a5".repeat(32),
+    networkId: NETWORK_ID,
     trustedContextId: context,
     expectedEntryHash,
     finalityProofNorito: Buffer.of(1),
@@ -50,7 +55,7 @@ test("browser authenticated verifier fails closed without digest-pinned Rust WAS
   );
 });
 
-test("node wrapper rejects unknown fields, wrong versions, and noncanonical networks before native load", async () => {
+test("node wrapper rejects unknown fields, wrong versions, and non-NetworkId values before native load", async () => {
   await assert.rejects(
     verifyAuthenticatedBlockProofsV1(minimallyShapedInput({ surprise: true })),
     /unknown field surprise/u,
@@ -60,12 +65,21 @@ test("node wrapper rejects unknown fields, wrong versions, and noncanonical netw
     /version must be 1/u,
   );
   await assert.rejects(
-    verifyAuthenticatedBlockProofsV1(minimallyShapedInput({ networkId: " bad " })),
-    /networkId is not canonical/u,
+    verifyAuthenticatedBlockProofsV1(
+      minimallyShapedInput({ networkId: NETWORK_ID.toString() }),
+    ),
+    /networkId must be a NetworkId/u,
   );
   await assert.rejects(
-    verifyAuthenticatedBlockProofsV1(minimallyShapedInput({ networkId: "a4".repeat(32) })),
-    /networkId must carry the Iroha hash marker bit/u,
+    verifyAuthenticatedBlockProofsV1(
+      minimallyShapedInput({
+        networkId: {
+          literal: NETWORK_ID.toString(),
+          toBytes: () => NETWORK_ID.toBytes(),
+        },
+      }),
+    ),
+    /networkId must be a NetworkId/u,
   );
 });
 

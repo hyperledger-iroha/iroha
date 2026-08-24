@@ -921,11 +921,15 @@ self.context_id == context_id
     require_sequence(
         "run_lifecycle_active_height",
         """
-let lock_outcome = lane_work.mark_global_body_locked(locked_round, locked)?;
-if lock_outcome == GlobalBodyLockOutcome::Inserted && local_validator.is_some() {
-    services
-        .request_locked_candidate(executor.current_tag(), locked_round, locked)
-        .map_err(V2RunnerError::Service)?;
+if directive.decided_subject().is_none()
+    && let Some((locked_round, locked)) = directive.locked_body()
+{
+    let lock_outcome = lane_work.mark_global_body_locked(locked_round, locked)?;
+    if lock_outcome == GlobalBodyLockOutcome::Inserted && local_validator.is_some() {
+        services
+            .request_locked_candidate(executor.current_tag(), locked_round, locked,)
+            .map_err(V2RunnerError::Service)?;
+    }
 }
 """,
         "locked-body refinement evidence must be requested only by a local validator at exact first admission",

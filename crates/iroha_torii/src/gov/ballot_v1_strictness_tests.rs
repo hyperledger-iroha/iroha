@@ -84,6 +84,40 @@ async fn ballot_zk_v1_rejects_noncanonical_owner_hint() {
     );
 }
 #[tokio::test]
+async fn ballot_zk_v1_rejects_owner_hint_different_from_authority() {
+    let (state, _queue, _chain_id) = mk_basic_context();
+    let authenticated = canonical_account(ACCOUNT_AUTHORITY);
+    let dto = super::ZkBallotV1Dto {
+        authority: ACCOUNT_AUTHORITY.to_string(),
+        network_id: *state.network_id_ref(),
+        election_id: "ref-1".to_string(),
+        backend: "halo2/ipa".to_string(),
+        envelope_b64: base64::engine::general_purpose::STANDARD.encode([1_u8, 2, 3, 4]),
+        root_hint: None,
+        owner: Some(canonical_literal(ACCOUNT_OWNER_ALT)),
+        amount: Some(100_u64.into()),
+        duration_blocks: Some(200),
+        direction: None,
+        nullifier: None,
+    };
+    let raw = Bytes::from(norito::json::to_vec(&norito::json::to_value(&dto).unwrap()).unwrap());
+    let response = super::handle_gov_ballot_zk_v1(
+        state,
+        &authenticated,
+        MaybeTelemetry::disabled(),
+        crate::NoritoJsonWithBytes { value: dto, raw },
+    )
+    .await
+    .expect("handler response");
+    assert!(!response.0.ok);
+    assert!(!response.0.accepted);
+    assert_eq!(
+        response.0.reason.as_deref(),
+        Some("owner must equal authority")
+    );
+    assert!(response.0.tx_instructions.is_empty());
+}
+#[tokio::test]
 async fn zk_v1_handlers_reject_noncanonical_direction() {
     use iroha_data_model::isi::governance::BallotProof;
     let (state, _queue, _chain_id) = mk_basic_context();

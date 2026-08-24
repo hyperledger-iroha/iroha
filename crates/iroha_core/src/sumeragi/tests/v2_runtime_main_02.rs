@@ -553,7 +553,7 @@ fn scheduler_owner_carrier_pins_exact_fifo_identity_and_rank_fields() {
     assert_eq!(evidence.queue_after.service_cursor, SERVICE_CLASS_NORMAL);
     assert_eq!(evidence.queue_before.max_service_debt, 0);
     assert_eq!(evidence.queue_after.max_service_debt, 1);
-    assert!(evidence.live_mode);
+    assert!(evidence.clocks_armed);
     assert!(!evidence.timeout_due);
     assert!(!evidence.periodic_timer_due);
     assert!(evidence.fifo_ready);
@@ -1014,6 +1014,7 @@ fn missing_nonempty_effect_ownership_latches_runtime_fail_closed() {
         "missing runtime ownership permanently closes later ingress",
     );
 }
+#[test]
 fn adapter_command_identity_is_derived_from_exact_immutable_payload() {
     let owner_tag = tag(4);
     let command = AdapterCommand::SignatureCompleted(vec![0x11, 0x22, 0x33]);

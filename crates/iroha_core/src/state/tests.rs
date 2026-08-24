@@ -19,6 +19,16 @@ use iroha_crypto::{
 use iroha_data_model::account::AccountDetails;
 use iroha_data_model::isi::verifying_keys;
 use iroha_data_model::proof::{VerifyingKeyBox, VerifyingKeyId, VerifyingKeyRecord};
+use iroha_data_model::soracloud::{
+    SORA_APP_INFRA_AUDIT_EVENT_VERSION_V1, SORA_APP_INFRA_MANIFEST_VERSION_V1,
+    SORA_APP_INFRA_SERVICE_REF_VERSION_V1, SORA_APP_INFRA_STATE_VERSION_V1,
+    SORA_INROU_REPLICA_RUNTIME_STATE_VERSION_V1, SORA_RUNTIME_RECEIPT_VERSION_V1,
+    SORA_SERVICE_MAILBOX_MESSAGE_VERSION_V1, SORA_SERVICE_RUNTIME_STATE_VERSION_V1,
+    SoraAppInfraActionV1, SoraAppInfraManifestV1, SoraAppInfraServiceRefV1,
+    SoraCertifiedResponsePolicyV1, SoraInrouGuestIsaV1, SoraInrouReplicaPlacementV1,
+    SoraRuntimeReceiptV1, SoraServiceHandlerClassV1, SoraServiceHealthStatusV1,
+    SoraServiceMailboxMessageV1,
+};
 use iroha_data_model::zk::BackendTag;
 use iroha_data_model::{
     block::{
@@ -166,7 +176,7 @@ macro_rules! strict_single_lane_kura_fixture {
         let_row! { $catalog = LaneCatalog::new(lane_count, vec![LaneConfig::default()]).expect("lane catalog") };
         let $lane_config = RuntimeLaneConfig::from_catalog(&$catalog);
         let kura_cfg = strict_kura_config_for_testing(store_root);
-        let ($kura, _) = Kura::new(&kura_cfg, &$lane_config).expect("init kura");
+        let ($kura, _) = Kura::open_test_kura_with_configured_lane_config(&kura_cfg, &$lane_config).expect("init kura");
     };
 }
 macro_rules! commit_autoscale_transition {
@@ -1069,7 +1079,7 @@ state_test! { sync merge_write_set_encoder_mentions_every_persisted_world_block_
     let source = include_str!("../state.rs");
     let_row! { struct_start = source .find("pub struct WorldBlock<'world> {") .expect("WorldBlock declaration must remain discoverable") };
     let struct_tail = &source[struct_start..];
-    let_row! { struct_end = struct_tail .find("\n}\n\nimpl<'world> WorldBlock") .expect("WorldBlock declaration terminator must remain discoverable") };
+    let_row! { struct_end = struct_tail .find("\n}\n\nimpl WorldBlock<'_>") .expect("WorldBlock declaration terminator must remain discoverable") };
     let struct_body = &struct_tail[..struct_end];
     let_row! { encoder_start = source .find("fn merge_execution_write_set_bytes(&self)") .expect("merge write-set encoder must exist") };
     let encoder_tail = &source[encoder_start..];
@@ -1110,7 +1120,7 @@ state_test! { sync world_and_world_block_keep_snapshot_skip_annotations_in_sync
     }
     let source = include_str!("../state.rs");
     let_row! { world = source .split_once("pub struct World {") .and_then(|(_, tail)| tail.split_once("\n}\n\n/// Struct for block's aggregated changes")) .map(|(body, _)| body) .expect("World declaration must remain discoverable") };
-    let_row! { world_block = source .split_once("pub struct WorldBlock<'world> {") .and_then(|(_, tail)| tail.split_once("\n}\n\nimpl<'world> WorldBlock")) .map(|(body, _)| body) .expect("WorldBlock declaration must remain discoverable") };
+    let_row! { world_block = source .split_once("pub struct WorldBlock<'world> {") .and_then(|(_, tail)| tail.split_once("\n}\n\nimpl WorldBlock<'_>")) .map(|(body, _)| body) .expect("WorldBlock declaration must remain discoverable") };
     let world_annotations = snapshot_skip_annotations(world);
     let block_annotations = snapshot_skip_annotations(world_block);
     assert_eq!(
@@ -3987,7 +3997,8 @@ fn strict_kura_for_testing(
     lane_config: &RuntimeLaneConfig,
 ) -> Arc<Kura> {
     let kura_cfg = strict_kura_config_for_testing(store_root);
-    let (kura, _) = Kura::new(&kura_cfg, lane_config).expect("init kura");
+    let (kura, _) = Kura::open_test_kura_with_configured_lane_config(&kura_cfg, lane_config)
+        .expect("init kura");
     kura
 }
 macro_rules! autoscale_storage_fixture {
@@ -5666,35 +5677,35 @@ state_test! { sync autoscale_thresholds_permille_rejects_quantized_hysteresis_co
     );
 }
 state_test! { sync autoscale_runtime_lane_bounds_reject_empty_inverted_or_excessive_max
-    let_row! { mut autoscale = iroha_config::parameters::actual::Autoscale { min_lanes: nonzero!(4_u32), max_lanes: nonzero!(3_u32), ..Default::default() } };
+    let_row! { mut autoscale = iroha_config::parameters::actual::Autoscale { min_lane_id: nonzero!(4_u32), max_lane_id_exclusive: nonzero!(3_u32), ..Default::default() } };
     let_row! { err = ensure_autoscale_runtime_lane_bounds(&autoscale) .expect_err("runtime autoscale bounds must reject inverted min/max") };
     assert!(matches!(
         err,
         LaneLifecycleError::AutoscaleInvalidLaneBounds {
-            min_lanes: 4,
-            max_lanes: 3
+            min_lane_id: 4,
+            max_lane_id_exclusive: 3
         }
     ));
-    autoscale.min_lanes = nonzero!(4_u32);
-    autoscale.max_lanes = nonzero!(4_u32);
+    autoscale.min_lane_id = nonzero!(4_u32);
+    autoscale.max_lane_id_exclusive = nonzero!(4_u32);
     let_row! { err = ensure_autoscale_runtime_lane_bounds(&autoscale) .expect_err("runtime autoscale bounds must reject empty elastic ranges") };
     assert!(matches!(
         err,
         LaneLifecycleError::AutoscaleInvalidLaneBounds {
-            min_lanes: 4,
-            max_lanes: 4
+            min_lane_id: 4,
+            max_lane_id_exclusive: 4
         }
     ));
-    let cap = iroha_config::parameters::defaults::nexus::autoscale::MAX_LANES;
-    autoscale.min_lanes = nonzero!(1_u32);
-    autoscale.max_lanes = NonZeroU32::new(cap.saturating_add(1)).expect("cap + 1 remains nonzero");
+    let cap = iroha_config::parameters::defaults::nexus::autoscale::MAX_LANE_ID_EXCLUSIVE;
+    autoscale.min_lane_id = nonzero!(1_u32);
+    autoscale.max_lane_id_exclusive = NonZeroU32::new(cap.saturating_add(1)).expect("cap + 1 remains nonzero");
     let_row! { err = ensure_autoscale_runtime_lane_bounds(&autoscale) .expect_err("runtime autoscale bounds must reject values above the safety cap") };
     assert!(matches!(
         err,
-        LaneLifecycleError::AutoscaleMaxLanesExceedsCap {
-            max_lanes,
+        LaneLifecycleError::AutoscaleMaxLaneIdExclusiveExceedsCap {
+            max_lane_id_exclusive,
             cap: observed_cap,
-        } if max_lanes == cap.saturating_add(1) && observed_cap == cap
+        } if max_lane_id_exclusive == cap.saturating_add(1) && observed_cap == cap
     ));
 }
 state_test! { sync autoscale_runtime_elastic_range_rejects_manual_or_malformed_in_range
@@ -5704,8 +5715,8 @@ state_test! { sync autoscale_runtime_elastic_range_rejects_manual_or_malformed_i
         err,
         LaneLifecycleError::ReservedAutoscaleElasticLaneId {
             lane,
-            min_lanes: 1,
-            max_lanes: 3
+            min_lane_id: 1,
+            max_lane_id_exclusive: 3
         } if lane == LaneId::new(1)
     ));
     let mut malformed = autoscale_elastic_lane_config(LaneId::new(1), DataSpaceId::UNIVERSAL, 2);
@@ -5723,8 +5734,8 @@ state_test! { sync autoscale_runtime_elastic_range_rejects_manual_or_malformed_i
         err,
         LaneLifecycleError::AutoscaleManagedLaneOutOfBounds {
             lane,
-            min_lanes: 1,
-            max_lanes: 3
+            min_lane_id: 1,
+            max_lane_id_exclusive: 3
         } if lane == LaneId::new(3)
     ));
     let_row! { mut marker_only = LaneConfig { id: LaneId::new(8), alias: "marked-manual-sidecar".to_owned(), ..LaneConfig::default() } };
@@ -5772,7 +5783,7 @@ state_test! { sync autoscale_runtime_elastic_range_rejects_default_lane_inside_e
         err,
         LaneLifecycleError::AutoscaleDefaultLaneNotBase {
             lane,
-            min_lanes: 1,
+            min_lane_id: 1,
         } if lane == LaneId::new(1)
     ));
 }
@@ -5784,7 +5795,7 @@ state_test! { sync autoscale_runtime_elastic_range_rejects_default_lane_above_el
         err,
         LaneLifecycleError::AutoscaleDefaultLaneNotBase {
             lane,
-            min_lanes: 1,
+            min_lane_id: 1,
         } if lane == LaneId::new(3)
     ));
 }
@@ -5796,8 +5807,8 @@ state_test! { sync autoscale_runtime_elastic_range_rejects_default_lane_claiming
         err,
         LaneLifecycleError::AutoscaleManagedLaneOutOfBounds {
             lane,
-            min_lanes: 1,
-            max_lanes: 3
+            min_lane_id: 1,
+            max_lane_id_exclusive: 3
         } if lane == LaneId::SINGLE
     ));
 }
@@ -6892,7 +6903,7 @@ state_test! { sync autoscale_retire_selection_ignores_managed_lanes_outside_elas
             DataSpaceId::UNIVERSAL
         ),
         None,
-        "exclusive max_lanes bound must be enforced while selecting retire candidates"
+        "exclusive max_lane_id_exclusive bound must be enforced while selecting retire candidates"
     );
     assert_eq!(
         autoscale_managed_lane_for_retire(
@@ -6960,7 +6971,7 @@ state_test! { sync autoscale_default_route_capacity_ignores_managed_lanes_outsid
             8,
         ),
         1,
-        "exclusive max_lanes bound must not inflate default-route capacity"
+        "exclusive max_lane_id_exclusive bound must not inflate default-route capacity"
     );
     assert_eq!(
         autoscale_default_route_capacity_lanes(
@@ -7005,14 +7016,14 @@ state_test! { sync autoscale_default_route_capacity_requires_valid_default_lane_
 state_test! { sync autoscale_full_unmanaged_public_profile_has_no_transition_path
     let_row! { lanes = ["core", "governance", "zk", "is", "nexus"] .into_iter() .enumerate() .map(|(idx, alias)| LaneConfig { id: LaneId::new(u32::try_from(idx).expect("lane index")), alias: alias.to_owned(), ..LaneConfig::default() }) .collect::<Vec<_>>() };
     let active_lanes = u64::try_from(lanes.len()).expect("lane count");
-    let min_lanes = 4_u32;
-    let max_lanes = 5_u32;
+    let min_lane_id = 4_u32;
+    let max_lane_id_exclusive = 5_u32;
     assert!(
-        active_lanes >= u64::from(max_lanes),
+        active_lanes >= u64::from(max_lane_id_exclusive),
         "full profile cannot scale out"
     );
     assert_eq!(
-        autoscale_managed_lane_for_retire(&lanes, min_lanes, max_lanes, DataSpaceId::UNIVERSAL),
+        autoscale_managed_lane_for_retire(&lanes, min_lane_id, max_lane_id_exclusive, DataSpaceId::UNIVERSAL),
         None,
         "unmanaged base lanes cannot be retired"
     );
@@ -7412,7 +7423,13 @@ state_test! { sync drain_intent_uses_incarnation_pin_across_disjoint_roster_and_
         topology.commit();
     }
     let lane_id = LaneId::new(1);
-    let expected_close_committee = state.authoritative_lane_peer_ids_at_height(lane_id, 1);
+    let expected_close_committee = state
+        .resolve_lane_committee_at_height(
+            LaneAuthorityRoute::new(lane_id, DataSpaceId::UNIVERSAL),
+            1,
+        )
+        .expect("close-height autoscale authority must resolve")
+        .into_validators();
     assert_eq!(expected_close_committee.len(), 4);
     let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 100, 0);
     let mut state_block = state.block(header);
@@ -7440,7 +7457,7 @@ state_test! { sync drain_intent_uses_incarnation_pin_across_disjoint_roster_and_
             .all(|peer| !expected_close_committee.contains(peer)),
         "the post-block committee must be disjoint for the adversarial boundary"
     );
-    let_row! { pinned_overlay_authority = State::authoritative_lane_peer_ids_from_sources( &state_block.world, lane_id, state_block .nexus .staking .validator_mode(lane_id, &state_block.nexus.lane_catalog), state_block.lane_manifests.as_ref(), &state_block.nexus, 1, ) };
+    let_row! { pinned_overlay_authority = lane_authority::resolve_from_sources( &state_block.world, &state_block.network_id, LaneAuthorityRoute::new(lane_id, DataSpaceId::UNIVERSAL), state_block.lane_manifests.as_ref(), &state_block.nexus, 1, ) .expect("pinned overlay authority must resolve") .into_validators() };
     assert_eq!(
         pinned_overlay_authority, expected_close_committee,
         "current-world removal and disjoint topology rotation must not change incarnation authority"
@@ -8142,8 +8159,8 @@ fn commit_and_store_autoscale_previous_block_for_test(
 }
 fn autoscale_transition_test_nexus(
     lanes: Vec<LaneConfig>,
-    min_lanes: u32,
-    max_lanes: u32,
+    min_lane_id: u32,
+    max_lane_id_exclusive: u32,
     target_block_ms: u64,
 ) -> iroha_config::parameters::actual::Nexus {
     let_row! { lane_count = lanes .iter() .map(|lane| lane.id.as_u32()) .max() .unwrap_or(0) .saturating_add(1) };
@@ -8152,8 +8169,9 @@ fn autoscale_transition_test_nexus(
     nexus.lane_config =
         iroha_config::parameters::actual::LaneConfig::from_catalog(&nexus.lane_catalog);
     nexus.autoscale.enabled = true;
-    nexus.autoscale.min_lanes = NonZeroU32::new(min_lanes).expect("nonzero min lanes");
-    nexus.autoscale.max_lanes = NonZeroU32::new(max_lanes).expect("nonzero max lanes");
+    nexus.autoscale.min_lane_id = NonZeroU32::new(min_lane_id).expect("nonzero min lanes");
+    nexus.autoscale.max_lane_id_exclusive =
+        NonZeroU32::new(max_lane_id_exclusive).expect("nonzero max lanes");
     nexus.autoscale.target_block_ms =
         NonZeroU64::new(target_block_ms).expect("nonzero target block ms");
     nexus.autoscale.scale_out_latency_ratio = 1.0;
@@ -9236,7 +9254,7 @@ impl PendingAutoscaleTamper {
     }
 }
 fn autoscale_commit_revalidation_fixture(
-    max_lanes: u32,
+    max_lane_id_exclusive: u32,
     target_block_ms: u64,
 ) -> (tempfile::TempDir, PathBuf, PathBuf, Arc<Kura>, State) {
     let temp_dir = tempfile::tempdir().expect("temp dir");
@@ -9248,7 +9266,7 @@ fn autoscale_commit_revalidation_fixture(
         .set_nexus(autoscale_transition_test_nexus(
             vec![LaneConfig::default()],
             1,
-            max_lanes,
+            max_lane_id_exclusive,
             target_block_ms,
         ))
         .expect("apply autoscale commit-revalidation Nexus config");
@@ -10632,17 +10650,17 @@ state_test! { sync autoscale_transition_scale_out_fails_closed_when_id_range_exh
         )
         .expect("seed internally managed elastic lanes across the full id range");
     let seeded_nexus = state.nexus_snapshot();
-    let_row! { seeded_capacity = autoscale_default_route_capacity_lanes( &seeded_nexus.routing_policy, seeded_nexus.lane_catalog.lanes(), seeded_nexus.autoscale.min_lanes.get(), seeded_nexus.autoscale.max_lanes.get(), ) };
+    let_row! { seeded_capacity = autoscale_default_route_capacity_lanes( &seeded_nexus.routing_policy, seeded_nexus.lane_catalog.lanes(), seeded_nexus.autoscale.min_lane_id.get(), seeded_nexus.autoscale.max_lane_id_exclusive.get(), ) };
     assert_eq!(seeded_capacity, 3);
     assert!(
-        seeded_capacity < u64::from(seeded_nexus.autoscale.max_lanes.get()),
-        "the elastic id range can be full even when default-route capacity is below max_lanes"
+        seeded_capacity < u64::from(seeded_nexus.autoscale.max_lane_id_exclusive.get()),
+        "the elastic id range can be full even when default-route capacity is below max_lane_id_exclusive"
     );
     assert_eq!(
         autoscale_next_lane_id(
             seeded_nexus.lane_catalog.lanes(),
-            seeded_nexus.autoscale.min_lanes.get(),
-            seeded_nexus.autoscale.max_lanes.get(),
+            seeded_nexus.autoscale.min_lane_id.get(),
+            seeded_nexus.autoscale.max_lane_id_exclusive.get(),
         ),
         None,
         "free elastic ids, not numeric capacity, are the scale-out gate"
@@ -10920,19 +10938,19 @@ state_test! { sync autoscale_transition_scale_out_rejects_quantized_hysteresis_c
         "collapsed effective hysteresis must not record an autoscale transition"
     );
 }
-state_test! { sync autoscale_transition_scale_out_rejects_runtime_max_lanes_above_safety_cap
+state_test! { sync autoscale_transition_scale_out_rejects_runtime_max_lane_id_exclusive_above_safety_cap
     let (mut state, kura) = blank_test_state_with_kura();
     state
         .set_nexus(autoscale_transition_test_nexus(
             vec![LaneConfig::default()],
             1,
-            iroha_config::parameters::defaults::nexus::autoscale::MAX_LANES,
+            iroha_config::parameters::defaults::nexus::autoscale::MAX_LANE_ID_EXCLUSIVE,
             100,
         ))
         .expect("apply autoscale runtime-cap guard test nexus config");
     {
-        let cap = iroha_config::parameters::defaults::nexus::autoscale::MAX_LANES;
-        state.nexus.write().autoscale.max_lanes =
+        let cap = iroha_config::parameters::defaults::nexus::autoscale::MAX_LANE_ID_EXCLUSIVE;
+        state.nexus.write().autoscale.max_lane_id_exclusive =
             NonZeroU32::new(cap.saturating_add(1)).expect("cap + 1 remains nonzero");
     }
     stage_autoscale_transition!(first, second, state, kura, state_block);
@@ -10941,7 +10959,7 @@ state_test! { sync autoscale_transition_scale_out_rejects_runtime_max_lanes_abov
     assert_eq!(
         nexus.lane_catalog.lanes(),
         &[LaneConfig::default()],
-        "corrupted runtime max_lanes above the safety cap must not permit hot scale-out"
+        "corrupted runtime max_lane_id_exclusive above the safety cap must not permit hot scale-out"
     );
     assert_eq!(
         nexus.autoscale.last_transition_height, 0,
@@ -10999,7 +11017,7 @@ state_test! { sync autoscale_transition_scale_in_retires_to_default_route_floor
             4,
             200,
         ))
-        .expect("apply autoscale min-lanes scale-in guard test nexus config");
+        .expect("apply autoscale min-lane-id scale-in guard test nexus config");
     state
         .apply_lane_lifecycle_with_options(
             &iroha_data_model::nexus::LaneLifecyclePlan {
@@ -11015,8 +11033,8 @@ state_test! { sync autoscale_transition_scale_in_retires_to_default_route_floor
         autoscale_default_route_capacity_lanes(
             &seeded_nexus.routing_policy,
             seeded_nexus.lane_catalog.lanes(),
-            seeded_nexus.autoscale.min_lanes.get(),
-            seeded_nexus.autoscale.max_lanes.get(),
+            seeded_nexus.autoscale.min_lane_id.get(),
+            seeded_nexus.autoscale.max_lane_id_exclusive.get(),
         ),
         2,
         "test setup should place default-route capacity above the fixed default-lane floor"
@@ -14961,7 +14979,7 @@ state_test! { sync enforce_nexus_storage_budget_prunes_spools_before_cold
     std::fs::create_dir_all(&snapshot_dir).expect("create snapshot dir");
     std::fs::write(snapshot_dir.join("payload.norito"), vec![0u8; 50]).expect("write cold payload");
     let kura_cfg = strict_kura_config_for_testing(store_root);
-    let (kura, _) = Kura::new(&kura_cfg, &RuntimeLaneConfig::default()).expect("init kura");
+    let (kura, _) = Kura::open_test_kura_with_configured_lane_config(&kura_cfg, &RuntimeLaneConfig::default()).expect("init kura");
     let query_handle = LiveQueryStore::start_test();
     let mut state = State::new_for_testing(World::default(), kura, query_handle);
     state.set_streaming_storage_paths(soranet_spool.clone(), soravpn_spool.clone());
@@ -15013,7 +15031,7 @@ state_test! { sync enforce_nexus_storage_budget_respects_interval_blocks
     let spool_file = soranet_spool.join("a-file.norito");
     std::fs::write(&spool_file, vec![0u8; 60]).expect("write spool file");
     let kura_cfg = strict_kura_config_for_testing(store_root);
-    let (kura, _) = Kura::new(&kura_cfg, &RuntimeLaneConfig::default()).expect("init kura");
+    let (kura, _) = Kura::open_test_kura_with_configured_lane_config(&kura_cfg, &RuntimeLaneConfig::default()).expect("init kura");
     let query_handle = LiveQueryStore::start_test();
     let mut state = State::new_for_testing(World::default(), kura, query_handle);
     state.set_streaming_storage_paths(
@@ -15261,7 +15279,7 @@ state_test! { sync apply_lane_geometry_updates_relabels_kura_storage
     let initial_config = RuntimeLaneConfig::from_catalog(&initial_catalog);
     let_row! { lane_entry = initial_config .entry(LaneId::SINGLE) .expect("lane entry exists") };
     let_row! { kura_cfg = KuraConfig { init_mode: InitMode::Strict, store_dir: WithOrigin::inline(store_root.clone()), max_disk_usage_bytes: iroha_config::parameters::defaults::kura::MAX_DISK_USAGE_BYTES, blocks_in_memory: iroha_config::parameters::defaults::kura::BLOCKS_IN_MEMORY, debug_output_new_blocks: false, merge_ledger_cache_capacity: iroha_config::parameters::defaults::kura::MERGE_LEDGER_CACHE_CAPACITY, fsync_mode: iroha_config::kura::FsyncMode::Batched, fsync_interval: iroha_config::parameters::defaults::kura::FSYNC_INTERVAL, lane_history_retention: iroha_config::parameters::defaults::kura::LANE_HISTORY_RETENTION, replica_advert: iroha_config::parameters::defaults::kura::REPLICA_ADVERT_POLICY, } };
-    let (kura, _) = Kura::new(&kura_cfg, &initial_config).expect("init kura");
+    let (kura, _) = Kura::open_test_kura_with_configured_lane_config(&kura_cfg, &initial_config).expect("init kura");
     let query_handle = LiveQueryStore::start_test();
     let state = State::new_for_testing(World::default(), Arc::clone(&kura), query_handle);
     let_row! { updated_catalog = LaneCatalog::new( lane_count, vec![LaneConfig { alias: "Payments Lane".to_string(), ..LaneConfig::default() }], ) .expect("updated catalog") };
@@ -16068,8 +16086,8 @@ state_test! { sync apply_lane_lifecycle_rejects_manual_lane_inside_active_autosc
         err,
         LaneLifecycleError::ReservedAutoscaleElasticLaneId {
             lane,
-            min_lanes: 1,
-            max_lanes: 8
+            min_lane_id: 1,
+            max_lane_id_exclusive: 8
         } if lane == LaneId::new(1)
     ));
     assert_eq!(
@@ -16104,8 +16122,8 @@ state_test! { sync apply_lane_lifecycle_rejects_preserving_manual_lane_inside_ac
         err,
         LaneLifecycleError::ReservedAutoscaleElasticLaneId {
             lane,
-            min_lanes: 1,
-            max_lanes: 8
+            min_lane_id: 1,
+            max_lane_id_exclusive: 8
         } if lane == LaneId::new(1)
     ));
     let nexus = state.nexus_snapshot();
@@ -16180,8 +16198,8 @@ state_test! { sync apply_lane_lifecycle_rejects_preserving_out_of_range_autoscal
         err,
         LaneLifecycleError::AutoscaleManagedLaneOutOfBounds {
             lane,
-            min_lanes: 1,
-            max_lanes: 8
+            min_lane_id: 1,
+            max_lane_id_exclusive: 8
         } if lane == LaneId::new(8)
     ));
     let nexus = state.nexus_snapshot();
@@ -16272,7 +16290,7 @@ fn apply_lane_lifecycle_rejects_preserving_default_lane_inside_active_autoscale_
         err,
         LaneLifecycleError::AutoscaleDefaultLaneNotBase {
             lane,
-            min_lanes: 1,
+            min_lane_id: 1,
         } if lane == LaneId::new(1)
     ));
     assert!(
@@ -16566,31 +16584,32 @@ state_test! { sync apply_lane_lifecycle_internal_autoscale_rejects_managed_addit
         err,
         LaneLifecycleError::AutoscaleManagedLaneOutOfBounds {
             lane,
-            min_lanes: 1,
-            max_lanes: 8
+            min_lane_id: 1,
+            max_lane_id_exclusive: 8
         } if lane == LaneId::new(8)
     ));
     assert_eq!(state.nexus_snapshot().lane_catalog.lanes().len(), 1);
 }
 #[test]
-fn apply_lane_lifecycle_internal_autoscale_rejects_runtime_max_lanes_above_safety_cap() {
+fn apply_lane_lifecycle_internal_autoscale_rejects_runtime_max_lane_id_exclusive_above_safety_cap()
+{
     let state = blank_test_state();
     enable_nexus_autoscale_for_testing(&state);
     {
-        let cap = iroha_config::parameters::defaults::nexus::autoscale::MAX_LANES;
-        state.nexus.write().autoscale.max_lanes =
+        let cap = iroha_config::parameters::defaults::nexus::autoscale::MAX_LANE_ID_EXCLUSIVE;
+        state.nexus.write().autoscale.max_lane_id_exclusive =
             NonZeroU32::new(cap.saturating_add(1)).expect("cap + 1 remains nonzero");
     }
     let lane = autoscale_elastic_lane_config(LaneId::new(1), DataSpaceId::UNIVERSAL, 2);
     let_row! { plan = iroha_data_model::nexus::LaneLifecyclePlan { additions: vec![lane], retire: Vec::new(), } };
-    let_row! { err = state .apply_lane_lifecycle_with_options(&plan, false, true) .expect_err("internal autoscale lifecycle must reject corrupted max_lanes") };
-    let cap = iroha_config::parameters::defaults::nexus::autoscale::MAX_LANES;
+    let_row! { err = state .apply_lane_lifecycle_with_options(&plan, false, true) .expect_err("internal autoscale lifecycle must reject corrupted max_lane_id_exclusive") };
+    let cap = iroha_config::parameters::defaults::nexus::autoscale::MAX_LANE_ID_EXCLUSIVE;
     assert!(matches!(
         err,
-        LaneLifecycleError::AutoscaleMaxLanesExceedsCap {
-            max_lanes,
+        LaneLifecycleError::AutoscaleMaxLaneIdExclusiveExceedsCap {
+            max_lane_id_exclusive,
             cap: observed_cap
-        } if max_lanes == cap.saturating_add(1) && observed_cap == cap
+        } if max_lane_id_exclusive == cap.saturating_add(1) && observed_cap == cap
     ));
     assert_eq!(
         state.nexus_snapshot().lane_catalog.lanes(),
@@ -16618,8 +16637,8 @@ state_test! { sync apply_lane_lifecycle_internal_autoscale_rejects_managed_retir
         err,
         LaneLifecycleError::AutoscaleManagedLaneOutOfBounds {
             lane,
-            min_lanes: 1,
-            max_lanes: 8
+            min_lane_id: 1,
+            max_lane_id_exclusive: 8
         } if lane == out_of_range_lane.id
     ));
     assert!(
@@ -17901,8 +17920,8 @@ state_test! { sync set_nexus_rejects_manual_lane_inside_active_autoscale_range
         err,
         LaneLifecycleError::ReservedAutoscaleElasticLaneId {
             lane,
-            min_lanes: 1,
-            max_lanes: 8
+            min_lane_id: 1,
+            max_lane_id_exclusive: 8
         } if lane == LaneId::new(1)
     ));
     assert_eq!(
@@ -17911,20 +17930,20 @@ state_test! { sync set_nexus_rejects_manual_lane_inside_active_autoscale_range
         "rejected config swap must not mutate the active catalog"
     );
 }
-state_test! { sync set_nexus_rejects_autoscale_max_lanes_above_safety_cap
+state_test! { sync set_nexus_rejects_autoscale_max_lane_id_exclusive_above_safety_cap
     let mut state = blank_test_state();
-    let cap = iroha_config::parameters::defaults::nexus::autoscale::MAX_LANES;
+    let cap = iroha_config::parameters::defaults::nexus::autoscale::MAX_LANE_ID_EXCLUSIVE;
     let_row! { mut nexus = iroha_config::parameters::actual::Nexus { ..iroha_config::parameters::actual::Nexus::default() } };
     nexus.autoscale.enabled = true;
-    nexus.autoscale.max_lanes =
+    nexus.autoscale.max_lane_id_exclusive =
         NonZeroU32::new(cap.saturating_add(1)).expect("cap + 1 remains nonzero");
     let_row! { err = state .set_nexus(nexus) .expect_err("programmatic actual config must honor autoscale safety cap") };
     assert!(matches!(
         err,
-        LaneLifecycleError::AutoscaleMaxLanesExceedsCap {
-            max_lanes,
+        LaneLifecycleError::AutoscaleMaxLaneIdExclusiveExceedsCap {
+            max_lane_id_exclusive,
             cap: observed_cap,
-        } if max_lanes == cap.saturating_add(1) && observed_cap == cap
+        } if max_lane_id_exclusive == cap.saturating_add(1) && observed_cap == cap
     ));
     assert_eq!(
         state.nexus_snapshot().lane_catalog.lanes(),
@@ -18023,7 +18042,7 @@ state_test! { sync set_nexus_rejects_default_lane_inside_active_autoscale_range
         err,
         LaneLifecycleError::AutoscaleDefaultLaneNotBase {
             lane,
-            min_lanes: 1,
+            min_lane_id: 1,
         } if lane == LaneId::new(1)
     ));
     assert_eq!(
@@ -18086,7 +18105,7 @@ state_test! { sync set_nexus_rejects_preserved_future_created_autoscale_managed_
 state_test! { sync set_nexus_rejects_default_lane_claiming_autoscale_ownership
     let mut state = blank_test_state();
     let default_lane = autoscale_elastic_lane_config(LaneId::SINGLE, DataSpaceId::UNIVERSAL, 2);
-    let_row! { nexus = iroha_config::parameters::actual::Nexus { autoscale: iroha_config::parameters::actual::Autoscale { enabled: true, min_lanes: nonzero!(1_u32), max_lanes: nonzero!(3_u32), ..Default::default() }, lane_catalog: LaneCatalog::new(nonzero!(1_u32), vec![default_lane]).expect("lane catalog"), ..iroha_config::parameters::actual::Nexus::default() } };
+    let_row! { nexus = iroha_config::parameters::actual::Nexus { autoscale: iroha_config::parameters::actual::Autoscale { enabled: true, min_lane_id: nonzero!(1_u32), max_lane_id_exclusive: nonzero!(3_u32), ..Default::default() }, lane_catalog: LaneCatalog::new(nonzero!(1_u32), vec![default_lane]).expect("lane catalog"), ..iroha_config::parameters::actual::Nexus::default() } };
     let_row! { err = state .set_nexus(nexus) .expect_err("default lane must not claim autoscale ownership") };
     assert!(matches!(
         err,
@@ -18169,14 +18188,14 @@ state_test! { sync set_nexus_rejects_preserved_autoscale_managed_lane_outside_ne
         .apply_lane_lifecycle_with_options(&add_plan, false, true)
         .expect("test setup may add internal autoscale lane");
     let mut changed_range = state.nexus_snapshot();
-    changed_range.autoscale.min_lanes = nonzero!(2_u32);
+    changed_range.autoscale.min_lane_id = nonzero!(2_u32);
     let_row! { err = state .set_nexus(changed_range) .expect_err("config swap must not strand autoscale-owned lanes outside range") };
     assert!(matches!(
         err,
         LaneLifecycleError::AutoscaleManagedLaneOutOfBounds {
             lane,
-            min_lanes: 2,
-            max_lanes: 8
+            min_lane_id: 2,
+            max_lane_id_exclusive: 8
         } if lane == LaneId::new(1)
     ));
     let nexus = state.nexus_snapshot();
@@ -18188,7 +18207,7 @@ state_test! { sync set_nexus_rejects_preserved_autoscale_managed_lane_outside_ne
             .any(|lane| lane.id == LaneId::new(1)),
         "rejected config swap must leave autoscale lane intact"
     );
-    assert_eq!(nexus.autoscale.min_lanes.get(), 1);
+    assert_eq!(nexus.autoscale.min_lane_id.get(), 1);
 }
 state_test! { sync set_nexus_rejects_external_autoscale_managed_lane_mutation
     autoscale_state_with_add_plan!(state, add_plan);
@@ -20433,8 +20452,8 @@ state_test! { sync durable_lane_diagnostics_reconstruct_after_kura_restart
     let temp_dir = tempfile::tempdir().expect("temp dir");
     let_row! { kura_config = strict_kura_config_for_testing(temp_dir.path().join("restart-diagnostics-kura")) };
     let lane_config = RuntimeLaneConfig::from_catalog(&LaneCatalog::default());
-    let_row! { expected = { let (kura, _) = Kura::new(&kura_config, &lane_config).expect("initialize Kura"); let state = blank_test_state_from_kura(&kura); let incarnation = state .lane_incarnation(LaneId::SINGLE) .expect("implicit default lane has an active incarnation"); let (block, session, signer_pops) = lane_artifact_block_and_session_for_state_test( None, LaneId::SINGLE, DataSpaceId::UNIVERSAL, incarnation, 1, ); kura.store_block(Arc::new(block)) .expect("store restart diagnostic block"); kura.persist_committed_lane_block_session(&session, &signer_pops) .expect("persist restart diagnostic certificate"); kura.persist_lane_block_application_receipt(&session.proposal) .expect("persist restart diagnostic receipt"); let snapshot = state.durable_lane_diagnostics(); assert_eq!(snapshot.lane_payload_ownerships.len(), 1); assert_eq!(snapshot.committed_lane_blocks.len(), 1); assert_eq!(snapshot.lane_block_sessions.len(), 1); assert_eq!( snapshot.committed_lane_blocks[0].execution_status, CommittedLaneBlockExecutionStatus::StateAppliedByCanonicalBlock ); assert!(snapshot.lane_block_sessions[0].committed_session_drained); assert_passive_state_diagnostics(&state, &kura, &lane_config, &session); let autonomous = state .autonomous_lane_execution_diagnostics() .expect("derive restart-stable autonomous diagnostics"); assert!( autonomous.is_empty(), "globally anchored lane evidence must not be misclassified as autonomous" ); (snapshot, autonomous) } };
-    let (reopened_kura, _) = Kura::new(&kura_config, &lane_config).expect("reopen persistent Kura");
+    let_row! { expected = { let (kura, _) = Kura::open_test_kura_with_configured_lane_config(&kura_config, &lane_config).expect("initialize Kura"); let state = blank_test_state_from_kura(&kura); let incarnation = state .lane_incarnation(LaneId::SINGLE) .expect("implicit default lane has an active incarnation"); let (block, session, signer_pops) = lane_artifact_block_and_session_for_state_test( None, LaneId::SINGLE, DataSpaceId::UNIVERSAL, incarnation, 1, ); kura.store_block(Arc::new(block)) .expect("store restart diagnostic block"); kura.persist_committed_lane_block_session(&session, &signer_pops) .expect("persist restart diagnostic certificate"); kura.persist_lane_block_application_receipt(&session.proposal) .expect("persist restart diagnostic receipt"); let snapshot = state.durable_lane_diagnostics(); assert_eq!(snapshot.lane_payload_ownerships.len(), 1); assert_eq!(snapshot.committed_lane_blocks.len(), 1); assert_eq!(snapshot.lane_block_sessions.len(), 1); assert_eq!( snapshot.committed_lane_blocks[0].execution_status, CommittedLaneBlockExecutionStatus::StateAppliedByCanonicalBlock ); assert!(snapshot.lane_block_sessions[0].committed_session_drained); assert_passive_state_diagnostics(&state, &kura, &lane_config, &session); let autonomous = state .autonomous_lane_execution_diagnostics() .expect("derive restart-stable autonomous diagnostics"); assert!( autonomous.is_empty(), "globally anchored lane evidence must not be misclassified as autonomous" ); (snapshot, autonomous) } };
+    let (reopened_kura, _) = Kura::open_test_kura_with_configured_lane_config(&kura_config, &lane_config).expect("reopen persistent Kura");
     let_row! { restarted_state = State::new_for_testing( World::default(), reopened_kura, LiveQueryStore::start_test(), ) };
     assert_eq!(
         restarted_state.durable_lane_diagnostics(),
@@ -22619,7 +22638,8 @@ fn lane_relay_committee_for_state_test(
     let manifest_registry = state.lane_manifests.read().clone();
     let validator_mode = nexus.staking.validator_mode(lane_id, &nexus.lane_catalog);
     let world = state.world.view();
-    let_row! { base_pool = State::authoritative_lane_peer_ids_from_sources( &world, lane_id, validator_mode, manifest_registry.as_ref(), &nexus, height, ) };
+    let_row! { inputs = lane_authority::inputs_from_nexus(lane_id, validator_mode, &nexus, height) .expect("test relay route must be active") };
+    let_row! { base_pool = lane_authority::peer_pool_with_inputs( &world, lane_id, manifest_registry.as_ref(), &inputs, height, ) .expect("test relay authority source must be valid") };
     let seed = state.lane_relay_committee_seed(dataspace_id, lane_id, height);
     if base_pool.len() >= committee_size {
         State::lane_relay_committee_from_pool(&base_pool, committee_size, seed)
@@ -23444,13 +23464,20 @@ fn record_lane_relay_accepts_emergency_override_under_quorum() {
         "override should be stored in world"
     );
     let height = 1;
-    let seed = state.lane_relay_committee_seed(DataSpaceId::UNIVERSAL, LaneId::new(0), height);
-    let base_pool = state.authoritative_lane_peer_ids(LaneId::new(0));
-    let emergency_pool = vec![peer_id_for_account(&extra_1), peer_id_for_account(&extra_2)];
-    let fillers = State::lane_relay_committee_from_pool(&emergency_pool, 2, seed).expect("fillers");
-    let mut committee = base_pool.clone();
-    committee.extend(fillers);
-    assert_eq!(&committee[..base_pool.len()], base_pool.as_slice());
+    let authority_error = state
+        .resolve_lane_committee_at_height(
+            LaneAuthorityRoute::new(LaneId::SINGLE, DataSpaceId::UNIVERSAL),
+            height,
+        )
+        .expect_err("the ordinary route authority must be undersized before the override");
+    assert!(matches!(
+        authority_error,
+        LaneAuthorityError::UndersizedPool {
+            required: 4,
+            actual: 2,
+            ..
+        }
+    ));
     let_row! { envelope = sample_lane_relay_envelope_for_state( &state, height, LaneId::new(0), &[base_1_kp, base_2_kp, extra_1_kp, extra_2_kp], ) };
     let_row! { inserted = state .record_lane_relay(&envelope) .expect("relay accepted with emergency override") };
     assert_eq!(inserted, LaneRelayInsert::Inserted);
@@ -23488,13 +23515,20 @@ fn record_lane_relay_accepts_emergency_override_on_expiry_height() {
         },
     );
     wb.commit();
-    let seed = state.lane_relay_committee_seed(DataSpaceId::UNIVERSAL, LaneId::new(0), height);
-    let base_pool = state.authoritative_lane_peer_ids(LaneId::new(0));
-    let emergency_pool = vec![peer_id_for_account(&extra_1), peer_id_for_account(&extra_2)];
-    let fillers = State::lane_relay_committee_from_pool(&emergency_pool, 2, seed).expect("fillers");
-    let mut committee = base_pool.clone();
-    committee.extend(fillers);
-    assert_eq!(&committee[..base_pool.len()], base_pool.as_slice());
+    let authority_error = state
+        .resolve_lane_committee_at_height(
+            LaneAuthorityRoute::new(LaneId::SINGLE, DataSpaceId::UNIVERSAL),
+            height,
+        )
+        .expect_err("the ordinary route authority must be undersized before the override");
+    assert!(matches!(
+        authority_error,
+        LaneAuthorityError::UndersizedPool {
+            required: 4,
+            actual: 2,
+            ..
+        }
+    ));
     let_row! { envelope = sample_lane_relay_envelope_for_state( &state, height, LaneId::new(0), &[base_1_kp, base_2_kp, extra_1_kp, extra_2_kp], ) };
     let_row! { inserted = state .record_lane_relay(&envelope) .expect("relay accepted on expiry height") };
     assert_eq!(inserted, LaneRelayInsert::Inserted);
@@ -23706,7 +23740,22 @@ fn assert_stale_emergency_peer_is_rejected(reason: StaleEmergencyPeerReason) {
         0,
     );
     let seed = state.lane_relay_committee_seed(DataSpaceId::UNIVERSAL, LaneId::new(0), height);
-    let base_pool = state.authoritative_lane_peer_ids(LaneId::new(0));
+    let authority_error = state
+        .resolve_lane_committee_at_height(
+            LaneAuthorityRoute::new(LaneId::SINGLE, DataSpaceId::UNIVERSAL),
+            height,
+        )
+        .expect_err("the ordinary route authority must be undersized before the override");
+    assert!(matches!(
+        authority_error,
+        LaneAuthorityError::UndersizedPool {
+            required: 4,
+            actual: 2,
+            ..
+        }
+    ));
+    let base_pool =
+        lane_relay_committee_for_state_test(&state, height, LaneId::SINGLE, DataSpaceId::UNIVERSAL);
     let emergency_pool = vec![peer_id_for_account(&extra_1), stale_peer.clone()];
     let fillers = State::lane_relay_committee_from_pool(&emergency_pool, 2, seed).expect("fillers");
     assert!(
@@ -23829,26 +23878,40 @@ state_test! { sync same_dataspace_stake_authority_projects_to_restricted_sibling
 
     let source_lane = LaneId::SINGLE;
     let target_lane = LaneId::new(1);
-    let (validator, keypair) = bls_account_in("validators");
-    seed_consensus_keys_with_pops(&state, std::slice::from_ref(&keypair));
-    insert_active_public_lane_validator_for_test(
-        &state,
-        source_lane,
-        &validator,
-        &keypair,
-        1_000_000,
-    );
+    let (validators, keypairs) = bls_accounts_in("validators", 4);
+    seed_consensus_keys_with_pops(&state, &keypairs);
+    for (validator, keypair) in validators.iter().zip(&keypairs) {
+        insert_active_public_lane_validator_for_test(
+            &state,
+            source_lane,
+            validator,
+            keypair,
+            1_000_000,
+        );
+    }
     install_lane_manifest_registry(&state, &[(target_lane, DataSpaceId::UNIVERSAL, Vec::new())]);
 
-    let expected_peer = PeerId::new(keypair.public_key().clone());
+    let mut expected_peers = keypairs
+        .iter()
+        .map(|keypair| PeerId::new(keypair.public_key().clone()))
+        .collect::<Vec<_>>();
+    expected_peers.sort();
+    let mut expected_validators = validators;
+    expected_validators.sort();
     assert_eq!(
         state.authoritative_lane_validator_accounts(target_lane),
-        vec![validator],
+        expected_validators,
         "an exact policy-only manifest must not mask the dataspace stake authority"
     );
     assert_eq!(
-        state.authoritative_lane_peer_ids(target_lane),
-        vec![expected_peer],
+        state
+            .resolve_lane_committee_at_height(
+                LaneAuthorityRoute::new(target_lane, DataSpaceId::UNIVERSAL),
+                0,
+            )
+            .expect("shared-dataspace stake authority must resolve")
+            .into_validators(),
+        expected_peers,
         "a restricted lane must inherit its physical dataspace's live stake-elected peers"
     );
 }
@@ -23861,24 +23924,39 @@ state_test! { sync same_dataspace_manifest_authority_projects_to_policy_only_sib
 
     let source_lane = LaneId::SINGLE;
     let target_lane = LaneId::new(1);
-    let (validator, keypair) = bls_account_in("validators");
-    seed_consensus_keys_with_pops(&state, std::slice::from_ref(&keypair));
+    let (mut validators, keypairs) = bls_accounts_in("validators", 4);
+    seed_consensus_keys_with_pops(&state, &keypairs);
     install_lane_manifest_registry(
         &state,
         &[
-            (source_lane, DataSpaceId::UNIVERSAL, vec![validator.clone()]),
+            (
+                source_lane,
+                DataSpaceId::UNIVERSAL,
+                validators.clone(),
+            ),
             (target_lane, DataSpaceId::UNIVERSAL, Vec::new()),
         ],
     );
 
-    let expected_peer = PeerId::new(keypair.public_key().clone());
+    let mut expected_peers = keypairs
+        .iter()
+        .map(|keypair| PeerId::new(keypair.public_key().clone()))
+        .collect::<Vec<_>>();
+    expected_peers.sort();
+    validators.sort();
     assert_eq!(
         state.authoritative_lane_validator_accounts(target_lane),
-        vec![validator]
+        validators
     );
     assert_eq!(
-        state.authoritative_lane_peer_ids(target_lane),
-        vec![expected_peer.clone()]
+        state
+            .resolve_lane_committee_at_height(
+                LaneAuthorityRoute::new(target_lane, DataSpaceId::UNIVERSAL),
+                0,
+            )
+            .expect("shared-dataspace manifest authority must resolve")
+            .into_validators(),
+        expected_peers.clone()
     );
     assert_eq!(
         state
@@ -23886,7 +23964,7 @@ state_test! { sync same_dataspace_manifest_authority_projects_to_policy_only_sib
             .into_iter()
             .map(|binding| binding.peer_id)
             .collect::<Vec<_>>(),
-        vec![expected_peer],
+        expected_peers,
         "transport bindings must follow the same effective dataspace manifest authority"
     );
 }
@@ -23958,10 +24036,16 @@ state_test! { sync singleton_non_owner_same_dataspace_stake_projection_fails_clo
                 .is_empty(),
             "a singleton non-owner projection must not become account authority"
         );
-        assert!(
-            state.authoritative_lane_peer_ids(lane_id).is_empty(),
-            "a singleton non-owner projection must not become peer authority"
-        );
+        assert!(matches!(
+            state.resolve_lane_committee_at_height(
+                LaneAuthorityRoute::new(lane_id, DataSpaceId::UNIVERSAL),
+                0,
+            ),
+            Err(LaneAuthorityError::InvalidAuthoritySource {
+                lane_id: rejected,
+                ..
+            }) if rejected == lane_id
+        ), "a singleton non-owner projection must not become peer authority");
     }
 }
 
@@ -23998,10 +24082,16 @@ state_test! { sync conflicting_same_dataspace_stake_projections_fail_closed
                 .is_empty(),
             "conflicting sibling projections must not be unioned into account authority"
         );
-        assert!(
-            state.authoritative_lane_peer_ids(lane_id).is_empty(),
-            "conflicting sibling projections must not be unioned into peer authority"
-        );
+        assert!(matches!(
+            state.resolve_lane_committee_at_height(
+                LaneAuthorityRoute::new(lane_id, DataSpaceId::UNIVERSAL),
+                0,
+            ),
+            Err(LaneAuthorityError::InvalidAuthoritySource {
+                lane_id: rejected,
+                ..
+            }) if rejected == lane_id
+        ), "conflicting sibling projections must not be unioned into peer authority");
     }
 }
 
@@ -24028,10 +24118,16 @@ state_test! { sync duplicate_same_dataspace_stake_projections_fail_closed
                 .is_empty(),
             "duplicate lane-keyed account projections are not a safe shared authority"
         );
-        assert!(
-            state.authoritative_lane_peer_ids(lane_id).is_empty(),
-            "duplicate lane-keyed peer projections must fail closed before they diverge"
-        );
+        assert!(matches!(
+            state.resolve_lane_committee_at_height(
+                LaneAuthorityRoute::new(lane_id, DataSpaceId::UNIVERSAL),
+                0,
+            ),
+            Err(LaneAuthorityError::InvalidAuthoritySource {
+                lane_id: rejected,
+                ..
+            }) if rejected == lane_id
+        ), "duplicate lane-keyed peer projections must fail closed before they diverge");
     }
 }
 
@@ -24501,11 +24597,17 @@ state_test! { sync authoritative_lane_peers_for_stake_elected_lane_require_prese
     }
     let removed_peer = PeerId::new(removed_keypair.public_key().clone());
     remove_world_peer_for_test(&state, &removed_peer);
-    assert_eq!(
-        state.authoritative_lane_peer_ids(LaneId::SINGLE),
-        vec![PeerId::new(live_keypair.public_key().clone())],
-        "stake-elected lane authority must ignore removed peers and non-live consensus keys even when their stale stake rows are heavier"
-    );
+    assert!(matches!(
+        state.resolve_lane_committee_at_height(
+            LaneAuthorityRoute::new(LaneId::SINGLE, DataSpaceId::UNIVERSAL),
+            0,
+        ),
+        Err(LaneAuthorityError::UndersizedPool {
+            required: 4,
+            actual: 1,
+            ..
+        })
+    ), "stake-elected lane authority must ignore removed peers and non-live consensus keys even when their stale stake rows are heavier");
     assert_eq!(
         state.authoritative_lane_validator_accounts(LaneId::SINGLE),
         vec![live_validator],
@@ -24564,8 +24666,8 @@ fn install_autoscale_elastic_lanes_for_test(
     let_row! { lane_catalog = LaneCatalog::new( core::num::NonZeroU32::new(lane_count).expect("nonzero lane count"), catalog_lanes, ) .expect("autoscale lane catalog") };
     let mut nexus = state.nexus_snapshot();
     nexus.autoscale.enabled = true;
-    nexus.autoscale.min_lanes = nonzero!(1_u32);
-    nexus.autoscale.max_lanes =
+    nexus.autoscale.min_lane_id = nonzero!(1_u32);
+    nexus.autoscale.max_lane_id_exclusive =
         core::num::NonZeroU32::new(lane_count).expect("nonzero autoscale lane bound");
     nexus.lane_catalog = lane_catalog;
     nexus.lane_config =
@@ -24697,7 +24799,13 @@ state_test! { sync authoritative_lane_peers_for_autoscale_elastic_lane_keep_boun
     let_row! { eligible: Vec<_> = keypairs .iter() .map(|keypair| PeerId::new(keypair.public_key().clone())) .collect() };
     let inactive_peer = PeerId::new(inactive_keypair.public_key().clone());
     let _ = commit_topology_signers_for_lane_relay_test(&state, lane_id, &keypairs, 1);
-    let committee = state.authoritative_lane_peer_ids(lane_id);
+    let committee = state
+        .resolve_lane_committee_at_height(
+            LaneAuthorityRoute::new(lane_id, DataSpaceId::UNIVERSAL),
+            1,
+        )
+        .expect("autoscale creation pin must resolve")
+        .into_validators();
     assert_eq!(committee.len(), 4, "f=1 requires an exact 3f+1 committee");
     assert!(
         committee.iter().all(|peer| eligible.contains(peer)),
@@ -24725,7 +24833,13 @@ state_test! { sync authoritative_lane_peers_for_autoscale_elastic_lane_keep_boun
         topology.commit();
     }
     assert_eq!(
-        state.authoritative_lane_peer_ids(lane_id),
+        state
+            .resolve_lane_committee_at_height(
+                LaneAuthorityRoute::new(lane_id, DataSpaceId::UNIVERSAL),
+                1,
+            )
+            .expect("autoscale creation pin must remain resolvable")
+            .into_validators(),
         committee,
         "current topology changes must not rewrite incarnation authority"
     );
@@ -24752,8 +24866,20 @@ state_test! { sync autoscale_lane_committee_pins_spread_lanes_and_survive_roster
     let_row! { peers: Vec<_> = keypairs .iter() .map(|keypair| PeerId::new(keypair.public_key().clone())) .collect() };
     let _ = commit_topology_signers_for_lane_relay_test(&state, lane_a, &keypairs, 1);
     let _ = commit_topology_signers_for_lane_relay_test(&state, lane_b, &keypairs, 1);
-    let committee_a = state.authoritative_lane_peer_ids(lane_a);
-    let committee_b = state.authoritative_lane_peer_ids(lane_b);
+    let committee_a = state
+        .resolve_lane_committee_at_height(
+            LaneAuthorityRoute::new(lane_a, DataSpaceId::UNIVERSAL),
+            1,
+        )
+        .expect("first autoscale creation pin must resolve")
+        .into_validators();
+    let committee_b = state
+        .resolve_lane_committee_at_height(
+            LaneAuthorityRoute::new(lane_b, DataSpaceId::UNIVERSAL),
+            1,
+        )
+        .expect("second autoscale creation pin must resolve")
+        .into_validators();
     assert_eq!(committee_a.len(), 4);
     assert_eq!(committee_b.len(), 4);
     assert_ne!(
@@ -24776,9 +24902,24 @@ state_test! { sync autoscale_lane_committee_pins_spread_lanes_and_survive_roster
         topology.commit();
     }
     four_peer_topology.sort();
-    assert_eq!(state.authoritative_lane_peer_ids(lane_a), committee_a);
     assert_eq!(
-        state.authoritative_lane_peer_ids(lane_b),
+        state
+            .resolve_lane_committee_at_height(
+                LaneAuthorityRoute::new(lane_a, DataSpaceId::UNIVERSAL),
+                1,
+            )
+            .expect("first autoscale pin must survive roster shrink")
+            .into_validators(),
+        committee_a
+    );
+    assert_eq!(
+        state
+            .resolve_lane_committee_at_height(
+                LaneAuthorityRoute::new(lane_b, DataSpaceId::UNIVERSAL),
+                1,
+            )
+            .expect("second autoscale pin must survive roster shrink")
+            .into_validators(),
         committee_b,
         "shrinking or rotating the current roster must not rewrite either historical pin"
     );
@@ -24845,11 +24986,23 @@ state_test! { sync authoritative_lane_peers_for_autoscale_elastic_lane_survive_l
     seed_latest_lane_authority_height_for_test(&state, 1);
     let_row! { keypairs: Vec<_> = (0..4) .map(|_| crate::state::checked_keypair_with_algorithm(Algorithm::BlsNormal)) .collect() };
     let _ = commit_topology_signers_for_lane_relay_test(&state, lane_id, &keypairs, 1);
-    let committee = state.authoritative_lane_peer_ids(lane_id);
+    let committee = state
+        .resolve_lane_committee_at_height(
+            LaneAuthorityRoute::new(lane_id, DataSpaceId::UNIVERSAL),
+            1,
+        )
+        .expect("autoscale creation pin must resolve")
+        .into_validators();
     let removed_peer = committee[3].clone();
     remove_world_peer_for_test(&state, &removed_peer);
     assert_eq!(
-        state.authoritative_lane_peer_ids(lane_id),
+        state
+            .resolve_lane_committee_at_height(
+                LaneAuthorityRoute::new(lane_id, DataSpaceId::UNIVERSAL),
+                1,
+            )
+            .expect("autoscale pin must survive peer removal")
+            .into_validators(),
         committee,
         "live peer removal must not lower or rewrite the committed incarnation committee"
     );
@@ -24931,7 +25084,13 @@ fn authoritative_lane_peers_for_autoscale_elastic_lane_pin_creation_manifest_com
     }
     let pinned = repin_autoscale_lane_from_current_sources_for_test(&state, lane_id, 1);
     let_row! { manifest_peers: BTreeSet<_> = manifest_validators .iter() .map(peer_id_for_account) .collect() };
-    let committee = state.authoritative_lane_peer_ids(lane_id);
+    let committee = state
+        .resolve_lane_committee_at_height(
+            LaneAuthorityRoute::new(lane_id, DataSpaceId::UNIVERSAL),
+            1,
+        )
+        .expect("creation-manifest autoscale pin must resolve")
+        .into_validators();
     assert_eq!(committee, pinned);
     assert_eq!(
         committee.len(),
@@ -24998,14 +25157,26 @@ state_test! { sync authoritative_lane_peers_for_autoscale_elastic_lane_require_p
         repin_autoscale_lane_from_current_sources_for_test(&state, lane_id, 1).is_empty(),
         "the same removed manifest must fail creation-time committee preflight"
     );
-    let pinned = state.authoritative_lane_peer_ids(lane_id);
+    let pinned = state
+        .resolve_lane_committee_at_height(
+            LaneAuthorityRoute::new(lane_id, DataSpaceId::UNIVERSAL),
+            1,
+        )
+        .expect("existing autoscale pin must resolve")
+        .into_validators();
     assert_eq!(
         pinned.len(),
         4,
         "existing synthetic pin must remain complete"
     );
     assert_eq!(
-        state.authoritative_lane_peer_ids(lane_id),
+        state
+            .resolve_lane_committee_at_height(
+                LaneAuthorityRoute::new(lane_id, DataSpaceId::UNIVERSAL),
+                1,
+            )
+            .expect("existing autoscale pin must survive manifest drift")
+            .into_validators(),
         pinned,
         "removed current manifest peers must not rewrite an existing incarnation pin"
     );
@@ -25063,7 +25234,14 @@ fn authoritative_lane_peers_for_autoscale_elastic_lane_do_not_fallback_from_stal
         "the stale manifest must fail creation-time committee preflight"
     );
     assert_eq!(
-        state.authoritative_lane_peer_ids(lane_id).len(),
+        state
+            .resolve_lane_committee_at_height(
+                LaneAuthorityRoute::new(lane_id, DataSpaceId::UNIVERSAL),
+                1,
+            )
+            .expect("existing autoscale pin must survive a stale manifest")
+            .validators()
+            .len(),
         4,
         "stale current manifests must not erase an existing incarnation pin"
     );
@@ -25085,7 +25263,16 @@ fn authoritative_lane_peers_do_not_inherit_commit_topology_for_malformed_autosca
         topology.commit();
     }
     assert!(
-        state.authoritative_lane_peer_ids(lane_id).is_empty(),
+        matches!(
+                state.resolve_lane_committee_at_height(
+                    LaneAuthorityRoute::new(lane_id, DataSpaceId::UNIVERSAL),
+                    1,
+                ),
+            Err(LaneAuthorityError::InactiveRoute {
+                lane_id: inactive,
+                ..
+            }) if inactive == lane_id
+        ),
         "malformed autoscale-owned lanes must fail closed"
     );
 }
@@ -25180,7 +25367,16 @@ state_test! { sync record_lane_relay_accepts_autoscale_elastic_creation_manifest
     }
     let pinned = repin_autoscale_lane_from_current_sources_for_test(&state, lane_id, height);
     let_row! { manifest_peers: Vec<_> = manifest_keypairs .iter() .map(|keypair| PeerId::new(keypair.public_key().clone())) .collect() };
-    assert_eq!(state.authoritative_lane_peer_ids(lane_id), pinned);
+    assert_eq!(
+        state
+            .resolve_lane_committee_at_height(
+                LaneAuthorityRoute::new(lane_id, DataSpaceId::UNIVERSAL),
+                height,
+            )
+            .expect("creation-manifest pin must resolve")
+            .into_validators(),
+        pinned
+    );
     assert!(pinned.iter().all(|peer| manifest_peers.contains(peer)));
     let_row! { envelope = sample_lane_relay_envelope_for_state(&state, height, lane_id, &manifest_keypairs) };
     let_row! { inserted = state .record_lane_relay(&envelope) .expect("creation-time manifest pin should authorize autoscale relay") };
@@ -25206,13 +25402,28 @@ state_test! { sync record_lane_relay_keeps_creation_pin_after_under_quorum_manif
     live_keypairs.extend(topology_keypairs.iter().cloned());
     seed_consensus_keys_with_pops(&state, &live_keypairs);
     let_row! { topology_signers = commit_topology_signers_for_lane_relay_test(&state, lane_id, &topology_keypairs, height) };
-    let pinned = state.authoritative_lane_peer_ids(lane_id);
+    let pinned = state
+        .resolve_lane_committee_at_height(
+            LaneAuthorityRoute::new(lane_id, DataSpaceId::UNIVERSAL),
+            height,
+        )
+        .expect("topology-pinned authority must resolve")
+        .into_validators();
     install_lane_manifest_registry(
         &state,
         &[(lane_id, DataSpaceId::UNIVERSAL, manifest_validators)],
     );
     assert!(repin_autoscale_lane_from_current_sources_for_test(&state, lane_id, height).is_empty());
-    assert_eq!(state.authoritative_lane_peer_ids(lane_id), pinned);
+    assert_eq!(
+        state
+            .resolve_lane_committee_at_height(
+                LaneAuthorityRoute::new(lane_id, DataSpaceId::UNIVERSAL),
+                height,
+            )
+            .expect("topology pin must survive under-quorum manifest drift")
+            .into_validators(),
+        pinned
+    );
     let signers: Vec<_> = topology_signers.iter().collect();
     let_row! { envelope = sample_lane_relay_envelope_for_state_with_keypair_signers( &state, height, lane_id, &signers, full_signer_bitmap(signers.len()), ) };
     assert_eq!(
@@ -25233,7 +25444,13 @@ state_test! { sync record_lane_relay_keeps_creation_pin_after_stale_manifest_dri
     seed_latest_lane_authority_height_for_test(&state, height);
     let_row! { topology_keypairs: Vec<_> = (0..4) .map(|_| crate::state::checked_keypair_with_algorithm(Algorithm::BlsNormal)) .collect() };
     let_row! { topology_signers = commit_topology_signers_for_lane_relay_test(&state, lane_id, &topology_keypairs, height) };
-    let pinned = state.authoritative_lane_peer_ids(lane_id);
+    let pinned = state
+        .resolve_lane_committee_at_height(
+            LaneAuthorityRoute::new(lane_id, DataSpaceId::UNIVERSAL),
+            height,
+        )
+        .expect("topology-pinned authority must resolve")
+        .into_validators();
     let signers: Vec<_> = topology_signers.iter().collect();
     let stale_validators: Vec<_> = (0..4).map(|_| bls_account_in("validators").0).collect();
     install_lane_manifest_registry(
@@ -25241,7 +25458,16 @@ state_test! { sync record_lane_relay_keeps_creation_pin_after_stale_manifest_dri
         &[(lane_id, DataSpaceId::UNIVERSAL, stale_validators)],
     );
     assert!(repin_autoscale_lane_from_current_sources_for_test(&state, lane_id, height).is_empty());
-    assert_eq!(state.authoritative_lane_peer_ids(lane_id), pinned);
+    assert_eq!(
+        state
+            .resolve_lane_committee_at_height(
+                LaneAuthorityRoute::new(lane_id, DataSpaceId::UNIVERSAL),
+                height,
+            )
+            .expect("topology pin must survive stale manifest drift")
+            .into_validators(),
+        pinned
+    );
     let_row! { envelope = sample_lane_relay_envelope_for_state_with_keypair_signers( &state, height, lane_id, &signers, full_signer_bitmap(signers.len()), ) };
     assert_eq!(
         state
@@ -25261,7 +25487,13 @@ state_test! { sync record_lane_relay_keeps_creation_pin_after_undeclared_manifes
     seed_latest_lane_authority_height_for_test(&state, height);
     let_row! { topology_keypairs: Vec<_> = (0..4) .map(|_| crate::state::checked_keypair_with_algorithm(Algorithm::BlsNormal)) .collect() };
     let_row! { topology_signers = commit_topology_signers_for_lane_relay_test(&state, lane_id, &topology_keypairs, height) };
-    let pinned = state.authoritative_lane_peer_ids(lane_id);
+    let pinned = state
+        .resolve_lane_committee_at_height(
+            LaneAuthorityRoute::new(lane_id, DataSpaceId::UNIVERSAL),
+            height,
+        )
+        .expect("topology-pinned authority must resolve")
+        .into_validators();
     let (declared_validator, declared_keypair) = bls_account_in("validators");
     let (rogue_validator, rogue_keypair) = bls_account_in("validators");
     seed_consensus_keys_with_pops(&state, &[declared_keypair, rogue_keypair.clone()]);
@@ -25281,7 +25513,16 @@ state_test! { sync record_lane_relay_keeps_creation_pin_after_undeclared_manifes
         "undeclared explicit manifest bindings must not become live public bindings"
     );
     assert!(repin_autoscale_lane_from_current_sources_for_test(&state, lane_id, height).is_empty());
-    assert_eq!(state.authoritative_lane_peer_ids(lane_id), pinned);
+    assert_eq!(
+        state
+            .resolve_lane_committee_at_height(
+                LaneAuthorityRoute::new(lane_id, DataSpaceId::UNIVERSAL),
+                height,
+            )
+            .expect("topology pin must survive malformed binding drift")
+            .into_validators(),
+        pinned
+    );
     let signers: Vec<_> = topology_signers.iter().collect();
     let_row! { envelope = sample_lane_relay_envelope_for_state_with_keypair_signers( &state, height, lane_id, &signers, full_signer_bitmap(signers.len()), ) };
     assert_eq!(
@@ -25310,7 +25551,13 @@ state_test! { sync record_lane_relay_keeps_creation_pin_after_non_live_manifest_
         seed_committed_height_for_state_test(&state, height.saturating_sub(1));
         let_row! { topology_keypairs: Vec<_> = (0..4) .map(|_| crate::state::checked_keypair_with_algorithm(Algorithm::BlsNormal)) .collect() };
         let_row! { topology_signers = commit_topology_signers_for_lane_relay_test( &state, lane_id, &topology_keypairs, height, ) };
-        let pinned = state.authoritative_lane_peer_ids(lane_id);
+        let pinned = state
+            .resolve_lane_committee_at_height(
+                LaneAuthorityRoute::new(lane_id, DataSpaceId::UNIVERSAL),
+                height,
+            )
+            .expect("topology-pinned authority must resolve")
+            .into_validators();
         let signers: Vec<_> = topology_signers.iter().collect();
         let (manifest_validator, manifest_keypair) = bls_account_in("validators");
         seed_consensus_key_with_lifecycle_for_test(
@@ -25346,7 +25593,16 @@ state_test! { sync record_lane_relay_keeps_creation_pin_after_non_live_manifest_
             repin_autoscale_lane_from_current_sources_for_test(&state, lane_id, height).is_empty(),
             "{case}: non-live manifest must fail creation-time committee preflight"
         );
-        assert_eq!(state.authoritative_lane_peer_ids(lane_id), pinned);
+        assert_eq!(
+            state
+                .resolve_lane_committee_at_height(
+                    LaneAuthorityRoute::new(lane_id, DataSpaceId::UNIVERSAL),
+                    height,
+                )
+                .expect("topology pin must survive non-live manifest drift")
+                .into_validators(),
+            pinned
+        );
         let_row! { envelope = sample_lane_relay_envelope_for_state_with_keypair_signers( &state, height, lane_id, &signers, full_signer_bitmap(signers.len()), ) };
         assert_eq!(
             state
@@ -25380,7 +25636,14 @@ state_test! { sync record_lane_relay_rejects_unpinned_topology_after_creation_pr
         "filtering a non-live member below 3f+1 must fail creation-time preflight"
     );
     assert_eq!(
-        state.authoritative_lane_peer_ids(lane_id).len(),
+        state
+            .resolve_lane_committee_at_height(
+                LaneAuthorityRoute::new(lane_id, DataSpaceId::UNIVERSAL),
+                height,
+            )
+            .expect("pre-existing incarnation pin must resolve")
+            .validators()
+            .len(),
         4,
         "a pre-existing incarnation pin must remain intact"
     );
@@ -25431,7 +25694,17 @@ state_test! { sync record_lane_relay_rejects_unpinned_lifecycle_topology_signer
             repin_autoscale_lane_from_current_sources_for_test(&state, lane_id, height).is_empty(),
             "{case}: non-live lifecycle state must fail creation-time preflight"
         );
-        assert_eq!(state.authoritative_lane_peer_ids(lane_id).len(), 4);
+        assert_eq!(
+            state
+                .resolve_lane_committee_at_height(
+                    LaneAuthorityRoute::new(lane_id, DataSpaceId::UNIVERSAL),
+                    height,
+                )
+                .expect("pre-existing incarnation pin must resolve")
+                .validators()
+                .len(),
+            4
+        );
         let signers: Vec<_> = topology_keypairs.iter().collect();
         let_row! { envelope = sample_lane_relay_envelope_for_state_with_keypair_signers( &state, height, lane_id, &signers, full_signer_bitmap(signers.len()), ) };
         let err = state.record_lane_relay(&envelope).unwrap_err();
@@ -25485,10 +25758,17 @@ state_test! { sync authoritative_lane_peers_ignore_future_created_autoscale_elas
         manifest_validators.len(),
         "test fixture must still keep the future-created lane manifest installed"
     );
-    assert!(
-        state.authoritative_lane_peer_ids(lane_id).is_empty(),
-        "future-created autoscale lanes must not inherit manifest or topology peer authority"
-    );
+    assert!(matches!(
+        state.resolve_lane_committee_at_height(
+            LaneAuthorityRoute::new(lane_id, DataSpaceId::UNIVERSAL),
+            1,
+        ),
+        Err(LaneAuthorityError::InactiveRoute {
+            lane_id: inactive,
+            authority_height: 1,
+            ..
+        }) if inactive == lane_id
+    ), "future-created autoscale lanes must not inherit manifest or topology peer authority");
     assert!(
         state
             .authoritative_lane_validator_accounts(lane_id)
@@ -25502,7 +25782,13 @@ state_test! { sync authoritative_lane_peers_ignore_future_created_autoscale_elas
         "manifest bindings should activate at the declared creation height"
     );
     assert_eq!(
-        state.authoritative_lane_peer_ids(lane_id),
+        state
+            .resolve_lane_committee_at_height(
+                LaneAuthorityRoute::new(lane_id, DataSpaceId::UNIVERSAL),
+                7,
+            )
+            .expect("autoscale pin must activate at its creation height")
+            .into_validators(),
         pinned,
         "the committed pin, not a later manifest, activates at the creation height"
     );
@@ -25602,8 +25888,8 @@ state_test! { sync record_lane_relay_rejects_manual_lane_inside_autoscale_elasti
     {
         let mut nexus = state.nexus.write();
         nexus.autoscale.enabled = true;
-        nexus.autoscale.min_lanes = nonzero!(1_u32);
-        nexus.autoscale.max_lanes = nonzero!(2_u32);
+        nexus.autoscale.min_lane_id = nonzero!(1_u32);
+        nexus.autoscale.max_lane_id_exclusive = nonzero!(2_u32);
         nexus.lane_catalog = lane_catalog;
         nexus.lane_config =
             iroha_config::parameters::actual::LaneConfig::from_catalog(&nexus.lane_catalog);
@@ -25619,10 +25905,16 @@ state_test! { sync record_lane_relay_rejects_manual_lane_inside_autoscale_elasti
         }
         topology.commit();
     }
-    assert!(
-        state.authoritative_lane_peer_ids(lane_id).is_empty(),
-        "manual lanes inside the autoscale elastic range must not inherit relay authority"
-    );
+    assert!(matches!(
+        state.resolve_lane_committee_at_height(
+            LaneAuthorityRoute::new(lane_id, DataSpaceId::UNIVERSAL),
+            height,
+        ),
+        Err(LaneAuthorityError::InactiveRoute {
+            lane_id: inactive,
+            ..
+        }) if inactive == lane_id
+    ), "manual lanes inside the autoscale elastic range must not inherit relay authority");
     let signers: Vec<_> = topology_keypairs.iter().collect();
     let_row! { envelope = sample_lane_relay_envelope(height, lane_id, &signers, full_signer_bitmap(signers.len())) };
     let_row! { err = state .record_lane_relay(&envelope) .expect_err("manual elastic-range lane must not accept relays") };
@@ -25670,7 +25962,16 @@ state_test! { sync authoritative_lane_validators_ignore_stale_stake_records_for_
             .authoritative_lane_validator_accounts(stale_lane)
             .is_empty()
     );
-    assert!(state.authoritative_lane_peer_ids(stale_lane).is_empty());
+    assert!(matches!(
+        state.resolve_lane_committee_at_height(
+            LaneAuthorityRoute::new(stale_lane, DataSpaceId::UNIVERSAL),
+            0,
+        ),
+        Err(LaneAuthorityError::InactiveRoute {
+            lane_id: inactive,
+            ..
+        }) if inactive == stale_lane
+    ));
     assert!(
         state
             .manifest_lane_validator_bindings(LaneId::SINGLE)
@@ -25683,10 +25984,17 @@ state_test! { sync authoritative_lane_validators_ignore_stale_stake_records_for_
             .is_empty(),
         "an unknown lane's stake row must not contaminate active account authority"
     );
-    assert!(
-        state.authoritative_lane_peer_ids(LaneId::SINGLE).is_empty(),
-        "an unknown lane's stake row must not contaminate active peer authority"
-    );
+    assert!(matches!(
+        state.resolve_lane_committee_at_height(
+            LaneAuthorityRoute::new(LaneId::SINGLE, DataSpaceId::UNIVERSAL),
+            0,
+        ),
+        Err(LaneAuthorityError::UndersizedPool {
+            required: 4,
+            actual: 0,
+            ..
+        })
+    ), "an unknown lane's stake row must not contaminate active peer authority");
 }
 state_test! { sync authoritative_lane_validators_ignore_stale_geometry_for_removed_catalog_lane
     let mut state = blank_test_state();
@@ -25724,10 +26032,16 @@ state_test! { sync authoritative_lane_validators_ignore_stale_geometry_for_remov
             .is_empty(),
         "stale derived geometry must not revive removed-lane manifest validators"
     );
-    assert!(
-        state.authoritative_lane_peer_ids(stale_lane).is_empty(),
-        "stale derived geometry must not produce relay peers for a removed catalog lane"
-    );
+    assert!(matches!(
+        state.resolve_lane_committee_at_height(
+            LaneAuthorityRoute::new(stale_lane, DataSpaceId::UNIVERSAL),
+            0,
+        ),
+        Err(LaneAuthorityError::InactiveRoute {
+            lane_id: inactive,
+            ..
+        }) if inactive == stale_lane
+    ), "stale derived geometry must not produce relay peers for a removed catalog lane");
 }
 state_test! { sync authoritative_lane_validators_ignore_stale_manifest_for_unknown_lane
     let state = blank_test_state();
@@ -25749,7 +26063,16 @@ state_test! { sync authoritative_lane_validators_ignore_stale_manifest_for_unkno
             .authoritative_lane_validator_accounts(stale_lane)
             .is_empty()
     );
-    assert!(state.authoritative_lane_peer_ids(stale_lane).is_empty());
+    assert!(matches!(
+        state.resolve_lane_committee_at_height(
+            LaneAuthorityRoute::new(stale_lane, DataSpaceId::UNIVERSAL),
+            0,
+        ),
+        Err(LaneAuthorityError::InactiveRoute {
+            lane_id: inactive,
+            ..
+        }) if inactive == stale_lane
+    ));
     assert!(
         state
             .manifest_lane_validator_bindings(LaneId::SINGLE)
@@ -25762,10 +26085,17 @@ state_test! { sync authoritative_lane_validators_ignore_stale_manifest_for_unkno
             .is_empty(),
         "an unknown lane's roster must not contaminate active account authority"
     );
-    assert!(
-        state.authoritative_lane_peer_ids(LaneId::SINGLE).is_empty(),
-        "an unknown lane's roster must not contaminate active peer authority"
-    );
+    assert!(matches!(
+        state.resolve_lane_committee_at_height(
+            LaneAuthorityRoute::new(LaneId::SINGLE, DataSpaceId::UNIVERSAL),
+            0,
+        ),
+        Err(LaneAuthorityError::UndersizedPool {
+            required: 4,
+            actual: 0,
+            ..
+        })
+    ), "an unknown lane's roster must not contaminate active peer authority");
 }
 state_test! { sync authoritative_lane_validators_ignore_manifest_for_rebound_dataspace
     let mut state = blank_test_state();
@@ -25810,7 +26140,16 @@ state_test! { sync authoritative_lane_validators_ignore_manifest_for_rebound_dat
             .authoritative_lane_validator_accounts(lane_id)
             .is_empty()
     );
-    assert!(state.authoritative_lane_peer_ids(lane_id).is_empty());
+    assert!(matches!(
+        state.resolve_lane_committee_at_height(
+            LaneAuthorityRoute::new(lane_id, active_dataspace),
+            0,
+        ),
+        Err(LaneAuthorityError::InvalidAuthoritySource {
+            lane_id: rejected,
+            ..
+        }) if rejected == lane_id
+    ));
 }
 state_test! { sync same_dataspace_authority_rejects_rebound_active_sibling_manifest
     let kura = Kura::blank_kura_for_testing();
@@ -25841,7 +26180,16 @@ state_test! { sync same_dataspace_authority_rejects_rebound_active_sibling_manif
             .authoritative_lane_validator_accounts(target_lane)
             .is_empty()
     );
-    assert!(state.authoritative_lane_peer_ids(target_lane).is_empty());
+    assert!(matches!(
+        state.resolve_lane_committee_at_height(
+            LaneAuthorityRoute::new(target_lane, DataSpaceId::UNIVERSAL),
+            0,
+        ),
+        Err(LaneAuthorityError::InvalidAuthoritySource {
+            lane_id: rejected,
+            ..
+        }) if rejected == target_lane
+    ));
 }
 
 state_test! { sync manifest_lane_validator_bindings_reject_duplicate_peer_bindings
@@ -25872,10 +26220,13 @@ state_test! { sync manifest_lane_validator_bindings_reject_duplicate_peer_bindin
         bindings.is_empty(),
         "duplicate explicit bindings for one peer must fail closed instead of picking a validator"
     );
-    assert!(
-        state.authoritative_lane_peer_ids(lane_id).is_empty(),
-        "duplicate peer bindings must not expose peer authority"
-    );
+    assert!(matches!(
+        state.resolve_lane_committee_at_height(
+            LaneAuthorityRoute::new(lane_id, dataspace_id),
+            0,
+        ),
+        Err(LaneAuthorityError::UndersizedPool { actual: 0, .. })
+    ), "duplicate peer bindings must not expose peer authority");
     assert!(
         state
             .authoritative_lane_validator_accounts(lane_id)
@@ -25927,10 +26278,13 @@ state_test! { sync manifest_lane_validator_bindings_reject_duplicate_validator_b
         bindings.is_empty(),
         "duplicate explicit bindings for one validator must fail closed instead of picking a peer"
     );
-    assert!(
-        state.authoritative_lane_peer_ids(lane_id).is_empty(),
-        "duplicate validator bindings must not expose peer authority"
-    );
+    assert!(matches!(
+        state.resolve_lane_committee_at_height(
+            LaneAuthorityRoute::new(lane_id, dataspace_id),
+            0,
+        ),
+        Err(LaneAuthorityError::UndersizedPool { actual: 0, .. })
+    ), "duplicate validator bindings must not expose peer authority");
     assert!(
         state
             .authoritative_lane_validator_accounts(lane_id)
@@ -25981,10 +26335,13 @@ state_test! { sync manifest_lane_validator_bindings_reject_undeclared_validator_
         state.manifest_lane_validator_bindings(lane_id).is_empty(),
         "a live explicit binding for an undeclared validator must not be exposed"
     );
-    assert!(
-        state.authoritative_lane_peer_ids(lane_id).is_empty(),
-        "undeclared explicit bindings must suppress fallback without granting peer authority"
-    );
+    assert!(matches!(
+        state.resolve_lane_committee_at_height(
+            LaneAuthorityRoute::new(lane_id, dataspace_id),
+            0,
+        ),
+        Err(LaneAuthorityError::UndersizedPool { actual: 0, .. })
+    ), "undeclared explicit bindings must suppress fallback without granting peer authority");
     assert!(
         state
             .authoritative_lane_validator_accounts(lane_id)
@@ -26030,10 +26387,13 @@ state_test! { sync manifest_lane_validators_reject_duplicate_declared_validators
             .is_empty(),
         "test fixture must exercise the no-explicit-binding fallback path"
     );
-    assert!(
-        state.authoritative_lane_peer_ids(lane_id).is_empty(),
-        "duplicate declared validators must fail closed instead of deduplicating into peer authority"
-    );
+    assert!(matches!(
+        state.resolve_lane_committee_at_height(
+            LaneAuthorityRoute::new(lane_id, dataspace_id),
+            0,
+        ),
+        Err(LaneAuthorityError::UndersizedPool { actual: 0, .. })
+    ), "duplicate declared validators must fail closed instead of deduplicating into peer authority");
     assert!(
         state
             .authoritative_lane_validator_accounts(lane_id)
@@ -26079,30 +26439,55 @@ state_test! { sync authoritative_lane_validator_accounts_use_explicit_manifest_p
             ..iroha_config::parameters::actual::Nexus::default()
         })
         .expect("apply nexus config");
-    let bound_peer_keypair = crate::state::checked_keypair_with_algorithm(Algorithm::BlsNormal);
-    seed_consensus_keys_with_pops(&state, std::slice::from_ref(&bound_peer_keypair));
-    let bound_peer = PeerId::new(bound_peer_keypair.public_key().clone());
-    let validator = ALICE_ID.clone();
+    let bound_peer_keypairs = (0..4)
+        .map(|_| crate::state::checked_keypair_with_algorithm(Algorithm::BlsNormal))
+        .collect::<Vec<_>>();
+    seed_consensus_keys_with_pops(&state, &bound_peer_keypairs);
+    let mut bound_peers = bound_peer_keypairs
+        .iter()
+        .map(|keypair| PeerId::new(keypair.public_key().clone()))
+        .collect::<Vec<_>>();
+    let (mut validators, _) = bls_accounts_in("validators", 4);
     install_lane_manifest_registry_with_bindings(
         &state,
         lane_id,
         dataspace_id,
-        vec![validator.clone()],
-        vec![ManifestValidatorBinding {
-            validator: validator.clone(),
-            peer_id: bound_peer.clone(),
-            torii_url: None,
-        }],
+        validators.clone(),
+        validators
+            .iter()
+            .zip(&bound_peers)
+            .map(|(validator, peer_id)| ManifestValidatorBinding {
+                validator: validator.clone(),
+                peer_id: peer_id.clone(),
+                torii_url: None,
+            })
+            .collect(),
     );
+    bound_peers.sort();
     assert_eq!(
-        state.authoritative_lane_peer_ids(lane_id),
-        vec![bound_peer],
+        state
+            .resolve_lane_committee_at_height(
+                LaneAuthorityRoute::new(lane_id, dataspace_id),
+                0,
+            )
+            .expect("explicit manifest authority must resolve")
+            .into_validators(),
+        bound_peers,
         "explicit manifest binding should supply the authoritative peer"
     );
+    let mut actual_validators = state.authoritative_lane_validator_accounts(lane_id);
+    actual_validators.sort();
+    validators.sort();
     assert_eq!(
-        state.authoritative_lane_validator_accounts(lane_id),
-        vec![validator],
+        actual_validators, validators,
         "account authority must follow explicit manifest peer bindings instead of inferring the validator account signatory as a peer"
+    );
+    assert!(
+        validators
+            .iter()
+            .zip(&bound_peers)
+            .all(|(validator, peer)| peer_id_for_account(validator) != *peer),
+        "test fixture must use explicit peer bindings instead of signatory inference"
     );
 }
 state_test! { sync authoritative_lane_validator_accounts_use_manifest_for_admin_managed_lane
@@ -26377,7 +26762,7 @@ state_test! { sync da_pin_intents_hydrate_from_kura_block_log
     let lane_config = RuntimeLaneConfig::from_catalog(&catalog);
     let lane = lane_config.primary().lane_id;
     let kura_cfg = strict_kura_config_for_testing(store_root);
-    let (kura, _) = Kura::new(&kura_cfg, &lane_config).expect("init kura");
+    let (kura, _) = Kura::open_test_kura_with_configured_lane_config(&kura_cfg, &lane_config).expect("init kura");
     let query_handle = LiveQueryStore::start_test();
     let mut state = State::new_for_testing(World::default(), Arc::clone(&kura), query_handle);
     state
@@ -26418,14 +26803,14 @@ state_test! { sync da_pin_intents_kura_replay_rejects_future_created_autoscale_l
     let_row! { catalog = LaneCatalog::new(nonzero!(2_u32), vec![LaneConfig::default(), elastic_lane]) .expect("future-created autoscale lane catalog") };
     let lane_config = RuntimeLaneConfig::from_catalog(&catalog);
     let kura_cfg = strict_kura_config_for_testing(store_root);
-    let (kura, _) = Kura::new(&kura_cfg, &lane_config).expect("init kura");
+    let (kura, _) = Kura::open_test_kura_with_configured_lane_config(&kura_cfg, &lane_config).expect("init kura");
     let query_handle = LiveQueryStore::start_test();
     let state = State::new_for_testing(World::default(), Arc::clone(&kura), query_handle);
     {
         let mut nexus = state.nexus.write();
         nexus.autoscale.enabled = true;
-        nexus.autoscale.min_lanes = nonzero!(1_u32);
-        nexus.autoscale.max_lanes = nonzero!(3_u32);
+        nexus.autoscale.min_lane_id = nonzero!(1_u32);
+        nexus.autoscale.max_lane_id_exclusive = nonzero!(3_u32);
         nexus.lane_config = lane_config;
         nexus.lane_catalog = catalog;
     }
@@ -26456,14 +26841,14 @@ state_test! { sync da_commitments_kura_replay_rejects_future_created_autoscale_l
     let_row! { catalog = LaneCatalog::new(nonzero!(2_u32), vec![LaneConfig::default(), elastic_lane]) .expect("future-created autoscale lane catalog") };
     let lane_config = RuntimeLaneConfig::from_catalog(&catalog);
     let kura_cfg = strict_kura_config_for_testing(store_root);
-    let (kura, _) = Kura::new(&kura_cfg, &lane_config).expect("init kura");
+    let (kura, _) = Kura::open_test_kura_with_configured_lane_config(&kura_cfg, &lane_config).expect("init kura");
     let query_handle = LiveQueryStore::start_test();
     let state = State::new_for_testing(World::default(), Arc::clone(&kura), query_handle);
     {
         let mut nexus = state.nexus.write();
         nexus.autoscale.enabled = true;
-        nexus.autoscale.min_lanes = nonzero!(1_u32);
-        nexus.autoscale.max_lanes = nonzero!(3_u32);
+        nexus.autoscale.min_lane_id = nonzero!(1_u32);
+        nexus.autoscale.max_lane_id_exclusive = nonzero!(3_u32);
         nexus.lane_config = lane_config;
         nexus.lane_catalog = catalog;
     }
@@ -26515,7 +26900,7 @@ state_test! { sync da_pin_intents_kura_replay_preserves_committed_owner_after_ac
     let lane_config = RuntimeLaneConfig::from_catalog(&catalog);
     let lane = lane_config.primary().lane_id;
     let kura_cfg = strict_kura_config_for_testing(store_root);
-    let (kura, _) = Kura::new(&kura_cfg, &lane_config).expect("init kura");
+    let (kura, _) = Kura::open_test_kura_with_configured_lane_config(&kura_cfg, &lane_config).expect("init kura");
     let query_handle = LiveQueryStore::start_test();
     let owner_id = AccountId::new(crate::state::checked_keypair().public_key().clone());
     let mut world = World::default();
@@ -26945,7 +27330,8 @@ fn hydrate_da_indexes_replays_multiple_shards() {
     let_row! { catalog = LaneCatalog::new( lane_count, vec![ LaneConfig::default(), LaneConfig { id: LaneId::new(1), shard_id: Some(ShardId::new(5)), alias: "lane1".to_string(), ..LaneConfig::default() }, ], ) .expect("lane catalog") };
     let lane_config = RuntimeLaneConfig::from_catalog(&catalog);
     let kura_cfg = strict_kura_config_for_testing(store_root);
-    let (kura, _) = Kura::new(&kura_cfg, &lane_config).expect("init kura");
+    let (kura, _) = Kura::open_test_kura_with_configured_lane_config(&kura_cfg, &lane_config)
+        .expect("init kura");
     let query_handle = LiveQueryStore::start_test();
     let_row! { mut state = State::try_new( World::default(), Arc::clone(&kura), query_handle, #[cfg(feature = "telemetry")] <_>::default(), ) .expect("open multi-bundle DA test State against configured Kura") };
     state.install_pre_genesis_nexus_for_testing(iroha_config::parameters::actual::Nexus {
@@ -27041,7 +27427,8 @@ fn hydrate_da_indexes_replays_multi_shard_bundle() {
     let_row! { catalog = LaneCatalog::new( nonzero!(2_u32), vec![ LaneConfig::default(), LaneConfig { id: LaneId::new(1), shard_id: Some(ShardId::new(5)), alias: "lane1".to_string(), ..LaneConfig::default() }, ], ) .expect("lane catalog") };
     let lane_config = RuntimeLaneConfig::from_catalog(&catalog);
     let kura_cfg = strict_kura_config_for_testing(store_root);
-    let (kura, _) = Kura::new(&kura_cfg, &lane_config).expect("init kura");
+    let (kura, _) = Kura::open_test_kura_with_configured_lane_config(&kura_cfg, &lane_config)
+        .expect("init kura");
     let query_handle = LiveQueryStore::start_test();
     let_row! { mut state = State::try_new( World::default(), Arc::clone(&kura), query_handle, #[cfg(feature = "telemetry")] <_>::default(), ) .expect("open dual-lane DA test State against configured Kura") };
     state.install_pre_genesis_nexus_for_testing(iroha_config::parameters::actual::Nexus {
@@ -27089,7 +27476,7 @@ state_test! { sync hydrate_da_indexes_replaces_stale_snapshot_state
     let catalog = LaneCatalog::new(nonzero!(1_u32), vec![LaneConfig::default()]).expect("catalog");
     let lane_config = RuntimeLaneConfig::from_catalog(&catalog);
     let kura_cfg = strict_kura_config_for_testing(store_root);
-    let (kura, _) = Kura::new(&kura_cfg, &lane_config).expect("init kura");
+    let (kura, _) = Kura::open_test_kura_with_configured_lane_config(&kura_cfg, &lane_config).expect("init kura");
     let query_handle = LiveQueryStore::start_test();
     let mut state = State::new_for_testing(World::default(), Arc::clone(&kura), query_handle);
     state
@@ -27139,7 +27526,7 @@ state_test! { sync da_commitment_lookup_hydrates_from_kura_after_state_restart
     let catalog = LaneCatalog::new(nonzero!(1_u32), vec![LaneConfig::default()]).expect("catalog");
     let lane_config = RuntimeLaneConfig::from_catalog(&catalog);
     let kura_cfg = strict_kura_config_for_testing(store_root);
-    let (kura, _) = Kura::new(&kura_cfg, &lane_config).expect("init kura");
+    let (kura, _) = Kura::open_test_kura_with_configured_lane_config(&kura_cfg, &lane_config).expect("init kura");
     let mut state = blank_test_state_from_kura(&kura);
     state
         .set_nexus(iroha_config::parameters::actual::Nexus {
@@ -27436,7 +27823,7 @@ fn state_journal_test_kura(store_root: &std::path::Path) -> Arc<Kura> {
     let_row! { catalog = LaneCatalog::new(nonzero!(1_u32), vec![LaneConfig::default()]).expect("lane catalog") };
     let lane_config = RuntimeLaneConfig::from_catalog(&catalog);
     let_row! { kura_cfg = KuraConfig { init_mode: InitMode::Strict, store_dir: WithOrigin::inline(store_root.to_path_buf()), max_disk_usage_bytes: iroha_config::parameters::defaults::kura::MAX_DISK_USAGE_BYTES, blocks_in_memory: iroha_config::parameters::defaults::kura::BLOCKS_IN_MEMORY, debug_output_new_blocks: false, merge_ledger_cache_capacity: iroha_config::parameters::defaults::kura::MERGE_LEDGER_CACHE_CAPACITY, fsync_mode: iroha_config::kura::FsyncMode::Batched, fsync_interval: iroha_config::parameters::defaults::kura::FSYNC_INTERVAL, lane_history_retention: iroha_config::parameters::defaults::kura::LANE_HISTORY_RETENTION, replica_advert: iroha_config::parameters::defaults::kura::REPLICA_ADVERT_POLICY, } };
-    Kura::new(&kura_cfg, &lane_config)
+    Kura::open_test_kura_with_configured_lane_config(&kura_cfg, &lane_config)
         .expect("initialize journal test Kura")
         .0
 }
@@ -27846,7 +28233,7 @@ state_test! { sync da_shard_cursor_journal_drops_on_reshard
     let_row! { initial_catalog = LaneCatalog::new( nonzero!(2_u32), vec![ LaneConfig::default(), LaneConfig { id: target_lane, shard_id: Some(ShardId::new(1)), alias: "cursor-reshard-target".to_owned(), ..LaneConfig::default() }, ], ) .expect("lane catalog") };
     let initial_config = RuntimeLaneConfig::from_catalog(&initial_catalog);
     let kura_cfg = strict_kura_config_for_testing(store_root);
-    let (kura, _) = Kura::new(&kura_cfg, &initial_config).expect("init kura");
+    let (kura, _) = Kura::open_test_kura_with_configured_lane_config(&kura_cfg, &initial_config).expect("init kura");
     let query_handle = LiveQueryStore::start_test();
     let_row! { mut state = State::try_new( World::default(), Arc::clone(&kura), query_handle, #[cfg(feature = "telemetry")] <_>::default(), ) .expect("open DA cursor test State against configured Kura") };
     state.install_pre_genesis_nexus_for_testing(iroha_config::parameters::actual::Nexus {
@@ -28275,8 +28662,8 @@ state_test! { sync da_pin_intent_ingest_rejects_future_created_autoscale_lane
     {
         let mut nexus = state.nexus.write();
         nexus.autoscale.enabled = true;
-        nexus.autoscale.min_lanes = nonzero!(1_u32);
-        nexus.autoscale.max_lanes = nonzero!(3_u32);
+        nexus.autoscale.min_lane_id = nonzero!(1_u32);
+        nexus.autoscale.max_lane_id_exclusive = nonzero!(3_u32);
         nexus.lane_config = RuntimeLaneConfig::from_catalog(&catalog);
         nexus.lane_catalog = catalog;
     }
@@ -28470,8 +28857,8 @@ state_test! { sync axt_policy_snapshot_ignores_future_created_autoscale_lane
     {
         let nexus = state.nexus.get_mut();
         nexus.autoscale.enabled = true;
-        nexus.autoscale.min_lanes = nonzero!(1_u32);
-        nexus.autoscale.max_lanes = nonzero!(3_u32);
+        nexus.autoscale.min_lane_id = nonzero!(1_u32);
+        nexus.autoscale.max_lane_id_exclusive = nonzero!(3_u32);
         install_test_nexus_lane_catalog(nexus, lane_catalog);
     }
     let snapshot = CoreHost::derive_axt_policy_snapshot_from_directory(&state.view());
@@ -28501,8 +28888,8 @@ state_test! { sync axt_policy_snapshot_filters_cached_future_created_autoscale_l
     {
         let nexus = state.nexus.get_mut();
         nexus.autoscale.enabled = true;
-        nexus.autoscale.min_lanes = nonzero!(1_u32);
-        nexus.autoscale.max_lanes = nonzero!(3_u32);
+        nexus.autoscale.min_lane_id = nonzero!(1_u32);
+        nexus.autoscale.max_lane_id_exclusive = nonzero!(3_u32);
         install_test_nexus_lane_catalog(nexus, lane_catalog);
     }
     state.set_axt_policy(
@@ -28540,8 +28927,8 @@ state_test! { sync axt_policy_refresh_prunes_cached_future_created_autoscale_lan
     {
         let nexus = state.nexus.get_mut();
         nexus.autoscale.enabled = true;
-        nexus.autoscale.min_lanes = nonzero!(1_u32);
-        nexus.autoscale.max_lanes = nonzero!(3_u32);
+        nexus.autoscale.min_lane_id = nonzero!(1_u32);
+        nexus.autoscale.max_lane_id_exclusive = nonzero!(3_u32);
         install_test_nexus_lane_catalog(nexus, lane_catalog);
     }
     state.set_axt_policy(
@@ -28590,8 +28977,8 @@ state_test! { sync axt_policy_refresh_does_not_cache_future_created_autoscale_la
     {
         let nexus = state.nexus.get_mut();
         nexus.autoscale.enabled = true;
-        nexus.autoscale.min_lanes = nonzero!(1_u32);
-        nexus.autoscale.max_lanes = nonzero!(3_u32);
+        nexus.autoscale.min_lane_id = nonzero!(1_u32);
+        nexus.autoscale.max_lane_id_exclusive = nonzero!(3_u32);
         install_test_nexus_lane_catalog(nexus, lane_catalog);
     }
     state.set_axt_policy(
@@ -32087,7 +32474,7 @@ state_test! { sync state_transaction_reports_confidential_digest
     let_row! { expected = compute_confidential_feature_digest( view.world(), &view.zk, view.sccp_registry.as_ref(), height, ) };
     assert_eq!(digest_from_tx, expected);
 }
-state_test! { sync governance_lock_record_legacy_wire_and_json_default_custody_to_none
+state_test! { sync governance_lock_record_rejects_missing_custody_on_wire_and_json
     use norito::codec::DecodeAll as _;
     #[derive(Encode)]
     struct LegacyGovernanceLockRecord {
@@ -32102,15 +32489,11 @@ state_test! { sync governance_lock_record_legacy_wire_and_json_default_custody_t
     let_row! { legacy = LegacyGovernanceLockRecord { owner: owner.clone(), amount: Quantity::from(150_u32), slashed: Quantity::from(5_u32), expiry_height: 100, direction: 1, duration_blocks: 3_600, } };
     let encoded = legacy.encode();
     let mut bytes = encoded.as_slice();
-    let_row! { decoded = GovernanceLockRecord::decode_all(&mut bytes) .expect("legacy governance lock record must decode") };
-    assert!(bytes.is_empty());
-    assert_eq!(decoded.owner, owner);
-    assert_eq!(decoded.amount, Quantity::from(150_u32));
-    assert_eq!(decoded.slashed, Quantity::from(5_u32));
-    assert_eq!(decoded.custody, None);
+    GovernanceLockRecord::decode_all(&mut bytes)
+        .expect_err("governance lock wire bytes without custody must fail closed");
     #[cfg(feature = "json")]
     {
-        let_row! { current = GovernanceLockRecord { owner, amount: Quantity::from(150_u32), slashed: Quantity::zero(), expiry_height: 100, direction: 1, duration_blocks: 3_600, custody: Some(GovernanceLockCustody { escrowed: true, asset_definition_id: "5dHF5UNffENuEg9mhjYwY1jcZ1K5" .parse() .expect("asset definition id"), bond_escrow_account: (*BOB_ID).clone(), slash_receiver_account: (*BOB_ID).clone(), }), } };
+        let_row! { current = GovernanceLockRecord { owner, amount: Quantity::from(150_u32), slashed: Quantity::zero(), expiry_height: 100, direction: 1, duration_blocks: 3_600, custody: governance_lock_custody_fixture(), } };
         let mut value = norito::json::to_value(&current).expect("serialize governance lock JSON");
         assert!(
             value
@@ -32120,8 +32503,18 @@ state_test! { sync governance_lock_record_legacy_wire_and_json_default_custody_t
                 .is_some(),
             "current governance lock JSON must include custody"
         );
-        let_row! { decoded: GovernanceLockRecord = norito::json::from_value(value).expect("legacy governance lock JSON must decode") };
-        assert_eq!(decoded.custody, None);
+        norito::json::from_value::<GovernanceLockRecord>(value)
+            .expect_err("governance lock JSON without custody must fail closed");
+    }
+}
+fn governance_lock_custody_fixture() -> GovernanceLockCustody {
+    GovernanceLockCustody {
+        escrowed: false,
+        asset_definition_id: "5dHF5UNffENuEg9mhjYwY1jcZ1K5"
+            .parse()
+            .expect("asset definition id"),
+        bond_escrow_account: (*BOB_ID).clone(),
+        slash_receiver_account: (*BOB_ID).clone(),
     }
 }
 fn indexed_governance_lock(owner: AccountId, expiry_height: u64) -> GovernanceLockRecord {
@@ -32132,7 +32525,7 @@ fn indexed_governance_lock(owner: AccountId, expiry_height: u64) -> GovernanceLo
         expiry_height,
         direction: 0,
         duration_blocks: 1,
-        custody: None,
+        custody: governance_lock_custody_fixture(),
     }
 }
 fn indexed_validation_fee_proposal(created_height: u64) -> GovernanceProposalRecord {
@@ -32140,28 +32533,1137 @@ fn indexed_validation_fee_proposal(created_height: u64) -> GovernanceProposalRec
         governance::types::{ProposalKind, ValidationFeePolicyProposal},
         validation_fee::{
             VALIDATION_FEE_DS_SCALE, VALIDATION_FEE_POLICY_SCHEMA_VERSION,
-            ValidationFeeChargingMode, ValidationFeePlainElectorateEligibilityRuleV1,
-            ValidationFeePlainElectorateRulesV1, ValidationFeePolicyV1,
+            ValidationFeeChargingMode, ValidationFeePolicyV1,
         },
     };
     let proposer = (*ALICE_ID).clone();
     let_row! { fee_asset = AssetDefinitionId::derive_from_components( DomainId::try_new("validation-fee", "universal").expect("validation-fee domain"), "xor".parse().expect("validation-fee asset name"), ) };
-    let_row! { rules = ValidationFeePlainElectorateRulesV1 { voting_asset_id: fee_asset.clone(), bond_escrow_account: proposer.clone(), slash_receiver_account: (*BOB_ID).clone(), ballot_amount: Quantity::from(1_u32), ballot_duration_blocks: 1, citizenship_amount: Quantity::from(1_u32), max_members: 1, conviction_step_blocks: 1, max_conviction: 1, min_turnout: 1, approval_threshold_numerator: 1, approval_threshold_denominator: 1, eligibility_rule: ValidationFeePlainElectorateEligibilityRuleV1::ProposalOperatorAtOrBeforeGateOthersAfterGate, } };
     let_row! { policy = ValidationFeePolicyV1 { schema_version: VALIDATION_FEE_POLICY_SCHEMA_VERSION, network_id: NetworkId::from_genesis_hash(HashOf::<BlockHeader>::from_untyped_unchecked( Hash::prehashed([0xA5; 32]), )), policy_version: 1, previous_policy_hash: None, ds_asset_id: fee_asset, ds_scale: VALIDATION_FEE_DS_SCALE, fee: Quantity::zero(), treasury_account_id: proposer.clone(), charging_mode: ValidationFeeChargingMode::Disabled, effective_from_height: 1, expires_after_height: None, exemption_classes: Vec::new(), treasury_payout_binding: None, } };
     GovernanceProposalRecord {
-        proposer,
+        proposer: proposer.clone(),
         kind: ProposalKind::ValidationFeePolicy(ValidationFeePolicyProposal {
+            proposal_operator: proposer,
             policy,
             payout_lifecycle_proposal_id: None,
-            plain_electorate_rules: rules,
         }),
         created_height,
         status: GovernanceProposalStatus::Proposed,
-        pipeline: GovernancePipeline::default(),
-        parliament_snapshot: None,
-        finalization_evidence: None,
-        enacted_at_height: None,
     }
+}
+fn indexed_deploy_contract_proposal(created_height: u64) -> GovernanceProposalRecord {
+    use iroha_data_model::governance::types::{
+        AbiVersion, ContractAbiHash, ContractCodeHash, DeployContractProposal, ProposalKind,
+    };
+
+    let proposer = (*ALICE_ID).clone();
+    GovernanceProposalRecord {
+        proposer: proposer.clone(),
+        kind: ProposalKind::DeployContract(DeployContractProposal {
+            contract_address: "irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw"
+                .parse()
+                .expect("canonical contract address"),
+            code_hash: ContractCodeHash::new([0x31; 32]),
+            abi_hash: ContractAbiHash::new([0x41; 32]),
+            abi_version: AbiVersion::new(1),
+            manifest_provenance: None,
+        }),
+        created_height,
+        status: GovernanceProposalStatus::Proposed,
+    }
+}
+state_test! { sync governance_proposal_first_release_shape_is_strict
+    let record = indexed_validation_fee_proposal(7);
+    let mut value = norito::json::to_value(&record).expect("serialize governance proposal");
+    value
+        .as_object_mut()
+        .expect("governance proposal JSON object")
+        .insert("enacted_at_height".to_owned(), norito::json::json!(11_u64));
+    let json_error = norito::json::from_value::<GovernanceProposalRecord>(value.clone())
+        .expect_err("legacy governance proposal fields must fail closed");
+    assert!(
+        json_error.to_string().contains("enacted_at_height"),
+        "unexpected legacy-field JSON error: {json_error}"
+    );
+    value
+        .as_object_mut()
+        .expect("governance proposal JSON object")
+        .remove("enacted_at_height");
+    value
+        .as_object_mut()
+        .expect("governance proposal JSON object")
+        .remove("status");
+    let json_error = norito::json::from_value::<GovernanceProposalRecord>(value)
+        .expect_err("missing canonical governance proposal fields must fail closed");
+    assert!(
+        json_error.to_string().contains("status"),
+        "unexpected missing-field JSON error: {json_error}"
+    );
+    let mut value = norito::json::to_value(&record).expect("serialize governance proposal");
+    value
+        .as_object_mut()
+        .expect("governance proposal JSON object")
+        .insert(
+            "created_height".to_owned(),
+            norito::json::json!(
+                iroha_data_model::parliament_types::FIRST_RELEASE_MAX_EXACT_JSON_U64 + 1
+            ),
+        );
+    let json_error = norito::json::from_value::<GovernanceProposalRecord>(value)
+        .expect_err("inexact governance proposal creation height must fail at JSON decode");
+    assert!(
+        json_error.to_string().contains("exact JSON integer maximum"),
+        "unexpected creation-height JSON error: {json_error}"
+    );
+}
+state_test! { sync governance_proposal_storage_rejects_inexact_json_numbers_before_mutation
+    let maximum = iroha_data_model::parliament_types::FIRST_RELEASE_MAX_EXACT_JSON_U64;
+    let state = blank_test_state();
+    let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+    let mut block = state.block(header);
+    let mut transaction = block.transaction();
+    let canonical = indexed_deploy_contract_proposal(maximum);
+    let proposal_id = canonical.kind.fingerprint();
+    transaction
+        .world
+        .put_governance_proposal(proposal_id, canonical.clone())
+        .expect("the exact JSON integer maximum is admissible");
+    let mut hostile = canonical.clone();
+    hostile.created_height = maximum + 1;
+    let error = transaction
+        .world
+        .put_governance_proposal(proposal_id, hostile)
+        .expect_err("one above the exact JSON integer maximum must reject");
+    assert!(error.contains("creation height"), "unexpected invariant: {error}");
+    assert_eq!(
+        transaction
+            .world
+            .governance_proposals
+            .get(&proposal_id)
+            .expect("canonical record remains after rejected replacement")
+            .created_height,
+        maximum,
+    );
+}
+state_test! { sync state_restore_accepts_canonical_certificate_only_deploy_proposal
+    let proposal = indexed_deploy_contract_proposal(0);
+    let proposal_id = proposal.kind.fingerprint();
+    let mut world = World::default();
+    world.governance_proposals.insert(proposal_id, proposal);
+    let state = State::new(
+        world,
+        Kura::blank_kura_for_testing(),
+        LiveQueryStore::start_test(),
+    );
+    let snapshot = norito::json::to_value(&state).expect("serialize canonical state fixture");
+    deserialize_state_snapshot_value(snapshot)
+        .expect("canonical certificate-only deploy proposal must restore");
+}
+state_test! { sync state_restore_rejects_inexact_governance_proposal_creation_height
+    let maximum = iroha_data_model::parliament_types::FIRST_RELEASE_MAX_EXACT_JSON_U64;
+    let proposal = indexed_deploy_contract_proposal(maximum + 1);
+    let proposal_id = proposal.kind.fingerprint();
+    let mut world = World::default();
+    world.governance_proposals.insert(proposal_id, proposal);
+    let state = State::new(
+        world,
+        Kura::blank_kura_for_testing(),
+        LiveQueryStore::start_test(),
+    );
+    let snapshot = norito::json::to_value(&state).expect("serialize inexact proposal fixture");
+    let error = deserialize_state_snapshot_value(snapshot)
+        .err()
+        .expect("an inexact proposal creation height must fail closed");
+    assert!(
+        error.to_string().contains("exact JSON integer maximum"),
+        "unexpected inexact proposal error: {error}"
+    );
+}
+state_test! { sync state_restore_rejects_inexact_nested_proposal_number
+    use iroha_data_model::governance::types::{ProposalKind, RuntimeUpgradeProposal};
+    let maximum = iroha_data_model::parliament_types::FIRST_RELEASE_MAX_EXACT_JSON_U64;
+    let proposal = GovernanceProposalRecord {
+        proposer: ALICE_ID.clone(),
+        kind: ProposalKind::RuntimeUpgrade(RuntimeUpgradeProposal {
+            manifest: iroha_data_model::runtime::RuntimeUpgradeManifest {
+                name: "hostile restore".to_owned(),
+                description: "inexact runtime height".to_owned(),
+                abi_version: 1,
+                abi_hash: ivm::syscalls::compute_abi_hash(ivm::SyscallPolicy::AbiV1),
+                added_syscalls: Vec::new(),
+                added_pointer_types: Vec::new(),
+                start_height: maximum + 1,
+                end_height: maximum + 2,
+                sbom_digests: Vec::new(),
+                slsa_attestation: Vec::new(),
+                provenance: Vec::new(),
+            },
+        }),
+        created_height: 0,
+        status: GovernanceProposalStatus::Proposed,
+    };
+    let proposal_id = proposal.kind.fingerprint();
+    let mut world = World::default();
+    world.governance_proposals.insert(proposal_id, proposal);
+    let state = State::new(
+        world,
+        Kura::blank_kura_for_testing(),
+        LiveQueryStore::start_test(),
+    );
+    let snapshot = norito::json::to_value(&state).expect("serialize inexact nested proposal");
+    let error = deserialize_state_snapshot_value(snapshot)
+        .err()
+        .expect("an inexact nested proposal number must fail closed");
+    assert!(
+        error.to_string().contains("runtime-upgrade proposal start height"),
+        "unexpected nested proposal error: {error}"
+    );
+}
+state_test! { sync state_restore_rejects_governance_proposal_created_after_committed_height
+    let proposal = indexed_deploy_contract_proposal(1);
+    let proposal_id = proposal.kind.fingerprint();
+    let mut world = World::default();
+    world.governance_proposals.insert(proposal_id, proposal);
+    let state = State::new(
+        world,
+        Kura::blank_kura_for_testing(),
+        LiveQueryStore::start_test(),
+    );
+    let snapshot = norito::json::to_value(&state).expect("serialize future proposal fixture");
+    let error = deserialize_state_snapshot_value(snapshot)
+        .err()
+        .expect("a proposal from beyond the committed ledger must fail closed");
+    assert!(
+        error.to_string().contains("created at future height 1"),
+        "unexpected future proposal error: {error}"
+    );
+}
+state_test! { sync state_restore_rejects_noncanonical_governance_proposal_key
+    let proposal = indexed_deploy_contract_proposal(0);
+    assert_ne!([0xA7; 32], proposal.kind.fingerprint());
+    let mut world = World::default();
+    world.governance_proposals.insert([0xA7; 32], proposal);
+    let state = State::new(
+        world,
+        Kura::blank_kura_for_testing(),
+        LiveQueryStore::start_test(),
+    );
+    let snapshot = norito::json::to_value(&state).expect("serialize miskeyed state fixture");
+    let error = deserialize_state_snapshot_value(snapshot)
+        .err()
+        .expect("a noncanonical governance proposal key must fail closed");
+    assert!(
+        error.to_string().contains("exact typed fingerprint"),
+        "unexpected proposal-key error: {error}"
+    );
+}
+state_test! { sync state_restore_rejects_proposal_backed_legacy_referendum_state
+    let proposal = indexed_deploy_contract_proposal(0);
+    let proposal_id = proposal.kind.fingerprint();
+    let referendum_id = hex::encode(proposal_id);
+    let mut world = World::default();
+    world.governance_proposals.insert(proposal_id, proposal);
+    world.governance_referenda.insert(
+        referendum_id,
+        GovernanceReferendumRecord {
+            h_start: 1,
+            h_end: 20,
+            status: GovernanceReferendumStatus::Proposed,
+            mode: GovernanceReferendumMode::Zk,
+        },
+    );
+    let state = State::new(
+        world,
+        Kura::blank_kura_for_testing(),
+        LiveQueryStore::start_test(),
+    );
+    let snapshot = norito::json::to_value(&state).expect("serialize legacy referendum fixture");
+    let error = deserialize_state_snapshot_value(snapshot)
+        .err()
+        .expect("proposal-backed legacy referendum state must fail closed");
+    assert!(
+        error.to_string().contains("certificate-only governance proposals"),
+        "unexpected legacy-referendum error: {error}"
+    );
+}
+state_test! { sync first_release_governance_state_fields_are_required
+    let state = blank_state();
+    for field in [
+        "elections",
+        "citizens",
+        "ministry_agenda_proposals",
+        "governance_proposals",
+        "governance_referenda",
+        "governance_locks",
+        "governance_slashes",
+        "governance_last_unlock_sweep_height",
+        "governance_unlock_stats",
+        "council",
+        "parliament_bodies",
+        "parliament_attempts",
+        "vrf_epochs",
+    ] {
+        let mut snapshot = norito::json::to_value(&state).expect("serialize state snapshot");
+        let_row! { norito::json::Value::Object(root) = &mut snapshot else { panic!("state snapshot must be an object"); } };
+        let_row! { norito::json::Value::Object(world) = root .get_mut("world") .expect("state snapshot world") else { panic!("world snapshot must be an object"); } };
+        assert!(world.remove(field).is_some(), "canonical state must carry {field}");
+        let error = deserialize_state_snapshot_value(snapshot)
+            .err()
+            .unwrap_or_else(|| panic!("state snapshot without {field} must fail closed"));
+        assert!(
+            error.to_string().contains(field),
+            "unexpected missing-{field} error: {error}"
+        );
+    }
+}
+state_test! { sync first_release_inrou_reachable_state_fields_are_required
+    let state = blank_state();
+    let snapshot = norito::json::to_value(&state).expect("serialize state snapshot");
+    let fields = [
+        "soracloud_service_revisions",
+        "soracloud_service_deployments",
+        "soracloud_app_infra_states",
+        "soracloud_service_runtime",
+        "soracloud_service_audit_events",
+        "soracloud_app_infra_audit_events",
+        "soracloud_training_job_audit_events",
+        "soracloud_model_weight_audit_events",
+        "soracloud_model_artifact_audit_events",
+        "soracloud_hf_shared_lease_audit_events",
+        "soracloud_model_host_violation_evidence",
+        "soracloud_agent_apartment_audit_events",
+        "soracloud_service_state_entries",
+        "soracloud_uploaded_model_bundles",
+        "soracloud_mailbox_messages",
+        "soracloud_runtime_receipts",
+        "soracloud_private_uploaded_model_execution_receipts",
+        "soracloud_inrou_replica_runtime",
+        "soracloud_inrou_host_capabilities",
+        "soracloud_inrou_service_placements",
+    ];
+    deserialize_state_snapshot_value(snapshot.clone())
+        .expect("explicit empty first-release Inrou stores must remain valid");
+    for field in fields {
+        let mut missing = snapshot.clone();
+        let_row! { norito::json::Value::Object(root) = &mut missing else { panic!("state snapshot must be an object"); } };
+        let_row! { norito::json::Value::Object(world) = root .get_mut("world") .expect("state snapshot world") else { panic!("world snapshot must be an object"); } };
+        assert!(world.remove(field).is_some(), "canonical state must carry {field}");
+        let error = deserialize_state_snapshot_value(missing)
+            .err()
+            .unwrap_or_else(|| panic!("state snapshot without {field} must fail closed"));
+        assert!(
+            error.to_string().contains(field),
+            "unexpected missing-{field} error: {error}"
+        );
+    }
+}
+fn sample_snapshot_service_runtime(
+    service_name: Name,
+    load_factor_bps: u16,
+) -> SoraServiceRuntimeStateV1 {
+    SoraServiceRuntimeStateV1 {
+        schema_version: SORA_SERVICE_RUNTIME_STATE_VERSION_V1,
+        service_name,
+        active_service_version: "1.0.0".to_owned(),
+        health_status: SoraServiceHealthStatusV1::Healthy,
+        load_factor_bps,
+        materialized_bundle_hash: Hash::new(b"snapshot-service-runtime-bundle"),
+        rollout_handle: None,
+        pending_mailbox_message_count: 0,
+        last_receipt_id: None,
+    }
+}
+fn sample_snapshot_inrou_replica_runtime(service_name: Name) -> SoraInrouReplicaRuntimeStateV1 {
+    SoraInrouReplicaRuntimeStateV1 {
+        schema_version: SORA_INROU_REPLICA_RUNTIME_STATE_VERSION_V1,
+        service_name,
+        service_version: "1.0.0".to_owned(),
+        replica_slot: 1,
+        validator_account_id: ALICE_ID.clone(),
+        peer_id: PeerId::from(ALICE_KEYPAIR.public_key().clone()).to_string(),
+        selected_guest_isa: SoraInrouGuestIsaV1::Aarch64,
+        health_status: SoraServiceHealthStatusV1::Healthy,
+        load_factor_bps: 250,
+        materialized_bundle_hash: Hash::new(b"snapshot-inrou-replica-bundle"),
+        reporting_epoch: 1,
+        accounted_egress_bytes: 0,
+        pending_mailbox_message_count: 0,
+        last_receipt_id: None,
+        updated_at_ms: 1_000,
+        last_error: None,
+    }
+}
+fn sample_snapshot_training_job_audit_event(
+    sequence: u64,
+) -> iroha_data_model::soracloud::SoraTrainingJobAuditEventV1 {
+    iroha_data_model::soracloud::SoraTrainingJobAuditEventV1 {
+        schema_version: iroha_data_model::soracloud::SORA_TRAINING_JOB_AUDIT_EVENT_VERSION_V1,
+        sequence,
+        action: iroha_data_model::soracloud::SoraTrainingJobActionV1::Checkpoint,
+        service_name: "snapshot_training".parse().expect("valid service name"),
+        service_version: "1.0.0".to_owned(),
+        model_name: "snapshot_model".to_owned(),
+        job_id: "snapshot-job".to_owned(),
+        status: iroha_data_model::soracloud::SoraTrainingJobStatusV1::Completed,
+        completed_steps: 10,
+        checkpoint_count: 1,
+        retry_count: 0,
+        compute_consumed_units: 10,
+        storage_consumed_bytes: 10,
+        last_checkpoint_step: Some(10),
+        latest_metrics_hash: Some(Hash::new(b"snapshot-training-metrics")),
+        last_failure_reason: None,
+        signer: ALICE_KEYPAIR.public_key().clone(),
+    }
+}
+fn sample_snapshot_model_host_violation(
+    sequence: u64,
+) -> iroha_data_model::soracloud::SoraModelHostViolationEvidenceRecordV1 {
+    iroha_data_model::soracloud::SoraModelHostViolationEvidenceRecordV1 {
+        schema_version:
+            iroha_data_model::soracloud::SORA_MODEL_HOST_VIOLATION_EVIDENCE_RECORD_VERSION_V1,
+        evidence_id: Hash::new(b"snapshot-model-host-violation"),
+        sequence,
+        validator_account_id: ALICE_ID.clone(),
+        kind: iroha_data_model::soracloud::SoraModelHostViolationKindV1::AdvertContradiction,
+        placement_id: None,
+        pool_id: None,
+        source_id: None,
+        window_started_at_ms: None,
+        observed_at_ms: 1_000,
+        detail: Some("snapshot contradiction".to_owned()),
+        strike_count: 0,
+        penalty_applied: false,
+        host_evicted: false,
+        slash_id: None,
+    }
+}
+fn sample_snapshot_service_bundle() -> SoraDeploymentBundleV1 {
+    let bundle: SoraDeploymentBundleV1 = norito::json::from_str(include_str!(
+        "../../../../fixtures/soracloud/sora_deployment_bundle_v1.json"
+    ))
+    .expect("decode canonical deployment-bundle fixture");
+    bundle
+        .validate_for_admission()
+        .expect("deployment-bundle fixture remains canonical");
+    bundle
+}
+fn sample_snapshot_mailbox_message(bundle: &SoraDeploymentBundleV1) -> SoraServiceMailboxMessageV1 {
+    let payload_bytes = b"snapshot-mailbox-payload".to_vec();
+    let enqueue_sequence = 1;
+    let delivery_delay_sequences = 2;
+    let retention_sequences = bundle
+        .service
+        .handlers
+        .iter()
+        .find(|handler| handler.handler_name.as_ref() == "update")
+        .and_then(|handler| handler.mailbox.as_ref())
+        .expect("snapshot update mailbox contract")
+        .retention_sequences
+        .get();
+    SoraServiceMailboxMessageV1 {
+        schema_version: SORA_SERVICE_MAILBOX_MESSAGE_VERSION_V1,
+        message_id: Hash::new(b"snapshot-mailbox-message"),
+        from_service: bundle.service.service_name.clone(),
+        from_service_version: bundle.service.service_version.clone(),
+        from_handler: "update".parse().expect("valid source handler"),
+        to_service: bundle.service.service_name.clone(),
+        to_service_version: bundle.service.service_version.clone(),
+        to_handler: "update".parse().expect("valid destination handler"),
+        payload_commitment: Hash::new(&payload_bytes),
+        payload_bytes,
+        delivery_delay_sequences,
+        enqueue_sequence,
+        available_after_sequence: enqueue_sequence + u64::from(delivery_delay_sequences),
+        expires_at_sequence: enqueue_sequence + u64::from(retention_sequences),
+    }
+}
+fn sample_snapshot_mailbox_receipt(
+    bundle: &SoraDeploymentBundleV1,
+    message: &SoraServiceMailboxMessageV1,
+    receipt_id_seed: &[u8],
+    emitted_sequence: u64,
+) -> SoraRuntimeReceiptV1 {
+    SoraRuntimeReceiptV1 {
+        schema_version: SORA_RUNTIME_RECEIPT_VERSION_V1,
+        receipt_id: Hash::new(receipt_id_seed),
+        service_name: bundle.service.service_name.clone(),
+        service_version: bundle.service.service_version.clone(),
+        handler_name: "update".parse().expect("valid receipt handler"),
+        handler_class: SoraServiceHandlerClassV1::Update,
+        request_commitment: message.payload_commitment,
+        result_commitment: Hash::new(b"snapshot-mailbox-result"),
+        certified_by: SoraCertifiedResponsePolicyV1::None,
+        emitted_sequence,
+        execution_host: None,
+        mailbox_message_id: Some(message.message_id),
+        journal_artifact_hash: None,
+        checkpoint_artifact_hash: None,
+    }
+}
+fn sample_snapshot_service_deployment(
+    bundle: &SoraDeploymentBundleV1,
+) -> SoraServiceDeploymentStateV1 {
+    SoraServiceDeploymentStateV1 {
+        schema_version: iroha_data_model::soracloud::SORA_SERVICE_DEPLOYMENT_STATE_VERSION_V1,
+        service_name: bundle.service.service_name.clone(),
+        current_service_version: bundle.service.service_version.clone(),
+        current_service_manifest_hash: bundle.service_manifest_hash(),
+        current_container_manifest_hash: bundle.container_manifest_hash(),
+        revision_count: 1,
+        process_generation: 1,
+        process_started_sequence: 1,
+        config_generation: 0,
+        secret_generation: 0,
+        service_configs: BTreeMap::new(),
+        service_secrets: BTreeMap::new(),
+        fhe_policy_records: BTreeMap::new(),
+        active_rollout: None,
+        last_rollout: None,
+        service_lease: None,
+        lease_volume_states: Vec::new(),
+    }
+}
+fn sample_snapshot_inrou_placement(
+    service_name: Name,
+    service_version: impl Into<String>,
+    validator_account_id: AccountId,
+) -> SoraInrouServicePlacementRecordV1 {
+    SoraInrouServicePlacementRecordV1 {
+        schema_version: iroha_data_model::soracloud::SORA_INROU_SERVICE_PLACEMENT_RECORD_VERSION_V1,
+        service_name,
+        service_version: service_version.into(),
+        desired_replica_count: 1,
+        eligible_validator_count: 1,
+        placements: vec![SoraInrouReplicaPlacementV1 {
+            replica_slot: 1,
+            validator_account_id,
+            peer_id: PeerId::from(ALICE_KEYPAIR.public_key().clone()).to_string(),
+            selected_guest_isa: SoraInrouGuestIsaV1::Aarch64,
+            selected_geography_tag: None,
+            selection_latency_ms: None,
+        }],
+        reconciled_at_ms: 1_000,
+        last_error: None,
+    }
+}
+fn snapshot_state_from_world(world: World) -> State {
+    State::new(
+        world,
+        Kura::blank_kura_for_testing(),
+        LiveQueryStore::start_test(),
+    )
+}
+state_test! { sync inrou_reachable_restore_rejects_invalid_and_miskeyed_runtime_records
+    let service_name: Name = "snapshot_runtime".parse().expect("valid service name");
+
+    let mut malformed_world = World::default();
+    malformed_world.soracloud_service_runtime.insert(
+        service_name.clone(),
+        sample_snapshot_service_runtime(service_name.clone(), 10_001),
+    );
+    let malformed = norito::json::to_value(&snapshot_state_from_world(malformed_world))
+        .expect("serialize malformed runtime snapshot");
+    let error = deserialize_state_snapshot_value(malformed)
+        .err()
+        .expect("restore must validate every generic service-runtime record");
+    assert!(
+        error.to_string().contains("soracloud_service_runtime"),
+        "unexpected malformed-runtime error: {error}"
+    );
+
+    let mut miskeyed_world = World::default();
+    miskeyed_world.soracloud_service_runtime.insert(
+        "foreign_runtime".parse().expect("valid foreign key"),
+        sample_snapshot_service_runtime(service_name.clone(), 250),
+    );
+    let miskeyed = norito::json::to_value(&snapshot_state_from_world(miskeyed_world))
+        .expect("serialize miskeyed runtime snapshot");
+    let error = deserialize_state_snapshot_value(miskeyed)
+        .err()
+        .expect("restore must bind runtime storage keys to embedded service identities");
+    assert!(
+        error.to_string().contains("soracloud_service_runtime"),
+        "unexpected miskeyed-runtime error: {error}"
+    );
+
+    for slot_key in ["not-a-slot", "2"] {
+        let mut replica_world = World::default();
+        replica_world.soracloud_inrou_replica_runtime.insert(
+            (
+                service_name.as_ref().to_owned(),
+                "1.0.0".to_owned(),
+                slot_key.to_owned(),
+            ),
+            sample_snapshot_inrou_replica_runtime(service_name.clone()),
+        );
+        let snapshot = norito::json::to_value(&snapshot_state_from_world(replica_world))
+            .expect("serialize miskeyed replica-runtime snapshot");
+        let error = deserialize_state_snapshot_value(snapshot)
+            .err()
+            .unwrap_or_else(|| panic!("restore must reject replica slot storage key `{slot_key}`"));
+        assert!(
+            error
+                .to_string()
+                .contains("soracloud_inrou_replica_runtime"),
+            "unexpected replica-slot error for `{slot_key}`: {error}"
+        );
+    }
+}
+state_test! { sync service_deployment_restore_requires_exact_admitted_revision_binding
+    let bundle = sample_snapshot_service_bundle();
+    let deployment = sample_snapshot_service_deployment(&bundle);
+
+    let mut canonical_world = World::default();
+    canonical_world.soracloud_service_revisions.insert(
+        (
+            bundle.service.service_name.as_ref().to_owned(),
+            bundle.service.service_version.clone(),
+        ),
+        bundle.clone(),
+    );
+    canonical_world
+        .soracloud_service_deployments
+        .insert(deployment.service_name.clone(), deployment.clone());
+    let canonical = norito::json::to_value(&snapshot_state_from_world(canonical_world))
+        .expect("serialize canonical service-deployment snapshot");
+    deserialize_state_snapshot_value(canonical)
+        .expect("an exact deployment-to-admitted-revision binding must restore");
+
+    let mut missing_revision_world = World::default();
+    let mut foreign_bundle = bundle.clone();
+    foreign_bundle.service.service_version = "foreign-version".to_owned();
+    missing_revision_world.soracloud_service_revisions.insert(
+        (
+            foreign_bundle.service.service_name.as_ref().to_owned(),
+            foreign_bundle.service.service_version.clone(),
+        ),
+        foreign_bundle,
+    );
+    missing_revision_world
+        .soracloud_service_deployments
+        .insert(deployment.service_name.clone(), deployment.clone());
+    let missing_revision =
+        norito::json::to_value(&snapshot_state_from_world(missing_revision_world))
+            .expect("serialize missing-current-revision snapshot");
+    let error = deserialize_state_snapshot_value(missing_revision)
+        .err()
+        .expect("a deployment with no exact current admitted revision must fail closed");
+    assert!(
+        error.to_string().contains("current revision")
+            && error.to_string().contains("soracloud_service_revisions"),
+        "unexpected missing-current-revision error: {error}"
+    );
+
+    let mut hash_mismatch_world = World::default();
+    hash_mismatch_world.soracloud_service_revisions.insert(
+        (
+            bundle.service.service_name.as_ref().to_owned(),
+            bundle.service.service_version.clone(),
+        ),
+        bundle.clone(),
+    );
+    let mut hash_mismatch = deployment.clone();
+    hash_mismatch.current_service_manifest_hash = Hash::new(b"foreign-service-manifest");
+    hash_mismatch_world
+        .soracloud_service_deployments
+        .insert(hash_mismatch.service_name.clone(), hash_mismatch);
+    let hash_mismatch = norito::json::to_value(&snapshot_state_from_world(hash_mismatch_world))
+        .expect("serialize deployment hash-mismatch snapshot");
+    let error = deserialize_state_snapshot_value(hash_mismatch)
+        .err()
+        .expect("deployment manifest hashes must bind to the exact admitted revision");
+    assert!(
+        error.to_string().contains("manifest hashes"),
+        "unexpected deployment-hash error: {error}"
+    );
+
+    let mut count_mismatch_world = World::default();
+    count_mismatch_world.soracloud_service_revisions.insert(
+        (
+            bundle.service.service_name.as_ref().to_owned(),
+            bundle.service.service_version.clone(),
+        ),
+        bundle.clone(),
+    );
+    let mut count_mismatch = deployment;
+    count_mismatch.revision_count = 2;
+    count_mismatch_world
+        .soracloud_service_deployments
+        .insert(count_mismatch.service_name.clone(), count_mismatch);
+    let count_mismatch = norito::json::to_value(&snapshot_state_from_world(count_mismatch_world))
+        .expect("serialize deployment revision-count mismatch snapshot");
+    let error = deserialize_state_snapshot_value(count_mismatch)
+        .err()
+        .expect("deployment revision_count must equal the exact admitted revision count");
+    assert!(
+        error.to_string().contains("revision_count"),
+        "unexpected deployment-count error: {error}"
+    );
+
+    let mut rollout_revision_world = World::default();
+    rollout_revision_world.soracloud_service_revisions.insert(
+        (
+            bundle.service.service_name.as_ref().to_owned(),
+            bundle.service.service_version.clone(),
+        ),
+        bundle.clone(),
+    );
+    let mut rollout_revision = sample_snapshot_service_deployment(&bundle);
+    rollout_revision.last_rollout = Some(
+        iroha_data_model::soracloud::SoraServiceRolloutStateV1 {
+            schema_version:
+                iroha_data_model::soracloud::SORA_SERVICE_ROLLOUT_STATE_VERSION_V1,
+            rollout_handle: "snapshot-rollout".to_owned(),
+            baseline_version: rollout_revision.current_service_version.clone(),
+            candidate_version: "missing-candidate".to_owned(),
+            canary_percent: 20,
+            traffic_percent: 0,
+            stage: iroha_data_model::soracloud::SoraRolloutStageV1::RolledBack,
+            health_failures: 1,
+            max_health_failures: 1,
+            health_window_secs: 30,
+            created_sequence: 1,
+            updated_sequence: 2,
+        },
+    );
+    rollout_revision_world
+        .soracloud_service_deployments
+        .insert(rollout_revision.service_name.clone(), rollout_revision);
+    let rollout_revision =
+        norito::json::to_value(&snapshot_state_from_world(rollout_revision_world))
+            .expect("serialize rollout-without-revision snapshot");
+    let error = deserialize_state_snapshot_value(rollout_revision)
+        .err()
+        .expect("every rollout revision reference must have an admitted bundle");
+    assert!(
+        error
+            .to_string()
+            .contains("last_rollout.candidate_version"),
+        "unexpected rollout-revision error: {error}"
+    );
+}
+state_test! { sync runtime_and_inrou_restore_require_authoritative_references
+    let service_name: Name = "snapshot_runtime_refs".parse().expect("valid service name");
+
+    let mut runtime_world = World::default();
+    runtime_world.soracloud_service_runtime.insert(
+        service_name.clone(),
+        sample_snapshot_service_runtime(service_name.clone(), 250),
+    );
+    let runtime = norito::json::to_value(&snapshot_state_from_world(runtime_world))
+        .expect("serialize runtime-without-deployment snapshot");
+    let error = deserialize_state_snapshot_value(runtime)
+        .err()
+        .expect("runtime state without an authoritative deployment must fail closed");
+    assert!(
+        error.to_string().contains("no authoritative deployment"),
+        "unexpected runtime-reference error: {error}"
+    );
+
+    let bundle = sample_snapshot_service_bundle();
+    let deployment = sample_snapshot_service_deployment(&bundle);
+    let mut runtime_version_world = World::default();
+    runtime_version_world.soracloud_service_revisions.insert(
+        (
+            bundle.service.service_name.as_ref().to_owned(),
+            bundle.service.service_version.clone(),
+        ),
+        bundle.clone(),
+    );
+    runtime_version_world
+        .soracloud_service_deployments
+        .insert(deployment.service_name.clone(), deployment);
+    runtime_version_world.soracloud_service_runtime.insert(
+        bundle.service.service_name.clone(),
+        sample_snapshot_service_runtime(bundle.service.service_name.clone(), 250),
+    );
+    let runtime_version = norito::json::to_value(&snapshot_state_from_world(runtime_version_world))
+        .expect("serialize runtime revision-mismatch snapshot");
+    let error = deserialize_state_snapshot_value(runtime_version)
+        .err()
+        .expect("runtime revision must equal the active authoritative deployment");
+    assert!(
+        error.to_string().contains("must equal its active deployment revision"),
+        "unexpected runtime-version error: {error}"
+    );
+
+    let placement = sample_snapshot_inrou_placement(
+        service_name.clone(),
+        "1.0.0",
+        ALICE_ID.clone(),
+    );
+    let mut placement_world = World::default();
+    placement_world.soracloud_inrou_service_placements.insert(
+        (
+            service_name.as_ref().to_owned(),
+            placement.service_version.clone(),
+        ),
+        placement.clone(),
+    );
+    let missing_revision = norito::json::to_value(&snapshot_state_from_world(placement_world))
+        .expect("serialize placement-without-revision snapshot");
+    let error = deserialize_state_snapshot_value(missing_revision)
+        .err()
+        .expect("Inrou placement without an admitted revision must fail closed");
+    assert!(
+        error.to_string().contains("placement has no admitted bundle"),
+        "unexpected placement-reference error: {error}"
+    );
+
+    let mut replica_without_placement_world = World::default();
+    replica_without_placement_world.soracloud_inrou_replica_runtime.insert(
+        (
+            service_name.as_ref().to_owned(),
+            "1.0.0".to_owned(),
+            "1".to_owned(),
+        ),
+        sample_snapshot_inrou_replica_runtime(service_name.clone()),
+    );
+    let missing_placement =
+        norito::json::to_value(&snapshot_state_from_world(replica_without_placement_world))
+            .expect("serialize replica-without-placement snapshot");
+    let error = deserialize_state_snapshot_value(missing_placement)
+        .err()
+        .expect("replica runtime without an authoritative placement must fail closed");
+    assert!(
+        error.to_string().contains("no authoritative placement record"),
+        "unexpected missing-placement error: {error}"
+    );
+
+    let mismatched_placement =
+        sample_snapshot_inrou_placement(service_name.clone(), "1.0.0", BOB_ID.clone());
+    let mut mismatched_identity_world = World::default();
+    mismatched_identity_world.soracloud_inrou_service_placements.insert(
+        (
+            service_name.as_ref().to_owned(),
+            "1.0.0".to_owned(),
+        ),
+        mismatched_placement,
+    );
+    mismatched_identity_world.soracloud_inrou_replica_runtime.insert(
+        (
+            service_name.as_ref().to_owned(),
+            "1.0.0".to_owned(),
+            "1".to_owned(),
+        ),
+        sample_snapshot_inrou_replica_runtime(service_name),
+    );
+    let mismatched_identity =
+        norito::json::to_value(&snapshot_state_from_world(mismatched_identity_world))
+            .expect("serialize mismatched replica-placement identity snapshot");
+    let error = deserialize_state_snapshot_value(mismatched_identity)
+        .err()
+        .expect("replica runtime identity must exactly match its placement");
+    assert!(
+        error
+            .to_string()
+            .contains("exactly match its authoritative placement assignment"),
+        "unexpected replica-identity error: {error}"
+    );
+}
+state_test! { sync global_clock_source_restore_validates_records_and_sequence_keys
+    let mut miskeyed_world = World::default();
+    miskeyed_world
+        .soracloud_training_job_audit_events
+        .insert(2, sample_snapshot_training_job_audit_event(1));
+    let miskeyed = norito::json::to_value(&snapshot_state_from_world(miskeyed_world))
+        .expect("serialize miskeyed training-audit snapshot");
+    let error = deserialize_state_snapshot_value(miskeyed)
+        .err()
+        .expect("global-clock event storage keys must match embedded sequences");
+    assert!(
+        error
+            .to_string()
+            .contains("soracloud_training_job_audit_events"),
+        "unexpected miskeyed training-audit error: {error}"
+    );
+
+    let mut invalid_event_world = World::default();
+    invalid_event_world
+        .soracloud_training_job_audit_events
+        .insert(0, sample_snapshot_training_job_audit_event(0));
+    let invalid_event = norito::json::to_value(&snapshot_state_from_world(invalid_event_world))
+        .expect("serialize invalid training-audit snapshot");
+    let error = deserialize_state_snapshot_value(invalid_event)
+        .err()
+        .expect("global-clock event records must validate during restore");
+    assert!(
+        error
+            .to_string()
+            .contains("soracloud_training_job_audit_events"),
+        "unexpected invalid training-audit error: {error}"
+    );
+
+    let mut invalid_evidence_world = World::default();
+    let evidence = sample_snapshot_model_host_violation(0);
+    invalid_evidence_world
+        .soracloud_model_host_violation_evidence
+        .insert(evidence.evidence_id, evidence);
+    let invalid_evidence = norito::json::to_value(&snapshot_state_from_world(invalid_evidence_world))
+        .expect("serialize invalid model-host evidence snapshot");
+    let error = deserialize_state_snapshot_value(invalid_evidence)
+        .err()
+        .expect("hash-keyed global-clock evidence must validate its sequence bounds");
+    assert!(
+        error
+            .to_string()
+            .contains("soracloud_model_host_violation_evidence"),
+        "unexpected invalid model-host evidence error: {error}"
+    );
+
+    let mut colliding_world = World::default();
+    colliding_world
+        .soracloud_training_job_audit_events
+        .insert(1, sample_snapshot_training_job_audit_event(1));
+    let evidence = sample_snapshot_model_host_violation(1);
+    colliding_world
+        .soracloud_model_host_violation_evidence
+        .insert(evidence.evidence_id, evidence);
+    let collision = norito::json::to_value(&snapshot_state_from_world(colliding_world))
+        .expect("serialize cross-domain Soracloud sequence collision");
+    let error = deserialize_state_snapshot_value(collision)
+        .err()
+        .expect("one authoritative Soracloud sequence must not name records in two stores");
+    assert!(
+        error.to_string().contains("collides with another Soracloud record"),
+        "unexpected cross-domain sequence collision error: {error}"
+    );
+}
+state_test! { sync service_revision_restore_requires_exact_embedded_identity_key
+    let bundle = sample_snapshot_service_bundle();
+    let mut world = World::default();
+    world.soracloud_service_revisions.insert(
+        (
+            "foreign_service".to_owned(),
+            bundle.service.service_version.clone(),
+        ),
+        bundle,
+    );
+    let snapshot = norito::json::to_value(&snapshot_state_from_world(world))
+        .expect("serialize miskeyed service-revision snapshot");
+    let error = deserialize_state_snapshot_value(snapshot)
+        .err()
+        .expect("service-revision key must match its embedded identity");
+    assert!(
+        error
+            .to_string()
+            .contains("soracloud_service_revisions"),
+        "unexpected miskeyed-service-revision error: {error}"
+    );
+}
+state_test! { sync mailbox_and_receipt_restore_require_exact_ledger_context
+    let bundle = sample_snapshot_service_bundle();
+    let message = sample_snapshot_mailbox_message(&bundle);
+    let receipt = sample_snapshot_mailbox_receipt(&bundle, &message, b"snapshot-mailbox-receipt", 3);
+
+    let mut canonical_world = World::default();
+    canonical_world.soracloud_service_revisions.insert(
+        (
+            bundle.service.service_name.as_ref().to_owned(),
+            bundle.service.service_version.clone(),
+        ),
+        bundle.clone(),
+    );
+    canonical_world
+        .soracloud_mailbox_messages
+        .insert(message.message_id, message.clone());
+    canonical_world
+        .soracloud_runtime_receipts
+        .insert(receipt.receipt_id, receipt.clone());
+    let canonical = norito::json::to_value(&snapshot_state_from_world(canonical_world))
+        .expect("serialize canonical mailbox and receipt snapshot");
+    deserialize_state_snapshot_value(canonical)
+        .expect("exact ledger-derived mailbox and receipt context must restore");
+
+    let mut schedule_world = World::default();
+    schedule_world.soracloud_service_revisions.insert(
+        (
+            bundle.service.service_name.as_ref().to_owned(),
+            bundle.service.service_version.clone(),
+        ),
+        bundle.clone(),
+    );
+    let mut hostile_schedule = message.clone();
+    hostile_schedule.expires_at_sequence -= 1;
+    schedule_world
+        .soracloud_mailbox_messages
+        .insert(hostile_schedule.message_id, hostile_schedule);
+    let hostile = norito::json::to_value(&snapshot_state_from_world(schedule_world))
+        .expect("serialize hostile mailbox schedule snapshot");
+    let error = deserialize_state_snapshot_value(hostile)
+        .err()
+        .expect("restore must recompute the exact mailbox schedule from the admitted contract");
+    assert!(
+        error.to_string().contains("ledger schedule must be exactly derived"),
+        "unexpected mailbox schedule restore error: {error}"
+    );
+
+    let mut duplicate_world = World::default();
+    duplicate_world.soracloud_service_revisions.insert(
+        (
+            bundle.service.service_name.as_ref().to_owned(),
+            bundle.service.service_version.clone(),
+        ),
+        bundle.clone(),
+    );
+    duplicate_world
+        .soracloud_mailbox_messages
+        .insert(message.message_id, message.clone());
+    duplicate_world
+        .soracloud_runtime_receipts
+        .insert(receipt.receipt_id, receipt);
+    let second_receipt =
+        sample_snapshot_mailbox_receipt(&bundle, &message, b"second-snapshot-mailbox-receipt", 4);
+    duplicate_world
+        .soracloud_runtime_receipts
+        .insert(second_receipt.receipt_id, second_receipt);
+    let duplicate = norito::json::to_value(&snapshot_state_from_world(duplicate_world))
+        .expect("serialize duplicate mailbox consumption snapshot");
+    let error = deserialize_state_snapshot_value(duplicate)
+        .err()
+        .expect("one mailbox message must not restore as consumed twice");
+    assert!(
+        error.to_string().contains("must not be consumed by multiple receipts"),
+        "unexpected duplicate mailbox consumption restore error: {error}"
+    );
+}
+fn sample_snapshot_app_infra_state() -> SoraAppInfraStateV1 {
+    let app_name: Name = "snapshot_app".parse().expect("valid app name");
+    let bundle = sample_snapshot_service_bundle();
+    let manifest = SoraAppInfraManifestV1 {
+        schema_version: SORA_APP_INFRA_MANIFEST_VERSION_V1,
+        app_name: app_name.clone(),
+        app_version: "1.0.0".to_owned(),
+        public_url: "https://snapshot-app.example.test".to_owned(),
+        static_site: None,
+        services: vec![SoraAppInfraServiceRefV1 {
+            schema_version: SORA_APP_INFRA_SERVICE_REF_VERSION_V1,
+            service_name: bundle.service.service_name.clone(),
+            service_version: bundle.service.service_version.clone(),
+            service_manifest_hash: bundle.service_manifest_hash(),
+            container_manifest_hash: bundle.container_manifest_hash(),
+            execution_plane: bundle.service.execution_plane,
+            runtime: bundle.container.runtime,
+            routes: Vec::new(),
+            lease_volumes: Vec::new(),
+            shard: None,
+        }],
+    };
+    SoraAppInfraStateV1 {
+        schema_version: SORA_APP_INFRA_STATE_VERSION_V1,
+        app_name,
+        current_app_version: manifest.app_version.clone(),
+        current_manifest_hash: manifest.manifest_hash(),
+        revision_count: 1,
+        deployed_sequence: 1,
+        updated_sequence: 1,
+        manifest,
+    }
+}
+fn insert_snapshot_app_service_references(world: &mut World, app_state: &SoraAppInfraStateV1) {
+    let bundle = sample_snapshot_service_bundle();
+    let service_ref = app_state
+        .manifest
+        .services
+        .first()
+        .expect("snapshot app service reference");
+    assert_eq!(service_ref.service_name, bundle.service.service_name);
+    assert_eq!(service_ref.service_version, bundle.service.service_version);
+    let deployment = sample_snapshot_service_deployment(&bundle);
+    world.soracloud_service_revisions.insert(
+        (
+            bundle.service.service_name.as_ref().to_owned(),
+            bundle.service.service_version.clone(),
+        ),
+        bundle,
+    );
+    world
+        .soracloud_service_deployments
+        .insert(deployment.service_name.clone(), deployment);
+}
+fn sample_snapshot_app_infra_audit_event(state: &SoraAppInfraStateV1) -> SoraAppInfraAuditEventV1 {
+    SoraAppInfraAuditEventV1 {
+        schema_version: SORA_APP_INFRA_AUDIT_EVENT_VERSION_V1,
+        sequence: state.updated_sequence,
+        action: SoraAppInfraActionV1::Deploy,
+        app_name: state.app_name.clone(),
+        from_version: None,
+        to_version: state.current_app_version.clone(),
+        app_manifest_hash: state.current_manifest_hash,
+        service_count: u32::try_from(state.manifest.services.len())
+            .expect("fixture service count fits u32"),
+        signer: ALICE_KEYPAIR.public_key().clone(),
+    }
+}
+state_test! { sync app_infra_restore_rejects_state_without_authoritative_audit_history
+    let mut world = World::default();
+    let app_state = sample_snapshot_app_infra_state();
+    world
+        .soracloud_app_infra_states
+        .insert(app_state.app_name.clone(), app_state);
+    let snapshot = norito::json::to_value(&snapshot_state_from_world(world))
+        .expect("serialize app state without audit history");
+    let error = deserialize_state_snapshot_value(snapshot)
+        .err()
+        .expect("nonempty app state must not restore with an empty audit store");
+    assert!(
+        error
+            .to_string()
+            .contains("soracloud_app_infra_audit_events"),
+        "unexpected missing app-audit error: {error}"
+    );
+}
+state_test! { sync app_infra_restore_requires_exact_audit_sequence_key
+    let mut canonical_world = World::default();
+    let app_state = sample_snapshot_app_infra_state();
+    let audit_event = sample_snapshot_app_infra_audit_event(&app_state);
+    insert_snapshot_app_service_references(&mut canonical_world, &app_state);
+    canonical_world
+        .soracloud_app_infra_states
+        .insert(app_state.app_name.clone(), app_state.clone());
+    canonical_world
+        .soracloud_app_infra_audit_events
+        .insert(audit_event.sequence, audit_event.clone());
+    let canonical = norito::json::to_value(&snapshot_state_from_world(canonical_world))
+        .expect("serialize canonical app-infra snapshot");
+    deserialize_state_snapshot_value(canonical)
+        .expect("exact app state and audit identities must restore");
+
+    let mut missing_service_world = World::default();
+    missing_service_world
+        .soracloud_app_infra_states
+        .insert(app_state.app_name.clone(), app_state.clone());
+    missing_service_world
+        .soracloud_app_infra_audit_events
+        .insert(audit_event.sequence, audit_event.clone());
+    let missing_service = norito::json::to_value(&snapshot_state_from_world(missing_service_world))
+        .expect("serialize app state without referenced service state");
+    let error = deserialize_state_snapshot_value(missing_service)
+        .err()
+        .expect("app service refs require their exact authoritative deployment and revision");
+    assert!(
+        error.to_string().contains("no authoritative deployment"),
+        "unexpected app-service reference error: {error}"
+    );
+
+    let mut miskeyed_world = World::default();
+    miskeyed_world
+        .soracloud_app_infra_states
+        .insert(app_state.app_name.clone(), app_state);
+    miskeyed_world
+        .soracloud_app_infra_audit_events
+        .insert(2, audit_event);
+    let miskeyed = norito::json::to_value(&snapshot_state_from_world(miskeyed_world))
+        .expect("serialize miskeyed app-audit snapshot");
+    let error = deserialize_state_snapshot_value(miskeyed)
+        .err()
+        .expect("app-audit storage key must equal the embedded sequence");
+    assert!(
+        error
+            .to_string()
+            .contains("soracloud_app_infra_audit_events"),
+        "unexpected miskeyed app-audit error: {error}"
+    );
 }
 #[allow(clippy::too_many_lines)]
 fn indexed_settled_vpn_lease(
@@ -32173,7 +33675,9 @@ fn indexed_settled_vpn_lease(
 ) -> VpnLeaseRecordV1 {
     use iroha_data_model::soranet::vpn::{
         VpnExitClassV1, VpnQuoteBodyV1, VpnQuotePolicyV1, VpnSessionReceiptV1, VpnSignedQuoteV1,
-        VpnTariffV1,
+        VpnSignedSessionReceiptV1, VpnTariffV1, VpnUsageVoucherBodyV1, VpnUsageVoucherV1,
+        derive_vpn_address_plan_v1, derive_vpn_lease_id_v1, derive_vpn_session_id_v1,
+        vpn_tariff_meter_hash_v1,
     };
     let mut quote_id = [0_u8; 32];
     quote_id[0] = account_tag;
@@ -32182,14 +33686,25 @@ fn indexed_settled_vpn_lease(
     let lease_id = derive_vpn_lease_id_v1(network_id, quote_id, client);
     let session_id = derive_vpn_session_id_v1(network_id, quote_id, client, address_slot);
     let operator_account_id = AccountId::new(operator_key.public_key().clone());
+    let_row! { relay_key = KeyPair::try_from_seed( vec![account_tag.wrapping_add(0xA0); 32], Algorithm::Ed25519, ) .expect("deterministic VPN relay key") };
+    let_row! { (relay_algorithm, relay_public_key) = relay_key.public_key().try_to_bytes().expect("fixture relay key") };
+    assert_eq!(relay_algorithm, Algorithm::Ed25519);
+    let mut relay_id = [0_u8; 32];
+    relay_id.copy_from_slice(relay_public_key);
     let_row! { asset_definition = AssetDefinitionId::derive_from_components( DomainId::parse_fully_qualified("universal.universal").expect("XOR domain"), "xor".parse().expect("XOR asset name"), ) };
     let_row! { custody_account_id = crate::smartcontracts::isi::vpn::vpn_lease_custody_account_id( network_id, &lease_id, &asset_definition, ) .expect("fixture VPN custody account") };
     let_row! { tariff = VpnTariffV1 { lease_fee: Quantity::from(10_u32), active_fee_per_minute: Quantity::from(1_u32), ingress_fee_per_mib: Quantity::from(1_u32), egress_fee_per_mib: Quantity::from(1_u32), } };
-    let_row! { policy = VpnQuotePolicyV1 { exit_class: VpnExitClassV1::Standard, relay_endpoint: "/dns/restart.test/udp/9443/quic".to_owned(), relay_id: [account_tag.wrapping_add(0x20); 32], descriptor_commit: [account_tag.wrapping_add(0x30); 32], tls_server_name: "restart.test".to_owned(), relay_tls_spki_sha256: [account_tag.wrapping_add(0x40); 32], relay_certificate_sha256: [account_tag.wrapping_add(0x50); 32], directory_snapshot_digest: [account_tag.wrapping_add(0x60); 32], relay_trust_valid_until_ms: 1_002_000, lease_secs: 1_000, meter_family: "soranet.vpn.restart".to_owned(), fee_asset_id: asset_definition.to_string(), escrow_account_id: custody_account_id.clone(), route_pushes: vec!["0.0.0.0/0".to_owned()], excluded_routes: Vec::new(), dns_servers: vec!["1.1.1.1".to_owned()], tunnel_addresses: derive_vpn_address_plan_v1(address_slot).client_tunnel_addresses, mtu_bytes: 1_280, flow_label_bits: 24, padding_budget_ms: 15, } };
+    let_row! { policy = VpnQuotePolicyV1 { exit_class: VpnExitClassV1::Standard, relay_endpoint: "/dns/restart.test/udp/9443/quic".to_owned(), relay_id, descriptor_commit: [account_tag.wrapping_add(0x30); 32], tls_server_name: "restart.test".to_owned(), relay_tls_spki_sha256: [account_tag.wrapping_add(0x40); 32], relay_certificate_sha256: [account_tag.wrapping_add(0x50); 32], directory_snapshot_digest: [account_tag.wrapping_add(0x60); 32], relay_trust_valid_until_ms: 1_002_000, lease_secs: 1_000, meter_family: "soranet.vpn.restart".to_owned(), fee_asset_id: asset_definition.to_string(), escrow_account_id: custody_account_id.clone(), route_pushes: vec!["0.0.0.0/0".to_owned()], excluded_routes: Vec::new(), dns_servers: vec!["1.1.1.1".to_owned()], tunnel_addresses: derive_vpn_address_plan_v1(address_slot).client_tunnel_addresses, mtu_bytes: 1_280, flow_label_bits: 24, padding_budget_ms: 15, } };
     let_row! { signed_quote = VpnSignedQuoteV1::try_sign( VpnQuoteBodyV1 { network_id: *network_id, quote_id, lease_id, session_id, address_slot, client_account_id: client.clone(), operator_account_id: operator_account_id.clone(), metering_public_key: operator_key.public_key().clone(), asset_definition: asset_definition.clone(), tariff: tariff.clone(), policy: policy.clone(), valid_after_ms: 1_000, expires_at_ms: 1_001_000, settlement_grace_ms: 60_000, }, operator_key.private_key(), ) .expect("sign fixture VPN quote") };
     let_row! { settled_at_ms = 10_000_u64 .checked_add(u64::from(account_tag) * 1_000) .and_then(|base| base.checked_add(u64::from(ordinal))) .expect("fixture VPN settlement timestamp") };
     let open_tx_hash = quote_id;
-    let_row! { receipt = VpnSessionReceiptV1 { session_id, quote_id, payment_tx_hash: open_tx_hash, account_hash: *blake3::hash(client.to_string().as_bytes()).as_bytes(), relay_id: policy.relay_id, ingress_bytes: u64::from(ordinal), egress_bytes: u64::from(ordinal), cover_bytes: 0, uptime_secs: 1, started_at_ms: 2_000, ended_at_ms: settled_at_ms, exit_class: policy.exit_class, meter_hash: [account_tag.wrapping_add(0x70); 32], earned_fee: Quantity::from(1_u32), highest_voucher_sequence: u64::from(ordinal) + 1, client_voucher_hash: quote_id, } };
+    let active_ms = settled_at_ms - 2_000;
+    let_row! { voucher_body = VpnUsageVoucherBodyV1 { session_id, quote_id, relay_id: policy.relay_id, sequence: u64::from(ordinal) + 1, ingress_bytes: u64::from(ordinal), egress_bytes: u64::from(ordinal), active_ms, issued_at_ms: settled_at_ms, } };
+    let_row! { voucher = VpnUsageVoucherV1::try_sign(voucher_body, operator_key.private_key()) .expect("sign fixture client voucher") };
+    let_row! { earned_fee = tariff .fee_for_usage(voucher_body.ingress_bytes, voucher_body.egress_bytes, active_ms) .expect("fixture VPN tariff arithmetic") };
+    let_row! { receipt_body = VpnSessionReceiptV1 { session_id, quote_id, payment_tx_hash: open_tx_hash, account_hash: iroha_data_model::soranet::vpn::vpn_account_hash_v1(client), relay_id: policy.relay_id, ingress_bytes: voucher_body.ingress_bytes, egress_bytes: voucher_body.egress_bytes, cover_bytes: 0, uptime_secs: u32::try_from(active_ms.div_ceil(1_000)).expect("fixture VPN uptime"), started_at_ms: 2_000, ended_at_ms: settled_at_ms, exit_class: policy.exit_class, meter_hash: vpn_tariff_meter_hash_v1(&tariff), earned_fee: earned_fee.clone(), highest_voucher_sequence: voucher_body.sequence, client_voucher_hash: voucher.hash(), } };
+    let_row! { receipt = VpnSignedSessionReceiptV1::try_sign(receipt_body, relay_key.private_key()) .expect("sign fixture relay receipt") };
+    let_row! { refunded_fee = tariff .lease_fee .checked_sub(&earned_fee) .expect("fixture VPN fee conservation") };
     let relay_receipt_hash = receipt.hash();
     VpnLeaseRecordV1 {
         lease_id,
@@ -32213,12 +33728,13 @@ fn indexed_settled_vpn_lease(
         settlement_grace_ms: 60_000,
         settled_at_ms: Some(settled_at_ms),
         refunded_at_ms: None,
-        highest_voucher_sequence: receipt.highest_voucher_sequence,
-        client_voucher_hash: Some(receipt.client_voucher_hash),
+        highest_voucher_sequence: voucher.body.sequence,
+        client_voucher_hash: Some(voucher.hash()),
+        settled_client_voucher: Some(voucher),
         relay_receipt_hash: Some(relay_receipt_hash),
         settled_relay_receipt: Some(receipt),
-        earned_fee: Quantity::from(1_u32),
-        refunded_fee: Quantity::from(9_u32),
+        earned_fee: earned_fee.clone(),
+        refunded_fee,
     }
 }
 state_test! { sync vpn_lease_projection_rejects_a_foreign_exact_network
@@ -32557,12 +34073,12 @@ state_test! { sync block_sweeps_expired_governance_locks_and_records_height
                 expiry_height: 5,
                 direction: 0,
                 duration_blocks: 0,
-                custody: Some(GovernanceLockCustody {
+                custody: GovernanceLockCustody {
                     escrowed: false,
                     asset_definition_id: state.gov.voting_asset_id.clone(),
                     bond_escrow_account: state.gov.bond_escrow_account.clone(),
                     slash_receiver_account: state.gov.slash_receiver_account.clone(),
-                }),
+                },
             },
         );
         world_block.put_governance_locks(referendum_id.clone(), locks);
@@ -32609,7 +34125,7 @@ state_test! { sync block_retains_expired_governance_lock_when_atomic_release_fai
                 expiry_height: 5,
                 direction: 0,
                 duration_blocks: 0,
-                custody: Some(custody),
+                custody,
             },
         );
         world_block.put_governance_locks(referendum_id.clone(), locks);
@@ -32668,12 +34184,12 @@ state_test! { sync block_releases_expired_governance_lock_through_stored_custody
                 expiry_height: 5,
                 direction: 0,
                 duration_blocks: 0,
-                custody: Some(GovernanceLockCustody {
+                custody: GovernanceLockCustody {
                     escrowed: true,
                     asset_definition_id: old_definition_id,
                     bond_escrow_account: old_escrow,
                     slash_receiver_account: live_escrow,
-                }),
+                },
             },
         );
         world_block.put_governance_locks(referendum_id.clone(), locks);
@@ -32731,12 +34247,12 @@ state_test! { sync block_removes_expired_fully_slashed_governance_lock_without_s
                 expiry_height: 5,
                 direction: 0,
                 duration_blocks: 0,
-                custody: Some(GovernanceLockCustody {
+                custody: GovernanceLockCustody {
                     escrowed: true,
                     asset_definition_id: state.gov.voting_asset_id.clone(),
                     bond_escrow_account: state.gov.bond_escrow_account.clone(),
                     slash_receiver_account: state.gov.slash_receiver_account.clone(),
-                }),
+                },
             },
         );
         world_block.put_governance_locks(referendum_id.clone(), locks);
@@ -32773,12 +34289,12 @@ state_test! { sync block_does_not_advance_sweep_marker_after_partial_release_fai
                 expiry_height: 5,
                 direction: 0,
                 duration_blocks: 0,
-                custody: Some(GovernanceLockCustody {
+                custody: GovernanceLockCustody {
                     escrowed: false,
                     asset_definition_id: state.gov.voting_asset_id.clone(),
                     bond_escrow_account: state.gov.bond_escrow_account.clone(),
                     slash_receiver_account: state.gov.slash_receiver_account.clone(),
-                }),
+                },
             },
         );
         locks.locks.insert(
@@ -32790,12 +34306,12 @@ state_test! { sync block_does_not_advance_sweep_marker_after_partial_release_fai
                 expiry_height: 5,
                 direction: 0,
                 duration_blocks: 0,
-                custody: Some(GovernanceLockCustody {
+                custody: GovernanceLockCustody {
                     escrowed: true,
                     asset_definition_id: state.gov.voting_asset_id.clone(),
                     bond_escrow_account: state.gov.bond_escrow_account.clone(),
                     slash_receiver_account: state.gov.slash_receiver_account.clone(),
-                }),
+                },
             },
         );
         world_block.put_governance_locks(referendum_id.clone(), locks);

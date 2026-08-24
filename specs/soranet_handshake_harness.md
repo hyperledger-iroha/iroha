@@ -57,7 +57,7 @@ and CLI entry points wired into `cargo xtask soranet-fixtures`.
 - `fixtures/soranet_handshake/telemetry/*.norito.json` — DowngradeAlarmReportV1 and
   SoraNetTelemetryV1 payloads emitted by the CLI with deterministic Dilithium3 + Ed25519
   signatures (derived from the fixture signing key).
-- `fixtures/soranet_handshake/interop/{rust,go,cpp}/snnet-interop-nk{2,3}-v1.json` — deterministic NK2/NK3 handshake vectors shared with Rust/Go/C++ SDKs (session keys, transcript hashes, confirmation tags).
+- `fixtures/soranet_handshake/interop/{rust,go,cpp}/snnet-interop-nk{2,3}-v1.json` — deterministic NK2/NK3 handshake vectors shared with Rust/Go/C++ SDKs (session keys, transcript hashes, confirmation tags, and relay responses carrying the tagged V1 identity key).
 - CI job invoking the harness via `cargo xtask soranet-fixtures --verify` to
   compare hashes against expected values (to be wired in once signing is ready).
 

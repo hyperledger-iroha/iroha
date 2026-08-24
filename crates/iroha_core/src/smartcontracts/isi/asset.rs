@@ -3006,11 +3006,7 @@ pub mod isi {
                             "governance slash capability has no retained lock".into(),
                         )
                     })?;
-                let custody = record.custody.as_ref().ok_or_else(|| {
-                    InstructionExecutionError::InvariantViolation(
-                        "governance slash requires immutable retained custody".into(),
-                    )
-                })?;
+                let custody = &record.custody;
                 let expected_source = AssetId::new(
                     custody.asset_definition_id.clone(),
                     custody.bond_escrow_account.clone(),
@@ -3059,11 +3055,7 @@ pub mod isi {
                             "governance restitution capability has no retained lock".into(),
                         )
                     })?;
-                let custody = record.custody.as_ref().ok_or_else(|| {
-                    InstructionExecutionError::InvariantViolation(
-                        "governance restitution requires immutable retained custody".into(),
-                    )
-                })?;
+                let custody = &record.custody;
                 let expected_source = AssetId::new(
                     custody.asset_definition_id.clone(),
                     custody.slash_receiver_account.clone(),
@@ -3213,11 +3205,7 @@ pub mod isi {
                     "governance unlock capability has no retained lock".into(),
                 )
             })?;
-        let custody = record.custody.as_ref().ok_or_else(|| {
-            InstructionExecutionError::InvariantViolation(
-                "governance unlock requires immutable retained custody".into(),
-            )
-        })?;
+        let custody = &record.custody;
         let expected_source = AssetId::new(
             custody.asset_definition_id.clone(),
             custody.bond_escrow_account.clone(),

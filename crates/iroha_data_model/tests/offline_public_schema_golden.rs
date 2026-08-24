@@ -83,7 +83,7 @@ fn public_kagemusha_release_provenance_schemas_are_frozen_for_abi21_v4() {
 fn public_kagemusha_internal_validation_receipt_schema_is_frozen_for_first_release() {
     assert_eq!(
         structural_schema_hash::<KagemushaRecursiveSpendInternalValidationReceiptV1>(),
-        "9ad983992795962ef209246008597b53"
+        "1033ca4e95d00e51a54c72812ba2bbed"
     );
 }
 

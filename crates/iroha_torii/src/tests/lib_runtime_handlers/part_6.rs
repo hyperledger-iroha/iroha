@@ -1234,8 +1234,6 @@ fn sample_soracloud_runtime_snapshot(
                     "/tmp/soracloud/runtime/web_portal/1.0.0/config_exports".to_string(),
                 secret_envelopes_materialization_dir:
                     "/tmp/soracloud/runtime/web_portal/1.0.0/secret_envelopes".to_string(),
-                secret_payload_materialization_dir:
-                    "/tmp/soracloud/runtime/secrets/web_portal/1.0.0".to_string(),
                 lease_volumes: Vec::new(),
                 mailboxes: vec![],
                 artifacts: vec![
@@ -1605,6 +1603,8 @@ fn seed_generated_hf_public_world(primary_peer_id: &str) -> (World, String, Stri
                 required_model_bytes: 1_024,
                 backend_family: SoraHfBackendFamilyV1::Transformers,
                 model_format: SoraHfModelFormatV1::Safetensors,
+                selected_weight_file_count: 1,
+                weight_selection_commitment: Hash::new(b"generated-hf-weight-selection"),
                 disk_cache_bytes_floor: 2_048,
                 ram_bytes_floor: 2_048,
                 vram_bytes_floor: 0,
@@ -1697,10 +1697,6 @@ fn hosted_http_runtime_plan(
             .to_string(),
         secret_envelopes_materialization_dir: materialization_dir
             .join("secret_envelopes")
-            .display()
-            .to_string(),
-        secret_payload_materialization_dir: materialization_dir
-            .join("secret_payloads")
             .display()
             .to_string(),
         lease_volumes: Vec::new(),
@@ -1801,13 +1797,11 @@ fn seed_authoritative_hosted_http_revision(
                         iroha_data_model::soracloud::SORA_INROU_HOST_CAPABILITY_RECORD_VERSION_V1,
                     validator_account_id: validator_account_id.clone(),
                     peer_id: peer_id.clone(),
-                    supported_backends: std::collections::BTreeSet::from([
-                        iroha_data_model::soracloud::SoraInrouRuntimeBackendV1::PortableVm,
-                    ]),
                     supported_guest_isas: std::collections::BTreeSet::from([
                         iroha_data_model::soracloud::SoraInrouGuestIsaV1::X8664,
                     ]),
-                    max_hosted_replica_capacity: desired_replica_count.max(1),
+                    max_hosted_replica_capacity:
+                        iroha_data_model::soracloud::SORA_INROU_HOSTED_REPLICA_CAPACITY_V1,
                     max_cpu_millis: u32::MAX,
                     max_memory_bytes: u64::MAX,
                     max_storage_bytes: u64::MAX,
@@ -1826,8 +1820,6 @@ fn seed_authoritative_hosted_http_revision(
                     replica_slot: *replica_slot,
                     validator_account_id: validator_account_id.clone(),
                     peer_id: peer_id.clone(),
-                    selected_backend:
-                        iroha_data_model::soracloud::SoraInrouRuntimeBackendV1::PortableVm,
                     selected_guest_isa: iroha_data_model::soracloud::SoraInrouGuestIsaV1::X8664,
                     selected_geography_tag: None,
                     selection_latency_ms: None,
@@ -1873,11 +1865,11 @@ fn seed_authoritative_hosted_http_revision(
                     replica_slot: *replica_slot,
                     validator_account_id: validator_account_id.clone(),
                     peer_id: peer_id.clone(),
-                    selected_backend: placement.selected_backend,
                     selected_guest_isa: placement.selected_guest_isa,
                     health_status: *health_status,
                     load_factor_bps: 0,
                     materialized_bundle_hash: bundle.container.bundle_hash,
+                    reporting_epoch: 1,
                     accounted_egress_bytes: 0,
                     pending_mailbox_message_count: 0,
                     last_receipt_id: None,
@@ -1927,10 +1919,7 @@ fn seed_public_hosted_http_rollout_app_with_service_lease(
             Some("http://127.0.0.1:18081"),
             Some(201),
         )],
-        Some(
-            checked_torii_test_peer_id(0x3e, "derive hosted-http rollout peer fixture key")
-                .to_string(),
-        ),
+        Some(hosted_http_rollout_local_peer_id().to_string()),
         service_lease,
     )
 }
@@ -1947,10 +1936,7 @@ fn seed_public_hosted_http_rollout_app_with_local_replicas(
         candidate_health,
         baseline_local_replicas,
         candidate_local_replicas,
-        Some(
-            checked_torii_test_peer_id(0x3e, "derive hosted-http rollout peer fixture key")
-                .to_string(),
-        ),
+        Some(hosted_http_rollout_local_peer_id().to_string()),
         Some(hosted_http_service_lease_state(
             iroha_data_model::soracloud::SoraServiceLeaseStatusV1::Active,
             "50".parse().expect("runtime balance"),
@@ -1974,10 +1960,15 @@ fn hosted_http_service_lease_state(
         egress_price_per_mib: "0.000005".parse().expect("egress price"),
         lease_started_sequence: 1,
         lease_expires_sequence,
-        last_billed_sequence: 1,
+        reporting_epoch: 1,
+        settled_egress_bytes: 0,
+        egress_reporter_checkpoints: Vec::new(),
         accounted_egress_bytes: 0,
         last_status_reason: None,
     }
+}
+fn hosted_http_rollout_local_peer_id() -> PeerId {
+    checked_torii_test_peer_id(0x3e, "derive hosted-http rollout peer fixture key")
 }
 fn seed_public_hosted_http_rollout_app_with_local_replicas_and_snapshot_peer_id(
     temp: &tempfile::TempDir,
@@ -2084,8 +2075,7 @@ fn seed_public_hosted_http_rollout_app_with_local_replicas_and_snapshot_peer_id(
         );
     let local_validator_account_id =
         checked_torii_test_account_id(0x3d, "derive hosted-http rollout validator fixture key");
-    let local_peer_id =
-        checked_torii_test_peer_id(0x3e, "derive hosted-http rollout peer fixture key");
+    let local_peer_id = hosted_http_rollout_local_peer_id();
     let baseline_assignments = baseline_local_replicas
         .iter()
         .map(|replica| {
@@ -2193,7 +2183,7 @@ where
     }
     panic!("failed to find a rollout bucket match for hosted-http routing test");
 }
-fn hosted_http_replica_test_ip<P>(
+fn hosted_http_baseline_replica_test_ip<P>(
     service_name: &str,
     service_version: &str,
     method: &HttpMethod,
@@ -2205,6 +2195,9 @@ where
 {
     for octet in 1..=254 {
         let ip = IpAddr::from([198, 51, 100, octet]);
+        if super::hosted_http_rollout_bucket(service_name, Some(ip), method, uri) < 20 {
+            continue;
+        }
         let digest = super::hosted_http_request_hash(
             "soracloud:hosted-http-replica:v1",
             service_name,
@@ -2223,10 +2216,7 @@ where
 #[derive(Clone, Copy)]
 enum PublicLocalReadRouteCase {
     Direct,
-    SoradnsPath,
     TairaMonHost,
-    SoradnsRoot,
-    SoradnsNonSora,
 }
 struct PublicLocalReadRouteSpec {
     state_dir: &'static str,
@@ -2236,7 +2226,6 @@ struct PublicLocalReadRouteSpec {
     artifact_hash_seed: Option<&'static [u8]>,
     result_seed: &'static [u8],
     certified_by: iroha_data_model::soracloud::SoraCertifiedResponsePolicyV1,
-    route_host: Option<&'static str>,
     bound_alias: Option<&'static str>,
     request_uri: &'static str,
     request_host: &'static str,
@@ -2251,19 +2240,12 @@ fn public_local_read_route_spec(case: PublicLocalReadRouteCase) -> PublicLocalRe
         artifact_hash_seed: Some(b"asset-hash"),
         result_seed: b"result",
         certified_by: SoraCertifiedResponsePolicyV1::StateCommitment,
-        route_host: None,
         bound_alias: None,
         request_uri: "/app/assets",
         request_host: "portal.sora",
     };
     match case {
         PublicLocalReadRouteCase::Direct => {}
-        PublicLocalReadRouteCase::SoradnsPath => {
-            spec.state_dir = "/tmp/test-soradns-public-runtime";
-            spec.bound_alias = Some("portal.sora");
-            spec.request_uri = "/soradns/portal.sora/app/assets?fresh=1";
-            spec.request_host = "taira.sora.org";
-        }
         PublicLocalReadRouteCase::TairaMonHost => {
             spec.state_dir = "/tmp/test-taira-mon-public-runtime";
             spec.response_bytes = b"mon-asset-body";
@@ -2272,32 +2254,6 @@ fn public_local_read_route_spec(case: PublicLocalReadRouteCase) -> PublicLocalRe
             spec.bound_alias = Some("portal.sora");
             spec.request_uri = "/app/assets?fresh=1";
             spec.request_host = "portal.sora.mon.taira.sora.net:443";
-        }
-        PublicLocalReadRouteCase::SoradnsRoot => {
-            spec.state_dir = "/tmp/test-soradns-public-root";
-            spec.response_bytes = b"docs-root";
-            spec.content_type = "text/plain";
-            spec.cache_control = None;
-            spec.artifact_hash_seed = None;
-            spec.result_seed = b"docs-root-result";
-            spec.certified_by = SoraCertifiedResponsePolicyV1::None;
-            spec.route_host = Some("docs.sora");
-            spec.bound_alias = Some("docs.sora");
-            spec.request_uri = "/soradns/docs.sora";
-            spec.request_host = "taira.sora.org";
-        }
-        PublicLocalReadRouteCase::SoradnsNonSora => {
-            spec.state_dir = "/tmp/test-soradns-public-dao";
-            spec.response_bytes = b"dao-alias";
-            spec.content_type = "text/plain";
-            spec.cache_control = None;
-            spec.artifact_hash_seed = None;
-            spec.result_seed = b"dao-alias-result";
-            spec.certified_by = SoraCertifiedResponsePolicyV1::None;
-            spec.route_host = Some("portal.dao");
-            spec.bound_alias = Some("portal.dao");
-            spec.request_uri = "/soradns/portal.dao/app/assets";
-            spec.request_host = "taira.sora.org";
         }
     }
     assert_eq!(
@@ -2392,13 +2348,9 @@ async fn run_public_local_read_route_case(case: PublicLocalReadRouteCase) {
     if let Some(alias) = spec.bound_alias {
         bind_domain_name_for_test(&app, alias);
     }
-    let router = if spec.bound_alias.is_some() {
-        soradns_public_alias_router(app)
-    } else {
-        axum::Router::new()
-            .fallback(any(handler_soracloud_public_local_read))
-            .with_state(app)
-    };
+    let router = axum::Router::new()
+        .fallback(any(handler_soracloud_public_local_read))
+        .with_state(app);
     let response = router
         .oneshot(
             axum::http::Request::builder()
@@ -2428,25 +2380,12 @@ async fn run_public_local_read_route_case(case: PublicLocalReadRouteCase) {
             assert_eq!(captured[0].request_path, "/app/assets");
             assert_eq!(captured[0].handler_path, "/");
         }
-        PublicLocalReadRouteCase::SoradnsPath | PublicLocalReadRouteCase::TairaMonHost => {
+        PublicLocalReadRouteCase::TairaMonHost => {
             assert_eq!(captured[0].request_path, "/app/assets");
             assert_eq!(captured[0].request_query.as_deref(), Some("fresh=1"));
             assert_eq!(
                 captured[0].request_headers.get("host").map(String::as_str),
                 Some("portal.sora")
-            );
-        }
-        PublicLocalReadRouteCase::SoradnsRoot => {
-            assert_eq!(captured[0].request_path, "/");
-            assert_eq!(
-                captured[0].request_headers.get("host").map(String::as_str),
-                Some("docs.sora")
-            );
-        }
-        PublicLocalReadRouteCase::SoradnsNonSora => {
-            assert_eq!(
-                captured[0].request_headers.get("host").map(String::as_str),
-                Some("portal.dao")
             );
         }
     }
@@ -2456,48 +2395,17 @@ async fn soracloud_public_local_read_route_invokes_runtime_with_authoritative_co
     run_public_local_read_route_case(PublicLocalReadRouteCase::Direct).await;
 }
 #[tokio::test]
-async fn soradns_public_alias_gateway_routes_local_read_requests() {
-    run_public_local_read_route_case(PublicLocalReadRouteCase::SoradnsPath).await;
-}
-#[tokio::test]
 async fn taira_mon_gateway_host_routes_local_read_requests() {
     run_public_local_read_route_case(PublicLocalReadRouteCase::TairaMonHost).await;
 }
 #[tokio::test]
-async fn soradns_public_alias_gateway_maps_empty_tail_to_root_path() {
-    run_public_local_read_route_case(PublicLocalReadRouteCase::SoradnsRoot).await;
-}
-#[tokio::test]
-async fn soradns_public_alias_gateway_rejects_invalid_aliases() {
+async fn path_encoded_soradns_alias_is_not_routed() {
     use tower::ServiceExt as _;
     let app = mk_app_state_for_tests_with_world(seed_public_soracloud_world());
-    let router = soradns_public_alias_router(app);
-    let response = router
-        .oneshot(
-            axum::http::Request::builder()
-                .uri("/soradns/bad%20name.sora/app/assets")
-                .header(axum::http::header::HOST, "taira.sora.org")
-                .extension(crate::loopback_connect_info())
-                .body(Body::empty())
-                .expect("request"),
-        )
-        .await
-        .expect("response");
-    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
-}
-#[tokio::test]
-async fn soradns_public_alias_gateway_rejects_inactive_aliases() {
-    use tower::ServiceExt as _;
-    let app = mk_app_state_for_tests_with_world(seed_public_soracloud_world());
-    bind_domain_name_for_test_with_status(
-        &app,
-        "portal.sora",
-        iroha_data_model::sns::NameStatus::Frozen(iroha_data_model::sns::NameFrozenStateV1 {
-            reason: "guardian hold".to_owned(),
-            until_ms: u64::MAX,
-        }),
-    );
-    let router = soradns_public_alias_router(app);
+    bind_domain_name_for_test(&app, "portal.sora");
+    let router = axum::Router::new()
+        .fallback(any(handler_soracloud_public_local_read))
+        .with_state(app);
     let response = router
         .oneshot(
             axum::http::Request::builder()
@@ -2510,10 +2418,6 @@ async fn soradns_public_alias_gateway_rejects_inactive_aliases() {
         .await
         .expect("response");
     assert_eq!(response.status(), StatusCode::NOT_FOUND);
-}
-#[tokio::test]
-async fn soradns_public_alias_gateway_accepts_non_sora_alias_hosts() {
-    run_public_local_read_route_case(PublicLocalReadRouteCase::SoradnsNonSora).await;
 }
 #[derive(Clone, Copy)]
 enum TravelSplitVaultMode {

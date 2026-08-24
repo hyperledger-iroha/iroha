@@ -28,7 +28,7 @@ TRACKED_NATIVE_EXTENSIONS="$(
     'python/iroha_python/src/iroha_python/*.dll'
 )"
 if [[ -n "${TRACKED_NATIVE_EXTENSIONS}" ]]; then
-  echo "error: Python native SDK artifacts must be rebuilt in the ABI-22 lane, not tracked:" >&2
+  echo "error: Python native SDK artifacts must be rebuilt in the ABI-23 lane, not tracked:" >&2
   printf '%s\n' "${TRACKED_NATIVE_EXTENSIONS}" >&2
   exit 1
 fi

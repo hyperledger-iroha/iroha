@@ -19,15 +19,15 @@ use iroha_data_model::{
         SoraHfPlacementRecordV1, SoraHfPlacementStatusV1, SoraHfSharedLeaseMemberStatusV1,
         SoraHfSharedLeaseStatusV1, SoraHfSourceStatusV1, SoraHttpServiceEconomicsV1,
         SoraInrouGuestIsaV1, SoraInrouGuestOsV1, SoraInrouReplicaPlacementV1,
-        SoraInrouRuntimeBackendV1, SoraInrouServicePlacementRecordV1, SoraLeaseVolumeKindV1,
-        SoraLifecycleHooksV1, SoraNetworkAllowlistEntryV1, SoraNetworkPolicyV1,
-        SoraPrivateModelArtifactRefV1, SoraPrivateUploadedModelExecutionReceiptV1,
-        SoraResourceLimitsV1, SoraRolloutPolicyV1, SoraRouteTargetV1, SoraRouteVisibilityV1,
-        SoraRuntimeReceiptV1, SoraServiceDeploymentStateV1, SoraServiceExecutionPlaneV1,
-        SoraServiceHandlerClassV1, SoraServiceHandlerV1, SoraServiceHealthStatusV1,
-        SoraServiceLeaseStatusV1, SoraServiceMailboxMessageV1, SoraServiceManifestV1,
-        SoraServiceRuntimeStateV1, SoraStateEncryptionV1, SoraStateMutationOperationV1,
-        SoraTlsModeV1, SoraUploadedModelBundleV1, SoraUploadedModelKeyEncapsulationV1,
+        SoraInrouServicePlacementRecordV1, SoraLeaseVolumeKindV1, SoraLifecycleHooksV1,
+        SoraNetworkAllowlistEntryV1, SoraNetworkPolicyV1, SoraPrivateModelArtifactRefV1,
+        SoraPrivateUploadedModelExecutionReceiptV1, SoraResourceLimitsV1, SoraRolloutPolicyV1,
+        SoraRouteTargetV1, SoraRouteVisibilityV1, SoraRuntimeReceiptV1,
+        SoraServiceDeploymentStateV1, SoraServiceExecutionPlaneV1, SoraServiceHandlerClassV1,
+        SoraServiceHandlerV1, SoraServiceHealthStatusV1, SoraServiceLeaseStatusV1,
+        SoraServiceMailboxMessageV1, SoraServiceManifestV1, SoraServiceRuntimeStateV1,
+        SoraStateEncryptionV1, SoraStateMutationOperationV1, SoraTlsModeV1,
+        SoraUploadedModelBundleV1, SoraUploadedModelKeyEncapsulationV1,
         SoraUploadedModelKeyWrapAeadV1, SoraUploadedModelRuntimeFormatV1,
     },
     sorafs::pin_registry::StorageClass,
@@ -371,9 +371,6 @@ fn inrou_replica_assignment_has_active_capability(
         && capability.validator_account_id == assignment.validator_account_id
         && capability.peer_id == assignment.peer_id
         && capability.can_host_replicas_at(now_ms)
-        && capability
-            .supported_backends
-            .contains(&assignment.selected_backend)
         && capability
             .supported_guest_isas
             .contains(&assignment.selected_guest_isa)
@@ -901,6 +898,7 @@ pub fn resolve_generated_hf_primary_assignment(
 /// Distinguishes the local runtime role of a materialized service revision.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, JsonSerialize, JsonDeserialize)]
 #[norito(tag = "revision_role", content = "value")]
+#[norito(deny_unknown_fields)]
 pub enum SoracloudRuntimeRevisionRole {
     /// The currently active deployment revision.
     Active,
@@ -909,6 +907,7 @@ pub enum SoracloudRuntimeRevisionRole {
 }
 /// Node-local mailbox materialization metadata for a handler.
 #[derive(Clone, Debug, PartialEq, Eq, JsonSerialize, JsonDeserialize)]
+#[norito(deny_unknown_fields)]
 pub struct SoracloudRuntimeMailboxPlan {
     /// Stable handler identifier.
     pub handler_name: String,
@@ -923,6 +922,7 @@ pub struct SoracloudRuntimeMailboxPlan {
 }
 /// Node-local hydration/materialization metadata for a referenced artifact.
 #[derive(Clone, Debug, PartialEq, Eq, JsonSerialize, JsonDeserialize)]
+#[norito(deny_unknown_fields)]
 pub struct SoracloudRuntimeArtifactPlan {
     /// Artifact class.
     pub kind: SoraArtifactKindV1,
@@ -931,6 +931,7 @@ pub struct SoracloudRuntimeArtifactPlan {
     /// Logical artifact path inside the service revision.
     pub artifact_path: String,
     /// Optional consuming handler.
+    #[norito(required)]
     pub handler_name: Option<String>,
     /// Local cache path where the runtime manager expects the artifact.
     pub local_cache_path: String,
@@ -939,6 +940,7 @@ pub struct SoracloudRuntimeArtifactPlan {
 }
 /// Node-local materialization plan for one active service revision.
 #[derive(Clone, Debug, PartialEq, Eq, JsonSerialize, JsonDeserialize)]
+#[norito(deny_unknown_fields)]
 pub struct SoracloudRuntimeServicePlan {
     /// Service identifier.
     pub service_name: String,
@@ -959,23 +961,20 @@ pub struct SoracloudRuntimeServicePlan {
     /// Entrypoint declared by the container manifest.
     pub entrypoint: String,
     /// Explicit Inrou VM metadata projected for hosted HTTP microVMs.
-    #[norito(default)]
-    #[norito(skip_serializing_if = "Option::is_none")]
+    #[norito(required)]
     pub inrou: Option<SoracloudRuntimeInrouPlan>,
     /// Node-local cache path for the executable bundle.
     pub bundle_cache_path: String,
     /// Whether the bundle is already present locally.
     pub bundle_available_locally: bool,
     /// Current deployment process generation when known for this revision.
+    #[norito(required)]
     pub process_generation: Option<u64>,
     /// Desired replica count declared by the admitted service manifest.
-    #[norito(default)]
     pub desired_replica_count: u16,
     /// Replica slots this runtime host is projecting locally for the revision.
-    #[norito(default)]
     pub local_replica_slots: Vec<u16>,
     /// Replica-local runtime topology currently projected on this host for the revision.
-    #[norito(default)]
     pub local_replicas: Vec<SoracloudRuntimeReplicaPlan>,
     /// Current runtime health projection.
     pub health_status: SoraServiceHealthStatusV1,
@@ -986,33 +985,29 @@ pub struct SoracloudRuntimeServicePlan {
     /// Pending mailbox messages currently stored in authoritative state.
     pub authoritative_pending_mailbox_messages: u32,
     /// Active rollout handle when this revision is part of a canary rollout.
+    #[norito(required)]
     pub rollout_handle: Option<String>,
     /// Monotonic generation of committed service config updates.
     pub config_generation: u64,
     /// Monotonic generation of committed service secret updates.
     pub secret_generation: u64,
     /// Hosted-service quota class when the service uses the HTTP plane.
-    #[norito(default)]
-    #[norito(skip_serializing_if = "Option::is_none")]
+    #[norito(required)]
     pub quota_class: Option<String>,
     /// Effective hosted-service lease status at the observed sequence.
-    #[norito(default)]
-    #[norito(skip_serializing_if = "Option::is_none")]
+    #[norito(required)]
     pub service_lease_status: Option<SoraServiceLeaseStatusV1>,
     /// Sequence when hosted-service routing/materialization expires.
-    #[norito(default)]
-    #[norito(skip_serializing_if = "Option::is_none")]
+    #[norito(required)]
     pub lease_expires_sequence: Option<u64>,
     /// Remaining prepaid runtime balance estimated at snapshot build time.
-    #[norito(default)]
-    #[norito(skip_serializing_if = "Option::is_none")]
+    #[norito(required)]
     pub remaining_runtime_balance: Option<Quantity>,
     /// Number of committed service config entries projected into runtime materialization.
     pub config_entry_count: u32,
     /// Number of committed service secret entries projected into runtime materialization.
     pub secret_entry_count: u32,
     /// Explicit config exports declared by the admitted container manifest.
-    #[norito(default)]
     pub config_exports: Vec<SoraConfigExportV1>,
     /// Whether ordinary handlers on this revision can read authoritative config payloads.
     pub supports_host_read_config: bool,
@@ -1025,20 +1020,14 @@ pub struct SoracloudRuntimeServicePlan {
     /// Local directory containing canonical JSON config files for this revision.
     pub config_materialization_dir: String,
     /// Effective launch environment after applying explicit config env exports.
-    #[norito(default)]
     pub effective_env: BTreeMap<String, String>,
     /// Local file containing the effective launch environment projection.
-    #[norito(default)]
     pub effective_env_materialization_path: String,
     /// Local directory containing explicit config file exports for this revision.
-    #[norito(default)]
     pub config_exports_materialization_dir: String,
     /// Local directory containing committed secret-envelope files for this revision.
     pub secret_envelopes_materialization_dir: String,
-    /// Local directory containing the legacy raw secret payload tree for this revision.
-    pub secret_payload_materialization_dir: String,
     /// Lease-backed mutable storage materialized for this revision.
-    #[norito(default)]
     pub lease_volumes: Vec<SoracloudRuntimeLeaseVolumePlan>,
     /// Declared replicated handler mailboxes.
     pub mailboxes: Vec<SoracloudRuntimeMailboxPlan>,
@@ -1047,11 +1036,10 @@ pub struct SoracloudRuntimeServicePlan {
 }
 /// Node-local materialization plan for one Inrou microVM guest.
 #[derive(Clone, Debug, PartialEq, Eq, JsonSerialize, JsonDeserialize)]
+#[norito(deny_unknown_fields)]
 pub struct SoracloudRuntimeInrouPlan {
     /// Guest userspace profile expected by the VM image.
     pub guest_os: SoraInrouGuestOsV1,
-    /// Runtime backend selected locally for the assigned host.
-    pub selected_backend: SoraInrouRuntimeBackendV1,
     /// Guest ISA profile selected locally for this replica.
     pub selected_guest_isa: SoraInrouGuestIsaV1,
     /// Kernel image path for the selected guest ISA inside the hydrated Soracloud bundle.
@@ -1059,21 +1047,19 @@ pub struct SoracloudRuntimeInrouPlan {
     /// Immutable base root filesystem image path for the selected guest ISA.
     pub rootfs_image_path: String,
     /// Optional initrd image path for the selected guest ISA.
-    #[norito(default)]
-    #[norito(skip_serializing_if = "Option::is_none")]
+    #[norito(required)]
     pub initrd_image_path: Option<String>,
     /// Optional bootstrap user-data overlay path inside the hydrated Soracloud bundle.
-    #[norito(default)]
-    #[norito(skip_serializing_if = "Option::is_none")]
+    #[norito(required)]
     pub bootstrap_user_data_path: Option<String>,
     /// SSH public keys injected into the guest bootstrap seed.
-    #[norito(default)]
     pub ssh_authorized_keys: Vec<String>,
     /// Logical volume identifier used as the authoritative mutable root disk.
     pub root_volume_name: String,
 }
 /// Node-local materialization plan for one lease-backed service volume.
 #[derive(Clone, Debug, PartialEq, Eq, JsonSerialize, JsonDeserialize)]
+#[norito(deny_unknown_fields)]
 pub struct SoracloudRuntimeLeaseVolumePlan {
     /// Logical volume identifier.
     pub volume_name: String,
@@ -1097,6 +1083,7 @@ pub struct SoracloudRuntimeLeaseVolumePlan {
 }
 /// Node-local runtime topology projected for one hosted-HTTP replica slot.
 #[derive(Clone, Debug, PartialEq, Eq, JsonSerialize, JsonDeserialize)]
+#[norito(deny_unknown_fields)]
 pub struct SoracloudRuntimeReplicaPlan {
     /// One-based replica slot within the revision.
     pub replica_slot: u16,
@@ -1105,20 +1092,18 @@ pub struct SoracloudRuntimeReplicaPlan {
     /// Current runtime health projection for this replica slot.
     pub health_status: SoraServiceHealthStatusV1,
     /// Loopback listener currently exposed by this replica, when healthy.
-    #[norito(default)]
-    #[norito(skip_serializing_if = "Option::is_none")]
+    #[norito(required)]
     pub listen_base_url: Option<String>,
     /// Local process identifier when the replica is running.
-    #[norito(default)]
-    #[norito(skip_serializing_if = "Option::is_none")]
+    #[norito(required)]
     pub pid: Option<u32>,
     /// Human-readable startup or healthcheck failure detail for the replica, when present.
-    #[norito(default)]
-    #[norito(skip_serializing_if = "Option::is_none")]
+    #[norito(required)]
     pub last_error: Option<String>,
 }
 /// Node-local materialization plan for an active agent apartment.
 #[derive(Clone, Debug, PartialEq, Eq, JsonSerialize, JsonDeserialize)]
+#[norito(deny_unknown_fields)]
 pub struct SoracloudRuntimeApartmentPlan {
     /// Apartment identifier.
     pub apartment_name: String,
@@ -1153,28 +1138,27 @@ pub const SORACLOUD_HOSTED_HTTP_RUNTIME_STATE_VERSION_V1: u16 = 1;
 pub const SORACLOUD_HOSTED_HTTP_RUNTIME_STATE_FILE_V1: &str = "hosted_http_runtime.json";
 /// Node-local state projected for one hosted-HTTP replica materialized by the local runtime manager.
 #[derive(Clone, Debug, PartialEq, Eq, JsonSerialize, JsonDeserialize)]
+#[norito(deny_unknown_fields)]
 pub struct SoracloudHostedHttpReplicaRuntimeStateV1 {
     /// One-based replica slot for the revision-local materialization.
     pub replica_slot: u16,
     /// Projected health state of the replica runtime.
     pub health_status: SoraServiceHealthStatusV1,
     /// Base URL for the loopback listener exposed by the replica process, when present.
-    #[norito(default)]
-    #[norito(skip_serializing_if = "Option::is_none")]
+    #[norito(required)]
     pub listen_base_url: Option<String>,
     /// Child process identifier while the replica is running.
-    #[norito(default)]
-    #[norito(skip_serializing_if = "Option::is_none")]
+    #[norito(required)]
     pub pid: Option<u32>,
     /// Human-readable startup or healthcheck failure detail for this replica, when present.
-    #[norito(default)]
-    #[norito(skip_serializing_if = "Option::is_none")]
+    #[norito(required)]
     pub last_error: Option<String>,
     /// Timestamp when the replica state was last refreshed.
     pub updated_at_ms: u64,
 }
 /// Node-local state projected for a supervised hosted-HTTP Soracloud service revision.
 #[derive(Clone, Debug, PartialEq, Eq, JsonSerialize, JsonDeserialize)]
+#[norito(deny_unknown_fields)]
 pub struct SoracloudHostedHttpRuntimeStateV1 {
     /// Schema version for this runtime-state document.
     pub schema_version: u16,
@@ -1187,16 +1171,17 @@ pub struct SoracloudHostedHttpRuntimeStateV1 {
     /// Projected health state of the child process.
     pub health_status: SoraServiceHealthStatusV1,
     /// Base URL for the loopback listener exposed by the child process.
+    #[norito(required)]
     pub listen_base_url: Option<String>,
     /// Child process identifier while the process is running.
+    #[norito(required)]
     pub pid: Option<u32>,
     /// Total authoritative egress bytes accounted by the local supervisor.
-    #[norito(default)]
     pub accounted_egress_bytes: u64,
     /// Healthy and unhealthy replica listeners currently materialized on this host for the revision.
-    #[norito(default)]
     pub replicas: Vec<SoracloudHostedHttpReplicaRuntimeStateV1>,
     /// Human-readable startup or healthcheck failure detail, when present.
+    #[norito(required)]
     pub last_error: Option<String>,
     /// Timestamp when the state file was last refreshed.
     pub updated_at_ms: u64,
@@ -1210,36 +1195,33 @@ pub const SORACLOUD_APARTMENT_AUTONOMY_EXECUTION_SUMMARY_VERSION_V1: u16 = 1;
 pub const SORACLOUD_APARTMENT_AUTONOMY_EXECUTION_SUMMARY_MAX_BYTES_V1: u64 = 16 * 1024 * 1024;
 /// One successful service step executed inside a generated apartment autonomy workflow.
 #[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
+#[norito(deny_unknown_fields)]
 pub struct SoracloudApartmentAutonomyWorkflowStepSummaryV1 {
     /// Zero-based workflow step index.
     pub step_index: u32,
     /// Optional stable workflow step identifier.
-    #[norito(default)]
-    #[norito(skip_serializing_if = "Option::is_none")]
+    #[norito(required)]
     pub step_id: Option<String>,
     /// Deterministic commitment over the local-read request for this step.
     pub request_commitment: Hash,
     /// Deterministic commitment over the step result.
     pub result_commitment: Hash,
     /// Optional certified runtime receipt emitted by the bound service query.
-    #[norito(default)]
-    #[norito(skip_serializing_if = "Option::is_none")]
+    #[norito(required)]
     pub runtime_receipt: Option<SoraRuntimeReceiptV1>,
     /// Response content type reported by the bound service, when available.
-    #[norito(default)]
-    #[norito(skip_serializing_if = "Option::is_none")]
+    #[norito(required)]
     pub content_type: Option<String>,
     /// Parsed JSON response body for successful JSON results, when available.
-    #[norito(default)]
-    #[norito(skip_serializing_if = "Option::is_none")]
+    #[norito(required)]
     pub response_json: Option<norito::json::Value>,
     /// UTF-8 response text for non-JSON results, when available.
-    #[norito(default)]
-    #[norito(skip_serializing_if = "Option::is_none")]
+    #[norito(required)]
     pub response_text: Option<String>,
 }
 /// Node-local execution summary for one approved apartment autonomy run.
 #[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
+#[norito(deny_unknown_fields)]
 pub struct SoracloudApartmentAutonomyExecutionSummaryV1 {
     /// Schema version; must equal [`SORACLOUD_APARTMENT_AUTONOMY_EXECUTION_SUMMARY_VERSION_V1`].
     pub schema_version: u16,
@@ -1248,52 +1230,167 @@ pub struct SoracloudApartmentAutonomyExecutionSummaryV1 {
     /// Stable authoritative autonomy-run identifier.
     pub run_id: String,
     /// Bound service name used for execution, when one was resolved locally.
-    #[norito(default)]
-    #[norito(skip_serializing_if = "Option::is_none")]
+    #[norito(required)]
     pub service_name: Option<String>,
     /// Bound service version used for execution, when one was resolved locally.
-    #[norito(default)]
-    #[norito(skip_serializing_if = "Option::is_none")]
+    #[norito(required)]
     pub service_version: Option<String>,
     /// Service handler used for execution, when one was resolved locally.
-    #[norito(default)]
-    #[norito(skip_serializing_if = "Option::is_none")]
+    #[norito(required)]
     pub handler_name: Option<String>,
     /// Whether the runtime obtained a successful inference result.
     pub succeeded: bool,
     /// Deterministic commitment over the execution outcome.
     pub result_commitment: Hash,
     /// Optional raw checkpoint artifact hash produced by the run.
-    #[norito(default)]
-    #[norito(skip_serializing_if = "Option::is_none")]
+    #[norito(required)]
     pub checkpoint_artifact_hash: Option<Hash>,
     /// Optional certified runtime receipt emitted by the bound service query.
-    #[norito(default)]
-    #[norito(skip_serializing_if = "Option::is_none")]
+    #[norito(required)]
     pub runtime_receipt: Option<SoraRuntimeReceiptV1>,
     /// Successful workflow steps executed before the final response was produced.
-    #[norito(default)]
     pub workflow_steps: Vec<SoracloudApartmentAutonomyWorkflowStepSummaryV1>,
     /// Response content type reported by the bound service, when available.
-    #[norito(default)]
-    #[norito(skip_serializing_if = "Option::is_none")]
+    #[norito(required)]
     pub content_type: Option<String>,
     /// Parsed JSON response body for successful JSON results, when available.
-    #[norito(default)]
-    #[norito(skip_serializing_if = "Option::is_none")]
+    #[norito(required)]
     pub response_json: Option<norito::json::Value>,
     /// UTF-8 response text for non-JSON results, when available.
-    #[norito(default)]
-    #[norito(skip_serializing_if = "Option::is_none")]
+    #[norito(required)]
     pub response_text: Option<String>,
     /// Human-readable execution error, when the run failed locally.
-    #[norito(default)]
-    #[norito(skip_serializing_if = "Option::is_none")]
+    #[norito(required)]
     pub error: Option<String>,
+}
+/// Error returned when a persisted autonomy execution summary is not bound to
+/// the exact authoritative V1 run that owns its storage path.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SoracloudApartmentAutonomySummaryValidationError(String);
+impl std::fmt::Display for SoracloudApartmentAutonomySummaryValidationError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(&self.0)
+    }
+}
+impl std::error::Error for SoracloudApartmentAutonomySummaryValidationError {}
+/// Derive the V1 commitment for a node-local apartment autonomy summary.
+///
+/// `process_generation` and `request_commitment` must come from authoritative
+/// apartment state rather than from the node-local summary document. This
+/// keeps summary reuse and control-plane reads bound to the approved run. The
+/// preimage covers every summary field except the circular
+/// `result_commitment` field itself.
+pub fn derive_soracloud_apartment_autonomy_result_commitment_v1(
+    summary: &SoracloudApartmentAutonomyExecutionSummaryV1,
+    process_generation: u64,
+    request_commitment: Hash,
+) -> Result<Hash, norito::json::Error> {
+    let workflow_steps_commitment = summary
+        .workflow_steps
+        .iter()
+        .map(|step| {
+            Ok((
+                step.step_index,
+                step.step_id.as_deref(),
+                step.request_commitment,
+                step.result_commitment,
+                step.runtime_receipt
+                    .as_ref()
+                    .map(|receipt| Encode::encode(receipt)),
+                step.content_type.as_deref(),
+                step.response_text.as_deref(),
+                step.response_json
+                    .as_ref()
+                    .map(norito::json::to_string)
+                    .transpose()?,
+            ))
+        })
+        .collect::<Result<Vec<_>, norito::json::Error>>()?;
+    let runtime_receipt = summary
+        .runtime_receipt
+        .as_ref()
+        .map(|receipt| Encode::encode(receipt));
+    Ok(Hash::new(Encode::encode(&(
+        "soracloud.apartment.autonomy.v1",
+        (
+            summary.schema_version,
+            summary.apartment_name.as_str(),
+            process_generation,
+            summary.run_id.as_str(),
+            request_commitment,
+        ),
+        (
+            summary.service_name.as_deref(),
+            summary.service_version.as_deref(),
+            summary.handler_name.as_deref(),
+            summary.succeeded,
+        ),
+        (
+            summary.checkpoint_artifact_hash,
+            runtime_receipt,
+            workflow_steps_commitment,
+        ),
+        (
+            summary.content_type.as_deref(),
+            summary.response_text.as_deref(),
+            summary
+                .response_json
+                .as_ref()
+                .map(norito::json::to_string)
+                .transpose()?,
+            summary.error.as_deref(),
+        ),
+    ))))
+}
+/// Validate a persisted V1 apartment autonomy summary against its storage path
+/// and the authoritative apartment/run values used to derive its commitment.
+pub fn validate_soracloud_apartment_autonomy_execution_summary_v1(
+    summary: &SoracloudApartmentAutonomyExecutionSummaryV1,
+    expected_apartment_name: &str,
+    expected_run_id: &str,
+    process_generation: u64,
+    request_commitment: Hash,
+) -> Result<(), SoracloudApartmentAutonomySummaryValidationError> {
+    if summary.schema_version != SORACLOUD_APARTMENT_AUTONOMY_EXECUTION_SUMMARY_VERSION_V1 {
+        return Err(SoracloudApartmentAutonomySummaryValidationError(format!(
+            "autonomy summary schema version {} does not match V1",
+            summary.schema_version
+        )));
+    }
+    if summary.apartment_name != expected_apartment_name {
+        return Err(SoracloudApartmentAutonomySummaryValidationError(format!(
+            "autonomy summary apartment `{}` does not match path apartment `{expected_apartment_name}`",
+            summary.apartment_name
+        )));
+    }
+    if summary.run_id != expected_run_id {
+        return Err(SoracloudApartmentAutonomySummaryValidationError(format!(
+            "autonomy summary run `{}` does not match path run `{expected_run_id}`",
+            summary.run_id
+        )));
+    }
+    let expected_result_commitment = derive_soracloud_apartment_autonomy_result_commitment_v1(
+        summary,
+        process_generation,
+        request_commitment,
+    )
+    .map_err(|error| {
+        SoracloudApartmentAutonomySummaryValidationError(format!(
+            "autonomy summary cannot derive its canonical V1 result commitment: {error}"
+        ))
+    })?;
+    if summary.result_commitment != expected_result_commitment {
+        return Err(SoracloudApartmentAutonomySummaryValidationError(format!(
+            "autonomy summary result commitment {} does not match authoritative V1 commitment {expected_result_commitment}",
+            summary.result_commitment
+        )));
+    }
+    Ok(())
 }
 /// Runtime-manager materialization state for a canonical Hugging Face source.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, JsonSerialize, JsonDeserialize)]
 #[norito(tag = "status", content = "value")]
+#[norito(deny_unknown_fields)]
 pub enum SoracloudRuntimeHfSourceStatus {
     /// The canonical import has no runtime-visible bindings yet.
     PendingImport,
@@ -1310,6 +1407,7 @@ pub enum SoracloudRuntimeHfSourceStatus {
 }
 /// Runtime-manager projection for one canonical Hugging Face source.
 #[derive(Clone, Debug, PartialEq, Eq, JsonSerialize, JsonDeserialize)]
+#[norito(deny_unknown_fields)]
 pub struct SoracloudRuntimeHfSourcePlan {
     /// Stable canonical source identifier.
     pub source_id: String,
@@ -1336,59 +1434,56 @@ pub struct SoracloudRuntimeHfSourcePlan {
     /// Number of distinct bound Soracloud services.
     pub bound_service_count: u32,
     /// Bound Soracloud service names in deterministic order.
-    #[norito(default)]
     pub bound_service_names: Vec<String>,
     /// Number of bound services already present in the runtime snapshot.
     pub materialized_service_count: u32,
     /// Materialized service names in deterministic order.
-    #[norito(default)]
     pub materialized_service_names: Vec<String>,
     /// Number of materialized services still hydrating their artifacts.
     pub hydrating_service_count: u32,
     /// Number of distinct bound Soracloud apartments.
     pub bound_apartment_count: u32,
     /// Bound apartment names in deterministic order.
-    #[norito(default)]
     pub bound_apartment_names: Vec<String>,
     /// Number of bound apartments already present in the runtime snapshot.
     pub materialized_apartment_count: u32,
     /// Materialized apartment names in deterministic order.
-    #[norito(default)]
     pub materialized_apartment_names: Vec<String>,
     /// Number of missing bundle cache entries across bound services.
     pub bundle_cache_miss_count: u32,
     /// Number of missing non-bundle artifact cache entries across bound services.
     pub artifact_cache_miss_count: u32,
     /// Latest authoritative failure string, when present.
-    #[norito(default)]
-    #[norito(skip_serializing_if = "Option::is_none")]
+    #[norito(required)]
     pub last_error: Option<String>,
 }
+/// Schema version for [`SoracloudRuntimeSnapshot`].
+pub const SORACLOUD_RUNTIME_SNAPSHOT_VERSION_V1: u16 = 1;
 /// Persisted snapshot of node-local Soracloud runtime materialization state.
 #[derive(Clone, Debug, PartialEq, Eq, JsonSerialize, JsonDeserialize)]
+#[norito(deny_unknown_fields)]
 pub struct SoracloudRuntimeSnapshot {
     /// Schema version for the local runtime snapshot format.
     pub schema_version: u16,
     /// Height of the authoritative state view used to build this snapshot.
     pub observed_height: u64,
     /// Latest committed block hash at snapshot time, when present.
+    #[norito(required)]
     pub observed_block_hash: Option<String>,
     /// Peer identity of the runtime host that produced this snapshot, when known.
-    #[norito(default)]
-    #[norito(skip_serializing_if = "Option::is_none")]
+    #[norito(required)]
     pub local_peer_id: Option<String>,
     /// Materialized active service revisions grouped by service name then version.
     pub services: BTreeMap<String, BTreeMap<String, SoracloudRuntimeServicePlan>>,
     /// Materialized active agent apartments keyed by apartment name.
     pub apartments: BTreeMap<String, SoracloudRuntimeApartmentPlan>,
     /// Runtime-manager Hugging Face source projections keyed by canonical source id.
-    #[norito(default)]
     pub hf_sources: BTreeMap<String, SoracloudRuntimeHfSourcePlan>,
 }
 impl Default for SoracloudRuntimeSnapshot {
     fn default() -> Self {
         Self {
-            schema_version: 1,
+            schema_version: SORACLOUD_RUNTIME_SNAPSHOT_VERSION_V1,
             observed_height: 0,
             observed_block_hash: None,
             local_peer_id: None,
@@ -1808,14 +1903,19 @@ pub struct SoracloudLocalReadRequest {
 }
 /// Committed artifact/state binding attached to a certified local read response.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, JsonSerialize, JsonDeserialize)]
+#[norito(deny_unknown_fields)]
 pub struct SoracloudLocalReadBinding {
     /// Binding name when the response is derived from authoritative service state.
+    #[norito(required)]
     pub binding_name: Option<String>,
     /// State key when the response is derived from a specific state entry.
+    #[norito(required)]
     pub state_key: Option<String>,
     /// Commitment for the bound state entry, when applicable.
+    #[norito(required)]
     pub payload_commitment: Option<Hash>,
     /// Bound artifact digest when the response is served from hydrated local content.
+    #[norito(required)]
     pub artifact_hash: Option<Hash>,
 }
 /// Shared response envelope for deterministic local Soracloud reads.
@@ -2062,6 +2162,71 @@ mod tests {
     fn checked_peer_id() -> PeerId {
         PeerId::from(checked_keypair().public_key().clone())
     }
+    fn sample_runtime_service_plan() -> SoracloudRuntimeServicePlan {
+        SoracloudRuntimeServicePlan {
+            service_name: "service".to_owned(),
+            service_version: "1.0.0".to_owned(),
+            role: SoracloudRuntimeRevisionRole::Active,
+            traffic_percent: 100,
+            runtime: SoraContainerRuntimeV1::Inrou,
+            execution_plane: SoraServiceExecutionPlaneV1::HttpService,
+            bundle_hash: "bundle-hash".to_owned(),
+            bundle_path: "sorafs://bundle".to_owned(),
+            entrypoint: "/sbin/init".to_owned(),
+            inrou: Some(SoracloudRuntimeInrouPlan {
+                guest_os: SoraInrouGuestOsV1::DebianSlim,
+                selected_guest_isa: SoraInrouGuestIsaV1::X8664,
+                kernel_image_path: "guest/vmlinuz".to_owned(),
+                rootfs_image_path: "guest/rootfs.ext4".to_owned(),
+                initrd_image_path: None,
+                bootstrap_user_data_path: None,
+                ssh_authorized_keys: Vec::new(),
+                root_volume_name: "root".to_owned(),
+            }),
+            bundle_cache_path: "/runtime/cache/bundle".to_owned(),
+            bundle_available_locally: true,
+            process_generation: None,
+            desired_replica_count: 1,
+            local_replica_slots: vec![1],
+            local_replicas: vec![SoracloudRuntimeReplicaPlan {
+                replica_slot: 1,
+                materialization_dir: "/runtime/services/service/1.0.0/replica-0001".to_owned(),
+                health_status: SoraServiceHealthStatusV1::Unavailable,
+                listen_base_url: None,
+                pid: None,
+                last_error: None,
+            }],
+            health_status: SoraServiceHealthStatusV1::Unavailable,
+            load_factor_bps: 0,
+            reported_pending_mailbox_messages: 0,
+            authoritative_pending_mailbox_messages: 0,
+            rollout_handle: None,
+            config_generation: 0,
+            secret_generation: 0,
+            quota_class: None,
+            service_lease_status: None,
+            lease_expires_sequence: None,
+            remaining_runtime_balance: None,
+            config_entry_count: 0,
+            secret_entry_count: 0,
+            config_exports: Vec::new(),
+            supports_host_read_config: false,
+            supports_host_read_secret_envelope: false,
+            supports_private_secret_payload_reads: false,
+            materialization_dir: "/runtime/services/service/1.0.0".to_owned(),
+            config_materialization_dir: "/runtime/services/service/1.0.0/config".to_owned(),
+            effective_env: BTreeMap::new(),
+            effective_env_materialization_path: "/runtime/services/service/1.0.0/env.json"
+                .to_owned(),
+            config_exports_materialization_dir: "/runtime/services/service/1.0.0/exports"
+                .to_owned(),
+            secret_envelopes_materialization_dir: "/runtime/services/service/1.0.0/secrets"
+                .to_owned(),
+            lease_volumes: Vec::new(),
+            mailboxes: Vec::new(),
+            artifacts: Vec::new(),
+        }
+    }
     #[test]
     fn checked_keypair_preserves_default_algorithm() {
         assert_eq!(checked_keypair().algorithm(), Algorithm::default());
@@ -2146,8 +2311,7 @@ mod tests {
             .insert(
                 private_receipt_id,
                 SoraPrivateUploadedModelExecutionReceiptV1 {
-                    schema_version:
-                        SORA_PRIVATE_UPLOADED_MODEL_EXECUTION_RECEIPT_VERSION_V1,
+                    schema_version: SORA_PRIVATE_UPLOADED_MODEL_EXECUTION_RECEIPT_VERSION_V1,
                     receipt_id: private_receipt_id,
                     service_name: private_bundle.service_name,
                     model_id: private_bundle.model_id,
@@ -2169,30 +2333,26 @@ mod tests {
         assert_eq!(authoritative_soracloud_sequence(&world.view()), 35);
 
         let mailbox_message_id = Hash::new(b"sequence-mailbox-message");
-        world
-            .soracloud_mailbox_messages_mut_for_testing()
-            .insert(
-                mailbox_message_id,
-                SoraServiceMailboxMessageV1 {
-                    schema_version:
-                        iroha_data_model::soracloud::SORA_SERVICE_MAILBOX_MESSAGE_VERSION_V1,
-                    message_id: mailbox_message_id,
-                    from_service: "sequence_source".parse().expect("valid service name"),
-                    from_service_version: "1.0.0".to_string(),
-                    from_handler: "update".parse().expect("valid handler name"),
-                    to_service: "sequence_destination"
-                        .parse()
-                        .expect("valid service name"),
-                    to_service_version: "1.0.0".to_string(),
-                    to_handler: "update".parse().expect("valid handler name"),
-                    payload_bytes: b"sequence-mailbox-payload".to_vec(),
-                    payload_commitment: Hash::new(b"sequence-mailbox-payload"),
-                    delivery_delay_sequences: 0,
-                    enqueue_sequence: 35,
-                    available_after_sequence: 35,
-                    expires_at_sequence: 40,
-                },
-            );
+        world.soracloud_mailbox_messages_mut_for_testing().insert(
+            mailbox_message_id,
+            SoraServiceMailboxMessageV1 {
+                schema_version:
+                    iroha_data_model::soracloud::SORA_SERVICE_MAILBOX_MESSAGE_VERSION_V1,
+                message_id: mailbox_message_id,
+                from_service: "sequence_source".parse().expect("valid service name"),
+                from_service_version: "1.0.0".to_string(),
+                from_handler: "update".parse().expect("valid handler name"),
+                to_service: "sequence_destination".parse().expect("valid service name"),
+                to_service_version: "1.0.0".to_string(),
+                to_handler: "update".parse().expect("valid handler name"),
+                payload_bytes: b"sequence-mailbox-payload".to_vec(),
+                payload_commitment: Hash::new(b"sequence-mailbox-payload"),
+                delivery_delay_sequences: 0,
+                enqueue_sequence: 35,
+                available_after_sequence: 35,
+                expires_at_sequence: 40,
+            },
+        );
         assert_eq!(latest_soracloud_sequence(&world.view()), 35);
         assert_eq!(authoritative_soracloud_sequence(&world.view()), 36);
 
@@ -2214,6 +2374,813 @@ mod tests {
             );
         assert_eq!(latest_soracloud_sequence(&world.view()), u64::MAX);
         assert_eq!(authoritative_soracloud_sequence(&world.view()), u64::MAX);
+    }
+    #[test]
+    fn runtime_snapshot_json_requires_the_exact_v1_field_set() {
+        let canonical = SoracloudRuntimeSnapshot::default();
+        let canonical_value =
+            norito::json::to_value(&canonical).expect("encode canonical runtime snapshot");
+        assert_eq!(
+            norito::json::from_value::<SoracloudRuntimeSnapshot>(canonical_value.clone())
+                .expect("decode canonical runtime snapshot"),
+            canonical
+        );
+
+        let mut unknown = canonical_value.clone();
+        unknown
+            .as_object_mut()
+            .expect("snapshot JSON object")
+            .insert("legacy_runtime".to_owned(), norito::json::Value::Null);
+        assert!(
+            norito::json::from_value::<SoracloudRuntimeSnapshot>(unknown).is_err(),
+            "same-version snapshots must reject unknown fields"
+        );
+
+        for required_field in ["observed_block_hash", "local_peer_id", "hf_sources"] {
+            let mut missing = canonical_value.clone();
+            missing
+                .as_object_mut()
+                .expect("snapshot JSON object")
+                .remove(required_field);
+            assert!(
+                norito::json::from_value::<SoracloudRuntimeSnapshot>(missing).is_err(),
+                "same-version snapshots must require the canonically emitted {required_field} field"
+            );
+        }
+    }
+
+    #[test]
+    fn runtime_snapshot_nested_records_require_the_exact_v1_field_set() {
+        let apartment = SoracloudRuntimeApartmentPlan {
+            apartment_name: "apartment".to_owned(),
+            manifest_hash: "manifest-hash".to_owned(),
+            status: SoraAgentRuntimeStatusV1::Running,
+            process_generation: 1,
+            lease_expires_sequence: 100,
+            last_active_sequence: 1,
+            materialization_dir: "/runtime/apartments/apartment".to_owned(),
+            pending_wallet_request_count: 0,
+            pending_mailbox_message_count: 0,
+            autonomy_budget_remaining_units: 0,
+            approved_artifact_count: 0,
+            autonomy_run_count: 0,
+            revoked_policy_capability_count: 0,
+        };
+        let mut apartment_value =
+            norito::json::to_value(&apartment).expect("encode canonical runtime apartment plan");
+        apartment_value
+            .as_object_mut()
+            .expect("runtime apartment plan JSON object")
+            .insert("legacy_status".to_owned(), norito::json::Value::Null);
+        assert!(
+            norito::json::from_value::<SoracloudRuntimeApartmentPlan>(apartment_value).is_err(),
+            "same-version runtime apartment plans must reject unknown fields"
+        );
+
+        let source = SoracloudRuntimeHfSourcePlan {
+            source_id: "source".to_owned(),
+            repo_id: "owner/model".to_owned(),
+            resolved_revision: "0123456789abcdef0123456789abcdef01234567".to_owned(),
+            model_name: "model".to_owned(),
+            adapter_id: "adapter".to_owned(),
+            authoritative_status: SoraHfSourceStatusV1::Ready,
+            runtime_status: SoracloudRuntimeHfSourceStatus::Ready,
+            pool_count: 0,
+            active_pool_count: 0,
+            active_member_count: 0,
+            queued_window_count: 0,
+            bound_service_count: 0,
+            bound_service_names: Vec::new(),
+            materialized_service_count: 0,
+            materialized_service_names: Vec::new(),
+            hydrating_service_count: 0,
+            bound_apartment_count: 0,
+            bound_apartment_names: Vec::new(),
+            materialized_apartment_count: 0,
+            materialized_apartment_names: Vec::new(),
+            bundle_cache_miss_count: 0,
+            artifact_cache_miss_count: 0,
+            last_error: None,
+        };
+        let source_value =
+            norito::json::to_value(&source).expect("encode canonical runtime HF source plan");
+        assert!(
+            source_value
+                .get("last_error")
+                .is_some_and(norito::json::Value::is_null),
+            "canonical runtime HF source plans must emit an explicit null last_error"
+        );
+        assert_eq!(
+            norito::json::from_value::<SoracloudRuntimeHfSourcePlan>(source_value.clone())
+                .expect("decode canonical runtime HF source plan"),
+            source
+        );
+        for required_field in [
+            "bound_service_names",
+            "materialized_service_names",
+            "bound_apartment_names",
+            "materialized_apartment_names",
+            "last_error",
+        ] {
+            let mut missing = source_value.clone();
+            missing
+                .as_object_mut()
+                .expect("runtime HF source plan JSON object")
+                .remove(required_field);
+            assert!(
+                norito::json::from_value::<SoracloudRuntimeHfSourcePlan>(missing).is_err(),
+                "same-version runtime HF source plans must require {required_field}"
+            );
+        }
+        let mut unknown_source = source_value;
+        unknown_source
+            .as_object_mut()
+            .expect("runtime HF source plan JSON object")
+            .insert("legacy_source".to_owned(), norito::json::Value::Null);
+        assert!(
+            norito::json::from_value::<SoracloudRuntimeHfSourcePlan>(unknown_source).is_err(),
+            "same-version runtime HF source plans must reject unknown fields"
+        );
+    }
+
+    #[test]
+    fn runtime_service_plan_json_requires_the_exact_v1_field_set() {
+        let canonical = sample_runtime_service_plan();
+        let canonical_value =
+            norito::json::to_value(&canonical).expect("encode canonical runtime service plan");
+        assert_eq!(
+            norito::json::from_value::<SoracloudRuntimeServicePlan>(canonical_value.clone())
+                .expect("decode canonical runtime service plan"),
+            canonical
+        );
+        let canonical_role = canonical.role;
+        let canonical_role_value =
+            norito::json::to_value(&canonical_role).expect("encode canonical runtime role");
+        assert_eq!(
+            norito::json::from_value::<SoracloudRuntimeRevisionRole>(canonical_role_value.clone())
+                .expect("decode canonical runtime role"),
+            canonical_role
+        );
+        let mut unknown_role = canonical_role_value;
+        unknown_role
+            .as_object_mut()
+            .expect("runtime role JSON object")
+            .insert("legacy_role".to_owned(), norito::json::Value::Null);
+        assert!(
+            norito::json::from_value::<SoracloudRuntimeRevisionRole>(unknown_role).is_err(),
+            "same-version runtime roles must reject unknown envelope fields"
+        );
+        for nullable_field in [
+            "process_generation",
+            "rollout_handle",
+            "quota_class",
+            "service_lease_status",
+            "lease_expires_sequence",
+            "remaining_runtime_balance",
+        ] {
+            assert!(
+                canonical_value
+                    .get(nullable_field)
+                    .is_some_and(norito::json::Value::is_null),
+                "canonical runtime service plan must emit explicit null for {nullable_field}"
+            );
+        }
+
+        let mut unknown = canonical_value.clone();
+        unknown
+            .as_object_mut()
+            .expect("runtime service plan JSON object")
+            .insert("legacy_backend".to_owned(), norito::json::Value::Null);
+        assert!(
+            norito::json::from_value::<SoracloudRuntimeServicePlan>(unknown).is_err(),
+            "same-version runtime service plans must reject unknown fields"
+        );
+
+        for required_field in [
+            "inrou",
+            "process_generation",
+            "desired_replica_count",
+            "local_replica_slots",
+            "local_replicas",
+            "rollout_handle",
+            "quota_class",
+            "service_lease_status",
+            "lease_expires_sequence",
+            "remaining_runtime_balance",
+            "config_exports",
+            "effective_env",
+            "effective_env_materialization_path",
+            "config_exports_materialization_dir",
+            "lease_volumes",
+        ] {
+            let mut missing = canonical_value.clone();
+            missing
+                .as_object_mut()
+                .expect("runtime service plan JSON object")
+                .remove(required_field);
+            assert!(
+                norito::json::from_value::<SoracloudRuntimeServicePlan>(missing).is_err(),
+                "same-version runtime service plans must require {required_field}"
+            );
+        }
+
+        let inrou = canonical.inrou.as_ref().expect("Inrou plan fixture");
+        let inrou_value =
+            norito::json::to_value(inrou).expect("encode canonical runtime Inrou plan");
+        assert_eq!(
+            norito::json::from_value::<SoracloudRuntimeInrouPlan>(inrou_value.clone())
+                .expect("decode canonical runtime Inrou plan"),
+            *inrou
+        );
+        for nullable_field in ["initrd_image_path", "bootstrap_user_data_path"] {
+            assert!(
+                inrou_value
+                    .get(nullable_field)
+                    .is_some_and(norito::json::Value::is_null),
+                "canonical runtime Inrou plan must emit explicit null for {nullable_field}"
+            );
+        }
+        for required_field in [
+            "initrd_image_path",
+            "bootstrap_user_data_path",
+            "ssh_authorized_keys",
+        ] {
+            let mut missing = inrou_value.clone();
+            missing
+                .as_object_mut()
+                .expect("runtime Inrou plan JSON object")
+                .remove(required_field);
+            assert!(
+                norito::json::from_value::<SoracloudRuntimeInrouPlan>(missing).is_err(),
+                "same-version runtime Inrou plans must require {required_field}"
+            );
+        }
+        let mut unknown_inrou = inrou_value;
+        unknown_inrou
+            .as_object_mut()
+            .expect("runtime Inrou plan JSON object")
+            .insert("legacy_backend".to_owned(), norito::json::Value::Null);
+        assert!(
+            norito::json::from_value::<SoracloudRuntimeInrouPlan>(unknown_inrou).is_err(),
+            "same-version runtime Inrou plans must reject unknown fields"
+        );
+
+        let replica = canonical
+            .local_replicas
+            .first()
+            .expect("runtime replica plan fixture");
+        let replica_value =
+            norito::json::to_value(replica).expect("encode canonical runtime replica plan");
+        assert_eq!(
+            norito::json::from_value::<SoracloudRuntimeReplicaPlan>(replica_value.clone())
+                .expect("decode canonical runtime replica plan"),
+            *replica
+        );
+        for required_field in ["listen_base_url", "pid", "last_error"] {
+            assert!(
+                replica_value
+                    .get(required_field)
+                    .is_some_and(norito::json::Value::is_null),
+                "canonical runtime replica plan must emit explicit null for {required_field}"
+            );
+            let mut missing = replica_value.clone();
+            missing
+                .as_object_mut()
+                .expect("runtime replica plan JSON object")
+                .remove(required_field);
+            assert!(
+                norito::json::from_value::<SoracloudRuntimeReplicaPlan>(missing).is_err(),
+                "same-version runtime replica plans must require {required_field}"
+            );
+        }
+        let mut unknown_replica = replica_value;
+        unknown_replica
+            .as_object_mut()
+            .expect("runtime replica plan JSON object")
+            .insert("legacy_pid".to_owned(), norito::json::Value::Null);
+        assert!(
+            norito::json::from_value::<SoracloudRuntimeReplicaPlan>(unknown_replica).is_err(),
+            "same-version runtime replica plans must reject unknown fields"
+        );
+    }
+
+    #[test]
+    fn runtime_nested_plan_json_requires_the_exact_v1_field_set() {
+        let mailbox = SoracloudRuntimeMailboxPlan {
+            handler_name: "dispatch".to_owned(),
+            queue_name: "dispatch-queue".to_owned(),
+            max_pending_messages: 4,
+            max_message_bytes: 1024,
+            retention_sequences: 16,
+        };
+        let mut mailbox_value =
+            norito::json::to_value(&mailbox).expect("encode canonical runtime mailbox plan");
+        mailbox_value
+            .as_object_mut()
+            .expect("runtime mailbox plan JSON object")
+            .insert("legacy_queue".to_owned(), norito::json::Value::Null);
+        assert!(
+            norito::json::from_value::<SoracloudRuntimeMailboxPlan>(mailbox_value).is_err(),
+            "same-version runtime mailbox plans must reject unknown fields"
+        );
+
+        let artifact = SoracloudRuntimeArtifactPlan {
+            kind: SoraArtifactKindV1::Bundle,
+            artifact_hash: "artifact-hash".to_owned(),
+            artifact_path: "bundle.to".to_owned(),
+            handler_name: None,
+            local_cache_path: "/runtime/cache/artifact".to_owned(),
+            available_locally: false,
+        };
+        let artifact_value =
+            norito::json::to_value(&artifact).expect("encode canonical runtime artifact plan");
+        assert!(
+            artifact_value
+                .get("handler_name")
+                .is_some_and(norito::json::Value::is_null),
+            "canonical runtime artifact plans must emit an explicit null handler_name"
+        );
+        let mut missing_handler = artifact_value.clone();
+        missing_handler
+            .as_object_mut()
+            .expect("runtime artifact plan JSON object")
+            .remove("handler_name");
+        assert!(
+            norito::json::from_value::<SoracloudRuntimeArtifactPlan>(missing_handler).is_err(),
+            "same-version runtime artifact plans must require handler_name"
+        );
+        let mut unknown_artifact = artifact_value;
+        unknown_artifact
+            .as_object_mut()
+            .expect("runtime artifact plan JSON object")
+            .insert("legacy_handler".to_owned(), norito::json::Value::Null);
+        assert!(
+            norito::json::from_value::<SoracloudRuntimeArtifactPlan>(unknown_artifact).is_err(),
+            "same-version runtime artifact plans must reject unknown fields"
+        );
+
+        let lease = SoracloudRuntimeLeaseVolumePlan {
+            volume_name: "root".to_owned(),
+            kind: SoraLeaseVolumeKindV1::PersistentRootLeaseVolume,
+            storage_class: StorageClass::Warm,
+            mount_path: "/".to_owned(),
+            max_total_bytes: 1024,
+            lease_expires_sequence: 100,
+            authoritative_generation: 1,
+            local_materialization_dir: "/runtime/volumes/root".to_owned(),
+        };
+        let mut lease_value =
+            norito::json::to_value(&lease).expect("encode canonical runtime lease-volume plan");
+        lease_value
+            .as_object_mut()
+            .expect("runtime lease-volume plan JSON object")
+            .insert("legacy_path".to_owned(), norito::json::Value::Null);
+        assert!(
+            norito::json::from_value::<SoracloudRuntimeLeaseVolumePlan>(lease_value).is_err(),
+            "same-version runtime lease-volume plans must reject unknown fields"
+        );
+    }
+
+    #[test]
+    fn hosted_http_runtime_state_json_requires_the_exact_v1_field_set() {
+        let canonical = SoracloudHostedHttpRuntimeStateV1 {
+            schema_version: SORACLOUD_HOSTED_HTTP_RUNTIME_STATE_VERSION_V1,
+            service_name: "service".to_owned(),
+            service_version: "1.0.0".to_owned(),
+            process_generation: 1,
+            health_status: SoraServiceHealthStatusV1::Healthy,
+            listen_base_url: None,
+            pid: None,
+            accounted_egress_bytes: 0,
+            replicas: vec![SoracloudHostedHttpReplicaRuntimeStateV1 {
+                replica_slot: 1,
+                health_status: SoraServiceHealthStatusV1::Healthy,
+                listen_base_url: None,
+                pid: None,
+                last_error: None,
+                updated_at_ms: 1,
+            }],
+            last_error: None,
+            updated_at_ms: 1,
+        };
+        let canonical_value =
+            norito::json::to_value(&canonical).expect("encode canonical hosted runtime state");
+        assert_eq!(
+            norito::json::from_value::<SoracloudHostedHttpRuntimeStateV1>(canonical_value.clone())
+                .expect("decode canonical hosted runtime state"),
+            canonical
+        );
+        for nullable_field in ["listen_base_url", "pid", "last_error"] {
+            assert!(
+                canonical_value
+                    .get(nullable_field)
+                    .is_some_and(norito::json::Value::is_null),
+                "canonical hosted runtime state must emit explicit null for {nullable_field}"
+            );
+            assert!(
+                canonical_value
+                    .pointer(&format!("/replicas/0/{nullable_field}"))
+                    .is_some_and(norito::json::Value::is_null),
+                "canonical hosted replica state must emit explicit null for {nullable_field}"
+            );
+        }
+
+        let mut unknown = canonical_value.clone();
+        unknown
+            .as_object_mut()
+            .expect("hosted runtime state JSON object")
+            .insert("legacy_backend".to_owned(), norito::json::Value::Null);
+        assert!(
+            norito::json::from_value::<SoracloudHostedHttpRuntimeStateV1>(unknown).is_err(),
+            "same-version hosted runtime state must reject unknown fields"
+        );
+
+        let mut unknown_replica = canonical_value.clone();
+        unknown_replica
+            .pointer_mut("/replicas/0")
+            .and_then(norito::json::Value::as_object_mut)
+            .expect("hosted replica JSON object")
+            .insert("legacy_pid".to_owned(), norito::json::Value::Null);
+        assert!(
+            norito::json::from_value::<SoracloudHostedHttpRuntimeStateV1>(unknown_replica).is_err(),
+            "same-version hosted replica state must reject unknown fields"
+        );
+
+        for required_field in [
+            "listen_base_url",
+            "pid",
+            "accounted_egress_bytes",
+            "replicas",
+            "last_error",
+        ] {
+            let mut missing = canonical_value.clone();
+            missing
+                .as_object_mut()
+                .expect("hosted runtime state JSON object")
+                .remove(required_field);
+            assert!(
+                norito::json::from_value::<SoracloudHostedHttpRuntimeStateV1>(missing).is_err(),
+                "same-version hosted runtime state must require {required_field}"
+            );
+        }
+        for required_field in ["listen_base_url", "pid", "last_error"] {
+            let mut missing = canonical_value.clone();
+            missing
+                .pointer_mut("/replicas/0")
+                .and_then(norito::json::Value::as_object_mut)
+                .expect("hosted replica JSON object")
+                .remove(required_field);
+            assert!(
+                norito::json::from_value::<SoracloudHostedHttpRuntimeStateV1>(missing).is_err(),
+                "same-version hosted replica state must require {required_field}"
+            );
+        }
+    }
+    #[test]
+    fn apartment_autonomy_summary_json_requires_the_exact_v1_field_set() {
+        let canonical = SoracloudApartmentAutonomyExecutionSummaryV1 {
+            schema_version: SORACLOUD_APARTMENT_AUTONOMY_EXECUTION_SUMMARY_VERSION_V1,
+            apartment_name: "ops_agent".to_owned(),
+            run_id: "run-1".to_owned(),
+            service_name: None,
+            service_version: None,
+            handler_name: None,
+            succeeded: false,
+            result_commitment: Hash::new(b"failed autonomy result"),
+            checkpoint_artifact_hash: None,
+            runtime_receipt: None,
+            workflow_steps: vec![SoracloudApartmentAutonomyWorkflowStepSummaryV1 {
+                step_index: 0,
+                step_id: None,
+                request_commitment: Hash::new(b"autonomy request"),
+                result_commitment: Hash::new(b"autonomy result"),
+                runtime_receipt: None,
+                content_type: None,
+                response_json: None,
+                response_text: None,
+            }],
+            content_type: None,
+            response_json: None,
+            response_text: None,
+            error: None,
+        };
+        let canonical_value =
+            norito::json::to_value(&canonical).expect("encode canonical autonomy summary");
+        norito::json::from_value::<SoracloudApartmentAutonomyExecutionSummaryV1>(
+            canonical_value.clone(),
+        )
+        .expect("decode canonical autonomy summary");
+
+        for nullable_field in [
+            "service_name",
+            "service_version",
+            "handler_name",
+            "checkpoint_artifact_hash",
+            "runtime_receipt",
+            "content_type",
+            "response_json",
+            "response_text",
+            "error",
+        ] {
+            assert!(
+                canonical_value
+                    .get(nullable_field)
+                    .is_some_and(norito::json::Value::is_null),
+                "canonical autonomy summary must emit explicit null for {nullable_field}"
+            );
+            let mut missing = canonical_value.clone();
+            missing
+                .as_object_mut()
+                .expect("autonomy summary JSON object")
+                .remove(nullable_field);
+            assert!(
+                norito::json::from_value::<SoracloudApartmentAutonomyExecutionSummaryV1>(missing)
+                    .is_err(),
+                "same-version autonomy summary must require {nullable_field}"
+            );
+        }
+        for nullable_field in [
+            "step_id",
+            "runtime_receipt",
+            "content_type",
+            "response_json",
+            "response_text",
+        ] {
+            assert!(
+                canonical_value
+                    .pointer(&format!("/workflow_steps/0/{nullable_field}"))
+                    .is_some_and(norito::json::Value::is_null),
+                "canonical autonomy workflow step must emit explicit null for {nullable_field}"
+            );
+            let mut missing = canonical_value.clone();
+            missing
+                .pointer_mut("/workflow_steps/0")
+                .and_then(norito::json::Value::as_object_mut)
+                .expect("autonomy workflow-step JSON object")
+                .remove(nullable_field);
+            assert!(
+                norito::json::from_value::<SoracloudApartmentAutonomyExecutionSummaryV1>(missing)
+                    .is_err(),
+                "same-version autonomy workflow step must require {nullable_field}"
+            );
+        }
+
+        let mut missing_steps = canonical_value.clone();
+        missing_steps
+            .as_object_mut()
+            .expect("autonomy summary JSON object")
+            .remove("workflow_steps");
+        assert!(
+            norito::json::from_value::<SoracloudApartmentAutonomyExecutionSummaryV1>(missing_steps)
+                .is_err(),
+            "same-version autonomy summary must require workflow_steps"
+        );
+
+        let mut unknown = canonical_value.clone();
+        unknown
+            .as_object_mut()
+            .expect("autonomy summary JSON object")
+            .insert("legacy_result".to_owned(), norito::json::Value::Null);
+        assert!(
+            norito::json::from_value::<SoracloudApartmentAutonomyExecutionSummaryV1>(unknown)
+                .is_err(),
+            "same-version autonomy summary must reject unknown fields"
+        );
+
+        let mut unknown_step = canonical_value;
+        unknown_step
+            .pointer_mut("/workflow_steps/0")
+            .and_then(norito::json::Value::as_object_mut)
+            .expect("autonomy workflow-step JSON object")
+            .insert("legacy_result".to_owned(), norito::json::Value::Null);
+        assert!(
+            norito::json::from_value::<SoracloudApartmentAutonomyExecutionSummaryV1>(unknown_step)
+                .is_err(),
+            "same-version autonomy workflow step must reject unknown fields"
+        );
+
+        let mut unknown_status = norito::json::to_value(&SoracloudRuntimeHfSourceStatus::Ready)
+            .expect("encode canonical HF runtime status");
+        unknown_status
+            .as_object_mut()
+            .expect("HF runtime status JSON object")
+            .insert("legacy_status".to_owned(), norito::json::Value::Null);
+        assert!(
+            norito::json::from_value::<SoracloudRuntimeHfSourceStatus>(unknown_status).is_err(),
+            "same-version HF runtime status must reject unknown fields"
+        );
+    }
+    #[test]
+    fn local_read_binding_json_requires_explicit_nullable_slots_and_rejects_unknown_fields() {
+        let canonical = SoracloudLocalReadBinding {
+            binding_name: None,
+            state_key: None,
+            payload_commitment: None,
+            artifact_hash: None,
+        };
+        let canonical_value =
+            norito::json::to_value(&canonical).expect("encode canonical local-read binding");
+        for nullable_field in [
+            "binding_name",
+            "state_key",
+            "payload_commitment",
+            "artifact_hash",
+        ] {
+            assert!(
+                canonical_value
+                    .get(nullable_field)
+                    .is_some_and(norito::json::Value::is_null),
+                "canonical local-read binding must emit explicit null for {nullable_field}"
+            );
+            let mut missing = canonical_value.clone();
+            missing
+                .as_object_mut()
+                .expect("local-read binding JSON object")
+                .remove(nullable_field);
+            assert!(
+                norito::json::from_value::<SoracloudLocalReadBinding>(missing).is_err(),
+                "local-read binding must require {nullable_field}"
+            );
+        }
+        let mut unknown = canonical_value;
+        unknown
+            .as_object_mut()
+            .expect("local-read binding JSON object")
+            .insert("legacy_binding".to_owned(), norito::json::Value::Null);
+        assert!(
+            norito::json::from_value::<SoracloudLocalReadBinding>(unknown).is_err(),
+            "local-read binding must reject unknown nested fields"
+        );
+    }
+    #[test]
+    fn apartment_autonomy_summary_validation_binds_schema_path_and_authoritative_commitment() {
+        let process_generation = 7;
+        let request_commitment = Hash::new(b"authoritative autonomy request");
+        let mut summary = SoracloudApartmentAutonomyExecutionSummaryV1 {
+            schema_version: SORACLOUD_APARTMENT_AUTONOMY_EXECUTION_SUMMARY_VERSION_V1,
+            apartment_name: "ops_agent".to_owned(),
+            run_id: "run-7".to_owned(),
+            service_name: None,
+            service_version: None,
+            handler_name: None,
+            succeeded: false,
+            result_commitment: Hash::new(b"placeholder"),
+            checkpoint_artifact_hash: None,
+            runtime_receipt: None,
+            workflow_steps: Vec::new(),
+            content_type: None,
+            response_json: None,
+            response_text: None,
+            error: Some("fixture failure".to_owned()),
+        };
+        summary.result_commitment = derive_soracloud_apartment_autonomy_result_commitment_v1(
+            &summary,
+            process_generation,
+            request_commitment,
+        )
+        .expect("derive canonical autonomy result commitment");
+        validate_soracloud_apartment_autonomy_execution_summary_v1(
+            &summary,
+            "ops_agent",
+            "run-7",
+            process_generation,
+            request_commitment,
+        )
+        .expect("canonical autonomy summary must validate");
+
+        let mut changed_success = summary.clone();
+        changed_success.succeeded = true;
+        assert!(
+            validate_soracloud_apartment_autonomy_execution_summary_v1(
+                &changed_success,
+                "ops_agent",
+                "run-7",
+                process_generation,
+                request_commitment,
+            )
+            .is_err(),
+            "result commitment must bind the success outcome"
+        );
+        let mut changed_service = summary.clone();
+        changed_service.service_name = Some("different_service".to_owned());
+        assert!(
+            validate_soracloud_apartment_autonomy_execution_summary_v1(
+                &changed_service,
+                "ops_agent",
+                "run-7",
+                process_generation,
+                request_commitment,
+            )
+            .is_err(),
+            "result commitment must bind resolved service identity"
+        );
+        let mut changed_receipt = summary.clone();
+        changed_receipt.runtime_receipt = Some(SoraRuntimeReceiptV1 {
+            schema_version: iroha_data_model::soracloud::SORA_RUNTIME_RECEIPT_VERSION_V1,
+            receipt_id: Hash::new(b"injected autonomy receipt"),
+            service_name: "different_service".parse().expect("valid service name"),
+            service_version: "v1".to_owned(),
+            handler_name: "infer".parse().expect("valid handler name"),
+            handler_class: SoraServiceHandlerClassV1::Query,
+            request_commitment: Hash::new(b"injected receipt request"),
+            result_commitment: Hash::new(b"injected receipt result"),
+            certified_by: SoraCertifiedResponsePolicyV1::AuditReceipt,
+            emitted_sequence: 1,
+            mailbox_message_id: None,
+            journal_artifact_hash: None,
+            checkpoint_artifact_hash: None,
+            execution_host: None,
+        });
+        assert!(
+            validate_soracloud_apartment_autonomy_execution_summary_v1(
+                &changed_receipt,
+                "ops_agent",
+                "run-7",
+                process_generation,
+                request_commitment,
+            )
+            .is_err(),
+            "result commitment must bind the runtime receipt used for authoritative ISIs"
+        );
+        let mut changed_content_type = summary.clone();
+        changed_content_type.content_type = Some("application/json".to_owned());
+        assert!(
+            validate_soracloud_apartment_autonomy_execution_summary_v1(
+                &changed_content_type,
+                "ops_agent",
+                "run-7",
+                process_generation,
+                request_commitment,
+            )
+            .is_err(),
+            "result commitment must bind response metadata"
+        );
+
+        let mut wrong_schema = summary.clone();
+        wrong_schema.schema_version =
+            SORACLOUD_APARTMENT_AUTONOMY_EXECUTION_SUMMARY_VERSION_V1.saturating_add(1);
+        assert!(
+            validate_soracloud_apartment_autonomy_execution_summary_v1(
+                &wrong_schema,
+                "ops_agent",
+                "run-7",
+                process_generation,
+                request_commitment,
+            )
+            .is_err()
+        );
+        assert!(
+            validate_soracloud_apartment_autonomy_execution_summary_v1(
+                &summary,
+                "other_agent",
+                "run-7",
+                process_generation,
+                request_commitment,
+            )
+            .is_err()
+        );
+        assert!(
+            validate_soracloud_apartment_autonomy_execution_summary_v1(
+                &summary,
+                "ops_agent",
+                "run-other",
+                process_generation,
+                request_commitment,
+            )
+            .is_err()
+        );
+        assert!(
+            validate_soracloud_apartment_autonomy_execution_summary_v1(
+                &summary,
+                "ops_agent",
+                "run-7",
+                process_generation.saturating_add(1),
+                request_commitment,
+            )
+            .is_err()
+        );
+        assert!(
+            validate_soracloud_apartment_autonomy_execution_summary_v1(
+                &summary,
+                "ops_agent",
+                "run-7",
+                process_generation,
+                Hash::new(b"different authoritative request"),
+            )
+            .is_err()
+        );
+        let mut wrong_result = summary;
+        wrong_result.result_commitment = Hash::new(b"different autonomy result");
+        assert!(
+            validate_soracloud_apartment_autonomy_execution_summary_v1(
+                &wrong_result,
+                "ops_agent",
+                "run-7",
+                process_generation,
+                request_commitment,
+            )
+            .is_err()
+        );
     }
     fn sample_private_model_artifact_ref(role: &str, seed: u8) -> SoraPrivateModelArtifactRefV1 {
         SoraPrivateModelArtifactRefV1 {
@@ -2306,7 +3273,7 @@ mod tests {
             service_name.clone(),
             &source_id.to_string(),
             "openai/gpt-oss",
-            "main",
+            "0123456789abcdef0123456789abcdef01234567",
             "gpt-oss",
         );
         let service_version = bundle.service.service_version.clone();
@@ -2418,6 +3385,8 @@ mod tests {
                     required_model_bytes: 1024,
                     backend_family: SoraHfBackendFamilyV1::Transformers,
                     model_format: SoraHfModelFormatV1::Safetensors,
+                    selected_weight_file_count: 1,
+                    weight_selection_commitment: Hash::new(b"hf-runtime-test-selection"),
                     disk_cache_bytes_floor: 2048,
                     ram_bytes_floor: 2048,
                     vram_bytes_floor: 0,
@@ -2449,7 +3418,7 @@ mod tests {
             "hf_service".parse().expect("valid service name"),
             "hash:1111111111111111111111111111111111111111111111111111111111111111#0001",
             "openai/gpt-oss",
-            "main",
+            "0123456789abcdef0123456789abcdef01234567",
             "gpt-oss",
         );
         bundle
@@ -2473,7 +3442,10 @@ mod tests {
         let binding = soracloud_hf_generated_source_binding(&bundle)
             .expect("generated bundle should expose HF markers");
         assert_eq!(binding.repo_id, "openai/gpt-oss");
-        assert_eq!(binding.resolved_revision, "main");
+        assert_eq!(
+            binding.resolved_revision,
+            "0123456789abcdef0123456789abcdef01234567"
+        );
         assert_eq!(binding.model_name, "gpt-oss");
     }
     #[test]
@@ -2482,7 +3454,7 @@ mod tests {
             "hf_service".parse().expect("valid service name"),
             "hash:2222222222222222222222222222222222222222222222222222222222222222#0002",
             "meta/llama",
-            "1234abcd",
+            "1123456789abcdef0123456789abcdef01234567",
             "llama",
         );
         let payload = soracloud_hf_generated_bundle_payload_if_applicable(&bundle)
@@ -2495,7 +3467,7 @@ mod tests {
             "hf_agent_service".parse().expect("valid service name"),
             "hash:3333333333333333333333333333333333333333333333333333333333333333#0003",
             "huggingface/smol",
-            "rev-a",
+            "2123456789abcdef0123456789abcdef01234567",
             "smol",
         );
         let manifest = build_soracloud_hf_generated_agent_manifest(

@@ -5,9 +5,7 @@
  * Builds sample transactions for:
  *   1. Proposing a contract deployment
  *   2. Casting a plain ballot
- *   3. Enacting a referendum (after approval)
- *   4. Finalizing the referendum
- *   5. Persisting a council snapshot
+ *   3. Persisting a council snapshot
  *
  * Every transaction is quoted before signing. By default the script only
  * prints the resulting hashes. Set
@@ -19,8 +17,6 @@ import { NetworkId, ToriiClient } from "../src/index.js";
 import {
   buildProposeDeployContractInstruction,
   buildCastPlainBallotInstruction,
-  buildEnactReferendumInstruction,
-  buildFinalizeReferendumInstruction,
   buildPersistCouncilForEpochInstruction,
   hashSignedTransaction,
   quoteAndSignTransaction,
@@ -56,8 +52,6 @@ const SAMPLE_CONTRACT_ADDRESS =
   process.env.GOV_CONTRACT_ADDRESS ??
   "irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw";
 const SAMPLE_REFERENDUM_ID = "demo-referendum";
-const SAMPLE_REFERENDUM_HASH = Buffer.alloc(32, 0xaa);
-const SAMPLE_PROPOSAL_HASH = Buffer.alloc(32, 0xbb);
 const GOV_PROPOSAL_ID = process.env.GOV_PROPOSAL_ID;
 const GOV_REFERENDUM_ID = process.env.GOV_REFERENDUM_ID;
 const GOV_LOCKS_ID = process.env.GOV_LOCKS_ID ?? GOV_REFERENDUM_ID;
@@ -97,48 +91,29 @@ async function main() {
       label: "ProposeDeployContract",
       buildInstruction: () =>
         buildProposeDeployContractInstruction({
-            contractAddress: SAMPLE_CONTRACT_ADDRESS,
-            codeHash: Buffer.alloc(32, 0xcd),
-            abiHash: Buffer.alloc(32, 0xef),
-            abiVersion: "1",
-            window: { lower: 100, upper: 200 },
-            votingMode: "Plain",
+          contractAddress: SAMPLE_CONTRACT_ADDRESS,
+          codeHash: Buffer.alloc(32, 0xcd),
+          abiHash: Buffer.alloc(32, 0xef),
+          abiVersion: 1,
         }),
     },
     {
       label: "CastPlainBallot",
       buildInstruction: () =>
         buildCastPlainBallotInstruction({
-            referendumId: SAMPLE_REFERENDUM_ID,
-            owner: AUTHORITY,
-            amount: "2500",
-            durationBlocks: 7200,
-            direction: "aye",
-        }),
-    },
-    {
-      label: "EnactReferendum",
-      buildInstruction: () =>
-        buildEnactReferendumInstruction({
-            referendumId: SAMPLE_REFERENDUM_HASH,
-            preimageHash: Buffer.alloc(32, 0xee),
-            window: { lower: 300, upper: 360 },
-        }),
-    },
-    {
-      label: "FinalizeReferendum",
-      buildInstruction: () =>
-        buildFinalizeReferendumInstruction({
-            referendumId: SAMPLE_REFERENDUM_ID,
-            proposalId: SAMPLE_PROPOSAL_HASH,
+          referendumId: SAMPLE_REFERENDUM_ID,
+          owner: AUTHORITY,
+          amount: "2500",
+          durationBlocks: 7200,
+          direction: "aye",
         }),
     },
     {
       label: "PersistCouncilForEpoch",
       buildInstruction: () =>
         buildPersistCouncilForEpochInstruction({
-            epoch: 42,
-            members: [AUTHORITY],
+          epoch: 42,
+          members: [AUTHORITY],
         }),
     },
   ];
@@ -175,7 +150,7 @@ async function main() {
   }
 
   if (SHOULD_FETCH) {
-    await inspectGovernance(client);
+    await inspectGovernance(client, canonicalAuth);
   }
 
   if (!SHOULD_SUBMIT) {
@@ -185,53 +160,56 @@ async function main() {
   }
 }
 
-async function inspectGovernance(client) {
+async function inspectGovernance(client, canonicalAuth) {
   console.log("\nInspecting governance state via Torii...");
-  await fetchProposal(client);
-  await fetchReferendum(client);
-  await fetchLocks(client);
-  await fetchUnlockStats(client);
+  await fetchProposal(client, canonicalAuth);
+  await fetchReferendum(client, canonicalAuth);
+  await fetchLocks(client, canonicalAuth);
+  await fetchUnlockStats(client, canonicalAuth);
 }
 
-async function fetchProposal(client) {
+async function fetchProposal(client, canonicalAuth) {
   if (!GOV_PROPOSAL_ID) {
     console.log("  GOV_PROPOSAL_ID not set; skipping proposal lookup.");
     return;
   }
   await logJsonResult(
     `proposal:${GOV_PROPOSAL_ID}`,
-    () => client.getGovernanceProposalTyped(GOV_PROPOSAL_ID),
+    () => client.getGovernanceProposalTyped(GOV_PROPOSAL_ID, { canonicalAuth }),
   );
 }
 
-async function fetchReferendum(client) {
+async function fetchReferendum(client, canonicalAuth) {
   if (!GOV_REFERENDUM_ID) {
     console.log("  GOV_REFERENDUM_ID not set; skipping referendum lookup.");
     return;
   }
   await logJsonResult(
     `referendum:${GOV_REFERENDUM_ID}`,
-    () => client.getGovernanceReferendumTyped(GOV_REFERENDUM_ID),
+    () => client.getGovernanceReferendumTyped(GOV_REFERENDUM_ID, { canonicalAuth }),
   );
   await logJsonResult(
     `tally:${GOV_REFERENDUM_ID}`,
-    () => client.getGovernanceTallyTyped(GOV_REFERENDUM_ID),
+    () => client.getGovernanceTallyTyped(GOV_REFERENDUM_ID, { canonicalAuth }),
   );
 }
 
-async function fetchLocks(client) {
+async function fetchLocks(client, canonicalAuth) {
   if (!GOV_LOCKS_ID) {
     console.log("  GOV_LOCKS_ID not set; skipping lock lookup.");
     return;
   }
   await logJsonResult(
     `locks:${GOV_LOCKS_ID}`,
-    () => client.getGovernanceLocksTyped(GOV_LOCKS_ID),
+    () => client.getGovernanceLocksTyped(GOV_LOCKS_ID, { canonicalAuth }),
   );
 }
 
-async function fetchUnlockStats(client) {
-  await logJsonResult("unlock_stats", () => client.getGovernanceUnlockStatsTyped());
+async function fetchUnlockStats(client, canonicalAuth) {
+  await logJsonResult(
+    "unlock_stats",
+    () => client.getGovernanceUnlockStatsTyped({ canonicalAuth }),
+  );
 }
 
 async function logJsonResult(label, fetcher) {

@@ -361,7 +361,8 @@ fn open_lifecycle_recovery_state(
     context: &wire::HeightContext,
     nexus: &Nexus,
 ) -> (Arc<Kura>, State) {
-    let (kura, _) = Kura::new(kura_config, lane_config).expect("open lifecycle Kura");
+    let (kura, _) = Kura::open_test_kura_with_configured_lane_config(kura_config, lane_config)
+        .expect("open lifecycle Kura");
     let mut state = State::try_new_with_chain_and_network_id_with_default_telemetry(
         World::default(),
         Arc::clone(&kura),
@@ -489,7 +490,8 @@ fn generation_takeover_runs_crash_recover_and_rehydrate_then_stutters() {
     context
         .validate()
         .expect("lifecycle startup context must be structurally valid");
-    let (kura, _) = Kura::new(&kura_config, &lane_config).expect("initial Kura");
+    let (kura, _) = Kura::open_test_kura_with_configured_lane_config(&kura_config, &lane_config)
+        .expect("initial Kura");
     let mut state = State::try_new_with_chain_and_network_id_with_default_telemetry(
         World::default(),
         Arc::clone(&kura),
@@ -558,7 +560,9 @@ fn generation_takeover_runs_crash_recover_and_rehydrate_then_stutters() {
     drop(generation_one);
     drop(state);
     drop(kura);
-    let (restarted, _) = Kura::new(&kura_config, &lane_config).expect("restart Kura");
+    let (restarted, _) =
+        Kura::open_test_kura_with_configured_lane_config(&kura_config, &lane_config)
+            .expect("restart Kura");
     let mut restarted_state = State::try_new_with_chain_and_network_id_with_default_telemetry(
         World::default(),
         Arc::clone(&restarted),

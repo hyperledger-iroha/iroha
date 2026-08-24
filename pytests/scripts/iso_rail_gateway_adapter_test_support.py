@@ -9,7 +9,7 @@ import threading
 import iso_rail_gateway_adapter as ADAPTER
 
 SAMPLE_XML = b"<Document><FIToFIPmtStsRpt><GrpHdr><MsgId>rail-1</MsgId></GrpHdr></FIToFIPmtStsRpt></Document>"
-TEST_NETWORK_ID = "hash:" + ("A5" * 32) + "#A2F0"
+TEST_NETWORK_ID = "hash:" + ("A5" * 32) + "#95D7"
 
 
 class _TestOperatorContext:

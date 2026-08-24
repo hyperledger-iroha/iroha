@@ -674,6 +674,7 @@ fn run_lifecycle_active_height(
     cleanup_supervisor: &mut V2CleanupSupervisor,
     liveness_watchdog: &mut crate::sumeragi::status::V2LivenessWatchdog,
     npos_vrf: &mut V2NposVrfLifecycle,
+    npos_beacon: &mut V2GlobalBeaconLifecycle,
     block_sync: &mut V2BlockSyncDiscovery,
     block_sync_server: &mut V2BlockSyncServer,
     eager_block_sync: &mut bool,
@@ -791,11 +792,24 @@ fn run_lifecycle_active_height(
         } else {
             activated.with_runner_runtime(
                 &mut active_runner,
-                |_owner, _executor, services, _local_proposal| {
+                |_owner, executor, services, _local_proposal| {
+                    npos_beacon
+                        .begin_round(executor.current_tag().view())
+                        .map_err(|error| V2RunnerError::Candidate(error.to_string()))?;
+                    broadcast_npos_vrf_messages(
+                        npos_beacon.take_outbound(),
+                        output_guard.as_ref(),
+                        services,
+                    )?;
                     let now = Instant::now();
                     if now >= next_npos_vrf_retransmit {
                         broadcast_npos_vrf_messages(
                             npos_vrf.retransmission(),
+                            output_guard.as_ref(),
+                            services,
+                        )?;
+                        broadcast_npos_vrf_messages(
+                            npos_beacon.retransmission(),
                             output_guard.as_ref(),
                             services,
                         )?;
@@ -970,6 +984,7 @@ fn run_lifecycle_active_height(
             block_sync,
             &mut block_sync_request,
             npos_vrf,
+            npos_beacon,
             body_queue_capacity,
             producer_claim,
         )?;
@@ -1163,6 +1178,7 @@ fn run_lifecycle_active_height(
                         services,
                         &mut lane_work,
                         npos_vrf,
+                        npos_beacon,
                         retransmit_interval,
                     )?;
                     dispatch_lane_work_effects(&mut lane_work, services, control_queue_capacity)
@@ -1393,6 +1409,9 @@ pub(super) fn run_non_pending_lifecycle_loop(
     reputation_finalized_archive: Option<
         Arc<crate::query::reputation_finalized::ReputationFinalizedArchive>,
     >,
+    global_beacon_partial_signer: Option<
+        Arc<dyn crate::beacon::GlobalThresholdBeaconPartialSignerV1>,
+    >,
     network: crate::IrohaNetwork,
     block_rx: Arc<FairV2Ingress>,
     lane_relay_rx: std::sync::mpsc::Receiver<crate::sumeragi::LaneRelayMessage>,
@@ -1483,6 +1502,13 @@ pub(super) fn run_non_pending_lifecycle_loop(
             local_validator,
             &common_config.key_pair,
         )?;
+        let mut npos_beacon = V2GlobalBeaconLifecycle::open(
+            &context,
+            state.as_ref(),
+            local_validator,
+            global_beacon_partial_signer.clone(),
+        )
+        .map_err(|error| V2RunnerError::Candidate(error.to_string()))?;
         let new_block_sync_server = block_sync_server
             .is_none()
             .then(|| V2BlockSyncServer::new(context.network_id, certified_request_capacity))
@@ -1843,7 +1869,7 @@ pub(super) fn run_non_pending_lifecycle_loop(
                 dispatch_lane_work_effects(&mut lane_work, services, control_queue_capacity)?;
                 Ok(lane_work)
             })?;
-        let (_initial_directive, local_proposal) =
+        let (initial_directive, local_proposal) =
             preactivation.initialize_recovered_local_proposal(setup_runner)?;
         // Startup repair is not live-height cadence. Arm activation, proposal,
         // and discovery deadlines only after every closed-ingress recovery and
@@ -1852,11 +1878,19 @@ pub(super) fn run_non_pending_lifecycle_loop(
         let mut activated = preactivation.activate(height_started_at, local_proposal)?;
         let mut active_runner =
             ProductionLifecycleActiveRunnerBorrowV1::mint_for_recovered_runner();
+        npos_beacon
+            .begin_round(initial_directive.tag().view())
+            .map_err(|error| V2RunnerError::Candidate(error.to_string()))?;
         activated.with_runner_runtime(
             &mut active_runner,
             |_owner, _executor, services, _local_proposal| {
                 broadcast_npos_vrf_messages(
                     npos_vrf.take_outbound(),
+                    output_guard.as_ref(),
+                    services,
+                )?;
+                broadcast_npos_vrf_messages(
+                    npos_beacon.take_outbound(),
                     output_guard.as_ref(),
                     services,
                 )
@@ -1883,6 +1917,7 @@ pub(super) fn run_non_pending_lifecycle_loop(
             &mut cleanup_supervisor,
             &mut liveness_watchdog,
             &mut npos_vrf,
+            &mut npos_beacon,
             &mut block_sync,
             block_sync_server
                 .as_mut()

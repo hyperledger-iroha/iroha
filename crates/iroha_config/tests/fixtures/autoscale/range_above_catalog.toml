@@ -4,8 +4,8 @@ lane_count = 4
 
 [nexus.autoscale]
 enabled = true
-min_lanes = 4
-max_lanes = 5
+min_lane_id = 4
+max_lane_id_exclusive = 5
 
 [[nexus.lane_catalog]]
 index = 0

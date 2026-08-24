@@ -2774,17 +2774,6 @@ macro_rules! production_decision_recovery_trace_body {
             && $projection.stage == 1u8
     }};
 }
-macro_rules! production_decision_apply_startup_trace_body {
-    ($projection:expr) => {{
-        let primitive_recovery = ProductionDecisionRecoveryTraceProjection {
-            stage: 1u8,
-            ..$projection.recovery
-        };
-        $projection.apply_carrier_installed
-            && $projection.recovery.stage == 4u8
-            && production_decision_recovery_trace_body!(primitive_recovery)
-    }};
-}
 macro_rules! production_scheduler_trace_body {
     ($projection:expr) => {{
         if $projection.timeout_due {
@@ -5699,12 +5688,6 @@ pub struct ProductionDecisionRecoveryTraceProjection {
     pub(crate) validated_execution_commitment: CanonicalIdentityProjection,
     pub(crate) stage: u8,
 }
-/// Direct-Apply startup authorized by one exact recovered carrier census.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub struct ProductionDecisionApplyStartupTraceProjection {
-    pub(crate) recovery: ProductionDecisionRecoveryTraceProjection,
-    pub(crate) apply_carrier_installed: bool,
-}
 /// Primitive scheduler input and its concrete selected owner.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct ProductionSchedulerTraceProjection {
@@ -8169,12 +8152,6 @@ pub(crate) const fn production_decision_trace_refines_recovery_witness_kernel(
     projection: ProductionDecisionRecoveryTraceProjection,
 ) -> bool {
     production_decision_recovery_trace_body!(projection)
-}
-/// Validate direct-Apply recovery only beside an installed recovered carrier.
-pub(crate) const fn production_decision_apply_startup_refines_recovery_witness_kernel(
-    projection: ProductionDecisionApplyStartupTraceProjection,
-) -> bool {
-    production_decision_apply_startup_trace_body!(projection)
 }
 /// Validate exact scheduler selection and the resulting FIFO debt owner.
 pub(crate) const fn production_scheduler_trace_refines_protected_ownership_kernel(

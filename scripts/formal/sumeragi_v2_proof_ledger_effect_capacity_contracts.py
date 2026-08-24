@@ -1050,7 +1050,6 @@ let Some(evidence) = self.pending_tip_recovery.as_ref() else {
 let exact = evidence.stage() == PendingKuraApplyRecoveryStage::Apply
     && evidence.is_exact(&self.context)
     && evidence.replay_tag() == self.current_tag()
-    && prepared.dispatch_key().lifecycle_ordinal() == evidence.recovered_apply_ordinal()
     && prepared.exactly_matches_pending_kura_recovery(
         &self.context,
         evidence.replay_tag(),
@@ -1059,7 +1058,7 @@ let exact = evidence.stage() == PendingKuraApplyRecoveryStage::Apply
         evidence.validated_receipt(),
     );
 """,
-        "pending-Kura lifecycle Apply dispatch must bind its exact stage, context, ordinal, Decision, and receipt",
+        "pending-Kura lifecycle Apply dispatch must bind its exact stage, context, Decision, and receipt",
         errors,
     )
 
@@ -4771,6 +4770,13 @@ self.retain_effect_ownership(
                 serialized_runtime_context,
                 description,
                 errors,
+                expected_attributes=(
+                    (
+                        '#[allow(dead_code, reason = "retained by formal contracts")]',
+                    )
+                    if item_name == "step_recovery"
+                    else ()
+                ),
             )
             _require_rust_token_sequence(
                 runtime_path,
