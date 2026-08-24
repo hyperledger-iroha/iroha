@@ -80,6 +80,7 @@ jobs:
       - uses: actions-rust-lang/setup-rust-toolchain@166cdcfd11aee3cb47222f9ddb555ce30ddb9659
         with:
           target: ${{ matrix.target }}
+          cache-targets: false
 
       - name: Build native C# bridge on its matching release host
         shell: bash
