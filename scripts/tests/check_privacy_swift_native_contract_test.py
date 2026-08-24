@@ -227,14 +227,16 @@ class PrivacySwiftNativeContractTests(unittest.TestCase):
         android_job = workflow_job(workflow, "android-mobile-sdk")
         self.assertIn('APPLE_PRIVACY_PRODUCTION_ENABLED: "false"', workflow)
         self.assertIn('ANDROID_PRIVACY_PRODUCTION_ENABLED: "false"', workflow)
-        self.assertIn(
-            "PRIVACY_PRODUCTION_ENABLED: ${{ env.APPLE_PRIVACY_PRODUCTION_ENABLED }}",
-            apple_job,
+        self.assertEqual(
+            apple_job.count('$APPLE_PRIVACY_PRODUCTION_ENABLED" == "true"'), 2
         )
-        self.assertIn(
-            "PRIVACY_PRODUCTION_ENABLED: ${{ env.ANDROID_PRIVACY_PRODUCTION_ENABLED }}",
-            android_job,
+        self.assertEqual(
+            android_job.count(
+                '-PprivacyProductionEnabled="$ANDROID_PRIVACY_PRODUCTION_ENABLED"'
+            ),
+            2,
         )
+        self.assertNotIn("PRIVACY_PRODUCTION_ENABLED: ${{ env.", workflow)
         self.assertNotIn("inputs.privacy_production_enabled", workflow)
         self.assertNotIn("github.ref_type == 'tag' ||", workflow)
         for trigger in (

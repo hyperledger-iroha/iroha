@@ -3282,11 +3282,9 @@ impl Kura {
         namespace: &BoundProgressNamespace,
     ) -> std::result::Result<(), BoundProgressRecoveryFailure> {
         for directory in &namespace.directories {
-            let opened = directory
-                .file
-                .metadata()
+            let opened = secure_file_metadata::from_file(&directory.file)
                 .map_err(|error| BoundProgressRecoveryFailure::from_io(&error))?;
-            let current = std::fs::symlink_metadata(&directory.expected_path)
+            let current = secure_file_metadata::from_path(&directory.expected_path)
                 .map_err(|error| BoundProgressRecoveryFailure::from_io(&error))?;
             if !opened.is_dir()
                 || !current.is_dir()

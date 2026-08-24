@@ -781,6 +781,11 @@ print(f"{digest} {size}")
         )
         self.assertNotIn("write_embedded_manifest", builder)
         self.assertNotIn("after migration", builder)
+        self.assertIn("libpqclean_common.a", builder)
+        self.assertIn("libkeccak*x.a", builder)
+        self.assertIn("ZERO_AR_DATE=1", builder)
+        self.assertIn("-no_warning_for_no_symbols", builder)
+        self.assertIn("staged Apple archive omitted pqcrypto native symbols", builder)
 
     def test_checker_nested_source_seal_is_no_site_and_no_bytecode(self) -> None:
         checker = (ROOT / "scripts/check_mobile_sdk_artifacts.sh").read_text(
@@ -810,6 +815,15 @@ print(f"{digest} {size}")
             EXPECTED_FORBIDDEN_SYMBOLS = [
                 "connect_norito_kagemusha_retired_v3"
             ]
+            EXPECTED_BUNDLED_NATIVE_SYMBOL_PREFIXES = ("sha3_", "shake")
+            EXPECTED_ARM64_SHAKE_X2_SYMBOLS = {
+                "shake128x2",
+                "shake128x2_absorb",
+                "shake128x2_squeezeblocks",
+                "shake256x2",
+                "shake256x2_absorb",
+                "shake256x2_squeezeblocks",
+            }
 
         def canonical_output(tool: Path, arguments: list[str]) -> str:
             identifier = Path(arguments[-1]).parent.name
@@ -817,11 +831,20 @@ print(f"{digest} {size}")
                 return " ".join(
                     NativePolicy.EXPECTED_SLICES[identifier]["architectures"]
                 ) + "\n"
-            self.assertEqual(arguments[:-1], ["-gUj"])
-            return (
-                "_connect_norito_bridge_abi_version\n"
-                "_connect_norito_kagemusha_required_v4\n"
-            )
+            if arguments[:-1] == ["-gUj"]:
+                return (
+                    "_connect_norito_bridge_abi_version\n"
+                    "_connect_norito_kagemusha_required_v4\n"
+                    "_sha3_256\n"
+                    "_shake128x2\n"
+                    "_shake128x2_absorb\n"
+                    "_shake128x2_squeezeblocks\n"
+                    "_shake256x2\n"
+                    "_shake256x2_absorb\n"
+                    "_shake256x2_squeezeblocks\n"
+                )
+            self.assertEqual(arguments[:-1], ["-guj"])
+            return "_sha3_256\n"
 
         with (
             mock.patch.object(owner.sys, "platform", "darwin"),
@@ -852,6 +875,8 @@ print(f"{digest} {size}")
                 "connect_norito_kagemusha_required_v4",
             ]
             EXPECTED_FORBIDDEN_SYMBOLS = []
+            EXPECTED_BUNDLED_NATIVE_SYMBOL_PREFIXES = ("sha3_", "shake")
+            EXPECTED_ARM64_SHAKE_X2_SYMBOLS = set()
 
         def reference_only_output(tool: Path, arguments: list[str]) -> str:
             identifier = Path(arguments[-1]).parent.name
@@ -859,13 +884,10 @@ print(f"{digest} {size}")
                 return " ".join(
                     NativePolicy.EXPECTED_SLICES[identifier]["architectures"]
                 ) + "\n"
-            if arguments[:-1] == ["-gj"]:
-                return (
-                    "_connect_norito_bridge_abi_version\n"
-                    "_connect_norito_kagemusha_required_v4\n"
-                )
-            self.assertEqual(arguments[:-1], ["-gUj"])
-            return "_connect_norito_bridge_abi_version\n"
+            if arguments[:-1] == ["-gUj"]:
+                return "_connect_norito_bridge_abi_version\n"
+            self.assertEqual(arguments[:-1], ["-guj"])
+            return ""
 
         with (
             mock.patch.object(owner.sys, "platform", "darwin"),
@@ -886,6 +908,123 @@ print(f"{digest} {size}")
             ):
                 owner._validate_native_binaries(self.framework, NativePolicy)
 
+    def test_unresolved_bundled_native_symbol_is_rejected(self) -> None:
+        owner = load_owner_module()
+
+        class NativePolicy:
+            LIBRARY_NAME = "libNoritoBridge.a"
+            EXPECTED_SLICES = {
+                identifier: {"architectures": architectures}
+                for identifier, (_, architectures, _) in SLICE_METADATA.items()
+            }
+            EXPECTED_REQUIRED_SYMBOLS = ["connect_norito_bridge_abi_version"]
+            EXPECTED_FORBIDDEN_SYMBOLS = []
+            EXPECTED_BUNDLED_NATIVE_SYMBOL_PREFIXES = ("sha3_", "shake")
+            EXPECTED_ARM64_SHAKE_X2_SYMBOLS = {
+                "shake128x2",
+                "shake128x2_absorb",
+                "shake128x2_squeezeblocks",
+                "shake256x2",
+                "shake256x2_absorb",
+                "shake256x2_squeezeblocks",
+            }
+
+        def unresolved_output(tool: Path, arguments: list[str]) -> str:
+            identifier = Path(arguments[-1]).parent.name
+            if tool.name == "lipo":
+                return " ".join(
+                    NativePolicy.EXPECTED_SLICES[identifier]["architectures"]
+                ) + "\n"
+            if arguments[:-1] == ["-gUj"]:
+                return (
+                    "_connect_norito_bridge_abi_version\n"
+                    "_shake128x2\n"
+                    "_shake128x2_absorb\n"
+                    "_shake128x2_squeezeblocks\n"
+                    "_shake256x2\n"
+                    "_shake256x2_absorb\n"
+                    "_shake256x2_squeezeblocks\n"
+                )
+            self.assertEqual(arguments[:-1], ["-guj"])
+            return "_sha3_256\n"
+
+        with (
+            mock.patch.object(owner.sys, "platform", "darwin"),
+            mock.patch.object(
+                owner,
+                "_pinned_native_tool",
+                side_effect=lambda name: Path("/usr/bin") / name,
+            ),
+            mock.patch.object(
+                owner,
+                "_run_native_tool",
+                side_effect=unresolved_output,
+            ),
+        ):
+            with self.assertRaisesRegex(
+                owner.ArchiveError,
+                "unresolved bundled native symbols: sha3_256",
+            ):
+                owner._validate_native_binaries(self.framework, NativePolicy)
+
+    def test_incomplete_arm64_shake_x2_inventory_is_rejected(self) -> None:
+        owner = load_owner_module()
+
+        class NativePolicy:
+            LIBRARY_NAME = "libNoritoBridge.a"
+            EXPECTED_SLICES = {
+                identifier: {"architectures": architectures}
+                for identifier, (_, architectures, _) in SLICE_METADATA.items()
+            }
+            EXPECTED_REQUIRED_SYMBOLS = ["connect_norito_bridge_abi_version"]
+            EXPECTED_FORBIDDEN_SYMBOLS = []
+            EXPECTED_BUNDLED_NATIVE_SYMBOL_PREFIXES = ("sha3_", "shake")
+            EXPECTED_ARM64_SHAKE_X2_SYMBOLS = {
+                "shake128x2",
+                "shake128x2_absorb",
+                "shake128x2_squeezeblocks",
+                "shake256x2",
+                "shake256x2_absorb",
+                "shake256x2_squeezeblocks",
+            }
+
+        def incomplete_output(tool: Path, arguments: list[str]) -> str:
+            identifier = Path(arguments[-1]).parent.name
+            if tool.name == "lipo":
+                return " ".join(
+                    NativePolicy.EXPECTED_SLICES[identifier]["architectures"]
+                ) + "\n"
+            if arguments[:-1] == ["-gUj"]:
+                return (
+                    "_connect_norito_bridge_abi_version\n"
+                    "_shake128x2\n"
+                    "_shake128x2_absorb\n"
+                    "_shake128x2_squeezeblocks\n"
+                    "_shake256x2\n"
+                    "_shake256x2_absorb\n"
+                )
+            self.assertEqual(arguments[:-1], ["-guj"])
+            return ""
+
+        with (
+            mock.patch.object(owner.sys, "platform", "darwin"),
+            mock.patch.object(
+                owner,
+                "_pinned_native_tool",
+                side_effect=lambda name: Path("/usr/bin") / name,
+            ),
+            mock.patch.object(
+                owner,
+                "_run_native_tool",
+                side_effect=incomplete_output,
+            ),
+        ):
+            with self.assertRaisesRegex(
+                owner.ArchiveError,
+                "arm64 SHAKE x2 symbol inventory is not exact",
+            ):
+                owner._validate_native_binaries(self.framework, NativePolicy)
+
     def test_wrong_architecture_and_missing_export_are_rejected(self) -> None:
         owner = load_owner_module()
 
@@ -902,6 +1041,8 @@ print(f"{digest} {size}")
             EXPECTED_FORBIDDEN_SYMBOLS = [
                 "connect_norito_kagemusha_retired_v3"
             ]
+            EXPECTED_BUNDLED_NATIVE_SYMBOL_PREFIXES = ("sha3_", "shake")
+            EXPECTED_ARM64_SHAKE_X2_SYMBOLS = set()
 
         def wrong_architecture(tool: Path, arguments: list[str]) -> str:
             identifier = Path(arguments[-1]).parent.name
@@ -920,7 +1061,9 @@ print(f"{digest} {size}")
                 return " ".join(
                     NativePolicy.EXPECTED_SLICES[identifier]["architectures"]
                 ) + "\n"
-            return "_connect_norito_kagemusha_required_v4\n"
+            if arguments[:-1] == ["-gUj"]:
+                return "_connect_norito_kagemusha_required_v4\n"
+            return ""
 
         with (
             mock.patch.object(owner.sys, "platform", "darwin"),

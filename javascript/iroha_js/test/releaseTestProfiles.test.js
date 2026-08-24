@@ -125,6 +125,12 @@ test("release workflows require platform provenance, heavy, and SoraFS native la
   for (const required of [
     '      - "javascript/iroha_js/**"',
     "os: [ubuntu-latest, macos-latest, windows-latest]",
+    "Prime and bind the audited JavaScript native build envelope",
+    '"$cargo_path" fetch --locked --manifest-path "$workspace/Cargo.toml"',
+    'echo "CARGO_NET_OFFLINE=true"',
+    'echo "IROHA_JS_CARGO_LOCKFILE_PATH=$cargo_lock"',
+    'echo "IROHA_JS_CARGO_PATH=$cargo_path"',
+    "env -u CARGO_PROFILE_DEV_DEBUG -u RUSTFLAGS npm test --prefix javascript/iroha_js",
     "npm run test:native-provenance --prefix javascript/iroha_js",
   ]) {
     assert.ok(kotodamaWorkflow.includes(required), `Kotodama workflow must contain ${required}`);

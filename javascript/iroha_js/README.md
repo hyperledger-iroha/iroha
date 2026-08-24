@@ -1432,9 +1432,12 @@ const assetDefinitionAndMintTx = buildRegisterAssetDefinitionAndMintTransaction(
   feePayment,
   assetDefinition: {
     assetDefinitionId: "62Fk4FPcMuLvW5QjDGNF2a4jAmjM",
+    name: "Rose",
     metadata: { description: "Rose asset" },
     mintable: "Not",
     spec: { scale: 4 },
+    owningDomain: null,
+    balanceScopePolicy: "Global",
   },
   mints: [
     {
@@ -1455,7 +1458,10 @@ const assetDefinitionMintAndTransferTx = buildRegisterAssetDefinitionMintAndTran
   feePayment,
   assetDefinition: {
     assetDefinitionId: "4jAY5UbAxnGPt31CkijmAsqXP4o4",
+    name: "Lily",
     metadata: { description: "Lily asset" },
+    owningDomain: null,
+    balanceScopePolicy: "Global",
   },
   mints: [
     {

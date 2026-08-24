@@ -272,7 +272,7 @@ private func mutateFirstNativeAmxQcBody(
     }
 }
 
-private final class StubGatewayFetcher: SorafsGatewayFetching, @unchecked Sendable {
+final class StubGatewayFetcher: SorafsGatewayFetching, @unchecked Sendable {
     var capturedPlan: ToriiJSONValue?
     var capturedProviders: [SorafsGatewayProvider]?
     var capturedOptions: SorafsGatewayFetchOptions?
@@ -2098,7 +2098,7 @@ final class ToriiClientTests: XCTestCase {
                                            statusCode: 200,
                                            httpVersion: nil,
                                            headerFields: ["Content-Type": "application/json"])!
-            return (response, self.ramLfeExecuteResponseJSON())
+            return (response, ramLfeExecuteResponseJSON())
         }
 
         let response = try await makeClient().executeRamLfeProgram(
@@ -2172,7 +2172,7 @@ final class ToriiClientTests: XCTestCase {
                                            statusCode: 200,
                                            httpVersion: nil,
                                            headerFields: ["Content-Type": "application/json"])!
-            return (response, self.ramLfeReceiptVerifyResponseJSON())
+            return (response, ramLfeReceiptVerifyResponseJSON())
         }
 
         let response = try await makeClient().verifyRamLfeReceipt(
@@ -6571,7 +6571,7 @@ final class ToriiClientTests: XCTestCase {
         )
         XCTAssertEqual(quote.quoteId, quoteId)
         XCTAssertEqual(quote.leaseFee, "1000000.25")
-        XCTAssertEqual(quote.openLeaseInstruction.wireId, "OpenVpnLeaseEscrow")
+        XCTAssertEqual(try XCTUnwrap(quote.openLeaseInstruction).wireId, "OpenVpnLeaseEscrow")
     }
 
     @available(iOS 15.0, macOS 12.0, *)
@@ -19710,48 +19710,48 @@ data: {"event":"Transaction","hash":"\(Self.pipelineHash)","status":"Applied","b
         let proposalId = String(repeating: "ab", count: 32)
         let invalidCalls: [(String, () async throws -> Void)] = [
             ("uppercase proposal", {
-                _ = try await client.getGovernanceProposal(idHex: proposalId.uppercased(), canonicalAuth: canonicalReadAuth)
+                _ = try await client.getGovernanceProposal(idHex: proposalId.uppercased(), canonicalAuth: self.canonicalReadAuth)
             }),
             ("prefixed proposal", {
-                _ = try await client.getGovernanceProposal(idHex: "0x\(proposalId)", canonicalAuth: canonicalReadAuth)
+                _ = try await client.getGovernanceProposal(idHex: "0x\(proposalId)", canonicalAuth: self.canonicalReadAuth)
             }),
             ("padded proposal", {
-                _ = try await client.getGovernanceProposal(idHex: " \(proposalId)", canonicalAuth: canonicalReadAuth)
+                _ = try await client.getGovernanceProposal(idHex: " \(proposalId)", canonicalAuth: self.canonicalReadAuth)
             }),
             ("slash proposal", {
-                _ = try await client.getGovernanceProposal(idHex: "proposal/segment", canonicalAuth: canonicalReadAuth)
+                _ = try await client.getGovernanceProposal(idHex: "proposal/segment", canonicalAuth: self.canonicalReadAuth)
             }),
             ("padded referendum", {
-                _ = try await client.getGovernanceReferendum(id: " ref-1", canonicalAuth: canonicalReadAuth)
+                _ = try await client.getGovernanceReferendum(id: " ref-1", canonicalAuth: self.canonicalReadAuth)
             }),
             ("internal referendum whitespace", {
-                _ = try await client.getGovernanceReferendum(id: "ref 1", canonicalAuth: canonicalReadAuth)
+                _ = try await client.getGovernanceReferendum(id: "ref 1", canonicalAuth: self.canonicalReadAuth)
             }),
             ("slash referendum", {
-                _ = try await client.getGovernanceReferendum(id: "ref/1", canonicalAuth: canonicalReadAuth)
+                _ = try await client.getGovernanceReferendum(id: "ref/1", canonicalAuth: self.canonicalReadAuth)
             }),
             ("leading-dot referendum", {
-                _ = try await client.getGovernanceReferendum(id: ".hidden", canonicalAuth: canonicalReadAuth)
+                _ = try await client.getGovernanceReferendum(id: ".hidden", canonicalAuth: self.canonicalReadAuth)
             }),
             ("percent referendum", {
-                _ = try await client.getGovernanceReferendum(id: "ref%31", canonicalAuth: canonicalReadAuth)
+                _ = try await client.getGovernanceReferendum(id: "ref%31", canonicalAuth: self.canonicalReadAuth)
             }),
             ("unicode referendum", {
-                _ = try await client.getGovernanceReferendum(id: "投票", canonicalAuth: canonicalReadAuth)
+                _ = try await client.getGovernanceReferendum(id: "投票", canonicalAuth: self.canonicalReadAuth)
             }),
             ("tally tab", {
-                _ = try await client.getGovernanceTally(id: "ref\t1", canonicalAuth: canonicalReadAuth)
+                _ = try await client.getGovernanceTally(id: "ref\t1", canonicalAuth: self.canonicalReadAuth)
             }),
             ("overlong tally", {
                 _ = try await client.getGovernanceTally(
-                    id: String(repeating: "a", count: 129), canonicalAuth: canonicalReadAuth
+                    id: String(repeating: "a", count: 129), canonicalAuth: self.canonicalReadAuth
                 )
             }),
             ("locks control", {
-                _ = try await client.getGovernanceLocks(referendumId: "ref\u{0000}1", canonicalAuth: canonicalReadAuth)
+                _ = try await client.getGovernanceLocks(referendumId: "ref\u{0000}1", canonicalAuth: self.canonicalReadAuth)
             }),
             ("locks unicode whitespace", {
-                _ = try await client.getGovernanceLocks(referendumId: "ref\u{2003}1", canonicalAuth: canonicalReadAuth)
+                _ = try await client.getGovernanceLocks(referendumId: "ref\u{2003}1", canonicalAuth: self.canonicalReadAuth)
             }),
         ]
         var dispatched = false

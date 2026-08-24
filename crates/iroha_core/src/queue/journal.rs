@@ -4,7 +4,10 @@ use super::{
     LaneQueueReservationRecoveryPhaseV1, QueuePlanAdmissionContextV2,
     QueuePlanGlobalAdmissionIdentityV2, QueuePlanReservationPhaseV1, RoutingPlan,
 };
-use crate::torii_proxy::QueuePlanAdmissionBindingV2;
+use crate::{
+    secure_file_metadata::{self, SecureMetadata},
+    torii_proxy::QueuePlanAdmissionBindingV2,
+};
 use iroha_crypto::{Hash, HashOf};
 use iroha_data_model::transaction::{SignedTransaction, TransactionEntrypoint};
 use norito::codec::{Decode, Encode};
@@ -613,7 +616,7 @@ impl PendingCompactionTemp {
                 "queue plan journal compaction temp path no longer identifies its recovery snapshot",
             ));
         }
-        let metadata = self.file.metadata()?;
+        let metadata = secure_file_metadata::from_file(&self.file)?;
         if journal_file_identity(&metadata) != self.file_identity
             || !journal_file_is_single_link(&metadata)
             || metadata.len() != self.snapshot_len
@@ -642,7 +645,7 @@ impl QueuePlanJournalReplay {
                 "queue plan journal replay path no longer identifies its snapshot file",
             ));
         }
-        let metadata = self.file.metadata()?;
+        let metadata = secure_file_metadata::from_file(&self.file)?;
         if journal_file_identity(&metadata) != self.file_identity
             || !journal_file_is_single_link(&metadata)
             || metadata.len() != self.snapshot_len
@@ -783,7 +786,7 @@ impl QueuePlanJournal {
         prepare_regular_journal_parent(&path)?;
         let pending_compaction = open_pending_compaction_temp(&path.with_extension("tmp"), limits)?;
         if pending_compaction.is_some() {
-            match fs::symlink_metadata(&path) {
+            match secure_file_metadata::from_path(&path) {
                 Ok(canonical)
                     if !journal_file_is_indirect(&canonical)
                         && canonical.is_file()
@@ -1890,10 +1893,10 @@ impl QueuePlanJournal {
         }
         Ok(())
     }
-    fn verify_cached_storage(&self) -> io::Result<fs::Metadata> {
+    fn verify_cached_storage(&self) -> io::Result<SecureMetadata> {
         self.verify_cached_storage_at_len(self.known_len)
     }
-    fn verify_cached_storage_at_len(&self, expected_len: u64) -> io::Result<fs::Metadata> {
+    fn verify_cached_storage_at_len(&self, expected_len: u64) -> io::Result<SecureMetadata> {
         self.verify_cached_parent()?;
         let identity = verify_open_regular_path(&self.path, &self.file)?;
         if identity != self.file_identity {
@@ -1901,7 +1904,7 @@ impl QueuePlanJournal {
                 "queue plan journal cached append handle no longer matches its canonical path",
             ));
         }
-        let metadata = self.file.metadata()?;
+        let metadata = secure_file_metadata::from_file(&self.file)?;
         if journal_file_identity(&metadata) != self.file_identity
             || !journal_file_is_single_link(&metadata)
             || metadata.len() != expected_len
@@ -1913,7 +1916,7 @@ impl QueuePlanJournal {
         self.verify_cached_parent()?;
         Ok(metadata)
     }
-    fn verify_cached_storage_or_poison(&mut self) -> io::Result<fs::Metadata> {
+    fn verify_cached_storage_or_poison(&mut self) -> io::Result<SecureMetadata> {
         match self.verify_cached_storage() {
             Ok(metadata) => Ok(metadata),
             Err(error) => {
@@ -3001,7 +3004,7 @@ fn normalize_platform_managed_alias(path: &Path) -> io::Result<PathBuf> {
                 "queue plan journal path below a platform-managed alias cannot contain `..`",
             ));
         }
-        let alias_metadata = fs::symlink_metadata(alias)?;
+        let alias_metadata = secure_file_metadata::from_path(alias)?;
         if !alias_metadata.file_type().is_symlink() {
             return Ok(path.to_path_buf());
         }
@@ -3013,7 +3016,7 @@ fn normalize_platform_managed_alias(path: &Path) -> io::Result<PathBuf> {
                 destination.display()
             )));
         }
-        let destination_metadata = fs::symlink_metadata(destination)?;
+        let destination_metadata = secure_file_metadata::from_path(destination)?;
         if journal_file_is_indirect(&destination_metadata) || !destination_metadata.is_dir() {
             return Err(invalid_data(format!(
                 "queue plan journal platform-managed alias destination {} must be a direct directory",
@@ -3045,17 +3048,16 @@ type JournalFileIdentity = (Option<u32>, Option<u64>);
 #[cfg(not(any(unix, windows)))]
 type JournalFileIdentity = ();
 #[cfg(unix)]
-fn journal_file_identity(metadata: &fs::Metadata) -> JournalFileIdentity {
+fn journal_file_identity(metadata: &SecureMetadata) -> JournalFileIdentity {
     use std::os::unix::fs::MetadataExt as _;
     (metadata.dev(), metadata.ino())
 }
 #[cfg(windows)]
-fn journal_file_identity(metadata: &fs::Metadata) -> JournalFileIdentity {
-    use std::os::windows::fs::MetadataExt as _;
+fn journal_file_identity(metadata: &SecureMetadata) -> JournalFileIdentity {
     (metadata.volume_serial_number(), metadata.file_index())
 }
 #[cfg(not(any(unix, windows)))]
-fn journal_file_identity(_metadata: &fs::Metadata) -> JournalFileIdentity {}
+fn journal_file_identity(_metadata: &SecureMetadata) -> JournalFileIdentity {}
 #[cfg(unix)]
 const fn journal_file_identity_available(_identity: JournalFileIdentity) -> bool {
     true
@@ -3068,7 +3070,7 @@ const fn journal_file_identity_available(identity: JournalFileIdentity) -> bool 
 const fn journal_file_identity_available(_identity: JournalFileIdentity) -> bool {
     false
 }
-fn journal_file_is_single_link(metadata: &fs::Metadata) -> bool {
+fn journal_file_is_single_link(metadata: &SecureMetadata) -> bool {
     #[cfg(unix)]
     {
         use std::os::unix::fs::MetadataExt as _;
@@ -3076,7 +3078,6 @@ fn journal_file_is_single_link(metadata: &fs::Metadata) -> bool {
     }
     #[cfg(windows)]
     {
-        use std::os::windows::fs::MetadataExt as _;
         metadata.number_of_links() == Some(1)
     }
     #[cfg(not(any(unix, windows)))]
@@ -3086,24 +3087,23 @@ fn journal_file_is_single_link(metadata: &fs::Metadata) -> bool {
     }
 }
 #[cfg(windows)]
-fn journal_file_is_reparse_point(metadata: &fs::Metadata) -> bool {
-    use std::os::windows::fs::MetadataExt as _;
+fn journal_file_is_reparse_point(metadata: &SecureMetadata) -> bool {
     const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x0000_0400;
     metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0
 }
 #[cfg(not(windows))]
-fn journal_file_is_reparse_point(_metadata: &fs::Metadata) -> bool {
+fn journal_file_is_reparse_point(_metadata: &SecureMetadata) -> bool {
     false
 }
-fn journal_file_is_indirect(metadata: &fs::Metadata) -> bool {
+fn journal_file_is_indirect(metadata: &SecureMetadata) -> bool {
     metadata.file_type().is_symlink() || journal_file_is_reparse_point(metadata)
 }
 fn verify_open_regular_directory(
     directory_path: &Path,
     directory: &File,
 ) -> io::Result<JournalFileIdentity> {
-    let path_metadata = fs::symlink_metadata(directory_path)?;
-    let opened = directory.metadata()?;
+    let path_metadata = secure_file_metadata::from_path(directory_path)?;
+    let opened = secure_file_metadata::from_file(directory)?;
     let path_identity = journal_file_identity(&path_metadata);
     let opened_identity = journal_file_identity(&opened);
     if journal_file_is_indirect(&path_metadata)
@@ -3270,7 +3270,7 @@ fn ensure_durable_v4_bootstrap(path: &Path, limits: QueuePlanJournalLimits) -> i
     Ok(())
 }
 fn open_recoverable_bootstrap_temp(path: &Path, expected: &[u8]) -> io::Result<Option<File>> {
-    let metadata = match fs::symlink_metadata(path) {
+    let metadata = match secure_file_metadata::from_path(path) {
         Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
         Ok(metadata) => metadata,
         Err(error) => return Err(error),
@@ -3370,7 +3370,7 @@ fn open_pending_compaction_temp(
     path: &Path,
     limits: QueuePlanJournalLimits,
 ) -> io::Result<Option<PendingCompactionTemp>> {
-    let metadata = match fs::symlink_metadata(path) {
+    let metadata = match secure_file_metadata::from_path(path) {
         Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
         Ok(metadata) => metadata,
         Err(error) => return Err(error),
@@ -3588,7 +3588,7 @@ fn reconcile_pending_compaction_temp(
     // to repeat.
     pending.verify()?;
     fs::remove_file(&pending.path)?;
-    let removed_metadata = pending.file.metadata()?;
+    let removed_metadata = secure_file_metadata::from_file(&pending.file)?;
     if journal_file_identity(&removed_metadata) != pending.file_identity
         || removed_metadata.len() != pending.snapshot_len
     {
@@ -3649,7 +3649,7 @@ fn verify_bound_compaction_canonical(
             "queue plan journal canonical identity changed during compaction recovery",
         ));
     }
-    let metadata = file.metadata()?;
+    let metadata = secure_file_metadata::from_file(file)?;
     if journal_file_identity(&metadata) != file_identity
         || !journal_file_is_single_link(&metadata)
         || metadata.len() != snapshot_len
@@ -3755,7 +3755,7 @@ fn compare_file_bytes(
 }
 fn prepare_regular_journal_path(path: &Path) -> io::Result<()> {
     prepare_regular_journal_parent(path)?;
-    match fs::symlink_metadata(path) {
+    match secure_file_metadata::from_path(path) {
         Ok(metadata) => {
             if journal_file_is_indirect(&metadata) || !metadata.is_file() {
                 return Err(invalid_data(
@@ -3783,7 +3783,7 @@ fn validate_directory_chain(path: &Path, require_complete: bool) -> io::Result<(
         if matches!(component, std::path::Component::Prefix(_)) {
             continue;
         }
-        match fs::symlink_metadata(&current) {
+        match secure_file_metadata::from_path(&current) {
             Ok(metadata) => {
                 if journal_file_is_indirect(&metadata) || !metadata.is_dir() {
                     return Err(invalid_data(format!(
@@ -3806,7 +3806,7 @@ fn prepare_regular_journal_parent(path: &Path) -> io::Result<()> {
     let mut cursor = target.to_path_buf();
     let mut missing = Vec::new();
     let existing = loop {
-        match fs::symlink_metadata(&cursor) {
+        match secure_file_metadata::from_path(&cursor) {
             Ok(metadata) => {
                 if journal_file_is_indirect(&metadata) || !metadata.is_dir() {
                     return Err(invalid_data(
@@ -3833,7 +3833,7 @@ fn prepare_regular_journal_parent(path: &Path) -> io::Result<()> {
         let owner_path = parent_directory(&directory);
         let owner = open_regular_directory(owner_path)?;
         let owner_identity = verify_open_regular_directory(owner_path, &owner)?;
-        match fs::symlink_metadata(&directory) {
+        match secure_file_metadata::from_path(&directory) {
             Err(error) if error.kind() == io::ErrorKind::NotFound => {}
             Ok(_) => {
                 return Err(invalid_data(
@@ -3873,7 +3873,7 @@ fn prepare_regular_journal_parent(path: &Path) -> io::Result<()> {
     Ok(())
 }
 fn reject_existing_compaction_temp(path: &Path) -> io::Result<()> {
-    match fs::symlink_metadata(path) {
+    match secure_file_metadata::from_path(path) {
         Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(()),
         Ok(metadata) => {
             let kind = if journal_file_is_indirect(&metadata) {
@@ -3894,7 +3894,7 @@ fn reject_existing_compaction_temp(path: &Path) -> io::Result<()> {
     }
 }
 fn validate_regular_path(path: &Path) -> io::Result<()> {
-    let metadata = fs::symlink_metadata(path)?;
+    let metadata = secure_file_metadata::from_path(path)?;
     let identity = journal_file_identity(&metadata);
     if journal_file_is_indirect(&metadata)
         || !metadata.is_file()
@@ -3912,8 +3912,8 @@ fn validate_regular_path(path: &Path) -> io::Result<()> {
     Ok(())
 }
 fn verify_open_regular_path(path: &Path, file: &File) -> io::Result<JournalFileIdentity> {
-    let path_metadata = fs::symlink_metadata(path)?;
-    let opened = file.metadata()?;
+    let path_metadata = secure_file_metadata::from_path(path)?;
+    let opened = secure_file_metadata::from_file(file)?;
     let path_identity = journal_file_identity(&path_metadata);
     let opened_identity = journal_file_identity(&opened);
     if journal_file_is_indirect(&path_metadata)

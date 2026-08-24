@@ -20,6 +20,7 @@
 //! archive can be production-qualified there.
 use crate::{
     kura::{Kura, KuraV2CommitReceipt},
+    secure_file_metadata::{self, SecureMetadata},
     smartcontracts::ValidSingularQuery,
     state::StateReadOnly,
 };
@@ -2635,12 +2636,12 @@ impl ReputationFinalizedArchive {
         let writer_lock_path = root.join(WRITER_LOCK_FILE);
         let writer_lock = open_writer_lock_file(&writer_lock_path)?;
         let writer_lock_identity =
-            archive_file_identity(&writer_lock.metadata().map_err(|source| {
-                ReputationFinalizedArchiveError::Read {
+            archive_file_identity(&secure_file_metadata::from_file(&writer_lock).map_err(
+                |source| ReputationFinalizedArchiveError::Read {
                     path: writer_lock_path.clone(),
                     source,
-                }
-            })?);
+                },
+            )?);
         acquire_writer_ownership(&writer_lock, &writer_lock_path)?;
         writer_lock
             .sync_all()
@@ -5396,18 +5397,19 @@ impl ReputationFinalizedArchive {
                 source,
             })?;
         let lock_path = self.root.join(WRITER_LOCK_FILE);
-        let lock_metadata = fs::symlink_metadata(&lock_path).map_err(|source| {
+        let lock_metadata = secure_file_metadata::from_path(&lock_path).map_err(|source| {
             ReputationFinalizedArchiveError::Read {
                 path: lock_path.clone(),
                 source,
             }
         })?;
-        let opened_metadata = self.writer_lock.metadata().map_err(|source| {
-            ReputationFinalizedArchiveError::Read {
-                path: lock_path.clone(),
-                source,
-            }
-        })?;
+        let opened_metadata =
+            secure_file_metadata::from_file(&self.writer_lock).map_err(|source| {
+                ReputationFinalizedArchiveError::Read {
+                    path: lock_path.clone(),
+                    source,
+                }
+            })?;
         if lock_metadata.file_type().is_symlink()
             || !lock_metadata.is_file()
             || !archive_file_is_single_link(&lock_metadata)
@@ -8684,17 +8686,18 @@ fn open_writer_lock_file(path: &Path) -> Result<fs::File, ReputationFinalizedArc
                 path: path.to_path_buf(),
                 source,
             })?;
-    let path_metadata =
-        fs::symlink_metadata(path).map_err(|source| ReputationFinalizedArchiveError::Read {
+    let path_metadata = secure_file_metadata::from_path(path).map_err(|source| {
+        ReputationFinalizedArchiveError::Read {
             path: path.to_path_buf(),
             source,
-        })?;
-    let opened_metadata =
-        file.metadata()
-            .map_err(|source| ReputationFinalizedArchiveError::Read {
-                path: path.to_path_buf(),
-                source,
-            })?;
+        }
+    })?;
+    let opened_metadata = secure_file_metadata::from_file(&file).map_err(|source| {
+        ReputationFinalizedArchiveError::Read {
+            path: path.to_path_buf(),
+            source,
+        }
+    })?;
     if path_metadata.file_type().is_symlink()
         || !path_metadata.is_file()
         || !archive_file_is_single_link(&path_metadata)
@@ -8731,17 +8734,16 @@ type ArchiveFileIdentity = (Option<u32>, Option<u64>);
 #[cfg(not(any(unix, windows)))]
 type ArchiveFileIdentity = ();
 #[cfg(unix)]
-fn archive_file_identity(metadata: &fs::Metadata) -> ArchiveFileIdentity {
+fn archive_file_identity(metadata: &SecureMetadata) -> ArchiveFileIdentity {
     use std::os::unix::fs::MetadataExt;
     (metadata.dev(), metadata.ino())
 }
 #[cfg(windows)]
-fn archive_file_identity(metadata: &fs::Metadata) -> ArchiveFileIdentity {
-    use std::os::windows::fs::MetadataExt;
+fn archive_file_identity(metadata: &SecureMetadata) -> ArchiveFileIdentity {
     (metadata.volume_serial_number(), metadata.file_index())
 }
 #[cfg(not(any(unix, windows)))]
-fn archive_file_identity(_metadata: &fs::Metadata) -> ArchiveFileIdentity {}
+fn archive_file_identity(_metadata: &SecureMetadata) -> ArchiveFileIdentity {}
 #[cfg(unix)]
 const fn archive_file_identity_available(_identity: ArchiveFileIdentity) -> bool {
     true
@@ -8754,7 +8756,7 @@ const fn archive_file_identity_available(identity: ArchiveFileIdentity) -> bool 
 const fn archive_file_identity_available(_identity: ArchiveFileIdentity) -> bool {
     false
 }
-fn archive_file_is_single_link(metadata: &fs::Metadata) -> bool {
+fn archive_file_is_single_link(metadata: &SecureMetadata) -> bool {
     #[cfg(unix)]
     {
         use std::os::unix::fs::MetadataExt;
@@ -8762,7 +8764,6 @@ fn archive_file_is_single_link(metadata: &fs::Metadata) -> bool {
     }
     #[cfg(windows)]
     {
-        use std::os::windows::fs::MetadataExt;
         metadata.number_of_links() == Some(1)
     }
     #[cfg(not(any(unix, windows)))]
@@ -8772,7 +8773,7 @@ fn archive_file_is_single_link(metadata: &fs::Metadata) -> bool {
     }
 }
 fn direct_archive_directory_identity(path: &Path) -> io::Result<ArchiveFileIdentity> {
-    let metadata = fs::symlink_metadata(path)?;
+    let metadata = secure_file_metadata::from_path(path)?;
     let identity = archive_file_identity(&metadata);
     if metadata.file_type().is_symlink()
         || !metadata.is_dir()
@@ -8795,7 +8796,7 @@ fn verify_archive_directory_identity(path: &Path, expected: ArchiveFileIdentity)
     Ok(())
 }
 #[cfg(unix)]
-fn archive_file_metadata_unchanged(left: &fs::Metadata, right: &fs::Metadata) -> bool {
+fn archive_file_metadata_unchanged(left: &SecureMetadata, right: &SecureMetadata) -> bool {
     use std::os::unix::fs::MetadataExt;
     archive_file_identity(left) == archive_file_identity(right)
         && left.nlink() == 1
@@ -8807,8 +8808,7 @@ fn archive_file_metadata_unchanged(left: &fs::Metadata, right: &fs::Metadata) ->
         && left.ctime_nsec() == right.ctime_nsec()
 }
 #[cfg(windows)]
-fn archive_file_metadata_unchanged(left: &fs::Metadata, right: &fs::Metadata) -> bool {
-    use std::os::windows::fs::MetadataExt;
+fn archive_file_metadata_unchanged(left: &SecureMetadata, right: &SecureMetadata) -> bool {
     archive_file_identity_available(archive_file_identity(left))
         && archive_file_identity(left) == archive_file_identity(right)
         && left.number_of_links() == Some(1)
@@ -8818,11 +8818,11 @@ fn archive_file_metadata_unchanged(left: &fs::Metadata, right: &fs::Metadata) ->
         && left.creation_time() == right.creation_time()
 }
 #[cfg(not(any(unix, windows)))]
-fn archive_file_metadata_unchanged(_left: &fs::Metadata, _right: &fs::Metadata) -> bool {
+fn archive_file_metadata_unchanged(_left: &SecureMetadata, _right: &SecureMetadata) -> bool {
     false
 }
-fn direct_archive_file_metadata(path: &Path, max_bytes: u64) -> io::Result<fs::Metadata> {
-    let metadata = fs::symlink_metadata(path)?;
+fn direct_archive_file_metadata(path: &Path, max_bytes: u64) -> io::Result<SecureMetadata> {
+    let metadata = secure_file_metadata::from_path(path)?;
     if metadata.file_type().is_symlink()
         || !metadata.is_file()
         || !archive_file_is_single_link(&metadata)
@@ -8851,7 +8851,7 @@ fn read_bounded_archive_file(path: &Path, max_bytes: u64) -> io::Result<Vec<u8>>
         options.custom_flags(FILE_FLAG_OPEN_REPARSE_POINT);
     }
     let mut file = options.open(path)?;
-    let opened_before = file.metadata()?;
+    let opened_before = secure_file_metadata::from_file(&file)?;
     if !archive_file_identity_available(archive_file_identity(&path_before))
         || !archive_file_metadata_unchanged(&path_before, &opened_before)
     {
@@ -8865,8 +8865,8 @@ fn read_bounded_archive_file(path: &Path, max_bytes: u64) -> io::Result<Vec<u8>>
     Read::by_ref(&mut file)
         .take(max_bytes.saturating_add(1))
         .read_to_end(&mut bytes)?;
-    let opened_after = file.metadata()?;
-    let path_after = fs::symlink_metadata(path)?;
+    let opened_after = secure_file_metadata::from_file(&file)?;
+    let path_after = secure_file_metadata::from_path(path)?;
     if u64::try_from(bytes.len()).unwrap_or(u64::MAX) > max_bytes
         || path_after.file_type().is_symlink()
         || !path_after.is_file()

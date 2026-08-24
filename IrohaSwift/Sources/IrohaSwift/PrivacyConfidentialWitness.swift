@@ -367,11 +367,20 @@ public enum PrivacyConfidentialWitnessCodecs {
     }
 
     static func canonicalU128(_ value: String, field: String) throws -> String {
-        do {
-            return try ConfidentialNoteCrypto.canonicalU128(value, field: field)
-        } catch {
+        // Privacy transfer witnesses use zero as the public-amount sentinel;
+        // confidential note openings intentionally require positive amounts.
+        let text = try canonicalText(value, field: field)
+        guard text.allSatisfy({ $0 >= "0" && $0 <= "9" }) else {
             throw PrivacyConfidentialWitnessError.invalidField(field)
         }
+        guard text == "0" || !text.hasPrefix("0") else {
+            throw PrivacyConfidentialWitnessError.invalidField(field)
+        }
+        let max = "340282366920938463463374607431768211455"
+        guard text.count < max.count || (text.count == max.count && text <= max) else {
+            throw PrivacyConfidentialWitnessError.invalidField(field)
+        }
+        return text
     }
 
     static func fixed32(_ value: Data, field: String) throws -> Data {

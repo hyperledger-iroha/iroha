@@ -211,7 +211,13 @@ impl KagemushaGenerationMemoryGuardV4 {
 #[derive(Clone, Copy, Debug)]
 enum KagemushaQualificationMemoryContractModeV4<'guard> {
     Operator(&'guard KagemushaGenerationMemoryGuardV4),
-    RuntimeCatalog { max_decoded_bytes: u64 },
+    #[cfg(all(
+        unix,
+        not(any(target_os = "espidf", target_os = "horizon", target_os = "redox"))
+    ))]
+    RuntimeCatalog {
+        max_decoded_bytes: u64,
+    },
 }
 /// Unforgeable memory authority: operators need a guard;
 /// Core uses its validated decoded budget.
@@ -227,6 +233,10 @@ impl<'guard> KagemushaQualificationMemoryContractV4<'guard> {
             mode: KagemushaQualificationMemoryContractModeV4::Operator(memory_guard),
         }
     }
+    #[cfg(all(
+        unix,
+        not(any(target_os = "espidf", target_os = "horizon", target_os = "redox"))
+    ))]
     pub(crate) fn for_runtime_catalog(max_decoded_bytes: u64) -> Result<Self, String> {
         if max_decoded_bytes == 0 {
             return Err(
@@ -255,6 +265,10 @@ impl<'guard> KagemushaQualificationMemoryContractV4<'guard> {
                     );
                 }
             }
+            #[cfg(all(
+                unix,
+                not(any(target_os = "espidf", target_os = "horizon", target_os = "redox"))
+            ))]
             KagemushaQualificationMemoryContractModeV4::RuntimeCatalog { max_decoded_bytes } => {
                 if max_decoded_bytes == 0 {
                     return Err(
@@ -3796,6 +3810,14 @@ where
 }
 /// Exact processed serialization lengths derived from one authenticated V4 profile.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[cfg(any(
+    test,
+    feature = "kagemusha-generation-memory-lab",
+    all(
+        unix,
+        not(any(target_os = "espidf", target_os = "horizon", target_os = "redox"))
+    )
+))]
 pub(crate) struct KagemushaArtifactEncodingSizesV4 {
     /// Exact unframed `ParamsIPA` length.
     pub(crate) parameters_bytes: u64,
@@ -3804,6 +3826,14 @@ pub(crate) struct KagemushaArtifactEncodingSizesV4 {
     /// Exact unframed processed verifier-key length.
     pub(crate) verifying_key_bytes: u64,
 }
+#[cfg(any(
+    test,
+    feature = "kagemusha-generation-memory-lab",
+    all(
+        unix,
+        not(any(target_os = "espidf", target_os = "horizon", target_os = "redox"))
+    )
+))]
 fn kagemusha_artifact_encoding_sizes_for_curve_v4<C>(
     circuit_params: &KagemushaStepCircuitParamsV4,
     role: &str,
@@ -3820,6 +3850,14 @@ where
     })
 }
 /// Derive exact processed role lengths without allocating a Halo2 domain or key.
+#[cfg(any(
+    test,
+    feature = "kagemusha-generation-memory-lab",
+    all(
+        unix,
+        not(any(target_os = "espidf", target_os = "horizon", target_os = "redox"))
+    )
+))]
 pub(crate) fn kagemusha_artifact_encoding_sizes_v4(
     circuit_params: &KagemushaStepCircuitParamsV4,
     parity: KagemushaPastaCycleParityV1,

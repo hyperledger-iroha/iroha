@@ -144,6 +144,10 @@ export const REQUIRED_NATIVE_EXPORT_RESULTS = Object.freeze({
   connectNoritoBridgeAbiVersion: REQUIRED_NATIVE_BRIDGE_ABI_VERSION,
   securePrivateFileAbiVersion: 1,
 });
+// Loading the debug native addon and checking its compiled-profile catalog can
+// exceed 30 seconds on a cold hosted Linux runner. Keep the probe bounded by a
+// fixed, non-configurable deadline while allowing that cold-start work to finish.
+export const NATIVE_EXPORT_PROBE_TIMEOUT_MS = 120_000;
 
 function assertRegularFile(path, label) {
   if (!existsSync(path)) {
@@ -483,7 +487,7 @@ if (
       cwd: repoRoot,
       encoding: "utf8",
       env: process.env,
-      timeout: 30_000,
+      timeout: NATIVE_EXPORT_PROBE_TIMEOUT_MS,
       windowsHide: true,
       maxBuffer: 64 * 1024,
     },

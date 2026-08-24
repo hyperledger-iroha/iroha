@@ -99,6 +99,22 @@ fn pending_kura_tip_requires_exact_decision_body_and_validation_replay() {
         evidence.stage(),
         PendingKuraApplyRecoveryStage::CertifiedFetch
     );
+    let mut missing_signature = certificate.clone();
+    missing_signature.aggregate_signature.clear();
+    assert!(
+        verify_pending_kura_apply_parts(
+            &fixture.context,
+            decision,
+            &recovered,
+            &validations,
+            expected,
+            tag(0),
+            tag(0),
+            missing_signature,
+            Some(&fixture.manifest),
+        )
+        .is_err()
+    );
     let (_, delayed_evidence) = verify_pending_kura_apply_parts(
         &fixture.context,
         decision,

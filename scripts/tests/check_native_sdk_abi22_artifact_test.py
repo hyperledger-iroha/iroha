@@ -194,6 +194,27 @@ def exact_symbol_inventory(_path: Path) -> tuple[str, ...]:
     return checker.APPROVED_PRIVACY_C_EXPORTS
 
 
+def test_direct_cli_loads_manifest_helper_under_isolated_python(tmp_path: Path) -> None:
+    """The hermetic JVM lane must load the adjacent helper under ``-I -S``."""
+
+    completed = subprocess.run(
+        (
+            sys.executable,
+            "-I",
+            "-S",
+            "-B",
+            str(REPO_ROOT / "scripts/check_native_sdk_abi22_artifact.py"),
+            "--help",
+        ),
+        cwd=tmp_path,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    assert completed.returncode == 0, completed.stderr
+    assert "{record,verify}" in completed.stdout
+
+
 @pytest.mark.parametrize(
     ("workflow_name", "workflow_specific"),
     NATIVE_ESCROW_WORKFLOW_SPECIFIC_TRIGGER_PATHS.items(),
@@ -1572,6 +1593,11 @@ def test_repository_wires_exact_abi22_release_contract() -> None:
     assert "func requireNativeTestCapability(" in all_swift_tests
     assert "RequiredNativeTestCapabilityError.unavailable" in all_swift_tests
 
+    required_jvm_native_assertion = (
+        "A freshly built connect_norito_bridge ABI 22 "
+        "artifact-streaming library is required"
+    )
+
     all_kotlin_tests = read_test_tree("kotlin/core-jvm/src/test", ".kt")
     assert "assumeTrue(" not in all_kotlin_tests
     assert "IROHA_REQUIRE_KAGEMUSHA_NATIVE" not in all_kotlin_tests
@@ -1580,11 +1606,7 @@ def test_repository_wires_exact_abi22_release_contract() -> None:
         r"if\s*\(\s*!NativeSignerBridge\.isNativeAvailable\(\)\s*\)\s*return\b",
         all_kotlin_tests,
     ) is None
-    assert (
-        "A freshly built connect_norito_bridge ABI 22 "
-        "artifact-streaming library is required"
-        in all_kotlin_tests
-    )
+    assert required_jvm_native_assertion in all_kotlin_tests
 
     all_java_tests = read_test_tree("java/iroha_android/src/test", ".java")
     assert "org.junit.Assume" not in all_java_tests
@@ -1596,11 +1618,7 @@ def test_repository_wires_exact_abi22_release_contract() -> None:
         r"\s*\{\s*return;",
         all_java_tests,
     ) is None
-    assert (
-        "A freshly built connect_norito_bridge ABI 22 "
-        "artifact-streaming library is required"
-        in all_java_tests
-    )
+    assert required_jvm_native_assertion in all_java_tests
 
     all_javascript_tests = "\n".join(
         (
@@ -1636,6 +1654,9 @@ def test_repository_wires_exact_abi22_release_contract() -> None:
     assert "check_mobile_sdk_artifacts.sh --apple-only" in mobile_workflow
     assert "check_kagemusha_jvm_native_bridge.sh" in mobile_workflow
     jni_lane = read("ci/check_kagemusha_jvm_native_bridge.sh")
+    assert (
+        f'REQUIRED_NATIVE_ASSERTION="{required_jvm_native_assertion}"' in jni_lane
+    )
     assert 'ABI22_ARTIFACT_CHECKER="$ROOT_DIR/scripts/check_native_sdk_abi22_artifact.py"' in jni_lane
     assert "resolve_trusted_python312()" in jni_lane
     assert "MOBILE_SDK_PYTHON_BINARY" in jni_lane
@@ -1650,6 +1671,43 @@ def test_repository_wires_exact_abi22_release_contract() -> None:
         "NORITO_MOBILE_JAVA_HOME or the macOS Java locator must provide an "
         "absolute regular JDK directory"
     ) in jni_lane
+    java_home_resolution = (
+        'JAVA_HOME_DIR="$("$PYTHON_BINARY" -I -S -c '
+        "'import pathlib,sys; "
+        "print(pathlib.Path(sys.argv[1]).resolve(strict=True))' "
+        '"$JAVA_HOME_DIR")"'
+    )
+    assert '[[ "$JAVA_HOME_DIR" == /* && -d "$JAVA_HOME_DIR" ]]' in jni_lane
+    assert java_home_resolution in jni_lane
+    assert (
+        '[[ "$JAVA_HOME_DIR" == /* && -d "$JAVA_HOME_DIR" '
+        '&& ! -L "$JAVA_HOME_DIR" ]]'
+        in jni_lane
+    )
+    assert (
+        "NORITO_MOBILE_JAVA_HOME or the macOS Java locator must resolve to a "
+        "canonical regular JDK directory"
+    ) in jni_lane
+    for rust_tool in ("cargo", "rustc", "rustdoc"):
+        assert (
+            '"$RUSTUP_BINARY" which --toolchain "$PINNED_TOOLCHAIN" '
+            f"{rust_tool}"
+        ) in jni_lane
+    assert 'NORITO_BRIDGE_SEAL_CARGO_TARGET_DIR="$CARGO_TARGET_DIR"' in jni_lane
+    assert 'NORITO_BRIDGE_SEAL_RUSTDOC="$RUSTDOC_BINARY"' in jni_lane
+    assert '"$rustdoc_commit" == "$rustc_commit"' in jni_lane
+    assert '"$RUSTDOC_BINARY:$RUSTDOC_SHA256_START"' in jni_lane
     assert '"$PYTHON_BINARY" -I -S' in jni_lane
     assert '--set "IROHA_REQUIRE_SORAFS_NATIVE_VALIDATION=1"' in jni_lane
     assert "--sdk c-jni" in jni_lane
+    for marker in (
+        'BUILT_NATIVE_LIBRARY="$CARGO_TARGET_DIR/$HOST_TRIPLE/debug/',
+        'NATIVE_LIBRARY_DIR="$BUILD_SESSION/c-jni-native"',
+        'NATIVE_LIBRARY="$NATIVE_LIBRARY_DIR/${BUILT_NATIVE_LIBRARY##*/}"',
+        '/bin/cp "$BUILT_NATIVE_LIBRARY" "$NATIVE_LIBRARY"',
+        'chmod 0700 "$NATIVE_LIBRARY"',
+    ):
+        assert marker in jni_lane
+    assert jni_lane.index('/bin/cp "$BUILT_NATIVE_LIBRARY" "$NATIVE_LIBRARY"') < (
+        jni_lane.index('"$PYTHON_BINARY" -I -S "$ABI22_ARTIFACT_CHECKER" record')
+    )

@@ -80,7 +80,13 @@ try:
         }
         def ordinary_git(*arguments: str, check: bool = True) -> subprocess.CompletedProcess[bytes]:
             return subprocess.run(
-                [str(SOURCE_GIT), '-C', str(repository), '-c', 'core.hooksPath=/dev/null', *arguments],
+                [
+                    str(SOURCE_GIT), '-C', str(repository),
+                    '-c', 'core.hooksPath=/dev/null',
+                    '-c', 'user.name=Kagemusha Self Test',
+                    '-c', 'user.email=kagemusha-self-test.invalid',
+                    *arguments,
+                ],
                 cwd=Path('/'),
                 env=ordinary_environment,
                 stdin=subprocess.DEVNULL,
@@ -93,8 +99,7 @@ try:
         conflict = repository / 'conflict.txt'
         conflict.write_text('base\n', encoding='utf-8')
         ordinary_git('add', '--', conflict.name)
-        ordinary_git('-c', 'user.name=Kagemusha Self Test', '-c',
-                     'user.email=kagemusha-self-test.invalid', 'commit', '-qm', 'base')
+        ordinary_git('commit', '-qm', 'base')
         ordinary_git('checkout', '-qb', 'other')
         conflict.write_text('other\n', encoding='utf-8')
         ordinary_git('commit', '-qam', 'other')
@@ -484,15 +489,18 @@ finally:
     require_no_macos_extended_acl = real_require_no_macos_extended_acl
 if sys.platform == 'darwin':
     try:
+        acl_free_path = Path('/usr/bin/true')
+        (descriptor, _) = pin_regular_metadata(
+            acl_free_path, 'self-test ACL-free macOS input', require_single_link=False
+        )
+        try:
+            require_no_macos_extended_acl(descriptor, 'self-test ACL-free macOS input')
+        finally:
+            os.close(descriptor)
         with tempfile.TemporaryDirectory(prefix='kagemusha-acl-custody-self-test-') as temporary:
             acl_path = Path(temporary) / 'acl-input'
             acl_path.write_bytes(b'root-custody-acl-test')
             acl_path.chmod(384)
-            (descriptor, _) = pin_regular_metadata(acl_path, 'self-test macOS ACL input')
-            try:
-                require_no_macos_extended_acl(descriptor, 'self-test ACL-free macOS input')
-            finally:
-                os.close(descriptor)
             added_acl = subprocess.run(['/bin/chmod', '+a', 'everyone allow read', str(acl_path)], cwd=Path('/'), env={'LANG': 'C',
                 'LC_ALL': 'C', 'PATH': '/usr/bin:/bin'}, stdin=subprocess.DEVNULL, check=False, capture_output=True, close_fds=True)
             if added_acl.returncode != 0:
@@ -2788,9 +2796,33 @@ for (required_filter, retired_filter, label) in (('cargo test -p iroha_data_mode
     'activation-policy parity'), ('cargo test -p iroha_kagami --bin kagami backing_',
     'cargo test -p iroha_kagami --bin kagami retired_backing_filter', 'ordered Taira backing')):
     expect_static_mutation(WORKFLOW, required_filter, retired_filter, f'reject a missing {label} workflow filter', (required_filter,))
+folded_acceptance_filter = KAGEMUSHA_RELEASE_RUST_TEST_FILTERS[0]
+folded_acceptance_inline = f'- run: {folded_acceptance_filter}'
+folded_acceptance_step = f'- run: >-\n          {folded_acceptance_filter}'
+if folded_acceptance_inline not in baseline[WORKFLOW]:
+    errors.append('self-test could not locate an inline Kagemusha release Rust filter')
+elif static_errors({WORKFLOW: baseline[WORKFLOW].replace(
+        folded_acceptance_inline, folded_acceptance_step, 1)}):
+    errors.append('self-test failed to accept an exact single-command folded Kagemusha Rust filter')
 for required_filter in KAGEMUSHA_RELEASE_RUST_TEST_FILTERS:
-    expect_static_mutation(WORKFLOW, f'- run: {required_filter}', f'# - run: {required_filter}',
-        'reject a missing Kagemusha release Rust filter', (required_filter,))
+    inline_step = f'- run: {required_filter}'
+    folded_step = f'- run: >-\n          {required_filter}'
+    if folded_step in baseline[WORKFLOW]:
+        expect_static_mutation(WORKFLOW, folded_step,
+            f'- run: >-\n          retired {required_filter}',
+            'reject a missing folded Kagemusha release Rust filter', (required_filter,))
+    else:
+        expect_static_mutation(WORKFLOW, inline_step, f'# {inline_step}',
+            'reject a missing Kagemusha release Rust filter', (required_filter,))
+folded_continuation_filter = next(
+    command for command in KAGEMUSHA_RELEASE_RUST_TEST_FILTERS
+    if 'kagemusha::tests::' in command
+)
+folded_continuation_step = f'- run: >-\n          {folded_continuation_filter}'
+expect_static_mutation(WORKFLOW, folded_continuation_step,
+    f'{folded_continuation_step}\n          echo unexpected continuation',
+    'reject an extra folded Kagemusha Rust filter continuation',
+    (folded_continuation_filter,))
 for required_path in KAGEMUSHA_RELEASE_PYTHON_TEST_PATHS:
     expect_static_mutation(WORKFLOW, required_path, f'# {required_path}',
         'reject a missing Kagemusha release Python test', (required_path,), -1)

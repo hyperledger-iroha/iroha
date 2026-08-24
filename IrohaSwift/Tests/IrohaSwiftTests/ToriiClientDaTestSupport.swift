@@ -55,7 +55,7 @@ func tcMakeGatewayFetchResult() -> SorafsGatewayFetchResult {
 }
 
 @available(iOS 15.0, macOS 12.0, *)
-private enum TcHelperError: Error {
+enum TcHelperError: Error {
     case invalidHashEncoding
     case invalidPayloadEncoding
 }

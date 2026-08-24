@@ -476,12 +476,13 @@ impl<'a> FlatOverlayJsonCursor<'a> {
     }
 }
 fn read_persisted_overlay_file(path: &Path) -> io::Result<Option<Vec<u8>>> {
-    let named_before = match fs::symlink_metadata(path) {
-        Ok(metadata) => metadata,
+    let mut file = match state_overlay_open_direct_file(path) {
+        Ok(file) => file,
         Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
         Err(error) => return Err(error),
     };
-    if state_overlay_metadata_is_link(&named_before) || !named_before.is_file() {
+    let opened_before = file.metadata()?;
+    if state_overlay_metadata_is_link(&opened_before) || !opened_before.is_file() {
         return Err(io::Error::new(
             io::ErrorKind::InvalidData,
             "durable state overlay must be a direct regular file",
@@ -489,34 +490,10 @@ fn read_persisted_overlay_file(path: &Path) -> io::Result<Option<Vec<u8>>> {
     }
     let maximum =
         u64::try_from(STATE_OVERLAY_MAX_FILE_BYTES_V1).expect("fixed state overlay limit fits u64");
-    if named_before.len() > maximum {
+    if opened_before.len() > maximum {
         return Err(state_overlay_file_too_large());
     }
-    let mut options = fs::OpenOptions::new();
-    options.read(true);
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::OpenOptionsExt as _;
-        options.custom_flags(STATE_OVERLAY_O_NOFOLLOW_FLAG);
-    }
-    #[cfg(windows)]
-    {
-        use std::os::windows::fs::OpenOptionsExt as _;
-        const FILE_FLAG_OPEN_REPARSE_POINT: u32 = 0x0020_0000;
-        options.custom_flags(FILE_FLAG_OPEN_REPARSE_POINT);
-    }
-    let mut file = options.open(path)?;
-    let opened_before = file.metadata()?;
-    if state_overlay_metadata_is_link(&opened_before)
-        || !opened_before.is_file()
-        || !state_overlay_metadata_identifies_same_file(&named_before, &opened_before)
-        || opened_before.len() > maximum
-    {
-        return Err(io::Error::new(
-            io::ErrorKind::InvalidData,
-            "durable state overlay changed identity or type while opening",
-        ));
-    }
+    let opened_before_identity = state_overlay_file_identity(&file)?;
     let capacity = usize::try_from(opened_before.len()).map_err(|_| {
         io::Error::new(
             io::ErrorKind::InvalidData,
@@ -531,7 +508,10 @@ fn read_persisted_overlay_file(path: &Path) -> io::Result<Option<Vec<u8>>> {
         return Err(state_overlay_file_too_large());
     }
     let opened_after = file.metadata()?;
-    let named_after = fs::symlink_metadata(path)?;
+    let opened_after_identity = state_overlay_file_identity(&file)?;
+    let named_after_file = state_overlay_open_direct_file(path)?;
+    let named_after = named_after_file.metadata()?;
+    let named_after_identity = state_overlay_file_identity(&named_after_file)?;
     let observed = u64::try_from(bytes.len()).map_err(|_| {
         io::Error::new(
             io::ErrorKind::InvalidData,
@@ -540,8 +520,8 @@ fn read_persisted_overlay_file(path: &Path) -> io::Result<Option<Vec<u8>>> {
     })?;
     if state_overlay_metadata_is_link(&named_after)
         || !named_after.is_file()
-        || !state_overlay_metadata_identifies_same_file(&opened_before, &opened_after)
-        || !state_overlay_metadata_identifies_same_file(&opened_after, &named_after)
+        || opened_before_identity != opened_after_identity
+        || opened_after_identity != named_after_identity
         || opened_before.len() != opened_after.len()
         || opened_after.len() != named_after.len()
         || opened_after.len() != observed
@@ -552,6 +532,27 @@ fn read_persisted_overlay_file(path: &Path) -> io::Result<Option<Vec<u8>>> {
         ));
     }
     Ok(Some(bytes))
+}
+fn state_overlay_open_direct_file(path: &Path) -> io::Result<fs::File> {
+    let mut options = fs::OpenOptions::new();
+    options.read(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt as _;
+        options.custom_flags(STATE_OVERLAY_O_NOFOLLOW_FLAG);
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::OpenOptionsExt as _;
+        const FILE_FLAG_OPEN_REPARSE_POINT: u32 = 0x0020_0000;
+        const FILE_SHARE_READ: u32 = 0x0000_0001;
+        // Keep the pathname bound to this direct handle and prevent concurrent
+        // writers until the final handle-identity check completes.
+        options
+            .share_mode(FILE_SHARE_READ)
+            .custom_flags(FILE_FLAG_OPEN_REPARSE_POINT);
+    }
+    options.open(path)
 }
 fn state_overlay_file_too_large() -> io::Error {
     io::Error::new(
@@ -573,21 +574,71 @@ fn state_overlay_metadata_is_link(metadata: &fs::Metadata) -> bool {
     false
 }
 #[cfg(unix)]
-fn state_overlay_metadata_identifies_same_file(left: &fs::Metadata, right: &fs::Metadata) -> bool {
+type StateOverlayFileIdentity = (u64, u64);
+#[cfg(unix)]
+fn state_overlay_file_identity(file: &fs::File) -> io::Result<StateOverlayFileIdentity> {
     use std::os::unix::fs::MetadataExt as _;
-    left.dev() == right.dev() && left.ino() == right.ino()
+    file.metadata()
+        .map(|metadata| (metadata.dev(), metadata.ino()))
 }
 #[cfg(windows)]
-fn state_overlay_metadata_identifies_same_file(left: &fs::Metadata, right: &fs::Metadata) -> bool {
-    use std::os::windows::fs::MetadataExt as _;
-    left.volume_serial_number().is_some()
-        && left.file_index().is_some()
-        && left.volume_serial_number() == right.volume_serial_number()
-        && left.file_index() == right.file_index()
+type StateOverlayFileIdentity = (u32, u64);
+#[cfg(windows)]
+#[repr(C)]
+#[derive(Clone, Copy)]
+struct StateOverlayWindowsFileTime {
+    low: u32,
+    high: u32,
+}
+#[cfg(windows)]
+#[repr(C)]
+struct StateOverlayWindowsByHandleFileInformation {
+    _file_attributes: u32,
+    _creation_time: StateOverlayWindowsFileTime,
+    _last_access_time: StateOverlayWindowsFileTime,
+    _last_write_time: StateOverlayWindowsFileTime,
+    volume_serial_number: u32,
+    _file_size_high: u32,
+    _file_size_low: u32,
+    _number_of_links: u32,
+    file_index_high: u32,
+    file_index_low: u32,
+}
+#[cfg(windows)]
+#[link(name = "kernel32")]
+#[allow(unsafe_code)]
+unsafe extern "system" {
+    #[link_name = "GetFileInformationByHandle"]
+    fn state_overlay_get_file_information_by_handle(
+        file: *mut std::ffi::c_void,
+        information: *mut StateOverlayWindowsByHandleFileInformation,
+    ) -> i32;
+}
+#[cfg(windows)]
+#[allow(unsafe_code)]
+fn state_overlay_file_identity(file: &fs::File) -> io::Result<StateOverlayFileIdentity> {
+    use std::{mem::MaybeUninit, os::windows::io::AsRawHandle as _};
+    let mut information = MaybeUninit::<StateOverlayWindowsByHandleFileInformation>::uninit();
+    // SAFETY: `file` owns a live kernel handle for the call, and `information`
+    // has the exact Win32 `BY_HANDLE_FILE_INFORMATION` output layout.
+    let succeeded = unsafe {
+        state_overlay_get_file_information_by_handle(file.as_raw_handle(), information.as_mut_ptr())
+    };
+    if succeeded == 0 {
+        return Err(io::Error::last_os_error());
+    }
+    // SAFETY: a nonzero result initializes every field in the output structure.
+    let information = unsafe { information.assume_init() };
+    let file_index =
+        u64::from(information.file_index_high) << 32 | u64::from(information.file_index_low);
+    Ok((information.volume_serial_number, file_index))
 }
 #[cfg(not(any(unix, windows)))]
-fn state_overlay_metadata_identifies_same_file(left: &fs::Metadata, right: &fs::Metadata) -> bool {
-    left.len() == right.len() && left.modified().ok() == right.modified().ok()
+type StateOverlayFileIdentity = (u64, Option<std::time::SystemTime>);
+#[cfg(not(any(unix, windows)))]
+fn state_overlay_file_identity(file: &fs::File) -> io::Result<StateOverlayFileIdentity> {
+    file.metadata()
+        .map(|metadata| (metadata.len(), metadata.modified().ok()))
 }
 impl DurableStateSnapshot {
     #[must_use]
@@ -758,6 +809,37 @@ mod tests {
         drop(file);
         let error = read_persisted_overlay_file(&file_path).expect_err("oversize must fail");
         assert_eq!(error.kind(), io::ErrorKind::InvalidData);
+        fs::remove_dir_all(directory).expect("remove temporary directory");
+    }
+    #[cfg(any(unix, windows))]
+    #[test]
+    fn direct_file_identity_is_stable_and_distinguishes_files() {
+        use std::time::{SystemTime, UNIX_EPOCH};
+        let directory = std::env::temp_dir().join(format!(
+            "ivm_state_overlay_identity_{}",
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .expect("system time after epoch")
+                .as_nanos()
+        ));
+        fs::create_dir_all(&directory).expect("create temporary directory");
+        let first_path = directory.join("first.json");
+        let second_path = directory.join("second.json");
+        fs::write(&first_path, b"{}").expect("write first state file");
+        fs::write(&second_path, b"{}").expect("write second state file");
+        let first = state_overlay_open_direct_file(&first_path).expect("open first state file");
+        let first_again =
+            state_overlay_open_direct_file(&first_path).expect("reopen first state file");
+        let second = state_overlay_open_direct_file(&second_path).expect("open second state file");
+        assert_eq!(
+            state_overlay_file_identity(&first).expect("identify first state file"),
+            state_overlay_file_identity(&first_again).expect("identify reopened first state file")
+        );
+        assert_ne!(
+            state_overlay_file_identity(&first).expect("identify first state file"),
+            state_overlay_file_identity(&second).expect("identify second state file")
+        );
+        drop((first, first_again, second));
         fs::remove_dir_all(directory).expect("remove temporary directory");
     }
 }

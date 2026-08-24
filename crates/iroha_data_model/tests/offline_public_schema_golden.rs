@@ -67,14 +67,14 @@ fn public_kagemusha_release_provenance_schemas_are_frozen_for_abi21_v4() {
             structural_schema_hash::<KagemushaRecursiveSpendReleaseActivationV4>(),
         ],
         [
-            "b63ac509332d9be9711ffe1a3794e844".to_owned(),
-            "6814925c1d576bd936f6077944bf04eb".to_owned(),
+            "74c49db4a7409b01b69c4be3736f9fa0".to_owned(),
+            "13e748a8145c226c48a46cfb8d2a9829".to_owned(),
             "d3f45905ef4fd933799654aadd00e00e".to_owned(),
             "2e93da6fb419e1dc4fd8e8898f7e48b0".to_owned(),
             "2c02da011b36781cb59d258a8d9e3507".to_owned(),
             "ada8d473d390a8fa9d372bc96b29e6c9".to_owned(),
-            "7d6377a67b0a03974f4e880f1618bf66".to_owned(),
-            "3363e52b0d6ca028f79ca64297a83ee3".to_owned(),
+            "766967fc902acf6db96f89f4b3b33c59".to_owned(),
+            "5574a5e7ece0696bbbfdb2c3ccd8dd32".to_owned(),
         ]
     );
 }

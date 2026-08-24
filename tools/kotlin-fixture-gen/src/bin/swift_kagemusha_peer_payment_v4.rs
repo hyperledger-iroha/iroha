@@ -703,13 +703,21 @@ mod tests {
             .topup_provenance
             .topup_finality_roster_artifact
             .windows[0];
+        window.validate().expect("fixture roster");
         assert_eq!(window.validator_set.len(), 4);
         assert_eq!(window.validator_set_pops.len(), 4);
-        let certificate = &payment.topup_provenance.topup_finality_evidence[0]
+        let compact_qc = &payment.topup_provenance.topup_finality_evidence[0]
             .topup_finality_proof
-            .commit_qc
-            .certificate;
+            .commit_qc;
+        let context = compact_qc
+            .height_context
+            .reconstruct_for_roster_window(window)
+            .expect("fixture height context");
+        let certificate = &compact_qc.certificate;
         assert_eq!(certificate.signers, [0, 1, 2]);
+        certificate
+            .validate(&context)
+            .expect("fixture quorum certificate");
     }
     #[test]
     fn output_is_exactly_checkable_and_unchanged_writes_are_noops() {

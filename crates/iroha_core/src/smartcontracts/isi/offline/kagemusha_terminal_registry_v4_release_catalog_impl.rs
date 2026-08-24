@@ -1,7 +1,28 @@
+#[cfg(any(
+    test,
+    all(
+        unix,
+        not(any(target_os = "espidf", target_os = "horizon", target_os = "redox"))
+    )
+))]
 const KAGEMUSHA_CATALOG_CONSENSUS_IDENTITY_DOMAIN_V1: &[u8] =
     b"iroha:kagemusha:release-catalog-consensus:v1\0";
+#[cfg(any(
+    test,
+    all(
+        unix,
+        not(any(target_os = "espidf", target_os = "horizon", target_os = "redox"))
+    )
+))]
 const KAGEMUSHA_CATALOG_CONSENSUS_IDENTITY_VERSION_V1: u16 = 1;
 
+#[cfg(any(
+    test,
+    all(
+        unix,
+        not(any(target_os = "espidf", target_os = "horizon", target_os = "redox"))
+    )
+))]
 fn kagemusha_catalog_consensus_policy_digest_from_identities_v1(
     configured_policy_sha256: [u8; 32],
     mut releases: Vec<KagemushaCatalogReleaseConsensusIdentityV1>,
@@ -20,6 +41,13 @@ fn kagemusha_catalog_consensus_policy_digest_from_identities_v1(
     hasher.finalize().into()
 }
 
+#[cfg(any(
+    test,
+    all(
+        unix,
+        not(any(target_os = "espidf", target_os = "horizon", target_os = "redox"))
+    )
+))]
 fn kagemusha_catalog_consensus_policy_digest_v1(
     configured_policy_sha256: [u8; 32],
     releases: &BTreeMap<[u8; 32], Arc<KagemushaCachedReleaseV4>>,

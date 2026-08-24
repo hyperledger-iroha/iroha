@@ -27,7 +27,7 @@ public final class PrivacyExact12FixtureCodecV1 {
       "iroha.privacy.exact12-typed-fixture-bundle.v1";
   public static final String SUBMIT_PROOF_WIRE_ID = "iroha.privacy.submit_proof.v1";
   public static final String CANONICAL_ARCHIVE_SHA256_HEX =
-      "1fe944a149ffab36a1f3ea04af029c07446d586ead7ae479bbdacf0e02d99397";
+      "fc45d0e7419b58df521937f3669e0c4f9a746526aa9530b3f48ed97146695b06";
   public static final int VERSION = 1;
   public static final int ROW_COUNT = 12;
   public static final int HASH_BYTES = 32;
