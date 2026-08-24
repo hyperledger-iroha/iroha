@@ -17460,8 +17460,14 @@ mod tests {
         refresh_taira_container_reference(&mut lifecycle);
         validate_taira_inrou_canary_bundle(&lifecycle, MutationMode::Deploy)
             .expect("generic admission still accepts the alternate lifecycle");
-        validate_taira_inrou_canary_source_bundle(&lifecycle)
+        let lifecycle_error = validate_taira_inrou_canary_source_bundle(&lifecycle)
             .expect_err("release staging must reject an alternate lifecycle");
+        assert!(
+            lifecycle_error
+                .to_string()
+                .contains("exact canonical deploy container and service manifests"),
+            "{lifecycle_error}"
+        );
 
         let mut rollout = canonical_taira_inrou_bundle_fixture();
         rollout.service.rollout.health_window_secs =
@@ -17469,8 +17475,14 @@ mod tests {
                 .expect("nonzero rollout window");
         validate_taira_inrou_canary_bundle(&rollout, MutationMode::Deploy)
             .expect("generic admission still accepts the alternate rollout policy");
-        validate_taira_inrou_canary_source_bundle(&rollout)
+        let rollout_error = validate_taira_inrou_canary_source_bundle(&rollout)
             .expect_err("release staging must reject an alternate rollout policy");
+        assert!(
+            rollout_error
+                .to_string()
+                .contains("exact canonical deploy container and service manifests"),
+            "{rollout_error}"
+        );
     }
     #[test]
     fn taira_inrou_canary_bundle_payload_is_the_exact_canonical_archive() {
@@ -17676,8 +17688,14 @@ mod tests {
             }
         }
 
-        create_taira_inrou_canary_workspace(&kernel, &rootfs, &initrd, &output)
+        let reuse_error = create_taira_inrou_canary_workspace(&kernel, &rootfs, &initrd, &output)
             .expect_err("existing workspaces must never be reused");
+        assert!(
+            reuse_error
+                .to_string()
+                .contains("existing directories are never reused"),
+            "{reuse_error}"
+        );
         validate_generated_taira_inrou_workspace(&output)
             .expect("failed reuse must preserve the original valid workspace");
     }
@@ -17728,8 +17746,14 @@ mod tests {
 
         let mut trailing = canonical;
         trailing.push(0);
-        validate_taira_inrou_canary_bundle_payload(&trailing)
+        let trailing_error = validate_taira_inrou_canary_bundle_payload(&trailing)
             .expect_err("trailing archive bytes must fail");
+        assert!(
+            trailing_error
+                .to_string()
+                .contains("exact deterministic gzip/USTAR"),
+            "{trailing_error}"
+        );
     }
     fn python3_available() -> bool {
         Command::new("python3")
@@ -20447,6 +20471,8 @@ mod tests {
                 "recent_audit_events": []
             }
         });
+        StatusOutput::from_network(endpoint.clone(), canonical.clone(), None)
+            .expect("the complete canonical control-plane shape must parse");
         for field in [
             "schema_version",
             "service_count",
@@ -20460,8 +20486,13 @@ mod tests {
                 .and_then(norito::json::Value::as_object_mut)
                 .expect("control-plane object")
                 .remove(field);
-            StatusOutput::from_network(endpoint.clone(), omitted, None)
+            let error = StatusOutput::from_network(endpoint.clone(), omitted, None)
                 .expect_err("an omitted canonical control-plane key must fail");
+            let rendered = format!("{error:#}");
+            assert!(
+                rendered.contains(&format!("missing field `{field}`")),
+                "omitting `{field}` returned an unexpected error: {rendered}"
+            );
         }
 
         let mut unknown = canonical.clone();
@@ -20470,8 +20501,13 @@ mod tests {
             .and_then(norito::json::Value::as_object_mut)
             .expect("control-plane object")
             .insert("legacy_services".to_owned(), norito::json::Value::Null);
-        StatusOutput::from_network(endpoint.clone(), unknown, None)
+        let unknown_error = StatusOutput::from_network(endpoint.clone(), unknown, None)
             .expect_err("an unknown control-plane key must fail");
+        let unknown_rendered = format!("{unknown_error:#}");
+        assert!(
+            unknown_rendered.contains("unknown field `legacy_services`"),
+            "{unknown_rendered}"
+        );
 
         let mut malformed = canonical.clone();
         malformed
@@ -20479,8 +20515,13 @@ mod tests {
             .and_then(norito::json::Value::as_object_mut)
             .expect("control-plane object")
             .insert("services".to_owned(), norito::json::Value::Null);
-        StatusOutput::from_network(endpoint.clone(), malformed, None)
+        let malformed_error = StatusOutput::from_network(endpoint.clone(), malformed, None)
             .expect_err("a malformed control-plane service list must fail");
+        let malformed_rendered = format!("{malformed_error:#}");
+        assert!(
+            malformed_rendered.contains("expected array start"),
+            "{malformed_rendered}"
+        );
 
         let mut inconsistent = canonical;
         inconsistent
@@ -23180,8 +23221,14 @@ mod tests {
             "01234567",
             "0123456789ABCDEF0123456789ABCDEF01234567",
         ] {
-            parse_hf_revision_arg(revision)
+            let error = parse_hf_revision_arg(revision)
                 .expect_err("mutable or noncanonical revision must fail");
+            assert!(
+                error
+                    .to_string()
+                    .contains("full 40-character lowercase hexadecimal commit OID"),
+                "{error}"
+            );
         }
     }
     #[test]

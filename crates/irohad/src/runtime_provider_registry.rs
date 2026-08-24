@@ -167,7 +167,7 @@ pub enum IrohaRuntimeProviderSlotV1 {
 }
 impl IrohaRuntimeProviderSlotV1 {
     /// Every first-release runtime-provider slot in wire-ID order.
-    pub const ALL: [Self; 62] = [
+    pub const ALL: [Self; 61] = [
         Self::ModerationQuarantineKeyWrapper,
         Self::PrivacyCyclePrfProvider,
         Self::PrivacyReleaseAnchor,

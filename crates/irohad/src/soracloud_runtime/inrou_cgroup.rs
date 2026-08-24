@@ -191,10 +191,6 @@ impl InrouWorkerCgroup {
                 worker_path.display()
             )
         })?;
-        fs::set_permissions(&worker_path, fs::Permissions::from_mode(0o700))
-            .wrap_err_with(|| format!("set exact permissions on {}", worker_path.display()))?;
-        validate_root_custodied_directory(&worker_path, "Inrou worker cgroup")?;
-
         let expected_proc_path = format!("/{INROU_CGROUP_SUBTREE_NAME}/{worker_name}");
         let mut worker = Self {
             attestation: InrouCgroupAttestation {
@@ -203,6 +199,33 @@ impl InrouWorkerCgroup {
             },
             active: true,
         };
+        let initialize = (|| -> eyre::Result<()> {
+            fs::set_permissions(
+                &worker.attestation.worker_path,
+                fs::Permissions::from_mode(0o700),
+            )
+            .wrap_err_with(|| {
+                format!(
+                    "set exact permissions on {}",
+                    worker.attestation.worker_path.display()
+                )
+            })?;
+            validate_root_custodied_directory(
+                &worker.attestation.worker_path,
+                "Inrou worker cgroup",
+            )
+        })();
+        if let Err(error) = initialize {
+            let cleanup = worker.cleanup_bounded();
+            return Err(error).wrap_err_with(|| {
+                format!(
+                    "initialize root-custodied Inrou worker cgroup{}",
+                    cleanup.err().map_or_else(String::new, |cleanup| format!(
+                        "; empty-cgroup cleanup also failed: {cleanup}"
+                    ))
+                )
+            });
+        }
         if let Err(error) = worker.configure(resources, io_backing_paths) {
             let cleanup = worker.cleanup_bounded();
             return Err(error).wrap_err_with(|| {
@@ -376,6 +399,13 @@ impl InrouLaunchBarrier {
                 path.display()
             )
         })?;
+        let mut barrier = Self {
+            path,
+            device: 0,
+            inode: 0,
+            child_gid,
+            active: true,
+        };
         let mut options = fs::OpenOptions::new();
         options.read(true).custom_flags(
             (rustix::fs::OFlags::NONBLOCK
@@ -383,28 +413,20 @@ impl InrouLaunchBarrier {
                 | rustix::fs::OFlags::CLOEXEC)
                 .bits() as i32,
         );
-        let reader = match options.open(&path) {
-            Ok(reader) => reader,
-            Err(error) => {
-                let _ = fs::remove_file(&path);
-                return Err(error).wrap_err_with(|| format!("open {}", path.display()));
-            }
-        };
+        let reader = options
+            .open(&barrier.path)
+            .wrap_err_with(|| format!("open {}", barrier.path.display()))?;
         rustix::fs::fchown(
             &reader,
             Some(rustix::fs::Uid::ROOT),
             Some(rustix::fs::Gid::from_raw(child_gid)),
         )?;
         rustix::fs::fchmod(&reader, rustix::fs::Mode::from_raw_mode(0o640))?;
-        validate_inrou_launch_barrier(&path, &reader, child_gid)?;
+        validate_inrou_launch_barrier(&barrier.path, &reader, child_gid)?;
         let metadata = reader.metadata()?;
-        Ok(Self {
-            path,
-            device: metadata.dev(),
-            inode: metadata.ino(),
-            child_gid,
-            active: true,
-        })
+        barrier.device = metadata.dev();
+        barrier.inode = metadata.ino();
+        Ok(barrier)
     }
 
     pub(super) fn path(&self) -> &Path {
@@ -935,15 +957,18 @@ fn parse_inrou_io_max(
                 .copied()
                 .ok_or_else(|| eyre::eyre!("io.max omitted `{name}` for {major}:{minor}"))
         };
-        if values.len() != 4 {
-            eyre::bail!("io.max contains an unexpected limit for {major}:{minor}");
-        }
         let limits = InrouCgroupIoLimits {
             read_bytes_per_sec: required("rbps")?,
             write_bytes_per_sec: required("wbps")?,
             read_iops: required("riops")?,
             write_iops: required("wiops")?,
         };
+        if let Some(unexpected) = values
+            .keys()
+            .find(|name| !matches!(**name, "rbps" | "wbps" | "riops" | "wiops"))
+        {
+            eyre::bail!("io.max contains unexpected limit `{unexpected}` for {major}:{minor}");
+        }
         if records.insert(device, limits).is_some() {
             eyre::bail!("io.max repeats device {major}:{minor}");
         }
@@ -1080,14 +1105,21 @@ mod tests {
         for variant in variants {
             assert_ne!(inrou_cgroup_worker_name(variant), name);
         }
-        for rejected in [
-            "worker-../escape",
-            "worker-ABCDEF",
-            "worker-00",
-            "other-0000000000000000000000000000000000000000000000000000000000000000",
+        for (rejected, expected_error) in [
+            ("worker-../escape", "must contain one lowercase hash"),
+            ("worker-ABCDEF", "must contain one lowercase hash"),
+            ("worker-00", "must contain one lowercase hash"),
+            (
+                "other-0000000000000000000000000000000000000000000000000000000000000000",
+                "lacks the fixed worker prefix",
+            ),
         ] {
-            validate_inrou_cgroup_worker_name(rejected)
+            let error = validate_inrou_cgroup_worker_name(rejected)
                 .expect_err("non-canonical worker names must fail closed");
+            assert!(
+                error.to_string().contains(expected_error),
+                "unexpected rejection for {rejected}: {error:?}"
+            );
         }
         Ok(())
     }
@@ -1097,14 +1129,24 @@ mod tests {
         let name = inrou_cgroup_worker_name(worker_key());
         let expected = format!("/{INROU_CGROUP_SUBTREE_NAME}/{name}");
         validate_inrou_proc_cgroup(&format!("0::{expected}\n"), &expected)?;
-        for rejected in [
-            format!("1:cpu:{expected}\n"),
-            format!("0::/other/{name}\n"),
-            format!("0::{expected}\n0::{expected}\n"),
-            "".to_owned(),
+        for (rejected, expected_error) in [
+            (format!("1:cpu:{expected}\n"), "membership must be exactly"),
+            (format!("0::/other/{name}\n"), "membership must be exactly"),
+            (
+                format!("0::{expected}\n0::{expected}\n"),
+                "exactly one unified cgroup-v2 membership record",
+            ),
+            (
+                "".to_owned(),
+                "exactly one unified cgroup-v2 membership record",
+            ),
         ] {
-            validate_inrou_proc_cgroup(&rejected, &expected)
+            let error = validate_inrou_proc_cgroup(&rejected, &expected)
                 .expect_err("non-exact cgroup membership must fail closed");
+            assert!(
+                error.to_string().contains(expected_error),
+                "unexpected rejection for {rejected:?}: {error:?}"
+            );
         }
         Ok(())
     }
@@ -1118,21 +1160,39 @@ mod tests {
             "cpu io pids",
             "cpu io memory",
         ] {
-            require_inrou_cgroup_controllers(missing)
+            let error = require_inrou_cgroup_controllers(missing)
                 .expect_err("every mandatory controller must be delegated");
+            assert!(
+                error
+                    .to_string()
+                    .contains("Inrou requires delegated cgroup-v2 controllers"),
+                "unexpected controller rejection for {missing:?}: {error:?}"
+            );
         }
-        require_inrou_cgroup_controllers("cpu cpu io memory pids")
+        let duplicate_error = require_inrou_cgroup_controllers("cpu cpu io memory pids")
             .expect_err("ambiguous duplicate controller records must fail closed");
+        assert!(
+            duplicate_error
+                .to_string()
+                .contains("cgroup controller list repeats `cpu`"),
+            "unexpected duplicate-controller rejection: {duplicate_error:?}"
+        );
         let mount = Path::new("/sys/fs/cgroup");
         validate_inrou_cgroup2_mount(
             "29 23 0:26 / /sys/fs/cgroup rw,nosuid,nodev,noexec,relatime - cgroup2 cgroup rw\n",
             mount,
         )?;
-        validate_inrou_cgroup2_mount(
+        let legacy_mount_error = validate_inrou_cgroup2_mount(
             "29 23 0:26 / /sys/fs/cgroup rw - cgroup cgroup rw,cpu\n",
             mount,
         )
         .expect_err("cgroup-v1 must never be accepted as a fallback");
+        assert!(
+            legacy_mount_error
+                .to_string()
+                .contains("is not a cgroup-v2 filesystem"),
+            "unexpected cgroup-v1 rejection: {legacy_mount_error:?}"
+        );
         Ok(())
     }
 
@@ -1140,23 +1200,47 @@ mod tests {
     fn event_and_io_attestation_rejects_unbounded_or_ambiguous_values() -> eyre::Result<()> {
         assert!(!parse_inrou_cgroup_populated("populated 0\nfrozen 0\n")?);
         assert!(parse_inrou_cgroup_populated("populated 1\nfrozen 0\n")?);
-        for rejected in [
-            "frozen 0\n",
-            "populated max\n",
-            "populated 0\npopulated 1\n",
+        for (rejected, expected_error) in [
+            ("frozen 0\n", "omitted `populated`"),
+            ("populated max\n", "non-boolean populated value"),
+            ("populated 0\npopulated 1\n", "repeats `populated`"),
         ] {
-            parse_inrou_cgroup_populated(rejected)
+            let error = parse_inrou_cgroup_populated(rejected)
                 .expect_err("malformed populated state must fail closed");
+            assert!(
+                error.to_string().contains(expected_error),
+                "unexpected cgroup.events rejection for {rejected:?}: {error:?}"
+            );
         }
 
         let limits = InrouCgroupIoLimits::from(project_inrou_cgroup_limits(&resources())?);
         let device = InrouCgroupIoDevice { major: 8, minor: 1 };
         let parsed = parse_inrou_io_max(&format_inrou_io_max_line(device, limits))?;
         assert_eq!(parsed.get(&device), Some(&limits));
-        parse_inrou_io_max("8:1 rbps=max wbps=1 riops=1 wiops=1")
+        let unbounded_error = parse_inrou_io_max("8:1 rbps=max wbps=1 riops=1 wiops=1")
             .expect_err("an unbounded IO controller value must fail closed");
-        parse_inrou_io_max("8:1 rbps=1 wbps=1 riops=1")
+        assert!(
+            unbounded_error
+                .to_string()
+                .contains("parse finite io.max `rbps` value; `max` is not accepted"),
+            "unexpected unbounded io.max rejection: {unbounded_error:?}"
+        );
+        let partial_error = parse_inrou_io_max("8:1 rbps=1 wbps=1 riops=1")
             .expect_err("a partial IO controller record must fail closed");
+        assert!(
+            partial_error
+                .to_string()
+                .contains("io.max omitted `wiops` for 8:1"),
+            "unexpected partial io.max rejection: {partial_error:?}"
+        );
+        let extra_error = parse_inrou_io_max("8:1 rbps=1 wbps=1 riops=1 wiops=1 burst=1")
+            .expect_err("an unknown IO controller limit must fail closed");
+        assert!(
+            extra_error
+                .to_string()
+                .contains("io.max contains unexpected limit `burst` for 8:1"),
+            "unexpected extra io.max limit rejection: {extra_error:?}"
+        );
         Ok(())
     }
 
@@ -1169,6 +1253,33 @@ mod tests {
             INROU_CGROUP_BARRIER_SCRIPT.find("/proc/self/cgroup")
                 < INROU_CGROUP_BARRIER_SCRIPT.find("exec \"$@\"")
         );
+    }
+
+    #[test]
+    fn unreleased_launch_barrier_owner_removes_the_created_fifo() -> eyre::Result<()> {
+        let temp_dir = tempfile::tempdir()?;
+        let path = temp_dir.path().join(INROU_CGROUP_BARRIER_FILE);
+        rustix::fs::mkfifoat(
+            rustix::fs::CWD,
+            &path,
+            rustix::fs::Mode::from_raw_mode(0o600),
+        )?;
+        let metadata = fs::symlink_metadata(&path)?;
+        let barrier = InrouLaunchBarrier {
+            path: path.clone(),
+            device: metadata.dev(),
+            inode: metadata.ino(),
+            child_gid: metadata.gid(),
+            active: true,
+        };
+
+        drop(barrier);
+
+        assert!(
+            !path.exists(),
+            "an unreleased barrier must not survive its owner"
+        );
+        Ok(())
     }
 
     #[test]

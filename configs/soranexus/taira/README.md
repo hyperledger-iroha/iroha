@@ -85,14 +85,22 @@ canonical absolute `--qemu`, `--setpriv`, and `--ldd` paths; this Taira AArch64
 posture uses the defaults.
 
 The daemon startup boundary additionally requires direct root-custodied
-`/usr/bin/qemu-img`, one root-custodied `iptables` executable at
-`/usr/sbin/iptables`, `/sbin/iptables`, `/usr/bin/iptables`, or
-`/bin/iptables`, `/dev/kvm` with API version 12, and unified cgroup v2 with the
-`cpu`, `io`, `memory`, and `pids` controllers available. Kernel namespace,
-QEMU user-network listener/private-connector, QMP, firewall owner-match, and
-cgroup controls are exercised by the bounded startup probe; `up` fails closed
-if any is unavailable. This artifact-free probe does not boot a guest or verify
-the workload loopback bridge.
+`/usr/bin/qemu-img`, root-custodied `mke2fs` at `/usr/sbin/mke2fs` or
+`/sbin/mke2fs`, one root-custodied `iptables` executable at
+`/usr/sbin/iptables`, `/sbin/iptables`, `/usr/bin/iptables`, or `/bin/iptables`,
+`/dev/kvm` with API version 12, and unified cgroup v2 with the `cpu`, `io`,
+`memory`, and `pids` controllers available. Kernel namespace, QEMU user-network
+listener/private-connector, QMP, firewall owner-match, and cgroup controls are
+exercised by the bounded startup probe; `up` fails closed if any is unavailable.
+This artifact-free probe does not boot a guest or verify the workload loopback
+bridge.
+
+New non-root Inrou lease volumes use the first-release canonical ext4 profile:
+their byte budgets must be positive multiples of 128 MiB. The daemon ignores
+host `mke2fs.conf` policy, supplies the complete format geometry and feature
+set explicitly, derives a stable UUID from the service revision, volume kind,
+storage class, and authoritative generation, and validates that exact
+superblock contract before publishing or reusing a disk.
 
 To prove a real guest launch, four placements, and the public route, prepare
 verified AArch64 assets, generate the exact deploy workspace with the

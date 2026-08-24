@@ -185,7 +185,6 @@ fn collect_soracloud_hf_credential_provider_binding(
     config: &Config,
     bindings: &mut Vec<IrohaRuntimeProviderBindingV1>,
 ) -> Result<(), IrohaRuntimeProviderRegistryErrorV1> {
-    let slot = IrohaRuntimeProviderSlotV1::SoracloudHfInferenceCredentialProvider;
     match config
         .soracloud_runtime
         .hf

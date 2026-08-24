@@ -1345,6 +1345,21 @@ impl SoracloudRuntimeExecutionError {
         }
     }
 }
+impl std::fmt::Display for SoracloudRuntimeExecutionError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let category = match self.kind {
+            SoracloudRuntimeExecutionErrorKind::Unavailable => "unavailable",
+            SoracloudRuntimeExecutionErrorKind::InvalidRequest => "invalid request",
+            SoracloudRuntimeExecutionErrorKind::Internal => "internal",
+        };
+        write!(
+            formatter,
+            "Soracloud runtime {category} error: {}",
+            self.message
+        )
+    }
+}
+impl std::error::Error for SoracloudRuntimeExecutionError {}
 /// Deterministic local read class for the Soracloud fast path.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode)]
 pub enum SoracloudLocalReadKind {
@@ -2874,5 +2889,17 @@ mod tests {
         )
         .expect_err("wrong runtime format must fail closed");
         assert_eq!(err.kind, SoracloudRuntimeExecutionErrorKind::InvalidRequest);
+    }
+    #[test]
+    fn runtime_execution_error_has_stable_user_facing_context() {
+        let error = SoracloudRuntimeExecutionError::new(
+            SoracloudRuntimeExecutionErrorKind::InvalidRequest,
+            "missing canonical step_id",
+        );
+        assert_eq!(
+            error.to_string(),
+            "Soracloud runtime invalid request error: missing canonical step_id"
+        );
+        assert!(std::error::Error::source(&error).is_none());
     }
 }

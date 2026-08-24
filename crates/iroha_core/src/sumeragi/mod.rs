@@ -4484,7 +4484,7 @@ impl FairV2Ingress {
     /// Queued messages belong to the preceding immutable height and are
     /// discarded while the public ingress gate is closed. The caller may open
     /// the queue only after context and safety-WAL recovery complete.
-    #[cfg(test)]
+    #[cfg(any(test, feature = "iroha-core-tests"))]
     pub(crate) fn configure_roster(
         &self,
         roster: impl IntoIterator<Item = PeerId>,
@@ -6219,7 +6219,7 @@ impl FairV2Ingress {
     /// becomes admissible, the head-first search selects it before later
     /// entries. When every entry is rejected, the source order and total length
     /// remain unchanged.
-    #[cfg(test)]
+    #[cfg(any(test, feature = "iroha-core-tests"))]
     pub(crate) fn try_recv_if(
         &self,
         predicate: impl FnMut(&InboundBlockMessage) -> bool,
@@ -7008,7 +7008,7 @@ impl SumeragiHandle {
         self.output_guard.restart_required()
     }
 }
-#[cfg(test)]
+#[cfg(any(test, feature = "iroha-core-tests"))]
 fn test_sumeragi_handle(
     block_capacity: usize,
 ) -> (
@@ -7018,7 +7018,7 @@ fn test_sumeragi_handle(
 ) {
     test_sumeragi_handle_with_source_geometry(block_capacity, None)
 }
-#[cfg(test)]
+#[cfg(any(test, feature = "iroha-core-tests"))]
 fn test_sumeragi_handle_with_source_geometry(
     block_capacity: usize,
     authenticated_non_validator_source_capacity: Option<usize>,

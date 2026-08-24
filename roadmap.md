@@ -174,10 +174,11 @@ Completed history lives in [`status.md`](./status.md).
   qualification.
 - Qualify the four locked `iroha-inrou-0` through `iroha-inrou-3` identities,
   files-only NSS and subid policy,
-  `/dev/kvm` custody, write-lease disk reclaim, anonymous QMP, bounded teardown,
-  and fail-secure stale-firewall workflow on a same-revision four-validator
-  Linux/AArch64 deployment. Archive operator-approved stale-chain cleanup and
-  lease-capable local-filesystem evidence with the canary.
+  `/dev/kvm` custody, pinned ext4 V1 write-lease mount/reuse/recovery and disk
+  reclaim, anonymous QMP, bounded teardown, and fail-secure stale-firewall
+  workflow on a same-revision four-validator Linux/AArch64 deployment. Archive
+  operator-approved stale-chain cleanup and lease-capable local-filesystem
+  evidence with the canary.
 - Before a public Taira reset, freeze one signed immutable source and artifact
   closure, supply an external exact four-host service/state inventory and
   runtime-only key custody, and use an authenticated replay-safe public executor.
