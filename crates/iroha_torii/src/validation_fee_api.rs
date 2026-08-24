@@ -15,9 +15,7 @@ use iroha_data_model::{
         InstructionBox, frame_instruction_payload,
         governance::{ProposeValidationFeePayoutLifecycle, ProposeValidationFeePolicy},
     },
-    validation_fee::{
-        ValidationFeePolicyRegistryV1, ValidationFeePolicySnapshotCommitmentV1,
-    },
+    validation_fee::{ValidationFeePolicyRegistryV1, ValidationFeePolicySnapshotCommitmentV1},
 };
 use iroha_torii_shared::validation_fee_api::{
     VALIDATION_FEE_POLICY_PROOF_MAX_FINALITY_CHAIN_BYTES,
@@ -103,7 +101,9 @@ fn public_pipeline(
 fn public_proposal_record(
     proposal_id: [u8; 32],
     proposal: &iroha_core::state::GovernanceProposalRecord,
-    authorization: Option<&iroha_data_model::validation_fee::ValidationFeeParliamentAuthorizationV1>,
+    authorization: Option<
+        &iroha_data_model::validation_fee::ValidationFeeParliamentAuthorizationV1,
+    >,
 ) -> Result<ValidationFeeProposalRecordV1, Error> {
     if !matches!(
         proposal.kind,
@@ -175,9 +175,8 @@ fn public_proposal_record(
         created_height: proposal.created_height.to_string(),
         status,
         pipeline: public_pipeline(proposal),
-        governance_certificate_id: authorization.map(|authorization| {
-            hex::encode(authorization.governance_certificate_id.as_bytes())
-        }),
+        governance_certificate_id: authorization
+            .map(|authorization| hex::encode(authorization.governance_certificate_id.as_bytes())),
         certified_at_height: authorization.map(|authorization| {
             authorization
                 .governance_certificate
@@ -210,8 +209,10 @@ fn current_validation_fee_registry(
 fn retained_registry_authorization<'a>(
     registry: Option<&'a ValidationFeePolicyRegistryV1>,
     proposal_id: [u8; 32],
-) -> Result<Option<&'a iroha_data_model::validation_fee::ValidationFeeParliamentAuthorizationV1>, Error>
-{
+) -> Result<
+    Option<&'a iroha_data_model::validation_fee::ValidationFeeParliamentAuthorizationV1>,
+    Error,
+> {
     let Some(registry) = registry else {
         return Ok(None);
     };

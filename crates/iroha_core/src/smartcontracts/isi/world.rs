@@ -97,9 +97,10 @@ pub mod isi {
         governance::types::{
             AbiVersion, AtWindow, ContractAbiHash, ContractCodeHash, DeployContractProposal,
             GovernanceExpectedHeadAbsentV1, GovernanceExpectedHeadPresentV1,
-            GovernanceExpectedHeadV1, GovernanceFinalizationEvidence, ParliamentBody,
-            ParliamentAggregateTallyV1, ParliamentDecisionModeV1, ProposalKind,
-            RequiredParliamentBodyV1, RiskTierV1, RuntimeUpgradeProposal,
+            GovernanceExpectedHeadV1, GovernanceFinalizationEvidence,
+            ParliamentAggregateTallyV1, ParliamentBallotFailureKindV1, ParliamentBody,
+            ParliamentDecisionModeV1, ProposalKind, RequiredParliamentBodyV1, RiskTierV1,
+            RuntimeUpgradeProposal,
             SccpRouteGovernanceProposal, SorafsProviderGovernanceProposal,
             ValidationFeePayoutLifecycleProposal, ValidationFeePolicyProposal,
         },
@@ -248,8 +249,8 @@ pub mod isi {
         governance::{
             draw::{self, derive_parliament_bodies},
             timed_ovn::{
-                TimedOvnLifecycleStateV1, TimedOvnSessionPublicV1,
-                timed_ovn_parameter_hash_v1,
+                TIMED_OVN_BALLOT_RECORD_BYTES_V1, TIMED_OVN_REGISTRATION_RECORD_BYTES_V1,
+                TimedOvnLifecycleStateV1, TimedOvnSessionPublicV1, timed_ovn_parameter_hash_v1,
             },
         },
         smartcontracts::{
@@ -9203,6 +9204,81 @@ pub mod isi {
         Ok(count)
     }
 
+    fn fail_parliament_ballot_with_derived_kind_v1(
+        attempt: &mut crate::governance::parliament::ParliamentAttemptStateV1,
+        governance_attempt_id: iroha_data_model::governance::types::GovernanceAttemptId,
+        ballot_attempt_id: iroha_data_model::governance::types::BallotAttemptId,
+        failure_root: [u8; 32],
+        current_height: u64,
+    ) -> Result<(), Error> {
+        use crate::governance::parliament::ParliamentReducerErrorV1;
+
+        for failure_kind in [
+            ParliamentBallotFailureKindV1::RegistrationDeadlineExpired,
+            ParliamentBallotFailureKindV1::SurvivorDeadlineExpired,
+            ParliamentBallotFailureKindV1::CommitmentDeadlineExpired,
+            ParliamentBallotFailureKindV1::ReleasePulseUnavailable,
+            ParliamentBallotFailureKindV1::AggregateOpeningFailed,
+        ] {
+            let mut candidate = attempt.clone();
+            match candidate.fail_ballot_no_result(
+                governance_attempt_id,
+                ballot_attempt_id,
+                failure_kind,
+                failure_root,
+                current_height,
+            ) {
+                Ok(()) => {
+                    *attempt = candidate;
+                    return Ok(());
+                }
+                Err(ParliamentReducerErrorV1::BallotFailureKindMismatch) => {}
+                Err(error) => return Err(parliament_reducer_error(error)),
+            }
+        }
+        Err(parliament_reducer_error(
+            ParliamentReducerErrorV1::BallotFailureKindMismatch,
+        ))
+    }
+
+    fn validate_parliament_transition_digest_bound_v1(
+        transition: &gov::ParliamentLifecycleTransitionV1,
+    ) -> Result<(), Error> {
+        match transition {
+            gov::ParliamentLifecycleTransitionV1::CloseBallotRegistration(payload) => {
+                parliament_timed_ovn_corpus_count_v1(payload.registration_records.len())?;
+                if payload
+                    .registration_records
+                    .iter()
+                    .any(|record| record.len() != TIMED_OVN_REGISTRATION_RECORD_BYTES_V1)
+                {
+                    return Err(InstructionExecutionError::InvariantViolation(
+                        "Parliament timed-OVN registration has a noncanonical wire width".into(),
+                    ));
+                }
+            }
+            gov::ParliamentLifecycleTransitionV1::FreezeBallotSurvivors(payload) => {
+                parliament_timed_ovn_corpus_count_v1(
+                    payload.survivor_participant_hashes.len(),
+                )?;
+            }
+            gov::ParliamentLifecycleTransitionV1::FreezeTimedOvnCorpus(payload) => {
+                parliament_timed_ovn_corpus_count_v1(payload.ballot_records.len())?;
+                if payload
+                    .ballot_records
+                    .iter()
+                    .any(|record| record.len() != TIMED_OVN_BALLOT_RECORD_BYTES_V1)
+                {
+                    return Err(InstructionExecutionError::InvariantViolation(
+                        "Parliament timed-OVN ballot has a noncanonical wire width".into(),
+                    ));
+                }
+            }
+            _ => {}
+        }
+        Ok(())
+    }
+
     impl Execute for gov::SubmitParliamentLifecycleTransitionV1 {
         fn execute(
             self,
@@ -9210,7 +9286,6 @@ pub mod isi {
             state_transaction: &mut StateTransaction<'_, '_>,
         ) -> Result<(), Error> {
             let transition_kind = self.transition.kind();
-            let transition_digest = self.transition.digest_v1();
             if parliament_transition_requires_consensus_v1(transition_kind) {
                 return Err(InstructionExecutionError::InvariantViolation(
                     "consensus-owned Parliament transitions cannot be submitted by an ordinary signed transaction"
@@ -9223,6 +9298,8 @@ pub mod isi {
             ) {
                 require_parliament_manager(authority, state_transaction)?;
             }
+            validate_parliament_transition_digest_bound_v1(&self.transition)?;
+            let transition_digest = self.transition.digest_v1();
 
             let governance_attempt_id = self.governance_attempt_id;
             let mut attempt = state_transaction
@@ -9574,13 +9651,15 @@ pub mod isi {
                         )
                         .map_err(parliament_reducer_error)?;
                 }
-                gov::ParliamentLifecycleTransitionV1::FailBallotNoResult(payload) => attempt
-                    .fail_ballot_no_result(
+                gov::ParliamentLifecycleTransitionV1::FailBallotNoResult(payload) => {
+                    fail_parliament_ballot_with_derived_kind_v1(
+                        &mut attempt,
                         governance_attempt_id,
                         payload.ballot_attempt_id,
                         payload.failure_root,
-                    )
-                    .map_err(parliament_reducer_error)?,
+                        current_height,
+                    )?;
+                }
                 gov::ParliamentLifecycleTransitionV1::ConstructCertificate(payload) => {
                     let certificate = attempt
                         .construct_certificate(
@@ -19837,6 +19916,51 @@ pub mod isi {
         const TEST_HALO2_CIRCUIT_ALIAS: &str = "halo2/ipa:ivm-execution-v1";
         const TEST_HALO2_CIRCUIT_FULL_ID: &str = "halo2/pasta/ipa/ivm-execution-v1";
         const TEST_OTHER_HALO2_CIRCUIT_ID: &str = "kaigi-roster-v1";
+
+        #[test]
+        fn parliament_signed_transition_classifier_is_closed() {
+            use gov::ParliamentLifecycleTransitionKindV1 as Kind;
+
+            for kind in [
+                Kind::ConsumeSortitionPulseBatch,
+                Kind::FailBodyElectionNoRoster,
+                Kind::SealBodyRoster,
+                Kind::BeginBallotOpeningBatch,
+                Kind::FailBallotNoResult,
+                Kind::ConstructCertificate,
+                Kind::MarkEnacted,
+                Kind::MarkSuperseded,
+                Kind::MarkExecutionFailed,
+            ] {
+                assert!(parliament_transition_requires_consensus_v1(kind));
+            }
+            for kind in [
+                Kind::EscalateRisk,
+                Kind::CompleteQualification,
+                Kind::RegisterSortitionRequest,
+                Kind::BeginInvitationAcceptance,
+                Kind::AdvanceBodyPhase,
+                Kind::RecordAttemptAbsence,
+                Kind::FinalizePublicFinding,
+                Kind::RegisterBallotAttempt,
+                Kind::CloseBallotRegistration,
+                Kind::FreezeBallotSurvivors,
+                Kind::FreezeTimedOvnCorpus,
+                Kind::FinalizeOpenedBallot,
+                Kind::RecordInvitationResponse,
+            ] {
+                assert!(!parliament_transition_requires_consensus_v1(kind));
+            }
+        }
+
+        #[test]
+        fn parliament_head_root_is_stable_and_value_binding() {
+            let first = parliament_governance_head_root_v1(&41_u64);
+            assert_eq!(first, parliament_governance_head_root_v1(&41_u64));
+            assert_ne!(first, parliament_governance_head_root_v1(&42_u64));
+            assert_ne!(first, [0; 32]);
+        }
+
         macro_rules! vk_record {
             ($record:ident, $version:expr, $circuit_id:expr, $backend:expr, $curve:expr, $schema:expr, $commitment:expr; $($field:ident = $value:expr),+ $(,)?) => {
                 let mut $record = VerifyingKeyRecord::new_with_owner(

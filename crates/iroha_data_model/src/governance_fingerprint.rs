@@ -14,8 +14,7 @@ pub const MUSUBI_REGISTRY_GOVERNANCE_V1: &[u8] =
     b"iroha.governance.proposal.musubi_registry_governance.v1";
 pub const SORAFS_PROVIDER_GOVERNANCE_V1: &[u8] =
     b"iroha.governance.proposal.sorafs_provider_governance.v1";
-pub const GOVERNANCE_EFFECT_PREIMAGE_V1: &[u8] =
-    b"iroha.governance.effect_preimage.v1";
+pub const GOVERNANCE_EFFECT_PREIMAGE_V1: &[u8] = b"iroha.governance.effect_preimage.v1";
 pub const GOVERNANCE_SUBJECT_ID_V1: &[u8] = b"iroha.governance.subject.id.v1";
 pub const GOVERNANCE_ATTEMPT_ID_V1: &[u8] = b"iroha.governance.attempt.id.v1";
 pub const BODY_ELECTION_ATTEMPT_ID_V1: &[u8] =

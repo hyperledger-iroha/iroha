@@ -610,6 +610,152 @@ fn ballot_policy_matches(ballot: &ParliamentBallotStateV1, policy: ParliamentTim
         && ballot.max_corpus_entries == policy.max_corpus_entries
 }
 
+fn ballot_policy(ballot: &ParliamentBallotStateV1) -> ParliamentTimedOvn {
+    ParliamentTimedOvn {
+        registration_phase_blocks: ballot.registration_phase_blocks,
+        survivor_freeze_phase_blocks: ballot.survivor_freeze_phase_blocks,
+        commitment_phase_blocks: ballot.commitment_phase_blocks,
+        release_delay_blocks: ballot.release_delay_blocks,
+        max_ballot_retries: ballot.max_ballot_retries,
+        max_corpus_entries: ballot.max_corpus_entries,
+    }
+}
+
+fn classify_ballot_failure(
+    ballot: &ParliamentBallotStateV1,
+    current_height: u64,
+) -> Option<ParliamentBallotFailureKindV1> {
+    match ballot.attempt.status {
+        BallotAttemptStatusV1::Registration
+            if current_height > ballot.registration_close_height =>
+        {
+            Some(ParliamentBallotFailureKindV1::RegistrationDeadlineExpired)
+        }
+        BallotAttemptStatusV1::SurvivorFreeze
+            if ballot.registration_closed_at_height == Some(ballot.registration_close_height)
+                && current_height > ballot.survivor_freeze_height =>
+        {
+            Some(ParliamentBallotFailureKindV1::SurvivorDeadlineExpired)
+        }
+        BallotAttemptStatusV1::TimedCommitment
+            if ballot.survivors_frozen_at_height == Some(ballot.survivor_freeze_height)
+                && current_height > ballot.commitment_close_height =>
+        {
+            Some(ParliamentBallotFailureKindV1::CommitmentDeadlineExpired)
+        }
+        BallotAttemptStatusV1::AwaitingRelease
+            if ballot.commitment_closed_at_height == Some(ballot.commitment_close_height)
+                && ballot
+                    .release_height
+                    .is_some_and(|release_height| current_height > release_height) =>
+        {
+            Some(ParliamentBallotFailureKindV1::ReleasePulseUnavailable)
+        }
+        BallotAttemptStatusV1::Opening
+            if ballot
+                .opening_height
+                .is_some_and(|opening_height| current_height >= opening_height) =>
+        {
+            Some(ParliamentBallotFailureKindV1::AggregateOpeningFailed)
+        }
+        _ => None,
+    }
+}
+
+fn ballot_failure_matches_state(ballot: &ParliamentBallotStateV1) -> bool {
+    let Some(failure_kind) = ballot.failure_kind else {
+        return false;
+    };
+    let Some(failure_height) = ballot.failure_height else {
+        return false;
+    };
+    if ballot.failure_root.is_none()
+        || ballot.opening_root.is_some()
+        || ballot.tally.is_some()
+        || ballot.outcome.is_some()
+    {
+        return false;
+    }
+
+    let registration_frozen = ballot.registration_root.is_some()
+        && ballot.registered_voters.is_some()
+        && ballot.registration_closed_at_height == Some(ballot.registration_close_height);
+    let survivors_frozen = registration_frozen
+        && ballot.dropout_root.is_some()
+        && ballot.survivor_root.is_some()
+        && ballot.survivors.is_some()
+        && ballot.no_recovery_root.is_some()
+        && ballot.survivors_frozen_at_height == Some(ballot.survivor_freeze_height);
+    let corpus_frozen = survivors_frozen
+        && ballot.corpus_root.is_some()
+        && ballot.accepted_ballots.is_some()
+        && ballot.timed_commitment_root.is_some()
+        && ballot.commitment_closed_at_height == Some(ballot.commitment_close_height);
+
+    match failure_kind {
+        ParliamentBallotFailureKindV1::RegistrationDeadlineExpired => {
+            failure_height > ballot.registration_close_height
+                && ballot.registration_root.is_none()
+                && ballot.registered_voters.is_none()
+                && ballot.registration_closed_at_height.is_none()
+                && ballot.dropout_root.is_none()
+                && ballot.survivor_root.is_none()
+                && ballot.survivors.is_none()
+                && ballot.no_recovery_root.is_none()
+                && ballot.survivors_frozen_at_height.is_none()
+                && ballot.corpus_root.is_none()
+                && ballot.accepted_ballots.is_none()
+                && ballot.timed_commitment_root.is_none()
+                && ballot.commitment_closed_at_height.is_none()
+                && ballot.release_pulse_id.is_none()
+                && ballot.opening_height.is_none()
+        }
+        ParliamentBallotFailureKindV1::SurvivorDeadlineExpired => {
+            failure_height > ballot.survivor_freeze_height
+                && registration_frozen
+                && ballot.dropout_root.is_none()
+                && ballot.survivor_root.is_none()
+                && ballot.survivors.is_none()
+                && ballot.no_recovery_root.is_none()
+                && ballot.survivors_frozen_at_height.is_none()
+                && ballot.corpus_root.is_none()
+                && ballot.accepted_ballots.is_none()
+                && ballot.timed_commitment_root.is_none()
+                && ballot.commitment_closed_at_height.is_none()
+                && ballot.release_pulse_id.is_none()
+                && ballot.opening_height.is_none()
+        }
+        ParliamentBallotFailureKindV1::CommitmentDeadlineExpired => {
+            failure_height > ballot.commitment_close_height
+                && survivors_frozen
+                && ballot.corpus_root.is_none()
+                && ballot.accepted_ballots.is_none()
+                && ballot.timed_commitment_root.is_none()
+                && ballot.commitment_closed_at_height.is_none()
+                && ballot.release_pulse_id.is_none()
+                && ballot.opening_height.is_none()
+        }
+        ParliamentBallotFailureKindV1::ReleasePulseUnavailable => {
+            corpus_frozen
+                && ballot
+                    .release_height
+                    .is_some_and(|release_height| failure_height > release_height)
+                && ballot.release_pulse_id.is_none()
+                && ballot.opening_height.is_none()
+        }
+        ParliamentBallotFailureKindV1::AggregateOpeningFailed => {
+            corpus_frozen
+                && ballot.release_pulse_id.is_some()
+                && ballot.opening_height.is_some_and(|opening_height| {
+                    ballot
+                        .release_height
+                        .is_some_and(|release_height| opening_height >= release_height)
+                        && failure_height >= opening_height
+                })
+        }
+    }
+}
+
 fn accepted_roster(
     election: &ParliamentElectionStateV1,
 ) -> Result<Vec<ParliamentSeatAssignmentV1>, ParliamentReducerErrorV1> {

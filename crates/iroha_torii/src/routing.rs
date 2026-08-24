@@ -44298,11 +44298,10 @@ mod validation_fee_torii_ingress_tests {
             VALIDATION_FEE_POLICY_ACTIVATION_DELAY_BLOCKS, VALIDATION_FEE_POLICY_HASH_METADATA_KEY,
             VALIDATION_FEE_POLICY_SCHEMA_VERSION, VALIDATION_FEE_POLICY_VERSION_METADATA_KEY,
             VALIDATION_FEE_TREASURY_PAYOUT_EXEMPTION_CLASS, ValidationFeeChargingMode,
-            ValidationFeeMultisigMarkerV1,
-            ValidationFeeParliamentAuthorizationV1, ValidationFeePayoutLifecycleReferenceV1,
-            ValidationFeePolicyRegistryEntryV1, ValidationFeePolicyRegistryV1,
-            ValidationFeePolicyV1, ValidationFeeTreasuryPayoutBindingV1,
-            ValidationFeeTreasuryPayoutRecipientV1,
+            ValidationFeeMultisigMarkerV1, ValidationFeeParliamentAuthorizationV1,
+            ValidationFeePayoutLifecycleReferenceV1, ValidationFeePolicyRegistryEntryV1,
+            ValidationFeePolicyRegistryV1, ValidationFeePolicyV1,
+            ValidationFeeTreasuryPayoutBindingV1, ValidationFeeTreasuryPayoutRecipientV1,
         },
     };
     use iroha_executor_data_model::isi::multisig::MultisigPropose;
@@ -44701,16 +44700,18 @@ mod validation_fee_torii_ingress_tests {
         proposal_fingerprint: [u8; 32],
     ) -> ValidationFeeParliamentAuthorizationV1 {
         use iroha_data_model::governance::types::{
-            BallotAttemptId, BeaconPulseId, BeaconSessionId, BodyElectionAttemptId,
-            BodyInstanceId, GovernanceAttemptId, GovernanceCertificateId,
-            GovernanceCertificateV1, GovernanceExpectedHeadPresentV1, GovernanceExpectedHeadV1,
+            BallotAttemptId, BeaconPulseId, BeaconSessionId, BodyElectionAttemptId, BodyInstanceId,
+            GovernanceAttemptId, GovernanceCertificateId, GovernanceCertificateV1,
+            GovernanceExpectedHeadPresentV1, GovernanceExpectedHeadV1,
             ParliamentAggregateOutcomeV1, ParliamentAggregateTallyV1,
             ParliamentBallotCertificateBindingV1, ParliamentBody,
-            ParliamentBodyCertificateBindingV1, ProposalContentId, RiskTierV1,
-            SortitionRequestV1, TleKeySessionId, TleSessionId,
+            ParliamentBodyCertificateBindingV1, ProposalContentId, RiskTierV1, SortitionRequestV1,
+            TleKeySessionId, TleSessionId,
         };
         let enacted_at_height = TEST_POLICY_ENACTMENT_HEIGHT;
-        let base = enacted_at_height.checked_sub(7).expect("certificate lifecycle");
+        let base = enacted_at_height
+            .checked_sub(7)
+            .expect("certificate lifecycle");
         let root = |marker: u8| [marker; 32];
         let proposal_content_id = ProposalContentId::new(proposal_fingerprint);
         let governance_attempt_sequence = 0;
@@ -44797,13 +44798,11 @@ mod validation_fee_torii_ingress_tests {
             }],
             policy_version: 1,
             effect_preimage_hash: root(19),
-            expected_head: GovernanceExpectedHeadV1::Present(
-                GovernanceExpectedHeadPresentV1 {
-                    subject_id: root(17),
-                    version: 1,
-                    head_root: root(18),
-                },
-            ),
+            expected_head: GovernanceExpectedHeadV1::Present(GovernanceExpectedHeadPresentV1 {
+                subject_id: root(17),
+                version: 1,
+                head_root: root(18),
+            }),
             certified_at_height: base + 6,
             enact_at_height: enacted_at_height,
         };
@@ -44822,10 +44821,8 @@ mod validation_fee_torii_ingress_tests {
         authority_key_pair: &KeyPair,
         policy: ValidationFeePolicyV1,
     ) {
-        use iroha_data_model::{
-            governance::types::{
-                ProposalKind, ValidationFeePayoutLifecycleProposal, ValidationFeePolicyProposal,
-            },
+        use iroha_data_model::governance::types::{
+            ProposalKind, ValidationFeePayoutLifecycleProposal, ValidationFeePolicyProposal,
         };
         let payout_binding = policy
             .treasury_payout_binding
@@ -44845,8 +44842,7 @@ mod validation_fee_torii_ingress_tests {
         let policy_proposal_id = policy_kind.fingerprint();
         let payout_lifecycle_authorization =
             validation_fee_test_authorization(authority, payout_lifecycle_id);
-        let policy_authorization =
-            validation_fee_test_authorization(authority, policy_proposal_id);
+        let policy_authorization = validation_fee_test_authorization(authority, policy_proposal_id);
         assert_eq!(
             payout_lifecycle_authorization.invariant_error(),
             None,
@@ -44942,11 +44938,7 @@ mod validation_fee_torii_ingress_tests {
                 payout_lifecycle_kind,
                 payout_lifecycle_authorization,
             ),
-            (
-                policy_proposal_id,
-                policy_kind,
-                policy_authorization,
-            ),
+            (policy_proposal_id, policy_kind, policy_authorization),
         ] {
             stx.world.governance_proposals_mut().insert(
                 proposal_id,

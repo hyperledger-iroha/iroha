@@ -12,9 +12,8 @@ use iroha_data_model::{
     validation_fee::{
         VALIDATION_FEE_POLICY_ACTIVATION_DELAY_BLOCKS, ValidationFeeChargingMode,
         ValidationFeeParliamentAuthorizationV1, ValidationFeePolicyRegistryEntryV1,
-        ValidationFeePolicyRegistryV1, ValidationFeePolicySnapshotStatusV1,
-        ValidationFeePolicyV1, ValidationFeePolicyWitnessProofV1,
-        ValidationFeeTreasuryPayoutBindingV1,
+        ValidationFeePolicyRegistryV1, ValidationFeePolicySnapshotStatusV1, ValidationFeePolicyV1,
+        ValidationFeePolicyWitnessProofV1, ValidationFeeTreasuryPayoutBindingV1,
     },
 };
 use norito::derive::{JsonDeserialize, JsonSerialize, NoritoDeserialize, NoritoSerialize};
@@ -912,9 +911,8 @@ mod tests {
         BallotAttemptId, BeaconPulseId, BeaconSessionId, BodyElectionAttemptId, BodyInstanceId,
         GovernanceAttemptId, GovernanceCertificateId, GovernanceExpectedHeadPresentV1,
         GovernanceExpectedHeadV1, ParliamentAggregateOutcomeV1, ParliamentAggregateTallyV1,
-        ParliamentBallotCertificateBindingV1, ParliamentBody,
-        ParliamentBodyCertificateBindingV1, ProposalContentId, RiskTierV1, SortitionRequestV1,
-        TleKeySessionId, TleSessionId,
+        ParliamentBallotCertificateBindingV1, ParliamentBody, ParliamentBodyCertificateBindingV1,
+        ProposalContentId, RiskTierV1, SortitionRequestV1, TleKeySessionId, TleSessionId,
     };
     fn fixture_account(seed: u8) -> AccountId {
         let key_pair =
@@ -926,7 +924,9 @@ mod tests {
         proposal_fingerprint: [u8; 32],
         enacted_at_height: u64,
     ) -> ValidationFeeParliamentAuthorizationV1 {
-        let base = enacted_at_height.checked_sub(7).expect("certificate lifecycle");
+        let base = enacted_at_height
+            .checked_sub(7)
+            .expect("certificate lifecycle");
         let root = |marker: u8| [marker; 32];
         let proposal_content_id = ProposalContentId::new(proposal_fingerprint);
         let governance_attempt_sequence = 0;
@@ -1013,13 +1013,11 @@ mod tests {
             }],
             policy_version: 1,
             effect_preimage_hash: root(19),
-            expected_head: GovernanceExpectedHeadV1::Present(
-                GovernanceExpectedHeadPresentV1 {
-                    subject_id: root(17),
-                    version: 1,
-                    head_root: root(18),
-                },
-            ),
+            expected_head: GovernanceExpectedHeadV1::Present(GovernanceExpectedHeadPresentV1 {
+                subject_id: root(17),
+                version: 1,
+                head_root: root(18),
+            }),
             certified_at_height: base + 6,
             enact_at_height: enacted_at_height,
         };

@@ -2547,8 +2547,7 @@ impl GovernanceCertificateV1 {
                     || ballot.survivor_freeze_height <= ballot.registration_close_height
                     || ballot.commitment_close_height <= ballot.survivor_freeze_height
                     || ballot.release_height <= ballot.commitment_close_height
-                    || ballot.registration_closed_at_height
-                        != ballot.registration_close_height
+                    || ballot.registration_closed_at_height != ballot.registration_close_height
                     || ballot.survivors_frozen_at_height != ballot.survivor_freeze_height
                     || ballot.commitment_closed_at_height != ballot.commitment_close_height
                     || ballot.max_ballot_retries > MAX_PARLIAMENT_BALLOT_RETRIES_V1
@@ -2930,10 +2929,9 @@ mod tests {
 
     #[test]
     fn competing_contract_effects_share_one_governed_subject() {
-        let contract_address =
-            "irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw"
-                .parse()
-                .expect("contract address");
+        let contract_address = "irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw"
+            .parse()
+            .expect("contract address");
         let first = ProposalKind::DeployContract(DeployContractProposal {
             contract_address: contract_address.clone(),
             code_hash_hex: ContractCodeHash::new([0x11; 32]),

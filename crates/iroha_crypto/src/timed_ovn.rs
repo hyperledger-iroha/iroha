@@ -246,7 +246,7 @@ pub fn timed_ovn_parameter_hash_v1() -> [u8; 32] {
     ] {
         update_field(&mut hasher, &(width as u32).to_be_bytes());
     }
-    for field in [
+    let transcript_fields: [&[u8]; 10] = [
         SESSION_DOMAIN_V1,
         SESSION_DIGEST_DOMAIN_V1,
         POP_CHALLENGE_DOMAIN_V1,
@@ -257,7 +257,8 @@ pub fn timed_ovn_parameter_hash_v1() -> [u8; 32] {
         BALLOT_MAGIC_V1,
         OPTION_TAGS_V1.as_slice(),
         TLE_RELEASE_SIGNATURE_DST_V1,
-    ] {
+    ];
+    for field in transcript_fields {
         update_field(&mut hasher, field);
     }
     hasher.finalize().into()

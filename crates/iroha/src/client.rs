@@ -90,10 +90,8 @@ pub use iroha_torii_shared::validation_fee_api::{
     VALIDATION_FEE_POLICY_PROOF_MAX_RESPONSE_BYTES, VALIDATION_FEE_POLICY_PROOF_VERSION_V1,
     VALIDATION_FEE_PROPOSAL_API_VERSION_V1, VALIDATION_FEE_PROPOSAL_PAGE_MAX_LIMIT_V1,
     ValidationFeeCurrentPolicyProofRequestV1, ValidationFeeCurrentPolicyProofV1,
-    ValidationFeePlainBallotDirectionV1, ValidationFeePlainBallotDraftRequestV1,
-    ValidationFeePlainBallotDraftResponseV1, ValidationFeeProposalDetailV1,
-    ValidationFeeProposalDraftPayloadV1, ValidationFeeProposalDraftRequestV1,
-    ValidationFeeProposalDraftResponseV1, ValidationFeeProposalInstructionDraftV1,
+    ValidationFeeProposalDetailV1, ValidationFeeProposalDraftPayloadV1,
+    ValidationFeeProposalDraftRequestV1, ValidationFeeProposalDraftResponseV1,
     ValidationFeeProposalListV1, ValidationFeeProposalRecordV1,
     ValidationFeeVerifiedPolicyProjectionV1, decode_validation_fee_proposal_cursor_v1,
 };
@@ -2671,32 +2669,12 @@ fn canonical_validation_fee_draft_instruction(
 )> {
     use iroha_data_model::{
         governance::types::ProposalKind,
-        isi::governance::{
-            ProposeValidationFeePayoutLifecycle, ProposeValidationFeePolicy, VotingMode,
-        },
+        isi::governance::{ProposeValidationFeePayoutLifecycle, ProposeValidationFeePolicy},
     };
     if request.version != VALIDATION_FEE_PROPOSAL_API_VERSION_V1 {
         return Err(eyre!("unsupported validation-fee proposal draft version"));
     }
-    if request
-        .referendum_window
-        .is_some_and(|window| window.upper < window.lower)
-    {
-        return Err(eyre!("validation-fee referendum window is reversed"));
-    }
-    if request.mode == Some(VotingMode::Zk) {
-        return Err(eyre!(
-            "validation-fee governance supports plain referendum voting only"
-        ));
-    }
-    if let Some(reason) = request.plain_electorate_rules.invariant_error() {
-        return Err(eyre!(
-            "invalid validation-fee PLAIN electorate rules: {reason}"
-        ));
-    }
-    let proposal_kind = request
-        .proposal
-        .proposal_kind(&request.proposal_operator, &request.plain_electorate_rules);
+    let proposal_kind = request.proposal.proposal_kind(&request.proposal_operator);
     let instruction = match &request.proposal {
         ValidationFeeProposalDraftPayloadV1::Policy {
             policy,
@@ -2727,16 +2705,12 @@ fn canonical_validation_fee_draft_instruction(
                     proposal_operator: request.proposal_operator.clone(),
                     policy: policy.clone(),
                     payout_lifecycle_proposal_id: *payout_lifecycle_proposal_id,
-                    plain_electorate_rules: request.plain_electorate_rules.clone(),
                 },
             );
             debug_assert_eq!(kind, proposal_kind);
             let instruction: InstructionBox = ProposeValidationFeePolicy {
                 policy: policy.clone(),
                 payout_lifecycle_proposal_id: *payout_lifecycle_proposal_id,
-                referendum_window: request.referendum_window,
-                mode: Some(VotingMode::Plain),
-                plain_electorate_rules: request.plain_electorate_rules.clone(),
             }
             .into();
             instruction
@@ -2755,9 +2729,6 @@ fn canonical_validation_fee_draft_instruction(
             }
             let instruction: InstructionBox = ProposeValidationFeePayoutLifecycle {
                 payout_binding: payout_binding.clone(),
-                referendum_window: request.referendum_window,
-                mode: Some(VotingMode::Plain),
-                plain_electorate_rules: request.plain_electorate_rules.clone(),
             }
             .into();
             instruction
@@ -2811,74 +2782,6 @@ fn validate_validation_fee_draft_response(
     {
         return Err(eyre!(
             "validation-fee draft returned a different native instruction"
-        ));
-    }
-    Ok(instruction)
-}
-fn validate_validation_fee_plain_ballot_draft_response(
-    response: &ValidationFeePlainBallotDraftResponseV1,
-    proposal_id: &str,
-    request: &ValidationFeePlainBallotDraftRequestV1,
-) -> Result<InstructionBox> {
-    if request.version != VALIDATION_FEE_PROPOSAL_API_VERSION_V1
-        || response.version != VALIDATION_FEE_PROPOSAL_API_VERSION_V1
-    {
-        return Err(eyre!(
-            "validation-fee PLAIN ballot draft has an unsupported version"
-        ));
-    }
-    if response.proposal_id != proposal_id
-        || response.owner != request.owner
-        || response.direction != request.direction
-    {
-        return Err(eyre!(
-            "validation-fee PLAIN ballot draft differs from the requested proposal, owner, or direction"
-        ));
-    }
-    let [draft] = response.tx_instructions.as_slice() else {
-        return Err(eyre!(
-            "validation-fee PLAIN ballot draft must contain exactly one instruction"
-        ));
-    };
-    if draft.payload_hex.is_empty()
-        || draft.payload_hex.len() % 2 != 0
-        || !draft
-            .payload_hex
-            .bytes()
-            .all(|byte| matches!(byte, b'0'..=b'9' | b'a'..=b'f'))
-    {
-        return Err(eyre!(
-            "validation-fee PLAIN ballot instruction payload must be lowercase canonical hex"
-        ));
-    }
-    let payload = hex::decode(&draft.payload_hex)
-        .wrap_err("failed to decode validation-fee PLAIN ballot draft")?;
-    let instruction = iroha_data_model::isi::decode_instruction_from_pair(&draft.wire_id, &payload)
-        .wrap_err("failed to decode native validation-fee PLAIN ballot instruction")?;
-    let ballot = instruction
-        .as_any()
-        .downcast_ref::<iroha_data_model::isi::governance::CastPlainBallot>()
-        .ok_or_else(|| {
-            eyre!("validation-fee PLAIN ballot draft returned a different instruction type")
-        })?;
-    if ballot.referendum_id != proposal_id
-        || ballot.owner != request.owner
-        || ballot.amount.is_zero()
-        || ballot.duration_blocks == 0
-        || ballot.direction != request.direction.native_code()
-        || response.amount != ballot.amount.to_string()
-        || response.duration_blocks != ballot.duration_blocks.to_string()
-    {
-        return Err(eyre!(
-            "validation-fee PLAIN ballot response differs from its exact native instruction"
-        ));
-    }
-    let (wire_id, canonical_payload) =
-        iroha_data_model::isi::framed_instruction_payload(&instruction)
-            .ok_or_else(|| eyre!("validation-fee PLAIN ballot instruction is not registered"))?;
-    if wire_id != draft.wire_id || hex::encode(canonical_payload) != draft.payload_hex {
-        return Err(eyre!(
-            "validation-fee PLAIN ballot instruction is not canonically framed"
         ));
     }
     Ok(instruction)
