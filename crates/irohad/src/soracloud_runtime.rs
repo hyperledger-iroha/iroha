@@ -36,10 +36,12 @@ use iroha_core::soracloud_runtime::{
     SoracloudRuntimeHfSourceStatus, SoracloudRuntimeInrouPlan, SoracloudRuntimeLeaseVolumePlan,
     SoracloudRuntimeMailboxPlan, SoracloudRuntimeReadHandle, SoracloudRuntimeReplicaPlan,
     SoracloudRuntimeRevisionRole, SoracloudRuntimeServicePlan, SoracloudRuntimeSnapshot,
-    SoracloudUploadedModelEncryptionRecipient, soracloud_hf_generated_bundle_payload_if_applicable,
+    SoracloudUploadedModelEncryptionRecipient, authoritative_soracloud_sequence,
+    resolve_active_inrou_placement_record, resolve_active_inrou_replica_assignment,
+    resolve_active_inrou_replica_assignments, soracloud_hf_generated_bundle_payload_if_applicable,
     soracloud_hf_generated_source_binding,
 };
-use iroha_core::state::{State, StateView, WorldReadOnly};
+use iroha_core::state::{State, StateReadOnly, StateView, WorldReadOnly};
 use iroha_core::{
     executor::quote_nexus_fee_admission_draft, queue::Queue, tx::AcceptedTransaction,
 };
@@ -68,7 +70,8 @@ use iroha_data_model::{
         SoraInrouGuestIsaV1, SoraInrouHostCapabilityRecordV1, SoraInrouReplicaPlacementV1,
         SoraInrouReplicaRuntimeStateV1, SoraInrouRuntimeBackendV1, SoraLeaseVolumeKindV1,
         SoraModelHostViolationKindV1, SoraNetworkPolicyV1, SoraRouteVisibilityV1,
-        SoraRuntimeReceiptV1, SoraServiceDeploymentStateV1, SoraServiceHandlerClassV1,
+        SoraRuntimeExecutionHostV1, SoraRuntimeHfModelHostV1, SoraRuntimeReceiptV1,
+        SoraServiceDeploymentStateV1, SoraServiceHandlerClassV1,
         SoraServiceHandlerV1, SoraServiceHealthStatusV1, SoraServiceLeaseStatusV1,
         SoraServiceLifecycleActionV1, SoraServiceMailboxMessageV1, SoraServiceRuntimeStateV1,
         SoraServiceStateEntryV1, SoraStateBindingV1, SoraStateMutationOperationV1,
@@ -159,6 +162,7 @@ const SORACLOUD_UPLOADED_MODEL_UPLOAD_KEY_DIR: &str = "uploaded_model_keys";
 const SORACLOUD_UPLOADED_MODEL_UPLOAD_KEY_FILE: &str = "x25519_v1.bin";
 const MODEL_HOST_VIOLATION_REPORT_COOLDOWN_MS: u64 = 30_000;
 const GENERATED_HF_RECONCILE_REQUEST_COOLDOWN_MS: u64 = 30_000;
+const HF_LEASE_WINDOW_RECONCILE_REQUEST_COOLDOWN_MS: u64 = 10_000;
 const SORACLOUD_COOLDOWN_TRACKER_MAX_ENTRIES: usize = 4_096;
 const INROU_HOST_ADVERT_ATTEMPT_COOLDOWN_MS: u64 = 10_000;
 const INROU_HOST_HEARTBEAT_TTL_FLOOR_MS: u64 = 300_000;
@@ -1185,13 +1189,13 @@ fn ensure_configured_inrou_backends_statically_available(
     Ok(())
 }
 #[cfg(test)]
-fn inrou_host_platform_supports_local_materialization() -> bool {
+fn inrou_host_platform_supports_static_local_materialization() -> bool {
     let mut config = iroha_config::parameters::actual::SoracloudRuntimeInrou::default();
     config.enabled = true;
     config
         .backends
         .insert(SoraInrouRuntimeBackendV1::PortableVm);
-    ensure_configured_inrou_backends_available(&config).is_ok()
+    ensure_configured_inrou_backends_statically_available(&config).is_ok()
 }
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct ModelHostViolationReportKey {
@@ -1263,6 +1267,7 @@ impl SoracloudModelHostViolationReporter {
         let Some(mutation_sink) = self.mutation_sink.as_ref() else {
             return;
         };
+        let now_ms = soracloud_state_view_observed_at_ms(view);
         let key = ModelHostViolationReportKey {
             validator_account_id: validator_account_id.clone(),
             kind,
@@ -2294,6 +2299,8 @@ impl SoracloudRuntimeManagerHandle {
                 view.world(),
                 request.service_name.as_str(),
                 &binding.source_id,
+                soracloud_runtime_observed_at_ms(),
+                |lane_id| view.is_lane_active_for_authority(lane_id),
             )
             .ok()
             .flatten()
@@ -3608,8 +3615,7 @@ impl SoracloudIvmHost {
             request.to_service.as_ref(),
             request.to_handler.as_ref(),
             payload_commitment,
-            request.available_after_sequence,
-            request.expires_at_sequence,
+            request.delivery_delay_sequences,
             u64::try_from(self.staged_outbound_mailbox_messages.len()).unwrap_or(u64::MAX),
         )));
         self.staged_outbound_mailbox_messages
@@ -3617,16 +3623,17 @@ impl SoracloudIvmHost {
                 schema_version: SORA_SERVICE_MAILBOX_MESSAGE_VERSION_V1,
                 message_id,
                 from_service: self.request.deployment.service_name.clone(),
+                from_service_version: String::new(),
                 from_handler: self.request.mailbox_message.to_handler.clone(),
                 to_service: request.to_service,
+                to_service_version: String::new(),
                 to_handler: request.to_handler,
                 payload_bytes: request.payload_bytes,
                 payload_commitment,
-                enqueue_sequence: self.request.execution_sequence,
-                available_after_sequence: request
-                    .available_after_sequence
-                    .max(self.request.execution_sequence),
-                expires_at_sequence: request.expires_at_sequence,
+                delivery_delay_sequences: request.delivery_delay_sequences,
+                enqueue_sequence: 0,
+                available_after_sequence: 0,
+                expires_at_sequence: 0,
             });
         Ok(SoracloudEmitMailboxMessageResponseV1 {
             message_id,
@@ -3869,9 +3876,7 @@ impl SoracloudIvmHost {
                 mailbox_message_id: Some(self.request.mailbox_message.message_id),
                 journal_artifact_hash,
                 checkpoint_artifact_hash,
-                placement_id: None,
-                selected_validator_account_id: None,
-                selected_peer_id: None,
+                execution_host: None,
             },
         })
     }
@@ -4507,9 +4512,12 @@ pub(crate) struct SoracloudRuntimeManager {
     hf_inference_credential_provider:
         Option<Arc<dyn crate::soracloud_hf_credential::SoracloudHfInferenceCredentialProviderV1>>,
     last_model_host_heartbeat_attempt_ms: Mutex<Option<u64>>,
+    last_hf_lease_window_reconcile_attempt_ms: Mutex<Option<u64>>,
     last_inrou_host_advert_attempt_ms: Mutex<Option<u64>>,
     pending_inrou_host_capability_advert: Mutex<Option<SoraInrouHostCapabilityRecordV1>>,
     inrou_startup_capability: Option<InrouStartupCapabilitySnapshot>,
+    #[cfg(test)]
+    inrou_hosting_available_override: Option<bool>,
     last_inrou_host_withdraw_attempt_ms: Mutex<Option<u64>>,
     last_inrou_placement_reconcile_attempt_ms: Mutex<Option<u64>>,
     last_runtime_state_submission_commitments: Mutex<BTreeMap<(String, String, u16), Hash>>,
@@ -4688,9 +4696,12 @@ impl SoracloudRuntimeManager {
             mutation_sink: None,
             hf_inference_credential_provider: None,
             last_model_host_heartbeat_attempt_ms: Mutex::new(None),
+            last_hf_lease_window_reconcile_attempt_ms: Mutex::new(None),
             last_inrou_host_advert_attempt_ms: Mutex::new(None),
             pending_inrou_host_capability_advert: Mutex::new(None),
             inrou_startup_capability,
+            #[cfg(test)]
+            inrou_hosting_available_override: None,
             last_inrou_host_withdraw_attempt_ms: Mutex::new(None),
             last_inrou_placement_reconcile_attempt_ms: Mutex::new(None),
             last_runtime_state_submission_commitments: Mutex::new(BTreeMap::new()),
@@ -4710,6 +4721,12 @@ impl SoracloudRuntimeManager {
         self.host_violation_reporter =
             SoracloudModelHostViolationReporter::with_mutation_sink(Arc::clone(&mutation_sink));
         self.mutation_sink = Some(mutation_sink);
+        self
+    }
+    #[cfg(test)]
+    #[must_use]
+    fn with_inrou_hosting_available_override(mut self, available: bool) -> Self {
+        self.inrou_hosting_available_override = Some(available);
         self
     }
     /// Attach the deployment-owned authenticated HF credential provider.
@@ -4941,17 +4958,23 @@ impl SoracloudRuntimeManager {
             .wrap_err_with(|| format!("create {}", self.hf_sources_root().display()))?;
         fs::create_dir_all(self.service_data_root())
             .wrap_err_with(|| format!("create {}", self.service_data_root().display()))?;
-        let inrou_hosting_available = match ensure_configured_inrou_backends_statically_available(
-            &self.config.inrou,
-        ) {
-            Ok(()) => self.config.inrou.enabled,
-            Err(error) => {
-                iroha_logger::warn!(
-                    ?error,
-                    "configured Inrou backend is unavailable; withdrawing host and stopping local replicas"
-                );
-                false
-            }
+        #[cfg(test)]
+        let inrou_hosting_available_override = self.inrou_hosting_available_override;
+        #[cfg(not(test))]
+        let inrou_hosting_available_override: Option<bool> = None;
+        let inrou_hosting_available = match inrou_hosting_available_override {
+            Some(available) => available && self.config.inrou.enabled,
+            None => match ensure_configured_inrou_backends_statically_available(&self.config.inrou)
+            {
+                Ok(()) => self.config.inrou.enabled,
+                Err(error) => {
+                    iroha_logger::warn!(
+                        ?error,
+                        "configured Inrou backend is unavailable; withdrawing host and stopping local replicas"
+                    );
+                    false
+                }
+            },
         };
         if !inrou_hosting_available {
             let view = self.state.view();
@@ -4960,12 +4983,14 @@ impl SoracloudRuntimeManager {
         let (
             bundle_registry,
             initial_snapshot,
+            hf_lease_window_reconcile_needed,
             inrou_host_capability_refresh,
             inrou_placement_reconcile_needed,
         ) = {
             let view = self.state.view();
             self.report_local_model_host_advert_contradictions(&view);
             let bundle_registry = collect_service_revision_registry(&view);
+            let hf_lease_window_reconcile_needed = self.hf_lease_window_reconcile_needed(&view);
             let inrou_host_capability_refresh = inrou_hosting_available
                 .then(|| self.local_inrou_host_capability_refresh_candidate(&view))
                 .flatten();
@@ -4985,10 +5010,12 @@ impl SoracloudRuntimeManager {
             (
                 bundle_registry,
                 initial_snapshot,
+                hf_lease_window_reconcile_needed,
                 inrou_host_capability_refresh,
                 inrou_placement_reconcile_needed,
             )
         };
+        self.request_hf_lease_window_reconcile_if_needed(hf_lease_window_reconcile_needed);
         self.refresh_local_inrou_host_capability_if_needed(inrou_host_capability_refresh);
         self.request_inrou_placement_reconcile_if_needed(inrou_placement_reconcile_needed);
         {
@@ -5032,7 +5059,10 @@ impl SoracloudRuntimeManager {
                 inrou_hosting_available,
             )?
         };
-        self.prune_stale_hf_local_workers(&snapshot);
+        {
+            let view = self.state.view();
+            self.prune_stale_hf_local_workers(&view, &snapshot);
+        }
         {
             let view = self.state.view();
             self.submit_http_service_runtime_state_updates(&view, &snapshot, &bundle_registry);
@@ -5055,6 +5085,8 @@ impl SoracloudRuntimeManager {
         let Some(mutation_sink) = self.mutation_sink.as_ref() else {
             return;
         };
+        let now_ms =
+            soracloud_state_view_observed_at_ms(view).max(soracloud_runtime_observed_at_ms());
         let desired_keys = snapshot
             .services
             .iter()
@@ -5181,17 +5213,26 @@ impl SoracloudRuntimeManager {
                     }
                 };
                 for replica in &plan.local_replicas {
-                    let Some(assignment) =
-                        view.world()
-                            .soracloud_inrou_service_placements()
-                            .get(&(service_name.clone(), service_version.clone()))
-                            .and_then(|record| {
-                                record.placements.iter().find(|placement| {
-                                    placement.replica_slot == replica.replica_slot
-                                })
-                            })
-                    else {
-                        continue;
+                    let assignment = match resolve_active_inrou_replica_assignment(
+                        view.world(),
+                        service_name,
+                        service_version,
+                        replica.replica_slot,
+                        now_ms,
+                        |lane_id| view.is_lane_active_for_authority(lane_id),
+                    ) {
+                        Ok(Some(assignment)) => assignment,
+                        Ok(None) => continue,
+                        Err(error) => {
+                            iroha_logger::warn!(
+                                %error,
+                                service_name = %service_name,
+                                service_version = %service_version,
+                                replica_slot = replica.replica_slot,
+                                "refusing to submit Inrou runtime state from malformed authoritative placement"
+                            );
+                            continue;
+                        }
                     };
                     let authoritative_state =
                         view.world().soracloud_inrou_replica_runtime().get(&(
@@ -5204,8 +5245,8 @@ impl SoracloudRuntimeManager {
                         service_name: service_name_id.clone(),
                         service_version: service_version.clone(),
                         replica_slot: replica.replica_slot,
-                        validator_account_id: assignment.validator_account_id.clone(),
-                        peer_id: assignment.peer_id.clone(),
+                        validator_account_id: assignment.validator_account_id,
+                        peer_id: assignment.peer_id,
                         selected_backend: assignment.selected_backend,
                         selected_guest_isa: assignment.selected_guest_isa,
                         health_status: replica.health_status,
@@ -5373,6 +5414,51 @@ impl SoracloudRuntimeManager {
             )),
         );
     }
+    fn hf_lease_window_reconcile_needed(&self, view: &StateView<'_>) -> bool {
+        let now_ms = soracloud_runtime_observed_at_ms();
+        view.world()
+            .soracloud_hf_shared_lease_pools()
+            .iter()
+            .any(|(_pool_id, pool)| {
+                pool.window_expires_at_ms <= now_ms
+                    && matches!(
+                        pool.status,
+                        SoraHfSharedLeaseStatusV1::Active | SoraHfSharedLeaseStatusV1::Draining
+                    )
+            })
+    }
+    fn hf_lease_window_reconcile_attempt_allowed(&self, now_ms: u64) -> bool {
+        let mut last_attempt_ms = self.last_hf_lease_window_reconcile_attempt_ms.lock();
+        if let Some(previous_attempt_ms) = *last_attempt_ms
+            && now_ms.saturating_sub(previous_attempt_ms)
+                < HF_LEASE_WINDOW_RECONCILE_REQUEST_COOLDOWN_MS
+        {
+            return false;
+        }
+        *last_attempt_ms = Some(now_ms);
+        true
+    }
+    fn request_hf_lease_window_reconcile_if_needed(&self, needed: bool) {
+        let Some(mutation_sink) = self.mutation_sink.as_ref() else {
+            return;
+        };
+        if !needed {
+            return;
+        }
+        let now_ms = soracloud_runtime_observed_at_ms();
+        if !self.hf_lease_window_reconcile_attempt_allowed(now_ms) {
+            return;
+        }
+        if let Err(error) = mutation_sink.submit_instruction(
+            InstructionBox::from(isi::soracloud::ReconcileSoracloudModelHosts),
+            "/internal/soracloud/runtime/hf-lease-window-reconcile",
+        ) {
+            iroha_logger::warn!(
+                ?error,
+                "failed to submit authoritative HF lease-window reconciliation request from embedded runtime manager"
+            );
+        }
+    }
     fn build_local_inrou_host_capability_record(
         &self,
         now_ms: u64,
@@ -5459,6 +5545,14 @@ impl SoracloudRuntimeManager {
         let Some(desired) = self.build_local_inrou_host_capability_record(now_ms) else {
             return None;
         };
+        if !iroha_core::soracloud_runtime::soracloud_validator_is_active(
+            view.world(),
+            &desired.validator_account_id,
+            |lane_id| view.is_lane_active_for_authority(lane_id),
+        ) {
+            self.clear_pending_inrou_host_capability_advert();
+            return None;
+        }
         let authoritative = view
             .world()
             .soracloud_inrou_host_capabilities()
@@ -5542,21 +5636,18 @@ impl SoracloudRuntimeManager {
         bundle_registry: &BTreeMap<(String, String), SoraDeploymentBundleV1>,
     ) -> Result<bool, NumericOperationError> {
         let world = view.world();
-        let current_sequence = current_soracloud_service_sequence(world);
-        let now_ms = soracloud_runtime_observed_at_ms();
+        let current_sequence = authoritative_soracloud_sequence(world);
+        let now_ms =
+            soracloud_state_view_observed_at_ms(view).max(soracloud_runtime_observed_at_ms());
         let mut desired_records = BTreeMap::<(String, String), u16>::new();
         for (service_name, deployment) in world.soracloud_service_deployments().iter() {
             if !deployment.hosted_service_lease_active_at(current_sequence)? {
                 continue;
             }
-            let mut active_versions = vec![deployment.current_service_version.clone()];
-            if let Some(rollout) = deployment.active_rollout.as_ref()
-                && rollout.traffic_percent > 0
-                && rollout.candidate_version != deployment.current_service_version
-            {
-                active_versions.push(rollout.candidate_version.clone());
-            }
-            for service_version in active_versions {
+            for (service_version, _, traffic_percent) in collect_active_versions(deployment) {
+                if traffic_percent == 0 {
+                    continue;
+                }
                 let Some(bundle) = bundle_registry
                     .get(&(service_name.as_ref().to_owned(), service_version.clone()))
                 else {
@@ -5570,45 +5661,50 @@ impl SoracloudRuntimeManager {
                 }
                 let key = (service_name.as_ref().to_owned(), service_version.clone());
                 desired_records.insert(key.clone(), bundle.service.replicas.get());
-                let Some(record) = world.soracloud_inrou_service_placements().get(&key) else {
-                    return Ok(true);
-                };
-                if record.desired_replica_count != bundle.service.replicas.get()
-                    || record.placements.len() > usize::from(record.desired_replica_count)
-                {
-                    return Ok(true);
-                }
-                for placement in &record.placements {
-                    let Some(capability) = world
-                        .soracloud_inrou_host_capabilities()
-                        .get(&placement.validator_account_id)
-                    else {
-                        return Ok(true);
-                    };
-                    if !capability.can_host_replicas_at(now_ms)
-                        || capability.peer_id != placement.peer_id
-                        || !capability
-                            .supported_backends
-                            .contains(&placement.selected_backend)
-                        || !capability
-                            .supported_guest_isas
-                            .contains(&placement.selected_guest_isa)
-                    {
+                let record = match resolve_active_inrou_placement_record(
+                    world,
+                    service_name.as_ref(),
+                    &service_version,
+                ) {
+                    Ok(Some(record)) => record,
+                    Ok(None) => return Ok(true),
+                    Err(error) => {
+                        iroha_logger::warn!(
+                            %error,
+                            service_name = %service_name,
+                            service_version = %service_version,
+                            "authoritative Inrou placement requires reconciliation"
+                        );
                         return Ok(true);
                     }
+                };
+                let active_assignments = match resolve_active_inrou_replica_assignments(
+                    world,
+                    service_name.as_ref(),
+                    &service_version,
+                    now_ms,
+                    |lane_id| view.is_lane_active_for_authority(lane_id),
+                ) {
+                    Ok(assignments) => assignments,
+                    Err(error) => {
+                        iroha_logger::warn!(
+                            %error,
+                            service_name = %service_name,
+                            service_version = %service_version,
+                            "authoritative Inrou assignment capacity requires reconciliation"
+                        );
+                        return Ok(true);
+                    }
+                };
+                if active_assignments.len() != record.placements.len() {
+                    return Ok(true);
                 }
             }
         }
         Ok(world
             .soracloud_inrou_service_placements()
             .iter()
-            .any(|(key, record)| {
-                desired_records
-                    .get(key)
-                    .is_none_or(|desired_replica_count| {
-                        *desired_replica_count != record.desired_replica_count
-                    })
-            }))
+            .any(|(key, _record)| !desired_records.contains_key(key)))
     }
     fn request_inrou_placement_reconcile_if_needed(&self, needed: bool) {
         let Some(mutation_sink) = self.mutation_sink.as_ref() else {
@@ -5645,8 +5741,23 @@ impl SoracloudRuntimeManager {
         *self.snapshot.write() = snapshot;
         Ok(true)
     }
-    fn prune_stale_hf_local_workers(&self, snapshot: &SoracloudRuntimeSnapshot) {
-        let active_sources = snapshot.hf_sources.keys().cloned().collect::<BTreeSet<_>>();
+    fn prune_stale_hf_local_workers(
+        &self,
+        view: &StateView<'_>,
+        snapshot: &SoracloudRuntimeSnapshot,
+    ) {
+        let active_sources = if hf_local_host_identity_is_configured(&self.config) {
+            snapshot
+                .hf_sources
+                .keys()
+                .filter(|source_id| {
+                    !local_hf_source_execution_hosts(view, source_id, &self.config).is_empty()
+                })
+                .cloned()
+                .collect::<BTreeSet<_>>()
+        } else {
+            snapshot.hf_sources.keys().cloned().collect::<BTreeSet<_>>()
+        };
         let stale_workers = {
             let mut workers = self.hf_local_workers.lock();
             let stale_source_ids = workers
@@ -8716,14 +8827,17 @@ fn local_read_execution_request(
             request.request_commitment,
         ))),
         from_service: context.deployment.service_name.clone(),
+        from_service_version: context.deployment.current_service_version.clone(),
         from_handler: context.handler.handler_name.clone(),
         to_service: context.deployment.service_name.clone(),
+        to_service_version: context.deployment.current_service_version.clone(),
         to_handler: context.handler.handler_name.clone(),
         payload_bytes: request.request_body.clone(),
         payload_commitment: request.request_commitment,
+        delivery_delay_sequences: 0,
         enqueue_sequence: execution_sequence,
         available_after_sequence: execution_sequence,
-        expires_at_sequence: None,
+        expires_at_sequence: execution_sequence.saturating_add(1),
     };
     SoracloudOrderedMailboxExecutionRequest {
         observed_height: request.observed_height,
@@ -11103,23 +11217,25 @@ fn resolve_local_read_context(
     })
 }
 fn hf_local_host_identity_is_configured(config: &SoracloudRuntimeManagerConfig) -> bool {
-    config.local_validator_account_id.is_some() || config.local_peer_id.is_some()
+    config.local_validator_account_id.is_some() && config.local_peer_id.is_some()
 }
 fn hf_assignment_matches_local_host(
     config: &SoracloudRuntimeManagerConfig,
     assignment: &SoraHfPlacementHostAssignmentV1,
 ) -> bool {
-    if !hf_local_host_identity_is_configured(config) {
+    let (Some(validator_account_id), Some(peer_id)) = (
+        config.local_validator_account_id.as_ref(),
+        config.local_peer_id.as_deref(),
+    ) else {
         return false;
-    }
-    config
-        .local_validator_account_id
-        .as_ref()
-        .is_none_or(|validator_account_id| assignment.validator_account_id == *validator_account_id)
-        && config
-            .local_peer_id
-            .as_deref()
-            .is_none_or(|peer_id| assignment.peer_id == peer_id)
+    };
+    assignment.validator_account_id == *validator_account_id && assignment.peer_id == peer_id
+}
+fn soracloud_state_view_observed_at_ms(view: &StateView<'_>) -> u64 {
+    view.latest_block()
+        .map(|block| u64::try_from(block.header().creation_time().as_millis()).unwrap_or(u64::MAX))
+        .unwrap_or(1)
+        .max(1)
 }
 fn local_hf_source_execution_hosts(
     view: &StateView<'_>,
@@ -11129,6 +11245,7 @@ fn local_hf_source_execution_hosts(
     if !hf_local_host_identity_is_configured(config) {
         return Vec::new();
     }
+    let now_ms = soracloud_state_view_observed_at_ms(view);
     view.world()
         .soracloud_hf_placements()
         .iter()
@@ -11140,6 +11257,9 @@ fn local_hf_source_execution_hosts(
                     .soracloud_hf_shared_lease_pools()
                     .get(pool_id)
                     .is_some_and(|pool| {
+                        pool.window_started_at_ms <= now_ms
+                            && pool.window_expires_at_ms > now_ms
+                            &&
                         matches!(
                             pool.status,
                             SoraHfSharedLeaseStatusV1::Active | SoraHfSharedLeaseStatusV1::Draining
@@ -11155,6 +11275,15 @@ fn local_hf_source_execution_hosts(
                             | SoraHfPlacementHostStatusV1::Retired
                     )
                 {
+                    return None;
+                }
+                if !iroha_core::soracloud_runtime::soracloud_hf_placement_assignment_has_active_capability(
+                    view.world(),
+                    placement,
+                    assignment,
+                    now_ms,
+                    |lane_id| view.is_lane_active_for_authority(lane_id),
+                ) {
                     return None;
                 }
                 Some(ResolvedHfPlacementExecutionHost {
@@ -11177,6 +11306,7 @@ fn resolve_active_hf_placement_for_service(
         view.world(),
         service_name,
         source_id,
+        soracloud_state_view_observed_at_ms(view),
     )
     .map_err(|message| {
         SoracloudRuntimeExecutionError::new(SoracloudRuntimeExecutionErrorKind::Internal, message)
@@ -11189,7 +11319,12 @@ fn resolve_local_hf_execution_host(
     config: &SoracloudRuntimeManagerConfig,
 ) -> Result<Option<ResolvedHfPlacementExecutionHost>, SoracloudRuntimeExecutionError> {
     if !hf_local_host_identity_is_configured(config) {
-        return Ok(None);
+        return Err(SoracloudRuntimeExecutionError::new(
+            SoracloudRuntimeExecutionErrorKind::Unavailable,
+            format!(
+                "generated HF service `{service_name}` source `{source_id}` requires both the local validator account and peer identity"
+            ),
+        ));
     }
     let Some(placement) = resolve_active_hf_placement_for_service(view, service_name, source_id)?
     else {
@@ -11203,7 +11338,16 @@ fn resolve_local_hf_execution_host(
     let Some(assignment) = placement
         .assigned_hosts
         .iter()
-        .find(|assignment| hf_assignment_matches_local_host(config, assignment))
+        .find(|assignment| {
+            hf_assignment_matches_local_host(config, assignment)
+                && iroha_core::soracloud_runtime::soracloud_hf_placement_assignment_has_active_capability(
+                    view.world(),
+                    &placement,
+                    assignment,
+                    soracloud_state_view_observed_at_ms(view),
+                    |lane_id| view.is_lane_active_for_authority(lane_id),
+                )
+        })
     else {
         return Err(SoracloudRuntimeExecutionError::new(
             SoracloudRuntimeExecutionErrorKind::Unavailable,
@@ -11227,7 +11371,12 @@ fn ensure_generated_hf_execution_host_ready(
     source_id: &str,
 ) -> Result<(), SoracloudRuntimeExecutionError> {
     let Some(host) = host else {
-        return Ok(());
+        return Err(SoracloudRuntimeExecutionError::new(
+            SoracloudRuntimeExecutionErrorKind::Unavailable,
+            format!(
+                "generated HF service `{service_name}` source `{source_id}` has no exact authoritative local host assignment"
+            ),
+        ));
     };
     if matches!(
         host.status,
@@ -11373,14 +11522,14 @@ fn local_read_receipt(
     mailbox_message_id: Option<Hash>,
     placement_host: Option<&ResolvedHfPlacementExecutionHost>,
 ) -> SoraRuntimeReceiptV1 {
-    let placement_id = placement_host.map(|host| host.placement_id);
-    let selected_validator_account_id =
-        placement_host.map(|host| host.validator_account_id.clone());
-    let selected_peer_id = placement_host.map(|host| host.peer_id.clone());
-    let emitted_sequence = next_authoritative_observation_sequence_from_view(
-        deployment.service_name.as_ref(),
-        request.observed_height,
-    );
+    let execution_host =
+        placement_host.map(|host| {
+            SoraRuntimeExecutionHostV1::HfModelHost(SoraRuntimeHfModelHostV1 {
+                placement_id: host.placement_id,
+                validator_account_id: host.validator_account_id.clone(),
+                peer_id: host.peer_id.clone(),
+            })
+        });
     SoraRuntimeReceiptV1 {
         schema_version: iroha_data_model::soracloud::SORA_RUNTIME_RECEIPT_VERSION_V1,
         receipt_id: Hash::new(Encode::encode(&(
@@ -11391,9 +11540,7 @@ fn local_read_receipt(
             request.request_commitment,
             result_commitment,
             certified_by,
-            placement_id,
-            selected_validator_account_id.clone(),
-            selected_peer_id.clone(),
+            execution_host.clone(),
         ))),
         service_name: deployment.service_name.clone(),
         service_version: deployment.current_service_version.clone(),
@@ -11402,20 +11549,12 @@ fn local_read_receipt(
         request_commitment: request.request_commitment,
         result_commitment,
         certified_by,
-        emitted_sequence,
+        emitted_sequence: 0,
         mailbox_message_id,
         journal_artifact_hash: None,
         checkpoint_artifact_hash: None,
-        placement_id,
-        selected_validator_account_id,
-        selected_peer_id,
+        execution_host,
     }
-}
-fn next_authoritative_observation_sequence_from_view(
-    _service_name: &str,
-    observed_height: u64,
-) -> u64 {
-    observed_height.max(1)
 }
 fn soracloud_runtime_observed_at_ms() -> u64 {
     std::time::SystemTime::now()
@@ -11540,14 +11679,6 @@ fn content_type_for_path(path: &str) -> &'static str {
         _ => "application/octet-stream",
     }
 }
-fn current_soracloud_service_sequence(world: &impl WorldReadOnly) -> u64 {
-    world
-        .soracloud_service_audit_events()
-        .iter()
-        .map(|(sequence, _event)| *sequence)
-        .max()
-        .unwrap_or(0)
-}
 fn build_lease_volume_plans(
     bundle: &SoraDeploymentBundleV1,
     deployment: &SoraServiceDeploymentStateV1,
@@ -11597,33 +11728,43 @@ fn build_lease_volume_plans(
         .collect()
 }
 fn local_inrou_replica_placements(
-    world: &impl WorldReadOnly,
+    view: &StateView<'_>,
     service_name: &str,
     service_version: &str,
     local_validator_account_id: Option<&AccountId>,
     local_peer_id: Option<&str>,
+    now_ms: u64,
 ) -> Vec<SoraInrouReplicaPlacementV1> {
+    let world = view.world();
+    let now_ms = now_ms.max(soracloud_runtime_observed_at_ms());
     let Some(local_validator_account_id) = local_validator_account_id else {
         return Vec::new();
     };
     let Some(local_peer_id) = local_peer_id else {
         return Vec::new();
     };
-    let Some(record) = world
-        .soracloud_inrou_service_placements()
-        .get(&(service_name.to_owned(), service_version.to_owned()))
-    else {
-        return Vec::new();
+    let mut placements = match resolve_active_inrou_replica_assignments(
+        world,
+        service_name,
+        service_version,
+        now_ms,
+        |lane_id| view.is_lane_active_for_authority(lane_id),
+    ) {
+        Ok(placements) => placements,
+        Err(error) => {
+            iroha_logger::warn!(
+                %error,
+                service_name = %service_name,
+                service_version = %service_version,
+                "refusing to materialize malformed authoritative Inrou placement"
+            );
+            return Vec::new();
+        }
     };
-    let mut placements = record
-        .placements
-        .iter()
-        .filter(|placement| {
-            &placement.validator_account_id == local_validator_account_id
-                && placement.peer_id == local_peer_id
-        })
-        .cloned()
-        .collect::<Vec<_>>();
+    placements.retain(|placement| {
+        &placement.validator_account_id == local_validator_account_id
+            && placement.peer_id == local_peer_id
+    });
     placements.sort_by_key(|placement| placement.replica_slot);
     placements
 }
@@ -11664,7 +11805,8 @@ fn build_runtime_snapshot(
 ) -> eyre::Result<SoracloudRuntimeSnapshot> {
     let mut services = BTreeMap::new();
     let world = view.world();
-    let current_sequence = current_soracloud_service_sequence(world);
+    let now_ms = soracloud_state_view_observed_at_ms(view);
+    let current_sequence = authoritative_soracloud_sequence(world);
     for (service_name, deployment) in world.soracloud_service_deployments().iter() {
         let service_name_key = service_name.clone();
         let service_name = service_name_key.to_string();
@@ -11673,6 +11815,7 @@ fn build_runtime_snapshot(
         let authoritative_pending = authoritative_mailbox_counts(
             world.soracloud_mailbox_messages(),
             world.soracloud_runtime_receipts(),
+            current_sequence,
         );
         let mut version_plans = BTreeMap::new();
         for (service_version, role, traffic_percent) in versions {
@@ -11737,11 +11880,12 @@ fn build_runtime_snapshot(
                 && bundle.container.runtime == SoraContainerRuntimeV1::Inrou
             {
                 local_inrou_replica_placements(
-                    world,
+                    view,
                     &service_name,
                     &service_version,
                     local_validator_account_id,
                     local_peer_id,
+                    now_ms,
                 )
             } else {
                 Vec::new()
@@ -11943,7 +12087,7 @@ fn build_runtime_snapshot(
                                 queue_name: mailbox.queue_name.to_string(),
                                 max_pending_messages: mailbox.max_pending_messages.get(),
                                 max_message_bytes: mailbox.max_message_bytes.get(),
-                                retention_blocks: mailbox.retention_blocks.get(),
+                                retention_sequences: mailbox.retention_sequences.get(),
                             })
                     })
                     .collect(),
@@ -12274,17 +12418,15 @@ fn collect_active_versions(
         let traffic_percent = rollout.traffic_percent.min(100);
         let baseline_percent = 100u8.saturating_sub(traffic_percent);
         versions.push((
-            deployment.current_service_version.clone(),
+            rollout.baseline_version.clone(),
             SoracloudRuntimeRevisionRole::Active,
             baseline_percent,
         ));
-        if rollout.candidate_version != deployment.current_service_version {
-            versions.push((
-                rollout.candidate_version.clone(),
-                SoracloudRuntimeRevisionRole::CanaryCandidate,
-                traffic_percent,
-            ));
-        }
+        versions.push((
+            rollout.candidate_version.clone(),
+            SoracloudRuntimeRevisionRole::CanaryCandidate,
+            traffic_percent,
+        ));
     } else {
         versions.push((
             deployment.current_service_version.clone(),
@@ -12313,6 +12455,7 @@ fn hydrated_ivm_service_health_status(
 fn authoritative_mailbox_counts(
     messages: &impl StorageReadOnly<Hash, SoraServiceMailboxMessageV1>,
     receipts: &impl StorageReadOnly<Hash, SoraRuntimeReceiptV1>,
+    current_sequence: u64,
 ) -> BTreeMap<String, u32> {
     let consumed: BTreeSet<Hash> = receipts
         .iter()
@@ -12320,7 +12463,9 @@ fn authoritative_mailbox_counts(
         .collect();
     let mut counts = BTreeMap::new();
     for (_, message) in messages.iter() {
-        if consumed.contains(&message.message_id) {
+        if consumed.contains(&message.message_id)
+            || message.expires_at_sequence <= current_sequence
+        {
             continue;
         }
         let entry = counts.entry(message.to_service.to_string()).or_insert(0u32);
@@ -12403,9 +12548,7 @@ fn deterministic_mailbox_failure_result_with_message(
             mailbox_message_id: Some(request.mailbox_message.message_id),
             journal_artifact_hash: None,
             checkpoint_artifact_hash: None,
-            placement_id: None,
-            selected_validator_account_id: None,
-            selected_peer_id: None,
+            execution_host: None,
         },
     }
 }
@@ -12517,6 +12660,7 @@ fn authoritative_mailbox_result_commitment(
                 message.to_service.as_ref(),
                 message.to_handler.as_ref(),
                 message.payload_commitment,
+                message.delivery_delay_sequences,
                 message.available_after_sequence,
                 message.expires_at_sequence,
             )
@@ -21936,16 +22080,23 @@ mod tests {
     //! Tests for the embedded Soracloud runtime manager.
     use super::*;
     use eyre::Result;
-    use iroha_core::{kura::Kura, query::store::LiveQueryStore, state::World};
+    use iroha_core::{
+        kura::Kura, query::store::LiveQueryStore, smartcontracts::isi::Execute, state::World,
+    };
     use iroha_crypto::{
         Algorithm, BlsNormal, KeyGenOption, KeyPair, PrivateKey, PublicKey, Signature,
     };
     use iroha_data_model::asset::AssetDefinitionId;
     use iroha_data_model::{
         Level,
+        account::Account,
         block::BlockHeader,
-        isi::Log,
+        isi::{Grant, Log},
         metadata::Metadata,
+        nexus::{LaneId, PublicLaneValidatorRecord, PublicLaneValidatorStatus},
+        peer::PeerId,
+        permission::Permission,
+        prelude::Register,
         smart_contract::manifest::EntryPointKind,
         soracloud::{
             AgentApartmentManifestV1, SECRET_ENVELOPE_VERSION_V1,
@@ -21960,12 +22111,13 @@ mod tests {
             SoraHfModelFormatV1, SoraHfPlacementHostAssignmentV1, SoraHfPlacementHostRoleV1,
             SoraHfPlacementHostStatusV1, SoraHfPlacementRecordV1, SoraHfPlacementStatusV1,
             SoraHfResourceProfileV1, SoraHfSharedLeaseMemberStatusV1, SoraHfSharedLeaseMemberV1,
-            SoraHfSharedLeasePoolV1, SoraHfSharedLeaseStatusV1, SoraHfSourceRecordV1,
-            SoraHfSourceStatusV1, SoraInrouGuestImageV1, SoraModelHostCapabilityRecordV1,
-            SoraPublishedInrouGuestImageArtifactV1, SoraRolloutStageV1, SoraRouteVisibilityV1,
-            SoraServiceConfigEntryV1, SoraServiceDeploymentStateV1, SoraServiceHandlerClassV1,
-            SoraServiceHealthStatusV1, SoraServiceMailboxMessageV1, SoraServiceRolloutStateV1,
-            SoraServiceRuntimeStateV1, SoraServiceSecretEntryV1,
+            SoraHfSharedLeasePoolV1, SoraHfSharedLeaseQueuedWindowV1, SoraHfSharedLeaseStatusV1,
+            SoraHfSourceRecordV1, SoraHfSourceStatusV1, SoraInrouGuestImageV1,
+            SoraModelHostCapabilityRecordV1, SoraPublishedInrouGuestImageArtifactV1,
+            SoraRolloutStageV1, SoraRouteVisibilityV1, SoraServiceConfigEntryV1,
+            SoraServiceDeploymentStateV1, SoraServiceHandlerClassV1, SoraServiceHealthStatusV1,
+            SoraServiceMailboxMessageV1, SoraServiceRolloutStateV1, SoraServiceRuntimeStateV1,
+            SoraServiceSecretEntryV1,
         },
         sorafs::pin_registry::{
             ChunkerProfileHandle, ManifestDigest, ManifestRootCid, PinFeePayment,
@@ -21974,7 +22126,7 @@ mod tests {
         },
     };
     use iroha_primitives::{json::Json, numeric::Quantity};
-    use iroha_test_samples::{ALICE_ID, ALICE_KEYPAIR, BOB_ID};
+    use iroha_test_samples::{ALICE_ID, ALICE_KEYPAIR, BOB_ID, SAMPLE_GENESIS_ACCOUNT_ID};
     use iroha_torii::sorafs::AdmissionRegistry;
     use rand::rand_core::{TryCryptoRng, TryRngCore};
     use serial_test::serial;
@@ -23447,18 +23599,18 @@ mod tests {
                 runtime_price_per_sequence: "0.00025".parse().expect("runtime price"),
                 storage_price_per_gib_sequence: "0.000025".parse().expect("storage price"),
                 egress_price_per_mib: "0.000005".parse().expect("egress price"),
-                lease_started_sequence: 0,
+                lease_started_sequence: 1,
                 lease_expires_sequence: 100,
-                last_billed_sequence: 0,
+                last_billed_sequence: 1,
                 accounted_egress_bytes: 0,
                 last_status_reason: None,
             });
-        SoraServiceDeploymentStateV1 {
+        let deployment = SoraServiceDeploymentStateV1 {
             schema_version: SORA_SERVICE_DEPLOYMENT_STATE_VERSION_V1,
             service_name: bundle.service.service_name.clone(),
             current_service_version: bundle.service.service_version.clone(),
-            current_service_manifest_hash: bundle.service.container.manifest_hash,
-            current_container_manifest_hash: bundle.service.container.manifest_hash,
+            current_service_manifest_hash: bundle.service_manifest_hash(),
+            current_container_manifest_hash: bundle.container_manifest_hash(),
             revision_count: 1,
             process_generation: 5,
             process_started_sequence: 11,
@@ -23471,7 +23623,11 @@ mod tests {
             fhe_policy_records: BTreeMap::new(),
             service_lease,
             lease_volume_states: Vec::new(),
-        }
+        };
+        deployment
+            .validate()
+            .expect("sample Soracloud deployment state must be production-valid");
+        deployment
     }
     fn soracloud_entrypoint(name: &str, entry_pc: u64) -> ivm::EmbeddedEntrypointDescriptor {
         ivm::EmbeddedEntrypointDescriptor {
@@ -23558,14 +23714,17 @@ mod tests {
                 payload_commitment,
             ))),
             from_service: "scheduler".parse().expect("literal name"),
+            from_service_version: "1.0.0".to_string(),
             from_handler: "dispatch".parse().expect("literal name"),
             to_service: bundle.service.service_name.clone(),
+            to_service_version: bundle.service.service_version.clone(),
             to_handler: handler_name.parse().expect("fixture handler name"),
             payload_bytes,
             payload_commitment,
+            delivery_delay_sequences: 0,
             enqueue_sequence: 6,
             available_after_sequence: 6,
-            expires_at_sequence: None,
+            expires_at_sequence: 7,
         }
     }
     fn sample_ordered_mailbox_request(
@@ -23643,6 +23802,10 @@ mod tests {
                 max_total_bytes: std::num::NonZeroU64::new(128 * 1024 * 1024).expect("bytes"),
             },
         ];
+        bundle.service.container.manifest_hash = bundle.container_manifest_hash();
+        bundle
+            .validate_for_admission()
+            .map_err(|error| eyre::eyre!("invalid hosted HTTP Inrou test fixture: {error}"))?;
         Ok(bundle)
     }
     fn sample_inrou_runtime_plan(
@@ -23690,7 +23853,61 @@ mod tests {
             })
             .collect::<Vec<_>>();
         let world = &mut Arc::get_mut(state).expect("unique test state").world;
+        insert_active_inrou_host_authority_fixture(world, local_peer_id, selected_guest_isa);
         insert_inrou_service_placement_record_fixture(world, bundle, placements);
+    }
+    fn insert_public_lane_validator_fixture(world: &mut World, status: PublicLaneValidatorStatus) {
+        insert_public_lane_validator_account_fixture(world, &ALICE_ID, status);
+    }
+    fn insert_public_lane_validator_account_fixture(
+        world: &mut World,
+        validator: &AccountId,
+        status: PublicLaneValidatorStatus,
+    ) {
+        world.public_lane_validators_mut_for_testing().insert(
+            (LaneId::SINGLE, validator.clone()),
+            PublicLaneValidatorRecord {
+                lane_id: LaneId::SINGLE,
+                validator: validator.clone(),
+                peer_id: PeerId::from(validator.expect_single_signatory().clone()),
+                stake_account: validator.clone(),
+                total_stake: Quantity::from(1_u64),
+                self_stake: Quantity::from(1_u64),
+                metadata: Metadata::default(),
+                status,
+                activation_epoch: Some(0),
+                activation_height: Some(0),
+                last_reward_epoch: None,
+            },
+        );
+    }
+    fn insert_active_inrou_host_authority_fixture(
+        world: &mut World,
+        local_peer_id: &str,
+        selected_guest_isa: SoraInrouGuestIsaV1,
+    ) {
+        insert_public_lane_validator_fixture(world, PublicLaneValidatorStatus::Active);
+        let capability = SoraInrouHostCapabilityRecordV1 {
+            schema_version: SORA_INROU_HOST_CAPABILITY_RECORD_VERSION_V1,
+            validator_account_id: ALICE_ID.clone(),
+            peer_id: local_peer_id.to_owned(),
+            supported_backends: BTreeSet::from([SoraInrouRuntimeBackendV1::PortableVm]),
+            supported_guest_isas: BTreeSet::from([selected_guest_isa]),
+            max_hosted_replica_capacity: 8,
+            max_cpu_millis: 32_000,
+            max_memory_bytes: 64 * 1024 * 1024 * 1024,
+            max_storage_bytes: 512 * 1024 * 1024 * 1024,
+            geography_tags: BTreeSet::new(),
+            observed_latency_ms: None,
+            advertised_at_ms: 1,
+            heartbeat_expires_at_ms: u64::MAX,
+        };
+        capability
+            .validate()
+            .expect("sample Inrou host capability must be production-valid");
+        world
+            .soracloud_inrou_host_capabilities_mut_for_testing()
+            .insert(ALICE_ID.clone(), capability);
     }
     fn insert_inrou_service_placement_record_fixture(
         world: &mut World,
@@ -23723,6 +23940,7 @@ mod tests {
         local_peer_id: &str,
         selected_guest_isa: SoraInrouGuestIsaV1,
     ) {
+        insert_active_inrou_host_authority_fixture(world, local_peer_id, selected_guest_isa);
         insert_inrou_service_placement_record_fixture(
             world,
             bundle,
@@ -23761,25 +23979,29 @@ mod tests {
             );
         }
         let temp_dir = tempfile::tempdir()?;
-        let manager = SoracloudRuntimeManager::new(
-            test_runtime_manager_config(temp_dir.path().to_path_buf())
-                .with_local_host_identity(ALICE_ID.clone(), local_peer_id),
-            Arc::clone(&state),
-        );
-        manager.reconcile_once()?;
-        let service_dir = temp_dir
-            .path()
-            .join("services")
-            .join(storage_path_component(bundle.service.service_name.as_ref()))
-            .join(storage_path_component(&bundle.service.service_version));
-        let replica_plan: SoracloudRuntimeServicePlan = read_json_optional(
-            service_dir
-                .join("replicas/replica-0001/runtime_plan.json")
-                .as_path(),
-            SORACLOUD_RUNTIME_SNAPSHOT_MAX_BYTES,
-            "test runtime plan",
-        )?
-        .expect("replica runtime plan");
+        let state_dir = fs::canonicalize(temp_dir.path())?;
+        let config = test_runtime_manager_config(state_dir)
+            .with_local_host_identity(ALICE_ID.clone(), local_peer_id);
+        let snapshot = {
+            let view = state.view();
+            let bundle_registry = collect_service_revision_registry(&view);
+            build_runtime_snapshot(
+                &view,
+                &bundle_registry,
+                &config.state_dir,
+                config.state_dir.join("artifacts"),
+                &config.cache_budgets,
+                config.local_validator_account_id.as_ref(),
+                config.local_peer_id.as_deref(),
+                true,
+            )?
+        };
+        let plan = snapshot
+            .services
+            .get(bundle.service.service_name.as_ref())
+            .and_then(|versions| versions.get(&bundle.service.service_version))
+            .expect("hosted Inrou runtime plan");
+        let replica_plan = project_hosted_http_replica_plan(plan, 1);
         let cache_key = HostedHttpWorkerCacheKey {
             runtime: bundle.container.runtime,
             backend: replica_plan
@@ -26309,8 +26531,8 @@ mod tests {
                     lease_asset_definition_id,
                     base_fee: "0.00001".parse().expect("base fee"),
                     lease_term_ms: 60_000,
-                    window_started_at_ms: 10,
-                    window_expires_at_ms: 60_010,
+                    window_started_at_ms: 1,
+                    window_expires_at_ms: 60_001,
                     active_member_count: 1,
                     status: SoraHfSharedLeaseStatusV1::Active,
                     queued_next_window: None,
@@ -26441,42 +26663,52 @@ mod tests {
                 host_class: "cpu.large".to_owned(),
             });
         }
-        Arc::get_mut(state)
-            .expect("unique test state")
-            .world
-            .soracloud_hf_placements_mut_for_testing()
-            .insert(
-                fixture.pool_id,
-                SoraHfPlacementRecordV1 {
-                    schema_version: SORA_HF_PLACEMENT_RECORD_VERSION_V1,
-                    placement_id,
-                    source_id: fixture.source_id,
-                    pool_id: fixture.pool_id,
-                    status: if local_role == SoraHfPlacementHostRoleV1::Primary
-                        && local_status == SoraHfPlacementHostStatusV1::Warm
-                    {
-                        SoraHfPlacementStatusV1::Ready
-                    } else {
-                        SoraHfPlacementStatusV1::Degraded
-                    },
-                    selection_seed_hash: Hash::new(
-                        format!(
-                            "generated-hf-placement-seed:{}",
-                            fixture.bundle.service.service_name
-                        )
-                        .as_bytes(),
-                    ),
-                    resource_profile: sample_hf_resource_profile_for_tests(),
-                    eligible_validator_count: u32::try_from(assigned_hosts.len())
-                        .expect("assigned host count fits in u32"),
-                    adaptive_target_host_count: u16::try_from(assigned_hosts.len())
-                        .expect("assigned host count fits in u16"),
-                    assigned_hosts,
-                    total_reservation_fee: "0.00002".parse().expect("total reservation fee"),
-                    last_rebalance_at_ms: 20,
-                    last_error: None,
-                },
+        let world = &mut Arc::get_mut(state).expect("unique test state").world;
+        for assignment in &assigned_hosts {
+            insert_public_lane_validator_account_fixture(
+                world,
+                &assignment.validator_account_id,
+                PublicLaneValidatorStatus::Active,
             );
+            insert_model_host_capability_fixture(
+                world,
+                &assignment.validator_account_id,
+                &assignment.peer_id,
+                u64::MAX,
+            );
+        }
+        world.soracloud_hf_placements_mut_for_testing().insert(
+            fixture.pool_id,
+            SoraHfPlacementRecordV1 {
+                schema_version: SORA_HF_PLACEMENT_RECORD_VERSION_V1,
+                placement_id,
+                source_id: fixture.source_id,
+                pool_id: fixture.pool_id,
+                status: if local_role == SoraHfPlacementHostRoleV1::Primary
+                    && local_status == SoraHfPlacementHostStatusV1::Warm
+                {
+                    SoraHfPlacementStatusV1::Ready
+                } else {
+                    SoraHfPlacementStatusV1::Degraded
+                },
+                selection_seed_hash: Hash::new(
+                    format!(
+                        "generated-hf-placement-seed:{}",
+                        fixture.bundle.service.service_name
+                    )
+                    .as_bytes(),
+                ),
+                resource_profile: sample_hf_resource_profile_for_tests(),
+                eligible_validator_count: u32::try_from(assigned_hosts.len())
+                    .expect("assigned host count fits in u32"),
+                adaptive_target_host_count: u16::try_from(assigned_hosts.len())
+                    .expect("assigned host count fits in u16"),
+                assigned_hosts,
+                total_reservation_fee: "0.00002".parse().expect("total reservation fee"),
+                last_rebalance_at_ms: 20,
+                last_error: None,
+            },
+        );
         placement_id
     }
     fn set_generated_hf_primary_assignment_status(
@@ -26531,15 +26763,13 @@ mod tests {
             .visibility = visibility;
         revisions.insert(key, bundle);
     }
-    fn insert_local_model_host_capability_fixture(
-        state: &mut Arc<State>,
+    fn insert_model_host_capability_fixture(
+        world: &mut World,
         validator_account_id: &AccountId,
         peer_id: &str,
         heartbeat_expires_at_ms: u64,
     ) {
-        Arc::get_mut(state)
-            .expect("unique test state")
-            .world
+        world
             .soracloud_model_host_capabilities_mut_for_testing()
             .insert(
                 validator_account_id.clone(),
@@ -26559,6 +26789,72 @@ mod tests {
                     heartbeat_expires_at_ms,
                 },
             );
+    }
+    fn insert_expired_hf_window_fixture(
+        state: &mut Arc<State>,
+        now_ms: u64,
+        queue_next_window: bool,
+    ) -> Result<()> {
+        let source_id = Hash::new(b"runtime-manager-queued-window-source");
+        let pool_id = Hash::new(b"runtime-manager-queued-window-pool");
+        let window_expires_at_ms = now_ms.saturating_sub(1).max(60_002);
+        let lease_term_ms = 60_000_u64;
+        let window_started_at_ms = window_expires_at_ms.saturating_sub(lease_term_ms);
+        let sponsored_at_ms = window_expires_at_ms.saturating_sub(1);
+        let lease_asset_definition_id = AssetDefinitionId::from_uuid_bytes([
+            0x55, 0x0e, 0x84, 0x00, 0xe2, 0x9b, 0x41, 0xd4, 0xa7, 0x16, 0x44, 0x66, 0x55, 0x44,
+            0x00, 0x0a,
+        ])
+        .expect("fixture asset definition");
+        let resource_profile = sample_hf_resource_profile_for_tests();
+        let pool = SoraHfSharedLeasePoolV1 {
+            schema_version: SORA_HF_SHARED_LEASE_POOL_VERSION_V1,
+            pool_id,
+            source_id,
+            storage_class: iroha_data_model::sorafs::pin_registry::StorageClass::Warm,
+            lease_asset_definition_id: lease_asset_definition_id.clone(),
+            base_fee: "0.00001".parse().expect("base fee"),
+            lease_term_ms,
+            window_started_at_ms,
+            window_expires_at_ms,
+            active_member_count: 1,
+            status: SoraHfSharedLeaseStatusV1::Active,
+            queued_next_window: queue_next_window.then_some(SoraHfSharedLeaseQueuedWindowV1 {
+                sponsor_account_id: ALICE_ID.clone(),
+                model_name: "gpt2-renewed".to_owned(),
+                lease_asset_definition_id,
+                base_fee: "0.000012".parse().expect("queued base fee"),
+                compute_reservation_cap: "0.000008".parse().expect("compute cap"),
+                resource_profile,
+                sponsored_at_ms,
+                window_started_at_ms: window_expires_at_ms,
+                window_expires_at_ms: window_expires_at_ms.saturating_add(lease_term_ms),
+                service_name: "hf_queued_window_service"
+                    .parse()
+                    .expect("valid service name"),
+                apartment_name: None,
+            }),
+        };
+        pool.validate()?;
+        Arc::get_mut(state)
+            .expect("unique test state")
+            .world
+            .soracloud_hf_shared_lease_pools_mut_for_testing()
+            .insert(pool_id, pool);
+        Ok(())
+    }
+    fn insert_local_model_host_capability_fixture(
+        state: &mut Arc<State>,
+        validator_account_id: &AccountId,
+        peer_id: &str,
+        heartbeat_expires_at_ms: u64,
+    ) {
+        insert_model_host_capability_fixture(
+            &mut Arc::get_mut(state).expect("unique test state").world,
+            validator_account_id,
+            peer_id,
+            heartbeat_expires_at_ms,
+        );
     }
     fn seed_local_artifact_cache(
         artifacts_root: &Path,
@@ -27050,6 +27346,7 @@ mod tests {
         capability.heartbeat_expires_at_ms = u64::MAX;
         {
             let world = &mut Arc::get_mut(&mut state).expect("unique test state").world;
+            insert_public_lane_validator_fixture(world, PublicLaneValidatorStatus::Active);
             world
                 .soracloud_inrou_host_capabilities_mut_for_testing()
                 .insert(ALICE_ID.clone(), capability);
@@ -27075,12 +27372,333 @@ mod tests {
         Ok(())
     }
     #[test]
+    fn inrou_placement_reconcile_detects_inactive_validator_with_live_capability() -> Result<()> {
+        let mut state = test_state()?;
+        let bundle = sample_inrou_test_bundle()?;
+        let local_peer_id = "12D3KooWInactiveInrouPlacementHost";
+        insert_inrou_service_placement_fixture(&mut state, &bundle, local_peer_id, [1_u16]);
+        let temp_dir = tempfile::tempdir()?;
+        let config = test_runtime_manager_config(temp_dir.path().to_path_buf())
+            .with_local_host_identity(ALICE_ID.clone(), local_peer_id);
+        let mut capability = {
+            let manager = SoracloudRuntimeManager::new(config.clone(), Arc::clone(&state));
+            manager
+                .build_local_inrou_host_capability_record(123)
+                .expect("host identity configured")
+        };
+        capability.heartbeat_expires_at_ms = u64::MAX;
+        {
+            let world = &mut Arc::get_mut(&mut state).expect("unique test state").world;
+            insert_service_revision_fixture(world, &bundle);
+            insert_service_deployment_fixture(world, &bundle, sample_deployment_state(&bundle));
+            world
+                .soracloud_inrou_host_capabilities_mut_for_testing()
+                .insert(ALICE_ID.clone(), capability.clone());
+            let mut validators = world.public_lane_validators_mut_for_testing().block();
+            validators
+                .get_mut(&(LaneId::SINGLE, ALICE_ID.clone()))
+                .expect("active validator fixture")
+                .status = PublicLaneValidatorStatus::Exited;
+            validators.commit();
+        }
+        let manager = SoracloudRuntimeManager::new(config, Arc::clone(&state));
+        let view = state.view();
+        let bundle_registry = collect_service_revision_registry(&view);
+        assert!(
+            capability.can_host_replicas_at(soracloud_runtime_observed_at_ms()),
+            "fixture must retain an otherwise-live Inrou host capability"
+        );
+        assert!(manager.inrou_placement_reconcile_needed(&view, &bundle_registry)?);
+        assert!(
+            manager
+                .local_inrou_host_capability_refresh_candidate(&view)
+                .is_none(),
+            "inactive validator must not refresh its Inrou capability"
+        );
+        let snapshot = build_runtime_snapshot(
+            &view,
+            &bundle_registry,
+            &manager.config.state_dir,
+            manager.artifacts_root(),
+            &manager.config.cache_budgets,
+            manager.config.local_validator_account_id.as_ref(),
+            manager.config.local_peer_id.as_deref(),
+            true,
+        )?;
+        let plan = snapshot
+            .services
+            .get(bundle.service.service_name.as_ref())
+            .and_then(|versions| versions.get(&bundle.service.service_version))
+            .expect("inactive-validator Inrou plan");
+        assert!(plan.local_replica_slots.is_empty());
+        assert!(plan.local_replicas.is_empty());
+        assert_eq!(plan.process_generation, None);
+        Ok(())
+    }
+    #[test]
+    fn inrou_placement_reconcile_rejects_cross_keyed_record() -> Result<()> {
+        let mut state = test_state()?;
+        let bundle = sample_inrou_test_bundle()?;
+        let local_peer_id = "12D3KooWCrossKeyedInrouPlacementHost";
+        insert_inrou_service_placement_fixture(&mut state, &bundle, local_peer_id, [1_u16]);
+        {
+            let world = &mut Arc::get_mut(&mut state).expect("unique test state").world;
+            insert_service_revision_fixture(world, &bundle);
+            insert_service_deployment_fixture(world, &bundle, sample_deployment_state(&bundle));
+            let key = (
+                bundle.service.service_name.to_string(),
+                bundle.service.service_version.clone(),
+            );
+            let mut placements = world
+                .soracloud_inrou_service_placements_mut_for_testing()
+                .block();
+            placements
+                .get_mut(&key)
+                .expect("Inrou placement fixture")
+                .service_version = "cross-bound-version".to_owned();
+            placements.commit();
+        }
+        let temp_dir = tempfile::tempdir()?;
+        let config = test_runtime_manager_config(temp_dir.path().to_path_buf())
+            .with_local_host_identity(ALICE_ID.clone(), local_peer_id);
+        let manager = SoracloudRuntimeManager::new(config, Arc::clone(&state));
+        let view = state.view();
+        let error = resolve_active_inrou_placement_record(
+            view.world(),
+            bundle.service.service_name.as_ref(),
+            &bundle.service.service_version,
+        )
+        .expect_err("cross-keyed placement must fail closed");
+        assert!(error.contains("storage key"), "unexpected error: {error}");
+        let bundle_registry = collect_service_revision_registry(&view);
+        assert!(manager.inrou_placement_reconcile_needed(&view, &bundle_registry)?);
+        let snapshot = build_runtime_snapshot(
+            &view,
+            &bundle_registry,
+            &manager.config.state_dir,
+            manager.artifacts_root(),
+            &manager.config.cache_budgets,
+            manager.config.local_validator_account_id.as_ref(),
+            manager.config.local_peer_id.as_deref(),
+            true,
+        )?;
+        let plan = snapshot
+            .services
+            .get(bundle.service.service_name.as_ref())
+            .and_then(|versions| versions.get(&bundle.service.service_version))
+            .expect("cross-keyed Inrou plan");
+        assert!(plan.local_replica_slots.is_empty());
+        assert!(plan.local_replicas.is_empty());
+        assert_eq!(plan.process_generation, None);
+        Ok(())
+    }
+    #[test]
+    fn inrou_placement_reconcile_rejects_invalid_record() -> Result<()> {
+        let mut state = test_state()?;
+        let bundle = sample_inrou_test_bundle()?;
+        let local_peer_id = "12D3KooWInvalidInrouPlacementHost";
+        insert_inrou_service_placement_fixture(&mut state, &bundle, local_peer_id, [1_u16]);
+        {
+            let world = &mut Arc::get_mut(&mut state).expect("unique test state").world;
+            insert_service_revision_fixture(world, &bundle);
+            insert_service_deployment_fixture(world, &bundle, sample_deployment_state(&bundle));
+            let key = (
+                bundle.service.service_name.to_string(),
+                bundle.service.service_version.clone(),
+            );
+            let mut placements = world
+                .soracloud_inrou_service_placements_mut_for_testing()
+                .block();
+            let record = placements.get_mut(&key).expect("Inrou placement fixture");
+            record.placements.push(record.placements[0].clone());
+            placements.commit();
+        }
+        let temp_dir = tempfile::tempdir()?;
+        let config = test_runtime_manager_config(temp_dir.path().to_path_buf())
+            .with_local_host_identity(ALICE_ID.clone(), local_peer_id);
+        let manager = SoracloudRuntimeManager::new(config, Arc::clone(&state));
+        let view = state.view();
+        let error = resolve_active_inrou_placement_record(
+            view.world(),
+            bundle.service.service_name.as_ref(),
+            &bundle.service.service_version,
+        )
+        .expect_err("invalid placement must fail closed");
+        assert!(error.contains("malformed"), "unexpected error: {error}");
+        let bundle_registry = collect_service_revision_registry(&view);
+        assert!(manager.inrou_placement_reconcile_needed(&view, &bundle_registry)?);
+        let snapshot = build_runtime_snapshot(
+            &view,
+            &bundle_registry,
+            &manager.config.state_dir,
+            manager.artifacts_root(),
+            &manager.config.cache_budgets,
+            manager.config.local_validator_account_id.as_ref(),
+            manager.config.local_peer_id.as_deref(),
+            true,
+        )?;
+        let plan = snapshot
+            .services
+            .get(bundle.service.service_name.as_ref())
+            .and_then(|versions| versions.get(&bundle.service.service_version))
+            .expect("invalid-record Inrou plan");
+        assert!(plan.local_replica_slots.is_empty());
+        assert!(plan.local_replicas.is_empty());
+        assert_eq!(plan.process_generation, None);
+        Ok(())
+    }
+    #[test]
+    fn inrou_placement_reconcile_rejects_aggregate_capacity_downgrade() -> Result<()> {
+        let mut state = test_state()?;
+        let mut bundle = sample_inrou_test_bundle()?;
+        bundle.service.replicas = std::num::NonZeroU16::new(2).expect("replica count");
+        bundle
+            .validate_for_admission()
+            .map_err(|error| eyre::eyre!("invalid capacity-downgrade fixture: {error}"))?;
+        let local_peer_id = "12D3KooWDowngradedInrouPlacementHost";
+        insert_inrou_service_placement_fixture(&mut state, &bundle, local_peer_id, [1_u16, 2_u16]);
+        {
+            let world = &mut Arc::get_mut(&mut state).expect("unique test state").world;
+            insert_service_revision_fixture(world, &bundle);
+            insert_service_deployment_fixture(world, &bundle, sample_deployment_state(&bundle));
+            let mut capabilities = world
+                .soracloud_inrou_host_capabilities_mut_for_testing()
+                .block();
+            let capability = capabilities
+                .get_mut(&ALICE_ID)
+                .expect("Inrou host capability fixture");
+            capability.max_hosted_replica_capacity = 1;
+            capability
+                .validate()
+                .expect("downgraded advert remains structurally valid");
+            capabilities.commit();
+        }
+        let temp_dir = tempfile::tempdir()?;
+        let config = test_runtime_manager_config(temp_dir.path().to_path_buf())
+            .with_local_host_identity(ALICE_ID.clone(), local_peer_id);
+        let manager = SoracloudRuntimeManager::new(config, Arc::clone(&state));
+        let view = state.view();
+        let record = resolve_active_inrou_placement_record(
+            view.world(),
+            bundle.service.service_name.as_ref(),
+            &bundle.service.service_version,
+        )
+        .map_err(|error| eyre::eyre!(error))?
+        .expect("placement lifecycle remains active");
+        assert_eq!(record.placements.len(), 2);
+        assert!(
+            record
+                .placements
+                .iter()
+                .all(|assignment| assignment.validator_account_id == *ALICE_ID),
+            "the persisted assignments remain exactly bound to the downgraded host"
+        );
+        let assignments = resolve_active_inrou_replica_assignments(
+            view.world(),
+            bundle.service.service_name.as_ref(),
+            &bundle.service.service_version,
+            soracloud_state_view_observed_at_ms(&view),
+            |lane_id| view.is_lane_active_for_authority(lane_id),
+        )
+        .map_err(|error| eyre::eyre!(error))?;
+        assert!(assignments.is_empty());
+        let bundle_registry = collect_service_revision_registry(&view);
+        assert!(manager.inrou_placement_reconcile_needed(&view, &bundle_registry)?);
+        let snapshot = build_runtime_snapshot(
+            &view,
+            &bundle_registry,
+            &manager.config.state_dir,
+            manager.artifacts_root(),
+            &manager.config.cache_budgets,
+            manager.config.local_validator_account_id.as_ref(),
+            manager.config.local_peer_id.as_deref(),
+            true,
+        )?;
+        let plan = snapshot
+            .services
+            .get(bundle.service.service_name.as_ref())
+            .and_then(|versions| versions.get(&bundle.service.service_version))
+            .expect("resource-downgraded Inrou plan");
+        assert!(plan.local_replica_slots.is_empty());
+        assert!(plan.local_replicas.is_empty());
+        assert_eq!(plan.process_generation, None);
+        Ok(())
+    }
+    #[test]
+    fn inrou_placement_reconcile_observes_runtime_receipt_lease_boundary() -> Result<()> {
+        let mut state = test_state()?;
+        let bundle = sample_inrou_test_bundle()?;
+        let local_peer_id = "12D3KooWReceiptSequenceInrouHost";
+        insert_inrou_service_placement_fixture(&mut state, &bundle, local_peer_id, [1_u16]);
+        {
+            let world = &mut Arc::get_mut(&mut state).expect("unique test state").world;
+            insert_service_revision_fixture(world, &bundle);
+            insert_service_deployment_fixture(world, &bundle, sample_deployment_state(&bundle));
+            let receipt_id = Hash::new(b"inrou-lease-boundary-runtime-receipt");
+            world.soracloud_runtime_receipts_mut_for_testing().insert(
+                receipt_id,
+                SoraRuntimeReceiptV1 {
+                    schema_version: SORA_RUNTIME_RECEIPT_VERSION_V1,
+                    receipt_id,
+                    service_name: bundle.service.service_name.clone(),
+                    service_version: bundle.service.service_version.clone(),
+                    handler_name: "health".parse().expect("valid handler name"),
+                    handler_class: SoraServiceHandlerClassV1::Query,
+                    request_commitment: Hash::new(b"inrou-lease-boundary-request"),
+                    result_commitment: Hash::new(b"inrou-lease-boundary-result"),
+                    certified_by: SoraCertifiedResponsePolicyV1::AuditReceipt,
+                    emitted_sequence: 99,
+                    mailbox_message_id: None,
+                    journal_artifact_hash: None,
+                    checkpoint_artifact_hash: None,
+                    execution_host: None,
+                },
+            );
+        }
+        let temp_dir = tempfile::tempdir()?;
+        let config = test_runtime_manager_config(temp_dir.path().to_path_buf())
+            .with_local_host_identity(ALICE_ID.clone(), local_peer_id);
+        let manager = SoracloudRuntimeManager::new(config, Arc::clone(&state));
+        let view = state.view();
+        let bundle_registry = collect_service_revision_registry(&view);
+        assert_eq!(authoritative_soracloud_sequence(view.world()), 100);
+        assert!(manager.inrou_placement_reconcile_needed(&view, &bundle_registry)?);
+
+        let snapshot = build_runtime_snapshot(
+            &view,
+            &bundle_registry,
+            &manager.config.state_dir,
+            manager.artifacts_root(),
+            &manager.config.cache_budgets,
+            manager.config.local_validator_account_id.as_ref(),
+            manager.config.local_peer_id.as_deref(),
+            true,
+        )?;
+        let plan = snapshot
+            .services
+            .get(bundle.service.service_name.as_ref())
+            .and_then(|versions| versions.get(&bundle.service.service_version))
+            .expect("lease-boundary Inrou plan");
+        assert!(plan.local_replica_slots.is_empty());
+        assert!(plan.local_replicas.is_empty());
+        assert_eq!(plan.process_generation, None);
+        assert_eq!(
+            plan.service_lease_status,
+            Some(SoraServiceLeaseStatusV1::Expired)
+        );
+        Ok(())
+    }
+    #[test]
     fn refresh_local_inrou_host_capability_submits_candidate() {
         let config =
             test_runtime_manager_config(PathBuf::from("/tmp/test-soracloud-runtime-host-refresh"));
         let config =
             config.with_local_host_identity(ALICE_ID.clone(), "12D3KooWRuntimeHostRefreshSubmit");
-        let state = test_state().expect("test state");
+        let mut state = test_state().expect("test state");
+        insert_public_lane_validator_fixture(
+            &mut Arc::get_mut(&mut state).expect("unique test state").world,
+            PublicLaneValidatorStatus::Active,
+        );
         let mutation_sink = Arc::new(RecordingRuntimeMutationSink::default());
         let manager = SoracloudRuntimeManager::new(config, Arc::clone(&state))
             .with_mutation_sink(mutation_sink.clone());
@@ -27100,7 +27718,11 @@ mod tests {
         ));
         let config =
             config.with_local_host_identity(ALICE_ID.clone(), "12D3KooWRuntimeHostRefreshPending");
-        let state = test_state().expect("test state");
+        let mut state = test_state().expect("test state");
+        insert_public_lane_validator_fixture(
+            &mut Arc::get_mut(&mut state).expect("unique test state").world,
+            PublicLaneValidatorStatus::Active,
+        );
         let mutation_sink = Arc::new(RecordingRuntimeMutationSink::default());
         let manager = SoracloudRuntimeManager::new(config, Arc::clone(&state))
             .with_mutation_sink(mutation_sink.clone());
@@ -27574,6 +28196,37 @@ mod tests {
         assert!(!config_path.exists());
         assert!(!secret_envelope_path.exists());
         assert!(!secret_payload_path.exists());
+        Ok(())
+    }
+    #[test]
+    fn reconcile_once_requests_authoritative_reconcile_for_every_expired_hf_window() -> Result<()> {
+        for queue_next_window in [false, true] {
+            let mut state = test_state()?;
+            let now_ms = soracloud_runtime_observed_at_ms();
+            insert_expired_hf_window_fixture(&mut state, now_ms, queue_next_window)?;
+            let mutation_sink = Arc::new(RecordingRuntimeMutationSink::default());
+            let sink_for_manager = mutation_sink.clone();
+            let fixture = RuntimeFixture::new(&state)?
+                .map_manager(|manager| manager.with_mutation_sink(sink_for_manager));
+            {
+                let view = state.view();
+                assert!(
+                    fixture.manager.hf_lease_window_reconcile_needed(&view),
+                    "expired {} HF window must require authoritative reconciliation",
+                    if queue_next_window {
+                        "queued"
+                    } else {
+                        "unqueued"
+                    }
+                );
+            }
+            fixture.manager.reconcile_once()?;
+            assert_eq!(
+                mutation_sink.submitted_model_host_reconciles(),
+                1,
+                "runtime manager must submit exactly one model-host reconcile for the expired window"
+            );
+        }
         Ok(())
     }
     #[test]
@@ -28172,6 +28825,52 @@ mod tests {
         );
         Ok(())
     }
+    #[test]
+    fn resolve_local_hf_execution_host_requires_complete_exact_identity() -> Result<()> {
+        let mut fixture = GeneratedHfTestFixture::new("hf_exact_local_identity")?;
+        let local_peer_id = "12D3KooWExactLocalIdentityHost";
+        fixture.insert_placement(
+            SoraHfPlacementHostRoleV1::Primary,
+            SoraHfPlacementHostStatusV1::Warm,
+            local_peer_id,
+        );
+        let mut account_only =
+            test_runtime_manager_config(PathBuf::from("/tmp/test-soracloud-runtime"));
+        account_only.local_validator_account_id = Some(ALICE_ID.clone());
+        let mut peer_only =
+            test_runtime_manager_config(PathBuf::from("/tmp/test-soracloud-runtime"));
+        peer_only.local_peer_id = Some(local_peer_id.to_owned());
+        for config in [
+            test_runtime_manager_config(PathBuf::from("/tmp/test-soracloud-runtime")),
+            account_only,
+            peer_only,
+        ] {
+            let view = fixture.state.view();
+            let error = resolve_local_hf_execution_host(
+                &view,
+                fixture.bundle.service.service_name.as_ref(),
+                &fixture.source_id.to_string(),
+                &config,
+            )
+            .expect_err("generated-HF execution must fail closed on a missing identity half");
+            assert_eq!(error.kind, SoracloudRuntimeExecutionErrorKind::Unavailable);
+            assert!(error.message.contains("requires both the local validator"));
+        }
+        let error = ensure_generated_hf_execution_host_ready(
+            None,
+            false,
+            fixture.bundle.service.service_name.as_ref(),
+            &fixture.source_id.to_string(),
+        )
+        .expect_err("generated-HF execution must not treat a missing assignment as authorized");
+        assert_eq!(error.kind, SoracloudRuntimeExecutionErrorKind::Unavailable);
+        assert!(
+            error
+                .message
+                .contains("no exact authoritative local host assignment")
+        );
+        Ok(())
+    }
     #[tokio::test(flavor = "multi_thread")]
     async fn reconcile_task_imports_generated_hf_source_without_panicking() -> Result<()> {
         let mut fixture = GeneratedHfTestFixture::new("hf_async_reconcile_import")?;
@@ -28311,6 +29010,28 @@ mod tests {
             SoraHfPlacementHostStatusV1::Warm,
             local_peer_id,
         );
+        let permission_header = {
+            let view = fixture.state.view();
+            BlockHeader::new(
+                NonZeroU64::new(1).expect("nonzero block height"),
+                view.latest_block_hash(),
+                None,
+                None,
+                0,
+                0,
+            )
+        };
+        let mut permission_block = fixture.state.block(permission_header);
+        let mut permission_transaction = permission_block.transaction();
+        Register::account(Account::new(ALICE_ID.clone()))
+            .execute(&SAMPLE_GENESIS_ACCOUNT_ID, &mut permission_transaction)?;
+        Grant::account_permission(
+            Permission::new("CanManageSoracloud".into(), Json::new(())),
+            ALICE_ID.clone(),
+        )
+        .execute(&SAMPLE_GENESIS_ACCOUNT_ID, &mut permission_transaction)?;
+        permission_transaction.apply();
+        permission_block.commit()?;
         let config_json =
             br#"{"model_type":"gpt2","_soracloud_fixture":{"mode":"echo","prefix":"local:"}}"#
                 .to_vec();
@@ -28357,16 +29078,53 @@ mod tests {
             .runtime_receipt
             .as_ref()
             .expect("generated HF local inference should emit a runtime receipt");
-        let expected_validator = ALICE_ID.clone();
-        assert_eq!(runtime_receipt.placement_id, Some(placement_id));
         assert_eq!(
-            runtime_receipt.selected_validator_account_id.as_ref(),
-            Some(&expected_validator)
+            runtime_receipt.execution_host,
+            Some(SoraRuntimeExecutionHostV1::HfModelHost(
+                SoraRuntimeHfModelHostV1 {
+                placement_id,
+                validator_account_id: ALICE_ID.clone(),
+                peer_id: local_peer_id.to_owned(),
+                },
+            ))
         );
-        assert_eq!(
-            runtime_receipt.selected_peer_id.as_deref(),
-            Some(local_peer_id)
-        );
+        assert_eq!(runtime_receipt.emitted_sequence, 0);
+        runtime_receipt
+            .validate_submission()
+            .expect("node-issued runtime receipt must be ready for ledger submission");
+        let submitted_receipt = runtime_receipt.clone();
+        let expected_sequence = {
+            let view = fixture.state.view();
+            authoritative_soracloud_sequence(view.world())
+        };
+        let header = {
+            let view = fixture.state.view();
+            let next_height = NonZeroU64::new(
+                u64::try_from(view.height())
+                    .unwrap_or(u64::MAX.saturating_sub(1))
+                    .saturating_add(1),
+            )
+            .expect("next block height");
+            BlockHeader::new(next_height, view.latest_block_hash(), None, None, 0, 0)
+        };
+        let mut block = fixture.state.block(header);
+        let mut transaction = block.transaction();
+        isi::soracloud::RecordSoracloudRuntimeReceipt {
+            receipt: submitted_receipt.clone(),
+        }
+        .execute(&ALICE_ID, &mut transaction)?;
+        transaction.apply();
+        block.commit()?;
+        let view = fixture.state.view();
+        let persisted_receipt = view
+            .world()
+            .soracloud_runtime_receipts()
+            .get(&submitted_receipt.receipt_id)
+            .expect("node-issued runtime receipt must persist");
+        assert_eq!(persisted_receipt.emitted_sequence, expected_sequence);
+        persisted_receipt
+            .validate()
+            .expect("ledger-assigned runtime receipt must validate for persistence");
         Ok(())
     }
     #[test]
@@ -28447,6 +29205,76 @@ mod tests {
         let runtime = fixture.local_runtime(&server, local_peer_id)?;
         runtime.manager.reconcile_once()?;
         assert_eq!(runtime.manager.hf_local_workers.lock().len(), 1);
+        Ok(())
+    }
+    #[test]
+    fn reconcile_once_stops_resident_hf_worker_when_local_validator_exits() -> Result<()> {
+        let mut fixture = GeneratedHfTestFixture::new("hf_worker_validator_exit_service")?;
+        let local_peer_id = "12D3KooWExitedWorkerRuntimeHost";
+        fixture.insert_placement(
+            SoraHfPlacementHostRoleV1::Primary,
+            SoraHfPlacementHostStatusV1::Warm,
+            local_peer_id,
+        );
+        let config_json =
+            br#"{"model_type":"gpt2","_soracloud_fixture":{"mode":"echo","prefix":"exit:"}}"#
+                .to_vec();
+        let routes = generated_hf_config_routes("commit-worker-exit-123", &config_json)?;
+        let (server, _captured) = spawn_recording_http_route_fixture(routes)?;
+        let runtime = fixture.local_runtime(&server, local_peer_id)?;
+
+        runtime.manager.reconcile_once()?;
+        let source_id = fixture.source_id.to_string();
+        let worker = runtime
+            .manager
+            .hf_local_workers
+            .lock()
+            .get(&source_id)
+            .cloned()
+            .expect("active local placement starts a resident worker");
+
+        let mut exited_fixture = GeneratedHfTestFixture::new("hf_worker_validator_exit_service")?;
+        exited_fixture.insert_placement(
+            SoraHfPlacementHostRoleV1::Primary,
+            SoraHfPlacementHostStatusV1::Warm,
+            local_peer_id,
+        );
+        {
+            let world = &mut Arc::get_mut(&mut exited_fixture.state)
+                .expect("unique exited-validator test state")
+                .world;
+            let mut validators = world.public_lane_validators_mut_for_testing().block();
+            validators
+                .get_mut(&(LaneId::SINGLE, ALICE_ID.clone()))
+                .expect("active validator fixture")
+                .status = PublicLaneValidatorStatus::Exited;
+            validators.commit();
+        }
+        let mut exited_runtime = exited_fixture.local_runtime(&server, local_peer_id)?;
+        exited_runtime.manager.hf_local_workers = Arc::clone(&runtime.manager.hf_local_workers);
+        exited_runtime.manager.reconcile_once()?;
+
+        assert!(
+            exited_runtime
+                .manager
+                .snapshot
+                .read()
+                .hf_sources
+                .contains_key(&source_id),
+            "the globally registered source must remain in the snapshot"
+        );
+        assert!(
+            !exited_runtime
+                .manager
+                .hf_local_workers
+                .lock()
+                .contains_key(&source_id),
+            "an exited local validator must not retain a source worker"
+        );
+        assert!(
+            worker.lock().child.try_wait()?.is_some(),
+            "the evicted resident worker process must be stopped"
+        );
         Ok(())
     }
     #[test]
@@ -29096,12 +29924,7 @@ mod tests {
     #[test]
     fn reconcile_once_projects_http_service_inrou_runtime_into_snapshot() -> Result<()> {
         let mut state = test_state()?;
-        let mut bundle = load_deployment_bundle_fixture()?;
-        bundle.container.runtime = SoraContainerRuntimeV1::Inrou;
-        bundle.service.execution_plane =
-            iroha_data_model::soracloud::SoraServiceExecutionPlaneV1::HttpService;
-        bundle.service.state_bindings.clear();
-        bundle.service.handlers.clear();
+        let bundle = sample_inrou_test_bundle()?;
         let deployment_state = sample_deployment_state(&bundle);
         let expected_process_generation = deployment_state.process_generation;
         {
@@ -29130,24 +29953,25 @@ mod tests {
             .and_then(|versions| versions.get(&bundle.service.service_version))
             .expect("Inrou runtime plan present");
         assert_eq!(plan.runtime, SoraContainerRuntimeV1::Inrou);
-        assert_eq!(plan.process_generation, Some(expected_process_generation));
         assert_eq!(plan.desired_replica_count, bundle.service.replicas.get());
-        assert_eq!(
-            plan.local_replica_slots,
-            (1..=bundle.service.replicas.get()).collect::<Vec<_>>()
-        );
+        if inrou_host_platform_supports_static_local_materialization() {
+            assert_eq!(plan.process_generation, Some(expected_process_generation));
+            assert_eq!(
+                plan.local_replica_slots,
+                (1..=bundle.service.replicas.get()).collect::<Vec<_>>()
+            );
+        } else {
+            assert_eq!(plan.process_generation, None);
+            assert!(plan.local_replica_slots.is_empty());
+            assert!(plan.local_replicas.is_empty());
+        }
         assert_eq!(plan.health_status, SoraServiceHealthStatusV1::Hydrating);
         Ok(())
     }
     #[test]
     fn reconcile_once_stamps_snapshot_with_local_peer_identity() -> Result<()> {
         let mut state = test_state()?;
-        let mut bundle = load_deployment_bundle_fixture()?;
-        bundle.container.runtime = SoraContainerRuntimeV1::Inrou;
-        bundle.service.execution_plane =
-            iroha_data_model::soracloud::SoraServiceExecutionPlaneV1::HttpService;
-        bundle.service.state_bindings.clear();
-        bundle.service.handlers.clear();
+        let bundle = sample_inrou_test_bundle()?;
         {
             let world = &mut Arc::get_mut(&mut state).expect("unique test state").world;
             insert_service_revision_fixture(world, &bundle);
@@ -29168,13 +29992,7 @@ mod tests {
     #[test]
     fn reconcile_once_materializes_canary_http_service_inrou_runtime_state() -> Result<()> {
         let mut state = test_state()?;
-        let mut active_bundle = load_deployment_bundle_fixture()?;
-        active_bundle.container.runtime = SoraContainerRuntimeV1::Inrou;
-        active_bundle.service.execution_plane =
-            iroha_data_model::soracloud::SoraServiceExecutionPlaneV1::HttpService;
-        active_bundle.service.state_bindings.clear();
-        active_bundle.service.handlers.clear();
-        active_bundle.service.artifacts.clear();
+        let mut active_bundle = sample_inrou_test_bundle()?;
         let mut canary_bundle = active_bundle.clone();
         canary_bundle.service.service_version = "2026.03.0".to_string();
         canary_bundle.container.bundle_path = "/bundles/web_portal_canary.to".to_string();
@@ -29182,13 +30000,28 @@ mod tests {
         let canary_bundle_bytes = simple_soracloud_contract_artifact(&["entry_canary"]);
         active_bundle.container.bundle_hash = Hash::new(&active_bundle_bytes);
         canary_bundle.container.bundle_hash = Hash::new(&canary_bundle_bytes);
+        active_bundle.service.container.manifest_hash = active_bundle.container_manifest_hash();
+        canary_bundle.service.container.manifest_hash = canary_bundle.container_manifest_hash();
+        active_bundle
+            .validate_for_admission()
+            .map_err(|error| eyre::eyre!("invalid active Inrou test fixture: {error}"))?;
+        canary_bundle
+            .validate_for_admission()
+            .map_err(|error| eyre::eyre!("invalid canary Inrou test fixture: {error}"))?;
         let mut deployment = sample_deployment_state(&active_bundle);
-        let expected_process_generation = deployment.process_generation;
         deployment.revision_count = 2;
+        deployment.current_service_version = canary_bundle.service.service_version.clone();
+        deployment.current_service_manifest_hash = canary_bundle.service_manifest_hash();
+        deployment.current_container_manifest_hash = canary_bundle.container_manifest_hash();
+        deployment.process_generation = deployment
+            .process_generation
+            .checked_add(1)
+            .expect("fixture process generation");
+        let expected_process_generation = deployment.process_generation;
         deployment.active_rollout = Some(SoraServiceRolloutStateV1 {
             schema_version: SORA_SERVICE_ROLLOUT_STATE_VERSION_V1,
             rollout_handle: "rollout-2026-03".to_string(),
-            baseline_version: Some(active_bundle.service.service_version.clone()),
+            baseline_version: active_bundle.service.service_version.clone(),
             candidate_version: canary_bundle.service.service_version.clone(),
             canary_percent: 20,
             traffic_percent: 20,
@@ -29238,24 +30071,8 @@ mod tests {
             .and_then(|versions| versions.get("2026.03.0"))
             .expect("canary service plan present");
         assert_eq!(
-            active_plan.process_generation,
-            Some(expected_process_generation)
-        );
-        assert_eq!(
-            canary_plan.process_generation,
-            Some(expected_process_generation)
-        );
-        assert_eq!(
             canary_plan.role,
             SoracloudRuntimeRevisionRole::CanaryCandidate
-        );
-        assert_eq!(
-            active_plan.health_status,
-            SoraServiceHealthStatusV1::Degraded
-        );
-        assert_eq!(
-            canary_plan.health_status,
-            SoraServiceHealthStatusV1::Degraded
         );
         let active_service_dir = temp_dir
             .path()
@@ -29267,30 +30084,63 @@ mod tests {
             .join("services")
             .join(storage_path_component("web_portal"))
             .join(storage_path_component("2026.03.0"));
-        assert!(
-            active_service_dir
-                .join(SORACLOUD_HOSTED_HTTP_RUNTIME_STATE_FILE_V1)
-                .exists()
-        );
-        assert!(
-            canary_service_dir
-                .join(SORACLOUD_HOSTED_HTTP_RUNTIME_STATE_FILE_V1)
-                .exists()
-        );
+        if inrou_host_platform_supports_static_local_materialization() {
+            assert_eq!(
+                active_plan.process_generation,
+                Some(expected_process_generation)
+            );
+            assert_eq!(
+                canary_plan.process_generation,
+                Some(expected_process_generation)
+            );
+            assert_eq!(
+                active_plan.health_status,
+                SoraServiceHealthStatusV1::Degraded
+            );
+            assert_eq!(
+                canary_plan.health_status,
+                SoraServiceHealthStatusV1::Degraded
+            );
+            assert!(
+                active_service_dir
+                    .join(SORACLOUD_HOSTED_HTTP_RUNTIME_STATE_FILE_V1)
+                    .exists()
+            );
+            assert!(
+                canary_service_dir
+                    .join(SORACLOUD_HOSTED_HTTP_RUNTIME_STATE_FILE_V1)
+                    .exists()
+            );
+        } else {
+            assert_eq!(active_plan.process_generation, None);
+            assert_eq!(canary_plan.process_generation, None);
+            assert_eq!(
+                active_plan.health_status,
+                SoraServiceHealthStatusV1::Unavailable
+            );
+            assert_eq!(
+                canary_plan.health_status,
+                SoraServiceHealthStatusV1::Unavailable
+            );
+            assert!(
+                !active_service_dir
+                    .join(SORACLOUD_HOSTED_HTTP_RUNTIME_STATE_FILE_V1)
+                    .exists()
+            );
+            assert!(
+                !canary_service_dir
+                    .join(SORACLOUD_HOSTED_HTTP_RUNTIME_STATE_FILE_V1)
+                    .exists()
+            );
+        }
         Ok(())
     }
     #[test]
     fn reconcile_once_materializes_replica_runtime_state_summary_for_multi_replica_http_service()
     -> Result<()> {
         let mut state = test_state()?;
-        let mut bundle = load_deployment_bundle_fixture()?;
-        bundle.container.runtime = SoraContainerRuntimeV1::Inrou;
-        bundle.service.execution_plane =
-            iroha_data_model::soracloud::SoraServiceExecutionPlaneV1::HttpService;
+        let mut bundle = sample_inrou_test_bundle()?;
         bundle.service.replicas = std::num::NonZeroU16::new(2).expect("replicas");
-        bundle.service.state_bindings.clear();
-        bundle.service.handlers.clear();
-        bundle.service.artifacts.clear();
         bundle.service.lease_volumes = vec![
             iroha_data_model::soracloud::SoraLeaseVolumeBindingV1 {
                 volume_name: "root_disk".parse().expect("volume"),
@@ -29309,6 +30159,10 @@ mod tests {
         ];
         let bundle_bytes = simple_soracloud_contract_artifact(&["entry_active"]);
         bundle.container.bundle_hash = Hash::new(&bundle_bytes);
+        bundle.service.container.manifest_hash = bundle.container_manifest_hash();
+        bundle
+            .validate_for_admission()
+            .map_err(|error| eyre::eyre!("invalid replicated Inrou test fixture: {error}"))?;
         let deployment_state = sample_deployment_state(&bundle);
         {
             let world = &mut Arc::get_mut(&mut state).expect("unique test state").world;
@@ -29343,7 +30197,7 @@ mod tests {
             .and_then(|versions| versions.get("2026.02.0"))
             .expect("replicated Inrou plan present");
         assert_eq!(plan.desired_replica_count, 2);
-        if inrou_host_platform_supports_local_materialization() {
+        if inrou_host_platform_supports_static_local_materialization() {
             let summary = summary.expect("revision runtime summary should be written");
             assert_eq!(plan.local_replica_slots, vec![1, 2]);
             assert_eq!(plan.local_replicas.len(), 2);
@@ -29478,40 +30332,7 @@ mod tests {
     fn reconcile_once_retries_http_service_runtime_state_until_authoritative_state_catches_up()
     -> Result<()> {
         let mut state = test_state()?;
-        let mut bundle = load_deployment_bundle_fixture()?;
-        bundle.container.runtime = SoraContainerRuntimeV1::Inrou;
-        bundle.container.inrou = Some(iroha_data_model::soracloud::SoraInrouManifestV1 {
-            schema_version: iroha_data_model::soracloud::SORA_INROU_MANIFEST_VERSION_V1,
-            guest_os: iroha_data_model::soracloud::SoraInrouGuestOsV1::DebianSlim,
-            guest_images: BTreeMap::from([
-                (
-                    SoraInrouGuestIsaV1::X8664,
-                    SoraInrouGuestImageV1 {
-                        kernel_image_path: "/inrou/x86_64/vmlinux".to_owned(),
-                        rootfs_image_path: "/inrou/x86_64/rootfs.ext4".to_owned(),
-                        initrd_image_path: None,
-                        distribution: Default::default(),
-                        published_artifact: None,
-                    },
-                ),
-                (
-                    SoraInrouGuestIsaV1::Aarch64,
-                    SoraInrouGuestImageV1 {
-                        kernel_image_path: "/inrou/aarch64/vmlinux".to_owned(),
-                        rootfs_image_path: "/inrou/aarch64/rootfs.ext4".to_owned(),
-                        initrd_image_path: None,
-                        distribution: Default::default(),
-                        published_artifact: None,
-                    },
-                ),
-            ]),
-            bootstrap_user_data_path: None,
-            ssh_authorized_keys: vec!["ssh-ed25519 test-key irohad-tests".to_owned()],
-        });
-        bundle.service.execution_plane =
-            iroha_data_model::soracloud::SoraServiceExecutionPlaneV1::HttpService;
-        bundle.service.state_bindings.clear();
-        bundle.service.handlers.clear();
+        let bundle = sample_inrou_test_bundle()?;
         let deployment_state = sample_deployment_state(&bundle);
         let local_peer_id = "12D3KooWHostedRuntimeStateReplica";
         let selected_guest_isa = current_host_inrou_guest_isa();
@@ -29533,47 +30354,43 @@ mod tests {
                 .with_local_host_identity(ALICE_ID.clone(), local_peer_id),
             Arc::clone(&state),
         )
+        .with_inrou_hosting_available_override(true)
         .with_mutation_sink(mutation_sink.clone());
         manager.reconcile_once()?;
         manager.reconcile_once()?;
+        let snapshot = manager.snapshot.read().clone();
+        let plan = snapshot
+            .services
+            .get(bundle.service.service_name.as_ref())
+            .and_then(|versions| versions.get(&bundle.service.service_version))
+            .expect("forced-available Inrou runtime plan");
+        assert_eq!(plan.local_replica_slots, vec![1]);
         let submitted_states = mutation_sink.submitted_inrou_replica_runtime_states();
-        if inrou_host_platform_supports_local_materialization() {
-            assert_eq!(
-                submitted_states.len(),
-                2,
-                "hosted replica runtime state must be retried while the authoritative chain state is still missing"
-            );
-            let submitted_state = &submitted_states[0].state;
-            assert_eq!(submitted_state.service_name, bundle.service.service_name);
-            assert_eq!(
-                submitted_state.service_version,
-                bundle.service.service_version
-            );
-            assert_eq!(submitted_state.replica_slot, 1);
-            assert_eq!(submitted_state.validator_account_id, *ALICE_ID);
-            assert_eq!(submitted_state.peer_id, local_peer_id);
-            assert_eq!(
-                submitted_state.materialized_bundle_hash,
-                bundle.container.bundle_hash
-            );
-        } else {
-            assert!(
-                submitted_states.is_empty(),
-                "unsupported hosts should not publish authoritative placed-replica Inrou runtime state"
-            );
-        }
+        assert_eq!(
+            submitted_states.len(),
+            2,
+            "hosted replica runtime state must be retried while the authoritative chain state is still missing"
+        );
+        let submitted_state = &submitted_states[0].state;
+        assert_eq!(submitted_state.service_name, bundle.service.service_name);
+        assert_eq!(
+            submitted_state.service_version,
+            bundle.service.service_version
+        );
+        assert_eq!(submitted_state.replica_slot, 1);
+        assert_eq!(submitted_state.validator_account_id, *ALICE_ID);
+        assert_eq!(submitted_state.peer_id, local_peer_id);
+        assert_eq!(
+            submitted_state.materialized_bundle_hash,
+            bundle.container.bundle_hash
+        );
         Ok(())
     }
     #[test]
     fn submit_http_service_lease_usage_update_deduplicates_until_authoritative_state_catches_up()
     -> Result<()> {
         let mut state = test_state()?;
-        let mut bundle = load_deployment_bundle_fixture()?;
-        bundle.container.runtime = SoraContainerRuntimeV1::Inrou;
-        bundle.service.execution_plane =
-            iroha_data_model::soracloud::SoraServiceExecutionPlaneV1::HttpService;
-        bundle.service.state_bindings.clear();
-        bundle.service.handlers.clear();
+        let bundle = sample_inrou_test_bundle()?;
         let deployment_state = sample_deployment_state(&bundle);
         {
             let world = &mut Arc::get_mut(&mut state).expect("unique test state").world;
@@ -29660,10 +30477,17 @@ mod tests {
         canary_bundle.service.artifacts[0].artifact_path = "/public/canary.html".to_string();
         let mut deployment = sample_deployment_state(&active_bundle);
         deployment.revision_count = 2;
+        deployment.current_service_version = canary_bundle.service.service_version.clone();
+        deployment.current_service_manifest_hash = canary_bundle.service_manifest_hash();
+        deployment.current_container_manifest_hash = canary_bundle.container_manifest_hash();
+        deployment.process_generation = deployment
+            .process_generation
+            .checked_add(1)
+            .expect("fixture process generation");
         deployment.active_rollout = Some(SoraServiceRolloutStateV1 {
             schema_version: SORA_SERVICE_ROLLOUT_STATE_VERSION_V1,
             rollout_handle: "rollout-2026-03".to_string(),
-            baseline_version: Some(active_bundle.service.service_version.clone()),
+            baseline_version: active_bundle.service.service_version.clone(),
             candidate_version: canary_bundle.service.service_version.clone(),
             canary_percent: 20,
             traffic_percent: 20,
@@ -29675,7 +30499,7 @@ mod tests {
             updated_sequence: 29,
         });
         deployment.last_rollout = deployment.active_rollout.clone();
-        let mut runtime = sample_runtime_state(&active_bundle);
+        let mut runtime = sample_runtime_state(&canary_bundle);
         runtime.rollout_handle = Some("rollout-2026-03".to_string());
         {
             let world = &mut Arc::get_mut(&mut state).expect("unique test state").world;
@@ -31510,7 +32334,7 @@ mod tests {
             TcpListener::bind(isolated.expected_backend).is_err(),
             "the supervisor must retain the QEMU port until its owner firewall is active"
         );
-        build_portable_vm_network_plan(
+        let error = build_portable_vm_network_plan(
             8080,
             &InrouTapFirewallPlan::Allowlist(vec![InrouTapResolvedAllowlistEndpoint {
                 host: "ton.example".to_owned(),
@@ -31518,7 +32342,13 @@ mod tests {
                 port: 443,
             }]),
         )
-        .expect_err("PortableVM V1 must not construct unmetered guestfwd egress");
+        .err()
+        .expect("PortableVM V1 must not construct unmetered guestfwd egress");
+        assert!(
+            error
+                .to_string()
+                .contains("supports only isolated networking")
+        );
         Ok(())
     }
     #[cfg(target_os = "linux")]
@@ -33106,27 +33936,42 @@ mod tests {
             .expect("root volume");
         let base_rootfs = temp_dir.path().join("base-rootfs.ext4");
         fs::write(&base_rootfs, b"authenticated-base")?;
-        ensure_inrou_portable_root_disk(
+        let root_error = ensure_inrou_portable_root_disk(
             &qemu_img,
             &base_rootfs,
             root_volume,
             Hash::new(b"authenticated-base"),
         )
         .expect_err("qemu-img failure must fail root-disk creation");
+        assert!(
+            root_error
+                .to_string()
+                .contains("create PortableVm root overlay")
+        );
         let root_dir = PathBuf::from(&root_volume.local_materialization_dir);
         let root_disk = root_dir.join("rootfs.qcow2");
         assert!(!root_disk.exists());
         assert!(!inrou_root_disk_binding_path(&root_disk)?.exists());
-        assert!(fs::read_dir(&root_dir)?.all(|entry| {
-            !entry
-                .expect("directory entry")
-                .file_name()
-                .to_string_lossy()
-                .contains(".inrou-stage-")
-        }));
+        match fs::read_dir(&root_dir) {
+            Ok(entries) => assert!(entries.into_iter().all(|entry| {
+                !entry
+                    .expect("directory entry")
+                    .file_name()
+                    .to_string_lossy()
+                    .contains(".inrou-stage-")
+            })),
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+            Err(error) => return Err(error.into()),
+        }
 
-        ensure_inrou_portable_lease_disks(&qemu_img, &replica_plan)
-            .expect_err("qemu-img failure must fail lease-disk creation");
+        let lease_error = ensure_inrou_portable_lease_disks(&qemu_img, &replica_plan)
+            .err()
+            .expect("qemu-img failure must fail lease-disk creation");
+        assert!(
+            lease_error
+                .to_string()
+                .contains("create PortableVm lease disk")
+        );
         let lease_volume = replica_plan
             .lease_volumes
             .iter()
@@ -33134,13 +33979,17 @@ mod tests {
             .expect("shared lease volume");
         let lease_dir = PathBuf::from(&lease_volume.local_materialization_dir);
         assert!(!lease_dir.join("lease.raw").exists());
-        assert!(fs::read_dir(&lease_dir)?.all(|entry| {
-            !entry
-                .expect("directory entry")
-                .file_name()
-                .to_string_lossy()
-                .contains(".inrou-stage-")
-        }));
+        match fs::read_dir(&lease_dir) {
+            Ok(entries) => assert!(entries.into_iter().all(|entry| {
+                !entry
+                    .expect("directory entry")
+                    .file_name()
+                    .to_string_lossy()
+                    .contains(".inrou-stage-")
+            })),
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+            Err(error) => return Err(error.into()),
+        }
         Ok(())
     }
     #[cfg(not(windows))]
@@ -33250,6 +34099,10 @@ exec python3 /tmp/inrou-health.py
                     SoraInrouGuestIsaV1::Aarch64 => "/inrou/aarch64/initrd.img".to_owned(),
                 });
             });
+        bundle.service.container.manifest_hash = bundle.container_manifest_hash();
+        bundle
+            .validate_for_admission()
+            .map_err(|error| eyre::eyre!("invalid PortableVM smoke-test bundle: {error}"))?;
         let mut state = test_state()?;
         let deployment_state = sample_deployment_state(&bundle);
         let local_peer_id = "12D3KooWPortableVmSmokePeer";

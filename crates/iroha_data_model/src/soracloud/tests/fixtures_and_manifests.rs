@@ -111,6 +111,7 @@ fn app_infra_manifest_validation_rejects_duplicate_services() {
 #[test]
 fn app_infra_manifest_hash_and_provenance_are_canonical() {
     let manifest = sample_app_infra_manifest();
+    let precondition = SoraAppInfraMutationPreconditionV1::AppAbsent;
     manifest
         .validate()
         .expect("sample app infra manifest must validate");
@@ -124,8 +125,9 @@ fn app_infra_manifest_hash_and_provenance_are_canonical() {
         Hash::new(Encode::encode(&manifest))
     );
     assert_eq!(
-        encode_app_infra_provenance_payload(&manifest).expect("encode app infra provenance"),
-        norito::to_bytes(&manifest).expect("encode canonical manifest")
+        encode_app_infra_provenance_payload(&manifest, &precondition)
+            .expect("encode app infra provenance"),
+        norito::to_bytes(&(manifest, precondition)).expect("encode canonical app mutation")
     );
 }
 #[test]
@@ -499,6 +501,7 @@ fn sample_hf_shared_lease_audit_event() -> SoraHfSharedLeaseAuditEventV1 {
         charged: xor_quantity_from_nanos(5_000),
         refunded: Quantity::zero(),
         lease_expires_at_ms: 604_810_000,
+        failure_reason: None,
         service_name: Some("demo_service".to_string()),
         apartment_name: Some("demo_apartment".to_string()),
     }

@@ -1414,7 +1414,7 @@ fn service_rollout_state_validate_rejects_promoted_partial_traffic() {
     let rollout = SoraServiceRolloutStateV1 {
         schema_version: SORA_SERVICE_ROLLOUT_STATE_VERSION_V1,
         rollout_handle: "portal:rollout:1".to_string(),
-        baseline_version: Some("1.0.0".to_string()),
+        baseline_version: "1.0.0".to_string(),
         candidate_version: "1.1.0".to_string(),
         canary_percent: 10,
         traffic_percent: 50,
@@ -1430,6 +1430,77 @@ fn service_rollout_state_validate_rejects_promoted_partial_traffic() {
         .expect_err("promoted rollouts must serve 100 percent of traffic");
     assert_soracloud_invalid_field(error, "traffic_percent");
 }
+fn sample_active_rollout_deployment() -> SoraServiceDeploymentStateV1 {
+    let mut deployment = sample_service_deployment_state();
+    deployment.active_rollout = Some(SoraServiceRolloutStateV1 {
+        schema_version: SORA_SERVICE_ROLLOUT_STATE_VERSION_V1,
+        rollout_handle: "portal:rollout:7".to_string(),
+        baseline_version: "1.0.0".to_string(),
+        candidate_version: deployment.current_service_version.clone(),
+        canary_percent: 25,
+        traffic_percent: 25,
+        stage: SoraRolloutStageV1::Canary,
+        health_failures: 0,
+        max_health_failures: 2,
+        health_window_secs: 30,
+        created_sequence: 7,
+        updated_sequence: 7,
+    });
+    deployment
+}
+#[test]
+fn service_rollout_state_validate_rejects_missing_or_reused_baseline() {
+    for baseline_version in ["", "1.1.0"] {
+        let mut deployment = sample_active_rollout_deployment();
+        deployment
+            .active_rollout
+            .as_mut()
+            .expect("active rollout")
+            .baseline_version = baseline_version.to_owned();
+        let error = deployment
+            .validate()
+            .expect_err("baseline must be present and distinct from the candidate");
+        assert_soracloud_invalid_field(error, "baseline_version");
+    }
+}
+#[test]
+fn service_deployment_state_validate_rejects_active_candidate_different_from_current() {
+    let mut deployment = sample_active_rollout_deployment();
+    deployment
+        .active_rollout
+        .as_mut()
+        .expect("active rollout")
+        .candidate_version = "1.2.0".to_owned();
+    let error = deployment
+        .validate()
+        .expect_err("active candidate must be the deployment current version");
+    assert_soracloud_invalid_field(error, "active_rollout.candidate_version");
+}
+#[test]
+fn service_deployment_state_validate_rejects_zero_or_full_canary_allocations() {
+    for canary_percent in [0, 100] {
+        let mut deployment = sample_active_rollout_deployment();
+        let rollout = deployment.active_rollout.as_mut().expect("active rollout");
+        rollout.canary_percent = canary_percent;
+        rollout.traffic_percent = canary_percent;
+        let error = deployment
+            .validate()
+            .expect_err("active canary policy must use a partial nonzero allocation");
+        assert_soracloud_invalid_field(error, "canary_percent");
+    }
+    for traffic_percent in [0, 100] {
+        let mut deployment = sample_active_rollout_deployment();
+        deployment
+            .active_rollout
+            .as_mut()
+            .expect("active rollout")
+            .traffic_percent = traffic_percent;
+        let error = deployment
+            .validate()
+            .expect_err("active canary traffic must use a partial nonzero allocation");
+        assert_soracloud_invalid_field(error, "traffic_percent");
+    }
+}
 #[test]
 fn service_deployment_state_validate_rejects_non_canary_active_rollout() {
     let deployment = SoraServiceDeploymentStateV1 {
@@ -1444,7 +1515,7 @@ fn service_deployment_state_validate_rejects_non_canary_active_rollout() {
         active_rollout: Some(SoraServiceRolloutStateV1 {
             schema_version: SORA_SERVICE_ROLLOUT_STATE_VERSION_V1,
             rollout_handle: "portal:rollout:7".to_string(),
-            baseline_version: Some("1.0.0".to_string()),
+            baseline_version: "1.0.0".to_string(),
             candidate_version: "1.1.0".to_string(),
             canary_percent: 25,
             traffic_percent: 100,
@@ -1665,14 +1736,17 @@ fn service_mailbox_message_validate_rejects_expired_message() {
         schema_version: SORA_SERVICE_MAILBOX_MESSAGE_VERSION_V1,
         message_id: sample_hash(162),
         from_service: "portal".parse().expect("valid name"),
+        from_service_version: "2026.1".to_string(),
         from_handler: "update".parse().expect("valid name"),
         to_service: "audit".parse().expect("valid name"),
+        to_service_version: "2026.1".to_string(),
         to_handler: "private_update".parse().expect("valid name"),
         payload_bytes: b"ciphertext".to_vec(),
         payload_commitment: Hash::new(b"ciphertext"),
+        delivery_delay_sequences: 2,
         enqueue_sequence: 10,
         available_after_sequence: 12,
-        expires_at_sequence: Some(12),
+        expires_at_sequence: 12,
     };
     let error = message
         .validate()
@@ -1685,19 +1759,53 @@ fn service_mailbox_message_validate_rejects_payload_commitment_mismatch() {
         schema_version: SORA_SERVICE_MAILBOX_MESSAGE_VERSION_V1,
         message_id: sample_hash(162),
         from_service: "portal".parse().expect("valid name"),
+        from_service_version: "2026.1".to_string(),
         from_handler: "update".parse().expect("valid name"),
         to_service: "audit".parse().expect("valid name"),
+        to_service_version: "2026.1".to_string(),
         to_handler: "private_update".parse().expect("valid name"),
         payload_bytes: b"ciphertext".to_vec(),
         payload_commitment: sample_hash(163),
+        delivery_delay_sequences: 0,
         enqueue_sequence: 10,
         available_after_sequence: 10,
-        expires_at_sequence: Some(12),
+        expires_at_sequence: 12,
     };
     let error = message
         .validate()
         .expect_err("message commitment must bind the authoritative payload bytes");
     assert_soracloud_invalid_field(error, "payload_commitment");
+}
+#[test]
+fn service_mailbox_message_validation_separates_submission_and_persisted_schedule_states() {
+    let mut message = sample_service_mailbox_message();
+    message
+        .validate()
+        .expect("ledger-assigned mailbox schedule must validate");
+    let error = message
+        .validate_submission()
+        .expect_err("mailbox submission must not carry ledger-bound service versions");
+    assert_soracloud_invalid_field(error, "from_service_version");
+
+    message.from_service_version.clear();
+    message.to_service_version.clear();
+    let error = message
+        .validate_submission()
+        .expect_err("mailbox submission must not carry a caller-selected schedule");
+    assert_soracloud_invalid_field(error, "enqueue_sequence");
+
+    message.enqueue_sequence = 0;
+    message.available_after_sequence = 0;
+    message.expires_at_sequence = 0;
+    message
+        .validate_submission()
+        .expect("zero-sentinel mailbox submission must validate");
+    message.from_service_version = "2026.1".to_owned();
+    message.to_service_version = "2026.1".to_owned();
+    let error = message
+        .validate()
+        .expect_err("persisted mailbox message requires a ledger-assigned schedule");
+    assert_soracloud_invalid_field(error, "enqueue_sequence");
 }
 zero_prehash_field_rejection_test! {
     service_mailbox_message_validate_rejects_zero_prehash_digest_sentinels,
@@ -1721,9 +1829,7 @@ fn runtime_receipt_validate_rejects_uncertified_query_receipt() {
         result_commitment: sample_hash(166),
         certified_by: SoraCertifiedResponsePolicyV1::None,
         emitted_sequence: 44,
-        placement_id: None,
-        selected_validator_account_id: None,
-        selected_peer_id: None,
+        execution_host: None,
         mailbox_message_id: None,
         journal_artifact_hash: None,
         checkpoint_artifact_hash: None,
@@ -1734,7 +1840,41 @@ fn runtime_receipt_validate_rejects_uncertified_query_receipt() {
     assert_soracloud_invalid_field(error, "certified_by");
 }
 #[test]
-fn runtime_receipt_validate_rejects_partial_host_attribution() {
+fn runtime_receipt_validation_separates_submission_and_persisted_sequence_states() {
+    let mut receipt = sample_runtime_receipt();
+    receipt.emitted_sequence = 0;
+    receipt
+        .validate_submission()
+        .expect("an unassigned runtime receipt is valid for ledger submission");
+    let error = receipt
+        .validate()
+        .expect_err("a persisted runtime receipt requires a ledger-assigned sequence");
+    assert_soracloud_invalid_field(error, "emitted_sequence");
+    receipt.emitted_sequence = 1;
+    let error = receipt
+        .validate_submission()
+        .expect_err("a submission must not select its authoritative sequence");
+    assert_soracloud_invalid_field(error, "emitted_sequence");
+}
+#[test]
+fn private_runtime_receipt_validation_separates_submission_and_persisted_sequence_states() {
+    let mut receipt = sample_private_uploaded_model_execution_receipt();
+    receipt.emitted_sequence = 0;
+    receipt
+        .validate_submission()
+        .expect("an unassigned private receipt is valid for ledger submission");
+    let error = receipt
+        .validate()
+        .expect_err("a persisted private receipt requires a ledger-assigned sequence");
+    assert_soracloud_invalid_field(error, "emitted_sequence");
+    receipt.emitted_sequence = 1;
+    let error = receipt
+        .validate_submission()
+        .expect_err("a private receipt submission must not select its authoritative sequence");
+    assert_soracloud_invalid_field(error, "emitted_sequence");
+}
+#[test]
+fn runtime_receipt_validate_rejects_invalid_host_attribution() {
     let receipt = SoraRuntimeReceiptV1 {
         schema_version: SORA_RUNTIME_RECEIPT_VERSION_V1,
         receipt_id: sample_hash(167),
@@ -1746,17 +1886,21 @@ fn runtime_receipt_validate_rejects_partial_host_attribution() {
         result_commitment: sample_hash(169),
         certified_by: SoraCertifiedResponsePolicyV1::AuditReceipt,
         emitted_sequence: 45,
-        placement_id: Some(sample_hash(170)),
-        selected_validator_account_id: Some(sample_account_id(171)),
-        selected_peer_id: None,
+        execution_host: Some(SoraRuntimeExecutionHostV1::InrouReplica(
+            SoraRuntimeInrouReplicaHostV1 {
+            replica_slot: 0,
+            validator_account_id: sample_account_id(171),
+            peer_id: "12D3KooWRuntimePrimary".to_string(),
+            },
+        )),
         mailbox_message_id: None,
         journal_artifact_hash: None,
         checkpoint_artifact_hash: None,
     };
     let error = receipt
         .validate()
-        .expect_err("partial host-attribution fields must be rejected");
-    assert_soracloud_invalid_field(error, "placement_id");
+        .expect_err("invalid host attribution must be rejected");
+    assert_soracloud_invalid_field(error, "replica_slot");
 }
 zero_prehash_field_rejection_test! {
     runtime_receipt_validate_rejects_zero_prehash_digest_sentinels,
@@ -1767,14 +1911,27 @@ zero_prehash_field_rejection_test! {
         ("request_commitment", "request placeholder commitment must fail admission");
     result_commitment = zero_digest =>
         ("result_commitment", "result placeholder commitment must fail admission");
-    placement_id = Some(zero_digest) =>
-        ("placement_id", "placement placeholder id must fail admission");
     mailbox_message_id = Some(zero_digest) =>
         ("mailbox_message_id", "mailbox message placeholder id must fail admission");
     journal_artifact_hash = Some(zero_digest) =>
         ("journal_artifact_hash", "journal artifact placeholder hash must fail admission");
     checkpoint_artifact_hash = Some(zero_digest) =>
         ("checkpoint_artifact_hash", "checkpoint artifact placeholder hash must fail admission");
+}
+#[test]
+fn runtime_receipt_validate_rejects_zero_hf_placement_digest() {
+    let mut receipt = sample_runtime_receipt();
+    receipt.execution_host = Some(SoraRuntimeExecutionHostV1::HfModelHost(
+        SoraRuntimeHfModelHostV1 {
+            placement_id: Hash::prehashed([0; Hash::LENGTH]),
+            validator_account_id: sample_account_id(171),
+            peer_id: "12D3KooWRuntimePrimary".to_string(),
+        },
+    ));
+    let error = receipt
+        .validate()
+        .expect_err("HF placement placeholder digest must fail validation");
+    assert_soracloud_invalid_field(error, "placement_id");
 }
 #[test]
 fn agent_apartment_manifest_validate_rejects_duplicate_tool_capabilities() {

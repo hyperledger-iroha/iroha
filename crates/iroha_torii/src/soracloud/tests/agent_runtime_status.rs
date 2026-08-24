@@ -79,9 +79,7 @@ fn authoritative_agent_autonomy_status_includes_runtime_recent_runs() -> Result<
                 mailbox_message_id: None,
                 journal_artifact_hash: Some(Hash::new(b"ops-agent-authoritative-journal")),
                 checkpoint_artifact_hash: Some(Hash::new(br#"{"text":"ok"}"#)),
-                placement_id: None,
-                selected_validator_account_id: None,
-                selected_peer_id: None,
+                execution_host: None,
             },
         );
         world
@@ -160,9 +158,7 @@ fn authoritative_agent_autonomy_status_includes_runtime_recent_runs() -> Result<
                 mailbox_message_id: None,
                 journal_artifact_hash: Some(Hash::new(b"ops-agent-authoritative-journal")),
                 checkpoint_artifact_hash: Some(Hash::new(br#"{"text":"ok"}"#)),
-                placement_id: None,
-                selected_validator_account_id: None,
-                selected_peer_id: None,
+                execution_host: None,
             }),
             workflow_steps: Vec::new(),
             content_type: Some("application/json".to_owned()),

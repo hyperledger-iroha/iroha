@@ -30,6 +30,39 @@ pub enum SoraServiceLifecycleActionV1 {
     /// Reversion to an already admitted baseline revision.
     Rollback,
 }
+/// Exact authoritative service revision observed by an upgrade signer.
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+pub struct SoraServiceExactCurrentRevisionPreconditionV1 {
+    /// Active service version observed by the signer.
+    pub service_version: String,
+    /// Active service-manifest hash observed by the signer.
+    pub service_manifest_hash: Hash,
+    /// Active container-manifest hash observed by the signer.
+    pub container_manifest_hash: Hash,
+    /// Positive active process generation observed by the signer.
+    pub process_generation: u64,
+    /// Active config generation observed by the signer.
+    pub config_generation: u64,
+    /// Active secret generation observed by the signer.
+    pub secret_generation: u64,
+}
+/// Signed compare-and-set condition for a service deploy or upgrade.
+///
+/// The condition is evaluated against authoritative deployment state in the
+/// same ledger transaction that admits the new revision. This prevents a
+/// status preflight from becoming a time-of-check/time-of-use race.
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[cfg_attr(feature = "json", norito(tag = "condition", content = "value"))]
+pub enum SoraServiceMutationPreconditionV1 {
+    /// A first deployment is valid only while no deployment state exists for
+    /// the service name carried by the signed bundle.
+    ServiceAbsent,
+    /// An upgrade is valid only while every field of the observed active
+    /// revision still matches authoritative deployment state.
+    ExactCurrentRevision(SoraServiceExactCurrentRevisionPreconditionV1),
+}
 /// Mutation mode recorded for authoritative Soracloud state updates.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
@@ -61,9 +94,8 @@ pub struct SoraServiceRolloutStateV1 {
     pub schema_version: u16,
     /// Deterministic rollout identifier.
     pub rollout_handle: String,
-    /// Baseline version retained for automatic rollback.
-    #[norito(default)]
-    pub baseline_version: Option<String>,
+    /// Baseline version retained for traffic splitting and automatic rollback.
+    pub baseline_version: String,
     /// Candidate version being evaluated.
     pub candidate_version: String,
     /// Initial canary percentage requested by the deployment policy.
@@ -104,15 +136,16 @@ impl SoraServiceRolloutStateV1 {
             "candidate_version",
             &self.candidate_version,
         )?;
-        if self
-            .baseline_version
-            .as_ref()
-            .is_some_and(|version| version.trim().is_empty())
-        {
+        validate_nonblank_field(
+            "sora service rollout state",
+            "baseline_version",
+            &self.baseline_version,
+        )?;
+        if self.baseline_version == self.candidate_version {
             return Err(invalid_field(
                 "sora service rollout state",
                 "baseline_version",
-                "must not be empty when provided",
+                "must differ from candidate_version",
             ));
         }
         if self.canary_percent > 100 {
@@ -131,11 +164,18 @@ impl SoraServiceRolloutStateV1 {
         }
         match self.stage {
             SoraRolloutStageV1::Canary => {
-                if self.traffic_percent < self.canary_percent {
+                if !(1..100).contains(&self.canary_percent) {
+                    return Err(invalid_field(
+                        "sora service rollout state",
+                        "canary_percent",
+                        "canary rollouts must start with a nonzero partial traffic allocation",
+                    ));
+                }
+                if !(self.canary_percent..100).contains(&self.traffic_percent) {
                     return Err(invalid_field(
                         "sora service rollout state",
                         "traffic_percent",
-                        "canary traffic must stay at or above canary_percent",
+                        "canary traffic must stay at or above canary_percent and below 100",
                     ));
                 }
             }
@@ -320,6 +360,27 @@ impl SoraServiceDeploymentStateV1 {
                     "sora service deployment state",
                     "active_rollout.stage",
                     "active_rollout may only track canary progress",
+                ));
+            }
+            if !(1..100).contains(&active_rollout.traffic_percent) {
+                return Err(invalid_field(
+                    "sora service deployment state",
+                    "active_rollout.traffic_percent",
+                    "active canary rollout must split traffic between baseline and candidate",
+                ));
+            }
+            if !(1..100).contains(&active_rollout.canary_percent) {
+                return Err(invalid_field(
+                    "sora service deployment state",
+                    "active_rollout.canary_percent",
+                    "active canary rollout must start with a nonzero partial traffic allocation",
+                ));
+            }
+            if active_rollout.candidate_version != self.current_service_version {
+                return Err(invalid_field(
+                    "sora service deployment state",
+                    "active_rollout.candidate_version",
+                    "must match current_service_version",
                 ));
             }
         }
@@ -2085,15 +2146,32 @@ pub struct SoraPrivateUploadedModelExecutionReceiptV1 {
     pub request_commitment: Hash,
     /// Commitment over the runtime result envelope.
     pub result_commitment: Hash,
-    /// Monotonic Soracloud sequence that emitted the receipt.
+    /// Ledger-assigned Soracloud sequence that persisted the receipt.
+    ///
+    /// A `RecordSoracloudPrivateUploadedModelExecutionReceipt` submission must set this to zero;
+    /// ledger execution replaces the sentinel with the next authoritative Soracloud sequence.
     pub emitted_sequence: u64,
 }
 impl SoraPrivateUploadedModelExecutionReceiptV1 {
-    /// Validate private uploaded-model execution receipt metadata.
+    /// Validate ledger-persisted private uploaded-model execution receipt metadata.
     ///
     /// # Errors
     /// Returns [`SoracloudManifestError`] when the receipt is malformed.
     pub fn validate(&self) -> Result<(), SoracloudManifestError> {
+        self.validate_with_sequence_state(true)
+    }
+    /// Validate private uploaded-model execution receipt metadata prepared for ledger submission.
+    ///
+    /// # Errors
+    /// Returns [`SoracloudManifestError`] when the receipt is malformed or carries a
+    /// caller-selected sequence.
+    pub fn validate_submission(&self) -> Result<(), SoracloudManifestError> {
+        self.validate_with_sequence_state(false)
+    }
+    fn validate_with_sequence_state(
+        &self,
+        require_assigned_sequence: bool,
+    ) -> Result<(), SoracloudManifestError> {
         validate_schema_version(
             "sora private uploaded model execution receipt",
             self.schema_version,
@@ -2132,11 +2210,18 @@ impl SoraPrivateUploadedModelExecutionReceiptV1 {
                 digest,
             )?;
         }
-        if self.emitted_sequence == 0 {
+        if require_assigned_sequence && self.emitted_sequence == 0 {
             return Err(invalid_field(
                 "sora private uploaded model execution receipt",
                 "emitted_sequence",
-                "must be greater than zero",
+                "must be assigned by the ledger before persistence",
+            ));
+        }
+        if !require_assigned_sequence && self.emitted_sequence != 0 {
+            return Err(invalid_field(
+                "sora private uploaded model execution receipt",
+                "emitted_sequence",
+                "must be zero before ledger submission",
             ));
         }
         self.input_artifact.validate()?;

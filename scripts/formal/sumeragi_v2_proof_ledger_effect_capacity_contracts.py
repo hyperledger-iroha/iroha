@@ -740,8 +740,9 @@ let ownership = match self.runtime.take_effect_ownership(&effects) {
         effects_path,
         consume_effects_wrapper,
         generic_executor_context,
-        "ordinary effect-consumer Decision-cleanup delegation",
+        "test-only ordinary effect-consumer Decision-cleanup delegation",
         errors,
+        expected_attributes=("#[cfg(test)]",),
     )
     _require_exact_rust_tokens(
         effects_path,
@@ -755,7 +756,7 @@ pub(crate) fn consume_effects<S: V2EffectServices>(
     self.consume_effects_with_runner_decision_cleanup(effects, services, None)
 }
 """,
-        "ordinary effect-consumer wrapper must delegate only to the Decision-cleanup-aware consumer",
+        "test-only ordinary effect-consumer wrapper must delegate only to the Decision-cleanup-aware consumer",
         errors,
     )
     _require_rust_token_sequence(
@@ -873,10 +874,30 @@ true
         effects_path,
         cleanup_plan,
         """
-let (None, Some(decision)) = (before, after) else {
+let Some(decision) = after else {
     return Ok(None);
 };
-let owner_tag = self.runtime.authoritative_tag().ok_or_else(|| {
+if before.is_some_and(|existing| existing != decision) {
+    return Err(EffectExecutorError::Contract(
+        "one runtime step changed an already durable Decision".to_owned(),
+    ));
+}
+let installed_by_step = before.is_none();
+let live_unreconciled_decision =
+    self.runtime.lifecycle_live_clocks_are_armed() && self.protected_decision.is_none();
+if !installed_by_step && !live_unreconciled_decision {
+    return Ok(None);
+}
+let frontier = self
+    .runtime
+    .reconciliation_frontier()
+    .map_err(EffectExecutorError::Runtime)?;
+if frontier.decision != Some(decision) {
+    return Err(EffectExecutorError::Contract(
+        "new Decision changed across its post-step reconciliation frontier".to_owned(),
+    ));
+}
+let owner_tag = frontier.tag.ok_or_else(|| {
     EffectExecutorError::Contract(
         "new Decision omitted its exact local runner owner".to_owned(),
     )
@@ -891,7 +912,7 @@ Ok(Some(PendingRunnerDecisionCleanup {
     owner_tag,
 }))
 """,
-        "only the first Decision transition may mint cleanup debt, bound to its authoritative same-height runner owner",
+        "a newly installed or live unreconciled same-Decision completion must mint cleanup debt from its exact post-step frontier owner",
         errors,
     )
 
@@ -1233,8 +1254,9 @@ self.finality_completion.is_some()
         effects_path,
         consume_pacemaker_wrapper,
         generic_executor_context,
-        "pacemaker effect-consumer Decision-cleanup delegation",
+        "test-only pacemaker effect-consumer Decision-cleanup delegation",
         errors,
+        expected_attributes=("#[cfg(test)]",),
     )
     _require_exact_rust_tokens(
         effects_path,
@@ -1248,7 +1270,7 @@ fn consume_pacemaker_effects<S: V2EffectServices>(
     self.consume_pacemaker_effects_with_runner_decision_cleanup(effects, services, None)
 }
 """,
-        "pacemaker effect-consumer wrapper must delegate only to the Decision-cleanup-aware consumer",
+        "test-only pacemaker effect-consumer wrapper must delegate only to the Decision-cleanup-aware consumer",
         errors,
     )
     consume_pacemaker = _require_rust_item(
@@ -4735,11 +4757,6 @@ self.retain_effect_ownership(
                 "dispatch_one_fence_dependency",
                 "RuntimeEffectSource::Fifo",
                 "fence-completion candidate statement handoff",
-            ),
-            (
-                "step_recovery",
-                "RuntimeEffectSource::Fifo",
-                "recovery FIFO candidate statement handoff",
             ),
         ):
             dispatch = _require_rust_item(

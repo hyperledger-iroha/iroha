@@ -37,6 +37,20 @@ impl RuntimeEffectOwnerAssignment {
             kind,
         )
     }
+
+    #[cfg(test)]
+    fn periodic_retransmit_for_test(tag: EventTag, lifecycle_ordinal: u128) -> Self {
+        let origin = RuntimeCandidateCausalOrigin::mint_fresh_root(
+            tag,
+            CommandClass::Progress,
+            RuntimeFreshRootKind::Retransmit,
+            PERIODIC_RETRANSMIT_ROOT_IDENTITY,
+        );
+        Self::inherit(
+            RuntimeLifecycleOwner::new(origin, lifecycle_ordinal)
+                .expect("periodic retransmit test owner binds its lifecycle ordinal"),
+        )
+    }
 }
 
 impl RuntimeEffectOwnership {
@@ -61,6 +75,36 @@ impl RuntimeEffectOwnership {
             lifecycle_ordinal,
             semantic_identity,
         )
+    }
+
+    /// Select the production-shaped periodic retransmit lifecycle for exact test binding.
+    #[cfg(test)]
+    pub(crate) fn periodic_retransmit_for_test(
+        tag: EventTag,
+        lifecycle_ordinal: u128,
+    ) -> RuntimeEffectOwnerAssignment {
+        RuntimeEffectOwnerAssignment::periodic_retransmit_for_test(tag, lifecycle_ordinal)
+    }
+
+    /// Authenticate one Broadcast as a child of the selected periodic retransmit episode.
+    pub(in crate::sumeragi) fn exactly_binds_periodic_retransmit_broadcast(
+        &self,
+        effect: &AdapterEffect,
+    ) -> bool {
+        if self.causality != RuntimeEffectCausality::Inherit
+            || !matches!(effect, AdapterEffect::Broadcast(_))
+            || !self.exactly_binds_adapter_effect(effect)
+        {
+            return false;
+        }
+        let expected = RuntimeCandidateCausalOrigin::mint_fresh_root(
+            self.owner.causal_origin().root_tag,
+            CommandClass::Progress,
+            RuntimeFreshRootKind::Retransmit,
+            PERIODIC_RETRANSMIT_ROOT_IDENTITY,
+        );
+        RuntimeLifecycleOwner::new(expected, self.owner.lifecycle_ordinal())
+            .is_ok_and(|expected| expected == self.owner)
     }
 
     fn validate_exact(&self) -> bool {

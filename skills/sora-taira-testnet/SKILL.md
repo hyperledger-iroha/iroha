@@ -41,9 +41,10 @@ four configs with the current daemon, starts them, requires health/readiness,
 submits a signed ping, waits for its typed `Applied` status, requires four-peer
 height convergence, and performs a semantic MCP initialize/tools-list smoke.
 
-Use `--full-doctor` only when the broad public product-route surface is part of
-the test. A minimal throwaway chain must not be rejected merely because an
-unrelated optional application route is absent.
+Public product-route qualification is separate: run the same-revision
+`iroha taira doctor` directly against the public ingress under test. A minimal
+throwaway chain must not be rejected because an unrelated application route is
+absent.
 
 The generated bundle contains private keys and tokens. Do not print, move,
 archive, or commit it. On failure the command stops the failed cohort and leaves

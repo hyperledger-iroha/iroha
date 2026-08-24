@@ -737,49 +737,13 @@ fn production_completion_dispatch_publishes_all_ready_validate_outcomes_fixture(
                     panic!("{row:?}: typed live Apply lost physical completion priority");
                 }
             };
-            let crate::sumeragi::v2_apply::LifecycleDecisionApplyWorkerResultV1::Applied(applied) =
-                completion.result()
-            else {
-                panic!("{row:?}: live Apply fixture must produce an applied terminal")
-            };
-            let lease = owner
-                .coordinator
-                .active_lease
-                .clone()
-                .expect("live Apply completion retains its exact active lease");
-            let (transition, authority) = owner
-                .registry
-                .prepare_lifecycle_decision_apply_terminal_transition(
-                    &owner.coordinator,
-                    &lease,
-                    applied,
-                )
-                .expect("join exact live worker result to its installed carrier");
-            let adapter = executor
-                .prepare_lifecycle_decision_apply_completion(authority)
-                .expect("preview exact live Apply completion on the serialized adapter");
-            let mut staged = owner.coordinator.stage_durable_transaction();
-            staged.reduce_settle_turn(lease.clone(), super::super::TurnOutcome::Advanced, None);
-            assert!(staged.fault.is_none());
-            owner
-                .registry
-                .publish_lifecycle_decision_apply_terminal_transition(
-                    transition,
-                    &owner.coordinator,
-                    &staged,
-                    &lease,
-                    || owner.coordinator.persist_exact_staged_successor(&staged),
-                )
-                .unwrap_or_else(|_| {
-                    panic!("{row:?}: publish exact live Apply terminal through LedgerV1")
-                });
-            owner.coordinator = staged;
-            let finality = adapter.commit_after_durable_settlement();
-            let _status = executor.commit_lifecycle_decision_apply_finality(finality);
-            let settled = completion.acknowledge_after_owner_settlement();
             assert!(matches!(
-                settled,
-                crate::sumeragi::v2_apply::LifecycleDecisionApplyWorkerResultV1::Applied(_)
+                super::super::settle_applied_lifecycle_decision_apply_completion_for_test(
+                    &mut owner,
+                    &mut executor,
+                    completion,
+                ),
+                Ok(super::super::ProductionLifecycleDecisionApplyCompletionV1::Applied)
             ));
             assert_eq!(
                 Some(executor.runtime_queue_snapshot_for_test(now)),

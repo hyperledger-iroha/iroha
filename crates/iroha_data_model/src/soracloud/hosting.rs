@@ -595,7 +595,10 @@ pub struct SoraHfPlacementRecordV1 {
     /// Assigned validator hosts in deterministic rank order.
     #[norito(default)]
     pub assigned_hosts: Vec<SoraHfPlacementHostAssignmentV1>,
-    /// Total nominal compute reservation fee charged for the current window.
+    /// Full-window nominal compute reservation tariff for the assigned host set.
+    ///
+    /// A queued window activated after its scheduled start settles this tariff pro rata; member
+    /// payment/refund totals carry the authoritative net charge.
     pub total_reservation_fee: Quantity,
     /// Timestamp of the last placement rebalance.
     pub last_rebalance_at_ms: u64,
@@ -993,6 +996,10 @@ pub enum SoraHfSharedLeaseActionV1 {
     Leave,
     /// A future or fresh window was sponsored.
     Renew,
+    /// A queued window became active and settled its deferred compute charge.
+    Activate,
+    /// A queued window reached activation but could not become active.
+    ActivationFailed,
     /// The current window was retired early.
     Retire,
 }
@@ -1000,19 +1007,24 @@ pub enum SoraHfSharedLeaseActionV1 {
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct SoraHfSharedLeaseQueuedWindowV1 {
-    /// Account that fronted the full charge for the queued window.
+    /// Account that sponsored the queued window and prepaid its storage charge.
     pub sponsor_account_id: AccountId,
     /// Model label to adopt once the queued window becomes active.
     pub model_name: String,
     /// Settlement asset definition for the queued window.
     pub lease_asset_definition_id: AssetDefinitionId,
-    /// Full-window nominal price charged to the sponsor.
+    /// Full-window nominal storage price charged at sponsorship.
     pub base_fee: Quantity,
-    /// Full-window nominal compute reservation fee charged to the sponsor.
-    #[norito(default)]
-    pub compute_reservation_fee: Quantity,
-    /// Planned placement to activate when the queued window becomes current.
-    pub planned_placement: SoraHfPlacementRecordV1,
+    /// Canonical maximum compute reservation fee authorized by the sponsor.
+    ///
+    /// Compute is not charged while the window is queued. The active placement is selected again
+    /// at activation and only its prorated reservation fee is charged, bounded by this cap.
+    pub compute_reservation_cap: Quantity,
+    /// Canonical resource profile reviewed when this window was sponsored.
+    ///
+    /// Activation selects a fresh authoritative placement against this profile before settling
+    /// the deferred compute charge.
+    pub resource_profile: SoraHfResourceProfileV1,
     /// Timestamp when the queued sponsorship was recorded.
     pub sponsored_at_ms: u64,
     /// Planned start timestamp for the queued window.
@@ -1045,21 +1057,14 @@ impl SoraHfSharedLeaseQueuedWindowV1 {
                 "must be greater than zero",
             ));
         }
-        if self.compute_reservation_fee.is_zero() {
+        if self.compute_reservation_cap.is_zero() {
             return Err(invalid_field(
                 "sora hf shared lease queued window",
-                "compute_reservation_fee",
+                "compute_reservation_cap",
                 "must be greater than zero",
             ));
         }
-        self.planned_placement.validate()?;
-        if self.planned_placement.total_reservation_fee != self.compute_reservation_fee {
-            return Err(invalid_field(
-                "sora hf shared lease queued window",
-                "planned_placement.total_reservation_fee",
-                "must match compute_reservation_fee",
-            ));
-        }
+        self.resource_profile.validate()?;
         if self.sponsored_at_ms == 0
             || self.window_started_at_ms == 0
             || self.window_expires_at_ms == 0
@@ -1186,6 +1191,24 @@ impl SoraHfSharedLeasePoolV1 {
                     "must equal queued window_started_at_ms + lease_term_ms",
                 ));
             }
+            if next_window.lease_asset_definition_id != self.lease_asset_definition_id {
+                return Err(invalid_field(
+                    "sora hf shared lease pool",
+                    "queued_next_window.lease_asset_definition_id",
+                    "must match the pool settlement asset",
+                ));
+            }
+            let canonical_compute_reservation_cap = hf_shared_lease_max_compute_reservation_fee_v1(
+                &next_window.resource_profile,
+                self.lease_term_ms,
+            )?;
+            if next_window.compute_reservation_cap != canonical_compute_reservation_cap {
+                return Err(invalid_field(
+                    "sora hf shared lease pool",
+                    "queued_next_window.compute_reservation_cap",
+                    "must equal the canonical V1 cap for resource_profile and lease_term_ms",
+                ));
+            }
         }
         Ok(())
     }
@@ -1303,8 +1326,11 @@ pub struct SoraHfSharedLeaseAuditEventV1 {
     pub charged: Quantity,
     /// Direct nominal refund amount recorded for the acting account.
     pub refunded: Quantity,
-    /// Current pool expiry after the mutation.
+    /// Expiry of the lease window affected by the event.
     pub lease_expires_at_ms: u64,
+    /// Terminal activation failure reason, present only for [`SoraHfSharedLeaseActionV1::ActivationFailed`].
+    #[norito(default)]
+    pub failure_reason: Option<String>,
     /// Optional service binding touched by the mutation.
     #[norito(default)]
     pub service_name: Option<String>,
@@ -1347,6 +1373,29 @@ impl SoraHfSharedLeaseAuditEventV1 {
                 "occurred_at_ms",
                 "occurred_at_ms and lease_expires_at_ms must be greater than zero",
             ));
+        }
+        match self.action {
+            SoraHfSharedLeaseActionV1::ActivationFailed => {
+                if self
+                    .failure_reason
+                    .as_ref()
+                    .is_none_or(|reason| reason.trim().is_empty())
+                {
+                    return Err(invalid_field(
+                        "sora hf shared lease audit event",
+                        "failure_reason",
+                        "must be non-empty for activation failures",
+                    ));
+                }
+            }
+            _ if self.failure_reason.is_some() => {
+                return Err(invalid_field(
+                    "sora hf shared lease audit event",
+                    "failure_reason",
+                    "must be omitted unless action is activation_failed",
+                ));
+            }
+            _ => {}
         }
         if self
             .service_name
@@ -2354,6 +2403,27 @@ impl SoraAppInfraManifestV1 {
         Ok(())
     }
 }
+/// Exact authoritative app topology observed before a signed upgrade.
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+pub struct SoraAppInfraExactCurrentRevisionPreconditionV1 {
+    /// Active app version observed by the signer.
+    pub app_version: String,
+    /// Active topology-manifest hash observed by the signer.
+    pub manifest_hash: Hash,
+    /// Positive authoritative revision count observed by the signer.
+    pub revision_count: u32,
+}
+/// Signed compare-and-set condition for an app topology deploy or upgrade.
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[cfg_attr(feature = "json", norito(tag = "condition", content = "value"))]
+pub enum SoraAppInfraMutationPreconditionV1 {
+    /// A first deployment is valid only while the app name has no state.
+    AppAbsent,
+    /// An upgrade is valid only while the observed topology revision remains current.
+    ExactCurrentRevision(SoraAppInfraExactCurrentRevisionPreconditionV1),
+}
 /// Authoritative app-level Soracloud infrastructure state.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
@@ -2882,31 +2952,53 @@ pub struct SoraServiceMailboxMessageV1 {
     pub message_id: Hash,
     /// Source service name.
     pub from_service: Name,
+    /// Ledger-bound source service revision.
+    pub from_service_version: String,
     /// Source handler name.
     pub from_handler: Name,
     /// Destination service name.
     pub to_service: Name,
+    /// Ledger-bound destination service revision.
+    pub to_service_version: String,
     /// Destination handler name.
     pub to_handler: Name,
     /// Opaque mailbox payload bytes replicated through authoritative state.
     pub payload_bytes: Vec<u8>,
     /// Commitment over the opaque message payload.
     pub payload_commitment: Hash,
-    /// Ordered sequence at which the message was enqueued.
-    pub enqueue_sequence: u64,
-    /// Earliest sequence at which the message may execute.
-    pub available_after_sequence: u64,
-    /// Optional expiry sequence for the message.
+    /// Relative delivery delay requested by the source runtime.
     #[norito(default)]
-    pub expires_at_sequence: Option<u64>,
+    pub delivery_delay_sequences: u32,
+    /// Ledger-assigned ordered sequence at which the message was enqueued.
+    ///
+    /// A [`crate::isi::soracloud::RecordSoracloudMailboxMessage`] submission must set this and the
+    /// two derived scheduling fields below to zero. Ledger execution assigns all three from the
+    /// canonical Soracloud sequence domain and the destination handler's mailbox contract.
+    pub enqueue_sequence: u64,
+    /// Ledger-derived earliest sequence at which the message may execute.
+    pub available_after_sequence: u64,
+    /// Ledger-derived sequence at which the message expires.
+    pub expires_at_sequence: u64,
 }
 impl SoraServiceMailboxMessageV1 {
-    /// Validate deterministic mailbox-message ordering constraints.
+    /// Validate a ledger-assigned mailbox message.
     ///
     /// # Errors
     /// Returns [`SoracloudManifestError`] when schema versions mismatch or
     /// availability/expiry sequences are inconsistent.
     pub fn validate(&self) -> Result<(), SoracloudManifestError> {
+        self.validate_with_sequence_state(true)
+    }
+    /// Validate a mailbox message prepared for ledger submission.
+    ///
+    /// Submission messages carry zero sentinels for all ledger-owned schedule fields.
+    pub fn validate_submission(&self) -> Result<(), SoracloudManifestError> {
+        self.validate_with_sequence_state(false)
+    }
+    fn validate_with_sequence_state(
+        &self,
+        require_assigned_schedule: bool,
+    ) -> Result<(), SoracloudManifestError> {
         validate_schema_version(
             "sora service mailbox message",
             self.schema_version,
@@ -2917,12 +3009,52 @@ impl SoraServiceMailboxMessageV1 {
             "message_id",
             self.message_id,
         )?;
+        if require_assigned_schedule {
+            validate_nonblank_field(
+                "sora service mailbox message",
+                "from_service_version",
+                &self.from_service_version,
+            )?;
+            validate_nonblank_field(
+                "sora service mailbox message",
+                "to_service_version",
+                &self.to_service_version,
+            )?;
+        } else if !self.from_service_version.is_empty() || !self.to_service_version.is_empty() {
+            return Err(invalid_field(
+                "sora service mailbox message",
+                "from_service_version",
+                "ledger-bound service versions must be empty before ledger submission",
+            ));
+        }
         validate_soracloud_digest_hash(
             "sora service mailbox message",
             "payload_commitment",
             self.payload_commitment,
         )?;
-        if self.available_after_sequence < self.enqueue_sequence {
+        if require_assigned_schedule
+            && (self.enqueue_sequence == 0
+                || self.available_after_sequence == 0
+                || self.expires_at_sequence == 0)
+        {
+            return Err(invalid_field(
+                "sora service mailbox message",
+                "enqueue_sequence",
+                "ledger-assigned schedule fields must be greater than zero before persistence",
+            ));
+        }
+        if !require_assigned_schedule
+            && (self.enqueue_sequence != 0
+                || self.available_after_sequence != 0
+                || self.expires_at_sequence != 0)
+        {
+            return Err(invalid_field(
+                "sora service mailbox message",
+                "enqueue_sequence",
+                "ledger-assigned schedule fields must be zero before ledger submission",
+            ));
+        }
+        if require_assigned_schedule && self.available_after_sequence < self.enqueue_sequence {
             return Err(invalid_field(
                 "sora service mailbox message",
                 "available_after_sequence",
@@ -2936,9 +3068,7 @@ impl SoraServiceMailboxMessageV1 {
                 "must match payload_bytes",
             ));
         }
-        if let Some(expires_at) = self.expires_at_sequence
-            && expires_at <= self.available_after_sequence
-        {
+        if require_assigned_schedule && self.expires_at_sequence <= self.available_after_sequence {
             return Err(invalid_field(
                 "sora service mailbox message",
                 "expires_at_sequence",
@@ -2946,6 +3076,73 @@ impl SoraServiceMailboxMessageV1 {
             ));
         }
         Ok(())
+    }
+}
+/// Exact Inrou replica assignment that executed a Soracloud workload.
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+pub struct SoraRuntimeInrouReplicaHostV1 {
+    /// One-based replica slot in the active service placement.
+    pub replica_slot: u16,
+    /// Validator account assigned to the replica.
+    pub validator_account_id: AccountId,
+    /// Peer identifier bound to the active replica assignment.
+    pub peer_id: String,
+}
+/// Exact HF model-host assignment that executed a Soracloud workload.
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+pub struct SoraRuntimeHfModelHostV1 {
+    /// Authoritative HF placement identifier.
+    pub placement_id: Hash,
+    /// Validator account assigned to the model host.
+    pub validator_account_id: AccountId,
+    /// Peer identifier bound to the active model-host assignment.
+    pub peer_id: String,
+}
+/// Exact authoritative host assignment that executed a Soracloud workload.
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[cfg_attr(feature = "json", norito(tag = "host_kind", content = "value"))]
+pub enum SoraRuntimeExecutionHostV1 {
+    /// One placed Inrou replica assigned to the executing validator.
+    InrouReplica(SoraRuntimeInrouReplicaHostV1),
+    /// One active Hugging Face model-host placement assignment.
+    HfModelHost(SoraRuntimeHfModelHostV1),
+}
+impl SoraRuntimeExecutionHostV1 {
+    /// Validate structural execution-host attribution.
+    ///
+    /// Authoritative placement and capability bindings are validated by ledger execution.
+    pub fn validate(&self) -> Result<(), SoracloudManifestError> {
+        match self {
+            Self::InrouReplica(host) => {
+                if host.replica_slot == 0 {
+                    return Err(invalid_field(
+                        "sora runtime execution host",
+                        "replica_slot",
+                        "must be greater than zero",
+                    ));
+                }
+                validate_nonblank_field("sora runtime execution host", "peer_id", &host.peer_id)
+            }
+            Self::HfModelHost(host) => {
+                validate_soracloud_digest_hash(
+                    "sora runtime execution host",
+                    "placement_id",
+                    host.placement_id,
+                )?;
+                validate_nonblank_field("sora runtime execution host", "peer_id", &host.peer_id)
+            }
+        }
+    }
+    /// Validator account named by this attribution.
+    #[must_use]
+    pub fn validator_account_id(&self) -> &AccountId {
+        match self {
+            Self::InrouReplica(host) => &host.validator_account_id,
+            Self::HfModelHost(host) => &host.validator_account_id,
+        }
     }
 }
 /// Authoritative execution receipt emitted by the generic Soracloud runtime.
@@ -2970,17 +3167,15 @@ pub struct SoraRuntimeReceiptV1 {
     pub result_commitment: Hash,
     /// Certification mode used for the response or audit record.
     pub certified_by: SoraCertifiedResponsePolicyV1,
-    /// Ordered sequence that emitted the receipt.
+    /// Ledger-assigned ordered sequence that emitted the receipt.
+    ///
+    /// A [`crate::isi::soracloud::RecordSoracloudRuntimeReceipt`] submission must set this to zero;
+    /// ledger execution replaces the sentinel with the next authoritative Soracloud sequence
+    /// before validating and persisting the receipt.
     pub emitted_sequence: u64,
-    /// Optional authoritative HF placement that selected the executing host.
+    /// Exact active placement assignment that selected the executing host, when host-attributed.
     #[norito(default)]
-    pub placement_id: Option<Hash>,
-    /// Optional validator account that executed the receipt under the selected placement.
-    #[norito(default)]
-    pub selected_validator_account_id: Option<AccountId>,
-    /// Optional Soracloud peer identifier that executed the receipt under the selected placement.
-    #[norito(default)]
-    pub selected_peer_id: Option<String>,
+    pub execution_host: Option<SoraRuntimeExecutionHostV1>,
     /// Optional mailbox message that triggered the execution.
     #[norito(default)]
     pub mailbox_message_id: Option<Hash>,
@@ -2992,12 +3187,29 @@ pub struct SoraRuntimeReceiptV1 {
     pub checkpoint_artifact_hash: Option<Hash>,
 }
 impl SoraRuntimeReceiptV1 {
-    /// Validate runtime-receipt classification and certification rules.
+    /// Validate a ledger-assigned runtime receipt.
     ///
     /// # Errors
     /// Returns [`SoracloudManifestError`] when schema versions mismatch or
     /// handler-class/certification invariants are violated.
     pub fn validate(&self) -> Result<(), SoracloudManifestError> {
+        self.validate_with_sequence_state(true)
+    }
+    /// Validate a runtime receipt prepared for ledger submission.
+    ///
+    /// Submission receipts carry the zero sequence sentinel. Ledger execution assigns the next
+    /// authoritative sequence while preserving the deterministic receipt identifier.
+    ///
+    /// # Errors
+    /// Returns [`SoracloudManifestError`] when the receipt is malformed or already carries a
+    /// caller-controlled sequence.
+    pub fn validate_submission(&self) -> Result<(), SoracloudManifestError> {
+        self.validate_with_sequence_state(false)
+    }
+    fn validate_with_sequence_state(
+        &self,
+        require_assigned_sequence: bool,
+    ) -> Result<(), SoracloudManifestError> {
         validate_schema_version(
             "sora runtime receipt",
             self.schema_version,
@@ -3019,8 +3231,22 @@ impl SoraRuntimeReceiptV1 {
             "result_commitment",
             self.result_commitment,
         )?;
-        if let Some(placement_id) = self.placement_id {
-            validate_soracloud_digest_hash("sora runtime receipt", "placement_id", placement_id)?;
+        if require_assigned_sequence && self.emitted_sequence == 0 {
+            return Err(invalid_field(
+                "sora runtime receipt",
+                "emitted_sequence",
+                "must be assigned by the ledger before persistence",
+            ));
+        }
+        if !require_assigned_sequence && self.emitted_sequence != 0 {
+            return Err(invalid_field(
+                "sora runtime receipt",
+                "emitted_sequence",
+                "must be zero before ledger submission",
+            ));
+        }
+        if let Some(execution_host) = self.execution_host.as_ref() {
+            execution_host.validate()?;
         }
         if let Some(mailbox_message_id) = self.mailbox_message_id {
             validate_soracloud_digest_hash(
@@ -3042,21 +3268,6 @@ impl SoraRuntimeReceiptV1 {
                 "checkpoint_artifact_hash",
                 checkpoint_artifact_hash,
             )?;
-        }
-        validate_optional_nonempty(
-            "sora runtime receipt",
-            "selected_peer_id",
-            self.selected_peer_id.as_deref(),
-        )?;
-        let placement_field_count = usize::from(self.placement_id.is_some())
-            + usize::from(self.selected_validator_account_id.is_some())
-            + usize::from(self.selected_peer_id.is_some());
-        if placement_field_count != 0 && placement_field_count != 3 {
-            return Err(invalid_field(
-                "sora runtime receipt",
-                "placement_id",
-                "placement attribution must provide placement_id, selected_validator_account_id, and selected_peer_id together",
-            ));
         }
         match self.handler_class {
             SoraServiceHandlerClassV1::Asset | SoraServiceHandlerClassV1::Query => {
@@ -3081,6 +3292,13 @@ impl SoraRuntimeReceiptV1 {
                         "sora runtime receipt",
                         "certified_by",
                         "update/private_update receipts use ordered mailbox execution instead of certified fast-path responses",
+                    ));
+                }
+                if self.mailbox_message_id.is_none() {
+                    return Err(invalid_field(
+                        "sora runtime receipt",
+                        "mailbox_message_id",
+                        "update/private_update receipts must identify the consumed mailbox message",
                     ));
                 }
             }

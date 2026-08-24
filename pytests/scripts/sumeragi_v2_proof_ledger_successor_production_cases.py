@@ -72,6 +72,7 @@ SUCCESSOR_PRODUCTION_SOURCE_FIXTURE_FILES = (
     "crates/iroha_core/src/sumeragi/tests/v2_worker_main_01.rs",
     "crates/iroha_core/src/sumeragi/tests/v2_worker_lifecycle_capacity_cases.rs",
     "crates/iroha_core/src/sumeragi/tests/v2_worker_recovered_lifecycle_output_cases.rs",
+    "crates/iroha_core/src/sumeragi/tests/v2_runner_unsealed_00.rs",
     "crates/iroha_core/src/snapshot.rs",
     "crates/iroha_core/src/state.rs",
     "crates/iroha_core/src/kura.rs",
@@ -79,7 +80,7 @@ SUCCESSOR_PRODUCTION_SOURCE_FIXTURE_FILES = (
 )
 assert len(SUCCESSOR_PRODUCTION_SOURCE_FIXTURE_FILES) == len(
     set(SUCCESSOR_PRODUCTION_SOURCE_FIXTURE_FILES)
-) == 75
+) == 76
 
 
 LIFECYCLE_DECISION_APPLY_LINEAGE_SOURCE_FILES = (
@@ -257,7 +258,7 @@ LIFECYCLE_DECISION_APPLY_LINEAGE_MUTATIONS = (
 )
 assert len(LIFECYCLE_DECISION_APPLY_LINEAGE_MUTATIONS) == len(
     set(LIFECYCLE_DECISION_APPLY_LINEAGE_MUTATIONS)
-) == 21
+) == 22
 
 
 @pytest.mark.parametrize(
@@ -3370,6 +3371,13 @@ SUCCESSOR_PRODUCTION_SOURCE_MAPPING_MUTATIONS = (
         "one-item closed-ingress pending-Kura lifecycle Apply completion turn",
     ),
     (
+        "crates/iroha_core/src/sumeragi/v2_lifecycle_pending_kura.rs",
+        "fn drive_apply_recovery_turn(",
+        "if stage == Stage::ApplicationDispatched =>",
+        "if true =>",
+        "one-item closed-ingress pending-Kura lifecycle Apply completion turn",
+    ),
+    (
         "crates/iroha_core/src/sumeragi/v2_effects.rs",
         "fn prepare_lifecycle_decision_apply_executor_dispatch",
         "prepared.exactly_matches_pending_kura_recovery(",
@@ -3409,7 +3417,7 @@ SUCCESSOR_PRODUCTION_SOURCE_MAPPING_MUTATIONS = (
 
 assert len(SUCCESSOR_PRODUCTION_SOURCE_MAPPING_MUTATIONS) == len(
     set(SUCCESSOR_PRODUCTION_SOURCE_MAPPING_MUTATIONS)
-) == 402
+) == 403
 
 
 @pytest.mark.parametrize(
@@ -3478,6 +3486,42 @@ def test_successor_production_source_mapping_mutations_fail_closed(
         path.write_text(source.replace(successor_reload, "true", 1), encoding="utf-8")
         errors = module._successor_production_source_fidelity_errors(tmp_path)
         assert any(error_fragment in error for error in errors), errors
+
+
+def test_retired_generic_runtime_recovery_symbol_fails_closed(
+    tmp_path: Path,
+) -> None:
+    """PendingKura recovery cannot regain a generic Runtime scheduler owner."""
+
+    module = load_checker()
+    for source_name in SUCCESSOR_PRODUCTION_SOURCE_FIXTURE_FILES:
+        destination = tmp_path / source_name
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(ROOT_DIR / source_name, destination)
+    copy_reviewed_rust_include_components(tmp_path)
+
+    runtime_path = tmp_path / "crates/iroha_core/src/sumeragi/v2_runtime.rs"
+    source = runtime_path.read_text(encoding="utf-8")
+    old = "    /// No live owner was ready.\n    Idle,\n}"
+    new = "    /// No live owner was ready.\n    Idle,\n    RecoveryIdle,\n}"
+    assert source.count(old) == 1
+    baseline_errors = (
+        module._lifecycle_turn_driver_ordinary_ingress_source_fidelity_errors(
+            tmp_path
+        )
+    )
+    diagnostic = "retired generic Runtime recovery symbol RecoveryIdle"
+    assert not any(diagnostic in error for error in baseline_errors)
+
+    runtime_path.write_text(source.replace(old, new, 1), encoding="utf-8")
+    errors = (
+        module._lifecycle_turn_driver_ordinary_ingress_source_fidelity_errors(
+            tmp_path
+        )
+    )
+
+    assert any(diagnostic in error for error in errors), errors
+
 
 def test_replayed_proposal_owner_semantics_survive_digest_refresh(
     tmp_path: Path,

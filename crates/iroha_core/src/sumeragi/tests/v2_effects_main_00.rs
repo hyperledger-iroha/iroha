@@ -186,6 +186,7 @@ struct FakeRuntime {
     terminal_body_candidate_commits: usize,
     external_lifecycle_owners: Vec<RuntimeLifecycleOwner>,
     external_lifecycle_owner_capacity: Option<usize>,
+    live_clocks_armed: bool,
     active_view_producer_retained: bool,
     completed_proposal_fanouts: Vec<(wire::ConsensusRound, RuntimeEffectOwnership)>,
     leader_wire_terminal_batches: VecDeque<Vec<LeaderWireRuntimeTerminal>>,
@@ -319,6 +320,10 @@ impl FakeRuntime {
     }
 }
 impl EffectRuntime for FakeRuntime {
+    fn lifecycle_live_clocks_are_armed(&self) -> bool {
+        self.live_clocks_armed
+    }
+
     fn can_admit_network_message_with_ingress_ownership(
         &self,
         message: &wire::ConsensusMessageV2,

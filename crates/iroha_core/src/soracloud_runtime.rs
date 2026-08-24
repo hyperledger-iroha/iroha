@@ -2,8 +2,10 @@
 use crate::state::WorldReadOnly;
 use iroha_crypto::Hash;
 use iroha_data_model::{
+    account::AccountId,
     isi::InstructionBox,
     name::Name,
+    nexus::{LaneId, staking::PublicLaneValidatorStatus},
     smart_contract::manifest::EntryPointKind,
     soracloud::{
         AGENT_APARTMENT_MANIFEST_VERSION_V1, AgentApartmentManifestV1, AgentToolCapabilityV1,
@@ -14,17 +16,18 @@ use iroha_data_model::{
         SoraCertifiedResponsePolicyV1, SoraConfigExportV1, SoraContainerManifestRefV1,
         SoraContainerManifestV1, SoraContainerRuntimeV1, SoraDeploymentBundleV1,
         SoraHfPlacementHostAssignmentV1, SoraHfPlacementHostRoleV1, SoraHfPlacementHostStatusV1,
-        SoraHfPlacementRecordV1, SoraHfSharedLeaseMemberStatusV1, SoraHfSharedLeaseStatusV1,
-        SoraHfSourceStatusV1, SoraHttpServiceEconomicsV1, SoraInrouGuestIsaV1, SoraInrouGuestOsV1,
-        SoraInrouRuntimeBackendV1, SoraLeaseVolumeKindV1, SoraLifecycleHooksV1,
-        SoraNetworkAllowlistEntryV1, SoraNetworkPolicyV1, SoraPrivateModelArtifactRefV1,
-        SoraPrivateUploadedModelExecutionReceiptV1, SoraResourceLimitsV1, SoraRolloutPolicyV1,
-        SoraRouteTargetV1, SoraRouteVisibilityV1, SoraRuntimeReceiptV1,
-        SoraServiceDeploymentStateV1, SoraServiceExecutionPlaneV1, SoraServiceHandlerClassV1,
-        SoraServiceHandlerV1, SoraServiceHealthStatusV1, SoraServiceLeaseStatusV1,
-        SoraServiceMailboxMessageV1, SoraServiceManifestV1, SoraServiceRuntimeStateV1,
-        SoraStateEncryptionV1, SoraStateMutationOperationV1, SoraTlsModeV1,
-        SoraUploadedModelBundleV1, SoraUploadedModelKeyEncapsulationV1,
+        SoraHfPlacementRecordV1, SoraHfPlacementStatusV1, SoraHfSharedLeaseMemberStatusV1,
+        SoraHfSharedLeaseStatusV1, SoraHfSourceStatusV1, SoraHttpServiceEconomicsV1,
+        SoraInrouGuestIsaV1, SoraInrouGuestOsV1, SoraInrouReplicaPlacementV1,
+        SoraInrouRuntimeBackendV1, SoraInrouServicePlacementRecordV1, SoraLeaseVolumeKindV1,
+        SoraLifecycleHooksV1, SoraNetworkAllowlistEntryV1, SoraNetworkPolicyV1,
+        SoraPrivateModelArtifactRefV1, SoraPrivateUploadedModelExecutionReceiptV1,
+        SoraResourceLimitsV1, SoraRolloutPolicyV1, SoraRouteTargetV1, SoraRouteVisibilityV1,
+        SoraRuntimeReceiptV1, SoraServiceDeploymentStateV1, SoraServiceExecutionPlaneV1,
+        SoraServiceHandlerClassV1, SoraServiceHandlerV1, SoraServiceHealthStatusV1,
+        SoraServiceLeaseStatusV1, SoraServiceMailboxMessageV1, SoraServiceManifestV1,
+        SoraServiceRuntimeStateV1, SoraStateEncryptionV1, SoraStateMutationOperationV1,
+        SoraTlsModeV1, SoraUploadedModelBundleV1, SoraUploadedModelKeyEncapsulationV1,
         SoraUploadedModelKeyWrapAeadV1, SoraUploadedModelRuntimeFormatV1,
     },
     sorafs::pin_registry::StorageClass,
@@ -51,6 +54,408 @@ const HF_GENERATED_MODEL_NAME_ENV: &str = "SORACLOUD_HF_MODEL_NAME";
 const HF_GENERATED_ROUTE_SUFFIX: &str = ".hf.soracloud.internal";
 const HF_GENERATED_ENTRYPOINT_INFER: &str = "infer";
 const HF_GENERATED_ENTRYPOINT_METADATA: &str = "metadata";
+/// Return the greatest authoritative Soracloud sequence visible from committed world state.
+///
+/// Soracloud uses one sequence domain across service and app-infra lifecycle events, training and
+/// model registries, HF shared leases, model-host violations, agent apartments, and runtime
+/// receipts. Read-side lease and lifecycle decisions must therefore observe every sequence-bearing
+/// store, not only the event family owned by their immediate subsystem.
+#[must_use]
+pub fn latest_soracloud_sequence(world: &impl WorldReadOnly) -> u64 {
+    [
+        world
+            .soracloud_service_audit_events()
+            .iter()
+            .map(|(sequence, _event)| *sequence)
+            .max()
+            .unwrap_or(0),
+        world
+            .soracloud_app_infra_audit_events()
+            .iter()
+            .map(|(sequence, _event)| *sequence)
+            .max()
+            .unwrap_or(0),
+        world
+            .soracloud_training_job_audit_events()
+            .iter()
+            .map(|(sequence, _event)| *sequence)
+            .max()
+            .unwrap_or(0),
+        world
+            .soracloud_model_weight_audit_events()
+            .iter()
+            .map(|(sequence, _event)| *sequence)
+            .max()
+            .unwrap_or(0),
+        world
+            .soracloud_model_artifact_audit_events()
+            .iter()
+            .map(|(sequence, _event)| *sequence)
+            .max()
+            .unwrap_or(0),
+        world
+            .soracloud_hf_shared_lease_audit_events()
+            .iter()
+            .map(|(sequence, _event)| *sequence)
+            .max()
+            .unwrap_or(0),
+        world
+            .soracloud_model_host_violation_evidence()
+            .iter()
+            .map(|(_evidence_id, record)| record.sequence)
+            .max()
+            .unwrap_or(0),
+        world
+            .soracloud_agent_apartment_audit_events()
+            .iter()
+            .map(|(sequence, _event)| *sequence)
+            .max()
+            .unwrap_or(0),
+        world
+            .soracloud_private_uploaded_model_execution_receipts()
+            .iter()
+            .map(|(_receipt_id, receipt)| receipt.emitted_sequence)
+            .max()
+            .unwrap_or(0),
+        world
+            .soracloud_mailbox_messages()
+            .iter()
+            .map(|(_message_id, message)| message.enqueue_sequence)
+            .max()
+            .unwrap_or(0),
+        world
+            .soracloud_runtime_receipts()
+            .iter()
+            .map(|(_receipt_id, receipt)| receipt.emitted_sequence)
+            .max()
+            .unwrap_or(0),
+    ]
+    .into_iter()
+    .max()
+    .unwrap_or(0)
+}
+/// Return the next authoritative Soracloud sequence visible from committed world state.
+#[must_use]
+pub fn authoritative_soracloud_sequence(world: &impl WorldReadOnly) -> u64 {
+    latest_soracloud_sequence(world).saturating_add(1)
+}
+/// Return whether an account has an exact, active validator record on an authoritative lane.
+///
+/// Soracloud adverts are only eligibility claims; validator lifecycle state remains the
+/// authoritative admission gate for both placement and request serving.
+#[must_use]
+pub fn soracloud_validator_is_active(
+    world: &impl WorldReadOnly,
+    validator_account_id: &AccountId,
+    lane_is_active_for_authority: impl Fn(LaneId) -> bool,
+) -> bool {
+    world.public_lane_validators().iter().any(|(key, record)| {
+        &key.1 == validator_account_id
+            && crate::state::public_lane_validator_record_matches_key(key, record)
+            && record.status == PublicLaneValidatorStatus::Active
+            && lane_is_active_for_authority(key.0)
+    })
+}
+/// Resolve one authoritative Inrou placement record through its exact active deployment binding.
+///
+/// Missing or inactive state resolves to `None`. Malformed records and cross-keyed authoritative
+/// state are errors so callers can fail closed and reconciliation can repair the row.
+pub fn resolve_active_inrou_placement_record(
+    world: &impl WorldReadOnly,
+    service_name: &str,
+    service_version: &str,
+) -> Result<Option<SoraInrouServicePlacementRecordV1>, String> {
+    let service_name_id = service_name.parse::<Name>().map_err(|error| {
+        format!(
+            "Inrou placement storage key contains invalid service name `{service_name}`: {error}"
+        )
+    })?;
+    let key = (service_name.to_owned(), service_version.to_owned());
+    let Some(record) = world
+        .soracloud_inrou_service_placements()
+        .get(&key)
+        .cloned()
+    else {
+        return Ok(None);
+    };
+    record.validate().map_err(|error| {
+        format!(
+            "Inrou placement for service `{service_name}` revision `{service_version}` is malformed: {error}"
+        )
+    })?;
+    if record.service_name != service_name_id || record.service_version != service_version {
+        return Err(format!(
+            "Inrou placement storage key `{service_name}`/`{service_version}` does not match embedded service `{}` revision `{}`",
+            record.service_name, record.service_version
+        ));
+    }
+
+    let Some(deployment) = world.soracloud_service_deployments().get(&service_name_id) else {
+        return Ok(None);
+    };
+    deployment.validate().map_err(|error| {
+        format!(
+            "Inrou placement for service `{service_name}` revision `{service_version}` references a malformed deployment: {error}"
+        )
+    })?;
+    if deployment.service_name != service_name_id {
+        return Err(format!(
+            "Inrou placement for service `{service_name}` revision `{service_version}` references a deployment whose embedded service is `{}`",
+            deployment.service_name
+        ));
+    }
+    let current_sequence = authoritative_soracloud_sequence(world);
+    if !deployment
+        .hosted_service_lease_active_at(current_sequence)
+        .map_err(|error| {
+            format!(
+                "Inrou placement lifecycle for service `{service_name}` revision `{service_version}` could not be calculated: {error}"
+            )
+        })?
+    {
+        return Ok(None);
+    }
+    if deployment.lease_volume_states.iter().any(|volume| {
+        current_sequence < volume.lease_started_sequence
+            || current_sequence >= volume.lease_expires_sequence
+    }) {
+        return Ok(None);
+    }
+    let version_is_active = deployment.active_rollout.as_ref().map_or_else(
+        || deployment.current_service_version == service_version,
+        |rollout| {
+            rollout.baseline_version == service_version
+                || rollout.candidate_version == service_version
+        },
+    );
+    if !version_is_active {
+        return Ok(None);
+    }
+
+    let Some(bundle) = world.soracloud_service_revisions().get(&key) else {
+        return Err(format!(
+            "active Inrou placement for service `{service_name}` revision `{service_version}` has no admitted deployment bundle"
+        ));
+    };
+    bundle.validate_for_admission().map_err(|error| {
+        format!(
+            "active Inrou placement for service `{service_name}` revision `{service_version}` references a malformed deployment bundle: {error}"
+        )
+    })?;
+    if bundle.service.service_name != service_name_id
+        || bundle.service.service_version != service_version
+    {
+        return Err(format!(
+            "Inrou revision storage key `{service_name}`/`{service_version}` does not match embedded service `{}` revision `{}`",
+            bundle.service.service_name, bundle.service.service_version
+        ));
+    }
+    if bundle.container.runtime != SoraContainerRuntimeV1::Inrou
+        || bundle.service.execution_plane != SoraServiceExecutionPlaneV1::HttpService
+    {
+        return Err(format!(
+            "active Inrou placement for service `{service_name}` revision `{service_version}` is not bound to an Inrou HTTP-service bundle"
+        ));
+    }
+    if record.desired_replica_count != bundle.service.replicas.get() {
+        return Err(format!(
+            "Inrou placement for service `{service_name}` revision `{service_version}` declares {} replicas but the admitted bundle declares {}",
+            record.desired_replica_count,
+            bundle.service.replicas.get()
+        ));
+    }
+    if service_version == deployment.current_service_version
+        && (deployment.current_service_manifest_hash != bundle.service_manifest_hash()
+            || deployment.current_container_manifest_hash != bundle.container_manifest_hash())
+    {
+        return Err(format!(
+            "active Inrou placement for service `{service_name}` revision `{service_version}` does not match the deployment's admitted manifest hashes"
+        ));
+    }
+    Ok(Some(record))
+}
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+struct ActiveInrouReservationUsage {
+    hosted_replicas: u32,
+    cpu_millis: u64,
+    memory_bytes: u64,
+    storage_bytes: u64,
+}
+fn inrou_bundle_per_replica_storage_bytes(bundle: &SoraDeploymentBundleV1) -> Option<u64> {
+    bundle
+        .service
+        .lease_volumes
+        .iter()
+        .filter(|volume| volume.kind.is_per_replica())
+        .try_fold(
+            bundle.container.resources.ephemeral_storage_bytes.get(),
+            |total, volume| total.checked_add(volume.max_total_bytes.get()),
+        )
+}
+fn active_inrou_reservation_usage_by_validator(
+    world: &impl WorldReadOnly,
+) -> Result<BTreeMap<AccountId, ActiveInrouReservationUsage>, String> {
+    let mut usage_by_validator = BTreeMap::new();
+    for ((service_name, service_version), _record) in
+        world.soracloud_inrou_service_placements().iter()
+    {
+        let Some(record) =
+            resolve_active_inrou_placement_record(world, service_name, service_version)?
+        else {
+            continue;
+        };
+        let bundle = world
+            .soracloud_service_revisions()
+            .get(&(
+                service_name.as_str().to_owned(),
+                service_version.as_str().to_owned(),
+            ))
+            .ok_or_else(|| {
+                format!(
+                    "active Inrou placement for service `{service_name}` revision `{service_version}` lost its admitted deployment bundle"
+                )
+            })?;
+        let cpu_millis = u64::from(bundle.container.resources.cpu_millis.get());
+        let memory_bytes = bundle.container.resources.memory_bytes.get();
+        let storage_bytes = inrou_bundle_per_replica_storage_bytes(bundle).ok_or_else(|| {
+            format!(
+                "active Inrou per-replica storage reservation overflows for service `{service_name}` revision `{service_version}`"
+            )
+        })?;
+        for assignment in record.placements {
+            let validator_account_id = assignment.validator_account_id;
+            let usage = usage_by_validator
+                .entry(validator_account_id.clone())
+                .or_insert_with(ActiveInrouReservationUsage::default);
+            usage.hosted_replicas = usage.hosted_replicas.checked_add(1).ok_or_else(|| {
+                format!(
+                    "active Inrou replica reservations overflow for validator `{validator_account_id}`"
+                )
+            })?;
+            usage.cpu_millis = usage.cpu_millis.checked_add(cpu_millis).ok_or_else(|| {
+                format!(
+                    "active Inrou CPU reservations overflow for validator `{validator_account_id}`"
+                )
+            })?;
+            usage.memory_bytes = usage.memory_bytes.checked_add(memory_bytes).ok_or_else(|| {
+                format!(
+                    "active Inrou memory reservations overflow for validator `{validator_account_id}`"
+                )
+            })?;
+            usage.storage_bytes = usage.storage_bytes.checked_add(storage_bytes).ok_or_else(|| {
+                format!(
+                    "active Inrou storage reservations overflow for validator `{validator_account_id}`"
+                )
+            })?;
+        }
+    }
+    Ok(usage_by_validator)
+}
+fn inrou_replica_assignment_has_active_capability(
+    world: &impl WorldReadOnly,
+    bundle: &SoraDeploymentBundleV1,
+    assignment: &SoraInrouReplicaPlacementV1,
+    now_ms: u64,
+    lane_is_active_for_authority: impl Fn(LaneId) -> bool,
+) -> bool {
+    let Some(capability) = world
+        .soracloud_inrou_host_capabilities()
+        .get(&assignment.validator_account_id)
+    else {
+        return false;
+    };
+    let Some(required_storage_bytes) = inrou_bundle_per_replica_storage_bytes(bundle) else {
+        return false;
+    };
+    capability.validate().is_ok()
+        && capability.validator_account_id == assignment.validator_account_id
+        && capability.peer_id == assignment.peer_id
+        && capability.can_host_replicas_at(now_ms)
+        && capability
+            .supported_backends
+            .contains(&assignment.selected_backend)
+        && capability
+            .supported_guest_isas
+            .contains(&assignment.selected_guest_isa)
+        && bundle.container.inrou.as_ref().is_some_and(|inrou| {
+            inrou
+                .guest_images
+                .contains_key(&assignment.selected_guest_isa)
+        })
+        && u64::from(capability.max_cpu_millis)
+            >= u64::from(bundle.container.resources.cpu_millis.get())
+        && capability.max_memory_bytes >= bundle.container.resources.memory_bytes.get()
+        && capability.max_storage_bytes >= required_storage_bytes
+        && soracloud_validator_is_active(
+            world,
+            &assignment.validator_account_id,
+            lane_is_active_for_authority,
+        )
+}
+/// Resolve all exact active replica assignments for an active Inrou placement record.
+pub fn resolve_active_inrou_replica_assignments(
+    world: &impl WorldReadOnly,
+    service_name: &str,
+    service_version: &str,
+    now_ms: u64,
+    lane_is_active_for_authority: impl Fn(LaneId) -> bool,
+) -> Result<Vec<SoraInrouReplicaPlacementV1>, String> {
+    let Some(record) = resolve_active_inrou_placement_record(world, service_name, service_version)?
+    else {
+        return Ok(Vec::new());
+    };
+    let Some(bundle) = world
+        .soracloud_service_revisions()
+        .get(&(service_name.to_owned(), service_version.to_owned()))
+    else {
+        return Err(format!(
+            "active Inrou placement for service `{service_name}` revision `{service_version}` lost its admitted deployment bundle"
+        ));
+    };
+    let reserved_usage = active_inrou_reservation_usage_by_validator(world)?;
+    Ok(record
+        .placements
+        .into_iter()
+        .filter(|assignment| {
+            let aggregate_capacity_matches = world
+                .soracloud_inrou_host_capabilities()
+                .get(&assignment.validator_account_id)
+                .zip(reserved_usage.get(&assignment.validator_account_id))
+                .is_some_and(|(capability, usage)| {
+                    usage.hosted_replicas <= u32::from(capability.max_hosted_replica_capacity)
+                        && usage.cpu_millis <= u64::from(capability.max_cpu_millis)
+                        && usage.memory_bytes <= capability.max_memory_bytes
+                        && usage.storage_bytes <= capability.max_storage_bytes
+                });
+            inrou_replica_assignment_has_active_capability(
+                world,
+                bundle,
+                assignment,
+                now_ms,
+                &lane_is_active_for_authority,
+            ) && aggregate_capacity_matches
+        })
+        .collect())
+}
+/// Resolve one exact active replica-slot assignment for an active Inrou placement record.
+pub fn resolve_active_inrou_replica_assignment(
+    world: &impl WorldReadOnly,
+    service_name: &str,
+    service_version: &str,
+    replica_slot: u16,
+    now_ms: u64,
+    lane_is_active_for_authority: impl Fn(LaneId) -> bool,
+) -> Result<Option<SoraInrouReplicaPlacementV1>, String> {
+    Ok(resolve_active_inrou_replica_assignments(
+        world,
+        service_name,
+        service_version,
+        now_ms,
+        lane_is_active_for_authority,
+    )?
+    .into_iter()
+    .find(|assignment| assignment.replica_slot == replica_slot))
+}
 /// Canonical Hugging Face source markers embedded into generated Soracloud service bundles.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct SoracloudHfGeneratedSourceBinding {
@@ -342,9 +747,11 @@ pub fn resolve_generated_hf_active_placement(
     world: &impl WorldReadOnly,
     service_name: &str,
     source_id: &str,
+    now_ms: u64,
 ) -> Result<Option<SoraHfPlacementRecordV1>, String> {
     let mut matching_pool_ids = BTreeSet::new();
-    for ((_member_pool_id, _account_id), member) in world.soracloud_hf_shared_lease_members().iter()
+    for ((member_pool_id, member_account_id), member) in
+        world.soracloud_hf_shared_lease_members().iter()
     {
         if member.status != SoraHfSharedLeaseMemberStatusV1::Active
             || !member.service_bindings.contains(service_name)
@@ -352,10 +759,34 @@ pub fn resolve_generated_hf_active_placement(
         {
             continue;
         }
+        member.validate().map_err(|error| {
+            format!(
+                "generated HF service `{service_name}` has a malformed active lease member for source `{source_id}`: {error}"
+            )
+        })?;
+        if member_pool_id != &member.pool_id.to_string()
+            || member_account_id != &member.account_id.to_string()
+        {
+            return Err(format!(
+                "generated HF service `{service_name}` has a miskeyed active lease member for source `{source_id}`"
+            ));
+        }
         let Some(pool) = world.soracloud_hf_shared_lease_pools().get(&member.pool_id) else {
             continue;
         };
+        pool.validate().map_err(|error| {
+            format!(
+                "generated HF service `{service_name}` has a malformed active lease pool for source `{source_id}`: {error}"
+            )
+        })?;
+        if pool.pool_id != member.pool_id {
+            return Err(format!(
+                "generated HF service `{service_name}` has a miskeyed active lease pool for source `{source_id}`"
+            ));
+        }
         if pool.source_id == member.source_id
+            && pool.window_started_at_ms <= now_ms
+            && pool.window_expires_at_ms > now_ms
             && matches!(
                 pool.status,
                 SoraHfSharedLeaseStatusV1::Active | SoraHfSharedLeaseStatusV1::Draining
@@ -377,26 +808,95 @@ pub fn resolve_generated_hf_active_placement(
             "generated HF service `{service_name}` is missing an authoritative placement for pool `{pool_id}`"
         ));
     };
+    placement.validate().map_err(|error| {
+        format!(
+            "generated HF service `{service_name}` has a malformed authoritative placement for pool `{pool_id}`: {error}"
+        )
+    })?;
+    if placement.pool_id != pool_id || placement.source_id.to_string() != source_id {
+        return Err(format!(
+            "generated HF service `{service_name}` authoritative placement does not match pool `{pool_id}` and source `{source_id}`"
+        ));
+    }
+    if !matches!(
+        placement.status,
+        SoraHfPlacementStatusV1::Ready | SoraHfPlacementStatusV1::Degraded
+    ) {
+        return Ok(None);
+    }
     Ok(Some(placement))
+}
+/// Return whether an HF placement assignment is backed by the exact active host capability.
+#[must_use]
+pub fn soracloud_hf_placement_assignment_has_active_capability(
+    world: &impl WorldReadOnly,
+    placement: &SoraHfPlacementRecordV1,
+    assignment: &SoraHfPlacementHostAssignmentV1,
+    now_ms: u64,
+    lane_is_active_for_authority: impl Fn(LaneId) -> bool,
+) -> bool {
+    let Some(capability) = world
+        .soracloud_model_host_capabilities()
+        .get(&assignment.validator_account_id)
+    else {
+        return false;
+    };
+    capability.validate().is_ok()
+        && capability.is_active_at(now_ms)
+        && capability.validator_account_id == assignment.validator_account_id
+        && soracloud_validator_is_active(
+            world,
+            &assignment.validator_account_id,
+            lane_is_active_for_authority,
+        )
+        && capability.peer_id == assignment.peer_id
+        && capability.host_class == assignment.host_class
+        && capability
+            .supported_backends
+            .contains(&placement.resource_profile.backend_family)
+        && capability
+            .supported_formats
+            .contains(&placement.resource_profile.model_format)
+        && capability.max_model_bytes >= placement.resource_profile.required_model_bytes
+        && capability.max_disk_cache_bytes >= placement.resource_profile.disk_cache_bytes_floor
+        && capability.max_ram_bytes >= placement.resource_profile.ram_bytes_floor
+        && capability.max_vram_bytes >= placement.resource_profile.vram_bytes_floor
+        && capability.max_concurrent_resident_models > 0
 }
 /// Resolve the current authoritative primary host for a generated HF service.
 pub fn resolve_generated_hf_primary_assignment(
     world: &impl WorldReadOnly,
     service_name: &str,
     source_id: &str,
+    now_ms: u64,
+    lane_is_active_for_authority: impl Fn(LaneId) -> bool,
 ) -> Result<Option<SoraHfPlacementHostAssignmentV1>, String> {
-    let Some(placement) = resolve_generated_hf_active_placement(world, service_name, source_id)?
+    let Some(placement) =
+        resolve_generated_hf_active_placement(world, service_name, source_id, now_ms)?
     else {
         return Ok(None);
     };
-    Ok(placement
+    let Some(assignment) = placement
         .assigned_hosts
         .iter()
         .find(|assignment| {
             assignment.role == SoraHfPlacementHostRoleV1::Primary
                 && assignment.status == SoraHfPlacementHostStatusV1::Warm
         })
-        .cloned())
+        .cloned()
+    else {
+        return Ok(None);
+    };
+    if !soracloud_hf_placement_assignment_has_active_capability(
+        world,
+        &placement,
+        &assignment,
+        now_ms,
+        lane_is_active_for_authority,
+    ) {
+        return Ok(None);
+    }
+    Ok(Some(assignment))
 }
 /// Distinguishes the local runtime role of a materialized service revision.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, JsonSerialize, JsonDeserialize)]
@@ -418,8 +918,8 @@ pub struct SoracloudRuntimeMailboxPlan {
     pub max_pending_messages: u32,
     /// Maximum message size.
     pub max_message_bytes: u64,
-    /// Retention bound for queued messages.
-    pub retention_blocks: u32,
+    /// Retention bound in authoritative Soracloud sequence steps.
+    pub retention_sequences: u32,
 }
 /// Node-local hydration/materialization metadata for a referenced artifact.
 #[derive(Clone, Debug, PartialEq, Eq, JsonSerialize, JsonDeserialize)]
@@ -1115,6 +1615,29 @@ fn private_model_result_commitment(
     append_private_model_commitment_part(&mut transcript, &output_commitment);
     Hash::new(transcript)
 }
+fn private_model_execution_receipt_id(
+    receipt: &SoraPrivateUploadedModelExecutionReceiptV1,
+) -> Hash {
+    let mut transcript = Vec::new();
+    append_private_model_commitment_part(
+        &mut transcript,
+        &"soracloud:private-model-execution-receipt:v1".to_owned(),
+    );
+    append_private_model_commitment_part(&mut transcript, &receipt.service_name);
+    append_private_model_commitment_part(&mut transcript, &receipt.model_id);
+    append_private_model_commitment_part(&mut transcript, &receipt.weight_version);
+    append_private_model_commitment_part(&mut transcript, &receipt.runtime_version);
+    append_private_model_commitment_part(&mut transcript, &receipt.model_manifest_digest);
+    append_private_model_commitment_part(&mut transcript, &receipt.model_bundle_root);
+    append_private_model_commitment_part(&mut transcript, &receipt.policy_id);
+    append_private_model_commitment_part(&mut transcript, &receipt.input_artifact);
+    append_private_model_commitment_part(&mut transcript, &receipt.output_artifact);
+    append_private_model_commitment_part(&mut transcript, &receipt.input_commitment);
+    append_private_model_commitment_part(&mut transcript, &receipt.output_commitment);
+    append_private_model_commitment_part(&mut transcript, &receipt.request_commitment);
+    append_private_model_commitment_part(&mut transcript, &receipt.result_commitment);
+    Hash::new(transcript)
+}
 /// Input envelope for deterministic private uploaded-model execution.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct SoracloudPrivateUploadedModelExecutionRequestV1 {
@@ -1128,8 +1651,6 @@ pub struct SoracloudPrivateUploadedModelExecutionRequestV1 {
     pub input_artifact: SoraPrivateModelArtifactRefV1,
     /// Persisted encrypted output artifact reference.
     pub output_artifact: SoraPrivateModelArtifactRefV1,
-    /// Monotonic Soracloud sequence emitted by the execution path.
-    pub emitted_sequence: u64,
 }
 /// Result emitted by the deterministic private uploaded-model CPU runtime.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -1203,10 +1724,10 @@ pub fn execute_private_uploaded_model_quantized_cpu_v1(
         output_commitment,
         request_commitment,
         result_commitment,
-        emitted_sequence: request.emitted_sequence,
+        emitted_sequence: 0,
     };
-    receipt.receipt_id = Hash::new(receipt.encode());
-    receipt.validate().map_err(|err| {
+    receipt.receipt_id = private_model_execution_receipt_id(&receipt);
+    receipt.validate_submission().map_err(|err| {
         SoracloudRuntimeExecutionError::new(
             SoracloudRuntimeExecutionErrorKind::Internal,
             format!("invalid private uploaded model execution receipt: {err}"),
@@ -1520,10 +2041,15 @@ mod tests {
         domain::DomainId,
         peer::PeerId,
         soracloud::{
-            SORA_HF_PLACEMENT_RECORD_VERSION_V1, SORA_HF_SHARED_LEASE_MEMBER_VERSION_V1,
-            SORA_HF_SHARED_LEASE_POOL_VERSION_V1, SoraHfBackendFamilyV1, SoraHfModelFormatV1,
+            SORA_APP_INFRA_AUDIT_EVENT_VERSION_V1, SORA_HF_PLACEMENT_RECORD_VERSION_V1,
+            SORA_HF_SHARED_LEASE_MEMBER_VERSION_V1, SORA_HF_SHARED_LEASE_POOL_VERSION_V1,
+            SORA_MODEL_HOST_CAPABILITY_RECORD_VERSION_V1,
+            SORA_MODEL_HOST_VIOLATION_EVIDENCE_RECORD_VERSION_V1, SoraAppInfraActionV1,
+            SoraAppInfraAuditEventV1, SoraHfBackendFamilyV1, SoraHfModelFormatV1,
             SoraHfPlacementHostAssignmentV1, SoraHfPlacementStatusV1, SoraHfResourceProfileV1,
-            SoraHfSharedLeaseMemberV1, SoraHfSharedLeasePoolV1,
+            SoraHfSharedLeaseMemberV1, SoraHfSharedLeasePoolV1, SoraModelHostCapabilityRecordV1,
+            SoraModelHostViolationEvidenceRecordV1, SoraModelHostViolationKindV1,
+            SoraServiceMailboxMessageV1,
         },
         sorafs::pin_registry::{ManifestDigest, StorageClass},
     };
@@ -1539,6 +2065,155 @@ mod tests {
     #[test]
     fn checked_keypair_preserves_default_algorithm() {
         assert_eq!(checked_keypair().algorithm(), Algorithm::default());
+    }
+    #[test]
+    fn latest_and_authoritative_sequences_track_cross_domain_events_and_saturate() {
+        let mut world = World::new();
+        assert_eq!(latest_soracloud_sequence(&world.view()), 0);
+        assert_eq!(authoritative_soracloud_sequence(&world.view()), 1);
+
+        let signer = checked_keypair().public_key().clone();
+        world
+            .soracloud_app_infra_audit_events_mut_for_testing()
+            .insert(
+                7,
+                SoraAppInfraAuditEventV1 {
+                    schema_version: SORA_APP_INFRA_AUDIT_EVENT_VERSION_V1,
+                    sequence: 7,
+                    action: SoraAppInfraActionV1::Deploy,
+                    app_name: "sequence_app".parse().expect("valid app name"),
+                    from_version: None,
+                    to_version: "1.0.0".to_owned(),
+                    app_manifest_hash: Hash::new(b"sequence-app-manifest"),
+                    service_count: 1,
+                    signer: signer.clone(),
+                },
+            );
+        assert_eq!(latest_soracloud_sequence(&world.view()), 7);
+        assert_eq!(authoritative_soracloud_sequence(&world.view()), 8);
+
+        let evidence_id = Hash::new(b"sequence-host-violation");
+        world
+            .soracloud_model_host_violation_evidence_mut_for_testing()
+            .insert(
+                evidence_id,
+                SoraModelHostViolationEvidenceRecordV1 {
+                    schema_version: SORA_MODEL_HOST_VIOLATION_EVIDENCE_RECORD_VERSION_V1,
+                    evidence_id,
+                    sequence: 13,
+                    validator_account_id: checked_account_id(),
+                    kind: SoraModelHostViolationKindV1::AdvertContradiction,
+                    placement_id: None,
+                    pool_id: None,
+                    source_id: None,
+                    window_started_at_ms: None,
+                    observed_at_ms: 1,
+                    detail: Some("cross-domain sequence fixture".to_owned()),
+                    strike_count: 1,
+                    penalty_applied: false,
+                    host_evicted: true,
+                    slash_id: None,
+                },
+            );
+        assert_eq!(authoritative_soracloud_sequence(&world.view()), 14);
+
+        let receipt_id = Hash::new(b"sequence-runtime-receipt");
+        world.soracloud_runtime_receipts_mut_for_testing().insert(
+            receipt_id,
+            SoraRuntimeReceiptV1 {
+                schema_version: iroha_data_model::soracloud::SORA_RUNTIME_RECEIPT_VERSION_V1,
+                receipt_id,
+                service_name: "sequence_service".parse().expect("valid service name"),
+                service_version: "1.0.0".to_owned(),
+                handler_name: "query".parse().expect("valid handler name"),
+                handler_class: SoraServiceHandlerClassV1::Query,
+                request_commitment: Hash::new(b"sequence-request"),
+                result_commitment: Hash::new(b"sequence-result"),
+                certified_by: SoraCertifiedResponsePolicyV1::AuditReceipt,
+                emitted_sequence: 21,
+                mailbox_message_id: None,
+                journal_artifact_hash: None,
+                checkpoint_artifact_hash: None,
+                execution_host: None,
+            },
+        );
+        assert_eq!(authoritative_soracloud_sequence(&world.view()), 22);
+
+        let private_bundle = sample_quantized_uploaded_model_bundle();
+        let private_receipt_id = Hash::new(b"sequence-private-runtime-receipt");
+        world
+            .soracloud_private_uploaded_model_execution_receipts_mut_for_testing()
+            .insert(
+                private_receipt_id,
+                SoraPrivateUploadedModelExecutionReceiptV1 {
+                    schema_version:
+                        SORA_PRIVATE_UPLOADED_MODEL_EXECUTION_RECEIPT_VERSION_V1,
+                    receipt_id: private_receipt_id,
+                    service_name: private_bundle.service_name,
+                    model_id: private_bundle.model_id,
+                    weight_version: private_bundle.weight_version,
+                    runtime_version: SORACLOUD_PRIVATE_MODEL_RUNTIME_VERSION_V1.to_owned(),
+                    model_manifest_digest: private_bundle.sorafs_manifest_digest,
+                    model_bundle_root: private_bundle.bundle_root,
+                    policy_id: private_bundle.decryption_policy_ref,
+                    input_artifact: sample_private_model_artifact_ref("input", 0x51),
+                    output_artifact: sample_private_model_artifact_ref("output", 0x52),
+                    input_commitment: Hash::new(b"sequence-private-input"),
+                    output_commitment: Hash::new(b"sequence-private-output"),
+                    request_commitment: Hash::new(b"sequence-private-request"),
+                    result_commitment: Hash::new(b"sequence-private-result"),
+                    emitted_sequence: 34,
+                },
+            );
+        assert_eq!(latest_soracloud_sequence(&world.view()), 34);
+        assert_eq!(authoritative_soracloud_sequence(&world.view()), 35);
+
+        let mailbox_message_id = Hash::new(b"sequence-mailbox-message");
+        world
+            .soracloud_mailbox_messages_mut_for_testing()
+            .insert(
+                mailbox_message_id,
+                SoraServiceMailboxMessageV1 {
+                    schema_version:
+                        iroha_data_model::soracloud::SORA_SERVICE_MAILBOX_MESSAGE_VERSION_V1,
+                    message_id: mailbox_message_id,
+                    from_service: "sequence_source".parse().expect("valid service name"),
+                    from_service_version: "1.0.0".to_string(),
+                    from_handler: "update".parse().expect("valid handler name"),
+                    to_service: "sequence_destination"
+                        .parse()
+                        .expect("valid service name"),
+                    to_service_version: "1.0.0".to_string(),
+                    to_handler: "update".parse().expect("valid handler name"),
+                    payload_bytes: b"sequence-mailbox-payload".to_vec(),
+                    payload_commitment: Hash::new(b"sequence-mailbox-payload"),
+                    delivery_delay_sequences: 0,
+                    enqueue_sequence: 35,
+                    available_after_sequence: 35,
+                    expires_at_sequence: 40,
+                },
+            );
+        assert_eq!(latest_soracloud_sequence(&world.view()), 35);
+        assert_eq!(authoritative_soracloud_sequence(&world.view()), 36);
+
+        world
+            .soracloud_app_infra_audit_events_mut_for_testing()
+            .insert(
+                u64::MAX,
+                SoraAppInfraAuditEventV1 {
+                    schema_version: SORA_APP_INFRA_AUDIT_EVENT_VERSION_V1,
+                    sequence: u64::MAX,
+                    action: SoraAppInfraActionV1::Upgrade,
+                    app_name: "sequence_app".parse().expect("valid app name"),
+                    from_version: Some("1.0.0".to_owned()),
+                    to_version: "2.0.0".to_owned(),
+                    app_manifest_hash: Hash::new(b"terminal-sequence-app-manifest"),
+                    service_count: 1,
+                    signer,
+                },
+            );
+        assert_eq!(latest_soracloud_sequence(&world.view()), u64::MAX);
+        assert_eq!(authoritative_soracloud_sequence(&world.view()), u64::MAX);
     }
     fn sample_private_model_artifact_ref(role: &str, seed: u8) -> SoraPrivateModelArtifactRefV1 {
         SoraPrivateModelArtifactRefV1 {
@@ -1608,6 +2283,25 @@ mod tests {
         let pool_id = Hash::new(b"hf-pool");
         let primary_validator = checked_account_id();
         let member_account = checked_account_id();
+        world.public_lane_validators_mut_for_testing().insert(
+            (
+                iroha_data_model::nexus::LaneId::SINGLE,
+                primary_validator.clone(),
+            ),
+            iroha_data_model::nexus::staking::PublicLaneValidatorRecord {
+                lane_id: iroha_data_model::nexus::LaneId::SINGLE,
+                validator: primary_validator.clone(),
+                peer_id: primary_peer_id.parse().expect("valid primary peer id"),
+                stake_account: primary_validator.clone(),
+                total_stake: Quantity::from(1_u64),
+                self_stake: Quantity::from(1_u64),
+                metadata: iroha_data_model::metadata::Metadata::default(),
+                status: PublicLaneValidatorStatus::Active,
+                activation_epoch: Some(0),
+                activation_height: Some(0),
+                last_reward_epoch: None,
+            },
+        );
         let bundle = build_soracloud_hf_generated_service_bundle(
             service_name.clone(),
             &source_id.to_string(),
@@ -1689,6 +2383,26 @@ mod tests {
                         service_name_string.clone()
                     ]),
                     apartment_bindings: std::collections::BTreeSet::new(),
+                },
+            );
+        world
+            .soracloud_model_host_capabilities_mut_for_testing()
+            .insert(
+                primary_validator.clone(),
+                SoraModelHostCapabilityRecordV1 {
+                    schema_version: SORA_MODEL_HOST_CAPABILITY_RECORD_VERSION_V1,
+                    validator_account_id: primary_validator.clone(),
+                    peer_id: primary_peer_id.to_owned(),
+                    supported_backends: BTreeSet::from([SoraHfBackendFamilyV1::Transformers]),
+                    supported_formats: BTreeSet::from([SoraHfModelFormatV1::Safetensors]),
+                    max_model_bytes: 8 * 1024 * 1024 * 1024,
+                    max_disk_cache_bytes: 32 * 1024 * 1024 * 1024,
+                    max_ram_bytes: 32 * 1024 * 1024 * 1024,
+                    max_vram_bytes: 0,
+                    max_concurrent_resident_models: 2,
+                    host_class: "gpu.large".to_owned(),
+                    advertised_at_ms: 1,
+                    heartbeat_expires_at_ms: u64::MAX,
                 },
             );
         world.soracloud_hf_placements_mut_for_testing().insert(
@@ -1819,13 +2533,299 @@ mod tests {
         let query_handle = LiveQueryStore::start_test();
         let state = State::new_for_testing(world, kura, query_handle);
         let view = state.view();
-        let primary =
-            resolve_generated_hf_primary_assignment(view.world(), &service_name, &source_id)
-                .expect("primary lookup should succeed")
-                .expect("generated service should resolve a primary assignment");
+        let primary = resolve_generated_hf_primary_assignment(
+            view.world(),
+            &service_name,
+            &source_id,
+            1,
+            |lane_id| view.is_lane_active_for_authority(lane_id),
+        )
+        .expect("primary lookup should succeed")
+        .expect("generated service should resolve a primary assignment");
         assert_eq!(primary.peer_id, primary_peer_id);
         assert_eq!(primary.role, SoraHfPlacementHostRoleV1::Primary);
         assert_eq!(primary.status, SoraHfPlacementHostStatusV1::Warm);
+    }
+    #[test]
+    fn resolve_generated_hf_primary_assignment_rejects_non_serving_stale_warm_primary() {
+        let primary_peer_id = checked_peer_id().to_string();
+        for non_serving_status in [
+            SoraHfPlacementStatusV1::Selecting,
+            SoraHfPlacementStatusV1::Warming,
+            SoraHfPlacementStatusV1::Unavailable,
+            SoraHfPlacementStatusV1::Retired,
+        ] {
+            let (mut world, service_name, _service_version, source_id) =
+                seed_generated_hf_world_with_primary(&primary_peer_id);
+            let (pool_id, mut placement) = world
+                .soracloud_hf_placements
+                .view()
+                .iter()
+                .next()
+                .map(|(pool_id, placement)| (*pool_id, placement.clone()))
+                .expect("generated HF placement fixture");
+            placement.status = non_serving_status;
+            assert_eq!(
+                placement.assigned_hosts[0].status,
+                SoraHfPlacementHostStatusV1::Warm,
+                "fixture must retain a stale historical Warm assignment"
+            );
+            world
+                .soracloud_hf_placements_mut_for_testing()
+                .insert(pool_id, placement);
+            let state = State::new_for_testing(
+                world,
+                Kura::blank_kura_for_testing(),
+                LiveQueryStore::start_test(),
+            );
+            let view = state.view();
+            assert!(
+                resolve_generated_hf_primary_assignment(
+                    view.world(),
+                    &service_name,
+                    &source_id,
+                    1,
+                    |lane_id| view.is_lane_active_for_authority(lane_id),
+                )
+                .expect("non-serving placement lookup must fail closed")
+                .is_none(),
+                "a {non_serving_status:?} placement must not route through a stale Warm assignment and live capability"
+            );
+        }
+    }
+    #[test]
+    fn resolve_generated_hf_active_placement_rejects_cross_bound_placement() {
+        let primary_peer_id = checked_peer_id().to_string();
+        for corrupt_source_id in [false, true] {
+            let (mut world, service_name, _service_version, source_id) =
+                seed_generated_hf_world_with_primary(&primary_peer_id);
+            let (pool_id, mut placement) = world
+                .soracloud_hf_placements
+                .view()
+                .iter()
+                .next()
+                .map(|(pool_id, placement)| (*pool_id, placement.clone()))
+                .expect("generated HF placement fixture");
+            if corrupt_source_id {
+                placement.source_id = Hash::new(b"cross-bound-hf-source");
+            } else {
+                placement.pool_id = Hash::new(b"cross-bound-hf-pool");
+            }
+            world
+                .soracloud_hf_placements_mut_for_testing()
+                .insert(pool_id, placement);
+            let state = State::new_for_testing(
+                world,
+                Kura::blank_kura_for_testing(),
+                LiveQueryStore::start_test(),
+            );
+            let view = state.view();
+            let error =
+                resolve_generated_hf_active_placement(view.world(), &service_name, &source_id, 1)
+                    .expect_err("cross-bound authoritative placement must fail closed");
+            assert!(
+                error.contains("does not match pool"),
+                "unexpected error: {error}"
+            );
+        }
+    }
+    #[test]
+    fn resolve_generated_hf_primary_assignment_rejects_stale_mismatched_or_inactive_capability()
+    -> Result<(), String> {
+        let primary_peer_id = checked_peer_id().to_string();
+        let (mut expired_world, service_name, _service_version, source_id) =
+            seed_generated_hf_world_with_primary(&primary_peer_id);
+        let primary_validator = expired_world
+            .soracloud_hf_placements
+            .view()
+            .iter()
+            .next()
+            .and_then(|(_pool_id, placement)| placement.assigned_hosts.first())
+            .map(|assignment| assignment.validator_account_id.clone())
+            .expect("primary validator");
+        let mut expired_capability = expired_world
+            .soracloud_model_host_capabilities
+            .view()
+            .get(&primary_validator)
+            .cloned()
+            .expect("primary capability");
+        expired_capability.heartbeat_expires_at_ms = 10;
+        expired_world
+            .soracloud_model_host_capabilities_mut_for_testing()
+            .insert(primary_validator, expired_capability);
+        let state = State::new_for_testing(
+            expired_world,
+            Kura::blank_kura_for_testing(),
+            LiveQueryStore::start_test(),
+        );
+        let view = state.view();
+        assert!(
+            resolve_generated_hf_primary_assignment(
+                view.world(),
+                &service_name,
+                &source_id,
+                11,
+                |lane_id| view.is_lane_active_for_authority(lane_id),
+            )?
+            .is_none(),
+            "an expired capability must not remain routable through a warm placement"
+        );
+
+        let (mut mismatched_world, service_name, _service_version, source_id) =
+            seed_generated_hf_world_with_primary(&primary_peer_id);
+        let primary_validator = mismatched_world
+            .soracloud_hf_placements
+            .view()
+            .iter()
+            .next()
+            .and_then(|(_pool_id, placement)| placement.assigned_hosts.first())
+            .map(|assignment| assignment.validator_account_id.clone())
+            .expect("primary validator");
+        let mut mismatched_capability = mismatched_world
+            .soracloud_model_host_capabilities
+            .view()
+            .get(&primary_validator)
+            .cloned()
+            .expect("primary capability");
+        mismatched_capability.peer_id = "12D3KooWMismatchedRuntimePeer".to_owned();
+        mismatched_world
+            .soracloud_model_host_capabilities_mut_for_testing()
+            .insert(primary_validator, mismatched_capability);
+        let state = State::new_for_testing(
+            mismatched_world,
+            Kura::blank_kura_for_testing(),
+            LiveQueryStore::start_test(),
+        );
+        let view = state.view();
+        assert!(
+            resolve_generated_hf_primary_assignment(
+                view.world(),
+                &service_name,
+                &source_id,
+                1,
+                |lane_id| view.is_lane_active_for_authority(lane_id),
+            )?
+            .is_none(),
+            "a capability identity mismatch must fail generated-HF routing closed"
+        );
+
+        let (mut malformed_world, service_name, _service_version, source_id) =
+            seed_generated_hf_world_with_primary(&primary_peer_id);
+        let primary_validator = malformed_world
+            .soracloud_hf_placements
+            .view()
+            .iter()
+            .next()
+            .and_then(|(_pool_id, placement)| placement.assigned_hosts.first())
+            .map(|assignment| assignment.validator_account_id.clone())
+            .expect("primary validator");
+        let mut malformed_capability = malformed_world
+            .soracloud_model_host_capabilities
+            .view()
+            .get(&primary_validator)
+            .cloned()
+            .expect("primary capability");
+        malformed_capability.schema_version = 0;
+        malformed_world
+            .soracloud_model_host_capabilities_mut_for_testing()
+            .insert(primary_validator, malformed_capability);
+        let state = State::new_for_testing(
+            malformed_world,
+            Kura::blank_kura_for_testing(),
+            LiveQueryStore::start_test(),
+        );
+        let view = state.view();
+        assert!(
+            resolve_generated_hf_primary_assignment(
+                view.world(),
+                &service_name,
+                &source_id,
+                1,
+                |lane_id| view.is_lane_active_for_authority(lane_id),
+            )?
+            .is_none(),
+            "a malformed capability record must fail generated-HF routing closed"
+        );
+
+        let (mut inactive_world, service_name, _service_version, source_id) =
+            seed_generated_hf_world_with_primary(&primary_peer_id);
+        let primary_validator = inactive_world
+            .soracloud_hf_placements
+            .view()
+            .iter()
+            .next()
+            .and_then(|(_pool_id, placement)| placement.assigned_hosts.first())
+            .map(|assignment| assignment.validator_account_id.clone())
+            .expect("primary validator");
+        let validator_key = (iroha_data_model::nexus::LaneId::SINGLE, primary_validator);
+        let mut validator_record = inactive_world
+            .public_lane_validators
+            .view()
+            .get(&validator_key)
+            .cloned()
+            .expect("primary validator record");
+        validator_record.status = PublicLaneValidatorStatus::Exited;
+        inactive_world
+            .public_lane_validators_mut_for_testing()
+            .insert(validator_key, validator_record);
+        let state = State::new_for_testing(
+            inactive_world,
+            Kura::blank_kura_for_testing(),
+            LiveQueryStore::start_test(),
+        );
+        let view = state.view();
+        assert!(
+            resolve_generated_hf_primary_assignment(
+                view.world(),
+                &service_name,
+                &source_id,
+                1,
+                |lane_id| view.is_lane_active_for_authority(lane_id),
+            )?
+            .is_none(),
+            "an exited validator must stop serving immediately even while its advert TTL is active"
+        );
+
+        let (mut inactive_lane_world, service_name, _service_version, source_id) =
+            seed_generated_hf_world_with_primary(&primary_peer_id);
+        let (validator_key, mut validator_record) = inactive_lane_world
+            .public_lane_validators
+            .view()
+            .iter()
+            .next()
+            .map(|(key, record)| (key.clone(), record.clone()))
+            .expect("primary validator record");
+        let inactive_lane_id = LaneId::new(1);
+        validator_record.lane_id = inactive_lane_id;
+        {
+            let mut validators = inactive_lane_world
+                .public_lane_validators_mut_for_testing()
+                .block();
+            validators.remove(validator_key);
+            validators.insert(
+                (inactive_lane_id, validator_record.validator.clone()),
+                validator_record,
+            );
+            validators.commit();
+        }
+        let state = State::new_for_testing(
+            inactive_lane_world,
+            Kura::blank_kura_for_testing(),
+            LiveQueryStore::start_test(),
+        );
+        let view = state.view();
+        assert!(
+            resolve_generated_hf_primary_assignment(
+                view.world(),
+                &service_name,
+                &source_id,
+                1,
+                |lane_id| view.is_lane_active_for_authority(lane_id),
+            )?
+            .is_none(),
+            "a validator record on an inactive lane must not authorize generated-HF serving"
+        );
+        Ok(())
     }
     #[test]
     fn private_uploaded_model_quantized_cpu_runtime_is_deterministic_and_receipted() {
@@ -1845,7 +2845,6 @@ mod tests {
             plaintext_input_i32: vec![7, -2, 5],
             input_artifact: sample_private_model_artifact_ref("input", 0x11),
             output_artifact: sample_private_model_artifact_ref("output", 0x22),
-            emitted_sequence: 9,
         };
         let first =
             execute_private_uploaded_model_quantized_cpu_v1(&model, request.clone()).expect("run");
@@ -1863,7 +2862,11 @@ mod tests {
             first.receipt.input_commitment,
             first.receipt.output_commitment
         );
-        first.receipt.validate().expect("receipt validates");
+        assert_eq!(first.receipt.emitted_sequence, 0);
+        first
+            .receipt
+            .validate_submission()
+            .expect("runtime receipt is ready for ledger submission");
     }
     #[test]
     fn private_uploaded_model_quantized_cpu_runtime_rejects_wrong_format() {
@@ -1887,7 +2890,6 @@ mod tests {
                 plaintext_input_i32: vec![1],
                 input_artifact: sample_private_model_artifact_ref("input", 0x11),
                 output_artifact: sample_private_model_artifact_ref("output", 0x22),
-                emitted_sequence: 1,
             },
         )
         .expect_err("wrong runtime format must fail closed");

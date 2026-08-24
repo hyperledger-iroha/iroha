@@ -215,7 +215,7 @@ fn require_expected_stock_launcher_unavailable_reason_v1(
 pub(super) mod tests {
     use super::*;
 
-    pub(super) fn reservation_fixture(
+    pub(crate) fn reservation_fixture(
         controller: &KeyPair,
     ) -> iroha_data_model::offline::KagemushaV4PromotionReservationV1 {
         use iroha_crypto::{Hash, HashOf};

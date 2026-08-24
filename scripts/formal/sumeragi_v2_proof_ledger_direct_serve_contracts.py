@@ -238,10 +238,11 @@ def _lifecycle_certified_serve_production_source_fidelity_errors(
         "prepare_and_dispatch_current_certified_serve",
         "current-height Serve lifecycle transaction",
         (
+            "cut.fence_producer_publication_retaining()",
             "prepare_current_certified_serve_pre_admission(",
             "cut.narrow_to_lifecycle(expected_context)",
-            "capture_lifecycle_ingress_selector(lifecycle_cut)",
-            "selector.into_locked_certified_serve_dequeue(receiver, &authenticated)",
+            "capture_fenced_certified_serve_ingress_selector(lifecycle_cut)",
+            "selector.into_locked_certified_serve_dequeue(&authenticated)",
             "capture_lifecycle_certified_serve_capacity(target)",
             "owner.admit_selected_certified_serve",
             "registry.attest_ready_certified_serve_request",
@@ -294,20 +295,23 @@ def _lifecycle_certified_serve_production_source_fidelity_errors(
             "self.close_output_for_restart()",
             "ProductionLifecycleCompletionSelectionV1::RestartRequired",
         ),
-        expected_attributes=("#[cfg_attr(not(test), allow(dead_code))]",),
     )
     sequence(
         "turn",
         "LaunchedProductionLifecycleV1",
-        "drive_ready_completion_turn",
+        "drive_ready_completion_turn_with_required_ordinal",
         "fresh Ready completion dispatch after the Producer eligibility gate",
         (
             "self.owner.classify_completion_ready_work(fence)",
             "ProductionCompletionReadyWorkV1::None",
+            "ProductionCompletionReadyWorkV1::PassThrough",
+            "ProductionCompletionReadyWorkV1::RetainedDirectOutput",
             "ProductionLifecycleCompletionTurnV1::PassThrough(runner)",
             "ProductionCompletionReadyWorkV1::Invalid",
             "self.close_output_for_restart()",
             "ProductionCompletionReadyWorkV1::CompletionIo",
+            "match required_ordinal",
+            "dispatch_completion_requiring_ready_ordinal",
             "dispatch_completion_with_runner_debt",
             "ProductionCompletionReadyWorkV1::RecoveredLifecycleBroadcast",
             "refanout_recovered_lifecycle_signed_broadcast_with_runner_debt",
@@ -317,8 +321,8 @@ def _lifecycle_certified_serve_production_source_fidelity_errors(
     sequence(
         "turn",
         "LaunchedProductionLifecycleV1",
-        "drive_completion_turn",
-        "compatibility-free full Completion turn composition",
+        "drive_completion_turn_for_test",
+        "test-only split Completion turn composition",
         (
             "self.drive_completion_pre_gate(runner, lane_work)",
             "ProductionLifecycleCompletionPreGateV1::Selected(selected)",
@@ -328,8 +332,13 @@ def _lifecycle_certified_serve_production_source_fidelity_errors(
             "ProductionLifecycleCompletionPreGateV1::Ready(ready)",
             "self.drive_ready_completion_turn(ready)",
         ),
-        expected_attributes=("#[cfg_attr(not(test), allow(dead_code))]",),
+        expected_attributes=("#[cfg(test)]",),
     )
+    if rust_items(sources["turn"], "drive_completion_turn"):
+        errors.append(
+            f"{paths['turn']}: superseded production Completion composition "
+            "drive_completion_turn must be absent"
+        )
 
     sequence(
         "worker",
@@ -487,7 +496,7 @@ def _lifecycle_certified_serve_production_source_fidelity_errors(
         (
             "drive_completion_pre_gate(current_turn, lane_work)",
             "PreGate::Ready(ready)",
-            "producer_claim == LifecycleProducerClaimDispositionV1::Eligible",
+            "producer_claim.permits_ready_completion()",
             "drive_ready_completion_turn(ready)",
             "completion_selection_stops_batch(&selected)",
             "return Ok(LifecycleV2IngressDrainDispositionV1::ready(producer_claim))",
@@ -542,7 +551,11 @@ def _lifecycle_certified_serve_production_source_fidelity_errors(
         ("turn", None, "prepare_and_dispatch_current_certified_serve"),
         ("turn", "LaunchedProductionLifecycleV1", "drive_completion_pre_gate"),
         ("turn", "LaunchedProductionLifecycleV1", "drive_ready_completion_turn"),
-        ("turn", "LaunchedProductionLifecycleV1", "drive_completion_turn"),
+        (
+            "turn",
+            "LaunchedProductionLifecycleV1",
+            "drive_ready_completion_turn_with_required_ordinal",
+        ),
         ("worker", "LifecycleCertifiedServeTaskV1", "from_dequeued_parts"),
         ("worker", "LifecycleIoCapacityReservation<'_>", "preflight_lifecycle_certified_serve"),
         ("worker", "LifecycleIoCapacityReservation<'_>", "commit_lifecycle_certified_serve"),
@@ -576,12 +589,6 @@ def _lifecycle_certified_serve_production_source_fidelity_errors(
         sealed_attributes = {
             "projection:super::ProductionLifecycleOwnerV1::settle_certified_serve_worker_completed": (
                 "#[cfg(any(not(test), feature = \"bls\"))]",
-            ),
-            "turn:LaunchedProductionLifecycleV1::drive_completion_turn": (
-                "#[cfg_attr(not(test), allow(dead_code))]",
-            ),
-            "turn:LaunchedProductionLifecycleV1::drive_completion_pre_gate": (
-                "#[cfg_attr(not(test), allow(dead_code))]",
             ),
             "launch:ProductionLifecycleOwnerV1::launch": (
                 "#[allow(clippy::result_large_err)]",

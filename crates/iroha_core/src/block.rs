@@ -4189,7 +4189,8 @@ pub(crate) mod valid {
         state_transaction: &StateTransaction<'_, '_>,
     ) -> Vec<SoraServiceMailboxMessageV1> {
         let execution_sequence =
-            crate::smartcontracts::isi::soracloud::next_soracloud_audit_sequence(state_transaction);
+            crate::smartcontracts::isi::soracloud::next_soracloud_audit_sequence(state_transaction)
+                .expect("test mailbox execution requires an available Soracloud audit sequence");
         let consumed: BTreeSet<Hash> = state_transaction
             .world
             .soracloud_runtime_receipts
@@ -4207,9 +4208,7 @@ pub(crate) mod valid {
                 if message.available_after_sequence > execution_sequence {
                     return None;
                 }
-                if let Some(expires_at) = message.expires_at_sequence
-                    && expires_at <= execution_sequence
-                {
+                if message.expires_at_sequence <= execution_sequence {
                     return None;
                 }
                 Some(message.clone())
@@ -4228,6 +4227,11 @@ pub(crate) mod valid {
         state_transaction: &StateTransaction<'_, '_>,
         service_name: &iroha_data_model::name::Name,
     ) -> u32 {
+        let current_sequence =
+            crate::smartcontracts::isi::soracloud::next_soracloud_audit_sequence(
+                state_transaction,
+            )
+            .unwrap_or(u64::MAX);
         let consumed: BTreeSet<Hash> = state_transaction
             .world
             .soracloud_runtime_receipts
@@ -4240,7 +4244,9 @@ pub(crate) mod valid {
                 .soracloud_mailbox_messages
                 .iter()
                 .filter(|(message_id, message)| {
-                    !consumed.contains(message_id) && message.to_service == *service_name
+                    !consumed.contains(message_id)
+                        && message.to_service == *service_name
+                        && message.expires_at_sequence > current_sequence
                 })
                 .count(),
         )
@@ -4317,9 +4323,7 @@ pub(crate) mod valid {
                 mailbox_message_id: Some(request.mailbox_message.message_id),
                 journal_artifact_hash: None,
                 checkpoint_artifact_hash: None,
-                placement_id: None,
-                selected_validator_account_id: None,
-                selected_peer_id: None,
+                execution_host: None,
             },
         }
     }
@@ -4428,7 +4432,8 @@ pub(crate) mod valid {
                 execution_sequence:
                     crate::smartcontracts::isi::soracloud::next_soracloud_audit_sequence(
                         &state_transaction,
-                    ),
+                    )
+                    .expect("test mailbox execution requires an available Soracloud audit sequence"),
                 deployment,
                 bundle,
                 handler,
@@ -4453,7 +4458,7 @@ pub(crate) mod valid {
                 response_bytes: _response_bytes,
                 content_type: _content_type,
                 runtime_state,
-                runtime_receipt,
+                mut runtime_receipt,
             } = result;
             if let Err(error) = validate_mailbox_runtime_receipt(&request, &runtime_receipt) {
                 warn!(
@@ -4543,6 +4548,7 @@ pub(crate) mod valid {
                 failed = true;
                 break;
             }
+            runtime_receipt.emitted_sequence = 0;
             if let Err(error) =
                 crate::smartcontracts::isi::soracloud::write_soracloud_runtime_receipt(
                     &mut state_transaction,

@@ -13364,10 +13364,14 @@ impl Queue {
                 }
                 GossipEntryState::Committed => {
                     drop(tx_arc);
-                    self.remove_committed_hashes_without_lane_reservation_ownership(
-                        [hash],
-                        backpressure_telemetry,
-                    );
+                    // A globally bound QueuePlan is still an authenticated
+                    // canonical-carrier owner after WSV publication. Gossip
+                    // retires only its own backlog cell; the State/Kura-bound
+                    // all-group cleanup must consume the Queue/FIFO/journal
+                    // owner. Removing it here races that cleanup and leaves a
+                    // raw FIFO tombstone which looks like conflicting live
+                    // ownership on lagging validators.
+                    self.remove_committed_hashes_inner([hash], backpressure_telemetry, true);
                 }
                 GossipEntryState::Other => {}
             }
@@ -18952,21 +18956,6 @@ impl Queue {
         guards.clear();
         Ok(report)
     }
-    /// Remove committed transactions that have no local durable lane-reservation owner.
-    ///
-    /// Canonical autonomous carriers execute on every validator, but only the
-    /// deterministic lane producer moves the selected transaction out of ordinary
-    /// FIFO ownership and into the reservation journal. Replica validators retain
-    /// their ordinary FIFO copy until the carrier commits. This helper consumes that
-    /// replica-side copy while leaving any live reservation, Commit barrier, or
-    /// release barrier untouched for the exact terminal reservation corridor.
-    pub(crate) fn remove_committed_hashes_without_lane_reservation_ownership(
-        &self,
-        hashes: impl IntoIterator<Item = EntrypointHash>,
-        telemetry: Option<&StateTelemetry>,
-    ) -> usize {
-        self.remove_committed_hashes_inner(hashes, telemetry, true)
-    }
     /// Remove committed transactions and their indexed queue metadata by hash.
     #[cfg_attr(not(feature = "telemetry"), allow(unused_variables))]
     pub(crate) fn remove_committed_hashes(
@@ -18981,7 +18970,7 @@ impl Queue {
         &self,
         hashes: impl IntoIterator<Item = EntrypointHash>,
         telemetry: Option<&StateTelemetry>,
-        preserve_lane_reservation_owners: bool,
+        preserve_globally_bound_owners: bool,
     ) -> usize {
         let hashes = hashes.into_iter().collect::<Vec<_>>();
         // A hash being made durable is not yet selectable or externally acknowledged. If a
@@ -19003,13 +18992,12 @@ impl Queue {
             }
             let mut removed_inner = 0usize;
             let mut removals = Vec::new();
-            let lane_reservation_owned_hashes = preserve_lane_reservation_owners
-                .then(|| self.lane_reservations.lock().live_hashes());
             for hash in hashes {
-                if lane_reservation_owned_hashes
-                    .as_ref()
-                    .is_some_and(|owned| owned.contains(&hash))
-                {
+                // Strict QueuePlan publication and this check share the queue
+                // mutation lock. A gossip tick therefore cannot observe an
+                // unbound owner and delete it after a concurrent global claim
+                // becomes durable.
+                if preserve_globally_bound_owners && self.has_globally_bound_durable_claim(hash) {
                     continue;
                 }
                 let stale_fifo_hash_remains = self.queued_tx_enqueued_at_ms.contains_key(&hash);

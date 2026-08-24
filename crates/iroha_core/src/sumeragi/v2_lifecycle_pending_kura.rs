@@ -489,6 +489,11 @@ impl PendingKuraProductionLifecycleV1 {
                                 "recovered Broadcast preceded the exact pending Apply",
                             ));
                         }
+                        super::super::ProductionCompletionReadyWorkV1::RetainedDirectOutput => {
+                            return Err(ProductionPendingKuraApplyRecoveryErrorV1::Lifecycle(
+                                "retained direct output preceded the exact pending Apply",
+                            ));
+                        }
                         super::super::ProductionCompletionReadyWorkV1::PassThrough => {
                             return Err(ProductionPendingKuraApplyRecoveryErrorV1::Lifecycle(
                                 "ordinary Ready work or an active lease preceded the exact pending Apply",

@@ -1232,6 +1232,31 @@ fn exact_authenticated_retransmission_preserves_capacity_fifo_and_cursor() {
     let authenticated = |signature| {
         AuthenticatedConsensusMessage::for_test(wire::ConsensusMessageV2::new(payload(signature)))
     };
+    let authenticated_peer = super::super::authenticated_peer_for_test();
+    let enqueue_authenticated =
+        |ingress: &mut BoundedIngress<AdapterCommand>,
+         tag: EventTag,
+         class: CommandClass,
+         authenticated: AuthenticatedConsensusMessage| {
+            let message = authenticated.wire_envelope_for_test();
+            let mut admitted = super::super::fair_v2_ingress_admit_for_test(
+                super::super::InboundBlockMessage::from_authenticated_peer(
+                    super::super::message::BlockMessage::V2(message.clone()),
+                    authenticated_peer.clone(),
+                ),
+            );
+            let ownership = admitted
+                .take_ingress_ownership()
+                .expect("real test fair ingress produces exact ownership");
+            let ownership = RuntimeIngressOwnershipEvidence::from_fair_ingress(&message, ownership)
+                .expect("same-source runtime ingress projection is exact");
+            ingress.enqueue_authenticated_with_ingress_ownership(
+                tag,
+                class,
+                authenticated,
+                ownership,
+            )
+        };
     let queued_wire = wire::ConsensusMessageV2::new(payload(1));
     let transport = wire::ConsensusMessageV2Payload::PayloadManifest(wire::PayloadManifest {
         round,
@@ -1266,14 +1291,12 @@ fn exact_authenticated_retransmission_preserves_capacity_fifo_and_cursor() {
     ));
     let mut ingress = BoundedIngress::new(RuntimeQueueConfig::new(5, 1, 1));
     assert_eq!(
-        ingress
-            .enqueue_authenticated(tag(0), CommandClass::Normal, authenticated(1))
+        enqueue_authenticated(&mut ingress, tag(0), CommandClass::Normal, authenticated(1),)
             .expect("first wire value enters below the normal boundary"),
         tag(0)
     );
     assert_eq!(
-        ingress
-            .enqueue_authenticated(tag(1), CommandClass::Normal, authenticated(2))
+        enqueue_authenticated(&mut ingress, tag(1), CommandClass::Normal, authenticated(2),)
             .expect("a non-identical wire value uses ordinary capacity"),
         tag(1)
     );
@@ -1288,8 +1311,7 @@ fn exact_authenticated_retransmission_preserves_capacity_fifo_and_cursor() {
         .map(|queued| queued.tag)
         .collect::<Vec<_>>();
     assert_eq!(
-        ingress
-            .enqueue_authenticated(tag(8), CommandClass::Normal, authenticated(1))
+        enqueue_authenticated(&mut ingress, tag(8), CommandClass::Normal, authenticated(1),)
             .expect("an exact duplicate coalesces at reserved capacity"),
         tag(0),
         "coalescing deterministically returns the original admission tag"
@@ -1305,16 +1327,24 @@ fn exact_authenticated_retransmission_preserves_capacity_fifo_and_cursor() {
         "coalescing changes neither FIFO ownership nor its tags"
     );
     assert_eq!(
-        ingress.enqueue_authenticated(tag(9), CommandClass::Normal, authenticated(3)),
+        enqueue_authenticated(&mut ingress, tag(9), CommandClass::Normal, authenticated(3),),
         Err(EnqueueError::ReservedCapacity),
         "a non-identical envelope still obeys the normal boundary"
     );
-    ingress
-        .enqueue_authenticated(tag(2), CommandClass::Progress, authenticated(3))
-        .expect("progress reserve remains independent");
-    ingress
-        .enqueue_authenticated(tag(3), CommandClass::Completion, authenticated(4))
-        .expect("completion reserve fills the final ordinary slot");
+    enqueue_authenticated(
+        &mut ingress,
+        tag(2),
+        CommandClass::Progress,
+        authenticated(3),
+    )
+    .expect("progress reserve remains independent");
+    enqueue_authenticated(
+        &mut ingress,
+        tag(3),
+        CommandClass::Completion,
+        authenticated(4),
+    )
+    .expect("completion reserve fills the final ordinary slot");
     assert_eq!(ingress.len(), 4);
     assert_eq!(
         ingress.check_capacity(CommandClass::Completion),
@@ -1341,9 +1371,13 @@ fn exact_authenticated_retransmission_preserves_capacity_fifo_and_cursor() {
         .map(|queued| queued.tag)
         .collect::<Vec<_>>();
     assert_eq!(
-        ingress
-            .enqueue_authenticated(tag(10), CommandClass::Normal, authenticated(1))
-            .expect("the exact envelope coalesces when every ordinary slot is owned"),
+        enqueue_authenticated(
+            &mut ingress,
+            tag(10),
+            CommandClass::Normal,
+            authenticated(1),
+        )
+        .expect("the exact envelope coalesces when every ordinary slot is owned"),
         tag(0)
     );
     assert_eq!(ingress.next_class, cursor_before);
@@ -1362,7 +1396,12 @@ fn exact_authenticated_retransmission_preserves_capacity_fifo_and_cursor() {
             .all(|queued| queued.eligible_skips == 0)
     );
     assert_eq!(
-        ingress.enqueue_authenticated(tag(11), CommandClass::Progress, authenticated(5)),
+        enqueue_authenticated(
+            &mut ingress,
+            tag(11),
+            CommandClass::Progress,
+            authenticated(5),
+        ),
         Err(EnqueueError::Full),
         "wire inequality cannot inherit the duplicate's full-queue exception"
     );

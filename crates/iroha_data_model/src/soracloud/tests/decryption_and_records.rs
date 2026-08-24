@@ -990,17 +990,91 @@ fn hf_shared_lease_pool_validation_rejects_zero_prehash_digest_sentinels() {
     assert_zero_prehash_digest_error(&error, "source_id");
 }
 #[test]
+fn hf_shared_lease_pool_binds_queued_profile_cap_and_asset() {
+    let mut pool = sample_hf_shared_lease_pool();
+    let resource_profile = sample_hf_resource_profile();
+    let canonical_cap =
+        hf_shared_lease_max_compute_reservation_fee_v1(&resource_profile, pool.lease_term_ms)
+            .expect("canonical compute cap");
+    pool.queued_next_window = Some(SoraHfSharedLeaseQueuedWindowV1 {
+        sponsor_account_id: sample_account_id(0xC3),
+        model_name: "demo_model".to_string(),
+        lease_asset_definition_id: pool.lease_asset_definition_id.clone(),
+        base_fee: xor_quantity_from_nanos(15_000),
+        compute_reservation_cap: canonical_cap,
+        resource_profile,
+        sponsored_at_ms: 20_000,
+        window_started_at_ms: pool.window_expires_at_ms,
+        window_expires_at_ms: pool.window_expires_at_ms.saturating_add(pool.lease_term_ms),
+        service_name: sample_name("demo_service"),
+        apartment_name: Some(sample_name("demo_apartment")),
+    });
+    pool.validate()
+        .expect("canonical queued-window cap and settlement asset are valid");
+    pool.queued_next_window
+        .as_mut()
+        .expect("queued window")
+        .compute_reservation_cap = xor_quantity_from_nanos(7_999);
+    let error = pool
+        .validate()
+        .expect_err("a non-canonical compute cap must fail");
+    assert!(matches!(
+        error,
+        SoracloudManifestError::InvalidField {
+            manifest: "sora hf shared lease pool",
+            field: "queued_next_window.compute_reservation_cap",
+            ..
+        }
+    ));
+
+    let mut pool = sample_hf_shared_lease_pool();
+    let resource_profile = sample_hf_resource_profile();
+    let compute_reservation_cap =
+        hf_shared_lease_max_compute_reservation_fee_v1(&resource_profile, pool.lease_term_ms)
+            .expect("canonical compute cap");
+    pool.queued_next_window = Some(SoraHfSharedLeaseQueuedWindowV1 {
+        sponsor_account_id: sample_account_id(0xC3),
+        model_name: "demo_model".to_string(),
+        lease_asset_definition_id: AssetDefinitionId::from_uuid_bytes([
+            0x66, 0x0e, 0x84, 0x00, 0xe2, 0x9b, 0x41, 0xd4, 0xa7, 0x16, 0x44, 0x66, 0x55, 0x44,
+            0x00, 0x0b,
+        ])
+        .expect("alternate asset definition"),
+        base_fee: xor_quantity_from_nanos(15_000),
+        compute_reservation_cap,
+        resource_profile,
+        sponsored_at_ms: 20_000,
+        window_started_at_ms: pool.window_expires_at_ms,
+        window_expires_at_ms: pool.window_expires_at_ms.saturating_add(pool.lease_term_ms),
+        service_name: sample_name("demo_service"),
+        apartment_name: Some(sample_name("demo_apartment")),
+    });
+    let error = pool
+        .validate()
+        .expect_err("a queued settlement asset mismatch must fail");
+    assert!(matches!(
+        error,
+        SoracloudManifestError::InvalidField {
+            manifest: "sora hf shared lease pool",
+            field: "queued_next_window.lease_asset_definition_id",
+            ..
+        }
+    ));
+}
+#[test]
 fn hf_shared_lease_pool_validation_rejects_misaligned_queued_window() {
     let mut pool = sample_hf_shared_lease_pool();
-    let mut planned_placement = sample_hf_placement_record();
-    planned_placement.total_reservation_fee = xor_quantity_from_nanos(3_000);
+    let resource_profile = sample_hf_resource_profile();
+    let compute_reservation_cap =
+        hf_shared_lease_max_compute_reservation_fee_v1(&resource_profile, pool.lease_term_ms)
+            .expect("canonical compute cap");
     pool.queued_next_window = Some(SoraHfSharedLeaseQueuedWindowV1 {
         sponsor_account_id: sample_account_id(0xC3),
         model_name: "demo_model".to_string(),
         lease_asset_definition_id: sample_asset_definition_id("4cuvDVPuLBKJyN6dPbRQhmLh68sU"),
         base_fee: xor_quantity_from_nanos(15_000),
-        compute_reservation_fee: xor_quantity_from_nanos(3_000),
-        planned_placement,
+        compute_reservation_cap,
+        resource_profile,
         sponsored_at_ms: 20_000,
         window_started_at_ms: pool.window_expires_at_ms.saturating_add(1),
         window_expires_at_ms: pool
@@ -1049,6 +1123,37 @@ fn hf_shared_lease_audit_event_validation_accepts_consistent_state() {
     sample_hf_shared_lease_audit_event()
         .validate()
         .expect("valid shared lease audit event");
+}
+#[test]
+fn hf_shared_lease_audit_event_binds_activation_failure_reason() {
+    let mut event = sample_hf_shared_lease_audit_event();
+    event.action = SoraHfSharedLeaseActionV1::ActivationFailed;
+    let error = event
+        .validate()
+        .expect_err("activation failures require an explicit reason");
+    assert!(matches!(
+        error,
+        SoracloudManifestError::InvalidField {
+            field: "failure_reason",
+            ..
+        }
+    ));
+    event.failure_reason = Some("queued sponsor could not fund compute".to_owned());
+    event
+        .validate()
+        .expect("an activation failure with a reason is valid");
+
+    event.action = SoraHfSharedLeaseActionV1::Activate;
+    let error = event
+        .validate()
+        .expect_err("successful activation must not carry a failure reason");
+    assert!(matches!(
+        error,
+        SoracloudManifestError::InvalidField {
+            field: "failure_reason",
+            ..
+        }
+    ));
 }
 #[test]
 fn hf_shared_lease_audit_event_validation_rejects_zero_prehash_digest_sentinels() {

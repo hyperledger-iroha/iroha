@@ -1126,7 +1126,7 @@ CROSS_TOOL_REFINEMENT_CONTRACTS = (
                     CrossToolLinkedConsumerContract(
                         source="crates/iroha_core/src/sumeragi/v2_effects.rs",
                         item="install_view",
-                        item_token_sha256="d081de0f396bcb685e76d4f6906eff37347ae7da907a699616925deea89af379",
+                        item_token_sha256="09d31e09f4aa305f555b38165e6a27646096c9e2f858c06d3e43191f8d5bbdc8",
                         required_expression="""
                             let stale_body_cleanup =
                                 self.plan_certified_view_body_cleanup(
@@ -1233,19 +1233,6 @@ CROSS_TOOL_REFINEMENT_CONTRACTS = (
                 theorem_projection_builder_return="EffectiveLockTraceProjection",
                 theorem_projection_builder_item_sha256=(
                     "56ac93d71cbda0dd6a1b584062ec64db7bb5ae6fc9ddfb822aea1f7e6edcb4c4"
-                ),
-                source_item_seals=(
-                    CrossToolSourceItemSeal(
-                        source="crates/iroha_core/src/sumeragi/v2_runtime.rs",
-                        item="step_recovery",
-                        item_token_sha256=(
-                            "818947b3b1356bfe825b34f2b4ee35f8293b24d9a12ef21fdd0d4f5d97c4ef0e"
-                        ),
-                        brace_context=((
-                            "impl", "<", "D", ":", "RuntimeDriver", ">",
-                            "SerializedV2Runtime", "<", "D", ">",
-                        ),),
-                    ),
                 ),
                 production_call_sites=(
                     CrossToolProductionCallContract(
@@ -3160,7 +3147,7 @@ _CHECKED_PRODUCTION_TOKEN_DEFINITION_SOURCE = (
     "crates/iroha_core/src/sumeragi/v2_core/refinement/first_release_witness.rs"
 )
 _CHECKED_PRODUCTION_TOKEN_CLOSURE_SHA256 = (
-    "52558a7c6976fc869b1e6214202190ef3eb0111231e8c49d990a7e36fe2c63d7"
+    "a4bf41d3a4389122cad3e4aafa0c86b159ec5cc6ea245756d28ecca446d23819"
 )
 _CHECKED_PRODUCTION_TOKEN_STRUCT_SHA256 = (
     "c79d22d356c0f53aceb7b771cb14660ea68ab6da856d46e186506bb5e570a9aa"

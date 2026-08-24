@@ -1853,8 +1853,8 @@ pub struct SoraMailboxContractV1 {
     pub max_pending_messages: NonZeroU32,
     /// Maximum payload size per message.
     pub max_message_bytes: NonZeroU64,
-    /// Retention bound for queued messages.
-    pub retention_blocks: NonZeroU32,
+    /// Retention bound in authoritative Soracloud sequence steps.
+    pub retention_sequences: NonZeroU32,
 }
 impl SoraMailboxContractV1 {
     /// Validate deterministic mailbox-contract constraints.

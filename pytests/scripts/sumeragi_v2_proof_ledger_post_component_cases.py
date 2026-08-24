@@ -20,6 +20,47 @@ def test_test_only_height_ingress_wrappers_are_not_production_seals() -> None:
     )
 
 
+def test_apply_terminal_direct_broadcast_exact_one_seams_are_source_sealed() -> None:
+    """The move-only authority and both exact settlers fail closed on seal drift."""
+
+    module = load_checker()
+    direct_output_seams = {
+        "height::completion_selection_retries_before_runtime",
+        "scheduler::ProductionLifecycleOwnerV1::wake_apply_terminal_direct_broadcast_if_fenced",
+        "scheduler::ProductionLifecycleOwnerV1::prepare_apply_terminal_direct_broadcast",
+        "registry::PreparedApplyTerminalDirectBroadcastV1",
+        "registry::ConcreteLifecycleWorkRegistry::prepare_apply_terminal_direct_broadcast",
+        "registry::ConcreteLifecycleWorkRegistry::apply_terminal_direct_broadcast_pending_is_exact",
+        "admission::ProductionLifecycleOwnerV1::settle_apply_terminal_direct_broadcast",
+        "effects::V2EffectExecutor::settle_apply_terminal_direct_broadcast",
+    }
+    inventory = module._PRODUCTION_APPLY_TERMINAL_READY_BROADCAST_ITEM_SHA256
+    assert direct_output_seams <= set(inventory)
+    assert (
+        module._lifecycle_turn_driver_ordinary_ingress_source_fidelity_errors(
+            ROOT_DIR
+        )
+        == []
+    )
+
+    stale_digest = "0" * 64
+    for seam in sorted(direct_output_seams):
+        reviewed_digest = inventory[seam]
+        inventory[seam] = stale_digest
+        try:
+            errors = (
+                module._lifecycle_turn_driver_ordinary_ingress_source_fidelity_errors(
+                    ROOT_DIR
+                )
+            )
+        finally:
+            inventory[seam] = reviewed_digest
+        assert any(
+            stale_digest in error and "exact reviewed token digest" in error
+            for error in errors
+        ), (seam, errors)
+
+
 @pytest.mark.parametrize(
     (
         "digest_key",

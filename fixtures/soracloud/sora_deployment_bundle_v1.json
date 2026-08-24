@@ -185,7 +185,7 @@
           "queue_name": "updates",
           "max_pending_messages": 1024,
           "max_message_bytes": 65536,
-          "retention_blocks": 1440
+          "retention_sequences": 1440
         }
       },
       {
@@ -204,7 +204,7 @@
           "queue_name": "private_updates",
           "max_pending_messages": 256,
           "max_message_bytes": 131072,
-          "retention_blocks": 2880
+          "retention_sequences": 2880
         }
       }
     ],

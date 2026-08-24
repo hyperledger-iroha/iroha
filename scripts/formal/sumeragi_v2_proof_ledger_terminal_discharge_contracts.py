@@ -1143,7 +1143,7 @@ def _atomic_timeout_completion_source_fidelity_errors(
 
 _SAME_ROUND_SEMANTIC_KERNEL_SOURCE_SHA256 = {
     "crates/iroha_core/src/sumeragi/v2_core/refinement.rs": (
-        "c0b5ef19fc5daec8d4d314668d33655e66c1dc7b20327f5ccb92ea2ca0b7603e"
+        "57512631a597b550a139e6b45b938dfc1989b46f66f01640f99dab51a805b6f6"
     ),
     "crates/iroha_core/src/sumeragi/v2_core/reducer.rs": (
         "047871a2fbbc08306274a266a0592cae1f2fc360c66ff66f7e08386f1f4cffd2"
@@ -1155,16 +1155,16 @@ _SAME_ROUND_SEMANTIC_KERNEL_SOURCE_SHA256 = {
         "b78fe6b65194ff48919c35f8423f31714fb6da4a172d8a004720e5b23f0b0d50"
     ),
     "crates/iroha_core/src/sumeragi/v2_effects.rs": (
-        "7fef4e6d2624a76f96c3132faa646f82597d1b60ab12d6d7a332eb34a2dc413d"
+        "33007d59cc1c0784e3f45e2aac6967f254296bc4787d6c2f39be807ab7b1e58e"
     ),
     "crates/iroha_core/src/sumeragi/v2_runner.rs": (
-        "093f112f182ade0fecfe6ed51342f4d4ad2558977ac78fafae550b45e06e5ced"
+        "2e4b90347a928d08d95c7416f86f194f06258f5254448ba0d3ad9ee9396ce070"
     ),
     "crates/iroha_core/src/sumeragi/v2_worker.rs": (
-        "b7f8c2c1b36458d844247e4d84f8179d38b0c77bde4d200ad74b9bcb87ea504c"
+        "ea0458b6597de2ecd4394857dd006b8e2dc5bced3d1525958dea84d8b56a13d2"
     ),
     "crates/iroha_sumeragi_core/src/verus_proofs.rs": (
-        "11f0d554e114b832ec31604a6fa3bb78e9ecbc965e0269be1bc5b3548ff8e519"
+        "78ae6f7721048780b66220419c7d59aa7af45ab0e6db62ca6e381e2eea85ea2e"
     ),
 }
 _INSTALLED_TC_SELECTOR_PROOF_SHA256 = (
@@ -1827,6 +1827,13 @@ if decision_round.context_id != self.context.id()
         "durable Decision is outside the frozen height context".to_owned(),
     ));
 }
+let projected_recovered_decision_seal = self
+    .durable_validate_retry_seals
+    .get(&decision_body)
+    .map(|seal| seal.project_recovered_commitment_ceiling(decision_commitment))
+    .transpose()
+    .map_err(EffectExecutorError::Contract)?
+    .flatten();
 match self.protected_decision {
 """,
                 "effect reconciliation must let the first durable Decision supersede any protected Prepare lock",

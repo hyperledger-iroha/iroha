@@ -922,14 +922,17 @@ fn soracloud_runtime_records_are_visible_through_world_view() {
             schema_version: iroha_data_model::soracloud::SORA_SERVICE_MAILBOX_MESSAGE_VERSION_V1,
             message_id: Hash::new(b"message"),
             from_service: service_name.clone(),
+            from_service_version: "1.0.0".to_string(),
             from_handler: "query".parse().expect("valid name"),
             to_service: service_name.clone(),
+            to_service_version: "1.0.0".to_string(),
             to_handler: "query".parse().expect("valid name"),
             payload_bytes: b"payload".to_vec(),
             payload_commitment: Hash::new(b"payload"),
+            delivery_delay_sequences: 0,
             enqueue_sequence: 4,
             available_after_sequence: 4,
-            expires_at_sequence: Some(8),
+            expires_at_sequence: 8,
         },
     );
     world.soracloud_runtime_receipts_mut_for_testing().insert(
@@ -948,9 +951,7 @@ fn soracloud_runtime_records_are_visible_through_world_view() {
             mailbox_message_id: None,
             journal_artifact_hash: None,
             checkpoint_artifact_hash: None,
-            placement_id: None,
-            selected_validator_account_id: None,
-            selected_peer_id: None,
+            execution_host: None,
         },
     );
     let view = world.view();

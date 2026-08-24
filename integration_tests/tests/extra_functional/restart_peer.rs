@@ -29,11 +29,12 @@ use iroha::{
             SoraPrivateUploadedModelExecutionReceiptV1, SoraResourceLimitsV1, SoraRolloutPolicyV1,
             SoraRouteTargetV1, SoraRouteVisibilityV1, SoraServiceExecutionPlaneV1,
             SoraServiceHandlerClassV1, SoraServiceHandlerV1, SoraServiceManifestV1,
-            SoraStateBindingV1, SoraStateEncryptionV1, SoraStateMutabilityV1, SoraStateScopeV1,
-            SoraTlsModeV1, SoraUploadedModelBundleV1, SoraUploadedModelEncryptionRecipientV1,
-            SoraUploadedModelKeyEncapsulationV1, SoraUploadedModelKeyWrapAeadV1,
-            SoraUploadedModelPricingPolicyV1, SoraUploadedModelRuntimeFormatV1,
-            SoraUploadedModelWrappedKeyV1, encode_bundle_with_materials_provenance_payload,
+            SoraServiceMutationPreconditionV1, SoraStateBindingV1, SoraStateEncryptionV1,
+            SoraStateMutabilityV1, SoraStateScopeV1, SoraTlsModeV1, SoraUploadedModelBundleV1,
+            SoraUploadedModelEncryptionRecipientV1, SoraUploadedModelKeyEncapsulationV1,
+            SoraUploadedModelKeyWrapAeadV1, SoraUploadedModelPricingPolicyV1,
+            SoraUploadedModelRuntimeFormatV1, SoraUploadedModelWrappedKeyV1,
+            encode_bundle_with_materials_provenance_payload,
             encode_uploaded_model_bundle_register_provenance_payload,
             encode_uploaded_model_finalize_provenance_payload,
         },
@@ -92,7 +93,6 @@ struct PrivateUploadedModelExecuteRequestForTest {
     plaintext_input_i32: Vec<i32>,
     input_artifact: SoraPrivateModelArtifactRefV1,
     output_artifact: SoraPrivateModelArtifactRefV1,
-    emitted_sequence: u64,
 }
 fn with_soracloud_private_runtime_bootstrap(mut builder: NetworkBuilder) -> NetworkBuilder {
     for instruction in sorafs_pin_fee_bootstrap_instructions() {
@@ -250,6 +250,7 @@ fn soracloud_service_bundle_provenance(
         bundle,
         &BTreeMap::new(),
         &BTreeMap::new(),
+        &SoraServiceMutationPreconditionV1::ServiceAbsent,
     )?;
     Ok(ManifestProvenance {
         signer: ALICE_KEYPAIR.public_key().clone(),
@@ -381,7 +382,6 @@ fn private_uploaded_model_execute_request(
         plaintext_input_i32: vec![5, -3],
         input_artifact,
         output_artifact,
-        emitted_sequence: 17,
     }
 }
 #[tokio::test]
@@ -953,6 +953,7 @@ async fn soracloud_private_uploaded_model_receipt_survives_four_peer_restart() -
             bundle: service_bundle.clone(),
             initial_service_configs: BTreeMap::new(),
             initial_service_secrets: BTreeMap::new(),
+            precondition: SoraServiceMutationPreconditionV1::ServiceAbsent,
             provenance: soracloud_service_bundle_provenance(&service_bundle)?,
         }
         .into(),
@@ -1032,8 +1033,8 @@ async fn soracloud_private_uploaded_model_receipt_survives_four_peer_restart() -
     );
     let receipt = post_private_uploaded_model_execute(&network.client(), &execute_request).await?;
     receipt
-        .validate()
-        .map_err(|err| eyre!("private uploaded-model receipt did not validate: {err}"))?;
+        .validate_submission()
+        .map_err(|err| eyre!("private uploaded-model receipt submission did not validate: {err}"))?;
     assert_eq!(receipt.service_name, uploaded_bundle.service_name);
     assert_eq!(receipt.model_id, uploaded_bundle.model_id);
     assert_eq!(receipt.weight_version, uploaded_bundle.weight_version);
@@ -1069,7 +1070,13 @@ async fn soracloud_private_uploaded_model_receipt_survives_four_peer_restart() -
         network.sync_timeout(),
     )
     .await?;
-    assert_eq!(committed, receipt);
+    assert!(committed.emitted_sequence > 0);
+    committed
+        .validate()
+        .map_err(|err| eyre!("committed private receipt did not validate: {err}"))?;
+    let mut expected_persisted_receipt = receipt.clone();
+    expected_persisted_receipt.emitted_sequence = committed.emitted_sequence;
+    assert_eq!(committed, expected_persisted_receipt);
     network.shutdown().await;
     for peer in network.peers() {
         remove_optional_recovery_sidecars(&peer.kura_store_dir())?;
@@ -1093,7 +1100,7 @@ async fn soracloud_private_uploaded_model_receipt_survives_four_peer_restart() -
         .await?;
         assert_eq!(
             restored,
-            receipt,
+            expected_persisted_receipt,
             "restarted peer {} rebuilt a different Soracloud private receipt",
             peer.id()
         );

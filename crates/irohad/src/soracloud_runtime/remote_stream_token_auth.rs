@@ -273,9 +273,9 @@ mod tests {
         let consumer_label = String::from("sora-production");
         let provider_label = consumer_label.clone();
         assert_eq!(consumer_label, provider_label);
-        let network_id = network_id(b"remote-stream-token-genesis-a");
+        let bound_network_id = network_id(b"remote-stream-token-genesis-a");
         let foreign_network_id = network_id(b"remote-stream-token-genesis-b");
-        let operator = RemoteStreamTokenOperator::new(key_pair(), network_id);
+        let operator = RemoteStreamTokenOperator::new(key_pair(), bound_network_id.clone());
         let request = request(Some(&operator))?;
         let body = request
             .body()
@@ -283,17 +283,22 @@ mod tests {
             .expect("in-memory request body");
         let uri: iroha_torii::Uri = STREAM_TOKEN_PATH.parse()?;
         let wrong_uri: iroha_torii::Uri = "/v1/sorafs/storage/token/other".parse()?;
-        assert!(signature_verifies(&request, &network_id, &uri, body));
+        assert!(signature_verifies(&request, &bound_network_id, &uri, body));
         assert!(!signature_verifies(
             &request,
             &foreign_network_id,
             &uri,
             body
         ));
-        assert!(!signature_verifies(&request, &network_id, &wrong_uri, body));
         assert!(!signature_verifies(
             &request,
-            &network_id,
+            &bound_network_id,
+            &wrong_uri,
+            body
+        ));
+        assert!(!signature_verifies(
+            &request,
+            &bound_network_id,
             &uri,
             br#"{"manifest_id_hex":"substituted"}"#,
         ));

@@ -697,17 +697,39 @@ match owner.coordinator.complete_durable_validate_dispatch(
         "crates/iroha_core/src/sumeragi/v2_lifecycle_turn_driver.rs",
         """
 DurableValidateCompletionPublication::PublishedValidated(
-    _,
-)
-| crate::sumeragi::v2_lifecycle_coordinator::DurableValidateCompletionPublication::PublishedRejected(
-    _,
-),
-) => {
+    published,
+)) => {
+    let ordinal = published.lifecycle_ordinal();
+    assert!(pending_lifecycle_completion.is_none());
+    *pending_lifecycle_completion = Some(
+        PendingLifecycleCompletionV1::ReadyValidateSuccessor(
+            ReadyValidateSuccessorV1::from_validated(published),
+        ),
+    );
     ack.acknowledge_after_publication();
-    ProductionLifecycleCompletionSelectionV1::LifecycleValidatePublished
+    ProductionLifecycleCompletionSelectionV1::LifecycleValidatePublished { ordinal }
 }
 """,
-        "the exact guarded Validate owner must retire only after publication",
+        "a validated owner must install its exact durable successor before retiring the guard",
+    )
+    require_sequence(
+        "crates/iroha_core/src/sumeragi/v2_lifecycle_turn_driver.rs",
+        """
+DurableValidateCompletionPublication::PublishedRejected(
+    published,
+)) => {
+    let ordinal = published.lifecycle_ordinal();
+    assert!(pending_lifecycle_completion.is_none());
+    *pending_lifecycle_completion = Some(
+        PendingLifecycleCompletionV1::ReadyValidateSuccessor(
+            ReadyValidateSuccessorV1::from_rejected(published),
+        ),
+    );
+    ack.acknowledge_after_publication();
+    ProductionLifecycleCompletionSelectionV1::LifecycleValidatePublished { ordinal }
+}
+""",
+        "a rejected owner must install its exact durable successor before retiring the guard",
     )
     require_sequence(
         "crates/iroha_core/src/sumeragi/v2_lifecycle_turn_driver.rs",
@@ -775,20 +797,9 @@ if lease
         "rejected Validate must carry its pre-reserved report output before execution",
     )
     require_sequence(
-        "crates/iroha_core/src/sumeragi/v2_lifecycle_work_registry_validate_recovery_registry_impl.rs",
+        "crates/iroha_core/src/sumeragi/v2_lifecycle_work_registry_validate_recovery_census_impl.rs",
         """
-coordinator
-    .durable_records
-    .get(&ordinal)
-    .is_none_or(|metadata| {
-        !metadata.replay_authority.structurally_matches_record(
-            coordinator.active_context,
-            record.key,
-            record.work_class,
-            record.stage,
-            metadata.payload,
-        )
-    })
+|| !candidate.replay_authority_is_exact(coordinator.active_context)
 """,
         "restart coverage must reject any row without exact durable replay authority",
     )

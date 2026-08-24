@@ -1575,6 +1575,24 @@ enum LifecycleDecisionApplyStatusPublicationV1 {
     DeferUntilPendingKuraActivation,
 }
 
+/// Settle an applied live Decision Apply completion through the production status cut.
+#[cfg(test)]
+pub(in crate::sumeragi) fn settle_applied_lifecycle_decision_apply_completion_for_test(
+    owner: &mut ProductionLifecycleOwnerV1,
+    executor: &mut V2EffectExecutor<SerializedV2Runtime>,
+    completion: PreparedLifecycleDecisionApplyCompletionV1,
+) -> Result<
+    ProductionLifecycleDecisionApplyCompletionV1,
+    ProductionLifecycleDecisionApplyCompletionErrorV1,
+> {
+    settle_applied_lifecycle_decision_apply_completion_with_status(
+        owner,
+        executor,
+        completion,
+        LifecycleDecisionApplyStatusPublicationV1::PublishActiveHeight,
+    )
+}
+
 fn settle_applied_lifecycle_decision_apply_completion_with_status(
     owner: &mut ProductionLifecycleOwnerV1,
     executor: &mut V2EffectExecutor<SerializedV2Runtime>,

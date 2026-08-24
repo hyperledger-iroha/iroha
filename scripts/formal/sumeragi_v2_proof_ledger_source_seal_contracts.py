@@ -781,6 +781,7 @@ _REVIEWED_RUST_INCLUDE_MANIFESTS = {
         'state/restored_staking_owner_tests.rs',
         'state/confidential_policy_transition_index_tests.rs',
         'state/passive_lane_diagnostic_methods.rs',
+        'state/runtime_configuration.rs',
         'state/lane_lifecycle_support.rs',
         'state/diagnostic_state_generation.rs',
         'state/autonomous_predecessor_application.rs',
@@ -799,6 +800,13 @@ _REVIEWED_RUST_INCLUDE_MANIFESTS = {
     ),
     'crates/iroha_core/src/sumeragi/evidence.rs': (
         'evidence/missing_signer_pop_test.rs',
+    ),
+    'crates/iroha_core/src/sumeragi/serviced_candidate_store.rs': (
+        'serviced_candidate_store_cases.rs',
+    ),
+    'crates/iroha_core/src/sumeragi/serviced_candidate_store_cases.rs': (
+        'serviced_candidate_store/body_terminal_recovery_tests.rs',
+        'serviced_candidate_store_tail_tests.rs',
     ),
     'crates/iroha_p2p/src/network.rs': (
         'network/handle_update_tests.rs',
@@ -825,6 +833,7 @@ _REVIEWED_RUST_INCLUDE_MANIFESTS = {
         'main/startup_tail_tests.rs',
     ),
     'crates/iroha_core/src/sumeragi/mod.rs': (
+        'fair_v2_ingress_leader_wire_identity.rs',
         'fair_v2_ingress_selector.rs',
         'tests/queue_plan_admission_handoff.rs',
         'tests/mod_authoritative_runtime_gate_01_support.rs',
@@ -842,6 +851,8 @@ _REVIEWED_RUST_INCLUDE_MANIFESTS = {
         'status/test_guards.rs',
     ),
     'crates/iroha_core/src/sumeragi/v2.rs': (
+        'v2_adapter_persistence_and_wal_types.rs',
+        'v2_recovered_decision_validate_adapter_startup.rs',
         'v2_authenticated_recovered_adapter_startup_impl.rs',
         'v2_verified_height_context_recovered_output_auth.rs',
         'v2_adapter_equivocation_evidence.rs',
@@ -864,6 +875,10 @@ _REVIEWED_RUST_INCLUDE_MANIFESTS = {
     'crates/iroha_core/src/sumeragi/v2_lifecycle_launch.rs': (
         'v2_lifecycle_launch_tests.rs',
     ),
+    'crates/iroha_core/src/sumeragi/v2_lifecycle_launch_tests.rs': (
+        'v2_lifecycle_launch_recovered_fetch_source_tests.rs',
+        'v2_lifecycle_launch_recovered_fetch_settlement_source_tests.rs',
+    ),
     'crates/iroha_core/src/sumeragi/v2_lifecycle_ledger.rs': (
         'v2_lifecycle_ledger_operations.rs',
         'v2_lifecycle_ledger_store.rs',
@@ -878,9 +893,11 @@ _REVIEWED_RUST_INCLUDE_MANIFESTS = {
         'tests/v2_lifecycle_projection_cases.rs',
     ),
     'crates/iroha_core/src/sumeragi/v2_lifecycle_scheduler_inputs.rs': (
+        'tests/v2_lifecycle_scheduler_completion_cases.rs',
         'tests/v2_lifecycle_scheduler_certified_serve_cases.rs',
     ),
     'crates/iroha_core/src/sumeragi/v2_lifecycle_replay_authority.rs': (
+        'v2_lifecycle_replay_authority_recovered_decision_validate.rs',
         'v2_lifecycle_replay_authority_live_wal.rs',
         'v2_lifecycle_replay_authority_certified_serve.rs',
         'v2_lifecycle_replay_authority_certified_body.rs',
@@ -894,12 +911,14 @@ _REVIEWED_RUST_INCLUDE_MANIFESTS = {
         'v2_lifecycle_work_registry_validate_recovery_parent.rs',
     ),
     'crates/iroha_core/src/sumeragi/v2_lifecycle_work_registry_validate_recovery_registry_impl.rs': (
+        'v2_lifecycle_work_registry_validate_recovery_census_impl.rs',
         'v2_lifecycle_work_registry_validate_recovery_registry_tail_impl.rs',
         'v2_lifecycle_work_registry_validate_completion_impl.rs',
         'v2_lifecycle_work_registry_access_impl.rs',
         'v2_lifecycle_work_registry_validate_recovery_execution_impl.rs',
     ),
     'crates/iroha_core/src/sumeragi/v2_lifecycle_work_registry.rs': (
+        'v2_lifecycle_work_registry_body_validate_carriers.rs',
         'v2_lifecycle_work_registry_pre_admission.rs',
         'v2_lifecycle_work_registry_live_wal_sign.rs',
         'v2_lifecycle_work_registry_output.rs',
@@ -919,10 +938,15 @@ _REVIEWED_RUST_INCLUDE_MANIFESTS = {
         'tests/v2_lifecycle_work_registry_recovery_surface_cases.rs',
         'tests/v2_lifecycle_work_registry_replay_evidence_cases.rs',
     ),
+    'crates/iroha_core/src/sumeragi/tests/v2_lifecycle_work_registry_validate_dispatch_execution_cases.rs': (
+        'v2_lifecycle_work_registry_validate_apply_cases.rs',
+        'v2_lifecycle_work_registry_validate_completion_cases.rs',
+    ),
     'crates/iroha_core/src/sumeragi/v2_lifecycle_work_registry_recovered_wal.rs': (
         'v2_lifecycle_work_registry_recovered_wal_persisted_ledger_impl.rs',
     ),
     'crates/iroha_core/src/sumeragi/v2_runtime.rs': (
+        'v2_runtime_lifecycle_ordinal_source.rs',
         'v2_runtime_durable_recovery_pending.rs',
         'v2_runtime_effect_ownership_core_impl.rs',
         'v2_runtime_effect_ownership_rebind_impl.rs',
@@ -955,6 +979,7 @@ _REVIEWED_RUST_INCLUDE_MANIFESTS = {
         'tests/v2_worker_main_02.rs',
         'tests/v2_worker_main_04.rs',
         'tests/v2_worker_main_05.rs',
+        'tests/v2_worker_kagemusha_runtime_gate.rs',
     ),
     'crates/iroha_core/src/sumeragi/v2_worker_io_execution.rs': (
         'v2_worker/exact_output_rollover_claim.rs',
@@ -966,7 +991,9 @@ _REVIEWED_RUST_INCLUDE_MANIFESTS = {
         'v2_worker/kura_replica_advert_refresh.rs',
     ),
     'crates/iroha_core/src/sumeragi/v2_worker_services_impl.rs': (
+        'v2_worker/pending_kura_apply_io_snapshot.rs',
         'v2_worker/current_lane_output_rollover_claim.rs',
+        'v2_worker/production_services_drop_impl.rs',
         'v2_worker/effect_services_impl.rs',
     ),
     'crates/iroha_core/src/sumeragi/v2_runner.rs': (
@@ -999,6 +1026,7 @@ _REVIEWED_RUST_INCLUDE_MANIFESTS = {
         'reducer/counterfeit_boundary_capability_test.rs',
     ),
     'crates/iroha_core/src/sumeragi/v2_core/refinement.rs': (
+        'refinement/leader_wire_admission_trace_projection.rs',
         'refinement/first_release_witness.rs',
         'refinement/volatile_summary_well_formed.rs',
         'refinement/post_carrier_transition.rs',
@@ -1017,8 +1045,11 @@ _REVIEWED_RUST_INCLUDE_MANIFESTS = {
         'tests/v2_core_terminal_transactionality.rs',
     ),
     'crates/iroha_core/src/sumeragi/v2_effects.rs': (
+        'v2_effects_recovered_fetch_and_pipeline_types.rs',
         'v2_effects_recovered_lifecycle_output_service.rs',
         'v2_effects_lifecycle_admission_settlement.rs',
+        'v2_effects_runner_decision_cleanup_plan.rs',
+        'v2_effects_test_consumer_wrappers.rs',
         'tests/v2_effects_main_00.rs',
         'tests/v2_effects_main_01.rs',
         'tests/v2_effects_main_02.rs',
@@ -1574,7 +1605,7 @@ _PRODUCTION_CAUSAL_FIFO_RUST_ITEM_SHA256 = {
         "45b2891248d62b2a998ebcaf2e29d35bfeb1687a8869a0b27776904ee6b3f778"
     ),
     "freeze_due_clock_owners": (
-        "86b2abb4734419e69faafa8bd5fd0473626fb2441b94469a81a448e5f661c76e"
+        "d1c028eb58483adffe8eb1415b431d3f031714167535af7382d3ee39b5cf4027"
     ),
     "validate_clock_owner_physical_cuts": (
         "0c32bff217ddf2b631eba89320a3b6fad6dda20830ed9e0ed7778ab47d2185d6"
@@ -1610,9 +1641,6 @@ _PRODUCTION_CAUSAL_FIFO_RUST_ITEM_SHA256 = {
         "ca2db5b8e601e556e10001d3c0a6be5b18dd1cd1f92e5eecf0273fe158fb232d"
     ),
     "runtime_step": "aaa41e0366ae660537780528c97e763e8f292e9a80234c21d4cc37a390eea414",
-    "runtime_step_recovery": (
-        "818947b3b1356bfe825b34f2b4ee35f8293b24d9a12ef21fdd0d4f5d97c4ef0e"
-    ),
     "dispatch_one_adapter_deferred": (
         "a4c901cdd676731f6cfd3c4dcb52718df366f65bc7ca5e8d1a54a841ec30cdab"
     ),
@@ -1739,7 +1767,7 @@ _PRODUCTION_CAUSAL_FIFO_NONFORGEABLE_ITEM_SHA256 = {
         "355052d58f6acbf00d4c7164d0e54a3e13044a087150cd4d56643110f2d51ed6"
     ),
     "scheduler_evidence_validate_exact": (
-        "04da1f906e4e197bad4e49e962a92ae7d99c2749f6aecfdfe28f256c4426a188"
+        "2fb71fb9e5d2e5c2714a9ecabb0a44a67bdaf3b361c6f543c596720852e3c249"
     ),
     "adapter_pacemaker_escape_is_parked": (
         "5513bb3477396c268d3dc7ed75ded1d6c027bc5780c5f129b53920720c498d86"
@@ -1945,13 +1973,13 @@ _TIMEOUT_VOTE_EPISODE_RUST_ITEM_SHA256 = {
         "091f57ccb6adaafd50864565891f636b364658cb8ed70cc5254d521901779a82"
     ),
     "ingress::try_recv_if_checked_retiring_obsolete": (
-        "302a0eeb2fe71397da4eefd0141eeca02b3f0087e508d7dfe94d2d7c4da9c5bb"
+        "005b9b5d1759840f0b68cc2b933c124309a69ac0522dc95ccd3a63ce33c25aa5"
     ),
     "ingress::try_recv_if_at_checked": (
-        "7b3b4b907715d56dba2dcc36dee64db07ef61cd7a456d039e24146cf4d60d20d"
+        "73722eaedc36f6ef5265f77198fb95ea520b686ea71406cca9326a8376c2c13b"
     ),
     "ingress::try_recv_if_at_checked_classified": (
-        "5f6184b1089ce6fee2ccb7f1ad8dadc5d47b8b017dfec383f7211eaec6fe9060"
+        "ca657eaedc48fdfdf96aeca1558d4b17774762c22fd0cd7e8cce82270aff5487"
     ),
     "runtime::RuntimeTimeoutVoteEpisodeOwner::validate_against": (
         "fb2a98e36b7014a4199ae78eda34119f69cec26fc25fff2d4ce5758f41d74777"
@@ -2435,7 +2463,7 @@ _EFFECT_CAPACITY_LIFECYCLE_RUST_ITEM_SHA256 = {
         "be3ae121e9728b1bf3e49e1f290e08f8ed9f09c310e5e510adf7b5aac7e792a9"
     ),
     "install_view": (
-        "d081de0f396bcb685e76d4f6906eff37347ae7da907a699616925deea89af379"
+        "09d31e09f4aa305f555b38165e6a27646096c9e2f858c06d3e43191f8d5bbdc8"
     ),
     "commit_fetch_completion": (
         "872cb0844dd0e1eb96ab8122b75f5cf9d4cc837f15581f07f81e02ea516fcab0"
@@ -2481,10 +2509,10 @@ _LOCKED_COMMIT_PROGRESS_WITNESS_HELPER_SHA256 = {
 _PRODUCTION_LIVENESS_RELEASE_COUNT = 864
 _PRODUCTION_LIVENESS_RELEASE_CORRIDOR_LEG_COUNT = 84
 _PRODUCTION_LIVENESS_RELEASE_INVENTORY_SHA256 = (
-    "a7364ee89cfab31a3a48d13e7f74b6e353bc34871619da907200b84cdf482a07"
+    "331123d12b08027a9ac0ed0157ed84007eac5a8659b1995bf4c77c3eedb231c2"
 )
 _PRODUCTION_LIVENESS_INVENTORY_GUARD_SHA256 = (
-    "cd8ff3e24c006a404d0a05d1696557ff92909fb96676851b59647ac48965a295"
+    "69d53011718b53968649ac86dd5d77fc29e5e89b69776225bdd5e4b66ecde307"
 )
 _SUMERAGI_V2_PACKAGE_LAYOUT_GUARD_SHA256 = (
     "e99da2c824b86930b76c741d2f7aa47ab16092c2f84e43550fb6362a36133268"
@@ -2925,12 +2953,11 @@ _PRODUCTION_LIVENESS_NEW_REGRESSIONS = (
     "sumeragi::v2::tests::deferred_service_evidence_rejects_every_owner_and_rank_mutation",
     "sumeragi::v2::tests::deferred_zero_ordinal_is_exact_single_use_and_never_reminted",
     "sumeragi::v2_effects::tests::live_runtime_step_rejects_missing_scheduler_ownership_before_callbacks",
-    "sumeragi::v2_effects::tests::recovery_runtime_step_rejects_invalid_scheduler_ownership_before_callbacks",
     "sumeragi::v2_lane_work::tests::durable_lane_certificate_coalescing_preserves_alternate_ingress_owners",
     "sumeragi::v2_runtime::tests::adapter_command_identity_is_derived_from_exact_immutable_payload",
     "sumeragi::v2_runtime::tests::admission_ordinal_exhaustion_fails_runtime_closed",
     "sumeragi::v2_runtime::tests::runtime_rejects_replayed_foreign_and_mutated_deferred_tokens",
-    "sumeragi::v2_runtime::tests::scheduler_owner_carrier_covers_live_recovery_and_typed_deferred_branches",
+    "sumeragi::v2_runtime::tests::scheduler_owner_carrier_covers_live_and_typed_deferred_branches",
     "sumeragi::v2_runtime::tests::scheduler_owner_carrier_pins_exact_fifo_identity_and_rank_fields",
     "sumeragi::v2_runtime::tests::scheduler_owner_must_be_taken_before_a_later_step_can_enter",
     "sumeragi::v2_runtime::tests::selected_owner_without_a_runtime_minted_ordinal_fails_closed",
@@ -3217,7 +3244,7 @@ _PRODUCTION_RETAINED_EFFECT_FIFO_ITEM_SHA256 = {
         "95f2f1c852290fd5037f6b88797e6c15982672bffb1a635a18a683e285e2caf1"
     ),
     "plan_runner_decision_cleanup": (
-        "6c51a655bc569b9e6a4c4087d52e1348a38503d516d65d1f5d221f892351c9b9"
+        "03094a082a2ba665c7cc655dd4fdcd68e98d4ec0499f7e127d8f16ad7d4455c5"
     ),
     "acknowledge_runner_decision_cleanup": (
         "d0a366f336e417fd1fcaecd51cfc8500f11878417f969ee97c6e2affbac545d2"
@@ -3740,7 +3767,7 @@ _PRODUCTION_LIFECYCLE_EXACT_OUTPUT_ITEM_SHA256 = {
     "ordinary_loop": "fe38b2b2ab597569383e9b693deabb75346eee956713ec26e3c5174eca38f767",
     "pending_loop": "520469f9f7c3a23d8915e5aa63e32c459bc8e7b069e796f527540b082741ba38",
     "ordinary_finalize": "05a36cb47c73bd91e88590bfed1eb0f078a5c75915a5f314497fb89f352aa041",
-    "ordinary_active": "b31b841989c9debadd4df0b1c646ce8d14e4e3a0d22446e9986a091bd7c3038d",
+    "ordinary_active": "4d1c7cb3ef26735bfefbeef2d8b44da64d52965418d6d876f8f404174ffa0acb",
     "pending_active": "a1b420e97ed6b0026d1f76c8faa5ee6d217e15fefeb7ee1e06eaaf6856093d6c",
 }
 _PRODUCTION_ORDINARY_INGRESS_CONSUMER_ITEM_SHA256 = "32e0bf9fb84c2f4ef83672eb6ee22ee14c0d89052cfcbb391cc10226730bb210"
@@ -3768,10 +3795,10 @@ _LIFECYCLE_CERTIFIED_SERVE_ITEM_SHA256 = {
     "registry:ConcreteLifecycleWorkRegistry::project_claimed_certified_serve_dispatch": "985dcb45690f99cde6bc2b07703e9c2cf915ceb1abb43b99710e8be71c4f5f26",
     "scheduler:CertifiedServeSchedulerObservationV1::from_live_cuts": "886ef927aff3c6f8ae8577bb1bcb729f4058b48f20df6c5fbf1c3773c43b3d4f",
     "scheduler:claim_certified_serve_turn_v1": "93578174a9077b0cda5510e9f763b416731fd5bcae84fcc3c124949c8a3535d1",
-    "turn:prepare_and_dispatch_current_certified_serve": "0830d824705ce2267f39960b0ad9ab552413d6b5613a845abfccdd7e09ff3988",
-    "turn:LaunchedProductionLifecycleV1::drive_completion_pre_gate": "6f52d5f3a8f9a75b1997a0ba5e333322528a8ef47270de7306019ba52aa26d66",
-    "turn:LaunchedProductionLifecycleV1::drive_ready_completion_turn": "d06433320e8a677bb1139f67da937b65d645f02c9a5aeb6fca5679ad603727b0",
-    "turn:LaunchedProductionLifecycleV1::drive_completion_turn": "7ca0b1da70431c09a45682449db54d2fe752d62dbfde87ad8bfe28eadd91d15d",
+    "turn:prepare_and_dispatch_current_certified_serve": "46c5d50370203b3e8cf81f37651da7610edadd11b6368ea03e8d36a46a5062d6",
+    "turn:LaunchedProductionLifecycleV1::drive_completion_pre_gate": "aa3fc3f5004c108b142df2fb92abdd47af5cb220bfdab36d2eb5d93a63ac5466",
+    "turn:LaunchedProductionLifecycleV1::drive_ready_completion_turn": "e11420f7da18a84d52f0ff8e7f38ac86edba92e98c5a75038a08d2783cfcddec",
+    "turn:LaunchedProductionLifecycleV1::drive_ready_completion_turn_with_required_ordinal": "80684a81b81aee02838428aace8d22dc66cc309e5eeaf1697e096c620ea60be8",
     "worker:LifecycleCertifiedServeTaskV1::from_dequeued_parts": "2fd97e5ef2efa718390f2b3aee03c357aae44562682f85288d973a4739e7cc7d",
     "worker:LifecycleIoCapacityReservation<'_>::preflight_lifecycle_certified_serve": "698cf37eefa08f22e3fc49a3bba6e04fce8c4e031e94ba6922cde786ce78556c",
     "worker:LifecycleIoCapacityReservation<'_>::commit_lifecycle_certified_serve": "f1edcfbd0f5c22919a05212cf7de00e5f914d551ca86f6b5b6156dc254e3d3f9",
@@ -3781,9 +3808,9 @@ _LIFECYCLE_CERTIFIED_SERVE_ITEM_SHA256 = {
     "body_store:V2BodyStore::read_durable_body_for_certified_serve": "c3e4d12afaa3f18ad1d5b0865eb3a54f4ad892eff4449b9d9d5b72bfd8f26c87",
     "projection:super::ProductionLifecycleOwnerV1::settle_certified_serve_worker_completed": "77930bc25fa0078aba267238ba1f3e8016eaa28f9a2d3aa58b4199c3f3333d10",
     "projection:super::ProductionLifecycleOwnerV1::settle_producer_turn_advanced": "d15b6ada19aa19ddd64ce9a23ca4ec06518cb4eb99cfe386976f7f85bc6f3917",
-    "ordinary:run_lifecycle_active_height": "b31b841989c9debadd4df0b1c646ce8d14e4e3a0d22446e9986a091bd7c3038d",
+    "ordinary:run_lifecycle_active_height": "4d1c7cb3ef26735bfefbeef2d8b44da64d52965418d6d876f8f404174ffa0acb",
     "pending:run_pending_active_height": "a1b420e97ed6b0026d1f76c8faa5ee6d217e15fefeb7ee1e06eaaf6856093d6c",
-    "height:drain_lifecycle_v2_ingress": "4470158942921ed2d8eb896129fa13f3689e8b6b39449fb9c6957d4d56386cd3",
+    "height:drain_lifecycle_v2_ingress": "7362a85fc7855d7794d41fd099087a0fcfc1337b16cabbdee71bf38dde71e19b",
     "launch:ProductionLeaderWireIngressBindingV1::bind": "a2c191a1ada7ec3b3dd00c36c4f495b1ed6c06e2527b2ca9e68b3729f8071f81",
     "launch:ProductionLeaderWireIngressBindingV1::retire": "b2aca6532fa807ad78a8cbd4d202152209c53dd5dd8c5a4fd5bba45f7df18c4d",
     "launch:ProductionLifecycleOwnerV1::launch": "93b7ee656bf767b3e41bb2a6d4436a770bccbe8b7c7f41155a2ab4fa76188f88",
@@ -3801,14 +3828,23 @@ _LEADER_WIRE_PHYSICAL_INGRESS_REGRESSION_TEST_SHA256 = {
 }
 
 _LEADER_WIRE_PHYSICAL_INGRESS_ITEM_SHA256 = {
+    "FairV2IngressCheckedSelectionScope": (
+        "55e89301fa99df237f13dcc8f81d8279c4cc2ccf856922698bae7b315bd0c57c"
+    ),
+    "is_lifecycle_lane_local": (
+        "e567836e91e1df241c9d1480ef3c5c29a862fcdc7e1d9a1b856b9a2ec1355f52"
+    ),
+    "try_recv_lifecycle_lane_local_checked": (
+        "a9002be83f47a532e07cb873352ade6d5e5a455ee191fbb8f1a6e7f317d34311"
+    ),
     "fair_v2_ingress_admit_leader_wire": (
-        "bda06e6c542397e50d18cde8fd85fb568e619de471719967a594cfbdfc850350"
+        "baaa66eb2c3508f15281f706ad1e2529904430781ebc574a420cce723a9c4b4e"
     ),
     "try_recv_if_at_checked": (
-        "7b3b4b907715d56dba2dcc36dee64db07ef61cd7a456d039e24146cf4d60d20d"
+        "73722eaedc36f6ef5265f77198fb95ea520b686ea71406cca9326a8376c2c13b"
     ),
     "try_recv_if_at_checked_classified": (
-        "5f6184b1089ce6fee2ccb7f1ad8dadc5d47b8b017dfec383f7211eaec6fe9060"
+        "ca657eaedc48fdfdf96aeca1558d4b17774762c22fd0cd7e8cce82270aff5487"
     ),
     "fair_v2_ingress_leader_wire_selector_projection": (
         "08ce0575f38ec671cff556b343d981536dd24fb5bc6c49874b76508cd9cd8104"
@@ -4149,7 +4185,9 @@ _PRODUCTION_LANE_ROLLOVER_AUTHORITY_ITEM_SHA256 = {
     ),
 }
 _PRODUCTION_EXACT_OUTPUT_RUNNER_ITEM_SHA256 = {
-    "authorize_decided_lane_recovery_drain": "f62eb9f1b38234b28765dafe591bd22098ae66267c90060a812ef37910cbf2eb",
+    "authorize_decided_lane_recovery_drain": "d8560f22aa7e0ad56cab370f00531d3338f22bafbc564e73ae8e727086d4f556",
+    "select_blocked_ordinary_lane_local_ingress": "cf0b52b8280f229dae97589635f302efc2699477e95fc8655514193d193af94f",
+    "drain_blocked_ordinary_lane_local_ingress": "1de13949d673c50dd194f206714564252fb428e43a12cf68eb8f50d24304928f",
     "preflight_finalized_lane_rollover": (
         "883edeefab8ca2ed10e688c58e591949a044e6098b960d6bcf16f1858e42d6ec"
     ),
@@ -4163,6 +4201,57 @@ _PRODUCTION_EXACT_OUTPUT_RUNNER_ITEM_SHA256 = {
     "drain_finalized_lane_work_output": "fe49593396950970f1e2dd67261c2d50c6374db5ce80114b0caebc8cee266f97",
     "dispatch_lane_work_effect": "a49cda3f020e0f2f577bdbd7e1c8e9b17fa529290a9115755c5665713973c278",
     "dispatch_lane_work_effect_from_snapshot": "20b07ac620f07eca9a61e14f198473a5beb9fdf77bf5222d34f0d7338791ec47",
+}
+
+_PRODUCTION_BLOCKED_ORDINARY_LANE_LOCAL_HEIGHT_ITEM_SHA256 = {
+    "LifecycleBlockedOrdinaryLaneLocalIngressPermitV1": (
+        "8fcb9016d28cc3b21d599d115f45bed1af0097ddde5b114b8317964f95f03d90"
+    ),
+    "blocked_ordinary_lane_local_ingress_permit": (
+        "282616f61a21ea25d33711d6cc35e48e009243dbfd6e6c5a8bf12aeacec081bf"
+    ),
+}
+
+_PRODUCTION_APPLY_TERMINAL_READY_BROADCAST_ITEM_SHA256 = {
+    "height::LifecycleApplyTerminalReadyBroadcastPermitV1": (
+        "3eebd86775aaeac2ad4a4b82a0f86f12ca62e9dc443d361886efa7c020dbbd3e"
+    ),
+    "height::apply_terminal_ready_broadcast_permit": (
+        "bf62c9bf3986e68d4cc6b0151a82ca02ac2a40e05050926c879d9b33e8eb5d8d"
+    ),
+    "height::completion_selection_retries_before_runtime": (
+        "3552e37e1b7ac66be3289e3f66affefd661fd2613c4d892f14a8c826c42825ec"
+    ),
+    "driver::classify_apply_terminal_ready_work": (
+        "44735b2ca2fafa13b5e80b0e909f733dfc96217c0fe101e802e21b9f06befa93"
+    ),
+    "driver::LaunchedProductionLifecycleV1::drive_apply_terminal_ready_broadcast_turn": (
+        "f29600918001515fbeb98d0361ea268712e2c2d6da5bb09d00aa9519603feac7"
+    ),
+    "driver::ActivatedProductionLifecycleV1::drive_apply_terminal_ready_broadcast_turn": (
+        "e799a2ad631f9fc19dcc398f818895694349c7c3f3db4190fdd67832eb1d34a6"
+    ),
+    "scheduler::ProductionLifecycleOwnerV1::prepare_apply_terminal_direct_broadcast": (
+        "1763107673fecdfaff74edb1ab0bf7487093ef8181a91455546e18b61471a99d"
+    ),
+    "scheduler::ProductionLifecycleOwnerV1::wake_apply_terminal_direct_broadcast_if_fenced": (
+        "3ab6946b9d5e91dee03fa1ec6e4aaa0784539609d8508eef477c0d16af3f7b39"
+    ),
+    "registry::PreparedApplyTerminalDirectBroadcastV1": (
+        "3c8b749af4c1acfdc5c515ba25ddb0bd9e6d90508d4ec92f21e227c541d1c56d"
+    ),
+    "registry::ConcreteLifecycleWorkRegistry::prepare_apply_terminal_direct_broadcast": (
+        "9b424cfcdfdd440ccfea0211adcc3677d12098dc2d04657a2bdd3877d8084237"
+    ),
+    "registry::ConcreteLifecycleWorkRegistry::apply_terminal_direct_broadcast_pending_is_exact": (
+        "b8655e67ff593a5c73b1a0264e341ff4ec58dea11fa63ebbb7a6d8f6dd829f34"
+    ),
+    "admission::ProductionLifecycleOwnerV1::settle_apply_terminal_direct_broadcast": (
+        "3225baa482525897247541b84e14644ef34b81984195a1976c28c58561c38b1c"
+    ),
+    "effects::V2EffectExecutor::settle_apply_terminal_direct_broadcast": (
+        "0e65eb068829c5257f158a5b2941183b4709e8c88130f63ac9bda0e84ffc9b32"
+    ),
 }
 
 # Canonical post-dequeue ownership moved into one first-release module shared

@@ -1268,6 +1268,38 @@ impl RecoveredStandaloneValidateReplayEvidenceV1 {
         })
     }
 }
+impl RecoveredDecisionValidateReplayEvidenceV1 {
+    fn exactly_matches_validate_pending(
+        &self,
+        effect: &AdapterEffect,
+        receipt: &DurableBodyReceipt,
+        pending: &PendingRuntimeEffectBinding,
+    ) -> bool {
+        self.validate_pending.exactly_matches(effect, pending)
+            && self
+                .lineage
+                .is_stage_closed(replay_context(receipt.round()))
+            && recovered_decision_validate_stage_matches(
+                &self.lineage.body.source,
+                self.lineage.body.body_frame,
+                effect,
+                receipt,
+            )
+    }
+
+    fn exactly_matches_durable_body(&self, receipt: &DurableBodyReceipt) -> bool {
+        recovered_decision_validate_effect(&self.lineage.body.source).is_some_and(|effect| {
+            self.lineage
+                .is_stage_closed(replay_context(receipt.round()))
+                && recovered_decision_validate_stage_matches(
+                    &self.lineage.body.source,
+                    self.lineage.body.body_frame,
+                    &effect,
+                    receipt,
+                )
+        })
+    }
+}
 impl RecoveredStandaloneValidateSourceV1 {
     /// Return whether this recovered source requires the private genesis body-store policy.
     pub(super) fn requires_genesis_authority_body_store(&self) -> bool {
@@ -1307,6 +1339,15 @@ fn standalone_origin_manifest(
         BodyPipelineOriginV1::Certified { manifest, .. } => Some(manifest),
         BodyPipelineOriginV1::RecoveredDecision { .. } => None,
     }
+}
+
+fn recovered_decision_origin_manifest(
+    source: &BodyPipelineReplaySourceV1,
+) -> Option<&wire::PayloadManifest> {
+    let BodyPipelineOriginV1::RecoveredDecision { manifest, .. } = &source.origin else {
+        return None;
+    };
+    Some(manifest)
 }
 
 fn authenticated_genesis_standalone_source(
@@ -1390,6 +1431,20 @@ fn standalone_validate_effect(source: &BodyPipelineReplaySourceV1) -> Option<Ada
         subject: manifest.subject,
     })
 }
+fn recovered_decision_validate_effect(
+    source: &BodyPipelineReplaySourceV1,
+) -> Option<AdapterEffect> {
+    let manifest = recovered_decision_origin_manifest(source)?;
+    Some(AdapterEffect::ValidateBody {
+        tag: EventTag::new(
+            source.tag.height,
+            source.tag.view,
+            crate::sumeragi::v2_core::Generation::new(source.tag.generation),
+        ),
+        round: manifest.round,
+        subject: manifest.subject,
+    })
+}
 fn standalone_validate_stage_matches(
     source: &BodyPipelineReplaySourceV1,
     body_frame: BodyFrameBindingV1,
@@ -1397,6 +1452,40 @@ fn standalone_validate_stage_matches(
     receipt: &DurableBodyReceipt,
 ) -> bool {
     let Some(manifest) = standalone_origin_manifest(source) else {
+        return false;
+    };
+    let AdapterEffect::ValidateBody {
+        tag,
+        round,
+        subject,
+    } = effect
+    else {
+        return false;
+    };
+    let context = replay_context(*round);
+    source.tag == ReplayEventTagV1::new(tag.height(), tag.view(), tag.generation().get())
+        && *round == manifest.round
+        && *subject == manifest.subject
+        && receipt.context_id() == round.context_id
+        && receipt.round() == *round
+        && receipt.subject() == *subject
+        && receipt.manifest_hash() == HashOf::new(manifest)
+        && durable_body_frame_reference(context, receipt) == Some(body_frame.durable_reference())
+        && canonical_replay_authority(
+            context,
+            LifecycleReplaySourceV1::BodyPipeline(source.clone()),
+            LifecycleStageKind::ValidateBody,
+            ReplayPayloadBindingV1::BodyFrame(body_frame),
+        )
+        .is_some()
+}
+fn recovered_decision_validate_stage_matches(
+    source: &BodyPipelineReplaySourceV1,
+    body_frame: BodyFrameBindingV1,
+    effect: &AdapterEffect,
+    receipt: &DurableBodyReceipt,
+) -> bool {
+    let Some(manifest) = recovered_decision_origin_manifest(source) else {
         return false;
     };
     let AdapterEffect::ValidateBody {
@@ -1441,6 +1530,10 @@ impl DurableValidateReplayEvidenceV1 {
             Self::RemoteProposal(evidence) => (&evidence.family.source, evidence.family.body_frame),
             Self::LocalBody(evidence) => evidence.family.source_and_frame(),
             Self::RecoveredStandalone(evidence) => (&evidence.source, evidence.body_frame),
+            Self::RecoveredDecision(evidence) => (
+                &evidence.lineage.body.source,
+                evidence.lineage.body.body_frame,
+            ),
         };
         body_stage_matches_recovered_record(
             source,
@@ -1470,6 +1563,49 @@ impl DurableValidateReplayEvidenceV1 {
     }
     fn recovered_standalone(evidence: RecoveredStandaloneValidateReplayEvidenceV1) -> Self {
         Self::RecoveredStandalone(evidence)
+    }
+    /// Retain only the inert recovered-Decision replay identity for a registry seal.
+    pub(super) fn seal_recovered_decision_registry_evidence(
+        &self,
+    ) -> Option<RecoveredDecisionValidateReplayEvidenceV1> {
+        match self {
+            Self::RecoveredDecision(evidence) => Some(evidence.clone()),
+            Self::Certified(_)
+            | Self::RemoteProposal(_)
+            | Self::LocalBody(_)
+            | Self::RecoveredStandalone(_) => None,
+        }
+    }
+    /// Compare two Validate replay carriers only within the recovered-Decision family.
+    pub(super) fn same_recovered_decision_registry_evidence(&self, other: &Self) -> bool {
+        matches!(
+            (self, other),
+            (Self::RecoveredDecision(left), Self::RecoveredDecision(right)) if left == right
+        )
+    }
+    /// Compare an installed Validate carrier with one inert recovered-Decision seal.
+    pub(super) fn matches_recovered_decision_registry_evidence(
+        &self,
+        expected: &RecoveredDecisionValidateReplayEvidenceV1,
+    ) -> bool {
+        matches!(self, Self::RecoveredDecision(evidence) if evidence == expected)
+    }
+    /// Reproject and compare the exact recovered-Decision Validate candidate.
+    ///
+    /// This comparison-only oracle releases no candidate or runtime owner and
+    /// is used before the linear startup projection is consumed.
+    pub(super) fn exactly_projects_recovered_decision_validate_candidate(
+        &self,
+        verified: &VerifiedHeightContext,
+        effect: &AdapterEffect,
+        receipt: &DurableBodyReceipt,
+        pending: &PendingRuntimeEffectBinding,
+        expected: &CandidateAdmission,
+    ) -> bool {
+        matches!(self, Self::RecoveredDecision(_))
+            && self
+                .project_exact_validate_candidate(verified, effect, receipt, pending)
+                .is_ok_and(|candidate| candidate == *expected)
     }
     /// Project local-proposal completion authority without exposing a generic
     /// replay-source or pending-binding constructor.
@@ -1516,7 +1652,7 @@ impl DurableValidateReplayEvidenceV1 {
                     manifest.clone(),
                 ))
             }
-            Self::Certified(_) | Self::RemoteProposal(_) => None,
+            Self::Certified(_) | Self::RemoteProposal(_) | Self::RecoveredDecision(_) => None,
         }
     }
     /// Compare the closed family with one exact Validate effect, body frame,
@@ -1540,6 +1676,9 @@ impl DurableValidateReplayEvidenceV1 {
             Self::RecoveredStandalone(evidence) => {
                 evidence.exactly_matches_validate_pending(effect, receipt, pending)
             }
+            Self::RecoveredDecision(evidence) => {
+                evidence.exactly_matches_validate_pending(effect, receipt, pending)
+            }
         }
     }
     /// Revalidate the closed family against its retained durable body frame.
@@ -1551,6 +1690,7 @@ impl DurableValidateReplayEvidenceV1 {
             }
             Self::LocalBody(evidence) => evidence.exactly_matches_durable_body(receipt),
             Self::RecoveredStandalone(evidence) => evidence.exactly_matches_durable_body(receipt),
+            Self::RecoveredDecision(evidence) => evidence.exactly_matches_durable_body(receipt),
         }
     }
     /// Project one installed Validate carrier without exposing its replay family.
@@ -1586,6 +1726,7 @@ impl DurableValidateReplayEvidenceV1 {
             Self::RemoteProposal(evidence) => &mut evidence.family.source,
             Self::LocalBody(evidence) => evidence.family.source_mut(),
             Self::RecoveredStandalone(evidence) => &mut evidence.source,
+            Self::RecoveredDecision(evidence) => &mut evidence.lineage.body.source,
         };
         let previous = source.tag;
         source.tag.generation = previous.generation.wrapping_add(1);
@@ -1650,6 +1791,14 @@ impl DurableValidateReplayEvidenceV1 {
                     return Err(AdapterEffectAdmissionError::InvalidCarrier);
                 }
                 evidence.source.clone()
+            }
+            Self::RecoveredDecision(evidence) => {
+                if payload_binding
+                    != ReplayPayloadBindingV1::BodyFrame(evidence.lineage.body.body_frame)
+                {
+                    return Err(AdapterEffectAdmissionError::InvalidCarrier);
+                }
+                evidence.lineage.body.source.clone()
             }
         };
         let authority = canonical_replay_authority(
@@ -2037,6 +2186,7 @@ fn exact_invalid_body_report_authority(
                 | BodyPipelineOriginV1::RecoveredDecision { .. } => return None,
             }
         }
+        DurableValidateReplayEvidenceV1::RecoveredDecision(_) => return None,
     };
     if receipt.manifest_hash() != HashOf::new(&manifest) {
         return None;

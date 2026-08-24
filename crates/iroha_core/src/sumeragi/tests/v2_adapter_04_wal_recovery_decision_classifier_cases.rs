@@ -561,6 +561,75 @@ fn bls_mutated_control_frame_identity_fails_before_serve_or_ledger_open() {
     assert!(!storage.path().join("serve").exists());
     assert!(crate::sumeragi::status::v2_status().is_none());
 }
+#[cfg(feature = "bls")]
+fn run_recovered_decision_validate_cold_projection_test_on_stack() {
+    let handle = std::thread::Builder::new()
+        .name("sumeragi-v2-recovered-decision-validate".to_owned())
+        .stack_size(32 * 1024 * 1024)
+        .spawn(recovered_decision_validate_cold_projection_installs_with_body_census)
+        .expect("spawn recovered Decision Validate recovery test");
+    if let Err(payload) = handle.join() {
+        std::panic::resume_unwind(payload);
+    }
+}
+#[cfg(feature = "bls")]
+#[test]
+fn recovered_decision_validate_cold_projection_installs_with_body_census() {
+    if std::thread::current().name() != Some("sumeragi-v2-recovered-decision-validate") {
+        return run_recovered_decision_validate_cold_projection_test_on_stack();
+    }
+    let safety = TempDir::new().expect("temporary recovered Decision Validate WAL");
+    let storage = TempDir::new().expect("temporary recovered Decision Validate stores");
+    let (startup, body_store) = write_decision_startup_with_body_marker(
+        &safety,
+        &storage.path().join("body"),
+        0xDA,
+        DecisionBodyMarkerFixture::DurableOnly,
+    );
+    let authenticated = startup
+        .authenticate_final_wal_startup_authority()
+        .unwrap_or_else(|(error, _)| {
+            panic!("authenticate recovered Decision Validate startup: {error}")
+        });
+    let AuthenticatedRecoveredAdapterStartup {
+        adapter,
+        effects,
+        authority,
+        validation_authority: _,
+        factory_owner: _,
+    } = authenticated;
+    assert!(effects.is_empty());
+    let verified = VerifiedHeightContext {
+        context: adapter.wire_context.clone(),
+        proofs_of_possession: adapter.proofs_of_possession.clone(),
+        parent_verification: adapter.parent_verification.clone(),
+    };
+    let RecoveredWalStartupAuthorityV1::DecisionFetch(fetch) = authority else {
+        panic!("recovered Decision Validate fixture requires one WAL Fetch")
+    };
+    let fetch = crate::sumeragi::v2_runtime::project_recovered_wal_decision_fetch(&verified, fetch)
+        .unwrap_or_else(|_| panic!("project recovered Decision Validate WAL Fetch"));
+    let body = body_store
+        .recovered_decision_fetch_store_body(&fetch)
+        .expect("recover the exact fsynced Decision body frame");
+    let adapter_startup = ProductionLifecycleAdapterStartupV1::recovered(adapter, effects);
+    let (adapter_startup, store) = adapter_startup
+        .advance_recovered_decision_fetch_store(&verified, &fetch, body)
+        .expect("replay recovered Decision Fetch-to-Store");
+    let (adapter_startup, validate) = adapter_startup
+        .advance_recovered_decision_store_validate(&verified, &fetch, &store)
+        .expect("replay recovered Decision Store-to-Validate");
+    let mut registry = super::super::v2_lifecycle_coordinator::LifecycleWorkRegistryHolder::empty();
+    assert!(registry.install_recovered_decision_validate_for_test(
+        &verified,
+        &storage.path().join("ledger"),
+        &body_store,
+        adapter_startup,
+        fetch,
+        store,
+        validate,
+    ));
+}
 crate::sumeragi::v2_lifecycle_coordinator::source_contract_test!(
     recovered_wal_first_release_source_is_closed_and_store_ordered
 );
