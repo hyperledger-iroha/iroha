@@ -23,6 +23,7 @@ use crate::{
         canonical_lane_queue_reservation_group_identity_projection,
         lane_queue_reservation_group_binding_from_ordered_keys,
     },
+    secure_file_metadata::{self, SecureMetadata},
     sumeragi::{
         lane_planner::autonomous_lane_reservation_identity_hashes_for_proposal,
         message::{
@@ -1869,7 +1870,7 @@ impl Kura {
                 store_root,
             ));
         }
-        let metadata = match std::fs::symlink_metadata(&store_root) {
+        let metadata = match secure_file_metadata::from_path(&store_root) {
             Ok(metadata) => metadata,
             Err(error) if error.kind() == ErrorKind::NotFound => return Ok(()),
             Err(error) => return Err(Error::IO(error, store_root)),
@@ -2150,7 +2151,7 @@ impl Kura {
     fn acquire_store_root_lock(store_root: &Path) -> Result<std::fs::File> {
         let canonical_root = std::fs::canonicalize(store_root)
             .map_err(|error| Error::IO(error, store_root.to_path_buf()))?;
-        let root_before = std::fs::symlink_metadata(&canonical_root)
+        let root_before = secure_file_metadata::from_path(&canonical_root)
             .map_err(|error| Error::IO(error, canonical_root.clone()))?;
         if root_before.file_type().is_symlink() || !root_before.is_dir() {
             return Err(Error::IO(
@@ -2162,7 +2163,7 @@ impl Kura {
             ));
         }
         let lock_path = canonical_root.join(STORE_ROOT_LOCK_FILE_NAME);
-        if let Some(metadata) = match std::fs::symlink_metadata(&lock_path) {
+        if let Some(metadata) = match secure_file_metadata::from_path(&lock_path) {
             Ok(metadata) => Some(metadata),
             Err(error) if error.kind() == ErrorKind::NotFound => None,
             Err(error) => return Err(Error::IO(error, lock_path)),
@@ -2187,13 +2188,18 @@ impl Kura {
                 .mode(0o600)
                 .custom_flags(rustix::fs::OFlags::NOFOLLOW.bits() as i32);
         }
+        #[cfg(windows)]
+        {
+            use std::os::windows::fs::OpenOptionsExt as _;
+            const FILE_FLAG_OPEN_REPARSE_POINT: u32 = 0x0020_0000;
+            options.custom_flags(FILE_FLAG_OPEN_REPARSE_POINT);
+        }
         let file = options
             .open(&lock_path)
             .map_err(|error| Error::IO(error, lock_path.clone()))?;
-        let opened_metadata = file
-            .metadata()
+        let opened_metadata = secure_file_metadata::from_file(&file)
             .map_err(|error| Error::IO(error, lock_path.clone()))?;
-        let path_metadata = std::fs::symlink_metadata(&lock_path)
+        let path_metadata = secure_file_metadata::from_path(&lock_path)
             .map_err(|error| Error::IO(error, lock_path.clone()))?;
         if !opened_metadata.file_type().is_file()
             || !path_metadata.file_type().is_file()
@@ -2217,9 +2223,9 @@ impl Kura {
                 return Err(Error::IO(error, lock_path));
             }
         }
-        let root_after = std::fs::symlink_metadata(&canonical_root)
+        let root_after = secure_file_metadata::from_path(&canonical_root)
             .map_err(|error| Error::IO(error, canonical_root.clone()))?;
-        let path_after = std::fs::symlink_metadata(&lock_path)
+        let path_after = secure_file_metadata::from_path(&lock_path)
             .map_err(|error| Error::IO(error, lock_path.clone()))?;
         if root_after.file_type().is_symlink()
             || !root_after.is_dir()
@@ -2315,7 +2321,7 @@ impl Kura {
                             primary_lane,
                         )?;
                         let marker_path = paths.0.join(VERIFIED_SNAPSHOT_TAIL_FILE_NAME);
-                        provisional_open = match std::fs::symlink_metadata(&marker_path) {
+                        provisional_open = match secure_file_metadata::from_path(&marker_path) {
                             Ok(_) => true,
                             Err(error) if error.kind() == ErrorKind::NotFound => false,
                             Err(error) => return Err(Error::IO(error, marker_path)),
@@ -2386,7 +2392,7 @@ impl Kura {
                 Self::rollback_intent_path(&blocks_root),
                 Self::rollback_intent_path(&blocks_root).with_extension("norito.tmp"),
             ] {
-                if std::fs::symlink_metadata(&path).is_ok() {
+                if secure_file_metadata::from_path(&path).is_ok() {
                     return Err(Error::InvalidSnapshotBootstrapMarker {
                         path,
                         reason:
@@ -2435,7 +2441,7 @@ impl Kura {
             });
         } else {
             let snapshot_marker_path = blocks_root.join(VERIFIED_SNAPSHOT_TAIL_FILE_NAME);
-            if std::fs::symlink_metadata(&snapshot_marker_path).is_ok() {
+            if secure_file_metadata::from_path(&snapshot_marker_path).is_ok() {
                 return Err(Error::InvalidSnapshotBootstrapMarker {
                     path: snapshot_marker_path,
                     reason: "hash-only imported history must be opened provisionally and reauthenticated from a signed snapshot lineage"
@@ -3768,7 +3774,7 @@ impl Kura {
                 store.eviction_compaction_stage_path(),
             ]
             .into_iter()
-            .any(|path| match std::fs::symlink_metadata(path) {
+            .any(|path| match secure_file_metadata::from_path(&path) {
                 Ok(_) => true,
                 Err(error) => error.kind() != ErrorKind::NotFound,
             })
@@ -5780,27 +5786,23 @@ impl Kura {
             .join(format!("{block_height}.norito"))
     }
     #[cfg(unix)]
-    fn sidecar_metadata_same_object(left: &std::fs::Metadata, right: &std::fs::Metadata) -> bool {
+    fn sidecar_metadata_same_object(left: &SecureMetadata, right: &SecureMetadata) -> bool {
         use std::os::unix::fs::MetadataExt as _;
         left.dev() == right.dev() && left.ino() == right.ino()
     }
     #[cfg(windows)]
-    fn sidecar_metadata_same_object(left: &std::fs::Metadata, right: &std::fs::Metadata) -> bool {
-        use std::os::windows::fs::MetadataExt as _;
+    fn sidecar_metadata_same_object(left: &SecureMetadata, right: &SecureMetadata) -> bool {
         left.volume_serial_number() == right.volume_serial_number()
             && left.file_index() == right.file_index()
             && left.volume_serial_number().is_some()
             && left.file_index().is_some()
     }
     #[cfg(all(not(unix), not(windows)))]
-    fn sidecar_metadata_same_object(_left: &std::fs::Metadata, _right: &std::fs::Metadata) -> bool {
+    fn sidecar_metadata_same_object(_left: &SecureMetadata, _right: &SecureMetadata) -> bool {
         false
     }
     #[cfg(unix)]
-    fn sidecar_file_metadata_unchanged(
-        left: &std::fs::Metadata,
-        right: &std::fs::Metadata,
-    ) -> bool {
+    fn sidecar_file_metadata_unchanged(left: &SecureMetadata, right: &SecureMetadata) -> bool {
         use std::os::unix::fs::MetadataExt as _;
         Self::sidecar_metadata_same_object(left, right)
             && left.nlink() == 1
@@ -5813,8 +5815,8 @@ impl Kura {
     }
     #[cfg(unix)]
     fn sidecar_file_metadata_unchanged_across_rename(
-        left: &std::fs::Metadata,
-        right: &std::fs::Metadata,
+        left: &SecureMetadata,
+        right: &SecureMetadata,
     ) -> bool {
         use std::os::unix::fs::MetadataExt as _;
         // Renaming the bound object legitimately advances ctime. Preserve the
@@ -5828,10 +5830,7 @@ impl Kura {
             && left.mtime_nsec() == right.mtime_nsec()
     }
     #[cfg(unix)]
-    fn sidecar_directory_metadata_unchanged(
-        left: &std::fs::Metadata,
-        right: &std::fs::Metadata,
-    ) -> bool {
+    fn sidecar_directory_metadata_unchanged(left: &SecureMetadata, right: &SecureMetadata) -> bool {
         use std::os::unix::fs::MetadataExt as _;
         Self::sidecar_metadata_same_object(left, right)
             && left.mtime() == right.mtime()
@@ -5840,26 +5839,19 @@ impl Kura {
             && left.ctime_nsec() == right.ctime_nsec()
     }
     #[cfg(windows)]
-    fn sidecar_directory_metadata_unchanged(
-        left: &std::fs::Metadata,
-        right: &std::fs::Metadata,
-    ) -> bool {
-        use std::os::windows::fs::MetadataExt as _;
+    fn sidecar_directory_metadata_unchanged(left: &SecureMetadata, right: &SecureMetadata) -> bool {
         Self::sidecar_metadata_same_object(left, right)
             && left.last_write_time() == right.last_write_time()
             && left.creation_time() == right.creation_time()
     }
     #[cfg(all(not(unix), not(windows)))]
     fn sidecar_directory_metadata_unchanged(
-        _left: &std::fs::Metadata,
-        _right: &std::fs::Metadata,
+        _left: &SecureMetadata,
+        _right: &SecureMetadata,
     ) -> bool {
         false
     }
-    fn sidecar_directory_binding_unchanged(
-        left: &std::fs::Metadata,
-        right: &std::fs::Metadata,
-    ) -> bool {
+    fn sidecar_directory_binding_unchanged(left: &SecureMetadata, right: &SecureMetadata) -> bool {
         // Directory mtime/ctime describe mutations to child entries, not replacement of the
         // directory itself. Progress sidecars are published concurrently, so descriptor binding
         // must compare object identity only. Stable inventory scans deliberately retain the
@@ -5867,11 +5859,7 @@ impl Kura {
         Self::sidecar_metadata_same_object(left, right)
     }
     #[cfg(windows)]
-    fn sidecar_file_metadata_unchanged(
-        left: &std::fs::Metadata,
-        right: &std::fs::Metadata,
-    ) -> bool {
-        use std::os::windows::fs::MetadataExt as _;
+    fn sidecar_file_metadata_unchanged(left: &SecureMetadata, right: &SecureMetadata) -> bool {
         Self::sidecar_metadata_same_object(left, right)
             && left.number_of_links() == Some(1)
             && right.number_of_links() == Some(1)
@@ -5880,10 +5868,7 @@ impl Kura {
             && left.creation_time() == right.creation_time()
     }
     #[cfg(all(not(unix), not(windows)))]
-    fn sidecar_file_metadata_unchanged(
-        left: &std::fs::Metadata,
-        right: &std::fs::Metadata,
-    ) -> bool {
+    fn sidecar_file_metadata_unchanged(left: &SecureMetadata, right: &SecureMetadata) -> bool {
         Self::sidecar_metadata_same_object(left, right)
             && left.len() == right.len()
             && left.modified().ok() == right.modified().ok()
@@ -5923,40 +5908,38 @@ impl Kura {
         }
     }
     #[cfg(unix)]
-    fn sidecar_is_single_link(metadata: &std::fs::Metadata) -> bool {
+    fn sidecar_is_single_link(metadata: &SecureMetadata) -> bool {
         use std::os::unix::fs::MetadataExt as _;
         metadata.nlink() == 1
     }
     #[cfg(windows)]
-    fn sidecar_is_single_link(metadata: &std::fs::Metadata) -> bool {
-        use std::os::windows::fs::MetadataExt as _;
+    fn sidecar_is_single_link(metadata: &SecureMetadata) -> bool {
         metadata.number_of_links() == Some(1)
     }
     #[cfg(all(not(unix), not(windows)))]
-    fn sidecar_is_single_link(_metadata: &std::fs::Metadata) -> bool {
+    fn sidecar_is_single_link(_metadata: &SecureMetadata) -> bool {
         false
     }
     #[cfg(unix)]
-    fn sidecar_has_link_count(metadata: &std::fs::Metadata, expected: u64) -> bool {
+    fn sidecar_has_link_count(metadata: &SecureMetadata, expected: u64) -> bool {
         use std::os::unix::fs::MetadataExt as _;
         metadata.nlink() == expected
     }
     #[cfg(windows)]
-    fn sidecar_has_link_count(metadata: &std::fs::Metadata, expected: u64) -> bool {
-        use std::os::windows::fs::MetadataExt as _;
+    fn sidecar_has_link_count(metadata: &SecureMetadata, expected: u64) -> bool {
         u32::try_from(expected)
             .ok()
             .is_some_and(|expected| metadata.number_of_links() == Some(expected))
     }
     #[cfg(all(not(unix), not(windows)))]
-    fn sidecar_has_link_count(_metadata: &std::fs::Metadata, _expected: u64) -> bool {
+    fn sidecar_has_link_count(_metadata: &SecureMetadata, _expected: u64) -> bool {
         false
     }
     fn canonical_sidecar_directory_for(
         store_root: &Path,
         expected_directory: &Path,
-    ) -> Result<Option<(PathBuf, std::fs::Metadata)>> {
-        let before = match std::fs::symlink_metadata(expected_directory) {
+    ) -> Result<Option<(PathBuf, SecureMetadata)>> {
+        let before = match secure_file_metadata::from_path(expected_directory) {
             Ok(metadata) => metadata,
             Err(error) if error.kind() == ErrorKind::NotFound => return Ok(None),
             Err(error) => return Err(Error::IO(error, expected_directory.to_path_buf())),
@@ -5992,7 +5975,7 @@ impl Kura {
                 expected_directory.to_path_buf(),
             ));
         }
-        let after = std::fs::symlink_metadata(expected_directory)
+        let after = secure_file_metadata::from_path(expected_directory)
             .map_err(|error| Error::IO(error, expected_directory.to_path_buf()))?;
         if after.file_type().is_symlink()
             || !after.is_dir()
@@ -6011,7 +5994,7 @@ impl Kura {
     fn canonical_sidecar_directory(
         &self,
         expected_directory: &Path,
-    ) -> Result<Option<(PathBuf, std::fs::Metadata)>> {
+    ) -> Result<Option<(PathBuf, SecureMetadata)>> {
         Self::canonical_sidecar_directory_for(&self.store_root, expected_directory)
     }
     fn stable_sidecar_directory_metadata(
@@ -6175,7 +6158,7 @@ impl Kura {
             ));
         }
         let directory = Self::canonical_sidecar_directory_for(store_root, expected_directory)?;
-        let metadata = match std::fs::symlink_metadata(path) {
+        let metadata = match secure_file_metadata::from_path(path) {
             Ok(metadata) => metadata,
             Err(err) if err.kind() == ErrorKind::NotFound => return Ok(None),
             Err(err) => return Err(Error::IO(err, path.to_path_buf())),
@@ -6248,6 +6231,7 @@ impl Kura {
                 path.to_path_buf(),
             ));
         }
+        #[cfg(unix)]
         let file_name = path.file_name().ok_or_else(|| {
             Error::IO(
                 std::io::Error::new(
@@ -6284,8 +6268,7 @@ impl Kura {
                 .open(path)
                 .map_err(|error| Error::IO(error, path.to_path_buf()))?
         };
-        let opened = file
-            .metadata()
+        let opened = secure_file_metadata::from_file(&file)
             .map_err(|error| Error::IO(error, path.to_path_buf()))?;
         if !opened.is_file() || !Self::sidecar_file_metadata_unchanged(&expected.file, &opened) {
             return Err(Error::IO(
@@ -6362,7 +6345,9 @@ impl Kura {
         append: bool,
         namespace: Option<&BoundProgressNamespace>,
     ) -> std::io::Result<std::fs::File> {
-        let before = match std::fs::symlink_metadata(path) {
+        #[cfg(not(unix))]
+        let _ = namespace;
+        let before = match secure_file_metadata::from_path(path) {
             Ok(metadata) => Some(metadata),
             Err(error) if error.kind() == ErrorKind::NotFound && create => None,
             Err(error) => return Err(error),
@@ -6401,7 +6386,7 @@ impl Kura {
                     ));
                 }
                 let opened = immediate.file.metadata()?;
-                let current = std::fs::symlink_metadata(parent_path)?;
+                let current = secure_file_metadata::from_path(parent_path)?;
                 if !opened.is_dir()
                     || current.file_type().is_symlink()
                     || !current.is_dir()
@@ -6415,7 +6400,7 @@ impl Kura {
                 }
                 &immediate.file
             } else {
-                let parent_before = std::fs::symlink_metadata(parent_path)?;
+                let parent_before = secure_file_metadata::from_path(parent_path)?;
                 if parent_before.file_type().is_symlink() || !parent_before.is_dir() {
                     return Err(std::io::Error::new(
                         ErrorKind::InvalidData,
@@ -6431,7 +6416,7 @@ impl Kura {
                 );
                 owned_parent = options.open(parent_path)?;
                 let parent_opened = owned_parent.metadata()?;
-                let parent_after = std::fs::symlink_metadata(parent_path)?;
+                let parent_after = secure_file_metadata::from_path(parent_path)?;
                 if !parent_opened.is_dir()
                     || parent_after.file_type().is_symlink()
                     || !parent_after.is_dir()
@@ -6463,7 +6448,7 @@ impl Kura {
                 )
                 .map_err(std::io::Error::from)?,
             );
-            let opened = file.metadata()?;
+            let opened = secure_file_metadata::from_file(&file)?;
             let after =
                 rustix::fs::statat(parent, file_name, rustix::fs::AtFlags::SYMLINK_NOFOLLOW)
                     .map_err(std::io::Error::from)?;
@@ -6494,8 +6479,8 @@ impl Kura {
                 options.custom_flags(FILE_FLAG_OPEN_REPARSE_POINT);
             }
             let file = options.open(path)?;
-            let opened = file.metadata()?;
-            let after = std::fs::symlink_metadata(path)?;
+            let opened = secure_file_metadata::from_file(&file)?;
+            let after = secure_file_metadata::from_path(path)?;
             if !opened.is_file()
                 || after.file_type().is_symlink()
                 || !after.is_file()
@@ -6530,6 +6515,7 @@ impl Kura {
                 "progress temp is outside its bound namespace",
             ));
         }
+        #[cfg(unix)]
         let name = path.file_name().ok_or_else(|| {
             std::io::Error::new(ErrorKind::InvalidInput, "progress temp has no entry name")
         })?;
@@ -6559,7 +6545,7 @@ impl Kura {
         }
         #[cfg(not(unix))]
         {
-            match std::fs::symlink_metadata(path) {
+            match secure_file_metadata::from_path(path) {
                 Ok(metadata)
                     if metadata.is_file()
                         && !metadata.file_type().is_symlink()
@@ -6594,10 +6580,11 @@ impl Kura {
                 "progress file is outside its bound namespace",
             ));
         }
+        #[cfg(unix)]
         let name = path.file_name().ok_or_else(|| {
             std::io::Error::new(ErrorKind::InvalidInput, "progress file has no entry name")
         })?;
-        let expected_metadata = expected.metadata()?;
+        let expected_metadata = secure_file_metadata::from_file(expected)?;
         if !Self::sidecar_file_metadata_unchanged(&expected_snapshot.file, &expected_metadata) {
             return Err(std::io::Error::new(
                 ErrorKind::InvalidData,
@@ -6628,7 +6615,7 @@ impl Kura {
         }
         #[cfg(not(unix))]
         {
-            let current = std::fs::symlink_metadata(path)?;
+            let current = secure_file_metadata::from_path(path)?;
             if current.file_type().is_symlink()
                 || !current.is_file()
                 || !Self::sidecar_is_single_link(&current)
@@ -6658,6 +6645,7 @@ impl Kura {
                 "progress temp is outside its bound namespace",
             ));
         }
+        #[cfg(unix)]
         let name = path.file_name().ok_or_else(|| {
             std::io::Error::new(ErrorKind::InvalidInput, "progress temp has no entry name")
         })?;
@@ -6676,7 +6664,7 @@ impl Kura {
                 )
                 .map_err(std::io::Error::from)?,
             );
-            let metadata = file.metadata()?;
+            let metadata = secure_file_metadata::from_file(&file)?;
             let entry =
                 rustix::fs::statat(&immediate.file, name, rustix::fs::AtFlags::SYMLINK_NOFOLLOW)
                     .map_err(std::io::Error::from)?;
@@ -6705,7 +6693,7 @@ impl Kura {
                 options.custom_flags(FILE_FLAG_OPEN_REPARSE_POINT);
             }
             let file = options.open(path)?;
-            let metadata = file.metadata()?;
+            let metadata = secure_file_metadata::from_file(&file)?;
             if !metadata.is_file() || !Self::sidecar_is_single_link(&metadata) {
                 return Err(std::io::Error::new(
                     ErrorKind::InvalidData,
@@ -6725,6 +6713,7 @@ impl Kura {
             published: false,
             source,
         };
+        #[cfg(unix)]
         let published = |source| BoundProgressPromotionError {
             published: true,
             source,
@@ -6747,12 +6736,14 @@ impl Kura {
                 "progress promotion escapes its bound namespace",
             )));
         }
+        #[cfg(unix)]
         let temp_name = temp_path
             .file_name()
             .ok_or_else(|| {
                 std::io::Error::new(ErrorKind::InvalidInput, "progress temp has no entry name")
             })
             .map_err(unpublished)?;
+        #[cfg(unix)]
         let main_name = main_path
             .file_name()
             .ok_or_else(|| {
@@ -6860,6 +6851,7 @@ impl Kura {
             published: false,
             source,
         };
+        #[cfg(unix)]
         let published = |source| BoundProgressPromotionError {
             published: true,
             source,
@@ -6882,12 +6874,14 @@ impl Kura {
                 "progress append-intent promotion escapes its bound namespace",
             )));
         }
+        #[cfg(unix)]
         let temp_name = temp_path
             .file_name()
             .ok_or_else(|| {
                 std::io::Error::new(ErrorKind::InvalidInput, "progress build has no entry name")
             })
             .map_err(unpublished)?;
+        #[cfg(unix)]
         let intent_name = intent_path
             .file_name()
             .ok_or_else(|| {
@@ -7085,8 +7079,7 @@ impl Kura {
         let file = options
             .open(expected_path)
             .map_err(|error| Error::IO(error, expected_path.to_path_buf()))?;
-        let opened = file
-            .metadata()
+        let opened = secure_file_metadata::from_file(&file)
             .map_err(|error| Error::IO(error, expected_path.to_path_buf()))?;
         let after = Self::canonical_sidecar_directory_for(store_root, expected_path)?;
         if !opened.is_dir()
@@ -7361,14 +7354,14 @@ impl Kura {
             .directories
             .iter()
             .enumerate()
-            .all(|(index, directory)| {
-                let Ok(opened) = directory.file.metadata() else {
+            .all(|(_index, directory)| {
+                let Ok(opened) = secure_file_metadata::from_file(&directory.file) else {
                     return false;
                 };
                 #[cfg(unix)]
                 if let Some(name) = directory.entry_name.as_deref() {
                     use std::os::unix::fs::MetadataExt as _;
-                    let Some(parent) = namespace.directories.get(index.saturating_add(1)) else {
+                    let Some(parent) = namespace.directories.get(_index.saturating_add(1)) else {
                         return false;
                     };
                     let Ok(entry) = rustix::fs::statat(
@@ -7410,10 +7403,10 @@ impl Kura {
         if bound.namespace.index_path.parent() != Some(sidecar_dir) {
             return false;
         }
-        let Ok(data_opened) = bound.data.metadata() else {
+        let Ok(data_opened) = secure_file_metadata::from_file(&bound.data) else {
             return false;
         };
-        let Ok(index_opened) = bound.index.metadata() else {
+        let Ok(index_opened) = secure_file_metadata::from_file(&bound.index) else {
             return false;
         };
         if !Self::sidecar_file_metadata_unchanged(&bound.data_metadata.file, &data_opened)
@@ -7743,8 +7736,7 @@ impl Kura {
         after_admission();
         let mut file =
             std::fs::File::open(path).map_err(|err| Error::IO(err, path.to_path_buf()))?;
-        let opened_metadata = file
-            .metadata()
+        let opened_metadata = secure_file_metadata::from_file(&file)
             .map_err(|err| Error::IO(err, path.to_path_buf()))?;
         if !opened_metadata.is_file()
             || !Self::sidecar_file_metadata_unchanged(&metadata.file, &opened_metadata)
@@ -7774,8 +7766,7 @@ impl Kura {
                 path.to_path_buf(),
             ));
         }
-        let opened_after = file
-            .metadata()
+        let opened_after = secure_file_metadata::from_file(&file)
             .map_err(|err| Error::IO(err, path.to_path_buf()))?;
         let path_after = Self::regular_sidecar_metadata_for(store_root, path, expected_directory)?;
         if bytes.len() > byte_limit
@@ -7906,8 +7897,8 @@ impl Kura {
         for entry in read_dir {
             let entry = entry.map_err(|err| Error::IO(err, directory.clone()))?;
             let path = entry.path();
-            let metadata =
-                std::fs::symlink_metadata(&path).map_err(|err| Error::IO(err, path.clone()))?;
+            let metadata = secure_file_metadata::from_path(&path)
+                .map_err(|err| Error::IO(err, path.clone()))?;
             if metadata.file_type().is_symlink() || !metadata.file_type().is_file() {
                 return Err(Error::MergeCarrierConflict(format!(
                     "carrier directory entry {} is not a regular no-follow file",
@@ -8011,8 +8002,8 @@ impl Kura {
         for entry in read_dir {
             let entry = entry.map_err(|err| Error::IO(err, directory.clone()))?;
             let path = entry.path();
-            let metadata =
-                std::fs::symlink_metadata(&path).map_err(|err| Error::IO(err, path.clone()))?;
+            let metadata = secure_file_metadata::from_path(&path)
+                .map_err(|err| Error::IO(err, path.clone()))?;
             if metadata.file_type().is_symlink() || !metadata.file_type().is_file() {
                 return Err(Error::MergeCarrierConflict(format!(
                     "carrier directory entry {} is not a regular no-follow file",
@@ -9287,7 +9278,7 @@ impl Kura {
     }
     fn ensure_pending_merge_entry_dir_unlocked(&self) -> Result<()> {
         let directory = self.pending_merge_entry_dir();
-        match std::fs::symlink_metadata(&directory) {
+        match secure_file_metadata::from_path(&directory) {
             Ok(_) => {
                 self.canonical_sidecar_directory(&directory)?
                     .ok_or_else(|| {
@@ -9331,6 +9322,7 @@ impl Kura {
                         "pending merge directory does not exist",
                     )
                 })?;
+        #[cfg(unix)]
         let file_name = path.file_name().ok_or_else(|| {
             Self::invalid_pending_merge_entry_error(
                 path.to_path_buf(),
@@ -9350,8 +9342,7 @@ impl Kura {
             let opened_directory = directory_options
                 .open(&directory)
                 .map_err(|error| Error::IO(error, directory.clone()))?;
-            let opened_directory_metadata = opened_directory
-                .metadata()
+            let opened_directory_metadata = secure_file_metadata::from_file(&opened_directory)
                 .map_err(|error| Error::IO(error, directory.clone()))?;
             if !opened_directory_metadata.is_dir()
                 || !Self::sidecar_metadata_same_object(
@@ -9393,10 +9384,9 @@ impl Kura {
                 .open(path)
                 .map_err(|error| Error::IO(error, path.to_path_buf()))?
         };
-        let opened = file
-            .metadata()
+        let opened = secure_file_metadata::from_file(&file)
             .map_err(|error| Error::IO(error, path.to_path_buf()))?;
-        let path_metadata = std::fs::symlink_metadata(path)
+        let path_metadata = secure_file_metadata::from_path(path)
             .map_err(|error| Error::IO(error, path.to_path_buf()))?;
         let (_, directory_after) =
             self.canonical_sidecar_directory(&directory)?
@@ -9486,8 +9476,8 @@ impl Kura {
                 ));
             };
             Self::validate_pending_queue_plan_admission_hash_text(&path, hash_text)?;
-            let metadata =
-                std::fs::symlink_metadata(&path).map_err(|err| Error::IO(err, path.clone()))?;
+            let metadata = secure_file_metadata::from_path(&path)
+                .map_err(|err| Error::IO(err, path.clone()))?;
             if metadata.file_type().is_symlink()
                 || !metadata.file_type().is_file()
                 || !Self::sidecar_is_single_link(&metadata)
@@ -9526,7 +9516,7 @@ impl Kura {
     }
     fn ensure_pending_queue_plan_admission_dir_unlocked(&self) -> Result<()> {
         let directory = self.pending_queue_plan_admission_dir();
-        match std::fs::symlink_metadata(&directory) {
+        match secure_file_metadata::from_path(&directory) {
             Ok(_) => {
                 self.canonical_sidecar_directory(&directory)?
                     .ok_or_else(|| {
@@ -9573,6 +9563,7 @@ impl Kura {
                         "pending QueuePlan admission directory does not exist",
                     )
                 })?;
+        #[cfg(unix)]
         let file_name = path.file_name().ok_or_else(|| {
             Self::invalid_pending_queue_plan_admission_error(
                 path.to_path_buf(),
@@ -9592,8 +9583,7 @@ impl Kura {
             let opened_directory = directory_options
                 .open(&directory)
                 .map_err(|error| Error::IO(error, directory.clone()))?;
-            let opened_directory_metadata = opened_directory
-                .metadata()
+            let opened_directory_metadata = secure_file_metadata::from_file(&opened_directory)
                 .map_err(|error| Error::IO(error, directory.clone()))?;
             if !opened_directory_metadata.is_dir()
                 || !Self::sidecar_metadata_same_object(
@@ -9635,10 +9625,9 @@ impl Kura {
                 .open(path)
                 .map_err(|error| Error::IO(error, path.to_path_buf()))?
         };
-        let opened = file
-            .metadata()
+        let opened = secure_file_metadata::from_file(&file)
             .map_err(|error| Error::IO(error, path.to_path_buf()))?;
-        let path_metadata = std::fs::symlink_metadata(path)
+        let path_metadata = secure_file_metadata::from_path(path)
             .map_err(|error| Error::IO(error, path.to_path_buf()))?;
         let (_, directory_after) = self.canonical_sidecar_directory(&directory)?.ok_or_else(
             || {
@@ -9734,7 +9723,7 @@ impl Kura {
             path: PathBuf,
             hash_text: String,
             is_temporary: bool,
-            metadata: std::fs::Metadata,
+            metadata: SecureMetadata,
             identity: RecoveryFileIdentity,
         }
         struct RecoveryAliases {
@@ -9816,8 +9805,8 @@ impl Kura {
             } else {
                 Self::validate_pending_merge_hash_text(&path, hash_text)?;
             }
-            let metadata =
-                std::fs::symlink_metadata(&path).map_err(|error| Error::IO(error, path.clone()))?;
+            let metadata = secure_file_metadata::from_path(&path)
+                .map_err(|error| Error::IO(error, path.clone()))?;
             if metadata.file_type().is_symlink()
                 || !metadata.file_type().is_file()
                 || (!Self::sidecar_has_link_count(&metadata, 1)
@@ -9846,7 +9835,6 @@ impl Kura {
             };
             #[cfg(windows)]
             let identity = {
-                use std::os::windows::fs::MetadataExt as _;
                 match (metadata.volume_serial_number(), metadata.file_index()) {
                     (Some(volume), Some(index)) => RecoveryFileIdentity::Windows { volume, index },
                     // Match `sidecar_metadata_same_object`: missing Windows identity
@@ -10003,8 +9991,8 @@ impl Kura {
                 ));
             };
             Self::validate_pending_merge_hash_text(&path, hash_text)?;
-            let metadata =
-                std::fs::symlink_metadata(&path).map_err(|err| Error::IO(err, path.clone()))?;
+            let metadata = secure_file_metadata::from_path(&path)
+                .map_err(|err| Error::IO(err, path.clone()))?;
             if metadata.file_type().is_symlink()
                 || !metadata.file_type().is_file()
                 || !Self::sidecar_is_single_link(&metadata)
@@ -10105,8 +10093,8 @@ impl Kura {
             }
             let entry = entry.map_err(|err| Error::IO(err, directory.clone()))?;
             let path = entry.path();
-            let metadata =
-                std::fs::symlink_metadata(&path).map_err(|err| Error::IO(err, path.clone()))?;
+            let metadata = secure_file_metadata::from_path(&path)
+                .map_err(|err| Error::IO(err, path.clone()))?;
             if metadata.file_type().is_symlink()
                 || !metadata.file_type().is_file()
                 || (!Self::sidecar_has_link_count(&metadata, 1)
@@ -10132,7 +10120,6 @@ impl Kura {
             };
             #[cfg(windows)]
             let count_file_bytes = {
-                use std::os::windows::fs::MetadataExt as _;
                 let volume = metadata.volume_serial_number().ok_or_else(|| {
                     Self::invalid_pending_merge_entry_error(
                         path.clone(),
@@ -10202,10 +10189,10 @@ impl Kura {
             continue;
         }
         for (temp_path, hash_text) in temp_paths {
-            let temp_metadata = std::fs::symlink_metadata(&temp_path)
+            let temp_metadata = secure_file_metadata::from_path(&temp_path)
                 .map_err(|err| Error::IO(err, temp_path.clone()))?;
             let target_path = directory.join(format!("{hash_text}.norito"));
-            let target_metadata = match std::fs::symlink_metadata(&target_path) {
+            let target_metadata = match secure_file_metadata::from_path(&target_path) {
                 Ok(metadata) => Some(metadata),
                 Err(err) if err.kind() == ErrorKind::NotFound => None,
                 Err(err) => return Err(Error::IO(err, target_path.clone())),
@@ -10323,7 +10310,7 @@ impl Kura {
             sync_dir(&directory).map_err(|err| Error::IO(err, directory.clone()))?;
             std::fs::hard_link(&temp_path, &target_path)
                 .map_err(|err| Error::IO(err, target_path.clone()))?;
-            let target_metadata = std::fs::symlink_metadata(&target_path)
+            let target_metadata = secure_file_metadata::from_path(&target_path)
                 .map_err(|err| Error::IO(err, target_path.clone()))?;
             if !Self::sidecar_metadata_same_object(&temp_metadata, &target_metadata)
                 || !Self::sidecar_has_link_count(&target_metadata, 2)
@@ -10384,8 +10371,8 @@ impl Kura {
             }
             let entry = entry.map_err(|err| Error::IO(err, directory.clone()))?;
             let path = entry.path();
-            let metadata =
-                std::fs::symlink_metadata(&path).map_err(|err| Error::IO(err, path.clone()))?;
+            let metadata = secure_file_metadata::from_path(&path)
+                .map_err(|err| Error::IO(err, path.clone()))?;
             if metadata.file_type().is_symlink()
                 || !metadata.file_type().is_file()
                 || (!Self::sidecar_has_link_count(&metadata, 1)
@@ -10418,7 +10405,6 @@ impl Kura {
             };
             #[cfg(windows)]
             let count_file_bytes = {
-                use std::os::windows::fs::MetadataExt as _;
                 let volume = metadata.volume_serial_number().ok_or_else(|| {
                     Self::invalid_pending_queue_plan_admission_error(
                         path.clone(),
@@ -10486,9 +10472,9 @@ impl Kura {
         }
         for (temp_path, hash_text) in temp_paths {
             let target_path = directory.join(format!("{hash_text}.norito"));
-            let temp_metadata = std::fs::symlink_metadata(&temp_path)
+            let temp_metadata = secure_file_metadata::from_path(&temp_path)
                 .map_err(|err| Error::IO(err, temp_path.clone()))?;
-            let target_metadata = match std::fs::symlink_metadata(&target_path) {
+            let target_metadata = match secure_file_metadata::from_path(&target_path) {
                 Ok(metadata) => Some(metadata),
                 Err(err) if err.kind() == ErrorKind::NotFound => None,
                 Err(err) => return Err(Error::IO(err, target_path.clone())),
@@ -10610,7 +10596,7 @@ impl Kura {
             sync_dir(&directory).map_err(|err| Error::IO(err, directory.clone()))?;
             std::fs::hard_link(&temp_path, &target_path)
                 .map_err(|err| Error::IO(err, target_path.clone()))?;
-            let target_metadata = std::fs::symlink_metadata(&target_path)
+            let target_metadata = secure_file_metadata::from_path(&target_path)
                 .map_err(|err| Error::IO(err, target_path.clone()))?;
             if !Self::sidecar_metadata_same_object(&temp_metadata, &target_metadata)
                 || !Self::sidecar_has_link_count(&target_metadata, 2)
@@ -10833,10 +10819,9 @@ impl Kura {
             .map_err(|error| Error::IO(error, temp_path.clone()))?;
         temp.sync_all()
             .map_err(|error| Error::IO(error, temp_path.clone()))?;
-        let opened_after_write = temp
-            .metadata()
+        let opened_after_write = secure_file_metadata::from_file(&temp)
             .map_err(|error| Error::IO(error, temp_path.clone()))?;
-        let path_after_write = std::fs::symlink_metadata(&temp_path)
+        let path_after_write = secure_file_metadata::from_path(&temp_path)
             .map_err(|error| Error::IO(error, temp_path.clone()))?;
         if !opened_after_write.is_file()
             || path_after_write.file_type().is_symlink()
@@ -10863,8 +10848,8 @@ impl Kura {
             }
             return Err(Error::IO(error, path));
         }
-        let target_metadata =
-            std::fs::symlink_metadata(&path).map_err(|error| Error::IO(error, path.clone()))?;
+        let target_metadata = secure_file_metadata::from_path(&path)
+            .map_err(|error| Error::IO(error, path.clone()))?;
         if target_metadata.file_type().is_symlink()
             || !target_metadata.file_type().is_file()
             || !Self::sidecar_metadata_same_object(&opened_after_write, &target_metadata)
@@ -10876,8 +10861,7 @@ impl Kura {
             ));
         }
         let target = std::fs::File::open(&path).map_err(|error| Error::IO(error, path.clone()))?;
-        let opened_target = target
-            .metadata()
+        let opened_target = secure_file_metadata::from_file(&target)
             .map_err(|error| Error::IO(error, path.clone()))?;
         if !Self::sidecar_metadata_same_object(&target_metadata, &opened_target)
             || !Self::sidecar_has_link_count(&opened_target, 2)
@@ -10986,10 +10970,9 @@ impl Kura {
             .map_err(|error| Error::IO(error, temp_path.clone()))?;
         temp.sync_all()
             .map_err(|error| Error::IO(error, temp_path.clone()))?;
-        let opened_after_write = temp
-            .metadata()
+        let opened_after_write = secure_file_metadata::from_file(&temp)
             .map_err(|error| Error::IO(error, temp_path.clone()))?;
-        let path_after_write = std::fs::symlink_metadata(&temp_path)
+        let path_after_write = secure_file_metadata::from_path(&temp_path)
             .map_err(|error| Error::IO(error, temp_path.clone()))?;
         if !opened_after_write.is_file()
             || path_after_write.file_type().is_symlink()
@@ -11016,8 +10999,8 @@ impl Kura {
             }
             return Err(Error::IO(error, path));
         }
-        let target_metadata =
-            std::fs::symlink_metadata(&path).map_err(|error| Error::IO(error, path.clone()))?;
+        let target_metadata = secure_file_metadata::from_path(&path)
+            .map_err(|error| Error::IO(error, path.clone()))?;
         if target_metadata.file_type().is_symlink()
             || !target_metadata.file_type().is_file()
             || !Self::sidecar_metadata_same_object(&opened_after_write, &target_metadata)
@@ -11029,8 +11012,7 @@ impl Kura {
             ));
         }
         let target = std::fs::File::open(&path).map_err(|error| Error::IO(error, path.clone()))?;
-        let opened_target = target
-            .metadata()
+        let opened_target = secure_file_metadata::from_file(&target)
             .map_err(|error| Error::IO(error, path.clone()))?;
         if !Self::sidecar_metadata_same_object(&target_metadata, &opened_target)
             || !Self::sidecar_has_link_count(&opened_target, 2)
@@ -17063,7 +17045,7 @@ impl Kura {
         let mut total = 0u64;
         for dir_name in [PIPELINE_DIR_NAME, LANE_ARTIFACTS_DIR_NAME] {
             let dir = store_dir.join(dir_name);
-            let before = match std::fs::symlink_metadata(&dir) {
+            let before = match secure_file_metadata::from_path(&dir) {
                 Ok(metadata) => metadata,
                 Err(err) if err.kind() == ErrorKind::NotFound => continue,
                 Err(err) => return Err(Error::IO(err, dir.clone())),
@@ -17081,8 +17063,8 @@ impl Kura {
             for entry in entries {
                 let entry = entry.map_err(|err| Error::IO(err, dir.clone()))?;
                 let path = entry.path();
-                let metadata =
-                    std::fs::symlink_metadata(&path).map_err(|err| Error::IO(err, path.clone()))?;
+                let metadata = secure_file_metadata::from_path(&path)
+                    .map_err(|err| Error::IO(err, path.clone()))?;
                 if metadata.file_type().is_file()
                     && !metadata.file_type().is_symlink()
                     && Self::sidecar_is_single_link(&metadata)
@@ -17110,7 +17092,7 @@ impl Kura {
                         *historical_record_budget,
                         *historical_byte_budget,
                         |record_path| {
-                            let record_metadata = std::fs::symlink_metadata(record_path)
+                            let record_metadata = secure_file_metadata::from_path(record_path)
                                 .map_err(|err| Error::IO(err, record_path.to_path_buf()))?;
                             Ok(((), record_metadata))
                         },
@@ -17156,7 +17138,7 @@ impl Kura {
                 ));
             }
             let after =
-                std::fs::symlink_metadata(&dir).map_err(|err| Error::IO(err, dir.clone()))?;
+                secure_file_metadata::from_path(&dir).map_err(|err| Error::IO(err, dir.clone()))?;
             if after.file_type().is_symlink()
                 || !after.file_type().is_dir()
                 || !Self::sidecar_directory_metadata_unchanged(&before, &after)
@@ -17358,7 +17340,7 @@ impl Kura {
         if root.as_os_str().is_empty() {
             return Ok(0);
         }
-        let root_metadata = match std::fs::symlink_metadata(root) {
+        let root_metadata = match secure_file_metadata::from_path(root) {
             Ok(metadata) => metadata,
             Err(err) if err.kind() == ErrorKind::NotFound => return Ok(0),
             Err(err) => return Err(Error::IO(err, root.to_path_buf())),
@@ -18248,8 +18230,8 @@ impl Kura {
         require_compact: bool,
         reject_temporaries: bool,
     ) -> Result<Option<SidecarIndexLayout>> {
-        let metadata = |path: &Path| -> Result<Option<std::fs::Metadata>> {
-            match std::fs::symlink_metadata(path) {
+        let metadata = |path: &Path| -> Result<Option<SecureMetadata>> {
+            match secure_file_metadata::from_path(path) {
                 Ok(metadata) => Ok(Some(metadata)),
                 Err(err) if err.kind() == ErrorKind::NotFound => Ok(None),
                 Err(err) => Err(Error::IO(err, path.to_path_buf())),
@@ -18282,7 +18264,7 @@ impl Kura {
         let temp_index_path = index_path.with_extension("index.tmp");
         if reject_temporaries {
             for temporary in [&temp_data_path, &temp_index_path] {
-                match std::fs::symlink_metadata(temporary) {
+                match secure_file_metadata::from_path(temporary) {
                     Ok(metadata)
                         if metadata.file_type().is_symlink() || !metadata.file_type().is_file() =>
                     {
@@ -19089,8 +19071,7 @@ impl Kura {
             .take(u64::try_from(max_bytes)?.saturating_add(1))
             .read_to_end(&mut readback)
             .map_err(|error| Error::IO(error, path.to_path_buf()))?;
-        let opened = file
-            .metadata()
+        let opened = secure_file_metadata::from_file(&file)
             .map_err(|error| Error::IO(error, path.to_path_buf()))?;
         let current = Self::regular_sidecar_metadata_for(&self.store_root, path, directory)?
             .ok_or_else(|| {
@@ -19137,8 +19118,7 @@ impl Kura {
             .take(u64::try_from(max_bytes)?.saturating_add(1))
             .read_to_end(&mut readback)
             .map_err(|error| Error::IO(error, path.to_path_buf()))?;
-        let opened = file
-            .metadata()
+        let opened = secure_file_metadata::from_file(&file)
             .map_err(|error| Error::IO(error, path.to_path_buf()))?;
         let current = Self::regular_sidecar_metadata_for(&self.store_root, path, directory)?
             .ok_or_else(|| {
@@ -19186,7 +19166,7 @@ impl Kura {
         {
             return Ok(false);
         }
-        match std::fs::symlink_metadata(temp_path) {
+        match secure_file_metadata::from_path(temp_path) {
             Ok(_) => {
                 return Err(Self::invalid_lane_artifact_error(
                     temp_path.to_path_buf(),
@@ -20223,8 +20203,8 @@ impl Kura {
     ) -> Result<()> {
         let temp_data_path = data_path.with_extension("norito.tmp");
         let temp_index_path = index_path.with_extension("index.tmp");
-        let temp_metadata = |path: &Path| -> Result<Option<std::fs::Metadata>> {
-            match std::fs::symlink_metadata(path) {
+        let temp_metadata = |path: &Path| -> Result<Option<SecureMetadata>> {
+            match secure_file_metadata::from_path(path) {
                 Ok(metadata) => {
                     if metadata.file_type().is_symlink()
                         || !metadata.file_type().is_file()
@@ -20434,10 +20414,10 @@ impl Kura {
         drop(new_index);
         drop(data);
         drop(index);
-        let staged_data_bytes = std::fs::symlink_metadata(&temp_data_path)
+        let staged_data_bytes = secure_file_metadata::from_path(&temp_data_path)
             .map_err(|error| Error::IO(error, temp_data_path.clone()))?
             .len();
-        let staged_index_bytes = std::fs::symlink_metadata(&temp_index_path)
+        let staged_index_bytes = secure_file_metadata::from_path(&temp_index_path)
             .map_err(|error| Error::IO(error, temp_index_path.clone()))?
             .len();
         if staged_data_bytes != actual.retained_data_bytes
@@ -23760,7 +23740,7 @@ impl Kura {
                 )
             })?;
         let namespace = self.open_bound_progress_namespace(&frontier_path, &build_path)?;
-        match std::fs::symlink_metadata(&build_path) {
+        match secure_file_metadata::from_path(&build_path) {
             Err(error) if error.kind() == ErrorKind::NotFound => {}
             Err(error) => return Err(Error::IO(error, build_path)),
             Ok(_) => {
@@ -23818,7 +23798,7 @@ impl Kura {
                 )
             })?;
         let namespace = self.open_bound_progress_namespace(&frontier_path, &build_path)?;
-        match std::fs::symlink_metadata(&build_path) {
+        match secure_file_metadata::from_path(&build_path) {
             Err(error) if error.kind() == ErrorKind::NotFound => {}
             Err(error) => return Err(Error::IO(error, build_path)),
             Ok(_) => {
@@ -25546,7 +25526,7 @@ impl Kura {
             }
         }
         let temp_path = Self::autonomous_lifecycle_process_generation_temp_path_for(store_root);
-        match std::fs::symlink_metadata(&temp_path) {
+        match secure_file_metadata::from_path(&temp_path) {
             Ok(_) => {
                 return Err(Self::invalid_lane_artifact_error(
                     temp_path,
@@ -25748,7 +25728,7 @@ impl Kura {
                         "retained autonomous lifecycle evidence is not a regular file",
                     ));
                 }
-                let metadata = std::fs::symlink_metadata(&path)
+                let metadata = secure_file_metadata::from_path(&path)
                     .map_err(|error| Error::IO(error, path.clone()))?;
                 if !Self::sidecar_is_single_link(&metadata) {
                     return Err(Self::invalid_lane_artifact_error(
@@ -27360,8 +27340,8 @@ impl Kura {
             if !name.starts_with("autonomous_") {
                 continue;
             }
-            let metadata =
-                std::fs::symlink_metadata(&path).map_err(|error| Error::IO(error, path.clone()))?;
+            let metadata = secure_file_metadata::from_path(&path)
+                .map_err(|error| Error::IO(error, path.clone()))?;
             if metadata.file_type().is_symlink()
                 || !metadata.file_type().is_file()
                 || !Self::sidecar_is_single_link(&metadata)
@@ -29694,7 +29674,7 @@ impl Kura {
         ) == path
     }
     fn autonomous_lane_entrypoint_claim_file_exists(path: &Path) -> Result<bool> {
-        match std::fs::symlink_metadata(path) {
+        match secure_file_metadata::from_path(path) {
             Ok(metadata)
                 if metadata.file_type().is_symlink()
                     || !metadata.file_type().is_file()
@@ -29757,7 +29737,7 @@ impl Kura {
                     "autonomous claim shard name is non-canonical",
                 ));
             }
-            let shard_metadata = std::fs::symlink_metadata(&shard_path)
+            let shard_metadata = secure_file_metadata::from_path(&shard_path)
                 .map_err(|error| Error::IO(error, shard_path.clone()))?;
             if shard_metadata.file_type().is_symlink() || !shard_metadata.file_type().is_dir() {
                 return Err(Self::invalid_lane_artifact_error(
@@ -29949,7 +29929,7 @@ impl Kura {
                     "autonomous claim shard name is non-canonical",
                 ));
             }
-            let shard_metadata = std::fs::symlink_metadata(&shard_path)
+            let shard_metadata = secure_file_metadata::from_path(&shard_path)
                 .map_err(|error| Error::IO(error, shard_path.clone()))?;
             if shard_metadata.file_type().is_symlink() || !shard_metadata.file_type().is_dir() {
                 return Err(Self::invalid_lane_artifact_error(
@@ -31882,7 +31862,7 @@ impl Kura {
         let _sidecar_guard = self.sidecar_lock.lock();
         for entry in entries {
             let directory = Self::lane_artifact_dir(&entry.blocks_dir(&self.store_root));
-            match std::fs::symlink_metadata(&directory) {
+            match secure_file_metadata::from_path(&directory) {
                 Ok(_) => {}
                 Err(error) if error.kind() == ErrorKind::NotFound => continue,
                 Err(error) => return Err(Error::IO(error, directory)),
@@ -31926,7 +31906,7 @@ impl Kura {
                 if !is_temporary && !name.starts_with("autonomous_") && !bootstrap_quarantine {
                     continue;
                 }
-                let metadata = std::fs::symlink_metadata(&path)
+                let metadata = secure_file_metadata::from_path(&path)
                     .map_err(|error| Error::IO(error, path.clone()))?;
                 if metadata.file_type().is_symlink()
                     || !metadata.file_type().is_file()
@@ -32049,7 +32029,7 @@ impl Kura {
                         "autonomous startup inventory exceeds its hard file-count limit",
                     ));
                 }
-                let metadata = match std::fs::symlink_metadata(&path) {
+                let metadata = match secure_file_metadata::from_path(&path) {
                     Ok(metadata) => metadata,
                     Err(error) if error.kind() == ErrorKind::NotFound => {
                         let Some(identity) = view_temp_identity else {
@@ -32556,7 +32536,7 @@ impl Kura {
                 let accounting_mutation = self.begin_total_disk_usage_mutation();
                 let mut removed_bytes = 0_u64;
                 for (path, expected_metadata) in &temporary_paths {
-                    let current = std::fs::symlink_metadata(path)
+                    let current = secure_file_metadata::from_path(path)
                         .map_err(|error| Error::IO(error, path.clone()))?;
                     if !Self::sidecar_file_metadata_unchanged(expected_metadata, &current) {
                         return Err(Self::invalid_lane_artifact_error(
@@ -36090,7 +36070,7 @@ impl Kura {
         let mut rebuilt = 0_usize;
         for entry in entries {
             let evidence_directory = Self::lane_artifact_dir(&entry.blocks_dir(&self.store_root));
-            match std::fs::symlink_metadata(&evidence_directory) {
+            match secure_file_metadata::from_path(&evidence_directory) {
                 Ok(_) => {}
                 Err(error) if error.kind() == ErrorKind::NotFound => continue,
                 Err(error) => return Err(Error::IO(error, evidence_directory)),
@@ -37758,8 +37738,8 @@ impl Kura {
             let directory_entry =
                 directory_entry.map_err(|error| Error::IO(error, directory.clone()))?;
             let path = directory_entry.path();
-            let metadata =
-                std::fs::symlink_metadata(&path).map_err(|error| Error::IO(error, path.clone()))?;
+            let metadata = secure_file_metadata::from_path(&path)
+                .map_err(|error| Error::IO(error, path.clone()))?;
             if metadata.file_type().is_symlink() {
                 return Err(Self::invalid_lane_artifact_error(
                     path,
@@ -38978,7 +38958,7 @@ impl BlockStore {
         ]))
     }
     fn eviction_file_digest(path: &Path) -> Result<(u64, Hash)> {
-        let before = std::fs::symlink_metadata(path)
+        let before = secure_file_metadata::from_path(path)
             .map_err(|error| Error::IO(error, path.to_path_buf()))?;
         if before.file_type().is_symlink()
             || !before.is_file()
@@ -38996,8 +38976,7 @@ impl BlockStore {
             .read(true)
             .open(path)
             .map_err(|error| Error::IO(error, path.to_path_buf()))?;
-        let opened = file
-            .metadata()
+        let opened = secure_file_metadata::from_file(&file)
             .map_err(|error| Error::IO(error, path.to_path_buf()))?;
         if !opened.is_file() || !Kura::sidecar_file_metadata_unchanged(&before, &opened) {
             return Err(Error::IO(
@@ -39011,10 +38990,9 @@ impl BlockStore {
         let total = before.len();
         let digest = Self::eviction_reader_digest(&mut file, total)
             .map_err(|error| Error::IO(error, path.to_path_buf()))?;
-        let after_handle = file
-            .metadata()
+        let after_handle = secure_file_metadata::from_file(&file)
             .map_err(|error| Error::IO(error, path.to_path_buf()))?;
-        let after_path = std::fs::symlink_metadata(path)
+        let after_path = secure_file_metadata::from_path(path)
             .map_err(|error| Error::IO(error, path.to_path_buf()))?;
         if !Kura::sidecar_file_metadata_unchanged(&before, &after_handle)
             || !Kura::sidecar_file_metadata_unchanged(&before, &after_path)
@@ -39034,7 +39012,7 @@ impl BlockStore {
         expected_len: u64,
         expected_digest: Hash,
     ) -> Result<bool> {
-        match std::fs::symlink_metadata(path) {
+        match secure_file_metadata::from_path(path) {
             Ok(metadata) => {
                 if metadata.file_type().is_symlink() || !metadata.is_file() {
                     return Err(Error::IO(
@@ -39146,8 +39124,8 @@ impl BlockStore {
                 path,
             ));
         }
-        let before =
-            std::fs::symlink_metadata(&path).map_err(|error| Error::IO(error, path.clone()))?;
+        let before = secure_file_metadata::from_path(&path)
+            .map_err(|error| Error::IO(error, path.clone()))?;
         if before.file_type().is_symlink()
             || !before.is_file()
             || !Kura::sidecar_is_single_link(&before)
@@ -39160,8 +39138,7 @@ impl BlockStore {
             .read(true)
             .open(&path)
             .map_err(|error| Error::IO(error, path.clone()))?;
-        let opened = file
-            .metadata()
+        let opened = secure_file_metadata::from_file(&file)
             .map_err(|error| Error::IO(error, path.clone()))?;
         if !Kura::sidecar_file_metadata_unchanged(&before, &opened) {
             return Err(self.invalid_eviction_compaction_stage(
@@ -39170,8 +39147,8 @@ impl BlockStore {
         }
         file.sync_all()
             .map_err(|error| Error::IO(error, path.clone()))?;
-        let after =
-            std::fs::symlink_metadata(&path).map_err(|error| Error::IO(error, path.clone()))?;
+        let after = secure_file_metadata::from_path(&path)
+            .map_err(|error| Error::IO(error, path.clone()))?;
         if !Kura::sidecar_file_metadata_unchanged(&before, &after) {
             return Err(self.invalid_eviction_compaction_stage(
                 "eviction compaction stage changed while being synchronized",
@@ -39726,11 +39703,10 @@ impl BlockStore {
         persisted
             .sync_all()
             .map_err(|error| Error::IO(error, path.clone()))?;
-        let persisted_metadata = persisted
-            .metadata()
+        let persisted_metadata = secure_file_metadata::from_file(&persisted)
             .map_err(|error| Error::IO(error, path.clone()))?;
-        let path_metadata =
-            std::fs::symlink_metadata(&path).map_err(|error| Error::IO(error, path.clone()))?;
+        let path_metadata = secure_file_metadata::from_path(&path)
+            .map_err(|error| Error::IO(error, path.clone()))?;
         let (_, parent_after_persist) =
             Kura::canonical_sidecar_directory_for(&self.path_to_blockchain, parent)?.ok_or_else(
                 || {
@@ -40478,7 +40454,7 @@ impl BlockStore {
             .sync_all()
             .map_err(|error| Error::IO(error, path.clone()))?;
         sync_dir(parent).map_err(|error| Error::IO(error, parent.to_path_buf()))?;
-        let parent_after = std::fs::symlink_metadata(parent)
+        let parent_after = secure_file_metadata::from_path(parent)
             .map_err(|error| Error::IO(error, parent.to_path_buf()))?;
         if !Kura::sidecar_metadata_same_object(&parent_before, &parent_after) {
             return Err(Error::IO(
@@ -40658,7 +40634,7 @@ impl BlockStore {
         Ok(Some(marker))
     }
     fn read_bounded_commit_marker_bytes(path: &Path) -> Result<Option<Vec<u8>>> {
-        let before = match std::fs::symlink_metadata(path) {
+        let before = match secure_file_metadata::from_path(path) {
             Ok(metadata) => metadata,
             Err(error) if error.kind() == ErrorKind::NotFound => return Ok(None),
             Err(error) => return Err(Error::IO(error, path.to_path_buf())),
@@ -40679,8 +40655,7 @@ impl BlockStore {
         }
         let mut file =
             std::fs::File::open(path).map_err(|error| Error::IO(error, path.to_path_buf()))?;
-        let opened_before = file
-            .metadata()
+        let opened_before = secure_file_metadata::from_file(&file)
             .map_err(|error| Error::IO(error, path.to_path_buf()))?;
         if !opened_before.is_file()
             || !Kura::sidecar_is_single_link(&opened_before)
@@ -40703,10 +40678,9 @@ impl BlockStore {
             )
             .read_to_end(&mut bytes)
             .map_err(|error| Error::IO(error, path.to_path_buf()))?;
-        let opened_after = file
-            .metadata()
+        let opened_after = secure_file_metadata::from_file(&file)
             .map_err(|error| Error::IO(error, path.to_path_buf()))?;
-        let after = std::fs::symlink_metadata(path)
+        let after = secure_file_metadata::from_path(path)
             .map_err(|error| Error::IO(error, path.to_path_buf()))?;
         if u64::try_from(bytes.len()).unwrap_or(u64::MAX) != before.len()
             || after.file_type().is_symlink()
@@ -42097,7 +42071,7 @@ impl BlockStore {
             self.eviction_compaction_stage_path(),
             self.commit_marker_path().with_extension("norito.tmp"),
         ] {
-            if std::fs::symlink_metadata(&path).is_ok() {
+            if secure_file_metadata::from_path(&path).is_ok() {
                 return Err(Error::InvalidSnapshotBootstrapMarker {
                     path,
                     reason: "unresolved canonical transaction requires recovery before provisional snapshot opening"

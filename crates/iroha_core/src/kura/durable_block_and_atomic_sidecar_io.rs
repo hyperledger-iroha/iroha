@@ -2,7 +2,7 @@
 impl Kura {
     fn blocks_root_debug_file_bytes(root: &Path) -> Result<u64> {
         let path = root.join("blocks.jsonl");
-        let metadata = match std::fs::symlink_metadata(&path) {
+        let metadata = match secure_file_metadata::from_path(&path) {
             Ok(metadata) => metadata,
             Err(error) if error.kind() == ErrorKind::NotFound => return Ok(0),
             Err(error) => return Err(Error::IO(error, path)),
@@ -163,8 +163,7 @@ impl Kura {
         file.seek(SeekFrom::End(0))
             .and_then(|_| file.write_all(bytes))
             .map_err(|error| Error::IO(error, path.to_path_buf()))?;
-        let after = file
-            .metadata()
+        let after = secure_file_metadata::from_file(&file)
             .map_err(|error| Error::IO(error, path.to_path_buf()))?;
         let current = Self::regular_sidecar_metadata_for(&self.store_root, path, parent)?
             .ok_or_else(|| {
@@ -675,9 +674,7 @@ impl Kura {
                 parent.to_path_buf(),
             ));
         }
-        let temporary_metadata = temporary
-            .as_file()
-            .metadata()
+        let temporary_metadata = secure_file_metadata::from_file(temporary.as_file())
             .map_err(|error| Error::IO(error, path.to_path_buf()))?;
         if !temporary_metadata.is_file() || !Self::sidecar_is_single_link(&temporary_metadata) {
             return Err(Error::IO(
@@ -748,10 +745,9 @@ impl Kura {
         persisted
             .sync_all()
             .map_err(|error| Error::IO(error, path.to_path_buf()))?;
-        let persisted_metadata = persisted
-            .metadata()
+        let persisted_metadata = secure_file_metadata::from_file(&persisted)
             .map_err(|error| Error::IO(error, path.to_path_buf()))?;
-        let path_metadata = std::fs::symlink_metadata(path)
+        let path_metadata = secure_file_metadata::from_path(path)
             .map_err(|error| Error::IO(error, path.to_path_buf()))?;
         let (_, directory_after_persist) =
             self.canonical_sidecar_directory(parent)?.ok_or_else(|| {

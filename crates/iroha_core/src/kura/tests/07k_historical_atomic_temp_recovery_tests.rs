@@ -195,7 +195,7 @@ fn historical_atomic_temp_cleans_exact_duplicate_and_two_link_publication_retry(
         );
     }
     assert!(Kura::sidecar_is_single_link(
-        &std::fs::symlink_metadata(&linked_stable)
+        &secure_file_metadata::from_path(&linked_stable)
             .expect("read cleaned linked historical stable metadata"),
     ));
 }

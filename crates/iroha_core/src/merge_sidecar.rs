@@ -14,6 +14,7 @@ use crate::sumeragi::v2_core::{
 };
 use crate::{
     merge::MergeLedgerCandidate,
+    secure_file_metadata::{self, SecureMetadata},
     sumeragi::{
         v2_core::{
             CanonicalIdentityProjection, IDENTITY_DOMAIN_PAYLOAD, IDENTITY_DOMAIN_PEER,
@@ -1748,19 +1749,18 @@ type LifecycleArtifactRevision = (u64, u64, u64, u32, Option<u32>);
 #[cfg(not(any(unix, windows)))]
 type LifecycleArtifactRevision = ();
 #[cfg(unix)]
-fn lifecycle_artifact_identity(metadata: &fs::Metadata) -> LifecycleArtifactIdentity {
+fn lifecycle_artifact_identity(metadata: &SecureMetadata) -> LifecycleArtifactIdentity {
     use std::os::unix::fs::MetadataExt as _;
     (metadata.dev(), metadata.ino())
 }
 #[cfg(windows)]
-fn lifecycle_artifact_identity(metadata: &fs::Metadata) -> LifecycleArtifactIdentity {
-    use std::os::windows::fs::MetadataExt as _;
+fn lifecycle_artifact_identity(metadata: &SecureMetadata) -> LifecycleArtifactIdentity {
     (metadata.volume_serial_number(), metadata.file_index())
 }
 #[cfg(not(any(unix, windows)))]
-fn lifecycle_artifact_identity(_metadata: &fs::Metadata) -> LifecycleArtifactIdentity {}
+fn lifecycle_artifact_identity(_metadata: &SecureMetadata) -> LifecycleArtifactIdentity {}
 #[cfg(unix)]
-fn lifecycle_artifact_revision(metadata: &fs::Metadata) -> LifecycleArtifactRevision {
+fn lifecycle_artifact_revision(metadata: &SecureMetadata) -> LifecycleArtifactRevision {
     use std::os::unix::fs::MetadataExt as _;
     (
         metadata.len(),
@@ -1775,8 +1775,7 @@ fn lifecycle_artifact_revision(metadata: &fs::Metadata) -> LifecycleArtifactRevi
     )
 }
 #[cfg(windows)]
-fn lifecycle_artifact_revision(metadata: &fs::Metadata) -> LifecycleArtifactRevision {
-    use std::os::windows::fs::MetadataExt as _;
+fn lifecycle_artifact_revision(metadata: &SecureMetadata) -> LifecycleArtifactRevision {
     (
         metadata.file_size(),
         metadata.creation_time(),
@@ -1786,7 +1785,7 @@ fn lifecycle_artifact_revision(metadata: &fs::Metadata) -> LifecycleArtifactRevi
     )
 }
 #[cfg(not(any(unix, windows)))]
-fn lifecycle_artifact_revision(_metadata: &fs::Metadata) -> LifecycleArtifactRevision {}
+fn lifecycle_artifact_revision(_metadata: &SecureMetadata) -> LifecycleArtifactRevision {}
 #[cfg(unix)]
 const fn lifecycle_artifact_identity_available(_identity: LifecycleArtifactIdentity) -> bool {
     true
@@ -1799,7 +1798,7 @@ const fn lifecycle_artifact_identity_available(identity: LifecycleArtifactIdenti
 const fn lifecycle_artifact_identity_available(_identity: LifecycleArtifactIdentity) -> bool {
     false
 }
-fn lifecycle_artifact_is_single_link(metadata: &fs::Metadata) -> bool {
+fn lifecycle_artifact_is_single_link(metadata: &SecureMetadata) -> bool {
     #[cfg(unix)]
     {
         use std::os::unix::fs::MetadataExt as _;
@@ -1807,7 +1806,6 @@ fn lifecycle_artifact_is_single_link(metadata: &fs::Metadata) -> bool {
     }
     #[cfg(windows)]
     {
-        use std::os::windows::fs::MetadataExt as _;
         metadata.number_of_links() == Some(1)
     }
     #[cfg(not(any(unix, windows)))]
@@ -1817,16 +1815,15 @@ fn lifecycle_artifact_is_single_link(metadata: &fs::Metadata) -> bool {
     }
 }
 #[cfg(windows)]
-fn lifecycle_artifact_is_reparse_point(metadata: &fs::Metadata) -> bool {
-    use std::os::windows::fs::MetadataExt as _;
+fn lifecycle_artifact_is_reparse_point(metadata: &SecureMetadata) -> bool {
     const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x0000_0400;
     metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0
 }
 #[cfg(not(windows))]
-fn lifecycle_artifact_is_reparse_point(_metadata: &fs::Metadata) -> bool {
+fn lifecycle_artifact_is_reparse_point(_metadata: &SecureMetadata) -> bool {
     false
 }
-fn lifecycle_artifact_metadata_unchanged(left: &fs::Metadata, right: &fs::Metadata) -> bool {
+fn lifecycle_artifact_metadata_unchanged(left: &SecureMetadata, right: &SecureMetadata) -> bool {
     let identity = lifecycle_artifact_identity(left);
     lifecycle_artifact_identity_available(identity)
         && identity == lifecycle_artifact_identity(right)
@@ -1836,10 +1833,9 @@ fn verify_open_lifecycle_directory(
     path: &Path,
     directory: &File,
 ) -> Result<LifecycleArtifactIdentity, MergeSidecarError> {
-    let path_metadata = fs::symlink_metadata(path)
+    let path_metadata = secure_file_metadata::from_path(path)
         .map_err(|error| MergeSidecarError::LifecycleJournal(error.to_string()))?;
-    let opened = directory
-        .metadata()
+    let opened = secure_file_metadata::from_file(directory)
         .map_err(|error| MergeSidecarError::LifecycleJournal(error.to_string()))?;
     let path_identity = lifecycle_artifact_identity(&path_metadata);
     let opened_identity = lifecycle_artifact_identity(&opened);
@@ -1897,11 +1893,10 @@ fn verify_open_lifecycle_regular(
     path: &Path,
     file: &File,
     artifact: &str,
-) -> Result<(fs::Metadata, fs::Metadata), MergeSidecarError> {
-    let path_metadata = fs::symlink_metadata(path)
+) -> Result<(SecureMetadata, SecureMetadata), MergeSidecarError> {
+    let path_metadata = secure_file_metadata::from_path(path)
         .map_err(|error| MergeSidecarError::LifecycleJournal(error.to_string()))?;
-    let opened = file
-        .metadata()
+    let opened = secure_file_metadata::from_file(file)
         .map_err(|error| MergeSidecarError::LifecycleJournal(error.to_string()))?;
     let path_identity = lifecycle_artifact_identity(&path_metadata);
     let opened_identity = lifecycle_artifact_identity(&opened);
@@ -2018,7 +2013,7 @@ impl MergeSidecarLifecycleJournal {
             }
         }
         let directory = store_root.join(LIFECYCLE_JOURNAL_DIR);
-        let directory_exists = match fs::symlink_metadata(&directory) {
+        let directory_exists = match secure_file_metadata::from_path(&directory) {
             Ok(metadata)
                 if metadata.file_type().is_dir()
                     && !metadata.file_type().is_symlink()
@@ -2310,7 +2305,7 @@ impl MergeSidecarLifecycleJournal {
         path: &Path,
         artifact: &str,
     ) -> Result<bool, MergeSidecarError> {
-        let metadata = match fs::symlink_metadata(path) {
+        let metadata = match secure_file_metadata::from_path(path) {
             Ok(metadata) => metadata,
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(false),
             Err(error) => {
@@ -2380,7 +2375,7 @@ impl MergeSidecarLifecycleJournal {
         max_bytes: usize,
         artifact: &str,
     ) -> Result<Vec<u8>, MergeSidecarError> {
-        let path_before = fs::symlink_metadata(path)
+        let path_before = secure_file_metadata::from_path(path)
             .map_err(|error| MergeSidecarError::LifecycleJournal(error.to_string()))?;
         if path_before.file_type().is_symlink()
             || lifecycle_artifact_is_reparse_point(&path_before)

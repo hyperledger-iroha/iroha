@@ -557,7 +557,7 @@ fn validate_geometry_journal_relative_path(
 ) -> Result<()> {
     let relative = Path::new(relative);
     validate_relative_path(relative)?;
-    let root_metadata = fs::symlink_metadata(store_root)
+    let root_metadata = secure_file_metadata::from_path(store_root)
         .map_err(|error| Error::IO(error, store_root.to_path_buf()))?;
     if root_metadata.file_type().is_symlink() || !root_metadata.file_type().is_dir() {
         return Err(configured_catalog_preflight_error(
@@ -571,7 +571,7 @@ fn validate_geometry_journal_relative_path(
     for (index, component) in components.iter().enumerate() {
         cursor.push(component.as_os_str());
         let is_target = index + 1 == components.len();
-        match fs::symlink_metadata(&cursor) {
+        match secure_file_metadata::from_path(&cursor) {
             Ok(metadata) if metadata.file_type().is_symlink() => {
                 return Err(Error::IO(
                     std::io::Error::new(
@@ -835,7 +835,7 @@ fn validate_relative_path(path: &Path) -> Result<()> {
     }
     Ok(())
 }
-fn geometry_file_identity(metadata: &fs::Metadata) -> GeometryFileIdentity {
+fn geometry_file_identity(metadata: &SecureMetadata) -> GeometryFileIdentity {
     #[cfg(unix)]
     {
         use std::os::unix::fs::MetadataExt;
@@ -846,7 +846,7 @@ fn geometry_file_identity(metadata: &fs::Metadata) -> GeometryFileIdentity {
     }
     #[cfg(windows)]
     {
-        use std::{os::windows::fs::MetadataExt, sync::atomic::Ordering};
+        use std::sync::atomic::Ordering;
         let volume_serial_number = metadata.volume_serial_number();
         let file_index = metadata.file_index();
         let unsupported_nonce = if volume_serial_number.is_some() && file_index.is_some() {
@@ -872,7 +872,7 @@ fn geometry_file_identity(metadata: &fs::Metadata) -> GeometryFileIdentity {
     }
 }
 fn checked_geometry_file_identity(
-    metadata: &fs::Metadata,
+    metadata: &SecureMetadata,
     path: &Path,
 ) -> Result<GeometryFileIdentity> {
     let identity = geometry_file_identity(metadata);

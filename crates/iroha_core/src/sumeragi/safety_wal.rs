@@ -338,6 +338,7 @@ impl BoundSafetyWalDirectory {
             identity,
         })
     }
+    #[cfg(all(unix, not(target_os = "espidf")))]
     fn verify_linked(&self) -> io::Result<()> {
         #[cfg(all(unix, not(target_os = "espidf")))]
         {
