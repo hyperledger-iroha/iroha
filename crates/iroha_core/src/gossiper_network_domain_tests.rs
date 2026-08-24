@@ -3,7 +3,7 @@
 fn initial_target_seed_is_stable_and_exact_network_specific() {
     let network_id = test_network_id();
     let foreign_network_id: NetworkId =
-        "0000000000000000000000000000000000000000000000000000000000000002"
+        "hash:0000000000000000000000000000000000000000000000000000000000000003#E54C"
             .parse()
             .expect("valid foreign test network id");
     let self_peer: PeerId = (*PEER_KEYPAIR).public_key().clone().into();

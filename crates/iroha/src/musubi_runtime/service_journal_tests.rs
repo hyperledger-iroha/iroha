@@ -1138,8 +1138,11 @@ fn threshold_private_service_fixture(behavior: ThresholdSigningBehavior) -> Priv
                 .expect("derive threshold broker key")
         })
         .collect();
+    // Keep the broker identity itself valid; `OverApprovalBound` exercises untrusted signer
+    // output by returning every key below, including approvals outside this 2-of-3 controller.
     let members = key_pairs
         .iter()
+        .take(3)
         .map(|key_pair| {
             MultisigMember::new(key_pair.public_key().clone(), 1).expect("threshold broker member")
         })

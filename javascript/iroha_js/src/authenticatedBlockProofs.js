@@ -1,6 +1,7 @@
 import { Buffer } from "node:buffer";
 
 import { getNativeBinding } from "./native.js";
+import { networkIdBytes } from "./networkId.js";
 
 export const AUTHENTICATED_BLOCK_PROOFS_VERSION_V1 = 1;
 export const AUTHENTICATED_BLOCK_PROOFS_MAX_BLOCK_WIRE_BYTES_V1 = 32 * 1024 * 1024;
@@ -186,14 +187,7 @@ function normalizeInput(input) {
       `authenticated BlockProofs version must be ${AUTHENTICATED_BLOCK_PROOFS_VERSION_V1}`,
     );
   }
-  if (typeof input.networkId !== "string" || !LOWER_HEX_32_PATTERN.test(input.networkId)) {
-    throw new TypeError("authenticated BlockProofs networkId is not canonical lowercase hex32");
-  }
-  if ((Number.parseInt(input.networkId.slice(-2), 16) & 1) !== 1) {
-    throw new TypeError(
-      "authenticated BlockProofs networkId must carry the Iroha hash marker bit",
-    );
-  }
+  networkIdBytes(input.networkId, "authenticated BlockProofs networkId");
   const trustedContextId = copyBoundedBytes(
     input.trustedContextId,
     "authenticated BlockProofs trustedContextId",
@@ -227,7 +221,7 @@ function normalizeInput(input) {
         );
   return {
     version: input.version,
-    networkId: input.networkId,
+    networkId: input.networkId.literal,
     trustedContextId,
     expectedEntryHash,
     previousFinalityProofNorito,

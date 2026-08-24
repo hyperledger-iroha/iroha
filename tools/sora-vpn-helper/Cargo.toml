@@ -13,9 +13,6 @@ path = "src/main.rs"
 
 [dependencies]
 blake3 = { workspace = true }
-# TODO: Remove this optional compatibility declaration with the next permitted
-# Cargo.lock refresh; the checked-in lock still records `clap` for this package.
-clap = { workspace = true, features = ["derive"], optional = true }
 hex = { workspace = true }
 iroha_crypto = { workspace = true, features = ["application"], default-features = false }
 iroha_data_model = { workspace = true, features = ["application-model"], default-features = false }

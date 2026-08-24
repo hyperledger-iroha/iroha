@@ -56,7 +56,7 @@ class RunLocalSwarmSafetyTest(unittest.TestCase):
             stop_body,
         )
 
-    def test_genesis_hash_is_exported_and_bound_into_every_peer_config(self) -> None:
+    def test_checked_genesis_network_id_is_bound_into_every_config(self) -> None:
         text = _script_text()
 
         self.assertIn(
@@ -64,10 +64,13 @@ class RunLocalSwarmSafetyTest(unittest.TestCase):
             text,
         )
         self.assertIn(
-            '[[ ! "$GENESIS_EXPECTED_HASH" =~ ^[0-9a-f]{63}[13579bdf]$ ]]',
+            '[[ ! "$GENESIS_NETWORK_ID" =~ ^hash:[0-9A-F]{63}[13579BDF]#[0-9A-F]{4}$ ]]',
             text,
         )
-        self.assertIn('expected_hash = "$GENESIS_EXPECTED_HASH"', text)
+        self.assertIn('expected_hash_file = "$BASE/genesis.expected_hash"', text)
+        self.assertIn('network_id_file = "$BASE/genesis.expected_hash"', text)
+        self.assertNotIn('expected_hash = "$GENESIS_NETWORK_ID"', text)
+        self.assertNotIn('network_id = "$GENESIS_NETWORK_ID"', text)
 
     def test_consensus_context_is_signed_in_genesis_not_local_config(self) -> None:
         text = _script_text()

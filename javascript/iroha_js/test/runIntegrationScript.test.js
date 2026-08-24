@@ -43,7 +43,7 @@ test("default Compose artifact preflight fails closed and accepts exact records"
   const hashPath = path.join(directory, "genesis.expected_hash");
   await writeFile(publicPath, "public-without-newline");
   await writeFile(signedPath, "signed-genesis");
-  await writeFile(hashPath, `${"0".repeat(63)}1\n`);
+  await writeFile(hashPath, `hash:${"0".repeat(63)}1#C50E\n`);
   const env = {
     IROHA_GENESIS_PUBLIC_KEY_FILE: publicPath,
     IROHA_GENESIS_SIGNED_FILE: signedPath,
@@ -55,13 +55,25 @@ test("default Compose artifact preflight fails closed and accepts exact records"
   );
 
   await writeFile(publicPath, "public\n");
-  await writeFile(hashPath, `${"0".repeat(63)}2\n`);
+  await writeFile(hashPath, `${"0".repeat(63)}1\n`);
   await assert.rejects(
     validateDefaultComposeGenesisArtifacts(env),
-    /canonical lowercase Iroha hash/,
+    /canonical checked NetworkId/,
   );
 
-  await writeFile(hashPath, `${"0".repeat(63)}1\n`);
+  await writeFile(hashPath, `hash:${"0".repeat(63)}1#c50e\n`);
+  await assert.rejects(
+    validateDefaultComposeGenesisArtifacts(env),
+    /canonical checked NetworkId/,
+  );
+
+  await writeFile(hashPath, `hash:${"0".repeat(63)}1#C50F\n`);
+  await assert.rejects(
+    validateDefaultComposeGenesisArtifacts(env),
+    /canonical checked NetworkId/,
+  );
+
+  await writeFile(hashPath, `hash:${"0".repeat(63)}1#C50E\n`);
   await validateDefaultComposeGenesisArtifacts(env);
 });
 

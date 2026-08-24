@@ -3,6 +3,7 @@ use crate::workspace_root;
 use blake2::{Blake2b512, digest::Digest};
 use iroha_crypto::{Algorithm, ExposedPrivateKey, Hash, KeyPair};
 use iroha_data_model::{
+    NetworkId,
     account::AccountId,
     asset::AssetDefinitionId,
     block::consensus_v2::is_valid_committee_size,
@@ -60,20 +61,33 @@ struct PeerMaterial {
 }
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum PrivateKeyRendering {
-    InlineStaging,
+    Inline,
     RuntimeFiles,
 }
 fn published_private_key_rendering(spec: &ProfileSpec) -> PrivateKeyRendering {
     if spec.slug == "iroha3-dev" {
-        PrivateKeyRendering::InlineStaging
+        PrivateKeyRendering::Inline
     } else {
         PrivateKeyRendering::RuntimeFiles
+    }
+}
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum GenesisIdentityRendering<'a> {
+    InlineBootstrap(&'a str),
+    SiblingFile,
+    RuntimeFile,
+}
+fn published_genesis_identity_rendering(spec: &ProfileSpec) -> GenesisIdentityRendering<'static> {
+    if spec.slug == "iroha3-dev" {
+        GenesisIdentityRendering::SiblingFile
+    } else {
+        GenesisIdentityRendering::RuntimeFile
     }
 }
 struct StagedGenesis {
     manifest: RawGenesisTransaction,
     signed_wire: Vec<u8>,
-    expected_hash: String,
+    network_id: NetworkId,
 }
 type AnyResult<T> = Result<T, Box<dyn Error>>;
 const DEFAULT_TORII_MAX_CONTENT_LEN: u64 =
@@ -202,8 +216,8 @@ fn write_profile_bundle(
         &peers,
         genesis_key.public_key(),
         &bundle_root,
-        GENESIS_EXPECTED_HASH_PLACEHOLDER,
-        PrivateKeyRendering::InlineStaging,
+        GenesisIdentityRendering::InlineBootstrap(GENESIS_EXPECTED_HASH_PLACEHOLDER),
+        PrivateKeyRendering::Inline,
     )?;
     let config_path = bundle_root.join(peer_config_file_name(0));
     let staged_genesis = bind_staged_context(
@@ -215,6 +229,7 @@ fn write_profile_bundle(
         patched_genesis,
     )?;
     write_json(&genesis_path, &staged_genesis.manifest)?;
+    let network_id = staged_genesis.network_id.to_string();
     fs::write(
         bundle_root.join("genesis.signed.nrt"),
         staged_genesis.signed_wire,
@@ -225,14 +240,14 @@ fn write_profile_bundle(
     )?;
     fs::write(
         bundle_root.join("genesis.expected_hash"),
-        format!("{}\n", staged_genesis.expected_hash),
+        format!("{network_id}\n"),
     )?;
     write_peer_configs(
         spec,
         &peers,
         genesis_key.public_key(),
         &bundle_root,
-        &staged_genesis.expected_hash,
+        published_genesis_identity_rendering(spec),
         published_private_key_rendering(spec),
     )?;
     let vrf_seed_hex = if spec.requires_seed {
@@ -597,7 +612,7 @@ fn bind_staged_context(
     Ok(StagedGenesis {
         manifest: portable_manifest,
         signed_wire,
-        expected_hash: block.hash().to_string(),
+        network_id: NetworkId::from_genesis_hash(block.hash()),
     })
 }
 fn portable_bound_profile_manifest(
@@ -726,14 +741,13 @@ fn render_config(
     spec: &ProfileSpec,
     peers: &[PeerMaterial],
     genesis_public_key: &iroha_crypto::PublicKey,
-    genesis_expected_hash: &str,
 ) -> String {
     render_peer_config_with_private_keys(
         spec,
         peers,
         0,
         genesis_public_key,
-        genesis_expected_hash,
+        published_genesis_identity_rendering(spec),
         published_private_key_rendering(spec),
     )
 }
@@ -743,14 +757,13 @@ fn render_peer_config(
     peers: &[PeerMaterial],
     peer_index: usize,
     genesis_public_key: &iroha_crypto::PublicKey,
-    genesis_expected_hash: &str,
 ) -> String {
     render_peer_config_with_private_keys(
         spec,
         peers,
         peer_index,
         genesis_public_key,
-        genesis_expected_hash,
+        published_genesis_identity_rendering(spec),
         published_private_key_rendering(spec),
     )
 }
@@ -759,27 +772,31 @@ fn render_peer_config_with_private_keys(
     peers: &[PeerMaterial],
     peer_index: usize,
     genesis_public_key: &iroha_crypto::PublicKey,
-    genesis_expected_hash: &str,
+    genesis_identity_rendering: GenesisIdentityRendering<'_>,
     private_key_rendering: PrivateKeyRendering,
 ) -> String {
-    let genesis_expected_hash = if genesis_expected_hash == GENESIS_EXPECTED_HASH_PLACEHOLDER {
-        genesis_expected_hash.to_owned()
-    } else {
-        norito::literal::format("hash", &genesis_expected_hash.to_ascii_uppercase())
-    };
-    let genesis_identity_source = if genesis_expected_hash == GENESIS_EXPECTED_HASH_PLACEHOLDER
-        && private_key_rendering == PrivateKeyRendering::RuntimeFiles
-    {
-        "expected_hash_file = \"/run/iroha/genesis.expected_hash\"".to_owned()
-    } else {
-        format!("expected_hash = \"{genesis_expected_hash}\"")
+    let genesis_identity_source = match genesis_identity_rendering {
+        // The staging config exists before the genesis block has been signed, so it alone carries
+        // the inline unresolved sentinel used to derive the consensus policy embedded at signing.
+        GenesisIdentityRendering::InlineBootstrap(expected_hash) => {
+            format!("expected_hash = \"{expected_hash}\"")
+        }
+        // Published host-run profiles resolve this path relative to the generated config itself.
+        GenesisIdentityRendering::SiblingFile => {
+            "expected_hash_file = \"genesis.expected_hash\"".to_owned()
+        }
+        // Container/runtime profiles mount the independently provisioned identity at one fixed
+        // public path, distinct from their private signing-key mounts.
+        GenesisIdentityRendering::RuntimeFile => {
+            "expected_hash_file = \"/run/iroha/genesis.expected_hash\"".to_owned()
+        }
     };
     let node = peers
         .get(peer_index)
         .expect("peer config index must address signed topology");
     let (node_private_key, soranet_transport_private_key, streaming_private_key) =
         match private_key_rendering {
-            PrivateKeyRendering::InlineStaging => (
+            PrivateKeyRendering::Inline => (
                 format!("private_key = \"{}\"", node.private_key),
                 format!(
                     "soranet_transport_private_key = \"{}\"",
@@ -980,7 +997,7 @@ fn write_peer_configs(
     peers: &[PeerMaterial],
     genesis_public_key: &iroha_crypto::PublicKey,
     bundle_root: &Path,
-    genesis_expected_hash: &str,
+    genesis_identity_rendering: GenesisIdentityRendering<'_>,
     private_key_rendering: PrivateKeyRendering,
 ) -> AnyResult<()> {
     for peer_index in 0..peers.len() {
@@ -989,7 +1006,7 @@ fn write_peer_configs(
             peers,
             peer_index,
             genesis_public_key,
-            genesis_expected_hash,
+            genesis_identity_rendering,
             private_key_rendering,
         );
         fs::write(
@@ -1001,6 +1018,17 @@ fn write_peer_configs(
     Ok(())
 }
 fn render_docker_compose(spec: &ProfileSpec, peers: &[PeerMaterial]) -> String {
+    let genesis_identity_volume = match published_genesis_identity_rendering(spec) {
+        GenesisIdentityRendering::SiblingFile => {
+            "\n      - ./genesis.expected_hash:/config/genesis.expected_hash:ro"
+        }
+        GenesisIdentityRendering::RuntimeFile => {
+            "\n      - ./genesis.expected_hash:/run/iroha/genesis.expected_hash:ro"
+        }
+        GenesisIdentityRendering::InlineBootstrap(_) => {
+            unreachable!("published profiles never carry an inline genesis identity")
+        }
+    };
     let runtime_secrets_volume =
         if published_private_key_rendering(spec) == PrivateKeyRendering::RuntimeFiles {
             "\n      - /run/secrets/iroha:/run/secrets/iroha:ro"
@@ -1036,7 +1064,7 @@ fn render_docker_compose(spec: &ProfileSpec, peers: &[PeerMaterial]) -> String {
     volumes:
       - ./{config_file}:/config/config.toml:ro
       - ./genesis.json:/config/genesis.json:ro
-      - ./genesis.signed.nrt:/config/genesis.signed.nrt:ro{runtime_secrets_volume}
+      - ./genesis.signed.nrt:/config/genesis.signed.nrt:ro{genesis_identity_volume}{runtime_secrets_volume}
     ports:
       - "{torii_port}:{torii_port}"
       - "{p2p_port}:{p2p_port}"
@@ -1136,7 +1164,7 @@ Files:
 - genesis.json — generated with `kagami genesis generate --profile {profile}`, patched with deterministic topology+PoPs, and rebound to the exact staged Nexus/AMX context through `kagami genesis sign`
 - genesis.signed.nrt — canonical signed genesis wire artifact consumed by every validator
 - genesis.public_key — canonical one-line verifier key for the signed genesis artifact
-- genesis.expected_hash — canonical one-line independently provisioned signed-header hash
+- genesis.expected_hash — canonical checked `hash:<64 uppercase hex>#<CRC16>` NetworkId encoding the independently provisioned signed-header hash
 - verify.txt — stdout from `kagami verify --profile {profile} --genesis genesis.json{verify_vrf_seed_arg}`
 - config.toml and config-peer-*.toml — compatibility names for the generated validator configs
 - peer0.toml through peerN.toml — canonical prepared-bundle validator configs
@@ -1344,8 +1372,8 @@ fn profile_slug_list() -> String {
 mod tests {
     use super::*;
     use iroha_config::{base::toml::TomlSource, parameters::actual};
-    use iroha_crypto::Signature;
-    use iroha_data_model::account::address::ChainDiscriminantGuard;
+    use iroha_crypto::{HashOf, Signature};
+    use iroha_data_model::{account::address::ChainDiscriminantGuard, block::BlockHeader};
     use tempfile::tempdir;
     fn stub_genesis() -> RawGenesisTransaction {
         iroha_genesis::GenesisBuilder::new_without_executor(
@@ -1512,12 +1540,7 @@ mod tests {
         let peers = build_peers(&PROFILES[1]).expect("build deterministic peers");
         let genesis_key = deterministic_keypair("config-genesis", Algorithm::Ed25519)
             .expect("derive deterministic genesis key");
-        let rendered = render_config(
-            &PROFILES[1],
-            &peers,
-            genesis_key.public_key(),
-            GENESIS_EXPECTED_HASH_PLACEHOLDER,
-        );
+        let rendered = render_config(&PROFILES[1], &peers, genesis_key.public_key());
         assert!(rendered.contains(PROFILES[1].chain_id));
         assert!(rendered.contains("chain_discriminant = 753"));
         assert!(rendered.contains("viral_incentive_pool_account"));
@@ -1729,7 +1752,11 @@ mod tests {
 
     #[test]
     fn rendered_profile_configs_pass_actual_config_admission() {
-        let expected_hash = Hash::new(b"xtask profile config admission").to_string();
+        let expected_hash =
+            NetworkId::from_genesis_hash(HashOf::<BlockHeader>::from_untyped_unchecked(Hash::new(
+                b"xtask profile config admission",
+            )))
+            .to_string();
         for profile in PROFILES {
             let peers = build_peers(profile).expect("build deterministic peers");
             let genesis_key = deterministic_keypair(
@@ -1742,8 +1769,8 @@ mod tests {
                 &peers,
                 0,
                 genesis_key.public_key(),
-                &expected_hash,
-                PrivateKeyRendering::InlineStaging,
+                GenesisIdentityRendering::InlineBootstrap(&expected_hash),
+                PrivateKeyRendering::Inline,
             );
             let table = rendered
                 .parse::<toml::Table>()
@@ -1762,64 +1789,76 @@ mod tests {
         }
     }
     #[test]
-    fn published_profiles_keep_runtime_keys_outside_production_configs() {
-        for profile in [&PROFILES[1]] {
+    fn bootstrap_configs_keep_the_unresolved_genesis_identity_inline() {
+        for profile in PROFILES {
             let peers = build_peers(profile).expect("build deterministic peers");
             let genesis_key = deterministic_keypair(
-                &format!("config-{}-public-only-genesis", profile.slug),
+                &format!("config-{}-bootstrap-genesis", profile.slug),
                 Algorithm::Ed25519,
             )
             .expect("derive deterministic genesis key");
-            let rendered = render_config(
+            let rendered = render_peer_config_with_private_keys(
                 profile,
                 &peers,
+                0,
                 genesis_key.public_key(),
-                GENESIS_EXPECTED_HASH_PLACEHOLDER,
+                GenesisIdentityRendering::InlineBootstrap(GENESIS_EXPECTED_HASH_PLACEHOLDER),
+                PrivateKeyRendering::Inline,
             );
-            for peer in &peers {
-                assert!(!rendered.contains(&peer.private_key));
-                assert!(!rendered.contains(&peer.soranet_transport_private_key));
-                assert!(!rendered.contains(&peer.streaming_private_key));
-            }
-            assert!(rendered.contains("private_key_file = \"/run/secrets/iroha/"));
-            assert!(
-                rendered.contains("soranet_transport_private_key_file = \"/run/secrets/iroha/")
-            );
-            assert!(rendered.contains("identity_private_key_file = \"/run/secrets/iroha/"));
-            assert!(rendered.contains("expected_hash_file = \"/run/iroha/genesis.expected_hash\""));
-            assert!(!rendered.contains(GENESIS_EXPECTED_HASH_PLACEHOLDER));
+            assert!(rendered.contains(&format!(
+                "expected_hash = \"{GENESIS_EXPECTED_HASH_PLACEHOLDER}\""
+            )));
+            assert!(!rendered.contains("expected_hash_file"));
         }
-        let profile = &PROFILES[0];
-        let peers = build_peers(profile).expect("build deterministic dev peers");
-        let genesis_key = deterministic_keypair("config-dev-inline-genesis", Algorithm::Ed25519)
-            .expect("derive deterministic genesis key");
-        let rendered = render_config(
-            profile,
-            &peers,
-            genesis_key.public_key(),
-            GENESIS_EXPECTED_HASH_PLACEHOLDER,
-        );
-        assert!(rendered.contains(&peers[0].private_key));
-        assert!(rendered.contains(&peers[0].soranet_transport_private_key));
-        assert!(rendered.contains(&peers[0].streaming_private_key));
-        assert!(!rendered.contains("private_key_file"));
     }
     #[test]
-    fn final_peer_configs_pin_the_exact_genesis_hash_and_prepared_names() {
+    fn published_profiles_decouple_genesis_identity_from_private_key_sources() {
+        for profile in PROFILES {
+            let peers = build_peers(profile).expect("build deterministic peers");
+            let genesis_key = deterministic_keypair(
+                &format!("config-{}-published-genesis", profile.slug),
+                Algorithm::Ed25519,
+            )
+            .expect("derive deterministic genesis key");
+            let rendered = render_config(profile, &peers, genesis_key.public_key());
+            assert!(!rendered.contains("expected_hash ="));
+            assert!(!rendered.contains(GENESIS_EXPECTED_HASH_PLACEHOLDER));
+            if profile.slug == "iroha3-dev" {
+                assert!(rendered.contains("expected_hash_file = \"genesis.expected_hash\""));
+                assert!(rendered.contains(&peers[0].private_key));
+                assert!(rendered.contains(&peers[0].soranet_transport_private_key));
+                assert!(rendered.contains(&peers[0].streaming_private_key));
+                assert!(!rendered.contains("private_key_file"));
+            } else {
+                assert!(
+                    rendered.contains("expected_hash_file = \"/run/iroha/genesis.expected_hash\"")
+                );
+                for peer in &peers {
+                    assert!(!rendered.contains(&peer.private_key));
+                    assert!(!rendered.contains(&peer.soranet_transport_private_key));
+                    assert!(!rendered.contains(&peer.streaming_private_key));
+                }
+                assert!(rendered.contains("private_key_file = \"/run/secrets/iroha/"));
+                assert!(
+                    rendered.contains("soranet_transport_private_key_file = \"/run/secrets/iroha/")
+                );
+                assert!(rendered.contains("identity_private_key_file = \"/run/secrets/iroha/"));
+            }
+        }
+    }
+    #[test]
+    fn final_peer_configs_use_only_the_sibling_identity_file_and_prepared_names() {
         let peers = build_peers(&PROFILES[0]).expect("build deterministic peers");
         let genesis_key = deterministic_keypair("prepared-config-genesis", Algorithm::Ed25519)
             .expect("derive deterministic genesis key");
         let bundle = tempdir().expect("prepared config bundle");
-        let expected_hash = Hash::new(b"prepared profile genesis").to_string();
-        let expected_hash_literal =
-            norito::literal::format("hash", &expected_hash.to_ascii_uppercase());
         write_peer_configs(
             &PROFILES[0],
             &peers,
             genesis_key.public_key(),
             bundle.path(),
-            &expected_hash,
-            PrivateKeyRendering::InlineStaging,
+            GenesisIdentityRendering::SiblingFile,
+            PrivateKeyRendering::Inline,
         )
         .expect("write prepared validator configs");
         for peer_index in 0..peers.len() {
@@ -1829,7 +1868,8 @@ mod tests {
             let prepared = fs::read_to_string(bundle.path().join(format!("peer{peer_index}.toml")))
                 .expect("read prepared config");
             assert_eq!(compatibility, prepared);
-            assert!(prepared.contains(&format!("expected_hash = \"{expected_hash_literal}\"")));
+            assert!(prepared.contains("expected_hash_file = \"genesis.expected_hash\""));
+            assert!(!prepared.contains("expected_hash ="));
             assert!(!prepared.contains(GENESIS_EXPECTED_HASH_PLACEHOLDER));
         }
     }
@@ -1866,12 +1906,7 @@ mod tests {
         assert!(dev_readme.contains(
             "- docker-compose.yml — full validator committee mounting the shared genesis and per-peer configs\n\nRegenerate:"
         ));
-        let dev_config = render_config(
-            &PROFILES[0],
-            &dev_peers,
-            genesis_key.public_key(),
-            GENESIS_EXPECTED_HASH_PLACEHOLDER,
-        );
+        let dev_config = render_config(&PROFILES[0], &dev_peers, genesis_key.public_key());
         assert!(dev_config.contains("lane_count = 3\n\n\n\n[genesis]"));
         assert!(!dev_config.contains("lane_count = 3\n\n\n\n\n[genesis]"));
     }
@@ -2013,12 +2048,7 @@ mod tests {
             let seed = format!("config-{}-genesis", profile.slug);
             let genesis_key = deterministic_keypair(&seed, Algorithm::Ed25519)
                 .expect("derive deterministic genesis key");
-            let rendered = render_config(
-                profile,
-                &peers,
-                genesis_key.public_key(),
-                GENESIS_EXPECTED_HASH_PLACEHOLDER,
-            );
+            let rendered = render_config(profile, &peers, genesis_key.public_key());
             assert!(
                 rendered.contains(&expected),
                 "profile {} should pin the Torii body-cap default explicitly",
@@ -2039,12 +2069,7 @@ mod tests {
             let seed = format!("config-{}-address-genesis", profile.slug);
             let genesis_key = deterministic_keypair(&seed, Algorithm::Ed25519)
                 .expect("derive deterministic genesis key");
-            let rendered = render_config(
-                profile,
-                &peers,
-                genesis_key.public_key(),
-                GENESIS_EXPECTED_HASH_PLACEHOLDER,
-            );
+            let rendered = render_config(profile, &peers, genesis_key.public_key());
             assert!(
                 rendered.contains(&format!("address = \"{expected_listen}\"")),
                 "profile {} must render the canonical network listen literal",
@@ -2078,12 +2103,7 @@ mod tests {
                 Algorithm::Ed25519,
             )
             .expect("derive deterministic genesis key");
-            let rendered = render_config(
-                profile,
-                &peers,
-                genesis_key.public_key(),
-                GENESIS_EXPECTED_HASH_PLACEHOLDER,
-            );
+            let rendered = render_config(profile, &peers, genesis_key.public_key());
             let expected_body_bytes = peers
                 .len()
                 .checked_add(authenticated_non_validator_sources)
@@ -2109,12 +2129,7 @@ mod tests {
             let seed = format!("config-{}-universal-offline-genesis", profile.slug);
             let genesis_key = deterministic_keypair(&seed, Algorithm::Ed25519)
                 .expect("derive deterministic generic genesis key");
-            let rendered = render_config(
-                profile,
-                &peers,
-                genesis_key.public_key(),
-                GENESIS_EXPECTED_HASH_PLACEHOLDER,
-            );
+            let rendered = render_config(profile, &peers, genesis_key.public_key());
             let config: toml::Value =
                 toml::from_str(&rendered).expect("parse rendered generic config");
             assert!(
@@ -2162,12 +2177,33 @@ mod tests {
                 .count(),
             peers.len()
         );
+        assert_eq!(
+            rendered
+                .matches("./genesis.expected_hash:/config/genesis.expected_hash:ro")
+                .count(),
+            peers.len(),
+            "every dev validator must receive the identity beside its config"
+        );
+        assert!(!rendered.contains("/run/iroha/genesis.expected_hash"));
         assert!(!rendered.contains("--genesis"));
         for peer_index in 1..peers.len() {
             assert!(rendered.contains(&format!(
                 "./config-peer-{peer_index}.toml:/config/config.toml:ro"
             )));
         }
+
+        let runtime_peers = build_peers(&PROFILES[1]).expect("build deterministic Nexus peers");
+        let runtime_rendered = render_docker_compose(&PROFILES[1], &runtime_peers);
+        assert_eq!(
+            runtime_rendered
+                .matches("./genesis.expected_hash:/run/iroha/genesis.expected_hash:ro")
+                .count(),
+            runtime_peers.len(),
+            "every runtime validator must receive the identity at its configured public path"
+        );
+        assert!(
+            !runtime_rendered.contains("./genesis.expected_hash:/config/genesis.expected_hash:ro")
+        );
     }
     #[test]
     fn peer_configs_use_distinct_consensus_streaming_and_port_material() {
@@ -2176,13 +2212,8 @@ mod tests {
             .expect("derive deterministic genesis key");
         let mut transport_public_keys = std::collections::BTreeSet::new();
         for (peer_index, peer) in peers.iter().enumerate() {
-            let rendered = render_peer_config(
-                &PROFILES[0],
-                &peers,
-                peer_index,
-                genesis_key.public_key(),
-                GENESIS_EXPECTED_HASH_PLACEHOLDER,
-            );
+            let rendered =
+                render_peer_config(&PROFILES[0], &peers, peer_index, genesis_key.public_key());
             let torii_port = 8080 + peer_index;
             assert!(rendered.contains(&format!("private_key = \"{}\"", peer.private_key)));
             assert!(rendered.contains(&format!(

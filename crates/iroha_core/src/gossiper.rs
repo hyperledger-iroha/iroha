@@ -3786,7 +3786,7 @@ mod tests {
     };
     use tempfile::{TempDir, tempdir};
     fn test_network_id() -> NetworkId {
-        "0000000000000000000000000000000000000000000000000000000000000001"
+        "hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
             .parse()
             .expect("valid default test network id")
     }

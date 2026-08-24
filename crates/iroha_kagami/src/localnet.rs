@@ -1401,7 +1401,9 @@ fn generate_localnet_inner<T: Write>(
         &peer_telemetry_urls,
         &genesis_public_key,
         &genesis_signed_path,
-        HashOf::from_untyped_unchecked(Hash::new(b"Kagami localnet policy-derivation placeholder")),
+        LocalnetGenesisIdentitySource::BootstrapInline(HashOf::from_untyped_unchecked(Hash::new(
+            b"Kagami localnet policy-derivation placeholder",
+        ))),
         &bls_entries,
         &bootstrap_paths,
         &rans_tables_path,
@@ -1429,7 +1431,7 @@ fn generate_localnet_inner<T: Write>(
         queue_capacity,
         sumeragi_body_bytes,
     );
-    let config = parse_localnet_peer_config(&bootstrap_config)?;
+    let config = parse_localnet_peer_config(&bootstrap_config, None)?;
     let da_proof_policies = Some(resolve_localnet_da_proof_policies(&config));
     let confidential_policy_hash =
         iroha_core::state::compute_genesis_confidential_policy_hash(&config.zk);
@@ -1490,7 +1492,7 @@ fn generate_localnet_inner<T: Write>(
             &peer_telemetry_urls,
             &genesis_public_key,
             &genesis_signed_path,
-            genesis_expected_hash,
+            LocalnetGenesisIdentitySource::PublishedFile,
             &bls_entries,
             &paths,
             &rans_tables_path,
@@ -1518,9 +1520,13 @@ fn generate_localnet_inner<T: Write>(
             queue_capacity,
             sumeragi_body_bytes,
         );
-        let parsed_config = parse_localnet_peer_config(&rendered).wrap_err_with(|| {
-            format!("generated validator config peer{idx}.toml failed Config/Catalog validation")
-        })?;
+        let path = out_dir.join(format!("peer{idx}.toml"));
+        let parsed_config =
+            parse_localnet_peer_config(&rendered, Some(&path)).wrap_err_with(|| {
+                format!(
+                    "generated validator config peer{idx}.toml failed Config/Catalog validation"
+                )
+            })?;
         if parsed_config.genesis.expected_hash != genesis_expected_hash {
             return Err(eyre!(
                 "generated validator config peer{idx}.toml has genesis hash {}, expected {}",
@@ -1528,7 +1534,6 @@ fn generate_localnet_inner<T: Write>(
                 genesis_expected_hash
             ));
         }
-        let path = out_dir.join(format!("peer{idx}.toml"));
         write_owner_only_localnet_file(&path, rendered.as_bytes())
             .wrap_err_with(|| format!("write validator config {}", path.display()))?;
     }
@@ -1549,7 +1554,6 @@ fn generate_localnet_inner<T: Write>(
         opts.base_api_port,
         &hosts.public,
         &chain_id,
-        genesis_expected_hash,
         chain_discriminant,
         &client_identity,
     )?;
@@ -2183,6 +2187,10 @@ struct RenderPeerFeatures<'a> {
     onboarding_private_key_file: &'a Path,
     onboarding_token_hash: &'a [u8; 32],
 }
+enum LocalnetGenesisIdentitySource {
+    BootstrapInline(HashOf<BlockHeader>),
+    PublishedFile,
+}
 #[allow(clippy::too_many_arguments, clippy::too_many_lines)]
 fn render_peer_config(
     peer: &Peer,
@@ -2190,7 +2198,7 @@ fn render_peer_config(
     peer_telemetry_urls: &[String],
     genesis_public_key: &iroha_crypto::PublicKey,
     genesis_signed_path: &Path,
-    genesis_expected_hash: HashOf<BlockHeader>,
+    genesis_identity: LocalnetGenesisIdentitySource,
     bls_entries: &[BlsEntry],
     storage_paths: &LocalnetPeerStoragePaths,
     rans_tables_path: &Path,
@@ -2827,13 +2835,20 @@ fn render_peer_config(
         "public_key".into(),
         Value::String(genesis_public_key.to_string()),
     );
-    genesis.insert(
-        "expected_hash".into(),
-        Value::String(norito::literal::format(
-            "hash",
-            &genesis_expected_hash.to_string().to_ascii_uppercase(),
-        )),
-    );
+    match genesis_identity {
+        LocalnetGenesisIdentitySource::BootstrapInline(expected_hash) => {
+            genesis.insert(
+                "expected_hash".into(),
+                Value::String(NetworkId::from_genesis_hash(expected_hash).to_string()),
+            );
+        }
+        LocalnetGenesisIdentitySource::PublishedFile => {
+            genesis.insert(
+                "expected_hash_file".into(),
+                Value::String(GENESIS_EXPECTED_HASH_FILE.to_owned()),
+            );
+        }
+    }
     root.insert("genesis".into(), Value::Table(genesis));
     let mut logger = Table::new();
     logger.insert("format".into(), Value::String("compact".into()));
@@ -4320,46 +4335,33 @@ fn write_and_validate_genesis_expected_hash(
             expected_hash
         ));
     }
-    let canonical = expected_hash.to_string();
-    let canonical_bytes = canonical.as_bytes();
-    let has_canonical_syntax = canonical_bytes.len() == 64
-        && canonical_bytes
-            .iter()
-            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(byte))
-        && canonical_bytes.last().is_some_and(|byte| {
-            matches!(*byte, b'1' | b'3' | b'5' | b'7' | b'9' | b'b' | b'd' | b'f')
-        });
-    if !has_canonical_syntax {
-        return Err(eyre!(
-            "generated genesis hash is not a canonical Iroha hash record: {canonical}"
-        ));
-    }
-    let record = format!("{canonical}\n");
+    let network_id = NetworkId::from_genesis_hash(expected_hash);
+    let record = format!("{network_id}\n");
     write_owner_only_localnet_file(expected_hash_path, record.as_bytes()).wrap_err_with(|| {
         format!(
-            "write exact genesis hash file {}",
+            "write checked genesis network identity file {}",
             expected_hash_path.display()
         )
     })?;
     let persisted = fs::read_to_string(expected_hash_path).wrap_err_with(|| {
         format!(
-            "read exact genesis hash file {}",
+            "read checked genesis network identity file {}",
             expected_hash_path.display()
         )
     })?;
     if persisted != record {
         return Err(eyre!(
-            "persisted exact genesis hash file is not the canonical generated record"
+            "persisted genesis network identity file is not the canonical generated record"
         ));
     }
     let parsed = persisted
         .strip_suffix('\n')
         .expect("canonical record always ends in a newline")
-        .parse::<HashOf<BlockHeader>>()
-        .wrap_err("parse persisted exact genesis hash")?;
-    if parsed != expected_hash {
+        .parse::<NetworkId>()
+        .wrap_err("parse persisted checked genesis network identity")?;
+    if parsed != network_id {
         return Err(eyre!(
-            "persisted exact genesis hash changed from {expected_hash} to {parsed}"
+            "persisted genesis network identity changed from {network_id} to {parsed}"
         ));
     }
     Ok(())
@@ -4396,7 +4398,10 @@ fn write_genesis_key_files(
     file.write_all(public.as_bytes())
         .wrap_err_with(|| format!("write genesis public-key file {}", public_path.display()))
 }
-fn parse_localnet_peer_config(rendered_config: &str) -> Result<actual::Root> {
+fn parse_localnet_peer_config(
+    rendered_config: &str,
+    config_path: Option<&Path>,
+) -> Result<actual::Root> {
     let table = rendered_config.parse::<toml::Table>().map_err(|err| {
         eyre!(
             "failed to parse rendered peer config as TOML while deriving consensus policies: {err}"
@@ -4408,7 +4413,11 @@ fn parse_localnet_peer_config(rendered_config: &str) -> Result<actual::Root> {
         .and_then(toml::Value::as_integer)
         .and_then(|value| u16::try_from(value).ok());
     let _chain_discriminant = chain_discriminant.map(ChainDiscriminantGuard::enter);
-    actual::Root::from_toml_source(TomlSource::inline(table)).map_err(|err| {
+    let source = match config_path {
+        Some(path) => TomlSource::new(path.to_path_buf(), table),
+        None => TomlSource::inline(table),
+    };
+    actual::Root::from_toml_source(source).map_err(|err| {
         eyre!("failed to parse generated peer config while deriving consensus policies: {err:?}")
     })
 }
@@ -5193,7 +5202,6 @@ fn write_client_config(
     base_api_port: u16,
     torii_host: &CanonicalHost,
     chain_id: &str,
-    genesis_expected_hash: HashOf<BlockHeader>,
     chain_discriminant: Option<u16>,
     client: &LocalnetClientIdentity,
 ) -> Result<()> {
@@ -5203,14 +5211,10 @@ fn write_client_config(
     let chain_discriminant_line = chain_discriminant.map_or_else(String::new, |value| {
         format!("chain_discriminant = {value}\n")
     });
-    let network_id = norito::literal::format(
-        "hash",
-        &genesis_expected_hash.to_string().to_ascii_uppercase(),
-    );
     let rendered = format!(
         concat!(
             "chain = \"{chain}\"\n",
-            "network_id = \"{network_id}\"\n",
+            "network_id_file = \"{network_id_file}\"\n",
             "torii_url = \"http://{torii_host}:{torii_port}/\"\n",
             "\n",
             "[transaction]\n",
@@ -5229,7 +5233,7 @@ fn write_client_config(
             "web_login = \"mad_hatter\"\n",
         ),
         chain = chain_id,
-        network_id = network_id,
+        network_id_file = GENESIS_EXPECTED_HASH_FILE,
         torii_port = base_api_port,
         torii_host = torii_host,
         ttl_ms = LOCALNET_CLIENT_TTL_MS,
@@ -5644,20 +5648,44 @@ mod tests {
         let expected_hash = expected_hash_record
             .strip_suffix('\n')
             .expect("hash record has final newline")
-            .parse::<HashOf<BlockHeader>>()
-            .expect("exact genesis hash parses");
+            .parse::<NetworkId>()
+            .expect("checked genesis network identity parses");
         assert_eq!(expected_hash_record, format!("{expected_hash}\n"));
         let signed = fs::read(temp.path().join("genesis.signed.nrt"))
             .expect("read generated signed genesis");
         let decoded = decode_framed_signed_block(&signed).expect("decode generated signed genesis");
-        assert_eq!(decoded.hash(), expected_hash);
+        assert_eq!(decoded.hash(), expected_hash.into_genesis_hash());
         for index in 0..opts.peers.get() {
-            let source = TomlSource::from_file(temp.path().join(format!("peer{index}.toml")))
-                .expect("read generated config");
+            let path = temp.path().join(format!("peer{index}.toml"));
+            let rendered = fs::read_to_string(&path).expect("read rendered validator config");
+            let table = rendered
+                .parse::<toml::Table>()
+                .expect("rendered validator config is TOML");
+            let genesis = table
+                .get("genesis")
+                .and_then(toml::Value::as_table)
+                .expect("rendered validator genesis table");
+            assert_eq!(
+                genesis
+                    .get("expected_hash_file")
+                    .and_then(toml::Value::as_str),
+                Some(GENESIS_EXPECTED_HASH_FILE)
+            );
+            assert!(!genesis.contains_key("expected_hash"));
+            let source = TomlSource::from_file(&path).expect("read generated config");
             let config =
                 actual::Root::from_toml_source(source).expect("generated config must parse");
-            assert_eq!(config.genesis.expected_hash, expected_hash);
+            assert_eq!(config.genesis.expected_hash, decoded.hash());
         }
+        let client = fs::read_to_string(temp.path().join("client.toml"))
+            .expect("read generated client config")
+            .parse::<toml::Table>()
+            .expect("generated client config is TOML");
+        assert_eq!(
+            client.get("network_id_file").and_then(toml::Value::as_str),
+            Some(GENESIS_EXPECTED_HASH_FILE)
+        );
+        assert!(!client.contains_key("network_id"));
     }
     #[test]
     fn generated_configs_for_user_localnet_parse() {
@@ -8345,7 +8373,7 @@ mod tests {
         );
     }
     #[test]
-    fn client_config_is_written_and_parsable() {
+    fn client_config_selects_the_generated_identity_file_only() {
         let tmp = tempfile::tempdir().expect("tmp dir");
         let host =
             CanonicalHost::parse(DEFAULT_PUBLIC_HOST, "--public-host").expect("canonicalize host");
@@ -8354,7 +8382,6 @@ mod tests {
             8080,
             &host,
             DEFAULT_CHAIN_ID,
-            HashOf::from_untyped_unchecked(Hash::prehashed([0x42; Hash::LENGTH])),
             None,
             &localnet_client_identity(None, false).expect("default client"),
         )
@@ -8363,13 +8390,14 @@ mod tests {
             fs::read_to_string(tmp.path().join("client.toml")).expect("read client config");
         assert!(contents.contains("private_key = \"802620"));
         let value: toml::Value = toml::from_str(&contents).expect("parse client config");
-        let network_id = value
-            .get("network_id")
-            .and_then(toml::Value::as_str)
-            .expect("network id")
-            .parse::<NetworkId>()
-            .expect("canonical network id");
-        assert_eq!(network_id.as_bytes(), &[0x42; Hash::LENGTH]);
+        assert_eq!(
+            value.get("network_id_file").and_then(toml::Value::as_str),
+            Some(GENESIS_EXPECTED_HASH_FILE)
+        );
+        assert!(
+            value.get("network_id").is_none(),
+            "generated client config must not duplicate the checked identity inline"
+        );
         assert_eq!(
             value
                 .get("torii_url")
@@ -8400,7 +8428,6 @@ mod tests {
             8080,
             &host,
             DEFAULT_CHAIN_ID,
-            HashOf::from_untyped_unchecked(Hash::prehashed([0x42; Hash::LENGTH])),
             Some(369),
             &localnet_client_identity(None, false).expect("default client"),
         )
@@ -8786,7 +8813,6 @@ mod tests {
             8080,
             &host,
             DEFAULT_CHAIN_ID,
-            HashOf::from_untyped_unchecked(Hash::prehashed([0x42; Hash::LENGTH])),
             None,
             &localnet_client_identity(None, false).expect("default client"),
         )
