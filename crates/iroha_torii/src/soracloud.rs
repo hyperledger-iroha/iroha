@@ -3081,8 +3081,8 @@ async fn derive_hf_resource_profile_within_deadline(
     // Release the decoded metadata before issuing one HEAD request per selected
     // weight file; the immutable LFS contract now owns every required field.
     drop(model_info);
-    stream::iter(&weight_selection.required_weight_files)
-        .map(|weight| {
+    stream::iter(weight_selection.required_weight_files.iter().cloned())
+        .map(|weight| async move {
             hf_content_length_bytes(
                 config,
                 repo_id,
@@ -3090,6 +3090,7 @@ async fn derive_hf_resource_profile_within_deadline(
                 &weight.path,
                 weight.content_length,
             )
+            .await
         })
         .buffer_unordered(HF_PROFILE_HEAD_MAX_IN_FLIGHT_V1)
         .try_collect::<Vec<()>>()
@@ -3512,7 +3513,7 @@ fn audit_event_leaf_hash(event: &ControlPlaneAuditEvent) -> Hash {
                 event.consent_evidence_hash,
                 event.break_glass,
                 event.break_glass_reason.as_deref(),
-                event.lease_reporting_epoch_rollover.as_ref(),
+                event.lease_reporting_epoch_rollover.clone(),
                 event.signed_by.as_str(),
             ),
         ),
@@ -6521,7 +6522,7 @@ fn authoritative_service_config_status_response(
                         "failed to decode authoritative service config json: {err}"
                     ))
                 })?;
-            Ok(ServiceConfigStatusEntry {
+            Ok::<_, SoracloudError>(ServiceConfigStatusEntry {
                 config_name: entry.config_name.clone(),
                 value_hash: entry.value_hash,
                 value_json,
@@ -8948,7 +8949,7 @@ pub(crate) fn control_plane_snapshot(
         let remaining_runtime_balance =
             deployment.hosted_service_remaining_balance(current_sequence)?;
         services.push(ControlPlaneServiceSnapshot {
-            service_name: service_label,
+            service_name: service_label.clone(),
             current_version: deployment.current_service_version.clone(),
             revision_count: deployment.revision_count,
             config_generation: deployment.config_generation,
@@ -13743,6 +13744,15 @@ mod tests {
             PrivateUploadedModelExecuteRequest,
         );
     }
+    fn sample_private_model_artifact_ref(role: &str, seed: u8) -> SoraPrivateModelArtifactRefV1 {
+        SoraPrivateModelArtifactRefV1 {
+            schema_version: iroha_data_model::soracloud::SORA_PRIVATE_MODEL_ARTIFACT_REF_VERSION_V1,
+            sorafs_manifest_digest: ManifestDigest::new([seed; 32]),
+            artifact_hash: Hash::new([seed; 16]),
+            ciphertext_bytes: 128,
+            artifact_role: role.to_owned(),
+        }
+    }
     #[test]
     fn signed_soracloud_mutation_graph_requires_explicit_optional_keys() {
         macro_rules! assert_required_nullable {
@@ -15859,11 +15869,7 @@ mod tests {
                     (bundle.service.service_version.clone(), discovery.clone()),
                 ]),
             };
-            let registry_json = Json::from(
-                norito::json::to_json(&registry)
-                    .expect("registry json should encode")
-                    .as_str(),
-            );
+            let registry_json = Json::new(registry);
             let registry_entry = SoraServiceConfigEntryV1 {
                 schema_version: iroha_data_model::soracloud::SORA_SERVICE_CONFIG_ENTRY_VERSION_V1,
                 config_name: PUBLIC_SERVICE_DISCOVERY_CONFIG_NAME.to_string(),
@@ -18328,9 +18334,9 @@ mod tests {
             let siblings = (0..SHARD_COUNT)
                 .map(|index| {
                     norito::json!({
-                        "rfilename": format!("shard-{index:02}.gguf"),
+                        "rfilename": (format!("shard-{index:02}.gguf")),
                         "lfs": {
-                            "sha256": format!("{:064x}", index + 1),
+                            "sha256": (format!("{:064x}", index + 1)),
                             "size": 1,
                         },
                     })

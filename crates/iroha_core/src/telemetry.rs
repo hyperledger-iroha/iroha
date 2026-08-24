@@ -7614,7 +7614,7 @@ mod tests {
         prelude::World,
         query::store::LiveQueryStore,
         state::StateReadOnly,
-        sumeragi::{message::BlockMessage, network_topology::Topology, status},
+        sumeragi::{message::BlockMessage, network_topology::Topology},
         tx::AcceptedTransaction,
     };
     use iroha_config::parameters::actual::ConfidentialGas as ActualConfidentialGas;
