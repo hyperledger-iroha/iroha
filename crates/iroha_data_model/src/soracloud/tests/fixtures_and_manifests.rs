@@ -510,7 +510,7 @@ fn hf_weight_selection_is_sorted_authenticated_bounded_and_committed() {
             {"rfilename": "fallback.safetensors", "lfs": {"sha256": safetensors, "size": 99}},
             {"rfilename": "weights/z.GGUF", "lfs": {"sha256": gguf_b, "size": 7}},
             {"rfilename": "weights/a.gguf", "lfs": {"sha256": gguf_a, "size": 5}},
-            {"rfilename": "weights/a.gguf", "lfs": {"sha256": "11".repeat(32), "size": 5}}
+            {"rfilename": "weights/a.gguf", "lfs": {"sha256": ("11".repeat(32)), "size": 5}}
         ]
     });
     let selection = derive_hf_weight_selection_v1(&model_info, 4, 8, 12)
@@ -525,8 +525,8 @@ fn hf_weight_selection_is_sorted_authenticated_bounded_and_committed() {
     let changed = derive_hf_weight_selection_v1(
         &norito::json!({
             "siblings": [
-                {"rfilename": "weights/a.gguf", "lfs": {"sha256": "44".repeat(32), "size": 5}},
-                {"rfilename": "weights/z.GGUF", "lfs": {"sha256": "22".repeat(32), "size": 7}}
+                {"rfilename": "weights/a.gguf", "lfs": {"sha256": ("44".repeat(32)), "size": 5}},
+                {"rfilename": "weights/z.GGUF", "lfs": {"sha256": ("22".repeat(32)), "size": 7}}
             ]
         }),
         4,
@@ -545,7 +545,7 @@ fn hf_weight_selection_rejects_unauthenticated_ambiguous_or_over_budget_shards()
     let digest = "11".repeat(32);
     for malformed in [
         norito::json!({"siblings": ["model.gguf"]}),
-        norito::json!({"siblings": [{"lfs": {"sha256": "11".repeat(32), "size": 8}}]}),
+        norito::json!({"siblings": [{"lfs": {"sha256": ("11".repeat(32)), "size": 8}}]}),
         norito::json!({"siblings": [{"rfilename": 7}]}),
     ] {
         assert!(
@@ -556,28 +556,28 @@ fn hf_weight_selection_rejects_unauthenticated_ambiguous_or_over_budget_shards()
     let missing_lfs = norito::json!({"siblings": [{"rfilename": "model.gguf"}]});
     assert!(derive_hf_weight_selection_v1(&missing_lfs, 1, 8, 8).is_err());
     let uppercase_digest = norito::json!({
-        "siblings": [{"rfilename": "model.gguf", "lfs": {"sha256": "AA".repeat(32), "size": 8}}]
+        "siblings": [{"rfilename": "model.gguf", "lfs": {"sha256": ("AA".repeat(32)), "size": 8}}]
     });
     assert!(derive_hf_weight_selection_v1(&uppercase_digest, 1, 8, 8).is_err());
     let zero_digest = norito::json!({
-        "siblings": [{"rfilename": "model.gguf", "lfs": {"sha256": "00".repeat(32), "size": 8}}]
+        "siblings": [{"rfilename": "model.gguf", "lfs": {"sha256": ("00".repeat(32)), "size": 8}}]
     });
     assert!(derive_hf_weight_selection_v1(&zero_digest, 1, 8, 8).is_err());
     let conflicting = norito::json!({
         "siblings": [
             {"rfilename": "model.gguf", "lfs": {"sha256": digest, "size": 8}},
-            {"rfilename": "model.gguf", "lfs": {"sha256": "22".repeat(32), "size": 8}}
+            {"rfilename": "model.gguf", "lfs": {"sha256": ("22".repeat(32)), "size": 8}}
         ]
     });
     assert!(derive_hf_weight_selection_v1(&conflicting, 1, 8, 8).is_err());
     let traversal = norito::json!({
-        "siblings": [{"rfilename": "../model.gguf", "lfs": {"sha256": "11".repeat(32), "size": 8}}]
+        "siblings": [{"rfilename": "../model.gguf", "lfs": {"sha256": ("11".repeat(32)), "size": 8}}]
     });
     assert!(derive_hf_weight_selection_v1(&traversal, 1, 8, 8).is_err());
     let two_shards = norito::json!({
         "siblings": [
-            {"rfilename": "a.gguf", "lfs": {"sha256": "11".repeat(32), "size": 5}},
-            {"rfilename": "b.gguf", "lfs": {"sha256": "22".repeat(32), "size": 5}}
+            {"rfilename": "a.gguf", "lfs": {"sha256": ("11".repeat(32)), "size": 5}},
+            {"rfilename": "b.gguf", "lfs": {"sha256": ("22".repeat(32)), "size": 5}}
         ]
     });
     assert!(derive_hf_weight_selection_v1(&two_shards, 1, 8, 10).is_err());
