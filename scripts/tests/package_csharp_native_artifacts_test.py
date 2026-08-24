@@ -306,6 +306,7 @@ class CSharpNativePackageTests(unittest.TestCase):
 
         self.assertEqual(native_job.count("check_native_sdk_abi22_artifact.py"), 2)
         self.assertIn("--sdk csharp", native_job)
+        self.assertIn("cache-targets: false", native_job)
         self.assertIn('if [[ "$host_target" != "$target" ]]', native_job)
         self.assertIn('if [[ -e target ]]', native_job)
         self.assertIn('cp "target/$target/release/$library_name" "$artifact"', native_job)
