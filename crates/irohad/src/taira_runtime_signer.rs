@@ -13,7 +13,10 @@ use crate::{
         SoracloudRuntimeSignerQualificationV1, SoracloudRuntimeSigningErrorV1,
     },
 };
-use iroha_config::parameters::actual::{NexusStorageWeights, Root as Config, SoracloudRuntime};
+use iroha_config::parameters::{
+    actual::{NexusStorageWeights, Root as Config, SoracloudRuntime},
+    defaults::soracloud_runtime as soracloud_runtime_defaults,
+};
 use iroha_crypto::{Algorithm, ExposedPrivateKey, KeyPair, PublicKey, Signature};
 use iroha_data_model::{
     account::AccountId,
@@ -27,6 +30,7 @@ use std::{
     fmt,
     fs::{File, OpenOptions},
     io::{Read as _, Seek as _, Write as _},
+    num::{NonZeroU32, NonZeroU64},
     os::{
         fd::{FromRawFd as _, RawFd},
         unix::fs::MetadataExt as _,
@@ -67,6 +71,16 @@ pub const TAIRA_NEXUS_SORANET_SPOOL_BPS_V1: u16 = 250;
 pub const TAIRA_NEXUS_SORAVPN_SPOOL_BPS_V1: u16 = 250;
 /// Exact effective SoraFS component cap derived for first-release Taira.
 pub const TAIRA_SORAFS_STORAGE_CAP_BYTES_V1: u64 = 13_743_895_347;
+/// Exact aggregate Inrou CPU ceiling for one first-release Taira validator.
+pub const TAIRA_INROU_MAX_CPU_MILLIS_V1: u32 = 8_000;
+/// Exact aggregate Inrou memory ceiling for one first-release Taira validator.
+pub const TAIRA_INROU_MAX_MEMORY_BYTES_V1: u64 = 8 * 1024 * 1024 * 1024;
+/// Exact aggregate Inrou writable-storage ceiling for one first-release Taira validator.
+pub const TAIRA_INROU_MAX_STORAGE_BYTES_V1: u64 = 64 * 1024 * 1024 * 1024;
+/// Exact Inrou egress request budget for one first-release Taira validator.
+pub const TAIRA_INROU_EGRESS_RATE_PER_MINUTE_V1: u32 = 600;
+/// Exact Inrou egress byte budget for one first-release Taira validator.
+pub const TAIRA_INROU_EGRESS_MAX_BYTES_PER_MINUTE_V1: u64 = 100 * 1024 * 1024;
 
 const TAIRA_RUNTIME_SIGNER_HANDLE_PREFIX_V1: &str = "software://taira/inrou/";
 const TAIRA_RUNTIME_SIGNER_POLICY_DIGEST_DOMAIN_V1: &[u8] =
@@ -114,14 +128,40 @@ fn validate_taira_launcher_profile_v1(
         return Err("Taira launcher requires Soracloud production mode".to_owned());
     }
     let inrou = &runtime.inrou;
-    if inrou.enabled
-        || !inrou.backends.is_empty()
-        || inrou.portable_vm_uid.is_some()
-        || inrou.portable_vm_gid.is_some()
+    if !inrou.enabled {
+        return Err("Taira launcher requires enabled Inrou PortableVM V1 hosting".to_owned());
+    }
+    let uid = inrou
+        .portable_vm_uid
+        .ok_or_else(|| "enabled Taira Inrou hosting requires portable_vm_uid".to_owned())?
+        .get();
+    let gid = inrou
+        .portable_vm_gid
+        .ok_or_else(|| "enabled Taira Inrou hosting requires portable_vm_gid".to_owned())?
+        .get();
+    if soracloud_runtime_defaults::inrou_portable_vm_identity_slot(uid, gid).is_none() {
+        return Err(format!(
+            "Taira Inrou uid/gid must be one equal canonical slot pair in {}..{} (upper bound exclusive)",
+            soracloud_runtime_defaults::INROU_PORTABLE_VM_ID_BASE,
+            soracloud_runtime_defaults::INROU_PORTABLE_VM_ID_MAX_EXCLUSIVE,
+        ));
+    }
+    if inrou.max_cpu_millis.get() != TAIRA_INROU_MAX_CPU_MILLIS_V1
+        || inrou.max_memory_bytes.get() != TAIRA_INROU_MAX_MEMORY_BYTES_V1
+        || inrou.max_storage_bytes.get() != TAIRA_INROU_MAX_STORAGE_BYTES_V1
+    {
+        return Err("Taira launcher requires the exact V1 Inrou resource ceilings".to_owned());
+    }
+    let egress = &runtime.egress;
+    if egress.default_allow
+        || !egress.allowed_hosts.is_empty()
+        || egress.rate_per_minute.map(NonZeroU32::get)
+            != Some(TAIRA_INROU_EGRESS_RATE_PER_MINUTE_V1)
+        || egress.max_bytes_per_minute.map(NonZeroU64::get)
+            != Some(TAIRA_INROU_EGRESS_MAX_BYTES_PER_MINUTE_V1)
     {
         return Err(
-            "Taira production launch forbids Inrou hosting until PortableVM has mandatory mount, network, IPC, and MAC confinement"
-                .to_owned()
+            "Taira launcher requires the exact deny-by-default V1 Inrou egress profile".to_owned(),
         );
     }
     Ok(())
@@ -537,6 +577,20 @@ mod tests {
     fn canonical_runtime_profile() -> SoracloudRuntime {
         let mut runtime = SoracloudRuntime::default();
         runtime.production_mode = true;
+        runtime.inrou.enabled = true;
+        runtime.inrou.portable_vm_uid = NonZeroU32::new(70_000);
+        runtime.inrou.portable_vm_gid = NonZeroU32::new(70_000);
+        runtime.inrou.max_cpu_millis =
+            NonZeroU32::new(TAIRA_INROU_MAX_CPU_MILLIS_V1).expect("nonzero CPU budget");
+        runtime.inrou.max_memory_bytes =
+            NonZeroU64::new(TAIRA_INROU_MAX_MEMORY_BYTES_V1).expect("nonzero memory budget");
+        runtime.inrou.max_storage_bytes =
+            NonZeroU64::new(TAIRA_INROU_MAX_STORAGE_BYTES_V1).expect("nonzero storage budget");
+        runtime.egress.default_allow = false;
+        runtime.egress.allowed_hosts.clear();
+        runtime.egress.rate_per_minute = NonZeroU32::new(TAIRA_INROU_EGRESS_RATE_PER_MINUTE_V1);
+        runtime.egress.max_bytes_per_minute =
+            NonZeroU64::new(TAIRA_INROU_EGRESS_MAX_BYTES_PER_MINUTE_V1);
         runtime
     }
 
@@ -581,20 +635,49 @@ mod tests {
             )
             .is_err()
         );
-        let mut enabled_inrou = runtime.clone();
-        enabled_inrou.inrou.enabled = true;
+        let mut disabled_inrou = runtime.clone();
+        disabled_inrou.inrou.enabled = false;
+        disabled_inrou.inrou.portable_vm_uid = None;
+        disabled_inrou.inrou.portable_vm_gid = None;
         assert!(
             validate_taira_launcher_profile_v1(
                 TAIRA_CHAIN_ID_V1,
                 TAIRA_CHAIN_DISCRIMINANT_V1,
                 TAIRA_VALIDATOR_COUNT_V1,
                 TAIRA_VALIDATOR_COUNT_V1,
-                &enabled_inrou,
+                &disabled_inrou,
             )
             .is_err()
         );
+        let mut exact_inrou = runtime.clone();
+        for slot in 0..soracloud_runtime_defaults::INROU_PORTABLE_VM_ID_SLOT_COUNT {
+            let id = soracloud_runtime_defaults::INROU_PORTABLE_VM_ID_BASE + slot;
+            exact_inrou.inrou.portable_vm_uid = NonZeroU32::new(id);
+            exact_inrou.inrou.portable_vm_gid = NonZeroU32::new(id);
+            validate_taira_launcher_profile_v1(
+                TAIRA_CHAIN_ID_V1,
+                TAIRA_CHAIN_DISCRIMINANT_V1,
+                TAIRA_VALIDATOR_COUNT_V1,
+                TAIRA_VALIDATOR_COUNT_V1,
+                &exact_inrou,
+            )
+            .expect("Taira accepts every canonical same-host PortableVM identity slot");
+        }
+        exact_inrou.inrou.portable_vm_uid = NonZeroU32::new(70_000);
+        exact_inrou.inrou.portable_vm_gid = NonZeroU32::new(70_001);
+        assert!(
+            validate_taira_launcher_profile_v1(
+                TAIRA_CHAIN_ID_V1,
+                TAIRA_CHAIN_DISCRIMINANT_V1,
+                TAIRA_VALIDATOR_COUNT_V1,
+                TAIRA_VALIDATOR_COUNT_V1,
+                &exact_inrou,
+            )
+            .is_err(),
+            "Taira must reject mismatched Inrou uid/gid slots"
+        );
         let mut configured_identity = runtime;
-        configured_identity.inrou.portable_vm_uid = NonZeroU32::new(70_000);
+        configured_identity.inrou.portable_vm_gid = None;
         assert!(
             validate_taira_launcher_profile_v1(
                 TAIRA_CHAIN_ID_V1,
@@ -605,6 +688,58 @@ mod tests {
             )
             .is_err()
         );
+    }
+
+    #[test]
+    fn launcher_profile_rejects_noncanonical_inrou_resources_and_egress() {
+        let runtime = canonical_runtime_profile();
+        let assert_rejected = |runtime: &SoracloudRuntime| {
+            assert!(
+                validate_taira_launcher_profile_v1(
+                    TAIRA_CHAIN_ID_V1,
+                    TAIRA_CHAIN_DISCRIMINANT_V1,
+                    TAIRA_VALIDATOR_COUNT_V1,
+                    TAIRA_VALIDATOR_COUNT_V1,
+                    runtime,
+                )
+                .is_err()
+            );
+        };
+
+        let mut changed = runtime.clone();
+        changed.inrou.max_cpu_millis = NonZeroU32::new(TAIRA_INROU_MAX_CPU_MILLIS_V1 + 1)
+            .expect("changed CPU budget is nonzero");
+        assert_rejected(&changed);
+
+        let mut changed = runtime.clone();
+        changed.inrou.max_memory_bytes = NonZeroU64::new(TAIRA_INROU_MAX_MEMORY_BYTES_V1 + 1)
+            .expect("changed memory budget is nonzero");
+        assert_rejected(&changed);
+
+        let mut changed = runtime.clone();
+        changed.inrou.max_storage_bytes = NonZeroU64::new(TAIRA_INROU_MAX_STORAGE_BYTES_V1 + 1)
+            .expect("changed storage budget is nonzero");
+        assert_rejected(&changed);
+
+        let mut changed = runtime.clone();
+        changed.egress.default_allow = true;
+        assert_rejected(&changed);
+
+        let mut changed = runtime.clone();
+        changed
+            .egress
+            .allowed_hosts
+            .push("example.invalid".to_owned());
+        assert_rejected(&changed);
+
+        let mut changed = runtime.clone();
+        changed.egress.rate_per_minute = NonZeroU32::new(TAIRA_INROU_EGRESS_RATE_PER_MINUTE_V1 + 1);
+        assert_rejected(&changed);
+
+        let mut changed = runtime;
+        changed.egress.max_bytes_per_minute =
+            NonZeroU64::new(TAIRA_INROU_EGRESS_MAX_BYTES_PER_MINUTE_V1 + 1);
+        assert_rejected(&changed);
     }
 
     fn canonical_storage_weights() -> NexusStorageWeights {

@@ -1,5 +1,51 @@
 #[test]
-fn execute_apartment_generated_hf_autonomy_run_executes_locally_and_persists_summary() -> Result<()>
+fn autonomy_workflow_json_is_exact_and_requires_explicit_nullable_step_id() -> Result<()> {
+    let canonical = norito::json!({
+        "workflow_version": 1,
+        "steps": [{"step_id": null, "request": {"inputs": "alpha"}}],
+    });
+    let parsed = parse_apartment_autonomy_workflow_spec(&canonical)?
+        .expect("canonical workflow must be recognized");
+    assert_eq!(parsed.len(), 1);
+    assert_eq!(parsed[0].step_id, None);
+
+    for noncanonical in [
+        norito::json!({
+            "workflow_version": 1,
+            "steps": [{"request": {"inputs": "alpha"}}],
+        }),
+        norito::json!({
+            "workflow_version": 1,
+            "steps": [{
+                "step_id": null,
+                "request": {"inputs": "alpha"},
+                "allow_bridge_fallback": false,
+            }],
+        }),
+        norito::json!({
+            "workflow_version": 1,
+            "steps": [{
+                "step_id": null,
+                "request": {"inputs": "alpha"},
+                "allow_bridge_fallback": "yes",
+            }],
+        }),
+        norito::json!({
+            "workflow_version": 1,
+            "steps": [{"step_id": null, "request": {"inputs": "alpha"}}],
+            "legacy_mode": true,
+        }),
+    ] {
+        let error = parse_apartment_autonomy_workflow_spec(&noncanonical)
+            .expect_err("noncanonical workflow JSON must fail closed");
+        assert_eq!(error.kind, SoracloudRuntimeExecutionErrorKind::InvalidRequest);
+        assert!(error.message.contains("not canonical V1 JSON"));
+    }
+    Ok(())
+}
+
+#[test]
+fn execute_apartment_generated_hf_autonomy_run_stays_inert_and_persists_failure() -> Result<()>
 {
     let mut state = test_state()?;
     let fixture = insert_generated_hf_service_fixture(
@@ -95,28 +141,64 @@ fn execute_apartment_generated_hf_autonomy_run_executes_locally_and_persists_sum
 }"#;
     let config_path = files_root.join("config.json");
     write_bytes_atomic(&config_path, config_json)?;
+    let weight_payload = b"authenticated autonomy execution weights";
+    write_bytes_atomic(&files_root.join("model.safetensors"), weight_payload)?;
+    let required_weight_files = vec![HfRequiredWeightFileV1 {
+        path: "model.safetensors".to_owned(),
+        content_length: u64::try_from(weight_payload.len())?,
+        lfs_sha256: hex::encode(iroha_crypto::sha256(weight_payload)),
+    }];
+    let model_info_payload = norito::json::to_vec(&norito::json!({
+        "sha": TEST_HF_COMMIT_OID,
+        "siblings": [{
+            "rfilename": "model.safetensors",
+            "lfs": {
+                "sha256": required_weight_files[0].lfs_sha256.clone(),
+                "size": required_weight_files[0].content_length
+            }
+        }]
+    }))?;
+    write_bytes_atomic(&source_root.join("model_info.json"), &model_info_payload)?;
     write_json_atomic(
         &source_root.join("import_manifest.json"),
         &HfLocalImportManifestV1 {
             schema_version: HF_LOCAL_IMPORT_SCHEMA_VERSION_V1,
             source_id: fixture.source_id.to_string(),
             repo_id: "openai-community/gpt2".to_owned(),
-            requested_revision: "main".to_owned(),
-            resolved_commit: Some("main".to_owned()),
+            requested_revision: TEST_HF_COMMIT_OID.to_owned(),
+            resolved_commit: Some(TEST_HF_COMMIT_OID.to_owned()),
             model_name: "gpt2".to_owned(),
             adapter_id: "hf.shared.v1".to_owned(),
             pipeline_tag: Some("text-generation".to_owned()),
             library_name: Some("transformers".to_owned()),
             tags: vec!["text-generation".to_owned()],
             imported_at_ms: 20,
-            imported_files: vec![HfImportedFileV1 {
-                path: "config.json".to_owned(),
-                content_length: u64::try_from(config_json.len()).unwrap_or(u64::MAX),
-                payload_hash: Hash::new(config_json).to_string(),
-                local_path: config_path.display().to_string(),
-            }],
+            model_info_content_length: Some(u64::try_from(model_info_payload.len())?),
+            model_info_payload_hash: Some(Hash::new(&model_info_payload).to_string()),
+            selected_weight_format: Some(HfImportWeightFormatV1::Safetensors),
+            weight_selection_commitment: Some(
+                hf_weight_selection_commitment(
+                    HfImportWeightFormatV1::Safetensors,
+                    &required_weight_files,
+                )
+                .to_string(),
+            ),
+            required_weight_files,
+            imported_files: vec![
+                HfImportedFileV1 {
+                    path: "config.json".to_owned(),
+                    content_length: u64::try_from(config_json.len())?,
+                    payload_hash: Hash::new(config_json).to_string(),
+                    lfs_sha256: None,
+                },
+                HfImportedFileV1 {
+                    path: "model.safetensors".to_owned(),
+                    content_length: u64::try_from(weight_payload.len())?,
+                    payload_hash: Hash::new(weight_payload).to_string(),
+                    lfs_sha256: Some(hex::encode(iroha_crypto::sha256(weight_payload))),
+                },
+            ],
             skipped_files: Vec::new(),
-            raw_model_info_path: None,
             import_error: None,
         },
     )?;
@@ -139,65 +221,31 @@ fn execute_apartment_generated_hf_autonomy_run_executes_locally_and_persists_sum
         .execute_apartment(request.clone())
         .map_err(|error| eyre::eyre!("{error:?}"))?;
     assert_eq!(result.status, SoraAgentRuntimeStatusV1::Running);
-    assert!(result.checkpoint_artifact_hash.is_some());
+    assert!(result.checkpoint_artifact_hash.is_none());
     assert!(result.journal_artifact_hash.is_some());
     let (summary, journal_hash) = read_apartment_autonomy_execution_summary(
         temp_dir.path(),
         apartment_name.as_ref(),
         &run.run_id,
+        run.approved_process_generation,
+        run.request_commitment,
     )
     .map_err(|error| eyre::eyre!("{error:?}"))?
     .expect("persisted autonomy execution summary");
-    assert!(summary.succeeded);
+    assert!(!summary.succeeded);
     assert!(summary.workflow_steps.is_empty());
     assert_eq!(
         summary.service_name.as_deref(),
         Some(fixture.bundle.service.service_name.as_ref())
     );
-    let runtime_receipt = summary
-        .runtime_receipt
-        .as_ref()
-        .expect("runtime receipt persisted");
-    assert_eq!(
-        runtime_receipt.service_name.as_ref(),
-        fixture.bundle.service.service_name.as_ref()
-    );
-    assert_eq!(runtime_receipt.handler_name.as_ref(), "infer");
-    let response_json = summary.response_json.as_ref().expect("response json");
-    assert_eq!(
-        response_json
-            .get("backend")
-            .and_then(norito::json::Value::as_str),
-        Some("local_fixture")
-    );
-    assert_eq!(
-        response_json
-            .get("inputs")
-            .and_then(norito::json::Value::as_array)
-            .and_then(|inputs| inputs.first())
-            .and_then(norito::json::Value::as_str),
-        Some("alpha")
-    );
-    assert_eq!(
-        response_json
-            .get("inputs")
-            .and_then(norito::json::Value::as_array)
-            .map(Vec::len),
-        Some(2)
-    );
-    assert_eq!(
-        response_json
-            .get("parameters")
-            .and_then(norito::json::Value::as_object)
-            .and_then(|parameters| parameters.get("max_new_tokens"))
-            .and_then(norito::json::Value::as_u64),
-        Some(4)
-    );
-    assert_eq!(
-        response_json
-            .get("text")
-            .and_then(norito::json::Value::as_str),
-        Some("agent:['alpha', 'beta']")
+    assert!(summary.runtime_receipt.is_none());
+    assert!(summary.response_json.is_none());
+    assert!(summary.response_text.is_none());
+    assert!(
+        summary
+            .error
+            .as_deref()
+            .is_some_and(|error| error.contains("authenticated Inrou runtime"))
     );
     assert_eq!(result.journal_artifact_hash, Some(journal_hash));
     assert_eq!(
@@ -216,7 +264,7 @@ fn execute_apartment_generated_hf_autonomy_run_executes_locally_and_persists_sum
     Ok(())
 }
 #[test]
-fn execute_apartment_generated_hf_autonomy_workflow_executes_multiple_steps_locally() -> Result<()>
+fn execute_apartment_generated_hf_autonomy_workflow_stays_inert_before_first_step() -> Result<()>
 {
     let mut state = test_state()?;
     let fixture = insert_generated_hf_service_fixture(
@@ -313,28 +361,64 @@ fn execute_apartment_generated_hf_autonomy_workflow_executes_multiple_steps_loca
 }"#;
     let config_path = files_root.join("config.json");
     write_bytes_atomic(&config_path, config_json)?;
+    let weight_payload = b"authenticated autonomy workflow weights";
+    write_bytes_atomic(&files_root.join("model.safetensors"), weight_payload)?;
+    let required_weight_files = vec![HfRequiredWeightFileV1 {
+        path: "model.safetensors".to_owned(),
+        content_length: u64::try_from(weight_payload.len())?,
+        lfs_sha256: hex::encode(iroha_crypto::sha256(weight_payload)),
+    }];
+    let model_info_payload = norito::json::to_vec(&norito::json!({
+        "sha": TEST_HF_COMMIT_OID,
+        "siblings": [{
+            "rfilename": "model.safetensors",
+            "lfs": {
+                "sha256": required_weight_files[0].lfs_sha256.clone(),
+                "size": required_weight_files[0].content_length
+            }
+        }]
+    }))?;
+    write_bytes_atomic(&source_root.join("model_info.json"), &model_info_payload)?;
     write_json_atomic(
         &source_root.join("import_manifest.json"),
         &HfLocalImportManifestV1 {
             schema_version: HF_LOCAL_IMPORT_SCHEMA_VERSION_V1,
             source_id: fixture.source_id.to_string(),
             repo_id: "openai-community/gpt2".to_owned(),
-            requested_revision: "main".to_owned(),
-            resolved_commit: Some("main".to_owned()),
+            requested_revision: TEST_HF_COMMIT_OID.to_owned(),
+            resolved_commit: Some(TEST_HF_COMMIT_OID.to_owned()),
             model_name: "gpt2".to_owned(),
             adapter_id: "hf.shared.v1".to_owned(),
             pipeline_tag: Some("text-generation".to_owned()),
             library_name: Some("transformers".to_owned()),
             tags: vec!["text-generation".to_owned()],
             imported_at_ms: 20,
-            imported_files: vec![HfImportedFileV1 {
-                path: "config.json".to_owned(),
-                content_length: u64::try_from(config_json.len()).unwrap_or(u64::MAX),
-                payload_hash: Hash::new(config_json).to_string(),
-                local_path: config_path.display().to_string(),
-            }],
+            model_info_content_length: Some(u64::try_from(model_info_payload.len())?),
+            model_info_payload_hash: Some(Hash::new(&model_info_payload).to_string()),
+            selected_weight_format: Some(HfImportWeightFormatV1::Safetensors),
+            weight_selection_commitment: Some(
+                hf_weight_selection_commitment(
+                    HfImportWeightFormatV1::Safetensors,
+                    &required_weight_files,
+                )
+                .to_string(),
+            ),
+            required_weight_files,
+            imported_files: vec![
+                HfImportedFileV1 {
+                    path: "config.json".to_owned(),
+                    content_length: u64::try_from(config_json.len())?,
+                    payload_hash: Hash::new(config_json).to_string(),
+                    lfs_sha256: None,
+                },
+                HfImportedFileV1 {
+                    path: "model.safetensors".to_owned(),
+                    content_length: u64::try_from(weight_payload.len())?,
+                    payload_hash: Hash::new(weight_payload).to_string(),
+                    lfs_sha256: Some(hex::encode(iroha_crypto::sha256(weight_payload))),
+                },
+            ],
             skipped_files: Vec::new(),
-            raw_model_info_path: None,
             import_error: None,
         },
     )?;
@@ -359,49 +443,22 @@ fn execute_apartment_generated_hf_autonomy_workflow_executes_multiple_steps_loca
         temp_dir.path(),
         apartment_name.as_ref(),
         &run.run_id,
+        run.approved_process_generation,
+        run.request_commitment,
     )
     .map_err(|error| eyre::eyre!("{error:?}"))?
     .expect("persisted workflow summary");
-    assert!(summary.succeeded);
-    assert_eq!(summary.workflow_steps.len(), 2);
-    assert_eq!(summary.workflow_steps[0].step_id.as_deref(), Some("draft"));
-    assert_eq!(
-        summary.workflow_steps[0]
-            .response_json
-            .as_ref()
-            .and_then(|value| value.get("text"))
-            .and_then(norito::json::Value::as_str),
-        Some("wf:alpha")
+    assert!(!summary.succeeded);
+    assert!(summary.workflow_steps.is_empty());
+    assert!(summary.runtime_receipt.is_none());
+    assert!(summary.response_json.is_none());
+    assert!(
+        summary
+            .error
+            .as_deref()
+            .is_some_and(|error| error.contains("authenticated Inrou runtime"))
     );
-    assert_eq!(summary.workflow_steps[1].step_id.as_deref(), Some("refine"));
-    assert_eq!(
-        summary.workflow_steps[1]
-            .response_json
-            .as_ref()
-            .and_then(|value| value.get("inputs"))
-            .and_then(norito::json::Value::as_str),
-        Some("wf:alpha")
-    );
-    let response_json = summary
-        .response_json
-        .as_ref()
-        .expect("workflow response json");
-    assert_eq!(
-        response_json
-            .get("step_count")
-            .and_then(norito::json::Value::as_u64),
-        Some(2)
-    );
-    assert_eq!(
-        response_json
-            .get("final_response")
-            .and_then(|value| value.get("text"))
-            .and_then(norito::json::Value::as_str),
-        Some("wf:wf:alpha")
-    );
-    assert_eq!(
-        result.checkpoint_artifact_hash,
-        summary.checkpoint_artifact_hash
-    );
+    assert!(result.checkpoint_artifact_hash.is_none());
+    assert_eq!(result.checkpoint_artifact_hash, summary.checkpoint_artifact_hash);
     Ok(())
 }

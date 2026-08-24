@@ -1,6 +1,8 @@
 #![doc = "FinalizeReferendum rejects when a ZK election exists but the tally is not finalized."]
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 //! FinalizeReferendum rejects when a ZK election exists but the tally is not finalized.
+#[path = "common/governance.rs"]
+mod governance_fixture;
 use core::num::NonZeroU64;
 use iroha_core::{
     kura::Kura,
@@ -63,7 +65,9 @@ fn finalize_referendum_rejects_unfinalized_zk_election() {
             created_height: 1,
             status: GovernanceProposalStatus::Proposed,
             pipeline: GovernancePipeline::seeded(1, Some(&referendum), &stx.gov),
-            parliament_snapshot: None,
+            parliament_snapshot: governance_fixture::single_member_parliament_snapshot(
+                &ALICE_ID, 1,
+            ),
             finalization_evidence: None,
             enacted_at_height: None,
         },

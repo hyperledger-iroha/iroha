@@ -43,7 +43,7 @@ summary: First-release SNNet-1c capability TLVs and downgrade detection.
   | 0x0101  | `snnet.pqkem`          | one `kem_id:u8, flags:u8` pair per TLV             | yes      | ML-KEM-768 (`0x01`) is the default required profile. |
   | 0x0102  | `snnet.pqsig`          | one `sig_id:u8, flags:u8` pair per TLV             | yes      | V1 accepts exactly one Dilithium3 (`0x01`) entry. |
   | 0x0103  | `snnet.transcript_commit` | 32-byte hash                                     | yes      | Binds microdescriptor to transcript. |
-  | 0x0104  | `snnet.suite_list`     | non-empty ordered suite IDs; first-byte `0x80` is required | yes | V1 suites are `0x04` and `0x05`. |
+  | 0x0104  | `snnet.suite_list`     | non-empty ordered unique suite IDs; first-byte `0x80` is required | yes | V1 accepts only `0x04` and `0x05`; unknown, retired, or duplicate IDs reject the entire list. |
   | 0x0201  | `snnet.role`           | nonzero bitfield (`guard=0x01`, `middle=0x02`, `exit=0x04`) | relay only | Reserved bits are rejected; clients omit it. |
   | 0x0202  | `snnet.padding`        | `cell_bytes:u16` little-endian                     | yes      | `00 04` encodes 1024-byte cells. |
   | 0x0203  | `snnet.constant_rate`  | exactly `version:u8, flags:u8, cell_bytes:u16 LE`  | optional | V1 requires version 1 and 1024-byte cells. |

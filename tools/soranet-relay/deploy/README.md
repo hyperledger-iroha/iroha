@@ -117,7 +117,16 @@ it.
     regular file (not a symbolic link or reparse point). The
     `soranet_admission_token revoke` command writes the same sorted, lowercase
     canonical form and refuses to grow a list beyond the entry cap.
-  - For VPN exits, place `vpn.helper_ticket_replay_store_path` on that same
+  - For VPN exits, set `vpn.helper_ticket_issuer_public_key_path` to a direct,
+    single-link, owner-private file containing exactly the VPN operator's
+    Ed25519 public key as 64 lowercase hexadecimal characters, with no prefix,
+    whitespace, or newline. This must be the public half of the Torii operator
+    key that signs quotes and helper tickets; startup fails closed if the file
+    is absent, mutable by another user, replaced during its bounded read, or
+    not a canonical Ed25519 key. Provision that same public key at the local
+    helper's fixed root-custodied trust-anchor path documented in
+    `specs/soranet_vpn.md`.
+  - Place `vpn.helper_ticket_replay_store_path` on that same
     operator-protected durable volume and size
     `vpn.helper_ticket_replay_store_capacity` for the maximum number of
     simultaneously unexpired leases. Helper-ticket redemption is not accepted
@@ -128,6 +137,18 @@ it.
     high-water mark also prevents a wall-clock regression from reopening an
     expired redemption. Do not delete or roll back the ledger while any
     recorded helper ticket remains valid.
+  - Keep `vpn.usage_voucher_max_age_ms` between the v1 bounds of 2,000 and
+    30,000 milliseconds (default 5,000). The client helper emits an initial
+    signed prepaid voucher before the relay connects its backend and refreshes
+    it every second. Set `vpn.usage_voucher_setup_timeout_ms` at least as high as the
+    freshness window and no higher than 120,000 milliseconds (default 30,000).
+    The separate setup deadline bounds pre-service resource occupancy; after
+    the first voucher, the relay closes the bridge when the next voucher misses
+    the freshness deadline. `vpn.usage_voucher_credit_window_bytes` limits how
+    far each signed ingress or egress ceiling may lead observed payload usage
+    (256 KiB through 16 MiB; default 1 MiB), while the freshness window also caps prepaid active-time
+    lead. The relay checks a complete packet and its active-time deadline before
+    forwarding it, so no unvouched tail is provided.
    - Set the `compliance` block to match your log retention requirements. The
      default writes JSON Lines events to `/var/log/soranet/relay_compliance.jsonl`,
      rotates the file when it reaches 64 MiB (retaining seven backups), and mirrors
@@ -249,9 +270,19 @@ the public relay configuration.
 When `vpn.backend_endpoint` is set in the relay configuration, `soranet-relay`
 bridges helper-authenticated VPN traffic to that local privileged endpoint. The
 default endpoint is the permissioned Unix socket
-`unix:/run/sora-vpn-backend.sock`. TCP remains available as `tcp://host:port`,
-but every Unix or TCP session requires the relay and backend to configure the same 32-byte
-secret through owner-private direct files referenced by
+`unix:/run/sora-vpn-backend.sock`. V1 accepts only
+`unix:/absolute/path` endpoints so socket custody and peer credentials prevent
+unprivileged local processes from consuming backend session capacity. An
+enabled relay must set `vpn.backend_expected_uid` and
+`vpn.backend_expected_gid` to the backend process's exact effective UID/GID.
+The configured socket parent chain must be canonical and owned by root, the
+relay user, or that pinned backend UID without unsafe write permissions. On
+each connect the relay requires a direct, single-link socket with that exact
+owner/group and no permissions for other users, pins its device/inode across
+the connect, and verifies the peer credentials before sending any bootstrap
+bytes. Configure the backend's `SORANET_VPN_BACKEND_ALLOWED_UID` /
+`SORANET_VPN_BACKEND_ALLOWED_GID` reciprocally for the relay identity. Relay
+and backend must also configure the same 32-byte secret through owner-private direct files referenced by
 `vpn.backend_bootstrap_secret_path` and
 `SORANET_VPN_BACKEND_BOOTSTRAP_SECRET_PATH` so bootstrap frames carry a valid
 keyed MAC. The file contains exactly 64 lowercase hexadecimal characters, with
@@ -265,7 +296,11 @@ hosts:
 - Unix-socket endpoints are chmodded to `0660` and peer credentials are checked
   against `SORANET_VPN_BACKEND_ALLOWED_UID` / `SORANET_VPN_BACKEND_ALLOWED_GID`
   (defaulting to the backend process uid/gid on Linux).
-- All endpoints require `SORANET_VPN_BACKEND_BOOTSTRAP_SECRET_PATH`; the file
+- The relay authenticates and reserves this local connection after validating
+  the initial prepaid voucher but before writing the settlement WAL and
+  redeeming the helper ticket. Bootstrap remains silent until durable admission
+  succeeds, so endpoint failure leaves the ticket retryable.
+- The endpoint requires `SORANET_VPN_BACKEND_BOOTSTRAP_SECRET_PATH`; the file
   must be direct, singly linked, owner-only, and contain exactly 64 hex
   characters. Bootstrap
   frames are Norito envelopes with timestamp, nonce, and keyed MAC, and the
@@ -283,14 +318,23 @@ hosts:
 - It receives the per-session tunnel addresses, session subnet routes, and MTU
   from the relay over the local bootstrap frame instead of relying on one fixed
   address plan.
-- It can enable IP forwarding and per-session MASQUERADE rules using
-  `iptables`/`ip6tables`.
+- When forwarding or NAT is enabled, it resolves and pins the family-specific
+  egress interface. Per-session `iptables`/`ip6tables` rules accept only the
+  exact assigned client address toward that egress and established/related
+  return traffic from it; wrong interfaces and disabled forwarding families
+  are drop-all. The V1 service is a public-Internet exit, not private-network
+  access: protected IPv4/IPv6 destinations (including loopback, link-local,
+  RFC 1918/ULA, shared, benchmark, documentation/test, multicast, reserved,
+  IPv4-mapped, and local translation ranges) are rejected in packet validation
+  and by higher-priority kernel rules. This remains enforced when a private LAN
+  or metadata route shares the pinned default-egress interface. MASQUERADE is
+  limited to the client's `/32` and `/128`.
 
 Typical relay deployments should either:
 
 1. Run `sora-vpn-backend` as a companion service on the same host and point
-   `vpn.backend_endpoint` at its Unix socket, or at a TCP endpoint with a
-   matching bootstrap secret when TCP is explicitly required.
+   `vpn.backend_endpoint` at its permissioned Unix socket with a matching
+   bootstrap secret.
 2. Keep helper-ticket access disabled if the relay is not meant to terminate VPN
    traffic.
 
@@ -300,14 +344,34 @@ strong collision-avoidance guarantees across large shared fleets, extend the
 relay-to-backend bootstrap contract with an operator-assigned address pool
 allocator before deploying it to multi-tenant infrastructure.
 
-For paid VPN exits, set `vpn.receipt_spool_dir` to an operator-owned private
-directory (for example `/var/spool/soranet/vpn-receipts`). When a helper-ticket
-session closes after accepting a client usage voucher, the relay writes a JSON
-settlement artifact containing the exact `relay_receipt_hex`,
+For every enabled VPN exit, pre-create an absolute operator-owned private directory
+with mode `0700` (for example `/var/spool/soranet/vpn-receipts`) and set
+`vpn.receipt_spool_dir` to its canonical path. The relay rejects symlinks,
+permissive modes, foreign ownership, and untrusted ancestors at startup and
+refuses to enable VPN service when the spool is absent. It revalidates directory
+custody for every write and holds an exclusive owner lock for its lifetime.
+Before durable helper-ticket redemption, it fsyncs a distinct, non-submit-ready
+per-session WAL containing a zero-service reservation. Backend-ready service and
+each later voucher advance that WAL to the signed bounded prepaid ceilings
+before any new credit can be forwarded. Graceful close replaces the reservation
+with actual observed usage; restart recovery promotes an orphan reservation so
+a power loss cannot erase settlement evidence. A crash can therefore charge at
+most the helper's small client-signed prepaid window (256 KiB per direction and
+two seconds by default). Every WAL create, replacement, final promotion, and
+removal fsyncs the owner-private `0600` file and parent directory; a persistence
+failure poisons VPN service rather than falling back to volatile accounting.
+Only final promotion writes a submit-ready JSON artifact containing the exact `relay_receipt_hex`,
 `client_voucher_hex`, and `lease_id_hex` request body for
 `POST /v1/vpn/receipts`. Its top-level `earned_fee` audit field is the canonical
 exact XOR decimal string mirrored into the encoded relay receipt; it is never an
-implicit nano-XOR integer. Submit that request with the configured operator
+implicit nano-XOR integer. Settlement counters, service interval, and uptime
+are relay-observed actual usage bounded by the highest client-signed prepaid
+ceilings. Active duration comes from a monotonic clock, so wall-clock rollback
+cannot erase forwarded service; `meter_hash` commits to the signed tariff and
+unauthenticated cover telemetry is excluded.
+A session that never supplies a fresh voucher is
+closed at the configured deadline and produces no settlement artifact. Submit
+an artifact with the configured operator
 account, then sign the returned `SettleVpnLease` transaction instruction so the
 earned XOR and refund are split from native custody. If no client voucher was
 accepted, no settlement artifact is written; the relay logs this so the

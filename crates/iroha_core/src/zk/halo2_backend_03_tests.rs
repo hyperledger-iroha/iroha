@@ -10,17 +10,22 @@ use halo2_proofs::{
 #[cfg(feature = "zk-halo2")]
 use rand_core_06::OsRng;
 
-#[cfg(all(
-    feature = "zk-halo2-ipa",
-    feature = "zk-halo2",
-    feature = "zk-halo2-ipa-poseidon"
-))]
-fn anon_transfer_poseidon_fixture() -> (Vec<u8>, Vec<u8>) {
+#[cfg(all(feature = "zk-halo2-ipa", feature = "zk-halo2",))]
+fn anon_transfer_pow5_fixture() -> (Vec<u8>, Vec<u8>) {
     let k = 7;
     let params: PastaParams = pasta_params_new(k);
-    let circuit = poseidon_depth::AnonTransfer2x2CommitMerklePoseidon::<8>::default();
+    let circuit = pow5_depth::AnonTransfer2x2CommitMerklePow5::<8>::default();
     let vk: VerifyingKey<Curve> = keygen_vk(&params, &circuit).expect("vk");
     let pk = keygen_pk(&params, vk.clone(), &circuit).expect("pk");
+    let values = ipa_fixture::anon_instances(8);
+    let columns = [
+        &values[0..1],
+        &values[1..2],
+        &values[2..3],
+        &values[3..4],
+        &values[4..5],
+        &values[5..6],
+    ];
     let mut transcript = Blake2bWrite::<_, Curve, Challenge255<Curve>>::init(vec![]);
     halo2_proofs::plonk::create_proof::<
         IPACommitmentScheme<Curve>,
@@ -29,7 +34,14 @@ fn anon_transfer_poseidon_fixture() -> (Vec<u8>, Vec<u8>) {
         _,
         _,
         _,
-    >(&params, &pk, &[circuit], &[&[]], OsRng, &mut transcript)
+    >(
+        &params,
+        &pk,
+        &[circuit],
+        &[&columns],
+        OsRng,
+        &mut transcript,
+    )
     .expect("proof created");
     let mut vk_envelope = zk1::wrap_start();
     zk1::wrap_append_ipa_k(&mut vk_envelope, k);
@@ -37,26 +49,18 @@ fn anon_transfer_poseidon_fixture() -> (Vec<u8>, Vec<u8>) {
     (vk_envelope, transcript.finalize())
 }
 
-#[cfg(all(
-    feature = "zk-halo2-ipa",
-    feature = "zk-halo2",
-    feature = "zk-halo2-ipa-poseidon"
-))]
+#[cfg(all(feature = "zk-halo2-ipa", feature = "zk-halo2",))]
 struct TinyCommitOpenFixture {
     vk_envelope: Vec<u8>,
     proof: Vec<u8>,
     commit: halo2_proofs::halo2curves::pasta::Fp,
 }
 
-#[cfg(all(
-    feature = "zk-halo2-ipa",
-    feature = "zk-halo2",
-    feature = "zk-halo2-ipa-poseidon"
-))]
+#[cfg(all(feature = "zk-halo2-ipa", feature = "zk-halo2",))]
 fn tiny_commit_open_fixture() -> TinyCommitOpenFixture {
     let k = 6;
     let params: PastaParams = pasta_params_new(k);
-    let circuit = pasta_tiny::poseidon::CommitOpenPoseidon::default();
+    let circuit = pasta_tiny::CommitOpen::default();
     let vk: VerifyingKey<Curve> = keygen_vk(&params, &circuit).expect("vk");
     let pk = keygen_pk(&params, vk.clone(), &circuit).expect("pk");
     let m = Scalar::from(11);
@@ -123,15 +127,11 @@ fn tiny_add_public_fixture() -> TinyAddPublicFixture {
     }
 }
 
-#[cfg(all(
-    feature = "zk-halo2-ipa",
-    feature = "zk-halo2",
-    feature = "zk-halo2-ipa-poseidon"
-))]
+#[cfg(all(feature = "zk-halo2-ipa", feature = "zk-halo2",))]
 #[test]
-fn halo2_verify_anon_transfer_2x2_merkle8_poseidon_ipa_zk1_noncanonical() {
+fn halo2_verify_anon_transfer_2x2_merkle8_pow5_ipa_zk1_noncanonical() {
     use ff::PrimeField as _;
-    let (vk_envelope, proof) = anon_transfer_poseidon_fixture();
+    let (vk_envelope, proof) = anon_transfer_pow5_fixture();
     let mut prf_env = zk1::wrap_start();
     zk1::wrap_append_proof(&mut prf_env, &proof);
     prf_env.extend_from_slice(b"I10P");
@@ -149,14 +149,10 @@ fn halo2_verify_anon_transfer_2x2_merkle8_poseidon_ipa_zk1_noncanonical() {
     assert!(!super::verify_halo2_ipa(&backend, &prf_box, Some(&vk_box)));
 }
 
-#[cfg(all(
-    feature = "zk-halo2-ipa",
-    feature = "zk-halo2",
-    feature = "zk-halo2-ipa-poseidon"
-))]
+#[cfg(all(feature = "zk-halo2-ipa", feature = "zk-halo2",))]
 #[test]
-fn halo2_verify_anon_transfer_2x2_merkle8_poseidon_ipa_zk1_invalid_header() {
-    let (vk_envelope, proof) = anon_transfer_poseidon_fixture();
+fn halo2_verify_anon_transfer_2x2_merkle8_pow5_ipa_zk1_invalid_header() {
+    let (vk_envelope, proof) = anon_transfer_pow5_fixture();
     // PROF ok, I10P invalid (rows=0)
     let mut prf_env = zk1::wrap_start();
     zk1::wrap_append_proof(&mut prf_env, &proof);
@@ -170,28 +166,18 @@ fn halo2_verify_anon_transfer_2x2_merkle8_poseidon_ipa_zk1_invalid_header() {
     assert!(!super::verify_halo2_ipa(&backend, &prf_box, Some(&vk_box)));
 }
 
-// --- Tiny Poseidon circuits (base) negative ZK1 tests ---
+// --- Tiny constrained Pow5 circuits (base) negative ZK1 tests ---
 
-#[cfg(all(
-    feature = "zk-halo2-ipa",
-    feature = "zk-halo2",
-    feature = "zk-halo2-ipa-poseidon"
-))]
+#[cfg(all(feature = "zk-halo2-ipa", feature = "zk-halo2",))]
 #[test]
 fn halo2_verify_tiny_commit_open_ipa_zk1_truncated_prof() {
     let k = 6u32;
     let params: PastaParams = pasta_params_new(k);
-    let vk_h2: VerifyingKey<Curve> = keygen_vk(
-        &params,
-        &pasta_tiny::poseidon::CommitOpenPoseidon::default(),
-    )
-    .expect("vk");
-    let pk = keygen_pk(
-        &params,
-        vk_h2.clone(),
-        &pasta_tiny::poseidon::CommitOpenPoseidon::default(),
-    )
-    .expect("pk");
+    let vk_h2: VerifyingKey<Curve> =
+        keygen_vk(&params, &pasta_tiny::CommitOpen::default()).expect("vk");
+    let pk = keygen_pk(&params, vk_h2.clone(), &pasta_tiny::CommitOpen::default()).expect("pk");
+    let commit = pasta_tiny::constrained_pow5_pair(Scalar::from(11), Scalar::from(31));
+    let instances: [&[&[Scalar]]; 1] = [&[&[commit]]];
 
     let mut transcript = Blake2bWrite::<_, Curve, Challenge255<Curve>>::init(vec![]);
     halo2_proofs::plonk::create_proof::<
@@ -204,8 +190,8 @@ fn halo2_verify_tiny_commit_open_ipa_zk1_truncated_prof() {
     >(
         &params,
         &pk,
-        &[pasta_tiny::poseidon::CommitOpenPoseidon::default()],
-        &[&[]],
+        &[pasta_tiny::CommitOpen::default()],
+        &instances,
         OsRng,
         &mut transcript,
     )
@@ -228,23 +214,16 @@ fn halo2_verify_tiny_commit_open_ipa_zk1_truncated_prof() {
     assert!(!super::verify_halo2_ipa(backend, &prf_box, Some(&vk_box)));
 }
 
-#[cfg(all(
-    feature = "zk-halo2-ipa",
-    feature = "zk-halo2",
-    feature = "zk-halo2-ipa-poseidon"
-))]
+#[cfg(all(feature = "zk-halo2-ipa", feature = "zk-halo2",))]
 #[test]
 fn halo2_verify_tiny_merkle2_ipa_zk1_invalid_header_extreme() {
     let k = 6u32;
     let params: PastaParams = pasta_params_new(k);
     let vk_h2: VerifyingKey<Curve> =
-        keygen_vk(&params, &pasta_tiny::poseidon::Merkle2Poseidon::default()).expect("vk");
-    let pk = keygen_pk(
-        &params,
-        vk_h2.clone(),
-        &pasta_tiny::poseidon::Merkle2Poseidon::default(),
-    )
-    .expect("pk");
+        keygen_vk(&params, &pasta_tiny::Merkle2::default()).expect("vk");
+    let pk = keygen_pk(&params, vk_h2.clone(), &pasta_tiny::Merkle2::default()).expect("pk");
+    let root = pasta_tiny::merkle2_sample_root();
+    let instances: [&[&[Scalar]]; 1] = [&[&[root]]];
 
     let mut transcript = Blake2bWrite::<_, Curve, Challenge255<Curve>>::init(vec![]);
     halo2_proofs::plonk::create_proof::<
@@ -257,8 +236,8 @@ fn halo2_verify_tiny_merkle2_ipa_zk1_invalid_header_extreme() {
     >(
         &params,
         &pk,
-        &[pasta_tiny::poseidon::Merkle2Poseidon::default()],
-        &[&[]],
+        &[pasta_tiny::Merkle2::default()],
+        &instances,
         OsRng,
         &mut transcript,
     )
@@ -296,11 +275,7 @@ fn halo2_verify_tiny_merkle2_ipa_zk1_invalid_header_extreme() {
     assert!(!super::verify_halo2_ipa(backend, &prf_box2, Some(&vk_box)));
 }
 
-#[cfg(all(
-    feature = "zk-halo2-ipa",
-    feature = "zk-halo2",
-    feature = "zk-halo2-ipa-poseidon"
-))]
+#[cfg(all(feature = "zk-halo2-ipa", feature = "zk-halo2",))]
 #[test]
 fn halo2_verify_tiny_commit_open_ipa_zk1_positive() {
     let fixture = tiny_commit_open_fixture();
@@ -314,26 +289,17 @@ fn halo2_verify_tiny_commit_open_ipa_zk1_positive() {
     assert!(super::verify_halo2_ipa(backend, &prf_box, Some(&vk_box)));
 }
 
-#[cfg(all(
-    feature = "zk-halo2-ipa",
-    feature = "zk-halo2",
-    feature = "zk-halo2-ipa-poseidon"
-))]
+#[cfg(all(feature = "zk-halo2-ipa", feature = "zk-halo2",))]
 #[test]
 fn halo2_verify_tiny_merkle2_ipa_zk1_positive() {
     let k = 6u32;
     let params: PastaParams = pasta_params_new(k);
     let vk_h2: VerifyingKey<Curve> =
-        keygen_vk(&params, &pasta_tiny::poseidon::Merkle2Poseidon::default()).expect("vk");
-    let pk = keygen_pk(
-        &params,
-        vk_h2.clone(),
-        &pasta_tiny::poseidon::Merkle2Poseidon::default(),
-    )
-    .expect("pk");
+        keygen_vk(&params, &pasta_tiny::Merkle2::default()).expect("vk");
+    let pk = keygen_pk(&params, vk_h2.clone(), &pasta_tiny::Merkle2::default()).expect("pk");
 
     let mut transcript = Blake2bWrite::<_, Curve, Challenge255<Curve>>::init(vec![]);
-    let root = pasta_tiny::poseidon::merkle2_poseidon_sample_root();
+    let root = pasta_tiny::merkle2_sample_root();
     let insts: [&[&[Scalar]]; 1] = [&[&[root]]];
     halo2_proofs::plonk::create_proof::<
         IPACommitmentScheme<Curve>,
@@ -345,7 +311,7 @@ fn halo2_verify_tiny_merkle2_ipa_zk1_positive() {
     >(
         &params,
         &pk,
-        &[pasta_tiny::poseidon::Merkle2Poseidon::default()],
+        &[pasta_tiny::Merkle2::default()],
         &insts,
         OsRng,
         &mut transcript,
@@ -368,11 +334,7 @@ fn halo2_verify_tiny_merkle2_ipa_zk1_positive() {
 }
 
 // ZK1 is canonical: duplicate proof payloads and unknown tags fail closed.
-#[cfg(all(
-    feature = "zk-halo2-ipa",
-    feature = "zk-halo2",
-    feature = "zk-halo2-ipa-poseidon"
-))]
+#[cfg(all(feature = "zk-halo2-ipa", feature = "zk-halo2",))]
 #[test]
 fn halo2_verify_tiny_commit_open_ipa_zk1_multiple_prof_and_unknown_rejects() {
     let fixture = tiny_commit_open_fixture();
@@ -396,11 +358,7 @@ fn halo2_verify_tiny_commit_open_ipa_zk1_multiple_prof_and_unknown_rejects() {
     assert!(!super::verify_halo2_ipa(backend, &prf_box, Some(&vk_box)));
 }
 
-#[cfg(all(
-    feature = "zk-halo2-ipa",
-    feature = "zk-halo2",
-    feature = "zk-halo2-ipa-poseidon"
-))]
+#[cfg(all(feature = "zk-halo2-ipa", feature = "zk-halo2",))]
 #[test]
 fn halo2_verify_tiny_commit_open_ipa_zk1_unknown_tlv_stress_rejects() {
     let fixture = tiny_commit_open_fixture();
@@ -435,11 +393,7 @@ fn halo2_verify_tiny_commit_open_ipa_zk1_unknown_tlv_stress_rejects() {
 }
 
 // ZK1 duplicate instance payloads fail closed regardless of ordering.
-#[cfg(all(
-    feature = "zk-halo2-ipa",
-    feature = "zk-halo2",
-    feature = "zk-halo2-ipa-poseidon"
-))]
+#[cfg(all(feature = "zk-halo2-ipa", feature = "zk-halo2",))]
 #[test]
 fn halo2_verify_tiny_commit_open_ipa_zk1_duplicate_i10p_last_correct_rejects() {
     let fixture = tiny_commit_open_fixture();
@@ -458,11 +412,7 @@ fn halo2_verify_tiny_commit_open_ipa_zk1_duplicate_i10p_last_correct_rejects() {
 }
 
 // Reversed duplicate-instance ordering must fail identically.
-#[cfg(all(
-    feature = "zk-halo2-ipa",
-    feature = "zk-halo2",
-    feature = "zk-halo2-ipa-poseidon"
-))]
+#[cfg(all(feature = "zk-halo2-ipa", feature = "zk-halo2",))]
 #[test]
 fn halo2_verify_tiny_commit_open_ipa_zk1_duplicate_i10p_last_wrong_rejects() {
     let fixture = tiny_commit_open_fixture();
@@ -481,11 +431,7 @@ fn halo2_verify_tiny_commit_open_ipa_zk1_duplicate_i10p_last_wrong_rejects() {
 }
 
 // Randomized deterministic unknown-TLV stress must fail closed.
-#[cfg(all(
-    feature = "zk-halo2-ipa",
-    feature = "zk-halo2",
-    feature = "zk-halo2-ipa-poseidon"
-))]
+#[cfg(all(feature = "zk-halo2-ipa", feature = "zk-halo2",))]
 #[test]
 fn halo2_verify_tiny_commit_open_ipa_zk1_unknown_tlv_randomized_rejects() {
     let fixture = tiny_commit_open_fixture();
@@ -521,11 +467,7 @@ fn halo2_verify_tiny_commit_open_ipa_zk1_unknown_tlv_randomized_rejects() {
     }
 }
 
-#[cfg(all(
-    feature = "zk-halo2-ipa",
-    feature = "zk-halo2",
-    feature = "zk-halo2-ipa-poseidon"
-))]
+#[cfg(all(feature = "zk-halo2-ipa", feature = "zk-halo2",))]
 #[test]
 fn halo2_verify_tiny_commit_open_ipa_zk1_permutation_harness() {
     use halo2_proofs::{
@@ -546,17 +488,9 @@ fn halo2_verify_tiny_commit_open_ipa_zk1_permutation_harness() {
     // Prepare circuit, proof and expected instance (commit)
     let k = 6u32;
     let params: PastaParams = pasta_params_new(k);
-    let vk_h2: VerifyingKey<Curve> = keygen_vk(
-        &params,
-        &pasta_tiny::poseidon::CommitOpenPoseidon::default(),
-    )
-    .expect("vk");
-    let pk = keygen_pk(
-        &params,
-        vk_h2.clone(),
-        &pasta_tiny::poseidon::CommitOpenPoseidon::default(),
-    )
-    .expect("pk");
+    let vk_h2: VerifyingKey<Curve> =
+        keygen_vk(&params, &pasta_tiny::CommitOpen::default()).expect("vk");
+    let pk = keygen_pk(&params, vk_h2.clone(), &pasta_tiny::CommitOpen::default()).expect("pk");
     // Expected commitment (same as in synthesize)
     let commit = {
         let m = Scalar::from(11u64);
@@ -583,7 +517,7 @@ fn halo2_verify_tiny_commit_open_ipa_zk1_permutation_harness() {
     >(
         &params,
         &pk,
-        &[pasta_tiny::poseidon::CommitOpenPoseidon::default()],
+        &[pasta_tiny::CommitOpen::default()],
         &insts,
         OsRng,
         &mut transcript,
@@ -663,11 +597,7 @@ fn halo2_verify_tiny_commit_open_ipa_zk1_permutation_harness() {
         run_case(steps, *expect_ok);
     }
 }
-#[cfg(all(
-    feature = "zk-halo2-ipa",
-    feature = "zk-halo2",
-    feature = "zk-halo2-ipa-poseidon"
-))]
+#[cfg(all(feature = "zk-halo2-ipa", feature = "zk-halo2",))]
 #[test]
 fn halo2_verify_zk1_prof_length_exceeds_cap_rejected() {
     // Build minimal ZK1 with PROF len > MAX_PROOF_LEN. Parser must reject.
@@ -690,11 +620,7 @@ fn halo2_verify_zk1_prof_length_exceeds_cap_rejected() {
     assert!(!super::verify_halo2_ipa(backend, &prf_box, Some(&vk_box)));
 }
 
-#[cfg(all(
-    feature = "zk-halo2-ipa",
-    feature = "zk-halo2",
-    feature = "zk-halo2-ipa-poseidon"
-))]
+#[cfg(all(feature = "zk-halo2-ipa", feature = "zk-halo2",))]
 #[test]
 fn halo2_verify_add2inst_public_ipa() {
     let k = 6u32;
@@ -742,11 +668,7 @@ fn halo2_verify_add2inst_public_ipa() {
     assert!(super::verify_halo2_ipa(backend, &prf_box, Some(&vk_box)));
 }
 
-#[cfg(all(
-    feature = "zk-halo2-ipa",
-    feature = "zk-halo2",
-    feature = "zk-halo2-ipa-poseidon"
-))]
+#[cfg(all(feature = "zk-halo2-ipa", feature = "zk-halo2",))]
 #[test]
 fn halo2_verify_anon_transfer_ipa() {
     let k = 6u32;
@@ -792,11 +714,7 @@ fn halo2_verify_anon_transfer_ipa() {
     assert!(super::verify_halo2_ipa(backend, &prf_box, Some(&vk_box)));
 }
 
-#[cfg(all(
-    feature = "zk-halo2-ipa",
-    feature = "zk-halo2",
-    feature = "zk-halo2-ipa-poseidon"
-))]
+#[cfg(all(feature = "zk-halo2-ipa", feature = "zk-halo2",))]
 #[test]
 fn halo2_verify_vote_bool_ipa() {
     let k = 5u32;
@@ -837,11 +755,7 @@ fn halo2_verify_vote_bool_ipa() {
     assert!(super::verify_halo2_ipa(backend, &prf_box, Some(&vk_box)));
 }
 
-#[cfg(all(
-    feature = "zk-halo2-ipa",
-    feature = "zk-halo2",
-    feature = "zk-halo2-ipa-poseidon"
-))]
+#[cfg(all(feature = "zk-halo2-ipa", feature = "zk-halo2",))]
 #[test]
 fn halo2_verify_id_public_ipa_with_and_without_inst() {
     let k = 5u32;
@@ -891,11 +805,7 @@ fn halo2_verify_id_public_ipa_with_and_without_inst() {
     assert!(super::verify_halo2_ipa(backend, &prf_box2, Some(&vk_box2)));
 }
 
-#[cfg(all(
-    feature = "zk-halo2-ipa",
-    feature = "zk-halo2",
-    feature = "zk-halo2-ipa-poseidon"
-))]
+#[cfg(all(feature = "zk-halo2-ipa", feature = "zk-halo2",))]
 #[test]
 fn halo2_verify_with_instance_add_ipa() {
     let fixture = tiny_add_public_fixture();

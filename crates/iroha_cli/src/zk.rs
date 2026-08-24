@@ -20,15 +20,15 @@
 //!
 //! Provides thin wrappers over Torii app endpoints for ZK features. These are
 //! intended for operator/testing convenience and are not consensus-critical.
-use std::{fs::File, path::Path};
 use eyre::{Context, Result};
+use std::{fs::File, path::Path};
 // For base64 Engine trait (decode)
+use crate::{CliOutputFormat, Run, RunContext, json_utils, quote_and_sign_transaction};
 use base64::Engine as _;
 use iroha::client::{Client, ZkProofsFilter};
 use iroha::data_model::prelude::{Executable, InstructionBox};
 use iroha_crypto::Hash as CryptoHash;
 use iroha_zkp_halo2::OpenVerifyEnvelope as Halo2Envelope;
-use crate::{CliOutputFormat, Run, RunContext, json_utils, quote_and_sign_transaction};
 // Proof/attachment tooling shares the first-release CLI's 64 MiB local-input
 // corridor. Backend-specific VK inputs use the stricter 8 MiB protocol cap.
 // JSON and Norito decoders additionally receive explicit graph/allocation

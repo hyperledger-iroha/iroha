@@ -1833,18 +1833,22 @@ impl Kura {
     /// Initialize a fresh Kura with the canonical single-lane storage geometry.
     ///
     /// This does _not_ start the thread which receives and stores new blocks, see [`Self::start`].
-    /// Outside crate unit tests, this compatibility constructor accepts only an
-    /// exact [`LaneConfig::default`] and a missing or empty, non-symlink store
-    /// root. Persistent or custom-geometry stores must use
+    /// This constructor accepts only an exact [`LaneConfig::default`] and a
+    /// missing or empty, non-symlink store root. Persistent or custom-geometry
+    /// stores must use
     /// [`Self::new_with_configured_lane_catalog`] so their storage paths are
     /// authenticated before Kura opens them.
     ///
     /// # Errors
-    /// Fails if the production store root is empty, a rollback intent is invalid or cannot be
-    /// completed, or filesystem access to a Kura-owned durability artifact fails.
-    pub fn new(config: &Config, lane_config: &LaneConfig) -> Result<(Arc<Self>, BlockCount)> {
-        #[cfg(not(test))]
-        Self::validate_unauthenticated_fresh_store(config, lane_config)?;
+    /// Fails if the lane geometry is not canonical single-lane geometry, the
+    /// store root is nonempty, is a symlink, or is not a directory, a rollback
+    /// intent is invalid or cannot be completed, or filesystem access to a
+    /// Kura-owned durability artifact fails.
+    pub fn new_fresh_single_lane(
+        config: &Config,
+        lane_config: &LaneConfig,
+    ) -> Result<(Arc<Self>, BlockCount)> {
+        Self::validate_fresh_single_lane_store(config, lane_config)?;
         Self::new_inner(
             config,
             lane_config,
@@ -1854,23 +1858,13 @@ impl Kura {
             PendingControlSidecarLimits::default(),
         )
     }
-    #[cfg(not(test))]
-    fn validate_unauthenticated_fresh_store(
-        config: &Config,
-        lane_config: &LaneConfig,
-    ) -> Result<()> {
-        Self::validate_unauthenticated_fresh_store_inputs(config, lane_config)
-    }
-    fn validate_unauthenticated_fresh_store_inputs(
-        config: &Config,
-        lane_config: &LaneConfig,
-    ) -> Result<()> {
+    fn validate_fresh_single_lane_store(config: &Config, lane_config: &LaneConfig) -> Result<()> {
         let store_root = config.store_dir.resolve_relative_path();
         if *lane_config != LaneConfig::default() {
             return Err(Error::IO(
                 std::io::Error::new(
                     ErrorKind::InvalidInput,
-                    "Kura::new only accepts the canonical single-lane geometry; use Kura::new_with_configured_lane_catalog for custom lane storage",
+                    "Kura::new_fresh_single_lane only accepts the canonical single-lane geometry; use Kura::new_with_configured_lane_catalog for custom lane storage",
                 ),
                 store_root,
             ));
@@ -1884,7 +1878,7 @@ impl Kura {
             return Err(Error::IO(
                 std::io::Error::new(
                     ErrorKind::InvalidData,
-                    "Kura::new requires a missing or empty, non-symlink store root; use Kura::new_with_configured_lane_catalog for persistent storage",
+                    "Kura::new_fresh_single_lane requires a missing or empty, non-symlink store root; use Kura::new_with_configured_lane_catalog for persistent storage",
                 ),
                 store_root,
             ));
@@ -1896,16 +1890,91 @@ impl Kura {
             return Err(Error::IO(
                 std::io::Error::new(
                     ErrorKind::InvalidData,
-                    "Kura::new cannot open a nonempty store without an authenticated configured lane catalog; use Kura::new_with_configured_lane_catalog",
+                    "Kura::new_fresh_single_lane cannot open a nonempty store; use Kura::new_with_configured_lane_catalog with the authenticated process catalog",
                 ),
                 entry.path(),
             ));
         }
         Ok(())
     }
+    /// Open a crate test fixture through the production authenticated-catalog boundary.
+    ///
+    /// This helper exists only in unit-test builds. It reconstructs the
+    /// canonical storage-bearing catalog projection supplied by the fixture and
+    /// delegates to [`Self::new_with_configured_lane_catalog`]; it never calls
+    /// [`Self::new_inner`] or weakens any shipping validation. Fixtures that
+    /// exercise a full catalog commitment use the production constructor
+    /// directly with that exact catalog.
+    #[cfg(test)]
+    pub(crate) fn open_test_kura_with_configured_lane_config(
+        config: &Config,
+        lane_config: &LaneConfig,
+    ) -> Result<(Arc<Self>, BlockCount)> {
+        let store_root = config.store_dir.resolve_relative_path();
+        let maximum_lane_id = lane_config
+            .entries()
+            .iter()
+            .map(|entry| entry.lane_id.as_u32())
+            .max()
+            .ok_or_else(|| {
+                Error::IO(
+                    std::io::Error::new(
+                        ErrorKind::InvalidInput,
+                        "test lane configuration must contain a primary lane",
+                    ),
+                    store_root.clone(),
+                )
+            })?;
+        let lane_count = maximum_lane_id
+            .checked_add(1)
+            .and_then(std::num::NonZeroU32::new)
+            .ok_or_else(|| {
+                Error::IO(
+                    std::io::Error::new(
+                        ErrorKind::InvalidInput,
+                        "test lane configuration exceeds the lane identifier namespace",
+                    ),
+                    store_root.clone(),
+                )
+            })?;
+        let configured_lanes = lane_config
+            .entries()
+            .iter()
+            .map(|entry| iroha_data_model::nexus::LaneConfig {
+                id: entry.lane_id,
+                shard_id: (entry.shard_id != entry.lane_id.as_u32())
+                    .then_some(iroha_data_model::nexus::ShardId::new(entry.shard_id)),
+                dataspace_id: entry.dataspace_id,
+                alias: entry.alias.clone(),
+                description: None,
+                visibility: entry.visibility,
+                lane_type: None,
+                governance: None,
+                settlement: None,
+                storage: entry.storage_profile,
+                proof_scheme: entry.proof_scheme,
+                manifest_policy: entry.manifest_policy,
+                confidential_compute: entry.confidential_compute.clone(),
+                scheduler: entry.scheduler,
+                settlement_buffer: entry.settlement_buffer.clone(),
+                metadata: BTreeMap::new(),
+            })
+            .collect();
+        let configured_lane_catalog =
+            LaneCatalog::new(lane_count, configured_lanes).map_err(|error| {
+                Error::IO(
+                    std::io::Error::new(
+                        ErrorKind::InvalidInput,
+                        format!("invalid configured lane catalog for Kura test fixture: {error}"),
+                    ),
+                    store_root,
+                )
+            })?;
+        Self::new_with_configured_lane_catalog(config, lane_config, &configured_lane_catalog)
+    }
     /// Initialize Kura after authenticating the process-configured lane catalog.
     ///
-    /// Unlike [`Self::new`], this production startup boundary checks an existing
+    /// Unlike [`Self::new_fresh_single_lane`], this production startup boundary checks an existing
     /// lane-geometry journal before opening or reconciling any lane-derived
     /// block, merge-ledger, or sidecar path. On the first startup it durably
     /// establishes the exact configured-catalog commitment before opening those
@@ -42456,7 +42525,7 @@ pub(crate) mod tests {
     include!("kura/tests/01_prune_capacity_support.rs");
     include!("kura/tests/01a_retained_eviction_and_rewrite_tail.rs");
     include!("kura/tests/02_replacement_and_preflight.rs");
-    include!("kura/tests/02a_unauthenticated_preflight.rs");
+    include!("kura/tests/02a_fresh_single_lane_preflight.rs");
     include!("kura/tests/03_preflight_and_merge_entry.rs");
     include!("kura/tests/03a_preflight_and_merge_entry_tail.rs");
     include!("kura/tests/04_merge_log_and_associations.rs");

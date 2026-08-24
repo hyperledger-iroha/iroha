@@ -1,5 +1,5 @@
 //! Domain endorsement helpers (committees, policies, submissions).
-use std::{fs, path::PathBuf, str::FromStr};
+use crate::{Run, RunContext};
 use eyre::{Result, WrapErr, eyre};
 use iroha::data_model::{
     domain::DomainId,
@@ -15,7 +15,7 @@ use iroha::data_model::{
 };
 use iroha_crypto::{Hash, KeyPair, PrivateKey, PublicKey, Signature};
 use norito::json;
-use crate::{Run, RunContext};
+use std::{fs, path::PathBuf, str::FromStr};
 fn parse_domain_id_literal(literal: &str) -> std::result::Result<DomainId, String> {
     DomainId::parse_fully_qualified(literal).map_err(|err| err.to_string())
 }

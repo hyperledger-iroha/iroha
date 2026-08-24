@@ -5,8 +5,8 @@ use iroha_crypto::{
     soranet::handshake::{
         DEFAULT_CLIENT_CAPABILITIES, DEFAULT_DESCRIPTOR_COMMIT, DEFAULT_RELAY_CAPABILITIES,
         DEFAULT_TLS_SERVER_NAME, HandshakeSuite, RuntimeParams, SORANET_QUIC_ALPN,
-        SimulationParams, build_client_hello, client_handle_relay_hello, relay_finalize_handshake,
-        simulate_handshake, simulation_report_json,
+        SimulationParams, build_client_hello, client_handle_relay_hello, simulate_handshake,
+        simulation_report_json,
     },
 };
 use libfuzzer_sys::fuzz_target;
@@ -171,27 +171,21 @@ fn run_runtime_handshake(case: &FuzzInput) {
     let Ok((client_hello, client_state)) = build_client_hello(&runtime, &mut rng_client) else {
         return;
     };
-    let Ok((relay_message, relay_state)) = iroha_crypto::soranet::handshake::process_client_hello(
-        &client_hello,
-        &runtime,
-        &relay_keys,
-        &mut rng_relay,
-    ) else {
+    let Ok((relay_message, _relay_session)) =
+        iroha_crypto::soranet::handshake::process_client_hello(
+            &client_hello,
+            &runtime,
+            &relay_keys,
+            &mut rng_relay,
+        )
+    else {
         return;
     };
-    let Ok((client_finish, _client_session)) = client_handle_relay_hello(
+    let _ = client_handle_relay_hello(
         client_state,
         &relay_message,
         relay_keys.public_key(),
         &runtime,
-        &mut rng_client,
-    ) else {
-        return;
-    };
-    let _ = relay_finalize_handshake(
-        relay_state,
-        client_finish.as_deref().unwrap_or(&[]),
-        &relay_keys,
     );
 }
 fuzz_target!(|case: FuzzInput| {

@@ -205,7 +205,7 @@ impl ZkAmsMkheCksSourceCiphertextV1 {
         Ok(hash.finalize())
     }
 }
-/// Borrowed legacy CKS statement for one governed source ciphertext.
+/// Test reference CKS statement for one governed source ciphertext.
 #[cfg(test)]
 #[derive(Clone, Copy, Debug)]
 pub(super) struct ZkAmsMkheCksStatementV1<'a> {

@@ -64,7 +64,8 @@ fn pagination_behaves() -> Result<()> {
                 Sorting::default(),
                 FetchSize::new(Some(nonzero!(3_u64))),
             ),
-        );
+        )
+        .expect("asset-definition query type has a canonical mapping");
         let (first_batch, remaining_items, _continue_cursor) = client.start_query(query)?;
         assert_eq!(first_batch.len(), 3);
         assert_eq!(remaining_items, None);

@@ -997,12 +997,6 @@ def _require_executable_digest_pin(
         raise CandidateBuildError(f"{label} executable differs from its SHA-256 pin")
 
 
-def _admitted_cargo_executable(cargo: str) -> str:
-    """Compatibility wrapper returning one admitted direct Cargo path."""
-
-    return _admit_direct_executable(cargo, "Cargo").command_path
-
-
 def _admit_cargo_home(root: Path, requested: Path) -> Path:
     """Admit a canonical cache-only Cargo home outside the signed source tree."""
 

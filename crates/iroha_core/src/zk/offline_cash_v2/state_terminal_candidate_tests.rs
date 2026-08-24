@@ -298,8 +298,41 @@ fn source_guards_keep_terminal_adapters_move_only_uninhabited_and_private() {
             .count(),
         1
     );
+    assert_eq!(
+        parent
+            .lines()
+            .filter(|line| { line.trim_end().ends_with("mod state_terminal_candidate;") })
+            .count(),
+        1
+    );
     assert!(parent.contains("#[path = \"offline_cash_v2/state_terminal_candidate.rs\"]"));
     assert!(!parent.contains("pub mod state_terminal_candidate"));
+    assert_eq!(
+        source
+            .lines()
+            .filter(|line| line.trim() == "mod sealed {")
+            .count(),
+        1
+    );
+    assert_eq!(
+        source
+            .lines()
+            .filter(|line| line.trim_end().ends_with("mod sealed {"))
+            .count(),
+        1
+    );
+    assert!(source.contains("mod sealed {\n    pub trait Sealed {}\n}"));
+    assert!(!source.contains("pub(super) mod sealed"));
+    assert!(
+        !source
+            .lines()
+            .any(|line| line.trim() == "pub(super) trait Sealed {}")
+    );
+    assert!(
+        !source
+            .lines()
+            .any(|line| { line.trim() == "pub(in crate::zk::offline_cash_v2) trait Sealed {}" })
+    );
     assert!(source.contains("public terminal order remains the frozen twelve-stage contract"));
     assert!(source.contains("enum StateTerminalProductionAdapterV2 {}"));
     assert!(source.contains("enum StateTerminalArtifactAdapterV2 {}"));

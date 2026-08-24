@@ -84,7 +84,12 @@ fn seed_slash_snapshot(
             expiry_height: 100,
             direction: 0,
             duration_blocks: 100,
-            custody: None,
+            custody: iroha_core::state::GovernanceLockCustody {
+                escrowed: true,
+                asset_definition_id: escrow_asset_id.definition().clone(),
+                bond_escrow_account: escrow_asset_id.account().clone(),
+                slash_receiver_account: slash_asset_id.account().clone(),
+            },
         },
     );
     seed_tx
@@ -530,7 +535,7 @@ fn slash_and_restitution_use_stored_custody_after_governance_config_change() {
             expiry_height: 100,
             direction: 0,
             duration_blocks: 100,
-            custody: Some(stored_custody.clone()),
+            custody: stored_custody.clone(),
         },
     );
     tx.world
@@ -552,7 +557,7 @@ fn slash_and_restitution_use_stored_custody_after_governance_config_change() {
         .expect("lock after slash");
     assert_eq!(lock_after_slash.amount, Quantity::from(6_u64));
     assert_eq!(lock_after_slash.slashed, Quantity::from(4_u64));
-    assert_eq!(lock_after_slash.custody.as_ref(), Some(&stored_custody));
+    assert_eq!(lock_after_slash.custody, stored_custody);
     assert_eq!(
         tx.world
             .asset(&old_escrow_asset_id)
@@ -614,10 +619,7 @@ fn slash_and_restitution_use_stored_custody_after_governance_config_change() {
         .expect("lock after restitution");
     assert_eq!(lock_after_restitution.amount, Quantity::from(10_u64));
     assert_eq!(lock_after_restitution.slashed, Quantity::zero());
-    assert_eq!(
-        lock_after_restitution.custody.as_ref(),
-        Some(&stored_custody)
-    );
+    assert_eq!(lock_after_restitution.custody, stored_custody);
     assert_eq!(
         tx.world
             .asset(&old_escrow_asset_id)

@@ -1,5 +1,7 @@
 //! Proposal-bound PLAIN ballot gates for validation-fee governance.
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
+#[path = "common/governance.rs"]
+mod governance_fixture;
 use core::num::NonZeroU64;
 use iroha_core::{
     kura::Kura,
@@ -227,7 +229,10 @@ fn validation_fee_plain_ballots_use_the_retained_proposal_contract() {
             created_height: GATE_HEIGHT,
             status: GovernanceProposalStatus::Proposed,
             pipeline: GovernancePipeline::default(),
-            parliament_snapshot: None,
+            parliament_snapshot: governance_fixture::single_member_parliament_snapshot(
+                &parliament_signer,
+                GATE_HEIGHT,
+            ),
             finalization_evidence: None,
             enacted_at_height: None,
         },
@@ -450,10 +455,7 @@ fn validation_fee_plain_ballots_use_the_retained_proposal_contract() {
         assert_eq!(lock.amount, retained_rules.ballot_amount);
         assert_eq!(lock.duration_blocks, retained_rules.ballot_duration_blocks);
         assert_eq!(lock.direction, expected_direction);
-        let custody = lock
-            .custody
-            .as_ref()
-            .expect("validation-fee lock must retain immutable custody");
+        let custody = &lock.custody;
         assert!(custody.escrowed);
         assert_eq!(custody.asset_definition_id, voting_asset_id);
         assert_eq!(custody.bond_escrow_account, bond_escrow);
@@ -499,7 +501,8 @@ fn validation_fee_plain_ballots_use_the_retained_proposal_contract() {
         .locks
         .get_mut(&proposer)
         .expect("proposal operator lock")
-        .custody = None;
+        .custody
+        .bond_escrow_account = parliament_signer.clone();
     state_transaction
         .world
         .governance_locks_mut()
@@ -533,11 +536,11 @@ fn validation_fee_plain_ballots_use_the_retained_proposal_contract() {
         reason: "malformed retained custody".to_owned(),
     }
     .execute(&proposer, &mut state_transaction)
-    .expect_err("validation-fee slash must reject missing immutable custody");
+    .expect_err("validation-fee slash must reject mismatched immutable custody");
     assert!(
         error
             .to_string()
-            .contains("missing immutable proposal custody"),
+            .contains("differs from its immutable proposal rules"),
         "unexpected malformed-custody rejection: {error}"
     );
     assert_eq!(

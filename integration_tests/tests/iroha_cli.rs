@@ -51,7 +51,7 @@ use std::{
 const SORACLOUD_TEST_CONTROL_PLANE_TIMEOUT_SECS: &str = "60";
 const SORACLOUD_TEST_SUBPROCESS_TIMEOUT_HEADROOM: Duration = Duration::from_secs(15);
 const SORACLOUD_TEST_CONTROL_PLANE_POLL_TIMEOUT: Duration = Duration::from_secs(60);
-const SORACLOUD_LIVE_HF_TEST_RESOLVED_REVISION: &str = "main";
+const SORACLOUD_LIVE_HF_TEST_RESOLVED_REVISION: &str = "0123456789abcdef0123456789abcdef01234567";
 const SORACLOUD_LIVE_HF_TEST_WEIGHT_BYTES: usize = 4_096;
 fn program() -> PathBuf {
     iroha_program().unwrap()
@@ -803,6 +803,7 @@ fn start_mock_hf_source_server() -> MockHttpServer {
     let weight_path = format!("/{repo_id}/resolve/{revision}/model.safetensors");
     let info_path = format!("/api/models/{repo_id}/revision/{revision}");
     let model_info = norito::json!({
+        "sha": revision,
         "siblings": [
             { "rfilename": "model.safetensors" }
         ]
@@ -1344,6 +1345,8 @@ async fn soracloud_mutations_use_live_torii_control_plane() -> eyre::Result<()> 
             "rollback",
             "--service-name",
             service_v1.service_name.to_string().as_ref(),
+            "--target-version",
+            "1.0.0",
             "--torii-url",
             torii_url.as_str(),
         ],
@@ -3213,6 +3216,7 @@ async fn soracloud_templates_deploy_site_and_webapp_with_rollout_and_rollback() 
         SoracloudSuccessCase::new("site rollback");
         "service", "rollback",
         "--service-name", "docs_portal",
+        "--target-version", "1.0.0",
         "--torii-url", network.client().torii_url.to_string(),
     );
     let site_rollback_payload: Value =

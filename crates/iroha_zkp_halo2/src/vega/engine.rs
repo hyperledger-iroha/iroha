@@ -317,21 +317,6 @@ pub fn install_vega_mdl_figure9_prover_artifacts_v1(
 ) -> Result<(), VegaMdlProofErrorV1> {
     super::canonical_mc::install_figure9_prover_artifacts(proving_key, verifier_key)
 }
-/// Validate one independent canonical Microsoft verifier-key/proof fixture.
-///
-/// This low-level conformance hook exists for release-vector tests. Production callers should use
-/// [`verify_vega_mdl_figure9_v1`] with the governed Figure 9 profile instead.
-///
-/// # Errors
-///
-/// Rejects noncanonical key or proof bytes and any failed Microsoft proof equation.
-#[doc(hidden)]
-pub fn vega_microsoft_fixture_conformance_v1(
-    verifier_key: &[u8],
-    proof: &[u8],
-) -> Result<([u8; 32], VegaMdlProofDimensionsV1, usize, usize), VegaMdlProofErrorV1> {
-    super::canonical_mc::validate_microsoft_fixture(verifier_key, proof)
-}
 /// Attempt the pinned Figure 9 Vega-MC prover path.
 ///
 /// The dependency-locked implementation validates context and the installed

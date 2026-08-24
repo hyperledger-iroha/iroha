@@ -707,6 +707,9 @@ Relay operators submit cumulative receipt/voucher evidence with
 `submitVpnReceipt`; the response's optional `settleLeaseInstruction` carries
 `SettleVpnLease` when a settlement transaction must be signed and submitted, so
 the operator receives only earned XOR and the customer gets the refundable balance.
+The submission status is exactly `settlement_pending` until that instruction
+commits; only a receipt read from committed WSV state uses `settled`. Exact
+`disconnected`, `expired`, and `replaced` lifecycle statuses remain valid.
 
 > **Account selectors:** Account-scoped helpers (`ToriiClient.getAssets`, `getTransactions`, and matching `IrohaSDK` shortcuts) accept canonical I105 account ids or on-chain account aliases (`name@dataspace` / `name@domain.dataspace`). Torii resolves aliases to canonical account ids before serving the response.
 
@@ -1171,7 +1174,7 @@ the application owns reconciliation and any later explicit submission.
 Use `getOfflineCapability()`, `submitKagemushaTopUp`,
 `submitKagemushaRedeem`, `getKagemushaOperationStatus(operationId:)`, and
 `getKagemushaRecipientRegistrationLineage(query:canonicalAuth:)`.
-No selector-taking readiness alias is exposed.
+`getOfflineCapability()` takes no selector.
 
 Receiver-lineage proof evaluation requires `ToriiLocalSigningContext` and a
 per-call `ToriiCanonicalRequestAuth`. Swift signs the exact genesis-derived
@@ -1179,9 +1182,9 @@ per-call `ToriiCanonicalRequestAuth`. Swift signs the exact genesis-derived
 never retries the nonce-bearing request.
 
 `ToriiOfflineStatus` is an asset-neutral protocol contract, not backend
-settlement readiness. Swift accepts only `mandatory: false`,
+settlement readiness. Swift accepts only
 `cash_handoff_capability: "cash_handoff_v1"`, bridge ABI `22`, the exact maximum
-hop bound, `ready: true`, and empty `assets` and `blockers`. Assets and
+hop bound, and `ready: true` as its only four fields. Assets and
 dataspaces require no offline enrollment or backend enablement.
 
 `KagemushaTopUpRequest` and `KagemushaRedeemRequest` accept only the corresponding

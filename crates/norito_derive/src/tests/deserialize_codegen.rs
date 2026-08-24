@@ -28,7 +28,7 @@ fn packed_field_bitset_matches_named_and_unnamed_layouts() {
     assert_eq!(packed_field_bitset(&unnamed_data.fields), vec![0b0000_0010]);
 }
 #[test]
-fn archived_field_paths_delegate_copy_and_context_setup_to_core() {
+fn context_field_paths_delegate_copy_and_context_setup_to_core() {
     let struct_input: DeriveInput = syn::parse_quote! {
         struct Record {
             opaque: Opaque,
@@ -88,17 +88,30 @@ fn archived_field_paths_delegate_copy_and_context_setup_to_core() {
         );
     }
     assert!(
-        struct_expansion.contains("decode_context_field_archived_compat::<Opaque>"),
-        "the legacy retry path must remain delegated to the shared helper"
+        struct_expansion.contains("decode_context_field_fixed_canonical::<Opaque>"),
+        "packed framed struct fields must use the exact canonical helper"
     );
     assert!(
         struct_expansion.contains("decode_context_field_canonical::<Opaque>"),
         "ordinary framed struct fields must use the shared canonical helper"
     );
     assert!(
-        enum_expansion.contains("decode_context_field_canonical_or_archived::<Opaque>"),
-        "framed tuple-enum fields must remain bounded by their declared length"
+        enum_expansion.contains("decode_context_field_canonical::<Opaque>"),
+        "framed tuple-enum fields must use the exact canonical helper"
     );
+    for retired_helper in [
+        "decode_context_field_canonical_or_archived",
+        "decode_context_field_archived::<",
+        "decode_context_field_archived_compat",
+        "decode_context_field_fixed_archived",
+    ] {
+        for expansion in [&struct_expansion, &tuple_expansion, &enum_expansion] {
+            assert!(
+                !expansion.contains(retired_helper),
+                "generated decoders must not retry retired field encodings via {retired_helper}"
+            );
+        }
+    }
     assert!(
         !enum_expansion.contains("decode_context_field_flexible"),
         "enum fields must not consume bytes beyond their declared frame"
@@ -154,6 +167,61 @@ fn archived_field_paths_delegate_copy_and_context_setup_to_core() {
             !enum_expansion.contains(struct_only_token),
             "enum codegen must not inherit packed-struct offset/size loops: \
              {struct_only_token}"
+        );
+    }
+}
+#[test]
+fn binary_default_attributes_do_not_generate_missing_field_fallbacks() {
+    let struct_input: DeriveInput = syn::parse_quote! {
+        struct Record {
+            #[norito(default)]
+            count: u32,
+            #[norito(default = "custom_default")]
+            marker: u64,
+        }
+    };
+    let Data::Struct(struct_data) = &struct_input.data else {
+        unreachable!("test input is a struct");
+    };
+    let struct_expansion = compact(derive_struct_deserialize(
+        &struct_input.ident,
+        &struct_input.generics,
+        &struct_data.fields,
+        &struct_input.attrs,
+        None,
+    ));
+    let enum_input: DeriveInput = syn::parse_quote! {
+        enum Message {
+            Values {
+                #[norito(default)]
+                count: u32,
+                #[norito(default = "custom_default")]
+                marker: u64,
+            },
+        }
+    };
+    let Data::Enum(enum_data) = &enum_input.data else {
+        unreachable!("test input is an enum");
+    };
+    let enum_expansion = compact(derive_enum_deserialize(
+        &enum_input.ident,
+        &enum_input.generics,
+        enum_data,
+        &enum_input.attrs,
+        None,
+    ));
+    for expansion in [&struct_expansion, &enum_expansion] {
+        assert!(
+            expansion.contains("decode_context_field_canonical::<"),
+            "default-annotated binary fields must use the canonical decoder"
+        );
+        assert!(
+            !expansion.contains("custom_default") && !expansion.contains("Default::default"),
+            "binary deserializers must not synthesize omitted default-annotated fields"
+        );
+        assert!(
+            !expansion.contains("Err(norito::core::Error::LengthMismatch)=>"),
+            "binary length mismatches must remain terminal"
         );
     }
 }

@@ -376,8 +376,6 @@ pub(in crate::sumeragi) struct ProductionRecoveredDecisionApplyFixtureV1 {
     pub(in crate::sumeragi) durable: DurableBodyReceipt,
     /// Real aggregate-signed CommitQC authorizing application.
     pub(in crate::sumeragi) commit_qc: wire::QuorumCertificate,
-    /// Matching State/Kura application service.
-    pub(in crate::sumeragi) apply_service: V2ApplyService,
     /// Validator keys matching the frozen roster.
     pub(in crate::sumeragi) validator_keys: Vec<KeyPair>,
     /// Keeps the body-store directory alive through worker settlement.
@@ -454,7 +452,7 @@ pub(in crate::sumeragi) fn production_recovered_decision_apply_fixture_v1()
     .expect("verify recovered Decision Apply fixture height context");
     let ApplyFixture {
         manifest,
-        service: apply_service,
+        service: _,
         body_root: directory,
         validator_keys,
         ..
@@ -466,7 +464,6 @@ pub(in crate::sumeragi) fn production_recovered_decision_apply_fixture_v1()
         body_store,
         durable,
         commit_qc,
-        apply_service,
         validator_keys,
         directory,
     }

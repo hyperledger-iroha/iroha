@@ -179,8 +179,8 @@ fn autoscale_localnet_builder() -> NetworkBuilder {
         .with_config_layer(|layer| {
             layer
                 .write(["nexus", "autoscale", "enabled"], true)
-                .write(["nexus", "autoscale", "min_lanes"], 1_i64)
-                .write(["nexus", "autoscale", "max_lanes"], 2_i64)
+                .write(["nexus", "autoscale", "min_lane_id"], 1_i64)
+                .write(["nexus", "autoscale", "max_lane_id_exclusive"], 2_i64)
                 .write(["nexus", "autoscale", "target_block_ms"], 60000_i64)
                 .write(["nexus", "autoscale", "scale_out_latency_ratio"], 1.20_f64)
                 .write(["nexus", "autoscale", "scale_in_latency_ratio"], 0.80_f64)
@@ -211,8 +211,8 @@ fn autoscale_public_profile_localnet_builder() -> NetworkBuilder {
                 .write(["nexus", "lane_count"], 3_i64)
                 .write(["nexus", "lane_catalog"], public_profile_lane_catalog())
                 .write(["nexus", "autoscale", "enabled"], true)
-                .write(["nexus", "autoscale", "min_lanes"], 3_i64)
-                .write(["nexus", "autoscale", "max_lanes"], 4_i64)
+                .write(["nexus", "autoscale", "min_lane_id"], 3_i64)
+                .write(["nexus", "autoscale", "max_lane_id_exclusive"], 4_i64)
                 .write(["nexus", "autoscale", "target_block_ms"], 120000_i64)
                 .write(["nexus", "autoscale", "scale_out_latency_ratio"], 1.20_f64)
                 .write(["nexus", "autoscale", "scale_in_latency_ratio"], 0.80_f64)

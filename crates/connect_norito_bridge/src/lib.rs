@@ -740,9 +740,6 @@ impl_kagemusha_canonical_decode_schema!(
     iroha_data_model::offline::KagemushaRecursiveSpendBranchClaimV2,
     iroha_data_model::offline::KagemushaRecursiveSpendTopUpAnchorV4,
     iroha_data_model::offline::KagemushaRecursiveSpendVerifyResultV4,
-    iroha_torii_shared::offline_api::OfflineActiveTransferVerifier,
-    iroha_torii_shared::offline_api::OfflineAuthenticatedArtifactSet,
-    iroha_torii_shared::offline_api::OfflineReadiness,
 );
 impl_kagemusha_canonical_decode_profile!(
     KAGEMUSHA_CANONICAL_STRUCTURAL_EXTRA_ALLOCATION_MULTIPLIER,
@@ -13823,6 +13820,13 @@ mod kagemusha_bridge_tests {
         manifest: &iroha_data_model::offline::KagemushaRecursiveSpendArtifactManifestV4,
     ) -> Vec<u8> {
         use iroha_data_model::offline::{
+            KAGEMUSHA_RECURSIVE_SPEND_INTERNAL_VALIDATION_CARGO_FUZZ_VERSION_OUTPUT_V1,
+            KAGEMUSHA_RECURSIVE_SPEND_INTERNAL_VALIDATION_CARGO_FUZZ_VERSION_V1,
+            KAGEMUSHA_RECURSIVE_SPEND_INTERNAL_VALIDATION_FUZZ_CARGO_PROXY_CONTRACT_V1,
+            KAGEMUSHA_RECURSIVE_SPEND_INTERNAL_VALIDATION_FUZZ_CARGO_PROXY_PROGRAM_V1,
+            KAGEMUSHA_RECURSIVE_SPEND_INTERNAL_VALIDATION_FUZZ_RUSTC_VERSION_OUTPUT_V1,
+            KAGEMUSHA_RECURSIVE_SPEND_INTERNAL_VALIDATION_FUZZ_RUSTC_VERSION_V1,
+            KAGEMUSHA_RECURSIVE_SPEND_INTERNAL_VALIDATION_FUZZ_TARGET_TRIPLE_V1,
             KAGEMUSHA_RECURSIVE_SPEND_INTERNAL_VALIDATION_MIN_FUZZ_EXECUTIONS_V1,
             KAGEMUSHA_RECURSIVE_SPEND_INTERNAL_VALIDATION_REQUIRED_COMMANDS_V1,
             KAGEMUSHA_RECURSIVE_SPEND_INTERNAL_VALIDATION_SIGNATURE_DOMAIN_V1,
@@ -13845,6 +13849,9 @@ mod kagemusha_bridge_tests {
         fn fuzz(
             target: KagemushaInternalValidationFuzzTargetV1,
             seed: u8,
+            source_tree_sha256: [u8; 32],
+            tracked_cargo_lock_sha256: [u8; 32],
+            standalone_fuzz_cargo_lock_sha256: [u8; 32],
         ) -> KagemushaInternalValidationFuzzOutcomeV1 {
             KagemushaInternalValidationFuzzOutcomeV1 {
                 target,
@@ -13855,6 +13862,9 @@ mod kagemusha_bridge_tests {
                 crashes: 0,
                 timeouts: 0,
                 out_of_memory: 0,
+                source_tree_sha256_after: source_tree_sha256,
+                tracked_cargo_lock_sha256_after: tracked_cargo_lock_sha256,
+                standalone_fuzz_cargo_lock_sha256_after: standalone_fuzz_cargo_lock_sha256,
                 initial_corpus: exact(seed),
                 final_corpus: exact(seed.wrapping_add(1)),
                 engine_report: exact(seed.wrapping_add(2)),
@@ -13863,6 +13873,11 @@ mod kagemusha_bridge_tests {
 
         let runner = fixture_key_pair(0xA7);
         let validator_binary = exact(14);
+        let reviewed_cargo_fuzz_binary_sha256 = [16; 32];
+        let reviewed_fuzz_cargo_proxy_binary_sha256 = [17; 32];
+        let reviewed_fuzz_rustc_binary_sha256 = [18; 32];
+        let tracked_cargo_lock_sha256 = manifest.reviewed_source_closure.tracked_cargo_lock_sha256;
+        let standalone_fuzz_cargo_lock_sha256 = [7; 32];
         let tool_roles = [
             KagemushaInternalValidationToolRoleV1::Cargo,
             KagemushaInternalValidationToolRoleV1::Rustc,
@@ -13870,6 +13885,8 @@ mod kagemusha_bridge_tests {
             KagemushaInternalValidationToolRoleV1::CargoClippy,
             KagemushaInternalValidationToolRoleV1::ClippyDriver,
             KagemushaInternalValidationToolRoleV1::CargoFuzz,
+            KagemushaInternalValidationToolRoleV1::FuzzCargoProxy,
+            KagemushaInternalValidationToolRoleV1::FuzzRustc,
             KagemushaInternalValidationToolRoleV1::ValidationRunner,
         ];
         let tools = tool_roles
@@ -13881,15 +13898,32 @@ mod kagemusha_bridge_tests {
                     executable.sha256 = manifest.reviewed_cargo_binary_sha256;
                 } else if role == KagemushaInternalValidationToolRoleV1::Rustc {
                     executable.sha256 = manifest.reviewed_rustc_binary_sha256;
+                } else if role == KagemushaInternalValidationToolRoleV1::CargoFuzz {
+                    executable.sha256 = reviewed_cargo_fuzz_binary_sha256;
+                } else if role == KagemushaInternalValidationToolRoleV1::FuzzCargoProxy {
+                    executable.sha256 = reviewed_fuzz_cargo_proxy_binary_sha256;
+                } else if role == KagemushaInternalValidationToolRoleV1::FuzzRustc {
+                    executable.sha256 = reviewed_fuzz_rustc_binary_sha256;
                 } else if role == KagemushaInternalValidationToolRoleV1::ValidationRunner {
                     executable = validator_binary;
                 }
+                let version_output = if role == KagemushaInternalValidationToolRoleV1::CargoFuzz {
+                    KagemushaExactBytesDigestV1::from_bytes(
+                        KAGEMUSHA_RECURSIVE_SPEND_INTERNAL_VALIDATION_CARGO_FUZZ_VERSION_OUTPUT_V1,
+                    )
+                    .expect("pinned cargo-fuzz version output")
+                } else if role == KagemushaInternalValidationToolRoleV1::FuzzRustc {
+                    KagemushaExactBytesDigestV1::from_bytes(
+                        KAGEMUSHA_RECURSIVE_SPEND_INTERNAL_VALIDATION_FUZZ_RUSTC_VERSION_OUTPUT_V1,
+                    )
+                    .expect("pinned fuzz rustc version output")
+                } else {
+                    exact(u8::try_from(index + 40).expect("version-output seed fits"))
+                };
                 KagemushaInternalValidationToolV1 {
                     role,
                     executable,
-                    version_output: exact(
-                        u8::try_from(index + 40).expect("version-output seed fits"),
-                    ),
+                    version_output,
                 }
             })
             .collect();
@@ -13915,7 +13949,13 @@ mod kagemusha_bridge_tests {
                     timed_out: false,
                     log_archive: exact(u8::try_from(index + 130).expect("log seed fits")),
                     fuzz: spec.fuzz_target.map(|target| {
-                        fuzz(target, u8::try_from(index + 190).expect("fuzz seed fits"))
+                        fuzz(
+                            target,
+                            u8::try_from(index + 190).expect("fuzz seed fits"),
+                            manifest.source_tree_sha256,
+                            tracked_cargo_lock_sha256,
+                            standalone_fuzz_cargo_lock_sha256,
+                        )
                     }),
                 },
             )
@@ -13946,18 +13986,39 @@ mod kagemusha_bridge_tests {
                 path: "Cargo.lock".to_owned(),
                 git_blob_oid: "3333333333333333333333333333333333333333".to_owned(),
                 git_mode: "100644".to_owned(),
-                sha256: manifest.reviewed_source_closure.ignored_cargo_lock_sha256,
+                sha256: tracked_cargo_lock_sha256,
                 size_bytes: manifest
                     .reviewed_source_closure
-                    .ignored_cargo_lock_size_bytes,
+                    .tracked_cargo_lock_size_bytes,
+            },
+            standalone_fuzz_cargo_lock: KagemushaReviewedTrackedCargoLockV2 {
+                path: "fuzz/Cargo.lock".to_owned(),
+                git_blob_oid: "4444444444444444444444444444444444444444".to_owned(),
+                git_mode: "100644".to_owned(),
+                sha256: standalone_fuzz_cargo_lock_sha256,
+                size_bytes: 2048,
             },
             reviewed_cargo_binary_sha256: manifest.reviewed_cargo_binary_sha256,
             reviewed_rustc_binary_sha256: manifest.reviewed_rustc_binary_sha256,
+            reviewed_cargo_fuzz_binary_sha256,
+            reviewed_fuzz_cargo_proxy_binary_sha256,
+            fuzz_cargo_proxy_program:
+                KAGEMUSHA_RECURSIVE_SPEND_INTERNAL_VALIDATION_FUZZ_CARGO_PROXY_PROGRAM_V1.to_owned(),
+            fuzz_cargo_proxy_contract:
+                KAGEMUSHA_RECURSIVE_SPEND_INTERNAL_VALIDATION_FUZZ_CARGO_PROXY_CONTRACT_V1
+                    .to_owned(),
+            reviewed_fuzz_rustc_binary_sha256,
+            cargo_fuzz_version: KAGEMUSHA_RECURSIVE_SPEND_INTERNAL_VALIDATION_CARGO_FUZZ_VERSION_V1
+                .to_owned(),
+            fuzz_rustc_version: KAGEMUSHA_RECURSIVE_SPEND_INTERNAL_VALIDATION_FUZZ_RUSTC_VERSION_V1
+                .to_owned(),
             generator_binary_sha256: manifest.generator_binary_sha256,
             sealed_candidate_build_report_sha256: manifest.sealed_candidate_build_report_sha256,
             candidate_validation_report: exact(12),
-            host_triple: "aarch64-apple-darwin".to_owned(),
-            target_triple: "aarch64-apple-darwin".to_owned(),
+            host_triple: KAGEMUSHA_RECURSIVE_SPEND_INTERNAL_VALIDATION_FUZZ_TARGET_TRIPLE_V1
+                .to_owned(),
+            target_triple: KAGEMUSHA_RECURSIVE_SPEND_INTERNAL_VALIDATION_FUZZ_TARGET_TRIPLE_V1
+                .to_owned(),
             validator_binary,
             toolchain_manifest: exact(15),
             tools,
@@ -13990,8 +14051,8 @@ mod kagemusha_bridge_tests {
             untracked_file_count: 0,
             untracked_path_mode_blob_oid_manifest: Vec::new(),
             untracked_path_mode_blob_oid_manifest_sha256,
-            ignored_cargo_lock_size_bytes: 1,
-            ignored_cargo_lock_sha256: Sha256::digest([seed.wrapping_add(1)]).into(),
+            tracked_cargo_lock_size_bytes: 1,
+            tracked_cargo_lock_sha256: Sha256::digest([seed.wrapping_add(1)]).into(),
             combined_source_fingerprint_sha256: combined.finalize().into(),
         };
         let descriptor_sha256 = closure
@@ -17844,158 +17905,6 @@ mod kagemusha_bridge_tests {
         eprintln!("KAGEMUSHA_TAIRA_RELEASE_STAGE_V4 release-key-step-count:verified");
     }
     #[cfg(feature = "privacy-production-enabled")]
-    fn production_ds_offline_readiness_v4(
-        fixture: &ProductionReleaseFixtureV4,
-        installed: &KagemushaRecursiveSpendInstalledArtifactSetV4,
-    ) -> iroha_torii_shared::offline_api::OfflineReadiness {
-        use iroha_core::zk::{
-            ZK_BACKEND_HALO2_IPA,
-            confidential_v2::{
-                CONFIDENTIAL_TRANSFER_V2_CIRCUIT_ID,
-                CONFIDENTIAL_TRANSFER_V2_PUBLIC_INPUTS_SCHEMA_V1,
-                CONFIDENTIAL_UNSHIELD_V3_CIRCUIT_ID,
-                CONFIDENTIAL_UNSHIELD_V3_PUBLIC_INPUTS_SCHEMA_V1, CONFIDENTIAL_V2_MAX_PROOF_BYTES,
-                KAGEMUSHA_TOPUP_SHIELD_V2_CIRCUIT_ID,
-                KAGEMUSHA_TOPUP_SHIELD_V2_PUBLIC_INPUTS_SCHEMA_V2, confidential_transfer_v2_vk_box,
-                confidential_unshield_v3_vk_box, kagemusha_topup_shield_v2_vk_box,
-            },
-            hash_vk,
-        };
-        use iroha_data_model::offline::{
-            KAGEMUSHA_RECURSIVE_SPEND_MAX_PEER_HOPS_V2,
-            KAGEMUSHA_RECURSIVE_SPEND_NATIVE_BRIDGE_ABI_V4,
-            KAGEMUSHA_RECURSIVE_SPEND_STEP_EP_CIRCUIT_ID_V4,
-            KAGEMUSHA_RECURSIVE_SPEND_STEP_EQ_CIRCUIT_ID_V4, KAGEMUSHA_VERIFIER_ROLE_STEP_EP_V4,
-            KAGEMUSHA_VERIFIER_ROLE_STEP_EQ_V4, KAGEMUSHA_VERIFIER_ROLE_TOPUP_SHIELD_V2,
-            KAGEMUSHA_VERIFIER_ROLE_TRANSFER_V2, KAGEMUSHA_VERIFIER_ROLE_UNSHIELD_V2,
-            kagemusha_recursive_spend_step_ep_public_inputs_schema_hash_v4,
-            kagemusha_recursive_spend_step_eq_public_inputs_schema_hash_v4,
-        };
-        use iroha_torii_shared::offline_api::{
-            OfflineActiveTransferVerifier, OfflineAuthenticatedArtifactSet, OfflineReadiness,
-            OfflineVerifierId,
-        };
-        let active = |name: &str,
-                      circuit_id: &str,
-                      commitment: [u8; 32],
-                      public_inputs_schema_hash: [u8; 32],
-                      max_proof_bytes: u32| {
-            OfflineActiveTransferVerifier {
-                id: OfflineVerifierId {
-                    backend: ZK_BACKEND_HALO2_IPA.to_owned(),
-                    name: name.to_owned(),
-                },
-                version: 4,
-                circuit_id: circuit_id.to_owned(),
-                commitment: hex::encode(commitment),
-                public_inputs_schema_hash: hex::encode(public_inputs_schema_hash),
-                max_proof_bytes,
-                activation_height: fixture.manifest.activation_height,
-                withdrawal_height: Some(fixture.manifest.withdrawal_height),
-            }
-        };
-        let transfer = active(
-            KAGEMUSHA_VERIFIER_ROLE_TRANSFER_V2,
-            CONFIDENTIAL_TRANSFER_V2_CIRCUIT_ID,
-            hash_vk(&confidential_transfer_v2_vk_box().expect("canonical transfer verifier")),
-            Hash::new(CONFIDENTIAL_TRANSFER_V2_PUBLIC_INPUTS_SCHEMA_V1).into(),
-            CONFIDENTIAL_V2_MAX_PROOF_BYTES,
-        );
-        let topup = active(
-            KAGEMUSHA_VERIFIER_ROLE_TOPUP_SHIELD_V2,
-            KAGEMUSHA_TOPUP_SHIELD_V2_CIRCUIT_ID,
-            hash_vk(&kagemusha_topup_shield_v2_vk_box().expect("canonical top-up verifier")),
-            Hash::new(KAGEMUSHA_TOPUP_SHIELD_V2_PUBLIC_INPUTS_SCHEMA_V2).into(),
-            CONFIDENTIAL_V2_MAX_PROOF_BYTES,
-        );
-        let unshield = active(
-            KAGEMUSHA_VERIFIER_ROLE_UNSHIELD_V2,
-            CONFIDENTIAL_UNSHIELD_V3_CIRCUIT_ID,
-            hash_vk(&confidential_unshield_v3_vk_box().expect("canonical unshield verifier")),
-            Hash::new(CONFIDENTIAL_UNSHIELD_V3_PUBLIC_INPUTS_SCHEMA_V1).into(),
-            CONFIDENTIAL_V2_MAX_PROOF_BYTES,
-        );
-        let recursive = |commitment: [u8; 32],
-                         role: &str,
-                         circuit_id: &str,
-                         public_inputs_schema_hash: [u8; 32]| {
-            active(
-                role,
-                circuit_id,
-                commitment,
-                public_inputs_schema_hash,
-                fixture.manifest.max_proof_bytes,
-            )
-        };
-        let step_eq = recursive(
-            installed
-                .qualified_source
-                .step_eq()
-                .verifying_key_commitment(),
-            KAGEMUSHA_VERIFIER_ROLE_STEP_EQ_V4,
-            KAGEMUSHA_RECURSIVE_SPEND_STEP_EQ_CIRCUIT_ID_V4,
-            kagemusha_recursive_spend_step_eq_public_inputs_schema_hash_v4(),
-        );
-        let step_ep = recursive(
-            installed
-                .qualified_source
-                .step_ep()
-                .verifying_key_commitment(),
-            KAGEMUSHA_VERIFIER_ROLE_STEP_EP_V4,
-            KAGEMUSHA_RECURSIVE_SPEND_STEP_EP_CIRCUIT_ID_V4,
-            kagemusha_recursive_spend_step_ep_public_inputs_schema_hash_v4(),
-        );
-        let readiness = OfflineReadiness {
-            cash_handoff_capability:
-                iroha_data_model::offline::KAGEMUSHA_CASH_HANDOFF_CAPABILITY_V1.to_owned(),
-            required_bridge_abi_version: KAGEMUSHA_RECURSIVE_SPEND_NATIVE_BRIDGE_ABI_V4,
-            max_hops: KAGEMUSHA_RECURSIVE_SPEND_MAX_PEER_HOPS_V2,
-            asset_definition_id: fixture.manifest.asset.to_string(),
-            asset_scale: Some(fixture.manifest.asset_scale),
-            evaluated_block_height: 43,
-            evaluated_block_hash: hex::encode(<[u8; 32]>::from(Hash::new(
-                b"production DS acceptance readiness block 43",
-            ))),
-            active_transfer_verifier: Some(transfer),
-            active_topup_shield_verifier: Some(topup),
-            active_unshield_verifier: Some(unshield),
-            active_recursive_step_eq_verifier: Some(step_eq),
-            active_recursive_step_ep_verifier: Some(step_ep),
-            artifact_set: Some(OfflineAuthenticatedArtifactSet {
-                generation: fixture.manifest.generation.clone(),
-                manifest_sha256: hex::encode(installed.manifest_sha256),
-                release_policy_sha256: hex::encode(
-                    installed
-                        .source
-                        .authenticated_release
-                        .release_policy_sha256(),
-                ),
-                release_attestation_sha256: hex::encode(
-                    installed
-                        .source
-                        .authenticated_release
-                        .release_attestation_sha256(),
-                ),
-                activation_height: fixture.manifest.activation_height,
-                withdrawal_height: fixture.manifest.withdrawal_height,
-                max_proof_bytes: fixture.manifest.max_proof_bytes,
-                asset_scale: fixture.manifest.asset_scale,
-            }),
-            proof_backend_available: true,
-            recursive_lineage_supported: true,
-            ready: true,
-            blockers: Vec::new(),
-        };
-        let projected = java_kagemusha_project_readiness_v4_fields(readiness.clone())
-            .expect("production DS readiness must satisfy the exact mobile projection");
-        assert_eq!(
-            projected.first().map(Vec::as_slice),
-            Some(iroha_data_model::offline::KAGEMUSHA_CASH_HANDOFF_CAPABILITY_V1.as_bytes()),
-            "mobile readiness must carry the authenticated cash-handoff capability instead of synthesizing it in an SDK",
-        );
-        readiness
-    }
-    #[cfg(feature = "privacy-production-enabled")]
     struct ProductionDsAcceptanceLifecycleV1 {
         artifact_binding: iroha_data_model::offline::KagemushaRecursiveSpendArtifactBindingV4,
         sender_opening: KagemushaNoteOpeningV2,
@@ -18019,7 +17928,6 @@ mod kagemusha_bridge_tests {
         acknowledgement: iroha_data_model::offline::KagemushaReceiverAcknowledgementV2,
         acknowledgement_verify_result:
             iroha_data_model::offline::KagemushaReceiverAcknowledgementVerifyResultV2,
-        offline_readiness: iroha_torii_shared::offline_api::OfflineReadiness,
     }
     #[cfg(feature = "privacy-production-enabled")]
     fn production_ds_acceptance_lifecycle_v1(
@@ -18523,7 +18431,6 @@ mod kagemusha_bridge_tests {
             .expect("decode production ACK ABI result"),
             acknowledgement_verify_result
         );
-        let offline_readiness = production_ds_offline_readiness_v4(fixture, installed);
         ProductionDsAcceptanceLifecycleV1 {
             artifact_binding,
             sender_opening,
@@ -18545,7 +18452,6 @@ mod kagemusha_bridge_tests {
             acknowledgement_signature_raw,
             acknowledgement,
             acknowledgement_verify_result,
-            offline_readiness,
         }
     }
     fn production_ds_acceptance_file_secret_v1(kind: &str, declared_secret: bool) -> bool {
@@ -19342,6 +19248,7 @@ mod kagemusha_bridge_tests {
     #[cfg(feature = "privacy-production-enabled")]
     fn export_production_ds_acceptance_bundle_v1(
         fixture: &ProductionReleaseFixtureV4,
+        installed: &KagemushaRecursiveSpendInstalledArtifactSetV4,
         lifecycle: &ProductionDsAcceptanceLifecycleV1,
     ) -> Option<std::path::PathBuf> {
         use std::{
@@ -19551,13 +19458,6 @@ mod kagemusha_bridge_tests {
             "input",
             "release/topup-finality-roster-v2.norito",
             &fixture.topup_roster,
-            false
-        );
-        archive!(
-            "offline_readiness_v4",
-            "input",
-            "release/offline-readiness-v4.norito",
-            &lifecycle.offline_readiness,
             false
         );
         let descriptors = fixture
@@ -19876,16 +19776,29 @@ mod kagemusha_bridge_tests {
             fixture.receiver_offer.request.amount,
             fixture.fresh_recipient_request.amount
         );
-        let readiness_artifact_set = lifecycle
-            .offline_readiness
-            .artifact_set
-            .as_ref()
-            .expect("production DS readiness artifact set");
-        let readiness_transfer = lifecycle
-            .offline_readiness
-            .active_transfer_verifier
-            .as_ref()
-            .expect("production DS readiness transfer verifier");
+        let evaluated_block_hash = hex::encode(<[u8; 32]>::from(Hash::new(
+            b"production DS acceptance block 43",
+        )));
+        let release_manifest_sha256 = hex::encode(installed.manifest_sha256);
+        let release_policy_sha256 = hex::encode(
+            installed
+                .source
+                .authenticated_release
+                .release_policy_sha256(),
+        );
+        let release_attestation_sha256 = hex::encode(
+            installed
+                .source
+                .authenticated_release
+                .release_attestation_sha256(),
+        );
+        let transfer_verifier_commitment = hex::encode(iroha_core::zk::hash_vk(
+            &iroha_core::zk::confidential_v2::confidential_transfer_v2_vk_box()
+                .expect("canonical transfer verifier"),
+        ));
+        let transfer_public_inputs_schema_hash = hex::encode(<[u8; 32]>::from(Hash::new(
+            iroha_core::zk::confidential_v2::CONFIDENTIAL_TRANSFER_V2_PUBLIC_INPUTS_SCHEMA_V1,
+        )));
         let manifest = format!(
             concat!(
                 "{{",
@@ -19957,29 +19870,27 @@ mod kagemusha_bridge_tests {
             iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_NATIVE_BRIDGE_ABI_V4,
             json_string(&fixture.manifest.network_id.to_string()),
             json_string(&fixture.manifest.asset.to_string()),
-            json_string(&lifecycle.offline_readiness.evaluated_block_hash),
+            json_string(&evaluated_block_hash),
             json_string(&lifecycle.topup_anchor.payer.to_string()),
             json_string(&fixture.fresh_recipient_request.recipient().to_string()),
             json_string(fixture.fresh_recipient_request.receiver_device_id()),
-            json_string(&readiness_artifact_set.generation),
-            json_string(&readiness_artifact_set.manifest_sha256),
-            json_string(&readiness_artifact_set.release_policy_sha256),
-            json_string(&readiness_artifact_set.release_attestation_sha256),
-            readiness_artifact_set.activation_height,
-            readiness_artifact_set.withdrawal_height,
-            readiness_artifact_set.max_proof_bytes,
-            readiness_artifact_set.asset_scale,
-            json_string(&readiness_transfer.id.backend),
-            json_string(&readiness_transfer.id.name),
-            readiness_transfer.version,
-            json_string(&readiness_transfer.circuit_id),
-            json_string(&readiness_transfer.commitment),
-            json_string(&readiness_transfer.public_inputs_schema_hash),
-            readiness_transfer.max_proof_bytes,
-            readiness_transfer.activation_height,
-            readiness_transfer
-                .withdrawal_height
-                .expect("production DS transfer verifier withdrawal"),
+            json_string(&fixture.manifest.generation),
+            json_string(&release_manifest_sha256),
+            json_string(&release_policy_sha256),
+            json_string(&release_attestation_sha256),
+            fixture.manifest.activation_height,
+            fixture.manifest.withdrawal_height,
+            fixture.manifest.max_proof_bytes,
+            fixture.manifest.asset_scale,
+            json_string(iroha_core::zk::ZK_BACKEND_HALO2_IPA),
+            json_string(iroha_data_model::offline::KAGEMUSHA_VERIFIER_ROLE_TRANSFER_V2),
+            4,
+            json_string(iroha_core::zk::confidential_v2::CONFIDENTIAL_TRANSFER_V2_CIRCUIT_ID),
+            json_string(&transfer_verifier_commitment),
+            json_string(&transfer_public_inputs_schema_hash),
+            iroha_core::zk::confidential_v2::CONFIDENTIAL_V2_MAX_PROOF_BYTES,
+            fixture.manifest.activation_height,
+            fixture.manifest.withdrawal_height,
             hex::encode(fixture.receiver_offer.request.request_id),
             hex::encode(previous_request_digest),
             hex::encode(fixture.fresh_recipient_request.request_id),
@@ -20257,7 +20168,9 @@ mod kagemusha_bridge_tests {
             700
         );
         assert!(lifecycle.acknowledgement_verify_result.valid);
-        if let Some(path) = export_production_ds_acceptance_bundle_v1(&fixture, &lifecycle) {
+        if let Some(path) =
+            export_production_ds_acceptance_bundle_v1(&fixture, installed.as_ref(), &lifecycle)
+        {
             eprintln!(
                 "wrote complete production DS mobile acceptance bundle to {}",
                 path.display()
@@ -20297,7 +20210,7 @@ mod kagemusha_bridge_tests {
             .split_once("fn production_release_key_step_count_regression_v1(")
             .expect("Taira release-key regression")
             .1
-            .split_once("fn production_ds_offline_readiness_v4(")
+            .split_once("struct ProductionDsAcceptanceLifecycleV1")
             .expect("end of Taira release-key regression")
             .0;
         for required in [

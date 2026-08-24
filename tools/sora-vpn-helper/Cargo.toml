@@ -13,9 +13,11 @@ path = "src/main.rs"
 
 [dependencies]
 blake3 = { workspace = true }
-clap = { workspace = true, features = ["derive"] }
+# TODO: Remove this optional compatibility declaration with the next permitted
+# Cargo.lock refresh; the checked-in lock still records `clap` for this package.
+clap = { workspace = true, features = ["derive"], optional = true }
 hex = { workspace = true }
-iroha_crypto = { workspace = true, features = ["application", "soranet-record-io"], default-features = false }
+iroha_crypto = { workspace = true, features = ["application"], default-features = false }
 iroha_data_model = { workspace = true, features = ["application-model"], default-features = false }
 nix = { version = "0.30.1", features = ["signal"] }
 norito = { workspace = true, default-features = false, features = ["node-codec"] }

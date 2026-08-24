@@ -114,7 +114,8 @@ pub use mkhe::{
     ZkAmsMkheProofEnvelopeWireV1, ZkAmsMkheProofKindV1, ZkAmsMkheReadinessV1,
     ZkAmsMkheReleaseKatEvidenceV1, ZkAmsMkheReleaseManifestV1, ZkAmsMkheResourceCertificateV1,
     ZkAmsMkheResourceEvidenceV1, ZkAmsMkheRnsNativeFamilyV1, ZkAmsMkheRnsNativeProfileManifestV1,
-    ZkAmsMkheRnsNativeProfileV1, ZkAmsMkheRnsNativeSecretChunkV1, ZkAmsMkheRnsNativeSourceArenaV1,
+    ZkAmsMkheRnsNativeProfileV1, ZkAmsMkheRnsNativeRepeatableSourceSnapshotV1,
+    ZkAmsMkheRnsNativeSecretChunkV1, ZkAmsMkheRnsNativeSourceArenaV1,
     ZkAmsMkheRnsNativeSourceErrorV1, ZkAmsMkheRnsNativeSourceLayoutV1,
     ZkAmsMkheRnsNativeSourceProviderV1, ZkAmsMkheRnsNativeSourceReceiptV1,
     ZkAmsMkheRnsNativeSourceSnapshotV1, ZkAmsMkheRnsNativeSourceWriterV1,
@@ -234,10 +235,6 @@ pub use mkhe::{
 #[cfg(test)]
 pub use mkhe::{
     ZkAmsMkheCollectiveCiphertextV1, ZkAmsMkheCollectiveLevelOneV1, ZkAmsMkheCollectivePublicKeyV1,
-};
-#[cfg(test)]
-pub use mkhe::{
-    automorphism_switch_zk_ams_mkhe_collective_v1, relinearize_zk_ams_mkhe_collective_v1,
 };
 /// Exact number of public T256 scalars in one admission relation instance.
 pub const ZK_AMS_ADMISSION_PUBLIC_INPUTS_V1: usize = 89;

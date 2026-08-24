@@ -30,16 +30,16 @@ const fn account_read_get(id: &'static str, path: &'static str) -> RouteDescript
     authenticated_account_route(app_get(id, path), RouteEffect::ReadOnly)
 }
 const fn account_read_sdk_get(id: &'static str, path: &'static str) -> RouteDescriptor {
-    authenticated_account_route(app_sdk_get(id, path), RouteEffect::ReadOnly)
+    authenticated_account_route(app_get(id, path), RouteEffect::ReadOnly)
 }
 const fn account_mutation_sdk_post(id: &'static str, path: &'static str) -> RouteDescriptor {
     authenticated_account_route(app_sdk_post(id, path), RouteEffect::Mutation)
 }
 const fn soracloud_mutation_post(id: &'static str, path: &'static str) -> RouteDescriptor {
-    account_mutation_sdk_post(id, path)
+    authenticated_account_route(app_post(id, path), RouteEffect::Mutation)
 }
 const fn soracloud_read_post(id: &'static str, path: &'static str) -> RouteDescriptor {
-    authenticated_account_route(app_sdk_post(id, path), RouteEffect::ReadOnly)
+    authenticated_account_route(app_post(id, path), RouteEffect::ReadOnly)
 }
 const fn soracloud_compute_post(id: &'static str, path: &'static str) -> RouteDescriptor {
     authenticated_account_route(app_post(id, path), RouteEffect::ExpensiveCompute)

@@ -1852,15 +1852,9 @@ test("bundle and proof-request JSON enforce the closed transfer/Groth16 schema",
   const request = normalizeSccpProofRequest(proofRequest());
   assert.equal(request.public_inputs.target_domain, 2);
   assert.equal(request.sora_finality_anchor.protocol_version, 4);
-  const historicalRequest = normalizeSccpProofRequest(proofRequest(3));
-  assert.equal(historicalRequest.sora_finality_anchor.protocol_version, 3);
-  assert.equal(
-    historicalRequest.sora_finality_anchor_hash,
-    "0xec6c821caf5fa74368c08e9101ab310f132fb7f627a09f6f9481aa9484054bba",
-  );
-  assert.notEqual(
-    historicalRequest.sora_finality_anchor_hash,
-    request.sora_finality_anchor_hash,
+  assert.throws(
+    () => normalizeSccpProofRequest(proofRequest(3)),
+    /protocol_version/u,
   );
   const retiredPayload = messageBundle();
   retiredPayload.payload = { Burn: {} };

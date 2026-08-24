@@ -10,6 +10,8 @@ Usage:
     --stage-sha256 <hex> \
     --source-commit <git-hex> \
     --source-tree-sha256 <hex> \
+    --reviewed-source-closure <canonical-json> \
+    --reviewed-source-closure-sha256 <hex> \
     --generation <id> \
     --slot-id <device-lab-slot> \
     [--attestation-slot <slot-directory>] \
@@ -52,6 +54,8 @@ CANDIDATE_SHA256=""
 STAGE_SHA256=""
 SOURCE_COMMIT=""
 SOURCE_TREE_SHA256=""
+REVIEWED_SOURCE_CLOSURE=""
+REVIEWED_SOURCE_CLOSURE_SHA256=""
 GENERATION=""
 SLOT_ID=""
 ATTESTATION_SLOT=""
@@ -91,6 +95,14 @@ while [[ $# -gt 0 ]]; do
       ;;
     --source-tree-sha256)
       SOURCE_TREE_SHA256="${2:-}"
+      shift 2
+      ;;
+    --reviewed-source-closure)
+      REVIEWED_SOURCE_CLOSURE="${2:-}"
+      shift 2
+      ;;
+    --reviewed-source-closure-sha256)
+      REVIEWED_SOURCE_CLOSURE_SHA256="${2:-}"
       shift 2
       ;;
     --generation)
@@ -201,6 +213,17 @@ done
   "--source-commit must be lowercase git hex"
 [[ "$SOURCE_TREE_SHA256" =~ ^[0-9a-f]{64}$ ]] || fail \
   "--source-tree-sha256 must be lowercase SHA-256"
+[[ "$REVIEWED_SOURCE_CLOSURE_SHA256" =~ ^[0-9a-f]{64}$ \
+    && "$REVIEWED_SOURCE_CLOSURE_SHA256" != "$(printf '0%.0s' {1..64})" ]] || fail \
+  "--reviewed-source-closure-sha256 must be non-zero lowercase SHA-256"
+[[ "$REVIEWED_SOURCE_CLOSURE" == /* \
+    && "$REVIEWED_SOURCE_CLOSURE" != */./* \
+    && "$REVIEWED_SOURCE_CLOSURE" != */../* \
+    && "$REVIEWED_SOURCE_CLOSURE" != */ \
+    && "$REVIEWED_SOURCE_CLOSURE" != *//* ]] || fail \
+  "--reviewed-source-closure must be one canonical absolute path"
+[[ -f "$REVIEWED_SOURCE_CLOSURE" && ! -L "$REVIEWED_SOURCE_CLOSURE" ]] || fail \
+  "--reviewed-source-closure must be one regular non-symlink file"
 [[ "$GENERATION" =~ ^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$ ]] || fail \
   "--generation is invalid"
 [[ "$SLOT_ID" =~ ^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$ ]] || fail \
@@ -366,12 +389,21 @@ verify_attestation_authority_inputs() {
 }
 
 verify_attestation_authority_inputs
+verify_pinned_file \
+  "$REVIEWED_SOURCE_CLOSURE" \
+  "$REVIEWED_SOURCE_CLOSURE_SHA256" \
+  reviewed-source-closure
 
 source_snapshot() {
   local label="$1"
   local commit fingerprint
   commit="$("$GIT_BINARY" -C "$ROOT_DIR" rev-parse HEAD)"
-  fingerprint="$("$PYTHON3_BINARY" -I "$SOURCE_SEAL" fingerprint --root "$ROOT_DIR")"
+  fingerprint="$(
+    "$PYTHON3_BINARY" -I "$SOURCE_SEAL" fingerprint \
+      --root "$ROOT_DIR" \
+      --reviewed-source-closure "$REVIEWED_SOURCE_CLOSURE" \
+      --reviewed-source-closure-sha256 "$REVIEWED_SOURCE_CLOSURE_SHA256"
+  )"
   [[ "$commit" == "$SOURCE_COMMIT" ]] || fail \
     "$label source commit does not match --source-commit"
   [[ "$fingerprint" == "$SOURCE_TREE_SHA256" ]] || fail \
@@ -386,7 +418,7 @@ source_snapshot() {
 [[ "$(sha256_file "$STAGE_MANIFEST")" == "$STAGE_SHA256" ]] || fail \
   "candidate stage manifest digest does not match --stage-sha256"
 "$PYTHON3_BINARY" -I - "$ROOT_DIR" "$EVIDENCE_ROOT" "$CANDIDATE_SHA256" "$STAGE_SHA256" \
-  "$SOURCE_COMMIT" "$SOURCE_TREE_SHA256" <<'PY'
+  "$SOURCE_COMMIT" "$SOURCE_TREE_SHA256" "$REVIEWED_SOURCE_CLOSURE_SHA256" <<'PY'
 from pathlib import Path
 import sys
 
@@ -399,6 +431,7 @@ validate_kagemusha_candidate_stage_manifest_v2(
     stage_sha256=sys.argv[4],
     source_commit=sys.argv[5],
     source_tree_sha256=sys.argv[6],
+    reviewed_source_closure_descriptor_sha256=sys.argv[7],
 )
 PY
 
@@ -417,7 +450,9 @@ trap cleanup_build_tmp EXIT
   --candidate-sha256 "$CANDIDATE_SHA256" \
   --stage-sha256 "$STAGE_SHA256" \
   --source-commit "$SOURCE_COMMIT" \
-  --source-tree-sha256 "$SOURCE_TREE_SHA256"
+  --source-tree-sha256 "$SOURCE_TREE_SHA256" \
+  --reviewed-source-closure "$REVIEWED_SOURCE_CLOSURE" \
+  --reviewed-source-closure-sha256 "$REVIEWED_SOURCE_CLOSURE_SHA256"
 
 PRIVATE_GRADLE_HOME="$BUILD_TMP/gradle-user-home"
 mkdir -p "$PRIVATE_GRADLE_HOME/caches" "$PRIVATE_GRADLE_HOME/wrapper"
@@ -550,8 +585,17 @@ def bounded_text(path_text, maximum):
         raise SystemExit(f"bounded text input grew while reading: {path}")
     return payload.decode("utf-8")
 
-def version(command):
-    result = subprocess.run(command, check=True, capture_output=True, text=True)
+def version(command, *, extra_environment=None):
+    environment = os.environ.copy()
+    if extra_environment is not None:
+        environment.update(extra_environment)
+    result = subprocess.run(
+        command,
+        check=True,
+        capture_output=True,
+        text=True,
+        env=environment,
+    )
     return (result.stdout + result.stderr).strip()
 
 output = Path(sys.argv[1])
@@ -576,7 +620,10 @@ payload = {
     "rustc_binary_sha256": digest(sys.argv[6]),
     "rustc_version_verbose": version([sys.argv[6], "--version", "--verbose"]),
     "cargo_ndk_binary_sha256": digest(sys.argv[7]),
-    "cargo_ndk_version": version([sys.argv[7], "--version"]),
+    "cargo_ndk_version": version(
+        [sys.argv[7], "--version"],
+        extra_environment={"CARGO": sys.argv[5]},
+    ),
     "android_ndk_source_properties_sha256": digest(sys.argv[8]),
     "android_ndk_source_properties": ndk_text,
     "gradle_wrapper_jar_sha256": digest(sys.argv[9]),
@@ -705,7 +752,8 @@ write_run_receipt() {
   local toolchain="$EVIDENCE_ROOT/evidence/candidate-build-toolchain-v1.json"
   "$PYTHON3_BINARY" -I - \
     "$ROOT_DIR" "$output" "$mode" "$CANDIDATE_SHA256" "$STAGE_SHA256" \
-    "$SOURCE_COMMIT" "$SOURCE_TREE_SHA256" "$GENERATION" "$SLOT_ID" \
+    "$SOURCE_COMMIT" "$SOURCE_TREE_SHA256" \
+    "$REVIEWED_SOURCE_CLOSURE_SHA256" "$GENERATION" "$SLOT_ID" \
     "$NATIVE_LIBRARY" "$(sha256_file "$NATIVE_LIBRARY")" \
     "$LAB_APK" "$LAB_APK_SHA256" "$LAB_APK_CERT_SHA256" \
     "$TEST_APK" "$TEST_APK_SHA256" "$TEST_APK_CERT_SHA256" \
@@ -742,7 +790,8 @@ import sys
 
 (
     root_text, output_text, mode, candidate_sha, stage_sha, source_commit,
-    source_tree_sha, generation, slot_id, native_path, native_sha, main_apk_path,
+    source_tree_sha, reviewed_source_closure_sha, generation, slot_id,
+    native_path, native_sha, main_apk_path,
     main_apk_sha, main_apk_cert, test_apk_path, test_apk_sha, test_apk_cert,
     toolchain_path, toolchain_sha, challenge_hex, challenge_sha, adb_path, serial,
     app_cert, chain_sha, trusted_summary_path, trusted_summary_sha,
@@ -861,6 +910,8 @@ native_command = [
     "--stage-sha256", stage_sha,
     "--source-commit", source_commit,
     "--source-tree-sha256", source_tree_sha,
+    "--reviewed-source-closure", "<reviewed-source-closure>",
+    "--reviewed-source-closure-sha256", reviewed_source_closure_sha,
 ]
 gradle_command = [
     "./gradlew", "--no-daemon", "--offline", "--max-workers=2",

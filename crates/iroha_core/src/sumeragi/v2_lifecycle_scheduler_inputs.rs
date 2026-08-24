@@ -5193,6 +5193,7 @@ impl ProductionLifecycleOwnerV1 {
                 runtime,
                 body_store,
                 recovered_validate_retry_census,
+                None,
                 context.clone(),
                 requester,
                 Some(local_validator),
@@ -5372,6 +5373,7 @@ impl ProductionLifecycleOwnerV1 {
             source,
         )
     }
+
     /// Move the owner's exact startup body store into the bounded test worker
     /// while retaining only its comparison seal in the running owner.
     pub(in crate::sumeragi) fn bind_body_store_to_planner_io_for_test(

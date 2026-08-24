@@ -482,29 +482,6 @@ fn has_supported_json_charset(parameters: &[MediaParameter]) -> bool {
         parameter.name != "charset" || parameter.value.eq_ignore_ascii_case("utf-8")
     })
 }
-fn is_norito_media_type(raw: &str) -> bool {
-    parse_media_type(raw).is_ok_and(|media_type| {
-        media_type.has_concrete_type()
-            && media_type.type_name == "application"
-            && media_type.subtype == "x-norito"
-            && media_type
-                .parameters
-                .iter()
-                .all(|parameter| parameter.name != "q")
-    })
-}
-fn is_json_media_type(raw: &str) -> bool {
-    parse_media_type(raw).is_ok_and(|media_type| {
-        media_type.has_concrete_type()
-            && media_type.type_name == "application"
-            && is_json_subtype(&media_type.subtype)
-            && has_supported_json_charset(&media_type.parameters)
-            && media_type
-                .parameters
-                .iter()
-                .all(|parameter| parameter.name != "q")
-    })
-}
 /// Classify a response `Content-Type` as one of Torii's two typed representations.
 ///
 /// Protocol-native media types such as SSE, Prometheus text, WebSocket upgrades,
@@ -706,10 +683,9 @@ pub(crate) fn typed_request_content_format(
 }
 /// Validate the canonical first-release JSON request representation.
 ///
-/// Unlike the compatibility-oriented [`extractors::JsonOnly`] extractor, this requires exactly one
-/// `Content-Type` header and accepts only `application/json` with an optional UTF-8 charset. It
-/// deliberately rejects structured-suffix JSON and native Norito so an endpoint cannot advertise a
-/// narrower protocol than it actually enforces.
+/// This requires exactly one `Content-Type` header and accepts only `application/json` with an
+/// optional UTF-8 charset. It deliberately rejects structured-suffix JSON and native Norito so an
+/// endpoint cannot advertise a narrower protocol than it actually enforces.
 #[allow(clippy::result_large_err)]
 pub(crate) fn canonical_json_request_content_type(
     headers: &axum::http::HeaderMap,
@@ -723,10 +699,10 @@ pub(crate) fn canonical_json_request_content_type(
         )),
     }
 }
-/// Validate the first-release Kagemusha command media type.
+/// Validate the canonical first-release native Norito request representation.
 ///
-/// Offline top-up and redemption accept one canonical Norito representation;
-/// JSON is deliberately not a second request protocol.
+/// Native-only endpoints accept one parameter-free media type; JSON and
+/// parameterized Norito declarations are deliberately not second protocols.
 #[allow(clippy::result_large_err)]
 pub(crate) fn norito_request_content_type(headers: &axum::http::HeaderMap) -> Result<(), Response> {
     let mut content_types = headers.get_all(CONTENT_TYPE).iter();
@@ -1560,33 +1536,7 @@ pub mod extractors {
         type Rejection = Response;
         async fn from_request(req: Request, state: &S) -> Result<Self, Self::Rejection> {
             let ingress_limits = req.extensions().get::<NoritoIngressLimits>().copied();
-            let declared = req
-                .headers()
-                .get(CONTENT_TYPE)
-                .and_then(|hv| hv.to_str().ok())
-                .map(str::trim)
-                .filter(|ct| !ct.is_empty())
-                .map(str::to_owned);
-            let Some(raw) = declared.as_deref() else {
-                return Err((
-                    StatusCode::UNSUPPORTED_MEDIA_TYPE,
-                    format!(
-                        "Norito requests must set `Content-Type: {}`",
-                        super::NORITO_MIME_TYPE
-                    ),
-                )
-                    .into_response());
-            };
-            if !super::is_norito_media_type(raw) {
-                return Err((
-                    StatusCode::UNSUPPORTED_MEDIA_TYPE,
-                    format!(
-                        "Norito requests must set `Content-Type: {}` (got `{raw}`)",
-                        super::NORITO_MIME_TYPE
-                    ),
-                )
-                    .into_response());
-            }
+            super::norito_request_content_type(req.headers())?;
             let body = match ingress_limits {
                 Some(limits) => axum::body::to_bytes(req.into_body(), limits.max_body_bytes)
                     .await
@@ -1634,33 +1584,7 @@ pub mod extractors {
     {
         type Rejection = Response;
         async fn from_request(req: Request, state: &S) -> Result<Self, Self::Rejection> {
-            let declared = req
-                .headers()
-                .get(CONTENT_TYPE)
-                .and_then(|hv| hv.to_str().ok())
-                .map(str::trim)
-                .filter(|ct| !ct.is_empty())
-                .map(str::to_owned);
-            let Some(raw) = declared.as_deref() else {
-                return Err((
-                    StatusCode::UNSUPPORTED_MEDIA_TYPE,
-                    format!(
-                        "Norito requests must set `Content-Type: {}`",
-                        super::NORITO_MIME_TYPE
-                    ),
-                )
-                    .into_response());
-            };
-            if !super::is_norito_media_type(raw) {
-                return Err((
-                    StatusCode::UNSUPPORTED_MEDIA_TYPE,
-                    format!(
-                        "Norito requests must set `Content-Type: {}` (got `{raw}`)",
-                        super::NORITO_MIME_TYPE
-                    ),
-                )
-                    .into_response());
-            }
+            super::norito_request_content_type(req.headers())?;
             Bytes::from_request(req, state)
                 .await
                 .map(NoritoBytes)
@@ -1677,33 +1601,7 @@ pub mod extractors {
     {
         type Rejection = Response;
         async fn from_request(req: Request, state: &S) -> Result<Self, Self::Rejection> {
-            let declared = req
-                .headers()
-                .get(CONTENT_TYPE)
-                .and_then(|hv| hv.to_str().ok())
-                .map(str::trim)
-                .filter(|ct| !ct.is_empty())
-                .map(str::to_owned);
-            let Some(raw) = declared.as_deref() else {
-                return Err((
-                    StatusCode::UNSUPPORTED_MEDIA_TYPE,
-                    format!(
-                        "Norito requests must set `Content-Type: {}`",
-                        super::NORITO_MIME_TYPE
-                    ),
-                )
-                    .into_response());
-            };
-            if !super::is_norito_media_type(raw) {
-                return Err((
-                    StatusCode::UNSUPPORTED_MEDIA_TYPE,
-                    format!(
-                        "Norito requests must set `Content-Type: {}` (got `{raw}`)",
-                        super::NORITO_MIME_TYPE
-                    ),
-                )
-                    .into_response());
-            }
+            super::norito_request_content_type(req.headers())?;
             let body = Bytes::from_request(req, state)
                 .await
                 .map_err(typed_body_rejection)?;
@@ -2293,7 +2191,7 @@ pub mod extractors {
                 .map_err(offline_canonical_norito_rejection::<T>)
         }
     }
-    /// Extractor for a native-Norito request body using compatibility decoding.
+    /// Extractor for one canonical native-Norito request body.
     #[derive(Clone, Copy, Debug)]
     pub struct NoritoOnly<T>(pub T);
     impl<S, T> FromRequest<S> for NoritoOnly<T>
@@ -2336,9 +2234,8 @@ pub mod extractors {
     }
     /// Extractor enforcing JSON payloads decoded with the Norito JSON codec.
     ///
-    /// A missing `Content-Type` remains accepted for compatibility. When the
-    /// header is present exactly once, its media type is validated before the
-    /// body is read; duplicate declarations fail closed.
+    /// The request must declare exactly one canonical JSON media type before
+    /// the body is read; missing, duplicate, or alternate declarations fail closed.
     #[derive(Clone, Debug)]
     pub struct JsonOnly<T>(pub T);
     impl<S, T> FromRequest<S> for JsonOnly<T>
@@ -2349,53 +2246,9 @@ pub mod extractors {
     {
         type Rejection = Response;
         async fn from_request(req: Request, state: &S) -> Result<Self, Self::Rejection> {
-            let mut content_types = req.headers().get_all(CONTENT_TYPE).iter();
-            if let Some(content_type) = content_types.next() {
-                if content_types.next().is_some() {
-                    return Err((
-                        StatusCode::UNSUPPORTED_MEDIA_TYPE,
-                        "Content-Type must appear at most once",
-                    )
-                        .into_response());
-                }
-                let Some(ct) = content_type
-                    .to_str()
-                    .ok()
-                    .map(str::trim)
-                    .filter(|ct| !ct.is_empty())
-                else {
-                    return Err((
-                        StatusCode::UNSUPPORTED_MEDIA_TYPE,
-                        "unsupported Content-Type; expected application/json",
-                    )
-                        .into_response());
-                };
-                if !super::is_json_media_type(ct) {
-                    return Err((
-                        StatusCode::UNSUPPORTED_MEDIA_TYPE,
-                        format!("unsupported Content-Type `{ct}`; expected application/json"),
-                    )
-                        .into_response());
-                }
-            }
-            let body = admitted_typed_body(req, state).await?;
-            decode_as_json::<T>(&body).map(JsonOnly)
-        }
-    }
-    /// Extractor enforcing the canonical first-release JSON request media type.
-    #[derive(Clone, Debug)]
-    pub struct CanonicalJsonOnly<T>(pub T);
-    impl<S, T> FromRequest<S> for CanonicalJsonOnly<T>
-    where
-        Bytes: FromRequest<S, Rejection = axum::extract::rejection::BytesRejection>,
-        S: Send + Sync,
-        T: JsonDeserializeOwned + Send,
-    {
-        type Rejection = Response;
-        async fn from_request(req: Request, state: &S) -> Result<Self, Self::Rejection> {
             super::canonical_json_request_content_type(req.headers())?;
             let body = admitted_typed_body(req, state).await?;
-            decode_as_json::<T>(&body).map(CanonicalJsonOnly)
+            decode_as_json::<T>(&body).map(JsonOnly)
         }
     }
     /// Extractor for URL query strings decoded into `JsonDeserialize` types.
@@ -3225,14 +3078,14 @@ pub mod extractors {
                     None,
                     bare_ok.clone(),
                     Err(StatusCode::UNSUPPORTED_MEDIA_TYPE),
-                    Some("Content-Type"),
+                    None,
                 ),
                 (
                     "wrong",
                     Some("text/plain"),
                     bare_ok.clone(),
                     Err(StatusCode::UNSUPPORTED_MEDIA_TYPE),
-                    Some("Content-Type"),
+                    None,
                 ),
                 (
                     "versioned decode fail",
@@ -3249,10 +3102,10 @@ pub mod extractors {
                     Some("versioned"),
                 ),
                 (
-                    "norito with parameters succeeds",
+                    "norito with parameters is rejected",
                     Some("application/x-norito; charset=utf-8"),
                     versioned_ok.clone(),
-                    Ok(Dummy(11)),
+                    Err(StatusCode::UNSUPPORTED_MEDIA_TYPE),
                     None,
                 ),
                 (
@@ -4297,48 +4150,6 @@ pub mod extractors {
             }
         }
         #[tokio::test]
-        async fn json_only_accepts_missing_header_charset_and_suffix_json() {
-            #[derive(
-                Clone,
-                Debug,
-                PartialEq,
-                NoritoSerialize,
-                NoritoDeserialize,
-                crate::json_macros::JsonSerialize,
-                crate::json_macros::JsonDeserialize,
-            )]
-            struct Payload {
-                value: u32,
-            }
-            let body_bytes = norito::json::to_vec(&Payload { value: 9 }).expect("json encode");
-            let req = Request::builder()
-                .method("POST")
-                .body(Body::from(body_bytes.clone()))
-                .expect("build request without Content-Type");
-            let extracted = JsonOnly::<Payload>::from_request(req, &())
-                .await
-                .expect("extract headerless compatibility JSON");
-            assert_eq!(extracted.0.value, 9);
-            let req = Request::builder()
-                .method("POST")
-                .header(CONTENT_TYPE, "application/json; charset=utf-8")
-                .body(Body::from(body_bytes.clone()))
-                .expect("build request");
-            let extracted = JsonOnly::<Payload>::from_request(req, &())
-                .await
-                .expect("extract json");
-            assert_eq!(extracted.0.value, 9);
-            let req = Request::builder()
-                .method("POST")
-                .header(CONTENT_TYPE, "application/ld+json")
-                .body(Body::from(body_bytes))
-                .expect("build request");
-            let extracted = JsonOnly::<Payload>::from_request(req, &())
-                .await
-                .expect("extract json suffix");
-            assert_eq!(extracted.0.value, 9);
-        }
-        #[tokio::test]
         async fn json_only_rejects_unsupported_media_before_body_admission() {
             #[derive(Clone, Debug, PartialEq, crate::json_macros::JsonDeserialize)]
             struct Payload {
@@ -4387,10 +4198,10 @@ pub mod extractors {
             let rejection = JsonOnly::<Payload>::from_request(duplicate, &())
                 .await
                 .expect_err("duplicate media declarations must fail closed");
-            assert_eq!(rejection.status(), StatusCode::UNSUPPORTED_MEDIA_TYPE);
+            assert_eq!(rejection.status(), StatusCode::BAD_REQUEST);
         }
         #[tokio::test]
-        async fn canonical_json_only_accepts_exact_json_representations() {
+        async fn json_only_accepts_exact_json_representations() {
             #[derive(Clone, Debug, PartialEq, crate::json_macros::JsonDeserialize)]
             struct Payload {
                 value: u32,
@@ -4405,14 +4216,14 @@ pub mod extractors {
                     .header(CONTENT_TYPE, content_type)
                     .body(Body::from(r#"{"value":9}"#))
                     .expect("build canonical JSON request");
-                let extracted = CanonicalJsonOnly::<Payload>::from_request(req, &())
+                let extracted = JsonOnly::<Payload>::from_request(req, &())
                     .await
                     .expect("extract canonical JSON");
                 assert_eq!(extracted.0.value, 9, "content_type={content_type}");
             }
         }
         #[tokio::test]
-        async fn canonical_json_only_rejects_noncanonical_media_before_body_decode() {
+        async fn json_only_rejects_noncanonical_media_before_body_decode() {
             #[derive(Clone, Debug, PartialEq, crate::json_macros::JsonDeserialize)]
             struct Payload {
                 value: u32,
@@ -4453,7 +4264,7 @@ pub mod extractors {
                     .expect("build rejected request");
                 let response = super::super::with_current_response_format(
                     super::super::ResponseFormat::Json,
-                    CanonicalJsonOnly::<Payload>::from_request(request, &()),
+                    JsonOnly::<Payload>::from_request(request, &()),
                 )
                 .await
                 .expect_err("noncanonical media must be rejected");
@@ -4486,7 +4297,7 @@ pub mod extractors {
                 .append(CONTENT_TYPE, HeaderValue::from_static("application/json"));
             let response = super::super::with_current_response_format(
                 super::super::ResponseFormat::Json,
-                CanonicalJsonOnly::<Payload>::from_request(duplicate, &()),
+                JsonOnly::<Payload>::from_request(duplicate, &()),
             )
             .await
             .expect_err("duplicate Content-Type must be rejected");

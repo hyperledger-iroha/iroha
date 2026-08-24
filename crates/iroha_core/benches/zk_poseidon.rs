@@ -1,4 +1,4 @@
-//! Micro-benchmarks for the local Poseidon Pow5 compatibility path.
+//! Micro-benchmarks for the constrained local Pow5 test compressor.
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 #![allow(clippy::all)]
 //!
@@ -9,10 +9,10 @@
 //!
 //! Run (with features):
 //!   cargo bench -p iroha_core --bench zk_poseidon \
-//!       --features zk-halo2,zk-halo2-ipa,zk-halo2-ipa-poseidon
+//!       --features zk-halo2,zk-halo2-ipa
 #![allow(clippy::needless_range_loop)]
 use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
-#[cfg(all(feature = "zk-halo2-ipa", feature = "zk-halo2-ipa-poseidon"))]
+#[cfg(feature = "zk-halo2-ipa")]
 mod benches {
     use super::*;
     use halo2_proofs::{
@@ -63,7 +63,7 @@ mod benches {
                 meta.advice_column(),
             ];
             let selector = meta.selector();
-            meta.create_gate("local_poseidon_pow5", |meta| {
+            meta.create_gate("local_pow5", |meta| {
                 let s = meta.query_selector(selector);
                 let a = meta.query_advice(state[0], halo2_proofs::poly::Rotation::cur());
                 let b = meta.query_advice(state[1], halo2_proofs::poly::Rotation::cur());
@@ -92,7 +92,7 @@ mod benches {
             for i in 0..REPS {
                 let digest = compress2_native(cur, b);
                 layouter.assign_region(
-                    || format!("local_poseidon_{i}"),
+                    || format!("local_pow5_{i}"),
                     |mut region| {
                         selector.enable(&mut region, 0)?;
                         region.assign_advice(state[0], 0, Value::known(cur));
@@ -140,7 +140,7 @@ mod benches {
         }
     }
     fn bench_group<const REPS: usize>(c: &mut Criterion) {
-        let mut group = c.benchmark_group(format!("poseidon_pow5_reps_{REPS}"));
+        let mut group = c.benchmark_group(format!("pow5_reps_{REPS}"));
         let k = 6u32;
         let params: ParamsIPA<Curve> = ParamsIPA::new(k);
         // Constrained local path
@@ -205,7 +205,7 @@ mod benches {
         bench_group::<32>(c);
     }
 }
-#[cfg(all(feature = "zk-halo2-ipa", feature = "zk-halo2-ipa-poseidon"))]
+#[cfg(feature = "zk-halo2-ipa")]
 criterion_group!(benches, benches::criterion_benchmarks);
-#[cfg(all(feature = "zk-halo2-ipa", feature = "zk-halo2-ipa-poseidon"))]
+#[cfg(feature = "zk-halo2-ipa")]
 criterion_main!(benches);

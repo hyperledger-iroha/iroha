@@ -583,12 +583,8 @@ trusted_native_macos_build = sys.argv[13]
 trusted_native_os_tcb_sha256 = sys.argv[14]
 trusted_native_runtime_dependency_contract = sys.argv[15]
 READINESS = "ci/check_kagemusha_production_readiness.sh"
-READINESS_SOURCE_CONTRACT = (
-    "ci/check_kagemusha_production_readiness_source_contract.py"
-)
-READINESS_SOURCE_SUPPORT = (
-    "ci/check_kagemusha_production_readiness_source_support.py"
-)
+READINESS_SOURCE_CONTRACT = "ci/check_kagemusha_production_readiness_source_contract.py"
+READINESS_SOURCE_SUPPORT = "ci/check_kagemusha_production_readiness_source_support.py"
 READINESS_RECURSION_SOURCE_CONTRACT = "ci/check_kagemusha_recursion_source_contract.py"
 READINESS_LIFECYCLE_SOURCE_CONTRACT = "ci/check_kagemusha_lifecycle_source_contract.py"
 READINESS_SOURCE_PROVIDERS = (
@@ -814,8 +810,8 @@ REVIEWED_SOURCE_CLOSURE_KEYS = {
     "untracked_file_count",
     "untracked_path_mode_blob_oid_manifest",
     "untracked_path_mode_blob_oid_manifest_sha256",
-    "ignored_cargo_lock_size_bytes",
-    "ignored_cargo_lock_sha256",
+    "tracked_cargo_lock_size_bytes",
+    "tracked_cargo_lock_sha256",
     "combined_source_fingerprint_sha256",
 }
 SOURCE_SEAL_PROJECTION_KEYS = {

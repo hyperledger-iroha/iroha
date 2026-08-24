@@ -745,17 +745,13 @@ mod model {
         )]
         pub untracked_path_mode_blob_oid_manifest_sha256: [u8; 32],
         /// Exact tracked root `Cargo.lock` byte length.
-        ///
-        /// The field name is retained for V1 wire compatibility.
-        pub ignored_cargo_lock_size_bytes: u64,
+        pub tracked_cargo_lock_size_bytes: u64,
         /// SHA-256 of the exact tracked root `Cargo.lock` bytes.
-        ///
-        /// The field name is retained for V1 wire compatibility.
         #[cfg_attr(
             feature = "json",
             norito(json = "crate::json_helpers::fixed_bytes_hex")
         )]
-        pub ignored_cargo_lock_sha256: [u8; 32],
+        pub tracked_cargo_lock_sha256: [u8; 32],
         /// Fingerprint proving the tracked diff and untracked manifest are empty.
         #[cfg_attr(
             feature = "json",

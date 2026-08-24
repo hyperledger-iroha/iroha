@@ -384,87 +384,6 @@ fn prove_cubic_remaining_rounds_owned(
     }
     Ok(())
 }
-/// Compatibility prover for callers that already own a full equality table.
-#[cfg(test)]
-pub(super) fn prove_cubic_with_three_inputs_owned(
-    initial_claim: Scalar,
-    round_count: usize,
-    mut eq: SecretScalarTable,
-    mut a: SecretScalarTable,
-    mut b: SecretScalarTable,
-    mut d: SecretScalarTable,
-    transcript: &mut VegaTranscriptV1,
-) -> Result<(SumcheckProof, Vec<Scalar>, [Scalar; 3]), SumcheckError> {
-    let expected = table_size(round_count)?;
-    if expected == 0 || a.len() != expected || b.len() != expected || d.len() != expected {
-        return Err(SumcheckError::WrongRoundCount);
-    }
-    if eq.len() != expected {
-        return Err(SumcheckError::WrongRoundCount);
-    }
-    let mut claim = initial_claim;
-    let mut rounds = Vec::with_capacity(round_count);
-    let mut challenges = Vec::with_capacity(round_count);
-    for _ in 0..round_count {
-        let half = a.len() / 2;
-        if half == 0 || b.len() != a.len() || d.len() != a.len() || eq.len() != a.len() {
-            return Err(SumcheckError::WrongRoundCount);
-        }
-        let mut evaluation_zero = Scalar::zero();
-        let mut evaluation_one = Scalar::zero();
-        let mut evaluation_two = Scalar::zero();
-        let mut evaluation_three = Scalar::zero();
-        for index in 0..half {
-            let eq_zero = eq.as_slice()[index];
-            let a_zero = a.as_slice()[index];
-            let b_zero = b.as_slice()[index];
-            let d_zero = d.as_slice()[index];
-            let delta_eq = eq.as_slice()[half + index] - eq_zero;
-            let delta_a = a.as_slice()[half + index] - a_zero;
-            let delta_b = b.as_slice()[half + index] - b_zero;
-            let delta_d = d.as_slice()[half + index] - d_zero;
-            evaluation_zero += eq_zero * (a_zero * b_zero - d_zero);
-            evaluation_one +=
-                (eq_zero + delta_eq) * ((a_zero + delta_a) * (b_zero + delta_b) - d_zero - delta_d);
-            let two = Scalar::from_u64(2);
-            evaluation_two += (eq_zero + two * delta_eq)
-                * ((a_zero + two * delta_a) * (b_zero + two * delta_b) - d_zero - two * delta_d);
-            let three = Scalar::from_u64(3);
-            evaluation_three += (eq_zero + three * delta_eq)
-                * ((a_zero + three * delta_a) * (b_zero + three * delta_b)
-                    - d_zero
-                    - three * delta_d);
-        }
-        if evaluation_zero + evaluation_one != claim {
-            return Err(SumcheckError::InvalidClaim);
-        }
-        let coefficients = interpolate_cubic([
-            evaluation_zero,
-            evaluation_one,
-            evaluation_two,
-            evaluation_three,
-        ])?;
-        let compressed =
-            CompressedUnivariate::new(vec![coefficients[0], coefficients[2], coefficients[3]], 3)?;
-        transcript.absorb_univariate(b"p", compressed.coefficients())?;
-        let challenge = transcript.squeeze(b"c")?;
-        claim = evaluate_univariate(&coefficients, challenge)?;
-        challenges.push(challenge);
-        rounds.push(compressed);
-        eq.bind_top(challenge)?;
-        a.bind_top(challenge)?;
-        b.bind_top(challenge)?;
-        d.bind_top(challenge)?;
-    }
-    if a.len() != 1 || b.len() != 1 || d.len() != 1 {
-        return Err(SumcheckError::WrongRoundCount);
-    }
-    Ok((
-        SumcheckProof::new(rounds),
-        challenges,
-        [a.as_slice()[0], b.as_slice()[0], d.as_slice()[0]],
-    ))
-}
 /// Prove the quadratic inner Spartan sum-check `sum_x A(x) * B(x)`.
 pub(super) fn prove_quadratic_owned(
     initial_claim: Scalar,
@@ -588,7 +507,7 @@ impl SumcheckProof {
 mod tests {
     use super::*;
     use crate::vega::algebra::{eq_evals, eq_evaluate};
-    fn prove_cubic_with_three_inputs(
+    fn prove_cubic_with_split_inputs(
         initial_claim: Scalar,
         tau: &[Scalar],
         a: &[Scalar],
@@ -596,13 +515,17 @@ mod tests {
         d: &[Scalar],
         transcript: &mut VegaTranscriptV1,
     ) -> Result<(SumcheckProof, Vec<Scalar>, [Scalar; 3]), SumcheckError> {
-        prove_cubic_with_three_inputs_owned(
+        let expected = table_size(tau.len())?;
+        if a.len() != expected || b.len() != expected || d.len() != expected {
+            return Err(SumcheckError::WrongRoundCount);
+        }
+        let half = expected / 2;
+        prove_cubic_with_split_first_owned(
             initial_claim,
-            tau.len(),
-            SecretScalarTable::try_eq_evals(tau)?,
-            SecretScalarTable::new(a.to_vec()),
-            SecretScalarTable::new(b.to_vec()),
-            SecretScalarTable::new(d.to_vec()),
+            tau,
+            SplitSecretScalarTable::new(a[..half].to_vec(), a[half..].to_vec()),
+            SplitSecretScalarTable::new(b[..half].to_vec(), b[half..].to_vec()),
+            SplitSecretScalarTable::new(d[..half].to_vec(), d[half..].to_vec()),
             transcript,
         )
     }
@@ -675,7 +598,7 @@ mod tests {
             });
         let mut prover_transcript = VegaTranscriptV1::new_neutron_nova();
         let (cubic, prover_challenges, claims) =
-            prove_cubic_with_three_inputs(cubic_claim, &tau, &a, &b, &d, &mut prover_transcript)
+            prove_cubic_with_split_inputs(cubic_claim, &tau, &a, &b, &d, &mut prover_transcript)
                 .expect("valid cubic proof");
         let mut verifier_transcript = VegaTranscriptV1::new_neutron_nova();
         let (final_claim, verifier_challenges) = cubic
@@ -719,7 +642,7 @@ mod tests {
         assert_eq!(final_claim, claims[0] * claims[1]);
     }
     #[test]
-    fn owned_provers_preserve_borrowed_results_and_transcript_schedule() {
+    fn owned_provers_preserve_deterministic_transcript_schedule() {
         let tau = [s(13), s(17)];
         let a = [s(2), s(3), s(5), s(7)];
         let b = [s(11), s(13), s(17), s(19)];
@@ -734,19 +657,8 @@ mod tests {
             });
         let mut borrowed_transcript = VegaTranscriptV1::new_neutron_nova();
         let borrowed =
-            prove_cubic_with_three_inputs(cubic_claim, &tau, &a, &b, &d, &mut borrowed_transcript)
-                .expect("borrowed compatibility path");
-        let mut owned_transcript = VegaTranscriptV1::new_neutron_nova();
-        let owned = prove_cubic_with_three_inputs_owned(
-            cubic_claim,
-            tau.len(),
-            SecretScalarTable::try_eq_evals(&tau).expect("small equality table"),
-            SecretScalarTable::new(a.to_vec()),
-            SecretScalarTable::new(b.to_vec()),
-            SecretScalarTable::new(d.to_vec()),
-            &mut owned_transcript,
-        )
-        .expect("owned path");
+            prove_cubic_with_split_inputs(cubic_claim, &tau, &a, &b, &d, &mut borrowed_transcript)
+                .expect("canonical split path");
         let mut split_transcript = VegaTranscriptV1::new_neutron_nova();
         let split = prove_cubic_with_split_first_owned(
             cubic_claim,
@@ -757,13 +669,8 @@ mod tests {
             &mut split_transcript,
         )
         .expect("split-first owned path");
-        assert_eq!(owned, borrowed);
         assert_eq!(split, borrowed);
         let borrowed_after = borrowed_transcript.squeeze(b"after").expect("bounded");
-        assert_eq!(
-            owned_transcript.squeeze(b"after").expect("bounded"),
-            borrowed_after
-        );
         assert_eq!(
             split_transcript.squeeze(b"after").expect("bounded"),
             borrowed_after
@@ -775,7 +682,7 @@ mod tests {
             .fold(Scalar::zero(), |sum, (a, b)| sum + a * b);
         let mut borrowed_transcript = VegaTranscriptV1::new_neutron_nova();
         let borrowed = prove_quadratic(quadratic_claim, 2, &a, &b, &mut borrowed_transcript)
-            .expect("borrowed compatibility path");
+            .expect("reference path");
         let mut owned_transcript = VegaTranscriptV1::new_neutron_nova();
         let owned = prove_quadratic_owned(
             quadratic_claim,
@@ -894,16 +801,9 @@ mod tests {
             .split("pub(super) fn prove_cubic_with_split_first_owned")
             .nth(1)
             .expect("split-first cubic prover")
-            .split("/// Compatibility prover")
-            .next()
-            .expect("split-first cubic boundary");
-        let cubic = source
-            .split("pub(super) fn prove_cubic_with_three_inputs_owned")
-            .nth(1)
-            .expect("owned cubic prover")
             .split("/// Prove the quadratic inner Spartan sum-check")
             .next()
-            .expect("cubic boundary");
+            .expect("split-first cubic boundary");
         let quadratic = source
             .split("pub(super) fn prove_quadratic_owned")
             .nth(1)
@@ -911,12 +811,12 @@ mod tests {
             .split("fn table_size")
             .next()
             .expect("quadratic boundary");
-        assert!(!cubic.contains(".to_vec()"));
         assert!(!split_first.contains(".to_vec()"));
         assert!(split_first.contains("visit_eq_evaluations(&tau[1..]"));
         assert!(split_first.contains("a.bind_first(first_challenge)"));
         assert!(split_first.contains("SecretScalarTable::try_eq_evals(&tau[1..])"));
         assert!(!quadratic.contains(".to_vec()"));
+        assert!(!source.contains("fn prove_cubic_with_three_inputs_owned"));
         assert!(source.contains("upper[index].clear_secret()"));
         assert!(source.contains("impl Drop for SecretScalarTable"));
     }
@@ -937,7 +837,7 @@ mod tests {
         assert!(prove_quadratic(s(0), 21, &[], &[], &mut transcript).is_err());
         let mut transcript = VegaTranscriptV1::new_neutron_nova();
         assert_eq!(
-            prove_cubic_with_three_inputs(
+            prove_cubic_with_split_inputs(
                 s(0),
                 &[s(1), s(2)],
                 &table,

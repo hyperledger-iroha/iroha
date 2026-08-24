@@ -1,11 +1,6 @@
 //! Soracles evidence helpers (audit bundle generation).
-use std::{
-    collections::{BTreeMap, HashSet},
-    fmt::Write as _,
-    fs,
-    path::{Path, PathBuf},
-    time::{Duration, SystemTime, UNIX_EPOCH},
-};
+use crate::cli_output::print_with_optional_text;
+use crate::{Run, RunContext};
 use clap::{Args, Subcommand, ValueEnum};
 use eyre::{Result, WrapErr, eyre};
 use iroha::data_model::{
@@ -26,8 +21,13 @@ use norito::{
     derive::{JsonDeserialize, JsonSerialize},
     json::{self, JsonDeserializeOwned, Value},
 };
-use crate::cli_output::print_with_optional_text;
-use crate::{Run, RunContext};
+use std::{
+    collections::{BTreeMap, HashSet},
+    fmt::Write as _,
+    fs,
+    path::{Path, PathBuf},
+    time::{Duration, SystemTime, UNIX_EPOCH},
+};
 #[derive(Subcommand, Debug)]
 pub enum Command {
     /// Build and submit oracle transactions.

@@ -7,11 +7,7 @@ pub use iroha_data_model::offline::{
     OFFLINE_CASH_ACKNOWLEDGEMENT_MAX_BYTES_V1, OFFLINE_CASH_PAYMENT_MAX_BYTES_V1,
     OFFLINE_CASH_PAYMENT_REQUEST_MAX_BYTES_V1, OFFLINE_CASH_WIRE_VERSION_V1,
     OFFLINE_REDEEM_REQUEST_SCHEMA_NAME, OFFLINE_TOP_UP_REQUEST_SCHEMA_NAME,
-    OfflineActiveRecursiveStepEpVerifier, OfflineActiveRecursiveStepEqVerifier,
-    OfflineActiveTopUpShieldVerifier, OfflineActiveTransferVerifier, OfflineActiveUnshieldVerifier,
-    OfflineAuthenticatedArtifactSet, OfflineCashAcknowledgementV1, OfflineCashPaymentRequestV1,
-    OfflineCashPaymentV1, OfflineReadiness, OfflineReadinessBlocker, OfflineStatus,
-    OfflineVerifierId,
+    OfflineCashAcknowledgementV1, OfflineCashPaymentRequestV1, OfflineCashPaymentV1, OfflineStatus,
 };
 use iroha_data_model::{
     NetworkId,
@@ -654,24 +650,18 @@ mod tests {
     }
     fn universal_capability_status() -> OfflineStatus {
         OfflineStatus {
-            mandatory: false,
             cash_handoff_capability:
                 iroha_data_model::offline::KAGEMUSHA_CASH_HANDOFF_CAPABILITY_V1.to_owned(),
             required_bridge_abi_version:
                 iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_NATIVE_BRIDGE_ABI_V4,
             max_hops: iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_MAX_PEER_HOPS_V2,
             ready: true,
-            assets: Vec::new(),
-            blockers: Vec::new(),
         }
     }
     #[test]
     fn universal_capability_roundtrips_without_asset_enrollment() {
         let capability = universal_capability_status();
-        assert!(!capability.mandatory);
         assert!(capability.ready);
-        assert!(capability.assets.is_empty());
-        assert!(capability.blockers.is_empty());
         let json = norito::json::to_vec(&capability).expect("encode capability JSON");
         let decoded_json: OfflineStatus =
             norito::json::from_slice(&json).expect("decode capability JSON");
@@ -688,6 +678,8 @@ mod tests {
         assert!(!canonical.contains("asset_definition_id"));
         assert!(!canonical.contains("verifier"));
         assert!(!canonical.contains("artifact"));
+        assert!(!canonical.contains("assets"));
+        assert!(!canonical.contains("blockers"));
         let unknown = canonical.replacen('{', r#"{"future_metadata":null,"#, 1);
         let error = norito::json::from_str::<OfflineStatus>(&unknown)
             .expect_err("unknown universal capability members fail closed");

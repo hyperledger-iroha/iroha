@@ -388,28 +388,6 @@ pub struct AdmissionTokenVerifier {
 impl AdmissionTokenVerifier {
     /// Construct a new verifier.
     ///
-    /// Runtime configuration loaders should prefer [`AdmissionTokenVerifier::try_new`] so invalid
-    /// key material can fail at configuration load time. This compatibility constructor keeps
-    /// malformed issuer keys as fail-closed verifier state; verification preflights reject them
-    /// before backend signature checks or replay-store mutation.
-    pub fn new(
-        suite: MlDsaSuite,
-        public_key: Vec<u8>,
-        max_ttl: Duration,
-        clock_skew: Duration,
-    ) -> Self {
-        let issuer_fingerprint = compute_issuer_fingerprint(&public_key);
-        Self {
-            suite,
-            public_key,
-            issuer_fingerprint,
-            max_ttl,
-            clock_skew,
-            replay_store: None,
-        }
-    }
-    /// Construct a new verifier.
-    ///
     /// # Errors
     /// Returns [`VerifierConfigError`] if the configured issuer public key does
     /// not match the selected ML-DSA suite.
@@ -1388,12 +1366,13 @@ mod tests {
     }
     impl MintedTokenFixture {
         fn verifier(&self, max_ttl_secs: u64, clock_skew_secs: u64) -> AdmissionTokenVerifier {
-            AdmissionTokenVerifier::new(
+            AdmissionTokenVerifier::try_new(
                 self.suite,
                 self.keypair.public_key().to_vec(),
                 Duration::from_secs(max_ttl_secs),
                 Duration::from_secs(clock_skew_secs),
             )
+            .expect("fixture verifier key must match its ML-DSA suite")
         }
         fn verifier_with_store(
             &self,
@@ -1878,12 +1857,13 @@ mod tests {
             &mut rng,
         )
         .expect("mint");
-        let verifier = AdmissionTokenVerifier::new(
+        let verifier = AdmissionTokenVerifier::try_new(
             MlDsaSuite::MlDsa44,
             keypair.public_key().to_vec(),
             Duration::from_secs(900),
             Duration::from_secs(5),
-        );
+        )
+        .expect("generated verifier key must match ML-DSA-44");
         let now = UNIX_EPOCH + Duration::from_secs(1_700_000_100);
         verifier
             .verify(&token, &RELAY_ID, &TRANSCRIPT, now)
@@ -1923,34 +1903,6 @@ mod tests {
             }
             other => panic!("{id}: expected ML-DSA public-key config error, got {other:?}"),
         }
-    }
-
-    #[test]
-    fn admission_token_verifier_rejects_malformed_public_key_before_replay() {
-        let id = TOKEN_CASES[12].0;
-        let mut fixture =
-            minted_token_with_expectation(0x0BAD_5EED, 300, "ML-DSA keypair generation");
-        let mut bad_public_key = fixture.keypair.public_key().to_vec();
-        bad_public_key.pop();
-        let store = replay_store(900);
-        let verifier = AdmissionTokenVerifier::new(
-            fixture.suite,
-            bad_public_key,
-            Duration::from_secs(900),
-            Duration::from_secs(5),
-        )
-        .with_replay_store(store.clone());
-        fixture.token.issuer_fingerprint = *verifier.issuer_fingerprint();
-        let now = fixture.issued + Duration::from_secs(5);
-        let err = verifier
-            .verify(&fixture.token, &RELAY_ID, &TRANSCRIPT, now)
-            .expect_err("malformed verifier public key must fail closed");
-        assert_mldsa_bad_encoding(err, "public key", id);
-        assert_eq!(
-            store.lock().expect("store lock").len(now).expect("len"),
-            0,
-            "{id}"
-        );
     }
 
     #[test]
@@ -2030,12 +1982,13 @@ mod tests {
             &mut rng,
         )
         .expect("mint");
-        let verifier = AdmissionTokenVerifier::new(
+        let verifier = AdmissionTokenVerifier::try_new(
             MlDsaSuite::MlDsa44,
             keypair.public_key().to_vec(),
             Duration::from_secs(900),
             Duration::from_secs(1),
-        );
+        )
+        .expect("generated verifier key must match ML-DSA-44");
         verifier
             .verify(
                 &token,
@@ -2073,12 +2026,13 @@ mod tests {
             &mut rng,
         )
         .expect("mint");
-        let verifier = AdmissionTokenVerifier::new(
+        let verifier = AdmissionTokenVerifier::try_new(
             MlDsaSuite::MlDsa44,
             keypair.public_key().to_vec(),
             Duration::from_secs(900),
             Duration::from_secs(5),
-        );
+        )
+        .expect("generated verifier key must match ML-DSA-44");
         let now = UNIX_EPOCH + Duration::from_secs(1_700_000_100);
         let result = verifier.verify(&token, &[0xEF; 32], &TRANSCRIPT, now);
         assert!(matches!(result, Err(VerifyError::RelayMismatch)));
@@ -2105,12 +2059,13 @@ mod tests {
         .expect("mint");
         token.expires_at = token.issued_at;
         token.signature.clear();
-        let verifier = AdmissionTokenVerifier::new(
+        let verifier = AdmissionTokenVerifier::try_new(
             MlDsaSuite::MlDsa44,
             keypair.public_key().to_vec(),
             Duration::from_secs(900),
             Duration::from_secs(5),
-        );
+        )
+        .expect("generated verifier key must match ML-DSA-44");
         let err = verifier
             .verify(
                 &token,
@@ -2463,12 +2418,13 @@ mod tests {
         let limits =
             TokenStoreLimits::new(4, Duration::from_secs(70)).expect("replay store limits");
         let store = Arc::new(Mutex::new(InMemoryTokenStore::new(limits).expect("store")));
-        let verifier = AdmissionTokenVerifier::new(
+        let verifier = AdmissionTokenVerifier::try_new(
             MlDsaSuite::MlDsa44,
             keypair.public_key().to_vec(),
             Duration::from_secs(60),
             clock_skew,
         )
+        .expect("generated verifier key must match ML-DSA-44")
         .with_replay_store(store);
         verifier
             .verify(
@@ -2512,12 +2468,13 @@ mod tests {
         let limits = TokenStoreLimits::new(4, Duration::from_secs(900)).expect("limits");
         let store: Arc<Mutex<dyn TokenStore + Send>> =
             Arc::new(Mutex::new(InMemoryTokenStore::new(limits).expect("store")));
-        let verifier = AdmissionTokenVerifier::new(
+        let verifier = AdmissionTokenVerifier::try_new(
             MlDsaSuite::MlDsa44,
             keypair.public_key().to_vec(),
             Duration::from_secs(900),
             Duration::from_secs(5),
         )
+        .expect("generated verifier key must match ML-DSA-44")
         .with_replay_store(store.clone());
         let now = issued + Duration::from_secs(5);
         let err = verifier

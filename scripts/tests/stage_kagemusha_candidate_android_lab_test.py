@@ -404,8 +404,8 @@ class CandidateStagerTests(unittest.TestCase):
             "untracked_file_count": 0,
             "untracked_path_mode_blob_oid_manifest": [],
             "untracked_path_mode_blob_oid_manifest_sha256": stage.EMPTY_SHA256,
-            "ignored_cargo_lock_size_bytes": 1,
-            "ignored_cargo_lock_sha256": "3" * 64,
+            "tracked_cargo_lock_size_bytes": 1,
+            "tracked_cargo_lock_sha256": "3" * 64,
             "combined_source_fingerprint_sha256": "4" * 64,
         }
         clean = stage.subprocess.CompletedProcess(

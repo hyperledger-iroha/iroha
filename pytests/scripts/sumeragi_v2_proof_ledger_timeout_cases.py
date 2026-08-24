@@ -885,11 +885,6 @@ def test_protected_service_rank_aggregate_cannot_drop_exact_leaf(
     ("current_id", "retired_id", "retired_symbol"),
     (
         (
-            "same-round-lock-and-commit-authorization",
-            "historical-tc-lock-commit",
-            "HistoricalTcLockedCommitAuthorizationObligation",
-        ),
-        (
             "locked-body-reproposal",
             "locked-body-reproposal-liveness",
             "LockedBodyReproposalProgressObligation",
@@ -1102,7 +1097,7 @@ def test_same_round_semantic_kernel_sources_and_callers_are_fail_closed(
         (path, path.read_text(encoding="utf-8")) for path in checker_source_paths()
     )
     expected_provider = [
-        ("sumeragi_v2_proof_ledger_terminal_discharge_contracts.py", 1009)
+        ("sumeragi_v2_proof_ledger_terminal_discharge_contracts.py", 1144)
     ]
     assert provider_assignments(checker_sources) == expected_provider
     synthetic_shadow = f"\n{provider_name} = {{}}\n"

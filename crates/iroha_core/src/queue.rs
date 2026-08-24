@@ -20344,8 +20344,8 @@ pub mod tests {
         nexus.fees.per_instruction_fee = Quantity::zero();
         nexus.fees.per_gas_unit_fee = Quantity::zero();
         nexus.autoscale.enabled = true;
-        nexus.autoscale.min_lanes = nonzero!(1_u32);
-        nexus.autoscale.max_lanes = nonzero!(8_u32);
+        nexus.autoscale.min_lane_id = nonzero!(1_u32);
+        nexus.autoscale.max_lane_id_exclusive = nonzero!(8_u32);
         nexus.lane_catalog = lane_catalog;
         nexus.lane_config = lane_config;
         *state.nexus.get_mut() = nexus;
@@ -21364,8 +21364,8 @@ pub mod tests {
             nexus.lane_config =
                 iroha_config::parameters::actual::LaneConfig::from_catalog(&nexus.lane_catalog);
             nexus.autoscale.enabled = true;
-            nexus.autoscale.min_lanes = nonzero!(1_u32);
-            nexus.autoscale.max_lanes = nonzero!(8_u32);
+            nexus.autoscale.min_lane_id = nonzero!(1_u32);
+            nexus.autoscale.max_lane_id_exclusive = nonzero!(8_u32);
             nexus.autoscale.last_transition_height = 3;
         }
         seed_committed_height_for_queue_test(&state, 3);
@@ -21581,10 +21581,11 @@ pub mod tests {
         let mut nexus = Nexus::default();
         if let Some((autoscale_lane, _)) = autoscale_lane {
             nexus.autoscale.enabled = true;
-            nexus.autoscale.min_lanes =
+            nexus.autoscale.min_lane_id =
                 NonZeroU32::new(autoscale_lane.as_u32()).expect("nonzero autoscale lane id");
-            nexus.autoscale.max_lanes = NonZeroU32::new(autoscale_lane.as_u32().saturating_add(1))
-                .expect("nonzero autoscale upper bound");
+            nexus.autoscale.max_lane_id_exclusive =
+                NonZeroU32::new(autoscale_lane.as_u32().saturating_add(1))
+                    .expect("nonzero autoscale upper bound");
         } else {
             nexus.autoscale.enabled = false;
         }
@@ -26421,8 +26422,8 @@ pub mod tests {
             crate::state::attach_synthetic_autoscale_committee_for_test(&mut elastic_lane);
             let nexus = state.nexus.get_mut();
             nexus.autoscale.enabled = true;
-            nexus.autoscale.min_lanes = nonzero!(1_u32);
-            nexus.autoscale.max_lanes = nonzero!(8_u32);
+            nexus.autoscale.min_lane_id = nonzero!(1_u32);
+            nexus.autoscale.max_lane_id_exclusive = nonzero!(8_u32);
             nexus.fees.base_fee = Quantity::zero();
             nexus.fees.per_byte_fee = Quantity::zero();
             nexus.fees.per_instruction_fee = Quantity::zero();
@@ -26554,8 +26555,8 @@ pub mod tests {
             nexus.fees.per_instruction_fee = Quantity::zero();
             nexus.fees.per_gas_unit_fee = Quantity::zero();
             nexus.autoscale.enabled = true;
-            nexus.autoscale.min_lanes = nonzero!(1_u32);
-            nexus.autoscale.max_lanes = nonzero!(8_u32);
+            nexus.autoscale.min_lane_id = nonzero!(1_u32);
+            nexus.autoscale.max_lane_id_exclusive = nonzero!(8_u32);
             nexus.lane_catalog =
                 LaneCatalog::new(nonzero!(2_u32), vec![LaneConfig::default(), future_elastic])
                     .expect("future-created lane catalog");

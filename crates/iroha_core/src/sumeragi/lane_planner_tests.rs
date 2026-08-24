@@ -712,8 +712,8 @@ mod tests {
         ]);
         let mut nexus = nexus_with_routing(default_routing_policy(), lane_catalog);
         nexus.autoscale.enabled = true;
-        nexus.autoscale.min_lanes = NonZeroU32::new(1).expect("nonzero min");
-        nexus.autoscale.max_lanes = NonZeroU32::new(4).expect("nonzero max");
+        nexus.autoscale.min_lane_id = NonZeroU32::new(1).expect("nonzero min");
+        nexus.autoscale.max_lane_id_exclusive = NonZeroU32::new(4).expect("nonzero max");
         assert!(!proposal_lookahead_enabled(&nexus, 6));
         assert!(proposal_lookahead_enabled(&nexus, 7));
     }
@@ -764,8 +764,8 @@ mod tests {
         ]);
         let mut nexus = nexus_with_routing(default_routing_policy(), lane_catalog);
         nexus.autoscale.enabled = true;
-        nexus.autoscale.min_lanes = NonZeroU32::new(1).expect("nonzero min");
-        nexus.autoscale.max_lanes = NonZeroU32::new(4).expect("nonzero max");
+        nexus.autoscale.min_lane_id = NonZeroU32::new(1).expect("nonzero min");
+        nexus.autoscale.max_lane_id_exclusive = NonZeroU32::new(4).expect("nonzero max");
         assert_eq!(
             proposal_fetch_cap(&nexus, 6, 8, 2),
             2,

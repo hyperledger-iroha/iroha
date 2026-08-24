@@ -5,6 +5,8 @@
     clippy::too_many_lines,
     clippy::items_after_statements
 )]
+#[path = "common/governance.rs"]
+mod governance_fixture;
 use iroha_core::{
     kura::Kura,
     query::store::LiveQueryStore,
@@ -86,7 +88,10 @@ fn referendum_open_and_close_by_height() {
                 stx1.world.governance_referenda().get(&rid),
                 &stx1.gov,
             ),
-            parliament_snapshot: None,
+            parliament_snapshot: governance_fixture::single_member_parliament_snapshot(
+                &iroha_test_samples::ALICE_ID,
+                header1.height().get(),
+            ),
             finalization_evidence: None,
             enacted_at_height: None,
         };

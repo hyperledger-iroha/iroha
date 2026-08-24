@@ -13,15 +13,13 @@
         "type": "object",
         "additionalProperties": false,
         "required": [
+          "sid",
           "role"
         ],
         "properties": {
           "sid": {
-            "type": "string"
-          },
-          "session_id": {
             "type": "string",
-            "description": "Alias for `sid`."
+            "pattern": "^[A-Za-z0-9_-]{43}$"
           },
           "role": {
             "type": "string",
@@ -47,7 +45,7 @@
             "description": "Optional node URL; defaults to Host/X-Forwarded-Proto from the MCP request."
           }
         },
-        "description": "Provide `role` plus one of `sid` or `session_id`."
+        "description": "Provide the canonical `sid` and selected `role`."
       }
     },
     {
@@ -170,13 +168,13 @@
       "input_schema": {
         "type": "object",
         "additionalProperties": false,
+        "required": [
+          "sid"
+        ],
         "properties": {
           "sid": {
-            "type": "string"
-          },
-          "session_id": {
             "type": "string",
-            "description": "Alias for `sid`."
+            "pattern": "^[A-Za-z0-9_-]{43}$"
           },
           "token_management": {
             "type": "string",
@@ -192,7 +190,7 @@
             "type": "string"
           }
         },
-        "description": "Provide `sid` or `session_id`. The dispatcher still accepts `path.sid` and `path.session_id` for backward compatibility, but the published tool parameters stay flat for OpenAI-compatible clients."
+        "description": "Provide the canonical flat `sid`."
       }
     },
     {
@@ -381,25 +379,16 @@
       "function": "iroha_da_manifests_get_tool",
       "name": "iroha.da.manifests.get",
       "effect": "read",
-      "description": "Fetch DA manifest payload (`/v1/da/manifests/{ticket}`; `ticket`/`manifest_ticket`/`id` shortcuts supported).",
+      "description": "Fetch DA manifest payload by canonical `path.ticket` (`/v1/da/manifests/{ticket}`).",
       "method": "GET",
       "path_template": "/v1/da/manifests/{ticket}",
       "input_schema": {
         "type": "object",
         "additionalProperties": false,
+        "required": [
+          "path"
+        ],
         "properties": {
-          "ticket": {
-            "type": "string",
-            "description": "Convenience shortcut for `path.ticket`."
-          },
-          "manifest_ticket": {
-            "type": "string",
-            "description": "Alias for `ticket`."
-          },
-          "id": {
-            "type": "string",
-            "description": "Alias for `ticket`."
-          },
           "path": {
             "type": "object",
             "additionalProperties": false,
@@ -428,21 +417,16 @@
       "function": "iroha_runtime_upgrades_activate_tool",
       "name": "iroha.runtime.upgrades.activate",
       "effect": "write",
-      "description": "Activate a runtime upgrade (`/v1/runtime/upgrades/activate/{id}`; `id`/`upgrade_id` shortcuts supported).",
+      "description": "Activate a runtime upgrade by canonical `path.id` (`/v1/runtime/upgrades/activate/{id}`).",
       "method": "POST",
       "path_template": "/v1/runtime/upgrades/activate/{id}",
       "input_schema": {
         "type": "object",
         "additionalProperties": true,
+        "required": [
+          "path"
+        ],
         "properties": {
-          "id": {
-            "type": "string",
-            "description": "Convenience shortcut for `path.id`."
-          },
-          "upgrade_id": {
-            "type": "string",
-            "description": "Alias for `id`."
-          },
           "path": {
             "type": "object",
             "additionalProperties": false,
@@ -458,7 +442,7 @@
           "body": {
             "type": "object",
             "additionalProperties": true,
-            "description": "Optional activation payload. If omitted, flat top-level fields (except id/path/headers/accept) are forwarded."
+            "description": "Optional activation payload. If omitted, flat top-level fields (except path/headers/accept) are forwarded."
           },
           "headers": {
             "type": "object",
@@ -476,21 +460,16 @@
       "function": "iroha_runtime_upgrades_cancel_tool",
       "name": "iroha.runtime.upgrades.cancel",
       "effect": "write",
-      "description": "Cancel a runtime upgrade (`/v1/runtime/upgrades/cancel/{id}`; `id`/`upgrade_id` shortcuts supported).",
+      "description": "Cancel a runtime upgrade by canonical `path.id` (`/v1/runtime/upgrades/cancel/{id}`).",
       "method": "POST",
       "path_template": "/v1/runtime/upgrades/cancel/{id}",
       "input_schema": {
         "type": "object",
         "additionalProperties": true,
+        "required": [
+          "path"
+        ],
         "properties": {
-          "id": {
-            "type": "string",
-            "description": "Convenience shortcut for `path.id`."
-          },
-          "upgrade_id": {
-            "type": "string",
-            "description": "Alias for `id`."
-          },
           "path": {
             "type": "object",
             "additionalProperties": false,
@@ -506,7 +485,7 @@
           "body": {
             "type": "object",
             "additionalProperties": true,
-            "description": "Optional cancellation payload. If omitted, flat top-level fields (except id/path/headers/accept) are forwarded."
+            "description": "Optional cancellation payload. If omitted, flat top-level fields (except path/headers/accept) are forwarded."
           },
           "headers": {
             "type": "object",
@@ -557,21 +536,16 @@
       "function": "iroha_ledger_state_root_tool",
       "name": "iroha.ledger.state_root",
       "effect": "read",
-      "description": "Fetch a State-committed execution root with its exact verified Sumeragi-v2 finality artifact (`/v1/ledger/state/{height}`; `height`/`block_height` shortcuts supported).",
+      "description": "Fetch a State-committed execution root with its exact verified Sumeragi-v2 finality artifact by canonical `path.height` (`/v1/ledger/state/{height}`).",
       "method": "GET",
       "path_template": "/v1/ledger/state/{height}",
       "input_schema": {
         "type": "object",
         "additionalProperties": false,
+        "required": [
+          "path"
+        ],
         "properties": {
-          "height": {
-            "type": "integer",
-            "description": "Convenience shortcut for `path.height`."
-          },
-          "block_height": {
-            "type": "integer",
-            "description": "Alias for `height`."
-          },
           "path": {
             "type": "object",
             "additionalProperties": false,
@@ -600,21 +574,16 @@
       "function": "iroha_ledger_state_proof_tool",
       "name": "iroha.ledger.state_proof",
       "effect": "read",
-      "description": "Fetch exact verified Sumeragi-v2 state-finality evidence by height (`/v1/ledger/state-proof/{height}`; `height`/`block_height` shortcuts supported).",
+      "description": "Fetch exact verified Sumeragi-v2 state-finality evidence by canonical `path.height` (`/v1/ledger/state-proof/{height}`).",
       "method": "GET",
       "path_template": "/v1/ledger/state-proof/{height}",
       "input_schema": {
         "type": "object",
         "additionalProperties": false,
+        "required": [
+          "path"
+        ],
         "properties": {
-          "height": {
-            "type": "integer",
-            "description": "Convenience shortcut for `path.height`."
-          },
-          "block_height": {
-            "type": "integer",
-            "description": "Alias for `height`."
-          },
           "path": {
             "type": "object",
             "additionalProperties": false,
@@ -643,33 +612,16 @@
       "function": "iroha_ledger_block_proof_tool",
       "name": "iroha.ledger.block_proof",
       "effect": "read",
-      "description": "Fetch block-entry Merkle proofs (`/v1/ledger/block/{height}/proof/{entry_hash}`; `height`/`block_height` and `entry_hash`/`tx_hash`/`hash` shortcuts supported).",
+      "description": "Fetch block-entry Merkle proofs by canonical `path.height` and `path.entry_hash` (`/v1/ledger/block/{height}/proof/{entry_hash}`).",
       "method": "GET",
       "path_template": "/v1/ledger/block/{height}/proof/{entry_hash}",
       "input_schema": {
         "type": "object",
         "additionalProperties": false,
+        "required": [
+          "path"
+        ],
         "properties": {
-          "height": {
-            "type": "integer",
-            "description": "Convenience shortcut for `path.height`."
-          },
-          "block_height": {
-            "type": "integer",
-            "description": "Alias for `height`."
-          },
-          "entry_hash": {
-            "type": "string",
-            "description": "Convenience shortcut for `path.entry_hash`."
-          },
-          "tx_hash": {
-            "type": "string",
-            "description": "Alias for `entry_hash`."
-          },
-          "hash": {
-            "type": "string",
-            "description": "Alias for `entry_hash`."
-          },
           "path": {
             "type": "object",
             "additionalProperties": false,
@@ -702,21 +654,16 @@
       "function": "iroha_bridge_finality_proof_tool",
       "name": "iroha.bridge.finality.proof",
       "effect": "read",
-      "description": "Fetch bridge finality proof by height (`/v1/bridge/finality/{height}`; `height`/`block_height` shortcuts supported).",
+      "description": "Fetch bridge finality proof by canonical `path.height` (`/v1/bridge/finality/{height}`).",
       "method": "GET",
       "path_template": "/v1/bridge/finality/{height}",
       "input_schema": {
         "type": "object",
         "additionalProperties": false,
+        "required": [
+          "path"
+        ],
         "properties": {
-          "height": {
-            "type": "integer",
-            "description": "Convenience shortcut for `path.height`."
-          },
-          "block_height": {
-            "type": "integer",
-            "description": "Alias for `height`."
-          },
           "path": {
             "type": "object",
             "additionalProperties": false,
@@ -745,21 +692,16 @@
       "function": "iroha_bridge_finality_bundle_tool",
       "name": "iroha.bridge.finality.bundle",
       "effect": "read",
-      "description": "Fetch bridge finality commitment+justification bundle by height (`/v1/bridge/finality/bundle/{height}`; `height`/`block_height` shortcuts supported).",
+      "description": "Fetch bridge finality commitment+justification bundle by canonical `path.height` (`/v1/bridge/finality/bundle/{height}`).",
       "method": "GET",
       "path_template": "/v1/bridge/finality/bundle/{height}",
       "input_schema": {
         "type": "object",
         "additionalProperties": false,
+        "required": [
+          "path"
+        ],
         "properties": {
-          "height": {
-            "type": "integer",
-            "description": "Convenience shortcut for `path.height`."
-          },
-          "block_height": {
-            "type": "integer",
-            "description": "Alias for `height`."
-          },
           "path": {
             "type": "object",
             "additionalProperties": false,
@@ -788,21 +730,16 @@
       "function": "iroha_proofs_get_tool",
       "name": "iroha.proofs.get",
       "effect": "read",
-      "description": "Fetch a proof record by id (`/v1/proofs/{id}`; `id`/`proof_id` shortcuts supported).",
+      "description": "Fetch a proof record by canonical `path.id` (`/v1/proofs/{id}`).",
       "method": "GET",
       "path_template": "/v1/proofs/{id}",
       "input_schema": {
         "type": "object",
         "additionalProperties": false,
+        "required": [
+          "path"
+        ],
         "properties": {
-          "id": {
-            "type": "string",
-            "description": "Convenience shortcut for `path.id`."
-          },
-          "proof_id": {
-            "type": "string",
-            "description": "Alias for `id`."
-          },
           "path": {
             "type": "object",
             "additionalProperties": false,
@@ -831,17 +768,16 @@
       "function": "iroha_gov_contract_get_tool",
       "name": "iroha.gov.contract.get",
       "effect": "read",
-      "description": "Read the governance binding for one contract address (`/v1/gov/contracts/{contract_address}`; `contract_address` shortcut supported).",
+      "description": "Read the governance binding for canonical `path.contract_address` (`/v1/gov/contracts/{contract_address}`).",
       "method": "GET",
       "path_template": "/v1/gov/contracts/{contract_address}",
       "input_schema": {
         "type": "object",
         "additionalProperties": true,
+        "required": [
+          "path"
+        ],
         "properties": {
-          "contract_address": {
-            "type": "string",
-            "description": "Convenience shortcut for `path.contract_address`."
-          },
           "path": {
             "type": "object",
             "additionalProperties": false,
@@ -974,21 +910,16 @@
       "function": "iroha_contracts_code_get_tool",
       "name": "iroha.contracts.code.get",
       "effect": "read",
-      "description": "Fetch contract code metadata (`code_hash` shortcut supported).",
+      "description": "Fetch contract code metadata by canonical `path.code_hash`.",
       "method": "GET",
       "path_template": "/v1/contracts/code/{code_hash}",
       "input_schema": {
         "type": "object",
         "additionalProperties": false,
+        "required": [
+          "path"
+        ],
         "properties": {
-          "code_hash": {
-            "type": "string",
-            "description": "Convenience shortcut for `path.code_hash`."
-          },
-          "hash": {
-            "type": "string",
-            "description": "Alias for `code_hash`."
-          },
           "path": {
             "type": "object",
             "additionalProperties": false,
@@ -1017,21 +948,16 @@
       "function": "iroha_contracts_code_bytes_get_tool",
       "name": "iroha.contracts.code.bytes.get",
       "effect": "read",
-      "description": "Fetch contract code bytes (`/v1/contracts/code-bytes/{code_hash}`; `code_hash` shortcut supported).",
+      "description": "Fetch contract code bytes by canonical `path.code_hash` (`/v1/contracts/code-bytes/{code_hash}`).",
       "method": "GET",
       "path_template": "/v1/contracts/code-bytes/{code_hash}",
       "input_schema": {
         "type": "object",
         "additionalProperties": false,
+        "required": [
+          "path"
+        ],
         "properties": {
-          "code_hash": {
-            "type": "string",
-            "description": "Convenience shortcut for `path.code_hash`."
-          },
-          "hash": {
-            "type": "string",
-            "description": "Alias for `code_hash`."
-          },
           "path": {
             "type": "object",
             "additionalProperties": false,
@@ -1075,10 +1001,6 @@
           "hash": {
             "type": "string",
             "description": "Optional known transaction hash override."
-          },
-          "transaction_hash": {
-            "type": "string",
-            "description": "Alias for `hash`."
           },
           "timeout_ms": {
             "type": "integer",
@@ -1196,17 +1118,16 @@
       "function": "iroha_accounts_get_tool",
       "name": "iroha.accounts.get",
       "effect": "read",
-      "description": "Fetch canonical account detail from the same-route account read (`account_id` shortcut supported). Defaults to JSON; set accept=application/x-norito for typed Norito.",
+      "description": "Fetch canonical account detail from `path.account_id`. Defaults to JSON; set accept=application/x-norito for typed Norito.",
       "method": "GET",
       "path_template": "/v1/accounts/{account_id}",
       "input_schema": {
         "type": "object",
         "additionalProperties": false,
+        "required": [
+          "path"
+        ],
         "properties": {
-          "account_id": {
-            "type": "string",
-            "description": "Convenience shortcut for `path.account_id`."
-          },
           "path": {
             "type": "object",
             "additionalProperties": false,
@@ -1235,17 +1156,16 @@
       "function": "iroha_accounts_qr_tool",
       "name": "iroha.accounts.qr",
       "effect": "read",
-      "description": "Fetch explorer account QR code (`account_id` shortcut supported).",
+      "description": "Fetch explorer account QR code by canonical `path.account_id`.",
       "method": "GET",
       "path_template": "/v1/explorer/accounts/{account_id}/qr",
       "input_schema": {
         "type": "object",
         "additionalProperties": false,
+        "required": [
+          "path"
+        ],
         "properties": {
-          "account_id": {
-            "type": "string",
-            "description": "Convenience shortcut for `path.account_id`."
-          },
           "path": {
             "type": "object",
             "additionalProperties": false,
@@ -1497,17 +1417,16 @@
       "function": "iroha_account_transactions_tool",
       "name": "iroha.accounts.transactions",
       "effect": "read",
-      "description": "List transactions authored by a specific account (`account_id` shortcut supported).",
+      "description": "List transactions authored by canonical `path.account_id`.",
       "method": "GET",
       "path_template": "/v1/accounts/{account_id}/transactions",
       "input_schema": {
         "type": "object",
         "additionalProperties": true,
+        "required": [
+          "path"
+        ],
         "properties": {
-          "account_id": {
-            "type": "string",
-            "description": "Convenience shortcut for `path.account_id`."
-          },
           "path": {
             "type": "object",
             "additionalProperties": false,
@@ -1546,11 +1465,10 @@
       "input_schema": {
         "type": "object",
         "additionalProperties": true,
+        "required": [
+          "path"
+        ],
         "properties": {
-          "account_id": {
-            "type": "string",
-            "description": "Convenience shortcut for `path.account_id`."
-          },
           "path": {
             "type": "object",
             "additionalProperties": false,
@@ -1592,17 +1510,16 @@
       "function": "iroha_account_transactions_query_tool",
       "name": "iroha.accounts.transactions.query",
       "effect": "read",
-      "description": "Query transactions authored by a specific account (flat `account_id` + QueryEnvelope shortcuts supported).",
+      "description": "Query transactions authored by canonical `path.account_id` with the QueryEnvelope input.",
       "method": "POST",
       "path_template": "/v1/accounts/{account_id}/transactions/query",
       "input_schema": {
         "type": "object",
         "additionalProperties": false,
+        "required": [
+          "path"
+        ],
         "properties": {
-          "account_id": {
-            "type": "string",
-            "description": "Convenience shortcut for `path.account_id`."
-          },
           "path": {
             "type": "object",
             "additionalProperties": false,
@@ -1665,17 +1582,16 @@
       "function": "iroha_account_assets_tool",
       "name": "iroha.accounts.assets",
       "effect": "read",
-      "description": "List assets held by a specific account (`account_id` shortcut supported).",
+      "description": "List assets held by canonical `path.account_id`.",
       "method": "GET",
       "path_template": "/v1/accounts/{account_id}/assets",
       "input_schema": {
         "type": "object",
         "additionalProperties": true,
+        "required": [
+          "path"
+        ],
         "properties": {
-          "account_id": {
-            "type": "string",
-            "description": "Convenience shortcut for `path.account_id`."
-          },
           "path": {
             "type": "object",
             "additionalProperties": false,
@@ -1717,17 +1633,16 @@
       "function": "iroha_account_assets_query_tool",
       "name": "iroha.accounts.assets.query",
       "effect": "read",
-      "description": "Query assets held by a specific account (flat `account_id` + QueryEnvelope shortcuts supported).",
+      "description": "Query assets held by canonical `path.account_id` with the QueryEnvelope input.",
       "method": "POST",
       "path_template": "/v1/accounts/{account_id}/assets/query",
       "input_schema": {
         "type": "object",
         "additionalProperties": false,
+        "required": [
+          "path"
+        ],
         "properties": {
-          "account_id": {
-            "type": "string",
-            "description": "Convenience shortcut for `path.account_id`."
-          },
           "path": {
             "type": "object",
             "additionalProperties": false,
@@ -1790,17 +1705,16 @@
       "function": "iroha_account_permissions_tool",
       "name": "iroha.accounts.permissions",
       "effect": "read",
-      "description": "List permissions granted to a specific account (`account_id` shortcut supported).",
+      "description": "List permissions granted to canonical `path.account_id`.",
       "method": "GET",
       "path_template": "/v1/accounts/{account_id}/permissions",
       "input_schema": {
         "type": "object",
         "additionalProperties": false,
+        "required": [
+          "path"
+        ],
         "properties": {
-          "account_id": {
-            "type": "string",
-            "description": "Convenience shortcut for `path.account_id`."
-          },
           "path": {
             "type": "object",
             "additionalProperties": false,
@@ -1829,17 +1743,16 @@
       "function": "iroha_account_portfolio_tool",
       "name": "iroha.accounts.portfolio",
       "effect": "read",
-      "description": "Fetch a UAID portfolio snapshot (`uaid` shortcut supported).",
+      "description": "Fetch a UAID portfolio snapshot by canonical `path.uaid`.",
       "method": "GET",
       "path_template": "/v1/accounts/{uaid}/portfolio",
       "input_schema": {
         "type": "object",
         "additionalProperties": true,
+        "required": [
+          "path"
+        ],
         "properties": {
-          "uaid": {
-            "type": "string",
-            "description": "Convenience shortcut for `path.uaid`."
-          },
           "path": {
             "type": "object",
             "additionalProperties": false,
@@ -1909,21 +1822,16 @@
       "function": "iroha_domains_get_tool",
       "name": "iroha.domains.get",
       "effect": "read",
-      "description": "Fetch explorer domain detail (`domain_id` shortcut supported).",
+      "description": "Fetch explorer domain detail by canonical `path.domain_id`.",
       "method": "GET",
       "path_template": "/v1/explorer/domains/{domain_id}",
       "input_schema": {
         "type": "object",
         "additionalProperties": false,
+        "required": [
+          "path"
+        ],
         "properties": {
-          "domain_id": {
-            "type": "string",
-            "description": "Convenience shortcut for `path.domain_id`."
-          },
-          "domain": {
-            "type": "string",
-            "description": "Alias for `domain_id`."
-          },
           "path": {
             "type": "object",
             "additionalProperties": false,
@@ -2180,21 +2088,16 @@
       "function": "iroha_subscriptions_get_tool",
       "name": "iroha.subscriptions.get",
       "effect": "read",
-      "description": "Fetch subscription detail (`subscription_id`/`id` shortcut supported).",
+      "description": "Fetch subscription detail by canonical `path.subscription_id`.",
       "method": "GET",
       "path_template": "/v1/subscriptions/{subscription_id}",
       "input_schema": {
         "type": "object",
         "additionalProperties": false,
+        "required": [
+          "path"
+        ],
         "properties": {
-          "subscription_id": {
-            "type": "string",
-            "description": "Convenience shortcut for `path.subscription_id`."
-          },
-          "id": {
-            "type": "string",
-            "description": "Alias for `subscription_id`."
-          },
           "path": {
             "type": "object",
             "additionalProperties": false,
@@ -2262,17 +2165,16 @@
       "function": "iroha_asset_definitions_get_tool",
       "name": "iroha.assets.definitions.get",
       "effect": "read",
-      "description": "Fetch explorer asset definition detail (`definition_id` shortcut supported).",
+      "description": "Fetch explorer asset definition detail by canonical `path.definition_id`.",
       "method": "GET",
       "path_template": "/v1/explorer/asset-definitions/{definition_id}",
       "input_schema": {
         "type": "object",
         "additionalProperties": false,
+        "required": [
+          "path"
+        ],
         "properties": {
-          "definition_id": {
-            "type": "string",
-            "description": "Convenience shortcut for `path.definition_id`."
-          },
           "path": {
             "type": "object",
             "additionalProperties": false,
@@ -2358,17 +2260,16 @@
       "function": "iroha_asset_holders_tool",
       "name": "iroha.assets.holders",
       "effect": "read",
-      "description": "List asset holders for one definition (`definition_id` shortcut supported).",
+      "description": "List asset holders for canonical `path.definition_id`.",
       "method": "GET",
       "path_template": "/v1/assets/{definition_id}/holders",
       "input_schema": {
         "type": "object",
         "additionalProperties": true,
+        "required": [
+          "path"
+        ],
         "properties": {
-          "definition_id": {
-            "type": "string",
-            "description": "Convenience shortcut for `path.definition_id`."
-          },
           "path": {
             "type": "object",
             "additionalProperties": false,
@@ -2410,17 +2311,16 @@
       "function": "iroha_asset_holders_query_tool",
       "name": "iroha.assets.holders.query",
       "effect": "read",
-      "description": "Query asset holders for one definition (flat `definition_id` + QueryEnvelope shortcuts supported). Supports exact aggregate DSL queries, for example PAYNET PKR alias users grouped by `primary_alias_domain` with `distinct_count(account_id)` and `sum(quantity)`. Production aggregate reads serve local DA projection shards as `query_source=projection_da_cache` and hydrate missing shards from approved SoraFS providers as `query_source=projection_da_hydrated`; incomplete projections return `projection_archive_unavailable` instead of scanning live holders. `live_debug` requires an explicit debug opt-in.",
+      "description": "Query asset holders for canonical `path.definition_id` with the QueryEnvelope input. Supports exact aggregate DSL queries, for example PAYNET PKR alias users grouped by `primary_alias_domain` with `distinct_count(account_id)` and `sum(quantity)`. Production aggregate reads serve local DA projection shards as `query_source=projection_da_cache` and hydrate missing shards from approved SoraFS providers as `query_source=projection_da_hydrated`; incomplete projections return `projection_archive_unavailable` instead of scanning live holders. `live_debug` requires an explicit debug opt-in.",
       "method": "POST",
       "path_template": "/v1/assets/{definition_id}/holders/query",
       "input_schema": {
         "type": "object",
         "additionalProperties": false,
+        "required": [
+          "path"
+        ],
         "properties": {
-          "definition_id": {
-            "type": "string",
-            "description": "Convenience shortcut for `path.definition_id`."
-          },
           "path": {
             "type": "object",
             "additionalProperties": false,
@@ -2530,21 +2430,16 @@
       "function": "iroha_assets_get_tool",
       "name": "iroha.assets.get",
       "effect": "read",
-      "description": "Fetch explorer asset detail (`asset_id` shortcut supported).",
+      "description": "Fetch explorer asset detail by canonical `path.asset_id`.",
       "method": "GET",
       "path_template": "/v1/explorer/assets/{asset_id}",
       "input_schema": {
         "type": "object",
         "additionalProperties": false,
+        "required": [
+          "path"
+        ],
         "properties": {
-          "asset_id": {
-            "type": "string",
-            "description": "Convenience shortcut for `path.asset_id`."
-          },
-          "id": {
-            "type": "string",
-            "description": "Alias for `asset_id`."
-          },
           "path": {
             "type": "object",
             "additionalProperties": false,
@@ -2617,21 +2512,16 @@
       "function": "iroha_nfts_get_tool",
       "name": "iroha.nfts.get",
       "effect": "read",
-      "description": "Fetch explorer NFT detail (`nft_id` shortcut supported).",
+      "description": "Fetch explorer NFT detail by canonical `path.nft_id`.",
       "method": "GET",
       "path_template": "/v1/explorer/nfts/{nft_id}",
       "input_schema": {
         "type": "object",
         "additionalProperties": false,
+        "required": [
+          "path"
+        ],
         "properties": {
-          "nft_id": {
-            "type": "string",
-            "description": "Convenience shortcut for `path.nft_id`."
-          },
-          "id": {
-            "type": "string",
-            "description": "Alias for `nft_id`."
-          },
           "path": {
             "type": "object",
             "additionalProperties": false,
@@ -2761,21 +2651,16 @@
       "function": "iroha_rwas_get_tool",
       "name": "iroha.rwas.get",
       "effect": "read",
-      "description": "Fetch explorer RWA detail (`rwa_id` shortcut supported).",
+      "description": "Fetch explorer RWA detail by canonical `path.rwa_id`.",
       "method": "GET",
       "path_template": "/v1/explorer/rwas/{rwa_id}",
       "input_schema": {
         "type": "object",
         "additionalProperties": false,
+        "required": [
+          "path"
+        ],
         "properties": {
-          "rwa_id": {
-            "type": "string",
-            "description": "Convenience shortcut for `path.rwa_id`."
-          },
-          "id": {
-            "type": "string",
-            "description": "Alias for `rwa_id`."
-          },
           "path": {
             "type": "object",
             "additionalProperties": false,
@@ -2906,43 +2791,25 @@
       "function": "iroha_transactions_get_tool",
       "name": "iroha.transactions.get",
       "effect": "read",
-      "description": "Fetch explorer transaction detail (`hash` shortcut supported).",
+      "description": "Fetch explorer transaction detail by canonical `path.hash`.",
       "method": "GET",
       "path_template": "/v1/explorer/transactions/{hash}",
       "input_schema": {
         "type": "object",
         "additionalProperties": false,
+        "required": [
+          "path"
+        ],
         "properties": {
-          "hash": {
-            "type": "string",
-            "description": "Convenience shortcut for `path.hash`."
-          },
-          "transaction_hash": {
-            "type": "string",
-            "description": "Alias for `hash`."
-          },
           "path": {
             "type": "object",
             "additionalProperties": false,
-            "anyOf": [
-              {
-                "required": [
-                  "hash"
-                ]
-              },
-              {
-                "required": [
-                  "transaction_hash"
-                ]
-              }
+            "required": [
+              "hash"
             ],
             "properties": {
               "hash": {
                 "type": "string"
-              },
-              "transaction_hash": {
-                "type": "string",
-                "description": "Alias for `path.hash`."
               }
             }
           },
@@ -3016,53 +2883,26 @@
       "function": "iroha_instructions_get_tool",
       "name": "iroha.instructions.get",
       "effect": "read",
-      "description": "Fetch explorer instruction detail (`hash` + `index` shortcuts supported).",
+      "description": "Fetch explorer instruction detail by canonical `path.hash` and `path.index`.",
       "method": "GET",
       "path_template": "/v1/explorer/instructions/{hash}/{index}",
       "input_schema": {
         "type": "object",
         "additionalProperties": false,
+        "required": [
+          "path"
+        ],
         "properties": {
-          "hash": {
-            "type": "string",
-            "description": "Convenience shortcut for `path.hash`."
-          },
-          "transaction_hash": {
-            "type": "string",
-            "description": "Alias for `hash`."
-          },
-          "index": {
-            "type": "integer",
-            "description": "Convenience shortcut for `path.index`."
-          },
-          "instruction_index": {
-            "type": "integer",
-            "description": "Alias for `index`."
-          },
           "path": {
             "type": "object",
             "additionalProperties": false,
-            "anyOf": [
-              {
-                "required": [
-                  "hash",
-                  "index"
-                ]
-              },
-              {
-                "required": [
-                  "transaction_hash",
-                  "index"
-                ]
-              }
+            "required": [
+              "hash",
+              "index"
             ],
             "properties": {
               "hash": {
                 "type": "string"
-              },
-              "transaction_hash": {
-                "type": "string",
-                "description": "Alias for `path.hash`."
               },
               "index": {
                 "type": "integer"
@@ -3118,27 +2958,16 @@
       "function": "iroha_blocks_get_tool",
       "name": "iroha.blocks.get",
       "effect": "read",
-      "description": "Fetch explorer block detail (`identifier` shortcut and block aliases supported).",
+      "description": "Fetch explorer block detail by canonical `path.identifier` (hash or height).",
       "method": "GET",
       "path_template": "/v1/explorer/blocks/{identifier}",
       "input_schema": {
         "type": "object",
         "additionalProperties": false,
+        "required": [
+          "path"
+        ],
         "properties": {
-          "identifier": {
-            "description": "Convenience shortcut for `path.identifier` (hash or height)."
-          },
-          "block_identifier": {
-            "description": "Alias for `identifier`."
-          },
-          "block_height": {
-            "type": "integer",
-            "description": "Alias for `identifier` using numeric block height."
-          },
-          "block_hash": {
-            "type": "string",
-            "description": "Alias for `identifier` using a block hash."
-          },
           "path": {
             "type": "object",
             "additionalProperties": false,
@@ -3171,25 +3000,19 @@
       "input_schema": {
         "type": "object",
         "additionalProperties": false,
+        "required": [
+          "query"
+        ],
         "properties": {
-          "hash": {
-            "type": "string",
-            "description": "Convenience shortcut for `query.hash`."
-          },
-          "transaction_hash": {
-            "type": "string",
-            "description": "Alias for `hash`."
-          },
           "query": {
             "type": "object",
             "additionalProperties": false,
+            "required": [
+              "hash"
+            ],
             "properties": {
               "hash": {
                 "type": "string"
-              },
-              "transaction_hash": {
-                "type": "string",
-                "description": "Alias for `query.hash`."
               }
             }
           },
@@ -3228,31 +3051,25 @@
       "function": "iroha_transactions_status_tool",
       "name": "iroha.transactions.status",
       "effect": "read",
-      "description": "Get the latest typed pipeline status for a submitted transaction hash (`hash`/`transaction_hash` shortcuts supported). Defaults to JSON; set accept=application/x-norito for typed Norito.",
+      "description": "Get the latest typed pipeline status for canonical `query.hash`. Defaults to JSON; set accept=application/x-norito for typed Norito.",
       "method": "GET",
       "path_template": "/v1/pipeline/transactions/status",
       "input_schema": {
         "type": "object",
         "additionalProperties": true,
+        "required": [
+          "query"
+        ],
         "properties": {
-          "hash": {
-            "type": "string",
-            "description": "Convenience shortcut for `query.hash`."
-          },
-          "transaction_hash": {
-            "type": "string",
-            "description": "Alias for `hash`."
-          },
           "query": {
             "type": "object",
             "additionalProperties": false,
+            "required": [
+              "hash"
+            ],
             "properties": {
               "hash": {
                 "type": "string"
-              },
-              "transaction_hash": {
-                "type": "string",
-                "description": "Alias for `query.hash`."
               }
             }
           },

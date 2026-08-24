@@ -882,7 +882,7 @@ function parseSoraFinalityAnchor(value, label) {
   const protocolVersion = integer(
     record.protocol_version,
     `${label}.protocol_version`,
-    3,
+    4,
     4,
   );
   const chainHash = bytesFromUpperHex(record.chain_id_hash, `${label}.chain_id_hash`, 32);

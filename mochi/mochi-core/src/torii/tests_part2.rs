@@ -666,7 +666,6 @@ async fn fetch_status_decodes_norito_payload() {
         blocks: 5,
         blocks_non_empty: 3,
         commit_time_ms: 42,
-        da_reschedule_total: 0,
         txs_approved: 7,
         txs_rejected: 1,
         last_rejection_at_ms: None,
@@ -702,7 +701,6 @@ async fn fetch_status_decodes_framed_norito_payload() {
         blocks: 5,
         blocks_non_empty: 3,
         commit_time_ms: 42,
-        da_reschedule_total: 0,
         txs_approved: 7,
         txs_rejected: 1,
         last_rejection_at_ms: None,
@@ -743,7 +741,6 @@ async fn fetch_status_snapshot_tracks_metrics_across_calls() {
         blocks: 10,
         blocks_non_empty: 8,
         commit_time_ms: 45,
-        da_reschedule_total: 2,
         txs_approved: 5,
         txs_rejected: 1,
         last_rejection_at_ms: None,
@@ -759,7 +756,6 @@ async fn fetch_status_snapshot_tracks_metrics_across_calls() {
         blocks: 11,
         blocks_non_empty: 9,
         commit_time_ms: 120,
-        da_reschedule_total: 5,
         txs_approved: 9,
         txs_rejected: 3,
         last_rejection_at_ms: Some(7_000),
@@ -809,7 +805,6 @@ async fn fetch_status_snapshot_tracks_metrics_across_calls() {
         .expect("first snapshot");
     assert_eq!(first.status.queue_size, initial.queue_size);
     assert_eq!(first.metrics.queue_delta, 0);
-    assert_eq!(first.metrics.da_reschedule_delta, 0);
     assert_eq!(first.metrics.tx_approved_delta, 0);
     assert_eq!(first.metrics.tx_rejected_delta, 0);
     assert_eq!(first.metrics.view_change_delta, 0);
@@ -821,10 +816,6 @@ async fn fetch_status_snapshot_tracks_metrics_across_calls() {
     assert_eq!(
         second.metrics.queue_delta,
         updated.queue_size as i64 - initial.queue_size as i64
-    );
-    assert_eq!(
-        second.metrics.da_reschedule_delta,
-        updated.da_reschedule_total - initial.da_reschedule_total
     );
     assert_eq!(
         second.metrics.tx_approved_delta,
@@ -1301,7 +1292,6 @@ fn status_metrics_report_activity_deltas() {
         queue_size: 4,
         txs_approved: 1,
         txs_rejected: 0,
-        da_reschedule_total: 2,
         view_changes: 3,
         blocks: 10,
         blocks_non_empty: 9,
@@ -1312,7 +1302,6 @@ fn status_metrics_report_activity_deltas() {
         queue_size: 7,
         txs_approved: 4,
         txs_rejected: 2,
-        da_reschedule_total: 5,
         view_changes: 4,
         blocks: 12,
         blocks_non_empty: 11,
@@ -1323,7 +1312,6 @@ fn status_metrics_report_activity_deltas() {
     assert_eq!(metrics.queue_delta, 3);
     assert_eq!(metrics.tx_approved_delta, 3);
     assert_eq!(metrics.tx_rejected_delta, 2);
-    assert_eq!(metrics.da_reschedule_delta, 3);
     assert_eq!(metrics.view_change_delta, 1);
     assert_eq!(metrics.block_delta, 2);
     assert_eq!(metrics.blocks_non_empty_delta, 2);
@@ -1336,7 +1324,6 @@ fn status_metrics_report_idle_when_snapshots_match() {
         queue_size: 2,
         txs_approved: 5,
         txs_rejected: 1,
-        da_reschedule_total: 1,
         view_changes: 0,
         ..TelemetryStatus::default()
     };
@@ -1345,7 +1332,6 @@ fn status_metrics_report_idle_when_snapshots_match() {
     assert_eq!(metrics.queue_delta, 0);
     assert_eq!(metrics.tx_approved_delta, 0);
     assert_eq!(metrics.tx_rejected_delta, 0);
-    assert_eq!(metrics.da_reschedule_delta, 0);
     assert_eq!(metrics.view_change_delta, 0);
     assert_eq!(metrics.block_delta, 0);
     assert_eq!(metrics.blocks_non_empty_delta, 0);

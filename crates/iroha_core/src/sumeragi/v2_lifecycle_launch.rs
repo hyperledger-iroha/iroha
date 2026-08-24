@@ -1543,17 +1543,16 @@ impl LaunchedProductionLifecycleV1 {
                 }
             }
         }
-        settle_applied_lifecycle_decision_apply_completion_with_status(
-            owner,
-            executor,
-            completion,
-            LifecycleDecisionApplyStatusPublicationV1::PublishActiveHeight,
-        )
+        settle_applied_lifecycle_decision_apply_completion(owner, executor, completion)
     }
 }
 
-/// Settle pending-Kura Apply while retaining status for no-clock activation.
-pub(in crate::sumeragi) fn settle_pending_kura_applied_decision_apply_completion(
+/// Settle one already-classified Applied lifecycle Decision Apply completion.
+///
+/// This test-only seam exercises the same live active-height status publication
+/// as the unified Completion driver without exposing recovered-only authority.
+#[cfg(test)]
+pub(in crate::sumeragi) fn settle_applied_live_lifecycle_decision_apply_completion_for_test(
     owner: &mut ProductionLifecycleOwnerV1,
     executor: &mut V2EffectExecutor<SerializedV2Runtime>,
     completion: PreparedLifecycleDecisionApplyCompletionV1,
@@ -1561,25 +1560,20 @@ pub(in crate::sumeragi) fn settle_pending_kura_applied_decision_apply_completion
     ProductionLifecycleDecisionApplyCompletionV1,
     ProductionLifecycleDecisionApplyCompletionErrorV1,
 > {
-    settle_applied_lifecycle_decision_apply_completion_with_status(
-        owner,
-        executor,
-        completion,
-        LifecycleDecisionApplyStatusPublicationV1::DeferUntilPendingKuraActivation,
-    )
+    if !matches!(
+        completion.result(),
+        LifecycleDecisionApplyWorkerResultV1::Applied(_)
+    ) {
+        owner.coordinator.fault = Some(super::CoordinatorFault::DurabilityFailure);
+        return Err(ProductionLifecycleDecisionApplyCompletionErrorV1::Completion);
+    }
+    settle_applied_lifecycle_decision_apply_completion(owner, executor, completion)
 }
 
-#[derive(Clone, Copy)]
-enum LifecycleDecisionApplyStatusPublicationV1 {
-    PublishActiveHeight,
-    DeferUntilPendingKuraActivation,
-}
-
-fn settle_applied_lifecycle_decision_apply_completion_with_status(
+fn settle_applied_lifecycle_decision_apply_completion(
     owner: &mut ProductionLifecycleOwnerV1,
     executor: &mut V2EffectExecutor<SerializedV2Runtime>,
     completion: PreparedLifecycleDecisionApplyCompletionV1,
-    status_publication: LifecycleDecisionApplyStatusPublicationV1,
 ) -> Result<
     ProductionLifecycleDecisionApplyCompletionV1,
     ProductionLifecycleDecisionApplyCompletionErrorV1,
@@ -1656,12 +1650,7 @@ fn settle_applied_lifecycle_decision_apply_completion_with_status(
         matches!(settled, LifecycleDecisionApplyWorkerResultV1::Applied(_)),
         "borrowed lifecycle Decision Apply result cannot change before acknowledgement"
     );
-    if matches!(
-        status_publication,
-        LifecycleDecisionApplyStatusPublicationV1::PublishActiveHeight
-    ) {
-        super::super::status::set_v2_status(status);
-    }
+    super::super::status::set_v2_status(status);
     Ok(ProductionLifecycleDecisionApplyCompletionV1::Applied)
 }
 
@@ -2776,7 +2765,7 @@ impl ProductionLifecycleOwnerV1 {
             .take()
             .ok_or(ProductionLifecycleLaunchErrorV1::InvalidOwner)?;
         let body_store_identity = body_store.instance_identity();
-        let (runtime, pending_kura_apply_replay, recovered_local_proposal_attempt) =
+        let (runtime, mut pending_kura_apply_replay, recovered_local_proposal_attempt) =
             adapter_startup
                 .into_serialized_runtime(
                     inputs.runtime_started_at,
@@ -2802,6 +2791,7 @@ impl ProductionLifecycleOwnerV1 {
             runtime,
             body_store,
             recovered_validate_retry_census,
+            pending_kura_apply_replay.as_mut(),
             context.clone(),
             inputs.local_peer.clone(),
             inputs.local_validator,

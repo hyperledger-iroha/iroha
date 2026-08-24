@@ -4266,39 +4266,11 @@ pub(crate) fn validate_transaction_fee_admission(
 ///
 /// Overlay execution bypasses `Executor::execute_transaction`, so this helper mirrors the
 /// fee-accounting behavior that `execute_transaction` performs for each committed transaction.
-#[allow(dead_code)]
 pub(crate) fn charge_fees_for_applied_overlay(
     state_transaction: &mut StateTransaction<'_, '_>,
     authority: &AccountId,
     transaction: &SignedTransaction,
     overlay: &crate::pipeline::overlay::TxOverlay,
-) -> Result<(), ValidationFail> {
-    let tx_bytes_len = to_bytes(transaction.payload())
-        .map(|bytes| bytes.len())
-        .map_err(|err| {
-            ValidationFail::InternalError(format!(
-                "failed to encode transaction for fee metering: {err}"
-            ))
-        })?;
-    charge_fees_for_applied_overlay_with_encoded_len(
-        state_transaction,
-        authority,
-        transaction,
-        overlay,
-        tx_bytes_len,
-    )
-}
-/// Charge gas and Nexus fees for an overlay-applied transaction using trusted local metadata.
-///
-/// The supplied encoded length is retained for call-site compatibility, but
-/// canonical fee metering is derived locally from the unsigned payload so a
-/// pre-signing quote and committed execution cannot diverge.
-pub(crate) fn charge_fees_for_applied_overlay_with_encoded_len(
-    state_transaction: &mut StateTransaction<'_, '_>,
-    authority: &AccountId,
-    transaction: &SignedTransaction,
-    overlay: &crate::pipeline::overlay::TxOverlay,
-    _tx_bytes_len: usize,
 ) -> Result<(), ValidationFail> {
     // Genesis transactions are bootstrap operations and must remain fee-free.
     if is_initial_genesis_context(state_transaction) {
@@ -6177,7 +6149,7 @@ impl Executor {
                             "verifying key backend mismatch".to_owned(),
                         ));
                     }
-                    if crate::zk::is_verifier_readiness_claim_label(backend.as_str()) {
+                    if crate::zk::is_production_claim_backend_label(backend.as_str()) {
                         return Err(ValidationFail::NotPermitted(
                             "readiness-claim proof backends are not supported".to_owned(),
                         ));
@@ -7639,7 +7611,6 @@ impl Executor {
                 .world
                 .apply_executor_data_model(data_model);
         }
-        purge_legacy_escalation_permissions(state_transaction);
         *self = Self::UserProvided(loaded_executor);
         Ok(())
     }
@@ -7661,62 +7632,6 @@ pub(crate) fn initial_executor_data_model_fallback() -> ExecutorDataModel {
         initial_executor_permission_names(),
         Json::new(()),
     )
-}
-/// Permission payloads issued under pre-release rules that admitted authorities which did not
-/// control the effective capability.
-///
-/// Ledger permissions do not retain grant provenance, so a migration cannot distinguish a
-/// legitimate token from one planted through an old escalation rule. The first-release migration
-/// therefore resets these narrow capability families and requires their legitimate roots to issue
-/// fresh grants under the corrected policy.
-const LEGACY_ESCALATION_PERMISSION_NAMES: &[&str] = &[
-    "CanMintAsset",
-    "CanInvokeContractEntrypoint",
-    "CanPublishSpaceDirectoryManifest",
-    "CanPublishSpaceDirectoryManifestForUaid",
-    "CanPublishSpaceDirectoryManifestForAccountDomain",
-];
-fn purge_legacy_escalation_permissions(state_transaction: &mut StateTransaction<'_, '_>) {
-    let account_ids: Vec<_> = state_transaction
-        .world
-        .account_permissions
-        .iter()
-        .map(|(account_id, _)| account_id.clone())
-        .collect();
-    for account_id in account_ids {
-        let remove_entry = state_transaction
-            .world
-            .account_permissions
-            .get_mut(&account_id)
-            .is_some_and(|permissions| {
-                permissions.retain(|permission| {
-                    !LEGACY_ESCALATION_PERMISSION_NAMES.contains(&permission.name().as_ref())
-                });
-                permissions.is_empty()
-            });
-        if remove_entry {
-            state_transaction
-                .world
-                .account_permissions
-                .remove(account_id);
-        }
-    }
-    let role_ids: Vec<_> = state_transaction
-        .world
-        .roles
-        .iter()
-        .map(|(role_id, _)| role_id.clone())
-        .collect();
-    for role_id in role_ids {
-        if let Some(role) = state_transaction.world.roles.get_mut(&role_id) {
-            role.permissions.retain(|permission| {
-                !LEGACY_ESCALATION_PERMISSION_NAMES.contains(&permission.name().as_ref())
-            });
-            role.permission_epochs.retain(|permission, _| {
-                !LEGACY_ESCALATION_PERMISSION_NAMES.contains(&permission.name().as_ref())
-            });
-        }
-    }
 }
 fn run_executor_validation<T>(
     executor: &LoadedExecutor,
@@ -8242,7 +8157,22 @@ fn validate_initial_permission_payload_constraints(
             }
         }};
     }
+    macro_rules! validate_exact_unit_permission {
+        ($permission_ty:path) => {{
+            let _ = <$permission_ty>::try_from(permission)
+                .map_err(|error| invalid_initial_permission_payload(permission, error))?;
+        }};
+    }
     match permission.name().as_ref() {
+        "CanManageRuntimeUpgrades" => validate_exact_unit_permission!(
+            executor_permission::governance::CanManageRuntimeUpgrades
+        ),
+        "CanManageConsensusKeys" => {
+            validate_exact_unit_permission!(executor_permission::governance::CanManageConsensusKeys)
+        }
+        "CanManageConfidentialParams" => validate_exact_unit_permission!(
+            executor_permission::governance::CanManageConfidentialParams
+        ),
         "CanSubmitGovernanceBallot" => validate_governance_selector!(
             executor_permission::governance::CanSubmitGovernanceBallot
         ),
@@ -10394,6 +10324,9 @@ const INITIAL_EXECUTOR_PERMISSION_NAMES: &[&str] = &[
     "CanModifyTriggerMetadata",
     "CanSetParameters",
     "CanManageVerifyingKeys",
+    "CanManageRuntimeUpgrades",
+    "CanManageConsensusKeys",
+    "CanManageConfidentialParams",
     "CanManageSccpGovernance",
     "CanProposeSccpRouteGovernance",
     "CanManageOfflineEscrow",
@@ -10437,8 +10370,6 @@ const INITIAL_EXECUTOR_PERMISSION_NAMES: &[&str] = &[
     "CanManageSorafsReputationJournalPolicy",
     "CanRecordSorafsReputationJournal",
     "CanResolveSorafsCapacityDispute",
-    "CanRegisterSorafsProviderOwner",
-    "CanUnregisterSorafsProviderOwner",
     "CanManageSoranetVpnQuoteIssuers",
     "CanIssueSoranetVpnQuote",
     "CanIngestSoranetPrivacy",
@@ -12550,6 +12481,96 @@ mod tests {
                     .permissions()
                     .any(|stored| stored == &permission),
                 "noncanonical permission reached role storage"
+            );
+        }
+    }
+    #[test]
+    fn initial_executor_requires_canonical_operational_governance_unit_permissions() {
+        use iroha_executor_data_model::permission::governance::{
+            CanManageConfidentialParams, CanManageConsensusKeys, CanManageRuntimeUpgrades,
+        };
+
+        let authority = checked_account_id();
+        let destination = checked_account_id();
+        let canonical_permissions = vec![
+            Permission::from(CanManageRuntimeUpgrades),
+            Permission::from(CanManageConsensusKeys),
+            Permission::from(CanManageConfidentialParams),
+        ];
+        let mut world = World::with(
+            [],
+            [
+                Account::new(authority.clone()).build(&authority),
+                Account::new(destination.clone()).build(&destination),
+            ],
+            [],
+        );
+        world.account_permissions.insert(
+            authority.clone(),
+            canonical_permissions.iter().cloned().collect(),
+        );
+        let state = state_for_testing(world);
+        let mut block = state.block(BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0));
+        let mut state_transaction = block.transaction();
+        let role_id: RoleId = "operational_governance_sink".parse().expect("role id");
+        Register::role(Role::new(role_id.clone(), authority.clone()))
+            .execute(&authority, &mut state_transaction)
+            .expect("seed empty role fixture");
+
+        for canonical in canonical_permissions {
+            let name = canonical.name().to_string();
+            assert!(INITIAL_EXECUTOR_PERMISSION_NAMES.contains(&name.as_str()));
+            validate_initial_permission_payload_constraints(&canonical)
+                .unwrap_or_else(|error| panic!("canonical {name} token rejected: {error:?}"));
+            for instruction in [
+                Grant::account_permission(canonical.clone(), destination.clone()).into(),
+                Grant::role_permission(canonical.clone(), role_id.clone()).into(),
+            ] {
+                super::Executor::Initial
+                    .execute_instruction(&mut state_transaction, &authority, instruction)
+                    .unwrap_or_else(|error| {
+                        panic!("exact holder could not delegate {name}: {error}")
+                    });
+            }
+
+            let malformed =
+                Permission::new(name.clone(), Json::new("invented-scope-must-not-authorize"));
+            for (path, instruction) in [
+                (
+                    "account",
+                    Grant::account_permission(malformed.clone(), destination.clone()).into(),
+                ),
+                (
+                    "role",
+                    Grant::role_permission(malformed.clone(), role_id.clone()).into(),
+                ),
+            ] {
+                let error = super::Executor::Initial
+                    .execute_instruction(&mut state_transaction, &authority, instruction)
+                    .expect_err("same-name non-unit payload must fail before storage");
+                assert!(
+                    matches!(&error, ValidationFail::NotPermitted(message)
+                        if message.contains(&name) && message.contains("Invalid permission payload")),
+                    "unexpected {path} {name} rejection: {error:?}",
+                );
+            }
+            assert!(
+                !state_transaction
+                    .world
+                    .account_permissions_iter(&destination)
+                    .expect("destination permissions")
+                    .any(|stored| stored == &malformed),
+                "malformed {name} permission reached account storage",
+            );
+            assert!(
+                !state_transaction
+                    .world
+                    .roles()
+                    .get(&role_id)
+                    .expect("role fixture")
+                    .permissions()
+                    .any(|stored| stored == &malformed),
+                "malformed {name} permission reached role storage",
             );
         }
     }

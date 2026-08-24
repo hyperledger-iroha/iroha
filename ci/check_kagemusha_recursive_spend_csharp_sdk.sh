@@ -41,7 +41,8 @@ grep -Fq '"/v1/offline/top-up"' "${client}"
 grep -Fq '"/v1/offline/redeem"' "${client}"
 grep -Fq '"/v1/offline/operations/' "${client}"
 
-if grep -REni '(class|record|interface)[[:space:]]+[^[:space:]]*Kagemusha[^[:space:]]*Prover|DllImport.*Kagemusha|LibraryImport.*Kagemusha' \
+if grep -rEni --include='*.cs' --exclude-dir=bin --exclude-dir=obj \
+  '(class|record|interface)[[:space:]]+[^[:space:]]*Kagemusha[^[:space:]]*Prover|DllImport.*Kagemusha|LibraryImport.*Kagemusha' \
   "${ROOT_DIR}/csharp/src"; then
   echo "error: C# must remain a Torii DTO/transport client and must not claim a Kagemusha native prover" >&2
   exit 1

@@ -1,4 +1,5 @@
 const BASE58_PATTERN = /^[1-9A-HJ-NP-Za-km-z]+$/;
+const HF_COMMIT_OID_PATTERN_V1 = /^[0-9a-f]{40}$/;
 const REJECTED_SIGNING_SECRET_FIELDS = [
   "privateKeyHex",
   "privateKey",
@@ -26,6 +27,34 @@ export const SORACLOUD_APP_INFRA_UPGRADE_WIRE_ID =
   "iroha_data_model::isi::soracloud::UpgradeSoracloudAppInfra";
 const PRIVATE_UPLOADED_MODEL_COUNT_MODES = new Set(["bounded", "exact"]);
 const JSON_ACCEPT_HEADERS = Object.freeze({ Accept: "application/json" });
+
+function requireExactObject(input, label, allowedFields, requiredFields = allowedFields) {
+  if (input == null || typeof input !== "object" || Array.isArray(input)) {
+    throw new TypeError(`${label} must be an object`);
+  }
+  const prototype = Object.getPrototypeOf(input);
+  if (prototype !== Object.prototype && prototype !== null) {
+    throw new TypeError(`${label} inherited properties are not accepted`);
+  }
+  const allowed = new Set(allowedFields);
+  for (const field of Object.getOwnPropertyNames(input)) {
+    if (!allowed.has(field)) {
+      throw new TypeError(`${label}.${field} is not accepted`);
+    }
+    if (!Object.getOwnPropertyDescriptor(input, field)?.enumerable) {
+      throw new TypeError(`${label}.${field} must be enumerable`);
+    }
+  }
+  if (Object.getOwnPropertySymbols(input).length > 0) {
+    throw new TypeError(`${label} symbols are not accepted`);
+  }
+  for (const field of requiredFields) {
+    if (!Object.hasOwn(input, field)) {
+      throw new TypeError(`${label}.${field} is required`);
+    }
+  }
+  return input;
+}
 
 function rejectSoracloudSigningSecrets(input) {
   if (input == null || (typeof input !== "object" && typeof input !== "function")) {
@@ -55,6 +84,30 @@ function optionalString(input, field) {
     throw new TypeError(`${field} must be a non-empty string when provided`);
   }
   return value.trim();
+}
+
+function nullableString(input, field, label = field) {
+  const value = input[field];
+  if (value === null) {
+    return null;
+  }
+  if (typeof value !== "string" || value.trim() === "") {
+    throw new TypeError(`${label} must be a non-empty string or null`);
+  }
+  return value.trim();
+}
+
+function requireHfCommitOid(input) {
+  const revision = input?.revision;
+  if (typeof revision !== "string" || revision === "") {
+    throw new TypeError("revision must be a non-empty string");
+  }
+  if (!HF_COMMIT_OID_PATTERN_V1.test(revision)) {
+    throw new TypeError(
+      "revision must be a full 40-character lowercase hexadecimal commit OID",
+    );
+  }
+  return revision;
 }
 
 function normalizeIntegerStringValue(value, field) {
@@ -191,25 +244,32 @@ function normalizePrivateArtifactRef(input, field, expectedRole) {
     throw new TypeError(`${field} must be an object`);
   }
   rejectSoracloudSigningSecrets(artifact);
-  const role = artifact.artifactRole ?? artifact.artifact_role;
+  requireExactObject(artifact, field, [
+    "schemaVersion",
+    "sorafsManifestDigest",
+    "artifactHash",
+    "ciphertextBytes",
+    "artifactRole",
+  ]);
+  const role = artifact.artifactRole;
   if (role !== expectedRole) {
     throw new TypeError(`${field}.artifactRole must be ${expectedRole}`);
   }
   return {
     schema_version: normalizeSafePositiveIntegerValue(
-      artifact.schemaVersion ?? artifact.schema_version,
+      artifact.schemaVersion,
       `${field}.schemaVersion`,
     ),
     sorafs_manifest_digest: normalizeHashLikeValue(
-      artifact.sorafsManifestDigest ?? artifact.sorafs_manifest_digest,
+      artifact.sorafsManifestDigest,
       `${field}.sorafsManifestDigest`,
     ),
     artifact_hash: normalizeHashLikeValue(
-      artifact.artifactHash ?? artifact.artifact_hash,
+      artifact.artifactHash,
       `${field}.artifactHash`,
     ),
     ciphertext_bytes: normalizeSafePositiveIntegerValue(
-      artifact.ciphertextBytes ?? artifact.ciphertext_bytes,
+      artifact.ciphertextBytes,
       `${field}.ciphertextBytes`,
     ),
     artifact_role: role,
@@ -222,22 +282,29 @@ function normalizeQuantizedCpuModel(input) {
     throw new TypeError("model must be an object");
   }
   rejectSoracloudSigningSecrets(model);
+  requireExactObject(model, "model", [
+    "inputLen",
+    "outputLen",
+    "weightsI8",
+    "biasI32",
+    "outputShift",
+    "outputMin",
+    "outputMax",
+  ]);
   const inputLen = normalizeSafePositiveIntegerValue(
-    model.inputLen ?? model.input_len,
+    model.inputLen,
     "model.inputLen",
   );
   const outputLen = normalizeSafePositiveIntegerValue(
-    model.outputLen ?? model.output_len,
+    model.outputLen,
     "model.outputLen",
   );
-  const weights = normalizeArray(
-    { value: model.weightsI8 ?? model.weights_i8 },
-    "value",
-  ).map((value, index) => normalizeSignedI8(value, `model.weightsI8[${index}]`));
-  const bias = normalizeArray(
-    { value: model.biasI32 ?? model.bias_i32 },
-    "value",
-  ).map((value, index) => normalizeSignedI32(value, `model.biasI32[${index}]`));
+  const weights = normalizeArray({ value: model.weightsI8 }, "value").map(
+    (value, index) => normalizeSignedI8(value, `model.weightsI8[${index}]`),
+  );
+  const bias = normalizeArray({ value: model.biasI32 }, "value").map(
+    (value, index) => normalizeSignedI32(value, `model.biasI32[${index}]`),
+  );
   if (weights.length !== inputLen * outputLen) {
     throw new TypeError("model.weightsI8 length must equal inputLen * outputLen");
   }
@@ -245,18 +312,18 @@ function normalizeQuantizedCpuModel(input) {
     throw new TypeError("model.biasI32 length must equal outputLen");
   }
   const outputShift = normalizeSafeIntegerValue(
-    model.outputShift ?? model.output_shift,
+    model.outputShift,
     "model.outputShift",
   );
   if (outputShift > 30) {
     throw new TypeError("model.outputShift must be <= 30");
   }
   const outputMin = normalizeSignedI32(
-    model.outputMin ?? model.output_min,
+    model.outputMin,
     "model.outputMin",
   );
   const outputMax = normalizeSignedI32(
-    model.outputMax ?? model.output_max,
+    model.outputMax,
     "model.outputMax",
   );
   if (outputMin > outputMax) {
@@ -361,7 +428,13 @@ function requireAllowedDraftPayloadFields(payload) {
 
 function requireAssembledDraftPayloadShape(payload) {
   requireAllowedDraftPayloadFields(payload);
-  for (const field of ["repo_id", "model_name", "service_name", "lease_asset_definition_id"]) {
+  for (const field of [
+    "repo_id",
+    "revision",
+    "model_name",
+    "service_name",
+    "lease_asset_definition_id",
+  ]) {
     if (
       !Object.hasOwn(payload, field) ||
       typeof payload[field] !== "string" ||
@@ -370,13 +443,19 @@ function requireAssembledDraftPayloadShape(payload) {
       throw new TypeError(`draft payload.${field} must be a non-empty string`);
     }
   }
-  for (const field of ["revision", "apartment_name"]) {
-    if (
-      payload[field] !== undefined &&
-      (typeof payload[field] !== "string" || payload[field].trim() === "")
-    ) {
-      throw new TypeError(`draft payload.${field} must be a non-empty string when provided`);
-    }
+  if (!HF_COMMIT_OID_PATTERN_V1.test(payload.revision)) {
+    throw new TypeError(
+      "draft payload.revision must be a full 40-character lowercase hexadecimal commit OID",
+    );
+  }
+  if (!Object.hasOwn(payload, "apartment_name")) {
+    throw new TypeError("draft payload.apartment_name is required");
+  }
+  if (
+    payload.apartment_name !== null &&
+    (typeof payload.apartment_name !== "string" || payload.apartment_name.trim() === "")
+  ) {
+    throw new TypeError("draft payload.apartment_name must be a non-empty string or null");
   }
   if (!BASE58_PATTERN.test(payload.lease_asset_definition_id)) {
     throw new Error("draft payload.lease_asset_definition_id must be valid Base58");
@@ -404,7 +483,7 @@ function generatedServiceSigningPayload(payload) {
   return {
     service_name: payload.service_name,
     repo_id: payload.repo_id,
-    revision: payload.revision ?? null,
+    revision: payload.revision,
   };
 }
 
@@ -418,38 +497,45 @@ function generatedApartmentSigningPayload(payload) {
 /**
  * Build an unsigned `/v1/soracloud/hf/deploy` draft.
  *
- * @param {{ repoId: string, revision?: string, modelName: string, serviceName: string, apartmentName?: string, storageClass: "hot" | "warm" | "cold", leaseTermMs: number | bigint | string, leaseAssetDefinitionId: string, baseFeeNanos: number | bigint | string }} input
- * @returns {{ payload: Record<string, unknown>, provenancePayloads: { deploy: Record<string, unknown>, generatedService: Record<string, unknown>, generatedApartment?: Record<string, unknown> } }}
+ * @param {{ repoId: string, revision: string, modelName: string, serviceName: string, apartmentName: string | null, storageClass: "hot" | "warm" | "cold", leaseTermMs: number | bigint | string, leaseAssetDefinitionId: string, baseFeeNanos: number | bigint | string }} input
+ * @returns {{ payload: Record<string, unknown>, provenancePayloads: { deploy: Record<string, unknown>, generatedService: Record<string, unknown>, generatedApartment: Record<string, unknown> | null } }}
  */
 export function buildSoracloudHfDeployDraft(input = {}) {
   rejectSoracloudSigningSecrets(input);
+  requireExactObject(input, "input", [
+    "repoId",
+    "revision",
+    "modelName",
+    "serviceName",
+    "apartmentName",
+    "storageClass",
+    "leaseTermMs",
+    "leaseAssetDefinitionId",
+    "baseFeeNanos",
+  ]);
+  const apartmentName = nullableString(input, "apartmentName");
   const payload = {
     repo_id: requireString(input, "repoId"),
+    revision: requireHfCommitOid(input),
     model_name: requireString(input, "modelName"),
     service_name: requireString(input, "serviceName"),
+    apartment_name: apartmentName,
     storage_class: normalizeStorageClass(input.storageClass),
     lease_term_ms: normalizeSafeInteger(input, "leaseTermMs"),
     lease_asset_definition_id: normalizeLeaseAssetDefinitionId(input),
     base_fee_nanos: normalizeIntegerString(input, "baseFeeNanos"),
   };
-  const revision = optionalString(input, "revision");
-  if (revision !== undefined) {
-    payload.revision = revision;
-  }
-  const apartmentName = optionalString(input, "apartmentName");
-  if (apartmentName !== undefined) {
-    payload.apartment_name = apartmentName;
-  }
 
   const provenancePayloads = {
     deploy: canonicalSigningPayload("hf_deploy", payload),
     generatedService: canonicalSigningPayload("generated_service", {
       service_name: payload.service_name,
       repo_id: payload.repo_id,
-      revision: payload.revision ?? null,
+      revision: payload.revision,
     }),
+    generatedApartment: null,
   };
-  if (payload.apartment_name !== undefined) {
+  if (payload.apartment_name !== null) {
     provenancePayloads.generatedApartment = canonicalSigningPayload("generated_apartment", {
       apartment_name: payload.apartment_name,
       service_name: payload.service_name,
@@ -484,9 +570,10 @@ function normalizeRouteSpec(route, field) {
   if (route == null || typeof route !== "object" || Array.isArray(route)) {
     throw new TypeError(`${field} must be an object`);
   }
+  requireExactObject(route, field, ["path", "publicHost", "internalUrl"]);
   const path = requireString(route, "path");
-  const publicHost = optionalString(route, "publicHost") ?? optionalString(route, "public_host");
-  const internalUrl = optionalString(route, "internalUrl") ?? optionalString(route, "internal_url");
+  const publicHost = nullableString(route, "publicHost", `${field}.publicHost`);
+  const internalUrl = nullableString(route, "internalUrl", `${field}.internalUrl`);
   return {
     schema_version: 1,
     public_host: publicHost,
@@ -500,49 +587,52 @@ function normalizeLeaseVolumeSpec(volume, field) {
   if (volume == null || typeof volume !== "object" || Array.isArray(volume)) {
     throw new TypeError(`${field} must be an object`);
   }
-  const temperature = optionalString(volume, "temperature") ?? "hot";
+  requireExactObject(volume, field, ["name", "mountPath", "maxTotalBytes", "temperature"]);
+  requireString(volume, "mountPath");
+  const temperature = requireString(volume, "temperature");
   if (!["hot", "warm", "cold"].includes(temperature)) {
     throw new TypeError(`${field}.temperature must be hot, warm, or cold`);
   }
   normalizeSafePositiveIntegerValue(
-    volume.maxTotalBytes ?? volume.max_total_bytes ?? 1,
+    volume.maxTotalBytes,
     `${field}.maxTotalBytes`,
   );
   return requireString(volume, "name");
 }
 
 function normalizeAppStaticSite(input) {
-  const site = input?.staticSite ?? input?.static_site;
-  if (site === undefined || site === null) {
-    return undefined;
+  const site = input.staticSite;
+  if (site === null) {
+    return null;
   }
   rejectSoracloudSigningSecrets(site);
   if (typeof site !== "object" || Array.isArray(site)) {
     throw new TypeError("staticSite must be an object");
   }
+  requireExactObject(site, "staticSite", [
+    "publicUrl",
+    "contentCid",
+    "manifestDigestHex",
+    "mountPath",
+    "apiBasePath",
+  ]);
   const payload = {
     schema_version: 1,
     public_url: requireString(site, "publicUrl"),
-    mount_path: optionalString(site, "mountPath") ?? "/",
+    content_cid: nullableString(site, "contentCid", "staticSite.contentCid"),
+    manifest_digest_hex: nullableString(
+      site,
+      "manifestDigestHex",
+      "staticSite.manifestDigestHex",
+    ),
+    mount_path: requireString(site, "mountPath"),
+    api_base_path: nullableString(site, "apiBasePath", "staticSite.apiBasePath"),
   };
-  const contentCid = optionalString(site, "contentCid") ?? optionalString(site, "content_cid");
-  if (contentCid !== undefined) {
-    payload.content_cid = contentCid;
-  }
-  const manifestDigestHex =
-    optionalString(site, "manifestDigestHex") ?? optionalString(site, "manifest_digest_hex");
-  if (manifestDigestHex !== undefined) {
-    payload.manifest_digest_hex = manifestDigestHex;
-  }
-  const apiBasePath = optionalString(site, "apiBasePath") ?? optionalString(site, "api_base_path");
-  if (apiBasePath !== undefined) {
-    payload.api_base_path = apiBasePath;
-  }
   return payload;
 }
 
 function normalizeServiceRuntime(value, field) {
-  const runtime = value ?? "Inrou";
+  const runtime = value;
   if (!["Inrou", "Ivm"].includes(runtime)) {
     throw new TypeError(`${field} must be Inrou or Ivm`);
   }
@@ -550,10 +640,7 @@ function normalizeServiceRuntime(value, field) {
 }
 
 function normalizeExecutionPlane(value, field) {
-  const executionPlane = value ?? "HttpService";
-  if (executionPlane === "Ivm") {
-    return "DeterministicService";
-  }
+  const executionPlane = value;
   if (!["HttpService", "DeterministicService"].includes(executionPlane)) {
     throw new TypeError(`${field} must be HttpService or DeterministicService`);
   }
@@ -565,23 +652,31 @@ function normalizeServiceSpec(service, index) {
   if (service == null || typeof service !== "object" || Array.isArray(service)) {
     throw new TypeError(`services[${index}] must be an object`);
   }
+  requireExactObject(service, `services[${index}]`, [
+    "name",
+    "serviceVersion",
+    "serviceManifestHash",
+    "containerManifestHash",
+    "runtime",
+    "executionPlane",
+    "routes",
+    "leaseVolumes",
+    "shards",
+  ]);
   const serviceName = requireString(service, "name");
-  const serviceVersion =
-    optionalString(service, "serviceVersion") ??
-    optionalString(service, "service_version") ??
-    optionalString(service, "version");
-  if (serviceVersion === undefined) {
-    throw new TypeError(`services[${index}].serviceVersion must be a non-empty string`);
-  }
-  const runtime = normalizeServiceRuntime(optionalString(service, "runtime"), `services[${index}].runtime`);
+  const serviceVersion = requireString(service, "serviceVersion");
+  const runtime = normalizeServiceRuntime(
+    requireString(service, "runtime"),
+    `services[${index}].runtime`,
+  );
   const executionPlane = normalizeExecutionPlane(
-    optionalString(service, "executionPlane") ?? optionalString(service, "execution_plane"),
+    requireString(service, "executionPlane"),
     `services[${index}].executionPlane`,
   );
-  const routes = (service.routes ?? []).map((route, routeIndex) =>
+  const routes = normalizeArray(service, "routes").map((route, routeIndex) =>
     normalizeRouteSpec(route, `services[${index}].routes[${routeIndex}]`),
   );
-  const leaseVolumes = (service.leaseVolumes ?? service.lease_volumes ?? []).map(
+  const leaseVolumes = normalizeArray(service, "leaseVolumes").map(
     (volume, volumeIndex) =>
       normalizeLeaseVolumeSpec(volume, `services[${index}].leaseVolumes[${volumeIndex}]`),
   );
@@ -589,30 +684,30 @@ function normalizeServiceSpec(service, index) {
     schema_version: 1,
     service_name: serviceName,
     service_version: serviceVersion,
-    service_manifest_hash:
-      optionalString(service, "serviceManifestHash") ??
-      optionalString(service, "service_manifest_hash") ??
-      requireString(service, "serviceManifestHash"),
-    container_manifest_hash:
-      optionalString(service, "containerManifestHash") ??
-      optionalString(service, "container_manifest_hash") ??
-      requireString(service, "containerManifestHash"),
+    service_manifest_hash: requireString(service, "serviceManifestHash"),
+    container_manifest_hash: requireString(service, "containerManifestHash"),
     execution_plane: executionPlane,
     runtime,
     routes,
     lease_volumes: leaseVolumes,
+    shard: null,
   };
   const shards = service.shards;
-  if (shards === undefined || shards === null) {
+  if (shards === null) {
     return [base];
   }
   rejectSoracloudSigningSecrets(shards);
   if (typeof shards !== "object" || Array.isArray(shards)) {
     throw new TypeError(`services[${index}].shards must be an object`);
   }
+  requireExactObject(shards, `services[${index}].shards`, [
+    "count",
+    "shardIdEnv",
+    "shardCountEnv",
+  ]);
   const count = normalizeSafePositiveIntegerValue(shards.count, `services[${index}].shards.count`);
-  const shardIdEnv = optionalString(shards, "shardIdEnv") ?? "SORACLOUD_SHARD_ID";
-  const shardCountEnv = optionalString(shards, "shardCountEnv") ?? "SORACLOUD_SHARD_COUNT";
+  const shardIdEnv = requireString(shards, "shardIdEnv");
+  const shardCountEnv = requireString(shards, "shardCountEnv");
   return Array.from({ length: count }, (_, shardIndex) => ({
     ...base,
     service_name: `${serviceName}_${String(shardIndex).padStart(2, "0")}`,
@@ -629,11 +724,18 @@ function normalizeServiceSpec(service, index) {
  * submission through Torii. It keeps low-level Torii clients usable without
  * hand-expanding worker shards.
  *
- * @param {{ appName: string, appVersion?: string, publicUrl: string, staticSite?: Record<string, unknown>, services: Array<Record<string, unknown>> }} input
+ * @param {{ appName: string, appVersion: string, publicUrl: string, staticSite: Record<string, unknown> | null, services: Array<Record<string, unknown>> }} input
  * @returns {{ payload: Record<string, unknown>, provenancePayloads: { deploy: Record<string, unknown>, services: Record<string, unknown>[] } }}
  */
 export function buildSoracloudAppInfraDraft(input = {}) {
   rejectSoracloudSigningSecrets(input);
+  requireExactObject(input, "input", [
+    "appName",
+    "appVersion",
+    "publicUrl",
+    "staticSite",
+    "services",
+  ]);
   const services = normalizeArray(input, "services")
     .flatMap((service, index) => normalizeServiceSpec(service, index));
   if (services.length === 0) {
@@ -642,14 +744,11 @@ export function buildSoracloudAppInfraDraft(input = {}) {
   const payload = {
     schema_version: 1,
     app_name: requireString(input, "appName"),
-    app_version: optionalString(input, "appVersion") ?? "dev",
+    app_version: requireString(input, "appVersion"),
     public_url: requireString(input, "publicUrl"),
+    static_site: normalizeAppStaticSite(input),
     services,
   };
-  const staticSite = normalizeAppStaticSite(input);
-  if (staticSite !== undefined) {
-    payload.static_site = staticSite;
-  }
   return {
     payload,
     provenancePayloads: {
@@ -686,6 +785,7 @@ function requireProvenance(provenances, field) {
   ) {
     throw new TypeError(`${field} provenance must include signer and signature`);
   }
+  requireExactObject(provenance, `${field} provenance`, ["signer", "signature"]);
   return {
     signer: provenance.signer,
     signature: provenance.signature,
@@ -762,10 +862,10 @@ function requireAppInfraDraftPayloadShape(payload) {
  *
  * @param {{ payload: Record<string, unknown>, provenancePayloads?: Record<string, unknown> }} draft
  * @param {{ deploy: { signer: string, signature: string } }} provenances
- * @param {{ deployServices?: unknown[], upgradeServices?: unknown[] }} [options]
+ * @param {{ deployServices: unknown[], upgradeServices: unknown[] }} options
  * @returns {{ manifest: Record<string, unknown>, provenance: { signer: string, signature: string }, deploy_services: unknown[], upgrade_services: unknown[] }}
  */
-export function assembleSoracloudAppInfraRequest(draft, provenances = {}, options = {}) {
+export function assembleSoracloudAppInfraRequest(draft, provenances = {}, options = undefined) {
   rejectSoracloudSigningSecrets(draft);
   rejectSoracloudSigningSecrets(options);
   if (
@@ -784,8 +884,10 @@ export function assembleSoracloudAppInfraRequest(draft, provenances = {}, option
     draft.payload,
     APP_INFRA_PROVENANCE_SCHEMA,
   );
-  const deployServices = options.deployServices ?? options.deploy_services ?? [];
-  const upgradeServices = options.upgradeServices ?? options.upgrade_services ?? [];
+  requireExactObject(provenances, "provenances", ["deploy"]);
+  requireExactObject(options, "options", ["deployServices", "upgradeServices"]);
+  const deployServices = options.deployServices;
+  const upgradeServices = options.upgradeServices;
   if (!Array.isArray(deployServices) || !Array.isArray(upgradeServices)) {
     throw new TypeError("deployServices and upgradeServices must be arrays when provided");
   }
@@ -821,8 +923,8 @@ export function upgradeSoracloudAppInfraInstruction(manifest, provenance) {
  * Assemble a deploy request from an unsigned draft and externally signed provenance.
  *
  * @param {{ payload: Record<string, unknown>, provenancePayloads?: Record<string, unknown> }} draft
- * @param {{ deploy: { signer: string, signature: string }, generatedService: { signer: string, signature: string }, generatedApartment?: { signer: string, signature: string } }} provenances
- * @returns {{ payload: Record<string, unknown>, provenance: { signer: string, signature: string }, generated_service_provenance: { signer: string, signature: string }, generated_apartment_provenance?: { signer: string, signature: string } }}
+ * @param {{ deploy: { signer: string, signature: string }, generatedService: { signer: string, signature: string }, generatedApartment: { signer: string, signature: string } | null }} provenances
+ * @returns {{ payload: Record<string, unknown>, provenance: { signer: string, signature: string }, generated_service_provenance: { signer: string, signature: string }, generated_apartment_provenance: { signer: string, signature: string } | null }}
  */
 export function assembleSoracloudHfDeployRequest(draft, provenances = {}) {
   rejectSoracloudSigningSecrets(draft);
@@ -845,12 +947,18 @@ export function assembleSoracloudHfDeployRequest(draft, provenances = {}) {
     "generated_service",
     generatedServiceSigningPayload(draft.payload),
   );
+  requireExactObject(provenances, "provenances", [
+    "deploy",
+    "generatedService",
+    "generatedApartment",
+  ], ["deploy", "generatedService"]);
   const request = {
-    payload: draft.payload,
+    payload: cloneCanonical(draft.payload),
     provenance: requireProvenance(provenances, "deploy"),
     generated_service_provenance: requireProvenance(provenances, "generatedService"),
+    generated_apartment_provenance: null,
   };
-  if (draft.payload.apartment_name !== undefined) {
+  if (draft.payload.apartment_name !== null) {
     requireDraftSigningPayload(
       draft,
       "generatedApartment",
@@ -861,6 +969,21 @@ export function assembleSoracloudHfDeployRequest(draft, provenances = {}) {
       provenances,
       "generatedApartment",
     );
+  } else {
+    if (
+      !Object.hasOwn(draft.provenancePayloads, "generatedApartment") ||
+      draft.provenancePayloads.generatedApartment !== null
+    ) {
+      throw new TypeError(
+        "draft provenancePayloads.generatedApartment must be null without an apartment",
+      );
+    }
+    if (!Object.hasOwn(provenances, "generatedApartment")) {
+      throw new TypeError("generatedApartment provenance is required");
+    }
+    if (provenances.generatedApartment !== null) {
+      throw new TypeError("generatedApartment provenance must be null without an apartment");
+    }
   }
   return request;
 }
@@ -871,39 +994,49 @@ export function assembleSoracloudHfDeployRequest(draft, provenances = {}) {
  * The helper only normalizes client-side request shape. It never accepts raw
  * signing secrets and does not submit the returned receipt instruction.
  *
- * @param {{ serviceName: string, weightVersion: string, modelId?: string, modelName?: string, bundleRoot?: string, policyId: string, model: { inputLen: number, outputLen: number, weightsI8: number[], biasI32: number[], outputShift: number, outputMin: number, outputMax: number }, plaintextInputI32: number[], inputArtifact: Record<string, unknown>, outputArtifact: Record<string, unknown>, emittedSequence: number | bigint | string }} input
+ * @param {{ serviceName: string, weightVersion: string, modelId: string | null, modelName: string | null, bundleRoot: string | null, policyId: string, decryptionRequestId: string | null, model: { inputLen: number, outputLen: number, weightsI8: number[], biasI32: number[], outputShift: number, outputMin: number, outputMax: number }, plaintextInputI32: number[], inputArtifact: Record<string, unknown>, outputArtifact: Record<string, unknown>, emittedSequence: number | bigint | string }} input
  * @returns {Record<string, unknown>}
  */
 export function buildSoracloudPrivateUploadedModelExecuteRequest(input = {}) {
   rejectSoracloudSigningSecrets(input);
-  const modelId = optionalString(input, "modelId");
-  const modelName = optionalString(input, "modelName");
-  if ((modelId === undefined) === (modelName === undefined)) {
+  requireExactObject(input, "input", [
+    "serviceName",
+    "weightVersion",
+    "modelId",
+    "modelName",
+    "bundleRoot",
+    "policyId",
+    "decryptionRequestId",
+    "model",
+    "plaintextInputI32",
+    "inputArtifact",
+    "outputArtifact",
+    "emittedSequence",
+  ]);
+  const modelId = nullableString(input, "modelId");
+  const modelName = nullableString(input, "modelName");
+  if ((modelId === null) === (modelName === null)) {
     throw new TypeError("exactly one of modelId or modelName must be provided");
   }
+  const bundleRoot = nullableString(input, "bundleRoot");
+  const decryptionRequestId = nullableString(input, "decryptionRequestId");
   const plaintextInput = normalizeArray(input, "plaintextInputI32").map((value, index) =>
     normalizeSignedI32(value, `plaintextInputI32[${index}]`),
   );
   const request = {
     service_name: requireString(input, "serviceName"),
     weight_version: requireString(input, "weightVersion"),
+    model_id: modelId,
+    model_name: modelName,
+    bundle_root: bundleRoot,
     policy_id: requireString(input, "policyId"),
+    decryption_request_id: decryptionRequestId,
     model: normalizeQuantizedCpuModel(input),
     plaintext_input_i32: plaintextInput,
     input_artifact: normalizePrivateArtifactRef(input, "inputArtifact", "input"),
     output_artifact: normalizePrivateArtifactRef(input, "outputArtifact", "output"),
     emitted_sequence: normalizeSafePositiveInteger(input, "emittedSequence"),
   };
-  if (modelId !== undefined) {
-    request.model_id = modelId;
-  }
-  if (modelName !== undefined) {
-    request.model_name = modelName;
-  }
-  const bundleRoot = optionalString(input, "bundleRoot");
-  if (bundleRoot !== undefined) {
-    request.bundle_root = bundleRoot;
-  }
   return request;
 }
 
@@ -915,6 +1048,12 @@ export function buildSoracloudPrivateUploadedModelExecuteRequest(input = {}) {
  */
 export function buildSoracloudPrivateUploadedModelReceiptQuery(input = {}) {
   rejectSoracloudSigningSecrets(input);
+  requireExactObject(
+    input,
+    "input",
+    ["receiptId", "serviceName", "modelId", "weightVersion", "limit", "countMode"],
+    [],
+  );
   const query = {};
   const receiptId = optionalString(input, "receiptId");
   if (receiptId !== undefined) {

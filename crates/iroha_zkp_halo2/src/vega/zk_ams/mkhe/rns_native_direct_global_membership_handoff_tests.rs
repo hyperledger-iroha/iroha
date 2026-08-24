@@ -172,7 +172,7 @@ fn safe_and_outer_mappings_preserve_the_audited_chronology() {
         "inventory_root:",
         "inventory_continuation_digest:",
         "inventory_binding_digest:",
-        "direct_binding_digest:",
+        "direct_binding_digest,",
         "comparator_binding_digest,",
         "comparator_range_carry_binding_digest,",
         "small_sign_disjointness_binding_digest,",
@@ -218,7 +218,7 @@ fn safe_and_outer_mappings_preserve_the_audited_chronology() {
         .find("same_borrowed_slice_identity_v1(preflight.successor, exact_claimed_successor)")
         .expect("preflight slice identity");
     let four_core = claimed
-        .find("verify_kernel_for_suite_v1::<ZkAmsT256BulletproofSuiteV1, _>(")
+        .find("verify_preflighted_kernel_for_suite_v1::<ZkAmsT256BulletproofSuiteV1, _>(")
         .expect("existing four-core verifier");
     let cursor_complete = claimed
         .find("if !numeric_sidecar.is_complete_v2()")
@@ -268,4 +268,82 @@ fn safe_and_outer_mappings_preserve_the_audited_chronology() {
             "unsafe direct-core digest input: {forbidden}"
         );
     }
+}
+
+#[test]
+fn owned_replay_uses_the_exact_point_and_source_mappings() {
+    let source = include_str!("rns_native_direct_global_membership_handoff.rs");
+    let replay = source
+        .split_once("impl<S: ZkAmsMkheRnsNativeRepeatableSourceSnapshotV1> RnsNativeSourcePackingAggregateReplayV1")
+        .expect("owned replay implementation")
+        .1
+        .split_once("impl<'source, 'proof, S>")
+        .expect("owned replay implementation boundary")
+        .0;
+    for required in [
+        "source_packing_difference_low_commitment_v2(group, digit)",
+        "comparator_top_commitments(group)",
+        "small_source_product_commitments(owner)",
+        "difference_source_index_v1(group, coordinate)?",
+        "difference_scalar_from_be_bytes_v1(encoded)?",
+        "signed_source_index_v1(signed_unit, coordinate)?",
+        "signed_scalar_from_twos_complement_be_i64_v1(encoded)",
+        "ZkAmsMkheRnsNativeSourceArenaV1::Main.slot_count()",
+        "self.validate_snapshot_stability_v2()?",
+    ] {
+        assert!(
+            replay.contains(required),
+            "owned replay omission: {required}"
+        );
+    }
+    assert_eq!(replay.matches(".read_slot(").count(), 2);
+    assert!(replay.contains("for group in 0..DIFFERENCE_GROUPS_V1"));
+    assert!(replay.contains("for signed_unit in 0..SIGNED_OWNERS_V1"));
+    assert!(!replay.contains("snapshot_digest ="));
+    assert!(!replay.contains("let encoded: [u8;"));
+    assert!(replay.contains("let encoded: &[u8; DIFFERENCE_SCALAR_BYTES_V1]"));
+    assert!(replay.contains("let encoded: &[u8; SIGNED_SCALAR_BYTES_V1]"));
+    assert!(!replay.contains("to_vec("));
+    assert!(!replay.contains("clone("));
+}
+
+#[test]
+fn owned_replay_context_and_lifetime_are_minted_only_from_the_handoff() {
+    let source = include_str!("rns_native_direct_global_membership_handoff.rs");
+    let context = source
+        .split_once("fn source_packing_context_v2")
+        .expect("source-packing context derivation")
+        .1
+        .split_once("/// Borrow-backed replay")
+        .expect("source-packing context boundary")
+        .0;
+    let layout = context
+        .find("let layout = snapshot.layout();")
+        .expect("live layout");
+    let receipt = context
+        .find(".structural_receipt()")
+        .expect("live structural receipt");
+    let formula = context
+        .find("source_formula_digest: source.formula_digest()")
+        .expect("retained formula");
+    let mapping = context
+        .find("source_mapping_digest: source.mapping_digest()")
+        .expect("retained mapping");
+    let schedule = context
+        .find("canonical_replay_schedule_digest_v1(context)?")
+        .expect("canonical schedule");
+    assert!(layout < receipt && receipt < formula && formula < mapping && mapping < schedule);
+
+    let owned = source
+        .split_once("RnsNativeSourcePackingOwnedReplayPredecessorV2<'proof>")
+        .expect("owned predecessor implementation")
+        .1
+        .split_once("/// Consume the completed membership chain")
+        .expect("owned predecessor boundary")
+        .0;
+    assert!(owned.contains("S: ZkAmsMkheRnsNativeRepeatableSourceSnapshotV1"));
+    assert!(owned.contains("atomic: &mut self._atomic_direct"));
+    assert!(owned.contains("type Replay<'owner>"));
+    assert!(!owned.contains("from_raw"));
+    assert!(!owned.contains("into_parts"));
 }

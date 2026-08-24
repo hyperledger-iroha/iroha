@@ -119,7 +119,13 @@ fn install_fixture_native_lane(state: &mut State, context: &mut wire::HeightCont
         .collect::<Vec<_>>();
     expected.sort();
     expected.dedup();
-    let mut actual = state.authoritative_lane_peer_ids_at_height(participant_lane, context.height);
+    let mut actual = state
+        .resolve_lane_committee_at_height(
+            crate::state::LaneAuthorityRoute::new(participant_lane, participant_dataspace),
+            context.height,
+        )
+        .expect("Native fixture participant authority must resolve")
+        .into_validators();
     actual.sort();
     actual.dedup();
     assert_eq!(actual, expected, "Native fixture participant authority");
@@ -194,7 +200,12 @@ fn native_amx_receipts_for_apply_fixture(
     );
     let mut validator_set = fixture
         .state
-        .authoritative_lane_peer_ids_at_height(participant_lane, context.height);
+        .resolve_lane_committee_at_height(
+            crate::state::LaneAuthorityRoute::new(participant_lane, participant_dataspace),
+            context.height,
+        )
+        .expect("Native fixture participant authority must resolve")
+        .into_validators();
     validator_set.sort();
     validator_set.dedup();
     let mut expected_validators = context

@@ -88,7 +88,7 @@ fn ed25519_batch_deterministic_accepts_valid_batch() {
     let msg_refs: Vec<&[u8]> = messages.iter().map(Vec::as_slice).collect();
     let sig_refs: Vec<&[u8]> = signatures.iter().map(Vec::as_slice).collect();
     let pk_refs: Vec<&[u8]> = public_keys.iter().map(Vec::as_slice).collect();
-    assert!(ed25519_verify_batch_deterministic(&msg_refs, &sig_refs, &pk_refs, [0x42; 32]).is_ok());
+    assert!(ed25519_verify_batch_deterministic(&msg_refs, &sig_refs, &pk_refs).is_ok());
 }
 #[test]
 fn ed25519_batch_deterministic_rejects_invalid_member() {
@@ -98,7 +98,7 @@ fn ed25519_batch_deterministic_rejects_invalid_member() {
     let sig_refs: Vec<&[u8]> = signatures.iter().map(Vec::as_slice).collect();
     let pk_refs: Vec<&[u8]> = public_keys.iter().map(Vec::as_slice).collect();
     assert!(matches!(
-        ed25519_verify_batch_deterministic(&msg_refs, &sig_refs, &pk_refs, [0x42; 32]),
+        ed25519_verify_batch_deterministic(&msg_refs, &sig_refs, &pk_refs),
         Err(Error::BadSignature)
     ));
 }
@@ -110,7 +110,7 @@ fn ed25519_batch_deterministic_preserves_order_binding() {
     let sig_refs: Vec<&[u8]> = signatures.iter().map(Vec::as_slice).collect();
     let pk_refs: Vec<&[u8]> = public_keys.iter().map(Vec::as_slice).collect();
     assert!(matches!(
-        ed25519_verify_batch_deterministic(&msg_refs, &sig_refs, &pk_refs, [0x42; 32]),
+        ed25519_verify_batch_deterministic(&msg_refs, &sig_refs, &pk_refs),
         Err(Error::BadSignature)
     ));
 }
@@ -123,7 +123,6 @@ fn ed25519_batch_deterministic_matches_single_verification() {
                 &[message.as_slice()],
                 &[signature.as_slice()],
                 &[public_key.as_slice()],
-                [0x24; 32],
             )
             .is_ok()
         );

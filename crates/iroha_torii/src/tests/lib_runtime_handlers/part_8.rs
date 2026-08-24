@@ -536,8 +536,8 @@ async fn autoscale_proxy_authority_uses_pinned_committee_not_disjoint_manifest_b
             ..iroha_config::parameters::actual::Nexus::default()
         };
         nexus.autoscale.enabled = true;
-        nexus.autoscale.min_lanes = NonZeroU32::new(1).expect("non-zero min lanes");
-        nexus.autoscale.max_lanes = NonZeroU32::new(2).expect("non-zero max lanes");
+        nexus.autoscale.min_lane_id = NonZeroU32::new(1).expect("non-zero min lanes");
+        nexus.autoscale.max_lane_id_exclusive = NonZeroU32::new(2).expect("non-zero max lanes");
         nexus.lane_config =
             iroha_config::parameters::actual::LaneConfig::from_catalog(&nexus.lane_catalog);
         *state.nexus.write() = nexus;
@@ -2215,14 +2215,14 @@ async fn torii_proxy_network_message_dispatch_resolves_pending_response() {
         body: b"torii-proxy-response".to_vec(),
     };
     let (tx, rx) = tokio::sync::oneshot::channel();
-    app.torii_proxy_pending.lock().await.insert(
+    let _waiter_token = super::register_torii_proxy_pending_waiter(
+        &app,
         (request_id, responder_peer_id),
-        PendingToriiProxyRequest {
-            sender: tx,
-            max_body_bytes: usize::MAX,
-            strict_queue_plan_synced: false,
-        },
-    );
+        tx,
+        usize::MAX,
+        false,
+    )
+    .await;
     let payload = iroha_core::NetworkMessage::ToriiProxyResponse(Box::new(ToriiProxyResponseV1 {
         schema_version: TORII_PROXY_RESPONSE_VERSION_V1,
         request_id,
@@ -2254,6 +2254,208 @@ async fn torii_proxy_network_message_dispatch_resolves_pending_response() {
             .keys()
             .any(|(pending_request_id, _)| *pending_request_id == request_id),
         "Torii proxy response dispatcher must clear the pending request"
+    );
+}
+#[cfg(any(feature = "p2p_ws", feature = "connect"))]
+#[tokio::test]
+async fn identical_torii_proxy_submissions_keep_all_pending_waiters() {
+    let app = mk_app_state_for_tests();
+    let request_id = Hash::new(b"identical-torii-proxy-submissions");
+    let responder_peer_id = checked_torii_test_peer_id(
+        0x7a,
+        "derive identical-submission proxy responder fixture key",
+    );
+    let pending_key = (request_id, responder_peer_id.clone());
+    let expected_response = ToriiProxyHttpResponseV1 {
+        status_code: StatusCode::ACCEPTED.as_u16(),
+        headers: Vec::new(),
+        body: b"shared-durable-acceptance".to_vec(),
+    };
+    let (first_tx, first_rx) = tokio::sync::oneshot::channel();
+    let (second_tx, second_rx) = tokio::sync::oneshot::channel();
+    let _first_waiter_token =
+        super::register_torii_proxy_pending_waiter(&app, pending_key.clone(), first_tx, 1024, true)
+            .await;
+    let _second_waiter_token = super::register_torii_proxy_pending_waiter(
+        &app,
+        pending_key.clone(),
+        second_tx,
+        1024,
+        true,
+    )
+    .await;
+    assert_eq!(
+        app.torii_proxy_pending
+            .lock()
+            .await
+            .get(&pending_key)
+            .map(Vec::len),
+        Some(2),
+        "an identical pending submission must append its waiter instead of replacing the first"
+    );
+
+    super::mark_torii_proxy_request_completed(&app, request_id).await;
+    assert_eq!(
+        app.torii_proxy_pending
+            .lock()
+            .await
+            .get(&pending_key)
+            .map(Vec::len),
+        Some(2),
+        "completion of another caller with the same semantic request id must preserve live waiters"
+    );
+
+    super::process_incoming_torii_proxy_response(
+        &app,
+        responder_peer_id,
+        ToriiProxyResponseV1 {
+            schema_version: TORII_PROXY_RESPONSE_VERSION_V1,
+            request_id,
+            response: expected_response.clone(),
+        },
+    )
+    .await;
+    assert_eq!(
+        tokio::time::timeout(Duration::from_millis(100), first_rx)
+            .await
+            .expect("first identical waiter must resolve promptly")
+            .expect("first identical waiter must remain open"),
+        expected_response
+    );
+    assert_eq!(
+        tokio::time::timeout(Duration::from_millis(100), second_rx)
+            .await
+            .expect("second identical waiter must resolve promptly")
+            .expect("second identical waiter must remain open"),
+        expected_response
+    );
+    assert!(
+        !app.torii_proxy_pending
+            .lock()
+            .await
+            .contains_key(&pending_key),
+        "the shared response must clear the completed waiter set"
+    );
+}
+#[cfg(any(feature = "p2p_ws", feature = "connect"))]
+#[tokio::test]
+async fn identical_torii_proxy_waiters_enforce_body_bounds_independently() {
+    let app = mk_app_state_for_tests();
+    let request_id = Hash::new(b"identical-torii-proxy-per-waiter-bounds");
+    let responder_peer_id = checked_torii_test_peer_id(
+        0x7c,
+        "derive identical-submission per-waiter-bounds responder fixture key",
+    );
+    let pending_key = (request_id, responder_peer_id.clone());
+    let (tight_tx, tight_rx) = tokio::sync::oneshot::channel();
+    let (wide_tx, wide_rx) = tokio::sync::oneshot::channel();
+    let _tight_waiter_token =
+        super::register_torii_proxy_pending_waiter(&app, pending_key.clone(), tight_tx, 4, false)
+            .await;
+    let _wide_waiter_token =
+        super::register_torii_proxy_pending_waiter(&app, pending_key.clone(), wide_tx, 1024, false)
+            .await;
+    let expected_response = ToriiProxyHttpResponseV1 {
+        status_code: StatusCode::OK.as_u16(),
+        headers: Vec::new(),
+        body: b"five!".to_vec(),
+    };
+
+    super::process_incoming_torii_proxy_response(
+        &app,
+        responder_peer_id,
+        ToriiProxyResponseV1 {
+            schema_version: TORII_PROXY_RESPONSE_VERSION_V1,
+            request_id,
+            response: expected_response.clone(),
+        },
+    )
+    .await;
+    assert!(
+        tokio::time::timeout(Duration::from_millis(100), tight_rx)
+            .await
+            .expect("tight waiter rejection must resolve promptly")
+            .is_err(),
+        "a response above one waiter's body cap must close only that waiter"
+    );
+    assert_eq!(
+        tokio::time::timeout(Duration::from_millis(100), wide_rx)
+            .await
+            .expect("wide waiter must resolve promptly")
+            .expect("wide waiter must remain open"),
+        expected_response
+    );
+    assert!(
+        !app.torii_proxy_pending
+            .lock()
+            .await
+            .contains_key(&pending_key),
+        "per-waiter validation must consume the completed waiter set"
+    );
+}
+#[cfg(any(feature = "p2p_ws", feature = "connect"))]
+#[tokio::test]
+async fn identical_torii_proxy_attempt_cleanup_is_waiter_scoped() {
+    let app = mk_app_state_for_tests();
+    let request_id = Hash::new(b"identical-torii-proxy-attempt-cleanup");
+    let responder_peer_id = checked_torii_test_peer_id(
+        0x7b,
+        "derive identical-submission cleanup responder fixture key",
+    );
+    let pending_key = (request_id, responder_peer_id.clone());
+    let (failed_tx, failed_rx) = tokio::sync::oneshot::channel();
+    let (live_tx, live_rx) = tokio::sync::oneshot::channel();
+    let failed_waiter_token = super::register_torii_proxy_pending_waiter(
+        &app,
+        pending_key.clone(),
+        failed_tx,
+        1024,
+        true,
+    )
+    .await;
+    let _live_waiter_token =
+        super::register_torii_proxy_pending_waiter(&app, pending_key.clone(), live_tx, 1024, true)
+            .await;
+
+    super::remove_torii_proxy_pending_waiter(&app, &pending_key, &failed_waiter_token).await;
+    assert!(
+        tokio::time::timeout(Duration::from_millis(100), failed_rx)
+            .await
+            .expect("failed attempt cleanup must close its waiter promptly")
+            .is_err(),
+        "cleaning one failed attempt must close only that attempt's waiter"
+    );
+    assert_eq!(
+        app.torii_proxy_pending
+            .lock()
+            .await
+            .get(&pending_key)
+            .map(Vec::len),
+        Some(1),
+        "cleaning one identical attempt must preserve the other live waiter"
+    );
+
+    let expected_response = ToriiProxyHttpResponseV1 {
+        status_code: StatusCode::ACCEPTED.as_u16(),
+        headers: Vec::new(),
+        body: b"remaining-waiter-response".to_vec(),
+    };
+    super::process_incoming_torii_proxy_response(
+        &app,
+        responder_peer_id,
+        ToriiProxyResponseV1 {
+            schema_version: TORII_PROXY_RESPONSE_VERSION_V1,
+            request_id,
+            response: expected_response.clone(),
+        },
+    )
+    .await;
+    assert_eq!(
+        tokio::time::timeout(Duration::from_millis(100), live_rx)
+            .await
+            .expect("remaining identical waiter must resolve promptly")
+            .expect("remaining identical waiter must stay open"),
+        expected_response
     );
 }
 #[cfg(any(feature = "p2p_ws", feature = "connect"))]

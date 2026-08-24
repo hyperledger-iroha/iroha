@@ -2488,6 +2488,23 @@ def test_lifecycle_certified_serve_production_contract_is_current(
             "current-height Serve lifecycle transaction must retain ordered marker",
         ),
         (
+            "crates/iroha_core/src/sumeragi/v2_lifecycle_turn_driver.rs",
+            "drive_ready_completion_turn_with_required_ordinal",
+            "turn:LaunchedProductionLifecycleV1::drive_ready_completion_turn_with_required_ordinal",
+            "self.owner.classify_completion_ready_work(fence)",
+            "self.owner.classify_completion_ready_work_unchecked(fence)",
+            "fresh Ready completion dispatch after the Producer eligibility gate "
+            "must retain ordered marker",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_runner/lifecycle_height_driver.rs",
+            "drain_lifecycle_v2_ingress",
+            "height:drain_lifecycle_v2_ingress",
+            "PreGate::Ready(ready) if producer_claim.permits_ready_completion()",
+            "PreGate::Ready(ready)",
+            "height-runner Serve completion yield must retain ordered marker",
+        ),
+        (
             "crates/iroha_core/src/sumeragi/v2_lifecycle_projection.rs",
             "settle_certified_serve_worker_completed",
             "projection:super::ProductionLifecycleOwnerV1::settle_certified_serve_worker_completed",
@@ -2546,6 +2563,36 @@ def test_lifecycle_certified_serve_semantics_survive_item_reseal(
     )
 
     assert any(diagnostic in error for error in errors), errors
+
+
+def test_lifecycle_certified_serve_ready_gate_retains_eligible_claim(
+    tmp_path: Path,
+) -> None:
+    """The fresh Ready gate cannot exclude an otherwise idle Producer claim."""
+
+    module = load_checker()
+    copy_serve_lifecycle_production_fixture(tmp_path, module)
+    path = (
+        tmp_path
+        / "crates/iroha_core/src/sumeragi/v2_runner/lifecycle_height_driver.rs"
+    )
+    mutate_rust_item_source(
+        module,
+        path,
+        "permits_ready_completion",
+        "Self::Eligible | Self::AwaitingLiveApplyQueue { .. }",
+        "Self::AwaitingLiveApplyQueue { .. }",
+    )
+
+    errors = module._lifecycle_certified_serve_production_source_fidelity_errors(
+        tmp_path
+    )
+
+    assert any(
+        "fresh Ready Producer eligibility classifier must retain ordered marker"
+        in error
+        for error in errors
+    ), errors
 
 
 def test_lifecycle_certified_serve_completion_failure_survives_item_reseal(

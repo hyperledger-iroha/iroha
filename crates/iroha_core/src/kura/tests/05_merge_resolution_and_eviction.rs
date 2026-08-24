@@ -6,7 +6,11 @@ fn unknown_marker_resolution_applies_or_discards_merge_association_stage() {
         config.fsync_mode = FsyncMode::Batched;
         config.fsync_interval = Duration::from_secs(60);
         let expected_entry = {
-            let (kura, _) = Kura::new(&config, &RuntimeLaneConfig::default()).expect("open Kura");
+            let (kura, _) = Kura::open_test_kura_with_configured_lane_config(
+                &config,
+                &RuntimeLaneConfig::default(),
+            )
+            .expect("open Kura");
             let mut blocks = DummyBlocks::new();
             kura.store_block(blocks.next()).expect("store merge parent");
             let mut entry = sample_merge_entry(1);
@@ -30,8 +34,11 @@ fn unknown_marker_resolution_applies_or_discards_merge_association_stage() {
             assert!(kura.merge_ledger_snapshot().is_empty());
             entry
         };
-        let (reopened, count) = Kura::new(&config, &RuntimeLaneConfig::default())
-            .expect("startup resolves merge association stage by marker");
+        let (reopened, count) = Kura::open_test_kura_with_configured_lane_config(
+            &config,
+            &RuntimeLaneConfig::default(),
+        )
+        .expect("startup resolves merge association stage by marker");
         assert_eq!(count.0, if new_marker_won { 2 } else { 1 });
         assert_eq!(
             reopened.merge_ledger_snapshot(),
@@ -566,7 +573,7 @@ fn append_block_batch_at_rewrites_tail() {
 #[test]
 fn strict_init_kura() {
     let temp_dir = TempDir::new().unwrap();
-    Kura::new(
+    Kura::open_test_kura_with_configured_lane_config(
         &Config {
             init_mode: InitMode::Strict,
             store_dir: iroha_config::base::WithOrigin::inline(
@@ -603,7 +610,7 @@ fn kura_not_miss_replace_block() {
         create_blocks(&rt, &temp_dir).try_into().unwrap();
     // Reinitialize kura and check that correct blocks are loaded
     {
-        let (kura, block_count) = Kura::new(
+        let (kura, block_count) = Kura::open_test_kura_with_configured_lane_config(
             &Config {
                 init_mode: InitMode::Strict,
                 store_dir: iroha_config::base::WithOrigin::inline(
@@ -644,7 +651,7 @@ fn get_block_caches_loaded_block() {
     let temp_dir = TempDir::new().unwrap();
     let block_count = 3usize;
     populate_store(&temp_dir, block_count);
-    let (kura, _) = Kura::new(
+    let (kura, _) = Kura::open_test_kura_with_configured_lane_config(
         &Config {
             init_mode: InitMode::Strict,
             store_dir: iroha_config::base::WithOrigin::inline(
@@ -691,7 +698,7 @@ fn transaction_index_completes_after_lazy_loading_reopened_blocks() {
         .entrypoint_hashes()
         .next()
         .expect("canonical test block has a transaction");
-    let (kura, block_count) = Kura::new(
+    let (kura, block_count) = Kura::open_test_kura_with_configured_lane_config(
         &Config {
             init_mode: InitMode::Strict,
             store_dir: iroha_config::base::WithOrigin::inline(
@@ -963,7 +970,7 @@ fn get_block_returns_none_when_data_missing() {
     // Otherwise `get_block` correctly serves the requested block from memory after the data
     // file is removed, and the test never exercises its missing-disk-data path.
     populate_store(&temp_dir, 3);
-    let (kura, _) = Kura::new(
+    let (kura, _) = Kura::open_test_kura_with_configured_lane_config(
         &Config {
             init_mode: InitMode::Strict,
             store_dir: iroha_config::base::WithOrigin::inline(
@@ -994,7 +1001,7 @@ fn get_block_returns_none_when_data_missing() {
 fn eviction_requires_remote_replicas() {
     let temp_dir = TempDir::new().unwrap();
     populate_store(&temp_dir, 4);
-    let (kura, _) = Kura::new(
+    let (kura, _) = Kura::open_test_kura_with_configured_lane_config(
         &KuraConfig {
             init_mode: InitMode::Strict,
             store_dir: WithOrigin::inline(temp_dir.path().to_str().unwrap().into()),
@@ -1032,7 +1039,9 @@ fn open_eviction_compaction_fixture(
     block_count: usize,
 ) -> (KuraConfig, Arc<Kura>, Vec<Arc<SignedBlock>>) {
     let config = kura_config_for_dir(temp_dir, NonZeroUsize::new(1).expect("non-zero"));
-    let (kura, _) = Kura::new(&config, &RuntimeLaneConfig::default()).expect("open empty Kura");
+    let (kura, _) =
+        Kura::open_test_kura_with_configured_lane_config(&config, &RuntimeLaneConfig::default())
+            .expect("open empty Kura");
     let blocks = store_dummy_block_arcs(&kura, block_count);
     for artifact in v2_finality_artifacts_for_chain(&blocks) {
         let _ = kura
@@ -1080,7 +1089,8 @@ fn assert_eviction_compaction_restart_rolls_forward(boundary: u8) {
     assert!(kura.canonical_storage_poisoned.load(Ordering::Acquire));
     drop(kura);
     let (reopened, _) =
-        Kura::new(&config, &RuntimeLaneConfig::default()).expect("recover staged compaction");
+        Kura::open_test_kura_with_configured_lane_config(&config, &RuntimeLaneConfig::default())
+            .expect("recover staged compaction");
     assert!(
         !blocks_dir
             .join(EVICTION_COMPACTION_STAGE_FILE_NAME)
@@ -1149,8 +1159,9 @@ fn eviction_compaction_restart_rejects_missing_staged_replacement() {
     std::fs::remove_file(blocks_dir.join(EVICTION_COMPACTION_DATA_FILE_NAME))
         .expect("remove staged replacement data");
     drop(kura);
-    let error = Kura::new(&config, &RuntimeLaneConfig::default())
-        .expect_err("missing staged compaction data must fail closed");
+    let error =
+        Kura::open_test_kura_with_configured_lane_config(&config, &RuntimeLaneConfig::default())
+            .expect_err("missing staged compaction data must fail closed");
     assert!(
         error
             .to_string()
@@ -1186,8 +1197,9 @@ fn eviction_compaction_restart_rejects_tampered_staged_replacement() {
     *first ^= 0x80;
     std::fs::write(&replacement, bytes).expect("tamper staged replacement data");
     drop(kura);
-    let error = Kura::new(&config, &RuntimeLaneConfig::default())
-        .expect_err("tampered staged compaction data must fail closed");
+    let error =
+        Kura::open_test_kura_with_configured_lane_config(&config, &RuntimeLaneConfig::default())
+            .expect_err("tampered staged compaction data must fail closed");
     assert!(
         error
             .to_string()
@@ -1225,7 +1237,7 @@ fn eviction_compaction_restart_rejects_tampered_retained_wire_binding() {
     let stage = primary_blocks_dir(&temp_dir).join(EVICTION_COMPACTION_STAGE_FILE_NAME);
     drop(kura);
     assert!(matches!(
-        Kura::new(&config, &RuntimeLaneConfig::default()),
+        Kura::open_test_kura_with_configured_lane_config(&config, &RuntimeLaneConfig::default()),
         Err(Error::V2FinalityExecutedBlockWireHashMismatch { height: 2 })
     ));
     assert!(
@@ -1252,8 +1264,9 @@ fn eviction_compaction_restart_rejects_hardlinked_stage_record() {
     let alias = blocks_dir.join("eviction-compaction-stage.attacker-link");
     std::fs::hard_link(&stage, &alias).expect("create attacker-controlled stage hardlink");
     drop(kura);
-    let error = Kura::new(&config, &RuntimeLaneConfig::default())
-        .expect_err("hard-linked compaction stage must fail closed");
+    let error =
+        Kura::open_test_kura_with_configured_lane_config(&config, &RuntimeLaneConfig::default())
+            .expect_err("hard-linked compaction stage must fail closed");
     assert!(
         error.to_string().contains("single-link regular file"),
         "unexpected recovery error: {error}"
@@ -1273,7 +1286,8 @@ fn eviction_compaction_restart_removes_unpublished_orphan_replacements() {
         .expect("write orphan index replacement");
     let config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
     let (_kura, count) =
-        Kura::new(&config, &RuntimeLaneConfig::default()).expect("open and clean Kura");
+        Kura::open_test_kura_with_configured_lane_config(&config, &RuntimeLaneConfig::default())
+            .expect("open and clean Kura");
     assert_eq!(count.0, 2);
     assert!(!data_orphan.exists());
     assert!(!index_orphan.exists());
@@ -1308,7 +1322,8 @@ fn eviction_compaction_does_not_promote_after_stage_dirsync_failure() {
     std::fs::remove_file(blocks_dir.join(EVICTION_COMPACTION_STAGE_FILE_NAME))
         .expect("simulate loss of the directory-unsynchronized stage after a crash");
     let (reopened, _) =
-        Kura::new(&config, &RuntimeLaneConfig::default()).expect("reopen original store");
+        Kura::open_test_kura_with_configured_lane_config(&config, &RuntimeLaneConfig::default())
+            .expect("reopen original store");
     assert!(
         !reopened
             .block_store
@@ -1344,7 +1359,8 @@ fn eviction_compaction_preserves_remote_only_prior_body() {
     assert!(kura.get_block(nonzero!(2_usize)).is_none());
     drop(kura);
     let (reopened, count) =
-        Kura::new(&config, &RuntimeLaneConfig::default()).expect("reopen compacted history");
+        Kura::open_test_kura_with_configured_lane_config(&config, &RuntimeLaneConfig::default())
+            .expect("reopen compacted history");
     assert_eq!(count.0, 5);
     assert_eq!(
         reopened.get_durable_block_hash(nonzero!(2_usize)),
@@ -1379,7 +1395,7 @@ fn eviction_compaction_preserves_verified_hash_only_tail() {
     );
     drop(kura);
     assert!(matches!(
-        Kura::new(&config, &RuntimeLaneConfig::default()),
+        Kura::open_test_kura_with_configured_lane_config(&config, &RuntimeLaneConfig::default()),
         Err(Error::InvalidSnapshotBootstrapMarker { .. })
     ));
     let (reopened, count) = Kura::new_inner(

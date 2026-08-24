@@ -2,6 +2,8 @@
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 #![allow(unused_imports)]
 #![allow(clippy::items_after_statements)]
+#[path = "common/governance.rs"]
+mod governance_fixture;
 use core::convert::TryInto;
 use iroha_core::{
     kura::Kura,
@@ -287,7 +289,10 @@ fn enact_rejects_unregistered_bytecode_without_creating_an_active_stub() {
             created_height: 1,
             status: iroha_core::state::GovernanceProposalStatus::Approved,
             pipeline: iroha_core::state::GovernancePipeline::seeded(1, None, &stx.gov),
-            parliament_snapshot: None,
+            parliament_snapshot: governance_fixture::single_member_parliament_snapshot(
+                &account_id,
+                1,
+            ),
             finalization_evidence: None,
             enacted_at_height: None,
         },
@@ -382,7 +387,10 @@ fn enact_rejects_on_conflicting_existing_manifest() {
             created_height: 1,
             status: iroha_core::state::GovernanceProposalStatus::Approved,
             pipeline: iroha_core::state::GovernancePipeline::seeded(1, None, &stx.gov),
-            parliament_snapshot: None,
+            parliament_snapshot: governance_fixture::single_member_parliament_snapshot(
+                &account_id,
+                1,
+            ),
             finalization_evidence: None,
             enacted_at_height: None,
         },

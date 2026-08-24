@@ -2096,12 +2096,6 @@ for token in (
     if verify.count(token) != 1:
         reject("Verus runner must inherit the authenticated external target and evidence roots")
 
-for script, source in sources.items():
-    if script.startswith("pytests/"):
-        continue
-    if "IROHA_TEST_ALLOW_REENTRANT_BUILD=1" in source:
-        reject(f"{script} re-enables nested Cargo builds")
-
 for script in (
     "scripts/run_sumeragi_v2_release_gates.sh",
     "scripts/run_sumeragi_v2_seed_matrix.sh",
@@ -2109,7 +2103,6 @@ for script in (
     source = sources[script]
     for token in (
         "export IROHA_TEST_SKIP_BUILD=1",
-        "export IROHA_TEST_ALLOW_REENTRANT_BUILD=0",
         "ensure_source_bound_localnet_binaries",
         "IROHA_RELEASE_PREBUILT_MANIFEST_SHA256",
         "export_source_bound_localnet_binaries",
@@ -2233,10 +2226,7 @@ if (
 ):
     reject("every main-runner path must validate roots before its entry boundary")
 if "--no-skip-build" in release:
-    reject("release runner may not request reentrant localnet builds")
-if "--env IROHA_TEST_ALLOW_REENTRANT_BUILD=" in release:
-    reject("release callers must not override launcher-owned reentrant policy")
-
+    reject("release runner may not request child localnet builds")
 launcher_source = sources["scripts/run_nexus_cross_dataspace_atomic_swap.sh"]
 if 'CARGO_TEST_CMD+=("--locked" "--offline")' not in launcher_source:
     reject("Nexus child launcher Cargo commands are not locked/offline")
@@ -2244,8 +2234,7 @@ if 'ENV_VARS+=("IROHA_TEST_SKIP_BUILD=1")' not in launcher_source:
     reject("Nexus child launcher does not propagate skip-build")
 for token in (
     'ENV_VARS+=("IROHA_TEST_SKIP_BUILD=1")',
-    'ENV_VARS+=("IROHA_TEST_ALLOW_REENTRANT_BUILD=0")',
-    "IROHA_TEST_SKIP_BUILD|IROHA_TEST_ALLOW_REENTRANT_BUILD|",
+    "IROHA_TEST_SKIP_BUILD|IROHA_TEST_NETWORK_BASE_SEED|",
 ):
     if launcher_source.count(token) != 1:
         reject(f"Nexus child launcher lacks exact nested-build policy {token!r}")
@@ -2255,7 +2244,6 @@ for forbidden in ("--no-skip-build", "SKIP_BUILD=true", "SKIP_BUILD=false"):
 extras_end = launcher_source.index("done\n# Test processes must consume")
 for token in (
     'ENV_VARS+=("IROHA_TEST_SKIP_BUILD=1")',
-    'ENV_VARS+=("IROHA_TEST_ALLOW_REENTRANT_BUILD=0")',
 ):
     if launcher_source.index(token) <= extras_end:
         reject("Nexus child launcher must pin nested-build policy after extras")
@@ -2274,7 +2262,6 @@ for token in (
     "KAGAMI_BIN=",
     "CARGO_NET_OFFLINE=true",
     "IROHA_TEST_SKIP_BUILD=1",
-    "IROHA_TEST_ALLOW_REENTRANT_BUILD=0",
     "IROHA_TEST_BUILD_PROFILE=release",
     "PROFILE=release",
     "cargo test --locked --offline",
@@ -2358,7 +2345,6 @@ for helper_name, helper_source in (
         'require_external_release_artifact_root "$REPO_ROOT"',
         "require_disjoint_release_roots",
         "export IROHA_TEST_SKIP_BUILD=1",
-        "export IROHA_TEST_ALLOW_REENTRANT_BUILD=0",
         "sumeragi_v2_ensure_source_bound_localnet_binaries",
         "sumeragi_v2_export_source_bound_localnet_binaries",
     ):
@@ -2368,7 +2354,6 @@ for helper_name, helper_source in (
             )
     for forbidden in (
         "--no-skip-build",
-        "IROHA_TEST_ALLOW_REENTRANT_BUILD=1",
         "IROHA_TEST_SKIP_BUILD=0",
     ):
         if forbidden in helper_source:
@@ -2439,14 +2424,12 @@ for token in (
     'f"KAGAMI_BIN={kagami} "',
     '"CARGO_NET_OFFLINE=true "',
     '"IROHA_TEST_SKIP_BUILD=1 "',
-    '"IROHA_TEST_ALLOW_REENTRANT_BUILD=0 "',
     '"cargo test --locked --offline -p integration_tests --test "',
 ):
     if token not in receipt_writer:
         reject(f"release receipt writer lacks exact seed replay token {token!r}")
 for obsolete in (
     '"IROHA_TEST_SKIP_BUILD=0 "',
-    '"IROHA_TEST_ALLOW_REENTRANT_BUILD=1 "',
     '"cargo test --locked -p integration_tests --test "',
 ):
     if obsolete in receipt_writer:
@@ -2508,13 +2491,13 @@ def reject(message: str) -> None:
 
 required_contract = (
     'const IROHA_TEST_SKIP_BUILD_ENV: &str = "IROHA_TEST_SKIP_BUILD";',
-    'const IROHA_TEST_ALLOW_REENTRANT_BUILD_ENV: &str = "IROHA_TEST_ALLOW_REENTRANT_BUILD";',
     'const IROHA_RELEASE_SOURCE_MANIFEST_SHA256_ENV: &str = "IROHA_RELEASE_SOURCE_MANIFEST_SHA256";',
     'const SUMERAGI_V2_RELEASE_TARGET_SUBDIR: &str = "sumeragi-v2-release";',
     'const SUMERAGI_V2_RELEASE_PROGRAMS_SUBDIR: &str = "programs";',
     "fn release_program_contract(repo: &Path)",
     "fn validate_release_program_candidate(",
-    "if release_corridor {\n        return false;\n    }",
+    "const fn child_build_allowed(running_under_cargo: bool, release_corridor: bool) -> bool {",
+    "!running_under_cargo && !release_corridor",
     '.arg("--locked")\n                .arg("--offline")',
     'std::process::Command::new("ps")\n        .args(["-axo", "pid,etime,command"])',
     "ensure_child_cargo_quiescent(&cargo_program)?;",
@@ -2523,7 +2506,7 @@ required_contract = (
 )
 for token in required_contract:
     if token not in source:
-        reject(f"source-manifest/reentrant-build contract token is missing: {token!r}")
+        reject(f"source-manifest/child-build contract token is missing: {token!r}")
 
 if source.count("let release_contract = release_program_contract(&repo)?;") != 1:
     reject("program resolution must activate the release contract exactly once")

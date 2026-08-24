@@ -42,7 +42,6 @@ present	iroha.sumeragi.qc
 present	iroha.sumeragi.checkpoints
 present	iroha.sumeragi.consensus_keys
 present	iroha.sumeragi.bls_keys
-present	iroha.sumeragi.key_lifecycle
 absent	iroha.sumeragi.telemetry
 absent	iroha.sumeragi.commit_qc.get
 present	iroha.sumeragi.evidence.count

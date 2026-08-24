@@ -404,25 +404,6 @@ fn new_rkg_round_one_selector_v1(
     Ok(selector)
 }
 
-/// Legacy selector wrapper retained only for verifier-side compatibility tests.
-#[cfg(test)]
-pub(super) fn mint_rkg_round_one_selector_v1(
-    roster: &ZkAmsMkheGovernedActiveRosterV1,
-    bindings: &VerifiedPersistentWitnessBindingSetV1,
-    context: ZkAmsMkheDirectCeremonyContextV1,
-    prior_round_digest: [u8; 32],
-    contribution_statement_digest: [u8; 32],
-    proof_commitment_transcript_digest: [u8; 32],
-) -> Result<PersistentDirectRelationUseSelectorV1, ZkAmsMkheErrorV1> {
-    let common_a = derive_verified_direct_common_a_statement_v1(roster, bindings, context)?;
-    new_rkg_round_one_selector_v1(
-        context,
-        prior_round_digest,
-        contribution_statement_digest,
-        proof_commitment_transcript_digest,
-        common_a,
-    )
-}
 #[cfg(test)]
 pub(super) fn mint_mismatched_rkg_round_one_selector_for_test_v1(
     roster: &ZkAmsMkheGovernedActiveRosterV1,

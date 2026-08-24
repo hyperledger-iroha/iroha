@@ -39,6 +39,8 @@
 //! - `X-Iroha-Account` only identifies a caller when paired with a valid
 //!   signature or witness; bare account headers are rejected on caller-scoped
 //!   read paths.
+//! - Exact direct Kagemusha lifecycle fee quotes require at least two verified
+//!   multisig policy members in strictly increasing canonical signer order.
 //!
 //! Some endpoints carry the same auth envelope inside a JSON body instead of HTTP headers. Those
 //! callers provide `account_id`, `timestamp_ms`, `nonce`, and exactly one proof field in the body,
@@ -67,8 +69,6 @@ use iroha_data_model::{
         CanonicalRequestWitnessV1,
     },
 };
-#[cfg(feature = "app_api")]
-use iroha_torii_shared::FeeQuoteRequest;
 use norito::codec::{Decode, Encode};
 use sha2::{Digest as _, Sha256};
 use std::{
@@ -78,6 +78,18 @@ use std::{
     num::NonZeroUsize,
     sync::{Arc, Mutex, OnceLock, RwLock},
     time::{Duration, SystemTime, UNIX_EPOCH},
+};
+#[cfg(feature = "app_api")]
+use {
+    iroha_data_model::{
+        isi::offline::{
+            ActivateKagemushaRecursiveReleaseV4, CancelKagemushaRecursiveReleaseV4,
+            DeactivateKagemushaRecursiveIssuanceV4, EnableKagemushaRecursiveIssuanceV4,
+        },
+        offline::KAGEMUSHA_V4_ACTIVATION_GOVERNANCE_MIN_SIGNERS,
+        transaction::Executable,
+    },
+    iroha_torii_shared::FeeQuoteRequest,
 };
 /// Header carrying the authorising account id.
 pub const HEADER_ACCOUNT: &str = "X-Iroha-Account";
@@ -2021,7 +2033,10 @@ pub fn verify_canonical_request(
         method,
         uri,
         body,
-        expected_account,
+        CanonicalRequestVerificationScope {
+            expected_account,
+            purpose: CanonicalRequestPurpose::General,
+        },
         state.network_id_ref(),
     )
 }
@@ -2049,9 +2064,97 @@ pub fn verify_canonical_network_request(
         method,
         uri,
         body,
-        expected_account,
+        CanonicalRequestVerificationScope {
+            expected_account,
+            purpose: CanonicalRequestPurpose::General,
+        },
         network_id,
     )
+}
+#[derive(Clone, Copy)]
+enum CanonicalRequestPurpose {
+    General,
+    #[cfg(feature = "app_api")]
+    FeeQuote,
+}
+#[derive(Clone, Copy)]
+struct CanonicalRequestVerificationScope<'a> {
+    expected_account: Option<&'a AccountId>,
+    purpose: CanonicalRequestPurpose,
+}
+fn validate_verified_request_purpose(
+    purpose: CanonicalRequestPurpose,
+    method: &Method,
+    uri: &Uri,
+    body: &[u8],
+    account: &AccountId,
+    verified_signers: &[PublicKey],
+) -> Result<(), crate::Error> {
+    match purpose {
+        CanonicalRequestPurpose::General => Ok(()),
+        #[cfg(feature = "app_api")]
+        CanonicalRequestPurpose::FeeQuote => validate_kagemusha_lifecycle_fee_quote_signers(
+            method,
+            uri,
+            body,
+            account,
+            verified_signers,
+        ),
+    }
+}
+#[cfg(feature = "app_api")]
+fn validate_kagemusha_lifecycle_fee_quote_signers(
+    method: &Method,
+    uri: &Uri,
+    body: &[u8],
+    account: &AccountId,
+    verified_signers: &[PublicKey],
+) -> Result<(), crate::Error> {
+    if method != Method::POST || uri.path() != "/v1/fees/quote" {
+        return Ok(());
+    }
+    let Ok(request) = norito::json::from_slice::<FeeQuoteRequest>(body) else {
+        return Ok(());
+    };
+    if request.payload.authority() != account
+        || !is_direct_kagemusha_lifecycle(request.payload.instructions())
+    {
+        return Ok(());
+    }
+    if verified_signers.len() < KAGEMUSHA_V4_ACTIVATION_GOVERNANCE_MIN_SIGNERS {
+        return Err(crate::Error::Query(ValidationFail::NotPermitted(format!(
+            "Kagemusha lifecycle fee quote requires at least {KAGEMUSHA_V4_ACTIVATION_GOVERNANCE_MIN_SIGNERS} verified distinct governance policy members"
+        ))));
+    }
+    if !verified_signers.windows(2).all(|pair| pair[0] < pair[1]) {
+        return Err(crate::Error::Query(ValidationFail::NotPermitted(
+            "Kagemusha lifecycle fee quote witness signers must be in strictly increasing canonical order"
+                .to_owned(),
+        )));
+    }
+    Ok(())
+}
+#[cfg(feature = "app_api")]
+fn is_direct_kagemusha_lifecycle(executable: &Executable) -> bool {
+    let Executable::Instructions(instructions) = executable else {
+        return false;
+    };
+    let [instruction] = instructions.as_ref() else {
+        return false;
+    };
+    let instruction = instruction.as_any();
+    instruction
+        .downcast_ref::<ActivateKagemushaRecursiveReleaseV4>()
+        .is_some()
+        || instruction
+            .downcast_ref::<EnableKagemushaRecursiveIssuanceV4>()
+            .is_some()
+        || instruction
+            .downcast_ref::<CancelKagemushaRecursiveReleaseV4>()
+            .is_some()
+        || instruction
+            .downcast_ref::<DeactivateKagemushaRecursiveIssuanceV4>()
+            .is_some()
 }
 fn verify_canonical_request_for_network(
     state: &Arc<CoreState>,
@@ -2059,9 +2162,16 @@ fn verify_canonical_request_for_network(
     method: &Method,
     uri: &Uri,
     body: &[u8],
-    expected_account: Option<&AccountId>,
+    scope: CanonicalRequestVerificationScope<'_>,
     network_id: &NetworkId,
 ) -> Result<Option<VerifiedCanonicalRequest>, crate::Error> {
+    // Axum routes query-bearing fee-quote URIs to the same handler. Reject them before any
+    // authentication can commit replay state or bypass the endpoint-specific signer policy.
+    if uri.path() == "/v1/fees/quote" && uri.query().is_some() {
+        return Err(crate::Error::Query(ValidationFail::NotPermitted(
+            "fee quote requests must not contain query parameters".to_owned(),
+        )));
+    }
     validate_canonical_request_singleton_headers(headers)?;
     let account_hdr = headers.get(HEADER_ACCOUNT);
     let signature_hdr = headers.get(HEADER_SIGNATURE);
@@ -2100,7 +2210,7 @@ fn verify_canonical_request_for_network(
         let account = explicit_account
             .as_ref()
             .unwrap_or(&witness.subject_account);
-        if let Some(expected) = expected_account
+        if let Some(expected) = scope.expected_account
             && expected != account
         {
             return Err(crate::Error::Query(ValidationFail::NotPermitted(
@@ -2126,6 +2236,14 @@ fn verify_canonical_request_for_network(
             &witness,
             "X-Iroha-Witness",
             "X-Iroha-Witness signature payload",
+        )?;
+        validate_verified_request_purpose(
+            scope.purpose,
+            method,
+            uri,
+            body,
+            account,
+            &verified_signers,
         )?;
         let signer = verified_signers
             .first()
@@ -2154,7 +2272,7 @@ fn verify_canonical_request_for_network(
     validate_canonical_request_target(method, uri)?;
     let account_literal = parse_required_header_exact_text(headers, HEADER_ACCOUNT)?;
     let account = parse_account_header_value(state, account_literal)?;
-    if let Some(expected) = expected_account
+    if let Some(expected) = scope.expected_account
         && expected != &account
     {
         return Err(crate::Error::Query(ValidationFail::NotPermitted(
@@ -2208,6 +2326,14 @@ fn verify_canonical_request_for_network(
         .try_reserve_exact(1)
         .map_err(|_| canonical_request_capacity_error())?;
     verified_signers.push(signer);
+    validate_verified_request_purpose(
+        scope.purpose,
+        method,
+        uri,
+        body,
+        &account,
+        &verified_signers,
+    )?;
     Ok(Some(finish_verified_canonical_request(
         account,
         primary_signer,
@@ -2223,7 +2349,9 @@ fn verify_canonical_request_for_network(
 /// single-key account named by `X-Iroha-Account` is not registered yet, this endpoint alone may
 /// authenticate it from the key embedded in its account id, provided the quoted payload's first
 /// instruction self-registers that same authority. Aliases, multisig controllers, and other
-/// endpoints never enter this fallback.
+/// endpoints never enter this fallback. An authenticated exact direct Kagemusha lifecycle payload
+/// additionally requires two distinct policy members in canonical signer order before its replay
+/// nonce is committed.
 #[cfg(feature = "app_api")]
 pub(crate) fn verify_fee_quote_canonical_request(
     state: &Arc<CoreState>,
@@ -2232,8 +2360,18 @@ pub(crate) fn verify_fee_quote_canonical_request(
     uri: &Uri,
     body: &[u8],
 ) -> Result<Option<VerifiedCanonicalRequest>, crate::Error> {
-    validate_canonical_request_singleton_headers(headers)?;
-    let normal_error = match verify_canonical_request(state, headers, method, uri, body, None) {
+    let normal_error = match verify_canonical_request_for_network(
+        state,
+        headers,
+        method,
+        uri,
+        body,
+        CanonicalRequestVerificationScope {
+            expected_account: None,
+            purpose: CanonicalRequestPurpose::FeeQuote,
+        },
+        state.network_id_ref(),
+    ) {
         Ok(verified) => return Ok(verified),
         Err(error) => error,
     };
@@ -2336,6 +2474,11 @@ mod tests {
         block::BlockHeader,
         domain::Domain,
         isi::Register,
+        offline::{
+            KAGEMUSHA_V4_RELEASE_CANCELLATION_SCHEMA_V1, KAGEMUSHA_V4_RELEASE_LIFECYCLE_VERSION_V1,
+            KagemushaExactBytesDigestV1, KagemushaV4ReleaseCancellationV1,
+            KagemushaV4ReleaseLifecycleReasonV1,
+        },
         prelude::DomainId,
         transaction::{FeePaymentIntent, TransactionBuilder},
     };
@@ -2403,6 +2546,32 @@ mod tests {
         .into_payload()
         .expect("build self-registering fee quote payload");
         norito::json::to_vec(&FeeQuoteRequest { payload }).expect("encode fee quote request")
+    }
+    fn kagemusha_lifecycle_fee_quote_body(authority: &AccountId) -> Vec<u8> {
+        let cancellation =
+            CancelKagemushaRecursiveReleaseV4::new(KagemushaV4ReleaseCancellationV1 {
+                schema: KAGEMUSHA_V4_RELEASE_CANCELLATION_SCHEMA_V1.to_owned(),
+                version: KAGEMUSHA_V4_RELEASE_LIFECYCLE_VERSION_V1,
+                promotion_id: [0x11; 32],
+                manifest_sha256: [0x22; 32],
+                expected_predecessor_lifecycle: KagemushaExactBytesDigestV1 {
+                    byte_len: 1,
+                    sha256: [0x33; 32],
+                },
+                transition_id: [0x44; 32],
+                reason: KagemushaV4ReleaseLifecycleReasonV1::GovernanceCancelled,
+                evidence: None,
+            });
+        let payload = TransactionBuilder::new(
+            test_network_id(0x30),
+            authority.clone(),
+            FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .with_instructions([cancellation])
+        .into_payload()
+        .expect("build direct Kagemusha lifecycle fee quote payload");
+        norito::json::to_vec(&FeeQuoteRequest { payload })
+            .expect("encode Kagemusha lifecycle fee quote request")
     }
     fn signed_headers_for_test(
         network_id: &NetworkId,
@@ -3520,6 +3689,126 @@ mod tests {
             crate::Error::Query(ValidationFail::NotPermitted(message))
                 if message == "query signature failed verification"
         ));
+    }
+    #[test]
+    fn fee_quote_endpoint_verifier_enforces_kagemusha_lifecycle_witness_floor_and_order() {
+        let _guard = test_guard(CanonicalRequestAuthConfig::default());
+        let mut signers = [
+            checked_app_auth_key_fixture(),
+            checked_app_auth_key_fixture(),
+        ];
+        signers.sort_by(|left, right| left.public_key().cmp(right.public_key()));
+        let policy = MultisigPolicy::new(
+            2,
+            vec![
+                MultisigMember::new(signers[0].public_key().clone(), 2).expect("member A"),
+                MultisigMember::new(signers[1].public_key().clone(), 1).expect("member B"),
+            ],
+        )
+        .expect("weighted lifecycle policy");
+        let account = AccountId::new_multisig(policy);
+        let state = minimal_state_with_account(&account);
+        let method = Method::POST;
+        let uri: Uri = "/v1/fees/quote".parse().expect("fee quote URI");
+        let lifecycle_body = kagemusha_lifecycle_fee_quote_body(&account);
+
+        let floor_timestamp_ms = now_unix_ms();
+        let floor_nonce = "kagemusha-lifecycle-one-weight-two";
+        let one_weight_two = multisig_witness(
+            state.network_id_ref(),
+            &account,
+            &method,
+            &uri,
+            &lifecycle_body,
+            floor_timestamp_ms,
+            floor_nonce,
+            &[&signers[0]],
+        );
+        let error = verify_fee_quote_canonical_request(
+            &state,
+            &witness_headers(&account, &one_weight_two),
+            &method,
+            &uri,
+            &lifecycle_body,
+        )
+        .expect_err("one weight-2 member must not authorize a lifecycle fee quote");
+        assert!(matches!(
+            error,
+            crate::Error::Query(ValidationFail::NotPermitted(message))
+                if message.contains("at least 2 verified distinct governance policy members")
+        ));
+
+        let reordered = multisig_witness(
+            state.network_id_ref(),
+            &account,
+            &method,
+            &uri,
+            &lifecycle_body,
+            now_unix_ms(),
+            "kagemusha-lifecycle-reordered",
+            &[&signers[1], &signers[0]],
+        );
+        let error = verify_fee_quote_canonical_request(
+            &state,
+            &witness_headers(&account, &reordered),
+            &method,
+            &uri,
+            &lifecycle_body,
+        )
+        .expect_err("reordered lifecycle fee quote witnesses must fail closed");
+        assert!(matches!(
+            error,
+            crate::Error::Query(ValidationFail::NotPermitted(message))
+                if message.contains("strictly increasing canonical order")
+        ));
+
+        let canonical = multisig_witness(
+            state.network_id_ref(),
+            &account,
+            &method,
+            &uri,
+            &lifecycle_body,
+            floor_timestamp_ms,
+            floor_nonce,
+            &[&signers[0], &signers[1]],
+        );
+        let verified = verify_fee_quote_canonical_request(
+            &state,
+            &witness_headers(&account, &canonical),
+            &method,
+            &uri,
+            &lifecycle_body,
+        )
+        .expect("corrected canonical witness must verify without a burned rejection nonce")
+        .expect("lifecycle quote must be authenticated");
+        assert_eq!(
+            verified.verified_signers,
+            vec![
+                signers[0].public_key().clone(),
+                signers[1].public_key().clone()
+            ]
+        );
+
+        let ordinary_body = fee_quote_body(&account, &account);
+        let ordinary_reordered = multisig_witness(
+            state.network_id_ref(),
+            &account,
+            &method,
+            &uri,
+            &ordinary_body,
+            now_unix_ms(),
+            "ordinary-fee-quote-reordered",
+            &[&signers[1], &signers[0]],
+        );
+        verify_fee_quote_canonical_request(
+            &state,
+            &witness_headers(&account, &ordinary_reordered),
+            &method,
+            &uri,
+            &ordinary_body,
+        )
+        .expect("ordinary app-auth must retain generic witness ordering semantics")
+        .expect("ordinary quote must be authenticated");
     }
     #[test]
     fn verify_accepts_valid_signature() {

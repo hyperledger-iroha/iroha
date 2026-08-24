@@ -338,7 +338,13 @@ fn install_fixture_validator_authority(
         .map(|validator| validator.validator.clone())
         .collect::<Vec<_>>();
     expected.sort();
-    let mut actual = state.authoritative_lane_peer_ids_at_height(LaneId::SINGLE, context.height);
+    let mut actual = state
+        .resolve_lane_committee_at_height(
+            crate::state::LaneAuthorityRoute::new(LaneId::SINGLE, DataSpaceId::UNIVERSAL),
+            context.height,
+        )
+        .expect("fixture lane authority must resolve")
+        .into_validators();
     actual.sort();
     assert_eq!(
         actual, expected,
@@ -395,7 +401,7 @@ impl ApplyFixture {
             false,
             false,
             false,
-            false,
+            true,
             Some(([0x55; 32], Some([0x55; 32]))),
         )
     }
@@ -2092,7 +2098,13 @@ fn install_recreatable_reservation_lane(
         .map(|validator| validator.validator.clone())
         .collect::<Vec<_>>();
     expected.sort();
-    let mut actual = state.authoritative_lane_peer_ids_at_height(lane.id, 1);
+    let mut actual = state
+        .resolve_lane_committee_at_height(
+            crate::state::LaneAuthorityRoute::new(lane.id, lane.dataspace_id),
+            1,
+        )
+        .expect("recreatable reservation lane authority must resolve")
+        .into_validators();
     actual.sort();
     assert_eq!(
         actual, expected,

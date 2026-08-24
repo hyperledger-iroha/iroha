@@ -212,6 +212,7 @@ fn seed_proposal_and_referendum(
     proposal_id: [u8; 32],
     proposal_kind: ProposalKind,
     proposer: &AccountId,
+    parliament_members: &[AccountId],
 ) -> String {
     let referendum_id = hex::encode(proposal_id);
     let header = BlockHeader::new(
@@ -234,6 +235,16 @@ fn seed_proposal_and_referendum(
         .governance_referenda_mut()
         .insert(referendum_id.clone(), referendum);
     let pipeline = iroha_core::state::GovernancePipeline::seeded(1, Some(&referendum), &stx.gov);
+    let bodies = draw::derive_parliament_bodies_from_bonded_citizens(
+        &stx.gov,
+        &stx.network_id,
+        1,
+        &[0x7b; 32],
+        parliament_members
+            .iter()
+            .map(|member| (member, ATTACKER_BOND_XOR)),
+        iroha_data_model::isi::governance::CouncilDerivationKind::Sortition,
+    );
     stx.world.governance_proposals_mut().insert(
         proposal_id,
         iroha_core::state::GovernanceProposalRecord {
@@ -242,7 +253,10 @@ fn seed_proposal_and_referendum(
             created_height: 1,
             status: iroha_core::state::GovernanceProposalStatus::Proposed,
             pipeline,
-            parliament_snapshot: None,
+            parliament_snapshot: iroha_core::state::GovernanceParliamentSnapshot::try_new(
+                [0x7b; 32], bodies,
+            )
+            .expect("canonical captured Parliament snapshot"),
             finalization_evidence: None,
             enacted_at_height: None,
         },
@@ -250,41 +264,6 @@ fn seed_proposal_and_referendum(
     stx.apply();
     block.commit().expect("seed proposal block commit");
     referendum_id
-}
-fn seed_captured_parliament(
-    state: &mut State,
-    members: Vec<AccountId>,
-    alternates: Vec<AccountId>,
-) {
-    let header = BlockHeader::new(
-        NonZeroU64::new(2).expect("non-zero"),
-        None,
-        None,
-        None,
-        0,
-        0,
-    );
-    let mut block = state.block(header);
-    let mut stx = block.transaction();
-    let council = iroha_core::governance::state::ParliamentTerm {
-        epoch: 0,
-        members: members.clone(),
-        alternates: alternates.clone(),
-        candidate_count: u32::try_from(members.len().saturating_add(alternates.len()))
-            .expect("candidate count should fit u32"),
-        derived_by: iroha_data_model::isi::governance::CouncilDerivationKind::Manual,
-    };
-    stx.world.council_mut().insert(0, council.clone());
-    let bodies = iroha_core::governance::draw::derive_parliament_bodies(
-        &stx.gov,
-        &stx.network_id,
-        0,
-        &[0x7b; 32],
-        &council,
-    );
-    stx.world.parliament_bodies_mut().insert(0, bodies);
-    stx.apply();
-    block.commit().expect("seed parliament block commit");
 }
 fn approve(
     state: &mut State,
@@ -473,11 +452,7 @@ fn duplicate_approvals_do_not_count_twice_for_quorum() {
             )),
         }),
         &attacker_a,
-    );
-    seed_captured_parliament(
-        &mut state,
-        vec![attacker_a.clone(), attacker_b.clone(), honest.clone()],
-        vec![],
+        &[attacker_a.clone(), attacker_b.clone(), honest.clone()],
     );
     approve(
         &mut state,
@@ -610,11 +585,7 @@ fn wealthy_non_members_cannot_open_referendum_without_sortition_capture() {
             )),
         }),
         &honest_a,
-    );
-    seed_captured_parliament(
-        &mut state,
-        vec![honest_a.clone(), honest_b.clone(), honest_c.clone()],
-        vec![],
+        &[honest_a.clone(), honest_b.clone(), honest_c.clone()],
     );
     let err_rules = approve(
         &mut state,

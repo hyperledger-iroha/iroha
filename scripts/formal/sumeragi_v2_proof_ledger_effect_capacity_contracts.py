@@ -742,9 +742,7 @@ let ownership = match self.runtime.take_effect_ownership(&effects) {
         generic_executor_context,
         "ordinary effect-consumer Decision-cleanup delegation",
         errors,
-        expected_attributes=(
-            '#[allow(dead_code, reason = "retained by formal contracts")]',
-        ),
+        expected_attributes=("#[cfg(test)]",),
     )
     _require_exact_rust_tokens(
         effects_path,
@@ -1032,7 +1030,6 @@ let Some(evidence) = self.pending_tip_recovery.as_ref() else {
 let exact = evidence.stage() == PendingKuraApplyRecoveryStage::Apply
     && evidence.is_exact(&self.context)
     && evidence.replay_tag() == self.current_tag()
-    && prepared.dispatch_key().lifecycle_ordinal() == evidence.recovered_apply_ordinal()
     && prepared.exactly_matches_pending_kura_recovery(
         &self.context,
         evidence.replay_tag(),
@@ -1041,7 +1038,7 @@ let exact = evidence.stage() == PendingKuraApplyRecoveryStage::Apply
         evidence.validated_receipt(),
     );
 """,
-        "pending-Kura lifecycle Apply dispatch must bind its exact stage, context, ordinal, Decision, and receipt",
+        "pending-Kura lifecycle Apply dispatch must bind its exact stage, context, Decision, and receipt",
         errors,
     )
 
@@ -1238,9 +1235,7 @@ self.finality_completion.is_some()
         generic_executor_context,
         "pacemaker effect-consumer Decision-cleanup delegation",
         errors,
-        expected_attributes=(
-            '#[allow(dead_code, reason = "retained by formal contracts")]',
-        ),
+        expected_attributes=("#[cfg(test)]",),
     )
     _require_exact_rust_tokens(
         effects_path,

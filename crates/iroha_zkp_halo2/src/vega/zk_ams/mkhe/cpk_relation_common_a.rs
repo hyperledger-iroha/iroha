@@ -69,17 +69,15 @@ pub(in super::super) const fn active_collective_public_a_limb_frame_bytes_v1() -
         + ACTIVE_COLLECTIVE_PUBLIC_A_CONTEXT_BYTES_V1
         + 2
 }
-/// Compatibility path preserving the native whole-polynomial derivation.
-pub(in super::super) fn derive_active_collective_public_a_limb_v1(
-    profile: &BgvProfile,
-    roster: &ZkAmsMkheGovernedActiveRosterV1,
-    cpk_transcript_digest: [u8; 32],
-    limb: usize,
-) -> Result<Vec<u64>, ZkAmsMkheCpkRelationErrorV1> {
-    prepare_active_collective_public_a_v1(profile, roster, cpk_transcript_digest)?
-        .derive_limb_inner_v1(limb, None)
-}
 impl ZkAmsMkhePreparedCollectivePublicAContextV1 {
+    /// Return the exact worst-case SHAKE candidate budget for `limb_count`
+    /// streamed limb derivations.
+    pub(in super::super) fn candidate_budget_for_limbs_v1(
+        &self,
+        limb_count: usize,
+    ) -> Result<u64, ZkAmsMkheCpkRelationErrorV1> {
+        common_a_candidate_budget_for_limbs_v1(self.profile.ring_degree, limb_count)
+    }
     /// Derive one byte-identical native limb while charging every accepted or
     /// rejected SHAKE candidate to the shared whole-worker budget.
     pub(in super::super) fn derive_limb_budgeted_v1(
@@ -87,12 +85,12 @@ impl ZkAmsMkhePreparedCollectivePublicAContextV1 {
         limb: usize,
         remaining_candidates: &mut u64,
     ) -> Result<Vec<u64>, ZkAmsMkheCpkRelationErrorV1> {
-        self.derive_limb_inner_v1(limb, Some(remaining_candidates))
+        self.derive_limb_inner_v1(limb, remaining_candidates)
     }
     fn derive_limb_inner_v1(
         &self,
         limb: usize,
-        mut remaining_candidates: Option<&mut u64>,
+        remaining_candidates: &mut u64,
     ) -> Result<Vec<u64>, ZkAmsMkheCpkRelationErrorV1> {
         if limb >= self.profile.moduli.len() {
             return Err(ZkAmsMkheCpkRelationErrorV1::NativeRelation);
@@ -112,9 +110,7 @@ impl ZkAmsMkhePreparedCollectivePublicAContextV1 {
         for _ in 0..self.profile.ring_degree {
             let mut accepted = None;
             for _ in 0..MAX_RANDOM_REJECTION_ATTEMPTS_V1 {
-                if let Some(remaining) = remaining_candidates.as_deref_mut() {
-                    consume_common_a_candidate_budget_v1(remaining)?;
-                }
+                consume_common_a_candidate_budget_v1(remaining_candidates)?;
                 let mut bytes = [0_u8; 8];
                 stream.read(&mut bytes);
                 let candidate = u64::from_le_bytes(bytes);
@@ -145,6 +141,16 @@ fn consume_common_a_candidate_budget_v1(
         .ok_or(ZkAmsMkheCpkRelationErrorV1::ResourceCeiling)?;
     Ok(())
 }
+fn common_a_candidate_budget_for_limbs_v1(
+    ring_degree: usize,
+    limb_count: usize,
+) -> Result<u64, ZkAmsMkheCpkRelationErrorV1> {
+    let candidates = ring_degree
+        .checked_mul(limb_count)
+        .and_then(|count| count.checked_mul(MAX_RANDOM_REJECTION_ATTEMPTS_V1))
+        .ok_or(ZkAmsMkheCpkRelationErrorV1::ResourceCeiling)?;
+    u64::try_from(candidates).map_err(|_| ZkAmsMkheCpkRelationErrorV1::ResourceCeiling)
+}
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -168,6 +174,17 @@ mod tests {
         assert_eq!(
             validate_profile_digest_axis_v1([0; 32], [0; 32]),
             Err(ZkAmsMkheCpkRelationErrorV1::GovernedContext)
+        );
+    }
+    #[test]
+    fn common_a_candidate_budget_is_exact_and_checked() {
+        assert_eq!(
+            common_a_candidate_budget_for_limbs_v1(8, 3),
+            Ok(8 * 3 * MAX_RANDOM_REJECTION_ATTEMPTS_V1 as u64)
+        );
+        assert_eq!(
+            common_a_candidate_budget_for_limbs_v1(usize::MAX, 2),
+            Err(ZkAmsMkheCpkRelationErrorV1::ResourceCeiling)
         );
     }
 }

@@ -4,7 +4,6 @@ use iroha_crypto::{
     soranet::handshake::{
         DEFAULT_DESCRIPTOR_COMMIT, DEFAULT_TLS_SERVER_NAME, HandshakeSuite, HarnessError,
         RuntimeParams, SORANET_QUIC_ALPN, build_client_hello, client_handle_relay_hello,
-        relay_finalize_handshake,
     },
 };
 use norito::json::{self, Map, Value};
@@ -62,7 +61,7 @@ fn run_handshake(suite: HandshakeSuite) -> Result<(), HarnessError> {
     let relay_keys = fixed_ed25519_keypair("relay", 0x22)?;
     let (client_hello, client_state) = build_client_hello(&params, &mut rng_client)?;
     let client_hello_len = client_hello.len();
-    let (relay_message, relay_state) = iroha_crypto::soranet::handshake::process_client_hello(
+    let (relay_message, _relay_session) = iroha_crypto::soranet::handshake::process_client_hello(
         &client_hello,
         &params,
         &relay_keys,
@@ -79,15 +78,12 @@ fn run_handshake(suite: HandshakeSuite) -> Result<(), HarnessError> {
             hex::encode(&scenario.relay_caps)
         );
     })?;
-    let (client_finish, _) = client_handle_relay_hello(
+    client_handle_relay_hello(
         client_state,
         &relay_message,
         relay_keys.public_key(),
         &params,
-        &mut rng_client,
     )?;
-    let finish = client_finish.as_deref().unwrap_or(&[]);
-    relay_finalize_handshake(relay_state, finish, &relay_keys)?;
     Ok(())
 }
 fn fixed_ed25519_keypair(label: &str, seed_byte: u8) -> Result<KeyPair, HarnessError> {

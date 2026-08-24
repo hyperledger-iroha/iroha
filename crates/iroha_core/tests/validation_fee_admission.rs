@@ -414,7 +414,7 @@ fn validation_fee_policy(
         treasury_payout_binding: Some(payout_binding),
     }
 }
-fn test_parliament_bodies() -> ParliamentBodies {
+fn test_parliament_bodies(selection_epoch: u64) -> ParliamentBodies {
     let member = account(250).0;
     let rosters = [
         ParliamentBody::RulesCommittee,
@@ -431,22 +431,23 @@ fn test_parliament_bodies() -> ParliamentBodies {
             body,
             ParliamentRoster {
                 body,
-                epoch: 1,
+                epoch: selection_epoch,
                 members: vec![member.clone()],
                 alternates: Vec::new(),
                 candidate_count: 1,
-                derived_by: Default::default(),
+                derived_by: iroha_data_model::isi::governance::CouncilDerivationKind::Sortition,
             },
         )
     })
     .collect();
     ParliamentBodies {
-        selection_epoch: 1,
+        selection_epoch,
         rosters,
     }
 }
-fn test_roster_root() -> [u8; 32] {
-    let encoded = norito::to_bytes(&test_parliament_bodies()).expect("encode Parliament bodies");
+fn test_roster_root(selection_epoch: u64) -> [u8; 32] {
+    let encoded = norito::encode_canonical(&test_parliament_bodies(selection_epoch))
+        .expect("canonically encode Parliament bodies");
     let digest = Blake2b512::digest(encoded);
     let mut root = [0; 32];
     root.copy_from_slice(&digest[..32]);
@@ -498,7 +499,7 @@ fn test_parliament_authorization(
     ValidationFeeParliamentAuthorizationV1 {
         proposal_id,
         proposal_fingerprint: proposal_id,
-        proposal_time_roster_root: test_roster_root(),
+        proposal_time_roster_root: test_roster_root(1),
         plain_electorate_snapshot_root: electorate.roster_root,
         plain_electorate_snapshot_member_count: electorate.member_count,
         plain_electorate_snapshot_captured_at_height: electorate.captured_at_height,
@@ -577,7 +578,7 @@ fn seed_open_proposal(
 ) -> [u8; 32] {
     let proposal_id = kind.fingerprint();
     let referendum_id = hex::encode(proposal_id);
-    let bodies = test_parliament_bodies();
+    let bodies = test_parliament_bodies(window.lower);
     let rules = match &kind {
         ProposalKind::ValidationFeePolicy(payload) => payload.plain_electorate_rules.clone(),
         ProposalKind::ValidationFeePayoutLifecycle(payload) => {
@@ -604,12 +605,12 @@ fn seed_open_proposal(
             created_height: window.lower,
             status: iroha_core::state::GovernanceProposalStatus::Proposed,
             pipeline: iroha_core::state::GovernancePipeline::default(),
-            parliament_snapshot: Some(iroha_core::state::GovernanceParliamentSnapshot {
-                selection_epoch: 1,
+            parliament_snapshot: iroha_core::state::GovernanceParliamentSnapshot {
+                selection_epoch: window.lower,
                 beacon: [0x44; 32],
-                roster_root: test_roster_root(),
+                roster_root: test_roster_root(window.lower),
                 bodies,
-            }),
+            },
             finalization_evidence: None,
             enacted_at_height: None,
         },
@@ -634,7 +635,7 @@ fn seed_open_proposal(
         ParliamentBody::FmaCommittee,
     ] {
         approvals
-            .ensure_stage(body, 1, 1, 10_000)
+            .ensure_stage(body, window.lower, 1, 10_000)
             .record(account(250).0);
     }
     approvals.approval_gate_height = Some(approval_gate_height);
@@ -662,7 +663,7 @@ fn seed_open_proposal(
                     expiry_height: window.upper,
                     direction: 0,
                     duration_blocks: rules.ballot_duration_blocks,
-                    custody: Some(custody),
+                    custody,
                 },
             )]),
         },

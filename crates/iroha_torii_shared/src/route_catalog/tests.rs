@@ -119,6 +119,34 @@ mod tests {
         );
     }
     #[test]
+    fn ordinary_kagemusha_lifecycle_has_one_dedicated_canonical_signed_route() {
+        let route = offline::KAGEMUSHA_LIFECYCLE_TRANSACTION;
+        assert_eq!(
+            route.path(),
+            "/v1/offline/kagemusha/lifecycle-v4/transactions"
+        );
+        assert_eq!(crate::uri::KAGEMUSHA_LIFECYCLE_TRANSACTION, route.path());
+        assert_eq!(route.method(), HttpMethod::Post);
+        assert_eq!(route.surface(), ApiSurface::Public);
+        assert_eq!(route.effect(), RouteEffect::Mutation);
+        assert_eq!(route.admission(), AdmissionPolicy::AuthenticatedAccount);
+        assert_eq!(
+            route.authentication(),
+            AuthenticationPolicy::CanonicalSignedBody
+        );
+        assert_eq!(route.feature_gate(), FeatureGate::Feature("app_api"));
+        assert_eq!(route.route_match(), RouteMatch::Exact);
+        assert_eq!(route.path_normalization(), PathNormalization::Strict);
+        assert_ne!(route.path(), pipeline::TRANSACTION.path());
+        assert_eq!(
+            offline::ROUTES
+                .iter()
+                .filter(|candidate| candidate.path() == route.path())
+                .count(),
+            1
+        );
+    }
+    #[test]
     fn canonical_catalog_retires_global_sumeragi_rbc_and_collectors() {
         assert!(
             CATALOGED_ROUTES
@@ -408,7 +436,7 @@ mod tests {
         );
     }
     #[test]
-    fn canonical_catalog_includes_exact_gateway_and_directory_routes() {
+    fn canonical_catalog_includes_host_gateway_and_directory_routes() {
         let catalog = RouteCatalog::new(CATALOGED_ROUTES);
         assert_eq!(catalog.validate(), Ok(()));
         for expected in soracloud_gateway::ROUTES
@@ -425,8 +453,8 @@ mod tests {
             catalog
                 .routes()
                 .iter()
-                .all(|route| route.path() != "/soradns/{fqdn}/"),
-            "the first-release gateway must not expose a trailing-slash alias"
+                .all(|route| !route.path().starts_with("/soradns/")),
+            "the first-release gateway must not expose a path-encoded alias"
         );
     }
     #[test]
@@ -436,7 +464,7 @@ mod tests {
             .filter(|route| route.stable_route_id().starts_with("protocol.soracloud."))
             .collect::<Vec<_>>();
         assert_eq!(catalog_routes.len(), soracloud_gateway::ROUTES.len());
-        assert_eq!(soracloud_gateway::ROUTES.len(), 4);
+        assert_eq!(soracloud_gateway::ROUTES.len(), 2);
         for route in soracloud_gateway::ROUTES {
             assert!(catalog_routes.iter().any(|catalog| **catalog == *route));
             assert_eq!(route.surface(), ApiSurface::Protocol);
@@ -507,7 +535,6 @@ mod tests {
             core::VPN_RECEIPTS,
             core::VPN_RECEIPT_SUBMIT,
             core::VPN_SESSION,
-            core::VPN_SESSION_DELETE,
             application_api::NOTIFY_DEVICES_POST,
             application_api::NOTIFY_DEVICES_DELETE,
         ] {
@@ -1051,7 +1078,7 @@ mod tests {
         }
         assert!(application_api::SORACLOUD_DEPLOY_POST.projections().sdk());
         assert!(
-            !application_api::SORACLOUD_DEPLOY_POST
+            application_api::SORACLOUD_DEPLOY_POST
                 .projections()
                 .openapi()
         );
@@ -1065,6 +1092,105 @@ mod tests {
                 .projections()
                 .openapi()
         );
+    }
+    #[test]
+    fn soracloud_release_surface_is_exactly_sixty_openapi_and_sdk_routes() {
+        let soracloud_routes = application_api::ROUTES
+            .iter()
+            .filter(|route| route.path().starts_with("/v1/soracloud/"))
+            .collect::<Vec<_>>();
+        assert_eq!(soracloud_routes.len(), 60);
+
+        let catalog_routes = CATALOGED_ROUTES
+            .iter()
+            .filter(|route| {
+                route.surface() == ApiSurface::Public && route.path().starts_with("/v1/soracloud/")
+            })
+            .map(|route| (route.method(), route.path()))
+            .collect::<BTreeSet<_>>();
+        assert_eq!(
+            catalog_routes,
+            soracloud_routes
+                .iter()
+                .map(|route| (route.method(), route.path()))
+                .collect(),
+            "the canonical catalog must contain the exact application Soracloud inventory"
+        );
+
+        let public_reads = BTreeSet::from([
+            "/v1/soracloud/model/upload/encryption-recipient",
+            "/v1/soracloud/services/{service_name}/public-discovery",
+            "/v1/soracloud/services/{service_name}/revisions/{service_version}/public-discovery",
+        ]);
+        for route in soracloud_routes {
+            assert_eq!(route.surface(), ApiSurface::Public, "{}", route.path());
+            assert_eq!(route.listener(), Listener::Torii, "{}", route.path());
+            assert_eq!(
+                route.feature_gate(),
+                FeatureGate::Feature("app_api"),
+                "{}",
+                route.path()
+            );
+            assert!(route.projections().openapi(), "{}", route.path());
+            assert!(route.projections().sdk(), "{}", route.path());
+            assert!(!route.projections().mcp(), "{}", route.path());
+            assert_eq!(route.route_match(), RouteMatch::Exact, "{}", route.path());
+            assert_eq!(
+                route.path_normalization(),
+                PathNormalization::Strict,
+                "{}",
+                route.path()
+            );
+            assert!(route.cors_options(), "{}", route.path());
+            assert_eq!(
+                route.implicit_head(),
+                route.method() == HttpMethod::Get,
+                "{}",
+                route.path()
+            );
+
+            if public_reads.contains(route.path()) {
+                assert_eq!(route.method(), HttpMethod::Get, "{}", route.path());
+                assert_eq!(
+                    route.authentication(),
+                    AuthenticationPolicy::ToriiDefault,
+                    "{}",
+                    route.path()
+                );
+                assert_eq!(
+                    route.admission(),
+                    AdmissionPolicy::Public,
+                    "{}",
+                    route.path()
+                );
+                assert_eq!(route.effect(), RouteEffect::ReadOnly, "{}", route.path());
+                continue;
+            }
+
+            assert_eq!(
+                route.authentication(),
+                AuthenticationPolicy::CanonicalAccountSignature,
+                "{}",
+                route.path()
+            );
+            assert_eq!(
+                route.admission(),
+                AdmissionPolicy::AuthenticatedAccount,
+                "{}",
+                route.path()
+            );
+            let expected_effect = match (route.method(), route.path()) {
+                (HttpMethod::Get, _) | (HttpMethod::Post, "/v1/soracloud/ciphertext/query") => {
+                    RouteEffect::ReadOnly
+                }
+                (HttpMethod::Post, "/v1/soracloud/model/upload/private/execute") => {
+                    RouteEffect::ExpensiveCompute
+                }
+                (HttpMethod::Post, _) => RouteEffect::Mutation,
+                (method, path) => panic!("unsupported Soracloud release route {method:?} {path}"),
+            };
+            assert_eq!(route.effect(), expected_effect, "{}", route.path());
+        }
     }
     #[test]
     #[expect(
@@ -1090,13 +1216,18 @@ mod tests {
             "/v1/sumeragi/checkpoints",
             "/v1/sumeragi/validator-sets",
             "/v1/sumeragi/validator-sets/{height}",
+            "/v1/sumeragi/key-lifecycle",
         ] {
             assert!(
                 routes.iter().all(|route| route.path() != unsupported_path),
                 "unsupported route must not enter the first-release catalog: {unsupported_path}"
             );
         }
-        for canonical_path in ["/v1/sumeragi/bls-keys", "/v1/sumeragi/diagnostics"] {
+        for canonical_path in [
+            "/v1/sumeragi/bls-keys",
+            "/v1/sumeragi/consensus-keys",
+            "/v1/sumeragi/diagnostics",
+        ] {
             assert!(
                 routes.iter().any(|route| route.path() == canonical_path),
                 "missing canonical first-release route: {canonical_path}"
@@ -1115,7 +1246,6 @@ mod tests {
             sumeragi::BLS_KEYS,
             sumeragi::QC,
             sumeragi::CONSENSUS_KEYS,
-            sumeragi::KEY_LIFECYCLE,
             sumeragi::PARAMETERS,
             sumeragi::EVIDENCE_COUNT,
             sumeragi::EVIDENCE_LIST,

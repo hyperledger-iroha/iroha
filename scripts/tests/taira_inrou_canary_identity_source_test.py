@@ -23,6 +23,13 @@ def test_identity_preflight_runs_before_any_canary_publication() -> None:
     assert positions == sorted(positions)
 
 
+def test_timeout_validation_runs_before_any_canary_publication() -> None:
+    run = _section("impl Run for InrouCanary", "fn ensure_canonical_taira_client_identity")
+    assert run.index("validate_inrou_canary_timeout") < run.index(
+        "run_taira_inrou_canary_deployment"
+    )
+
+
 def test_identity_preflight_binds_the_remote_puzzle_to_configured_taira() -> None:
     preflight = _section("fn preflight_taira_network_identity", "#[derive(Debug)]")
     assert 'join_url(public_root, "/v1/accounts/faucet/puzzle")' in preflight

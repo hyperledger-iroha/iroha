@@ -1,7 +1,6 @@
 //! Move-only, allocation-bounded collective-public-key ceremony.
 //!
-//! The legacy aggregate API borrows all eight release-sized shares at once.
-//! This facade instead verifies and consumes exactly the next governed party.
+//! The ceremony verifies and consumes exactly the next governed party.
 //! Only compact admissions, commitment bindings, immutable object pointers,
 //! and receipts survive a transition.  The final aggregate is allocated only
 //! after every full share and relation proof has been released.

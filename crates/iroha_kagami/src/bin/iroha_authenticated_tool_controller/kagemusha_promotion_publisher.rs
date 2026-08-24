@@ -1079,11 +1079,11 @@ impl CandidateSnapshot {
             || internal.source_tree_sha256 != manifest.source_tree_sha256
             || internal.source_repo_dirty != manifest.source_repo_dirty
             || internal.tracked_cargo_lock.sha256
-                != manifest.reviewed_source_closure.ignored_cargo_lock_sha256
+                != manifest.reviewed_source_closure.tracked_cargo_lock_sha256
             || internal.tracked_cargo_lock.size_bytes
                 != manifest
                     .reviewed_source_closure
-                    .ignored_cargo_lock_size_bytes
+                    .tracked_cargo_lock_size_bytes
             || internal.reviewed_source_closure_descriptor_sha256
                 != manifest.reviewed_source_closure_descriptor_sha256
             || internal.authenticated_source_seal_projection_sha256

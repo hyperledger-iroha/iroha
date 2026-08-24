@@ -1480,13 +1480,9 @@ pub mod genesis_instructions_json {
             .map_err(|err| json::Error::Message(format!("invalid {label}: {err}")))
     }
     fn parse_account_id(value: &str, label: &'static str) -> Result<AccountId, json::Error> {
-        match AccountId::parse_encoded(value) {
-            Ok(parsed) => Ok(parsed.into_account_id()),
-            Err(err) => value
-                .parse::<iroha_crypto::PublicKey>()
-                .map(AccountId::new)
-                .map_err(|_| json::Error::Message(format!("invalid {label}: {err}"))),
-        }
+        AccountId::parse_encoded(value)
+            .map(|parsed| parsed.into_account_id())
+            .map_err(|err| json::Error::Message(format!("invalid {label}: {err}")))
     }
     fn parse_domain_id(value: &str, label: &'static str) -> Result<DomainId, json::Error> {
         DomainId::parse_fully_qualified(value)
@@ -4539,10 +4535,9 @@ mod tests {
         Ok(())
     }
     #[test]
-    fn parse_genesis_accepts_legacy_public_key_account_literals() -> Result<()> {
+    fn parse_genesis_rejects_raw_public_key_account_literals() -> Result<()> {
         init_instruction_registry();
         let public_key_literal = ALICE_KEYPAIR.public_key().to_string();
-        let account_id = AccountId::new(ALICE_KEYPAIR.public_key().clone());
         let sumeragi_v2 =
             norito::json::to_json(&SumeragiV2GenesisContextParameters::recommended())?;
         let genesis = format!(
@@ -4560,16 +4555,9 @@ mod tests {
             iroha_data_model::account::address::chain_discriminant(),
             sumeragi_v2,
         );
-        let decoded: RawGenesisTransaction = norito::json::from_str(&genesis)?;
-        let account = decoded.transactions[0].instructions[0]
-            .as_any()
-            .downcast_ref::<RegisterBox>()
-            .and_then(|register| match register {
-                RegisterBox::Account(account) => Some(account.object().id().clone()),
-                _ => None,
-            })
-            .expect("account registration");
-        assert_eq!(account, account_id);
+        let error = norito::json::from_str::<RawGenesisTransaction>(&genesis)
+            .expect_err("raw public-key account literals are not part of first-release genesis");
+        assert!(error.to_string().contains("invalid register account"));
         Ok(())
     }
     #[test]

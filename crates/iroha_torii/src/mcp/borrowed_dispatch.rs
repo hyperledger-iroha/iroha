@@ -548,12 +548,9 @@ fn append_transaction_status_query(
     )?;
     for (key, value) in source {
         let ignored = if nested_query.is_some() {
-            matches!(key.as_str(), "hash" | "transaction_hash")
+            key == "hash"
         } else {
-            matches!(
-                key.as_str(),
-                "query" | "headers" | "accept" | "hash" | "transaction_hash"
-            )
+            matches!(key.as_str(), "query" | "headers" | "accept" | "hash")
         };
         if ignored || value.is_null() {
             continue;

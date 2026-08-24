@@ -979,7 +979,6 @@ const BUILD_STAMP_VERSION: u32 = 3;
 const IROHA_TEST_TARGET_DIR_ENV: &str = "IROHA_TEST_TARGET_DIR";
 const IROHA_TEST_BUILD_PROFILE_ENV: &str = "IROHA_TEST_BUILD_PROFILE";
 const IROHA_TEST_SKIP_BUILD_ENV: &str = "IROHA_TEST_SKIP_BUILD";
-const IROHA_TEST_ALLOW_REENTRANT_BUILD_ENV: &str = "IROHA_TEST_ALLOW_REENTRANT_BUILD";
 const IROHA_RELEASE_SOURCE_MANIFEST_SHA256_ENV: &str = "IROHA_RELEASE_SOURCE_MANIFEST_SHA256";
 const IROHA_RELEASE_PREBUILT_MANIFEST_SHA256_ENV: &str = "IROHA_RELEASE_PREBUILT_MANIFEST_SHA256";
 const IROHA_RELEASE_CARGO_LOCK_SHA256_ENV: &str = "IROHA_RELEASE_CARGO_LOCK_SHA256";
@@ -1486,15 +1485,6 @@ fn release_program_contract(repo: &Path) -> color_eyre::Result<Option<ReleasePro
              top-level prebuild"
         ));
     }
-    match exact_env_value(IROHA_TEST_ALLOW_REENTRANT_BUILD_ENV)?.as_deref() {
-        Some("0") => {}
-        _ => {
-            return Err(eyre!(
-                "release binary resolution requires the top-level runner to set the explicit \
-                 {IROHA_TEST_ALLOW_REENTRANT_BUILD_ENV}=0 no-reentrant-build contract"
-            ));
-        }
-    }
     let configured_target_raw = exact_env_value(IROHA_TEST_TARGET_DIR_ENV)?.ok_or_else(|| {
         eyre!(
             "release binary resolution requires {IROHA_TEST_TARGET_DIR_ENV} to select the \
@@ -1772,7 +1762,7 @@ fn global_build_lock_path(cache_dir: &Path) -> PathBuf {
     cache_dir.join("cargo-build.lock")
 }
 fn is_rustc_metadata_mismatch(output: &str) -> bool {
-    // Re-entrant builds occasionally trip over stale/corrupted `target` artifacts (e.g. after
+    // Top-level builds occasionally trip over stale/corrupted `target` artifacts (e.g. after
     // toolchain upgrades or interrupted builds). Cleaning the target dir and retrying once is a
     // pragmatic recovery strategy.
     //
@@ -2360,8 +2350,7 @@ fn ensure_binary_fresh(
         return Err(eyre!(
             "cannot build `{name}` (pkg `{pkg}`) because automatic child builds are disabled; \
              build it ahead of time with `cargo build --locked --offline -p {pkg}` and rerun \
-             with {IROHA_TEST_SKIP_BUILD_ENV}=1 and \
-             {IROHA_TEST_ALLOW_REENTRANT_BUILD_ENV}=0; target_dir={}",
+             with {IROHA_TEST_SKIP_BUILD_ENV}=1; target_dir={}",
             target_dir.display()
         ));
     }
@@ -2449,24 +2438,11 @@ fn ensure_binary_fresh(
         .wrap_err_with(|| eyre!("Failed to release build lock for {pkg}"))?;
     Ok(())
 }
-fn allow_reentrant_build(running_under_cargo: bool, release_corridor: bool) -> bool {
-    if release_corridor {
-        return false;
-    }
-    if !running_under_cargo {
-        return true;
-    }
-    // A test launched by Cargo reuses a top-level prebuild by default. Keep an explicit
-    // developer opt-in for the legacy path, but its immediate process guard still refuses to
-    // start a child while the outer Cargo/rustc process is active.
-    bool_env_override(IROHA_TEST_ALLOW_REENTRANT_BUILD_ENV).unwrap_or(false)
+const fn child_build_allowed(running_under_cargo: bool, release_corridor: bool) -> bool {
+    !running_under_cargo && !release_corridor
 }
-const fn must_validate_binary_freshness(
-    skip_build: bool,
-    running_under_cargo: bool,
-    allow_reentrant: bool,
-) -> bool {
-    !skip_build && (!running_under_cargo || allow_reentrant)
+const fn must_validate_binary_freshness(skip_build: bool, allow_child_build: bool) -> bool {
+    !skip_build && allow_child_build
 }
 fn cached_binary_if_present(cache: &OnceLock<PathBuf>) -> Option<PathBuf> {
     let cached = cache.get()?;
@@ -2491,8 +2467,8 @@ impl Program {
     ///   disagrees with the current workspace state (skipped when `IROHA_TEST_SKIP_BUILD=1`).
     ///
     /// A source-manifest-bound release corridor is lookup-only: it requires the top-level runner
-    /// to prebuild into the manifest-addressed release target, skip child builds, and explicitly
-    /// disable reentrant Cargo.
+    /// to prebuild into the manifest-addressed release target and skip child builds. Any resolver
+    /// running under Cargo is likewise lookup-only; nested Cargo invocation is never supported.
     ///
     /// # Errors
     /// If the path is not found (and build did not help).
@@ -2614,17 +2590,16 @@ impl Program {
             ));
         }
         let running_under_cargo = std::env::var_os("CARGO").is_some();
-        let allow_reentrant =
-            allow_reentrant_build(running_under_cargo, release_contract.is_some());
-        let validate_freshness =
-            must_validate_binary_freshness(skip_build, running_under_cargo, allow_reentrant);
+        let allow_child_build =
+            child_build_allowed(running_under_cargo, release_contract.is_some());
+        let validate_freshness = must_validate_binary_freshness(skip_build, allow_child_build);
         if !skip_build && !validate_freshness {
             if let Some(found) = prebuild_candidate.clone() {
                 warn!(
                     %name,
                     %pkg,
                     ?found,
-                    "reentrant build disabled under Cargo; using existing binary"
+                    "child build forbidden under Cargo; using existing binary"
                 );
                 match self {
                     Program::Irohad => {
@@ -2648,7 +2623,7 @@ impl Program {
                 &target_dir,
                 &profile,
                 &primary_binary,
-                allow_reentrant,
+                allow_child_build,
                 &build_args,
             )?;
         }
@@ -2700,7 +2675,7 @@ impl Program {
     }
     /// Async variant of [`Self::resolve`].
     ///
-    /// Spawns a blocking task so that re-entrant builds and filesystem probing never block
+    /// Spawns a blocking task so that top-level builds and filesystem probing never block
     /// a Tokio runtime thread (which can otherwise starve timers and hang async tests).
     pub async fn resolve_async(&self) -> color_eyre::Result<PathBuf> {
         let program = *self;
@@ -3228,7 +3203,7 @@ impl Network {
             }
         }
         // Ensure we resolve `iroha3d` once before spawning peers; caches for subsequent calls.
-        // This may trigger a re-entrant build, so keep it off the async runtime threads.
+        // A top-level caller may trigger a build, so keep resolution off the async runtime threads.
         let program = self
             .peers
             .first()
@@ -4226,7 +4201,7 @@ impl fmt::Display for PeerStartupState {
         if let Some(snapshot) = &self.status_snapshot {
             write!(
                 f,
-                "; status=ok(blocks={} non_empty={} queue={} view_changes={} peers={} txs={}/{} da_reschedule_total={})@{formatted_ts}",
+                "; status=ok(blocks={} non_empty={} queue={} view_changes={} peers={} txs={}/{})@{formatted_ts}",
                 snapshot.blocks,
                 snapshot.blocks_non_empty,
                 snapshot.queue_size,
@@ -4234,7 +4209,6 @@ impl fmt::Display for PeerStartupState {
                 snapshot.peers,
                 snapshot.txs_approved,
                 snapshot.txs_rejected,
-                snapshot.da_reschedule_total,
             )?;
         } else if let Some(error) = &self.status_error {
             write!(
@@ -4560,7 +4534,6 @@ pub struct PeerStatusSnapshot {
     pub view_changes: u32,
     pub txs_approved: u64,
     pub txs_rejected: u64,
-    pub da_reschedule_total: u64,
 }
 impl From<&Status> for PeerStatusSnapshot {
     fn from(value: &Status) -> Self {
@@ -4573,7 +4546,6 @@ impl From<&Status> for PeerStatusSnapshot {
             view_changes: value.view_changes,
             txs_approved: value.txs_approved,
             txs_rejected: value.txs_rejected,
-            da_reschedule_total: value.da_reschedule_total,
         }
     }
 }
@@ -5408,30 +5380,6 @@ type InitialConsensusMessageControlFactory =
 struct InitialConsensusMessageControl {
     queue_capacity: usize,
     factory: Arc<InitialConsensusMessageControlFactory>,
-}
-fn bool_env_override(key: &str) -> Option<bool> {
-    match std::env::var(key) {
-        Ok(value) => {
-            let trimmed = value.trim();
-            if trimmed.eq_ignore_ascii_case("true") || trimmed == "1" {
-                Some(true)
-            } else if trimmed.eq_ignore_ascii_case("false") || trimmed == "0" {
-                Some(false)
-            } else {
-                warn!(
-                    key,
-                    value = %value,
-                    "ignoring invalid boolean environment override"
-                );
-                None
-            }
-        }
-        Err(std::env::VarError::NotPresent) => None,
-        Err(std::env::VarError::NotUnicode(_)) => {
-            warn!(key, "ignoring non-unicode boolean environment override");
-            None
-        }
-    }
 }
 fn merge_tables(dst: &mut Table, src: &Table) {
     for (key, value) in src {

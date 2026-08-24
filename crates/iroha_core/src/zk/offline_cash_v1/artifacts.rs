@@ -59,6 +59,15 @@ impl fmt::Display for OfflineCashHalo2ArtifactErrorV1 {
 
 impl std::error::Error for OfflineCashHalo2ArtifactErrorV1 {}
 
+/// Exact failure from an authenticated, Core-private artifact parser callback.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) enum OfflineCashAuthenticatedArtifactParseErrorV1<E> {
+    /// Source, manifest, length, digest, or callback authentication failed.
+    Authentication(OfflineCashHalo2ArtifactErrorV1),
+    /// Authentication succeeded, but the selected typed parser rejected the bytes.
+    Parser(E),
+}
+
 /// Immutable exact artifact plan derived only from an authenticated release.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct OfflineCashHalo2ArtifactManifestV1 {
@@ -228,6 +237,120 @@ fn authenticate_reader(
     Ok(())
 }
 
+fn read_authenticated_artifact(
+    reader: &mut dyn Read,
+    expected: OfflineCashArtifactBindingV1,
+) -> Result<Vec<u8>, OfflineCashHalo2ArtifactErrorV1> {
+    let exact_len = usize::try_from(expected.byte_len)
+        .map_err(|_| OfflineCashHalo2ArtifactErrorV1::InvalidManifest)?;
+    let mut bytes = Vec::new();
+    bytes
+        .try_reserve_exact(exact_len)
+        .map_err(|_| OfflineCashHalo2ArtifactErrorV1::SourceFailure)?;
+    let mut hasher = Sha256::new();
+    let mut remaining = expected.byte_len;
+    let mut buffer = [0_u8; AUTHENTICATION_BUFFER_BYTES];
+    while remaining != 0 {
+        let requested = usize::try_from(remaining.min(buffer.len() as u64))
+            .expect("bounded artifact chunk fits usize");
+        let read = reader
+            .read(&mut buffer[..requested])
+            .map_err(|_| OfflineCashHalo2ArtifactErrorV1::SourceFailure)?;
+        if read == 0 {
+            return Err(OfflineCashHalo2ArtifactErrorV1::LengthMismatch);
+        }
+        hasher.update(&buffer[..read]);
+        bytes.extend_from_slice(&buffer[..read]);
+        remaining -= u64::try_from(read).expect("read length fits u64");
+    }
+    let mut excess = [0_u8; 1];
+    if reader
+        .read(&mut excess)
+        .map_err(|_| OfflineCashHalo2ArtifactErrorV1::SourceFailure)?
+        != 0
+    {
+        return Err(OfflineCashHalo2ArtifactErrorV1::LengthMismatch);
+    }
+    if bytes.len() != exact_len {
+        return Err(OfflineCashHalo2ArtifactErrorV1::LengthMismatch);
+    }
+    if <[u8; 32]>::from(hasher.finalize()) != expected.sha256 {
+        return Err(OfflineCashHalo2ArtifactErrorV1::DigestMismatch);
+    }
+    Ok(bytes)
+}
+
+fn parse_authenticated_source_artifact<T, E, F>(
+    source: &dyn OfflineCashHalo2ArtifactSourceV1,
+    expected: OfflineCashArtifactBindingV1,
+    parse: F,
+) -> Result<T, OfflineCashAuthenticatedArtifactParseErrorV1<E>>
+where
+    F: FnOnce(&[u8]) -> Result<T, E>,
+{
+    let mut callback_count = 0_u8;
+    let mut outcome = None;
+    let mut parse = Some(parse);
+    let source_result = source.with_artifact(expected.role, &mut |reader| {
+        callback_count = callback_count.saturating_add(1);
+        if callback_count != 1 {
+            return Err(OfflineCashHalo2ArtifactErrorV1::SourceContractViolation.to_string());
+        }
+        let result = read_authenticated_artifact(reader, expected)
+            .map_err(OfflineCashAuthenticatedArtifactParseErrorV1::Authentication)
+            .and_then(|bytes| {
+                let parse = parse.take().ok_or(
+                    OfflineCashAuthenticatedArtifactParseErrorV1::Authentication(
+                        OfflineCashHalo2ArtifactErrorV1::SourceContractViolation,
+                    ),
+                )?;
+                parse(&bytes).map_err(OfflineCashAuthenticatedArtifactParseErrorV1::Parser)
+            });
+        let callback_result = match &result {
+            Ok(_) => Ok(()),
+            Err(OfflineCashAuthenticatedArtifactParseErrorV1::Authentication(error)) => {
+                Err(error.to_string())
+            }
+            Err(OfflineCashAuthenticatedArtifactParseErrorV1::Parser(_)) => {
+                Err("offline-cash authenticated artifact parser rejected bytes".to_owned())
+            }
+        };
+        outcome = Some(result);
+        callback_result
+    });
+    if callback_count == 0 {
+        return Err(
+            OfflineCashAuthenticatedArtifactParseErrorV1::Authentication(
+                if source_result.is_err() {
+                    OfflineCashHalo2ArtifactErrorV1::SourceFailure
+                } else {
+                    OfflineCashHalo2ArtifactErrorV1::SourceContractViolation
+                },
+            ),
+        );
+    }
+    if callback_count != 1 {
+        return Err(
+            OfflineCashAuthenticatedArtifactParseErrorV1::Authentication(
+                OfflineCashHalo2ArtifactErrorV1::SourceContractViolation,
+            ),
+        );
+    }
+    match outcome {
+        Some(Err(error)) => Err(error),
+        Some(Ok(parsed)) => source_result.map(|()| parsed).map_err(|_| {
+            OfflineCashAuthenticatedArtifactParseErrorV1::Authentication(
+                OfflineCashHalo2ArtifactErrorV1::SourceFailure,
+            )
+        }),
+        None => Err(
+            OfflineCashAuthenticatedArtifactParseErrorV1::Authentication(
+                OfflineCashHalo2ArtifactErrorV1::SourceContractViolation,
+            ),
+        ),
+    }
+}
+
 fn authenticate_source_artifact(
     source: &dyn OfflineCashHalo2ArtifactSourceV1,
     expected: OfflineCashArtifactBindingV1,
@@ -263,9 +386,10 @@ fn authenticate_source_artifact(
 
 /// Hash-authenticated verifier artifacts without a proof-acceptance capability.
 ///
-/// This owner intentionally does not expose raw bytes and is not evidence that
-/// the keys are semantically valid Halo2 keys.  The verifier skeleton therefore
-/// remains unavailable even after this boundary succeeds.
+/// This owner does not expose raw bytes outside the private Offline Cash module
+/// tree and is not evidence that the keys are semantically valid Halo2 keys.
+/// The verifier skeleton therefore remains unavailable even after this boundary
+/// succeeds.
 pub(crate) struct OfflineCashAuthenticatedVerifierArtifactsV1 {
     source: Arc<dyn OfflineCashHalo2ArtifactSourceV1>,
     manifest: OfflineCashHalo2ArtifactManifestV1,
@@ -301,6 +425,72 @@ impl OfflineCashAuthenticatedVerifierArtifactsV1 {
             authenticate_source_artifact(source.as_ref(), manifest.artifact(role))?;
         }
         Ok(Self { source, manifest })
+    }
+
+    /// Authenticate and parse the exact parity-specific STATE parameters.
+    ///
+    /// Bytes are length- and digest-authenticated before the private parser is
+    /// invoked. The parser result cannot be swallowed by a misbehaving source.
+    pub(super) fn with_authenticated_state_params<T, E, F>(
+        &self,
+        parity: OfflineCashHalo2ParityV1,
+        parse: F,
+    ) -> Result<T, OfflineCashAuthenticatedArtifactParseErrorV1<E>>
+    where
+        F: FnOnce(&[u8]) -> Result<T, E>,
+    {
+        if !self
+            .manifest
+            .matches_release(self.source.authenticated_release())
+        {
+            return Err(
+                OfflineCashAuthenticatedArtifactParseErrorV1::Authentication(
+                    OfflineCashHalo2ArtifactErrorV1::InvalidManifest,
+                ),
+            );
+        }
+        let role = match parity {
+            OfflineCashHalo2ParityV1::Eq => OfflineCashArtifactRoleV1::ParamsEq,
+            OfflineCashHalo2ParityV1::Ep => OfflineCashArtifactRoleV1::ParamsEp,
+        };
+        parse_authenticated_source_artifact(
+            self.source.as_ref(),
+            self.manifest.artifact(role),
+            parse,
+        )
+    }
+
+    /// Authenticate and parse the exact parity-specific STATE verifying key.
+    ///
+    /// No caller-selected artifact role or ambient path participates in this
+    /// callback; parity determines the sole manifest binding.
+    pub(super) fn with_authenticated_state_verifying_key<T, E, F>(
+        &self,
+        parity: OfflineCashHalo2ParityV1,
+        parse: F,
+    ) -> Result<T, OfflineCashAuthenticatedArtifactParseErrorV1<E>>
+    where
+        F: FnOnce(&[u8]) -> Result<T, E>,
+    {
+        if !self
+            .manifest
+            .matches_release(self.source.authenticated_release())
+        {
+            return Err(
+                OfflineCashAuthenticatedArtifactParseErrorV1::Authentication(
+                    OfflineCashHalo2ArtifactErrorV1::InvalidManifest,
+                ),
+            );
+        }
+        let role = match parity {
+            OfflineCashHalo2ParityV1::Eq => OfflineCashArtifactRoleV1::StateVkEq,
+            OfflineCashHalo2ParityV1::Ep => OfflineCashArtifactRoleV1::StateVkEp,
+        };
+        parse_authenticated_source_artifact(
+            self.source.as_ref(),
+            self.manifest.artifact(role),
+            parse,
+        )
     }
 
     pub(super) fn authenticate_state_verifier(

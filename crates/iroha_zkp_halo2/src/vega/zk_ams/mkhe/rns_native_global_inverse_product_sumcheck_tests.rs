@@ -258,14 +258,14 @@ fn prove_tiny_v1(fixture: &TinyFixtureV1, source: TinySourceV1) -> Vec<u8> {
         u: &fixture.u_commitments,
         inverse_product_mask: fixture.inverse_product_mask_commitment,
     };
-    prove_kernel_for_suite_v1::<TinySuiteV1, _, _>(
+    prove_pending_kernel_for_suite_v1::<TinySuiteV1, _, _>(
         TINY_GEOMETRY_V1,
         fixture.context,
         commitments,
         source,
-        b"downstream",
         &mut KatRandomV1::new(b"tiny-global-inverse-product-proof"),
     )
+    .and_then(|pending| pending.seal_v1(b"downstream"))
     .expect("valid tiny proof")
 }
 
@@ -455,7 +455,7 @@ fn commitment_splicing_and_incorrect_inverse_openings_are_rejected() {
     let mut invalid_source = fixture.source.clone();
     invalid_source.u[0][7] += Scalar::one();
     assert!(
-        prove_kernel_for_suite_v1::<TinySuiteV1, _, _>(
+        prove_pending_kernel_for_suite_v1::<TinySuiteV1, _, _>(
             TINY_GEOMETRY_V1,
             fixture.context,
             KernelCommitmentsV1 {
@@ -464,7 +464,6 @@ fn commitment_splicing_and_incorrect_inverse_openings_are_rejected() {
                 inverse_product_mask: fixture.inverse_product_mask_commitment,
             },
             invalid_source,
-            b"downstream",
             &mut KatRandomV1::new(b"invalid-inverse-proof"),
         )
         .is_err()
@@ -654,6 +653,7 @@ fn production_codec_and_soundness_accounting_are_exact_and_fail_closed() {
             "missing source guard: {required}"
         );
     }
+    assert!(!source.contains("fn prove_kernel_for_suite_v1"));
     assert_eq!(
         source
             .matches("source.replay_active_plane_values_v1(")

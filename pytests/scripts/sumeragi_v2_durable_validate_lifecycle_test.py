@@ -173,6 +173,39 @@ def test_durable_validate_lifecycle_source_seal_rejects_unreserved_dispatch(
     ), errors
 
 
+def test_durable_validate_lifecycle_retires_only_after_successor_retention(
+    tmp_path: Path,
+) -> None:
+    """A guarded Validate completion cannot ACK before retaining its successor."""
+
+    module = load_checker()
+    repo_root, _ = copy_durable_validate_lifecycle_fixture(tmp_path, module)
+    driver = (
+        repo_root
+        / "crates/iroha_core/src/sumeragi/v2_lifecycle_turn_driver.rs"
+    )
+    source = driver.read_text(encoding="utf-8")
+    assert source.count("ReadyValidateSuccessorV1::from_validated(published)") == 1
+    driver.write_text(
+        source.replace(
+            "ReadyValidateSuccessorV1::from_validated(published)",
+            "ReadyValidateSuccessorV1::from_rejected(published)",
+            1,
+        ),
+        encoding="utf-8",
+    )
+
+    errors = (
+        module._durable_validate_lifecycle_production_source_fidelity_errors(
+            repo_root
+        )
+    )
+    assert any(
+        "validated output must retain its exact Ready successor" in error
+        for error in errors
+    ), errors
+
+
 def test_durable_validate_lifecycle_source_seal_rejects_sixth_prepared_owner(
     tmp_path: Path,
 ) -> None:

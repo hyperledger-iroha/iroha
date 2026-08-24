@@ -34,7 +34,8 @@ fn autonomous_execution_input_preflights_complete_progress_peak_before_mutation(
     let signer = checked_keypair_with_algorithm(Algorithm::BlsNormal);
     let (network_id, epoch, payload) =
         autonomous_lane_payload_for_kura(lane.lane_id, lane.dataspace_id, 1, &signer);
-    let (mut kura, _) = Kura::new(&config, &lane_config).expect("execution-input capacity Kura");
+    let (mut kura, _) = Kura::open_test_kura_with_configured_lane_config(&config, &lane_config)
+        .expect("execution-input capacity Kura");
     install_autonomous_lane_marker_for_kura(&kura, &lane_config, &payload);
     kura.persist_lane_executable_payload(&payload, network_id, epoch)
         .expect("persist capacity payload");
@@ -152,7 +153,8 @@ fn autonomous_view_recovery_preflights_named_and_atomic_temp_peak() {
     let signer = checked_keypair_with_algorithm(Algorithm::BlsNormal);
     let (network_id, epoch, payload) =
         autonomous_lane_payload_for_kura(lane.lane_id, lane.dataspace_id, 1, &signer);
-    let (mut kura, _) = Kura::new(&config, &lane_config).expect("view recovery capacity Kura");
+    let (mut kura, _) = Kura::open_test_kura_with_configured_lane_config(&config, &lane_config)
+        .expect("view recovery capacity Kura");
     install_autonomous_lane_marker_for_kura(&kura, &lane_config, &payload);
     kura.persist_lane_executable_payload(&payload, network_id, epoch)
         .expect("persist view recovery payload");
@@ -266,7 +268,8 @@ fn autonomous_view_writer_preflights_even_with_named_temp() {
     let signer = checked_keypair_with_algorithm(Algorithm::BlsNormal);
     let (network_id, epoch, payload) =
         autonomous_lane_payload_for_kura(lane.lane_id, lane.dataspace_id, 1, &signer);
-    let (mut kura, _) = Kura::new(&config, &lane_config).expect("view writer capacity Kura");
+    let (mut kura, _) = Kura::open_test_kura_with_configured_lane_config(&config, &lane_config)
+        .expect("view writer capacity Kura");
     install_autonomous_lane_marker_for_kura(&kura, &lane_config, &payload);
     kura.persist_lane_executable_payload(&payload, network_id, epoch)
         .expect("persist view writer payload");
@@ -376,7 +379,8 @@ fn autonomous_view_recovery_corridor_acquires_prune_before_geometry() {
     let signer = checked_keypair_with_algorithm(Algorithm::BlsNormal);
     let (network_id, epoch, payload) =
         autonomous_lane_payload_for_kura(lane.lane_id, lane.dataspace_id, 1, &signer);
-    let (kura, _) = Kura::new(&config, &lane_config).expect("view lock-order Kura");
+    let (kura, _) = Kura::open_test_kura_with_configured_lane_config(&config, &lane_config)
+        .expect("view lock-order Kura");
     install_autonomous_lane_marker_for_kura(&kura, &lane_config, &payload);
     kura.persist_lane_executable_payload(&payload, network_id, epoch)
         .expect("persist lock-order payload");

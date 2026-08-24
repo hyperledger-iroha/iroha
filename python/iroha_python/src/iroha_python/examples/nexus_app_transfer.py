@@ -100,9 +100,9 @@ def main() -> None:
     )
 
     session = client.start_connect()
-    _account, approved_session = client.await_approval(session)
+    approved = client.await_approval(session)
     receipt = client.transfer_with_wallet(
-        approved_session,
+        approved.session,
         NexusTransferInput(
             source_asset_id=SOURCE_ASSET_ID,
             quantity="12.34",

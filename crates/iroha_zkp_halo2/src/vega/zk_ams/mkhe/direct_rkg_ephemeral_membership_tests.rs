@@ -12,7 +12,9 @@ use crate::vega::{
             VerifiedPersistentWitnessBindingV1, mint_test_state_owned_collective_secret_binding_v1,
         },
         collective::{
-            ZkAmsMkheCollectivePartyStateV1, generate_zk_ams_mkhe_collective_party_state_v1,
+            ZkAmsMkheCollectivePartyStateV1,
+            generate_zk_ams_mkhe_collective_party_state_with_prepared_public_a_v1,
+            prepare_zk_ams_mkhe_collective_public_a_v1,
         },
         direct_collective_eval_ceremony::ZkAmsMkheDirectEvaluatedKeyTargetV1,
         manifest::{ZK_AMS_MKHE_RELEASE_ROSTER_SIZE_V1, release_profile_v1},
@@ -81,9 +83,11 @@ pub(in crate::vega::zk_ams::mkhe) fn creator_state_fixture(
         frame.push(index as u8);
         keccak256(&frame)
     });
-    let (mut state, share) = generate_zk_ams_mkhe_collective_party_state_v1(
+    let prepared_public_a = prepare_zk_ams_mkhe_collective_public_a_v1(&roster, transcript)
+        .expect("prepared collective public a");
+    let (mut state, share) = generate_zk_ams_mkhe_collective_party_state_with_prepared_public_a_v1(
         &roster,
-        transcript,
+        &prepared_public_a,
         0,
         &secrets[0],
         &mut random,

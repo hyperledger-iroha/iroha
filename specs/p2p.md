@@ -310,13 +310,13 @@ Behavior:
 - Each peer advertises `scion_supported` in handshake metadata.
 - Peers gossip observed transport capabilities (`scion_supported`) alongside peer-address gossip.
 - Outbound dialing prefers SCION only when both peers advertise SCION support.
-- If SCION preference fails for a peer, dialing falls back to legacy transport strategy automatically.
+- If SCION preference fails for a peer, dialing continues with the standard transport strategy.
 - Peers without SCION capability continue to use existing QUIC/TLS/TCP/WS behavior.
 - Successful SCION-preferred outbound connections increment `p2p_scion_outbound_total`.
 
-Notes:
-- Existing `network.scion_*` config fields are ignored at runtime and retained only for backward-compatible config parsing.
-- `scion_listen_endpoint` remains reserved for future inbound listener support.
+There are no `network.scion_*` configuration keys. SCION selection is derived
+only from the signed peer-capability exchange; retired configuration keys are
+unknown-field errors.
 
 ### Example: `[network]` TOML and Feature Flags
 

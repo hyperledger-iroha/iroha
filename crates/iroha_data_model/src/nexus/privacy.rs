@@ -18,6 +18,7 @@ pub const LANE_PRIVACY_MAX_MERKLE_DEPTH_V1: usize = u8::MAX as usize;
     feature = "json",
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
 )]
+#[cfg_attr(feature = "json", norito(deny_unknown_fields))]
 pub struct LanePrivacyProof {
     /// Commitment identifier advertised by the lane manifest.
     pub commitment_id: LaneCommitmentId,
@@ -129,6 +130,7 @@ impl LanePrivacyProof {
     feature = "json",
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
 )]
+#[cfg_attr(feature = "json", norito(deny_unknown_fields))]
 pub struct LanePrivacyMerkleWitness {
     /// Leaf bytes used to derive the committed hash.
     #[cfg_attr(
@@ -149,7 +151,10 @@ pub struct LanePrivacyMerkleWitness {
     feature = "json",
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
 )]
-#[cfg_attr(feature = "json", norito(tag = "kind", content = "payload"))]
+#[cfg_attr(
+    feature = "json",
+    norito(tag = "kind", content = "payload", deny_unknown_fields)
+)]
 pub enum LanePrivacyWitness {
     /// Merkle inclusion proof bound to a committed root.
     #[norito(rename = "merkle")]
@@ -334,6 +339,37 @@ mod tests {
                 .expect_err("decoded empty path must fail at the verifier"),
             PrivacyError::EmptyMerkleProof
         );
+    }
+    #[cfg(feature = "json")]
+    #[test]
+    fn lane_privacy_json_rejects_unknown_first_release_fields() {
+        let proof = LanePrivacyProof::merkle_from_raw_path(
+            LaneCommitmentId::new(7),
+            [0xAA; 32],
+            0,
+            vec![Some([0x22; 32])],
+        )
+        .expect("canonical lane privacy proof");
+        let canonical = norito::json::to_json(&proof).expect("serialize lane privacy proof");
+        let unknown = canonical.replacen('{', r#"{"future_proof_metadata":true,"#, 1);
+        let error = norito::json::from_str::<LanePrivacyProof>(&unknown)
+            .expect_err("LanePrivacyProof must reject unknown first-release fields");
+        assert!(error.to_string().contains("unknown"));
+
+        let LanePrivacyWitness::Merkle(merkle) = proof.witness.clone();
+        let canonical =
+            norito::json::to_json(&merkle).expect("serialize lane privacy Merkle witness");
+        let unknown = canonical.replacen('{', r#"{"future_merkle_metadata":true,"#, 1);
+        let error = norito::json::from_str::<LanePrivacyMerkleWitness>(&unknown)
+            .expect_err("LanePrivacyMerkleWitness must reject unknown first-release fields");
+        assert!(error.to_string().contains("unknown"));
+
+        let canonical =
+            norito::json::to_json(&proof.witness).expect("serialize lane privacy witness");
+        let unknown = canonical.replacen('{', r#"{"future_witness_metadata":true,"#, 1);
+        let error = norito::json::from_str::<LanePrivacyWitness>(&unknown)
+            .expect_err("LanePrivacyWitness must reject unknown first-release fields");
+        assert!(error.to_string().contains("unknown"));
     }
     #[cfg(feature = "json")]
     #[test]
