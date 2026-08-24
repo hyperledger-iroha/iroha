@@ -2771,12 +2771,9 @@ pub mod openssl_sm {
 mod tests {
     use super::{sm_accel, *};
     use hex::decode as hex_decode;
-    use rand_core::{TryCryptoRng, TryRngCore};
+    use rand_core::{OsRng, TryCryptoRng, TryRngCore};
     use signature::hazmat::PrehashVerifier;
-    use sm2::elliptic_curve::{
-        rand_core::OsRng,
-        sec1::{Coordinates, ToEncodedPoint},
-    };
+    use sm2::elliptic_curve::sec1::{Coordinates, ToEncodedPoint};
     use sm3::Sm3;
     use std::str::FromStr;
     const ANNEX_SIG_HEX: &str = "40F1EC59F793D9F49E09DCEF49130D4194F79FB1EED2CAA55BACDB49C4E755D16FC6DAC32C5D5CF10C77DFB20F7C2EB667A457872FB09EC56327A67EC7DEEBE7";

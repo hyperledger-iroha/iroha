@@ -236,9 +236,13 @@ fn read_bounded_regular_file(path: &Path, max_bytes: usize, label: &str) -> io::
     {
         use std::os::windows::fs::OpenOptionsExt as _;
         const FILE_FLAG_OPEN_REPARSE_POINT: u32 = 0x0020_0000;
+        const FILE_SHARE_READ: u32 = 0x0000_0001;
+        options.share_mode(FILE_SHARE_READ);
         options.custom_flags(FILE_FLAG_OPEN_REPARSE_POINT);
     }
     let mut file = options.open(path)?;
+    #[cfg(windows)]
+    let opened_identity = genesis_artifact_file_identity(&file)?;
     let opened_before = file.metadata()?;
     if genesis_metadata_is_link(&opened_before)
         || !opened_before.is_file()
@@ -267,10 +271,21 @@ fn read_bounded_regular_file(path: &Path, max_bytes: usize, label: &str) -> io::
         return Err(genesis_artifact_too_large(label, max_bytes));
     }
     let opened_after = file.metadata()?;
+    #[cfg(windows)]
+    let named_after_file = options.open(path)?;
+    #[cfg(windows)]
+    let named_after = named_after_file.metadata()?;
+    #[cfg(windows)]
+    let named_after_is_same_file =
+        genesis_artifact_file_identity(&named_after_file)? == opened_identity;
+    #[cfg(not(windows))]
     let named_after = fs::symlink_metadata(path)?;
+    #[cfg(not(windows))]
+    let named_after_is_same_file = true;
     if genesis_metadata_is_link(&named_after)
         || !named_after.is_file()
         || bytes.len() != capacity
+        || !named_after_is_same_file
         || !same_genesis_artifact_snapshot(&opened_before, &opened_after)
         || !same_genesis_artifact_snapshot(&opened_after, &named_after)
     {
@@ -384,6 +399,57 @@ fn genesis_metadata_is_link(metadata: &fs::Metadata) -> bool {
     #[cfg(not(windows))]
     false
 }
+#[cfg(windows)]
+type GenesisArtifactFileIdentity = (u32, u64);
+#[cfg(windows)]
+#[repr(C)]
+struct GenesisWindowsFileTime {
+    _low_date_time: u32,
+    _high_date_time: u32,
+}
+#[cfg(windows)]
+#[repr(C)]
+struct GenesisWindowsByHandleFileInformation {
+    _file_attributes: u32,
+    _creation_time: GenesisWindowsFileTime,
+    _last_access_time: GenesisWindowsFileTime,
+    _last_write_time: GenesisWindowsFileTime,
+    volume_serial_number: u32,
+    _file_size_high: u32,
+    _file_size_low: u32,
+    _number_of_links: u32,
+    file_index_high: u32,
+    file_index_low: u32,
+}
+#[cfg(windows)]
+#[link(name = "kernel32")]
+#[allow(unsafe_code)]
+unsafe extern "system" {
+    #[link_name = "GetFileInformationByHandle"]
+    fn genesis_get_file_information_by_handle(
+        file: *mut std::ffi::c_void,
+        information: *mut GenesisWindowsByHandleFileInformation,
+    ) -> i32;
+}
+#[cfg(windows)]
+#[allow(unsafe_code)]
+fn genesis_artifact_file_identity(file: &fs::File) -> io::Result<GenesisArtifactFileIdentity> {
+    use std::{mem::MaybeUninit, os::windows::io::AsRawHandle as _};
+    let mut information = MaybeUninit::<GenesisWindowsByHandleFileInformation>::uninit();
+    // SAFETY: `file` owns a live kernel handle for the call, and `information`
+    // has the exact Win32 `BY_HANDLE_FILE_INFORMATION` output layout.
+    let succeeded = unsafe {
+        genesis_get_file_information_by_handle(file.as_raw_handle(), information.as_mut_ptr())
+    };
+    if succeeded == 0 {
+        return Err(io::Error::last_os_error());
+    }
+    // SAFETY: a nonzero result initializes every field in the output structure.
+    let information = unsafe { information.assume_init() };
+    let file_index =
+        u64::from(information.file_index_high) << 32 | u64::from(information.file_index_low);
+    Ok((information.volume_serial_number, file_index))
+}
 #[cfg(unix)]
 fn same_genesis_artifact_snapshot(left: &fs::Metadata, right: &fs::Metadata) -> bool {
     use std::os::unix::fs::MetadataExt as _;
@@ -398,12 +464,7 @@ fn same_genesis_artifact_snapshot(left: &fs::Metadata, right: &fs::Metadata) -> 
 #[cfg(windows)]
 fn same_genesis_artifact_snapshot(left: &fs::Metadata, right: &fs::Metadata) -> bool {
     use std::os::windows::fs::MetadataExt as _;
-    left.volume_serial_number().is_some()
-        && left.file_index().is_some()
-        && left.volume_serial_number() == right.volume_serial_number()
-        && left.file_index() == right.file_index()
-        && left.file_size() == right.file_size()
-        && left.last_write_time() == right.last_write_time()
+    left.file_size() == right.file_size() && left.last_write_time() == right.last_write_time()
 }
 #[cfg(not(any(unix, windows)))]
 fn same_genesis_artifact_snapshot(left: &fs::Metadata, right: &fs::Metadata) -> bool {
@@ -429,6 +490,27 @@ mod tests {
             .expect_err("oversized genesis artifact must fail closed");
         assert_eq!(error.kind(), io::ErrorKind::InvalidData);
         assert!(error.to_string().contains("32-byte"));
+    }
+    #[cfg(windows)]
+    #[test]
+    fn windows_file_identity_is_stable_and_distinguishes_files() {
+        let directory = tempfile::tempdir().expect("create genesis-artifact test directory");
+        let first_path = directory.path().join("first.bin");
+        let second_path = directory.path().join("second.bin");
+        fs::write(&first_path, b"first").expect("write first genesis artifact");
+        fs::write(&second_path, b"second").expect("write second genesis artifact");
+        let first = fs::File::open(&first_path).expect("open first genesis artifact");
+        let first_again = fs::File::open(&first_path).expect("reopen first genesis artifact");
+        let second = fs::File::open(&second_path).expect("open second genesis artifact");
+        assert_eq!(
+            genesis_artifact_file_identity(&first).expect("identify first genesis artifact"),
+            genesis_artifact_file_identity(&first_again)
+                .expect("identify reopened genesis artifact")
+        );
+        assert_ne!(
+            genesis_artifact_file_identity(&first).expect("identify first genesis artifact"),
+            genesis_artifact_file_identity(&second).expect("identify second genesis artifact")
+        );
     }
     #[cfg(unix)]
     #[test]
