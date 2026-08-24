@@ -44553,7 +44553,13 @@ assert_eq!(unminted_runtime.queued_commands(), 0);
                 expected_attributes=(
                     ("#[cfg(test)]",)
                     if item_name == "minimum_active_lifecycle_ordinal_for_deferred"
-                    else ()
+                    else (
+                        (
+                            '#[allow(dead_code, reason = "retained by formal contracts")]',
+                        )
+                        if item_name == "step_recovery"
+                        else ()
+                    )
                 ),
             )
             if item is not None:

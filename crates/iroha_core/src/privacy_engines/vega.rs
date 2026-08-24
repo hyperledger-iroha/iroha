@@ -1460,44 +1460,6 @@ where
     )?;
     sign_prepared_vega_privacy_action_v1(prepared, private_key)
 }
-/// Build and sign a non-authorizing Vega release candidate with caller-provided randomness.
-///
-/// This crate-only entry point is absent from default production builds. It preserves the public
-/// builder's transaction and signing-authority validation order, but deliberately selects
-/// candidate profile material that grants no governance or admission authority.
-///
-/// # Errors
-///
-/// Returns the same transaction, authority, candidate preparation, proving, and signing errors as
-/// [`build_signed_vega_privacy_action_with_rng_v1`].
-#[cfg(feature = "privacy-release-evidence")]
-#[allow(clippy::too_many_arguments)]
-pub(crate) fn build_signed_vega_release_candidate_privacy_action_with_rng_v1<R>(
-    context: VegaPrivacyActionTransactionContextV1,
-    input: VegaPrivacyActionPublicInputV1,
-    witness_material: VegaPrivacyActionWitnessMaterialV1,
-    device_signing_key: &P256SigningKey,
-    canonical_genesis_hash: [u8; 32],
-    trusted_block_timestamp_ms: u64,
-    private_key: &PrivateKey,
-    rng: &mut R,
-) -> Result<SignedVegaPrivacyActionV1, VegaPrivacyActionBuildErrorV1>
-where
-    R: CryptoRng + RngCore,
-{
-    validate_vega_transaction_context_v1(&context)?;
-    validate_vega_signing_authority_v1(&context.authority, private_key)?;
-    let prepared = prepare_vega_release_candidate_privacy_action_with_rng_v1(
-        context,
-        input,
-        witness_material,
-        device_signing_key,
-        canonical_genesis_hash,
-        trusted_block_timestamp_ms,
-        rng,
-    )?;
-    sign_prepared_vega_privacy_action_v1(prepared, private_key)
-}
 /// Build, prove, bind, and sign one canonical direct Vega privacy action using
 /// operating-system proof randomness.
 ///

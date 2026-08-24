@@ -1367,7 +1367,7 @@ pub enum KagemushaInternalValidationReceiptErrorV1 {
 }
 
 #[cfg(test)]
-pub mod tests {
+pub(super) mod internal_validation_receipt_tests {
     use super::super::{
         KagemushaRecursiveSpendArtifactManifestV4, KagemushaRecursiveSpendCandidateV4,
     };

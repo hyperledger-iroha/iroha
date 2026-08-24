@@ -50,9 +50,8 @@ Completed history lives in [`status.md`](./status.md).
   operations are separate and remain valid.
 - Decide whether the currently unreachable
   `halo2/ipa/poly-open` backend belongs in the closed first-release registry.
-- Once the in-progress Halo2 tree compiles, run the focused native-STARK and
-  FASTPQ regressions, then the full workspace test and strict all-target Clippy
-  matrices from one settled candidate.
+- Run the focused native-STARK and FASTPQ regressions, then the full workspace
+  test and strict all-target Clippy matrices from one settled candidate.
 - On CUDA- and Metal-capable release hosts, compile the corrected BN254 kernels
   and archive direct-evaluation, CPU/GPU parity, FFT/LDE, and benchmark evidence
   from the same immutable source revision.
@@ -2857,9 +2856,9 @@ shape is not a fallback.
 
 Public NPoS XOR handling is pinned to canonical asset-definition bindings:
 `xor#universal` is only an alias selector, Taira binds it to
-`6TEAJqbb8oEPmLncoNiMRbLEK6tw`, and Nexus deployable genesis generation must
-receive an operator-supplied canonical Base58 XOR id through
-`--xor-asset-definition-id`.
+`6TEAJqbb8oEPmLncoNiMRbLEK6tw` with `NumericSpec::fractional(9)`, and Nexus
+deployable genesis generation must receive an operator-supplied canonical
+Base58 XOR id through `--xor-asset-definition-id`.
 
 Crypto production-readiness hardening closed the remaining BFV wrapper-order
 follow-up on 2026-07-05. The exact and bounded artifact-aware wrappers now

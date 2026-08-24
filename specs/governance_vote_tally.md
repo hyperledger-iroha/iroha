@@ -29,7 +29,7 @@ rejects STARK verifying keys whose circuit identifiers merely use the
 - **Circuit identifier**: `halo2/pasta/vote-bool-commit-merkle8-v1`
 - **Implementation**: `VoteBoolCommitMerkle::<8>` in `iroha_core::zk::depth`
 - **Domain size**: `k = 6`
-- **Backend**: Transparent Halo2/IPA over Pasta (ZK1 envelope: `IPAK` + `H2VK` for VKs, `PROF` + `I10P` for proofs)
+- **Backend**: Transparent Halo2/IPA over Pasta (ZK1 envelope: `IPAK` + `CID1` + `H2VK` for VKs, `PROF` + `I10P` for proofs)
 - **Witness shape**:
   - ballot bit `v ∈ {0,1}`
   - randomness scalar `ρ`

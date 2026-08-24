@@ -179,7 +179,7 @@ use iroha_data_model::{
 use std::{
     collections::{BTreeMap, HashSet},
     convert::{TryFrom, TryInto},
-    fmt, fs, mem,
+    fmt, fs,
     num::{NonZeroU32, NonZeroU64},
     panic::{AssertUnwindSafe, catch_unwind},
     path::PathBuf,
@@ -1031,7 +1031,8 @@ fn zk1_append_instances_cols(buf: &mut Vec<u8>, columns: &[&[Halo2Scalar]]) {
     if columns.iter().any(|column| column.len() != rows) {
         return;
     }
-    let mut payload = Vec::with_capacity(8 + rows * columns.len() * mem::size_of::<Halo2Scalar>());
+    let mut payload =
+        Vec::with_capacity(8 + rows * columns.len() * std::mem::size_of::<Halo2Scalar>());
     payload
         .extend_from_slice(&usize_to_u32_len(columns.len(), "zk1 instance columns").to_le_bytes());
     payload.extend_from_slice(&usize_to_u32_len(rows, "zk1 instance rows").to_le_bytes());

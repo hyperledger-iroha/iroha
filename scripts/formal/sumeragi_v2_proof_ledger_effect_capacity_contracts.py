@@ -4755,6 +4755,13 @@ self.retain_effect_ownership(
                 serialized_runtime_context,
                 description,
                 errors,
+                expected_attributes=(
+                    (
+                        '#[allow(dead_code, reason = "retained by formal contracts")]',
+                    )
+                    if item_name == "step_recovery"
+                    else ()
+                ),
             )
             _require_rust_token_sequence(
                 runtime_path,

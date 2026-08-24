@@ -1,14 +1,18 @@
 //! Root-custodied reservation input and immutable validator-seal output for
 //! the explicit no-bind Kagemusha qualification command.
 
-use std::path::{Path, PathBuf};
+use std::path::Path;
+
+#[cfg(any(target_os = "macos", test))]
+use std::path::PathBuf;
 
 use iroha_config::parameters::actual::Root as Config;
 use iroha_core::smartcontracts::isi::offline::KAGEMUSHA_CATALOG_QUALIFICATION_SEAL_MAX_BYTES_V1;
+use iroha_data_model::offline::KagemushaV4ValidatorQualificationSealV1;
+#[cfg(any(target_os = "macos", test))]
 use iroha_data_model::offline::{
     KAGEMUSHA_V4_CATALOG_REVALIDATION_RECEIPT_MAX_BYTES,
     KAGEMUSHA_V4_PROMOTION_RESERVATION_MAX_BYTES, KagemushaV4PromotionReservationV1,
-    KagemushaV4ValidatorQualificationSealV1,
 };
 
 use super::root_owned_artifact_publication::RootOwnedNoReplaceArtifactPublicationTarget;
@@ -56,6 +60,7 @@ pub fn read_configured_kagemusha_promotion_reservation(
     )
 }
 
+#[cfg(any(target_os = "macos", test))]
 fn read_configured_kagemusha_promotion_reservation_with(
     config: &Config,
     mut read: impl FnMut(&Path, usize, &'static str) -> Result<Vec<u8>, String>,
@@ -106,6 +111,7 @@ fn read_configured_kagemusha_promotion_reservation_with(
     })
 }
 
+#[cfg(any(target_os = "macos", test))]
 fn kagemusha_catalog_revalidation_receipt_path_v1(promotion_id: [u8; 32]) -> PathBuf {
     Path::new(KAGEMUSHA_CATALOG_REVALIDATION_RECEIPT_ROOT_V1)
         .join(format!("{}.json", hex::encode(promotion_id)))
@@ -524,7 +530,8 @@ mod tests {
     #[test]
     fn live_reader_rejects_unreviewed_platform_root() {
         let error = read_configured_kagemusha_promotion_reservation(&config_fixture())
-            .expect_err("unreviewed platform must fail before reading any path");
+            .err()
+            .expect("unreviewed platform must fail before reading any path");
         assert!(error.contains("unsupported outside macOS"));
     }
 }

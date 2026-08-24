@@ -547,6 +547,10 @@ fn vega_release_stages_and_network_builder_fail_closed_without_an_activatable_pr
     assert!(network_builder.contains("compiled_privacy_profile_v1(protocol_id)"));
     assert!(network_builder.contains("build_signed_vega_privacy_action_with_rng_v1("));
     assert!(!network_builder.contains(&candidate_marker));
+
+    let signed_candidate_marker = ["build_signed_vega_release_", "candidate"].concat();
+    let engine_source = include_str!("../privacy_engines/vega.rs");
+    assert!(!engine_source.contains(&signed_candidate_marker));
 }
 #[test]
 #[ignore = "release gate: proves the full native Vega Figure 9 action once"]
