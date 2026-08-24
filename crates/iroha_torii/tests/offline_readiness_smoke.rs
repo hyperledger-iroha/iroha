@@ -64,13 +64,10 @@ async fn offline_router_exposes_only_the_final_first_release_contract() {
         fixtures::response_body(readiness, "collect universal offline capability").await;
     let capability: iroha_torii_shared::offline_api::OfflineStatus =
         norito::json::from_slice(&readiness_body).expect("decode universal offline capability");
-    assert!(!capability.mandatory);
     assert_eq!(capability.cash_handoff_capability, "cash_handoff_v1");
     assert_eq!(capability.required_bridge_abi_version, 22);
     assert_eq!(capability.max_hops, 8);
     assert!(capability.ready);
-    assert!(capability.assets.is_empty());
-    assert!(capability.blockers.is_empty());
     let legacy_selector = fixtures::request(
         &app,
         Request::builder()
@@ -82,16 +79,12 @@ async fn offline_router_exposes_only_the_final_first_release_contract() {
     )
     .await
     .expect("legacy selector response");
-    assert_eq!(legacy_selector.status(), StatusCode::OK);
-    let legacy_selector_body = fixtures::response_body(
-        legacy_selector,
-        "collect selector-neutral offline capability",
-    )
-    .await;
-    let legacy_selector_capability: iroha_torii_shared::offline_api::OfflineStatus =
-        norito::json::from_slice(&legacy_selector_body)
-            .expect("decode selector-neutral offline capability");
-    assert_eq!(legacy_selector_capability, capability);
+    assert_eq!(legacy_selector.status(), StatusCode::BAD_REQUEST);
+    let legacy_selector_body =
+        fixtures::response_body(legacy_selector, "collect rejected legacy selector").await;
+    let error: iroha_torii_shared::ErrorEnvelope =
+        norito::json::from_slice(&legacy_selector_body).expect("decode selector rejection");
+    assert_eq!(error.code(), "offline_capability_query_unsupported");
     for path in ["/v1/offline/top-up", "/v1/offline/redeem"] {
         enum RejectedHeaders {
             MissingIdempotency,

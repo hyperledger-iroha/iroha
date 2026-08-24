@@ -241,8 +241,11 @@ tab.
 
 Start a disposable four-validator Taira network with
 `python3 scripts/taira_devnet.py up`; inspect it with `check` and stop it with
-`down`. The command delegates config/genesis generation to the current Kagami
-binary and transaction/API checks to the current daemon and CLI. See
+`down`. `up` is a Linux/AArch64/root/KVM qualification run bound to the current
+`optimizations` worktree and freshly built target-specific binaries; `check` is
+read-only inspection and does not repeat that qualification. The command
+delegates config/genesis generation to the current Kagami binary and
+transaction/API checks to the current daemon and CLI. See
 [`configs/soranexus/taira/README.md`](./configs/soranexus/taira/README.md).
 
 ## Core Crates

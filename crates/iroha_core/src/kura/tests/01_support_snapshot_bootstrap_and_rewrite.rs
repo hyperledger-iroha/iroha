@@ -280,7 +280,10 @@ fn kura_new_rejects_empty_production_store_root_before_persistence_initializatio
     let temp_dir = TempDir::new().expect("tempdir");
     let mut config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
     config.store_dir = WithOrigin::inline(PathBuf::new());
-    let err = match Kura::new(&config, &RuntimeLaneConfig::default()) {
+    let err = match Kura::open_test_kura_with_configured_lane_config(
+        &config,
+        &RuntimeLaneConfig::default(),
+    ) {
         Ok(_) => panic!("empty production Kura root must fail closed"),
         Err(err) => err,
     };
@@ -299,8 +302,11 @@ fn kura_startup_rejects_every_retired_roster_artifact() {
     ] {
         let temp_dir = TempDir::new().expect("retired-artifact tempdir");
         let config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
-        let (kura, _) = Kura::new(&config, &RuntimeLaneConfig::default())
-            .expect("initialize retired-artifact Kura");
+        let (kura, _) = Kura::open_test_kura_with_configured_lane_config(
+            &config,
+            &RuntimeLaneConfig::default(),
+        )
+        .expect("initialize retired-artifact Kura");
         let store_root = kura.store_root();
         let blocks_root = kura.active_blocks_dir.lock().clone();
         drop(kura);
@@ -316,7 +322,10 @@ fn kura_startup_rejects_every_retired_roster_artifact() {
         } else {
             fs::write(&path, b"retired artifact must remain").expect("write retired artifact");
         }
-        let err = match Kura::new(&config, &RuntimeLaneConfig::default()) {
+        let err = match Kura::open_test_kura_with_configured_lane_config(
+            &config,
+            &RuntimeLaneConfig::default(),
+        ) {
             Ok(_) => panic!("retired artifact {name} must abort Kura startup"),
             Err(err) => err,
         };
@@ -350,7 +359,8 @@ fn pending_v1_rollback_intents_are_rejected_before_mutation() {
         let temp_dir = TempDir::new().expect("V1 rollback tempdir");
         let config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
         let lane_config = RuntimeLaneConfig::default();
-        let (kura, _) = Kura::new(&config, &lane_config).expect("initialize rollback Kura");
+        let (kura, _) = Kura::open_test_kura_with_configured_lane_config(&config, &lane_config)
+            .expect("initialize rollback Kura");
         let hashes = store_dummy_blocks(&kura, 2);
         let blocks_root = kura.active_blocks_dir.lock().clone();
         drop(kura);
@@ -375,7 +385,7 @@ fn pending_v1_rollback_intents_are_rejected_before_mutation() {
         sync_dir(&blocks_root).expect("sync V1 rollback intent");
         let before = snapshot_regular_test_tree(&blocks_root);
         assert!(matches!(
-            Kura::new(&config, &lane_config),
+            Kura::open_test_kura_with_configured_lane_config(&config, &lane_config),
             Err(Error::RollbackIntentInvalid { .. })
         ));
         assert_eq!(
@@ -390,14 +400,15 @@ fn kura_startup_rejects_corrupt_rollback_intent_without_mutating_block_boundary(
     let temp_dir = TempDir::new().expect("tempdir");
     let config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
     let lane_config = RuntimeLaneConfig::default();
-    let (kura, _) = Kura::new(&config, &lane_config).expect("initial Kura");
+    let (kura, _) = Kura::open_test_kura_with_configured_lane_config(&config, &lane_config)
+        .expect("initial Kura");
     store_dummy_blocks(&kura, 2);
     let blocks_root = kura.active_blocks_dir.lock().clone();
     drop(kura);
     let intent_path = Kura::rollback_intent_path(&blocks_root);
     fs::write(&intent_path, b"corrupt rollback intent").expect("write corrupt intent");
     sync_dir(&blocks_root).expect("sync corrupt intent marker");
-    let err = match Kura::new(&config, &lane_config) {
+    let err = match Kura::open_test_kura_with_configured_lane_config(&config, &lane_config) {
         Ok(_) => panic!("corrupt rollback intent must block startup"),
         Err(err) => err,
     };
@@ -415,7 +426,8 @@ fn kura_startup_promotes_synced_temporary_rollback_intent_and_completes() {
     let temp_dir = TempDir::new().expect("tempdir");
     let config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
     let lane_config = RuntimeLaneConfig::default();
-    let (kura, _) = Kura::new(&config, &lane_config).expect("initial Kura");
+    let (kura, _) = Kura::open_test_kura_with_configured_lane_config(&config, &lane_config)
+        .expect("initial Kura");
     let hashes = store_dummy_blocks(&kura, 2);
     let blocks_root = kura.active_blocks_dir.lock().clone();
     drop(kura);
@@ -434,8 +446,9 @@ fn kura_startup_promotes_synced_temporary_rollback_intent_and_completes() {
         .sync_data()
         .expect("sync temporary intent");
     sync_dir(&blocks_root).expect("sync temporary intent directory entry");
-    let (reopened, BlockCount(block_count)) = Kura::new(&config, &lane_config)
-        .expect("startup should promote and complete valid temporary intent");
+    let (reopened, BlockCount(block_count)) =
+        Kura::open_test_kura_with_configured_lane_config(&config, &lane_config)
+            .expect("startup should promote and complete valid temporary intent");
     assert_eq!(block_count, 1);
     assert_eq!(
         reopened.block_hash_at_height(nonzero!(1_usize)),
@@ -1348,16 +1361,17 @@ fn store_root_lock_rejects_a_second_live_kura_and_releases_on_drop() {
     let temp_dir = TempDir::new().expect("create Kura store root");
     let config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
     let lane_config = RuntimeLaneConfig::default();
-    let (first, _) = Kura::new(&config, &lane_config).expect("open first Kura");
+    let (first, _) = Kura::open_test_kura_with_configured_lane_config(&config, &lane_config)
+        .expect("open first Kura");
     let expected_lock_path = std::fs::canonicalize(temp_dir.path())
         .expect("canonical Kura root")
         .join(STORE_ROOT_LOCK_FILE_NAME);
     assert!(matches!(
-        Kura::new(&config, &lane_config),
+        Kura::open_test_kura_with_configured_lane_config(&config, &lane_config),
         Err(Error::Locked(path)) if path == expected_lock_path
     ));
     drop(first);
-    let (reopened, _) = Kura::new(&config, &lane_config)
+    let (reopened, _) = Kura::open_test_kura_with_configured_lane_config(&config, &lane_config)
         .expect("the OS lock must be released when the first Kura is dropped");
     drop(reopened);
 }
@@ -1373,7 +1387,7 @@ fn store_root_lock_rejects_a_symlink_without_touching_its_target() {
     symlink(&victim, &lock_path).expect("plant lockfile symlink");
     let config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
     assert!(matches!(
-        Kura::new(&config, &RuntimeLaneConfig::default()),
+        Kura::open_test_kura_with_configured_lane_config(&config, &RuntimeLaneConfig::default()),
         Err(Error::IO(error, observed_path))
             if error.kind() == ErrorKind::InvalidData && observed_path == lock_path
     ));
@@ -1395,7 +1409,9 @@ fn store_root_lock_canonicalizes_a_symlinked_root_for_all_kura_paths() {
     alias_config.store_dir = WithOrigin::inline(alias_root);
     let real_config = kura_config_for_dir(&real_root, BLOCKS_IN_MEMORY);
     let lane_config = RuntimeLaneConfig::default();
-    let (aliased, _) = Kura::new(&alias_config, &lane_config).expect("open aliased Kura root");
+    let (aliased, _) =
+        Kura::open_test_kura_with_configured_lane_config(&alias_config, &lane_config)
+            .expect("open aliased Kura root");
     assert_eq!(aliased.store_root, canonical_root);
     assert!(
         aliased
@@ -1404,13 +1420,14 @@ fn store_root_lock_canonicalizes_a_symlinked_root_for_all_kura_paths() {
             .starts_with(&canonical_root)
     );
     assert!(matches!(
-        Kura::new(&real_config, &lane_config),
+        Kura::open_test_kura_with_configured_lane_config(&real_config, &lane_config),
         Err(Error::Locked(path))
             if path == canonical_root.join(STORE_ROOT_LOCK_FILE_NAME)
     ));
     drop(aliased);
-    let (reopened, _) = Kura::new(&real_config, &lane_config)
-        .expect("canonical root must reopen after aliased owner drops");
+    let (reopened, _) =
+        Kura::open_test_kura_with_configured_lane_config(&real_config, &lane_config)
+            .expect("canonical root must reopen after aliased owner drops");
     drop(reopened);
 }
 #[test]
@@ -1538,7 +1555,8 @@ fn telemetry_attach_hydrates_authenticated_durable_tip_after_restart() {
     let config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
     let lane_config = RuntimeLaneConfig::default();
     let artifact = {
-        let (kura, _) = Kura::new(&config, &lane_config).expect("open persistent telemetry Kura");
+        let (kura, _) = Kura::open_test_kura_with_configured_lane_config(&config, &lane_config)
+            .expect("open persistent telemetry Kura");
         let block = DummyBlocks::new().next();
         kura.store_block(Arc::clone(&block))
             .expect("store persistent telemetry fixture block");
@@ -1548,7 +1566,8 @@ fn telemetry_attach_hydrates_authenticated_durable_tip_after_restart() {
             .expect("store persistent telemetry fixture finality");
         artifact
     };
-    let (reopened, _) = Kura::new(&config, &lane_config).expect("reopen persistent telemetry Kura");
+    let (reopened, _) = Kura::open_test_kura_with_configured_lane_config(&config, &lane_config)
+        .expect("reopen persistent telemetry Kura");
     let metrics = Arc::new(Metrics::default());
     reopened.attach_telemetry(StateTelemetry::new(Arc::clone(&metrics), true));
     assert_v2_finality_telemetry(&metrics, &artifact);
@@ -1565,7 +1584,8 @@ fn telemetry_attach_hydrates_highest_finality_below_durable_tip_after_restart() 
     let config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
     let lane_config = RuntimeLaneConfig::default();
     let artifact = {
-        let (kura, _) = Kura::new(&config, &lane_config).expect("open persistent telemetry Kura");
+        let (kura, _) = Kura::open_test_kura_with_configured_lane_config(&config, &lane_config)
+            .expect("open persistent telemetry Kura");
         let mut generator = DummyBlocks::new();
         let blocks = vec![generator.next(), generator.next()];
         for block in &blocks {
@@ -1581,7 +1601,8 @@ fn telemetry_attach_hydrates_highest_finality_below_durable_tip_after_restart() 
             .expect("store finality below the durable block tip");
         artifact
     };
-    let (reopened, _) = Kura::new(&config, &lane_config).expect("reopen persistent telemetry Kura");
+    let (reopened, _) = Kura::open_test_kura_with_configured_lane_config(&config, &lane_config)
+        .expect("reopen persistent telemetry Kura");
     {
         let inventory = reopened.v2_startup_finality_verification_inventory.lock();
         let inventory = inventory
@@ -1699,7 +1720,8 @@ fn active_receiver_witness_survives_finality_promotion_restart_and_retry() {
     let temp_dir = TempDir::new().expect("create persistent Kura root");
     let config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
     let lane_config = RuntimeLaneConfig::default();
-    let (kura, _) = Kura::new(&config, &lane_config).expect("open persistent Kura");
+    let (kura, _) = Kura::open_test_kura_with_configured_lane_config(&config, &lane_config)
+        .expect("open persistent Kura");
     let block = DummyBlocks::new().next();
     let (witness, mut execution_commitment) = kagemusha_topup_witness([0xC1; 32], [0xC2; 32]);
     execution_commitment.executed_block_wire_len = u64::try_from(
@@ -1735,7 +1757,8 @@ fn active_receiver_witness_survives_finality_promotion_restart_and_retry() {
     kura.promote_kagemusha_topup_finality_sidecar(&artifact, &receipt)
         .expect("exact promotion retry is idempotent");
     drop(kura);
-    let (reopened, _) = Kura::new(&config, &lane_config).expect("reopen persistent Kura");
+    let (reopened, _) = Kura::open_test_kura_with_configured_lane_config(&config, &lane_config)
+        .expect("reopen persistent Kura");
     let recovered = reopened
         .kagemusha_active_receiver_witness_proof_v1(artifact.height)
         .expect("read receiver witness after restart")
@@ -2877,7 +2900,11 @@ fn canonical_finality_path_rejects_raw_artifact_shape_on_read_and_restart() {
     let temp_dir = TempDir::new().expect("create Kura root");
     let config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
     {
-        let (kura, _) = Kura::new(&config, &RuntimeLaneConfig::default()).expect("open Kura");
+        let (kura, _) = Kura::open_test_kura_with_configured_lane_config(
+            &config,
+            &RuntimeLaneConfig::default(),
+        )
+        .expect("open Kura");
         let block = store_dummy_block_arcs(&kura, 1)
             .pop()
             .expect("canonical block");
@@ -2893,7 +2920,8 @@ fn canonical_finality_path_rejects_raw_artifact_shape_on_read_and_restart() {
         );
     }
     assert!(
-        Kura::new(&config, &RuntimeLaneConfig::default()).is_err(),
+        Kura::open_test_kura_with_configured_lane_config(&config, &RuntimeLaneConfig::default())
+            .is_err(),
         "startup must reject a raw artifact at the canonical private-record path"
     );
 }
@@ -2902,7 +2930,11 @@ fn canonical_finality_path_rejects_wrong_private_record_version_on_read_and_rest
     let temp_dir = TempDir::new().expect("create Kura root");
     let config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
     {
-        let (kura, _) = Kura::new(&config, &RuntimeLaneConfig::default()).expect("open Kura");
+        let (kura, _) = Kura::open_test_kura_with_configured_lane_config(
+            &config,
+            &RuntimeLaneConfig::default(),
+        )
+        .expect("open Kura");
         let block = store_dummy_block_arcs(&kura, 1)
             .pop()
             .expect("canonical block");
@@ -2923,7 +2955,7 @@ fn canonical_finality_path_rejects_wrong_private_record_version_on_read_and_rest
         ));
     }
     assert!(matches!(
-        Kura::new(&config, &RuntimeLaneConfig::default()),
+        Kura::open_test_kura_with_configured_lane_config(&config, &RuntimeLaneConfig::default()),
         Err(Error::IO(error, _)) if error.kind() == ErrorKind::InvalidData
     ));
 }
@@ -2932,7 +2964,11 @@ fn canonical_finality_path_rejects_legacy_v2_private_record_on_read_and_restart(
     let temp_dir = TempDir::new().expect("create Kura root");
     let config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
     {
-        let (kura, _) = Kura::new(&config, &RuntimeLaneConfig::default()).expect("open Kura");
+        let (kura, _) = Kura::open_test_kura_with_configured_lane_config(
+            &config,
+            &RuntimeLaneConfig::default(),
+        )
+        .expect("open Kura");
         let block = store_dummy_block_arcs(&kura, 1)
             .pop()
             .expect("canonical block");
@@ -2953,7 +2989,7 @@ fn canonical_finality_path_rejects_legacy_v2_private_record_on_read_and_restart(
         ));
     }
     assert!(matches!(
-        Kura::new(&config, &RuntimeLaneConfig::default()),
+        Kura::open_test_kura_with_configured_lane_config(&config, &RuntimeLaneConfig::default()),
         Err(Error::IO(error, _)) if error.kind() == ErrorKind::InvalidData
     ));
 }

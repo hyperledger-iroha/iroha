@@ -592,6 +592,8 @@ fn validate_operation_payload(
                 MAX_SORACLOUD_HF_INFERENCE_FRAME_BYTES_V1,
             )?;
             crate::soracloud_hf_credential::SoracloudHfAuthenticatedInferenceRequestV1::try_new(
+                std::mem::take(&mut wire.repo_id),
+                std::mem::take(&mut wire.resolved_revision),
                 std::mem::take(&mut wire.url),
                 std::mem::take(&mut wire.content_type),
                 wire.accept.take(),

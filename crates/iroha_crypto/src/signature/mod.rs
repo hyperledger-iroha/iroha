@@ -264,9 +264,9 @@ impl Signature {
     }
     /// Fallibly create a signature from raw bytes received from an external boundary.
     ///
-    /// This preserves [`Signature::from_bytes`] for tests and compatibility code that intentionally
-    /// reproduce opaque bytes, while giving protocol adapters a checked constructor for admitting
-    /// externally supplied signatures.
+    /// This preserves [`Signature::from_bytes`] for tests and callers that intentionally reproduce
+    /// opaque bytes, while giving protocol adapters a checked constructor for admitting externally
+    /// supplied signatures.
     ///
     /// # Errors
     ///
@@ -321,8 +321,8 @@ impl Signature {
     }
     /// Fallibly create a signature from hex received from an external boundary.
     ///
-    /// This preserves [`Signature::from_hex`] for tests and compatibility code that intentionally
-    /// reproduce opaque bytes, while rejecting empty or all-zero payloads for admission paths.
+    /// This preserves [`Signature::from_hex`] for tests and callers that intentionally reproduce
+    /// opaque bytes, while rejecting empty or all-zero payloads for admission paths.
     ///
     /// # Errors
     /// Returns [`ParseError`] when the string is not valid hex, or when the
@@ -429,23 +429,6 @@ fn validate_signature_payload_for_admission(payload: &[u8]) -> Result<(), ParseE
     Ok(())
 }
 
-fn unpacked_raw_signature_payload(bytes: &[u8]) -> Result<Option<&[u8]>, ncore::Error> {
-    if bytes.len() < 8 {
-        return Ok(None);
-    }
-    let count_bytes: [u8; 8] = bytes
-        .get(..8)
-        .expect("length checked above")
-        .try_into()
-        .map_err(|_| ncore::Error::LengthMismatch)?;
-    let count = usize::try_from(u64::from_le_bytes(count_bytes))
-        .map_err(|_| ncore::Error::LengthMismatch)?;
-    let end = 8usize
-        .checked_add(count)
-        .ok_or(ncore::Error::LengthMismatch)?;
-    Ok((end == bytes.len()).then(|| &bytes[8..end]))
-}
-
 #[allow(unsafe_code)]
 fn allocate_signature_payload_exact(length: usize) -> Result<Box<[u8]>, ncore::Error> {
     if length == 0 {
@@ -466,24 +449,9 @@ fn allocate_signature_payload_exact(length: usize) -> Result<Box<[u8]>, ncore::E
     Ok(unsafe { Box::from_raw(slice) })
 }
 
-fn copy_raw_signature_payload_for_decode(
-    sequence_bytes: &[u8],
-    payload_bytes: &[u8],
-) -> Result<ConstVec<u8>, ncore::Error> {
-    let (count, _) = ncore::read_seq_len_slice(sequence_bytes)?;
-    if count != payload_bytes.len() {
-        return Err(ncore::Error::LengthMismatch);
-    }
-    // `read_seq_len_slice` already charged one retained byte per u8 element.
-    let mut payload = allocate_signature_payload_exact(payload_bytes.len())?;
-    payload.copy_from_slice(payload_bytes);
-    Ok(ConstVec::new(payload))
-}
-
+/// Decode the advertised unpacked `ConstVec<u8>` layout: a sequence count
+/// followed by one exactly framed byte per element.
 fn decode_signature_payload_unpacked(bytes: &[u8]) -> Result<ConstVec<u8>, ncore::Error> {
-    if let Some(raw) = unpacked_raw_signature_payload(bytes)? {
-        return copy_raw_signature_payload_for_decode(bytes, raw);
-    }
     let (count, raw_start) = ncore::read_seq_len_slice(bytes)?;
     if count > bytes.len().saturating_sub(raw_start) {
         return Err(ncore::Error::LengthMismatch);
@@ -514,10 +482,6 @@ fn decode_signature_payload_unpacked(bytes: &[u8]) -> Result<ConstVec<u8>, ncore
 fn decode_signature_payload_from_slice(
     bytes: &[u8],
 ) -> Result<(ConstVec<u8>, usize), ncore::Error> {
-    if let Some(raw) = unpacked_raw_signature_payload(bytes)? {
-        return copy_raw_signature_payload_for_decode(bytes, raw)
-            .map(|payload| (payload, bytes.len()));
-    }
     let flags = ncore::effective_decode_flags().unwrap_or_else(ncore::default_encode_flags);
     if ncore::packed_seq_enabled_for_flags(flags) {
         <ConstVec<u8> as DecodeFromSlice>::decode_from_slice(bytes)
@@ -642,30 +606,16 @@ impl<'de> ncore::NoritoDeserialize<'de> for Signature {
         Self::try_deserialize(archived).expect("Signature decode")
     }
     fn try_deserialize(archived: &'de ncore::Archived<Self>) -> Result<Self, ncore::Error> {
-        let payload_bytes =
-            ncore::payload_slice_from_ptr(core::ptr::from_ref(archived).cast::<u8>()).ok();
-        let raw_payload = payload_bytes
-            .map(unpacked_raw_signature_payload)
-            .transpose()?
-            .flatten();
-        let payload = if let Some(raw) = raw_payload {
-            let bytes = payload_bytes.expect("raw payload came from this slice");
-            let payload = copy_raw_signature_payload_for_decode(bytes, raw)?;
-            ncore::note_payload_access(bytes, bytes.len());
+        let bytes = ncore::payload_slice_from_ptr(core::ptr::from_ref(archived).cast::<u8>())?;
+        let flags = ncore::effective_decode_flags().unwrap_or_else(ncore::default_encode_flags);
+        let payload = if ncore::packed_seq_enabled_for_flags(flags) {
+            let (payload, used) = <ConstVec<u8> as DecodeFromSlice>::decode_from_slice(bytes)?;
+            ncore::note_payload_access(bytes, used);
             payload
         } else {
-            let flags = ncore::effective_decode_flags().unwrap_or_else(ncore::default_encode_flags);
-            if ncore::packed_seq_enabled_for_flags(flags) {
-                let bytes = payload_bytes.ok_or(ncore::Error::MissingPayloadContext)?;
-                let (payload, used) = <ConstVec<u8> as DecodeFromSlice>::decode_from_slice(bytes)?;
-                ncore::note_payload_access(bytes, used);
-                payload
-            } else {
-                let bytes = payload_bytes.ok_or(ncore::Error::MissingPayloadContext)?;
-                let payload = decode_signature_payload_unpacked(bytes)?;
-                ncore::note_payload_access(bytes, bytes.len());
-                payload
-            }
+            let payload = decode_signature_payload_unpacked(bytes)?;
+            ncore::note_payload_access(bytes, bytes.len());
+            payload
         };
         validate_signature_payload_for_decode(&payload)?;
         Ok(Signature { payload })
@@ -1099,11 +1049,15 @@ mod tests {
     }
     #[test]
     #[expect(clippy::too_many_lines, reason = "cohesive signature decode matrix")]
-    fn raw_compatibility_signature_decode_uses_exact_fallible_storage() {
+    fn canonical_unpacked_signature_decode_uses_exact_fallible_storage() {
         let payload = [0x11_u8; 64];
-        let mut bytes = Vec::with_capacity(8 + payload.len());
+        let mut bytes = Vec::with_capacity(8 + payload.len() * 9);
         bytes.extend_from_slice(&u64::try_from(payload.len()).unwrap().to_le_bytes());
-        bytes.extend_from_slice(&payload);
+        for byte in payload {
+            bytes.extend_from_slice(&1_u64.to_le_bytes());
+            bytes.push(byte);
+        }
+        let _unpacked_flags = norito::core::DecodeFlagsGuard::enter(0);
         let limits = |allocated| {
             norito::core::DecodeLimits::new(
                 usize::MAX,
@@ -1117,7 +1071,7 @@ mod tests {
             norito::core::with_decode_limits_measured(limits(payload.len()), || {
                 <Signature as norito::core::DecodeFromSlice>::decode_from_slice(&bytes)
             });
-        let (decoded, used) = decoded.expect("exact raw compatibility allocation");
+        let (decoded, used) = decoded.expect("exact canonical unpacked allocation");
         assert_eq!(decoded.payload(), payload);
         assert_eq!(used, bytes.len());
         assert_eq!(usage.total_allocated_bytes(), payload.len());
@@ -1139,7 +1093,7 @@ mod tests {
         let error = norito::core::with_decode_limits(sequence_limited, || {
             <Signature as norito::core::DecodeFromSlice>::decode_from_slice(&bytes)
         })
-        .expect_err("raw compatibility decode must enforce the sequence-element ceiling");
+        .expect_err("canonical unpacked decode must enforce the sequence-element ceiling");
         assert!(matches!(
             error,
             norito::core::Error::SequenceLengthExceeded {
@@ -1187,17 +1141,13 @@ mod tests {
             ));
         }
 
-        let mut length_prefixed = Vec::with_capacity(8 + payload.len() * 9);
-        length_prefixed.extend_from_slice(&u64::try_from(payload.len()).unwrap().to_le_bytes());
-        for byte in payload {
-            length_prefixed.extend_from_slice(&1_u64.to_le_bytes());
-            length_prefixed.push(byte);
-        }
-        let _flags = norito::core::DecodeFlagsGuard::enter(0);
+        let archived = norito::core::archived_from_slice::<Signature>(&bytes)
+            .expect("sized canonical unpacked signature marker");
+        let _context = norito::core::PayloadCtxGuard::enter(archived.bytes());
         let error = norito::core::with_decode_limits(sequence_limited, || {
-            <Signature as norito::core::DecodeFromSlice>::decode_from_slice(&length_prefixed)
+            <Signature as norito::core::NoritoDeserialize<'_>>::try_deserialize(archived.as_ref())
         })
-        .expect_err("length-prefixed decode must enforce the sequence-element ceiling");
+        .expect_err("canonical unpacked pointer decode must enforce the sequence-element ceiling");
         assert!(matches!(
             error,
             norito::core::Error::SequenceLengthExceeded {
@@ -1206,20 +1156,22 @@ mod tests {
             }
         ));
 
-        let archived = norito::core::archived_from_slice::<Signature>(&length_prefixed)
-            .expect("sized archived signature marker");
+        drop(_context);
+        let mut raw = Vec::with_capacity(8 + payload.len());
+        raw.extend_from_slice(&u64::try_from(payload.len()).unwrap().to_le_bytes());
+        raw.extend_from_slice(&payload);
+        assert!(
+            <Signature as norito::core::DecodeFromSlice>::decode_from_slice(&raw).is_err(),
+            "raw length-plus-payload signature bytes are not canonical V1"
+        );
+        let archived = norito::core::archived_from_slice::<Signature>(&raw)
+            .expect("sized raw signature marker");
         let _context = norito::core::PayloadCtxGuard::enter(archived.bytes());
-        let error = norito::core::with_decode_limits(sequence_limited, || {
+        assert!(
             <Signature as norito::core::NoritoDeserialize<'_>>::try_deserialize(archived.as_ref())
-        })
-        .expect_err("archived length-prefixed decode must enforce the sequence-element ceiling");
-        assert!(matches!(
-            error,
-            norito::core::Error::SequenceLengthExceeded {
-                length: 64,
-                limit: 63
-            }
-        ));
+                .is_err(),
+            "pointer decoding must reject raw length-plus-payload signature bytes"
+        );
     }
     #[test]
     #[cfg(feature = "sm")]

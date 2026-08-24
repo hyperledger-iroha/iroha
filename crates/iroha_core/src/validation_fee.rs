@@ -10,7 +10,9 @@ use crate::{
 };
 use core::fmt;
 use hex;
-use iroha_crypto::{Hash, blake2::Blake2b512};
+use iroha_crypto::Hash;
+#[cfg(test)]
+use iroha_crypto::blake2::Blake2b512;
 #[cfg(test)]
 use iroha_data_model::validation_fee::{
     VALIDATION_FEE_PLAIN_MAX_MEMBERS_V1, ValidationFeePlainElectorateEligibilityRuleV1,
@@ -1691,23 +1693,13 @@ fn validate_parliament_authorization(
                 .to_owned(),
         ));
     }
-    let snapshot = proposal.parliament_snapshot.as_ref().ok_or_else(|| {
-        ValidationFeeAdmissionError::InvalidPolicyRegistry(
-            "authorized governance proposal has no Parliament snapshot".to_owned(),
-        )
+    let snapshot = &proposal.parliament_snapshot;
+    proposal.validate_v1().map_err(|reason| {
+        ValidationFeeAdmissionError::InvalidPolicyRegistry(format!(
+            "authorized governance proposal has an invalid Parliament snapshot: {reason}"
+        ))
     })?;
-    let snapshot_bytes = norito::to_bytes(&snapshot.bodies).map_err(|_| {
-        ValidationFeeAdmissionError::InvalidPolicyRegistry(
-            "Parliament snapshot cannot be encoded".to_owned(),
-        )
-    })?;
-    let digest = Blake2b512::digest(snapshot_bytes);
-    let mut computed_roster_root = [0; 32];
-    computed_roster_root.copy_from_slice(&digest[..32]);
-    if computed_roster_root != snapshot.roster_root
-        || snapshot.roster_root != authorization.proposal_time_roster_root
-        || snapshot.bodies.selection_epoch != snapshot.selection_epoch
-    {
+    if snapshot.roster_root != authorization.proposal_time_roster_root {
         return Err(ValidationFeeAdmissionError::InvalidPolicyRegistry(
             "proposal-time Parliament roster commitment differs from retained consensus state"
                 .to_owned(),
@@ -3675,7 +3667,7 @@ mod tests {
                     members: vec![member.clone()],
                     alternates: Vec::new(),
                     candidate_count: 1,
-                    derived_by: Default::default(),
+                    derived_by: iroha_data_model::isi::governance::CouncilDerivationKind::Sortition,
                 },
             )
         })
@@ -3686,8 +3678,8 @@ mod tests {
         }
     }
     fn test_roster_root() -> [u8; 32] {
-        let encoded =
-            norito::to_bytes(&test_parliament_bodies()).expect("encode Parliament bodies");
+        let encoded = norito::encode_canonical(&test_parliament_bodies())
+            .expect("canonically encode Parliament bodies");
         let digest = Blake2b512::digest(encoded);
         let mut root = [0; 32];
         root.copy_from_slice(&digest[..32]);
@@ -3865,12 +3857,12 @@ mod tests {
                 created_height: 1,
                 status: crate::state::GovernanceProposalStatus::Enacted,
                 pipeline: crate::state::GovernancePipeline::default(),
-                parliament_snapshot: Some(crate::state::GovernanceParliamentSnapshot {
+                parliament_snapshot: crate::state::GovernanceParliamentSnapshot {
                     selection_epoch: 1,
                     beacon: [0x44; 32],
                     roster_root: authorization.proposal_time_roster_root,
                     bodies,
-                }),
+                },
                 finalization_evidence: Some(GovernanceFinalizationEvidence {
                     proposal_id,
                     referendum_id: proposal_id,

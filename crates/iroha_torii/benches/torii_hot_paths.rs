@@ -358,7 +358,8 @@ fn signed_find_domains_query(
             fetch_size: FetchSize::new(Some(fetch_size)),
             ..QueryParams::default()
         },
-    );
+    )
+    .expect("domain query type has a canonical mapping");
     authorize_benchmark_query(QueryRequest::Start(iter), authority.clone()).sign(key_pair)
 }
 #[derive(Clone)]

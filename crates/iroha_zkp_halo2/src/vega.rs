@@ -297,10 +297,6 @@ pub use zk_ams::{
 pub use zk_ams::{
     ZkAmsMkheCollectiveCiphertextV1, ZkAmsMkheCollectiveLevelOneV1, ZkAmsMkheCollectivePublicKeyV1,
 };
-#[cfg(test)]
-pub use zk_ams::{
-    automorphism_switch_zk_ams_mkhe_collective_v1, relinearize_zk_ams_mkhe_collective_v1,
-};
 /// Exact canonical COSE `Sig_structure` width in the released Figure 9 relation.
 pub const VEGA_MDL_ISSUER_AUTHENTICATION_SIG_STRUCTURE_BYTES_V1: usize = 368;
 /// Exact tagged ISO 18013-5 MSO payload width embedded in the `Sig_structure`.

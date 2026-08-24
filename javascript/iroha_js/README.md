@@ -160,11 +160,10 @@ native dispatch. Fixture-bundle and Governance DAG block entries use `bytes`.
 
 The JavaScript package exposes the four stable Kagemusha Torii routes through
 `getOfflineCapability`, `submitKagemushaTopUpV4`,
-`submitKagemushaRedeemV4`, and `getKagemushaOperationStatus`. Readiness is
-an asset-neutral protocol capability compiled into every deployment. Discovery
-accepts only the exact `cash_handoff_v1`, bridge ABI 22, eight-hop universal
-`OfflineStatus` with `mandatory: false`, `ready: true`, and empty asset and
-blocker lists. No selector-taking readiness alias is exported.
+`submitKagemushaRedeemV4`, and `getKagemushaOperationStatus`. Discovery is
+an asset-neutral protocol capability compiled into every deployment and accepts
+only the exact four-field `cash_handoff_v1`, bridge ABI 22, eight-hop
+`OfflineStatus` with `ready: true`.
 
 This is deliberately a transport-only boundary. Command helpers require an
 externally produced `{ version: 4, operationId, norito }` archive and never
@@ -1060,7 +1059,14 @@ const registerAccountInstruction = buildRegisterAccountInstruction({
 });
 console.log(noritoDecodeInstruction(registerAccountInstruction).Register.Account.id);
 
-const receipt = await torii.submitTransaction(encoded);
+const { signedTransaction } = buildTransaction({
+  networkId,
+  authority,
+  instructions: [instruction],
+  feePayment: { payer: "authority", chargeLimits: [] },
+  privateKey,
+});
+const receipt = await torii.submitTransaction(signedTransaction);
 const sampleHashHex =
   receipt?.payload?.tx_hash ?? "ab".repeat(32); // 32-byte transaction hash as lowercase hex
 const status = await torii.getTransactionStatus(sampleHashHex);
@@ -1069,6 +1075,10 @@ console.log(status?.status.kind); // e.g. "Applied"
 // Normalised helper exposes canonical fields (`kind`, `hashHex`, `status.kind`, etc.)
 const typedStatus = await torii.getTransactionStatusTyped(sampleHashHex);
 console.log(typedStatus?.status?.kind); // e.g. "Applied"
+
+// Node submission accepts only the exact canonical VersionedSignedTransaction
+// V1 wire emitted by the native builders. Framed, bare, headerless, alternate-
+// layout, and opaque byte payloads are rejected before any network request.
 
 // The wait helpers also ship normalised variants if you prefer structured DTOs
 await torii.waitForTransactionStatusTyped(sampleHashHex, { intervalMs: 500 });
@@ -1913,10 +1923,6 @@ console.log(`leader index=${leader.leader_index} epoch seed=${leader.prf.epoch_s
 
 const params = await torii.getSumeragiParams();
 console.log(`block time=${params.block_time_ms}ms next mode=${params.next_mode ?? "current"}`);
-
-// Consensus key lifecycle history
-const keyRecords = await torii.listSumeragiKeyLifecycle();
-console.log(`latest key record status=${keyRecords[0]?.status ?? "none"}`);
 ```
 
 All advanced helpers validate the Torii payloads and coerce numeric string
@@ -1956,7 +1962,6 @@ const snapshot = await torii.getStatusSnapshot();
 console.log(
   `queue=${snapshot.status.queue_size} Δ=${snapshot.metrics.queue_delta} approvals=${snapshot.metrics.tx_approved_delta}`,
 );
-console.log(`DA reschedules this interval=${snapshot.metrics.da_reschedule_delta}`);
 if (snapshot.status.governance) {
   const admission = snapshot.status.governance.manifest_admission;
   console.log(
@@ -2028,8 +2033,8 @@ const exposure = await torii.getSorafsHedgingExposure({
 The exposure and intent reads require a treasury- or hedging-observer role.
 These APIs expose projections only; automatic hedge execution remains absent.
 
-Pin registration accepts only a caller-signed, versioned transaction containing
-exactly one native `RegisterPinManifest` instruction. Build and fee-quote that
+Pin registration accepts only an exact canonical `VersionedSignedTransaction`
+V1 containing exactly one native `RegisterPinManifest` instruction. Build and fee-quote that
 transaction locally; neither the raw private key nor any secret-bearing JSON
 request is sent to Torii. The immediate response is only an admission identity,
 not a finality, fee, custody, or pin-status receipt.
@@ -2494,6 +2499,15 @@ contract (the claim account must also match the signed path). Canonical headers
 are generated locally over the exact method, path, query, and body; callers
 cannot supply precomputed headers or inline body secrets, and signed requests
 are never redirected or retried.
+
+## Sora VPN lease receipts
+
+`submitVpnReceipt` returns earned/refund XOR fields and the native
+`settleLeaseInstruction` that the operator must sign and submit. Its receipt
+status is exactly `settlement_pending` while that instruction is uncommitted;
+only a receipt later read from committed WSV state uses `settled`. The client
+also retains the exact `disconnected`, `expired`, and `replaced` lifecycle
+statuses and rejects padded or case-drifted spellings.
 
 ## SoraNet Puzzle & Token Service Client
 

@@ -306,8 +306,8 @@ fn assert_tool_error(response: &Value, context: &str) {
 #[derive(Clone, Copy)]
 enum McpAliasDispatchArguments {
     InvalidAccountId,
-    InvalidHash,
-    InvalidTransactionHash,
+    InvalidPathHash,
+    InvalidStatusHash,
     InvalidAssetId,
     InvalidNftId,
     InvalidRwaId,
@@ -320,20 +320,24 @@ enum McpAliasDispatchArguments {
 impl McpAliasDispatchArguments {
     fn into_json(self) -> Value {
         match self {
-            Self::InvalidAccountId => norito::json!({"account_id": "not-an-account-id"}),
-            Self::InvalidHash => norito::json!({"hash": "not-a-hash"}),
-            Self::InvalidTransactionHash => {
-                norito::json!({"transaction_hash": "not-a-hash"})
+            Self::InvalidAccountId => {
+                norito::json!({"path": {"account_id": "not-an-account-id"}})
             }
-            Self::InvalidAssetId => norito::json!({"asset_id": "not-an-asset-id"}),
-            Self::InvalidNftId => norito::json!({"nft_id": "not-an-nft-id"}),
-            Self::InvalidRwaId => norito::json!({"rwa_id": "not-a-rwa-id"}),
-            Self::InvalidDomainId => norito::json!({"domain_id": "not-a-domain-id"}),
+            Self::InvalidPathHash => norito::json!({"path": {"hash": "not-a-hash"}}),
+            Self::InvalidStatusHash => norito::json!({"query": {"hash": "not-a-hash"}}),
+            Self::InvalidAssetId => {
+                norito::json!({"path": {"asset_id": "not-an-asset-id"}})
+            }
+            Self::InvalidNftId => norito::json!({"path": {"nft_id": "not-an-nft-id"}}),
+            Self::InvalidRwaId => norito::json!({"path": {"rwa_id": "not-a-rwa-id"}}),
+            Self::InvalidDomainId => {
+                norito::json!({"path": {"domain_id": "not-a-domain-id"}})
+            }
             Self::InvalidSubscriptionId => {
-                norito::json!({"subscription_id": "not-a-subscription-id"})
+                norito::json!({"path": {"subscription_id": "not-a-subscription-id"}})
             }
             Self::InvalidDefinitionId => {
-                norito::json!({"definition_id": "not-a-definition-id"})
+                norito::json!({"path": {"definition_id": "not-a-definition-id"}})
             }
             Self::LimitTwo => norito::json!({"limit": 2}),
             Self::PageOne => norito::json!({"page": 1}),
@@ -500,6 +504,117 @@ async fn mcp_capabilities_endpoint_exposes_server_metadata() {
     );
 }
 #[tokio::test]
+async fn mcp_jsonrpc_accepts_only_one_canonical_json_content_type() {
+    let _data_dir = test_utils::TestDataDirGuard::new();
+    let mut cfg = test_utils::mk_minimal_root_cfg();
+    cfg.torii.mcp.enabled = true;
+    cfg.torii.mcp.rate_per_minute = Some(NonZeroU32::new(10_000).expect("nonzero rate"));
+    cfg.torii.mcp.burst = Some(NonZeroU32::new(10_000).expect("nonzero burst"));
+    let app = build_router(cfg);
+    let payload = norito::json::to_vec(&norito::json!({
+        "jsonrpc": "2.0",
+        "id": "content-type",
+        "method": "initialize"
+    }))
+    .expect("serialize initialize request");
+
+    for content_type in [
+        "application/json",
+        "application/json;charset=utf-8",
+        "application/json; charset=\"UTF-8\"",
+    ] {
+        let response = call_app(
+            &app,
+            Request::builder()
+                .method("POST")
+                .uri("/v1/mcp")
+                .header(header::CONTENT_TYPE, content_type)
+                .body(Body::from(payload.clone()))
+                .expect("canonical MCP request"),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::OK, "{content_type}");
+    }
+
+    for (content_type, expected_status, expected_code) in [
+        (
+            None,
+            StatusCode::UNSUPPORTED_MEDIA_TYPE,
+            "request_content_type_missing",
+        ),
+        (
+            Some("text/plain"),
+            StatusCode::UNSUPPORTED_MEDIA_TYPE,
+            "request_content_type_unsupported",
+        ),
+        (
+            Some("application/problem+json"),
+            StatusCode::UNSUPPORTED_MEDIA_TYPE,
+            "request_content_type_unsupported",
+        ),
+        (
+            Some("application/x-norito"),
+            StatusCode::UNSUPPORTED_MEDIA_TYPE,
+            "request_content_type_unsupported",
+        ),
+        (
+            Some("application/json; profile=torii"),
+            StatusCode::UNSUPPORTED_MEDIA_TYPE,
+            "request_content_type_unsupported",
+        ),
+        (
+            Some("application/json;"),
+            StatusCode::BAD_REQUEST,
+            "request_content_type_invalid",
+        ),
+    ] {
+        let mut builder = Request::builder()
+            .method("POST")
+            .uri("/v1/mcp")
+            .header(header::ACCEPT, "application/json");
+        if let Some(content_type) = content_type {
+            builder = builder.header(header::CONTENT_TYPE, content_type);
+        }
+        let response = call_app(
+            &app,
+            builder
+                .body(Body::from("not valid JSON"))
+                .expect("rejected MCP request"),
+        )
+        .await;
+        assert_eq!(response.status(), expected_status, "{content_type:?}");
+        assert_eq!(
+            response
+                .headers()
+                .get("x-iroha-reject-code")
+                .and_then(|value| value.to_str().ok()),
+            Some(expected_code),
+            "{content_type:?}"
+        );
+    }
+
+    let mut duplicate = Request::builder()
+        .method("POST")
+        .uri("/v1/mcp")
+        .header(header::ACCEPT, "application/json")
+        .header(header::CONTENT_TYPE, "application/json")
+        .body(Body::from("not valid JSON"))
+        .expect("duplicate MCP request");
+    duplicate.headers_mut().append(
+        header::CONTENT_TYPE,
+        "application/json".parse().expect("header"),
+    );
+    let response = call_app(&app, duplicate).await;
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    assert_eq!(
+        response
+            .headers()
+            .get("x-iroha-reject-code")
+            .and_then(|value| value.to_str().ok()),
+        Some("request_content_type_invalid")
+    );
+}
+#[tokio::test]
 async fn mcp_connect_session_delete_tools_publish_openai_compatible_schema() {
     let _data_dir = test_utils::TestDataDirGuard::new();
     let mut cfg = test_utils::mk_minimal_root_cfg();
@@ -519,11 +634,28 @@ async fn mcp_connect_session_delete_tools_publish_openai_compatible_schema() {
             .and_then(Value::as_object)
             .expect("properties object");
         assert!(properties.contains_key("sid"));
-        assert!(properties.contains_key("session_id"));
+        assert!(!properties.contains_key("session_id"));
         assert!(properties.contains_key("token_management"));
         assert!(
             !properties.contains_key("path"),
             "{name} schema should keep delete parameters flat for OpenAI-compatible clients"
+        );
+        assert_eq!(
+            schema
+                .get("required")
+                .and_then(Value::as_array)
+                .map(|required| required
+                    .iter()
+                    .filter_map(Value::as_str)
+                    .collect::<Vec<_>>()),
+            Some(vec!["sid"])
+        );
+        assert_eq!(
+            properties
+                .get("sid")
+                .and_then(|value| value.get("pattern"))
+                .and_then(Value::as_str),
+            Some("^[A-Za-z0-9_-]{43}$")
         );
     }
 }
@@ -550,7 +682,19 @@ async fn mcp_connect_ticket_tools_publish_openai_compatible_schema() {
                     .iter()
                     .filter_map(Value::as_str)
                     .collect::<Vec<_>>()),
-            Some(vec!["role"])
+            Some(vec!["sid", "role"])
+        );
+        let properties = schema
+            .get("properties")
+            .and_then(Value::as_object)
+            .expect("properties object");
+        assert!(!properties.contains_key("session_id"));
+        assert_eq!(
+            properties
+                .get("sid")
+                .and_then(|value| value.get("pattern"))
+                .and_then(Value::as_str),
+            Some("^[A-Za-z0-9_-]{43}$")
         );
     }
 }
@@ -562,21 +706,20 @@ async fn mcp_vpn_session_detail_tools_publish_openai_compatible_schema() {
     cfg.torii.mcp.profile = iroha_config::parameters::actual::ToriiMcpProfile::Operator;
     cfg.torii.connect.enabled = true;
     let app = build_router(cfg);
-    for name in ["iroha.vpn.sessions.get", "iroha.vpn.sessions.delete"] {
-        let tool = find_tool(&app, name).await;
-        let schema = tool
-            .get("inputSchema")
-            .and_then(Value::as_object)
-            .expect("inputSchema object");
-        assert_openai_compatible_top_level_input_schema(name, schema);
-        let properties = schema
-            .get("properties")
-            .and_then(Value::as_object)
-            .expect("properties object");
-        assert!(properties.contains_key("session_id"));
-        assert!(properties.contains_key("id"));
-        assert!(properties.contains_key("path"));
-    }
+    let name = "iroha.vpn.sessions.get";
+    let tool = find_tool(&app, name).await;
+    let schema = tool
+        .get("inputSchema")
+        .and_then(Value::as_object)
+        .expect("inputSchema object");
+    assert_openai_compatible_top_level_input_schema(name, schema);
+    let properties = schema
+        .get("properties")
+        .and_then(Value::as_object)
+        .expect("properties object");
+    assert!(properties.contains_key("session_id"));
+    assert!(!properties.contains_key("id"));
+    assert!(!properties.contains_key("path"));
 }
 #[tokio::test]
 async fn mcp_all_published_tool_schemas_are_openai_compatible_top_level_objects() {
@@ -683,7 +826,7 @@ async fn mcp_jsonrpc_initialize_list_and_call_connect_ticket() {
             "params": {
                 "name": "connect.ws.ticket",
                 "arguments": {
-                    "sid": "sid-1",
+                    "sid": "AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE",
                     "role": "app",
                     "token": "secret-token",
                     "node_url": "https://node.example"
@@ -700,7 +843,9 @@ async fn mcp_jsonrpc_initialize_list_and_call_connect_ticket() {
         .expect("structured content");
     assert_eq!(
         structured.get("ws_url").and_then(Value::as_str),
-        Some("wss://node.example/v1/connect/ws?sid=sid-1&role=app")
+        Some(
+            "wss://node.example/v1/connect/ws?sid=AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE&role=app"
+        )
     );
     assert_eq!(
         structured
@@ -1838,7 +1983,7 @@ async fn mcp_jsonrpc_tools_call_agent_alias_runtime_upgrade_mutation_endpoints_d
             1056,
             "iroha.runtime.upgrades.activate",
             norito::json!({
-                "upgrade_id": "upgrade-001",
+                "path": { "id": "upgrade-001" },
                 "body": {}
             }),
         ),
@@ -1846,7 +1991,7 @@ async fn mcp_jsonrpc_tools_call_agent_alias_runtime_upgrade_mutation_endpoints_d
             1057,
             "iroha.runtime.upgrades.cancel",
             norito::json!({
-                "id": "upgrade-001",
+                "path": { "id": "upgrade-001" },
                 "body": {}
             }),
         ),
@@ -1886,7 +2031,7 @@ async fn mcp_jsonrpc_tools_call_agent_alias_runtime_upgrade_mutation_endpoints_d
     }
 }
 #[tokio::test]
-async fn mcp_jsonrpc_tools_call_finality_endpoints_accept_block_height_shortcut() {
+async fn mcp_jsonrpc_tools_call_finality_endpoints_accept_canonical_height_path() {
     let _data_dir = test_utils::TestDataDirGuard::new();
     let mut cfg = test_utils::mk_minimal_root_cfg();
     cfg.torii.mcp.enabled = true;
@@ -1904,7 +2049,7 @@ async fn mcp_jsonrpc_tools_call_finality_endpoints_accept_block_height_shortcut(
                 "params": {
                     "name": tool_name,
                     "arguments": {
-                        "block_height": 1
+                        "path": { "height": 1 }
                     }
                 }
             }),
@@ -1985,7 +2130,9 @@ async fn mcp_jsonrpc_tools_call_agent_alias_gov_endpoints_dispatch() {
             10320,
             "iroha.gov.contract.get",
             norito::json!({
-                "contract_address": "irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw"
+                "path": {
+                    "contract_address": "irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw"
+                }
             }),
         ),
         (
@@ -1999,28 +2146,28 @@ async fn mcp_jsonrpc_tools_call_agent_alias_gov_endpoints_dispatch() {
             10322,
             "iroha.gov.proposals.get",
             norito::json!({
-                "proposal_id": ("11".repeat(32))
+                "path": { "id": ("11".repeat(32)) }
             }),
         ),
         (
             10323,
             "iroha.gov.locks.get",
             norito::json!({
-                "rid": "referendum-001"
+                "path": { "rid": "referendum-001" }
             }),
         ),
         (
             10324,
             "iroha.gov.referenda.get",
             norito::json!({
-                "referendum_id": "referendum-001"
+                "path": { "id": "referendum-001" }
             }),
         ),
         (
             10325,
             "iroha.gov.tally.get",
             norito::json!({
-                "tally_id": "tally-001"
+                "path": { "id": "tally-001" }
             }),
         ),
         (
@@ -2190,7 +2337,7 @@ async fn mcp_jsonrpc_tools_call_agent_alias_contract_call_and_wait_surfaces_subm
     );
 }
 #[tokio::test]
-async fn mcp_jsonrpc_tools_call_agent_alias_contracts_code_get_accepts_hash_shortcut() {
+async fn mcp_jsonrpc_tools_call_contracts_code_get_accepts_canonical_code_hash_path() {
     let _data_dir = test_utils::TestDataDirGuard::new();
     let mut cfg = test_utils::mk_minimal_root_cfg();
     cfg.torii.mcp.enabled = true;
@@ -2204,7 +2351,7 @@ async fn mcp_jsonrpc_tools_call_agent_alias_contracts_code_get_accepts_hash_shor
             "params": {
                 "name": "iroha.contracts.code.get",
                 "arguments": {
-                    "hash": "not-a-code-hash"
+                    "path": { "code_hash": "not-a-code-hash" }
                 }
             }
         }),
@@ -2225,7 +2372,7 @@ async fn mcp_jsonrpc_tools_call_agent_alias_contracts_code_get_accepts_hash_shor
     );
 }
 #[tokio::test]
-async fn mcp_jsonrpc_tools_call_agent_alias_contracts_code_bytes_get_accepts_hash_shortcut() {
+async fn mcp_jsonrpc_tools_call_contracts_code_bytes_get_accepts_canonical_code_hash_path() {
     let _data_dir = test_utils::TestDataDirGuard::new();
     let mut cfg = test_utils::mk_minimal_root_cfg();
     cfg.torii.mcp.enabled = true;
@@ -2239,7 +2386,7 @@ async fn mcp_jsonrpc_tools_call_agent_alias_contracts_code_bytes_get_accepts_has
             "params": {
                 "name": "iroha.contracts.code.bytes.get",
                 "arguments": {
-                    "hash": "not-a-code-hash"
+                    "path": { "code_hash": "not-a-code-hash" }
                 }
             }
         }),
@@ -2478,7 +2625,6 @@ async fn mcp_tools_list_exposes_account_and_transaction_interfaces() {
         "iroha.sumeragi.checkpoints",
         "iroha.sumeragi.consensus_keys",
         "iroha.sumeragi.bls_keys",
-        "iroha.sumeragi.key_lifecycle",
         "iroha.sumeragi.telemetry",
         "iroha.sumeragi.phases",
         "iroha.sumeragi.commit_qc.get",
@@ -3108,7 +3254,7 @@ async fn mcp_jsonrpc_tools_call_agent_alias_accounts_list_dispatches_route() {
 }
 mcp_alias_dispatch_test! {
     #[tokio::test]
-    async fn mcp_jsonrpc_tools_call_agent_alias_accounts_get_accepts_flat_account_id => error(
+    async fn mcp_jsonrpc_tools_call_agent_alias_accounts_get_accepts_canonical_path => error(
         1051,
         "iroha.accounts.get",
         InvalidAccountId,
@@ -3118,7 +3264,7 @@ mcp_alias_dispatch_test! {
 }
 mcp_alias_dispatch_test! {
     #[tokio::test]
-    async fn mcp_jsonrpc_tools_call_agent_alias_accounts_qr_accepts_flat_account_id => error(
+    async fn mcp_jsonrpc_tools_call_agent_alias_accounts_qr_accepts_canonical_path => error(
         1052,
         "iroha.accounts.qr",
         InvalidAccountId,
@@ -3160,26 +3306,16 @@ async fn mcp_jsonrpc_tools_call_agent_alias_transaction_status_validates_query()
 }
 mcp_alias_dispatch_test! {
     #[tokio::test]
-    async fn mcp_jsonrpc_tools_call_agent_alias_transaction_status_accepts_flat_hash => error(
+    async fn mcp_jsonrpc_tools_call_agent_alias_transaction_status_accepts_canonical_query_hash => error(
         1061,
         "iroha.transactions.status",
-        InvalidHash,
+        InvalidStatusHash,
         "invalid flat hash should be marked as MCP tool error",
         "tool_execution_error",
     )
 }
-mcp_alias_dispatch_test! {
-    #[tokio::test]
-    async fn mcp_jsonrpc_tools_call_agent_alias_transaction_status_accepts_transaction_hash_alias => error(
-        10616,
-        "iroha.transactions.status",
-        InvalidTransactionHash,
-        "invalid transaction_hash alias should be marked as MCP tool error",
-        "tool_execution_error",
-    )
-}
 #[tokio::test]
-async fn mcp_jsonrpc_tools_call_agent_alias_transaction_wait_accepts_flat_hash() {
+async fn mcp_jsonrpc_tools_call_agent_alias_transaction_wait_rejects_retired_flat_hash() {
     let _data_dir = test_utils::TestDataDirGuard::new();
     let mut cfg = test_utils::mk_minimal_root_cfg();
     cfg.torii.mcp.enabled = true;
@@ -3214,7 +3350,7 @@ async fn mcp_jsonrpc_tools_call_agent_alias_transaction_wait_accepts_flat_hash()
     );
 }
 #[tokio::test]
-async fn mcp_jsonrpc_tools_call_agent_alias_transaction_wait_accepts_query_transaction_hash_alias()
+async fn mcp_jsonrpc_tools_call_agent_alias_transaction_wait_rejects_query_transaction_hash_alias()
 {
     let _data_dir = test_utils::TestDataDirGuard::new();
     let mut cfg = test_utils::mk_minimal_root_cfg();
@@ -3262,16 +3398,16 @@ mcp_alias_dispatch_test! {
 }
 mcp_alias_dispatch_test! {
     #[tokio::test]
-    async fn mcp_jsonrpc_tools_call_agent_alias_transactions_get_accepts_flat_hash => error(
+    async fn mcp_jsonrpc_tools_call_agent_alias_transactions_get_accepts_canonical_path => error(
         10612,
         "iroha.transactions.get",
-        InvalidHash,
+        InvalidPathHash,
         "invalid hash should be marked as MCP tool error for transaction detail alias",
         "expected invalid transaction hash to be rejected by explorer detail alias",
     )
 }
 #[tokio::test]
-async fn mcp_jsonrpc_tools_call_agent_alias_transactions_get_accepts_path_transaction_hash_alias() {
+async fn mcp_jsonrpc_tools_call_transactions_get_rejects_retired_path_transaction_hash() {
     let _data_dir = test_utils::TestDataDirGuard::new();
     let mut cfg = test_utils::mk_minimal_root_cfg();
     cfg.torii.mcp.enabled = true;
@@ -3298,13 +3434,12 @@ async fn mcp_jsonrpc_tools_call_agent_alias_transactions_get_accepts_path_transa
         tool_is_error(&call),
         "invalid nested transaction_hash alias should be marked as MCP tool error for transaction detail alias"
     );
-    let structured = structured_content(&call);
     assert!(
-        structured
-            .get("status")
-            .and_then(Value::as_u64)
-            .is_some_and(|status| status >= 400),
-        "expected invalid nested transaction_hash alias to be rejected by explorer detail alias"
+        structured_content(&call)
+            .get("message")
+            .and_then(Value::as_str)
+            .is_some_and(|message| message.contains("transaction_hash")),
+        "retired nested transaction_hash must be rejected before dispatch"
     );
 }
 mcp_alias_dispatch_test! {
@@ -3317,7 +3452,7 @@ mcp_alias_dispatch_test! {
     )
 }
 #[tokio::test]
-async fn mcp_jsonrpc_tools_call_agent_alias_instructions_get_accepts_flat_hash_and_index() {
+async fn mcp_jsonrpc_tools_call_instructions_get_accepts_canonical_path() {
     let _data_dir = test_utils::TestDataDirGuard::new();
     let mut cfg = test_utils::mk_minimal_root_cfg();
     cfg.torii.mcp.enabled = true;
@@ -3331,8 +3466,10 @@ async fn mcp_jsonrpc_tools_call_agent_alias_instructions_get_accepts_flat_hash_a
             "params": {
                 "name": "iroha.instructions.get",
                 "arguments": {
-                    "hash": "not-a-hash",
-                    "index": 0
+                    "path": {
+                        "hash": "not-a-hash",
+                        "index": 0
+                    }
                 }
             }
         }),
@@ -3353,7 +3490,7 @@ async fn mcp_jsonrpc_tools_call_agent_alias_instructions_get_accepts_flat_hash_a
     );
 }
 #[tokio::test]
-async fn mcp_jsonrpc_tools_call_agent_alias_instructions_get_accepts_alias_shortcuts() {
+async fn mcp_jsonrpc_tools_call_instructions_get_rejects_retired_flat_aliases() {
     let _data_dir = test_utils::TestDataDirGuard::new();
     let mut cfg = test_utils::mk_minimal_root_cfg();
     cfg.torii.mcp.enabled = true;
@@ -3379,17 +3516,16 @@ async fn mcp_jsonrpc_tools_call_agent_alias_instructions_get_accepts_alias_short
         tool_is_error(&call),
         "invalid hash should be marked as MCP tool error for instruction alias shortcuts"
     );
-    let structured = structured_content(&call);
     assert!(
-        structured
-            .get("status")
-            .and_then(Value::as_u64)
-            .is_some_and(|status| status >= 400),
-        "expected invalid transaction hash alias to be rejected by explorer detail alias"
+        structured_content(&call)
+            .get("message")
+            .and_then(Value::as_str)
+            .is_some_and(|message| message.contains("transaction_hash")),
+        "retired flat instruction aliases must be rejected before dispatch"
     );
 }
 #[tokio::test]
-async fn mcp_jsonrpc_tools_call_agent_alias_instructions_get_accepts_path_transaction_hash_alias() {
+async fn mcp_jsonrpc_tools_call_instructions_get_rejects_retired_path_transaction_hash() {
     let _data_dir = test_utils::TestDataDirGuard::new();
     let mut cfg = test_utils::mk_minimal_root_cfg();
     cfg.torii.mcp.enabled = true;
@@ -3417,13 +3553,12 @@ async fn mcp_jsonrpc_tools_call_agent_alias_instructions_get_accepts_path_transa
         tool_is_error(&call),
         "invalid nested transaction_hash alias should be marked as MCP tool error for instruction detail alias"
     );
-    let structured = structured_content(&call);
     assert!(
-        structured
-            .get("status")
-            .and_then(Value::as_u64)
-            .is_some_and(|status| status >= 400),
-        "expected invalid nested transaction_hash alias to be rejected by instruction detail alias"
+        structured_content(&call)
+            .get("message")
+            .and_then(Value::as_str)
+            .is_some_and(|message| message.contains("transaction_hash")),
+        "retired nested transaction_hash must be rejected before dispatch"
     );
 }
 mcp_alias_dispatch_test! {
@@ -3437,7 +3572,7 @@ mcp_alias_dispatch_test! {
 }
 mcp_alias_dispatch_test! {
     #[tokio::test]
-    async fn mcp_jsonrpc_tools_call_agent_alias_assets_get_accepts_flat_asset_id => error(
+    async fn mcp_jsonrpc_tools_call_agent_alias_assets_get_accepts_canonical_path => error(
         106152,
         "iroha.assets.get",
         InvalidAssetId,
@@ -3495,7 +3630,7 @@ mcp_alias_dispatch_test! {
 }
 mcp_alias_dispatch_test! {
     #[tokio::test]
-    async fn mcp_jsonrpc_tools_call_agent_alias_nfts_get_accepts_flat_nft_id => error(
+    async fn mcp_jsonrpc_tools_call_agent_alias_nfts_get_accepts_canonical_path => error(
         106154,
         "iroha.nfts.get",
         InvalidNftId,
@@ -3562,7 +3697,7 @@ mcp_alias_dispatch_test! {
 }
 mcp_alias_dispatch_test! {
     #[tokio::test]
-    async fn mcp_jsonrpc_tools_call_agent_alias_rwas_get_accepts_flat_rwa_id => error(
+    async fn mcp_jsonrpc_tools_call_agent_alias_rwas_get_accepts_canonical_path => error(
         106158,
         "iroha.rwas.get",
         InvalidRwaId,
@@ -3589,7 +3724,7 @@ mcp_alias_dispatch_test! {
     )
 }
 #[tokio::test]
-async fn mcp_jsonrpc_tools_call_agent_alias_blocks_get_accepts_height_alias() {
+async fn mcp_jsonrpc_tools_call_blocks_get_accepts_canonical_identifier_path() {
     let _data_dir = test_utils::TestDataDirGuard::new();
     let mut cfg = test_utils::mk_minimal_root_cfg();
     cfg.torii.mcp.enabled = true;
@@ -3603,7 +3738,7 @@ async fn mcp_jsonrpc_tools_call_agent_alias_blocks_get_accepts_height_alias() {
             "params": {
                 "name": "iroha.blocks.get",
                 "arguments": {
-                    "block_height": 0
+                    "path": { "identifier": 0 }
                 }
             }
         }),
@@ -3624,7 +3759,7 @@ async fn mcp_jsonrpc_tools_call_agent_alias_blocks_get_accepts_height_alias() {
     );
 }
 #[tokio::test]
-async fn mcp_jsonrpc_tools_call_agent_alias_account_transactions_accepts_flat_arguments() {
+async fn mcp_jsonrpc_tools_call_agent_alias_account_transactions_rejects_retired_flat_arguments() {
     let _data_dir = test_utils::TestDataDirGuard::new();
     let mut cfg = test_utils::mk_minimal_root_cfg();
     cfg.torii.mcp.enabled = true;
@@ -3660,7 +3795,7 @@ async fn mcp_jsonrpc_tools_call_agent_alias_account_transactions_accepts_flat_ar
     );
 }
 #[tokio::test]
-async fn mcp_jsonrpc_tools_call_agent_alias_account_history_accepts_flat_arguments() {
+async fn mcp_jsonrpc_tools_call_agent_alias_account_history_rejects_retired_flat_arguments() {
     let _data_dir = test_utils::TestDataDirGuard::new();
     let mut cfg = test_utils::mk_minimal_root_cfg();
     cfg.torii.mcp.enabled = true;
@@ -3763,7 +3898,7 @@ async fn mcp_jsonrpc_tools_call_agent_alias_accounts_onboard_accepts_shortcuts()
     );
 }
 #[tokio::test]
-async fn mcp_jsonrpc_tools_call_agent_alias_account_transactions_query_accepts_flat_arguments() {
+async fn mcp_jsonrpc_tools_call_account_transactions_query_accepts_canonical_path() {
     let _data_dir = test_utils::TestDataDirGuard::new();
     let mut cfg = test_utils::mk_minimal_root_cfg();
     cfg.torii.mcp.enabled = true;
@@ -3777,7 +3912,7 @@ async fn mcp_jsonrpc_tools_call_agent_alias_account_transactions_query_accepts_f
             "params": {
                 "name": "iroha.accounts.transactions.query",
                 "arguments": {
-                    "account_id": TEST_ACCOUNT_I105,
+                    "path": { "account_id": TEST_ACCOUNT_I105 },
                     "limit": 2
                 }
             }
@@ -3793,7 +3928,7 @@ async fn mcp_jsonrpc_tools_call_agent_alias_account_transactions_query_accepts_f
     assert_eq!(structured.get("status").and_then(Value::as_u64), Some(200));
 }
 #[tokio::test]
-async fn mcp_jsonrpc_tools_call_agent_alias_account_assets_accepts_flat_arguments() {
+async fn mcp_jsonrpc_tools_call_account_assets_accepts_canonical_path() {
     let _data_dir = test_utils::TestDataDirGuard::new();
     let mut cfg = test_utils::mk_minimal_root_cfg();
     cfg.torii.mcp.enabled = true;
@@ -3807,7 +3942,7 @@ async fn mcp_jsonrpc_tools_call_agent_alias_account_assets_accepts_flat_argument
             "params": {
                 "name": "iroha.accounts.assets",
                 "arguments": {
-                    "account_id": TEST_ACCOUNT_I105,
+                    "path": { "account_id": TEST_ACCOUNT_I105 },
                     "limit": 0
                 }
             }
@@ -3829,7 +3964,7 @@ async fn mcp_jsonrpc_tools_call_agent_alias_account_assets_accepts_flat_argument
     );
 }
 #[tokio::test]
-async fn mcp_jsonrpc_tools_call_agent_alias_account_assets_query_accepts_flat_arguments() {
+async fn mcp_jsonrpc_tools_call_account_assets_query_accepts_canonical_path() {
     let _data_dir = test_utils::TestDataDirGuard::new();
     let mut cfg = test_utils::mk_minimal_root_cfg();
     cfg.torii.mcp.enabled = true;
@@ -3843,7 +3978,7 @@ async fn mcp_jsonrpc_tools_call_agent_alias_account_assets_query_accepts_flat_ar
             "params": {
                 "name": "iroha.accounts.assets.query",
                 "arguments": {
-                    "account_id": TEST_ACCOUNT_I105,
+                    "path": { "account_id": TEST_ACCOUNT_I105 },
                     "limit": 2
                 }
             }
@@ -3859,7 +3994,7 @@ async fn mcp_jsonrpc_tools_call_agent_alias_account_assets_query_accepts_flat_ar
     assert_eq!(structured.get("status").and_then(Value::as_u64), Some(200));
 }
 #[tokio::test]
-async fn mcp_jsonrpc_tools_call_agent_alias_account_permissions_accepts_flat_account_id() {
+async fn mcp_jsonrpc_tools_call_account_permissions_accepts_canonical_path() {
     let _data_dir = test_utils::TestDataDirGuard::new();
     let mut cfg = test_utils::mk_minimal_root_cfg();
     cfg.torii.mcp.enabled = true;
@@ -3873,7 +4008,7 @@ async fn mcp_jsonrpc_tools_call_agent_alias_account_permissions_accepts_flat_acc
             "params": {
                 "name": "iroha.accounts.permissions",
                 "arguments": {
-                    "account_id": TEST_ACCOUNT_I105
+                    "path": { "account_id": TEST_ACCOUNT_I105 }
                 }
             }
         }),
@@ -3888,7 +4023,7 @@ async fn mcp_jsonrpc_tools_call_agent_alias_account_permissions_accepts_flat_acc
     assert_eq!(structured.get("status").and_then(Value::as_u64), Some(200));
 }
 #[tokio::test]
-async fn mcp_jsonrpc_tools_call_agent_alias_account_portfolio_accepts_flat_uaid() {
+async fn mcp_jsonrpc_tools_call_account_portfolio_accepts_canonical_path() {
     let _data_dir = test_utils::TestDataDirGuard::new();
     let mut cfg = test_utils::mk_minimal_root_cfg();
     cfg.torii.mcp.enabled = true;
@@ -3902,7 +4037,9 @@ async fn mcp_jsonrpc_tools_call_agent_alias_account_portfolio_accepts_flat_uaid(
             "params": {
                 "name": "iroha.accounts.portfolio",
                 "arguments": {
-                    "uaid": "uaid:00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff"
+                    "path": {
+                        "uaid": "uaid:00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff"
+                    }
                 }
             }
         }),
@@ -3953,7 +4090,7 @@ async fn mcp_jsonrpc_tools_call_agent_alias_domains_list_accepts_flat_query_fiel
 }
 mcp_alias_dispatch_test! {
     #[tokio::test]
-    async fn mcp_jsonrpc_tools_call_agent_alias_domains_get_accepts_flat_domain_id => error(
+    async fn mcp_jsonrpc_tools_call_agent_alias_domains_get_accepts_canonical_path => error(
         1062221,
         "iroha.domains.get",
         InvalidDomainId,
@@ -4155,23 +4292,26 @@ async fn mcp_jsonrpc_connect_session_create_and_ticket_dispatches_routes() {
     enable_writer_mcp(&mut cfg);
     cfg.torii.connect.enabled = true;
     let app = build_router(cfg);
-    for (id, tool_name, sid_bytes, role, token_key) in [
+    for (id, tool_name, app_key_byte, nonce_byte, role, token_key) in [
         (
             1078,
             "connect.session.create_and_ticket",
-            [0x77u8; 32],
+            0x77u8,
+            0x17u8,
             "app",
             "token_app",
         ),
         (
             1079,
             "iroha.connect.session.create_and_ticket",
-            [0x78u8; 32],
+            0x78u8,
+            0x18u8,
             "wallet",
             "token_wallet",
         ),
     ] {
-        let sid = B64.encode(sid_bytes);
+        let app_pk = B64.encode([app_key_byte; 32]);
+        let nonce = B64.encode([nonce_byte; 16]);
         let (status, call) = post_mcp(
             &app,
             norito::json!({
@@ -4181,9 +4321,11 @@ async fn mcp_jsonrpc_connect_session_create_and_ticket_dispatches_routes() {
                 "params": {
                     "name": tool_name,
                     "arguments": {
-                        "session_id": sid,
+                        "network_id": "hash:4141414141414141414141414141414141414141414141414141414141414141#7023",
+                        "app_pk": app_pk,
+                        "nonce": nonce,
                         "role": role,
-                        "node_url": "https://node.example"
+                        "ticket_node_url": "https://node.example"
                     }
                 }
             }),
@@ -4196,10 +4338,11 @@ async fn mcp_jsonrpc_connect_session_create_and_ticket_dispatches_routes() {
         );
         let structured = structured_content(&call);
         assert_eq!(structured.get("status").and_then(Value::as_u64), Some(200));
-        assert_eq!(
-            structured.get("sid").and_then(Value::as_str),
-            Some(sid.as_str())
-        );
+        let sid = structured
+            .get("sid")
+            .and_then(Value::as_str)
+            .expect("derived sid")
+            .to_owned();
         assert_eq!(structured.get("role").and_then(Value::as_str), Some(role));
         let create = structured
             .get("create")
@@ -4210,6 +4353,10 @@ async fn mcp_jsonrpc_connect_session_create_and_ticket_dispatches_routes() {
             .get("body")
             .and_then(Value::as_object)
             .expect("create response body");
+        assert_eq!(
+            create_body.get("sid").and_then(Value::as_str),
+            Some(sid.as_str())
+        );
         let token = create_body
             .get(token_key)
             .and_then(Value::as_str)
@@ -4229,16 +4376,18 @@ async fn mcp_jsonrpc_connect_session_create_and_ticket_dispatches_routes() {
     }
 }
 #[tokio::test]
-async fn mcp_jsonrpc_connect_session_create_generates_sid_when_omitted() {
+async fn mcp_jsonrpc_connect_session_create_derives_sid_from_exact_identity() {
     let _data_dir = test_utils::TestDataDirGuard::new();
     let mut cfg = test_utils::mk_minimal_root_cfg();
     enable_writer_mcp(&mut cfg);
     cfg.torii.connect.enabled = true;
     let app = build_router(cfg);
-    for (id, tool_name) in [
-        (2080, "connect.session.create"),
-        (2081, "iroha.connect.session.create"),
+    for (id, tool_name, app_key_byte, nonce_byte) in [
+        (2080, "connect.session.create", 0x41u8, 0x21u8),
+        (2081, "iroha.connect.session.create", 0x42u8, 0x22u8),
     ] {
+        let app_pk = B64.encode([app_key_byte; 32]);
+        let nonce = B64.encode([nonce_byte; 16]);
         let (status, call) = post_mcp(
             &app,
             norito::json!({
@@ -4248,7 +4397,10 @@ async fn mcp_jsonrpc_connect_session_create_generates_sid_when_omitted() {
                 "params": {
                     "name": tool_name,
                     "arguments": {
-                        "node_url": "https://node.example"
+                        "network_id": "hash:4141414141414141414141414141414141414141414141414141414141414141#7023",
+                        "app_pk": app_pk,
+                        "nonce": nonce,
+                        "node": "https://node.example"
                     }
                 }
             }),
@@ -4257,7 +4409,7 @@ async fn mcp_jsonrpc_connect_session_create_generates_sid_when_omitted() {
         assert_eq!(status, StatusCode::OK);
         assert!(
             !tool_is_error(&call),
-            "create alias `{tool_name}` should auto-generate sid"
+            "create alias `{tool_name}` should derive a sid"
         );
         let structured = structured_content(&call);
         assert_eq!(structured.get("status").and_then(Value::as_u64), Some(200));

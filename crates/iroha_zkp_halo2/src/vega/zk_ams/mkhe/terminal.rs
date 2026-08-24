@@ -1873,7 +1873,8 @@ mod tests {
     use crate::vega::{
         circuit::CircuitAssignment,
         masked_relaxed::{
-            MaskedRelaxedRandomErrorV1, MaskedRelaxedRandomSourceV1, precompute_masked_relaxed_v1,
+            MaskedRelaxedRandomErrorV1, MaskedRelaxedRandomSourceV1, MaskedRelaxedStreamConfigV1,
+            precompute_masked_relaxed_stream_v1,
         },
         zk_ams::mkhe::phase23_encrypted::ZkAmsPhase23AccumulatorShapeV1,
     };
@@ -2054,12 +2055,11 @@ mod tests {
         );
         let profile = build_terminal_profile(external_relation(&maps, &shape))
             .expect("synthetic terminal profile");
-        let assignments = vec![strict_assignment(&shape, 3), strict_assignment(&shape, 4)];
-        let governed_bytes = assignments
+        let strict_public_inputs = vec![vec![s(3)], vec![s(4)]];
+        let governed_bytes = strict_public_inputs
             .iter()
-            .map(|assignment| {
-                assignment
-                    .public_inputs
+            .map(|public_inputs| {
+                public_inputs
                     .iter()
                     .copied()
                     .map(Scalar::to_be_bytes)
@@ -2083,12 +2083,17 @@ mod tests {
         let proof_context = proof_context();
         let context_frame = terminal_composition_context_frame(&proof_context, context, &governed)
             .expect("canonical terminal composition context frame");
-        let precomputation = precompute_masked_relaxed_v1(
-            super::super::super::COMPOSITION_DOMAIN_V1,
-            &context_frame,
-            super::super::super::COMMITMENT_KEY_LABEL_V1,
-            assignments,
-            1,
+        let strict_values = [3_u64, 4];
+        let precomputation = precompute_masked_relaxed_stream_v1(
+            MaskedRelaxedStreamConfigV1::new(
+                super::super::super::COMPOSITION_DOMAIN_V1,
+                &context_frame,
+                super::super::super::COMMITMENT_KEY_LABEL_V1,
+                Arc::clone(&shape),
+                &strict_public_inputs,
+                1,
+            ),
+            |index| Ok(strict_assignment(&shape, strict_values[index])),
             &mut KatRandom::new(),
         )
         .expect("canonical masked Nova precomputation");

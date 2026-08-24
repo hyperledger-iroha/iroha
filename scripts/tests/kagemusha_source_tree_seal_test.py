@@ -312,9 +312,9 @@ class KagemushaSourceTreeSealTests(unittest.TestCase):
         self.commit()
         identity, descriptor, path, pin = self.reviewed_identity()
         initial_lock = (self.root / "Cargo.lock").read_bytes()
-        self.assertEqual(descriptor["ignored_cargo_lock_size_bytes"], len(initial_lock))
+        self.assertEqual(descriptor["tracked_cargo_lock_size_bytes"], len(initial_lock))
         self.assertEqual(
-            descriptor["ignored_cargo_lock_sha256"],
+            descriptor["tracked_cargo_lock_sha256"],
             hashlib.sha256(initial_lock).hexdigest(),
         )
 
@@ -331,9 +331,23 @@ class KagemushaSourceTreeSealTests(unittest.TestCase):
             replacement["source_tree_sha256"],
         )
         self.assertNotEqual(
-            descriptor["ignored_cargo_lock_sha256"],
-            replacement["ignored_cargo_lock_sha256"],
+            descriptor["tracked_cargo_lock_sha256"],
+            replacement["tracked_cargo_lock_sha256"],
         )
+
+    def test_reviewed_descriptor_rejects_retired_ignored_cargo_lock_keys(self) -> None:
+        (self.root / "tracked.txt").write_text("tracked\n", encoding="utf-8")
+        self.commit()
+        descriptor = seal.compute_observed_descriptor(self.root)
+        descriptor["ignored_cargo_lock_size_bytes"] = descriptor.pop(
+            "tracked_cargo_lock_size_bytes"
+        )
+        descriptor["ignored_cargo_lock_sha256"] = descriptor.pop(
+            "tracked_cargo_lock_sha256"
+        )
+
+        with self.assertRaisesRegex(seal.SourceSealError, "keys are not exact"):
+            seal._validate_descriptor(descriptor, descriptor["base_commit"])
 
     def test_requires_exactly_one_stage_zero_tracked_mode_100644_root_cargo_lock(
         self,

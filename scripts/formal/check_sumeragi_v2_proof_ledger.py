@@ -14420,20 +14420,6 @@ def _worker_test_include_source_fidelity_errors(repo_root: Path) -> list[str]:
                 expected_attributes=expected_attributes,
             )
     return errors
-
-
-def _serve_ingress_ordinal_production_source_fidelity_errors(repo_root: Path) -> list[str]:
-    """Delegate the retired entry point to the lifecycle-owned Serve seal."""
-
-    return _lifecycle_certified_serve_production_source_fidelity_errors(repo_root)
-
-
-def _serve_lifecycle_production_source_fidelity_errors(repo_root: Path) -> list[str]:
-    """Delegate the retired entry point to the lifecycle-owned Serve seal."""
-
-    return _lifecycle_certified_serve_production_source_fidelity_errors(repo_root)
-
-
 _execute_checker_component("sumeragi_v2_proof_ledger_serviced_candidate_contracts.py")
 
 
@@ -19592,12 +19578,6 @@ def _safety_property_source_fidelity_errors(formal_dir: Path) -> list[str]:
         "PotentialCommitSigners": (
             "{vote.signer: vote \\in PotentialCommitVotes( "
             "certificateContext, roundView, subject)}"
-        ),
-        "InstalledTcAuthorizedPotentialCommitIntersection": (
-            "FALSE"
-        ),
-        "TCProtectsOrInstalledTcAuthorizesPotentialCommit": (
-            "TCProtectsPotentialCommit(tc)"
         ),
         "TimeoutProtectionProperty": (
             "specification => [](\\A tc \\in formedTCs: "
@@ -69871,7 +69851,9 @@ def validate_ledger(
     errors.extend(
         _process_lifetime_worker_launch_source_fidelity_errors(ROOT_DIR)
     )
-    errors.extend(_serve_lifecycle_production_source_fidelity_errors(ROOT_DIR))
+    errors.extend(
+        _lifecycle_certified_serve_production_source_fidelity_errors(ROOT_DIR)
+    )
     errors.extend(
         _serviced_candidate_production_source_fidelity_errors(ROOT_DIR)
     )

@@ -422,7 +422,8 @@ fn lane_block_artifact_remains_canonical_when_post_commit_merge_append_fails() {
     );
     drop(kura);
     let (kura, BlockCount(count)) =
-        Kura::new(&config, &lane_config).expect("restart repairs committed association");
+        Kura::open_test_kura_with_configured_lane_config(&config, &lane_config)
+            .expect("restart repairs committed association");
     assert_eq!(count, 2);
     let _ = persist_v2_finality_chain_through(&kura, nonzero!(2_usize));
     let artifact = kura
@@ -1774,7 +1775,10 @@ fn sidecar_reader_rejects_oversized_payloads() {
     let temp_dir = TempDir::new().unwrap();
     let store_root = temp_dir.path().join("kura");
     let config = kura_config_for_path(&store_root, BLOCKS_IN_MEMORY);
-    let kura = Kura::new(&config, &RuntimeLaneConfig::default()).unwrap().0;
+    let kura =
+        Kura::open_test_kura_with_configured_lane_config(&config, &RuntimeLaneConfig::default())
+            .unwrap()
+            .0;
     let mut dir = kura.store_dir().expect("store dir");
     dir.push(PIPELINE_DIR_NAME);
     std::fs::create_dir_all(&dir).expect("create pipeline dir");
@@ -2223,7 +2227,8 @@ fn terminal_auxiliary_cleanup_resumes_after_each_mutation_budget() {
     let (temp_dir, config) = kura_storage_fixture("temporary Kura directory", BLOCKS_IN_MEMORY);
     let lane_config = RuntimeLaneConfig::default();
     let lane = lane_config.primary();
-    let (kura, _) = Kura::new(&config, &lane_config).expect("initialize Kura");
+    let (kura, _) = Kura::open_test_kura_with_configured_lane_config(&config, &lane_config)
+        .expect("initialize Kura");
     let artifact_dir = Kura::lane_artifact_dir(&lane.blocks_dir(temp_dir.path()));
     std::fs::create_dir_all(&artifact_dir).expect("create lane artifact directory");
     let paths = (1_u64..=3)

@@ -1311,7 +1311,6 @@ impl<'tx> AcceptedTransaction<'tx> {
                 &messages,
                 &signatures,
                 &public_keys,
-                [0; 32],
             )
             .map_err(|err| {
                 AcceptTransactionFail::SignatureVerification(Self::signature_fail_from_error(
@@ -2520,8 +2519,9 @@ impl StateBlock<'_> {
                 ),
             ));
         }
-        crate::smartcontracts::isi::offline::signed_lifecycle_entrypoint_context(tx)
-            .map_err(TransactionRejectionReason::Validation)?;
+        let lifecycle_entrypoint =
+            crate::smartcontracts::isi::offline::signed_lifecycle_entrypoint_context(tx)
+                .map_err(TransactionRejectionReason::Validation)?;
         let (require_height_ttl, require_sequence) = {
             let params = state_transaction.world.parameters();
             (
@@ -2609,7 +2609,7 @@ impl StateBlock<'_> {
                 | Executable::IvmProved(_)
                 | Executable::Ivm(_) => false,
             };
-            let allows_direct_kagemusha_lifecycle_authority = tx.multisig_signatures().is_some()
+            let allows_direct_kagemusha_lifecycle_authority = lifecycle_entrypoint.is_some()
                 && matches!(
                     tx.instructions(),
                     Executable::Instructions(instructions)
@@ -4223,7 +4223,6 @@ fn tenant_label_from(raw: &str) -> &str {
 struct FraudTelemetryContext<'a> {
     telemetry: &'a StateTelemetry,
     lane_id: NexusLaneId,
-    dataspace_id: NexusDataSpaceId,
     dataspace_label: String,
     tenant: String,
     score_bps: Option<u16>,
@@ -4251,7 +4250,6 @@ impl<'a> FraudTelemetryContext<'a> {
     ) -> Self {
         let dataspace_label = routing.dataspace_label();
         let lane_id = routing.lane_id;
-        let dataspace_id = routing.dataspace_id;
         let tenant = metadata
             .get(FRAUD_ASSESSMENT_TENANT_KEY.as_ref())
             .map_or_else(
@@ -4261,7 +4259,6 @@ impl<'a> FraudTelemetryContext<'a> {
                         |_| {
                             telemetry.record_fraud_invalid_metadata(
                                 lane_id,
-                                dataspace_id,
                                 dataspace_label.as_str(),
                                 "unknown",
                                 "tenant",
@@ -4273,7 +4270,6 @@ impl<'a> FraudTelemetryContext<'a> {
                             if trimmed.is_empty() {
                                 telemetry.record_fraud_invalid_metadata(
                                     lane_id,
-                                    dataspace_id,
                                     dataspace_label.as_str(),
                                     "unknown",
                                     "tenant",
@@ -4296,7 +4292,6 @@ impl<'a> FraudTelemetryContext<'a> {
                     |_| {
                         telemetry.record_fraud_invalid_metadata(
                             lane_id,
-                            dataspace_id,
                             dataspace_label.as_str(),
                             tenant_label,
                             "latency_ms",
@@ -4314,7 +4309,6 @@ impl<'a> FraudTelemetryContext<'a> {
                         |_| {
                             telemetry.record_fraud_invalid_metadata(
                                 lane_id,
-                                dataspace_id,
                                 dataspace_label.as_str(),
                                 tenant_label,
                                 "score_bps",
@@ -4326,7 +4320,6 @@ impl<'a> FraudTelemetryContext<'a> {
                                 |_| {
                                     telemetry.record_fraud_invalid_metadata(
                                         lane_id,
-                                        dataspace_id,
                                         dataspace_label.as_str(),
                                         tenant_label,
                                         "score_bps",
@@ -4345,7 +4338,6 @@ impl<'a> FraudTelemetryContext<'a> {
                     |_| {
                         telemetry.record_fraud_invalid_metadata(
                             lane_id,
-                            dataspace_id,
                             dataspace_label.as_str(),
                             tenant_label,
                             "disposition",
@@ -4356,7 +4348,6 @@ impl<'a> FraudTelemetryContext<'a> {
                         FraudDisposition::from_metadata(&raw).unwrap_or_else(|()| {
                             telemetry.record_fraud_invalid_metadata(
                                 lane_id,
-                                dataspace_id,
                                 dataspace_label.as_str(),
                                 tenant_label,
                                 "disposition",
@@ -4369,7 +4360,6 @@ impl<'a> FraudTelemetryContext<'a> {
         Self {
             telemetry,
             lane_id,
-            dataspace_id,
             dataspace_label,
             tenant,
             score_bps,
@@ -4386,7 +4376,6 @@ impl<'a> FraudTelemetryContext<'a> {
     fn record_missing(&self, cause: &'static str) {
         self.telemetry.record_fraud_missing_assessment(
             self.lane_id,
-            self.dataspace_id,
             self.dataspace_label(),
             self.tenant_label(),
             cause,
@@ -4395,7 +4384,6 @@ impl<'a> FraudTelemetryContext<'a> {
     fn record_invalid(&self, field: &'static str) {
         self.telemetry.record_fraud_invalid_metadata(
             self.lane_id,
-            self.dataspace_id,
             self.dataspace_label(),
             self.tenant_label(),
             field,
@@ -4404,7 +4392,6 @@ impl<'a> FraudTelemetryContext<'a> {
     fn record_assessment(&self, band: iroha_config::parameters::actual::FraudRiskBand) {
         self.telemetry.record_fraud_assessment(
             self.lane_id,
-            self.dataspace_id,
             self.dataspace_label(),
             self.tenant_label(),
             band.as_str(),
@@ -4414,7 +4401,6 @@ impl<'a> FraudTelemetryContext<'a> {
         if let Some(direction) = self.outcome_mismatch_direction(band) {
             self.telemetry.record_fraud_outcome_mismatch(
                 self.lane_id,
-                self.dataspace_id,
                 self.dataspace_label(),
                 self.tenant_label(),
                 direction,
@@ -4424,7 +4410,6 @@ impl<'a> FraudTelemetryContext<'a> {
     fn record_attestation(&self, engine_id: &str, status: &'static str) {
         self.telemetry.record_fraud_attestation(
             self.lane_id,
-            self.dataspace_id,
             self.dataspace_label(),
             self.tenant_label(),
             engine_id,
@@ -5148,8 +5133,8 @@ pub mod tests {
 
         let mut nexus = state.nexus.write();
         nexus.autoscale.enabled = true;
-        nexus.autoscale.min_lanes = nonzero!(1_u32);
-        nexus.autoscale.max_lanes = nonzero!(2_u32);
+        nexus.autoscale.min_lane_id = nonzero!(1_u32);
+        nexus.autoscale.max_lane_id_exclusive = nonzero!(2_u32);
         nexus.lane_catalog =
             LaneCatalog::new(nonzero!(2_u32), vec![LaneConfig::default(), elastic_lane])
                 .expect("static and autoscale lane catalog");
@@ -11169,8 +11154,8 @@ pub mod tests {
             crate::state::attach_synthetic_autoscale_committee_for_test(&mut elastic_lane);
             let mut nexus = state.nexus.write();
             nexus.autoscale.enabled = true;
-            nexus.autoscale.min_lanes = nonzero!(1_u32);
-            nexus.autoscale.max_lanes = nonzero!(8_u32);
+            nexus.autoscale.min_lane_id = nonzero!(1_u32);
+            nexus.autoscale.max_lane_id_exclusive = nonzero!(8_u32);
             nexus.lane_catalog =
                 LaneCatalog::new(nonzero!(2_u32), vec![LaneConfig::default(), elastic_lane])
                     .expect("autoscale lane catalog");
@@ -11399,8 +11384,8 @@ pub mod tests {
         {
             let mut nexus = state.nexus.write();
             nexus.autoscale.enabled = true;
-            nexus.autoscale.min_lanes = nonzero!(1_u32);
-            nexus.autoscale.max_lanes = nonzero!(8_u32);
+            nexus.autoscale.min_lane_id = nonzero!(1_u32);
+            nexus.autoscale.max_lane_id_exclusive = nonzero!(8_u32);
             nexus.lane_catalog =
                 LaneCatalog::new(nonzero!(2_u32), vec![LaneConfig::default(), elastic_lane])
                     .expect("autoscale lane catalog");

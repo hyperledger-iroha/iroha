@@ -14,8 +14,8 @@ metadata = {}
 
 [nexus.autoscale]
 enabled = true
-min_lanes = 1
-max_lanes = 2
+min_lane_id = 1
+max_lane_id_exclusive = 2
 
 [nexus.routing_policy]
 default_lane = 2

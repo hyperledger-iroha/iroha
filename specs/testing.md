@@ -77,7 +77,7 @@ Start from a clean run directory so previous artifacts do not hide new issues. T
 
 - Use [`scripts/analyze_telemetry.sh`](../scripts/analyze_telemetry.sh) after test execution to aggregate node metrics into timestamped Norito JSON snapshots.
 - When investigating networking issues, run [`scripts/run_iroha_monitor_demo.py`](../scripts/run_iroha_monitor_demo.py) to stream Torii events into `monitor_output.norito.json`.
-- Integration test logs are stored under `integration_tests/target/`; compress them with [`scripts/profile_build.sh`](../scripts/profile_build.sh) for sharing with other teams.
+- Integration test logs are stored under `integration_tests/target/`; archive the exact run directory when sharing them with other teams.
 - Export Python client logs alongside captured telemetry with a dry-run report before filing an issue:
   ```bash
   python3 scripts/report_red_team_failures.py \

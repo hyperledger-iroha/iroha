@@ -72,7 +72,7 @@ impl<F: Field> Circuit<F> for PublicValue<F> {
         let cell = layouter.assign_region(
             || "offline cash primitive public value",
             |mut region| {
-                let cell = crate::zk::halo2_backend::assign_advice_compat(
+                let cell = crate::zk::halo2_backend::assign_advice_vendored(
                     &mut region,
                     || "value",
                     advice,

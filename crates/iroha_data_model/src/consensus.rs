@@ -799,7 +799,7 @@ mod tests {
             epoch: 0,
             chain_order_hash: crate::consensus::default_chain_order_hash(),
             rechain_seq: 0,
-            mode_tag: crate::block::consensus::PERMISSIONED_TAG.to_string(),
+            mode_tag: crate::block::consensus_v2::PERMISSIONED_TAG.to_string(),
             highest_qc: None,
             validator_set_hash,
             validator_set_hash_version: VALIDATOR_SET_HASH_VERSION_V1,

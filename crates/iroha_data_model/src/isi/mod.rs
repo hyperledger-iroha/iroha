@@ -453,8 +453,6 @@ impl_direct_instruction_box!(crate::isi::alias_setup::RenewAliasLease);
 impl_direct_instruction_box!(crate::isi::alias_setup::ConfigureAliasAutoRenew);
 impl_direct_instruction_box!(crate::isi::alias_setup::RebindAccountAlias);
 impl_direct_instruction_box!(crate::isi::alias_setup::CompareAndSetPrimaryAccountAlias);
-impl_direct_instruction_box!(crate::isi::account_alias_lease::AcquireAccountAliasLease);
-impl_direct_instruction_box!(crate::isi::domain_link::SetAccountAliasBinding);
 impl_direct_instruction_box!(crate::isi::account_recovery::ReplaceAccountController);
 impl_direct_instruction_box!(crate::isi::account_recovery::SetAccountRecoveryPolicy);
 impl_direct_instruction_box!(crate::isi::account_recovery::ClearAccountRecoveryPolicy);
@@ -1604,6 +1602,7 @@ impl InstructionRegistry {
         self.insert_entry(entry);
         self
     }
+    #[cfg(test)]
     /// Register a new [`crate::isi::Instruction`] type using a stable wire identifier
     /// and the direct slice decoder.
     ///
@@ -2052,8 +2051,6 @@ macro_rules! enum_type {
         }
     };
 }
-/// Legacy paid account-alias acquisition compatibility.
-pub mod account_alias_lease;
 /// Native account controller replacement and social recovery instructions.
 pub mod account_recovery;
 /// Declarative alias setup and explicit alias lifecycle instructions.
@@ -2072,8 +2069,6 @@ pub mod content;
 pub mod contract_alias;
 /// DeFi-native instructions.
 pub mod defi;
-/// Legacy account-alias binding compatibility.
-pub mod domain_link;
 /// Ledger-managed asset escrow instructions.
 pub mod escrow;
 /// Hidden-function-backed identifier policy instructions.

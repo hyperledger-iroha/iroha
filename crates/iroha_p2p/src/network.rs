@@ -7458,7 +7458,6 @@ impl<T: Pload + message::ClassifyTopic, E: Enc + Sync> NetworkBaseHandle<T, E> {
             quic_datagram_max_payload_bytes,
             quic_datagram_receive_buffer_bytes,
             quic_datagram_send_buffer_bytes,
-            scion,
             tls_enabled,
             tls_fallback_to_plain,
             prefer_ws_fallback,
@@ -7778,11 +7777,6 @@ impl<T: Pload + message::ClassifyTopic, E: Enc + Sync> NetworkBaseHandle<T, E> {
             }
             iroha_logger::warn!(
                 "network.tls_enabled=true but this build lacks iroha_p2p/p2p_tls; outbound dials will be plaintext because tls_fallback_to_plain=true"
-            );
-        }
-        if scion.enabled || scion.listen_endpoint.is_some() || !scion.routes.is_empty() {
-            iroha_logger::warn!(
-                "network.scion_* settings are ignored; SCION selection is automatic via peer capabilities"
             );
         }
         let local_scion_supported = quic_enabled && cfg!(feature = "quic");
@@ -9657,7 +9651,6 @@ mod accept_stream_tests {
             quic_datagram_max_payload_bytes: iroha_config::parameters::defaults::network::QUIC_DATAGRAM_MAX_PAYLOAD_BYTES.get(),
             quic_datagram_receive_buffer_bytes: iroha_config::parameters::defaults::network::QUIC_DATAGRAM_RECEIVE_BUFFER_BYTES.get(),
             quic_datagram_send_buffer_bytes: iroha_config::parameters::defaults::network::QUIC_DATAGRAM_SEND_BUFFER_BYTES.get(),
-            scion: iroha_config::parameters::actual::ScionConfig::default(),
             tls_enabled: false,
             tls_fallback_to_plain: false,
             tls_listen_address: None,

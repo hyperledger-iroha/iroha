@@ -8,6 +8,7 @@ use axum::{
     routing::{get, post},
 };
 use http_body_util::BodyExt as _;
+use iroha_test_samples::{ALICE_ID, BOB_ID};
 use std::{convert::TryFrom, sync::Once};
 use tower::ServiceExt as _;
 fn ensure_quota_config() {
@@ -38,8 +39,8 @@ async fn attachments_post_get_list_delete_roundtrip() {
     let _data_dir = iroha_torii::test_utils::TestDataDirGuard::new();
     ensure_quota_config();
     iroha_torii::zk_attachments::init_persistence();
-    // Token-specific uploads should hash tenant identity and remain distinct
-    let tenant_token_a = iroha_torii::zk_attachments::AttachmentTenant::from_api_token("tenant-A");
+    // Account-specific uploads should hash tenant identity and remain distinct.
+    let tenant_token_a = iroha_torii::zk_attachments::AttachmentTenant::from_account(&ALICE_ID);
     let meta_token_a: norito::json::Value = {
         let resp = iroha_torii::zk_attachments::handle_post_attachment(
             tenant_token_a.clone(),
@@ -52,7 +53,7 @@ async fn attachments_post_get_list_delete_roundtrip() {
         let bytes = resp.into_body().collect().await.unwrap().to_bytes();
         norito::json::from_slice(&bytes).unwrap()
     };
-    let tenant_token_b = iroha_torii::zk_attachments::AttachmentTenant::from_api_token("tenant-B");
+    let tenant_token_b = iroha_torii::zk_attachments::AttachmentTenant::from_account(&BOB_ID);
     let meta_token_b: norito::json::Value = {
         let resp = iroha_torii::zk_attachments::handle_post_attachment(
             tenant_token_b.clone(),
@@ -76,7 +77,7 @@ async fn attachments_post_get_list_delete_roundtrip() {
     assert_eq!(tenant_a, tenant_token_a.as_str());
     assert_eq!(tenant_b, tenant_token_b.as_str());
     assert_ne!(tenant_a, tenant_b);
-    // Cleanup token-scoped attachments so quota tests operate on a clean slate
+    // Cleanup account-scoped attachments so quota tests operate on a clean slate.
     let id_a = meta_token_a
         .get("id")
         .and_then(|v| v.as_str())

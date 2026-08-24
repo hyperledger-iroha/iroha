@@ -18,7 +18,7 @@ KOTODAMA_MANIFEST = (
 )
 ISO_MANIFEST = ROOT / "crates/ivm/src/assets/iso20022_schema_v1/manifest.json"
 REGISTRY_PROVIDER_SHA256 = (
-    "f94f9db2aefc6bf4249405f034a9e9f1266a7bbe89ea07d54c1417b3e634770c"
+    "d1cfff3ef8039ebf93e570371d838849f43030a48a754fc8db3f64aa315f0d34"
 )
 
 
@@ -443,14 +443,13 @@ class CompileTimeTableProjectionTests(unittest.TestCase):
             type_name = re.sub(r"\s+", "", match.group(2))
             mode = match.group(4) or "register_slice"
             rows.append((scope, type_name, mode, match.group(3)))
-        self.assertEqual(len(rows), 352)
+        self.assertEqual(len(rows), 350)
         self.assertEqual(
             collections.Counter(row[2] for row in rows),
             {
-                "register_slice": 331,
+                "register_slice": 330,
                 "register": 19,
                 "register_with_id": 1,
-                "register_with_id_slice": 1,
             },
         )
         canonical = "".join("\t".join(row) + "\n" for row in rows).encode()

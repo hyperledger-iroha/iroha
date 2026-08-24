@@ -118,10 +118,9 @@ where
         ProvingKey::read::<_, C>(reader, SerdeFormat::Processed)
     }
 }
-/// Assign advice using the vendored Halo2 API shape while preserving the
-/// annotation-compatible call surface used by older circuits.
+/// Assign advice through the canonical vendored Halo2 API shape.
 #[allow(clippy::needless_pass_by_value, clippy::unnecessary_wraps)]
-pub(crate) fn assign_advice_compat<'r, F, A, AR, V, T>(
+pub(crate) fn assign_advice_vendored<'r, F, A, AR, V, T>(
     region: &mut Region<'r, F>,
     annotation: A,
     column: Column<Advice>,
@@ -268,7 +267,7 @@ mod tests {
             let cell = layouter.assign_region(
                 || "public value",
                 |mut region| {
-                    let cell = assign_advice_compat(
+                    let cell = assign_advice_vendored(
                         &mut region,
                         || "value",
                         advice,

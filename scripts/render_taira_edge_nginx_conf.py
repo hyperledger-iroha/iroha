@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import ipaddress
 import re
 from dataclasses import dataclass
 from pathlib import Path
@@ -21,7 +22,25 @@ DEFAULT_MON_HOST_SUFFIX = "mon.taira.sora.net"
 DEFAULT_CLIENT_MAX_BODY_SIZE = "1g"
 DEFAULT_UPSTREAM_KEEPALIVE = 64
 DEFAULT_UPSTREAM_FAIL_TIMEOUT = "5s"
-MIN_VALIDATORS = 4
+TAIRA_VALIDATOR_COUNT = 4
+ROSTER_TOP_LEVEL_KEYS = frozenset(
+    {"network_address", "torii_address", "validators", "soracloud_alias_routes"}
+)
+ROSTER_VALIDATOR_KEYS = frozenset(
+    {
+        "slug",
+        "account_id",
+        "public_key",
+        "pop_hex",
+        "public_address",
+        "torii_public_address",
+        "edge_torii_upstream",
+    }
+)
+ROSTER_REQUIRED_VALIDATOR_KEYS = frozenset(
+    {"slug", "torii_public_address", "edge_torii_upstream"}
+)
+ROSTER_ALIAS_ROUTE_KEYS = frozenset({"alias", "edge_upstream"})
 PUBLIC_TORII_CORS_ORIGINS = [
     "https://test.soraswap.org",
     "http://127.0.0.1:3000",
@@ -30,7 +49,12 @@ PUBLIC_TORII_CORS_ORIGINS = [
 PUBLIC_TORII_CORS_METHODS = "GET, POST, DELETE, OPTIONS"
 PUBLIC_TORII_CORS_HEADERS = "accept, authorization, content-type"
 PUBLIC_TORII_CORS_MAX_AGE = "3600"
-SORACLOUD_ALIAS_RE = re.compile(r"^[a-z0-9](?:[a-z0-9.-]*[a-z0-9])?$")
+CANONICAL_DNS_LABEL_RE = re.compile(r"^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$")
+CANONICAL_SLUG_RE = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
+CANONICAL_PORT_RE = re.compile(r"^[1-9][0-9]{0,4}$")
+LOCALHOST_UPSTREAM_ALIASES = frozenset(
+    {"localhost", "localhost.localdomain", "ip6-localhost", "ip6-loopback"}
+)
 
 
 @dataclass(frozen=True)
@@ -69,70 +93,213 @@ def _load_toml(path: Path) -> dict[str, Any]:
 
 def _require_string(payload: dict[str, Any], key: str, context: str) -> str:
     value = payload.get(key)
-    if not isinstance(value, str) or not value.strip():
+    if not isinstance(value, str) or not value:
         raise ValueError(f"{context} field `{key}` must be a non-empty string")
-    return value.strip()
-
-
-def _split_host_port(value: str, context: str) -> tuple[str, str]:
-    text = value.strip()
-    if not text:
-        raise ValueError(f"{context} must be a non-empty host:port string")
-    if text.startswith("["):
-        end = text.find("]")
-        if end == -1 or end + 2 >= len(text) or text[end + 1] != ":":
-            raise ValueError(f"{context} must be a valid [ipv6]:port or host:port value")
-        host = text[1:end]
-        port = text[end + 2 :]
-    else:
-        host, sep, port = text.rpartition(":")
-        if sep == "" or not host or not port:
-            raise ValueError(f"{context} must be a valid host:port value")
-    if not port.isdigit():
-        raise ValueError(f"{context} port `{port}` must be numeric")
-    return host, port
-
-
-def _normalize_upstream_address(value: str, context: str) -> str:
-    host, port = _split_host_port(value, context)
-    normalized_host = host
-    if host in {"0.0.0.0", "::", "[::]", "localhost"}:
-        normalized_host = "127.0.0.1"
-    return f"{normalized_host}:{port}"
-
-
-def _validator_host_from_public_url(value: str, context: str) -> str:
-    parsed = urlparse(value)
-    if parsed.scheme not in {"http", "https"}:
-        raise ValueError(f"{context} must be an http:// or https:// URL")
-    if not parsed.hostname:
-        raise ValueError(f"{context} must include a hostname")
-    return parsed.hostname
-
-
-def _upstream_name_from_slug(slug: str) -> str:
-    return "".join(ch if ch.isalnum() else "_" for ch in slug)
-
-
-def _normalize_soracloud_alias(value: str, context: str) -> str:
-    alias = value.strip().lower().rstrip(".")
-    if not alias:
-        raise ValueError(f"{context} alias must be a non-empty DNS name")
-    if not SORACLOUD_ALIAS_RE.fullmatch(alias):
+    if value != value.strip():
         raise ValueError(
-            f"{context} alias `{value}` must contain only DNS label characters"
+            f"{context} field `{key}` must not contain surrounding whitespace"
         )
-    labels = alias.split(".")
+    return value
+
+
+def _require_canonical_keys(
+    payload: dict[str, Any],
+    *,
+    allowed: frozenset[str],
+    required: frozenset[str],
+    context: str,
+) -> None:
+    unknown = set(payload).difference(allowed)
+    missing = required.difference(payload)
+    if unknown:
+        raise ValueError(
+            f"{context} contains unknown first-release field(s): "
+            + ", ".join(f"`{key}`" for key in sorted(unknown))
+        )
+    if missing:
+        raise ValueError(
+            f"{context} is missing canonical field(s): "
+            + ", ".join(f"`{key}`" for key in sorted(missing))
+        )
+
+
+def _validate_roster_schema(payload: dict[str, Any]) -> None:
+    """Reject every non-canonical first-release roster shape."""
+
+    _require_canonical_keys(
+        payload,
+        allowed=ROSTER_TOP_LEVEL_KEYS,
+        required=frozenset({"validators"}),
+        context="roster",
+    )
+    validators = payload.get("validators")
+    if not isinstance(validators, list):
+        raise ValueError("roster must define a `validators` array of tables")
+    if len(validators) != TAIRA_VALIDATOR_COUNT:
+        raise ValueError(
+            f"roster must define exactly {TAIRA_VALIDATOR_COUNT} validators for Taira"
+        )
+    for index, validator in enumerate(validators, start=1):
+        if not isinstance(validator, dict):
+            raise ValueError(f"validator entry #{index} must be a TOML table")
+        _require_canonical_keys(
+            validator,
+            allowed=ROSTER_VALIDATOR_KEYS,
+            required=ROSTER_REQUIRED_VALIDATOR_KEYS,
+            context=f"validator entry #{index}",
+        )
+    routes = payload.get("soracloud_alias_routes", [])
+    if routes is None:
+        raise ValueError("roster `soracloud_alias_routes` must not be null")
+    if not isinstance(routes, list):
+        raise ValueError("roster `soracloud_alias_routes` must be an array of tables")
+    for index, route in enumerate(routes, start=1):
+        if not isinstance(route, dict):
+            raise ValueError(f"Soracloud alias route entry #{index} must be a TOML table")
+        _require_canonical_keys(
+            route,
+            allowed=ROSTER_ALIAS_ROUTE_KEYS,
+            required=ROSTER_ALIAS_ROUTE_KEYS,
+            context=f"Soracloud alias route entry #{index}",
+        )
+
+
+def _require_canonical_dns_name(value: str, context: str) -> str:
+    if not value:
+        raise ValueError(f"{context} must be a non-empty DNS name")
+    if value != value.lower():
+        raise ValueError(f"{context} must use exact lowercase DNS spelling")
+    if value.endswith("."):
+        raise ValueError(f"{context} must not use a trailing dot")
+    if len(value) > 253:
+        raise ValueError(f"{context} exceeds the 253-character DNS name limit")
+    labels = value.split(".")
     if any(
-        label.startswith("-") or label.endswith("-") or len(label) > 63
+        len(label) > 63 or not CANONICAL_DNS_LABEL_RE.fullmatch(label)
         for label in labels
     ):
-        raise ValueError(f"{context} alias `{value}` must contain valid DNS labels")
-    return alias
+        raise ValueError(f"{context} must contain canonical lowercase DNS labels")
+    return value
+
+
+def _require_canonical_port(port: str, context: str) -> str:
+    if not CANONICAL_PORT_RE.fullmatch(port):
+        raise ValueError(
+            f"{context} port `{port}` must use canonical decimal spelling"
+        )
+    if int(port) > 65535:
+        raise ValueError(f"{context} port `{port}` must be between 1 and 65535")
+    return port
+
+
+def _split_canonical_host_port(value: str, context: str) -> tuple[str, str, bool]:
+    if not value:
+        raise ValueError(f"{context} must be a non-empty host:port string")
+    if value != value.strip():
+        raise ValueError(f"{context} must not contain surrounding whitespace")
+    if value.startswith("["):
+        end = value.find("]")
+        if end == -1 or end + 2 >= len(value) or value[end + 1] != ":":
+            raise ValueError(f"{context} must be a valid [ipv6]:port or host:port value")
+        host = value[1:end]
+        port = value[end + 2 :]
+        if "]" in port:
+            raise ValueError(f"{context} must be a valid [ipv6]:port value")
+        return host, _require_canonical_port(port, context), True
+    else:
+        if value.count(":") != 1:
+            raise ValueError(f"{context} must be a valid host:port value")
+        host, port = value.split(":", 1)
+        if not host or not port:
+            raise ValueError(f"{context} must be a valid host:port value")
+        return host, _require_canonical_port(port, context), False
+
+
+def _require_canonical_upstream_address(value: str, context: str) -> str:
+    host, port, bracketed = _split_canonical_host_port(value, context)
+    if bracketed:
+        try:
+            address = ipaddress.IPv6Address(host)
+        except ipaddress.AddressValueError as error:
+            raise ValueError(f"{context} must contain a valid IPv6 address") from error
+        if host != address.compressed:
+            raise ValueError(
+                f"{context} IPv6 host must use exact lowercase compressed spelling"
+            )
+        if address.is_unspecified:
+            raise ValueError(f"{context} must not use a wildcard address")
+        return f"[{host}]:{port}"
+
+    try:
+        address = ipaddress.IPv4Address(host)
+    except ipaddress.AddressValueError:
+        address = None
+    if address is not None:
+        if host != str(address):
+            raise ValueError(f"{context} IPv4 host must use exact canonical spelling")
+        if address.is_unspecified:
+            raise ValueError(f"{context} must not use a wildcard address")
+        return value
+    if re.fullmatch(r"[0-9.]+", host):
+        raise ValueError(f"{context} IPv4 host must use exact canonical spelling")
+
+    canonical_host = _require_canonical_dns_name(host, f"{context} host")
+    if canonical_host in LOCALHOST_UPSTREAM_ALIASES or canonical_host.endswith(
+        ".localhost"
+    ):
+        raise ValueError(f"{context} must not use a localhost alias")
+    return value
+
+
+def _validator_host_from_public_origin(value: str, context: str) -> str:
+    parsed = urlparse(value)
+    try:
+        hostname = parsed.hostname
+        explicit_port = parsed.port
+    except ValueError as error:
+        raise ValueError(f"{context} must be an exact HTTPS origin") from error
+    if parsed.scheme != "https" or not hostname:
+        raise ValueError(f"{context} must be an exact https:// DNS origin")
+    if (
+        parsed.username is not None
+        or parsed.password is not None
+        or explicit_port is not None
+        or parsed.path
+        or parsed.params
+        or parsed.query
+        or parsed.fragment
+    ):
+        raise ValueError(
+            f"{context} must not contain credentials, an explicit port, a path, "
+            "a query, or a fragment"
+        )
+    canonical_host = _require_canonical_dns_name(hostname, f"{context} hostname")
+    canonical_origin = f"https://{canonical_host}"
+    if value != canonical_origin:
+        raise ValueError(f"{context} must use exact canonical spelling `{canonical_origin}`")
+    return canonical_host
+
+
+def _require_canonical_slug(value: str, context: str) -> str:
+    if len(value) > 63 or not CANONICAL_SLUG_RE.fullmatch(value):
+        raise ValueError(
+            f"{context} must use exact lowercase kebab-case slug spelling"
+        )
+    return value
+
+
+def _nginx_upstream_name_for_slug(slug: str) -> str:
+    return _require_canonical_slug(slug, "validator slug").replace("-", "_")
+
+
+def _require_canonical_soracloud_alias(value: str, context: str) -> str:
+    return _require_canonical_dns_name(value, f"{context} alias")
 
 
 def _soracloud_alias_upstream_name(alias: str) -> str:
-    return f"soracloud_{_upstream_name_from_slug(alias)}_upstream"
+    canonical_alias = _require_canonical_soracloud_alias(alias, "Soracloud route")
+    identifier = canonical_alias.replace("-", "_").replace(".", "_")
+    return f"soracloud_{identifier}_upstream"
 
 
 def parse_soracloud_alias_routes(
@@ -149,7 +316,7 @@ def parse_soracloud_alias_routes(
             raise ValueError(
                 f"Soracloud alias route #{index} must use ALIAS=HOST:PORT syntax"
             )
-        alias = _normalize_soracloud_alias(
+        alias = _require_canonical_soracloud_alias(
             alias_text,
             f"Soracloud alias route #{index}",
         )
@@ -160,7 +327,7 @@ def parse_soracloud_alias_routes(
             raise ValueError(
                 f"Soracloud alias route `{alias}` collides with another nginx upstream name"
             )
-        upstream_address = _normalize_upstream_address(
+        upstream_address = _require_canonical_upstream_address(
             upstream_text,
             f"Soracloud alias route `{alias}` upstream",
         )
@@ -179,45 +346,30 @@ def parse_soracloud_alias_routes(
 
 def load_soracloud_alias_route_specs(roster_path: Path) -> list[str]:
     payload = _load_toml(roster_path)
+    _validate_roster_schema(payload)
     routes_raw = payload.get("soracloud_alias_routes", [])
-    if routes_raw is None:
-        return []
-    if not isinstance(routes_raw, list):
-        raise ValueError("roster `soracloud_alias_routes` must be an array of tables")
 
     route_specs: list[str] = []
     for index, raw in enumerate(routes_raw, start=1):
         if not isinstance(raw, dict):
             raise ValueError(f"Soracloud alias route entry #{index} must be a TOML table")
         context = f"Soracloud alias route `{index}`"
-        alias = _require_string(raw, "alias", context)
-        upstream_source = raw.get(
-            "edge_upstream",
-            raw.get("upstream_address", raw.get("upstream")),
+        alias = _require_canonical_soracloud_alias(
+            _require_string(raw, "alias", context), context
         )
-        if not isinstance(upstream_source, str) or not upstream_source.strip():
-            raise ValueError(
-                f"{context} must set `edge_upstream`, `upstream_address`, or `upstream` "
-                "to a non-empty host:port value"
-            )
-        route_specs.append(f"{alias}={upstream_source.strip()}")
+        upstream_source = _require_canonical_upstream_address(
+            _require_string(raw, "edge_upstream", context),
+            f"{context} edge_upstream",
+        )
+        route_specs.append(f"{alias}={upstream_source}")
     return route_specs
 
 
 def load_edge_validators(roster_path: Path) -> list[EdgeValidator]:
     payload = _load_toml(roster_path)
+    _validate_roster_schema(payload)
     validators_raw = payload.get("validators")
-    if not isinstance(validators_raw, list):
-        raise ValueError("roster must define a `validators` array of tables")
-    if len(validators_raw) < MIN_VALIDATORS:
-        raise ValueError(
-            f"roster must define at least {MIN_VALIDATORS} validators for Taira"
-        )
-
-    default_torii_address = payload.get("torii_address", "0.0.0.0:18080")
-    if not isinstance(default_torii_address, str) or not default_torii_address.strip():
-        raise ValueError("roster default `torii_address` must be a non-empty string")
-    default_torii_address = default_torii_address.strip()
+    assert isinstance(validators_raw, list)
 
     validators: list[EdgeValidator] = []
     seen_hosts: set[str] = set()
@@ -225,20 +377,21 @@ def load_edge_validators(roster_path: Path) -> list[EdgeValidator]:
     for index, raw in enumerate(validators_raw, start=1):
         if not isinstance(raw, dict):
             raise ValueError(f"validator entry #{index} must be a TOML table")
-        slug = _require_string(raw, "slug", f"validator `{index}`")
+        slug = _require_canonical_slug(
+            _require_string(raw, "slug", f"validator `{index}`"),
+            f"validator entry #{index} field `slug`",
+        )
         torii_public_address = _require_string(
             raw, "torii_public_address", f"validator `{slug}`"
         )
-        validator_host = _validator_host_from_public_url(
+        validator_host = _validator_host_from_public_origin(
             torii_public_address, f"validator `{slug}` torii_public_address"
         )
-        upstream_source = raw.get("edge_torii_upstream", raw.get("torii_address", default_torii_address))
-        if not isinstance(upstream_source, str) or not upstream_source.strip():
-            raise ValueError(
-                f"validator `{slug}` must set `edge_torii_upstream` or `torii_address` to a non-empty host:port"
-            )
-        upstream_address = _normalize_upstream_address(
-            upstream_source.strip(),
+        upstream_source = _require_string(
+            raw, "edge_torii_upstream", f"validator `{slug}`"
+        )
+        upstream_address = _require_canonical_upstream_address(
+            upstream_source,
             f"validator `{slug}` edge_torii_upstream",
         )
         if validator_host in seen_hosts:
@@ -253,7 +406,7 @@ def load_edge_validators(roster_path: Path) -> list[EdgeValidator]:
         validators.append(
             EdgeValidator(
                 slug=slug,
-                upstream_name=_upstream_name_from_slug(slug),
+                upstream_name=_nginx_upstream_name_for_slug(slug),
                 validator_host=validator_host,
                 upstream_address=upstream_address,
             )
@@ -365,53 +518,6 @@ def _render_prefix_proxy_location(
     return lines
 
 
-def _render_soradns_proxy_location(upstream: str) -> list[str]:
-    return [
-        "  location ~ ^/soradns/(?<soradns_alias>[^/]+)(?<soradns_rest>/.*)?$ {",
-        "    set $soradns_target_path $soradns_rest;",
-        "    if ($soradns_target_path = \"\") {",
-        "      set $soradns_target_path /;",
-        "    }",
-        "",
-        f"    proxy_pass http://{upstream}$soradns_target_path$is_args$args;",
-        "    proxy_http_version 1.1;",
-        "    proxy_set_header Host $soradns_alias;",
-        "    proxy_set_header X-Real-IP $remote_addr;",
-        "    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;",
-        "    proxy_set_header X-Forwarded-Host $host;",
-        "    proxy_set_header X-Forwarded-Proto $scheme;",
-        "    proxy_next_upstream error timeout http_502 http_503 http_504 invalid_header non_idempotent;",
-        "    proxy_next_upstream_tries 4;",
-        "    proxy_read_timeout 3600;",
-        "    proxy_send_timeout 3600;",
-        "    proxy_buffering off;",
-        "  }",
-    ]
-
-
-def _render_soracloud_alias_debug_location(route: SoracloudAliasRoute) -> list[str]:
-    escaped_alias = re.escape(route.alias)
-    return [
-        f"  location ~ ^/soradns/{escaped_alias}(?<soradns_rest>/.*)?$ {{",
-        "    set $soradns_target_path $soradns_rest;",
-        "    if ($soradns_target_path = \"\") {",
-        "      set $soradns_target_path /;",
-        "    }",
-        "",
-        f"    proxy_pass http://{route.upstream_name}$soradns_target_path$is_args$args;",
-        "    proxy_http_version 1.1;",
-        f"    proxy_set_header Host {route.alias};",
-        "    proxy_set_header X-Real-IP $remote_addr;",
-        "    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;",
-        "    proxy_set_header X-Forwarded-Host $host;",
-        "    proxy_set_header X-Forwarded-Proto $scheme;",
-        "    proxy_read_timeout 3600;",
-        "    proxy_send_timeout 3600;",
-        "    proxy_buffering off;",
-        "  }",
-    ]
-
-
 def _render_soracloud_alias_server(
     route: SoracloudAliasRoute,
     *,
@@ -497,6 +603,70 @@ def _render_connect_stateful_locations(
     return lines
 
 
+def _require_canonical_render_inputs(
+    validators: list[EdgeValidator],
+    soracloud_alias_routes: list[SoracloudAliasRoute],
+    *,
+    mon_host_suffix: str,
+) -> None:
+    seen_slugs: set[str] = set()
+    seen_validator_hosts: set[str] = set()
+    seen_upstream_addresses: set[str] = set()
+    for index, validator in enumerate(validators, start=1):
+        context = f"edge validator #{index}"
+        slug = _require_canonical_slug(validator.slug, f"{context} slug")
+        expected_upstream_name = _nginx_upstream_name_for_slug(slug)
+        if validator.upstream_name != expected_upstream_name:
+            raise ValueError(
+                f"{context} upstream name must be exactly `{expected_upstream_name}`"
+            )
+        validator_host = _require_canonical_dns_name(
+            validator.validator_host, f"{context} public hostname"
+        )
+        upstream_address = _require_canonical_upstream_address(
+            validator.upstream_address, f"{context} upstream"
+        )
+        if slug in seen_slugs:
+            raise ValueError(f"edge validator slug `{slug}` is duplicated")
+        if validator_host in seen_validator_hosts:
+            raise ValueError(f"edge validator host `{validator_host}` is duplicated")
+        if upstream_address in seen_upstream_addresses:
+            raise ValueError(f"edge upstream `{upstream_address}` is duplicated")
+        seen_slugs.add(slug)
+        seen_validator_hosts.add(validator_host)
+        seen_upstream_addresses.add(upstream_address)
+
+    canonical_mon_suffix = _require_canonical_dns_name(
+        mon_host_suffix, "Soracloud Mon host suffix"
+    )
+    seen_aliases: set[str] = set()
+    seen_alias_upstream_names: set[str] = set()
+    for index, route in enumerate(soracloud_alias_routes, start=1):
+        context = f"Soracloud alias route #{index}"
+        alias = _require_canonical_soracloud_alias(route.alias, context)
+        expected_upstream_name = _soracloud_alias_upstream_name(alias)
+        if route.upstream_name != expected_upstream_name:
+            raise ValueError(
+                f"{context} upstream name must be exactly `{expected_upstream_name}`"
+            )
+        _require_canonical_upstream_address(
+            route.upstream_address, f"{context} upstream"
+        )
+        expected_pretty_host = f"{alias}.{canonical_mon_suffix}"
+        if route.pretty_host != expected_pretty_host:
+            raise ValueError(
+                f"{context} pretty host must be exactly `{expected_pretty_host}`"
+            )
+        if alias in seen_aliases:
+            raise ValueError(f"Soracloud alias route `{alias}` is duplicated")
+        if route.upstream_name in seen_alias_upstream_names:
+            raise ValueError(
+                f"Soracloud alias route `{alias}` collides with another nginx upstream name"
+            )
+        seen_aliases.add(alias)
+        seen_alias_upstream_names.add(route.upstream_name)
+
+
 def render_edge_nginx_conf(
     validators: list[EdgeValidator],
     *,
@@ -514,10 +684,25 @@ def render_edge_nginx_conf(
     upstream_fail_timeout: str = DEFAULT_UPSTREAM_FAIL_TIMEOUT,
 ) -> str:
     soracloud_alias_routes = soracloud_alias_routes or []
-    if not validators:
-        raise ValueError("at least one edge validator is required")
+    if len(validators) != TAIRA_VALIDATOR_COUNT:
+        raise ValueError(
+            f"exactly {TAIRA_VALIDATOR_COUNT} edge validators are required for Taira"
+        )
+    _require_canonical_render_inputs(
+        validators,
+        soracloud_alias_routes,
+        mon_host_suffix=mon_host_suffix,
+    )
+    for hostname, context in (
+        (public_host, "public edge hostname"),
+        (explorer_host, "explorer hostname"),
+        (tls_lineage, "TLS lineage"),
+        (cid_host_suffix, "SoraFS CID host suffix"),
+    ):
+        _require_canonical_dns_name(hostname, context)
     if public_upstream_host is None:
         public_upstream_host = validators[0].validator_host
+    _require_canonical_dns_name(public_upstream_host, "public upstream hostname")
     public_validator = next(
         (
             validator
@@ -650,13 +835,6 @@ def render_edge_nginx_conf(
             )
         )
         lines.append("")
-    for route in soracloud_alias_routes:
-        lines.extend(_render_soracloud_alias_debug_location(route))
-        lines.append("")
-    lines.extend(
-        _render_soradns_proxy_location("taira_public_edge_upstream")
-    )
-    lines.append("")
     lines.extend(
         _render_prefix_proxy_location(
             "/",
@@ -691,16 +869,11 @@ def render_edge_nginx_conf(
             '    default_type "text/plain";',
             "    return 200 \"Taira Soracloud Mon gateway\\n\\nUse https://<alias>."
             f"{mon_host_suffix}/<path> for browser clients.\\nExample: "
-            f"https://solswap-indexer.sora.{mon_host_suffix}/api/indexer/v1/health\\nDebug "
-            f"fallback: https://{mon_host_suffix}/soradns/<alias>/<path>\\n\";",
+            f"https://solswap-indexer.sora.{mon_host_suffix}/api/indexer/v1/health\\n\";",
             "  }",
             "",
         ]
     )
-    for route in soracloud_alias_routes:
-        lines.extend(_render_soracloud_alias_debug_location(route))
-        lines.append("")
-    lines.extend(_render_soradns_proxy_location("taira_public_edge_upstream"))
     lines.extend(
         [
             "}",

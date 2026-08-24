@@ -1691,9 +1691,7 @@ fn record_lane_settlement_metrics(
 #[cfg(feature = "telemetry")]
 use crate::queue::{LaneSchedulingLimits, QueueLimits};
 use crate::{
-    executor::{
-        charge_fees_for_applied_overlay_with_encoded_len, charge_fees_for_rejected_live_batch,
-    },
+    executor::{charge_fees_for_applied_overlay, charge_fees_for_rejected_live_batch},
     kura::{
         PipelineDagSnapshot, PipelineRecoverySidecar, PipelineSidecarEnqueueResult,
         PipelineTxSnapshot,
@@ -4010,7 +4008,6 @@ pub(crate) mod valid {
         tx: &iroha_data_model::transaction::SignedTransaction,
         authority: &AccountId,
         overlay: &crate::pipeline::overlay::TxOverlay,
-        encoded_len: usize,
         lane_id: LaneId,
         dataspace_id: DataSpaceId,
         rejection_reason: &TransactionRejectionReason,
@@ -4029,14 +4026,8 @@ pub(crate) mod valid {
         fee_tx.world.current_dataspace_id = Some(dataspace_id);
         fee_tx.tx_call_hash = Some(iroha_crypto::Hash::from(tx.hash_as_entrypoint()));
         fee_tx.current_tx_hash = Some(tx.hash());
-        charge_fees_for_applied_overlay_with_encoded_len(
-            &mut fee_tx,
-            authority,
-            tx,
-            overlay,
-            encoded_len,
-        )
-        .map_err(TransactionRejectionReason::Validation)?;
+        charge_fees_for_applied_overlay(&mut fee_tx, authority, tx, overlay)
+            .map_err(TransactionRejectionReason::Validation)?;
         fee_tx.apply();
         Ok(())
     }
@@ -10460,12 +10451,7 @@ pub(crate) mod valid {
             }
             #[cfg(feature = "telemetry")]
             if let Some(metrics) = metrics {
-                metrics.set_pipeline_sig_bls_counts(
-                    lane_id,
-                    same_msg_agg,
-                    multi_msg_agg,
-                    deterministic,
-                );
+                metrics.set_pipeline_sig_bls_counts(same_msg_agg, multi_msg_agg, deterministic);
             }
             #[cfg(not(feature = "telemetry"))]
             let _ = (metrics, lane_id);
@@ -10637,7 +10623,6 @@ pub(crate) mod valid {
                         messages,
                         signatures,
                         public_keys,
-                        [0; 32],
                         scratch,
                     )
                 }
@@ -10693,7 +10678,6 @@ pub(crate) mod valid {
                                 messages,
                                 signatures,
                                 public_keys,
-                                [0; 32],
                                 &mut scratch,
                             )
                         {
@@ -11930,7 +11914,6 @@ pub(crate) mod valid {
                             messages,
                             signatures,
                             public_keys,
-                            [0; 32],
                             scratch,
                         )
                         .is_ok()
@@ -11952,11 +11935,7 @@ pub(crate) mod valid {
                         signatures.clear();
                         public_keys.clear();
                     }
-                    let cap = if state_block.pipeline.signature_batch_max_ed25519 > 0 {
-                        state_block.pipeline.signature_batch_max_ed25519
-                    } else {
-                        state_block.pipeline.signature_batch_max
-                    };
+                    let cap = state_block.pipeline.signature_batch_max_ed25519;
                     let chunk_capacity = cap.max(1).min(txs.len().max(1));
                     let mut item_indices = Vec::with_capacity(chunk_capacity);
                     let mut messages = Vec::with_capacity(chunk_capacity);
@@ -12512,15 +12491,12 @@ pub(crate) mod valid {
             }
             #[cfg(feature = "telemetry")]
             {
-                let aggregate_lane = state_block.nexus.routing_policy.default_lane;
-                state_block.metrics().set_pipeline_quarantine_classified(
-                    aggregate_lane,
-                    quarantine_candidates.len() as u64,
-                );
-                state_block.metrics().set_pipeline_quarantine_overflow(
-                    aggregate_lane,
-                    quarantine_overflow.len() as u64,
-                );
+                state_block
+                    .metrics()
+                    .set_pipeline_quarantine_classified(quarantine_candidates.len() as u64);
+                state_block
+                    .metrics()
+                    .set_pipeline_quarantine_overflow(quarantine_overflow.len() as u64);
             }
             // Snapshot accounts for overlay building (prepass) — reused across txs
             let accounts_snapshot = state_block.accounts_snapshot();
@@ -13410,22 +13386,12 @@ pub(crate) mod valid {
                 }
                 #[cfg(feature = "telemetry")]
                 {
-                    let aggregate_lane = state_block.nexus.routing_policy.default_lane;
                     let telemetry = state_block.metrics();
-                    telemetry.set_pipeline_dag(aggregate_lane, vertices_total, edges_total);
-                    telemetry.set_pipeline_conflict_rate_bps(aggregate_lane, conflict_rate_bps);
-                    telemetry.set_pipeline_components(
-                        aggregate_lane,
-                        comp_count,
-                        comp_max,
-                        comp_buckets,
-                    );
-                    telemetry.set_pipeline_overlays(
-                        aggregate_lane,
-                        overlay_count_total,
-                        overlay_instr_total,
-                    );
-                    telemetry.set_pipeline_overlay_bytes(aggregate_lane, overlay_bytes_total);
+                    telemetry.set_pipeline_dag(vertices_total, edges_total);
+                    telemetry.set_pipeline_conflict_rate_bps(conflict_rate_bps);
+                    telemetry.set_pipeline_components(comp_count, comp_max, comp_buckets);
+                    telemetry.set_pipeline_overlays(overlay_count_total, overlay_instr_total);
+                    telemetry.set_pipeline_overlay_bytes(overlay_bytes_total);
                     for ((lane_id, dataspace_id), tx_served) in &dataspace_summaries {
                         telemetry.record_dataspace_pipeline_summary(
                             *lane_id,
@@ -14216,7 +14182,6 @@ pub(crate) mod valid {
                                         tx,
                                         &authority,
                                         overlay.as_ref(),
-                                        prepared_txs[idx].metadata.encoded_len,
                                         routing_decisions[idx].lane_id,
                                         routing_decisions[idx].dataspace_id,
                                         &rejection_reason,
@@ -14226,15 +14191,12 @@ pub(crate) mod valid {
                                     }
                                 }
                                 Ok(()) => {
-                                    if let Err(err) =
-                                        charge_fees_for_applied_overlay_with_encoded_len(
-                                            &mut state_tx,
-                                            &authority,
-                                            tx,
-                                            overlay.as_ref(),
-                                            prepared_txs[idx].metadata.encoded_len,
-                                        )
-                                    {
+                                    if let Err(err) = charge_fees_for_applied_overlay(
+                                        &mut state_tx,
+                                        &authority,
+                                        tx,
+                                        overlay.as_ref(),
+                                    ) {
                                         Err(TransactionRejectionReason::Validation(err))
                                     } else {
                                         match state_tx.execute_data_triggers_dfs(&authority) {
@@ -14245,7 +14207,6 @@ pub(crate) mod valid {
                                                     tx,
                                                     &authority,
                                                     overlay.as_ref(),
-                                                    prepared_txs[idx].metadata.encoded_len,
                                                     routing_decisions[idx].lane_id,
                                                     routing_decisions[idx].dataspace_id,
                                                     &err,
@@ -14536,29 +14497,31 @@ pub(crate) mod valid {
                                         [p.idx]
                                     {
                                         delta
-                                                .merge_single_transfer_effects_into_transaction(
-                                                    &mut state_tx,
-                                                    &p.authority,
-                                                )
-                                                .map(|result| {
-                                                    result.and_then(|()| {
-                                                        let overlay = overlays[p.idx]
-                                                            .as_ref()
-                                                            .expect("detached delta requires an overlay")
-                                                            .as_ref()
-                                                            .map_err(map_overlay_error)?;
-                                                        charge_fees_for_applied_overlay_with_encoded_len(
-                                                            &mut state_tx,
-                                                            &p.authority,
-                                                            tx,
-                                                            overlay.as_ref(),
-                                                            prepared_txs[p.idx].metadata.encoded_len,
+                                            .merge_single_transfer_effects_into_transaction(
+                                                &mut state_tx,
+                                                &p.authority,
+                                            )
+                                            .map(|result| {
+                                                result.and_then(|()| {
+                                                    let overlay = overlays[p.idx]
+                                                        .as_ref()
+                                                        .expect(
+                                                            "detached delta requires an overlay",
                                                         )
-                                                        .map_err(TransactionRejectionReason::Validation)?;
-                                                        state_tx
-                                                            .execute_data_triggers_dfs(&p.authority)
-                                                    })
+                                                        .as_ref()
+                                                        .map_err(map_overlay_error)?;
+                                                    charge_fees_for_applied_overlay(
+                                                        &mut state_tx,
+                                                        &p.authority,
+                                                        tx,
+                                                        overlay.as_ref(),
+                                                    )
+                                                    .map_err(
+                                                        TransactionRejectionReason::Validation,
+                                                    )?;
+                                                    state_tx.execute_data_triggers_dfs(&p.authority)
                                                 })
+                                            })
                                     } else {
                                         delta.merge_single_transfer_into_transaction(
                                             &mut state_tx,
@@ -14799,7 +14762,6 @@ pub(crate) mod valid {
                                                 tx,
                                                 &authority,
                                                 overlay.as_ref(),
-                                                prepared_txs[idx].metadata.encoded_len,
                                                 routing_decisions[idx].lane_id,
                                                 routing_decisions[idx].dataspace_id,
                                                 &rejection_reason,
@@ -14809,15 +14771,12 @@ pub(crate) mod valid {
                                             }
                                         }
                                         Ok(()) => {
-                                            if let Err(err) =
-                                                charge_fees_for_applied_overlay_with_encoded_len(
-                                                    &mut state_tx,
-                                                    &authority,
-                                                    tx,
-                                                    overlay.as_ref(),
-                                                    prepared_txs[idx].metadata.encoded_len,
-                                                )
-                                            {
+                                            if let Err(err) = charge_fees_for_applied_overlay(
+                                                &mut state_tx,
+                                                &authority,
+                                                tx,
+                                                overlay.as_ref(),
+                                            ) {
                                                 Err(
                                                     iroha_data_model::transaction::error::TransactionRejectionReason::Validation(
                                                         err,
@@ -14833,7 +14792,6 @@ pub(crate) mod valid {
                                                             tx,
                                                             &authority,
                                                             overlay.as_ref(),
-                                                            prepared_txs[idx].metadata.encoded_len,
                                                             routing_decisions[idx].lane_id,
                                                             routing_decisions[idx].dataspace_id,
                                                             &err,
@@ -15005,7 +14963,6 @@ pub(crate) mod valid {
                                             tx,
                                             &authority,
                                             overlay.as_ref(),
-                                            prepared_txs[idx].metadata.encoded_len,
                                             routing_decisions[idx].lane_id,
                                             routing_decisions[idx].dataspace_id,
                                             &rejection_reason,
@@ -15015,15 +14972,12 @@ pub(crate) mod valid {
                                         }
                                     }
                                     Ok(()) => {
-                                        if let Err(err) =
-                                            charge_fees_for_applied_overlay_with_encoded_len(
-                                                &mut state_tx,
-                                                &authority,
-                                                tx,
-                                                overlay.as_ref(),
-                                                prepared_txs[idx].metadata.encoded_len,
-                                            )
-                                        {
+                                        if let Err(err) = charge_fees_for_applied_overlay(
+                                            &mut state_tx,
+                                            &authority,
+                                            tx,
+                                            overlay.as_ref(),
+                                        ) {
                                             Err(
                                                 iroha_data_model::transaction::error::TransactionRejectionReason::Validation(
                                                     err,
@@ -15038,7 +14992,6 @@ pub(crate) mod valid {
                                                         tx,
                                                         &authority,
                                                         overlay.as_ref(),
-                                                        prepared_txs[idx].metadata.encoded_len,
                                                         routing_decisions[idx].lane_id,
                                                         routing_decisions[idx].dataspace_id,
                                                         &err,
@@ -15211,51 +15164,45 @@ pub(crate) mod valid {
                     });
                 let quarantine_total: u64 =
                     lane_summaries.values().map(|s| s.quarantine_executed).sum();
-                telemetry.set_pipeline_detached_prepared(aggregate_lane, det_prepared_total);
-                telemetry.set_pipeline_detached_merged(aggregate_lane, det_merged_total);
-                telemetry.set_pipeline_detached_fallback(aggregate_lane, det_fallback_total);
+                telemetry.set_pipeline_detached_prepared(det_prepared_total);
+                telemetry.set_pipeline_detached_merged(det_merged_total);
+                telemetry.set_pipeline_detached_fallback(det_fallback_total);
                 telemetry.set_pipeline_detached_fallback_reason(
-                    aggregate_lane,
                     "fee_postprocessing",
                     det_fallback_reasons_total.fee_postprocessing,
                 );
                 telemetry.set_pipeline_detached_fallback_reason(
-                    aggregate_lane,
                     "user_executor",
                     det_fallback_reasons_total.user_executor,
                 );
                 telemetry.set_pipeline_detached_fallback_reason(
-                    aggregate_lane,
                     "durable_state",
                     det_fallback_reasons_total.durable_state,
                 );
                 telemetry.set_pipeline_detached_fallback_reason(
-                    aggregate_lane,
                     "unsupported_instruction",
                     det_fallback_reasons_total.unsupported_instruction,
                 );
                 telemetry.set_pipeline_detached_fallback_reason(
-                    aggregate_lane,
                     "rejected_eval",
                     det_fallback_reasons_total.rejected_eval,
                 );
                 telemetry.set_pipeline_detached_fallback_reason(
-                    aggregate_lane,
                     "overlay_error",
                     det_fallback_reasons_total.overlay_error,
                 );
-                telemetry.set_pipeline_quarantine_executed(aggregate_lane, quarantine_total);
+                telemetry.set_pipeline_quarantine_executed(quarantine_total);
                 if layer_widths_global.is_empty() {
-                    telemetry.set_pipeline_peak_layer_width(aggregate_lane, 0);
-                    telemetry.set_pipeline_layer_count(aggregate_lane, 0);
-                    telemetry.set_pipeline_scheduler_utilization_pct(aggregate_lane, 0);
-                    telemetry.set_pipeline_layer_avg_median(aggregate_lane, 0, 0);
-                    telemetry.set_pipeline_layer_width_hist(aggregate_lane, [0; 8]);
+                    telemetry.set_pipeline_peak_layer_width(0);
+                    telemetry.set_pipeline_layer_count(0);
+                    telemetry.set_pipeline_scheduler_utilization_pct(0);
+                    telemetry.set_pipeline_layer_avg_median(0, 0);
+                    telemetry.set_pipeline_layer_width_hist([0; 8]);
                 } else {
                     let peak_layer_width = layer_widths_global.iter().copied().max().unwrap_or(0);
-                    telemetry.set_pipeline_peak_layer_width(aggregate_lane, peak_layer_width);
+                    telemetry.set_pipeline_peak_layer_width(peak_layer_width);
                     let layer_count = layer_widths_global.len() as u64;
-                    telemetry.set_pipeline_layer_count(aggregate_lane, layer_count);
+                    telemetry.set_pipeline_layer_count(layer_count);
                     let sum_global: u64 = layer_widths_global.iter().sum();
                     let avg = if layer_count > 0 {
                         (sum_global + (layer_count / 2)) / layer_count
@@ -15267,7 +15214,7 @@ pub(crate) mod valid {
                     } else {
                         0
                     };
-                    telemetry.set_pipeline_scheduler_utilization_pct(aggregate_lane, util_pct);
+                    telemetry.set_pipeline_scheduler_utilization_pct(util_pct);
                     let mut sorted = layer_widths_global.clone();
                     sorted.sort_unstable();
                     let median = if sorted.is_empty() {
@@ -15277,7 +15224,7 @@ pub(crate) mod valid {
                     } else {
                         u64::midpoint(sorted[sorted.len() / 2 - 1], sorted[sorted.len() / 2])
                     };
-                    telemetry.set_pipeline_layer_avg_median(aggregate_lane, avg, median);
+                    telemetry.set_pipeline_layer_avg_median(avg, median);
                     let mut buckets = [0u64; 8];
                     for width in sorted {
                         for (idx, threshold) in PIPELINE_LAYER_WIDTH_THRESHOLDS.iter().enumerate() {
@@ -15286,7 +15233,7 @@ pub(crate) mod valid {
                             }
                         }
                     }
-                    telemetry.set_pipeline_layer_width_hist(aggregate_lane, buckets);
+                    telemetry.set_pipeline_layer_width_hist(buckets);
                 }
             }
             for (idx, maybe) in stateless_rejections.iter_mut().enumerate() {
@@ -17788,8 +17735,8 @@ pub(crate) mod valid {
                     .expect("future-created autoscale lane catalog");
             let mut nexus = state.nexus.write();
             nexus.autoscale.enabled = true;
-            nexus.autoscale.min_lanes = nonzero!(1_u32);
-            nexus.autoscale.max_lanes = nonzero!(3_u32);
+            nexus.autoscale.min_lane_id = nonzero!(1_u32);
+            nexus.autoscale.max_lane_id_exclusive = nonzero!(3_u32);
             nexus.lane_config =
                 iroha_config::parameters::actual::LaneConfig::from_catalog(&lane_catalog);
             nexus.lane_catalog = lane_catalog;
@@ -17810,8 +17757,8 @@ pub(crate) mod valid {
             {
                 let mut nexus = state.nexus.write();
                 nexus.autoscale.enabled = true;
-                nexus.autoscale.min_lanes = nonzero!(1_u32);
-                nexus.autoscale.max_lanes = nonzero!(8_u32);
+                nexus.autoscale.min_lane_id = nonzero!(1_u32);
+                nexus.autoscale.max_lane_id_exclusive = nonzero!(8_u32);
             }
             state
                 .apply_autoscale_lane_lifecycle_for_tests(
@@ -19442,7 +19389,13 @@ pub(crate) mod valid {
             let _prev_hash =
                 commit_block_at_height(&state, &kura, &topology, leader.private_key(), 1, None, 1);
             let (_, time_source) = TimeSource::new_mock(Duration::from_millis(1));
-            let lane_authority = state.authoritative_lane_peer_ids_at_height(LaneId::SINGLE, 2);
+            let lane_authority = state
+                .resolve_lane_committee_at_height(
+                    crate::state::LaneAuthorityRoute::new(LaneId::SINGLE, DataSpaceId::UNIVERSAL),
+                    2,
+                )
+                .expect("single-lane authority must resolve")
+                .into_validators();
             assert_eq!(lane_authority.len(), lane_keypairs.len());
             assert_ne!(lane_authority.as_slice(), topology.as_ref());
 
@@ -20675,8 +20628,16 @@ pub(crate) mod valid {
             let lane_incarnation = state
                 .lane_incarnation_at_height(coordinator.lane_id, 2)
                 .expect("elastic lane incarnation at candidate height");
-            let descriptor_validators =
-                state.authoritative_lane_peer_ids_at_height(coordinator.lane_id, 2);
+            let descriptor_validators = state
+                .resolve_lane_committee_at_height(
+                    crate::state::LaneAuthorityRoute::new(
+                        coordinator.lane_id,
+                        coordinator.dataspace_id,
+                    ),
+                    2,
+                )
+                .expect("elastic-lane authority must resolve")
+                .into_validators();
             let mut ownership = sample_lane_payload_ownership_for_context(
                 2,
                 0,
@@ -20928,8 +20889,16 @@ pub(crate) mod valid {
             let lane_incarnation = state
                 .lane_incarnation_at_height(coordinator.lane_id, 2)
                 .expect("elastic lane incarnation before removing the lane");
-            let descriptor_validators =
-                state.authoritative_lane_peer_ids_at_height(coordinator.lane_id, 2);
+            let descriptor_validators = state
+                .resolve_lane_committee_at_height(
+                    crate::state::LaneAuthorityRoute::new(
+                        coordinator.lane_id,
+                        coordinator.dataspace_id,
+                    ),
+                    2,
+                )
+                .expect("elastic-lane authority must resolve before removal")
+                .into_validators();
             {
                 let mut nexus = state.nexus.write();
                 nexus.lane_catalog = LaneCatalog::default();
@@ -21347,8 +21316,8 @@ pub(crate) mod valid {
             {
                 let mut nexus = state.nexus.write();
                 nexus.autoscale.enabled = true;
-                nexus.autoscale.min_lanes = nonzero!(1_u32);
-                nexus.autoscale.max_lanes = nonzero!(3_u32);
+                nexus.autoscale.min_lane_id = nonzero!(1_u32);
+                nexus.autoscale.max_lane_id_exclusive = nonzero!(3_u32);
                 nexus.lane_catalog =
                     LaneCatalog::new(nonzero!(2_u32), vec![LaneConfig::default(), elastic_lane])
                         .expect("future-created autoscale lane catalog");

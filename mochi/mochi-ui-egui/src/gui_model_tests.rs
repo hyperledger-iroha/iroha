@@ -95,7 +95,7 @@ fn ensure_http_base_adds_scheme_once() {
 #[test]
 fn compose_launch_recipe_includes_current_flags() {
     let recipe = compose_launch_recipe(
-        "single-peer",
+        "four-peer-bft",
         "/tmp/mochi data",
         "mochi-local",
         Some(8080),
@@ -106,7 +106,7 @@ fn compose_launch_recipe_includes_current_flags() {
     assert!(
         recipe.starts_with("cargo run -p mochi-ui --features gui --bin mochi -- sandbox serve")
     );
-    assert!(recipe.contains("--profile single-peer"));
+    assert!(recipe.contains("--profile four-peer-bft"));
     assert!(recipe.contains("--workspace-root '/tmp/mochi data'"));
     assert!(recipe.contains("--chain-id mochi-local"));
     assert!(recipe.contains("--torii-start 8080"));
@@ -177,7 +177,7 @@ fn cli_profile_override_reconfigures_builder() {
         profile: Some(NetworkProfile::from_preset(ProfilePreset::FourPeerBft)),
         ..Default::default()
     };
-    let builder = overrides.apply_to(SupervisorBuilder::new(ProfilePreset::SinglePeer));
+    let builder = overrides.apply_to(SupervisorBuilder::new(ProfilePreset::FourPeerBft));
     assert_eq!(builder.profile().preset, Some(ProfilePreset::FourPeerBft));
     assert_eq!(builder.profile().topology.peer_count, 4);
 }
@@ -1367,7 +1367,6 @@ fn peer_status_view_captures_metrics_and_errors() {
         blocks: 10,
         blocks_non_empty: 8,
         commit_time_ms: 45,
-        da_reschedule_total: 2,
         txs_approved: 5,
         txs_rejected: 1,
         last_rejection_at_ms: None,
@@ -1418,7 +1417,6 @@ fn peer_status_view_captures_metrics_and_errors() {
         blocks: 11,
         blocks_non_empty: 9,
         commit_time_ms: 120,
-        da_reschedule_total: 5,
         txs_approved: 9,
         txs_rejected: 3,
         last_rejection_at_ms: Some(6_000),
@@ -1483,7 +1481,6 @@ fn peer_status_view_surfaces_sealed_lanes() {
         blocks: 10,
         blocks_non_empty: 8,
         commit_time_ms: 42,
-        da_reschedule_total: 0,
         txs_approved: 4,
         txs_rejected: 0,
         last_rejection_at_ms: None,
@@ -2030,47 +2027,6 @@ fn view_change_plot_points_record_deltas() {
     assert!(
         app.view_change_plot_points("alpha").is_some(),
         "non-zero view change deltas should produce points"
-    );
-}
-#[test]
-fn reschedule_plot_points_record_activity() {
-    let mut app = MochiApp::default();
-    let base = Instant::now();
-    let mut history = VecDeque::new();
-    let status_a = TelemetryStatus {
-        da_reschedule_total: 5,
-        ..Default::default()
-    };
-    let mut metrics_a = StatusMetrics::from_samples(None, &status_a);
-    metrics_a.sample_interval_ms = 1_000;
-    let snapshot_a = ToriiStatusSnapshot {
-        timestamp: base,
-        status: status_a.clone(),
-        metrics: metrics_a,
-    };
-    history.push_back(StatusHistoryEntry {
-        timestamp: base,
-        snapshot: snapshot_a,
-        metrics: None,
-    });
-    let mut status_b = status_a.clone();
-    status_b.da_reschedule_total = 9;
-    let mut metrics_b = StatusMetrics::from_samples(Some(&status_a), &status_b);
-    metrics_b.sample_interval_ms = 500;
-    let snapshot_b = ToriiStatusSnapshot {
-        timestamp: base + Duration::from_millis(500),
-        status: status_b,
-        metrics: metrics_b,
-    };
-    history.push_back(StatusHistoryEntry {
-        timestamp: base + Duration::from_millis(500),
-        snapshot: snapshot_b,
-        metrics: None,
-    });
-    app.status_history.insert("alpha".to_owned(), history);
-    assert!(
-        app.reschedule_plot_points("alpha").is_some(),
-        "reschedule deltas should produce points"
     );
 }
 #[test]

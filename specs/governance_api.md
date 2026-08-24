@@ -11,6 +11,16 @@ object. Clients sign locally and submit via `/v1/pipeline/transactions`.
 Important: we do not ship a standing council or “default” governance roster.
 Until governance persists a roster, the current-council endpoint returns the
 constant empty state; a read never scans assets or derives a hidden fallback.
+A V1 proposal always retains one mandatory, immutable proposal-time Parliament
+snapshot with all seven sortition rosters and their canonical commitment. The
+snapshot selection epoch is the proposal creation height. Module names never
+select governance behavior, and ballots never fall back to a current council,
+an epoch roster, or a reconstructed roster when the proposal snapshot is
+missing or malformed. Snapshotless JSON/Norito proposal records and state
+snapshots that omit first-release governance stores are rejected at decode.
+Every governance lock likewise carries its immutable asset, escrow, and slash
+custody binding; missing-custody JSON/Norito records are rejected and runtime
+configuration is never used to reconstruct retained lock custody.
 A citizen is an account that posted the configured minimum bond; the bond is
 an anti-Sybil/collateral floor and does not increase Parliament draw odds or
 vote weight above the minimum. There is no baked-in multisig, secret key, or
@@ -100,6 +110,8 @@ Endpoints
     bonded citizens. A non-empty one-citizen registry therefore produces one
     immutable member in every body and quorum `1`; zero eligible citizens fails
     proposal creation.
+  - Capability metadata is descriptive only. It cannot select a legacy council
+    approval mode or override the mandatory proposal-time Parliament snapshot.
   - Every governance integer other than the fixed response `version: 1` is a
     canonical unsigned decimal JSON string. This includes heights, windows,
     thresholds, body targets, and quorum/count fields; clients must parse the

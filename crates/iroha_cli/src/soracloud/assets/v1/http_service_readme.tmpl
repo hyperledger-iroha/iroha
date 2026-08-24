@@ -145,7 +145,7 @@ prints alongside the live Torii payload.
 ```bash
 iroha soracloud service config-status --container ./container_manifest.json --service ./service_manifest.json --torii-url http://127.0.0.1:8080
 iroha soracloud service secret-status --container ./container_manifest.json --service ./service_manifest.json --torii-url http://127.0.0.1:8080
-iroha soracloud service rollback --container ./container_manifest.json --service ./service_manifest.json --torii-url http://127.0.0.1:8080
+iroha soracloud service rollback --container ./container_manifest.json --service ./service_manifest.json --target-version <VERSION> --torii-url http://127.0.0.1:8080
 iroha soracloud service rollout --container ./container_manifest.json --service ./service_manifest.json --rollout-handle <handle> --governance-tx-hash <hash> --torii-url http://127.0.0.1:8080
 ```
 

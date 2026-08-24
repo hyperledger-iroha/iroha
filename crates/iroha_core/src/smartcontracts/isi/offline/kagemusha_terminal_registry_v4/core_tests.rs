@@ -36,8 +36,8 @@ fn candidate_binding_reviewed_source_closure(
         untracked_file_count: 0,
         untracked_path_mode_blob_oid_manifest: Vec::new(),
         untracked_path_mode_blob_oid_manifest_sha256,
-        ignored_cargo_lock_size_bytes: 1,
-        ignored_cargo_lock_sha256: Sha256::digest([0x92]).into(),
+        tracked_cargo_lock_size_bytes: 1,
+        tracked_cargo_lock_sha256: Sha256::digest([0x92]).into(),
         combined_source_fingerprint_sha256: combined.finalize().into(),
     };
     let descriptor_sha256 = closure
@@ -58,6 +58,9 @@ fn candidate_binding_internal_validation_receipt(
     fn fuzz(
         target: KagemushaInternalValidationFuzzTargetV1,
         seed: u8,
+        source_tree_sha256: [u8; 32],
+        tracked_cargo_lock_sha256: [u8; 32],
+        standalone_fuzz_cargo_lock_sha256: [u8; 32],
     ) -> KagemushaInternalValidationFuzzOutcomeV1 {
         KagemushaInternalValidationFuzzOutcomeV1 {
             target,
@@ -68,6 +71,9 @@ fn candidate_binding_internal_validation_receipt(
             crashes: 0,
             timeouts: 0,
             out_of_memory: 0,
+            source_tree_sha256_after: source_tree_sha256,
+            tracked_cargo_lock_sha256_after: tracked_cargo_lock_sha256,
+            standalone_fuzz_cargo_lock_sha256_after: standalone_fuzz_cargo_lock_sha256,
             initial_corpus: exact(seed),
             final_corpus: exact(seed.wrapping_add(1)),
             engine_report: exact(seed.wrapping_add(2)),
@@ -75,6 +81,11 @@ fn candidate_binding_internal_validation_receipt(
     }
     let runner = KeyPair::from_seed(vec![0xa7; 32], Algorithm::Ed25519);
     let validator_binary = exact(14);
+    let reviewed_cargo_fuzz_binary_sha256 = [16; 32];
+    let reviewed_fuzz_cargo_proxy_binary_sha256 = [17; 32];
+    let reviewed_fuzz_rustc_binary_sha256 = [18; 32];
+    let tracked_cargo_lock_sha256 = [6; 32];
+    let standalone_fuzz_cargo_lock_sha256 = [7; 32];
     let tool_roles = [
         KagemushaInternalValidationToolRoleV1::Cargo,
         KagemushaInternalValidationToolRoleV1::Rustc,
@@ -82,6 +93,8 @@ fn candidate_binding_internal_validation_receipt(
         KagemushaInternalValidationToolRoleV1::CargoClippy,
         KagemushaInternalValidationToolRoleV1::ClippyDriver,
         KagemushaInternalValidationToolRoleV1::CargoFuzz,
+        KagemushaInternalValidationToolRoleV1::FuzzCargoProxy,
+        KagemushaInternalValidationToolRoleV1::FuzzRustc,
         KagemushaInternalValidationToolRoleV1::ValidationRunner,
     ];
     let tools = tool_roles
@@ -93,13 +106,32 @@ fn candidate_binding_internal_validation_receipt(
                 executable.sha256 = manifest.reviewed_cargo_binary_sha256;
             } else if role == KagemushaInternalValidationToolRoleV1::Rustc {
                 executable.sha256 = manifest.reviewed_rustc_binary_sha256;
+            } else if role == KagemushaInternalValidationToolRoleV1::CargoFuzz {
+                executable.sha256 = reviewed_cargo_fuzz_binary_sha256;
+            } else if role == KagemushaInternalValidationToolRoleV1::FuzzCargoProxy {
+                executable.sha256 = reviewed_fuzz_cargo_proxy_binary_sha256;
+            } else if role == KagemushaInternalValidationToolRoleV1::FuzzRustc {
+                executable.sha256 = reviewed_fuzz_rustc_binary_sha256;
             } else if role == KagemushaInternalValidationToolRoleV1::ValidationRunner {
                 executable = validator_binary;
             }
+            let version_output = if role == KagemushaInternalValidationToolRoleV1::CargoFuzz {
+                KagemushaExactBytesDigestV1::from_bytes(
+                    KAGEMUSHA_RECURSIVE_SPEND_INTERNAL_VALIDATION_CARGO_FUZZ_VERSION_OUTPUT_V1,
+                )
+                .expect("pinned cargo-fuzz version output")
+            } else if role == KagemushaInternalValidationToolRoleV1::FuzzRustc {
+                KagemushaExactBytesDigestV1::from_bytes(
+                    KAGEMUSHA_RECURSIVE_SPEND_INTERNAL_VALIDATION_FUZZ_RUSTC_VERSION_OUTPUT_V1,
+                )
+                .expect("pinned fuzz rustc version output")
+            } else {
+                exact(u8::try_from(index + 40).expect("version seed fits"))
+            };
             KagemushaInternalValidationToolV1 {
                 role,
                 executable,
-                version_output: exact(u8::try_from(index + 40).expect("version seed fits")),
+                version_output,
             }
         })
         .collect();
@@ -124,9 +156,15 @@ fn candidate_binding_internal_validation_receipt(
                 termination_signal: None,
                 timed_out: false,
                 log_archive: exact(u8::try_from(index + 130).expect("log seed fits")),
-                fuzz: spec
-                    .fuzz_target
-                    .map(|target| fuzz(target, u8::try_from(index + 190).expect("fuzz seed fits"))),
+                fuzz: spec.fuzz_target.map(|target| {
+                    fuzz(
+                        target,
+                        u8::try_from(index + 190).expect("fuzz seed fits"),
+                        manifest.source_tree_sha256,
+                        tracked_cargo_lock_sha256,
+                        standalone_fuzz_cargo_lock_sha256,
+                    )
+                }),
             },
         )
         .collect();
@@ -155,16 +193,35 @@ fn candidate_binding_internal_validation_receipt(
             path: "Cargo.lock".to_owned(),
             git_blob_oid: "3333333333333333333333333333333333333333".to_owned(),
             git_mode: "100644".to_owned(),
-            sha256: [6; 32],
+            sha256: tracked_cargo_lock_sha256,
             size_bytes: 1024,
+        },
+        standalone_fuzz_cargo_lock: KagemushaReviewedTrackedCargoLockV2 {
+            path: "fuzz/Cargo.lock".to_owned(),
+            git_blob_oid: "4444444444444444444444444444444444444444".to_owned(),
+            git_mode: "100644".to_owned(),
+            sha256: standalone_fuzz_cargo_lock_sha256,
+            size_bytes: 2048,
         },
         reviewed_cargo_binary_sha256: manifest.reviewed_cargo_binary_sha256,
         reviewed_rustc_binary_sha256: manifest.reviewed_rustc_binary_sha256,
+        reviewed_cargo_fuzz_binary_sha256,
+        reviewed_fuzz_cargo_proxy_binary_sha256,
+        fuzz_cargo_proxy_program:
+            KAGEMUSHA_RECURSIVE_SPEND_INTERNAL_VALIDATION_FUZZ_CARGO_PROXY_PROGRAM_V1.to_owned(),
+        fuzz_cargo_proxy_contract:
+            KAGEMUSHA_RECURSIVE_SPEND_INTERNAL_VALIDATION_FUZZ_CARGO_PROXY_CONTRACT_V1.to_owned(),
+        reviewed_fuzz_rustc_binary_sha256,
+        cargo_fuzz_version: KAGEMUSHA_RECURSIVE_SPEND_INTERNAL_VALIDATION_CARGO_FUZZ_VERSION_V1
+            .to_owned(),
+        fuzz_rustc_version: KAGEMUSHA_RECURSIVE_SPEND_INTERNAL_VALIDATION_FUZZ_RUSTC_VERSION_V1
+            .to_owned(),
         generator_binary_sha256: manifest.generator_binary_sha256,
         sealed_candidate_build_report_sha256: manifest.sealed_candidate_build_report_sha256,
         candidate_validation_report: exact(12),
-        host_triple: "aarch64-apple-darwin".to_owned(),
-        target_triple: "aarch64-apple-darwin".to_owned(),
+        host_triple: KAGEMUSHA_RECURSIVE_SPEND_INTERNAL_VALIDATION_FUZZ_TARGET_TRIPLE_V1.to_owned(),
+        target_triple: KAGEMUSHA_RECURSIVE_SPEND_INTERNAL_VALIDATION_FUZZ_TARGET_TRIPLE_V1
+            .to_owned(),
         validator_binary,
         toolchain_manifest: exact(15),
         tools,

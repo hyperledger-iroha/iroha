@@ -886,31 +886,6 @@ public sealed partial class ToriiClient : IDisposable
         return session;
     }
 
-    public async Task<ToriiVpnReceipt?> DeleteVpnSessionAsync(
-        string sessionId,
-        CancellationToken cancellationToken = default)
-    {
-        RequireVpnCanonicalRequestCredentials("/v1/vpn/sessions/{session_id}");
-        var encodedSessionId = EncodeVpnSessionPathSegment(sessionId, nameof(sessionId));
-        using var response = await SendExpectingStatusAsync(
-            HttpMethod.Delete,
-            $"/v1/vpn/sessions/{encodedSessionId}",
-            query: null,
-            content: null,
-            HttpStatusCode.OK,
-            HttpStatusCode.NotFound,
-            cancellationToken);
-
-        if (response.StatusCode == HttpStatusCode.NotFound)
-        {
-            return null;
-        }
-
-        var receipt = await DeserializeAsync<ToriiVpnReceipt>(response, cancellationToken);
-        ValidateVpnReceipt(receipt, "vpn receipt response");
-        return receipt;
-    }
-
     public async Task<ToriiVpnReceipt> SubmitVpnReceiptAsync(
         ToriiVpnReceiptSubmitRequest request,
         CancellationToken cancellationToken = default)
@@ -5683,7 +5658,7 @@ public sealed partial class ToriiClient : IDisposable
 
     private static string EncodeVpnSessionPathSegment(string? value, string paramName)
     {
-        return Uri.EscapeDataString(NormalizeExactSizedHex(value, paramName, 32));
+        return Uri.EscapeDataString(NormalizeExactSizedHex(value, paramName, 16));
     }
 
     private static string EncodeSoraFsCidPathSegment(string? value, string paramName)

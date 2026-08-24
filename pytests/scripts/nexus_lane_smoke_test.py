@@ -37,3 +37,32 @@ def test_require_hash_accepts_canonical_norito_literal() -> None:
 def test_require_hash_rejects_noncanonical_literals(literal: str) -> None:
     with pytest.raises(SMOKE.SmokeError, match="invalid `catalog_hash` commitment"):
         SMOKE._require_hash(literal, "catalog_hash")
+
+
+def test_parse_args_accepts_only_canonical_source_flags() -> None:
+    args = SMOKE.parse_args(
+        [
+            "--lifecycle-file",
+            "lifecycle.json",
+            "--telemetry-file",
+            "telemetry.ndjson",
+            "--lane-alias",
+            "core",
+        ]
+    )
+
+    assert args.lifecycle_file == "lifecycle.json"
+    assert args.telemetry_file == "telemetry.ndjson"
+
+
+@pytest.mark.parametrize(
+    "retired_args",
+    [
+        ["--status-url", "https://example.invalid/v1/nexus/lifecycle"],
+        ["--status-file", "lifecycle.json"],
+        ["--lifecycle-file", "lifecycle.json", "--from-telemetry", "events.ndjson"],
+    ],
+)
+def test_parse_args_rejects_retired_source_flags(retired_args: list[str]) -> None:
+    with pytest.raises(SystemExit):
+        SMOKE.parse_args([*retired_args, "--lane-alias", "core"])

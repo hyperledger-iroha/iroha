@@ -106,14 +106,14 @@ pub const KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_IPA_K: u32 = 12;
 use crate::kura::PipelineProofSnapshot;
 #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
 pub(crate) use halo2_backend::{
-    PastaParams, assign_advice_compat, params_fingerprint, params_new as pasta_params_new,
+    PastaParams, assign_advice_vendored, params_fingerprint, params_new as pasta_params_new,
     read_proving_key, read_verifying_key,
 };
 #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
 use halo2_proofs::poly::commitment::Params as _;
 #[cfg(all(
     test,
-    feature = "zk-halo2-ipa-poseidon",
+    feature = "zk-halo2-ipa",
     any(feature = "zk-halo2", feature = "zk-halo2-ipa")
 ))]
 use halo2_proofs::poly::ipa::{commitment::IPACommitmentScheme, multiopen::ProverIPA};
@@ -769,13 +769,6 @@ pub fn is_production_claim_backend_label(backend: &str) -> bool {
     PRODUCTION_CLAIM_BACKEND_FRAGMENTS
         .iter()
         .any(|fragment| compact.contains(fragment))
-}
-/// Compatibility spelling for callers that still classify textual readiness
-/// claims separately from the production verifier allowlist.
-#[inline]
-#[must_use]
-pub fn is_verifier_readiness_claim_label(backend: &str) -> bool {
-    is_production_claim_backend_label(backend)
 }
 /// Returns `true` when `backend` is accepted for `ivm-execution-v1` proofs.
 #[inline]
@@ -3496,7 +3489,7 @@ pub mod zk1_test_helpers;
 #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
 macro_rules! advice {
     (@call $region:ident, $annotation:expr, $column:expr, $offset:expr, $value:expr) => {
-        crate::zk::assign_advice_compat(
+        crate::zk::assign_advice_vendored(
             &mut $region,
             $annotation,
             $column,
@@ -3532,23 +3525,8 @@ macro_rules! advice {
         )
     };
 }
-#[cfg(all(feature = "zk-halo2-ipa-poseidon", feature = "halo2-dev-tests"))]
-macro_rules! advice_dev {
-    ($region:ident, $label:literal, $column:expr => value $value:expr) => {
-        advice!(@call $region, || $label, $column, 0, || $value)
-    };
-    ($region:ident, format $label:literal, $column:expr, $offset:expr => $value:expr) => {
-        advice!(
-            @call $region,
-            || format!($label),
-            $column,
-            $offset,
-            || halo2_proofs::circuit::Value::known($value)
-        )
-    };
-}
 // Generic, fixed-depth variants consolidated here to enable easy parameterization
-// and future chip-backed swaps under the `zk-halo2-ipa-poseidon` feature flag.
+// of the canonical constrained test relations.
 #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
 /// Depth-parameterized example circuits over Halo2 (Pasta).
 ///
@@ -3556,12 +3534,6 @@ macro_rules! advice_dev {
 /// checks. They are not consensus-critical and are compiled only when Halo2
 /// backends are enabled.
 pub mod depth {
-    #[cfg(all(feature = "zk-halo2-ipa-poseidon", feature = "halo2-dev-tests"))]
-    #[allow(unused_imports)]
-    use crate::zk::pasta_tiny::poseidon::{Poseidon2ChipWrapper, Pow5Chip, Pow5Config};
-    #[cfg(all(feature = "zk-halo2-ipa-poseidon", feature = "halo2-dev-tests"))]
-    #[allow(unused_imports)]
-    use crate::zk::pasta_tiny::poseidon_compress2_native;
     use halo2_proofs::{
         circuit::{Layouter, SimpleFloorPlanner},
         halo2curves::pasta::Fp as Scalar,
@@ -3929,29 +3901,21 @@ pub mod depth {
         }
     }
 }
-// Poseidon-backed depth-param circuits.
-#[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
-/// Poseidon-like depth-parameterized circuits (Pow5 S-box) for internal tests.
+// Constrained Pow5 depth-parameterized test circuits.
+#[cfg(all(test, any(feature = "zk-halo2", feature = "zk-halo2-ipa")))]
+/// Constrained Pow5 depth-parameterized circuits (Pow5 S-box) for internal tests.
 ///
-/// These circuits mimic Poseidon permutation behaviour with small, fixed
+/// These circuits exercise one explicit quintic compression relation with small, fixed
 /// round parameters and are used to exercise backends that implement
 /// transparent hashing (e.g., IPA over Pasta) in our verifier dispatch.
-pub mod poseidon_depth {
-    #[cfg(all(feature = "zk-halo2-ipa-poseidon", feature = "halo2-dev-tests"))]
-    #[allow(unused_imports)]
-    use crate::zk::pasta_tiny::poseidon::{Poseidon2ChipWrapper, Pow5Chip, Pow5Config};
-    #[cfg(all(feature = "zk-halo2-ipa-poseidon", feature = "halo2-dev-tests"))]
-    #[allow(unused_imports)]
-    use crate::zk::pasta_tiny::poseidon_compress2_native;
+mod pow5_depth {
     use halo2_proofs::{
         circuit::{Layouter, SimpleFloorPlanner},
         halo2curves::pasta::Fp as Scalar,
         plonk::{Circuit, ConstraintSystem, Error as PlonkError, Selector},
         poly::Rotation,
     };
-    #[cfg(not(all(feature = "zk-halo2-ipa-poseidon", feature = "halo2-dev-tests")))]
-    // Simple Pow5 helpers (constraint expressions) used as a local gadget when the Poseidon
-    // feature is disabled.
+    // The native and expression helpers below define the same explicit test relation.
     #[inline]
     fn sbox5(
         x: halo2_proofs::plonk::Expression<Scalar>,
@@ -3960,7 +3924,6 @@ pub mod poseidon_depth {
         let x4 = x2.clone() * x2;
         x4 * x
     }
-    #[cfg(not(all(feature = "zk-halo2-ipa-poseidon", feature = "halo2-dev-tests")))]
     fn h2(
         a: halo2_proofs::plonk::Expression<Scalar>,
         b: halo2_proofs::plonk::Expression<Scalar>,
@@ -3973,11 +3936,18 @@ pub mod poseidon_depth {
         halo2_proofs::plonk::Expression::Constant(Scalar::from(2u64)) * a5
             + halo2_proofs::plonk::Expression::Constant(Scalar::from(3u64)) * b5
     }
-    /// Vote-bool commit with Poseidon-style hashing and fixed-depth membership.
+    fn h2_native(a: Scalar, b: Scalar) -> Scalar {
+        let pow5 = |value: Scalar| {
+            let square = value * value;
+            square * square * value
+        };
+        Scalar::from(2u64) * pow5(a + Scalar::from(7u64))
+            + Scalar::from(3u64) * pow5(b + Scalar::from(13u64))
+    }
+    /// Vote-bool commit with constrained Pow5 hashing and fixed-depth membership.
     #[derive(Clone, Default)]
-    pub struct VoteBoolCommitMerklePoseidon<const DEPTH: usize>;
-    #[cfg(not(all(feature = "zk-halo2-ipa-poseidon", feature = "halo2-dev-tests")))]
-    impl<const DEPTH: usize> Circuit<Scalar> for VoteBoolCommitMerklePoseidon<DEPTH> {
+    pub struct VoteBoolCommitMerklePow5<const DEPTH: usize>;
+    impl<const DEPTH: usize> Circuit<Scalar> for VoteBoolCommitMerklePow5<DEPTH> {
         type Config = (
             halo2_proofs::plonk::Column<halo2_proofs::plonk::Advice>, // v
             halo2_proofs::plonk::Column<halo2_proofs::plonk::Advice>, // rho
@@ -4005,7 +3975,7 @@ pub mod poseidon_depth {
             let inst_cm = meta.instance_column();
             let inst_root = meta.instance_column();
             let s = meta.selector();
-            meta.create_gate("vote_commit_merkle_poseidon_depth", |meta| {
+            meta.create_gate("vote_commit_merkle_pow5_depth", |meta| {
                 let s = meta.query_selector(s);
                 let vq = meta.query_advice(v, Rotation::cur());
                 let rhoq = meta.query_advice(rho, Rotation::cur());
@@ -4043,275 +4013,33 @@ pub mod poseidon_depth {
             mut layouter: impl Layouter<Scalar>,
         ) -> Result<(), PlonkError> {
             layouter.assign_region(
-                || "vote_commit_merkle_poseidon",
+                || "vote_commit_merkle_pow5",
                 |mut region| {
                     s.enable(&mut region, 0)?;
-                    advice!(region, "v", v => Scalar::from(1u64))?;
-                    advice!(region, "rho", rho => Scalar::from(12345u64))?;
+                    let v_value = Scalar::from(1u64);
+                    let rho_value = Scalar::from(12_345u64);
+                    advice!(region, "v", v => v_value)?;
+                    advice!(region, "rho", rho => rho_value)?;
                     for (i, col) in sibs.iter().enumerate() {
                         advice!(region, move "sib{i}", *col => Scalar::from(20 + i as u64))?;
                     }
                     for (i, col) in dirs.iter().enumerate() {
                         advice!(region, move "dir{i}", *col => Scalar::from(0))?;
                     }
-                    let mut acc = Scalar::from(0);
+                    let mut previous = h2_native(v_value, rho_value);
                     for (i, col) in ws.iter().enumerate() {
-                        acc += Scalar::from(20 + i as u64);
-                        advice!(region, move "w{i}", *col => acc)?;
+                        previous = h2_native(previous, Scalar::from(20 + i as u64));
+                        advice!(region, move "w{i}", *col => previous)?;
                     }
                     Ok(())
                 },
             )
         }
     }
-    #[cfg(all(feature = "zk-halo2-ipa-poseidon", feature = "halo2-dev-tests"))]
-    impl<const DEPTH: usize> Circuit<Scalar> for VoteBoolCommitMerklePoseidon<DEPTH> {
-        type Config = (
-            halo2_proofs::plonk::Column<halo2_proofs::plonk::Advice>, // v
-            halo2_proofs::plonk::Column<halo2_proofs::plonk::Advice>, // rho
-            halo2_proofs::plonk::Column<halo2_proofs::plonk::Advice>, // commit_left
-            halo2_proofs::plonk::Column<halo2_proofs::plonk::Advice>, // commit_right
-            halo2_proofs::plonk::Column<halo2_proofs::plonk::Advice>, // commit_hash
-            [halo2_proofs::plonk::Column<halo2_proofs::plonk::Advice>; DEPTH], // sibs
-            [halo2_proofs::plonk::Column<halo2_proofs::plonk::Advice>; DEPTH], // dirs
-            [halo2_proofs::plonk::Column<halo2_proofs::plonk::Advice>; DEPTH], // w nodes
-            [halo2_proofs::plonk::Column<halo2_proofs::plonk::Advice>; DEPTH], // poseidon_left
-            [halo2_proofs::plonk::Column<halo2_proofs::plonk::Advice>; DEPTH], // poseidon_right
-            halo2_proofs::plonk::Column<halo2_proofs::plonk::Instance>, // commit
-            halo2_proofs::plonk::Column<halo2_proofs::plonk::Instance>, // root
-            Selector,
-            Pow5Config<Scalar, 3, 2>,
-        );
-        type FloorPlanner = SimpleFloorPlanner;
-        type Params = ();
-        fn without_witnesses(&self) -> Self {
-            Self
-        }
-        #[allow(clippy::too_many_lines)]
-        fn configure(meta: &mut ConstraintSystem<Scalar>) -> Self::Config {
-            let v = meta.advice_column();
-            let rho = meta.advice_column();
-            let commit_left = meta.advice_column();
-            meta.enable_equality(commit_left);
-            let commit_right = meta.advice_column();
-            meta.enable_equality(commit_right);
-            let commit_hash = meta.advice_column();
-            meta.enable_equality(commit_hash);
-            let sibs = std::array::from_fn(|_| meta.advice_column());
-            let dirs = std::array::from_fn(|_| meta.advice_column());
-            let ws = std::array::from_fn(|_| {
-                let col = meta.advice_column();
-                meta.enable_equality(col);
-                col
-            });
-            let poseidon_left = std::array::from_fn(|_| {
-                let col = meta.advice_column();
-                meta.enable_equality(col);
-                col
-            });
-            let poseidon_right = std::array::from_fn(|_| {
-                let col = meta.advice_column();
-                meta.enable_equality(col);
-                col
-            });
-            let inst_cm = meta.instance_column();
-            let inst_root = meta.instance_column();
-            let s = meta.selector();
-            // Gadget config
-            let st0 = meta.advice_column();
-            let st1 = meta.advice_column();
-            let st2 = meta.advice_column();
-            let partial = meta.advice_column();
-            let rc_a = meta.fixed_column();
-            let rc_b = meta.fixed_column();
-            let poseidon_cfg = Pow5Chip::configure(meta, [st0, st1, st2], partial, rc_a, rc_b);
-            meta.create_gate("vote_commit_merkle_poseidon_depth", |meta| {
-                let s = meta.query_selector(s);
-                let vq = meta.query_advice(v, Rotation::cur());
-                let rhoq = meta.query_advice(rho, Rotation::cur());
-                let commit_left_q = meta.query_advice(commit_left, Rotation::cur());
-                let commit_right_q = meta.query_advice(commit_right, Rotation::cur());
-                let commit_hash_q = meta.query_advice(commit_hash, Rotation::cur());
-                let cmq = meta.query_instance(inst_cm, Rotation::cur());
-                let rootq = meta.query_instance(inst_root, Rotation::cur());
-                let one = halo2_proofs::plonk::Expression::Constant(Scalar::from(1u64));
-                let mut constraints = vec![
-                    s.clone() * (vq.clone() * (vq.clone() - one.clone())),
-                    s.clone() * (commit_left_q.clone() - vq.clone()),
-                    s.clone() * (commit_right_q.clone() - rhoq.clone()),
-                    s.clone() * (commit_hash_q.clone() - cmq),
-                ];
-                let mut prev = commit_hash_q;
-                for i in 0..DEPTH {
-                    let sib = meta.query_advice(sibs[i], Rotation::cur());
-                    let dir = meta.query_advice(dirs[i], Rotation::cur());
-                    let wi = meta.query_advice(ws[i], Rotation::cur());
-                    let left = meta.query_advice(poseidon_left[i], Rotation::cur());
-                    let right = meta.query_advice(poseidon_right[i], Rotation::cur());
-                    let one_minus_dir = one.clone() - dir.clone();
-                    constraints.push(s.clone() * (dir.clone() * (dir.clone() - one.clone())));
-                    constraints.push(
-                        s.clone()
-                            * (left.clone()
-                                - (one_minus_dir.clone() * prev.clone()
-                                    + dir.clone() * sib.clone())),
-                    );
-                    constraints.push(
-                        s.clone()
-                            * (right.clone()
-                                - (dir.clone() * prev.clone() + one_minus_dir * sib.clone())),
-                    );
-                    constraints.push(s.clone() * (wi.clone() - wi.clone()));
-                    prev = wi;
-                }
-                constraints.push(s * (prev - rootq));
-                constraints
-            });
-            (
-                v,
-                rho,
-                commit_left,
-                commit_right,
-                commit_hash,
-                sibs,
-                dirs,
-                ws,
-                poseidon_left,
-                poseidon_right,
-                inst_cm,
-                inst_root,
-                s,
-                poseidon_cfg,
-            )
-        }
-        #[allow(clippy::too_many_lines)]
-        fn synthesize(
-            &self,
-            (
-                v,
-                rho,
-                commit_left,
-                commit_right,
-                commit_hash,
-                sibs,
-                dirs,
-                ws,
-                poseidon_left,
-                poseidon_right,
-                _inst_cm,
-                _inst_root,
-                s,
-                poseidon_cfg,
-            ): Self::Config,
-            mut layouter: impl Layouter<Scalar>,
-        ) -> Result<(), PlonkError> {
-            use halo2_proofs::circuit::Value;
-            let v_val = Scalar::from(1);
-            let rho_val = Scalar::from(12345);
-            let commit_digest = poseidon_compress2_native(v_val, rho_val);
-            let (
-                commit_left_cell,
-                commit_right_cell,
-                commit_hash_cell,
-                sib_cells,
-                dir_cells,
-                w_cells,
-                left_cells,
-                right_cells,
-            ) = layouter.assign_region(
-                || "vote_commit_merkle_poseidon_depth",
-                |mut region| {
-                    s.enable(&mut region, 0)?;
-                    advice!(region, "v", v => v_val)?;
-                    advice!(region, "rho", rho => rho_val)?;
-                    let commit_left_cell = advice!(region, "commit_left", commit_left => v_val)?;
-                    let commit_right_cell =
-                        advice!(region, "commit_right", commit_right => rho_val)?;
-                    let commit_hash_cell =
-                        advice!(region, "commit_hash", commit_hash => commit_digest)?;
-                    let mut sib_cells = Vec::with_capacity(DEPTH);
-                    let mut dir_cells = Vec::with_capacity(DEPTH);
-                    let mut w_cells = Vec::with_capacity(DEPTH);
-                    let mut left_cells = Vec::with_capacity(DEPTH);
-                    let mut right_cells = Vec::with_capacity(DEPTH);
-                    let mut prev_val = commit_digest;
-                    for i in 0..DEPTH {
-                        let sib_val = Scalar::from(20 + i as u64);
-                        let dir_val = if i % 2 == 0 {
-                            Scalar::zero()
-                        } else {
-                            Scalar::one()
-                        };
-                        sib_cells.push(advice!(region, move "sib{i}", sibs[i] => sib_val)?);
-                        dir_cells.push(advice!(region, move "dir{i}", dirs[i] => dir_val)?);
-                        let (left_val, right_val) = if dir_val == Scalar::one() {
-                            (sib_val, prev_val)
-                        } else {
-                            (prev_val, sib_val)
-                        };
-                        left_cells.push(advice!(
-                            region,
-                            move "poseidon_left{i}",
-                            poseidon_left[i] => left_val
-                        )?);
-                        right_cells.push(advice!(
-                            region,
-                            move "poseidon_right{i}",
-                            poseidon_right[i] => right_val
-                        )?);
-                        let digest_val = poseidon_compress2_native(left_val, right_val);
-                        w_cells.push(advice!(region, move "w{i}", ws[i] => digest_val)?);
-                        prev_val = digest_val;
-                    }
-                    Ok((
-                        commit_left_cell,
-                        commit_right_cell,
-                        commit_hash_cell,
-                        sib_cells,
-                        dir_cells,
-                        w_cells,
-                        left_cells,
-                        right_cells,
-                    ))
-                },
-            )?;
-            let commit_digest_cells = Poseidon2ChipWrapper::new().hash2_chip(
-                &mut layouter,
-                &poseidon_cfg,
-                Value::known(v_val),
-                Value::known(rho_val),
-            )?;
-            layouter.constrain_equal(commit_digest_cells.left.cell(), commit_left_cell.cell())?;
-            layouter.constrain_equal(commit_digest_cells.right.cell(), commit_right_cell.cell())?;
-            layouter.constrain_equal(commit_digest_cells.digest.cell(), commit_hash_cell.cell())?;
-            let mut prev_val = commit_digest;
-            for i in 0..DEPTH {
-                let dir_val = dir_cells[i].value().copied().unwrap_or_else(Scalar::zero);
-                let sib_val = sib_cells[i].value().copied().unwrap_or_else(Scalar::zero);
-                let (left_val, right_val) = if dir_val == Scalar::one() {
-                    (sib_val, prev_val)
-                } else {
-                    (prev_val, sib_val)
-                };
-                let digest_cells = Poseidon2ChipWrapper::new().hash2_chip(
-                    &mut layouter,
-                    &poseidon_cfg,
-                    Value::known(left_val),
-                    Value::known(right_val),
-                )?;
-                layouter.constrain_equal(digest_cells.left.cell(), left_cells[i].cell())?;
-                layouter.constrain_equal(digest_cells.right.cell(), right_cells[i].cell())?;
-                layouter.constrain_equal(digest_cells.digest.cell(), w_cells[i].cell())?;
-                prev_val = w_cells[i].value().copied().unwrap_or(prev_val);
-            }
-            Ok(())
-        }
-    }
-    /// Anonymous transfer (2x2) with Poseidon-style commit + membership chain.
+    /// Anonymous transfer (2x2) with constrained Pow5 commit + membership chain.
     #[derive(Clone, Default)]
-    pub struct AnonTransfer2x2CommitMerklePoseidon<const DEPTH: usize>;
-    #[cfg(not(all(feature = "zk-halo2-ipa-poseidon", feature = "halo2-dev-tests")))]
-    impl<const DEPTH: usize> Circuit<Scalar> for AnonTransfer2x2CommitMerklePoseidon<DEPTH> {
+    pub struct AnonTransfer2x2CommitMerklePow5<const DEPTH: usize>;
+    impl<const DEPTH: usize> Circuit<Scalar> for AnonTransfer2x2CommitMerklePow5<DEPTH> {
         type Config = (
             halo2_proofs::plonk::Column<halo2_proofs::plonk::Advice>, // in0
             halo2_proofs::plonk::Column<halo2_proofs::plonk::Advice>, // in1
@@ -4367,7 +4095,7 @@ pub mod poseidon_depth {
             ];
             let root = meta.instance_column();
             let s = meta.selector();
-            meta.create_gate("anon_transfer_commit_merkle_poseidon_depth", |meta| {
+            meta.create_gate("anon_transfer_commit_merkle_pow5_depth", |meta| {
                 let s = meta.query_selector(s);
                 let a = meta.query_advice(in0, Rotation::cur());
                 let b = meta.query_advice(in1, Rotation::cur());
@@ -4469,9 +4197,11 @@ pub mod poseidon_depth {
                 s,
             ) = cfg;
             layouter.assign_region(
-                || "anon_transfer_commit_merkle_poseidon",
+                || "anon_transfer_commit_merkle_pow5",
                 |mut region| {
                     s.enable(&mut region, 0)?;
+                    let cm0 = h2_native(Scalar::from(7), Scalar::from(11)) + Scalar::from(7);
+                    let cm1 = h2_native(Scalar::from(5), Scalar::from(13)) + Scalar::from(7);
                     advice!(region, "in0", in0 => Scalar::from(7))?;
                     advice!(region, "in1", in1 => Scalar::from(5))?;
                     advice!(region, "out0", out0 => Scalar::from(6))?;
@@ -4483,301 +4213,54 @@ pub mod poseidon_depth {
                     advice!(region, "sk", sk => Scalar::from(1_234_567))?;
                     advice!(region, "serial", serial => Scalar::from(42))?;
                     for (i, col) in sib_a.iter().enumerate() {
-                        advice!(region, move "sib_a{i}", *col => Scalar::from(20 + i as u64))?;
+                        let sibling = if i == 0 {
+                            cm1
+                        } else {
+                            Scalar::from(20 + i as u64)
+                        };
+                        advice!(region, move "sib_a{i}", *col => sibling)?;
                     }
                     for (i, col) in dir_a.iter().enumerate() {
                         advice!(region, move "dir_a{i}", *col => Scalar::from(0))?;
                     }
-                    let mut acc = Scalar::from(0);
+                    let mut previous_a = cm0;
                     for (i, col) in w_a.iter().enumerate() {
-                        acc += Scalar::from(20 + i as u64);
-                        advice!(region, move "w_a{i}", *col => acc)?;
+                        let sibling = if i == 0 {
+                            cm1
+                        } else {
+                            Scalar::from(20 + i as u64)
+                        };
+                        previous_a = h2_native(previous_a, sibling);
+                        advice!(region, move "w_a{i}", *col => previous_a)?;
                     }
                     for (i, col) in sib_b.iter().enumerate() {
-                        advice!(region, move "sib_b{i}", *col => Scalar::from(30 + i as u64))?;
+                        let sibling = if i == 0 {
+                            cm0
+                        } else {
+                            Scalar::from(20 + i as u64)
+                        };
+                        advice!(region, move "sib_b{i}", *col => sibling)?;
                     }
                     for (i, col) in dir_b.iter().enumerate() {
-                        advice!(region, move "dir_b{i}", *col => Scalar::from(0))?;
+                        let direction = if i == 0 {
+                            Scalar::from(1)
+                        } else {
+                            Scalar::from(0)
+                        };
+                        advice!(region, move "dir_b{i}", *col => direction)?;
                     }
-                    let mut acc_b = Scalar::from(0);
+                    let mut previous_b = cm1;
                     for (i, col) in w_b.iter().enumerate() {
-                        acc_b += Scalar::from(30 + i as u64);
-                        advice!(region, move "w_b{i}", *col => acc_b)?;
+                        if i == 0 {
+                            previous_b = h2_native(cm0, previous_b);
+                        } else {
+                            previous_b = h2_native(previous_b, Scalar::from(20 + i as u64));
+                        }
+                        advice!(region, move "w_b{i}", *col => previous_b)?;
                     }
                     Ok(())
                 },
             )
-        }
-    }
-    #[cfg(all(feature = "zk-halo2-ipa-poseidon", feature = "halo2-dev-tests"))]
-    impl<const DEPTH: usize> Circuit<Scalar> for AnonTransfer2x2CommitMerklePoseidon<DEPTH> {
-        type Config = (
-            halo2_proofs::plonk::Column<halo2_proofs::plonk::Advice>, // in0
-            halo2_proofs::plonk::Column<halo2_proofs::plonk::Advice>, // in1
-            halo2_proofs::plonk::Column<halo2_proofs::plonk::Advice>, // out0
-            halo2_proofs::plonk::Column<halo2_proofs::plonk::Advice>, // out1
-            halo2_proofs::plonk::Column<halo2_proofs::plonk::Advice>, // r_in0
-            halo2_proofs::plonk::Column<halo2_proofs::plonk::Advice>, // r_in1
-            halo2_proofs::plonk::Column<halo2_proofs::plonk::Advice>, // r_out0
-            halo2_proofs::plonk::Column<halo2_proofs::plonk::Advice>, // r_out1
-            halo2_proofs::plonk::Column<halo2_proofs::plonk::Advice>, // sk
-            halo2_proofs::plonk::Column<halo2_proofs::plonk::Advice>, // serial
-            [halo2_proofs::plonk::Column<halo2_proofs::plonk::Advice>; DEPTH], // sib_a
-            [halo2_proofs::plonk::Column<halo2_proofs::plonk::Advice>; DEPTH], // dir_a
-            [halo2_proofs::plonk::Column<halo2_proofs::plonk::Advice>; DEPTH], // w_a
-            [halo2_proofs::plonk::Column<halo2_proofs::plonk::Advice>; DEPTH], // sib_b
-            [halo2_proofs::plonk::Column<halo2_proofs::plonk::Advice>; DEPTH], // dir_b
-            [halo2_proofs::plonk::Column<halo2_proofs::plonk::Advice>; DEPTH], // w_b
-            [halo2_proofs::plonk::Column<halo2_proofs::plonk::Instance>; 5], // cm_in0..cm_out1, nf
-            halo2_proofs::plonk::Column<halo2_proofs::plonk::Instance>, // root
-            Selector,
-            Pow5Config<Scalar, 3, 2>,
-        );
-        type FloorPlanner = SimpleFloorPlanner;
-        type Params = ();
-        fn without_witnesses(&self) -> Self {
-            Self
-        }
-        #[allow(clippy::too_many_lines)]
-        fn configure(meta: &mut ConstraintSystem<Scalar>) -> Self::Config {
-            let in0 = meta.advice_column();
-            let in1 = meta.advice_column();
-            let out0 = meta.advice_column();
-            let out1 = meta.advice_column();
-            let r0 = meta.advice_column();
-            let r1 = meta.advice_column();
-            let r2 = meta.advice_column();
-            let r3 = meta.advice_column();
-            let sk = meta.advice_column();
-            let serial = meta.advice_column();
-            let sib_a = std::array::from_fn(|_| meta.advice_column());
-            let dir_a = std::array::from_fn(|_| meta.advice_column());
-            let w_a = std::array::from_fn(|_| meta.advice_column());
-            let sib_b = std::array::from_fn(|_| meta.advice_column());
-            let dir_b = std::array::from_fn(|_| meta.advice_column());
-            let w_b = std::array::from_fn(|_| meta.advice_column());
-            for w in &w_a {
-                meta.enable_equality(*w);
-            }
-            for w in &w_b {
-                meta.enable_equality(*w);
-            }
-            let cm_cols = [
-                meta.instance_column(),
-                meta.instance_column(),
-                meta.instance_column(),
-                meta.instance_column(),
-                meta.instance_column(),
-            ];
-            let root = meta.instance_column();
-            let s = meta.selector();
-            // Poseidon chip config
-            let st0 = meta.advice_column();
-            let st1 = meta.advice_column();
-            let st2 = meta.advice_column();
-            let partial = meta.advice_column();
-            let rc_a = meta.fixed_column();
-            let rc_b = meta.fixed_column();
-            let poseidon_cfg = Pow5Chip::configure(meta, [st0, st1, st2], partial, rc_a, rc_b);
-            // Constraints unchanged
-            meta.create_gate("anon_transfer_commit_merkle_poseidon_depth", |meta| {
-                let s = meta.query_selector(s);
-                let a = meta.query_advice(in0, Rotation::cur());
-                let b = meta.query_advice(in1, Rotation::cur());
-                let c = meta.query_advice(out0, Rotation::cur());
-                let d = meta.query_advice(out1, Rotation::cur());
-                let r0q = meta.query_advice(r0, Rotation::cur());
-                let r1q = meta.query_advice(r1, Rotation::cur());
-                let r2q = meta.query_advice(r2, Rotation::cur());
-                let r3q = meta.query_advice(r3, Rotation::cur());
-                let skq = meta.query_advice(sk, Rotation::cur());
-                let serq = meta.query_advice(serial, Rotation::cur());
-                let cm_in0 = meta.query_instance(cm_cols[0], Rotation::cur());
-                let cm_in1 = meta.query_instance(cm_cols[1], Rotation::cur());
-                let cm_out0 = meta.query_instance(cm_cols[2], Rotation::cur());
-                let cm_out1 = meta.query_instance(cm_cols[3], Rotation::cur());
-                let nf = meta.query_instance(cm_cols[4], Rotation::cur());
-                let rootq = meta.query_instance(root, Rotation::cur());
-                let cm0 = h2(a.clone(), r0q.clone())
-                    + halo2_proofs::plonk::Expression::Constant(Scalar::from(7));
-                let cm1 = h2(b.clone(), r1q.clone())
-                    + halo2_proofs::plonk::Expression::Constant(Scalar::from(7));
-                let cm2 = h2(c.clone(), r2q.clone())
-                    + halo2_proofs::plonk::Expression::Constant(Scalar::from(7));
-                let cm3 = h2(d.clone(), r3q.clone())
-                    + halo2_proofs::plonk::Expression::Constant(Scalar::from(7));
-                let nf_exp = h2(skq.clone(), serq.clone())
-                    + halo2_proofs::plonk::Expression::Constant(Scalar::from(7));
-                let mut cons = vec![
-                    s.clone() * (a.clone() + b.clone() - (c.clone() + d.clone())),
-                    s.clone() * (cm0.clone() - cm_in0),
-                    s.clone() * (cm1.clone() - cm_in1),
-                    s.clone() * (cm2 - cm_out0),
-                    s.clone() * (cm3 - cm_out1),
-                    s.clone() * (nf_exp - nf),
-                ];
-                let one = halo2_proofs::plonk::Expression::Constant(Scalar::from(1));
-                let mut prev = cm0;
-                for i in 0..DEPTH {
-                    let si = meta.query_advice(sib_a[i], Rotation::cur());
-                    let di = meta.query_advice(dir_a[i], Rotation::cur());
-                    let wi = meta.query_advice(w_a[i], Rotation::cur());
-                    cons.push(s.clone() * (di.clone() * (di.clone() - one.clone())));
-                    let h_l = h2(prev.clone(), si.clone());
-                    let h_r = h2(si.clone(), prev.clone());
-                    let wi_exp = (one.clone() - di.clone()) * h_l + di.clone() * h_r;
-                    cons.push(s.clone() * (wi.clone() - wi_exp));
-                    prev = wi;
-                }
-                let mut prev_b = cm1;
-                for i in 0..DEPTH {
-                    let si = meta.query_advice(sib_b[i], Rotation::cur());
-                    let di = meta.query_advice(dir_b[i], Rotation::cur());
-                    let wi = meta.query_advice(w_b[i], Rotation::cur());
-                    cons.push(s.clone() * (di.clone() * (di.clone() - one.clone())));
-                    let h_l = h2(prev_b.clone(), si.clone());
-                    let h_r = h2(si.clone(), prev_b.clone());
-                    let wi_exp = (one.clone() - di.clone()) * h_l + di.clone() * h_r;
-                    cons.push(s.clone() * (wi.clone() - wi_exp));
-                    prev_b = wi;
-                }
-                cons.push(s.clone() * (prev - rootq.clone()));
-                cons.push(s * (prev_b - rootq));
-                cons
-            });
-            (
-                in0,
-                in1,
-                out0,
-                out1,
-                r0,
-                r1,
-                r2,
-                r3,
-                sk,
-                serial,
-                sib_a,
-                dir_a,
-                w_a,
-                sib_b,
-                dir_b,
-                w_b,
-                cm_cols,
-                root,
-                s,
-                poseidon_cfg,
-            )
-        }
-        fn synthesize(
-            &self,
-            cfg: Self::Config,
-            mut layouter: impl Layouter<Scalar>,
-        ) -> Result<(), PlonkError> {
-            use halo2_proofs::circuit::Value;
-            let (
-                in0,
-                in1,
-                out0,
-                out1,
-                r0,
-                r1,
-                r2,
-                r3,
-                sk,
-                serial,
-                sib_a,
-                dir_a,
-                w_a,
-                sib_b,
-                dir_b,
-                w_b,
-                _cm_cols,
-                _root,
-                s,
-                poseidon_cfg,
-            ) = cfg;
-            layouter.assign_region(
-                || "anon_transfer_commit_merkle_poseidon",
-                |mut region| {
-                    s.enable(&mut region, 0)?;
-                    advice!(region, "in0", in0 => Scalar::from(7))?;
-                    advice!(region, "in1", in1 => Scalar::from(5))?;
-                    advice!(region, "out0", out0 => Scalar::from(6))?;
-                    advice!(region, "out1", out1 => Scalar::from(6))?;
-                    advice!(region, "r0", r0 => Scalar::from(11))?;
-                    advice!(region, "r1", r1 => Scalar::from(13))?;
-                    advice!(region, "r2", r2 => Scalar::from(17))?;
-                    advice!(region, "r3", r3 => Scalar::from(19))?;
-                    advice!(region, "sk", sk => Scalar::from(1_234_567))?;
-                    advice!(region, "serial", serial => Scalar::from(42))?;
-                    for (i, col) in sib_a.iter().enumerate() {
-                        advice!(region, move "sib_a{i}", *col => Scalar::from(20 + i as u64))?;
-                    }
-                    for (i, col) in dir_a.iter().enumerate() {
-                        advice!(region, move "dir_a{i}", *col => Scalar::from(0))?;
-                    }
-                    for (i, col) in sib_b.iter().enumerate() {
-                        advice!(region, move "sib_b{i}", *col => Scalar::from(30 + i as u64))?;
-                    }
-                    for (i, col) in dir_b.iter().enumerate() {
-                        advice!(region, move "dir_b{i}", *col => Scalar::from(0))?;
-                    }
-                    Ok(())
-                },
-            )?;
-            // Use concrete witness values assigned above
-            let in0v = Scalar::from(7);
-            let in1v = Scalar::from(5);
-            let out0v = Scalar::from(6);
-            let out1v = Scalar::from(6);
-            let r0v = Scalar::from(11);
-            let r1v = Scalar::from(13);
-            let r2v = Scalar::from(17);
-            let r3v = Scalar::from(19);
-            // Commit-like hashes (+7 offset) for cm and nf
-            let cm0 = poseidon_compress2_native(in0v, r0v) + Scalar::from(7);
-            let cm1 = poseidon_compress2_native(in1v, r1v) + Scalar::from(7);
-            let _cm2 = poseidon_compress2_native(out0v, r2v) + Scalar::from(7);
-            let _cm3 = poseidon_compress2_native(out1v, r3v) + Scalar::from(7);
-            // Chain A via gadget
-            let mut prev_a = cm0;
-            for (i, w_col) in w_a.iter().enumerate() {
-                let sib_val = Scalar::from(20 + i as u64);
-                let hash_cells = Poseidon2ChipWrapper::new().hash2_chip(
-                    &mut layouter,
-                    &poseidon_cfg,
-                    Value::known(prev_a),
-                    Value::known(sib_val),
-                )?;
-                let digest = hash_cells.digest;
-                let w_val = poseidon_compress2_native(prev_a, sib_val);
-                let w_cell = layouter.assign_region(
-                    || format!("w_a_{i}"),
-                    |mut region| advice!(region, "w_a", *w_col => w_val),
-                )?;
-                layouter.constrain_equal(digest.cell(), w_cell.cell())?;
-                prev_a = w_val;
-            }
-            // Chain B via gadget
-            let mut prev_b = cm1;
-            for (i, w_col) in w_b.iter().enumerate() {
-                let sib_val = Scalar::from(30 + i as u64);
-                let hash_cells = Poseidon2ChipWrapper::new().hash2_chip(
-                    &mut layouter,
-                    &poseidon_cfg,
-                    Value::known(prev_b),
-                    Value::known(sib_val),
-                )?;
-                let digest = hash_cells.digest;
-                let w_val = poseidon_compress2_native(prev_b, sib_val);
-                let w_cell = layouter.assign_region(
-                    || format!("w_b_{i}"),
-                    |mut region| advice!(region, "w_b", *w_col => w_val),
-                )?;
-                layouter.constrain_equal(digest.cell(), w_cell.cell())?;
-                prev_b = w_val;
-            }
-            Ok(())
         }
     }
 }
@@ -5012,25 +4495,11 @@ impl DedupCache {
         }
     }
 }
-#[cfg(all(
-    test,
-    feature = "zk-halo2-ipa",
-    feature = "zk-halo2",
-    feature = "zk-halo2-ipa-poseidon"
-))]
+#[cfg(all(test, feature = "zk-halo2-ipa", feature = "zk-halo2"))]
 use halo2_proofs::transcript::TranscriptWriterBuffer;
-#[cfg(all(
-    test,
-    feature = "zk-halo2-ipa",
-    feature = "zk-halo2",
-    feature = "zk-halo2-ipa-poseidon"
-))]
+#[cfg(all(test, feature = "zk-halo2-ipa", feature = "zk-halo2"))]
 use rand_core_06::OsRng;
-#[cfg(all(
-    feature = "zk-halo2-ipa",
-    feature = "zk-halo2",
-    feature = "zk-halo2-ipa-poseidon"
-))]
+#[cfg(all(feature = "zk-halo2-ipa", feature = "zk-halo2"))]
 #[test]
 fn halo2_verify_with_instance_noncanonical_ipa() {
     // Generate a valid proof, then wrap a non-canonical instance scalar in ZK1.
@@ -5134,11 +4603,7 @@ fn halo2_verify_with_instance_noncanonical_ipa() {
     let prf_box = ProofBox::new(backend.into(), prf_env);
     assert!(!verify_halo2_ipa(backend, &prf_box, Some(&vk_box)));
 }
-#[cfg(all(
-    feature = "zk-halo2-ipa",
-    feature = "zk-halo2",
-    feature = "zk-halo2-ipa-poseidon"
-))]
+#[cfg(all(feature = "zk-halo2-ipa", feature = "zk-halo2"))]
 #[test]
 fn ipa_vote_bool_commit_zk1() {
     use halo2_proofs::{
@@ -5208,11 +4673,7 @@ fn ipa_vote_bool_commit_zk1() {
     let prf_box = ProofBox::new(backend.into(), prf_env);
     assert!(verify_halo2_ipa(backend, &prf_box, Some(&vk_box)));
 }
-#[cfg(all(
-    feature = "zk-halo2-ipa",
-    feature = "zk-halo2",
-    feature = "zk-halo2-ipa-poseidon"
-))]
+#[cfg(all(feature = "zk-halo2-ipa", feature = "zk-halo2"))]
 #[test]
 fn halo2_verify_rejects_vk_without_bytes() {
     use halo2_proofs::{
@@ -5291,11 +4752,7 @@ fn halo2_verify_rejects_vk_without_bytes() {
     let vk_box_tampered = VerifyingKeyBox::new(backend.into(), vk_tampered);
     assert!(!verify_halo2_ipa(backend, &prf_box, Some(&vk_box_tampered)));
 }
-#[cfg(all(
-    feature = "zk-halo2-ipa",
-    feature = "zk-halo2",
-    feature = "zk-halo2-ipa-poseidon"
-))]
+#[cfg(all(feature = "zk-halo2-ipa", feature = "zk-halo2"))]
 #[test]
 fn ipa_anon_transfer_commit_zk1() {
     use halo2_proofs::{
@@ -5384,11 +4841,7 @@ fn ipa_anon_transfer_commit_zk1() {
     let prf_box = ProofBox::new(backend.into(), prf_env);
     assert!(verify_halo2_ipa(backend, &prf_box, Some(&vk_box)));
 }
-#[cfg(all(
-    feature = "zk-halo2-ipa",
-    feature = "zk-halo2",
-    feature = "zk-halo2-ipa-poseidon"
-))]
+#[cfg(all(feature = "zk-halo2-ipa", feature = "zk-halo2"))]
 #[test]
 fn ipa_vote_bool_commit_merkle2_zk1() {
     use halo2_proofs::{
@@ -5406,15 +4859,15 @@ fn ipa_vote_bool_commit_merkle2_zk1() {
         &pasta_tiny::VoteBoolCommitMerkle2::default(),
     )
     .expect("pk");
-    // Compute commit and Merkle root using the same fallback Pow5 pair hash as the circuit.
+    // Compute commit and Merkle root using the circuit's constrained Pow5 pair relation.
     let v = Scalar::from(1u64);
     let rho = Scalar::from(12345u64);
-    let commit = pasta_tiny::poseidon_pair(v, rho);
+    let commit = pasta_tiny::constrained_pow5_pair(v, rho);
     let sib0 = Scalar::from(5u64);
     let sib1 = Scalar::from(7u64);
     // w0 = h(commit, sib0), w1 = h(w0, sib1)
-    let w0 = pasta_tiny::poseidon_pair(commit, sib0);
-    let root = pasta_tiny::poseidon_pair(w0, sib1);
+    let w0 = pasta_tiny::constrained_pow5_pair(commit, sib0);
+    let root = pasta_tiny::constrained_pow5_pair(w0, sib1);
     let col0 = vec![commit];
     let col1 = vec![root];
     let inst_cols: Vec<&[Scalar]> = vec![col0.as_slice(), col1.as_slice()];
@@ -10338,10 +9791,8 @@ mod pasta_tiny {
             )
         }
     }
-    #[cfg(not(all(feature = "zk-halo2-ipa-poseidon", feature = "halo2-dev-tests")))]
     #[derive(Clone, Default)]
     pub struct CommitOpen; // algebraic test relation; not a cryptographic commitment
-    #[cfg(not(all(feature = "zk-halo2-ipa-poseidon", feature = "halo2-dev-tests")))]
     impl Circuit<Scalar> for CommitOpen {
         type Config = (
             halo2_proofs::plonk::Column<halo2_proofs::plonk::Advice>, // m
@@ -10364,7 +9815,7 @@ mod pasta_tiny {
                 let m = meta.query_advice(m, Rotation::cur());
                 let r = meta.query_advice(r, Rotation::cur());
                 let c = meta.query_instance(inst, Rotation::cur());
-                vec![s * (poseidon_pair_expr(m, r) - c)]
+                vec![s * (constrained_pow5_pair_expr(m, r) - c)]
             });
             (m, r, inst, s)
         }
@@ -10384,10 +9835,8 @@ mod pasta_tiny {
             )
         }
     }
-    #[cfg(not(all(feature = "zk-halo2-ipa-poseidon", feature = "halo2-dev-tests")))]
     #[derive(Clone, Default)]
     pub struct Merkle2; // algebraic test tree; not a collision-resistant Merkle tree
-    #[cfg(not(all(feature = "zk-halo2-ipa-poseidon", feature = "halo2-dev-tests")))]
     impl Circuit<Scalar> for Merkle2 {
         type Config = (
             halo2_proofs::plonk::Column<halo2_proofs::plonk::Advice>, // leaf
@@ -10420,8 +9869,8 @@ mod pasta_tiny {
                 let w1 = meta.query_advice(w1, Rotation::cur());
                 let root = meta.query_instance(root, Rotation::cur());
                 vec![
-                    s.clone() * (w0.clone() - poseidon_pair_expr(leaf, sib0)),
-                    s.clone() * (w1.clone() - poseidon_pair_expr(w0, sib1)),
+                    s.clone() * (w0.clone() - constrained_pow5_pair_expr(leaf, sib0)),
+                    s.clone() * (w1.clone() - constrained_pow5_pair_expr(w0, sib1)),
                     s * (root - w1),
                 ]
             });
@@ -10439,8 +9888,8 @@ mod pasta_tiny {
                     let l = Scalar::from(9);
                     let s0 = Scalar::from(5);
                     let s1 = Scalar::from(7);
-                    let w0v = poseidon_pair(l, s0);
-                    let w1v = poseidon_pair(w0v, s1);
+                    let w0v = constrained_pow5_pair(l, s0);
+                    let w1v = constrained_pow5_pair(w0v, s1);
                     advice!(region, "leaf", leaf => l)?;
                     advice!(region, "sib0", sib0 => s0)?;
                     advice!(region, "sib1", sib1 => s1)?;
@@ -10450,424 +9899,6 @@ mod pasta_tiny {
                 },
             )
         }
-    }
-    // INSECURE DEV-TEST COMPATIBILITY ONLY. This is a single quintic expression,
-    // not Poseidon: it has no full permutation rounds or MDS schedule, and the
-    // assignment wrapper below does not constrain its digest. No production
-    // verifier, key generator, or release artifact may select these circuits.
-    #[cfg(all(feature = "zk-halo2-ipa-poseidon", feature = "halo2-dev-tests"))]
-    pub mod poseidon {
-        use super::*;
-        use halo2_proofs::{
-            circuit::{AssignedCell, Cell, Layouter, Value},
-            plonk::{
-                Advice, Circuit, Column, ConstraintSystem, Error as PlonkError, Fixed, Selector,
-            },
-            poly::Rotation,
-        };
-        pub(super) fn compress2_native(
-            a: halo2_proofs::halo2curves::pasta::Fp,
-            b: halo2_proofs::halo2curves::pasta::Fp,
-        ) -> halo2_proofs::halo2curves::pasta::Fp {
-            use halo2_proofs::halo2curves::pasta::Fp as F;
-            let t0 = a + F::from(7u64);
-            let t1 = b + F::from(13u64);
-            let t0_2 = t0 * t0;
-            let t0_4 = t0_2 * t0_2;
-            let t0_5 = t0_4 * t0;
-            let t1_2 = t1 * t1;
-            let t1_4 = t1_2 * t1_2;
-            let t1_5 = t1_4 * t1;
-            F::from(2) * t0_5 + F::from(3) * t1_5
-        }
-        /// Local Pow5 configuration retained for old Poseidon-gadget call sites.
-        #[derive(Clone, Debug)]
-        pub struct Pow5Config<F, const WIDTH: usize, const RATE: usize> {
-            /// State advice columns used by the compatibility wrapper.
-            pub state: [Column<Advice>; WIDTH],
-            _marker: std::marker::PhantomData<fn() -> F>,
-        }
-        /// Local Pow5 chip marker retained for old Poseidon-gadget call sites.
-        #[derive(Clone, Debug)]
-        pub struct Pow5Chip<F, const WIDTH: usize, const RATE: usize> {
-            _config: Pow5Config<F, WIDTH, RATE>,
-        }
-        impl<F, const WIDTH: usize, const RATE: usize> Pow5Chip<F, WIDTH, RATE>
-        where
-            F: halo2_proofs::halo2curves::ff::Field,
-        {
-            /// Build a local compatibility config without depending on upstream gadgets.
-            pub fn configure(
-                meta: &mut ConstraintSystem<F>,
-                state: [Column<Advice>; WIDTH],
-                partial: Column<Advice>,
-                rc_a: Column<Fixed>,
-                rc_b: Column<Fixed>,
-            ) -> Pow5Config<F, WIDTH, RATE> {
-                let _ = (partial, rc_a, rc_b);
-                for column in state {
-                    meta.enable_equality(column);
-                }
-                Pow5Config {
-                    state,
-                    _marker: std::marker::PhantomData,
-                }
-            }
-            /// Construct a compatibility chip wrapper from its config.
-            pub fn construct(config: Pow5Config<F, WIDTH, RATE>) -> Self {
-                Self { _config: config }
-            }
-        }
-        /// Assigned cell handle returned by the local Poseidon wrapper.
-        #[derive(Clone, Debug)]
-        pub struct PoseidonCell<F> {
-            cell: Cell,
-            _marker: std::marker::PhantomData<fn() -> F>,
-        }
-        impl<F> PoseidonCell<F> {
-            fn new(cell: Cell) -> Self {
-                Self {
-                    cell,
-                    _marker: std::marker::PhantomData,
-                }
-            }
-            /// Return the underlying Halo2 cell.
-            pub fn cell(&self) -> Cell {
-                self.cell
-            }
-        }
-        /// Unconstrained dev-test assignment wrapper retained for compatibility tests.
-        ///
-        /// This type is not a hash gadget and must never be used by a release circuit.
-        #[derive(Clone, Default)]
-        pub struct Poseidon2ChipWrapper;
-        #[derive(Clone)]
-        pub struct PoseidonHashCells<F> {
-            /// Assigned digest cell.
-            pub digest: PoseidonCell<F>,
-            /// Assigned left input cell.
-            pub left: PoseidonCell<F>,
-            /// Assigned right input cell.
-            pub right: PoseidonCell<F>,
-        }
-        impl<F> PoseidonHashCells<F> {
-            /// Return the digest cell for call sites that only need the hash output.
-            pub fn cell(&self) -> Cell {
-                self.digest.cell()
-            }
-        }
-        impl Poseidon2ChipWrapper {
-            pub fn new() -> Self {
-                Self
-            }
-            /// Assign the retired quintic expression without hash constraints.
-            ///
-            /// Callers may use this only in negative/dev-test scaffolding.
-            pub fn hash2_chip(
-                &self,
-                layouter: &mut impl Layouter<halo2_proofs::halo2curves::pasta::Fp>,
-                poseidon_cfg: &Pow5Config<halo2_proofs::halo2curves::pasta::Fp, 3, 2>,
-                a: Value<halo2_proofs::halo2curves::pasta::Fp>,
-                b: Value<halo2_proofs::halo2curves::pasta::Fp>,
-            ) -> Result<PoseidonHashCells<halo2_proofs::halo2curves::pasta::Fp>, PlonkError>
-            {
-                let digest = a.zip(b).map(|(left, right)| compress2_native(left, right));
-                let (a_cell, b_cell, digest_cell) = layouter.assign_region(
-                    || "poseidon2_inputs",
-                    |mut region| {
-                        let a_cell = advice_dev!(region, "a", poseidon_cfg.state[0] => value a)?;
-                        let b_cell = advice_dev!(region, "b", poseidon_cfg.state[1] => value b)?;
-                        let digest_cell =
-                            advice_dev!(region, "digest", poseidon_cfg.state[2] => value digest)?;
-                        Ok((a_cell, b_cell, digest_cell))
-                    },
-                )?;
-                Ok(PoseidonHashCells {
-                    digest: PoseidonCell::new(digest_cell.cell()),
-                    left: PoseidonCell::new(a_cell.cell()),
-                    right: PoseidonCell::new(b_cell.cell()),
-                })
-            }
-        }
-        #[derive(Clone, Default)]
-        pub struct CommitOpenPoseidon;
-        impl Circuit<halo2_proofs::halo2curves::pasta::Fp> for CommitOpenPoseidon {
-            type Config = (
-                halo2_proofs::plonk::Column<halo2_proofs::plonk::Advice>, // m
-                halo2_proofs::plonk::Column<halo2_proofs::plonk::Advice>, // r
-                halo2_proofs::plonk::Column<halo2_proofs::plonk::Advice>, // s0
-                halo2_proofs::plonk::Column<halo2_proofs::plonk::Advice>, // s1
-                halo2_proofs::plonk::Column<halo2_proofs::plonk::Instance>, // commit (public)
-                Selector,
-                Pow5Config<halo2_proofs::halo2curves::pasta::Fp, 3, 2>, // Poseidon chip config
-            );
-            type FloorPlanner = SimpleFloorPlanner;
-            type Params = ();
-            fn without_witnesses(&self) -> Self {
-                Self
-            }
-            fn configure(
-                meta: &mut ConstraintSystem<halo2_proofs::halo2curves::pasta::Fp>,
-            ) -> Self::Config {
-                let m = meta.advice_column();
-                let r = meta.advice_column();
-                let s0 = meta.advice_column();
-                meta.enable_equality(s0);
-                let s1 = meta.advice_column();
-                let inst = meta.instance_column();
-                let sel = meta.selector();
-                // Configure Poseidon Pow5 chip (T=3, RATE=2)
-                let st0 = meta.advice_column();
-                let st1 = meta.advice_column();
-                let st2 = meta.advice_column();
-                let partial = meta.advice_column();
-                let rc_a = meta.fixed_column();
-                let rc_b = meta.fixed_column();
-                let poseidon_cfg = Pow5Chip::configure(meta, [st0, st1, st2], partial, rc_a, rc_b);
-                meta.create_gate("poseidon2_commit", |meta| {
-                    let s = meta.query_selector(sel);
-                    let m = meta.query_advice(m, Rotation::cur());
-                    let r = meta.query_advice(r, Rotation::cur());
-                    let s0_cur = meta.query_advice(s0, Rotation::cur());
-                    let s1_cur = meta.query_advice(s1, Rotation::cur());
-                    let c = meta.query_instance(inst, Rotation::cur());
-                    // s0 is the compressor output; s1 is a secondary mix value
-                    let rc0 = halo2_proofs::plonk::Expression::Constant(
-                        halo2_proofs::halo2curves::pasta::Fp::from(7u64),
-                    );
-                    let rc1 = halo2_proofs::plonk::Expression::Constant(
-                        halo2_proofs::halo2curves::pasta::Fp::from(13u64),
-                    );
-                    let three = halo2_proofs::plonk::Expression::Constant(
-                        halo2_proofs::halo2curves::pasta::Fp::from(3u64),
-                    );
-                    let five = halo2_proofs::plonk::Expression::Constant(
-                        halo2_proofs::halo2curves::pasta::Fp::from(5u64),
-                    );
-                    let t0 = m + rc0;
-                    let t0_2 = t0.clone() * t0.clone();
-                    let t0_4 = t0_2.clone() * t0_2;
-                    let t0_5 = t0_4 * t0;
-                    let t1 = r + rc1;
-                    let t1_2 = t1.clone() * t1.clone();
-                    let t1_4 = t1_2.clone() * t1_2;
-                    let t1_5 = t1_4 * t1;
-                    let exp_s1 = three * t0_5 + five * t1_5;
-                    // Constrain s0_cur,s1_cur equal to exp and s0_cur == c
-                    vec![s.clone() * (s1_cur - exp_s1), s * (c - s0_cur)]
-                });
-                (m, r, s0, s1, inst, sel, poseidon_cfg)
-            }
-            fn synthesize(
-                &self,
-                (m, r, s0, s1, _inst, sel, poseidon_cfg): Self::Config,
-                mut layouter: impl Layouter<halo2_proofs::halo2curves::pasta::Fp>,
-            ) -> Result<(), PlonkError> {
-                use halo2_proofs::halo2curves::pasta::Fp as F;
-                layouter.assign_region(
-                    || "poseidon2_commit",
-                    |mut region| {
-                        sel.enable(&mut region, 0)?;
-                        let m_v = F::from(11u64);
-                        let r_v = F::from(31u64);
-                        // assign inputs
-                        let _m_cell = advice!(region, "m", m => m_v)?;
-                        let _r_cell = advice!(region, "r", r => r_v)?;
-                        // assign s0 via native helper for constraints, then constrain equal to gadget digest
-                        let s0_v = compress2_native(m_v, r_v);
-                        let s0_cell = advice!(region, "s0", s0 => s0_v)?;
-                        // s1 remains secondary mix value for the circuit
-                        let t0 = m_v + F::from(7u64);
-                        let t1 = r_v + F::from(13u64);
-                        let t0_2 = t0 * t0;
-                        let t0_4 = t0_2 * t0_2;
-                        let t0_5 = t0_4 * t0;
-                        let t1_2 = t1 * t1;
-                        let t1_4 = t1_2 * t1_2;
-                        let t1_5 = t1_4 * t1;
-                        let s1_v = F::from(3u64) * t0_5 + F::from(5u64) * t1_5;
-                        advice!(region, "s1", s1 => s1_v)?;
-                        // Compute gadget digest and constrain equality to s0
-                        let hash_cells = Poseidon2ChipWrapper::new().hash2_chip(
-                            &mut layouter,
-                            &poseidon_cfg,
-                            Value::known(m_v),
-                            Value::known(r_v),
-                        )?;
-                        layouter.constrain_equal(hash_cells.digest.cell(), s0_cell.cell())?;
-                        Ok(())
-                    },
-                )
-            }
-        }
-        const MERKLE2_POSEIDON_DEPTH: usize = 8;
-        const MERKLE2_POSEIDON_SAMPLE_LEAF: u64 = 9;
-        const MERKLE2_POSEIDON_SAMPLE_SIBS: [u64; MERKLE2_POSEIDON_DEPTH] =
-            [5, 11, 7, 13, 17, 23, 19, 29];
-        const MERKLE2_POSEIDON_SAMPLE_DIRS: [u64; MERKLE2_POSEIDON_DEPTH] =
-            [0, 1, 1, 0, 1, 0, 1, 0];
-        pub(crate) fn merkle2_poseidon_sample_path() -> (
-            halo2_proofs::halo2curves::pasta::Fp,
-            [halo2_proofs::halo2curves::pasta::Fp; MERKLE2_POSEIDON_DEPTH],
-            [halo2_proofs::halo2curves::pasta::Fp; MERKLE2_POSEIDON_DEPTH],
-        ) {
-            use halo2_proofs::halo2curves::pasta::Fp as F;
-            let leaf = F::from(MERKLE2_POSEIDON_SAMPLE_LEAF);
-            let siblings = MERKLE2_POSEIDON_SAMPLE_SIBS.map(F::from);
-            let dirs = MERKLE2_POSEIDON_SAMPLE_DIRS.map(F::from);
-            (leaf, siblings, dirs)
-        }
-        pub(crate) fn merkle2_poseidon_sample_root() -> halo2_proofs::halo2curves::pasta::Fp {
-            use halo2_proofs::halo2curves::pasta::Fp as F;
-            let (mut current, siblings, dirs) = merkle2_poseidon_sample_path();
-            for (sib, dir) in siblings.iter().zip(dirs.iter()) {
-                let left = current + *dir * (*sib - current);
-                let right = *sib + *dir * (current - *sib);
-                current = compress2_native(left, right);
-            }
-            current
-        }
-        #[derive(Clone, Default)]
-        pub struct Merkle2Poseidon;
-        impl Circuit<halo2_proofs::halo2curves::pasta::Fp> for Merkle2Poseidon {
-            type Config = (
-                halo2_proofs::plonk::Column<halo2_proofs::plonk::Advice>, // node (current value)
-                halo2_proofs::plonk::Column<halo2_proofs::plonk::Advice>, // sibling
-                halo2_proofs::plonk::Column<halo2_proofs::plonk::Advice>, // direction bit
-                halo2_proofs::plonk::Column<halo2_proofs::plonk::Advice>, // left input
-                halo2_proofs::plonk::Column<halo2_proofs::plonk::Advice>, // right input
-                halo2_proofs::plonk::Column<halo2_proofs::plonk::Advice>, // hash output
-                halo2_proofs::plonk::Column<halo2_proofs::plonk::Instance>, // root
-                Selector,
-                Pow5Config<halo2_proofs::halo2curves::pasta::Fp, 3, 2>,
-            );
-            type FloorPlanner = SimpleFloorPlanner;
-            type Params = ();
-            fn without_witnesses(&self) -> Self {
-                Self
-            }
-            fn configure(
-                meta: &mut ConstraintSystem<halo2_proofs::halo2curves::pasta::Fp>,
-            ) -> Self::Config {
-                let node = meta.advice_column();
-                meta.enable_equality(node);
-                let sibling = meta.advice_column();
-                let dir = meta.advice_column();
-                let left = meta.advice_column();
-                meta.enable_equality(left);
-                let right = meta.advice_column();
-                meta.enable_equality(right);
-                let out = meta.advice_column();
-                meta.enable_equality(out);
-                let inst = meta.instance_column();
-                let sel = meta.selector();
-                let st0 = meta.advice_column();
-                let st1 = meta.advice_column();
-                let st2 = meta.advice_column();
-                let partial = meta.advice_column();
-                let rc_a = meta.fixed_column();
-                let rc_b = meta.fixed_column();
-                let poseidon_cfg = Pow5Chip::configure(meta, [st0, st1, st2], partial, rc_a, rc_b);
-                meta.create_gate("merkle_poseidon_layer", |meta| {
-                    use halo2_proofs::halo2curves::pasta::Fp as F;
-                    let s = meta.query_selector(sel);
-                    let node_q = meta.query_advice(node, Rotation::cur());
-                    let sibling_q = meta.query_advice(sibling, Rotation::cur());
-                    let dir_q = meta.query_advice(dir, Rotation::cur());
-                    let left_q = meta.query_advice(left, Rotation::cur());
-                    let right_q = meta.query_advice(right, Rotation::cur());
-                    let one = halo2_proofs::plonk::Expression::Constant(F::from(1u64));
-                    let left_expected =
-                        node_q.clone() + dir_q.clone() * (sibling_q.clone() - node_q.clone());
-                    let right_expected =
-                        sibling_q.clone() + dir_q.clone() * (node_q.clone() - sibling_q.clone());
-                    vec![
-                        s.clone() * dir_q.clone() * (dir_q.clone() - one.clone()),
-                        s.clone() * (left_q - left_expected),
-                        s * (right_q - right_expected),
-                    ]
-                });
-                (
-                    node,
-                    sibling,
-                    dir,
-                    left,
-                    right,
-                    out,
-                    inst,
-                    sel,
-                    poseidon_cfg,
-                )
-            }
-            fn synthesize(
-                &self,
-                (node, sibling, dir, left, right, out, inst, sel, poseidon_cfg): Self::Config,
-                mut layouter: impl Layouter<halo2_proofs::halo2curves::pasta::Fp>,
-            ) -> Result<(), PlonkError> {
-                use halo2_proofs::halo2curves::pasta::Fp as F;
-                layouter.assign_region(
-                    || "merkle_poseidon_layers",
-                    |mut region| {
-                        let mut current = F::from(MERKLE2_POSEIDON_SAMPLE_LEAF);
-                        let mut previous_output: Option<AssignedCell<F, F>> = None;
-                        let chip = Poseidon2ChipWrapper::new();
-                        for (row, (&sib_raw, &dir_raw)) in MERKLE2_POSEIDON_SAMPLE_SIBS
-                            .iter()
-                            .zip(MERKLE2_POSEIDON_SAMPLE_DIRS.iter())
-                            .enumerate()
-                        {
-                            let sib_val = F::from(sib_raw);
-                            let dir_val = F::from(dir_raw);
-                            let left_val = current + dir_val * (sib_val - current);
-                            let right_val = sib_val + dir_val * (current - sib_val);
-                            let hash_val = compress2_native(left_val, right_val);
-                            let node_cell =
-                                advice_dev!(region, format "node_{row}", node, row => current)?;
-                            if let Some(ref prev) = previous_output {
-                                layouter.constrain_equal(node_cell.cell(), prev.cell())?;
-                            }
-                            advice_dev!(region, format "sibling_{row}", sibling, row => sib_val)?;
-                            advice_dev!(region, format "dir_{row}", dir, row => dir_val)?;
-                            let left_cell =
-                                advice_dev!(region, format "left_{row}", left, row => left_val)?;
-                            let right_cell =
-                                advice_dev!(region, format "right_{row}", right, row => right_val)?;
-                            sel.enable(&mut region, row)?;
-                            let hash_cells = chip.hash2_chip(
-                                &mut layouter,
-                                &poseidon_cfg,
-                                Value::known(left_val),
-                                Value::known(right_val),
-                            )?;
-                            layouter.constrain_equal(left_cell.cell(), hash_cells.left.cell())?;
-                            layouter.constrain_equal(right_cell.cell(), hash_cells.right.cell())?;
-                            let out_cell =
-                                advice_dev!(region, format "out_{row}", out, row => hash_val)?;
-                            layouter.constrain_equal(out_cell.cell(), hash_cells.digest.cell())?;
-                            previous_output = Some(out_cell.clone());
-                            current = hash_val;
-                        }
-                        if let Some(ref root_cell) = previous_output {
-                            layouter.constrain_instance(root_cell.cell(), inst, 0)?;
-                        } else {
-                            return Err(PlonkError::Synthesis);
-                        }
-                        Ok(())
-                    },
-                )?;
-                Ok(())
-            }
-        }
-    }
-    #[cfg(all(feature = "zk-halo2-ipa-poseidon", feature = "halo2-dev-tests"))]
-    #[allow(unused_imports)]
-    pub use self::poseidon::CommitOpenPoseidon as CommitOpen;
-    #[cfg(all(feature = "zk-halo2-ipa-poseidon", feature = "halo2-dev-tests"))]
-    #[allow(unused_imports)]
-    pub use self::poseidon::Merkle2Poseidon as Merkle2;
-    #[cfg(all(feature = "zk-halo2-ipa-poseidon", feature = "halo2-dev-tests"))]
-    pub fn poseidon_compress2_native(a: Scalar, b: Scalar) -> Scalar {
-        poseidon::compress2_native(a, b)
     }
     #[derive(Clone, Default)]
     pub struct VoteBoolCommit; // dev-test quintic relation; not a cryptographic commitment
@@ -10994,11 +10025,11 @@ mod pasta_tiny {
                 let output_commitment_slot1 = meta.query_instance(cm_out1, Rotation::cur());
                 let nullifier_instance = meta.query_instance(nf, Rotation::cur());
                 // cm_in0 = H(a, r0); cm_in1 = H(b, r1); cm_out0 = H(c, r2); cm_out1 = H(d, r3)
-                let h_in0 = poseidon_pair_expr(a.clone(), r0);
-                let h_in1 = poseidon_pair_expr(b.clone(), r1);
-                let h_out0 = poseidon_pair_expr(c.clone(), r2);
-                let h_out1 = poseidon_pair_expr(d.clone(), r3);
-                let h_nf = poseidon_pair_expr(skq.clone(), serq.clone());
+                let h_in0 = constrained_pow5_pair_expr(a.clone(), r0);
+                let h_in1 = constrained_pow5_pair_expr(b.clone(), r1);
+                let h_out0 = constrained_pow5_pair_expr(c.clone(), r2);
+                let h_out1 = constrained_pow5_pair_expr(d.clone(), r3);
+                let h_nf = constrained_pow5_pair_expr(skq.clone(), serq.clone());
                 vec![
                     s.clone() * (a.clone() + b.clone() - (c.clone() + d.clone())),
                     s.clone() * (h_in0 - input_commitment_slot0),
@@ -11056,7 +10087,7 @@ mod pasta_tiny {
         }
     }
     #[derive(Clone, Default)]
-    pub struct VoteBoolCommitMerkle2; // commit = Poseidon(v,rho); root = Merkle2(commit, sib0, sib1)
+    pub struct VoteBoolCommitMerkle2; // constrained Pow5 commit and two-level test tree
     impl Circuit<Scalar> for VoteBoolCommitMerkle2 {
         type Config = (
             halo2_proofs::plonk::Column<halo2_proofs::plonk::Advice>, // v
@@ -11098,11 +10129,11 @@ mod pasta_tiny {
                 // Boolean v
                 let boolc = vq.clone() * (vq.clone() - one);
                 // commit = H(v,rho)
-                let h = poseidon_pair_expr(vq, rhoq);
+                let h = constrained_pow5_pair_expr(vq, rhoq);
                 let commitment_delta = h.clone() - cmq.clone();
                 // merkle2: w0 = H(cm, sib0); w1 = H(w0, sib1) = root
-                let expected_first_hash = poseidon_pair_expr(h, sib0q);
-                let expected_second_hash = poseidon_pair_expr(w0q.clone(), sib1q);
+                let expected_first_hash = constrained_pow5_pair_expr(h, sib0q);
+                let expected_second_hash = constrained_pow5_pair_expr(w0q.clone(), sib1q);
                 vec![
                     s.clone() * boolc,
                     s.clone() * commitment_delta,
@@ -11126,9 +10157,9 @@ mod pasta_tiny {
                     let rho_v = Scalar::from(12345);
                     let sib0_v = Scalar::from(5);
                     let sib1_v = Scalar::from(7);
-                    let commit_v = poseidon_pair(v_v, rho_v);
-                    let w0_v = poseidon_pair(commit_v, sib0_v);
-                    let w1_v = poseidon_pair(w0_v, sib1_v);
+                    let commit_v = constrained_pow5_pair(v_v, rho_v);
+                    let w0_v = constrained_pow5_pair(commit_v, sib0_v);
+                    let w1_v = constrained_pow5_pair(w0_v, sib1_v);
                     advice!(region, "v", v => v_v)?;
                     advice!(region, "rho", rho => rho_v)?;
                     advice!(region, "sib0", sib0 => sib0_v)?;
@@ -11216,13 +10247,15 @@ mod pasta_tiny {
                 let output_commitment_slot1 = meta.query_instance(cm_out1, Rotation::cur());
                 let nullifier_instance = meta.query_instance(nf, Rotation::cur());
                 let rootq = meta.query_instance(root, Rotation::cur());
-                let computed_cm0 = poseidon_pair_expr(a.clone(), r0.clone());
-                let computed_cm1 = poseidon_pair_expr(b.clone(), r1.clone());
-                let computed_cm2 = poseidon_pair_expr(c.clone(), r2.clone());
-                let computed_cm3 = poseidon_pair_expr(d.clone(), r3.clone());
-                let cm0_root =
-                    poseidon_pair_expr(poseidon_pair_expr(computed_cm0.clone(), s0_0), s0_1);
-                let nf_exp = poseidon_pair_expr(skq.clone(), serq.clone());
+                let computed_cm0 = constrained_pow5_pair_expr(a.clone(), r0.clone());
+                let computed_cm1 = constrained_pow5_pair_expr(b.clone(), r1.clone());
+                let computed_cm2 = constrained_pow5_pair_expr(c.clone(), r2.clone());
+                let computed_cm3 = constrained_pow5_pair_expr(d.clone(), r3.clone());
+                let cm0_root = constrained_pow5_pair_expr(
+                    constrained_pow5_pair_expr(computed_cm0.clone(), s0_0),
+                    s0_1,
+                );
+                let nf_exp = constrained_pow5_pair_expr(skq.clone(), serq.clone());
                 vec![
                     s.clone() * (a.clone() + b.clone() - (c.clone() + d.clone())),
                     s.clone() * (computed_cm0 - input_commitment_slot0),
@@ -11290,7 +10323,7 @@ mod pasta_tiny {
             )
         }
     }
-    // Depth-8 membership variants with optional Poseidon gadget backing.
+    // Depth-8 membership variants using the sole constrained Pow5 test relation.
     #[derive(Clone, Default)]
     #[allow(dead_code)] // circuit scaffolding, constructed in gated tests/examples
     pub struct VoteBoolCommitMerkle8; // instances: [commit, root]
@@ -11298,32 +10331,38 @@ mod pasta_tiny {
     const VOTE_BOOL_COMMIT_MERKLE8_SAMPLE_RHO: u64 = 12_345;
     const VOTE_BOOL_COMMIT_MERKLE8_SAMPLE_SIBS: [u64; 8] = [10, 11, 12, 13, 14, 15, 16, 17];
     const VOTE_BOOL_COMMIT_MERKLE8_SAMPLE_DIRS: [u64; 8] = [0; 8];
-    fn poseidon_pow5(x: Scalar) -> Scalar {
+    fn pow5(x: Scalar) -> Scalar {
         let x2 = x * x;
         let x4 = x2 * x2;
         x4 * x
     }
-    pub(super) fn poseidon_pair(lhs: Scalar, rhs: Scalar) -> Scalar {
+    pub(super) fn constrained_pow5_pair(lhs: Scalar, rhs: Scalar) -> Scalar {
         let lhs = lhs + Scalar::from(7u64);
         let rhs = rhs + Scalar::from(13u64);
-        Scalar::from(2u64) * poseidon_pow5(lhs) + Scalar::from(3u64) * poseidon_pow5(rhs)
+        Scalar::from(2u64) * pow5(lhs) + Scalar::from(3u64) * pow5(rhs)
     }
-    fn poseidon_pow5_expr(
+    #[cfg(all(test, feature = "zk-tests", feature = "halo2-dev-tests"))]
+    pub(super) fn merkle2_sample_root() -> Scalar {
+        constrained_pow5_pair(
+            constrained_pow5_pair(Scalar::from(9u64), Scalar::from(5u64)),
+            Scalar::from(7u64),
+        )
+    }
+    fn pow5_expr(
         expr: halo2_proofs::plonk::Expression<Scalar>,
     ) -> halo2_proofs::plonk::Expression<Scalar> {
         let squared = expr.clone() * expr.clone();
         let fourth = squared.clone() * squared;
         fourth * expr
     }
-    fn poseidon_pair_expr(
+    fn constrained_pow5_pair_expr(
         lhs: halo2_proofs::plonk::Expression<Scalar>,
         rhs: halo2_proofs::plonk::Expression<Scalar>,
     ) -> halo2_proofs::plonk::Expression<Scalar> {
         let lhs = lhs + halo2_proofs::plonk::Expression::Constant(Scalar::from(7u64));
         let rhs = rhs + halo2_proofs::plonk::Expression::Constant(Scalar::from(13u64));
-        halo2_proofs::plonk::Expression::Constant(Scalar::from(2u64)) * poseidon_pow5_expr(lhs)
-            + halo2_proofs::plonk::Expression::Constant(Scalar::from(3u64))
-                * poseidon_pow5_expr(rhs)
+        halo2_proofs::plonk::Expression::Constant(Scalar::from(2u64)) * pow5_expr(lhs)
+            + halo2_proofs::plonk::Expression::Constant(Scalar::from(3u64)) * pow5_expr(rhs)
     }
     pub(super) fn vote_bool_commit_merkle8_witnesses(
         v: Scalar,
@@ -11332,14 +10371,14 @@ mod pasta_tiny {
         dirs: [Scalar; 8],
     ) -> (Scalar, [Scalar; 8], Scalar) {
         let one = Scalar::from(1u64);
-        let commit = poseidon_pair(v, rho);
+        let commit = constrained_pow5_pair(v, rho);
         let mut prev = commit;
         let mut witnesses = [Scalar::from(0u64); 8];
         for i in 0..8 {
             let sib = siblings[i];
             let dir = dirs[i];
-            let forward = poseidon_pair(prev, sib);
-            let reverse = poseidon_pair(sib, prev);
+            let forward = constrained_pow5_pair(prev, sib);
+            let reverse = constrained_pow5_pair(sib, prev);
             let witness = (one - dir) * forward + dir * reverse;
             witnesses[i] = witness;
             prev = witness;
@@ -11355,7 +10394,6 @@ mod pasta_tiny {
             VOTE_BOOL_COMMIT_MERKLE8_SAMPLE_DIRS.map(Scalar::from),
         )
     }
-    #[cfg(not(all(feature = "zk-halo2-ipa-poseidon", feature = "halo2-dev-tests")))]
     impl Circuit<Scalar> for VoteBoolCommitMerkle8 {
         type Config = (
             halo2_proofs::plonk::Column<halo2_proofs::plonk::Advice>, // v
@@ -11393,8 +10431,7 @@ mod pasta_tiny {
             let inst_cm = meta.instance_column();
             let inst_root = meta.instance_column();
             let s = meta.selector();
-            // Inline Pow5 constraints keep the fallback path dependency-light while matching
-            // the Poseidon round function used by the gadget-enabled build.
+            // Inline Pow5 constraints define the sole test relation for this circuit.
             meta.create_gate("vote_commit_merkle8", |meta| {
                 let s = meta.query_selector(s);
                 let vq = meta.query_advice(v, Rotation::cur());
@@ -11478,159 +10515,6 @@ mod pasta_tiny {
             )
         }
     }
-    #[cfg(all(feature = "zk-halo2-ipa-poseidon", feature = "halo2-dev-tests"))]
-    impl Circuit<Scalar> for VoteBoolCommitMerkle8 {
-        type Config = (
-            halo2_proofs::plonk::Column<halo2_proofs::plonk::Advice>, // v
-            halo2_proofs::plonk::Column<halo2_proofs::plonk::Advice>, // rho
-            // 8 siblings
-            [halo2_proofs::plonk::Column<halo2_proofs::plonk::Advice>; 8],
-            // 8 direction bits
-            [halo2_proofs::plonk::Column<halo2_proofs::plonk::Advice>; 8],
-            // 8 intermediate nodes
-            [halo2_proofs::plonk::Column<halo2_proofs::plonk::Advice>; 8],
-            halo2_proofs::plonk::Column<halo2_proofs::plonk::Instance>, // commit
-            halo2_proofs::plonk::Column<halo2_proofs::plonk::Instance>, // root
-            Selector,
-            poseidon::Pow5Config<Scalar, 3, 2>,
-        );
-        type FloorPlanner = SimpleFloorPlanner;
-        type Params = ();
-        fn without_witnesses(&self) -> Self {
-            Self
-        }
-        fn configure(meta: &mut ConstraintSystem<Scalar>) -> Self::Config {
-            let v = meta.advice_column();
-            let rho = meta.advice_column();
-            let mut sibs = [v; 8];
-            let mut dirs = [rho; 8];
-            let mut ws = [rho; 8];
-            for i in 0..8 {
-                sibs[i] = meta.advice_column();
-            }
-            for i in 0..8 {
-                dirs[i] = meta.advice_column();
-            }
-            for i in 0..8 {
-                ws[i] = meta.advice_column();
-                meta.enable_equality(ws[i]);
-            }
-            let inst_cm = meta.instance_column();
-            let inst_root = meta.instance_column();
-            let s = meta.selector();
-            let st0 = meta.advice_column();
-            let st1 = meta.advice_column();
-            let st2 = meta.advice_column();
-            let partial = meta.advice_column();
-            let rc_a = meta.fixed_column();
-            let rc_b = meta.fixed_column();
-            let poseidon_cfg =
-                poseidon::Pow5Chip::configure(meta, [st0, st1, st2], partial, rc_a, rc_b);
-            meta.create_gate("vote_commit_merkle8", |meta| {
-                let s = meta.query_selector(s);
-                let vq = meta.query_advice(v, Rotation::cur());
-                let rhoq = meta.query_advice(rho, Rotation::cur());
-                let cmq = meta.query_instance(inst_cm, Rotation::cur());
-                let rootq = meta.query_instance(inst_root, Rotation::cur());
-                let constant =
-                    |value: u64| halo2_proofs::plonk::Expression::Constant(Scalar::from(value));
-                let shift = |expr: halo2_proofs::plonk::Expression<Scalar>, offset: u64| {
-                    expr + constant(offset)
-                };
-                let pow5 = |expr: halo2_proofs::plonk::Expression<Scalar>| {
-                    let squared = expr.clone() * expr.clone();
-                    let fourth = squared.clone() * squared.clone();
-                    fourth * expr
-                };
-                let pedersen_pair =
-                    |lhs: halo2_proofs::plonk::Expression<Scalar>,
-                     rhs: halo2_proofs::plonk::Expression<Scalar>| {
-                        constant(2) * pow5(lhs) + constant(3) * pow5(rhs)
-                    };
-                let one = constant(1);
-                let boolc = vq.clone() * (vq.clone() - one.clone());
-                let commit_hash = pedersen_pair(shift(vq.clone(), 7), shift(rhoq.clone(), 13));
-                let commitment_delta = commit_hash.clone() - cmq.clone();
-                let mut cons = vec![s.clone() * boolc, s.clone() * commitment_delta];
-                let mut prev = commit_hash;
-                for i in 0..8 {
-                    let sibling = meta.query_advice(sibs[i], Rotation::cur());
-                    let direction_bit = meta.query_advice(dirs[i], Rotation::cur());
-                    let witness = meta.query_advice(ws[i], Rotation::cur());
-                    cons.push(
-                        s.clone() * (direction_bit.clone() * (direction_bit.clone() - one.clone())),
-                    );
-                    let forward_hash =
-                        pedersen_pair(shift(prev.clone(), 7), shift(sibling.clone(), 13));
-                    let reverse_hash =
-                        pedersen_pair(shift(sibling.clone(), 7), shift(prev.clone(), 13));
-                    let expected_branch = (one.clone() - direction_bit.clone())
-                        * forward_hash.clone()
-                        + direction_bit.clone() * reverse_hash;
-                    cons.push(s.clone() * (witness.clone() - expected_branch));
-                    prev = witness;
-                }
-                cons.push(s * (prev - rootq));
-                cons
-            });
-            (v, rho, sibs, dirs, ws, inst_cm, inst_root, s, poseidon_cfg)
-        }
-        fn synthesize(
-            &self,
-            (v, rho, sibs, dirs, ws, _cm, _root, s, poseidon_cfg): Self::Config,
-            mut layouter: impl Layouter<Scalar>,
-        ) -> Result<(), PlonkError> {
-            use halo2_proofs::circuit::Value;
-            let (v_val, rho_val, sibling_vals, dir_vals) = vote_bool_commit_merkle8_sample_inputs();
-            let (commit_val, witness_vals, _root_val) =
-                vote_bool_commit_merkle8_witnesses(v_val, rho_val, sibling_vals, dir_vals);
-            let mut w_cells = Vec::with_capacity(8);
-            layouter.assign_region(
-                || "vote_commit_merkle8",
-                |mut region| {
-                    s.enable(&mut region, 0)?;
-                    advice!(region, "v", v => v_val)?;
-                    advice!(region, "rho", rho => rho_val)?;
-                    for (i, col) in sibs.iter().enumerate() {
-                        let sib_val = sibling_vals[i];
-                        advice!(region, move "sib{i}", *col => sib_val)?;
-                    }
-                    for (i, col) in dirs.iter().enumerate() {
-                        let dir_val = dir_vals[i];
-                        advice!(region, move "dir{i}", *col => dir_val)?;
-                    }
-                    for (i, col) in ws.iter().enumerate() {
-                        let w_val = witness_vals[i];
-                        let cell = advice!(region, move "w{i}", *col => w_val)?;
-                        w_cells.push(cell);
-                    }
-                    Ok(())
-                },
-            )?;
-            let poseidon_chip = poseidon::Poseidon2ChipWrapper::new();
-            let mut prev_scalar = commit_val;
-            for (i, witness_cell) in w_cells.iter().enumerate() {
-                let dir_val = dir_vals[i];
-                let sib_val = sibling_vals[i];
-                let is_right = dir_val == Scalar::from(1u64);
-                let (lhs, rhs) = if is_right {
-                    (sib_val, prev_scalar)
-                } else {
-                    (prev_scalar, sib_val)
-                };
-                let mut ns = layouter.namespace(|| format!("poseidon_vote_merkle8_layer_{i}"));
-                let digest = poseidon_chip.hash2_chip(
-                    &mut ns,
-                    &poseidon_cfg,
-                    Value::known(lhs),
-                    Value::known(rhs),
-                )?;
-                layouter.constrain_equal(digest.cell(), witness_cell.cell())?;
-                prev_scalar = witness_vals[i];
-            }
-            Ok(())
-        }
-    }
     #[derive(Clone, Default)]
     #[allow(dead_code)] // circuit scaffolding, constructed in gated tests/examples
     pub struct AnonTransfer2x2CommitMerkle8; // instances: [cm_in0, cm_in1, cm_out0, cm_out1, nf, root]
@@ -11694,8 +10578,8 @@ mod pasta_tiny {
             ];
             let root = meta.instance_column();
             let s = meta.selector();
-            // Poseidon gadget wiring mirrors the halo2-ecc interface; once `zk-halo2-ipa-poseidon`
-            // lands we can swap the inline Pow5 equations below without changing the layout.
+            // Constrain the canonical local Pow5 test relation directly; there is no alternate
+            // assignment-only gadget path.
             meta.create_gate("anon_transfer_commit_merkle8", |meta| {
                 let s = meta.query_selector(s);
                 let a = meta.query_advice(in0, Rotation::cur());
@@ -12212,7 +11096,8 @@ fn verify_halo2_ipa(backend: &str, proof: &ProofBox, vk: Option<&VerifyingKeyBox
             )
         };
     }
-    match normalized.as_str() {
+    let circuit_label = normalized.strip_suffix("-pow5").unwrap_or(&normalized);
+    match circuit_label {
         #[cfg(test)]
         "halo2/pasta/tiny-add" => {
             verify_test_circuit!(pasta_tiny::Add, no_instances)
@@ -12321,11 +11206,11 @@ fn verify_halo2_ipa(backend: &str, proof: &ProofBox, vk: Option<&VerifyingKeyBox
         }
         #[cfg(test)]
         "halo2/pasta/anon-transfer-2x2-merkle8" => {
-            // Use depth-8 generic with dual membership; select algorithm by backend suffix
-            let use_poseidon = backend.ends_with("-poseidon");
-            if use_poseidon {
+            // Use the explicitly tagged constrained-Pow5 circuit when requested.
+            let use_pow5 = backend.ends_with("-pow5");
+            if use_pow5 {
                 verify_test_circuit!(
-                    poseidon_depth::AnonTransfer2x2CommitMerklePoseidon::<8>,
+                    pow5_depth::AnonTransfer2x2CommitMerklePow5::<8>,
                     columns,
                     col_refs.len() < 6
                 )
@@ -12343,19 +11228,11 @@ fn verify_halo2_ipa(backend: &str, proof: &ProofBox, vk: Option<&VerifyingKeyBox
         }
         #[cfg(test)]
         "halo2/pasta/tiny-commit-open" => {
-            // If Poseidon gadgets are enabled, use the Poseidon-backed variant.
-            #[cfg(all(feature = "zk-halo2-ipa-poseidon", feature = "halo2-dev-tests"))]
-            let circuit = pasta_tiny::poseidon::CommitOpenPoseidon;
-            #[cfg(not(all(feature = "zk-halo2-ipa-poseidon", feature = "halo2-dev-tests")))]
             let circuit = pasta_tiny::CommitOpen;
             verify_test_circuit!(using circuit, columns, col_refs.is_empty())
         }
         #[cfg(test)]
         "halo2/pasta/tiny-merkle2" => {
-            // If Poseidon gadgets are enabled, use the Poseidon-backed variant.
-            #[cfg(all(feature = "zk-halo2-ipa-poseidon", feature = "halo2-dev-tests"))]
-            let circuit = pasta_tiny::poseidon::Merkle2Poseidon;
-            #[cfg(not(all(feature = "zk-halo2-ipa-poseidon", feature = "halo2-dev-tests")))]
             let circuit = pasta_tiny::Merkle2;
             verify_test_circuit!(using circuit, columns, col_refs.is_empty())
         }
@@ -12375,11 +11252,11 @@ fn verify_halo2_ipa(backend: &str, proof: &ProofBox, vk: Option<&VerifyingKeyBox
         }
         #[cfg(test)]
         "halo2/pasta/vote-bool-commit-merkle8" => {
-            // Use depth-8 generic; select algorithm by backend suffix
-            let use_poseidon = backend.ends_with("-poseidon");
-            if use_poseidon {
+            // Use the explicitly tagged constrained-Pow5 circuit when requested.
+            let use_pow5 = backend.ends_with("-pow5");
+            if use_pow5 {
                 verify_test_circuit!(
-                    poseidon_depth::VoteBoolCommitMerklePoseidon::<8>,
+                    pow5_depth::VoteBoolCommitMerklePow5::<8>,
                     columns,
                     col_refs.len() < 2
                 )
@@ -12394,10 +11271,10 @@ fn verify_halo2_ipa(backend: &str, proof: &ProofBox, vk: Option<&VerifyingKeyBox
         // Depth-16 variants
         #[cfg(test)]
         "halo2/pasta/anon-transfer-2x2-merkle16" => {
-            let use_poseidon = backend.ends_with("-poseidon");
-            if use_poseidon {
+            let use_pow5 = backend.ends_with("-pow5");
+            if use_pow5 {
                 verify_test_circuit!(
-                    poseidon_depth::AnonTransfer2x2CommitMerklePoseidon::<16>,
+                    pow5_depth::AnonTransfer2x2CommitMerklePow5::<16>,
                     columns,
                     col_refs.len() < 6
                 )
@@ -12411,10 +11288,10 @@ fn verify_halo2_ipa(backend: &str, proof: &ProofBox, vk: Option<&VerifyingKeyBox
         }
         #[cfg(test)]
         "halo2/pasta/vote-bool-commit-merkle16" => {
-            let use_poseidon = backend.ends_with("-poseidon");
-            if use_poseidon {
+            let use_pow5 = backend.ends_with("-pow5");
+            if use_pow5 {
                 verify_test_circuit!(
-                    poseidon_depth::VoteBoolCommitMerklePoseidon::<16>,
+                    pow5_depth::VoteBoolCommitMerklePow5::<16>,
                     columns,
                     col_refs.len() < 2
                 )

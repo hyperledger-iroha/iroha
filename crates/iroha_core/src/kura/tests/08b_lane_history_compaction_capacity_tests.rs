@@ -41,7 +41,8 @@ fn merge_receipt_compaction_fixture() -> MergeReceiptCompactionFixture {
     let config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
     let lane_config = RuntimeLaneConfig::default();
     let lane_entry = lane_config.primary().clone();
-    let (kura, _) = Kura::new(&config, &lane_config).expect("initialize Kura");
+    let (kura, _) = Kura::open_test_kura_with_configured_lane_config(&config, &lane_config)
+        .expect("initialize Kura");
     let entrypoint = offline_top_up_entrypoint_for_index([0xC1; 32], [0xC2; 32]);
     let mut merge_entry = merge_entry_with_indexed_entrypoint(entrypoint);
     let execution = merge_entry

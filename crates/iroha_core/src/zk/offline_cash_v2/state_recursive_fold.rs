@@ -1003,7 +1003,7 @@ mod sealed {
 }
 
 /// Marker implemented only by uninhabited adapters in this source module.
-pub(super) trait SealedStateRecursiveAdapterV2: sealed::Sealed {}
+trait SealedStateRecursiveAdapterV2: sealed::Sealed {}
 
 /// Uninhabited move-only compiler adapter. No circuit compiler is wired.
 pub(super) enum StateRecursiveCompilerAdapterV2 {}

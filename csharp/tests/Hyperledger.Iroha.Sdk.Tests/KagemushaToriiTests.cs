@@ -11,41 +11,55 @@ public sealed class KagemushaToriiTests
     private static readonly string TransactionHash = new('2', 64);
 
     [Fact]
-    public async Task ReadinessUsesTheStableRouteAndRequiresBridgeAbi22()
+    public async Task OfflineCapabilityUsesTheAssetNeutralRouteAndExactSchema()
     {
         using var handler = new KagemushaHandler(request =>
         {
             Assert.Equal(HttpMethod.Get, request.Method);
             Assert.Equal("/v1/offline/readiness", request.RequestUri!.AbsolutePath);
-            Assert.Equal("coin#wonderland", ParseQuery(request.RequestUri.Query)["asset_definition_id"]);
-            return JsonResponse(UnavailableReadinessJson(22));
+            Assert.Empty(request.RequestUri.Query);
+            return JsonResponse(OfflineCapabilityJson());
         });
         using var client = new ToriiClient(new Uri("https://torii.example"), new HttpClient(handler));
 
-        var readiness = await client.GetKagemushaReadinessV4Async(
-            "coin#wonderland",
+        var capability = await client.GetOfflineCapabilityAsync(
             TestContext.Current.CancellationToken);
 
-        Assert.Equal(22U, readiness.RequiredBridgeAbiVersion);
-        Assert.Equal(8U, readiness.MaxHops);
-        Assert.False(readiness.Ready);
-        Assert.False(readiness.ProofBackendAvailable);
-        Assert.False(readiness.RecursiveLineageSupported);
-        Assert.Null(readiness.ArtifactSet);
+        Assert.Equal("cash_handoff_v1", capability.CashHandoffCapability);
+        Assert.Equal(22U, capability.RequiredBridgeAbiVersion);
+        Assert.Equal(8U, capability.MaxHops);
+        Assert.True(capability.Ready);
+        Assert.Null(typeof(ToriiClient).GetMethod("GetKagemushaReadinessV4Async"));
+        Assert.DoesNotContain(
+            typeof(ToriiClient).Assembly.GetTypes(),
+            type => type.Name.StartsWith("ToriiKagemushaReadiness", StringComparison.Ordinal));
     }
 
     [Fact]
-    public async Task ReadinessRejectsAbi20InsteadOfUpgradingIt()
+    public async Task OfflineCapabilityRejectsRetiredAndNoncanonicalClaims()
     {
-        using var handler = new KagemushaHandler(_ => JsonResponse(UnavailableReadinessJson(20)));
-        using var client = new ToriiClient(new Uri("https://torii.example"), new HttpClient(handler));
+        var invalidPayloads = new[]
+        {
+            OfflineCapabilityJson(cashHandoffCapability: "cash_handoff_v2"),
+            OfflineCapabilityJson(abiVersion: 21),
+            OfflineCapabilityJson(maxHops: 9),
+            OfflineCapabilityJson(ready: false),
+            OfflineCapabilityJson(extra: "\"assets\":[]"),
+            OfflineCapabilityJson(extra: "\"blockers\":[]"),
+            OfflineCapabilityJson(extra: "\"mandatory\":true"),
+            OfflineCapabilityJson(extra: "\"asset_definition_id\":\"coin#wonderland\""),
+        };
 
-        var error = await Assert.ThrowsAsync<JsonException>(() =>
-            client.GetKagemushaReadinessV4Async(
-                "coin#wonderland",
-                TestContext.Current.CancellationToken));
+        foreach (var payload in invalidPayloads)
+        {
+            using var handler = new KagemushaHandler(_ => JsonResponse(payload));
+            using var client = new ToriiClient(
+                new Uri("https://torii.example"),
+                new HttpClient(handler));
 
-        Assert.Contains("required_bridge_abi_version must be 22", error.Message);
+            await Assert.ThrowsAsync<JsonException>(() =>
+                client.GetOfflineCapabilityAsync(TestContext.Current.CancellationToken));
+        }
     }
 
     [Fact]
@@ -183,26 +197,23 @@ public sealed class KagemushaToriiTests
         }
         """;
 
-    private static string UnavailableReadinessJson(int abiVersion) => $$"""
-        {
-          "required_bridge_abi_version": {{abiVersion}},
-          "max_hops": 8,
-          "asset_definition_id": "coin#wonderland",
-          "asset_scale": null,
-          "evaluated_block_height": 7,
-          "evaluated_block_hash": "{{new string('a', 64)}}",
-          "active_transfer_verifier": null,
-          "active_topup_shield_verifier": null,
-          "active_unshield_verifier": null,
-          "active_recursive_step_eq_verifier": null,
-          "active_recursive_step_ep_verifier": null,
-          "artifact_set": null,
-          "proof_backend_available": false,
-          "recursive_lineage_supported": false,
-          "ready": false,
-          "blockers": [{"code": "recursive_v4_registry_unavailable", "message": "not provisioned"}]
-        }
-        """;
+    private static string OfflineCapabilityJson(
+        string cashHandoffCapability = "cash_handoff_v1",
+        int abiVersion = 22,
+        int maxHops = 8,
+        bool ready = true,
+        string? extra = null)
+    {
+        var extraField = extra is null ? string.Empty : $",\n  {extra}";
+        return $$"""
+            {
+              "cash_handoff_capability": "{{cashHandoffCapability}}",
+              "required_bridge_abi_version": {{abiVersion}},
+              "max_hops": {{maxHops}},
+              "ready": {{ready.ToString().ToLowerInvariant()}}{{extraField}}
+            }
+            """;
+    }
 
     private static HttpResponseMessage JsonResponse(
         string json,
@@ -211,15 +222,6 @@ public sealed class KagemushaToriiTests
         {
             Content = new StringContent(json, Encoding.UTF8, "application/json"),
         };
-
-    private static Dictionary<string, string> ParseQuery(string query) =>
-        query.TrimStart('?')
-            .Split('&', StringSplitOptions.RemoveEmptyEntries)
-            .Select(part => part.Split('=', 2))
-            .ToDictionary(
-                pair => Uri.UnescapeDataString(pair[0]),
-                pair => Uri.UnescapeDataString(pair[1]),
-                StringComparer.Ordinal);
 
     private sealed class KagemushaHandler(
         Func<HttpRequestMessage, HttpResponseMessage> responder) : HttpMessageHandler

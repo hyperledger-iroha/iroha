@@ -9,7 +9,6 @@ use axum::{
     http::HeaderMap,
 };
 use iroha_core::state::{StateReadOnly as _, WorldReadOnly as _};
-use iroha_crypto::blake2::{Blake2b512, Digest as _};
 use iroha_data_model::{
     account::AccountId,
     governance::types::{AtWindow, ParliamentBody, ProposalKind},
@@ -114,15 +113,8 @@ const VALIDATION_FEE_PARLIAMENT_BODIES: [ParliamentBody; 7] = [
 fn validate_retained_parliament_snapshot(
     proposal: &iroha_core::state::GovernanceProposalRecord,
 ) -> Result<(), Error> {
-    let snapshot = proposal
-        .parliament_snapshot
-        .as_ref()
-        .ok_or_else(|| inconsistent("validation-fee proposal has no Parliament snapshot"))?;
-    if snapshot.bodies.selection_epoch != snapshot.selection_epoch {
-        return Err(inconsistent(
-            "validation-fee Parliament snapshot selection epoch is inconsistent",
-        ));
-    }
+    let snapshot = &proposal.parliament_snapshot;
+    proposal.validate_v1().map_err(inconsistent)?;
     for body in VALIDATION_FEE_PARLIAMENT_BODIES {
         let roster = snapshot.bodies.rosters.get(&body).ok_or_else(|| {
             inconsistent(format!(
@@ -150,16 +142,6 @@ fn validate_retained_parliament_snapshot(
                 "validation-fee Parliament roster for {body:?} has duplicate membership"
             )));
         }
-    }
-    let encoded = norito::to_bytes(&snapshot.bodies)
-        .map_err(|_| inconsistent("validation-fee Parliament snapshot cannot be encoded"))?;
-    let digest = Blake2b512::digest(encoded);
-    let mut roster_root = [0_u8; 32];
-    roster_root.copy_from_slice(&digest[..32]);
-    if roster_root != snapshot.roster_root {
-        return Err(inconsistent(
-            "validation-fee Parliament snapshot roster root is inconsistent",
-        ));
     }
     Ok(())
 }
@@ -285,10 +267,7 @@ fn parliament_body_progress(
     quorum_bps: u16,
     account_id: Option<&iroha_data_model::account::AccountId>,
 ) -> Result<Vec<ValidationFeeParliamentBodyProgressV1>, Error> {
-    let snapshot = proposal
-        .parliament_snapshot
-        .as_ref()
-        .ok_or_else(|| inconsistent("validation-fee proposal has no Parliament snapshot"))?;
+    let snapshot = &proposal.parliament_snapshot;
     let mut progress = Vec::with_capacity(7);
     for body in [
         iroha_data_model::governance::types::ParliamentBody::RulesCommittee,
@@ -413,7 +392,7 @@ fn live_plain_tally(
             || record.amount != rules.ballot_amount
             || !record.slashed.is_zero()
             || record.duration_blocks != rules.ballot_duration_blocks
-            || record.custody.as_ref() != Some(&expected_custody)
+            || record.custody != expected_custody
             || !electorate.contains(owner)
         {
             return Err(inconsistent(
@@ -523,10 +502,7 @@ fn public_proposal_record(
     let rules = retained_plain_electorate_rules(&proposal.kind)?;
     let electorate =
         validate_retained_proposal_state(proposal_id, proposal, referendum, approvals, rules)?;
-    let snapshot = proposal
-        .parliament_snapshot
-        .as_ref()
-        .ok_or_else(|| inconsistent("validation-fee proposal has no Parliament snapshot"))?;
+    let snapshot = &proposal.parliament_snapshot;
     let status = match proposal.status {
         iroha_core::state::GovernanceProposalStatus::Proposed => {
             ValidationFeeProposalStatusV1::Proposed
@@ -1084,10 +1060,7 @@ pub(crate) async fn handler_plain_ballot_draft(
             "validation-fee ballot owner is not in the frozen PLAIN electorate",
         ));
     }
-    let snapshot = proposal
-        .parliament_snapshot
-        .as_ref()
-        .ok_or_else(|| inconsistent("validation-fee proposal has no Parliament snapshot"))?;
+    let snapshot = &proposal.parliament_snapshot;
     if VALIDATION_FEE_PARLIAMENT_BODIES.into_iter().any(|body| {
         !approvals.quorum_met(body, snapshot.selection_epoch)
             || approvals.rejection_quorum_met(body, snapshot.selection_epoch)
@@ -1294,7 +1267,7 @@ mod tests {
             expiry_height: referendum_end,
             direction: 0,
             duration_blocks: rules.ballot_duration_blocks,
-            custody: Some(validation_fee_lock_custody(&rules)),
+            custody: validation_fee_lock_custody(&rules),
         };
         let locks = iroha_core::state::GovernanceLocksForReferendum {
             locks: BTreeMap::from([(member.clone(), lock.clone())]),

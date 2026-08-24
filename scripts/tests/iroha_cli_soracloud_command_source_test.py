@@ -11,8 +11,8 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 SOURCE_PATH = REPO_ROOT / "integration_tests/tests/iroha_cli.rs"
-PREIMAGE_SHA256 = "392be4d9a9212e8b2af7fd34a3774e096febfc96903ec5096dc5d1ab275d4dfd"
-EXPECTED_SOURCE_LINES = 4_569
+PREIMAGE_SHA256 = "aa1a2f2e6113915b33107d68d255f66194bd3813f853bd031125fe4459a57d43"
+EXPECTED_SOURCE_LINES = 4_573
 
 HELPER_START = "struct SoracloudCli<'a>"
 HELPER_END = "async fn wait_for_soracloud_json_command"
@@ -29,7 +29,7 @@ FUNCTION_CONTRACTS = {
         True,
     ),
     "soracloud_mutations_use_live_torii_control_plane": (
-        "e122388c0a915c15a9b72be13fbfb6d014c5ad54da417b95e50c65645d854eb7",
+        "a0670560be55d527ba48625a71f626c7bdf972c71e9dfb5810c1a93f225cd431",
         0,
         0,
         4,
@@ -71,7 +71,7 @@ FUNCTION_CONTRACTS = {
         True,
     ),
     "soracloud_templates_deploy_site_and_webapp_with_rollout_and_rollback": (
-        "4c3a97a89b6c2ce395fee336d2d5fd849078b0ebd6ee8e94072ac65f936a6feb",
+        "211dec6de4c6001170ada71c21a7c6d57090f8700f4407098d67ba64f489fec6",
         8,
         0,
         0,
@@ -345,7 +345,7 @@ class IrohaCliSoracloudCommandSourceTests(unittest.TestCase):
     def test_preimage_identity_is_frozen(self) -> None:
         self.assertEqual(
             PREIMAGE_SHA256,
-            "392be4d9a9212e8b2af7fd34a3774e096febfc96903ec5096dc5d1ab275d4dfd",
+            "aa1a2f2e6113915b33107d68d255f66194bd3813f853bd031125fe4459a57d43",
         )
 
     def test_name_mutation_is_rejected(self) -> None:

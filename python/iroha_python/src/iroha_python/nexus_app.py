@@ -422,11 +422,6 @@ class NexusApprovedAccount:
     signing_public_key: bytes
     session: NexusConnectSession
 
-    def __iter__(self):
-        # Backwards-compatible tuple unpacking: account, session = await_approval(...)
-        yield self.account_id
-        yield self.session
-
 
 @dataclass(frozen=True)
 class NexusTransferInput:

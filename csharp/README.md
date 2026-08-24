@@ -227,7 +227,7 @@ sends the nonce-bearing body once without redirects or retries.
   hashes/status text, lifecycle counters, and revocation metadata before callers
   serialize or trust manually constructed space-directory metadata
 - account/asset/contract alias lookup and resolve helpers validate exact aliases, dataspace, and domain filters before HTTP dispatch, with by-account lookup requiring canonical I105 account ids; alias lookup/resolve responses plus raw account alias lookup, alias index, alias resolution, and alias binding DTO deserialization reject duplicate/type-confused envelopes, duplicate keys inside ignored alias lookup/index/resolution/binding extension JSON, missing or malformed aliases, noncanonical account ids, malformed asset/contract ids, dataspace/source/status fields, null lookup lists/items, required alias-index indexes, negative index fields, and non-positive binding timestamp fields before callers trust alias metadata; direct alias lookup/resolution/binding DTO metadata rejects malformed aliases, dataspace/domain/source/status fields, account ids, asset/contract identifiers, negative indexes, and non-positive binding timestamps before callers can serialize or trust manually constructed alias results
-- typed Torii VPN and SoraFS helpers for `/v1/vpn/profile`, signed VPN quote/session/receipt flows under `/v1/vpn/quotes`, `/v1/vpn/sessions`, and `/v1/vpn/receipts`, `/v1/sorafs/cid/{cid}`, and CID content reads under `/sorafs/cid/{cid}/...`; VPN quote/session/receipt writes validate exact exit-class text, 32-byte quote/payment/metering/lease hex fields, and receipt/voucher hex payload shape before HTTP dispatch; VPN profile, quote, session, receipt, and receipt-list responses plus raw VPN response/native-instruction DTO deserialization reject null, duplicate, or type-confused envelopes, duplicate keys inside ignored VPN response/native-instruction extension JSON, noncanonical account, escrow, and operator account ids, missing or malformed route/DNS/tunnel lists, required native-instruction arrays, and counters, non-positive lease/DNS/MTU operational fields, zero or reversed VPN quote/session/receipt timestamps, missing VPN accounting counters, inconsistent receipt-list totals, and non-exact lowercase SPKI/key/hash/id/native-instruction hex fields before callers trust tunnel or settlement material; VPN session reads/deletes validate 32-byte hex route ids, SoraFS CID lookup/content reads validate lowercase multibase base32 CID route ids, and content relative path identifiers validate exact path segments before dispatch while preserving valid internal SoraFS path text; SoraFS CID lookup responses plus raw CID lookup/file-entry DTO deserialization reject duplicate/type-confused fields, duplicate keys inside ignored CID lookup/file-entry extension JSON, missing or non-exact content CIDs, missing or malformed lowercase manifest digest/id hex, malformed path components, and missing or negative file geometry before callers trust gateway listings; buffered SoraFS content responses reject malformed or duplicated `sora-content-cid` headers and direct malformed content CIDs or negative content lengths before returning content metadata, and defensively copy buffered response bytes; SoraFS pin registration accepts an already signed `SignedTransactionEnvelope`, posts only its Norito bytes, requires HTTP 202, and returns the strict admission identity (`status: submitted`, transaction hash, and manifest digest) without claiming finality, fees, custody, or pin status; raw chunker/storage-class/pin-policy DTO deserialization rejects null, duplicate, case-drifted, or type-confused fields, duplicate keys inside ignored extension JSON, invalid counters, non-exact chunker text, and unknown storage-class values while canonicalizing omitted optional multihash/retention counters to zero
+- typed Torii VPN and SoraFS helpers for `/v1/vpn/profile`, signed VPN quote/session/receipt flows under `/v1/vpn/quotes`, `/v1/vpn/sessions`, and `/v1/vpn/receipts`, `/v1/sorafs/cid/{cid}`, and CID content reads under `/sorafs/cid/{cid}/...`; VPN quote/session/receipt writes validate exact exit-class text, 32-byte quote/payment/metering/lease hex fields, and receipt/voucher hex payload shape before HTTP dispatch; VPN profile, quote, session, receipt, and receipt-list responses plus raw VPN response/native-instruction DTO deserialization reject null, duplicate, or type-confused envelopes, duplicate keys inside ignored VPN response/native-instruction extension JSON, noncanonical account, escrow, and operator account ids, missing or malformed route/DNS/tunnel lists, required native-instruction arrays, and counters, non-positive lease/DNS/MTU operational fields, zero or reversed VPN quote/session/receipt timestamps, missing VPN accounting counters, inconsistent receipt-list totals, and non-exact lowercase SPKI/key/hash/id/native-instruction hex fields before callers trust tunnel or settlement material; VPN session responses and read routes require canonical 16-byte session ids encoded as 32 lowercase hex characters, SoraFS CID lookup/content reads validate lowercase multibase base32 CID route ids, and content relative path identifiers validate exact path segments before dispatch while preserving valid internal SoraFS path text; SoraFS CID lookup responses plus raw CID lookup/file-entry DTO deserialization reject duplicate/type-confused fields, duplicate keys inside ignored CID lookup/file-entry extension JSON, missing or non-exact content CIDs, missing or malformed lowercase manifest digest/id hex, malformed path components, and missing or negative file geometry before callers trust gateway listings; buffered SoraFS content responses reject malformed or duplicated `sora-content-cid` headers and direct malformed content CIDs or negative content lengths before returning content metadata, and defensively copy buffered response bytes; SoraFS pin registration accepts an already signed `SignedTransactionEnvelope`, posts only its Norito bytes, requires HTTP 202, and returns the strict admission identity (`status: submitted`, transaction hash, and manifest digest) without claiming finality, fees, custody, or pin status; raw chunker/storage-class/pin-policy DTO deserialization rejects null, duplicate, case-drifted, or type-confused fields, duplicate keys inside ignored extension JSON, invalid counters, non-exact chunker text, and unknown storage-class values while canonicalizing omitted optional multihash/retention counters to zero
 - SoraFS CID lookup file path/file-list DTOs snapshot assigned arrays and return
   detached arrays on access while preserving malformed null/missing list
   rejection in the raw converters
@@ -416,11 +416,11 @@ Broader iterable families beyond the current canonical subset, richer typed even
 
 ## Kagemusha Torii transport
 
-The managed SDK exposes the unchanged Kagemusha routes through
-`GetKagemushaReadinessV4Async`, `SubmitKagemushaTopUpV4Async`,
+The managed SDK exposes universal offline discovery through
+`GetOfflineCapabilityAsync`, plus `SubmitKagemushaTopUpV4Async`,
 `SubmitKagemushaRedeemV4Async`, and `GetKagemushaOperationStatusAsync`.
-Readiness accepts bridge ABI 22 and the manifest-V4 Eq/Ep verifier identity;
-ABI-19 and V3 projections fail instead of being upgraded.
+Discovery is asset-neutral and accepts only the exact four-field
+`cash_handoff_v1` capability response for bridge ABI 22.
 
 The C# surface is transport-only and does not claim a native prover. Top-up and
 redemption methods accept bounded canonical Norito archives created by a
@@ -430,8 +430,8 @@ artifact installation, and device-key handling remain outside this SDK. The
 transport accepts at most 512 KiB for top-up and 48 MiB for redemption, matching
 Torii's route-specific request limits.
 
-`CreateVpnQuoteAsync(...)`, `CreateVpnSessionAsync(...)`,
-`SubmitVpnReceiptAsync(...)`, and `DeleteVpnSessionAsync(...)` call signed Torii
+`CreateVpnQuoteAsync(...)`, `CreateVpnSessionAsync(...)`, and
+`SubmitVpnReceiptAsync(...)` call signed Torii
 routes, so set `ToriiClientOptions.CanonicalRequestCredentials` with a
 canonical I105 account id and set `LocalSigningContext` to the exact
 genesis-derived `NetworkId` before using those helpers. Human-readable labels
@@ -439,9 +439,12 @@ never substitute for that signing domain. Session creation requires the quote id
 `OpenVpnLeaseEscrow` transaction hash, and the same metering public key that was
 bound into the quote. Empty quote/session exit class still selects Torii's
 profile default, and an empty receipt lease id still lets Torii derive the
-settlement lease id from the relay receipt. Session deletion and operator
-receipt submission return canonical receipt DTOs with earned/refund XOR fields
-and any `SettleVpnLease` instruction skeleton Torii produced.
+settlement lease id from the relay receipt. Operator receipt submission returns
+canonical receipt DTOs with earned/refund XOR fields
+and any `SettleVpnLease` instruction skeleton Torii produced. A submission
+receipt has exact status `settlement_pending` until that instruction commits;
+only the committed WSV receipt has status `settled`. The validators retain the
+exact `disconnected`, `expired`, and `replaced` lifecycle statuses.
 
 For SoraFS content, use `OpenSoraFsCidContentAsync(...)` when you want the raw
 HTTP response/stream, or `GetSoraFsCidContentAsync(...)` when buffering the

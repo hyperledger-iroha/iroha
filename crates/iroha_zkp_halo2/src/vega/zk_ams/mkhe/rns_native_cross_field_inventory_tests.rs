@@ -1327,22 +1327,15 @@ fn pre_direct_candidate_projection_surface_is_sealed_one_pass_and_fail_closed() 
         .split_once("pub(super) fn authenticate_rns_native_cross_field_inventory_v1")
         .expect("ordinary typed authentication")
         .1
-        .split_once("#[cfg(test)]")
+        .split_once("/// Consume the exact bound envelope section")
         .expect("ordinary typed authentication boundary")
         .0;
     assert!(ordinary.contains("view,\n        None,"));
     assert!(!ordinary.contains("mint_pre_direct_inventory_candidate_projection_v1"));
-    let detached_fixture = source
-        .split_once(
-            "pub(super) fn authenticate_rns_native_cross_field_inventory_from_pre_qpcs_preflight_v1",
-        )
-        .expect("detached fixture authentication")
-        .1
-        .split_once("/// Consume the exact bound envelope section")
-        .expect("detached fixture authentication boundary")
-        .0;
-    assert!(detached_fixture.contains("view,\n        None,"));
-    assert!(!detached_fixture.contains("mint_pre_direct_inventory_candidate_projection_v1"));
+    assert!(
+        !source
+            .contains("authenticate_rns_native_cross_field_inventory_from_pre_qpcs_preflight_v1")
+    );
     let sealed = source
         .split_once(
             "pub(super) fn authenticate_rns_native_cross_field_inventory_from_sealed_pre_qpcs_preflight_v1",

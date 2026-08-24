@@ -649,6 +649,15 @@ fn trigger_list_all_active_parse() {
     };
     assert!(active);
 }
+
+#[test]
+fn trigger_completed_list_rejects_retired_timeout_flag() {
+    let error =
+        Args::try_parse_from(["iroha", "trigger", "completed", "list", "--timeout-ms", "1"])
+            .expect_err("completed list must reject the retired timeout flag");
+    assert!(error.to_string().contains("--timeout-ms"));
+}
+
 #[test]
 fn render_cli_error_includes_kind_and_exit_code() {
     let report = Report::new(MainError::Config);
@@ -792,6 +801,97 @@ fn taira_write_canary_cli_parses_defaults_and_overrides() {
         Some(std::path::Path::new("/tmp/taira-canary-client.toml"))
     );
     assert!(cmd.json);
+}
+#[test]
+fn taira_inrou_workspace_cli_requires_explicit_assets_and_output() {
+    let args = Args::try_parse_from([
+        "iroha",
+        "taira",
+        "inrou-workspace",
+        "--kernel",
+        "/private/assets/vmlinux",
+        "--rootfs",
+        "/private/assets/rootfs.ext4",
+        "--initrd",
+        "/private/assets/initrd.img",
+        "--output-dir",
+        "/private/runtime/taira-inrou-canary",
+        "--json",
+    ])
+    .expect("parse Taira Inrou workspace args");
+    let Command::Taira(crate::taira::Command::InrouWorkspace(cmd)) = args.command else {
+        panic!("expected taira inrou-workspace command");
+    };
+    assert_eq!(
+        cmd.kernel,
+        std::path::PathBuf::from("/private/assets/vmlinux")
+    );
+    assert_eq!(
+        cmd.rootfs,
+        std::path::PathBuf::from("/private/assets/rootfs.ext4")
+    );
+    assert_eq!(
+        cmd.initrd,
+        std::path::PathBuf::from("/private/assets/initrd.img")
+    );
+    assert_eq!(
+        cmd.output_dir,
+        std::path::PathBuf::from("/private/runtime/taira-inrou-canary")
+    );
+    assert!(cmd.json);
+
+    let error = Args::try_parse_from([
+        "iroha",
+        "taira",
+        "inrou-workspace",
+        "--kernel",
+        "/private/assets/vmlinux",
+        "--rootfs",
+        "/private/assets/rootfs.ext4",
+        "--output-dir",
+        "/private/runtime/taira-inrou-canary",
+    ])
+    .expect_err("Taira Inrou workspace must require an explicit initrd");
+    assert_eq!(error.kind(), ErrorKind::MissingRequiredArgument);
+}
+#[test]
+fn taira_inrou_stage_cli_requires_mode_and_parses_explicit_upgrade() {
+    let args = Args::try_parse_from([
+        "iroha",
+        "taira",
+        "inrou-stage",
+        "--mode",
+        "upgrade",
+        "--container",
+        "/tmp/inrou/container.json",
+        "--service",
+        "/tmp/inrou/service.json",
+        "--bundle-file",
+        "/tmp/inrou/bundle.bin",
+        "--stage-dir",
+        "/tmp/taira-inrou-stage-upgrade",
+    ])
+    .expect("parse Taira Inrou stage args");
+    let Command::Taira(crate::taira::Command::InrouStage(cmd)) = args.command else {
+        panic!("expected taira inrou-stage command");
+    };
+    assert_eq!(cmd.mode, crate::taira::InrouCanaryMode::Upgrade);
+
+    let error = Args::try_parse_from([
+        "iroha",
+        "taira",
+        "inrou-stage",
+        "--container",
+        "/tmp/inrou/container.json",
+        "--service",
+        "/tmp/inrou/service.json",
+        "--bundle-file",
+        "/tmp/inrou/bundle.bin",
+        "--stage-dir",
+        "/tmp/taira-inrou-stage",
+    ])
+    .expect_err("Inrou stage must require an explicit mutation mode");
+    assert_eq!(error.kind(), ErrorKind::MissingRequiredArgument);
 }
 #[test]
 fn taira_inrou_canary_cli_requires_mode_and_parses_explicit_upgrade() {

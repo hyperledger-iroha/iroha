@@ -115,7 +115,8 @@ async fn noncanonical_snapshot_publishes_and_compacts_nothing() {
     let initial_activations = BTreeMap::from([(LaneId::SINGLE, 0)]);
     let extended_activations = BTreeMap::from([(LaneId::SINGLE, 0), (LaneId::new(1), 0)]);
     let kura_config = kura_config_for_snapshot_test(&kura_store_dir, nonzero!(1_usize));
-    let (kura, _) = Kura::new(&kura_config, &initial).expect("create persistent Kura");
+    let (kura, _) = Kura::open_test_kura_with_configured_lane_config(&kura_config, &initial)
+        .expect("create persistent Kura");
     kura.apply_lane_geometry_transition_at_height(
         &initial,
         &extended,

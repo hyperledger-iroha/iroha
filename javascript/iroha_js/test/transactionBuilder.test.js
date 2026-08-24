@@ -179,7 +179,12 @@ function hex32(byte) {
 
 function mutateFirstSignedTransactionSignatureByte(signedTransaction) {
   const bytes = Buffer.from(signedTransaction);
-  const bareOffset = bytes[0] === 1 ? 1 : 0;
+  assert.equal(
+    bytes[0],
+    1,
+    "signed transaction fixture must be VersionedSignedTransaction V1",
+  );
+  const versionedPayloadOffset = 1;
 
   const readCompactLength = (offset) => {
     let value = 0;
@@ -197,7 +202,7 @@ function mutateFirstSignedTransactionSignatureByte(signedTransaction) {
     throw new Error("compact length must terminate within 10 bytes");
   };
 
-  const signatureField = readCompactLength(bareOffset);
+  const signatureField = readCompactLength(versionedPayloadOffset);
   const signaturePayload = readCompactLength(signatureField.next);
   assert.ok(
     signaturePayload.next + signaturePayload.value <= bytes.length,
@@ -251,6 +256,7 @@ function buildSampleRegisterDomain(additionalOptions = {}) {
 test("buildRegisterDomainTransaction returns canonical hash", () => {
   const built = buildSampleRegisterDomain();
   assert.ok(Buffer.isBuffer(built.signedTransaction));
+  assert.equal(built.signedTransaction[0], 1);
   assert.ok(Buffer.isBuffer(built.hash));
   assert.equal(built.hash.length, 32);
 

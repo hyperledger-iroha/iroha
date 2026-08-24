@@ -894,19 +894,3 @@ for proposal in raw_proposals {
         ),
     ):
         _require_rust_token_sequence(lane_path, hydration, expected, description, errors)
-
-
-def _serve_ingress_ordinal_production_source_fidelity_errors(
-    repo_root: Path,
-) -> list[str]:
-    """Compatibility entry point for the coordinator-owned Serve contract."""
-
-    return _lifecycle_certified_serve_production_source_fidelity_errors(repo_root)
-
-
-def _serve_lifecycle_production_source_fidelity_errors(
-    repo_root: Path,
-) -> list[str]:
-    """Compatibility entry point for the coordinator-owned Serve contract."""
-
-    return _lifecycle_certified_serve_production_source_fidelity_errors(repo_root)

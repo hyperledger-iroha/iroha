@@ -1995,7 +1995,7 @@ fn ensure_kagemusha_transparent_backend(
     backend: &str,
     backend_tag: BackendTag,
 ) -> Result<(), Error> {
-    if crate::zk::is_verifier_readiness_claim_label(backend) {
+    if crate::zk::is_production_claim_backend_label(backend) {
         return Err(labeled_invariant(
             "verifier_key_invalid",
             "offline transparent proofs may not use readiness-claim proof backends",

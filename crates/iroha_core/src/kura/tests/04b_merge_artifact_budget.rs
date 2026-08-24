@@ -3,7 +3,8 @@ fn merge_carrier_budget_reserves_receipt_frontier_without_double_counting_termin
     let temp_dir = TempDir::new().expect("create merge evidence budget temp dir");
     let cfg = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
     let (mut kura, _) =
-        Kura::new(&cfg, &RuntimeLaneConfig::default()).expect("initialize merge budget Kura");
+        Kura::open_test_kura_with_configured_lane_config(&cfg, &RuntimeLaneConfig::default())
+            .expect("initialize merge budget Kura");
     let entrypoint = offline_top_up_entrypoint_for_index([0x61; 32], [0x62; 32]);
     let mut entry = merge_entry_with_indexed_entrypoint(entrypoint);
     let mut blocks = DummyBlocks::new();
@@ -123,7 +124,8 @@ fn committed_merge_carrier_reconstructs_only_outstanding_post_wsv_components() {
     let temp_dir = TempDir::new().expect("create merge reservation temp dir");
     let cfg = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
     let (mut kura, _) =
-        Kura::new(&cfg, &RuntimeLaneConfig::default()).expect("initialize reservation Kura");
+        Kura::open_test_kura_with_configured_lane_config(&cfg, &RuntimeLaneConfig::default())
+            .expect("initialize reservation Kura");
     let entrypoint = offline_top_up_entrypoint_for_index([0x71; 32], [0x72; 32]);
     let mut entry = merge_entry_with_indexed_entrypoint(entrypoint);
     let mut blocks = DummyBlocks::new();

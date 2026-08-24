@@ -76,9 +76,9 @@ Swift uses the Norito bridge and fails closed when the XCFramework is missing:
 - Primary transport: WebSocket (`/v1/connect/ws?sid=<session_id>&role=<app|wallet>`),
   authenticated with the role's one-shot token.
 - Torii relay transport is in-node only: `CONNECT_RELAY_STRATEGY="broadcast"` uses Iroha peer-to-peer
-  node transport, while `"local_only"` disables cross-node forwarding. Compatibility aliases `"local-only"`
-  and `"local"` normalize to `"local_only"`. Unsupported values are coerced to `"local_only"`; there is
-  no centralized relay gateway mode.
+  node transport, while `"local_only"` disables cross-node forwarding. These are the only accepted
+  first-release spellings; aliases, case folding, whitespace normalization, and unknown values are
+  rejected. There is no centralized relay gateway mode.
 - Operator-only aggregate status reflects both configured and effective relay
   behavior under `/v1/connect/status/aggregate`: `policy.relay_strategy`
   (configured), `policy.relay_effective_strategy` (effective), and

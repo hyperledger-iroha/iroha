@@ -59,17 +59,15 @@ use iroha_data_model::{
             SumeragiV2VoteQuorumStatus,
         },
     },
-    consensus::ConsensusKeyRecord,
     isi::settlement::{SettlementAtomicity, SettlementExecutionOrder},
     nexus::{DataSpaceId, LaneId, LaneRelayEnvelope, LaneRelayError},
 };
 use iroha_primitives::numeric::Quantity;
 use iroha_telemetry::metrics;
-use norito::codec::{Decode, Encode};
 #[cfg(test)]
 use std::sync::Condvar;
 use std::{
-    collections::{BTreeMap, BTreeSet, VecDeque},
+    collections::{BTreeMap, BTreeSet},
     sync::{Arc, Mutex, MutexGuard, OnceLock, Weak},
     time::{Duration, Instant},
 };
@@ -4097,27 +4095,6 @@ pub fn mode_tags() -> (String, Option<String>, Option<u64>, Option<u64>) {
         .unwrap_or_default();
     (mode, staged, activation, lag)
 }
-/// Legacy lane-RBC mismatch labels retained only by lane-local telemetry.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
-pub enum RbcMismatchKind {
-    /// Chunk digest does not match the declared digest list.
-    ChunkDigest,
-    /// Payload hash does not match the expected value.
-    PayloadHash,
-    /// Merkle root for chunk digests does not match the expected root.
-    ChunkRoot,
-}
-impl RbcMismatchKind {
-    /// Stable telemetry label.
-    #[must_use]
-    pub const fn label(self) -> &'static str {
-        match self {
-            Self::ChunkDigest => "chunk_digest",
-            Self::PayloadHash => "payload_hash",
-            Self::ChunkRoot => "chunk_root",
-        }
-    }
-}
 fn lock_operator_status_slot<T>(
     slot: &'static Mutex<T>,
     label: &'static str,
@@ -4621,36 +4598,6 @@ pub struct DataspaceActivitySnapshot {
     /// Transactions executed for this dataspace.
     pub tx_served: u64,
 }
-/// Aggregated per-lane RBC backlog snapshot for operator dashboards.
-#[derive(Clone, Copy, Debug, Default, Encode, Decode, PartialEq, Eq)]
-pub struct LaneRbcSnapshot {
-    /// Lane identifier (numeric).
-    pub lane_id: u32,
-    /// Transactions contributing payload bytes in this lane across active sessions.
-    pub tx_count: u64,
-    /// Total RBC chunks attributed to this lane across active sessions.
-    pub total_chunks: u64,
-    /// RBC chunks still pending delivery for this lane across active sessions.
-    pub pending_chunks: u64,
-    /// Total RBC payload bytes attributed to this lane across active sessions.
-    pub rbc_bytes_total: u64,
-}
-/// Aggregated per-dataspace RBC backlog snapshot for operator dashboards.
-#[derive(Clone, Copy, Debug, Default, Encode, Decode, PartialEq, Eq)]
-pub struct DataspaceRbcSnapshot {
-    /// Owning lane identifier (numeric).
-    pub lane_id: u32,
-    /// Dataspace identifier (numeric).
-    pub dataspace_id: u64,
-    /// Transactions contributing payload bytes for this dataspace across active sessions.
-    pub tx_count: u64,
-    /// Total RBC chunks attributed to this dataspace across active sessions.
-    pub total_chunks: u64,
-    /// RBC chunks still pending delivery for this dataspace across active sessions.
-    pub pending_chunks: u64,
-    /// Total RBC payload bytes attributed to this dataspace across active sessions.
-    pub rbc_bytes_total: u64,
-}
 /// Aggregated per-lane commitment summary for recently committed blocks.
 #[derive(Clone, Copy, Debug)]
 pub struct LaneCommitmentSnapshot {
@@ -5138,34 +5085,6 @@ pub(crate) fn peer_key_policy_reject_snapshot_for_tests() -> (u64, Option<&'stat
     );
     (total, last_reason)
 }
-const KEY_LIFECYCLE_HISTORY_CAP: usize = 128;
-static KEY_LIFECYCLE_HISTORY: OnceLock<Mutex<VecDeque<ConsensusKeyRecord>>> = OnceLock::new();
-fn key_history_slot() -> &'static Mutex<VecDeque<ConsensusKeyRecord>> {
-    KEY_LIFECYCLE_HISTORY.get_or_init(|| Mutex::new(VecDeque::new()))
-}
-/// Record a consensus-key lifecycle entry for the remaining legacy Torii endpoint.
-pub fn record_consensus_key(record: ConsensusKeyRecord) {
-    let mut history = lock_operator_status_slot(key_history_slot(), "key lifecycle history");
-    history.retain(|existing| existing.id != record.id);
-    history.push_back(record);
-    while history.len() > KEY_LIFECYCLE_HISTORY_CAP {
-        history.pop_front();
-    }
-}
-/// Return consensus-key lifecycle entries newest first.
-#[must_use]
-pub fn consensus_key_history() -> Vec<ConsensusKeyRecord> {
-    lock_operator_status_slot(key_history_slot(), "key lifecycle history")
-        .iter()
-        .rev()
-        .cloned()
-        .collect()
-}
-/// Clear consensus-key lifecycle history in tests.
-#[cfg(test)]
-pub fn reset_consensus_keys_for_tests() {
-    lock_operator_status_slot(key_history_slot(), "key lifecycle history").clear();
-}
 static VRF_PENALTY_EPOCH: AtomicU64 = AtomicU64::new(0);
 static VRF_NON_REVEAL_TOTAL: AtomicU64 = AtomicU64::new(0);
 static VRF_NO_PARTICIPATION_TOTAL: AtomicU64 = AtomicU64::new(0);
@@ -5187,8 +5106,6 @@ pub enum WorkerQueueKind {
     Votes,
     /// Block payload messages.
     BlockPayload,
-    /// Legacy lane-RBC chunk transport.
-    RbcChunks,
     /// Fallback block/control messages.
     Blocks,
     /// Consensus control-flow messages.
@@ -5198,17 +5115,16 @@ pub enum WorkerQueueKind {
     /// Background post requests.
     Background,
 }
-static WORKER_QUEUE_DEPTHS: [AtomicU64; 7] = [const { AtomicU64::new(0) }; 7];
-static WORKER_QUEUE_DROPS: [AtomicU64; 7] = [const { AtomicU64::new(0) }; 7];
+static WORKER_QUEUE_DEPTHS: [AtomicU64; 6] = [const { AtomicU64::new(0) }; 6];
+static WORKER_QUEUE_DROPS: [AtomicU64; 6] = [const { AtomicU64::new(0) }; 6];
 const fn worker_queue_index(kind: WorkerQueueKind) -> usize {
     match kind {
         WorkerQueueKind::Votes => 0,
         WorkerQueueKind::BlockPayload => 1,
-        WorkerQueueKind::RbcChunks => 2,
-        WorkerQueueKind::Blocks => 3,
-        WorkerQueueKind::Consensus => 4,
-        WorkerQueueKind::LaneRelay => 5,
-        WorkerQueueKind::Background => 6,
+        WorkerQueueKind::Blocks => 2,
+        WorkerQueueKind::Consensus => 3,
+        WorkerQueueKind::LaneRelay => 4,
+        WorkerQueueKind::Background => 5,
     }
 }
 /// Record an enqueue for the given adapter queue.

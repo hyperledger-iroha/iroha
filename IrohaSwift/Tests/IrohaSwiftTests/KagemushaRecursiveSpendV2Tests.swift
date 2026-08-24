@@ -51,7 +51,7 @@ final class KagemushaRecursiveSpendTests: XCTestCase {
         let end = try XCTUnwrap(tail.range(of: "    /// Generates a new signing key"))
         let implementation = String(tail[..<end.lowerBound])
 
-        XCTAssertTrue(implementation.contains("let verifier = expectedReadiness.verifier"))
+        XCTAssertTrue(implementation.contains("let verifier = productCapability.verifier"))
         XCTAssertTrue(implementation.contains(
             "_ = try await toriiRestClient.getOfflineCapability()"
         ))
@@ -59,6 +59,9 @@ final class KagemushaRecursiveSpendTests: XCTestCase {
             "let snapshot = try await toriiRestClient.getZkAssetMerklePathSnapshot("
         ))
         XCTAssertTrue(implementation.contains("canonicalAuth: canonicalAuth"))
+        XCTAssertTrue(implementation.contains(
+            "snapshot.evaluatedBlockHeight >= productCapability.minimumEvaluatedBlockHeight"
+        ))
         XCTAssertTrue(implementation.contains(
             "verifier.activationHeight <= snapshot.evaluatedBlockHeight"
         ))
@@ -73,6 +76,7 @@ final class KagemushaRecursiveSpendTests: XCTestCase {
         ))
         XCTAssertFalse(implementation.contains("getKagemushaReadiness"))
         XCTAssertFalse(implementation.contains("matching: readiness"))
+        XCTAssertFalse(implementation.contains("ToriiKagemushaReadiness"))
         XCTAssertFalse(implementation.contains("for attempt in 0..<3"))
         XCTAssertFalse(implementation.contains("let currentReadiness"))
     }
@@ -377,7 +381,7 @@ final class KagemushaRecursiveSpendTests: XCTestCase {
         ))
     }
 
-    func testTopUpReadinessExpectationRejectsRoleSubstitutionAndExpiredVerifier() throws {
+    func testTopUpCapabilityRejectsRoleSubstitutionAndExpiredVerifier() throws {
         func binding(
             backend: String = "halo2/ipa",
             circuitID: String = KagemushaRecursiveSpend.topUpShieldCircuitID,
@@ -401,7 +405,7 @@ final class KagemushaRecursiveSpendTests: XCTestCase {
         }
 
         let verifier = try binding()
-        let expected = try KagemushaTopUpShieldReadinessExpectation(
+        let expected = try KagemushaTopUpShieldCapability(
             assetDefinitionID: assetDefinitionID(),
             assetScale: 9,
             minimumEvaluatedBlockHeight: 42,
@@ -415,13 +419,13 @@ final class KagemushaRecursiveSpendTests: XCTestCase {
         XCTAssertThrowsError(try binding(schema: "ab"))
         XCTAssertThrowsError(try binding(maximumProofBytes: 192 * 1024 + 1))
         XCTAssertThrowsError(try binding(activationHeight: 80, withdrawalHeight: 80))
-        XCTAssertThrowsError(try KagemushaTopUpShieldReadinessExpectation(
+        XCTAssertThrowsError(try KagemushaTopUpShieldCapability(
             assetDefinitionID: assetDefinitionID(),
             assetScale: 9,
             minimumEvaluatedBlockHeight: 39,
             verifier: verifier
         ))
-        XCTAssertThrowsError(try KagemushaTopUpShieldReadinessExpectation(
+        XCTAssertThrowsError(try KagemushaTopUpShieldCapability(
             assetDefinitionID: assetDefinitionID(),
             assetScale: 9,
             minimumEvaluatedBlockHeight: 80,

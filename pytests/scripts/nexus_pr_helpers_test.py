@@ -145,15 +145,12 @@ def test_nexus_pr_helpers_and_jobs_are_pinned_to_shared_policy() -> None:
         assert source.count("require_disjoint_release_roots") == 1
         assert "must be supplied all-or-none" in source
         assert "export IROHA_TEST_SKIP_BUILD=1" in source
-        assert "export IROHA_TEST_ALLOW_REENTRANT_BUILD=0" in source
         assert "--no-skip-build" not in source
-        assert "IROHA_TEST_ALLOW_REENTRANT_BUILD=1" not in source
         assert re.search(r"(?m)^\s*(?:command\s+)?cargo(?:\s|$)", source) is None
     assert lane.count("run_cargo test --locked --offline") == 4
     extras_end = launcher.index("done\n# Test processes must consume")
     for assignment in (
         'ENV_VARS+=("IROHA_TEST_SKIP_BUILD=1")',
-        'ENV_VARS+=("IROHA_TEST_ALLOW_REENTRANT_BUILD=0")',
     ):
         assert launcher.count(assignment) == 1
         assert extras_end < launcher.index(assignment)
@@ -162,7 +159,6 @@ def test_nexus_pr_helpers_and_jobs_are_pinned_to_shared_policy() -> None:
     for arguments in (
         ("--no-skip-build",),
         ("--env", "IROHA_TEST_SKIP_BUILD=0"),
-        ("--env", "IROHA_TEST_ALLOW_REENTRANT_BUILD=1"),
     ):
         rejected = subprocess.run(
             ["bash", str(NEXUS_LAUNCHER), *arguments],
@@ -191,7 +187,6 @@ def test_cross_dataspace_helper_reuses_attested_prebuilt_bundle(
 set -euo pipefail
 printf 'args\t%s\n' "$*" >"$NEXUS_HELPER_CAPTURE"
 printf 'skip\t%s\n' "$IROHA_TEST_SKIP_BUILD" >>"$NEXUS_HELPER_CAPTURE"
-printf 'reentrant\t%s\n' "$IROHA_TEST_ALLOW_REENTRANT_BUILD" >>"$NEXUS_HELPER_CAPTURE"
 printf 'target\t%s\n' "$CARGO_TARGET_DIR" >>"$NEXUS_HELPER_CAPTURE"
 printf 'artifacts\t%s\n' "$IROHA_RELEASE_ARTIFACT_ROOT" >>"$NEXUS_HELPER_CAPTURE"
 printf 'irohad\t%s\n' "$TEST_NETWORK_BIN_IROHAD" >>"$NEXUS_HELPER_CAPTURE"
@@ -224,9 +219,7 @@ printf 'irohad\t%s\n' "$TEST_NETWORK_BIN_IROHAD" >>"$NEXUS_HELPER_CAPTURE"
     )
     assert "--capture" in fields["args"]
     assert "--no-skip-build" not in fields["args"]
-    assert "--env IROHA_TEST_ALLOW_REENTRANT_BUILD=0" not in fields["args"]
     assert fields["skip"] == "1"
-    assert fields["reentrant"] == "0"
     assert fields["target"] == env["CARGO_TARGET_DIR"]
     assert fields["artifacts"] == env["IROHA_RELEASE_ARTIFACT_ROOT"]
     assert fields["irohad"] == str(bundle / "release" / "iroha3d")
@@ -241,10 +234,9 @@ def test_cross_lane_helper_routes_all_filters_through_pinned_cargo(
         cargo,
         """#!/usr/bin/env bash
 set -euo pipefail
-printf '%s\t%s\t%s\t%s\n' \
+printf '%s\t%s\t%s\n' \
   "$*" \
   "${IROHA_TEST_SKIP_BUILD-<unset>}" \
-  "${IROHA_TEST_ALLOW_REENTRANT_BUILD-<unset>}" \
   "${TEST_NETWORK_BIN_IROHAD-<unset>}" \
   >>"$NEXUS_HELPER_CAPTURE"
 """,
@@ -280,5 +272,5 @@ printf '%s\t%s\t%s\t%s\n' \
             ),
         )
     ]
-    assert all(row[1:3] == ["1", "0"] for row in rows)
-    assert all(row[3] == str(bundle / "release" / "iroha3d") for row in rows)
+    assert all(row[1] == "1" for row in rows)
+    assert all(row[2] == str(bundle / "release" / "iroha3d") for row in rows)

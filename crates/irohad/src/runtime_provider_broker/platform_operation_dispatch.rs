@@ -2705,6 +2705,8 @@ fn dispatch_server_operation_with_session(
             )?;
             let provider_request = crate::soracloud_hf_credential::
                 SoracloudHfAuthenticatedInferenceRequestV1::try_new(
+                    std::mem::take(&mut wire.repo_id),
+                    std::mem::take(&mut wire.resolved_revision),
                     std::mem::take(&mut wire.url),
                     std::mem::take(&mut wire.content_type),
                     wire.accept.take(),
@@ -2717,6 +2719,8 @@ fn dispatch_server_operation_with_session(
                 .execute_authenticated(&provider_request)
                 .map_err(soracloud_hf_credential_operation_error)?;
             let response_wire = SoracloudHfAuthenticatedInferenceResponseWireV1 {
+                served_repo_id: response.served_repo_id().to_owned(),
+                served_revision: response.served_revision().to_owned(),
                 status: response.status(),
                 content_type: response.content_type().map(ToOwned::to_owned),
                 content_encoding: response.content_encoding().map(ToOwned::to_owned),

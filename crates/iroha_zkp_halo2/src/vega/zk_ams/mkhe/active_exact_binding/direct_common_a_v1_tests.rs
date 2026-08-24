@@ -404,7 +404,7 @@ fn replay_authority_is_move_only_opaque_and_has_no_digest_escape() {
 }
 
 #[test]
-fn typed_selector_and_existing_wire_and_release_closure_are_preserved() {
+fn typed_selector_uses_only_the_creator_replay_typestate() {
     let active = include_str!("../active_exact_binding.rs");
     let common_a = include_str!("direct_common_a_v1.rs");
     let constructor_tail = common_a
@@ -413,7 +413,7 @@ fn typed_selector_and_existing_wire_and_release_closure_are_preserved() {
         .unwrap();
     let (constructor, _) = constructor_tail
         .split_once(
-            "/// Legacy selector wrapper retained only for verifier-side compatibility tests.",
+            "#[cfg(test)]\npub(super) fn mint_mismatched_rkg_round_one_selector_for_test_v1",
         )
         .unwrap();
     assert!(constructor.contains("VerifiedDirectCommonAStatementV1"));
@@ -422,27 +422,10 @@ fn typed_selector_and_existing_wire_and_release_closure_are_preserved() {
     assert!(!common_a.contains("pub(super) struct VerifiedDirectCommonAStatementV1"));
     assert!(!common_a.contains("pub(super) fn statement_digest_for("));
     assert!(!common_a.contains("pub(super) fn derive_verified_direct_common_a_statement_v1("));
-    let authority_mint = common_a
-        .split("pub(super) fn mint_rkg_round_one_selector_v1")
-        .nth(1)
-        .unwrap()
-        .split("#[cfg(test)]")
-        .next()
-        .unwrap();
-    assert!(authority_mint.contains("derive_verified_direct_common_a_statement_v1("));
-    assert!(authority_mint.contains("new_rkg_round_one_selector_v1("));
-    assert!(!authority_mint.contains("common_a_statement_digest"));
-    let parent_mint = active
-        .split("pub(super) fn mint_rkg_round_one_selector_v1")
-        .nth(1)
-        .unwrap()
-        .split("/// Non-serializable, single-use authorization")
-        .next()
-        .unwrap();
-    assert!(parent_mint.contains("direct_common_a_v1::mint_rkg_round_one_selector_v1("));
-    assert!(!parent_mint.contains("derive_verified_direct_common_a_statement_v1("));
-    assert!(!parent_mint.contains("VerifiedDirectCommonAStatementV1"));
-    assert!(!parent_mint.contains("common_a_statement_digest"));
+    assert!(!common_a.contains("fn mint_rkg_round_one_selector_v1("));
+    assert!(!active.contains("fn mint_rkg_round_one_selector_v1("));
+    assert!(active.contains("direct_common_a_v1::prepare_direct_common_a_creator_h0_v1("));
+    assert!(active.contains("direct_common_a_v1::consume_completed_creator_authority_v1("));
     assert!(!active.contains("VerifiedDirectCommonAStatementV1"));
     assert!(!active.contains("derive_verified_direct_common_a_statement_v1("));
     assert!(active.contains("mod direct_common_a_v1;"));

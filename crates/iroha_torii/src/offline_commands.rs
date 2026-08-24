@@ -2880,7 +2880,7 @@ mod tests {
         let transaction = submission_test_transaction(vec![request]);
         let directory = TempDir::new().expect("create evicted Kura fixture directory");
         let config = persistent_kura_config(&directory);
-        let (kura, _) = Kura::new(&config, &RuntimeLaneConfig::default())
+        let (kura, _) = Kura::new_fresh_single_lane(&config, &RuntimeLaneConfig::default())
             .expect("create evicted offline history Kura");
         let block1 = signed_history_block(1, None, 401, Vec::new(), Vec::new());
         let block1_hash = block1.hash();

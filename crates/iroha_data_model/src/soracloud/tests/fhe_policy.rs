@@ -2038,6 +2038,606 @@ fn sample_governed_fhe_material_for_lifecycle(
         .expect("compute governed material digest");
     material
 }
+#[cfg(feature = "json")]
+#[test]
+#[allow(clippy::too_many_lines)]
+fn fhe_canonical_model_v1_json_is_closed_and_requires_explicit_keys() {
+    use iroha_crypto::fhe_bfv::{
+        BfvBootstrapKey, BfvBootstrapKeyMode, BfvCiphertext,
+        BfvFullBootstrapCircuitArtifactBundleV1, BfvFullBootstrapCircuitArtifactRoleV1,
+        BfvFullBootstrapCircuitMaterialV1, BfvFullBootstrapReleaseAuditEvidenceV1,
+        BfvFullBootstrapReleaseAuditKeyEvidenceV1, BfvFullBootstrapReleaseAuditManifestV1,
+        BfvFullBootstrapReleaseAuditPackageV1, BfvFullBootstrapReleaseAuditProofProfileV1,
+        BfvFullBootstrapReleaseAuditRecordV1, BfvFullBootstrapReleaseAuditSignoffPayloadV1,
+        BfvFullBootstrapReleaseAuditSignoffV1, BfvFullBootstrapReleaseAuditVerdictV1, BfvGaloisKey,
+        BfvRelinearizationKey, BfvRelinearizationKeyEntry, BfvRotationKey,
+    };
+
+    macro_rules! assert_unknown_rejected {
+        ($value:expr, $ty:ty, $label:literal) => {{
+            let mut value =
+                norito::json::to_value(&$value).expect(concat!("serialize ", $label));
+            value
+                .as_object_mut()
+                .expect(concat!($label, " JSON object"))
+                .insert("retired_v0".to_owned(), norito::json!(true));
+            let error = norito::json::from_value::<$ty>(value)
+                .expect_err(concat!($label, " must reject unknown fields"));
+            assert!(
+                matches!(
+                    error,
+                    json::Error::UnknownField { ref field } if field == "retired_v0"
+                ),
+                "{} reported the wrong error: {error:?}",
+                $label
+            );
+        }};
+    }
+    macro_rules! assert_required_fields {
+        (
+            $value:expr,
+            $ty:ty,
+            [$($field:literal),+ $(,)?],
+            [$($nullable:literal),* $(,)?],
+            $label:literal
+        ) => {{
+            let canonical =
+                norito::json::to_value(&$value).expect(concat!("serialize ", $label));
+            norito::json::from_value::<$ty>(canonical.clone())
+                .expect(concat!("canonical ", $label, " must decode"));
+            $(
+                assert!(
+                    canonical.get($field).is_some(),
+                    "canonical {} must emit `{}`",
+                    $label,
+                    $field
+                );
+                let mut missing = canonical.clone();
+                assert!(
+                    missing
+                        .as_object_mut()
+                        .expect(concat!($label, " JSON object"))
+                        .remove($field)
+                        .is_some()
+                );
+                norito::json::from_value::<$ty>(missing).expect_err(concat!(
+                    $label,
+                    " must reject an omitted canonical key"
+                ));
+            )+
+            $(
+                assert!(
+                    matches!(canonical.get($nullable), Some(norito::json::Value::Null)),
+                    "canonical {} must emit `{}` as null",
+                    $label,
+                    $nullable
+                );
+            )*
+        }};
+    }
+
+    let mut param_set = sample_fhe_param_set();
+    param_set.ciphertext_modulus_bits.clear();
+    param_set.activation_height = None;
+    param_set.deprecation_height = None;
+    param_set.withdraw_height = None;
+    let mut refresh_transcript = sample_bfv_refresh_transcript();
+    refresh_transcript.rotation_transcripts.clear();
+    refresh_transcript.bootstrap_transcript = None;
+    let mut execution_policy = sample_fhe_execution_policy();
+    execution_policy.public_key_proof_statement_digest = None;
+    execution_policy.bootstrap_key_zero_refresh_proof_statement_digest = None;
+    execution_policy.full_bootstrap_release_audit_package = None;
+    execution_policy.full_bootstrap_release_audit_package_digest = None;
+    execution_policy.full_bootstrap_release_audit_trusted_reviewer_id = None;
+    execution_policy.full_bootstrap_release_audit_trusted_reviewer_public_key = None;
+    let governance_bundle = FheGovernanceBundleV1 {
+        schema_version: FHE_GOVERNANCE_BUNDLE_VERSION_V1,
+        param_set: param_set.clone(),
+        execution_policy: execution_policy.clone(),
+    };
+    let governed_material =
+        sample_governed_fhe_material_for_lifecycle(NonZeroU32::new(1).expect("nonzero"));
+    let policy_reference = governed_material.policy_reference();
+    let permission_scope = SoracloudFheGovernancePermissionScopeV1 {
+        schema_version: SORACLOUD_FHE_GOVERNANCE_PERMISSION_SCOPE_VERSION_V1,
+        service_name: governed_material.service_name.clone(),
+        policy_name: governed_material.policy_name.clone(),
+    };
+    let version_state = SoracloudFhePolicyVersionStateV1 {
+        material: governed_material.clone(),
+        admitted_by_transaction_hash: sample_hash(221),
+        lifecycle: SoracloudFhePolicyVersionLifecycleV1::Active,
+        deactivated_by_transaction_hash: None,
+    };
+    let policy_record = SoracloudFhePolicyRecordV1 {
+        schema_version: SORACLOUD_FHE_POLICY_RECORD_VERSION_V1,
+        service_name: governed_material.service_name.clone(),
+        policy_name: governed_material.policy_name.clone(),
+        active_version: None,
+        versions: BTreeMap::new(),
+    };
+    let mut input_admission_proof = sample_fhe_input_admission_proof();
+    input_admission_proof.public_key = None;
+    input_admission_proof
+        .ciphertext_proof_statement_digests
+        .clear();
+    let public_key_proof = sample_fhe_public_key_proof();
+    let bootstrap_key_proof = sample_fhe_bootstrap_key_proof();
+    let full_bootstrap_execution_proof = sample_fhe_full_bootstrap_execution_proof();
+    let mut secret = sample_secret_envelope();
+    secret.aad_digest = None;
+    let mut ciphertext_state = sample_ciphertext_state_record();
+    ciphertext_state.metadata.policy_tag = None;
+    ciphertext_state.metadata.tags.clear();
+    let ciphertext_metadata = ciphertext_state.metadata.clone();
+    let mut job_spec = sample_fhe_job_spec();
+    job_spec.inputs.clear();
+    let job_input = FheJobInputRefV1 {
+        state_key: "/state/private/input".to_owned(),
+        payload_bytes: NonZeroU64::new(1).expect("nonzero"),
+        commitment: sample_hash(222),
+    };
+    let mut decryption_policy = sample_decryption_authority_policy();
+    decryption_policy.approver_ids.clear();
+    let mut decryption_request = sample_decryption_request();
+    decryption_request.consent_evidence_hash = None;
+    decryption_request.break_glass_reason = None;
+    let query_spec = sample_ciphertext_query_spec();
+    let mut query_response = sample_ciphertext_query_response();
+    let mut query_item = query_response.results[0].clone();
+    let inclusion_proof = query_item.proof.clone().expect("sample inclusion proof");
+    query_item.state_key = None;
+    query_item.proof = None;
+    query_response.results.clear();
+    let container = sample_container();
+    let mut service = sample_service(vec![sample_binding("private_state")]);
+    service.container.manifest_hash = Hash::new(Encode::encode(&container));
+    let deployment_bundle = SoraDeploymentBundleV1 {
+        schema_version: SORA_DEPLOYMENT_BUNDLE_VERSION_V1,
+        container,
+        service,
+    };
+
+    assert_unknown_rejected!(FheSchemeV1::Bfv, FheSchemeV1, "FHE scheme");
+    assert_unknown_rejected!(
+        FheParamLifecycleV1::Active,
+        FheParamLifecycleV1,
+        "FHE parameter lifecycle"
+    );
+    assert_unknown_rejected!(param_set, FheParamSetV1, "FHE parameter set");
+    assert_unknown_rejected!(
+        FheDeterministicRoundingModeV1::NearestTiesToEven,
+        FheDeterministicRoundingModeV1,
+        "FHE rounding mode"
+    );
+    assert_unknown_rejected!(
+        BfvRefreshTranscriptModeV1::ExactLift,
+        BfvRefreshTranscriptModeV1,
+        "BFV refresh transcript mode"
+    );
+    assert_unknown_rejected!(
+        BfvCiphertextBoundModeV1::ExactResidualMultiple,
+        BfvCiphertextBoundModeV1,
+        "BFV ciphertext bound mode"
+    );
+    assert_unknown_rejected!(
+        BfvRotationRefreshTranscriptV1 {
+            rotation_steps: 1,
+            seed: Vec::new(),
+        },
+        BfvRotationRefreshTranscriptV1,
+        "BFV rotation refresh transcript"
+    );
+    assert_unknown_rejected!(
+        BfvBootstrapRefreshTranscriptV1 {
+            key_id: "bootstrap-v1".to_owned(),
+            max_refresh_rounds: 1,
+            seed: Vec::new(),
+        },
+        BfvBootstrapRefreshTranscriptV1,
+        "BFV bootstrap refresh transcript"
+    );
+    assert_unknown_rejected!(
+        refresh_transcript,
+        BfvEvaluationKeyRefreshTranscriptV1,
+        "BFV evaluation-key refresh transcript"
+    );
+    assert_unknown_rejected!(
+        execution_policy,
+        FheExecutionPolicyV1,
+        "FHE execution policy"
+    );
+    assert_unknown_rejected!(
+        governance_bundle,
+        FheGovernanceBundleV1,
+        "FHE governance bundle"
+    );
+    assert_unknown_rejected!(
+        policy_reference,
+        SoracloudFhePolicyReferenceV1,
+        "FHE policy reference"
+    );
+    assert_unknown_rejected!(
+        permission_scope,
+        SoracloudFheGovernancePermissionScopeV1,
+        "FHE governance permission scope"
+    );
+    assert_unknown_rejected!(
+        governed_material,
+        SoracloudFheGovernedMaterialV1,
+        "governed FHE material"
+    );
+    assert_unknown_rejected!(
+        SoracloudFhePolicyVersionLifecycleV1::Active,
+        SoracloudFhePolicyVersionLifecycleV1,
+        "FHE policy version lifecycle"
+    );
+    assert_unknown_rejected!(
+        version_state,
+        SoracloudFhePolicyVersionStateV1,
+        "FHE policy version state"
+    );
+    assert_unknown_rejected!(
+        policy_record,
+        SoracloudFhePolicyRecordV1,
+        "FHE policy record"
+    );
+    assert_unknown_rejected!(
+        input_admission_proof,
+        SoracloudFheInputAdmissionProofV1,
+        "FHE input admission proof"
+    );
+    assert_unknown_rejected!(
+        public_key_proof,
+        SoracloudFhePublicKeyProofV1,
+        "FHE public-key proof"
+    );
+    assert_unknown_rejected!(
+        bootstrap_key_proof,
+        SoracloudFheBootstrapKeyProofV1,
+        "FHE bootstrap-key proof"
+    );
+    assert_unknown_rejected!(
+        full_bootstrap_execution_proof,
+        SoracloudFheFullBootstrapExecutionProofV1,
+        "FHE full-bootstrap execution proof"
+    );
+    assert_unknown_rejected!(
+        SecretEnvelopeEncryptionV1::FheCiphertext,
+        SecretEnvelopeEncryptionV1,
+        "secret-envelope encryption mode"
+    );
+    assert_unknown_rejected!(secret, SecretEnvelopeV1, "secret envelope");
+    assert_unknown_rejected!(
+        ciphertext_metadata,
+        CiphertextStateMetadataV1,
+        "ciphertext state metadata"
+    );
+    assert_unknown_rejected!(
+        ciphertext_state,
+        CiphertextStateRecordV1,
+        "ciphertext state record"
+    );
+    assert_unknown_rejected!(
+        FheJobOperationV1::Add,
+        FheJobOperationV1,
+        "FHE job operation"
+    );
+    assert_unknown_rejected!(job_input, FheJobInputRefV1, "FHE job input");
+    assert_unknown_rejected!(job_spec, FheJobSpecV1, "FHE job spec");
+    assert_unknown_rejected!(
+        DecryptionAuthorityModeV1::ThresholdService,
+        DecryptionAuthorityModeV1,
+        "decryption authority mode"
+    );
+    assert_unknown_rejected!(
+        decryption_policy,
+        DecryptionAuthorityPolicyV1,
+        "decryption authority policy"
+    );
+    assert_unknown_rejected!(
+        decryption_request,
+        DecryptionRequestV1,
+        "decryption request"
+    );
+    assert_unknown_rejected!(
+        CiphertextQueryMetadataLevelV1::Minimal,
+        CiphertextQueryMetadataLevelV1,
+        "ciphertext query metadata level"
+    );
+    assert_unknown_rejected!(query_spec, CiphertextQuerySpecV1, "ciphertext query spec");
+    assert_unknown_rejected!(
+        inclusion_proof,
+        CiphertextInclusionProofV1,
+        "ciphertext inclusion proof"
+    );
+    assert_unknown_rejected!(
+        query_item,
+        CiphertextQueryResultItemV1,
+        "ciphertext query item"
+    );
+    assert_unknown_rejected!(
+        query_response,
+        CiphertextQueryResponseV1,
+        "ciphertext query response"
+    );
+    assert_unknown_rejected!(
+        deployment_bundle,
+        SoraDeploymentBundleV1,
+        "Sora deployment bundle"
+    );
+
+    assert_required_fields!(
+        param_set,
+        FheParamSetV1,
+        [
+            "ciphertext_modulus_bits",
+            "activation_height",
+            "deprecation_height",
+            "withdraw_height",
+        ],
+        ["activation_height", "deprecation_height", "withdraw_height"],
+        "FHE parameter set"
+    );
+    assert_required_fields!(
+        refresh_transcript,
+        BfvEvaluationKeyRefreshTranscriptV1,
+        ["rotation_transcripts", "bootstrap_transcript"],
+        ["bootstrap_transcript"],
+        "BFV evaluation-key refresh transcript"
+    );
+    assert_required_fields!(
+        execution_policy,
+        FheExecutionPolicyV1,
+        [
+            "refresh_transcript_mode",
+            "public_key_proof_statement_digest",
+            "bootstrap_key_zero_refresh_proof_statement_digest",
+            "full_bootstrap_release_audit_package",
+            "full_bootstrap_release_audit_package_digest",
+            "full_bootstrap_release_audit_trusted_reviewer_id",
+            "full_bootstrap_release_audit_trusted_reviewer_public_key",
+        ],
+        [
+            "public_key_proof_statement_digest",
+            "bootstrap_key_zero_refresh_proof_statement_digest",
+            "full_bootstrap_release_audit_package",
+            "full_bootstrap_release_audit_package_digest",
+            "full_bootstrap_release_audit_trusted_reviewer_id",
+            "full_bootstrap_release_audit_trusted_reviewer_public_key",
+        ],
+        "FHE execution policy"
+    );
+    assert_required_fields!(
+        governed_material,
+        SoracloudFheGovernedMaterialV1,
+        ["full_bootstrap_circuit_artifacts"],
+        ["full_bootstrap_circuit_artifacts"],
+        "governed FHE material"
+    );
+    assert_required_fields!(
+        version_state,
+        SoracloudFhePolicyVersionStateV1,
+        ["deactivated_by_transaction_hash"],
+        ["deactivated_by_transaction_hash"],
+        "FHE policy version state"
+    );
+    assert_required_fields!(
+        policy_record,
+        SoracloudFhePolicyRecordV1,
+        ["active_version", "versions"],
+        ["active_version"],
+        "FHE policy record"
+    );
+    assert_required_fields!(
+        input_admission_proof,
+        SoracloudFheInputAdmissionProofV1,
+        [
+            "public_key",
+            "ciphertext_proof_statement_digests",
+            "bound_mode",
+        ],
+        ["public_key"],
+        "FHE input admission proof"
+    );
+    assert_required_fields!(
+        secret,
+        SecretEnvelopeV1,
+        ["aad_digest"],
+        ["aad_digest"],
+        "secret envelope"
+    );
+    assert_required_fields!(
+        ciphertext_metadata,
+        CiphertextStateMetadataV1,
+        ["policy_tag", "tags"],
+        ["policy_tag"],
+        "ciphertext state metadata"
+    );
+    assert_required_fields!(job_spec, FheJobSpecV1, ["inputs"], [], "FHE job spec");
+    assert_required_fields!(
+        decryption_policy,
+        DecryptionAuthorityPolicyV1,
+        ["approver_ids"],
+        [],
+        "decryption authority policy"
+    );
+    assert_required_fields!(
+        decryption_request,
+        DecryptionRequestV1,
+        ["consent_evidence_hash", "break_glass_reason"],
+        ["consent_evidence_hash", "break_glass_reason"],
+        "decryption request"
+    );
+    assert_required_fields!(
+        query_item,
+        CiphertextQueryResultItemV1,
+        ["state_key", "proof"],
+        ["state_key", "proof"],
+        "ciphertext query item"
+    );
+    assert_required_fields!(
+        query_response,
+        CiphertextQueryResponseV1,
+        ["results"],
+        [],
+        "ciphertext query response"
+    );
+
+    let entry = BfvRelinearizationKeyEntry {
+        b: Vec::new(),
+        a: Vec::new(),
+    };
+    let relinearization_key = BfvRelinearizationKey {
+        entries: vec![entry.clone()],
+    };
+    let ciphertext = BfvCiphertext {
+        c0: Vec::new(),
+        c1: Vec::new(),
+    };
+    let rotation_key = BfvRotationKey {
+        rotation_steps: 1,
+        zero_refresh: ciphertext.clone(),
+    };
+    let galois_key = BfvGaloisKey {
+        automorphism_power: 3,
+        entries: vec![entry.clone()],
+    };
+    let bootstrap_key = BfvBootstrapKey {
+        key_id: "bootstrap-v1".to_owned(),
+        max_refresh_rounds: 0,
+        public_key_digest: None,
+        zero_refresh: ciphertext.clone(),
+        round_refreshes: Vec::new(),
+        mode: BfvBootstrapKeyMode::RefreshOnlyV1,
+        full_bootstrap_material: None,
+    };
+    let evaluation_keys = BfvEvaluationKeyBundle {
+        relinearization_key: relinearization_key.clone(),
+        rotation_keys: vec![rotation_key.clone()],
+        galois_keys: vec![galois_key.clone()],
+        bootstrap_key: None,
+    };
+    let params = ram_lfe_bfv_parameters_v1();
+    let full_bootstrap_material = sample_full_bootstrap_material(&params);
+    let full_bootstrap_artifacts = sample_full_bootstrap_circuit_artifacts();
+    let reviewer_keypair = sample_ed25519_keypair(0x64);
+    let (release_package, _) =
+        sample_full_bootstrap_release_audit_package_and_digest(&reviewer_keypair);
+    let release_record = release_package.record.clone();
+    let release_evidence = release_record.evidence.clone();
+    let release_profile = release_evidence.proof_profile.clone();
+    let release_key_evidence = release_evidence.prover_key.clone();
+    let release_signoff = release_record.signoff.clone();
+    let release_signoff_payload = release_signoff.payload.clone();
+    let release_manifest = release_package.manifest.clone();
+    let release_verdict = release_manifest.verdict;
+
+    assert_unknown_rejected!(
+        entry,
+        BfvRelinearizationKeyEntry,
+        "BFV relinearization entry"
+    );
+    assert_unknown_rejected!(
+        relinearization_key,
+        BfvRelinearizationKey,
+        "BFV relinearization key"
+    );
+    assert_unknown_rejected!(galois_key, BfvGaloisKey, "BFV Galois key");
+    assert_unknown_rejected!(rotation_key, BfvRotationKey, "BFV rotation key");
+    assert_unknown_rejected!(
+        BfvBootstrapKeyMode::RefreshOnlyV1,
+        BfvBootstrapKeyMode,
+        "BFV bootstrap-key mode"
+    );
+    assert_unknown_rejected!(
+        full_bootstrap_material,
+        BfvFullBootstrapCircuitMaterialV1,
+        "BFV full-bootstrap material"
+    );
+    assert_unknown_rejected!(
+        BfvFullBootstrapCircuitArtifactRoleV1::ProverKey,
+        BfvFullBootstrapCircuitArtifactRoleV1,
+        "BFV full-bootstrap artifact role"
+    );
+    assert_unknown_rejected!(ciphertext, BfvCiphertext, "BFV ciphertext");
+    assert_unknown_rejected!(
+        full_bootstrap_artifacts,
+        BfvFullBootstrapCircuitArtifactBundleV1,
+        "BFV full-bootstrap artifacts"
+    );
+    assert_unknown_rejected!(
+        release_profile,
+        BfvFullBootstrapReleaseAuditProofProfileV1,
+        "BFV release-audit proof profile"
+    );
+    assert_unknown_rejected!(
+        release_key_evidence,
+        BfvFullBootstrapReleaseAuditKeyEvidenceV1,
+        "BFV release-audit key evidence"
+    );
+    assert_unknown_rejected!(
+        release_evidence,
+        BfvFullBootstrapReleaseAuditEvidenceV1,
+        "BFV release-audit evidence"
+    );
+    assert_unknown_rejected!(
+        release_signoff_payload,
+        BfvFullBootstrapReleaseAuditSignoffPayloadV1,
+        "BFV release-audit signoff payload"
+    );
+    assert_unknown_rejected!(
+        release_signoff,
+        BfvFullBootstrapReleaseAuditSignoffV1,
+        "BFV release-audit signoff"
+    );
+    assert_unknown_rejected!(
+        release_record,
+        BfvFullBootstrapReleaseAuditRecordV1,
+        "BFV release-audit record"
+    );
+    assert_unknown_rejected!(
+        release_verdict,
+        BfvFullBootstrapReleaseAuditVerdictV1,
+        "BFV release-audit verdict"
+    );
+    assert_unknown_rejected!(
+        release_manifest,
+        BfvFullBootstrapReleaseAuditManifestV1,
+        "BFV release-audit manifest"
+    );
+    assert_unknown_rejected!(
+        release_package,
+        BfvFullBootstrapReleaseAuditPackageV1,
+        "BFV release-audit package"
+    );
+    assert_unknown_rejected!(bootstrap_key, BfvBootstrapKey, "BFV bootstrap key");
+    assert_unknown_rejected!(
+        evaluation_keys,
+        BfvEvaluationKeyBundle,
+        "BFV evaluation-key bundle"
+    );
+    assert_required_fields!(
+        bootstrap_key,
+        BfvBootstrapKey,
+        [
+            "public_key_digest",
+            "round_refreshes",
+            "mode",
+            "full_bootstrap_material",
+        ],
+        ["public_key_digest", "full_bootstrap_material"],
+        "BFV bootstrap key"
+    );
+    assert_required_fields!(
+        evaluation_keys,
+        BfvEvaluationKeyBundle,
+        ["rotation_keys", "galois_keys", "bootstrap_key"],
+        ["bootstrap_key"],
+        "BFV evaluation-key bundle"
+    );
+}
 #[test]
 #[allow(clippy::too_many_lines)]
 fn governed_fhe_material_and_policy_history_enforce_exact_monotonic_lifecycle() {

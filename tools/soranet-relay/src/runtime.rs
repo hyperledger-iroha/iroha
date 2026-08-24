@@ -12,8 +12,7 @@ use iroha_crypto::{
             ClientHelloMetadata, DEFAULT_TLS_SERVER_NAME, HandshakeSuite,
             HarnessError as NoiseHandshakeError, MAX_HANDSHAKE_FRAME_LEN,
             RuntimeParams as NoiseRuntimeParams, SORANET_QUIC_ALPN, SessionSecrets,
-            inspect_client_hello, process_client_hello, relay_finalize_handshake,
-            update_suite_list,
+            inspect_client_hello, process_client_hello, update_suite_list,
         },
         pow::{
             self, Parameters as PowParameters, Ticket as PowTicket, TicketRevocationStore,
@@ -25,6 +24,8 @@ use iroha_crypto::{
         token::{self, AdmissionToken, DecodeError as TokenDecodeError},
     },
 };
+#[cfg(unix)]
+use std::os::unix::fs::{FileTypeExt as _, MetadataExt as _, PermissionsExt as _};
 use std::{
     collections::HashSet,
     fmt::{self, Write as _},
@@ -35,7 +36,7 @@ use std::{
     str::FromStr,
     sync::{
         Arc, Mutex as StdMutex,
-        atomic::{AtomicBool, AtomicU16, Ordering},
+        atomic::{AtomicBool, AtomicU16, AtomicU64, Ordering},
     },
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
@@ -54,8 +55,8 @@ use crate::{
     },
     compliance::{ComplianceLogger, ThrottleAudit},
     config::{
-        self, ConfigError, RelayConfig, RelayMode, VpnBackendEndpoint,
-        read_bounded_direct_regular_file, read_bounded_private_regular_file,
+        self, ConfigError, RelayConfig, RelayMode, read_bounded_direct_regular_file,
+        read_bounded_private_regular_file,
     },
     congestion::{CongestionController, CongestionError, CongestionLease},
     constant_rate::ConstantRateProfileSpec,
@@ -94,8 +95,9 @@ use iroha_data_model::{
         },
         vpn::{
             VPN_DEFAULT_TUNNEL_MTU_BYTES, VPN_USAGE_VOUCHER_CONTROL_MAGIC, VpnCellClassV1,
-            VpnFlowLabelV1, VpnHelperTicketError, VpnHelperTicketV1, VpnTariffV1,
-            VpnUsageVoucherEnvelopeV1, derive_vpn_session_address_plan_v1,
+            VpnFlowLabelV1, VpnHelperTicketError, VpnHelperTicketV1, VpnSignedSessionReceiptV1,
+            VpnTariffV1, VpnUsageVoucherEnvelopeV1, VpnUsageVoucherV1,
+            derive_vpn_session_address_plan_v1, vpn_tariff_meter_hash_v1,
         },
     },
 };
@@ -138,7 +140,8 @@ struct VpnBackendBridgeContext<'a> {
     bridge: VpnBridge,
     adapter: &'a VpnAdapter,
     vpn_session: &'a VpnSessionHandle,
-    helper_ticket: &'a VpnHelperTicketV1,
+    voucher_authorization: Arc<Mutex<VpnVoucherAuthorization>>,
+    settlement_store: Arc<VpnSettlementStore>,
     mtu: usize,
 }
 #[derive(Clone)]
@@ -247,6 +250,11 @@ const TLS_CERTIFICATE_CHAIN_MAX_ENTRIES_V1: usize = 16;
 const TLS_PRIVATE_KEY_MAX_BYTES_V1: usize = 64 * 1024;
 /// Maximum on-disk JSON size of one first-release VPN settlement spool record.
 pub const VPN_SETTLEMENT_SPOOL_MAX_BYTES_V1: usize = 64 * 1024;
+const VPN_SETTLEMENT_WAL_PREFIX_V1: &str = ".vpn-settlement-live-";
+const VPN_SETTLEMENT_WAL_SUFFIX_V1: &str = ".wal";
+const VPN_SETTLEMENT_TEMP_PREFIX_V1: &str = ".vpn-settlement-tmp-";
+const VPN_SETTLEMENT_OWNER_LOCK_V1: &str = ".vpn-settlement-owner.lock";
+static VPN_SETTLEMENT_TEMP_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 const VPN_HELPER_TICKET_REPLAY_NAMESPACE: &[u8] =
     b"iroha.soranet.vpn.helper-ticket.consumptions.v1";
 const VPN_HELPER_TICKET_REPLAY_ID_DOMAIN: &[u8] = b"iroha.soranet.vpn.helper-ticket.replay-id.v1";
@@ -295,6 +303,8 @@ struct MonitorCircuitResources {
     metrics: Arc<Metrics>,
     lane_manager: Arc<ConstantRateLaneManager>,
     vpn: Option<Arc<VpnOverlay>>,
+    vpn_helper_ticket_replays: Option<Arc<StdMutex<PersistentReplayLedger>>>,
+    vpn_settlement_store: Option<Arc<VpnSettlementStore>>,
 }
 #[derive(Debug)]
 struct ConstantRateLaneManager {
@@ -689,51 +699,129 @@ enum VpnBackendBridgeError {
     #[error("vpn usage voucher error: {0}")]
     UsageVoucher(String),
 }
-#[derive(Debug)]
-struct VpnVoucherDebtWindow {
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct VpnBackendSocketIdentity {
+    device: u64,
+    inode: u64,
+}
+#[derive(Debug, Clone)]
+struct VpnVoucherAuthorization {
     session_id: [u8; 16],
     quote_id: [u8; 32],
     relay_id: RelayId,
     metering_public_key: PublicKey,
     tariff: VpnTariffV1,
-    max_unvouched_bytes: u64,
+    valid_after_ms: u64,
+    expires_at_ms: u64,
+    max_credit_bytes: u64,
+    max_credit_active_ms: u64,
+    service_started_at: Option<TokioInstant>,
     observed_ingress_bytes: u64,
     observed_egress_bytes: u64,
-    vouched_ingress_bytes: u64,
-    vouched_egress_bytes: u64,
-    vouched_earned_fee: Quantity,
+    authorized_ingress_bytes: u64,
+    authorized_egress_bytes: u64,
+    signed_active_ms: u64,
+    authorized_active_ms: u64,
+    authorized_fee_ceiling: Quantity,
     highest_sequence: u64,
+    last_issued_at_ms: Option<u64>,
     has_voucher: bool,
 }
-impl VpnVoucherDebtWindow {
-    fn new(helper_ticket: &VpnHelperTicketV1, max_unvouched_bytes: u64) -> Self {
+impl VpnVoucherAuthorization {
+    fn new(
+        helper_ticket: &VpnHelperTicketV1,
+        max_credit_bytes: u64,
+        max_credit_active_ms: u64,
+    ) -> Self {
         Self {
             session_id: helper_ticket.session_id,
             quote_id: helper_ticket.quote_id,
             relay_id: helper_ticket.relay_id,
             metering_public_key: helper_ticket.metering_public_key.clone(),
             tariff: helper_ticket.tariff.clone(),
-            max_unvouched_bytes,
+            valid_after_ms: helper_ticket.valid_after_ms,
+            expires_at_ms: helper_ticket.expires_at_ms,
+            max_credit_bytes,
+            max_credit_active_ms,
+            service_started_at: None,
             observed_ingress_bytes: 0,
             observed_egress_bytes: 0,
-            vouched_ingress_bytes: 0,
-            vouched_egress_bytes: 0,
-            vouched_earned_fee: Quantity::zero(),
+            authorized_ingress_bytes: 0,
+            authorized_egress_bytes: 0,
+            signed_active_ms: 0,
+            authorized_active_ms: 0,
+            authorized_fee_ceiling: Quantity::zero(),
             highest_sequence: 0,
+            last_issued_at_ms: None,
             has_voucher: false,
         }
     }
-    fn record_ingress(&mut self, bytes: u64) -> Result<(), VpnBackendBridgeError> {
-        self.observed_ingress_bytes = self.observed_ingress_bytes.saturating_add(bytes);
-        self.ensure_within_window()
+    fn begin_service(&mut self) {
+        self.service_started_at
+            .get_or_insert_with(TokioInstant::now);
     }
-    fn record_egress(&mut self, bytes: u64) -> Result<(), VpnBackendBridgeError> {
-        self.observed_egress_bytes = self.observed_egress_bytes.saturating_add(bytes);
-        self.ensure_within_window()
+    fn observed_active_ms(&self) -> u64 {
+        self.service_started_at.map_or(0, |started_at| {
+            started_at.elapsed().as_millis().min(u128::from(u64::MAX)) as u64
+        })
+    }
+    fn active_deadline(&self) -> Result<TokioInstant, VpnBackendBridgeError> {
+        let started_at = self.service_started_at.ok_or_else(|| {
+            VpnBackendBridgeError::UsageVoucher(
+                "vpn service cannot start before an initial prepaid voucher".to_owned(),
+            )
+        })?;
+        started_at
+            .checked_add(Duration::from_millis(self.authorized_active_ms))
+            .ok_or_else(|| {
+                VpnBackendBridgeError::UsageVoucher(
+                    "voucher active-time authorization exceeds the monotonic clock range"
+                        .to_owned(),
+                )
+            })
+    }
+    fn authorize_ingress_packet(
+        &mut self,
+        bytes: u64,
+    ) -> Result<TokioInstant, VpnBackendBridgeError> {
+        let next = self
+            .observed_ingress_bytes
+            .checked_add(bytes)
+            .ok_or_else(|| {
+                VpnBackendBridgeError::UsageVoucher(
+                    "vpn ingress usage counter overflowed its prepaid authorization".to_owned(),
+                )
+            })?;
+        self.ensure_authorized(next, self.observed_egress_bytes)?;
+        self.observed_ingress_bytes = next;
+        self.active_deadline()
+    }
+    fn authorize_egress_packet(
+        &mut self,
+        bytes: u64,
+    ) -> Result<TokioInstant, VpnBackendBridgeError> {
+        let next = self
+            .observed_egress_bytes
+            .checked_add(bytes)
+            .ok_or_else(|| {
+                VpnBackendBridgeError::UsageVoucher(
+                    "vpn egress usage counter overflowed its prepaid authorization".to_owned(),
+                )
+            })?;
+        self.ensure_authorized(self.observed_ingress_bytes, next)?;
+        self.observed_egress_bytes = next;
+        self.active_deadline()
     }
     fn accept_envelope(
         &mut self,
         envelope: &VpnUsageVoucherEnvelopeV1,
+    ) -> Result<VpnUsageVoucherEnvelopeV1, VpnBackendBridgeError> {
+        self.accept_envelope_at(envelope, unix_time_ms(SystemTime::now()))
+    }
+    fn accept_envelope_at(
+        &mut self,
+        envelope: &VpnUsageVoucherEnvelopeV1,
+        now_ms: u64,
     ) -> Result<VpnUsageVoucherEnvelopeV1, VpnBackendBridgeError> {
         let voucher = &envelope.voucher;
         let body = &voucher.body;
@@ -767,55 +855,198 @@ impl VpnVoucherDebtWindow {
                 "voucher sequence must increase".to_string(),
             ));
         }
-        if body.ingress_bytes < self.vouched_ingress_bytes
-            || body.egress_bytes < self.vouched_egress_bytes
+        if body.ingress_bytes < self.authorized_ingress_bytes
+            || body.egress_bytes < self.authorized_egress_bytes
         {
             return Err(VpnBackendBridgeError::UsageVoucher(
                 "voucher counters must be cumulative".to_string(),
             ));
         }
-        if envelope.earned_fee < self.vouched_earned_fee {
+        if body.active_ms < self.signed_active_ms {
             return Err(VpnBackendBridgeError::UsageVoucher(
-                "voucher earned fee must be cumulative".to_string(),
+                "voucher active time must be cumulative".to_string(),
             ));
         }
-        let earned_fee = self.tariff.earned_fee(body).map_err(|error| {
+        if body.issued_at_ms < self.valid_after_ms || body.issued_at_ms >= self.expires_at_ms {
+            return Err(VpnBackendBridgeError::UsageVoucher(
+                "voucher issuance time falls outside the signed helper-ticket window".to_string(),
+            ));
+        }
+        if body.issued_at_ms > now_ms {
+            return Err(VpnBackendBridgeError::UsageVoucher(
+                "voucher issuance time is ahead of the relay clock".to_string(),
+            ));
+        }
+        if now_ms.saturating_sub(body.issued_at_ms) > self.max_credit_active_ms {
+            return Err(VpnBackendBridgeError::UsageVoucher(format!(
+                "voucher issuance time is older than {}ms",
+                self.max_credit_active_ms
+            )));
+        }
+        if self
+            .last_issued_at_ms
+            .is_some_and(|last| body.issued_at_ms < last)
+        {
+            return Err(VpnBackendBridgeError::UsageVoucher(
+                "voucher issuance time must not move backwards".to_string(),
+            ));
+        }
+        if body.ingress_bytes < self.observed_ingress_bytes
+            || body.egress_bytes < self.observed_egress_bytes
+        {
+            return Err(VpnBackendBridgeError::UsageVoucher(
+                "voucher byte ceilings are already below relay-observed user payload".to_string(),
+            ));
+        }
+        let observed_active_ms = self.observed_active_ms();
+        if body.active_ms < observed_active_ms {
+            return Err(VpnBackendBridgeError::UsageVoucher(
+                "voucher active-time ceiling is already below relay-observed service time"
+                    .to_string(),
+            ));
+        }
+        let ingress_credit = body
+            .ingress_bytes
+            .saturating_sub(self.observed_ingress_bytes);
+        let egress_credit = body.egress_bytes.saturating_sub(self.observed_egress_bytes);
+        if ingress_credit > self.max_credit_bytes || egress_credit > self.max_credit_bytes {
+            return Err(VpnBackendBridgeError::UsageVoucher(format!(
+                "voucher byte credit exceeds the configured per-direction limit of {}B",
+                self.max_credit_bytes
+            )));
+        }
+        let active_credit = body.active_ms.saturating_sub(observed_active_ms);
+        if !self.has_voucher && active_credit > self.max_credit_active_ms {
+            return Err(VpnBackendBridgeError::UsageVoucher(format!(
+                "initial voucher active-time credit exceeds the configured limit of {}ms",
+                self.max_credit_active_ms
+            )));
+        }
+        if !self.has_voucher
+            && (body.ingress_bytes == 0 || body.egress_bytes == 0 || body.active_ms == 0)
+        {
+            return Err(VpnBackendBridgeError::UsageVoucher(
+                "initial voucher must preauthorize non-zero ingress, egress, and active-time credit"
+                    .to_owned(),
+            ));
+        }
+        if envelope.fee_ceiling > self.tariff.lease_fee {
+            return Err(VpnBackendBridgeError::UsageVoucher(
+                "voucher fee ceiling exceeds the escrowed helper-ticket lease fee".to_owned(),
+            ));
+        }
+        if envelope.fee_ceiling < self.authorized_fee_ceiling {
+            return Err(VpnBackendBridgeError::UsageVoucher(
+                "voucher fee ceiling must be cumulative".to_string(),
+            ));
+        }
+        let fee_ceiling = self.tariff.fee_ceiling(body).map_err(|error| {
             VpnBackendBridgeError::UsageVoucher(format!(
                 "voucher tariff arithmetic failed: {error}"
             ))
         })?;
-        if envelope.earned_fee != earned_fee {
+        if envelope.fee_ceiling != fee_ceiling {
             return Err(VpnBackendBridgeError::UsageVoucher(
-                "voucher earned fee does not match helper ticket tariff".to_string(),
+                "voucher fee ceiling does not match helper ticket tariff".to_string(),
             ));
         }
         self.has_voucher = true;
         self.highest_sequence = body.sequence;
-        self.vouched_ingress_bytes = body.ingress_bytes;
-        self.vouched_egress_bytes = body.egress_bytes;
-        self.vouched_earned_fee = earned_fee.clone();
-        self.ensure_within_window()?;
+        self.authorized_ingress_bytes = body.ingress_bytes;
+        self.authorized_egress_bytes = body.egress_bytes;
+        self.signed_active_ms = body.active_ms;
+        // Helper time starts before backend readiness, so later vouchers can
+        // include unused setup time. Honor at most one configured window ahead
+        // of relay-observed service while retaining the full signed ceiling for
+        // monotonic settlement verification.
+        self.authorized_active_ms = body
+            .active_ms
+            .min(observed_active_ms.saturating_add(self.max_credit_active_ms));
+        self.authorized_fee_ceiling = fee_ceiling.clone();
+        self.last_issued_at_ms = Some(body.issued_at_ms);
         Ok(VpnUsageVoucherEnvelopeV1 {
             voucher: voucher.clone(),
-            earned_fee,
+            fee_ceiling,
         })
     }
-    fn ensure_within_window(&self) -> Result<(), VpnBackendBridgeError> {
-        let observed = self
-            .observed_ingress_bytes
-            .saturating_add(self.observed_egress_bytes);
-        let vouched = self
-            .vouched_ingress_bytes
-            .saturating_add(self.vouched_egress_bytes);
-        let debt = observed.saturating_sub(vouched);
-        if debt > self.max_unvouched_bytes {
+    fn ensure_authorized(
+        &self,
+        ingress_bytes: u64,
+        egress_bytes: u64,
+    ) -> Result<(), VpnBackendBridgeError> {
+        let active_ms = self.observed_active_ms();
+        if ingress_bytes > self.authorized_ingress_bytes {
             return Err(VpnBackendBridgeError::UsageVoucher(format!(
-                "unvouched vpn usage debt {debt}B exceeds {}B",
-                self.max_unvouched_bytes
+                "vpn ingress packet would exceed the signed prepaid ceiling of {}B",
+                self.authorized_ingress_bytes
+            )));
+        }
+        if egress_bytes > self.authorized_egress_bytes {
+            return Err(VpnBackendBridgeError::UsageVoucher(format!(
+                "vpn egress packet would exceed the signed prepaid ceiling of {}B",
+                self.authorized_egress_bytes
+            )));
+        }
+        if active_ms >= self.authorized_active_ms {
+            return Err(VpnBackendBridgeError::UsageVoucher(format!(
+                "vpn service time reached the signed prepaid ceiling of {}ms",
+                self.authorized_active_ms
             )));
         }
         Ok(())
     }
+}
+#[derive(Debug, Default)]
+struct VpnPacketStreamDecoder {
+    buffer: Vec<u8>,
+    expected_len: Option<usize>,
+}
+impl VpnPacketStreamDecoder {
+    fn ingest(
+        &mut self,
+        framed: &[u8],
+        max_packet_len: usize,
+    ) -> Result<Vec<Vec<u8>>, VpnBackendBridgeError> {
+        self.buffer.extend_from_slice(framed);
+        let mut packets = Vec::new();
+        loop {
+            if self.expected_len.is_none() {
+                if self.buffer.len() < 2 {
+                    break;
+                }
+                let packet_len = usize::from(u16::from_be_bytes([self.buffer[0], self.buffer[1]]));
+                self.buffer.drain(..2);
+                if packet_len == 0 || packet_len > max_packet_len {
+                    self.buffer.clear();
+                    return Err(VpnBackendBridgeError::BackendControl(format!(
+                        "vpn packet-stream frame length {packet_len} is outside 1..={max_packet_len}"
+                    )));
+                }
+                self.expected_len = Some(packet_len);
+            }
+            let packet_len = self
+                .expected_len
+                .expect("packet length is established before payload decoding");
+            if self.buffer.len() < packet_len {
+                break;
+            }
+            packets.push(self.buffer.drain(..packet_len).collect());
+            self.expected_len = None;
+        }
+        Ok(packets)
+    }
+}
+fn encode_vpn_packet_stream_frame(packet: &[u8]) -> Result<Vec<u8>, VpnBackendBridgeError> {
+    let packet_len = u16::try_from(packet.len()).map_err(|_| {
+        VpnBackendBridgeError::BackendControl(format!(
+            "vpn packet length {} exceeds the first-release framing limit",
+            packet.len()
+        ))
+    })?;
+    let mut framed = Vec::with_capacity(2 + packet.len());
+    framed.extend_from_slice(&packet_len.to_be_bytes());
+    framed.extend_from_slice(packet);
+    Ok(framed)
 }
 fn decode_usage_voucher_control(
     payload: &[u8],
@@ -836,10 +1067,29 @@ fn decode_usage_voucher_control(
     }
     Ok(Some(envelope))
 }
+async fn accept_initial_usage_voucher<R: AsyncRead + Unpin>(
+    adapter: &VpnAdapter,
+    vpn_reader: &mut R,
+) -> Result<VpnUsageVoucherEnvelopeV1, VpnBackendBridgeError> {
+    let cell = adapter.read_ingress_frame(vpn_reader).await?;
+    if cell.header.class != VpnCellClassV1::Control {
+        return Err(VpnBackendBridgeError::UsageVoucher(
+            "the first VPN tunnel cell must be a prepaid usage voucher".to_owned(),
+        ));
+    }
+    let envelope = decode_usage_voucher_control(&cell.payload)?.ok_or_else(|| {
+        VpnBackendBridgeError::UsageVoucher(
+            "the first VPN tunnel control cell must carry a prepaid usage voucher".to_owned(),
+        )
+    })?;
+    Ok(envelope)
+}
 #[derive(Debug, Clone, Encode, Decode, PartialEq, Eq)]
 struct VpnBackendBootstrap {
     session_id_hex: String,
     server_tunnel_addresses: Vec<String>,
+    client_ipv4_address: [u8; 4],
+    client_ipv6_address: [u8; 16],
     session_routes: Vec<String>,
     mtu_bytes: u16,
 }
@@ -850,13 +1100,17 @@ struct VpnBackendBootstrapEnvelope {
     nonce: [u8; 16],
     mac: [u8; 32],
 }
-#[derive(Debug, Clone, norito::derive::JsonSerialize, norito::derive::JsonDeserialize)]
+#[derive(
+    Debug, Clone, PartialEq, Eq, norito::derive::JsonSerialize, norito::derive::JsonDeserialize,
+)]
 struct VpnSettlementSubmitRequestArtifact {
     relay_receipt_hex: String,
     client_voucher_hex: String,
     lease_id_hex: String,
 }
-#[derive(Debug, Clone, norito::derive::JsonSerialize, norito::derive::JsonDeserialize)]
+#[derive(
+    Debug, Clone, PartialEq, Eq, norito::derive::JsonSerialize, norito::derive::JsonDeserialize,
+)]
 struct VpnSettlementSpoolRecord {
     version: u8,
     generated_at_ms: u64,
@@ -866,6 +1120,38 @@ struct VpnSettlementSpoolRecord {
     earned_fee: Quantity,
     torii_receipt_path: String,
     submit_receipt_request: VpnSettlementSubmitRequestArtifact,
+}
+#[derive(Debug, Clone, norito::derive::JsonSerialize, norito::derive::JsonDeserialize)]
+struct VpnSettlementWalRecord {
+    version: u8,
+    phase: String,
+    helper_ticket_replay_id_hex: String,
+    valid_after_ms: u64,
+    expires_at_ms: u64,
+    tariff: VpnTariffV1,
+    reserved_settlement: VpnSettlementSpoolRecord,
+}
+#[derive(Debug, Clone, Copy)]
+enum VpnSettlementWalPhase {
+    PreService,
+    ServiceReserved,
+    Finalizing,
+}
+impl VpnSettlementWalPhase {
+    const fn as_str(self) -> &'static str {
+        match self {
+            Self::PreService => "pre_service",
+            Self::ServiceReserved => "service_reserved",
+            Self::Finalizing => "finalizing",
+        }
+    }
+}
+#[derive(Debug)]
+struct VpnSettlementStore {
+    spool_dir: PathBuf,
+    _owner_lock: fs::File,
+    operation: StdMutex<()>,
+    poisoned: AtomicBool,
 }
 fn unix_time_ms(time: SystemTime) -> u64 {
     time.duration_since(UNIX_EPOCH)
@@ -882,13 +1168,13 @@ fn vpn_settlement_spool_record(
 ) -> VpnSettlementSpoolRecord {
     let relay_receipt_hex = hex::encode(artifact.receipt.encode());
     let client_voucher_hex = hex::encode(artifact.voucher.encode());
-    let lease_id_hex = hex::encode(artifact.receipt.quote_id);
+    let lease_id_hex = hex::encode(artifact.lease_id);
     VpnSettlementSpoolRecord {
         version: 1,
         generated_at_ms,
-        session_id_hex: hex::encode(artifact.receipt.session_id),
-        quote_id_hex: lease_id_hex.clone(),
-        payment_tx_hash_hex: hex::encode(artifact.receipt.payment_tx_hash),
+        session_id_hex: hex::encode(artifact.receipt.receipt.session_id),
+        quote_id_hex: hex::encode(artifact.receipt.receipt.quote_id),
+        payment_tx_hash_hex: hex::encode(artifact.receipt.receipt.payment_tx_hash),
         earned_fee: artifact.earned_fee.clone(),
         torii_receipt_path: "/v1/vpn/receipts".to_owned(),
         submit_receipt_request: VpnSettlementSubmitRequestArtifact {
@@ -898,54 +1184,677 @@ fn vpn_settlement_spool_record(
         },
     }
 }
-fn spool_vpn_settlement_artifact(
-    spool_dir: &Path,
+fn vpn_settlement_wal_record(
+    session: &VpnSessionHandle,
     artifact: &VpnSettlementArtifact,
-) -> Result<PathBuf, String> {
-    fs::create_dir_all(spool_dir).map_err(|error| {
-        format!(
-            "failed to create vpn receipt spool directory `{}`: {error}",
-            spool_dir.display()
-        )
-    })?;
-    let generated_at_ms = unix_time_ms_for_artifact();
-    let record = vpn_settlement_spool_record(artifact, generated_at_ms);
-    let file_name = format!(
-        "vpn-settlement-{}-seq{}-{}.json",
-        record.session_id_hex, artifact.voucher.body.sequence, generated_at_ms
-    );
-    let path = spool_dir.join(file_name);
-    let bytes = norito::json::to_vec_pretty(&record)
-        .map_err(|error| format!("failed to encode vpn settlement artifact JSON: {error}"))?;
-    if bytes.len().saturating_add(1) > VPN_SETTLEMENT_SPOOL_MAX_BYTES_V1 {
-        return Err(format!(
-            "vpn settlement artifact is {} bytes; first-release limit is {VPN_SETTLEMENT_SPOOL_MAX_BYTES_V1} bytes",
-            bytes.len().saturating_add(1)
-        ));
-    }
-    let mut file = fs::OpenOptions::new()
+    phase: VpnSettlementWalPhase,
+) -> Result<VpnSettlementWalRecord, String> {
+    let tariff = session
+        .tariff()
+        .cloned()
+        .ok_or_else(|| "vpn settlement WAL is missing the signed session tariff".to_owned())?;
+    Ok(VpnSettlementWalRecord {
+        version: 1,
+        phase: phase.as_str().to_owned(),
+        helper_ticket_replay_id_hex: hex::encode(vpn_helper_ticket_replay_id_from_parts(
+            &artifact.receipt.receipt.relay_id,
+            &artifact.receipt.receipt.session_id,
+        )),
+        valid_after_ms: session.valid_after_ms(),
+        expires_at_ms: session.expires_at_ms(),
+        tariff,
+        reserved_settlement: vpn_settlement_spool_record(artifact, unix_time_ms_for_artifact()),
+    })
+}
+#[cfg(unix)]
+fn create_private_vpn_spool_file(path: &Path) -> io::Result<fs::File> {
+    use std::os::unix::fs::{MetadataExt as _, OpenOptionsExt as _, PermissionsExt as _};
+
+    let file = fs::OpenOptions::new()
         .write(true)
         .create_new(true)
-        .open(&path)
+        .mode(0o600)
+        .custom_flags(config::O_NOFOLLOW_FLAG)
+        .open(path)?;
+    let metadata = file.metadata()?;
+    if !metadata.is_file()
+        || metadata.uid() != config::effective_uid()?
+        || metadata.nlink() != 1
+        || metadata.permissions().mode() & 0o777 != 0o600
+    {
+        return Err(io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            "VPN settlement artifact must be an owner-owned, single-link regular file with mode 0600",
+        ));
+    }
+    Ok(file)
+}
+#[cfg(not(unix))]
+fn create_private_vpn_spool_file(_path: &Path) -> io::Result<fs::File> {
+    Err(io::Error::new(
+        io::ErrorKind::Unsupported,
+        "secure VPN settlement spooling requires Unix filesystem custody guarantees",
+    ))
+}
+#[cfg(unix)]
+fn open_private_vpn_spool_lock(path: &Path) -> io::Result<fs::File> {
+    use std::os::unix::fs::{MetadataExt as _, OpenOptionsExt as _, PermissionsExt as _};
+
+    let file = fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create(true)
+        .truncate(false)
+        .mode(0o600)
+        .custom_flags(config::O_NOFOLLOW_FLAG)
+        .open(path)?;
+    let metadata = file.metadata()?;
+    if !metadata.is_file()
+        || metadata.uid() != config::effective_uid()?
+        || metadata.nlink() != 1
+        || metadata.permissions().mode() & 0o777 != 0o600
+    {
+        return Err(io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            "VPN settlement owner lock must be an owner-owned, single-link regular file with mode 0600",
+        ));
+    }
+    file.try_lock().map_err(|error| {
+        io::Error::other(format!(
+            "failed to acquire exclusive VPN settlement spool ownership: {error}"
+        ))
+    })?;
+    let metadata = file.metadata()?;
+    let path_metadata = fs::symlink_metadata(path)?;
+    if !metadata.is_file()
+        || metadata.uid() != config::effective_uid()?
+        || metadata.nlink() != 1
+        || metadata.permissions().mode() & 0o777 != 0o600
+        || path_metadata.dev() != metadata.dev()
+        || path_metadata.ino() != metadata.ino()
+    {
+        return Err(io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            "VPN settlement owner lock changed identity during acquisition",
+        ));
+    }
+    Ok(file)
+}
+#[cfg(not(unix))]
+fn open_private_vpn_spool_lock(_path: &Path) -> io::Result<fs::File> {
+    Err(io::Error::new(
+        io::ErrorKind::Unsupported,
+        "secure VPN settlement spool ownership requires Unix file locks",
+    ))
+}
+fn sync_vpn_spool_directory(spool_dir: &Path) -> Result<(), String> {
+    fs::File::open(spool_dir)
+        .and_then(|directory| directory.sync_all())
         .map_err(|error| {
             format!(
-                "failed to create vpn settlement artifact `{}`: {error}",
-                path.display()
+                "failed to sync vpn settlement spool directory `{}`: {error}",
+                spool_dir.display()
+            )
+        })
+}
+fn private_vpn_spool_file_exists(path: &Path) -> Result<bool, String> {
+    match fs::symlink_metadata(path) {
+        Ok(metadata) => {
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::{MetadataExt as _, PermissionsExt as _};
+                if !metadata.is_file()
+                    || metadata.uid()
+                        != config::effective_uid().map_err(|error| error.to_string())?
+                    || metadata.nlink() != 1
+                    || metadata.permissions().mode() & 0o777 != 0o600
+                {
+                    return Err(format!(
+                        "vpn settlement path `{}` is not an owner-owned, single-link regular file with mode 0600",
+                        path.display()
+                    ));
+                }
+            }
+            #[cfg(not(unix))]
+            {
+                let _ = metadata;
+                return Err(
+                    "secure VPN settlement file validation requires Unix custody guarantees"
+                        .to_owned(),
+                );
+            }
+            Ok(true)
+        }
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(false),
+        Err(error) => Err(format!(
+            "failed to inspect vpn settlement path `{}`: {error}",
+            path.display()
+        )),
+    }
+}
+fn vpn_settlement_json_bytes<T: norito::json::JsonSerialize>(value: &T) -> Result<Vec<u8>, String> {
+    let mut bytes = norito::json::to_vec_pretty(value)
+        .map_err(|error| format!("failed to encode vpn settlement JSON: {error}"))?;
+    bytes.push(b'\n');
+    if bytes.len() > VPN_SETTLEMENT_SPOOL_MAX_BYTES_V1 {
+        return Err(format!(
+            "vpn settlement record is {} bytes; first-release limit is {VPN_SETTLEMENT_SPOOL_MAX_BYTES_V1} bytes",
+            bytes.len()
+        ));
+    }
+    Ok(bytes)
+}
+fn write_private_vpn_spool_file_atomically(
+    spool_dir: &Path,
+    destination: &Path,
+    bytes: &[u8],
+) -> Result<(), String> {
+    let sequence = VPN_SETTLEMENT_TEMP_SEQUENCE.fetch_add(1, Ordering::Relaxed);
+    let timestamp = unix_time_ms_for_artifact();
+    let temp_path = spool_dir.join(format!(
+        "{VPN_SETTLEMENT_TEMP_PREFIX_V1}{timestamp}-{sequence}.tmp"
+    ));
+    let write_result = (|| {
+        let mut file = create_private_vpn_spool_file(&temp_path).map_err(|error| {
+            format!(
+                "failed to create vpn settlement temporary file `{}`: {error}",
+                temp_path.display()
             )
         })?;
-    file.write_all(&bytes).map_err(|error| {
-        format!(
-            "failed to write vpn settlement artifact `{}`: {error}",
-            path.display()
-        )
+        file.write_all(bytes).map_err(|error| {
+            format!(
+                "failed to write vpn settlement temporary file `{}`: {error}",
+                temp_path.display()
+            )
+        })?;
+        file.sync_all().map_err(|error| {
+            format!(
+                "failed to sync vpn settlement temporary file `{}`: {error}",
+                temp_path.display()
+            )
+        })?;
+        drop(file);
+        fs::rename(&temp_path, destination).map_err(|error| {
+            format!(
+                "failed to atomically install vpn settlement file `{}`: {error}",
+                destination.display()
+            )
+        })?;
+        sync_vpn_spool_directory(spool_dir)
+    })();
+    if let Err(error) = write_result {
+        if private_vpn_spool_file_exists(&temp_path).unwrap_or(false) {
+            let _ = fs::remove_file(&temp_path);
+            let _ = sync_vpn_spool_directory(spool_dir);
+        }
+        return Err(error);
+    }
+    Ok(())
+}
+fn vpn_settlement_wal_path(spool_dir: &Path, record: &VpnSettlementSpoolRecord) -> PathBuf {
+    spool_dir.join(format!(
+        "{VPN_SETTLEMENT_WAL_PREFIX_V1}{}-{}-{}{VPN_SETTLEMENT_WAL_SUFFIX_V1}",
+        record.session_id_hex, record.quote_id_hex, record.submit_receipt_request.lease_id_hex,
+    ))
+}
+fn vpn_settlement_final_path(
+    spool_dir: &Path,
+    record: &VpnSettlementSpoolRecord,
+    voucher_sequence: u64,
+) -> PathBuf {
+    spool_dir.join(format!(
+        "vpn-settlement-{}-{}-{}-seq{voucher_sequence}.json",
+        record.session_id_hex, record.quote_id_hex, record.submit_receipt_request.lease_id_hex,
+    ))
+}
+fn decode_vpn_spool_payload(
+    record: &VpnSettlementSpoolRecord,
+) -> Result<(VpnSignedSessionReceiptV1, VpnUsageVoucherV1, [u8; 32]), String> {
+    let receipt_bytes = hex::decode(&record.submit_receipt_request.relay_receipt_hex)
+        .map_err(|error| format!("vpn settlement receipt hex is invalid: {error}"))?;
+    let voucher_bytes = hex::decode(&record.submit_receipt_request.client_voucher_hex)
+        .map_err(|error| format!("vpn settlement voucher hex is invalid: {error}"))?;
+    let lease_bytes = hex::decode(&record.submit_receipt_request.lease_id_hex)
+        .map_err(|error| format!("vpn settlement lease id hex is invalid: {error}"))?;
+    let mut receipt_input = receipt_bytes.as_slice();
+    let receipt = VpnSignedSessionReceiptV1::decode(&mut receipt_input)
+        .map_err(|error| format!("vpn settlement receipt decode failed: {error}"))?;
+    if !receipt_input.is_empty() {
+        return Err("vpn settlement receipt has trailing bytes".to_owned());
+    }
+    let mut voucher_input = voucher_bytes.as_slice();
+    let voucher = VpnUsageVoucherV1::decode(&mut voucher_input)
+        .map_err(|error| format!("vpn settlement voucher decode failed: {error}"))?;
+    if !voucher_input.is_empty() {
+        return Err("vpn settlement voucher has trailing bytes".to_owned());
+    }
+    let lease_id: [u8; 32] = lease_bytes
+        .try_into()
+        .map_err(|_| "vpn settlement lease id must be exactly 32 bytes".to_owned())?;
+    Ok((receipt, voucher, lease_id))
+}
+fn validate_vpn_settlement_wal(
+    wal: &VpnSettlementWalRecord,
+) -> Result<(VpnSignedSessionReceiptV1, VpnUsageVoucherV1), String> {
+    if wal.version != 1 {
+        return Err("vpn settlement WAL version must be exactly 1".to_owned());
+    }
+    if !matches!(
+        wal.phase.as_str(),
+        "pre_service" | "service_reserved" | "finalizing"
+    ) {
+        return Err("vpn settlement WAL phase is not recognized".to_owned());
+    }
+    if wal.valid_after_ms >= wal.expires_at_ms {
+        return Err("vpn settlement WAL has an empty signed time window".to_owned());
+    }
+    let record = &wal.reserved_settlement;
+    if record.version != 1 || record.torii_receipt_path != "/v1/vpn/receipts" {
+        return Err("vpn settlement WAL carries an invalid submit target".to_owned());
+    }
+    let (signed_receipt, voucher, lease_id) = decode_vpn_spool_payload(record)?;
+    if record.submit_receipt_request.lease_id_hex != hex::encode(lease_id) {
+        return Err("vpn settlement WAL lease id is not canonical".to_owned());
+    }
+    voucher
+        .verify()
+        .map_err(|error| format!("vpn settlement WAL voucher signature is invalid: {error}"))?;
+    signed_receipt.verify().map_err(|error| {
+        format!("vpn settlement WAL relay receipt signature is invalid: {error}")
     })?;
-    file.write_all(b"\n").map_err(|error| {
-        format!(
-            "failed to finalize vpn settlement artifact `{}`: {error}",
-            path.display()
+    let receipt = &signed_receipt.receipt;
+    let active_ms = receipt
+        .ended_at_ms
+        .checked_sub(receipt.started_at_ms)
+        .ok_or_else(|| "vpn settlement WAL receipt interval is inverted".to_owned())?;
+    if receipt.started_at_ms < wal.valid_after_ms || receipt.ended_at_ms > wal.expires_at_ms {
+        return Err("vpn settlement WAL receipt falls outside the signed ticket window".to_owned());
+    }
+    if voucher.body.issued_at_ms < wal.valid_after_ms
+        || voucher.body.issued_at_ms >= wal.expires_at_ms
+        || voucher.body.issued_at_ms > receipt.ended_at_ms
+    {
+        return Err("vpn settlement WAL voucher timestamp is not consensus-valid".to_owned());
+    }
+    if receipt.session_id != voucher.body.session_id
+        || receipt.quote_id != voucher.body.quote_id
+        || receipt.relay_id != voucher.body.relay_id
+    {
+        return Err("vpn settlement WAL receipt/voucher identity mismatch".to_owned());
+    }
+    if record.session_id_hex != hex::encode(receipt.session_id)
+        || record.quote_id_hex != hex::encode(receipt.quote_id)
+        || record.payment_tx_hash_hex != hex::encode(receipt.payment_tx_hash)
+    {
+        return Err("vpn settlement WAL metadata does not match its receipt".to_owned());
+    }
+    if receipt.client_voucher_hash != voucher.hash()
+        || receipt.highest_voucher_sequence != voucher.body.sequence
+    {
+        return Err("vpn settlement WAL does not commit to its embedded voucher".to_owned());
+    }
+    if !voucher
+        .body
+        .authorizes(receipt.ingress_bytes, receipt.egress_bytes, active_ms)
+    {
+        return Err("vpn settlement WAL usage exceeds the signed prepaid ceilings".to_owned());
+    }
+    let expected_uptime = u32::try_from(active_ms.div_ceil(1_000))
+        .map_err(|_| "vpn settlement WAL active time exceeds receipt range".to_owned())?;
+    if receipt.uptime_secs != expected_uptime || receipt.cover_bytes != 0 {
+        return Err("vpn settlement WAL receipt accounting is not canonical".to_owned());
+    }
+    if receipt.meter_hash != vpn_tariff_meter_hash_v1(&wal.tariff) {
+        return Err("vpn settlement WAL tariff commitment mismatch".to_owned());
+    }
+    let earned_fee = wal
+        .tariff
+        .fee_for_usage(receipt.ingress_bytes, receipt.egress_bytes, active_ms)
+        .map_err(|error| format!("vpn settlement WAL tariff arithmetic failed: {error}"))?;
+    if receipt.earned_fee != earned_fee || record.earned_fee != earned_fee {
+        return Err(
+            "vpn settlement WAL earned fee does not match actual reserved usage".to_owned(),
+        );
+    }
+    match wal.phase.as_str() {
+        "pre_service"
+            if receipt.ingress_bytes != 0
+                || receipt.egress_bytes != 0
+                || active_ms != 0
+                || receipt.uptime_secs != 0
+                || !receipt.earned_fee.is_zero()
+                || receipt.started_at_ms != voucher.body.issued_at_ms =>
+        {
+            return Err(
+                "pre-service VPN settlement WAL must reserve exactly zero usage and fee".to_owned(),
+            );
+        }
+        "service_reserved"
+            if receipt.ingress_bytes != voucher.body.ingress_bytes
+                || receipt.egress_bytes != voucher.body.egress_bytes
+                || active_ms == 0 =>
+        {
+            return Err(
+                "service-reserved VPN settlement WAL must retain the exact signed byte ceilings and non-zero time credit"
+                    .to_owned(),
+            );
+        }
+        _ => {}
+    }
+    let replay_id = vpn_helper_ticket_replay_id_from_parts(&receipt.relay_id, &receipt.session_id);
+    if wal.helper_ticket_replay_id_hex != hex::encode(replay_id) {
+        return Err("vpn settlement WAL replay identifier mismatch".to_owned());
+    }
+    Ok((signed_receipt, voucher))
+}
+impl VpnSettlementStore {
+    fn open(
+        spool_dir: &Path,
+        replay_ledger: &StdMutex<PersistentReplayLedger>,
+    ) -> Result<Self, String> {
+        let spool_dir = config::trusted_private_directory_path(
+            spool_dir,
+            "VPN settlement receipt spool directory",
         )
-    })?;
-    Ok(path)
+        .map_err(|error| {
+            format!(
+                "vpn receipt spool directory `{}` is not secure: {error}",
+                spool_dir.display()
+            )
+        })?;
+        let owner_lock_path = spool_dir.join(VPN_SETTLEMENT_OWNER_LOCK_V1);
+        let owner_lock = open_private_vpn_spool_lock(&owner_lock_path).map_err(|error| {
+            format!(
+                "failed to open vpn settlement owner lock `{}`: {error}",
+                owner_lock_path.display()
+            )
+        })?;
+        owner_lock.sync_all().map_err(|error| {
+            format!(
+                "failed to sync vpn settlement owner lock `{}`: {error}",
+                owner_lock_path.display()
+            )
+        })?;
+        sync_vpn_spool_directory(&spool_dir)?;
+        let store = Self {
+            spool_dir,
+            _owner_lock: owner_lock,
+            operation: StdMutex::new(()),
+            poisoned: AtomicBool::new(false),
+        };
+        store.recover(replay_ledger)?;
+        Ok(store)
+    }
+    fn ensure_healthy(&self) -> Result<(), String> {
+        if self.poisoned.load(Ordering::Acquire) {
+            Err("vpn settlement persistence is poisoned; refusing further service".to_owned())
+        } else {
+            Ok(())
+        }
+    }
+    fn poison<T>(&self, error: String) -> Result<T, String> {
+        self.poisoned.store(true, Ordering::Release);
+        Err(error)
+    }
+    fn operation_guard(&self) -> Result<std::sync::MutexGuard<'_, ()>, String> {
+        self.ensure_healthy()?;
+        self.operation.lock().map_err(|_| {
+            self.poisoned.store(true, Ordering::Release);
+            "vpn settlement persistence operation lock is poisoned".to_owned()
+        })
+    }
+    fn write_initial_reservation(
+        &self,
+        session: &VpnSessionHandle,
+        artifact: &VpnSettlementArtifact,
+    ) -> Result<PathBuf, String> {
+        let _guard = self.operation_guard()?;
+        let wal = vpn_settlement_wal_record(session, artifact, VpnSettlementWalPhase::PreService)?;
+        let path = vpn_settlement_wal_path(&self.spool_dir, &wal.reserved_settlement);
+        if private_vpn_spool_file_exists(&path)? {
+            return Err(format!(
+                "vpn settlement WAL `{}` already owns this session",
+                path.display()
+            ));
+        }
+        let bytes = vpn_settlement_json_bytes(&wal)?;
+        if let Err(error) = write_private_vpn_spool_file_atomically(&self.spool_dir, &path, &bytes)
+        {
+            return self.poison(error);
+        }
+        Ok(path)
+    }
+    fn replace_reservation(
+        &self,
+        session: &VpnSessionHandle,
+        artifact: &VpnSettlementArtifact,
+        phase: VpnSettlementWalPhase,
+    ) -> Result<PathBuf, String> {
+        let _guard = self.operation_guard()?;
+        let wal = vpn_settlement_wal_record(session, artifact, phase)?;
+        let path = vpn_settlement_wal_path(&self.spool_dir, &wal.reserved_settlement);
+        match private_vpn_spool_file_exists(&path) {
+            Ok(true) => {}
+            Ok(false) => {
+                return self.poison(format!(
+                    "vpn settlement WAL `{}` disappeared before durable advancement",
+                    path.display()
+                ));
+            }
+            Err(error) => return self.poison(error),
+        }
+        let bytes = vpn_settlement_json_bytes(&wal)?;
+        if let Err(error) = write_private_vpn_spool_file_atomically(&self.spool_dir, &path, &bytes)
+        {
+            return self.poison(error);
+        }
+        Ok(path)
+    }
+    fn discard_initial_reservation(&self, path: &Path) -> Result<(), String> {
+        let _guard = self.operation_guard()?;
+        match private_vpn_spool_file_exists(path) {
+            Ok(true) => {}
+            Ok(false) => return Ok(()),
+            Err(error) => return self.poison(error),
+        }
+        if let Err(error) = fs::remove_file(path) {
+            return self.poison(format!(
+                "failed to remove unredeemed vpn settlement WAL `{}`: {error}",
+                path.display()
+            ));
+        }
+        if let Err(error) = sync_vpn_spool_directory(&self.spool_dir) {
+            return self.poison(error);
+        }
+        Ok(())
+    }
+    fn finalize(
+        &self,
+        session: &VpnSessionHandle,
+        artifact: &VpnSettlementArtifact,
+    ) -> Result<PathBuf, String> {
+        let _guard = self.operation_guard()?;
+        let wal = vpn_settlement_wal_record(session, artifact, VpnSettlementWalPhase::Finalizing)?;
+        let wal_path = vpn_settlement_wal_path(&self.spool_dir, &wal.reserved_settlement);
+        match private_vpn_spool_file_exists(&wal_path) {
+            Ok(true) => {}
+            Ok(false) => {
+                return self.poison(format!(
+                    "vpn settlement WAL `{}` is missing at finalization",
+                    wal_path.display()
+                ));
+            }
+            Err(error) => return self.poison(error),
+        }
+        let wal_bytes = vpn_settlement_json_bytes(&wal)?;
+        if let Err(error) =
+            write_private_vpn_spool_file_atomically(&self.spool_dir, &wal_path, &wal_bytes)
+        {
+            return self.poison(error);
+        }
+        let final_path = vpn_settlement_final_path(
+            &self.spool_dir,
+            &wal.reserved_settlement,
+            artifact.voucher.body.sequence,
+        );
+        match private_vpn_spool_file_exists(&final_path) {
+            Ok(false) => {
+                let final_bytes = vpn_settlement_json_bytes(&wal.reserved_settlement)?;
+                if let Err(error) = write_private_vpn_spool_file_atomically(
+                    &self.spool_dir,
+                    &final_path,
+                    &final_bytes,
+                ) {
+                    return self.poison(error);
+                }
+            }
+            Ok(true) => {
+                let existing = read_bounded_private_regular_file(
+                    &final_path,
+                    VPN_SETTLEMENT_SPOOL_MAX_BYTES_V1,
+                    "VPN settlement final artifact",
+                )
+                .map_err(|error| error.to_string())?;
+                let existing: VpnSettlementSpoolRecord = norito::json::from_slice(&existing)
+                    .map_err(|error| {
+                        format!("existing vpn settlement final artifact is invalid: {error}")
+                    })?;
+                if existing != wal.reserved_settlement {
+                    return self.poison(format!(
+                        "vpn settlement final artifact `{}` conflicts with the WAL",
+                        final_path.display()
+                    ));
+                }
+            }
+            Err(error) => return self.poison(error),
+        }
+        if let Err(error) = fs::remove_file(&wal_path) {
+            return self.poison(format!(
+                "failed to remove finalized vpn settlement WAL `{}`: {error}",
+                wal_path.display()
+            ));
+        }
+        if let Err(error) = sync_vpn_spool_directory(&self.spool_dir) {
+            return self.poison(error);
+        }
+        Ok(final_path)
+    }
+    fn recover(&self, replay_ledger: &StdMutex<PersistentReplayLedger>) -> Result<(), String> {
+        let mut wal_paths = Vec::new();
+        let mut temp_paths = Vec::new();
+        for entry in fs::read_dir(&self.spool_dir).map_err(|error| {
+            format!(
+                "failed to enumerate vpn settlement spool `{}`: {error}",
+                self.spool_dir.display()
+            )
+        })? {
+            let entry = entry.map_err(|error| {
+                format!("failed to inspect vpn settlement spool entry: {error}")
+            })?;
+            let name = entry.file_name();
+            let Some(name) = name.to_str() else {
+                continue;
+            };
+            if name.starts_with(VPN_SETTLEMENT_WAL_PREFIX_V1)
+                && name.ends_with(VPN_SETTLEMENT_WAL_SUFFIX_V1)
+            {
+                wal_paths.push(entry.path());
+            } else if name.starts_with(VPN_SETTLEMENT_TEMP_PREFIX_V1) && name.ends_with(".tmp") {
+                temp_paths.push(entry.path());
+            }
+        }
+        wal_paths.sort();
+        temp_paths.sort();
+        for path in temp_paths {
+            private_vpn_spool_file_exists(&path)?;
+            fs::remove_file(&path).map_err(|error| {
+                format!(
+                    "failed to remove interrupted vpn settlement temporary file `{}`: {error}",
+                    path.display()
+                )
+            })?;
+            sync_vpn_spool_directory(&self.spool_dir)?;
+        }
+        for wal_path in wal_paths {
+            let bytes = read_bounded_private_regular_file(
+                &wal_path,
+                VPN_SETTLEMENT_SPOOL_MAX_BYTES_V1,
+                "VPN settlement recovery WAL",
+            )
+            .map_err(|error| {
+                format!(
+                    "failed to read vpn settlement recovery WAL `{}`: {error}",
+                    wal_path.display()
+                )
+            })?;
+            let wal: VpnSettlementWalRecord =
+                norito::json::from_slice(&bytes).map_err(|error| {
+                    format!(
+                        "failed to decode vpn settlement recovery WAL `{}`: {error}",
+                        wal_path.display()
+                    )
+                })?;
+            let (signed_receipt, voucher) = validate_vpn_settlement_wal(&wal)?;
+            let receipt = &signed_receipt.receipt;
+            let expected_wal = vpn_settlement_wal_path(&self.spool_dir, &wal.reserved_settlement);
+            if wal_path != expected_wal {
+                return Err(format!(
+                    "vpn settlement WAL filename `{}` does not match its authenticated session metadata",
+                    wal_path.display()
+                ));
+            }
+            recover_vpn_helper_ticket_replay(
+                replay_ledger,
+                vpn_helper_ticket_replay_id_from_parts(&receipt.relay_id, &receipt.session_id),
+                wal.expires_at_ms,
+                unix_time_ms(SystemTime::now()),
+            )?;
+            let final_path = vpn_settlement_final_path(
+                &self.spool_dir,
+                &wal.reserved_settlement,
+                voucher.body.sequence,
+            );
+            match private_vpn_spool_file_exists(&final_path) {
+                Ok(false) => {
+                    let final_bytes = vpn_settlement_json_bytes(&wal.reserved_settlement)?;
+                    write_private_vpn_spool_file_atomically(
+                        &self.spool_dir,
+                        &final_path,
+                        &final_bytes,
+                    )?;
+                }
+                Ok(true) => {
+                    let existing = read_bounded_private_regular_file(
+                        &final_path,
+                        VPN_SETTLEMENT_SPOOL_MAX_BYTES_V1,
+                        "VPN settlement recovered final artifact",
+                    )
+                    .map_err(|error| error.to_string())?;
+                    let existing: VpnSettlementSpoolRecord = norito::json::from_slice(&existing)
+                        .map_err(|error| {
+                            format!(
+                                "existing recovered vpn settlement artifact is invalid: {error}"
+                            )
+                        })?;
+                    if existing != wal.reserved_settlement {
+                        return Err(format!(
+                            "vpn settlement recovery target `{}` conflicts with its WAL",
+                            final_path.display()
+                        ));
+                    }
+                }
+                Err(error) => return Err(error),
+            }
+            fs::remove_file(&wal_path).map_err(|error| {
+                format!(
+                    "failed to remove recovered vpn settlement WAL `{}`: {error}",
+                    wal_path.display()
+                )
+            })?;
+            sync_vpn_spool_directory(&self.spool_dir)?;
+        }
+        Ok(())
+    }
 }
 impl<'a> HandshakeByteGuard<'a> {
     fn new(metrics: &'a Metrics) -> Self {
@@ -982,11 +1891,13 @@ fn vpn_flow_label_from_session_id(session_id: [u8; 16]) -> VpnFlowLabelV1 {
         | u32::from(session_id[2]);
     VpnFlowLabelV1::from_u32(value).expect("three-byte flow label should always fit")
 }
-fn build_vpn_backend_bootstrap(session_id: [u8; 16]) -> VpnBackendBootstrap {
-    let address_plan = derive_vpn_session_address_plan_v1(session_id);
+fn build_vpn_backend_bootstrap(helper_ticket: &VpnHelperTicketV1) -> VpnBackendBootstrap {
+    let address_plan = derive_vpn_session_address_plan_v1(helper_ticket.session_id);
     VpnBackendBootstrap {
-        session_id_hex: hex::encode(session_id),
+        session_id_hex: hex::encode(helper_ticket.session_id),
         server_tunnel_addresses: address_plan.server_tunnel_addresses,
+        client_ipv4_address: helper_ticket.client_ipv4_address,
+        client_ipv6_address: helper_ticket.client_ipv6_address,
         session_routes: address_plan.session_routes,
         mtu_bytes: VPN_DEFAULT_TUNNEL_MTU_BYTES,
     }
@@ -1034,6 +1945,100 @@ async fn write_vpn_backend_bootstrap<W: AsyncWrite + Unpin>(
     writer.write_all(&len.to_be_bytes()).await?;
     writer.write_all(&payload).await?;
     Ok(())
+}
+#[cfg(unix)]
+fn inspect_vpn_backend_socket(
+    path: &Path,
+    expected_uid: u32,
+    expected_gid: u32,
+) -> io::Result<VpnBackendSocketIdentity> {
+    let canonical = config::trusted_vpn_backend_socket_path(path, expected_uid)?;
+    if canonical != path {
+        return Err(io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            format!(
+                "VPN backend Unix socket path {} is not the startup-pinned canonical path {}",
+                path.display(),
+                canonical.display()
+            ),
+        ));
+    }
+    let metadata = fs::symlink_metadata(path)?;
+    if !metadata.file_type().is_socket() {
+        return Err(io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            format!(
+                "VPN backend endpoint {} must be a direct Unix socket",
+                path.display()
+            ),
+        ));
+    }
+    if metadata.uid() != expected_uid || metadata.gid() != expected_gid {
+        return Err(io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            format!(
+                "VPN backend Unix socket owner {}/{} does not match pinned backend {expected_uid}/{expected_gid}",
+                metadata.uid(),
+                metadata.gid()
+            ),
+        ));
+    }
+    if metadata.nlink() != 1 {
+        return Err(io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            "VPN backend Unix socket must have exactly one hard link",
+        ));
+    }
+    if metadata.permissions().mode() & 0o007 != 0 {
+        return Err(io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            "VPN backend Unix socket must have no permissions for other users",
+        ));
+    }
+    Ok(VpnBackendSocketIdentity {
+        device: metadata.dev(),
+        inode: metadata.ino(),
+    })
+}
+#[cfg(unix)]
+fn verify_vpn_backend_peer_credentials(
+    backend: &UnixStream,
+    expected_uid: u32,
+    expected_gid: u32,
+) -> io::Result<()> {
+    let credentials = backend.peer_cred()?;
+    if credentials.uid() != expected_uid || credentials.gid() != expected_gid {
+        return Err(io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            format!(
+                "VPN backend peer credentials {}/{} do not match pinned backend {expected_uid}/{expected_gid}",
+                credentials.uid(),
+                credentials.gid()
+            ),
+        ));
+    }
+    Ok(())
+}
+#[cfg(unix)]
+async fn connect_authenticated_vpn_backend(
+    path: &Path,
+    expected_uid: u32,
+    expected_gid: u32,
+) -> io::Result<UnixStream> {
+    let expected_socket = inspect_vpn_backend_socket(path, expected_uid, expected_gid)?;
+    let backend = UnixStream::connect(path).await?;
+    // Authenticate the connected process before inspecting protocol data or
+    // sending the keyed bootstrap. Filesystem checks alone do not authenticate
+    // the process that accepted this particular connection.
+    verify_vpn_backend_peer_credentials(&backend, expected_uid, expected_gid)?;
+    let connected_socket = inspect_vpn_backend_socket(path, expected_uid, expected_gid)?;
+    if connected_socket != expected_socket {
+        return Err(io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            "VPN backend Unix socket inode changed while connecting",
+        ));
+    }
+    Ok(backend)
 }
 async fn read_vpn_backend_status<R: AsyncRead + Unpin>(
     reader: &mut R,
@@ -1115,6 +2120,7 @@ pub struct RelayRuntime {
     lane_manager: Arc<ConstantRateLaneManager>,
     vpn: Option<Arc<VpnOverlay>>,
     vpn_helper_ticket_replays: Option<Arc<StdMutex<PersistentReplayLedger>>>,
+    vpn_settlement_store: Option<Arc<VpnSettlementStore>>,
     ticket_replays: Arc<StdMutex<TicketReplayState>>,
 }
 #[derive(Clone)]
@@ -1143,6 +2149,7 @@ struct CircuitContext {
     lane_manager: Arc<ConstantRateLaneManager>,
     vpn: Option<Arc<VpnOverlay>>,
     vpn_helper_ticket_replays: Option<Arc<StdMutex<PersistentReplayLedger>>>,
+    vpn_settlement_store: Option<Arc<VpnSettlementStore>>,
     ticket_replays: Arc<StdMutex<TicketReplayState>>,
 }
 #[derive(Debug, Clone)]
@@ -1301,11 +2308,40 @@ fn load_vpn_helper_ticket_replay_ledger(
     })
 }
 fn vpn_helper_ticket_replay_id(ticket: &VpnHelperTicketV1) -> [u8; 32] {
+    vpn_helper_ticket_replay_id_from_parts(&ticket.relay_id, &ticket.session_id)
+}
+fn vpn_helper_ticket_replay_id_from_parts(relay_id: &RelayId, session_id: &[u8; 16]) -> [u8; 32] {
     let mut hasher = blake3::Hasher::new();
     hasher.update(VPN_HELPER_TICKET_REPLAY_ID_DOMAIN);
-    hasher.update(&ticket.relay_id);
-    hasher.update(&ticket.session_id);
+    hasher.update(relay_id);
+    hasher.update(session_id);
     *hasher.finalize().as_bytes()
+}
+fn recover_vpn_helper_ticket_replay(
+    replay_ledger: &StdMutex<PersistentReplayLedger>,
+    replay_id: [u8; 32],
+    expires_at_ms: u64,
+    now_ms: u64,
+) -> Result<(), String> {
+    let mut replay_ledger = replay_ledger
+        .lock()
+        .map_err(|_| "VPN helper-ticket replay ledger lock poisoned during recovery".to_owned())?;
+    let status = replay_ledger
+        .insert(replay_id, expires_at_ms, now_ms)
+        .map_err(|error| {
+            format!("VPN helper-ticket replay recovery persistence failed: {error}")
+        })?;
+    match status {
+        ReplayInsertStatus::Accepted
+        | ReplayInsertStatus::Duplicate
+        | ReplayInsertStatus::Expired => Ok(()),
+        ReplayInsertStatus::TtlExceeded => {
+            Err("recovered VPN helper ticket exceeds the configured replay lifetime".to_owned())
+        }
+        ReplayInsertStatus::Capacity => Err(
+            "VPN helper-ticket replay ledger is at capacity during settlement recovery".to_owned(),
+        ),
+    }
 }
 fn consume_vpn_helper_ticket(
     replay_ledger: &StdMutex<PersistentReplayLedger>,
@@ -1342,6 +2378,7 @@ fn consume_vpn_helper_ticket(
         )),
     }
 }
+#[cfg(test)]
 async fn redeem_vpn_helper_ticket(
     replay_ledger: Arc<StdMutex<PersistentReplayLedger>>,
     ticket: &VpnHelperTicketV1,
@@ -1356,6 +2393,51 @@ async fn redeem_vpn_helper_ticket(
     .map_err(|error| {
         HandshakeError::ReplayStore(format!(
             "VPN helper-ticket replay ledger worker failed: {error}"
+        ))
+    })?
+}
+async fn persist_initial_settlement_and_redeem_ticket(
+    settlement_store: Arc<VpnSettlementStore>,
+    replay_ledger: Arc<StdMutex<PersistentReplayLedger>>,
+    session: VpnSessionHandle,
+    ticket: VpnHelperTicketV1,
+    artifact: VpnSettlementArtifact,
+    now_ms: u64,
+) -> Result<(), VpnBackendBridgeError> {
+    let worker_store = Arc::clone(&settlement_store);
+    tokio::task::spawn_blocking(move || {
+        let wal_path = worker_store
+            .write_initial_reservation(&session, &artifact)
+            .map_err(|error| {
+                VpnBackendBridgeError::UsageVoucher(format!(
+                    "failed to durably reserve initial VPN settlement: {error}"
+                ))
+            })?;
+        let replay_result = consume_vpn_helper_ticket(
+            replay_ledger.as_ref(),
+            vpn_helper_ticket_replay_id(&ticket),
+            ticket.expires_at_ms,
+            now_ms,
+        );
+        if let Err(replay_error) = replay_result {
+            worker_store
+                .discard_initial_reservation(&wal_path)
+                .map_err(|persistence_error| {
+                    VpnBackendBridgeError::UsageVoucher(format!(
+                        "VPN helper-ticket redemption failed ({replay_error}) and its settlement WAL could not be discarded: {persistence_error}"
+                    ))
+                })?;
+            return Err(VpnBackendBridgeError::UsageVoucher(format!(
+                "VPN helper-ticket redemption failed: {replay_error}"
+            )));
+        }
+        Ok(())
+    })
+    .await
+    .map_err(|error| {
+        settlement_store.poisoned.store(true, Ordering::Release);
+        VpnBackendBridgeError::UsageVoucher(format!(
+            "VPN settlement/replay persistence worker failed: {error}"
         ))
     })?
 }
@@ -1702,6 +2784,31 @@ impl RelayRuntime {
             })
             .transpose()?
             .map(|ledger| Arc::new(StdMutex::new(ledger)));
+        let vpn_settlement_store = match (vpn_overlay.as_ref(), vpn_helper_ticket_replays.as_ref())
+        {
+            (Some(vpn), Some(replay_ledger)) => {
+                let spool_dir = vpn.config().receipt_spool_dir.as_deref().ok_or_else(|| {
+                    RelayError::Config(ConfigError::Vpn(
+                        "vpn receipt spool directory is unavailable after validation".to_owned(),
+                    ))
+                })?;
+                Some(Arc::new(
+                    VpnSettlementStore::open(spool_dir, replay_ledger.as_ref()).map_err(
+                        |error| {
+                            RelayError::Io(io::Error::other(format!(
+                                "failed to initialize VPN settlement persistence: {error}"
+                            )))
+                        },
+                    )?,
+                ))
+            }
+            (None, None) => None,
+            _ => {
+                return Err(RelayError::Io(io::Error::other(
+                    "VPN settlement persistence and helper-ticket replay state must initialize together",
+                )));
+            }
+        };
         if let Some(vpn) = vpn_overlay.as_ref() {
             let (session_label, byte_label) = vpn.billing_labels();
             metrics.set_vpn_meter_labels(session_label, byte_label);
@@ -1793,6 +2900,7 @@ impl RelayRuntime {
             lane_manager,
             vpn: vpn_overlay,
             vpn_helper_ticket_replays,
+            vpn_settlement_store,
             ticket_replays,
         })
     }
@@ -1842,6 +2950,7 @@ impl RelayRuntime {
             lane_manager: Arc::clone(&self.lane_manager),
             vpn: self.vpn.clone(),
             vpn_helper_ticket_replays: self.vpn_helper_ticket_replays.clone(),
+            vpn_settlement_store: self.vpn_settlement_store.clone(),
             ticket_replays: Arc::clone(&self.ticket_replays),
         }
     }
@@ -2546,6 +3655,8 @@ impl RelayRuntime {
                     metrics: Arc::clone(&context.metrics),
                     lane_manager: Arc::clone(&context.lane_manager),
                     vpn: context.vpn.clone(),
+                    vpn_helper_ticket_replays: context.vpn_helper_ticket_replays.clone(),
+                    vpn_settlement_store: context.vpn_settlement_store.clone(),
                 };
                 Self::monitor_circuit(
                     connection,
@@ -2776,6 +3887,8 @@ impl RelayRuntime {
                     session,
                     helper_ticket,
                     Arc::clone(&record_layer),
+                    resources.vpn_helper_ticket_replays.clone(),
+                    resources.vpn_settlement_store.clone(),
                 ))
             }
             _ => tokio::spawn(Self::serve_exit_streams(
@@ -2844,32 +3957,46 @@ impl RelayRuntime {
             debug!(%error, "exit stream task join error");
         }
         if let Some(vpn_session) = vpn_session {
-            let settlement_artifact = vpn_session.settlement_artifact();
+            let settlement_artifact = match vpn_session.settlement_artifact() {
+                Ok(artifact) => artifact,
+                Err(error) => {
+                    warn!(%error, "failed to authenticate final VPN settlement receipt");
+                    None
+                }
+            };
             let receipt = settlement_artifact
                 .as_ref()
-                .map(|artifact| artifact.receipt.clone())
+                .map(|artifact| artifact.receipt.receipt.clone())
                 .unwrap_or_else(|| vpn_session.receipt());
             metrics.record_vpn_receipt(&receipt);
-            if let Some(spool_dir) = resources
-                .vpn
-                .as_ref()
-                .and_then(|overlay| overlay.config().receipt_spool_dir.as_deref())
-            {
-                if let Some(artifact) = settlement_artifact.as_ref() {
-                    match spool_vpn_settlement_artifact(spool_dir, artifact) {
-                        Ok(_) => info!("vpn settlement artifact spooled"),
-                        Err(error) => {
-                            warn!(
-                                %error,
-                                "failed to spool vpn settlement artifact"
-                            );
-                        }
+            if let (Some(store), Some(artifact)) = (
+                resources.vpn_settlement_store.as_ref(),
+                settlement_artifact.as_ref(),
+            ) {
+                let store = Arc::clone(store);
+                let session = vpn_session.clone();
+                let artifact = artifact.clone();
+                let worker_store = Arc::clone(&store);
+                match tokio::task::spawn_blocking(move || {
+                    worker_store.finalize(&session, &artifact)
+                })
+                .await
+                {
+                    Ok(Ok(_)) => info!("vpn settlement artifact durably finalized"),
+                    Ok(Err(error)) => warn!(
+                        %error,
+                        "failed to finalize vpn settlement artifact; recovery WAL retained"
+                    ),
+                    Err(error) => {
+                        store.poisoned.store(true, Ordering::Release);
+                        warn!(
+                            %error,
+                            "vpn settlement finalization worker failed; recovery WAL retained"
+                        );
                     }
-                } else {
-                    warn!(
-                        "vpn settlement artifact not spooled because no client voucher was accepted"
-                    );
                 }
+            } else if settlement_artifact.is_none() {
+                debug!("vpn settlement artifact absent because no client voucher was committed");
             }
             debug!(
                 exit_class = receipt.exit_class.as_label(),
@@ -3012,97 +4139,19 @@ impl RelayRuntime {
         vpn_session: VpnSessionHandle,
         helper_ticket: VpnHelperTicketV1,
         record_layer: Arc<RecordLayer>,
+        helper_ticket_replays: Option<Arc<StdMutex<PersistentReplayLedger>>>,
+        settlement_store: Option<Arc<VpnSettlementStore>>,
     ) {
         let Some(backend_endpoint) = overlay.config().backend_endpoint() else {
             warn!("vpn helper connection rejected: vpn.backend_endpoint is not configured");
             connection.close(0u32.into(), b"vpn backend unavailable");
             return;
         };
-        match backend_endpoint {
-            VpnBackendEndpoint::Unix(path) => {
-                let backend_label = format!("unix:{}", path.display());
-                match timeout(HANDSHAKE_STREAM_TIMEOUT, UnixStream::connect(&path)).await {
-                    Ok(Ok(stream)) => {
-                        Self::serve_vpn_backend_tunnel_stream(
-                            connection,
-                            remote,
-                            overlay,
-                            vpn_session,
-                            helper_ticket,
-                            stream,
-                            backend_label,
-                            Arc::clone(&record_layer),
-                        )
-                        .await;
-                    }
-                    Ok(Err(error)) => {
-                        warn!(
-                            %error,
-                            "failed to connect relay VPN backend"
-                        );
-                        connection.close(0u32.into(), b"vpn backend connect failed");
-                    }
-                    Err(_) => {
-                        warn!("timed out connecting relay VPN backend");
-                        connection.close(0u32.into(), b"vpn backend connect timeout");
-                    }
-                }
-            }
-            VpnBackendEndpoint::Tcp(addr) => {
-                let backend_label = format!("tcp://{addr}");
-                match timeout(HANDSHAKE_STREAM_TIMEOUT, TcpStream::connect(addr.as_str())).await {
-                    Ok(Ok(stream)) => {
-                        Self::serve_vpn_backend_tunnel_stream(
-                            connection,
-                            remote,
-                            overlay,
-                            vpn_session,
-                            helper_ticket,
-                            stream,
-                            backend_label,
-                            record_layer,
-                        )
-                        .await;
-                    }
-                    Ok(Err(error)) => {
-                        warn!(
-                            %error,
-                            "failed to connect relay VPN backend"
-                        );
-                        connection.close(0u32.into(), b"vpn backend connect failed");
-                    }
-                    Err(_) => {
-                        warn!("timed out connecting relay VPN backend");
-                        connection.close(0u32.into(), b"vpn backend connect timeout");
-                    }
-                }
-            }
-        }
-    }
-    #[expect(
-        clippy::too_many_arguments,
-        reason = "the tunnel handoff binds one authenticated connection and session context"
-    )]
-    async fn serve_vpn_backend_tunnel_stream<S>(
-        connection: Connection,
-        _remote: SocketAddr,
-        overlay: Arc<VpnOverlay>,
-        vpn_session: VpnSessionHandle,
-        helper_ticket: VpnHelperTicketV1,
-        backend: S,
-        _backend_addr: String,
-        record_layer: Arc<RecordLayer>,
-    ) where
-        S: AsyncRead + AsyncWrite + Unpin,
-    {
         let (mut send, mut recv) =
             match timeout(HANDSHAKE_STREAM_TIMEOUT, connection.accept_bi()).await {
                 Ok(Ok(streams)) => streams,
                 Ok(Err(error)) => {
-                    warn!(
-                        %error,
-                        "failed to accept vpn helper tunnel stream"
-                    );
+                    warn!(%error, "failed to accept vpn helper tunnel stream");
                     connection.close(0u32.into(), b"vpn tunnel stream failed");
                     return;
                 }
@@ -3112,6 +4161,11 @@ impl RelayRuntime {
                     return;
                 }
             };
+        let now_ms = unix_time_ms(SystemTime::now());
+        if helper_ticket.expires_at_ms <= now_ms {
+            connection.close(0u32.into(), b"vpn helper ticket expired");
+            return;
+        }
         let flow_label = vpn_flow_label_from_session_id(helper_ticket.session_id);
         let adapter = VpnAdapter::new(vpn_session.session().clone(), Arc::clone(&overlay));
         let bridge = match VpnBridge::new(adapter.clone(), helper_ticket.session_id, flow_label) {
@@ -3123,90 +4177,261 @@ impl RelayRuntime {
             }
         };
         let mtu = bridge.max_payload_len();
-        let (mut backend_read, mut backend_write) = tokio::io::split(backend);
-        let bootstrap = build_vpn_backend_bootstrap(helper_ticket.session_id);
-        info!(
-            expires_at_ms = helper_ticket.expires_at_ms,
-            "bridging helper-authenticated vpn tunnel to relay backend"
-        );
-        let bootstrap_secret = overlay.backend_bootstrap_secret();
-        let Some(bootstrap_secret) = bootstrap_secret else {
-            warn!("vpn backend bootstrap secret is unavailable");
-            connection.close(0u32.into(), b"vpn backend authentication unavailable");
-            return;
-        };
-        if let Err(error) =
-            write_vpn_backend_bootstrap(&mut backend_write, &bootstrap, bootstrap_secret).await
-        {
-            warn!(
-                %error,
-                "failed to send vpn backend bootstrap"
-            );
-            connection.close(0u32.into(), b"vpn backend bootstrap failed");
-            return;
-        }
-        if let Err(error) = read_vpn_backend_status(&mut backend_read).await {
-            warn!(
-                %error,
-                "vpn backend failed session bootstrap"
-            );
-            connection.close(0u32.into(), b"vpn backend bootstrap rejected");
-            return;
-        }
-        let now_ms = unix_time_ms(SystemTime::now());
-        if helper_ticket.expires_at_ms <= now_ms {
-            connection.close(0u32.into(), b"vpn helper ticket expired");
-            return;
-        }
-        let remaining = Duration::from_millis(helper_ticket.expires_at_ms.saturating_sub(now_ms));
         let record_stream = match record_layer.stream(record_stream_context(send.id())) {
             Ok(stream) => stream,
             Err(error) => {
-                warn!(
-                    %error,
-                    "failed to derive vpn tunnel record keys"
-                );
+                warn!(%error, "failed to derive vpn tunnel record keys");
                 connection.close(0u32.into(), b"vpn record key failure");
                 return;
             }
         };
         let mut protected_send = RecordWriter::new(&mut send, record_stream.sealer);
         let mut protected_recv = RecordReader::new(&mut recv, record_stream.opener);
-        match timeout(
+        let Some(settlement_store) = settlement_store else {
+            warn!("vpn settlement persistence is unavailable before prepaid admission");
+            connection.close(0u32.into(), b"vpn settlement persistence unavailable");
+            return;
+        };
+        if let Err(error) = settlement_store.ensure_healthy() {
+            warn!(%error, "vpn settlement persistence is poisoned before prepaid admission");
+            connection.close(0u32.into(), b"vpn settlement persistence poisoned");
+            return;
+        }
+        let voucher_authorization = Arc::new(Mutex::new(VpnVoucherAuthorization::new(
+            &helper_ticket,
+            overlay.config().usage_voucher_credit_window_bytes,
+            overlay.config().usage_voucher_max_age_ms,
+        )));
+        let setup_timeout = Duration::from_millis(overlay.config().usage_voucher_setup_timeout_ms);
+        let initial_envelope = match timeout(
+            setup_timeout,
+            accept_initial_usage_voucher(&adapter, &mut protected_recv),
+        )
+        .await
+        {
+            Ok(Ok(envelope)) => envelope,
+            Ok(Err(error)) => {
+                warn!(%error, "vpn helper failed prepaid voucher admission");
+                connection.close(0u32.into(), b"vpn prepaid voucher rejected");
+                return;
+            }
+            Err(_) => {
+                warn!("timed out waiting for initial prepaid vpn voucher");
+                connection.close(0u32.into(), b"vpn prepaid voucher timeout");
+                return;
+            }
+        };
+        let Some(helper_ticket_replays) = helper_ticket_replays else {
+            warn!("vpn helper-ticket replay ledger is unavailable after prepaid admission");
+            connection.close(0u32.into(), b"vpn replay protection unavailable");
+            return;
+        };
+        let (initial_authorization, initial_envelope) = {
+            let authorization = voucher_authorization.lock().await;
+            let mut candidate = authorization.clone();
+            let envelope = match candidate.accept_envelope(&initial_envelope) {
+                Ok(envelope) => envelope,
+                Err(error) => {
+                    warn!(%error, "vpn helper failed initial prepaid voucher validation");
+                    connection.close(0u32.into(), b"vpn prepaid voucher rejected");
+                    return;
+                }
+            };
+            (candidate, envelope)
+        };
+        let initial_reservation =
+            match vpn_session.settlement_reservation_artifact(&initial_envelope, 0, false) {
+                Ok(artifact) => artifact,
+                Err(error) => {
+                    warn!(%error, "failed to construct initial vpn settlement reservation");
+                    connection.close(0u32.into(), b"vpn settlement reservation invalid");
+                    return;
+                }
+            };
+        let path = backend_endpoint.path();
+        let Some((backend_uid, backend_gid)) = overlay.config().backend_expected_peer_ids() else {
+            warn!("vpn helper connection rejected: backend peer identity is not pinned");
+            connection.close(0u32.into(), b"vpn backend identity unavailable");
+            return;
+        };
+        let backend_label = format!("unix:{}", path.display());
+        // Authenticate and reserve a backend connection before irreversibly
+        // redeeming the one-use helper ticket. No backend protocol byte is sent
+        // until the WAL and replay reservation below both commit.
+        let backend = match timeout(
+            HANDSHAKE_STREAM_TIMEOUT,
+            connect_authenticated_vpn_backend(path, backend_uid, backend_gid),
+        )
+        .await
+        {
+            Ok(Ok(backend)) => backend,
+            Ok(Err(error)) => {
+                warn!(%error, "failed to authenticate local VPN backend");
+                connection.close(0u32.into(), b"vpn backend authentication failed");
+                return;
+            }
+            Err(_) => {
+                warn!("timed out authenticating local VPN backend");
+                connection.close(0u32.into(), b"vpn backend authentication timeout");
+                return;
+            }
+        };
+        if let Err(error) = persist_initial_settlement_and_redeem_ticket(
+            Arc::clone(&settlement_store),
+            helper_ticket_replays,
+            vpn_session.clone(),
+            helper_ticket.clone(),
+            initial_reservation,
+            unix_time_ms(SystemTime::now()),
+        )
+        .await
+        {
+            warn!(%error, "vpn settlement reservation or helper-ticket redemption failed");
+            connection.close(0u32.into(), b"vpn durable admission failed");
+            return;
+        }
+        *voucher_authorization.lock().await = initial_authorization;
+        vpn_session.record_usage_voucher(initial_envelope.clone());
+        let backend_result = Self::serve_vpn_backend_tunnel_stream(
+            &mut protected_send,
+            &mut protected_recv,
+            &overlay,
+            &vpn_session,
+            &helper_ticket,
+            backend,
+            &backend_label,
+            bridge,
+            &adapter,
+            voucher_authorization,
+            settlement_store,
+            initial_envelope,
+            mtu,
+        )
+        .await;
+        let close_reason = match backend_result {
+            Ok(()) => b"vpn tunnel closed".as_slice(),
+            Err(error) => {
+                warn!(%error, %remote, "vpn helper bridge stopped");
+                b"vpn bridge policy failure".as_slice()
+            }
+        };
+        connection.close(0u32.into(), close_reason);
+        match timeout(Duration::from_secs(1), protected_send.shutdown()).await {
+            Ok(Ok(())) => {}
+            Ok(Err(error)) => debug!(%error, "failed to finish protected vpn tunnel stream"),
+            Err(error) => debug!(%error, "timed out finishing protected vpn tunnel stream"),
+        }
+    }
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "the tunnel handoff binds one authenticated prepaid session and backend"
+    )]
+    async fn serve_vpn_backend_tunnel_stream<VW, VR, S>(
+        vpn_writer: &mut VW,
+        vpn_reader: &mut VR,
+        overlay: &VpnOverlay,
+        vpn_session: &VpnSessionHandle,
+        helper_ticket: &VpnHelperTicketV1,
+        backend: S,
+        _backend_addr: &str,
+        bridge: VpnBridge,
+        adapter: &VpnAdapter,
+        voucher_authorization: Arc<Mutex<VpnVoucherAuthorization>>,
+        settlement_store: Arc<VpnSettlementStore>,
+        initial_envelope: VpnUsageVoucherEnvelopeV1,
+        mtu: usize,
+    ) -> Result<(), VpnBackendBridgeError>
+    where
+        VW: AsyncWrite + Unpin,
+        VR: AsyncRead + Unpin,
+        S: AsyncRead + AsyncWrite + Unpin,
+    {
+        let now_ms = unix_time_ms(SystemTime::now());
+        if helper_ticket.expires_at_ms <= now_ms {
+            return Err(VpnBackendBridgeError::BackendControl(
+                "vpn helper ticket expired before backend service started".to_owned(),
+            ));
+        }
+        let (mut backend_read, mut backend_write) = tokio::io::split(backend);
+        let bootstrap = build_vpn_backend_bootstrap(helper_ticket);
+        info!(
+            expires_at_ms = helper_ticket.expires_at_ms,
+            "bridging helper-authenticated vpn tunnel to relay backend"
+        );
+        let bootstrap_secret = overlay.backend_bootstrap_secret().ok_or_else(|| {
+            VpnBackendBridgeError::BackendControl(
+                "vpn backend bootstrap secret is unavailable".to_owned(),
+            )
+        })?;
+        write_vpn_backend_bootstrap(&mut backend_write, &bootstrap, bootstrap_secret).await?;
+        read_vpn_backend_status(&mut backend_read).await?;
+        let now_ms = unix_time_ms(SystemTime::now());
+        if helper_ticket.expires_at_ms <= now_ms {
+            return Err(VpnBackendBridgeError::BackendControl(
+                "vpn helper ticket expired before backend service started".to_owned(),
+            ));
+        }
+        let remaining = Duration::from_millis(helper_ticket.expires_at_ms.saturating_sub(now_ms));
+        let authorized_active_ms = {
+            let mut authorization = voucher_authorization.lock().await;
+            authorization.begin_service();
+            authorization.authorized_active_ms
+        };
+        vpn_session.begin_metered_service(now_ms);
+        let service_reservation = vpn_session
+            .settlement_reservation_artifact(&initial_envelope, authorized_active_ms, true)
+            .map_err(VpnBackendBridgeError::UsageVoucher)?;
+        let worker_store = Arc::clone(&settlement_store);
+        let worker_session = vpn_session.clone();
+        let persistence_result = match tokio::task::spawn_blocking(move || {
+            worker_store.replace_reservation(
+                &worker_session,
+                &service_reservation,
+                VpnSettlementWalPhase::ServiceReserved,
+            )
+        })
+        .await
+        {
+            Ok(result) => result.map_err(|error| {
+                VpnBackendBridgeError::UsageVoucher(format!(
+                    "failed to durably reserve prepaid VPN service before forwarding: {error}"
+                ))
+            }),
+            Err(error) => {
+                settlement_store.poisoned.store(true, Ordering::Release);
+                Err(VpnBackendBridgeError::UsageVoucher(format!(
+                    "vpn service reservation persistence worker failed: {error}"
+                )))
+            }
+        };
+        if let Err(error) = persistence_result {
+            vpn_session.cancel_metered_service_before_forwarding();
+            return Err(error);
+        }
+        let result = timeout(
             remaining,
             Self::bridge_vpn_backend_streams(
-                &mut protected_send,
-                &mut protected_recv,
+                vpn_writer,
+                vpn_reader,
                 VpnBackendBridgeContext {
                     bridge,
-                    adapter: &adapter,
-                    vpn_session: &vpn_session,
-                    helper_ticket: &helper_ticket,
+                    adapter,
+                    vpn_session,
+                    voucher_authorization,
+                    settlement_store,
                     mtu,
                 },
                 &mut backend_read,
                 &mut backend_write,
             ),
         )
-        .await
-        {
-            Ok(Ok(())) => {}
-            Ok(Err(error)) => {
-                warn!(
-                    %error,
-                    "vpn helper bridge stopped"
-                );
-            }
-            Err(_) => {
-                info!("vpn helper ticket expired; closing tunnel");
-                connection.close(0u32.into(), b"vpn helper ticket expired");
-            }
-        }
-        if let Err(error) = protected_send.shutdown().await {
-            debug!(
-                %error,
-                "failed to finish protected vpn tunnel stream"
-            );
+        .await;
+        vpn_session.end_metered_service(unix_time_ms(SystemTime::now()));
+        match result {
+            Ok(result) => result,
+            Err(_) => Err(VpnBackendBridgeError::UsageVoucher(
+                "vpn helper ticket expired".to_owned(),
+            )),
         }
     }
     async fn bridge_vpn_backend_streams<VW, VR, BR, BW>(
@@ -3226,49 +4451,147 @@ impl RelayRuntime {
             mut bridge,
             adapter,
             vpn_session,
-            helper_ticket,
+            voucher_authorization,
+            settlement_store,
             mtu,
         } = context;
-        let debt_window = Arc::new(Mutex::new(VpnVoucherDebtWindow::new(
-            helper_ticket,
-            adapter.overlay().config().usage_voucher_debt_window_bytes,
-        )));
-        let upstream_debt = Arc::clone(&debt_window);
+        let upstream_authorization = Arc::clone(&voucher_authorization);
+        let upstream_settlement_store = Arc::clone(&settlement_store);
         let upstream = async {
             let max_payload = mtu.min(bridge.max_payload_len()).max(1);
             let mut buffer = vec![0u8; max_payload];
+            let mut packet_decoder = VpnPacketStreamDecoder::default();
             loop {
                 let read = backend_reader.read(&mut buffer).await?;
                 if read == 0 {
                     break Ok(());
                 }
-                bridge.send_buffer(vpn_writer, &buffer[..read]).await?;
-                upstream_debt.lock().await.record_egress(read as u64)?;
+                for packet in packet_decoder.ingest(&buffer[..read], mtu)? {
+                    upstream_settlement_store
+                        .ensure_healthy()
+                        .map_err(VpnBackendBridgeError::UsageVoucher)?;
+                    let packet_len = u64::try_from(packet.len())
+                        .expect("first-release VPN packets are bounded by u16");
+                    let active_deadline = upstream_authorization
+                        .lock()
+                        .await
+                        .authorize_egress_packet(packet_len)?;
+                    let framed = encode_vpn_packet_stream_frame(&packet)?;
+                    tokio::time::timeout_at(
+                        active_deadline,
+                        bridge.send_buffer(vpn_writer, &framed),
+                    )
+                    .await
+                    .map_err(|_| {
+                        VpnBackendBridgeError::UsageVoucher(
+                            "vpn active-time credit expired while forwarding an egress packet"
+                                .to_owned(),
+                        )
+                    })??;
+                    vpn_session.record_metered_egress(packet_len);
+                }
             }
         };
-        let downstream_debt = Arc::clone(&debt_window);
+        let downstream_authorization = Arc::clone(&voucher_authorization);
+        let downstream_settlement_store = Arc::clone(&settlement_store);
+        let voucher_max_age =
+            Duration::from_millis(adapter.overlay().config().usage_voucher_max_age_ms);
         let downstream = async {
+            let mut voucher_deadline = TokioInstant::now() + voucher_max_age;
+            let mut packet_decoder = VpnPacketStreamDecoder::default();
             loop {
-                match adapter.read_ingress_frame(vpn_reader).await {
-                    Ok(cell) => match cell.header.class {
-                        VpnCellClassV1::Data => {
-                            downstream_debt
-                                .lock()
-                                .await
-                                .record_ingress(cell.payload.len() as u64)?;
-                            backend_writer.write_all(&cell.payload).await?;
-                        }
-                        VpnCellClassV1::Control => {
-                            if let Some(envelope) = decode_usage_voucher_control(&cell.payload)? {
-                                let envelope =
-                                    downstream_debt.lock().await.accept_envelope(&envelope)?;
-                                vpn_session.record_usage_voucher(envelope);
+                // Keep the absolute voucher deadline around the complete
+                // receive-and-forward step. A blocked local backend must not
+                // suspend the payment-liveness watchdog.
+                let active_deadline = downstream_authorization.lock().await.active_deadline()?;
+                let deadline = voucher_deadline.min(active_deadline);
+                let progress = tokio::time::timeout_at(deadline, async {
+                    match adapter.read_ingress_frame(vpn_reader).await {
+                        Ok(cell) => match cell.header.class {
+                            VpnCellClassV1::Data => {
+                                for packet in packet_decoder.ingest(&cell.payload, mtu)? {
+                                    downstream_settlement_store
+                                        .ensure_healthy()
+                                        .map_err(VpnBackendBridgeError::UsageVoucher)?;
+                                    let packet_len = u64::try_from(packet.len())
+                                        .expect("first-release VPN packets are bounded by u16");
+                                    let active_deadline = downstream_authorization
+                                        .lock()
+                                        .await
+                                        .authorize_ingress_packet(packet_len)?;
+                                    let framed = encode_vpn_packet_stream_frame(&packet)?;
+                                    tokio::time::timeout_at(
+                                        active_deadline,
+                                        backend_writer.write_all(&framed),
+                                    )
+                                    .await
+                                    .map_err(|_| {
+                                        VpnBackendBridgeError::UsageVoucher(
+                                            "vpn active-time credit expired while forwarding an ingress packet"
+                                                .to_owned(),
+                                        )
+                                    })??;
+                                    vpn_session.record_metered_ingress(packet_len);
+                                }
+                                Ok(Some(false))
                             }
-                        }
-                        VpnCellClassV1::Cover | VpnCellClassV1::KeepAlive => {}
-                    },
-                    Err(VpnFrameIoError::FrameLength { actual: 0, .. }) => break Ok(()),
-                    Err(error) => break Err(VpnBackendBridgeError::from(error)),
+                            VpnCellClassV1::Control => {
+                                if let Some(envelope) = decode_usage_voucher_control(&cell.payload)?
+                                {
+                                    let mut authorization = downstream_authorization.lock().await;
+                                    let mut candidate = authorization.clone();
+                                    let envelope = candidate.accept_envelope(&envelope)?;
+                                    let reservation = vpn_session
+                                        .settlement_reservation_artifact(
+                                            &envelope,
+                                            candidate.authorized_active_ms,
+                                            true,
+                                        )
+                                        .map_err(VpnBackendBridgeError::UsageVoucher)?;
+                                    downstream_settlement_store
+                                        .replace_reservation(
+                                            vpn_session,
+                                            &reservation,
+                                            VpnSettlementWalPhase::ServiceReserved,
+                                        )
+                                        .map_err(|error| {
+                                            VpnBackendBridgeError::UsageVoucher(format!(
+                                                "failed to durably advance prepaid VPN settlement before accepting voucher: {error}"
+                                            ))
+                                        })?;
+                                    *authorization = candidate;
+                                    drop(authorization);
+                                    vpn_session.record_usage_voucher(envelope);
+                                    Ok(Some(true))
+                                } else {
+                                    Ok(Some(false))
+                                }
+                            }
+                            VpnCellClassV1::Cover | VpnCellClassV1::KeepAlive => Ok(Some(false)),
+                        },
+                        Err(VpnFrameIoError::FrameLength { actual: 0, .. }) => Ok(None),
+                        Err(error) => Err(VpnBackendBridgeError::from(error)),
+                    }
+                })
+                .await
+                .map_err(|_| {
+                    if TokioInstant::now() >= active_deadline {
+                        VpnBackendBridgeError::UsageVoucher(
+                            "vpn service reached its signed prepaid active-time ceiling".to_owned(),
+                        )
+                    } else {
+                        VpnBackendBridgeError::UsageVoucher(format!(
+                            "no fresh vpn usage voucher arrived within {}ms",
+                            voucher_max_age.as_millis()
+                        ))
+                    }
+                })??;
+                match progress {
+                    Some(true) => {
+                        voucher_deadline = TokioInstant::now() + voucher_max_age;
+                    }
+                    Some(false) => {}
+                    None => break Ok(()),
                 }
             }
         };
@@ -4104,10 +5427,10 @@ impl RelayRuntime {
                 Ok(Err(error)) => return Err(HandshakeError::Connection(error)),
                 Err(_) => return Err(HandshakeError::Timeout("handshake stream")),
             };
-        let helper_ticket_secret = context
+        let helper_ticket_issuer_public_key = context
             .vpn
             .as_ref()
-            .and_then(|overlay| overlay.helper_ticket_secret());
+            .and_then(|overlay| overlay.helper_ticket_issuer_public_key());
         let mut byte_guard = HandshakeByteGuard::new(&context.metrics);
         let mut puzzle_verify_micros: Option<u64> = None;
         let pow_params = context.dos.current_pow_parameters();
@@ -4122,7 +5445,10 @@ impl RelayRuntime {
         let mut admission_token: Option<AdmissionToken> = None;
         let mut vpn_helper_ticket: Option<VpnHelperTicketV1> = None;
         let mut vpn_helper_ticket_frame: Option<Vec<u8>> = None;
-        if helper_ticket_secret.is_some() || has_token_policy || (pow_required && puzzle_enforced) {
+        if helper_ticket_issuer_public_key.is_some()
+            || has_token_policy
+            || (pow_required && puzzle_enforced)
+        {
             let first_frame = match timeout(
                 HANDSHAKE_PAYLOAD_TIMEOUT,
                 Self::read_handshake_frame(&mut recv),
@@ -4134,10 +5460,11 @@ impl RelayRuntime {
                 Err(_) => return Err(HandshakeError::Timeout("pow token/ticket")),
             };
             byte_guard.add(first_frame.len() + 2);
-            if let Some(secret) = helper_ticket_secret {
+            if let Some(issuer_public_key) = helper_ticket_issuer_public_key {
                 if VpnHelperTicketV1::looks_like(&first_frame) {
                     let now_ms = unix_time_ms(SystemTime::now());
-                    let helper_ticket = VpnHelperTicketV1::parse(&first_frame, secret, now_ms)?;
+                    let helper_ticket =
+                        VpnHelperTicketV1::parse(&first_frame, issuer_public_key, now_ms)?;
                     if helper_ticket.relay_id != context.relay_id {
                         return Err(HandshakeError::HelperTicket(
                             VpnHelperTicketError::InvalidRelay,
@@ -4151,16 +5478,6 @@ impl RelayRuntime {
                     })?;
                     ensure_vpn_helper_ticket_within_trust(&helper_ticket, trust)
                         .map_err(HandshakeError::Noise)?;
-                    let replay_ledger = context
-                        .vpn_helper_ticket_replays
-                        .as_ref()
-                        .map(Arc::clone)
-                        .ok_or_else(|| {
-                            HandshakeError::ReplayStore(
-                                "VPN helper-ticket replay ledger is unavailable".to_owned(),
-                            )
-                        })?;
-                    redeem_vpn_helper_ticket(replay_ledger, &helper_ticket, now_ms).await?;
                     vpn_helper_ticket = Some(helper_ticket);
                     vpn_helper_ticket_frame = Some(first_frame);
                 } else if has_token_policy && token::frame_looks_like_token(&first_frame) {
@@ -4293,7 +5610,7 @@ impl RelayRuntime {
             .map_or(DEFAULT_TLS_SERVER_NAME, |trust| {
                 trust.tls_server_name.as_str()
             });
-        let (relay_hello, relay_state) = continue_after_admission(admission, || {
+        let (relay_hello, session) = continue_after_admission(admission, || {
             let mut rng = StdRng::from_os_rng();
             let runtime_params = NoiseRuntimeParams {
                 descriptor_commit: context.descriptor_commit.as_slice(),
@@ -4338,33 +5655,20 @@ impl RelayRuntime {
             Err(_) => return Err(HandshakeError::Timeout("relay hello")),
         }
         send.finish().map_err(HandshakeError::Finish)?;
-        let session = if relay_state.requires_client_finish() {
-            let client_finish = match timeout(
-                HANDSHAKE_PAYLOAD_TIMEOUT,
-                Self::read_handshake_frame(&mut recv),
-            )
-            .await
-            {
-                Ok(Ok(frame)) => {
-                    byte_guard.add(frame.len() + 2);
-                    frame
-                }
-                Ok(Err(error)) => return Err(error),
-                Err(_) => return Err(HandshakeError::Timeout("client finish")),
-            };
-            relay_finalize_handshake(relay_state, &client_finish, context.identity_key.as_ref())
-                .map_err(HandshakeError::Noise)?
-        } else {
-            relay_finalize_handshake(relay_state, &[], context.identity_key.as_ref())
-                .map_err(HandshakeError::Noise)?
-        };
         negotiated.grease.extend(context.grease.iter().cloned());
         let handshake_bytes = byte_guard.finish();
         let vpn_session = match (vpn_helper_ticket.clone(), context.vpn.as_ref()) {
-            (Some(helper_ticket), Some(overlay)) => Some(overlay.bind_helper_session(
-                overlay.start_session(Arc::clone(&context.metrics)),
-                helper_ticket,
-            )),
+            (Some(helper_ticket), Some(overlay)) => Some(
+                overlay
+                    .bind_helper_session(
+                        overlay.start_session(Arc::clone(&context.metrics)),
+                        helper_ticket,
+                        Arc::clone(&context.identity_key),
+                    )
+                    .map_err(|error| {
+                        HandshakeError::Noise(NoiseHandshakeError::Validation(error))
+                    })?,
+            ),
             _ => None,
         };
         Ok(HandshakeOutcome {

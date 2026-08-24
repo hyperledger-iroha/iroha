@@ -418,8 +418,8 @@ fn push_with_gossip_payload_with_state_and_routing_rejects_future_created_autosc
         nexus.fees.per_instruction_fee = Quantity::zero();
         nexus.fees.per_gas_unit_fee = Quantity::zero();
         nexus.autoscale.enabled = true;
-        nexus.autoscale.min_lanes = nonzero!(1_u32);
-        nexus.autoscale.max_lanes = nonzero!(8_u32);
+        nexus.autoscale.min_lane_id = nonzero!(1_u32);
+        nexus.autoscale.max_lane_id_exclusive = nonzero!(8_u32);
         nexus.lane_catalog =
             LaneCatalog::new(nonzero!(2_u32), vec![LaneConfig::default(), future_elastic])
                 .expect("future-created lane catalog");

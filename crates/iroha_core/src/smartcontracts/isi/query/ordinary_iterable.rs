@@ -737,7 +737,10 @@ mod tests {
             ..QueryParams::default()
         };
         let request = super::super::ValidQueryRequest {
-            request: QueryRequest::Start(QueryWithParams::new(&query, params)),
+            request: QueryRequest::Start(
+                QueryWithParams::new(&query, params)
+                    .expect("peer query type has a canonical mapping"),
+            ),
             limits: super::super::QueryLimits::new(max_page_items)
                 .with_count_mode(super::super::QueryCountMode::Bounded)
                 .with_ordinary_execution_limits(ordinary),

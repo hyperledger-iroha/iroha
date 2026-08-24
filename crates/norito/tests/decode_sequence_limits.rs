@@ -73,7 +73,7 @@ fn bounded_decode_rejects_one_element_over_the_limit() {
     assert_sequence_limit(error, 4, 3);
 }
 #[test]
-fn enum_compatibility_fallbacks_preserve_terminal_sequence_limits() {
+fn enum_canonical_decoders_preserve_terminal_sequence_limits() {
     for value in [
         WrappedSequence::Direct(vec![1, 2, 3, 4]),
         WrappedSequence::Boxed(Box::new(vec![1, 2, 3, 4])),
@@ -83,7 +83,7 @@ fn enum_compatibility_fallbacks_preserve_terminal_sequence_limits() {
     ] {
         let bytes = norito::to_bytes(&value).expect("encode wrapped sequence");
         let error = norito::decode_from_bytes_with_limits::<WrappedSequence>(&bytes, limits(3))
-            .expect_err("an enum compatibility path must not swallow a resource-limit error");
+            .expect_err("an enum decoder must preserve the terminal resource-limit error");
         assert_sequence_limit(error, 4, 3);
     }
 }

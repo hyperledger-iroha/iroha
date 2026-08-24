@@ -126,6 +126,27 @@ fn validate_nonblank_field(
     }
     Ok(())
 }
+fn validate_peer_id_field(
+    manifest: &'static str,
+    value: &str,
+) -> Result<(), SoracloudManifestError> {
+    validate_nonblank_field(manifest, "peer_id", value)?;
+    let peer_id = value.parse::<PeerId>().map_err(|error| {
+        invalid_field(
+            manifest,
+            "peer_id",
+            format!("must be a canonical peer public key: {error}"),
+        )
+    })?;
+    if peer_id.to_string() != value {
+        return Err(invalid_field(
+            manifest,
+            "peer_id",
+            "must use the exact canonical peer public-key spelling",
+        ));
+    }
+    Ok(())
+}
 fn validate_optional_nonempty(
     manifest: &'static str,
     field: &'static str,
@@ -151,6 +172,7 @@ fn invalid_field(
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, IntoSchema, Default)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[cfg_attr(feature = "json", norito(tag = "runtime", content = "value"))]
+#[norito(deny_unknown_fields)]
 pub enum SoraContainerRuntimeV1 {
     /// Execute IVM bytecode entrypoints.
     #[default]
@@ -174,6 +196,7 @@ impl SoraContainerRuntimeV1 {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, IntoSchema, Default)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[cfg_attr(feature = "json", norito(tag = "guest_os", content = "value"))]
+#[norito(deny_unknown_fields)]
 pub enum SoraInrouGuestOsV1 {
     /// Debian slim guest userspace with `apt` package management.
     #[default]
@@ -183,6 +206,7 @@ pub enum SoraInrouGuestOsV1 {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[cfg_attr(feature = "json", norito(tag = "guest_isa", content = "value"))]
+#[norito(deny_unknown_fields)]
 pub enum SoraInrouGuestIsaV1 {
     /// Native 64-bit x86 guest image.
     #[cfg_attr(feature = "json", norito(rename = "x86_64"))]
@@ -210,27 +234,11 @@ impl SoraInrouGuestIsaV1 {
         }
     }
 }
-/// Runtime backend used to materialize an Inrou hosted HTTP replica.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[cfg_attr(feature = "json", norito(tag = "backend", content = "value"))]
-pub enum SoraInrouRuntimeBackendV1 {
-    /// Portable full-system VM running entirely in unprivileged userspace.
-    PortableVm,
-}
-impl SoraInrouRuntimeBackendV1 {
-    /// Canonical configuration and status label for the backend.
-    #[must_use]
-    pub const fn as_str(self) -> &'static str {
-        match self {
-            Self::PortableVm => "portable_vm",
-        }
-    }
-}
 /// CDN-like distribution target for Soracloud-published artifacts.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema, Default)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[cfg_attr(feature = "json", norito(tag = "target", content = "value"))]
+#[norito(deny_unknown_fields)]
 pub enum SoraArtifactDistributionTargetV1 {
     /// Replicate and hydrate from the globally best eligible hosts.
     #[default]
@@ -269,6 +277,7 @@ impl SoraArtifactDistributionTargetV1 {
 /// Reusable policy for publishing artifacts to Soracloud host storage.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[norito(deny_unknown_fields)]
 pub struct SoraArtifactDistributionPolicyV1 {
     /// Operator target: global or a set of geography tags.
     pub target: SoraArtifactDistributionTargetV1,
@@ -298,12 +307,17 @@ impl SoraArtifactDistributionPolicyV1 {
 /// Immutable `SoraFS` artifact reference used to hydrate Inrou guest images.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[norito(deny_unknown_fields)]
 pub struct SoraPublishedInrouGuestImageArtifactV1 {
     /// `SoraFS` manifest digest hex for the uploaded guest-image artifact bundle.
     pub manifest_digest_hex: String,
     /// CID rendered for the uploaded guest-image artifact bundle.
     pub content_cid: String,
     /// Optional storage manifest identifier returned by the storage pin endpoint.
+    ///
+    /// The JSON key is mandatory in V1; an unavailable identifier is encoded
+    /// explicitly as `null` rather than by omitting the field.
+    #[norito(required)]
     pub manifest_id_hex: Option<String>,
     /// Exact copy of the parent guest image's authoritative distribution policy.
     pub distribution: SoraArtifactDistributionPolicyV1,
@@ -694,6 +708,7 @@ impl SoraInrouManifestV1 {
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[cfg_attr(feature = "json", norito(tag = "mode", content = "value"))]
+#[norito(deny_unknown_fields)]
 pub enum SoraNetworkPolicyV1 {
     /// Open egress is allowed and must be metered by the runtime.
     Open,
@@ -705,6 +720,7 @@ pub enum SoraNetworkPolicyV1 {
 /// A single allowlist rule for outbound network access.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[norito(deny_unknown_fields)]
 pub struct SoraNetworkAllowlistEntryV1 {
     /// Allowed outbound hostname.
     pub host: String,
@@ -820,6 +836,7 @@ impl SoraNetworkPolicyV1 {
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[allow(clippy::struct_excessive_bools)]
+#[norito(deny_unknown_fields)]
 pub struct SoraCapabilityPolicyV1 {
     /// Egress policy for outbound network access.
     pub network: SoraNetworkPolicyV1,
@@ -835,6 +852,7 @@ pub struct SoraCapabilityPolicyV1 {
 /// Resource limits for SCR process admission.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[norito(deny_unknown_fields)]
 pub struct SoraResourceLimitsV1 {
     /// CPU budget in millicores.
     pub cpu_millis: NonZeroU32,
@@ -850,17 +868,20 @@ pub struct SoraResourceLimitsV1 {
 /// Lifecycle hooks and probe settings used by SCR.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[norito(deny_unknown_fields)]
 pub struct SoraLifecycleHooksV1 {
     /// Grace period allowed for service startup.
     pub start_grace_secs: NonZeroU32,
     /// Grace period allowed for service shutdown.
     pub stop_grace_secs: NonZeroU32,
     /// Optional HTTP health endpoint path.
+    #[norito(required)]
     pub healthcheck_path: Option<String>,
 }
 /// Explicit config export injected into the runtime environment or mounted tree.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[norito(deny_unknown_fields)]
 pub struct SoraConfigExportV1 {
     /// Required config entry being exported.
     pub config_name: String,
@@ -886,6 +907,7 @@ impl SoraConfigExportV1 {
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[cfg_attr(feature = "json", norito(tag = "target", content = "value"))]
+#[norito(deny_unknown_fields)]
 pub enum SoraConfigExportTargetV1 {
     /// Export the canonical JSON payload into an environment variable.
     Env(String),
@@ -895,6 +917,7 @@ pub enum SoraConfigExportTargetV1 {
 /// One verified signature entry in a multisig canonical request witness.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[norito(deny_unknown_fields)]
 pub struct CanonicalRequestSignatureWitnessV1 {
     /// Public key that produced this signature.
     pub signer: PublicKey,
@@ -904,6 +927,7 @@ pub struct CanonicalRequestSignatureWitnessV1 {
 /// Multisignature witness for app-auth canonical HTTP requests.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[norito(deny_unknown_fields)]
 pub struct CanonicalRequestWitnessV1 {
     /// Schema version; must equal [`CANONICAL_REQUEST_WITNESS_VERSION_V1`].
     pub schema_version: u16,
@@ -916,7 +940,6 @@ pub struct CanonicalRequestWitnessV1 {
     /// Hash of the canonical request bytes reconstructed by the verifier.
     pub canonical_request_hash: Hash,
     /// Verified signature witnesses supplied by multisig participants.
-    #[norito(default)]
     pub signatures: Vec<CanonicalRequestSignatureWitnessV1>,
 }
 /// Canonical executable bundle manifest for `Soracloud` workloads.
@@ -1146,6 +1169,7 @@ impl SoraContainerManifestV1 {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, IntoSchema, Default)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[cfg_attr(feature = "json", norito(tag = "visibility", content = "value"))]
+#[norito(deny_unknown_fields)]
 pub enum SoraRouteVisibilityV1 {
     /// Route is externally reachable.
     #[default]
@@ -1157,6 +1181,7 @@ pub enum SoraRouteVisibilityV1 {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, IntoSchema, Default)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[cfg_attr(feature = "json", norito(tag = "tls", content = "value"))]
+#[norito(deny_unknown_fields)]
 pub enum SoraTlsModeV1 {
     /// TLS is mandatory.
     #[default]
@@ -1169,6 +1194,7 @@ pub enum SoraTlsModeV1 {
 /// Route definition for a deployed service.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[norito(deny_unknown_fields)]
 pub struct SoraRouteTargetV1 {
     /// Hostname assigned by `SoraDNS`.
     pub host: String,
@@ -1184,6 +1210,7 @@ pub struct SoraRouteTargetV1 {
 /// Rollout/upgrade behavior for the service.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[norito(deny_unknown_fields)]
 pub struct SoraRolloutPolicyV1 {
     /// Canary percentage applied before full rollout.
     pub canary_percent: u8,
@@ -1197,6 +1224,7 @@ pub struct SoraRolloutPolicyV1 {
 /// Reference to a previously admitted container manifest.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[norito(deny_unknown_fields)]
 pub struct SoraContainerManifestRefV1 {
     /// Hash of the referenced container manifest bytes.
     pub manifest_hash: Hash,
@@ -1207,6 +1235,7 @@ pub struct SoraContainerManifestRefV1 {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, IntoSchema, Default)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[cfg_attr(feature = "json", norito(tag = "execution_plane", content = "value"))]
+#[norito(deny_unknown_fields)]
 pub enum SoraServiceExecutionPlaneV1 {
     /// Deterministic certified reads and ordered mailbox execution on IVM.
     #[default]
@@ -1218,6 +1247,7 @@ pub enum SoraServiceExecutionPlaneV1 {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[cfg_attr(feature = "json", norito(tag = "lease_volume", content = "value"))]
+#[norito(deny_unknown_fields)]
 pub enum SoraLeaseVolumeKindV1 {
     /// Rebuildable public-service state such as indexes and checkpoints,
     /// shared across replicas of the same hosted-service revision.
@@ -1244,6 +1274,7 @@ impl SoraLeaseVolumeKindV1 {
 /// Lease-backed mutable storage binding for one hosted HTTP service.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[norito(deny_unknown_fields)]
 pub struct SoraLeaseVolumeBindingV1 {
     /// Human-readable volume identifier.
     pub volume_name: Name,
@@ -1300,6 +1331,7 @@ impl SoraLeaseVolumeBindingV1 {
 /// Economic policy required for hosted HTTP services.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[norito(deny_unknown_fields)]
 pub struct SoraHttpServiceEconomicsV1 {
     /// Schema version; must equal [`SORA_HTTP_SERVICE_ECONOMICS_VERSION_V1`].
     pub schema_version: u16,
@@ -1377,6 +1409,7 @@ impl SoraHttpServiceEconomicsV1 {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, IntoSchema, Default)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[cfg_attr(feature = "json", norito(tag = "status", content = "value"))]
+#[norito(deny_unknown_fields)]
 pub enum SoraServiceLeaseStatusV1 {
     /// Lease is active and the service may be routed/materialized.
     #[default]
@@ -1388,9 +1421,128 @@ pub enum SoraServiceLeaseStatusV1 {
     /// Lease was suspended by policy and must fail closed.
     Suspended,
 }
+/// Maximum authenticated reporter identities retained in one reporting epoch.
+///
+/// This consensus constant bounds world-state and Norito growth under repeated
+/// revision rollout or validator churn. Once the bound is reached, the exact
+/// newly assigned reporter may advance the reporting epoch only after every
+/// prior checkpoint is terminal and no prior reporter remains actively placed.
+pub const SORA_SERVICE_LEASE_MAX_EGRESS_REPORTER_CHECKPOINTS_V1: usize = 4_096;
+/// One reporting-epoch-bound replica reporter's monotonic egress checkpoint.
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[norito(deny_unknown_fields)]
+pub struct SoraServiceLeaseEgressCheckpointV1 {
+    /// Reporting epoch in which this checkpoint was admitted.
+    pub reporting_epoch: u64,
+    /// Service revision for which the replica emitted this usage.
+    pub active_service_version: String,
+    /// One-based placed replica slot.
+    pub replica_slot: u16,
+    /// Validator authority authenticated when the checkpoint was accepted.
+    pub validator_account_id: AccountId,
+    /// Monotonic egress bytes emitted by this exact reporter identity.
+    pub accounted_egress_bytes: u64,
+    /// Whether this reporter identity has submitted its terminal checkpoint.
+    ///
+    /// An identical active placement may reopen the checkpoint before serving
+    /// again. A former reporter may only replay the exact terminal value.
+    pub finalize_reporter: bool,
+}
+/// Typed audit payload for one hosted-service reporting-epoch rollover.
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[norito(deny_unknown_fields)]
+pub struct SoraServiceLeaseReportingEpochRolloverV1 {
+    /// Schema version; must equal
+    /// [`SORA_SERVICE_LEASE_REPORTING_EPOCH_ROLLOVER_VERSION_V1`].
+    pub schema_version: u16,
+    /// Immutable economic lease incarnation to which the rollover belongs.
+    pub lease_started_sequence: u64,
+    /// Epoch whose terminal counters were settled.
+    pub previous_reporting_epoch: u64,
+    /// Exact successor epoch opened by the rollover.
+    pub new_reporting_epoch: u64,
+    /// Active validator that opened the successor epoch.
+    pub reporter_account_id: AccountId,
+    /// Active service revision assigned to the successor reporter.
+    pub active_service_version: String,
+    /// One-based replica slot assigned to the successor reporter.
+    pub replica_slot: u16,
+    /// Number of terminal prior-epoch checkpoints folded into settlement.
+    pub finalized_checkpoint_count: u32,
+    /// Exact prior-epoch bytes added to the settlement baseline.
+    pub settled_egress_bytes_delta: u128,
+    /// Exact cumulative settled bytes after the rollover.
+    pub settled_egress_bytes: u128,
+}
+impl SoraServiceLeaseReportingEpochRolloverV1 {
+    /// Validate the bound rollover transition.
+    ///
+    /// # Errors
+    /// Returns [`SoracloudManifestError`] when the epoch transition, trigger,
+    /// or settlement fields do not describe one exact rollover.
+    pub fn validate(&self) -> Result<(), SoracloudManifestError> {
+        validate_schema_version(
+            "sora service lease reporting epoch rollover",
+            self.schema_version,
+            SORA_SERVICE_LEASE_REPORTING_EPOCH_ROLLOVER_VERSION_V1,
+        )?;
+        if self.lease_started_sequence == 0 {
+            return Err(invalid_field(
+                "sora service lease reporting epoch rollover",
+                "lease_started_sequence",
+                "must be greater than zero",
+            ));
+        }
+        if self.previous_reporting_epoch == 0
+            || self.previous_reporting_epoch.checked_add(1) != Some(self.new_reporting_epoch)
+        {
+            return Err(invalid_field(
+                "sora service lease reporting epoch rollover",
+                "new_reporting_epoch",
+                "must be the checked successor of a non-zero previous_reporting_epoch",
+            ));
+        }
+        validate_nonblank_field(
+            "sora service lease reporting epoch rollover",
+            "active_service_version",
+            &self.active_service_version,
+        )?;
+        if self.replica_slot == 0 {
+            return Err(invalid_field(
+                "sora service lease reporting epoch rollover",
+                "replica_slot",
+                "must be greater than zero",
+            ));
+        }
+        if usize::try_from(self.finalized_checkpoint_count).ok()
+            != Some(SORA_SERVICE_LEASE_MAX_EGRESS_REPORTER_CHECKPOINTS_V1)
+        {
+            return Err(invalid_field(
+                "sora service lease reporting epoch rollover",
+                "finalized_checkpoint_count",
+                "must equal the reporting-epoch checkpoint limit",
+            ));
+        }
+        if self
+            .settled_egress_bytes
+            .checked_sub(self.settled_egress_bytes_delta)
+            .is_none()
+        {
+            return Err(invalid_field(
+                "sora service lease reporting epoch rollover",
+                "settled_egress_bytes",
+                "must be greater than or equal to settled_egress_bytes_delta",
+            ));
+        }
+        Ok(())
+    }
+}
 /// Authoritative lease and accounting state for a hosted HTTP service.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[norito(deny_unknown_fields)]
 pub struct SoraServiceLeaseStateV1 {
     /// Schema version; must equal [`SORA_SERVICE_LEASE_STATE_VERSION_V1`].
     pub schema_version: u16,
@@ -1412,16 +1564,47 @@ pub struct SoraServiceLeaseStateV1 {
     pub lease_started_sequence: u64,
     /// Sequence after which the lease must fail closed.
     pub lease_expires_sequence: u64,
-    /// Most recent authoritative billing checkpoint.
-    pub last_billed_sequence: u64,
-    /// Authoritative egress bytes recorded by the runtime so far.
-    #[norito(default)]
-    pub accounted_egress_bytes: u64,
+    /// Monotonic reporting epoch, independent of the economic lease clock.
+    pub reporting_epoch: u64,
+    /// Exact bytes settled from all finalized prior reporting epochs.
+    pub settled_egress_bytes: u128,
+    /// Canonically sorted reporter checkpoints keyed by reporting epoch,
+    /// revision, slot, and validator. Every retained checkpoint belongs to the
+    /// current reporting epoch.
+    pub egress_reporter_checkpoints: Vec<SoraServiceLeaseEgressCheckpointV1>,
+    /// Cached exact sum of settled bytes and all current-epoch checkpoints.
+    pub accounted_egress_bytes: u128,
     /// Human-readable reason when the lease is not active.
-    #[norito(default)]
+    #[norito(required)]
     pub last_status_reason: Option<String>,
 }
 impl SoraServiceLeaseStateV1 {
+    /// Recompute the deterministic exact aggregate egress total.
+    #[must_use]
+    pub fn recomputed_accounted_egress_bytes(&self) -> Option<u128> {
+        self.egress_reporter_checkpoints
+            .iter()
+            .try_fold(self.settled_egress_bytes, |total, checkpoint| {
+                total.checked_add(u128::from(checkpoint.accounted_egress_bytes))
+            })
+    }
+
+    /// Refresh the cached aggregate egress total after a checkpoint mutation.
+    ///
+    /// # Errors
+    /// Returns [`SoracloudManifestError`] if the exact `u128` aggregate overflows.
+    pub fn refresh_accounted_egress_bytes(&mut self) -> Result<(), SoracloudManifestError> {
+        self.accounted_egress_bytes =
+            self.recomputed_accounted_egress_bytes().ok_or_else(|| {
+                invalid_field(
+                    "sora service lease state",
+                    "accounted_egress_bytes",
+                    "settled and current-epoch egress total overflows u128",
+                )
+            })?;
+        Ok(())
+    }
+
     /// Validate lease-accounting invariants.
     ///
     /// # Errors
@@ -1456,7 +1639,7 @@ impl SoraServiceLeaseStateV1 {
         for (field, value) in [
             ("lease_started_sequence", self.lease_started_sequence),
             ("lease_expires_sequence", self.lease_expires_sequence),
-            ("last_billed_sequence", self.last_billed_sequence),
+            ("reporting_epoch", self.reporting_epoch),
         ] {
             if value == 0 {
                 return Err(invalid_field(
@@ -1473,15 +1656,6 @@ impl SoraServiceLeaseStateV1 {
                 "must be greater than lease_started_sequence",
             ));
         }
-        if self.last_billed_sequence < self.lease_started_sequence
-            || self.last_billed_sequence > self.lease_expires_sequence
-        {
-            return Err(invalid_field(
-                "sora service lease state",
-                "last_billed_sequence",
-                "must be within lease_started_sequence..=lease_expires_sequence",
-            ));
-        }
         if self
             .last_status_reason
             .as_ref()
@@ -1491,6 +1665,78 @@ impl SoraServiceLeaseStateV1 {
                 "sora service lease state",
                 "last_status_reason",
                 "must not be empty when provided",
+            ));
+        }
+        for checkpoint in &self.egress_reporter_checkpoints {
+            if checkpoint.reporting_epoch != self.reporting_epoch {
+                return Err(invalid_field(
+                    "sora service lease state",
+                    "egress_reporter_checkpoints",
+                    "checkpoint reporting_epoch must match the active reporting_epoch",
+                ));
+            }
+            if checkpoint.active_service_version.trim().is_empty() {
+                return Err(invalid_field(
+                    "sora service lease state",
+                    "egress_reporter_checkpoints",
+                    "service versions must not be empty",
+                ));
+            }
+            if checkpoint.replica_slot == 0 {
+                return Err(invalid_field(
+                    "sora service lease state",
+                    "egress_reporter_checkpoints",
+                    "replica slots must be greater than zero",
+                ));
+            }
+        }
+        if self.egress_reporter_checkpoints.len()
+            > SORA_SERVICE_LEASE_MAX_EGRESS_REPORTER_CHECKPOINTS_V1
+        {
+            return Err(invalid_field(
+                "sora service lease state",
+                "egress_reporter_checkpoints",
+                "exceeds the protocol reporter checkpoint limit",
+            ));
+        }
+        if self
+            .egress_reporter_checkpoints
+            .windows(2)
+            .any(|checkpoints| {
+                let left = (
+                    checkpoints[0].reporting_epoch,
+                    checkpoints[0].active_service_version.as_str(),
+                    checkpoints[0].replica_slot,
+                    &checkpoints[0].validator_account_id,
+                );
+                let right = (
+                    checkpoints[1].reporting_epoch,
+                    checkpoints[1].active_service_version.as_str(),
+                    checkpoints[1].replica_slot,
+                    &checkpoints[1].validator_account_id,
+                );
+                left >= right
+            })
+        {
+            return Err(invalid_field(
+                "sora service lease state",
+                "egress_reporter_checkpoints",
+                "must be strictly sorted by reporting epoch, revision, slot, and validator",
+            ));
+        }
+        let recomputed_accounted_egress_bytes =
+            self.recomputed_accounted_egress_bytes().ok_or_else(|| {
+                invalid_field(
+                    "sora service lease state",
+                    "accounted_egress_bytes",
+                    "settled and current-epoch egress total overflows u128",
+                )
+            })?;
+        if self.accounted_egress_bytes != recomputed_accounted_egress_bytes {
+            return Err(invalid_field(
+                "sora service lease state",
+                "accounted_egress_bytes",
+                "must equal the exact settled and current-epoch checkpoint sum",
             ));
         }
         Ok(())
@@ -1574,6 +1820,7 @@ impl SoraServiceLeaseStateV1 {
 /// Authoritative leased-volume state recorded by the hosting control plane.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[norito(deny_unknown_fields)]
 pub struct SoraServiceLeaseVolumeStateV1 {
     /// Schema version; must equal [`SORA_SERVICE_LEASE_VOLUME_STATE_VERSION_V1`].
     pub schema_version: u16,
@@ -1594,7 +1841,7 @@ pub struct SoraServiceLeaseVolumeStateV1 {
     /// Monotonic platform-side generation for the authoritative binding.
     pub authoritative_generation: u64,
     /// Latest sequence that materialized this binding on a host, when known.
-    #[norito(default)]
+    #[norito(required)]
     pub last_materialized_sequence: Option<u64>,
 }
 impl SoraServiceLeaseVolumeStateV1 {
@@ -1663,6 +1910,7 @@ impl SoraServiceLeaseVolumeStateV1 {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, IntoSchema, Default)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[cfg_attr(feature = "json", norito(tag = "scope", content = "value"))]
+#[norito(deny_unknown_fields)]
 pub enum SoraStateScopeV1 {
     /// Account metadata namespace.
     AccountMetadata,
@@ -1680,6 +1928,7 @@ pub enum SoraStateScopeV1 {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, IntoSchema, Default)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[cfg_attr(feature = "json", norito(tag = "mutability", content = "value"))]
+#[norito(deny_unknown_fields)]
 pub enum SoraStateMutabilityV1 {
     /// Binding is read-only.
     #[default]
@@ -1693,6 +1942,7 @@ pub enum SoraStateMutabilityV1 {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, IntoSchema, Default)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[cfg_attr(feature = "json", norito(tag = "encryption", content = "value"))]
+#[norito(deny_unknown_fields)]
 pub enum SoraStateEncryptionV1 {
     /// Values are stored in plaintext.
     #[default]
@@ -1705,6 +1955,7 @@ pub enum SoraStateEncryptionV1 {
 /// Deterministic state binding contract for an SCR service.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[norito(deny_unknown_fields)]
 pub struct SoraStateBindingV1 {
     /// Schema version; must equal [`SORA_STATE_BINDING_VERSION_V1`].
     pub schema_version: u16,
@@ -1766,6 +2017,7 @@ impl SoraStateBindingV1 {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, IntoSchema, Default)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[cfg_attr(feature = "json", norito(tag = "class", content = "value"))]
+#[norito(deny_unknown_fields)]
 pub enum SoraServiceHandlerClassV1 {
     /// Certified static-asset serving.
     Asset,
@@ -1784,6 +2036,7 @@ pub enum SoraServiceHandlerClassV1 {
     feature = "json",
     norito(tag = "certified_response", content = "value")
 )]
+#[norito(deny_unknown_fields)]
 pub enum SoraCertifiedResponsePolicyV1 {
     /// No certification is attached.
     #[default]
@@ -1797,6 +2050,7 @@ pub enum SoraCertifiedResponsePolicyV1 {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, IntoSchema, Default)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[cfg_attr(feature = "json", norito(tag = "artifact_kind", content = "value"))]
+#[norito(deny_unknown_fields)]
 pub enum SoraArtifactKindV1 {
     /// Executable service bundle.
     Bundle,
@@ -1815,6 +2069,7 @@ pub enum SoraArtifactKindV1 {
 /// Content-addressed artifact reference attached to a service revision.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[norito(deny_unknown_fields)]
 pub struct SoraArtifactRefV1 {
     /// Artifact class referenced by the service revision.
     pub kind: SoraArtifactKindV1,
@@ -1823,6 +2078,7 @@ pub struct SoraArtifactRefV1 {
     /// Canonical bundle-relative or service-relative path for the artifact.
     pub artifact_path: String,
     /// Optional handler that consumes or serves the artifact.
+    #[norito(required)]
     pub handler_name: Option<Name>,
 }
 impl SoraArtifactRefV1 {
@@ -1846,6 +2102,7 @@ impl SoraArtifactRefV1 {
 /// Ordered mailbox contract attached to replicated service handlers.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[norito(deny_unknown_fields)]
 pub struct SoraMailboxContractV1 {
     /// Stable logical queue name.
     pub queue_name: Name,
@@ -1875,6 +2132,7 @@ impl SoraMailboxContractV1 {
 /// Runtime handler definition exposed by a service revision.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[norito(deny_unknown_fields)]
 pub struct SoraServiceHandlerV1 {
     /// Stable logical handler identifier.
     pub handler_name: Name,
@@ -1883,10 +2141,12 @@ pub struct SoraServiceHandlerV1 {
     /// Entrypoint symbol/function for this handler.
     pub entrypoint: String,
     /// Optional path suffix relative to the service route prefix.
+    #[norito(required)]
     pub route_path: Option<String>,
     /// Certification mode for responses emitted by this handler.
     pub certified_response: SoraCertifiedResponsePolicyV1,
     /// Ordered mailbox contract for replicated handlers.
+    #[norito(required)]
     pub mailbox: Option<SoraMailboxContractV1>,
 }
 impl SoraServiceHandlerV1 {
@@ -1954,6 +2214,7 @@ impl SoraServiceHandlerV1 {
 /// Canonical deployment manifest for a routable `Soracloud` service.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[norito(deny_unknown_fields)]
 pub struct SoraServiceManifestV1 {
     /// Schema version; must equal [`SORA_SERVICE_MANIFEST_VERSION_V1`].
     pub schema_version: u16,
@@ -1968,6 +2229,7 @@ pub struct SoraServiceManifestV1 {
     /// Desired replica count.
     pub replicas: NonZeroU16,
     /// Optional route exposure metadata.
+    #[norito(required)]
     pub route: Option<SoraRouteTargetV1>,
     /// Rollout and rollback policy.
     pub rollout: SoraRolloutPolicyV1,
@@ -2178,6 +2440,7 @@ impl SoraServiceManifestV1 {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, IntoSchema, Default)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[cfg_attr(feature = "json", norito(tag = "upgrade_policy", content = "value"))]
+#[norito(deny_unknown_fields)]
 pub enum AgentUpgradePolicyV1 {
     /// Apartments can only be upgraded through explicit governance actions.
     #[default]
@@ -2190,6 +2453,7 @@ pub enum AgentUpgradePolicyV1 {
 /// Tool-level execution cap for an agent apartment.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[norito(deny_unknown_fields)]
 pub struct AgentToolCapabilityV1 {
     /// Stable tool identifier.
     pub tool: String,
@@ -2203,6 +2467,7 @@ pub struct AgentToolCapabilityV1 {
 /// Spend guardrail for a specific asset under apartment policy.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[norito(deny_unknown_fields)]
 pub struct AgentSpendLimitV1 {
     /// Asset definition identifier (for example `61CtjvNd9T3THAR65GsMVHr82Bjc`).
     pub asset_definition: String,
@@ -2214,6 +2479,7 @@ pub struct AgentSpendLimitV1 {
 /// Deterministic policy manifest for a persistent AI agent apartment.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[norito(deny_unknown_fields)]
 pub struct AgentApartmentManifestV1 {
     /// Schema version; must equal [`AGENT_APARTMENT_MANIFEST_VERSION_V1`].
     pub schema_version: u16,
@@ -2222,13 +2488,10 @@ pub struct AgentApartmentManifestV1 {
     /// Reference to the executable container manifest.
     pub container: SoraContainerManifestRefV1,
     /// Tool-level capability policy.
-    #[norito(default)]
     pub tool_capabilities: Vec<AgentToolCapabilityV1>,
     /// Additional high-level policy capability identifiers.
-    #[norito(default)]
     pub policy_capabilities: Vec<Name>,
     /// Wallet spend limits across allowed assets.
-    #[norito(default)]
     pub spend_limits: Vec<AgentSpendLimitV1>,
     /// Total state quota reserved for apartment memory.
     pub state_quota_bytes: NonZeroU64,

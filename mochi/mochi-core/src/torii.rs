@@ -1106,8 +1106,6 @@ pub struct StatusMetrics {
     pub block_delta: u64,
     /// Number of non-empty blocks committed since the previous sample.
     pub blocks_non_empty_delta: u64,
-    /// DA reschedules observed since the previous sample.
-    pub da_reschedule_delta: u64,
     /// Approved transaction increase since the previous sample.
     pub tx_approved_delta: u64,
     /// Rejected transaction increase since the previous sample.
@@ -1143,20 +1141,12 @@ impl StatusMetrics {
                 )
             })
             .unwrap_or((0, 0, 0));
-        let da_reschedule_delta = previous
-            .map(|prev| {
-                current
-                    .da_reschedule_total
-                    .saturating_sub(prev.da_reschedule_total)
-            })
-            .unwrap_or(0);
         Self {
             commit_latency_ms: current.commit_time_ms,
             queue_size: current.queue_size,
             queue_delta,
             block_delta,
             blocks_non_empty_delta,
-            da_reschedule_delta,
             tx_approved_delta,
             tx_rejected_delta,
             view_change_delta,
@@ -1169,7 +1159,6 @@ impl StatusMetrics {
         self.tx_approved_delta > 0
             || self.tx_rejected_delta > 0
             || self.queue_delta != 0
-            || self.da_reschedule_delta > 0
             || self.block_delta > 0
             || self.blocks_non_empty_delta > 0
             || self.view_change_delta > 0

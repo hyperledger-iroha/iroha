@@ -623,8 +623,8 @@ mod tests {
             untracked_file_count: 0,
             untracked_path_mode_blob_oid_manifest: Vec::new(),
             untracked_path_mode_blob_oid_manifest_sha256,
-            ignored_cargo_lock_size_bytes: 1,
-            ignored_cargo_lock_sha256: Sha256::digest([0x94]).into(),
+            tracked_cargo_lock_size_bytes: 1,
+            tracked_cargo_lock_sha256: Sha256::digest([0x94]).into(),
             combined_source_fingerprint_sha256: combined.finalize().into(),
         };
         let descriptor_sha256 = closure

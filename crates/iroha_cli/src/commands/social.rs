@@ -1,5 +1,5 @@
 //! Social incentive helpers (viral follow rewards and escrows).
-use std::{fs, path::Path};
+use crate::{Run, RunContext};
 use clap::{Args, Subcommand};
 use eyre::{Result, WrapErr, eyre};
 use iroha::data_model::{
@@ -8,7 +8,7 @@ use iroha::data_model::{
 };
 use iroha_primitives::numeric::Quantity;
 use norito::json;
-use crate::{Run, RunContext};
+use std::{fs, path::Path};
 #[derive(Subcommand, Debug)]
 pub enum Command {
     /// Claim a promotional reward for a verified Twitter follow binding.

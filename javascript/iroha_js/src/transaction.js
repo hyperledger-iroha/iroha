@@ -469,7 +469,8 @@ function normalizeOptionalPositiveInteger(value, context) {
 }
 
 /**
- * Compute the canonical transaction hash (blake2b-256) for a signed transaction.
+ * Compute the canonical transaction hash (blake2b-256) for an exact canonical
+ * VersionedSignedTransaction V1 wire.
  * @param {ArrayBufferView | ArrayBuffer | Buffer} signedTransaction
  * @param {{ encoding?: BufferEncoding }} [options]
  * @returns {string | Buffer} Hex string by default, Buffer when `encoding` is `"buffer"`.
@@ -489,8 +490,8 @@ export function hashSignedTransaction(signedTransaction, options = {}) {
 }
 
 /**
- * Compute the detached-signature preimage used by Torii for a transaction
- * scaffold (`HashOf::new(tx.payload())`).
+ * Compute the detached-signature preimage used by Torii for an exact canonical
+ * VersionedSignedTransaction V1 wire (`HashOf::new(tx.payload())`).
  * @param {ArrayBufferView | ArrayBuffer | Buffer} signedTransaction
  * @param {{ encoding?: BufferEncoding }} [options]
  * @returns {string | Buffer} Hex string by default, Buffer when `encoding` is `"buffer"`.
@@ -512,7 +513,7 @@ export function hashSignedTransactionPayload(signedTransaction, options = {}) {
 }
 
 /**
- * Decode a canonical Norito signed transaction into its JSON representation.
+ * Decode an exact canonical VersionedSignedTransaction V1 wire into JSON.
  * This is intended for wallet policy checks before signing an untrusted
  * transaction scaffold.
  * @param {ArrayBufferView | ArrayBuffer | Buffer} signedTransaction
@@ -592,9 +593,9 @@ export function hashInstructionBatch(instructions, options = {}) {
 }
 
 /**
- * Re-sign a Norito-encoded ordinary transaction for one exact NetworkId with
- * the provided Ed25519 private key. Foreign-network and genesis payloads are
- * rejected by the native boundary before signing.
+ * Re-sign an exact canonical VersionedSignedTransaction V1 wire for one exact
+ * NetworkId with the provided Ed25519 private key. Foreign-network and genesis
+ * payloads are rejected by the native boundary before signing.
  * @param {import("./networkId.js").NetworkId} networkId
  * @param {ArrayBufferView | ArrayBuffer | Buffer} signedTransaction
  * @param {ArrayBufferView | ArrayBuffer | Buffer} privateKey 32- or 64-byte Ed25519 key.
@@ -4682,7 +4683,8 @@ export function buildRemoveSmartContractBytesTransaction(input) {
 }
 
 /**
- * Submit a signed transaction and optionally wait for authoritative Applied finality.
+ * Submit an exact canonical VersionedSignedTransaction V1 wire and optionally
+ * wait for authoritative Applied finality.
  * @param {ToriiClient} client
  * @param {ArrayBufferView | ArrayBuffer | Buffer} signedTransaction
  * @param {{ waitForCommit?: boolean, pollIntervalMs?: number, timeoutMs?: number, networkId?: import("./networkId.js").NetworkId, privateKey?: ArrayBufferView | ArrayBuffer | Buffer }} [options]
@@ -4725,46 +4727,6 @@ export async function submitSignedTransaction(
 
   const status = await waitForAuthoritativeApplied(client, hashHex, options);
   return { hash: hashHex, submission, status };
-}
-
-/**
- * Submit a raw transaction entrypoint payload and optionally wait for authoritative Applied finality.
- * @param {ToriiClient} client
- * @param {ArrayBufferView | ArrayBuffer | Buffer} transactionEntrypoint
- * @param {{ hashHex: string, waitForCommit?: boolean, pollIntervalMs?: number, timeoutMs?: number }} options
- * @returns {Promise<{hash: string, submission: any, status?: any}>}
- */
-export async function submitTransactionEntrypoint(
-  client,
-  transactionEntrypoint,
-  options,
-) {
-  if (!(client instanceof ToriiClient)) {
-    throw new TypeError("client must be an instance of ToriiClient");
-  }
-  if (!options || typeof options !== "object") {
-    throw new TypeError(
-      "options.hashHex is required for entrypoint submission",
-    );
-  }
-  if (Object.prototype.hasOwnProperty.call(options, "scope")) {
-    throw new TypeError(
-      "options.scope is unsupported; finality waits always use global scope",
-    );
-  }
-  const hashHex = String(options.hashHex ?? "").trim();
-  if (!/^[0-9a-fA-F]{64}$/.test(hashHex)) {
-    throw new TypeError("options.hashHex must be a 32-byte hex string");
-  }
-  const payload = toBuffer(transactionEntrypoint);
-  const submission = await client.submitTransaction(payload);
-
-  if (!options.waitForCommit) {
-    return { hash: hashHex.toLowerCase(), submission };
-  }
-
-  const status = await waitForAuthoritativeApplied(client, hashHex, options);
-  return { hash: hashHex.toLowerCase(), submission, status };
 }
 
 async function waitForAuthoritativeApplied(client, hashHex, options) {

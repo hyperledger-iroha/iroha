@@ -1,14 +1,17 @@
 //! Governance threshold tests: ratio and turnout logic.
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
+#[path = "common/governance.rs"]
+mod governance_fixture;
 use core::num::NonZeroU64;
 use iroha_core::{
     kura::Kura,
     query::store::LiveQueryStore,
     smartcontracts::Execute,
     state::{
-        GovernancePipeline, GovernanceProposalRecord, GovernanceProposalStatus,
-        GovernanceReferendumMode, GovernanceReferendumRecord, GovernanceReferendumStatus,
-        GovernanceStageApprovals, State, StateTransaction, World, WorldReadOnly,
+        GovernanceLockCustody, GovernancePipeline, GovernanceProposalRecord,
+        GovernanceProposalStatus, GovernanceReferendumMode, GovernanceReferendumRecord,
+        GovernanceReferendumStatus, GovernanceStageApprovals, State, StateTransaction, World,
+        WorldReadOnly,
     },
 };
 use iroha_crypto::KeyPair;
@@ -50,6 +53,14 @@ fn threshold_contract_address(nonce: u64) -> ContractAddress {
     )
     .expect("threshold proposal contract address")
 }
+fn lock_custody(stx: &StateTransaction<'_, '_>) -> GovernanceLockCustody {
+    GovernanceLockCustody {
+        escrowed: !stx.gov.min_bond_amount.is_zero(),
+        asset_definition_id: stx.gov.voting_asset_id.clone(),
+        bond_escrow_account: stx.gov.bond_escrow_account.clone(),
+        slash_receiver_account: stx.gov.slash_receiver_account.clone(),
+    }
+}
 fn seed_open_plain_referendum(
     stx: &mut StateTransaction<'_, '_>,
     proposal_id: [u8; 32],
@@ -83,7 +94,9 @@ fn seed_open_plain_referendum(
             created_height: h_start,
             status: GovernanceProposalStatus::Proposed,
             pipeline,
-            parliament_snapshot: None,
+            parliament_snapshot: governance_fixture::single_member_parliament_snapshot(
+                &ALICE_ID, h_start,
+            ),
             finalization_evidence: None,
             enacted_at_height: None,
         },
@@ -91,13 +104,13 @@ fn seed_open_plain_referendum(
     let mut approvals = GovernanceStageApprovals::default();
     for body in DEPLOY_PARLIAMENT_BODIES {
         approvals
-            .ensure_stage(body, 0, 1, stx.gov.parliament_quorum_bps)
+            .ensure_stage(body, h_start, 1, stx.gov.parliament_quorum_bps)
             .record(ALICE_ID.clone());
     }
     assert!(
         DEPLOY_PARLIAMENT_BODIES
             .into_iter()
-            .all(|body| approvals.quorum_met(body, 0))
+            .all(|body| approvals.quorum_met(body, h_start))
     );
     stx.world
         .governance_stage_approvals_mut()
@@ -136,7 +149,7 @@ fn ratio_threshold_rejects_even_if_approve_gt_reject() {
             expiry_height: 100,
             direction: 0,
             duration_blocks: 0,
-            custody: None,
+            custody: lock_custody(&stx),
         },
     );
     map.locks.insert(
@@ -148,7 +161,7 @@ fn ratio_threshold_rejects_even_if_approve_gt_reject() {
             expiry_height: 100,
             direction: 1,
             duration_blocks: 0,
-            custody: None,
+            custody: lock_custody(&stx),
         },
     );
     stx.world.governance_locks_mut().insert(rid.clone(), map);
@@ -216,7 +229,7 @@ fn min_turnout_rejects_when_below_threshold() {
             expiry_height: 100,
             direction: 0,
             duration_blocks: 0,
-            custody: None,
+            custody: lock_custody(&stx),
         },
     );
     stx.world.governance_locks_mut().insert(rid.clone(), map);
@@ -281,7 +294,7 @@ fn finalize_referendum_rejects_tally_overflow_without_side_effects() {
                 expiry_height: u64::MAX,
                 direction: 0,
                 duration_blocks: u64::MAX - 1,
-                custody: None,
+                custody: lock_custody(&stx),
             },
         );
     }

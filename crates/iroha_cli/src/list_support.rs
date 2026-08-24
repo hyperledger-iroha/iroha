@@ -1,6 +1,6 @@
+use crate::parse_json;
 use eyre::{Result, WrapErr};
 use iroha::data_model::query::{dsl::SelectorTuple, parameters::SortOrder};
-use crate::parse_json;
 /// Common pagination/sorting arguments shared by list commands.
 #[derive(clap::Args, Debug, Clone)]
 pub struct CommonArgs {
