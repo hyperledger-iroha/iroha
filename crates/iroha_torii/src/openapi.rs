@@ -4680,21 +4680,26 @@ mod tests {
         }
     }
     #[test]
-    fn retired_validation_fee_plain_ballot_draft_is_absent() {
-        const RETIRED_PATH: &str =
-            "/v1/validation-fee/proposals/{proposal_id}/plain-ballot/draft";
+    fn validation_fee_plaintext_contracts_stay_retired_and_parliament_capabilities_are_exact() {
+        const RETIRED_PATH: &str = "/v1/validation-fee/proposals/{proposal_id}/plain-ballot/draft";
         for (surface, source) in [
-            ("Torii validation-fee implementation", include_str!("validation_fee_api.rs")),
+            (
+                "Torii validation-fee implementation",
+                include_str!("validation_fee_api.rs"),
+            ),
             ("Torii router mounts", include_str!("lib.rs")),
-            ("canonical route catalog", include_str!("../../iroha_torii_shared/src/route_catalog.rs")),
+            (
+                "canonical route catalog",
+                include_str!("../../iroha_torii_shared/src/route_catalog.rs"),
+            ),
         ] {
             assert!(
                 !source.contains(RETIRED_PATH),
                 "retired validation-fee PLAIN ballot draft reappeared in {surface}"
             );
             assert!(
-                !source.contains("ValidationFeePlainBallotDraft"),
-                "retired validation-fee PLAIN ballot draft type reappeared in {surface}"
+                !source.contains("ValidationFeePlain"),
+                "retired validation-fee plaintext type reappeared in {surface}"
             );
         }
         for (label, document) in [
@@ -4709,6 +4714,12 @@ mod tests {
                 !paths.contains_key(RETIRED_PATH),
                 "retired validation-fee PLAIN ballot draft remains in {label} OpenAPI"
             );
+            assert!(
+                paths.keys().all(|path| {
+                    !path.starts_with("/v1/validation-fee/") || !path.contains("plain")
+                }),
+                "retired validation-fee plaintext route remains in {label} OpenAPI"
+            );
             let schemas = document
                 .get("components")
                 .and_then(Value::as_object)
@@ -4718,12 +4729,100 @@ mod tests {
             for retired_schema in [
                 "ValidationFeePlainBallotDraftRequestV1",
                 "ValidationFeePlainBallotDraftResponseV1",
+                "ValidationFeePlainElectorateMemberV1",
+                "ValidationFeePlainElectorateRulesV1",
+                "ValidationFeePlainElectorateSnapshotV1",
             ] {
                 assert!(
                     !schemas.contains_key(retired_schema),
                     "retired schema {retired_schema} remains in {label} OpenAPI"
                 );
             }
+            assert!(
+                schemas
+                    .keys()
+                    .all(|name| !name.starts_with("ValidationFeePlain")),
+                "retired validation-fee plaintext schema remains in {label} OpenAPI"
+            );
+
+            assert_strict_object_schema(
+                schemas,
+                "GovernanceCapabilitiesV1",
+                &[
+                    "schema",
+                    "version",
+                    "network_id",
+                    "current_height",
+                    "network_prefix",
+                    "abi_version",
+                    "data_model_version",
+                    "approval_mode",
+                    "private_ballot_protocol",
+                    "mandatory_private_ballots",
+                    "proposal_backed_referendum_ballots_supported",
+                    "standalone_plain_ballots_supported",
+                    "standalone_zk_ballots_supported",
+                    "citizenship_asset_id",
+                    "citizenship_bond_amount",
+                    "citizenship_escrow_account",
+                    "voting_asset_id",
+                    "min_bond_amount",
+                    "bond_escrow_account",
+                    "min_enactment_delay",
+                    "invitation_phase_blocks",
+                    "registration_phase_blocks",
+                    "survivor_freeze_phase_blocks",
+                    "commitment_phase_blocks",
+                    "release_delay_blocks",
+                    "opening_phase_blocks",
+                    "max_ballot_retries",
+                    "max_corpus_entries",
+                    "target_body_sizes",
+                    "supported_proposal_kinds",
+                    "supported_routes",
+                ],
+                &[],
+            );
+            let capabilities = component_properties(schemas, "GovernanceCapabilitiesV1");
+            for retired_field in [
+                "approval_threshold_denominator",
+                "approval_threshold_numerator",
+                "auto_finalize_plain",
+                "auto_finalize_plain_scope",
+                "conviction_step_blocks",
+                "max_conviction",
+                "min_turnout",
+                "parliament_quorum_bps",
+                "plain_voting_enabled",
+                "validation_fee_plain_electorate_rules",
+                "validation_fee_plain_requires_explicit_finalization",
+                "window_span",
+            ] {
+                assert!(
+                    !capabilities.contains_key(retired_field),
+                    "retired GovernanceCapabilitiesV1 field {retired_field} remains in {label} OpenAPI"
+                );
+            }
+            assert_eq!(
+                capabilities["approval_mode"]["const"].as_str(),
+                Some("PARLIAMENT_ATTEMPT_TIMED_OVN_V1")
+            );
+            assert_eq!(
+                capabilities["private_ballot_protocol"]["const"].as_str(),
+                Some("TIMED_OVN_TLE_THRESHOLD_BLS_V1")
+            );
+            assert_eq!(
+                capabilities["mandatory_private_ballots"]["const"].as_bool(),
+                Some(true)
+            );
+            assert_eq!(
+                capabilities["proposal_backed_referendum_ballots_supported"]["const"].as_bool(),
+                Some(false)
+            );
+            assert_eq!(
+                capabilities["standalone_zk_ballots_supported"]["const"].as_bool(),
+                Some(true)
+            );
         }
     }
     #[test]

@@ -322,7 +322,7 @@ def test_zk_x509_public_apis_require_nominal_network_id() -> None:
     assert submit.args.kwarg is None
 
 
-def test_pyo3_boundary_and_native_signer_revision_are_exact_abi22_v5() -> None:
+def test_pyo3_boundary_and_native_signer_revision_are_exact_abi23_v5() -> None:
     rust = (RUST_BRIDGE / "lib.rs").read_text(encoding="utf-8")
     vk_rust = (RUST_BRIDGE / "zk_vk_draft.rs").read_text(encoding="utf-8")
     native_bridge = (REPO / "crates" / "connect_norito_bridge" / "src" / "lib.rs").read_text(

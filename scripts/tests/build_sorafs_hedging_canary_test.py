@@ -381,7 +381,7 @@ def test_duplicate_native_bridge_artifact_id_fails_closed_without_leaking(
     assert not canary_path(tmp_path, "native_bridge_release").exists()
 
 
-@pytest.mark.parametrize("abi", [20, 21])
+@pytest.mark.parametrize("abi", [20, 21, 22])
 def test_native_bridge_release_requires_exact_abi_before_write(
     tmp_path: Path,
     capsys,

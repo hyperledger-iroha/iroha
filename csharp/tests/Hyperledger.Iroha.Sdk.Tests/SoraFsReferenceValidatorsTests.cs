@@ -726,7 +726,7 @@ public sealed class SoraFsReferenceValidatorsTests
     {
         Assert.True(
             SoraFsReferenceValidators.IsFixtureBundleAvailable(),
-            "ABI-22 connect_norito_bridge with fixture-bundle symbol is required.");
+            "ABI-23 connect_norito_bridge with fixture-bundle symbol is required.");
 
         var fixtureRoot = Path.Combine(
             AppContext.BaseDirectory,
@@ -771,7 +771,7 @@ public sealed class SoraFsReferenceValidatorsTests
     {
         Assert.True(
             SoraFsReferenceValidators.IsOrderbookPdpAvailable(),
-            "ABI-22 connect_norito_bridge with orderbook/PDP symbols is required.");
+            "ABI-23 connect_norito_bridge with orderbook/PDP symbols is required.");
 
         var orderbookRoot = Path.Combine(
             AppContext.BaseDirectory,
@@ -903,7 +903,7 @@ public sealed class SoraFsReferenceValidatorsTests
     {
         Assert.True(
             SoraFsReferenceValidators.IsAppealFinanceAvailable(),
-            "ABI-22 appeal-finance reference bridge is required.");
+            "ABI-23 appeal-finance reference bridge is required.");
         var fixtureRoot = Path.Combine(
             AppContext.BaseDirectory,
             "Fixtures",
@@ -998,7 +998,7 @@ public sealed class SoraFsReferenceValidatorsTests
     {
         Assert.True(
             SoraFsReferenceValidators.IsOrderbookPdpAvailable(),
-            "ABI-22 connect_norito_bridge with orderbook/PDP symbols is required.");
+            "ABI-23 connect_norito_bridge with orderbook/PDP symbols is required.");
         var privateKey = Enumerable.Repeat((byte)0xb7, 32).ToArray();
         var owner = Encoding.UTF8.GetBytes("buyer@sora");
         var orderId = SoraFsReferenceValidators.DeriveOrderbookOrderId(owner, 7);
@@ -1078,7 +1078,7 @@ public sealed class SoraFsReferenceValidatorsTests
     {
         Assert.True(
             SoraFsReferenceValidators.IsAvailable(),
-            "ABI-22 connect_norito_bridge with governance reference symbols is required.");
+            "ABI-23 connect_norito_bridge with governance reference symbols is required.");
 
         var fixtureRoot = Path.Combine(
             AppContext.BaseDirectory,
@@ -1113,7 +1113,7 @@ public sealed class SoraFsReferenceValidatorsTests
     {
         Assert.True(
             SoraFsReferenceValidators.IsAvailable(),
-            "ABI-22 connect_norito_bridge with Governance DAG symbols is required.");
+            "ABI-23 connect_norito_bridge with Governance DAG symbols is required.");
 
         var fixtureRoot = Path.Combine(
             AppContext.BaseDirectory,

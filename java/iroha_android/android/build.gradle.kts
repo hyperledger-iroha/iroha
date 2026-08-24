@@ -100,6 +100,11 @@ android {
     }
 
     sourceSets {
+        getByName("test") {
+            // Reuse the canonical Java SDK network-id fixture without pulling
+            // the complete root JVM test suite into the Android unit target.
+            java.srcDir("../src/test/java/org/hyperledger/iroha/android/testing")
+        }
         getByName("androidTest") {
             assets.srcDir("../../../fixtures/offline")
         }

@@ -1,4 +1,4 @@
-"""Contract tests for host native SDK ABI-22 artifact evidence."""
+"""Contract tests for host native SDK ABI-23 artifact evidence."""
 
 from __future__ import annotations
 
@@ -370,10 +370,11 @@ def test_privacy_c_export_inventory_rejects_duplicate_and_unexpected() -> None:
     "stale",
     (
         "iroha_privacy_compiled_profile_catalog_v21",
-        "iroha_privacy_validate_compiled_profile_catalog_abi23",
+        "iroha_privacy_validate_compiled_profile_catalog_abi22",
         "connect_norito_privacy_abi_21_probe",
-        "connect_norito_privacy_abi-23-probe",
+        "connect_norito_privacy_abi-22-probe",
         "connect_norito_bridge_abi_version_v21",
+        "connect_norito_bridge_abi_version_v22",
     ),
 )
 def test_privacy_c_export_inventory_rejects_stale_abi_markers(stale: str) -> None:
@@ -965,10 +966,10 @@ def test_python_native_evidence_retention_is_opt_in_and_uploaded() -> None:
     )
     evidence_file = f"{evidence_directory}/python-native-abi22.json"
     assert f"SORAFS_PYTHON_SDK_EVIDENCE_DIR: {evidence_directory}" in workflow
-    assert "name: Upload verified Python ABI-22 evidence" in workflow
+    assert "name: Upload verified Python ABI-23 evidence" in workflow
     assert evidence_file in workflow
     assert "actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02" in workflow
-    upload = workflow.split("name: Upload verified Python ABI-22 evidence", 1)[1]
+    upload = workflow.split("name: Upload verified Python ABI-23 evidence", 1)[1]
     upload = upload.split("- name: Upload parity evidence", 1)[0]
     assert "if: always()" in upload
     assert "if-no-files-found: error" in upload
@@ -1433,7 +1434,7 @@ def test_kotlin_localnet_evidence_validator_rejects_every_skip(
     assert list(evidence_dir.iterdir()) == []
 
 
-def test_repository_wires_exact_abi22_release_contract() -> None:
+def test_repository_wires_exact_abi23_release_contract() -> None:
     """Freeze the fail-closed source and CI wiring without loading a native binary."""
 
     def read(relative: str) -> str:

@@ -43,7 +43,7 @@ evidence_directory = (
 evidence_file = f"{evidence_directory}/python-native-abi22.json"
 required_workflow_tokens = (
     f"SORAFS_PYTHON_SDK_EVIDENCE_DIR: {evidence_directory}",
-    "name: Upload verified Python ABI-22 evidence",
+    "name: Upload verified Python ABI-23 evidence",
     evidence_file,
     "actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02",
     "if-no-files-found: error",
@@ -52,7 +52,7 @@ required_workflow_tokens = (
 for token in required_workflow_tokens:
     if token not in workflow:
         raise SystemExit(f"Python native evidence workflow is missing {token!r}")
-upload = workflow.split("name: Upload verified Python ABI-22 evidence", 1)[1]
+upload = workflow.split("name: Upload verified Python ABI-23 evidence", 1)[1]
 upload = upload.split("- name: Upload parity evidence", 1)[0]
 if "pytest.xml" in upload or "iroha-sorafs-python-sdk" in upload:
     raise SystemExit("Python native evidence upload must contain only the manifest")

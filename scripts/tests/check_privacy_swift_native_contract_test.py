@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Freeze the authenticated, no-skip ABI-22 Swift privacy lane."""
+"""Freeze the authenticated, no-skip ABI-23 Swift privacy lane."""
 
 from __future__ import annotations
 

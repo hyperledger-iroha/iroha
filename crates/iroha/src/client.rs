@@ -3076,28 +3076,6 @@ fn parse_canonical_validation_fee_u64(value: &str, field: &str) -> Result<u64> {
         format!("validation-fee proposal {field} is outside the unsigned 64-bit integer range")
     })
 }
-fn parse_canonical_validation_fee_hex32(value: &str, field: &str) -> Result<[u8; 32]> {
-    if value.len() != 64
-        || !value
-            .bytes()
-            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
-    {
-        return Err(eyre!(
-            "validation-fee proposal {field} must be exactly 64 lowercase hexadecimal digits"
-        ));
-    }
-    let bytes = hex::decode(value)
-        .wrap_err_with(|| format!("validation-fee proposal {field} is invalid hexadecimal"))?;
-    let bytes: [u8; 32] = bytes
-        .try_into()
-        .map_err(|_| eyre!("validation-fee proposal {field} must decode to exactly 32 bytes"))?;
-    if bytes == [0; 32] {
-        return Err(eyre!(
-            "validation-fee proposal {field} must be a non-zero identifier"
-        ));
-    }
-    Ok(bytes)
-}
 fn validate_validation_fee_proposal_record(record: &ValidationFeeProposalRecordV1) -> Result<u64> {
     use iroha_data_model::governance::types::ProposalKind;
 
@@ -3272,6 +3250,8 @@ fn validate_sccp_route_governance_draft_response(
     request: &SccpRouteGovernanceProposalDraftRequestV1,
     network_id: iroha_data_model::NetworkId,
 ) -> Result<()> {
+    use iroha_data_model::governance::types::{ProposalKind, SccpRouteGovernanceProposal};
+
     let proposal = ProposalKind::SccpRouteGovernance(SccpRouteGovernanceProposal {
         anchor: Box::new(iroha_data_model::isi::bridge::SccpRouteGovernanceAnchorV1 {
             network_id,
@@ -6478,9 +6458,7 @@ fn validate_multisig_response(response: &MultisigResponse) -> Result<()> {
                     "multisig response fee_payment does not match the transaction payload"
                 ));
             }
-            if response.creation_time_ms
-                != u64::try_from(builder.payload().creation_time().as_millis()).ok()
-            {
+            if response.creation_time_ms != Some(builder.payload().creation_time_ms) {
                 return Err(eyre!(
                     "multisig response creation_time_ms does not match the transaction payload"
                 ));
@@ -16919,6 +16897,8 @@ impl Client {
         &self,
         request: &SccpRouteGovernanceProposalDraftRequestV1,
     ) -> Result<SccpRouteGovernanceProposalDraftResponseV1> {
+        use iroha_data_model::governance::types::{ProposalKind, SccpRouteGovernanceProposal};
+
         request
             .action
             .validate_static()
