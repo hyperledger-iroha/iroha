@@ -44,6 +44,13 @@ on:
 
 jobs:
   native-release-artifacts:
+    env:
+      # Keep checkout bytes canonical before the clean-source artifact check.
+      # Git for Windows otherwise inherits the runner image's CRLF checkout
+      # policy, which the checker deliberately excludes from authentication.
+      GIT_CONFIG_COUNT: "1"
+      GIT_CONFIG_KEY_0: core.autocrlf
+      GIT_CONFIG_VALUE_0: "false"
     strategy:
       fail-fast: false
       matrix:
