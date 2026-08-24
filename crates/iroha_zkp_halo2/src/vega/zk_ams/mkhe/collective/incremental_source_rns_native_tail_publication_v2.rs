@@ -1134,6 +1134,7 @@ where
         }
 
         let callback_failure = Cell::new(None);
+        let callback_failure_ref = &callback_failure;
         let RnsNativeTailPublicationLifecycleV2 {
             key_tail,
             basis_lifecycle,
@@ -1157,9 +1158,11 @@ where
                         match RnsNativeCiphertextTailWorkspaceOwnerV2::allocate_workspace_v2() {
                             Ok(workspace) => workspace,
                             Err(_) => {
-                                callback_failure.set(Some(RnsNativeV1TailCallbackFailureV2::Tail(
-                                    RnsNativeTailPublicationErrorV2::Basis,
-                                )));
+                                callback_failure_ref.set(Some(
+                                    RnsNativeV1TailCallbackFailureV2::Tail(
+                                        RnsNativeTailPublicationErrorV2::Basis,
+                                    ),
+                                ));
                                 return Err(ZkAmsMkheErrorV1::ResourceCeilingExceeded);
                             }
                         };
@@ -1169,7 +1172,7 @@ where
                         ) {
                             Ok(prepared) => prepared,
                             Err(error) => {
-                                callback_failure
+                                callback_failure_ref
                                     .set(Some(RnsNativeV1TailCallbackFailureV2::Tail(error)));
                                 return Err(ZkAmsMkheErrorV1::ResourceCeilingExceeded);
                             }
@@ -1177,13 +1180,12 @@ where
                     let sink = match prepare_sink() {
                         Ok(sink) => sink,
                         Err(error) => {
-                            callback_failure.set(Some(
+                            callback_failure_ref.set(Some(
                                 RnsNativeV1TailCallbackFailureV2::ConfidentialSink(error),
                             ));
                             return Err(error);
                         }
                     };
-                    let callback_failure = &callback_failure;
                     Ok(
                         move |publisher: &mut P,
                               canonical_plaintext: &[[u8; 32]],
@@ -1198,7 +1200,7 @@ where
                                 error_one,
                                 encryption_nonce,
                             ) {
-                                callback_failure.set(Some(
+                                callback_failure_ref.set(Some(
                                     RnsNativeV1TailCallbackFailureV2::ConfidentialSink(error),
                                 ));
                                 return Err(error);
@@ -1220,7 +1222,7 @@ where
                                 error_one,
                                 encryption_nonce,
                             ) {
-                                callback_failure
+                                callback_failure_ref
                                     .set(Some(RnsNativeV1TailCallbackFailureV2::Tail(error)));
                                 return Err(ZkAmsMkheErrorV1::InvalidCiphertext);
                             }

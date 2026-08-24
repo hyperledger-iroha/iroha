@@ -17366,10 +17366,11 @@ json_response_fixture!(StatusCode::OK, &norito::json!({
             let account = AccountId::new(kp.public_key().clone());
             let cfg = Config {
                 chain: ChainId::from("test-chain"),
-                network_id:
-                    "hash:32C903E5B3497E34C2B844EBFE8A39C19E6CF8F95D44C1FFB8BA9DCB42F91149#A2F0"
-                        .parse()
-                        .expect("network id"),
+                network_id: iroha::data_model::NetworkId::from_genesis_hash(
+                    iroha_crypto::HashOf::from_untyped_unchecked(iroha_crypto::Hash::new(
+                        b"iroha-cli-sorafs-test-genesis",
+                    )),
+                ),
                 account,
                 account_chain_discriminant:
                     iroha_config::parameters::defaults::common::chain_discriminant(),
@@ -17873,13 +17874,17 @@ json_response_fixture!(StatusCode::OK, &norito::json!({
             fs::metadata(&output_path).expect("token metadata").mode() & 0o077,
             0
         );
-        HandshakeTokenIssueArgs::emit(
+        let overwrite_error = HandshakeTokenIssueArgs::emit(
             &mut ctx,
             &artifacts,
             &output_path,
             TokenOutputFormat::Base64,
         )
         .expect_err("existing bearer output must not be overwritten");
+        assert!(
+            format!("{overwrite_error:#}")
+                .contains("failed to create new owner-private token output")
+        );
         artifacts.zeroize_encoded_token();
         assert!(artifacts.token_bytes.is_empty());
     }

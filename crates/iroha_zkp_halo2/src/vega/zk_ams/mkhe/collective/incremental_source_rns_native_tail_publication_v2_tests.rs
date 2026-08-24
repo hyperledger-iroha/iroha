@@ -1077,10 +1077,6 @@ fn coordinator_preserves_callback_error_origin_and_every_live_gate_remains_close
         "RnsNativeV1TailCoordinatorErrorV2::Encryption(encryption_error)",
         "RnsNativeV1TailCoordinatorErrorV2::ConfidentialSink(error)",
         "RnsNativeV1TailCoordinatorErrorV2::Tail(error)",
-        "let callback_failure = Cell::new(None);",
-        "let callback_failure = &callback_failure;",
-        "callback_failure.get().is_none()",
-        "match callback_failure.get()",
         "RNS_NATIVE_V1_TAIL_COORDINATOR_IMPLEMENTED_V2: bool = true",
         "RNS_NATIVE_TAIL_V1_CALLBACK_INTEGRATED_V2: bool = true",
     ] {
@@ -1089,12 +1085,13 @@ fn coordinator_preserves_callback_error_origin_and_every_live_gate_remains_close
             "missing error/contract pin: {required}"
         );
     }
-    let compact_source = source.split_whitespace().collect::<String>();
-    assert_eq!(
-        compact_source.matches("callback_failure.set(Some(").count(),
-        5
-    );
-    assert!(!source.contains("let mut callback_failure"));
+    assert!(source.contains("let callback_failure = Cell::new(None);"));
+    assert!(source.contains("let callback_failure_ref = &callback_failure;"));
+    assert_eq!(source.matches("callback_failure_ref").count(), 6);
+    assert_eq!(source.matches(".set(Some(").count(), 5);
+    assert_eq!(source.matches("callback_failure.get()").count(), 2);
+    assert!(!source.contains("let mut callback_failure = None;"));
+    assert!(!source.contains("callback_failure = Some("));
     for closed in [
         "RNS_NATIVE_TAIL_PHASE23_OWNER_AVAILABLE_V2: bool = false",
         "RNS_NATIVE_KEY_TAIL_CAS_OWNER_AVAILABLE_V2: bool = false",

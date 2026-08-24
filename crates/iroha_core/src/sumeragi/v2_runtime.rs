@@ -14105,6 +14105,7 @@ impl<D: RuntimeDriver> SerializedV2Runtime<D> {
     /// operation, and elapsed wall time must not manufacture a timeout vote or
     /// retransmission. The runner consumes this runtime after finalization and
     /// constructs a fresh, normally armed successor-height runtime.
+    #[allow(dead_code, reason = "retained by formal contracts")]
     pub(crate) fn step_recovery(
         &mut self,
         now: Instant,
@@ -14675,6 +14676,7 @@ impl<D: RuntimeDriver> SerializedV2Runtime<D> {
     pub(in crate::sumeragi) const fn lifecycle_live_clocks_are_armed(&self) -> bool {
         self.clocks_armed
     }
+
     /// Arm the live clocks after all height constructors and startup effects.
     ///
     /// This one-shot boundary prevents WAL replay, body-store recovery, worker
@@ -14839,7 +14841,6 @@ impl<D: RuntimeDriver> SerializedV2Runtime<D> {
         RuntimeError::Driver(error)
     }
 }
-const _: fn(&mut SerializedV2Runtime, Instant) = |runtime, now| drop(runtime.step_recovery(now));
 include!("v2_runtime_ready_validate_publication.rs");
 
 impl SerializedV2Runtime<SumeragiV2Adapter> {
