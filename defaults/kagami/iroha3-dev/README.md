@@ -15,7 +15,7 @@ Files:
 - genesis.json — generated with `kagami genesis generate --profile iroha3-dev`, patched with deterministic topology+PoPs, and rebound to the exact staged Nexus/AMX context through `kagami genesis sign`
 - genesis.signed.nrt — canonical signed genesis wire artifact consumed by every validator
 - genesis.public_key — canonical one-line verifier key for the signed genesis artifact
-- genesis.expected_hash — canonical one-line independently provisioned signed-header hash
+- genesis.expected_hash — canonical checked `hash:<64 uppercase hex>#<CRC16>` NetworkId encoding the independently provisioned signed-header hash
 - verify.txt — stdout from `kagami verify --profile iroha3-dev --genesis genesis.json`
 - config.toml and config-peer-*.toml — compatibility names for the generated validator configs
 - peer0.toml through peerN.toml — canonical prepared-bundle validator configs

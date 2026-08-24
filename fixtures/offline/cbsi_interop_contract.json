@@ -65,7 +65,7 @@
       "issuer_load_lineage_id": "5656565656565656565656565656565656565656565656565656565656565656",
       "issuer_load_local_revision": 1,
       "issuer_load_operation_id": "5555555555555555555555555555555555555555555555555555555555555555",
-      "network_id": "8a1fcaff8bc7cdfc694a7cfeb24a7e1b35dbdf9c235a6a91404d805f83143e1f",
+      "network_id": "hash:8A1FCAFF8BC7CDFC694A7CFEB24A7E1B35DBDF9C235A6A91404D805F83143E1F#3A2D",
       "note_commitment_domain": "iroha:kagemusha:v4:note-commitment",
       "payment_request_id": "invoice-fixture-1",
       "payment_token_id": "3ea0f73007e1eeeb072f20f32de5ecf140f21c7e3cada169e1584dec410fb811",

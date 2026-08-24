@@ -1,3 +1,5 @@
+import type { NetworkId } from "./networkId.js";
+
 export interface ToriiBlockMerkleProof {
   readonly leaf_index: number;
   readonly audit_path: ReadonlyArray<string | null>;
@@ -94,7 +96,7 @@ export const AUTHENTICATED_BLOCK_PROOFS_MAX_PROOF_BYTES_V1: 16777216;
 export interface AuthenticatedBlockProofInputV1 {
   readonly version: 1;
   /** Application-pinned exact genesis-derived NetworkId; this must not be sourced from the response. */
-  readonly networkId: string;
+  readonly networkId: NetworkId;
   /** Application-pinned marked 32-byte HeightContextId. */
   readonly trustedContextId: ArrayBufferView | ArrayBuffer;
   /** Application-selected marked 32-byte transaction entrypoint hash. */

@@ -12,6 +12,31 @@ PEER_COUNT = 4
 SLUGS = tuple(f"taira-validator-{index}" for index in range(1, PEER_COUNT + 1))
 
 
+def canonical_network_id(network_id: str) -> str:
+    """Validate and return one canonical checked NetworkId literal."""
+
+    prefix = "hash:"
+    if not isinstance(network_id, str) or not network_id.startswith(prefix):
+        raise ValueError("network id must use the canonical checked hash literal")
+    try:
+        body, checksum = network_id[len(prefix) :].split("#", maxsplit=1)
+    except ValueError as error:
+        raise ValueError("network id must use the canonical checked hash literal") from error
+    if (
+        len(body) != 64
+        or body != body.upper()
+        or any(character not in "0123456789ABCDEF" for character in body)
+        or len(checksum) != 4
+        or checksum != checksum.upper()
+        or any(character not in "0123456789ABCDEF" for character in checksum)
+    ):
+        raise ValueError("network id must use the canonical checked hash literal")
+    canonical = network_id_from_genesis_hash(body.lower())
+    if network_id != canonical:
+        raise ValueError("network id checksum does not match its genesis hash")
+    return canonical
+
+
 def network_id_from_genesis_hash(genesis_hash: str) -> str:
     """Return the canonical CRC-bound NetworkId for one reset genesis hash."""
 
@@ -21,8 +46,9 @@ def network_id_from_genesis_hash(genesis_hash: str) -> str:
         or genesis_hash != genesis_hash.lower()
         or genesis_hash == "0" * 64
         or any(character not in "0123456789abcdef" for character in genesis_hash)
+        or genesis_hash[-1] not in "13579bdf"
     ):
-        raise ValueError("genesis hash must be one nonzero lowercase 32-byte digest")
+        raise ValueError("genesis hash must be one canonical marked lowercase 32-byte digest")
     body = genesis_hash.upper()
     crc = 0xFFFF
     for byte in b"hash:" + body.encode("ascii"):

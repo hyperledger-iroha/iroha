@@ -1606,7 +1606,7 @@ impl KotoTestHost {
         entrypoints: HashMap<String, RuntimeEntrypoint>,
     ) -> Self {
         let contract_address = ContractAddress::derive(
-            &"0000000000000000000000000000000000000000000000000000000000000001"
+            &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
                 .parse()
                 .expect("canonical test network id"),
             &inner.caller_subject(),

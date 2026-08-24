@@ -1,6 +1,6 @@
 package org.hyperledger.iroha.android.nexus;
 
-/** Wallet approval result for an app-role Connect session. */
+/** Wallet approval result; transports leave the session null and the facade supplies its caller copy. */
 public final class NexusApprovedAccount {
 
   private final String accountId;
