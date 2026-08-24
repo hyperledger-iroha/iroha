@@ -64,6 +64,12 @@ const GUARD_DIRECTORY_O_NOFOLLOW_FLAG: i32 = 0x0000_0100;
 compile_error!(
     "guard-directory file loading requires a defined no-follow open flag on this Unix target"
 );
+#[cfg(windows)]
+const GUARD_DIRECTORY_FILE_FLAG_OPEN_REPARSE_POINT: u32 = 0x0020_0000;
+#[cfg(windows)]
+const GUARD_DIRECTORY_FILE_FLAG_BACKUP_SEMANTICS: u32 = 0x0200_0000;
+#[cfg(windows)]
+const GUARD_DIRECTORY_FILE_SHARE_READ: u32 = 0x0000_0001;
 const fn guard_directory_decode_limits_v1() -> DecodeLimits {
     DecodeLimits::new(
         GUARD_DIRECTORY_RELAY_CERTIFICATE_MAX_BYTES_V1,
@@ -111,13 +117,28 @@ fn read_guard_directory_snapshot_file_with_hook(
     #[cfg(windows)]
     {
         use std::os::windows::fs::OpenOptionsExt as _;
-        const FILE_FLAG_OPEN_REPARSE_POINT: u32 = 0x0020_0000;
-        options.custom_flags(FILE_FLAG_OPEN_REPARSE_POINT);
+        options
+            .custom_flags(GUARD_DIRECTORY_FILE_FLAG_OPEN_REPARSE_POINT)
+            // A successful open is incompatible with every writer or delete/rename handle.
+            // That pins both the bytes and the path identity for this read without relying on
+            // unstable Windows metadata-by-handle accessors.
+            .share_mode(GUARD_DIRECTORY_FILE_SHARE_READ);
     }
     let mut file = options.open(path)?;
     let opened_before = file.metadata()?;
+    let named_locked = fs::symlink_metadata(path)?;
     pinned.validate_file(&opened_before)?;
-    if !guard_directory_metadata_identifies_same_file(&named_before, &opened_before)
+    pinned.validate_file(&named_locked)?;
+    #[cfg(unix)]
+    let changed_identity_while_opening =
+        !guard_directory_metadata_identifies_same_file(&named_before, &opened_before)
+            || !guard_directory_metadata_identifies_same_file(&opened_before, &named_locked);
+    #[cfg(windows)]
+    let changed_identity_while_opening = false;
+    #[cfg(not(any(unix, windows)))]
+    let changed_identity_while_opening = true;
+    if changed_identity_while_opening
+        || opened_before.len() != named_locked.len()
         || opened_before.len() > max_bytes
     {
         return Err(io::Error::new(
@@ -148,8 +169,15 @@ fn read_guard_directory_snapshot_file_with_hook(
             "guard directory snapshot byte count cannot be represented as u64",
         )
     })?;
-    if !guard_directory_metadata_identifies_same_file(&opened_before, &opened_after)
-        || !guard_directory_metadata_identifies_same_file(&opened_after, &named_after)
+    #[cfg(unix)]
+    let changed_identity_while_reading =
+        !guard_directory_metadata_identifies_same_file(&opened_before, &opened_after)
+            || !guard_directory_metadata_identifies_same_file(&opened_after, &named_after);
+    #[cfg(windows)]
+    let changed_identity_while_reading = false;
+    #[cfg(not(any(unix, windows)))]
+    let changed_identity_while_reading = true;
+    if changed_identity_while_reading
         || opened_before.len() != opened_after.len()
         || opened_after.len() != named_after.len()
         || opened_after.len() != observed_bytes
@@ -166,6 +194,8 @@ struct PinnedGuardDirectoryPath {
     path: PathBuf,
     parent_path: PathBuf,
     parent: fs::File,
+    #[cfg(windows)]
+    ancestors: Vec<(PathBuf, fs::File)>,
     #[cfg(unix)]
     owner_uid: u32,
 }
@@ -208,9 +238,35 @@ impl PinnedGuardDirectoryPath {
                 "guard directory snapshot parent must be a direct directory",
             ));
         }
+        #[cfg(not(windows))]
         let parent = fs::File::open(&parent_path)?;
+        #[cfg(windows)]
+        let (ancestors, parent) = {
+            let mut pinned = pin_guard_directory_windows_ancestor_chain(&parent_path)?;
+            let (_, parent) = pinned.pop().ok_or_else(|| {
+                io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    "guard directory snapshot parent has no canonical ancestor chain",
+                )
+            })?;
+            (pinned, parent)
+        };
         let opened = parent.metadata()?;
-        if !opened.is_dir() || !guard_directory_metadata_identifies_same_file(&named, &opened) {
+        let named_locked = fs::symlink_metadata(&parent_path)?;
+        #[cfg(unix)]
+        let changed_identity_while_opening =
+            !guard_directory_metadata_identifies_same_file(&named, &opened)
+                || !guard_directory_metadata_identifies_same_file(&opened, &named_locked);
+        #[cfg(windows)]
+        let changed_identity_while_opening = false;
+        #[cfg(not(any(unix, windows)))]
+        let changed_identity_while_opening = true;
+        if guard_directory_metadata_is_link(&opened)
+            || !opened.is_dir()
+            || guard_directory_metadata_is_link(&named_locked)
+            || !named_locked.is_dir()
+            || changed_identity_while_opening
+        {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidData,
                 "guard directory snapshot parent changed while opening",
@@ -220,6 +276,8 @@ impl PinnedGuardDirectoryPath {
             path: parent_path.join(file_name),
             parent_path,
             parent,
+            #[cfg(windows)]
+            ancestors,
             #[cfg(unix)]
             owner_uid,
         };
@@ -230,12 +288,22 @@ impl PinnedGuardDirectoryPath {
         &self.path
     }
     fn verify_parent(&self) -> io::Result<()> {
+        #[cfg(windows)]
+        verify_guard_directory_windows_ancestor_chain(&self.ancestors)?;
         let named = fs::symlink_metadata(&self.parent_path)?;
         let opened = self.parent.metadata()?;
+        #[cfg(unix)]
+        let changed_identity = !guard_directory_metadata_identifies_same_file(&named, &opened);
+        // `new` retains a Windows handle which denies delete/rename sharing for this path.
+        #[cfg(windows)]
+        let changed_identity = false;
+        #[cfg(not(any(unix, windows)))]
+        let changed_identity = true;
         if guard_directory_metadata_is_link(&named)
             || !named.is_dir()
+            || guard_directory_metadata_is_link(&opened)
             || !opened.is_dir()
-            || !guard_directory_metadata_identifies_same_file(&named, &opened)
+            || changed_identity
         {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidData,
@@ -269,6 +337,79 @@ impl PinnedGuardDirectoryPath {
         Ok(())
     }
 }
+#[cfg(any(unix, windows))]
+fn guard_directory_ancestor_paths(parent: &Path) -> Vec<PathBuf> {
+    let mut ancestors = parent
+        .ancestors()
+        .map(Path::to_path_buf)
+        .collect::<Vec<_>>();
+    ancestors.reverse();
+    ancestors
+}
+#[cfg(windows)]
+fn pin_guard_directory_windows_ancestor_chain(
+    parent: &Path,
+) -> io::Result<Vec<(PathBuf, fs::File)>> {
+    use std::os::windows::fs::OpenOptionsExt as _;
+
+    let ancestor_paths = guard_directory_ancestor_paths(parent);
+    let mut pinned = Vec::with_capacity(ancestor_paths.len());
+    for path in ancestor_paths {
+        let named_before = fs::symlink_metadata(&path)?;
+        validate_guard_directory_windows_ancestor(&path, &named_before)?;
+
+        let mut options = fs::OpenOptions::new();
+        options
+            // Metadata queries do not require data or directory-list access. Desired access stays
+            // at zero; the share mode below independently excludes mutating handles.
+            .access_mode(0)
+            .custom_flags(
+                GUARD_DIRECTORY_FILE_FLAG_OPEN_REPARSE_POINT
+                    | GUARD_DIRECTORY_FILE_FLAG_BACKUP_SEMANTICS,
+            )
+            // Retain every root-to-parent handle with read sharing only. Once an ancestor opens,
+            // it cannot be written, redirected, renamed, or replaced while the snapshot path
+            // remains in use.
+            .share_mode(GUARD_DIRECTORY_FILE_SHARE_READ);
+        let handle = options.open(&path)?;
+        let opened = handle.metadata()?;
+        let named_locked = fs::symlink_metadata(&path)?;
+        validate_guard_directory_windows_ancestor(&path, &opened)?;
+        validate_guard_directory_windows_ancestor(&path, &named_locked)?;
+
+        pinned.push((path, handle));
+        verify_guard_directory_windows_ancestor_chain(&pinned)?;
+    }
+    Ok(pinned)
+}
+#[cfg(windows)]
+fn verify_guard_directory_windows_ancestor_chain(
+    ancestors: &[(PathBuf, fs::File)],
+) -> io::Result<()> {
+    for (path, handle) in ancestors {
+        let opened = handle.metadata()?;
+        let named = fs::symlink_metadata(path)?;
+        validate_guard_directory_windows_ancestor(path, &opened)?;
+        validate_guard_directory_windows_ancestor(path, &named)?;
+    }
+    Ok(())
+}
+#[cfg(windows)]
+fn validate_guard_directory_windows_ancestor(
+    path: &Path,
+    metadata: &fs::Metadata,
+) -> io::Result<()> {
+    if guard_directory_metadata_is_link(metadata) || !metadata.is_dir() {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!(
+                "guard directory snapshot ancestor {} must be a direct directory",
+                path.display()
+            ),
+        ));
+    }
+    Ok(())
+}
 #[cfg(unix)]
 fn guard_directory_current_uid() -> io::Result<u32> {
     use std::os::unix::fs::MetadataExt as _;
@@ -277,19 +418,7 @@ fn guard_directory_current_uid() -> io::Result<u32> {
 #[cfg(unix)]
 fn validate_guard_directory_ancestor_chain(parent: &Path, owner_uid: u32) -> io::Result<()> {
     use std::os::unix::fs::MetadataExt as _;
-    let mut ancestors = Vec::new();
-    let mut cursor = parent;
-    loop {
-        ancestors.push(cursor.to_path_buf());
-        let Some(next) = cursor.parent() else {
-            break;
-        };
-        if next == cursor {
-            break;
-        }
-        cursor = next;
-    }
-    ancestors.reverse();
+    let ancestors = guard_directory_ancestor_paths(parent);
     let mut metadata = Vec::with_capacity(ancestors.len());
     for ancestor in &ancestors {
         let observed = fs::symlink_metadata(ancestor)?;
@@ -359,24 +488,6 @@ fn guard_directory_metadata_identifies_same_file(
 ) -> bool {
     use std::os::unix::fs::MetadataExt as _;
     left.dev() == right.dev() && left.ino() == right.ino()
-}
-#[cfg(windows)]
-fn guard_directory_metadata_identifies_same_file(
-    left: &fs::Metadata,
-    right: &fs::Metadata,
-) -> bool {
-    use std::os::windows::fs::MetadataExt as _;
-    left.volume_serial_number().is_some()
-        && left.file_index().is_some()
-        && left.volume_serial_number() == right.volume_serial_number()
-        && left.file_index() == right.file_index()
-}
-#[cfg(not(any(unix, windows)))]
-fn guard_directory_metadata_identifies_same_file(
-    _left: &fs::Metadata,
-    _right: &fs::Metadata,
-) -> bool {
-    false
 }
 /// Norito-encoded guard directory snapshot.
 #[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
@@ -1205,6 +1316,28 @@ mod tests {
             .expect("read pinned parent"),
             b"snapshot"
         );
+    }
+    #[cfg(windows)]
+    #[test]
+    fn snapshot_file_reader_pins_each_windows_ancestor() {
+        let temporary = tempfile::tempdir().expect("temporary directory");
+        let ancestor = temporary.path().join("ancestor");
+        let parent = ancestor.join("child").join("parent");
+        let renamed_ancestor = temporary.path().join("renamed-ancestor");
+        fs::create_dir_all(&parent).expect("create nested snapshot parent");
+        let snapshot = parent.join("directory.norito");
+        fs::write(&snapshot, b"snapshot").expect("write snapshot");
+
+        assert_eq!(
+            read_guard_directory_snapshot_file_with_hook(&snapshot, || {
+                fs::rename(&ancestor, &renamed_ancestor)
+                    .expect_err("retained ancestor handle must deny rename");
+            })
+            .expect("read snapshot through pinned ancestor chain"),
+            b"snapshot"
+        );
+        assert!(ancestor.is_dir());
+        assert!(!renamed_ancestor.exists());
     }
     #[cfg(unix)]
     #[test]

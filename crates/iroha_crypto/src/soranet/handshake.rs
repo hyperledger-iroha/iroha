@@ -103,6 +103,10 @@ const HANDSHAKE_FIXTURE_O_NOFOLLOW_FLAG: i32 = 0x0000_0100;
     ))
 ))]
 compile_error!("SoraNet handshake fixture loading requires a defined no-follow open flag");
+#[cfg(windows)]
+const HANDSHAKE_FIXTURE_FILE_FLAG_OPEN_REPARSE_POINT: u32 = 0x0020_0000;
+#[cfg(windows)]
+const HANDSHAKE_FIXTURE_FILE_SHARE_READ: u32 = 0x0000_0001;
 const STEP_NOTE_HYBRID_INIT: &str = "Client sends NK2 hybrid init";
 const STEP_NOTE_HYBRID_RESPONSE: &str = "Relay completes NK2 hybrid handshake";
 const STEP_NOTE_PQFS_COMMIT: &str = "Client commits NK3 forward-secure material";
@@ -3258,8 +3262,12 @@ fn read_bounded_direct_fixture(
     #[cfg(windows)]
     {
         use std::os::windows::fs::OpenOptionsExt as _;
-        const FILE_FLAG_OPEN_REPARSE_POINT: u32 = 0x0020_0000;
-        options.custom_flags(FILE_FLAG_OPEN_REPARSE_POINT);
+        options
+            .custom_flags(HANDSHAKE_FIXTURE_FILE_FLAG_OPEN_REPARSE_POINT)
+            // Deny writers and delete/rename handles while the fixture is read. A successful
+            // open therefore pins the opened file object and bytes without unstable metadata
+            // accessors.
+            .share_mode(HANDSHAKE_FIXTURE_FILE_SHARE_READ);
     }
     #[cfg(not(any(unix, windows)))]
     {
@@ -3273,9 +3281,17 @@ fn read_bounded_direct_fixture(
     #[cfg(any(unix, windows))]
     {
         let opened_before = file.metadata()?;
+        let named_locked = fs::symlink_metadata(path)?;
         validate_direct_fixture_metadata(&opened_before, subject)?;
-        if !fixture_metadata_identifies_same_file(&named_before, &opened_before)
-            || opened_before.len() != named_before.len()
+        validate_direct_fixture_metadata(&named_locked, subject)?;
+        #[cfg(unix)]
+        let changed_identity_while_opening =
+            !fixture_metadata_identifies_same_file(&named_before, &opened_before)
+                || !fixture_metadata_identifies_same_file(&opened_before, &named_locked);
+        #[cfg(windows)]
+        let changed_identity_while_opening = false;
+        if changed_identity_while_opening
+            || opened_before.len() != named_locked.len()
             || opened_before.len() > max_bytes as u64
         {
             return Err(io::Error::new(
@@ -3303,8 +3319,13 @@ fn read_bounded_direct_fixture(
         let named_after = fs::symlink_metadata(path)?;
         validate_direct_fixture_metadata(&opened_after, subject)?;
         validate_direct_fixture_metadata(&named_after, subject)?;
-        if !fixture_metadata_identifies_same_file(&opened_before, &opened_after)
-            || !fixture_metadata_identifies_same_file(&opened_after, &named_after)
+        #[cfg(unix)]
+        let changed_identity_while_reading =
+            !fixture_metadata_identifies_same_file(&opened_before, &opened_after)
+                || !fixture_metadata_identifies_same_file(&opened_after, &named_after);
+        #[cfg(windows)]
+        let changed_identity_while_reading = false;
+        if changed_identity_while_reading
             || opened_before.len() != opened_after.len()
             || opened_after.len() != named_after.len()
             || opened_after.len() != bytes.len() as u64
@@ -3343,14 +3364,6 @@ fn fixture_metadata_is_indirect(metadata: &fs::Metadata) -> bool {
 fn fixture_metadata_identifies_same_file(left: &fs::Metadata, right: &fs::Metadata) -> bool {
     use std::os::unix::fs::MetadataExt as _;
     left.dev() == right.dev() && left.ino() == right.ino()
-}
-#[cfg(windows)]
-fn fixture_metadata_identifies_same_file(left: &fs::Metadata, right: &fs::Metadata) -> bool {
-    use std::os::windows::fs::MetadataExt as _;
-    left.volume_serial_number().is_some()
-        && left.file_index().is_some()
-        && left.volume_serial_number() == right.volume_serial_number()
-        && left.file_index() == right.file_index()
 }
 fn fixture_too_large(subject: &str, max_bytes: usize) -> io::Error {
     io::Error::new(
