@@ -2356,7 +2356,7 @@ mod tests {
         let entrypoint = TransactionEntrypoint::External(transaction);
         let entrypoint_hashes = vec![Hash::from(entrypoint.hash())];
         let result_hashes = vec![Hash::from(result.hash())];
-        let validator_set = Vec::<PeerId>::new();
+        let validator_set = vec![PeerId::new(history_block_signer().public_key().clone())];
         let lane_incarnation = Hash::new(b"offline-status-merge-lane-incarnation");
         let mut descriptor = LaneBlockDescriptorV1 {
             lane_id: LaneId::SINGLE,
@@ -2375,8 +2375,8 @@ mod tests {
             validator_set_hash_version: VALIDATOR_SET_HASH_VERSION_V1,
             validator_set_hash: HashOf::new(&validator_set),
             validator_set: validator_set.clone(),
-            validator_count: 0,
-            min_quorum: 0,
+            validator_count: 1,
+            min_quorum: 1,
             qc_mode_tag: "offline-status-merge-fixture".to_owned(),
             descriptor_hash: Hash::prehashed([0; Hash::LENGTH]),
         };
@@ -2687,11 +2687,7 @@ mod tests {
         let rejected_result = TransactionResult::new(Err(TransactionRejectionReason::Validation(
             ValidationFail::TooComplex,
         )));
-        let expected_rejection = rejected_result
-            .0
-            .as_ref()
-            .expect_err("fixture is rejected")
-            .to_string();
+        let expected_rejection = "Transaction validation failed.".to_owned();
         let (_, rejected) = terminal_offline_operation_in_transaction(
             &transaction,
             &rejected_result,
@@ -2939,7 +2935,6 @@ mod tests {
     #[test]
     fn misaligned_committed_merge_execution_is_never_zipped_or_partially_trusted() {
         let request = submission_test_request(0x85);
-        let operation_id = request.authorization.operation_id;
         let transaction = submission_test_transaction(vec![request]);
         let kura = Kura::blank_kura_for_testing();
         let parent = signed_history_block(1, None, 501, Vec::new(), Vec::new());
@@ -2962,21 +2957,19 @@ mod tests {
             .results
             .clear();
         let carrier = attach_committed_merge_reference(carrier, &entry);
-        kura.store_block_with_merge_entry(carrier, &entry)
-            .expect("persist adversarial misaligned merge history fixture");
-        let issuer = submission_test_issuer();
-        assert_eq!(
-            kura.get_earliest_block_height_by_offline_operation_id(
-                &issuer.authority,
-                operation_id,
+        let error = kura
+            .store_block_with_merge_entry(carrier, &entry)
+            .expect_err("misaligned entrypoint/result history must fail closed at persistence");
+        assert!(
+            matches!(
+                &error,
+                iroha_core::kura::Error::CanonicalBlockCommittedRecoveryRequired { detail }
+                    if detail.contains(
+                        "application receipt result count does not match hashes"
+                    )
             ),
-            Some(NonZeroUsize::new(2)),
-            "the index deliberately points at the malformed carrier under test"
+            "misaligned merge history returned the wrong persistence error: {error:?}"
         );
-        let app = app_with_offline_history(kura, Arc::clone(&issuer));
-        let error = find_terminal_offline_operation_by_id(&app, &issuer.authority, operation_id)
-            .expect_err("misaligned entrypoint/result history must fail closed");
-        assert_offline_history_error(error, "offline_operation_index_inconsistent");
     }
     #[test]
     fn pipeline_applied_ram_hint_cannot_manufacture_canonical_offline_finality() {
