@@ -742,6 +742,9 @@ let ownership = match self.runtime.take_effect_ownership(&effects) {
         generic_executor_context,
         "ordinary effect-consumer Decision-cleanup delegation",
         errors,
+        expected_attributes=(
+            '#[allow(dead_code, reason = "retained by formal contracts")]',
+        ),
     )
     _require_exact_rust_tokens(
         effects_path,
@@ -1235,6 +1238,9 @@ self.finality_completion.is_some()
         generic_executor_context,
         "pacemaker effect-consumer Decision-cleanup delegation",
         errors,
+        expected_attributes=(
+            '#[allow(dead_code, reason = "retained by formal contracts")]',
+        ),
     )
     _require_exact_rust_tokens(
         effects_path,
@@ -4754,6 +4760,13 @@ self.retain_effect_ownership(
                 serialized_runtime_context,
                 description,
                 errors,
+                expected_attributes=(
+                    (
+                        '#[allow(dead_code, reason = "retained by formal contracts")]',
+                    )
+                    if item_name == "step_recovery"
+                    else ()
+                ),
             )
             _require_rust_token_sequence(
                 runtime_path,

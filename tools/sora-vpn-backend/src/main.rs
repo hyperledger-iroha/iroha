@@ -1322,45 +1322,6 @@ fn vpn_backend_bootstrap_mac(
 fn bootstrap_mac_matches(expected: &[u8; 32], candidate: &[u8; 32]) -> bool {
     blake3::Hash::from_bytes(*expected) == blake3::Hash::from_bytes(*candidate)
 }
-fn admit_bootstrap_nonce(
-    seen: &mut SeenBootstrapNonces,
-    nonce: [u8; 16],
-    received_at: Instant,
-) -> Result<(), BackendError> {
-    let retention = VPN_BACKEND_BOOTSTRAP_NONCE_RETENTION;
-    while seen.receipts.front().is_some_and(|(prior_receipt, _, _)| {
-        received_at.saturating_duration_since(*prior_receipt) > retention
-    }) {
-        let (_, expired_nonce, _) = seen
-            .receipts
-            .pop_front()
-            .expect("front entry checked above");
-        seen.nonces.remove(&expired_nonce);
-    }
-    if seen.nonces.contains(&nonce) {
-        return Err(BackendError::InvalidConfig(
-            "vpn backend bootstrap nonce was replayed".to_owned(),
-        ));
-    }
-    if seen.nonces.len() >= VPN_BACKEND_BOOTSTRAP_NONCE_CACHE_CAPACITY_V1 {
-        return Err(BackendError::State(format!(
-            "vpn backend bootstrap nonce cache reached its first-release capacity of {VPN_BACKEND_BOOTSTRAP_NONCE_CACHE_CAPACITY_V1}"
-        )));
-    }
-    seen.nonces.try_reserve(1).map_err(|error| {
-        BackendError::State(format!(
-            "failed to reserve bounded bootstrap nonce cache storage: {error}"
-        ))
-    })?;
-    seen.receipts.try_reserve(1).map_err(|error| {
-        BackendError::State(format!(
-            "failed to reserve bounded bootstrap nonce expiry storage: {error}"
-        ))
-    })?;
-    seen.nonces.insert(nonce);
-    seen.receipts.push_back((received_at, nonce, 0));
-    Ok(())
-}
 impl DurableBootstrapReplay {
     fn open(directory: &std::path::Path, now_ms: u64, now: Instant) -> Result<Self, BackendError> {
         let directory = prepare_private_replay_directory(directory)?;
@@ -2439,9 +2400,6 @@ struct BoundedCommandOutput {
     bytes: Vec<u8>,
     exceeded_limit: bool,
 }
-fn read_bounded_command_output<R: io::Read>(reader: R) -> io::Result<BoundedCommandOutput> {
-    read_bounded_command_output_until(reader, &AtomicBool::new(false))
-}
 fn read_bounded_command_output_until<R: io::Read>(
     mut reader: R,
     cancelled: &AtomicBool,
@@ -3025,18 +2983,18 @@ mod tests {
     }
     #[test]
     fn command_output_reader_caps_retained_bytes() {
-        let exact = read_bounded_command_output(io::Cursor::new(vec![
-            0xAA;
-            TRUSTED_COMMAND_MAX_OUTPUT_BYTES_V1
-        ]))
+        let cancelled = AtomicBool::new(false);
+        let exact = read_bounded_command_output_until(
+            io::Cursor::new(vec![0xAA; TRUSTED_COMMAND_MAX_OUTPUT_BYTES_V1]),
+            &cancelled,
+        )
         .expect("read exact command output");
         assert_eq!(exact.bytes.len(), TRUSTED_COMMAND_MAX_OUTPUT_BYTES_V1);
         assert!(!exact.exceeded_limit);
-        let oversized = read_bounded_command_output(io::Cursor::new(vec![
-            0xAA;
-            TRUSTED_COMMAND_MAX_OUTPUT_BYTES_V1
-                + 1
-        ]))
+        let oversized = read_bounded_command_output_until(
+            io::Cursor::new(vec![0xAA; TRUSTED_COMMAND_MAX_OUTPUT_BYTES_V1 + 1]),
+            &cancelled,
+        )
         .expect("drain oversized command output");
         assert_eq!(oversized.bytes.len(), TRUSTED_COMMAND_MAX_OUTPUT_BYTES_V1);
         assert!(oversized.exceeded_limit);
@@ -3532,54 +3490,36 @@ mod tests {
         assert!(try_session_permit(&permits).is_some());
     }
     #[test]
-    fn bootstrap_nonce_cache_expires_entries_and_fails_closed_at_capacity() {
+    fn durable_bootstrap_nonce_cache_fails_closed_at_capacity() {
+        let parent = TestDirectory::new("durable-replay-capacity");
+        let replay_directory = parent.path().join("replay");
         let now = Instant::now();
-        let expired_nonce = [0x11; 16];
-        let fresh_nonce = [0x22; 16];
-        let expired_at = now
-            .checked_sub(VPN_BACKEND_BOOTSTRAP_NONCE_RETENTION + Duration::from_millis(1))
-            .expect("test instant supports nonce-retention subtraction");
-        let mut seen = SeenBootstrapNonces {
-            nonces: HashSet::from([expired_nonce, fresh_nonce]),
-            receipts: VecDeque::from([(expired_at, expired_nonce, 0), (now, fresh_nonce, 0)]),
-        };
-        admit_bootstrap_nonce(&mut seen, [0x33; 16], now)
-            .expect("fresh nonce should be admitted after pruning");
-        assert!(!seen.nonces.contains(&expired_nonce));
-        let replay = admit_bootstrap_nonce(&mut seen, fresh_nonce, now)
-            .expect_err("fresh duplicate nonce must fail");
-        assert!(replay.to_string().contains("replayed"));
-
-        seen = SeenBootstrapNonces::default();
-        seen.nonces
+        let now_ms = 1_500_000;
+        let expires_at_ms = now_ms
+            + u64::try_from(VPN_BACKEND_BOOTSTRAP_NONCE_RETENTION.as_millis())
+                .expect("retention milliseconds");
+        let mut replay = DurableBootstrapReplay::open(&replay_directory, now_ms, now)
+            .expect("open replay state");
+        replay
+            .seen
+            .nonces
             .try_reserve(VPN_BACKEND_BOOTSTRAP_NONCE_CACHE_CAPACITY_V1)
             .expect("reserve test nonce set");
-        seen.receipts
+        replay
+            .seen
+            .receipts
             .try_reserve(VPN_BACKEND_BOOTSTRAP_NONCE_CACHE_CAPACITY_V1)
             .expect("reserve test receipt queue");
         for index in 0..VPN_BACKEND_BOOTSTRAP_NONCE_CACHE_CAPACITY_V1 {
             let mut nonce = [0u8; 16];
             nonce[..8].copy_from_slice(&(index as u64).to_be_bytes());
-            seen.nonces.insert(nonce);
-            seen.receipts.push_back((now, nonce, 0));
+            replay.seen.nonces.insert(nonce);
+            replay.seen.receipts.push_back((now, nonce, expires_at_ms));
         }
-        let full = admit_bootstrap_nonce(&mut seen, [0xFF; 16], now)
+        let full = replay
+            .admit([0xFF; 16], now, now_ms)
             .expect_err("full nonce cache must fail closed");
         assert!(full.to_string().contains("capacity"));
-    }
-    #[test]
-    fn future_dated_bootstrap_nonce_remains_replay_protected_for_both_skew_edges() {
-        let first_receipt = Instant::now();
-        let nonce = [0x44; 16];
-        let mut seen = SeenBootstrapNonces::default();
-        admit_bootstrap_nonce(&mut seen, nonce, first_receipt).expect("first nonce receipt");
-
-        let latest_valid_replay = first_receipt
-            .checked_add(VPN_BACKEND_BOOTSTRAP_NONCE_RETENTION - Duration::from_millis(1))
-            .expect("test instant supports retention addition");
-        let replay = admit_bootstrap_nonce(&mut seen, nonce, latest_valid_replay)
-            .expect_err("future-dated frame must remain blocked across both skew edges");
-        assert!(replay.to_string().contains("replayed"));
     }
     #[test]
     fn bootstrap_nonce_replay_survives_restart_and_clock_rollback_fails_closed() {

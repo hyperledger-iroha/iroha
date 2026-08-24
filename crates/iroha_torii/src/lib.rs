@@ -44762,9 +44762,6 @@ macro_rules! catalog_route_policy {
     (operator_post($handler:path, $state:ident)) => {
         catalog_post($handler).authenticated_operator($state.clone())
     };
-    (protocol_handshake_delete($handler:path)) => {
-        catalog_delete($handler).authenticated_in_handler(HandlerAuthentication::ProtocolHandshake)
-    };
     (protocol_handshake_get($handler:path)) => {
         catalog_get($handler).authenticated_in_handler(HandlerAuthentication::ProtocolHandshake)
     };

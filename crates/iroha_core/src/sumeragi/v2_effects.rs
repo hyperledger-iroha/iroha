@@ -6064,6 +6064,7 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
         self.publish_status(services)
     }
     /// Consume startup or reducer effects in their exact emitted order.
+    #[allow(dead_code, reason = "retained by formal contracts")]
     pub(crate) fn consume_effects<S: V2EffectServices>(
         &mut self,
         effects: Vec<AdapterEffect>,
@@ -7752,6 +7753,7 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
             AdapterEffect::Sign { .. } | AdapterEffect::EnterView { .. } => false,
         }
     }
+    #[allow(dead_code, reason = "retained by formal contracts")]
     fn consume_pacemaker_effects<S: V2EffectServices>(
         &mut self,
         effects: Vec<AdapterEffect>,
@@ -13618,20 +13620,6 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
         error
     }
 }
-// Keep the reviewed direct-consumer wrappers compile-checked without adding a
-// runtime call beside the cleanup-aware production path.
-const _: fn(
-    &mut V2EffectExecutor,
-    Vec<AdapterEffect>,
-    &mut super::v2_worker::ProductionV2Services,
-) -> Result<usize, EffectExecutorError> =
-    V2EffectExecutor::consume_effects::<super::v2_worker::ProductionV2Services>;
-const _: fn(
-    &mut V2EffectExecutor,
-    Vec<AdapterEffect>,
-    &mut super::v2_worker::ProductionV2Services,
-) -> Result<usize, EffectExecutorError> =
-    V2EffectExecutor::consume_pacemaker_effects::<super::v2_worker::ProductionV2Services>;
 /// Outcome of one runtime/executor scheduling step.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum EffectExecutorStep {

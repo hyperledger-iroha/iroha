@@ -530,7 +530,7 @@ mod tests {
     };
     use std::{
         fs,
-        num::{NonZeroU32, NonZeroU64},
+        num::NonZeroU32,
         os::unix::fs::{OpenOptionsExt as _, PermissionsExt as _},
     };
 

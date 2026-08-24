@@ -31999,7 +31999,7 @@ mod offline_cfg_tests {
 mod duration_clamp_tests {
     use super::{
         AssetDefinitionId, BTreeSet, ConfidentialComputeMechanism, DaManifestPolicy, DomainId,
-        Emitter, LaneId, NexusFees, NonZeroU32, NonZeroU64, RETIRED_LANE_FUNCTIONAL_METADATA_KEYS,
+        Emitter, LaneId, NexusFees, NonZeroU64, RETIRED_LANE_FUNCTIONAL_METADATA_KEYS,
     };
     use crate::parameters::{
         actual, defaults,

@@ -2150,7 +2150,7 @@ region|pending_dispatch|effects|at|pub(in crate::sumeragi) fn prepare_lifecycle_
 region|pending_completion_exact|adapter|at|pub(in crate::sumeragi) fn exactly_matches_pending_kura_recovery(|before|impl SumeragiV2Adapter {
 region|pending_driver|pending_lifecycle|at|pub(in crate::sumeragi) fn drive_apply_recovery_turn(|before|/// Construct and authenticate lane recovery after the local Apply completes.
 region|pending_settlement|launch|at|pub(in crate::sumeragi) fn settle_pending_kura_applied_decision_apply_completion(|before|/// Fail-stop failure while consuming the recovered lifecycle owner into I/O.
-region|attempt_settlement|effects|at|pub(crate) fn begin_pending_tip_recovery_attempt(|before|/// Number of serialized interrupted-tip recovery attempts made so far.
+region|attempt_settlement|effects|at|pub(crate) fn begin_pending_tip_recovery_attempt(|before|#[allow(clippy::too_many_lines)]
 region|generic_apply|effects|at|fn begin_apply<S: V2EffectServices>(|before|fn reconcile_runtime_decision<S: V2EffectServices>(
 region|generic_completion|effects|at|pub(crate) fn complete_application<S: V2EffectServices>(|before|/// Current bounded operational status.
 region|effects_production|effects|begin|-|before|\n#[cfg(test)]\nmod tests {
