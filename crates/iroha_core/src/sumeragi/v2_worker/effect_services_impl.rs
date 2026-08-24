@@ -123,7 +123,10 @@ impl V2EffectServices for ProductionV2Services {
             | wire::ConsensusMessageV2Payload::CommitCertificateRequest(_)
             | wire::ConsensusMessageV2Payload::CommitCertificateResponse(_)
             | wire::ConsensusMessageV2Payload::VrfCommit(_)
-            | wire::ConsensusMessageV2Payload::VrfReveal(_) => self.remote_voters(),
+            | wire::ConsensusMessageV2Payload::VrfReveal(_)
+            | wire::ConsensusMessageV2Payload::GlobalBeaconPartialSignature(_) => {
+                self.remote_voters()
+            }
         };
         if let wire::ConsensusMessageV2Payload::Proposal(proposal) = &message.payload {
             let manifest_hash = HashOf::new(&proposal.manifest);
@@ -745,6 +748,9 @@ fn global_v2_output_round(message: &NetworkMessage) -> Option<wire::ConsensusRou
         | wire::ConsensusMessageV2Payload::CommitCertificateRequest(_)
         | wire::ConsensusMessageV2Payload::VrfCommit(_)
         | wire::ConsensusMessageV2Payload::VrfReveal(_) => None,
+        wire::ConsensusMessageV2Payload::GlobalBeaconPartialSignature(partial) => {
+            Some(partial.round)
+        }
     }
 }
 impl PendingExactFanout {

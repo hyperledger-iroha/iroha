@@ -12,11 +12,6 @@ def compute_status_metric_values(
     """Return constructor values for one immutable status-metrics snapshot."""
 
     queue_delta = 0 if previous is None else current.queue_size - previous.queue_size
-    da_delta = (
-        0
-        if previous is None
-        else max(0, current.da_reschedule_total - previous.da_reschedule_total)
-    )
     approved_delta = (
         0 if previous is None else max(0, current.txs_approved - previous.txs_approved)
     )
@@ -30,7 +25,6 @@ def compute_status_metric_values(
         value
         for value in (
             queue_delta,
-            da_delta,
             approved_delta,
             rejected_delta,
             view_delta,
@@ -44,7 +38,6 @@ def compute_status_metric_values(
         "queue_delta": queue_delta,
         "time_since_last_block_ms": current.time_since_last_block_ms,
         "time_since_last_non_empty_block_ms": current.time_since_last_non_empty_block_ms,
-        "da_reschedule_delta": da_delta,
         "tx_approved_delta": approved_delta,
         "tx_rejected_delta": rejected_delta,
         "view_change_delta": view_delta,

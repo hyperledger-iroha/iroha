@@ -69,8 +69,8 @@ pub(super) fn configure_corrupt_inactive_autoscale_range_route_for_test(
         ..iroha_config::parameters::actual::Nexus::default()
     };
     nexus.autoscale.enabled = true;
-    nexus.autoscale.min_lanes = NonZeroU32::new(1).expect("nonzero min lanes");
-    nexus.autoscale.max_lanes = NonZeroU32::new(3).expect("nonzero max lanes");
+    nexus.autoscale.min_lane_id = NonZeroU32::new(1).expect("nonzero min lanes");
+    nexus.autoscale.max_lane_id_exclusive = NonZeroU32::new(3).expect("nonzero max lanes");
     nexus.lane_config =
         iroha_config::parameters::actual::LaneConfig::from_catalog(&nexus.lane_catalog);
     let app_state = Arc::get_mut(app).expect("unique app state");
@@ -115,8 +115,8 @@ pub(super) fn configure_future_created_autoscale_route_for_test(
         ..iroha_config::parameters::actual::Nexus::default()
     };
     nexus.autoscale.enabled = true;
-    nexus.autoscale.min_lanes = NonZeroU32::new(1).expect("nonzero min lanes");
-    nexus.autoscale.max_lanes = NonZeroU32::new(3).expect("nonzero max lanes");
+    nexus.autoscale.min_lane_id = NonZeroU32::new(1).expect("nonzero min lanes");
+    nexus.autoscale.max_lane_id_exclusive = NonZeroU32::new(3).expect("nonzero max lanes");
     nexus.lane_config =
         iroha_config::parameters::actual::LaneConfig::from_catalog(&nexus.lane_catalog);
     let app_state = Arc::get_mut(app).expect("unique app state");

@@ -98,11 +98,45 @@ impl ZkAmsMkheRnsNativeSourceSnapshotV1 for TestSnapshot {
     }
 }
 
+struct InvalidReceiptSnapshot {
+    layout: ZkAmsMkheRnsNativeSourceLayoutV1,
+}
+
+impl ZkAmsMkheRnsNativeSourceSnapshotV1 for InvalidReceiptSnapshot {
+    type Chunk = TestChunk;
+
+    fn layout(&self) -> ZkAmsMkheRnsNativeSourceLayoutV1 {
+        self.layout
+    }
+
+    fn snapshot_digest(&self, _arena: ZkAmsMkheRnsNativeSourceArenaV1) -> [u8; 32] {
+        [0; 32]
+    }
+
+    fn read_slot(
+        &mut self,
+        _arena: ZkAmsMkheRnsNativeSourceArenaV1,
+        _slot: u64,
+    ) -> Result<Self::Chunk, ZkAmsMkheRnsNativeSourceErrorV1> {
+        Err(ZkAmsMkheRnsNativeSourceErrorV1::Storage)
+    }
+}
+
 struct CompositeFixtureV1 {
+    context: u16,
     layout: ZkAmsMkheRnsNativeSourceLayoutV1,
     source_receipt: ZkAmsMkheRnsNativeSourceReceiptV1,
     envelope: ZkAmsMkheRnsNativeProofEnvelopeV1,
     transcript: ZkAmsMkheRnsNativeChallengeSeedsV1,
+}
+
+impl CompositeFixtureV1 {
+    fn source_snapshot(&self) -> TestSnapshot {
+        TestSnapshot {
+            layout: self.layout,
+            context: self.context,
+        }
+    }
 }
 
 fn opening_role(ordinal: usize) -> (ZkAmsMkheRnsNativeFamilyV1, u8) {
@@ -267,6 +301,7 @@ fn composite_fixture(context: u16) -> CompositeFixtureV1 {
     )
     .expect("proof envelope");
     CompositeFixtureV1 {
+        context,
         layout,
         source_receipt,
         envelope,
@@ -288,11 +323,11 @@ fn exact_authority(
 #[test]
 fn production_boundary_rejects_an_invalid_terminal_kernel() {
     let fixture = composite_fixture(1);
+    let source_snapshot = fixture.source_snapshot();
     assert!(matches!(
         verify_zk_ams_mkhe_rns_native_composite_v1(
             fixture.envelope,
-            fixture.layout,
-            fixture.source_receipt,
+            source_snapshot,
             fixture.transcript,
         ),
         Err(
@@ -369,13 +404,9 @@ fn all_typed_sections_are_validated_before_first_unavailable_stage() {
             .to_vec(),
     )
     .expect("transport-valid malformed typed section");
+    let source_snapshot = fixture.source_snapshot();
     assert!(matches!(
-        verify_zk_ams_mkhe_rns_native_composite_v1(
-            envelope,
-            fixture.layout,
-            fixture.source_receipt,
-            fixture.transcript,
-        ),
+        verify_zk_ams_mkhe_rns_native_composite_v1(envelope, source_snapshot, fixture.transcript,),
         Err(
             ZkAmsMkheRnsNativeCompositeVerificationErrorV1::InvalidSection(
                 ZkAmsMkheRnsNativeVerificationStageV1::RnsRelationQpcs,
@@ -424,13 +455,9 @@ fn inner_metadata_cannot_alias_a_source_or_outer_identity() {
             .to_vec(),
     )
     .expect("transport-valid cross-layer alias");
+    let source_snapshot = fixture.source_snapshot();
     assert!(matches!(
-        verify_zk_ams_mkhe_rns_native_composite_v1(
-            envelope,
-            fixture.layout,
-            fixture.source_receipt,
-            fixture.transcript,
-        ),
+        verify_zk_ams_mkhe_rns_native_composite_v1(envelope, source_snapshot, fixture.transcript,),
         Err(ZkAmsMkheRnsNativeCompositeVerificationErrorV1::InvalidTranscript)
     ));
 }
@@ -445,10 +472,10 @@ fn exact_private_fixture_mints_candidate_only_after_all_stages() {
     let expected_ciphertext = fixture.transcript.public_ciphertext_digest();
     let expected_transcript = fixture.transcript.transcript_digest();
     let expected_proof = fixture.envelope.proof_digest();
+    let source_snapshot = fixture.source_snapshot();
     let receipt = verify_with_first_party_authority_v1(
         fixture.envelope,
-        fixture.layout,
-        fixture.source_receipt,
+        source_snapshot,
         fixture.transcript,
         FirstPartyStageAuthorityV1::ExactFixture(Box::new(authority)),
     )
@@ -475,11 +502,11 @@ fn rejection_at_any_stage_never_yields_a_candidate() {
         let authority = exact_authority(&fixture)
             .expect("exact authority")
             .reject(stage);
+        let source_snapshot = fixture.source_snapshot();
         assert!(matches!(
             verify_with_first_party_authority_v1(
                 fixture.envelope,
-                fixture.layout,
-                fixture.source_receipt,
+                source_snapshot,
                 fixture.transcript,
                 FirstPartyStageAuthorityV1::ExactFixture(Box::new(authority)),
             ),
@@ -491,15 +518,15 @@ fn rejection_at_any_stage_never_yields_a_candidate() {
 }
 
 #[test]
-fn source_and_envelope_context_substitution_is_rejected_before_stages() {
+fn source_owner_and_envelope_context_substitution_is_rejected_before_stages() {
     let first = composite_fixture(20);
     let second = composite_fixture(21);
     let authority = exact_authority(&first).expect("authority");
+    let foreign_source_snapshot = second.source_snapshot();
     assert!(matches!(
         verify_with_first_party_authority_v1(
             first.envelope,
-            second.layout,
-            second.source_receipt,
+            foreign_source_snapshot,
             first.transcript,
             FirstPartyStageAuthorityV1::ExactFixture(Box::new(authority)),
         ),
@@ -509,12 +536,35 @@ fn source_and_envelope_context_substitution_is_rejected_before_stages() {
     let first = composite_fixture(22);
     let second = composite_fixture(23);
     let authority = exact_authority(&first).expect("authority");
+    // A caller can substitute only a whole owner. Even when its layout matches,
+    // its derived structural receipt remains bound to the foreign snapshot.
+    let foreign_snapshot_state = TestSnapshot {
+        layout: first.layout,
+        context: second.context,
+    };
     assert!(matches!(
         verify_with_first_party_authority_v1(
             first.envelope,
-            second.layout,
-            first.source_receipt,
+            foreign_snapshot_state,
             first.transcript,
+            FirstPartyStageAuthorityV1::ExactFixture(Box::new(authority)),
+        ),
+        Err(ZkAmsMkheRnsNativeCompositeVerificationErrorV1::InvalidEnvelopeContext)
+    ));
+}
+
+#[test]
+fn invalid_owned_snapshot_receipt_is_rejected_before_stages() {
+    let fixture = composite_fixture(26);
+    let authority = exact_authority(&fixture).expect("authority");
+    let invalid_source_snapshot = InvalidReceiptSnapshot {
+        layout: fixture.layout,
+    };
+    assert!(matches!(
+        verify_with_first_party_authority_v1(
+            fixture.envelope,
+            invalid_source_snapshot,
+            fixture.transcript,
             FirstPartyStageAuthorityV1::ExactFixture(Box::new(authority)),
         ),
         Err(ZkAmsMkheRnsNativeCompositeVerificationErrorV1::InvalidSourceContext)
@@ -546,13 +596,9 @@ fn rebuilt_envelope_cannot_substitute_a_cross_context_transcript_and_sections() 
             .to_vec(),
     )
     .expect("transport-valid rebuilt envelope");
+    let source_snapshot = context_a.source_snapshot();
     assert!(matches!(
-        verify_zk_ams_mkhe_rns_native_composite_v1(
-            envelope,
-            context_a.layout,
-            context_a.source_receipt,
-            context_b.transcript,
-        ),
+        verify_zk_ams_mkhe_rns_native_composite_v1(envelope, source_snapshot, context_b.transcript,),
         Err(ZkAmsMkheRnsNativeCompositeVerificationErrorV1::InvalidTranscript)
     ));
 }
@@ -562,11 +608,11 @@ fn transcript_section_and_stage_order_splices_are_rejected() {
     let first = composite_fixture(30);
     let second = composite_fixture(31);
     let authority = exact_authority(&first).expect("authority");
+    let source_snapshot = first.source_snapshot();
     assert!(matches!(
         verify_with_first_party_authority_v1(
             first.envelope,
-            first.layout,
-            first.source_receipt,
+            source_snapshot,
             second.transcript,
             FirstPartyStageAuthorityV1::ExactFixture(Box::new(authority)),
         ),
@@ -597,11 +643,11 @@ fn transcript_section_and_stage_order_splices_are_rejected() {
             .to_vec(),
     )
     .expect("transport-valid section splice");
+    let source_snapshot = baseline.source_snapshot();
     assert!(matches!(
         verify_with_first_party_authority_v1(
             spliced_envelope,
-            baseline.layout,
-            baseline.source_receipt,
+            source_snapshot,
             baseline.transcript,
             FirstPartyStageAuthorityV1::ExactFixture(Box::new(authority)),
         ),
@@ -615,11 +661,11 @@ fn transcript_section_and_stage_order_splices_are_rejected() {
     let fixture = composite_fixture(34);
     let mut authority = exact_authority(&fixture).expect("authority");
     authority.expectations.swap(0, 1);
+    let source_snapshot = fixture.source_snapshot();
     assert!(matches!(
         verify_with_first_party_authority_v1(
             fixture.envelope,
-            fixture.layout,
-            fixture.source_receipt,
+            source_snapshot,
             fixture.transcript,
             FirstPartyStageAuthorityV1::ExactFixture(Box::new(authority)),
         ),
@@ -643,4 +689,30 @@ fn boundary_exposes_no_accept_all_or_release_authority_surface() {
         .expect("candidate receipt declaration");
     let prefix = &source[receipt.saturating_sub(180)..receipt];
     assert!(!prefix.contains("derive(Clone"));
+
+    let public_boundary = source
+        .split_once("pub fn verify_zk_ams_mkhe_rns_native_composite_v1<S>")
+        .and_then(|(_, suffix)| suffix.split_once("fn verify_with_first_party_authority_v1<S>"))
+        .map(|(boundary, _)| boundary)
+        .expect("generic public ownership boundary");
+    assert!(public_boundary.contains("source_snapshot: S"));
+    assert!(public_boundary.contains("S: ZkAmsMkheRnsNativeSourceSnapshotV1"));
+    assert!(!public_boundary.contains("source_layout:"));
+    assert!(!public_boundary.contains("source_receipt:"));
+
+    let private_boundary = source
+        .split_once("fn verify_with_first_party_authority_v1<S>")
+        .and_then(|(_, suffix)| suffix.split_once("struct CandidateAxesV1"))
+        .map(|(boundary, _)| boundary)
+        .expect("private retained-owner boundary");
+    let calculation = private_boundary
+        .find("let result = (||")
+        .expect("scoped atomic calculation");
+    let owner_drop = private_boundary
+        .find("drop(source_snapshot);")
+        .expect("explicit source-owner drop");
+    assert!(calculation < owner_drop);
+    assert!(private_boundary.contains("let source_receipt = source_snapshot"));
+    assert!(private_boundary.contains(".structural_receipt()"));
+    assert!(!private_boundary.contains("preflight_rns_native_rlwe_source_statement_v1"));
 }

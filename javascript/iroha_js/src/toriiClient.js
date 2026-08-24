@@ -105,10 +105,30 @@ import { blake2b256 } from "./blake2b.js";
 import { NetworkId, networkIdBytes } from "./networkId.js";
 import { generateConnectSid, validateConnectSessionResponseIdentity } from "./connectSession.js";
 import { isCanonicalGovernanceSelectorV1 } from "./governanceSelector.js";
+import { parseCanonicalContractAddress } from "./contractAddress.js";
+import { normalizeGovernanceProposalWireV1 } from "./governanceProposalV1.js";
 import {
   createToriiGovernanceNormalizers,
   VERIFYING_KEY_PRIVATE_KEY_FIELDS,
 } from "./toriiGovernanceNormalizers.js";
+import {
+  PARLIAMENT_ATTEMPT_DRAFT_PATH_V1,
+  PARLIAMENT_ATTEMPT_STATE_MAX_BYTES_V1,
+  PARLIAMENT_TIMED_OVN_CASTING_CONTEXT_ARCHIVE_MAX_BYTES_V1,
+  PARLIAMENT_TRANSITION_DRAFT_PATH_V1,
+  buildParliamentAttemptDraftRequestV1,
+  buildParliamentTransitionDraftRequestV1,
+  normalizeParliamentAttemptDraftResponseV1,
+  normalizeParliamentAttemptReadResponseV1,
+  normalizeParliamentTimedOvnCastingContextResponseV1,
+  normalizeParliamentTlePartialReleaseShareV1,
+  normalizeParliamentTleReleaseContextResponseV1,
+  normalizeParliamentTransitionDraftResponseV1,
+  parliamentAttemptReadPathV1,
+  parliamentTimedOvnCastingContextReadPathV1,
+  parliamentTlePartialReleasePathV1,
+  parliamentTleReleaseContextReadPathV1,
+} from "./parliamentApiV1.js";
 import { createSubscriptionResponseNormalizers } from "./subscriptionResponses.js";
 import { requestSoracloudAppInfraStatus } from "./soracloud.js";
 import {
@@ -205,6 +225,8 @@ const JSON_REQUEST_HEADERS = Object.freeze({
   "Content-Type": APPLICATION_JSON,
   Accept: APPLICATION_JSON,
 });
+const PROPOSE_DEPLOY_CONTRACT_WIRE_ID =
+  "iroha_data_model::isi::governance::ProposeDeployContract";
 
 const DEFAULT_FAILURE_STATUSES = ["Rejected", "Expired"];
 const AUTHORITATIVE_PIPELINE_STATUS_KINDS = new Set([
@@ -798,99 +820,29 @@ const SUBSCRIPTION_LIST_OPTION_KEYS = new Set([
   "offset",
   "signal",
 ]);
-const NORITO_FRAME_HEADER_LENGTH = 40;
-const VERSIONED_TRANSACTION_PAYLOAD_VERSION = 1;
-function isNrt0NoritoFrame(payload) {
-  return (
-    payload.length >= NORITO_FRAME_HEADER_LENGTH &&
-    payload.subarray(0, 4).toString("ascii") === "NRT0"
-  );
-}
-
-function unwrapNrt0NoritoFrame(payload) {
-  if (!isNrt0NoritoFrame(payload)) {
-    return payload;
-  }
-  if (payload[4] !== 0 || payload[5] !== 0) {
-    throw new Error("Unsupported NRT0 transaction frame version.");
-  }
-  const payloadLength = payload.readBigUInt64LE(23);
-  if (payloadLength > BigInt(Number.MAX_SAFE_INTEGER)) {
-    throw new Error("NRT0 transaction frame payload is too large.");
-  }
-  const payloadStart = payload.length - Number(payloadLength);
-  if (payloadStart < NORITO_FRAME_HEADER_LENGTH) {
-    throw new Error("Malformed NRT0 transaction frame payload length.");
-  }
-  return payload.subarray(payloadStart);
-}
-
-function toVersionedTransactionPayload(payload, nativeBinding) {
-  const rawPayload = unwrapNrt0NoritoFrame(payload);
-  const native = resolveOptionalNativeBinding(nativeBinding);
+function encodeCanonicalVersionedSignedTransactionV1(payload, nativeBinding) {
+  const native = resolveNativeBinding(nativeBinding);
   if (
-    native &&
-    typeof native.encodeSignedTransactionVersioned === "function"
+    !native ||
+    typeof native.encodeSignedTransactionVersioned !== "function"
   ) {
-    try {
-      const encoded = Buffer.from(native.encodeSignedTransactionVersioned(rawPayload));
-      if (encoded.length > 0) {
-        return encoded;
-      }
-    } catch {
-      // Preserve the pre-native path for opaque or foreign signed payload bytes.
-    }
+    throw new Error(
+      "Canonical VersionedSignedTransaction V1 validation requires native encodeSignedTransactionVersioned.",
+    );
   }
-  if (
-    native &&
-    typeof native.encodeSignedTransactionNorito === "function"
-  ) {
-    try {
-      return Buffer.concat([
-        Buffer.from([VERSIONED_TRANSACTION_PAYLOAD_VERSION]),
-        unwrapNrt0NoritoFrame(Buffer.from(native.encodeSignedTransactionNorito(rawPayload))),
-      ]);
-    } catch {
-      // Preserve the pre-native path for opaque or foreign signed payload bytes.
-    }
+  const input = Buffer.from(payload);
+  const encoded = Buffer.from(native.encodeSignedTransactionVersioned(input));
+  if (encoded.length === 0 || encoded[0] !== 1) {
+    throw new Error(
+      "Native signed transaction encoder did not return VersionedSignedTransaction V1 bytes.",
+    );
   }
-  return Buffer.concat([
-    Buffer.from([VERSIONED_TRANSACTION_PAYLOAD_VERSION]),
-    rawPayload,
-  ]);
-}
-
-function toVersionedTransactionPayloadStrict(payload, nativeBinding) {
-  const rawPayload = unwrapNrt0NoritoFrame(payload);
-  const native = resolveOptionalNativeBinding(nativeBinding);
-  if (
-    native &&
-    typeof native.encodeSignedTransactionVersioned === "function"
-  ) {
-    const encoded = Buffer.from(native.encodeSignedTransactionVersioned(rawPayload));
-    if (encoded.length === 0) {
-      throw new Error("Native signed transaction version encoder returned an empty payload.");
-    }
-    return encoded;
+  if (!encoded.equals(input)) {
+    throw new Error(
+      "Signed transaction input was not the exact canonical VersionedSignedTransaction V1 encoding.",
+    );
   }
-  if (
-    native &&
-    typeof native.encodeSignedTransactionNorito === "function"
-  ) {
-    const encoded = Buffer.from(native.encodeSignedTransactionNorito(rawPayload));
-    const noritoPayload = unwrapNrt0NoritoFrame(encoded);
-    if (noritoPayload.length === 0) {
-      throw new Error("Native signed transaction Norito encoder returned an empty payload.");
-    }
-    return Buffer.concat([
-      Buffer.from([VERSIONED_TRANSACTION_PAYLOAD_VERSION]),
-      noritoPayload,
-    ]);
-  }
-  return Buffer.concat([
-    Buffer.from([VERSIONED_TRANSACTION_PAYLOAD_VERSION]),
-    rawPayload,
-  ]);
+  return encoded;
 }
 
 function encodeTransactionPayloadBatch(payloads, nativeBinding) {
@@ -3176,7 +3128,7 @@ export class ToriiClient {
    * Persist each page's `promotedCheckpoint` yourself when crash-durable
    * promotion is required; this convenience method promotes only in memory.
    */
-  async catchUpValidationFeeCurrentPolicyProof(binding, options) {
+  async catchUpValidationFeeCurrentPolicyProof(binding, options = {}) {
     const normalizedBinding = normalizeValidationFeeLedgerBindingV1(binding);
     const normalizedOptions = ensureRecord(
       options,
@@ -4697,7 +4649,7 @@ export class ToriiClient {
   }
 
   /**
-   * Submit one caller-signed SoraFS pin-registration transaction.
+   * Submit one exact canonical VersionedSignedTransaction V1 for SoraFS pin registration.
    * @param {ArrayBufferView | ArrayBuffer | Buffer} signedTransaction
    * @param {{signal?: AbortSignal}} [options]
    * @returns {Promise<Record<string, unknown>>}
@@ -4718,12 +4670,12 @@ export class ToriiClient {
     }
     const rawTransaction = toBuffer(signedTransaction, "signedTransaction");
     throwIfAborted(signal);
-    await waitForPromiseWithSignal(this._ensureDataModelValidation(), signal);
-    throwIfAborted(signal);
-    const body = toVersionedTransactionPayload(
+    const body = encodeCanonicalVersionedSignedTransactionV1(
       rawTransaction,
       this._nativeBinding,
     );
+    await waitForPromiseWithSignal(this._ensureDataModelValidation(), signal);
+    throwIfAborted(signal);
     const response = await this._request("POST", "/v1/sorafs/pin/register", {
       headers: {
         "Content-Type": APPLICATION_NORITO,
@@ -5561,7 +5513,7 @@ export class ToriiClient {
   }
 
   /**
-   * Submit a Norito-encoded transaction payload.
+   * Submit one exact canonical VersionedSignedTransaction V1 payload.
    * Throws ToriiDataModelMismatchError when the node data model version mismatches.
    * @param {ArrayBufferView | ArrayBuffer | Buffer} payload
    * @param {{signal?: AbortSignal}} [options]
@@ -5570,10 +5522,13 @@ export class ToriiClient {
   async submitTransaction(payload, options = {}) {
     const { signal } = normalizeSignalOnlyOption(options, "submitTransaction");
     throwIfAborted(signal);
+    const rawPayload = toBuffer(payload);
+    const pipelinePayload = encodeCanonicalVersionedSignedTransactionV1(
+      rawPayload,
+      this._nativeBinding,
+    );
     await waitForPromiseWithSignal(this._ensureDataModelValidation(), signal);
     throwIfAborted(signal);
-    const rawPayload = toBuffer(payload);
-    const pipelinePayload = toVersionedTransactionPayload(rawPayload, this._nativeBinding);
     const requestOptions = {
       headers: {
         "Content-Type": "application/x-norito",
@@ -5639,7 +5594,7 @@ export class ToriiClient {
   }
 
   /**
-   * Submit an input-ordered batch of Norito-encoded signed transaction payloads.
+   * Submit an input-ordered batch of exact canonical VersionedSignedTransaction V1 payloads.
    * Throws ToriiDataModelMismatchError when the node data model version mismatches.
    * @param {ReadonlyArray<ArrayBufferView | ArrayBuffer | Buffer>} payloads
    * @param {{signal?: AbortSignal}} [options]
@@ -5654,7 +5609,10 @@ export class ToriiClient {
       throw new TypeError("submitTransactionBatch requires at least one payload");
     }
     const versionedPayloads = payloads.map((payload) =>
-      toVersionedTransactionPayloadStrict(toBuffer(payload), this._nativeBinding),
+      encodeCanonicalVersionedSignedTransactionV1(
+        toBuffer(payload),
+        this._nativeBinding,
+      ),
     );
     throwIfAborted(signal);
     await waitForPromiseWithSignal(this._ensureDataModelValidation(), signal);
@@ -7041,12 +6999,12 @@ export class ToriiClient {
   /**
    * Fetch an authenticated active Sora VPN session (`GET /v1/vpn/sessions/{session_id}`).
    * Returns null when the session is already absent.
-   * @param {string} sessionId
+   * @param {string} sessionId canonical 16-byte session ID as hexadecimal text
    * @param {{signal?: AbortSignal, canonicalAuth: CanonicalRequestAuth}} options
    * @returns {Promise<ToriiVpnSession | null>}
    */
   async getVpnSession(sessionId, options) {
-    const normalizedSessionId = normalizeHex32String(sessionId, "sessionId");
+    const normalizedSessionId = normalizeHex16String(sessionId, "sessionId");
     const { signal, canonicalAuth } = normalizeVpnSessionOptions(
       options,
       "getVpnSession",
@@ -7069,39 +7027,6 @@ export class ToriiClient {
       throw new Error("vpn session status endpoint returned no payload");
     }
     return normalizeVpnSessionResponse(payload, "vpn session status response");
-  }
-
-  /**
-   * Delete a signed Sora VPN session (`DELETE /v1/vpn/sessions/{session_id}`).
-   * Returns null when the session is already absent.
-   * @param {string} sessionId
-   * @param {{signal?: AbortSignal, canonicalAuth: CanonicalRequestAuth}} options
-   * @returns {Promise<ToriiVpnReceipt | null>}
-   */
-  async deleteVpnSession(sessionId, options) {
-    const normalizedSessionId = normalizeHex32String(sessionId, "sessionId");
-    const { signal, canonicalAuth } = normalizeVpnSessionOptions(
-      options,
-      "deleteVpnSession",
-    );
-    const response = await this._vpnRequest(
-      "DELETE",
-      `/v1/vpn/sessions/${encodeURIComponent(normalizedSessionId)}`,
-      {
-        headers: JSON_ACCEPT_HEADERS,
-        signal,
-        canonicalAuth,
-      },
-    );
-    if (response.status === 404) {
-      return null;
-    }
-    await this._expectStatus(response, [200]);
-    const payload = await this._maybeJson(response);
-    if (!payload) {
-      throw new Error("vpn delete endpoint returned no payload");
-    }
-    return normalizeVpnReceiptResponse(payload, "vpn delete response");
   }
 
   /**
@@ -7435,6 +7360,193 @@ export class ToriiClient {
   }
 
   /**
+   * Build one authenticated Parliament attempt-creation instruction draft.
+   * The caller supplies the independently derived IDs that the response must
+   * match before any payload is exposed for local signing.
+   */
+  async draftParliamentAttemptV1(proposal, attemptSequence, options) {
+    const context = "draftParliamentAttemptV1";
+    const normalizedOptions = ensureRecord(options, `${context} options`);
+    assertSupportedOptionKeys(
+      normalizedOptions,
+      new Set([
+        "signal",
+        "canonicalAuth",
+        "expectedProposalContentId",
+        "expectedGovernanceAttemptId",
+      ]),
+      `${context} options`,
+    );
+    const { signal, canonicalAuth } = normalizeVpnSessionOptions(
+      {
+        signal: normalizedOptions.signal,
+        canonicalAuth: normalizedOptions.canonicalAuth,
+      },
+      context,
+    );
+    const request = buildParliamentAttemptDraftRequestV1(proposal, attemptSequence);
+    const response = await this._request("POST", PARLIAMENT_ATTEMPT_DRAFT_PATH_V1, {
+      headers: JSON_REQUEST_HEADERS,
+      body: stringifyStrictLosslessIntegerJson(request, `${context} request`),
+      signal,
+      canonicalAuth,
+    });
+    await this._expectStatus(response, [200]);
+    const payload = await this._readBoundedLosslessIntegerJson(
+      response,
+      1024 * 1024,
+      `${context} response`,
+      { signal },
+    );
+    return normalizeParliamentAttemptDraftResponseV1(payload, {
+      expectedProposalContentId: normalizedOptions.expectedProposalContentId,
+      expectedGovernanceAttemptId: normalizedOptions.expectedGovernanceAttemptId,
+    });
+  }
+
+  /** Fetch and strictly validate one authenticated Parliament attempt read. */
+  async getParliamentAttemptV1(governanceAttemptId, options) {
+    const context = "getParliamentAttemptV1";
+    const { signal, canonicalAuth } = normalizeVpnSessionOptions(options, context);
+    const path = parliamentAttemptReadPathV1(governanceAttemptId);
+    const response = await this._request("GET", path, {
+      headers: JSON_ACCEPT_HEADERS,
+      signal,
+      canonicalAuth,
+    });
+    await this._expectStatus(response, [200]);
+    const payload = await this._readBoundedLosslessIntegerJson(
+      response,
+      2 * PARLIAMENT_ATTEMPT_STATE_MAX_BYTES_V1 + 2 * 1024 * 1024,
+      `${context} response`,
+      { signal },
+    );
+    return normalizeParliamentAttemptReadResponseV1(payload, governanceAttemptId);
+  }
+
+  /** Fetch one replay-validated public timed-OVN wallet preparation context. */
+  async getParliamentTimedOvnCastingContextV1(ballotAttemptId, options) {
+    const context = "getParliamentTimedOvnCastingContextV1";
+    const { signal, canonicalAuth } = normalizeVpnSessionOptions(options, context);
+    const path = parliamentTimedOvnCastingContextReadPathV1(ballotAttemptId);
+    const response = await this._request("GET", path, {
+      headers: JSON_ACCEPT_HEADERS,
+      signal,
+      canonicalAuth,
+    });
+    await this._expectStatus(response, [200]);
+    const payload = await this._readBoundedLosslessIntegerJson(
+      response,
+      4 * PARLIAMENT_TIMED_OVN_CASTING_CONTEXT_ARCHIVE_MAX_BYTES_V1,
+      `${context} response`,
+      { signal },
+    );
+    return normalizeParliamentTimedOvnCastingContextResponseV1(payload, ballotAttemptId);
+  }
+
+  /** Fetch one Core-authorized bounded public Parliament TLE release context. */
+  async getParliamentTleReleaseContextV1(ballotAttemptId, options) {
+    const context = "getParliamentTleReleaseContextV1";
+    const { signal, canonicalAuth } = normalizeVpnSessionOptions(options, context);
+    const path = parliamentTleReleaseContextReadPathV1(ballotAttemptId);
+    const response = await this._request("GET", path, {
+      headers: JSON_ACCEPT_HEADERS,
+      signal,
+      canonicalAuth,
+    });
+    await this._expectStatus(response, [200]);
+    const payload = await this._readBoundedLosslessIntegerJson(
+      response,
+      1024 * 1024,
+      `${context} response`,
+      { signal },
+    );
+    return normalizeParliamentTleReleaseContextResponseV1(payload, ballotAttemptId);
+  }
+
+  /** Request and strictly bind this node's proof-carrying public TLE partial. */
+  async requestParliamentTlePartialReleaseV1(ballotAttemptId, options) {
+    const context = "requestParliamentTlePartialReleaseV1";
+    const normalizedOptions = ensureRecord(options, `${context} options`);
+    assertSupportedOptionKeys(
+      normalizedOptions,
+      new Set([
+        "signal", "canonicalAuth", "expectedKeySessionId", "expectedIdentityDigest",
+        "committeeSize",
+      ]),
+      `${context} options`,
+    );
+    const { signal, canonicalAuth } = normalizeVpnSessionOptions(
+      {
+        signal: normalizedOptions.signal,
+        canonicalAuth: normalizedOptions.canonicalAuth,
+      },
+      context,
+    );
+    const path = parliamentTlePartialReleasePathV1(ballotAttemptId);
+    const response = await this._request("POST", path, {
+      headers: JSON_ACCEPT_HEADERS,
+      signal,
+      canonicalAuth,
+    });
+    await this._expectStatus(response, [200]);
+    const payload = await this._readBoundedLosslessIntegerJson(
+      response,
+      16 * 1024,
+      `${context} response`,
+      { signal },
+    );
+    return normalizeParliamentTlePartialReleaseShareV1(payload, {
+      expectedKeySessionId: normalizedOptions.expectedKeySessionId,
+      expectedIdentityDigest: normalizedOptions.expectedIdentityDigest,
+      committeeSize: normalizedOptions.committeeSize,
+    });
+  }
+
+  /**
+   * Build one authenticated public Parliament lifecycle-transition draft.
+   * Automatic execution outcomes are deliberately rejected by the builder.
+   */
+  async draftParliamentTransitionV1(governanceAttemptId, transition, options) {
+    const context = "draftParliamentTransitionV1";
+    const normalizedOptions = ensureRecord(options, `${context} options`);
+    assertSupportedOptionKeys(
+      normalizedOptions,
+      new Set(["signal", "canonicalAuth", "expectedTransitionDigest"]),
+      `${context} options`,
+    );
+    const { signal, canonicalAuth } = normalizeVpnSessionOptions(
+      {
+        signal: normalizedOptions.signal,
+        canonicalAuth: normalizedOptions.canonicalAuth,
+      },
+      context,
+    );
+    const request = buildParliamentTransitionDraftRequestV1(
+      governanceAttemptId,
+      transition,
+    );
+    const response = await this._request("POST", PARLIAMENT_TRANSITION_DRAFT_PATH_V1, {
+      headers: JSON_REQUEST_HEADERS,
+      body: stringifyStrictLosslessIntegerJson(request, `${context} request`),
+      signal,
+      canonicalAuth,
+    });
+    await this._expectStatus(response, [200]);
+    const payload = await this._readBoundedLosslessIntegerJson(
+      response,
+      1024 * 1024,
+      `${context} response`,
+      { signal },
+    );
+    return normalizeParliamentTransitionDraftResponseV1(payload, {
+      expectedGovernanceAttemptId: governanceAttemptId,
+      expectedTransitionKind: transition?.transition,
+      expectedTransitionDigest: normalizedOptions.expectedTransitionDigest,
+    });
+  }
+
+  /**
    * Draft a Ministry agenda proposal submission transaction (`POST /v1/ministry/agenda/proposals/draft`).
    * @param {{ proposal: Record<string, unknown>, authority: string }} payload
    * @returns {Promise<Record<string, unknown>>}
@@ -7495,74 +7607,9 @@ export class ToriiClient {
   }
 
   /**
-   * Finalise a referendum (`POST /v1/gov/finalize`).
-   * @param {ToriiGovernanceFinalizeRequest} payload
-   * @returns {Promise<Record<string, unknown> | null>}
-   */
-  async governanceFinalizeReferendum(payload, options = {}) {
-    const body = stringifyStrictLosslessIntegerJson(
-      normalizeGovernanceFinalizePayload(payload),
-      "governance finalize request",
-    );
-    const { signal } = normalizeSignalOnlyOption(
-      options,
-      "governanceFinalizeReferendum",
-    );
-    const response = await this._request("POST", "/v1/gov/finalize", {
-      headers: JSON_REQUEST_HEADERS,
-      body,
-      signal,
-    });
-    await this._expectStatus(response, [200, 202, 204]);
-    const draft = await this._maybeJson(response);
-    return draft == null ? null : normalizeGovernanceDraftResponse(draft);
-  }
-
-  /**
-   * Finalise a referendum and always return a typed draft.
-   * @param {ToriiGovernanceFinalizeRequest} payload
-   * @returns {Promise<ToriiGovernanceDraftResponse>}
-   */
-  async governanceFinalizeReferendumTyped(payload, options = {}) {
-    const result = await this.governanceFinalizeReferendum(payload, options);
-    return result ?? createEmptyGovernanceDraftResponse("governance finalize response");
-  }
-
-  /**
-   * Enact a governance proposal (`POST /v1/gov/enact`).
-   * @param {ToriiGovernanceEnactRequest} payload
-   * @returns {Promise<Record<string, unknown> | null>}
-   */
-  async governanceEnactProposal(payload, options) {
-    const body = stringifyStrictLosslessIntegerJson(
-      normalizeGovernanceEnactPayload(payload),
-      "governance enact request",
-    );
-    const { signal, canonicalAuth } = normalizeVpnSessionOptions(options, "governanceEnactProposal");
-    const response = await this._request("POST", "/v1/gov/enact", {
-      headers: JSON_REQUEST_HEADERS,
-      body,
-      signal, canonicalAuth,
-    });
-    await this._expectStatus(response, [200, 202, 204]);
-    const draft = await this._maybeJson(response);
-    return draft == null ? null : normalizeGovernanceDraftResponse(draft);
-  }
-
-  /**
-   * Enact a governance proposal and always return a typed draft.
-   * @param {ToriiGovernanceEnactRequest} payload
-   * @returns {Promise<ToriiGovernanceDraftResponse>}
-   */
-  async governanceEnactProposalTyped(payload, options) {
-    const result = await this.governanceEnactProposal(payload, options);
-    return result ?? createEmptyGovernanceDraftResponse("governance enact response");
-  }
-
-  /**
    * Draft a governance deployment proposal (`POST /v1/gov/proposals/deploy-contract`).
    * @param {ToriiGovernanceDeployContractProposalRequest} payload
-   * @returns {Promise<ToriiGovernanceDraftResponse>}
+   * @returns {Promise<ToriiGovernanceProposalDraftResponseV1>}
    */
   async governanceProposeDeployContract(payload, options) {
     const { signal, canonicalAuth } = normalizeVpnSessionOptions(
@@ -7583,7 +7630,11 @@ export class ToriiClient {
     if (!draft) {
       throw new Error("governance deploy-contract endpoint returned no payload");
     }
-    return normalizeGovernanceDraftResponse(draft, "governance deploy-contract response");
+    return normalizeGovernanceProposalDraftResponseV1(
+      draft,
+      PROPOSE_DEPLOY_CONTRACT_WIRE_ID,
+      "governance deploy-contract response",
+    );
   }
 
   /**
@@ -7612,37 +7663,6 @@ export class ToriiClient {
       throw new Error("governance plain ballot endpoint returned no payload");
     }
     return normalizeGovernanceBallotResponse(draft, "governance plain ballot response");
-  }
-
-  /**
-   * Draft an equal Parliament-stage ballot (`POST /v1/gov/parliament/ballots`).
-   * @param {ToriiGovernanceParliamentBallotRequest} payload
-   * @param {{signal?: AbortSignal, canonicalAuth: CanonicalRequestAuth}} options
-   * @returns {Promise<ToriiGovernanceBallotResponse>}
-   */
-  async governanceSubmitParliamentBallot(payload, options) {
-    const normalized = normalizeGovernanceParliamentBallotPayload(payload);
-    const requestIdentity = normalizeGovernanceBallotIdentity(
-      normalized, options, this._localSigningContext, "governanceSubmitParliamentBallot",
-    );
-    const body = stringifyStrictLosslessIntegerJson(
-      normalized,
-      "governance Parliament-ballot request",
-    );
-    const response = await this._request("POST", "/v1/gov/parliament/ballots", {
-      headers: JSON_REQUEST_HEADERS,
-      body,
-      ...requestIdentity,
-    });
-    await this._expectStatus(response, [200]);
-    const draft = await this._maybeJson(response);
-    if (!draft) {
-      throw new Error("governance Parliament ballot endpoint returned no payload");
-    }
-    return normalizeGovernanceBallotResponse(
-      draft,
-      "governance Parliament ballot response",
-    );
   }
 
   /**
@@ -7751,23 +7771,6 @@ export class ToriiClient {
    * @param {{signal?: AbortSignal}} [options]
    * @returns {Promise<any>}
    */
-
-  /**
-   * Fetch consensus key lifecycle records (newest first) via `/v1/sumeragi/key-lifecycle`.
-   */
-  async listSumeragiKeyLifecycle() {
-    const response = await this._request("GET", "/v1/sumeragi/key-lifecycle", {
-      headers: { Accept: this._acceptHeader() },
-      operatorSigningContext: requireOperatorSigningContext(
-        this._operatorSigningContext,
-        "listSumeragiKeyLifecycle",
-      ),
-    });
-    if (!response) {
-      throw new Error("sumeragi key lifecycle endpoint returned no payload");
-    }
-    return response;
-  }
 
   async getSumeragiStatus(options = {}) {
     const { signal } = normalizeSignalOnlyOption(options, "getSumeragiStatus");
@@ -14205,10 +14208,6 @@ function parseStatusPayload(payload) {
       "status.time_since_last_non_empty_block_ms",
     ),
     commit_time_ms: coerceStatusInt(payload.commit_time_ms, "status.commit_time_ms"),
-    da_reschedule_total: coerceStatusInt(
-      payload.da_reschedule_total,
-      "status.da_reschedule_total",
-    ),
     txs_approved: coerceStatusInt(payload.txs_approved, "status.txs_approved"),
     txs_rejected: coerceStatusInt(payload.txs_rejected, "status.txs_rejected"),
     view_changes: coerceStatusInt(payload.view_changes, "status.view_changes"),
@@ -14253,9 +14252,14 @@ function parseGovernanceSnapshot(payload) {
   return {
     proposals: {
       proposed: coerceNestedInt(proposals, "proposed", "governance.proposals"),
-      approved: coerceNestedInt(proposals, "approved", "governance.proposals"),
       rejected: coerceNestedInt(proposals, "rejected", "governance.proposals"),
       enacted: coerceNestedInt(proposals, "enacted", "governance.proposals"),
+      superseded: coerceNestedInt(proposals, "superseded", "governance.proposals"),
+      execution_failed: coerceNestedInt(
+        proposals,
+        "execution_failed",
+        "governance.proposals",
+      ),
     },
     protected_namespace: {
       total_checks: coerceNestedInt(
@@ -14742,9 +14746,10 @@ function normalizeSumeragiParamsSnapshot(payload) {
 
 const GOVERNANCE_PROPOSAL_STATUSES = new Set([
   "Proposed",
-  "Approved",
   "Rejected",
   "Enacted",
+  "Superseded",
+  "ExecutionFailed",
 ]);
 
 function parseGovernanceProposalResult(payload) {
@@ -14763,77 +14768,1061 @@ function parseGovernanceProposalResult(payload) {
 }
 
 function parseGovernanceProposalRecord(payload) {
-  const record = ensureRecord(payload, "governance proposal record");
-  const proposer = requireNonEmptyString(record.proposer, "governance.proposal.proposer");
-  const createdHeight = coerceInteger(record.created_height, "governance.proposal.created_height");
+  const record = requireExactGovernanceProposalRecord(
+    payload,
+    ["proposer", "kind", "created_height", "status"],
+    "governance proposal record",
+  );
+  const proposer = requireCanonicalGovernanceAccountId(
+    record.proposer,
+    "governance.proposal.proposer",
+  );
+  const createdHeight = requireExactJsonUnsignedInteger(
+    record.created_height,
+    "governance.proposal.created_height",
+  );
   const statusValue = record.status;
   if (typeof statusValue !== "string" || !GOVERNANCE_PROPOSAL_STATUSES.has(statusValue)) {
     throw new TypeError(
-      "governance proposal status must be one of Proposed, Approved, Rejected, Enacted",
+      "governance proposal status must be one of Proposed, Rejected, Enacted, Superseded, ExecutionFailed",
     );
   }
   const kindPayload = ensureRecord(record.kind, "governance.proposal.kind");
+  const kind = parseGovernanceProposalKind(kindPayload, "governance.proposal.kind");
+  let proposalOperator = null;
+  if (kind.variant === "ValidationFeePolicy") {
+    proposalOperator = kind.validation_fee_policy.proposal_operator;
+  } else if (kind.variant === "ValidationFeePayoutLifecycle") {
+    proposalOperator = kind.validation_fee_payout_lifecycle.proposal_operator;
+  }
+  if (proposalOperator !== null && proposalOperator !== proposer) {
+    throw new TypeError("governance proposal operator must match the retained proposer");
+  }
   return {
     proposer,
     created_height: createdHeight,
     status: statusValue,
-    kind: parseGovernanceProposalKind(kindPayload, "governance.proposal.kind"),
+    kind,
   };
 }
 
 function parseGovernanceProposalKind(payload, context) {
-  const entries = Object.entries(payload);
-  if (entries.length !== 1) {
-    throw new TypeError(`${context} must contain exactly one variant entry`);
+  const record = normalizeGovernanceProposalWireV1(payload, context);
+  const variant = requireExactNonEmptyString(record.kind, `${context}.kind`);
+  const details = ensureRecord(record.payload, `${context}.payload`);
+  switch (variant) {
+    case "DeployContract":
+      return {
+        variant,
+        deploy_contract: parseGovernanceDeployContract(
+          details,
+          `${context}.payload`,
+        ),
+      };
+    case "RuntimeUpgrade":
+      return {
+        variant,
+        runtime_upgrade: parseGovernanceRuntimeUpgrade(details, `${context}.payload`),
+      };
+    case "SccpRouteGovernance":
+      return {
+        variant,
+        sccp_route_governance: parseGovernanceSccpRouteGovernance(
+          details,
+          `${context}.payload`,
+        ),
+      };
+    case "ValidationFeePolicy":
+      return {
+        variant,
+        validation_fee_policy: parseGovernanceValidationFeePolicy(
+          details,
+          `${context}.payload`,
+        ),
+      };
+    case "ValidationFeePayoutLifecycle":
+      return {
+        variant,
+        validation_fee_payout_lifecycle: parseGovernanceValidationFeePayoutLifecycle(
+          details,
+          `${context}.payload`,
+        ),
+      };
+    case "MusubiRegistryGovernance":
+      return {
+        variant,
+        musubi_registry_governance: parseGovernanceMusubiAction(
+          details,
+          `${context}.payload`,
+        ),
+      };
+    case "SorafsProviderGovernance":
+      return {
+        variant,
+        sorafs_provider_governance: parseGovernanceSorafsProvider(
+          details,
+          `${context}.payload`,
+        ),
+      };
+    default:
+      throw new TypeError(`${context}.kind contains unsupported proposal variant: ${variant}`);
   }
-  const [variantRaw, details] = entries[0];
-  const variant = requireNonEmptyString(variantRaw, `${context}.variant`);
-  let deployContract = null;
-  let sccpRouteGovernance = null;
-  if (variant === "DeployContract") {
-    if (!isPlainObject(details)) {
-      throw new TypeError("DeployContract proposal kind expects an object payload");
-    }
-    deployContract = parseGovernanceDeployContract(details, `${context}.DeployContract`);
-  } else if (variant === "SccpRouteGovernance") {
-    if (!isPlainObject(details)) {
-      throw new TypeError("SccpRouteGovernance proposal kind expects an object payload");
-    }
-    const proposal = ensureRecord(details, `${context}.SccpRouteGovernance`);
-    const fields = Object.keys(proposal);
-    if (fields.length !== 1 || fields[0] !== "action") {
-      throw new TypeError(
-        `${context}.SccpRouteGovernance must contain only \`action\``,
-      );
-    }
-    sccpRouteGovernance = normalizeSccpRouteGovernanceAction(proposal.action);
-  }
-  return {
-    variant,
-    deploy_contract: deployContract,
-    sccp_route_governance: sccpRouteGovernance,
-    raw: cloneGovernanceKindRaw(details),
-  };
 }
 
 function parseGovernanceDeployContract(payload, context) {
-  const record = ensureRecord(payload, context);
+  const record = requireExactGovernanceProposalRecord(
+    payload,
+    [
+      "contract_address",
+      "code_hash",
+      "abi_hash",
+      "abi_version",
+      "manifest_provenance",
+    ],
+    context,
+  );
+  if (record.abi_version !== 1) {
+    throw new TypeError(`${context}.abi_version must be the number 1`);
+  }
+  const contractAddress = requireExactNonEmptyString(
+    record.contract_address,
+    `${context}.contract_address`,
+  );
+  parseCanonicalContractAddress(contractAddress, `${context}.contract_address`);
   return {
-    contract_address: requireNonEmptyString(
-      record.contract_address,
-      `${context}.contract_address`,
-    ),
-    code_hash_hex: requireNonEmptyString(record.code_hash_hex, `${context}.code_hash_hex`),
-    abi_hash_hex: requireNonEmptyString(record.abi_hash_hex, `${context}.abi_hash_hex`),
-    abi_version: requireNonEmptyString(record.abi_version, `${context}.abi_version`),
+    contract_address: contractAddress,
+    code_hash: requireExactLowerHex32String(record.code_hash, `${context}.code_hash`),
+    abi_hash: requireExactLowerHex32String(record.abi_hash, `${context}.abi_hash`),
+    abi_version: 1,
+    manifest_provenance:
+      record.manifest_provenance === null
+        ? null
+        : parseGovernanceManifestProvenance(
+            record.manifest_provenance,
+            `${context}.manifest_provenance`,
+          ),
   };
 }
 
-function cloneGovernanceKindRaw(details) {
-  if (isPlainObject(details)) {
-    return { ...details };
+function parseGovernanceManifestProvenance(payload, context) {
+  const record = requireExactGovernanceProposalRecord(
+    payload,
+    ["signer", "signature"],
+    context,
+  );
+  return {
+    signer: requireExactNonEmptyString(record.signer, `${context}.signer`),
+    signature: requireExactNonEmptyString(record.signature, `${context}.signature`),
+  };
+}
+
+function parseGovernanceRuntimeUpgrade(payload, context) {
+  const record = requireExactGovernanceProposalRecord(payload, ["manifest"], context);
+  const manifestContext = `${context}.manifest`;
+  const manifest = requireExactGovernanceProposalRecord(
+    record.manifest,
+    [
+      "name",
+      "description",
+      "abi_version",
+      "abi_hash",
+      "added_syscalls",
+      "added_pointer_types",
+      "start_height",
+      "end_height",
+      "sbom_digests",
+      "slsa_attestation",
+      "provenance",
+    ],
+    manifestContext,
+  );
+  if (manifest.abi_version !== 1) {
+    throw new TypeError(`${manifestContext}.abi_version must be the number 1`);
   }
-  return { value: details };
+  const addedSyscalls = parseGovernanceUint16Array(
+    manifest.added_syscalls,
+    `${manifestContext}.added_syscalls`,
+  );
+  const addedPointerTypes = parseGovernanceUint16Array(
+    manifest.added_pointer_types,
+    `${manifestContext}.added_pointer_types`,
+  );
+  if (addedSyscalls.length !== 0 || addedPointerTypes.length !== 0) {
+    throw new TypeError(`${manifestContext} ABI delta lists must be empty in V1`);
+  }
+  const startHeight = requireExactJsonUnsignedInteger(
+    manifest.start_height,
+    `${manifestContext}.start_height`,
+  );
+  const endHeight = requireExactJsonUnsignedInteger(
+    manifest.end_height,
+    `${manifestContext}.end_height`,
+  );
+  if (endHeight <= startHeight) {
+    throw new TypeError(`${manifestContext}.end_height must be greater than start_height`);
+  }
+  return {
+    manifest: {
+      name: requireExactNonEmptyString(manifest.name, `${manifestContext}.name`),
+      description: requireExactString(manifest.description, `${manifestContext}.description`),
+      abi_version: 1,
+      abi_hash: requireExactGovernanceByteArray(
+        manifest.abi_hash,
+        32,
+        `${manifestContext}.abi_hash`,
+      ),
+      added_syscalls: addedSyscalls,
+      added_pointer_types: addedPointerTypes,
+      start_height: startHeight,
+      end_height: endHeight,
+      sbom_digests: parseGovernanceSbomDigests(
+        manifest.sbom_digests,
+        `${manifestContext}.sbom_digests`,
+      ),
+      slsa_attestation: requireCanonicalGovernanceBase64(
+        manifest.slsa_attestation,
+        `${manifestContext}.slsa_attestation`,
+      ),
+      provenance: requireGovernanceArray(
+        manifest.provenance,
+        `${manifestContext}.provenance`,
+      ).map((item, index) => parseGovernanceManifestProvenance(
+        item,
+        `${manifestContext}.provenance[${index}]`,
+      )),
+    },
+  };
+}
+
+function parseGovernanceSbomDigests(payload, context) {
+  return requireGovernanceArray(payload, context).map((item, index) => {
+    const itemContext = `${context}[${index}]`;
+    const record = requireExactGovernanceProposalRecord(
+      item,
+      ["algorithm", "digest"],
+      itemContext,
+    );
+    return {
+      algorithm: requireExactNonEmptyString(record.algorithm, `${itemContext}.algorithm`),
+      digest: requireCanonicalGovernanceBase64(record.digest, `${itemContext}.digest`),
+    };
+  });
+}
+
+function parseGovernanceSccpRouteGovernance(payload, context) {
+  const record = requireExactGovernanceProposalRecord(payload, ["anchor"], context);
+  const anchorContext = `${context}.anchor`;
+  const anchor = requireExactGovernanceProposalRecord(
+    record.anchor,
+    ["network_id", "action"],
+    anchorContext,
+  );
+  const networkId = requireExactNonEmptyString(
+    anchor.network_id,
+    `${anchorContext}.network_id`,
+  );
+  NetworkId.parse(networkId);
+  return {
+    anchor: {
+      network_id: networkId,
+      action: normalizeSccpRouteGovernanceAction(anchor.action),
+    },
+  };
+}
+
+function parseGovernanceValidationFeePolicy(payload, context) {
+  const record = requireExactGovernanceProposalRecord(
+    payload,
+    ["proposal_operator", "policy", "payout_lifecycle_proposal_id"],
+    context,
+  );
+  const policy = parseGovernanceValidationFeePolicyV1(
+    record.policy,
+    `${context}.policy`,
+  );
+  const lifecycleId = record.payout_lifecycle_proposal_id === null
+    ? null
+    : requireExactGovernanceByteArray(
+      record.payout_lifecycle_proposal_id,
+      32,
+      `${context}.payout_lifecycle_proposal_id`,
+      { nonZero: true },
+    );
+  if ((policy.treasury_payout_binding === null) !== (lifecycleId === null)) {
+    throw new TypeError(
+      `${context}.payout_lifecycle_proposal_id must be present exactly when the policy has a payout binding`,
+    );
+  }
+  return {
+    proposal_operator: requireCanonicalGovernanceAccountId(
+      record.proposal_operator,
+      `${context}.proposal_operator`,
+    ),
+    policy,
+    payout_lifecycle_proposal_id: lifecycleId,
+  };
+}
+
+function parseGovernanceValidationFeePolicyV1(payload, context) {
+  const record = requireExactGovernanceProposalRecord(
+    payload,
+    [
+      "schema_version",
+      "network_id",
+      "policy_version",
+      "previous_policy_hash",
+      "ds_asset_id",
+      "ds_scale",
+      "fee",
+      "treasury_account_id",
+      "charging_mode",
+      "effective_from_height",
+      "expires_after_height",
+      "exemption_classes",
+      "treasury_payout_binding",
+    ],
+    context,
+  );
+  if (record.schema_version !== 1) {
+    throw new TypeError(`${context}.schema_version must be the number 1`);
+  }
+  if (record.ds_scale !== 2) {
+    throw new TypeError(`${context}.ds_scale must be the number 2`);
+  }
+  const networkId = requireExactNonEmptyString(record.network_id, `${context}.network_id`);
+  NetworkId.parse(networkId);
+  const policyVersion = requireExactGovernanceUint64String(
+    record.policy_version,
+    `${context}.policy_version`,
+    { allowZero: false },
+  );
+  const previousPolicyHash = record.previous_policy_hash === null
+    ? null
+    : requireExactGovernanceByteArray(
+      record.previous_policy_hash,
+      32,
+      `${context}.previous_policy_hash`,
+    );
+  if ((policyVersion === "1") !== (previousPolicyHash === null)) {
+    throw new TypeError(`${context}.previous_policy_hash does not match policy_version`);
+  }
+  const chargingMode = parseGovernanceValidationFeeChargingMode(
+    record.charging_mode,
+    `${context}.charging_mode`,
+  );
+  const fee = requireExactCanonicalGovernanceQuantity(record.fee, `${context}.fee`);
+  const exemptions = requireGovernanceArray(
+    record.exemption_classes,
+    `${context}.exemption_classes`,
+  ).map((item, index) => requireExactNonEmptyString(
+    item,
+    `${context}.exemption_classes[${index}]`,
+  ));
+  if (
+    exemptions.some((item) => item !== "TREASURY_PAYOUT") ||
+    new Set(exemptions).size !== exemptions.length
+  ) {
+    throw new TypeError(`${context}.exemption_classes contains an unsupported or duplicate class`);
+  }
+  const payoutBinding = record.treasury_payout_binding === null
+    ? null
+    : parseGovernanceValidationFeePayoutBinding(
+      record.treasury_payout_binding,
+      `${context}.treasury_payout_binding`,
+    );
+  if ((payoutBinding === null) !== !exemptions.includes("TREASURY_PAYOUT")) {
+    throw new TypeError(`${context}.treasury_payout_binding does not match exemption_classes`);
+  }
+  if (chargingMode.charging_mode === "DISABLED") {
+    if (fee !== "0" || exemptions.length !== 0 || payoutBinding !== null) {
+      throw new TypeError(`${context} disabled charging mode requires zero fee and no exemptions`);
+    }
+  } else if (fee !== "0.1") {
+    throw new TypeError(`${context}.fee must be exactly 0.1 for enabled V1 charging`);
+  }
+  const effectiveHeight = requireExactGovernanceUint64String(
+    record.effective_from_height,
+    `${context}.effective_from_height`,
+  );
+  const expiresHeight = record.expires_after_height === null
+    ? null
+    : requireExactGovernanceUint64String(
+      record.expires_after_height,
+      `${context}.expires_after_height`,
+    );
+  if (expiresHeight !== null && BigInt(expiresHeight) <= BigInt(effectiveHeight)) {
+    throw new TypeError(`${context}.expires_after_height must exceed effective_from_height`);
+  }
+  return {
+    schema_version: 1,
+    network_id: networkId,
+    policy_version: policyVersion,
+    previous_policy_hash: previousPolicyHash,
+    ds_asset_id: requireCanonicalGovernanceAssetDefinitionId(
+      record.ds_asset_id,
+      `${context}.ds_asset_id`,
+    ),
+    ds_scale: 2,
+    fee,
+    treasury_account_id: requireCanonicalGovernanceAccountId(
+      record.treasury_account_id,
+      `${context}.treasury_account_id`,
+    ),
+    charging_mode: chargingMode,
+    effective_from_height: effectiveHeight,
+    expires_after_height: expiresHeight,
+    exemption_classes: exemptions,
+    treasury_payout_binding: payoutBinding,
+  };
+}
+
+function parseGovernanceValidationFeeChargingMode(payload, context) {
+  const record = requireExactGovernanceProposalRecord(
+    payload,
+    ["charging_mode", "value"],
+    context,
+  );
+  if (
+    record.charging_mode !== "DISABLED" &&
+    record.charging_mode !== "PER_QUALIFYING_TRANSFER_INSTRUCTION"
+  ) {
+    throw new TypeError(`${context}.charging_mode contains an unsupported variant`);
+  }
+  if (record.value !== null) {
+    throw new TypeError(`${context}.value must be null`);
+  }
+  return { charging_mode: record.charging_mode, value: null };
+}
+
+function parseGovernanceValidationFeePayoutLifecycle(payload, context) {
+  const record = requireExactGovernanceProposalRecord(
+    payload,
+    ["proposal_operator", "payout_binding"],
+    context,
+  );
+  return {
+    proposal_operator: requireCanonicalGovernanceAccountId(
+      record.proposal_operator,
+      `${context}.proposal_operator`,
+    ),
+    payout_binding: parseGovernanceValidationFeePayoutBinding(
+      record.payout_binding,
+      `${context}.payout_binding`,
+    ),
+  };
+}
+
+function parseGovernanceValidationFeePayoutBinding(payload, context) {
+  const record = requireExactGovernanceProposalRecord(
+    payload,
+    [
+      "contract_address",
+      "code_hash",
+      "entrypoint",
+      "treasury_account_id",
+      "ds_asset_id",
+      "xor_asset_id",
+      "pool_vault_account_id",
+      "batch_ds",
+      "min_xor_out",
+      "max_xor_out",
+      "recipients",
+    ],
+    context,
+  );
+  const contractAddress = requireExactNonEmptyString(
+    record.contract_address,
+    `${context}.contract_address`,
+  );
+  parseCanonicalContractAddress(contractAddress, `${context}.contract_address`);
+  if (record.entrypoint !== "autonomous_validation_fee_tick") {
+    throw new TypeError(`${context}.entrypoint must be autonomous_validation_fee_tick`);
+  }
+  const treasury = requireCanonicalGovernanceAccountId(
+    record.treasury_account_id,
+    `${context}.treasury_account_id`,
+  );
+  const vault = requireCanonicalGovernanceAccountId(
+    record.pool_vault_account_id,
+    `${context}.pool_vault_account_id`,
+  );
+  if (treasury === vault) {
+    throw new TypeError(`${context} treasury and pool vault accounts must differ`);
+  }
+  const dsAsset = requireCanonicalGovernanceAssetDefinitionId(
+    record.ds_asset_id,
+    `${context}.ds_asset_id`,
+  );
+  const xorAsset = requireCanonicalGovernanceAssetDefinitionId(
+    record.xor_asset_id,
+    `${context}.xor_asset_id`,
+  );
+  if (dsAsset === xorAsset) {
+    throw new TypeError(`${context} DS and XOR assets must differ`);
+  }
+  if (
+    requireExactCanonicalGovernanceQuantity(record.batch_ds, `${context}.batch_ds`) !== "10" ||
+    requireExactCanonicalGovernanceQuantity(record.min_xor_out, `${context}.min_xor_out`) !== "4" ||
+    requireExactCanonicalGovernanceQuantity(record.max_xor_out, `${context}.max_xor_out`) !== "100"
+  ) {
+    throw new TypeError(`${context} must use the exact V1 payout quantities`);
+  }
+  const recipients = requireGovernanceArray(record.recipients, `${context}.recipients`)
+    .map((item, index) => {
+      const itemContext = `${context}.recipients[${index}]`;
+      const recipient = requireExactGovernanceProposalRecord(
+        item,
+        ["account_id", "share"],
+        itemContext,
+      );
+      const accountId = requireCanonicalGovernanceAccountId(
+        recipient.account_id,
+        `${itemContext}.account_id`,
+      );
+      if (requireExactCanonicalGovernanceQuantity(
+        recipient.share,
+        `${itemContext}.share`,
+      ) !== "0.25") {
+        throw new TypeError(`${itemContext}.share must be exactly 0.25`);
+      }
+      return { account_id: accountId, share: "0.25" };
+    });
+  const recipientIds = recipients.map((recipient) => recipient.account_id);
+  if (
+    recipients.length !== 4 ||
+    new Set(recipientIds).size !== 4 ||
+    recipientIds.includes(treasury) ||
+    recipientIds.includes(vault)
+  ) {
+    throw new TypeError(`${context}.recipients must contain four unique non-pool accounts`);
+  }
+  return {
+    contract_address: contractAddress,
+    code_hash: requireExactGovernanceByteArray(
+      record.code_hash,
+      32,
+      `${context}.code_hash`,
+      { nonZero: true },
+    ),
+    entrypoint: "autonomous_validation_fee_tick",
+    treasury_account_id: treasury,
+    ds_asset_id: dsAsset,
+    xor_asset_id: xorAsset,
+    pool_vault_account_id: vault,
+    batch_ds: "10",
+    min_xor_out: "4",
+    max_xor_out: "100",
+    recipients,
+  };
+}
+
+function parseGovernanceMusubiAction(payload, context) {
+  const record = requireExactGovernanceProposalRecord(payload, ["kind", "value"], context);
+  const valueContext = `${context}.value`;
+  switch (record.kind) {
+    case "RecoverPackageOwners": {
+      const value = requireExactGovernanceProposalRecord(
+        record.value,
+        ["package", "owners", "expected_revision"],
+        valueContext,
+      );
+      const owners = requireGovernanceArray(value.owners, `${valueContext}.owners`).map(
+        (owner, index) => requireCanonicalGovernanceAccountId(
+          owner,
+          `${valueContext}.owners[${index}]`,
+        ),
+      );
+      if (owners.length === 0 || owners.length > 64 || new Set(owners).size !== owners.length) {
+        throw new TypeError(`${valueContext}.owners must contain 1-64 unique accounts`);
+      }
+      return {
+        kind: "RecoverPackageOwners",
+        value: {
+          package: parseGovernanceMusubiPackage(value.package, `${valueContext}.package`),
+          owners,
+          expected_revision: requireExactJsonUnsignedInteger(
+            value.expected_revision,
+            `${valueContext}.expected_revision`,
+            { allowZero: false },
+          ),
+        },
+      };
+    }
+    case "RetargetAlias": {
+      const value = requireExactGovernanceProposalRecord(
+        record.value,
+        ["alias", "target", "expected_revision"],
+        valueContext,
+      );
+      return {
+        kind: "RetargetAlias",
+        value: {
+          alias: requireGovernanceAsciiKebab(
+            requireExactGovernanceStringTuple(value.alias, `${valueContext}.alias`),
+            `${valueContext}.alias[0]`,
+            32,
+          ),
+          target: parseGovernanceMusubiPackage(value.target, `${valueContext}.target`),
+          expected_revision: requireExactJsonUnsignedInteger(
+            value.expected_revision,
+            `${valueContext}.expected_revision`,
+            { allowZero: false },
+          ),
+        },
+      };
+    }
+    case "TakedownArtifact": {
+      const value = requireExactGovernanceProposalRecord(
+        record.value,
+        ["release", "reason", "expected_artifact_governance_revision"],
+        valueContext,
+      );
+      return {
+        kind: "TakedownArtifact",
+        value: {
+          release: parseGovernanceMusubiRelease(value.release, `${valueContext}.release`),
+          reason: requireGovernanceBoundedReason(
+            requireExactGovernanceStringTuple(value.reason, `${valueContext}.reason`),
+            `${valueContext}.reason[0]`,
+          ),
+          expected_artifact_governance_revision: requireExactJsonUnsignedInteger(
+            value.expected_artifact_governance_revision,
+            `${valueContext}.expected_artifact_governance_revision`,
+            { allowZero: false },
+          ),
+        },
+      };
+    }
+    case "SetRegistryPolicy": {
+      const value = requireExactGovernanceProposalRecord(
+        record.value,
+        ["policy", "expected_revision"],
+        valueContext,
+      );
+      const expectedRevision = requireExactJsonUnsignedInteger(
+        value.expected_revision,
+        `${valueContext}.expected_revision`,
+        { allowZero: false },
+      );
+      const policy = parseGovernanceMusubiRegistryPolicy(
+        value.policy,
+        `${valueContext}.policy`,
+      );
+      if (policy.revision !== expectedRevision + 1) {
+        throw new TypeError(`${valueContext}.policy.revision must follow expected_revision`);
+      }
+      return {
+        kind: "SetRegistryPolicy",
+        value: { policy, expected_revision: expectedRevision },
+      };
+    }
+    default:
+      throw new TypeError(`${context}.kind contains an unsupported Musubi action`);
+  }
+}
+
+function parseGovernanceMusubiPackage(payload, context) {
+  const record = requireExactGovernanceProposalRecord(
+    payload,
+    ["home_dataspace", "scope", "name"],
+    context,
+  );
+  const scope = requireExactGovernanceProposalRecord(
+    record.scope,
+    ["kind", "value"],
+    `${context}.scope`,
+  );
+  let normalizedScope;
+  if (scope.kind === "DataspaceRoot" && scope.value === null) {
+    normalizedScope = { kind: "DataspaceRoot", value: null };
+  } else if (scope.kind === "Domain") {
+    normalizedScope = {
+      kind: "Domain",
+      value: requireCanonicalGovernanceName(scope.value, `${context}.scope.value`),
+    };
+  } else {
+    throw new TypeError(`${context}.scope contains an unsupported package scope`);
+  }
+  return {
+    home_dataspace: requireExactJsonUnsignedInteger(
+      record.home_dataspace,
+      `${context}.home_dataspace`,
+    ),
+    scope: normalizedScope,
+    name: requireGovernanceAsciiKebab(
+      requireExactGovernanceStringTuple(record.name, `${context}.name`),
+      `${context}.name[0]`,
+      64,
+    ),
+  };
+}
+
+function parseGovernanceMusubiRelease(payload, context) {
+  const record = requireExactGovernanceProposalRecord(
+    payload,
+    ["package", "version"],
+    context,
+  );
+  const version = requireExactGovernanceProposalRecord(
+    record.version,
+    ["major", "minor", "patch", "prerelease"],
+    `${context}.version`,
+  );
+  const prerelease = requireGovernanceArray(
+    version.prerelease,
+    `${context}.version.prerelease`,
+  ).map((item, index) => {
+    const itemContext = `${context}.version.prerelease[${index}]`;
+    const identifier = requireExactGovernanceProposalRecord(item, ["kind", "value"], itemContext);
+    if (identifier.kind === "Numeric") {
+      return {
+        kind: "Numeric",
+        value: requireExactJsonUnsignedInteger(identifier.value, `${itemContext}.value`),
+      };
+    }
+    if (
+      identifier.kind === "AlphaNumeric" &&
+      typeof identifier.value === "string" &&
+      identifier.value.length <= 64 &&
+      /^(?=.*[A-Za-z-])[A-Za-z0-9-]+$/u.test(identifier.value)
+    ) {
+      return { kind: "AlphaNumeric", value: identifier.value };
+    }
+    throw new TypeError(`${itemContext} contains an unsupported prerelease identifier`);
+  });
+  if (prerelease.length > 16) {
+    throw new TypeError(`${context}.version.prerelease exceeds the V1 bound`);
+  }
+  return {
+    package: parseGovernanceMusubiPackage(record.package, `${context}.package`),
+    version: {
+      major: requireExactJsonUnsignedInteger(version.major, `${context}.version.major`),
+      minor: requireExactJsonUnsignedInteger(version.minor, `${context}.version.minor`),
+      patch: requireExactJsonUnsignedInteger(version.patch, `${context}.version.patch`),
+      prerelease,
+    },
+  };
+}
+
+function parseGovernanceMusubiRegistryPolicy(payload, context) {
+  const record = requireExactGovernanceProposalRecord(
+    payload,
+    ["version", "revision", "mode", "allowlisted_dataspaces", "alias_pricing"],
+    context,
+  );
+  if (record.version !== 1) {
+    throw new TypeError(`${context}.version must be the number 1`);
+  }
+  const mode = requireExactGovernanceProposalRecord(
+    record.mode,
+    ["kind", "value"],
+    `${context}.mode`,
+  );
+  if (!["Closed", "Allowlisted", "Open"].includes(mode.kind) || mode.value !== null) {
+    throw new TypeError(`${context}.mode contains an unsupported registry mode`);
+  }
+  const allowlistedDataspaces = requireGovernanceArray(
+    record.allowlisted_dataspaces,
+    `${context}.allowlisted_dataspaces`,
+  ).map((value, index) => requireExactJsonUnsignedInteger(
+    value,
+    `${context}.allowlisted_dataspaces[${index}]`,
+  ));
+  if (
+    new Set(allowlistedDataspaces).size !== allowlistedDataspaces.length ||
+    allowlistedDataspaces.some((value, index) => index > 0 && allowlistedDataspaces[index - 1] >= value)
+  ) {
+    throw new TypeError(`${context}.allowlisted_dataspaces must be sorted and unique`);
+  }
+  if (mode.kind !== "Allowlisted" && allowlistedDataspaces.length > 0) {
+    throw new TypeError(`${context}.allowlisted_dataspaces does not match mode`);
+  }
+  const pricing = requireExactGovernanceProposalRecord(
+    record.alias_pricing,
+    [
+      "revision",
+      "length_1_xor",
+      "length_2_xor",
+      "length_3_xor",
+      "length_4_xor",
+      "length_5_to_32_xor",
+    ],
+    `${context}.alias_pricing`,
+  );
+  const normalizedPricing = {};
+  for (const field of [
+    "revision",
+    "length_1_xor",
+    "length_2_xor",
+    "length_3_xor",
+    "length_4_xor",
+    "length_5_to_32_xor",
+  ]) {
+    normalizedPricing[field] = requireExactJsonUnsignedInteger(
+      pricing[field],
+      `${context}.alias_pricing.${field}`,
+      { allowZero: false },
+    );
+  }
+  const revision = requireExactJsonUnsignedInteger(
+    record.revision,
+    `${context}.revision`,
+    { allowZero: false },
+  );
+  return {
+    version: 1,
+    revision,
+    mode: { kind: mode.kind, value: null },
+    allowlisted_dataspaces: allowlistedDataspaces,
+    alias_pricing: normalizedPricing,
+  };
+}
+
+function parseGovernanceSorafsProvider(payload, context) {
+  const record = requireExactGovernanceProposalRecord(payload, ["action"], context);
+  const actionContext = `${context}.action`;
+  const action = requireExactGovernanceProposalRecord(
+    record.action,
+    ["action", "value"],
+    actionContext,
+  );
+  const valueContext = `${actionContext}.value`;
+  if (action.action === "establish") {
+    const value = requireExactGovernanceProposalRecord(
+      action.value,
+      ["provider_id", "owner"],
+      valueContext,
+    );
+    return {
+      action: {
+        action: "establish",
+        value: {
+          provider_id: requireExactGovernanceProviderId(
+            value.provider_id,
+            `${valueContext}.provider_id`,
+          ),
+          owner: requireCanonicalGovernanceAccountId(value.owner, `${valueContext}.owner`),
+        },
+      },
+    };
+  }
+  if (action.action === "rebind") {
+    const value = requireExactGovernanceProposalRecord(
+      action.value,
+      ["provider_id", "expected_owner", "next_owner"],
+      valueContext,
+    );
+    const expectedOwner = requireCanonicalGovernanceAccountId(
+      value.expected_owner,
+      `${valueContext}.expected_owner`,
+    );
+    const nextOwner = requireCanonicalGovernanceAccountId(
+      value.next_owner,
+      `${valueContext}.next_owner`,
+    );
+    if (expectedOwner === nextOwner) {
+      throw new TypeError(`${valueContext}.next_owner must differ from expected_owner`);
+    }
+    return {
+      action: {
+        action: "rebind",
+        value: {
+          provider_id: requireExactGovernanceProviderId(
+            value.provider_id,
+            `${valueContext}.provider_id`,
+          ),
+          expected_owner: expectedOwner,
+          next_owner: nextOwner,
+        },
+      },
+    };
+  }
+  if (action.action === "remove") {
+    const value = requireExactGovernanceProposalRecord(
+      action.value,
+      ["provider_id", "expected_owner"],
+      valueContext,
+    );
+    return {
+      action: {
+        action: "remove",
+        value: {
+          provider_id: requireExactGovernanceProviderId(
+            value.provider_id,
+            `${valueContext}.provider_id`,
+          ),
+          expected_owner: requireCanonicalGovernanceAccountId(
+            value.expected_owner,
+            `${valueContext}.expected_owner`,
+          ),
+        },
+      },
+    };
+  }
+  throw new TypeError(`${actionContext}.action contains an unsupported provider action`);
+}
+
+function requireGovernanceArray(value, context) {
+  if (!Array.isArray(value)) {
+    throw new TypeError(`${context} must be an array`);
+  }
+  return value;
+}
+
+function requireExactGovernanceByteArray(value, length, context, options = {}) {
+  const bytes = requireGovernanceArray(value, context);
+  if (
+    bytes.length !== length ||
+    bytes.some((byte) => !Number.isInteger(byte) || byte < 0 || byte > 255)
+  ) {
+    throw new TypeError(`${context} must contain exactly ${length} JSON byte values`);
+  }
+  if (options.nonZero === true && bytes.every((byte) => byte === 0)) {
+    throw new TypeError(`${context} must not be all zero`);
+  }
+  return [...bytes];
+}
+
+function requireExactGovernanceProviderId(value, context) {
+  const tuple = requireGovernanceArray(value, context);
+  if (tuple.length !== 1) {
+    throw new TypeError(`${context} must be the exact one-field ProviderId tuple`);
+  }
+  return requireExactGovernanceByteArray(tuple[0], 32, `${context}[0]`, {
+    nonZero: true,
+  });
+}
+
+function requireExactGovernanceStringTuple(value, context) {
+  if (!Array.isArray(value) || value.length !== 1 || typeof value[0] !== "string") {
+    throw new TypeError(`${context} must be the exact one-field string tuple`);
+  }
+  return value[0];
+}
+
+function parseGovernanceUint16Array(value, context) {
+  return requireGovernanceArray(value, context).map((item, index) => {
+    const parsed = requireExactJsonUnsignedInteger(item, `${context}[${index}]`);
+    if (parsed > 0xffff) {
+      throw new TypeError(`${context}[${index}] must fit in an unsigned 16-bit integer`);
+    }
+    return parsed;
+  });
+}
+
+function requireExactGovernanceUint64String(value, context, options = {}) {
+  if (typeof value !== "string" || !/^(?:0|[1-9][0-9]*)$/u.test(value)) {
+    throw new TypeError(`${context} must be a canonical unsigned 64-bit decimal string`);
+  }
+  const parsed = BigInt(value);
+  if (parsed > MAX_UINT64_BIGINT || (options.allowZero === false && parsed === 0n)) {
+    throw new TypeError(`${context} is outside the supported unsigned 64-bit range`);
+  }
+  return value;
+}
+
+function requireCanonicalGovernanceAccountId(value, context) {
+  const literal = requireExactNonEmptyString(value, context);
+  const canonical = ensureCanonicalAccountId(literal, context);
+  if (canonical !== literal) {
+    throw new TypeError(`${context} must use the canonical account literal`);
+  }
+  return literal;
+}
+
+function requireCanonicalGovernanceAssetDefinitionId(value, context) {
+  const literal = requireExactNonEmptyString(value, context);
+  const canonical = normalizeAssetDefinitionId(literal, context);
+  if (canonical !== literal) {
+    throw new TypeError(`${context} must use the canonical asset-definition literal`);
+  }
+  return literal;
+}
+
+function requireCanonicalGovernanceBase64(value, context) {
+  if (typeof value !== "string") {
+    throw new TypeError(`${context} must be a canonical base64 string`);
+  }
+  if (value === "") return value;
+  if (!/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/u.test(value)) {
+    throw new TypeError(`${context} must be canonical padded base64`);
+  }
+  try {
+    strictDecodeBase64(value);
+  } catch {
+    throw new TypeError(`${context} must be canonical padded base64`);
+  }
+  return value;
+}
+
+function requireExactCanonicalGovernanceQuantity(value, context) {
+  const normalized = requireCanonicalQuantity(value, context);
+  if (normalized !== value) {
+    throw new TypeError(`${context} must use the canonical quantity spelling`);
+  }
+  return normalized;
+}
+
+function requireExactString(value, context) {
+  if (typeof value !== "string") {
+    throw new TypeError(`${context} must be a string`);
+  }
+  return value;
+}
+
+function requireGovernanceAsciiKebab(value, context, maxBytes) {
+  const literal = requireExactNonEmptyString(value, context);
+  if (
+    Buffer.byteLength(literal, "utf8") > maxBytes ||
+    !/^[a-z0-9]+(?:-[a-z0-9]+)*$/u.test(literal)
+  ) {
+    throw new TypeError(`${context} must be canonical lowercase ASCII kebab text`);
+  }
+  return literal;
+}
+
+function requireCanonicalGovernanceName(value, context) {
+  const literal = requireExactNonEmptyString(value, context);
+  if (
+    Buffer.byteLength(literal, "utf8") > 255 ||
+    literal.normalize("NFC") !== literal ||
+    /[\s@#$\p{Cc}\u061c\u200e\u200f\u202a-\u202e\u2066-\u2069]/u.test(literal)
+  ) {
+    throw new TypeError(`${context} must be a canonical Iroha Name`);
+  }
+  return literal;
+}
+
+function requireGovernanceBoundedReason(value, context) {
+  const literal = requireExactNonEmptyString(value, context);
+  if (
+    literal.trim() !== literal ||
+    Buffer.byteLength(literal, "utf8") > 1024 ||
+    /[\u0000-\u001f\u007f]/u.test(literal)
+  ) {
+    throw new TypeError(`${context} must be bounded canonical public text`);
+  }
+  return literal;
+}
+
+function requireExactGovernanceProposalRecord(payload, fields, context) {
+  const record = ensureRecord(payload, context);
+  const expected = new Set(fields);
+  const unknown = Object.keys(record).filter((field) => !expected.has(field));
+  if (unknown.length !== 0) {
+    throw new TypeError(
+      `${context} contains unsupported fields: ${unknown.sort().join(", ")}`,
+    );
+  }
+  const missing = fields.filter(
+    (field) => !Object.prototype.hasOwnProperty.call(record, field),
+  );
+  if (missing.length !== 0) {
+    throw new TypeError(
+      `${context} is missing required fields: ${missing.join(", ")}`,
+    );
+  }
+  return record;
 }
 
 function parseGovernanceReferendumResult(payload) {
@@ -15791,7 +16780,11 @@ function normalizeVpnSessionResponse(payload, context = "vpn session response") 
   assertVpnResponseFields(record, VPN_SESSION_RESPONSE_FIELDS, context);
   const trust = normalizeVpnTrustTuple(record, context);
   return {
-    sessionId: requireExactLowerHex32String(record.session_id, `${context}.session_id`),
+    sessionId: requireExactLowerHexBytesString(
+      record.session_id,
+      `${context}.session_id`,
+      16,
+    ),
     accountId: requireNonEmptyString(record.account_id, `${context}.account_id`),
     exitClass: requireVpnEnum(
       record.exit_class,
@@ -15888,7 +16881,11 @@ function normalizeVpnReceiptResponse(payload, context = "vpn receipt response") 
   const record = ensureRecord(payload ?? {}, context);
   assertVpnResponseFields(record, VPN_RECEIPT_RESPONSE_FIELDS, context);
   return {
-    sessionId: requireExactLowerHex32String(record.session_id, `${context}.session_id`),
+    sessionId: requireExactLowerHexBytesString(
+      record.session_id,
+      `${context}.session_id`,
+      16,
+    ),
     accountId: requireNonEmptyString(record.account_id, `${context}.account_id`),
     exitClass: requireVpnEnum(
       record.exit_class,
@@ -17373,9 +18370,6 @@ function computeStatusMetrics(previous, current) {
     time_since_last_block_ms: current.time_since_last_block_ms,
     time_since_last_non_empty_block_ms:
       current.time_since_last_non_empty_block_ms,
-    da_reschedule_delta: previous
-      ? Math.max(0, current.da_reschedule_total - previous.da_reschedule_total)
-      : 0,
     tx_approved_delta: previous
       ? Math.max(0, current.txs_approved - previous.txs_approved)
       : 0,
@@ -17388,7 +18382,6 @@ function computeStatusMetrics(previous, current) {
   };
   metrics.has_activity = Boolean(
     metrics.queue_delta ||
-      metrics.da_reschedule_delta ||
       metrics.tx_approved_delta ||
       metrics.tx_rejected_delta ||
       metrics.view_change_delta,
@@ -19740,6 +20733,37 @@ function normalizeHex32String(value, name, options = {}) {
   return hex.toLowerCase();
 }
 
+function normalizeHex16String(value, name) {
+  if (Buffer.isBuffer(value)) {
+    return normalizeHex16String(value.toString("hex"), name);
+  }
+  if (ArrayBuffer.isView(value)) {
+    return normalizeHex16String(
+      Buffer.from(value.buffer, value.byteOffset, value.byteLength).toString("hex"),
+      name,
+    );
+  }
+  if (value instanceof ArrayBuffer) {
+    return normalizeHex16String(Buffer.from(value).toString("hex"), name);
+  }
+  if (Array.isArray(value)) {
+    return normalizeHex16String(normalizeByteArray(value, name).toString("hex"), name);
+  }
+  const normalized = requireNonEmptyString(value, name);
+  const hex =
+    normalized.startsWith("0x") || normalized.startsWith("0X")
+      ? normalized.slice(2)
+      : normalized;
+  if (hex.length !== 32 || !/^[0-9a-fA-F]+$/u.test(hex)) {
+    throw createValidationError(
+      ValidationErrorCode.INVALID_HEX,
+      `${name} must be a 16-byte hex string`,
+      name,
+    );
+  }
+  return hex.toLowerCase();
+}
+
 function normalizeHex20String(value, name) {
   const normalized = requireHexString(value, name);
   const hex =
@@ -20355,14 +21379,11 @@ function normalizeAppApiTransactionDraft(
 }
 
 const {
-  createEmptyGovernanceDraftResponse,
   normalizeGovernanceBallotIdentity,
   normalizeGovernanceBallotResponse,
   normalizeGovernanceDeployContractProposalPayload,
   normalizeGovernanceDraftResponse,
-  normalizeGovernanceEnactPayload,
-  normalizeGovernanceFinalizePayload,
-  normalizeGovernanceParliamentBallotPayload,
+  normalizeGovernanceProposalDraftResponseV1,
   normalizeGovernancePlainBallotPayload,
   normalizeGovernanceZkBallotProofPayload,
   normalizeGovernanceZkBallotV1Payload,
@@ -20394,7 +21415,6 @@ const {
   normalizeQuantityInput,
   normalizeRequiredBase64Payload,
   normalizeUint64DecimalString,
-  requireExactLowerHex32String,
   requireExactNonEmptyString,
   requireExactTokenString,
   requireGovernanceSelectorString,
@@ -26939,6 +27959,24 @@ function normalizePipelinePreflight(payload, context = "pipeline preflight respo
   const admission = ensureRecord(record.admission, `${context}.admission`);
   const block = ensureRecord(record.block, `${context}.block`);
   const pipeline = ensureRecord(record.pipeline, `${context}.pipeline`);
+  const allowedPipelineFields = new Set([
+    "signature_batch_max_ed25519",
+    "signature_batch_max_secp256k1",
+    "signature_batch_max_pqc",
+    "signature_batch_max_bls",
+    "overlay_max_instructions",
+    "ivm_max_cycles_upper_bound",
+    "ivm_admission_cycle_limit",
+    "ivm_max_decoded_instructions",
+  ]);
+  const unknownPipelineField = Object.keys(pipeline).find(
+    (field) => !allowedPipelineFields.has(field),
+  );
+  if (unknownPipelineField !== undefined) {
+    throw new TypeError(
+      `${context}.pipeline contains unknown field ${unknownPipelineField}`,
+    );
+  }
   const queue = ensureRecord(record.queue, `${context}.queue`);
   const fees = ensureRecord(record.fees, `${context}.fees`);
   const normalized = {
@@ -26972,11 +28010,6 @@ function normalizePipelinePreflight(payload, context = "pipeline preflight respo
       max_transactions: coerceNestedInt(block, "max_transactions", `${context}.block`),
     },
     pipeline: {
-      signature_batch_max: coerceNestedInt(
-        pipeline,
-        "signature_batch_max",
-        `${context}.pipeline`,
-      ),
       signature_batch_max_ed25519: coerceNestedInt(
         pipeline,
         "signature_batch_max_ed25519",

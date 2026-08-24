@@ -18,7 +18,7 @@ use iroha_data_model::{
     permission::Permission,
     prelude::{Account, Domain, Grant, InstructionBox},
 };
-use iroha_primitives::json::Json;
+use iroha_executor_data_model::permission::governance::CanManageConfidentialParams;
 use iroha_test_samples::ALICE_ID;
 use mv::storage::StorageReadOnly;
 use nonzero_ext::nonzero;
@@ -36,12 +36,7 @@ fn grant_manage_confidential_params(state: &mut State) {
     let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
     let mut block = state.block(header);
     let mut stx = block.transaction();
-    let perm = Permission::new(
-        "CanManageConfidentialParams"
-            .parse()
-            .expect("permission name"),
-        Json::new(()),
-    );
+    let perm = Permission::from(CanManageConfidentialParams);
     Grant::account_permission(perm, ALICE_ID.clone())
         .execute(&ALICE_ID, &mut stx)
         .expect("grant confidential permission");

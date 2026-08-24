@@ -3018,7 +3018,6 @@ mod serde_tests {
             dataspace_catalog: Vec::new(),
             nexus: None,
             tx_gossip: TxGossipSnapshot::default(),
-            da_reschedule_total: 0,
             sorafs_micropayments: Vec::new(),
             taikai_alias_rotations: Vec::new(),
             taikai_ingest: Vec::new(),
@@ -4018,25 +4017,6 @@ pub struct SumeragiConsensusStatus {
     /// View associated with the recorded PRF context.
     #[norito(default)]
     pub prf_view: u64,
-    /// Total DA deadline reschedules pushing blocks into future slots.
-    pub da_reschedule_total: u64,
-    /// Total RBC DELIVER deferrals due to missing READY quorum.
-    pub rbc_deliver_defer_ready_total: u64,
-    /// Total RBC DELIVER deferrals due to missing chunks.
-    pub rbc_deliver_defer_chunks_total: u64,
-    /// Current number of persisted RBC sessions on disk.
-    pub rbc_store_sessions: u64,
-    /// Current persisted RBC payload bytes on disk.
-    pub rbc_store_bytes: u64,
-    /// Current RBC store pressure level (0 = normal, 1 = soft limit, 2 = hard limit).
-    pub rbc_store_pressure_level: u8,
-    /// Total number of times proposal assembly was deferred due to RBC store pressure.
-    pub rbc_store_backpressure_deferrals_total: u64,
-    /// Total number of RBC persist requests dropped due to full async queues.
-    #[norito(default)]
-    pub rbc_store_persist_drops_total: u64,
-    /// Total number of RBC sessions evicted due to TTL or capacity enforcement.
-    pub rbc_store_evictions_total: u64,
     /// Total view-change proofs accepted (advanced the proof chain).
     #[norito(default)]
     pub view_change_proof_accepted_total: u64,
@@ -4104,15 +4084,6 @@ struct SumeragiConsensusStatusPayload {
     epoch_length_blocks: u64,
     epoch_commit_deadline_offset: u64,
     epoch_reveal_deadline_offset: u64,
-    da_reschedule_total: u64,
-    rbc_deliver_defer_ready_total: u64,
-    rbc_deliver_defer_chunks_total: u64,
-    rbc_store_sessions: u64,
-    rbc_store_bytes: u64,
-    rbc_store_pressure_level: u8,
-    rbc_store_backpressure_deferrals_total: u64,
-    rbc_store_persist_drops_total: u64,
-    rbc_store_evictions_total: u64,
     prf_epoch_seed: Option<String>,
     prf_height: u64,
     prf_view: u64,
@@ -4164,109 +4135,6 @@ fn decode_prf_fields(
     }
     let view = decode_field::<u64>(bytes, used)?;
     Ok((seed, height, view))
-}
-#[allow(clippy::type_complexity)]
-fn decode_rbc_fields(
-    bytes: &[u8],
-    used: &mut usize,
-) -> Result<(u64, u64, u64, u64, u64, u8, u64, u64, u64), norito::core::Error> {
-    if *used >= bytes.len() {
-        return Ok((0, 0, 0, 0, 0, 0, 0, 0, 0));
-    }
-    let reschedules = decode_field::<u64>(bytes, used)?;
-    if *used >= bytes.len() {
-        return Ok((reschedules, 0, 0, 0, 0, 0, 0, 0, 0));
-    }
-    let defer_ready = decode_field::<u64>(bytes, used)?;
-    if *used >= bytes.len() {
-        return Ok((reschedules, defer_ready, 0, 0, 0, 0, 0, 0, 0));
-    }
-    let defer_chunks = decode_field::<u64>(bytes, used)?;
-    if *used >= bytes.len() {
-        return Ok((reschedules, defer_ready, defer_chunks, 0, 0, 0, 0, 0, 0));
-    }
-    let sessions = decode_field::<u64>(bytes, used)?;
-    if *used >= bytes.len() {
-        return Ok((
-            reschedules,
-            defer_ready,
-            defer_chunks,
-            sessions,
-            0,
-            0,
-            0,
-            0,
-            0,
-        ));
-    }
-    let bytes_total = decode_field::<u64>(bytes, used)?;
-    if *used >= bytes.len() {
-        return Ok((
-            reschedules,
-            defer_ready,
-            defer_chunks,
-            sessions,
-            bytes_total,
-            0,
-            0,
-            0,
-            0,
-        ));
-    }
-    let level = decode_field::<u8>(bytes, used)?;
-    if *used >= bytes.len() {
-        return Ok((
-            reschedules,
-            defer_ready,
-            defer_chunks,
-            sessions,
-            bytes_total,
-            level,
-            0,
-            0,
-            0,
-        ));
-    }
-    let deferrals = decode_field::<u64>(bytes, used)?;
-    if *used >= bytes.len() {
-        return Ok((
-            reschedules,
-            defer_ready,
-            defer_chunks,
-            sessions,
-            bytes_total,
-            level,
-            deferrals,
-            0,
-            0,
-        ));
-    }
-    let persist_drops = decode_field::<u64>(bytes, used)?;
-    if *used >= bytes.len() {
-        return Ok((
-            reschedules,
-            defer_ready,
-            defer_chunks,
-            sessions,
-            bytes_total,
-            level,
-            deferrals,
-            persist_drops,
-            0,
-        ));
-    }
-    let evictions = decode_field::<u64>(bytes, used)?;
-    Ok((
-        reschedules,
-        defer_ready,
-        defer_chunks,
-        sessions,
-        bytes_total,
-        level,
-        deferrals,
-        persist_drops,
-        evictions,
-    ))
 }
 fn decode_epoch_fields(
     bytes: &[u8],
@@ -4413,17 +4281,6 @@ impl<'a> DecodeFromSlice<'a> for SumeragiConsensusStatusPayload {
         let tx_queue_saturated = decode_field::<bool>(bytes, &mut used)?;
         let (epoch_length_blocks, epoch_commit_deadline_offset, epoch_reveal_deadline_offset) =
             decode_epoch_fields(bytes, &mut used)?;
-        let (
-            da_reschedule_total,
-            rbc_deliver_defer_ready_total,
-            rbc_deliver_defer_chunks_total,
-            rbc_store_sessions,
-            rbc_store_bytes,
-            rbc_store_pressure_level,
-            rbc_store_backpressure_deferrals_total,
-            rbc_store_persist_drops_total,
-            rbc_store_evictions_total,
-        ) = decode_rbc_fields(bytes, &mut used)?;
         let (prf_epoch_seed, prf_height, prf_view) = decode_prf_fields(bytes, &mut used)?;
         let (
             view_change_proof_accepted_total,
@@ -4500,15 +4357,6 @@ impl<'a> DecodeFromSlice<'a> for SumeragiConsensusStatusPayload {
                 epoch_length_blocks,
                 epoch_commit_deadline_offset,
                 epoch_reveal_deadline_offset,
-                da_reschedule_total,
-                rbc_deliver_defer_ready_total,
-                rbc_deliver_defer_chunks_total,
-                rbc_store_sessions,
-                rbc_store_bytes,
-                rbc_store_pressure_level,
-                rbc_store_backpressure_deferrals_total,
-                rbc_store_persist_drops_total,
-                rbc_store_evictions_total,
                 prf_epoch_seed,
                 prf_height,
                 prf_view,
@@ -4563,15 +4411,6 @@ impl From<&SumeragiConsensusStatus> for SumeragiConsensusStatusPayload {
             epoch_length_blocks: status.epoch_length_blocks,
             epoch_commit_deadline_offset: status.epoch_commit_deadline_offset,
             epoch_reveal_deadline_offset: status.epoch_reveal_deadline_offset,
-            da_reschedule_total: status.da_reschedule_total,
-            rbc_deliver_defer_ready_total: status.rbc_deliver_defer_ready_total,
-            rbc_deliver_defer_chunks_total: status.rbc_deliver_defer_chunks_total,
-            rbc_store_sessions: status.rbc_store_sessions,
-            rbc_store_bytes: status.rbc_store_bytes,
-            rbc_store_pressure_level: status.rbc_store_pressure_level,
-            rbc_store_backpressure_deferrals_total: status.rbc_store_backpressure_deferrals_total,
-            rbc_store_persist_drops_total: status.rbc_store_persist_drops_total,
-            rbc_store_evictions_total: status.rbc_store_evictions_total,
             prf_epoch_seed: status.prf_epoch_seed.clone(),
             prf_height: status.prf_height,
             prf_view: status.prf_view,
@@ -4618,15 +4457,6 @@ impl From<SumeragiConsensusStatusPayload> for SumeragiConsensusStatus {
             epoch_length_blocks: payload.epoch_length_blocks,
             epoch_commit_deadline_offset: payload.epoch_commit_deadline_offset,
             epoch_reveal_deadline_offset: payload.epoch_reveal_deadline_offset,
-            da_reschedule_total: payload.da_reschedule_total,
-            rbc_deliver_defer_ready_total: payload.rbc_deliver_defer_ready_total,
-            rbc_deliver_defer_chunks_total: payload.rbc_deliver_defer_chunks_total,
-            rbc_store_sessions: payload.rbc_store_sessions,
-            rbc_store_bytes: payload.rbc_store_bytes,
-            rbc_store_pressure_level: payload.rbc_store_pressure_level,
-            rbc_store_backpressure_deferrals_total: payload.rbc_store_backpressure_deferrals_total,
-            rbc_store_persist_drops_total: payload.rbc_store_persist_drops_total,
-            rbc_store_evictions_total: payload.rbc_store_evictions_total,
             prf_epoch_seed: payload.prf_epoch_seed,
             prf_height: payload.prf_height,
             prf_view: payload.prf_view,
@@ -5088,9 +4918,6 @@ pub struct Status {
     /// Milliseconds since this peer last processed a committed non-empty block.
     #[norito(default)]
     pub time_since_last_non_empty_block_ms: u64,
-    /// Total number of DA deadline reschedules observed by this peer.
-    #[norito(default)]
-    pub da_reschedule_total: u64,
     /// Cryptography feature snapshot (SM enablement flags).
     #[norito(default)]
     pub crypto: CryptoStatus,
@@ -5173,8 +5000,6 @@ struct StatusPayload {
     #[norito(default)]
     time_since_last_non_empty_block_ms: u64,
     #[norito(default)]
-    da_reschedule_total: u64,
-    #[norito(default)]
     crypto: CryptoStatus,
     #[norito(default)]
     stack: StackStatus,
@@ -5226,7 +5051,6 @@ impl From<&Status> for StatusPayload {
             last_non_empty_block_committed_at_ms: status.last_non_empty_block_committed_at_ms,
             time_since_last_block_ms: status.time_since_last_block_ms,
             time_since_last_non_empty_block_ms: status.time_since_last_non_empty_block_ms,
-            da_reschedule_total: status.da_reschedule_total,
             crypto: status.crypto.clone(),
             stack: status.stack,
             offline: status.offline.clone(),
@@ -5266,7 +5090,6 @@ impl From<StatusPayload> for Status {
             last_non_empty_block_committed_at_ms: payload.last_non_empty_block_committed_at_ms,
             time_since_last_block_ms: payload.time_since_last_block_ms,
             time_since_last_non_empty_block_ms: payload.time_since_last_non_empty_block_ms,
-            da_reschedule_total: payload.da_reschedule_total,
             crypto: payload.crypto,
             stack: payload.stack,
             offline: payload.offline,
@@ -5332,14 +5155,16 @@ pub struct GovernanceStatus {
     crate::json_macros::JsonDeserialize,
 )]
 pub struct GovernanceProposalCounters {
-    /// Proposals currently awaiting review.
+    /// Proposals whose latest attempt is active or certified.
     pub proposed: u64,
-    /// Proposals approved but not yet enacted.
-    pub approved: u64,
-    /// Proposals rejected by governance.
+    /// Proposals whose latest attempt was rejected.
     pub rejected: u64,
     /// Proposals that completed enactment.
     pub enacted: u64,
+    /// Proposals whose certified compare-and-set predecessor was superseded.
+    pub superseded: u64,
+    /// Proposals whose certified effect failed atomically at execution.
+    pub execution_failed: u64,
 }
 /// Counters tracking protected-namespace admission decisions.
 #[derive(
@@ -5527,32 +5352,40 @@ impl<'a> DecodeFromSlice<'a> for GovernanceStatus {
 }
 impl norito::core::NoritoSerialize for GovernanceProposalCounters {
     fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), norito::core::Error> {
-        let payload = (self.proposed, self.approved, self.rejected, self.enacted);
+        let payload = (
+            self.proposed,
+            self.rejected,
+            self.enacted,
+            self.superseded,
+            self.execution_failed,
+        );
         norito::core::NoritoSerialize::serialize(&payload, writer)
     }
 }
 impl<'a> norito::core::NoritoDeserialize<'a> for GovernanceProposalCounters {
     fn deserialize(archived: &'a norito::core::Archived<GovernanceProposalCounters>) -> Self {
-        let (proposed, approved, rejected, enacted): (u64, u64, u64, u64) =
+        let (proposed, rejected, enacted, superseded, execution_failed): (u64, u64, u64, u64, u64) =
             norito::core::NoritoDeserialize::deserialize(archived.cast());
         Self {
             proposed,
-            approved,
             rejected,
             enacted,
+            superseded,
+            execution_failed,
         }
     }
 }
 impl<'a> DecodeFromSlice<'a> for GovernanceProposalCounters {
     fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), norito::core::Error> {
-        let ((proposed, approved, rejected, enacted), used) =
-            <(u64, u64, u64, u64)>::decode_from_slice(bytes)?;
+        let ((proposed, rejected, enacted, superseded, execution_failed), used) =
+            <(u64, u64, u64, u64, u64)>::decode_from_slice(bytes)?;
         Ok((
             Self {
                 proposed,
-                approved,
                 rejected,
                 enacted,
+                superseded,
+                execution_failed,
             },
             used,
         ))
@@ -5761,18 +5594,6 @@ fn build_sumeragi_status(metrics: &Metrics) -> SumeragiConsensusStatus {
             .get(),
         view_change_suggest_total: metrics.sumeragi_view_change_suggest_total.get(),
         view_change_install_total: metrics.sumeragi_view_change_install_total.get(),
-        da_reschedule_total: metrics.sumeragi_rbc_da_reschedule_total.get(),
-        rbc_store_sessions: metrics.sumeragi_rbc_store_sessions.get(),
-        rbc_store_bytes: metrics.sumeragi_rbc_store_bytes.get(),
-        rbc_store_pressure_level: u8::try_from(metrics.sumeragi_rbc_store_pressure.get())
-            .unwrap_or(0),
-        rbc_store_backpressure_deferrals_total: metrics
-            .sumeragi_rbc_backpressure_deferrals_total
-            .get(),
-        rbc_store_persist_drops_total: metrics.sumeragi_rbc_persist_drops_total.get(),
-        rbc_deliver_defer_ready_total: metrics.sumeragi_rbc_deliver_defer_ready_total.get(),
-        rbc_deliver_defer_chunks_total: metrics.sumeragi_rbc_deliver_defer_chunks_total.get(),
-        rbc_store_evictions_total: metrics.sumeragi_rbc_store_evictions_total.get(),
         prf_epoch_seed: metrics
             .sumeragi_prf_epoch_seed_hex
             .read()
@@ -5799,9 +5620,10 @@ fn governance_proposal_counters(metrics: &Metrics) -> GovernanceProposalCounters
     };
     GovernanceProposalCounters {
         proposed: fetch("proposed"),
-        approved: fetch("approved"),
         rejected: fetch("rejected"),
         enacted: fetch("enacted"),
+        superseded: fetch("superseded"),
+        execution_failed: fetch("execution_failed"),
     }
 }
 fn governance_protected_namespace_counters(
@@ -5990,7 +5812,6 @@ impl From<&Metrics> for Status {
             last_non_empty_block_committed_at_ms,
             time_since_last_block_ms,
             time_since_last_non_empty_block_ms,
-            da_reschedule_total: value.sumeragi_rbc_da_reschedule_total.get(),
             crypto: CryptoStatus {
                 sm_helpers_available: cfg!(feature = "sm"),
                 sm_openssl_preview_enabled: value.sm_openssl_preview.get() != 0,
@@ -6503,6 +6324,14 @@ fields {
     pub storage_da_churn_bytes_total: int_counter_vec(&["component", "direction"]);
     /// Governance: proposal counts grouped by status
     pub governance_proposals_status: gauge_vec(&["status"]);
+    /// Parliament: accepted lifecycle transitions grouped by a closed transition kind.
+    pub governance_parliament_transitions_total: int_counter_vec(&["transition"]);
+    /// Parliament: Core-derived no-result outcomes grouped by a closed failure class.
+    pub governance_parliament_no_result_total: int_counter_vec(&["class"]);
+    /// Parliament: committed attempt counts grouped by a closed status.
+    pub governance_parliament_attempts_by_status: gauge_vec(&["status"]);
+    /// Parliament: committed attempt counts grouped by a closed stage.
+    pub governance_parliament_attempts_by_stage: gauge_vec(&["stage"]);
     /// Governance: latest council members count.
     pub governance_council_members: gauge();
     /// Governance: latest council alternates count.
@@ -6916,54 +6745,6 @@ fields {
     pub sumeragi_da_spool_cache_total: int_counter_vec(&["kind", "result"]);
     /// Sumeragi DA pin intent spool: outcomes labeled by result/reason.
     pub sumeragi_da_pin_intent_spool_total: int_counter_vec(&["result", "reason"]);
-    /// Sumeragi RBC: active sessions (gauge)
-    pub sumeragi_rbc_sessions_active: gauge();
-    /// Sumeragi RBC: sessions pruned due to TTL (cumulative)
-    pub sumeragi_rbc_sessions_pruned_total: int_counter();
-    /// Sumeragi RBC: targeted INIT repair requests sent (cumulative)
-    pub sumeragi_rbc_init_requests_total: int_counter();
-    /// Sumeragi RBC: targeted chunk repair requests sent (cumulative)
-    pub sumeragi_rbc_chunk_requests_total: int_counter();
-    /// Sumeragi RBC: encoded chunk indices requested via targeted repair (cumulative)
-    pub sumeragi_rbc_requested_chunks_total: int_counter();
-    /// Sumeragi RBC: initial chunk target outcomes by encoding and fanout policy.
-    pub sumeragi_rbc_initial_chunk_targets_total: int_counter_vec(
-        &["encoding", "fanout", "outcome"],
-    );
-    /// Sumeragi RBC: targeted repair windows that fell back to broad rebroadcast (kind=init|chunk)
-    pub sumeragi_rbc_repair_fallback_total: int_counter_vec(&["kind"]);
-    /// Sumeragi RBC: READY broadcasts sent (cumulative)
-    pub sumeragi_rbc_ready_broadcasts_total: int_counter();
-    /// Sumeragi RBC: rebroadcasts skipped (kind=payload|ready)
-    pub sumeragi_rbc_rebroadcast_skipped_total: int_counter_vec(&["kind"]);
-    /// Sumeragi RBC: DELIVER broadcasts sent (cumulative)
-    pub sumeragi_rbc_deliver_broadcasts_total: int_counter();
-    /// Sumeragi RBC: total payload bytes delivered and cached (gauge)
-    pub sumeragi_rbc_payload_bytes_delivered_total: gauge();
-    /// Sumeragi RBC: RS16 stripes reconstructed from parity (cumulative)
-    pub sumeragi_rbc_reconstructed_stripes_total: int_counter();
-    /// Sumeragi RBC: seed/preprocessing latency histogram (milliseconds)
-    pub sumeragi_rbc_seed_latency_ms: histogram_with_buckets(
-        vec![
-                        0.5, 1.0, 2.5, 5.0, 10.0, 25.0, 50.0, 100.0, 250.0, 500.0, 1_000.0,
-                    ],
-    );
-    /// Pending RBC backlog aggregated per lane (tx count).
-    pub sumeragi_rbc_lane_tx_count: gauge_vec(&["lane_id"]);
-    /// Total RBC chunks aggregated per lane.
-    pub sumeragi_rbc_lane_total_chunks: gauge_vec(&["lane_id"]);
-    /// Pending RBC chunks aggregated per lane.
-    pub sumeragi_rbc_lane_pending_chunks: gauge_vec(&["lane_id"]);
-    /// Total RBC payload bytes aggregated per lane.
-    pub sumeragi_rbc_lane_bytes_total: gauge_vec(&["lane_id"]);
-    /// Pending RBC backlog aggregated per dataspace (tx count).
-    pub sumeragi_rbc_dataspace_tx_count: gauge_vec(&["lane_id", "dataspace_id"],);
-    /// Total RBC chunks aggregated per dataspace.
-    pub sumeragi_rbc_dataspace_total_chunks: gauge_vec(&["lane_id", "dataspace_id"],);
-    /// Pending RBC chunks aggregated per dataspace.
-    pub sumeragi_rbc_dataspace_pending_chunks: gauge_vec(&["lane_id", "dataspace_id"],);
-    /// Total RBC payload bytes aggregated per dataspace.
-    pub sumeragi_rbc_dataspace_bytes_total: gauge_vec(&["lane_id", "dataspace_id"],);
     /// Sumeragi availability: votes ingested by this collector (cumulative)
     pub sumeragi_da_votes_ingested_total: int_counter();
     /// Sumeragi QC assembly latency histogram (milliseconds) labeled by `kind`
@@ -6975,34 +6756,6 @@ fields {
     );
     /// Sumeragi QC last observed latency gauge (milliseconds) labeled by `kind`
     pub sumeragi_qc_last_latency_ms: gauge_vec(&["kind"]);
-    /// Sumeragi RBC: persisted store sessions (gauge)
-    pub sumeragi_rbc_store_sessions: gauge();
-    /// Sumeragi RBC: persisted store payload bytes (gauge)
-    pub sumeragi_rbc_store_bytes: gauge();
-    /// Sumeragi RBC: current store pressure level (0=normal,1=soft,2=hard)
-    pub sumeragi_rbc_store_pressure: gauge();
-    /// Sumeragi RBC: session evictions due to TTL/capacity enforcement (cumulative)
-    pub sumeragi_rbc_store_evictions_total: int_counter();
-    /// Sumeragi RBC: persist requests dropped due to a full async queue (cumulative)
-    pub sumeragi_rbc_persist_drops_total: int_counter();
-    /// Sumeragi RBC status snapshot persistence unavailable due to init or fatal disk faults (0/1)
-    pub sumeragi_rbc_status_persistence_disabled: gauge();
-    /// Sumeragi RBC status snapshot fatal persist failures (cumulative)
-    pub sumeragi_rbc_status_persist_failures_total: int_counter();
-    /// Sumeragi RBC: proposals deferred due to store back-pressure (cumulative)
-    pub sumeragi_rbc_backpressure_deferrals_total: int_counter();
-    /// Sumeragi RBC: DELIVER deferrals waiting on READY quorum (cumulative)
-    pub sumeragi_rbc_deliver_defer_ready_total: int_counter();
-    /// Sumeragi RBC: DELIVER deferrals waiting on missing chunks (cumulative)
-    pub sumeragi_rbc_deliver_defer_chunks_total: int_counter();
-    /// Sumeragi RBC: DA deadline reschedules triggered (cumulative)
-    pub sumeragi_rbc_da_reschedule_total: int_counter();
-    /// Sumeragi RBC: DA deadline reschedules triggered (cumulative) labeled by consensus mode
-    pub sumeragi_rbc_da_reschedule_by_mode_total: int_counter_vec(&["mode"]);
-    /// Sumeragi RBC: pending blocks aborted due to missing/mismatched/invalid RBC payload (labeled by consensus mode)
-    pub sumeragi_rbc_abort_total: int_counter_vec(&["mode"]);
-    /// Sumeragi RBC: payload mismatches attributed to peers (labels: peer, kind)
-    pub sumeragi_rbc_mismatch_total: int_counter_vec(&["peer", "kind"]);
     /// Sumeragi: kura persistence failures grouped by outcome (retry|abort)
     pub sumeragi_kura_store_failures_total: int_counter_vec(&["outcome"]);
     /// Sumeragi: last recorded kura persistence retry attempt (gauge)
@@ -7041,20 +6794,6 @@ fields {
                     ],
                     &["stage"],
     );
-    /// State commit: legacy view_lock wait duration (ms) during block commit.
-    pub state_commit_view_lock_wait_ms: histogram_with_buckets(
-        vec![
-                        1.0, 2.0, 5.0, 10.0, 25.0, 50.0, 100.0, 250.0, 500.0, 1000.0, 2500.0, 5000.0,
-                        10000.0,
-                    ],
-    );
-    /// State commit: legacy view_lock hold duration (ms) during block commit.
-    pub state_commit_view_lock_hold_ms: histogram_with_buckets(
-        vec![
-                        1.0, 2.0, 5.0, 10.0, 25.0, 50.0, 100.0, 250.0, 500.0, 1000.0, 2500.0, 5000.0,
-                        10000.0,
-                    ],
-    );
     /// State commit: state_write_lock wait duration (ms) during block commit.
     pub state_commit_write_lock_wait_ms: histogram_with_buckets(
         vec![
@@ -7073,24 +6812,6 @@ fields {
     pub sumeragi_commit_pipeline_tick_total: int_counter_vec(&["mode", "outcome"]);
     /// Sumeragi pacemaker: prevote-quorum timeouts (cumulative, labeled by mode)
     pub sumeragi_prevote_timeout_total: int_counter_vec(&["mode"]);
-    /// Sumeragi RBC: total missing chunks across active sessions (gauge)
-    pub sumeragi_rbc_backlog_chunks_total: gauge();
-    /// Sumeragi RBC: maximum missing chunks in a single session (gauge)
-    pub sumeragi_rbc_backlog_chunks_max: gauge();
-    /// Sumeragi RBC: sessions pending delivery (gauge)
-    pub sumeragi_rbc_backlog_sessions_pending: gauge();
-    /// Sumeragi RBC: pending sessions awaiting INIT (gauge)
-    pub sumeragi_rbc_pending_sessions: gauge();
-    /// Sumeragi RBC: pending chunk frames buffered before INIT (gauge)
-    pub sumeragi_rbc_pending_chunks: gauge();
-    /// Sumeragi RBC: pending chunk/aux bytes buffered before INIT (gauge)
-    pub sumeragi_rbc_pending_bytes: gauge();
-    /// Sumeragi RBC: pending-frame drops by reason (cap/session_cap/ttl) (counter)
-    pub sumeragi_rbc_pending_drops_total: int_counter_vec(&["reason"]);
-    /// Sumeragi RBC: pending-byte drops by reason (counter)
-    pub sumeragi_rbc_pending_dropped_bytes_total: int_counter_vec(&["reason"]);
-    /// Sumeragi RBC: pending sessions evicted due to TTL or stash limits (counter)
-    pub sumeragi_rbc_pending_evicted_total: int_counter();
     /// Sumeragi: membership mismatches detected (labeled by peer, height, view)
     pub sumeragi_membership_mismatch_total: int_counter_vec(&["peer", "height", "view"],);
     /// Sumeragi: peers currently flagged for membership mismatch (0/1 gauge)
@@ -7333,10 +7054,6 @@ fields {
     pub nexus_config_diff_total: int_counter_vec(&["knob", "profile"]);
     /// Number of Nexus lane catalog entries configured on this node.
     pub nexus_lane_configured_total: gauge();
-    /// Latest Nexus lane identifier recorded for legacy lane-context gauges.
-    pub nexus_lane_id_placeholder: gauge();
-    /// Latest Nexus dataspace identifier recorded for legacy lane-context gauges.
-    pub nexus_dataspace_id_placeholder: gauge();
     /// Nexus: per-lane governance seal status (1 = sealed, 0 = ready).
     pub nexus_lane_governance_sealed: gauge_vec(&["lane"]);
     /// Nexus: total number of lanes still sealed (missing manifest).
@@ -8496,11 +8213,90 @@ construct {
         state_tiered_hot_budget_overflow_keys state_tiered_hot_budget_overflow_bytes
         state_tiered_last_snapshot_index storage_budget_bytes_used storage_budget_bytes_limit
         storage_budget_exceeded_total storage_da_cache_total storage_da_churn_bytes_total
-        governance_proposals_status]
+        governance_proposals_status governance_parliament_transitions_total
+        governance_parliament_no_result_total governance_parliament_attempts_by_status
+        governance_parliament_attempts_by_stage]
     {
-        for status in ["proposed", "approved", "rejected", "enacted"] {
+        for status in [
+            "proposed",
+            "rejected",
+            "enacted",
+            "superseded",
+            "execution_failed",
+        ] {
             governance_proposals_status
                 .with_label_values(&[status])
+                .set(0);
+        }
+        for transition in [
+            "escalate_risk",
+            "complete_qualification",
+            "register_sortition_request",
+            "consume_sortition_pulse_batch",
+            "begin_invitation_acceptance",
+            "fail_body_election_no_roster",
+            "seal_body_roster",
+            "advance_body_phase",
+            "record_attempt_absence",
+            "endorse_public_finding",
+            "fail_public_finding_no_result",
+            "register_ballot_attempt",
+            "close_ballot_registration",
+            "freeze_ballot_survivors",
+            "freeze_timed_ovn_corpus",
+            "begin_ballot_opening_batch",
+            "fail_ballot_no_result",
+            "finalize_opened_ballot",
+            "mark_enacted",
+            "mark_superseded",
+            "mark_execution_failed",
+            "record_invitation_response",
+            "register_ballot_participant",
+            "record_ballot_dropout",
+        ] {
+            let _ = governance_parliament_transitions_total
+                .with_label_values(&[transition]);
+        }
+        for class in [
+            "public_finding_quorum_unreachable",
+            "public_finding_deadline_expired",
+            "ballot_registration_deadline_expired",
+            "ballot_survivor_deadline_expired",
+            "ballot_commitment_deadline_expired",
+            "ballot_release_pulse_unavailable",
+            "ballot_opening_deadline_expired",
+        ] {
+            let _ = governance_parliament_no_result_total.with_label_values(&[class]);
+        }
+        for status in [
+            "active",
+            "certified",
+            "rejected",
+            "enacted",
+            "superseded",
+            "execution_failed",
+        ] {
+            governance_parliament_attempts_by_status
+                .with_label_values(&[status])
+                .set(0);
+        }
+        for stage in [
+            "qualification",
+            "rules",
+            "agenda",
+            "interest",
+            "review",
+            "coordination",
+            "mpc",
+            "fma",
+            "oversight",
+            "policy_jury",
+            "confirmation_jury",
+            "certification",
+            "enactment",
+        ] {
+            governance_parliament_attempts_by_stage
+                .with_label_values(&[stage])
                 .set(0);
         }
     }
@@ -8709,39 +8505,17 @@ construct {
         sumeragi_da_gate_satisfied_total sumeragi_da_manifest_guard_total
         sumeragi_da_manifest_cache_total sumeragi_da_spool_cache_total
         sumeragi_da_pin_intent_spool_total]
-        // RBC metrics
-    [sumeragi_rbc_sessions_active sumeragi_rbc_sessions_pruned_total
-        sumeragi_rbc_init_requests_total sumeragi_rbc_chunk_requests_total
-        sumeragi_rbc_requested_chunks_total sumeragi_rbc_initial_chunk_targets_total
-        sumeragi_rbc_repair_fallback_total sumeragi_rbc_ready_broadcasts_total
-        sumeragi_rbc_rebroadcast_skipped_total sumeragi_rbc_deliver_broadcasts_total
-        sumeragi_rbc_payload_bytes_delivered_total sumeragi_rbc_reconstructed_stripes_total
-        sumeragi_rbc_seed_latency_ms sumeragi_rbc_lane_tx_count sumeragi_rbc_lane_total_chunks
-        sumeragi_rbc_lane_pending_chunks sumeragi_rbc_lane_bytes_total
-        sumeragi_rbc_dataspace_tx_count sumeragi_rbc_dataspace_total_chunks
-        sumeragi_rbc_dataspace_pending_chunks sumeragi_rbc_dataspace_bytes_total
-        sumeragi_da_votes_ingested_total sumeragi_qc_assembly_latency_ms
-        sumeragi_qc_last_latency_ms sumeragi_rbc_store_sessions sumeragi_rbc_store_bytes
-        sumeragi_rbc_store_pressure sumeragi_rbc_store_evictions_total
-        sumeragi_rbc_persist_drops_total sumeragi_rbc_status_persistence_disabled
-        sumeragi_rbc_status_persist_failures_total sumeragi_rbc_backpressure_deferrals_total
-        sumeragi_rbc_deliver_defer_ready_total sumeragi_rbc_deliver_defer_chunks_total
-        sumeragi_rbc_da_reschedule_total sumeragi_rbc_da_reschedule_by_mode_total
-        sumeragi_rbc_abort_total sumeragi_rbc_mismatch_total sumeragi_kura_store_failures_total
+    [sumeragi_da_votes_ingested_total sumeragi_qc_assembly_latency_ms
+        sumeragi_qc_last_latency_ms sumeragi_kura_store_failures_total
         sumeragi_kura_store_last_retry_attempt sumeragi_kura_store_last_retry_backoff_ms
         sumeragi_pacemaker_backpressure_deferrals_total
         sumeragi_pacemaker_backpressure_deferrals_by_reason_total
         sumeragi_pacemaker_backpressure_deferral_duration_ms
         sumeragi_pacemaker_backpressure_deferral_active
         sumeragi_pacemaker_backpressure_deferral_age_ms sumeragi_pacemaker_eval_ms
-        sumeragi_pacemaker_propose_ms sumeragi_commit_stage_ms state_commit_view_lock_wait_ms
-        state_commit_view_lock_hold_ms state_commit_write_lock_wait_ms
+        sumeragi_pacemaker_propose_ms sumeragi_commit_stage_ms state_commit_write_lock_wait_ms
         state_commit_write_lock_hold_ms sumeragi_commit_pipeline_tick_total
-        sumeragi_prevote_timeout_total sumeragi_rbc_backlog_chunks_total
-        sumeragi_rbc_backlog_chunks_max sumeragi_rbc_backlog_sessions_pending
-        sumeragi_rbc_pending_sessions sumeragi_rbc_pending_chunks sumeragi_rbc_pending_bytes
-        sumeragi_rbc_pending_drops_total sumeragi_rbc_pending_dropped_bytes_total
-        sumeragi_rbc_pending_evicted_total sumeragi_membership_mismatch_total
+        sumeragi_prevote_timeout_total sumeragi_membership_mismatch_total
         sumeragi_membership_mismatch_active sumeragi_highest_qc_height sumeragi_locked_qc_height
         sumeragi_locked_qc_view]
         // Sumeragi pacemaker gauges
@@ -8816,10 +8590,8 @@ construct {
                 let _ = sumeragi_qc_signer_counts.with_label_values(&[phase, kind]);
             }
         }
-        for kind in ["vote", "rbc_ready", "rbc_deliver"] {
-            for outcome in ["logged", "throttled"] {
-                let _ = sumeragi_invalid_signature_total.with_label_values(&[kind, outcome]);
-            }
+        for outcome in ["logged", "throttled"] {
+            let _ = sumeragi_invalid_signature_total.with_label_values(&["vote", outcome]);
         }
     }
     [sumeragi_widen_before_rotate_total sumeragi_view_change_suggest_total
@@ -8854,8 +8626,8 @@ construct {
         ivm_merkle_incremental_leaf_updates_total pipeline_dag_vertices pipeline_dag_edges
         pipeline_conflict_rate_bps pipeline_access_set_source_total pipeline_comp_count
         pipeline_comp_max pipeline_comp_hist_bucket pipeline_peak_layer_width
-        pipeline_layer_avg_width pipeline_layer_median_width nexus_lane_id_placeholder
-        nexus_dataspace_id_placeholder nexus_config_diff_total nexus_lane_configured_total
+        pipeline_layer_avg_width pipeline_layer_median_width nexus_config_diff_total
+        nexus_lane_configured_total
         nexus_lane_governance_sealed nexus_lane_governance_sealed_total
         nexus_lane_lifecycle_applied_total]
     {
@@ -9144,8 +8916,6 @@ suffix {
     ] {
         register_guarded(&registry, metric);
     }
-
-    // RBC metrics registration
 }
 initialize (metrics) {
     [txs block_height block_height_non_empty last_commit_time_ms last_block_committed_at_ms
@@ -9197,6 +8967,8 @@ initialize (metrics) {
         state_tiered_hot_budget_overflow_bytes state_tiered_last_snapshot_index
         storage_budget_bytes_used storage_budget_bytes_limit storage_budget_exceeded_total
         storage_da_cache_total storage_da_churn_bytes_total governance_proposals_status
+        governance_parliament_transitions_total governance_parliament_no_result_total
+        governance_parliament_attempts_by_status governance_parliament_attempts_by_stage
         governance_council_members governance_council_alternates governance_council_candidates
         governance_council_epoch governance_citizens_total governance_citizen_service_events_total
         governance_protected_namespace_total governance_manifest_admission_total
@@ -9290,38 +9062,18 @@ initialize (metrics) {
         sumeragi_da_gate_last_reason sumeragi_da_gate_last_satisfied
         sumeragi_da_gate_satisfied_total sumeragi_da_manifest_guard_total
         sumeragi_da_manifest_cache_total sumeragi_da_spool_cache_total
-        sumeragi_da_pin_intent_spool_total sumeragi_rbc_sessions_active
-        sumeragi_rbc_sessions_pruned_total sumeragi_rbc_init_requests_total
-        sumeragi_rbc_chunk_requests_total sumeragi_rbc_requested_chunks_total
-        sumeragi_rbc_initial_chunk_targets_total sumeragi_rbc_repair_fallback_total
-        sumeragi_rbc_ready_broadcasts_total sumeragi_rbc_rebroadcast_skipped_total
-        sumeragi_rbc_deliver_broadcasts_total sumeragi_rbc_payload_bytes_delivered_total
-        sumeragi_rbc_reconstructed_stripes_total sumeragi_rbc_seed_latency_ms
-        sumeragi_rbc_lane_tx_count sumeragi_rbc_lane_total_chunks sumeragi_rbc_lane_pending_chunks
-        sumeragi_rbc_lane_bytes_total sumeragi_rbc_dataspace_tx_count
-        sumeragi_rbc_dataspace_total_chunks sumeragi_rbc_dataspace_pending_chunks
-        sumeragi_rbc_dataspace_bytes_total sumeragi_da_votes_ingested_total
-        sumeragi_qc_assembly_latency_ms sumeragi_qc_last_latency_ms sumeragi_rbc_store_sessions
-        sumeragi_rbc_store_bytes sumeragi_rbc_store_pressure sumeragi_rbc_store_evictions_total
-        sumeragi_rbc_persist_drops_total sumeragi_rbc_status_persistence_disabled
-        sumeragi_rbc_status_persist_failures_total sumeragi_rbc_backpressure_deferrals_total
-        sumeragi_rbc_deliver_defer_ready_total sumeragi_rbc_deliver_defer_chunks_total
-        sumeragi_rbc_da_reschedule_total sumeragi_rbc_da_reschedule_by_mode_total
-        sumeragi_rbc_abort_total sumeragi_rbc_mismatch_total sumeragi_kura_store_failures_total
+        sumeragi_da_pin_intent_spool_total sumeragi_da_votes_ingested_total
+        sumeragi_qc_assembly_latency_ms sumeragi_qc_last_latency_ms
+        sumeragi_kura_store_failures_total
         sumeragi_kura_store_last_retry_attempt sumeragi_kura_store_last_retry_backoff_ms
         sumeragi_pacemaker_backpressure_deferrals_total
         sumeragi_pacemaker_backpressure_deferrals_by_reason_total
         sumeragi_pacemaker_backpressure_deferral_duration_ms
         sumeragi_pacemaker_backpressure_deferral_active
         sumeragi_pacemaker_backpressure_deferral_age_ms sumeragi_pacemaker_eval_ms
-        sumeragi_pacemaker_propose_ms sumeragi_commit_stage_ms state_commit_view_lock_wait_ms
-        state_commit_view_lock_hold_ms state_commit_write_lock_wait_ms
+        sumeragi_pacemaker_propose_ms sumeragi_commit_stage_ms state_commit_write_lock_wait_ms
         state_commit_write_lock_hold_ms sumeragi_commit_pipeline_tick_total
-        sumeragi_prevote_timeout_total sumeragi_rbc_backlog_chunks_total
-        sumeragi_rbc_backlog_chunks_max sumeragi_rbc_backlog_sessions_pending
-        sumeragi_rbc_pending_sessions sumeragi_rbc_pending_chunks sumeragi_rbc_pending_bytes
-        sumeragi_rbc_pending_drops_total sumeragi_rbc_pending_dropped_bytes_total
-        sumeragi_rbc_pending_evicted_total sumeragi_membership_mismatch_total
+        sumeragi_prevote_timeout_total sumeragi_membership_mismatch_total
         sumeragi_membership_mismatch_active sumeragi_post_to_peer_total
         sumeragi_bg_post_enqueued_total sumeragi_bg_post_overflow_total sumeragi_bg_post_drop_total
         sumeragi_bg_post_queue_depth sumeragi_bg_post_queue_depth_by_peer sumeragi_bg_post_age_ms
@@ -9339,8 +9091,7 @@ initialize (metrics) {
         pipeline_dag_edges pipeline_conflict_rate_bps pipeline_access_set_source_total
         pipeline_comp_count pipeline_comp_max pipeline_comp_hist_bucket pipeline_peak_layer_width
         pipeline_layer_avg_width pipeline_layer_median_width nexus_config_diff_total
-        nexus_lane_configured_total nexus_lane_id_placeholder nexus_dataspace_id_placeholder
-        nexus_lane_governance_sealed nexus_lane_governance_sealed_total
+        nexus_lane_configured_total nexus_lane_governance_sealed nexus_lane_governance_sealed_total
         nexus_lane_governance_sealed_aliases nexus_lane_lifecycle_applied_total
         nexus_lane_block_height nexus_lane_finality_lag_slots nexus_lane_settlement_backlog_xor
         nexus_public_lane_validator_total nexus_public_lane_validator_activation_total
@@ -9541,12 +9292,12 @@ epilogue {
 }
 const METRIC_CATALOG_V2: &str = include_str!("metrics/catalog_v2.tsv");
 const METRIC_CATALOG_V2_HEADER: &str = "# iroha-telemetry-metric-catalog-v2";
-const METRIC_CATALOG_V2_ROWS: usize = 869;
-const METRIC_CATALOG_V2_REGISTERED: usize = 824;
-const METRIC_CATALOG_V2_BYTES: usize = 118_359;
+const METRIC_CATALOG_V2_ROWS: usize = 825;
+const METRIC_CATALOG_V2_REGISTERED: usize = 780;
+const METRIC_CATALOG_V2_BYTES: usize = 112_456;
 #[cfg(test)]
 const METRIC_CATALOG_V2_BLAKE3: &str =
-    "5a9c2a5ed46e7ff790544aa948c9aaab14cd5191859b891164c49f9256588b59";
+    "243d3497c82352252a050842ecd427c20d6c2bb446d9b21a393117b4bb53f4f4";
 
 #[derive(Clone, Copy)]
 struct MetricSpec {

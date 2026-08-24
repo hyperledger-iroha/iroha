@@ -4581,6 +4581,9 @@ impl V2ApplyService {
         let witness = state_block
             .take_exec_witness()
             .ok_or(V2ApplyError::ExecutionCommitmentUnavailable)?;
+        let parliament_timed_ovn_casting_bindings = state_block
+            .take_parliament_timed_ovn_casting_bindings()
+            .ok_or(V2ApplyError::ExecutionCommitmentUnavailable)?;
         let fastpq_witness_context = state_block.take_fastpq_witness_context();
         let native_amx_manifest = crate::sumeragi::exec::NativeAmxApplicationManifestV1::from_result_bearing_block_and_merge_entry(
             valid_block.as_ref(),
@@ -4619,6 +4622,7 @@ impl V2ApplyService {
             block_hash,
             &witness,
             expected_execution_commitment,
+            &parliament_timed_ovn_casting_bindings,
         )?;
         let committed_block = valid_block
             .commit_with_verified_v2_artifact(

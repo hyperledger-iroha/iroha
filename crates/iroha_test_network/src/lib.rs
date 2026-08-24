@@ -752,6 +752,7 @@ const TEMPDIR_MAX_KEEP: usize = 256;
 const KEEP_TEMPDIR_ENV: &str = "IROHA_TEST_NETWORK_KEEP_DIRS";
 const PROGRAM_IROHAD_ENV: &str = "TEST_NETWORK_BIN_IROHAD";
 const PROGRAM_IROHAD_MESSAGE_CONTROL_ENV: &str = "TEST_NETWORK_BIN_IROHAD_MESSAGE_CONTROL";
+const PROGRAM_IROHAD_PARLIAMENT_SIGNERS_ENV: &str = "TEST_NETWORK_BIN_IROHAD_PARLIAMENT_SIGNERS";
 const PROGRAM_IROHAD_FEATURES_ENV: &str = "TEST_NETWORK_IROHAD_FEATURES";
 const PROGRAM_IROHA_ENV: &str = "TEST_NETWORK_BIN_IROHA";
 /// Utility to get the root of the repository
@@ -904,6 +905,9 @@ pub enum Program {
     /// Feature-isolated daemon used only by explicit consensus fault-injection tests.
     #[doc(hidden)]
     IrohadMessageControl,
+    /// Feature-isolated daemon with exact-seat Parliament beacon and TLE share providers.
+    #[doc(hidden)]
+    IrohadParliamentSigners,
     /// Iroha Client CLI
     Iroha,
 }
@@ -920,8 +924,14 @@ impl Program {
         match self {
             Self::Irohad => ReleasePrebuiltBinary::Irohad,
             Self::IrohadMessageControl => ReleasePrebuiltBinary::IrohadMessageControl,
+            // The test signer is explicitly rejected whenever a release-prebuilt
+            // contract is active. This value is therefore an unreachable sentinel.
+            Self::IrohadParliamentSigners => ReleasePrebuiltBinary::Irohad,
             Self::Iroha => ReleasePrebuiltBinary::Iroha,
         }
+    }
+    const fn release_prebuilt_allowed(self) -> bool {
+        !matches!(self, Self::IrohadParliamentSigners)
     }
     fn spec(&self) -> ProgramSpec {
         match self {
@@ -960,6 +970,21 @@ impl Program {
                 .collect(),
                 isolated_target_subdir: Some("message-control"),
             },
+            Self::IrohadParliamentSigners => ProgramSpec {
+                name: "iroha3d",
+                env: PROGRAM_IROHAD_PARLIAMENT_SIGNERS_ENV,
+                pkg: "irohad",
+                build_args: [
+                    "--bin",
+                    "iroha3d",
+                    "--features",
+                    "test-network-parliament-signers",
+                ]
+                .into_iter()
+                .map(OsString::from)
+                .collect(),
+                isolated_target_subdir: Some("parliament-signers"),
+            },
             Self::Iroha => ProgramSpec {
                 name: "iroha",
                 env: PROGRAM_IROHA_ENV,
@@ -973,13 +998,13 @@ impl Program {
 // Cache resolved binary paths to avoid redundant rebuilds/resolution per peer
 static IROHAD_BIN: OnceLock<PathBuf> = OnceLock::new();
 static IROHAD_MESSAGE_CONTROL_BIN: OnceLock<PathBuf> = OnceLock::new();
+static IROHAD_PARLIAMENT_SIGNERS_BIN: OnceLock<PathBuf> = OnceLock::new();
 static IROHA_BIN: OnceLock<PathBuf> = OnceLock::new();
 const BUILD_CACHE_DIR: &str = ".iroha_test_network";
 const BUILD_STAMP_VERSION: u32 = 3;
 const IROHA_TEST_TARGET_DIR_ENV: &str = "IROHA_TEST_TARGET_DIR";
 const IROHA_TEST_BUILD_PROFILE_ENV: &str = "IROHA_TEST_BUILD_PROFILE";
 const IROHA_TEST_SKIP_BUILD_ENV: &str = "IROHA_TEST_SKIP_BUILD";
-const IROHA_TEST_ALLOW_REENTRANT_BUILD_ENV: &str = "IROHA_TEST_ALLOW_REENTRANT_BUILD";
 const IROHA_RELEASE_SOURCE_MANIFEST_SHA256_ENV: &str = "IROHA_RELEASE_SOURCE_MANIFEST_SHA256";
 const IROHA_RELEASE_PREBUILT_MANIFEST_SHA256_ENV: &str = "IROHA_RELEASE_PREBUILT_MANIFEST_SHA256";
 const IROHA_RELEASE_CARGO_LOCK_SHA256_ENV: &str = "IROHA_RELEASE_CARGO_LOCK_SHA256";
@@ -1486,15 +1511,6 @@ fn release_program_contract(repo: &Path) -> color_eyre::Result<Option<ReleasePro
              top-level prebuild"
         ));
     }
-    match exact_env_value(IROHA_TEST_ALLOW_REENTRANT_BUILD_ENV)?.as_deref() {
-        Some("0") => {}
-        _ => {
-            return Err(eyre!(
-                "release binary resolution requires the top-level runner to set the explicit \
-                 {IROHA_TEST_ALLOW_REENTRANT_BUILD_ENV}=0 no-reentrant-build contract"
-            ));
-        }
-    }
     let configured_target_raw = exact_env_value(IROHA_TEST_TARGET_DIR_ENV)?.ok_or_else(|| {
         eyre!(
             "release binary resolution requires {IROHA_TEST_TARGET_DIR_ENV} to select the \
@@ -1772,7 +1788,7 @@ fn global_build_lock_path(cache_dir: &Path) -> PathBuf {
     cache_dir.join("cargo-build.lock")
 }
 fn is_rustc_metadata_mismatch(output: &str) -> bool {
-    // Re-entrant builds occasionally trip over stale/corrupted `target` artifacts (e.g. after
+    // Top-level builds occasionally trip over stale/corrupted `target` artifacts (e.g. after
     // toolchain upgrades or interrupted builds). Cleaning the target dir and retrying once is a
     // pragmatic recovery strategy.
     //
@@ -2360,8 +2376,7 @@ fn ensure_binary_fresh(
         return Err(eyre!(
             "cannot build `{name}` (pkg `{pkg}`) because automatic child builds are disabled; \
              build it ahead of time with `cargo build --locked --offline -p {pkg}` and rerun \
-             with {IROHA_TEST_SKIP_BUILD_ENV}=1 and \
-             {IROHA_TEST_ALLOW_REENTRANT_BUILD_ENV}=0; target_dir={}",
+             with {IROHA_TEST_SKIP_BUILD_ENV}=1; target_dir={}",
             target_dir.display()
         ));
     }
@@ -2449,24 +2464,11 @@ fn ensure_binary_fresh(
         .wrap_err_with(|| eyre!("Failed to release build lock for {pkg}"))?;
     Ok(())
 }
-fn allow_reentrant_build(running_under_cargo: bool, release_corridor: bool) -> bool {
-    if release_corridor {
-        return false;
-    }
-    if !running_under_cargo {
-        return true;
-    }
-    // A test launched by Cargo reuses a top-level prebuild by default. Keep an explicit
-    // developer opt-in for the legacy path, but its immediate process guard still refuses to
-    // start a child while the outer Cargo/rustc process is active.
-    bool_env_override(IROHA_TEST_ALLOW_REENTRANT_BUILD_ENV).unwrap_or(false)
+const fn child_build_allowed(running_under_cargo: bool, release_corridor: bool) -> bool {
+    !running_under_cargo && !release_corridor
 }
-const fn must_validate_binary_freshness(
-    skip_build: bool,
-    running_under_cargo: bool,
-    allow_reentrant: bool,
-) -> bool {
-    !skip_build && (!running_under_cargo || allow_reentrant)
+const fn must_validate_binary_freshness(skip_build: bool, allow_child_build: bool) -> bool {
+    !skip_build && allow_child_build
 }
 fn cached_binary_if_present(cache: &OnceLock<PathBuf>) -> Option<PathBuf> {
     let cached = cache.get()?;
@@ -2491,8 +2493,8 @@ impl Program {
     ///   disagrees with the current workspace state (skipped when `IROHA_TEST_SKIP_BUILD=1`).
     ///
     /// A source-manifest-bound release corridor is lookup-only: it requires the top-level runner
-    /// to prebuild into the manifest-addressed release target, skip child builds, and explicitly
-    /// disable reentrant Cargo.
+    /// to prebuild into the manifest-addressed release target and skip child builds. Any resolver
+    /// running under Cargo is likewise lookup-only; nested Cargo invocation is never supported.
     ///
     /// # Errors
     /// If the path is not found (and build did not help).
@@ -2513,6 +2515,11 @@ impl Program {
         } = self.spec();
         let repo = repo_root();
         let release_contract = release_program_contract(&repo)?;
+        if release_contract.is_some() && !self.release_prebuilt_allowed() {
+            return Err(eyre!(
+                "the feature-isolated Parliament signer daemon is forbidden in release-prebuilt corridors"
+            ));
+        }
         let release_binary = self.release_prebuilt_binary();
         // 1) Explicit override
         if let Ok(path) = std::env::var(env) {
@@ -2544,6 +2551,9 @@ impl Program {
         let cached = match self {
             Program::Irohad => cached_binary_if_present(&IROHAD_BIN),
             Program::IrohadMessageControl => cached_binary_if_present(&IROHAD_MESSAGE_CONTROL_BIN),
+            Program::IrohadParliamentSigners => {
+                cached_binary_if_present(&IROHAD_PARLIAMENT_SIGNERS_BIN)
+            }
             Program::Iroha => cached_binary_if_present(&IROHA_BIN),
         };
         if let Some(path) = cached {
@@ -2614,17 +2624,16 @@ impl Program {
             ));
         }
         let running_under_cargo = std::env::var_os("CARGO").is_some();
-        let allow_reentrant =
-            allow_reentrant_build(running_under_cargo, release_contract.is_some());
-        let validate_freshness =
-            must_validate_binary_freshness(skip_build, running_under_cargo, allow_reentrant);
+        let allow_child_build =
+            child_build_allowed(running_under_cargo, release_contract.is_some());
+        let validate_freshness = must_validate_binary_freshness(skip_build, allow_child_build);
         if !skip_build && !validate_freshness {
             if let Some(found) = prebuild_candidate.clone() {
                 warn!(
                     %name,
                     %pkg,
                     ?found,
-                    "reentrant build disabled under Cargo; using existing binary"
+                    "child build forbidden under Cargo; using existing binary"
                 );
                 match self {
                     Program::Irohad => {
@@ -2632,6 +2641,9 @@ impl Program {
                     }
                     Program::IrohadMessageControl => {
                         let _ = IROHAD_MESSAGE_CONTROL_BIN.set(found.clone());
+                    }
+                    Program::IrohadParliamentSigners => {
+                        let _ = IROHAD_PARLIAMENT_SIGNERS_BIN.set(found.clone());
                     }
                     Program::Iroha => {
                         let _ = IROHA_BIN.set(found.clone());
@@ -2648,7 +2660,7 @@ impl Program {
                 &target_dir,
                 &profile,
                 &primary_binary,
-                allow_reentrant,
+                allow_child_build,
                 &build_args,
             )?;
         }
@@ -2675,6 +2687,9 @@ impl Program {
                 Program::IrohadMessageControl => {
                     let _ = IROHAD_MESSAGE_CONTROL_BIN.set(found.clone());
                 }
+                Program::IrohadParliamentSigners => {
+                    let _ = IROHAD_PARLIAMENT_SIGNERS_BIN.set(found.clone());
+                }
                 Program::Iroha => {
                     let _ = IROHA_BIN.set(found.clone());
                 }
@@ -2700,7 +2715,7 @@ impl Program {
     }
     /// Async variant of [`Self::resolve`].
     ///
-    /// Spawns a blocking task so that re-entrant builds and filesystem probing never block
+    /// Spawns a blocking task so that top-level builds and filesystem probing never block
     /// a Tokio runtime thread (which can otherwise starve timers and hang async tests).
     pub async fn resolve_async(&self) -> color_eyre::Result<PathBuf> {
         let program = *self;
@@ -3228,7 +3243,7 @@ impl Network {
             }
         }
         // Ensure we resolve `iroha3d` once before spawning peers; caches for subsequent calls.
-        // This may trigger a re-entrant build, so keep it off the async runtime threads.
+        // A top-level caller may trigger a build, so keep resolution off the async runtime threads.
         let program = self
             .peers
             .first()
@@ -4226,7 +4241,7 @@ impl fmt::Display for PeerStartupState {
         if let Some(snapshot) = &self.status_snapshot {
             write!(
                 f,
-                "; status=ok(blocks={} non_empty={} queue={} view_changes={} peers={} txs={}/{} da_reschedule_total={})@{formatted_ts}",
+                "; status=ok(blocks={} non_empty={} queue={} view_changes={} peers={} txs={}/{})@{formatted_ts}",
                 snapshot.blocks,
                 snapshot.blocks_non_empty,
                 snapshot.queue_size,
@@ -4234,7 +4249,6 @@ impl fmt::Display for PeerStartupState {
                 snapshot.peers,
                 snapshot.txs_approved,
                 snapshot.txs_rejected,
-                snapshot.da_reschedule_total,
             )?;
         } else if let Some(error) = &self.status_error {
             write!(
@@ -4560,7 +4574,6 @@ pub struct PeerStatusSnapshot {
     pub view_changes: u32,
     pub txs_approved: u64,
     pub txs_rejected: u64,
-    pub da_reschedule_total: u64,
 }
 impl From<&Status> for PeerStatusSnapshot {
     fn from(value: &Status) -> Self {
@@ -4573,7 +4586,6 @@ impl From<&Status> for PeerStatusSnapshot {
             view_changes: value.view_changes,
             txs_approved: value.txs_approved,
             txs_rejected: value.txs_rejected,
-            da_reschedule_total: value.da_reschedule_total,
         }
     }
 }
@@ -5400,6 +5412,7 @@ pub struct NetworkBuilder {
     auto_populate_trusted_peer_pops: bool,
     npos_genesis_bootstrap_stake: Option<Quantity>,
     consensus_message_control: bool,
+    parliament_test_signers: bool,
     initial_consensus_message_control: Option<InitialConsensusMessageControl>,
 }
 type InitialConsensusMessageControlFactory =
@@ -5408,30 +5421,6 @@ type InitialConsensusMessageControlFactory =
 struct InitialConsensusMessageControl {
     queue_capacity: usize,
     factory: Arc<InitialConsensusMessageControlFactory>,
-}
-fn bool_env_override(key: &str) -> Option<bool> {
-    match std::env::var(key) {
-        Ok(value) => {
-            let trimmed = value.trim();
-            if trimmed.eq_ignore_ascii_case("true") || trimmed == "1" {
-                Some(true)
-            } else if trimmed.eq_ignore_ascii_case("false") || trimmed == "0" {
-                Some(false)
-            } else {
-                warn!(
-                    key,
-                    value = %value,
-                    "ignoring invalid boolean environment override"
-                );
-                None
-            }
-        }
-        Err(std::env::VarError::NotPresent) => None,
-        Err(std::env::VarError::NotUnicode(_)) => {
-            warn!(key, "ignoring non-unicode boolean environment override");
-            None
-        }
-    }
 }
 fn merge_tables(dst: &mut Table, src: &Table) {
     for (key, value) in src {
@@ -6396,6 +6385,7 @@ impl NetworkBuilder {
                 SumeragiNposParameters::default().min_self_bond().clone(),
             ),
             consensus_message_control: false,
+            parliament_test_signers: false,
             initial_consensus_message_control: None,
         };
         let mut default_layer = Table::new();
@@ -6490,7 +6480,23 @@ impl NetworkBuilder {
     /// Use a separately built, feature-isolated daemon with receiver-local
     /// authenticated Sumeragi v2 message control for adversarial network tests.
     pub fn with_consensus_message_control(mut self) -> Self {
+        assert!(
+            !self.parliament_test_signers,
+            "the feature-isolated Parliament signer has a separate daemon binary"
+        );
         self.consensus_message_control = true;
+        self
+    }
+    /// Use a separately built, feature-isolated daemon whose runtime dependency
+    /// returns one proof-valid global-beacon share and one proof-valid TLE share
+    /// for each validator's exact local seat. Consensus and release validation
+    /// remain unchanged.
+    pub fn with_parliament_test_signers(mut self) -> Self {
+        assert!(
+            !self.consensus_message_control,
+            "the Parliament signer and message-control daemons are separate test binaries"
+        );
+        self.parliament_test_signers = true;
         self
     }
     /// Stage receiver-local authenticated consensus rules before controlled
@@ -6507,6 +6513,10 @@ impl NetworkBuilder {
     where
         F: Fn(usize, &[PeerId]) -> Vec<ConsensusMessageControlRule> + Send + Sync + 'static,
     {
+        assert!(
+            !self.parliament_test_signers,
+            "the feature-isolated Parliament signer has a separate daemon binary"
+        );
         self.consensus_message_control = true;
         self.initial_consensus_message_control = Some(InitialConsensusMessageControl {
             queue_capacity,
@@ -6840,6 +6850,7 @@ impl NetworkBuilder {
             auto_populate_trusted_peer_pops,
             npos_genesis_bootstrap_stake,
             consensus_message_control,
+            parliament_test_signers,
             initial_consensus_message_control,
         } = self;
         let max_validator_capacity = max_validator_capacity.unwrap_or(n_peers);
@@ -6893,19 +6904,18 @@ impl NetworkBuilder {
             }
             config_layers.push(nexus_accounts_layer);
         }
+        let validator_program = match (consensus_message_control, parliament_test_signers) {
+            (false, false) => Program::Irohad,
+            (true, false) => Program::IrohadMessageControl,
+            (false, true) => Program::IrohadParliamentSigners,
+            (true, true) => unreachable!("builder methods reject combined test daemons"),
+        };
         let mut peers: Vec<_> = (0..n_peers)
             .map(|i| {
                 let seed = seed.as_ref().map(|x| format!("{x}-peer-{i}"));
                 NetworkPeerBuilder::new()
                     .with_seed(seed.as_ref().map(|x| x.as_bytes()))
-                    .build_with_program(
-                        &env,
-                        if consensus_message_control {
-                            Program::IrohadMessageControl
-                        } else {
-                            Program::Irohad
-                        },
-                    )
+                    .build_with_program(&env, validator_program)
             })
             .collect();
         let mut observers: Vec<_> = (0..observer_count)
@@ -13933,6 +13943,92 @@ mod tests {
             args.windows(2)
                 .any(|pair| { pair == ["--features", "test-network-message-control"] })
         );
+    }
+    #[test]
+    fn parliament_signer_daemon_is_feature_target_and_release_isolated() {
+        let spec = Program::IrohadParliamentSigners.spec();
+        let args = spec
+            .build_args
+            .iter()
+            .map(|arg| arg.to_string_lossy().to_string())
+            .collect::<Vec<_>>();
+        assert_eq!(spec.env, PROGRAM_IROHAD_PARLIAMENT_SIGNERS_ENV);
+        assert_eq!(spec.isolated_target_subdir, Some("parliament-signers"));
+        assert!(
+            args.windows(2)
+                .any(|pair| { pair == ["--features", "test-network-parliament-signers"] })
+        );
+        assert!(!Program::IrohadParliamentSigners.release_prebuilt_allowed());
+
+        let daemon_manifest = include_str!("../../irohad/Cargo.toml");
+        let default_feature = daemon_manifest
+            .split_once("default = [")
+            .and_then(|(_, tail)| tail.split_once(']'))
+            .map(|(value, _)| value)
+            .expect("irohad default feature declaration");
+        let daemon_feature = daemon_manifest
+            .split_once("daemon = [")
+            .and_then(|(_, tail)| tail.split_once(']'))
+            .map(|(value, _)| value)
+            .expect("irohad daemon feature declaration");
+        for shipping_feature in [default_feature, daemon_feature] {
+            assert!(
+                !shipping_feature.contains("test-network-parliament-signers"),
+                "ordinary daemon construction must not compile the test signer"
+            );
+        }
+        let core_manifest = include_str!("../../iroha_core/Cargo.toml");
+        let core_default_feature = core_manifest
+            .split_once("default = [")
+            .and_then(|(_, tail)| tail.split_once(']'))
+            .map(|(value, _)| value)
+            .expect("iroha_core default feature declaration");
+        let core_node_feature = core_manifest
+            .split_once("node = [")
+            .and_then(|(_, tail)| tail.split_once(']'))
+            .map(|(value, _)| value)
+            .expect("iroha_core node feature declaration");
+        for shipping_feature in [core_default_feature, core_node_feature] {
+            assert!(
+                !shipping_feature.contains("test-network-parliament-signers"),
+                "ordinary Core construction must not compile the test signer"
+            );
+        }
+        let integration_manifest = include_str!("../../integration_tests/Cargo.toml");
+        assert!(integration_manifest.contains("required-features = [\"parliament-test-signers\"]"));
+        assert!(integration_manifest.contains(
+            "parliament-test-signers = [\"iroha_core/test-network-parliament-signers\"]"
+        ));
+        let daemon_source = include_str!("../../irohad/src/main.rs");
+        assert!(daemon_source.contains("not(debug_assertions)"));
+        assert!(daemon_source.contains(
+            "the feature-isolated Parliament fixture signers cannot be compiled into an optimized daemon"
+        ));
+
+        let beacon_provider =
+            include_str!("../../iroha_core/src/beacon/parliament_test_network_signer.rs");
+        let tle_provider =
+            include_str!("../../iroha_core/src/tle_release/parliament_test_network_signer.rs");
+        assert!(beacon_provider.contains("GlobalThresholdBeaconPartialSignerV1"));
+        assert!(tle_provider.contains("TlePartialReleaseSignerV1"));
+        for provider in [beacon_provider, tle_provider] {
+            assert!(
+                provider.contains("#[cfg(not(debug_assertions))]"),
+                "the Core provider itself must reject optimized compilation"
+            );
+            for forbidden in [
+                "FinalizedGlobalThresholdBeaconPulseV1",
+                "TleFinalReleaseSignatureV1",
+                "ParliamentLifecycleTransitionV1",
+                "StateTransaction",
+                "put_parliament_attempt",
+            ] {
+                assert!(
+                    !provider.contains(forbidden),
+                    "test signer providers must return partial shares only, not `{forbidden}`"
+                );
+            }
+        }
     }
     #[test]
     fn program_spec_irohad_includes_features_from_env() {

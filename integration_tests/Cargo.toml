@@ -35,6 +35,11 @@ name = "network_functional"
 path = "tests/network_functional.rs"
 
 [[test]]
+name = "sora_parliament_lifecycle_smoke"
+path = "tests/sora_parliament_lifecycle_smoke.rs"
+required-features = ["parliament-test-signers"]
+
+[[test]]
 name = "consensus_and_da"
 path = "tests/consensus_and_da.rs"
 
@@ -66,6 +71,10 @@ zk-stark = ["iroha_core/zk-stark", "iroha_torii/zk-stark", "dep:zk_ace_prover"]
 # Non-shipping native exact-12 fixture builders used only by explicit
 # four-peer privacy release gates.
 privacy-release-evidence = ["iroha_core/privacy-release-evidence"]
+# Non-shipping exact-seat threshold-share providers for the dedicated modern
+# Parliament four-validator corridor. The test target is absent unless this
+# feature is explicitly requested, and Core rejects optimized compilation.
+parliament-test-signers = ["iroha_core/test-network-parliament-signers"]
 
 [dependencies]
 tokio = { workspace = true, features = ["fs", "io-util", "process", "rt-multi-thread", "time"] }

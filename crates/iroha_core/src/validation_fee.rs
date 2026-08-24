@@ -18,8 +18,8 @@ use iroha_data_model::{
     isi::{
         InstructionBox, TransferAssetBatch, TransferBox,
         governance::{
-            ApproveGovernanceProposal, CastParliamentBallot, CastPlainBallot, EnactReferendum,
-            FinalizeReferendum, ProposeValidationFeePayoutLifecycle, ProposeValidationFeePolicy,
+            CreateParliamentGovernanceAttemptV1, ProposeValidationFeePayoutLifecycle,
+            ProposeValidationFeePolicy, SubmitParliamentLifecycleTransitionV1,
         },
         register::RegisterBox,
         repo::{RepoInstructionBox, RepoIsi, ReverseRepoIsi},
@@ -37,7 +37,7 @@ use iroha_data_model::{
         VALIDATION_FEE_TRANSFER_ENTRY_INDEX_METADATA_KEY, ValidationFeeChargingMode,
         ValidationFeeMultisigMarkerV1, ValidationFeeParliamentAuthorizationV1,
         ValidationFeePolicyRegistryEntryV1, ValidationFeePolicyRegistryV1, ValidationFeePolicyV1,
-        ValidationFeeTreasuryPayoutBindingV1, validation_fee_payout_lifecycle_can_retire,
+        ValidationFeeTreasuryPayoutBindingV1,
     },
 };
 use iroha_executor_data_model::isi::multisig::MultisigInstructionBox;
@@ -900,23 +900,11 @@ fn is_validation_fee_control_plane_transaction(tx: &SignedTransaction) -> bool {
                 .is_some()
             || instruction
                 .as_any()
-                .downcast_ref::<CastParliamentBallot>()
+                .downcast_ref::<CreateParliamentGovernanceAttemptV1>()
                 .is_some()
             || instruction
                 .as_any()
-                .downcast_ref::<CastPlainBallot>()
-                .is_some()
-            || instruction
-                .as_any()
-                .downcast_ref::<ApproveGovernanceProposal>()
-                .is_some()
-            || instruction
-                .as_any()
-                .downcast_ref::<FinalizeReferendum>()
-                .is_some()
-            || instruction
-                .as_any()
-                .downcast_ref::<EnactReferendum>()
+                .downcast_ref::<SubmitParliamentLifecycleTransitionV1>()
                 .is_some()
     }
     match tx.instructions() {
@@ -1857,6 +1845,28 @@ fn validate_parliament_authorization(
             "stored proposal operator does not match the exact typed proposal preimage".to_owned(),
         ));
     }
+    let certificate = &authorization.governance_certificate;
+    let governed_subject = exact_kind.governed_subject_id_v1().map_err(|_| {
+        ValidationFeeAdmissionError::InvalidPolicyRegistry(
+            "failed to derive the exact validation-fee governed subject".to_owned(),
+        )
+    })?;
+    let certificate_subject = match certificate.expected_head {
+        iroha_data_model::governance::types::GovernanceExpectedHeadV1::Absent(head) => {
+            head.subject_id
+        }
+        iroha_data_model::governance::types::GovernanceExpectedHeadV1::Present(head) => {
+            head.subject_id
+        }
+    };
+    if certificate.effect_preimage_hash != exact_kind.effect_preimage_hash_v1()
+        || certificate_subject != governed_subject
+    {
+        return Err(ValidationFeeAdmissionError::InvalidPolicyRegistry(
+            "stored Parliament certificate is not bound to the exact governed effect and subject"
+                .to_owned(),
+        ));
+    }
     let proposal = state_transaction
         .world
         .governance_proposals
@@ -1869,10 +1879,40 @@ fn validate_parliament_authorization(
     if &proposal.kind != exact_kind
         || proposal.proposer != authorization.proposal_operator
         || proposal.status != crate::state::GovernanceProposalStatus::Enacted
-        || proposal.enacted_at_height != Some(authorization.enacted_at_height)
     {
         return Err(ValidationFeeAdmissionError::InvalidPolicyRegistry(
-            "authorized governance proposal payload, status, or enactment height differs from the registry"
+            "authorized governance proposal payload or status differs from the registry".to_owned(),
+        ));
+    }
+    let attempt = state_transaction
+        .world
+        .parliament_attempts
+        .get(&certificate.governance_attempt_id)
+        .ok_or_else(|| {
+            ValidationFeeAdmissionError::InvalidPolicyRegistry(
+                "authorized Parliament attempt is missing".to_owned(),
+            )
+        })?;
+    attempt.validate().map_err(|error| {
+        ValidationFeeAdmissionError::InvalidPolicyRegistry(format!(
+            "authorized Parliament attempt is invalid: {error}"
+        ))
+    })?;
+    attempt
+        .validate_proposal_bindings_v1(exact_kind)
+        .map_err(|error| {
+            ValidationFeeAdmissionError::InvalidPolicyRegistry(format!(
+                "authorized Parliament attempt proposal bindings are invalid: {error}"
+            ))
+        })?;
+    if attempt.proposal_content_id() != certificate.proposal_content_id
+        || attempt.attempt().status
+            != iroha_data_model::governance::types::GovernanceAttemptStatusV1::Enacted
+        || attempt.terminal_height() != Some(authorization.enacted_at_height)
+        || attempt.certificate() != Some(certificate)
+    {
+        return Err(ValidationFeeAdmissionError::InvalidPolicyRegistry(
+            "authorized Parliament attempt does not retain the exact enacted certificate"
                 .to_owned(),
         ));
     }
@@ -2338,6 +2378,9 @@ fn ensure_validation_fee_credit_capacity(
 ///
 /// The caller must invoke this only after the corresponding signed transaction and its data
 /// triggers have succeeded. Dropping the state transaction rolls this mutation back.
+/// First-release lifecycle-scoped balance and asset leaves remain in consensus state after their
+/// balance reaches zero; no retirement transition exists from which Core could derive inactivity
+/// and an exact reference count.
 pub(crate) fn commit_validation_fee_credit(
     state_transaction: &mut StateTransaction<'_, '_>,
     credit: Option<&ValidationFeeCredit>,
@@ -2442,60 +2485,6 @@ fn consume_validation_fee_credit(
         .smart_contract_state
         .insert(projection_key, bytes);
     Ok(())
-}
-/// Retire one sealed credit record only after consensus has proved it inactive and unreferenced.
-///
-/// The caller must derive `lifecycle_is_active` and `reference_count` from the same frozen state
-/// transaction. Returning `false` is a fail-closed refusal and never mutates state.
-pub(crate) fn retire_validation_fee_credit_lifecycle(
-    state_transaction: &mut StateTransaction<'_, '_>,
-    credit: &ValidationFeeCredit,
-    lifecycle_is_active: bool,
-    reference_count: u64,
-) -> Result<bool, TransactionRejectionReason> {
-    let balance = read_validation_fee_credit_balance(state_transaction, credit)
-        .map_err(admission_rejection)?;
-    if !validation_fee_payout_lifecycle_can_retire(
-        lifecycle_is_active,
-        balance.is_zero(),
-        reference_count,
-    ) {
-        return Ok(false);
-    }
-    let (key, asset_key) =
-        validation_fee_credit_state_keys(state_transaction, credit).map_err(admission_rejection)?;
-    let (projection_key, projection_asset_key, projection_seal_key) =
-        validation_fee_credit_projection_state_keys(state_transaction, credit)
-            .map_err(admission_rejection)?;
-    let projection_matches = state_transaction
-        .world
-        .smart_contract_state
-        .get(&projection_seal_key)
-        .and_then(|bytes| {
-            let seal = norito::decode_from_bytes::<[u8; 32]>(bytes).ok()?;
-            (norito::to_bytes(&seal).ok()?.as_slice() == bytes.as_slice()).then_some(seal)
-        })
-        == Some(credit.lifecycle_seal);
-    state_transaction.world.smart_contract_state.remove(key);
-    state_transaction
-        .world
-        .smart_contract_state
-        .remove(asset_key);
-    if projection_matches {
-        state_transaction
-            .world
-            .smart_contract_state
-            .remove(projection_key);
-        state_transaction
-            .world
-            .smart_contract_state
-            .remove(projection_asset_key);
-        state_transaction
-            .world
-            .smart_contract_state
-            .remove(projection_seal_key);
-    }
-    Ok(true)
 }
 #[cfg(test)]
 fn enforce_policy(
@@ -3407,6 +3396,11 @@ fn native_instruction_ds_effect_disposition(
     // control-plane records, or deferred-execution bookkeeping.
     audited_no_ds_effect!(
         iroha_data_model::isi::register::RegisterPeerWithPop,
+        // Parliament attempt admission and lifecycle transitions mutate only
+        // their typed governance records. Core independently revalidates their
+        // authority and consensus proofs before applying those state changes.
+        iroha_data_model::isi::governance::CreateParliamentGovernanceAttemptV1,
+        iroha_data_model::isi::governance::SubmitParliamentLifecycleTransitionV1,
         // These lifecycle steps only register content-addressed artifacts or create an
         // initially absent address -> code-hash binding. The executor rejects activation
         // over an address already bound to a different hash. Deactivation/removal remain
@@ -3716,7 +3710,7 @@ mod tests {
             ParliamentAggregateOutcomeV1, ParliamentAggregateTallyV1,
             ParliamentBallotCertificateBindingV1, ParliamentBody,
             ParliamentBodyCertificateBindingV1, ProposalContentId, RiskTierV1, SortitionRequestV1,
-            TleKeySessionId, TleSessionId,
+            TleKeySessionId, TleSessionId, parliament_ballot_result_root_v1,
         },
         isi::{
             InstructionBox, Transfer, TransferAssetBatchEntry,
@@ -3883,7 +3877,7 @@ mod tests {
             )
             .expect("test policy leaves the full activation delay");
         let base = enacted_at_height
-            .checked_sub(7)
+            .checked_sub(10)
             .expect("test policy leaves a complete Parliament certificate lifecycle");
         let root = |marker: u8| [marker; 32];
         let proposal_content_id = ProposalContentId::new(proposal_fingerprint);
@@ -3917,12 +3911,31 @@ mod tests {
             BallotAttemptId::derive_v1(body_instance_id, ballot_attempt_sequence);
         let release_beacon_session_id = BeaconSessionId::new(root(7));
         let tle_key_session_id = TleKeySessionId::new(root(8));
-        let release_height = base + 4;
+        let release_height = base + 7;
         let tle_session_id = TleSessionId::derive_v1(
             ballot_attempt_id,
             tle_key_session_id,
             release_beacon_session_id,
             release_height,
+        );
+        let opening_root = root(16);
+        let tally = ParliamentAggregateTallyV1 {
+            original_seats: 500,
+            accepted_ballots: 334,
+            aye: 200,
+            nay: 100,
+            abstain: 34,
+        };
+        let outcome = ParliamentAggregateOutcomeV1::Approved;
+        let result_height = base + 8;
+        let result_root = parliament_ballot_result_root_v1(
+            governance_attempt_id,
+            body_instance_id,
+            ballot_attempt_id,
+            opening_root,
+            tally,
+            outcome,
+            result_height,
         );
         let governance_certificate = GovernanceCertificateV1 {
             proposal_content_id,
@@ -3936,12 +3949,14 @@ mod tests {
                 sortition_request_id: sortition_request.id,
                 sortition_request,
                 body: ParliamentBody::PolicyJury,
+                original_seats: tally.original_seats,
                 beacon_session_id,
                 beacon_pulse_id: BeaconPulseId::new(root(3)),
                 roster_root,
                 assignment_root: root(5),
-                result_root: root(6),
-                result_height: base + 5,
+                result_root,
+                result_height,
+                public_finding: None,
                 ballot: Some(ParliamentBallotCertificateBindingV1 {
                     ballot_attempt_id,
                     ballot_attempt_sequence,
@@ -3955,18 +3970,21 @@ mod tests {
                     timed_commitment_root: root(14),
                     release_beacon_session_id,
                     registered_at_height: base + 3,
+                    registration_close_height: base + 4,
+                    survivor_freeze_height: base + 5,
+                    commitment_close_height: base + 6,
+                    registration_closed_at_height: base + 4,
+                    survivors_frozen_at_height: base + 5,
+                    commitment_closed_at_height: base + 6,
+                    max_ballot_retries: 3,
+                    max_corpus_entries: 1_000,
                     release_height,
+                    opening_deadline_height: result_height,
                     release_pulse_id: BeaconPulseId::new(root(15)),
                     opening_height: release_height,
-                    opening_root: root(16),
-                    tally: ParliamentAggregateTallyV1 {
-                        original_seats: 500,
-                        accepted_ballots: 334,
-                        aye: 200,
-                        nay: 100,
-                        abstain: 34,
-                    },
-                    outcome: ParliamentAggregateOutcomeV1::Approved,
+                    opening_root,
+                    tally,
+                    outcome,
                 }),
             }],
             policy_version: 1,
@@ -3976,7 +3994,7 @@ mod tests {
                 version: 1,
                 head_root: root(18),
             }),
-            certified_at_height: base + 6,
+            certified_at_height: base + 9,
             enact_at_height: enacted_at_height,
         };
         let governance_certificate_id = GovernanceCertificateId::derive_v1(&governance_certificate);
@@ -4043,19 +4061,18 @@ mod tests {
         let proposal_id = authorization.proposal_fingerprint;
         assert_eq!(kind.fingerprint(), proposal_id);
         assert_eq!(authorization.invariant_error(), None);
-        state_tx.world.put_governance_proposal(
-            proposal_id,
-            crate::state::GovernanceProposalRecord {
-                proposer: account(250),
-                kind,
-                created_height: 1,
-                status: crate::state::GovernanceProposalStatus::Enacted,
-                pipeline: crate::state::GovernancePipeline::default(),
-                parliament_snapshot: None,
-                finalization_evidence: None,
-                enacted_at_height: Some(authorization.enacted_at_height),
-            },
-        );
+        state_tx
+            .world
+            .put_governance_proposal(
+                proposal_id,
+                crate::state::GovernanceProposalRecord {
+                    proposer: account(250),
+                    kind,
+                    created_height: 1,
+                    status: crate::state::GovernanceProposalStatus::Enacted,
+                },
+            )
+            .expect("validation-fee test proposal must satisfy first-release JSON bounds");
     }
     fn install_policy_registry_fixture(
         registry: &ValidationFeePolicyRegistryV1,
@@ -4734,7 +4751,46 @@ mod tests {
         );
     }
     #[test]
-    fn active_policy_exempts_only_plain_ballot_control_transactions() {
+    fn parliament_attempt_and_transition_instructions_are_balance_neutral() {
+        use iroha_data_model::{
+            governance::types::{ProposalKind, ValidationFeePolicyProposal},
+            isi::governance::{
+                CreateParliamentGovernanceAttemptV1, ParliamentLifecycleTransitionV1,
+                SubmitParliamentLifecycleTransitionV1,
+            },
+        };
+
+        let treasury = account(3);
+        let policy = policy(&treasury);
+        let create: InstructionBox = CreateParliamentGovernanceAttemptV1 {
+            proposal: ProposalKind::ValidationFeePolicy(ValidationFeePolicyProposal {
+                proposal_operator: account(1),
+                policy: policy.clone(),
+                payout_lifecycle_proposal_id: None,
+            }),
+            attempt_sequence: 0,
+        }
+        .into();
+        let transition: InstructionBox = SubmitParliamentLifecycleTransitionV1 {
+            governance_attempt_id: GovernanceAttemptId::new([0x42; 32]),
+            transition: ParliamentLifecycleTransitionV1::CompleteQualification,
+        }
+        .into();
+        let instructions = vec![create, transition];
+
+        for instruction in &instructions {
+            assert_eq!(
+                native_instruction_ds_effect_disposition(instruction, &policy_fee_asset(&policy)),
+                NativeInstructionDsEffectDisposition::AuditedNoDsEffect,
+            );
+        }
+        assert_eq!(
+            enforce_policy(&tx(1, instructions, Metadata::default()), &policy),
+            Ok(()),
+        );
+    }
+    #[test]
+    fn active_policy_exempts_only_private_parliament_control_transactions() {
         let deployer_key = key_pair(55);
         let deployer = AccountId::new(deployer_key.public_key().clone());
         let state = crate::state::State::new_with_chain_and_network_id_for_testing(
@@ -4764,7 +4820,26 @@ mod tests {
             "fixture must exercise active-policy admission"
         );
 
-        let ballot: InstructionBox = CastPlainBallot {
+        let private_control: InstructionBox = CreateParliamentGovernanceAttemptV1 {
+            proposal: iroha_data_model::governance::types::ProposalKind::ValidationFeePolicy(
+                iroha_data_model::governance::types::ValidationFeePolicyProposal {
+                    proposal_operator: deployer.clone(),
+                    policy: policy.clone(),
+                    payout_lifecycle_proposal_id: None,
+                },
+            ),
+            attempt_sequence: 0,
+        }
+        .into();
+        let control_only = tx(55, vec![private_control], Metadata::default());
+        assert!(is_validation_fee_control_plane_transaction(&control_only));
+        assert_eq!(
+            enforce_validation_fee_admission(&control_only, &state_tx)
+                .expect("private Parliament control transactions remain live"),
+            None
+        );
+
+        let plaintext_ballot: InstructionBox = iroha_data_model::isi::governance::CastPlainBallot {
             referendum_id: "successor-validation-fee-policy".to_owned(),
             owner: deployer,
             amount: 150_u64.into(),
@@ -4772,36 +4847,13 @@ mod tests {
             direction: 0,
         }
         .into();
-        let ballot_only = tx(55, vec![ballot.clone()], Metadata::default());
-        assert!(is_validation_fee_control_plane_transaction(&ballot_only));
-        assert_eq!(
-            enforce_validation_fee_admission(&ballot_only, &state_tx)
-                .expect("PLAIN governance must remain live under an active policy"),
-            None
-        );
-
-        let mixed = tx(
-            55,
-            vec![
-                ballot,
-                Log::new(Level::INFO, "non-control instruction".to_owned()).into(),
-            ],
-            metadata_for(&policy),
-        );
+        let ballot_only = tx(55, vec![plaintext_ballot], Metadata::default());
         assert!(
-            !is_validation_fee_control_plane_transaction(&mixed),
-            "a PLAIN ballot must not exempt a mixed transaction"
+            !is_validation_fee_control_plane_transaction(&ballot_only),
+            "plaintext ballots are ordinary fee-subject transactions"
         );
-        let error = enforce_validation_fee_admission(&mixed, &state_tx)
-            .expect_err("mixed transactions must remain subject to active-policy admission");
-        assert!(
-            matches!(
-                error,
-                TransactionRejectionReason::Validation(ValidationFail::NotPermitted(ref message))
-                    if message.contains("CastPlainBallot")
-            ),
-            "unexpected mixed-transaction rejection: {error:?}"
-        );
+        enforce_validation_fee_admission(&ballot_only, &state_tx)
+            .expect_err("plaintext ballots must not bypass active-policy admission");
     }
     #[test]
     fn parliament_authorization_certificate_hash_ignores_ambient_norito_layout() {
@@ -7081,46 +7133,32 @@ mod tests {
                 .expect("read isolated successor credit"),
             successor_credit.amount
         );
-        assert!(
-            !retire_validation_fee_credit_lifecycle(
-                &mut exhausted_credit_transaction,
-                &successor_credit,
-                true,
-                0,
-            )
-            .expect("active lifecycle retirement check"),
-            "active lifecycle state must be retained"
-        );
-        assert!(
-            !retire_validation_fee_credit_lifecycle(
-                &mut exhausted_credit_transaction,
-                &successor_credit,
-                false,
-                1,
-            )
-            .expect("referenced lifecycle retirement check"),
-            "referenced lifecycle state must be retained"
-        );
-        assert!(
-            !retire_validation_fee_credit_lifecycle(
-                &mut exhausted_credit_transaction,
-                &successor_credit,
-                false,
-                0,
-            )
-            .expect("funded lifecycle retirement check"),
-            "funded lifecycle state must be retained"
-        );
         consume_validation_fee_credit(&mut exhausted_credit_transaction, &successor_credit)
-            .expect("drain successor fixture before retirement");
+            .expect("drain successor fixture");
+        assert_eq!(
+            read_validation_fee_credit_balance(&exhausted_credit_transaction, &successor_credit)
+                .expect("read retained successor lifecycle credit"),
+            Quantity::zero(),
+            "a drained first-release lifecycle must retain a canonical zero balance"
+        );
+        let (successor_balance_key, successor_asset_key) =
+            validation_fee_credit_state_keys(&exhausted_credit_transaction, &successor_credit)
+                .expect("resolve retained successor lifecycle state");
         assert!(
-            retire_validation_fee_credit_lifecycle(
-                &mut exhausted_credit_transaction,
-                &successor_credit,
-                false,
-                0,
-            )
-            .expect("retire inactive empty unreferenced lifecycle")
+            exhausted_credit_transaction
+                .world
+                .smart_contract_state
+                .get(&successor_balance_key)
+                .is_some(),
+            "a drained first-release lifecycle must retain its canonical zero balance"
+        );
+        assert!(
+            exhausted_credit_transaction
+                .world
+                .smart_contract_state
+                .get(&successor_asset_key)
+                .is_some(),
+            "a drained first-release lifecycle must retain its immutable asset binding"
         );
     }
     #[test]

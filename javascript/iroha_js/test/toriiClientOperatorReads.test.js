@@ -41,13 +41,6 @@ const OPERATOR_READS = [
   ["/v1/sumeragi/leader", (client) => client.getSumeragiLeader()],
   ["/v1/sumeragi/params", (client) => client.getSumeragiParams()],
   [
-    "/v1/sumeragi/key-lifecycle",
-    async (client) => {
-      await client.listSumeragiKeyLifecycle();
-      throw new Error("terminal test response");
-    },
-  ],
-  [
     "/v1/sumeragi/evidence/count",
     (client) => client.getSumeragiEvidenceCount(),
   ],

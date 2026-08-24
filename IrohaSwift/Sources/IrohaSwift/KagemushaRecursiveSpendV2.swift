@@ -25,7 +25,7 @@ public enum KagemushaRecursiveSpendError: Error, Equatable, LocalizedError {
         case let .invalidArchive(field):
             return "Invalid Kagemusha recursive spend Norito archive: \(field)."
         case .nativeBridgeUnavailable:
-            return "The ABI-22 Kagemusha recursive spend bridge is unavailable."
+            return "The ABI-23 Kagemusha recursive spend bridge is unavailable."
         case .proofBackendUnavailable:
             return "Kagemusha recursive spend V4 is unavailable until the ABI-21 proof backend is promoted."
         case .proofWorkerBusy:
@@ -129,9 +129,8 @@ public struct KagemushaRecursiveSpendNativeCapabilitiesV4: Equatable, Sendable {
 }
 
 public enum KagemushaRecursiveSpend {
-    /// Exact verifier-registry roles carried by the five readiness fields.
-    /// A field is valid only for its matching role and circuit; roles are not
-    /// interchangeable even though Torii uses one common record shape.
+    /// Exact verifier-registry roles bound by canonical proof and command artifacts.
+    /// Roles are not interchangeable even though they share one registry-record shape.
     public enum VerifierRole: CaseIterable, Sendable {
         case transfer
         case topUpShield
@@ -172,15 +171,15 @@ public enum KagemushaRecursiveSpend {
         }
     }
 
-    public static let requiredNativeBridgeAbiVersion: UInt32 = 22
-    /// Mandatory sender-final peer-cash contract advertised by Torii readiness.
+    public static let requiredNativeBridgeAbiVersion: UInt32 = 23
+    /// Sender-final peer-cash contract advertised by universal capability discovery.
     public static let cashHandoffCapabilityV1 = "cash_handoff_v1"
     public static let authorizationPreparationVersionV2: UInt16 = 2
     public static let wireVersionV4: UInt16 = 4
     public static let localWitnessVersionV4: UInt16 = 4
     /// First-release maximum number of recursive parents consumed by one transition.
     public static let maximumInputsPerTransition = 2
-    /// First-release peer-hop bound advertised by Torii readiness and
+    /// First-release peer-hop bound advertised by universal capability discovery and
     /// enforced by every recursive-spend request codec.
     public static let maximumPeerHops: UInt32 = 8
     public static let artifactManifestSchemaV4 =
@@ -528,7 +527,7 @@ public enum KagemushaRecursiveSpend {
         "connect_norito_kagemusha_recursive_spend_artifact_set_uninstall_v4",
     ]
 
-    /// Complete native-symbol inventory required by first-release readiness checks.
+    /// Complete native-symbol inventory required by first-release proof operations.
     public static let requiredNativeSymbols = requiredProofSymbols + requiredProtocolSymbols
 
     public static var hasRequiredNativeSymbols: Bool {
@@ -548,7 +547,8 @@ public enum KagemushaRecursiveSpend {
         return try KagemushaRecursiveSpendCodecs.decodeNativeCapabilitiesV4(archive)
     }
 
-    /// Exact local production capability; Torii readiness remains an additional requirement.
+    /// Exact local proof capability, including the installed authenticated artifact set.
+    /// Torii capability discovery is universal and is not an asset or backend gate.
     public static var isProductionAvailable: Bool {
         productionAvailability(
             hasRequiredNativeSymbols: hasRequiredNativeSymbols,
@@ -558,7 +558,7 @@ public enum KagemushaRecursiveSpend {
         )
     }
 
-    /// True when the ABI-22 bridge was compiled with the audited production
+    /// True when the ABI-23 bridge was compiled with the audited production
     /// promotion feature, even if its authenticated artifact set has not been
     /// installed yet. Setup UI uses this non-cached probe to avoid an artifact
     /// bootstrap cycle; value-moving operations still require
@@ -576,10 +576,10 @@ public enum KagemushaRecursiveSpend {
         )
     }
 
-    /// Keep ABI linkage separate from mutable artifact readiness. In
+    /// Keep ABI linkage separate from mutable artifact availability. In
     /// particular, an unavailable response before artifact promotion must not
     /// be remembered as a missing symbol: the probe is deliberately executed
-    /// afresh on every readiness check.
+    /// afresh on every availability check.
     static func productionAvailability(
         hasRequiredNativeSymbols: Bool,
         probe: () throws -> Bool
@@ -1039,23 +1039,6 @@ public struct KagemushaConfidentialVerifierBinding: Equatable, Sendable {
     public let name: String
     public let commitment: Data
     public let blockHeight: UInt64
-
-    public init(
-        role: KagemushaRecursiveSpend.VerifierRole,
-        verifier: ToriiKagemushaActiveTransferVerifier,
-        blockHeight: UInt64
-    ) throws {
-        try self.init(
-            role: role,
-            backend: verifier.id.backend,
-            name: verifier.id.name,
-            circuitID: verifier.circuitId,
-            commitmentHex: verifier.commitment,
-            activationHeight: verifier.activationHeight,
-            withdrawalHeight: verifier.withdrawalHeight,
-            blockHeight: blockHeight
-        )
-    }
 
     public init(
         role: KagemushaRecursiveSpend.VerifierRole,
@@ -1811,11 +1794,6 @@ public struct KagemushaRequestAuthorization: Equatable, Sendable {
     public let fields: KagemushaRequestAuthorizationFields
     public let hardwareAssertion: KagemushaOnlineHardwareAssertion
     public let archive: Data
-
-    /// Canonical raw low-S signature retained for source compatibility.
-    public var signature: Data {
-        hardwareAssertion.signature.rawBytes
-    }
 
     init(
         fields: KagemushaRequestAuthorizationFields,

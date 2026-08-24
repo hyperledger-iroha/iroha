@@ -167,7 +167,8 @@ fn historical_recovery_batch_capacity_is_exact_duplicate_aware_and_atomic_on_rej
         record_one.clone(),
         record_other.clone(),
     ];
-    let (mut kura, _) = Kura::new(&config, &lane_config).expect("historical capacity Kura");
+    let (mut kura, _) = Kura::open_test_kura_with_configured_lane_config(&config, &lane_config)
+        .expect("historical capacity Kura");
     install_autonomous_lane_marker_for_kura(&kura, &lane_config, &lane_one_height_one);
     install_autonomous_lane_marker_for_kura(&kura, &lane_config, &lane_zero_height_one);
     for payload in [
@@ -261,7 +262,8 @@ fn historical_recovery_partial_batch_restart_completes_remaining_records() {
         historical_autonomous_recovery_record_for_kura(&first_payload, &signer, b"restart-first");
     let second =
         historical_autonomous_recovery_record_for_kura(&second_payload, &signer, b"restart-second");
-    let (kura, _) = Kura::new(&config, &lane_config).expect("historical restart Kura");
+    let (kura, _) = Kura::open_test_kura_with_configured_lane_config(&config, &lane_config)
+        .expect("historical restart Kura");
     install_autonomous_lane_marker_for_kura(&kura, &lane_config, &first_payload);
     persist_historical_capacity_payload_fixture(&kura, &second_payload);
     persist_historical_capacity_payload_fixture(&kura, &first_payload);
@@ -277,7 +279,8 @@ fn historical_recovery_partial_batch_restart_completes_remaining_records() {
         vec![HistoricalAutonomousLaneRecoveryPersistOutcome::Installed],
     );
     drop(kura);
-    let (reopened, _) = Kura::new(&config, &lane_config).expect("reopen partial historical batch");
+    let (reopened, _) = Kura::open_test_kura_with_configured_lane_config(&config, &lane_config)
+        .expect("reopen partial historical batch");
     let remaining_peak = reopened
         .historical_autonomous_recovery_batch_additional_peak_for_test(&[
             first.clone(),
@@ -343,7 +346,8 @@ fn historical_recovery_append_crash_is_repaired_only_by_startup_before_replay() 
         &signer,
         b"append-crash-second",
     );
-    let (kura, _) = Kura::new(&config, &lane_config).expect("historical append-crash Kura");
+    let (kura, _) = Kura::open_test_kura_with_configured_lane_config(&config, &lane_config)
+        .expect("historical append-crash Kura");
     install_autonomous_lane_marker_for_kura(&kura, &lane_config, &first_payload);
     persist_historical_capacity_payload_fixture(&kura, &first_payload);
     persist_historical_capacity_payload_fixture(&kura, &second_payload);
@@ -377,7 +381,7 @@ fn historical_recovery_append_crash_is_repaired_only_by_startup_before_replay() 
         "the restart-required live retry must be byte-immutable",
     );
     drop(kura);
-    let (reopened, _) = Kura::new(&config, &lane_config)
+    let (reopened, _) = Kura::open_test_kura_with_configured_lane_config(&config, &lane_config)
         .expect("startup repairs the historical execution-input append");
     assert!(
         !append_intent_path.exists(),
@@ -410,7 +414,8 @@ fn historical_recovery_seal_temp_uses_reserved_bytes_and_residue_fails_closed() 
     let record = historical_autonomous_recovery_record_for_kura(&payload, &signer, b"seal-temp");
     let seal_bytes = historical_autonomous_recovery_record_bytes(&record);
     let seal_len = u64::try_from(seal_bytes.len()).expect("historical seal length fits u64");
-    let (kura, _) = Kura::new(&config, &lane_config).expect("historical seal-temp Kura");
+    let (kura, _) = Kura::open_test_kura_with_configured_lane_config(&config, &lane_config)
+        .expect("historical seal-temp Kura");
     install_autonomous_lane_marker_for_kura(&kura, &lane_config, &payload);
     persist_historical_capacity_payload_fixture(&kura, &payload);
     let recovered = kura
@@ -492,7 +497,8 @@ fn historical_recovery_acquires_prune_before_historical_mutation_lock() {
         &signer,
     );
     let record = historical_autonomous_recovery_record_for_kura(&payload, &signer, b"lock-order");
-    let (kura, _) = Kura::new(&config, &lane_config).expect("historical lock-order Kura");
+    let (kura, _) = Kura::open_test_kura_with_configured_lane_config(&config, &lane_config)
+        .expect("historical lock-order Kura");
     install_autonomous_lane_marker_for_kura(&kura, &lane_config, &payload);
     persist_historical_capacity_payload_fixture(&kura, &payload);
     let historical_guard = kura.historical_autonomous_recovery_mutation_lock.lock();

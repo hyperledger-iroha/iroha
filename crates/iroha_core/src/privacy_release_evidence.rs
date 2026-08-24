@@ -61,6 +61,8 @@ fn release_network_id_from_genesis_hash(hash: [u8; 32]) -> iroha_data_model::Net
         hash,
     )))
 }
+#[cfg(test)]
+use crate::privacy_engines::vega::prepare_vega_release_candidate_privacy_action_with_rng_v1;
 use crate::privacy_engines::{
     anonymous_pgc::{
         AnonymousPgcParametersV1, AnonymousPgcPoolInvariantV1, TwistedElGamalCiphertextV1,

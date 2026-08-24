@@ -67,12 +67,6 @@ impl AttachmentTenant {
     pub fn from_account(account: &AccountId) -> Self {
         Self(hash_identity_hex("account", &account.to_string()))
     }
-    /// Derive a tenant key from a validated API token.
-    ///
-    /// This remains available for tests and backward-compatible migration helpers.
-    pub fn from_api_token(token: &str) -> Self {
-        Self(hash_identity_hex("token", token))
-    }
     /// Tenant used when neither token nor remote address is available.
     pub fn anonymous() -> Self {
         Self(hash_identity_hex("anon", "anon"))

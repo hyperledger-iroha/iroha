@@ -108,7 +108,7 @@ public struct TransactionInstructionFrame: Equatable, Sendable {
             guard let privacyProtocolId, let privacyAdmission else {
                 throw ExecutableBatchInputError.privacyExact12CapabilityAdmissionRequired
             }
-            // Re-run the ABI22 catalog getter+validator and the exact manifest/
+            // Re-run the ABI23 catalog getter+validator and the exact manifest/
             // envelope tuple comparison at final encoding. A previously issued
             // token cannot turn a missing or stale native artifact into authority.
             try PrivacyExact12CapabilityAdmissionV1.requireForConstruction(
@@ -543,63 +543,65 @@ public struct RegisterZkAssetRequest {
     }
 }
 
-public struct GovernanceWindow: Sendable {
-    public let lower: UInt64
-    public let upper: UInt64
-
-    public init(lower: UInt64, upper: UInt64) throws {
-        guard lower <= upper else {
-            throw TransactionInputError.invalidGovernanceWindow(lower: lower, upper: upper)
-        }
-        self.lower = lower
-        self.upper = upper
-    }
-}
-
-public enum GovernanceVotingMode: UInt8, Sendable {
-    case zk = 0
-    case plain = 1
-}
-
 public enum BallotDirection: UInt8, Sendable {
     case aye = 0
     case nay = 1
     case abstain = 2
 }
 
-public struct ProposeDeployContractRequest {
+public struct ProposeDeployContractRequest: Sendable {
     public let networkId: NetworkId
     public let authority: String
     public let contractAddress: String
-    public let codeHashHex: String
-    public let abiHashHex: String
-    public let abiVersion: String
-    public let window: GovernanceWindow?
-    public let mode: GovernanceVotingMode?
+    public let codeHash: Data
+    public let abiHash: Data
+    public let abiVersion: UInt16
+    public let manifestProvenance: ToriiContractManifestProvenance?
     public let feePayment: FeePaymentIntent
     public let ttlMs: UInt64?
 
     public init(networkId: NetworkId,
                 authority: String,
                 contractAddress: String,
-                codeHashHex: String,
-                abiHashHex: String,
-                abiVersion: String,
-                window: GovernanceWindow? = nil,
-                mode: GovernanceVotingMode? = nil,
+                codeHash: Data,
+                abiHash: Data,
+                abiVersion: UInt16 = 1,
+                manifestProvenance: ToriiContractManifestProvenance? = nil,
                 feePayment: FeePaymentIntent,
                 ttlMs: UInt64? = 100_000) throws {
-        guard abiVersion == "1" else {
+        guard ContractAddressV1.isCanonical(contractAddress) else {
+            throw ContractAddressV1Error.invalidLiteral
+        }
+        guard codeHash.count == 32 else {
+            throw TransactionInputError.invalidGovernanceHashLength(
+                field: "codeHash",
+                actual: codeHash.count
+            )
+        }
+        guard abiHash.count == 32 else {
+            throw TransactionInputError.invalidGovernanceHashLength(
+                field: "abiHash",
+                actual: abiHash.count
+            )
+        }
+        guard abiVersion == 1 else {
             throw TransactionInputError.invalidGovernanceAbiVersion(abiVersion)
+        }
+        if let manifestProvenance {
+            guard isExactContractManifestString(manifestProvenance.signer) else {
+                throw TransactionInputError.invalidGovernanceManifestProvenance(field: "signer")
+            }
+            guard isExactContractManifestString(manifestProvenance.signature) else {
+                throw TransactionInputError.invalidGovernanceManifestProvenance(field: "signature")
+            }
         }
         self.networkId = networkId
         self.authority = authority
         self.contractAddress = contractAddress
-        self.codeHashHex = codeHashHex
-        self.abiHashHex = abiHashHex
+        self.codeHash = codeHash
+        self.abiHash = abiHash
         self.abiVersion = abiVersion
-        self.window = window
-        self.mode = mode
+        self.manifestProvenance = manifestProvenance
         self.feePayment = feePayment
         self.ttlMs = ttlMs
     }
@@ -658,55 +660,6 @@ public struct CastZkBallotRequest {
         self.electionId = electionId
         self.proofB64 = proofB64
         self.publicInputs = publicInputs
-        self.feePayment = feePayment
-        self.ttlMs = ttlMs
-    }
-}
-
-public struct EnactReferendumRequest {
-    public let networkId: NetworkId
-    public let authority: String
-    public let referendumIdHex: String
-    public let preimageHashHex: String
-    public let window: GovernanceWindow
-    public let feePayment: FeePaymentIntent
-    public let ttlMs: UInt64?
-
-    public init(networkId: NetworkId,
-                authority: String,
-                referendumIdHex: String,
-                preimageHashHex: String,
-                window: GovernanceWindow,
-                feePayment: FeePaymentIntent,
-                ttlMs: UInt64? = 100_000) {
-        self.networkId = networkId
-        self.authority = authority
-        self.referendumIdHex = referendumIdHex
-        self.preimageHashHex = preimageHashHex
-        self.window = window
-        self.feePayment = feePayment
-        self.ttlMs = ttlMs
-    }
-}
-
-public struct FinalizeReferendumRequest {
-    public let networkId: NetworkId
-    public let authority: String
-    public let referendumId: String
-    public let proposalIdHex: String
-    public let feePayment: FeePaymentIntent
-    public let ttlMs: UInt64?
-
-    public init(networkId: NetworkId,
-                authority: String,
-                referendumId: String,
-                proposalIdHex: String,
-                feePayment: FeePaymentIntent,
-                ttlMs: UInt64? = 100_000) {
-        self.networkId = networkId
-        self.authority = authority
-        self.referendumId = referendumId
-        self.proposalIdHex = proposalIdHex
         self.feePayment = feePayment
         self.ttlMs = ttlMs
     }
@@ -856,37 +809,12 @@ public struct KagemushaTopUpShieldVerifierBinding: Equatable, Sendable {
         self.withdrawalHeight = withdrawalHeight
     }
 
-    public init(_ verifier: ToriiKagemushaActiveTopUpShieldVerifier) throws {
-        try self.init(
-            backend: verifier.id.backend,
-            name: verifier.id.name,
-            version: verifier.version,
-            circuitID: verifier.circuitId,
-            commitment: verifier.commitment,
-            publicInputsSchemaHash: verifier.publicInputsSchemaHash,
-            maximumProofBytes: verifier.maxProofBytes,
-            activationHeight: verifier.activationHeight,
-            withdrawalHeight: verifier.withdrawalHeight
-        )
-    }
-
-    fileprivate func matches(_ verifier: ToriiKagemushaActiveTopUpShieldVerifier) -> Bool {
-        backend == verifier.id.backend
-            && name == verifier.id.name
-            && version == verifier.version
-            && circuitID == verifier.circuitId
-            && commitment == verifier.commitment
-            && publicInputsSchemaHash == verifier.publicInputsSchemaHash
-            && maximumProofBytes == verifier.maxProofBytes
-            && activationHeight == verifier.activationHeight
-            && withdrawalHeight == verifier.withdrawalHeight
-    }
 }
 
-/// Legacy-named product expectation supplied by the app for an online top-up.
-/// It binds the selected asset and verifier lifecycle; it is not universal
-/// offline discovery or backend readiness.
-public struct KagemushaTopUpShieldReadinessExpectation: Equatable, Sendable {
+/// Product capability supplied by the app for an online top-up.
+/// It binds the selected asset and verifier lifecycle independently from
+/// universal offline protocol discovery.
+public struct KagemushaTopUpShieldCapability: Equatable, Sendable {
     public let assetDefinitionID: String
     public let assetScale: UInt32
     public let minimumEvaluatedBlockHeight: UInt64
@@ -902,7 +830,7 @@ public struct KagemushaTopUpShieldReadinessExpectation: Equatable, Sendable {
               assetScale <= KagemushaScaledAmount.maximumScale,
               verifier.activationHeight <= minimumEvaluatedBlockHeight,
               verifier.withdrawalHeight.map({ minimumEvaluatedBlockHeight < $0 }) != false else {
-            throw KagemushaRecursiveSpendError.invalidField("topUpReadinessExpectation")
+            throw KagemushaRecursiveSpendError.invalidField("topUpCapability")
         }
         self.assetDefinitionID = assetDefinitionID
         self.assetScale = assetScale
@@ -922,7 +850,7 @@ public struct KagemushaTopUpShieldSnapshotBinding: Equatable, Sendable {
     public let leafIndex: UInt32
 }
 
-/// Unsigned top-up plus the exact live readiness/tree observation used to
+/// Unsigned top-up plus the exact live capability/tree observation used to
 /// construct it. Wallets persist this atomically with note secrets before
 /// signing or submitting the request.
 public struct KagemushaTopUpShieldPreparation: Equatable, Sendable {
@@ -1043,7 +971,7 @@ public final class IrohaSDK: @unchecked Sendable {
         operationId: Data,
         opening: KagemushaNoteOpening,
         artifactBinding: KagemushaRecursiveSpendArtifactBindingV4,
-        expectedReadiness: KagemushaTopUpShieldReadinessExpectation,
+        productCapability: KagemushaTopUpShieldCapability,
         canonicalAuth: ToriiCanonicalRequestAuth
     ) async throws -> KagemushaTopUpShieldPreparation {
         guard let toriiRestClient else {
@@ -1058,9 +986,9 @@ public final class IrohaSDK: @unchecked Sendable {
             throw KagemushaRecursiveSpendError.invalidField("assetId")
         }
         let assetDefinitionId = String(assetParts[0])
-        let verifier = expectedReadiness.verifier
-        guard assetDefinitionId == expectedReadiness.assetDefinitionID,
-              amount.scale == expectedReadiness.assetScale,
+        let verifier = productCapability.verifier
+        guard assetDefinitionId == productCapability.assetDefinitionID,
+              amount.scale == productCapability.assetScale,
               let verifierCommitment = Data(hexString: verifier.commitment),
               verifierCommitment.count == 32 else {
             throw KagemushaRecursiveSpendError.invalidField("topUp.productCapability")
@@ -1071,7 +999,7 @@ public final class IrohaSDK: @unchecked Sendable {
             commitments: [],
             canonicalAuth: canonicalAuth
         )
-        guard snapshot.evaluatedBlockHeight >= expectedReadiness.minimumEvaluatedBlockHeight,
+        guard snapshot.evaluatedBlockHeight >= productCapability.minimumEvaluatedBlockHeight,
               verifier.activationHeight <= snapshot.evaluatedBlockHeight,
               verifier.withdrawalHeight.map({ snapshot.evaluatedBlockHeight < $0 }) != false else {
             throw KagemushaRecursiveSpendError.invalidField("topUp.productCapability.snapshot")
@@ -1127,7 +1055,7 @@ public final class IrohaSDK: @unchecked Sendable {
                 assetScale: amount.scale,
                 evaluatedBlockHeight: snapshot.evaluatedBlockHeight,
                 evaluatedBlockHash: snapshot.evaluatedBlockHash,
-                verifier: expectedReadiness.verifier,
+                verifier: productCapability.verifier,
                 initialRoot: zeroPath.rootAtHeight,
                 leafIndex: UInt32(zeroPath.leafIndex)
             )
@@ -1703,34 +1631,6 @@ public final class IrohaSDK: @unchecked Sendable {
                                                               creationTimeMs: creationTimeMs)
     }
 
-    public func buildEnactReferendum(request: EnactReferendumRequest, keypair: Keypair) throws -> SignedTransactionEnvelope {
-        let creationTimeMs = makeCreationTimeMs()
-        return try SwiftTransactionEncoder.encodeEnactReferendum(request: request,
-                                                                 keypair: keypair,
-                                                                 creationTimeMs: creationTimeMs)
-    }
-
-    public func buildEnactReferendum(request: EnactReferendumRequest, signingKey: SigningKey) throws -> SignedTransactionEnvelope {
-        let creationTimeMs = makeCreationTimeMs()
-        return try SwiftTransactionEncoder.encodeEnactReferendum(request: request,
-                                                                 signingKey: signingKey,
-                                                                 creationTimeMs: creationTimeMs)
-    }
-
-    public func buildFinalizeReferendum(request: FinalizeReferendumRequest, keypair: Keypair) throws -> SignedTransactionEnvelope {
-        let creationTimeMs = makeCreationTimeMs()
-        return try SwiftTransactionEncoder.encodeFinalizeReferendum(request: request,
-                                                                    keypair: keypair,
-                                                                    creationTimeMs: creationTimeMs)
-    }
-
-    public func buildFinalizeReferendum(request: FinalizeReferendumRequest, signingKey: SigningKey) throws -> SignedTransactionEnvelope {
-        let creationTimeMs = makeCreationTimeMs()
-        return try SwiftTransactionEncoder.encodeFinalizeReferendum(request: request,
-                                                                    signingKey: signingKey,
-                                                                    creationTimeMs: creationTimeMs)
-    }
-
     public func buildPersistCouncil(request: PersistCouncilRequest, keypair: Keypair) throws -> SignedTransactionEnvelope {
         let creationTimeMs = makeCreationTimeMs()
         return try SwiftTransactionEncoder.encodePersistCouncil(request: request,
@@ -2096,20 +1996,6 @@ public final class IrohaSDK: @unchecked Sendable {
         )
     }
 
-    public func submitGovernanceParliamentBallot(_ request: ToriiGovernanceParliamentBallotRequest,
-                                                 canonicalAuth: ToriiCanonicalRequestAuth,
-                                                 completion: @escaping (Result<ToriiGovernanceBallotResponse, Error>) -> Void) {
-        guard let toriiRestClient else {
-            completion(.failure(Self.restUnavailableError()))
-            return
-        }
-        toriiRestClient.submitGovernanceParliamentBallot(
-            request,
-            canonicalAuth: canonicalAuth,
-            completion: completion
-        )
-    }
-
     public func submitGovernanceZkBallotV1(_ request: ToriiGovernanceZkBallotV1Request,
                                            canonicalAuth: ToriiCanonicalRequestAuth,
                                            completion: @escaping (Result<ToriiGovernanceBallotResponse, Error>) -> Void) {
@@ -2135,27 +2021,6 @@ public final class IrohaSDK: @unchecked Sendable {
             request,
             canonicalAuth: canonicalAuth,
             completion: completion
-        )
-    }
-
-    public func finalizeGovernanceReferendum(_ request: ToriiGovernanceFinalizeRequest,
-                                             completion: @escaping (Result<ToriiGovernanceFinalizeResponse, Error>) -> Void) {
-        guard let toriiRestClient else {
-            completion(.failure(Self.restUnavailableError()))
-            return
-        }
-        toriiRestClient.finalizeGovernanceReferendum(request, completion: completion)
-    }
-
-    public func enactGovernanceProposal(_ request: ToriiGovernanceEnactRequest,
-                                        canonicalAuth: ToriiCanonicalRequestAuth,
-                                        completion: @escaping (Result<ToriiGovernanceEnactResponse, Error>) -> Void) {
-        guard let toriiRestClient else {
-            completion(.failure(Self.restUnavailableError()))
-            return
-        }
-        toriiRestClient.enactGovernanceProposal(
-            request, canonicalAuth: canonicalAuth, completion: completion
         )
     }
 
@@ -2250,20 +2115,6 @@ public final class IrohaSDK: @unchecked Sendable {
     }
 
     @available(iOS 15.0, macOS 12.0, *)
-    public func submitGovernanceParliamentBallot(
-        _ request: ToriiGovernanceParliamentBallotRequest,
-        canonicalAuth: ToriiCanonicalRequestAuth
-    ) async throws -> ToriiGovernanceBallotResponse {
-        guard let toriiRestClient else {
-            throw Self.restUnavailableError()
-        }
-        return try await toriiRestClient.submitGovernanceParliamentBallot(
-            request,
-            canonicalAuth: canonicalAuth
-        )
-    }
-
-    @available(iOS 15.0, macOS 12.0, *)
     public func submitGovernanceZkBallotV1(
         _ request: ToriiGovernanceZkBallotV1Request,
         canonicalAuth: ToriiCanonicalRequestAuth
@@ -2288,27 +2139,6 @@ public final class IrohaSDK: @unchecked Sendable {
         return try await toriiRestClient.submitGovernanceZkBallotProofV1(
             request,
             canonicalAuth: canonicalAuth
-        )
-    }
-
-    @available(iOS 15.0, macOS 12.0, *)
-    public func finalizeGovernanceReferendum(_ request: ToriiGovernanceFinalizeRequest) async throws -> ToriiGovernanceFinalizeResponse {
-        guard let toriiRestClient else {
-            throw Self.restUnavailableError()
-        }
-        return try await toriiRestClient.finalizeGovernanceReferendum(request)
-    }
-
-    @available(iOS 15.0, macOS 12.0, *)
-    public func enactGovernanceProposal(
-        _ request: ToriiGovernanceEnactRequest,
-        canonicalAuth: ToriiCanonicalRequestAuth
-    ) async throws -> ToriiGovernanceEnactResponse {
-        guard let toriiRestClient else {
-            throw Self.restUnavailableError()
-        }
-        return try await toriiRestClient.enactGovernanceProposal(
-            request, canonicalAuth: canonicalAuth
         )
     }
 

@@ -797,19 +797,17 @@ mod tests {
                 err.into_inner()
             })
     }
-    struct BuildEnvRestore {
-        _reentrant_build: EnvRestore,
+    struct ExistingBinaryEnvRestore {
         _permit_dir: EnvRestore,
         _iroha_bin: Option<EnvRestore>,
         _irohad_bin: Option<EnvRestore>,
         _permit_dir_owner: TempDir,
     }
-    fn allow_reentrant_build_guard() -> BuildEnvRestore {
+    fn existing_network_binary_guard() -> ExistingBinaryEnvRestore {
         let permit_dir_owner = tempfile::tempdir().expect("sandbox permit dir");
         let permit_dir = permit_dir_owner.path().to_string_lossy().into_owned();
         let (iroha_bin, irohad_bin) = reusable_test_network_binaries();
-        BuildEnvRestore {
-            _reentrant_build: EnvRestore::set("IROHA_TEST_ALLOW_REENTRANT_BUILD", "1"),
+        ExistingBinaryEnvRestore {
             _permit_dir: EnvRestore::set("IROHA_TEST_NETWORK_PERMIT_DIR", &permit_dir),
             _iroha_bin: env_override_for_existing_binary(TEST_NETWORK_BIN_IROHA_ENV, iroha_bin),
             _irohad_bin: env_override_for_existing_binary(TEST_NETWORK_BIN_IROHAD_ENV, irohad_bin),
@@ -1064,13 +1062,13 @@ mod tests {
         assert!(!is_retryable_network_startup_error(&err));
     }
     #[test]
-    fn reentrant_build_guard_prefers_existing_network_binaries() {
+    fn existing_binary_guard_prefers_existing_network_binaries() {
         let _env_guard = lock_env_guard();
         let _iroha_restore = EnvRestore::remove(TEST_NETWORK_BIN_IROHA_ENV);
         let _irohad_restore = EnvRestore::remove(TEST_NETWORK_BIN_IROHAD_ENV);
         let expected = reusable_test_network_binaries();
         {
-            let _build_guard = allow_reentrant_build_guard();
+            let _build_guard = existing_network_binary_guard();
             assert_eq!(
                 std::env::var(TEST_NETWORK_BIN_IROHA_ENV).ok(),
                 expected
@@ -1090,11 +1088,11 @@ mod tests {
         assert!(std::env::var(TEST_NETWORK_BIN_IROHAD_ENV).is_err());
     }
     #[test]
-    fn reentrant_build_guard_preserves_explicit_network_binary_overrides() {
+    fn existing_binary_guard_preserves_explicit_network_binary_overrides() {
         let _env_guard = lock_env_guard();
         let _iroha_restore = EnvRestore::set(TEST_NETWORK_BIN_IROHA_ENV, "/tmp/explicit-iroha");
         let _irohad_restore = EnvRestore::set(TEST_NETWORK_BIN_IROHAD_ENV, "/tmp/explicit-iroha3d");
-        let _build_guard = allow_reentrant_build_guard();
+        let _build_guard = existing_network_binary_guard();
         assert_eq!(
             std::env::var(TEST_NETWORK_BIN_IROHA_ENV).as_deref(),
             Ok("/tmp/explicit-iroha")
@@ -1132,7 +1130,7 @@ mod tests {
             return;
         }
         let _env_guard = lock_env_guard();
-        let _build_guard = allow_reentrant_build_guard();
+        let _build_guard = existing_network_binary_guard();
         let _override_guard = override_network_parallelism(Some(true), None);
         let guard = serial_guard();
         let network = NetworkBuilder::new()
@@ -1164,7 +1162,7 @@ mod tests {
             return;
         }
         let _env_guard = lock_env_guard();
-        let _build_guard = allow_reentrant_build_guard();
+        let _build_guard = existing_network_binary_guard();
         let _override_guard = override_network_parallelism(Some(true), None);
         let guard = serial_guard();
         let network = NetworkBuilder::new()
@@ -1184,7 +1182,7 @@ mod tests {
             return;
         }
         let _env_guard = lock_env_guard();
-        let _build_guard = allow_reentrant_build_guard();
+        let _build_guard = existing_network_binary_guard();
         let _override_guard = override_network_parallelism(Some(true), None);
         let guard = serial_guard();
         let network = NetworkBuilder::new()
@@ -1204,7 +1202,7 @@ mod tests {
             return;
         }
         let _env_guard = lock_env_guard();
-        let _build_guard = allow_reentrant_build_guard();
+        let _build_guard = existing_network_binary_guard();
         let _override_guard = override_network_parallelism(Some(true), None);
         let guard = serial_guard();
         let network = NetworkBuilder::new()
@@ -1220,7 +1218,7 @@ mod tests {
             return;
         }
         let _env_guard = lock_env_guard();
-        let _build_guard = allow_reentrant_build_guard();
+        let _build_guard = existing_network_binary_guard();
         let guard = serial_guard();
         let builder = NetworkBuilder::new()
             .with_auto_populated_trusted_peers()
@@ -1373,7 +1371,7 @@ mod tests {
             return;
         }
         let _env_guard = lock_env_guard();
-        let _build_guard = allow_reentrant_build_guard();
+        let _build_guard = existing_network_binary_guard();
         let result = build_network_or_skip(
             NetworkBuilder::new(),
             "build_network_or_skip_returns_network",
@@ -1402,7 +1400,7 @@ mod tests {
             return;
         }
         let _env_guard = lock_env_guard();
-        let _build_guard = allow_reentrant_build_guard();
+        let _build_guard = existing_network_binary_guard();
         let result = build_network_blocking_or_skip(
             NetworkBuilder::new(),
             "build_network_blocking_or_skip_returns_network",
@@ -1431,7 +1429,7 @@ mod tests {
             return Ok(());
         }
         let _env_guard = lock_env_guard();
-        let _build_guard = allow_reentrant_build_guard();
+        let _build_guard = existing_network_binary_guard();
         let result = start_network_blocking_or_skip(
             NetworkBuilder::new(),
             "start_network_blocking_or_skip_includes_trusted_peer_pops",
@@ -1461,7 +1459,7 @@ mod tests {
             return Ok(());
         }
         let _env_guard = lock_env_guard();
-        let _build_guard = allow_reentrant_build_guard();
+        let _build_guard = existing_network_binary_guard();
         let result = start_network_async_or_skip(
             NetworkBuilder::new(),
             "start_network_async_or_skip_includes_trusted_peer_pops",

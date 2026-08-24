@@ -807,7 +807,7 @@ public final class HttpClientTransport implements IrohaClient {
   public CompletableFuture<Optional<VpnSession>> getVpnSession(
       final String sessionId,
       final ToriiCanonicalRequestAuth canonicalAuth) {
-    final String normalizedSessionId = normalizeHex32(sessionId, "sessionId");
+    final String normalizedSessionId = normalizeHex16(sessionId, "sessionId");
     final TransportRequest request =
         buildVpnRequest(
             "GET",
@@ -816,21 +816,6 @@ public final class HttpClientTransport implements IrohaClient {
             canonicalAuth);
     return fetchJsonAllowingNotFound(
         request, VpnJsonParser::parseSession, "vpn session lookup", 200);
-  }
-
-  /** Deletes an active VPN session and returns Torii's disconnect receipt when present. */
-  public CompletableFuture<Optional<VpnReceipt>> deleteVpnSession(
-      final String sessionId,
-      final ToriiCanonicalRequestAuth canonicalAuth) {
-    final String normalizedSessionId = normalizeHex32(sessionId, "sessionId");
-    final TransportRequest request =
-        buildVpnRequest(
-            "DELETE",
-            "/v1/vpn/sessions/" + encodePathSegment(normalizedSessionId),
-            null,
-            canonicalAuth);
-    return fetchJsonAllowingNotFound(
-        request, VpnJsonParser::parseReceipt, "vpn session delete", 200);
   }
 
   /** Submits an operator receipt and returns the native lease settlement instruction. */
@@ -1027,6 +1012,117 @@ public final class HttpClientTransport implements IrohaClient {
         request,
         ContractJsonParser::parseGovernanceContractResponse,
         "governance contract");
+  }
+
+  /** Drafts one typed Parliament attempt for local transaction signing. */
+  public CompletableFuture<ParliamentApiV1.AttemptDraftResponse> draftParliamentAttemptV1(
+      final ParliamentApiV1.Proposal proposal,
+      final long attemptSequence,
+      final String expectedProposalContentId,
+      final String expectedGovernanceAttemptId,
+      final ToriiCanonicalRequestAuth canonicalAuth) {
+    final byte[] body =
+        ParliamentApiV1.attemptDraftRequestJson(proposal, attemptSequence);
+    return fetchJson(
+        buildVpnRequest(
+            "POST",
+            ParliamentApiV1.ATTEMPT_DRAFT_PATH,
+            body,
+            canonicalAuth,
+            1024L * 1024L),
+        response ->
+            ParliamentApiV1.parseAttemptDraftResponse(
+                response, expectedProposalContentId, expectedGovernanceAttemptId),
+        "Parliament attempt draft",
+        200);
+  }
+
+  /** Reads and strictly validates one authenticated typed Parliament attempt. */
+  public CompletableFuture<ParliamentApiV1.AttemptReadResponse> getParliamentAttemptV1(
+      final String governanceAttemptId,
+      final ToriiCanonicalRequestAuth canonicalAuth) {
+    return fetchJson(
+        buildVpnRequest(
+            "GET",
+            ParliamentApiV1.attemptReadPath(governanceAttemptId),
+            null,
+            canonicalAuth,
+            2L * ParliamentApiV1.MAX_STATE_BYTES + 2L * 1024L * 1024L),
+        response -> ParliamentApiV1.parseAttemptReadResponse(response, governanceAttemptId),
+        "Parliament attempt read",
+        200);
+  }
+
+  /** Drafts one closed public Parliament transition for local transaction signing. */
+  public CompletableFuture<ParliamentApiV1.TransitionDraftResponse>
+      draftParliamentTransitionV1(
+          final String governanceAttemptId,
+          final byte[] transitionJson,
+          final String expectedTransitionKind,
+          final byte[] expectedTransitionDigest,
+          final ToriiCanonicalRequestAuth canonicalAuth) {
+    final byte[] body =
+        ParliamentApiV1.transitionDraftRequestJson(governanceAttemptId, transitionJson);
+    return fetchJson(
+        buildVpnRequest(
+            "POST",
+            ParliamentApiV1.TRANSITION_DRAFT_PATH,
+            body,
+            canonicalAuth,
+            1024L * 1024L),
+        response ->
+            ParliamentApiV1.parseTransitionDraftResponse(
+                response,
+                governanceAttemptId,
+                expectedTransitionKind,
+                expectedTransitionDigest),
+        "Parliament transition draft",
+        200);
+  }
+
+  /** Fetches the complete public transcript for one currently authorized TLE release. */
+  public CompletableFuture<ParliamentApiV1.TleReleaseContextResponse>
+      getParliamentTleReleaseContextV1(
+          final String ballotAttemptId,
+          final ToriiCanonicalRequestAuth canonicalAuth) {
+    return fetchJson(
+        buildVpnRequest(
+            "GET",
+            ParliamentApiV1.tleReleaseContextReadPath(ballotAttemptId),
+            null,
+            canonicalAuth,
+            1024L * 1024L),
+        response -> ParliamentApiV1.parseTleReleaseContextResponse(response, ballotAttemptId),
+        "Parliament TLE release context",
+        200);
+  }
+
+  /** Requests one node-local proof-carrying partial bound to an admitted release context. */
+  public CompletableFuture<ParliamentApiV1.TlePartialReleaseShare>
+      requestParliamentTlePartialReleaseV1(
+          final String ballotAttemptId,
+          final ParliamentApiV1.TleReleaseContextResponse context,
+          final ToriiCanonicalRequestAuth canonicalAuth) {
+    Objects.requireNonNull(context, "context");
+    if (!context.ballotAttemptId.equals(ballotAttemptId)) {
+      throw new IllegalArgumentException(
+          "release context ballot id differs from the partial-release request");
+    }
+    return fetchJson(
+        buildVpnRequest(
+            "POST",
+            ParliamentApiV1.tlePartialReleasePath(ballotAttemptId),
+            null,
+            canonicalAuth,
+            16L * 1024L),
+        response ->
+            ParliamentApiV1.parseTlePartialReleaseResponse(
+                response,
+                context.keySession.keySessionId,
+                context.identityDigest,
+                context.keySession.committeeSize),
+        "Parliament TLE partial release",
+        200);
   }
 
   /** Fetches the complete manifest via `GET /v1/contracts/code/{code_hash}`. */
@@ -1948,6 +2044,15 @@ public final class HttpClientTransport implements IrohaClient {
       final String path,
       final byte[] body,
       final ToriiCanonicalRequestAuth canonicalAuth) {
+    return buildVpnRequest(method, path, body, canonicalAuth, null);
+  }
+
+  private TransportRequest buildVpnRequest(
+      final String method,
+      final String path,
+      final byte[] body,
+      final ToriiCanonicalRequestAuth canonicalAuth,
+      final Long maximumResponseBytes) {
     if (path.startsWith("/v1/vpn/")) {
       requireSecureVpnBaseUri();
     }
@@ -1962,6 +2067,9 @@ public final class HttpClientTransport implements IrohaClient {
             .setTimeout(config.requestTimeout());
     if (body != null) {
       builder.setBody(body).addHeader("Content-Type", "application/json");
+    }
+    if (maximumResponseBytes != null) {
+      builder.setMaximumResponseBytes(maximumResponseBytes);
     }
     for (final Map.Entry<String, String> entry : config.defaultHeaders().entrySet()) {
       builder.addHeader(entry.getKey(), entry.getValue());
@@ -3324,6 +3432,14 @@ public final class HttpClientTransport implements IrohaClient {
     final String normalized = normalizeEvenLengthHex(value, field);
     if (normalized.length() != 64) {
       throw new IllegalArgumentException(field + " must contain 64 hex characters");
+    }
+    return normalized;
+  }
+
+  static String normalizeHex16(final String value, final String field) {
+    final String normalized = normalizeEvenLengthHex(value, field);
+    if (normalized.length() != 32) {
+      throw new IllegalArgumentException(field + " must contain 32 hex characters");
     }
     return normalized;
   }

@@ -366,6 +366,6 @@ def test_pyo3_boundary_and_native_signer_revision_are_exact_abi22_v5() -> None:
     signer_start = rust.index("fn sign_query_request(")
     signer_signature = rust[signer_start : rust.index(") -> PyResult", signer_start)]
     assert "network_id: &NetworkId" in signer_signature
-    assert "assert_eq!(connect_norito_bridge_abi_version_py(), 22);" in rust
+    assert "assert_eq!(connect_norito_bridge_abi_version_py(), 23);" in rust
     assert "const NATIVE_SIGNER_JNI_CONTRACT_REVISION: u32 = 5;" in native_bridge
     assert "native_signer_jni_contract_revision_is_the_v5_network_id_hard_cut" in native_bridge

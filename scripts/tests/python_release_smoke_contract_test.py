@@ -100,7 +100,7 @@ def test_release_smoke_authenticates_wheel_native_and_privacy_catalog_in_order()
         '"${SMOKE_TMP_DIR}/venv"',
         '"${PROJECT_ROOT}/python/norito_py/src"',
         '"${PROJECT_ROOT}/python/iroha_torii_client"',
-        "assert sdk.PRIVACY_REQUIRED_BRIDGE_ABI_VERSION == 22",
+        "assert sdk.PRIVACY_REQUIRED_BRIDGE_ABI_VERSION == 23",
         "assert sdk.privacy_bridge_abi_version() == sdk.PRIVACY_REQUIRED_BRIDGE_ABI_VERSION",
         "assert sdk.is_privacy_native_available() is True",
         "catalog = sdk.privacy_compiled_profile_catalog_v1()",
@@ -118,7 +118,7 @@ def test_release_smoke_authenticates_wheel_native_and_privacy_catalog_in_order()
         "--preflight \"${WHEEL}\" \"${WHEEL_SEAL}\"",
         'pip install "${WHEEL}" --no-compile',
         "INSTALLED_NATIVE_PATH=",
-        "assert sdk.PRIVACY_REQUIRED_BRIDGE_ABI_VERSION == 22",
+        "assert sdk.PRIVACY_REQUIRED_BRIDGE_ABI_VERSION == 23",
         "python/iroha_python/scripts/run_norito_rpc_smoke.sh",
         "python -m twine check",
     )

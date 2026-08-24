@@ -11,6 +11,16 @@ use iroha_data_model::offline::{
 use sha2::{Digest as _, Sha256};
 
 use super::*;
+use super::{
+    artifacts::OfflineCashAuthenticatedArtifactParseErrorV1,
+    halo2_primitives::OfflineCashHalo2PrimitiveErrorV1,
+    state_abi::OfflineCashStatePublicInstancesV1,
+    state_direct_verifier::{
+        OfflineCashDirectStateVerifierErrorV1, OfflineCashDirectStateVerifierStageV1,
+        verify_and_decide_state_candidate_v1,
+    },
+    state_transition::OfflineCashStateContextV1,
+};
 
 #[derive(Clone, Copy)]
 enum SourceBehavior {
@@ -461,6 +471,66 @@ fn artifact_corruption_and_callback_contracts_fail_closed() {
 }
 
 #[test]
+fn authenticated_state_parser_error_survives_a_source_that_swallows_it() {
+    let artifacts = OfflineCashAuthenticatedVerifierArtifactsV1::load(source_with_behavior(
+        SourceBehavior::SwallowCallbackError,
+    ))
+    .expect("hash-authenticated verifier artifacts");
+    let mut parser_called = false;
+    let error = artifacts
+        .with_authenticated_state_params(OfflineCashHalo2ParityV1::Eq, |bytes| {
+            parser_called = true;
+            assert_eq!(
+                u64::try_from(bytes.len()).expect("test artifact length fits u64"),
+                OFFLINE_CASH_PARAMS_BYTES_V1
+            );
+            Err::<(), _>("typed parser sentinel")
+        })
+        .expect_err("a swallowed parser error must remain authoritative");
+    assert!(parser_called);
+    assert_eq!(
+        error,
+        OfflineCashAuthenticatedArtifactParseErrorV1::Parser("typed parser sentinel")
+    );
+}
+
+#[test]
+fn direct_state_candidate_consumes_full_typed_instances_and_remains_fail_closed() {
+    let source = source_with_behavior(SourceBehavior::SwallowCallbackError);
+    let artifacts = OfflineCashAuthenticatedVerifierArtifactsV1::load(source.clone())
+        .expect("hash-authenticated verifier artifacts");
+    let request = super::terminal_tests::request(source.authenticated_release());
+    let payment = super::terminal_tests::payment(source.authenticated_release(), &request);
+    let context = OfflineCashStateContextV1::new(
+        payment.statement.release_id,
+        payment.statement.network_id.clone(),
+        payment.statement.asset.clone(),
+        payment.statement.scale,
+    )
+    .expect("canonical STATE context");
+    let history = canonical_eq_history();
+    let instances = OfflineCashStatePublicInstancesV1::send_split(
+        &context,
+        &payment.statement,
+        OfflineCashHalo2ParityV1::Eq,
+        &history,
+    )
+    .expect("exact typed Eq STATE instances");
+
+    assert_eq!(
+        verify_and_decide_state_candidate_v1(&artifacts, &instances, &[0_u8; 32]),
+        Err(OfflineCashDirectStateVerifierErrorV1::InvalidProofShape)
+    );
+    assert_eq!(
+        verify_and_decide_state_candidate_v1(&artifacts, &instances, &[0x32; 128]),
+        Err(OfflineCashDirectStateVerifierErrorV1::Primitive {
+            stage: OfflineCashDirectStateVerifierStageV1::Parameters,
+            error: OfflineCashHalo2PrimitiveErrorV1::InvalidParameterShape,
+        })
+    );
+}
+
+#[test]
 fn wrong_role_protocol_and_all_proofs_remain_rejected() {
     let source = source_with_behavior(SourceBehavior::Normal);
     let backend = OfflineCashHalo2VerifierBackendV1::from_artifact_source(source)
@@ -603,6 +673,7 @@ fn staged_warning_allowance_is_confined_and_proof_authority_stays_core_private()
 
     let root = include_str!("../offline_cash_v1.rs");
     let backend = include_str!("halo2_backend.rs");
+    let direct = include_str!("state_direct_verifier.rs");
     let staged_sources = [
         root,
         include_str!("artifacts.rs"),
@@ -614,6 +685,7 @@ fn staged_warning_allowance_is_confined_and_proof_authority_stays_core_private()
         include_str!("protocol.rs"),
         include_str!("state_abi.rs"),
         include_str!("state_circuit.rs"),
+        direct,
         include_str!("state_relation.rs"),
         include_str!("state_relation_circuit.rs"),
         include_str!("state_sha.rs"),
@@ -647,6 +719,7 @@ fn staged_warning_allowance_is_confined_and_proof_authority_stays_core_private()
 
     let compact_root = without_whitespace(root);
     let compact_backend = without_whitespace(backend);
+    let compact_direct = without_whitespace(direct);
     assert!(compact_root.contains(
         "pub(crate)traitOfflineCashPairedProofVerifierV1:paired_verifier_sealed::Sealed"
     ));
@@ -659,4 +732,23 @@ fn staged_warning_allowance_is_confined_and_proof_authority_stays_core_private()
     assert!(!backend.contains("OfflineCashStatePublicInstancesV1"));
     assert!(!compact_backend.contains("pubstructOfflineCashHalo2VerifierBackendV1"));
     assert!(!compact_root.contains("pubusehalo2_backend::OfflineCashHalo2VerifierBackendV1"));
+    assert!(compact_root.contains("modstate_direct_verifier;"));
+    assert!(compact_direct.contains("instances:&OfflineCashStatePublicInstancesV1"));
+    assert!(compact_direct.contains("field_instances::<Fp>()"));
+    assert!(compact_direct.contains("field_instances::<Fq>()"));
+    assert!(compact_direct.contains("parse_offline_cash_eq_params_v1"));
+    assert!(compact_direct.contains("parse_offline_cash_ep_params_v1"));
+    assert!(
+        compact_direct
+            .contains("parse_processed_verifier_key_v1::<EqAffine,OfflineCashEqStateCircuitV1>")
+    );
+    assert!(
+        compact_direct
+            .contains("parse_processed_verifier_key_v1::<EpAffine,OfflineCashEpStateCircuitV1>")
+    );
+    assert!(compact_direct.contains("verify_augmented_ipa_proof_v1"));
+    assert!(compact_direct.contains("decide_eq_history_v1"));
+    assert!(compact_direct.contains("decide_ep_history_v1"));
+    assert!(!direct.contains("OfflineCashPairedProofVerifierV1"));
+    assert!(!direct.contains("VerifiedOfflineCashCreditV1"));
 }

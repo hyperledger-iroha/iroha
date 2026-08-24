@@ -55,6 +55,8 @@ use core::fmt;
 use iroha_crypto::{Hash, HashOf, KeyPair, MerkleTree, PublicKey};
 #[cfg(test)]
 use iroha_data_model::block::consensus::{CertPhase, NativeAmxAttestationBodyV2};
+#[cfg(test)]
+use iroha_data_model::consensus::{VrfEpochRecord, VrfParticipantRecord};
 #[cfg(feature = "bls")]
 use iroha_data_model::metadata::Metadata;
 use iroha_data_model::{
@@ -69,10 +71,7 @@ use iroha_data_model::{
         *,
     },
     confidential::ConfidentialFeatureDigest,
-    consensus::{
-        ConsensusKeyRole, NposConsensusEffects, VALIDATOR_SET_HASH_VERSION_V1, VrfEpochRecord,
-        VrfParticipantRecord,
-    },
+    consensus::{ConsensusKeyRole, NposConsensusEffects, VALIDATOR_SET_HASH_VERSION_V1},
     da::{
         commitment::{DaCommitmentBundle, DaProofPolicyBundle},
         pin_intent::DaPinIntentBundle,
@@ -1691,9 +1690,7 @@ fn record_lane_settlement_metrics(
 #[cfg(feature = "telemetry")]
 use crate::queue::{LaneSchedulingLimits, QueueLimits};
 use crate::{
-    executor::{
-        charge_fees_for_applied_overlay_with_encoded_len, charge_fees_for_rejected_live_batch,
-    },
+    executor::{charge_fees_for_applied_overlay, charge_fees_for_rejected_live_batch},
     kura::{
         PipelineDagSnapshot, PipelineRecoverySidecar, PipelineSidecarEnqueueResult,
         PipelineTxSnapshot,
@@ -4010,7 +4007,6 @@ pub(crate) mod valid {
         tx: &iroha_data_model::transaction::SignedTransaction,
         authority: &AccountId,
         overlay: &crate::pipeline::overlay::TxOverlay,
-        encoded_len: usize,
         lane_id: LaneId,
         dataspace_id: DataSpaceId,
         rejection_reason: &TransactionRejectionReason,
@@ -4029,14 +4025,8 @@ pub(crate) mod valid {
         fee_tx.world.current_dataspace_id = Some(dataspace_id);
         fee_tx.tx_call_hash = Some(iroha_crypto::Hash::from(tx.hash_as_entrypoint()));
         fee_tx.current_tx_hash = Some(tx.hash());
-        charge_fees_for_applied_overlay_with_encoded_len(
-            &mut fee_tx,
-            authority,
-            tx,
-            overlay,
-            encoded_len,
-        )
-        .map_err(TransactionRejectionReason::Validation)?;
+        charge_fees_for_applied_overlay(&mut fee_tx, authority, tx, overlay)
+            .map_err(TransactionRejectionReason::Validation)?;
         fee_tx.apply();
         Ok(())
     }
@@ -8101,6 +8091,7 @@ pub(crate) mod valid {
                 }
             }
         }
+        #[cfg(test)]
         fn vrf_epoch_record_extends_existing(
             existing: &VrfEpochRecord,
             proposed: &VrfEpochRecord,
@@ -8138,6 +8129,7 @@ pub(crate) mod valid {
                     .as_ref()
                     .is_none_or(|election| proposed.validator_election.as_ref() == Some(election))
         }
+        #[cfg(test)]
         fn vrf_participants_extend_existing(
             existing: &[VrfParticipantRecord],
             proposed: &[VrfParticipantRecord],
@@ -8164,6 +8156,7 @@ pub(crate) mod valid {
                     })
                 })
         }
+        #[cfg(test)]
         fn vrf_late_reveals_extend_existing(
             existing: &VrfEpochRecord,
             proposed: &VrfEpochRecord,
@@ -8202,13 +8195,35 @@ pub(crate) mod valid {
             if authoritative_mode
                 == Some(iroha_data_model::block::consensus_v2::ConsensusMode::Permissioned)
             {
-                return if actual_effects.is_none() {
-                    Ok(())
-                } else {
-                    Err(Self::npos_effects_error(
-                        "permissioned consensus blocks must not carry NPoS effects",
-                    ))
-                };
+                let context = authenticated_height_context.ok_or_else(|| {
+                    Self::npos_effects_error(
+                        "permissioned candidate validation requires its authenticated height context",
+                    )
+                })?;
+                if context.mode
+                    != iroha_data_model::block::consensus_v2::ConsensusMode::Permissioned
+                    || context.height != block_height
+                {
+                    return Err(Self::npos_effects_error(
+                        "permissioned candidate differs from its authenticated height context",
+                    ));
+                }
+                if let Some(effects) = actual_effects
+                    && (!effects.vrf_epoch_seals.is_empty()
+                        || !effects.v2_evidence_admissions.is_empty()
+                        || !effects.penalty_actions.is_empty())
+                {
+                    return Err(Self::npos_effects_error(
+                        "permissioned consensus blocks may carry only a requested global beacon pulse",
+                    ));
+                }
+                return Self::validate_global_beacon_pulse_effect(
+                    block,
+                    state,
+                    context,
+                    actual_effects
+                        .and_then(|effects| effects.finalized_global_beacon_pulse.as_ref()),
+                );
             }
             if authoritative_mode
                 == Some(iroha_data_model::block::consensus_v2::ConsensusMode::Npos)
@@ -8235,8 +8250,21 @@ pub(crate) mod valid {
                         "invalid authenticated NPoS VRF effects: {error}"
                     ))
                 })?;
+                Self::validate_global_beacon_pulse_effect(
+                    block,
+                    state,
+                    context,
+                    actual_effects
+                        .and_then(|effects| effects.finalized_global_beacon_pulse.as_ref()),
+                )?;
             }
             let admission_keys = if let Some(effects) = actual_effects {
+                #[cfg(not(test))]
+                if !effects.vrf_epoch_seals.is_empty() {
+                    return Err(Self::npos_effects_error(
+                        "legacy VRF epoch effects are retired; finalized threshold-beacon pulses are authoritative",
+                    ));
+                }
                 crate::sumeragi::evidence::validate_v2_evidence_admissions(
                     state,
                     block_height,
@@ -8264,53 +8292,57 @@ pub(crate) mod valid {
                     &effects.penalty_actions,
                 )
                 .map_err(|err| Self::npos_effects_error(err.to_string()))?;
-                let mut seen_epochs = BTreeSet::new();
-                for record in &effects.vrf_epoch_seals {
-                    if !seen_epochs.insert(record.epoch) {
-                        return Err(Self::npos_effects_error(
-                            "duplicate VRF epoch seal in NPoS effects",
-                        ));
-                    }
-                    if record.penalties_applied_at_height.is_some() && !record.penalties_applied {
-                        return Err(Self::npos_effects_error(
-                            "VRF epoch seal has applied height without applied marker",
-                        ));
-                    }
-                    if !record.finalized
-                        && (!record.committed_no_reveal.is_empty()
-                            || !record.no_participation.is_empty())
-                    {
-                        return Err(Self::npos_effects_error(
-                            "unfinalized VRF epoch seal includes penalty offenders",
-                        ));
-                    }
-                    let mut offenders = record
-                        .committed_no_reveal
-                        .iter()
-                        .chain(record.no_participation.iter())
-                        .copied()
-                        .collect::<Vec<_>>();
-                    offenders.sort();
-                    offenders.dedup();
-                    if offenders.len()
-                        != record.committed_no_reveal.len() + record.no_participation.len()
-                    {
-                        return Err(Self::npos_effects_error(
-                            "VRF epoch seal contains duplicate offender indices",
-                        ));
-                    }
-                    if offenders.iter().any(|signer| *signer >= record.roster_len) {
-                        return Err(Self::npos_effects_error(
-                            "VRF epoch seal contains offender outside roster",
-                        ));
-                    }
-                    let world = state.world_view();
-                    if let Some(existing) = world.vrf_epochs().get(&record.epoch)
-                        && !Self::vrf_epoch_record_extends_existing(&existing, record)
-                    {
-                        return Err(Self::npos_effects_error(
-                            "VRF epoch seal conflicts with pre-block state",
-                        ));
+                #[cfg(test)]
+                {
+                    let mut seen_epochs = BTreeSet::new();
+                    for record in &effects.vrf_epoch_seals {
+                        if !seen_epochs.insert(record.epoch) {
+                            return Err(Self::npos_effects_error(
+                                "duplicate VRF epoch seal in NPoS effects",
+                            ));
+                        }
+                        if record.penalties_applied_at_height.is_some() && !record.penalties_applied
+                        {
+                            return Err(Self::npos_effects_error(
+                                "VRF epoch seal has applied height without applied marker",
+                            ));
+                        }
+                        if !record.finalized
+                            && (!record.committed_no_reveal.is_empty()
+                                || !record.no_participation.is_empty())
+                        {
+                            return Err(Self::npos_effects_error(
+                                "unfinalized VRF epoch seal includes penalty offenders",
+                            ));
+                        }
+                        let mut offenders = record
+                            .committed_no_reveal
+                            .iter()
+                            .chain(record.no_participation.iter())
+                            .copied()
+                            .collect::<Vec<_>>();
+                        offenders.sort();
+                        offenders.dedup();
+                        if offenders.len()
+                            != record.committed_no_reveal.len() + record.no_participation.len()
+                        {
+                            return Err(Self::npos_effects_error(
+                                "VRF epoch seal contains duplicate offender indices",
+                            ));
+                        }
+                        if offenders.iter().any(|signer| *signer >= record.roster_len) {
+                            return Err(Self::npos_effects_error(
+                                "VRF epoch seal contains offender outside roster",
+                            ));
+                        }
+                        let world = state.world_view();
+                        if let Some(existing) = world.vrf_epochs().get(&record.epoch)
+                            && !Self::vrf_epoch_record_extends_existing(&existing, record)
+                        {
+                            return Err(Self::npos_effects_error(
+                                "VRF epoch seal conflicts with pre-block state",
+                            ));
+                        }
                     }
                 }
             }
@@ -8335,6 +8367,131 @@ pub(crate) mod valid {
                     "NPoS penalty actions do not match pre-block state",
                 ));
             }
+            Ok(())
+        }
+        fn validate_global_beacon_pulse_effect(
+            block: &SignedBlock,
+            state: &State,
+            context: &iroha_data_model::block::consensus_v2::HeightContext,
+            pulse: Option<&iroha_data_model::consensus::FinalizedGlobalThresholdBeaconPulseV1>,
+        ) -> Result<(), BlockValidationError> {
+            let pulse_required_for_successor = context.mode
+                == iroha_data_model::block::consensus_v2::ConsensusMode::Npos
+                && context
+                    .height
+                    .checked_add(1)
+                    .is_some_and(|next_height| next_height == context.epoch_end_height);
+            let world = state.world_view();
+            let logical_beacon_id =
+                iroha_data_model::governance::types::BeaconSessionId::for_network_v1(
+                    &context.network_id,
+                );
+            let parliament_requested = world.parliament_attempts().iter().any(|(_, attempt)| {
+                attempt.requires_beacon_pulse_at(logical_beacon_id, context.height)
+            });
+            let pulse_requested = pulse_required_for_successor || parliament_requested;
+            let Some(pulse) = pulse else {
+                return if pulse_required_for_successor {
+                    Err(Self::npos_effects_error(
+                        "NPoS pre-boundary block is missing its finalized global beacon pulse",
+                    ))
+                } else {
+                    Ok(())
+                };
+            };
+            if !pulse_requested {
+                return Err(Self::npos_effects_error(
+                    "global beacon pulse was not requested by committed pre-state",
+                ));
+            }
+            let block_height = block.header().height().get();
+            if pulse.height != block_height
+                || pulse.round != crate::beacon::GLOBAL_THRESHOLD_BEACON_PULSE_ROUND_V1
+                || pulse.network_id != context.network_id
+            {
+                return Err(Self::npos_effects_error(
+                    "global beacon pulse differs from the authenticated block height, fixed protocol round, or network",
+                ));
+            }
+            let parent_hash = block.header().prev_block_hash().ok_or_else(|| {
+                Self::npos_effects_error("global beacon pulse has no finalized parent anchor")
+            })?;
+            let anchor_height = block_height.checked_sub(1).ok_or_else(|| {
+                Self::npos_effects_error("global beacon pulse height cannot anchor a parent")
+            })?;
+            let expected_anchor = iroha_data_model::consensus::GlobalThresholdBeaconChainAnchorV1 {
+                height: anchor_height,
+                block_hash: parent_hash,
+            };
+
+            if world.global_beacon_pulses.get(&pulse.pulse_id).is_some() {
+                return Err(Self::npos_effects_error(
+                    "global beacon pulse replays a pulse already in committed state",
+                ));
+            }
+            let active_session = world
+                .global_beacon_active_session
+                .get(&crate::state::GLOBAL_THRESHOLD_BEACON_SINGLETON_KEY)
+                .copied()
+                .ok_or_else(|| {
+                    Self::npos_effects_error("global beacon pulse has no active key session")
+                })?;
+            if active_session != pulse.session_id {
+                return Err(Self::npos_effects_error(
+                    "global beacon pulse is not signed by the active key session",
+                ));
+            }
+            let key_record = world
+                .global_beacon_key_sessions
+                .get(&active_session)
+                .ok_or_else(|| {
+                    Self::npos_effects_error("global beacon active key session is absent")
+                })?;
+            if !key_record.is_active_at(block_height) {
+                return Err(Self::npos_effects_error(
+                    "global beacon key session is not active at the pulse height",
+                ));
+            }
+            let context_roster = context
+                .roster
+                .iter()
+                .map(|entry| entry.validator.clone())
+                .collect::<Vec<_>>();
+            let expected_roster_hash =
+                crate::beacon::authenticated_global_threshold_beacon_roster_hash_v1(
+                    &key_record.session,
+                    &context_roster,
+                )
+                .map_err(|_| {
+                    Self::npos_effects_error(
+                        "global beacon active key session differs from the authenticated height roster",
+                    )
+                })?;
+            let binding = crate::beacon::GlobalThresholdBeaconSessionBindingV1 {
+                network_id: context.network_id,
+                session_id: active_session,
+                roster_hash: expected_roster_hash,
+                transcript_hash: key_record.session.transcript_hash,
+            };
+            let session = crate::beacon::validate_global_threshold_beacon_session_v1(
+                key_record.session.clone(),
+                &binding,
+            )
+            .map_err(|error| {
+                Self::npos_effects_error(format!(
+                    "global beacon active public DKG session is invalid: {error}"
+                ))
+            })?;
+            crate::beacon::verify_finalized_global_threshold_beacon_pulse_v1(
+                &session,
+                pulse,
+                expected_anchor,
+            )
+            .map_err(|error| {
+                Self::npos_effects_error(format!(
+                    "invalid finalized global beacon pulse effect: {error}"
+                ))
+            })?;
             Ok(())
         }
         fn execution_context_error(message: impl Into<String>) -> BlockValidationError {
@@ -10473,12 +10630,7 @@ pub(crate) mod valid {
             }
             #[cfg(feature = "telemetry")]
             if let Some(metrics) = metrics {
-                metrics.set_pipeline_sig_bls_counts(
-                    lane_id,
-                    same_msg_agg,
-                    multi_msg_agg,
-                    deterministic,
-                );
+                metrics.set_pipeline_sig_bls_counts(same_msg_agg, multi_msg_agg, deterministic);
             }
             #[cfg(not(feature = "telemetry"))]
             let _ = (metrics, lane_id);
@@ -10650,7 +10802,6 @@ pub(crate) mod valid {
                         messages,
                         signatures,
                         public_keys,
-                        [0; 32],
                         scratch,
                     )
                 }
@@ -10706,7 +10857,6 @@ pub(crate) mod valid {
                                 messages,
                                 signatures,
                                 public_keys,
-                                [0; 32],
                                 &mut scratch,
                             )
                         {
@@ -11943,7 +12093,6 @@ pub(crate) mod valid {
                             messages,
                             signatures,
                             public_keys,
-                            [0; 32],
                             scratch,
                         )
                         .is_ok()
@@ -11965,11 +12114,7 @@ pub(crate) mod valid {
                         signatures.clear();
                         public_keys.clear();
                     }
-                    let cap = if state_block.pipeline.signature_batch_max_ed25519 > 0 {
-                        state_block.pipeline.signature_batch_max_ed25519
-                    } else {
-                        state_block.pipeline.signature_batch_max
-                    };
+                    let cap = state_block.pipeline.signature_batch_max_ed25519;
                     let chunk_capacity = cap.max(1).min(txs.len().max(1));
                     let mut item_indices = Vec::with_capacity(chunk_capacity);
                     let mut messages = Vec::with_capacity(chunk_capacity);
@@ -12525,15 +12670,12 @@ pub(crate) mod valid {
             }
             #[cfg(feature = "telemetry")]
             {
-                let aggregate_lane = state_block.nexus.routing_policy.default_lane;
-                state_block.metrics().set_pipeline_quarantine_classified(
-                    aggregate_lane,
-                    quarantine_candidates.len() as u64,
-                );
-                state_block.metrics().set_pipeline_quarantine_overflow(
-                    aggregate_lane,
-                    quarantine_overflow.len() as u64,
-                );
+                state_block
+                    .metrics()
+                    .set_pipeline_quarantine_classified(quarantine_candidates.len() as u64);
+                state_block
+                    .metrics()
+                    .set_pipeline_quarantine_overflow(quarantine_overflow.len() as u64);
             }
             // Snapshot accounts for overlay building (prepass) — reused across txs
             let accounts_snapshot = state_block.accounts_snapshot();
@@ -13423,22 +13565,12 @@ pub(crate) mod valid {
                 }
                 #[cfg(feature = "telemetry")]
                 {
-                    let aggregate_lane = state_block.nexus.routing_policy.default_lane;
                     let telemetry = state_block.metrics();
-                    telemetry.set_pipeline_dag(aggregate_lane, vertices_total, edges_total);
-                    telemetry.set_pipeline_conflict_rate_bps(aggregate_lane, conflict_rate_bps);
-                    telemetry.set_pipeline_components(
-                        aggregate_lane,
-                        comp_count,
-                        comp_max,
-                        comp_buckets,
-                    );
-                    telemetry.set_pipeline_overlays(
-                        aggregate_lane,
-                        overlay_count_total,
-                        overlay_instr_total,
-                    );
-                    telemetry.set_pipeline_overlay_bytes(aggregate_lane, overlay_bytes_total);
+                    telemetry.set_pipeline_dag(vertices_total, edges_total);
+                    telemetry.set_pipeline_conflict_rate_bps(conflict_rate_bps);
+                    telemetry.set_pipeline_components(comp_count, comp_max, comp_buckets);
+                    telemetry.set_pipeline_overlays(overlay_count_total, overlay_instr_total);
+                    telemetry.set_pipeline_overlay_bytes(overlay_bytes_total);
                     for ((lane_id, dataspace_id), tx_served) in &dataspace_summaries {
                         telemetry.record_dataspace_pipeline_summary(
                             *lane_id,
@@ -14229,7 +14361,6 @@ pub(crate) mod valid {
                                         tx,
                                         &authority,
                                         overlay.as_ref(),
-                                        prepared_txs[idx].metadata.encoded_len,
                                         routing_decisions[idx].lane_id,
                                         routing_decisions[idx].dataspace_id,
                                         &rejection_reason,
@@ -14239,15 +14370,12 @@ pub(crate) mod valid {
                                     }
                                 }
                                 Ok(()) => {
-                                    if let Err(err) =
-                                        charge_fees_for_applied_overlay_with_encoded_len(
-                                            &mut state_tx,
-                                            &authority,
-                                            tx,
-                                            overlay.as_ref(),
-                                            prepared_txs[idx].metadata.encoded_len,
-                                        )
-                                    {
+                                    if let Err(err) = charge_fees_for_applied_overlay(
+                                        &mut state_tx,
+                                        &authority,
+                                        tx,
+                                        overlay.as_ref(),
+                                    ) {
                                         Err(TransactionRejectionReason::Validation(err))
                                     } else {
                                         match state_tx.execute_data_triggers_dfs(&authority) {
@@ -14258,7 +14386,6 @@ pub(crate) mod valid {
                                                     tx,
                                                     &authority,
                                                     overlay.as_ref(),
-                                                    prepared_txs[idx].metadata.encoded_len,
                                                     routing_decisions[idx].lane_id,
                                                     routing_decisions[idx].dataspace_id,
                                                     &err,
@@ -14549,29 +14676,31 @@ pub(crate) mod valid {
                                         [p.idx]
                                     {
                                         delta
-                                                .merge_single_transfer_effects_into_transaction(
-                                                    &mut state_tx,
-                                                    &p.authority,
-                                                )
-                                                .map(|result| {
-                                                    result.and_then(|()| {
-                                                        let overlay = overlays[p.idx]
-                                                            .as_ref()
-                                                            .expect("detached delta requires an overlay")
-                                                            .as_ref()
-                                                            .map_err(map_overlay_error)?;
-                                                        charge_fees_for_applied_overlay_with_encoded_len(
-                                                            &mut state_tx,
-                                                            &p.authority,
-                                                            tx,
-                                                            overlay.as_ref(),
-                                                            prepared_txs[p.idx].metadata.encoded_len,
+                                            .merge_single_transfer_effects_into_transaction(
+                                                &mut state_tx,
+                                                &p.authority,
+                                            )
+                                            .map(|result| {
+                                                result.and_then(|()| {
+                                                    let overlay = overlays[p.idx]
+                                                        .as_ref()
+                                                        .expect(
+                                                            "detached delta requires an overlay",
                                                         )
-                                                        .map_err(TransactionRejectionReason::Validation)?;
-                                                        state_tx
-                                                            .execute_data_triggers_dfs(&p.authority)
-                                                    })
+                                                        .as_ref()
+                                                        .map_err(map_overlay_error)?;
+                                                    charge_fees_for_applied_overlay(
+                                                        &mut state_tx,
+                                                        &p.authority,
+                                                        tx,
+                                                        overlay.as_ref(),
+                                                    )
+                                                    .map_err(
+                                                        TransactionRejectionReason::Validation,
+                                                    )?;
+                                                    state_tx.execute_data_triggers_dfs(&p.authority)
                                                 })
+                                            })
                                     } else {
                                         delta.merge_single_transfer_into_transaction(
                                             &mut state_tx,
@@ -14812,7 +14941,6 @@ pub(crate) mod valid {
                                                 tx,
                                                 &authority,
                                                 overlay.as_ref(),
-                                                prepared_txs[idx].metadata.encoded_len,
                                                 routing_decisions[idx].lane_id,
                                                 routing_decisions[idx].dataspace_id,
                                                 &rejection_reason,
@@ -14822,15 +14950,12 @@ pub(crate) mod valid {
                                             }
                                         }
                                         Ok(()) => {
-                                            if let Err(err) =
-                                                charge_fees_for_applied_overlay_with_encoded_len(
-                                                    &mut state_tx,
-                                                    &authority,
-                                                    tx,
-                                                    overlay.as_ref(),
-                                                    prepared_txs[idx].metadata.encoded_len,
-                                                )
-                                            {
+                                            if let Err(err) = charge_fees_for_applied_overlay(
+                                                &mut state_tx,
+                                                &authority,
+                                                tx,
+                                                overlay.as_ref(),
+                                            ) {
                                                 Err(
                                                     iroha_data_model::transaction::error::TransactionRejectionReason::Validation(
                                                         err,
@@ -14846,7 +14971,6 @@ pub(crate) mod valid {
                                                             tx,
                                                             &authority,
                                                             overlay.as_ref(),
-                                                            prepared_txs[idx].metadata.encoded_len,
                                                             routing_decisions[idx].lane_id,
                                                             routing_decisions[idx].dataspace_id,
                                                             &err,
@@ -15018,7 +15142,6 @@ pub(crate) mod valid {
                                             tx,
                                             &authority,
                                             overlay.as_ref(),
-                                            prepared_txs[idx].metadata.encoded_len,
                                             routing_decisions[idx].lane_id,
                                             routing_decisions[idx].dataspace_id,
                                             &rejection_reason,
@@ -15028,15 +15151,12 @@ pub(crate) mod valid {
                                         }
                                     }
                                     Ok(()) => {
-                                        if let Err(err) =
-                                            charge_fees_for_applied_overlay_with_encoded_len(
-                                                &mut state_tx,
-                                                &authority,
-                                                tx,
-                                                overlay.as_ref(),
-                                                prepared_txs[idx].metadata.encoded_len,
-                                            )
-                                        {
+                                        if let Err(err) = charge_fees_for_applied_overlay(
+                                            &mut state_tx,
+                                            &authority,
+                                            tx,
+                                            overlay.as_ref(),
+                                        ) {
                                             Err(
                                                 iroha_data_model::transaction::error::TransactionRejectionReason::Validation(
                                                     err,
@@ -15051,7 +15171,6 @@ pub(crate) mod valid {
                                                         tx,
                                                         &authority,
                                                         overlay.as_ref(),
-                                                        prepared_txs[idx].metadata.encoded_len,
                                                         routing_decisions[idx].lane_id,
                                                         routing_decisions[idx].dataspace_id,
                                                         &err,
@@ -15224,51 +15343,45 @@ pub(crate) mod valid {
                     });
                 let quarantine_total: u64 =
                     lane_summaries.values().map(|s| s.quarantine_executed).sum();
-                telemetry.set_pipeline_detached_prepared(aggregate_lane, det_prepared_total);
-                telemetry.set_pipeline_detached_merged(aggregate_lane, det_merged_total);
-                telemetry.set_pipeline_detached_fallback(aggregate_lane, det_fallback_total);
+                telemetry.set_pipeline_detached_prepared(det_prepared_total);
+                telemetry.set_pipeline_detached_merged(det_merged_total);
+                telemetry.set_pipeline_detached_fallback(det_fallback_total);
                 telemetry.set_pipeline_detached_fallback_reason(
-                    aggregate_lane,
                     "fee_postprocessing",
                     det_fallback_reasons_total.fee_postprocessing,
                 );
                 telemetry.set_pipeline_detached_fallback_reason(
-                    aggregate_lane,
                     "user_executor",
                     det_fallback_reasons_total.user_executor,
                 );
                 telemetry.set_pipeline_detached_fallback_reason(
-                    aggregate_lane,
                     "durable_state",
                     det_fallback_reasons_total.durable_state,
                 );
                 telemetry.set_pipeline_detached_fallback_reason(
-                    aggregate_lane,
                     "unsupported_instruction",
                     det_fallback_reasons_total.unsupported_instruction,
                 );
                 telemetry.set_pipeline_detached_fallback_reason(
-                    aggregate_lane,
                     "rejected_eval",
                     det_fallback_reasons_total.rejected_eval,
                 );
                 telemetry.set_pipeline_detached_fallback_reason(
-                    aggregate_lane,
                     "overlay_error",
                     det_fallback_reasons_total.overlay_error,
                 );
-                telemetry.set_pipeline_quarantine_executed(aggregate_lane, quarantine_total);
+                telemetry.set_pipeline_quarantine_executed(quarantine_total);
                 if layer_widths_global.is_empty() {
-                    telemetry.set_pipeline_peak_layer_width(aggregate_lane, 0);
-                    telemetry.set_pipeline_layer_count(aggregate_lane, 0);
-                    telemetry.set_pipeline_scheduler_utilization_pct(aggregate_lane, 0);
-                    telemetry.set_pipeline_layer_avg_median(aggregate_lane, 0, 0);
-                    telemetry.set_pipeline_layer_width_hist(aggregate_lane, [0; 8]);
+                    telemetry.set_pipeline_peak_layer_width(0);
+                    telemetry.set_pipeline_layer_count(0);
+                    telemetry.set_pipeline_scheduler_utilization_pct(0);
+                    telemetry.set_pipeline_layer_avg_median(0, 0);
+                    telemetry.set_pipeline_layer_width_hist([0; 8]);
                 } else {
                     let peak_layer_width = layer_widths_global.iter().copied().max().unwrap_or(0);
-                    telemetry.set_pipeline_peak_layer_width(aggregate_lane, peak_layer_width);
+                    telemetry.set_pipeline_peak_layer_width(peak_layer_width);
                     let layer_count = layer_widths_global.len() as u64;
-                    telemetry.set_pipeline_layer_count(aggregate_lane, layer_count);
+                    telemetry.set_pipeline_layer_count(layer_count);
                     let sum_global: u64 = layer_widths_global.iter().sum();
                     let avg = if layer_count > 0 {
                         (sum_global + (layer_count / 2)) / layer_count
@@ -15280,7 +15393,7 @@ pub(crate) mod valid {
                     } else {
                         0
                     };
-                    telemetry.set_pipeline_scheduler_utilization_pct(aggregate_lane, util_pct);
+                    telemetry.set_pipeline_scheduler_utilization_pct(util_pct);
                     let mut sorted = layer_widths_global.clone();
                     sorted.sort_unstable();
                     let median = if sorted.is_empty() {
@@ -15290,7 +15403,7 @@ pub(crate) mod valid {
                     } else {
                         u64::midpoint(sorted[sorted.len() / 2 - 1], sorted[sorted.len() / 2])
                     };
-                    telemetry.set_pipeline_layer_avg_median(aggregate_lane, avg, median);
+                    telemetry.set_pipeline_layer_avg_median(avg, median);
                     let mut buckets = [0u64; 8];
                     for width in sorted {
                         for (idx, threshold) in PIPELINE_LAYER_WIDTH_THRESHOLDS.iter().enumerate() {
@@ -15299,7 +15412,7 @@ pub(crate) mod valid {
                             }
                         }
                     }
-                    telemetry.set_pipeline_layer_width_hist(aggregate_lane, buckets);
+                    telemetry.set_pipeline_layer_width_hist(buckets);
                 }
             }
             for (idx, maybe) in stateless_rejections.iter_mut().enumerate() {
@@ -17801,8 +17914,8 @@ pub(crate) mod valid {
                     .expect("future-created autoscale lane catalog");
             let mut nexus = state.nexus.write();
             nexus.autoscale.enabled = true;
-            nexus.autoscale.min_lanes = nonzero!(1_u32);
-            nexus.autoscale.max_lanes = nonzero!(3_u32);
+            nexus.autoscale.min_lane_id = nonzero!(1_u32);
+            nexus.autoscale.max_lane_id_exclusive = nonzero!(3_u32);
             nexus.lane_config =
                 iroha_config::parameters::actual::LaneConfig::from_catalog(&lane_catalog);
             nexus.lane_catalog = lane_catalog;
@@ -17823,8 +17936,8 @@ pub(crate) mod valid {
             {
                 let mut nexus = state.nexus.write();
                 nexus.autoscale.enabled = true;
-                nexus.autoscale.min_lanes = nonzero!(1_u32);
-                nexus.autoscale.max_lanes = nonzero!(8_u32);
+                nexus.autoscale.min_lane_id = nonzero!(1_u32);
+                nexus.autoscale.max_lane_id_exclusive = nonzero!(8_u32);
             }
             state
                 .apply_autoscale_lane_lifecycle_for_tests(
@@ -18763,6 +18876,7 @@ pub(crate) mod valid {
                 leader.private_key(),
                 2,
                 Some(NposConsensusEffects {
+                    finalized_global_beacon_pulse: None,
                     vrf_epoch_seals: vec![vrf_epoch_record_for_test(0, 2)],
                     v2_evidence_admissions: Vec::new(),
                     penalty_actions: Vec::new(),
@@ -18867,6 +18981,7 @@ pub(crate) mod valid {
                 keys[0].private_key(),
                 context.height,
                 Some(NposConsensusEffects {
+                    finalized_global_beacon_pulse: None,
                     // This is the exact malicious shape from R-CON-25: a
                     // first record with no authenticated commit proof.
                     vrf_epoch_seals: vec![vrf_epoch_record_for_test(0, context.height)],
@@ -18951,6 +19066,7 @@ pub(crate) mod valid {
                 leader.private_key(),
                 15,
                 Some(NposConsensusEffects {
+                    finalized_global_beacon_pulse: None,
                     vrf_epoch_seals: vec![proposed],
                     v2_evidence_admissions: Vec::new(),
                     penalty_actions: Vec::new(),
@@ -18977,6 +19093,7 @@ pub(crate) mod valid {
                 leader.private_key(),
                 15,
                 Some(NposConsensusEffects {
+                    finalized_global_beacon_pulse: None,
                     vrf_epoch_seals: vec![proposed],
                     v2_evidence_admissions: Vec::new(),
                     penalty_actions: Vec::new(),
@@ -19008,6 +19125,7 @@ pub(crate) mod valid {
                 leader.private_key(),
                 4,
                 Some(NposConsensusEffects {
+                    finalized_global_beacon_pulse: None,
                     vrf_epoch_seals: vec![npos_vrf_record(
                         0,
                         4,
@@ -19041,6 +19159,7 @@ pub(crate) mod valid {
                 leader.private_key(),
                 4,
                 Some(NposConsensusEffects {
+                    finalized_global_beacon_pulse: None,
                     vrf_epoch_seals: vec![npos_vrf_record(
                         0,
                         4,
@@ -19097,6 +19216,7 @@ pub(crate) mod valid {
                 leader.private_key(),
                 20,
                 Some(NposConsensusEffects {
+                    finalized_global_beacon_pulse: None,
                     vrf_epoch_seals: Vec::new(),
                     v2_evidence_admissions: Vec::new(),
                     penalty_actions: vec![npos_marker(7, 20)],
@@ -19117,6 +19237,7 @@ pub(crate) mod valid {
                 leader.private_key(),
                 2,
                 Some(NposConsensusEffects {
+                    finalized_global_beacon_pulse: None,
                     vrf_epoch_seals: Vec::new(),
                     v2_evidence_admissions: Vec::new(),
                     penalty_actions: vec![npos_marker(99, 2)],
@@ -19139,6 +19260,7 @@ pub(crate) mod valid {
                 leader.private_key(),
                 2,
                 Some(NposConsensusEffects {
+                    finalized_global_beacon_pulse: None,
                     vrf_epoch_seals: Vec::new(),
                     v2_evidence_admissions: Vec::new(),
                     penalty_actions: vec![action.clone(), action],
@@ -19455,7 +19577,13 @@ pub(crate) mod valid {
             let _prev_hash =
                 commit_block_at_height(&state, &kura, &topology, leader.private_key(), 1, None, 1);
             let (_, time_source) = TimeSource::new_mock(Duration::from_millis(1));
-            let lane_authority = state.authoritative_lane_peer_ids_at_height(LaneId::SINGLE, 2);
+            let lane_authority = state
+                .resolve_lane_committee_at_height(
+                    crate::state::LaneAuthorityRoute::new(LaneId::SINGLE, DataSpaceId::UNIVERSAL),
+                    2,
+                )
+                .expect("single-lane authority must resolve")
+                .into_validators();
             assert_eq!(lane_authority.len(), lane_keypairs.len());
             assert_ne!(lane_authority.as_slice(), topology.as_ref());
 
@@ -20688,8 +20816,16 @@ pub(crate) mod valid {
             let lane_incarnation = state
                 .lane_incarnation_at_height(coordinator.lane_id, 2)
                 .expect("elastic lane incarnation at candidate height");
-            let descriptor_validators =
-                state.authoritative_lane_peer_ids_at_height(coordinator.lane_id, 2);
+            let descriptor_validators = state
+                .resolve_lane_committee_at_height(
+                    crate::state::LaneAuthorityRoute::new(
+                        coordinator.lane_id,
+                        coordinator.dataspace_id,
+                    ),
+                    2,
+                )
+                .expect("elastic-lane authority must resolve")
+                .into_validators();
             let mut ownership = sample_lane_payload_ownership_for_context(
                 2,
                 0,
@@ -20941,8 +21077,16 @@ pub(crate) mod valid {
             let lane_incarnation = state
                 .lane_incarnation_at_height(coordinator.lane_id, 2)
                 .expect("elastic lane incarnation before removing the lane");
-            let descriptor_validators =
-                state.authoritative_lane_peer_ids_at_height(coordinator.lane_id, 2);
+            let descriptor_validators = state
+                .resolve_lane_committee_at_height(
+                    crate::state::LaneAuthorityRoute::new(
+                        coordinator.lane_id,
+                        coordinator.dataspace_id,
+                    ),
+                    2,
+                )
+                .expect("elastic-lane authority must resolve before removal")
+                .into_validators();
             {
                 let mut nexus = state.nexus.write();
                 nexus.lane_catalog = LaneCatalog::default();
@@ -21360,8 +21504,8 @@ pub(crate) mod valid {
             {
                 let mut nexus = state.nexus.write();
                 nexus.autoscale.enabled = true;
-                nexus.autoscale.min_lanes = nonzero!(1_u32);
-                nexus.autoscale.max_lanes = nonzero!(3_u32);
+                nexus.autoscale.min_lane_id = nonzero!(1_u32);
+                nexus.autoscale.max_lane_id_exclusive = nonzero!(3_u32);
                 nexus.lane_catalog =
                     LaneCatalog::new(nonzero!(2_u32), vec![LaneConfig::default(), elastic_lane])
                         .expect("future-created autoscale lane catalog");

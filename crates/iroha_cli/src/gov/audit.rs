@@ -1,13 +1,13 @@
 //! Audit commands for governance workflows.
+use super::shared::{
+    canonicalize_hex32, compute_proposal_id, decode_hex32, print_with_summary,
+    resolve_contract_address_target,
+};
 use crate::{Run, RunContext};
 use eyre::Result;
 use iroha::client::Client;
 use iroha_crypto::Hash;
 use norito::json::{Map, Value};
-use super::shared::{
-    canonicalize_hex32, compute_proposal_id, decode_hex32, print_with_summary,
-    resolve_contract_address_target,
-};
 #[derive(clap::Args, Debug)]
 pub struct AuditDeployArgs {
     #[arg(long, conflicts_with = "contract_alias")]
@@ -111,14 +111,14 @@ impl AuditDeployArgs {
             }
         };
         record.insert("code_hash".into(), Value::from(code_hash.clone()));
-        let manifest_abi_hash =
+        let manifest_proposal_binding =
             audit_manifest_map(client, &code_hash, &mut manifest_map, &mut issues);
         audit_code_map(client, &code_hash, &mut code_map, &mut issues);
         audit_proposal_map(
             client,
             contract_address,
             &code_hash,
-            manifest_abi_hash.as_deref(),
+            manifest_proposal_binding.as_ref(),
             &mut proposal_map,
             &mut issues,
         );
@@ -156,10 +156,13 @@ fn audit_manifest_map(
     code_hash: &str,
     manifest_map: &mut Map,
     issues: &mut Vec<String>,
-) -> Option<String> {
+) -> Option<(
+    String,
+    Option<iroha::data_model::smart_contract::manifest::ManifestProvenance>,
+)> {
     let manifest_value = client.get_contract_manifest_json(code_hash);
     manifest_map.insert("present".into(), Value::from(manifest_value.is_ok()));
-    let mut manifest_abi_hash: Option<String> = None;
+    let mut proposal_binding = None;
     match manifest_value {
         Ok(manifest_v) => {
             if let Some(manifest_obj) = manifest_v.get("manifest").and_then(Value::as_object) {
@@ -188,7 +191,23 @@ fn audit_manifest_map(
                     match canonicalize_hex32(abi_hash_str) {
                         Ok(abi_hash) => {
                             manifest_map.insert("abi_hash".into(), Value::from(abi_hash.clone()));
-                            manifest_abi_hash = Some(abi_hash);
+                            match norito::json::from_value::<
+                                iroha::data_model::smart_contract::manifest::ContractManifest,
+                            >(Value::Object(manifest_obj.clone()))
+                            {
+                                Ok(manifest) => {
+                                    proposal_binding = Some((abi_hash, manifest.provenance));
+                                }
+                                Err(err) => {
+                                    manifest_map.insert(
+                                        "provenance_error".into(),
+                                        Value::from(err.to_string()),
+                                    );
+                                    issues.push(format!(
+                                        "manifest_provenance_invalid_for_proposal_id: {err}"
+                                    ));
+                                }
+                            }
                         }
                         Err(err) => {
                             manifest_map
@@ -213,7 +232,7 @@ fn audit_manifest_map(
             issues.push(format!("manifest_fetch_error: {err}"));
         }
     }
-    manifest_abi_hash
+    proposal_binding
 }
 fn audit_code_map(client: &Client, code_hash: &str, code_map: &mut Map, issues: &mut Vec<String>) {
     match client.get_contract_code_bytes(code_hash) {
@@ -249,11 +268,14 @@ fn audit_proposal_map(
     client: &Client,
     contract_address: &iroha::data_model::smart_contract::ContractAddress,
     code_hash: &str,
-    manifest_abi_hash: Option<&str>,
+    manifest_binding: Option<&(
+        String,
+        Option<iroha::data_model::smart_contract::manifest::ManifestProvenance>,
+    )>,
     proposal_map: &mut Map,
     issues: &mut Vec<String>,
 ) {
-    let Some(abi_hash_hex) = manifest_abi_hash else {
+    let Some((abi_hash_hex, manifest_provenance)) = manifest_binding else {
         proposal_map.insert("expected_id".into(), Value::Null);
         proposal_map.insert("found".into(), Value::from(false));
         return;
@@ -262,6 +284,7 @@ fn audit_proposal_map(
         contract_address,
         code_hash,
         abi_hash_hex,
+        manifest_provenance.clone(),
         proposal_map,
         issues,
     ) && let Some(proposal_json) =
@@ -281,12 +304,18 @@ fn resolve_proposal_id(
     contract_address: &iroha::data_model::smart_contract::ContractAddress,
     code_hash: &str,
     abi_hash_hex: &str,
+    manifest_provenance: Option<iroha::data_model::smart_contract::manifest::ManifestProvenance>,
     proposal_map: &mut Map,
     issues: &mut Vec<String>,
 ) -> Option<String> {
     match (decode_hex32(code_hash), decode_hex32(abi_hash_hex)) {
         (Ok(code_bytes), Ok(abi_bytes)) => {
-            let proposal_id_bytes = compute_proposal_id(contract_address, &code_bytes, &abi_bytes);
+            let proposal_id_bytes = compute_proposal_id(
+                contract_address,
+                &code_bytes,
+                &abi_bytes,
+                manifest_provenance,
+            );
             let proposal_id_hex = hex::encode(proposal_id_bytes);
             proposal_map.insert("expected_id".into(), Value::from(proposal_id_hex.clone()));
             Some(proposal_id_hex)

@@ -8,7 +8,7 @@ import pytest
 import requests
 from iroha_torii_client.client import ToriiCanonicalRequestAuth, ToriiClient
 
-ACCOUNT = "sorauﾛ1NcMBm2dﾌBokヱDﾑﾅekAbｶﾍﾜﾇﾐMFｽヱﾋZﾘ2u4WGUMMS63EY6"
+ACCOUNT = "sorauﾛ1PｺfMﾇﾘｾﾄoﾂﾊﾔH7ZdﾘhﾚmAｸdnｳu1ｱﾄ1ｺﾋuSﾑﾀﾇﾐuHEB5DP"
 
 
 def _network(seed: int) -> str:

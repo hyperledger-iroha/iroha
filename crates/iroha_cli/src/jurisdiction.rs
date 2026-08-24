@@ -3,7 +3,7 @@
 //! Provides offline helpers to validate JDG attestations and their Secret Data
 //! Node (SDN) commitments against a local registry/policy before submitting
 //! them on-chain.
-use std::{fs::File, io, path::PathBuf};
+use crate::{Run, RunContext};
 use eyre::{Context, Result, eyre};
 use iroha_core::jurisdiction::JdgSdnEnforcer;
 use iroha_data_model::jurisdiction::{
@@ -14,7 +14,7 @@ use norito::{
     DecodeLimits, decode_from_bytes_with_limits,
     json::{self, JsonDeserialize, JsonPreflightLimits, JsonSerialize},
 };
-use crate::{Run, RunContext};
+use std::{fs::File, io, path::PathBuf};
 // V1 attestations and registries may carry proof/signature material, but one
 // offline verification input must not grow without bound before its semantic
 // policy is reached. The sequence maximum follows the u16 committee threshold;
@@ -267,7 +267,9 @@ impl VerificationSummary {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use tempfile::NamedTempFile;
+    use crate::config_utils::{
+        default_alias_cache_policy, default_anonymity_policy, default_rollout_phase,
+    };
     use iroha_crypto::{Algorithm, Hash, KeyPair, Signature, SignatureOf};
     use iroha_data_model::jurisdiction::{
         JDG_ATTESTATION_VERSION_V1, JDG_SDN_COMMITMENT_VERSION_V1, JdgAttestationScope,
@@ -276,10 +278,8 @@ mod tests {
     use iroha_data_model::{ChainId, prelude::AccountId};
     use iroha_i18n::{Bundle, Language, Localizer};
     use std::str::FromStr;
+    use tempfile::NamedTempFile;
     use url::Url;
-    use crate::config_utils::{
-        default_alias_cache_policy, default_anonymity_policy, default_rollout_phase,
-    };
     struct TestContext {
         cfg: iroha::config::Config,
         printed: Vec<String>,

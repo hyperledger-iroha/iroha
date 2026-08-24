@@ -35,8 +35,8 @@ use crate::privacy_engines::{
     },
     orchard::{OrchardBundleDraftV1, OrchardChangeProverInputV1, Scope},
     vega::{
-        VegaPrivacyActionTransactionContextV1, VegaPrivacyActionWitnessMaterialV1,
-        build_signed_vega_privacy_action_with_rng_v1,
+        VegaPrivacyActionBuildErrorV1, VegaPrivacyActionTransactionContextV1,
+        VegaPrivacyActionWitnessMaterialV1, build_signed_vega_privacy_action_with_rng_v1,
     },
 };
 pub use retained::{
@@ -336,6 +336,13 @@ pub fn build_privacy_release_vega_network_action_v1(
     fixture_seed: [u8; 32],
     private_key: &PrivateKey,
 ) -> Result<PrivacyReleaseVegaNetworkActionV1, PrivacyReleaseEvidenceErrorClassV1> {
+    let protocol_id = iroha_data_model::privacy::PrivacyProtocolIdV1::VegaExistingCredentialZkV0;
+    compiled_privacy_profile_v1(protocol_id).map_err(|error| match error {
+        crate::privacy_profiles::CompiledPrivacyProfileErrorV1::EngineUnavailable {
+            protocol_id: unavailable,
+        } if unavailable == protocol_id => PrivacyReleaseEvidenceErrorClassV1::ProtocolUnavailable,
+        _ => PrivacyReleaseEvidenceErrorClassV1::FixtureConstructionFailed,
+    })?;
     let mut fixture = super::vega::vega_release_fixture_v1()?;
     let trusted_timestamp_ms = u64::try_from(transaction_context.creation_time.as_millis())
         .map_err(|_| PrivacyReleaseEvidenceErrorClassV1::FixtureConstructionFailed)?;
@@ -368,7 +375,12 @@ pub fn build_privacy_release_vega_network_action_v1(
         private_key,
         &mut rng,
     )
-    .map_err(|_| PrivacyReleaseEvidenceErrorClassV1::NativeProverRejected)?;
+    .map_err(|error| match error {
+        VegaPrivacyActionBuildErrorV1::CompiledProfileUnavailable => {
+            PrivacyReleaseEvidenceErrorClassV1::ProtocolUnavailable
+        }
+        _ => PrivacyReleaseEvidenceErrorClassV1::NativeProverRejected,
+    })?;
     Ok(PrivacyReleaseVegaNetworkActionV1 {
         transaction: signed.into_signed_transaction(),
         issuer_record: fixture.issuer_record,

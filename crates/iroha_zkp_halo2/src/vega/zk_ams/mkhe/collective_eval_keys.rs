@@ -6,8 +6,6 @@
 //! retains the full authenticated source topology and compacts every digit with
 //! the native full-roster CKS protocol.  Online evaluation therefore performs
 //! exactly two ring multiplications per digit, independent of roster size.
-#[cfg(test)]
-use super::gadget_decompose;
 use super::{
     ArtifactAuthentication, BgvProfile, MAX_RANDOM_REJECTION_ATTEMPTS_V1, MKHE_VERSION_V1,
     RnsPolynomial, WideUint, ZkAmsMkheCksContributionWireV1, ZkAmsMkheErrorV1, ZkAmsMkhePartyIdV1,
@@ -53,10 +51,8 @@ use super::{
         ZkAmsMkheCksStatementV1, combine_zk_ams_mkhe_cks_v1, prove_zk_ams_mkhe_cks_contribution_v1,
     },
     collective::{
-        ZkAmsMkheCollectiveCiphertextV1, ZkAmsMkheCollectiveLevelOneV1,
         ZkAmsMkheCollectivePartyStateV1, ZkAmsMkheCollectivePublicKeyShareV1,
         ZkAmsMkheCollectivePublicKeyV1, aggregate_zk_ams_mkhe_collective_public_key_v1,
-        validate_compact_for_key,
     },
     derive_rkg_common_a,
     wire::ZkAmsMkheRnsPolynomialWireV1,

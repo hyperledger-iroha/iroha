@@ -344,6 +344,7 @@ impl Default for PinPolicy {
 )]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[cfg_attr(feature = "json", norito(tag = "type", content = "value"))]
+#[norito(deny_unknown_fields)]
 pub enum StorageClass {
     /// Low-latency replicas servicing developer workflows.
     #[default]

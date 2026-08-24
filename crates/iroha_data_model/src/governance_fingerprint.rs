@@ -20,15 +20,25 @@ pub const GOVERNANCE_ATTEMPT_ID_V1: &[u8] = b"iroha.governance.attempt.id.v1";
 pub const BODY_ELECTION_ATTEMPT_ID_V1: &[u8] =
     b"iroha.governance.parliament.body_election_attempt.id.v1";
 pub const SORTITION_REQUEST_ID_V1: &[u8] = b"iroha.governance.parliament.sortition_request.id.v1";
+pub const LOGICAL_BEACON_SESSION_ID_V1: &[u8] =
+    b"iroha.governance.parliament.logical_beacon_session.id.v1";
 pub const CANDIDATE_ROOT_V1: &[u8] = b"iroha.governance.parliament.candidate.root.v1";
 pub const BODY_INSTANCE_ID_V1: &[u8] = b"iroha.governance.parliament.body_instance.id.v1";
 pub const ASSIGNMENT_ID_V1: &[u8] = b"iroha.governance.parliament.assignment.id.v1";
 pub const ASSIGNMENT_PLAN_ROOT_V1: &[u8] = b"iroha.governance.parliament.assignment_plan.root.v1";
 pub const ROSTER_ROOT_V1: &[u8] = b"iroha.governance.parliament.roster.root.v1";
 pub const BALLOT_ATTEMPT_ID_V1: &[u8] = b"iroha.governance.parliament.ballot_attempt.id.v1";
+pub const BALLOT_PARTICIPANT_HASH_V1: &[u8] =
+    b"iroha.governance.parliament.ballot_participant.hash.v1";
 pub const TLE_SESSION_ID_V1: &[u8] = b"iroha.governance.parliament.tle_session.id.v1";
+pub const PARLIAMENT_BALLOT_FAILURE_ROOT_V1: &[u8] =
+    b"iroha.governance.parliament.ballot_failure.root.v1";
 pub const PARLIAMENT_BALLOT_RESULT_ROOT_V1: &[u8] =
     b"iroha.governance.parliament.ballot_result.root.v1";
+pub const PARLIAMENT_PUBLIC_FINDING_ENDORSEMENT_ROOT_V1: &[u8] =
+    b"iroha.governance.parliament.public_finding_endorsement.root.v1";
+pub const PARLIAMENT_EXECUTION_FAILURE_ROOT_V1: &[u8] =
+    b"iroha.governance.parliament.execution_failure.root.v1";
 pub const GOVERNANCE_CERTIFICATE_ID_V1: &[u8] = b"iroha.governance.certificate.id.v1";
 pub fn fingerprint(domain: &[u8], proposal: &impl Encode) -> [u8; 32] {
     let encoded = proposal.encode();
@@ -64,14 +74,19 @@ mod tests {
             GOVERNANCE_ATTEMPT_ID_V1,
             BODY_ELECTION_ATTEMPT_ID_V1,
             SORTITION_REQUEST_ID_V1,
+            LOGICAL_BEACON_SESSION_ID_V1,
             CANDIDATE_ROOT_V1,
             BODY_INSTANCE_ID_V1,
             ASSIGNMENT_ID_V1,
             ASSIGNMENT_PLAN_ROOT_V1,
             ROSTER_ROOT_V1,
             BALLOT_ATTEMPT_ID_V1,
+            BALLOT_PARTICIPANT_HASH_V1,
             TLE_SESSION_ID_V1,
+            PARLIAMENT_BALLOT_FAILURE_ROOT_V1,
             PARLIAMENT_BALLOT_RESULT_ROOT_V1,
+            PARLIAMENT_PUBLIC_FINDING_ENDORSEMENT_ROOT_V1,
+            PARLIAMENT_EXECUTION_FAILURE_ROOT_V1,
             GOVERNANCE_CERTIFICATE_ID_V1,
         ];
         assert_eq!(

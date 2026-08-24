@@ -794,8 +794,9 @@ prevent mixing branches from alternative splits.
 Peer hops are capped at eight independently of the 64-level branch-path
 capacity. A peer split increments both the branch depth and peer-hop count;
 redemption-change extends the branch without incrementing peer hops. Canonical
-ingress, Torii readiness, maintained clients, and the Eq/Vesta transition
-relation all enforce the exact eight-hop ceiling.
+ingress, maintained clients, and the Eq/Vesta transition relation all enforce
+the exact eight-hop ceiling; universal capability discovery advertises the
+same bound without evaluating an asset or proof backend.
 
 Implementations may share internal witness computation, transcript preparation,
 or parent-proof verification while constructing the two proofs, but the wire

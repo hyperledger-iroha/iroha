@@ -8921,410 +8921,29 @@ public struct ToriiVerifyingKeyDetail: Decodable, Sendable {
 
 }
 
-public struct ToriiKagemushaReadinessBlocker: Decodable, Sendable, Equatable {
-    public let code: String
-    public let message: String
-
-    private enum CodingKeys: String, CodingKey, CaseIterable {
-        case code
-        case message
-    }
-
-    public init(from decoder: Decoder) throws {
-        try ToriiKagemushaReadinessValidation.rejectUnknownFields(
-            from: decoder,
-            allowed: Set(CodingKeys.allCases.map(\.stringValue)),
-            context: "Kagemusha readiness blocker"
-        )
-        let container = try decoder.container(keyedBy: CodingKeys.self)
-        let decodedCode = try container.decode(String.self, forKey: .code)
-        guard ToriiKagemushaReadinessValidation.isStableCode(decodedCode) else {
-            throw DecodingError.dataCorruptedError(
-                forKey: .code,
-                in: container,
-                debugDescription: "code must be a 1-64 character lowercase stable identifier"
-            )
-        }
-        code = decodedCode
-        message = try Self.decodeExactMessage(from: container, forKey: .message)
-    }
-
-    private static func decodeExactMessage(
-        from container: KeyedDecodingContainer<CodingKeys>,
-        forKey key: CodingKeys
-    ) throws -> String {
-        let value = try container.decode(String.self, forKey: key)
-        guard ToriiKagemushaReadinessValidation.isExactHumanText(
-            value,
-            maximumUnicodeScalars: 1024
-        )
-        else {
-            throw DecodingError.dataCorruptedError(
-                forKey: key,
-                in: container,
-                debugDescription: "\(key.stringValue) must be exact non-empty text of at most 1024 Unicode characters"
-            )
-        }
-        return value
-    }
-}
-
-/// The active confidential-transfer verifier selected for a Kagemusha readiness snapshot.
-public struct ToriiKagemushaActiveTransferVerifier: Decodable, Sendable, Equatable {
-    public let id: ToriiVerifyingKeyId
-    public let version: UInt32
-    public let circuitId: String
-    public let commitment: String
-    public let publicInputsSchemaHash: String
-    public let maxProofBytes: UInt32
-    public let activationHeight: UInt64
-    public let withdrawalHeight: UInt64?
-
-    private enum CodingKeys: String, CodingKey, CaseIterable {
-        case id
-        case version
-        case circuitId = "circuit_id"
-        case commitment
-        case publicInputsSchemaHash = "public_inputs_schema_hash"
-        case maxProofBytes = "max_proof_bytes"
-        case activationHeight = "activation_height"
-        case withdrawalHeight = "withdrawal_height"
-    }
-
-    /// Construct a strict verifier record from an already authenticated Core
-    /// projection. This keeps apps from duplicating the Torii wire model while
-    /// preserving exactly the same registry and lifecycle validation used by
-    /// response decoding.
-    public init(
-        id: ToriiVerifyingKeyId,
-        version: UInt32,
-        circuitId: String,
-        commitment: String,
-        publicInputsSchemaHash: String,
-        maxProofBytes: UInt32,
-        activationHeight: UInt64,
-        withdrawalHeight: UInt64?
-    ) throws {
-        guard version > 0,
-              ToriiKagemushaReadinessValidation.isPortableVerifierIDComponent(id.backend),
-              ToriiKagemushaReadinessValidation.isPortableVerifierIDComponent(id.name),
-              ToriiKagemushaReadinessValidation.isPortableCircuitID(circuitId),
-              ToriiKagemushaReadinessValidation.isCanonicalHash(commitment),
-              ToriiKagemushaReadinessValidation.isCanonicalHash(publicInputsSchemaHash),
-              commitment.contains(where: { $0 != "0" }),
-              publicInputsSchemaHash.contains(where: { $0 != "0" }),
-              maxProofBytes > 0,
-              withdrawalHeight.map({ $0 > activationHeight }) != false else {
-            throw ToriiClientError.invalidPayload(
-                "Kagemusha verifier record is not canonical or has an invalid lifecycle."
-            )
-        }
-        self.id = id
-        self.version = version
-        self.circuitId = circuitId
-        self.commitment = commitment
-        self.publicInputsSchemaHash = publicInputsSchemaHash
-        self.maxProofBytes = maxProofBytes
-        self.activationHeight = activationHeight
-        self.withdrawalHeight = withdrawalHeight
-    }
-
-    public init(from decoder: Decoder) throws {
-        try ToriiKagemushaReadinessValidation.rejectUnknownFields(
-            from: decoder,
-            allowed: Set(CodingKeys.allCases.map(\.stringValue)),
-            context: "Kagemusha active verifier"
-        )
-        let container = try decoder.container(keyedBy: CodingKeys.self)
-        id = try container.decode(ToriiVerifyingKeyId.self, forKey: .id)
-        guard ToriiKagemushaReadinessValidation.isPortableVerifierIDComponent(id.backend),
-              ToriiKagemushaReadinessValidation.isPortableVerifierIDComponent(id.name) else {
-            throw DecodingError.dataCorruptedError(
-                forKey: .id,
-                in: container,
-                debugDescription: "id must use bounded portable verifier-registry syntax"
-            )
-        }
-        let decodedVersion = try container.decode(UInt32.self, forKey: .version)
-        guard decodedVersion > 0 else {
-            throw DecodingError.dataCorruptedError(
-                forKey: .version,
-                in: container,
-                debugDescription: "version must be greater than zero"
-            )
-        }
-        version = decodedVersion
-        circuitId = try Self.decodeExactText(from: container, forKey: .circuitId)
-        guard ToriiKagemushaReadinessValidation.isPortableCircuitID(circuitId) else {
-            throw DecodingError.dataCorruptedError(
-                forKey: .circuitId,
-                in: container,
-                debugDescription: "circuit_id must use the portable OpenVerify grammar"
-            )
-        }
-        commitment = try Self.decodeCanonicalHash(from: container, forKey: .commitment)
-        publicInputsSchemaHash = try Self.decodeCanonicalHash(
-            from: container,
-            forKey: .publicInputsSchemaHash
-        )
-        guard commitment.contains(where: { $0 != "0" }),
-              publicInputsSchemaHash.contains(where: { $0 != "0" }) else {
-            throw DecodingError.dataCorruptedError(
-                forKey: .commitment,
-                in: container,
-                debugDescription: "verifier commitment and public-input schema hash must be nonzero"
-            )
-        }
-        let decodedMaxProofBytes = try container.decode(UInt32.self, forKey: .maxProofBytes)
-        guard decodedMaxProofBytes > 0 else {
-            throw DecodingError.dataCorruptedError(
-                forKey: .maxProofBytes,
-                in: container,
-                debugDescription: "max_proof_bytes must be greater than zero"
-            )
-        }
-        maxProofBytes = decodedMaxProofBytes
-        activationHeight = try container.decode(UInt64.self, forKey: .activationHeight)
-        guard container.contains(.withdrawalHeight) else {
-            throw DecodingError.keyNotFound(
-                CodingKeys.withdrawalHeight,
-                DecodingError.Context(
-                    codingPath: container.codingPath,
-                    debugDescription: "withdrawal_height is required"
-                )
-            )
-        }
-        withdrawalHeight = try container.decodeIfPresent(
-            UInt64.self,
-            forKey: .withdrawalHeight
-        )
-        if let withdrawalHeight, withdrawalHeight <= activationHeight {
-            throw DecodingError.dataCorruptedError(
-                forKey: .withdrawalHeight,
-                in: container,
-                debugDescription: "withdrawal_height must be greater than activation_height"
-            )
-        }
-    }
-
-    fileprivate func isActive(at blockHeight: UInt64) -> Bool {
-        activationHeight <= blockHeight
-            && withdrawalHeight.map { blockHeight < $0 } != false
-    }
-
-    private static func decodeExactText(
-        from container: KeyedDecodingContainer<CodingKeys>,
-        forKey key: CodingKeys
-    ) throws -> String {
-        let value = try container.decode(String.self, forKey: key)
-        guard ToriiKagemushaReadinessValidation.isExactText(value) else {
-            throw DecodingError.dataCorruptedError(
-                forKey: key,
-                in: container,
-                debugDescription: "\(key.stringValue) must be exact non-empty text"
-            )
-        }
-        return value
-    }
-
-    private static func decodeCanonicalHash(
-        from container: KeyedDecodingContainer<CodingKeys>,
-        forKey key: CodingKeys
-    ) throws -> String {
-        let value = try container.decode(String.self, forKey: key)
-        guard ToriiKagemushaReadinessValidation.isCanonicalHash(value) else {
-            throw DecodingError.dataCorruptedError(
-                forKey: key,
-                in: container,
-                debugDescription: "\(key.stringValue) must be exact lowercase 32-byte hexadecimal"
-            )
-        }
-        return value
-    }
-}
-
-/// The active public-to-confidential top-up shield verifier selected for the
-/// same readiness snapshot. Its wire shape and registry invariants are exact
-/// aliases of the transfer verifier record, but the roles are not interchangeable.
-public typealias ToriiKagemushaActiveTopUpShieldVerifier = ToriiKagemushaActiveTransferVerifier
-public typealias ToriiKagemushaActiveUnshieldVerifier = ToriiKagemushaActiveTransferVerifier
-public typealias ToriiKagemushaActiveRecursiveStepEqVerifier =
-    ToriiKagemushaActiveTransferVerifier
-public typealias ToriiKagemushaActiveRecursiveStepEpVerifier =
-    ToriiKagemushaActiveTransferVerifier
-
-/// Authenticated ABI-21 V4 recursive release selected for a readiness snapshot.
-///
-/// The three digests bind the release manifest, locally trusted policy, and
-/// signed release attestation. Torii emits this value only after Core has
-/// authenticated the complete release and its two recursive verifier records.
-public struct ToriiKagemushaAuthenticatedArtifactSet: Decodable, Sendable, Equatable {
-    public let generation: String
-    public let manifestSha256: String
-    public let releasePolicySha256: String
-    public let releaseAttestationSha256: String
-    public let activationHeight: UInt64
-    public let withdrawalHeight: UInt64
-    public let maxProofBytes: UInt32
-    public let assetScale: UInt32
-
-    private enum CodingKeys: String, CodingKey, CaseIterable {
-        case generation
-        case manifestSha256 = "manifest_sha256"
-        case releasePolicySha256 = "release_policy_sha256"
-        case releaseAttestationSha256 = "release_attestation_sha256"
-        case activationHeight = "activation_height"
-        case withdrawalHeight = "withdrawal_height"
-        case maxProofBytes = "max_proof_bytes"
-        case assetScale = "asset_scale"
-    }
-
-    public init(from decoder: Decoder) throws {
-        try ToriiKagemushaReadinessValidation.rejectUnknownFields(
-            from: decoder,
-            allowed: Set(CodingKeys.allCases.map(\.stringValue)),
-            context: "Kagemusha authenticated artifact set"
-        )
-        let container = try decoder.container(keyedBy: CodingKeys.self)
-        let decodedGeneration = try container.decode(String.self, forKey: .generation)
-        guard ToriiKagemushaReadinessValidation.isPortableArtifactIdentifier(
-            decodedGeneration
-        ) else {
-            throw DecodingError.dataCorruptedError(
-                forKey: .generation,
-                in: container,
-                debugDescription:
-                    "generation must be a canonical cross-platform artifact identifier"
-            )
-        }
-        generation = decodedGeneration
-        let decodedManifestSha256 = try Self.decodeNonzeroSha256(
-            from: container,
-            forKey: .manifestSha256
-        )
-        let decodedReleasePolicySha256 = try Self.decodeNonzeroSha256(
-            from: container,
-            forKey: .releasePolicySha256
-        )
-        let decodedReleaseAttestationSha256 = try Self.decodeNonzeroSha256(
-            from: container,
-            forKey: .releaseAttestationSha256
-        )
-        guard Set([
-            decodedManifestSha256,
-            decodedReleasePolicySha256,
-            decodedReleaseAttestationSha256,
-        ]).count == 3 else {
-            throw DecodingError.dataCorruptedError(
-                forKey: .releaseAttestationSha256,
-                in: container,
-                debugDescription: "artifact_set SHA-256 digests must be pairwise distinct"
-            )
-        }
-        manifestSha256 = decodedManifestSha256
-        releasePolicySha256 = decodedReleasePolicySha256
-        releaseAttestationSha256 = decodedReleaseAttestationSha256
-
-        let decodedActivationHeight = try container.decode(
-            UInt64.self,
-            forKey: .activationHeight
-        )
-        guard decodedActivationHeight > 0 else {
-            throw DecodingError.dataCorruptedError(
-                forKey: .activationHeight,
-                in: container,
-                debugDescription: "activation_height must be greater than zero"
-            )
-        }
-        activationHeight = decodedActivationHeight
-
-        let decodedWithdrawalHeight = try container.decode(
-            UInt64.self,
-            forKey: .withdrawalHeight
-        )
-        guard decodedWithdrawalHeight > decodedActivationHeight else {
-            throw DecodingError.dataCorruptedError(
-                forKey: .withdrawalHeight,
-                in: container,
-                debugDescription: "withdrawal_height must be greater than activation_height"
-            )
-        }
-        withdrawalHeight = decodedWithdrawalHeight
-
-        let decodedMaxProofBytes = try container.decode(UInt32.self, forKey: .maxProofBytes)
-        guard decodedMaxProofBytes > 0,
-              decodedMaxProofBytes
-                <= KagemushaRecursiveSpend.absoluteMaximumProofPairBytesV4 else {
-            throw DecodingError.dataCorruptedError(
-                forKey: .maxProofBytes,
-                in: container,
-                debugDescription:
-                    "max_proof_bytes must be within the ABI-21 V4 absolute proof limit"
-            )
-        }
-        maxProofBytes = decodedMaxProofBytes
-
-        let decodedAssetScale = try container.decode(UInt32.self, forKey: .assetScale)
-        guard decodedAssetScale <= KagemushaScaledAmount.maximumScale else {
-            throw DecodingError.dataCorruptedError(
-                forKey: .assetScale,
-                in: container,
-                debugDescription: "asset_scale must not exceed 28"
-            )
-        }
-        assetScale = decodedAssetScale
-    }
-
-    private static func decodeNonzeroSha256(
-        from container: KeyedDecodingContainer<CodingKeys>,
-        forKey key: CodingKeys
-    ) throws -> String {
-        let value = try container.decode(String.self, forKey: key)
-        guard ToriiKagemushaReadinessValidation.isCanonicalHash(value),
-              value.contains(where: { $0 != "0" }) else {
-            throw DecodingError.dataCorruptedError(
-                forKey: key,
-                in: container,
-                debugDescription:
-                    "\(key.stringValue) must be a nonzero lowercase SHA-256 digest"
-            )
-        }
-        return value
-    }
-}
-
 /// Asset-neutral offline protocol capability advertised by every app-api node.
 ///
-/// This is deliberately not a service-readiness or settlement projection. A
-/// conforming node always exposes the ABI-21 `cash_handoff_v1` application
+/// A conforming node always exposes the ABI-21 `cash_handoff_v1` application
 /// interface, independent of assets and dataspaces.
 public struct ToriiOfflineStatus: Decodable, Sendable, Equatable {
-    public let mandatory: Bool
     public let cashHandoffCapability: String
     public let requiredBridgeAbiVersion: UInt32
     public let maxHops: UInt32
     public let ready: Bool
-    public let assets: [ToriiJSONValue]
-    public let blockers: [ToriiKagemushaReadinessBlocker]
 
     private enum CodingKeys: String, CodingKey, CaseIterable {
-        case mandatory
         case cashHandoffCapability = "cash_handoff_capability"
         case requiredBridgeAbiVersion = "required_bridge_abi_version"
         case maxHops = "max_hops"
         case ready
-        case assets
-        case blockers
     }
 
     public init(from decoder: Decoder) throws {
-        try ToriiKagemushaReadinessValidation.rejectUnknownFields(
+        try ToriiOfflineCapabilityValidation.rejectUnknownFields(
             from: decoder,
-            allowed: Set(CodingKeys.allCases.map(\.stringValue)),
-            context: "offline capability"
+            allowed: Set(CodingKeys.allCases.map(\.stringValue))
         )
         let container = try decoder.container(keyedBy: CodingKeys.self)
-        let decodedMandatory = try container.decode(Bool.self, forKey: .mandatory)
         let decodedCapability = try container.decode(
             String.self,
             forKey: .cashHandoffCapability
@@ -9335,19 +8954,7 @@ public struct ToriiOfflineStatus: Decodable, Sendable, Equatable {
         )
         let decodedMaxHops = try container.decode(UInt32.self, forKey: .maxHops)
         let decodedReady = try container.decode(Bool.self, forKey: .ready)
-        let decodedAssets = try container.decode([ToriiJSONValue].self, forKey: .assets)
-        let decodedBlockers = try container.decode(
-            [ToriiKagemushaReadinessBlocker].self,
-            forKey: .blockers
-        )
 
-        guard !decodedMandatory else {
-            throw DecodingError.dataCorruptedError(
-                forKey: .mandatory,
-                in: container,
-                debugDescription: "mandatory must be false for universal offline capability"
-            )
-        }
         guard decodedCapability == KagemushaRecursiveSpend.cashHandoffCapabilityV1 else {
             throw DecodingError.dataCorruptedError(
                 forKey: .cashHandoffCapability,
@@ -9359,7 +8966,7 @@ public struct ToriiOfflineStatus: Decodable, Sendable, Equatable {
             throw DecodingError.dataCorruptedError(
                 forKey: .requiredBridgeAbiVersion,
                 in: container,
-                debugDescription: "required_bridge_abi_version must be 22"
+                debugDescription: "required_bridge_abi_version must be 23"
             )
         }
         guard decodedMaxHops == KagemushaRecursiveSpend.maximumPeerHops else {
@@ -9376,666 +8983,15 @@ public struct ToriiOfflineStatus: Decodable, Sendable, Equatable {
                 debugDescription: "ready must be true for universal offline capability"
             )
         }
-        guard decodedAssets.isEmpty else {
-            throw DecodingError.dataCorruptedError(
-                forKey: .assets,
-                in: container,
-                debugDescription: "assets must be empty because capability is asset-neutral"
-            )
-        }
-        guard decodedBlockers.isEmpty else {
-            throw DecodingError.dataCorruptedError(
-                forKey: .blockers,
-                in: container,
-                debugDescription: "blockers must be empty for universal offline capability"
-            )
-        }
 
-        mandatory = decodedMandatory
         cashHandoffCapability = decodedCapability
         requiredBridgeAbiVersion = decodedABI
         maxHops = decodedMaxHops
         ready = decodedReady
-        assets = decodedAssets
-        blockers = decodedBlockers
     }
 }
 
-/// Legacy asset-specific command diagnostics retained for persisted ABI-21
-/// artifacts. It is not returned by the universal discovery endpoint.
-public struct ToriiKagemushaReadiness: Decodable, Sendable, Equatable {
-    public let cashHandoffCapability: String
-    public let requiredBridgeAbiVersion: UInt32
-    public let maxHops: UInt32
-    public let assetDefinitionId: String
-    /// Authoritative live asset scale. Values above 28 are retained so callers
-    /// can explain an `asset_scale_unsupported` readiness blocker.
-    public let assetScale: UInt32?
-    public let evaluatedBlockHeight: UInt64
-    public let evaluatedBlockHash: String
-    public let evaluatedBlockHashBytes: Data
-    public let activeTransferVerifier: ToriiKagemushaActiveTransferVerifier?
-    public let activeTopUpShieldVerifier: ToriiKagemushaActiveTopUpShieldVerifier?
-    public let activeUnshieldVerifier: ToriiKagemushaActiveUnshieldVerifier?
-    public let activeRecursiveStepEqVerifier: ToriiKagemushaActiveRecursiveStepEqVerifier?
-    public let activeRecursiveStepEpVerifier: ToriiKagemushaActiveRecursiveStepEpVerifier?
-    /// Authenticated recursive release selected atomically with the two V4
-    /// verifier records. `nil` is an explicit unavailable registry state.
-    public let artifactSet: ToriiKagemushaAuthenticatedArtifactSet?
-    public let proofBackendAvailable: Bool
-    /// True only when the chain can verify and redeem the ABI-21 lineage.
-    public let recursiveLineageSupported: Bool
-    public let ready: Bool
-    public let blockers: [ToriiKagemushaReadinessBlocker]
-
-    private enum CodingKeys: String, CodingKey, CaseIterable {
-        case cashHandoffCapability = "cash_handoff_capability"
-        case requiredBridgeAbiVersion = "required_bridge_abi_version"
-        case maxHops = "max_hops"
-        case assetDefinitionId = "asset_definition_id"
-        case assetScale = "asset_scale"
-        case evaluatedBlockHeight = "evaluated_block_height"
-        case evaluatedBlockHash = "evaluated_block_hash"
-        case activeTransferVerifier = "active_transfer_verifier"
-        case activeTopUpShieldVerifier = "active_topup_shield_verifier"
-        case activeUnshieldVerifier = "active_unshield_verifier"
-        case activeRecursiveStepEqVerifier = "active_recursive_step_eq_verifier"
-        case activeRecursiveStepEpVerifier = "active_recursive_step_ep_verifier"
-        case artifactSet = "artifact_set"
-        case proofBackendAvailable = "proof_backend_available"
-        case recursiveLineageSupported = "recursive_lineage_supported"
-        case ready
-        case blockers
-    }
-
-    public init(from decoder: Decoder) throws {
-        try ToriiKagemushaReadinessValidation.rejectUnknownFields(
-            from: decoder,
-            allowed: Set(CodingKeys.allCases.map(\.stringValue)),
-            context: "Kagemusha readiness"
-        )
-        let container = try decoder.container(keyedBy: CodingKeys.self)
-        let decodedCashHandoffCapability = try container.decode(
-            String.self,
-            forKey: .cashHandoffCapability
-        )
-        guard decodedCashHandoffCapability == KagemushaRecursiveSpend.cashHandoffCapabilityV1 else {
-            throw DecodingError.dataCorruptedError(
-                forKey: .cashHandoffCapability,
-                in: container,
-                debugDescription: "cash_handoff_capability must be cash_handoff_v1"
-            )
-        }
-        let decodedBridgeABI = try container.decode(
-            UInt32.self,
-            forKey: .requiredBridgeAbiVersion
-        )
-        guard decodedBridgeABI == KagemushaRecursiveSpend.requiredNativeBridgeAbiVersion else {
-            throw DecodingError.dataCorruptedError(
-                forKey: .requiredBridgeAbiVersion,
-                in: container,
-                debugDescription: "required_bridge_abi_version does not match this SDK"
-            )
-        }
-        let decodedMaxHops = try container.decode(UInt32.self, forKey: .maxHops)
-        guard decodedMaxHops == KagemushaRecursiveSpend.maximumPeerHops else {
-            throw DecodingError.dataCorruptedError(
-                forKey: .maxHops,
-                in: container,
-                debugDescription: "max_hops does not match the first-release protocol bound"
-            )
-        }
-        assetDefinitionId = try Self.decodeExactToken(
-            from: container,
-            forKey: .assetDefinitionId
-        )
-        guard container.contains(.assetScale) else {
-            throw DecodingError.keyNotFound(
-                CodingKeys.assetScale,
-                DecodingError.Context(
-                    codingPath: container.codingPath,
-                    debugDescription: "asset_scale is required"
-                )
-            )
-        }
-        let decodedAssetScale = try container.decodeIfPresent(UInt32.self, forKey: .assetScale)
-        evaluatedBlockHeight = try container.decode(
-            UInt64.self,
-            forKey: .evaluatedBlockHeight
-        )
-        let blockHash = try container.decode(String.self, forKey: .evaluatedBlockHash)
-        guard ToriiKagemushaReadinessValidation.isCanonicalHash(blockHash),
-              let blockHashBytes = Data(hexString: blockHash),
-              blockHashBytes.count == 32 else {
-            throw DecodingError.dataCorruptedError(
-                forKey: .evaluatedBlockHash,
-                in: container,
-                debugDescription: "evaluated_block_hash must be exact lowercase 32-byte hexadecimal"
-            )
-        }
-        evaluatedBlockHash = blockHash
-        evaluatedBlockHashBytes = blockHashBytes
-        guard container.contains(.activeTransferVerifier) else {
-            throw DecodingError.keyNotFound(
-                CodingKeys.activeTransferVerifier,
-                DecodingError.Context(
-                    codingPath: container.codingPath,
-                    debugDescription: "active_transfer_verifier is required"
-                )
-            )
-        }
-        let decodedActiveTransferVerifier = try container.decodeIfPresent(
-            ToriiKagemushaActiveTransferVerifier.self,
-            forKey: .activeTransferVerifier
-        )
-        guard container.contains(.activeTopUpShieldVerifier) else {
-            throw DecodingError.keyNotFound(
-                CodingKeys.activeTopUpShieldVerifier,
-                DecodingError.Context(
-                    codingPath: container.codingPath,
-                    debugDescription: "active_topup_shield_verifier is required"
-                )
-            )
-        }
-        let decodedActiveTopUpShieldVerifier = try container.decodeIfPresent(
-            ToriiKagemushaActiveTopUpShieldVerifier.self,
-            forKey: .activeTopUpShieldVerifier
-        )
-        let decodedActiveUnshieldVerifier = try Self.decodeRequiredNullableVerifier(
-            from: container,
-            forKey: .activeUnshieldVerifier
-        )
-        let decodedActiveRecursiveStepEqVerifier = try Self.decodeRequiredNullableVerifier(
-            from: container,
-            forKey: .activeRecursiveStepEqVerifier
-        )
-        let decodedActiveRecursiveStepEpVerifier = try Self.decodeRequiredNullableVerifier(
-            from: container,
-            forKey: .activeRecursiveStepEpVerifier
-        )
-        guard container.contains(.artifactSet) else {
-            throw DecodingError.keyNotFound(
-                CodingKeys.artifactSet,
-                .init(
-                    codingPath: container.codingPath,
-                    debugDescription: "artifact_set is required"
-                )
-            )
-        }
-        let decodedArtifactSet = try container.decodeIfPresent(
-            ToriiKagemushaAuthenticatedArtifactSet.self,
-            forKey: .artifactSet
-        )
-        let decodedProofBackendAvailable = try container.decode(
-            Bool.self,
-            forKey: .proofBackendAvailable
-        )
-        let decodedRecursiveLineageSupported = try container.decode(
-            Bool.self,
-            forKey: .recursiveLineageSupported
-        )
-        let decodedReady = try container.decode(Bool.self, forKey: .ready)
-        let decodedBlockers = try container.decode(
-            [ToriiKagemushaReadinessBlocker].self,
-            forKey: .blockers
-        )
-        guard decodedReady || !decodedBlockers.isEmpty else {
-            throw DecodingError.dataCorruptedError(
-                forKey: .blockers,
-                in: container,
-                debugDescription: "an unavailable readiness response must include a blocker"
-            )
-        }
-        let blockerCodes = Set(decodedBlockers.map(\.code))
-        guard blockerCodes.count == decodedBlockers.count else {
-            throw DecodingError.dataCorruptedError(
-                forKey: .blockers,
-                in: container,
-                debugDescription: "blocker codes must be unique"
-            )
-        }
-        let scaleUnavailable = blockerCodes.contains("asset_scale_unavailable")
-        let scaleUnsupported = blockerCodes.contains("asset_scale_unsupported")
-        switch decodedAssetScale {
-        case nil where !scaleUnavailable || scaleUnsupported:
-            throw DecodingError.dataCorruptedError(
-                forKey: .assetScale,
-                in: container,
-                debugDescription: "null asset_scale requires only the asset_scale_unavailable blocker"
-            )
-        case let scale?
-            where scale <= KagemushaScaledAmount.maximumScale
-                && (scaleUnavailable || scaleUnsupported):
-            throw DecodingError.dataCorruptedError(
-                forKey: .assetScale,
-                in: container,
-                debugDescription: "supported asset_scale must not have an asset scale blocker"
-            )
-        case let scale?
-            where scale > KagemushaScaledAmount.maximumScale
-                && (!scaleUnsupported || scaleUnavailable):
-            throw DecodingError.dataCorruptedError(
-                forKey: .assetScale,
-                in: container,
-                debugDescription: "asset_scale above 28 requires only the asset_scale_unsupported blocker"
-            )
-        default:
-            break
-        }
-        let transferUnavailable = blockerCodes.contains("transfer_verifier_unavailable")
-        guard (decodedActiveTransferVerifier == nil) == transferUnavailable else {
-            throw DecodingError.dataCorruptedError(
-                forKey: .activeTransferVerifier,
-                in: container,
-                debugDescription: "active_transfer_verifier must be null exactly when transfer_verifier_unavailable is blocked"
-            )
-        }
-        if let decodedActiveTransferVerifier,
-           !decodedActiveTransferVerifier.isActive(at: evaluatedBlockHeight) {
-            throw DecodingError.dataCorruptedError(
-                forKey: .activeTransferVerifier,
-                in: container,
-                debugDescription: "active_transfer_verifier must be active at evaluated_block_height"
-            )
-        }
-        let topUpShieldUnavailable = blockerCodes.contains(
-            "topup_shield_verifier_unavailable"
-        )
-        guard (decodedActiveTopUpShieldVerifier == nil) == topUpShieldUnavailable else {
-            throw DecodingError.dataCorruptedError(
-                forKey: .activeTopUpShieldVerifier,
-                in: container,
-                debugDescription: "active_topup_shield_verifier must be null exactly when topup_shield_verifier_unavailable is blocked"
-            )
-        }
-        if let decodedActiveTopUpShieldVerifier,
-           !decodedActiveTopUpShieldVerifier.isActive(at: evaluatedBlockHeight) {
-            throw DecodingError.dataCorruptedError(
-                forKey: .activeTopUpShieldVerifier,
-                in: container,
-                debugDescription: "active_topup_shield_verifier must be active at evaluated_block_height"
-            )
-        }
-        try Self.validateVerifierAvailability(
-            decodedActiveUnshieldVerifier,
-            blockerCode: "unshield_verifier_unavailable",
-            blockerCodes: blockerCodes,
-            blockHeight: evaluatedBlockHeight,
-            key: .activeUnshieldVerifier,
-            container: container
-        )
-        try Self.validateVerifierAvailability(
-            decodedActiveRecursiveStepEqVerifier,
-            blockerCode: "recursive_step_eq_verifier_unavailable",
-            blockerCodes: blockerCodes,
-            blockHeight: evaluatedBlockHeight,
-            key: .activeRecursiveStepEqVerifier,
-            container: container
-        )
-        try Self.validateVerifierAvailability(
-            decodedActiveRecursiveStepEpVerifier,
-            blockerCode: "recursive_step_ep_verifier_unavailable",
-            blockerCodes: blockerCodes,
-            blockHeight: evaluatedBlockHeight,
-            key: .activeRecursiveStepEpVerifier,
-            container: container
-        )
-        try Self.validateVerifierRole(
-            decodedActiveTransferVerifier,
-            role: .transfer,
-            key: .activeTransferVerifier,
-            container: container
-        )
-        try Self.validateVerifierRole(
-            decodedActiveTopUpShieldVerifier,
-            role: .topUpShield,
-            key: .activeTopUpShieldVerifier,
-            container: container
-        )
-        try Self.validateVerifierRole(
-            decodedActiveUnshieldVerifier,
-            role: .unshield,
-            key: .activeUnshieldVerifier,
-            container: container
-        )
-        try Self.validateRecursiveVerifierRoleV4(
-            decodedActiveRecursiveStepEqVerifier,
-            expectedRegistryName: "kagemusha_recursive_step_eq_v4_verifier_record",
-            expectedCircuitID: KagemushaRecursiveSpend.stepEqCircuitIDV4,
-            key: .activeRecursiveStepEqVerifier,
-            container: container
-        )
-        try Self.validateRecursiveVerifierRoleV4(
-            decodedActiveRecursiveStepEpVerifier,
-            expectedRegistryName: "kagemusha_recursive_step_ep_v4_verifier_record",
-            expectedCircuitID: KagemushaRecursiveSpend.stepEpCircuitIDV4,
-            key: .activeRecursiveStepEpVerifier,
-            container: container
-        )
-        try Self.validateDistinctVerifierBindings(
-            [
-                (.activeTransferVerifier, decodedActiveTransferVerifier),
-                (.activeTopUpShieldVerifier, decodedActiveTopUpShieldVerifier),
-                (.activeUnshieldVerifier, decodedActiveUnshieldVerifier),
-                (
-                    .activeRecursiveStepEqVerifier,
-                    decodedActiveRecursiveStepEqVerifier
-                ),
-                (.activeRecursiveStepEpVerifier, decodedActiveRecursiveStepEpVerifier),
-            ],
-            container: container
-        )
-        try Self.validateAuthenticatedArtifactSet(
-            decodedArtifactSet,
-            assetScale: decodedAssetScale,
-            evaluatedBlockHeight: evaluatedBlockHeight,
-            activeRecursiveStepEqVerifier: decodedActiveRecursiveStepEqVerifier,
-            activeRecursiveStepEpVerifier: decodedActiveRecursiveStepEpVerifier,
-            proofBackendAvailable: decodedProofBackendAvailable,
-            blockerCodes: blockerCodes,
-            container: container
-        )
-        guard decodedProofBackendAvailable
-                != blockerCodes.contains("proof_backend_unavailable") else {
-            throw DecodingError.dataCorruptedError(
-                forKey: .proofBackendAvailable,
-                in: container,
-                debugDescription: "proof_backend_available contradicts the blocker set"
-            )
-        }
-        let expectedRecursiveLineageSupported = decodedProofBackendAvailable
-            && decodedArtifactSet != nil
-            && decodedActiveRecursiveStepEqVerifier != nil
-            && decodedActiveRecursiveStepEpVerifier != nil
-        guard decodedRecursiveLineageSupported == expectedRecursiveLineageSupported else {
-            throw DecodingError.dataCorruptedError(
-                forKey: .recursiveLineageSupported,
-                in: container,
-                debugDescription:
-                    "recursive_lineage_supported must equal the exact authenticated ABI-21 lineage conjunction"
-            )
-        }
-        guard decodedRecursiveLineageSupported
-                != blockerCodes.contains("recursive_lineage_unavailable") else {
-            throw DecodingError.dataCorruptedError(
-                forKey: .recursiveLineageSupported,
-                in: container,
-                debugDescription:
-                    "recursive_lineage_supported contradicts the blocker set"
-            )
-        }
-        let expectedReady = decodedProofBackendAvailable
-            && decodedRecursiveLineageSupported
-            && decodedArtifactSet != nil
-            && decodedAssetScale.map({ $0 <= KagemushaScaledAmount.maximumScale }) == true
-            && decodedActiveTransferVerifier != nil
-            && decodedActiveTopUpShieldVerifier != nil
-            && decodedActiveUnshieldVerifier != nil
-            && decodedActiveRecursiveStepEqVerifier != nil
-            && decodedActiveRecursiveStepEpVerifier != nil
-            && decodedBlockers.isEmpty
-        guard decodedReady == expectedReady else {
-            throw DecodingError.dataCorruptedError(
-                forKey: .ready,
-                in: container,
-                debugDescription: "ready must equal the complete ABI-21 runtime conjunction"
-            )
-        }
-        cashHandoffCapability = decodedCashHandoffCapability
-        requiredBridgeAbiVersion = decodedBridgeABI
-        maxHops = decodedMaxHops
-        assetScale = decodedAssetScale
-        activeTransferVerifier = decodedActiveTransferVerifier
-        activeTopUpShieldVerifier = decodedActiveTopUpShieldVerifier
-        activeUnshieldVerifier = decodedActiveUnshieldVerifier
-        activeRecursiveStepEqVerifier = decodedActiveRecursiveStepEqVerifier
-        activeRecursiveStepEpVerifier = decodedActiveRecursiveStepEpVerifier
-        artifactSet = decodedArtifactSet
-        proofBackendAvailable = decodedProofBackendAvailable
-        recursiveLineageSupported = decodedRecursiveLineageSupported
-        ready = decodedReady
-        blockers = decodedBlockers
-    }
-
-    /// Local wallet proving is available only when the installed native
-    /// release is byte-for-byte the authenticated set advertised by Torii.
-    /// This is deliberately stricter than chain issuance readiness alone.
-    public func localWalletCapabilityAvailableV4() throws -> Bool {
-        guard ready,
-              proofBackendAvailable,
-              recursiveLineageSupported,
-              let artifactSet,
-              let expectedDigest = Data(hexString: artifactSet.manifestSha256),
-              expectedDigest.count == 32,
-              let installedDigest = try NoritoNativeBridge.shared
-                .kagemushaRecursiveSpendInstalledManifestSHA256V4(),
-              installedDigest == expectedDigest else {
-            return false
-        }
-        return try KagemushaRecursiveSpend.nativeCapabilitiesV4().proofBackendAvailable
-    }
-
-    private static func decodeRequiredNullableVerifier(
-        from container: KeyedDecodingContainer<CodingKeys>,
-        forKey key: CodingKeys
-    ) throws -> ToriiKagemushaActiveTransferVerifier? {
-        guard container.contains(key) else {
-            throw DecodingError.keyNotFound(
-                key,
-                .init(
-                    codingPath: container.codingPath,
-                    debugDescription: "\(key.stringValue) is required"
-                )
-            )
-        }
-        return try container.decodeIfPresent(
-            ToriiKagemushaActiveTransferVerifier.self,
-            forKey: key
-        )
-    }
-
-    private static func validateVerifierAvailability(
-        _ verifier: ToriiKagemushaActiveTransferVerifier?,
-        blockerCode: String,
-        blockerCodes: Set<String>,
-        blockHeight: UInt64,
-        key: CodingKeys,
-        container: KeyedDecodingContainer<CodingKeys>
-    ) throws {
-        guard (verifier == nil) == blockerCodes.contains(blockerCode) else {
-            throw DecodingError.dataCorruptedError(
-                forKey: key,
-                in: container,
-                debugDescription: "\(key.stringValue) contradicts \(blockerCode)"
-            )
-        }
-        if let verifier, !verifier.isActive(at: blockHeight) {
-            throw DecodingError.dataCorruptedError(
-                forKey: key,
-                in: container,
-                debugDescription: "\(key.stringValue) must be active at evaluated_block_height"
-            )
-        }
-    }
-
-    private static func validateVerifierRole(
-        _ verifier: ToriiKagemushaActiveTransferVerifier?,
-        role: KagemushaRecursiveSpend.VerifierRole,
-        key: CodingKeys,
-        container: KeyedDecodingContainer<CodingKeys>
-    ) throws {
-        guard let verifier else { return }
-        guard verifier.id.backend == role.registryBackend,
-              verifier.id.name == role.registryName,
-              verifier.circuitId == role.circuitID else {
-            throw DecodingError.dataCorruptedError(
-                forKey: key,
-                in: container,
-                debugDescription:
-                    "\(key.stringValue) must use the exact \(role.registryName) role and circuit"
-            )
-        }
-    }
-
-    /// ABI-21 recursive verifier names and circuits are exact registry roles.
-    /// The authenticated artifact set subsequently binds their proof cap and
-    /// lifecycle window to one release.
-    private static func validateRecursiveVerifierRoleV4(
-        _ verifier: ToriiKagemushaActiveTransferVerifier?,
-        expectedRegistryName: String,
-        expectedCircuitID: String,
-        key: CodingKeys,
-        container: KeyedDecodingContainer<CodingKeys>
-    ) throws {
-        guard let verifier else { return }
-        guard verifier.id.backend == "halo2/ipa",
-              verifier.id.name == expectedRegistryName,
-              verifier.circuitId == expectedCircuitID else {
-            throw DecodingError.dataCorruptedError(
-                forKey: key,
-                in: container,
-                debugDescription:
-                    "\(key.stringValue) must use the exact \(expectedRegistryName) V4 role and circuit"
-            )
-        }
-    }
-
-    private static func validateAuthenticatedArtifactSet(
-        _ artifactSet: ToriiKagemushaAuthenticatedArtifactSet?,
-        assetScale: UInt32?,
-        evaluatedBlockHeight: UInt64,
-        activeRecursiveStepEqVerifier: ToriiKagemushaActiveTransferVerifier?,
-        activeRecursiveStepEpVerifier: ToriiKagemushaActiveTransferVerifier?,
-        proofBackendAvailable: Bool,
-        blockerCodes: Set<String>,
-        container: KeyedDecodingContainer<CodingKeys>
-    ) throws {
-        let registryBlockerCount = [
-            "recursive_v4_registry_unavailable",
-            "recursive_v4_registry_malformed",
-        ].filter(blockerCodes.contains).count
-
-        guard let artifactSet else {
-            guard registryBlockerCount == 1 else {
-                throw DecodingError.dataCorruptedError(
-                    forKey: .artifactSet,
-                    in: container,
-                    debugDescription:
-                        "null artifact_set requires exactly one authenticated V4 registry blocker"
-                )
-            }
-            guard activeRecursiveStepEqVerifier == nil,
-                  activeRecursiveStepEpVerifier == nil else {
-                throw DecodingError.dataCorruptedError(
-                    forKey: .artifactSet,
-                    in: container,
-                    debugDescription:
-                        "recursive verifiers require an authenticated artifact_set"
-                )
-            }
-            guard !proofBackendAvailable else {
-                throw DecodingError.dataCorruptedError(
-                    forKey: .proofBackendAvailable,
-                    in: container,
-                    debugDescription:
-                        "proof_backend_available requires an authenticated artifact_set"
-                )
-            }
-            return
-        }
-
-        guard registryBlockerCount == 0 else {
-            throw DecodingError.dataCorruptedError(
-                forKey: .artifactSet,
-                in: container,
-                debugDescription:
-                    "artifact_set contradicts the authenticated V4 registry blocker"
-            )
-        }
-        guard let activeRecursiveStepEqVerifier,
-              let activeRecursiveStepEpVerifier else {
-            throw DecodingError.dataCorruptedError(
-                forKey: .artifactSet,
-                in: container,
-                debugDescription: "artifact_set requires both recursive V4 verifiers"
-            )
-        }
-        guard assetScale == artifactSet.assetScale else {
-            throw DecodingError.dataCorruptedError(
-                forKey: .assetScale,
-                in: container,
-                debugDescription: "artifact_set must bind the live asset_scale"
-            )
-        }
-        guard evaluatedBlockHeight >= artifactSet.activationHeight,
-              evaluatedBlockHeight < artifactSet.withdrawalHeight else {
-            throw DecodingError.dataCorruptedError(
-                forKey: .artifactSet,
-                in: container,
-                debugDescription: "artifact_set must be active at evaluated_block_height"
-            )
-        }
-        for (key, verifier) in [
-            (CodingKeys.activeRecursiveStepEqVerifier, activeRecursiveStepEqVerifier),
-            (CodingKeys.activeRecursiveStepEpVerifier, activeRecursiveStepEpVerifier),
-        ] {
-            guard verifier.activationHeight == artifactSet.activationHeight,
-                  verifier.withdrawalHeight == artifactSet.withdrawalHeight,
-                  verifier.maxProofBytes == artifactSet.maxProofBytes else {
-                throw DecodingError.dataCorruptedError(
-                    forKey: key,
-                    in: container,
-                    debugDescription: "\(key.stringValue) must be bound exactly to artifact_set"
-                )
-            }
-        }
-    }
-
-    private static func validateDistinctVerifierBindings(
-        _ entries: [(CodingKeys, ToriiKagemushaActiveTransferVerifier?)],
-        container: KeyedDecodingContainer<CodingKeys>
-    ) throws {
-        let active = entries.compactMap { key, verifier in
-            verifier.map { (key, $0) }
-        }
-        let identifiers = active.map { entry in
-            "\(entry.1.id.backend)\u{0}\(entry.1.id.name)"
-        }
-        let commitments = active.map { $0.1.commitment }
-        let schemaHashes = active.map { $0.1.publicInputsSchemaHash }
-        guard Set(identifiers).count == active.count,
-              Set(commitments).count == active.count,
-              Set(schemaHashes).count == active.count else {
-            throw DecodingError.dataCorruptedError(
-                forKey: .activeTransferVerifier,
-                in: container,
-                debugDescription:
-                    "active verifier ids, commitments, and public-input schema hashes must be pairwise distinct across roles"
-            )
-        }
-    }
-
-    private static func decodeExactToken(
-        from container: KeyedDecodingContainer<CodingKeys>,
-        forKey key: CodingKeys
-    ) throws -> String {
-        let value = try container.decode(String.self, forKey: key)
-        guard ToriiKagemushaReadinessValidation.isExactToken(value),
-              canonicalPublicAssetDefinitionLiteral(value) == value
-        else {
-            throw DecodingError.dataCorruptedError(
-                forKey: key,
-                in: container,
-                debugDescription: "\(key.stringValue) must be a canonical unprefixed Base58 asset definition id"
-            )
-        }
-        return value
-    }
-}
-
-private enum ToriiKagemushaReadinessValidation {
-    private static let maximumVerifierIDComponentBytes = 256
-
+private enum ToriiOfflineCapabilityValidation {
     private struct RawCodingKey: CodingKey {
         let stringValue: String
         let intValue: Int? = nil
@@ -10046,135 +9002,16 @@ private enum ToriiKagemushaReadinessValidation {
 
     static func rejectUnknownFields(
         from decoder: Decoder,
-        allowed: Set<String>,
-        context: String
+        allowed: Set<String>
     ) throws {
         let fields = try decoder.container(keyedBy: RawCodingKey.self)
         if let unknown = fields.allKeys.first(where: { !allowed.contains($0.stringValue) }) {
             throw DecodingError.dataCorruptedError(
                 forKey: unknown,
                 in: fields,
-                debugDescription: "Unsupported \(context) field \(unknown.stringValue)"
+                debugDescription: "Unsupported offline capability field \(unknown.stringValue)"
             )
         }
-    }
-
-    static func isCanonicalHash(_ value: String) -> Bool {
-        let bytes = Array(value.utf8)
-        return bytes.count == 64 && bytes.allSatisfy {
-            ($0 >= UInt8(ascii: "0") && $0 <= UInt8(ascii: "9"))
-                || ($0 >= UInt8(ascii: "a") && $0 <= UInt8(ascii: "f"))
-        }
-    }
-
-    static func isPortableArtifactIdentifier(_ value: String) -> Bool {
-        let bytes = Array(value.utf8)
-        guard (1...128).contains(bytes.count),
-              let first = bytes.first,
-              let last = bytes.last,
-              isASCIIAlphanumeric(first),
-              isASCIIAlphanumeric(last),
-              bytes.allSatisfy({
-                  isASCIIAlphanumeric($0)
-                      || [UInt8(ascii: "."), UInt8(ascii: "_"), UInt8(ascii: "-")]
-                          .contains($0)
-              }) else {
-            return false
-        }
-
-        let basename = String(
-            decoding: bytes.prefix(while: { $0 != UInt8(ascii: ".") }),
-            as: UTF8.self
-        ).lowercased()
-        if ["con", "prn", "aux", "nul"].contains(basename) {
-            return false
-        }
-        let basenameBytes = Array(basename.utf8)
-        if basenameBytes.count == 4,
-           (basenameBytes.prefix(3).elementsEqual("com".utf8)
-               || basenameBytes.prefix(3).elementsEqual("lpt".utf8)),
-           (UInt8(ascii: "1")...UInt8(ascii: "9")).contains(basenameBytes[3]) {
-            return false
-        }
-        return true
-    }
-
-    static func isStableCode(_ value: String) -> Bool {
-        let bytes = Array(value.utf8)
-        guard (1...64).contains(bytes.count), let first = bytes.first else {
-            return false
-        }
-        let isDigit: (UInt8) -> Bool = {
-            $0 >= UInt8(ascii: "0") && $0 <= UInt8(ascii: "9")
-        }
-        let isLowercase: (UInt8) -> Bool = {
-            $0 >= UInt8(ascii: "a") && $0 <= UInt8(ascii: "z")
-        }
-        return (isDigit(first) || isLowercase(first))
-            && bytes.allSatisfy {
-                isDigit($0) || isLowercase($0) || $0 == UInt8(ascii: "_")
-            }
-    }
-
-    static func isExactText(_ value: String) -> Bool {
-        !value.isEmpty
-            && value == value.trimmingCharacters(in: .whitespacesAndNewlines)
-            && !value.unicodeScalars.contains {
-                CharacterSet.controlCharacters.contains($0)
-            }
-    }
-
-    static func isExactHumanText(
-        _ value: String,
-        maximumUnicodeScalars: Int
-    ) -> Bool {
-        !value.isEmpty
-            && value == value.trimmingCharacters(in: .whitespacesAndNewlines)
-            && value.unicodeScalars.count <= maximumUnicodeScalars
-            && !value.unicodeScalars.contains {
-                $0.value <= 0x1f || (0x7f...0x9f).contains($0.value)
-            }
-    }
-
-    static func isExactToken(_ value: String) -> Bool {
-        isExactText(value)
-            && !value.unicodeScalars.contains {
-                CharacterSet.whitespacesAndNewlines.contains($0)
-            }
-    }
-
-    static func isPortableVerifierIDComponent(_ value: String) -> Bool {
-        !value.isEmpty
-            && value.utf8.count <= maximumVerifierIDComponentBytes
-            && isPortableCircuitID(value)
-    }
-
-    static func isPortableCircuitID(_ value: String) -> Bool {
-        let bytes = Array(value.utf8)
-        guard let first = bytes.first, let last = bytes.last,
-              isLowercaseOrDigit(first), isLowercaseOrDigit(last) else {
-            return false
-        }
-        for forbidden in ["..", "//", ":::", "/:", ":/", "/.", "./", ":.", ".:"]
-            where value.contains(forbidden) {
-            return false
-        }
-        return bytes.allSatisfy {
-            isLowercaseOrDigit($0)
-                || [UInt8(ascii: "-"), UInt8(ascii: "_"), UInt8(ascii: "/"),
-                    UInt8(ascii: ":"), UInt8(ascii: ".")].contains($0)
-        }
-    }
-
-    private static func isLowercaseOrDigit(_ byte: UInt8) -> Bool {
-        (byte >= UInt8(ascii: "a") && byte <= UInt8(ascii: "z"))
-            || (byte >= UInt8(ascii: "0") && byte <= UInt8(ascii: "9"))
-    }
-
-    private static func isASCIIAlphanumeric(_ byte: UInt8) -> Bool {
-        (byte >= UInt8(ascii: "a") && byte <= UInt8(ascii: "z"))
-            || (byte >= UInt8(ascii: "A") && byte <= UInt8(ascii: "Z"))
-            || (byte >= UInt8(ascii: "0") && byte <= UInt8(ascii: "9"))
     }
 }
 
@@ -11463,6 +10300,17 @@ enum ToriiRequestValidation {
         return trimmed.lowercased()
     }
 
+    static func normalized16ByteHex(_ value: String, field: String) throws -> String {
+        var trimmed = try normalizedNonEmpty(value, field: field)
+        if trimmed.hasPrefix("0x") || trimmed.hasPrefix("0X") {
+            trimmed = String(trimmed.dropFirst(2))
+        }
+        guard trimmed.count == 32, Data(hexString: trimmed) != nil else {
+            throw ToriiClientError.invalidPayload("\(field) must be a 16-byte hex string.")
+        }
+        return trimmed.lowercased()
+    }
+
     static func normalizedOptional32ByteHex(_ value: String?, field: String) throws -> String? {
         guard let value else { return nil }
         return try normalized32ByteHex(value, field: field)
@@ -12089,7 +10937,7 @@ fileprivate func rejectUnknownContractManifestFields(
     }
 }
 
-fileprivate func isExactContractManifestString(_ value: String, allowEmpty: Bool = false) -> Bool {
+func isExactContractManifestString(_ value: String, allowEmpty: Bool = false) -> Bool {
     guard (allowEmpty || !value.isEmpty),
           value == value.trimmingCharacters(in: .whitespacesAndNewlines) else {
         return false
@@ -18192,7 +17040,6 @@ public struct ToriiPipelinePreflightBlock: Decodable, Sendable, Equatable {
 }
 
 public struct ToriiPipelinePreflightPipeline: Decodable, Sendable, Equatable {
-    public let signatureBatchMax: Int
     public let signatureBatchMaxEd25519: Int
     public let signatureBatchMaxSecp256k1: Int
     public let signatureBatchMaxPqc: Int
@@ -18201,13 +17048,45 @@ public struct ToriiPipelinePreflightPipeline: Decodable, Sendable, Equatable {
     public let ivmMaxDecodedInstructions: Int
 
     private enum CodingKeys: String, CodingKey {
-        case signatureBatchMax = "signature_batch_max"
         case signatureBatchMaxEd25519 = "signature_batch_max_ed25519"
         case signatureBatchMaxSecp256k1 = "signature_batch_max_secp256k1"
         case signatureBatchMaxPqc = "signature_batch_max_pqc"
         case signatureBatchMaxBls = "signature_batch_max_bls"
         case overlayMaxInstructions = "overlay_max_instructions"
         case ivmMaxDecodedInstructions = "ivm_max_decoded_instructions"
+    }
+
+    public init(from decoder: Decoder) throws {
+        try rejectUnknownJSONFields(
+            from: decoder,
+            allowed: [
+                "signature_batch_max_ed25519",
+                "signature_batch_max_secp256k1",
+                "signature_batch_max_pqc",
+                "signature_batch_max_bls",
+                "overlay_max_instructions",
+                "ivm_max_cycles_upper_bound",
+                "ivm_admission_cycle_limit",
+                "ivm_max_decoded_instructions",
+            ],
+            debugName: "pipeline preflight pipeline"
+        )
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        signatureBatchMaxEd25519 = try container.decode(
+            Int.self,
+            forKey: .signatureBatchMaxEd25519
+        )
+        signatureBatchMaxSecp256k1 = try container.decode(
+            Int.self,
+            forKey: .signatureBatchMaxSecp256k1
+        )
+        signatureBatchMaxPqc = try container.decode(Int.self, forKey: .signatureBatchMaxPqc)
+        signatureBatchMaxBls = try container.decode(Int.self, forKey: .signatureBatchMaxBls)
+        overlayMaxInstructions = try container.decode(Int.self, forKey: .overlayMaxInstructions)
+        ivmMaxDecodedInstructions = try container.decode(
+            Int.self,
+            forKey: .ivmMaxDecodedInstructions
+        )
     }
 }
 
@@ -18297,92 +17176,74 @@ private enum ToriiDataModelValidation {
     case schemaMismatch(expected: String, actual: String?)
 }
 
-public struct ToriiGovernanceInstruction: Codable, Sendable {
+public struct ToriiGovernanceInstruction: Decodable, Sendable {
     public let wireId: String
     public let payloadHex: String
 
-    private enum CodingKeys: String, CodingKey {
+    private enum CodingKeys: String, CodingKey, CaseIterable {
         case wireId = "wire_id"
         case payloadHex = "payload_hex"
     }
-}
-
-public struct ToriiGovernanceWindow: Codable, Sendable {
-    public var lower: UInt64
-    public var upper: UInt64
-
-    private enum CodingKeys: String, CodingKey {
-        case lower
-        case upper
-    }
-
-    public init(lower: UInt64, upper: UInt64) {
-        self.lower = lower
-        self.upper = upper
-    }
 
     public init(from decoder: Decoder) throws {
+        try rejectUnknownJSONFields(
+            from: decoder,
+            allowed: Set(CodingKeys.allCases.map(\.stringValue)),
+            debugName: "governance instruction"
+        )
         let container = try decoder.container(keyedBy: CodingKeys.self)
-        lower = try container.decode(UInt64.self, forKey: .lower)
-        upper = try container.decode(UInt64.self, forKey: .upper)
-        guard lower <= upper else {
-            throw DecodingError.dataCorrupted(
-                .init(
-                    codingPath: container.codingPath,
-                    debugDescription: "governance window upper bound must not precede its lower bound"
-                )
+        wireId = try container.decode(String.self, forKey: .wireId)
+        guard !wireId.isEmpty,
+              wireId == wireId.trimmingCharacters(in: .whitespacesAndNewlines) else {
+            throw DecodingError.dataCorruptedError(
+                forKey: .wireId,
+                in: container,
+                debugDescription: "wire_id must be exact non-empty text"
             )
         }
-    }
-
-    public func encode(to encoder: Encoder) throws {
-        guard lower <= upper else {
-            throw ToriiClientError.invalidPayload(
-                "governance window upper bound must not precede its lower bound."
+        payloadHex = try container.decode(String.self, forKey: .payloadHex)
+        guard !payloadHex.isEmpty,
+              payloadHex.count.isMultiple(of: 2),
+              payloadHex.unicodeScalars.allSatisfy({ scalar in
+                  (48...57).contains(scalar.value) || (97...102).contains(scalar.value)
+              }) else {
+            throw DecodingError.dataCorruptedError(
+                forKey: .payloadHex,
+                in: container,
+                debugDescription: "payload_hex must be exact non-empty lowercase hexadecimal"
             )
         }
-        var container = encoder.container(keyedBy: CodingKeys.self)
-        try container.encode(lower, forKey: .lower)
-        try container.encode(upper, forKey: .upper)
     }
 }
 
 public struct ToriiGovernanceDeployContractProposalRequest: Encodable, Sendable {
     public var contractAddress: String?
     public var contractAlias: String?
-    public var codeHashHex: String
-    public var abiHashHex: String
-    public var abiVersion: String
-    public var window: ToriiGovernanceWindow?
-    public var mode: ToriiGovernanceReferendumMode?
+    public var codeHash: Data
+    public var abiHash: Data
+    public var abiVersion: UInt16
     public var manifestProvenance: ToriiContractManifestProvenance?
 
     private enum CodingKeys: String, CodingKey {
         case contractAddress = "contract_address"
         case contractAlias = "contract_alias"
-        case codeHashHex = "code_hash"
-        case abiHashHex = "abi_hash"
+        case codeHash = "code_hash"
+        case abiHash = "abi_hash"
         case abiVersion = "abi_version"
-        case window
-        case mode
         case manifestProvenance = "manifest_provenance"
     }
 
     public init(contractAddress: String? = nil,
                 contractAlias: String? = nil,
-                codeHashHex: String,
-                abiHashHex: String,
-                abiVersion: String = "1",
-                window: ToriiGovernanceWindow? = nil,
-                mode: ToriiGovernanceReferendumMode? = nil,
+                codeHash: Data,
+                abiHash: Data,
+                abiVersion: UInt16 = 1,
                 manifestProvenance: ToriiContractManifestProvenance? = nil) {
         self.contractAddress = contractAddress
         self.contractAlias = contractAlias
-        self.codeHashHex = codeHashHex
-        self.abiHashHex = abiHashHex
+        self.codeHash = codeHash
+        self.abiHash = abiHash
         self.abiVersion = abiVersion
-        self.window = window
-        self.mode = mode
         self.manifestProvenance = manifestProvenance
     }
 
@@ -18392,108 +17253,64 @@ public struct ToriiGovernanceDeployContractProposalRequest: Encodable, Sendable 
             contractAlias: contractAlias,
             field: "governanceProposeDeployContract"
         )
-        let normalizedCodeHash = try canonicalizeGovernanceHex32(codeHashHex, field: "code_hash")
-        let normalizedAbiHash = try canonicalizeGovernanceHex32(abiHashHex, field: "abi_hash")
-        guard abiVersion == "1" else {
+        if let contractAddress = normalizedTarget.contractAddress,
+           !ContractAddressV1.isCanonical(contractAddress) {
+            throw ToriiClientError.invalidPayload("contract_address must be a canonical ABI V1 address.")
+        }
+        guard codeHash.count == 32 else {
+            throw ToriiClientError.invalidPayload("code_hash must contain exactly 32 bytes.")
+        }
+        guard abiHash.count == 32 else {
+            throw ToriiClientError.invalidPayload("abi_hash must contain exactly 32 bytes.")
+        }
+        guard abiVersion == 1 else {
             throw ToriiClientError.invalidPayload("abi_version must be exactly 1.")
         }
         var container = encoder.container(keyedBy: CodingKeys.self)
         try container.encodeIfPresent(normalizedTarget.contractAddress, forKey: .contractAddress)
         try container.encodeIfPresent(normalizedTarget.contractAlias, forKey: .contractAlias)
-        try container.encode(normalizedCodeHash, forKey: .codeHashHex)
-        try container.encode(normalizedAbiHash, forKey: .abiHashHex)
+        try container.encode(codeHash.hexLowercased(), forKey: .codeHash)
+        try container.encode(abiHash.hexLowercased(), forKey: .abiHash)
         try container.encode(abiVersion, forKey: .abiVersion)
-        try container.encodeIfPresent(window, forKey: .window)
-        try container.encodeIfPresent(mode, forKey: .mode)
         try container.encodeIfPresent(manifestProvenance, forKey: .manifestProvenance)
     }
 }
 
-/// Finalizes the referendum identified by the proposal's exact lowercase 32-byte digest.
-public struct ToriiGovernanceFinalizeRequest: Encodable, Sendable {
-    public var referendumId: String
-    public var proposalId: String
-
-    private enum CodingKeys: String, CodingKey {
-        case referendumId = "referendum_id"
-        case proposalId = "proposal_id"
-    }
-
-    public init(referendumId: String, proposalId: String) {
-        self.referendumId = referendumId
-        self.proposalId = proposalId
-    }
-
-    public func encode(to encoder: Encoder) throws {
-        let exactReferendumId = try ToriiRequestValidation.exactLowercase32ByteHex(
-            referendumId,
-            field: "referendum_id"
-        )
-        let exactProposalId = try ToriiRequestValidation.exactLowercase32ByteHex(
-            proposalId,
-            field: "proposal_id"
-        )
-        guard exactReferendumId == exactProposalId else {
-            throw ToriiClientError.invalidPayload(
-                "referendum_id must equal proposal_id"
-            )
-        }
-        var container = encoder.container(keyedBy: CodingKeys.self)
-        try container.encode(exactReferendumId, forKey: .referendumId)
-        try container.encode(exactProposalId, forKey: .proposalId)
-    }
-}
-
-public struct ToriiGovernanceEnactRequest: Encodable, Sendable {
-    public var proposalId: String
-
-    private enum CodingKeys: String, CodingKey {
-        case proposalId = "proposal_id"
-    }
-
-    public init(proposalId: String) {
-        self.proposalId = proposalId
-    }
-
-    public func encode(to encoder: Encoder) throws {
-        let exactProposalId = try ToriiRequestValidation.exactLowercase32ByteHex(
-            proposalId,
-            field: "proposal_id"
-        )
-        var container = encoder.container(keyedBy: CodingKeys.self)
-        try container.encode(exactProposalId, forKey: .proposalId)
-    }
-}
-
 public struct ToriiGovernanceProposalResponse: Decodable, Sendable {
-    public let ok: Bool
     public let proposalId: String
     public let txInstructions: [ToriiGovernanceInstruction]
 
-    private enum CodingKeys: String, CodingKey {
-        case ok
+    private enum CodingKeys: String, CodingKey, CaseIterable {
         case proposalId = "proposal_id"
         case txInstructions = "tx_instructions"
     }
 
-    public init(ok: Bool,
-                proposalId: String,
-                txInstructions: [ToriiGovernanceInstruction]) {
-        self.ok = ok
-        self.proposalId = proposalId
-        self.txInstructions = txInstructions
-    }
-
     public init(from decoder: Decoder) throws {
+        try rejectUnknownJSONFields(
+            from: decoder,
+            allowed: Set(CodingKeys.allCases.map(\.stringValue)),
+            debugName: "governance proposal response"
+        )
         let container = try decoder.container(keyedBy: CodingKeys.self)
-        ok = try container.decode(Bool.self, forKey: .ok)
         let proposalId = try container.decode(String.self, forKey: .proposalId)
-        self.proposalId = try ToriiValidation.normalized32ByteHex(
+        self.proposalId = try exactDetachedAssetTransferHash(
             proposalId,
             field: "proposal_id",
             codingPath: container.codingPath + [CodingKeys.proposalId]
         )
-        txInstructions = try container.decode([ToriiGovernanceInstruction].self, forKey: .txInstructions)
+        let txInstructions = try container.decode(
+            [ToriiGovernanceInstruction].self,
+            forKey: .txInstructions
+        )
+        guard txInstructions.count == 1,
+              txInstructions[0].wireId == "iroha_data_model::isi::governance::ProposeDeployContract" else {
+            throw DecodingError.dataCorruptedError(
+                forKey: .txInstructions,
+                in: container,
+                debugDescription: "governance proposal response must contain exactly one full ProposeDeployContract wire instruction"
+            )
+        }
+        self.txInstructions = txInstructions
     }
 }
 
@@ -18521,112 +17338,208 @@ public struct ToriiGovernanceBallotResponse: Decodable, Sendable {
     }
 }
 
-public struct ToriiGovernanceFinalizeResponse: Decodable, Sendable {
-    public let ok: Bool
-    public let txInstructions: [ToriiGovernanceInstruction]
-
-    private enum CodingKeys: String, CodingKey {
-        case ok
-        case txInstructions = "tx_instructions"
-    }
-}
-
-public struct ToriiGovernanceEnactResponse: Decodable, Sendable {
-    public let ok: Bool
-    public let txInstructions: [ToriiGovernanceInstruction]
-
-    private enum CodingKeys: String, CodingKey {
-        case ok
-        case txInstructions = "tx_instructions"
-    }
-}
-
 public enum ToriiGovernanceProposalKind: Decodable, Sendable, Equatable {
     case deployContract(ToriiGovernanceDeployContractKind)
-    case unknown(String)
+    case runtimeUpgrade(ToriiGovernanceRuntimeUpgradeProposal)
+    case sccpRouteGovernance(ToriiGovernanceSccpRouteProposal)
+    case validationFeePolicy(ToriiGovernanceValidationFeePolicyProposal)
+    case validationFeePayoutLifecycle(ToriiGovernanceValidationFeePayoutLifecycleProposal)
+    case musubiRegistryGovernance(ToriiGovernanceMusubiRegistryAction)
+    case sorafsProviderGovernance(ToriiGovernanceSorafsProviderProposal)
 
-    private enum CodingKeys: String, CodingKey {
-        case deployContract = "DeployContract"
+    private enum CodingKeys: String, CodingKey, CaseIterable {
+        case kind
+        case payload
     }
 
     public init(from decoder: Decoder) throws {
-        let container = try decoder.singleValueContainer()
-        if let dictionary = try? container.decode([String: ToriiGovernanceDeployContractKind].self) {
-            guard dictionary.count == 1 else {
-                throw DecodingError.dataCorruptedError(in: container,
-                                                       debugDescription: "Governance proposal kind expects single-key object")
-            }
-            if let deploy = dictionary["DeployContract"] {
-                self = .deployContract(deploy)
-                return
-            }
+        try rejectUnknownJSONFields(
+            from: decoder,
+            allowed: Set(CodingKeys.allCases.map(\.stringValue)),
+            debugName: "governance proposal kind"
+        )
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        let tag = try container.decode(String.self, forKey: .kind)
+        let payloadWire = try container.decode(ToriiJSONValue.self, forKey: .payload)
+        try governanceRequireExactJSONIntegers(
+            payloadWire,
+            codingPath: container.codingPath + [CodingKeys.payload],
+            context: "governance proposal payload"
+        )
+        switch tag {
+        case "DeployContract":
+            self = .deployContract(
+                try container.decode(ToriiGovernanceDeployContractKind.self, forKey: .payload)
+            )
+        case "RuntimeUpgrade":
+            self = .runtimeUpgrade(
+                try container.decode(ToriiGovernanceRuntimeUpgradeProposal.self, forKey: .payload)
+            )
+        case "SccpRouteGovernance":
+            self = .sccpRouteGovernance(
+                try container.decode(ToriiGovernanceSccpRouteProposal.self, forKey: .payload)
+            )
+        case "ValidationFeePolicy":
+            self = .validationFeePolicy(
+                try container.decode(ToriiGovernanceValidationFeePolicyProposal.self, forKey: .payload)
+            )
+        case "ValidationFeePayoutLifecycle":
+            self = .validationFeePayoutLifecycle(
+                try container.decode(
+                    ToriiGovernanceValidationFeePayoutLifecycleProposal.self,
+                    forKey: .payload
+                )
+            )
+        case "MusubiRegistryGovernance":
+            self = .musubiRegistryGovernance(
+                try container.decode(ToriiGovernanceMusubiRegistryAction.self, forKey: .payload)
+            )
+        case "SorafsProviderGovernance":
+            self = .sorafsProviderGovernance(
+                try container.decode(ToriiGovernanceSorafsProviderProposal.self, forKey: .payload)
+            )
+        default:
+            throw DecodingError.dataCorruptedError(
+                forKey: .kind,
+                in: container,
+                debugDescription: "unsupported governance proposal kind \(tag)"
+            )
         }
-        if let raw = try? container.decode([String: ToriiJSONValue].self) {
-            guard raw.count == 1, let key = raw.keys.first else {
-                throw DecodingError.dataCorruptedError(in: container,
-                                                       debugDescription: "Governance proposal kind expects single-key object")
-            }
-            self = .unknown(key)
-            return
-        }
-        throw DecodingError.dataCorruptedError(in: container,
-                                               debugDescription: "Unable to decode governance proposal kind")
     }
 }
 
 public struct ToriiGovernanceDeployContractKind: Decodable, Sendable, Equatable {
     public let contractAddress: String
-    public let codeHashHex: String
-    public let abiHashHex: String
-    public let abiVersion: String
+    public let codeHash: Data
+    public let abiHash: Data
+    public let abiVersion: UInt16
+    public let manifestProvenance: ToriiContractManifestProvenance?
 
-    private enum CodingKeys: String, CodingKey {
+    private enum CodingKeys: String, CodingKey, CaseIterable {
         case contractAddress = "contract_address"
-        case codeHashHex = "code_hash_hex"
-        case abiHashHex = "abi_hash_hex"
+        case codeHash = "code_hash"
+        case abiHash = "abi_hash"
         case abiVersion = "abi_version"
+        case manifestProvenance = "manifest_provenance"
     }
 
     public init(from decoder: Decoder) throws {
+        try rejectUnknownJSONFields(
+            from: decoder,
+            allowed: Set(CodingKeys.allCases.map(\.stringValue)),
+            debugName: "governance deploy-contract proposal kind"
+        )
         let container = try decoder.container(keyedBy: CodingKeys.self)
         contractAddress = try normalizeToriiContractAddressLiteral(
             try container.decode(String.self, forKey: .contractAddress),
             field: "contract_address"
         )
-        let codeHashHex = try container.decode(String.self, forKey: .codeHashHex)
-        self.codeHashHex = try ToriiValidation.normalized32ByteHex(
-            codeHashHex,
-            field: "code_hash_hex",
-            codingPath: container.codingPath + [CodingKeys.codeHashHex]
+        guard ContractAddressV1.isCanonical(contractAddress) else {
+            throw DecodingError.dataCorruptedError(
+                forKey: .contractAddress,
+                in: container,
+                debugDescription: "contract_address must be a canonical ABI V1 address"
+            )
+        }
+        let codeHashText = try exactDetachedAssetTransferHash(
+            container.decode(String.self, forKey: .codeHash),
+            field: "code_hash",
+            codingPath: container.codingPath + [CodingKeys.codeHash]
         )
-        let abiHashHex = try container.decode(String.self, forKey: .abiHashHex)
-        self.abiHashHex = try ToriiValidation.normalized32ByteHex(
-            abiHashHex,
-            field: "abi_hash_hex",
-            codingPath: container.codingPath + [CodingKeys.abiHashHex]
+        guard let codeHash = Data(hexString: codeHashText) else {
+            throw DecodingError.dataCorruptedError(
+                forKey: .codeHash,
+                in: container,
+                debugDescription: "code_hash is not exact lowercase hexadecimal"
+            )
+        }
+        self.codeHash = codeHash
+        let abiHashText = try exactDetachedAssetTransferHash(
+            container.decode(String.self, forKey: .abiHash),
+            field: "abi_hash",
+            codingPath: container.codingPath + [CodingKeys.abiHash]
         )
-        abiVersion = try container.decode(String.self, forKey: .abiVersion)
+        guard let abiHash = Data(hexString: abiHashText) else {
+            throw DecodingError.dataCorruptedError(
+                forKey: .abiHash,
+                in: container,
+                debugDescription: "abi_hash is not exact lowercase hexadecimal"
+            )
+        }
+        self.abiHash = abiHash
+        abiVersion = try container.decode(UInt16.self, forKey: .abiVersion)
+        guard abiVersion == 1 else {
+            throw DecodingError.dataCorruptedError(
+                forKey: .abiVersion,
+                in: container,
+                debugDescription: "abi_version must be exactly 1"
+            )
+        }
+        guard container.contains(.manifestProvenance) else {
+            throw DecodingError.keyNotFound(
+                CodingKeys.manifestProvenance,
+                DecodingError.Context(
+                    codingPath: container.codingPath,
+                    debugDescription: "manifest_provenance must be present as null or an exact provenance object"
+                )
+            )
+        }
+        manifestProvenance = try container.decodeIfPresent(
+            ToriiContractManifestProvenance.self,
+            forKey: .manifestProvenance
+        )
     }
 }
 
-public enum ToriiGovernanceProposalStatus: String, Decodable, Sendable {
+public enum ToriiGovernanceProposalStatus: String, Decodable, Sendable, Equatable {
     case proposed = "Proposed"
-    case approved = "Approved"
     case rejected = "Rejected"
     case enacted = "Enacted"
+    case superseded = "Superseded"
+    case executionFailed = "ExecutionFailed"
 }
 
-public struct ToriiGovernanceProposalRecord: Decodable, Sendable {
+public struct ToriiGovernanceProposalRecord: Decodable, Sendable, Equatable {
     public let proposer: String
     public let kind: ToriiGovernanceProposalKind
     public let createdHeight: UInt64
     public let status: ToriiGovernanceProposalStatus
 
-    private enum CodingKeys: String, CodingKey {
+    private enum CodingKeys: String, CodingKey, CaseIterable {
         case proposer
         case kind
         case createdHeight = "created_height"
         case status
+    }
+
+    public init(from decoder: Decoder) throws {
+        try rejectUnknownJSONFields(
+            from: decoder,
+            allowed: Set(CodingKeys.allCases.map(\.stringValue)),
+            debugName: "governance proposal record"
+        )
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        let proposer = try container.decode(String.self, forKey: .proposer)
+        do {
+            _ = try exactCanonicalToriiAccountAddress(proposer)
+        } catch {
+            throw DecodingError.dataCorruptedError(
+                forKey: .proposer,
+                in: container,
+                debugDescription: "proposer must be an exact canonical account address"
+            )
+        }
+        self.proposer = proposer
+        kind = try container.decode(ToriiGovernanceProposalKind.self, forKey: .kind)
+        createdHeight = try container.decode(UInt64.self, forKey: .createdHeight)
+        guard createdHeight <= UInt64(governanceFirstReleaseMaxExactJSONInteger) else {
+            throw DecodingError.dataCorruptedError(
+                forKey: .createdHeight,
+                in: container,
+                debugDescription: "created_height is outside the exact first-release JSON integer range"
+            )
+        }
+        status = try container.decode(ToriiGovernanceProposalStatus.self, forKey: .status)
     }
 }
 
@@ -22209,13 +21122,6 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
     }
 
     @discardableResult
-    public func deleteVpnSession(sessionId: String,
-                                 canonicalAuth: ToriiCanonicalRequestAuth,
-                                 completion: @escaping (Result<ToriiVpnReceipt?, Swift.Error>) -> Void) -> Task<Void, Never> {
-        runTask(completion) { try await self.deleteVpnSession(sessionId: sessionId, canonicalAuth: canonicalAuth) }
-    }
-
-    @discardableResult
     public func submitVpnReceipt(_ requestBody: ToriiVpnReceiptSubmitRequest,
                                  canonicalAuth: ToriiCanonicalRequestAuth,
                                  completion: @escaping (Result<ToriiVpnReceipt, Swift.Error>) -> Void) -> Task<Void, Never> {
@@ -22774,15 +21680,6 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
     }
 
     @discardableResult
-    public func submitGovernanceParliamentBallot(_ requestBody: ToriiGovernanceParliamentBallotRequest,
-                                                 canonicalAuth: ToriiCanonicalRequestAuth,
-                                                 completion: @escaping (Result<ToriiGovernanceBallotResponse, Swift.Error>) -> Void) -> Task<Void, Never> {
-        runTask(completion) {
-            try await self.submitGovernanceParliamentBallot(requestBody, canonicalAuth: canonicalAuth)
-        }
-    }
-
-    @discardableResult
     public func submitGovernanceZkBallotV1(_ requestBody: ToriiGovernanceZkBallotV1Request,
                                            canonicalAuth: ToriiCanonicalRequestAuth,
                                            completion: @escaping (Result<ToriiGovernanceBallotResponse, Swift.Error>) -> Void) -> Task<Void, Never> {
@@ -22798,12 +21695,6 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
         runTask(completion) {
             try await self.submitGovernanceZkBallotProofV1(requestBody, canonicalAuth: canonicalAuth)
         }
-    }
-
-    @discardableResult
-    public func finalizeGovernanceReferendum(_ requestBody: ToriiGovernanceFinalizeRequest,
-                                             completion: @escaping (Result<ToriiGovernanceFinalizeResponse, Swift.Error>) -> Void) -> Task<Void, Never> {
-        runTask(completion) { try await self.finalizeGovernanceReferendum(requestBody) }
     }
 
     // MARK: - Async API
@@ -23977,7 +22868,7 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
 
     public func getVpnSession(sessionId: String,
                               canonicalAuth: ToriiCanonicalRequestAuth) async throws -> ToriiVpnSession? {
-        let normalizedSessionId = try ToriiRequestValidation.normalized32ByteHex(sessionId,
+        let normalizedSessionId = try ToriiRequestValidation.normalized16ByteHex(sessionId,
                                                                                  field: "sessionId")
         let encoded = encodePathComponent(normalizedSessionId)
         let request = try requireSecureVpnRequest(
@@ -23992,27 +22883,6 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
             throw ToriiClientError.emptyBody
         }
         return try decodeJSON(ToriiVpnSession.self, from: data)
-    }
-
-    public func deleteVpnSession(sessionId: String,
-                                 canonicalAuth: ToriiCanonicalRequestAuth) async throws -> ToriiVpnReceipt? {
-        let normalizedSessionId = try ToriiRequestValidation.normalized32ByteHex(sessionId,
-                                                                                 field: "sessionId")
-        let encoded = encodePathComponent(normalizedSessionId)
-        let request = try requireSecureVpnRequest(
-            makeVpnRequest(path: "/v1/vpn/sessions/\(encoded)",
-                           method: .delete,
-                           canonicalAuth: canonicalAuth)
-        )
-        let (data, response) = try await send(request, rejectRedirects: true)
-        if response.statusCode == 404 {
-            return nil
-        }
-        try ensureStatus(response, equals: 200, responseBody: data)
-        if data.isEmpty {
-            throw ToriiClientError.emptyBody
-        }
-        return try decodeJSON(ToriiVpnReceipt.self, from: data)
     }
 
     public func submitVpnReceipt(_ requestBody: ToriiVpnReceiptSubmitRequest,
@@ -24645,26 +23515,194 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
         )
     }
 
+    /// Draft one canonical Parliament attempt-create instruction for local signing.
+    public func draftParliamentAttemptV1(
+        proposal: ToriiParliamentProposalV1,
+        attemptSequence: UInt32,
+        expectedProposalContentId: String,
+        expectedGovernanceAttemptId: String,
+        canonicalAuth: ToriiCanonicalRequestAuth
+    ) async throws -> ToriiParliamentAttemptDraftResponseV1 {
+        let body = try ToriiParliamentAPIV1.attemptDraftRequestData(
+            proposal: proposal,
+            attemptSequence: attemptSequence
+        )
+        let request = try makeCanonicalAccountRequest(
+            path: ToriiParliamentAPIV1.attemptDraftPath,
+            method: .post,
+            body: body,
+            headers: [
+                "Content-Type": "application/json",
+                "Accept": "application/json",
+            ],
+            canonicalAuth: canonicalAuth
+        )
+        let (data, response) = try await send(request)
+        try ensureStatus(response, in: 200..<300, responseBody: data)
+        try ensureResponseMediaType(response, equals: "application/json")
+        try rejectDuplicateJSONKeys(data, context: "Parliament attempt draft response")
+        return try ToriiParliamentAPIV1.decodeAttemptDraftResponse(
+            data,
+            expectedProposalContentId: expectedProposalContentId,
+            expectedGovernanceAttemptId: expectedGovernanceAttemptId
+        )
+    }
+
+    /// Read one exact authenticated Parliament attempt projection.
+    public func getParliamentAttemptV1(
+        governanceAttemptId: String,
+        canonicalAuth: ToriiCanonicalRequestAuth
+    ) async throws -> ToriiParliamentAttemptReadResponseV1 {
+        let path = try ToriiParliamentAPIV1.attemptReadPath(
+            governanceAttemptId: governanceAttemptId
+        )
+        let request = try makeCanonicalAccountRequest(
+            path: path,
+            headers: ["Accept": "application/json"],
+            canonicalAuth: canonicalAuth
+        )
+        let (data, response) = try await send(request)
+        try ensureStatus(response, in: 200..<300, responseBody: data)
+        try ensureResponseMediaType(response, equals: "application/json")
+        try rejectDuplicateJSONKeys(data, context: "Parliament attempt read response")
+        return try ToriiParliamentAPIV1.decodeAttemptReadResponse(
+            data,
+            expectedGovernanceAttemptId: governanceAttemptId
+        )
+    }
+
+    /// Draft one public Parliament lifecycle transition for local signing.
+    public func draftParliamentTransitionV1(
+        governanceAttemptId: String,
+        transition: ToriiParliamentLifecycleTransitionV1,
+        expectedTransitionDigest: [UInt8],
+        canonicalAuth: ToriiCanonicalRequestAuth
+    ) async throws -> ToriiParliamentTransitionDraftResponseV1 {
+        let body = try ToriiParliamentAPIV1.transitionDraftRequestData(
+            governanceAttemptId: governanceAttemptId,
+            transition: transition
+        )
+        let request = try makeCanonicalAccountRequest(
+            path: ToriiParliamentAPIV1.transitionDraftPath,
+            method: .post,
+            body: body,
+            headers: [
+                "Content-Type": "application/json",
+                "Accept": "application/json",
+            ],
+            canonicalAuth: canonicalAuth
+        )
+        let (data, response) = try await send(request)
+        try ensureStatus(response, in: 200..<300, responseBody: data)
+        try ensureResponseMediaType(response, equals: "application/json")
+        try rejectDuplicateJSONKeys(data, context: "Parliament transition draft response")
+        return try ToriiParliamentAPIV1.decodeTransitionDraftResponse(
+            data,
+            expectedGovernanceAttemptId: governanceAttemptId,
+            expectedTransitionKind: transition.layout.jsonTag,
+            expectedTransitionDigest: expectedTransitionDigest
+        )
+    }
+
+    /// Fetch one replay-validated public timed-OVN wallet preparation context.
+    public func getParliamentTimedOvnCastingContextV1(
+        ballotAttemptId: String,
+        canonicalAuth: ToriiCanonicalRequestAuth
+    ) async throws -> ToriiParliamentTimedOvnCastingContextResponseV1 {
+        let path = try ToriiParliamentAPIV1.timedOvnCastingContextReadPath(
+            ballotAttemptId: ballotAttemptId
+        )
+        let request = try makeCanonicalAccountRequest(
+            path: path,
+            headers: ["Accept": "application/json"],
+            canonicalAuth: canonicalAuth
+        )
+        let (data, response) = try await send(request)
+        guard data.count <= 16 * 1024 * 1024 else {
+            throw ToriiClientError.invalidPayload(
+                "Parliament timed-OVN casting context exceeds its response bound."
+            )
+        }
+        try ensureStatus(response, in: 200..<300, responseBody: data)
+        try ensureResponseMediaType(response, equals: "application/json")
+        try rejectDuplicateJSONKeys(data, context: "Parliament timed-OVN casting context")
+        return try ToriiParliamentAPIV1.decodeTimedOvnCastingContextResponse(
+            data,
+            expectedBallotAttemptId: ballotAttemptId
+        )
+    }
+
+    /// Fetch the complete public transcript for one currently authorized TLE release.
+    public func getParliamentTleReleaseContextV1(
+        ballotAttemptId: String,
+        canonicalAuth: ToriiCanonicalRequestAuth
+    ) async throws -> ToriiParliamentTleReleaseContextResponseV1 {
+        let path = try ToriiParliamentAPIV1.tleReleaseContextReadPath(
+            ballotAttemptId: ballotAttemptId
+        )
+        let request = try makeCanonicalAccountRequest(
+            path: path,
+            headers: ["Accept": "application/json"],
+            canonicalAuth: canonicalAuth
+        )
+        let (data, response) = try await send(request)
+        guard data.count <= 1024 * 1024 else {
+            throw ToriiClientError.invalidPayload(
+                "Parliament TLE release context exceeds its response bound."
+            )
+        }
+        try ensureStatus(response, in: 200..<300, responseBody: data)
+        try ensureResponseMediaType(response, equals: "application/json")
+        try rejectDuplicateJSONKeys(data, context: "Parliament TLE release context")
+        return try ToriiParliamentAPIV1.decodeTleReleaseContextResponse(
+            data,
+            expectedBallotAttemptId: ballotAttemptId
+        )
+    }
+
+    /// Request one node-local proof-carrying partial bound to an admitted release context.
+    public func requestParliamentTlePartialReleaseV1(
+        ballotAttemptId: String,
+        context: ToriiParliamentTleReleaseContextResponseV1,
+        canonicalAuth: ToriiCanonicalRequestAuth
+    ) async throws -> ToriiParliamentTlePartialReleaseShareV1 {
+        guard context.ballotAttemptId == ballotAttemptId else {
+            throw ToriiClientError.invalidPayload(
+                "release context ballot id differs from the partial-release request."
+            )
+        }
+        let path = try ToriiParliamentAPIV1.tlePartialReleasePath(
+            ballotAttemptId: ballotAttemptId
+        )
+        let request = try makeCanonicalAccountRequest(
+            path: path,
+            method: .post,
+            headers: ["Accept": "application/json"],
+            canonicalAuth: canonicalAuth
+        )
+        let (data, response) = try await send(request)
+        guard data.count <= 16 * 1024 else {
+            throw ToriiClientError.invalidPayload(
+                "Parliament TLE partial release exceeds its response bound."
+            )
+        }
+        try ensureStatus(response, in: 200..<300, responseBody: data)
+        try ensureResponseMediaType(response, equals: "application/json")
+        try rejectDuplicateJSONKeys(data, context: "Parliament TLE partial release")
+        return try ToriiParliamentAPIV1.decodeTlePartialReleaseResponse(
+            data,
+            expectedKeySessionId: context.keySession.keySessionId,
+            expectedIdentityDigest: context.identityDigest,
+            committeeSize: context.keySession.committeeSize
+        )
+    }
+
     public func submitGovernancePlainBallot(
         _ requestBody: ToriiGovernancePlainBallotRequest,
         canonicalAuth: ToriiCanonicalRequestAuth
     ) async throws -> ToriiGovernanceBallotResponse {
         try await postGovernanceBallotJSON(
             path: "/v1/gov/ballots/plain",
-            body: requestBody,
-            networkId: requestBody.networkId,
-            authority: requestBody.authority,
-            canonicalAuth: canonicalAuth,
-            responseType: ToriiGovernanceBallotResponse.self
-        )
-    }
-
-    public func submitGovernanceParliamentBallot(
-        _ requestBody: ToriiGovernanceParliamentBallotRequest,
-        canonicalAuth: ToriiCanonicalRequestAuth
-    ) async throws -> ToriiGovernanceBallotResponse {
-        try await postGovernanceBallotJSON(
-            path: "/v1/gov/parliament/ballots",
             body: requestBody,
             networkId: requestBody.networkId,
             authority: requestBody.authority,
@@ -24698,23 +23736,6 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
             authority: requestBody.authority,
             canonicalAuth: canonicalAuth,
             responseType: ToriiGovernanceBallotResponse.self
-        )
-    }
-
-    public func finalizeGovernanceReferendum(_ requestBody: ToriiGovernanceFinalizeRequest) async throws -> ToriiGovernanceFinalizeResponse {
-        try await postGovernanceJSON(path: "/v1/gov/finalize",
-                                     body: requestBody,
-                                     responseType: ToriiGovernanceFinalizeResponse.self)
-    }
-
-    public func enactGovernanceProposal(
-        _ requestBody: ToriiGovernanceEnactRequest,
-        canonicalAuth: ToriiCanonicalRequestAuth
-    ) async throws -> ToriiGovernanceEnactResponse {
-        try await postAuthenticatedGovernanceJSON(
-            path: "/v1/gov/enact", body: requestBody,
-            canonicalAuth: canonicalAuth,
-            responseType: ToriiGovernanceEnactResponse.self
         )
     }
 
@@ -24903,21 +23924,6 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
         }
     }
 
-    public func getZkAssetRoots(
-        asset: String,
-        max: UInt32 = 0,
-        matching readiness: ToriiKagemushaReadiness,
-        canonicalAuth: ToriiCanonicalRequestAuth
-    ) async throws -> ToriiZkRootsResponse {
-        let roots = try await getZkAssetRoots(
-            asset: asset, max: max, canonicalAuth: canonicalAuth
-        )
-        return try roots.requireEvaluatedSnapshot(
-            height: readiness.evaluatedBlockHeight,
-            blockHash: readiness.evaluatedBlockHashBytes
-        )
-    }
-
     /// Fetch the complete authoritative path snapshot, including Torii's
     /// padded next-zero path. Kagemusha uses this form so a one-input proof can
     /// be built from two bounded paths without downloading the whole tree.
@@ -24941,23 +23947,6 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
             _ = try response.validatedNextZeroPath()
         }
         return response
-    }
-
-    public func getZkAssetMerklePathSnapshot(
-        asset: String,
-        commitments: [Data],
-        matching readiness: ToriiKagemushaReadiness,
-        canonicalAuth: ToriiCanonicalRequestAuth
-    ) async throws -> ToriiZkMerklePathResponse {
-        let response = try await getZkAssetMerklePathSnapshot(
-            asset: asset,
-            commitments: commitments,
-            canonicalAuth: canonicalAuth
-        )
-        return try response.requireEvaluatedSnapshot(
-            height: readiness.evaluatedBlockHeight,
-            blockHash: readiness.evaluatedBlockHashBytes
-        )
     }
 
     private func fetchZkAssetMerklePathResponse(
@@ -25901,7 +24890,7 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
     }
 
     public func getOfflineCapability() async throws -> ToriiOfflineStatus {
-        let request = try makeRequest(path: "/v1/offline/readiness",
+        let request = try makeRequest(path: KagemushaToriiAPI.Endpoint.capability.path,
                                       headers: ["Accept": "application/json"])
         let (data, response) = try await send(request)
         try ensureStatus(response, equals: 200, responseBody: data)
@@ -26701,7 +25690,7 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
     /// canonical Norito bytes selected by the server.
     ///
     /// This authority-bearing route is deliberately unavailable over HTTP,
-    /// JSON, redirects, mock catalogs, or without the loaded exact ABI22
+    /// JSON, redirects, mock catalogs, or without the loaded exact ABI23
     /// artifact. The returned model retains the response bytes and binds every
     /// compiled row to that artifact's natively validated local catalog.
     public func getPrivacyExact12CapabilityManifestV1(
@@ -26715,7 +25704,7 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
             )
         }
         // Fail before network I/O when the bridge is absent, stale, or missing
-        // any of the exact five privacy ABI22 symbols.
+        // any of the exact five privacy ABI23 symbols.
         _ = try PrivacyNativeBridge.compiledProfileCatalogV1()
         var request = try makeRequest(
             path: "/v1/privacy/capabilities",

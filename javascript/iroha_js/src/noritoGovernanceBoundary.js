@@ -19,9 +19,9 @@ const ELECTION_ID_FIELD = "election_id";
 const PUBLIC_INPUTS_JSON_FIELD = "public_inputs_json";
 const CONTRACT_ADDRESS_FIELD = "contract_address";
 const DURATION_BLOCKS_FIELD = "duration_blocks";
-const CODE_HASH_FIELD = "code_hash_hex";
+const CODE_HASH_FIELD = "code_hash";
 const REFERENDUM_ID_FIELD = "referendum_id";
-const ABI_HASH_FIELD = "abi_hash_hex";
+const ABI_HASH_FIELD = "abi_hash";
 const ABI_VERSION_FIELD = "abi_version";
 const PROOF_BASE64_FIELD = "proof_b64";
 const GOVERNANCE_PRIVATE_KEY_FIELD_RE =
@@ -36,9 +36,8 @@ const GOVERNANCE_ZK_PUBLIC_INPUT_FIELDS = Object.freeze([
 ]);
 
 /**
- * Parse the closed governance JSON profile while retaining integer tokens as
- * canonical decimal strings. The downstream u64/Quantity validators consume
- * those strings losslessly, so no JavaScript number rounding is possible.
+ * Parse the closed governance JSON profile without rounding integer tokens.
+ * Safe integers remain numbers and larger integers remain bigint values.
  */
 export function parseStrictGovernanceInstructionJson(text, context) {
   let parsed;
@@ -54,21 +53,7 @@ export function parseStrictGovernanceInstructionJson(text, context) {
     }
     throw error;
   }
-  const stringifyIntegers = (value) => {
-    if (typeof value === JS_TYPE_BIGINT || typeof value === JS_TYPE_NUMBER) {
-      return value.toString(10);
-    }
-    if (Array.isArray(value)) {
-      return value.map(stringifyIntegers);
-    }
-    if (value !== null && typeof value === JS_TYPE_OBJECT) {
-      return Object.fromEntries(
-        Object.entries(value).map(([key, entry]) => [key, stringifyIntegers(entry)]),
-      );
-    }
-    return value;
-  };
-  return stringifyIntegers(parsed);
+  return parsed;
 }
 
 /**
@@ -81,7 +66,6 @@ export function createNoritoGovernanceInstructionBoundary({
   decodeExactStandardBase64,
   decodeManifestProvenanceValue,
   encodeManifestProvenanceValue,
-  encodeVotingModeValue,
   isPlainObject,
 }) {
   function isStrictGovernanceInstructionCandidate(value) {
@@ -120,7 +104,6 @@ export function createNoritoGovernanceInstructionBoundary({
     for (const [variant, field] of [
       [CAST_ZK_BALLOT, ELECTION_ID_FIELD],
       ["CastPlainBallot", REFERENDUM_ID_FIELD],
-      ["FinalizeReferendum", REFERENDUM_ID_FIELD],
     ]) {
       validateGovernanceSelectorPayload(instruction[variant], field, variant);
     }
@@ -228,21 +211,6 @@ export function createNoritoGovernanceInstructionBoundary({
     return integer;
   }
 
-  function normalizeGovernanceWindowValue(value, context) {
-    assertExactGovernanceObjectKeys(
-      value,
-      ["lower", "upper"],
-      ["lower", "upper"],
-      context,
-    );
-    const lower = normalizeGovernanceU64(value.lower, `${context}.lower`);
-    const upper = normalizeGovernanceU64(value.upper, `${context}.upper`);
-    if (upper < lower) {
-      throw new RangeError(`${context}.upper must be greater than or equal to lower`);
-    }
-    return { lower: lower.toString(10), upper: upper.toString(10) };
-  }
-
   function normalizeGovernanceQuantity(value, context) {
     if (typeof value !== JS_TYPE_STRING) {
       throw new TypeError(`${context} must be a canonical Kotodama V1 quantity string`);
@@ -343,8 +311,6 @@ export function createNoritoGovernanceInstructionBoundary({
         CODE_HASH_FIELD,
         ABI_HASH_FIELD,
         ABI_VERSION_FIELD,
-        "window",
-        "mode",
         "manifest_provenance",
       ],
       [CONTRACT_ADDRESS_FIELD, CODE_HASH_FIELD, ABI_HASH_FIELD, ABI_VERSION_FIELD],
@@ -355,22 +321,16 @@ export function createNoritoGovernanceInstructionBoundary({
       `${context}.contract_address`,
     );
     parseCanonicalContractAddress(contractAddress, `${context}.contract_address`);
-    value.code_hash_hex = normalizeGovernanceHex32(
-      value.code_hash_hex,
-      `${context}.code_hash_hex`,
+    value.code_hash = normalizeGovernanceHex32(
+      value.code_hash,
+      `${context}.code_hash`,
     );
-    value.abi_hash_hex = normalizeGovernanceHex32(
-      value.abi_hash_hex,
-      `${context}.abi_hash_hex`,
+    value.abi_hash = normalizeGovernanceHex32(
+      value.abi_hash,
+      `${context}.abi_hash`,
     );
-    if (value.abi_version !== "1") {
-      throw new TypeError(`${context}.abi_version must be exactly '1'`);
-    }
-    if (value.window !== undefined && value.window !== null) {
-      value.window = normalizeGovernanceWindowValue(value.window, `${context}.window`);
-    }
-    if (value.mode !== undefined && value.mode !== null) {
-      encodeVotingModeValue(value.mode, `${context}.mode`);
+    if (value.abi_version !== 1) {
+      throw new TypeError(`${context}.abi_version must be exactly 1`);
     }
     if (value.manifest_provenance !== undefined && value.manifest_provenance !== null) {
       value.manifest_provenance = decodeManifestProvenanceValue(

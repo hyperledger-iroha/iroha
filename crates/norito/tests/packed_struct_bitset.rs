@@ -167,3 +167,28 @@ fn compact_zero_size_header_is_not_reinterpreted_as_fixed_u64() {
         assert_typed_error_without_unwind::<TupleTiny>(&payload, flags);
     }
 }
+
+#[test]
+fn packed_struct_sized_field_rejects_a_nested_length_frame() {
+    let flags =
+        header_flags::PACKED_STRUCT | header_flags::COMPACT_LEN | header_flags::FIELD_BITSET;
+    let inner = Tiny(0x1122_3344);
+    let inner_payload = encode_bare_with_flags(&inner, flags);
+
+    let mut nested_frame = Vec::new();
+    let mut forged = vec![0b1];
+    {
+        let _guard = DecodeFlagsGuard::enter(flags);
+        norito_core::write_len_header(&mut nested_frame, inner_payload.len() as u64)
+            .expect("frame the retired inner encoding");
+        nested_frame.extend_from_slice(&inner_payload);
+        norito_core::write_len_header(&mut forged, nested_frame.len() as u64)
+            .expect("write the canonical outer field size");
+    }
+    forged.extend_from_slice(&nested_frame);
+
+    assert!(matches!(
+        decode_bare_with_flags::<NamedTiny>(&forged, flags),
+        Err(Error::NonCanonicalEncoding)
+    ));
+}

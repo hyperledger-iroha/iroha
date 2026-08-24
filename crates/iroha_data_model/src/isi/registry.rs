@@ -3,11 +3,11 @@ use crate::isi::governance;
 mod wire_ids;
 use crate::{
     isi::{
-        InstructionRegistry, account_alias_lease, account_recovery, alias_setup, asset_alias,
-        asset_transfer_control, bridge, confidential, consensus_keys, content, contract_alias,
-        defi, domain_link, endorsement, escrow, identifier, kaigi, ministry, musubi, nexus,
-        offline, oracle, privacy, ram_lfe, repo, runtime_upgrade, rwa, settlement,
-        smart_contract_code, social, soracloud, soradns, sorafs, space_directory,
+        InstructionRegistry, account_recovery, alias_setup, asset_alias, asset_transfer_control,
+        bridge, confidential, consensus_keys, content, contract_alias, defi, endorsement, escrow,
+        identifier, kaigi, ministry, musubi, nexus, offline, oracle, privacy, ram_lfe, repo,
+        runtime_upgrade, rwa, settlement, smart_contract_code, social, soracloud, soradns, sorafs,
+        space_directory,
         transparent::{
             AddSignatory, InvalidInstruction, RemoveAssetKeyValue, RemoveSignatory,
             SetAccountQuorum, SetAssetKeyValue,
@@ -170,6 +170,38 @@ mod tests {
             expected_type_name,
             "pair payload should decode back into the canonical boxed family"
         );
+    }
+    #[cfg(feature = "governance")]
+    #[test]
+    fn parliament_registry_contains_only_current_lifecycle_and_standalone_ballots() {
+        let registry = default();
+        for active in [
+            crate::isi::governance::CreateParliamentGovernanceAttemptV1::WIRE_ID,
+            crate::isi::governance::SubmitParliamentLifecycleTransitionV1::WIRE_ID,
+            "iroha_data_model::isi::governance::CastZkBallot",
+            "iroha_data_model::isi::governance::CastPlainBallot",
+        ] {
+            assert!(
+                registry.contains(active),
+                "active Parliament or standalone referendum wire id is missing: {active}"
+            );
+        }
+        for retired in [
+            "iroha_data_model::isi::governance::ApproveGovernanceProposal",
+            "iroha_data_model::isi::governance::CastParliamentBallot",
+            "iroha_data_model::isi::governance::FinalizeReferendum",
+            "iroha_data_model::isi::governance::EnactReferendum",
+            "iroha_data_model::isi::governance::EnactSccpRouteGovernance",
+        ] {
+            assert!(
+                !registry.contains(retired),
+                "retired proposal-backed governance wire id remains registered: {retired}"
+            );
+            assert!(
+                !is_instruction_wire_id_registered(retired),
+                "retired proposal-backed governance wire id remains publicly accepted: {retired}"
+            );
+        }
     }
     #[test]
     fn default_registry_registers_public_lane_validator() {
@@ -477,13 +509,11 @@ mod tests {
         ));
     }
     #[test]
-    fn required_boi_alias_compatibility_ids_are_registered_without_reopening_retired_mutations() {
+    fn only_declarative_alias_instruction_ids_are_registered() {
         let registry = default();
-        assert!(registry.contains(core::any::type_name::<
-            account_alias_lease::AcquireAccountAliasLease,
-        >()));
-        assert!(registry.contains("identity::SetAccountAliasBinding"));
         let removed_ids = [
+            "iroha_data_model::isi::account_alias_lease::AcquireAccountAliasLease",
+            "identity::SetAccountAliasBinding",
             "iroha.account.alias.lease.renew",
             "iroha.account.alias.binding.set",
             "iroha.account.alias.primary.set",

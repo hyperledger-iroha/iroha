@@ -35,8 +35,8 @@ manifest.json          # deterministic file manifest with SHA-256 hashes
    `profile = "four-peer-bft"` preset, while custom profiles use a table such
    as `profile = { peer_count = 7, consensus_mode = "permissioned" }`. Custom
    peer counts must form an exact Sumeragi committee (`3f+1`), so this bundle
-   accepts 4 or 7 peers. The historical `single-peer` name is accepted only
-   for saved-config compatibility and now launches four validators. For NPoS
+   accepts 4 or 7 peers. Preset names are exact: `four-peer-bft` is the only
+   built-in topology preset. For NPoS
    genesis presets, set `consensus_mode = "npos"` and include
    `genesis_profile = "iroha3-dev"` in the same table (or set
    `supervisor.genesis_profile` when using presets).

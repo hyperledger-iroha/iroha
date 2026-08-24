@@ -39,8 +39,8 @@ pub use norito_derive::{
 /// Version 2 makes the signature-bound fee payment intent mandatory and replaces account/policy fee
 /// sponsorship with on-chain sponsor programs. Version 3 adds the flat ordered transaction/trigger
 /// executable batch that atomically interleaves native instructions and deployed-contract calls.
-/// Version 4 requires validation-fee policy and payout-lifecycle proposals, plus their retained
-/// registry entries, to bind the exact PLAIN electorate rules used by their ballot lifecycle.
+/// Version 4 requires validation-fee policy and payout-lifecycle proposals to use the canonical
+/// certificate-only Parliament lifecycle and its retained proposal records.
 pub const DATA_MODEL_VERSION: u32 = 4;
 #[macro_use]
 mod id_macros;
@@ -136,6 +136,8 @@ pub mod offline;
 pub mod oracle;
 /// Runtime parameter definitions and schema.
 pub mod parameter;
+/// Finality-bound SORA Parliament timed-OVN casting commitments and proofs.
+pub mod parliament_casting;
 #[path = "governance/types.rs"]
 #[doc(hidden)]
 pub mod parliament_types;

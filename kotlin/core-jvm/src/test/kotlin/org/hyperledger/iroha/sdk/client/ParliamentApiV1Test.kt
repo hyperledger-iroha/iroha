@@ -1,0 +1,896 @@
+package org.hyperledger.iroha.sdk.client
+
+import java.io.ByteArrayOutputStream
+import java.math.BigInteger
+import java.nio.charset.StandardCharsets
+import java.nio.file.Files
+import java.nio.file.Path
+import java.nio.file.Paths
+import java.security.MessageDigest
+import java.util.Base64
+import kotlin.test.Test
+import kotlin.test.assertContentEquals
+import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
+import org.hyperledger.iroha.sdk.address.AccountAddress
+import org.hyperledger.iroha.sdk.address.AssetDefinitionIdEncoder
+import org.hyperledger.iroha.sdk.core.model.NetworkId
+import org.hyperledger.iroha.sdk.norito.CRC64
+import org.hyperledger.iroha.sdk.norito.NoritoHeader
+import org.hyperledger.iroha.sdk.testing.TestEd25519Keys
+
+class ParliamentApiV1Test {
+    private val attemptId = "ab".repeat(32)
+    private val proposalId = "cd".repeat(32)
+
+    @Test
+    fun sharedFixturePinsEveryPublicTransitionAutomaticOutcomeAndResultRoot() {
+        val fixture = objectValue(Files.readAllBytes(fixturePath()))
+        assertEquals("iroha.governance.parliament.api_fixture.v1", fixture["schema"])
+        assertEquals(1L, fixture["api_version"])
+
+        val routes = fixture["routes"] as Map<*, *>
+        assertEquals(ParliamentApiV1.ATTEMPT_DRAFT_PATH, routes["attempt_draft"])
+        assertEquals(ParliamentApiV1.ATTEMPT_READ_PATH, routes["attempt_read"])
+        assertEquals(
+            ParliamentApiV1.TIMED_OVN_CASTING_CONTEXT_READ_PATH,
+            routes["timed_ovn_casting_context_read"],
+        )
+        assertEquals(
+            ParliamentApiV1.TIMED_OVN_CASTING_PROOF_PATH,
+            routes["timed_ovn_casting_proof"],
+        )
+        assertEquals(
+            ParliamentApiV1.TLE_RELEASE_CONTEXT_READ_PATH,
+            routes["tle_release_context_read"],
+        )
+        assertEquals(ParliamentApiV1.TLE_PARTIAL_RELEASE_PATH, routes["tle_partial_release"])
+        assertEquals(ParliamentApiV1.TRANSITION_DRAFT_PATH, routes["transition_draft"])
+        val wireIds = fixture["wire_ids"] as Map<*, *>
+        assertEquals(ParliamentApiV1.ATTEMPT_CREATE_WIRE_ID, wireIds["attempt_create"])
+        assertEquals(ParliamentApiV1.TRANSITION_SUBMIT_WIRE_ID, wireIds["transition_submit"])
+        assertEquals(ParliamentApiV1.PROPOSAL_KINDS, fixture["proposal_kinds"])
+        val limits = fixture["limits"] as Map<*, *>
+        assertEquals(ParliamentApiV1.MAX_STATE_BYTES, (limits["attempt_state_bytes"] as Number).toInt())
+
+        val transitions = fixture["public_transitions"] as List<*>
+        assertEquals(ParliamentApiV1.PUBLIC_TRANSITIONS.size, transitions.size)
+        ParliamentApiV1.PUBLIC_TRANSITIONS.zip(transitions).forEach { (layout, raw) ->
+            val entry = raw as Map<*, *>
+            assertEquals(layout.noritoIndex, (entry["norito_index"] as Number).toInt())
+            assertEquals(layout.noritoIndex.toString(16).padStart(2, '0'), entry["norito_prefix_hex"])
+            assertEquals(layout.jsonTag, entry["json_tag"])
+            assertEquals(
+                if (layout.jsonPayloadRequired) "required" else "forbidden",
+                entry["json_payload"],
+            )
+            assertEquals(layout.eventKindIndex, (entry["event_kind_index"] as Number).toInt())
+
+            val transitionJson = if (layout.jsonPayloadRequired) {
+                """{"transition":"${layout.jsonTag}","payload":{}}"""
+            } else {
+                """{"transition":"${layout.jsonTag}"}"""
+            }
+            ParliamentApiV1.transitionDraftRequestJson(attemptId, bytes(transitionJson))
+        }
+
+        val outcomes = fixture["automatic_execution_outcomes"] as List<*>
+        assertEquals(ParliamentApiV1.AUTOMATIC_EXECUTION_OUTCOMES.size, outcomes.size)
+        ParliamentApiV1.AUTOMATIC_EXECUTION_OUTCOMES.zip(outcomes).forEach { (layout, raw) ->
+            val entry = raw as Map<*, *>
+            assertEquals(layout.noritoIndex, (entry["norito_index"] as Number).toInt())
+            assertEquals(layout.jsonTag, entry["json_tag"])
+            assertEquals(layout.eventKind, entry["event_kind"])
+            assertEquals(layout.eventKindIndex, (entry["event_kind_index"] as Number).toInt())
+        }
+
+        val domains = fixture["digest_domains"] as Map<*, *>
+        assertEquals(ParliamentApiV1.PUBLIC_TRANSITION_DIGEST_DOMAIN, domains["public_transition"])
+        assertEquals(
+            ParliamentApiV1.AUTOMATIC_OUTCOME_DIGEST_DOMAIN,
+            domains["automatic_execution_outcome"],
+        )
+        val fixtureRootDomains = (fixture["certificate_result_roots"] as List<*>)
+            .associate { raw ->
+                val entry = raw as Map<*, *>
+                entry["name"] as String to entry["domain"] as? String
+            }
+        assertEquals(ParliamentApiV1.CERTIFICATE_RESULT_ROOT_DOMAINS, fixtureRootDomains)
+
+        val binding = fixture["certificate_body_binding"] as Map<*, *>
+        assertEquals(
+            ParliamentApiV1.CERTIFICATE_BODY_BINDING_NORITO_FIELDS,
+            binding["norito_field_order"],
+        )
+        val publicFinding = binding["public_nonbinding_body"] as Map<*, *>
+        assertEquals(
+            ParliamentApiV1.PUBLIC_FINDING_CERTIFICATE_NORITO_FIELDS,
+            publicFinding["public_finding_norito_field_order"],
+        )
+        assertEquals("ceil(2 * original_seats / 3)", publicFinding["quorum"])
+        assertEquals(
+            "strictly increasing distinct nonzero assignment ids",
+            publicFinding["endorsing_assignments"],
+        )
+        assertEquals("endorsing_assignments.length == quorum", publicFinding["endorsements"])
+        val privateJury = binding["private_jury"] as Map<*, *>
+        assertEquals("forbidden", privateJury["public_finding"])
+        assertEquals("ballot.tally.original_seats", privateJury["original_seats"])
+        val noResultKinds = fixture["no_result_kinds"] as List<*>
+        assertEquals(
+            ParliamentApiV1.NO_RESULT_KINDS.map { it.jsonTag },
+            noResultKinds.map { (it as Map<*, *>)["json_tag"] },
+        )
+        val bodyState = fixture["attempt_read_body_state"] as Map<*, *>
+        assertEquals(ParliamentApiV1.BODY_STATE_FIELDS, bodyState["json_fields"])
+        val release = fixture["tle_release_context"] as Map<*, *>
+        assertEquals(
+            listOf(
+                "version", "key_session_id", "network_id", "roster_hash", "committee_size",
+                "threshold", "generator_h", "generator_v", "qualified_dealers",
+                "qualified_dealer_commitments", "dkg_event_hash", "group_public_key",
+                "public_shares", "transcript_hash",
+            ),
+            release["transcript_public_state_fields"],
+        )
+        val partial = fixture["tle_partial_release"] as Map<*, *>
+        assertEquals(9, (partial["response_fields"] as List<*>).size)
+    }
+
+    @Test
+    fun attemptBuilderAdmitsExactlyTheSevenFirstReleaseProposalKinds() {
+        ParliamentApiV1.PROPOSAL_KINDS.forEach { kind ->
+            val request = objectValue(
+                ParliamentApiV1.attemptDraftRequestJson(
+                    proposal(kind),
+                    0,
+                ),
+            )
+            assertEquals(kind, (request["proposal"] as Map<*, *>)["kind"])
+        }
+        assertEquals(7, ParliamentApiV1.PROPOSAL_KINDS.size)
+
+        val fullU64Policy = validProposal("ValidationFeePolicy")
+        @Suppress("UNCHECKED_CAST")
+        val fullU64PolicyValue =
+            (fullU64Policy["payload"] as MutableMap<String, Any?>)["policy"] as MutableMap<String, Any?>
+        fullU64PolicyValue["policy_version"] = "18446744073709551615"
+        fullU64PolicyValue["previous_policy_hash"] = List(32) { 1 }
+        fullU64PolicyValue["effective_from_height"] = "18446744073709551615"
+        ParliamentApiV1.Proposal.fromJson(encode(fullU64Policy))
+
+        listOf(
+            "ProposeDeployContract",
+            "EnactReferendum",
+            "FinalizeReferendum",
+            "deploy_contract",
+            "runtimeUpgrade",
+            "Unknown",
+        ).forEach { kind ->
+            assertFailsWith<IllegalArgumentException>("accepted retired or unknown tag $kind") {
+                ParliamentApiV1.Proposal.fromJson(
+                    bytes("""{"kind":"$kind","payload":{}}"""),
+                )
+            }
+        }
+        assertFailsWith<IllegalArgumentException> {
+            ParliamentApiV1.Proposal.fromJson(
+                bytes("""{"proposal_kind":"RuntimeUpgrade","payload":{}}"""),
+            )
+        }
+    }
+
+    @Test
+    fun proposalAdmissionRejectsMissingUnknownAndMalformedNestedFields() {
+        val runtime = validProposal("RuntimeUpgrade")
+        @Suppress("UNCHECKED_CAST")
+        val manifest = (runtime["payload"] as MutableMap<String, Any?>)["manifest"] as MutableMap<String, Any?>
+        manifest.remove("provenance")
+        assertFailsWith<IllegalArgumentException> {
+            ParliamentApiV1.Proposal.fromJson(encode(runtime))
+        }
+
+        val provider = validProposal("SorafsProviderGovernance")
+        @Suppress("UNCHECKED_CAST")
+        val action = ((provider["payload"] as MutableMap<String, Any?>)["action"] as MutableMap<String, Any?>)
+        action["legacy_owner"] = account(9)
+        assertFailsWith<IllegalArgumentException> {
+            ParliamentApiV1.Proposal.fromJson(encode(provider))
+        }
+
+        val malformedProvider = validProposal("SorafsProviderGovernance")
+        @Suppress("UNCHECKED_CAST")
+        val providerValue = (((malformedProvider["payload"] as MutableMap<String, Any?>)["action"] as MutableMap<String, Any?>)["value"] as MutableMap<String, Any?>)
+        providerValue["provider_id"] = List(32) { 1 }
+        assertFailsWith<IllegalArgumentException> {
+            ParliamentApiV1.Proposal.fromJson(encode(malformedProvider))
+        }
+
+        val malformedAccount = validProposal("MusubiRegistryGovernance")
+        @Suppress("UNCHECKED_CAST")
+        val musubiValue = (((malformedAccount["payload"] as MutableMap<String, Any?>)["value"] as MutableMap<String, Any?>))
+        musubiValue["owners"] = listOf("alice@legacy")
+        assertFailsWith<IllegalArgumentException> {
+            ParliamentApiV1.Proposal.fromJson(encode(malformedAccount))
+        }
+
+        val impreciseHeight = validProposal("RuntimeUpgrade")
+        @Suppress("UNCHECKED_CAST")
+        val impreciseManifest = (impreciseHeight["payload"] as MutableMap<String, Any?>)["manifest"] as MutableMap<String, Any?>
+        impreciseManifest["start_height"] = BigInteger("9007199254740992")
+        assertFailsWith<IllegalArgumentException> {
+            ParliamentApiV1.Proposal.fromJson(encode(impreciseHeight))
+        }
+    }
+
+    @Test
+    fun transitionBuilderRejectsRemovedOutcomeTagsAndPayloadAliases() {
+        for (tag in listOf(
+            "ConstructCertificate",
+            "MarkEnacted",
+            "MarkSuperseded",
+            "MarkExecutionFailed",
+            "PlainBallotFallback",
+        )) {
+            assertFailsWith<IllegalArgumentException>("accepted removed or unknown tag $tag") {
+                ParliamentApiV1.transitionDraftRequestJson(
+                    attemptId,
+                    bytes("""{"transition":"$tag","payload":{}}"""),
+                )
+            }
+        }
+        assertFailsWith<IllegalArgumentException> {
+            ParliamentApiV1.transitionDraftRequestJson(
+                attemptId,
+                bytes("""{"transition":"CompleteQualification","payload":{}}"""),
+            )
+        }
+        assertFailsWith<IllegalArgumentException> {
+            ParliamentApiV1.transitionDraftRequestJson(
+                attemptId,
+                bytes("""{"transition":"EscalateRisk"}"""),
+            )
+        }
+    }
+
+    @Test
+    fun requestBuildersExposeOnlyCanonicalV1FieldsAndRoutes() {
+        val attempt = objectValue(ParliamentApiV1.attemptDraftRequestJson(proposal("RuntimeUpgrade"), 7))
+        assertEquals(setOf("version", "proposal", "attempt_sequence"), attempt.keys)
+        assertEquals(1L, attempt["version"])
+        assertEquals(7L, attempt["attempt_sequence"])
+
+        val transition = bytes("""{"transition":"CompleteQualification"}""")
+        val draft = objectValue(
+            ParliamentApiV1.transitionDraftRequestJson(attemptId, transition),
+        )
+        assertEquals(
+            setOf("version", "governance_attempt_id", "transition"),
+            draft.keys,
+        )
+        assertEquals(attemptId, draft["governance_attempt_id"])
+        assertEquals(
+            "/v1/gov/parliament/attempts/$attemptId",
+            ParliamentApiV1.attemptReadPath(attemptId),
+        )
+        val ballotId = "33".repeat(32)
+        assertEquals(
+            "/v1/gov/parliament/ballots/$ballotId/casting-context",
+            ParliamentApiV1.timedOvnCastingContextReadPath(ballotId),
+        )
+        assertEquals(
+            "/v1/gov/parliament/ballots/$ballotId/casting-proof",
+            ParliamentApiV1.timedOvnCastingProofPath(ballotId),
+        )
+        assertEquals(
+            "/v1/gov/parliament/ballots/$ballotId/release-context",
+            ParliamentApiV1.tleReleaseContextReadPath(ballotId),
+        )
+        assertEquals(
+            "/v1/gov/parliament/ballots/$ballotId/partial-release",
+            ParliamentApiV1.tlePartialReleasePath(ballotId),
+        )
+
+        assertFailsWith<IllegalArgumentException> {
+            ParliamentApiV1.transitionDraftRequestJson(
+                attemptId,
+                bytes("""{"transition":"CompleteQualification","authority":"alice"}"""),
+            )
+        }
+        assertFailsWith<IllegalArgumentException> {
+            ParliamentApiV1.attemptReadPath(attemptId.uppercase())
+        }
+    }
+
+    @Test
+    fun strictDraftParsersBindVersionIdentifiersDigestAndWireIds() {
+        val attemptResponse = linkedMapOf<String, Any?>(
+            "version" to 1,
+            "proposal_content_id" to proposalId,
+            "governance_attempt_id" to attemptId,
+            "tx_instructions" to listOf(
+                mapOf(
+                    "wire_id" to ParliamentApiV1.ATTEMPT_CREATE_WIRE_ID,
+                    "payload_hex" to "0102",
+                ),
+            ),
+        )
+        val parsedAttempt = ParliamentApiV1.parseAttemptDraftResponse(
+            encode(attemptResponse),
+            proposalId,
+            attemptId,
+        )
+        assertEquals(attemptId, parsedAttempt.governanceAttemptId)
+
+        val digest = ByteArray(32) { 0x55.toByte() }
+        val transitionResponse = linkedMapOf<String, Any?>(
+            "version" to 1,
+            "governance_attempt_id" to attemptId,
+            "transition_kind" to mapOf("kind" to "CompleteQualification"),
+            "transition_digest" to digest.map { it.toInt() and 0xff },
+            "tx_instructions" to listOf(
+                mapOf(
+                    "wire_id" to ParliamentApiV1.TRANSITION_SUBMIT_WIRE_ID,
+                    "payload_hex" to "0304",
+                ),
+            ),
+        )
+        val parsedTransition = ParliamentApiV1.parseTransitionDraftResponse(
+            encode(transitionResponse),
+            attemptId,
+            "CompleteQualification",
+            digest,
+        )
+        assertContentEquals(digest, parsedTransition.transitionDigest)
+
+        val wrongVersion = LinkedHashMap(attemptResponse)
+        wrongVersion["version"] = 2
+        assertFailsWith<IllegalArgumentException> {
+            ParliamentApiV1.parseAttemptDraftResponse(
+                encode(wrongVersion),
+                proposalId,
+                attemptId,
+            )
+        }
+        val unknown = LinkedHashMap(attemptResponse)
+        unknown["private_key"] = "secret"
+        assertFailsWith<IllegalArgumentException> {
+            ParliamentApiV1.parseAttemptDraftResponse(encode(unknown), proposalId, attemptId)
+        }
+    }
+
+    @Test
+    fun readParserRejectsAliasesAndOversizedOrMismatchedState() {
+        val root = List(32) { 0x55 }
+        val id1 = "01".repeat(32)
+        val id2 = "02".repeat(32)
+        val response = linkedMapOf<String, Any?>(
+            "version" to 1,
+            "current_height" to 9,
+            "attempt" to mapOf(
+                "id" to attemptId,
+                "proposal_content_id" to proposalId,
+                "sequence" to 0,
+                "risk_tier" to mapOf("tier" to "Standard"),
+                "stage" to mapOf("stage" to "Rules"),
+                "status" to mapOf("status" to "Certified"),
+            ),
+            "policy_version" to 1,
+            "required_bodies" to listOf(
+                mapOf(
+                    "body" to "rules-committee",
+                    "decision_mode" to mapOf("mode" to "PublicFinding"),
+                ),
+            ),
+            "body_states" to listOf(
+                linkedMapOf(
+                    "body" to "rules-committee",
+                    "body_instance_id" to id1,
+                    "status" to mapOf("status" to "Approved"),
+                    "public_finding_opened_at_height" to 1,
+                    "public_finding_phase_blocks" to 7,
+                    "public_finding_deadline_height" to 8,
+                    "no_result_kind" to null,
+                    "no_result_height" to null,
+                ),
+            ),
+            "certificate" to linkedMapOf(
+                "proposal_content_id" to proposalId,
+                "governance_attempt_id" to attemptId,
+                "governance_attempt_sequence" to 0,
+                "risk_tier" to mapOf("tier" to "Standard"),
+                "body_bindings" to listOf(
+                    linkedMapOf(
+                        "body_instance_id" to id1,
+                        "election_attempt_id" to id2,
+                        "election_attempt_sequence" to 0,
+                        "sortition_request_id" to "03".repeat(32),
+                        "sortition_request" to emptyMap<String, Any>(),
+                        "body" to "rules-committee",
+                        "original_seats" to 3,
+                        "beacon_session_id" to "04".repeat(32),
+                        "beacon_pulse_id" to "05".repeat(32),
+                        "roster_root" to root,
+                        "assignment_root" to root,
+                        "result_root" to root,
+                        "result_height" to 8,
+                        "public_finding" to linkedMapOf(
+                            "endorsement_root" to root,
+                            "endorsing_assignments" to listOf("11".repeat(32), "12".repeat(32)),
+                            "endorsements" to 2,
+                            "quorum" to 2,
+                        ),
+                        "ballot" to null,
+                    ),
+                ),
+                "policy_version" to 1,
+                "effect_preimage_hash" to root,
+                "expected_head" to mapOf("state" to "Absent", "head" to mapOf("subject_id" to root)),
+                "certified_at_height" to 8,
+                "enact_at_height" to 10,
+            ),
+            "terminal_height" to null,
+            "superseding_head" to null,
+            "execution_failure_root" to null,
+            "state_payload_hex" to stateFrameHex(),
+        )
+        val parsed = ParliamentApiV1.parseAttemptReadResponse(encode(response), attemptId)
+        assertEquals("9", parsed.currentHeight)
+        assertEquals("rules-committee", parsed.bodyStates.single().body)
+        assertEquals(
+            listOf("11".repeat(32), "12".repeat(32)),
+            parsed.publicFindingBindings.single().endorsingAssignments,
+        )
+
+        val alias = LinkedHashMap(response)
+        alias["statePayloadHex"] = alias.remove("state_payload_hex")
+        assertFailsWith<IllegalArgumentException> {
+            ParliamentApiV1.parseAttemptReadResponse(encode(alias), attemptId)
+        }
+        assertFailsWith<IllegalArgumentException> {
+            ParliamentApiV1.parseAttemptReadResponse(encode(response), "66".repeat(32))
+        }
+
+        val barePayload = LinkedHashMap(response)
+        barePayload["state_payload_hex"] = "0102"
+        assertFailsWith<IllegalArgumentException> {
+            ParliamentApiV1.parseAttemptReadResponse(encode(barePayload), attemptId)
+        }
+
+        val badChecksum = LinkedHashMap(response)
+        val tampered = stateFrame().also { it[it.lastIndex] = (it.last() + 1).toByte() }
+        badChecksum["state_payload_hex"] = tampered.toHex()
+        assertFailsWith<IllegalArgumentException> {
+            ParliamentApiV1.parseAttemptReadResponse(encode(badChecksum), attemptId)
+        }
+
+        val wrongDeadline = LinkedHashMap(response)
+        @Suppress("UNCHECKED_CAST")
+        val wrongStates = (response["body_states"] as List<Map<String, Any?>>)
+            .map { LinkedHashMap(it) }
+        wrongStates[0]["public_finding_deadline_height"] = 9
+        wrongDeadline["body_states"] = wrongStates
+        assertFailsWith<IllegalArgumentException> {
+            ParliamentApiV1.parseAttemptReadResponse(encode(wrongDeadline), attemptId)
+        }
+
+        val unsorted = LinkedHashMap(response)
+        @Suppress("UNCHECKED_CAST")
+        val certificate = LinkedHashMap(response["certificate"] as Map<String, Any?>)
+        @Suppress("UNCHECKED_CAST")
+        val bindings = (certificate["body_bindings"] as List<Map<String, Any?>>)
+            .map { LinkedHashMap(it) }
+        @Suppress("UNCHECKED_CAST")
+        val finding = LinkedHashMap(bindings[0]["public_finding"] as Map<String, Any?>)
+        finding["endorsing_assignments"] = listOf("12".repeat(32), "11".repeat(32))
+        bindings[0]["public_finding"] = finding
+        certificate["body_bindings"] = bindings
+        unsorted["certificate"] = certificate
+        assertFailsWith<IllegalArgumentException> {
+            ParliamentApiV1.parseAttemptReadResponse(encode(unsorted), attemptId)
+        }
+    }
+
+    @Test
+    fun releaseContextRequiresCompleteTranscriptAndBindsEveryPartial() {
+        val ballotId = "33".repeat(32)
+        val response = tleReleaseContextResponse()
+        val context = ParliamentApiV1.parseTleReleaseContextResponse(encode(response), ballotId)
+        assertEquals(4, context.keySession.publicShares.size)
+        assertEquals(2, context.keySession.qualifiedDealerCommitments.size)
+
+        val partial = tlePartialReleaseResponse(response)
+        val parsedPartial = ParliamentApiV1.parseTlePartialReleaseResponse(
+            encode(partial),
+            context.keySession.keySessionId,
+            context.identityDigest,
+            context.keySession.committeeSize,
+        )
+        assertEquals(1, parsedPartial.participantIndex)
+
+        val missingShare = tleReleaseContextResponse()
+        @Suppress("UNCHECKED_CAST")
+        val missingSession = LinkedHashMap(missingShare["tle_key_session"] as Map<String, Any?>)
+        @Suppress("UNCHECKED_CAST")
+        val shares = (missingSession["public_shares"] as List<Any?>).dropLast(1)
+        missingSession["public_shares"] = shares
+        missingShare["tle_key_session"] = missingSession
+        assertFailsWith<IllegalArgumentException> {
+            ParliamentApiV1.parseTleReleaseContextResponse(encode(missingShare), ballotId)
+        }
+
+        val wrongDigest = tleReleaseContextResponse()
+        wrongDigest["identity_digest"] = List(32) { if (it == 0) 1 else 0x88 }
+        assertFailsWith<IllegalArgumentException> {
+            ParliamentApiV1.parseTleReleaseContextResponse(encode(wrongDigest), ballotId)
+        }
+
+        val crossBound = tlePartialReleaseResponse(response)
+        crossBound["key_session_id"] = "77".repeat(32)
+        assertFailsWith<IllegalArgumentException> {
+            ParliamentApiV1.parseTlePartialReleaseResponse(
+                encode(crossBound),
+                context.keySession.keySessionId,
+                context.identityDigest,
+                4,
+            )
+        }
+    }
+
+    @Test
+    fun castingContextRequiresExactPhaseCorpusAndCanonicalArchive() {
+        val release = tleReleaseContextResponse()
+        @Suppress("UNCHECKED_CAST")
+        val keySession = release["tle_key_session"] as Map<String, Any?>
+        @Suppress("UNCHECKED_CAST")
+        val releaseIdentity = release["release_identity"] as Map<String, Any?>
+        val ballotId = release["ballot_attempt_id"] as String
+        val response = linkedMapOf<String, Any?>(
+            "version" to 1,
+            "current_height" to 20,
+            "phase" to "Registered",
+            "session" to linkedMapOf(
+                "network_id" to keySession["network_id"],
+                "proposal_content_id" to proposalId,
+                "governance_attempt_id" to attemptId,
+                "body_instance_id" to release["body_instance_id"],
+                "ballot_attempt_id" to ballotId,
+                "parameter_hash" to releaseIdentity["parameter_hash"],
+                "tle_key_session_id" to keySession["key_session_id"],
+                "tle_key_transcript_hash" to keySession["transcript_hash"],
+                "tle_master_public_key" to keySession["group_public_key"],
+            ),
+            "registration_opened_at_finalized_height" to 10,
+            "target_finalized_height" to 40,
+            "tle_key_session" to keySession,
+            "registration_records_hex" to listOf(ByteArray(3_624) { 0x41 }.toHex()),
+            "survivor_participant_hashes" to null,
+            "release_identity" to null,
+            "archive_norito_base64" to Base64.getEncoder().encodeToString("NRT0".toByteArray()),
+        )
+        val parsed = ParliamentApiV1.parseTimedOvnCastingContextResponse(
+            encode(response),
+            ballotId,
+        )
+        assertEquals(ParliamentTimedOvnCastingPhaseV1.Registered, parsed.phase)
+        assertEquals(3_624, parsed.registrationRecordsHex.single().length / 2)
+
+        response["phase"] = "SurvivorsFrozen"
+        assertFailsWith<IllegalArgumentException> {
+            ParliamentApiV1.parseTimedOvnCastingContextResponse(encode(response), ballotId)
+        }
+        response["survivor_participant_hashes"] = emptyList<List<Int>>()
+        response["release_identity"] = releaseIdentity
+        assertFailsWith<IllegalArgumentException> {
+            ParliamentApiV1.parseTimedOvnCastingContextResponse(encode(response), ballotId)
+        }
+        response["phase"] = "Registered"
+        response["survivor_participant_hashes"] = null
+        response["release_identity"] = null
+        response["archive_norito_base64"] = "TlJUMA"
+        assertFailsWith<IllegalArgumentException> {
+            ParliamentApiV1.parseTimedOvnCastingContextResponse(encode(response), ballotId)
+        }
+    }
+
+    private fun tleReleaseContextResponse(): LinkedHashMap<String, Any?> {
+        val ballotId = "33".repeat(32)
+        val bodyId = "22".repeat(32)
+        val keySessionId = "44".repeat(32)
+        val survivorRoot = List(32) { 0x61 }
+        val noRecoveryRoot = List(32) { 0x62 }
+        val parameterHash = List(32) { 0x63 }
+        val identityPayload = ByteArrayOutputStream().apply {
+            append("iroha.parliament.tle.identity-payload.v1\u0000".toByteArray(StandardCharsets.UTF_8))
+            append(u16(1))
+            append(attemptId.hexBytes())
+            append(bodyId.hexBytes())
+            append(ballotId.hexBytes())
+            append(survivorRoot.toBytes())
+            append(noRecoveryRoot.toBytes())
+            append(u64(40))
+            append(parameterHash.toBytes())
+        }.toByteArray()
+        assertEquals(243, identityPayload.size)
+        val keySession = linkedMapOf<String, Any?>(
+            "version" to 1,
+            "key_session_id" to keySessionId,
+            "network_id" to List(32) { 0x45 },
+            "roster_hash" to List(32) { 0x46 },
+            "committee_size" to 4,
+            "threshold" to 2,
+            "generator_h" to List(96) { 0x47 },
+            "generator_v" to List(96) { 0x48 },
+            "qualified_dealers" to listOf(1, 2),
+            "qualified_dealer_commitments" to listOf(1, 2).map { dealer ->
+                linkedMapOf<String, Any?>(
+                    "dealer_index" to dealer,
+                    "coefficient_commitments" to listOf(
+                        List(96) { 0x50 + dealer },
+                        List(96) { 0x60 + dealer },
+                    ),
+                    "constant_pok_commitment" to List(96) { 0x70 + dealer },
+                    "constant_pok_response" to List(32) { 0x80 + dealer },
+                )
+            },
+            "dkg_event_hash" to List(32) { 0x49 },
+            "group_public_key" to List(96) { 0x4a },
+            "public_shares" to listOf(1, 2, 3, 4).map { index ->
+                linkedMapOf<String, Any?>(
+                    "index" to index,
+                    "participant_hash" to List(32) { 0x20 + index },
+                    "public_key_share" to List(96) { 0x30 + index },
+                )
+            },
+            "transcript_hash" to List(32) { 0x4b },
+        )
+        val framed = ByteArrayOutputStream().apply {
+            append("iroha.threshold-bls.message.v1\u0000".toByteArray(StandardCharsets.UTF_8))
+            append("iroha.threshold-bls.session.v1\u0000".toByteArray(StandardCharsets.UTF_8))
+            append(u16(1))
+            write(2)
+            append((keySession["network_id"] as List<Int>).toBytes())
+            append(keySessionId.hexBytes())
+            append((keySession["roster_hash"] as List<Int>).toBytes())
+            append(u16(4))
+            append(u16(2))
+            append(u32(identityPayload.size))
+            append(identityPayload)
+        }.toByteArray()
+        return linkedMapOf(
+            "version" to 1,
+            "current_height" to 42,
+            "ballot_attempt_id" to ballotId,
+            "governance_attempt_id" to attemptId,
+            "body_instance_id" to bodyId,
+            "status" to mapOf("status" to "Opening"),
+            "release_height" to 40,
+            "opening_deadline_height" to 45,
+            "tle_key_session" to keySession,
+            "release_identity" to linkedMapOf(
+                "tle_key_session_id" to keySessionId,
+                "governance_attempt_id" to attemptId,
+                "body_instance_id" to bodyId,
+                "ballot_attempt_id" to ballotId,
+                "survivor_corpus_root" to survivorRoot,
+                "no_recovery_root" to noRecoveryRoot,
+                "target_finalized_height" to 40,
+                "parameter_hash" to parameterHash,
+            ),
+            "identity_digest" to MessageDigest.getInstance("SHA-256").digest(framed)
+                .map { it.toInt() and 0xff },
+            "identity_payload_hex" to identityPayload.toHex(),
+        )
+    }
+
+    private fun tlePartialReleaseResponse(
+        context: Map<String, Any?>,
+    ): LinkedHashMap<String, Any?> {
+        @Suppress("UNCHECKED_CAST")
+        val session = context["tle_key_session"] as Map<String, Any?>
+        return linkedMapOf(
+            "key_session_id" to session["key_session_id"],
+            "identity_digest" to context["identity_digest"],
+            "participant_index" to 1,
+            "sigma" to List(48) { 0x91 },
+            "proof_x" to List(96) { 0x92 },
+            "proof_y" to List(48) { 0x93 },
+            "z_s" to List(32) { 0x94 },
+            "z_r" to List(32) { 0x95 },
+            "z_u" to List(32) { 0x96 },
+        )
+    }
+
+    private fun ByteArrayOutputStream.append(bytes: ByteArray) {
+        write(bytes, 0, bytes.size)
+    }
+
+    private fun List<Int>.toBytes(): ByteArray = ByteArray(size) { this[it].toByte() }
+
+    private fun String.hexBytes(): ByteArray = ByteArray(length / 2) { index ->
+        substring(index * 2, index * 2 + 2).toInt(16).toByte()
+    }
+
+    private fun u16(value: Int): ByteArray = byteArrayOf(
+        (value ushr 8).toByte(),
+        value.toByte(),
+    )
+
+    private fun u32(value: Int): ByteArray = byteArrayOf(
+        (value ushr 24).toByte(),
+        (value ushr 16).toByte(),
+        (value ushr 8).toByte(),
+        value.toByte(),
+    )
+
+    private fun u64(value: Long): ByteArray = ByteArray(8) { offset ->
+        (value ushr (8 * (7 - offset))).toByte()
+    }
+
+    private fun proposal(kind: String): ParliamentApiV1.Proposal =
+        ParliamentApiV1.Proposal.fromJson(encode(validProposal(kind)))
+
+    private fun validProposal(kind: String): MutableMap<String, Any?> {
+        val payload: MutableMap<String, Any?> = when (kind) {
+            "DeployContract" -> linkedMapOf(
+                "contract_address" to CONTRACT_ADDRESS,
+                "code_hash" to "11".repeat(32),
+                "abi_hash" to "22".repeat(32),
+                "abi_version" to 1,
+                "manifest_provenance" to null,
+            )
+            "RuntimeUpgrade" -> linkedMapOf(
+                "manifest" to linkedMapOf(
+                    "name" to "runtime-v1",
+                    "description" to "first release runtime",
+                    "abi_version" to 1,
+                    "abi_hash" to List(32) { 1 },
+                    "added_syscalls" to emptyList<Any?>(),
+                    "added_pointer_types" to emptyList<Any?>(),
+                    "start_height" to 10,
+                    "end_height" to 20,
+                    "sbom_digests" to emptyList<Any?>(),
+                    "slsa_attestation" to "",
+                    "provenance" to emptyList<Any?>(),
+                ),
+            )
+            "SccpRouteGovernance" -> linkedMapOf(
+                "anchor" to linkedMapOf(
+                    "network_id" to networkId(),
+                    "action" to linkedMapOf(
+                        "action" to "Remove",
+                        "route" to linkedMapOf(
+                            "lane_id" to inboundLane(),
+                            "route_id" to "taira_bsc_xor",
+                            "asset_key" to "xor",
+                            "revision" to 1,
+                        ),
+                    ),
+                ),
+            )
+            "ValidationFeePolicy" -> linkedMapOf(
+                "proposal_operator" to account(1),
+                "policy" to disabledFeePolicy(),
+                "payout_lifecycle_proposal_id" to null,
+            )
+            "ValidationFeePayoutLifecycle" -> linkedMapOf(
+                "proposal_operator" to account(1),
+                "payout_binding" to payoutBinding(),
+            )
+            "MusubiRegistryGovernance" -> linkedMapOf(
+                "kind" to "RecoverPackageOwners",
+                "value" to linkedMapOf(
+                    "package" to linkedMapOf(
+                        "home_dataspace" to 7,
+                        "scope" to linkedMapOf("kind" to "DataspaceRoot", "value" to null),
+                        "name" to listOf("wallet-core"),
+                    ),
+                    "owners" to listOf(account(2)),
+                    "expected_revision" to 1,
+                ),
+            )
+            "SorafsProviderGovernance" -> linkedMapOf(
+                "action" to linkedMapOf(
+                    "action" to "establish",
+                    "value" to linkedMapOf(
+                        "provider_id" to listOf(List(32) { 0x45 }),
+                        "owner" to account(3),
+                    ),
+                ),
+            )
+            else -> error("unsupported fixture kind $kind")
+        }
+        return linkedMapOf("kind" to kind, "payload" to payload)
+    }
+
+    private fun disabledFeePolicy(): MutableMap<String, Any?> = linkedMapOf(
+        "schema_version" to 1,
+        "network_id" to networkId(),
+        "policy_version" to "1",
+        "previous_policy_hash" to null,
+        "ds_asset_id" to asset(1),
+        "ds_scale" to 2,
+        "fee" to "0",
+        "treasury_account_id" to account(2),
+        "charging_mode" to linkedMapOf("charging_mode" to "DISABLED", "value" to null),
+        "effective_from_height" to "10",
+        "expires_after_height" to null,
+        "exemption_classes" to emptyList<Any?>(),
+        "treasury_payout_binding" to null,
+    )
+
+    private fun payoutBinding(): MutableMap<String, Any?> = linkedMapOf(
+        "contract_address" to CONTRACT_ADDRESS,
+        "code_hash" to List(32) { 0x31 },
+        "entrypoint" to "autonomous_validation_fee_tick",
+        "treasury_account_id" to account(2),
+        "ds_asset_id" to asset(1),
+        "xor_asset_id" to asset(2),
+        "pool_vault_account_id" to account(3),
+        "batch_ds" to "10",
+        "min_xor_out" to "4",
+        "max_xor_out" to "100",
+        "recipients" to (4..7).map { seed ->
+            linkedMapOf("account_id" to account(seed), "share" to "0.25")
+        },
+    )
+
+    private fun inboundLane(): MutableMap<String, Any?> = linkedMapOf(
+        "source" to linkedMapOf("network" to "bsc_mainnet", "profile" to null),
+        "target" to linkedMapOf("network" to "sora_taira", "profile" to null),
+    )
+
+    private fun account(seed: Int): String =
+        AccountAddress.fromAccount(TestEd25519Keys.publicKey(seed), "ed25519")
+            .toI105(AccountAddress.DEFAULT_I105_DISCRIMINANT)
+
+    private fun asset(seed: Int): String {
+        val bytes = ByteArray(16) { (seed + it).toByte() }
+        bytes[6] = ((bytes[6].toInt() and 0x0f) or 0x40).toByte()
+        bytes[8] = ((bytes[8].toInt() and 0x3f) or 0x80).toByte()
+        return AssetDefinitionIdEncoder.encodeFromBytes(bytes)
+    }
+
+    private fun networkId(): String =
+        NetworkId.fromBytes(ByteArray(32) { 0x23 }.also { it[31] = 0x25 }).literal
+
+    private fun encode(value: Map<String, Any?>): ByteArray =
+        JsonEncoder.encode(value).toByteArray(StandardCharsets.UTF_8)
+
+    private fun bytes(value: String): ByteArray = value.toByteArray(StandardCharsets.UTF_8)
+
+    private fun stateFrame(): ByteArray {
+        val payload = byteArrayOf(1, 2)
+        val header = NoritoHeader(
+            ByteArray(16) { 3 },
+            payload.size,
+            CRC64.compute(payload),
+            0,
+            NoritoHeader.COMPRESSION_NONE,
+        )
+        return header.encode() + payload
+    }
+
+    private fun stateFrameHex(): String = stateFrame().toHex()
+
+    private fun ByteArray.toHex(): String = joinToString("") { "%02x".format(it.toInt() and 0xff) }
+
+    private fun fixturePath(): Path {
+        var current: Path? = Paths.get("").toAbsolutePath()
+        while (current != null) {
+            val candidate = current.resolve("fixtures/governance/parliament_api_v1.json")
+            if (Files.isRegularFile(candidate)) return candidate
+            current = current.parent
+        }
+        error("fixtures/governance/parliament_api_v1.json was not found")
+    }
+
+    @Suppress("UNCHECKED_CAST")
+    private fun objectValue(bytes: ByteArray): Map<String, Any?> =
+        JsonParser.parse(String(bytes, StandardCharsets.UTF_8)) as Map<String, Any?>
+
+    companion object {
+        private const val CONTRACT_ADDRESS =
+            "irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw"
+    }
+}

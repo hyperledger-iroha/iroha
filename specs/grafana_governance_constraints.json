@@ -9,9 +9,10 @@
       "description": "Gauge current governance proposals grouped by status.",
       "targets": [
         { "expr": "governance_proposals_status{status=\"proposed\"}", "legendFormat": "proposed" },
-        { "expr": "governance_proposals_status{status=\"approved\"}", "legendFormat": "approved" },
         { "expr": "governance_proposals_status{status=\"rejected\"}", "legendFormat": "rejected" },
-        { "expr": "governance_proposals_status{status=\"enacted\"}", "legendFormat": "enacted" }
+        { "expr": "governance_proposals_status{status=\"enacted\"}", "legendFormat": "enacted" },
+        { "expr": "governance_proposals_status{status=\"superseded\"}", "legendFormat": "superseded" },
+        { "expr": "governance_proposals_status{status=\"execution_failed\"}", "legendFormat": "execution failed" }
       ],
       "gridPos": { "h": 8, "w": 12, "x": 0, "y": 0 }
     },
@@ -34,7 +35,7 @@
     {
       "type": "timeseries",
       "title": "Manifest Activations (5m)",
-      "description": "Counts manifest insertions and namespace bindings emitted by EnactReferendum.",
+      "description": "Counts manifest insertions and namespace bindings emitted by exact-due Parliament certificate execution.",
       "targets": [
         {
           "expr": "increase(governance_manifest_activations_total{event=\"manifest_inserted\"}[5m])",

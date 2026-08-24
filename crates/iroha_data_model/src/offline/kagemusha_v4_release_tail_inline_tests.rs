@@ -64,7 +64,7 @@ pub(super) fn lifecycle_enable_witness_wire_fixture() -> KagemushaV4IssuanceEnab
     let canary_body = &fixture.evidence.body;
 
     let mut liveness =
-        super::kagemusha_post_canary_validator_liveness::tests::signed_liveness_evidence_fixture();
+        super::kagemusha_post_canary_validator_liveness::post_canary_validator_liveness_tests::signed_liveness_evidence_fixture();
     let mut challenge_body = liveness.body.challenge.body.clone();
     challenge_body.binding = binding;
     challenge_body.canary_anchor = KagemushaV4PostCanaryValidatorLivenessCanaryAnchorV1 {

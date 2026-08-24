@@ -138,8 +138,6 @@ mod tests {
     };
     use sorafs_node::evidence_viewer::EVIDENCE_VIEWER_MAX_OPAQUE_TOKEN_BYTES_V1;
     use std::collections::{BTreeSet, VecDeque};
-    const SORACLOUD_HF_DEPLOY_CONTRACT_EXTENSION: &str = "x-iroha-soracloud-hf-deploy-contract";
-    const SORACLOUD_HF_DEPLOY_CONTRACT_V1: &str = "cap-bound-local-signing-v1";
     const GOVERNANCE_HASH_LITERAL_PATTERN: &str =
         "^(?:[bB][lL][aA][kK][eE]2[bB]32:)?(?:0[xX])?[0-9a-fA-F]{64}$";
     const GOVERNANCE_LOWER_HEX32_PATTERN: &str = "^[0-9a-f]{64}$";
@@ -297,11 +295,10 @@ mod tests {
                 .filter(|(name, _)| name.starts_with("Subscription")),
         );
     }
-    const OFFLINE_TYPED_SCHEMA_ROOTS: [&str; 9] = [
+    const OFFLINE_TYPED_SCHEMA_ROOTS: [&str; 8] = [
         "OfflineTopUpRequest",
         "OfflineRedeemRequest",
-        "OfflineCapabilityStatus",
-        "OfflineReadiness",
+        "OfflineStatus",
         "OfflineOperationReference",
         "OfflineOperationStatus",
         "OfflineTopUpResult",
@@ -546,6 +543,7 @@ mod tests {
                         | "/v1/nfts/query"
                         | "/v1/proofs/query"
                         | "/v1/rwas/query"
+                        | "/v1/soracloud/ciphertext/query"
                         | "/v1/pipeline/transactions/status"
                         | "/v1/pipeline/transactions/details"
                         | "/v1/zk/merkle-path"
@@ -881,6 +879,834 @@ mod tests {
             CANONICAL_OPENAPI_JSON.as_bytes(),
             "package-local OpenAPI authority must use canonical pretty Norito JSON bytes"
         );
+    }
+    #[test]
+    fn private_uploaded_model_v1_openapi_is_closed_and_exact() {
+        let document = canonical_document();
+        let schemas = component_schemas(&document);
+        let execute = openapi_operation(
+            &document,
+            "/v1/soracloud/model/upload/private/execute",
+            "post",
+        );
+        assert_eq!(
+            operation_request_schema_ref(execute, "private uploaded-model execute"),
+            "#/components/schemas/PrivateUploadedModelExecuteRequest"
+        );
+        assert_eq!(
+            operation_response_schema_ref(execute, "200", "private uploaded-model execute",),
+            "#/components/schemas/PrivateUploadedModelExecuteResponse"
+        );
+        assert_strict_object_schema(
+            schemas,
+            "PrivateUploadedModelExecuteRequest",
+            &[
+                "model_id",
+                "model_name",
+                "bundle_root",
+                "service_name",
+                "weight_version",
+                "policy_id",
+                "model",
+                "plaintext_input_i32",
+                "input_artifact",
+                "output_artifact",
+                "emitted_sequence",
+                "decryption_request_id",
+            ],
+            &[],
+        );
+        assert_strict_object_schema(
+            schemas,
+            "PrivateUploadedModelExecuteResponse",
+            &["schema_version", "status", "receipt", "tx_instructions"],
+            &[],
+        );
+        assert_eq!(
+            property_ref(schemas, "PrivateUploadedModelExecuteResponse", "status"),
+            "#/components/schemas/UploadedModelStatusResponse"
+        );
+        assert_eq!(
+            property_ref(schemas, "PrivateUploadedModelExecuteResponse", "receipt"),
+            "#/components/schemas/SoraPrivateUploadedModelExecutionReceiptV1"
+        );
+        assert_strict_object_schema(
+            schemas,
+            "UploadedModelStatusResponse",
+            &["schema_version", "bundle", "artifact"],
+            &[],
+        );
+        assert_strict_object_schema(
+            schemas,
+            "SoraPrivateUploadedModelExecutionReceiptV1",
+            &[
+                "schema_version",
+                "receipt_id",
+                "service_name",
+                "model_id",
+                "weight_version",
+                "runtime_version",
+                "model_manifest_digest",
+                "model_bundle_root",
+                "policy_id",
+                "input_artifact",
+                "output_artifact",
+                "input_commitment",
+                "output_commitment",
+                "request_commitment",
+                "result_commitment",
+                "emitted_sequence",
+            ],
+            &[],
+        );
+        assert_strict_object_schema(
+            schemas,
+            "PrivateUploadedModelReceiptListResponse",
+            &[
+                "schema_version",
+                "receipts",
+                "returned_items",
+                "remaining_items",
+                "has_more",
+                "count_mode",
+                "total",
+                "continue_cursor",
+            ],
+            &[],
+        );
+        assert_strict_object_schema(
+            schemas,
+            "PrivateUploadedModelQuantizedCpuModelDto",
+            &[
+                "input_len",
+                "output_len",
+                "weights_i8",
+                "bias_i32",
+                "output_shift",
+                "output_min",
+                "output_max",
+            ],
+            &[],
+        );
+        assert_eq!(
+            component_properties(schemas, "PrivateUploadedModelQuantizedCpuModelDto")["input_len"]
+                .get("minimum")
+                .and_then(Value::as_u64),
+            Some(1)
+        );
+        assert_eq!(
+            component_properties(schemas, "PrivateUploadedModelQuantizedCpuModelDto")["output_len"]
+                .get("minimum")
+                .and_then(Value::as_u64),
+            Some(1)
+        );
+        assert_eq!(
+            component_properties(schemas, "PrivateUploadedModelQuantizedCpuModelDto")
+                ["output_shift"]
+                .get("maximum")
+                .and_then(Value::as_u64),
+            Some(30)
+        );
+        let artifact_roles =
+            component_properties(schemas, "SoraPrivateModelArtifactRefV1")["artifact_role"]
+                .get("enum")
+                .and_then(Value::as_array)
+                .expect("private model artifact roles")
+                .iter()
+                .map(|role| role.as_str().expect("private model artifact role"))
+                .collect::<BTreeSet<_>>();
+        assert_eq!(artifact_roles, BTreeSet::from(["input", "output"]));
+
+        let parameters =
+            document["paths"]["/v1/soracloud/model/upload/private/receipts"]["get"]["parameters"]
+                .as_array()
+                .expect("private uploaded-model receipt query parameters");
+        let count_mode = parameters
+            .iter()
+            .find(|parameter| parameter["name"].as_str() == Some("count_mode"))
+            .expect("private uploaded-model receipt count_mode parameter");
+        let variants = count_mode["schema"]["enum"]
+            .as_array()
+            .expect("private uploaded-model receipt count_mode variants")
+            .iter()
+            .map(|variant| variant.as_str().expect("count_mode string variant"))
+            .collect::<BTreeSet<_>>();
+        assert_eq!(variants, BTreeSet::from(["bounded", "exact"]));
+    }
+    #[test]
+    #[expect(
+        clippy::too_many_lines,
+        reason = "one cohesive exact Soracloud release-route and schema authority audit"
+    )]
+    fn soracloud_release_openapi_matches_the_exact_closed_catalog_surface() {
+        use iroha_torii_shared::route_catalog::{
+            AdmissionPolicy, AuthenticationPolicy, RouteEffect,
+        };
+
+        fn method_name(method: CatalogHttpMethod) -> &'static str {
+            match method {
+                CatalogHttpMethod::Get => "get",
+                CatalogHttpMethod::Post => "post",
+                CatalogHttpMethod::Put => "put",
+                CatalogHttpMethod::Patch => "patch",
+                CatalogHttpMethod::Delete => "delete",
+                CatalogHttpMethod::Any => {
+                    panic!("ANY gateways cannot enter the Soracloud OpenAPI surface")
+                }
+            }
+        }
+        fn assert_closed_exact_schema(value: &Value, location: &str) {
+            match value {
+                Value::Array(values) => {
+                    for (index, value) in values.iter().enumerate() {
+                        assert_closed_exact_schema(value, &format!("{location}/{index}"));
+                    }
+                }
+                Value::Object(schema) => {
+                    assert!(
+                        !schema.contains_key("default"),
+                        "body schema {location} must not infer an omitted default"
+                    );
+                    if schema.get("additionalProperties") == Some(&Value::Bool(true)) {
+                        assert_eq!(
+                            location,
+                            format!("{COMPONENT_SCHEMA_REF_PREFIX}JsonValue"),
+                            "only the explicitly dynamic JSON value may remain open"
+                        );
+                    }
+                    if let Some(properties) = schema.get("properties").and_then(Value::as_object) {
+                        assert_eq!(
+                            schema.get("type").and_then(Value::as_str),
+                            Some("object"),
+                            "typed property inventory at {location} must be an object"
+                        );
+                        assert_eq!(
+                            schema.get("additionalProperties"),
+                            Some(&Value::Bool(false)),
+                            "typed body object {location} must reject unknown fields"
+                        );
+                        let required = schema
+                            .get("required")
+                            .and_then(Value::as_array)
+                            .unwrap_or_else(|| {
+                                panic!("typed body object {location} required fields")
+                            })
+                            .iter()
+                            .map(|field| field.as_str().expect("required body field"))
+                            .collect::<BTreeSet<_>>();
+                        let declared = properties
+                            .keys()
+                            .map(String::as_str)
+                            .collect::<BTreeSet<_>>();
+                        assert_eq!(
+                            required, declared,
+                            "typed body object {location} must require every V1 field, including nullable fields"
+                        );
+                    } else if schema.get("type").and_then(Value::as_str) == Some("object") {
+                        let additional = schema.get("additionalProperties");
+                        assert!(
+                            location == format!("{COMPONENT_SCHEMA_REF_PREFIX}JsonValue")
+                                || matches!(
+                                    additional,
+                                    Some(Value::Object(_)) | Some(Value::Bool(false))
+                                ),
+                            "map object {location} must type its values or be closed"
+                        );
+                    }
+                    for (key, value) in schema {
+                        assert_closed_exact_schema(value, &format!("{location}/{key}"));
+                    }
+                }
+                _ => {}
+            }
+        }
+
+        let document = canonical_document();
+        let schemas = component_schemas(&document);
+        let routes = CATALOGED_ROUTES
+            .iter()
+            .filter(|route| {
+                route.surface() == ApiSurface::Public && route.path().starts_with("/v1/soracloud/")
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(routes.len(), 60, "canonical Soracloud release inventory");
+
+        let expected = routes
+            .iter()
+            .map(|route| {
+                assert!(route.projections().openapi(), "{}", route.path());
+                assert!(route.projections().sdk(), "{}", route.path());
+                (
+                    route.path().replace("{*", "{"),
+                    method_name(route.method()).to_owned(),
+                )
+            })
+            .collect::<BTreeSet<_>>();
+        let paths = document
+            .get("paths")
+            .and_then(Value::as_object)
+            .expect("canonical OpenAPI paths");
+        let actual = paths
+            .iter()
+            .filter(|(path, _)| path.starts_with("/v1/soracloud/"))
+            .flat_map(|(path, item)| {
+                let item = item.as_object().expect("Soracloud path item");
+                ["get", "post", "put", "patch", "delete"]
+                    .into_iter()
+                    .filter_map(move |method| {
+                        item.contains_key(method)
+                            .then(|| (path.clone(), method.to_owned()))
+                    })
+            })
+            .collect::<BTreeSet<_>>();
+        assert_eq!(actual.len(), 60, "canonical Soracloud OpenAPI inventory");
+        assert_eq!(
+            actual, expected,
+            "Soracloud OpenAPI/catalog method-path equality"
+        );
+
+        let exact_contracts = [
+            ("/v1/soracloud/status", "get", None, "SoracloudStatusV1"),
+            (
+                "/v1/soracloud/services/{service_name}/public-discovery",
+                "get",
+                None,
+                "ServicePublicDiscoveryResponse",
+            ),
+            (
+                "/v1/soracloud/services/{service_name}/revisions/{service_version}/public-discovery",
+                "get",
+                None,
+                "ServicePublicDiscoveryResponse",
+            ),
+            (
+                "/v1/soracloud/deploy",
+                "post",
+                Some("SignedBundleRequest"),
+                "SoracloudMutationDraftResponse",
+            ),
+            (
+                "/v1/soracloud/upgrade",
+                "post",
+                Some("SignedBundleRequest"),
+                "SoracloudMutationDraftResponse",
+            ),
+            (
+                "/v1/soracloud/apps/deploy",
+                "post",
+                Some("SignedAppInfraRequest"),
+                "SoracloudMutationDraftResponse",
+            ),
+            (
+                "/v1/soracloud/apps/upgrade",
+                "post",
+                Some("SignedAppInfraRequest"),
+                "SoracloudMutationDraftResponse",
+            ),
+            (
+                "/v1/soracloud/apps/status",
+                "get",
+                None,
+                "AppInfraStatusResponse",
+            ),
+            (
+                "/v1/soracloud/apps/{app_name}/status",
+                "get",
+                None,
+                "AppInfraStatusResponse",
+            ),
+            (
+                "/v1/soracloud/rollback",
+                "post",
+                Some("SignedRollbackRequest"),
+                "SoracloudMutationDraftResponse",
+            ),
+            (
+                "/v1/soracloud/rollout",
+                "post",
+                Some("SignedRolloutAdvanceRequest"),
+                "SoracloudMutationDraftResponse",
+            ),
+            (
+                "/v1/soracloud/state/mutate",
+                "post",
+                Some("SignedStateMutationRequest"),
+                "SoracloudMutationDraftResponse",
+            ),
+            (
+                "/v1/soracloud/service/config/set",
+                "post",
+                Some("SignedServiceConfigSetRequest"),
+                "SoracloudMutationDraftResponse",
+            ),
+            (
+                "/v1/soracloud/service/config/delete",
+                "post",
+                Some("SignedServiceConfigDeleteRequest"),
+                "SoracloudMutationDraftResponse",
+            ),
+            (
+                "/v1/soracloud/service/config/status",
+                "get",
+                None,
+                "ServiceConfigStatusResponse",
+            ),
+            (
+                "/v1/soracloud/service/secret/set",
+                "post",
+                Some("SignedServiceSecretSetRequest"),
+                "SoracloudMutationDraftResponse",
+            ),
+            (
+                "/v1/soracloud/service/secret/delete",
+                "post",
+                Some("SignedServiceSecretDeleteRequest"),
+                "SoracloudMutationDraftResponse",
+            ),
+            (
+                "/v1/soracloud/service/secret/status",
+                "get",
+                None,
+                "ServiceSecretStatusResponse",
+            ),
+            (
+                "/v1/soracloud/fhe/job/run",
+                "post",
+                Some("SignedFheJobRunRequest"),
+                "SoracloudMutationDraftResponse",
+            ),
+            (
+                "/v1/soracloud/decrypt/request",
+                "post",
+                Some("SignedDecryptionRequest"),
+                "SoracloudMutationDraftResponse",
+            ),
+            (
+                "/v1/soracloud/health/access/request",
+                "post",
+                Some("SignedDecryptionRequest"),
+                "SoracloudMutationDraftResponse",
+            ),
+            (
+                "/v1/soracloud/health/compliance/report",
+                "get",
+                None,
+                "HealthComplianceReportResponse",
+            ),
+            (
+                "/v1/soracloud/ciphertext/query",
+                "post",
+                Some("SignedCiphertextQueryRequest"),
+                "CiphertextQueryResponse",
+            ),
+            (
+                "/v1/soracloud/training/job/start",
+                "post",
+                Some("SignedTrainingJobStartRequest"),
+                "SoracloudMutationDraftResponse",
+            ),
+            (
+                "/v1/soracloud/training/job/checkpoint",
+                "post",
+                Some("SignedTrainingJobCheckpointRequest"),
+                "SoracloudMutationDraftResponse",
+            ),
+            (
+                "/v1/soracloud/training/job/retry",
+                "post",
+                Some("SignedTrainingJobRetryRequest"),
+                "SoracloudMutationDraftResponse",
+            ),
+            (
+                "/v1/soracloud/training/job/status",
+                "get",
+                None,
+                "TrainingJobStatusResponse",
+            ),
+            (
+                "/v1/soracloud/model/weight/register",
+                "post",
+                Some("SignedModelWeightRegisterRequest"),
+                "SoracloudMutationDraftResponse",
+            ),
+            (
+                "/v1/soracloud/model/weight/promote",
+                "post",
+                Some("SignedModelWeightPromoteRequest"),
+                "SoracloudMutationDraftResponse",
+            ),
+            (
+                "/v1/soracloud/model/weight/rollback",
+                "post",
+                Some("SignedModelWeightRollbackRequest"),
+                "SoracloudMutationDraftResponse",
+            ),
+            (
+                "/v1/soracloud/model/weight/status",
+                "get",
+                None,
+                "ModelWeightStatusResponse",
+            ),
+            (
+                "/v1/soracloud/model/artifact/register",
+                "post",
+                Some("SignedModelArtifactRegisterRequest"),
+                "SoracloudMutationDraftResponse",
+            ),
+            (
+                "/v1/soracloud/model/artifact/status",
+                "get",
+                None,
+                "ModelArtifactStatusResponse",
+            ),
+            (
+                "/v1/soracloud/model/upload/register",
+                "post",
+                Some("SignedUploadedModelRegisterRequest"),
+                "SoracloudMutationDraftResponse",
+            ),
+            (
+                "/v1/soracloud/model/upload/encryption-recipient",
+                "get",
+                None,
+                "UploadedModelEncryptionRecipientResponse",
+            ),
+            (
+                "/v1/soracloud/model/upload/status",
+                "get",
+                None,
+                "UploadedModelStatusResponse",
+            ),
+            (
+                "/v1/soracloud/model/upload/private/execute",
+                "post",
+                Some("PrivateUploadedModelExecuteRequest"),
+                "PrivateUploadedModelExecuteResponse",
+            ),
+            (
+                "/v1/soracloud/model/upload/private/receipts",
+                "get",
+                None,
+                "PrivateUploadedModelReceiptListResponse",
+            ),
+            (
+                "/v1/soracloud/hf/deploy",
+                "post",
+                Some("SignedHfDeployRequest"),
+                "SoracloudMutationDraftResponse",
+            ),
+            (
+                "/v1/soracloud/hf/status",
+                "get",
+                None,
+                "HfSharedLeaseStatusResponse",
+            ),
+            (
+                "/v1/soracloud/hf/lease/leave",
+                "post",
+                Some("SignedHfLeaseLeaveRequest"),
+                "SoracloudMutationDraftResponse",
+            ),
+            (
+                "/v1/soracloud/hf/lease/renew",
+                "post",
+                Some("SignedHfLeaseRenewRequest"),
+                "SoracloudMutationDraftResponse",
+            ),
+            (
+                "/v1/soracloud/model-host/advertise",
+                "post",
+                Some("SignedModelHostAdvertiseRequest"),
+                "SoracloudMutationDraftResponse",
+            ),
+            (
+                "/v1/soracloud/model-host/heartbeat",
+                "post",
+                Some("SignedModelHostHeartbeatRequest"),
+                "SoracloudMutationDraftResponse",
+            ),
+            (
+                "/v1/soracloud/model-host/withdraw",
+                "post",
+                Some("SignedModelHostWithdrawRequest"),
+                "SoracloudMutationDraftResponse",
+            ),
+            (
+                "/v1/soracloud/model-host/status",
+                "get",
+                None,
+                "ModelHostStatusResponse",
+            ),
+            (
+                "/v1/soracloud/agent/deploy",
+                "post",
+                Some("SignedAgentDeployRequest"),
+                "SoracloudMutationDraftResponse",
+            ),
+            (
+                "/v1/soracloud/agent/lease/renew",
+                "post",
+                Some("SignedAgentLeaseRenewRequest"),
+                "SoracloudMutationDraftResponse",
+            ),
+            (
+                "/v1/soracloud/agent/restart",
+                "post",
+                Some("SignedAgentRestartRequest"),
+                "SoracloudMutationDraftResponse",
+            ),
+            (
+                "/v1/soracloud/agent/status",
+                "get",
+                None,
+                "AgentStatusResponse",
+            ),
+            (
+                "/v1/soracloud/agent/wallet/spend",
+                "post",
+                Some("SignedAgentWalletSpendRequest"),
+                "SoracloudMutationDraftResponse",
+            ),
+            (
+                "/v1/soracloud/agent/wallet/approve",
+                "post",
+                Some("SignedAgentWalletApproveRequest"),
+                "SoracloudMutationDraftResponse",
+            ),
+            (
+                "/v1/soracloud/agent/policy/revoke",
+                "post",
+                Some("SignedAgentPolicyRevokeRequest"),
+                "SoracloudMutationDraftResponse",
+            ),
+            (
+                "/v1/soracloud/agent/message/send",
+                "post",
+                Some("SignedAgentMessageSendRequest"),
+                "SoracloudMutationDraftResponse",
+            ),
+            (
+                "/v1/soracloud/agent/message/ack",
+                "post",
+                Some("SignedAgentMessageAckRequest"),
+                "SoracloudMutationDraftResponse",
+            ),
+            (
+                "/v1/soracloud/agent/mailbox/status",
+                "get",
+                None,
+                "AgentMailboxStatusResponse",
+            ),
+            (
+                "/v1/soracloud/agent/autonomy/allow",
+                "post",
+                Some("SignedAgentArtifactAllowRequest"),
+                "SoracloudMutationDraftResponse",
+            ),
+            (
+                "/v1/soracloud/agent/autonomy/run",
+                "post",
+                Some("SignedAgentAutonomyRunRequest"),
+                "SoracloudMutationDraftResponse",
+            ),
+            (
+                "/v1/soracloud/agent/autonomy/run/finalize",
+                "post",
+                Some("AgentAutonomyFinalizeRequest"),
+                "SoracloudMutationDraftResponse",
+            ),
+            (
+                "/v1/soracloud/agent/autonomy/status",
+                "get",
+                None,
+                "AgentAutonomyStatusResponse",
+            ),
+        ];
+        assert_eq!(exact_contracts.len(), 60);
+        assert_eq!(
+            exact_contracts
+                .iter()
+                .map(|(path, method, _, _)| ((*path).to_owned(), (*method).to_owned()))
+                .collect::<BTreeSet<_>>(),
+            actual,
+            "every canonical Soracloud operation must have one explicit schema contract"
+        );
+        for (path, method, request, response) in exact_contracts {
+            let operation = openapi_operation(&document, path, method);
+            if let Some(request) = request {
+                assert_eq!(
+                    operation_request_schema_ref(operation, path),
+                    format!("{COMPONENT_SCHEMA_REF_PREFIX}{request}"),
+                    "{method} {path} request root"
+                );
+            } else {
+                assert!(
+                    operation.get("requestBody").is_none(),
+                    "{method} {path} must not infer a request body"
+                );
+            }
+            assert_eq!(
+                operation_response_schema_ref(operation, "200", path),
+                format!("{COMPONENT_SCHEMA_REF_PREFIX}{response}"),
+                "{method} {path} response root"
+            );
+        }
+
+        let mut roots = BTreeSet::new();
+        for route in routes {
+            let path = route.path().replace("{*", "{");
+            let method = method_name(route.method());
+            let operation = openapi_operation(&document, &path, method);
+            let expected_effect = if route.effect() == RouteEffect::ReadOnly {
+                "read"
+            } else {
+                "write"
+            };
+            assert_eq!(
+                operation.get(TOOL_EFFECT_EXTENSION).and_then(Value::as_str),
+                Some(expected_effect),
+                "{method} {path} effect"
+            );
+            let expected_headers = match (route.authentication(), route.admission()) {
+                (
+                    AuthenticationPolicy::CanonicalAccountSignature,
+                    AdmissionPolicy::AuthenticatedAccount,
+                ) => canonical_account_header_requirements(false),
+                (AuthenticationPolicy::ToriiDefault, AdmissionPolicy::Public) => Vec::new(),
+                pair => panic!("unexpected Soracloud authentication/admission {pair:?} at {path}"),
+            };
+            let headers = operation_header_requirements(operation);
+            assert_eq!(headers, expected_headers, "{method} {path} auth headers");
+            assert!(
+                headers
+                    .iter()
+                    .all(|(name, _)| !name
+                        .eq_ignore_ascii_case("x-iroha-internal-soracloud-account")),
+                "{method} {path} exposes the internal local-read account header"
+            );
+
+            let response = operation_response_schema_ref(operation, "200", &path);
+            let response_root = response
+                .strip_prefix(COMPONENT_SCHEMA_REF_PREFIX)
+                .unwrap_or_else(|| panic!("{method} {path} response must use a component schema"));
+            assert_ne!(
+                response_root, "JsonValue",
+                "{method} {path} untyped response"
+            );
+            roots.insert(response_root.to_owned());
+            if route.method() == CatalogHttpMethod::Post {
+                let request = operation_request_schema_ref(operation, &path);
+                let request_root = request
+                    .strip_prefix(COMPONENT_SCHEMA_REF_PREFIX)
+                    .unwrap_or_else(|| panic!("POST {path} request must use a component schema"));
+                assert_ne!(request_root, "JsonValue", "POST {path} untyped request");
+                roots.insert(request_root.to_owned());
+            } else {
+                assert!(
+                    operation.get("requestBody").is_none(),
+                    "GET {path} must not infer a request body"
+                );
+            }
+        }
+
+        let mut pending = roots.into_iter().collect::<VecDeque<_>>();
+        let mut reachable = BTreeSet::new();
+        let mut dynamic_json_parents = BTreeSet::new();
+        while let Some(name) = pending.pop_front() {
+            if !reachable.insert(name.clone()) {
+                continue;
+            }
+            let schema = schemas.get(&name).unwrap_or_else(|| {
+                panic!("Soracloud component reference does not resolve: {name}")
+            });
+            assert_closed_exact_schema(schema, &format!("{COMPONENT_SCHEMA_REF_PREFIX}{name}"));
+            let mut references = BTreeSet::new();
+            collect_component_refs(schema, &mut references);
+            if references.contains("JsonValue") {
+                dynamic_json_parents.insert(name.clone());
+            }
+            pending.extend(references);
+        }
+        assert_eq!(
+            dynamic_json_parents,
+            BTreeSet::from([
+                "AgentRuntimeExecutionSummary".to_owned(),
+                "AgentRuntimeWorkflowStepSummary".to_owned(),
+                "ServiceConfigSetRequest".to_owned(),
+                "ServiceConfigStatusEntry".to_owned(),
+                "SignedBundleRequest".to_owned(),
+            ]),
+            "only explicitly dynamic configuration/runtime JSON fields may use JsonValue"
+        );
+        assert!(reachable.contains("JsonValue"));
+
+        assert_strict_object_schema(
+            schemas,
+            "SoracloudLocalReadBinding",
+            &[
+                "binding_name",
+                "state_key",
+                "payload_commitment",
+                "artifact_hash",
+            ],
+            &[],
+        );
+        let serialized = norito::json::to_string(&document).expect("serialize Soracloud authority");
+        for retired in [
+            "cap-bound-local-signing",
+            "SoracloudHfDeployDraftV1",
+            "PrivateUploadedModelArtifactRef\"",
+            "PrivateUploadedModelQuantizedCpuModel\"",
+            "PrivateUploadedModelReceipt\"",
+            "SoracloudTxInstr\"",
+            "x-iroha-internal-soracloud-account",
+        ] {
+            assert!(
+                !serialized.contains(retired),
+                "retired or internal Soracloud compatibility surface remains: {retired}"
+            );
+        }
+    }
+    #[test]
+    fn pipeline_preflight_schema_exposes_only_per_scheme_signature_batch_caps() {
+        let document = generate_spec();
+        let schemas = component_schemas(&document);
+        let pipeline = component_properties(schemas, "PipelinePreflightResponse")
+            .get("pipeline")
+            .and_then(Value::as_object)
+            .expect("PipelinePreflightResponse.pipeline schema");
+        let properties = pipeline
+            .get("properties")
+            .and_then(Value::as_object)
+            .expect("PipelinePreflightResponse.pipeline properties");
+        let required = pipeline
+            .get("required")
+            .and_then(Value::as_array)
+            .expect("PipelinePreflightResponse.pipeline required fields");
+
+        assert!(properties.get("signature_batch_max").is_none());
+        assert!(
+            !required
+                .iter()
+                .any(|field| field.as_str() == Some("signature_batch_max"))
+        );
+        for field in [
+            "signature_batch_max_ed25519",
+            "signature_batch_max_secp256k1",
+            "signature_batch_max_pqc",
+            "signature_batch_max_bls",
+        ] {
+            assert!(
+                properties.get(field).is_some(),
+                "missing schema for {field}"
+            );
+            assert!(
+                required
+                    .iter()
+                    .any(|required_field| required_field.as_str() == Some(field)),
+                "{field} must be required"
+            );
+        }
     }
     #[cfg(all(
         feature = "node-api",
@@ -1537,7 +2363,7 @@ mod tests {
     #[test]
     fn sccp_schema_serialization_excludes_retired_and_secret_fields() {
         assert_eq!(
-            iroha_data_model::bridge::SCCP_V1_JSON_SAFE_INTEGER_MAX,
+            iroha_data_model::parliament_types::FIRST_RELEASE_MAX_EXACT_JSON_U64,
             9_007_199_254_740_991
         );
         let schemas = sccp_schemas();
@@ -1777,8 +2603,8 @@ mod tests {
         ))]
         assert_eq!(
             expected.len(),
-            442,
-            "the supported full Torii documentation profile must remain exactly 442 cataloged operations"
+            497,
+            "the supported full Torii documentation profile must remain exactly 497 cataloged operations"
         );
         let spec = generate_spec();
         let paths = spec
@@ -1965,6 +2791,19 @@ mod tests {
                 "unsupported path leaked into OpenAPI: {unsupported_path}"
             );
         }
+    }
+    #[cfg(feature = "app_api")]
+    #[test]
+    fn soracloud_status_documents_only_the_canonical_routing_count() {
+        let document = generate_spec();
+        let description = openapi_operation(&document, "/v1/soracloud/status", "get")
+            .get("description")
+            .and_then(Value::as_str)
+            .expect("Soracloud status description");
+
+        assert!(description.contains("`configured_lane_count`"));
+        assert!(!description.contains("`lane_count`"));
+        assert!(!description.contains("legacy"));
     }
     #[test]
     fn canonical_stream_operations_publish_fail_closed_contract() {
@@ -2802,266 +3641,71 @@ mod tests {
                 "{owner}.{property} must expose the one-or-two-input bound"
             );
         }
-        let readiness = schemas
-            .get("OfflineReadiness")
+        let capability = schemas
+            .get("OfflineStatus")
             .and_then(Value::as_object)
-            .expect("offline readiness schema");
+            .expect("universal offline capability schema");
         assert_eq!(
-            readiness
+            capability
                 .get("additionalProperties")
                 .and_then(Value::as_bool),
             Some(false),
-            "readiness rejects unknown members"
+            "offline capability rejects unknown members"
         );
         assert_eq!(
-            component_required(schemas, "OfflineReadiness"),
+            component_required(schemas, "OfflineStatus"),
             [
                 "cash_handoff_capability",
                 "required_bridge_abi_version",
                 "max_hops",
-                "asset_definition_id",
-                "asset_scale",
-                "evaluated_block_height",
-                "evaluated_block_hash",
-                "active_transfer_verifier",
-                "active_topup_shield_verifier",
-                "active_unshield_verifier",
-                "active_recursive_step_eq_verifier",
-                "active_recursive_step_ep_verifier",
-                "artifact_set",
-                "proof_backend_available",
-                "recursive_lineage_supported",
                 "ready",
-                "blockers",
             ]
         );
+        let capability_properties = component_properties(schemas, "OfflineStatus");
+        assert_eq!(capability_properties.len(), 4);
         assert_eq!(
-            nullable_property_ref(schemas, "OfflineReadiness", "active_transfer_verifier"),
-            "#/components/schemas/OfflineActiveTransferVerifier"
+            capability_properties["cash_handoff_capability"]["const"].as_str(),
+            Some("cash_handoff_v1")
         );
         assert_eq!(
-            nullable_property_ref(schemas, "OfflineReadiness", "active_topup_shield_verifier"),
-            "#/components/schemas/OfflineActiveTopUpShieldVerifier"
+            capability_properties["required_bridge_abi_version"]["const"].as_u64(),
+            Some(23)
         );
-        for field in openapi_contract_strings(
+        assert_eq!(capability_properties["max_hops"]["const"].as_u64(), Some(8));
+        assert_eq!(
+            capability_properties["ready"]["const"].as_bool(),
+            Some(true)
+        );
+        for retired_property in openapi_contract_strings(
             "openapi.generated_spec_documents_strict_typed_offline_request_schemas_and_states.strings.1",
-        ) {
-            assert_eq!(
-                nullable_property_ref(schemas, "OfflineReadiness", field),
-                "#/components/schemas/OfflineActiveTransferVerifier"
-            );
-        }
-        assert_eq!(
-            nullable_property_ref(schemas, "OfflineReadiness", "artifact_set"),
-            "#/components/schemas/OfflineAuthenticatedArtifactSet"
-        );
-        assert_eq!(
-            component_required(schemas, "OfflineAuthenticatedArtifactSet"),
-            [
-                "generation",
-                "manifest_sha256",
-                "release_policy_sha256",
-                "release_attestation_sha256",
-                "activation_height",
-                "withdrawal_height",
-                "max_proof_bytes",
-                "asset_scale",
-            ]
-        );
-        let artifact_set = schemas
-            .get("OfflineAuthenticatedArtifactSet")
-            .and_then(Value::as_object)
-            .expect("authenticated artifact-set schema");
-        assert_eq!(
-            artifact_set
-                .get("additionalProperties")
-                .and_then(Value::as_bool),
-            Some(false)
-        );
-        let artifact_properties = component_properties(schemas, "OfflineAuthenticatedArtifactSet");
-        let generation = artifact_properties
-            .get("generation")
-            .and_then(Value::as_object)
-            .expect("artifact generation schema");
-        assert_eq!(generation.get("minLength").and_then(Value::as_u64), Some(1));
-        assert_eq!(
-            generation.get("maxLength").and_then(Value::as_u64),
-            Some(128)
-        );
-        assert_eq!(
-            generation.get("pattern").and_then(Value::as_str),
-            Some(
-                "^(?!(?:[Cc][Oo][Nn]|[Pp][Rr][Nn]|[Aa][Uu][Xx]|[Nn][Uu][Ll]|[Cc][Oo][Mm][1-9]|[Ll][Pp][Tt][1-9])(?:\\.|$))[A-Za-z0-9](?:[A-Za-z0-9._-]{0,126}[A-Za-z0-9])?$"
-            )
-        );
-        for digest in openapi_contract_strings(
+        )
+        .chain(openapi_contract_strings(
             "openapi.generated_spec_documents_strict_typed_offline_request_schemas_and_states.strings.2",
-        ) {
-            let digest_schema = artifact_properties
-                .get(digest)
-                .and_then(Value::as_object)
-                .unwrap_or_else(|| panic!("{digest} schema"));
-            assert_eq!(
-                digest_schema.get("minLength").and_then(Value::as_u64),
-                Some(64)
-            );
-            assert_eq!(
-                digest_schema.get("maxLength").and_then(Value::as_u64),
-                Some(64)
-            );
-            assert_eq!(
-                digest_schema.get("pattern").and_then(Value::as_str),
-                Some("^[0-9a-f]{64}$")
-            );
-            assert_eq!(
-                digest_schema["not"]["const"].as_str(),
-                Some("0000000000000000000000000000000000000000000000000000000000000000")
-            );
-        }
-        assert!(
-            artifact_set["description"]
-                .as_str()
-                .is_some_and(|description| description.contains("distinct artifacts"))
-        );
-        for (height, minimum) in [("activation_height", 1), ("withdrawal_height", 2)] {
-            let height_schema = artifact_properties
-                .get(height)
-                .and_then(Value::as_object)
-                .unwrap_or_else(|| panic!("{height} schema"));
-            assert_eq!(
-                height_schema.get("format").and_then(Value::as_str),
-                Some("uint64")
-            );
-            assert_eq!(
-                height_schema.get("minimum").and_then(Value::as_u64),
-                Some(minimum)
-            );
-        }
-        assert!(
-            artifact_properties["withdrawal_height"]["description"]
-                .as_str()
-                .is_some_and(|description| description.contains("strictly greater"))
-        );
-        let readiness_properties = component_properties(schemas, "OfflineReadiness");
-        for property in ["recursive_lineage_supported", "ready"] {
-            assert_eq!(
-                readiness_properties[property]["type"].as_str(),
-                Some("boolean"),
-                "{property} must expose the evaluated exact-release result"
-            );
-            assert!(
-                readiness_properties[property].get("const").is_none(),
-                "{property} must not be frozen independently of exact-release blockers"
-            );
-        }
-        assert!(
-            readiness_properties["blockers"].get("minItems").is_none(),
-            "ready responses must admit an empty blocker list"
-        );
-        for property in openapi_contract_strings(
-            "openapi.generated_spec_documents_strict_typed_offline_request_schemas_and_states.strings.3",
+        ))
+        .chain(
+            openapi_contract_strings(
+                "openapi.generated_spec_documents_strict_typed_offline_request_schemas_and_states.strings.3",
+            )
+            .filter(|property| *property != "required_bridge_abi_version"),
         ) {
             assert!(
-                readiness_properties[property]["description"]
-                    .as_str()
-                    .is_some_and(|description| description.contains("ABI-21 V4")),
-                "{property} must describe the active ABI-21 V4 readiness contract"
+                !capability_properties.contains_key(retired_property),
+                "universal capability must not carry retired field {retired_property}"
             );
         }
-        let readiness_scale = readiness
-            .get("properties")
-            .and_then(Value::as_object)
-            .and_then(|properties| properties.get("asset_scale"))
-            .and_then(Value::as_object)
-            .and_then(|schema| schema.get("anyOf"))
-            .and_then(Value::as_array)
-            .and_then(|variants| variants.first())
-            .and_then(Value::as_object)
-            .expect("nullable readiness asset scale");
-        assert_eq!(
-            readiness_scale.get("format").and_then(Value::as_str),
-            Some("uint32")
-        );
-        assert!(
-            !readiness_scale.contains_key("maximum"),
-            "an unsupported live scale must remain decodable with its blocker"
-        );
-        assert_eq!(
-            component_required(schemas, "OfflineActiveTransferVerifier"),
-            [
-                "id",
-                "version",
-                "circuit_id",
-                "commitment",
-                "public_inputs_schema_hash",
-                "max_proof_bytes",
-                "activation_height",
-                "withdrawal_height",
-            ]
-        );
-        assert_eq!(
-            property_ref(schemas, "OfflineActiveTransferVerifier", "id"),
-            "#/components/schemas/OfflineVerifyingKeyId"
-        );
-        let verifier_properties = component_properties(schemas, "OfflineActiveTransferVerifier");
-        assert_eq!(
-            verifier_properties["version"]["minimum"].as_u64(),
-            Some(1),
-            "active verifier versions must be positive"
-        );
-        for field in ["commitment", "public_inputs_schema_hash"] {
-            assert_eq!(
-                verifier_properties[field]["pattern"].as_str(),
-                Some("^[0-9a-f]{64}$")
-            );
-            assert_eq!(
-                verifier_properties[field]["not"]["const"].as_str(),
-                Some("0000000000000000000000000000000000000000000000000000000000000000"),
-                "{field} must exclude the all-zero binding"
+        for retired_component in [
+            "OfflineCapabilityStatus",
+            "OfflineReadiness",
+            "OfflineReadinessBlocker",
+            "OfflineActiveTransferVerifier",
+            "OfflineActiveTopUpShieldVerifier",
+            "OfflineAuthenticatedArtifactSet",
+        ] {
+            assert!(
+                !schemas.contains_key(retired_component),
+                "{retired_component} must be absent from the first-release schema graph"
             );
         }
-        let blocker_code = schemas
-            .get("OfflineReadinessBlocker")
-            .and_then(Value::as_object)
-            .and_then(|schema| schema.get("properties"))
-            .and_then(Value::as_object)
-            .and_then(|properties| properties.get("code"))
-            .and_then(Value::as_object)
-            .expect("offline readiness blocker code schema");
-        assert_eq!(
-            blocker_code.get("minLength").and_then(Value::as_u64),
-            Some(1)
-        );
-        assert_eq!(
-            blocker_code.get("maxLength").and_then(Value::as_u64),
-            Some(64)
-        );
-        assert_eq!(
-            blocker_code.get("pattern").and_then(Value::as_str),
-            Some("^[a-z0-9][a-z0-9_]{0,63}$")
-        );
-        let blocker_message = schemas
-            .get("OfflineReadinessBlocker")
-            .and_then(Value::as_object)
-            .and_then(|schema| schema.get("properties"))
-            .and_then(Value::as_object)
-            .and_then(|properties| properties.get("message"))
-            .and_then(Value::as_object)
-            .expect("offline readiness blocker message schema");
-        assert_eq!(
-            blocker_message.get("maxLength").and_then(Value::as_u64),
-            Some(1024)
-        );
-        let readiness_asset = readiness
-            .get("properties")
-            .and_then(Value::as_object)
-            .and_then(|properties| properties.get("asset_definition_id"))
-            .and_then(Value::as_object)
-            .expect("offline readiness canonical asset schema");
-        assert_eq!(
-            readiness_asset.get("pattern").and_then(Value::as_str),
-            Some("^[1-9A-HJ-NP-Za-km-z]{28}$")
-        );
         assert!(schemas.contains_key("OfflineOperationReference"));
         let status = schemas
             .get("OfflineOperationStatus")
@@ -3326,23 +3970,47 @@ mod tests {
                 );
             }
         }
-        let readiness_responses = paths
+        let capability_operation = paths
             .get("/v1/offline/readiness")
             .and_then(Value::as_object)
             .and_then(|item| item.get("get"))
             .and_then(Value::as_object)
-            .and_then(|operation| operation.get("responses"))
+            .expect("offline capability operation");
+        assert_eq!(
+            capability_operation
+                .get("operationId")
+                .and_then(Value::as_str),
+            Some("offlineCapability")
+        );
+        assert!(
+            capability_operation
+                .get("parameters")
+                .and_then(Value::as_array)
+                .is_none_or(|parameters| parameters.iter().all(|parameter| {
+                    parameter
+                        .get("in")
+                        .and_then(Value::as_str)
+                        .is_some_and(|location| location != "query")
+                })),
+            "offline capability must not advertise a selector query"
+        );
+        assert_eq!(
+            operation_response_schema_ref(capability_operation, "200", "/v1/offline/readiness"),
+            "#/components/schemas/OfflineStatus"
+        );
+        let capability_responses = capability_operation
+            .get("responses")
             .and_then(Value::as_object)
-            .expect("offline readiness responses");
+            .expect("offline capability responses");
         for status in ["400", "404", "503"] {
             assert!(
-                !readiness_responses.contains_key(status),
+                !capability_responses.contains_key(status),
                 "universal capability discovery must not document {status} backend evaluation"
             );
         }
         assert!(
-            !response_documents_reject_code(readiness_responses, "429"),
-            "generic readiness ingress throttling must not advertise an application reject code"
+            !response_documents_reject_code(capability_responses, "429"),
+            "generic capability ingress throttling must not advertise an application reject code"
         );
         let status_responses = paths
             .get("/v1/offline/operations/{operation_id}")
@@ -3948,12 +4616,25 @@ mod tests {
         }
     }
     #[test]
-    fn retired_sumeragi_mutation_surfaces_are_absent() {
-        let doc = generate_spec();
-        let paths = doc
+    fn retired_sumeragi_vrf_surfaces_are_absent() {
+        for (surface, source) in [
+            ("Torii runtime handlers", include_str!("routing.rs")),
+            ("Torii router mounts", include_str!("lib.rs")),
+        ] {
+            assert!(
+                !source.contains("handle_v1_sumeragi_vrf_"),
+                "retired Sumeragi VRF handler reappeared in {surface}"
+            );
+            assert!(
+                !source.contains("/v1/sumeragi/vrf/"),
+                "retired Sumeragi VRF route reappeared in {surface}"
+            );
+        }
+        let canonical = canonical_document();
+        let paths = canonical
             .get("paths")
             .and_then(Value::as_object)
-            .expect("paths section");
+            .expect("canonical paths section");
         let evidence = paths
             .get("/v1/sumeragi/evidence")
             .and_then(Value::as_object)
@@ -3963,22 +4644,38 @@ mod tests {
             !evidence.contains_key("post"),
             "retired evidence submission operation remains documented"
         );
-        for retired_path in ["/v1/sumeragi/vrf/commit", "/v1/sumeragi/vrf/reveal"] {
+        for retired_path in [
+            "/v1/sumeragi/vrf/commit",
+            "/v1/sumeragi/vrf/epoch/{epoch}",
+            "/v1/sumeragi/vrf/penalties/{epoch}",
+            "/v1/sumeragi/vrf/reveal",
+        ] {
             assert!(
                 !paths.contains_key(retired_path),
-                "retired Sumeragi mutation path remains documented: {retired_path}"
+                "retired Sumeragi VRF path remains in the canonical full-profile document: {retired_path}"
             );
         }
-        let schemas = doc
+        let compiled_paths = generate_spec()
+            .get("paths")
+            .and_then(Value::as_object)
+            .expect("compiled paths section")
+            .clone();
+        assert!(
+            compiled_paths
+                .keys()
+                .all(|path| !path.starts_with("/v1/sumeragi/vrf/")),
+            "compiled OpenAPI profile must not expose retired Sumeragi VRF paths"
+        );
+        let schemas = canonical
             .get("components")
             .and_then(Value::as_object)
             .and_then(|components| components.get("schemas"))
             .and_then(Value::as_object)
-            .expect("schemas section");
+            .expect("canonical schemas section");
         for retired_schema in ["SumeragiVrfCommitRequest", "SumeragiVrfRevealRequest"] {
             assert!(
                 !schemas.contains_key(retired_schema),
-                "retired Sumeragi mutation schema remains documented: {retired_schema}"
+                "retired Sumeragi VRF request schema remains documented: {retired_schema}"
             );
         }
     }

@@ -183,7 +183,7 @@ namespace Hyperledger.Iroha.Torii;
 [JsonSerializable(typeof(ToriiNodeQueryCapabilities))]
 [JsonSerializable(typeof(ToriiNodeAggregateQueryCapabilities))]
 [JsonSerializable(typeof(ToriiNodeProjectionCapabilities))]
-[JsonSerializable(typeof(ToriiKagemushaReadinessV4))]
+[JsonSerializable(typeof(ToriiOfflineStatus))]
 [JsonSerializable(typeof(ToriiPipelineEvent))]
 [JsonSerializable(typeof(ToriiProofEvent))]
 [JsonSerializable(typeof(ToriiProofRemovedRecord))]

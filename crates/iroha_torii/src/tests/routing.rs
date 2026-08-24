@@ -472,13 +472,10 @@ mod tests {
         use iroha_torii_shared::offline_api::OfflineStatus;
         let telemetry = MaybeTelemetry::for_tests();
         let offline = OfflineStatus {
-            mandatory: false,
             cash_handoff_capability: "cash_handoff_v1".to_owned(),
-            required_bridge_abi_version: 22,
+            required_bridge_abi_version: 23,
             max_hops: 8,
             ready: true,
-            assets: Vec::new(),
-            blockers: Vec::new(),
         };
         let response = super::handle_status(
             &telemetry,

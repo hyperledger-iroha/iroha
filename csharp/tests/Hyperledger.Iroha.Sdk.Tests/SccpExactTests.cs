@@ -891,14 +891,8 @@ public sealed partial class SccpExactTests
             Convert.ToHexString(parsed.SoraFinalityAnchor.AnchorHash));
         Assert.Equal("0x01724432368d493ea5babeabdee2baeddd070e0db1b870a5d5e1898c6c48c2d4", parsed.StatementHash);
         Assert.Equal("0x6fc7f0ee2acb1f6f2e65a411b23db54f802c316c6b2a2a5186c51952afcca4b2", parsed.RequestHash);
-        var historical = SccpGroth16ProofRequestV1.Parse(Json(ProofRequestObject(3)));
-        Assert.Equal((ushort)3, historical.SoraFinalityAnchor.ProtocolVersion);
-        Assert.Equal(
-            "EC6C821CAF5FA74368C08E9101AB310F132FB7F627A09F6F9481AA9484054BBA",
-            Convert.ToHexString(historical.SoraFinalityAnchor.AnchorHash));
-        Assert.False(parsed.SoraFinalityAnchor.AnchorHash.SequenceEqual(
-            historical.SoraFinalityAnchor.AnchorHash));
         Assert.Throws<ArgumentException>(() => ProofRequestObject(2));
+        Assert.Throws<ArgumentException>(() => ProofRequestObject(3));
         Assert.Throws<ArgumentException>(() => ProofRequestObject(5));
         var mutations = new Action<Dictionary<string, object?>>[]
         {
@@ -917,6 +911,7 @@ public sealed partial class SccpExactTests
             value => ((Dictionary<string, object?>)((Dictionary<string, object?>)value["semantic_proof_profile"]!)["commitments"]!)["circuit_commitment"] = Upper(0xc2, 32),
             value => ((Dictionary<string, object?>)value["sora_finality_anchor"]!)["checkpoint_height"] = 0,
             value => ((Dictionary<string, object?>)value["sora_finality_anchor"]!)["protocol_version"] = 1,
+            value => ((Dictionary<string, object?>)value["sora_finality_anchor"]!)["protocol_version"] = 3,
             value => ((Dictionary<string, object?>)value["sora_finality_anchor"]!)["protocol_version"] = "4",
             value => ((Dictionary<string, object?>)value["sora_finality_anchor"]!)["protocol_version"] = 5,
             value => ((Dictionary<string, object?>)value["sora_finality_anchor"]!)["protocol_version"] = "3",

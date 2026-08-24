@@ -527,8 +527,8 @@ struct StagedKagemushaTopUpFinalitySidecar {
     post_state_root: Hash,
     leaves: Vec<KagemushaTopUpFinalityLeaf>,
 }
-/// Immutable Kura proof that one block's receiver snapshot synthetic write is
-/// included in the ordinary-write root authenticated by its exact finality artifact.
+/// Immutable Kura proofs for one block's fixed receiver, validation-fee, and
+/// Parliament casting writes, authenticated by its exact finality artifact.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
 pub struct KagemushaActiveReceiverFinalitySidecarV1 {
     /// Sidecar version.
@@ -547,6 +547,10 @@ pub struct KagemushaActiveReceiverFinalitySidecarV1 {
     pub witness_proof: KagemushaActiveReceiverWitnessProofV1,
     /// Fixed-key sparse-SMT proof and exact encoded validation-fee commitment.
     pub validation_fee_policy_witness: ValidationFeePolicyWitnessProofV1,
+    /// Fixed-key sparse-SMT proof and exact encoded Parliament casting commitment.
+    pub parliament_timed_ovn_casting_witness: ParliamentTimedOvnCastingWitnessProofV1,
+    /// Exact bounded compact leaves needed to build historical membership proofs.
+    pub parliament_timed_ovn_casting_bindings: Vec<ParliamentTimedOvnCastingContextBindingV1>,
 }
 impl KagemushaActiveReceiverFinalitySidecarV1 {
     /// Current sidecar version.
@@ -561,6 +565,8 @@ struct StagedKagemushaActiveReceiverFinalitySidecarV1 {
     post_state_root: Hash,
     witness_proof: KagemushaActiveReceiverWitnessProofV1,
     validation_fee_policy_witness: ValidationFeePolicyWitnessProofV1,
+    parliament_timed_ovn_casting_witness: ParliamentTimedOvnCastingWitnessProofV1,
+    parliament_timed_ovn_casting_bindings: Vec<ParliamentTimedOvnCastingContextBindingV1>,
 }
 impl CommitManifest {
     /// Construct a manifest for a committed height.

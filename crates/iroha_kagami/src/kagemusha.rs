@@ -1784,6 +1784,109 @@ impl PromotionFileSnapshotV1 {
     }
 }
 #[cfg(unix)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum NoReplaceRenameNameStateV1 {
+    Missing,
+    Owned,
+    Foreign,
+}
+#[cfg(unix)]
+impl NoReplaceRenameNameStateV1 {
+    fn operator_label(self) -> &'static str {
+        match self {
+            Self::Missing => "missing",
+            Self::Owned => "owned",
+            Self::Foreign => "foreign",
+        }
+    }
+}
+#[cfg(unix)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum FailedNoReplaceRenameDispositionV1 {
+    PreCommit,
+    CommitUncertain,
+}
+#[cfg(unix)]
+fn classify_failed_no_replace_rename_v1(
+    target: Option<NoReplaceRenameNameStateV1>,
+    staging: Option<NoReplaceRenameNameStateV1>,
+) -> FailedNoReplaceRenameDispositionV1 {
+    if matches!(
+        target,
+        Some(NoReplaceRenameNameStateV1::Missing | NoReplaceRenameNameStateV1::Foreign)
+    ) && staging == Some(NoReplaceRenameNameStateV1::Owned)
+    {
+        FailedNoReplaceRenameDispositionV1::PreCommit
+    } else {
+        // A syscall error alone does not prove that the rename stayed on the
+        // pre-commit side. An owned target or a missing, changed, or
+        // uninspectable staging binding may be evidence of a completed rename
+        // or a concurrent name substitution.
+        FailedNoReplaceRenameDispositionV1::CommitUncertain
+    }
+}
+#[cfg(unix)]
+enum FailedNoReplaceRenameReconciliationV1 {
+    PreCommit,
+    CommitUncertain { reason: String },
+}
+#[cfg(unix)]
+fn rename_name_observation_label_v1(observation: &Result<NoReplaceRenameNameStateV1>) -> String {
+    match observation {
+        Ok(state) => state.operator_label().to_owned(),
+        Err(error) => format!("uninspectable ({error:#})"),
+    }
+}
+#[cfg(unix)]
+fn reconcile_failed_no_replace_rename_v1<C>(
+    rename_error_chain: &str,
+    target: &Result<NoReplaceRenameNameStateV1>,
+    staging: &Result<NoReplaceRenameNameStateV1>,
+    cleanup_exact_owned_staging: C,
+) -> FailedNoReplaceRenameReconciliationV1
+where
+    C: FnOnce() -> Result<()>,
+{
+    let disposition = classify_failed_no_replace_rename_v1(
+        target.as_ref().ok().copied(),
+        staging.as_ref().ok().copied(),
+    );
+    if disposition == FailedNoReplaceRenameDispositionV1::PreCommit {
+        return match cleanup_exact_owned_staging() {
+            Ok(()) => FailedNoReplaceRenameReconciliationV1::PreCommit,
+            Err(error) => FailedNoReplaceRenameReconciliationV1::CommitUncertain {
+                reason: format!(
+                    "{rename_error_chain}; post-error reconciliation proved an absent or foreign destination and owned staging inode, but exact staging cleanup became uncertain: {error:#}"
+                ),
+            },
+        };
+    }
+    FailedNoReplaceRenameReconciliationV1::CommitUncertain {
+        reason: format!(
+            "{rename_error_chain}; post-error reconciliation is commit-uncertain and left all names untouched: target={}, staging={}",
+            rename_name_observation_label_v1(target),
+            rename_name_observation_label_v1(staging),
+        ),
+    }
+}
+#[cfg(unix)]
+fn inspect_no_replace_rename_name_v1<M>(
+    parent: &File,
+    name: &std::ffi::OsStr,
+    matches_owned: M,
+    label: &str,
+) -> Result<NoReplaceRenameNameStateV1>
+where
+    M: FnOnce(&rustix::fs::Stat) -> bool,
+{
+    match rustix::fs::statat(parent, name, rustix::fs::AtFlags::SYMLINK_NOFOLLOW) {
+        Ok(stat) if matches_owned(&stat) => Ok(NoReplaceRenameNameStateV1::Owned),
+        Ok(_) => Ok(NoReplaceRenameNameStateV1::Foreign),
+        Err(error) if error == rustix::io::Errno::NOENT => Ok(NoReplaceRenameNameStateV1::Missing),
+        Err(error) => Err(error).wrap_err_with(|| format!("failed to inspect {label}")),
+    }
+}
+#[cfg(unix)]
 struct PinnedPromotionParentV1 {
     path: PathBuf,
     file: File,
@@ -1833,8 +1936,9 @@ impl PinnedPromotionParentV1 {
             &file
                 .metadata()
                 .wrap_err("failed to inspect pinned promotion-record filesystem root")?,
-        );
-        if opened_root != Some(root_snapshot) {
+        )
+        .ok_or_else(|| eyre!("pinned promotion-record filesystem root is not a directory"))?;
+        if !root_snapshot.matches_except_links(opened_root) || opened_root.links == 0 {
             bail!("promotion-record filesystem root changed while it was pinned");
         }
         let mut current_path = root_path.to_path_buf();
@@ -1874,7 +1978,7 @@ impl PinnedPromotionParentV1 {
                     && stat_field_matches_v1(stat_after.st_mode, next_snapshot.mode)
                     && stat_field_matches_v1(stat_after.st_uid, next_snapshot.uid)
                     && stat_field_matches_v1(stat_after.st_gid, next_snapshot.gid)
-                    && stat_field_matches_v1(stat_after.st_nlink, next_snapshot.links);
+                    && stat_after.st_nlink > 0;
             if !stat_identity_matches {
                 bail!("promotion-record parent component changed while it was pinned");
             }
@@ -1899,23 +2003,21 @@ impl PinnedPromotionParentV1 {
         parent.verify_path_identity()?;
         Ok(parent)
     }
-    fn snapshot_after_new_subdirectory(&self) -> Result<PromotionDirectorySnapshotV1> {
-        let current = PromotionDirectorySnapshotV1::from_metadata(
-            &self
-                .file
-                .metadata()
-                .wrap_err("failed to inspect promotion-record parent after staging")?,
-        )
-        .ok_or_else(|| eyre!("promotion-record parent is no longer a directory"))?;
-        // Unix filesystems may increment a parent's link count for the newly
-        // staged subdirectory; some filesystems report a stable count instead.
+    fn snapshot_after_one_staged_entry(&self, label: &str) -> Result<PromotionDirectorySnapshotV1> {
+        let current =
+            PromotionDirectorySnapshotV1::from_metadata(&self.file.metadata().wrap_err_with(
+                || format!("failed to inspect promotion-record parent after staging {label}"),
+            )?)
+            .ok_or_else(|| eyre!("promotion-record parent is no longer a directory"))?;
+        // Unix filesystems disagree on whether a newly staged entry increments
+        // its parent's link count. Admit only that single known transition.
         if !self.snapshot.matches_except_links(current)
             || current
                 .links
                 .checked_sub(self.snapshot.links)
                 .is_none_or(|delta| delta > 1)
         {
-            bail!("promotion-record parent changed unexpectedly while staging a directory");
+            bail!("promotion-record parent changed unexpectedly while staging {label}");
         }
         self.verify_path_identity_against(current)?;
         Ok(current)
@@ -1938,20 +2040,21 @@ impl PinnedPromotionParentV1 {
         }
         let final_component = self.path_chain.len().saturating_sub(1);
         for (index, (path, original_expected)) in self.path_chain.iter().enumerate() {
-            let expected = if index == final_component {
-                expected_parent
-            } else {
-                *original_expected
-            };
             let current = fs::symlink_metadata(path).wrap_err_with(|| {
                 format!(
                     "failed to re-inspect promotion-record ancestor {}",
                     path.display()
                 )
             })?;
-            if current.file_type().is_symlink()
-                || PromotionDirectorySnapshotV1::from_metadata(&current) != Some(expected)
-            {
+            let current_snapshot = PromotionDirectorySnapshotV1::from_metadata(&current);
+            let identity_matches = current_snapshot.is_some_and(|current| {
+                if index == final_component {
+                    current == expected_parent
+                } else {
+                    original_expected.matches_except_links(current) && current.links > 0
+                }
+            });
+            if current.file_type().is_symlink() || !identity_matches {
                 bail!(
                     "promotion-record ancestor changed after it was pinned: {}",
                     path.display()
@@ -2037,6 +2140,14 @@ where
         )
         .wrap_err("failed to create private promotion-record temporary file")?,
     );
+    let publication_parent_snapshot =
+        match parent.snapshot_after_one_staged_entry("a promotion-record file") {
+            Ok(snapshot) => snapshot,
+            Err(error) => {
+                cleanup_promotion_temporary_v1(&parent, &temporary_name)?;
+                return Err(error);
+            }
+        };
     let write_result = (|| -> Result<PromotionFileSnapshotV1> {
         PromotionFileSnapshotV1::from_metadata(
             &temporary
@@ -2072,7 +2183,18 @@ where
             return Err(error);
         }
     };
-    if let Err(error) = before_publish().and_then(|()| parent.verify_path_identity()) {
+    if let Err(error) = before_publish()
+        .and_then(|()| parent.verify_path_identity_against(publication_parent_snapshot))
+        .and_then(|()| {
+            verify_pinned_file_contents_v1(
+                &parent.file,
+                &temporary_name,
+                snapshot,
+                bytes,
+                "staged promotion record",
+            )
+        })
+    {
         cleanup_promotion_temporary_v1(&parent, &temporary_name)?;
         return Err(error);
     }
@@ -2083,34 +2205,82 @@ where
         target_name,
         RenameFlags::NOREPLACE,
     ) {
-        cleanup_promotion_temporary_v1(&parent, &temporary_name)?;
-        return Err(error).wrap_err("failed to atomically publish new promotion record");
+        let rename_error =
+            eyre!(error).wrap_err("failed to atomically publish new promotion record");
+        let rename_error_chain = format!("{rename_error:#}");
+        let target_observation = inspect_no_replace_rename_name_v1(
+            &parent.file,
+            target_name,
+            |stat| promotion_file_snapshot_has_stat_identity_v1(snapshot, stat),
+            "promotion-record destination after failed rename",
+        );
+        let staging_observation = inspect_no_replace_rename_name_v1(
+            &parent.file,
+            &temporary_name,
+            |stat| release_circuit_params_file_snapshot_matches_stat_v1(snapshot, stat),
+            "promotion-record staging binding after failed rename",
+        );
+        return match reconcile_failed_no_replace_rename_v1(
+            &rename_error_chain,
+            &target_observation,
+            &staging_observation,
+            || {
+                parent.verify_path_identity_against(publication_parent_snapshot)?;
+                verify_pinned_file_contents_v1(
+                    &parent.file,
+                    &temporary_name,
+                    snapshot,
+                    bytes,
+                    "post-error staged promotion record",
+                )?;
+                cleanup_promotion_temporary_v1(&parent, &temporary_name)?;
+                parent.verify_path_identity()
+            },
+        ) {
+            FailedNoReplaceRenameReconciliationV1::PreCommit => Err(rename_error),
+            FailedNoReplaceRenameReconciliationV1::CommitUncertain { reason } => {
+                Ok(DurableFilePublicationOutcomeV1::CommitUncertain {
+                    final_path: parent.path.join(target_name),
+                    reason,
+                })
+            }
+        };
     }
     let final_path = parent.path.join(target_name);
     let after_publication = (|| -> Result<()> {
-        let target = statat(&parent.file, target_name, AtFlags::SYMLINK_NOFOLLOW)
-            .wrap_err("failed to inspect published promotion record")?;
-        if !stat_field_matches_v1(target.st_dev, snapshot.device)
-            || !stat_field_matches_v1(target.st_ino, snapshot.inode)
-            || !stat_field_matches_v1(target.st_mode, snapshot.mode)
-            || !stat_field_matches_v1(target.st_uid, snapshot.uid)
-            || !stat_field_matches_v1(target.st_gid, snapshot.gid)
-            || !stat_field_matches_v1(target.st_nlink, snapshot.links)
-            || !stat_field_matches_v1(target.st_size, snapshot.length)
-        {
-            bail!("published promotion record changed identity or custody");
-        }
+        verify_pinned_file_contents_v1(
+            &parent.file,
+            target_name,
+            snapshot,
+            bytes,
+            "published promotion record",
+        )?;
         sync_parent(&parent.file).wrap_err("failed to durably sync promotion-record parent")?;
-        parent.verify_path_identity()?;
+        parent.verify_path_identity_against(publication_parent_snapshot)?;
+        verify_pinned_file_contents_v1(
+            &parent.file,
+            target_name,
+            snapshot,
+            bytes,
+            "durably published promotion record",
+        )?;
         Ok(())
     })();
     Ok(match after_publication {
         Ok(()) => DurableFilePublicationOutcomeV1::Committed { final_path },
         Err(error) => DurableFilePublicationOutcomeV1::CommitUncertain {
             final_path,
-            reason: error.to_string(),
+            reason: format!("{error:#}"),
         },
     })
+}
+#[cfg(unix)]
+fn promotion_file_snapshot_has_stat_identity_v1(
+    snapshot: PromotionFileSnapshotV1,
+    stat: &rustix::fs::Stat,
+) -> bool {
+    stat_field_matches_v1(stat.st_dev, snapshot.device)
+        && stat_field_matches_v1(stat.st_ino, snapshot.inode)
 }
 #[cfg(unix)]
 fn release_circuit_params_file_snapshot_matches_stat_v1(
@@ -2126,6 +2296,78 @@ fn release_circuit_params_file_snapshot_matches_stat_v1(
         && stat_field_matches_v1(stat.st_size, snapshot.length)
 }
 #[cfg(unix)]
+fn verify_pinned_file_contents_v1(
+    directory: &File,
+    file_name: &std::ffi::OsStr,
+    snapshot: PromotionFileSnapshotV1,
+    expected_bytes: &[u8],
+    label: &str,
+) -> Result<()> {
+    use rustix::fs::{AtFlags, Mode, OFlags, openat, statat};
+    let expected_length = u64::try_from(expected_bytes.len())
+        .map_err(|_| eyre!("{label} length does not fit u64"))?;
+    if snapshot.length != expected_length {
+        bail!("{label} snapshot has the wrong length");
+    }
+    let linked_before = statat(directory, file_name, AtFlags::SYMLINK_NOFOLLOW)
+        .wrap_err_with(|| format!("failed to inspect {label} binding"))?;
+    if !release_circuit_params_file_snapshot_matches_stat_v1(snapshot, &linked_before) {
+        bail!("{label} changed identity or custody");
+    }
+    let opened = File::from(
+        openat(
+            directory,
+            file_name,
+            OFlags::RDONLY | OFlags::NOFOLLOW | OFlags::CLOEXEC,
+            Mode::empty(),
+        )
+        .wrap_err_with(|| format!("failed to pin {label}"))?,
+    );
+    let opened_snapshot = PromotionFileSnapshotV1::from_metadata(
+        &opened
+            .metadata()
+            .wrap_err_with(|| format!("failed to inspect pinned {label}"))?,
+    );
+    if opened_snapshot != Some(snapshot) {
+        bail!("{label} binding does not identify the staged file");
+    }
+    let read_limit = expected_length
+        .checked_add(1)
+        .ok_or_else(|| eyre!("{label} read limit overflow"))?;
+    let mut actual = Vec::new();
+    actual
+        .try_reserve_exact(expected_bytes.len().saturating_add(1))
+        .map_err(|_| eyre!("failed to reserve {label} verification buffer"))?;
+    (&opened)
+        .take(read_limit)
+        .read_to_end(&mut actual)
+        .wrap_err_with(|| format!("failed to read pinned {label}"))?;
+    if actual != expected_bytes {
+        bail!("{label} content does not match the authenticated bytes");
+    }
+    let opened_after = PromotionFileSnapshotV1::from_metadata(
+        &opened
+            .metadata()
+            .wrap_err_with(|| format!("failed to re-inspect pinned {label}"))?,
+    );
+    let linked_after = statat(directory, file_name, AtFlags::SYMLINK_NOFOLLOW)
+        .wrap_err_with(|| format!("failed to re-inspect {label} binding"))?;
+    if opened_after != Some(snapshot)
+        || !release_circuit_params_file_snapshot_matches_stat_v1(snapshot, &linked_after)
+    {
+        bail!("{label} changed while its content was verified");
+    }
+    Ok(())
+}
+#[cfg(unix)]
+fn promotion_directory_snapshot_has_stat_identity_v1(
+    snapshot: PromotionDirectorySnapshotV1,
+    stat: &rustix::fs::Stat,
+) -> bool {
+    stat_field_matches_v1(stat.st_dev, snapshot.device)
+        && stat_field_matches_v1(stat.st_ino, snapshot.inode)
+}
+#[cfg(unix)]
 fn release_circuit_params_directory_snapshot_matches_stat_v1(
     snapshot: PromotionDirectorySnapshotV1,
     stat: &rustix::fs::Stat,
@@ -2136,6 +2378,65 @@ fn release_circuit_params_directory_snapshot_matches_stat_v1(
         && stat_field_matches_v1(stat.st_uid, snapshot.uid)
         && stat_field_matches_v1(stat.st_gid, snapshot.gid)
         && stat_field_matches_v1(stat.st_nlink, snapshot.links)
+}
+#[cfg(unix)]
+#[expect(
+    clippy::too_many_arguments,
+    reason = "the directory and both exact leaf identities form one atomic publication set"
+)]
+fn verify_release_circuit_params_directory_contents_v1(
+    parent: &File,
+    directory: &File,
+    directory_name: &std::ffi::OsStr,
+    directory_snapshot: PromotionDirectorySnapshotV1,
+    eq_snapshot: PromotionFileSnapshotV1,
+    ep_snapshot: PromotionFileSnapshotV1,
+    expected_bytes: &[u8],
+    label: &str,
+) -> Result<()> {
+    use rustix::fs::{AtFlags, statat};
+    let opened = PromotionDirectorySnapshotV1::from_metadata(
+        &directory
+            .metadata()
+            .wrap_err_with(|| format!("failed to inspect {label} directory"))?,
+    );
+    let linked = statat(parent, directory_name, AtFlags::SYMLINK_NOFOLLOW)
+        .wrap_err_with(|| format!("failed to inspect {label} directory binding"))?;
+    if opened != Some(directory_snapshot)
+        || !release_circuit_params_directory_snapshot_matches_stat_v1(directory_snapshot, &linked)
+    {
+        bail!("{label} directory changed identity or custody");
+    }
+    verify_pinned_file_contents_v1(
+        directory,
+        std::ffi::OsStr::new(RELEASE_STEP_EQ_CIRCUIT_PARAMS_FILE_NAME_V4),
+        eq_snapshot,
+        expected_bytes,
+        &format!("{label} Eq circuit parameters"),
+    )?;
+    verify_pinned_file_contents_v1(
+        directory,
+        std::ffi::OsStr::new(RELEASE_STEP_EP_CIRCUIT_PARAMS_FILE_NAME_V4),
+        ep_snapshot,
+        expected_bytes,
+        &format!("{label} Ep circuit parameters"),
+    )?;
+    let opened_after = PromotionDirectorySnapshotV1::from_metadata(
+        &directory
+            .metadata()
+            .wrap_err_with(|| format!("failed to re-inspect {label} directory"))?,
+    );
+    let linked_after = statat(parent, directory_name, AtFlags::SYMLINK_NOFOLLOW)
+        .wrap_err_with(|| format!("failed to re-inspect {label} directory binding"))?;
+    if opened_after != Some(directory_snapshot)
+        || !release_circuit_params_directory_snapshot_matches_stat_v1(
+            directory_snapshot,
+            &linked_after,
+        )
+    {
+        bail!("{label} directory changed while its leaves were verified");
+    }
+    Ok(())
 }
 #[cfg(unix)]
 fn write_release_circuit_params_staged_file_v1(
@@ -2291,20 +2592,25 @@ where
             return Err(error);
         }
     };
-    let publication_parent_snapshot = match parent.snapshot_after_new_subdirectory() {
-        Ok(snapshot) => snapshot,
-        Err(error) => {
-            cleanup_release_circuit_params_staging_v1(&parent, &staging, &temporary_name)?;
-            return Err(error);
-        }
-    };
-    let prepare_result = (|| -> Result<()> {
-        write_release_circuit_params_staged_file_v1(
+    let publication_parent_snapshot =
+        match parent.snapshot_after_one_staged_entry("a circuit-parameter directory") {
+            Ok(snapshot) => snapshot,
+            Err(error) => {
+                cleanup_release_circuit_params_staging_v1(&parent, &staging, &temporary_name)?;
+                return Err(error);
+            }
+        };
+    let prepare_result = (|| -> Result<(
+        PromotionDirectorySnapshotV1,
+        PromotionFileSnapshotV1,
+        PromotionFileSnapshotV1,
+    )> {
+        let eq_snapshot = write_release_circuit_params_staged_file_v1(
             &staging,
             RELEASE_STEP_EQ_CIRCUIT_PARAMS_FILE_NAME_V4,
             bytes,
         )?;
-        write_release_circuit_params_staged_file_v1(
+        let ep_snapshot = write_release_circuit_params_staged_file_v1(
             &staging,
             RELEASE_STEP_EP_CIRCUIT_PARAMS_FILE_NAME_V4,
             bytes,
@@ -2312,18 +2618,51 @@ where
         staging
             .sync_all()
             .wrap_err("failed to sync complete circuit-parameter staging directory")?;
+        let complete_staging_snapshot = PromotionDirectorySnapshotV1::from_metadata(
+            &staging
+                .metadata()
+                .wrap_err("failed to inspect complete circuit-parameter staging directory")?,
+        )
+        .ok_or_else(|| eyre!("complete circuit-parameter staging path is not a directory"))?;
+        // APFS includes staged regular entries in the directory link count.
+        // Admit exactly the two known Eq/Ep leaf transitions and no decrease.
+        if !staging_snapshot.matches_except_links(complete_staging_snapshot)
+            || !complete_staging_snapshot
+                .links
+                .checked_sub(staging_snapshot.links)
+                .is_some_and(|delta| delta <= 2)
+        {
+            bail!("circuit-parameter staging directory changed while its leaves were staged");
+        }
         let linked = statat(&parent.file, &temporary_name, AtFlags::SYMLINK_NOFOLLOW)
             .wrap_err("failed to inspect circuit-parameter staging binding")?;
-        if !release_circuit_params_directory_snapshot_matches_stat_v1(staging_snapshot, &linked) {
+        if !release_circuit_params_directory_snapshot_matches_stat_v1(
+            complete_staging_snapshot,
+            &linked,
+        ) {
             bail!("circuit-parameter staging directory changed identity or custody");
         }
         before_publish()?;
-        parent.verify_path_identity_against(publication_parent_snapshot)
+        parent.verify_path_identity_against(publication_parent_snapshot)?;
+        verify_release_circuit_params_directory_contents_v1(
+            &parent.file,
+            &staging,
+            &temporary_name,
+            complete_staging_snapshot,
+            eq_snapshot,
+            ep_snapshot,
+            bytes,
+            "staged circuit-parameter",
+        )?;
+        Ok((complete_staging_snapshot, eq_snapshot, ep_snapshot))
     })();
-    if let Err(error) = prepare_result {
-        cleanup_release_circuit_params_staging_v1(&parent, &staging, &temporary_name)?;
-        return Err(error);
-    }
+    let (complete_staging_snapshot, eq_snapshot, ep_snapshot) = match prepare_result {
+        Ok(snapshots) => snapshots,
+        Err(error) => {
+            cleanup_release_circuit_params_staging_v1(&parent, &staging, &temporary_name)?;
+            return Err(error);
+        }
+    };
     if let Err(error) = renameat_with(
         &parent.file,
         &temporary_name,
@@ -2331,33 +2670,89 @@ where
         target_name,
         RenameFlags::NOREPLACE,
     ) {
-        cleanup_release_circuit_params_staging_v1(&parent, &staging, &temporary_name)?;
-        return Err(error).wrap_err("failed to atomically publish circuit-parameter directory");
+        let rename_error =
+            eyre!(error).wrap_err("failed to atomically publish circuit-parameter directory");
+        let rename_error_chain = format!("{rename_error:#}");
+        let target_observation = inspect_no_replace_rename_name_v1(
+            &parent.file,
+            target_name,
+            |stat| {
+                promotion_directory_snapshot_has_stat_identity_v1(complete_staging_snapshot, stat)
+            },
+            "circuit-parameter destination after failed rename",
+        );
+        let staging_observation = inspect_no_replace_rename_name_v1(
+            &parent.file,
+            &temporary_name,
+            |stat| {
+                release_circuit_params_directory_snapshot_matches_stat_v1(
+                    complete_staging_snapshot,
+                    stat,
+                )
+            },
+            "circuit-parameter staging binding after failed rename",
+        );
+        return match reconcile_failed_no_replace_rename_v1(
+            &rename_error_chain,
+            &target_observation,
+            &staging_observation,
+            || {
+                parent.verify_path_identity_against(publication_parent_snapshot)?;
+                verify_release_circuit_params_directory_contents_v1(
+                    &parent.file,
+                    &staging,
+                    &temporary_name,
+                    complete_staging_snapshot,
+                    eq_snapshot,
+                    ep_snapshot,
+                    bytes,
+                    "post-error staged circuit-parameter",
+                )?;
+                cleanup_release_circuit_params_staging_v1(&parent, &staging, &temporary_name)?;
+                parent.verify_path_identity()
+            },
+        ) {
+            FailedNoReplaceRenameReconciliationV1::PreCommit => Err(rename_error),
+            FailedNoReplaceRenameReconciliationV1::CommitUncertain { reason } => {
+                Ok(ReleaseCircuitParamsPublicationOutcomeV1::CommitUncertain {
+                    final_path: parent.path.join(target_name),
+                    reason,
+                })
+            }
+        };
     }
     let final_path = parent.path.join(target_name);
     let after_publication = (|| -> Result<()> {
-        let opened = PromotionDirectorySnapshotV1::from_metadata(
-            &staging
-                .metadata()
-                .wrap_err("failed to re-inspect published circuit-parameter directory")?,
-        );
-        let linked = statat(&parent.file, target_name, AtFlags::SYMLINK_NOFOLLOW)
-            .wrap_err("failed to inspect published circuit-parameter directory")?;
-        if opened != Some(staging_snapshot)
-            || !release_circuit_params_directory_snapshot_matches_stat_v1(staging_snapshot, &linked)
-        {
-            bail!("published circuit-parameter directory changed identity or custody");
-        }
+        verify_release_circuit_params_directory_contents_v1(
+            &parent.file,
+            &staging,
+            target_name,
+            complete_staging_snapshot,
+            eq_snapshot,
+            ep_snapshot,
+            bytes,
+            "published circuit-parameter",
+        )?;
         sync_parent(&parent.file)
             .wrap_err("failed to durably sync circuit-parameter parent directory")?;
         parent.verify_path_identity_against(publication_parent_snapshot)?;
+        verify_release_circuit_params_directory_contents_v1(
+            &parent.file,
+            &staging,
+            target_name,
+            complete_staging_snapshot,
+            eq_snapshot,
+            ep_snapshot,
+            bytes,
+            "durably published circuit-parameter",
+        )?;
         Ok(())
     })();
     Ok(match after_publication {
         Ok(()) => ReleaseCircuitParamsPublicationOutcomeV1::Committed { final_path },
         Err(error) => ReleaseCircuitParamsPublicationOutcomeV1::CommitUncertain {
             final_path,
-            reason: error.to_string(),
+            reason: format!("{error:#}"),
         },
     })
 }
@@ -2599,9 +2994,11 @@ mod tests {
     #[cfg(unix)]
     use super::{
         Args, Command, DURABLE_FILE_COMMIT_UNCERTAIN_EXIT_CODE, DurableFilePublicationOutcomeV1,
-        PrepareCancelReleaseV4Args, PrepareDeactivateIssuanceV4Args, PrepareEnableIssuanceV4Args,
-        ReleaseCircuitParamsPublicationOutcomeV1, write_new_durable_file_with_hooks_v1,
-        write_release_circuit_params_directory_with_hooks_v1,
+        FailedNoReplaceRenameDispositionV1, FailedNoReplaceRenameReconciliationV1,
+        NoReplaceRenameNameStateV1, PrepareCancelReleaseV4Args, PrepareDeactivateIssuanceV4Args,
+        PrepareEnableIssuanceV4Args, ReleaseCircuitParamsPublicationOutcomeV1,
+        classify_failed_no_replace_rename_v1, reconcile_failed_no_replace_rename_v1,
+        write_new_durable_file_with_hooks_v1, write_release_circuit_params_directory_with_hooks_v1,
     };
     #[cfg(unix)]
     use crate::RunArgs as _;
@@ -2646,6 +3043,77 @@ mod tests {
         rc::Rc,
     };
     const POLICY_EVALUATION_TIME_MS: u64 = 1_800_000_000_000;
+    #[cfg(unix)]
+    #[test]
+    fn failed_no_replace_rename_is_precommit_only_with_unpublished_target_and_owned_staging() {
+        use NoReplaceRenameNameStateV1::{Foreign, Missing, Owned};
+
+        let observations = [None, Some(Missing), Some(Owned), Some(Foreign)];
+        for target in observations {
+            for staging in observations {
+                let expected =
+                    if matches!(target, Some(Missing | Foreign)) && staging == Some(Owned) {
+                        FailedNoReplaceRenameDispositionV1::PreCommit
+                    } else {
+                        FailedNoReplaceRenameDispositionV1::CommitUncertain
+                    };
+                assert_eq!(
+                    classify_failed_no_replace_rename_v1(target, staging),
+                    expected,
+                    "unexpected classification for target={target:?}, staging={staging:?}"
+                );
+            }
+        }
+    }
+    #[cfg(unix)]
+    #[test]
+    fn failed_no_replace_rename_cleanup_uncertainty_retains_the_full_error_chain() {
+        use NoReplaceRenameNameStateV1::{Missing, Owned};
+
+        let target: super::Result<_> = Ok(Missing);
+        let staging: super::Result<_> = Ok(Owned);
+        let reconciliation = reconcile_failed_no_replace_rename_v1(
+            "rename context: injected syscall failure",
+            &target,
+            &staging,
+            || Err(color_eyre::eyre::eyre!("injected parent identity loss")),
+        );
+        match reconciliation {
+            FailedNoReplaceRenameReconciliationV1::CommitUncertain { reason } => {
+                assert!(reason.contains("rename context: injected syscall failure"));
+                assert!(reason.contains("injected parent identity loss"));
+            }
+            FailedNoReplaceRenameReconciliationV1::PreCommit => {
+                panic!("uncertain cleanup cannot remain pre-commit")
+            }
+        }
+    }
+    #[cfg(unix)]
+    #[test]
+    fn failed_no_replace_rename_commit_uncertainty_never_runs_staging_cleanup() {
+        use NoReplaceRenameNameStateV1::{Missing, Owned};
+
+        let target: super::Result<_> = Ok(Owned);
+        let staging: super::Result<_> = Ok(Missing);
+        let cleanup_called = Cell::new(false);
+        let reconciliation = reconcile_failed_no_replace_rename_v1(
+            "rename context: injected syscall failure",
+            &target,
+            &staging,
+            || {
+                cleanup_called.set(true);
+                Ok(())
+            },
+        );
+        assert!(matches!(
+            reconciliation,
+            FailedNoReplaceRenameReconciliationV1::CommitUncertain { .. }
+        ));
+        assert!(
+            !cleanup_called.get(),
+            "an owned destination or lost staging name must leave every name untouched"
+        );
+    }
     struct LivePayload {
         live: Rc<Cell<usize>>,
     }
@@ -3206,7 +3674,11 @@ mod tests {
             std::fs::File::sync_all,
         )
         .expect_err("a swapped parent must fail before pair visibility");
-        assert!(error.to_string().contains("parent"));
+        let message = error.to_string();
+        assert!(
+            message.contains("parent") || message.contains("ancestor"),
+            "unexpected parent-substitution error: {error:#}"
+        );
         assert!(!output_dir.exists());
         assert!(!displaced.join("circuit-params-v4").exists());
         assert_eq!(
@@ -3219,6 +3691,92 @@ mod tests {
                 .count(),
             0,
             "the unpublished private staging directory must be removed"
+        );
+    }
+    #[cfg(unix)]
+    #[test]
+    fn release_circuit_params_publication_rejects_staged_leaf_substitution() {
+        use std::{fs, os::unix::fs::PermissionsExt as _, os::unix::fs::symlink};
+        let root = tempfile::tempdir().expect("temporary circuit-parameter root");
+        fs::set_permissions(root.path(), fs::Permissions::from_mode(0o700))
+            .expect("secure circuit-parameter root");
+        let parent = root.path().join("release-inputs");
+        fs::create_dir(&parent).expect("create circuit-parameter parent");
+        fs::set_permissions(&parent, fs::Permissions::from_mode(0o700))
+            .expect("secure circuit-parameter parent");
+        let output_dir = parent.join("circuit-params-v4");
+        let error = write_release_circuit_params_directory_with_hooks_v1(
+            &output_dir,
+            b"canonical circuit parameters",
+            || {
+                let staging = fs::read_dir(&parent)
+                    .expect("read circuit-parameter parent")
+                    .next()
+                    .expect("staging directory entry")
+                    .expect("read staging directory entry")
+                    .path();
+                fs::remove_file(staging.join(RELEASE_STEP_EQ_CIRCUIT_PARAMS_FILE_NAME_V4))
+                    .expect("remove authentic staged Eq leaf");
+                symlink(
+                    RELEASE_STEP_EP_CIRCUIT_PARAMS_FILE_NAME_V4,
+                    staging.join(RELEASE_STEP_EQ_CIRCUIT_PARAMS_FILE_NAME_V4),
+                )
+                .expect("substitute staged Eq leaf with a symlink");
+                Ok(())
+            },
+            std::fs::File::sync_all,
+        )
+        .expect_err("a substituted staged leaf must fail before publication");
+        assert!(
+            error.to_string().contains("Eq circuit parameters"),
+            "unexpected substitution error: {error:#}"
+        );
+        assert!(!output_dir.exists());
+        assert_eq!(
+            fs::read_dir(&parent)
+                .expect("read cleaned circuit-parameter parent")
+                .count(),
+            0
+        );
+    }
+    #[cfg(unix)]
+    #[test]
+    fn failed_no_replace_rename_for_release_circuit_params_preserves_foreign_target() {
+        use std::{fs, os::unix::fs::PermissionsExt as _};
+        let root = tempfile::tempdir().expect("temporary circuit-parameter root");
+        fs::set_permissions(root.path(), fs::Permissions::from_mode(0o700))
+            .expect("secure circuit-parameter root");
+        let parent = root.path().join("release-inputs");
+        fs::create_dir(&parent).expect("create circuit-parameter parent");
+        fs::set_permissions(&parent, fs::Permissions::from_mode(0o700))
+            .expect("secure circuit-parameter parent");
+        let output_dir = parent.join("circuit-params-v4");
+        let error = write_release_circuit_params_directory_with_hooks_v1(
+            &output_dir,
+            b"canonical circuit parameters",
+            || {
+                fs::write(&output_dir, b"foreign destination")
+                    .expect("inject no-replace destination race");
+                Ok(())
+            },
+            std::fs::File::sync_all,
+        )
+        .expect_err("a foreign destination must defeat the directory no-replace rename");
+        assert!(
+            format!("{error:#}")
+                .contains("failed to atomically publish circuit-parameter directory"),
+            "the original rename error chain must be retained: {error:#}"
+        );
+        assert_eq!(
+            fs::read(&output_dir).expect("read preserved foreign destination"),
+            b"foreign destination"
+        );
+        assert_eq!(
+            fs::read_dir(&parent)
+                .expect("inspect reconciled circuit-parameter parent")
+                .count(),
+            1,
+            "only the foreign destination may remain after exact staging cleanup"
         );
     }
     #[cfg(unix)]
@@ -3267,6 +3825,164 @@ mod tests {
     }
     #[cfg(unix)]
     #[test]
+    fn release_circuit_params_post_rename_mutation_is_commit_uncertain() {
+        use std::{fs, os::unix::fs::PermissionsExt as _};
+        let root = tempfile::tempdir().expect("temporary circuit-parameter root");
+        fs::set_permissions(root.path(), fs::Permissions::from_mode(0o700))
+            .expect("secure circuit-parameter root");
+        let parent = root.path().join("release-inputs");
+        fs::create_dir(&parent).expect("create circuit-parameter parent");
+        fs::set_permissions(&parent, fs::Permissions::from_mode(0o700))
+            .expect("secure circuit-parameter parent");
+        let output_dir = parent.join("circuit-params-v4");
+        let bytes = b"canonical circuit parameters";
+        let outcome = write_release_circuit_params_directory_with_hooks_v1(
+            &output_dir,
+            bytes,
+            || Ok(()),
+            |parent_file| {
+                fs::write(
+                    output_dir.join(RELEASE_STEP_EQ_CIRCUIT_PARAMS_FILE_NAME_V4),
+                    vec![b'X'; bytes.len()],
+                )?;
+                parent_file.sync_all()
+            },
+        )
+        .expect("post-rename mutation has an explicit publication outcome");
+        match outcome {
+            ReleaseCircuitParamsPublicationOutcomeV1::CommitUncertain { final_path, reason } => {
+                assert_eq!(final_path, output_dir);
+                assert!(
+                    reason.contains("content does not match"),
+                    "unexpected mutation reason: {reason}"
+                );
+            }
+            ReleaseCircuitParamsPublicationOutcomeV1::Committed { .. } => {
+                panic!("mutated published circuit parameters cannot be committed")
+            }
+        }
+    }
+    #[cfg(unix)]
+    #[test]
+    fn promotion_publication_accepts_unrelated_ancestor_link_transition() {
+        use std::{fs, os::unix::fs::PermissionsExt as _};
+
+        let root = tempfile::tempdir().expect("temporary publication root");
+        fs::set_permissions(root.path(), fs::Permissions::from_mode(0o700))
+            .expect("secure temporary root");
+        let ancestor = root.path().join("ancestor");
+        let parent = ancestor.join("promotion");
+        fs::create_dir(&ancestor).expect("create publication ancestor");
+        fs::create_dir(&parent).expect("create promotion parent");
+        fs::set_permissions(&ancestor, fs::Permissions::from_mode(0o700))
+            .expect("secure publication ancestor");
+        fs::set_permissions(&parent, fs::Permissions::from_mode(0o700))
+            .expect("secure promotion parent");
+        let target = parent.join("promotion-record-v4.norito");
+        let bytes = b"authenticated promotion record";
+        let unrelated = ancestor.join("unrelated-directory");
+
+        let outcome = write_new_durable_file_with_hooks_v1(
+            &target,
+            bytes,
+            || {
+                fs::create_dir(&unrelated).expect("create unrelated ancestor entry");
+                Ok(())
+            },
+            std::fs::File::sync_all,
+        )
+        .expect("an unrelated ancestor link transition must preserve the pinned path identity");
+
+        assert!(matches!(
+            outcome,
+            DurableFilePublicationOutcomeV1::Committed { ref final_path }
+                if final_path == &target
+        ));
+        assert_eq!(fs::read(target).expect("read published record"), bytes);
+    }
+    #[cfg(unix)]
+    #[test]
+    fn promotion_publication_rejects_same_length_staged_content_mutation() {
+        use std::{fs, os::unix::fs::PermissionsExt as _};
+        let root = tempfile::tempdir().expect("temporary publication root");
+        fs::set_permissions(root.path(), fs::Permissions::from_mode(0o700))
+            .expect("secure temporary root");
+        let parent = root.path().join("promotion");
+        fs::create_dir(&parent).expect("create promotion parent");
+        fs::set_permissions(&parent, fs::Permissions::from_mode(0o700))
+            .expect("secure promotion parent");
+        let target = parent.join("promotion-record-v4.norito");
+        let bytes = b"authenticated promotion record";
+        let error = write_new_durable_file_with_hooks_v1(
+            &target,
+            bytes,
+            || {
+                let temporary = fs::read_dir(&parent)
+                    .expect("read promotion parent")
+                    .next()
+                    .expect("promotion temporary entry")
+                    .expect("read promotion temporary entry")
+                    .path();
+                fs::write(temporary, vec![b'X'; bytes.len()])
+                    .expect("mutate the staged record without changing its length");
+                Ok(())
+            },
+            std::fs::File::sync_all,
+        )
+        .expect_err("mutated staged content must fail before publication");
+        assert!(
+            error.to_string().contains("content does not match"),
+            "unexpected mutation error: {error:#}"
+        );
+        assert!(!target.exists());
+        assert_eq!(
+            fs::read_dir(&parent)
+                .expect("read cleaned promotion parent")
+                .count(),
+            0
+        );
+    }
+    #[cfg(unix)]
+    #[test]
+    fn failed_no_replace_rename_for_promotion_preserves_foreign_target() {
+        use std::{fs, os::unix::fs::PermissionsExt as _};
+        let root = tempfile::tempdir().expect("temporary publication root");
+        fs::set_permissions(root.path(), fs::Permissions::from_mode(0o700))
+            .expect("secure temporary root");
+        let parent = root.path().join("promotion");
+        fs::create_dir(&parent).expect("create promotion parent");
+        fs::set_permissions(&parent, fs::Permissions::from_mode(0o700))
+            .expect("secure promotion parent");
+        let target = parent.join("promotion-record-v4.norito");
+        let error = write_new_durable_file_with_hooks_v1(
+            &target,
+            b"authenticated promotion record",
+            || {
+                fs::write(&target, b"foreign destination")
+                    .expect("inject no-replace destination race");
+                Ok(())
+            },
+            std::fs::File::sync_all,
+        )
+        .expect_err("a foreign destination must defeat the file no-replace rename");
+        assert!(
+            format!("{error:#}").contains("failed to atomically publish new promotion record"),
+            "the original rename error chain must be retained: {error:#}"
+        );
+        assert_eq!(
+            fs::read(&target).expect("read preserved foreign destination"),
+            b"foreign destination"
+        );
+        assert_eq!(
+            fs::read_dir(&parent)
+                .expect("inspect reconciled promotion parent")
+                .count(),
+            1,
+            "only the foreign destination may remain after exact staging cleanup"
+        );
+    }
+    #[cfg(unix)]
+    #[test]
     fn promotion_publication_rejects_a_parent_swap_before_visibility() {
         use std::{fs, os::unix::fs::PermissionsExt as _};
         let root = tempfile::tempdir().expect("temporary publication root");
@@ -3293,7 +4009,11 @@ mod tests {
             std::fs::File::sync_all,
         )
         .expect_err("a swapped parent must fail before publication");
-        assert!(error.to_string().contains("parent"));
+        let message = error.to_string();
+        assert!(
+            message.contains("parent") || message.contains("ancestor"),
+            "unexpected parent-substitution error: {error:#}"
+        );
         assert!(!target.exists(), "the impostor path must receive no record");
         assert!(
             !displaced.join("promotion-record-v4.norito").exists(),

@@ -177,12 +177,12 @@ fn install_state_nexus(
         lane_catalog,
         ..Default::default()
     };
-    if let Some((min_lanes, max_lanes)) = autoscale_range {
+    if let Some((min_lane_id, max_lane_id_exclusive)) = autoscale_range {
         nexus.autoscale.enabled = true;
-        nexus.autoscale.min_lanes =
-            NonZeroU32::new(min_lanes).expect("autoscale min lanes must be nonzero");
-        nexus.autoscale.max_lanes =
-            NonZeroU32::new(max_lanes).expect("autoscale max lanes must be nonzero");
+        nexus.autoscale.min_lane_id =
+            NonZeroU32::new(min_lane_id).expect("autoscale min lanes must be nonzero");
+        nexus.autoscale.max_lane_id_exclusive =
+            NonZeroU32::new(max_lane_id_exclusive).expect("autoscale max lanes must be nonzero");
     }
     *state.nexus.write() = nexus;
     Ok(state)

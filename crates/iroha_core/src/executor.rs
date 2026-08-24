@@ -4266,39 +4266,11 @@ pub(crate) fn validate_transaction_fee_admission(
 ///
 /// Overlay execution bypasses `Executor::execute_transaction`, so this helper mirrors the
 /// fee-accounting behavior that `execute_transaction` performs for each committed transaction.
-#[allow(dead_code)]
 pub(crate) fn charge_fees_for_applied_overlay(
     state_transaction: &mut StateTransaction<'_, '_>,
     authority: &AccountId,
     transaction: &SignedTransaction,
     overlay: &crate::pipeline::overlay::TxOverlay,
-) -> Result<(), ValidationFail> {
-    let tx_bytes_len = to_bytes(transaction.payload())
-        .map(|bytes| bytes.len())
-        .map_err(|err| {
-            ValidationFail::InternalError(format!(
-                "failed to encode transaction for fee metering: {err}"
-            ))
-        })?;
-    charge_fees_for_applied_overlay_with_encoded_len(
-        state_transaction,
-        authority,
-        transaction,
-        overlay,
-        tx_bytes_len,
-    )
-}
-/// Charge gas and Nexus fees for an overlay-applied transaction using trusted local metadata.
-///
-/// The supplied encoded length is retained for call-site compatibility, but
-/// canonical fee metering is derived locally from the unsigned payload so a
-/// pre-signing quote and committed execution cannot diverge.
-pub(crate) fn charge_fees_for_applied_overlay_with_encoded_len(
-    state_transaction: &mut StateTransaction<'_, '_>,
-    authority: &AccountId,
-    transaction: &SignedTransaction,
-    overlay: &crate::pipeline::overlay::TxOverlay,
-    _tx_bytes_len: usize,
 ) -> Result<(), ValidationFail> {
     // Genesis transactions are bootstrap operations and must remain fee-free.
     if is_initial_genesis_context(state_transaction) {
@@ -5845,7 +5817,7 @@ impl Executor {
         host.set_crypto_config(Arc::clone(&state_transaction.crypto));
         host.set_zk_config(&state_transaction.zk);
         host.set_public_inputs_from_parameters(state_transaction.world.parameters.get());
-        host.set_vrf_epoch_seeds_from_world(&state_transaction.world);
+        host.set_vrf_epoch_seeds_from_state(state_transaction);
         host.set_query_state(state_transaction);
         host.set_contract_runtime_context(contract_runtime_context.clone());
         host.set_contract_entrypoint_authorization(Some(entrypoint_authorization));
@@ -6177,7 +6149,7 @@ impl Executor {
                             "verifying key backend mismatch".to_owned(),
                         ));
                     }
-                    if crate::zk::is_verifier_readiness_claim_label(backend.as_str()) {
+                    if crate::zk::is_production_claim_backend_label(backend.as_str()) {
                         return Err(ValidationFail::NotPermitted(
                             "readiness-claim proof backends are not supported".to_owned(),
                         ));
@@ -6668,7 +6640,7 @@ impl Executor {
                         host.set_public_inputs_from_parameters(
                             state_transaction.world.parameters.get(),
                         );
-                        host.set_vrf_epoch_seeds_from_world(&state_transaction.world);
+                        host.set_vrf_epoch_seeds_from_state(state_transaction);
                         host.set_query_state(state_transaction);
                         host.set_bound_contract_records_by_subject_snapshot(bound_contract_records);
                         crate::pipeline::overlay::apply_streaming_metadata(
@@ -6850,7 +6822,7 @@ impl Executor {
                 host.set_crypto_config(Arc::clone(&state_transaction.crypto));
                 host.set_zk_config(&state_transaction.zk);
                 host.set_public_inputs_from_parameters(state_transaction.world.parameters.get());
-                host.set_vrf_epoch_seeds_from_world(&state_transaction.world);
+                host.set_vrf_epoch_seeds_from_state(state_transaction);
                 host.set_query_state(state_transaction);
                 host.set_contract_runtime_context(contract_runtime_context.clone());
                 host.set_contract_entrypoint_authorization(Some(entrypoint_authorization));
@@ -7639,7 +7611,6 @@ impl Executor {
                 .world
                 .apply_executor_data_model(data_model);
         }
-        purge_legacy_escalation_permissions(state_transaction);
         *self = Self::UserProvided(loaded_executor);
         Ok(())
     }
@@ -7661,62 +7632,6 @@ pub(crate) fn initial_executor_data_model_fallback() -> ExecutorDataModel {
         initial_executor_permission_names(),
         Json::new(()),
     )
-}
-/// Permission payloads issued under pre-release rules that admitted authorities which did not
-/// control the effective capability.
-///
-/// Ledger permissions do not retain grant provenance, so a migration cannot distinguish a
-/// legitimate token from one planted through an old escalation rule. The first-release migration
-/// therefore resets these narrow capability families and requires their legitimate roots to issue
-/// fresh grants under the corrected policy.
-const LEGACY_ESCALATION_PERMISSION_NAMES: &[&str] = &[
-    "CanMintAsset",
-    "CanInvokeContractEntrypoint",
-    "CanPublishSpaceDirectoryManifest",
-    "CanPublishSpaceDirectoryManifestForUaid",
-    "CanPublishSpaceDirectoryManifestForAccountDomain",
-];
-fn purge_legacy_escalation_permissions(state_transaction: &mut StateTransaction<'_, '_>) {
-    let account_ids: Vec<_> = state_transaction
-        .world
-        .account_permissions
-        .iter()
-        .map(|(account_id, _)| account_id.clone())
-        .collect();
-    for account_id in account_ids {
-        let remove_entry = state_transaction
-            .world
-            .account_permissions
-            .get_mut(&account_id)
-            .is_some_and(|permissions| {
-                permissions.retain(|permission| {
-                    !LEGACY_ESCALATION_PERMISSION_NAMES.contains(&permission.name().as_ref())
-                });
-                permissions.is_empty()
-            });
-        if remove_entry {
-            state_transaction
-                .world
-                .account_permissions
-                .remove(account_id);
-        }
-    }
-    let role_ids: Vec<_> = state_transaction
-        .world
-        .roles
-        .iter()
-        .map(|(role_id, _)| role_id.clone())
-        .collect();
-    for role_id in role_ids {
-        if let Some(role) = state_transaction.world.roles.get_mut(&role_id) {
-            role.permissions.retain(|permission| {
-                !LEGACY_ESCALATION_PERMISSION_NAMES.contains(&permission.name().as_ref())
-            });
-            role.permission_epochs.retain(|permission, _| {
-                !LEGACY_ESCALATION_PERMISSION_NAMES.contains(&permission.name().as_ref())
-            });
-        }
-    }
 }
 fn run_executor_validation<T>(
     executor: &LoadedExecutor,
@@ -8242,7 +8157,22 @@ fn validate_initial_permission_payload_constraints(
             }
         }};
     }
+    macro_rules! validate_exact_unit_permission {
+        ($permission_ty:path) => {{
+            let _ = <$permission_ty>::try_from(permission)
+                .map_err(|error| invalid_initial_permission_payload(permission, error))?;
+        }};
+    }
     match permission.name().as_ref() {
+        "CanManageRuntimeUpgrades" => validate_exact_unit_permission!(
+            executor_permission::governance::CanManageRuntimeUpgrades
+        ),
+        "CanManageConsensusKeys" => {
+            validate_exact_unit_permission!(executor_permission::governance::CanManageConsensusKeys)
+        }
+        "CanManageConfidentialParams" => validate_exact_unit_permission!(
+            executor_permission::governance::CanManageConfidentialParams
+        ),
         "CanSubmitGovernanceBallot" => validate_governance_selector!(
             executor_permission::governance::CanSubmitGovernanceBallot
         ),
@@ -9387,20 +9317,15 @@ fn initial_native_instruction_is_explicitly_admitted(instruction: &InstructionBo
         iroha_data_model::isi::governance::ProposeDeployContract,
         iroha_data_model::isi::governance::ProposeRuntimeUpgradeProposal,
         iroha_data_model::isi::governance::ProposeSccpRouteGovernance,
-        iroha_data_model::isi::governance::EnactSccpRouteGovernance,
         iroha_data_model::isi::governance::ProposeValidationFeePayoutLifecycle,
         iroha_data_model::isi::governance::ProposeValidationFeePolicy,
         iroha_data_model::isi::governance::CreateParliamentGovernanceAttemptV1,
         iroha_data_model::isi::governance::SubmitParliamentLifecycleTransitionV1,
-        iroha_data_model::isi::governance::ApproveGovernanceProposal,
-        iroha_data_model::isi::governance::CastParliamentBallot,
         iroha_data_model::isi::governance::CastZkBallot,
         iroha_data_model::isi::governance::CastPlainBallot,
         iroha_data_model::isi::governance::SlashGovernanceLock,
         iroha_data_model::isi::governance::RestituteGovernanceLock,
         iroha_data_model::isi::governance::RecordCitizenServiceOutcome,
-        iroha_data_model::isi::governance::FinalizeReferendum,
-        iroha_data_model::isi::governance::EnactReferendum,
         iroha_data_model::isi::nexus::RegisterVerifiedLaneRelay,
         iroha_data_model::isi::nexus::RegisterVerifiedFeeSponsorVaultAllocation,
         iroha_data_model::isi::nexus::SetLaneRelayEmergencyValidators,
@@ -10396,6 +10321,9 @@ const INITIAL_EXECUTOR_PERMISSION_NAMES: &[&str] = &[
     "CanModifyTriggerMetadata",
     "CanSetParameters",
     "CanManageVerifyingKeys",
+    "CanManageRuntimeUpgrades",
+    "CanManageConsensusKeys",
+    "CanManageConfidentialParams",
     "CanManageSccpGovernance",
     "CanProposeSccpRouteGovernance",
     "CanManageOfflineEscrow",
@@ -10439,8 +10367,6 @@ const INITIAL_EXECUTOR_PERMISSION_NAMES: &[&str] = &[
     "CanManageSorafsReputationJournalPolicy",
     "CanRecordSorafsReputationJournal",
     "CanResolveSorafsCapacityDispute",
-    "CanRegisterSorafsProviderOwner",
-    "CanUnregisterSorafsProviderOwner",
     "CanManageSoranetVpnQuoteIssuers",
     "CanIssueSoranetVpnQuote",
     "CanIngestSoranetPrivacy",
@@ -11466,6 +11392,7 @@ mod tests {
     #[test]
     #[allow(clippy::too_many_lines)]
     fn initial_executor_routes_exact_scoped_governance_isis_through_core_authorization() {
+        use iroha_data_model::governance::types::{AbiVersion, ContractAbiHash, ContractCodeHash};
         use iroha_data_model::isi::governance as gov;
         use iroha_executor_data_model::permission::governance::{
             CanProposeContractDeployment, CanProposeRuntimeUpgrade, CanRecordCitizenService,
@@ -11502,24 +11429,17 @@ mod tests {
             (
                 gov::ProposeDeployContract {
                     contract_address: contract_address.clone(),
-                    code_hash_hex: "11".repeat(32),
-                    abi_hash_hex: hex::encode(abi_hash),
-                    abi_version: " 1".to_owned(),
-                    window: None,
-                    mode: Some(gov::VotingMode::Zk),
+                    code_hash: ContractCodeHash::new([0x11; 32]),
+                    abi_hash: ContractAbiHash::new(abi_hash),
+                    abi_version: AbiVersion::new(2),
                     manifest_provenance: None,
                 }
                 .into(),
                 "CanProposeContractDeployment",
-                "exact string `1`",
+                "abi_version must be exactly 1",
             ),
             (
-                gov::ProposeRuntimeUpgradeProposal {
-                    manifest,
-                    window: None,
-                    mode: Some(gov::VotingMode::Plain),
-                }
-                .into(),
+                gov::ProposeRuntimeUpgradeProposal { manifest }.into(),
                 "CanProposeRuntimeUpgrade",
                 "runtime upgrade window",
             ),
@@ -11707,77 +11627,29 @@ mod tests {
         );
     }
     #[test]
-    fn initial_executor_requires_exact_enactment_permission_before_state_lookup() {
-        use iroha_data_model::isi::governance::{AtWindow, EnactReferendum};
-        use iroha_executor_data_model::permission::governance::CanEnactGovernance;
-        let authority = checked_account_id();
-        let account = Account::new(authority.clone()).build(&authority);
-        let mut world = World::with([], [account], []);
-        world.account_permissions.insert(
-            authority.clone(),
-            BTreeSet::from([Permission::new(
-                "CanEnactGovernance".to_owned(),
-                Json::from(norito::json!({ "unexpected": true })),
-            )]),
-        );
-        let state = state_for_testing(world);
-        let mut block = state.block(BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0));
-        let mut state_transaction = block.transaction();
-        let proposal_id = [0xA6; 32];
-        let instruction: InstructionBox = EnactReferendum {
-            referendum_id: proposal_id,
-            preimage_hash: proposal_id,
-            at_window: AtWindow { lower: 1, upper: 1 },
+    fn initial_executor_keeps_explicitly_standalone_referendum_ballots() {
+        use iroha_data_model::isi::governance::{CastPlainBallot, CastZkBallot};
+
+        let ballots = [
+            InstructionBox::from(CastPlainBallot {
+                referendum_id: "standalone-plain".to_owned(),
+                owner: checked_account_id(),
+                amount: 1_u64.into(),
+                duration_blocks: 1,
+                direction: 0,
+            }),
+            InstructionBox::from(CastZkBallot {
+                election_id: "standalone-zk".to_owned(),
+                proof_b64: "AA==".to_owned(),
+                public_inputs_json: "{}".to_owned(),
+            }),
+        ];
+        for ballot in &ballots {
+            assert!(
+                initial_native_instruction_is_explicitly_admitted(ballot),
+                "standalone referendum ballot must remain reachable after Parliament cutover"
+            );
         }
-        .into();
-        assert!(initial_native_instruction_is_explicitly_admitted(
-            &instruction
-        ));
-        let error = super::Executor::Initial
-            .execute_instruction(&mut state_transaction, &authority, instruction.clone())
-            .expect_err("a malformed same-name permission must not authorize enactment");
-        assert!(
-            matches!(
-                error,
-                ValidationFail::InstructionFailed(
-                    InstructionExecutionError::InvariantViolation(ref message)
-                ) if message.as_ref() == "not permitted: exact CanEnactGovernance required"
-            ),
-            "unexpected malformed-token rejection: {error:?}"
-        );
-        assert!(
-            state_transaction
-                .world
-                .governance_proposals
-                .iter()
-                .next()
-                .is_none()
-        );
-        assert!(
-            state_transaction
-                .world
-                .governance_referenda
-                .iter()
-                .next()
-                .is_none()
-        );
-        assert!(state_transaction.world.elections.iter().next().is_none());
-        state_transaction.world.account_permissions.insert(
-            authority.clone(),
-            BTreeSet::from([Permission::from(CanEnactGovernance)]),
-        );
-        let error = super::Executor::Initial
-            .execute_instruction(&mut state_transaction, &authority, instruction)
-            .expect_err("the exact permission must reach proposal validation");
-        assert!(
-            matches!(
-                error,
-                ValidationFail::InstructionFailed(
-                    InstructionExecutionError::InvariantViolation(ref message)
-                ) if message.as_ref() == "governance proposal not found"
-            ),
-            "exact enactment permission did not reach Core validation: {error:?}"
-        );
     }
     #[test]
     fn initial_executor_denies_chain_and_foreign_controller_takeover_paths() {
@@ -11828,30 +11700,6 @@ mod tests {
                 "{error:?}"
             );
         }
-        // Referendum finalization is intentionally permissionless once its
-        // authenticated governance records exist. A fabricated identifier must
-        // instead fail closed on the missing proposal before any finalization.
-        let forced_proposal_id = [0xA5; 32];
-        let error = super::Executor::Initial
-            .execute_instruction(
-                &mut state_transaction,
-                &attacker,
-                iroha_data_model::isi::governance::FinalizeReferendum {
-                    referendum_id: hex::encode(forced_proposal_id),
-                    proposal_id: forced_proposal_id,
-                }
-                .into(),
-            )
-            .expect_err("a fabricated referendum must not mutate governance state");
-        assert!(
-            matches!(
-                error,
-                ValidationFail::InstructionFailed(
-                    InstructionExecutionError::InvariantViolation(ref message)
-                ) if message.as_ref() == "governance proposal not found"
-            ),
-            "{error:?}"
-        );
         assert!(matches!(
             &*state_transaction.world.executor,
             super::Executor::Initial
@@ -12552,6 +12400,96 @@ mod tests {
                     .permissions()
                     .any(|stored| stored == &permission),
                 "noncanonical permission reached role storage"
+            );
+        }
+    }
+    #[test]
+    fn initial_executor_requires_canonical_operational_governance_unit_permissions() {
+        use iroha_executor_data_model::permission::governance::{
+            CanManageConfidentialParams, CanManageConsensusKeys, CanManageRuntimeUpgrades,
+        };
+
+        let authority = checked_account_id();
+        let destination = checked_account_id();
+        let canonical_permissions = vec![
+            Permission::from(CanManageRuntimeUpgrades),
+            Permission::from(CanManageConsensusKeys),
+            Permission::from(CanManageConfidentialParams),
+        ];
+        let mut world = World::with(
+            [],
+            [
+                Account::new(authority.clone()).build(&authority),
+                Account::new(destination.clone()).build(&destination),
+            ],
+            [],
+        );
+        world.account_permissions.insert(
+            authority.clone(),
+            canonical_permissions.iter().cloned().collect(),
+        );
+        let state = state_for_testing(world);
+        let mut block = state.block(BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0));
+        let mut state_transaction = block.transaction();
+        let role_id: RoleId = "operational_governance_sink".parse().expect("role id");
+        Register::role(Role::new(role_id.clone(), authority.clone()))
+            .execute(&authority, &mut state_transaction)
+            .expect("seed empty role fixture");
+
+        for canonical in canonical_permissions {
+            let name = canonical.name().to_string();
+            assert!(INITIAL_EXECUTOR_PERMISSION_NAMES.contains(&name.as_str()));
+            validate_initial_permission_payload_constraints(&canonical)
+                .unwrap_or_else(|error| panic!("canonical {name} token rejected: {error:?}"));
+            for instruction in [
+                Grant::account_permission(canonical.clone(), destination.clone()).into(),
+                Grant::role_permission(canonical.clone(), role_id.clone()).into(),
+            ] {
+                super::Executor::Initial
+                    .execute_instruction(&mut state_transaction, &authority, instruction)
+                    .unwrap_or_else(|error| {
+                        panic!("exact holder could not delegate {name}: {error}")
+                    });
+            }
+
+            let malformed =
+                Permission::new(name.clone(), Json::new("invented-scope-must-not-authorize"));
+            for (path, instruction) in [
+                (
+                    "account",
+                    Grant::account_permission(malformed.clone(), destination.clone()).into(),
+                ),
+                (
+                    "role",
+                    Grant::role_permission(malformed.clone(), role_id.clone()).into(),
+                ),
+            ] {
+                let error = super::Executor::Initial
+                    .execute_instruction(&mut state_transaction, &authority, instruction)
+                    .expect_err("same-name non-unit payload must fail before storage");
+                assert!(
+                    matches!(&error, ValidationFail::NotPermitted(message)
+                        if message.contains(&name) && message.contains("Invalid permission payload")),
+                    "unexpected {path} {name} rejection: {error:?}",
+                );
+            }
+            assert!(
+                !state_transaction
+                    .world
+                    .account_permissions_iter(&destination)
+                    .expect("destination permissions")
+                    .any(|stored| stored == &malformed),
+                "malformed {name} permission reached account storage",
+            );
+            assert!(
+                !state_transaction
+                    .world
+                    .roles()
+                    .get(&role_id)
+                    .expect("role fixture")
+                    .permissions()
+                    .any(|stored| stored == &malformed),
+                "malformed {name} permission reached role storage",
             );
         }
     }

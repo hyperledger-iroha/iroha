@@ -132,7 +132,10 @@ class VpnReceiptSubmitRequest(
         this(relayReceiptHex, clientVoucherHex, null)
 }
 
-/** VPN receipt response including earned/refunded XOR and native settlement instructions. */
+/**
+ * VPN receipt response including earned/refunded XOR and native settlement instructions.
+ * `settlement_pending` is provisional; only committed WSV receipts use `settled`.
+ */
 class VpnReceipt(
     @JvmField val sessionId: String,
     @JvmField val accountId: String,

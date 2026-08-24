@@ -423,6 +423,18 @@ fn kagemusha_v4_circuit_id(
         }
     }
 }
+fn kagemusha_v4_verifier_curve(
+    parity: iroha_data_model::offline::KagemushaPastaCycleParityV1,
+) -> &'static str {
+    match parity {
+        iroha_data_model::offline::KagemushaPastaCycleParityV1::StepEq => {
+            iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_STEP_EQ_VERIFIER_CURVE_V4
+        }
+        iroha_data_model::offline::KagemushaPastaCycleParityV1::StepEp => {
+            iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_STEP_EP_VERIFIER_CURVE_V4
+        }
+    }
+}
 fn kagemusha_v4_logical_role_id(
     parity: iroha_data_model::offline::KagemushaPastaCycleParityV1,
 ) -> iroha_data_model::proof::VerifyingKeyId {
@@ -439,27 +451,249 @@ fn kagemusha_v4_logical_role_id(
     // therefore retain their release digest and V4 backend identity.
     iroha_data_model::proof::VerifyingKeyId::new(crate::zk::ZK_BACKEND_HALO2_IPA, role)
 }
-fn ensure_release_qualified_kagemusha_v4_verifier_id(
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct KagemushaV4ReleaseVerifierIdentity {
+    manifest_sha256: [u8; 32],
+    parity: iroha_data_model::offline::KagemushaPastaCycleParityV1,
+}
+
+fn kagemusha_v4_parity_for_circuit(
+    circuit_id: &str,
+) -> Option<iroha_data_model::offline::KagemushaPastaCycleParityV1> {
+    if circuit_id == iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_STEP_EQ_CIRCUIT_ID_V4 {
+        Some(iroha_data_model::offline::KagemushaPastaCycleParityV1::StepEq)
+    } else if circuit_id
+        == iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_STEP_EP_CIRCUIT_ID_V4
+    {
+        Some(iroha_data_model::offline::KagemushaPastaCycleParityV1::StepEp)
+    } else {
+        None
+    }
+}
+
+fn kagemusha_release_verifier_id_has_exact_digest(
+    id: &iroha_data_model::proof::VerifyingKeyId,
+    version_prefix: &str,
+) -> bool {
+    if id.backend.as_str()
+        != iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_BACKEND_V4
+    {
+        return false;
+    }
+    let Some(name) = id.name.strip_prefix(version_prefix) else {
+        return false;
+    };
+    [
+        iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_STEP_EQ_CIRCUIT_ID_V4,
+        iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_STEP_EP_CIRCUIT_ID_V4,
+    ]
+    .iter()
+    .any(|circuit| {
+        name.strip_prefix(circuit)
+            .and_then(|suffix| suffix.strip_prefix('-'))
+            .is_some_and(|digest| {
+                digest.len() == 64
+                    && digest
+                        .bytes()
+                        .all(|byte| byte.is_ascii_digit() || matches!(byte, b'a'..=b'f'))
+            })
+    })
+}
+
+fn kagemusha_v4_release_verifier_candidate(
+    id: &iroha_data_model::proof::VerifyingKeyId,
+    circuit_id: &str,
+) -> bool {
+    kagemusha_release_verifier_id_has_exact_digest(id, "")
+        || kagemusha_v4_parity_for_circuit(circuit_id).is_some()
+}
+
+fn exact_kagemusha_v4_release_verifier_identity(
     id: &iroha_data_model::proof::VerifyingKeyId,
     record: &VerifyingKeyRecord,
-    parity: iroha_data_model::offline::KagemushaPastaCycleParityV1,
-    role: &str,
-) -> Result<(), String> {
+) -> Result<Option<KagemushaV4ReleaseVerifierIdentity>, String> {
+    // V5 reuses this backend and these circuits under a disjoint exact name.
+    // It remains protocol-owned, but no V5 native hydration path exists yet.
+    if kagemusha_release_verifier_id_has_exact_digest(id, "v5-") {
+        return Err(
+            "Kagemusha V5 release verifier cannot enter V4 or generic hydration".to_owned(),
+        );
+    }
+    if !kagemusha_v4_release_verifier_candidate(id, &record.circuit_id) {
+        return Ok(None);
+    }
+    let parity = kagemusha_v4_parity_for_circuit(&record.circuit_id).ok_or_else(|| {
+        "Kagemusha V4 verifier candidate does not use an exact Eq/Ep circuit".to_owned()
+    })?;
+    let role = match parity {
+        iroha_data_model::offline::KagemushaPastaCycleParityV1::StepEq => "Eq",
+        iroha_data_model::offline::KagemushaPastaCycleParityV1::StepEp => "Ep",
+    };
     let manifest_sha256 =
         kagemusha_terminal_registry_v4::verifier_owner_manifest_sha256(record, role)?;
     let expected = iroha_data_model::offline::kagemusha_recursive_spend_verifier_key_id_v4(
         parity,
         manifest_sha256,
     );
-    if record.circuit_id != kagemusha_v4_circuit_id(parity)
-        || !id.is_portable_registry_id()
+    if !id.is_portable_registry_id()
         || id != &expected
+        || record.namespace != iroha_data_model::offline::KAGEMUSHA_VERIFIER_NAMESPACE
+        || record.backend != BackendTag::Halo2IpaPasta
+        || record.curve != kagemusha_v4_verifier_curve(parity)
     {
         return Err(format!(
             "Kagemusha V4 {role} verifier id is not the exact release-qualified registry identity"
         ));
     }
+    Ok(Some(KagemushaV4ReleaseVerifierIdentity {
+        manifest_sha256,
+        parity,
+    }))
+}
+
+fn ensure_release_qualified_kagemusha_v4_verifier_id(
+    id: &iroha_data_model::proof::VerifyingKeyId,
+    record: &VerifyingKeyRecord,
+    parity: iroha_data_model::offline::KagemushaPastaCycleParityV1,
+    role: &str,
+) -> Result<(), String> {
+    let identity = exact_kagemusha_v4_release_verifier_identity(id, record)?;
+    if identity.is_none_or(|identity| identity.parity != parity) {
+        return Err(format!(
+            "Kagemusha V4 {role} verifier id is not the exact release-qualified registry identity"
+        ));
+    }
     Ok(())
+}
+
+fn ensure_exact_kagemusha_v4_native_verifier_storage_shape(
+    record: &VerifyingKeyRecord,
+    parity: iroha_data_model::offline::KagemushaPastaCycleParityV1,
+) -> Result<(), String> {
+    let role = match parity {
+        iroha_data_model::offline::KagemushaPastaCycleParityV1::StepEq => "Eq",
+        iroha_data_model::offline::KagemushaPastaCycleParityV1::StepEp => "Ep",
+    };
+    if record.version == 0
+        || record.commitment == [0; 32]
+        || record.public_inputs_schema_hash == [0; 32]
+        || record.max_proof_bytes == 0
+    {
+        return Err(format!(
+            "Kagemusha V4 {role} verifier storage metadata is not canonical"
+        ));
+    }
+    match record.status {
+        ConfidentialStatus::Active => {
+            let key = record
+                .key
+                .as_ref()
+                .ok_or_else(|| format!("Kagemusha V4 {role} active verifier key is unavailable"))?;
+            if !record.activation_height.is_some_and(|height| height > 0)
+                || record.withdraw_height.is_some()
+                || key.backend.as_str()
+                    != iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_BACKEND_V4
+                || key.bytes.is_empty()
+                || u32::try_from(key.bytes.len()).ok() != Some(record.vk_len)
+                || crate::zk::hash_vk(key) != record.commitment
+            {
+                return Err(format!(
+                    "Kagemusha V4 {role} active verifier storage shape is invalid"
+                ));
+            }
+        }
+        ConfidentialStatus::Withdrawn => {
+            if record.activation_height.is_some()
+                || !record.withdraw_height.is_some_and(|height| height > 0)
+                || record.key.is_some()
+                || record.vk_len != 0
+            {
+                return Err(format!(
+                    "Kagemusha V4 {role} cancelled verifier tombstone is invalid"
+                ));
+            }
+        }
+        ConfidentialStatus::Proposed => {
+            return Err(format!(
+                "Kagemusha V4 {role} verifier has an unsupported lifecycle status"
+            ));
+        }
+    }
+    Ok(())
+}
+
+/// Return the exact release-owned verifier ids that native Kagemusha handles
+/// outside the generic OpenVerify registry.
+///
+/// # Errors
+///
+/// Returns an error when a reserved V4 marker is only a near-match, an Eq/Ep
+/// pair is incomplete or non-atomic, or its retained circuit index is stale.
+pub(crate) fn exact_kagemusha_v4_native_verifier_ids_for_hydration(
+    world: &impl WorldReadOnly,
+) -> Result<BTreeSet<iroha_data_model::proof::VerifyingKeyId>, String> {
+    type Pair<'a> = [Option<(
+        &'a iroha_data_model::proof::VerifyingKeyId,
+        &'a VerifyingKeyRecord,
+    )>; 2];
+    let mut pairs: BTreeMap<[u8; 32], Pair<'_>> = BTreeMap::new();
+    for (id, record) in world.verifying_keys().iter() {
+        let Some(identity) = exact_kagemusha_v4_release_verifier_identity(id, record)? else {
+            continue;
+        };
+        ensure_exact_kagemusha_v4_native_verifier_storage_shape(record, identity.parity)?;
+        let expected_index = (record.circuit_id.clone(), record.version);
+        if world.verifying_keys_by_circuit().get(&expected_index) != Some(id) {
+            return Err("Kagemusha V4 verifier retained circuit index is stale".to_owned());
+        }
+        let pair = pairs
+            .entry(identity.manifest_sha256)
+            .or_insert([None, None]);
+        let slot = match identity.parity {
+            iroha_data_model::offline::KagemushaPastaCycleParityV1::StepEq => &mut pair[0],
+            iroha_data_model::offline::KagemushaPastaCycleParityV1::StepEp => &mut pair[1],
+        };
+        if slot.replace((id, record)).is_some() {
+            return Err("Kagemusha V4 release contains a duplicate parity verifier".to_owned());
+        }
+    }
+
+    let mut ids = BTreeSet::new();
+    for pair in pairs.values() {
+        let [Some((step_eq_id, step_eq)), Some((step_ep_id, step_ep))] = *pair else {
+            return Err("Kagemusha V4 release verifier pair is incomplete".to_owned());
+        };
+        if step_eq.version != step_ep.version
+            || step_eq.status != step_ep.status
+            || step_eq.activation_height != step_ep.activation_height
+            || step_eq.withdraw_height != step_ep.withdraw_height
+            || step_eq.max_proof_bytes != step_ep.max_proof_bytes
+        {
+            return Err("Kagemusha V4 release verifier pair is not atomic".to_owned());
+        }
+        ids.insert((*step_eq_id).clone());
+        ids.insert((*step_ep_id).clone());
+    }
+
+    for ((circuit_id, version), id) in world.verifying_keys_by_circuit().iter() {
+        if kagemusha_release_verifier_id_has_exact_digest(id, "v5-") {
+            return Err(
+                "Kagemusha V5 release verifier index cannot enter V4 or generic hydration"
+                    .to_owned(),
+            );
+        }
+        if !kagemusha_v4_release_verifier_candidate(id, circuit_id) {
+            continue;
+        }
+        let record = world.verifying_keys().get(id).ok_or_else(|| {
+            "Kagemusha V4 retained circuit index points to an absent verifier".to_owned()
+        })?;
+        if !ids.contains(id) || record.circuit_id != *circuit_id || record.version != *version {
+            return Err("Kagemusha V4 retained circuit index is inconsistent".to_owned());
+        }
+    }
+    Ok(ids)
 }
 fn decode_kagemusha_v4_consensus_release_state(
     key: &StatePath,

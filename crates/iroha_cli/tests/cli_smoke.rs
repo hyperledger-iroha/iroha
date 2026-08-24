@@ -950,6 +950,12 @@ fn gov_deploy_meta_accepts_manifest_approvers() {
 }
 #[test]
 fn gov_propose_deploy_against_mock() {
+    use iroha_data_model::{
+        governance::types::{
+            AbiVersion, ContractAbiHash, ContractCodeHash, DeployContractProposal, ProposalKind,
+        },
+        isi::governance::ProposeDeployContract,
+    };
     use torii_mock_support::{
         SpawnError, TempDir, ToriiMockProcess, configure_governance, write_client_config,
     };
@@ -961,15 +967,45 @@ fn gov_propose_deploy_against_mock() {
         }
         Err(err) => panic!("failed to start Torii mock: {err}"),
     };
-    let proposal_id =
-        "feedfeedfeedfeedfeedfeedfeedfeedfeedfeedfeedfeedfeedfeedfeedfeed".to_string();
+    let code_hash_bytes = [0x00; 32];
+    let abi_hash_bytes = [0x11; 32];
+    let contract_address: iroha_data_model::smart_contract::ContractAddress =
+        "irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw"
+            .parse()
+            .expect("contract address");
+    let proposal = ProposalKind::DeployContract(DeployContractProposal {
+        contract_address: contract_address.clone(),
+        code_hash: ContractCodeHash::new(code_hash_bytes),
+        abi_hash: ContractAbiHash::new(abi_hash_bytes),
+        abi_version: AbiVersion::new(1),
+        manifest_provenance: None,
+    });
+    let proposal_id = hex::encode(proposal.fingerprint());
+    let instruction: iroha_data_model::isi::InstructionBox = ProposeDeployContract {
+        contract_address: contract_address.clone(),
+        code_hash: ContractCodeHash::new(code_hash_bytes),
+        abi_hash: ContractAbiHash::new(abi_hash_bytes),
+        abi_version: AbiVersion::new(1),
+        manifest_provenance: None,
+    }
+    .into();
+    let wire_id = iroha_data_model::isi::Instruction::id(&*instruction).to_owned();
+    let payload = iroha_data_model::isi::Instruction::dyn_encode(&*instruction);
+    let framed = iroha_data_model::isi::frame_instruction_payload(&wire_id, &payload)
+        .expect("frame deploy proposal instruction");
     let mut config_payload_map = json::Map::new();
     config_payload_map.insert("referenda".to_string(), json::Value::Array(Vec::new()));
     let mut response_map = json::Map::new();
-    response_map.insert("ok".to_string(), json::Value::Bool(true));
     response_map.insert(
         "proposal_id".to_string(),
         json::Value::String(proposal_id.clone()),
+    );
+    response_map.insert(
+        "tx_instructions".to_string(),
+        norito::json!([{
+            "wire_id": wire_id,
+            "payload_hex": hex::encode(framed),
+        }]),
     );
     config_payload_map.insert(
         "propose_deploy_response".to_string(),
@@ -980,9 +1016,9 @@ fn gov_propose_deploy_against_mock() {
     let temp_dir = TempDir::new("gov_propose_deploy").expect("temp dir");
     let config_path = temp_dir.path().join("client.toml");
     write_client_config(&config_path, mock.base_url()).expect("write config");
-    let code_hash = "00".repeat(32);
-    let abi_hash = "11".repeat(32);
-    let contract_address = "irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw";
+    let code_hash = hex::encode(code_hash_bytes);
+    let abi_hash = hex::encode(abi_hash_bytes);
+    let contract_address = contract_address.to_string();
     let summary = command()
         .arg("--config")
         .arg(&config_path)
@@ -994,7 +1030,7 @@ fn gov_propose_deploy_against_mock() {
             "deploy",
             "propose",
             "--contract-address",
-            contract_address,
+            contract_address.as_str(),
             "--code-hash",
             code_hash.as_str(),
             "--abi-hash",
@@ -1010,7 +1046,7 @@ fn gov_propose_deploy_against_mock() {
     let summary_out = String::from_utf8_lossy(&summary.stdout);
     assert_eq!(
         summary_out.trim_end(),
-        format!("deploy propose: ok=true proposal_id={proposal_id}")
+        format!("deploy propose: proposal_id={proposal_id}")
     );
     let json_output = command()
         .arg("--config")
@@ -1021,7 +1057,7 @@ fn gov_propose_deploy_against_mock() {
             "deploy",
             "propose",
             "--contract-address",
-            contract_address,
+            contract_address.as_str(),
             "--code-hash",
             code_hash.as_str(),
             "--abi-hash",
@@ -1036,178 +1072,12 @@ fn gov_propose_deploy_against_mock() {
     );
     let value: norito::json::Value =
         norito::json::from_slice(&json_output.stdout).expect("parse deploy propose JSON");
-    assert_eq!(
-        value.get("ok").and_then(norito::json::Value::as_bool),
-        Some(true)
-    );
+    assert!(value.get("ok").is_none());
     assert_eq!(
         value
             .get("proposal_id")
             .and_then(norito::json::Value::as_str),
         Some(proposal_id.as_str())
-    );
-}
-#[test]
-fn gov_finalize_against_mock() {
-    use torii_mock_support::{
-        SpawnError, TempDir, ToriiMockProcess, configure_governance, write_client_config,
-    };
-    let mock = match ToriiMockProcess::spawn() {
-        Ok(proc) => proc,
-        Err(SpawnError::PythonUnavailable | SpawnError::PermissionDenied) => {
-            eprintln!("skipping gov_finalize_against_mock: mock server unavailable");
-            return;
-        }
-        Err(err) => panic!("failed to start Torii mock: {err}"),
-    };
-    let finalize_response = norito::json!({
-        "ok": true,
-        "tx_instructions": [{
-            "wire_id": "FinalizeReferendum",
-            "payload_hex": "aa"
-        }]
-    });
-    let config_payload = norito::json!({
-        "referenda": [],
-        "finalize_response": finalize_response,
-    });
-    configure_governance(mock.base_url(), &config_payload).expect("configure governance");
-    let temp_dir = TempDir::new("gov_finalize").expect("temp dir");
-    let config_path = temp_dir.path().join("client.toml");
-    write_client_config(&config_path, mock.base_url()).expect("write config");
-    let proposal_id =
-        "feedfeedfeedfeedfeedfeedfeedfeedfeedfeedfeedfeedfeedfeedfeedfeed".to_string();
-    let referendum_id = proposal_id.as_str();
-    let summary = command()
-        .arg("--config")
-        .arg(&config_path)
-        .arg("--output-format")
-        .arg("text")
-        .args([
-            "app",
-            "gov",
-            "finalize",
-            "--referendum-id",
-            referendum_id,
-            "--proposal-id",
-            proposal_id.as_str(),
-        ])
-        .output()
-        .expect("invoke iroha app gov finalize --output-format text");
-    assert!(
-        summary.status.success(),
-        "expected finalize summary to succeed, stderr: {}",
-        String::from_utf8_lossy(&summary.stderr)
-    );
-    let summary_out = String::from_utf8_lossy(&summary.stdout);
-    assert_eq!(
-        summary_out.trim_end(),
-        format!("finalize: referendum_id={referendum_id} ok=true tx_instrs=1")
-    );
-    let json_output = command()
-        .arg("--config")
-        .arg(&config_path)
-        .args([
-            "app",
-            "gov",
-            "finalize",
-            "--referendum-id",
-            referendum_id,
-            "--proposal-id",
-            proposal_id.as_str(),
-        ])
-        .output()
-        .expect("invoke iroha app gov finalize");
-    assert!(
-        json_output.status.success(),
-        "expected finalize JSON to succeed, stderr: {}",
-        String::from_utf8_lossy(&json_output.stderr)
-    );
-    let value: norito::json::Value =
-        norito::json::from_slice(&json_output.stdout).expect("parse finalize JSON");
-    let instructions = value
-        .get("tx_instructions")
-        .and_then(norito::json::Value::as_array)
-        .expect("tx_instructions array");
-    assert_eq!(instructions.len(), 1);
-    assert_eq!(
-        instructions[0]
-            .get("wire_id")
-            .and_then(norito::json::Value::as_str),
-        Some("FinalizeReferendum")
-    );
-}
-#[test]
-fn gov_enact_against_mock() {
-    use torii_mock_support::{
-        SpawnError, TempDir, ToriiMockProcess, configure_governance, write_client_config,
-    };
-    let mock = match ToriiMockProcess::spawn() {
-        Ok(proc) => proc,
-        Err(SpawnError::PythonUnavailable | SpawnError::PermissionDenied) => {
-            eprintln!("skipping gov_enact_against_mock: mock server unavailable");
-            return;
-        }
-        Err(err) => panic!("failed to start Torii mock: {err}"),
-    };
-    let enact_response = norito::json!({
-        "ok": true,
-        "tx_instructions": [{
-            "wire_id": "EnactProposal",
-            "payload_hex": "bb"
-        }]
-    });
-    let config_payload = norito::json!({
-        "referenda": [],
-        "enact_response": enact_response,
-    });
-    configure_governance(mock.base_url(), &config_payload).expect("configure governance");
-    let temp_dir = TempDir::new("gov_enact").expect("temp dir");
-    let config_path = temp_dir.path().join("client.toml");
-    write_client_config(&config_path, mock.base_url()).expect("write config");
-    let proposal_id =
-        "feedfeedfeedfeedfeedfeedfeedfeedfeedfeedfeedfeedfeedfeedfeedfeed".to_string();
-    let summary = command()
-        .arg("--config")
-        .arg(&config_path)
-        .arg("--output-format")
-        .arg("text")
-        .args(["app", "gov", "enact", "--proposal-id", proposal_id.as_str()])
-        .output()
-        .expect("invoke iroha app gov enact --output-format text");
-    assert!(
-        summary.status.success(),
-        "expected enact summary to succeed, stderr: {}",
-        String::from_utf8_lossy(&summary.stderr)
-    );
-    let summary_out = String::from_utf8_lossy(&summary.stdout);
-    assert_eq!(
-        summary_out.trim_end(),
-        format!("enact: proposal_id={proposal_id} ok=true tx_instrs=1")
-    );
-    let json_output = command()
-        .arg("--config")
-        .arg(&config_path)
-        .args(["app", "gov", "enact", "--proposal-id", proposal_id.as_str()])
-        .output()
-        .expect("invoke iroha app gov enact");
-    assert!(
-        json_output.status.success(),
-        "expected enact JSON to succeed, stderr: {}",
-        String::from_utf8_lossy(&json_output.stderr)
-    );
-    let value: norito::json::Value =
-        norito::json::from_slice(&json_output.stdout).expect("parse enact JSON");
-    let instructions = value
-        .get("tx_instructions")
-        .and_then(norito::json::Value::as_array)
-        .expect("tx_instructions array");
-    assert_eq!(instructions.len(), 1);
-    assert_eq!(
-        instructions[0]
-            .get("wire_id")
-            .and_then(norito::json::Value::as_str),
-        Some("EnactProposal")
     );
 }
 #[test]
@@ -2424,35 +2294,17 @@ fn gov_vote_zk_emits_summary_and_json() {
     );
 }
 #[test]
-fn gov_vote_rejects_retired_zk_flag_aliases() {
-    for (flag, value) in [
-        ("--proof-b64", "AAA="),
-        ("--lock-amount", "1"),
-        ("--lock-duration-blocks", "1"),
-    ] {
+fn gov_rejects_retired_governance_mutation_commands() {
+    for command_name in ["finalize", "enact"] {
         let output = command()
-            .args([
-                "app",
-                "gov",
-                "vote",
-                "--referendum-id",
-                "ref-zk",
-                "--mode",
-                "zk",
-                "--backend",
-                "halo2/ipa",
-                "--envelope-b64",
-                "AAA=",
-                flag,
-                value,
-            ])
+            .args(["app", "gov", command_name])
             .output()
-            .expect("run CLI with a retired ZK flag");
-        assert!(!output.status.success(), "{flag} must be absent");
+            .expect("run CLI with a retired governance command");
+        assert!(!output.status.success(), "{command_name} must be absent");
         let stderr = String::from_utf8_lossy(&output.stderr);
         assert!(
-            stderr.contains("unexpected argument") && stderr.contains(flag),
-            "unexpected diagnostic for {flag}: {stderr}"
+            stderr.contains("unrecognized subcommand") && stderr.contains(command_name),
+            "unexpected diagnostic for {command_name}: {stderr}"
         );
     }
 }

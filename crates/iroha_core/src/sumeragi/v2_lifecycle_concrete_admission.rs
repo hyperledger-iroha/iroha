@@ -71,15 +71,6 @@ impl LifecycleWorkRegistryHolder {
         self.registry
             .project_recovered_durable_validate_retry_census(coordinator, decision)
     }
-    /// Return the sole recovered Decision Apply Ready ordinal when the full
-    /// logical and concrete startup census agrees.
-    pub(super) fn exact_recovered_decision_apply_ready_ordinal(
-        &self,
-        coordinator: &LifecycleCoordinator,
-    ) -> Option<u128> {
-        self.registry
-            .exact_recovered_decision_apply_ready_ordinal(coordinator)
-    }
     /// Join one runtime output to its exact next lifecycle row.
     fn join_lifecycle_output(
         &self,

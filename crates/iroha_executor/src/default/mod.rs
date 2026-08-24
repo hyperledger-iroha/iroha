@@ -38,8 +38,6 @@ pub use domain::{
 pub use executor::visit_upgrade;
 /// Re-export governance visitors handled by the default executor.
 pub use governance::{
-    visit_approve_governance_proposal, visit_cast_parliament_ballot, visit_enact_referendum,
-    visit_enact_sccp_route_governance, visit_finalize_referendum,
     visit_propose_sccp_route_governance, visit_propose_sorafs_provider_governance,
     visit_propose_validation_fee_policy, visit_register_citizen,
 };
@@ -82,10 +80,8 @@ use iroha_smart_contract::data_model::{
         contract_alias::SetContractAlias,
         defi::DeFiInstructionBox,
         governance::{
-            ApproveGovernanceProposal, CastParliamentBallot, EnactReferendum,
-            EnactSccpRouteGovernance, FinalizeReferendum, ProposeSccpRouteGovernance,
-            ProposeSorafsProviderGovernance, ProposeValidationFeePayoutLifecycle,
-            ProposeValidationFeePolicy, RegisterCitizen,
+            ProposeSccpRouteGovernance, ProposeSorafsProviderGovernance,
+            ProposeValidationFeePayoutLifecycle, ProposeValidationFeePolicy, RegisterCitizen,
         },
         nexus::{
             ActivateFeeSponsorProgramRevision, BeginCloseFeeSponsorProgram, CloseFeeSponsorProgram,
@@ -1255,26 +1251,6 @@ impl InstructionDispatch for InstructionBox {
             governance::visit_propose_validation_fee_payout_lifecycle(executor, isi);
             return;
         }
-        if let Some(isi) = any.downcast_ref::<ApproveGovernanceProposal>() {
-            governance::visit_approve_governance_proposal(executor, isi);
-            return;
-        }
-        if let Some(isi) = any.downcast_ref::<CastParliamentBallot>() {
-            governance::visit_cast_parliament_ballot(executor, isi);
-            return;
-        }
-        if let Some(isi) = any.downcast_ref::<FinalizeReferendum>() {
-            governance::visit_finalize_referendum(executor, isi);
-            return;
-        }
-        if let Some(isi) = any.downcast_ref::<EnactReferendum>() {
-            governance::visit_enact_referendum(executor, isi);
-            return;
-        }
-        if let Some(isi) = any.downcast_ref::<EnactSccpRouteGovernance>() {
-            governance::visit_enact_sccp_route_governance(executor, isi);
-            return;
-        }
         if let Some(isi) = any.downcast_ref::<RegisterCitizen>() {
             governance::visit_register_citizen(executor, isi);
             return;
@@ -1782,23 +1758,13 @@ pub mod governance {
         visit_propose_sccp_route_governance(ProposeSccpRouteGovernance);
         /// Dispatch a typed `SoraFS` provider-owner proposal to Core.
         ///
-        /// Core admits proposal authors separately; only a successful referendum
-        /// enactment can mutate the owner registry.
+        /// Core admits bonded citizens as proposal authors; only exact-due automatic execution of
+        /// a successful Parliament certificate can mutate the owner registry.
         visit_propose_sorafs_provider_governance(ProposeSorafsProviderGovernance);
         /// Dispatch a bonded-citizen validation-fee proposal to the Parliament lifecycle in Core.
         visit_propose_validation_fee_policy(ProposeValidationFeePolicy);
         /// Dispatch a bonded-citizen payout-lifecycle proposal to the Parliament lifecycle in Core.
         visit_propose_validation_fee_payout_lifecycle(ProposeValidationFeePayoutLifecycle);
-        /// Dispatch a body-specific Parliament approval to Core.
-        visit_approve_governance_proposal(ApproveGovernanceProposal);
-        /// Dispatch a body-specific Parliament ballot to Core.
-        visit_cast_parliament_ballot(CastParliamentBallot);
-        /// Dispatch permissionless referendum finalization to Core.
-        visit_finalize_referendum(FinalizeReferendum);
-        /// Dispatch permissionless referendum enactment to Core.
-        visit_enact_referendum(EnactReferendum);
-        /// Dispatch the full-preimage SCCP referendum enactment to Core.
-        visit_enact_sccp_route_governance(EnactSccpRouteGovernance);
         /// Dispatch citizen registration to Core, which enforces self-registration and the configured
         /// citizenship bond floor against committed governance parameters.
         visit_register_citizen(RegisterCitizen);
@@ -2844,6 +2810,9 @@ pub mod domain {
             | AnyPermission::CanModifyTriggerMetadata(_)
             | AnyPermission::CanManagePeers(_)
             | AnyPermission::CanManageLaneRelayEmergency(_)
+            | AnyPermission::CanManageRuntimeUpgrades(_)
+            | AnyPermission::CanManageConsensusKeys(_)
+            | AnyPermission::CanManageConfidentialParams(_)
             | AnyPermission::CanRegisterDomain(_)
             | AnyPermission::CanSetParameters(_)
             | AnyPermission::CanManageSccpGovernance(_)
@@ -2870,8 +2839,6 @@ pub mod domain {
             | AnyPermission::CanManageSorafsPopRegistry(_)
             | AnyPermission::CanOperateSorafsPopIssuer(_)
             | AnyPermission::CanUpsertSorafsProviderCredit(_)
-            | AnyPermission::CanRegisterSorafsProviderOwner(_)
-            | AnyPermission::CanUnregisterSorafsProviderOwner(_)
             | AnyPermission::CanManageSoranetVpnQuoteIssuers(_)
             | AnyPermission::CanIssueSoranetVpnQuote(_)
             | AnyPermission::CanIngestSoranetPrivacy(_)
@@ -3109,6 +3076,9 @@ pub mod account {
             | AnyPermission::CanReadRestrictedDataspace(_)
             | AnyPermission::CanManagePeers(_)
             | AnyPermission::CanManageLaneRelayEmergency(_)
+            | AnyPermission::CanManageRuntimeUpgrades(_)
+            | AnyPermission::CanManageConsensusKeys(_)
+            | AnyPermission::CanManageConfidentialParams(_)
             | AnyPermission::CanRegisterDomain(_)
             | AnyPermission::CanUnregisterDomain(_)
             | AnyPermission::CanModifyDomainMetadata(_)
@@ -3149,8 +3119,6 @@ pub mod account {
             | AnyPermission::CanManageSorafsPopRegistry(_)
             | AnyPermission::CanOperateSorafsPopIssuer(_)
             | AnyPermission::CanUpsertSorafsProviderCredit(_)
-            | AnyPermission::CanRegisterSorafsProviderOwner(_)
-            | AnyPermission::CanUnregisterSorafsProviderOwner(_)
             | AnyPermission::CanManageSoranetVpnQuoteIssuers(_)
             | AnyPermission::CanIssueSoranetVpnQuote(_)
             | AnyPermission::CanIngestSoranetPrivacy(_)
@@ -3421,6 +3389,9 @@ pub mod asset_definition {
             | AnyPermission::CanModifyTriggerMetadata(_)
             | AnyPermission::CanManagePeers(_)
             | AnyPermission::CanManageLaneRelayEmergency(_)
+            | AnyPermission::CanManageRuntimeUpgrades(_)
+            | AnyPermission::CanManageConsensusKeys(_)
+            | AnyPermission::CanManageConfidentialParams(_)
             | AnyPermission::CanRegisterDomain(_)
             | AnyPermission::CanUnregisterDomain(_)
             | AnyPermission::CanModifyDomainMetadata(_)
@@ -3454,8 +3425,6 @@ pub mod asset_definition {
             | AnyPermission::CanManageSorafsPopRegistry(_)
             | AnyPermission::CanOperateSorafsPopIssuer(_)
             | AnyPermission::CanUpsertSorafsProviderCredit(_)
-            | AnyPermission::CanRegisterSorafsProviderOwner(_)
-            | AnyPermission::CanUnregisterSorafsProviderOwner(_)
             | AnyPermission::CanManageSoranetVpnQuoteIssuers(_)
             | AnyPermission::CanIssueSoranetVpnQuote(_)
             | AnyPermission::CanIngestSoranetPrivacy(_)
@@ -4309,7 +4278,7 @@ pub mod parameter {
         if updates_sccp_governance(isi) {
             deny!(
                 executor,
-                "The reserved SCCP registry cannot be changed through SetParameter; enact a finalized typed SCCP referendum"
+                "The reserved SCCP registry cannot be changed through SetParameter; an exact due Parliament certificate must apply the typed SCCP action"
             );
         }
         if updates_validation_fee_governance(isi) {
@@ -4778,6 +4747,9 @@ pub mod trigger {
             | AnyPermission::CanRegisterTrigger(_)
             | AnyPermission::CanManagePeers(_)
             | AnyPermission::CanManageLaneRelayEmergency(_)
+            | AnyPermission::CanManageRuntimeUpgrades(_)
+            | AnyPermission::CanManageConsensusKeys(_)
+            | AnyPermission::CanManageConfidentialParams(_)
             | AnyPermission::CanRegisterDomain(_)
             | AnyPermission::CanUnregisterDomain(_)
             | AnyPermission::CanModifyDomainMetadata(_)
@@ -4835,8 +4807,6 @@ pub mod trigger {
             | AnyPermission::CanManageSorafsPopRegistry(_)
             | AnyPermission::CanOperateSorafsPopIssuer(_)
             | AnyPermission::CanUpsertSorafsProviderCredit(_)
-            | AnyPermission::CanRegisterSorafsProviderOwner(_)
-            | AnyPermission::CanUnregisterSorafsProviderOwner(_)
             | AnyPermission::CanManageSoranetVpnQuoteIssuers(_)
             | AnyPermission::CanIssueSoranetVpnQuote(_)
             | AnyPermission::CanIngestSoranetPrivacy(_)
@@ -4885,8 +4855,7 @@ pub mod trigger {
                 CanBindSorafsAlias, CanCompleteSorafsReplicationOrder, CanDeclareSorafsCapacity,
                 CanFileSorafsCapacityDispute, CanIssueSorafsReplicationOrder,
                 CanManageSorafsModeration, CanManageSorafsPopRegistry, CanOperateSorafsPopIssuer,
-                CanRegisterSorafsProviderOwner, CanSetSorafsPricing, CanSetSorafsReservePolicy,
-                CanSubmitSorafsTelemetry, CanUnregisterSorafsProviderOwner,
+                CanSetSorafsPricing, CanSetSorafsReservePolicy, CanSubmitSorafsTelemetry,
                 CanUpsertSorafsProviderCredit,
             },
             soranet::{
@@ -4923,8 +4892,6 @@ pub mod trigger {
                 AnyPermission::CanSetSorafsPricing(CanSetSorafsPricing),
                 AnyPermission::CanSetSorafsReservePolicy(CanSetSorafsReservePolicy),
                 AnyPermission::CanUpsertSorafsProviderCredit(CanUpsertSorafsProviderCredit),
-                AnyPermission::CanRegisterSorafsProviderOwner(CanRegisterSorafsProviderOwner),
-                AnyPermission::CanUnregisterSorafsProviderOwner(CanUnregisterSorafsProviderOwner),
                 AnyPermission::CanManageSoranetVpnQuoteIssuers(CanManageSoranetVpnQuoteIssuers),
                 AnyPermission::CanIssueSoranetVpnQuote(CanIssueSoranetVpnQuote),
                 AnyPermission::CanIngestSoranetPrivacy(CanIngestSoranetPrivacy),
@@ -6165,7 +6132,7 @@ pub mod bridge {
     ) {
         deny!(
             executor,
-            "direct SCCP route mutation is retired; enact a finalized threshold referendum"
+            "direct SCCP route mutation is retired; an exact due Parliament certificate must apply the action"
         )
     }
     declare_execute_visitors! {

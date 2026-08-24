@@ -424,11 +424,11 @@ fn localnet_builder(seed: &str) -> NetworkBuilder {
                 .write(["nexus", "lane_count"], 3_i64)
                 .write(["nexus", "autoscale", "enabled"], true)
                 .write(
-                    ["nexus", "autoscale", "min_lanes"],
+                    ["nexus", "autoscale", "min_lane_id"],
                     i64::from(AUTOSCALE_LANE_INDEX),
                 )
                 .write(
-                    ["nexus", "autoscale", "max_lanes"],
+                    ["nexus", "autoscale", "max_lane_id_exclusive"],
                     i64::from(AUTOSCALE_LANE_INDEX + 1),
                 )
                 .write(["nexus", "autoscale", "target_block_ms"], 120_000_i64)

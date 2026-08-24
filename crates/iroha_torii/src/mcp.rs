@@ -19,6 +19,10 @@ use base64::Engine as _;
 use blake3::Hasher as Blake3Hasher;
 use iroha_crypto::PublicKey;
 use iroha_data_model::account::AccountAddress;
+use iroha_torii_shared::parliament_api::{
+    PARLIAMENT_TIMED_OVN_CASTING_PROOF_REQUEST_SCHEMA_NAME_V1,
+    PARLIAMENT_TIMED_OVN_CASTING_PROOF_VERSION_V1, ParliamentTimedOvnCastingProofRequestV1,
+};
 use iroha_torii_shared::route_catalog::{
     self, AdmissionPolicy, ApiSurface, AuthenticationPolicy, CatalogProjection, EnabledFeatures,
     HttpMethod as CatalogHttpMethod, RouteCatalog, RouteDescriptor, RouteEffect,
@@ -543,7 +547,6 @@ pub(crate) fn build_tool_specs(cfg: &iroha_config::parameters::actual::ToriiMcp)
     tools.push(iroha_vpn_quotes_create_tool());
     tools.push(iroha_vpn_sessions_create_tool());
     tools.push(iroha_vpn_sessions_get_tool());
-    tools.push(iroha_vpn_sessions_delete_tool());
     tools.push(iroha_vpn_receipts_list_tool());
     tools.push(iroha_vpn_receipts_submit_tool());
     tools.push(iroha_health_tool());
@@ -583,6 +586,13 @@ pub(crate) fn build_tool_specs(cfg: &iroha_config::parameters::actual::ToriiMcp)
     tools.push(iroha_proofs_query_tool());
     tools.push(iroha_gov_contract_get_tool());
     tools.push(iroha_gov_proposals_deploy_contract_tool());
+    tools.push(iroha_gov_parliament_attempt_draft_tool());
+    tools.push(iroha_gov_parliament_attempt_get_tool());
+    tools.push(iroha_gov_parliament_timed_ovn_casting_context_get_tool());
+    tools.push(iroha_gov_parliament_timed_ovn_casting_proof_get_tool());
+    tools.push(iroha_gov_parliament_tle_release_context_get_tool());
+    tools.push(iroha_gov_parliament_tle_partial_release_create_tool());
+    tools.push(iroha_gov_parliament_transition_draft_tool());
     tools.push(iroha_gov_proposals_get_tool());
     tools.push(iroha_gov_locks_get_tool());
     tools.push(iroha_gov_referenda_get_tool());
@@ -595,8 +605,6 @@ pub(crate) fn build_tool_specs(cfg: &iroha_config::parameters::actual::ToriiMcp)
     tools.push(iroha_gov_unlocks_stats_tool());
     tools.push(iroha_gov_council_current_tool());
     tools.push(iroha_gov_citizens_count_tool());
-    tools.push(iroha_gov_enact_tool());
-    tools.push(iroha_gov_finalize_tool());
     tools.push(iroha_aliases_resolve_tool());
     tools.push(iroha_aliases_resolve_index_tool());
     tools.push(iroha_aliases_by_account_tool());
@@ -1004,7 +1012,6 @@ fn is_manual_read_tool_name(name: &str) -> bool {
         || name.ends_with(".checkpoints")
         || name.ends_with(".consensus_keys")
         || name.ends_with(".bls_keys")
-        || name.ends_with(".key_lifecycle")
         || name.ends_with(".telemetry")
         || name.ends_with(".sessions")
         || name.ends_with(".collectors")
@@ -1308,12 +1315,6 @@ async fn handle_named_tool_call(
                 Err(err) => mcp_tool_error(err),
             }
         }
-        "iroha.vpn.sessions.delete" => {
-            match dispatch_iroha_vpn_sessions_delete(&app, inbound_headers, arguments).await {
-                Ok(result) => mcp_tool_success(result),
-                Err(err) => mcp_tool_error(err),
-            }
-        }
         "iroha.vpn.receipts.list" => {
             match dispatch_iroha_vpn_receipts_list(&app, inbound_headers, arguments).await {
                 Ok(result) => mcp_tool_success(result),
@@ -1564,6 +1565,77 @@ async fn handle_named_tool_call(
                 Err(err) => mcp_tool_error(err),
             }
         }
+        "iroha.gov.parliament.attempts.draft" => {
+            match dispatch_iroha_gov_parliament_attempt_draft(&app, inbound_headers, arguments)
+                .await
+            {
+                Ok(result) => mcp_tool_success(result),
+                Err(err) => mcp_tool_error(err),
+            }
+        }
+        "iroha.gov.parliament.attempts.get" => {
+            match dispatch_iroha_gov_parliament_attempt_get(&app, inbound_headers, arguments).await
+            {
+                Ok(result) => mcp_tool_success(result),
+                Err(err) => mcp_tool_error(err),
+            }
+        }
+        "iroha.gov.parliament.ballots.timed_ovn_casting_context.get" => {
+            match dispatch_iroha_gov_parliament_timed_ovn_casting_context_get(
+                &app,
+                inbound_headers,
+                arguments,
+            )
+            .await
+            {
+                Ok(result) => mcp_tool_success(result),
+                Err(err) => mcp_tool_error(err),
+            }
+        }
+        "iroha.gov.parliament.ballots.timed_ovn_casting_proof.get" => {
+            match dispatch_iroha_gov_parliament_timed_ovn_casting_proof_get(
+                &app,
+                inbound_headers,
+                arguments,
+            )
+            .await
+            {
+                Ok(result) => mcp_tool_success(result),
+                Err(err) => mcp_tool_error(err),
+            }
+        }
+        "iroha.gov.parliament.ballots.tle_release_context.get" => {
+            match dispatch_iroha_gov_parliament_tle_release_context_get(
+                &app,
+                inbound_headers,
+                arguments,
+            )
+            .await
+            {
+                Ok(result) => mcp_tool_success(result),
+                Err(err) => mcp_tool_error(err),
+            }
+        }
+        "iroha.gov.parliament.ballots.tle_partial_release.create" => {
+            match dispatch_iroha_gov_parliament_tle_partial_release_create(
+                &app,
+                inbound_headers,
+                arguments,
+            )
+            .await
+            {
+                Ok(result) => mcp_tool_success(result),
+                Err(err) => mcp_tool_error(err),
+            }
+        }
+        "iroha.gov.parliament.transitions.draft" => {
+            match dispatch_iroha_gov_parliament_transition_draft(&app, inbound_headers, arguments)
+                .await
+            {
+                Ok(result) => mcp_tool_success(result),
+                Err(err) => mcp_tool_error(err),
+            }
+        }
         "iroha.gov.proposals.get" => {
             match dispatch_iroha_gov_proposals_get(&app, inbound_headers, arguments).await {
                 Ok(result) => mcp_tool_success(result),
@@ -1638,18 +1710,6 @@ async fn handle_named_tool_call(
         }
         "iroha.gov.citizens.count" => {
             match dispatch_iroha_gov_citizens_count(&app, inbound_headers, arguments).await {
-                Ok(result) => mcp_tool_success(result),
-                Err(err) => mcp_tool_error(err),
-            }
-        }
-        "iroha.gov.enact" => {
-            match dispatch_iroha_gov_enact(&app, inbound_headers, arguments).await {
-                Ok(result) => mcp_tool_success(result),
-                Err(err) => mcp_tool_error(err),
-            }
-        }
-        "iroha.gov.finalize" => {
-            match dispatch_iroha_gov_finalize(&app, inbound_headers, arguments).await {
                 Ok(result) => mcp_tool_success(result),
                 Err(err) => mcp_tool_error(err),
             }
@@ -2728,17 +2788,10 @@ enum GovernanceOpenapiValidation {
     SelectorBody {
         field: &'static str,
     },
-    ProposalBody {
-        field: &'static str,
-    },
-    FinalizeBody,
 }
 impl GovernanceOpenapiValidation {
     const fn requires_body(self) -> bool {
-        matches!(
-            self,
-            Self::SelectorBody { .. } | Self::ProposalBody { .. } | Self::FinalizeBody
-        )
+        matches!(self, Self::SelectorBody { .. })
     }
 }
 fn governance_openapi_validation(
@@ -2771,10 +2824,6 @@ fn governance_openapi_validation(
         ("POST", "/v1/gov/ballots/plain") => Some(GovernanceOpenapiValidation::SelectorBody {
             field: "referendum_id",
         }),
-        ("POST", "/v1/gov/enact") => Some(GovernanceOpenapiValidation::ProposalBody {
-            field: "proposal_id",
-        }),
-        ("POST", "/v1/gov/finalize") => Some(GovernanceOpenapiValidation::FinalizeBody),
         _ => None,
     }
 }
@@ -3661,12 +3710,16 @@ async fn dispatch_connect_session_delete(
     inbound_headers: &HeaderMap,
     arguments: &Map,
 ) -> Result<Value, String> {
-    let sid = extract_connect_sid_argument(arguments)?;
+    reject_unknown_arguments(
+        arguments,
+        &["sid", "token_management", "headers", "accept"],
+        "connect.session.delete",
+    )?;
+    let sid = canonical_connect_sid_argument(arguments)?;
     let mut path = String::from("/v1/connect/session/");
     try_append_percent_encoded_path_component(&mut path, sid)?;
     let management_token = arguments
         .get("token_management")
-        .or_else(|| arguments.get("tokenManagement"))
         .and_then(Value::as_str)
         .filter(|token| !token.is_empty());
     dispatch_route_with_borrowed_headers(
@@ -4190,37 +4243,6 @@ async fn dispatch_iroha_vpn_sessions_get(
     )
     .await
 }
-async fn dispatch_iroha_vpn_sessions_delete(
-    app: &SharedAppState,
-    inbound_headers: &HeaderMap,
-    arguments: &Map,
-) -> Result<Value, String> {
-    reject_unknown_arguments(
-        arguments,
-        &["session_id", "canonical_auth", "accept"],
-        "VPN session delete tool call",
-    )?;
-    let canonical_headers = vpn_canonical_auth_headers(arguments)?;
-    let session_id = extract_vpn_session_id_argument(arguments)?;
-    let mut path_args = Map::new();
-    path_args.insert("session_id".into(), Value::String(session_id));
-    let path_value = Value::Object(path_args);
-    let route = fill_path_template("/v1/vpn/sessions/{session_id}", Some(&path_value))?;
-    dispatch_vpn_route_with_canonical_auth(
-        app,
-        inbound_headers,
-        Method::DELETE,
-        route.as_str(),
-        &canonical_headers,
-        Vec::new(),
-        None,
-        arguments
-            .get("accept")
-            .and_then(Value::as_str)
-            .map(str::to_owned),
-    )
-    .await
-}
 async fn dispatch_iroha_vpn_receipts_submit(
     app: &SharedAppState,
     inbound_headers: &HeaderMap,
@@ -4459,10 +4481,8 @@ async fn dispatch_iroha_runtime_upgrades_action(
     path_args.insert("id".into(), Value::String(upgrade_id));
     let path_value = Value::Object(path_args);
     let route = fill_path_template(route_template, Some(&path_value))?;
-    let body = build_object_body_or_flat_shortcuts(
-        arguments,
-        &["body", "path", "id", "upgrade_id", "headers", "accept"],
-    )?;
+    let body =
+        build_object_body_or_flat_shortcuts(arguments, &["body", "path", "headers", "accept"])?;
     let body_bytes = encode_mcp_json_body(&body, "encode request body")?;
     dispatch_route(
         app,
@@ -4559,6 +4579,249 @@ async fn dispatch_iroha_gov_contract_get(
     )
     .await
 }
+fn parliament_json_body(arguments: &Map, context: &str) -> Result<Vec<u8>, String> {
+    reject_unknown_arguments(arguments, &["body", "headers", "accept"], context)?;
+    let body = arguments
+        .get("body")
+        .and_then(Value::as_object)
+        .ok_or_else(|| format!("`body` must be an object for {context}"))?;
+    encode_mcp_json_body(
+        &Value::Object(body.clone()),
+        "encode Parliament request body",
+    )
+}
+async fn dispatch_iroha_gov_parliament_attempt_draft(
+    app: &SharedAppState,
+    inbound_headers: &HeaderMap,
+    arguments: &Map,
+) -> Result<Value, String> {
+    let body = parliament_json_body(arguments, "Parliament attempt draft")?;
+    dispatch_route(
+        app,
+        inbound_headers,
+        Method::POST,
+        iroha_torii_shared::uri::GOV_PARLIAMENT_ATTEMPT_DRAFT,
+        arguments.get("headers"),
+        body,
+        Some("application/json".to_owned()),
+        arguments
+            .get("accept")
+            .and_then(Value::as_str)
+            .map(str::to_owned),
+    )
+    .await
+}
+fn extract_parliament_attempt_id_argument(arguments: &Map) -> Result<String, String> {
+    reject_unknown_arguments(
+        arguments,
+        &["path", "headers", "accept"],
+        "Parliament attempt read",
+    )?;
+    let path = arguments
+        .get("path")
+        .and_then(Value::as_object)
+        .ok_or_else(|| "`path` must be an object for Parliament attempt read".to_owned())?;
+    reject_unknown_arguments(
+        path,
+        &["governance_attempt_id"],
+        "Parliament attempt read path",
+    )?;
+    let attempt_id = path
+        .get("governance_attempt_id")
+        .and_then(Value::as_str)
+        .ok_or_else(|| "string `path.governance_attempt_id` is required".to_owned())?;
+    require_governance_proposal_id_v1("governance attempt id", attempt_id)?;
+    if attempt_id.bytes().all(|byte| byte == b'0') {
+        return Err("`governance attempt id` must not be the zero identifier".to_owned());
+    }
+    Ok(attempt_id.to_owned())
+}
+async fn dispatch_iroha_gov_parliament_attempt_get(
+    app: &SharedAppState,
+    inbound_headers: &HeaderMap,
+    arguments: &Map,
+) -> Result<Value, String> {
+    let attempt_id = extract_parliament_attempt_id_argument(arguments)?;
+    let mut path = String::from("/v1/gov/parliament/attempts/");
+    path.push_str(&attempt_id);
+    dispatch_route(
+        app,
+        inbound_headers,
+        Method::GET,
+        &path,
+        arguments.get("headers"),
+        Vec::new(),
+        None,
+        arguments
+            .get("accept")
+            .and_then(Value::as_str)
+            .map(str::to_owned),
+    )
+    .await
+}
+fn extract_parliament_ballot_attempt_id_argument(
+    arguments: &Map,
+    context: &str,
+) -> Result<String, String> {
+    reject_unknown_arguments(arguments, &["path", "headers", "accept"], context)?;
+    extract_parliament_ballot_attempt_id_path(arguments, context)
+}
+fn extract_parliament_ballot_attempt_id_path(
+    arguments: &Map,
+    context: &str,
+) -> Result<String, String> {
+    let path = arguments
+        .get("path")
+        .and_then(Value::as_object)
+        .ok_or_else(|| format!("`path` must be an object for {context}"))?;
+    reject_unknown_arguments(path, &["ballot_attempt_id"], &format!("{context} path"))?;
+    let ballot_attempt_id = path
+        .get("ballot_attempt_id")
+        .and_then(Value::as_str)
+        .ok_or_else(|| "string `path.ballot_attempt_id` is required".to_owned())?;
+    require_governance_proposal_id_v1("ballot attempt id", ballot_attempt_id)?;
+    if ballot_attempt_id.bytes().all(|byte| byte == b'0') {
+        return Err("`ballot attempt id` must not be the zero identifier".to_owned());
+    }
+    Ok(ballot_attempt_id.to_owned())
+}
+async fn dispatch_iroha_gov_parliament_tle_release_context_get(
+    app: &SharedAppState,
+    inbound_headers: &HeaderMap,
+    arguments: &Map,
+) -> Result<Value, String> {
+    let ballot_attempt_id = extract_parliament_ballot_attempt_id_argument(
+        arguments,
+        "Parliament TLE release-context read",
+    )?;
+    let path = format!("/v1/gov/parliament/ballots/{ballot_attempt_id}/release-context");
+    dispatch_route(
+        app,
+        inbound_headers,
+        Method::GET,
+        &path,
+        arguments.get("headers"),
+        Vec::new(),
+        None,
+        arguments
+            .get("accept")
+            .and_then(Value::as_str)
+            .map(str::to_owned),
+    )
+    .await
+}
+async fn dispatch_iroha_gov_parliament_timed_ovn_casting_context_get(
+    app: &SharedAppState,
+    inbound_headers: &HeaderMap,
+    arguments: &Map,
+) -> Result<Value, String> {
+    let ballot_attempt_id = extract_parliament_ballot_attempt_id_argument(
+        arguments,
+        "Parliament timed-OVN casting-context read",
+    )?;
+    let path = format!("/v1/gov/parliament/ballots/{ballot_attempt_id}/casting-context");
+    dispatch_route(
+        app,
+        inbound_headers,
+        Method::GET,
+        &path,
+        arguments.get("headers"),
+        Vec::new(),
+        None,
+        arguments
+            .get("accept")
+            .and_then(Value::as_str)
+            .map(str::to_owned),
+    )
+    .await
+}
+fn parliament_timed_ovn_casting_proof_request(
+    arguments: &Map,
+) -> Result<ParliamentTimedOvnCastingProofRequestV1, String> {
+    reject_unknown_arguments(
+        arguments,
+        &["path", "trusted_checkpoint_height", "headers"],
+        "Parliament timed-OVN casting-proof read",
+    )?;
+    let trusted_checkpoint_height = arguments
+        .get("trusted_checkpoint_height")
+        .and_then(Value::as_u64)
+        .filter(|height| *height != 0)
+        .ok_or_else(|| "non-zero integer `trusted_checkpoint_height` is required".to_owned())?;
+    Ok(ParliamentTimedOvnCastingProofRequestV1 {
+        version: PARLIAMENT_TIMED_OVN_CASTING_PROOF_VERSION_V1,
+        trusted_checkpoint_height,
+    })
+}
+async fn dispatch_iroha_gov_parliament_timed_ovn_casting_proof_get(
+    app: &SharedAppState,
+    inbound_headers: &HeaderMap,
+    arguments: &Map,
+) -> Result<Value, String> {
+    let ballot_attempt_id = extract_parliament_ballot_attempt_id_path(
+        arguments,
+        "Parliament timed-OVN casting-proof read",
+    )?;
+    let request = parliament_timed_ovn_casting_proof_request(arguments)?;
+    let path = format!("/v1/gov/parliament/ballots/{ballot_attempt_id}/casting-proof");
+    dispatch_route(
+        app,
+        inbound_headers,
+        Method::POST,
+        &path,
+        arguments.get("headers"),
+        norito::codec::Encode::encode(&request),
+        Some(crate::utils::NORITO_MIME_TYPE.to_owned()),
+        Some(crate::utils::NORITO_MIME_TYPE.to_owned()),
+    )
+    .await
+}
+async fn dispatch_iroha_gov_parliament_tle_partial_release_create(
+    app: &SharedAppState,
+    inbound_headers: &HeaderMap,
+    arguments: &Map,
+) -> Result<Value, String> {
+    let ballot_attempt_id = extract_parliament_ballot_attempt_id_argument(
+        arguments,
+        "Parliament TLE partial-release request",
+    )?;
+    let path = format!("/v1/gov/parliament/ballots/{ballot_attempt_id}/partial-release");
+    dispatch_route(
+        app,
+        inbound_headers,
+        Method::POST,
+        &path,
+        arguments.get("headers"),
+        Vec::new(),
+        None,
+        arguments
+            .get("accept")
+            .and_then(Value::as_str)
+            .map(str::to_owned),
+    )
+    .await
+}
+async fn dispatch_iroha_gov_parliament_transition_draft(
+    app: &SharedAppState,
+    inbound_headers: &HeaderMap,
+    arguments: &Map,
+) -> Result<Value, String> {
+    let body = parliament_json_body(arguments, "Parliament transition draft")?;
+    dispatch_route(
+        app,
+        inbound_headers,
+        Method::POST,
+        iroha_torii_shared::uri::GOV_PARLIAMENT_TRANSITION_DRAFT,
+        arguments.get("headers"),
+        body,
+        Some("application/json".to_owned()),
+        arguments
+            .get("accept")
+            .and_then(Value::as_str)
+            .map(str::to_owned),
+    )
+    .await
+}
 async fn dispatch_iroha_gov_proposals_get(
     app: &SharedAppState,
     inbound_headers: &HeaderMap,
@@ -4589,12 +4852,7 @@ async fn dispatch_iroha_gov_locks_get(
     inbound_headers: &HeaderMap,
     arguments: &Map,
 ) -> Result<Value, String> {
-    let rid = extract_governance_selector_argument(
-        arguments,
-        &["rid"],
-        &["rid", "id", "referendum_id"],
-        "referendum id",
-    )?;
+    let rid = extract_governance_selector_argument(arguments, "rid", "referendum id")?;
     let mut path_args = Map::new();
     path_args.insert("rid".into(), Value::String(rid));
     let path_value = Value::Object(path_args);
@@ -4619,12 +4877,7 @@ async fn dispatch_iroha_gov_referenda_get(
     inbound_headers: &HeaderMap,
     arguments: &Map,
 ) -> Result<Value, String> {
-    let id = extract_governance_selector_argument(
-        arguments,
-        &["id"],
-        &["id", "referendum_id"],
-        "referendum id",
-    )?;
+    let id = extract_governance_selector_argument(arguments, "id", "referendum id")?;
     let mut path_args = Map::new();
     path_args.insert("id".into(), Value::String(id));
     let path_value = Value::Object(path_args);
@@ -4649,8 +4902,7 @@ async fn dispatch_iroha_gov_tally_get(
     inbound_headers: &HeaderMap,
     arguments: &Map,
 ) -> Result<Value, String> {
-    let id =
-        extract_governance_selector_argument(arguments, &["id"], &["id", "tally_id"], "tally id")?;
+    let id = extract_governance_selector_argument(arguments, "id", "tally id")?;
     let mut path_args = Map::new();
     path_args.insert("id".into(), Value::String(id));
     let path_value = Value::Object(path_args);
@@ -4739,58 +4991,6 @@ async fn dispatch_iroha_gov_ballots_plain(
     )
     .await
 }
-async fn dispatch_iroha_gov_enact(
-    app: &SharedAppState,
-    inbound_headers: &HeaderMap,
-    arguments: &Map,
-) -> Result<Value, String> {
-    let body = build_object_body_or_flat_shortcuts(arguments, &["body", "headers", "accept"])?;
-    require_borrowed_governance_proposal_id_body(&body, "proposal_id")?;
-    let body_bytes = encode_mcp_json_body(&body, "encode request body")?;
-    dispatch_route(
-        app,
-        inbound_headers,
-        Method::POST,
-        "/v1/gov/enact",
-        arguments.get("headers"),
-        body_bytes,
-        Some("application/json".to_owned()),
-        arguments
-            .get("accept")
-            .and_then(Value::as_str)
-            .map(str::to_owned),
-    )
-    .await
-}
-async fn dispatch_iroha_gov_finalize(
-    app: &SharedAppState,
-    inbound_headers: &HeaderMap,
-    arguments: &Map,
-) -> Result<Value, String> {
-    let body = build_object_body_or_flat_shortcuts(arguments, &["body", "headers", "accept"])?;
-    let referendum_id = require_borrowed_governance_proposal_id_body(&body, "referendum_id")?;
-    let proposal_id = require_borrowed_governance_proposal_id_body(&body, "proposal_id")?;
-    if referendum_id != proposal_id {
-        return Err(
-            "`referendum_id` must equal `proposal_id` for governance finalization".to_owned(),
-        );
-    }
-    let body_bytes = encode_mcp_json_body(&body, "encode request body")?;
-    dispatch_route(
-        app,
-        inbound_headers,
-        Method::POST,
-        "/v1/gov/finalize",
-        arguments.get("headers"),
-        body_bytes,
-        Some("application/json".to_owned()),
-        arguments
-            .get("accept")
-            .and_then(Value::as_str)
-            .map(str::to_owned),
-    )
-    .await
-}
 async fn dispatch_iroha_contracts_code_get(
     app: &SharedAppState,
     inbound_headers: &HeaderMap,
@@ -4867,8 +5067,7 @@ async fn dispatch_iroha_contracts_call_and_wait(
         hash
     } else {
         submitted_hash = extract_transaction_hash_from_submit_result(&submit).map_err(|_| {
-            "could not resolve transaction hash; provide `hash`/`transaction_hash` explicitly"
-                .to_owned()
+            "could not resolve transaction hash; provide canonical `hash` explicitly".to_owned()
         })?;
         &submitted_hash
     };
@@ -5874,9 +6073,6 @@ fn build_iso20022_payload_body(arguments: &Map) -> Result<(Vec<u8>, Option<&str>
         arguments,
         &[
             "body_base64",
-            "message_xml",
-            "xml",
-            "body",
             "content_type",
             "profile",
             "operator_auth",
@@ -5884,21 +6080,14 @@ fn build_iso20022_payload_body(arguments: &Map) -> Result<(Vec<u8>, Option<&str>
         ],
         "ISO 20022 submission",
     )?;
-    if arguments.contains_key("body_base64") || arguments.contains_key("body") {
-        return build_request_body(arguments);
-    }
-    let xml = arguments
-        .get("message_xml")
-        .or_else(|| arguments.get("xml"))
-        .ok_or_else(|| {
-            "one of `body_base64`, `message_xml`, `xml`, or `body` is required".to_owned()
-        })?
-        .as_str()
-        .ok_or_else(|| "`message_xml`/`xml` must be a string".to_owned())?;
-    let mut body = Vec::new();
-    body.try_reserve_exact(xml.len())
-        .map_err(|_| "failed to reserve ISO 20022 XML payload".to_owned())?;
-    body.extend_from_slice(xml.as_bytes());
+    let encoded = arguments
+        .get("body_base64")
+        .and_then(Value::as_str)
+        .ok_or_else(|| "string `body_base64` is required for ISO 20022 submission".to_owned())?;
+    let body = decode_base64_any(
+        encoded,
+        "ISO 20022 `body_base64` must be valid base64/base64url",
+    )?;
     let content_type = arguments
         .get("content_type")
         .map(|value| {
@@ -6057,14 +6246,7 @@ async fn dispatch_iroha_iso20022_status_get(
 ) -> Result<Value, String> {
     reject_unknown_arguments(
         arguments,
-        &[
-            "msg_id",
-            "message_id",
-            "id",
-            "path",
-            "operator_auth",
-            "accept",
-        ],
+        &["path", "operator_auth", "accept"],
         "ISO 20022 status request",
     )?;
     let headers = iso20022_operator_auth_headers(arguments)?;
@@ -6101,7 +6283,6 @@ async fn dispatch_iroha_transactions_submit_and_wait(
         &[
             "body_base64",
             "hash",
-            "transaction_hash",
             "timeout_ms",
             "poll_interval_ms",
             "terminal_statuses",
@@ -6124,8 +6305,7 @@ async fn dispatch_iroha_transactions_submit_and_wait(
         hash
     } else {
         submitted_hash = extract_transaction_hash_from_submit_result(&submit).map_err(|_| {
-            "could not resolve transaction hash; provide `hash`/`transaction_hash` explicitly"
-                .to_owned()
+            "could not resolve transaction hash; provide canonical `hash` explicitly".to_owned()
         })?;
         &submitted_hash
     };
@@ -6149,9 +6329,7 @@ async fn dispatch_iroha_transactions_wait(
     let timeout_ms = resolve_submit_wait_timeout_ms(arguments)?;
     let poll_interval_ms = resolve_submit_wait_poll_interval_ms(arguments)?;
     let terminal_statuses = resolve_submit_wait_terminal_statuses(arguments)?;
-    let tx_hash = extract_optional_transaction_hash_argument(arguments)?.ok_or_else(|| {
-        "`hash` is required (provide `hash`, `transaction_hash`, `query.hash`, or `query.transaction_hash`)".to_owned()
-    })?;
+    let tx_hash = extract_transaction_status_hash_argument(arguments)?;
     wait_for_terminal_transaction_status(
         app,
         inbound_headers,
@@ -6288,10 +6466,7 @@ async fn dispatch_iroha_transactions_status(
     inbound_headers: &HeaderMap,
     arguments: &Map,
 ) -> Result<Value, String> {
-    let tx_hash = extract_optional_transaction_hash_argument(arguments)?.ok_or_else(|| {
-            "`hash` is required (provide `hash`, `transaction_hash`, `query.hash`, or `query.transaction_hash`)"
-                .to_owned()
-    })?;
+    let tx_hash = extract_transaction_status_hash_argument(arguments)?;
     let route = append_transaction_status_query(
         "/v1/pipeline/transactions/status".to_owned(),
         arguments,
@@ -6383,25 +6558,33 @@ fn resolve_submit_wait_terminal_statuses(arguments: &Map) -> Result<Vec<String>,
     Ok(statuses)
 }
 fn extract_optional_transaction_hash_argument(arguments: &Map) -> Result<Option<&str>, String> {
-    let query = arguments.get("query").and_then(Value::as_object);
-    let hash = query
-        .and_then(|query| query.get("hash"))
+    if arguments.contains_key("transaction_hash") || arguments.contains_key("query") {
+        return Err(
+            "optional transaction hash accepts only the exact top-level `hash` field".to_owned(),
+        );
+    }
+    arguments
+        .get("hash")
         .and_then(Value::as_str)
         .filter(|hash| !hash.is_empty())
-        .or_else(|| {
-            query
-                .and_then(|query| query.get("transaction_hash"))
-                .and_then(Value::as_str)
-                .filter(|hash| !hash.is_empty())
-        })
-        .or_else(|| {
-            arguments
-                .get("hash")
-                .or_else(|| arguments.get("transaction_hash"))
-                .and_then(Value::as_str)
-                .filter(|hash| !hash.is_empty())
-        });
-    hash.map(canonical_transaction_hash).transpose()
+        .map(canonical_transaction_hash)
+        .transpose()
+}
+fn extract_transaction_status_hash_argument(arguments: &Map) -> Result<&str, String> {
+    if arguments.contains_key("hash") || arguments.contains_key("transaction_hash") {
+        return Err("transaction status accepts only the exact `query.hash` field".to_owned());
+    }
+    let query = arguments
+        .get("query")
+        .and_then(Value::as_object)
+        .ok_or_else(|| "`query` must be an object".to_owned())?;
+    reject_unknown_arguments(query, &["hash"], "transaction status query")?;
+    let hash = query
+        .get("hash")
+        .and_then(Value::as_str)
+        .filter(|hash| !hash.is_empty())
+        .ok_or_else(|| "non-empty `query.hash` is required".to_owned())?;
+    canonical_transaction_hash(hash)
 }
 fn canonical_transaction_hash(hash: &str) -> Result<&str, String> {
     let marker_is_set = hash
@@ -6429,31 +6612,9 @@ fn try_copy_canonical_transaction_hash(hash: &str) -> Result<String, String> {
     owned.push_str(hash);
     Ok(owned)
 }
-fn extract_connect_sid_argument(arguments: &Map) -> Result<&str, String> {
-    if let Some(path) = arguments.get("path") {
-        let path = path
-            .as_object()
-            .ok_or_else(|| "`path` must be an object".to_owned())?;
-        if let Some(sid) = path.get("sid").and_then(Value::as_str)
-            && !sid.is_empty()
-        {
-            return Ok(sid);
-        }
-        if let Some(sid) = path.get("session_id").and_then(Value::as_str)
-            && !sid.is_empty()
-        {
-            return Ok(sid);
-        }
-    }
-    arguments
-        .get("sid")
-        .or_else(|| arguments.get("session_id"))
-        .and_then(Value::as_str)
-        .filter(|sid| !sid.is_empty())
-        .ok_or_else(|| {
-            "`sid` is required (provide `sid`, `session_id`, `path.sid`, or `path.session_id`)"
-                .to_owned()
-        })
+fn canonical_connect_sid_argument(arguments: &Map) -> Result<&str, String> {
+    decode_canonical(arguments, "sid", 32)?;
+    required_string(arguments, "sid")
 }
 fn extract_vpn_session_id_argument(arguments: &Map) -> Result<String, String> {
     let session_id = arguments
@@ -6461,12 +6622,12 @@ fn extract_vpn_session_id_argument(arguments: &Map) -> Result<String, String> {
         .and_then(Value::as_str)
         .filter(|session_id| !session_id.is_empty())
         .ok_or_else(|| "non-empty `session_id` is required".to_owned())?;
-    if session_id.len() != 64
+    if session_id.len() != 32
         || !session_id
             .bytes()
             .all(|byte| matches!(byte, b'0'..=b'9' | b'a'..=b'f'))
     {
-        return Err("`session_id` must be exactly 64 lowercase hexadecimal digits".to_owned());
+        return Err("`session_id` must be exactly 32 lowercase hexadecimal digits".to_owned());
     }
     Ok(session_id.to_owned())
 }
@@ -6541,74 +6702,89 @@ fn should_error_on_unrequested_terminal_failure(
 fn format_submit_wait_terminal_statuses(terminal_statuses: &[String]) -> String {
     terminal_statuses.join(", ")
 }
-fn extract_account_id_argument(arguments: &Map) -> Result<String, String> {
-    if let Some(path) = arguments.get("path") {
-        let path = path
-            .as_object()
-            .ok_or_else(|| "`path` must be an object".to_owned())?;
-        if let Some(account_id) = path.get("account_id").and_then(Value::as_str) {
-            return Ok(account_id.to_owned());
-        }
+fn reject_retired_flat_path_arguments(
+    arguments: &Map,
+    canonical_field: &str,
+    retired_flat_fields: &[&str],
+    retired_path_fields: &[&str],
+) -> Result<(), String> {
+    if let Some(field) = retired_flat_fields
+        .iter()
+        .find(|field| arguments.contains_key(**field))
+    {
+        return Err(format!(
+            "`{field}` is retired; provide only `path.{canonical_field}`"
+        ));
     }
+    let path = arguments
+        .get("path")
+        .and_then(Value::as_object)
+        .ok_or_else(|| "`path` must be an object".to_owned())?;
+    if let Some(field) = retired_path_fields
+        .iter()
+        .find(|field| path.contains_key(**field))
+    {
+        return Err(format!(
+            "`path.{field}` is retired; provide only `path.{canonical_field}`"
+        ));
+    }
+    Ok(())
+}
+fn extract_canonical_path_string_argument(
+    arguments: &Map,
+    canonical_field: &str,
+    retired_flat_fields: &[&str],
+    retired_path_fields: &[&str],
+) -> Result<String, String> {
+    reject_retired_flat_path_arguments(
+        arguments,
+        canonical_field,
+        retired_flat_fields,
+        retired_path_fields,
+    )?;
     arguments
-        .get("account_id")
+        .get("path")
+        .and_then(Value::as_object)
+        .and_then(|path| path.get(canonical_field))
         .and_then(Value::as_str)
         .map(str::to_owned)
-        .ok_or_else(|| {
-            "`account_id` is required (provide `account_id` or `path.account_id`)".to_owned()
-        })
+        .ok_or_else(|| format!("string `path.{canonical_field}` is required"))
+}
+fn extract_canonical_path_value_argument(
+    arguments: &Map,
+    canonical_field: &str,
+    retired_flat_fields: &[&str],
+    retired_path_fields: &[&str],
+) -> Result<String, String> {
+    reject_retired_flat_path_arguments(
+        arguments,
+        canonical_field,
+        retired_flat_fields,
+        retired_path_fields,
+    )?;
+    arguments
+        .get("path")
+        .and_then(Value::as_object)
+        .and_then(|path| path.get(canonical_field))
+        .and_then(value_to_string)
+        .ok_or_else(|| format!("scalar `path.{canonical_field}` is required"))
+}
+fn extract_account_id_argument(arguments: &Map) -> Result<String, String> {
+    extract_canonical_path_string_argument(arguments, "account_id", &["account_id"], &[])
 }
 fn extract_uaid_argument(arguments: &Map) -> Result<String, String> {
-    if let Some(path) = arguments.get("path") {
-        let path = path
-            .as_object()
-            .ok_or_else(|| "`path` must be an object".to_owned())?;
-        if let Some(uaid) = path.get("uaid").and_then(Value::as_str) {
-            return Ok(uaid.to_owned());
-        }
-    }
-    arguments
-        .get("uaid")
-        .and_then(Value::as_str)
-        .map(str::to_owned)
-        .ok_or_else(|| "`uaid` is required (provide `uaid` or `path.uaid`)".to_owned())
+    extract_canonical_path_string_argument(arguments, "uaid", &["uaid"], &[])
 }
 fn extract_domain_id_argument(arguments: &Map) -> Result<String, String> {
-    if let Some(path) = arguments.get("path") {
-        let path = path
-            .as_object()
-            .ok_or_else(|| "`path` must be an object".to_owned())?;
-        if let Some(domain_id) = path.get("domain_id").and_then(Value::as_str) {
-            return Ok(domain_id.to_owned());
-        }
-    }
-    arguments
-        .get("domain_id")
-        .or_else(|| arguments.get("domain"))
-        .and_then(Value::as_str)
-        .map(str::to_owned)
-        .ok_or_else(|| {
-            "`domain_id` is required (provide `domain_id`, `domain`, or `path.domain_id`)"
-                .to_owned()
-        })
+    extract_canonical_path_string_argument(arguments, "domain_id", &["domain_id", "domain"], &[])
 }
 fn extract_subscription_id_argument(arguments: &Map) -> Result<String, String> {
-    if let Some(path) = arguments.get("path") {
-        let path = path
-            .as_object()
-            .ok_or_else(|| "`path` must be an object".to_owned())?;
-        if let Some(subscription_id) = path.get("subscription_id").and_then(Value::as_str) {
-            return Ok(subscription_id.to_owned());
-        }
-    }
-    arguments
-        .get("subscription_id")
-        .or_else(|| arguments.get("id"))
-        .and_then(Value::as_str)
-        .map(str::to_owned)
-        .ok_or_else(|| {
-            "`subscription_id` is required (provide `subscription_id`, `id`, or `path.subscription_id`)".to_owned()
-        })
+    extract_canonical_path_string_argument(
+        arguments,
+        "subscription_id",
+        &["subscription_id", "id"],
+        &[],
+    )
 }
 fn extract_exact_subscription_id_argument(arguments: &Map) -> Result<String, String> {
     if arguments.contains_key("id") || arguments.contains_key("path") {
@@ -6625,122 +6801,23 @@ fn extract_exact_subscription_id_argument(arguments: &Map) -> Result<String, Str
         .ok_or_else(|| "non-empty `subscription_id` is required".to_owned())
 }
 fn extract_iso20022_message_id_argument(arguments: &Map) -> Result<String, String> {
-    if let Some(path) = arguments.get("path") {
-        let path = path
-            .as_object()
-            .ok_or_else(|| "`path` must be an object".to_owned())?;
-        if let Some(msg_id) = path.get("msg_id").and_then(Value::as_str) {
-            return Ok(msg_id.to_owned());
-        }
-    }
-    arguments
-        .get("msg_id")
-        .or_else(|| arguments.get("message_id"))
-        .or_else(|| arguments.get("id"))
-        .and_then(Value::as_str)
-        .map(str::to_owned)
-        .ok_or_else(|| {
-            "`msg_id` is required (provide `msg_id`, `message_id`, `id`, or `path.msg_id`)"
-                .to_owned()
-        })
+    extract_canonical_path_string_argument(
+        arguments,
+        "msg_id",
+        &["msg_id", "message_id", "id"],
+        &[],
+    )
 }
 fn extract_ticket_argument(arguments: &Map) -> Result<String, String> {
-    if let Some(path) = arguments.get("path") {
-        let path = path
-            .as_object()
-            .ok_or_else(|| "`path` must be an object".to_owned())?;
-        if let Some(ticket) = path.get("ticket").and_then(Value::as_str) {
-            return Ok(ticket.to_owned());
-        }
-    }
-    arguments
-        .get("ticket")
-        .or_else(|| arguments.get("manifest_ticket"))
-        .or_else(|| arguments.get("id"))
-        .and_then(Value::as_str)
-        .map(str::to_owned)
-        .ok_or_else(|| {
-            "`ticket` is required (provide `ticket`, `manifest_ticket`, `id`, or `path.ticket`)"
-                .to_owned()
-        })
+    extract_canonical_path_string_argument(
+        arguments,
+        "ticket",
+        &["ticket", "manifest_ticket", "id"],
+        &[],
+    )
 }
 fn extract_proof_record_id_argument(arguments: &Map) -> Result<String, String> {
-    if let Some(path) = arguments.get("path") {
-        let path = path
-            .as_object()
-            .ok_or_else(|| "`path` must be an object".to_owned())?;
-        if let Some(proof_id) = path.get("id").and_then(Value::as_str) {
-            return Ok(proof_id.to_owned());
-        }
-    }
-    arguments
-        .get("id")
-        .or_else(|| arguments.get("proof_id"))
-        .and_then(Value::as_str)
-        .map(str::to_owned)
-        .ok_or_else(|| "`id` is required (provide `id`, `proof_id`, or `path.id`)".to_owned())
-}
-fn extract_exact_string_alias_argument(
-    arguments: &Map,
-    path_keys: &[&str],
-    flat_keys: &[&str],
-    label: &str,
-) -> Result<String, String> {
-    for key in arguments.keys() {
-        if !matches!(key.as_str(), "path" | "headers" | "accept")
-            && !flat_keys.contains(&key.as_str())
-        {
-            return Err(format!("unexpected `{key}` for {label}"));
-        }
-    }
-    let mut selected: Option<(String, String)> = None;
-    let mut consider = |location: &str, value: &Value| -> Result<(), String> {
-        let value = value
-            .as_str()
-            .ok_or_else(|| format!("`{location}` must be a string"))?;
-        if let Some((selected_location, selected_value)) = selected.as_ref() {
-            if selected_value != value {
-                return Err(format!(
-                    "conflicting {label} aliases `{selected_location}` and `{location}`"
-                ));
-            }
-        } else {
-            selected = Some((location.to_owned(), value.to_owned()));
-        }
-        Ok(())
-    };
-    if let Some(path) = arguments.get("path") {
-        let path = path
-            .as_object()
-            .ok_or_else(|| "`path` must be an object".to_owned())?;
-        for key in path.keys() {
-            if !path_keys.contains(&key.as_str()) {
-                return Err(format!("unexpected `path.{key}` for {label}"));
-            }
-        }
-        let mut saw_path_alias = false;
-        for key in path_keys {
-            if let Some(value) = path.get(*key) {
-                saw_path_alias = true;
-                let location = format!("path.{key}");
-                consider(&location, value)?;
-            }
-        }
-        if !saw_path_alias {
-            return Err(format!(
-                "`path.{}` is required",
-                path_keys.join("` or `path.")
-            ));
-        }
-    }
-    for key in flat_keys {
-        if let Some(value) = arguments.get(*key) {
-            consider(key, value)?;
-        }
-    }
-    selected
-        .map(|(_, value)| value)
-        .ok_or_else(|| format!("`{label}` is required"))
+    extract_canonical_path_string_argument(arguments, "id", &["id", "proof_id"], &[])
 }
 fn require_governance_selector_v1(label: &str, value: &str) -> Result<(), String> {
     if !iroha_data_model::governance::is_valid_governance_selector_v1(value) {
@@ -6765,21 +6842,35 @@ fn require_governance_proposal_id_v1(label: &str, value: &str) -> Result<(), Str
 }
 fn extract_governance_selector_argument(
     arguments: &Map,
-    path_keys: &[&str],
-    flat_keys: &[&str],
+    path_key: &str,
     label: &str,
 ) -> Result<String, String> {
-    let value = extract_exact_string_alias_argument(arguments, path_keys, flat_keys, label)?;
+    reject_unknown_arguments(arguments, &["path", "headers", "accept"], label)?;
+    let path = arguments
+        .get("path")
+        .and_then(Value::as_object)
+        .ok_or_else(|| "`path` must be an object".to_owned())?;
+    reject_unknown_arguments(path, &[path_key], label)?;
+    let value = path
+        .get(path_key)
+        .and_then(Value::as_str)
+        .map(str::to_owned)
+        .ok_or_else(|| format!("string `path.{path_key}` is required"))?;
     require_governance_selector_v1(label, &value)?;
     Ok(value)
 }
 fn extract_governance_proposal_id_argument(arguments: &Map) -> Result<String, String> {
-    let value = extract_exact_string_alias_argument(
-        arguments,
-        &["id"],
-        &["id", "proposal_id"],
-        "proposal id",
-    )?;
+    reject_unknown_arguments(arguments, &["path", "headers", "accept"], "proposal id")?;
+    let path = arguments
+        .get("path")
+        .and_then(Value::as_object)
+        .ok_or_else(|| "`path` must be an object".to_owned())?;
+    reject_unknown_arguments(path, &["id"], "proposal id")?;
+    let value = path
+        .get("id")
+        .and_then(Value::as_str)
+        .map(str::to_owned)
+        .ok_or_else(|| "string `path.id` is required".to_owned())?;
     require_governance_proposal_id_v1("proposal id", &value)?;
     Ok(value)
 }
@@ -6794,14 +6885,6 @@ fn require_governance_body_string<'a>(body: &'a Value, field: &str) -> Result<&'
 fn require_governance_selector_body<'a>(body: &'a Value, field: &str) -> Result<&'a str, String> {
     let value = require_governance_body_string(body, field)?;
     require_governance_selector_v1(field, value)?;
-    Ok(value)
-}
-fn require_governance_proposal_id_body<'a>(
-    body: &'a Value,
-    field: &str,
-) -> Result<&'a str, String> {
-    let value = require_governance_body_string(body, field)?;
-    require_governance_proposal_id_v1(field, value)?;
     Ok(value)
 }
 fn require_governance_openapi_path_string<'a>(
@@ -6853,287 +6936,92 @@ fn validate_governance_openapi_dispatch(tool: &ToolSpec, arguments: &Map) -> Res
             let body = require_governance_openapi_json_body(arguments)?;
             require_governance_selector_body(body, field).map(|_| ())
         }
-        GovernanceOpenapiValidation::ProposalBody { field } => {
-            let body = require_governance_openapi_json_body(arguments)?;
-            require_governance_proposal_id_body(body, field).map(|_| ())
-        }
-        GovernanceOpenapiValidation::FinalizeBody => {
-            let body = require_governance_openapi_json_body(arguments)?;
-            let referendum_id = require_governance_proposal_id_body(body, "referendum_id")?;
-            let proposal_id = require_governance_proposal_id_body(body, "proposal_id")?;
-            if referendum_id != proposal_id {
-                return Err(
-                    "`referendum_id` must equal `proposal_id` for governance finalization"
-                        .to_owned(),
-                );
-            }
-            Ok(())
-        }
     }
 }
 fn extract_runtime_upgrade_id_argument(arguments: &Map) -> Result<String, String> {
-    if let Some(path) = arguments.get("path") {
-        let path = path
-            .as_object()
-            .ok_or_else(|| "`path` must be an object".to_owned())?;
-        if let Some(upgrade_id) = path.get("id").and_then(Value::as_str) {
-            return Ok(upgrade_id.to_owned());
-        }
-    }
-    arguments
-        .get("id")
-        .or_else(|| arguments.get("upgrade_id"))
-        .and_then(Value::as_str)
-        .map(str::to_owned)
-        .ok_or_else(|| "`id` is required (provide `id`, `upgrade_id`, or `path.id`)".to_owned())
+    extract_canonical_path_string_argument(arguments, "id", &["id", "upgrade_id"], &[])
 }
 fn extract_height_argument(arguments: &Map) -> Result<String, String> {
-    if let Some(path) = arguments.get("path") {
-        let path = path
-            .as_object()
-            .ok_or_else(|| "`path` must be an object".to_owned())?;
-        if let Some(height) = path.get("height").and_then(value_to_string) {
-            return Ok(height);
-        }
-    }
-    arguments
-        .get("height")
-        .or_else(|| arguments.get("block_height"))
-        .and_then(value_to_string)
-        .ok_or_else(|| {
-            "`height` is required (provide `height`, `block_height`, or `path.height`)".to_owned()
-        })
+    extract_canonical_path_value_argument(arguments, "height", &["height", "block_height"], &[])
 }
 fn extract_view_argument(arguments: &Map) -> Result<String, String> {
-    if let Some(path) = arguments.get("path") {
-        let path = path
-            .as_object()
-            .ok_or_else(|| "`path` must be an object".to_owned())?;
-        if let Some(view) = path.get("view").and_then(value_to_string) {
-            return Ok(view);
-        }
-    }
-    arguments
-        .get("view")
-        .and_then(value_to_string)
-        .ok_or_else(|| "`view` is required (provide `view` or `path.view`)".to_owned())
+    extract_canonical_path_value_argument(arguments, "view", &["view"], &[])
 }
 fn extract_entry_hash_argument(arguments: &Map) -> Result<String, String> {
-    if let Some(path) = arguments.get("path") {
-        let path = path
-            .as_object()
-            .ok_or_else(|| "`path` must be an object".to_owned())?;
-        if let Some(entry_hash) = path.get("entry_hash").and_then(Value::as_str) {
-            return Ok(entry_hash.to_owned());
-        }
-    }
-    arguments
-        .get("entry_hash")
-        .or_else(|| arguments.get("tx_hash"))
-        .or_else(|| arguments.get("hash"))
-        .and_then(Value::as_str)
-        .map(str::to_owned)
-        .ok_or_else(|| {
-            "`entry_hash` is required (provide `entry_hash`, `tx_hash`, `hash`, or `path.entry_hash`)".to_owned()
-        })
+    extract_canonical_path_string_argument(
+        arguments,
+        "entry_hash",
+        &["entry_hash", "tx_hash", "hash"],
+        &["tx_hash", "hash"],
+    )
 }
 fn extract_definition_id_argument(arguments: &Map) -> Result<String, String> {
-    if let Some(path) = arguments.get("path") {
-        let path = path
-            .as_object()
-            .ok_or_else(|| "`path` must be an object".to_owned())?;
-        if let Some(definition_id) = path.get("definition_id").and_then(Value::as_str) {
-            return Ok(definition_id.to_owned());
-        }
-    }
-    arguments
-        .get("definition_id")
-        .and_then(Value::as_str)
-        .map(str::to_owned)
-        .ok_or_else(|| {
-            "`definition_id` is required (provide `definition_id` or `path.definition_id`)"
-                .to_owned()
-        })
+    extract_canonical_path_string_argument(arguments, "definition_id", &["definition_id"], &[])
 }
 fn extract_asset_id_argument(arguments: &Map) -> Result<String, String> {
-    if let Some(path) = arguments.get("path") {
-        let path = path
-            .as_object()
-            .ok_or_else(|| "`path` must be an object".to_owned())?;
-        if let Some(asset_id) = path.get("asset_id").and_then(Value::as_str) {
-            return Ok(asset_id.to_owned());
-        }
-    }
-    arguments
-        .get("asset_id")
-        .or_else(|| arguments.get("id"))
-        .and_then(Value::as_str)
-        .map(str::to_owned)
-        .ok_or_else(|| {
-            "`asset_id` is required (provide `asset_id`, `id`, or `path.asset_id`)".to_owned()
-        })
+    extract_canonical_path_string_argument(arguments, "asset_id", &["asset_id", "id"], &[])
 }
 fn extract_nft_id_argument(arguments: &Map) -> Result<String, String> {
-    if let Some(path) = arguments.get("path") {
-        let path = path
-            .as_object()
-            .ok_or_else(|| "`path` must be an object".to_owned())?;
-        if let Some(nft_id) = path.get("nft_id").and_then(Value::as_str) {
-            return Ok(nft_id.to_owned());
-        }
-    }
-    arguments
-        .get("nft_id")
-        .or_else(|| arguments.get("id"))
-        .and_then(Value::as_str)
-        .map(str::to_owned)
-        .ok_or_else(|| "`nft_id` is required (provide `nft_id`, `id`, or `path.nft_id`)".to_owned())
+    extract_canonical_path_string_argument(arguments, "nft_id", &["nft_id", "id"], &[])
 }
 fn extract_rwa_id_argument(arguments: &Map) -> Result<String, String> {
-    if let Some(path) = arguments.get("path") {
-        let path = path
-            .as_object()
-            .ok_or_else(|| "`path` must be an object".to_owned())?;
-        if let Some(rwa_id) = path.get("rwa_id").and_then(Value::as_str) {
-            return Ok(rwa_id.to_owned());
-        }
-    }
-    arguments
-        .get("rwa_id")
-        .or_else(|| arguments.get("id"))
-        .and_then(Value::as_str)
-        .map(str::to_owned)
-        .ok_or_else(|| "`rwa_id` is required (provide `rwa_id`, `id`, or `path.rwa_id`)".to_owned())
+    extract_canonical_path_string_argument(arguments, "rwa_id", &["rwa_id", "id"], &[])
 }
 fn extract_bundle_id_hex_argument(arguments: &Map) -> Result<String, String> {
-    if let Some(path) = arguments.get("path") {
-        let path = path
-            .as_object()
-            .ok_or_else(|| "`path` must be an object".to_owned())?;
-        if let Some(bundle_id_hex) = path.get("bundle_id_hex").and_then(Value::as_str) {
-            return Ok(bundle_id_hex.to_owned());
-        }
-    }
-    arguments
-        .get("bundle_id_hex")
-        .or_else(|| arguments.get("bundle_id"))
-        .and_then(Value::as_str)
-        .map(str::to_owned)
-        .ok_or_else(|| {
-            "`bundle_id_hex` is required (provide `bundle_id_hex`, `bundle_id`, or `path.bundle_id_hex`)".to_owned()
-        })
+    extract_canonical_path_string_argument(
+        arguments,
+        "bundle_id_hex",
+        &["bundle_id_hex", "bundle_id"],
+        &["bundle_id"],
+    )
 }
 fn extract_certificate_id_hex_argument(arguments: &Map) -> Result<String, String> {
-    if let Some(path) = arguments.get("path") {
-        let path = path
-            .as_object()
-            .ok_or_else(|| "`path` must be an object".to_owned())?;
-        if let Some(certificate_id_hex) = path.get("certificate_id_hex").and_then(Value::as_str) {
-            return Ok(certificate_id_hex.to_owned());
-        }
-    }
-    arguments
-        .get("certificate_id_hex")
-        .or_else(|| arguments.get("certificate_id"))
-        .or_else(|| arguments.get("id"))
-        .and_then(Value::as_str)
-        .map(str::to_owned)
-        .ok_or_else(|| {
-            "`certificate_id_hex` is required (provide `certificate_id_hex`, `certificate_id`, `id`, or `path.certificate_id_hex`)".to_owned()
-        })
+    extract_canonical_path_string_argument(
+        arguments,
+        "certificate_id_hex",
+        &["certificate_id_hex", "certificate_id", "id"],
+        &["certificate_id", "id"],
+    )
 }
 fn extract_transaction_hash_argument(arguments: &Map) -> Result<String, String> {
-    if let Some(path) = arguments.get("path") {
-        let path = path
-            .as_object()
-            .ok_or_else(|| "`path` must be an object".to_owned())?;
-        if let Some(hash) = path.get("hash").and_then(Value::as_str) {
-            return Ok(hash.to_owned());
-        }
-        if let Some(hash) = path.get("transaction_hash").and_then(Value::as_str) {
-            return Ok(hash.to_owned());
-        }
-    }
-    arguments
-        .get("hash")
-        .or_else(|| arguments.get("transaction_hash"))
-        .and_then(Value::as_str)
-        .map(str::to_owned)
-        .ok_or_else(|| {
-            "`hash` is required (provide `hash`, `transaction_hash`, `path.hash`, or `path.transaction_hash`)".to_owned()
-        })
+    extract_canonical_path_string_argument(
+        arguments,
+        "hash",
+        &["hash", "transaction_hash"],
+        &["transaction_hash"],
+    )
 }
 fn extract_code_hash_argument(arguments: &Map) -> Result<String, String> {
-    if let Some(path) = arguments.get("path") {
-        let path = path
-            .as_object()
-            .ok_or_else(|| "`path` must be an object".to_owned())?;
-        if let Some(code_hash) = path.get("code_hash").and_then(Value::as_str) {
-            return Ok(code_hash.to_owned());
-        }
-    }
-    arguments
-        .get("code_hash")
-        .or_else(|| arguments.get("hash"))
-        .and_then(Value::as_str)
-        .map(str::to_owned)
-        .ok_or_else(|| {
-            "`code_hash` is required (provide `code_hash`, `hash`, or `path.code_hash`)".to_owned()
-        })
+    extract_canonical_path_string_argument(arguments, "code_hash", &["code_hash", "hash"], &[])
 }
 fn extract_contract_address_argument(arguments: &Map) -> Result<String, String> {
-    if let Some(path) = arguments.get("path") {
-        let path = path
-            .as_object()
-            .ok_or_else(|| "`path` must be an object".to_owned())?;
-        if let Some(contract_address) = path.get("contract_address").and_then(Value::as_str) {
-            return Ok(contract_address.to_owned());
-        }
-    }
-    arguments
-        .get("contract_address")
-        .and_then(Value::as_str)
-        .map(str::to_owned)
-        .ok_or_else(|| {
-            "`contract_address` is required (provide `contract_address` or `path.contract_address`)"
-                .to_owned()
-        })
+    extract_canonical_path_string_argument(
+        arguments,
+        "contract_address",
+        &["contract_address"],
+        &[],
+    )
 }
 fn extract_instruction_index_argument(arguments: &Map) -> Result<String, String> {
-    if let Some(path) = arguments.get("path") {
-        let path = path
-            .as_object()
-            .ok_or_else(|| "`path` must be an object".to_owned())?;
-        if let Some(index) = path.get("index").and_then(value_to_string) {
-            return Ok(index);
-        }
-    }
-    arguments
-        .get("index")
-        .or_else(|| arguments.get("instruction_index"))
-        .and_then(value_to_string)
-        .ok_or_else(|| {
-            "`index` is required (provide `index`, `instruction_index`, or `path.index`)".to_owned()
-        })
+    extract_canonical_path_value_argument(
+        arguments,
+        "index",
+        &["index", "instruction_index"],
+        &["instruction_index"],
+    )
 }
 fn extract_block_identifier_argument(arguments: &Map) -> Result<String, String> {
-    if let Some(path) = arguments.get("path") {
-        let path = path
-            .as_object()
-            .ok_or_else(|| "`path` must be an object".to_owned())?;
-        if let Some(identifier) = path.get("identifier").and_then(value_to_string) {
-            return Ok(identifier);
-        }
-    }
-    arguments
-        .get("identifier")
-        .or_else(|| arguments.get("block_identifier"))
-        .or_else(|| arguments.get("block_height"))
-        .or_else(|| arguments.get("block_hash"))
-        .and_then(value_to_string)
-        .ok_or_else(|| {
-            "`identifier` is required (provide `identifier`, `block_identifier`, `block_height`, `block_hash`, or `path.identifier`)".to_owned()
-        })
+    extract_canonical_path_value_argument(
+        arguments,
+        "identifier",
+        &[
+            "identifier",
+            "block_identifier",
+            "block_height",
+            "block_hash",
+        ],
+        &["block_identifier", "block_height", "block_hash"],
+    )
 }
 #[allow(clippy::too_many_arguments)]
 async fn dispatch_route(
@@ -7900,7 +7788,19 @@ fn project_value_keys(value: &mut Value, keys: &[String]) {
     }
 }
 fn build_connect_ws_ticket(arguments: &Map, inbound_headers: &HeaderMap) -> Result<Value, String> {
-    let sid = extract_connect_sid_argument(arguments)?;
+    reject_unknown_arguments(
+        arguments,
+        &[
+            "sid",
+            "role",
+            "token",
+            "token_app",
+            "token_wallet",
+            "node_url",
+        ],
+        "connect.ws.ticket",
+    )?;
+    let sid = canonical_connect_sid_argument(arguments)?;
     let role = arguments
         .get("role")
         .and_then(Value::as_str)
@@ -7921,7 +7821,6 @@ fn build_connect_ws_ticket(arguments: &Map, inbound_headers: &HeaderMap) -> Resu
         })?;
     let node = arguments
         .get("node_url")
-        .or_else(|| arguments.get("node"))
         .and_then(Value::as_str)
         .map(str::to_owned)
         .unwrap_or_else(|| infer_node_url(inbound_headers));
@@ -7981,12 +7880,12 @@ fn parse_node_url(raw: &str) -> Result<url::Url, String> {
 }
 const MANUAL_STATIC_TOOL_ASSET_VERSION: u64 = 1;
 const MANUAL_STATIC_TOOL_ASSET_DESCRIPTOR_COUNT: usize = 68;
-const MANUAL_STATIC_TOOL_ASSET_LEN: usize = 94_898;
+const MANUAL_STATIC_TOOL_ASSET_LEN: usize = 86_670;
 const MANUAL_STATIC_TOOL_HISTORICAL_RUST_PREIMAGE_SHA256: &str =
     "1273686f98de21c686573d399d511be7606155b9d09de21869a8c060436242b4";
 const MANUAL_STATIC_TOOL_ASSET_BLAKE3: [u8; 32] = [
-    0x3d, 0xb7, 0x99, 0xe4, 0x4e, 0x3a, 0x76, 0x88, 0xd4, 0xef, 0x6e, 0xc4, 0xdb, 0xa1, 0x40, 0x3c,
-    0xeb, 0x08, 0xec, 0x74, 0x8c, 0x56, 0x38, 0xc1, 0x80, 0x90, 0x24, 0x78, 0x6c, 0x41, 0xdf, 0x98,
+    0x96, 0x9b, 0xc1, 0x7f, 0xab, 0xe5, 0xee, 0xf4, 0x13, 0xa8, 0xf2, 0x0f, 0x59, 0x2a, 0x66, 0xea,
+    0x15, 0x74, 0x3c, 0x1c, 0xd0, 0xf7, 0x9b, 0xd4, 0xb6, 0x56, 0xe0, 0xe6, 0xb0, 0xd1, 0x47, 0x9d,
 ];
 const MANUAL_STATIC_TOOL_ASSET: &[u8] = include_bytes!("mcp/manual_tool_descriptors_v1.json");
 
@@ -8499,28 +8398,7 @@ fn iroha_vpn_sessions_get_tool() -> ToolSpec {
             "type": "object",
             "additionalProperties": false,
             "properties": {
-                "session_id": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
-                "canonical_auth": (vpn_canonical_auth_schema()),
-                "accept": { "type": "string" }
-            },
-            "required": ["session_id", "canonical_auth"],
-            "description": "Provide the exact `session_id` plus a proof signed for the resolved inner path."
-        }),
-    }
-}
-fn iroha_vpn_sessions_delete_tool() -> ToolSpec {
-    ToolSpec {
-        name: "iroha.vpn.sessions.delete".to_owned(),
-        effect: manual_tool_effect_from_name("iroha.vpn.sessions.delete"),
-        description: "Delete a Sora VPN session and return its canonical receipt. `canonical_auth` must be signed for the exact inner DELETE path; outer MCP authentication is never reused for the inner target."
-            .to_owned(),
-        method: Method::DELETE,
-        path_template: "/v1/vpn/sessions/{session_id}".to_owned(),
-        input_schema: norito::json!({
-            "type": "object",
-            "additionalProperties": false,
-            "properties": {
-                "session_id": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+                "session_id": { "type": "string", "pattern": "^[0-9a-f]{32}$" },
                 "canonical_auth": (vpn_canonical_auth_schema()),
                 "accept": { "type": "string" }
             },
@@ -8751,31 +8629,6 @@ fn governance_proposal_id_v1_schema(description: &str) -> Value {
         "description": description
     })
 }
-fn required_property_schema(field: &str) -> Value {
-    let mut schema = Map::new();
-    schema.insert(
-        "required".to_owned(),
-        Value::Array(vec![Value::String(field.to_owned())]),
-    );
-    Value::Object(schema)
-}
-fn add_path_or_flat_alias_requiredness(schema: &mut Value, flat_keys: &[&str]) {
-    let Some((last, preceding)) = flat_keys.split_last() else {
-        return;
-    };
-    let mut fallback = required_property_schema(last);
-    for field in preceding.iter().rev() {
-        let mut branch = Map::new();
-        branch.insert("if".to_owned(), required_property_schema(field));
-        branch.insert("else".to_owned(), fallback);
-        fallback = Value::Object(branch);
-    }
-    let schema = schema
-        .as_object_mut()
-        .expect("governance MCP input schema is an object");
-    schema.insert("if".to_owned(), required_property_schema("path"));
-    schema.insert("else".to_owned(), fallback);
-}
 fn iroha_gov_post_tool_with_fields(
     name: &str,
     description: &str,
@@ -8853,24 +8706,282 @@ fn iroha_gov_proposals_deploy_contract_tool() -> ToolSpec {
         "/v1/gov/proposals/deploy-contract",
     )
 }
+fn iroha_gov_parliament_attempt_draft_tool() -> ToolSpec {
+    ToolSpec {
+        name: "iroha.gov.parliament.attempts.draft".to_owned(),
+        effect: ToolEffect::BuildInstruction,
+        description: "Draft one canonical attempt-based Parliament proposal for local signing. The canonical account proof must bind the exact V1 JSON body.".to_owned(),
+        method: Method::POST,
+        path_template: "/v1/gov/parliament/attempts/draft".to_owned(),
+        input_schema: norito::json!({
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["body"],
+            "properties": {
+                "body": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": ["version", "proposal", "attempt_sequence"],
+                    "properties": {
+                        "version": { "type": "integer", "const": 1 },
+                        "proposal": { "type": "object" },
+                        "attempt_sequence": {
+                            "type": "integer",
+                            "minimum": 0,
+                            "maximum": 4_294_967_295_u64
+                        }
+                    }
+                },
+                "headers": {
+                    "type": "object",
+                    "additionalProperties": { "type": "string" }
+                },
+                "accept": { "type": "string", "const": "application/json" }
+            }
+        }),
+    }
+}
+fn iroha_gov_parliament_attempt_get_tool() -> ToolSpec {
+    ToolSpec {
+        name: "iroha.gov.parliament.attempts.get".to_owned(),
+        effect: ToolEffect::Read,
+        description:
+            "Read one complete committed Parliament attempt by its exact canonical identifier."
+                .to_owned(),
+        method: Method::GET,
+        path_template: "/v1/gov/parliament/attempts/{governance_attempt_id}".to_owned(),
+        input_schema: norito::json!({
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["path"],
+            "properties": {
+                "path": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": ["governance_attempt_id"],
+                    "properties": {
+                        "governance_attempt_id": {
+                            "type": "string",
+                            "minLength": 64,
+                            "maxLength": 64,
+                            "pattern": "^[0-9a-f]{64}$"
+                        }
+                    }
+                },
+                "headers": {
+                    "type": "object",
+                    "additionalProperties": { "type": "string" }
+                },
+                "accept": { "type": "string", "const": "application/json" }
+            }
+        }),
+    }
+}
+fn iroha_gov_parliament_tle_release_context_get_tool() -> ToolSpec {
+    ToolSpec {
+        name: "iroha.gov.parliament.ballots.tle_release_context.get".to_owned(),
+        effect: ToolEffect::Read,
+        description: "Read one Core-authorized bounded public TLE release context for a Parliament ballot already in Opening. No ballot corpora, shares, secrets, or individual openings are returned."
+            .to_owned(),
+        method: Method::GET,
+        path_template:
+            "/v1/gov/parliament/ballots/{ballot_attempt_id}/release-context".to_owned(),
+        input_schema: norito::json!({
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["path"],
+            "properties": {
+                "path": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": ["ballot_attempt_id"],
+                    "properties": {
+                        "ballot_attempt_id": {
+                            "type": "string",
+                            "minLength": 64,
+                            "maxLength": 64,
+                            "pattern": "^[0-9a-f]{64}$"
+                        }
+                    }
+                },
+                "headers": {
+                    "type": "object",
+                    "additionalProperties": { "type": "string" }
+                },
+                "accept": { "type": "string", "const": "application/json" }
+            }
+        }),
+    }
+}
+fn iroha_gov_parliament_timed_ovn_casting_context_get_tool() -> ToolSpec {
+    ToolSpec {
+        name: "iroha.gov.parliament.ballots.timed_ovn_casting_context.get".to_owned(),
+        effect: ToolEffect::Read,
+        description: "Inspect one node-local Core-replay-validated public timed-OVN casting context. This unauthenticated-by-consensus view is for diagnostics only and MUST NOT be used as native-wallet or seed-unsealing input."
+            .to_owned(),
+        method: Method::GET,
+        path_template:
+            "/v1/gov/parliament/ballots/{ballot_attempt_id}/casting-context".to_owned(),
+        input_schema: norito::json!({
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["path"],
+            "properties": {
+                "path": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": ["ballot_attempt_id"],
+                    "properties": {
+                        "ballot_attempt_id": {
+                            "type": "string",
+                            "minLength": 64,
+                            "maxLength": 64,
+                            "pattern": "^[0-9a-f]{64}$"
+                        }
+                    }
+                },
+                "headers": {
+                    "type": "object",
+                    "additionalProperties": { "type": "string" }
+                },
+                "accept": { "type": "string", "const": "application/json" }
+            }
+        }),
+    }
+}
+fn iroha_gov_parliament_timed_ovn_casting_proof_get_tool() -> ToolSpec {
+    ToolSpec {
+        name: "iroha.gov.parliament.ballots.timed_ovn_casting_proof.get".to_owned(),
+        effect: manual_tool_effect_from_name(
+            "iroha.gov.parliament.ballots.timed_ovn_casting_proof.get",
+        ),
+        description: format!(
+            "Transport one bounded consensus-authenticated Parliament casting-proof page as canonical Norito (`{PARLIAMENT_TIMED_OVN_CASTING_PROOF_REQUEST_SCHEMA_NAME_V1}`). The MCP response body is base64 canonical Norito, not a verified wallet context: native code MUST independently pin the network id and exact checkpoint context, verify every finality proof and membership witness, and replay the archive before accessing seed material."
+        ),
+        method: Method::POST,
+        path_template: "/v1/gov/parliament/ballots/{ballot_attempt_id}/casting-proof".to_owned(),
+        input_schema: norito::json!({
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["path", "trusted_checkpoint_height"],
+            "properties": {
+                "path": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": ["ballot_attempt_id"],
+                    "properties": {
+                        "ballot_attempt_id": {
+                            "type": "string",
+                            "minLength": 64,
+                            "maxLength": 64,
+                            "pattern": "^[0-9a-f]{64}$"
+                        }
+                    }
+                },
+                "trusted_checkpoint_height": {
+                    "type": "integer",
+                    "format": "uint64",
+                    "minimum": 1,
+                    "description": "Height of the caller's externally pinned finality checkpoint; the exact trusted context id stays local to the native verifier."
+                },
+                "headers": {
+                    "type": "object",
+                    "additionalProperties": { "type": "string" },
+                    "description": "Canonical account authentication for the exact POST target and canonical Norito request bytes."
+                }
+            }
+        }),
+    }
+}
+fn iroha_gov_parliament_tle_partial_release_create_tool() -> ToolSpec {
+    ToolSpec {
+        name: "iroha.gov.parliament.ballots.tle_partial_release.create".to_owned(),
+        effect: ToolEffect::Write,
+        description: "Request this node's Core-authorized proof-carrying TLE partial release for one Parliament ballot in Opening. The request has no body and returns no secret-share material."
+            .to_owned(),
+        method: Method::POST,
+        path_template:
+            "/v1/gov/parliament/ballots/{ballot_attempt_id}/partial-release".to_owned(),
+        input_schema: norito::json!({
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["path"],
+            "properties": {
+                "path": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": ["ballot_attempt_id"],
+                    "properties": {
+                        "ballot_attempt_id": {
+                            "type": "string",
+                            "minLength": 64,
+                            "maxLength": 64,
+                            "pattern": "^[0-9a-f]{64}$"
+                        }
+                    }
+                },
+                "headers": {
+                    "type": "object",
+                    "additionalProperties": { "type": "string" }
+                },
+                "accept": { "type": "string", "const": "application/json" }
+            }
+        }),
+    }
+}
+fn iroha_gov_parliament_transition_draft_tool() -> ToolSpec {
+    ToolSpec {
+        name: "iroha.gov.parliament.transitions.draft".to_owned(),
+        effect: ToolEffect::BuildInstruction,
+        description: "Draft one exact closed Parliament lifecycle transition for local signing. Consensus rechecks authority, state, phase, proof, and roster bindings.".to_owned(),
+        method: Method::POST,
+        path_template: "/v1/gov/parliament/transitions/draft".to_owned(),
+        input_schema: norito::json!({
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["body"],
+            "properties": {
+                "body": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": ["version", "governance_attempt_id", "transition"],
+                    "properties": {
+                        "version": { "type": "integer", "const": 1 },
+                        "governance_attempt_id": {
+                            "type": "string",
+                            "minLength": 64,
+                            "maxLength": 64,
+                            "pattern": "^[0-9a-f]{64}$"
+                        },
+                        "transition": { "type": "object" }
+                    }
+                },
+                "headers": {
+                    "type": "object",
+                    "additionalProperties": { "type": "string" }
+                },
+                "accept": { "type": "string", "const": "application/json" }
+            }
+        }),
+    }
+}
 fn iroha_gov_proposals_get_tool() -> ToolSpec {
     let proposal_id_schema = governance_proposal_id_v1_schema(
         "Exact 64-character lowercase hexadecimal governance proposal id.",
     );
-    let mut tool = ToolSpec {
+    ToolSpec {
         name: "iroha.gov.proposals.get".to_owned(),
         effect: manual_tool_effect_from_name("iroha.gov.proposals.get"),
         description:
-            "Fetch governance proposal detail (`/v1/gov/proposals/{id}`; `id`/`proposal_id` shortcuts supported)."
+            "Fetch governance proposal detail by canonical `path.id` (`/v1/gov/proposals/{id}`)."
                 .to_owned(),
         method: Method::GET,
         path_template: "/v1/gov/proposals/{id}".to_owned(),
         input_schema: norito::json!({
             "type": "object",
             "additionalProperties": false,
+            "required": ["path"],
             "properties": {
-                "id": (proposal_id_schema.clone()),
-                "proposal_id": (proposal_id_schema.clone()),
                 "path": {
                     "type": "object",
                     "additionalProperties": false,
@@ -8886,28 +8997,24 @@ fn iroha_gov_proposals_get_tool() -> ToolSpec {
                 "accept": { "type": "string" }
             }
         }),
-    };
-    add_path_or_flat_alias_requiredness(&mut tool.input_schema, &["id", "proposal_id"]);
-    tool
+    }
 }
 fn iroha_gov_locks_get_tool() -> ToolSpec {
     let referendum_id_schema =
         governance_selector_v1_schema("Canonical first-release governance referendum selector.");
-    let mut tool = ToolSpec {
+    ToolSpec {
         name: "iroha.gov.locks.get".to_owned(),
         effect: manual_tool_effect_from_name("iroha.gov.locks.get"),
         description:
-            "Fetch governance lock records (`/v1/gov/locks/{rid}`; `rid`/`referendum_id` shortcuts supported)."
+            "Fetch governance lock records by canonical `path.rid` (`/v1/gov/locks/{rid}`)."
                 .to_owned(),
         method: Method::GET,
         path_template: "/v1/gov/locks/{rid}".to_owned(),
         input_schema: norito::json!({
             "type": "object",
             "additionalProperties": false,
+            "required": ["path"],
             "properties": {
-                "rid": (referendum_id_schema.clone()),
-                "id": (referendum_id_schema.clone()),
-                "referendum_id": (referendum_id_schema.clone()),
                 "path": {
                     "type": "object",
                     "additionalProperties": false,
@@ -8923,27 +9030,24 @@ fn iroha_gov_locks_get_tool() -> ToolSpec {
                 "accept": { "type": "string" }
             }
         }),
-    };
-    add_path_or_flat_alias_requiredness(&mut tool.input_schema, &["rid", "id", "referendum_id"]);
-    tool
+    }
 }
 fn iroha_gov_referenda_get_tool() -> ToolSpec {
     let referendum_id_schema =
         governance_selector_v1_schema("Canonical first-release governance referendum selector.");
-    let mut tool = ToolSpec {
+    ToolSpec {
         name: "iroha.gov.referenda.get".to_owned(),
         effect: manual_tool_effect_from_name("iroha.gov.referenda.get"),
         description:
-            "Fetch governance referendum detail (`/v1/gov/referenda/{id}`; `id`/`referendum_id` shortcuts supported)."
+            "Fetch governance referendum detail by canonical `path.id` (`/v1/gov/referenda/{id}`)."
                 .to_owned(),
         method: Method::GET,
         path_template: "/v1/gov/referenda/{id}".to_owned(),
         input_schema: norito::json!({
             "type": "object",
             "additionalProperties": false,
+            "required": ["path"],
             "properties": {
-                "id": (referendum_id_schema.clone()),
-                "referendum_id": (referendum_id_schema.clone()),
                 "path": {
                     "type": "object",
                     "additionalProperties": false,
@@ -8959,27 +9063,23 @@ fn iroha_gov_referenda_get_tool() -> ToolSpec {
                 "accept": { "type": "string" }
             }
         }),
-    };
-    add_path_or_flat_alias_requiredness(&mut tool.input_schema, &["id", "referendum_id"]);
-    tool
+    }
 }
 fn iroha_gov_tally_get_tool() -> ToolSpec {
     let tally_id_schema =
         governance_selector_v1_schema("Canonical first-release governance tally selector.");
-    let mut tool = ToolSpec {
+    ToolSpec {
         name: "iroha.gov.tally.get".to_owned(),
         effect: manual_tool_effect_from_name("iroha.gov.tally.get"),
-        description:
-            "Fetch governance tally detail (`/v1/gov/tally/{id}`; `id`/`tally_id` shortcuts supported)."
-                .to_owned(),
+        description: "Fetch governance tally detail by canonical `path.id` (`/v1/gov/tally/{id}`)."
+            .to_owned(),
         method: Method::GET,
         path_template: "/v1/gov/tally/{id}".to_owned(),
         input_schema: norito::json!({
             "type": "object",
             "additionalProperties": false,
+            "required": ["path"],
             "properties": {
-                "id": (tally_id_schema.clone()),
-                "tally_id": (tally_id_schema.clone()),
                 "path": {
                     "type": "object",
                     "additionalProperties": false,
@@ -8995,9 +9095,7 @@ fn iroha_gov_tally_get_tool() -> ToolSpec {
                 "accept": { "type": "string" }
             }
         }),
-    };
-    add_path_or_flat_alias_requiredness(&mut tool.input_schema, &["id", "tally_id"]);
-    tool
+    }
 }
 fn iroha_gov_protected_namespaces_list_tool() -> ToolSpec {
     simple_manual_get_tool(
@@ -9032,40 +9130,6 @@ fn iroha_gov_citizens_count_tool() -> ToolSpec {
         "iroha.gov.citizens.count",
         "Fetch exact governance citizenship registry count (`/v1/gov/citizens`).",
         "/v1/gov/citizens",
-    )
-}
-fn iroha_gov_enact_tool() -> ToolSpec {
-    iroha_gov_post_tool_with_fields(
-        "iroha.gov.enact",
-        "Enact governance proposal effects (`/v1/gov/enact`); accepts raw `body` or flat top-level body shortcuts.",
-        "/v1/gov/enact",
-        &[(
-            "proposal_id",
-            governance_proposal_id_v1_schema(
-                "Exact 64-character lowercase hexadecimal governance proposal id.",
-            ),
-        )],
-    )
-}
-fn iroha_gov_finalize_tool() -> ToolSpec {
-    iroha_gov_post_tool_with_fields(
-        "iroha.gov.finalize",
-        "Finalize governance tally (`/v1/gov/finalize`); accepts raw `body` or flat top-level body shortcuts.",
-        "/v1/gov/finalize",
-        &[
-            (
-                "referendum_id",
-                governance_proposal_id_v1_schema(
-                    "Exact 64-character lowercase hexadecimal referendum id; it must equal proposal_id for proposal-backed finalization.",
-                ),
-            ),
-            (
-                "proposal_id",
-                governance_proposal_id_v1_schema(
-                    "Exact 64-character lowercase hexadecimal governance proposal id.",
-                ),
-            ),
-        ],
     )
 }
 fn iroha_contracts_post_tool(name: &str, description: &str, path_template: &str) -> ToolSpec {
@@ -9226,7 +9290,7 @@ fn iroha_subscriptions_keep_tool() -> ToolSpec {
 fn iroha_subscriptions_usage_tool() -> ToolSpec {
     iroha_subscription_action_tool(
         "iroha.subscriptions.usage",
-        "Record subscription usage (`subscription_id` shortcut supported).",
+        "Record subscription usage for canonical `path.subscription_id`.",
         "usage",
         "Optional usage payload. When omitted, `{}` is submitted.",
     )
@@ -9330,15 +9394,8 @@ fn iroha_subscription_action_tool(
         input_schema: norito::json!({
             "type": "object",
             "additionalProperties": false,
+            "required": ["path"],
             "properties": {
-                "subscription_id": {
-                    "type": "string",
-                    "description": "Convenience shortcut for `path.subscription_id`."
-                },
-                "id": {
-                    "type": "string",
-                    "description": "Alias for `subscription_id`."
-                },
                 "path": {
                     "type": "object",
                     "additionalProperties": false,
@@ -9447,10 +9504,6 @@ fn iroha_transactions_submit_and_wait_tool() -> ToolSpec {
                 "hash": {
                     "type": "string",
                     "description": "Optional known transaction hash; if omitted the tool attempts to decode it from the submission receipt."
-                },
-                "transaction_hash": {
-                    "type": "string",
-                    "description": "Alias for `hash`."
                 },
                 "timeout_ms": {
                     "type": "integer",
@@ -9717,5 +9770,63 @@ mod tests {
             vpn_canonical_auth_headers(arguments.as_object().expect("arguments"))
                 .expect_err("noncanonical typed authentication must fail before dispatch");
         }
+    }
+
+    #[test]
+    fn parliament_casting_proof_tool_builds_one_canonical_checkpoint_request() {
+        let arguments = norito::json!({
+            "path": {
+                "ballot_attempt_id": "0101010101010101010101010101010101010101010101010101010101010101"
+            },
+            "trusted_checkpoint_height": 41_u64,
+            "headers": {}
+        });
+        let arguments = arguments.as_object().expect("arguments");
+        let request = parliament_timed_ovn_casting_proof_request(arguments)
+            .expect("bounded casting-proof request");
+        assert_eq!(
+            request.version,
+            PARLIAMENT_TIMED_OVN_CASTING_PROOF_VERSION_V1
+        );
+        assert_eq!(request.trusted_checkpoint_height, 41);
+        let encoded = norito::codec::Encode::encode(&request);
+        assert_eq!(
+            norito::decode_from_bytes::<ParliamentTimedOvnCastingProofRequestV1>(&encoded)
+                .expect("canonical casting-proof request"),
+            request
+        );
+    }
+
+    #[test]
+    fn parliament_casting_proof_tool_rejects_unpinned_or_ambiguous_requests() {
+        for arguments in [
+            norito::json!({
+                "path": {
+                    "ballot_attempt_id": "0101010101010101010101010101010101010101010101010101010101010101"
+                },
+                "trusted_checkpoint_height": 0_u64
+            }),
+            norito::json!({
+                "path": {
+                    "ballot_attempt_id": "0101010101010101010101010101010101010101010101010101010101010101"
+                },
+                "trusted_checkpoint_height": 41_u64,
+                "network_id": "node-selected-network"
+            }),
+        ] {
+            parliament_timed_ovn_casting_proof_request(arguments.as_object().expect("arguments"))
+                .expect_err("untrusted or ambiguous checkpoint request must fail closed");
+        }
+        let tool = iroha_gov_parliament_timed_ovn_casting_proof_get_tool();
+        assert_eq!(tool.method, Method::POST);
+        assert!(
+            tool.description
+                .contains("MUST independently pin the network id")
+        );
+        assert!(
+            iroha_gov_parliament_timed_ovn_casting_context_get_tool()
+                .description
+                .contains("MUST NOT be used")
+        );
     }
 }

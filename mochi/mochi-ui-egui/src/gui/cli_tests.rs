@@ -120,6 +120,40 @@ fn parse_cli_profile_inline_table_sets_custom_profile() {
     assert_eq!(profile.consensus_mode, SumeragiConsensusMode::Permissioned);
 }
 #[test]
+fn parse_cli_profile_rejects_preset_aliases() {
+    for profile in [
+        "single-peer",
+        "four_peer_bft",
+        "fourpeerbft",
+        "Four-Peer-Bft",
+        " four-peer-bft ",
+    ] {
+        let args = vec![OsString::from("--profile"), OsString::from(profile)];
+        let error = parse_cli_overrides_from(args).expect_err("profile alias must fail");
+        assert!(
+            error.to_string().contains("invalid profile"),
+            "unexpected error for `{profile}`: {error}"
+        );
+    }
+}
+#[test]
+fn parse_cli_profile_rejects_consensus_aliases() {
+    for mode in [
+        "permissioned-sumeragi",
+        "permissioned_sumeragi",
+        "Permissioned",
+        " permissioned ",
+    ] {
+        let profile = format!("{{ peer_count = 4, consensus_mode = {mode:?} }}");
+        let args = vec![OsString::from("--profile"), OsString::from(profile)];
+        let error = parse_cli_overrides_from(args).expect_err("consensus alias must fail");
+        assert!(
+            error.to_string().contains("not supported"),
+            "unexpected error for `{mode}`: {error}"
+        );
+    }
+}
+#[test]
 fn parse_cli_profile_inline_table_sets_genesis_profile() {
     let args = vec![
         OsString::from("--profile"),
@@ -382,13 +416,13 @@ fn cli_flags_override_env_values() {
     let env_overrides = parse_env_overrides().expect("parse env overrides");
     let cli = parse_cli_overrides_from(vec![
         OsString::from("--profile"),
-        OsString::from("single-peer"),
+        OsString::from("four-peer-bft"),
     ])
     .expect("parse CLI");
     let merged = merge_overrides(env_overrides, cli.overrides);
     assert_eq!(
         merged.profile,
-        Some(NetworkProfile::from_preset(ProfilePreset::SinglePeer))
+        Some(NetworkProfile::from_preset(ProfilePreset::FourPeerBft))
     );
 }
 #[cfg(unix)]
@@ -427,7 +461,7 @@ fn cli_overrides_apply_kagami_path_to_supervisor_builder() {
     let (script_path, log_path) = write_kagami_override_stub(temp.path());
     let mut overrides = CliOverrides::default();
     overrides.binaries.kagami = Some(script_path.clone());
-    let builder = SupervisorBuilder::new(ProfilePreset::SinglePeer).data_root(temp.path());
+    let builder = SupervisorBuilder::new(ProfilePreset::FourPeerBft).data_root(temp.path());
     overrides
         .apply_to(builder)
         .build()

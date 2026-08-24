@@ -76,7 +76,7 @@ mod state_owned_creator_v1;
 pub(super) mod state_owned_secret_adapter_v1;
 pub(super) use common_a::{
     ZkAmsMkhePreparedCollectivePublicAContextV1, active_collective_public_a_limb_frame_bytes_v1,
-    derive_active_collective_public_a_limb_v1, prepare_active_collective_public_a_v1,
+    prepare_active_collective_public_a_v1,
 };
 pub(super) use state_owned_creator_v1::publish_canonical_cpk_relation_proof_v1;
 const CPK_SHARE_STATEMENT_MAGIC_V1: [u8; 4] = *b"ZCPS";
@@ -2563,6 +2563,10 @@ where
     {
         return Err(ZkAmsMkheCpkRelationErrorV1::ResourceCeiling);
     }
+    let prepared_public_a =
+        prepare_active_collective_public_a_v1(&profile, roster, expected_cpk_transcript_digest)?;
+    let mut remaining_public_a_candidates =
+        prepared_public_a.candidate_budget_for_limbs_v1(profile.moduli.len())?;
     let rns_first_messages = reconstruct_cpk_rns_first_messages_for_shape_v1(
         CpkRelationShapeV1::RELEASE,
         rns_shape,
@@ -2575,12 +2579,7 @@ where
             if profile.moduli.get(limb).copied() != Some(modulus) {
                 return Err(ZkAmsMkheCpkRelationErrorV1::NativeRelation);
             }
-            derive_active_collective_public_a_limb_v1(
-                &profile,
-                roster,
-                expected_cpk_transcript_digest,
-                limb,
-            )
+            prepared_public_a.derive_limb_budgeted_v1(limb, &mut remaining_public_a_candidates)
         },
         |limb, modulus| party_b_reader.read_limb(limb, modulus),
     )?;

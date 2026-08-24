@@ -26,6 +26,32 @@ deployment manifests. They extend the Soracloud model plane and point at
 approved SoraFS manifests rather than being encoded as new service/container
 manifests. See `uploaded_private_models.md`.
 
+## Hosted-service reporting epochs
+
+The hosted-service economic lease and its usage-reporting epoch are separate
+clocks. `lease_started_sequence`, `lease_expires_sequence`, prepaid balance,
+and the admitted runtime/storage/egress unit prices remain fixed for one
+economic lease. An upgrade or rollback that retains that lease must reject
+unit-price drift; a reporting rollover never renews or reprices the lease and
+never changes a leased volume's start or expiry.
+
+Every newly assigned Inrou reporter must first submit an accepted zero/open
+checkpoint for the current `reporting_epoch` before its replica may be marked
+as serving. Reporter counters are monotonic and terminal delivery is explicit.
+At exactly 4,096 reporter identities, the exact newly assigned active
+public-lane validator may compare-and-swap to `reporting_epoch + 1` only with a
+zero/open counter, after every old checkpoint is finalized and none of those
+old keys remains placed. The transition folds the exact checked `u128` old
+total into `settled_egress_bytes`, opens the trigger checkpoint, and records a
+typed audit event atomically. No manager or reconciliation path may force-clear
+unknown usage.
+
+Liveness therefore assumes an honest retiring worker can stop, join its final
+writes, and deliver its terminal report. A crashed or malicious reporter that
+cannot provide that terminal value intentionally stalls rollover until the
+missing usage is recovered; the protocol chooses accounting safety over an
+administrative data-loss escape hatch.
+
 ## Scope
 
 These manifests are designed for the `IVM` + custom Sora Container Runtime

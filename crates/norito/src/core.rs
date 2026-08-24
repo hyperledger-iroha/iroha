@@ -965,6 +965,18 @@ fn payload_ctx_flags() -> Option<(u8, u8)> {
         }
     })
 }
+
+fn enter_field_codec_flags() -> Option<DecodeFlagsGuard> {
+    if decode_flags_active() {
+        return None;
+    }
+    let (flags, hint) = payload_ctx_flags().unwrap_or_else(|| {
+        let flags = default_encode_flags();
+        (flags, flags)
+    });
+    Some(DecodeFlagsGuard::enter_with_hint(flags, hint))
+}
+
 fn payload_ctx_state() -> Option<PayloadCtxState> {
     DECODE_PAYLOAD_CTX.with(|c| c.borrow().clone())
 }
@@ -1689,12 +1701,6 @@ impl SequenceSpan {
     #[inline]
     pub fn len(&self) -> usize {
         self.end.saturating_sub(self.start)
-    }
-    /// Whether the planned element payload is empty.
-    #[doc(hidden)]
-    #[inline]
-    pub fn is_empty(&self) -> bool {
-        self.start == self.end
     }
 }
 /// Planned element spans and total bytes consumed by a binary sequence.
@@ -3035,7 +3041,11 @@ impl<'a> DecodeFromSlice<'a> for i8 {
 impl<'a> DecodeFromSlice<'a> for bool {
     fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), Error> {
         let b = *bytes.first().ok_or(Error::LengthMismatch)?;
-        Ok((b != 0, 1))
+        match b {
+            0 => Ok((false, 1)),
+            1 => Ok((true, 1)),
+            tag => Err(Error::invalid_tag("bool", tag)),
+        }
     }
 }
 macro_rules! impl_decode_from_slice_le_int {
@@ -3192,12 +3202,6 @@ where
         BinarySequenceLayout::LengthPrefixed
     };
     let plan = plan_binary_sequence_with_count(bytes, flags, layout, len)?;
-    if layout == BinarySequenceLayout::LengthPrefixed
-        && core::mem::size_of::<T>() != 0
-        && plan.spans.iter().any(SequenceSpan::is_empty)
-    {
-        return decode_length_prefixed_sequence_legacy::<T>(bytes, len, offset);
-    }
     if let Some(out) = decode_planned(bytes, flags, &plan)? {
         return Ok((out, plan.used));
     }
@@ -3235,114 +3239,12 @@ where
         })
     }
 }
-fn decode_length_prefixed_sequence_legacy<'a, T>(
-    bytes: &'a [u8],
-    len: usize,
-    mut offset: usize,
-) -> Result<(Vec<T>, usize), Error>
-where
-    T: for<'de> NoritoDeserialize<'de> + NoritoSerialize,
-{
-    let mut out = try_decode_vec_with_capacity(len)?;
-    for _ in 0..len {
-        let (elem_len, header_len) = read_len_dyn_slice(&bytes[offset..])?;
-        offset = offset
-            .checked_add(header_len)
-            .ok_or(Error::LengthMismatch)?;
-        let data_start = offset;
-        let expected_end = data_start
-            .checked_add(elem_len)
-            .ok_or(Error::LengthMismatch)?;
-        if crate::debug_trace_enabled() {
-            eprintln!(
-                "Vec::<{}> element header_len={} elem_len={} offset_start={}",
-                core::any::type_name::<T>(),
-                header_len,
-                elem_len,
-                data_start
-            );
-        }
-        if expected_end > bytes.len() {
-            return Err(Error::LengthMismatch);
-        }
-        let decode_input = if elem_len == 0 {
-            &bytes[data_start..]
-        } else {
-            &bytes[data_start..expected_end]
-        };
-        let (value, used) = decode_field_canonical::<T>(decode_input)?;
-        if used > bytes.len().saturating_sub(data_start) {
-            return Err(Error::LengthMismatch);
-        }
-        if elem_len != 0 && used != elem_len {
-            return Err(Error::LengthMismatch);
-        }
-        if elem_len == 0 && used == 0 && core::mem::size_of::<T>() != 0 {
-            return Err(Error::LengthMismatch);
-        }
-        let consumed = if elem_len == 0 { used } else { elem_len };
-        let data_end = data_start
-            .checked_add(consumed)
-            .ok_or(Error::LengthMismatch)?;
-        record_slice_access(&bytes[data_start..data_end], consumed);
-        out.push(value);
-        offset = data_end;
-    }
-    Ok((out, offset))
-}
-fn decode_length_prefixed_sequence_legacy_with<'a, T, F>(
-    bytes: &'a [u8],
-    len: usize,
-    mut offset: usize,
-    mut on_value: F,
-) -> Result<usize, Error>
-where
-    T: for<'de> NoritoDeserialize<'de> + NoritoSerialize,
-    F: FnMut(T) -> Result<(), Error>,
-{
-    for _ in 0..len {
-        let (elem_len, header_len) = read_len_dyn_slice(&bytes[offset..])?;
-        offset = offset
-            .checked_add(header_len)
-            .ok_or(Error::LengthMismatch)?;
-        let data_start = offset;
-        let expected_end = data_start
-            .checked_add(elem_len)
-            .ok_or(Error::LengthMismatch)?;
-        if expected_end > bytes.len() {
-            return Err(Error::LengthMismatch);
-        }
-        let decode_input = if elem_len == 0 {
-            &bytes[data_start..]
-        } else {
-            &bytes[data_start..expected_end]
-        };
-        let (value, used) = decode_field_canonical::<T>(decode_input)?;
-        if used > bytes.len().saturating_sub(data_start) {
-            return Err(Error::LengthMismatch);
-        }
-        if elem_len != 0 && used != elem_len {
-            return Err(Error::LengthMismatch);
-        }
-        if elem_len == 0 && used == 0 && core::mem::size_of::<T>() != 0 {
-            return Err(Error::LengthMismatch);
-        }
-        let consumed = if elem_len == 0 { used } else { elem_len };
-        let data_end = data_start
-            .checked_add(consumed)
-            .ok_or(Error::LengthMismatch)?;
-        record_slice_access(&bytes[data_start..data_end], consumed);
-        on_value(value)?;
-        offset = data_end;
-    }
-    Ok(offset)
-}
 fn decode_sequence_elements<'a, T, F>(bytes: &'a [u8], mut on_value: F) -> Result<usize, Error>
 where
     T: for<'de> NoritoDeserialize<'de> + NoritoSerialize,
     F: FnMut(T) -> Result<(), Error>,
 {
-    let (len, offset) = read_seq_len_slice(bytes)?;
+    let (len, _) = read_seq_len_slice(bytes)?;
     let flags = effective_decode_flags().unwrap_or_else(default_encode_flags);
     let layout = if use_packed_seq() {
         BinarySequenceLayout::FixedOffsets
@@ -3350,12 +3252,6 @@ where
         BinarySequenceLayout::LengthPrefixed
     };
     let plan = plan_binary_sequence_with_count(bytes, flags, layout, len)?;
-    if layout == BinarySequenceLayout::LengthPrefixed
-        && core::mem::size_of::<T>() != 0
-        && plan.spans.iter().any(SequenceSpan::is_empty)
-    {
-        return decode_length_prefixed_sequence_legacy_with::<T, _>(bytes, len, offset, on_value);
-    }
     for span in &plan.spans {
         let element_slice = span.get(bytes)?;
         record_slice_access(element_slice, span.len());
@@ -7915,7 +7811,7 @@ impl<'a> ArchiveView<'a> {
     pub fn schema(&self) -> [u8; 16] {
         self.schema
     }
-    fn decode_with<T, F>(&self, allow_zero_padding: bool, decode: F) -> Result<T, Error>
+    fn decode_with<T, F>(&self, decode: F) -> Result<T, Error>
     where
         F: FnOnce(&'a [u8]) -> Result<(T, usize), Error>,
     {
@@ -7926,11 +7822,11 @@ impl<'a> ArchiveView<'a> {
             self.flags_hint,
         );
         let (value, used) = decode(self.bytes)?;
-        validate_decode_consumption(self.bytes, used, allow_zero_padding)?;
+        validate_decode_consumption(self.bytes, used)?;
         Ok(value)
     }
-    fn decode_inner<T: DecodeFromSlice<'a>>(&self, allow_zero_padding: bool) -> Result<T, Error> {
-        self.decode_with(allow_zero_padding, T::decode_from_slice)
+    fn decode_inner<T: DecodeFromSlice<'a>>(&self) -> Result<T, Error> {
+        self.decode_with(T::decode_from_slice)
     }
     /// Decode a value from the payload using the strict-safe slice-based path,
     /// enforcing the header schema hash and payload-derived resource limits.
@@ -7945,15 +7841,14 @@ impl<'a> ArchiveView<'a> {
             return Err(Error::LengthMismatch);
         }
         with_decode_limits(crate::canonical_decode_limits(self.bytes.len()), || {
-            self.decode_inner(true)
+            self.decode_inner()
         })
     }
     /// Decode a value under payload-derived resource limits while requiring the
     /// slice decoder to consume the complete payload.
     ///
-    /// This is intended for custom codecs whose payload decoder itself enforces one
-    /// canonical representation. Unlike [`Self::decode`], it does not accept a
-    /// zero-filled logical tail inside the checksummed payload.
+    /// This explicit name is retained for call sites that emphasize canonical
+    /// framing. All V1 archive-view decoders require complete payload consumption.
     pub fn decode_exact<T>(&self) -> Result<T, Error>
     where
         T: DecodeFromSlice<'a> + NoritoDeserialize<'a>,
@@ -7965,7 +7860,7 @@ impl<'a> ArchiveView<'a> {
             return Err(Error::LengthMismatch);
         }
         with_decode_limits(crate::canonical_decode_limits(self.bytes.len()), || {
-            self.decode_inner(false)
+            self.decode_inner()
         })
     }
     /// Decode a value with a custom payload decoder while enforcing the header schema,
@@ -7985,34 +7880,21 @@ impl<'a> ArchiveView<'a> {
             return Err(Error::LengthMismatch);
         }
         with_decode_limits(crate::canonical_decode_limits(self.bytes.len()), || {
-            self.decode_with(false, decode)
+            self.decode_with(decode)
         })
     }
     /// Decode a value under payload-derived resource limits without enforcing the schema hash.
     pub fn decode_unchecked<T: DecodeFromSlice<'a>>(&self) -> Result<T, Error> {
         with_decode_limits(crate::canonical_decode_limits(self.bytes.len()), || {
-            self.decode_inner(true)
+            self.decode_inner()
         })
     }
 }
-fn validate_decode_consumption(
-    bytes: &[u8],
-    used: usize,
-    allow_zero_padding: bool,
-) -> Result<(), Error> {
+fn validate_decode_consumption(bytes: &[u8], used: usize) -> Result<(), Error> {
     if used == bytes.len() {
         return Ok(());
     }
-    if !allow_zero_padding {
-        return Err(Error::LengthMismatch);
-    }
-    // Some payloads carry trailing zero alignment bytes after the logical
-    // decode boundary. Accept those, while still rejecting non-zero tails.
-    let tail = bytes.get(used..).ok_or(Error::LengthMismatch)?;
-    if tail.iter().any(|byte| *byte != 0) {
-        return Err(Error::LengthMismatch);
-    }
-    Ok(())
+    Err(Error::LengthMismatch)
 }
 /// Validate bytes and return an archive view over the payload slice.
 pub fn from_bytes_view<'a>(bytes: &'a [u8]) -> Result<ArchiveView<'a>, Error> {
@@ -8074,7 +7956,7 @@ where
         return crate::guarded_try_deserialize(|| {
             let _guard = PayloadCtxGuard::enter_with_flags_hint(payload_src, flags, flags_hint);
             let (value, used) = <T as DecodeFromSlice>::decode_from_slice(payload_src)?;
-            validate_decode_consumption(payload_src, used, true)?;
+            validate_decode_consumption(payload_src, used)?;
             Ok(value)
         });
     }
@@ -8086,7 +7968,10 @@ where
     crate::guarded_try_deserialize(|| {
         let _guard = PayloadCtxGuard::enter_with_flags_hint(payload_src, flags, flags_hint);
         let archived = unsafe { &*archived_ptr };
-        T::try_deserialize(archived)
+        let value = T::try_deserialize(archived)?;
+        let used = header_len.max(payload_ctx_max_access().unwrap_or(0));
+        validate_decode_consumption(payload_src, used)?;
+        Ok(value)
     })
 }
 /// Strict-safe slice decode with an explicit resource budget.
@@ -8272,11 +8157,7 @@ fn decode_field_erased(
     } else {
         None
     };
-    let _flags_guard = if decode_flags_active() {
-        None
-    } else {
-        Some(DecodeFlagsGuard::enter(default_encode_flags()))
-    };
+    let _flags_guard = enter_field_codec_flags();
     let align = slot.archived_align();
     let needs_realign = align > 1 && !(bytes.as_ptr() as usize).is_multiple_of(align);
     let aligned = if needs_realign {
@@ -8392,34 +8273,6 @@ where
     *offset = next_offset;
     Ok(value)
 }
-/// Decode one length-prefixed field through the archived-value compatibility path.
-#[doc(hidden)]
-#[inline(never)]
-pub fn decode_context_field_archived<T>(ptr: *const u8, offset: &mut usize) -> Result<T, Error>
-where
-    T: for<'de> crate::NoritoDeserialize<'de>,
-{
-    let (field, next_offset) = take_length_prefixed_context_field(ptr, *offset)?;
-    let value = decode_archived_field::<T>(field)?;
-    *offset = next_offset;
-    Ok(value)
-}
-/// Decode one fixed-width field relative to an active payload context.
-#[doc(hidden)]
-#[inline(never)]
-pub fn decode_context_field_fixed_archived<T>(
-    ptr: *const u8,
-    offset: &mut usize,
-    len: usize,
-) -> Result<T, Error>
-where
-    T: for<'de> crate::NoritoDeserialize<'de>,
-{
-    let (field, next_offset) = take_context_field(ptr, *offset, len)?;
-    let value = decode_archived_field::<T>(field)?;
-    *offset = next_offset;
-    Ok(value)
-}
 /// Canonically decode one fixed-width field relative to an active payload context.
 #[doc(hidden)]
 #[inline(never)]
@@ -8483,61 +8336,6 @@ where
     *offset = offset.checked_add(used).ok_or(Error::LengthMismatch)?;
     Ok(value)
 }
-/// Decode a bounded field canonically, retaining the archived compatibility fallback.
-#[doc(hidden)]
-#[inline(never)]
-pub fn decode_context_field_canonical_or_archived<T>(
-    ptr: *const u8,
-    offset: &mut usize,
-) -> Result<T, Error>
-where
-    T: for<'de> crate::NoritoDeserialize<'de> + crate::NoritoSerialize,
-{
-    let (field, next_offset) = take_length_prefixed_context_field(ptr, *offset)?;
-    let value = match decode_field_canonical::<T>(field) {
-        Ok((value, used)) if used == field.len() => Ok(value),
-        Ok(_) => Err(Error::LengthMismatch),
-        Err(error) if error.is_decode_resource_limit() => Err(error),
-        Err(_) => decode_archived_field::<T>(field),
-    }?;
-    *offset = next_offset;
-    Ok(value)
-}
-/// Decode an archived field and retain the compact-length nested-frame fallback.
-#[doc(hidden)]
-#[inline(never)]
-pub fn decode_context_field_archived_compat<T>(
-    ptr: *const u8,
-    offset: &mut usize,
-    len: usize,
-) -> Result<T, Error>
-where
-    T: for<'de> crate::NoritoDeserialize<'de>,
-{
-    let (field, next_offset) = take_context_field(ptr, *offset, len)?;
-    let value = match decode_archived_field::<T>(field) {
-        Ok(value) => Ok(value),
-        Err(error) if error.is_decode_resource_limit() => Err(error),
-        Err(error) => {
-            #[cfg(feature = "compact-len")]
-            {
-                if let Ok((inner_len, header_len)) = read_len_from_slice(field)
-                    && header_len.checked_add(inner_len) == Some(field.len())
-                {
-                    decode_archived_field::<T>(&field[header_len..])
-                } else {
-                    Err(error)
-                }
-            }
-            #[cfg(not(feature = "compact-len"))]
-            {
-                Err(error)
-            }
-        }
-    }?;
-    *offset = next_offset;
-    Ok(value)
-}
 /// Finish a derive-generated field sequence at the active decode boundary.
 ///
 /// Canonical field decodes must consume the complete payload. Prefix decodes
@@ -8591,11 +8389,7 @@ where
     } else {
         None
     };
-    let _flags_guard = if decode_flags_active() {
-        None
-    } else {
-        Some(DecodeFlagsGuard::enter(default_encode_flags()))
-    };
+    let _flags_guard = enter_field_codec_flags();
     let payload_guard = PayloadCtxGuard::enter(bytes);
     let (value, used) = <T as DecodeFromSlice>::decode_from_slice(bytes)?;
     if require_full_consumption && used != bytes.len() {

@@ -1522,49 +1522,49 @@ def check(overrides: dict[str, str] | None = None) -> None:
 
     require(
         re.search(
-            r"PRIVACY_REQUIRED_BRIDGE_ABI_VERSION\s*=\s*22\s*;",
+            r"PRIVACY_REQUIRED_BRIDGE_ABI_VERSION\s*=\s*23\s*;",
             js_crypto,
         )
         is not None
         and "abiVersion === PRIVACY_REQUIRED_BRIDGE_ABI_VERSION" in js_crypto
         and "abiVersion >= PRIVACY_REQUIRED_BRIDGE_ABI_VERSION" not in js_crypto,
-        "JavaScript privacy bridge must require exact first-release ABI 22",
+        "JavaScript privacy bridge must require exact first-release ABI 23",
         errors,
     )
     require(
-        literal_assignment(py_crypto, "PRIVACY_REQUIRED_BRIDGE_ABI_VERSION") == 22
+        literal_assignment(py_crypto, "PRIVACY_REQUIRED_BRIDGE_ABI_VERSION") == 23
         and "version == PRIVACY_REQUIRED_BRIDGE_ABI_VERSION" in py_crypto
         and "version >= PRIVACY_REQUIRED_BRIDGE_ABI_VERSION" not in py_crypto,
-        "Python privacy bridge must require exact first-release ABI 22",
+        "Python privacy bridge must require exact first-release ABI 23",
         errors,
     )
     require(
         "fn privacy_bridge_abi_version_py() -> u32" in py_native
         and "PRIVACY_BRIDGE_ABI_VERSION_V1" in py_native,
-        "Python native privacy bridge must report first-release bridge ABI 22",
+        "Python native privacy bridge must report first-release bridge ABI 23",
         errors,
     )
     for relative, marker in (
         (
             "java/iroha_android/src/main/java/org/hyperledger/iroha/android/privacy/PrivacyNativeBridge.java",
-            "REQUIRED_BRIDGE_ABI_VERSION = 22",
+            "REQUIRED_BRIDGE_ABI_VERSION = 23",
         ),
         (
             "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/privacy/PrivacyNativeBridge.kt",
-            "REQUIRED_BRIDGE_ABI_VERSION: Int = 22",
+            "REQUIRED_BRIDGE_ABI_VERSION: Int = 23",
         ),
         (
             "IrohaSwift/Sources/IrohaSwift/PrivacyNativeBridge.swift",
-            "requiredBridgeABIVersion: UInt32 = 22",
+            "requiredBridgeABIVersion: UInt32 = 23",
         ),
         (
             "csharp/src/Hyperledger.Iroha.Sdk/Privacy/PrivacyNative.cs",
-            "RequiredBridgeAbiVersion = 22",
+            "RequiredBridgeAbiVersion = 23",
         ),
     ):
         require(
             marker in read(relative, overrides),
-            f"{relative} must require exact first-release bridge ABI 22",
+            f"{relative} must require exact first-release bridge ABI 23",
             errors,
         )
 
@@ -1868,7 +1868,7 @@ def check(overrides: dict[str, str] | None = None) -> None:
     require(
         "loadedBridgeAbiVersion == PrivacyNativeBridge.requiredBridgeABIVersion"
         in swift_native_bridge,
-        "Swift privacy availability must require exact first-release ABI 22",
+        "Swift privacy availability must require exact first-release ABI 23",
         errors,
     )
 
@@ -2576,15 +2576,15 @@ if mode:
     elif mode == "--negative-control-js-privacy-abi-drift":
         path = "javascript/iroha_js/src/crypto.js"
         overrides[path] = read(path, {}).replace(
+            "PRIVACY_REQUIRED_BRIDGE_ABI_VERSION = 23",
             "PRIVACY_REQUIRED_BRIDGE_ABI_VERSION = 22",
-            "PRIVACY_REQUIRED_BRIDGE_ABI_VERSION = 21",
             1,
         )
     elif mode == "--negative-control-python-privacy-abi-drift":
         path = "python/iroha_python/src/iroha_python/crypto.py"
         overrides[path] = read(path, {}).replace(
+            "PRIVACY_REQUIRED_BRIDGE_ABI_VERSION: Final[int] = 23",
             "PRIVACY_REQUIRED_BRIDGE_ABI_VERSION: Final[int] = 22",
-            "PRIVACY_REQUIRED_BRIDGE_ABI_VERSION: Final[int] = 21",
             1,
         )
     elif mode == "--negative-control-canonical-backend-alias-rejection-coverage":

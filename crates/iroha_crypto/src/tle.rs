@@ -12,7 +12,6 @@
 //! [`crate::timed_ovn`], whose release term is intrinsic to its one-hot proof;
 //! this standalone DEM envelope is not a plaintext or manual-opening fallback.
 
-use core::fmt;
 use std::vec::Vec;
 
 use aead::{Aead as _, KeyInit as _, Payload};
@@ -157,6 +156,8 @@ pub struct TleReleaseIdentityV1 {
     body_instance_id: [u8; 32],
     ballot_attempt_id: [u8; 32],
     survivor_corpus_root: [u8; 32],
+    // Generic compatibility slot for an application-defined context root.
+    // Timed OVN passes only its replay-derived no-recovery sentinel here.
     recovery_root: [u8; 32],
     target_finalized_height: u64,
     parameter_hash: [u8; 32],
@@ -167,6 +168,9 @@ impl TleReleaseIdentityV1 {
     ///
     /// The embedded threshold session supplies the network, TLE session,
     /// frozen validator-roster hash, committee size, and threshold bindings.
+    /// `protocol_context_root` is an opaque application binding: this module
+    /// neither interprets it as a recovery corpus nor exposes a recovery path.
+    /// Timed OVN supplies its locally replay-derived no-recovery sentinel.
     ///
     /// # Errors
     ///
@@ -178,7 +182,7 @@ impl TleReleaseIdentityV1 {
         body_instance_id: [u8; 32],
         ballot_attempt_id: [u8; 32],
         survivor_corpus_root: [u8; 32],
-        recovery_root: [u8; 32],
+        protocol_context_root: [u8; 32],
         target_finalized_height: u64,
         parameter_hash: [u8; 32],
     ) -> Result<Self, TleError> {
@@ -187,7 +191,7 @@ impl TleReleaseIdentityV1 {
             body_instance_id,
             ballot_attempt_id,
             survivor_corpus_root,
-            recovery_root,
+            protocol_context_root,
             parameter_hash,
         ]
         .iter()
@@ -204,7 +208,7 @@ impl TleReleaseIdentityV1 {
             body_instance_id,
             ballot_attempt_id,
             survivor_corpus_root,
-            recovery_root,
+            recovery_root: protocol_context_root,
             target_finalized_height,
             parameter_hash,
         })
@@ -427,25 +431,11 @@ impl TleEnvelopeV1 {
 /// Dedicated, non-cloneable, zeroizing future TLE identity private key.
 ///
 /// This value is intentionally separate from generic account and consensus
-/// signing keys. Its debug representation never contains secret material.
+/// signing keys and has no serialization, byte-export, or `Debug` implementation.
 pub struct TleIdentitySecretKeyV1 {
     master_public_key: TleMasterPublicKey,
     identity_digest: [u8; 32],
     secret_bytes: Zeroizing<[u8; THRESHOLD_BLS_SIGNATURE_BYTES]>,
-}
-
-impl fmt::Debug for TleIdentitySecretKeyV1 {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter
-            .debug_struct("TleIdentitySecretKeyV1")
-            .field(
-                "session_id",
-                &hex::encode(self.master_public_key.session_id()),
-            )
-            .field("identity_digest", &hex::encode(self.identity_digest))
-            .field("secret_bytes", &"<redacted>")
-            .finish()
-    }
 }
 
 impl TleIdentitySecretKeyV1 {

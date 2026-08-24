@@ -116,7 +116,7 @@ verified native artifact directory.
 ## Native SoraFS Reference Validation
 
 The repository SoraFS qualification runner pins
-`IROHA_JS_NATIVE_BUILD_PROFILE=release` for its authenticated ABI-22 host
+`IROHA_JS_NATIVE_BUILD_PROFILE=release` for its authenticated ABI-23 host
 artifact. Plain source-checkout builds remain `debug` unless the profile is
 selected explicitly.
 
@@ -160,11 +160,10 @@ native dispatch. Fixture-bundle and Governance DAG block entries use `bytes`.
 
 The JavaScript package exposes the four stable Kagemusha Torii routes through
 `getOfflineCapability`, `submitKagemushaTopUpV4`,
-`submitKagemushaRedeemV4`, and `getKagemushaOperationStatus`. Readiness is
-an asset-neutral protocol capability compiled into every deployment. Discovery
-accepts only the exact `cash_handoff_v1`, bridge ABI 22, eight-hop universal
-`OfflineStatus` with `mandatory: false`, `ready: true`, and empty asset and
-blocker lists. No selector-taking readiness alias is exported.
+`submitKagemushaRedeemV4`, and `getKagemushaOperationStatus`. Discovery is
+an asset-neutral protocol capability compiled into every deployment and accepts
+only the exact four-field `cash_handoff_v1`, bridge ABI 23, eight-hop
+`OfflineStatus` with `ready: true`.
 
 This is deliberately a transport-only boundary. Command helpers require an
 externally produced `{ version: 4, operationId, norito }` archive and never
@@ -187,7 +186,7 @@ committed height, consensus policy, activation, or readiness projection and
 cannot authorize a network operation. Import
 `getPrivacyExact12CapabilityManifestV1` from
 `@iroha/iroha-js/privacy-capabilities` to fetch Torii's canonical Norito
-manifest through the Node/N-API client. The authenticated ABI22 binding applies
+manifest through the Node/N-API client. The authenticated ABI23 binding applies
 the bounded canonical decoder; transaction construction must then call
 `requirePrivacyExact12CapabilityAdmissionV1`, which requires committed Active
 state and byte-exact equality with the selected local compiled-profile row.
@@ -1060,7 +1059,14 @@ const registerAccountInstruction = buildRegisterAccountInstruction({
 });
 console.log(noritoDecodeInstruction(registerAccountInstruction).Register.Account.id);
 
-const receipt = await torii.submitTransaction(encoded);
+const { signedTransaction } = buildTransaction({
+  networkId,
+  authority,
+  instructions: [instruction],
+  feePayment: { payer: "authority", chargeLimits: [] },
+  privateKey,
+});
+const receipt = await torii.submitTransaction(signedTransaction);
 const sampleHashHex =
   receipt?.payload?.tx_hash ?? "ab".repeat(32); // 32-byte transaction hash as lowercase hex
 const status = await torii.getTransactionStatus(sampleHashHex);
@@ -1069,6 +1075,10 @@ console.log(status?.status.kind); // e.g. "Applied"
 // Normalised helper exposes canonical fields (`kind`, `hashHex`, `status.kind`, etc.)
 const typedStatus = await torii.getTransactionStatusTyped(sampleHashHex);
 console.log(typedStatus?.status?.kind); // e.g. "Applied"
+
+// Node submission accepts only the exact canonical VersionedSignedTransaction
+// V1 wire emitted by the native builders. Framed, bare, headerless, alternate-
+// layout, and opaque byte payloads are rejected before any network request.
 
 // The wait helpers also ship normalised variants if you prefer structured DTOs
 await torii.waitForTransactionStatusTyped(sampleHashHex, { intervalMs: 500 });
@@ -1907,10 +1917,6 @@ console.log(`leader index=${leader.leader_index} epoch seed=${leader.prf.epoch_s
 
 const params = await torii.getSumeragiParams();
 console.log(`block time=${params.block_time_ms}ms next mode=${params.next_mode ?? "current"}`);
-
-// Consensus key lifecycle history
-const keyRecords = await torii.listSumeragiKeyLifecycle();
-console.log(`latest key record status=${keyRecords[0]?.status ?? "none"}`);
 ```
 
 All advanced helpers validate the Torii payloads and coerce numeric string
@@ -1950,7 +1956,6 @@ const snapshot = await torii.getStatusSnapshot();
 console.log(
   `queue=${snapshot.status.queue_size} Δ=${snapshot.metrics.queue_delta} approvals=${snapshot.metrics.tx_approved_delta}`,
 );
-console.log(`DA reschedules this interval=${snapshot.metrics.da_reschedule_delta}`);
 if (snapshot.status.governance) {
   const admission = snapshot.status.governance.manifest_admission;
   console.log(
@@ -2022,8 +2027,8 @@ const exposure = await torii.getSorafsHedgingExposure({
 The exposure and intent reads require a treasury- or hedging-observer role.
 These APIs expose projections only; automatic hedge execution remains absent.
 
-Pin registration accepts only a caller-signed, versioned transaction containing
-exactly one native `RegisterPinManifest` instruction. Build and fee-quote that
+Pin registration accepts only an exact canonical `VersionedSignedTransaction`
+V1 containing exactly one native `RegisterPinManifest` instruction. Build and fee-quote that
 transaction locally; neither the raw private key nor any secret-bearing JSON
 request is sent to Torii. The immediate response is only an admission identity,
 not a finality, fee, custody, or pin-status receipt.
@@ -2488,6 +2493,15 @@ contract (the claim account must also match the signed path). Canonical headers
 are generated locally over the exact method, path, query, and body; callers
 cannot supply precomputed headers or inline body secrets, and signed requests
 are never redirected or retried.
+
+## Sora VPN lease receipts
+
+`submitVpnReceipt` returns earned/refund XOR fields and the native
+`settleLeaseInstruction` that the operator must sign and submit. Its receipt
+status is exactly `settlement_pending` while that instruction is uncommitted;
+only a receipt later read from committed WSV state uses `settled`. The client
+also retains the exact `disconnected`, `expired`, and `replaced` lifecycle
+statuses and rejects padded or case-drifted spellings.
 
 ## SoraNet Puzzle & Token Service Client
 
@@ -3007,7 +3021,7 @@ await torii.cancelIvmProveJob(created.job_id, { canonicalAuth });
 Validation-fee authority is ledger-native. Applications obtain bounded policy
 proof pages with `ToriiClient.getValidationFeeCurrentPolicyProofPage`, anchored
 to an immutable exact `NetworkId`/policy-chain binding and a durable checkpoint.
-The ABI 22 native bridge verifies the Norito proof and returns an immutable
+The ABI 23 native bridge verifies the Norito proof and returns an immutable
 projection; JavaScript never substitutes application-supplied signatures or
 keysets for that trusted boundary. Persist every promoted checkpoint before
 requesting the next page. `catchUpValidationFeeCurrentPolicyProof` is available
@@ -3035,6 +3049,14 @@ do {
 console.log("verified Parliament policy:", page.projection.current_policy);
 ```
 
+Each projected Parliament authorization is the exact certificate-backed V1
+record: `proposal_kind`, `proposal_operator`, `proposal_id`, `payload_hash`,
+`governance_certificate_id`, `governance_certificate`,
+`certified_at_height`, and `enacted_at_height`. The SDK rejects missing,
+unknown, and structurally invalid nested fields, recursively checks the complete
+certificate, and binds the proposal and canonical decimal-string heights to its
+retained certificate.
+
 Callers cannot provide validation-fee policy signatures, governance keysets, or
 reserved policy metadata. Validator admission derives the active policy from
 the Parliament registry and remains authoritative. An enabled first-release
@@ -3043,9 +3065,8 @@ charges exactly 10 minor units at scale 2 (`0.10`).
 
 Validation-fee proposal IDs are available only through the native canonical
 `ProposalKind` encoder. Both proposal kinds require the canonical proposal
-operator and complete first-release PLAIN electorate contract, so a caller
-cannot fingerprint the same policy or payout binding under a different
-retained proposer or ballot rules:
+operator, so a caller cannot fingerprint the same policy or payout binding
+under a different retained proposer:
 
 ```js
 import {
@@ -3053,42 +3074,21 @@ import {
   computeValidationFeePolicyProposalFingerprintV1,
 } from "@iroha/iroha-js";
 
-const plainElectorateRules = {
-  voting_asset_id: "5dHF5UNffENuEg9mhjYwY1jcZ1K5",
-  bond_escrow_account: BOND_ESCROW_ACCOUNT_ID,
-  slash_receiver_account: SLASH_RECEIVER_ACCOUNT_ID,
-  ballot_amount: "150",
-  ballot_duration_blocks: "3600",
-  citizenship_amount: "10000",
-  max_members: "256",
-  conviction_step_blocks: "100",
-  max_conviction: "6",
-  min_turnout: "1",
-  approval_threshold_numerator: "1",
-  approval_threshold_denominator: "2",
-  eligibility_rule: {
-    rule: "proposal_operator_at_or_before_gate_others_after_gate",
-    value: null,
-  },
-};
-
 const lifecycleId =
   computeValidationFeePayoutLifecycleProposalFingerprintV1(
     PROPOSAL_OPERATOR_ACCOUNT_ID,
     payoutBinding,
-    plainElectorateRules,
   );
 const policyId = computeValidationFeePolicyProposalFingerprintV1(
   PROPOSAL_OPERATOR_ACCOUNT_ID,
   policy,
   lifecycleId,
-  plainElectorateRules,
 );
 ```
 
 The native bridge rejects a missing or non-canonical operator plus missing,
-extra, legacy, and non-canonical JSON fields before fingerprinting; these
-helpers do not provide a JavaScript hashing fallback.
+extra, and non-canonical JSON fields before fingerprinting; these helpers do
+not provide a JavaScript hashing fallback.
 
 `submitIvmProvedContractCall` quotes the exact unsigned `IvmProved` payload,
 rebuilds its signature-bound fee intent from the quote, reattaches the proof,
@@ -3121,10 +3121,13 @@ retrofitted by this client helper; it must be rebuilt and deployed by its owner.
 The helper is asset- and venue-neutral and does not create pools, choose asset
 pairs, or install official liquidity defaults.
 
-## Governance Voting Helpers
+## Governance Proposal and Ballot Helpers
 
-The governance ISI builders mirror the Torii DTOs, handling hash/hex
-normalisation, referendum windows, and ballot encoding:
+The governance ISI builders mirror the first-release Torii DTOs. Proposal
+builders contain immutable proposal content only; Parliament derives lifecycle
+timing and execution automatically. Hash inputs are normalized into the typed
+32-byte governance hash wrappers, while ballot builders retain their standalone
+referendum/election encoding:
 
 ```js
 import { AccountAddress } from "@iroha/iroha-js";
@@ -3141,7 +3144,6 @@ import {
   buildProposeDeployContractTransaction,
   buildCastPlainBallotTransaction,
   buildCastZkBallotTransaction,
-  buildEnactReferendumTransaction,
 } from "@iroha/iroha-js";
 
 const proposalTx = buildProposeDeployContractTransaction({
@@ -3152,9 +3154,7 @@ const proposalTx = buildProposeDeployContractTransaction({
     contractAddress: "irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw",
     codeHash: Buffer.alloc(32, 0xaa),
     abiHash: `blake2b32:${"bb".repeat(32)}`,
-    abiVersion: "1",
-    window: { lower: Date.now(), upper: Date.now() + 60000 },
-    votingMode: "Plain",
+    abiVersion: 1,
   },
   privateKey,
 });
@@ -3192,17 +3192,6 @@ const plainBallotTx = buildCastPlainBallotTransaction({
   privateKey,
 });
 
-const enactTx = buildEnactReferendumTransaction({
-  networkId,
-  authority,
-  feePayment,
-  enactment: {
-    referendumId: Buffer.alloc(32, 0xee),
-    preimageHash: Buffer.alloc(32, 0xdd),
-    window: { lower: 100, upper: 200 },
-  },
-  privateKey,
-});
 ```
 
 The local deployment builder accepts only a canonical `contractAddress`; alias
@@ -3213,9 +3202,11 @@ offline. Its camel-case input is closed, ABI V1 is exact, and the optional
 `duration_blocks`, `direction`, and `nullifier`. Durations retain the complete
 u64 range and directions use exactly `Aye`, `Nay`, or `Abstain`.
 
-Helper inputs accept either strings or raw `Buffer`s for 32-byte hashes, ensure
-referendum windows remain ordered, and convert ballot payloads to canonical
-Norito JSON before signing.
+Helper inputs accept either strings or raw `Buffer`s for 32-byte hashes and
+convert proposal and ballot payloads to canonical Norito before signing.
+Proposal timing, certification, and execution are Core-derived Parliament
+state transitions and have no client-controlled lifecycle fields or terminal
+builders.
 
 See the source-checkout-only `recipes/governance.mjs` for an end-to-end script
 that assembles the common governance transactions, prints deterministic hashes,
@@ -4089,6 +4080,7 @@ for await (const balance of torii.iterateAccountAssetsQuery("sorauﾛ1PｸCｶr�
 
 const governedContract = await torii.getGovernanceContract(
   "irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw",
+  { canonicalAuth },
 );
 console.log("governed contract:", governedContract.contract_address, governedContract.code_hash_hex);
 
@@ -4228,8 +4220,10 @@ for await (const event of torii.streamEvents({
   break; // stop after the first event in this example
 }
 
+const governanceCanonicalAuth = { accountId: authority, privateKey };
 const governanceBinding = await torii.getGovernanceContract(
   "irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw",
+  { canonicalAuth: governanceCanonicalAuth },
 );
 console.log(
   `${governanceBinding.contract_address} :: ${governanceBinding.code_hash_hex}`,
@@ -4241,15 +4235,22 @@ console.log(
 const controller = new AbortController();
 const proposal = await torii.getGovernanceProposal("ab".repeat(32), {
   signal: controller.signal,
+  canonicalAuth: governanceCanonicalAuth,
 });
 console.log(proposal?.proposal?.kind);
 
-// Typed wrapper returns a structured not-found result when the proposal is missing.
-const proposalResult = await torii.getGovernanceProposalTyped("cd".repeat(32));
+// Typed wrapper returns a structured not-found result and a closed seven-variant
+// ProposalKind union; it rejects unknown tags instead of leaking raw JSON.
+const proposalResult = await torii.getGovernanceProposalTyped(
+  "cd".repeat(32),
+  { canonicalAuth: governanceCanonicalAuth },
+);
 if (!proposalResult.found) {
   console.warn("proposal not found");
 }
-const tallyResult = await torii.getGovernanceTallyTyped("ref-mainnet");
+const tallyResult = await torii.getGovernanceTallyTyped("ref-mainnet", {
+  canonicalAuth: governanceCanonicalAuth,
+});
 if (!tallyResult.found) {
   console.warn("tally not found");
 } else {
@@ -4263,19 +4264,16 @@ if (!tallyResult.found) {
 
 // Governance write helpers also accept AbortSignal options so transactions can be cancelled.
 const writeController = new AbortController();
-const governanceCanonicalAuth = { accountId: authority, privateKey };
 const deployDraft = await torii.governanceProposeDeployContract({
   contractAddress: "irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw",
   codeHash: "11".repeat(32),
   abiHash: Buffer.alloc(32, 0xaa),
-  abiVersion: "1",
-  window: { lower: 12_345, upper: 12_500 },
-  mode: "Plain",
+  abiVersion: 1,
   manifestProvenance: {
     signer: `ed25519:${manifestSignerMultihashHex}`,
     signature: `ed25519:${manifestSignatureHex}`,
   },
-}, { signal: writeController.signal });
+}, { canonicalAuth: governanceCanonicalAuth, signal: writeController.signal });
 console.log("proposal instructions", deployDraft.tx_instructions.length);
 
 const ballot = await torii.governanceSubmitPlainBallot({
@@ -4289,17 +4287,6 @@ const ballot = await torii.governanceSubmitPlainBallot({
 }, { canonicalAuth: governanceCanonicalAuth, signal: writeController.signal });
 if (!ballot.accepted) {
   console.warn("ballot rejected:", ballot.reason);
-}
-
-const parliamentBallot = await torii.governanceSubmitParliamentBallot({
-  authority,
-  networkId,
-  proposalId: "11".repeat(32),
-  body: "policy-jury",
-  decision: "approve",
-}, { canonicalAuth: governanceCanonicalAuth, signal: writeController.signal });
-if (!parliamentBallot.accepted) {
-  console.warn("Parliament ballot rejected:", parliamentBallot.reason);
 }
 
 const zkOwner = "sorauﾛ1Ni1A1mYｲzｳﾚﾊGﾆｲgｵ4ﾜｾﾒﾔzｺﾍz6ﾀFoVDﾇXzｹCkﾙ4CQVXL"; // canonical I105 account id for ZK public inputs
@@ -4328,14 +4315,15 @@ await torii.governanceSubmitZkBallotV1({
 // key store. Ballot drafts require exact-network canonical account
 // authentication, bind that account to `authority`, and never follow redirects
 // or retry their nonce-bearing body. Plain-ballot durations are sent as canonical u64 decimal strings,
-// including "0". Parliament decisions use only the exact lowercase labels
-// "approve", "reject", and "abstain". Finalize requires referendumId and
-// proposalId to be the same exact 64-character lowercase proposal fingerprint;
-// enact uses that proposal-id grammar as well.
+// including "0". Proposal-backed Parliament voting and enactment use the
+// certificate-driven Parliament attempt API rather than the retired equal-ballot,
+// finalize, and enact draft routes.
 // Protected namespace labels are exact printable-ASCII tokens and are never
 // trimmed.
 
-const council = await torii.getGovernanceCouncilCurrent();
+const council = await torii.getGovernanceCouncilCurrent({
+  canonicalAuth: governanceCanonicalAuth,
+});
 console.log(`active council epoch=${council.epoch} members=${council.members.length}`);
 
 const protectedNamespaceAbort = new AbortController();
@@ -4346,16 +4334,6 @@ const protectedNamespaces = await torii.getProtectedNamespaces({
   signal: protectedNamespaceAbort.signal,
 });
 console.log(protectedNamespaces.namespaces); // ["apps", "system"]
-
-const finalizeDraft = await torii.governanceFinalizeReferendumTyped({
-  referendumId: "01".repeat(32),
-  proposalId: "01".repeat(32),
-});
-console.log(`finalize instructions=${finalizeDraft.tx_instructions.length}`);
-const enactDraft = await torii.governanceEnactProposalTyped({
-  proposalId: "02".repeat(32),
-});
-console.log(`enact instructions=${enactDraft.tx_instructions.length}`);
 
 const registeredTriggers = await torii.listTriggers({
   namespace: "apps",
@@ -4453,11 +4431,6 @@ continuation point.
 
 `list*`/`query*` helpers and explorer QR snapshots now emit canonical I105 account
 literals only; address-format hints are no longer supported.
-
-`governanceFinalizeReferendumTyped` and `governanceEnactProposalTyped` normalise
-the Torii responses (or synthesize an empty draft when Torii replies with `204 No Content`)
-so automation always receives a `tx_instructions` array to sign without checking
-for `null`.
 
 ### Asset-lock cancellation
 

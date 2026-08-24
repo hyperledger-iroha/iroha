@@ -597,55 +597,47 @@ impl ValidationFeeCurrentPolicyProofV1 {
     }
 }
 /// Validation-fee governance proposal status exposed by the typed read API.
-#[derive(
-    Debug,
-    Clone,
-    Copy,
-    PartialEq,
-    Eq,
-    JsonDeserialize,
-    JsonSerialize,
-    NoritoDeserialize,
-    NoritoSerialize,
-)]
-#[norito(tag = "status", content = "value", rename_all = "SCREAMING_SNAKE_CASE")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, NoritoDeserialize, NoritoSerialize)]
 pub enum ValidationFeeProposalStatusV1 {
-    /// Parliament processing is still in progress.
+    /// Parliament processing is active or certified for future execution.
     Proposed,
-    /// Parliament certified approval.
-    Approved,
     /// Parliament reached a terminal rejection.
     Rejected,
     /// The proposal payload was enacted.
     Enacted,
     /// A concurrently enacted successor made this policy predecessor stale.
     Superseded,
+    /// The certified proposal effect failed atomically.
+    ExecutionFailed,
 }
-/// JSON-safe governance pipeline retained with a proposal.
-#[derive(
-    Debug, Clone, PartialEq, Eq, JsonDeserialize, JsonSerialize, NoritoDeserialize, NoritoSerialize,
-)]
-#[norito(deny_unknown_fields)]
-pub struct ValidationFeeProposalPipelineV1 {
-    /// Ordered stage records.
-    pub stages: Vec<ValidationFeeProposalPipelineStageV1>,
+impl norito::json::FastJsonWrite for ValidationFeeProposalStatusV1 {
+    fn write_json(&self, out: &mut String) {
+        let label = match self {
+            Self::Proposed => "Proposed",
+            Self::Rejected => "Rejected",
+            Self::Enacted => "Enacted",
+            Self::Superseded => "Superseded",
+            Self::ExecutionFailed => "ExecutionFailed",
+        };
+        norito::json::write_json_string(label, out);
+    }
 }
-/// One JSON-safe proposal pipeline stage.
-#[derive(
-    Debug, Clone, PartialEq, Eq, JsonDeserialize, JsonSerialize, NoritoDeserialize, NoritoSerialize,
-)]
-#[norito(deny_unknown_fields)]
-pub struct ValidationFeeProposalPipelineStageV1 {
-    /// Stable governance stage name.
-    pub stage: String,
-    /// Block height at which the stage began.
-    pub started_at: String,
-    /// Inclusive stage deadline, when configured.
-    pub deadline: Option<String>,
-    /// Completion height, when completed or failed.
-    pub completed_at: Option<String>,
-    /// Stable failure description, when the stage failed.
-    pub failure: Option<String>,
+impl norito::json::JsonDeserialize for ValidationFeeProposalStatusV1 {
+    fn json_deserialize(
+        parser: &mut norito::json::Parser<'_>,
+    ) -> Result<Self, norito::json::Error> {
+        match parser.parse_string()?.as_str() {
+            "Proposed" => Ok(Self::Proposed),
+            "Rejected" => Ok(Self::Rejected),
+            "Enacted" => Ok(Self::Enacted),
+            "Superseded" => Ok(Self::Superseded),
+            "ExecutionFailed" => Ok(Self::ExecutionFailed),
+            other => Err(norito::json::Error::InvalidField {
+                field: "status".to_owned(),
+                message: format!("unknown governance proposal status `{other}`"),
+            }),
+        }
+    }
 }
 /// One complete typed validation-fee proposal read from protected governance state.
 #[derive(
@@ -653,26 +645,52 @@ pub struct ValidationFeeProposalPipelineStageV1 {
 )]
 #[norito(deny_unknown_fields)]
 pub struct ValidationFeeProposalRecordV1 {
-    /// Lowercase deterministic proposal fingerprint.
-    pub proposal_id: String,
     /// Bonded citizen who created the proposal.
     pub proposer: AccountId,
     /// Exact native validation-fee proposal kind and payload.
-    pub proposal_kind: ProposalKind,
+    pub kind: ProposalKind,
     /// Height at which the proposal was created.
-    pub created_height: String,
+    #[norito(json = "first_release_exact_json_u64_number")]
+    pub created_height: u64,
     /// Current proposal status.
     pub status: ValidationFeeProposalStatusV1,
-    /// Exact governance pipeline with JSON-safe heights.
-    pub pipeline: ValidationFeeProposalPipelineV1,
-    /// Canonical certificate identifier after successful certification.
-    pub governance_certificate_id: Option<String>,
-    /// Height at which the successful certificate was finalized.
-    pub certified_at_height: Option<String>,
-    /// Exact certified enactment-due height.
-    pub enact_at_height: Option<String>,
-    /// Height at which enactment completed.
-    pub enacted_at_height: Option<String>,
+}
+mod first_release_exact_json_u64_number {
+    use norito::json::{
+        self, BoundedJsonError, JsonDeserialize, JsonSerialize, JsonWriteSink, Parser,
+    };
+
+    #[expect(
+        clippy::trivially_copy_pass_by_ref,
+        reason = "Norito field serializers receive values by shared reference"
+    )]
+    pub fn serialize(value: &u64, out: &mut String) {
+        value.json_serialize(out);
+    }
+
+    #[expect(
+        clippy::trivially_copy_pass_by_ref,
+        reason = "Norito bounded field serializers receive values by shared reference"
+    )]
+    pub fn serialize_bounded(
+        value: &u64,
+        out: &mut dyn JsonWriteSink,
+    ) -> Result<(), BoundedJsonError> {
+        value.json_serialize_to(out)
+    }
+
+    pub fn deserialize(parser: &mut Parser<'_>) -> Result<u64, json::Error> {
+        let value = u64::json_deserialize(parser)?;
+        if value > iroha_data_model::parliament_types::FIRST_RELEASE_MAX_EXACT_JSON_U64 {
+            return Err(json::Error::InvalidField {
+                field: "created_height".to_owned(),
+                message:
+                    "governance proposal creation height exceeds the exact JSON integer maximum"
+                        .to_owned(),
+            });
+        }
+        Ok(value)
+    }
 }
 fn validation_fee_proposal_default_page_limit() -> u32 {
     VALIDATION_FEE_PROPOSAL_PAGE_DEFAULT_LIMIT_V1
@@ -779,19 +797,37 @@ pub struct ValidationFeeProposalDetailV1 {
     pub governance_certificate: Option<GovernanceCertificateV1>,
 }
 /// Strict empty query for one validation-fee proposal detail projection.
-#[derive(
-    Debug,
-    Clone,
-    PartialEq,
-    Eq,
-    Default,
-    JsonDeserialize,
-    JsonSerialize,
-    NoritoDeserialize,
-    NoritoSerialize,
-)]
-#[norito(deny_unknown_fields)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, NoritoDeserialize, NoritoSerialize)]
 pub struct ValidationFeeProposalDetailQueryV1 {}
+impl norito::json::JsonSerialize for ValidationFeeProposalDetailQueryV1 {
+    fn json_serialize(&self, out: &mut String) {
+        out.push_str("{}");
+    }
+
+    fn json_serialize_to(
+        &self,
+        out: &mut dyn norito::json::JsonWriteSink,
+    ) -> Result<(), norito::json::BoundedJsonError> {
+        norito::json::write_validated_json_to("{}", out)
+    }
+}
+impl norito::json::JsonDeserialize for ValidationFeeProposalDetailQueryV1 {
+    fn json_deserialize(
+        parser: &mut norito::json::Parser<'_>,
+    ) -> Result<Self, norito::json::Error> {
+        let value =
+            <norito::json::Value as norito::json::JsonDeserialize>::json_deserialize(parser)?;
+        match value {
+            norito::json::Value::Object(fields) if fields.is_empty() => Ok(Self {}),
+            norito::json::Value::Object(_) => Err(norito::json::Error::Message(
+                "validation-fee proposal detail query rejects unknown fields".to_owned(),
+            )),
+            _ => Err(norito::json::Error::Message(
+                "validation-fee proposal detail query must be an empty object".to_owned(),
+            )),
+        }
+    }
+}
 /// Exact native validation-fee payload requested from the draft endpoint.
 #[derive(
     Debug, Clone, PartialEq, Eq, JsonDeserialize, JsonSerialize, NoritoDeserialize, NoritoSerialize,
@@ -913,6 +949,7 @@ mod tests {
         GovernanceExpectedHeadV1, ParliamentAggregateOutcomeV1, ParliamentAggregateTallyV1,
         ParliamentBallotCertificateBindingV1, ParliamentBody, ParliamentBodyCertificateBindingV1,
         ProposalContentId, RiskTierV1, SortitionRequestV1, TleKeySessionId, TleSessionId,
+        parliament_ballot_result_root_v1,
     };
     fn fixture_account(seed: u8) -> AccountId {
         let key_pair =
@@ -925,7 +962,7 @@ mod tests {
         enacted_at_height: u64,
     ) -> ValidationFeeParliamentAuthorizationV1 {
         let base = enacted_at_height
-            .checked_sub(7)
+            .checked_sub(10)
             .expect("certificate lifecycle");
         let root = |marker: u8| [marker; 32];
         let proposal_content_id = ProposalContentId::new(proposal_fingerprint);
@@ -959,12 +996,31 @@ mod tests {
             BallotAttemptId::derive_v1(body_instance_id, ballot_attempt_sequence);
         let release_beacon_session_id = BeaconSessionId::new(root(7));
         let tle_key_session_id = TleKeySessionId::new(root(8));
-        let release_height = base + 4;
+        let release_height = base + 7;
         let tle_session_id = TleSessionId::derive_v1(
             ballot_attempt_id,
             tle_key_session_id,
             release_beacon_session_id,
             release_height,
+        );
+        let opening_root = root(16);
+        let tally = ParliamentAggregateTallyV1 {
+            original_seats: 500,
+            accepted_ballots: 334,
+            aye: 200,
+            nay: 100,
+            abstain: 34,
+        };
+        let outcome = ParliamentAggregateOutcomeV1::Approved;
+        let result_height = base + 8;
+        let result_root = parliament_ballot_result_root_v1(
+            governance_attempt_id,
+            body_instance_id,
+            ballot_attempt_id,
+            opening_root,
+            tally,
+            outcome,
+            result_height,
         );
         let governance_certificate = GovernanceCertificateV1 {
             proposal_content_id,
@@ -978,12 +1034,14 @@ mod tests {
                 sortition_request_id: sortition_request.id,
                 sortition_request,
                 body: ParliamentBody::PolicyJury,
+                original_seats: tally.original_seats,
                 beacon_session_id,
                 beacon_pulse_id: BeaconPulseId::new(root(3)),
                 roster_root,
                 assignment_root: root(5),
-                result_root: root(6),
-                result_height: base + 5,
+                result_root,
+                result_height,
+                public_finding: None,
                 ballot: Some(ParliamentBallotCertificateBindingV1 {
                     ballot_attempt_id,
                     ballot_attempt_sequence,
@@ -997,18 +1055,21 @@ mod tests {
                     timed_commitment_root: root(14),
                     release_beacon_session_id,
                     registered_at_height: base + 3,
+                    registration_close_height: base + 4,
+                    survivor_freeze_height: base + 5,
+                    commitment_close_height: base + 6,
+                    registration_closed_at_height: base + 4,
+                    survivors_frozen_at_height: base + 5,
+                    commitment_closed_at_height: base + 6,
+                    max_ballot_retries: 3,
+                    max_corpus_entries: 1_000,
                     release_height,
+                    opening_deadline_height: result_height,
                     release_pulse_id: BeaconPulseId::new(root(15)),
                     opening_height: release_height,
-                    opening_root: root(16),
-                    tally: ParliamentAggregateTallyV1 {
-                        original_seats: 500,
-                        accepted_ballots: 334,
-                        aye: 200,
-                        nay: 100,
-                        abstain: 34,
-                    },
-                    outcome: ParliamentAggregateOutcomeV1::Approved,
+                    opening_root,
+                    tally,
+                    outcome,
                 }),
             }],
             policy_version: 1,
@@ -1018,7 +1079,7 @@ mod tests {
                 version: 1,
                 head_root: root(18),
             }),
-            certified_at_height: base + 6,
+            certified_at_height: base + 9,
             enact_at_height: enacted_at_height,
         };
         let governance_certificate_id = GovernanceCertificateId::derive_v1(&governance_certificate);
@@ -1201,6 +1262,54 @@ mod tests {
         );
         assert!(decode_validation_fee_proposal_cursor_v1(&encoded.to_uppercase()).is_err());
         assert!(decode_validation_fee_proposal_cursor_v1("").is_err());
+    }
+    #[test]
+    fn proposal_status_json_is_the_exact_five_pascal_case_strings() {
+        for (status, label) in [
+            (ValidationFeeProposalStatusV1::Proposed, "Proposed"),
+            (ValidationFeeProposalStatusV1::Rejected, "Rejected"),
+            (ValidationFeeProposalStatusV1::Enacted, "Enacted"),
+            (ValidationFeeProposalStatusV1::Superseded, "Superseded"),
+            (
+                ValidationFeeProposalStatusV1::ExecutionFailed,
+                "ExecutionFailed",
+            ),
+        ] {
+            let json = norito::json::to_string(&status).expect("serialize proposal status");
+            assert_eq!(json, format!("\"{label}\""));
+            assert_eq!(
+                norito::json::from_str::<ValidationFeeProposalStatusV1>(&json)
+                    .expect("deserialize proposal status"),
+                status
+            );
+        }
+        for retired in [
+            r#""Approved""#,
+            r#""PROPOSED""#,
+            r#"{"status":"PROPOSED","value":null}"#,
+        ] {
+            assert!(
+                norito::json::from_str::<ValidationFeeProposalStatusV1>(retired).is_err(),
+                "retired status representation must reject: {retired}"
+            );
+        }
+    }
+    #[test]
+    fn proposal_created_height_json_rejects_inexact_numbers() {
+        let maximum = iroha_data_model::parliament_types::FIRST_RELEASE_MAX_EXACT_JSON_U64;
+        let maximum_json = maximum.to_string();
+        let mut parser = norito::json::Parser::new(&maximum_json);
+        assert_eq!(
+            first_release_exact_json_u64_number::deserialize(&mut parser)
+                .expect("the exact JSON integer maximum is valid"),
+            maximum
+        );
+        let hostile_json = (maximum + 1).to_string();
+        let mut parser = norito::json::Parser::new(&hostile_json);
+        assert!(
+            first_release_exact_json_u64_number::deserialize(&mut parser).is_err(),
+            "one above the exact JSON integer maximum must reject"
+        );
     }
     #[test]
     fn proposal_list_query_defaults_to_a_bounded_page() {

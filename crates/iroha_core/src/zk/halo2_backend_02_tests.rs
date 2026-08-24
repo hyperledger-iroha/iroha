@@ -1,10 +1,6 @@
 // Lexically included by `zk::tests` to preserve the existing libtest paths.
-// Chip-backed Poseidon circuits (IPA): commit-open and merkle2
-#[cfg(all(
-    feature = "zk-halo2-ipa",
-    feature = "zk-halo2",
-    feature = "zk-halo2-ipa-poseidon"
-))]
+// Constrained Pow5 test circuits (IPA): commit-open and merkle2.
+#[cfg(all(feature = "zk-halo2-ipa", feature = "zk-halo2",))]
 mod ipa_fixture {
     use super::*;
     use halo2_proofs::{
@@ -135,28 +131,26 @@ mod ipa_fixture {
         square * square * value
     }
 
-    fn poseidon_pair(left: Scalar, right: Scalar) -> Scalar {
+    fn constrained_pow5_pair(left: Scalar, right: Scalar) -> Scalar {
         Scalar::from(2) * fifth_power(left + Scalar::from(7))
             + Scalar::from(3) * fifth_power(right + Scalar::from(13))
     }
 
     pub(super) fn commit_open_instance() -> Scalar {
-        poseidon_pair(Scalar::from(11), Scalar::from(31))
+        constrained_pow5_pair(Scalar::from(11), Scalar::from(31))
     }
 
     pub(super) fn vote_instances(depth: u64) -> [Scalar; 2] {
-        let commitment = poseidon_pair(Scalar::from(1), Scalar::from(12_345));
+        let commitment = constrained_pow5_pair(Scalar::from(1), Scalar::from(12_345));
         let mut root = commitment;
         for level in 0..depth {
-            root = poseidon_pair(root, Scalar::from(20 + level));
+            root = constrained_pow5_pair(root, Scalar::from(20 + level));
         }
         [commitment, root]
     }
 
     fn anon_commitment(value: u64, blinding: u64) -> Scalar {
-        Scalar::from(2) * fifth_power(Scalar::from(value))
-            + Scalar::from(3) * fifth_power(Scalar::from(blinding))
-            + Scalar::from(7)
+        constrained_pow5_pair(Scalar::from(value), Scalar::from(blinding)) + Scalar::from(7)
     }
 
     pub(super) fn anon_instances(depth: u64) -> [Scalar; 6] {
@@ -165,9 +159,13 @@ mod ipa_fixture {
         let output_zero = anon_commitment(6, 17);
         let output_one = anon_commitment(6, 19);
         let nullifier = anon_commitment(1_234_567, 42);
-        let mut root = input_zero;
-        for level in 0..depth {
-            root = poseidon_pair(root, Scalar::from(20 + level));
+        assert!(
+            depth > 0,
+            "the dual-membership fixture needs one merge level"
+        );
+        let mut root = constrained_pow5_pair(input_zero, input_one);
+        for level in 1..depth {
+            root = constrained_pow5_pair(root, Scalar::from(20 + level));
         }
         [
             input_zero,
@@ -179,44 +177,23 @@ mod ipa_fixture {
         ]
     }
 }
-#[cfg(all(
-    feature = "zk-halo2-ipa",
-    feature = "zk-halo2-ipa-poseidon",
-    feature = "zk-halo2",
-    feature = "zk-halo2-ipa-poseidon"
-))]
+#[cfg(all(feature = "zk-halo2-ipa", feature = "zk-halo2",))]
 #[test]
-fn halo2_poseidon_commit_open_chip_ipa() {
+fn halo2_constrained_commit_open_ipa() {
     let instances = [ipa_fixture::commit_open_instance()];
-    let proof = ipa_fixture::build_with_instances(
-        6,
-        pasta_tiny::poseidon::CommitOpenPoseidon::default(),
-        &[&instances],
-    );
+    let proof =
+        ipa_fixture::build_with_instances(6, pasta_tiny::CommitOpen::default(), &[&instances]);
     assert!(proof.verify_single("halo2/pasta/ipa/tiny-commit-open", &instances));
 }
-#[cfg(all(
-    feature = "zk-halo2-ipa",
-    feature = "zk-halo2-ipa-poseidon",
-    feature = "zk-halo2",
-    feature = "zk-halo2-ipa-poseidon"
-))]
+#[cfg(all(feature = "zk-halo2-ipa", feature = "zk-halo2",))]
 #[test]
-fn halo2_poseidon_merkle2_chip_ipa() {
-    let instances = [pasta_tiny::poseidon::merkle2_poseidon_sample_root()];
-    let proof = ipa_fixture::build_with_instances(
-        6,
-        pasta_tiny::poseidon::Merkle2Poseidon::default(),
-        &[&instances],
-    );
+fn halo2_constrained_merkle2_ipa() {
+    let instances = [pasta_tiny::merkle2_sample_root()];
+    let proof = ipa_fixture::build_with_instances(6, pasta_tiny::Merkle2::default(), &[&instances]);
     assert!(proof.verify_single("halo2/pasta/ipa/tiny-merkle2", &instances));
 }
 // Depth-8 end-to-end checks for vote/transfer circuits (IPA)
-#[cfg(all(
-    feature = "zk-halo2-ipa",
-    feature = "zk-halo2",
-    feature = "zk-halo2-ipa-poseidon"
-))]
+#[cfg(all(feature = "zk-halo2-ipa", feature = "zk-halo2",))]
 #[test]
 fn halo2_verify_vote_bool_commit_merkle8_ipa() {
     let instances = ipa_fixture::vote_instances(8);
@@ -227,11 +204,7 @@ fn halo2_verify_vote_bool_commit_merkle8_ipa() {
     );
     assert!(proof.verify_two_columns("halo2/pasta/ipa/vote-bool-commit-merkle8", &instances,));
 }
-#[cfg(all(
-    feature = "zk-halo2-ipa",
-    feature = "zk-halo2",
-    feature = "zk-halo2-ipa-poseidon"
-))]
+#[cfg(all(feature = "zk-halo2-ipa", feature = "zk-halo2",))]
 #[test]
 fn halo2_verify_anon_transfer_2x2_merkle8_ipa() {
     let instances = ipa_fixture::anon_instances(8);
@@ -242,30 +215,36 @@ fn halo2_verify_anon_transfer_2x2_merkle8_ipa() {
     );
     assert!(proof.verify_six_columns("halo2/pasta/ipa/anon-transfer-2x2-merkle8", &instances,));
 }
-// Poseidon-tagged (runtime-selected) variants: vote/transfer @ depth-8
-#[cfg(all(
-    feature = "zk-halo2-ipa",
-    feature = "zk-halo2",
-    feature = "zk-halo2-ipa-poseidon"
-))]
+// Test-only Pow5-tagged variants: vote/transfer @ depth-8.
+#[cfg(all(feature = "zk-halo2-ipa", feature = "zk-halo2",))]
 #[test]
-fn halo2_verify_vote_bool_commit_merkle8_poseidon_ipa() {
+fn halo2_verify_vote_bool_commit_merkle8_pow5_ipa() {
     let instances = ipa_fixture::vote_instances(8);
     let proof = ipa_fixture::build_with_instances(
         6,
-        poseidon_depth::VoteBoolCommitMerklePoseidon::<8>::default(),
+        pow5_depth::VoteBoolCommitMerklePow5::<8>::default(),
         &[&instances],
     );
     let backend = backend_tag_vote_bool_commit_merkle(8, true);
     assert!(proof.verify_two_columns(&backend, &instances));
 }
-#[cfg(all(
-    feature = "zk-halo2-ipa",
-    feature = "zk-halo2",
-    feature = "zk-halo2-ipa-poseidon"
-))]
+#[cfg(all(feature = "zk-halo2-ipa", feature = "zk-halo2"))]
 #[test]
-fn halo2_verify_vote_bool_commit_merkle8_poseidon_ipa_zk1_permutation_harness() {
+fn retired_poseidon_backend_label_is_not_a_pow5_alias() {
+    let instances = ipa_fixture::vote_instances(8);
+    let proof = ipa_fixture::build_with_instances(
+        6,
+        pow5_depth::VoteBoolCommitMerklePow5::<8>::default(),
+        &[&instances],
+    );
+    assert!(!proof.verify_two_columns(
+        "halo2/pasta/ipa/vote-bool-commit-merkle8-poseidon",
+        &instances,
+    ));
+}
+#[cfg(all(feature = "zk-halo2-ipa", feature = "zk-halo2",))]
+#[test]
+fn halo2_verify_vote_bool_commit_merkle8_pow5_ipa_zk1_permutation_harness() {
     use halo2_proofs::{
         halo2curves::pasta::{EqAffine as Curve, Fp as Scalar},
         plonk::{VerifyingKey, keygen_pk, keygen_vk},
@@ -285,13 +264,13 @@ fn halo2_verify_vote_bool_commit_merkle8_poseidon_ipa_zk1_permutation_harness() 
     let params: PastaParams = pasta_params_new(k);
     let vk_h2: VerifyingKey<Curve> = keygen_vk(
         &params,
-        &poseidon_depth::VoteBoolCommitMerklePoseidon::<8>::default(),
+        &pow5_depth::VoteBoolCommitMerklePow5::<8>::default(),
     )
     .expect("vk");
     let pk = keygen_pk(
         &params,
         vk_h2.clone(),
-        &poseidon_depth::VoteBoolCommitMerklePoseidon::<8>::default(),
+        &pow5_depth::VoteBoolCommitMerklePow5::<8>::default(),
     )
     .expect("pk");
     // Compute expected instances
@@ -336,7 +315,7 @@ fn halo2_verify_vote_bool_commit_merkle8_poseidon_ipa_zk1_permutation_harness() 
     >(
         &params,
         &pk,
-        &[poseidon_depth::VoteBoolCommitMerklePoseidon::<8>::default()],
+        &[pow5_depth::VoteBoolCommitMerklePow5::<8>::default()],
         &insts,
         OsRng,
         &mut transcript,
@@ -415,16 +394,12 @@ fn halo2_verify_vote_bool_commit_merkle8_poseidon_ipa_zk1_permutation_harness() 
         run_case(steps, *ok);
     }
 }
-#[cfg(all(
-    feature = "zk-halo2-ipa",
-    feature = "zk-halo2",
-    feature = "zk-halo2-ipa-poseidon"
-))]
+#[cfg(all(feature = "zk-halo2-ipa", feature = "zk-halo2",))]
 #[test]
-fn halo2_verify_vote_bool_commit_merkle8_poseidon_ipa_zk1_malformed_inst() {
+fn halo2_verify_vote_bool_commit_merkle8_pow5_ipa_zk1_malformed_inst() {
     let proof = ipa_fixture::build_without_instances(
         6,
-        poseidon_depth::VoteBoolCommitMerklePoseidon::<8>::default(),
+        pow5_depth::VoteBoolCommitMerklePow5::<8>::default(),
     );
     let mut proof_envelope = proof.proof_envelope();
     proof_envelope.extend_from_slice(b"I10P");
@@ -434,62 +409,46 @@ fn halo2_verify_vote_bool_commit_merkle8_poseidon_ipa_zk1_malformed_inst() {
     let backend = backend_tag_vote_bool_commit_merkle(8, true);
     assert!(!proof.verify_envelope(&backend, proof_envelope));
 }
-#[cfg(all(
-    feature = "zk-halo2-ipa",
-    feature = "zk-halo2",
-    feature = "zk-halo2-ipa-poseidon"
-))]
+#[cfg(all(feature = "zk-halo2-ipa", feature = "zk-halo2",))]
 #[test]
-fn halo2_verify_vote_bool_commit_merkle8_poseidon_ipa_zk1_truncated_prof() {
+fn halo2_verify_vote_bool_commit_merkle8_pow5_ipa_zk1_truncated_prof() {
     let proof = ipa_fixture::build_without_instances(
         6,
-        poseidon_depth::VoteBoolCommitMerklePoseidon::<8>::default(),
+        pow5_depth::VoteBoolCommitMerklePow5::<8>::default(),
     );
     let backend = backend_tag_vote_bool_commit_merkle(8, true);
     assert!(!proof.verify_envelope(&backend, proof.truncated_proof_envelope()));
 }
-#[cfg(all(
-    feature = "zk-halo2-ipa",
-    feature = "zk-halo2",
-    feature = "zk-halo2-ipa-poseidon"
-))]
+#[cfg(all(feature = "zk-halo2-ipa", feature = "zk-halo2",))]
 #[test]
-fn halo2_verify_vote_bool_commit_merkle16_poseidon_ipa_zk1() {
+fn halo2_verify_vote_bool_commit_merkle16_pow5_ipa_zk1() {
     let instances = ipa_fixture::vote_instances(16);
     let proof = ipa_fixture::build_with_instances(
         6,
-        poseidon_depth::VoteBoolCommitMerklePoseidon::<16>::default(),
+        pow5_depth::VoteBoolCommitMerklePow5::<16>::default(),
         &[&instances],
     );
     let backend = backend_tag_vote_bool_commit_merkle(16, true);
     assert!(proof.verify_two_columns(&backend, &instances));
 }
-#[cfg(all(
-    feature = "zk-halo2-ipa",
-    feature = "zk-halo2",
-    feature = "zk-halo2-ipa-poseidon"
-))]
+#[cfg(all(feature = "zk-halo2-ipa", feature = "zk-halo2",))]
 #[test]
-fn halo2_verify_anon_transfer_2x2_merkle16_poseidon_ipa_zk1() {
+fn halo2_verify_anon_transfer_2x2_merkle16_pow5_ipa_zk1() {
     let instances = ipa_fixture::anon_instances(16);
     let proof = ipa_fixture::build_with_instances(
         7,
-        poseidon_depth::AnonTransfer2x2CommitMerklePoseidon::<16>::default(),
+        pow5_depth::AnonTransfer2x2CommitMerklePow5::<16>::default(),
         &[&instances],
     );
     let backend = backend_tag_anon_transfer_merkle(16, true);
     assert!(proof.verify_six_columns(&backend, &instances));
 }
-#[cfg(all(
-    feature = "zk-halo2-ipa",
-    feature = "zk-halo2",
-    feature = "zk-halo2-ipa-poseidon"
-))]
+#[cfg(all(feature = "zk-halo2-ipa", feature = "zk-halo2",))]
 #[test]
-fn halo2_verify_vote_bool_commit_merkle16_poseidon_ipa_zk1_malformed_inst() {
+fn halo2_verify_vote_bool_commit_merkle16_pow5_ipa_zk1_malformed_inst() {
     let proof = ipa_fixture::build_without_instances(
         6,
-        poseidon_depth::VoteBoolCommitMerklePoseidon::<16>::default(),
+        pow5_depth::VoteBoolCommitMerklePow5::<16>::default(),
     );
     let mut proof_envelope = proof.proof_envelope();
     proof_envelope.extend_from_slice(b"I10P");
@@ -499,33 +458,25 @@ fn halo2_verify_vote_bool_commit_merkle16_poseidon_ipa_zk1_malformed_inst() {
     let backend = backend_tag_vote_bool_commit_merkle(16, true);
     assert!(!proof.verify_envelope(&backend, proof_envelope));
 }
-#[cfg(all(
-    feature = "zk-halo2-ipa",
-    feature = "zk-halo2",
-    feature = "zk-halo2-ipa-poseidon"
-))]
+#[cfg(all(feature = "zk-halo2-ipa", feature = "zk-halo2",))]
 #[test]
-fn halo2_verify_vote_bool_commit_merkle16_poseidon_ipa_zk1_truncated_prof() {
+fn halo2_verify_vote_bool_commit_merkle16_pow5_ipa_zk1_truncated_prof() {
     let proof = ipa_fixture::build_without_instances(
         6,
-        poseidon_depth::VoteBoolCommitMerklePoseidon::<16>::default(),
+        pow5_depth::VoteBoolCommitMerklePow5::<16>::default(),
     );
     let backend = backend_tag_vote_bool_commit_merkle(16, true);
     assert!(!proof.verify_envelope(&backend, proof.truncated_proof_envelope()));
 }
-#[cfg(all(
-    feature = "zk-halo2-ipa",
-    feature = "zk-halo2",
-    feature = "zk-halo2-ipa-poseidon"
-))]
+#[cfg(all(feature = "zk-halo2-ipa", feature = "zk-halo2",))]
 #[test]
-fn halo2_verify_anon_transfer_2x2_merkle16_poseidon_ipa_zk1_noncanonical() {
+fn halo2_verify_anon_transfer_2x2_merkle16_pow5_ipa_zk1_noncanonical() {
     use ff::PrimeField as _;
     use halo2_proofs::halo2curves::pasta::Fp as Scalar;
 
     let proof = ipa_fixture::build_without_instances(
         7,
-        poseidon_depth::AnonTransfer2x2CommitMerklePoseidon::<16>::default(),
+        pow5_depth::AnonTransfer2x2CommitMerklePow5::<16>::default(),
     );
     let mut proof_envelope = proof.proof_envelope();
     proof_envelope.extend_from_slice(b"I10P");
@@ -538,16 +489,12 @@ fn halo2_verify_anon_transfer_2x2_merkle16_poseidon_ipa_zk1_noncanonical() {
     let backend = backend_tag_anon_transfer_merkle(16, true);
     assert!(!proof.verify_envelope(&backend, proof_envelope));
 }
-#[cfg(all(
-    feature = "zk-halo2-ipa",
-    feature = "zk-halo2",
-    feature = "zk-halo2-ipa-poseidon"
-))]
+#[cfg(all(feature = "zk-halo2-ipa", feature = "zk-halo2",))]
 #[test]
-fn halo2_verify_anon_transfer_2x2_merkle16_poseidon_ipa_zk1_invalid_header() {
+fn halo2_verify_anon_transfer_2x2_merkle16_pow5_ipa_zk1_invalid_header() {
     let proof = ipa_fixture::build_without_instances(
         7,
-        poseidon_depth::AnonTransfer2x2CommitMerklePoseidon::<16>::default(),
+        pow5_depth::AnonTransfer2x2CommitMerklePow5::<16>::default(),
     );
     let mut proof_envelope = proof.proof_envelope();
     proof_envelope.extend_from_slice(b"I10P");
@@ -556,13 +503,9 @@ fn halo2_verify_anon_transfer_2x2_merkle16_poseidon_ipa_zk1_invalid_header() {
     let backend = backend_tag_anon_transfer_merkle(16, true);
     assert!(!proof.verify_envelope(&backend, proof_envelope));
 }
-#[cfg(all(
-    feature = "zk-halo2-ipa",
-    feature = "zk-halo2",
-    feature = "zk-halo2-ipa-poseidon"
-))]
+#[cfg(all(feature = "zk-halo2-ipa", feature = "zk-halo2",))]
 #[test]
-fn halo2_verify_anon_transfer_2x2_merkle8_poseidon_ipa_zk1_permutation_harness() {
+fn halo2_verify_anon_transfer_2x2_merkle8_pow5_ipa_zk1_permutation_harness() {
     use halo2_proofs::{
         halo2curves::pasta::{EqAffine as Curve, Fp as Scalar},
         plonk::{VerifyingKey, keygen_pk, keygen_vk},
@@ -582,13 +525,13 @@ fn halo2_verify_anon_transfer_2x2_merkle8_poseidon_ipa_zk1_permutation_harness()
     let params: PastaParams = pasta_params_new(k);
     let vk_h2: VerifyingKey<Curve> = keygen_vk(
         &params,
-        &poseidon_depth::AnonTransfer2x2CommitMerklePoseidon::<8>::default(),
+        &pow5_depth::AnonTransfer2x2CommitMerklePow5::<8>::default(),
     )
     .expect("vk");
     let pk = keygen_pk(
         &params,
         vk_h2.clone(),
-        &poseidon_depth::AnonTransfer2x2CommitMerklePoseidon::<8>::default(),
+        &pow5_depth::AnonTransfer2x2CommitMerklePow5::<8>::default(),
     )
     .expect("pk");
     let in0 = Scalar::from(7u64);
@@ -645,7 +588,7 @@ fn halo2_verify_anon_transfer_2x2_merkle8_poseidon_ipa_zk1_permutation_harness()
     >(
         &params,
         &pk,
-        &[poseidon_depth::AnonTransfer2x2CommitMerklePoseidon::<8>::default()],
+        &[pow5_depth::AnonTransfer2x2CommitMerklePow5::<8>::default()],
         &insts,
         OsRng,
         &mut transcript,
@@ -732,13 +675,9 @@ fn halo2_verify_anon_transfer_2x2_merkle8_poseidon_ipa_zk1_permutation_harness()
     }
 }
 // Minimal randomized harness for depth-16 (ZK1). Few cases to keep runtime reasonable.
-#[cfg(all(
-    feature = "zk-halo2-ipa",
-    feature = "zk-halo2",
-    feature = "zk-halo2-ipa-poseidon"
-))]
+#[cfg(all(feature = "zk-halo2-ipa", feature = "zk-halo2",))]
 #[test]
-fn halo2_verify_vote_bool_commit_merkle16_poseidon_ipa_zk1_randomized_min() {
+fn halo2_verify_vote_bool_commit_merkle16_pow5_ipa_zk1_randomized_min() {
     use halo2_proofs::{
         halo2curves::pasta::{EqAffine as Curve, Fp as Scalar},
         plonk::{VerifyingKey, keygen_pk, keygen_vk},
@@ -758,13 +697,13 @@ fn halo2_verify_vote_bool_commit_merkle16_poseidon_ipa_zk1_randomized_min() {
     let params: PastaParams = pasta_params_new(k);
     let vk_h2: VerifyingKey<Curve> = keygen_vk(
         &params,
-        &poseidon_depth::VoteBoolCommitMerklePoseidon::<16>::default(),
+        &pow5_depth::VoteBoolCommitMerklePow5::<16>::default(),
     )
     .expect("vk");
     let pk = keygen_pk(
         &params,
         vk_h2.clone(),
-        &poseidon_depth::VoteBoolCommitMerklePoseidon::<16>::default(),
+        &pow5_depth::VoteBoolCommitMerklePow5::<16>::default(),
     )
     .expect("pk");
     // Expected [commit, root]
@@ -809,7 +748,7 @@ fn halo2_verify_vote_bool_commit_merkle16_poseidon_ipa_zk1_randomized_min() {
     >(
         &params,
         &pk,
-        &[poseidon_depth::VoteBoolCommitMerklePoseidon::<16>::default()],
+        &[pow5_depth::VoteBoolCommitMerklePow5::<16>::default()],
         &insts,
         OsRng,
         &mut transcript,
@@ -868,13 +807,9 @@ fn halo2_verify_vote_bool_commit_merkle16_poseidon_ipa_zk1_randomized_min() {
     }
 }
 // ZK1 permutation harness for depth-16 anon (6-column), trimmed cases
-#[cfg(all(
-    feature = "zk-halo2-ipa",
-    feature = "zk-halo2",
-    feature = "zk-halo2-ipa-poseidon"
-))]
+#[cfg(all(feature = "zk-halo2-ipa", feature = "zk-halo2",))]
 #[test]
-fn halo2_verify_anon_transfer_2x2_merkle16_poseidon_ipa_zk1_permutation_harness() {
+fn halo2_verify_anon_transfer_2x2_merkle16_pow5_ipa_zk1_permutation_harness() {
     use halo2_proofs::{
         halo2curves::pasta::{EqAffine as Curve, Fp as Scalar},
         plonk::{VerifyingKey, keygen_pk, keygen_vk},
@@ -894,13 +829,13 @@ fn halo2_verify_anon_transfer_2x2_merkle16_poseidon_ipa_zk1_permutation_harness(
     let params: PastaParams = pasta_params_new(k);
     let vk_h2: VerifyingKey<Curve> = keygen_vk(
         &params,
-        &poseidon_depth::AnonTransfer2x2CommitMerklePoseidon::<16>::default(),
+        &pow5_depth::AnonTransfer2x2CommitMerklePow5::<16>::default(),
     )
     .expect("vk");
     let pk = keygen_pk(
         &params,
         vk_h2.clone(),
-        &poseidon_depth::AnonTransfer2x2CommitMerklePoseidon::<16>::default(),
+        &pow5_depth::AnonTransfer2x2CommitMerklePow5::<16>::default(),
     )
     .expect("pk");
     // Expected instances
@@ -959,7 +894,7 @@ fn halo2_verify_anon_transfer_2x2_merkle16_poseidon_ipa_zk1_permutation_harness(
     >(
         &params,
         &pk,
-        &[poseidon_depth::AnonTransfer2x2CommitMerklePoseidon::<16>::default()],
+        &[pow5_depth::AnonTransfer2x2CommitMerklePow5::<16>::default()],
         &insts,
         OsRng,
         &mut transcript,

@@ -17,12 +17,12 @@ import org.hyperledger.iroha.android.numeric.NumericV1;
 /** Minimal JSON parser for Sora VPN Torii responses. */
 public final class VpnJsonParser {
 
-  private static final int VPN_HELPER_TICKET_HEX_LENGTH = 1392;
+  private static final int VPN_HELPER_TICKET_HEX_LENGTH = 1576;
   private static final long U32_MAX = 4_294_967_295L;
   private static final Set<String> EXIT_CLASSES =
       fields("standard", "low-latency", "high-security");
   private static final Set<String> RECEIPT_STATUSES =
-      fields("disconnected", "expired", "replaced", "settled");
+      fields("disconnected", "expired", "replaced", "settlement_pending", "settled");
   private static final Set<String> RECEIPT_SOURCES = fields("torii", "relay", "wsv");
   private static final Set<String> PROFILE_FIELDS =
       fields(
@@ -150,7 +150,7 @@ public final class VpnJsonParser {
     requireExactFields(root, SESSION_FIELDS, "vpn session response");
     final VpnTrustTuple trust = vpnTrustTuple(root, "vpn session response", false);
     return new VpnSession(
-        hex32(root.get("session_id"), "sessionId"),
+        hex16(root.get("session_id"), "sessionId"),
         requiredString(root.get("account_id"), "vpn session response.account_id"),
         exitClass(root.get("exit_class"), "vpn session response.exit_class"),
         relayEndpoint(root.get("relay_endpoint"), "vpn session response.relay_endpoint", false),
@@ -213,7 +213,7 @@ public final class VpnJsonParser {
   private static VpnReceipt parseReceiptObject(final Map<String, Object> root, final String path) {
     requireExactFields(root, RECEIPT_FIELDS, path);
     return new VpnReceipt(
-        hex32(root.get("session_id"), "sessionId"),
+        hex16(root.get("session_id"), "sessionId"),
         requiredString(root.get("account_id"), path + ".account_id"),
         exitClass(root.get("exit_class"), path + ".exit_class"),
         requiredString(root.get("relay_endpoint"), path + ".relay_endpoint"),

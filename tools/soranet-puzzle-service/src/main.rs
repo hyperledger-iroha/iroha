@@ -1864,7 +1864,8 @@ mod tests {
             None,
         );
         let verifier =
-            AdmissionTokenVerifier::new(MlDsaSuite::MlDsa44, public_key, max_ttl, clock_skew);
+            AdmissionTokenVerifier::try_new(MlDsaSuite::MlDsa44, public_key, max_ttl, clock_skew)
+                .expect("generated verifier key must match ML-DSA-44");
         let service = PuzzleService {
             descriptor_commit: [0u8; 32],
             relay_id,

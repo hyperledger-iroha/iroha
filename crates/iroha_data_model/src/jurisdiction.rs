@@ -219,16 +219,9 @@ pub struct JdgSignatureSchemeParseError(pub String);
 impl FromStr for JdgSignatureScheme {
     type Err = JdgSignatureSchemeParseError;
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        match s.to_ascii_lowercase().as_str() {
-            "simple_threshold" | "simple-threshold" | "simple" => Ok(Self::SimpleThreshold),
-            "bls_normal_aggregate"
-            | "bls-normal-aggregate"
-            | "bls_normal"
-            | "bls-normal"
-            | "bls_aggregate"
-            | "bls-aggregate"
-            | "bls_preaggregated"
-            | "bls-preaggregated" => Ok(Self::BlsNormalAggregate),
+        match s {
+            "simple_threshold" => Ok(Self::SimpleThreshold),
+            "bls_normal_aggregate" => Ok(Self::BlsNormalAggregate),
             other => Err(JdgSignatureSchemeParseError(other.to_string())),
         }
     }
@@ -1070,15 +1063,38 @@ mod tests {
         assert_ne!(attestation.signing_hash(), HashOf::new(&signable));
     }
     #[test]
-    fn signature_scheme_from_str_accepts_aliases() {
+    fn signature_scheme_from_str_accepts_only_canonical_v1_labels() {
         assert_eq!(
             "simple_threshold".parse::<JdgSignatureScheme>().unwrap(),
             JdgSignatureScheme::SimpleThreshold
         );
         assert_eq!(
-            "bls-aggregate".parse::<JdgSignatureScheme>().unwrap(),
+            "bls_normal_aggregate"
+                .parse::<JdgSignatureScheme>()
+                .unwrap(),
             JdgSignatureScheme::BlsNormalAggregate
         );
+    }
+    #[test]
+    fn signature_scheme_from_str_rejects_aliases_and_case_drift() {
+        for alias in [
+            "simple-threshold",
+            "simple",
+            "SIMPLE_THRESHOLD",
+            "bls-normal-aggregate",
+            "bls_normal",
+            "bls-normal",
+            "bls_aggregate",
+            "bls-aggregate",
+            "bls_preaggregated",
+            "bls-preaggregated",
+            "BLS_NORMAL_AGGREGATE",
+        ] {
+            let error = alias
+                .parse::<JdgSignatureScheme>()
+                .expect_err("noncanonical signature scheme label must fail");
+            assert_eq!(error.0, alias);
+        }
     }
     #[test]
     fn signature_scheme_ids_and_labels() {

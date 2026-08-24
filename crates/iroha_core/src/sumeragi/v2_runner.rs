@@ -43,6 +43,7 @@ use super::{
         preflight_historical_autonomous_lane_recovery,
         validate_installed_historical_autonomous_lane_recoveries,
     },
+    v2_beacon::V2GlobalBeaconLifecycle,
     v2_block_sync::{
         CommitCertificateAdmissionError, V2BlockSyncDiscovery, V2BlockSyncError, V2BlockSyncServer,
     },
@@ -888,6 +889,7 @@ fn run_inner(worker: SumeragiWorker) -> Result<(), V2RunnerError> {
         kura,
         provider_ingest_finalized_archive,
         reputation_finalized_archive,
+        global_beacon_partial_signer,
         startup_replay_plan,
         mut startup_replay_inventory_guard,
         network,
@@ -1030,6 +1032,7 @@ fn run_inner(worker: SumeragiWorker) -> Result<(), V2RunnerError> {
             kura,
             provider_ingest_finalized_archive,
             reputation_finalized_archive,
+            global_beacon_partial_signer,
             network,
             block_rx,
             lane_relay_rx,
@@ -1071,6 +1074,7 @@ fn run_inner(worker: SumeragiWorker) -> Result<(), V2RunnerError> {
             kura,
             provider_ingest_finalized_archive,
             reputation_finalized_archive,
+            global_beacon_partial_signer,
             network,
             block_rx,
             lane_relay_rx,
@@ -1166,6 +1170,7 @@ fn schedule_local_proposal(
     services: &mut ProductionV2Services,
     lane_work: &mut V2LaneWorkAdapter,
     npos_vrf: &V2NposVrfLifecycle,
+    npos_beacon: &V2GlobalBeaconLifecycle,
     candidate_work_wait_bound: Duration,
 ) -> Result<(), V2RunnerError> {
     let directive = executor.local_proposal_directive()?;
@@ -1304,6 +1309,14 @@ fn schedule_local_proposal(
     if directive.locked_body().is_some() {
         return Ok(());
     }
+    if npos_beacon.pulse_requested()
+        && npos_beacon.pulse_required_for_consensus()
+        && npos_beacon
+            .finalized_pulse(directive.tag().view())
+            .is_none()
+    {
+        return Ok(());
+    }
     if context.height == 1 {
         let body = genesis_body.ok_or(V2RunnerError::MissingGenesisBody)?;
         // Genesis staging retains its deterministic execution image for application, while
@@ -1378,6 +1391,7 @@ fn schedule_local_proposal(
             directive.tag().view(),
             &carrier_context_header,
             npos_vrf,
+            npos_beacon,
             queue_plan_admissions,
         )?;
         let assembly = assembler.assemble(CandidateRequest {
@@ -2116,6 +2130,7 @@ fn candidate_attachments(
     view: wire::View,
     round_header: &BlockHeader,
     npos_vrf: &V2NposVrfLifecycle,
+    npos_beacon: &V2GlobalBeaconLifecycle,
     queue_plan_admissions: Vec<Vec<u8>>,
 ) -> Result<CandidateAttachments, V2RunnerError> {
     if round_header.height().get() != context.height
@@ -2128,7 +2143,7 @@ fn candidate_attachments(
             "certified merge carrier probe differs from the frozen round".to_owned(),
         ));
     }
-    let effects = if context.mode == wire::ConsensusMode::Npos {
+    let mut effects = if context.mode == wire::ConsensusMode::Npos {
         super::penalties::PenaltyApplier::from_parts(
             state,
             #[cfg(feature = "telemetry")]
@@ -2141,6 +2156,9 @@ fn candidate_attachments(
     } else {
         Default::default()
     };
+    npos_beacon
+        .attach_candidate_effects(view, &mut effects)
+        .map_err(|error| V2RunnerError::Candidate(error.to_string()))?;
     let npos_consensus_effects = (!effects.is_empty()).then_some(effects);
     super::v2_npos::validate_candidate_records(context, state, npos_consensus_effects.as_ref())
         .map_err(|error| V2RunnerError::Candidate(error.to_string()))?;

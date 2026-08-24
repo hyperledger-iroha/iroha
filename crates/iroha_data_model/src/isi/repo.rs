@@ -320,27 +320,23 @@ fn decode_packed_repo_instruction_box(
             .map_err(|_| norito::core::Error::LengthMismatch)?,
     );
     let mut offset = 4usize;
-    let value = match tag {
-        0 => RepoInstructionBox::Initiate(Box::new(
-            norito::core::decode_context_field_canonical_or_archived::<RepoIsi>(ptr, &mut offset)?,
-        )),
-        1 => {
-            RepoInstructionBox::Reverse(norito::core::decode_context_field_canonical_or_archived::<
+    let value =
+        match tag {
+            0 => RepoInstructionBox::Initiate(Box::new(
+                norito::core::decode_context_field_canonical::<RepoIsi>(ptr, &mut offset)?,
+            )),
+            1 => RepoInstructionBox::Reverse(norito::core::decode_context_field_canonical::<
                 ReverseRepoIsi,
-            >(ptr, &mut offset)?)
-        }
-        2 => RepoInstructionBox::MarginCall(
-            norito::core::decode_context_field_canonical_or_archived::<RepoMarginCallIsi>(
-                ptr,
-                &mut offset,
-            )?,
-        ),
-        _ => {
-            return Err(norito::core::Error::Message(format!(
-                "invalid RepoInstructionBox tag {tag}"
-            )));
-        }
-    };
+            >(ptr, &mut offset)?),
+            2 => RepoInstructionBox::MarginCall(norito::core::decode_context_field_canonical::<
+                RepoMarginCallIsi,
+            >(ptr, &mut offset)?),
+            _ => {
+                return Err(norito::core::Error::Message(format!(
+                    "invalid RepoInstructionBox tag {tag}"
+                )));
+            }
+        };
     norito::core::finish_context_fields(ptr, offset)?;
     Ok((value, offset))
 }

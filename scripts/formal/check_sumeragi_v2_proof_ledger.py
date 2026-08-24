@@ -840,8 +840,8 @@ _RELIABLE_FLUSH_LINK_GATE = CrossToolTotalGateContract(
 # the contract tuples.
 _TOTAL_GATE_CALL_ITEM_SHA256 = {
     "reducer_step": "c9f1ab80636f76db9de0ac05f8ce5ca6d121ec9ecdf46b235c551844f9263b97",
-    "decision_helper": "8130bcc40d44f34d761ddadfa323df80587800c636d28f065592954d16302565",
-    "decision_consumer": "5b4745ee4fff7cac65bb82e7f76e39ffe3da99e6ca6020cc34332de6ab75059b",
+    "decision_helper": "5108d1c79f59dbff40468718cf2bb1582d671a394cc05c341c11a944a231a259",
+    "decision_consumer": "cdd735815df4eed7b914ef9a15f53790f9cd5a758e8f23fbecc394b0216de6ac",
     "scheduler_select": "aec8d0ba48d61ad39f9a62178913f701be0f78222f63a4cf839d47ea536e6cfb",
     "ingress_one": "7d2c7f25809a426b6d9c418cc5f5637e19c37cf42cf58135de0a8d62b0d5424f",
     "ingress_batch": "d918c1f57aff8fbcc64aa83614344f352a857de6166329812e0e1d52230ecd17",
@@ -849,7 +849,7 @@ _TOTAL_GATE_CALL_ITEM_SHA256 = {
     "ingress_atomic_commit": "6842895a159090efa2c4da65863b2e1f83f3afbb2bab05e55e8cfbfb0092d640",
     "lifecycle_ordinal_source_commit": "ededc4d64c8d76d3458b7bcf2f7e9812fe7303673b9d314686968a2369d7c4f6",
     "body_available_commit": "d2f24737c0a9ed5fddc579101ab48ea8a1820ef83508319b9942f6381a65109b",
-    "effect_candidate_retain": "2d7cbd5e2c9bcd323c60925770d8a9406ea85877cacac7b6a323729df07e3bde",
+    "effect_candidate_retain": "56512d3347fa9d328c342e3982e6b03f3a9699fcc4ed7daeac854277838d59f4",
     "relay_retry": "052e90cc19d9416a0546c0938c57592da456a5bf98d9c9d64939dc4469d258ac",
     # Refresh after atomic-reservation work stops touching v2_worker.rs.
     "worker_poll_reply_flushes": "eae8ee4dc4996b077b9d0e3315e96e8c35a18b0189f2add40e898e60a4167749",
@@ -905,7 +905,7 @@ def _total_gate_call_sites(
         "ProductionDecisionTraceRefinesRecoveryWitness": (
             CrossToolProductionCallContract(
                 "crates/iroha_core/src/sumeragi/v2_effects.rs",
-                "verify_pending_kura_apply_parts",
+                "verify_pending_kura_apply_parts_inner",
                 "recovery_trace",
                 """
                     let Some(checked_recovery) =
@@ -1293,15 +1293,16 @@ def _total_gate_call_sites(
         "ProductionDecisionTraceRefinesRecoveryWitness": (
             CrossToolLinkedConsumerContract(
                 source="crates/iroha_core/src/sumeragi/v2_effects.rs",
-                item="verify_pending_kura_recovered_apply_replay",
+                item="verify_pending_kura_apply_replay",
                 required_expression=(
                     "let (genesis_context, evidence) = "
-                    "verify_pending_kura_apply_parts"
+                    "verify_pending_kura_apply_parts_with_marker("
+                    "&self.context, decision, &self.recovered_bodies, "
+                    "&self.validated_bodies, expected, *tag, owner_tag, "
+                    "certificate.clone(), manifest.as_ref(), "
+                    "deferred_validated_marker, )?"
                 ),
-                mutation_boundaries=(
-                    "let recovered_apply_ordinal = apply_carrier.consume_for_executor();",
-                    "self.pending_tip_recovery = Some(evidence);",
-                ),
+                mutation_boundaries=("self.pending_tip_recovery = Some(evidence);",),
                 brace_context=((
                     "impl",
                     "V2EffectExecutor",
@@ -14419,20 +14420,6 @@ def _worker_test_include_source_fidelity_errors(repo_root: Path) -> list[str]:
                 expected_attributes=expected_attributes,
             )
     return errors
-
-
-def _serve_ingress_ordinal_production_source_fidelity_errors(repo_root: Path) -> list[str]:
-    """Delegate the retired entry point to the lifecycle-owned Serve seal."""
-
-    return _lifecycle_certified_serve_production_source_fidelity_errors(repo_root)
-
-
-def _serve_lifecycle_production_source_fidelity_errors(repo_root: Path) -> list[str]:
-    """Delegate the retired entry point to the lifecycle-owned Serve seal."""
-
-    return _lifecycle_certified_serve_production_source_fidelity_errors(repo_root)
-
-
 _execute_checker_component("sumeragi_v2_proof_ledger_serviced_candidate_contracts.py")
 
 
@@ -19591,12 +19578,6 @@ def _safety_property_source_fidelity_errors(formal_dir: Path) -> list[str]:
         "PotentialCommitSigners": (
             "{vote.signer: vote \\in PotentialCommitVotes( "
             "certificateContext, roundView, subject)}"
-        ),
-        "InstalledTcAuthorizedPotentialCommitIntersection": (
-            "FALSE"
-        ),
-        "TCProtectsOrInstalledTcAuthorizesPotentialCommit": (
-            "TCProtectsPotentialCommit(tc)"
         ),
         "TimeoutProtectionProperty": (
             "specification => [](\\A tc \\in formedTCs: "
@@ -44552,7 +44533,13 @@ assert_eq!(unminted_runtime.queued_commands(), 0);
                 expected_attributes=(
                     ("#[cfg(test)]",)
                     if item_name == "minimum_active_lifecycle_ordinal_for_deferred"
-                    else ()
+                    else (
+                        (
+                            '#[allow(dead_code, reason = "retained by formal contracts")]',
+                        )
+                        if item_name == "step_recovery"
+                        else ()
+                    )
                 ),
             )
             if item is not None:
@@ -54077,7 +54064,6 @@ let Some(evidence) = self.pending_tip_recovery.as_ref() else {
 let exact = evidence.stage() == PendingKuraApplyRecoveryStage::Apply
     && evidence.is_exact(&self.context)
     && evidence.replay_tag() == self.current_tag()
-    && prepared.dispatch_key().lifecycle_ordinal() == evidence.recovered_apply_ordinal()
     && prepared.exactly_matches_pending_kura_recovery(
         &self.context,
         evidence.replay_tag(),
@@ -54086,7 +54072,7 @@ let exact = evidence.stage() == PendingKuraApplyRecoveryStage::Apply
         evidence.validated_receipt(),
     );
 """,
-            "pending-Kura lifecycle Apply dispatch must bind its exact stage, context, ordinal, Decision, and receipt",
+            "pending-Kura lifecycle Apply dispatch must bind its exact stage, context, Decision, and receipt",
             errors,
         )
 
@@ -54687,6 +54673,7 @@ let count = self.consume_effects_with_runner_decision_cleanup(
         for item_name, runtime_call in (
             ("step_pacemaker_once", "self.runtime.step_pacemaker_effects(now)"),
             ("step", "self.runtime.step_effects(now)"),
+            ("step_pending_tip_recovery", "self.runtime.step_recovery_effects(now)"),
         ):
             item = executor_items[item_name]
             if item is None:
@@ -57919,9 +57906,9 @@ self.finality_completion = Some(FinalityCompletion {
         effects_path,
         effects_source,
         "finality_completion",
-        "the durable Apply completion tombstone field must have exactly its twenty-two reviewed runtime and lifecycle uses and no additional mutation surface",
+        "the durable Apply completion tombstone field must have exactly its twenty-one reviewed runtime and lifecycle uses and no additional mutation surface",
         errors,
-        count=22,
+        count=21,
     )
     for expected, description in (
         (
@@ -57972,21 +57959,31 @@ self.finality_completion
         _require_rust_item_context(effects_path, item, (("impl", "V2EffectExecutor", "<", "SerializedV2Runtime", ">"),), f"lifecycle Decision Apply finality {description}", errors)
     _require_rust_token_sequence(
         effects_path, prepare_lifecycle_finality,
-        """let recovered_requires_empty_ingress =
-authority.lineage() == LifecycleDecisionApplyLineageV1::Recovered;
-let lineage_owner_is_exact = match authority.lineage() {
-LifecycleDecisionApplyLineageV1::Live => self.live_lifecycle_decision_apply.as_ref().is_some_and(|owner|
-owner.exactly_matches_completion(authority.dispatch_key(), authority.tag(), authority.subject(), authority.receipt(), authority.artifact(),)),
-LifecycleDecisionApplyLineageV1::Recovered => { self.live_lifecycle_decision_apply.is_none() }
+        """let lineage_owner_is_exact = match authority.lineage() {
+LifecycleDecisionApplyLineageV1::Live => self.live_lifecycle_decision_apply.as_ref().is_some_and(|owner| {
+owner.exactly_matches_completion(""",
+        "lifecycle Decision Apply completion must authenticate its exact live owner",
+        errors)
+    _require_rust_token_sequence(
+        effects_path, prepare_lifecycle_finality,
+        """}),
+LifecycleDecisionApplyLineageV1::Recovered => {
+self.live_lifecycle_decision_apply.is_none()
+}
 };""",
-        "lifecycle Decision Apply completion must join the exact live owner or prove recovered non-substitution",
+        "direct recovered Decision Apply completion must prove live-owner non-substitution",
         errors)
     _require_rust_token_sequence(
         effects_path, prepare_lifecycle_finality,
         """let pending_recovery_is_exact = self.pending_tip_recovery.as_ref().is_none_or(|evidence| {
 authority.exactly_matches_pending_kura_recovery(&self.context, evidence)
 });""",
-        "lifecycle Decision Apply completion must retain exact pending-Kura recovery evidence",
+        "lifecycle Decision Apply completion must bind optional interrupted-tip evidence to the exact recovered lineage",
+        errors)
+    _require_rust_token_sequence(
+        effects_path, prepare_lifecycle_finality,
+        "|| !pending_recovery_is_exact",
+        "lifecycle Decision Apply completion must authenticate exact pending-Kura recovery evidence",
         errors)
     _require_rust_token_sequence(
         effects_path, prepare_lifecycle_finality,
@@ -58000,16 +57997,24 @@ authority.exactly_matches_pending_kura_recovery(&self.context, evidence)
     _require_rust_token_sequence(
         effects_path, commit_lifecycle_finality,
         """let lineage_owner_is_exact = match dispatch_key.lineage() {
-LifecycleDecisionApplyLineageV1::Live => self.live_lifecycle_decision_apply.take().is_some_and(|owner|
-owner.exactly_matches_completion(dispatch_key, tag, receipt.subject(), &receipt, &artifact,)),
-LifecycleDecisionApplyLineageV1::Recovered => { self.live_lifecycle_decision_apply.is_none() }
+LifecycleDecisionApplyLineageV1::Live => self.live_lifecycle_decision_apply.take().is_some_and(|owner| {
+owner.exactly_matches_completion(""",
+        "lifecycle Decision Apply finality must consume its exact live owner",
+        errors)
+    _require_rust_token_sequence(
+        effects_path, commit_lifecycle_finality,
+        """}),
+LifecycleDecisionApplyLineageV1::Recovered => {
+self.live_lifecycle_decision_apply.is_none()
+}
 };""",
-        "lifecycle Decision Apply finality must consume the exact live owner or prove recovered non-substitution",
+        "direct recovered Decision Apply finality must prove live-owner non-substitution",
         errors)
     _require_rust_token_sequence(
         effects_path, commit_lifecycle_finality,
         """let pending_recovery_is_exact = self.pending_tip_recovery.as_ref().is_none_or(|evidence| {
-    evidence.stage() == PendingKuraApplyRecoveryStage::ApplicationDispatched
+    dispatch_key.lineage() == LifecycleDecisionApplyLineageV1::Recovered
+        && evidence.stage() == PendingKuraApplyRecoveryStage::ApplicationDispatched
         && evidence.is_exact(&self.context)
         && tag == evidence.replay_tag()
         && artifact.subject == evidence.commit_subject()
@@ -58021,7 +58026,12 @@ LifecycleDecisionApplyLineageV1::Recovered => { self.live_lifecycle_decision_app
         && receipt.certificate() == evidence.commit_qc().as_ref()
         && receipt.artifact_hash() == HashOf::new(&artifact)
 });""",
-        "lifecycle Decision Apply finality must retain exact pending-Kura recovery evidence",
+        "lifecycle Decision Apply finality must bind pending-Kura evidence only to the recovered dispatched lineage",
+        errors)
+    _require_rust_token_sequence(
+        effects_path, commit_lifecycle_finality,
+        "&& pending_recovery_is_exact",
+        "lifecycle Decision Apply finality must authenticate exact pending-Kura recovery evidence",
         errors)
     _require_rust_token_sequence(
         effects_path, commit_lifecycle_finality,
@@ -69841,7 +69851,9 @@ def validate_ledger(
     errors.extend(
         _process_lifetime_worker_launch_source_fidelity_errors(ROOT_DIR)
     )
-    errors.extend(_serve_lifecycle_production_source_fidelity_errors(ROOT_DIR))
+    errors.extend(
+        _lifecycle_certified_serve_production_source_fidelity_errors(ROOT_DIR)
+    )
     errors.extend(
         _serviced_candidate_production_source_fidelity_errors(ROOT_DIR)
     )

@@ -11,9 +11,12 @@ mod model {
             GovernanceAttemptId, GovernanceAttemptStatusV1, GovernanceCertificateId,
             GovernanceExpectedHeadV1, GovernanceStageV1, ParliamentAggregateOutcomeV1,
             ParliamentAggregateTallyV1, ParliamentBodies, ParliamentBody,
-            ParliamentConcentrationWarningV1, ProposalContentId, RiskTierV1,
+            ParliamentConcentrationWarningV1, ParliamentNoResultKindV1, ProposalContentId,
+            RiskTierV1,
         },
-        isi::governance::{ParliamentDecision, ParliamentLifecycleTransitionKindV1},
+        isi::governance::{
+            ParliamentAutomaticExecutionOutcomeV1, ParliamentLifecycleTransitionKindV1,
+        },
     };
     use iroha_primitives::numeric::Quantity;
     /// Governance lifecycle events.
@@ -71,12 +74,12 @@ mod model {
         ParliamentConcentrationWarning(GovernanceParliamentConcentrationWarning),
         /// A hidden Parliament aggregate result was finalized.
         ParliamentAggregateFinalized(GovernanceParliamentAggregateFinalized),
+        /// A current-roster QC installed, rotated, or retired a threshold key session.
+        ThresholdKeyLifecycleApplied(GovernanceThresholdKeyLifecycleAppliedV1),
         /// A complete V1 governance certificate was issued automatically.
         ParliamentCertificateIssued(GovernanceParliamentCertificateIssued),
         /// A parliament body approval was recorded for a proposal.
         ParliamentApprovalRecorded(GovernanceParliamentApprovalRecorded),
-        /// A parliament body ballot was recorded for a proposal.
-        ParliamentBallotRecorded(GovernanceParliamentBallotRecorded),
         /// A governance lock was slashed (partial or full) for a referendum.
         LockSlashed(GovernanceLockSlashed),
         /// A governance lock received restitution after appeal.
@@ -87,6 +90,21 @@ mod model {
         CitizenRevoked(GovernanceCitizenRevoked),
         /// A citizen service discipline event was recorded.
         CitizenServiceRecorded(GovernanceCitizenServiceRecorded),
+    }
+
+    /// Public audit record for one QC-authorized threshold-key lifecycle action.
+    #[derive(
+        Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, iroha_schema::IntoSchema,
+    )]
+    pub struct GovernanceThresholdKeyLifecycleAppliedV1 {
+        /// Exact lifecycle action authenticated by the current validator roster.
+        pub action: crate::isi::consensus_keys::ThresholdKeyLifecycleActionV1,
+        /// Exact threshold-key session identifier.
+        pub session_id: [u8; 32],
+        /// Exact finalized DKG transcript commitment.
+        pub transcript_hash: [u8; 32],
+        /// Committed height at which the lifecycle action took effect.
+        pub effective_height: u64,
     }
     /// Proposal submitted payload.
     #[derive(
@@ -360,7 +378,8 @@ mod model {
         /// Block height creating the attempt.
         pub at_height: u64,
     }
-    /// Bounded audit record for one accepted Parliament reducer command.
+    /// Bounded audit record for one accepted Parliament reducer command or
+    /// consensus-derived certificate-execution outcome.
     #[derive(
         Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, iroha_schema::IntoSchema,
     )]
@@ -369,9 +388,16 @@ mod model {
         pub proposal_content_id: ProposalContentId,
         /// Retry attempt that consumed the transition.
         pub governance_attempt_id: GovernanceAttemptId,
-        /// Stable bounded classification of the accepted transition.
+        /// Stable bounded classification of the public transition or automatic outcome.
         pub transition_kind: ParliamentLifecycleTransitionKindV1,
-        /// Domain-separated digest of the exact transition and any evidence.
+        /// Core-derived bounded no-result class, present only when a body terminalizes without a result.
+        pub no_result_kind: Option<ParliamentNoResultKindV1>,
+        /// Typed consensus-owned terminal outcome, absent for submitted transitions.
+        pub automatic_outcome: Option<ParliamentAutomaticExecutionOutcomeV1>,
+        /// Domain-separated digest of the submitted transition or automatic outcome.
+        ///
+        /// A no-result transition carries no caller-selected failure class; its
+        /// separate `no_result_kind` field records that Core-derived evidence.
         pub transition_digest: [u8; 32],
         /// Certificate produced by this transition, when applicable.
         pub certificate_id: Option<GovernanceCertificateId>,
@@ -489,29 +515,6 @@ mod model {
         /// Quorum required to open the referendum.
         pub required: u32,
     }
-    /// Parliament ballot recorded payload.
-    #[derive(
-        Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, iroha_schema::IntoSchema,
-    )]
-    pub struct GovernanceParliamentBallotRecorded {
-        /// Proposal id receiving a ballot.
-        #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
-        pub proposal_id: [u8; 32],
-        /// Epoch of the Parliament roster.
-        pub epoch: u64,
-        /// Parliament body receiving the ballot.
-        pub body: ParliamentBody,
-        /// Decision recorded for the signer.
-        pub decision: ParliamentDecision,
-        /// Number of approvals recorded so far.
-        pub approvals: u32,
-        /// Number of rejections recorded so far.
-        pub rejections: u32,
-        /// Number of abstentions recorded so far.
-        pub abstentions: u32,
-        /// Quorum required for an approve or reject decision.
-        pub required: u32,
-    }
     /// Citizen service discipline event payload.
     #[derive(
         Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, iroha_schema::IntoSchema,
@@ -556,9 +559,9 @@ impl_json_via_norito_bytes!(
     GovernanceParliamentBallotTransitioned,
     GovernanceParliamentConcentrationWarning,
     GovernanceParliamentAggregateFinalized,
+    GovernanceThresholdKeyLifecycleAppliedV1,
     GovernanceParliamentCertificateIssued,
     GovernanceParliamentApprovalRecorded,
-    GovernanceParliamentBallotRecorded,
     GovernanceSlashReason,
     GovernanceLockSlashed,
     GovernanceLockRestituted,
@@ -575,12 +578,12 @@ pub mod prelude {
         GovernanceLockRestituted, GovernanceLockSlashed, GovernanceLockUnlocked,
         GovernanceParliamentAggregateFinalized, GovernanceParliamentApprovalRecorded,
         GovernanceParliamentAttemptCreated, GovernanceParliamentAttemptTransitioned,
-        GovernanceParliamentBallotRecorded, GovernanceParliamentBallotTransitioned,
-        GovernanceParliamentBodyTransitioned, GovernanceParliamentCertificateIssued,
-        GovernanceParliamentConcentrationWarning, GovernanceParliamentLifecycleTransitionApplied,
-        GovernanceParliamentSelected, GovernanceProposalApproved, GovernanceProposalEnacted,
-        GovernanceProposalRejected, GovernanceProposalSubmitted, GovernanceReferendumClosed,
-        GovernanceReferendumOpened, GovernanceSlashReason,
+        GovernanceParliamentBallotTransitioned, GovernanceParliamentBodyTransitioned,
+        GovernanceParliamentCertificateIssued, GovernanceParliamentConcentrationWarning,
+        GovernanceParliamentLifecycleTransitionApplied, GovernanceParliamentSelected,
+        GovernanceProposalApproved, GovernanceProposalEnacted, GovernanceProposalRejected,
+        GovernanceProposalSubmitted, GovernanceReferendumClosed, GovernanceReferendumOpened,
+        GovernanceSlashReason, GovernanceThresholdKeyLifecycleAppliedV1,
     };
 }
 
@@ -592,9 +595,10 @@ mod tests {
         GovernanceAttemptId, GovernanceAttemptStatusV1, GovernanceCertificateId,
         GovernanceExpectedHeadAbsentV1, GovernanceExpectedHeadV1, GovernanceStageV1,
         ParliamentAggregateOutcomeV1, ParliamentAggregateTallyV1, ParliamentBody,
-        ParliamentConcentrationWarningV1, ProposalContentId, RiskTierV1,
+        ParliamentConcentrationWarningV1, ParliamentNoResultKindV1, ProposalContentId, RiskTierV1,
     };
     use crate::isi::governance::{
+        ParliamentAutomaticExecutionFailedV1, ParliamentAutomaticExecutionOutcomeV1,
         ParliamentCloseBallotRegistrationV1, ParliamentLifecycleTransitionKindV1,
         ParliamentLifecycleTransitionV1,
     };
@@ -631,10 +635,54 @@ mod tests {
                 proposal_content_id,
                 governance_attempt_id,
                 transition_kind: ParliamentLifecycleTransitionKindV1::CompleteQualification,
+                no_result_kind: None,
+                automatic_outcome: None,
                 transition_digest: ParliamentLifecycleTransitionV1::CompleteQualification
                     .digest_v1(),
                 certificate_id: None,
                 at_height: 100,
+            },
+        ));
+        assert_roundtrip(GovernanceEvent::ParliamentLifecycleTransitionApplied(
+            GovernanceParliamentLifecycleTransitionApplied {
+                proposal_content_id,
+                governance_attempt_id,
+                transition_kind: ParliamentLifecycleTransitionKindV1::FailPublicFindingNoResult,
+                no_result_kind: Some(ParliamentNoResultKindV1::PublicFindingDeadlineExpired),
+                automatic_outcome: None,
+                transition_digest: [0x19; 32],
+                certificate_id: None,
+                at_height: 101,
+            },
+        ));
+        assert_roundtrip(GovernanceEvent::ParliamentLifecycleTransitionApplied(
+            GovernanceParliamentLifecycleTransitionApplied {
+                proposal_content_id,
+                governance_attempt_id,
+                transition_kind: ParliamentLifecycleTransitionKindV1::FailBallotNoResult,
+                no_result_kind: Some(ParliamentNoResultKindV1::BallotOpeningDeadlineExpired),
+                automatic_outcome: None,
+                transition_digest: [0x20; 32],
+                certificate_id: None,
+                at_height: 101,
+            },
+        ));
+        let automatic_outcome = ParliamentAutomaticExecutionOutcomeV1::ExecutionFailed(
+            ParliamentAutomaticExecutionFailedV1 {
+                effect_preimage_hash: [0x21; 32],
+                failure_root: [0x22; 32],
+            },
+        );
+        assert_roundtrip(GovernanceEvent::ParliamentLifecycleTransitionApplied(
+            GovernanceParliamentLifecycleTransitionApplied {
+                proposal_content_id,
+                governance_attempt_id,
+                transition_kind: automatic_outcome.kind(),
+                no_result_kind: None,
+                automatic_outcome: Some(automatic_outcome),
+                transition_digest: automatic_outcome.digest_v1(),
+                certificate_id: Some(GovernanceCertificateId::new([0x23; 32])),
+                at_height: 102,
             },
         ));
         assert_roundtrip(GovernanceEvent::ParliamentAttemptTransitioned(
@@ -672,7 +720,6 @@ mod tests {
         let transition = ParliamentLifecycleTransitionV1::CloseBallotRegistration(
             ParliamentCloseBallotRegistrationV1 {
                 ballot_attempt_id: BallotAttemptId::new([0x19; 32]),
-                registration_records: vec![vec![0x1A; 3_624]; 2],
             },
         );
         let event = GovernanceEvent::ParliamentLifecycleTransitionApplied(
@@ -680,6 +727,8 @@ mod tests {
                 proposal_content_id,
                 governance_attempt_id,
                 transition_kind: transition.kind(),
+                no_result_kind: None,
+                automatic_outcome: None,
                 transition_digest: transition.digest_v1(),
                 certificate_id: None,
                 at_height: 103,
@@ -739,5 +788,48 @@ mod tests {
                 enact_at_height: 203,
             },
         ));
+    }
+
+    #[test]
+    fn threshold_key_lifecycle_event_roundtrips() {
+        assert_roundtrip(GovernanceEvent::ThresholdKeyLifecycleApplied(
+            GovernanceThresholdKeyLifecycleAppliedV1 {
+                action: crate::isi::consensus_keys::ThresholdKeyLifecycleActionV1::InstallGlobalBeaconKey,
+                session_id: [0x31; 32],
+                transcript_hash: [0x32; 32],
+                effective_height: 41,
+            },
+        ));
+    }
+
+    #[test]
+    fn parliament_event_schema_excludes_per_voter_plaintext() {
+        let retired_variant = ["Parliament", "Ballot", "Recorded"].concat();
+        let retired_payload = ["Governance", retired_variant.as_str()].concat();
+        let retired_decision = ["Parliament", "Decision"].concat();
+        let retired_decision_declaration = ["pub enum ", retired_decision.as_str(), " {"].concat();
+
+        let event_source = include_str!("governance.rs");
+        let instruction_source = include_str!("../../isi/governance.rs");
+        assert!(!event_source.contains(&retired_variant));
+        assert!(!event_source.contains(&retired_payload));
+        assert!(!instruction_source.contains(&retired_decision_declaration));
+
+        let schema = <GovernanceEvent as iroha_schema::IntoSchema>::schema();
+        let metadata = schema
+            .get::<GovernanceEvent>()
+            .expect("governance event schema entry");
+        let iroha_schema::Metadata::Enum(event_metadata) = metadata else {
+            panic!("governance event schema must remain an enum");
+        };
+        assert!(
+            event_metadata
+                .variants
+                .iter()
+                .all(|variant| variant.tag != retired_variant)
+        );
+        assert!(schema.iter().all(|(_, entry)| {
+            entry.type_name != retired_payload && entry.type_name != retired_decision
+        }));
     }
 }

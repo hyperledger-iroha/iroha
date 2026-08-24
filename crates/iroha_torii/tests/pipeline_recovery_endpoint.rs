@@ -11,7 +11,7 @@ use tower::ServiceExt as _; // for Router::oneshot
 async fn recovery_endpoint_serves_sidecar_and_404_on_missing() {
     // Initialize a persistent Kura in a temp dir so sidecars can be written/read
     let temp_dir = tempfile::tempdir().expect("tempdir");
-    let (kura, _count) = Kura::new(
+    let (kura, _count) = Kura::new_fresh_single_lane(
         &iroha_config::parameters::actual::Kura {
             init_mode: iroha_config::kura::InitMode::Strict,
             store_dir: iroha_config::base::WithOrigin::inline(

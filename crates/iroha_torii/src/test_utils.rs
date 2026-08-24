@@ -675,7 +675,6 @@ pub fn mk_minimal_root_cfg() -> iroha_config::parameters::actual::Root {
                 defaults::network::QUIC_DATAGRAM_RECEIVE_BUFFER_BYTES.get(),
             quic_datagram_send_buffer_bytes: defaults::network::QUIC_DATAGRAM_SEND_BUFFER_BYTES
                 .get(),
-            scion: A::ScionConfig::default(),
             tls_enabled: false,
             tls_fallback_to_plain: false,
             tls_listen_address: None,
@@ -962,7 +961,7 @@ pub fn mk_minimal_root_cfg() -> iroha_config::parameters::actual::Root {
                 dedupe_ttl: defaults::connect::DEDUPE_TTL,
                 dedupe_cap: defaults::connect::DEDUPE_CAP,
                 relay_enabled: defaults::connect::RELAY_ENABLED,
-                relay_strategy: defaults::connect::RELAY_STRATEGY,
+                relay_strategy: A::ConnectRelayStrategy::Broadcast,
                 p2p_ttl_hops: defaults::connect::P2P_TTL_HOPS,
             },
             iso_bridge: A::IsoBridge {
@@ -1066,7 +1065,6 @@ pub fn mk_minimal_root_cfg() -> iroha_config::parameters::actual::Root {
             gpu_key_bucket: defaults::pipeline::GPU_KEY_BUCKET,
             debug_trace_scheduler_inputs: defaults::pipeline::DEBUG_TRACE_SCHEDULER_INPUTS,
             debug_trace_tx_eval: defaults::pipeline::DEBUG_TRACE_TX_EVAL,
-            signature_batch_max: defaults::pipeline::SIGNATURE_BATCH_MAX,
             signature_batch_max_ed25519: defaults::pipeline::SIGNATURE_BATCH_MAX_ED25519,
             signature_batch_max_secp256k1: defaults::pipeline::SIGNATURE_BATCH_MAX_SECP256K1,
             signature_batch_max_pqc: defaults::pipeline::SIGNATURE_BATCH_MAX_PQC,
@@ -1372,6 +1370,14 @@ pub fn mk_minimal_root_cfg() -> iroha_config::parameters::actual::Root {
             .parse()
             .expect("valid default governance asset id"),
             parliament_alternate_size: defaults::governance::PARLIAMENT_ALTERNATE_SIZE,
+            parliament_invitation_phase_blocks:
+                defaults::governance::PARLIAMENT_INVITATION_PHASE_BLOCKS,
+            parliament_public_finding_phase_blocks:
+                defaults::governance::PARLIAMENT_PUBLIC_FINDING_PHASE_BLOCKS,
+            parliament_timed_ovn: A::ParliamentTimedOvn::default(),
+            parliament_tle_partial_release_signer_provider_handle: None,
+            parliament_tle_partial_release_signer_provider_revision: None,
+            parliament_tle_partial_release_signer_provider_policy_digest: None,
             rules_committee_size: defaults::governance::PARLIAMENT_RULES_COMMITTEE_SIZE,
             agenda_council_size: defaults::governance::PARLIAMENT_AGENDA_COUNCIL_SIZE,
             interest_panel_size: defaults::governance::PARLIAMENT_INTEREST_PANEL_SIZE,
@@ -1384,12 +1390,6 @@ pub fn mk_minimal_root_cfg() -> iroha_config::parameters::actual::Root {
             mpc_committee_size: defaults::governance::PARLIAMENT_MPC_COMMITTEE_SIZE,
             fma_committee_size: defaults::governance::PARLIAMENT_FMA_COMMITTEE_SIZE,
             viral_incentives: A::ViralIncentives::default(),
-            pipeline_study_sla_blocks: 0,
-            pipeline_review_sla_blocks: 10,
-            pipeline_decision_sla_blocks: 1,
-            pipeline_enactment_sla_blocks: 20,
-            pipeline_rules_sla_blocks: defaults::governance::PIPELINE_RULES_SLA_BLOCKS,
-            pipeline_agenda_sla_blocks: defaults::governance::PIPELINE_AGENDA_SLA_BLOCKS,
         },
         norito: A::Norito {
             allow_gpu_compression: defaults::norito::ALLOW_GPU_COMPRESSION,

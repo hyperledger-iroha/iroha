@@ -608,7 +608,10 @@ impl iroha_p2p::network::message::ClassifyTopic for NetworkMessage {
                             | ConsensusMessageV2Payload::TimeoutCertificate(_)
                             | ConsensusMessageV2Payload::CommitCertificateResponse(_)
                             | ConsensusMessageV2Payload::VrfCommit(_)
-                            | ConsensusMessageV2Payload::VrfReveal(_) => T::ConsensusSafety,
+                            | ConsensusMessageV2Payload::VrfReveal(_)
+                            | ConsensusMessageV2Payload::GlobalBeaconPartialSignature(_) => {
+                                T::ConsensusSafety
+                            }
                             ConsensusMessageV2Payload::CertifiedBodyRequest(_)
                             | ConsensusMessageV2Payload::CommitCertificateRequest(_) => {
                                 T::Consensus

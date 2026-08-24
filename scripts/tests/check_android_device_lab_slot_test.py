@@ -908,7 +908,7 @@ def write_candidate_binding_v2(
             "generation_memory_enforcement_profile": (
                 device_lab.KAGEMUSHA_GENERATION_MEMORY_ENFORCEMENT_PROFILE_V1
             ),
-            "bridge_abi_version": 22,
+            "bridge_abi_version": 23,
             "artifact_count": len(report_artifacts),
             "artifacts": report_artifacts,
             "topup_finality_roster_file_name": "topup-finality-roster-v4.norito",
@@ -1877,6 +1877,102 @@ def write_unsigned_production_slot_metadata(slot: Path, name: str, family: str) 
 
 class AndroidDeviceLabSlotTest(unittest.TestCase):
 
+    def test_isolated_cli_resolves_repository_modules(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            result = subprocess.run(
+                [sys.executable, "-I", "-B", str(MODULE_PATH), "--help"],
+                cwd=temporary,
+                text=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                check=False,
+            )
+        self.assertEqual(0, result.returncode, result.stderr)
+        self.assertIn("Validate Android device-lab slots", result.stdout)
+
+    def test_candidate_android_scripts_pin_cargo_for_cargo_ndk_identity(self) -> None:
+        scripts = MODULE_PATH.parent
+        native_runner = (scripts / "build_kagemusha_candidate_android_native.sh").read_text(
+            encoding="utf-8"
+        )
+        lab_runner = (scripts / "run_kagemusha_candidate_android_lab.sh").read_text(
+            encoding="utf-8"
+        )
+
+        direct_version_call = '"$CARGO_NDK_BINARY" --version'
+        pinned_version_call = (
+            'CARGO="$CARGO_BINARY" "$CARGO_NDK_BINARY" --version'
+        )
+        self.assertEqual(3, native_runner.count(direct_version_call))
+        self.assertEqual(3, native_runner.count(pinned_version_call))
+        self.assertIn(
+            'version(\n'
+            '        [sys.argv[7], "--version"],\n'
+            '        extra_environment={"CARGO": sys.argv[5]},\n'
+            '    )',
+            lab_runner,
+        )
+
+    def test_candidate_android_scripts_thread_reviewed_source_closure(self) -> None:
+        scripts = MODULE_PATH.parent
+        native_runner = (scripts / "build_kagemusha_candidate_android_native.sh").read_text(
+            encoding="utf-8"
+        )
+        lab_runner = (scripts / "run_kagemusha_candidate_android_lab.sh").read_text(
+            encoding="utf-8"
+        )
+        native_fingerprint = native_runner.split("source_fingerprint() {", 1)[1].split(
+            "}", 1
+        )[0]
+        lab_fingerprint = lab_runner.split("source_snapshot() {", 1)[1].split(
+            "}", 1
+        )[0]
+        for fingerprint in (native_fingerprint, lab_fingerprint):
+            self.assertIn(
+                '--reviewed-source-closure "$REVIEWED_SOURCE_CLOSURE"',
+                fingerprint,
+            )
+            self.assertIn(
+                '--reviewed-source-closure-sha256 '
+                '"$REVIEWED_SOURCE_CLOSURE_SHA256"',
+                fingerprint,
+            )
+        self.assertIn(
+            'reviewed_source_closure_descriptor_sha256=sys.argv[7]',
+            native_runner,
+        )
+        self.assertIn(
+            'reviewed_source_closure_descriptor_sha256=sys.argv[7]',
+            lab_runner,
+        )
+        self.assertIn(
+            '--reviewed-source-closure "$REVIEWED_SOURCE_CLOSURE"',
+            lab_runner,
+        )
+
+    def test_stage_catalog_binds_reviewed_source_closure_digest(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            slot = Path(temporary) / "candidate-slot"
+            slot.mkdir(mode=0o700)
+            binding, _ = write_candidate_binding_v2(slot, slot.name)
+            arguments = {
+                "candidate_sha256": str(binding["candidate_record_sha256"]),
+                "stage_sha256": str(binding["candidate_stage_manifest_sha256"]),
+                "source_commit": str(binding["candidate_source_commit"]),
+                "source_tree_sha256": str(binding["candidate_source_tree_sha256"]),
+            }
+
+            device_lab.validate_kagemusha_candidate_stage_manifest_v2(
+                slot,
+                reviewed_source_closure_descriptor_sha256="6" * 64,
+                **arguments,
+            )
+            with self.assertRaisesRegex(ValueError, "does not match its explicit pin"):
+                device_lab.validate_kagemusha_candidate_stage_manifest_v2(
+                    slot,
+                    reviewed_source_closure_descriptor_sha256="a" * 64,
+                    **arguments,
+                )
 
     def test_stage_catalog_metadata_mode_defers_content_authentication_to_streamer(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -2107,7 +2203,7 @@ class AndroidDeviceLabSlotTest(unittest.TestCase):
         cls._authority_directory.cleanup()
 
     def test_kagemusha_production_evidence_requires_current_v4_bridge(self) -> None:
-        self.assertEqual(device_lab.REQUIRED_KAGEMUSHA_NATIVE_BRIDGE_ABI_VERSION, 22)
+        self.assertEqual(device_lab.REQUIRED_KAGEMUSHA_NATIVE_BRIDGE_ABI_VERSION, 23)
 
     def test_apk_verifier_executes_the_complete_pinned_java_jar_authority(self) -> None:
         main_apk, _, certificate_sha256 = signed_candidate_apk_fixture()

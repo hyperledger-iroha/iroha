@@ -10,8 +10,12 @@ use iroha_data_model::{
 use norito::derive::{JsonDeserialize, JsonSerialize, NoritoDeserialize, NoritoSerialize};
 /// Shared data-availability helpers (sampling, assignment).
 pub mod da;
+/// Public Torii DTOs for certificate-only governance proposal drafts.
+pub mod governance_proposal_api;
 /// Public Torii DTOs for the offline cash lifecycle.
 pub mod offline_api;
+/// Public Torii DTOs for authenticated SORA Parliament draft and read routes.
+pub mod parliament_api;
 /// Shared QR Code encoder used by Torii and CLI offline flows.
 pub mod qr;
 /// Canonical Torii route metadata and projection helpers.
@@ -151,6 +155,9 @@ pub mod uri {
     pub const OFFLINE_TOP_UP: &str = crate::route_catalog::offline::TOP_UP_PATH;
     /// URI used to submit an offline redemption operation.
     pub const OFFLINE_REDEEM: &str = crate::route_catalog::offline::REDEEM_PATH;
+    /// URI used to submit one exact ordinary Kagemusha V4 lifecycle transaction.
+    pub const KAGEMUSHA_LIFECYCLE_TRANSACTION: &str =
+        crate::route_catalog::offline::KAGEMUSHA_LIFECYCLE_TRANSACTION_PATH;
     /// URI used to fetch a finality-bound current validation-fee registry.
     pub const VALIDATION_FEE_CURRENT_POLICY_PROOF: &str =
         crate::route_catalog::runtime_governance::VALIDATION_FEE_CURRENT_POLICY_PROOF_PATH;
@@ -160,6 +167,28 @@ pub mod uri {
     /// URI used to draft the exact configured citizenship registration instruction.
     pub const GOV_CITIZEN_DRAFT: &str =
         crate::route_catalog::runtime_governance::GOV_CITIZEN_DRAFT.path();
+    /// URI used to draft one canonical Parliament attempt creation.
+    pub const GOV_PARLIAMENT_ATTEMPT_DRAFT: &str =
+        crate::route_catalog::runtime_governance::GOV_PARLIAMENT_ATTEMPT_DRAFT.path();
+    /// URI template used to read one exact Parliament attempt.
+    pub const GOV_PARLIAMENT_ATTEMPT_READ: &str =
+        crate::route_catalog::runtime_governance::GOV_PARLIAMENT_ATTEMPT_READ.path();
+    /// URI template used to inspect one node-local timed-OVN casting context.
+    pub const GOV_PARLIAMENT_TIMED_OVN_CASTING_CONTEXT_READ: &str =
+        crate::route_catalog::runtime_governance::GOV_PARLIAMENT_TIMED_OVN_CASTING_CONTEXT_READ
+            .path();
+    /// URI template used to fetch one consensus-authenticated casting-proof page.
+    pub const GOV_PARLIAMENT_TIMED_OVN_CASTING_PROOF: &str =
+        crate::route_catalog::runtime_governance::GOV_PARLIAMENT_TIMED_OVN_CASTING_PROOF.path();
+    /// URI template used to read one authorized public Parliament TLE release context.
+    pub const GOV_PARLIAMENT_TLE_RELEASE_CONTEXT_READ: &str =
+        crate::route_catalog::runtime_governance::GOV_PARLIAMENT_TLE_RELEASE_CONTEXT_READ.path();
+    /// Request one locally produced, independently verified TLE partial release.
+    pub const GOV_PARLIAMENT_TLE_PARTIAL_RELEASE: &str =
+        crate::route_catalog::runtime_governance::GOV_PARLIAMENT_TLE_PARTIAL_RELEASE.path();
+    /// URI used to draft one closed Parliament lifecycle transition.
+    pub const GOV_PARLIAMENT_TRANSITION_DRAFT: &str =
+        crate::route_catalog::runtime_governance::GOV_PARLIAMENT_TRANSITION_DRAFT.path();
     /// URI used to list typed validation-fee Parliament proposals.
     pub const VALIDATION_FEE_PROPOSALS: &str =
         crate::route_catalog::runtime_governance::VALIDATION_FEE_PROPOSALS_PATH;
@@ -247,14 +276,8 @@ pub mod uri {
     pub const GOV_PROPOSE_DEPLOY: &str = "/v1/gov/proposals/deploy-contract";
     /// Draft one closed SCCP route-governance proposal.
     pub const GOV_PROPOSE_SCCP_ROUTE_GOVERNANCE: &str = "/v1/gov/proposals/sccp-route-governance";
-    /// Governance: submit a non-ZK quadratic ballot (optional mode)
+    /// Standalone referendum ballot route; never a Parliament body ballot.
     pub const GOV_BALLOT_PLAIN: &str = "/v1/gov/ballots/plain";
-    /// Governance: draft an equal signed Parliament stage ballot
-    pub const GOV_PARLIAMENT_BALLOT: &str = "/v1/gov/parliament/ballots";
-    /// Governance: finalize a referendum (compute tally and emit Approved/Rejected)
-    pub const GOV_FINALIZE: &str = "/v1/gov/finalize";
-    /// Governance: enact an approved referendum (build `EnactReferendum` instruction)
-    pub const GOV_ENACT: &str = "/v1/gov/enact";
     /// Governance: query the current sortition council
     pub const GOV_COUNCIL_CURRENT: &str = "/v1/gov/council/current";
     /// Governance: query exact citizenship registry count

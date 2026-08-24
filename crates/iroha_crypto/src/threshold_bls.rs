@@ -11,8 +11,8 @@
 //! `g^s h^r v^u` with unblinded constants, partial signatures are
 //! `H0(m)^s H1(m)^r`, and each partial carries the paper's two-equation
 //! representation proof. The Fiat--Shamir transcript contains every paper
-//! statement element `(x, y, pk_i, sigma_i, m)` plus the typed Iroha session,
-//! qualified-transcript, participant-seat, and parameter bindings.
+//! statement element `(x, y, pk_i, sigma_i, H0(m), H1(m))` plus the typed Iroha
+//! session, qualified-transcript, participant-seat, and parameter bindings.
 //!
 //! # Security model and limits
 //!
@@ -70,10 +70,16 @@ pub const THRESHOLD_BLS_PUBLIC_KEY_BYTES: usize = 96;
 pub const THRESHOLD_BLS_SIGNATURE_BYTES: usize = 48;
 /// Canonical `(s, r, u)` coefficient bytes accepted only inside zeroizing builders.
 pub type DasRenSecretCoefficientV1 = [[u8; 32]; 3];
-/// RFC 9380 hash-to-G1 DST for the global randomness beacon.
+/// Draft CFRG BLS-07 basic-suite DST for the global randomness beacon.
+///
+/// It uses the RFC 9380 BLS12-381 hash-to-G1 suite and places application
+/// context after the reserved `NUL:` scheme tag.
 pub const BEACON_SIGNATURE_DST_V1: &[u8] =
     b"BLS_SIG_BLS12381G1_XMD:SHA-256_SSWU_RO_NUL:IROHA-BEACON-V1_";
-/// RFC 9380 hash-to-G1 DST for Parliament timelock release identities.
+/// Draft CFRG BLS-07 basic-suite DST for Parliament timelock releases.
+///
+/// The application context is purpose-distinct and follows the reserved
+/// `NUL:` scheme tag; the complete release identity remains in the message.
 pub const TLE_RELEASE_SIGNATURE_DST_V1: &[u8] =
     b"BLS_SIG_BLS12381G1_XMD:SHA-256_SSWU_RO_NUL:IROHA-TLE-RELEASE-V1_";
 
@@ -1537,7 +1543,7 @@ impl<P: ThresholdBlsPurpose> AdaptiveThresholdBlsPublicTranscript<P> {
         let z_s = decode_scalar(&partial.z_s)?;
         let z_r = decode_scalar(&partial.z_r)?;
         let z_u = decode_scalar(&partial.z_u)?;
-        let challenge = partial_proof_challenge(self, &message, share, partial)?;
+        let challenge = partial_proof_challenge(self, &message_h0, &message_h1, share, partial)?;
         let lhs_g2 = (G2Projective::generator() * z_s
             + G2Projective::from(self.parameters.h_point()?) * z_r
             + G2Projective::from(self.parameters.v_point()?) * z_u)
@@ -1812,7 +1818,8 @@ impl<P: ThresholdBlsPurpose> AdaptiveThresholdBlsSecretShare<P> {
             .get(usize::from(self.index - 1))
             .filter(|share| share.index == self.index)
             .ok_or(ThresholdBlsError::UnknownParticipant)?;
-        let challenge = partial_proof_challenge(transcript, &message, share, &partial)?;
+        let challenge =
+            partial_proof_challenge(transcript, &message_h0, &message_h1, share, &partial)?;
         partial.z_s = (nonce_s + challenge * s).to_bytes_be();
         partial.z_r = (nonce_r + challenge * r).to_bytes_be();
         partial.z_u = (nonce_u + challenge * u).to_bytes_be();
@@ -2143,7 +2150,8 @@ fn compute_adaptive_transcript_hash<P: ThresholdBlsPurpose>(
 
 fn partial_proof_challenge<P: ThresholdBlsPurpose>(
     transcript: &AdaptiveThresholdBlsPublicTranscript<P>,
-    message: &[u8],
+    message_h0: &G1Affine,
+    message_h1: &G1Affine,
     share: &AdaptiveThresholdBlsPublicShare<P>,
     partial: &DasRenPartialSignature<P>,
 ) -> Result<Scalar, ThresholdBlsError> {
@@ -2158,14 +2166,18 @@ fn partial_proof_challenge<P: ThresholdBlsPurpose>(
     hasher.update(THRESHOLD_BLS_PROTOCOL_VERSION_V1.to_be_bytes());
     hasher.update(transcript.transcript_hash);
     hasher.update(transcript.parameters.digest());
-    hasher.update((message.len() as u32).to_be_bytes());
-    hasher.update(message);
-    hasher.update(partial.index.to_be_bytes());
-    hasher.update(share.participant_hash);
-    hasher.update(share.bytes);
-    hasher.update(partial.sigma);
+    // Preserve the Das--Ren Fiat--Shamir statement order `(x, y, pk_i,
+    // sigma_i, H0(m), H1(m))`. The fixed prefix above and seat suffix below
+    // strengthen application/session binding without omitting or
+    // reinterpreting a paper statement element.
     hasher.update(partial.proof_x);
     hasher.update(partial.proof_y);
+    hasher.update(share.bytes);
+    hasher.update(partial.sigma);
+    hasher.update(message_h0.to_compressed());
+    hasher.update(message_h1.to_compressed());
+    hasher.update(partial.index.to_be_bytes());
+    hasher.update(share.participant_hash);
     scalar_from_transcript(hasher)
 }
 
@@ -2459,10 +2471,25 @@ mod tests {
             ThresholdBlsSession::<BeaconPurpose>::new([0; 32], binding(2), binding(3), 4, 2),
             Err(ThresholdBlsError::ZeroBinding)
         );
-        assert!(
+        let largest =
             ThresholdBlsSession::<BeaconPurpose>::new(binding(1), binding(2), binding(3), 31, 11)
-                .is_ok()
+                .expect("largest supported session");
+        assert_eq!(
+            largest.maximum_distinct_share_exposures_without_rotation(),
+            10
         );
+        assert!(!THRESHOLD_BLS_PROACTIVE_REFRESH_SUPPORTED_V1);
+    }
+
+    #[test]
+    fn basic_suite_domains_follow_bls_07_and_keep_roles_distinct() {
+        const BASIC_PREFIX: &[u8] = b"BLS_SIG_BLS12381G1_XMD:SHA-256_SSWU_RO_NUL:";
+        for domain in [BEACON_SIGNATURE_DST_V1, TLE_RELEASE_SIGNATURE_DST_V1] {
+            assert!(domain.starts_with(BASIC_PREFIX));
+            assert!(domain.ends_with(b"_"));
+            assert!(!domain.starts_with(b"IROHA_BLS_SIG_"));
+        }
+        assert_ne!(BEACON_SIGNATURE_DST_V1, TLE_RELEASE_SIGNATURE_DST_V1);
     }
 
     #[test]
@@ -2738,7 +2765,7 @@ mod tests {
     }
 
     #[test]
-    fn adaptive_partial_proofs_combine_to_one_subset_independent_signature() {
+    fn das_ren_partials_prove_representations_and_final_bls_is_subset_unique() {
         let fixture = adaptive_fixture();
         let mut rng = ChaCha20Rng::from_seed([77; 32]);
         let partials = (1_u16..=4)

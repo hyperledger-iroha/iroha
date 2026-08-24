@@ -37,12 +37,12 @@ fn unlocks_after_expiry_height() {
                 expiry_height: 2,
                 direction: 0,
                 duration_blocks: 0,
-                custody: Some(iroha_core::state::GovernanceLockCustody {
+                custody: iroha_core::state::GovernanceLockCustody {
                     escrowed: false,
                     asset_definition_id: state.gov.voting_asset_id.clone(),
                     bond_escrow_account: state.gov.bond_escrow_account.clone(),
                     slash_receiver_account: state.gov.slash_receiver_account.clone(),
-                }),
+                },
             },
         );
         stx.world

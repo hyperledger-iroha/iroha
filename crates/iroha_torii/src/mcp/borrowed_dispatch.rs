@@ -360,15 +360,6 @@ fn require_borrowed_governance_selector_body<'a>(
     Ok(value)
 }
 
-fn require_borrowed_governance_proposal_id_body<'a>(
-    body: &BorrowedMcpJson<'a>,
-    field: &str,
-) -> Result<&'a str, String> {
-    let value = require_borrowed_governance_body_string(body, field)?;
-    require_governance_proposal_id_v1(field, value)?;
-    Ok(value)
-}
-
 fn try_begin_form_query(path: &mut String) -> Result<usize, String> {
     let query_start = path
         .len()
@@ -548,12 +539,9 @@ fn append_transaction_status_query(
     )?;
     for (key, value) in source {
         let ignored = if nested_query.is_some() {
-            matches!(key.as_str(), "hash" | "transaction_hash")
+            key == "hash"
         } else {
-            matches!(
-                key.as_str(),
-                "query" | "headers" | "accept" | "hash" | "transaction_hash"
-            )
+            matches!(key.as_str(), "query" | "headers" | "accept" | "hash")
         };
         if ignored || value.is_null() {
             continue;

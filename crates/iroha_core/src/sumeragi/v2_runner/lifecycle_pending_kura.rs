@@ -441,7 +441,6 @@ fn run_pending_active_height(
 ) -> Result<Option<(PreparedPendingKuraSuccessorV1, RetainedMergeSidecars)>, V2RunnerError> {
     let mut next_lane_retransmit = deadline_after(Instant::now(), retransmit_interval);
     let mut canonical_lane_body_recovered = false;
-    let mut finalized_ingress_closed = false;
     loop {
         cleanup_supervisor.reap_finished();
         if output_guard.restart_required() {
@@ -563,35 +562,6 @@ fn run_pending_active_height(
             let _ = wake_rx.recv_timeout(IDLE_POLL);
             continue;
         }
-
-        if !finalized_ingress_closed {
-            activated.close_runner_ingress_for_finalized_drain(&mut active_runner, receiver)?;
-            finalized_ingress_closed = true;
-        }
-        let drained_terminal_ingress = activated.with_runner_runtime(
-            &mut active_runner,
-            |executor, services, lane_work| {
-                let drained = drain_decided_lane_recovery_ingress(
-                    receiver,
-                    executor,
-                    services,
-                    lane_work,
-                    executor.current_tag().view(),
-                    output_guard.as_ref(),
-                    kura.as_ref(),
-                    &common_config.key_pair,
-                    block_sync_server,
-                )?;
-                dispatch_lane_work_effects(lane_work, services, control_queue_capacity)?;
-                Ok::<_, V2RunnerError>(drained.is_some())
-            },
-        )?;
-        if drained_terminal_ingress {
-            continue;
-        }
-        receiver
-            .ensure_closed_drained_cut()
-            .map_err(V2RunnerError::Service)?;
 
         let (finalized, lane_work) = activated.into_finalized_rollover(&mut active_runner)?;
         let prepared_successor = {
@@ -720,6 +690,9 @@ pub(super) fn run_pending_kura_lifecycle_height(
     >,
     reputation_finalized_archive: Option<
         Arc<crate::query::reputation_finalized::ReputationFinalizedArchive>,
+    >,
+    global_beacon_partial_signer: Option<
+        Arc<dyn crate::beacon::GlobalThresholdBeaconPartialSignerV1>,
     >,
     network: crate::IrohaNetwork,
     block_rx: Arc<FairV2Ingress>,
@@ -933,7 +906,7 @@ pub(super) fn run_pending_kura_lifecycle_height(
                 recovery_stage,
             ));
         }
-        match pending.drive_apply_recovery_turn(&mut setup_runner)? {
+        match pending.drive_apply_recovery_turn(&mut setup_runner, control_queue_capacity)? {
             ProductionPendingKuraApplyRecoveryProgressV1::Completed { attempts } => {
                 recovery_attempts = attempts;
                 break;
@@ -1065,6 +1038,7 @@ pub(super) fn run_pending_kura_lifecycle_height(
         kura,
         provider_ingest_finalized_archive,
         reputation_finalized_archive,
+        global_beacon_partial_signer,
         network,
         block_rx,
         lane_relay_rx,

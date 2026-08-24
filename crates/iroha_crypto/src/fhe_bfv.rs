@@ -2596,6 +2596,7 @@ pub struct BfvSecretKey {
 /// BFV public key.
 #[cfg_attr(feature = "json", derive(JsonSerialize, JsonDeserialize))]
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
+#[norito(deny_unknown_fields)]
 pub struct BfvPublicKey {
     /// First public-key component.
     pub b: Vec<u64>,
@@ -2605,6 +2606,7 @@ pub struct BfvPublicKey {
 /// One base-decomposition entry of the relinearization key.
 #[cfg_attr(feature = "json", derive(JsonSerialize, JsonDeserialize))]
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
+#[norito(deny_unknown_fields)]
 pub struct BfvRelinearizationKeyEntry {
     /// First evaluation-key component.
     pub b: Vec<u64>,
@@ -2614,6 +2616,7 @@ pub struct BfvRelinearizationKeyEntry {
 /// Relinearization key for reducing quadratic ciphertexts back to size two.
 #[cfg_attr(feature = "json", derive(JsonSerialize, JsonDeserialize))]
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
+#[norito(deny_unknown_fields)]
 pub struct BfvRelinearizationKey {
     /// Decomposition entries, ordered from least- to most-significant digit.
     pub entries: Vec<BfvRelinearizationKeyEntry>,
@@ -2621,6 +2624,7 @@ pub struct BfvRelinearizationKey {
 /// Key-switching material for one BFV Galois automorphism.
 #[cfg_attr(feature = "json", derive(JsonSerialize, JsonDeserialize))]
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
+#[norito(deny_unknown_fields)]
 pub struct BfvGaloisKey {
     /// Canonical odd automorphism power `k` for `x -> x^k`.
     pub automorphism_power: u32,
@@ -2630,6 +2634,7 @@ pub struct BfvGaloisKey {
 /// Public rotation key admitted for deterministic ciphertext-slot rotations.
 #[cfg_attr(feature = "json", derive(JsonSerialize, JsonDeserialize))]
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
+#[norito(deny_unknown_fields)]
 pub struct BfvRotationKey {
     /// Positive left-rotation step supported by this key.
     pub rotation_steps: u32,
@@ -2645,6 +2650,7 @@ pub struct BfvRotationKey {
 #[cfg_attr(feature = "json", derive(JsonSerialize, JsonDeserialize))]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, IntoSchema, Default)]
 #[norito(tag = "mode", content = "value", rename_all = "snake_case")]
+#[norito(deny_unknown_fields)]
 pub enum BfvBootstrapKeyMode {
     /// First-release public encrypted-zero refresh masks.
     #[default]
@@ -2659,6 +2665,7 @@ pub enum BfvBootstrapKeyMode {
 /// execution consumes the concrete payload bundle.
 #[cfg_attr(feature = "json", derive(JsonSerialize, JsonDeserialize))]
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
+#[norito(deny_unknown_fields)]
 pub struct BfvFullBootstrapCircuitMaterialV1 {
     /// Canonical full-bootstrap circuit id.
     pub circuit_id: String,
@@ -2701,6 +2708,7 @@ pub struct BfvFullBootstrapCircuitMaterialV1 {
 #[cfg_attr(feature = "json", derive(JsonSerialize, JsonDeserialize))]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[norito(tag = "role", content = "value", rename_all = "snake_case")]
+#[norito(deny_unknown_fields)]
 pub enum BfvFullBootstrapCircuitArtifactRoleV1 {
     /// Coefficient-to-slot linear transform material.
     CoefficientToSlotKey,
@@ -3747,6 +3755,7 @@ pub struct BfvFullBootstrapAccumulatorV1 {
 /// can consume them.
 #[cfg_attr(feature = "json", derive(JsonSerialize, JsonDeserialize))]
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
+#[norito(deny_unknown_fields)]
 pub struct BfvFullBootstrapCircuitArtifactBundleV1 {
     /// Coefficient-to-slot linear transform material.
     pub coefficient_to_slot_key: Vec<u8>,
@@ -3775,6 +3784,7 @@ pub struct BfvFullBootstrapCircuitArtifactBundleV1 {
     clippy::struct_excessive_bools,
     reason = "release-audit wire profile exposes one boolean per audited proof obligation"
 )]
+#[norito(deny_unknown_fields)]
 pub struct BfvFullBootstrapReleaseAuditProofProfileV1 {
     /// Evidence proof-profile version.
     pub version: u16,
@@ -3896,6 +3906,7 @@ pub struct BfvFullBootstrapReleaseAuditProofProfileV1 {
 /// Proof-key artifact summary recorded in release audit evidence.
 #[cfg_attr(feature = "json", derive(JsonSerialize, JsonDeserialize))]
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
+#[norito(deny_unknown_fields)]
 pub struct BfvFullBootstrapReleaseAuditKeyEvidenceV1 {
     /// Evidence proof-key record version.
     pub version: u16,
@@ -3928,6 +3939,7 @@ pub struct BfvFullBootstrapReleaseAuditKeyEvidenceV1 {
 /// path.
 #[cfg_attr(feature = "json", derive(JsonSerialize, JsonDeserialize))]
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
+#[norito(deny_unknown_fields)]
 pub struct BfvFullBootstrapReleaseAuditEvidenceV1 {
     /// Evidence payload version.
     pub version: u16,
@@ -3984,6 +3996,7 @@ pub struct BfvFullBootstrapReleaseAuditEvidenceV1 {
 /// checked against the evidence without trusting display text.
 #[cfg_attr(feature = "json", derive(JsonSerialize, JsonDeserialize))]
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
+#[norito(deny_unknown_fields)]
 pub struct BfvFullBootstrapReleaseAuditSignoffPayloadV1 {
     /// Signoff payload version.
     pub version: u16,
@@ -4025,6 +4038,7 @@ pub struct BfvFullBootstrapReleaseAuditSignoffPayloadV1 {
 /// Signed external audit signoff for BFV full-bootstrap release artifacts.
 #[cfg_attr(feature = "json", derive(JsonSerialize, JsonDeserialize))]
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
+#[norito(deny_unknown_fields)]
 pub struct BfvFullBootstrapReleaseAuditSignoffV1 {
     /// Signoff envelope version.
     pub version: u16,
@@ -4042,6 +4056,7 @@ pub struct BfvFullBootstrapReleaseAuditSignoffV1 {
 /// rederiving the evidence from concrete artifacts during admission or publication checks.
 #[cfg_attr(feature = "json", derive(JsonSerialize, JsonDeserialize))]
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
+#[norito(deny_unknown_fields)]
 pub struct BfvFullBootstrapReleaseAuditRecordV1 {
     /// Record layout version.
     pub version: u16,
@@ -4056,6 +4071,7 @@ pub struct BfvFullBootstrapReleaseAuditRecordV1 {
 #[cfg_attr(feature = "json", derive(JsonSerialize, JsonDeserialize))]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[norito(tag = "verdict", content = "value", rename_all = "snake_case")]
+#[norito(deny_unknown_fields)]
 pub enum BfvFullBootstrapReleaseAuditVerdictV1 {
     /// The reviewed release artifacts are approved for publication.
     ApprovedForRelease,
@@ -4070,6 +4086,7 @@ pub enum BfvFullBootstrapReleaseAuditVerdictV1 {
 /// decision.
 #[cfg_attr(feature = "json", derive(JsonSerialize, JsonDeserialize))]
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
+#[norito(deny_unknown_fields)]
 pub struct BfvFullBootstrapReleaseAuditManifestV1 {
     /// Manifest layout version.
     pub version: u16,
@@ -4125,6 +4142,7 @@ pub struct BfvFullBootstrapReleaseAuditManifestV1 {
 /// validation hashes every packaged object before accepting it.
 #[cfg_attr(feature = "json", derive(JsonSerialize, JsonDeserialize))]
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
+#[norito(deny_unknown_fields)]
 pub struct BfvFullBootstrapReleaseAuditPackageV1 {
     /// Package layout version.
     pub version: u16,
@@ -4146,6 +4164,7 @@ pub struct BfvFullBootstrapReleaseAuditPackageV1 {
 /// Public bootstrap key admitted for deterministic ciphertext refresh.
 #[cfg_attr(feature = "json", derive(JsonSerialize, JsonDeserialize))]
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
+#[norito(deny_unknown_fields)]
 pub struct BfvBootstrapKey {
     /// Stable bootstrap-key identifier.
     pub key_id: String,
@@ -4161,8 +4180,7 @@ pub struct BfvBootstrapKey {
     /// `FullBootstrapV1` keys do not expose those bootstrap transcript seeds, so governed
     /// full-bootstrap material requires this digest to bind proof statements to the same public key
     /// as admission policy.
-    #[norito(default)]
-    #[norito(skip_serializing_if = "Option::is_none")]
+    #[norito(required)]
     pub public_key_digest: Option<Hash>,
     /// First-round encryption of zero added during refresh.
     ///
@@ -4178,7 +4196,6 @@ pub struct BfvBootstrapKey {
     /// the requested round index without holding the secret key or observing the plaintext.
     /// `FullBootstrapV1` keys must leave this empty so governed full-bootstrap admission cannot be
     /// mixed with the refresh-only bridge.
-    #[norito(default)]
     pub round_refreshes: Vec<BfvCiphertext>,
     /// Bootstrap key execution mode.
     ///
@@ -4186,30 +4203,27 @@ pub struct BfvBootstrapKey {
     /// [`BfvFullBootstrapCircuitMaterialV1`] commitments and executes only through governed
     /// artifact-aware APIs; direct material-only refresh surfaces remain fail-closed with an
     /// explicit artifact requirement.
-    #[norito(default)]
     pub mode: BfvBootstrapKeyMode,
     /// Full-bootstrap circuit/key material commitments.
     ///
     /// `RefreshOnlyV1` keys must leave this empty. `FullBootstrapV1` keys must carry it so bundle
     /// digests can bind the governed bootstrap artifacts.
-    #[norito(default)]
-    #[norito(skip_serializing_if = "Option::is_none")]
+    #[norito(required)]
     pub full_bootstrap_material: Option<BfvFullBootstrapCircuitMaterialV1>,
 }
 /// Evaluation keys required by public BFV evaluators.
 #[cfg_attr(feature = "json", derive(JsonSerialize, JsonDeserialize))]
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
+#[norito(deny_unknown_fields)]
 pub struct BfvEvaluationKeyBundle {
     /// Relinearization key used after ciphertext-ciphertext multiplication.
     pub relinearization_key: BfvRelinearizationKey,
     /// Rotation keys admitted for slot rotation.
-    #[norito(default)]
     pub rotation_keys: Vec<BfvRotationKey>,
     /// Galois automorphism keys admitted for packed-polynomial key switching.
-    #[norito(default)]
     pub galois_keys: Vec<BfvGaloisKey>,
     /// Optional bootstrap key used to refresh ciphertexts.
-    #[norito(default)]
+    #[norito(required)]
     pub bootstrap_key: Option<BfvBootstrapKey>,
 }
 /// Public transcript seed descriptor for a rotation refresh key.
@@ -5510,6 +5524,7 @@ pub fn validate_bfv_full_bootstrap_galois_key_set_bytes_for_witness_material_v1(
 /// BFV ciphertext with two components.
 #[cfg_attr(feature = "json", derive(JsonSerialize, JsonDeserialize))]
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
+#[norito(deny_unknown_fields)]
 pub struct BfvCiphertext {
     /// First ciphertext polynomial.
     pub c0: Vec<u64>,

@@ -176,6 +176,9 @@ declare_permissions! {
     iroha_executor_data_model::permission::trigger::{CanExecuteTrigger},
     iroha_executor_data_model::permission::trigger::{CanModifyTriggerMetadata},
     iroha_executor_data_model::permission::executor::{CanUpgradeExecutor},
+    iroha_executor_data_model::permission::governance::{CanManageRuntimeUpgrades},
+    iroha_executor_data_model::permission::governance::{CanManageConsensusKeys},
+    iroha_executor_data_model::permission::governance::{CanManageConfidentialParams},
     iroha_executor_data_model::permission::smart_contract::{CanRegisterSmartContractCode},
     iroha_executor_data_model::permission::smart_contract::{CanInvokeContractEntrypoint},
     iroha_executor_data_model::permission::settlement::{CanExecuteSettlement},
@@ -198,8 +201,6 @@ declare_permissions! {
     iroha_executor_data_model::permission::sorafs::{CanManageSorafsPopRegistry},
     iroha_executor_data_model::permission::sorafs::{CanOperateSorafsPopIssuer},
     iroha_executor_data_model::permission::sorafs::{CanUpsertSorafsProviderCredit},
-    iroha_executor_data_model::permission::sorafs::{CanRegisterSorafsProviderOwner},
-    iroha_executor_data_model::permission::sorafs::{CanUnregisterSorafsProviderOwner},
     iroha_executor_data_model::permission::soranet::{CanManageSoranetVpnQuoteIssuers},
     iroha_executor_data_model::permission::soranet::{CanIssueSoranetVpnQuote},
     iroha_executor_data_model::permission::soranet::{CanIngestSoranetPrivacy},
@@ -411,6 +412,18 @@ mod executor {
     use super::*;
     use iroha_executor_data_model::permission::executor::CanUpgradeExecutor;
     impl_validate_grant_revoke_via!(OnlyGenesis::from => CanUpgradeExecutor);
+}
+mod governance {
+    use super::*;
+    use iroha_executor_data_model::permission::governance::{
+        CanManageConfidentialParams, CanManageConsensusKeys, CanManageRuntimeUpgrades,
+    };
+
+    impl_owned_permission!(
+        CanManageRuntimeUpgrades,
+        CanManageConsensusKeys,
+        CanManageConfidentialParams,
+    );
 }
 mod smart_contract {
     use super::*;
@@ -838,9 +851,8 @@ mod sorafs {
     use iroha_executor_data_model::permission::sorafs::{
         CanBindSorafsAlias, CanCompleteSorafsReplicationOrder, CanDeclareSorafsCapacity,
         CanFileSorafsCapacityDispute, CanIssueSorafsReplicationOrder, CanManageSorafsModeration,
-        CanManageSorafsPopRegistry, CanOperateSorafsPopIssuer, CanRegisterSorafsProviderOwner,
-        CanSetSorafsPricing, CanSetSorafsReservePolicy, CanSubmitSorafsTelemetry,
-        CanUnregisterSorafsProviderOwner, CanUpsertSorafsProviderCredit,
+        CanManageSorafsPopRegistry, CanOperateSorafsPopIssuer, CanSetSorafsPricing,
+        CanSetSorafsReservePolicy, CanSubmitSorafsTelemetry, CanUpsertSorafsProviderCredit,
     };
     impl_owned_permission!(
         CanBindSorafsAlias,
@@ -855,8 +867,6 @@ mod sorafs {
         CanSetSorafsPricing,
         CanSetSorafsReservePolicy,
         CanUpsertSorafsProviderCredit,
-        CanRegisterSorafsProviderOwner,
-        CanUnregisterSorafsProviderOwner,
     );
 }
 mod soranet {
@@ -1938,6 +1948,9 @@ mod tests {
             CanManageAssetDefinitionConfidentialPolicy,
         },
         domain::CanRegisterDomain,
+        governance::{
+            CanManageConfidentialParams, CanManageConsensusKeys, CanManageRuntimeUpgrades,
+        },
         nexus::{
             CanEnrollFeeSponsorProgram, CanManageFeeSponsorProgram,
             CanPublishSpaceDirectoryManifest, CanPublishSpaceDirectoryManifestForAccountDomain,
@@ -1977,6 +1990,46 @@ mod tests {
                 .parse()
                 .unwrap();
         AccountId::new(public_key)
+    }
+    #[test]
+    fn operational_governance_permissions_require_canonical_unit_payloads() {
+        let authority = make_account_id();
+        let context = make_context(&authority, 2);
+        let permissions = [
+            PermissionObject::from(CanManageRuntimeUpgrades),
+            PermissionObject::from(CanManageConsensusKeys),
+            PermissionObject::from(CanManageConfidentialParams),
+        ];
+
+        for raw in permissions {
+            let name = raw.name().to_owned();
+            let dispatched =
+                AnyPermission::try_from(&raw).expect("canonical unit permission must be typed");
+            let previous = test_override::replace_permissions(vec![raw]);
+            assert!(
+                dispatched
+                    .validate_grant(&authority, &context, &Iroha)
+                    .is_ok(),
+                "exact holder could not grant {name}",
+            );
+            assert!(
+                dispatched
+                    .validate_revoke(&authority, &context, &Iroha)
+                    .is_ok(),
+                "exact holder could not revoke {name}",
+            );
+            test_override::replace_permissions(previous);
+
+            let malformed = PermissionObject::new(
+                name.parse().expect("permission ident"),
+                Json::from_raw_json("{\"invented_scope\":true}".to_owned())
+                    .expect("valid JSON fixture"),
+            );
+            assert!(
+                AnyPermission::try_from(&malformed).is_err(),
+                "same-name non-unit {name} payload must fail typed dispatch",
+            );
+        }
     }
     fn make_third_account_id() -> AccountId {
         let public_key: PublicKey =

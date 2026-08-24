@@ -15,7 +15,7 @@ use std::sync::Arc;
 fn pipeline_warning_emitted_on_dag_mismatch() {
     // Build a persistent Kura in a temp directory so sidecars are writable.
     let temp_dir = tempfile::tempdir().expect("tempdir");
-    let (kura, _block_count) = Kura::new(
+    let (kura, _block_count) = Kura::new_fresh_single_lane(
         &iroha_config::parameters::actual::Kura {
             init_mode: iroha_config::kura::InitMode::Strict,
             store_dir: iroha_config::base::WithOrigin::inline(
@@ -140,7 +140,7 @@ fn pipeline_warning_emitted_on_dag_mismatch() {
 fn pipeline_warning_ignored_for_stale_sidecar() {
     // Build a persistent Kura in a temp directory so sidecars are writable.
     let temp_dir = tempfile::tempdir().expect("tempdir");
-    let (kura, _block_count) = Kura::new(
+    let (kura, _block_count) = Kura::new_fresh_single_lane(
         &iroha_config::parameters::actual::Kura {
             init_mode: iroha_config::kura::InitMode::Strict,
             store_dir: iroha_config::base::WithOrigin::inline(

@@ -792,14 +792,6 @@ TCProtectsPotentialCommit(tc) ==
       PotentialCommitSigners(tc.context, protectedView, subject))
       => TCProtectsViewSubject(tc, protectedView, subject)
 
-\* First-release compatibility names. Installed TCs never authorize a Commit
-\* created after an honest timeout; only strict timeout protection is valid.
-InstalledTcAuthorizedPotentialCommitIntersection(tc, protectedView, subject) ==
-  FALSE
-
-TCProtectsOrInstalledTcAuthorizesPotentialCommit(tc) ==
-  TCProtectsPotentialCommit(tc)
-
 THEOREM StrongInvariantImpliesDirectTimeoutProtection ==
   StrongInductiveInvariant
     => \A tc \in formedTCs:
@@ -907,13 +899,6 @@ PROOF
     <2> QED BY <2>1 DEF TCProtectsPotentialCommit
   <1> QED BY <1>1
 
-THEOREM StrongInvariantImpliesTimeoutProtectionAlternative ==
-  StrongInductiveInvariant
-    => \A tc \in formedTCs:
-         TCProtectsOrInstalledTcAuthorizesPotentialCommit(tc)
-BY StrongInvariantImpliesDirectTimeoutProtection
-   DEF TCProtectsOrInstalledTcAuthorizesPotentialCommit
-
 (***************************************************************************
 Every newly pending LockAndCommit uses a PrepareQC, proposal origin, and Vote
 from the durable current round. Every durable honest timeout directly protects
@@ -940,28 +925,6 @@ PROOF
     <2> QED BY <2>1, <2>2, PTL
          DEF SameRoundLockAndCommitAuthorizationProperty
   <1> QED BY <1>1
-
-\* Compatibility surface for the existing release ledger. Both old names now
-\* denote the exact same-round obligation above and have no historical branch.
-HistoricalLockedCommitAuthorizationProperty(specification) ==
-  SameRoundLockAndCommitAuthorizationProperty(specification)
-
-THEOREM HistoricalLockedCommitAuthorizationObligation ==
-  \A initialContext:
-    HistoricalLockedCommitAuthorizationProperty(
-      CoreSpecAt(initialContext))
-BY SameRoundLockAndCommitAuthorizationObligation
-   DEF HistoricalLockedCommitAuthorizationProperty
-
-HistoricalTcLockedCommitAuthorizationProperty(specification) ==
-  SameRoundLockAndCommitAuthorizationProperty(specification)
-
-THEOREM HistoricalTcLockedCommitAuthorizationObligation ==
-  \A initialContext:
-    HistoricalTcLockedCommitAuthorizationProperty(
-      CoreSpecAt(initialContext))
-BY SameRoundLockAndCommitAuthorizationObligation
-   DEF HistoricalTcLockedCommitAuthorizationProperty
 
 TimeoutProtectionProperty(specification) ==
   specification

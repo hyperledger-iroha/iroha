@@ -4323,14 +4323,6 @@ EXACT_FIXED_PROOF_SUPPORTING_THEOREM_STATEMENTS = {
     ),
     (
         "SumeragiV2IndexedHistoricalRecoveryTransportClosureProofs",
-        "IndexedHistoricalFixedClockLeavesEstablishPrerequisiteSurface",
-    ): (
-        "/\\ IndexedChainSpec /\\ "
-        "IndexedHistoricalFixedClockTemporalLeafProperties => "
-        "IndexedHistoricalFixedClockPrerequisiteSurface"
-    ),
-    (
-        "SumeragiV2IndexedHistoricalRecoveryTransportClosureProofs",
         "IndexedHistoricalFixedClockPacketResidualClosesPacketLeaves",
     ): (
         "IndexedHistoricalFixedClockPacketCorridorTemporalResidual => "

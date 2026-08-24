@@ -2,7 +2,8 @@ fn pending_canonical_capacity_fixture() -> (TempDir, Arc<Kura>) {
     let temp_dir = TempDir::new().expect("pending canonical capacity temp dir");
     let config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
     let lane_config = two_lane_runtime_config();
-    let (mut kura, _) = Kura::new(&config, &lane_config).expect("pending capacity Kura");
+    let (mut kura, _) = Kura::open_test_kura_with_configured_lane_config(&config, &lane_config)
+        .expect("pending capacity Kura");
     Arc::get_mut(&mut kura)
         .expect("pending capacity Kura is exclusive")
         .max_disk_usage_bytes = u64::MAX / 4;

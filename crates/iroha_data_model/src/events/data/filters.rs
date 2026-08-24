@@ -1574,6 +1574,7 @@ fn governance_matches(
         | GovernanceEvent::ParliamentSelected(_)
         | GovernanceEvent::ParliamentBodyTransitioned(_)
         | GovernanceEvent::ParliamentBallotTransitioned(_)
+        | GovernanceEvent::ThresholdKeyLifecycleApplied(_)
         | GovernanceEvent::ParliamentConcentrationWarning(_) => true,
         GovernanceEvent::ParliamentAttemptTransitioned(ev) => {
             proposal_matches(ev.proposal_content_id.as_bytes())
@@ -1591,7 +1592,6 @@ fn governance_matches(
             proposal_matches(ev.proposal_content_id.as_bytes())
         }
         GovernanceEvent::ParliamentApprovalRecorded(ev) => proposal_matches(&ev.proposal_id),
-        GovernanceEvent::ParliamentBallotRecorded(ev) => proposal_matches(&ev.proposal_id),
         GovernanceEvent::LockSlashed(ev) => referendum_matches(&ev.referendum_id),
         GovernanceEvent::LockRestituted(ev) => referendum_matches(&ev.referendum_id),
     }

@@ -195,7 +195,6 @@ jobs:
             pytests/scripts/check_cargo_feature_hygiene_test.py \
             pytests/scripts/check_workspace_target_inventory_test.py \
             scripts/tests/cargo_fast_test.py \
-            scripts/tests/profile_build_test.py \
             scripts/tests/profile_cargo_build_test.py \
             scripts/tests/check_musubi_fixture_owner_test.py \
             scripts/tests/check_compile_time_table_assets_test.py \
@@ -553,3 +552,21 @@ jobs:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
       - name: Nexus cross-lane proof filters
         run: bash ci/check_nexus_cross_lane_proofs.sh
+
+  sora_parliament_lifecycle:
+    runs-on: [self-hosted, Linux, iroha2]
+    container:
+      image: hyperledger/iroha2-ci:nightly-2025-05-08
+    timeout-minutes: 120
+    env:
+      CARGO_TARGET_DIR: target/sora-parliament-lifecycle
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32
+        with:
+          cache-on-failure: "true"
+          shared-key: sora-parliament-lifecycle
+      - name: Verify isolated Parliament corridor source contract
+        run: python3 -I -S scripts/tests/sora_parliament_lifecycle_corridor_source_test.py
+      - name: Run exact four-validator Parliament lifecycle corridor
+        run: bash ci/check_sora_parliament_lifecycle.sh

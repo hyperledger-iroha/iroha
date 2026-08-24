@@ -175,21 +175,13 @@ def parse_args(argv: Optional[Iterable[str]]) -> argparse.Namespace:
     lifecycle_group = parser.add_mutually_exclusive_group(required=True)
     lifecycle_group.add_argument(
         "--lifecycle-url",
-        "--status-url",
         dest="lifecycle_url",
-        help=(
-            "Canonical lane lifecycle endpoint (https://host/v1/nexus/lifecycle); "
-            "--status-url is retained as a deprecated spelling"
-        ),
+        help="Canonical lane lifecycle endpoint (https://host/v1/nexus/lifecycle)",
     )
     lifecycle_group.add_argument(
         "--lifecycle-file",
-        "--status-file",
         dest="lifecycle_file",
-        help=(
-            "Path to a recorded /v1/nexus/lifecycle JSON payload; --status-file "
-            "is retained as a deprecated spelling"
-        ),
+        help="Path to a recorded /v1/nexus/lifecycle JSON payload",
     )
     metrics_group = parser.add_mutually_exclusive_group()
     metrics_group.add_argument(
@@ -202,7 +194,6 @@ def parse_args(argv: Optional[Iterable[str]]) -> argparse.Namespace:
     )
     parser.add_argument(
         "--telemetry-file",
-        "--from-telemetry",
         dest="telemetry_file",
         help=(
             "Path to a newline-delimited telemetry log containing "
@@ -392,7 +383,7 @@ def parse_args(argv: Optional[Iterable[str]]) -> argparse.Namespace:
     for spec in args.require_alias_migration:
         alias_migrations.append(_parse_alias_migration_spec(spec))
     if alias_migrations and not args.telemetry_file:
-        parser.error("--require-alias-migration requires --telemetry-file/--from-telemetry")
+        parser.error("--require-alias-migration requires --telemetry-file")
     args.require_alias_migration = alias_migrations
     return args
 

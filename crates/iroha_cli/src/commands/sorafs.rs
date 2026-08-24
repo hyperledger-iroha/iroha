@@ -17366,10 +17366,11 @@ json_response_fixture!(StatusCode::OK, &norito::json!({
             let account = AccountId::new(kp.public_key().clone());
             let cfg = Config {
                 chain: ChainId::from("test-chain"),
-                network_id:
-                    "hash:32C903E5B3497E34C2B844EBFE8A39C19E6CF8F95D44C1FFB8BA9DCB42F91149#A2F0"
-                        .parse()
-                        .expect("network id"),
+                network_id: iroha::data_model::NetworkId::from_genesis_hash(
+                    iroha_crypto::HashOf::from_untyped_unchecked(iroha_crypto::Hash::new(
+                        b"iroha-cli-sorafs-test-genesis",
+                    )),
+                ),
                 account,
                 account_chain_discriminant:
                     iroha_config::parameters::defaults::common::chain_discriminant(),
@@ -17839,12 +17840,13 @@ json_response_fixture!(StatusCode::OK, &norito::json!({
         let mut artifacts = args
             .issue_with_rng(&mut ctx, &mut rng, default_now)
             .expect("issue token");
-        let verifier = AdmissionTokenVerifier::new(
+        let verifier = AdmissionTokenVerifier::try_new(
             MlDsaSuite::MlDsa44,
             keypair.public_key().to_vec(),
             Duration::from_secs(900),
             Duration::from_secs(5),
-        );
+        )
+        .expect("generated verifier key must match ML-DSA-44");
         let verify_now = SystemTime::UNIX_EPOCH
             + Duration::from_secs(artifacts.token.issued_at().saturating_add(1));
         verifier

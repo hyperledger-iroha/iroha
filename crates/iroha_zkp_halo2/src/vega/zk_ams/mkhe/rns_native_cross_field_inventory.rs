@@ -1490,6 +1490,12 @@ impl<'source, 'proof, S: ZkAmsMkheRnsNativeSourceSnapshotV1>
         &self.linked
     }
 
+    /// Purpose-bound mutable forwarding for the source-packing replay.  No
+    /// other linked source/terminal state is split from this inventory owner.
+    pub(super) fn source_packing_snapshot_mut_v2(&mut self) -> &mut S {
+        self.linked.source_packing_snapshot_mut_v2()
+    }
+
     pub(super) const fn continuation(&self) -> &'proof [u8] {
         self.continuation
     }
@@ -1648,53 +1654,6 @@ where
         cross.proof(),
         prior_context_digest,
     )?;
-    finish_rns_native_cross_field_inventory_authentication_v1(
-        transcript,
-        linked,
-        cross,
-        qpcs_evaluations,
-        view,
-        None,
-    )
-}
-
-/// Consume the provisional pre-qPCS owner into the ordinary authenticated
-/// inventory prerequisite without a second header, full point-validation,
-/// inventory-root, continuation, or codec pass.  The ordinary prerequisite
-/// binding hash is still computed exactly once after final context binding.
-///
-/// The exact typed `cross.proof()` allocation must be pointer-, length-, and
-/// byte-identical to the leased allocation.  Equal bytes copied into a second
-/// allocation are rejected. This detached typed-section compatibility path is
-/// test-only; production must consume the sealed Envelope transition below.
-#[cfg(test)]
-#[allow(
-    dead_code,
-    reason = "the raw typed-section compatibility path exists only for bounded fixtures"
-)]
-pub(super) fn authenticate_rns_native_cross_field_inventory_from_pre_qpcs_preflight_v1<
-    'source,
-    'proof,
-    S,
->(
-    transcript: &ZkAmsMkheRnsNativeChallengeSeedsV1,
-    linked: RnsNativeSourceTerminalCrossFieldPrerequisiteV1<'source, S>,
-    cross: ZkAmsMkheRnsNativeCrossFieldGlobalLookupSectionV1<'proof>,
-    preflight: RnsNativePreQpcsQMaskInventoryPreflightV1<'proof>,
-) -> Result<
-    RnsNativeCrossFieldInventoryPrerequisiteV1<'source, 'proof, S>,
-    RnsNativeCrossFieldInventoryErrorV1,
->
-where
-    S: ZkAmsMkheRnsNativeSourceSnapshotV1,
-{
-    let view = preflight.into_exact_fixture_proof_view_v1(cross.proof())?;
-    let qpcs_evaluations = CanonicalQpcsEvaluationGridV1::from_authenticated_bytes_v1(
-        linked.source().qpcs().evaluations(),
-    )?;
-    let prior_context_digest =
-        prior_context_digest_v1(transcript, &linked, cross, qpcs_evaluations)?;
-    view.validate_expected_prior_context_v1(prior_context_digest)?;
     finish_rns_native_cross_field_inventory_authentication_v1(
         transcript,
         linked,

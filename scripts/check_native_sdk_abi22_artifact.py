@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Record and verify fail-closed ABI-22 native SDK artifact evidence.
+"""Record and verify fail-closed ABI-23 native SDK artifact evidence.
 
 This checker is intentionally host-only.  It authenticates the exact native
 artifact exercised by a Node, Python, C/JNI, or C# test lane, calls that
@@ -35,7 +35,7 @@ else:
 
 
 SCHEMA = "iroha.native-sdk-abi22-artifact.v1"
-REQUIRED_BRIDGE_ABI_VERSION = 22
+REQUIRED_BRIDGE_ABI_VERSION = 23
 MAX_MANIFEST_BYTES = 64 * 1024
 MAX_SYMBOL_TOOL_OUTPUT_BYTES = 16 * 1024 * 1024
 MAX_EXPORTED_SYMBOLS = 1_000_000
@@ -483,7 +483,7 @@ def probe_node_abi(
     *,
     node: str = "node",
 ) -> int:
-    """Load one Node addon and call its exact ABI-22 probe."""
+    """Load one Node addon and call its exact ABI-23 probe."""
 
     source = r"""
 const artifact = process.argv[1];
@@ -520,7 +520,7 @@ def probe_python_abi(
     *,
     python: str = sys.executable,
 ) -> int:
-    """Load one Python extension directly and call its exact ABI-22 probe."""
+    """Load one Python extension directly and call its exact ABI-23 probe."""
 
     source = r"""
 import importlib.machinery
@@ -654,7 +654,7 @@ def canonical_manifest_bytes(manifest: Mapping[str, object]) -> bytes:
 
 
 def validate_manifest(value: object) -> dict[str, object]:
-    """Validate the exact ABI-22 artifact evidence schema."""
+    """Validate the exact ABI-23 artifact evidence schema."""
 
     manifest = _plain_object(value, "native artifact manifest")
     expected_keys = {
@@ -1082,5 +1082,5 @@ if __name__ == "__main__":
     try:
         raise SystemExit(main())
     except ArtifactContractError as error:
-        print(f"native SDK ABI-22 artifact check failed: {error}", file=sys.stderr)
+        print(f"native SDK ABI-23 artifact check failed: {error}", file=sys.stderr)
         raise SystemExit(1) from error

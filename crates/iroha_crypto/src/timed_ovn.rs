@@ -18,9 +18,12 @@
 //! Secret target-group exponentiation uses a fixed 256-round
 //! square-and-multiply-always routine and limb-mask selection over the public
 //! `blst_fp12` representation.  Its result is deterministic across hardware.
-//! An independent compiler/assembly and side-channel audit remains a release
-//! gate; [`ensure_timed_ovn_release_ready_v1`] fails closed until that audit is
-//! recorded.
+//! Runtime protocol validation does not depend on a mutable audit flag.  The
+//! separate official binary-publication corridor must call
+//! [`validate_timed_ovn_official_release_audit_manifest_bytes_v1`] and supply
+//! the exact independently reviewed source archive, release-artifact manifest,
+//! target inventory, report, and evidence archive.  No such external audit
+//! artifact is asserted or embedded by this module.
 
 use core::fmt;
 use std::{collections::HashSet, vec::Vec};
@@ -55,6 +58,15 @@ pub const TIMED_OVN_G2_BYTES_V1: usize = THRESHOLD_BLS_PUBLIC_KEY_BYTES;
 pub const TIMED_OVN_SCALAR_BYTES_V1: usize = 32;
 /// Fixed number of target-group square-and-multiply-always rounds.
 pub const TIMED_OVN_CT_SCALAR_BITS_V1: usize = 256;
+/// Fixed version of the official-release side-channel audit manifest.
+pub const TIMED_OVN_OFFICIAL_RELEASE_AUDIT_MANIFEST_VERSION_V1: u16 = 1;
+/// Number of fields in the fixed official-release audit manifest.
+pub const TIMED_OVN_OFFICIAL_RELEASE_AUDIT_MANIFEST_FIELD_COUNT_V1: u16 = 11;
+/// Fixed width of the signed statement prefix in the audit manifest.
+pub const TIMED_OVN_OFFICIAL_RELEASE_AUDIT_STATEMENT_BYTES_V1: usize = 237;
+/// Fixed width of the complete canonical audit manifest.
+pub const TIMED_OVN_OFFICIAL_RELEASE_AUDIT_MANIFEST_BYTES_V1: usize =
+    TIMED_OVN_OFFICIAL_RELEASE_AUDIT_STATEMENT_BYTES_V1 + 64;
 
 const SESSION_DOMAIN_V1: &[u8] = b"iroha.parliament.timed-ovn.session.v1\0";
 const PARAMETER_PROFILE_DOMAIN_V1: &[u8] =
@@ -66,6 +78,19 @@ const SURVIVOR_ROOT_DOMAIN_V1: &[u8] = b"iroha.parliament.timed-ovn.survivor-roo
 const BALLOT_CHALLENGE_DOMAIN_V1: &[u8] = b"iroha.parliament.timed-ovn.ballot-or-proof.v1\0";
 const REGISTRATION_MAGIC_V1: &[u8; 8] = b"ITOVREG1";
 const BALLOT_MAGIC_V1: &[u8; 8] = b"ITOVBAL1";
+const OFFICIAL_RELEASE_AUDIT_MANIFEST_MAGIC_V1: &[u8; 8] = b"ITOVAUD1";
+const OFFICIAL_RELEASE_AUDIT_SIGNING_DOMAIN_V1: &[u8] =
+    b"iroha.parliament.timed-ovn.official-release-audit-signoff.v1\0";
+const OFFICIAL_RELEASE_AUDIT_SOURCE_DOMAIN_V1: &[u8] =
+    b"iroha.parliament.timed-ovn.official-release-audit.source-archive.v1\0";
+const OFFICIAL_RELEASE_AUDIT_ARTIFACT_MANIFEST_DOMAIN_V1: &[u8] =
+    b"iroha.parliament.timed-ovn.official-release-audit.artifact-manifest.v1\0";
+const OFFICIAL_RELEASE_AUDIT_TARGET_INVENTORY_DOMAIN_V1: &[u8] =
+    b"iroha.parliament.timed-ovn.official-release-audit.target-inventory.v1\0";
+const OFFICIAL_RELEASE_AUDIT_REPORT_DOMAIN_V1: &[u8] =
+    b"iroha.parliament.timed-ovn.official-release-audit.report.v1\0";
+const OFFICIAL_RELEASE_AUDIT_EVIDENCE_ARCHIVE_DOMAIN_V1: &[u8] =
+    b"iroha.parliament.timed-ovn.official-release-audit.evidence-archive.v1\0";
 const OPTION_TAGS_V1: [u8; TIMED_OVN_CHOICE_COUNT_V1] = [0, 1, 2];
 const FP_BYTES: usize = 48;
 const FP_LIMBS: usize = 6;
@@ -100,6 +125,26 @@ pub enum TimedOvnChoiceV1 {
     Nay = 1,
     /// Count toward turnout without choosing Aye or Nay.
     Abstain = 2,
+}
+
+/// Machine-checkable decision in an official-release audit manifest.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[repr(u8)]
+pub enum TimedOvnOfficialReleaseAuditVerdictV1 {
+    /// The reviewed artifact set must not be published as an official build.
+    Rejected = 0,
+    /// The independent reviewer approved exactly the committed artifact set.
+    ApprovedForOfficialRelease = 1,
+}
+
+impl TimedOvnOfficialReleaseAuditVerdictV1 {
+    fn from_tag(tag: u8) -> Result<Self, TimedOvnError> {
+        match tag {
+            0 => Ok(Self::Rejected),
+            1 => Ok(Self::ApprovedForOfficialRelease),
+            _ => Err(TimedOvnError::InvalidOfficialReleaseAuditManifest),
+        }
+    }
 }
 
 impl TimedOvnChoiceV1 {
@@ -189,25 +234,388 @@ pub enum TimedOvnError {
     /// Decoded choice counts did not sum to the exact survivor count.
     #[error("timed-OVN decoded counts do not equal the survivor count")]
     InvalidTally,
-    /// Independent review of the constant-time target-group path is not recorded.
-    #[error("timed-OVN external side-channel audit release gate is not satisfied")]
-    ExternalSideChannelAuditRequired,
+    /// The official-release corridor did not supply its required audit manifest.
+    #[error("timed-OVN official-release audit evidence is required")]
+    OfficialReleaseAuditEvidenceRequired,
+    /// The official-release audit manifest was malformed or noncanonical.
+    #[error("invalid canonical timed-OVN official-release audit manifest")]
+    InvalidOfficialReleaseAuditManifest,
+    /// The manifest did not approve publication of the committed artifacts.
+    #[error("timed-OVN official-release audit manifest does not approve release")]
+    OfficialReleaseAuditNotApproved,
+    /// The manifest reviewer did not match the release corridor's trusted key.
+    #[error("timed-OVN official-release audit reviewer is not trusted")]
+    UntrustedOfficialReleaseAuditReviewer,
+    /// The reviewer signature was malformed or invalid.
+    #[error("invalid timed-OVN official-release audit reviewer signature")]
+    InvalidOfficialReleaseAuditSignature,
+    /// Supplied release evidence did not match its signed commitment.
+    #[error("timed-OVN official-release audit evidence digest mismatch")]
+    OfficialReleaseAuditEvidenceMismatch,
 }
 
-/// Return the fail-closed release-audit status for the v1 timed-OVN suite.
+/// Exact public artifacts reviewed for one official timed-OVN binary release.
 ///
-/// The arithmetic path is implemented and tested, but an external review of
-/// generated code and supported hardware is required before production ballot
-/// admission is enabled.
+/// This borrowed view is release-corridor input. It is not consensus state and
+/// must never be consulted by ballot registration, sealing, or opening.
+pub struct TimedOvnOfficialReleaseAuditArtifactsV1<'a> {
+    implementation_source_archive: &'a [u8],
+    release_artifact_manifest: &'a [u8],
+    supported_target_inventory: &'a [u8],
+    audit_report: &'a [u8],
+    audit_evidence_archive: &'a [u8],
+}
+
+impl<'a> TimedOvnOfficialReleaseAuditArtifactsV1<'a> {
+    /// Bind the exact byte artifacts supplied to the official-release verifier.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`TimedOvnError::OfficialReleaseAuditEvidenceRequired`] when any
+    /// mandatory artifact is empty.
+    pub fn new(
+        implementation_source_archive: &'a [u8],
+        release_artifact_manifest: &'a [u8],
+        supported_target_inventory: &'a [u8],
+        audit_report: &'a [u8],
+        audit_evidence_archive: &'a [u8],
+    ) -> Result<Self, TimedOvnError> {
+        if [
+            implementation_source_archive,
+            release_artifact_manifest,
+            supported_target_inventory,
+            audit_report,
+            audit_evidence_archive,
+        ]
+        .iter()
+        .any(|artifact| artifact.is_empty())
+        {
+            return Err(TimedOvnError::OfficialReleaseAuditEvidenceRequired);
+        }
+        Ok(Self {
+            implementation_source_archive,
+            release_artifact_manifest,
+            supported_target_inventory,
+            audit_report,
+            audit_evidence_archive,
+        })
+    }
+}
+
+/// Signable, fixed-suite statement for an official timed-OVN release audit.
+///
+/// Constructing a statement does not approve a release. Approval exists only
+/// when an independent reviewer signs the canonical bytes and the official
+/// release corridor validates the resulting manifest against its configured
+/// trusted reviewer key and the exact supplied artifacts.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct TimedOvnOfficialReleaseAuditStatementV1 {
+    verdict: TimedOvnOfficialReleaseAuditVerdictV1,
+    parameter_hash: [u8; 32],
+    implementation_source_archive_digest: [u8; 32],
+    release_artifact_manifest_digest: [u8; 32],
+    supported_target_inventory_digest: [u8; 32],
+    audit_report_digest: [u8; 32],
+    audit_evidence_archive_digest: [u8; 32],
+    reviewer_public_key: [u8; 32],
+}
+
+impl TimedOvnOfficialReleaseAuditStatementV1 {
+    /// Derive a statement from the exact public artifacts reviewed externally.
+    ///
+    /// This helper performs no signing and accepts no private key.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`TimedOvnError`] for an invalid reviewer key or malformed
+    /// artifact bindings.
+    pub fn from_artifacts(
+        verdict: TimedOvnOfficialReleaseAuditVerdictV1,
+        artifacts: &TimedOvnOfficialReleaseAuditArtifactsV1<'_>,
+        reviewer_public_key: [u8; 32],
+    ) -> Result<Self, TimedOvnError> {
+        parse_official_release_audit_reviewer_key(&reviewer_public_key)?;
+        let statement = Self {
+            verdict,
+            parameter_hash: timed_ovn_parameter_hash_v1(),
+            implementation_source_archive_digest: official_release_audit_artifact_digest(
+                OFFICIAL_RELEASE_AUDIT_SOURCE_DOMAIN_V1,
+                artifacts.implementation_source_archive,
+            ),
+            release_artifact_manifest_digest: official_release_audit_artifact_digest(
+                OFFICIAL_RELEASE_AUDIT_ARTIFACT_MANIFEST_DOMAIN_V1,
+                artifacts.release_artifact_manifest,
+            ),
+            supported_target_inventory_digest: official_release_audit_artifact_digest(
+                OFFICIAL_RELEASE_AUDIT_TARGET_INVENTORY_DOMAIN_V1,
+                artifacts.supported_target_inventory,
+            ),
+            audit_report_digest: official_release_audit_artifact_digest(
+                OFFICIAL_RELEASE_AUDIT_REPORT_DOMAIN_V1,
+                artifacts.audit_report,
+            ),
+            audit_evidence_archive_digest: official_release_audit_artifact_digest(
+                OFFICIAL_RELEASE_AUDIT_EVIDENCE_ARCHIVE_DOMAIN_V1,
+                artifacts.audit_evidence_archive,
+            ),
+            reviewer_public_key,
+        };
+        statement.validate_shape()?;
+        Ok(statement)
+    }
+
+    /// Return the canonical bytes an external reviewer must sign.
+    #[must_use]
+    pub fn signing_bytes(&self) -> Vec<u8> {
+        let statement = self.to_wire_prefix();
+        let mut bytes =
+            Vec::with_capacity(OFFICIAL_RELEASE_AUDIT_SIGNING_DOMAIN_V1.len() + statement.len());
+        bytes.extend_from_slice(OFFICIAL_RELEASE_AUDIT_SIGNING_DOMAIN_V1);
+        bytes.extend_from_slice(&statement);
+        bytes
+    }
+
+    /// Return the manifest's explicit release decision.
+    #[must_use]
+    pub const fn verdict(&self) -> TimedOvnOfficialReleaseAuditVerdictV1 {
+        self.verdict
+    }
+
+    /// Return the committed fixed-suite parameter hash.
+    #[must_use]
+    pub const fn parameter_hash(&self) -> &[u8; 32] {
+        &self.parameter_hash
+    }
+
+    /// Return the external reviewer's canonical Ed25519 public key.
+    #[must_use]
+    pub const fn reviewer_public_key(&self) -> &[u8; 32] {
+        &self.reviewer_public_key
+    }
+
+    fn from_wire_prefix(
+        bytes: &[u8; TIMED_OVN_OFFICIAL_RELEASE_AUDIT_STATEMENT_BYTES_V1],
+    ) -> Result<Self, TimedOvnError> {
+        let mut cursor = 0_usize;
+        if take::<8>(bytes, &mut cursor)? != *OFFICIAL_RELEASE_AUDIT_MANIFEST_MAGIC_V1
+            || u16::from_be_bytes(take::<2>(bytes, &mut cursor)?)
+                != TIMED_OVN_OFFICIAL_RELEASE_AUDIT_MANIFEST_VERSION_V1
+            || u16::from_be_bytes(take::<2>(bytes, &mut cursor)?)
+                != TIMED_OVN_OFFICIAL_RELEASE_AUDIT_MANIFEST_FIELD_COUNT_V1
+        {
+            return Err(TimedOvnError::InvalidOfficialReleaseAuditManifest);
+        }
+        let verdict =
+            TimedOvnOfficialReleaseAuditVerdictV1::from_tag(take::<1>(bytes, &mut cursor)?[0])?;
+        let statement = Self {
+            verdict,
+            parameter_hash: take::<32>(bytes, &mut cursor)?,
+            implementation_source_archive_digest: take::<32>(bytes, &mut cursor)?,
+            release_artifact_manifest_digest: take::<32>(bytes, &mut cursor)?,
+            supported_target_inventory_digest: take::<32>(bytes, &mut cursor)?,
+            audit_report_digest: take::<32>(bytes, &mut cursor)?,
+            audit_evidence_archive_digest: take::<32>(bytes, &mut cursor)?,
+            reviewer_public_key: take::<32>(bytes, &mut cursor)?,
+        };
+        if cursor != bytes.len() {
+            return Err(TimedOvnError::InvalidOfficialReleaseAuditManifest);
+        }
+        statement.validate_shape()?;
+        Ok(statement)
+    }
+
+    fn to_wire_prefix(&self) -> [u8; TIMED_OVN_OFFICIAL_RELEASE_AUDIT_STATEMENT_BYTES_V1] {
+        let mut bytes = [0_u8; TIMED_OVN_OFFICIAL_RELEASE_AUDIT_STATEMENT_BYTES_V1];
+        let mut cursor = 0_usize;
+        append_fixed(
+            &mut bytes,
+            &mut cursor,
+            OFFICIAL_RELEASE_AUDIT_MANIFEST_MAGIC_V1,
+        );
+        append_fixed(
+            &mut bytes,
+            &mut cursor,
+            &TIMED_OVN_OFFICIAL_RELEASE_AUDIT_MANIFEST_VERSION_V1.to_be_bytes(),
+        );
+        append_fixed(
+            &mut bytes,
+            &mut cursor,
+            &TIMED_OVN_OFFICIAL_RELEASE_AUDIT_MANIFEST_FIELD_COUNT_V1.to_be_bytes(),
+        );
+        append_fixed(&mut bytes, &mut cursor, &[self.verdict as u8]);
+        for field in [
+            &self.parameter_hash,
+            &self.implementation_source_archive_digest,
+            &self.release_artifact_manifest_digest,
+            &self.supported_target_inventory_digest,
+            &self.audit_report_digest,
+            &self.audit_evidence_archive_digest,
+            &self.reviewer_public_key,
+        ] {
+            append_fixed(&mut bytes, &mut cursor, field);
+        }
+        debug_assert_eq!(cursor, bytes.len());
+        bytes
+    }
+
+    fn validate_shape(&self) -> Result<(), TimedOvnError> {
+        if self.parameter_hash != timed_ovn_parameter_hash_v1() {
+            return Err(TimedOvnError::ParameterProfileMismatch);
+        }
+        let commitments = [
+            self.parameter_hash,
+            self.implementation_source_archive_digest,
+            self.release_artifact_manifest_digest,
+            self.supported_target_inventory_digest,
+            self.audit_report_digest,
+            self.audit_evidence_archive_digest,
+        ];
+        if commitments.iter().any(|commitment| is_zero(commitment)) {
+            return Err(TimedOvnError::InvalidOfficialReleaseAuditManifest);
+        }
+        for (index, commitment) in commitments.iter().enumerate() {
+            if commitments[..index].contains(commitment) {
+                return Err(TimedOvnError::InvalidOfficialReleaseAuditManifest);
+            }
+        }
+        parse_official_release_audit_reviewer_key(&self.reviewer_public_key)?;
+        Ok(())
+    }
+}
+
+/// Canonical signed manifest consumed only by the official-release corridor.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct TimedOvnOfficialReleaseAuditManifestV1 {
+    statement: TimedOvnOfficialReleaseAuditStatementV1,
+    reviewer_signature: [u8; 64],
+}
+
+impl TimedOvnOfficialReleaseAuditManifestV1 {
+    /// Assemble a manifest from an externally signed statement.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`TimedOvnError`] when the statement is malformed or its
+    /// Ed25519 signature does not verify under its embedded reviewer key.
+    pub fn from_statement_and_signature(
+        statement: TimedOvnOfficialReleaseAuditStatementV1,
+        reviewer_signature: [u8; 64],
+    ) -> Result<Self, TimedOvnError> {
+        statement.validate_shape()?;
+        verify_official_release_audit_signature(&statement, &reviewer_signature)?;
+        Ok(Self {
+            statement,
+            reviewer_signature,
+        })
+    }
+
+    /// Decode a fully consuming fixed-width manifest and verify its signature.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`TimedOvnError`] for missing, malformed, noncanonical, or
+    /// incorrectly signed bytes.
+    pub fn from_bytes(bytes: &[u8]) -> Result<Self, TimedOvnError> {
+        if bytes.is_empty() {
+            return Err(TimedOvnError::OfficialReleaseAuditEvidenceRequired);
+        }
+        if bytes.len() != TIMED_OVN_OFFICIAL_RELEASE_AUDIT_MANIFEST_BYTES_V1 {
+            return Err(TimedOvnError::InvalidOfficialReleaseAuditManifest);
+        }
+        let prefix: &[u8; TIMED_OVN_OFFICIAL_RELEASE_AUDIT_STATEMENT_BYTES_V1] = bytes
+            [..TIMED_OVN_OFFICIAL_RELEASE_AUDIT_STATEMENT_BYTES_V1]
+            .try_into()
+            .map_err(|_| TimedOvnError::InvalidOfficialReleaseAuditManifest)?;
+        let reviewer_signature: [u8; 64] = bytes
+            [TIMED_OVN_OFFICIAL_RELEASE_AUDIT_STATEMENT_BYTES_V1..]
+            .try_into()
+            .map_err(|_| TimedOvnError::InvalidOfficialReleaseAuditManifest)?;
+        Self::from_statement_and_signature(
+            TimedOvnOfficialReleaseAuditStatementV1::from_wire_prefix(prefix)?,
+            reviewer_signature,
+        )
+    }
+
+    /// Encode the complete canonical fixed-width manifest.
+    #[must_use]
+    pub fn to_bytes(&self) -> [u8; TIMED_OVN_OFFICIAL_RELEASE_AUDIT_MANIFEST_BYTES_V1] {
+        let mut bytes = [0_u8; TIMED_OVN_OFFICIAL_RELEASE_AUDIT_MANIFEST_BYTES_V1];
+        let statement = self.statement.to_wire_prefix();
+        bytes[..statement.len()].copy_from_slice(&statement);
+        bytes[statement.len()..].copy_from_slice(&self.reviewer_signature);
+        bytes
+    }
+
+    /// Return the signed release-audit statement.
+    #[must_use]
+    pub const fn statement(&self) -> &TimedOvnOfficialReleaseAuditStatementV1 {
+        &self.statement
+    }
+
+    /// Return the canonical reviewer signature bytes.
+    #[must_use]
+    pub const fn reviewer_signature(&self) -> &[u8; 64] {
+        &self.reviewer_signature
+    }
+}
+
+/// Validate a signed manifest and exact artifacts for official publication.
+///
+/// This is deliberately not a consensus/runtime readiness predicate. Official
+/// release tooling must configure the independently trusted reviewer key and
+/// invoke this function before publishing a binary. Runtime timed-OVN ballot
+/// admission remains governed solely by the cryptographic transcript checks.
 ///
 /// # Errors
 ///
-/// Always returns [`TimedOvnError::ExternalSideChannelAuditRequired`] until the
-/// independent audit artifact is pinned by a later reviewed change.
-pub const fn ensure_timed_ovn_release_ready_v1() -> Result<(), TimedOvnError> {
-    // TODO: Replace this fail-closed gate only after pinning the independent
-    // compiler/assembly and side-channel audit artifact for every release target.
-    Err(TimedOvnError::ExternalSideChannelAuditRequired)
+/// Returns [`TimedOvnError`] unless the manifest approves release, its embedded
+/// key equals the corridor-configured trusted key, its signature is valid, and
+/// every supplied artifact exactly matches the signed digest.
+pub fn validate_timed_ovn_official_release_audit_manifest_v1(
+    manifest: &TimedOvnOfficialReleaseAuditManifestV1,
+    artifacts: &TimedOvnOfficialReleaseAuditArtifactsV1<'_>,
+    trusted_reviewer_public_key: &[u8; 32],
+) -> Result<(), TimedOvnError> {
+    manifest.statement.validate_shape()?;
+    if manifest.statement.verdict
+        != TimedOvnOfficialReleaseAuditVerdictV1::ApprovedForOfficialRelease
+    {
+        return Err(TimedOvnError::OfficialReleaseAuditNotApproved);
+    }
+    parse_official_release_audit_reviewer_key(trusted_reviewer_public_key)
+        .map_err(|_| TimedOvnError::UntrustedOfficialReleaseAuditReviewer)?;
+    if manifest.statement.reviewer_public_key != *trusted_reviewer_public_key {
+        return Err(TimedOvnError::UntrustedOfficialReleaseAuditReviewer);
+    }
+    let expected = TimedOvnOfficialReleaseAuditStatementV1::from_artifacts(
+        manifest.statement.verdict,
+        artifacts,
+        *trusted_reviewer_public_key,
+    )?;
+    if manifest.statement != expected {
+        return Err(TimedOvnError::OfficialReleaseAuditEvidenceMismatch);
+    }
+    verify_official_release_audit_signature(&manifest.statement, &manifest.reviewer_signature)
+}
+
+/// Decode and validate official-release audit manifest bytes and exact artifacts.
+///
+/// # Errors
+///
+/// Returns [`TimedOvnError`] for absent/noncanonical manifest bytes or any
+/// failure described by [`validate_timed_ovn_official_release_audit_manifest_v1`].
+pub fn validate_timed_ovn_official_release_audit_manifest_bytes_v1(
+    manifest_bytes: &[u8],
+    artifacts: &TimedOvnOfficialReleaseAuditArtifactsV1<'_>,
+    trusted_reviewer_public_key: &[u8; 32],
+) -> Result<TimedOvnOfficialReleaseAuditManifestV1, TimedOvnError> {
+    let manifest = TimedOvnOfficialReleaseAuditManifestV1::from_bytes(manifest_bytes)?;
+    validate_timed_ovn_official_release_audit_manifest_v1(
+        &manifest,
+        artifacts,
+        trusted_reviewer_public_key,
+    )?;
+    Ok(manifest)
 }
 
 /// Derive the canonical digest naming the complete fixed timed-OVN v1 suite.
@@ -1889,12 +2297,72 @@ fn take<const N: usize>(bytes: &[u8], cursor: &mut usize) -> Result<[u8; N], Tim
     Ok(value)
 }
 
+fn append_fixed<const N: usize>(destination: &mut [u8], cursor: &mut usize, value: &[u8; N]) {
+    let end = cursor
+        .checked_add(N)
+        .expect("fixed audit-manifest encoding length cannot overflow");
+    destination[*cursor..end].copy_from_slice(value);
+    *cursor = end;
+}
+
+fn official_release_audit_artifact_digest(domain: &[u8], bytes: &[u8]) -> [u8; 32] {
+    let mut hasher = Sha256::new();
+    hasher.update(domain);
+    hasher.update(
+        u64::try_from(bytes.len())
+            .expect("in-memory release artifact length fits u64")
+            .to_be_bytes(),
+    );
+    hasher.update(bytes);
+    hasher.finalize().into()
+}
+
+fn parse_official_release_audit_reviewer_key(
+    bytes: &[u8; 32],
+) -> Result<ed25519_dalek::VerifyingKey, TimedOvnError> {
+    if is_zero(bytes) {
+        return Err(TimedOvnError::InvalidOfficialReleaseAuditManifest);
+    }
+    let compressed = curve25519_dalek::edwards::CompressedEdwardsY(*bytes);
+    let point = compressed
+        .decompress()
+        .ok_or(TimedOvnError::InvalidOfficialReleaseAuditManifest)?;
+    if point.compress().as_bytes() != bytes || point.is_small_order() || !point.is_torsion_free() {
+        return Err(TimedOvnError::InvalidOfficialReleaseAuditManifest);
+    }
+    ed25519_dalek::VerifyingKey::from_bytes(bytes)
+        .map_err(|_| TimedOvnError::InvalidOfficialReleaseAuditManifest)
+}
+
+fn verify_official_release_audit_signature(
+    statement: &TimedOvnOfficialReleaseAuditStatementV1,
+    signature: &[u8; 64],
+) -> Result<(), TimedOvnError> {
+    let public_key = parse_official_release_audit_reviewer_key(&statement.reviewer_public_key)?;
+    let encoded_r: [u8; 32] = signature[..32]
+        .try_into()
+        .map_err(|_| TimedOvnError::InvalidOfficialReleaseAuditSignature)?;
+    let r_point = curve25519_dalek::edwards::CompressedEdwardsY(encoded_r)
+        .decompress()
+        .ok_or(TimedOvnError::InvalidOfficialReleaseAuditSignature)?;
+    if r_point.compress().as_bytes() != &encoded_r || r_point.is_small_order() {
+        return Err(TimedOvnError::InvalidOfficialReleaseAuditSignature);
+    }
+    public_key
+        .verify_strict(
+            &statement.signing_bytes(),
+            &ed25519_dalek::Signature::from_bytes(signature),
+        )
+        .map_err(|_| TimedOvnError::InvalidOfficialReleaseAuditSignature)
+}
+
 fn is_zero(bytes: &[u8]) -> bool {
     bytes.iter().all(|byte| *byte == 0)
 }
 
 #[cfg(test)]
 mod tests {
+    use ::signature::Signer as _;
     use blstrs::pairing;
     use rand_chacha::ChaCha20Rng;
     use rand_core::SeedableRng as _;
@@ -2006,8 +2474,14 @@ mod tests {
     fn fixed_parameter_profile_is_derived_and_cannot_be_wire_selected() {
         let fixture = fixture(6);
         let parameter_hash = timed_ovn_parameter_hash_v1();
-        assert_ne!(parameter_hash, [0; 32]);
-        assert_eq!(parameter_hash, timed_ovn_parameter_hash_v1());
+        assert_eq!(
+            parameter_hash,
+            [
+                0x4e, 0x2c, 0xa9, 0xb3, 0xd2, 0x09, 0xb7, 0xf4, 0xcb, 0x1e, 0x30, 0x70, 0x60, 0xba,
+                0x1b, 0xd3, 0x00, 0x10, 0x31, 0x3e, 0xe1, 0x21, 0x63, 0x44, 0xaf, 0xc8, 0xf7, 0x28,
+                0x7e, 0x1c, 0x61, 0x9a,
+            ]
+        );
         assert_eq!(
             TimedOvnSessionV1::new(
                 binding(6),
@@ -2272,7 +2746,7 @@ mod tests {
     }
 
     #[test]
-    fn aggregate_cancellation_and_audit_gate_fail_closed() {
+    fn aggregate_cancellation_fails_closed() {
         let fixture = fixture(22);
         let ballots = cast_fixture_ballots(&fixture, 23);
         let mut aggregate =
@@ -2284,9 +2758,128 @@ mod tests {
             aggregate.open_and_tally(&fixture.survivors, &fixture.identity_secret),
             Err(TimedOvnError::MaskCancellationFailed | TimedOvnError::InvalidTally)
         ));
+    }
+
+    #[test]
+    fn official_release_audit_manifest_is_exact_signed_and_release_only() {
+        // These are synthetic test vectors. They are not an external audit or
+        // an approval of any production artifact.
+        let artifacts = TimedOvnOfficialReleaseAuditArtifactsV1::new(
+            b"canonical timed-ovn source archive test vector",
+            b"release binary and toolchain manifest test vector",
+            b"supported target inventory test vector",
+            b"independent side-channel report test vector",
+            b"compiler assembly and timing evidence archive test vector",
+        )
+        .expect("nonempty synthetic release artifacts");
+        let reviewer = ed25519_dalek::SigningKey::from_bytes(&[71_u8; 32]);
+        let reviewer_public_key = reviewer.verifying_key().to_bytes();
+        let statement = TimedOvnOfficialReleaseAuditStatementV1::from_artifacts(
+            TimedOvnOfficialReleaseAuditVerdictV1::ApprovedForOfficialRelease,
+            &artifacts,
+            reviewer_public_key,
+        )
+        .expect("canonical synthetic audit statement");
+        let signature = reviewer.sign(&statement.signing_bytes()).to_bytes();
+        let manifest = TimedOvnOfficialReleaseAuditManifestV1::from_statement_and_signature(
+            statement, signature,
+        )
+        .expect("valid synthetic signed manifest");
+        let manifest_bytes = manifest.to_bytes();
+
         assert_eq!(
-            ensure_timed_ovn_release_ready_v1(),
-            Err(TimedOvnError::ExternalSideChannelAuditRequired)
+            TimedOvnOfficialReleaseAuditManifestV1::from_bytes(&manifest_bytes),
+            Ok(manifest)
+        );
+        assert_eq!(
+            validate_timed_ovn_official_release_audit_manifest_bytes_v1(
+                &manifest_bytes,
+                &artifacts,
+                &reviewer_public_key,
+            ),
+            Ok(manifest)
+        );
+        assert_eq!(
+            TimedOvnOfficialReleaseAuditManifestV1::from_bytes(&[]),
+            Err(TimedOvnError::OfficialReleaseAuditEvidenceRequired)
+        );
+
+        let mismatched_artifacts = TimedOvnOfficialReleaseAuditArtifactsV1::new(
+            b"tampered timed-ovn source archive",
+            b"release binary and toolchain manifest test vector",
+            b"supported target inventory test vector",
+            b"independent side-channel report test vector",
+            b"compiler assembly and timing evidence archive test vector",
+        )
+        .expect("nonempty mismatched artifacts");
+        assert_eq!(
+            validate_timed_ovn_official_release_audit_manifest_v1(
+                &manifest,
+                &mismatched_artifacts,
+                &reviewer_public_key,
+            ),
+            Err(TimedOvnError::OfficialReleaseAuditEvidenceMismatch)
+        );
+
+        let untrusted_reviewer = ed25519_dalek::SigningKey::from_bytes(&[72_u8; 32])
+            .verifying_key()
+            .to_bytes();
+        assert_eq!(
+            validate_timed_ovn_official_release_audit_manifest_v1(
+                &manifest,
+                &artifacts,
+                &untrusted_reviewer,
+            ),
+            Err(TimedOvnError::UntrustedOfficialReleaseAuditReviewer)
+        );
+
+        let rejected_statement = TimedOvnOfficialReleaseAuditStatementV1::from_artifacts(
+            TimedOvnOfficialReleaseAuditVerdictV1::Rejected,
+            &artifacts,
+            reviewer_public_key,
+        )
+        .expect("canonical rejected statement");
+        let rejected_signature = reviewer
+            .sign(&rejected_statement.signing_bytes())
+            .to_bytes();
+        let rejected_manifest =
+            TimedOvnOfficialReleaseAuditManifestV1::from_statement_and_signature(
+                rejected_statement,
+                rejected_signature,
+            )
+            .expect("authentic rejected manifest");
+        assert_eq!(
+            validate_timed_ovn_official_release_audit_manifest_v1(
+                &rejected_manifest,
+                &artifacts,
+                &reviewer_public_key,
+            ),
+            Err(TimedOvnError::OfficialReleaseAuditNotApproved)
+        );
+
+        let mut tampered_signature = manifest_bytes;
+        *tampered_signature.last_mut().expect("fixed manifest") ^= 1;
+        assert_eq!(
+            TimedOvnOfficialReleaseAuditManifestV1::from_bytes(&tampered_signature),
+            Err(TimedOvnError::InvalidOfficialReleaseAuditSignature)
+        );
+
+        let mut wrong_magic = manifest_bytes;
+        wrong_magic[0] ^= 1;
+        assert_eq!(
+            TimedOvnOfficialReleaseAuditManifestV1::from_bytes(&wrong_magic),
+            Err(TimedOvnError::InvalidOfficialReleaseAuditManifest)
+        );
+        assert_eq!(
+            TimedOvnOfficialReleaseAuditArtifactsV1::new(
+                b"",
+                b"artifact manifest",
+                b"targets",
+                b"report",
+                b"archive",
+            )
+            .err(),
+            Some(TimedOvnError::OfficialReleaseAuditEvidenceRequired)
         );
     }
 

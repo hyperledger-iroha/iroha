@@ -30,27 +30,10 @@ PotentialCommitSigners(certificateContext, roundView, subject) ==
   {vote.signer:
     vote \in PotentialCommitVotes(
       certificateContext, roundView, subject)}
-InstalledTcAuthorizedPotentialCommitIntersection(tc, protectedView, subject) ==
-  \E timeoutVote \in tc.votes,
-      commitVote \in PotentialCommitVotes(
-        tc.context, protectedView, subject):
-    /\ timeoutVote.signer \in Honest
-    /\ commitVote.signer = timeoutVote.signer
-    /\ timeoutVote.context = tc.context
-    /\ timeoutVote.view = tc.view
-    /\ ~TimeoutVoteStrictlyProtectsCommit(timeoutVote, commitVote)
-    /\ InstalledTcAuthorizesCommitVote(commitVote)
-TCProtectsOrInstalledTcAuthorizesPotentialCommit(tc) ==
-  \A protectedView \in 0..tc.view, subject \in Subjects:
-    DualQuorum(tc.context.epoch,
-      PotentialCommitSigners(tc.context, protectedView, subject))
-      => \/ TCProtectsViewSubject(tc, protectedView, subject)
-         \/ InstalledTcAuthorizedPotentialCommitIntersection(
-              tc, protectedView, subject)
 TimeoutProtectionProperty(specification) ==
   specification
     => [](\A tc \in formedTCs:
-          TCProtectsOrInstalledTcAuthorizesPotentialCommit(tc))
+          TCProtectsPotentialCommit(tc))
 AgreementProperty(specification) ==
   specification => []DecisionAgreement
 NoConflictingCommitCertificatesProperty(specification) ==
@@ -83,28 +66,14 @@ CrashRecoveryProperty(specification) ==
 
     path.write_text(
         source.replace(
-            "/\\ InstalledTcAuthorizesCommitVote(commitVote)",
-            "/\\ TRUE",
+            "          TCProtectsPotentialCommit(tc))",
+            "          TRUE)",
         ),
         encoding="utf-8",
     )
     errors = module._safety_property_source_fidelity_errors(formal_dir)
     assert any(
-        "InstalledTcAuthorizedPotentialCommitIntersection must equal only" in error
-        for error in errors
-    )
-
-    path.write_text(
-        source.replace(
-            "\\/ InstalledTcAuthorizedPotentialCommitIntersection(\n"
-            "              tc, protectedView, subject)",
-            "\\/ TCProtectsViewSubject(tc, protectedView, subject)",
-        ),
-        encoding="utf-8",
-    )
-    errors = module._safety_property_source_fidelity_errors(formal_dir)
-    assert any(
-        "TCProtectsOrInstalledTcAuthorizesPotentialCommit must equal only" in error
+        "TimeoutProtectionProperty must equal only" in error
         for error in errors
     )
 

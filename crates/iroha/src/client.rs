@@ -30,7 +30,8 @@ use crate::{
         },
         prelude::*,
         transaction::{
-            TransactionBuilder, TransactionEntrypoint, error::TransactionRejectionReason,
+            TransactionBuilder, TransactionEntrypoint, TransactionSubmissionReceipt,
+            error::TransactionRejectionReason,
         },
     },
     http::{Method as HttpMethod, RequestBuilder, Response, StatusCode},
@@ -54,7 +55,7 @@ pub use iroha_config::client_api::{
     ConfidentialGas as ConfidentialGasDTO, ConfigGetDTO, ConfigUpdateDTO, Logger as LoggerDTO,
 };
 use iroha_config::parameters::actual::SorafsRolloutPhase;
-use iroha_crypto::{Algorithm, Hash, Signature};
+use iroha_crypto::{Algorithm, Hash, PublicKey, Signature};
 use iroha_data_model::{
     DATA_MODEL_VERSION, ValidationFail,
     alias::AliasIndex,
@@ -80,11 +81,32 @@ use iroha_data_model::{
     },
     privacy::PrivacyExact12CapabilityManifestV1,
     soracloud::{CANONICAL_REQUEST_WITNESS_VERSION_V1, CanonicalRequestWitnessV1},
+    sorafs::orderbook_submission::{
+        SorafsOrderbookSubmissionIdentityV1,
+        decode_and_verify_sorafs_orderbook_submission_receipt_v1,
+    },
     sorafs::pin_registry::PinStatusKindV1,
 };
 use iroha_logger::prelude::*;
 use iroha_primitives::numeric::{Numeric, Quantity};
 pub use iroha_telemetry::metrics::{Status, TxGossipSnapshot, Uptime};
+pub use iroha_torii_shared::governance_proposal_api::{
+    DeployContractProposalDraftRequestV1, DeployContractProposalDraftResponseV1,
+    GovernanceProposalInstructionDraftV1, SccpRouteGovernanceProposalDraftRequestV1,
+    SccpRouteGovernanceProposalDraftResponseV1,
+};
+pub use iroha_torii_shared::parliament_api::{
+    PARLIAMENT_API_VERSION_V1, PARLIAMENT_ATTEMPT_READ_MAX_STATE_BYTES_V1,
+    PARLIAMENT_TIMED_OVN_CASTING_PROOF_MAX_RESPONSE_BYTES_V1,
+    PARLIAMENT_TIMED_OVN_CASTING_PROOF_VERSION_V1, ParliamentAttemptDraftRequestV1,
+    ParliamentAttemptDraftResponseV1, ParliamentAttemptReadResponseV1,
+    ParliamentDecisionModeProjectionV1, ParliamentInstructionDraftV1,
+    ParliamentTimedOvnCastingContextResponseV1, ParliamentTimedOvnCastingPhaseProjectionV1,
+    ParliamentTimedOvnCastingProofRequestV1, ParliamentTimedOvnCastingProofResponseV1,
+    ParliamentTimedOvnSessionProjectionV1, ParliamentTlePartialReleaseShareV1,
+    ParliamentTleReleaseContextResponseV1, ParliamentTransitionDraftRequestV1,
+    ParliamentTransitionDraftResponseV1, RequiredParliamentBodyProjectionV1,
+};
 pub use iroha_torii_shared::sorafs_hedging_billing_api::BillingAcknowledgementProofV1 as SorafsBillingAcknowledgementProof;
 pub use iroha_torii_shared::validation_fee_api::{
     VALIDATION_FEE_POLICY_PROOF_MAX_RESPONSE_BYTES, VALIDATION_FEE_POLICY_PROOF_VERSION_V1,
@@ -150,13 +172,25 @@ use url::Url;
 const APPLICATION_JSON: &str = "application/json";
 const PIPELINE_TRANSACTION_STATUS_RESPONSE_MAX_BYTES: usize = 64 * 1024;
 const NODE_STATUS_RESPONSE_MAX_BYTES: usize = 8 * 1024 * 1024;
+const NODE_CAPABILITIES_RESPONSE_MAX_BYTES: usize = 256 * 1024;
+const SORACLOUD_STATUS_RESPONSE_MAX_BYTES: usize = 8 * 1024 * 1024;
 const TRANSACTION_SUBMISSION_RESPONSE_MAX_BYTES: usize = 64 * 1024;
+const TRANSACTION_ENTRYPOINT_HASH_HEADER: &str = "x-iroha-entrypoint-hash";
+const SIGNED_TRANSACTION_HASH_HEADER: &str = "x-iroha-signed-transaction-hash";
 const FEE_QUOTE_RESPONSE_MAX_BYTES: usize = 64 * 1024;
 const PRIVACY_CAPABILITIES_RESPONSE_MAX_BYTES: usize = 256 * 1024;
 const SCCP_CAPABILITIES_RESPONSE_MAX_BYTES: usize = 64 * 1024;
 const SCCP_RECENT_RESPONSE_MAX_BYTES: usize = 8 * 1024 * 1024;
 const SCCP_JSON_RESPONSE_MAX_BYTES: usize = 64 * 1024 * 1024;
+const GOVERNANCE_PROPOSAL_JSON_RESPONSE_MAX_BYTES: usize = 4 * 1024 * 1024;
 const VALIDATION_FEE_JSON_RESPONSE_MAX_BYTES: usize = 4 * 1024 * 1024;
+const PARLIAMENT_JSON_RESPONSE_MAX_BYTES: usize =
+    PARLIAMENT_ATTEMPT_READ_MAX_STATE_BYTES_V1 * 2 + 1024 * 1024;
+const PARLIAMENT_TLE_RELEASE_CONTEXT_RESPONSE_MAX_BYTES: usize = 1024 * 1024;
+const PARLIAMENT_TIMED_OVN_CASTING_CONTEXT_RESPONSE_MAX_BYTES: usize = 16 * 1024 * 1024;
+const PARLIAMENT_TIMED_OVN_CASTING_PROOF_RESPONSE_MAX_BYTES: usize =
+    PARLIAMENT_TIMED_OVN_CASTING_PROOF_MAX_RESPONSE_BYTES_V1;
+const PARLIAMENT_TLE_PARTIAL_RELEASE_RESPONSE_MAX_BYTES: usize = 16 * 1024;
 const VALIDATION_FEE_PROOF_RESPONSE_MAX_BYTES: usize =
     iroha_torii_shared::validation_fee_api::VALIDATION_FEE_POLICY_PROOF_MAX_RESPONSE_BYTES;
 const CONTRACT_CODE_ARTIFACT_MAX_BYTES: usize = 16 * 1024 * 1024;
@@ -2072,7 +2106,7 @@ fn validate_sccp_resource_limits(limits: SccpResourceLimits) -> Result<()> {
     );
     macro_rules! require_json_safe {
         ($($field:ident),+ $(,)?) => {
-            $(if limits.$field > iroha_data_model::bridge::SCCP_V1_JSON_SAFE_INTEGER_MAX {
+            $(if limits.$field > iroha_data_model::parliament_types::FIRST_RELEASE_MAX_EXACT_JSON_U64 {
                 return Err(eyre!(
                     "SCCP capabilities resource_limits.max_{} exceeds the V1 JSON-safe integer maximum",
                     stringify!($field)
@@ -2616,45 +2650,24 @@ pub struct SccpNativeMessageSubmitRequest {
     #[norito(default)]
     pub creation_time_ms: Option<u64>,
 }
-#[derive(Clone, Debug, PartialEq, Eq, JsonSerialize)]
-#[norito(deny_unknown_fields)]
-/// Exact caller-side request for an SCCP route-governance proposal draft.
-pub struct SccpRouteGovernanceDraftRequest {
-    /// Atomic closed registry action proposed for enactment.
-    pub action: iroha_data_model::isi::bridge::SccpRouteGovernanceActionV1,
-    /// Optional inclusive referendum window.
-    #[norito(default)]
-    pub window: Option<iroha_data_model::isi::governance::AtWindow>,
-    /// Optional exact voting mode (`Zk` or `Plain`).
-    #[norito(default)]
-    pub mode: Option<iroha_data_model::isi::governance::VotingMode>,
-}
-#[derive(Clone, Debug, PartialEq, Eq, JsonSerialize, JsonDeserialize)]
-#[norito(deny_unknown_fields)]
-/// One canonical instruction returned by the SCCP governance draft endpoint.
-pub struct SccpRouteGovernanceInstructionDraft {
-    /// Registered instruction wire identifier.
-    pub wire_id: String,
-    /// Lowercase hexadecimal canonical framed instruction bytes.
-    pub payload_hex: String,
-}
-#[derive(Clone, Debug, PartialEq, Eq, JsonSerialize, JsonDeserialize)]
-#[norito(deny_unknown_fields)]
-/// Exact validated response from the SCCP route-governance draft endpoint.
-pub struct SccpRouteGovernanceDraftResponse {
-    /// Whether draft construction succeeded.
-    pub ok: bool,
-    /// Deterministic lowercase action proposal id.
-    pub proposal_id: String,
-    /// Exactly one typed `ProposeSccpRouteGovernance` instruction.
-    pub tx_instructions: Vec<SccpRouteGovernanceInstructionDraft>,
-}
 /// Result of verifying one or more bounded validation-fee checkpoint-promotion pages.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ValidationFeePolicyProofCatchUp {
     /// Final proof page containing the most recent observed registry snapshot.
     pub final_page: ValidationFeeCurrentPolicyProofV1,
     /// Number of independently verified pages.
+    pub pages_verified: u32,
+    /// Height of the promoted durable checkpoint.
+    pub promoted_checkpoint_height: u64,
+    /// Context id of the promoted durable checkpoint.
+    pub promoted_checkpoint_context_id: [u8; 32],
+}
+/// Result of verifying one or more bounded Parliament casting checkpoint pages.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ParliamentTimedOvnCastingProofCatchUp {
+    /// Terminal page containing the consensus-authenticated casting archive.
+    pub final_page: ParliamentTimedOvnCastingProofResponseV1,
+    /// Number of independently verified checkpoint pages.
     pub pages_verified: u32,
     /// Height of the promoted durable checkpoint.
     pub promoted_checkpoint_height: u64,
@@ -2786,6 +2799,270 @@ fn validate_validation_fee_draft_response(
     }
     Ok(instruction)
 }
+
+fn validate_parliament_attempt_draft_response(
+    response: &ParliamentAttemptDraftResponseV1,
+    request: &ParliamentAttemptDraftRequestV1,
+) -> Result<iroha_data_model::isi::governance::CreateParliamentGovernanceAttemptV1> {
+    use iroha_data_model::isi::{
+        Instruction as _, governance::CreateParliamentGovernanceAttemptV1,
+    };
+
+    if request.version != PARLIAMENT_API_VERSION_V1 || response.version != PARLIAMENT_API_VERSION_V1
+    {
+        return Err(eyre!("unsupported Parliament attempt draft version"));
+    }
+    let expected = CreateParliamentGovernanceAttemptV1 {
+        proposal: request.proposal.clone(),
+        attempt_sequence: request.attempt_sequence,
+    };
+    if response.proposal_content_id != expected.proposal_content_id()
+        || response.governance_attempt_id != expected.governance_attempt_id()
+    {
+        return Err(eyre!(
+            "Parliament attempt draft identifiers differ from the exact request"
+        ));
+    }
+    let [draft] = response.tx_instructions.as_slice() else {
+        return Err(eyre!(
+            "Parliament attempt draft must contain exactly one instruction"
+        ));
+    };
+    if draft.wire_id != CreateParliamentGovernanceAttemptV1::WIRE_ID
+        || draft.payload_hex.is_empty()
+        || draft.payload_hex.len() % 2 != 0
+        || !draft
+            .payload_hex
+            .bytes()
+            .all(|byte| matches!(byte, b'0'..=b'9' | b'a'..=b'f'))
+    {
+        return Err(eyre!(
+            "Parliament attempt draft must use its canonical wire id and lowercase payload hex"
+        ));
+    }
+    let payload =
+        hex::decode(&draft.payload_hex).wrap_err("failed to decode Parliament attempt draft")?;
+    let decoded = iroha_data_model::isi::decode_instruction_from_pair(&draft.wire_id, &payload)
+        .wrap_err("failed to decode Parliament attempt creation instruction")?;
+    let decoded = decoded
+        .as_any()
+        .downcast_ref::<CreateParliamentGovernanceAttemptV1>()
+        .ok_or_else(|| eyre!("Parliament attempt draft returned a different instruction type"))?;
+    if decoded != &expected {
+        return Err(eyre!(
+            "Parliament attempt draft returned a different instruction payload"
+        ));
+    }
+    Ok(expected)
+}
+
+fn validate_parliament_transition_draft_response(
+    response: &ParliamentTransitionDraftResponseV1,
+    request: &ParliamentTransitionDraftRequestV1,
+) -> Result<iroha_data_model::isi::governance::SubmitParliamentLifecycleTransitionV1> {
+    use iroha_data_model::isi::{
+        Instruction as _, governance::SubmitParliamentLifecycleTransitionV1,
+    };
+
+    request
+        .validate_static()
+        .map_err(|reason| eyre!("invalid Parliament transition draft request: {reason}"))?;
+    if response.version != PARLIAMENT_API_VERSION_V1 {
+        return Err(eyre!("unsupported Parliament transition draft version"));
+    }
+    let expected = SubmitParliamentLifecycleTransitionV1 {
+        governance_attempt_id: request.governance_attempt_id,
+        transition: request.transition.clone(),
+    };
+    if response.governance_attempt_id != expected.governance_attempt_id
+        || response.transition_kind != expected.transition.kind()
+        || response.transition_digest != expected.transition.digest_v1()
+    {
+        return Err(eyre!(
+            "Parliament transition draft bindings differ from the exact request"
+        ));
+    }
+    let [draft] = response.tx_instructions.as_slice() else {
+        return Err(eyre!(
+            "Parliament transition draft must contain exactly one instruction"
+        ));
+    };
+    if draft.wire_id != SubmitParliamentLifecycleTransitionV1::WIRE_ID
+        || draft.payload_hex.is_empty()
+        || draft.payload_hex.len() % 2 != 0
+        || !draft
+            .payload_hex
+            .bytes()
+            .all(|byte| matches!(byte, b'0'..=b'9' | b'a'..=b'f'))
+    {
+        return Err(eyre!(
+            "Parliament transition draft must use its canonical wire id and lowercase payload hex"
+        ));
+    }
+    let payload =
+        hex::decode(&draft.payload_hex).wrap_err("failed to decode Parliament transition draft")?;
+    let decoded = iroha_data_model::isi::decode_instruction_from_pair(&draft.wire_id, &payload)
+        .wrap_err("failed to decode Parliament lifecycle transition instruction")?;
+    let decoded = decoded
+        .as_any()
+        .downcast_ref::<SubmitParliamentLifecycleTransitionV1>()
+        .ok_or_else(|| {
+            eyre!("Parliament transition draft returned a different instruction type")
+        })?;
+    if decoded != &expected {
+        return Err(eyre!(
+            "Parliament transition draft returned a different instruction payload"
+        ));
+    }
+    Ok(expected)
+}
+
+fn validate_parliament_attempt_state_frame(state_payload_hex: &str) -> Result<()> {
+    if state_payload_hex.is_empty()
+        || state_payload_hex.len() % 2 != 0
+        || state_payload_hex.len() / 2 > PARLIAMENT_ATTEMPT_READ_MAX_STATE_BYTES_V1
+        || !state_payload_hex
+            .bytes()
+            .all(|byte| matches!(byte, b'0'..=b'9' | b'a'..=b'f'))
+    {
+        return Err(eyre!(
+            "Parliament attempt read response carries invalid canonical reducer bytes"
+        ));
+    }
+    let frame = hex::decode(state_payload_hex)
+        .wrap_err("failed to decode Parliament attempt reducer frame")?;
+    let header = norito::core::Header::read(std::io::Cursor::new(&frame))
+        .wrap_err("Parliament attempt reducer bytes are not a valid Norito frame")?;
+    let payload_len = usize::try_from(header.length)
+        .wrap_err("Parliament attempt reducer frame length exceeds this platform")?;
+    let minimum_len = norito::core::Header::SIZE
+        .checked_add(payload_len)
+        .ok_or_else(|| eyre!("Parliament attempt reducer frame length overflows"))?;
+    if header.compression != norito::Compression::None
+        || header.schema == [0; 16]
+        || payload_len == 0
+        || frame.len() < minimum_len
+        || frame.len() - minimum_len > 64
+    {
+        return Err(eyre!(
+            "Parliament attempt reducer bytes are not one bounded uncompressed Norito frame"
+        ));
+    }
+    let payload_start = frame.len() - payload_len;
+    if frame[norito::core::Header::SIZE..payload_start]
+        .iter()
+        .any(|byte| *byte != 0)
+        || norito::core::hardware_crc64(&frame[payload_start..]) != header.checksum
+    {
+        return Err(eyre!(
+            "Parliament attempt reducer frame has invalid padding or checksum"
+        ));
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod parliament_draft_response_validation_tests {
+    use super::*;
+    use iroha_data_model::{
+        governance::types::{
+            AbiVersion, ContractAbiHash, ContractCodeHash, DeployContractProposal,
+            GovernanceAttemptId, ProposalKind,
+        },
+        isi::{
+            Instruction,
+            governance::{
+                CreateParliamentGovernanceAttemptV1, ParliamentLifecycleTransitionV1,
+                SubmitParliamentLifecycleTransitionV1,
+            },
+        },
+        smart_contract::ContractAddress,
+    };
+
+    fn framed_draft(
+        instruction: iroha_data_model::isi::InstructionBox,
+    ) -> ParliamentInstructionDraftV1 {
+        let wire_id = Instruction::id(&*instruction).to_owned();
+        let payload = Instruction::dyn_encode(&*instruction);
+        let framed = iroha_data_model::isi::frame_instruction_payload(&wire_id, &payload)
+            .expect("frame Parliament client fixture instruction");
+        ParliamentInstructionDraftV1 {
+            wire_id,
+            payload_hex: hex::encode(framed),
+        }
+    }
+
+    fn attempt_request() -> ParliamentAttemptDraftRequestV1 {
+        ParliamentAttemptDraftRequestV1 {
+            version: PARLIAMENT_API_VERSION_V1,
+            proposal: ProposalKind::DeployContract(DeployContractProposal {
+                contract_address: "irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw"
+                    .parse::<ContractAddress>()
+                    .expect("parse Parliament client fixture contract"),
+                code_hash: ContractCodeHash::new([0x11; 32]),
+                abi_hash: ContractAbiHash::new([0x22; 32]),
+                abi_version: AbiVersion::new(1),
+                manifest_provenance: None,
+            }),
+            attempt_sequence: 2,
+        }
+    }
+
+    #[test]
+    fn attempt_draft_response_is_bound_to_exact_instruction_and_ids() {
+        let request = attempt_request();
+        let expected = CreateParliamentGovernanceAttemptV1 {
+            proposal: request.proposal.clone(),
+            attempt_sequence: request.attempt_sequence,
+        };
+        let mut response = ParliamentAttemptDraftResponseV1 {
+            version: PARLIAMENT_API_VERSION_V1,
+            proposal_content_id: expected.proposal_content_id(),
+            governance_attempt_id: expected.governance_attempt_id(),
+            tx_instructions: vec![framed_draft(expected.clone().into())],
+        };
+        assert!(validate_parliament_attempt_draft_response(&response, &request).is_ok());
+
+        response.governance_attempt_id = GovernanceAttemptId::new([0x99; 32]);
+        assert!(validate_parliament_attempt_draft_response(&response, &request).is_err());
+    }
+
+    #[test]
+    fn transition_draft_response_is_bound_to_exact_digest_and_instruction() {
+        let request = ParliamentTransitionDraftRequestV1 {
+            version: PARLIAMENT_API_VERSION_V1,
+            governance_attempt_id: GovernanceAttemptId::new([0x33; 32]),
+            transition: ParliamentLifecycleTransitionV1::CompleteQualification,
+        };
+        let expected = SubmitParliamentLifecycleTransitionV1 {
+            governance_attempt_id: request.governance_attempt_id,
+            transition: request.transition.clone(),
+        };
+        let mut response = ParliamentTransitionDraftResponseV1 {
+            version: PARLIAMENT_API_VERSION_V1,
+            governance_attempt_id: request.governance_attempt_id,
+            transition_kind: request.transition.kind(),
+            transition_digest: request.transition.digest_v1(),
+            tx_instructions: vec![framed_draft(expected.into())],
+        };
+        assert!(validate_parliament_transition_draft_response(&response, &request).is_ok());
+
+        response.transition_digest[0] ^= 1;
+        assert!(validate_parliament_transition_draft_response(&response, &request).is_err());
+    }
+
+    #[test]
+    fn attempt_read_state_payload_must_be_one_valid_bounded_norito_frame() {
+        let frame = norito::to_bytes_bounded(&42_u64, PARLIAMENT_ATTEMPT_READ_MAX_STATE_BYTES_V1)
+            .expect("encode Parliament read state fixture");
+        assert!(validate_parliament_attempt_state_frame(&hex::encode(&frame)).is_ok());
+
+        let mut corrupted = frame;
+        *corrupted.last_mut().expect("fixture payload byte") ^= 1;
+        assert!(validate_parliament_attempt_state_frame(&hex::encode(corrupted)).is_err());
+        assert!(validate_parliament_attempt_state_frame("0102").is_err());
+    }
+}
 fn parse_canonical_validation_fee_u64(value: &str, field: &str) -> Result<u64> {
     if value.is_empty()
         || (value.len() > 1 && value.starts_with('0'))
@@ -2799,23 +3076,38 @@ fn parse_canonical_validation_fee_u64(value: &str, field: &str) -> Result<u64> {
         format!("validation-fee proposal {field} is outside the unsigned 64-bit integer range")
     })
 }
-fn parse_canonical_validation_fee_u128(value: &str, field: &str) -> Result<u128> {
-    if value.is_empty()
-        || (value.len() > 1 && value.starts_with('0'))
-        || !value.bytes().all(|byte| byte.is_ascii_digit())
+fn parse_canonical_validation_fee_hex32(value: &str, field: &str) -> Result<[u8; 32]> {
+    if value.len() != 64
+        || !value
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
     {
         return Err(eyre!(
-            "validation-fee proposal {field} must be a canonical unsigned decimal integer"
+            "validation-fee proposal {field} must be exactly 64 lowercase hexadecimal digits"
         ));
     }
-    value.parse::<u128>().wrap_err_with(|| {
-        format!("validation-fee proposal {field} is outside the unsigned 128-bit integer range")
-    })
+    let bytes = hex::decode(value)
+        .wrap_err_with(|| format!("validation-fee proposal {field} is invalid hexadecimal"))?;
+    let bytes: [u8; 32] = bytes
+        .try_into()
+        .map_err(|_| eyre!("validation-fee proposal {field} must decode to exactly 32 bytes"))?;
+    if bytes == [0; 32] {
+        return Err(eyre!(
+            "validation-fee proposal {field} must be a non-zero identifier"
+        ));
+    }
+    Ok(bytes)
 }
 fn validate_validation_fee_proposal_record(record: &ValidationFeeProposalRecordV1) -> Result<u64> {
-    use iroha_data_model::{governance::types::ProposalKind, isi::governance::VotingMode};
-    let expected_id = hex::encode(record.proposal_kind.fingerprint());
-    let proposal_operator = match &record.proposal_kind {
+    use iroha_data_model::governance::types::ProposalKind;
+
+    if record.created_height > iroha_data_model::parliament_types::FIRST_RELEASE_MAX_EXACT_JSON_U64
+    {
+        return Err(eyre!(
+            "validation-fee proposal creation height exceeds the exact JSON integer maximum"
+        ));
+    }
+    let proposal_operator = match &record.kind {
         ProposalKind::ValidationFeePolicy(payload) => &payload.proposal_operator,
         ProposalKind::ValidationFeePayoutLifecycle(payload) => &payload.proposal_operator,
         _ => {
@@ -2824,111 +3116,70 @@ fn validate_validation_fee_proposal_record(record: &ValidationFeeProposalRecordV
             ));
         }
     };
-    if record.proposal_id != expected_id
-        || proposal_operator != &record.proposer
-        || record.referendum.mode != VotingMode::Plain
-    {
+    if proposal_operator != &record.proposer {
         return Err(eyre!(
             "validation-fee proposal read response is not bound to its exact native proposal"
         ));
     }
-    let created_height =
-        parse_canonical_validation_fee_u64(&record.created_height, "created_height")?;
-    parse_canonical_validation_fee_u64(
-        &record.parliament_snapshot.selection_epoch,
-        "parliament_snapshot.selection_epoch",
-    )?;
-    if let Some(height) = record.enacted_at_height.as_deref() {
-        parse_canonical_validation_fee_u64(height, "enacted_at_height")?;
-    }
-    for stage in &record.pipeline.stages {
-        parse_canonical_validation_fee_u64(&stage.started_at, "pipeline.started_at")?;
-        if let Some(height) = stage.deadline.as_deref() {
-            parse_canonical_validation_fee_u64(height, "pipeline.deadline")?;
-        }
-        if let Some(height) = stage.completed_at.as_deref() {
-            parse_canonical_validation_fee_u64(height, "pipeline.completed_at")?;
-        }
-    }
-    Ok(created_height)
+    Ok(record.created_height)
 }
 fn validate_validation_fee_proposal_detail(detail: &ValidationFeeProposalDetailV1) -> Result<()> {
+    use iroha_data_model::governance::types::{GovernanceExpectedHeadV1, ProposalContentId};
+    use iroha_torii_shared::validation_fee_api::ValidationFeeProposalStatusV1;
+
     parse_canonical_validation_fee_u64(&detail.current_height, "current_height")?;
-    for progress in &detail.body_progress {
-        parse_canonical_validation_fee_u64(&progress.required, "body_progress.required")?;
-        parse_canonical_validation_fee_u64(&progress.approve, "body_progress.approve")?;
-        parse_canonical_validation_fee_u64(&progress.reject, "body_progress.reject")?;
-        parse_canonical_validation_fee_u64(&progress.abstain, "body_progress.abstain")?;
+    let proposal_id = detail.proposal.kind.fingerprint();
+    let certificate = detail.governance_certificate.as_ref();
+    match detail.proposal.status {
+        ValidationFeeProposalStatusV1::Proposed => {}
+        ValidationFeeProposalStatusV1::Rejected if certificate.is_none() => {}
+        ValidationFeeProposalStatusV1::Enacted
+        | ValidationFeeProposalStatusV1::Superseded
+        | ValidationFeeProposalStatusV1::ExecutionFailed
+            if certificate.is_none() =>
+        {
+            return Err(eyre!(
+                "terminal certified validation-fee proposal has no Parliament certificate"
+            ));
+        }
+        ValidationFeeProposalStatusV1::Rejected => {
+            return Err(eyre!(
+                "rejected validation-fee proposal unexpectedly carries a Parliament certificate"
+            ));
+        }
+        ValidationFeeProposalStatusV1::Enacted
+        | ValidationFeeProposalStatusV1::Superseded
+        | ValidationFeeProposalStatusV1::ExecutionFailed => {}
     }
-    parse_canonical_validation_fee_u128(&detail.tally.approve, "tally.approve")?;
-    parse_canonical_validation_fee_u128(&detail.tally.reject, "tally.reject")?;
-    parse_canonical_validation_fee_u128(&detail.tally.abstain, "tally.abstain")?;
-    parse_canonical_validation_fee_u128(&detail.tally.turnout, "tally.turnout")?;
-    parse_canonical_validation_fee_u128(&detail.tally.min_turnout, "tally.min_turnout")?;
-    parse_canonical_validation_fee_u64(
-        &detail.tally.approval_threshold_numerator,
-        "tally.approval_threshold_numerator",
-    )?;
-    parse_canonical_validation_fee_u64(
-        &detail.tally.approval_threshold_denominator,
-        "tally.approval_threshold_denominator",
-    )?;
-    for lock in detail.locks.locks.values() {
-        parse_canonical_validation_fee_u64(&lock.expiry_height, "locks.expiry_height")?;
-        parse_canonical_validation_fee_u64(&lock.duration_blocks, "locks.duration_blocks")?;
+    let Some(certificate) = certificate else {
+        return Ok(());
+    };
+    certificate
+        .validate()
+        .map_err(|error| eyre!("invalid validation-fee Parliament certificate: {error}"))?;
+    let expected_subject = detail
+        .proposal
+        .kind
+        .governed_subject_id_v1()
+        .map_err(|error| eyre!("invalid validation-fee governed subject: {error}"))?;
+    let certificate_subject = match certificate.expected_head {
+        GovernanceExpectedHeadV1::Absent(head) => head.subject_id,
+        GovernanceExpectedHeadV1::Present(head) => head.subject_id,
+    };
+    if certificate.proposal_content_id != ProposalContentId::new(proposal_id)
+        || certificate.effect_preimage_hash != detail.proposal.kind.effect_preimage_hash_v1()
+        || certificate_subject != expected_subject
+    {
+        return Err(eyre!(
+            "validation-fee Parliament certificate differs from the exact proposal effect"
+        ));
     }
     Ok(())
 }
-fn sccp_route_governance_proposal_id(
-    network_id: iroha_data_model::NetworkId,
-    action: &iroha_data_model::isi::bridge::SccpRouteGovernanceActionV1,
-) -> Result<[u8; 32]> {
-    use blake2::{Blake2b512, Digest as _};
-    let anchor = iroha_data_model::isi::bridge::SccpRouteGovernanceAnchorV1 {
-        network_id,
-        action: action.clone(),
-    };
-    let canonical = norito::codec::Encode::encode(&anchor);
-    let action_len: u32 = canonical
-        .len()
-        .try_into()
-        .map_err(|_| eyre!("SCCP route governance action exceeds 2^32 bytes"))?;
-    let mut input = Vec::with_capacity(
-        b"iroha:gov:sccp-route-governance:proposal:v1|".len()
-            + core::mem::size_of::<u32>()
-            + canonical.len(),
-    );
-    input.extend_from_slice(b"iroha:gov:sccp-route-governance:proposal:v1|");
-    input.extend_from_slice(&action_len.to_le_bytes());
-    input.extend_from_slice(&canonical);
-    let digest = Blake2b512::digest(input);
-    let mut proposal_id = [0_u8; 32];
-    proposal_id.copy_from_slice(&digest[..32]);
-    Ok(proposal_id)
-}
-fn validate_sccp_route_governance_draft_response(
-    response: &SccpRouteGovernanceDraftResponse,
-    request: &SccpRouteGovernanceDraftRequest,
-    network_id: iroha_data_model::NetworkId,
-) -> Result<()> {
-    if !response.ok {
-        return Err(eyre!(
-            "SCCP route-governance draft response is not successful"
-        ));
-    }
-    let expected_proposal_id = sccp_route_governance_proposal_id(network_id, &request.action)?;
-    if decode_exact_nonzero_sccp_hex32(&response.proposal_id, "SCCP route-governance proposal id")?
-        != expected_proposal_id
-    {
-        return Err(eyre!(
-            "SCCP route-governance proposal id does not match the requested action"
-        ));
-    }
-    let [draft] = response.tx_instructions.as_slice() else {
-        return Err(eyre!(
-            "SCCP route-governance draft must contain exactly one instruction"
-        ));
-    };
+fn decode_governance_proposal_instruction_draft(
+    draft: &GovernanceProposalInstructionDraftV1,
+    label: &str,
+) -> Result<InstructionBox> {
     if draft.payload_hex.is_empty()
         || draft.payload_hex.len() % 2 != 0
         || !draft
@@ -2937,26 +3188,116 @@ fn validate_sccp_route_governance_draft_response(
             .all(|byte| matches!(byte, b'0'..=b'9' | b'a'..=b'f'))
     {
         return Err(eyre!(
-            "SCCP route-governance instruction payload must be lowercase canonical hex"
+            "{label} instruction payload must be lowercase canonical hex"
         ));
     }
     let payload = hex::decode(&draft.payload_hex)
-        .wrap_err("failed to decode SCCP route-governance instruction payload")?;
-    let instruction = iroha_data_model::isi::decode_instruction_from_pair(&draft.wire_id, &payload)
-        .wrap_err("failed to decode SCCP route-governance instruction draft")?;
+        .wrap_err_with(|| format!("failed to decode {label} instruction payload"))?;
+    iroha_data_model::isi::decode_instruction_from_pair(&draft.wire_id, &payload)
+        .wrap_err_with(|| format!("failed to decode {label} instruction draft"))
+}
+
+fn validate_deploy_contract_proposal_draft_response(
+    response: &DeployContractProposalDraftResponseV1,
+    request: &DeployContractProposalDraftRequestV1,
+) -> Result<()> {
+    use iroha_data_model::governance::types::{DeployContractProposal, ProposalKind};
+
+    if request.abi_version.get() != 1 {
+        return Err(eyre!(
+            "deploy-contract proposal ABI version must be exactly one"
+        ));
+    }
+    if matches!(
+        (&request.contract_address, &request.contract_alias),
+        (Some(_), Some(_)) | (None, None)
+    ) {
+        return Err(eyre!(
+            "deploy-contract proposal must select exactly one contract address or alias"
+        ));
+    }
+    let [draft] = &response.tx_instructions;
+    let instruction =
+        decode_governance_proposal_instruction_draft(draft, "deploy-contract proposal")?;
+    let proposed = instruction
+        .as_any()
+        .downcast_ref::<iroha_data_model::isi::governance::ProposeDeployContract>()
+        .ok_or_else(|| {
+            eyre!("deploy-contract proposal draft returned a different instruction type")
+        })?;
+    if proposed.abi_version != request.abi_version
+        || proposed.code_hash != request.code_hash
+        || proposed.abi_hash != request.abi_hash
+        || proposed.manifest_provenance.as_ref() != request.manifest_provenance.as_ref()
+        || request
+            .contract_address
+            .as_ref()
+            .is_some_and(|address| address != &proposed.contract_address)
+    {
+        return Err(eyre!(
+            "deploy-contract proposal instruction does not match the exact certificate-only request"
+        ));
+    }
+    let proposal = ProposalKind::DeployContract(DeployContractProposal {
+        contract_address: proposed.contract_address.clone(),
+        code_hash: request.code_hash,
+        abi_hash: request.abi_hash,
+        abi_version: request.abi_version,
+        manifest_provenance: request.manifest_provenance.clone(),
+    });
+    if response.proposal_id.into_bytes() != proposal.fingerprint() {
+        return Err(eyre!(
+            "deploy-contract proposal id does not match the complete requested proposal"
+        ));
+    }
+    Ok(())
+}
+
+fn sccp_route_governance_proposal_id(
+    network_id: iroha_data_model::NetworkId,
+    action: &iroha_data_model::isi::bridge::SccpRouteGovernanceActionV1,
+) -> [u8; 32] {
+    use iroha_data_model::governance::types::{ProposalKind, SccpRouteGovernanceProposal};
+    let anchor = iroha_data_model::isi::bridge::SccpRouteGovernanceAnchorV1 {
+        network_id,
+        action: action.clone(),
+    };
+    ProposalKind::SccpRouteGovernance(SccpRouteGovernanceProposal {
+        anchor: Box::new(anchor),
+    })
+    .fingerprint()
+}
+fn validate_sccp_route_governance_draft_response(
+    response: &SccpRouteGovernanceProposalDraftResponseV1,
+    request: &SccpRouteGovernanceProposalDraftRequestV1,
+    network_id: iroha_data_model::NetworkId,
+) -> Result<()> {
+    let proposal = ProposalKind::SccpRouteGovernance(SccpRouteGovernanceProposal {
+        anchor: Box::new(iroha_data_model::isi::bridge::SccpRouteGovernanceAnchorV1 {
+            network_id,
+            action: request.action.clone(),
+        }),
+    });
+    if let Some(reason) = proposal.first_release_exact_json_u64_invariant_error() {
+        return Err(eyre!(reason));
+    }
+    let expected_proposal_id = sccp_route_governance_proposal_id(network_id, &request.action);
+    if response.proposal_id.into_bytes() != expected_proposal_id {
+        return Err(eyre!(
+            "SCCP route-governance proposal id does not match the requested action"
+        ));
+    }
+    let [draft] = &response.tx_instructions;
+    let instruction = decode_governance_proposal_instruction_draft(draft, "SCCP route-governance")?;
     let proposed = instruction
         .as_any()
         .downcast_ref::<iroha_data_model::isi::governance::ProposeSccpRouteGovernance>()
         .ok_or_else(|| {
             eyre!("SCCP route-governance draft returned a different instruction type")
         })?;
-    if proposed.anchor.network_id != network_id
-        || proposed.anchor.action != request.action
-        || proposed.window != request.window
-        || proposed.mode != request.mode
-    {
+    if proposed.anchor.network_id != network_id || proposed.anchor.action != request.action {
         return Err(eyre!(
-            "SCCP route-governance instruction does not match the exact requested action, window, and mode"
+            "SCCP route-governance instruction does not match the exact certificate-only request"
         ));
     }
     Ok(())
@@ -6515,7 +6856,7 @@ pub enum TransactionSchemaCompatibilityError {
 }
 /// Cached compatibility state for the Torii node.
 #[derive(Debug, Clone)]
-pub enum DataModelCompatibility {
+pub(crate) enum DataModelCompatibility {
     /// Compatibility check has not been performed yet.
     Unchecked,
     /// Node data model version matches the client.
@@ -6583,6 +6924,107 @@ impl SumeragiEvidenceListFilter<'_> {
         out
     }
 }
+fn secure_transaction_submission_uses_direct_loopback(url: &Url) -> Result<bool> {
+    if url.host().is_none()
+        || !url.username().is_empty()
+        || url.password().is_some()
+        || url.query().is_some()
+        || url.fragment().is_some()
+    {
+        return Err(eyre!(
+            "verified transaction submission requires an exact origin without userinfo, query, or fragment"
+        ));
+    }
+    let loopback = match url.host() {
+        Some(url::Host::Domain(domain)) => domain == "localhost",
+        Some(url::Host::Ipv4(address)) => address.is_loopback(),
+        Some(url::Host::Ipv6(address)) => address.is_loopback(),
+        None => false,
+    };
+    match url.scheme() {
+        "https" => Ok(false),
+        "http" if loopback => Ok(true),
+        "http" => Err(eyre!(
+            "verified transaction submission permits cleartext HTTP only for exact localhost, 127/8, or ::1 loopback hosts"
+        )),
+        _ => Err(eyre!(
+            "verified transaction submission requires HTTPS or exact loopback HTTP"
+        )),
+    }
+}
+
+fn exact_single_response_header<'a>(
+    response: &'a Response<Vec<u8>>,
+    name: &'static str,
+) -> Result<&'a str> {
+    let mut values = response.headers().get_all(name).iter();
+    let value = values
+        .next()
+        .ok_or_else(|| eyre!("response omitted `{name}`"))?;
+    if values.next().is_some() {
+        return Err(eyre!("response duplicated `{name}`"));
+    }
+    value
+        .to_str()
+        .wrap_err_with(|| format!("response `{name}` is not canonical ASCII"))
+}
+
+/// Strict response verifier for high-assurance transaction submission.
+#[derive(Clone, Copy)]
+struct VerifiedTransactionResponseHandler;
+impl VerifiedTransactionResponseHandler {
+    fn handle(
+        response: &Response<Vec<u8>>,
+        expected_identity: &SorafsOrderbookSubmissionIdentityV1,
+        expected_receipt_signer: &PublicKey,
+    ) -> Result<TransactionSubmissionReceipt> {
+        if response.body().len() > TRANSACTION_SUBMISSION_RESPONSE_MAX_BYTES {
+            return Err(eyre!(
+                "verified transaction response exceeds the {} byte limit",
+                TRANSACTION_SUBMISSION_RESPONSE_MAX_BYTES
+            ));
+        }
+        if response.status() != StatusCode::ACCEPTED {
+            return Err(ResponseReport::with_msg(
+                "Unexpected verified transaction response",
+                response,
+            )
+            .unwrap_or_else(core::convert::identity)
+            .into());
+        }
+        if response.headers().contains_key("x-iroha-reject-code") {
+            return Err(eyre!(
+                "accepted verified transaction response carried a rejection code"
+            ));
+        }
+        let content_type = exact_single_response_header(response, "content-type")?;
+        if !content_type.eq_ignore_ascii_case(APPLICATION_NORITO) {
+            return Err(eyre!(
+                "verified transaction response must contain canonical Norito"
+            ));
+        }
+        let entrypoint_hash =
+            exact_single_response_header(response, TRANSACTION_ENTRYPOINT_HASH_HEADER)?;
+        if entrypoint_hash != expected_identity.entrypoint_hash.to_string() {
+            return Err(eyre!(
+                "verified transaction response entrypoint identity differs from the submitted wire"
+            ));
+        }
+        let signed_transaction_hash =
+            exact_single_response_header(response, SIGNED_TRANSACTION_HASH_HEADER)?;
+        if signed_transaction_hash != expected_identity.signed_transaction_hash.to_string() {
+            return Err(eyre!(
+                "verified transaction response signed-transaction identity differs from the submitted wire"
+            ));
+        }
+        decode_and_verify_sorafs_orderbook_submission_receipt_v1(
+            response.body(),
+            expected_identity,
+            expected_receipt_signer,
+        )
+        .wrap_err("verified transaction receipt failed canonical authentication")
+    }
+}
 /// Phantom struct that handles Transaction API HTTP response
 #[derive(Clone, Copy)]
 struct TransactionResponseHandler;
@@ -6605,19 +7047,38 @@ impl TransactionResponseHandler {
         }
     }
 }
-/// Decode a `/status` response body, preferring Norito and falling back to JSON.
-fn decode_status_response(resp: &Response<Vec<u8>>) -> Result<Status> {
+/// Decode one negotiated `/status` response under the requested wire-format policy.
+fn decode_status_response(
+    resp: &Response<Vec<u8>>,
+    preference: WireFormatPreference,
+) -> Result<Status> {
     if resp.status() != StatusCode::OK {
         return Err(ResponseReport::with_msg("Unexpected status response", resp)
             .unwrap_or_else(core::convert::identity)
             .into());
     }
     let body = resp.body();
-    let is_json = resp
+    let content_type = resp
         .headers()
         .get("content-type")
         .and_then(|v| v.to_str().ok())
-        .is_some_and(|ct| ct.starts_with("application/json"));
+        .map(|value| value.split(';').next().unwrap_or(value).trim());
+    let is_json = content_type.is_some_and(|value| value.eq_ignore_ascii_case(APPLICATION_JSON));
+    let is_norito =
+        content_type.is_some_and(|value| value.eq_ignore_ascii_case(APPLICATION_NORITO));
+    match preference {
+        WireFormatPreference::NoritoOnly if !is_norito => {
+            return Err(eyre!(
+                "status response violates NoritoOnly: expected content-type `{APPLICATION_NORITO}`"
+            ));
+        }
+        WireFormatPreference::JsonOnly if !is_json => {
+            return Err(eyre!(
+                "status response violates JsonOnly: expected content-type `{APPLICATION_JSON}`"
+            ));
+        }
+        _ => {}
+    }
     if is_json {
         norito::json::from_slice(body).map_err(Into::into)
     } else {
@@ -6903,10 +7364,6 @@ impl Client {
         }
         Ok(())
     }
-    fn require_json_lower_hex_32(value: &JsonValue, field: &str, context: &str) -> Result<()> {
-        let hex = Self::require_json_string_field(value, field, context)?;
-        Self::require_lower_hex_32(hex, &format!("{context}.{field}"))
-    }
     fn validate_offline_operation_reference(
         response: &Response<Vec<u8>>,
         reference: &OfflineOperationReference,
@@ -7016,11 +7473,6 @@ impl Client {
         Self::require_lower_hex_32(transaction_hash, "transaction_hash")
     }
     fn validate_offline_capability(status: &OfflineStatus) -> Result<()> {
-        if status.mandatory {
-            return Err(eyre!(
-                "offline capability must not be reported as a backend-mandatory service"
-            ));
-        }
         if status.cash_handoff_capability
             != iroha_data_model::offline::KAGEMUSHA_CASH_HANDOFF_CAPABILITY_V1
         {
@@ -7032,7 +7484,7 @@ impl Client {
             != iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_NATIVE_BRIDGE_ABI_V4
         {
             return Err(eyre!(
-                "offline capability response does not advertise native bridge ABI 22"
+                "offline capability response does not advertise native bridge ABI 23"
             ));
         }
         if status.max_hops != iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_MAX_PEER_HOPS_V2
@@ -7044,16 +7496,6 @@ impl Client {
         if !status.ready {
             return Err(eyre!(
                 "offline capability response must report the universally compiled capability as ready"
-            ));
-        }
-        if !status.assets.is_empty() {
-            return Err(eyre!(
-                "offline capability response must not contain asset-specific readiness entries"
-            ));
-        }
-        if !status.blockers.is_empty() {
-            return Err(eyre!(
-                "offline capability response must not contain backend readiness blockers"
             ));
         }
         Ok(())
@@ -7080,22 +7522,6 @@ impl Client {
         )?;
         Self::validate_offline_capability(&status)?;
         Ok(status)
-    }
-    /// Compatibility alias for clients that previously selected one asset.
-    ///
-    /// Offline capability is universal. The selector is intentionally ignored
-    /// and no query parameter is sent.
-    ///
-    /// # Errors
-    ///
-    /// Returns the same transport, response, representation, and capability
-    /// validation errors as [`Self::get_offline_capability`].
-    #[deprecated(note = "use get_offline_capability(); offline capability is asset-neutral")]
-    pub fn get_offline_readiness(
-        &self,
-        _asset_definition_id: &AssetDefinitionId,
-    ) -> Result<OfflineStatus> {
-        self.get_offline_capability()
     }
     /// Submit a signed online-to-offline top-up operation.
     ///
@@ -7420,33 +7846,6 @@ impl Client {
         )?;
         norito::json::from_slice(resp.body()).map_err(Into::into)
     }
-    /// GET `/v1/sumeragi/vrf/penalties/:epoch` — VRF penalties snapshot for the given epoch.
-    ///
-    /// # Errors
-    /// Returns an error if the HTTP request fails, the response is non-OK, or JSON deserialization fails.
-    pub fn get_sumeragi_vrf_penalties_json(&self, epoch: u64) -> Result<norito::json::Value> {
-        let url = join_torii_url(
-            &self.torii_url,
-            &format!("v1/sumeragi/vrf/penalties/{epoch}"),
-        );
-        let resp = self.send_builder(
-            self.operator_signed_request(HttpMethod::GET, url, Vec::new())?
-                .header("Accept", APPLICATION_JSON),
-        )?;
-        Self::parse_json_ok_response(&resp, "Failed to get sumeragi vrf penalties")
-    }
-    /// GET `/v1/sumeragi/vrf/epoch/:epoch` — VRF epoch snapshot (participants, randomness state).
-    ///
-    /// # Errors
-    /// Returns an error if the HTTP request fails, the response is non-OK, or JSON deserialization fails.
-    pub fn get_sumeragi_vrf_epoch_json(&self, epoch: u64) -> Result<norito::json::Value> {
-        let url = join_torii_url(&self.torii_url, &format!("v1/sumeragi/vrf/epoch/{epoch}"));
-        let resp = self.send_builder(
-            self.operator_signed_request(HttpMethod::GET, url, Vec::new())?
-                .header("Accept", APPLICATION_JSON),
-        )?;
-        Self::parse_json_ok_response(&resp, "Failed to get sumeragi vrf epoch")
-    }
     /// GET `/v1/sumeragi/leader` — leader index snapshot with optional PRF context.
     ///
     /// # Errors
@@ -7640,15 +8039,12 @@ mod offline_client_tests {
     }
     fn universal_offline_capability() -> OfflineStatus {
         OfflineStatus {
-            mandatory: false,
             cash_handoff_capability:
                 iroha_data_model::offline::KAGEMUSHA_CASH_HANDOFF_CAPABILITY_V1.to_owned(),
             required_bridge_abi_version:
                 iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_NATIVE_BRIDGE_ABI_V4,
             max_hops: iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_MAX_PEER_HOPS_V2,
             ready: true,
-            assets: Vec::new(),
-            blockers: Vec::new(),
         }
     }
     #[test]
@@ -7664,13 +8060,10 @@ mod offline_client_tests {
             client_with_base_url(base_url()).get_offline_capability()
         })
         .expect("offline capability response");
-        assert!(!result.mandatory);
         assert_eq!(result.cash_handoff_capability, "cash_handoff_v1");
-        assert_eq!(result.required_bridge_abi_version, 22);
+        assert_eq!(result.required_bridge_abi_version, 23);
         assert_eq!(result.max_hops, 8);
         assert!(result.ready);
-        assert!(result.assets.is_empty());
-        assert!(result.blockers.is_empty());
         let snapshots = snapshots.lock().expect("snapshots");
         assert_eq!(snapshots.len(), 1);
         let snapshot = &snapshots[0];
@@ -7682,9 +8075,6 @@ mod offline_client_tests {
     #[test]
     fn offline_capability_rejects_non_universal_claims() {
         let mut cases = Vec::new();
-        let mut mandatory = universal_offline_capability();
-        mandatory.mandatory = true;
-        cases.push(mandatory);
         let mut wrong_capability = universal_offline_capability();
         wrong_capability.cash_handoff_capability = "cash_handoff_v2".to_owned();
         cases.push(wrong_capability);
@@ -7697,14 +8087,6 @@ mod offline_client_tests {
         let mut not_ready = universal_offline_capability();
         not_ready.ready = false;
         cases.push(not_ready);
-        let mut blocked = universal_offline_capability();
-        blocked
-            .blockers
-            .push(iroha_torii_shared::offline_api::OfflineReadinessBlocker {
-                code: "backend_gate".to_owned(),
-                message: "Backend readiness must not gate the capability.".to_owned(),
-            });
-        cases.push(blocked);
         for capability in cases {
             let response = HttpResponse::builder()
                 .status(StatusCode::OK)
@@ -7904,7 +8286,6 @@ mod status_tests {
             last_non_empty_block_committed_at_ms: 0,
             time_since_last_block_ms: 0,
             time_since_last_non_empty_block_ms: 0,
-            da_reschedule_total: 0,
             tx_gossip: TxGossipSnapshot::default(),
             stack: StackStatus::default(),
             crypto: CryptoStatus {
@@ -7930,7 +8311,8 @@ mod status_tests {
         let s = status_fixture();
         let body = norito::to_bytes(&s).expect("encode status");
         let resp = mk_response(StatusCode::OK, body, Some("application/x-norito"));
-        let got = decode_status_response(&resp).expect("decode");
+        let got =
+            decode_status_response(&resp, WireFormatPreference::NoritoPreferred).expect("decode");
         assert_eq!(got.peers, s.peers);
         assert_eq!(got.blocks, s.blocks);
         assert_eq!(got.blocks_non_empty, s.blocks_non_empty);
@@ -7959,7 +8341,8 @@ mod status_tests {
         s.crypto.sm_openssl_preview_enabled = false;
         let body = norito::json::to_vec(&s).unwrap();
         let resp = mk_response(StatusCode::OK, body, Some("application/json"));
-        let got = decode_status_response(&resp).expect("json decode");
+        let got = decode_status_response(&resp, WireFormatPreference::NoritoPreferred)
+            .expect("json decode");
         assert_eq!(got.blocks, s.blocks);
         assert_eq!(got.queue_size, s.queue_size);
     }
@@ -7985,7 +8368,8 @@ mod status_tests {
         map.remove("build");
         let body = norito::json::to_vec(&value).expect("encode modified json");
         let resp = mk_response(StatusCode::OK, body, Some("application/json"));
-        let got = decode_status_response(&resp).expect("json decode");
+        let got = decode_status_response(&resp, WireFormatPreference::NoritoPreferred)
+            .expect("json decode");
         assert_eq!(got.build.git_commit_sha, "");
         assert_eq!(got.build.dpn_validator_release_commit, "");
         assert_eq!(got.peers, 2);
@@ -8384,6 +8768,36 @@ mod evidence_http_tests {
             snapshot.headers
         );
         assert_eq!(accept_headers[0].1, expected);
+    }
+    #[test]
+    fn client_debug_redacts_runtime_headers_and_torii_url_secrets() {
+        let mut client = client_with_base_url(
+            Url::parse(
+                "https://debug-user:debug-password@example.com/private?auth=debug-query#fragment",
+            )
+            .expect("debug URL fixture"),
+        );
+        client.headers.insert(
+            "Authorization".to_owned(),
+            "Bearer debug-header-sentinel".to_owned(),
+        );
+
+        let rendered = format!("{client:?}");
+
+        assert!(rendered.contains("https://example.com"));
+        assert!(rendered.contains("<redacted>"));
+        for secret in [
+            "debug-user",
+            "debug-password",
+            "debug-query",
+            "fragment",
+            "debug-header-sentinel",
+        ] {
+            assert!(
+                !rendered.contains(secret),
+                "Client Debug exposed secret sentinel `{secret}`: {rendered}"
+            );
+        }
     }
     pub(super) fn assert_signed_headers(snapshot: &RequestSnapshot) -> HashMap<String, String> {
         let headers: HashMap<_, _> = snapshot.headers.iter().cloned().collect();
@@ -10661,11 +11075,6 @@ mod evidence_http_tests {
             assert_json_accept(&snapshot, path);
         }
         let (result, snapshot) = capture_request(json_response(StatusCode::OK, "{}"), || {
-            client_with_base_url(base_url()).get_node_capabilities_json_for_compatibility()
-        });
-        result.expect("compatibility node capabilities JSON");
-        assert_json_accept(&snapshot, "/v1/node/capabilities");
-        let (result, snapshot) = capture_request(json_response(StatusCode::OK, "{}"), || {
             let filter = SumeragiEvidenceListFilter::default();
             client_with_base_url(base_url()).get_sumeragi_evidence_list_json(&filter)
         });
@@ -11158,7 +11567,7 @@ pub struct Client {
     /// Rollout phase controlling the default anonymity policy.
     pub rollout_phase: SorafsRolloutPhase,
     /// Cached Torii compatibility state for queries and transaction submissions.
-    pub data_model_compatibility: Arc<Mutex<DataModelCompatibility>>,
+    pub(crate) data_model_compatibility: Arc<Mutex<DataModelCompatibility>>,
     /// Default response wire-format preference for negotiated Torii endpoints.
     pub wire_format_preference: WireFormatPreference,
 }
@@ -11184,10 +11593,11 @@ impl PreparedTransactionPayload {
 }
 impl fmt::Debug for Client {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let torii_origin = self.torii_url.origin().ascii_serialization();
         f.debug_struct("Client")
             .field("chain", &self.chain)
             .field("network_id", &self.network_id)
-            .field("torii_url", &self.torii_url)
+            .field("torii_url", &torii_origin)
             .field("public_key", &self.key_pair.public_key())
             .field("transaction_ttl", &self.transaction_ttl)
             .field(
@@ -11196,7 +11606,7 @@ impl fmt::Debug for Client {
             )
             .field("torii_request_timeout", &self.torii_request_timeout)
             .field("account", &self.account)
-            .field("headers", &self.headers)
+            .field("headers", &"<redacted>")
             .field(
                 "operator_public_key",
                 &self
@@ -12003,9 +12413,7 @@ impl Client {
             | DataModelCompatibility::SchemaIncompatible(_) => return Ok(()),
             DataModelCompatibility::Incompatible(err) => return Err(err.into()),
         }
-        let Some(capabilities) = self.get_node_capabilities_json_for_compatibility()? else {
-            return Ok(());
-        };
+        let capabilities = self.get_node_capabilities_json()?;
         let outcome = match parse_optional_u64(
             capabilities.get("data_model_version"),
             "node capabilities data_model_version",
@@ -12063,19 +12471,31 @@ impl Client {
         }
     }
     fn ensure_transaction_submit_compatibility(&self) -> Result<()> {
+        self.ensure_transaction_submit_compatibility_with_transport(false, false)
+    }
+    fn ensure_transaction_submit_compatibility_with_transport(
+        &self,
+        direct_loopback: bool,
+        require_fresh_probe: bool,
+    ) -> Result<()> {
         let mut cached = self
             .data_model_compatibility
             .lock()
             .expect("data model compatibility lock");
         match cached.clone() {
             DataModelCompatibility::Unchecked | DataModelCompatibility::Compatible => {}
-            DataModelCompatibility::SubmitCompatible => return Ok(()),
-            DataModelCompatibility::Incompatible(err) => return Err(err.into()),
-            DataModelCompatibility::SchemaIncompatible(err) => return Err(err.into()),
+            DataModelCompatibility::SubmitCompatible if !require_fresh_probe => return Ok(()),
+            DataModelCompatibility::SubmitCompatible => {}
+            DataModelCompatibility::Incompatible(err) if !require_fresh_probe => {
+                return Err(err.into());
+            }
+            DataModelCompatibility::Incompatible(_) => {}
+            DataModelCompatibility::SchemaIncompatible(err) if !require_fresh_probe => {
+                return Err(err.into());
+            }
+            DataModelCompatibility::SchemaIncompatible(_) => {}
         }
-        let Some(capabilities) = self.get_node_capabilities_json_for_compatibility()? else {
-            return Ok(());
-        };
+        let capabilities = self.get_node_capabilities_json_with_transport(direct_loopback)?;
         let outcome = match parse_optional_u64(
             capabilities.get("data_model_version"),
             "node capabilities data_model_version",
@@ -12142,9 +12562,8 @@ impl Client {
     /// # Errors
     /// Fails if sending transaction to peer fails, if it response with error, or if the node
     /// submit compatibility advert is missing or incompatible. On HTTP 200, the node must
-    /// advertise both `data_model_version` and `signed_transaction_schema_hash_hex`. If
-    /// `/v1/node/capabilities` responds with HTTP 404, HTTP 429, or transient 5xx statuses, the
-    /// compatibility probe is treated as transient and deferred.
+    /// advertise both `data_model_version` and `signed_transaction_schema_hash_hex`. Any
+    /// non-successful or malformed capability response aborts before transaction bytes are sent.
     pub fn submit_transaction(
         &self,
         transaction: &SignedTransaction,
@@ -12179,6 +12598,65 @@ impl Client {
             .wrap_err_with(|| format!("Failed to send transaction with hash {hash:?}"))?;
         TransactionResponseHandler::handle(&response)?;
         Ok(hash)
+    }
+    /// Submit one exact Kagemusha lifecycle archive through its dedicated durable route.
+    ///
+    /// The capability probe and write share the same HTTPS-or-direct-loopback transport policy.
+    /// Success requires an exact `202 Accepted` response, singleton transaction-identity headers,
+    /// and a bounded canonical receipt signed by `expected_receipt_signer` over both identities.
+    ///
+    /// # Errors
+    ///
+    /// Fails before network I/O if the prepared body differs from `transaction` or the configured
+    /// origin is unsafe. Transport ambiguity and every missing, malformed, untrusted, or
+    /// identity-mismatched acknowledgement fail closed.
+    pub fn submit_prepared_kagemusha_lifecycle_payload(
+        &self,
+        transaction: &SignedTransaction,
+        payload: &PreparedTransactionPayload,
+        expected_receipt_signer: &PublicKey,
+    ) -> Result<TransactionSubmissionReceipt> {
+        let canonical = Self::prepare_transaction_payload(transaction);
+        if canonical.hash() != payload.hash() || canonical.as_bytes() != payload.as_bytes() {
+            return Err(eyre!(
+                "prepared Kagemusha lifecycle body differs from the authorized transaction wire"
+            ));
+        }
+        let direct_loopback = secure_transaction_submission_uses_direct_loopback(&self.torii_url)?;
+        let url = join_torii_url(&self.torii_url, torii_uri::KAGEMUSHA_LIFECYCLE_TRANSACTION);
+        self.ensure_transaction_submit_compatibility_with_transport(direct_loopback, true)?;
+
+        let mut headers = self.transaction_headers_without_content_type();
+        headers.retain(|name, _| {
+            !name.eq_ignore_ascii_case("accept") && !name.eq_ignore_ascii_case("prefer")
+        });
+        let mut request = DefaultRequestBuilder::new(HttpMethod::POST, url)
+            .headers(headers)
+            .header("Content-Type", APPLICATION_NORITO)
+            .header("Accept", APPLICATION_NORITO)
+            .body(payload.as_bytes().to_vec())
+            .max_response_bytes(TRANSACTION_SUBMISSION_RESPONSE_MAX_BYTES);
+        if self.torii_request_timeout != Duration::ZERO {
+            request = request.timeout(self.torii_request_timeout);
+        }
+        if direct_loopback {
+            request = request.direct_loopback();
+        }
+        let transaction_hash = payload.hash();
+        let uncertain_context = format!(
+            "Kagemusha lifecycle submission outcome is uncertain for transaction \
+             {transaction_hash}; do not retry automatically"
+        );
+        let response = request
+            .build()?
+            .send()
+            .wrap_err_with(|| uncertain_context.clone())?;
+        let identity = SorafsOrderbookSubmissionIdentityV1 {
+            entrypoint_hash: transaction.hash_as_entrypoint(),
+            signed_transaction_hash: payload.hash(),
+        };
+        VerifiedTransactionResponseHandler::handle(&response, &identity, expected_receipt_signer)
+            .wrap_err_with(|| uncertain_context)
     }
     /// Submit a prebuilt transaction with the asynchronous HTTP transport.
     ///
@@ -13228,11 +13706,11 @@ impl Client {
     }
     /// Gets network status seen from the peer
     ///
-    /// Tries Norito first (preferred, compact and stable), then gracefully falls back
-    /// to JSON if the server responds with a JSON payload.
+    /// Sends one negotiated request and decodes only that response. Strict preferences
+    /// reject a response whose declared representation differs from the requested format.
     ///
     /// # Errors
-    /// Fails if sending request or decoding fails for both Norito and JSON formats.
+    /// Fails if sending the request, enforcing the representation policy, or decoding fails.
     /// Fetch node `/status`.
     ///
     /// # Errors
@@ -13251,31 +13729,27 @@ impl Client {
             http::header::ACCEPT,
             self.wire_format_preference.accept_header(),
         ))?;
-        match decode_status_response(&resp) {
-            Ok(status) => Ok(status),
-            Err(first_err) => {
-                let json_resp = self.send_builder(
-                    self.default_request(
-                        HttpMethod::GET,
-                        join_torii_url(&self.torii_url, torii_uri::STATUS),
-                    )
-                    .header(http::header::ACCEPT, APPLICATION_JSON)
-                    .max_response_bytes(NODE_STATUS_RESPONSE_MAX_BYTES),
-                )?;
-                match decode_status_response(&json_resp) {
-                    Ok(status) => Ok(status),
-                    Err(json_err) => Err(eyre!(
-                        "Norito decode failed: {first}; JSON fallback failed: {second}",
-                        first = first_err,
-                        second = json_err
-                    )),
-                }
-            }
-        }
+        decode_status_response(&resp, self.wire_format_preference)
+    }
+    /// Fetch the authoritative Soracloud status using canonical account authentication.
+    ///
+    /// The status surface is account-scoped and therefore never falls back to
+    /// an unsigned request or an operator-token alias.
+    ///
+    /// # Errors
+    /// Returns an error if canonical request signing, construction, transport,
+    /// or bounded response reading fails.
+    pub fn get_soracloud_status_response(&self) -> Result<Response<Vec<u8>>> {
+        let url = join_torii_url(&self.torii_url, "v1/soracloud/status");
+        self.send_builder(
+            self.account_signed_request(HttpMethod::GET, url, Vec::new())?
+                .header(http::header::ACCEPT, APPLICATION_JSON)
+                .max_response_bytes(SORACLOUD_STATUS_RESPONSE_MAX_BYTES),
+        )
     }
     #[cfg(test)]
     fn decode_status_for_test(resp: &Response<Vec<u8>>) -> Result<Status> {
-        decode_status_response(resp)
+        decode_status_response(resp, WireFormatPreference::NoritoPreferred)
     }
     /// Prepares http-request to implement [`Self::get_status`] on your own.
     ///
@@ -14364,14 +14838,23 @@ impl Client {
             ));
         }
         let witness_header = canonical_request_witness_header_value(witness)?;
-        let response = self.send_builder(
-            self.request_without_canonical_account_auth(HttpMethod::POST, url)
-                .header(HEADER_WITNESS, &witness_header)
-                .header("Content-Type", APPLICATION_JSON)
-                .header("Accept", APPLICATION_JSON)
-                .body(body)
-                .max_response_bytes(FEE_QUOTE_RESPONSE_MAX_BYTES),
-        )?;
+        let cleartext = url.scheme() == "http";
+        if !cleartext && url.scheme() != "https" {
+            return Err(eyre!("fee-quote transport requires HTTPS or local HTTP"));
+        }
+        let request = self
+            .request_without_canonical_account_auth(HttpMethod::POST, url)
+            .header(HEADER_WITNESS, &witness_header)
+            .header("Content-Type", APPLICATION_JSON)
+            .header("Accept", APPLICATION_JSON)
+            .body(body)
+            .max_response_bytes(FEE_QUOTE_RESPONSE_MAX_BYTES);
+        let request = if cleartext {
+            request.direct_loopback()
+        } else {
+            request
+        };
+        let response = self.send_builder(request)?;
         if response.body().len() > FEE_QUOTE_RESPONSE_MAX_BYTES {
             return Err(eyre!(
                 "fee quote response exceeds the {} byte limit",
@@ -14394,23 +14877,6 @@ impl Client {
     /// Returns an error if request construction, NORITO serialization, or the HTTP call fails.
     pub fn post_asset_alias_resolve(&self, alias: &str) -> Result<Response<Vec<u8>>> {
         let url = join_torii_url(&self.torii_url, "v1/assets/aliases/resolve");
-        let body = norito::json::to_vec(&norito::json!({ "alias": alias }))?;
-        self.default_request(HttpMethod::POST, url)
-            .header("Content-Type", APPLICATION_JSON)
-            .body(body)
-            .build()?
-            .send()
-    }
-    /// Compatibility helper: POST `/v1/aliases/resolve` with an account-alias literal.
-    ///
-    /// New code should prefer [`Self::resolve_account_alias_unsigned`] or
-    /// [`Self::resolve_account_alias_authenticated`] for strict typed response
-    /// substitution checks.
-    ///
-    /// # Errors
-    /// Returns an error if request construction, JSON serialization, or the HTTP call fails.
-    pub fn post_alias_resolve(&self, alias: &str) -> Result<Response<Vec<u8>>> {
-        let url = join_torii_url(&self.torii_url, "v1/aliases/resolve");
         let body = norito::json::to_vec(&norito::json!({ "alias": alias }))?;
         self.default_request(HttpMethod::POST, url)
             .header("Content-Type", APPLICATION_JSON)
@@ -16405,21 +16871,58 @@ impl Client {
             "Failed to upload attachment with HTTP status",
         )
     }
-    /// POST `/v1/gov/proposals/deploy-contract` with a JSON DTO body.
+    /// Draft one canonical deploy-contract proposal instruction for local signing.
+    ///
+    /// The response is rejected unless the decoded instruction and typed
+    /// proposal identifier bind the complete request, including manifest
+    /// provenance.
+    ///
     /// # Errors
-    /// Returns an error if the HTTP request fails, the response is non-OK, or response JSON deserialization fails.
-    pub fn post_gov_propose_deploy_json(
+    /// Returns an error for an invalid target or ABI version, transport or HTTP
+    /// failure, malformed JSON, or any response-binding mismatch.
+    pub fn post_deploy_contract_proposal_draft(
         &self,
-        value: &norito::json::Value,
-    ) -> Result<norito::json::Value> {
-        let url = join_torii_url(&self.torii_url, "v1/gov/proposals/deploy-contract");
-        let body = norito::json::to_vec(value)?;
-        let resp = self
-            .account_signed_request(HttpMethod::POST, url, body)?
-            .header("Content-Type", APPLICATION_JSON)
-            .build()?
-            .send()?;
-        Self::decode_json_ok(resp, "Failed to propose-deploy")
+        request: &DeployContractProposalDraftRequestV1,
+    ) -> Result<DeployContractProposalDraftResponseV1> {
+        if request.abi_version.get() != 1 {
+            return Err(eyre!(
+                "deploy-contract proposal ABI version must be exactly one"
+            ));
+        }
+        if matches!(
+            (&request.contract_address, &request.contract_alias),
+            (Some(_), Some(_)) | (None, None)
+        ) {
+            return Err(eyre!(
+                "deploy-contract proposal must select exactly one contract address or alias"
+            ));
+        }
+        let url = join_torii_url(&self.torii_url, iroha_torii_shared::uri::GOV_PROPOSE_DEPLOY);
+        let body = norito::json::to_vec(request)
+            .wrap_err("failed to encode deploy-contract proposal draft request")?;
+        let response = self.send_builder(
+            self.account_signed_request(HttpMethod::POST, url, body)?
+                .header("Content-Type", APPLICATION_JSON)
+                .header("Accept", APPLICATION_JSON)
+                .max_response_bytes(GOVERNANCE_PROPOSAL_JSON_RESPONSE_MAX_BYTES),
+        )?;
+        Self::ensure_response_status(
+            &response,
+            StatusCode::OK,
+            "Failed to draft deploy-contract proposal",
+            " ",
+        )?;
+        let content_type = Self::response_content_type(&response);
+        if !Self::is_sccp_json_content_type(content_type) {
+            return Err(eyre!(
+                "deploy-contract proposal draft response has invalid content type {content_type}"
+            ));
+        }
+        let response: DeployContractProposalDraftResponseV1 =
+            norito::json::from_slice(response.body())
+                .wrap_err("failed to decode typed deploy-contract proposal draft response")?;
+        validate_deploy_contract_proposal_draft_response(&response, request)?;
+        Ok(response)
     }
     /// POST `/v1/gov/proposals/sccp-route-governance` with one typed action.
     ///
@@ -16429,24 +16932,25 @@ impl Client {
     ///
     /// # Errors
     ///
-    /// Returns an error for an invalid action/window, transport or HTTP
+    /// Returns an error for an invalid action, transport or HTTP
     /// failure, a non-JSON response, or a response whose proposal id or framed
     /// instruction differs from the exact request.
     pub fn post_sccp_route_governance_draft(
         &self,
-        request: &SccpRouteGovernanceDraftRequest,
-    ) -> Result<SccpRouteGovernanceDraftResponse> {
+        request: &SccpRouteGovernanceProposalDraftRequestV1,
+    ) -> Result<SccpRouteGovernanceProposalDraftResponseV1> {
         request
             .action
             .validate_static()
             .map_err(|error| eyre!("invalid SCCP route-governance action: {error}"))?;
-        if request
-            .window
-            .is_some_and(|window| window.upper < window.lower)
-        {
-            return Err(eyre!(
-                "SCCP route-governance window.upper must be greater than or equal to window.lower"
-            ));
+        let proposal = ProposalKind::SccpRouteGovernance(SccpRouteGovernanceProposal {
+            anchor: Box::new(iroha_data_model::isi::bridge::SccpRouteGovernanceAnchorV1 {
+                network_id: self.network_id,
+                action: request.action.clone(),
+            }),
+        });
+        if let Some(reason) = proposal.first_release_exact_json_u64_invariant_error() {
+            return Err(eyre!(reason));
         }
         let url = join_torii_url(
             &self.torii_url,
@@ -16457,7 +16961,7 @@ impl Client {
             self.account_signed_request(HttpMethod::POST, url, body)?
                 .header("Content-Type", APPLICATION_JSON)
                 .header("Accept", APPLICATION_JSON)
-                .max_response_bytes(SCCP_JSON_RESPONSE_MAX_BYTES),
+                .max_response_bytes(GOVERNANCE_PROPOSAL_JSON_RESPONSE_MAX_BYTES),
         )?;
         Self::ensure_response_status(
             &resp,
@@ -16471,11 +16975,367 @@ impl Client {
                 "SCCP route-governance draft response has invalid content type {content_type}"
             ));
         }
-        let response: SccpRouteGovernanceDraftResponse = norito::json::from_slice(resp.body())
-            .wrap_err("failed to decode typed SCCP route-governance draft response")?;
+        let response: SccpRouteGovernanceProposalDraftResponseV1 =
+            norito::json::from_slice(resp.body())
+                .wrap_err("failed to decode typed SCCP route-governance draft response")?;
         validate_sccp_route_governance_draft_response(&response, request, self.network_id)?;
         Ok(response)
     }
+
+    /// Draft one canonical attempt-based Parliament proposal for local signing.
+    ///
+    /// The response is rejected unless its derived identifiers and decoded
+    /// instruction exactly match the request.
+    ///
+    /// # Errors
+    /// Returns an error for an unsupported request version, transport or HTTP
+    /// failure, malformed JSON, or any response-binding mismatch.
+    pub fn post_parliament_attempt_draft(
+        &self,
+        request: &ParliamentAttemptDraftRequestV1,
+    ) -> Result<ParliamentAttemptDraftResponseV1> {
+        if request.version != PARLIAMENT_API_VERSION_V1 {
+            return Err(eyre!("unsupported Parliament attempt draft version"));
+        }
+        let url = join_torii_url(&self.torii_url, torii_uri::GOV_PARLIAMENT_ATTEMPT_DRAFT);
+        let body = norito::json::to_vec(request)
+            .wrap_err("failed to encode Parliament attempt draft request")?;
+        let response = self.send_builder(
+            self.account_signed_request(HttpMethod::POST, url, body)?
+                .header("Content-Type", APPLICATION_JSON)
+                .header("Accept", APPLICATION_JSON)
+                .max_response_bytes(PARLIAMENT_JSON_RESPONSE_MAX_BYTES),
+        )?;
+        Self::ensure_response_status(
+            &response,
+            StatusCode::OK,
+            "Failed to draft Parliament governance attempt",
+            " ",
+        )?;
+        let result: ParliamentAttemptDraftResponseV1 = norito::json::from_slice(response.body())
+            .wrap_err("failed to decode Parliament attempt draft response")?;
+        let _ = validate_parliament_attempt_draft_response(&result, request)?;
+        Ok(result)
+    }
+
+    /// Draft one exact Parliament lifecycle transition for local signing.
+    ///
+    /// Static corpus bounds are checked before sending, and the response is
+    /// rejected unless its classification, digest, and decoded instruction are
+    /// all bound to the exact request.
+    ///
+    /// # Errors
+    /// Returns an error for an invalid request, transport or HTTP failure,
+    /// malformed JSON, or any response-binding mismatch.
+    pub fn post_parliament_transition_draft(
+        &self,
+        request: &ParliamentTransitionDraftRequestV1,
+    ) -> Result<ParliamentTransitionDraftResponseV1> {
+        request
+            .validate_static()
+            .map_err(|reason| eyre!("invalid Parliament transition draft request: {reason}"))?;
+        let url = join_torii_url(&self.torii_url, torii_uri::GOV_PARLIAMENT_TRANSITION_DRAFT);
+        let body = norito::json::to_vec(request)
+            .wrap_err("failed to encode Parliament transition draft request")?;
+        let response = self.send_builder(
+            self.account_signed_request(HttpMethod::POST, url, body)?
+                .header("Content-Type", APPLICATION_JSON)
+                .header("Accept", APPLICATION_JSON)
+                .max_response_bytes(PARLIAMENT_JSON_RESPONSE_MAX_BYTES),
+        )?;
+        Self::ensure_response_status(
+            &response,
+            StatusCode::OK,
+            "Failed to draft Parliament lifecycle transition",
+            " ",
+        )?;
+        let result: ParliamentTransitionDraftResponseV1 = norito::json::from_slice(response.body())
+            .wrap_err("failed to decode Parliament transition draft response")?;
+        let _ = validate_parliament_transition_draft_response(&result, request)?;
+        Ok(result)
+    }
+
+    /// Read one complete authenticated Parliament attempt projection.
+    ///
+    /// # Errors
+    /// Returns an error for a zero or noncanonical identifier, transport or
+    /// HTTP failure, malformed JSON, a mismatched attempt id, or oversized or
+    /// noncanonical reducer payload hex.
+    pub fn get_parliament_attempt(
+        &self,
+        governance_attempt_id: iroha_data_model::governance::types::GovernanceAttemptId,
+    ) -> Result<ParliamentAttemptReadResponseV1> {
+        if governance_attempt_id
+            .as_bytes()
+            .iter()
+            .all(|byte| *byte == 0)
+        {
+            return Err(eyre!("Parliament governance attempt id must be non-zero"));
+        }
+        let path = torii_uri::GOV_PARLIAMENT_ATTEMPT_READ
+            .replace("{governance_attempt_id}", &governance_attempt_id.to_hex());
+        let url = join_torii_url(&self.torii_url, &path);
+        let response = self.send_builder(
+            self.account_signed_request(HttpMethod::GET, url, Vec::new())?
+                .header("Accept", APPLICATION_JSON)
+                .max_response_bytes(PARLIAMENT_JSON_RESPONSE_MAX_BYTES),
+        )?;
+        Self::ensure_response_status(
+            &response,
+            StatusCode::OK,
+            "Failed to read Parliament governance attempt",
+            " ",
+        )?;
+        let result: ParliamentAttemptReadResponseV1 = norito::json::from_slice(response.body())
+            .wrap_err("failed to decode Parliament attempt read response")?;
+        if result.version != PARLIAMENT_API_VERSION_V1
+            || result.attempt.id != governance_attempt_id
+            || !result.attempt.has_canonical_id()
+        {
+            return Err(eyre!(
+                "Parliament attempt read response differs from the requested canonical id"
+            ));
+        }
+        validate_parliament_attempt_state_frame(&result.state_payload_hex)?;
+        Ok(result)
+    }
+
+    /// Read one replay-validated public timed-OVN inspection context.
+    ///
+    /// The response carries strict JSON projections and one canonical bounded
+    /// Norito archive for public inspection. It is not consensus-authenticated
+    /// and must never be passed to a secret-local wallet; use
+    /// [`Self::get_parliament_timed_ovn_casting_proof_page`] instead. Torii never
+    /// receives or generates a registration secret, masked ballot, proof
+    /// nonce, release share, or individual opening.
+    ///
+    /// # Errors
+    /// Returns an error for a zero identifier, transport or HTTP failure,
+    /// malformed JSON, or any oversized, noncanonical, cross-bound, or
+    /// phase-inconsistent public response.
+    pub fn get_parliament_timed_ovn_casting_context(
+        &self,
+        ballot_attempt_id: iroha_data_model::governance::types::BallotAttemptId,
+    ) -> Result<ParliamentTimedOvnCastingContextResponseV1> {
+        if ballot_attempt_id.as_bytes().iter().all(|byte| *byte == 0) {
+            return Err(eyre!("Parliament ballot attempt id must be non-zero"));
+        }
+        let path = torii_uri::GOV_PARLIAMENT_TIMED_OVN_CASTING_CONTEXT_READ
+            .replace("{ballot_attempt_id}", &ballot_attempt_id.to_hex());
+        let url = join_torii_url(&self.torii_url, &path);
+        let response = self.send_builder(
+            self.account_signed_request(HttpMethod::GET, url, Vec::new())?
+                .header("Accept", APPLICATION_JSON)
+                .max_response_bytes(PARLIAMENT_TIMED_OVN_CASTING_CONTEXT_RESPONSE_MAX_BYTES),
+        )?;
+        Self::ensure_response_status(
+            &response,
+            StatusCode::OK,
+            "Failed to read Parliament timed-OVN casting context",
+            " ",
+        )?;
+        let result: ParliamentTimedOvnCastingContextResponseV1 =
+            norito::json::from_slice(response.body())
+                .wrap_err("failed to decode Parliament timed-OVN casting-context response")?;
+        result
+            .validate_for_ballot(ballot_attempt_id)
+            .map_err(|reason| eyre!(reason))?;
+        Ok(result)
+    }
+
+    /// Fetch and verify one bounded consensus-authenticated casting-proof page.
+    ///
+    /// The caller supplies a durable, independently trusted checkpoint. An
+    /// intermediate response advances that checkpoint by at most 63 blocks and
+    /// contains no casting archive. A terminal response authenticates the
+    /// requested ballot's compact binding through the block execution root.
+    /// Secret-local native code must still replay the included Core archive and
+    /// require that it exactly rederives the authenticated compact binding.
+    ///
+    /// # Errors
+    /// Returns an error for an invalid ballot/anchor, transport or HTTP failure,
+    /// non-Norito response, malformed finality, or invalid witness/membership.
+    pub fn get_parliament_timed_ovn_casting_proof_page(
+        &self,
+        ballot_attempt_id: iroha_data_model::governance::types::BallotAttemptId,
+        trusted_checkpoint_height: u64,
+        trusted_checkpoint_context_id: [u8; 32],
+    ) -> Result<ParliamentTimedOvnCastingProofResponseV1> {
+        if ballot_attempt_id.as_bytes().iter().all(|byte| *byte == 0) {
+            return Err(eyre!("Parliament ballot attempt id must be non-zero"));
+        }
+        let request = ParliamentTimedOvnCastingProofRequestV1 {
+            version: PARLIAMENT_TIMED_OVN_CASTING_PROOF_VERSION_V1,
+            trusted_checkpoint_height,
+        };
+        let body = to_bytes(&request)
+            .wrap_err("failed to encode Parliament casting proof request as Norito")?;
+        let path = torii_uri::GOV_PARLIAMENT_TIMED_OVN_CASTING_PROOF
+            .replace("{ballot_attempt_id}", &ballot_attempt_id.to_hex());
+        let url = join_torii_url(&self.torii_url, &path);
+        let response = self.send_builder(
+            self.account_signed_request(HttpMethod::POST, url, body)?
+                .header("Content-Type", APPLICATION_NORITO)
+                .header("Accept", APPLICATION_NORITO)
+                .max_response_bytes(PARLIAMENT_TIMED_OVN_CASTING_PROOF_RESPONSE_MAX_BYTES),
+        )?;
+        if response.status() != StatusCode::OK {
+            return Err(eyre!(
+                "Failed to fetch Parliament casting proof: {} {}",
+                response.status(),
+                std::str::from_utf8(response.body()).unwrap_or("")
+            ));
+        }
+        let content_type = Self::response_content_type(&response);
+        if !content_type.starts_with(APPLICATION_NORITO) {
+            return Err(eyre!(
+                "Parliament casting proof response has invalid content type {content_type}"
+            ));
+        }
+        let proof: ParliamentTimedOvnCastingProofResponseV1 = decode_from_bytes(response.body())
+            .wrap_err("failed to decode Parliament casting proof response")?;
+        proof
+            .verify_consensus_page_against(
+                self.network_id,
+                trusted_checkpoint_height,
+                trusted_checkpoint_context_id,
+                ballot_attempt_id,
+            )
+            .map_err(|error| eyre!("Parliament casting proof verification failed: {error}"))?;
+        Ok(proof)
+    }
+
+    /// Verify bounded casting-proof pages until the endpoint's observed tip.
+    ///
+    /// Applications should durably persist each promoted height/context before
+    /// requesting the next page. This convenience method performs the same
+    /// checks in memory and returns only after a terminal page authenticates the
+    /// requested ballot's casting archive.
+    ///
+    /// # Errors
+    /// Returns an error if any page fails, does not advance, omits the terminal
+    /// archive, or attempts an unbounded pagination loop.
+    pub fn catch_up_parliament_timed_ovn_casting_proof(
+        &self,
+        ballot_attempt_id: iroha_data_model::governance::types::BallotAttemptId,
+        trusted_checkpoint_height: u64,
+        trusted_checkpoint_context_id: [u8; 32],
+    ) -> Result<ParliamentTimedOvnCastingProofCatchUp> {
+        const MAX_PAGES_PER_CALL: u32 = 4_096;
+        let mut checkpoint_height = trusted_checkpoint_height;
+        let mut checkpoint_context_id = trusted_checkpoint_context_id;
+        for pages_verified in 1..=MAX_PAGES_PER_CALL {
+            let page = self.get_parliament_timed_ovn_casting_proof_page(
+                ballot_attempt_id,
+                checkpoint_height,
+                checkpoint_context_id,
+            )?;
+            if page.evaluated_block_height < checkpoint_height
+                || (page.more_available && page.evaluated_block_height == checkpoint_height)
+            {
+                return Err(eyre!(
+                    "Parliament casting checkpoint promotion did not advance"
+                ));
+            }
+            checkpoint_height = page.evaluated_block_height;
+            checkpoint_context_id = *page.evaluated_context_id.0.as_ref();
+            if !page.more_available {
+                if page.casting_context_archive.is_none() {
+                    return Err(eyre!(
+                        "terminal Parliament casting proof omitted its archive"
+                    ));
+                }
+                return Ok(ParliamentTimedOvnCastingProofCatchUp {
+                    final_page: page,
+                    pages_verified,
+                    promoted_checkpoint_height: checkpoint_height,
+                    promoted_checkpoint_context_id: checkpoint_context_id,
+                });
+            }
+        }
+        Err(eyre!(
+            "Parliament casting checkpoint promotion exceeded {MAX_PAGES_PER_CALL} pages"
+        ))
+    }
+
+    /// Read and strictly validate one Core-authorized public TLE release context.
+    ///
+    /// The response includes the complete public DKG transcript required by an
+    /// independent coordinator. It never includes registration or ballot
+    /// corpora, secret shares, or individual openings.
+    ///
+    /// # Errors
+    /// Returns an error for a zero identifier, transport or HTTP failure,
+    /// malformed JSON, or any transcript, identity, height, or digest mismatch.
+    pub fn get_parliament_tle_release_context(
+        &self,
+        ballot_attempt_id: iroha_data_model::governance::types::BallotAttemptId,
+    ) -> Result<ParliamentTleReleaseContextResponseV1> {
+        if ballot_attempt_id.as_bytes().iter().all(|byte| *byte == 0) {
+            return Err(eyre!("Parliament ballot attempt id must be non-zero"));
+        }
+        let path = torii_uri::GOV_PARLIAMENT_TLE_RELEASE_CONTEXT_READ
+            .replace("{ballot_attempt_id}", &ballot_attempt_id.to_hex());
+        let url = join_torii_url(&self.torii_url, &path);
+        let response = self.send_builder(
+            self.account_signed_request(HttpMethod::GET, url, Vec::new())?
+                .header("Accept", APPLICATION_JSON)
+                .max_response_bytes(PARLIAMENT_TLE_RELEASE_CONTEXT_RESPONSE_MAX_BYTES),
+        )?;
+        Self::ensure_response_status(
+            &response,
+            StatusCode::OK,
+            "Failed to read Parliament TLE release context",
+            " ",
+        )?;
+        let result: ParliamentTleReleaseContextResponseV1 =
+            norito::json::from_slice(response.body())
+                .wrap_err("failed to decode Parliament TLE release-context response")?;
+        result
+            .validate_for_ballot(ballot_attempt_id)
+            .map_err(|reason| eyre!(reason))?;
+        Ok(result)
+    }
+
+    /// Request this node's proof-carrying public partial for a validated context.
+    ///
+    /// The request body is exactly empty. The returned share is structurally
+    /// bound to the fetched key session and identity digest; an operational
+    /// coordinator must still independently verify its proof equations before
+    /// combining it with peer shares.
+    ///
+    /// # Errors
+    /// Returns an error for an invalid context, transport or HTTP failure,
+    /// malformed JSON, or a cross-session/invalid partial response.
+    pub fn post_parliament_tle_partial_release(
+        &self,
+        context: &ParliamentTleReleaseContextResponseV1,
+    ) -> Result<ParliamentTlePartialReleaseShareV1> {
+        context
+            .validate_for_ballot(context.ballot_attempt_id)
+            .map_err(|reason| eyre!(reason))?;
+        let path = torii_uri::GOV_PARLIAMENT_TLE_PARTIAL_RELEASE
+            .replace("{ballot_attempt_id}", &context.ballot_attempt_id.to_hex());
+        let url = join_torii_url(&self.torii_url, &path);
+        let response = self.send_builder(
+            self.account_signed_request(HttpMethod::POST, url, Vec::new())?
+                .header("Accept", APPLICATION_JSON)
+                .max_response_bytes(PARLIAMENT_TLE_PARTIAL_RELEASE_RESPONSE_MAX_BYTES),
+        )?;
+        Self::ensure_response_status(
+            &response,
+            StatusCode::OK,
+            "Failed to request Parliament TLE partial release",
+            " ",
+        )?;
+        let result: ParliamentTlePartialReleaseShareV1 = norito::json::from_slice(response.body())
+            .wrap_err("failed to decode Parliament TLE partial-release response")?;
+        result
+            .validate_against(context)
+            .map_err(|reason| eyre!(reason))?;
+        Ok(result)
+    }
+
     /// Fetch and verify one bounded validation-fee policy proof page.
     ///
     /// The caller supplies a previously trusted checkpoint. The returned page
@@ -16582,8 +17442,8 @@ impl Client {
     /// # Errors
     ///
     /// Returns an error for an invalid cursor or limit, transport/HTTP/JSON
-    /// failure, or a response whose page boundary, proposal id, kind, version,
-    /// or voting mode is inconsistent.
+    /// failure, or a response whose page boundary, proposal id, operator,
+    /// certificate summary, kind, or version is inconsistent.
     pub fn list_validation_fee_proposals_page(
         &self,
         cursor: Option<&str>,
@@ -16633,7 +17493,7 @@ impl Client {
         let mut order_keys = Vec::with_capacity(result.proposals.len());
         for proposal in &result.proposals {
             let created_height = validate_validation_fee_proposal_record(proposal)?;
-            order_keys.push((created_height, proposal.proposal_id.as_str()));
+            order_keys.push((created_height, proposal.kind.fingerprint()));
         }
         if order_keys.windows(2).any(|pair| pair[0] > pair[1]) {
             return Err(eyre!(
@@ -16643,8 +17503,7 @@ impl Client {
         if let (Some((after_height, after_id)), Some((first_height, first_id))) =
             (after, order_keys.first().copied())
         {
-            let after_id = hex::encode(after_id);
-            if (first_height, first_id) <= (after_height, after_id.as_str()) {
+            if (first_height, first_id) <= (after_height, after_id) {
                 return Err(eyre!(
                     "validation-fee proposal page did not advance beyond its cursor"
                 ));
@@ -16663,11 +17522,6 @@ impl Client {
                     "empty validation-fee proposal page cannot advertise a next cursor"
                 ));
             };
-            let last_id = hex::decode(last_id)
-                .wrap_err("validation-fee proposal id stopped being canonical")?;
-            let last_id: [u8; 32] = last_id
-                .try_into()
-                .map_err(|_| eyre!("validation-fee proposal id has the wrong width"))?;
             if next != (last_height, last_id) {
                 return Err(eyre!(
                     "validation-fee next cursor is not bound to the last returned proposal"
@@ -16704,7 +17558,7 @@ impl Client {
         let result: ValidationFeeProposalDetailV1 = norito::json::from_slice(response.body())
             .wrap_err("failed to decode validation-fee proposal detail")?;
         if result.version != VALIDATION_FEE_PROPOSAL_API_VERSION_V1
-            || result.proposal.proposal_id != proposal_id
+            || hex::encode(result.proposal.kind.fingerprint()) != proposal_id
         {
             return Err(eyre!(
                 "validation-fee proposal detail differs from the requested id or version"
@@ -16718,9 +17572,9 @@ impl Client {
     ///
     /// # Errors
     ///
-    /// Returns an error before HTTP for ZK mode or malformed payloads, and
-    /// rejects any server response whose proposal kind/id/instruction differs
-    /// from the exact request.
+    /// Returns an error before HTTP for malformed payloads, and rejects any
+    /// server response whose operator-bound proposal kind/id/instruction
+    /// differs from the exact request.
     pub fn post_validation_fee_proposal_draft(
         &self,
         request: &ValidationFeeProposalDraftRequestV1,
@@ -16767,54 +17621,6 @@ impl Client {
         let response = self.post_validation_fee_proposal_draft(request)?;
         let instruction = validate_validation_fee_draft_response(&response, request)?;
         self.submit(instruction, fee_payment)
-    }
-    /// Draft one exact proposal-bound validation-fee PLAIN ballot for local signing.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error for a malformed proposal id, unsupported request
-    /// version, transport/HTTP/JSON failure, or a response whose owner,
-    /// direction, amount, duration, or native instruction differs from the
-    /// exact requested ballot.
-    pub fn post_validation_fee_plain_ballot_draft(
-        &self,
-        proposal_id: &str,
-        request: &ValidationFeePlainBallotDraftRequestV1,
-    ) -> Result<ValidationFeePlainBallotDraftResponseV1> {
-        Self::require_lower_hex_32(proposal_id, "proposal_id")?;
-        if request.owner != self.account {
-            return Err(eyre!(
-                "validation-fee PLAIN ballot owner must equal the client account"
-            ));
-        }
-        if request.version != VALIDATION_FEE_PROPOSAL_API_VERSION_V1 {
-            return Err(eyre!(
-                "validation-fee PLAIN ballot draft has an unsupported version"
-            ));
-        }
-        let path =
-            torii_uri::VALIDATION_FEE_PLAIN_BALLOT_DRAFT.replace("{proposal_id}", proposal_id);
-        let url = join_torii_url(&self.torii_url, &path);
-        let body = norito::json::to_vec(request)
-            .wrap_err("failed to encode validation-fee PLAIN ballot draft")?;
-        let response = self.send_builder(
-            self.account_signed_request(HttpMethod::POST, url, body)?
-                .header("Content-Type", APPLICATION_JSON)
-                .header("Accept", APPLICATION_JSON)
-                .max_response_bytes(VALIDATION_FEE_JSON_RESPONSE_MAX_BYTES),
-        )?;
-        if response.status() != StatusCode::OK {
-            return Err(eyre!(
-                "Failed to draft validation-fee PLAIN ballot: {} {}",
-                response.status(),
-                std::str::from_utf8(response.body()).unwrap_or("")
-            ));
-        }
-        let result: ValidationFeePlainBallotDraftResponseV1 =
-            norito::json::from_slice(response.body())
-                .wrap_err("failed to decode validation-fee PLAIN ballot draft response")?;
-        let _ = validate_validation_fee_plain_ballot_draft_response(&result, proposal_id, request)?;
-        Ok(result)
     }
     /// Draft a ZK ballot instruction via `/v1/gov/ballots/zk-v1`.
     ///
@@ -16889,51 +17695,6 @@ impl Client {
             .build()?
             .send()?;
         Self::decode_json_ok(resp, "Failed to apply protected namespaces")
-    }
-    /// POST `/v1/gov/finalize` with a JSON DTO body.
-    /// Expected body shape: `{ referendum_id: Hex64, proposal_id: Hex64 }`, where both fields
-    /// contain the same exact lowercase proposal fingerprint.
-    /// Returns JSON with `{ ok, tx_instructions: [{ wire_id, payload_hex }] }`.
-    /// # Errors
-    /// Returns an error if the HTTP request fails, the response is non-OK, or response JSON deserialization fails.
-    pub fn post_gov_finalize_json(
-        &self,
-        value: &norito::json::Value,
-    ) -> Result<norito::json::Value> {
-        Self::require_json_lower_hex_32(value, "referendum_id", "governance finalize request")?;
-        Self::require_json_lower_hex_32(value, "proposal_id", "governance finalize request")?;
-        let referendum_id =
-            Self::require_json_string_field(value, "referendum_id", "governance finalize request")?;
-        let proposal_id =
-            Self::require_json_string_field(value, "proposal_id", "governance finalize request")?;
-        if referendum_id != proposal_id {
-            return Err(eyre!(
-                "governance finalize request.referendum_id must equal proposal_id"
-            ));
-        }
-        let url = join_torii_url(&self.torii_url, "v1/gov/finalize");
-        let body = norito::json::to_vec(value)?;
-        let resp = self
-            .default_request(HttpMethod::POST, url)
-            .header("Content-Type", APPLICATION_JSON)
-            .body(body)
-            .build()?
-            .send()?;
-        Self::decode_json_ok(resp, "Failed to build finalize tx")
-    }
-    /// POST `/v1/gov/enact` with a JSON DTO body.
-    /// # Errors
-    /// Returns an error if the HTTP request fails, the response is non-OK, or response JSON deserialization fails.
-    pub fn post_gov_enact_json(&self, value: &norito::json::Value) -> Result<norito::json::Value> {
-        Self::require_json_lower_hex_32(value, "proposal_id", "governance enact request")?;
-        let url = join_torii_url(&self.torii_url, "v1/gov/enact");
-        let body = norito::json::to_vec(value)?;
-        let resp = self
-            .account_signed_request(HttpMethod::POST, url, body)?
-            .header("Content-Type", APPLICATION_JSON)
-            .build()?
-            .send()?;
-        Self::decode_json_ok(resp, "Failed to build enact tx")
     }
     /// GET `/v1/gov/proposals/{id}`
     /// # Errors
@@ -17647,61 +18408,37 @@ impl Client {
     /// Returns `{ abi_version: n, data_model_version: n, signed_transaction_schema_hash_hex: "...", crypto: { ... } }`.
     /// # Errors
     /// Returns an error if the HTTP request fails, the response is non-OK, or JSON deserialization fails.
-    fn get_node_capabilities_json_for_compatibility(&self) -> Result<Option<norito::json::Value>> {
-        let url = join_torii_url(&self.torii_url, "v1/node/capabilities");
-        let resp = self.send_builder(
-            self.account_signed_get_request(url)?
-                .header(http::header::ACCEPT, APPLICATION_JSON),
-        )?;
-        if resp.status() == StatusCode::TOO_MANY_REQUESTS {
-            let retry_after = resp
-                .headers()
-                .get("retry-after")
-                .and_then(|value| value.to_str().ok())
-                .unwrap_or("unknown");
-            warn!(
-                "node capabilities probe was rate-limited (retry-after: {retry_after}); deferring compatibility check"
-            );
-            return Ok(None);
-        }
-        if resp.status().is_server_error() {
-            warn!(
-                "node capabilities probe returned transient server error status={}; deferring compatibility check",
-                resp.status()
-            );
-            return Ok(None);
-        }
-        if resp.status() == StatusCode::NOT_FOUND {
-            warn!("node capabilities probe returned 404; deferring compatibility check");
-            return Ok(None);
-        }
-        Self::ensure_response_status(
-            &resp,
-            StatusCode::OK,
-            "Failed to get node capabilities",
-            " ",
-        )?;
-        Ok(Some(
-            norito::json::from_slice(resp.body())
-                .wrap_err("failed to decode node capabilities JSON")?,
-        ))
-    }
-    /// GET `/v1/node/capabilities`
-    /// Returns `{ abi_version: n, data_model_version: n, signed_transaction_schema_hash_hex: "...", crypto: { ... } }`.
-    /// # Errors
-    /// Returns an error if the HTTP request fails, the response is non-OK, or JSON deserialization fails.
     pub fn get_node_capabilities_json(&self) -> Result<norito::json::Value> {
+        self.get_node_capabilities_json_with_transport(false)
+    }
+    fn get_node_capabilities_json_with_transport(
+        &self,
+        direct_loopback: bool,
+    ) -> Result<norito::json::Value> {
         let url = join_torii_url(&self.torii_url, "v1/node/capabilities");
-        let resp = self.send_builder(
-            self.account_signed_get_request(url)?
-                .header(http::header::ACCEPT, APPLICATION_JSON),
-        )?;
+        let request = self
+            .account_signed_get_request(url)?
+            .header(http::header::ACCEPT, APPLICATION_JSON)
+            .max_response_bytes(NODE_CAPABILITIES_RESPONSE_MAX_BYTES);
+        let request = if direct_loopback {
+            request.direct_loopback()
+        } else {
+            request
+        };
+        let resp = self.send_builder(request)?;
         Self::ensure_response_status(
             &resp,
             StatusCode::OK,
             "Failed to get node capabilities",
             " ",
         )?;
+        if !exact_single_response_header(&resp, "content-type")?
+            .eq_ignore_ascii_case(APPLICATION_JSON)
+        {
+            return Err(eyre!(
+                "node capabilities response must contain canonical JSON"
+            ));
+        }
         norito::json::from_slice(resp.body()).wrap_err("failed to decode node capabilities JSON")
     }
     /// GET `/v1/privacy/capabilities`.
@@ -20891,29 +21628,6 @@ mod tests {
                 "referendum_id": "referendum alias"
             }))
         });
-        assert_no_http(|| {
-            client.post_gov_finalize_json(&norito::json!({
-                "referendum_id": "referendum/alias",
-                "proposal_id": ("11".repeat(32))
-            }))
-        });
-        assert_no_http(|| {
-            client.post_gov_finalize_json(&norito::json!({
-                "referendum_id": ("AA".repeat(32)),
-                "proposal_id": ("aa".repeat(32))
-            }))
-        });
-        assert_no_http(|| {
-            client.post_gov_finalize_json(&norito::json!({
-                "referendum_id": ("11".repeat(32)),
-                "proposal_id": ("22".repeat(32))
-            }))
-        });
-        assert_no_http(|| {
-            client.post_gov_enact_json(&norito::json!({
-                "proposal_id": ("AA".repeat(32))
-            }))
-        });
         assert_no_http(|| client.get_gov_proposal_json("11/../../status"));
         assert_no_http(|| client.get_gov_locks_json("lock?cursor=alias"));
         assert_no_http(|| client.get_gov_referendum_json(".hidden"));
@@ -22459,6 +23173,27 @@ mod tests {
             ])
         );
         assert!(snapshot.body.is_empty());
+        assert_canonical_account_signed_request(&client, snapshot);
+    }
+    #[test]
+    fn soracloud_status_read_is_bounded_and_canonically_signed() {
+        let client = client_with_base_url(base_url());
+        let store: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
+        let response = json_response(StatusCode::OK, r#"{"schema_version":1}"#);
+        with_mock_http(respond_with(&store, response), || {
+            client
+                .get_soracloud_status_response()
+                .expect("signed Soracloud status read");
+        });
+        let snapshots = store.lock().expect("snapshot store");
+        let snapshot = snapshots.first().expect("snapshot");
+        assert_eq!(snapshot.method, HttpMethod::GET);
+        assert_eq!(snapshot.url.path(), "/v1/soracloud/status");
+        assert!(snapshot.body.is_empty());
+        assert_eq!(
+            snapshot.max_response_bytes,
+            SORACLOUD_STATUS_RESPONSE_MAX_BYTES
+        );
         assert_canonical_account_signed_request(&client, snapshot);
     }
     #[test]
@@ -24789,7 +25524,32 @@ mod tests {
         let store_guard = store.lock().expect("snapshot lock");
         assert_eq!(store_guard.len(), 1);
         assert_eq!(store_guard[0].url.path(), "/v1/node/capabilities");
+        assert_eq!(
+            store_guard[0].max_response_bytes,
+            NODE_CAPABILITIES_RESPONSE_MAX_BYTES
+        );
         assert_single_accept_header(&store_guard[0], APPLICATION_JSON);
+    }
+    #[test]
+    fn get_node_capabilities_json_rejects_ambiguous_representation() {
+        let body = compatible_capabilities_body().into_bytes();
+        let missing = HttpResponse::builder()
+            .status(StatusCode::OK)
+            .body(body.clone())
+            .unwrap();
+        let duplicated = HttpResponse::builder()
+            .status(StatusCode::OK)
+            .header("content-type", APPLICATION_JSON)
+            .header("content-type", APPLICATION_JSON)
+            .body(body)
+            .unwrap();
+        for response in [missing, duplicated] {
+            let (result, snapshots) = capture_requests(response, || {
+                client_with_base_url(base_url()).get_node_capabilities_json()
+            });
+            assert!(result.is_err());
+            assert_eq!(snapshots.len(), 1);
+        }
     }
     #[test]
     fn prepared_transaction_payload_preserves_hash_and_versioned_bytes() {
@@ -24865,12 +25625,371 @@ mod tests {
             TRANSACTION_SUBMISSION_RESPONSE_MAX_BYTES
         );
     }
+    fn verified_submission_response(
+        transaction: &SignedTransaction,
+        signer: &KeyPair,
+    ) -> HttpResponse<Vec<u8>> {
+        let entrypoint_hash = transaction.hash_as_entrypoint();
+        let signed_transaction_hash = transaction.hash();
+        let receipt = TransactionSubmissionReceipt::sign(
+            iroha_data_model::transaction::TransactionSubmissionReceiptPayload {
+                entrypoint_hash: entrypoint_hash.clone(),
+                signed_transaction_hash: Some(signed_transaction_hash.clone()),
+                submitted_at_ms: 1,
+                submitted_at_height: 1,
+                signer: signer.public_key().clone(),
+            },
+            signer,
+        );
+        HttpResponse::builder()
+            .status(StatusCode::ACCEPTED)
+            .header("content-type", APPLICATION_NORITO)
+            .header(
+                TRANSACTION_ENTRYPOINT_HASH_HEADER,
+                entrypoint_hash.to_string(),
+            )
+            .header(
+                SIGNED_TRANSACTION_HASH_HEADER,
+                signed_transaction_hash.to_string(),
+            )
+            .body(norito::encode_canonical(&receipt).expect("canonical receipt"))
+            .expect("receipt response")
+    }
+    #[test]
+    fn verified_lifecycle_submit_pins_direct_transport_body_and_receipt() {
+        let store: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
+        let client = client_with_base_url(
+            Url::parse("http://localhost:19191/").expect("loopback client URL"),
+        );
+        let transaction = empty_transaction(&client);
+        let prepared = Client::prepare_transaction_payload(&transaction);
+        let receipt_signer = checked_random_keypair();
+        *client
+            .data_model_compatibility
+            .lock()
+            .expect("compatibility cache lock") = DataModelCompatibility::SubmitCompatible;
+        let responder = {
+            let store = Arc::clone(&store);
+            let transaction = transaction.clone();
+            let receipt_signer = receipt_signer.clone();
+            move |snapshot: RequestSnapshot| {
+                let capabilities = snapshot.url.path() == "/v1/node/capabilities";
+                store.lock().expect("snapshot lock").push(snapshot);
+                Ok(if capabilities {
+                    json_response(StatusCode::OK, &compatible_capabilities_body())
+                } else {
+                    verified_submission_response(&transaction, &receipt_signer)
+                })
+            }
+        };
+        let receipt = with_mock_http(responder, || {
+            client.submit_prepared_kagemusha_lifecycle_payload(
+                &transaction,
+                &prepared,
+                receipt_signer.public_key(),
+            )
+        })
+        .expect("exact verified lifecycle submission");
+        assert_eq!(
+            receipt.payload.entrypoint_hash,
+            transaction.hash_as_entrypoint()
+        );
+        let snapshots = store.lock().expect("snapshot lock");
+        assert_eq!(snapshots.len(), 2);
+        assert!(snapshots.iter().all(|snapshot| snapshot.direct_loopback));
+        assert_eq!(
+            snapshots[0].max_response_bytes,
+            NODE_CAPABILITIES_RESPONSE_MAX_BYTES
+        );
+        assert_eq!(snapshots[1].body, prepared.as_bytes());
+        assert_eq!(
+            snapshots[1].url.path(),
+            torii_uri::KAGEMUSHA_LIFECYCLE_TRANSACTION
+        );
+        assert_single_accept_header(&snapshots[1], APPLICATION_NORITO);
+    }
+    #[test]
+    fn verified_lifecycle_submit_marks_transport_failure_outcome_uncertain() {
+        let store: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
+        let client = client_with_base_url(
+            Url::parse("http://localhost:19191/").expect("loopback client URL"),
+        );
+        let transaction = empty_transaction(&client);
+        let prepared = Client::prepare_transaction_payload(&transaction);
+        let receipt_signer = checked_random_keypair();
+        let responder = {
+            let store = Arc::clone(&store);
+            move |snapshot: RequestSnapshot| {
+                let capabilities = snapshot.url.path() == "/v1/node/capabilities";
+                store.lock().expect("snapshot lock").push(snapshot);
+                if capabilities {
+                    Ok(json_response(
+                        StatusCode::OK,
+                        &compatible_capabilities_body(),
+                    ))
+                } else {
+                    Err(eyre!("synthetic lifecycle transport failure"))
+                }
+            }
+        };
+
+        let error = with_mock_http(responder, || {
+            client.submit_prepared_kagemusha_lifecycle_payload(
+                &transaction,
+                &prepared,
+                receipt_signer.public_key(),
+            )
+        })
+        .expect_err("post-dispatch transport failure must be outcome-uncertain");
+        let rendered = format!("{error:#}");
+        assert!(
+            rendered.contains(&format!(
+                "Kagemusha lifecycle submission outcome is uncertain for transaction {}; do not \
+                 retry automatically",
+                transaction.hash()
+            )),
+            "unexpected lifecycle submission error: {rendered}"
+        );
+        assert!(rendered.contains("synthetic lifecycle transport failure"));
+        let snapshots = store.lock().expect("snapshot lock");
+        assert_eq!(snapshots.len(), 2);
+        assert_eq!(snapshots[0].url.path(), "/v1/node/capabilities");
+        assert_eq!(
+            snapshots[1].url.path(),
+            torii_uri::KAGEMUSHA_LIFECYCLE_TRANSACTION
+        );
+    }
+    #[test]
+    fn verified_lifecycle_submit_marks_acknowledgement_validation_outcome_uncertain() {
+        let store: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
+        let client = client_with_base_url(
+            Url::parse("http://localhost:19191/").expect("loopback client URL"),
+        );
+        let transaction = empty_transaction(&client);
+        let prepared = Client::prepare_transaction_payload(&transaction);
+        let receipt_signer = checked_random_keypair();
+        let responder = {
+            let store = Arc::clone(&store);
+            move |snapshot: RequestSnapshot| {
+                let capabilities = snapshot.url.path() == "/v1/node/capabilities";
+                store.lock().expect("snapshot lock").push(snapshot);
+                Ok(if capabilities {
+                    json_response(StatusCode::OK, &compatible_capabilities_body())
+                } else {
+                    HttpResponse::builder()
+                        .status(StatusCode::ACCEPTED)
+                        .header("content-type", APPLICATION_NORITO)
+                        .body(Vec::new())
+                        .expect("malformed acknowledgement fixture")
+                })
+            }
+        };
+
+        let error = with_mock_http(responder, || {
+            client.submit_prepared_kagemusha_lifecycle_payload(
+                &transaction,
+                &prepared,
+                receipt_signer.public_key(),
+            )
+        })
+        .expect_err("malformed post-POST acknowledgement must fail closed");
+        let rendered = format!("{error:#}");
+        assert!(
+            rendered.contains(&format!(
+                "Kagemusha lifecycle submission outcome is uncertain for transaction {}; do not \
+                 retry automatically",
+                transaction.hash()
+            )),
+            "unexpected lifecycle submission error: {rendered}"
+        );
+        let snapshots = store.lock().expect("snapshot lock");
+        assert_eq!(snapshots.len(), 2);
+        assert_eq!(snapshots[0].url.path(), "/v1/node/capabilities");
+        assert_eq!(
+            snapshots[1].url.path(),
+            torii_uri::KAGEMUSHA_LIFECYCLE_TRANSACTION
+        );
+    }
+    #[test]
+    fn verified_lifecycle_submit_rejects_unsafe_origins_before_io() {
+        for rejected in [
+            "http://example.com/",
+            "http://localhost.example/",
+            "ftp://localhost/",
+            "https://user@example.com/",
+            "https://example.com/?query=1",
+            "https://example.com/#fragment",
+        ] {
+            let client = client_with_base_url(Url::parse(rejected).expect("hostile URL"));
+            let transaction = empty_transaction(&client);
+            let prepared = Client::prepare_transaction_payload(&transaction);
+            let signer = checked_random_keypair();
+            let (result, snapshots) =
+                capture_requests(empty_response(StatusCode::ACCEPTED), || {
+                    client.submit_prepared_kagemusha_lifecycle_payload(
+                        &transaction,
+                        &prepared,
+                        signer.public_key(),
+                    )
+                });
+            assert!(result.is_err(), "unsafe origin must fail: {rejected}");
+            assert!(
+                snapshots.is_empty(),
+                "unsafe origin performed I/O: {rejected}"
+            );
+        }
+    }
+    #[test]
+    fn verified_transaction_response_rejects_missing_or_untrusted_evidence() {
+        let client = client_with_base_url(base_url());
+        let transaction = empty_transaction(&client);
+        let signer = checked_random_keypair();
+        let identity = SorafsOrderbookSubmissionIdentityV1 {
+            entrypoint_hash: transaction.hash_as_entrypoint(),
+            signed_transaction_hash: transaction.hash(),
+        };
+        let valid = verified_submission_response(&transaction, &signer);
+        VerifiedTransactionResponseHandler::handle(&valid, &identity, signer.public_key())
+            .expect("valid receipt response");
+
+        let empty = HttpResponse::builder()
+            .status(StatusCode::ACCEPTED)
+            .header("content-type", APPLICATION_NORITO)
+            .header(
+                TRANSACTION_ENTRYPOINT_HASH_HEADER,
+                identity.entrypoint_hash.to_string(),
+            )
+            .header(
+                SIGNED_TRANSACTION_HASH_HEADER,
+                identity.signed_transaction_hash.to_string(),
+            )
+            .body(Vec::new())
+            .unwrap();
+        assert!(
+            VerifiedTransactionResponseHandler::handle(&empty, &identity, signer.public_key())
+                .is_err()
+        );
+
+        let mut missing_header = verified_submission_response(&transaction, &signer);
+        missing_header
+            .headers_mut()
+            .remove(TRANSACTION_ENTRYPOINT_HASH_HEADER);
+        assert!(
+            VerifiedTransactionResponseHandler::handle(
+                &missing_header,
+                &identity,
+                signer.public_key(),
+            )
+            .is_err()
+        );
+
+        let wrong_signer = checked_random_keypair();
+        assert!(
+            VerifiedTransactionResponseHandler::handle(
+                &valid,
+                &identity,
+                wrong_signer.public_key(),
+            )
+            .is_err()
+        );
+        let mut noncanonical = verified_submission_response(&transaction, &signer);
+        noncanonical.body_mut().push(0);
+        assert!(
+            VerifiedTransactionResponseHandler::handle(
+                &noncanonical,
+                &identity,
+                signer.public_key(),
+            )
+            .is_err()
+        );
+        let ok = verified_submission_response(&transaction, &signer);
+        let (mut parts, body) = ok.into_parts();
+        parts.headers.append(
+            TRANSACTION_ENTRYPOINT_HASH_HEADER,
+            identity.entrypoint_hash.to_string().parse().unwrap(),
+        );
+        let duplicate = HttpResponse::from_parts(parts, body);
+        assert!(
+            VerifiedTransactionResponseHandler::handle(&duplicate, &identity, signer.public_key(),)
+                .is_err()
+        );
+    }
     fn empty_transaction(client: &Client) -> SignedTransaction {
         client.build_transaction(
             Vec::<InstructionBox>::new(),
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
             Metadata::default(),
         )
+    }
+    #[test]
+    fn fresh_submit_compatibility_probe_replaces_cached_failures() {
+        let stale_states = [
+            DataModelCompatibility::Incompatible(DataModelCompatibilityError::Mismatch {
+                expected: DATA_MODEL_VERSION,
+                actual: DATA_MODEL_VERSION + 1,
+            }),
+            DataModelCompatibility::SchemaIncompatible(
+                TransactionSchemaCompatibilityError::Missing {
+                    expected: signed_transaction_schema_hash_hex(),
+                },
+            ),
+        ];
+        for stale in stale_states {
+            let client = client_with_base_url(base_url());
+            *client
+                .data_model_compatibility
+                .lock()
+                .expect("compatibility cache lock") = stale;
+            let (result, snapshots) = capture_requests(
+                json_response(StatusCode::OK, &compatible_capabilities_body()),
+                || client.ensure_transaction_submit_compatibility_with_transport(false, true),
+            );
+
+            result.expect("fresh probe should recover from stale incompatibility");
+            assert_eq!(snapshots.len(), 1);
+            assert_eq!(snapshots[0].url.path(), "/v1/node/capabilities");
+            assert!(matches!(
+                &*client
+                    .data_model_compatibility
+                    .lock()
+                    .expect("compatibility cache lock"),
+                DataModelCompatibility::SubmitCompatible
+            ));
+        }
+    }
+    #[test]
+    fn ordinary_submit_compatibility_preserves_cached_failures_without_io() {
+        let stale_states = [
+            DataModelCompatibility::Incompatible(DataModelCompatibilityError::Mismatch {
+                expected: DATA_MODEL_VERSION,
+                actual: DATA_MODEL_VERSION + 1,
+            }),
+            DataModelCompatibility::SchemaIncompatible(
+                TransactionSchemaCompatibilityError::Missing {
+                    expected: signed_transaction_schema_hash_hex(),
+                },
+            ),
+        ];
+        for stale in stale_states {
+            let client = client_with_base_url(base_url());
+            *client
+                .data_model_compatibility
+                .lock()
+                .expect("compatibility cache lock") = stale;
+            let (result, snapshots) = capture_requests(empty_response(StatusCode::OK), || {
+                client.ensure_transaction_submit_compatibility_with_transport(false, false)
+            });
+
+            let _ = result.expect_err("cached incompatibility should remain a no-I/O fast failure");
+            assert!(snapshots.is_empty());
+            assert!(!matches!(
+                &*client
+                    .data_model_compatibility
+                    .lock()
+                    .expect("compatibility cache lock"),
+                DataModelCompatibility::SubmitCompatible
+            ));
+        }
     }
     fn rejected_transaction_submission(capabilities_body: &str) -> eyre::Report {
         let (result, snapshots) =
@@ -24886,12 +26005,7 @@ mod tests {
         assert_eq!(snapshots[0].url.path(), "/v1/node/capabilities");
         result.expect_err("transaction submission should fail")
     }
-    fn assert_transient_capability_probe(
-        status: StatusCode,
-        response_body: &'static [u8],
-        submit_message: &str,
-        cache_message: &str,
-    ) {
+    fn assert_rejected_capability_probe(status: StatusCode, response_body: &'static [u8]) {
         let store: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
         let responder = {
             let store = Arc::clone(&store);
@@ -24910,9 +26024,22 @@ mod tests {
         };
         with_mock_http(responder, || {
             let client = client_with_base_url(base_url());
-            client
+            let error = client
                 .submit_transaction(&empty_transaction(&client))
-                .expect(submit_message);
+                .expect_err("failed capability probe must reject transaction submission");
+            let rendered = format!("{error:#}");
+            assert!(
+                rendered.contains("Failed to get node capabilities"),
+                "unexpected error: {rendered}"
+            );
+            assert!(
+                rendered.contains(&status.to_string()),
+                "error did not include status {status}: {rendered}"
+            );
+            assert!(
+                rendered.contains(std::str::from_utf8(response_body).expect("UTF-8 test body")),
+                "error did not include response body: {rendered}"
+            );
             let cached = client
                 .data_model_compatibility
                 .lock()
@@ -24920,17 +26047,16 @@ mod tests {
                 .clone();
             assert!(
                 matches!(cached, DataModelCompatibility::Unchecked),
-                "{cache_message}"
+                "failed probe must leave compatibility unchecked"
             );
         });
         let snapshots = store.lock().expect("snapshot lock");
         assert_eq!(
             snapshots.len(),
-            2,
-            "expected node capabilities + transaction requests"
+            1,
+            "failed capability probe must not send transaction bytes"
         );
         assert_eq!(snapshots[0].url.path(), "/v1/node/capabilities");
-        assert_eq!(snapshots[1].url.path(), torii_uri::TRANSACTION);
     }
     #[test]
     fn submit_transaction_rejects_mismatched_data_model_version() {
@@ -25028,31 +26154,73 @@ mod tests {
         );
     }
     #[test]
-    fn submit_transaction_tolerates_rate_limited_capabilities_probe() {
-        assert_transient_capability_probe(
-            StatusCode::TOO_MANY_REQUESTS,
-            b"rate limited",
-            "transaction submission should proceed despite transient capability throttling",
-            "rate-limited probe must not mark compatibility state as checked",
-        );
+    fn submit_transaction_rejects_rate_limited_capabilities_probe() {
+        assert_rejected_capability_probe(StatusCode::TOO_MANY_REQUESTS, b"rate limited");
     }
     #[test]
-    fn submit_transaction_tolerates_missing_capabilities_probe() {
-        assert_transient_capability_probe(
-            StatusCode::NOT_FOUND,
-            b"not found",
-            "transaction submission should proceed when the capability advert is unavailable",
-            "404 probe must not mark compatibility state as checked",
-        );
+    fn submit_transaction_rejects_missing_capabilities_probe() {
+        assert_rejected_capability_probe(StatusCode::NOT_FOUND, b"not found");
     }
     #[test]
-    fn submit_transaction_tolerates_server_error_capabilities_probe() {
-        assert_transient_capability_probe(
+    fn submit_transaction_rejects_server_error_capabilities_probe() {
+        for status in [
+            StatusCode::INTERNAL_SERVER_ERROR,
             StatusCode::BAD_GATEWAY,
-            b"bad gateway",
-            "transaction submission should proceed despite transient capability server errors",
-            "server-error probe must not mark compatibility state as checked",
-        );
+            StatusCode::SERVICE_UNAVAILABLE,
+            StatusCode::GATEWAY_TIMEOUT,
+        ] {
+            assert_rejected_capability_probe(status, b"server unavailable");
+        }
+    }
+    #[test]
+    fn submit_transaction_reprobes_after_failed_capabilities_probe() {
+        let store: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
+        let capability_attempts = Arc::new(Mutex::new(0_u8));
+        let responder = {
+            let store = Arc::clone(&store);
+            let capability_attempts = Arc::clone(&capability_attempts);
+            let compatible_capabilities = compatible_capabilities_body();
+            move |snapshot: RequestSnapshot| {
+                let path = snapshot.url.path().to_owned();
+                store.lock().expect("snapshot lock").push(snapshot);
+                if path == "/v1/node/capabilities" {
+                    let mut attempts = capability_attempts.lock().expect("attempt lock");
+                    *attempts += 1;
+                    if *attempts == 1 {
+                        Ok(json_response(
+                            StatusCode::SERVICE_UNAVAILABLE,
+                            "temporarily unavailable",
+                        ))
+                    } else {
+                        Ok(json_response(StatusCode::OK, &compatible_capabilities))
+                    }
+                } else {
+                    Ok(empty_response(StatusCode::OK))
+                }
+            }
+        };
+        with_mock_http(responder, || {
+            let client = client_with_base_url(base_url());
+            let transaction = empty_transaction(&client);
+            let _ = client
+                .submit_transaction(&transaction)
+                .expect_err("first capability probe must fail closed");
+            assert!(matches!(
+                &*client
+                    .data_model_compatibility
+                    .lock()
+                    .expect("data model compatibility lock"),
+                DataModelCompatibility::Unchecked
+            ));
+            client
+                .submit_transaction(&transaction)
+                .expect("recovered capability probe should permit submission");
+        });
+        let snapshots = store.lock().expect("snapshot lock");
+        assert_eq!(snapshots.len(), 3);
+        assert_eq!(snapshots[0].url.path(), "/v1/node/capabilities");
+        assert_eq!(snapshots[1].url.path(), "/v1/node/capabilities");
+        assert_eq!(snapshots[2].url.path(), torii_uri::TRANSACTION);
     }
     #[test]
     fn submit_transaction_blocking_returns_submit_rejection_without_waiting_for_timeout() {
@@ -25426,80 +26594,6 @@ mod tests {
         }
     }
     #[test]
-    fn sumeragi_vrf_json_endpoints_request_json_and_reject_malformed_payloads() {
-        type SumeragiEndpointCase = (&'static str, fn(&Client) -> Result<norito::json::Value>);
-        fn penalties(client: &Client) -> Result<norito::json::Value> {
-            client.get_sumeragi_vrf_penalties_json(7)
-        }
-        fn epoch(client: &Client) -> Result<norito::json::Value> {
-            client.get_sumeragi_vrf_epoch_json(7)
-        }
-        let cases: [SumeragiEndpointCase; 2] = [
-            ("/v1/sumeragi/vrf/penalties/7", penalties),
-            ("/v1/sumeragi/vrf/epoch/7", epoch),
-        ];
-        for (path, request) in cases {
-            let (result, snapshot) = capture_request(json_response(StatusCode::OK, "{}"), || {
-                request(&client_with_base_url(base_url()))
-            });
-            result.expect("VRF JSON endpoint should decode mocked payload");
-            assert_sumeragi_json_request(&snapshot, path);
-            let (result, _) =
-                capture_request(json_response(StatusCode::OK, r#"{"broken":"#), || {
-                    request(&client_with_base_url(base_url()))
-                });
-            let err = result.expect_err("malformed successful VRF JSON payload should fail");
-            assert!(
-                err.to_string().contains("failed to decode JSON payload"),
-                "{path} returned unexpected error: {err}"
-            );
-        }
-    }
-    #[test]
-    fn sumeragi_vrf_json_endpoints_reject_non_ok_responses_with_context() {
-        type SumeragiEndpointCase = (
-            &'static str,
-            &'static str,
-            fn(&Client) -> Result<norito::json::Value>,
-        );
-        fn penalties(client: &Client) -> Result<norito::json::Value> {
-            client.get_sumeragi_vrf_penalties_json(9)
-        }
-        fn epoch(client: &Client) -> Result<norito::json::Value> {
-            client.get_sumeragi_vrf_epoch_json(9)
-        }
-        let cases: [SumeragiEndpointCase; 2] = [
-            (
-                "/v1/sumeragi/vrf/penalties/9",
-                "Failed to get sumeragi vrf penalties",
-                penalties,
-            ),
-            (
-                "/v1/sumeragi/vrf/epoch/9",
-                "Failed to get sumeragi vrf epoch",
-                epoch,
-            ),
-        ];
-        for (path, context, request) in cases {
-            let (result, snapshot) = capture_request(
-                json_response(
-                    StatusCode::BAD_GATEWAY,
-                    "upstream consensus snapshot failed",
-                ),
-                || request(&client_with_base_url(base_url())),
-            );
-            let err = result.expect_err("non-OK VRF JSON endpoint response should fail");
-            assert_endpoint_error(
-                &err,
-                path,
-                context,
-                "502",
-                "upstream consensus snapshot failed",
-            );
-            assert_sumeragi_json_request(&snapshot, path);
-        }
-    }
-    #[test]
     fn sumeragi_operator_json_endpoints_reject_duplicate_key_payloads() {
         type SumeragiEndpointCase = (&'static str, fn(&Client) -> Result<norito::json::Value>);
         let cases: [SumeragiEndpointCase; 1] = [(
@@ -25590,7 +26684,6 @@ mod tests {
             last_non_empty_block_committed_at_ms: 0,
             time_since_last_block_ms: 0,
             time_since_last_non_empty_block_ms: 0,
-            da_reschedule_total: 0,
             tx_gossip: TxGossipSnapshot::default(),
             crypto: CryptoStatus::default(),
             stack: StackStatus::default(),
@@ -27650,8 +28743,8 @@ mod tests {
             next: None,
         }
     }
-    fn sample_sccp_governance_draft_request() -> SccpRouteGovernanceDraftRequest {
-        SccpRouteGovernanceDraftRequest {
+    fn sample_sccp_governance_draft_request() -> SccpRouteGovernanceProposalDraftRequestV1 {
+        SccpRouteGovernanceProposalDraftRequestV1 {
             action: iroha_data_model::isi::bridge::SccpRouteGovernanceActionV1::Remove(
                 iroha_data_model::bridge::SccpRouteKeyV1 {
                     lane_id: iroha_data_model::bridge::SccpLaneIdV1 {
@@ -27663,37 +28756,91 @@ mod tests {
                     revision: 1,
                 },
             ),
-            window: Some(iroha_data_model::isi::governance::AtWindow {
-                lower: 10,
-                upper: 20,
-            }),
-            mode: Some(iroha_data_model::isi::governance::VotingMode::Zk),
         }
     }
     fn sccp_governance_draft_response(
-        request: &SccpRouteGovernanceDraftRequest,
-    ) -> SccpRouteGovernanceDraftResponse {
+        request: &SccpRouteGovernanceProposalDraftRequestV1,
+    ) -> SccpRouteGovernanceProposalDraftResponseV1 {
         use iroha_data_model::isi::Instruction;
         let instruction = iroha_data_model::isi::governance::ProposeSccpRouteGovernance {
             anchor: iroha_data_model::isi::bridge::SccpRouteGovernanceAnchorV1 {
                 network_id: test_network_id(),
                 action: request.action.clone(),
             },
-            window: request.window,
-            mode: request.mode,
         };
         let boxed: iroha_data_model::isi::InstructionBox = instruction.into();
         let wire_id = Instruction::id(&*boxed).to_string();
         let payload = Instruction::dyn_encode(&*boxed);
         let framed = iroha_data_model::isi::frame_instruction_payload(&wire_id, &payload)
             .expect("frame SCCP governance instruction");
-        SccpRouteGovernanceDraftResponse {
-            ok: true,
-            proposal_id: hex::encode(
-                sccp_route_governance_proposal_id(test_network_id(), &request.action)
-                    .expect("proposal id"),
+        SccpRouteGovernanceProposalDraftResponseV1 {
+            proposal_id: iroha_data_model::governance::types::ProposalContentId::new(
+                sccp_route_governance_proposal_id(test_network_id(), &request.action),
             ),
-            tx_instructions: vec![SccpRouteGovernanceInstructionDraft {
+            tx_instructions: [GovernanceProposalInstructionDraftV1 {
+                wire_id,
+                payload_hex: hex::encode(framed),
+            }],
+        }
+    }
+    fn sample_deploy_contract_proposal_draft_request() -> DeployContractProposalDraftRequestV1 {
+        let key_pair =
+            iroha_crypto::KeyPair::try_from_seed(vec![0xD4; 32], iroha_crypto::Algorithm::Ed25519)
+                .expect("derive deploy proposal provenance fixture key");
+        let provenance = iroha_data_model::smart_contract::manifest::ManifestProvenance {
+            signer: key_pair.public_key().clone(),
+            signature: Signature::try_new(
+                key_pair.private_key(),
+                b"deploy-contract-proposal-draft-fixture",
+            )
+            .expect("sign deploy proposal provenance fixture"),
+        };
+        DeployContractProposalDraftRequestV1 {
+            contract_address: Some(
+                "irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw"
+                    .parse()
+                    .expect("canonical contract address"),
+            ),
+            contract_alias: None,
+            abi_version: iroha_data_model::governance::types::AbiVersion::new(1),
+            code_hash: iroha_data_model::governance::types::ContractCodeHash::new([0x41; 32]),
+            abi_hash: iroha_data_model::governance::types::ContractAbiHash::new([0x42; 32]),
+            manifest_provenance: Some(provenance),
+        }
+    }
+    fn deploy_contract_proposal_draft_response(
+        request: &DeployContractProposalDraftRequestV1,
+    ) -> DeployContractProposalDraftResponseV1 {
+        use iroha_data_model::{
+            governance::types::{DeployContractProposal, ProposalContentId, ProposalKind},
+            isi::Instruction,
+        };
+        let contract_address = request
+            .contract_address
+            .clone()
+            .expect("deploy proposal response fixture uses a direct address");
+        let instruction = iroha_data_model::isi::governance::ProposeDeployContract {
+            contract_address: contract_address.clone(),
+            code_hash: request.code_hash,
+            abi_hash: request.abi_hash,
+            abi_version: request.abi_version,
+            manifest_provenance: request.manifest_provenance.clone(),
+        };
+        let boxed: iroha_data_model::isi::InstructionBox = instruction.into();
+        let wire_id = Instruction::id(&*boxed).to_owned();
+        let payload = Instruction::dyn_encode(&*boxed);
+        let framed = iroha_data_model::isi::frame_instruction_payload(&wire_id, &payload)
+            .expect("frame deploy proposal instruction");
+        let proposal = ProposalKind::DeployContract(DeployContractProposal {
+            contract_address,
+            code_hash: request.code_hash,
+            abi_hash: request.abi_hash,
+            abi_version: request.abi_version,
+            manifest_provenance: request.manifest_provenance.clone(),
+        });
+        DeployContractProposalDraftResponseV1 {
+            proposal_id: ProposalContentId::new(proposal.fingerprint()),
+            tx_instructions: [GovernanceProposalInstructionDraftV1 {
                 wire_id,
                 payload_hex: hex::encode(framed),
             }],
@@ -28053,7 +29200,7 @@ mod tests {
                 $({
                     let mut hostile = valid.clone();
                     hostile.resource_limits.$field =
-                        iroha_data_model::bridge::SCCP_V1_JSON_SAFE_INTEGER_MAX + 1;
+                        iroha_data_model::parliament_types::FIRST_RELEASE_MAX_EXACT_JSON_U64 + 1;
                     let error = validate_sccp_capabilities(&hostile).expect_err(concat!(
                         "non-portable SCCP JSON resource limit must reject: ",
                         stringify!($field),
@@ -28233,6 +29380,156 @@ mod tests {
         .expect_err("unknown nested governance response fields must reject");
     }
     #[test]
+    fn deploy_contract_proposal_draft_is_typed_locally_signed_and_response_bound() {
+        let request = sample_deploy_contract_proposal_draft_request();
+        let response_payload = deploy_contract_proposal_draft_response(&request);
+        let response_json = norito::json::to_json(&response_payload)
+            .expect("encode deploy-contract governance response");
+        let response_value: JsonValue =
+            norito::json::from_str(&response_json).expect("decode response JSON value");
+        let proposal_id_hex = response_payload.proposal_id.to_hex();
+        assert_eq!(
+            response_value
+                .get("proposal_id")
+                .and_then(JsonValue::as_str),
+            Some(proposal_id_hex.as_str()),
+            "typed proposal ids serialize as canonical lowercase hex"
+        );
+        let store: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
+        let response = json_response(StatusCode::OK, &response_json);
+        let decoded = with_mock_http(respond_with(&store, response), || {
+            client_with_base_url(base_url()).post_deploy_contract_proposal_draft(&request)
+        })
+        .expect("valid typed deploy-contract proposal draft");
+        assert_eq!(decoded, response_payload);
+        let snapshots = store.lock().expect("snapshot lock");
+        assert_eq!(snapshots.len(), 1);
+        assert_eq!(
+            snapshots[0].url.path(),
+            iroha_torii_shared::uri::GOV_PROPOSE_DEPLOY
+        );
+        assert_eq!(snapshots[0].method, HttpMethod::POST);
+        assert_signed_json_headers(&snapshots[0]);
+        assert_eq!(
+            snapshots[0].max_response_bytes,
+            GOVERNANCE_PROPOSAL_JSON_RESPONSE_MAX_BYTES
+        );
+        let body: JsonValue =
+            norito::json::from_slice(&snapshots[0].body).expect("typed deploy draft request JSON");
+        let fields = body.as_object().expect("deploy draft request object");
+        assert_eq!(
+            fields
+                .keys()
+                .map(String::as_str)
+                .collect::<std::collections::BTreeSet<_>>(),
+            std::collections::BTreeSet::from([
+                "abi_hash",
+                "abi_version",
+                "code_hash",
+                "contract_address",
+                "manifest_provenance",
+            ])
+        );
+        for forbidden in [
+            "authority",
+            "private_key",
+            "signer",
+            "manifest",
+            "window",
+            "mode",
+        ] {
+            assert!(!fields.contains_key(forbidden));
+        }
+    }
+    #[test]
+    fn deploy_contract_proposal_draft_rejects_local_and_server_malleability() {
+        let request = sample_deploy_contract_proposal_draft_request();
+        let client = client_with_base_url(base_url());
+        let mut invalid_target = request.clone();
+        invalid_target.contract_alias = Some(
+            iroha_data_model::smart_contract::ContractAlias::from_components(
+                "router",
+                None,
+                "universal",
+            )
+            .expect("canonical contract alias"),
+        );
+        let error = client
+            .post_deploy_contract_proposal_draft(&invalid_target)
+            .expect_err("two deploy proposal targets must reject before transport");
+        assert!(error.to_string().contains("exactly one"));
+        let mut invalid_abi = request.clone();
+        invalid_abi.abi_version = iroha_data_model::governance::types::AbiVersion::new(2);
+        let error = client
+            .post_deploy_contract_proposal_draft(&invalid_abi)
+            .expect_err("unsupported deploy proposal ABI must reject before transport");
+        assert!(error.to_string().contains("ABI version"));
+
+        let mut hostile = deploy_contract_proposal_draft_response(&request);
+        let instruction = iroha_data_model::isi::governance::ProposeDeployContract {
+            contract_address: request
+                .contract_address
+                .clone()
+                .expect("direct-address deploy proposal fixture"),
+            code_hash: iroha_data_model::governance::types::ContractCodeHash::new([0x99; 32]),
+            abi_hash: request.abi_hash,
+            abi_version: request.abi_version,
+            manifest_provenance: request.manifest_provenance.clone(),
+        };
+        let boxed: iroha_data_model::isi::InstructionBox = instruction.into();
+        let wire_id = iroha_data_model::isi::Instruction::id(&*boxed).to_owned();
+        let payload = iroha_data_model::isi::Instruction::dyn_encode(&*boxed);
+        let framed = iroha_data_model::isi::frame_instruction_payload(&wire_id, &payload)
+            .expect("frame hostile deploy proposal instruction");
+        let draft = hostile
+            .tx_instructions
+            .first_mut()
+            .expect("one deploy proposal instruction");
+        draft.wire_id = wire_id;
+        draft.payload_hex = hex::encode(framed);
+        let response = json_response(
+            StatusCode::OK,
+            &norito::json::to_json(&hostile).expect("hostile deploy draft response"),
+        );
+        let error = with_mock_http(
+            respond_with(&Arc::new(Mutex::new(Vec::new())), response),
+            || client_with_base_url(base_url()).post_deploy_contract_proposal_draft(&request),
+        )
+        .expect_err("retired lifecycle controls in the instruction must reject");
+        assert!(error.to_string().contains("does not match"));
+
+        let mut mismatched_request = request.clone();
+        mismatched_request.manifest_provenance = None;
+        let mut mismatched_provenance =
+            deploy_contract_proposal_draft_response(&mismatched_request);
+        mismatched_provenance.proposal_id =
+            deploy_contract_proposal_draft_response(&request).proposal_id;
+        let response = json_response(
+            StatusCode::OK,
+            &norito::json::to_json(&mismatched_provenance)
+                .expect("provenance-mismatched draft response"),
+        );
+        let error = with_mock_http(
+            respond_with(&Arc::new(Mutex::new(Vec::new())), response),
+            || client_with_base_url(base_url()).post_deploy_contract_proposal_draft(&request),
+        )
+        .expect_err("manifest provenance mismatch must reject");
+        assert!(error.to_string().contains("does not match"));
+
+        let mut wrong_id = deploy_contract_proposal_draft_response(&request);
+        wrong_id.proposal_id =
+            iroha_data_model::governance::types::ProposalContentId::new([0x11; 32]);
+        let response = json_response(
+            StatusCode::OK,
+            &norito::json::to_json(&wrong_id).expect("wrong-id deploy response"),
+        );
+        let _ = with_mock_http(
+            respond_with(&Arc::new(Mutex::new(Vec::new())), response),
+            || client_with_base_url(base_url()).post_deploy_contract_proposal_draft(&request),
+        )
+        .expect_err("wrong deploy proposal id must reject");
+    }
+    #[test]
     fn sccp_governance_draft_is_typed_locally_signed_and_response_bound() {
         let request = sample_sccp_governance_draft_request();
         let response_payload = sccp_governance_draft_response(&request);
@@ -28252,6 +29549,11 @@ mod tests {
             iroha_torii_shared::uri::GOV_PROPOSE_SCCP_ROUTE_GOVERNANCE
         );
         assert_eq!(snapshots[0].method, HttpMethod::POST);
+        assert_signed_json_headers(&snapshots[0]);
+        assert_eq!(
+            snapshots[0].max_response_bytes,
+            GOVERNANCE_PROPOSAL_JSON_RESPONSE_MAX_BYTES
+        );
         let body: JsonValue =
             norito::json::from_slice(&snapshots[0].body).expect("typed draft request JSON");
         let fields = body.as_object().expect("draft request object");
@@ -28260,33 +29562,92 @@ mod tests {
                 .keys()
                 .map(String::as_str)
                 .collect::<std::collections::BTreeSet<_>>(),
-            std::collections::BTreeSet::from(["action", "window", "mode"])
+            std::collections::BTreeSet::from(["action"])
         );
-        assert_eq!(fields.get("mode").and_then(JsonValue::as_str), Some("Zk"));
-        for forbidden in ["authority", "private_key", "signer", "manifest"] {
+        for forbidden in [
+            "authority",
+            "private_key",
+            "signer",
+            "manifest",
+            "window",
+            "mode",
+        ] {
             assert!(!fields.contains_key(forbidden));
         }
     }
     #[test]
     fn sccp_governance_draft_rejects_local_and_server_malleability() {
-        let mut invalid_window = sample_sccp_governance_draft_request();
-        invalid_window.window = Some(iroha_data_model::isi::governance::AtWindow {
-            lower: 21,
-            upper: 20,
-        });
-        let _ = with_mock_http(
-            |_| panic!("invalid governance window must fail before HTTP"),
-            || client_with_base_url(base_url()).post_sccp_route_governance_draft(&invalid_window),
-        )
-        .expect_err("reversed governance window must reject");
         let request = sample_sccp_governance_draft_request();
-        let mut wrong = request.clone();
-        wrong.mode = Some(iroha_data_model::isi::governance::VotingMode::Plain);
-        let mut hostile = sccp_governance_draft_response(&wrong);
-        hostile.proposal_id = hex::encode(
-            sccp_route_governance_proposal_id(test_network_id(), &request.action)
-                .expect("same action proposal id"),
+        let mut invalid_action = request.clone();
+        let iroha_data_model::isi::bridge::SccpRouteGovernanceActionV1::Remove(route) =
+            &mut invalid_action.action
+        else {
+            unreachable!("SCCP governance fixture is a remove action");
+        };
+        route.revision = 0;
+        let error = client_with_base_url(base_url())
+            .post_sccp_route_governance_draft(&invalid_action)
+            .expect_err("invalid SCCP action must reject before transport");
+        assert!(
+            error
+                .to_string()
+                .contains("invalid SCCP route-governance action")
         );
+        let iroha_data_model::isi::bridge::SccpRouteGovernanceActionV1::Remove(route_key) =
+            request.action.clone()
+        else {
+            unreachable!("SCCP governance fixture is a remove action")
+        };
+        let inexact_request = SccpRouteGovernanceProposalDraftRequestV1 {
+            action: iroha_data_model::isi::bridge::SccpRouteGovernanceActionV1::SetActivation(
+                iroha_data_model::isi::bridge::SccpSetRouteActivationV1 {
+                    key: route_key,
+                    expected_current: iroha_data_model::bridge::SccpRouteActivationV1::InboundOnly,
+                    next: iroha_data_model::bridge::SccpRouteActivationV1::Retired,
+                    inbound_finality_cutoff: Some(
+                        iroha_data_model::bridge::SccpInboundFinalityCutoffV1 {
+                            trust_anchor_hash: [0x91; 32],
+                            max_anchor_interval_height:
+                                iroha_data_model::parliament_types::FIRST_RELEASE_MAX_EXACT_JSON_U64
+                                    + 1,
+                        },
+                    ),
+                },
+            ),
+        };
+        let error = client_with_base_url(base_url())
+            .post_sccp_route_governance_draft(&inexact_request)
+            .expect_err("inexact SCCP numbers must reject before transport");
+        assert!(
+            error.to_string().contains("exact JSON integer maximum"),
+            "unexpected inexact SCCP rejection: {error}"
+        );
+
+        let mut hostile = sccp_governance_draft_response(&request);
+        let draft = hostile
+            .tx_instructions
+            .first_mut()
+            .expect("one SCCP governance draft instruction");
+        let mut mismatched_action = request.action.clone();
+        let iroha_data_model::isi::bridge::SccpRouteGovernanceActionV1::Remove(route) =
+            &mut mismatched_action
+        else {
+            unreachable!("SCCP governance fixture is a remove action");
+        };
+        route.revision = route.revision.saturating_add(1);
+        let instruction = iroha_data_model::isi::governance::ProposeSccpRouteGovernance {
+            anchor: iroha_data_model::isi::bridge::SccpRouteGovernanceAnchorV1 {
+                network_id: test_network_id(),
+                action: mismatched_action,
+            },
+        };
+        let boxed: iroha_data_model::isi::InstructionBox = instruction.into();
+        let wire_id = iroha_data_model::isi::Instruction::id(&*boxed).to_owned();
+        let payload = iroha_data_model::isi::Instruction::dyn_encode(&*boxed);
+        let framed = iroha_data_model::isi::frame_instruction_payload(&wire_id, &payload)
+            .expect("frame hostile SCCP governance instruction");
+        draft.wire_id = wire_id;
+        draft.payload_hex = hex::encode(framed);
         let response = json_response(
             StatusCode::OK,
             &norito::json::to_json(&hostile).expect("hostile draft response"),
@@ -28295,10 +29656,11 @@ mod tests {
             respond_with(&Arc::new(Mutex::new(Vec::new())), response),
             || client_with_base_url(base_url()).post_sccp_route_governance_draft(&request),
         )
-        .expect_err("cross-mode instruction response must reject");
+        .expect_err("retired lifecycle controls in the instruction must reject");
         assert!(error.to_string().contains("does not match"));
         let mut wrong_id = sccp_governance_draft_response(&request);
-        wrong_id.proposal_id = "11".repeat(32);
+        wrong_id.proposal_id =
+            iroha_data_model::governance::types::ProposalContentId::new([0x11; 32]);
         let response = json_response(
             StatusCode::OK,
             &norito::json::to_json(&wrong_id).expect("wrong-id response"),

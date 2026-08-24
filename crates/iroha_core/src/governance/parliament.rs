@@ -7,8 +7,8 @@
 //! immutable and rejects replay, stage skipping, and cross-attempt substitution.
 //!
 //! There is deliberately no plaintext ballot or manual-opening transition.  A
-//! failed pulse, TLE opening, or proof produces `NoResult`; retry requires a
-//! fresh ballot attempt and a fresh TLE session.
+//! missed phase deadline or objectively absent finalized release pulse produces
+//! `NoResult`; retry requires a fresh ballot attempt and a fresh TLE session.
 
 use std::{
     collections::{BTreeMap, BTreeSet},
@@ -24,14 +24,16 @@ use iroha_data_model::{
         BodyElectionAttemptId, BodyElectionAttemptStatusV1, BodyInstanceId, BodyInstanceStatusV1,
         DeliberationPhaseV1, GovernanceAttemptId, GovernanceAttemptStatusV1, GovernanceAttemptV1,
         GovernanceCertificateV1, GovernanceExpectedHeadV1, GovernanceStageV1,
+        MAX_PARLIAMENT_BALLOT_CORPUS_ENTRIES_V1, MAX_PARLIAMENT_BALLOT_RETRIES_V1,
         ParliamentAggregateOutcomeV1, ParliamentAggregateTallyV1, ParliamentBallotAttemptV1,
         ParliamentBallotCertificateBindingV1, ParliamentBallotFailureKindV1, ParliamentBody,
-        ParliamentBodyCertificateBindingV1, ParliamentBodyInstanceV1,
-        ParliamentSeatAssignmentV1, ProposalContentId, RiskTierV1, SortitionRequestId,
-        SortitionRequestV1, TleKeySessionId, TleSessionId,
-        MAX_PARLIAMENT_BALLOT_CORPUS_ENTRIES_V1, MAX_PARLIAMENT_BALLOT_RETRIES_V1,
-        parliament_assignment_plan_root_v1, parliament_ballot_result_root_v1,
-        parliament_candidate_root_v1, parliament_roster_root_v1,
+        ParliamentBodyCertificateBindingV1, ParliamentBodyInstanceV1, ParliamentNoResultKindV1,
+        ParliamentPublicFindingCertificateBindingV1, ParliamentSeatAssignmentV1, ProposalContentId,
+        ProposalKind, RiskTierV1, SortitionRequestId, SortitionRequestV1, TleKeySessionId,
+        TleSessionId, parliament_assignment_plan_root_v1, parliament_ballot_failure_root_v1,
+        parliament_ballot_result_root_v1, parliament_candidate_root_v1,
+        parliament_execution_failure_root_v1, parliament_public_finding_endorsement_root_v1,
+        parliament_quorum_seats_v1, parliament_roster_root_v1,
     },
 };
 use norito::{
@@ -118,20 +120,36 @@ pub enum ParliamentReducerErrorV1 {
     InvitationWindowClosed,
     /// A roster or no-roster result was requested before the response window closed.
     InvitationWindowStillOpen,
+    /// A sortition election was failed before its immutable pulse height passed.
+    SortitionPulseStillPending,
     /// A candidate snapshot was empty, noncanonical, or disagreed with its committed root/count.
     InvalidCandidateSnapshot,
     /// The Confirmation Jury reused a Policy Jury member.
     ConfirmationJuryNotFresh,
     /// The transition used a public finding for a binding body, or vice versa.
     DecisionModeMismatch,
+    /// The frozen public-finding endorsement schedule is zero, overflows, or changed.
+    InvalidPublicFindingSchedule,
+    /// An endorsement arrived after the inclusive public-finding deadline.
+    PublicFindingWindowClosed,
+    /// Public-finding expiry was requested no later than its inclusive deadline.
+    PublicFindingWindowStillOpen,
+    /// Persisted public-finding no-result evidence does not match reducer state.
+    PublicFindingFailureKindMismatch,
     /// A ballot count exceeded a frozen registration, survivor, or seat bound.
     InvalidBallotCount,
+    /// The transaction authority does not own a nonexcluded seat in this ballot body.
+    UnauthorizedBallotParticipant,
+    /// The transaction authority does not own the assignment declaring absence.
+    UnauthorizedBodyMember,
     /// A later ballot transition attempted to change the accepted corpus.
     AcceptedCorpusMutation,
     /// The release height was not strictly after the timed seal height.
     ReleaseHeightNotFuture,
     /// The immutable timed-ballot phase schedule is invalid or changed mid-attempt.
     InvalidBallotSchedule,
+    /// A certified terminal transition did not execute at its exact due height.
+    WrongEnactmentHeight,
     /// A consensus transition did not execute at its immutable phase boundary.
     WrongBallotPhaseHeight,
     /// The requested retry exceeds the policy frozen for this lifecycle.
@@ -148,6 +166,8 @@ pub enum ParliamentReducerErrorV1 {
     IncompleteCertificate,
     /// Certification or enactment heights violate their strict ordering.
     InvalidCertificateHeight,
+    /// Persisted reducer state records an action after the restored ledger height.
+    FuturePersistedHeight,
     /// A supplied certificate or effect binding differs from reducer state.
     CertificateBindingMismatch,
     /// Supersession was reported without an actual compare-and-set head change.
@@ -206,6 +226,9 @@ impl fmt::Display for ParliamentReducerErrorV1 {
             Self::InvitationWindowStillOpen => {
                 f.write_str("Parliament invitation response window is still open")
             }
+            Self::SortitionPulseStillPending => {
+                f.write_str("Parliament sortition pulse height has not passed")
+            }
             Self::InvalidCandidateSnapshot => {
                 f.write_str("invalid or mismatched Parliament candidate snapshot")
             }
@@ -213,18 +236,37 @@ impl fmt::Display for ParliamentReducerErrorV1 {
                 f.write_str("Confirmation Jury is not disjoint from Policy Jury")
             }
             Self::DecisionModeMismatch => f.write_str("body decision mode mismatch"),
+            Self::InvalidPublicFindingSchedule => {
+                f.write_str("invalid public-finding endorsement schedule")
+            }
+            Self::PublicFindingWindowClosed => {
+                f.write_str("public-finding endorsement window is closed")
+            }
+            Self::PublicFindingWindowStillOpen => {
+                f.write_str("public-finding endorsement window is still open")
+            }
+            Self::PublicFindingFailureKindMismatch => {
+                f.write_str("public-finding no-result evidence does not match reducer state")
+            }
             Self::InvalidBallotCount => f.write_str("ballot count exceeds a frozen bound"),
+            Self::UnauthorizedBallotParticipant => {
+                f.write_str("account is not a nonexcluded member of this ballot body")
+            }
+            Self::UnauthorizedBodyMember => {
+                f.write_str("account does not own this Parliament body assignment")
+            }
             Self::AcceptedCorpusMutation => f.write_str("accepted ballot corpus is immutable"),
             Self::ReleaseHeightNotFuture => {
                 f.write_str("ballot release height must be strictly future")
             }
             Self::InvalidBallotSchedule => f.write_str("invalid timed-ballot phase schedule"),
+            Self::WrongEnactmentHeight => {
+                f.write_str("certified governance effect must execute at its exact due height")
+            }
             Self::WrongBallotPhaseHeight => {
                 f.write_str("timed-ballot transition is outside its immutable phase boundary")
             }
-            Self::BallotRetryLimitExceeded => {
-                f.write_str("private ballot retry limit exceeded")
-            }
+            Self::BallotRetryLimitExceeded => f.write_str("private ballot retry limit exceeded"),
             Self::BallotFailureKindMismatch => {
                 f.write_str("private ballot failure reason does not match its phase or deadline")
             }
@@ -234,6 +276,9 @@ impl fmt::Display for ParliamentReducerErrorV1 {
             Self::IncompleteCertificate => f.write_str("governance certificate is incomplete"),
             Self::InvalidCertificateHeight => {
                 f.write_str("invalid certification or enactment height")
+            }
+            Self::FuturePersistedHeight => {
+                f.write_str("persisted Parliament action is ahead of the restored ledger height")
             }
             Self::CertificateBindingMismatch => {
                 f.write_str("governance certificate binding mismatch")
@@ -288,6 +333,71 @@ pub struct RequiredParliamentBodyV1 {
     pub body: ParliamentBody,
     /// Decision protocol required for the body.
     pub decision_mode: ParliamentDecisionModeV1,
+}
+
+/// The one consensus policy version implemented by first-release Parliament.
+pub(crate) const PARLIAMENT_GOVERNANCE_POLICY_VERSION_V1: u64 = 1;
+
+/// Derive the immutable initial risk and body pipeline for one typed proposal.
+///
+/// A reducer may subsequently raise the risk tier and append the dynamically
+/// required Confirmation Jury, but neither operation may weaken this base
+/// policy.
+#[must_use]
+pub(crate) fn parliament_attempt_policy_v1(
+    proposal: &ProposalKind,
+) -> (RiskTierV1, Vec<RequiredParliamentBodyV1>) {
+    let bodies: &[ParliamentBody] = match proposal {
+        ProposalKind::DeployContract(_) => &[
+            ParliamentBody::RulesCommittee,
+            ParliamentBody::AgendaCouncil,
+            ParliamentBody::InterestPanel,
+            ParliamentBody::ReviewPanel,
+            ParliamentBody::OversightCommittee,
+            ParliamentBody::PolicyJury,
+        ],
+        ProposalKind::SccpRouteGovernance(_)
+        | ProposalKind::ValidationFeePolicy(_)
+        | ProposalKind::ValidationFeePayoutLifecycle(_) => &[
+            ParliamentBody::RulesCommittee,
+            ParliamentBody::AgendaCouncil,
+            ParliamentBody::InterestPanel,
+            ParliamentBody::ReviewPanel,
+            ParliamentBody::CoordinationCouncil,
+            ParliamentBody::FmaCommittee,
+            ParliamentBody::OversightCommittee,
+            ParliamentBody::PolicyJury,
+        ],
+        ProposalKind::RuntimeUpgrade(_)
+        | ProposalKind::MusubiRegistryGovernance(_)
+        | ProposalKind::SorafsProviderGovernance(_) => &[
+            ParliamentBody::RulesCommittee,
+            ParliamentBody::AgendaCouncil,
+            ParliamentBody::InterestPanel,
+            ParliamentBody::ReviewPanel,
+            ParliamentBody::CoordinationCouncil,
+            ParliamentBody::OversightCommittee,
+            ParliamentBody::PolicyJury,
+        ],
+    };
+    let risk_tier = if matches!(proposal, ProposalKind::DeployContract(_)) {
+        RiskTierV1::Standard
+    } else {
+        RiskTierV1::Constitutional
+    };
+    let requirements = bodies
+        .iter()
+        .copied()
+        .map(|body| RequiredParliamentBodyV1 {
+            body,
+            decision_mode: if body == ParliamentBody::PolicyJury {
+                ParliamentDecisionModeV1::HiddenBindingBallot
+            } else {
+                ParliamentDecisionModeV1::PublicFinding
+            },
+        })
+        .collect();
+    (risk_tier, requirements)
 }
 
 /// The single reducer object allowed to consume a finalized beacon pulse.
@@ -422,6 +532,13 @@ pub struct ParliamentBodyStateV1 {
     roster_root: [u8; 32],
     assignments: Vec<ParliamentSeatAssignmentV1>,
     excluded_assignments: BTreeSet<AssignmentId>,
+    public_finding_endorsements: BTreeMap<AssignmentId, [u8; 32]>,
+    public_finding_opened_at_height: Option<u64>,
+    public_finding_phase_blocks: Option<u64>,
+    public_finding_deadline_height: Option<u64>,
+    public_finding_no_result_kind: Option<ParliamentNoResultKindV1>,
+    public_finding_no_result_height: Option<u64>,
+    public_finding_binding: Option<ParliamentPublicFindingCertificateBindingV1>,
     result_root: Option<[u8; 32]>,
     result_height: Option<u64>,
     ballot_binding: Option<ParliamentBallotCertificateBindingV1>,
@@ -450,6 +567,42 @@ impl ParliamentBodyStateV1 {
     #[must_use]
     pub const fn excluded_assignments(&self) -> &BTreeSet<AssignmentId> {
         &self.excluded_assignments
+    }
+
+    /// Return authority-authenticated public-finding endorsements by assignment.
+    #[must_use]
+    pub const fn public_finding_endorsements(&self) -> &BTreeMap<AssignmentId, [u8; 32]> {
+        &self.public_finding_endorsements
+    }
+
+    /// Return the height opening the public-finding endorsement window.
+    #[must_use]
+    pub const fn public_finding_opened_at_height(&self) -> Option<u64> {
+        self.public_finding_opened_at_height
+    }
+
+    /// Return the frozen public-finding endorsement span in blocks.
+    #[must_use]
+    pub const fn public_finding_phase_blocks(&self) -> Option<u64> {
+        self.public_finding_phase_blocks
+    }
+
+    /// Return the inclusive frozen public-finding endorsement deadline.
+    #[must_use]
+    pub const fn public_finding_deadline_height(&self) -> Option<u64> {
+        self.public_finding_deadline_height
+    }
+
+    /// Return the objective public-finding no-result class, when terminal.
+    #[must_use]
+    pub const fn public_finding_no_result_kind(&self) -> Option<ParliamentNoResultKindV1> {
+        self.public_finding_no_result_kind
+    }
+
+    /// Return the containing height that made the public finding terminal.
+    #[must_use]
+    pub const fn public_finding_no_result_height(&self) -> Option<u64> {
+        self.public_finding_no_result_height
     }
 
     /// Return the final public result root, when the body has completed.
@@ -485,6 +638,7 @@ pub struct ParliamentBallotStateV1 {
     survivor_freeze_phase_blocks: u64,
     commitment_phase_blocks: u64,
     release_delay_blocks: u64,
+    opening_phase_blocks: u64,
     max_ballot_retries: u32,
     max_corpus_entries: u32,
     registration_close_height: u64,
@@ -495,6 +649,7 @@ pub struct ParliamentBallotStateV1 {
     commitment_closed_at_height: Option<u64>,
     timed_commitment_root: Option<[u8; 32]>,
     release_height: Option<u64>,
+    opening_deadline_height: u64,
     release_pulse_id: Option<BeaconPulseId>,
     opening_height: Option<u64>,
     opening_root: Option<[u8; 32]>,
@@ -524,16 +679,76 @@ impl ParliamentBallotStateV1 {
         self.accepted_ballots
     }
 
+    /// Return the frozen authenticated registration count after registration closes.
+    #[must_use]
+    pub const fn registered_voters(&self) -> Option<u32> {
+        self.registered_voters
+    }
+
     /// Return the dedicated TLE session, once the timed seal is complete.
     #[must_use]
     pub const fn tle_session_id(&self) -> Option<TleSessionId> {
         self.tle_session_id
     }
 
+    /// Return the finalized adaptive TLE key session bound to this ballot.
+    #[must_use]
+    pub const fn tle_key_session_id(&self) -> Option<TleKeySessionId> {
+        self.tle_key_session_id
+    }
+
+    /// Return the threshold-beacon session committed for release.
+    #[must_use]
+    pub const fn release_beacon_session_id(&self) -> Option<BeaconSessionId> {
+        self.release_beacon_session_id
+    }
+
     /// Return the committed release height, once the timed seal is complete.
     #[must_use]
     pub const fn release_height(&self) -> Option<u64> {
         self.release_height
+    }
+
+    /// Return the immutable height that opened registration for this ballot.
+    #[must_use]
+    pub const fn registered_at_height(&self) -> u64 {
+        self.registered_at_height
+    }
+
+    /// Return the exact height that closes authenticated registration.
+    #[must_use]
+    pub(crate) const fn registration_close_height(&self) -> u64 {
+        self.registration_close_height
+    }
+
+    /// Return the exact height that freezes the survivor subsequence.
+    #[must_use]
+    pub(crate) const fn survivor_freeze_height(&self) -> u64 {
+        self.survivor_freeze_height
+    }
+
+    /// Return the exact height that freezes the masked-ballot corpus.
+    #[must_use]
+    pub(crate) const fn commitment_close_height(&self) -> u64 {
+        self.commitment_close_height
+    }
+
+    /// Return the immutable last height at which aggregate opening may complete.
+    #[must_use]
+    pub const fn opening_deadline_height(&self) -> u64 {
+        self.opening_deadline_height
+    }
+
+    /// Return the Core-derived terminal failure class, when present.
+    #[must_use]
+    pub const fn failure_kind(&self) -> Option<ParliamentBallotFailureKindV1> {
+        self.failure_kind
+    }
+
+    /// Return the containing height of the Core-derived terminal failure.
+    #[must_use]
+    pub const fn failure_height(&self) -> Option<u64> {
+        self.failure_height
     }
 }
 
@@ -566,18 +781,27 @@ fn root_is_zero(root: &[u8; 32]) -> bool {
     root.iter().all(|byte| *byte == 0)
 }
 
+fn expected_head_is_valid(expected_head: GovernanceExpectedHeadV1) -> bool {
+    match expected_head {
+        GovernanceExpectedHeadV1::Absent(head) => !root_is_zero(&head.subject_id),
+        GovernanceExpectedHeadV1::Present(head) => {
+            !root_is_zero(&head.subject_id) && !root_is_zero(&head.head_root)
+        }
+    }
+}
+
 fn timed_ballot_schedule(
     registered_at_height: u64,
     policy: ParliamentTimedOvn,
-) -> Result<(u64, u64, u64, u64), ParliamentReducerErrorV1> {
+) -> Result<(u64, u64, u64, u64, u64), ParliamentReducerErrorV1> {
     if registered_at_height == 0
         || policy.registration_phase_blocks == 0
         || policy.survivor_freeze_phase_blocks == 0
         || policy.commitment_phase_blocks == 0
         || policy.release_delay_blocks == 0
+        || policy.opening_phase_blocks == 0
         || policy.max_ballot_retries > MAX_PARLIAMENT_BALLOT_RETRIES_V1
-        || !(1..=MAX_PARLIAMENT_BALLOT_CORPUS_ENTRIES_V1)
-            .contains(&policy.max_corpus_entries)
+        || !(1..=MAX_PARLIAMENT_BALLOT_CORPUS_ENTRIES_V1).contains(&policy.max_corpus_entries)
     {
         return Err(ParliamentReducerErrorV1::InvalidBallotSchedule);
     }
@@ -593,11 +817,15 @@ fn timed_ballot_schedule(
     let release_height = commitment_close_height
         .checked_add(policy.release_delay_blocks)
         .ok_or(ParliamentReducerErrorV1::InvalidBallotSchedule)?;
+    let opening_deadline_height = release_height
+        .checked_add(policy.opening_phase_blocks)
+        .ok_or(ParliamentReducerErrorV1::InvalidBallotSchedule)?;
     Ok((
         registration_close_height,
         survivor_freeze_height,
         commitment_close_height,
         release_height,
+        opening_deadline_height,
     ))
 }
 
@@ -606,6 +834,7 @@ fn ballot_policy_matches(ballot: &ParliamentBallotStateV1, policy: ParliamentTim
         && ballot.survivor_freeze_phase_blocks == policy.survivor_freeze_phase_blocks
         && ballot.commitment_phase_blocks == policy.commitment_phase_blocks
         && ballot.release_delay_blocks == policy.release_delay_blocks
+        && ballot.opening_phase_blocks == policy.opening_phase_blocks
         && ballot.max_ballot_retries == policy.max_ballot_retries
         && ballot.max_corpus_entries == policy.max_corpus_entries
 }
@@ -616,6 +845,7 @@ fn ballot_policy(ballot: &ParliamentBallotStateV1) -> ParliamentTimedOvn {
         survivor_freeze_phase_blocks: ballot.survivor_freeze_phase_blocks,
         commitment_phase_blocks: ballot.commitment_phase_blocks,
         release_delay_blocks: ballot.release_delay_blocks,
+        opening_phase_blocks: ballot.opening_phase_blocks,
         max_ballot_retries: ballot.max_ballot_retries,
         max_corpus_entries: ballot.max_corpus_entries,
     }
@@ -623,6 +853,7 @@ fn ballot_policy(ballot: &ParliamentBallotStateV1) -> ParliamentTimedOvn {
 
 fn classify_ballot_failure(
     ballot: &ParliamentBallotStateV1,
+    release_pulse_available: bool,
     current_height: u64,
 ) -> Option<ParliamentBallotFailureKindV1> {
     match ballot.attempt.status {
@@ -645,31 +876,44 @@ fn classify_ballot_failure(
         }
         BallotAttemptStatusV1::AwaitingRelease
             if ballot.commitment_closed_at_height == Some(ballot.commitment_close_height)
+                && current_height > ballot.opening_deadline_height =>
+        {
+            Some(ParliamentBallotFailureKindV1::OpeningDeadlineExpired)
+        }
+        BallotAttemptStatusV1::AwaitingRelease
+            if ballot.commitment_closed_at_height == Some(ballot.commitment_close_height)
+                && !release_pulse_available
                 && ballot
                     .release_height
                     .is_some_and(|release_height| current_height > release_height) =>
         {
             Some(ParliamentBallotFailureKindV1::ReleasePulseUnavailable)
         }
-        BallotAttemptStatusV1::Opening
-            if ballot
-                .opening_height
-                .is_some_and(|opening_height| current_height >= opening_height) =>
-        {
-            Some(ParliamentBallotFailureKindV1::AggregateOpeningFailed)
+        BallotAttemptStatusV1::Opening if current_height > ballot.opening_deadline_height => {
+            Some(ParliamentBallotFailureKindV1::OpeningDeadlineExpired)
         }
         _ => None,
     }
 }
 
-fn ballot_failure_matches_state(ballot: &ParliamentBallotStateV1) -> bool {
+fn ballot_failure_matches_state(
+    governance_attempt_id: GovernanceAttemptId,
+    ballot_attempt_id: BallotAttemptId,
+    ballot: &ParliamentBallotStateV1,
+) -> bool {
     let Some(failure_kind) = ballot.failure_kind else {
         return false;
     };
     let Some(failure_height) = ballot.failure_height else {
         return false;
     };
-    if ballot.failure_root.is_none()
+    if ballot.failure_root
+        != Some(parliament_ballot_failure_root_v1(
+            governance_attempt_id,
+            ballot_attempt_id,
+            failure_kind,
+            failure_height,
+        ))
         || ballot.opening_root.is_some()
         || ballot.tally.is_some()
         || ballot.outcome.is_some()
@@ -740,18 +984,23 @@ fn ballot_failure_matches_state(ballot: &ParliamentBallotStateV1) -> bool {
                 && ballot
                     .release_height
                     .is_some_and(|release_height| failure_height > release_height)
+                && failure_height <= ballot.opening_deadline_height
                 && ballot.release_pulse_id.is_none()
                 && ballot.opening_height.is_none()
         }
-        ParliamentBallotFailureKindV1::AggregateOpeningFailed => {
+        ParliamentBallotFailureKindV1::OpeningDeadlineExpired => {
             corpus_frozen
-                && ballot.release_pulse_id.is_some()
-                && ballot.opening_height.is_some_and(|opening_height| {
-                    ballot
-                        .release_height
-                        .is_some_and(|release_height| opening_height >= release_height)
-                        && failure_height >= opening_height
-                })
+                && failure_height > ballot.opening_deadline_height
+                && match (ballot.release_pulse_id, ballot.opening_height) {
+                    (None, None) => true,
+                    (Some(_), Some(opening_height)) => {
+                        ballot
+                            .release_height
+                            .is_some_and(|release_height| opening_height >= release_height)
+                            && opening_height <= ballot.opening_deadline_height
+                    }
+                    _ => false,
+                }
         }
     }
 }
@@ -775,6 +1024,27 @@ fn accepted_roster(
         .collect();
     assignments.sort_unstable_by_key(|assignment| assignment.assignment_id);
     Ok(assignments)
+}
+
+fn public_finding_quorum_is_unreachable(
+    body: &ParliamentBodyStateV1,
+) -> Result<bool, ParliamentReducerErrorV1> {
+    let quorum = usize::try_from(parliament_quorum_seats_v1(body.instance.original_seats))
+        .map_err(|_| ParliamentReducerErrorV1::InvalidRoster)?;
+    let eligible = body
+        .assignments
+        .len()
+        .checked_sub(body.excluded_assignments.len())
+        .ok_or(ParliamentReducerErrorV1::InvalidRoster)?;
+    let remaining = eligible
+        .checked_sub(body.public_finding_endorsements.len())
+        .ok_or(ParliamentReducerErrorV1::InvalidRoster)?;
+    let mut endorsements_by_root = BTreeMap::<[u8; 32], usize>::new();
+    for result_root in body.public_finding_endorsements.values() {
+        *endorsements_by_root.entry(*result_root).or_default() += 1;
+    }
+    let strongest_existing_root = endorsements_by_root.values().copied().max().unwrap_or(0);
+    Ok(strongest_existing_root.saturating_add(remaining) < quorum)
 }
 
 fn stage_for_body(body: ParliamentBody) -> GovernanceStageV1 {
@@ -871,6 +1141,7 @@ impl ParliamentAttemptStateV1 {
             .all(|byte| *byte == 0)
             || policy_version == 0
             || root_is_zero(&effect_preimage_hash)
+            || !expected_head_is_valid(expected_head)
         {
             return Err(ParliamentReducerErrorV1::ImmutableBindingMismatch);
         }
@@ -912,6 +1183,32 @@ impl ParliamentAttemptStateV1 {
         &self.attempt
     }
 
+    /// Return whether this immutable attempt references `member` in a selected
+    /// Parliament seat assignment.
+    #[must_use]
+    pub(crate) fn references_parliament_member(&self, member: &AccountId) -> bool {
+        self.elections.values().any(|election| {
+            election
+                .primary_assignments()
+                .iter()
+                .chain(election.alternate_assignments())
+                .any(|assignment| &assignment.member == member)
+        }) || self.bodies.values().any(|body| {
+            body.assignments()
+                .iter()
+                .any(|assignment| &assignment.member == member)
+        })
+    }
+
+    /// Return whether an active attempt still retains `member`'s citizenship bond.
+    #[must_use]
+    pub(crate) fn retains_citizenship_bond(&self, member: &AccountId) -> bool {
+        matches!(
+            self.attempt.status,
+            GovernanceAttemptStatusV1::Active | GovernanceAttemptStatusV1::Certified
+        ) && self.references_parliament_member(member)
+    }
+
     /// Return the immutable proposal content identifier.
     #[must_use]
     pub const fn proposal_content_id(&self) -> ProposalContentId {
@@ -930,6 +1227,53 @@ impl ParliamentAttemptStateV1 {
         &self.required_bodies
     }
 
+    /// Validate immutable attempt bindings against their retained typed proposal.
+    ///
+    /// This check is required after persistence restore and again immediately
+    /// before due execution. It accepts only upward risk escalation and the
+    /// reducer-validated dynamic Confirmation Jury; all base proposal policy,
+    /// effect, identity, and compare-and-set subject bindings remain exact.
+    ///
+    /// # Errors
+    /// Returns an error when any proposal-derived binding was weakened or
+    /// substituted.
+    pub fn validate_proposal_bindings_v1(
+        &self,
+        proposal: &ProposalKind,
+    ) -> Result<(), ParliamentReducerErrorV1> {
+        let expected_proposal_content_id = ProposalContentId::new(proposal.fingerprint());
+        let expected_effect_preimage_hash = proposal.effect_preimage_hash_v1();
+        let expected_subject = proposal
+            .governed_subject_id_v1()
+            .map_err(|_| ParliamentReducerErrorV1::ProposalBindingMismatch)?;
+        let observed_subject = match self.expected_head {
+            GovernanceExpectedHeadV1::Absent(head) => head.subject_id,
+            GovernanceExpectedHeadV1::Present(head) => head.subject_id,
+        };
+        let (base_risk_tier, base_required_bodies) = parliament_attempt_policy_v1(proposal);
+        let persisted_base =
+            self.required_bodies
+                .last()
+                .map_or(self.required_bodies.as_slice(), |last| {
+                    if last.body == ParliamentBody::ConfirmationJury {
+                        &self.required_bodies[..self.required_bodies.len() - 1]
+                    } else {
+                        self.required_bodies.as_slice()
+                    }
+                });
+
+        if self.attempt.proposal_content_id != expected_proposal_content_id
+            || self.policy_version != PARLIAMENT_GOVERNANCE_POLICY_VERSION_V1
+            || self.effect_preimage_hash != expected_effect_preimage_hash
+            || observed_subject != expected_subject
+            || !base_risk_tier.can_escalate_to(self.attempt.risk_tier)
+            || persisted_base != base_required_bodies
+        {
+            return Err(ParliamentReducerErrorV1::ProposalBindingMismatch);
+        }
+        Ok(())
+    }
+
     /// Return a registered body-election attempt.
     #[must_use]
     pub fn election(&self, id: &BodyElectionAttemptId) -> Option<&ParliamentElectionStateV1> {
@@ -942,10 +1286,194 @@ impl ParliamentAttemptStateV1 {
         self.bodies.get(id)
     }
 
+    /// Return the active sealed body instance for an exact Parliament role.
+    ///
+    /// This is used to derive the disjoint Confirmation Jury candidate set
+    /// from the immutable Policy Jury roster without exposing mutable maps.
+    #[must_use]
+    pub fn sealed_body_for_role(&self, body: ParliamentBody) -> Option<&ParliamentBodyStateV1> {
+        self.active_bodies
+            .get(&body)
+            .and_then(|body_instance_id| self.bodies.get(body_instance_id))
+    }
+
     /// Return a private ballot attempt.
     #[must_use]
     pub fn ballot(&self, id: &BallotAttemptId) -> Option<&ParliamentBallotStateV1> {
         self.ballots.get(id)
+    }
+
+    /// Return the latest private ballot attempt bound to one exact body instance.
+    ///
+    /// The returned state exposes only bounded lifecycle getters. Timed-OVN
+    /// registrations, masked ballot records, shares, and individual openings
+    /// remain outside this reducer projection.
+    #[must_use]
+    pub fn active_ballot_for_body(
+        &self,
+        body_instance_id: &BodyInstanceId,
+    ) -> Option<&ParliamentBallotStateV1> {
+        self.active_ballots
+            .get(body_instance_id)
+            .and_then(|ballot_attempt_id| self.ballots.get(ballot_attempt_id))
+    }
+
+    /// Validate one seated authority's timed-OVN registration window.
+    ///
+    /// # Errors
+    /// Returns an error unless the exact ballot is in registration, the
+    /// containing height precedes the immutable close boundary, and `member`
+    /// owns a nonexcluded seat in the bound body instance.
+    pub(crate) fn validate_ballot_registration_member(
+        &self,
+        governance_attempt_id: GovernanceAttemptId,
+        ballot_attempt_id: BallotAttemptId,
+        member: &AccountId,
+        current_height: u64,
+    ) -> Result<(), ParliamentReducerErrorV1> {
+        self.validate_ballot_member_action(
+            governance_attempt_id,
+            ballot_attempt_id,
+            member,
+            current_height,
+            BallotAttemptStatusV1::Registration,
+        )
+    }
+
+    /// Validate one registered authority's pre-freeze dropout window.
+    ///
+    /// # Errors
+    /// Returns an error unless registration is closed, the immutable survivor
+    /// boundary has not arrived, and `member` owns a nonexcluded seat in the
+    /// exact body instance. Cryptographic lifecycle validation separately
+    /// requires that this member registered and has not already withdrawn.
+    pub(crate) fn validate_ballot_dropout_member(
+        &self,
+        governance_attempt_id: GovernanceAttemptId,
+        ballot_attempt_id: BallotAttemptId,
+        member: &AccountId,
+        current_height: u64,
+    ) -> Result<(), ParliamentReducerErrorV1> {
+        self.validate_ballot_member_action(
+            governance_attempt_id,
+            ballot_attempt_id,
+            member,
+            current_height,
+            BallotAttemptStatusV1::SurvivorFreeze,
+        )
+    }
+
+    fn validate_ballot_member_action(
+        &self,
+        governance_attempt_id: GovernanceAttemptId,
+        ballot_attempt_id: BallotAttemptId,
+        member: &AccountId,
+        current_height: u64,
+        expected_status: BallotAttemptStatusV1,
+    ) -> Result<(), ParliamentReducerErrorV1> {
+        self.ensure_active(governance_attempt_id)?;
+        let ballot =
+            self.ballots
+                .get(&ballot_attempt_id)
+                .ok_or(ParliamentReducerErrorV1::UnknownEntity(
+                    ParliamentReducerEntityV1::BallotAttempt,
+                ))?;
+        if ballot.attempt.status != expected_status {
+            return Err(ParliamentReducerErrorV1::InvalidLifecycleTransition(
+                ParliamentReducerEntityV1::BallotAttempt,
+            ));
+        }
+        let inside_window = match expected_status {
+            BallotAttemptStatusV1::Registration => {
+                current_height >= ballot.registered_at_height
+                    && current_height < ballot.registration_close_height
+            }
+            BallotAttemptStatusV1::SurvivorFreeze => {
+                current_height >= ballot.registration_close_height
+                    && current_height < ballot.survivor_freeze_height
+            }
+            _ => false,
+        };
+        if !inside_window {
+            return Err(ParliamentReducerErrorV1::WrongBallotPhaseHeight);
+        }
+        let body = self.bodies.get(&ballot.attempt.body_instance_id).ok_or(
+            ParliamentReducerErrorV1::UnknownEntity(ParliamentReducerEntityV1::BodyInstance),
+        )?;
+        if body.instance.governance_attempt_id != governance_attempt_id
+            || self.active_ballots.get(&body.instance.id) != Some(&ballot_attempt_id)
+        {
+            return Err(ParliamentReducerErrorV1::ImmutableBindingMismatch);
+        }
+        let assignment = body
+            .assignments
+            .iter()
+            .find(|assignment| &assignment.member == member)
+            .ok_or(ParliamentReducerErrorV1::UnauthorizedBallotParticipant)?;
+        if body
+            .excluded_assignments
+            .contains(&assignment.assignment_id)
+        {
+            return Err(ParliamentReducerErrorV1::UnauthorizedBallotParticipant);
+        }
+        Ok(())
+    }
+
+    /// Iterate every canonical ballot-attempt entry for persistence validation.
+    pub(crate) fn ballot_attempts(
+        &self,
+    ) -> impl ExactSizeIterator<Item = (&BallotAttemptId, &ParliamentBallotStateV1)> {
+        self.ballots.iter()
+    }
+
+    /// Return the greatest committed opening deadline that references one TLE key session.
+    ///
+    /// Runtime secret-share custody uses this read-only projection before
+    /// retiring a rotating share. Historical retries remain included: a share
+    /// is retained through every deadline ever committed for this attempt,
+    /// even when a later retry superseded the corresponding ballot.
+    #[must_use]
+    pub(crate) fn tle_key_session_retention_deadline(
+        &self,
+        key_session_id: TleKeySessionId,
+    ) -> Option<u64> {
+        self.ballots
+            .values()
+            .filter(|ballot| ballot.tle_key_session_id == Some(key_session_id))
+            .map(|ballot| ballot.opening_deadline_height)
+            .max()
+    }
+
+    /// Return whether a live reducer object requests the exact beacon slot.
+    ///
+    /// Sortition requests remain live only while awaiting their future pulse.
+    /// Timed ballots request their frozen release slot from registration until
+    /// they either consume the pulse or become terminal, so an otherwise valid
+    /// arbitrary release height is visible to consensus before it arrives.
+    #[must_use]
+    pub(crate) fn requires_beacon_pulse_at(
+        &self,
+        beacon_session_id: BeaconSessionId,
+        height: u64,
+    ) -> bool {
+        if self.attempt.status != GovernanceAttemptStatusV1::Active {
+            return false;
+        }
+        self.elections.values().any(|election| {
+            election.attempt.status == BodyElectionAttemptStatusV1::AwaitingPulse
+                && election.attempt.request.beacon_session_id == beacon_session_id
+                && election.attempt.request.pulse_height == height
+        }) || self.ballots.values().any(|ballot| {
+            matches!(
+                ballot.attempt.status,
+                BallotAttemptStatusV1::Registration
+                    | BallotAttemptStatusV1::SurvivorFreeze
+                    | BallotAttemptStatusV1::TimedCommitment
+                    | BallotAttemptStatusV1::AwaitingRelease
+            ) && ballot.release_beacon_session_id == Some(beacon_session_id)
+                && ballot.release_height == Some(height)
+                && ballot.release_pulse_id.is_none()
+        })
     }
 
     /// Return the constructed certificate after certification.
@@ -970,6 +1498,109 @@ impl ParliamentAttemptStateV1 {
     #[must_use]
     pub const fn execution_failure_root(&self) -> Option<[u8; 32]> {
         self.execution_failure_root
+    }
+
+    /// Validate all realized lifecycle chronology against a restored committed height.
+    ///
+    /// A still-certified effect must remain strictly future. Conversely, a
+    /// terminal execution outcome and the certificate that authorized it may
+    /// not claim heights beyond the restored ledger boundary. Persisted
+    /// elections, bodies, ballots, and consumed pulses likewise cannot record
+    /// actions from future blocks, and the atomic pre-certificate transient is
+    /// never a valid restart state.
+    ///
+    /// # Errors
+    /// Returns an error when persisted lifecycle chronology is impossible at
+    /// `restored_height`.
+    pub(crate) fn validate_restored_height_v1(
+        &self,
+        restored_height: u64,
+    ) -> Result<(), ParliamentReducerErrorV1> {
+        let missing_certificate_at_persisted_stage = self.certificate.is_none()
+            && matches!(
+                self.attempt.stage,
+                GovernanceStageV1::Certification | GovernanceStageV1::Enactment
+            );
+        if let Some(certificate) = self.certificate.as_ref() {
+            if certificate.certified_at_height > restored_height {
+                return Err(ParliamentReducerErrorV1::InvalidCertificateHeight);
+            }
+            match self.attempt.status {
+                GovernanceAttemptStatusV1::Certified
+                    if certificate.enact_at_height <= restored_height =>
+                {
+                    return Err(ParliamentReducerErrorV1::WrongEnactmentHeight);
+                }
+                GovernanceAttemptStatusV1::Enacted
+                | GovernanceAttemptStatusV1::Superseded
+                | GovernanceAttemptStatusV1::ExecutionFailed
+                    if certificate.enact_at_height > restored_height =>
+                {
+                    return Err(ParliamentReducerErrorV1::InvalidCertificateHeight);
+                }
+                _ => {}
+            }
+        }
+
+        let future_election_height = self.elections.values().any(|election| {
+            let request = election.attempt.request;
+            request.request_height > restored_height
+                || (election.pulse_id.is_some() && request.pulse_height > restored_height)
+                || election
+                    .invitation_opened_at_height
+                    .is_some_and(|height| height > restored_height)
+                || (matches!(
+                    election.attempt.status,
+                    BodyElectionAttemptStatusV1::Sealed
+                        | BodyElectionAttemptStatusV1::NoRoster
+                        | BodyElectionAttemptStatusV1::Superseded
+                ) && election
+                    .invitation_close_height
+                    .is_none_or(|height| height >= restored_height))
+        });
+        let future_body_height = self.bodies.values().any(|body| {
+            body.result_height
+                .is_some_and(|height| height > restored_height)
+                || body
+                    .public_finding_opened_at_height
+                    .is_some_and(|height| height > restored_height)
+                || body
+                    .public_finding_no_result_height
+                    .is_some_and(|height| height > restored_height)
+        });
+        let future_ballot_height = self.ballots.values().any(|ballot| {
+            ballot.registered_at_height > restored_height
+                || ballot
+                    .registration_closed_at_height
+                    .is_some_and(|height| height > restored_height)
+                || ballot
+                    .survivors_frozen_at_height
+                    .is_some_and(|height| height > restored_height)
+                || ballot
+                    .commitment_closed_at_height
+                    .is_some_and(|height| height > restored_height)
+                || ballot
+                    .opening_height
+                    .is_some_and(|height| height > restored_height)
+                || ballot
+                    .failure_height
+                    .is_some_and(|height| height > restored_height)
+        });
+        let future_consumed_pulse = self
+            .used_pulse_slots
+            .keys()
+            .any(|slot| slot.height > restored_height);
+        if future_election_height
+            || future_body_height
+            || future_ballot_height
+            || future_consumed_pulse
+        {
+            return Err(ParliamentReducerErrorV1::FuturePersistedHeight);
+        }
+        if missing_certificate_at_persisted_stage {
+            return Err(ParliamentReducerErrorV1::IncompleteCertificate);
+        }
+        Ok(())
     }
 
     fn ensure_attempt(
@@ -1272,6 +1903,11 @@ impl ParliamentAttemptStateV1 {
 
     /// Consume one finalized future pulse and derive its complete assignment plans.
     ///
+    /// The first consumed pulse must cover every initially required body in one
+    /// simultaneous batch, so a trigger cannot evade cross-body concentration
+    /// limits by splitting the draw. Later no-roster retries and a dynamically
+    /// required Confirmation Jury may use fresh dedicated pulse slots.
+    ///
     /// # Errors
     /// Returns an error for replay, a wrong request/session/height binding, a
     /// duplicate pulse identifier or session-height slot, or a wrong attempt.
@@ -1358,6 +1994,20 @@ impl ParliamentAttemptStateV1 {
         bodies.dedup();
         if bodies.len() != election_ids.len() {
             return Err(ParliamentReducerErrorV1::InvalidAssignmentPlan);
+        }
+        if self.used_pulse_ids.is_empty() {
+            let mut expected_initial_bodies: Vec<_> = self
+                .required_bodies
+                .iter()
+                .filter_map(|requirement| {
+                    (requirement.body != ParliamentBody::ConfirmationJury)
+                        .then_some(requirement.body)
+                })
+                .collect();
+            expected_initial_bodies.sort_unstable();
+            if bodies != expected_initial_bodies {
+                return Err(ParliamentReducerErrorV1::InvalidAssignmentPlan);
+            }
         }
         let candidate_snapshot = shared_candidate_snapshot
             .as_deref()
@@ -1584,11 +2234,12 @@ impl ParliamentAttemptStateV1 {
         Ok(())
     }
 
-    /// Mark an election unable to form any nonempty eligible roster.
+    /// Mark an election unable to obtain its pulse or form a nonempty roster.
     ///
     /// # Errors
     /// Returns an error for a wrong attempt, unknown election, or replay from a
-    /// state other than drawing or invitation acceptance.
+    /// state other than an objectively expired pulse wait or invitation
+    /// acceptance.
     pub fn fail_body_election_no_roster(
         &mut self,
         governance_attempt_id: GovernanceAttemptId,
@@ -1600,6 +2251,17 @@ impl ParliamentAttemptStateV1 {
             ParliamentReducerErrorV1::UnknownEntity(ParliamentReducerEntityV1::BodyElection),
         )?;
         self.ensure_draw_eligible_body(election.attempt.request.body)?;
+        if election.attempt.status == BodyElectionAttemptStatusV1::AwaitingPulse {
+            if current_height <= election.attempt.request.pulse_height {
+                return Err(ParliamentReducerErrorV1::SortitionPulseStillPending);
+            }
+            self.elections
+                .get_mut(&election_attempt_id)
+                .expect("election checked above")
+                .attempt
+                .status = BodyElectionAttemptStatusV1::NoRoster;
+            return Ok(());
+        }
         if election.attempt.status != BodyElectionAttemptStatusV1::AcceptingInvitations {
             return Err(ParliamentReducerErrorV1::InvalidLifecycleTransition(
                 ParliamentReducerEntityV1::BodyElection,
@@ -1721,6 +2383,13 @@ impl ParliamentAttemptStateV1 {
                 roster_root,
                 assignments,
                 excluded_assignments: BTreeSet::new(),
+                public_finding_endorsements: BTreeMap::new(),
+                public_finding_opened_at_height: None,
+                public_finding_phase_blocks: None,
+                public_finding_deadline_height: None,
+                public_finding_no_result_kind: None,
+                public_finding_no_result_height: None,
+                public_finding_binding: None,
                 result_root: None,
                 result_height: None,
                 ballot_binding: None,
@@ -1744,6 +2413,8 @@ impl ParliamentAttemptStateV1 {
         governance_attempt_id: GovernanceAttemptId,
         body_instance_id: BodyInstanceId,
         target: DeliberationPhaseV1,
+        current_height: u64,
+        public_finding_phase_blocks: u64,
     ) -> Result<(), ParliamentReducerErrorV1> {
         self.ensure_active(governance_attempt_id)?;
         let body =
@@ -1752,11 +2423,18 @@ impl ParliamentAttemptStateV1 {
                 .ok_or(ParliamentReducerErrorV1::UnknownEntity(
                     ParliamentReducerEntityV1::BodyInstance,
                 ))?;
-        let requirement = self.ensure_current_body(body.instance.body)?;
+        let decision_mode = self.ensure_current_body(body.instance.body)?.decision_mode;
         if body.instance.governance_attempt_id != governance_attempt_id
             || self.active_bodies.get(&body.instance.body) != Some(&body_instance_id)
         {
             return Err(ParliamentReducerErrorV1::ImmutableBindingMismatch);
+        }
+        let election = self
+            .elections
+            .get(&body.instance.election_attempt_id)
+            .ok_or(ParliamentReducerErrorV1::ImmutableBindingMismatch)?;
+        if current_height <= election.attempt.request.pulse_height {
+            return Err(ParliamentReducerErrorV1::InvalidPublicFindingSchedule);
         }
         let expected = match body.instance.status {
             BodyInstanceStatusV1::RosterSealed => DeliberationPhaseV1::Orientation,
@@ -1777,32 +2455,58 @@ impl ParliamentAttemptStateV1 {
             ));
         }
         if target == DeliberationPhaseV1::Vote
-            && requirement.decision_mode != ParliamentDecisionModeV1::HiddenBindingBallot
+            && decision_mode != ParliamentDecisionModeV1::HiddenBindingBallot
         {
             return Err(ParliamentReducerErrorV1::DecisionModeMismatch);
         }
-        self.bodies
+        let body = self
+            .bodies
             .get_mut(&body_instance_id)
-            .expect("body checked above")
-            .instance
-            .status = BodyInstanceStatusV1::Deliberating(target);
+            .expect("body checked above");
+        if target == DeliberationPhaseV1::Reflection
+            && decision_mode == ParliamentDecisionModeV1::PublicFinding
+        {
+            let deadline = current_height
+                .checked_add(public_finding_phase_blocks)
+                .filter(|_| public_finding_phase_blocks != 0)
+                .ok_or(ParliamentReducerErrorV1::InvalidPublicFindingSchedule)?;
+            if body.public_finding_opened_at_height.is_some()
+                || body.public_finding_phase_blocks.is_some()
+                || body.public_finding_deadline_height.is_some()
+            {
+                return Err(ParliamentReducerErrorV1::InvalidLifecycleTransition(
+                    ParliamentReducerEntityV1::BodyInstance,
+                ));
+            }
+            body.public_finding_opened_at_height = Some(current_height);
+            body.public_finding_phase_blocks = Some(public_finding_phase_blocks);
+            body.public_finding_deadline_height = Some(deadline);
+        }
+        body.instance.status = BodyInstanceStatusV1::Deliberating(target);
         Ok(())
     }
 
-    /// Exclude an absent seat from this attempt without changing its quorum denominator.
+    /// Record a member-authenticated absence without changing the quorum denominator.
     ///
     /// The reducer records no slash, cooldown, or future-selection penalty. The
     /// same assignment cannot be excluded twice, and an exclusion cannot be
-    /// introduced after balloting starts.
+    /// introduced after balloting starts. `member` must own the exact named
+    /// assignment, preventing a manager or another member from fabricating it.
+    /// A public-finding body is marked `NoResult` and the governance attempt is
+    /// rejected as soon as the remaining nonexcluded seats can no longer reach
+    /// its immutable original-seat quorum.
     ///
     /// # Errors
-    /// Returns an error for wrong bindings, an unknown assignment, replay, or a
-    /// body that has already entered or completed balloting.
+    /// Returns an error for wrong bindings, an unknown assignment, an authority
+    /// that does not own it, replay, or a body that has already entered or
+    /// completed balloting.
     pub fn record_attempt_absence(
         &mut self,
         governance_attempt_id: GovernanceAttemptId,
         body_instance_id: BodyInstanceId,
         assignment_id: AssignmentId,
+        member: &AccountId,
+        current_height: u64,
     ) -> Result<(), ParliamentReducerErrorV1> {
         self.ensure_active(governance_attempt_id)?;
         let body =
@@ -1811,19 +2515,37 @@ impl ParliamentAttemptStateV1 {
                 .ok_or(ParliamentReducerErrorV1::UnknownEntity(
                     ParliamentReducerEntityV1::BodyInstance,
                 ))?;
-        self.ensure_current_body(body.instance.body)?;
-        if body.instance.governance_attempt_id != governance_attempt_id
-            || !body
-                .assignments
-                .iter()
-                .any(|seat| seat.assignment_id == assignment_id)
-        {
+        let decision_mode = self.ensure_current_body(body.instance.body)?.decision_mode;
+        if body.instance.governance_attempt_id != governance_attempt_id {
             return Err(ParliamentReducerErrorV1::ImmutableBindingMismatch);
+        }
+        let election = self
+            .elections
+            .get(&body.instance.election_attempt_id)
+            .ok_or(ParliamentReducerErrorV1::ImmutableBindingMismatch)?;
+        if current_height <= election.attempt.request.pulse_height {
+            return Err(ParliamentReducerErrorV1::InvalidPublicFindingSchedule);
+        }
+        if decision_mode == ParliamentDecisionModeV1::PublicFinding
+            && body
+                .public_finding_deadline_height
+                .is_some_and(|deadline| current_height > deadline)
+        {
+            return Err(ParliamentReducerErrorV1::PublicFindingWindowClosed);
+        }
+        let assignment = body
+            .assignments
+            .iter()
+            .find(|seat| seat.assignment_id == assignment_id)
+            .ok_or(ParliamentReducerErrorV1::ImmutableBindingMismatch)?;
+        if &assignment.member != member {
+            return Err(ParliamentReducerErrorV1::UnauthorizedBodyMember);
         }
         if !matches!(
             body.instance.status,
             BodyInstanceStatusV1::RosterSealed | BodyInstanceStatusV1::Deliberating(_)
-        ) {
+        ) || !body.public_finding_endorsements.is_empty()
+        {
             return Err(ParliamentReducerErrorV1::InvalidLifecycleTransition(
                 ParliamentReducerEntityV1::BodyInstance,
             ));
@@ -1836,6 +2558,15 @@ impl ParliamentAttemptStateV1 {
             return Err(ParliamentReducerErrorV1::InvalidLifecycleTransition(
                 ParliamentReducerEntityV1::BodyInstance,
             ));
+        }
+        if decision_mode == ParliamentDecisionModeV1::PublicFinding
+            && public_finding_quorum_is_unreachable(body)?
+        {
+            body.instance.status = BodyInstanceStatusV1::NoResult;
+            body.public_finding_no_result_kind =
+                Some(ParliamentNoResultKindV1::PublicFindingQuorumUnreachable);
+            body.public_finding_no_result_height = Some(current_height);
+            self.attempt.status = GovernanceAttemptStatusV1::Rejected;
         }
         Ok(())
     }
@@ -1901,6 +2632,7 @@ impl ParliamentAttemptStateV1 {
             release_height: ballot
                 .release_height
                 .ok_or(ParliamentReducerErrorV1::IncompleteCertificate)?,
+            opening_deadline_height: ballot.opening_deadline_height,
             release_pulse_id: ballot
                 .release_pulse_id
                 .ok_or(ParliamentReducerErrorV1::IncompleteCertificate)?,
@@ -1970,28 +2702,39 @@ impl ParliamentAttemptStateV1 {
             sortition_request_id: election.attempt.request.id,
             sortition_request: election.attempt.request,
             body: body.instance.body,
+            original_seats: body.instance.original_seats,
             beacon_session_id: election.attempt.request.beacon_session_id,
             beacon_pulse_id,
             roster_root: body.roster_root,
             assignment_root,
             result_root,
             result_height,
+            public_finding: body.public_finding_binding.clone(),
             ballot,
         })
     }
 
-    /// Finalize a public, nonbinding body finding after reflection.
+    /// Record one seated member's endorsement of a public, nonbinding finding.
+    ///
+    /// Each assignment may endorse exactly one result root. The body result
+    /// finalizes automatically once one root reaches the immutable two-thirds
+    /// original-seat quorum, so a manager cannot invent or select the finding.
+    /// If immutable endorsements split so that no root can reach quorum even if
+    /// every remaining eligible assignment joins it, the body becomes
+    /// `NoResult` and the governance attempt is rejected deterministically.
     ///
     /// # Errors
     /// Returns an error for a binding body, wrong stage/bindings, zero result
-    /// root, replay, or a body that has not completed reflection.
-    pub fn finalize_public_finding(
+    /// root, a nonmember/excluded authority, replay, or a body that has not
+    /// completed reflection. Returns whether this endorsement finalized the body.
+    pub fn endorse_public_finding(
         &mut self,
         governance_attempt_id: GovernanceAttemptId,
         body_instance_id: BodyInstanceId,
         result_root: [u8; 32],
+        member: &AccountId,
         result_height: u64,
-    ) -> Result<(), ParliamentReducerErrorV1> {
+    ) -> Result<bool, ParliamentReducerErrorV1> {
         self.ensure_active(governance_attempt_id)?;
         if root_is_zero(&result_root) {
             return Err(ParliamentReducerErrorV1::ZeroCommitmentRoot);
@@ -2024,6 +2767,76 @@ impl ParliamentAttemptStateV1 {
         if result_height <= election.attempt.request.pulse_height {
             return Err(ParliamentReducerErrorV1::InvalidCertificateHeight);
         }
+        let opened_at_height = body
+            .public_finding_opened_at_height
+            .ok_or(ParliamentReducerErrorV1::InvalidPublicFindingSchedule)?;
+        let deadline_height = body
+            .public_finding_deadline_height
+            .ok_or(ParliamentReducerErrorV1::InvalidPublicFindingSchedule)?;
+        if result_height < opened_at_height || result_height > deadline_height {
+            return Err(ParliamentReducerErrorV1::PublicFindingWindowClosed);
+        }
+        let assignment = body
+            .assignments
+            .iter()
+            .find(|assignment| &assignment.member == member)
+            .ok_or(ParliamentReducerErrorV1::UnauthorizedBodyMember)?;
+        if body
+            .excluded_assignments
+            .contains(&assignment.assignment_id)
+            || body
+                .public_finding_endorsements
+                .contains_key(&assignment.assignment_id)
+        {
+            return Err(ParliamentReducerErrorV1::InvalidLifecycleTransition(
+                ParliamentReducerEntityV1::BodyInstance,
+            ));
+        }
+        let assignment_id = assignment.assignment_id;
+        let quorum = parliament_quorum_seats_v1(body.instance.original_seats);
+        {
+            let body = self
+                .bodies
+                .get_mut(&body_instance_id)
+                .expect("body checked above");
+            body.public_finding_endorsements
+                .insert(assignment_id, result_root);
+        }
+        let endorsing_assignments = self
+            .bodies
+            .get(&body_instance_id)
+            .expect("body checked above")
+            .public_finding_endorsements
+            .iter()
+            .filter_map(|(assignment_id, endorsed_root)| {
+                (*endorsed_root == result_root).then_some(*assignment_id)
+            })
+            .collect::<Vec<_>>();
+        let endorsements = u32::try_from(endorsing_assignments.len())
+            .map_err(|_| ParliamentReducerErrorV1::InvalidRoster)?;
+        if endorsements < quorum {
+            let body = self
+                .bodies
+                .get_mut(&body_instance_id)
+                .expect("body checked above");
+            if public_finding_quorum_is_unreachable(body)? {
+                body.instance.status = BodyInstanceStatusV1::NoResult;
+                body.public_finding_no_result_kind =
+                    Some(ParliamentNoResultKindV1::PublicFindingQuorumUnreachable);
+                body.public_finding_no_result_height = Some(result_height);
+                self.attempt.status = GovernanceAttemptStatusV1::Rejected;
+            }
+            return Ok(false);
+        }
+        let endorsement_root = parliament_public_finding_endorsement_root_v1(
+            governance_attempt_id,
+            body_instance_id,
+            result_root,
+            &endorsing_assignments,
+        );
+        if root_is_zero(&endorsement_root) {
+            return Err(ParliamentReducerErrorV1::ZeroCommitmentRoot);
+        }
         {
             let body = self
                 .bodies
@@ -2032,6 +2845,12 @@ impl ParliamentAttemptStateV1 {
             body.instance.status = BodyInstanceStatusV1::Approved;
             body.result_root = Some(result_root);
             body.result_height = Some(result_height);
+            body.public_finding_binding = Some(ParliamentPublicFindingCertificateBindingV1 {
+                endorsement_root,
+                endorsing_assignments,
+                endorsements,
+                quorum,
+            });
         }
         let binding = self.build_body_binding(body_instance_id)?;
         if self.body_bindings.insert(body_role, binding).is_some() {
@@ -2039,7 +2858,63 @@ impl ParliamentAttemptStateV1 {
                 ParliamentReducerEntityV1::BodyInstance,
             ));
         }
-        self.advance_after_body(body_role)
+        self.advance_after_body(body_role)?;
+        Ok(true)
+    }
+
+    /// Terminally reject a public-finding body after its frozen endorsement deadline.
+    ///
+    /// The caller supplies only the body identifier. Core derives the schedule,
+    /// verifies that no finding was finalized, and records the containing height
+    /// as objective no-result evidence.
+    ///
+    /// # Errors
+    /// Returns an error for a wrong attempt/body/mode, a replay, a body outside
+    /// Reflection, or a trigger submitted no later than the inclusive deadline.
+    pub fn fail_public_finding_no_result(
+        &mut self,
+        governance_attempt_id: GovernanceAttemptId,
+        body_instance_id: BodyInstanceId,
+        current_height: u64,
+    ) -> Result<(), ParliamentReducerErrorV1> {
+        self.ensure_active(governance_attempt_id)?;
+        let body =
+            self.bodies
+                .get(&body_instance_id)
+                .ok_or(ParliamentReducerErrorV1::UnknownEntity(
+                    ParliamentReducerEntityV1::BodyInstance,
+                ))?;
+        let decision_mode = self.ensure_current_body(body.instance.body)?.decision_mode;
+        if decision_mode != ParliamentDecisionModeV1::PublicFinding {
+            return Err(ParliamentReducerErrorV1::DecisionModeMismatch);
+        }
+        if body.instance.governance_attempt_id != governance_attempt_id
+            || body.instance.status
+                != BodyInstanceStatusV1::Deliberating(DeliberationPhaseV1::Reflection)
+            || body.public_finding_binding.is_some()
+            || body.public_finding_no_result_kind.is_some()
+            || body.public_finding_no_result_height.is_some()
+        {
+            return Err(ParliamentReducerErrorV1::InvalidLifecycleTransition(
+                ParliamentReducerEntityV1::BodyInstance,
+            ));
+        }
+        let deadline_height = body
+            .public_finding_deadline_height
+            .ok_or(ParliamentReducerErrorV1::InvalidPublicFindingSchedule)?;
+        if current_height <= deadline_height {
+            return Err(ParliamentReducerErrorV1::PublicFindingWindowStillOpen);
+        }
+        let body = self
+            .bodies
+            .get_mut(&body_instance_id)
+            .expect("body checked above");
+        body.instance.status = BodyInstanceStatusV1::NoResult;
+        body.public_finding_no_result_kind =
+            Some(ParliamentNoResultKindV1::PublicFindingDeadlineExpired);
+        body.public_finding_no_result_height = Some(current_height);
+        self.attempt.status = GovernanceAttemptStatusV1::Rejected;
+        Ok(())
     }
 }
 
@@ -2094,6 +2969,7 @@ impl ParliamentAttemptStateV1 {
             survivor_freeze_height,
             commitment_close_height,
             expected_release_height,
+            opening_deadline_height,
         ) = timed_ballot_schedule(registered_at_height, timed_ovn_policy)?;
         if release_height != expected_release_height {
             return Err(ParliamentReducerErrorV1::InvalidBallotSchedule);
@@ -2146,6 +3022,16 @@ impl ParliamentAttemptStateV1 {
         if body.instance.governance_attempt_id != governance_attempt_id {
             return Err(ParliamentReducerErrorV1::ImmutableBindingMismatch);
         }
+        let election = self
+            .elections
+            .get(&body.instance.election_attempt_id)
+            .ok_or(ParliamentReducerErrorV1::ImmutableBindingMismatch)?;
+        if election
+            .invitation_close_height
+            .is_none_or(|close_height| registered_at_height <= close_height)
+        {
+            return Err(ParliamentReducerErrorV1::InvalidBallotSchedule);
+        }
         let original_seats = body.instance.original_seats;
         let predecessor = self.active_ballots.get(&body_instance_id).copied();
         match predecessor {
@@ -2172,6 +3058,12 @@ impl ParliamentAttemptStateV1 {
                 }
                 if sequence != previous.attempt.sequence.saturating_add(1) {
                     return Err(ParliamentReducerErrorV1::RetrySequenceMismatch);
+                }
+                if previous
+                    .failure_height
+                    .is_none_or(|failure_height| registered_at_height < failure_height)
+                {
+                    return Err(ParliamentReducerErrorV1::InvalidBallotSchedule);
                 }
             }
         }
@@ -2215,6 +3107,7 @@ impl ParliamentAttemptStateV1 {
                 survivor_freeze_phase_blocks: timed_ovn_policy.survivor_freeze_phase_blocks,
                 commitment_phase_blocks: timed_ovn_policy.commitment_phase_blocks,
                 release_delay_blocks: timed_ovn_policy.release_delay_blocks,
+                opening_phase_blocks: timed_ovn_policy.opening_phase_blocks,
                 max_ballot_retries: timed_ovn_policy.max_ballot_retries,
                 max_corpus_entries: timed_ovn_policy.max_corpus_entries,
                 registration_close_height,
@@ -2225,6 +3118,7 @@ impl ParliamentAttemptStateV1 {
                 commitment_closed_at_height: None,
                 timed_commitment_root: None,
                 release_height: Some(release_height),
+                opening_deadline_height,
                 release_pulse_id: None,
                 opening_height: None,
                 opening_root: None,
@@ -2238,6 +3132,107 @@ impl ParliamentAttemptStateV1 {
         self.used_tle_sessions
             .insert(tle_session_id, ballot_attempt_id);
         Ok(())
+    }
+
+    /// Cheaply authorize the registration-close checkpoint before corpus replay.
+    ///
+    /// This checks only reducer-owned scalar state and bindings. Callers must
+    /// still replay and validate the complete timed-OVN registration corpus
+    /// after this succeeds.
+    ///
+    /// # Errors
+    /// Returns an error for an inactive attempt, wrong ballot/body binding,
+    /// replayed phase, or a containing height other than the frozen deadline.
+    pub(crate) fn precheck_close_ballot_registration(
+        &self,
+        governance_attempt_id: GovernanceAttemptId,
+        ballot_attempt_id: BallotAttemptId,
+        current_height: u64,
+    ) -> Result<&ParliamentBallotStateV1, ParliamentReducerErrorV1> {
+        self.precheck_ballot_checkpoint(
+            governance_attempt_id,
+            ballot_attempt_id,
+            BallotAttemptStatusV1::Registration,
+            |ballot| current_height == ballot.registration_close_height,
+        )
+    }
+
+    /// Cheaply authorize the survivor-freeze checkpoint before corpus replay.
+    ///
+    /// # Errors
+    /// Returns an error for an inactive attempt, wrong ballot/body binding,
+    /// replayed phase, or a containing height other than the frozen deadline.
+    pub(crate) fn precheck_freeze_ballot_survivors(
+        &self,
+        governance_attempt_id: GovernanceAttemptId,
+        ballot_attempt_id: BallotAttemptId,
+        current_height: u64,
+    ) -> Result<&ParliamentBallotStateV1, ParliamentReducerErrorV1> {
+        self.precheck_ballot_checkpoint(
+            governance_attempt_id,
+            ballot_attempt_id,
+            BallotAttemptStatusV1::SurvivorFreeze,
+            |ballot| {
+                current_height == ballot.survivor_freeze_height
+                    && ballot.registration_closed_at_height
+                        == Some(ballot.registration_close_height)
+            },
+        )
+    }
+
+    /// Cheaply authorize the commitment-close checkpoint before corpus replay.
+    ///
+    /// # Errors
+    /// Returns an error for an inactive attempt, wrong ballot/body binding,
+    /// replayed phase, or a containing height other than the frozen deadline.
+    pub(crate) fn precheck_freeze_timed_ovn_corpus(
+        &self,
+        governance_attempt_id: GovernanceAttemptId,
+        ballot_attempt_id: BallotAttemptId,
+        current_height: u64,
+    ) -> Result<&ParliamentBallotStateV1, ParliamentReducerErrorV1> {
+        self.precheck_ballot_checkpoint(
+            governance_attempt_id,
+            ballot_attempt_id,
+            BallotAttemptStatusV1::TimedCommitment,
+            |ballot| {
+                current_height == ballot.commitment_close_height
+                    && ballot.survivors_frozen_at_height == Some(ballot.survivor_freeze_height)
+            },
+        )
+    }
+
+    fn precheck_ballot_checkpoint(
+        &self,
+        governance_attempt_id: GovernanceAttemptId,
+        ballot_attempt_id: BallotAttemptId,
+        expected_status: BallotAttemptStatusV1,
+        height_is_exact: impl FnOnce(&ParliamentBallotStateV1) -> bool,
+    ) -> Result<&ParliamentBallotStateV1, ParliamentReducerErrorV1> {
+        self.ensure_active(governance_attempt_id)?;
+        let ballot =
+            self.ballots
+                .get(&ballot_attempt_id)
+                .ok_or(ParliamentReducerErrorV1::UnknownEntity(
+                    ParliamentReducerEntityV1::BallotAttempt,
+                ))?;
+        if ballot.attempt.status != expected_status {
+            return Err(ParliamentReducerErrorV1::InvalidLifecycleTransition(
+                ParliamentReducerEntityV1::BallotAttempt,
+            ));
+        }
+        if !height_is_exact(ballot) {
+            return Err(ParliamentReducerErrorV1::WrongBallotPhaseHeight);
+        }
+        let body = self.bodies.get(&ballot.attempt.body_instance_id).ok_or(
+            ParliamentReducerErrorV1::UnknownEntity(ParliamentReducerEntityV1::BodyInstance),
+        )?;
+        if body.instance.governance_attempt_id != governance_attempt_id
+            || self.active_ballots.get(&body.instance.id) != Some(&ballot_attempt_id)
+        {
+            return Err(ParliamentReducerErrorV1::ImmutableBindingMismatch);
+        }
+        Ok(ballot)
     }
 
     /// Close private registration and enter canonical survivor freezing.
@@ -2257,28 +3252,15 @@ impl ParliamentAttemptStateV1 {
         if root_is_zero(&registration_root) {
             return Err(ParliamentReducerErrorV1::ZeroCommitmentRoot);
         }
-        let ballot =
-            self.ballots
-                .get(&ballot_attempt_id)
-                .ok_or(ParliamentReducerErrorV1::UnknownEntity(
-                    ParliamentReducerEntityV1::BallotAttempt,
-                ))?;
-        if ballot.attempt.status != BallotAttemptStatusV1::Registration {
-            return Err(ParliamentReducerErrorV1::InvalidLifecycleTransition(
-                ParliamentReducerEntityV1::BallotAttempt,
-            ));
-        }
-        if current_height != ballot.registration_close_height {
-            return Err(ParliamentReducerErrorV1::WrongBallotPhaseHeight);
-        }
-        let body = self.bodies.get(&ballot.attempt.body_instance_id).ok_or(
-            ParliamentReducerErrorV1::UnknownEntity(ParliamentReducerEntityV1::BodyInstance),
+        let ballot = self.precheck_close_ballot_registration(
+            governance_attempt_id,
+            ballot_attempt_id,
+            current_height,
         )?;
-        if body.instance.governance_attempt_id != governance_attempt_id
-            || self.active_ballots.get(&body.instance.id) != Some(&ballot_attempt_id)
-        {
-            return Err(ParliamentReducerErrorV1::ImmutableBindingMismatch);
-        }
+        let body = self
+            .bodies
+            .get(&ballot.attempt.body_instance_id)
+            .expect("checkpoint precheck verified the body");
         let excluded = u32::try_from(body.excluded_assignments.len())
             .map_err(|_| ParliamentReducerErrorV1::InvalidBallotCount)?;
         let eligible = ballot.attempt.original_seats.saturating_sub(excluded);
@@ -2318,22 +3300,11 @@ impl ParliamentAttemptStateV1 {
         {
             return Err(ParliamentReducerErrorV1::ZeroCommitmentRoot);
         }
-        let ballot =
-            self.ballots
-                .get(&ballot_attempt_id)
-                .ok_or(ParliamentReducerErrorV1::UnknownEntity(
-                    ParliamentReducerEntityV1::BallotAttempt,
-                ))?;
-        if ballot.attempt.status != BallotAttemptStatusV1::SurvivorFreeze {
-            return Err(ParliamentReducerErrorV1::InvalidLifecycleTransition(
-                ParliamentReducerEntityV1::BallotAttempt,
-            ));
-        }
-        if current_height != ballot.survivor_freeze_height
-            || ballot.registration_closed_at_height != Some(ballot.registration_close_height)
-        {
-            return Err(ParliamentReducerErrorV1::WrongBallotPhaseHeight);
-        }
+        let ballot = self.precheck_freeze_ballot_survivors(
+            governance_attempt_id,
+            ballot_attempt_id,
+            current_height,
+        )?;
         let registered = ballot
             .registered_voters
             .ok_or(ParliamentReducerErrorV1::ImmutableBindingMismatch)?;
@@ -2375,22 +3346,11 @@ impl ParliamentAttemptStateV1 {
         {
             return Err(ParliamentReducerErrorV1::ZeroCommitmentRoot);
         }
-        let ballot =
-            self.ballots
-                .get(&ballot_attempt_id)
-                .ok_or(ParliamentReducerErrorV1::UnknownEntity(
-                    ParliamentReducerEntityV1::BallotAttempt,
-                ))?;
-        if ballot.attempt.status != BallotAttemptStatusV1::TimedCommitment {
-            return Err(ParliamentReducerErrorV1::InvalidLifecycleTransition(
-                ParliamentReducerEntityV1::BallotAttempt,
-            ));
-        }
-        if current_height != ballot.commitment_close_height
-            || ballot.survivors_frozen_at_height != Some(ballot.survivor_freeze_height)
-        {
-            return Err(ParliamentReducerErrorV1::WrongBallotPhaseHeight);
-        }
+        let ballot = self.precheck_freeze_timed_ovn_corpus(
+            governance_attempt_id,
+            ballot_attempt_id,
+            current_height,
+        )?;
         if ballot.survivor_root != Some(survivor_root) {
             return Err(ParliamentReducerErrorV1::AcceptedCorpusMutation);
         }
@@ -2472,6 +3432,7 @@ impl ParliamentAttemptStateV1 {
                 || ballot.attempt.status != BallotAttemptStatusV1::AwaitingRelease
                 || ballot.release_beacon_session_id != Some(release_beacon_session_id)
                 || ballot.release_height != Some(release_height)
+                || at_height > ballot.opening_deadline_height
                 || ballot.commitment_closed_at_height != Some(ballot.commitment_close_height)
             {
                 return Err(ParliamentReducerErrorV1::PulseBindingMismatch);
@@ -2507,62 +3468,28 @@ impl ParliamentAttemptStateV1 {
         Ok(())
     }
 
-    /// Mark a cryptographic ballot protocol failure as `NoResult`.
+    /// Mark an objectively expired ballot phase as `NoResult`.
     ///
     /// There is no manual or plaintext fallback. A retry must register a fresh
     /// ballot attempt and, if it reaches timed sealing, a fresh TLE session.
     ///
     /// # Errors
-    /// Returns an error for a zero failure root, unknown/wrong attempt, or a
-    /// terminal/replayed ballot transition.
+    /// Returns an error for an unknown/wrong attempt or a terminal/replayed
+    /// ballot transition.
     pub fn fail_ballot_no_result(
         &mut self,
         governance_attempt_id: GovernanceAttemptId,
         ballot_attempt_id: BallotAttemptId,
-        failure_kind: ParliamentBallotFailureKindV1,
-        failure_root: [u8; 32],
+        release_pulse_available: bool,
         current_height: u64,
     ) -> Result<(), ParliamentReducerErrorV1> {
         self.ensure_active(governance_attempt_id)?;
-        if root_is_zero(&failure_root) {
-            return Err(ParliamentReducerErrorV1::ZeroCommitmentRoot);
-        }
         let ballot =
             self.ballots
                 .get(&ballot_attempt_id)
                 .ok_or(ParliamentReducerErrorV1::UnknownEntity(
                     ParliamentReducerEntityV1::BallotAttempt,
                 ))?;
-        let failure_matches_phase = match (ballot.attempt.status, failure_kind) {
-            (
-                BallotAttemptStatusV1::Registration,
-                ParliamentBallotFailureKindV1::RegistrationDeadlineExpired,
-            ) => current_height > ballot.registration_close_height,
-            (
-                BallotAttemptStatusV1::SurvivorFreeze,
-                ParliamentBallotFailureKindV1::SurvivorDeadlineExpired,
-            ) => current_height > ballot.survivor_freeze_height,
-            (
-                BallotAttemptStatusV1::TimedCommitment,
-                ParliamentBallotFailureKindV1::CommitmentDeadlineExpired,
-            ) => current_height > ballot.commitment_close_height,
-            (
-                BallotAttemptStatusV1::AwaitingRelease,
-                ParliamentBallotFailureKindV1::ReleasePulseUnavailable,
-            ) => ballot
-                .release_height
-                .is_some_and(|release_height| current_height > release_height),
-            (
-                BallotAttemptStatusV1::Opening,
-                ParliamentBallotFailureKindV1::AggregateOpeningFailed,
-            ) => ballot
-                .opening_height
-                .is_some_and(|opening_height| current_height >= opening_height),
-            _ => false,
-        };
-        if !failure_matches_phase {
-            return Err(ParliamentReducerErrorV1::BallotFailureKindMismatch);
-        }
         if matches!(
             ballot.attempt.status,
             BallotAttemptStatusV1::Finalized
@@ -2573,6 +3500,14 @@ impl ParliamentAttemptStateV1 {
                 ParliamentReducerEntityV1::BallotAttempt,
             ));
         }
+        let failure_kind = classify_ballot_failure(ballot, release_pulse_available, current_height)
+            .ok_or(ParliamentReducerErrorV1::BallotFailureKindMismatch)?;
+        let failure_root = parliament_ballot_failure_root_v1(
+            governance_attempt_id,
+            ballot_attempt_id,
+            failure_kind,
+            current_height,
+        );
         let body_id = ballot.attempt.body_instance_id;
         let body = self
             .bodies
@@ -2589,6 +3524,7 @@ impl ParliamentAttemptStateV1 {
             .ballots
             .get_mut(&ballot_attempt_id)
             .expect("ballot checked above");
+        let retry_budget_exhausted = ballot.attempt.sequence == ballot.max_ballot_retries;
         ballot.failure_root = Some(failure_root);
         ballot.failure_kind = Some(failure_kind);
         ballot.failure_height = Some(current_height);
@@ -2598,6 +3534,9 @@ impl ParliamentAttemptStateV1 {
             .expect("body checked above")
             .instance
             .status = BodyInstanceStatusV1::NoResult;
+        if retry_budget_exhausted {
+            self.attempt.status = GovernanceAttemptStatusV1::Rejected;
+        }
         Ok(())
     }
 }
@@ -2685,6 +3624,7 @@ impl ParliamentAttemptStateV1 {
         let release_height = ballot
             .release_height
             .ok_or(ParliamentReducerErrorV1::IncompleteCertificate)?;
+        let opening_deadline_height = ballot.opening_deadline_height;
         let release_pulse_id = ballot
             .release_pulse_id
             .ok_or(ParliamentReducerErrorV1::IncompleteCertificate)?;
@@ -2704,7 +3644,11 @@ impl ParliamentAttemptStateV1 {
             .ok_or(ParliamentReducerErrorV1::IncompleteCertificate)?;
         let max_ballot_retries = ballot.max_ballot_retries;
         let max_corpus_entries = ballot.max_corpus_entries;
-        if opening_height < release_height || result_height < opening_height {
+        if opening_height < release_height
+            || opening_height > opening_deadline_height
+            || result_height < opening_height
+            || result_height > opening_deadline_height
+        {
             return Err(ParliamentReducerErrorV1::InvalidCertificateHeight);
         }
         tally
@@ -2794,6 +3738,7 @@ impl ParliamentAttemptStateV1 {
             max_ballot_retries,
             max_corpus_entries,
             release_height,
+            opening_deadline_height,
             release_pulse_id,
             opening_height,
             opening_root,
@@ -2865,16 +3810,20 @@ impl ParliamentAttemptStateV1 {
             let binding = self
                 .body_bindings
                 .get(&requirement.body)
-                .copied()
+                .cloned()
                 .ok_or(ParliamentReducerErrorV1::IncompleteCertificate)?;
             if binding.body != requirement.body {
                 return Err(ParliamentReducerErrorV1::CertificateBindingMismatch);
             }
             match requirement.decision_mode {
-                ParliamentDecisionModeV1::PublicFinding if binding.ballot.is_some() => {
+                ParliamentDecisionModeV1::PublicFinding
+                    if binding.public_finding.is_none() || binding.ballot.is_some() =>
+                {
                     return Err(ParliamentReducerErrorV1::CertificateBindingMismatch);
                 }
-                ParliamentDecisionModeV1::HiddenBindingBallot if binding.ballot.is_none() => {
+                ParliamentDecisionModeV1::HiddenBindingBallot
+                    if binding.public_finding.is_some() || binding.ballot.is_none() =>
+                {
                     return Err(ParliamentReducerErrorV1::IncompleteCertificate);
                 }
                 _ => {}
@@ -2923,8 +3872,8 @@ impl ParliamentAttemptStateV1 {
             .certificate
             .as_ref()
             .ok_or(ParliamentReducerErrorV1::IncompleteCertificate)?;
-        if at_height < certificate.enact_at_height {
-            return Err(ParliamentReducerErrorV1::ReleaseHeightNotReached);
+        if at_height != certificate.enact_at_height {
+            return Err(ParliamentReducerErrorV1::WrongEnactmentHeight);
         }
         Ok(certificate)
     }
@@ -2966,33 +3915,58 @@ impl ParliamentAttemptStateV1 {
         Ok(())
     }
 
-    /// Mark deterministic execution failed for the exact certified effect.
+    /// Mark deterministic execution failure for the exact due certificate.
+    ///
+    /// The failure transcript root is derived entirely from the retained
+    /// certificate and its immutable enactment height. Callers cannot supply
+    /// either an effect binding or a failure root.
     ///
     /// # Errors
-    /// Returns an error for effect substitution, zero failure root, early
-    /// execution, wrong attempt, or any replay/noncertified transition.
+    /// Returns an error before or after the exact due height, for a wrong
+    /// attempt, or for any replay/noncertified transition.
     pub fn mark_execution_failed(
         &mut self,
         governance_attempt_id: GovernanceAttemptId,
         at_height: u64,
-        effect_preimage_hash: [u8; 32],
-        failure_root: [u8; 32],
-    ) -> Result<(), ParliamentReducerErrorV1> {
-        if root_is_zero(&failure_root) {
-            return Err(ParliamentReducerErrorV1::ZeroCommitmentRoot);
-        }
+    ) -> Result<[u8; 32], ParliamentReducerErrorV1> {
         let certificate = self.ensure_certified_for_execution(governance_attempt_id, at_height)?;
-        if effect_preimage_hash != certificate.effect_preimage_hash {
-            return Err(ParliamentReducerErrorV1::CertificateBindingMismatch);
-        }
+        let failure_root = parliament_execution_failure_root_v1(certificate, at_height);
         self.attempt.status = GovernanceAttemptStatusV1::ExecutionFailed;
         self.terminal_height = Some(at_height);
         self.execution_failure_root = Some(failure_root);
-        Ok(())
+        Ok(failure_root)
     }
 }
 
 impl ParliamentAttemptStateV1 {
+    fn expected_completed_body_count_v1(&self) -> Result<usize, ParliamentReducerErrorV1> {
+        let body_index = || {
+            self.required_bodies
+                .iter()
+                .position(|required| stage_for_body(required.body) == self.attempt.stage)
+                .ok_or(ParliamentReducerErrorV1::InvalidRequiredBodyPipeline)
+        };
+        match self.attempt.status {
+            GovernanceAttemptStatusV1::Active => match self.attempt.stage {
+                GovernanceStageV1::Qualification => Ok(0),
+                GovernanceStageV1::Certification | GovernanceStageV1::Enactment => {
+                    Ok(self.required_bodies.len())
+                }
+                _ => body_index(),
+            },
+            GovernanceAttemptStatusV1::Rejected => body_index().map(|index| index + 1),
+            GovernanceAttemptStatusV1::Certified
+            | GovernanceAttemptStatusV1::Enacted
+            | GovernanceAttemptStatusV1::Superseded
+            | GovernanceAttemptStatusV1::ExecutionFailed => {
+                if self.attempt.stage != GovernanceStageV1::Enactment {
+                    return Err(ParliamentReducerErrorV1::IncompleteCertificate);
+                }
+                Ok(self.required_bodies.len())
+            }
+        }
+    }
+
     /// Validate all cross-object bindings after decoding persisted reducer state.
     ///
     /// This audit is intentionally stricter than individual transition checks:
@@ -3012,12 +3986,21 @@ impl ParliamentAttemptStateV1 {
                 .all(|byte| *byte == 0)
             || self.policy_version == 0
             || root_is_zero(&self.effect_preimage_hash)
+            || !expected_head_is_valid(self.expected_head)
             || !self.attempt.has_canonical_id()
         {
             return Err(ParliamentReducerErrorV1::ImmutableBindingMismatch);
         }
         if !persisted_pipeline_is_canonical(&self.required_bodies) {
             return Err(ParliamentReducerErrorV1::InvalidRequiredBodyPipeline);
+        }
+        let expected_completed_bodies = self.expected_completed_body_count_v1()?;
+        if self.body_bindings.len() != expected_completed_bodies
+            || self.required_bodies[..expected_completed_bodies]
+                .iter()
+                .any(|required| !self.body_bindings.contains_key(&required.body))
+        {
+            return Err(ParliamentReducerErrorV1::IncompleteCertificate);
         }
         let confirmation_required = self
             .required_bodies
@@ -3201,6 +4184,42 @@ impl ParliamentAttemptStateV1 {
                 }
             }
         }
+        let initial_required_bodies: BTreeSet<_> = self
+            .required_bodies
+            .iter()
+            .filter_map(|requirement| {
+                (requirement.body != ParliamentBody::ConfirmationJury).then_some(requirement.body)
+            })
+            .collect();
+        let initial_drawn: Vec<_> = self
+            .elections
+            .values()
+            .filter(|election| {
+                election.attempt.sequence == 0
+                    && election.attempt.request.body != ParliamentBody::ConfirmationJury
+                    && election.pulse_id.is_some()
+            })
+            .collect();
+        if let Some(first) = initial_drawn.first() {
+            let drawn_bodies: BTreeSet<_> = initial_drawn
+                .iter()
+                .map(|election| election.attempt.request.body)
+                .collect();
+            if drawn_bodies != initial_required_bodies
+                || initial_drawn.iter().any(|election| {
+                    election.pulse_id != first.pulse_id
+                        || election.pulse_output != first.pulse_output
+                        || election.attempt.request.beacon_session_id
+                            != first.attempt.request.beacon_session_id
+                        || election.attempt.request.pulse_height
+                            != first.attempt.request.pulse_height
+                        || election.cross_body_assignment_cap != first.cross_body_assignment_cap
+                        || election.candidate_snapshot != first.candidate_snapshot
+                })
+            {
+                return Err(ParliamentReducerErrorV1::InvalidAssignmentPlan);
+            }
+        }
         if self.active_elections.len() != election_sequences.len() {
             return Err(ParliamentReducerErrorV1::ImmutableBindingMismatch);
         }
@@ -3301,6 +4320,136 @@ impl ParliamentAttemptStateV1 {
             {
                 return Err(ParliamentReducerErrorV1::InvalidRoster);
             }
+            let decision_mode = self
+                .required_bodies
+                .iter()
+                .find(|required| required.body == body.instance.body)
+                .map(|required| required.decision_mode)
+                .ok_or(ParliamentReducerErrorV1::InvalidRequiredBodyPipeline)?;
+            if body
+                .public_finding_endorsements
+                .iter()
+                .any(|(assignment_id, result_root)| {
+                    root_is_zero(result_root)
+                        || body.excluded_assignments.contains(assignment_id)
+                        || !body
+                            .assignments
+                            .iter()
+                            .any(|assignment| assignment.assignment_id == *assignment_id)
+                })
+            {
+                return Err(ParliamentReducerErrorV1::InvalidRoster);
+            }
+            match decision_mode {
+                ParliamentDecisionModeV1::HiddenBindingBallot => {
+                    if !body.public_finding_endorsements.is_empty()
+                        || body.public_finding_binding.is_some()
+                        || body.public_finding_opened_at_height.is_some()
+                        || body.public_finding_phase_blocks.is_some()
+                        || body.public_finding_deadline_height.is_some()
+                        || body.public_finding_no_result_kind.is_some()
+                        || body.public_finding_no_result_height.is_some()
+                    {
+                        return Err(ParliamentReducerErrorV1::CertificateBindingMismatch);
+                    }
+                }
+                ParliamentDecisionModeV1::PublicFinding => {
+                    if body.ballot_binding.is_some() {
+                        return Err(ParliamentReducerErrorV1::CertificateBindingMismatch);
+                    }
+                    let quorum = parliament_quorum_seats_v1(body.instance.original_seats);
+                    let quorum_usize = usize::try_from(quorum)
+                        .map_err(|_| ParliamentReducerErrorV1::InvalidRoster)?;
+                    let mut endorsements_by_root = BTreeMap::<[u8; 32], Vec<AssignmentId>>::new();
+                    for (assignment_id, result_root) in &body.public_finding_endorsements {
+                        endorsements_by_root
+                            .entry(*result_root)
+                            .or_default()
+                            .push(*assignment_id);
+                    }
+                    match body.public_finding_binding.as_ref() {
+                        None => {
+                            if endorsements_by_root
+                                .values()
+                                .any(|endorsers| endorsers.len() >= quorum_usize)
+                                || body.result_root.is_some()
+                                || body.result_height.is_some()
+                            {
+                                return Err(ParliamentReducerErrorV1::IncompleteCertificate);
+                            }
+                            let quorum_unreachable = public_finding_quorum_is_unreachable(body)?;
+                            match body.public_finding_no_result_kind {
+                                Some(ParliamentNoResultKindV1::PublicFindingQuorumUnreachable) => {
+                                    if !quorum_unreachable
+                                        || body.instance.status != BodyInstanceStatusV1::NoResult
+                                        || self.attempt.status
+                                            != GovernanceAttemptStatusV1::Rejected
+                                        || body.public_finding_no_result_height.is_none()
+                                    {
+                                        return Err(
+                                            ParliamentReducerErrorV1::PublicFindingFailureKindMismatch,
+                                        );
+                                    }
+                                }
+                                Some(ParliamentNoResultKindV1::PublicFindingDeadlineExpired) => {
+                                    if quorum_unreachable
+                                        || body.instance.status != BodyInstanceStatusV1::NoResult
+                                        || self.attempt.status
+                                            != GovernanceAttemptStatusV1::Rejected
+                                        || body.public_finding_no_result_height.is_none()
+                                    {
+                                        return Err(
+                                            ParliamentReducerErrorV1::PublicFindingFailureKindMismatch,
+                                        );
+                                    }
+                                }
+                                Some(_) => {
+                                    return Err(
+                                        ParliamentReducerErrorV1::PublicFindingFailureKindMismatch,
+                                    );
+                                }
+                                None => {
+                                    if quorum_unreachable
+                                        || body.instance.status == BodyInstanceStatusV1::NoResult
+                                        || body.public_finding_no_result_height.is_some()
+                                    {
+                                        return Err(
+                                            ParliamentReducerErrorV1::PublicFindingFailureKindMismatch,
+                                        );
+                                    }
+                                }
+                            }
+                        }
+                        Some(binding) => {
+                            let result_root = body
+                                .result_root
+                                .ok_or(ParliamentReducerErrorV1::IncompleteCertificate)?;
+                            let endorsers = endorsements_by_root
+                                .get(&result_root)
+                                .ok_or(ParliamentReducerErrorV1::CertificateBindingMismatch)?;
+                            let endorsements = u32::try_from(endorsers.len())
+                                .map_err(|_| ParliamentReducerErrorV1::InvalidRoster)?;
+                            if body.instance.status != BodyInstanceStatusV1::Approved
+                                || binding.quorum != quorum
+                                || binding.endorsements != endorsements
+                                || endorsements != quorum
+                                || binding.endorsing_assignments.as_slice() != endorsers.as_slice()
+                                || body.public_finding_no_result_kind.is_some()
+                                || body.public_finding_no_result_height.is_some()
+                                || binding.endorsement_root
+                                    != parliament_public_finding_endorsement_root_v1(
+                                        self.attempt.id,
+                                        body.instance.id,
+                                        result_root,
+                                        endorsers,
+                                    )
+                            {
+                                return Err(ParliamentReducerErrorV1::CertificateBindingMismatch);
+                            }
+                        }
+                    }
+                }
+            }
             let election = self
                 .elections
                 .get(&body.instance.election_attempt_id)
@@ -3311,6 +4460,73 @@ impl ParliamentAttemptStateV1 {
                 || accepted_roster(election)? != body.assignments
             {
                 return Err(ParliamentReducerErrorV1::ImmutableBindingMismatch);
+            }
+            if decision_mode == ParliamentDecisionModeV1::PublicFinding {
+                if body
+                    .public_finding_no_result_height
+                    .is_some_and(|height| height <= election.attempt.request.pulse_height)
+                {
+                    return Err(ParliamentReducerErrorV1::InvalidPublicFindingSchedule);
+                }
+                let schedule = match (
+                    body.public_finding_opened_at_height,
+                    body.public_finding_phase_blocks,
+                    body.public_finding_deadline_height,
+                ) {
+                    (None, None, None) => None,
+                    (Some(opened_at), Some(phase_blocks), Some(deadline))
+                        if phase_blocks != 0
+                            && opened_at > election.attempt.request.pulse_height
+                            && opened_at.checked_add(phase_blocks) == Some(deadline) =>
+                    {
+                        Some((opened_at, deadline))
+                    }
+                    _ => return Err(ParliamentReducerErrorV1::InvalidPublicFindingSchedule),
+                };
+                let schedule_required = !body.public_finding_endorsements.is_empty()
+                    || body.public_finding_binding.is_some()
+                    || body.instance.status
+                        == BodyInstanceStatusV1::Deliberating(DeliberationPhaseV1::Reflection)
+                    || body.public_finding_no_result_kind
+                        == Some(ParliamentNoResultKindV1::PublicFindingDeadlineExpired);
+                if schedule_required && schedule.is_none() {
+                    return Err(ParliamentReducerErrorV1::InvalidPublicFindingSchedule);
+                }
+                if schedule.is_some()
+                    && !matches!(
+                        body.instance.status,
+                        BodyInstanceStatusV1::Deliberating(DeliberationPhaseV1::Reflection)
+                            | BodyInstanceStatusV1::Approved
+                            | BodyInstanceStatusV1::NoResult
+                    )
+                {
+                    return Err(ParliamentReducerErrorV1::InvalidPublicFindingSchedule);
+                }
+                if let Some((opened_at, deadline)) = schedule {
+                    if body
+                        .result_height
+                        .is_some_and(|height| height < opened_at || height > deadline)
+                    {
+                        return Err(ParliamentReducerErrorV1::InvalidCertificateHeight);
+                    }
+                    match body.public_finding_no_result_kind {
+                        Some(ParliamentNoResultKindV1::PublicFindingDeadlineExpired)
+                            if body
+                                .public_finding_no_result_height
+                                .is_none_or(|height| height <= deadline) =>
+                        {
+                            return Err(ParliamentReducerErrorV1::PublicFindingFailureKindMismatch);
+                        }
+                        Some(ParliamentNoResultKindV1::PublicFindingQuorumUnreachable)
+                            if body
+                                .public_finding_no_result_height
+                                .is_none_or(|height| height < opened_at || height > deadline) =>
+                        {
+                            return Err(ParliamentReducerErrorV1::PublicFindingFailureKindMismatch);
+                        }
+                        _ => {}
+                    }
+                }
             }
             if body.result_root.is_some() != body.result_height.is_some()
                 || body
@@ -3402,11 +4618,13 @@ impl ParliamentAttemptStateV1 {
                 survivor_freeze_height,
                 commitment_close_height,
                 expected_release_height,
+                opening_deadline_height,
             ) = timed_ballot_schedule(ballot.registered_at_height, policy)?;
             if ballot.registration_close_height != registration_close_height
                 || ballot.survivor_freeze_height != survivor_freeze_height
                 || ballot.commitment_close_height != commitment_close_height
                 || ballot.release_height != Some(expected_release_height)
+                || ballot.opening_deadline_height != opening_deadline_height
             {
                 return Err(ParliamentReducerErrorV1::InvalidBallotSchedule);
             }
@@ -3419,6 +4637,16 @@ impl ParliamentAttemptStateV1 {
                 .ok_or(ParliamentReducerErrorV1::ImmutableBindingMismatch)?;
             if ballot.attempt.original_seats != body.instance.original_seats {
                 return Err(ParliamentReducerErrorV1::InvalidBallotCount);
+            }
+            let election = self
+                .elections
+                .get(&body.instance.election_attempt_id)
+                .ok_or(ParliamentReducerErrorV1::ImmutableBindingMismatch)?;
+            if election
+                .invitation_close_height
+                .is_none_or(|close_height| ballot.registered_at_height <= close_height)
+            {
+                return Err(ParliamentReducerErrorV1::InvalidBallotSchedule);
             }
             let tle_session_id = ballot
                 .tle_session_id
@@ -3489,7 +4717,7 @@ impl ParliamentAttemptStateV1 {
                 BallotAttemptStatusV1::NoResult | BallotAttemptStatusV1::Superseded
             );
             if terminal_failure {
-                if !ballot_failure_matches_state(ballot) {
+                if !ballot_failure_matches_state(self.attempt.id, *id, ballot) {
                     return Err(ParliamentReducerErrorV1::BallotFailureKindMismatch);
                 }
             } else if ballot.failure_root.is_some()
@@ -3556,6 +4784,9 @@ impl ParliamentAttemptStateV1 {
                         || ballot.tle_key_session_id.is_none()
                         || ballot.release_beacon_session_id.is_none()
                         || ballot.release_height.is_none()
+                        || ballot.registration_closed_at_height.is_some()
+                        || ballot.survivors_frozen_at_height.is_some()
+                        || ballot.commitment_closed_at_height.is_some()
                         || ballot.registration_root.is_some()
                         || ballot.registered_voters.is_some()
                         || ballot.dropout_root.is_some()
@@ -3568,13 +4799,16 @@ impl ParliamentAttemptStateV1 {
                         || ballot.release_pulse_id.is_some()
                         || ballot.opening_height.is_some()
                         || ballot.opening_root.is_some()
-                        || ballot.failure_root.is_some()
                     {
                         return Err(ParliamentReducerErrorV1::ImmutableBindingMismatch);
                     }
                 }
                 BallotAttemptStatusV1::SurvivorFreeze => {
-                    if ballot.registration_root.is_none()
+                    if ballot.registration_closed_at_height
+                        != Some(ballot.registration_close_height)
+                        || ballot.survivors_frozen_at_height.is_some()
+                        || ballot.commitment_closed_at_height.is_some()
+                        || ballot.registration_root.is_none()
                         || ballot.registered_voters.is_none()
                         || ballot.dropout_root.is_some()
                         || ballot.survivor_root.is_some()
@@ -3586,13 +4820,18 @@ impl ParliamentAttemptStateV1 {
                         || ballot.release_pulse_id.is_some()
                         || ballot.opening_height.is_some()
                         || ballot.opening_root.is_some()
-                        || ballot.failure_root.is_some()
                     {
                         return Err(ParliamentReducerErrorV1::ImmutableBindingMismatch);
                     }
                 }
                 BallotAttemptStatusV1::TimedCommitment => {
-                    if ballot.dropout_root.is_none()
+                    if ballot.registration_closed_at_height
+                        != Some(ballot.registration_close_height)
+                        || ballot.survivors_frozen_at_height != Some(ballot.survivor_freeze_height)
+                        || ballot.commitment_closed_at_height.is_some()
+                        || ballot.registration_root.is_none()
+                        || ballot.registered_voters.is_none()
+                        || ballot.dropout_root.is_none()
                         || ballot.survivor_root.is_none()
                         || ballot.survivors.is_none()
                         || ballot.survivors == Some(0)
@@ -3603,13 +4842,17 @@ impl ParliamentAttemptStateV1 {
                         || ballot.release_pulse_id.is_some()
                         || ballot.opening_height.is_some()
                         || ballot.opening_root.is_some()
-                        || ballot.failure_root.is_some()
                     {
                         return Err(ParliamentReducerErrorV1::ImmutableBindingMismatch);
                     }
                 }
                 BallotAttemptStatusV1::AwaitingRelease => {
-                    if ballot.corpus_root.is_none()
+                    if ballot.registration_closed_at_height
+                        != Some(ballot.registration_close_height)
+                        || ballot.survivors_frozen_at_height != Some(ballot.survivor_freeze_height)
+                        || ballot.commitment_closed_at_height
+                            != Some(ballot.commitment_close_height)
+                        || ballot.corpus_root.is_none()
                         || ballot.accepted_ballots.is_none()
                         || ballot.timed_commitment_root.is_none()
                         || ballot.tle_session_id.is_none()
@@ -3619,34 +4862,46 @@ impl ParliamentAttemptStateV1 {
                         || ballot.release_pulse_id.is_some()
                         || ballot.opening_height.is_some()
                         || ballot.opening_root.is_some()
-                        || ballot.failure_root.is_some()
                     {
                         return Err(ParliamentReducerErrorV1::ImmutableBindingMismatch);
                     }
                 }
                 BallotAttemptStatusV1::Opening => {
-                    if ballot.release_pulse_id.is_none()
+                    if ballot.registration_closed_at_height
+                        != Some(ballot.registration_close_height)
+                        || ballot.survivors_frozen_at_height != Some(ballot.survivor_freeze_height)
+                        || ballot.commitment_closed_at_height
+                            != Some(ballot.commitment_close_height)
+                        || ballot.release_pulse_id.is_none()
                         || ballot.opening_height.is_none()
                         || ballot.opening_height < ballot.release_height
+                        || ballot.opening_height > Some(ballot.opening_deadline_height)
                         || ballot.opening_root.is_some()
-                        || ballot.failure_root.is_some()
                     {
                         return Err(ParliamentReducerErrorV1::ImmutableBindingMismatch);
                     }
                 }
                 BallotAttemptStatusV1::Finalized => {
-                    if ballot.opening_root.is_none()
+                    if ballot.registration_closed_at_height
+                        != Some(ballot.registration_close_height)
+                        || ballot.survivors_frozen_at_height != Some(ballot.survivor_freeze_height)
+                        || ballot.commitment_closed_at_height
+                            != Some(ballot.commitment_close_height)
+                        || ballot.opening_root.is_none()
                         || ballot.opening_height.is_none()
                         || ballot.opening_height < ballot.release_height
+                        || ballot.opening_height > Some(ballot.opening_deadline_height)
                         || body.ballot_binding.is_none()
                         || ballot.tally.is_none()
                         || ballot.outcome.is_none()
-                        || ballot.failure_root.is_some()
                         || body.result_height.is_none_or(|height| {
                             ballot
                                 .opening_height
                                 .is_none_or(|opening_height| height < opening_height)
                         })
+                        || body
+                            .result_height
+                            .is_none_or(|height| height > ballot.opening_deadline_height)
                     {
                         return Err(ParliamentReducerErrorV1::IncompleteCertificate);
                     }
@@ -3656,10 +4911,26 @@ impl ParliamentAttemptStateV1 {
                     let outcome = ballot
                         .outcome
                         .ok_or(ParliamentReducerErrorV1::IncompleteCertificate)?;
+                    let opening_root = ballot
+                        .opening_root
+                        .ok_or(ParliamentReducerErrorV1::IncompleteCertificate)?;
+                    let result_height = body
+                        .result_height
+                        .ok_or(ParliamentReducerErrorV1::IncompleteCertificate)?;
                     if tally
                         .decision()
                         .map_err(|_| ParliamentReducerErrorV1::InvalidTally)?
                         != outcome
+                        || body.result_root
+                            != Some(parliament_ballot_result_root_v1(
+                                self.attempt.id,
+                                body.instance.id,
+                                *id,
+                                opening_root,
+                                tally,
+                                outcome,
+                                result_height,
+                            ))
                         || self.build_ballot_binding(*id)?
                             != body
                                 .ballot_binding
@@ -3669,14 +4940,10 @@ impl ParliamentAttemptStateV1 {
                     }
                 }
                 BallotAttemptStatusV1::NoResult => {
-                    if ballot.failure_root.is_none() {
-                        return Err(ParliamentReducerErrorV1::ImmutableBindingMismatch);
-                    }
+                    // The exact terminal phase and frozen field set were checked above.
                 }
                 BallotAttemptStatusV1::Superseded => {
-                    if ballot.failure_root.is_none() {
-                        return Err(ParliamentReducerErrorV1::ImmutableBindingMismatch);
-                    }
+                    // Supersession preserves the exact validated no-result transcript.
                 }
             }
         }
@@ -3701,15 +4968,30 @@ impl ParliamentAttemptStateV1 {
             if self.active_ballots.get(body_id) != Some(&latest_id) {
                 return Err(ParliamentReducerErrorV1::ImmutableBindingMismatch);
             }
+            let mut previous_failure_height = None;
             for id in sequences.values() {
-                let status = self
+                let ballot = self
                     .ballots
                     .get(id)
-                    .ok_or(ParliamentReducerErrorV1::RetrySequenceMismatch)?
-                    .attempt
-                    .status;
+                    .ok_or(ParliamentReducerErrorV1::RetrySequenceMismatch)?;
+                let status = ballot.attempt.status;
                 if (*id == latest_id && status == BallotAttemptStatusV1::Superseded)
                     || (*id != latest_id && status != BallotAttemptStatusV1::Superseded)
+                    || previous_failure_height
+                        .is_some_and(|failure_height| ballot.registered_at_height < failure_height)
+                {
+                    return Err(ParliamentReducerErrorV1::RetrySequenceMismatch);
+                }
+                previous_failure_height = ballot.failure_height;
+            }
+            let latest = self
+                .ballots
+                .get(&latest_id)
+                .ok_or(ParliamentReducerErrorV1::RetrySequenceMismatch)?;
+            if latest.attempt.status == BallotAttemptStatusV1::NoResult {
+                let retry_budget_exhausted = latest.attempt.sequence == latest.max_ballot_retries;
+                if retry_budget_exhausted
+                    != (self.attempt.status == GovernanceAttemptStatusV1::Rejected)
                 {
                     return Err(ParliamentReducerErrorV1::RetrySequenceMismatch);
                 }
@@ -3839,21 +5121,24 @@ impl ParliamentAttemptStateV1 {
         }
 
         for (body_role, binding) in &self.body_bindings {
-            if binding.body != *body_role
-                || self.build_body_binding(binding.body_instance_id)? != *binding
-            {
+            let rebuilt = self.build_body_binding(binding.body_instance_id)?;
+            if binding.body != *body_role || &rebuilt != binding {
                 return Err(ParliamentReducerErrorV1::CertificateBindingMismatch);
             }
         }
         let policy_binding = self.body_bindings.get(&ParliamentBody::PolicyJury);
-        if let Some(policy_ballot) = policy_binding.and_then(|binding| binding.ballot) {
-            let requires_confirmation = policy_ballot
-                .tally
-                .requires_confirmation()
-                .map_err(|_| ParliamentReducerErrorV1::InvalidTally)?;
-            if requires_confirmation != confirmation_required {
-                return Err(ParliamentReducerErrorV1::IncompleteCertificate);
-            }
+        let requires_confirmation = policy_binding
+            .and_then(|binding| binding.ballot)
+            .map(|policy_ballot| {
+                policy_ballot
+                    .tally
+                    .requires_confirmation()
+                    .map_err(|_| ParliamentReducerErrorV1::InvalidTally)
+            })
+            .transpose()?
+            .unwrap_or(false);
+        if requires_confirmation != confirmation_required {
+            return Err(ParliamentReducerErrorV1::IncompleteCertificate);
         }
         if let Some(certificate) = &self.certificate {
             certificate
@@ -3899,9 +5184,7 @@ impl ParliamentAttemptStateV1 {
                     }
                 }
                 GovernanceAttemptStatusV1::Enacted => {
-                    if self
-                        .terminal_height
-                        .is_none_or(|height| height < certificate.enact_at_height)
+                    if self.terminal_height != Some(certificate.enact_at_height)
                         || self.superseding_head.is_some()
                         || self.execution_failure_root.is_some()
                     {
@@ -3909,9 +5192,7 @@ impl ParliamentAttemptStateV1 {
                     }
                 }
                 GovernanceAttemptStatusV1::Superseded => {
-                    if self
-                        .terminal_height
-                        .is_none_or(|height| height < certificate.enact_at_height)
+                    if self.terminal_height != Some(certificate.enact_at_height)
                         || self
                             .superseding_head
                             .is_none_or(|head| head == certificate.expected_head)
@@ -3921,13 +5202,13 @@ impl ParliamentAttemptStateV1 {
                     }
                 }
                 GovernanceAttemptStatusV1::ExecutionFailed => {
-                    if self
-                        .terminal_height
-                        .is_none_or(|height| height < certificate.enact_at_height)
+                    if self.terminal_height != Some(certificate.enact_at_height)
                         || self.superseding_head.is_some()
-                        || self
-                            .execution_failure_root
-                            .is_none_or(|root| root_is_zero(&root))
+                        || self.execution_failure_root
+                            != Some(parliament_execution_failure_root_v1(
+                                certificate,
+                                certificate.enact_at_height,
+                            ))
                     {
                         return Err(ParliamentReducerErrorV1::CertificateBindingMismatch);
                     }
@@ -3954,11 +5235,341 @@ impl ParliamentAttemptStateV1 {
     }
 }
 
+#[cfg(any(test, feature = "iroha-core-tests"))]
+fn enacted_fixture_governance(
+    requirements: &[RequiredParliamentBodyV1],
+) -> iroha_config::parameters::actual::Governance {
+    let mut governance = iroha_config::parameters::actual::Governance {
+        parliament_alternate_size: Some(0),
+        ..iroha_config::parameters::actual::Governance::default()
+    };
+    for requirement in requirements {
+        match requirement.body {
+            ParliamentBody::RulesCommittee => governance.rules_committee_size = 3,
+            ParliamentBody::AgendaCouncil => governance.agenda_council_size = 3,
+            ParliamentBody::InterestPanel => governance.interest_panel_size = 3,
+            ParliamentBody::ReviewPanel => governance.review_panel_size = 3,
+            ParliamentBody::CoordinationCouncil => governance.coordination_council_size = 3,
+            ParliamentBody::MpcCommittee => governance.mpc_committee_size = 3,
+            ParliamentBody::FmaCommittee => governance.fma_committee_size = 3,
+            ParliamentBody::OversightCommittee => governance.oversight_committee_size = 3,
+            ParliamentBody::PolicyJury => governance.policy_jury_size = 3,
+            ParliamentBody::ConfirmationJury => governance.confirmation_jury_size = 3,
+        }
+    }
+    governance
+}
+
+#[cfg(any(test, feature = "iroha-core-tests"))]
+fn complete_enacted_fixture_body(
+    attempt: &mut ParliamentAttemptStateV1,
+    requirement: RequiredParliamentBodyV1,
+    election_attempt_id: BodyElectionAttemptId,
+    result_tag: u8,
+) {
+    let governance_attempt_id = attempt.attempt().id;
+    attempt
+        .begin_invitation_acceptance(governance_attempt_id, election_attempt_id, 2, 1)
+        .expect("open enacted-attempt fixture invitation window");
+    let members = attempt
+        .election(&election_attempt_id)
+        .expect("drawn enacted-attempt fixture election")
+        .primary_assignments()
+        .iter()
+        .map(|assignment| assignment.member.clone())
+        .collect::<Vec<_>>();
+    for member in &members {
+        attempt
+            .record_invitation_response(governance_attempt_id, election_attempt_id, member, true, 2)
+            .expect("accept enacted-attempt fixture invitation");
+    }
+    let body_instance_id = attempt
+        .seal_body_roster(governance_attempt_id, election_attempt_id, 3)
+        .expect("seal enacted-attempt fixture roster");
+    let mut phases = vec![
+        DeliberationPhaseV1::Orientation,
+        DeliberationPhaseV1::Evidence,
+        DeliberationPhaseV1::Questions,
+        DeliberationPhaseV1::Responses,
+        DeliberationPhaseV1::Deliberation,
+        DeliberationPhaseV1::Reflection,
+    ];
+    if requirement.decision_mode == ParliamentDecisionModeV1::HiddenBindingBallot {
+        phases.push(DeliberationPhaseV1::Vote);
+    }
+    for phase in phases {
+        attempt
+            .advance_body_phase(governance_attempt_id, body_instance_id, phase, 3, 1)
+            .expect("advance enacted-attempt fixture deliberation");
+    }
+    match requirement.decision_mode {
+        ParliamentDecisionModeV1::PublicFinding => {
+            let result_root = [result_tag.max(1); 32];
+            let mut finalized = false;
+            for member in &members {
+                finalized = attempt
+                    .endorse_public_finding(
+                        governance_attempt_id,
+                        body_instance_id,
+                        result_root,
+                        member,
+                        3,
+                    )
+                    .expect("endorse enacted-attempt fixture public finding");
+                if finalized {
+                    break;
+                }
+            }
+            assert!(
+                finalized,
+                "fixture seats must reach the public-finding quorum"
+            );
+        }
+        ParliamentDecisionModeV1::HiddenBindingBallot => {
+            let root = |tag: u8| [tag.max(1); 32];
+            let ballot_attempt_id = BallotAttemptId::derive_v1(body_instance_id, 0);
+            let release_beacon_session_id = BeaconSessionId::new(root(0xD0));
+            let tle_key_session_id = TleKeySessionId::new(root(0xD1));
+            let release_height = 7;
+            let tle_session_id = TleSessionId::derive_v1(
+                ballot_attempt_id,
+                tle_key_session_id,
+                release_beacon_session_id,
+                release_height,
+            );
+            attempt
+                .register_ballot_attempt(
+                    governance_attempt_id,
+                    body_instance_id,
+                    ballot_attempt_id,
+                    0,
+                    tle_session_id,
+                    tle_key_session_id,
+                    release_beacon_session_id,
+                    3,
+                    ParliamentTimedOvn {
+                        registration_phase_blocks: 1,
+                        survivor_freeze_phase_blocks: 1,
+                        commitment_phase_blocks: 1,
+                        release_delay_blocks: 1,
+                        opening_phase_blocks: 1,
+                        max_ballot_retries: 2,
+                        max_corpus_entries: 1_000,
+                    },
+                    release_height,
+                )
+                .expect("register enacted-attempt fixture ballot");
+            let registration_root = root(0xD2);
+            let dropout_root = root(0xD3);
+            let survivor_root = root(0xD4);
+            let no_recovery_root = root(0xD5);
+            let corpus_root = root(0xD6);
+            let timed_commitment_root = root(0xD7);
+            attempt
+                .close_ballot_registration(
+                    governance_attempt_id,
+                    ballot_attempt_id,
+                    registration_root,
+                    3,
+                    4,
+                )
+                .expect("close enacted-attempt fixture ballot registration");
+            attempt
+                .freeze_ballot_survivors(
+                    governance_attempt_id,
+                    ballot_attempt_id,
+                    dropout_root,
+                    survivor_root,
+                    3,
+                    no_recovery_root,
+                    5,
+                )
+                .expect("freeze enacted-attempt fixture ballot survivors");
+            attempt
+                .freeze_timed_ovn_corpus(
+                    governance_attempt_id,
+                    ballot_attempt_id,
+                    corpus_root,
+                    survivor_root,
+                    3,
+                    timed_commitment_root,
+                    6,
+                )
+                .expect("freeze enacted-attempt fixture timed corpus");
+            attempt
+                .begin_ballot_opening_batch(
+                    governance_attempt_id,
+                    vec![ballot_attempt_id],
+                    release_beacon_session_id,
+                    release_height,
+                    release_height,
+                    BeaconPulseId::new(root(0xD8)),
+                )
+                .expect("open enacted-attempt fixture ballot");
+            let outcome = attempt
+                .finalize_opened_ballot(
+                    governance_attempt_id,
+                    ballot_attempt_id,
+                    corpus_root,
+                    no_recovery_root,
+                    tle_session_id,
+                    root(0xD9),
+                    3,
+                    ParliamentAggregateTallyV1 {
+                        original_seats: 3,
+                        accepted_ballots: 3,
+                        aye: 2,
+                        nay: 1,
+                        abstain: 0,
+                    },
+                    release_height,
+                )
+                .expect("finalize enacted-attempt fixture ballot");
+            assert_eq!(outcome, ParliamentAggregateOutcomeV1::Approved);
+        }
+    }
+}
+
+/// Build one complete, proposal-bound enacted Parliament attempt for integration fixtures.
+///
+/// This helper is available only to Core's explicit test corridor. It deliberately exercises the
+/// reducer instead of manufacturing certificate-only compatibility state.
+#[cfg(any(test, feature = "iroha-core-tests"))]
+#[doc(hidden)]
+pub fn enacted_parliament_attempt_for_testing(
+    proposal: &ProposalKind,
+    mut candidates: Vec<AccountId>,
+    network_id: &NetworkId,
+    enact_at_height: u64,
+) -> ParliamentAttemptStateV1 {
+    assert!(
+        enact_at_height > 9,
+        "fixture enactment must follow the complete reducer transcript"
+    );
+    candidates.sort_unstable();
+    candidates.dedup();
+    assert!(candidates.len() >= 3, "fixture requires three candidates");
+    let proposal_content_id = ProposalContentId::new(proposal.fingerprint());
+    let governance_attempt_id = GovernanceAttemptId::derive_v1(proposal_content_id, 0);
+    let (risk_tier, requirements) = parliament_attempt_policy_v1(proposal);
+    let mut attempt = ParliamentAttemptStateV1::try_new(
+        GovernanceAttemptV1 {
+            id: governance_attempt_id,
+            proposal_content_id,
+            sequence: 0,
+            risk_tier,
+            stage: GovernanceStageV1::Qualification,
+            status: GovernanceAttemptStatusV1::Active,
+        },
+        PARLIAMENT_GOVERNANCE_POLICY_VERSION_V1,
+        proposal.effect_preimage_hash_v1(),
+        GovernanceExpectedHeadV1::Absent(
+            iroha_data_model::governance::types::GovernanceExpectedHeadAbsentV1 {
+                subject_id: proposal
+                    .governed_subject_id_v1()
+                    .expect("derive fixture proposal subject"),
+            },
+        ),
+        requirements.clone(),
+    )
+    .expect("create proposal-bound enacted-attempt fixture");
+    attempt
+        .complete_qualification(governance_attempt_id)
+        .expect("complete enacted-attempt fixture qualification");
+    let candidate_count = u32::try_from(candidates.len()).expect("candidate count fits u32");
+    let sortition_session = BeaconSessionId::new([0xB0; 32]);
+    let mut request_ids = Vec::with_capacity(requirements.len());
+    for requirement in &requirements {
+        let election_attempt_id =
+            BodyElectionAttemptId::derive_v1(governance_attempt_id, requirement.body, 0);
+        let request = SortitionRequestV1::try_new_canonical(
+            governance_attempt_id,
+            election_attempt_id,
+            requirement.body,
+            parliament_candidate_root_v1(governance_attempt_id, requirement.body, &candidates),
+            candidate_count,
+            3,
+            1,
+            2,
+            sortition_session,
+            None,
+        )
+        .expect("construct enacted-attempt fixture sortition request");
+        request_ids.push(request.id);
+        attempt
+            .register_sortition_request(governance_attempt_id, 0, request, candidates.clone())
+            .expect("register enacted-attempt fixture sortition request");
+    }
+    request_ids.sort_unstable();
+    let sortition_pulse_id = BeaconPulseId::new([0xB1; 32]);
+    attempt
+        .consume_sortition_pulse_batch(
+            governance_attempt_id,
+            request_ids,
+            sortition_session,
+            2,
+            sortition_pulse_id,
+            *sortition_pulse_id.as_bytes(),
+            network_id,
+            &enacted_fixture_governance(&requirements),
+        )
+        .expect("consume enacted-attempt fixture sortition pulse");
+    for (index, requirement) in requirements.iter().copied().enumerate() {
+        complete_enacted_fixture_body(
+            &mut attempt,
+            requirement,
+            BodyElectionAttemptId::derive_v1(governance_attempt_id, requirement.body, 0),
+            0xC0_u8
+                .checked_add(u8::try_from(index).expect("body index fits u8"))
+                .expect("result tag does not overflow"),
+        );
+    }
+    attempt
+        .construct_certificate(governance_attempt_id, enact_at_height - 1, enact_at_height)
+        .expect("construct enacted-attempt fixture certificate");
+    attempt
+        .mark_enacted(governance_attempt_id, enact_at_height)
+        .expect("mark enacted-attempt fixture enacted");
+    attempt
+        .validate_proposal_bindings_v1(proposal)
+        .expect("enacted-attempt fixture retains exact proposal bindings");
+    attempt
+}
+
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
-    use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair};
-    use iroha_data_model::{block::BlockHeader, governance::types::GovernanceExpectedHeadAbsentV1};
+    use iroha_crypto::{
+        Algorithm, Hash, HashOf, KeyPair,
+        threshold_bls::{
+            AdaptiveThresholdBlsParameters, DasRenDealerSecret, ThresholdBlsSession,
+            TleReleasePurpose,
+        },
+        timed_ovn::TimedOvnRegistrationSecretV1,
+    };
+    use iroha_data_model::{
+        block::BlockHeader,
+        governance::types::{
+            AbiVersion, ContractAbiHash, ContractCodeHash, DeployContractProposal,
+            GovernanceExpectedHeadAbsentV1, parliament_ballot_participant_hash_v1,
+        },
+    };
+    use rand::{SeedableRng as _, rngs::StdRng};
+
+    use crate::{
+        governance::timed_ovn::{
+            TimedOvnLifecyclePhaseV1, TimedOvnLifecycleStateV1, TimedOvnSessionPublicV1,
+            timed_ovn_parameter_hash_v1,
+        },
+        kura::Kura,
+        query::store::LiveQueryStore,
+        state::{State, StateReadOnly as _, World},
+        tle_release::{
+            ParliamentTimedOvnCastingPhaseV1, TimedOvnCastingAuthorizationErrorV1,
+            ValidatedTleKeySessionV1, authorize_parliament_timed_ovn_casting_context_v1,
+            derive_parliament_timed_ovn_casting_snapshot_v1,
+        },
+    };
 
     fn root(tag: u8) -> [u8; 32] {
         [tag.max(1); 32]
@@ -3990,6 +5601,67 @@ mod tests {
         NetworkId::from_genesis_hash(HashOf::<BlockHeader>::from_untyped_unchecked(Hash::new(
             b"parliament-reducer-fixture",
         )))
+    }
+
+    fn casting_tle_key(network_id: [u8; 32], tag: u8) -> ValidatedTleKeySessionV1 {
+        let threshold_session = ThresholdBlsSession::<TleReleasePurpose>::new(
+            network_id,
+            root(tag),
+            root(tag.wrapping_add(1)),
+            4,
+            2,
+        )
+        .expect("casting fixture threshold session");
+        let parameters =
+            AdaptiveThresholdBlsParameters::derive(&threshold_session).expect("parameters");
+        let mut rng = StdRng::from_seed([tag.wrapping_add(2); 32]);
+        let dealers = (1_u16..=3)
+            .map(|index| {
+                DasRenDealerSecret::generate_with_rng(&parameters, index, &mut rng)
+                    .expect("dealer")
+                    .1
+            })
+            .collect::<Vec<_>>();
+        ValidatedTleKeySessionV1::from_qualified_dealers(
+            threshold_session,
+            &dealers,
+            &[1, 2, 3],
+            root(tag.wrapping_add(3)),
+        )
+        .expect("casting fixture TLE session")
+    }
+
+    fn casting_state_at_height(
+        attempt: ParliamentAttemptStateV1,
+        lifecycle: TimedOvnLifecycleStateV1,
+        tle_key: Option<&ValidatedTleKeySessionV1>,
+        stored_key: Option<TleKeySessionId>,
+        height: u64,
+    ) -> State {
+        let mut world = World::new();
+        world
+            .parliament_attempts
+            .insert(attempt.attempt().id, attempt);
+        if let (Some(key), Some(storage_id)) = (tle_key, stored_key) {
+            world
+                .tle_key_sessions
+                .insert(storage_id, key.public_state().clone());
+        }
+        world.timed_ovn_evidence.insert(
+            BallotAttemptId::new(lifecycle.ballot_attempt_id()),
+            lifecycle,
+        );
+        let mut state = State::new_for_testing(
+            world,
+            Kura::blank_kura_for_testing(),
+            LiveQueryStore::start_test(),
+        );
+        for index in 0..height {
+            state.push_block_hash_for_testing(HashOf::<BlockHeader>::from_untyped_unchecked(
+                Hash::new(index.to_be_bytes()),
+            ));
+        }
+        state
     }
 
     fn governance_for_pending_draws(state: &ParliamentAttemptStateV1) -> Governance {
@@ -4126,6 +5798,97 @@ mod tests {
         }])
     }
 
+    fn deploy_contract_proposal() -> ProposalKind {
+        ProposalKind::DeployContract(DeployContractProposal {
+            contract_address: "irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw"
+                .parse()
+                .expect("canonical contract address"),
+            code_hash: ContractCodeHash::new(root(41)),
+            abi_hash: ContractAbiHash::new(root(42)),
+            abi_version: AbiVersion::new(1),
+            manifest_provenance: None,
+        })
+    }
+
+    fn proposal_bound_state(proposal: &ProposalKind) -> ParliamentAttemptStateV1 {
+        let proposal_content_id = ProposalContentId::new(proposal.fingerprint());
+        let (risk_tier, required_bodies) = parliament_attempt_policy_v1(proposal);
+        ParliamentAttemptStateV1::try_new(
+            GovernanceAttemptV1 {
+                id: GovernanceAttemptId::derive_v1(proposal_content_id, 0),
+                proposal_content_id,
+                sequence: 0,
+                risk_tier,
+                stage: GovernanceStageV1::Qualification,
+                status: GovernanceAttemptStatusV1::Active,
+            },
+            PARLIAMENT_GOVERNANCE_POLICY_VERSION_V1,
+            proposal.effect_preimage_hash_v1(),
+            GovernanceExpectedHeadV1::Absent(GovernanceExpectedHeadAbsentV1 {
+                subject_id: proposal
+                    .governed_subject_id_v1()
+                    .expect("derive proposal subject"),
+            }),
+            required_bodies,
+        )
+        .expect("canonical proposal-bound reducer state")
+    }
+
+    #[test]
+    fn proposal_binding_validation_rejects_weakened_persisted_policy() {
+        let proposal = deploy_contract_proposal();
+        let state = proposal_bound_state(&proposal);
+        state
+            .validate_proposal_bindings_v1(&proposal)
+            .expect("canonical proposal bindings");
+
+        let mut escalated = state.clone();
+        escalated.attempt.risk_tier = RiskTierV1::Constitutional;
+        escalated
+            .validate_proposal_bindings_v1(&proposal)
+            .expect("upward-only risk escalation remains valid");
+
+        let mut downgraded = state.clone();
+        downgraded.attempt.risk_tier = RiskTierV1::Routine;
+        assert_eq!(
+            downgraded.validate_proposal_bindings_v1(&proposal),
+            Err(ParliamentReducerErrorV1::ProposalBindingMismatch)
+        );
+
+        let mut substituted_effect = state.clone();
+        substituted_effect.effect_preimage_hash = root(99);
+        substituted_effect
+            .validate()
+            .expect("an internally valid effect still needs its proposal binding");
+        assert_eq!(
+            substituted_effect.validate_proposal_bindings_v1(&proposal),
+            Err(ParliamentReducerErrorV1::ProposalBindingMismatch)
+        );
+
+        let mut substituted_subject = state.clone();
+        substituted_subject.expected_head =
+            GovernanceExpectedHeadV1::Absent(GovernanceExpectedHeadAbsentV1 {
+                subject_id: root(100),
+            });
+        substituted_subject
+            .validate()
+            .expect("an internally valid subject still needs its proposal binding");
+        assert_eq!(
+            substituted_subject.validate_proposal_bindings_v1(&proposal),
+            Err(ParliamentReducerErrorV1::ProposalBindingMismatch)
+        );
+
+        let mut weakened_pipeline = state;
+        weakened_pipeline.required_bodies.remove(0);
+        weakened_pipeline
+            .validate()
+            .expect("an ordered subset still needs the proposal's exact base policy");
+        assert_eq!(
+            weakened_pipeline.validate_proposal_bindings_v1(&proposal),
+            Err(ParliamentReducerErrorV1::ProposalBindingMismatch)
+        );
+    }
+
     struct BodyFixture {
         state: ParliamentAttemptStateV1,
         body_id: BodyInstanceId,
@@ -4203,9 +5966,90 @@ mod tests {
             DeliberationPhaseV1::Vote,
         ] {
             state
-                .advance_body_phase(attempt_id, body_id, phase)
+                .advance_body_phase(attempt_id, body_id, phase, 22, 10)
                 .expect("advance one exact deliberation phase");
         }
+    }
+
+    fn timed_ovn_policy() -> ParliamentTimedOvn {
+        ParliamentTimedOvn {
+            registration_phase_blocks: 2,
+            survivor_freeze_phase_blocks: 2,
+            commitment_phase_blocks: 2,
+            release_delay_blocks: 4,
+            opening_phase_blocks: 2,
+            max_ballot_retries: 2,
+            max_corpus_entries: 1_000,
+        }
+    }
+
+    #[test]
+    fn beacon_demand_tracks_sortition_timeout_and_frozen_ballot_release_slot() {
+        let mut sortition = policy_only_state();
+        let governance_attempt_id = sortition.attempt.id;
+        sortition
+            .complete_qualification(governance_attempt_id)
+            .expect("enter Policy Jury stage");
+        let session_id = beacon_session(81);
+        let (request, candidate_snapshot) = sortition_request(
+            governance_attempt_id,
+            0,
+            ParliamentBody::PolicyJury,
+            82,
+            3,
+            3,
+            10,
+            20,
+            session_id,
+            None,
+        );
+        let election_attempt_id = request.body_election_attempt_id;
+        sortition
+            .register_sortition_request(governance_attempt_id, 0, request, candidate_snapshot)
+            .expect("register immutable sortition pulse slot");
+        assert!(sortition.requires_beacon_pulse_at(session_id, 20));
+        assert!(!sortition.requires_beacon_pulse_at(beacon_session(83), 20));
+        assert_eq!(
+            sortition.fail_body_election_no_roster(governance_attempt_id, election_attempt_id, 20,),
+            Err(ParliamentReducerErrorV1::SortitionPulseStillPending)
+        );
+        sortition
+            .fail_body_election_no_roster(governance_attempt_id, election_attempt_id, 21)
+            .expect("missing sortition pulse becomes an objective retryable failure");
+        assert!(!sortition.requires_beacon_pulse_at(session_id, 20));
+
+        let BodyFixture {
+            mut state, body_id, ..
+        } = sealed_policy_body(3);
+        advance_to_vote(&mut state, body_id);
+        let governance_attempt_id = state.attempt.id;
+        let ballot_id = BallotAttemptId::derive_v1(body_id, 0);
+        let release_session_id = beacon_session(84);
+        let release_height = 40;
+        let tle_key_session_id = tle_key_session(85);
+        let tle_session_id = TleSessionId::derive_v1(
+            ballot_id,
+            tle_key_session_id,
+            release_session_id,
+            release_height,
+        );
+        state
+            .register_ballot_attempt(
+                governance_attempt_id,
+                body_id,
+                ballot_id,
+                0,
+                tle_session_id,
+                tle_key_session_id,
+                release_session_id,
+                30,
+                timed_ovn_policy(),
+                release_height,
+            )
+            .expect("register arbitrary frozen ballot release slot");
+        assert!(state.requires_beacon_pulse_at(release_session_id, release_height));
+        assert!(state.requires_beacon_pulse_at(release_session_id, release_height));
+        assert!(!state.requires_beacon_pulse_at(release_session_id, release_height - 1));
     }
 
     struct OpeningFixture {
@@ -4242,11 +6086,12 @@ mod tests {
                 tle_key_session_id,
                 release_beacon_session_id,
                 30,
+                timed_ovn_policy(),
                 release_height,
             )
             .expect("register private ballot");
         state
-            .close_ballot_registration(attempt_id, ballot_id, root(19), accepted)
+            .close_ballot_registration(attempt_id, ballot_id, root(19), accepted, 32)
             .expect("freeze registration");
         state
             .freeze_ballot_survivors(
@@ -4256,6 +6101,7 @@ mod tests {
                 root(29),
                 accepted,
                 root(22),
+                34,
             )
             .expect("freeze survivor roster");
         state
@@ -4266,6 +6112,7 @@ mod tests {
                 root(29),
                 accepted,
                 root(25),
+                36,
             )
             .expect("freeze complete timed OVN corpus");
         assert_eq!(
@@ -4327,7 +6174,6 @@ mod tests {
                     nay,
                     abstain,
                 },
-                root(28),
                 41,
             )
             .expect("finalize policy aggregate")
@@ -4370,6 +6216,42 @@ mod tests {
     }
 
     #[test]
+    fn attempt_rejects_an_inert_compare_and_set_subject() {
+        let required = vec![RequiredParliamentBodyV1 {
+            body: ParliamentBody::PolicyJury,
+            decision_mode: ParliamentDecisionModeV1::HiddenBindingBallot,
+        }];
+        assert_eq!(
+            ParliamentAttemptStateV1::try_new(
+                attempt(),
+                7,
+                root(3),
+                GovernanceExpectedHeadV1::Absent(GovernanceExpectedHeadAbsentV1 {
+                    subject_id: [0; 32],
+                }),
+                required.clone(),
+            ),
+            Err(ParliamentReducerErrorV1::ImmutableBindingMismatch)
+        );
+        assert_eq!(
+            ParliamentAttemptStateV1::try_new(
+                attempt(),
+                7,
+                root(3),
+                GovernanceExpectedHeadV1::Present(
+                    iroha_data_model::governance::types::GovernanceExpectedHeadPresentV1 {
+                        subject_id: root(4),
+                        version: 1,
+                        head_root: [0; 32],
+                    },
+                ),
+                required,
+            ),
+            Err(ParliamentReducerErrorV1::ImmutableBindingMismatch)
+        );
+    }
+
+    #[test]
     fn simultaneous_sortition_consumes_one_exact_canonical_batch() {
         let mut state = state(vec![
             RequiredParliamentBodyV1 {
@@ -4385,22 +6267,26 @@ mod tests {
         state.complete_qualification(id).expect("enter interest");
         let mut request_ids = Vec::new();
         for body in [ParliamentBody::InterestPanel, ParliamentBody::PolicyJury] {
-            let (request, candidate_snapshot) = sortition_request(
-                id,
-                0,
-                body,
-                12,
-                3,
-                3,
-                10,
-                20,
-                beacon_session(30),
-                None,
-            );
+            let (request, candidate_snapshot) =
+                sortition_request(id, 0, body, 12, 3, 3, 10, 20, beacon_session(30), None);
             request_ids.push(request.id);
             state
                 .register_sortition_request(id, 0, request, candidate_snapshot)
                 .expect("register simultaneous request");
+            if body == ParliamentBody::InterestPanel {
+                assert_eq!(
+                    consume_sortition(
+                        &mut state,
+                        id,
+                        request_ids.clone(),
+                        beacon_session(30),
+                        20,
+                        pulse_id(31),
+                    ),
+                    Err(ParliamentReducerErrorV1::InvalidAssignmentPlan),
+                    "the first draw must cover every initial body in one future-pulse batch"
+                );
+            }
         }
         request_ids.sort_unstable();
         assert_eq!(
@@ -4644,7 +6530,7 @@ mod tests {
         for (index, expected) in phases.into_iter().enumerate() {
             for candidate in phases {
                 let mut probe = cursor.clone();
-                let result = probe.advance_body_phase(id, body_id, candidate);
+                let result = probe.advance_body_phase(id, body_id, candidate, 22, 10);
                 assert_eq!(
                     result.is_ok(),
                     candidate == expected,
@@ -4652,11 +6538,11 @@ mod tests {
                 );
             }
             cursor
-                .advance_body_phase(id, body_id, expected)
+                .advance_body_phase(id, body_id, expected, 22, 10)
                 .expect("exact next phase succeeds");
         }
         assert_eq!(
-            cursor.advance_body_phase(id, body_id, DeliberationPhaseV1::Vote),
+            cursor.advance_body_phase(id, body_id, DeliberationPhaseV1::Vote, 22, 10),
             Err(ParliamentReducerErrorV1::InvalidLifecycleTransition(
                 ParliamentReducerEntityV1::BodyInstance
             ))
@@ -4669,18 +6555,21 @@ mod tests {
             mut state, body_id, ..
         } = sealed_policy_body(3);
         let id = state.attempt.id;
-        let absent = state
-            .body(&body_id)
-            .expect("body")
-            .assignments()
-            .first()
-            .expect("fixture has a seat")
-            .assignment_id;
-        state
-            .record_attempt_absence(id, body_id, absent)
-            .expect("record first absence");
+        let assignments = state.body(&body_id).expect("body").assignments().to_vec();
+        let absent = assignments.first().expect("fixture has a seat");
+        let other_member = &assignments
+            .get(1)
+            .expect("fixture has a second seat")
+            .member;
         assert_eq!(
-            state.record_attempt_absence(id, body_id, absent),
+            state.record_attempt_absence(id, body_id, absent.assignment_id, other_member, 22),
+            Err(ParliamentReducerErrorV1::UnauthorizedBodyMember)
+        );
+        state
+            .record_attempt_absence(id, body_id, absent.assignment_id, &absent.member, 22)
+            .expect("the exact seated member may declare their own absence");
+        assert_eq!(
+            state.record_attempt_absence(id, body_id, absent.assignment_id, &absent.member, 22),
             Err(ParliamentReducerErrorV1::InvalidLifecycleTransition(
                 ParliamentReducerEntityV1::BodyInstance
             ))
@@ -4710,15 +6599,16 @@ mod tests {
                 tle_key_session_id,
                 release_beacon_session_id,
                 30,
+                timed_ovn_policy(),
                 release_height,
             )
             .expect("register ballot");
         assert_eq!(
-            state.close_ballot_registration(id, ballot, root(51), 3),
+            state.close_ballot_registration(id, ballot, root(51), 3, 32),
             Err(ParliamentReducerErrorV1::InvalidBallotCount)
         );
         state
-            .close_ballot_registration(id, ballot, root(51), 2)
+            .close_ballot_registration(id, ballot, root(51), 2, 32)
             .expect("only nonabsent seats register");
         assert_eq!(
             state
@@ -4727,6 +6617,658 @@ mod tests {
                 .attempt
                 .original_seats,
             3
+        );
+    }
+
+    #[test]
+    fn public_finding_requires_authority_bound_two_thirds_endorsement() {
+        let mut state = state(vec![
+            RequiredParliamentBodyV1 {
+                body: ParliamentBody::InterestPanel,
+                decision_mode: ParliamentDecisionModeV1::PublicFinding,
+            },
+            RequiredParliamentBodyV1 {
+                body: ParliamentBody::PolicyJury,
+                decision_mode: ParliamentDecisionModeV1::HiddenBindingBallot,
+            },
+        ]);
+        let attempt_id = state.attempt.id;
+        state
+            .complete_qualification(attempt_id)
+            .expect("enter first public body");
+        let mut request_ids = Vec::new();
+        let mut interest_election_id = None;
+        for body in [ParliamentBody::InterestPanel, ParliamentBody::PolicyJury] {
+            let (request, candidate_snapshot) = sortition_request(
+                attempt_id,
+                0,
+                body,
+                12,
+                3,
+                3,
+                10,
+                20,
+                beacon_session(90),
+                None,
+            );
+            if body == ParliamentBody::InterestPanel {
+                interest_election_id = Some(request.body_election_attempt_id);
+            }
+            request_ids.push(request.id);
+            state
+                .register_sortition_request(attempt_id, 0, request, candidate_snapshot)
+                .expect("register simultaneous body request");
+        }
+        request_ids.sort_unstable();
+        consume_sortition(
+            &mut state,
+            attempt_id,
+            request_ids,
+            beacon_session(90),
+            20,
+            pulse_id(91),
+        )
+        .expect("consume complete simultaneous draw");
+        let election_id = interest_election_id.expect("interest election id");
+        state
+            .begin_invitation_acceptance(attempt_id, election_id, 20, 1)
+            .expect("open interest invitations");
+        let members = state
+            .election(&election_id)
+            .expect("interest election")
+            .primary_assignments()
+            .iter()
+            .map(|assignment| assignment.member.clone())
+            .collect::<Vec<_>>();
+        for member in &members {
+            state
+                .record_invitation_response(attempt_id, election_id, member, true, 20)
+                .expect("selected interest member accepts");
+        }
+        let body_id = state
+            .seal_body_roster(attempt_id, election_id, 21)
+            .expect("seal public body");
+        for phase in [
+            DeliberationPhaseV1::Orientation,
+            DeliberationPhaseV1::Evidence,
+            DeliberationPhaseV1::Questions,
+            DeliberationPhaseV1::Responses,
+            DeliberationPhaseV1::Deliberation,
+            DeliberationPhaseV1::Reflection,
+        ] {
+            state
+                .advance_body_phase(attempt_id, body_id, phase, 22, 10)
+                .expect("advance public deliberation");
+        }
+        assert_eq!(
+            state
+                .body(&body_id)
+                .expect("public body")
+                .public_finding_deadline_height(),
+            Some(32)
+        );
+
+        let mut expired = state.clone();
+        assert_eq!(
+            expired.fail_public_finding_no_result(attempt_id, body_id, 32),
+            Err(ParliamentReducerErrorV1::PublicFindingWindowStillOpen)
+        );
+        assert_eq!(
+            expired.endorse_public_finding(attempt_id, body_id, root(100), &members[0], 33),
+            Err(ParliamentReducerErrorV1::PublicFindingWindowClosed)
+        );
+        expired
+            .fail_public_finding_no_result(attempt_id, body_id, 33)
+            .expect("the permissionless trigger closes an expired public finding");
+        assert_eq!(
+            expired
+                .body(&body_id)
+                .expect("expired public body")
+                .public_finding_no_result_kind(),
+            Some(ParliamentNoResultKindV1::PublicFindingDeadlineExpired)
+        );
+        expired
+            .validate()
+            .expect("deadline-expired public finding persists canonically");
+
+        let mut irreconcilable = state.clone();
+        for (member, tag) in members.iter().zip([101_u8, 102, 103]) {
+            assert!(
+                !irreconcilable
+                    .endorse_public_finding(attempt_id, body_id, root(tag), member, 22)
+                    .expect("distinct seated endorsement is accepted")
+            );
+        }
+        assert_eq!(
+            irreconcilable.attempt.status,
+            GovernanceAttemptStatusV1::Rejected
+        );
+        assert_eq!(
+            irreconcilable
+                .body(&body_id)
+                .expect("irreconcilable public body")
+                .instance
+                .status,
+            BodyInstanceStatusV1::NoResult
+        );
+        irreconcilable
+            .validate()
+            .expect("a mathematically unreachable public quorum is terminal after restore");
+
+        let mut absent_quorum = state.clone();
+        for member in &members[..2] {
+            absent_quorum
+                .record_attempt_absence(
+                    attempt_id,
+                    body_id,
+                    AssignmentId::derive_v1(election_id, member),
+                    member,
+                    22,
+                )
+                .expect("seated member records their own absence");
+        }
+        assert_eq!(
+            absent_quorum.attempt.status,
+            GovernanceAttemptStatusV1::Rejected
+        );
+        assert_eq!(
+            absent_quorum
+                .body(&body_id)
+                .expect("absence-terminal public body")
+                .instance
+                .status,
+            BodyInstanceStatusV1::NoResult
+        );
+        absent_quorum
+            .validate()
+            .expect("insufficient eligible public seats are terminal after restore");
+
+        assert_eq!(
+            state.endorse_public_finding(attempt_id, body_id, root(92), &account(99), 22),
+            Err(ParliamentReducerErrorV1::UnauthorizedBodyMember)
+        );
+        assert!(
+            !state
+                .endorse_public_finding(attempt_id, body_id, root(92), &members[0], 22)
+                .expect("first seated endorsement")
+        );
+        assert_eq!(
+            state.endorse_public_finding(attempt_id, body_id, root(93), &members[0], 22),
+            Err(ParliamentReducerErrorV1::InvalidLifecycleTransition(
+                ParliamentReducerEntityV1::BodyInstance
+            ))
+        );
+        assert!(
+            !state
+                .endorse_public_finding(attempt_id, body_id, root(93), &members[1], 22)
+                .expect("dissenting seated endorsement")
+        );
+        state
+            .validate()
+            .expect("split sub-quorum endorsements persist canonically");
+        assert!(
+            state
+                .endorse_public_finding(attempt_id, body_id, root(92), &members[2], 22)
+                .expect("second matching endorsement reaches two-thirds")
+        );
+        let body = state.body(&body_id).expect("final public body");
+        assert_eq!(body.result_root(), Some(root(92)));
+        let binding = body
+            .public_finding_binding
+            .as_ref()
+            .expect("quorum binding retained");
+        assert_eq!(binding.endorsements, 2);
+        assert_eq!(binding.quorum, 2);
+        assert_eq!(binding.endorsing_assignments.len(), 2);
+        state
+            .validate()
+            .expect("authority-bound public-finding quorum persists canonically");
+
+        let mut forged = state.clone();
+        forged
+            .bodies
+            .get_mut(&body_id)
+            .expect("public body")
+            .public_finding_binding
+            .as_mut()
+            .expect("public binding")
+            .endorsement_root = root(94);
+        assert_eq!(
+            forged.validate(),
+            Err(ParliamentReducerErrorV1::CertificateBindingMismatch)
+        );
+
+        let mut substituted_endorsers = state.clone();
+        substituted_endorsers
+            .bodies
+            .get_mut(&body_id)
+            .expect("public body")
+            .public_finding_binding
+            .as_mut()
+            .expect("public binding")
+            .endorsing_assignments[0] = AssignmentId::derive_v1(election_id, &members[1]);
+        assert_eq!(
+            substituted_endorsers.validate(),
+            Err(ParliamentReducerErrorV1::CertificateBindingMismatch)
+        );
+
+        let mut surplus_endorsement = state;
+        let dissenting_assignment = AssignmentId::derive_v1(election_id, &members[1]);
+        let body = surplus_endorsement
+            .bodies
+            .get_mut(&body_id)
+            .expect("public body");
+        body.public_finding_endorsements
+            .insert(dissenting_assignment, root(92));
+        let endorsing_assignments = body
+            .public_finding_endorsements
+            .keys()
+            .copied()
+            .collect::<Vec<_>>();
+        let binding = body
+            .public_finding_binding
+            .as_mut()
+            .expect("public binding");
+        binding.endorsements = 3;
+        binding.endorsing_assignments = endorsing_assignments;
+        binding.endorsement_root = parliament_public_finding_endorsement_root_v1(
+            attempt_id,
+            body_id,
+            root(92),
+            &binding.endorsing_assignments,
+        );
+        assert_eq!(
+            surplus_endorsement.validate(),
+            Err(ParliamentReducerErrorV1::CertificateBindingMismatch)
+        );
+    }
+
+    #[test]
+    fn casting_context_authorization_replays_all_prefix_phases_and_rejects_tampering() {
+        let BodyFixture {
+            mut state, body_id, ..
+        } = sealed_policy_body(3);
+        advance_to_vote(&mut state, body_id);
+        let governance_attempt_id = state.attempt.id;
+        let ballot_attempt_id = BallotAttemptId::derive_v1(body_id, 0);
+        let network_id = network_id();
+        let network_binding = *network_id.as_ref();
+        let tle_key = casting_tle_key(network_binding, 0xA0);
+        let tle_key_session_id = tle_key.public_state().key_session_id;
+        let release_beacon_session_id = beacon_session(0xA4);
+        let release_height = 40;
+        let tle_session_id = TleSessionId::derive_v1(
+            ballot_attempt_id,
+            tle_key_session_id,
+            release_beacon_session_id,
+            release_height,
+        );
+        state
+            .register_ballot_attempt(
+                governance_attempt_id,
+                body_id,
+                ballot_attempt_id,
+                0,
+                tle_session_id,
+                tle_key_session_id,
+                release_beacon_session_id,
+                30,
+                timed_ovn_policy(),
+                release_height,
+            )
+            .expect("register casting-context ballot");
+        let session = TimedOvnSessionPublicV1 {
+            network_id: network_binding,
+            proposal_content_id: *state.proposal_content_id().as_bytes(),
+            governance_attempt_id: *governance_attempt_id.as_bytes(),
+            body_instance_id: *body_id.as_bytes(),
+            ballot_attempt_id: *ballot_attempt_id.as_bytes(),
+            parameter_hash: timed_ovn_parameter_hash_v1(),
+            tle_key_session_id,
+            tle_key_transcript_hash: tle_key.public_state().transcript_hash,
+            tle_master_public_key: *tle_key.master_public_key().as_bytes(),
+        };
+        let mut lifecycle =
+            TimedOvnLifecycleStateV1::open_registration(session, 30, release_height, &tle_key)
+                .expect("open casting-context registration");
+        let mut rng = StdRng::from_seed([0xA5; 32]);
+        for assignment in state.body(&body_id).expect("fixture body").assignments() {
+            let participant_hash =
+                parliament_ballot_participant_hash_v1(ballot_attempt_id, &assignment.member);
+            let (_, registration) = TimedOvnRegistrationSecretV1::generate_with_rng(
+                &session.rebuild(&tle_key).expect("timed session"),
+                participant_hash,
+                &mut rng,
+            )
+            .expect("registration");
+            lifecycle = lifecycle
+                .register_participant(participant_hash, registration.to_bytes(), &tle_key)
+                .expect("authenticated registration");
+        }
+
+        let registered_state = casting_state_at_height(
+            state.clone(),
+            lifecycle.clone(),
+            Some(&tle_key),
+            Some(tle_key_session_id),
+            30,
+        );
+        let registered = authorize_parliament_timed_ovn_casting_context_v1(
+            &registered_state.query_view(),
+            ballot_attempt_id,
+        )
+        .expect("registered casting context");
+        assert_eq!(
+            registered.phase(),
+            ParliamentTimedOvnCastingPhaseV1::Registered
+        );
+        assert_eq!(registered.registration_records().len(), 3);
+        assert!(registered.survivor_participant_hashes().is_none());
+        let registered_archive = registered.archive_v1();
+        let validated_registered_archive = registered_archive
+            .validate_v1()
+            .expect("registered archive replays independently");
+        let registered_view = registered_state.query_view();
+        let (registered_snapshot, registered_bindings) =
+            derive_parliament_timed_ovn_casting_snapshot_v1(registered_view.world(), 30)
+                .expect("derive authenticated registered casting snapshot");
+        assert_eq!(registered_snapshot.count, 1);
+        assert_eq!(registered_bindings.len(), 1);
+        assert!(validated_registered_archive.matches_compact_binding_v1(&registered_bindings[0]));
+        assert_eq!(
+            derive_parliament_timed_ovn_casting_snapshot_v1(registered_view.world(), 30)
+                .expect("repeat deterministic registered casting snapshot"),
+            (registered_snapshot, registered_bindings)
+        );
+
+        for stale_height in [29, 32] {
+            let stale_state = casting_state_at_height(
+                state.clone(),
+                lifecycle.clone(),
+                Some(&tle_key),
+                Some(tle_key_session_id),
+                stale_height,
+            );
+            assert_eq!(
+                authorize_parliament_timed_ovn_casting_context_v1(
+                    &stale_state.query_view(),
+                    ballot_attempt_id,
+                )
+                .expect_err("out-of-window registered context must be rejected"),
+                TimedOvnCastingAuthorizationErrorV1::PhaseWindowInactive
+            );
+        }
+
+        let mut malformed_schedule = state.clone();
+        malformed_schedule
+            .ballots
+            .get_mut(&ballot_attempt_id)
+            .expect("casting-context ballot")
+            .registration_close_height = 30;
+        let malformed_schedule_state = casting_state_at_height(
+            malformed_schedule,
+            lifecycle.clone(),
+            Some(&tle_key),
+            Some(tle_key_session_id),
+            30,
+        );
+        assert_eq!(
+            authorize_parliament_timed_ovn_casting_context_v1(
+                &malformed_schedule_state.query_view(),
+                ballot_attempt_id,
+            )
+            .expect_err("malformed casting schedule must be rejected"),
+            TimedOvnCastingAuthorizationErrorV1::InvalidPhaseSchedule
+        );
+
+        let missing_key_state =
+            casting_state_at_height(state.clone(), lifecycle.clone(), None, None, 30);
+        assert!(matches!(
+            authorize_parliament_timed_ovn_casting_context_v1(
+                &missing_key_state.query_view(),
+                ballot_attempt_id,
+            ),
+            Err(TimedOvnCastingAuthorizationErrorV1::MissingKeySession)
+        ));
+
+        let mut tampered_registration = lifecycle.clone();
+        tampered_registration.corrupt_first_registration_record_for_testing();
+        let tampered_state = casting_state_at_height(
+            state.clone(),
+            tampered_registration,
+            Some(&tle_key),
+            Some(tle_key_session_id),
+            30,
+        );
+        assert!(matches!(
+            authorize_parliament_timed_ovn_casting_context_v1(
+                &tampered_state.query_view(),
+                ballot_attempt_id,
+            ),
+            Err(TimedOvnCastingAuthorizationErrorV1::TimedOvn(_))
+        ));
+
+        let wrong_key = casting_tle_key(network_binding, 0xB0);
+        let mismatched_key_state = casting_state_at_height(
+            state.clone(),
+            lifecycle.clone(),
+            Some(&wrong_key),
+            Some(tle_key_session_id),
+            30,
+        );
+        assert!(matches!(
+            authorize_parliament_timed_ovn_casting_context_v1(
+                &mismatched_key_state.query_view(),
+                ballot_attempt_id,
+            ),
+            Err(TimedOvnCastingAuthorizationErrorV1::TimedOvn(_))
+                | Err(TimedOvnCastingAuthorizationErrorV1::KeySession(_))
+        ));
+
+        let lifecycle = lifecycle
+            .close_registration(&tle_key)
+            .expect("close registration evidence");
+        let TimedOvnLifecycleStateV1::RegistrationClosed(closed) = &lifecycle else {
+            panic!("expected closed registration");
+        };
+        let (_, roster) = closed.validate(&tle_key).expect("replay closed roster");
+        state
+            .close_ballot_registration(
+                governance_attempt_id,
+                ballot_attempt_id,
+                *roster.roster_root(),
+                3,
+                32,
+            )
+            .expect("advance reducer registration close");
+        let closed_state = casting_state_at_height(
+            state.clone(),
+            lifecycle.clone(),
+            Some(&tle_key),
+            Some(tle_key_session_id),
+            32,
+        );
+        let closed_context = authorize_parliament_timed_ovn_casting_context_v1(
+            &closed_state.query_view(),
+            ballot_attempt_id,
+        )
+        .expect("registration-closed casting context");
+        assert_eq!(
+            closed_context.phase(),
+            ParliamentTimedOvnCastingPhaseV1::RegistrationClosed
+        );
+        assert!(closed_context.release_identity().is_none());
+        let stale_closed_state = casting_state_at_height(
+            state.clone(),
+            lifecycle.clone(),
+            Some(&tle_key),
+            Some(tle_key_session_id),
+            34,
+        );
+        assert_eq!(
+            authorize_parliament_timed_ovn_casting_context_v1(
+                &stale_closed_state.query_view(),
+                ballot_attempt_id,
+            )
+            .expect_err("expired registration-closed context must be rejected"),
+            TimedOvnCastingAuthorizationErrorV1::PhaseWindowInactive
+        );
+
+        let lifecycle = lifecycle
+            .freeze_survivors(&tle_key)
+            .expect("freeze survivor evidence");
+        let TimedOvnLifecycleStateV1::SurvivorsFrozen(frozen) = &lifecycle else {
+            panic!("expected survivor-frozen evidence");
+        };
+        state
+            .freeze_ballot_survivors(
+                governance_attempt_id,
+                ballot_attempt_id,
+                *frozen.dropout_root(),
+                frozen.release_identity().survivor_corpus_root,
+                u32::try_from(frozen.survivor_participant_hashes().len()).expect("survivor count"),
+                frozen.release_identity().no_recovery_root,
+                34,
+            )
+            .expect("advance reducer survivor freeze");
+        let frozen_state = casting_state_at_height(
+            state.clone(),
+            lifecycle.clone(),
+            Some(&tle_key),
+            Some(tle_key_session_id),
+            34,
+        );
+        let frozen_context = authorize_parliament_timed_ovn_casting_context_v1(
+            &frozen_state.query_view(),
+            ballot_attempt_id,
+        )
+        .expect("survivor-frozen casting context");
+        assert_eq!(
+            frozen_context.phase(),
+            ParliamentTimedOvnCastingPhaseV1::SurvivorsFrozen
+        );
+        assert_eq!(
+            frozen_context
+                .survivor_participant_hashes()
+                .expect("frozen survivors")
+                .len(),
+            3
+        );
+        assert!(frozen_context.release_identity().is_some());
+        assert!(
+            frozen_context
+                .archive_v1()
+                .validate_v1()
+                .expect("frozen archive replays")
+                .prepared_attempt()
+                .is_some()
+        );
+        let stale_frozen_state = casting_state_at_height(
+            state,
+            lifecycle,
+            Some(&tle_key),
+            Some(tle_key_session_id),
+            36,
+        );
+        assert_eq!(
+            authorize_parliament_timed_ovn_casting_context_v1(
+                &stale_frozen_state.query_view(),
+                ballot_attempt_id,
+            )
+            .expect_err("expired survivor-frozen context must be rejected"),
+            TimedOvnCastingAuthorizationErrorV1::PhaseWindowInactive
+        );
+
+        assert_eq!(
+            ParliamentTimedOvnCastingPhaseV1::try_from(TimedOvnLifecyclePhaseV1::Sealed),
+            Err(TimedOvnCastingAuthorizationErrorV1::PhaseNotCastable)
+        );
+        assert_eq!(
+            ParliamentTimedOvnCastingPhaseV1::try_from(TimedOvnLifecyclePhaseV1::Released),
+            Err(TimedOvnCastingAuthorizationErrorV1::PhaseNotCastable)
+        );
+    }
+
+    #[test]
+    fn timed_ovn_checkpoint_prechecks_reject_phase_and_height_before_replay() {
+        let BodyFixture {
+            mut state, body_id, ..
+        } = sealed_policy_body(3);
+        advance_to_vote(&mut state, body_id);
+        let attempt_id = state.attempt.id;
+        let ballot_id = BallotAttemptId::derive_v1(body_id, 0);
+        let release_beacon_session_id = beacon_session(24);
+        let tle_key_session_id = tle_key_session(23);
+        let release_height = 40;
+        state
+            .register_ballot_attempt(
+                attempt_id,
+                body_id,
+                ballot_id,
+                0,
+                TleSessionId::derive_v1(
+                    ballot_id,
+                    tle_key_session_id,
+                    release_beacon_session_id,
+                    release_height,
+                ),
+                tle_key_session_id,
+                release_beacon_session_id,
+                30,
+                timed_ovn_policy(),
+                release_height,
+            )
+            .expect("register timed ballot");
+
+        assert_eq!(
+            state.precheck_close_ballot_registration(attempt_id, ballot_id, 31),
+            Err(ParliamentReducerErrorV1::WrongBallotPhaseHeight)
+        );
+        state
+            .precheck_close_ballot_registration(attempt_id, ballot_id, 32)
+            .expect("exact registration deadline passes the cheap guard");
+        state
+            .close_ballot_registration(attempt_id, ballot_id, root(19), 3, 32)
+            .expect("close registration");
+        assert_eq!(
+            state.precheck_close_ballot_registration(attempt_id, ballot_id, 32),
+            Err(ParliamentReducerErrorV1::InvalidLifecycleTransition(
+                ParliamentReducerEntityV1::BallotAttempt
+            ))
+        );
+
+        assert_eq!(
+            state.precheck_freeze_ballot_survivors(attempt_id, ballot_id, 33),
+            Err(ParliamentReducerErrorV1::WrongBallotPhaseHeight)
+        );
+        state
+            .precheck_freeze_ballot_survivors(attempt_id, ballot_id, 34)
+            .expect("exact survivor deadline passes the cheap guard");
+        state
+            .freeze_ballot_survivors(attempt_id, ballot_id, root(21), root(29), 3, root(22), 34)
+            .expect("freeze survivors");
+        assert_eq!(
+            state.precheck_freeze_ballot_survivors(attempt_id, ballot_id, 34),
+            Err(ParliamentReducerErrorV1::InvalidLifecycleTransition(
+                ParliamentReducerEntityV1::BallotAttempt
+            ))
+        );
+
+        assert_eq!(
+            state.precheck_freeze_timed_ovn_corpus(attempt_id, ballot_id, 35),
+            Err(ParliamentReducerErrorV1::WrongBallotPhaseHeight)
+        );
+        state
+            .precheck_freeze_timed_ovn_corpus(attempt_id, ballot_id, 36)
+            .expect("exact commitment deadline passes the cheap guard");
+        state
+            .freeze_timed_ovn_corpus(attempt_id, ballot_id, root(20), root(29), 3, root(25), 36)
+            .expect("freeze ballot corpus");
+        assert_eq!(
+            state.precheck_freeze_timed_ovn_corpus(attempt_id, ballot_id, 36),
+            Err(ParliamentReducerErrorV1::InvalidLifecycleTransition(
+                ParliamentReducerEntityV1::BallotAttempt
+            ))
         );
     }
 
@@ -4757,33 +7299,34 @@ mod tests {
                 first_tle_key_session_id,
                 first_release_beacon_session_id,
                 30,
+                timed_ovn_policy(),
                 first_release_height,
             )
             .expect("registration");
         assert_eq!(
-            state.freeze_ballot_survivors(id, ballot, root(21), root(29), 3, root(22)),
+            state.freeze_ballot_survivors(id, ballot, root(21), root(29), 3, root(22), 34),
             Err(ParliamentReducerErrorV1::InvalidLifecycleTransition(
                 ParliamentReducerEntityV1::BallotAttempt
             ))
         );
         state
-            .close_ballot_registration(id, ballot, root(19), 3)
+            .close_ballot_registration(id, ballot, root(19), 3, 32)
             .expect("commitment");
         assert_eq!(
-            state.close_ballot_registration(id, ballot, root(19), 3),
+            state.close_ballot_registration(id, ballot, root(19), 3, 32),
             Err(ParliamentReducerErrorV1::InvalidLifecycleTransition(
                 ParliamentReducerEntityV1::BallotAttempt
             ))
         );
         state
-            .freeze_ballot_survivors(id, ballot, root(21), root(29), 2, root(22))
+            .freeze_ballot_survivors(id, ballot, root(21), root(29), 2, root(22), 34)
             .expect("freeze nonempty survivor roster");
         assert_eq!(
-            state.freeze_timed_ovn_corpus(id, ballot, root(20), root(28), 2, root(25)),
+            state.freeze_timed_ovn_corpus(id, ballot, root(20), root(28), 2, root(25), 36),
             Err(ParliamentReducerErrorV1::AcceptedCorpusMutation)
         );
         state
-            .freeze_timed_ovn_corpus(id, ballot, root(20), root(29), 2, root(25))
+            .freeze_timed_ovn_corpus(id, ballot, root(20), root(29), 2, root(25), 36)
             .expect("freeze complete intrinsic timed OVN corpus");
         assert_eq!(
             state.finalize_opened_ballot(
@@ -4801,7 +7344,6 @@ mod tests {
                     nay: 1,
                     abstain: 0,
                 },
-                root(27),
                 41,
             ),
             Err(ParliamentReducerErrorV1::InvalidLifecycleTransition(
@@ -4809,7 +7351,7 @@ mod tests {
             ))
         );
         state
-            .fail_ballot_no_result(id, ballot, root(30))
+            .fail_ballot_no_result(id, ballot, false, 41)
             .expect("pulse/TLE failure is NoResult");
         let retry = BallotAttemptId::derive_v1(body_id, 1);
         assert_eq!(
@@ -4822,13 +7364,14 @@ mod tests {
                 tle_key_session(31),
                 beacon_session(32),
                 41,
-                50,
+                timed_ovn_policy(),
+                51,
             ),
             Err(ParliamentReducerErrorV1::TleSessionAlreadyConsumed)
         );
         let retry_release_beacon_session_id = beacon_session(33);
         let retry_tle_key_session_id = tle_key_session(32);
-        let retry_release_height = 50;
+        let retry_release_height = 51;
         let retry_tle_session_id = TleSessionId::derive_v1(
             retry,
             retry_tle_key_session_id,
@@ -4845,6 +7388,7 @@ mod tests {
                 retry_tle_key_session_id,
                 retry_release_beacon_session_id,
                 41,
+                timed_ovn_policy(),
                 retry_release_height,
             )
             .expect("fresh attempt retries");
@@ -4860,6 +7404,358 @@ mod tests {
                 .original_seats,
             3
         );
+    }
+
+    /// Build a validated attempt retaining `key_session_id` through two ballot deadlines.
+    pub(crate) fn tle_key_session_retention_attempt_fixture_v1(
+        key_session_id: TleKeySessionId,
+    ) -> ParliamentAttemptStateV1 {
+        let BodyFixture {
+            mut state, body_id, ..
+        } = sealed_policy_body(3);
+        advance_to_vote(&mut state, body_id);
+        let governance_attempt_id = state.attempt.id;
+        let policy = timed_ovn_policy();
+
+        let first_ballot = BallotAttemptId::derive_v1(body_id, 0);
+        let first_beacon = beacon_session(87);
+        let first_release_height = 40;
+        let first_tle_session = TleSessionId::derive_v1(
+            first_ballot,
+            key_session_id,
+            first_beacon,
+            first_release_height,
+        );
+        state
+            .register_ballot_attempt(
+                governance_attempt_id,
+                body_id,
+                first_ballot,
+                0,
+                first_tle_session,
+                key_session_id,
+                first_beacon,
+                30,
+                policy,
+                first_release_height,
+            )
+            .expect("register first ballot");
+        assert_eq!(
+            state.tle_key_session_retention_deadline(key_session_id),
+            Some(42)
+        );
+
+        state
+            .fail_ballot_no_result(governance_attempt_id, first_ballot, false, 41)
+            .expect("objectively fail first ballot");
+        let retry_ballot = BallotAttemptId::derive_v1(body_id, 1);
+        let retry_beacon = beacon_session(88);
+        let retry_release_height = 60;
+        let retry_tle_session = TleSessionId::derive_v1(
+            retry_ballot,
+            key_session_id,
+            retry_beacon,
+            retry_release_height,
+        );
+        state
+            .register_ballot_attempt(
+                governance_attempt_id,
+                body_id,
+                retry_ballot,
+                1,
+                retry_tle_session,
+                key_session_id,
+                retry_beacon,
+                41,
+                policy,
+                retry_release_height,
+            )
+            .expect("register retry with rotating key still retained");
+
+        state
+    }
+
+    #[test]
+    fn tle_custody_retention_uses_maximum_deadline_across_ballot_retries() {
+        let key_session_id = tle_key_session(86);
+        let state = tle_key_session_retention_attempt_fixture_v1(key_session_id);
+        assert_eq!(
+            state.tle_key_session_retention_deadline(key_session_id),
+            Some(62)
+        );
+        assert_eq!(
+            state.tle_key_session_retention_deadline(tle_key_session(89)),
+            None
+        );
+    }
+
+    #[test]
+    fn final_private_ballot_retry_failure_rejects_the_governance_attempt() {
+        let BodyFixture {
+            mut state, body_id, ..
+        } = sealed_policy_body(3);
+        advance_to_vote(&mut state, body_id);
+        let attempt_id = state.attempt.id;
+        let policy = timed_ovn_policy();
+        let mut registered_at_height = 30_u64;
+        let mut final_ballot = None;
+        let mut final_failure_height = None;
+
+        for sequence in 0..=policy.max_ballot_retries {
+            let ballot_id = BallotAttemptId::derive_v1(body_id, sequence);
+            let tle_key_session_id =
+                tle_key_session(u8::try_from(110 + sequence).expect("test sequence fits in u8"));
+            let release_beacon_session_id =
+                beacon_session(u8::try_from(120 + sequence).expect("test sequence fits in u8"));
+            let release_height = registered_at_height + 10;
+            let tle_session_id = TleSessionId::derive_v1(
+                ballot_id,
+                tle_key_session_id,
+                release_beacon_session_id,
+                release_height,
+            );
+            state
+                .register_ballot_attempt(
+                    attempt_id,
+                    body_id,
+                    ballot_id,
+                    sequence,
+                    tle_session_id,
+                    tle_key_session_id,
+                    release_beacon_session_id,
+                    registered_at_height,
+                    policy,
+                    release_height,
+                )
+                .expect("register the exact next private ballot attempt");
+            let failure_height = registered_at_height + 3;
+            state
+                .fail_ballot_no_result(attempt_id, ballot_id, false, failure_height)
+                .expect("registration timeout is objectively derived");
+            final_ballot = Some(ballot_id);
+            final_failure_height = Some(failure_height);
+            if sequence < policy.max_ballot_retries {
+                assert_eq!(state.attempt.status, GovernanceAttemptStatusV1::Active);
+            }
+            registered_at_height = failure_height;
+        }
+
+        assert_eq!(state.attempt.status, GovernanceAttemptStatusV1::Rejected);
+        assert_eq!(
+            state.body(&body_id).expect("policy body").instance.status,
+            BodyInstanceStatusV1::NoResult
+        );
+        let active_ballot = state
+            .active_ballot_for_body(&body_id)
+            .expect("the final failed ballot remains the active body transcript");
+        assert_eq!(
+            active_ballot.attempt().id,
+            final_ballot.expect("final ballot id")
+        );
+        assert_eq!(
+            active_ballot.failure_kind(),
+            Some(ParliamentBallotFailureKindV1::RegistrationDeadlineExpired)
+        );
+        assert_eq!(active_ballot.failure_height(), final_failure_height);
+        state
+            .validate()
+            .expect("exhausted private-ballot retry rejection persists canonically");
+    }
+
+    #[test]
+    fn ballot_failure_reason_is_derived_from_the_frozen_phase() {
+        let BodyFixture {
+            mut state, body_id, ..
+        } = sealed_policy_body(3);
+        advance_to_vote(&mut state, body_id);
+        let attempt_id = state.attempt.id;
+        let ballot_id = BallotAttemptId::derive_v1(body_id, 0);
+        let release_beacon_session_id = beacon_session(73);
+        let tle_key_session_id = tle_key_session(72);
+        let release_height = 40;
+        let tle_session_id = TleSessionId::derive_v1(
+            ballot_id,
+            tle_key_session_id,
+            release_beacon_session_id,
+            release_height,
+        );
+        state
+            .register_ballot_attempt(
+                attempt_id,
+                body_id,
+                ballot_id,
+                0,
+                tle_session_id,
+                tle_key_session_id,
+                release_beacon_session_id,
+                30,
+                timed_ovn_policy(),
+                release_height,
+            )
+            .expect("register private ballot");
+
+        assert_eq!(
+            state.fail_ballot_no_result(attempt_id, ballot_id, false, 32),
+            Err(ParliamentReducerErrorV1::BallotFailureKindMismatch)
+        );
+        let mut registration_expired = state.clone();
+        registration_expired
+            .fail_ballot_no_result(attempt_id, ballot_id, false, 33)
+            .expect("registration expiry is derived after its boundary");
+        assert_eq!(
+            registration_expired
+                .ballot(&ballot_id)
+                .expect("failed ballot")
+                .failure_kind,
+            Some(ParliamentBallotFailureKindV1::RegistrationDeadlineExpired)
+        );
+        let expected_failure_root = parliament_ballot_failure_root_v1(
+            attempt_id,
+            ballot_id,
+            ParliamentBallotFailureKindV1::RegistrationDeadlineExpired,
+            33,
+        );
+        assert_eq!(
+            registration_expired
+                .ballot(&ballot_id)
+                .expect("failed ballot")
+                .failure_root,
+            Some(expected_failure_root)
+        );
+        registration_expired
+            .validate()
+            .expect("derived registration failure persists canonically");
+        registration_expired
+            .ballots
+            .get_mut(&ballot_id)
+            .expect("failed ballot")
+            .failure_root = Some(root(70));
+        assert_eq!(
+            registration_expired.validate(),
+            Err(ParliamentReducerErrorV1::BallotFailureKindMismatch)
+        );
+
+        state
+            .close_ballot_registration(attempt_id, ballot_id, root(71), 3, 32)
+            .expect("freeze registration");
+        let mut survivor_expired = state.clone();
+        survivor_expired
+            .fail_ballot_no_result(attempt_id, ballot_id, false, 35)
+            .expect("survivor expiry is derived after its boundary");
+        assert_eq!(
+            survivor_expired
+                .ballot(&ballot_id)
+                .expect("failed ballot")
+                .failure_kind,
+            Some(ParliamentBallotFailureKindV1::SurvivorDeadlineExpired)
+        );
+
+        state
+            .freeze_ballot_survivors(attempt_id, ballot_id, root(74), root(75), 3, root(76), 34)
+            .expect("freeze survivors");
+        let mut commitment_expired = state.clone();
+        commitment_expired
+            .fail_ballot_no_result(attempt_id, ballot_id, false, 37)
+            .expect("commitment expiry is derived after its boundary");
+        assert_eq!(
+            commitment_expired
+                .ballot(&ballot_id)
+                .expect("failed ballot")
+                .failure_kind,
+            Some(ParliamentBallotFailureKindV1::CommitmentDeadlineExpired)
+        );
+
+        state
+            .freeze_timed_ovn_corpus(attempt_id, ballot_id, root(77), root(75), 3, root(78), 36)
+            .expect("freeze timed corpus");
+        let mut release_expired = state.clone();
+        release_expired
+            .fail_ballot_no_result(attempt_id, ballot_id, false, 41)
+            .expect("release expiry is derived after its boundary");
+        assert_eq!(
+            release_expired
+                .ballot(&ballot_id)
+                .expect("failed ballot")
+                .failure_kind,
+            Some(ParliamentBallotFailureKindV1::ReleasePulseUnavailable)
+        );
+
+        let mut finalized_pulse_before_deadline = state.clone();
+        assert_eq!(
+            finalized_pulse_before_deadline.fail_ballot_no_result(
+                attempt_id,
+                ballot_id,
+                true,
+                release_height + 1,
+            ),
+            Err(ParliamentReducerErrorV1::BallotFailureKindMismatch)
+        );
+        finalized_pulse_before_deadline
+            .fail_ballot_no_result(attempt_id, ballot_id, true, release_height + 3)
+            .expect("an unconsumed finalized pulse cannot strand a ballot past opening deadline");
+        assert_eq!(
+            finalized_pulse_before_deadline
+                .ballot(&ballot_id)
+                .expect("failed ballot")
+                .failure_kind,
+            Some(ParliamentBallotFailureKindV1::OpeningDeadlineExpired)
+        );
+        finalized_pulse_before_deadline
+            .validate()
+            .expect("objective opening-deadline failure persists canonically");
+
+        let mut late_opening = state.clone();
+        assert_eq!(
+            late_opening.begin_ballot_opening_batch(
+                attempt_id,
+                vec![ballot_id],
+                release_beacon_session_id,
+                release_height,
+                release_height + 3,
+                pulse_id(80),
+            ),
+            Err(ParliamentReducerErrorV1::PulseBindingMismatch)
+        );
+
+        state
+            .begin_ballot_opening_batch(
+                attempt_id,
+                vec![ballot_id],
+                release_beacon_session_id,
+                release_height,
+                release_height,
+                pulse_id(79),
+            )
+            .expect("consume exact release pulse");
+        assert_eq!(
+            state.fail_ballot_no_result(attempt_id, ballot_id, true, release_height),
+            Err(ParliamentReducerErrorV1::BallotFailureKindMismatch)
+        );
+        let mut opening_expired = state.clone();
+        opening_expired
+            .fail_ballot_no_result(attempt_id, ballot_id, true, release_height + 3)
+            .expect("an incomplete aggregate opening expires objectively");
+        assert_eq!(
+            opening_expired
+                .ballot(&ballot_id)
+                .expect("failed opening")
+                .failure_kind,
+            Some(ParliamentBallotFailureKindV1::OpeningDeadlineExpired)
+        );
+        opening_expired
+            .validate()
+            .expect("expired opening transcript remains canonical");
+        assert_eq!(
+            state
+                .ballot(&ballot_id)
+                .expect("opening ballot")
+                .attempt
+                .status,
+            BallotAttemptStatusV1::Opening
+        );
+        state
+            .validate()
+            .expect("a rejected caller-selected opening failure leaves canonical state");
     }
 
     #[test]
@@ -4998,6 +7894,15 @@ mod tests {
             ParliamentAggregateOutcomeV1::Approved
         );
         let id = fixture.state.attempt.id;
+        fixture
+            .state
+            .validate()
+            .expect("the reducer's pre-certificate state is internally consistent");
+        assert_eq!(
+            fixture.state.validate_restored_height_v1(41),
+            Err(ParliamentReducerErrorV1::IncompleteCertificate),
+            "the atomic pre-certificate transient must never survive restart"
+        );
         assert_eq!(
             fixture.state.construct_certificate(id, 50, 50),
             Err(ParliamentReducerErrorV1::InvalidCertificateHeight)
@@ -5008,12 +7913,37 @@ mod tests {
             .expect("complete certificate");
         assert_eq!(certificate.body_bindings.len(), 1);
         assert_eq!(
+            fixture.state.validate_restored_height_v1(49),
+            Err(ParliamentReducerErrorV1::InvalidCertificateHeight)
+        );
+        fixture
+            .state
+            .validate_restored_height_v1(59)
+            .expect("a certified effect remains future before its due height");
+        assert_eq!(
+            fixture.state.validate_restored_height_v1(60),
+            Err(ParliamentReducerErrorV1::WrongEnactmentHeight)
+        );
+        assert_eq!(
             fixture.state.mark_enacted(id, 59),
-            Err(ParliamentReducerErrorV1::ReleaseHeightNotReached)
+            Err(ParliamentReducerErrorV1::WrongEnactmentHeight)
+        );
+
+        let mut late = fixture.state.clone();
+        assert_eq!(
+            late.mark_enacted(id, 61),
+            Err(ParliamentReducerErrorV1::WrongEnactmentHeight)
         );
 
         let mut enacted = fixture.state.clone();
         enacted.mark_enacted(id, 60).expect("enact due certificate");
+        assert_eq!(
+            enacted.validate_restored_height_v1(59),
+            Err(ParliamentReducerErrorV1::InvalidCertificateHeight)
+        );
+        enacted
+            .validate_restored_height_v1(60)
+            .expect("terminal outcome is committed at the restored boundary");
         assert_eq!(enacted.attempt.status, GovernanceAttemptStatusV1::Enacted);
         assert_eq!(enacted.terminal_height(), Some(60));
         enacted
@@ -5053,21 +7983,96 @@ mod tests {
 
         let mut failed = fixture.state;
         assert_eq!(
-            failed.mark_execution_failed(id, 60, root(99), root(100)),
-            Err(ParliamentReducerErrorV1::CertificateBindingMismatch)
+            failed.mark_execution_failed(id, 59),
+            Err(ParliamentReducerErrorV1::WrongEnactmentHeight)
         );
-        failed
-            .mark_execution_failed(id, 60, root(3), root(100))
-            .expect("exact effect records execution failure");
+        let expected_failure_root = parliament_execution_failure_root_v1(&certificate, 60);
+        assert_eq!(
+            failed
+                .mark_execution_failed(id, 60)
+                .expect("exact due certificate records execution failure"),
+            expected_failure_root
+        );
         assert_eq!(
             failed.attempt.status,
             GovernanceAttemptStatusV1::ExecutionFailed
         );
         assert_eq!(failed.terminal_height(), Some(60));
-        assert_eq!(failed.execution_failure_root(), Some(root(100)));
+        assert_eq!(failed.execution_failure_root(), Some(expected_failure_root));
         failed
             .validate()
             .expect("execution-failed terminal state validates");
+        let encoded_failure = norito::to_bytes(&failed).expect("encode execution failure state");
+        let decoded_failure =
+            norito::decode_from_bytes::<ParliamentAttemptStateV1>(&encoded_failure)
+                .expect("decode execution failure state");
+        assert_eq!(decoded_failure, failed);
+        decoded_failure
+            .validate()
+            .expect("decoded execution failure state validates");
+        assert!(matches!(
+            failed.mark_execution_failed(id, 60),
+            Err(ParliamentReducerErrorV1::InvalidLifecycleTransition(_))
+        ));
+
+        let mut corrupted_failure = failed;
+        let mut corrupted_root = expected_failure_root;
+        corrupted_root[0] ^= 1;
+        corrupted_failure.execution_failure_root = Some(corrupted_root);
+        assert_eq!(
+            corrupted_failure.validate(),
+            Err(ParliamentReducerErrorV1::CertificateBindingMismatch)
+        );
+    }
+
+    #[test]
+    fn persistence_rejects_future_actions_and_body_stage_skips() {
+        let mut fixture = opened_policy_ballot(3, 3);
+        fixture
+            .state
+            .validate()
+            .expect("opened ballot fixture validates structurally");
+        for restored_height in [9, 19, 20, 29, 31, 33, 35, 39] {
+            assert_eq!(
+                fixture.state.validate_restored_height_v1(restored_height),
+                Err(ParliamentReducerErrorV1::FuturePersistedHeight),
+                "realized lifecycle state must not come from after restored height {restored_height}"
+            );
+        }
+        fixture
+            .state
+            .validate_restored_height_v1(40)
+            .expect("every realized opening fixture height is committed by height 40");
+
+        assert_eq!(
+            finalize_policy(&mut fixture, 2, 1, 0),
+            ParliamentAggregateOutcomeV1::Approved
+        );
+        assert_eq!(
+            fixture.state.validate_restored_height_v1(40),
+            Err(ParliamentReducerErrorV1::FuturePersistedHeight),
+            "the body result was not realized until height 41"
+        );
+        assert_eq!(
+            fixture.state.validate_restored_height_v1(41),
+            Err(ParliamentReducerErrorV1::IncompleteCertificate),
+            "Certification is an in-transaction transient until Core constructs the certificate"
+        );
+
+        let mut skipped = fixture.state.clone();
+        skipped.attempt.stage = GovernanceStageV1::PolicyJury;
+        assert_eq!(
+            skipped.validate(),
+            Err(ParliamentReducerErrorV1::IncompleteCertificate),
+            "a current-body stage cannot retain that body's completed binding"
+        );
+        let mut missing = fixture.state;
+        missing.body_bindings.clear();
+        assert_eq!(
+            missing.validate(),
+            Err(ParliamentReducerErrorV1::IncompleteCertificate),
+            "Certification requires the exact completed required-body prefix"
+        );
     }
 
     #[test]

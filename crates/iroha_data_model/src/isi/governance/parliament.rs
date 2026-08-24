@@ -23,12 +23,22 @@ use crate::{
     seal,
 };
 
+/// Exact canonical width of one timed-OVN participant-registration record.
+pub const PARLIAMENT_TIMED_OVN_REGISTRATION_RECORD_BYTES_V1: usize = 3_624;
+/// Exact canonical width of one timed-OVN masked-ballot record.
+pub const PARLIAMENT_TIMED_OVN_BALLOT_RECORD_BYTES_V1: usize = 2_858;
+
 /// Create one retryable Parliament attempt for exact immutable proposal content.
 ///
 /// The instruction carries no caller-selected attempt identifier, status, stage,
 /// policy version, effect hash, compare-and-set head, or body pipeline.  Core
 /// derives those consensus bindings from the proposal and committed world state.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
+#[cfg_attr(feature = "json", norito(deny_unknown_fields))]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
 pub struct CreateParliamentGovernanceAttemptV1 {
     /// Exact typed proposal whose fingerprint is shared by every retry.
     pub proposal: ProposalKind,
@@ -79,6 +89,11 @@ impl seal::Instruction for CreateParliamentGovernanceAttemptV1 {}
 
 /// Payload for a monotonic risk escalation.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
+#[cfg_attr(feature = "json", norito(deny_unknown_fields))]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
 pub struct ParliamentEscalateRiskV1 {
     /// Strictly nondecreasing policy-derived risk tier.
     pub target: RiskTierV1,
@@ -86,6 +101,11 @@ pub struct ParliamentEscalateRiskV1 {
 
 /// Payload registering one immutable candidate snapshot for future sortition.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
+#[cfg_attr(feature = "json", norito(deny_unknown_fields))]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
 pub struct ParliamentRegisterSortitionRequestV1 {
     /// Zero-based retry sequence for this body election.
     pub sequence: u32,
@@ -97,6 +117,11 @@ pub struct ParliamentRegisterSortitionRequestV1 {
 
 /// Payload consuming one finalized threshold-beacon pulse batch.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
+#[cfg_attr(feature = "json", norito(deny_unknown_fields))]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
 pub struct ParliamentConsumeSortitionPulseBatchV1 {
     /// Strictly ordered complete request identifiers for the pulse slot.
     pub request_ids: Vec<SortitionRequestId>,
@@ -110,13 +135,23 @@ pub struct ParliamentConsumeSortitionPulseBatchV1 {
 
 /// Payload beginning invitation acceptance after a deterministic draw.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
+#[cfg_attr(feature = "json", norito(deny_unknown_fields))]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
 pub struct ParliamentBeginInvitationAcceptanceV1 {
     /// Election attempt whose finalized-pulse draw completed.
     pub election_attempt_id: BodyElectionAttemptId,
 }
 
-/// Payload terminally recording that an election formed no roster.
+/// Payload terminally recording a missing sortition pulse or empty roster.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
+#[cfg_attr(feature = "json", norito(deny_unknown_fields))]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
 pub struct ParliamentFailBodyElectionNoRosterV1 {
     /// Election attempt that failed.
     pub election_attempt_id: BodyElectionAttemptId,
@@ -124,6 +159,14 @@ pub struct ParliamentFailBodyElectionNoRosterV1 {
 
 /// A candidate's response to one canonical Parliament invitation.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
+#[cfg_attr(
+    feature = "json",
+    norito(tag = "decision", content = "details", deny_unknown_fields)
+)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
 #[repr(u8)]
 pub enum ParliamentInvitationDecisionV1 {
     /// Accept the offered Parliament assignment.
@@ -136,6 +179,11 @@ pub enum ParliamentInvitationDecisionV1 {
 
 /// Payload recording one authority-bound invitation response.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
+#[cfg_attr(feature = "json", norito(deny_unknown_fields))]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
 pub struct ParliamentRecordInvitationResponseV1 {
     /// Election attempt whose ranked invitation is being answered.
     pub election_attempt_id: BodyElectionAttemptId,
@@ -148,8 +196,13 @@ pub struct ParliamentRecordInvitationResponseV1 {
     pub decision: ParliamentInvitationDecisionV1,
 }
 
-/// Payload triggering consensus-owned sealing of a canonical Parliament roster.
+/// Payload triggering deterministic sealing of a canonical Parliament roster.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
+#[cfg_attr(feature = "json", norito(deny_unknown_fields))]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
 pub struct ParliamentSealBodyRosterV1 {
     /// Election whose ranked, authority-bound responses determine the roster.
     ///
@@ -160,6 +213,11 @@ pub struct ParliamentSealBodyRosterV1 {
 
 /// Payload advancing one sealed body by exactly one deliberation phase.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
+#[cfg_attr(feature = "json", norito(deny_unknown_fields))]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
 pub struct ParliamentAdvanceBodyPhaseV1 {
     /// Body instance being advanced.
     pub body_instance_id: BodyInstanceId,
@@ -169,24 +227,53 @@ pub struct ParliamentAdvanceBodyPhaseV1 {
 
 /// Payload excluding one absent assignment from the current attempt.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
+#[cfg_attr(feature = "json", norito(deny_unknown_fields))]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
 pub struct ParliamentRecordAttemptAbsenceV1 {
-    /// Body instance whose member was absent.
+    /// Body instance whose transaction-authority member declares their own absence.
     pub body_instance_id: BodyInstanceId,
-    /// Canonical assignment excluded from this attempt only.
+    /// Canonical assignment owned by the transaction authority and excluded from
+    /// this attempt only.
     pub assignment_id: AssignmentId,
 }
 
-/// Payload finalizing one public nonbinding Parliament finding.
+/// Payload endorsing one public nonbinding Parliament finding under the
+/// transaction authority's exact seated assignment.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
-pub struct ParliamentFinalizePublicFindingV1 {
+#[cfg_attr(feature = "json", norito(deny_unknown_fields))]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+pub struct ParliamentEndorsePublicFindingV1 {
     /// Body instance contributing the finding.
     pub body_instance_id: BodyInstanceId,
     /// Root of the complete evidence, deliberation, and dissent record.
     pub result_root: [u8; 32],
 }
 
+/// Payload triggering objective expiry of one public-finding endorsement window.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
+#[cfg_attr(feature = "json", norito(deny_unknown_fields))]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+pub struct ParliamentFailPublicFindingNoResultV1 {
+    /// Public body whose frozen endorsement deadline has elapsed.
+    pub body_instance_id: BodyInstanceId,
+}
+
 /// Payload registering a fresh private timed-OVN ballot attempt.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
+#[cfg_attr(feature = "json", norito(deny_unknown_fields))]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
 pub struct ParliamentRegisterBallotAttemptV1 {
     /// Binding body instance receiving the private ballot.
     pub body_instance_id: BodyInstanceId,
@@ -204,40 +291,76 @@ pub struct ParliamentRegisterBallotAttemptV1 {
     pub release_height: u64,
 }
 
-/// Payload closing proof-validated timed-OVN registration.
+/// Payload registering one seated member's proof-validated timed-OVN keys.
+///
+/// The member identity is deliberately absent. Core derives it from the
+/// authenticated transaction authority and requires the record's participant
+/// hash to bind that account to this exact ballot attempt.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
+#[cfg_attr(feature = "json", norito(deny_unknown_fields))]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+pub struct ParliamentRegisterBallotParticipantV1 {
+    /// Ballot attempt accepting the authenticated member registration.
+    pub ballot_attempt_id: BallotAttemptId,
+    /// Exact canonical 3,624-byte timed-OVN registration record.
+    pub registration_record: Vec<u8>,
+}
+
+/// Payload closing the member-authenticated timed-OVN registration window.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
+#[cfg_attr(feature = "json", norito(deny_unknown_fields))]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
 pub struct ParliamentCloseBallotRegistrationV1 {
     /// Ballot attempt whose registration closes.
     pub ballot_attempt_id: BallotAttemptId,
-    /// Exact canonical 3,624-byte timed-OVN registration records.
-    ///
-    /// Core decodes and verifies every record, preserves the supplied canonical
-    /// order, and derives the registration root and count. The active
-    /// governance configuration must enforce the V1 cap of 1,000 records.
-    pub registration_records: Vec<Vec<u8>>,
 }
 
-/// Payload freezing the exact nonempty survivor subset.
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
+/// Payload recording one registered seated member's authenticated dropout.
+///
+/// Core derives the participant hash from the transaction authority; neither a
+/// Parliament manager nor the caller can name or exclude another participant.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
+#[cfg_attr(feature = "json", norito(deny_unknown_fields))]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+pub struct ParliamentRecordBallotDropoutV1 {
+    /// Ballot attempt from which the authenticated member withdraws.
+    pub ballot_attempt_id: BallotAttemptId,
+}
+
+/// Payload freezing the exact nonempty survivor subset derived by Core.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
+#[cfg_attr(feature = "json", norito(deny_unknown_fields))]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
 pub struct ParliamentFreezeBallotSurvivorsV1 {
     /// Ballot attempt whose survivor set becomes immutable.
     pub ballot_attempt_id: BallotAttemptId,
-    /// Strictly ordered nonempty participant hashes forming a roster subsequence.
-    ///
-    /// Core derives the survivor corpus root, count, and the suite-specific
-    /// no-post-freeze-recovery sentinel from the proof-validated registration
-    /// corpus. The active governance configuration must enforce the V1 cap of
-    /// 1,000 participants.
-    pub survivor_participant_hashes: Vec<[u8; 32]>,
 }
 
 /// Payload freezing the exact timed-OVN ciphertext and one-hot-proof corpus.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
+#[cfg_attr(feature = "json", norito(deny_unknown_fields))]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
 pub struct ParliamentFreezeTimedOvnCorpusV1 {
     /// Ballot attempt whose corpus becomes immutable.
     pub ballot_attempt_id: BallotAttemptId,
     /// Exact canonical 2,858-byte timed-OVN ballot records in survivor order.
     ///
+    /// An exact `CanManageParliament` authority submits this proof-heavy batch;
     /// Core verifies every proof and exact survivor coverage, then derives all
     /// corpus roots, counts, and aggregate commitments. The active governance
     /// configuration must enforce the V1 cap of 1,000 records.
@@ -246,6 +369,11 @@ pub struct ParliamentFreezeTimedOvnCorpusV1 {
 
 /// Payload consuming one finalized release pulse for a complete ballot batch.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
+#[cfg_attr(feature = "json", norito(deny_unknown_fields))]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
 pub struct ParliamentBeginBallotOpeningBatchV1 {
     /// Strictly ordered complete ballot attempts for the release slot.
     pub ballot_attempt_ids: Vec<BallotAttemptId>,
@@ -257,16 +385,16 @@ pub struct ParliamentBeginBallotOpeningBatchV1 {
     pub pulse_id: BeaconPulseId,
 }
 
-/// Payload terminally recording a cryptographic ballot protocol failure.
+/// Payload triggering Core derivation of an objectively expired ballot phase.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
+#[cfg_attr(feature = "json", norito(deny_unknown_fields))]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
 pub struct ParliamentFailBallotNoResultV1 {
     /// Ballot attempt that failed.
     pub ballot_attempt_id: BallotAttemptId,
-    /// Nonzero root of deterministic failure evidence.
-    ///
-    /// Core must authorize this consensus-origin transition and must not accept
-    /// an arbitrary transaction submitter's failure assertion.
-    pub failure_root: [u8; 32],
 }
 
 /// Canonical public final threshold release record for one future TLE identity.
@@ -275,6 +403,11 @@ pub struct ParliamentFailBallotNoResultV1 {
 /// data model depend on non-schema cryptographic runtime types. Core must
 /// reconstruct the exact future identity and verify every field and pairing.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
+#[cfg_attr(feature = "json", norito(deny_unknown_fields))]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
 pub struct ParliamentTleFinalReleaseSignatureV1 {
     /// Long-lived TLE key session producing the final signature.
     pub key_session_id: TleKeySessionId,
@@ -285,7 +418,12 @@ pub struct ParliamentTleFinalReleaseSignatureV1 {
 }
 
 /// Payload finalizing an aggregate-only timed-OVN opening.
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
+#[cfg_attr(feature = "json", norito(deny_unknown_fields))]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
 pub struct ParliamentFinalizeOpenedBallotV1 {
     /// Ballot attempt whose complete survivor aggregate is opened.
     pub ballot_attempt_id: BallotAttemptId,
@@ -293,30 +431,58 @@ pub struct ParliamentFinalizeOpenedBallotV1 {
     pub final_release: ParliamentTleFinalReleaseSignatureV1,
 }
 
-/// Payload constructing and freezing the automatic governance certificate.
+/// Consensus-derived audit payload recording compare-and-set supersession.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
-pub struct ParliamentConstructCertificateV1 {
-    /// Exact deterministic height at which enactment is due.
-    pub enact_at_height: u64,
-}
-
-/// Payload recording that a competing compare-and-set head won first.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
-pub struct ParliamentMarkSupersededV1 {
+#[cfg_attr(feature = "json", norito(deny_unknown_fields))]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+pub struct ParliamentAutomaticSupersededV1 {
     /// Different committed head observed when execution became due.
     pub observed_head: GovernanceExpectedHeadV1,
 }
 
-/// Payload recording deterministic execution failure of the certified effect.
+/// Consensus-derived audit payload for an atomically rolled-back effect failure.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
-pub struct ParliamentMarkExecutionFailedV1 {
+#[cfg_attr(feature = "json", norito(deny_unknown_fields))]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+pub struct ParliamentAutomaticExecutionFailedV1 {
     /// Exact certified effect preimage hash.
+    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
     pub effect_preimage_hash: [u8; 32],
-    /// Nonzero root of deterministic execution-failure evidence.
-    ///
-    /// Core must authorize this consensus-origin transition and must not accept
-    /// an arbitrary transaction submitter's failure assertion.
+    /// Certificate-and-height-derived execution failure root.
+    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
     pub failure_root: [u8; 32],
+}
+
+/// Consensus-derived outcome of executing one due Parliament certificate.
+///
+/// This is an event-audit payload, not a submit-able lifecycle transition. Core
+/// constructs it only at the certificate's exact due block after comparing the
+/// retained expected head and atomically applying the certified effect.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
+#[cfg_attr(
+    feature = "json",
+    norito(tag = "outcome", content = "details", deny_unknown_fields)
+)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+pub enum ParliamentAutomaticExecutionOutcomeV1 {
+    /// The exact certified effect enacted successfully.
+    #[codec(index = 0)]
+    Enacted,
+    /// A different compare-and-set head was authoritative at the due height.
+    #[codec(index = 1)]
+    Superseded(ParliamentAutomaticSupersededV1),
+    /// The exact certified effect failed and all partial writes were discarded.
+    #[codec(index = 2)]
+    ExecutionFailed(ParliamentAutomaticExecutionFailedV1),
 }
 
 /// One closed, versioned transition accepted by the Parliament attempt reducer.
@@ -329,6 +495,14 @@ pub struct ParliamentMarkExecutionFailedV1 {
     reason = "closed transition variants retain their canonical direct Norito payloads"
 )]
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
+#[cfg_attr(
+    feature = "json",
+    norito(tag = "transition", content = "payload", deny_unknown_fields)
+)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
 pub enum ParliamentLifecycleTransitionV1 {
     /// Escalate the attempt's risk tier before Policy Jury sortition is frozen.
     #[codec(index = 0)]
@@ -345,7 +519,7 @@ pub enum ParliamentLifecycleTransitionV1 {
     /// Derive the deterministic draw plan and begin invitation acceptance.
     #[codec(index = 4)]
     BeginInvitationAcceptance(ParliamentBeginInvitationAcceptanceV1),
-    /// Terminally record that an election could not form a nonempty roster.
+    /// Terminally record an expired pulse wait or failure to form a nonempty roster.
     #[codec(index = 5)]
     FailBodyElectionNoRoster(ParliamentFailBodyElectionNoRosterV1),
     /// Seal a nonempty canonical roster into a body instance.
@@ -354,12 +528,12 @@ pub enum ParliamentLifecycleTransitionV1 {
     /// Advance one sealed body by exactly one deliberation phase.
     #[codec(index = 7)]
     AdvanceBodyPhase(ParliamentAdvanceBodyPhaseV1),
-    /// Exclude one absent assignment without changing the original-seat quorum.
+    /// Record one member-authenticated self-absence without changing original quorum.
     #[codec(index = 8)]
     RecordAttemptAbsence(ParliamentRecordAttemptAbsenceV1),
-    /// Finalize a public nonbinding body finding.
+    /// Record one seated member's endorsement of a public nonbinding finding.
     #[codec(index = 9)]
-    FinalizePublicFinding(ParliamentFinalizePublicFindingV1),
+    EndorsePublicFinding(ParliamentEndorsePublicFindingV1),
     /// Register a fresh private timed-OVN ballot attempt.
     #[codec(index = 10)]
     RegisterBallotAttempt(ParliamentRegisterBallotAttemptV1),
@@ -375,34 +549,41 @@ pub enum ParliamentLifecycleTransitionV1 {
     /// Consume one finalized release pulse for a complete ballot batch.
     #[codec(index = 14)]
     BeginBallotOpeningBatch(ParliamentBeginBallotOpeningBatchV1),
-    /// Terminally record a cryptographic ballot protocol failure.
+    /// Terminally record an objectively expired ballot phase.
     #[codec(index = 15)]
     FailBallotNoResult(ParliamentFailBallotNoResultV1),
     /// Finalize an aggregate-only timed-OVN opening and binding-body result.
     #[codec(index = 16)]
     FinalizeOpenedBallot(ParliamentFinalizeOpenedBallotV1),
-    /// Construct and freeze the complete automatic governance certificate.
-    #[codec(index = 17)]
-    ConstructCertificate(ParliamentConstructCertificateV1),
-    /// Record successful deterministic execution of a due certificate.
-    #[codec(index = 18)]
-    MarkEnacted,
-    /// Record that a competing compare-and-set head superseded the certificate.
-    #[codec(index = 19)]
-    MarkSuperseded(ParliamentMarkSupersededV1),
-    /// Record deterministic failure while executing the exact certified effect.
-    #[codec(index = 20)]
-    MarkExecutionFailed(ParliamentMarkExecutionFailedV1),
     /// Record one authenticated candidate's invitation response.
-    #[codec(index = 21)]
+    #[codec(index = 17)]
     RecordInvitationResponse(ParliamentRecordInvitationResponseV1),
+    /// Register one exact seated member's authenticated timed-OVN keys.
+    #[codec(index = 18)]
+    RegisterBallotParticipant(ParliamentRegisterBallotParticipantV1),
+    /// Record one registered seated member's authenticated dropout.
+    #[codec(index = 19)]
+    RecordBallotDropout(ParliamentRecordBallotDropoutV1),
+    /// Terminally record expiry of a public-finding endorsement window.
+    #[codec(index = 20)]
+    FailPublicFindingNoResult(ParliamentFailPublicFindingNoResultV1),
 }
 
 /// Bounded audit classification for a Parliament lifecycle transition.
 ///
-/// Indices exactly mirror [`ParliamentLifecycleTransitionV1`] and never carry
-/// registration or ballot corpora.
+/// Public-transition kinds and consensus-only execution outcomes share this
+/// event classification. Its indices are independent from
+/// [`ParliamentLifecycleTransitionV1`] and never carry registration or ballot
+/// corpora.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
+#[cfg_attr(
+    feature = "json",
+    norito(tag = "kind", content = "details", deny_unknown_fields)
+)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
 #[repr(u8)]
 pub enum ParliamentLifecycleTransitionKindV1 {
     /// Risk escalation.
@@ -420,7 +601,7 @@ pub enum ParliamentLifecycleTransitionKindV1 {
     /// Invitation-acceptance start.
     #[codec(index = 4)]
     BeginInvitationAcceptance,
-    /// Terminal election failure without a roster.
+    /// Terminal election failure after a missing pulse or without a roster.
     #[codec(index = 5)]
     FailBodyElectionNoRoster,
     /// Canonical body-roster sealing.
@@ -429,12 +610,12 @@ pub enum ParliamentLifecycleTransitionKindV1 {
     /// Body deliberation phase advancement.
     #[codec(index = 7)]
     AdvanceBodyPhase,
-    /// Attempt-scoped absence recording.
+    /// Member-authenticated attempt-scoped self-absence recording.
     #[codec(index = 8)]
     RecordAttemptAbsence,
-    /// Public finding finalization.
+    /// Authority-bound public-finding endorsement.
     #[codec(index = 9)]
-    FinalizePublicFinding,
+    EndorsePublicFinding,
     /// Ballot-attempt registration.
     #[codec(index = 10)]
     RegisterBallotAttempt,
@@ -456,26 +637,36 @@ pub enum ParliamentLifecycleTransitionKindV1 {
     /// Aggregate-only ballot finalization.
     #[codec(index = 16)]
     FinalizeOpenedBallot,
-    /// Governance-certificate construction.
-    #[codec(index = 17)]
-    ConstructCertificate,
     /// Successful certified enactment.
-    #[codec(index = 18)]
+    #[codec(index = 17)]
     MarkEnacted,
     /// Compare-and-set supersession.
-    #[codec(index = 19)]
+    #[codec(index = 18)]
     MarkSuperseded,
-    /// Certified-effect execution failure.
-    #[codec(index = 20)]
+    /// Deterministic certified-effect execution failure.
+    #[codec(index = 19)]
     MarkExecutionFailed,
     /// Authority-bound invitation response.
-    #[codec(index = 21)]
+    #[codec(index = 20)]
     RecordInvitationResponse,
+    /// Authority-bound timed-OVN registration.
+    #[codec(index = 21)]
+    RegisterBallotParticipant,
+    /// Authority-bound pre-ballot dropout.
+    #[codec(index = 22)]
+    RecordBallotDropout,
+    /// Objective public-finding endorsement-window expiry.
+    #[codec(index = 23)]
+    FailPublicFindingNoResult,
 }
 
 /// Domain separating the digest of an exact Parliament lifecycle transition.
 pub const PARLIAMENT_LIFECYCLE_TRANSITION_DIGEST_V1: &[u8] =
     b"iroha.governance.parliament.lifecycle_transition.digest.v1";
+
+/// Domain separating the digest of a consensus-derived execution outcome.
+pub const PARLIAMENT_AUTOMATIC_EXECUTION_OUTCOME_DIGEST_V1: &[u8] =
+    b"iroha.governance.parliament.automatic_execution_outcome.digest.v1";
 
 impl ParliamentLifecycleTransitionV1 {
     /// Return the bounded audit classification for this transition.
@@ -503,8 +694,8 @@ impl ParliamentLifecycleTransitionV1 {
             Self::RecordAttemptAbsence(_) => {
                 ParliamentLifecycleTransitionKindV1::RecordAttemptAbsence
             }
-            Self::FinalizePublicFinding(_) => {
-                ParliamentLifecycleTransitionKindV1::FinalizePublicFinding
+            Self::EndorsePublicFinding(_) => {
+                ParliamentLifecycleTransitionKindV1::EndorsePublicFinding
             }
             Self::RegisterBallotAttempt(_) => {
                 ParliamentLifecycleTransitionKindV1::RegisterBallotAttempt
@@ -525,16 +716,17 @@ impl ParliamentLifecycleTransitionV1 {
             Self::FinalizeOpenedBallot(_) => {
                 ParliamentLifecycleTransitionKindV1::FinalizeOpenedBallot
             }
-            Self::ConstructCertificate(_) => {
-                ParliamentLifecycleTransitionKindV1::ConstructCertificate
-            }
-            Self::MarkEnacted => ParliamentLifecycleTransitionKindV1::MarkEnacted,
-            Self::MarkSuperseded(_) => ParliamentLifecycleTransitionKindV1::MarkSuperseded,
-            Self::MarkExecutionFailed(_) => {
-                ParliamentLifecycleTransitionKindV1::MarkExecutionFailed
-            }
             Self::RecordInvitationResponse(_) => {
                 ParliamentLifecycleTransitionKindV1::RecordInvitationResponse
+            }
+            Self::RegisterBallotParticipant(_) => {
+                ParliamentLifecycleTransitionKindV1::RegisterBallotParticipant
+            }
+            Self::RecordBallotDropout(_) => {
+                ParliamentLifecycleTransitionKindV1::RecordBallotDropout
+            }
+            Self::FailPublicFindingNoResult(_) => {
+                ParliamentLifecycleTransitionKindV1::FailPublicFindingNoResult
             }
         }
     }
@@ -546,8 +738,43 @@ impl ParliamentLifecycleTransitionV1 {
     }
 }
 
+impl ParliamentAutomaticExecutionOutcomeV1 {
+    /// Return the bounded lifecycle-event classification for this automatic outcome.
+    #[must_use]
+    pub const fn kind(self) -> ParliamentLifecycleTransitionKindV1 {
+        match self {
+            Self::Enacted => ParliamentLifecycleTransitionKindV1::MarkEnacted,
+            Self::Superseded(_) => ParliamentLifecycleTransitionKindV1::MarkSuperseded,
+            Self::ExecutionFailed(_) => ParliamentLifecycleTransitionKindV1::MarkExecutionFailed,
+        }
+    }
+
+    /// Derive a domain-separated digest of the exact automatic execution outcome.
+    #[must_use]
+    pub fn digest_v1(self) -> [u8; 32] {
+        crate::governance_fingerprint::fingerprint(
+            PARLIAMENT_AUTOMATIC_EXECUTION_OUTCOME_DIGEST_V1,
+            &self,
+        )
+    }
+}
+
 /// Submit one transition for an existing Parliament governance attempt.
+///
+/// A member's own invitation response, absence declaration, public-finding
+/// endorsement, timed-OVN registration, or dropout is bound to the signed
+/// authority. Deterministic ballot checkpoint, release, failure, and aggregate
+/// finalization variants are permissionless liveness triggers. Core requires
+/// the exact `CanManageParliament` permission for every remaining management
+/// transition. None of these callers can select a consensus result: the
+/// containing finalized block supplies order and height, and Core derives or
+/// revalidates every state, corpus, pulse, proof, and result binding.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
+#[cfg_attr(feature = "json", norito(deny_unknown_fields))]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
 pub struct SubmitParliamentLifecycleTransitionV1 {
     /// Attempt whose reducer must consume the transition.
     pub governance_attempt_id: GovernanceAttemptId,
@@ -637,15 +864,15 @@ mod tests {
         smart_contract::ContractAddress,
     };
     use iroha_crypto::{Algorithm, KeyPair};
-    use norito::core::DecodeFromSlice;
+    use norito::{codec::DecodeAll as _, core::DecodeFromSlice, json};
 
     fn proposal() -> ProposalKind {
         ProposalKind::DeployContract(DeployContractProposal {
             contract_address: "irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw"
                 .parse::<ContractAddress>()
                 .expect("parse Parliament instruction fixture contract address"),
-            code_hash_hex: ContractCodeHash::new([0x11; 32]),
-            abi_hash_hex: ContractAbiHash::new([0x22; 32]),
+            code_hash: ContractCodeHash::new([0x11; 32]),
+            abi_hash: ContractAbiHash::new([0x22; 32]),
             abi_version: AbiVersion::new(1),
             manifest_provenance: None,
         })
@@ -773,8 +1000,8 @@ mod tests {
                     assignment_id,
                 },
             ),
-            ParliamentLifecycleTransitionV1::FinalizePublicFinding(
-                ParliamentFinalizePublicFindingV1 {
+            ParliamentLifecycleTransitionV1::EndorsePublicFinding(
+                ParliamentEndorsePublicFindingV1 {
                     body_instance_id,
                     result_root: [0x53; 32],
                 },
@@ -791,16 +1018,10 @@ mod tests {
                 },
             ),
             ParliamentLifecycleTransitionV1::CloseBallotRegistration(
-                ParliamentCloseBallotRegistrationV1 {
-                    ballot_attempt_id,
-                    registration_records: vec![vec![0x54; 3_624]],
-                },
+                ParliamentCloseBallotRegistrationV1 { ballot_attempt_id },
             ),
             ParliamentLifecycleTransitionV1::FreezeBallotSurvivors(
-                ParliamentFreezeBallotSurvivorsV1 {
-                    ballot_attempt_id,
-                    survivor_participant_hashes: vec![[0x56; 32]],
-                },
+                ParliamentFreezeBallotSurvivorsV1 { ballot_attempt_id },
             ),
             ParliamentLifecycleTransitionV1::FreezeTimedOvnCorpus(
                 ParliamentFreezeTimedOvnCorpusV1 {
@@ -818,7 +1039,6 @@ mod tests {
             ),
             ParliamentLifecycleTransitionV1::FailBallotNoResult(ParliamentFailBallotNoResultV1 {
                 ballot_attempt_id,
-                failure_root: [0x5A; 32],
             }),
             ParliamentLifecycleTransitionV1::FinalizeOpenedBallot(
                 ParliamentFinalizeOpenedBallotV1 {
@@ -830,23 +1050,6 @@ mod tests {
                     },
                 },
             ),
-            ParliamentLifecycleTransitionV1::ConstructCertificate(
-                ParliamentConstructCertificateV1 {
-                    enact_at_height: 50,
-                },
-            ),
-            ParliamentLifecycleTransitionV1::MarkEnacted,
-            ParliamentLifecycleTransitionV1::MarkSuperseded(ParliamentMarkSupersededV1 {
-                observed_head: GovernanceExpectedHeadV1::Absent(
-                    crate::governance::types::GovernanceExpectedHeadAbsentV1 {
-                        subject_id: [0x5D; 32],
-                    },
-                ),
-            }),
-            ParliamentLifecycleTransitionV1::MarkExecutionFailed(ParliamentMarkExecutionFailedV1 {
-                effect_preimage_hash: [0x5E; 32],
-                failure_root: [0x5F; 32],
-            }),
             ParliamentLifecycleTransitionV1::RecordInvitationResponse(
                 ParliamentRecordInvitationResponseV1 {
                     election_attempt_id,
@@ -854,13 +1057,134 @@ mod tests {
                     decision: ParliamentInvitationDecisionV1::Accept,
                 },
             ),
+            ParliamentLifecycleTransitionV1::RegisterBallotParticipant(
+                ParliamentRegisterBallotParticipantV1 {
+                    ballot_attempt_id,
+                    registration_record: vec![0x60; 3_624],
+                },
+            ),
+            ParliamentLifecycleTransitionV1::RecordBallotDropout(ParliamentRecordBallotDropoutV1 {
+                ballot_attempt_id,
+            }),
+            ParliamentLifecycleTransitionV1::FailPublicFindingNoResult(
+                ParliamentFailPublicFindingNoResultV1 { body_instance_id },
+            ),
         ];
-        for variant in variants {
+        for (expected_index, variant) in variants.into_iter().enumerate() {
             let kind = variant.kind();
-            assert_eq!(kind.encode()[0], variant.encode()[0]);
+            assert_eq!(
+                variant.encode()[0],
+                u8::try_from(expected_index).expect("V1 transition index fits u8")
+            );
+            assert_ne!(kind.encode(), Vec::<u8>::new());
             assert_ne!(variant.digest_v1(), [0; 32]);
-            assert_slice_roundtrip(transition(variant));
+            let instruction = transition(variant);
+            assert_slice_roundtrip(instruction.clone());
+            let encoded_json = json::to_vec(&instruction)
+                .expect("encode Parliament lifecycle instruction JSON fixture");
+            let decoded_json: SubmitParliamentLifecycleTransitionV1 =
+                json::from_slice(&encoded_json)
+                    .expect("decode Parliament lifecycle instruction JSON fixture");
+            assert_eq!(decoded_json, instruction);
         }
+    }
+
+    #[test]
+    fn automatic_execution_outcomes_are_audit_only_and_domain_separated() {
+        let outcomes = [
+            ParliamentAutomaticExecutionOutcomeV1::Enacted,
+            ParliamentAutomaticExecutionOutcomeV1::Superseded(ParliamentAutomaticSupersededV1 {
+                observed_head: GovernanceExpectedHeadV1::Absent(
+                    crate::governance::types::GovernanceExpectedHeadAbsentV1 {
+                        subject_id: [0x5D; 32],
+                    },
+                ),
+            }),
+            ParliamentAutomaticExecutionOutcomeV1::ExecutionFailed(
+                ParliamentAutomaticExecutionFailedV1 {
+                    effect_preimage_hash: [0x5E; 32],
+                    failure_root: [0x5F; 32],
+                },
+            ),
+        ];
+        let expected_kinds = [
+            ParliamentLifecycleTransitionKindV1::MarkEnacted,
+            ParliamentLifecycleTransitionKindV1::MarkSuperseded,
+            ParliamentLifecycleTransitionKindV1::MarkExecutionFailed,
+        ];
+        for ((expected_index, outcome), expected_kind) in
+            outcomes.into_iter().enumerate().zip(expected_kinds)
+        {
+            assert_eq!(
+                outcome.encode()[0],
+                u8::try_from(expected_index).expect("V1 outcome index fits u8")
+            );
+            assert_eq!(outcome.kind(), expected_kind);
+            assert_eq!(
+                outcome.digest_v1(),
+                crate::governance_fingerprint::fingerprint(
+                    PARLIAMENT_AUTOMATIC_EXECUTION_OUTCOME_DIGEST_V1,
+                    &outcome,
+                )
+            );
+            assert_ne!(
+                outcome.digest_v1(),
+                crate::governance_fingerprint::fingerprint(
+                    PARLIAMENT_LIFECYCLE_TRANSITION_DIGEST_V1,
+                    &outcome,
+                )
+            );
+            let encoded = outcome.encode();
+            let decoded =
+                ParliamentAutomaticExecutionOutcomeV1::decode_all(&mut encoded.as_slice())
+                    .expect("decode automatic execution outcome");
+            assert_eq!(decoded, outcome);
+        }
+    }
+
+    #[test]
+    fn lifecycle_json_rejects_unknown_fields_aliases_and_transition_tags() {
+        let instruction = transition(ParliamentLifecycleTransitionV1::CompleteQualification);
+        let value = json::to_value(&instruction).expect("render lifecycle JSON fixture");
+
+        let mut unknown = value.clone();
+        unknown
+            .as_object_mut()
+            .expect("lifecycle request object")
+            .insert(
+                "private_key".to_owned(),
+                json::Value::String("secret".to_owned()),
+            );
+        assert!(
+            json::from_value::<SubmitParliamentLifecycleTransitionV1>(unknown).is_err(),
+            "unknown signing-material field must fail"
+        );
+
+        let mut alias = value.clone();
+        let alias_object = alias.as_object_mut().expect("lifecycle request object");
+        let attempt_id = alias_object
+            .remove("governance_attempt_id")
+            .expect("canonical governance_attempt_id field");
+        alias_object.insert("governanceAttemptId".to_owned(), attempt_id);
+        assert!(
+            json::from_value::<SubmitParliamentLifecycleTransitionV1>(alias).is_err(),
+            "camel-case alias must fail"
+        );
+
+        let mut unknown_tag = value;
+        let transition = unknown_tag
+            .as_object_mut()
+            .and_then(|object| object.get_mut("transition"))
+            .and_then(json::Value::as_object_mut)
+            .expect("tagged transition object");
+        transition.insert(
+            "transition".to_owned(),
+            json::Value::String("PlainBallotFallback".to_owned()),
+        );
+        assert!(
+            json::from_value::<SubmitParliamentLifecycleTransitionV1>(unknown_tag).is_err(),
+            "unknown or plaintext transition tag must fail"
+        );
     }
 
     #[test]
@@ -888,10 +1212,10 @@ mod tests {
     )]
     fn lifecycle_digest_is_domain_separated_and_commits_to_all_private_evidence() {
         let ballot_attempt_id = BallotAttemptId::new([0x61; 32]);
-        let domain_probe = ParliamentLifecycleTransitionV1::CloseBallotRegistration(
-            ParliamentCloseBallotRegistrationV1 {
+        let domain_probe = ParliamentLifecycleTransitionV1::RegisterBallotParticipant(
+            ParliamentRegisterBallotParticipantV1 {
                 ballot_attempt_id,
-                registration_records: vec![vec![0x62; 3_624]],
+                registration_record: vec![0x62; 3_624],
             },
         );
         assert_eq!(
@@ -917,30 +1241,28 @@ mod tests {
             };
         let pairs = vec![
             (
-                ParliamentLifecycleTransitionV1::CloseBallotRegistration(
-                    ParliamentCloseBallotRegistrationV1 {
-                        ballot_attempt_id,
-                        registration_records: vec![vec![0x62; 3_624]],
+                ParliamentLifecycleTransitionV1::FailPublicFindingNoResult(
+                    ParliamentFailPublicFindingNoResultV1 {
+                        body_instance_id: BodyInstanceId::new([0x60; 32]),
                     },
                 ),
-                ParliamentLifecycleTransitionV1::CloseBallotRegistration(
-                    ParliamentCloseBallotRegistrationV1 {
-                        ballot_attempt_id,
-                        registration_records: vec![vec![0x63; 3_624]],
+                ParliamentLifecycleTransitionV1::FailPublicFindingNoResult(
+                    ParliamentFailPublicFindingNoResultV1 {
+                        body_instance_id: BodyInstanceId::new([0x61; 32]),
                     },
                 ),
             ),
             (
-                ParliamentLifecycleTransitionV1::FreezeBallotSurvivors(
-                    ParliamentFreezeBallotSurvivorsV1 {
+                ParliamentLifecycleTransitionV1::RegisterBallotParticipant(
+                    ParliamentRegisterBallotParticipantV1 {
                         ballot_attempt_id,
-                        survivor_participant_hashes: vec![[0x64; 32]],
+                        registration_record: vec![0x62; 3_624],
                     },
                 ),
-                ParliamentLifecycleTransitionV1::FreezeBallotSurvivors(
-                    ParliamentFreezeBallotSurvivorsV1 {
+                ParliamentLifecycleTransitionV1::RegisterBallotParticipant(
+                    ParliamentRegisterBallotParticipantV1 {
                         ballot_attempt_id,
-                        survivor_participant_hashes: vec![[0x65; 32]],
+                        registration_record: vec![0x63; 3_624],
                     },
                 ),
             ),

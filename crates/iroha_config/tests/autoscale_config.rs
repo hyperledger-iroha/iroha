@@ -1,5 +1,8 @@
 //! Validate Nexus autoscale configuration parsing and guardrails.
-use iroha_config::parameters::{actual::Root as ActualConfig, user::Root as UserConfig};
+use iroha_config::parameters::{
+    actual::Root as ActualConfig,
+    user::{Autoscale as UserAutoscale, Root as UserConfig},
+};
 use iroha_config_base::{read::ConfigReader, toml::TomlSource};
 use iroha_data_model::nexus::LaneId;
 use std::path::PathBuf;
@@ -20,6 +23,55 @@ fn parse_actual_config(inline_toml: &str) -> Result<ActualConfig, String> {
 fn autoscale_config_error(inline_toml: &str) -> String {
     parse_actual_config(inline_toml).expect_err("autoscale config should be rejected")
 }
+
+#[test]
+fn autoscale_rejects_retired_lane_bound_config_keys() {
+    for retired in ["min_lanes", "max_lanes"] {
+        let table = format!("[nexus.autoscale]\n{retired} = 3\n")
+            .parse()
+            .expect("retired autoscale TOML should parse");
+        let error = base_reader()
+            .with_toml_source(TomlSource::inline(table))
+            .read_and_complete::<UserConfig>()
+            .expect_err("retired autoscale lane-bound key must be rejected");
+        let message = format!("{error:?}");
+        assert!(
+            message.contains("unknown parameter")
+                && message.contains(&format!("nexus.autoscale.{retired}")),
+            "unexpected retired autoscale key diagnostic: {message}"
+        );
+    }
+}
+
+#[test]
+fn autoscale_json_rejects_retired_lane_bound_fields() {
+    for retired in ["min_lanes", "max_lanes"] {
+        let encoded = format!(
+            r#"{{
+                "enabled": true,
+                "min_lane_id": 1,
+                "max_lane_id_exclusive": 3,
+                "target_block_ms": 1000,
+                "scale_out_latency_ratio": 1.2,
+                "scale_in_latency_ratio": 0.8,
+                "scale_out_utilization_ratio": 0.85,
+                "scale_in_utilization_ratio": 0.4,
+                "scale_out_window_blocks": 8,
+                "scale_in_window_blocks": 32,
+                "cooldown_blocks": 4,
+                "per_lane_target_tps": 50,
+                "{retired}": 2
+            }}"#
+        );
+        let error = norito::json::from_str::<UserAutoscale>(&encoded)
+            .expect_err("retired autoscale JSON field must be rejected");
+        let message = error.to_string();
+        assert!(
+            message.contains("unknown field") && message.contains(retired),
+            "unexpected retired autoscale JSON-field diagnostic: {message}"
+        );
+    }
+}
 fn assert_ratio_eq(actual: f64, expected: f64) {
     assert!(
         (actual - expected).abs() <= f64::EPSILON,
@@ -32,8 +84,8 @@ fn autoscale_overrides_parse_from_toml() {
         .expect("valid autoscale config should parse");
     let autoscale = config.nexus.autoscale;
     assert!(autoscale.enabled);
-    assert_eq!(autoscale.min_lanes.get(), 3);
-    assert_eq!(autoscale.max_lanes.get(), 5);
+    assert_eq!(autoscale.min_lane_id.get(), 3);
+    assert_eq!(autoscale.max_lane_id_exclusive.get(), 5);
     assert_eq!(autoscale.target_block_ms.get(), 2_500);
     assert_ratio_eq(autoscale.scale_out_latency_ratio, 1.25);
     assert_ratio_eq(autoscale.scale_in_latency_ratio, 0.75);
@@ -49,8 +101,8 @@ fn autoscale_overrides_parse_from_toml() {
 fn autoscale_rejects_zero_sizing_fields() {
     let message = autoscale_config_error(include_str!("fixtures/autoscale/zero_fields.toml"));
     for field in [
-        "min_lanes",
-        "max_lanes",
+        "min_lane_id",
+        "max_lane_id_exclusive",
         "target_block_ms",
         "scale_out_window_blocks",
         "scale_in_window_blocks",
@@ -67,7 +119,7 @@ fn autoscale_rejects_zero_sizing_fields() {
 fn autoscale_rejects_invalid_lane_bounds() {
     let message = autoscale_config_error(include_str!("fixtures/autoscale/invalid_bounds.toml"));
     assert!(
-        message.contains("min_lanes must be < max_lanes"),
+        message.contains("min_lane_id must be < max_lane_id_exclusive"),
         "error should identify inverted autoscale lane bounds: {message}"
     );
 }
@@ -75,16 +127,16 @@ fn autoscale_rejects_invalid_lane_bounds() {
 fn autoscale_rejects_empty_elastic_lane_range() {
     let message = autoscale_config_error(include_str!("fixtures/autoscale/empty_range.toml"));
     assert!(
-        message.contains("min_lanes must be < max_lanes"),
+        message.contains("min_lane_id must be < max_lane_id_exclusive"),
         "error should reject an enabled autoscale profile with no elastic lane ids: {message}"
     );
 }
 #[test]
-fn autoscale_rejects_max_lanes_above_safety_cap() {
+fn autoscale_rejects_max_lane_id_exclusive_above_safety_cap() {
     let message = autoscale_config_error(include_str!("fixtures/autoscale/above_cap.toml"));
     assert!(
-        message.contains("max_lanes must be <= 8"),
-        "error should identify autoscale max_lanes above the safety cap: {message}"
+        message.contains("max_lane_id_exclusive must be <= 8"),
+        "error should identify autoscale max_lane_id_exclusive above the safety cap: {message}"
     );
 }
 #[test]
@@ -160,7 +212,7 @@ fn autoscale_rejects_default_lane_inside_elastic_id_range() {
     let message = autoscale_config_error(include_str!("fixtures/autoscale/default_in_range.toml"));
     assert!(
         message.contains("nexus.routing_policy.default_lane")
-            && message.contains("must be below nexus.autoscale.min_lanes 1"),
+            && message.contains("must be below nexus.autoscale.min_lane_id 1"),
         "error should identify non-base default lanes: {message}"
     );
 }
@@ -170,7 +222,7 @@ fn autoscale_rejects_default_lane_above_elastic_id_range() {
         autoscale_config_error(include_str!("fixtures/autoscale/default_above_range.toml"));
     assert!(
         message.contains("nexus.routing_policy.default_lane")
-            && message.contains("must be below nexus.autoscale.min_lanes 1"),
+            && message.contains("must be below nexus.autoscale.min_lane_id 1"),
         "error should reject high-side default lanes: {message}"
     );
 }

@@ -2,6 +2,7 @@
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, IntoSchema, Default)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[cfg_attr(feature = "json", norito(tag = "scheme", content = "value"))]
+#[norito(deny_unknown_fields)]
 pub enum FheSchemeV1 {
     /// Brakerski/Fan-Vercauteren integer arithmetic scheme.
     #[default]
@@ -15,6 +16,7 @@ pub enum FheSchemeV1 {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, IntoSchema, Default)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[cfg_attr(feature = "json", norito(tag = "lifecycle", content = "value"))]
+#[norito(deny_unknown_fields)]
 pub enum FheParamLifecycleV1 {
     /// Parameter set is published and awaiting activation.
     #[default]
@@ -29,6 +31,7 @@ pub enum FheParamLifecycleV1 {
 /// Governance-managed FHE parameter-set descriptor for `Soracloud` workloads.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[norito(deny_unknown_fields)]
 pub struct FheParamSetV1 {
     /// Schema version; must equal [`FHE_PARAM_SET_VERSION_V1`].
     pub schema_version: u16,
@@ -41,7 +44,6 @@ pub struct FheParamSetV1 {
     /// Cryptosystem family used by this parameter set.
     pub scheme: FheSchemeV1,
     /// RNS modulus chain in bits, canonical order from highest to lowest level.
-    #[norito(default)]
     pub ciphertext_modulus_bits: Vec<NonZeroU16>,
     /// Plaintext modulus size in bits.
     pub plaintext_modulus_bits: NonZeroU16,
@@ -56,13 +58,13 @@ pub struct FheParamSetV1 {
     /// Governance lifecycle state.
     pub lifecycle: FheParamLifecycleV1,
     /// First block where this set can be admitted.
-    #[norito(default)]
+    #[norito(required)]
     pub activation_height: Option<u64>,
     /// Optional block where this set enters deprecation.
-    #[norito(default)]
+    #[norito(required)]
     pub deprecation_height: Option<u64>,
     /// Optional block where this set is fully withdrawn.
-    #[norito(default)]
+    #[norito(required)]
     pub withdraw_height: Option<u64>,
     /// Canonical digest of backend parameter bytes.
     pub parameter_digest: Hash,
@@ -286,6 +288,7 @@ impl FheParamSetV1 {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, IntoSchema, Default)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[cfg_attr(feature = "json", norito(tag = "rounding_mode", content = "value"))]
+#[norito(deny_unknown_fields)]
 pub enum FheDeterministicRoundingModeV1 {
     /// Always round toward negative infinity.
     Floor,
@@ -300,6 +303,7 @@ pub enum FheDeterministicRoundingModeV1 {
     feature = "json",
     norito(tag = "refresh_transcript_mode", content = "value")
 )]
+#[norito(deny_unknown_fields)]
 pub enum BfvRefreshTranscriptModeV1 {
     /// First-release exact-lift encrypted-zero refresh transcript derivation.
     #[default]
@@ -311,6 +315,7 @@ pub enum BfvRefreshTranscriptModeV1 {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, IntoSchema, Default)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[cfg_attr(feature = "json", norito(tag = "bound_mode", content = "value"))]
+#[norito(deny_unknown_fields)]
 pub enum BfvCiphertextBoundModeV1 {
     /// Bound is an exact plaintext-modulus residual multiple.
     #[default]
@@ -321,6 +326,7 @@ pub enum BfvCiphertextBoundModeV1 {
 /// Public transcript seed for one BFV rotation refresh key.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[norito(deny_unknown_fields)]
 pub struct BfvRotationRefreshTranscriptV1 {
     /// Rotation step count whose public refresh key is derived from `seed`.
     pub rotation_steps: u32,
@@ -330,6 +336,7 @@ pub struct BfvRotationRefreshTranscriptV1 {
 /// Public transcript seed for the BFV bootstrap refresh key.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[norito(deny_unknown_fields)]
 pub struct BfvBootstrapRefreshTranscriptV1 {
     /// Bootstrap key id whose refresh rounds are derived from `seed`.
     pub key_id: String,
@@ -341,14 +348,14 @@ pub struct BfvBootstrapRefreshTranscriptV1 {
 /// Public transcript inventory for BFV evaluation-key refresh material.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[norito(deny_unknown_fields)]
 pub struct BfvEvaluationKeyRefreshTranscriptV1 {
     /// Public BFV key used to derive rotation/bootstrap encrypted-zero masks.
     pub public_key: BfvPublicKey,
     /// One transcript seed per public rotation refresh key.
-    #[norito(default)]
     pub rotation_transcripts: Vec<BfvRotationRefreshTranscriptV1>,
     /// Optional bootstrap refresh transcript.
-    #[norito(default)]
+    #[norito(required)]
     pub bootstrap_transcript: Option<BfvBootstrapRefreshTranscriptV1>,
 }
 fn validate_bfv_refresh_transcript_seed(
@@ -759,6 +766,7 @@ impl BfvEvaluationKeyRefreshTranscriptV1 {
 /// Deterministic execution policy for validator-side ciphertext operations.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[norito(deny_unknown_fields)]
 pub struct FheExecutionPolicyV1 {
     /// Schema version; must equal [`FHE_EXECUTION_POLICY_VERSION_V1`].
     pub schema_version: u16,
@@ -773,30 +781,24 @@ pub struct FheExecutionPolicyV1 {
     /// Domain-separated digest of the BFV refresh transcript inventory.
     pub evaluation_key_refresh_transcript_digest: Hash,
     /// BFV refresh transcript derivation mode bound by this policy.
-    #[norito(default)]
     pub refresh_transcript_mode: BfvRefreshTranscriptModeV1,
     /// Governed proof statement digest for public BFV key material.
-    #[norito(default)]
-    #[norito(skip_serializing_if = "Option::is_none")]
+    #[norito(required)]
     pub public_key_proof_statement_digest: Option<Hash>,
     /// Governed proof statement digest for bootstrap-capable public zero-refresh material.
-    #[norito(default)]
+    #[norito(required)]
     pub bootstrap_key_zero_refresh_proof_statement_digest: Option<Hash>,
     /// Release audit package approved for governed full-bootstrap artifact execution.
-    #[norito(default)]
-    #[norito(skip_serializing_if = "Option::is_none")]
+    #[norito(required)]
     pub full_bootstrap_release_audit_package: Option<BfvFullBootstrapReleaseAuditPackageV1>,
     /// Caller-pinned digest of the approved full-bootstrap release audit package.
-    #[norito(default)]
-    #[norito(skip_serializing_if = "Option::is_none")]
+    #[norito(required)]
     pub full_bootstrap_release_audit_package_digest: Option<Hash>,
     /// Trusted reviewer identifier expected by the full-bootstrap release audit package.
-    #[norito(default)]
-    #[norito(skip_serializing_if = "Option::is_none")]
+    #[norito(required)]
     pub full_bootstrap_release_audit_trusted_reviewer_id: Option<String>,
     /// Trusted reviewer public key expected by the full-bootstrap release audit package.
-    #[norito(default)]
-    #[norito(skip_serializing_if = "Option::is_none")]
+    #[norito(required)]
     pub full_bootstrap_release_audit_trusted_reviewer_public_key: Option<PublicKey>,
     /// Maximum admitted ciphertext size in bytes.
     pub max_ciphertext_bytes: NonZeroU64,
@@ -1143,6 +1145,7 @@ impl FheExecutionPolicyV1 {
 /// Governance admission bundle coupling an FHE parameter set and execution policy.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[norito(deny_unknown_fields)]
 pub struct FheGovernanceBundleV1 {
     /// Schema version; must equal [`FHE_GOVERNANCE_BUNDLE_VERSION_V1`].
     pub schema_version: u16,
@@ -1186,6 +1189,7 @@ impl FheGovernanceBundleV1 {
 /// Exact immutable reference to one governed Soracloud FHE policy version.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[norito(deny_unknown_fields)]
 pub struct SoracloudFhePolicyReferenceV1 {
     /// Schema version; must equal [`SORACLOUD_FHE_POLICY_REFERENCE_VERSION_V1`].
     pub schema_version: u16,
@@ -1219,6 +1223,7 @@ impl SoracloudFhePolicyReferenceV1 {
 /// Exact service-and-policy scope carried by the FHE governance permission.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[norito(deny_unknown_fields)]
 pub struct SoracloudFheGovernancePermissionScopeV1 {
     /// Schema version; must equal [`SORACLOUD_FHE_GOVERNANCE_PERMISSION_SCOPE_VERSION_V1`].
     pub schema_version: u16,
@@ -1246,6 +1251,7 @@ impl SoracloudFheGovernancePermissionScopeV1 {
 /// Immutable, governance-authenticated material for one Soracloud FHE policy version.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[norito(deny_unknown_fields)]
 pub struct SoracloudFheGovernedMaterialV1 {
     /// Schema version; must equal [`SORACLOUD_FHE_GOVERNED_MATERIAL_VERSION_V1`].
     pub schema_version: u16,
@@ -1262,6 +1268,7 @@ pub struct SoracloudFheGovernedMaterialV1 {
     /// Exact deterministic refresh transcript admitted by governance.
     pub evaluation_key_refresh_transcript: BfvEvaluationKeyRefreshTranscriptV1,
     /// Concrete governed artifacts required by full-bootstrap key material.
+    #[norito(required)]
     pub full_bootstrap_circuit_artifacts: Option<BfvFullBootstrapCircuitArtifactBundleV1>,
     /// Canonical domain-separated digest of every preceding material field.
     pub material_digest: Hash,
@@ -1500,6 +1507,7 @@ impl SoracloudFheGovernedMaterialV1 {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[cfg_attr(feature = "json", norito(tag = "lifecycle", content = "value"))]
+#[norito(deny_unknown_fields)]
 pub enum SoracloudFhePolicyVersionLifecycleV1 {
     /// Exact version currently authorized for execution.
     Active,
@@ -1511,6 +1519,7 @@ pub enum SoracloudFhePolicyVersionLifecycleV1 {
 /// Lifecycle wrapper for one immutable governed material version.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[norito(deny_unknown_fields)]
 pub struct SoracloudFhePolicyVersionStateV1 {
     /// Immutable authenticated material.
     pub material: SoracloudFheGovernedMaterialV1,
@@ -1519,6 +1528,7 @@ pub struct SoracloudFhePolicyVersionStateV1 {
     /// Current lifecycle of this version.
     pub lifecycle: SoracloudFhePolicyVersionLifecycleV1,
     /// Governance transaction that superseded or revoked this version.
+    #[norito(required)]
     pub deactivated_by_transaction_hash: Option<Hash>,
 }
 impl SoracloudFhePolicyVersionStateV1 {
@@ -1558,6 +1568,7 @@ impl SoracloudFhePolicyVersionStateV1 {
 /// Complete monotonic lifecycle history for one service-scoped FHE policy.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[norito(deny_unknown_fields)]
 pub struct SoracloudFhePolicyRecordV1 {
     /// Schema version; must equal [`SORACLOUD_FHE_POLICY_RECORD_VERSION_V1`].
     pub schema_version: u16,
@@ -1566,6 +1577,7 @@ pub struct SoracloudFhePolicyRecordV1 {
     /// Stable policy identifier within the service.
     pub policy_name: Name,
     /// Exact active version, or `None` after permanent revocation.
+    #[norito(required)]
     pub active_version: Option<NonZeroU32>,
     /// Immutable version history keyed by consecutive monotonic version.
     pub versions: BTreeMap<NonZeroU32, SoracloudFhePolicyVersionStateV1>,
@@ -1687,19 +1699,18 @@ impl SoracloudFhePolicyRecordV1 {
 /// Proof envelope admitting a client-provided BFV ciphertext as Soracloud FHE input.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[norito(deny_unknown_fields)]
 pub struct SoracloudFheInputAdmissionProofV1 {
     /// Schema version; must equal [`SORACLOUD_FHE_INPUT_ADMISSION_PROOF_VERSION_V1`].
     pub schema_version: u16,
     /// Public BFV key that the admitted ciphertext statement binds.
-    #[norito(default)]
+    #[norito(required)]
     pub public_key: Option<BfvPublicKey>,
     /// Per-slot ciphertext proof statement digests bound into `statement_hash`.
-    #[norito(default)]
     pub ciphertext_proof_statement_digests: Vec<Hash>,
     /// Public BFV ciphertext bound value proven for the ciphertext.
     pub residual_multiple_bound: u128,
     /// Semantics of `residual_multiple_bound`.
-    #[norito(default)]
     pub bound_mode: BfvCiphertextBoundModeV1,
     /// Canonical statement hash carried as the proof public input.
     pub statement_hash: Hash,
@@ -1851,6 +1862,7 @@ impl SoracloudFheInputAdmissionProofV1 {
 /// Proof envelope admitting public BFV key material.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[norito(deny_unknown_fields)]
 pub struct SoracloudFhePublicKeyProofV1 {
     /// Schema version; must equal [`SORACLOUD_FHE_PUBLIC_KEY_PROOF_VERSION_V1`].
     pub schema_version: u16,
@@ -1952,6 +1964,7 @@ impl SoracloudFhePublicKeyProofV1 {
 /// Proof envelope admitting public BFV bootstrap-key zero-refresh material.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[norito(deny_unknown_fields)]
 pub struct SoracloudFheBootstrapKeyProofV1 {
     /// Schema version; must equal [`SORACLOUD_FHE_BOOTSTRAP_KEY_PROOF_VERSION_V1`].
     pub schema_version: u16,
@@ -2053,6 +2066,7 @@ impl SoracloudFheBootstrapKeyProofV1 {
 /// Proof envelope admitting a governed BFV full-bootstrap execution output claim.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[norito(deny_unknown_fields)]
 pub struct SoracloudFheFullBootstrapExecutionProofV1 {
     /// Schema version; must equal [`SORACLOUD_FHE_FULL_BOOTSTRAP_EXECUTION_PROOF_VERSION_V1`].
     pub schema_version: u16,
@@ -2800,6 +2814,7 @@ pub fn soracloud_fhe_full_bootstrap_execution_proof_open_verify_bounds() -> Open
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[cfg_attr(feature = "json", norito(tag = "encryption", content = "value"))]
+#[norito(deny_unknown_fields)]
 pub enum SecretEnvelopeEncryptionV1 {
     /// Payload is client-encrypted and opaque to validators.
     ClientCiphertext,
@@ -2809,6 +2824,7 @@ pub enum SecretEnvelopeEncryptionV1 {
 /// Opaque encrypted payload with commitment used by ciphertext-native state.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[norito(deny_unknown_fields)]
 pub struct SecretEnvelopeV1 {
     /// Schema version; must equal [`SECRET_ENVELOPE_VERSION_V1`].
     pub schema_version: u16,
@@ -2827,7 +2843,7 @@ pub struct SecretEnvelopeV1 {
     /// Commitment hash for verifying payload integrity against metadata.
     pub commitment: Hash,
     /// Optional digest over associated public metadata.
-    #[norito(default)]
+    #[norito(required)]
     pub aad_digest: Option<Hash>,
 }
 impl SecretEnvelopeV1 {
@@ -2896,6 +2912,7 @@ impl SecretEnvelopeV1 {
 /// Public metadata attached to ciphertext-native state records.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[norito(deny_unknown_fields)]
 pub struct CiphertextStateMetadataV1 {
     /// MIME-style content hint for encrypted payload decoding.
     pub content_type: String,
@@ -2904,10 +2921,9 @@ pub struct CiphertextStateMetadataV1 {
     /// Commitment hash mirrored from the secret envelope.
     pub commitment: Hash,
     /// Optional governance policy tag for access/disclosure controls.
-    #[norito(default)]
+    #[norito(required)]
     pub policy_tag: Option<String>,
     /// Optional deterministic labels for index/query routing.
-    #[norito(default)]
     pub tags: Vec<String>,
 }
 impl CiphertextStateMetadataV1 {
@@ -2957,6 +2973,7 @@ impl CiphertextStateMetadataV1 {
 /// Ciphertext-native key-value record with public metadata and secret payload.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[norito(deny_unknown_fields)]
 pub struct CiphertextStateRecordV1 {
     /// Schema version; must equal [`CIPHERTEXT_STATE_RECORD_VERSION_V1`].
     pub schema_version: u16,
@@ -3024,6 +3041,7 @@ impl CiphertextStateRecordV1 {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[cfg_attr(feature = "json", norito(tag = "operation", content = "value"))]
+#[norito(deny_unknown_fields)]
 pub enum FheJobOperationV1 {
     /// Element-wise homomorphic addition over two or more inputs.
     Add,
@@ -3041,6 +3059,7 @@ pub enum FheJobOperationV1 {
 /// Input ciphertext reference for deterministic FHE job admission.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[norito(deny_unknown_fields)]
 pub struct FheJobInputRefV1 {
     /// Canonical state key of the ciphertext input.
     pub state_key: String,
@@ -3076,6 +3095,7 @@ impl FheJobInputRefV1 {
 /// Deterministic FHE admission/execution job descriptor.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[norito(deny_unknown_fields)]
 pub struct FheJobSpecV1 {
     /// Schema version; must equal [`FHE_JOB_SPEC_VERSION_V1`].
     pub schema_version: u16,
@@ -3090,7 +3110,6 @@ pub struct FheJobSpecV1 {
     /// Homomorphic operation class.
     pub operation: FheJobOperationV1,
     /// Ordered ciphertext inputs for deterministic replay.
-    #[norito(default)]
     pub inputs: Vec<FheJobInputRefV1>,
     /// Output ciphertext state key.
     pub output_state_key: String,
@@ -3447,6 +3466,7 @@ impl FheJobSpecV1 {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[cfg_attr(feature = "json", norito(tag = "mode", content = "value"))]
+#[norito(deny_unknown_fields)]
 pub enum DecryptionAuthorityModeV1 {
     /// Ciphertext keys are client-held; network records request/audit only.
     ClientHeld,
@@ -3456,6 +3476,7 @@ pub enum DecryptionAuthorityModeV1 {
 /// Governance-managed policy for decryption authority and request gating.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[norito(deny_unknown_fields)]
 pub struct DecryptionAuthorityPolicyV1 {
     /// Schema version; must equal [`DECRYPTION_AUTHORITY_POLICY_VERSION_V1`].
     pub schema_version: u16,
@@ -3466,7 +3487,6 @@ pub struct DecryptionAuthorityPolicyV1 {
     /// Required approvals for threshold-mode decryption.
     pub approver_quorum: NonZeroU16,
     /// Ordered unique approver identities allowed by the policy.
-    #[norito(default)]
     pub approver_ids: Vec<Name>,
     /// Whether emergency break-glass requests are allowed.
     pub allow_break_glass: bool,
@@ -3599,6 +3619,7 @@ impl DecryptionAuthorityPolicyV1 {
 /// Decryption request envelope gated by a [`DecryptionAuthorityPolicyV1`].
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[norito(deny_unknown_fields)]
 pub struct DecryptionRequestV1 {
     /// Schema version; must equal [`DECRYPTION_REQUEST_VERSION_V1`].
     pub schema_version: u16,
@@ -3617,14 +3638,14 @@ pub struct DecryptionRequestV1 {
     /// Jurisdiction/compliance tag for this disclosure request.
     pub jurisdiction_tag: String,
     /// Optional consent evidence commitment hash.
-    #[norito(default)]
+    #[norito(required)]
     pub consent_evidence_hash: Option<Hash>,
     /// Requested TTL in blocks before request expiry.
     pub requested_ttl_blocks: NonZeroU32,
     /// Break-glass flag for emergency disclosure attempts.
     pub break_glass: bool,
     /// Optional break-glass reason, required when `break_glass=true`.
-    #[norito(default)]
+    #[norito(required)]
     pub break_glass_reason: Option<String>,
     /// Governance linkage hash for policy-driven auditability.
     pub governance_tx_hash: Hash,
@@ -3714,7 +3735,7 @@ impl DecryptionRequestV1 {
             return Err(SoracloudManifestError::InvalidField {
                 manifest: "decryption request",
                 field: "break_glass_reason",
-                reason: "must be omitted when break_glass=false".to_string(),
+                reason: "must be null when break_glass=false".to_string(),
             });
         }
         Ok(())
@@ -3784,6 +3805,7 @@ impl DecryptionRequestV1 {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[cfg_attr(feature = "json", norito(tag = "metadata_level", content = "value"))]
+#[norito(deny_unknown_fields)]
 pub enum CiphertextQueryMetadataLevelV1 {
     /// Return only digest-level key references.
     Minimal,
@@ -3793,6 +3815,7 @@ pub enum CiphertextQueryMetadataLevelV1 {
 /// Deterministic query specification for ciphertext-only state lookups.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[norito(deny_unknown_fields)]
 pub struct CiphertextQuerySpecV1 {
     /// Schema version; must equal [`CIPHERTEXT_QUERY_SPEC_VERSION_V1`].
     pub schema_version: u16,
@@ -3854,6 +3877,7 @@ impl CiphertextQuerySpecV1 {
 /// Inclusion proof attached to ciphertext query results.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[norito(deny_unknown_fields)]
 pub struct CiphertextInclusionProofV1 {
     /// Schema version; must equal [`CIPHERTEXT_QUERY_PROOF_VERSION_V1`].
     pub schema_version: u16,
@@ -3910,11 +3934,12 @@ impl CiphertextInclusionProofV1 {
 /// A single query result row for ciphertext metadata lookups.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[norito(deny_unknown_fields)]
 pub struct CiphertextQueryResultItemV1 {
     /// Binding owning the ciphertext state row.
     pub binding_name: Name,
     /// Canonical state key when `Standard` metadata projection is used.
-    #[norito(default)]
+    #[norito(required)]
     pub state_key: Option<String>,
     /// Digest reference for the state key.
     pub state_key_digest: Hash,
@@ -3929,7 +3954,7 @@ pub struct CiphertextQueryResultItemV1 {
     /// Governance linkage hash associated with the ciphertext mutation.
     pub governance_tx_hash: Hash,
     /// Optional inclusion proof for this row.
-    #[norito(default)]
+    #[norito(required)]
     pub proof: Option<CiphertextInclusionProofV1>,
 }
 impl CiphertextQueryResultItemV1 {
@@ -3986,6 +4011,7 @@ impl CiphertextQueryResultItemV1 {
 /// Deterministic response payload for ciphertext query execution.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[norito(deny_unknown_fields)]
 pub struct CiphertextQueryResponseV1 {
     /// Schema version; must equal [`CIPHERTEXT_QUERY_RESPONSE_VERSION_V1`].
     pub schema_version: u16,
@@ -4004,7 +4030,6 @@ pub struct CiphertextQueryResponseV1 {
     /// Whether additional rows existed beyond `result_count`.
     pub truncated: bool,
     /// Result rows.
-    #[norito(default)]
     pub results: Vec<CiphertextQueryResultItemV1>,
 }
 impl CiphertextQueryResponseV1 {
@@ -4062,6 +4087,7 @@ impl CiphertextQueryResponseV1 {
 /// Admission bundle coupling container + service manifests for deterministic checks.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[norito(deny_unknown_fields)]
 pub struct SoraDeploymentBundleV1 {
     /// Schema version; must equal [`SORA_DEPLOYMENT_BUNDLE_VERSION_V1`].
     pub schema_version: u16,

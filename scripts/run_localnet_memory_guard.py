@@ -471,7 +471,6 @@ def _bool_field(payload: dict, key: str) -> bool | None:
 def extract_status_fields(payload: dict) -> dict[str, int | bool | str | None]:
     """Extract compact high-signal counters from Torii /status JSON."""
     sumeragi = payload.get("sumeragi") or {}
-    pending_rbc = sumeragi.get("pending_rbc") or {}
     tx_gossip = sumeragi.get("tx_gossip") or {}
     return {
         "blocks": _int_field(payload, "blocks"),
@@ -488,13 +487,6 @@ def extract_status_fields(payload: dict) -> dict[str, int | bool | str | None]:
         else _bool_field(sumeragi, "tx_queue_saturated"),
         "queue_saturated_by_count": _bool_field(sumeragi, "tx_queue_saturated_by_count"),
         "queue_saturated_by_bytes": _bool_field(sumeragi, "tx_queue_saturated_by_bytes"),
-        "rbc_store_sessions": _int_field(sumeragi, "rbc_store_sessions"),
-        "rbc_store_bytes": _int_field(sumeragi, "rbc_store_bytes"),
-        "rbc_store_pressure_level": _int_field(sumeragi, "rbc_store_pressure_level"),
-        "rbc_store_evictions_total": _int_field(sumeragi, "rbc_store_evictions_total"),
-        "pending_rbc_sessions": _int_field(pending_rbc, "sessions"),
-        "pending_rbc_chunks": _int_field(pending_rbc, "chunks"),
-        "pending_rbc_bytes": _int_field(pending_rbc, "bytes"),
         "tx_gossip_queued": _int_field(tx_gossip, "queued"),
         "tx_gossip_evicted_total": _int_field(tx_gossip, "evicted_total"),
     }

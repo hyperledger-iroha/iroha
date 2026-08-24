@@ -625,70 +625,17 @@ Every identity and Ed25519 key must be distinct and valid in the prime-order
 subgroup. The evidence document cannot introduce or replace a trusted key.
 Release signatures are checked against the external policy.
 
-The committed fixture uses the incompatible
-`sccp-release-test-trust-policy-v1` schema with `environment: test-fixture`.
-Only the pinned fixture runner and public-only reseal tool accept it; both pin
-the fixture policy id, release id, evidence path, and artifact root. Production
-entrypoints have no option that enables fixture keys.
+The committed `sccp-release-test-trust-policy-v1` fixture is retained only as
+negative evidence. Its Sumeragi protocol-v3 anchors are invalid under the sole
+first-release protocol revision, v4. No runner validates, bundles, verifies, or
+reseals that snapshot; `python3 scripts/sccp_release_fixture.py reject` asserts
+that the current policy loader rejects it at the protocol boundary.
 
-Disposable fixture-signing private keys must remain only in external signer
-memory and must never enter repository tooling, session directories, runtime
-files, transcripts, bundles, or logs. Production signing stays external and
-verification-only. Keep bearer tokens, RPC credentials, and authorization
-headers out of evidence and command output as well.
-
-### Test-fixture reseal workflow
-
-The checked-in test fixture is resealed with a public-only two-phase tool. It
-does not generate signatures and has no option for supplying signing keys.
-Before preparing a reseal, register both new release-role **public** keys in the
-fixture-key deny lists in `scripts/sccp_release_common.py` and
-`crates/iroha_sccp/src/bin/sccp_release_evidence.rs`, then build the final
-validator from the exact source and lockfile that the evidence will bind:
-
-```bash
-SCCP_VALIDATOR_TARGET=/absolute/operator/path/sccp-validator-target
-CARGO_TARGET_DIR="$SCCP_VALIDATOR_TARGET" \
-  cargo build --locked --offline --no-default-features \
-    --features dev-tools \
-    -p iroha_sccp --bin sccp_release_evidence
-python3 scripts/sccp_release_fixture_reseal.py prepare \
-  --rust-validator "$SCCP_VALIDATOR_TARGET/debug/sccp_release_evidence" \
-  --session-dir /absolute/operator/path/sccp-reseal-session \
-  --release-engineering-public-key-hex <64-lowercase-hex> \
-  --release-security-public-key-hex <64-lowercase-hex>
-```
-
-`prepare` refuses an existing session directory. It authenticates the selected
-validator against the current Rust source, manifests, `Cargo.lock`, build
-script, toolchain lock, and executable bytes; validates the candidate test
-policy; verifies the complete pinned artifact inventory; and emits
-`evidence-signing-payload.bin`. If preparation fails after exclusively creating
-the directory, it leaves the incomplete, unusable session for operator
-inspection instead of recursively deleting a pathname that could have been
-exchanged concurrently. Both independent release-role signers sign that exact
-binary file, including its domain prefix, outside the repository.
-
-Finalize with only the two canonical padded-base64 detached signatures:
-
-```bash
-python3 scripts/sccp_release_fixture_reseal.py finalize \
-  --rust-validator "$SCCP_VALIDATOR_TARGET/debug/sccp_release_evidence" \
-  --session-dir /absolute/operator/path/sccp-reseal-session \
-  --release-engineering-signature-b64 <signature> \
-  --release-security-signature-b64 <signature>
-```
-
-Finalization fails if the session, fixture, validator, source inputs, public-key
-deny lists, payload, or artifacts changed after preparation. It verifies both
-signatures with Python and the Rust validator, validates every typed lane, then
-publishes a complete staged fixture generation through an atomic directory
-exchange. Finalizers are serialized with a non-blocking exclusive lock on the
-pinned fixture-parent inode, and the live, staged, displaced, and restored
-directory identities are checked around both exchanges. A failed post-exchange
-check swaps the previous generation back. Linux
-`renameat2(RENAME_EXCHANGE)` or macOS `renameatx_np(RENAME_SWAP)` support is
-required; the tool does not fall back to a partially atomic two-file update.
+A future positive test fixture must be created from a fresh v4 policy and must
+receive fresh external circuit-auditor and release-role signatures. The retired
+v3 signatures cannot be reused or transformed, and no private signing material
+may enter repository tooling, session directories, runtime files, transcripts,
+bundles, or logs. Production entrypoints expose no fixture-key switch.
 
 ## Canonical release evidence
 

@@ -1,11 +1,14 @@
 //! Serialized runtime shell for the authoritative Sumeragi v2 adapter.
 //!
-//! This module owns scheduling and backpressure, not consensus state.
-//! A class-aware arbiter serially delivers admitted commands to [`SumeragiV2Adapter`]
-//! and returns every [`AdapterEffect`] unchanged. Only `EnterView` is inspected:
-//! installing a certified view alone may restart round and retransmission clocks.
-//! The round deadline grows to a finite ceiling while retransmission stays fixed,
-//! giving post-GST service more room without making a long-idle height wait hours.
+//! This module owns scheduling and backpressure, not consensus state. Every
+//! admitted command is delivered to [`SumeragiV2Adapter`] by one serialized
+//! class-aware arbiter, and all
+//! returned [`AdapterEffect`] values are handed to callers unchanged. The only
+//! effect inspected here is `EnterView`, because installing a certified view is
+//! the sole event allowed to restart the round and retransmission clocks. The
+//! round deadline grows linearly through a finite protocol ceiling while
+//! retransmission stays fixed. This gives post-GST service additional room
+//! without turning a long-idle height's view into an hours-long wait.
 //! Every admitted owner freezes both its receiver-local physical predecessor
 //! cut and its logical lifecycle ordinal. A replay admitted at or after that
 //! cut cannot overtake the owner even when the replay retains an older logical
@@ -379,6 +382,8 @@ pub(crate) enum RuntimeError<E> {
     FailClosed,
     /// The runner attempted live scheduling before startup finished.
     ClocksNotArmed,
+    /// Interrupted-tip recovery was attempted after live scheduling began.
+    RecoveryAfterClocksArmed,
 }
 impl<E: fmt::Display> fmt::Display for RuntimeError<E> {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -388,6 +393,9 @@ impl<E: fmt::Display> fmt::Display for RuntimeError<E> {
             Self::ClocksNotArmed => {
                 formatter.write_str("Sumeragi v2 pacemaker clocks are not armed")
             }
+            Self::RecoveryAfterClocksArmed => formatter.write_str(
+                "Sumeragi v2 interrupted-tip recovery cannot run after pacemaker clocks are armed",
+            ),
         }
     }
 }
@@ -398,7 +406,7 @@ where
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
             Self::Driver(error) => Some(error),
-            Self::FailClosed | Self::ClocksNotArmed => None,
+            Self::FailClosed | Self::ClocksNotArmed | Self::RecoveryAfterClocksArmed => None,
         }
     }
 }
@@ -4827,7 +4835,7 @@ struct RuntimeSchedulerArbitrationInputs {
     fence_retry_blocked_fifo_before: Vec<RuntimeQueueOccurrenceOwner>,
     fence_retry_marker_required: bool,
 }
-/// Exact source selected for one live scheduler turn.
+/// Exact source selected for one serialized scheduler turn.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum RuntimeSelectedOwnerKind {
     /// One older adapter-owned Busy-deferred occurrence.
@@ -4851,12 +4859,12 @@ pub(crate) enum RuntimeSelectedOwnerKind {
     Timeout,
     /// Periodic retransmission timer.
     PeriodicTimer,
-    /// One live class-aware FIFO command.
+    /// One class-aware FIFO command from live or closed recovery ingress.
     Fifo,
-    /// A live FIFO command encountered retryable adapter backpressure and was
+    /// A FIFO command encountered retryable adapter backpressure and was
     /// restored with its immutable admission and lifecycle owner intact.
     FifoRetryRetained,
-    /// No live owner was ready.
+    /// No serialized owner was ready.
     Idle,
 }
 /// Validation result for a retained scheduler ownership carrier.
@@ -5677,7 +5685,6 @@ impl RuntimeSchedulerOwnershipEvidence {
                     self.queue_after.len.checked_add(1) == Some(self.queue_before.len)
                 }
                 && scheduled == ScheduledWork::Fifo
-                && self.clocks_armed
                 && candidate.selection_seal.matches_scheduler_occurrence(
                     candidate,
                     &self.queue_before_snapshot,
@@ -5709,9 +5716,7 @@ impl RuntimeSchedulerOwnershipEvidence {
                 Ok(())
             }
             (RuntimeSelectedOwnerKind::Idle, RuntimeSelectedCandidateOwnership::NotApplicable)
-                if self.clocks_armed
-                    && self.queue_before == self.queue_after
-                    && scheduled == ScheduledWork::Idle =>
+                if self.queue_before == self.queue_after && scheduled == ScheduledWork::Idle =>
             {
                 Ok(())
             }
@@ -14061,6 +14066,215 @@ impl<D: RuntimeDriver> SerializedV2Runtime<D> {
         }
         Ok(Some(RuntimeStep::Advanced(effects)))
     }
+    /// Drain at most one adapter-deferred transition or startup-recovery
+    /// command without running live timers.
+    ///
+    /// An interrupted canonical Kura tip is already decided and can require a
+    /// slow local WSV/checkpoint/fsync replay before the height is retired. It
+    /// must therefore keep the pacemaker unarmed: no peer can help this local
+    /// operation, and elapsed wall time must not manufacture a timeout vote or
+    /// retransmission. The runner consumes this runtime after finalization and
+    /// constructs a fresh, normally armed successor-height runtime.
+    #[allow(dead_code, reason = "retained by formal contracts")]
+    pub(crate) fn step_recovery(
+        &mut self,
+        now: Instant,
+    ) -> Result<RuntimeStep<D::Effect>, RuntimeError<D::Error>> {
+        if self.fail_closed {
+            return Err(RuntimeError::FailClosed);
+        }
+        if self.last_scheduler_ownership.is_some() {
+            self.latch_fail_closed("recovery began with an unconsumed scheduler owner");
+            return Err(RuntimeError::FailClosed);
+        }
+        if self.pending_effect_ownership.is_some() {
+            self.latch_fail_closed("recovery overtook an unconsumed effect owner");
+            return Err(RuntimeError::FailClosed);
+        }
+        if !self.pending_leader_wire_terminals.is_empty() {
+            self.latch_fail_closed("recovery overtook an unconsumed leader-wire terminal owner");
+            return Err(RuntimeError::FailClosed);
+        }
+        if self.clocks_armed {
+            return Err(RuntimeError::RecoveryAfterClocksArmed);
+        }
+        // Interrupted-tip recovery replays an already decided local commit;
+        // it cannot legitimately await a fresh signature callback. Such a
+        // fence would have no live signer after restart, so reject the
+        // impossible ownership state instead of idling forever or retrying a
+        // fenced command under a second producer wrapper.
+        if !self.driver.all_deferred_admission_ordinals().is_empty()
+            && !self.driver.deferred_work_is_serviceable()
+        {
+            self.latch_fail_closed("recovery retained an unserviceable deferred signing fence");
+            return Err(RuntimeError::FailClosed);
+        }
+        if let Some(step) = self.dispatch_one_adapter_deferred(now, None)? {
+            return Ok(step);
+        }
+        let round_tag = self.round_tag;
+        let queue_before = self.ingress.ownership_snapshot();
+        let schedule_before = self.schedule;
+        let arbitration = self.scheduler_arbitration_inputs(now).map_err(|_| {
+            self.latch_fail_closed("recovery scheduler lifecycle ownership was invalid");
+            RuntimeError::FailClosed
+        })?;
+        let (scheduled, schedule_after) = schedule_before.select(
+            arbitration.timeout_due,
+            arbitration.periodic_timer_due,
+            arbitration.fifo_ready,
+        );
+        self.schedule = schedule_after;
+        let selected = match self.ingress.pop_next_with_ownership() {
+            Ok(selected) => selected,
+            Err(_) => {
+                self.latch_fail_closed("recovery ingress ownership validation failed");
+                return Err(RuntimeError::FailClosed);
+            }
+        };
+        let Some((command, candidate)) = selected else {
+            if scheduled != ScheduledWork::Idle {
+                self.latch_fail_closed("recovery arbitration selected work without a candidate");
+                return Err(RuntimeError::FailClosed);
+            }
+            let queue_after = self.ingress.ownership_snapshot();
+            self.retain_scheduler_ownership(
+                RuntimeSelectedOwnerKind::Idle,
+                round_tag,
+                RuntimeSelectedCandidateOwnership::NotApplicable,
+                queue_before,
+                queue_after,
+                arbitration,
+                schedule_before,
+                schedule_after,
+            )?;
+            return Ok(RuntimeStep::Idle);
+        };
+        if scheduled != ScheduledWork::Fifo {
+            self.latch_fail_closed("recovery candidate disagreed with FIFO arbitration");
+            return Err(RuntimeError::FailClosed);
+        }
+        let owner = match command.lifecycle_owner() {
+            Ok(owner)
+                if owner.lifecycle_ordinal() == candidate.lifecycle_ordinal
+                    && owner.causal_origin() == &candidate.causal_origin =>
+            {
+                owner
+            }
+            Ok(_) | Err(_) => {
+                self.latch_fail_closed("recovery FIFO lifecycle owner was inconsistent");
+                return Err(RuntimeError::FailClosed);
+            }
+        };
+        let current_ingress = if command.ingress_ownership.is_some() {
+            RuntimeDispatchIngress::DirectAuthenticated
+        } else {
+            RuntimeDispatchIngress::LocalOrCausal
+        };
+        let parent_statement = command.candidate_semantic_statement;
+        let retry_command = command.clone();
+        let (effects, retry_unadmitted, producer_handoff, retained_deferred_ingress) = match self
+            .driver
+            .dispatch(command)
+        {
+            Ok(dispatch) => {
+                self.accept_driver_dispatch(dispatch, &owner, parent_statement, current_ingress)?
+            }
+            Err(error) => return Err(self.close(error)),
+        };
+        if retry_unadmitted {
+            if self
+                .ingress
+                .restore_selected_command(retry_command, &candidate)
+                .is_err()
+            {
+                self.latch_fail_closed(
+                    "retryable recovery FIFO backpressure could not restore its exact owner",
+                );
+                return Err(RuntimeError::FailClosed);
+            }
+            let queue_after = self.ingress.ownership_snapshot();
+            self.retain_scheduler_ownership(
+                RuntimeSelectedOwnerKind::FifoRetryRetained,
+                round_tag,
+                RuntimeSelectedCandidateOwnership::Exact(candidate),
+                queue_before,
+                queue_after,
+                arbitration,
+                schedule_before,
+                schedule_after,
+            )?;
+            return Ok(RuntimeStep::Advanced(Vec::new()));
+        }
+        let queue_after = self.ingress.ownership_snapshot();
+        self.retain_scheduler_ownership(
+            RuntimeSelectedOwnerKind::Fifo,
+            round_tag,
+            RuntimeSelectedCandidateOwnership::Exact(candidate),
+            queue_before,
+            queue_after,
+            arbitration,
+            schedule_before,
+            schedule_after,
+        )?;
+        if self
+            .retain_effect_ownership(
+                RuntimeEffectSource::Fifo,
+                Some(&owner),
+                parent_statement.as_ref(),
+                &effects,
+            )
+            .is_err()
+        {
+            self.latch_fail_closed("recovery effect lifecycle ownership could not be retained");
+            return Err(RuntimeError::FailClosed);
+        }
+        let mut completed_producer_handoff = None;
+        if let Some(token) = producer_handoff {
+            if token.identity().admission_ordinal() != owner.lifecycle_ordinal()
+                || token.identity().causal_lifecycle_key() != owner.causal_origin().lifecycle_key
+            {
+                self.latch_fail_closed(
+                    "recovery producer handoff changed its selected lifecycle identity",
+                );
+                return Err(RuntimeError::FailClosed);
+            }
+            let evidence = match self
+                .driver
+                .producer_handoff_evidence(token, !effects.is_empty())
+            {
+                Ok(evidence) => evidence,
+                Err(error) => {
+                    self.latch_fail_closed(format!(
+                        "recovery producer handoff evidence failed: {error}"
+                    ));
+                    return Err(RuntimeError::FailClosed);
+                }
+            };
+            let terminal = match self.driver.acknowledge_producer_handoff(token, evidence) {
+                Ok(terminal) => terminal,
+                Err(error) => {
+                    self.latch_fail_closed(format!(
+                        "recovery producer handoff acknowledgement failed: {error}"
+                    ));
+                    return Err(RuntimeError::FailClosed);
+                }
+            };
+            completed_producer_handoff = Some((evidence, terminal));
+        }
+        self.complete_driver_dispatch_leader_wire_owners(
+            &owner,
+            retained_deferred_ingress,
+            completed_producer_handoff,
+        )?;
+        if self.observe_effects(now, &effects).is_err() {
+            self.latch_fail_closed(
+                "recovery effect observation lost active-view producer ownership",
+            );
+            return Err(RuntimeError::FailClosed);
+        }
+        Ok(RuntimeStep::Advanced(effects))
+    }
     /// Dispatch one target-relative eligible adapter-owned transition without
     /// concatenating it with a timer or runtime-ingress command.
     ///
@@ -14314,7 +14528,8 @@ impl<D: RuntimeDriver> SerializedV2Runtime<D> {
         }
         Ok(Some(RuntimeStep::Advanced(effects)))
     }
-    /// Last exact scheduling ownership carrier produced by `step`.
+    /// Last exact scheduling ownership carrier produced by `step` or
+    /// `step_recovery`.
     #[cfg(test)]
     pub(crate) const fn last_scheduler_ownership(
         &self,
@@ -14325,7 +14540,7 @@ impl<D: RuntimeDriver> SerializedV2Runtime<D> {
     ///
     /// Taking the carrier before the next scheduling call prevents a later
     /// branch from overwriting the production occurrence being handed to the
-    /// worker.
+    /// worker or recovery owner.
     pub(crate) fn take_last_scheduler_ownership(
         &mut self,
     ) -> Option<RuntimeSchedulerOwnershipEvidence> {
@@ -14581,6 +14796,37 @@ impl<D: RuntimeDriver> SerializedV2Runtime<D> {
 include!("v2_runtime_ready_validate_publication.rs");
 
 impl SerializedV2Runtime<SumeragiV2Adapter> {
+    /// Stage the deferred pending-Kura validation and its exact Apply successor.
+    ///
+    /// This no-clock seam is available only after the startup Validate effect's
+    /// positional ownership has left the runtime shell. Failure returns the
+    /// move-only marker unchanged; success retains it inside the adapter's
+    /// drop-inert prepared transition.
+    #[allow(clippy::result_large_err)]
+    pub(in crate::sumeragi) fn prepare_pending_kura_validated_apply(
+        &mut self,
+        marker: super::v2::DeferredPendingKuraValidatedMarkerV1,
+        predecessor: &AdapterEffect,
+        ownership: &RuntimeEffectOwnership,
+    ) -> Result<
+        super::v2::PreparedPendingKuraValidatedApplyV1<'_>,
+        (
+            super::v2::DeferredPendingKuraValidatedMarkerV1,
+            AdapterError,
+        ),
+    > {
+        if self.fail_closed
+            || self.clocks_armed
+            || self.ingress.len() != 0
+            || self.pending_effect_ownership.is_some()
+            || self.last_scheduler_ownership.is_some()
+            || !self.pending_leader_wire_terminals.is_empty()
+        {
+            return Err((marker, AdapterError::RecoveredPendingKuraApplyMismatch));
+        }
+        marker.prepare_apply(&mut self.driver, predecessor, ownership)
+    }
+
     /// Freeze the serialized shell around one ordinary Fetch-to-Store preview.
     pub(in crate::sumeragi) fn prepare_certified_fetch_store(
         &mut self,

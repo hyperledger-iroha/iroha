@@ -251,6 +251,21 @@ allowed_hosts = []
 rate_per_minute = 600
 max_bytes_per_minute = 104857600
 
+[soracloud_runtime.inrou]
+# PortableVM is the sole V1 backend and its per-node capacity is intrinsically
+# one VM. Public validators use slot 0 because they run on separate hosts; the
+# disposable same-host four-validator profile uses slots 0 through 3.
+enabled = true
+portable_vm_uid = 70000
+portable_vm_gid = 70000
+max_cpu_millis = 8000
+max_memory_bytes = 8589934592
+max_storage_bytes = 68719476736
+# Operator minima; each effective worker grace is the maximum of this value
+# and the corresponding workload-manifest lifecycle value.
+start_grace_ms = 30000
+stop_grace_ms = 10000
+
 [sumeragi.block]
 max_transactions = 96
 max_payload_bytes = 16777216
@@ -367,8 +382,8 @@ poll_interval_ms = 10000
 enabled = true
 # Seven routing containers are statically assigned; this half-open range
 # reserves index 7 for deterministic creation.
-min_lanes = 7
-max_lanes = 8
+min_lane_id = 7
+max_lane_id_exclusive = 8
 # Match the canonical 4 s genesis cadence so healthy blocks do not look four
 # times slower than the autoscale target.
 target_block_ms = 4000
@@ -687,9 +702,6 @@ min_bond_amount = "150"
 min_enactment_delay = 600
 window_span = 3600
 min_turnout = 1
-# The reviewed validation-fee policy enacts exactly 3,600 blocks after its
-# referendum closes. The deadline is inclusive; the following block fails closed.
-pipeline_enactment_sla_blocks = 3600
 voting_asset_id = "6TEAJqbb8oEPmLncoNiMRbLEK6tw"
 citizenship_asset_id = "6TEAJqbb8oEPmLncoNiMRbLEK6tw"
 citizenship_bond_amount = "10000"

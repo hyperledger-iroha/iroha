@@ -584,7 +584,12 @@ pub(super) fn resolve_from_sources(
         route.dataspace_id(),
         route.lane_id(),
         authority_height,
-    );
+    )
+    .map_err(|_| LaneAuthorityError::InvalidAuthoritySource {
+        lane_id: route.lane_id(),
+        dataspace_id: route.dataspace_id(),
+        authority_height,
+    })?;
     let mut validators = State::lane_relay_committee_from_pool(&pool, required, seed)
         .map_err(|_| LaneAuthorityError::CanonicalPeerEncoding)?;
     if validators.len() != required {

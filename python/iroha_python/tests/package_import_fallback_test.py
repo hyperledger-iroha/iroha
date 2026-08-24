@@ -28,31 +28,23 @@ def test_privacy_wallet_worker_contract_is_a_base_export() -> None:
         assert not hasattr(iroha_python, retired)
 
 
-def test_offline_readiness_verifier_roles_are_public_exports() -> None:
+def test_offline_capability_is_the_only_discovery_export() -> None:
     import iroha_python
-    from iroha_python import (
-        OfflineActiveRecursiveStepEpVerifier,
-        OfflineActiveRecursiveStepEqVerifier,
-        OfflineActiveTopUpShieldVerifier,
-        OfflineActiveTransferVerifier,
-        OfflineActiveUnshieldVerifier,
-        OfflineStatus,
-    )
+    from iroha_python import OfflineStatus
 
-    assert OfflineActiveTopUpShieldVerifier is OfflineActiveTransferVerifier
-    assert OfflineActiveUnshieldVerifier is OfflineActiveTransferVerifier
-    assert OfflineActiveRecursiveStepEqVerifier is OfflineActiveTransferVerifier
-    assert OfflineActiveRecursiveStepEpVerifier is OfflineActiveTransferVerifier
-    for name in (
+    assert "OfflineStatus" in iroha_python.__all__
+    assert OfflineStatus.__name__ == "OfflineStatus"
+    for retired in (
         "OfflineActiveTransferVerifier",
         "OfflineActiveTopUpShieldVerifier",
         "OfflineActiveUnshieldVerifier",
         "OfflineActiveRecursiveStepEqVerifier",
         "OfflineActiveRecursiveStepEpVerifier",
-        "OfflineStatus",
+        "OfflineReadiness",
+        "OfflineReadinessBlocker",
     ):
-        assert name in iroha_python.__all__
-    assert OfflineStatus.__name__ == "OfflineStatus"
+        assert retired not in iroha_python.__all__
+        assert not hasattr(iroha_python, retired)
 
 
 def test_package_root_lazy_crypto_exports_preserve_import_error_cause() -> None:

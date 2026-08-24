@@ -4,7 +4,8 @@ async fn ordinary_snapshot_hash_reconcile_rejects_ahead_suffix_without_mutation(
     let kura_store_dir = tmp_root.path().join("kura");
     let lane_config = LaneConfig::default();
     let kura_config = kura_config_for_snapshot_test(&kura_store_dir, nonzero!(1_usize));
-    let (kura, _) = Kura::new(&kura_config, &lane_config).expect("kura init");
+    let (kura, _) = Kura::open_test_kura_with_configured_lane_config(&kura_config, &lane_config)
+        .expect("kura init");
     let mut state = state_factory_with_kura(Arc::clone(&kura));
     let block = signed_block_with_transaction(accepted_log_transaction("canonical"));
     let canonical_hash = block.hash();
@@ -24,7 +25,8 @@ async fn ordinary_snapshot_hash_reconcile_rejects_ahead_suffix_without_mutation(
     drop(state);
     drop(kura);
     let (reopened, BlockCount(reopened_count)) =
-        Kura::new(&kura_config, &lane_config).expect("reopen kura");
+        Kura::open_test_kura_with_configured_lane_config(&kura_config, &lane_config)
+            .expect("reopen kura");
     assert_eq!(
         reopened_count, 1,
         "cold restart must not discover a rejected hash-only suffix"
@@ -93,7 +95,9 @@ async fn ordinary_signed_snapshot_rejects_kura_tail_loss_without_mutation() {
         kura_config_for_snapshot_test(&source_kura_store_dir, nonzero!(1_usize));
     let tail_loss_kura_config =
         kura_config_for_snapshot_test(&tail_loss_kura_store_dir, nonzero!(1_usize));
-    let (kura, _) = Kura::new(&source_kura_config, &lane_config).expect("source Kura init");
+    let (kura, _) =
+        Kura::open_test_kura_with_configured_lane_config(&source_kura_config, &lane_config)
+            .expect("source Kura init");
     let mut state = state_factory_with_kura(Arc::clone(&kura));
     let key_pair = checked_random_snapshot_keypair();
     let block1 = signed_block_after_transaction(accepted_log_transaction("first"), None);
@@ -111,7 +115,8 @@ async fn ordinary_signed_snapshot_rejects_kura_tail_loss_without_mutation() {
     let pointer_before =
         std::fs::read(snapshot_store_dir.join(SNAPSHOT_CURRENT_FILE_NAME)).unwrap();
     let (tail_loss_kura, BlockCount(initial_height)) =
-        Kura::new(&tail_loss_kura_config, &lane_config).expect("tail-loss Kura init");
+        Kura::open_test_kura_with_configured_lane_config(&tail_loss_kura_config, &lane_config)
+            .expect("tail-loss Kura init");
     assert_eq!(initial_height, 0);
     tail_loss_kura
         .store_block(Arc::clone(&block1))
@@ -153,7 +158,8 @@ async fn ordinary_signed_snapshot_rejects_kura_tail_loss_without_mutation() {
     );
     drop(tail_loss_kura);
     let (reopened, BlockCount(reopened_count)) =
-        Kura::new(&tail_loss_kura_config, &lane_config).expect("cold reopen tail-loss Kura");
+        Kura::open_test_kura_with_configured_lane_config(&tail_loss_kura_config, &lane_config)
+            .expect("cold reopen tail-loss Kura");
     assert_eq!(reopened_count, 1);
     assert_eq!(reopened.exact_durable_blocks_count().unwrap(), 1);
     assert_eq!(
@@ -169,7 +175,8 @@ async fn snapshot_read_validates_hashes_without_historical_block_body() {
     let kura_store_dir = tmp_root.path().join("kura");
     let lane_config = LaneConfig::default();
     let kura_config = kura_config_for_snapshot_test(&kura_store_dir, nonzero!(1_usize));
-    let (kura, _) = Kura::new(&kura_config, &lane_config).expect("kura init");
+    let (kura, _) = Kura::open_test_kura_with_configured_lane_config(&kura_config, &lane_config)
+        .expect("kura init");
     let mut state = state_factory_with_kura(Arc::clone(&kura));
     let key_pair = checked_random_snapshot_keypair();
     let block1 = signed_block_after_transaction(accepted_log_transaction("first"), None);
@@ -195,7 +202,9 @@ async fn snapshot_read_validates_hashes_without_historical_block_body() {
         .expect("snapshot write");
     drop(state);
     drop(kura);
-    let (kura, block_count) = Kura::new(&kura_config, &lane_config).expect("kura reopen");
+    let (kura, block_count) =
+        Kura::open_test_kura_with_configured_lane_config(&kura_config, &lane_config)
+            .expect("kura reopen");
     let historical_height = nonzero!(2_usize);
     let payload_len = kura
         .advertise_required_replicas_for_bench(historical_height)

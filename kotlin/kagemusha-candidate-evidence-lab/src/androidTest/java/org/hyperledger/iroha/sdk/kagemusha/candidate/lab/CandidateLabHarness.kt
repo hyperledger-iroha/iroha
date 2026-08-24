@@ -997,7 +997,7 @@ internal object CandidateLabHarness {
     }
 
     private fun installCandidate(context: Context): AcceptedIdentity {
-        check(KagemushaCandidateLabNative.nativeBridgeAbiVersion() == 22)
+        check(KagemushaCandidateLabNative.nativeBridgeAbiVersion() == 23)
         check(!KagemushaCandidateLabNative.nativeProductionCapabilityObservedV4()) {
             "candidate lab native library unexpectedly reports production capability"
         }
@@ -1280,7 +1280,7 @@ internal object CandidateLabHarness {
                 1L..(64L * 1024 * 1024 * 1024) &&
                 validation.getString("generation_memory_enforcement_profile") ==
                 "self-physical-footprint-v1" &&
-                validation.getInt("bridge_abi_version") == 22 &&
+                validation.getInt("bridge_abi_version") == 23 &&
                 validation.getInt("artifact_count") == artifacts.size &&
                 validation.getString("topup_finality_roster_file_name") ==
                 "topup-finality-roster-v4.norito" &&
@@ -1582,7 +1582,7 @@ internal object CandidateLabHarness {
             "native accepted candidate must report a clean source tree"
         }
         val bridgeAbi = requireAscii(fields[8], "bridge ABI").toInt()
-        check(bridgeAbi == 22)
+        check(bridgeAbi == 23)
         check(candidateSha == BuildConfig.CANDIDATE_RECORD_SHA256)
         check(manifestSha == BuildConfig.CANDIDATE_MANIFEST_SHA256)
         check(generation == BuildConfig.GENERATION)

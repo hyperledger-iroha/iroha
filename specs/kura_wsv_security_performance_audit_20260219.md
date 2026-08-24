@@ -422,8 +422,7 @@ Out of scope: unrelated crates and full-system benchmark reruns.
 - Status: addressed by capacity-one writer wake coalescing and a
   config-derived pipeline sidecar queue cap with explicit overflow rejection.
 8. Expand telemetry dashboards for:
-- `state_commit_write_lock_*` wait/hold distributions, while retaining legacy
-  `state_commit_view_lock_*` aliases during dashboard migration
+- canonical `state_commit_write_lock_*` wait/hold distributions
 - eviction duration and reclaimed bytes per run
 - budget-check enqueue latency
 

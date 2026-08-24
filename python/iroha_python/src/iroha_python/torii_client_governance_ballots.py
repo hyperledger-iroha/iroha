@@ -38,7 +38,6 @@ def create_torii_client_governance_ballot_mixin(
     require_exact_non_empty_string: Callable[[Any, str], str],
     normalize_canonical_auth: Callable[..., Any],
     normalize_plain_ballot: Callable[..., Dict[str, Any]],
-    normalize_parliament_ballot: Callable[..., Dict[str, Any]],
     normalize_zk_ballot_v1: Callable[..., Dict[str, Any]],
     normalize_zk_ballot_proof_v1: Callable[..., Dict[str, Any]],
 ) -> type:
@@ -50,7 +49,6 @@ def create_torii_client_governance_ballot_mixin(
     _require_exact_non_empty_string = require_exact_non_empty_string
     _normalize_canonical_auth = normalize_canonical_auth
     _normalize_plain_ballot = normalize_plain_ballot
-    _normalize_parliament_ballot = normalize_parliament_ballot
     _normalize_zk_ballot_v1 = normalize_zk_ballot_v1
     _normalize_zk_ballot_proof_v1 = normalize_zk_ballot_proof_v1
 
@@ -141,22 +139,6 @@ def create_torii_client_governance_ballot_mixin(
                 canonical_auth,
                 normalizer=_normalize_plain_ballot,
                 context="governance plain ballot",
-            )
-
-        def governance_submit_parliament_ballot(
-            self,
-            payload: Mapping[str, Any],
-            *,
-            canonical_auth: ToriiCanonicalRequestAuth,
-        ) -> Optional[Any]:
-            """Draft an exact-network Parliament ballot."""
-
-            return self._post_governance_ballot(
-                "/v1/gov/parliament/ballots",
-                payload,
-                canonical_auth,
-                normalizer=_normalize_parliament_ballot,
-                context="governance parliament ballot",
             )
 
         def governance_submit_zk_ballot_v1(

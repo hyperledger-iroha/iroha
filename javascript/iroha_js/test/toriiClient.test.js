@@ -170,6 +170,19 @@ const txStatusErrorMessageContract = JSON.parse(
 );
 const nativeTest = makeNativeTest(test);
 
+function canonicalTransactionCodecNative(overrides = {}) {
+  return {
+    encodeSignedTransactionVersioned: (payload) => {
+      const bytes = Buffer.from(payload);
+      if (bytes.length === 0 || bytes[0] !== 1) {
+        throw new Error("test payload is not VersionedSignedTransaction V1");
+      }
+      return bytes;
+    },
+    ...overrides,
+  };
+}
+
 test("governance lossless JSON writer preserves raw u64 tokens", () => {
   const encoded = stringifyStrictLosslessIntegerJson(
     {
@@ -2720,8 +2733,8 @@ test("getSorafsPinManifestTyped rejects when Torii responds with 404", async () 
   );
 });
 
-test("registerSorafsPinManifest posts only a versioned signed transaction", async () => {
-  const signedTransaction = Buffer.from([0xde, 0xad, 0xbe, 0xef]);
+test("registerSorafsPinManifest posts only an exact canonical V1 transaction", async () => {
+  const signedTransaction = Buffer.from([0x01, 0xde, 0xad, 0xbe, 0xef]);
   const admission = {
     status: "submitted",
     tx_hash_hex: "a".repeat(64),
@@ -2745,7 +2758,7 @@ test("registerSorafsPinManifest posts only a versioned signed transaction", asyn
   };
   const client = new ToriiClient(BASE_URL, {
     fetchImpl,
-    __nativeBinding: {},
+    __nativeBinding: canonicalTransactionCodecNative(),
   });
 
   const result = await client.registerSorafsPinManifestTyped(signedTransaction);
@@ -2755,8 +2768,34 @@ test("registerSorafsPinManifest posts only a versioned signed transaction", asyn
   assert.equal(captured?.init?.redirect, "error");
   assert.equal(captured?.init?.headers["Content-Type"], "application/x-norito");
   assert.equal(captured?.init?.headers.Accept, "application/json");
-  assert.deepEqual(captured?.init?.body, Buffer.from([1, ...signedTransaction]));
+  assert.deepEqual(captured?.init?.body, signedTransaction);
   assert.deepEqual(result, admission);
+});
+
+test("registerSorafsPinManifest rejects missing or noncanonical V1 codecs before fetch", async () => {
+  let fetchCalls = 0;
+  const fetchImpl = async () => {
+    fetchCalls += 1;
+    throw new Error("invalid pin registration must fail before fetch");
+  };
+  const withoutCodec = new ToriiClient(BASE_URL, {
+    fetchImpl,
+    __nativeBinding: {},
+  });
+  await assert.rejects(
+    () => withoutCodec.registerSorafsPinManifest(Buffer.from([0x01, 0xaa])),
+    /requires native encodeSignedTransactionVersioned/,
+  );
+
+  const framed = new ToriiClient(BASE_URL, {
+    fetchImpl,
+    __nativeBinding: canonicalTransactionCodecNative(),
+  });
+  await assert.rejects(
+    () => framed.registerSorafsPinManifest(Buffer.from("NRT0legacy", "ascii")),
+    /test payload is not VersionedSignedTransaction V1/,
+  );
+  assert.equal(fetchCalls, 0);
 });
 
 test("registerSorafsPinManifest rejects legacy secret-bearing request objects", async () => {
@@ -2804,11 +2843,11 @@ test("registerSorafsPinManifestTyped rejects pre-finality fee or custody claims"
   };
   const client = new ToriiClient(BASE_URL, {
     fetchImpl,
-    __nativeBinding: {},
+    __nativeBinding: canonicalTransactionCodecNative(),
   });
 
   await assert.rejects(
-    () => client.registerSorafsPinManifestTyped(Buffer.from([0x01])),
+    () => client.registerSorafsPinManifestTyped(Buffer.from([0x01, 0xaa])),
     /unsupported fields.*pin_fee/i,
   );
 });
@@ -7864,7 +7903,7 @@ test("submitIsoPacs009AndWait rejects when submission omits message_id", async (
 });
 
 test("submitTransaction posts norito payload and decodes receipt response", async () => {
-  const payload = new Uint8Array([0xde, 0xad]);
+  const payload = new Uint8Array([0x01, 0xde, 0xad]);
   const receiptJson = JSON.stringify({
     payload: {
       entrypoint_hash: "aa".repeat(32),
@@ -7919,12 +7958,12 @@ test("submitTransaction posts norito payload and decodes receipt response", asyn
   };
   const client = new ToriiClient(BASE_URL, { fetchImpl });
   const originalBinding = globalThis.__IROHA_NATIVE_BINDING__;
-  globalThis.__IROHA_NATIVE_BINDING__ = {
+  globalThis.__IROHA_NATIVE_BINDING__ = canonicalTransactionCodecNative({
     decodeTransactionReceiptJson: (buffer) => {
       assert.ok(Buffer.isBuffer(buffer));
       return receiptJson;
     },
-  };
+  });
   try {
     const result = await client.submitTransaction(payload);
     assert.deepEqual(result, JSON.parse(receiptJson));
@@ -7938,7 +7977,7 @@ test("submitTransaction posts norito payload and decodes receipt response", asyn
 });
 
 test("submitTransactionBatch posts a Norito transaction payload vector", async () => {
-  const payloads = [Buffer.from([0xde, 0xad]), new Uint8Array([0xbe, 0xef])];
+  const payloads = [Buffer.from([0x01, 0xde, 0xad]), new Uint8Array([0x01, 0xbe, 0xef])];
   const fetchImpl = async (url, init) => {
     if (url === `${BASE_URL}/v1/node/capabilities`) {
       return createResponse({
@@ -7987,9 +8026,9 @@ test("submitTransactionBatch posts a Norito transaction payload vector", async (
       const itemLength = readU64Length(item.payload, 0, `batch.item${index}.bytes`);
       assert.deepEqual(
         [...item.payload.subarray(itemLength.bytes)],
-        [0x01, ...payload],
+        [...payload],
       );
-      assert.equal(itemLength.length, payload.length + 1);
+      assert.equal(itemLength.length, payload.length);
       offset = item.offset;
     }
     assert.equal(offset, body.length);
@@ -8002,7 +8041,10 @@ test("submitTransactionBatch posts a Norito transaction payload vector", async (
       },
     });
   };
-  const client = new ToriiClient(BASE_URL, { fetchImpl, __nativeBinding: {} });
+  const client = new ToriiClient(BASE_URL, {
+    fetchImpl,
+    __nativeBinding: canonicalTransactionCodecNative(),
+  });
 
   const result = await client.submitTransactionBatch(payloads);
 
@@ -8017,18 +8059,18 @@ test("submitTransactionBatch posts a Norito transaction payload vector", async (
 });
 
 test("submitTransactionBatch uses native framed Norito batch encoder when available", async () => {
-  const payloads = [Buffer.from([0xde, 0xad]), new Uint8Array([0xbe, 0xef])];
+  const payloads = [Buffer.from([0x01, 0xde, 0xad]), new Uint8Array([0x01, 0xbe, 0xef])];
   const framedBody = Buffer.concat([
     Buffer.from("NRT0", "ascii"),
     Buffer.alloc(36, 0x42),
   ]);
   let encodedInputs;
-  const nativeBinding = {
+  const nativeBinding = canonicalTransactionCodecNative({
     encodeTransactionPayloadBatch: (items) => {
       encodedInputs = items.map((item) => Buffer.from(item));
       return framedBody;
     },
-  };
+  });
   const fetchImpl = async (url, init) => {
     if (url === `${BASE_URL}/v1/node/capabilities`) {
       return createResponse({
@@ -8081,7 +8123,7 @@ test("submitTransactionBatch uses native framed Norito batch encoder when availa
 
   assert.deepEqual(
     encodedInputs.map((payload) => [...payload]),
-    payloads.map((payload) => [0x01, ...payload]),
+    payloads.map((payload) => [...payload]),
   );
   assert.deepEqual(result, {
     acceptedCount: 2,
@@ -8108,6 +8150,10 @@ test("submitTransactionBatch rejects malformed batch inputs before network submi
     () => client.submitTransactionBatch([{}]),
     /payload must be a Buffer or ArrayBuffer view/,
   );
+  await assert.rejects(
+    () => client.submitTransactionBatch([Buffer.from([0x01, 0xaa])]),
+    /requires native encodeSignedTransactionVersioned/,
+  );
 });
 
 test("submitTransactionBatch rejects native transaction versioning failures before network submit", async () => {
@@ -8123,24 +8169,24 @@ test("submitTransactionBatch rejects native transaction versioning failures befo
   });
 
   await assert.rejects(
-    () => client.submitTransactionBatch([Buffer.from([0xde, 0xad])]),
+    () => client.submitTransactionBatch([Buffer.from([0x01, 0xde, 0xad])]),
     /native versioning failed/,
   );
 });
 
-test("submitTransactionBatch rejects empty native transaction Norito frames before network submit", async () => {
+test("submitTransactionBatch rejects an empty canonical encoder result before network submit", async () => {
   const client = new ToriiClient(BASE_URL, {
     fetchImpl: async () => {
       throw new Error("submitTransactionBatch should not issue a request");
     },
     __nativeBinding: {
-      encodeSignedTransactionNorito: () => Buffer.alloc(0),
+      encodeSignedTransactionVersioned: () => Buffer.alloc(0),
     },
   });
 
   await assert.rejects(
-    () => client.submitTransactionBatch([Buffer.from([0xde, 0xad])]),
-    /Native signed transaction Norito encoder returned an empty payload/,
+    () => client.submitTransactionBatch([Buffer.from([0x01, 0xde, 0xad])]),
+    /did not return VersionedSignedTransaction V1 bytes/,
   );
 });
 
@@ -8181,22 +8227,22 @@ test("submitTransactionBatch rejects native batch encoder failures without posti
   };
   const client = new ToriiClient(BASE_URL, {
     fetchImpl,
-    __nativeBinding: {
+    __nativeBinding: canonicalTransactionCodecNative({
       encodeTransactionPayloadBatch: () => {
         throw new Error("native batch encoder failed");
       },
-    },
+    }),
   });
 
   await assert.rejects(
-    () => client.submitTransactionBatch([Buffer.from([0xde, 0xad])]),
+    () => client.submitTransactionBatch([Buffer.from([0x01, 0xde, 0xad])]),
     /native batch encoder failed/,
   );
   assert.deepEqual(calls.map((call) => call.url), [`${BASE_URL}/v1/node/capabilities`]);
 });
 
 test("submitTransactionBatch rejects malformed accepted-count admission headers", async () => {
-  const payloads = [Buffer.from([0xde, 0xad])];
+  const payloads = [Buffer.from([0x01, 0xde, 0xad])];
   const fetchImpl = async (url, init) => {
     if (url === `${BASE_URL}/v1/node/capabilities`) {
       return createResponse({
@@ -8236,7 +8282,10 @@ test("submitTransactionBatch rejects malformed accepted-count admission headers"
       },
     });
   };
-  const client = new ToriiClient(BASE_URL, { fetchImpl, __nativeBinding: {} });
+  const client = new ToriiClient(BASE_URL, {
+    fetchImpl,
+    __nativeBinding: canonicalTransactionCodecNative(),
+  });
 
   await assert.rejects(
     () => client.submitTransactionBatch(payloads),
@@ -8266,9 +8315,12 @@ test("submitTransactionBatch requires a canonical accepted-count admission heade
         headers: header === null ? {} : { "x-iroha-transactions-accepted": header },
       });
     };
-    const client = new ToriiClient(BASE_URL, { fetchImpl, __nativeBinding: {} });
+    const client = new ToriiClient(BASE_URL, {
+      fetchImpl,
+      __nativeBinding: canonicalTransactionCodecNative(),
+    });
     await assert.rejects(
-      () => client.submitTransactionBatch([Buffer.from([0xde, 0xad])]),
+      () => client.submitTransactionBatch([Buffer.from([0x01, 0xde, 0xad])]),
       TransactionBatchAdmissionAmbiguousError,
       `header ${String(header)}`,
     );
@@ -8293,11 +8345,11 @@ test("submitTransactionBatch never retries a lost POST response", async () => {
     maxRetries: 9,
     retryMethods: ["POST"],
     retryStatuses: [503],
-    __nativeBinding: {},
+    __nativeBinding: canonicalTransactionCodecNative(),
   });
 
   await assert.rejects(
-    () => client.submitTransactionBatch([Buffer.from([0xde, 0xad])]),
+    () => client.submitTransactionBatch([Buffer.from([0x01, 0xde, 0xad])]),
     (error) => {
       assert.ok(error instanceof TransactionBatchAdmissionAmbiguousError);
       assert.equal(error.cause, lostResponse);
@@ -8324,11 +8376,11 @@ test("submitTransactionBatch never retries retryable HTTP statuses", async () =>
     maxRetries: 9,
     retryMethods: ["POST"],
     retryStatuses: [503],
-    __nativeBinding: {},
+    __nativeBinding: canonicalTransactionCodecNative(),
   });
 
   await assert.rejects(
-    () => client.submitTransactionBatch([Buffer.from([0xde, 0xad])]),
+    () => client.submitTransactionBatch([Buffer.from([0x01, 0xde, 0xad])]),
     (error) => error instanceof ToriiHttpError && error.status === 503,
   );
   assert.equal(batchPosts, 1);
@@ -8353,69 +8405,55 @@ test("submitTransactionBatch rejects 308 without redirecting or retrying", async
     maxRetries: 9,
     retryMethods: ["POST"],
     retryStatuses: [308],
-    __nativeBinding: {},
+    __nativeBinding: canonicalTransactionCodecNative(),
   });
 
   await assert.rejects(
-    () => client.submitTransactionBatch([Buffer.from([0xde, 0xad])]),
+    () => client.submitTransactionBatch([Buffer.from([0x01, 0xde, 0xad])]),
     (error) => error instanceof ToriiHttpError && error.status === 308,
   );
   assert.equal(batchPosts, 1);
 });
 
-test("submitTransaction deframes NRT0 payloads before posting versioned pipeline bytes", async () => {
+test("submitTransaction rejects framed signed transactions before any request", async () => {
   const rawPayload = Buffer.from([0x8a, 0x01, 0x88, 0x01]);
   const header = Buffer.alloc(40);
   header.write("NRT0", 0, "ascii");
   header.writeBigUInt64LE(BigInt(rawPayload.length), 23);
   const framedPayload = Buffer.concat([header, rawPayload]);
-  const fetchImpl = async (url, init) => {
-    if (url === `${BASE_URL}/v1/node/capabilities`) {
-      return createResponse({
-        status: 200,
-        jsonData: {
-          abi_version: 1,
-          data_model_version: 4,
-          crypto: {
-            sm: {
-              enabled: false,
-              default_hash: "sha2_256",
-              allowed_signing: ["ed25519"],
-              sm2_distid_default: "",
-              openssl_preview: false,
-              acceleration: {
-                scalar: true,
-                neon_sm3: false,
-                neon_sm4: false,
-                policy: "scalar-only",
-              },
-            },
-            curves: {
-              registry_version: 1,
-              allowed_curve_ids: [1],
-            },
-          },
-        },
-        headers: { "content-type": "application/json" },
-      });
-    }
-    assert.equal(url, `${BASE_URL}/v1/pipeline/transactions`);
-    assert.equal(init.method, "POST");
-    assert.ok(Buffer.isBuffer(init.body));
-    assert.deepEqual([...init.body.values()], [0x01, ...rawPayload]);
-    return createResponse({
-      status: 202,
-      jsonData: { ok: true },
-      headers: { "content-type": "application/json" },
-    });
-  };
-  const client = new ToriiClient(BASE_URL, { fetchImpl });
-  const response = await client.submitTransaction(framedPayload);
-  assert.deepEqual(response, { ok: true });
+  let fetchCalls = 0;
+  const client = new ToriiClient(BASE_URL, {
+    fetchImpl: async () => {
+      fetchCalls += 1;
+      throw new Error("framed transaction must fail before fetch");
+    },
+    __nativeBinding: canonicalTransactionCodecNative(),
+  });
+  await assert.rejects(
+    () => client.submitTransaction(framedPayload),
+    /test payload is not VersionedSignedTransaction V1/,
+  );
+  assert.equal(fetchCalls, 0);
+});
+
+test("submitTransaction requires the canonical native V1 validator before any request", async () => {
+  let fetchCalls = 0;
+  const client = new ToriiClient(BASE_URL, {
+    fetchImpl: async () => {
+      fetchCalls += 1;
+      throw new Error("unvalidated transaction must fail before fetch");
+    },
+    __nativeBinding: {},
+  });
+  await assert.rejects(
+    () => client.submitTransaction(Buffer.from([0x01, 0xaa])),
+    /requires native encodeSignedTransactionVersioned/,
+  );
+  assert.equal(fetchCalls, 0);
 });
 
 test("submitTransaction never retries a retryable HTTP status", async () => {
-  const payload = new Uint8Array([0xaa]);
+  const payload = new Uint8Array([0x01, 0xaa]);
   let attempts = 0;
   const fetchImpl = async (url, init) => {
     if (url === `${BASE_URL}/v1/node/capabilities`) {
@@ -8432,6 +8470,7 @@ test("submitTransaction never retries a retryable HTTP status", async () => {
     maxRetries: 9,
     retryMethods: ["POST"],
     retryStatuses: [503],
+    __nativeBinding: canonicalTransactionCodecNative(),
   });
   await assert.rejects(
     () => client.submitTransaction(payload),
@@ -8441,7 +8480,7 @@ test("submitTransaction never retries a retryable HTTP status", async () => {
 });
 
 test("submitTransaction never retries a network failure after dispatch", async () => {
-  const payload = new Uint8Array([0xab]);
+  const payload = new Uint8Array([0x01, 0xab]);
   let attempts = 0;
   const networkError = Object.assign(new TypeError("write EPIPE"), {
     code: "EPIPE",
@@ -8460,6 +8499,7 @@ test("submitTransaction never retries a network failure after dispatch", async (
     fetchImpl,
     maxRetries: 9,
     retryMethods: ["POST"],
+    __nativeBinding: canonicalTransactionCodecNative(),
   });
   await assert.rejects(
     () => client.submitTransaction(payload),
@@ -8492,10 +8532,11 @@ test("submitTransaction may retry safe capability preflight before one-shot disp
     fetchImpl,
     maxRetries: 2,
     backoffInitialMs: 0,
+    __nativeBinding: canonicalTransactionCodecNative(),
   });
 
   assert.deepEqual(
-    await client.submitTransaction(Uint8Array.of(0xad)),
+    await client.submitTransaction(Uint8Array.of(0x01, 0xad)),
     { ok: true },
   );
   assert.equal(capabilityAttempts, 2);
@@ -8523,10 +8564,11 @@ for (const redirectStatus of [307, 308]) {
       maxRetries: 9,
       retryMethods: ["POST"],
       retryStatuses: [redirectStatus],
+      __nativeBinding: canonicalTransactionCodecNative(),
     });
 
     await assert.rejects(
-      () => client.submitTransaction(Uint8Array.of(0xac)),
+      () => client.submitTransaction(Uint8Array.of(0x01, 0xac)),
       (error) => error instanceof ToriiHttpError && error.status === redirectStatus,
     );
     assert.equal(attempts, 1);
@@ -8534,15 +8576,15 @@ for (const redirectStatus of [307, 308]) {
 }
 
 test("submitTransaction rejects unavailable pipeline submit", async () => {
-  const payload = new Uint8Array([0xab, 0xcd]);
+  const payload = new Uint8Array([0x01, 0xab, 0xcd]);
   const seenUrls = [];
   let nativeEncodeCalls = 0;
   const nativeBinding = {
-    encodeSignedTransactionNorito: (buffer) => {
+    encodeSignedTransactionVersioned: (buffer) => {
       nativeEncodeCalls += 1;
       assert.ok(Buffer.isBuffer(buffer));
-      assert.deepEqual([...buffer.values()], [0xab, 0xcd]);
-      return Buffer.from([0xca, 0xfe]);
+      assert.deepEqual([...buffer.values()], [...payload]);
+      return Buffer.from(buffer);
     },
   };
   const fetchImpl = async (url, init) => {
@@ -8578,7 +8620,7 @@ test("submitTransaction rejects unavailable pipeline submit", async () => {
     }
     if (url === `${BASE_URL}/v1/pipeline/transactions`) {
       assert.equal(init.method, "POST");
-      assert.deepEqual([...Buffer.from(init.body).values()], [0x01, 0xca, 0xfe]);
+      assert.deepEqual([...Buffer.from(init.body).values()], [...payload]);
       return createResponse({ status: 405 });
     }
     throw new Error(`Unexpected URL ${url}`);
@@ -8592,16 +8634,16 @@ test("submitTransaction rejects unavailable pipeline submit", async () => {
   assert.equal(nativeEncodeCalls, 1);
 });
 
-test("submitTransaction wraps native Norito transaction payload for pipeline submit", async () => {
-  const payload = new Uint8Array([0xab, 0xcd]);
+test("submitTransaction posts unchanged canonical VersionedSignedTransaction V1 bytes", async () => {
+  const payload = new Uint8Array([0x01, 0xab, 0xcd]);
   const controller = new AbortController();
   let nativeEncodeCalls = 0;
   const nativeBinding = {
-    encodeSignedTransactionNorito: (buffer) => {
+    encodeSignedTransactionVersioned: (buffer) => {
       nativeEncodeCalls += 1;
       assert.ok(Buffer.isBuffer(buffer));
-      assert.deepEqual([...buffer.values()], [0xab, 0xcd]);
-      return Buffer.from([0xca, 0xfe]);
+      assert.deepEqual([...buffer.values()], [...payload]);
+      return Buffer.from(buffer);
     },
   };
   const fetchImpl = async (url, init) => {
@@ -8638,7 +8680,7 @@ test("submitTransaction wraps native Norito transaction payload for pipeline sub
     assert.equal(init.method, "POST");
     assert.equal(init.signal, controller.signal);
     assert.equal(init.headers["Content-Type"], "application/x-norito");
-    assert.deepEqual([...Buffer.from(init.body).values()], [0x01, 0xca, 0xfe]);
+    assert.deepEqual([...Buffer.from(init.body).values()], [...payload]);
     return createResponse({
       status: 202,
       jsonData: { ok: true },
@@ -8673,77 +8715,37 @@ test("submitTransaction rejects an aborted signal before any fetch", async () =>
   assert.equal(fetchCalls, 0);
 });
 
-test("submitTransaction unwraps native NRT0 Norito frames before pipeline submit", async () => {
-  const payload = new Uint8Array([0x8a, 0x01, 0x88, 0x01]);
-  const encodedPayload = Buffer.from([0xca, 0xfe, 0xba, 0xbe]);
-  const header = Buffer.alloc(40);
-  header.write("NRT0", 0, "ascii");
-  header.writeBigUInt64LE(BigInt(encodedPayload.length), 23);
+test("submitTransaction rejects a native encoder result that changes the input", async () => {
+  const payload = new Uint8Array([0x01, 0x8a, 0x01, 0x88, 0x01]);
   const nativeBinding = {
-    encodeSignedTransactionNorito: (buffer) => {
+    encodeSignedTransactionVersioned: (buffer) => {
       assert.ok(Buffer.isBuffer(buffer));
       assert.deepEqual([...buffer.values()], [...payload]);
-      return Buffer.concat([header, encodedPayload]);
+      return Buffer.from([0x01, 0xca, 0xfe, 0xba, 0xbe]);
     },
   };
-  const fetchImpl = async (url, init) => {
-    if (url === `${BASE_URL}/v1/node/capabilities`) {
-      return createResponse({
-        status: 200,
-        jsonData: {
-          abi_version: 1,
-          data_model_version: 4,
-          crypto: {
-            sm: {
-              enabled: false,
-              default_hash: "sha2_256",
-              allowed_signing: ["ed25519"],
-              sm2_distid_default: "",
-              openssl_preview: false,
-              acceleration: {
-                scalar: true,
-                neon_sm3: false,
-                neon_sm4: false,
-                policy: "scalar-only",
-              },
-            },
-            curves: {
-              registry_version: 1,
-              allowed_curve_ids: [1],
-            },
-          },
-        },
-        headers: { "content-type": "application/json" },
-      });
-    }
-    assert.equal(url, `${BASE_URL}/v1/pipeline/transactions`);
-    assert.equal(init.method, "POST");
-    assert.deepEqual([...Buffer.from(init.body).values()], [
-      0x01,
-      ...encodedPayload,
-    ]);
-    return createResponse({
-      status: 202,
-      jsonData: { ok: true },
-      headers: { "content-type": "application/json" },
-    });
+  let fetchCalls = 0;
+  const fetchImpl = async () => {
+    fetchCalls += 1;
+    throw new Error("mutated signed transaction must fail before fetch");
   };
   const client = new ToriiClient(BASE_URL, { fetchImpl, __nativeBinding: nativeBinding });
-  const response = await client.submitTransaction(payload);
-  assert.deepEqual(response, { ok: true });
+  await assert.rejects(
+    () => client.submitTransaction(payload),
+    /not the exact canonical VersionedSignedTransaction V1 encoding/,
+  );
+  assert.equal(fetchCalls, 0);
 });
 
-test("submitTransaction preserves native versioned transaction payload", async () => {
-  const payload = new Uint8Array([0xde, 0xad]);
-  let noritoEncodeCalls = 0;
+test("submitTransaction validates canonical versioned transaction payload exactly once", async () => {
+  const payload = new Uint8Array([0x01, 0xba, 0xdc]);
   let versionedEncodeCalls = 0;
   const nativeBinding = {
-    encodeSignedTransactionNorito: undefined,
     encodeSignedTransactionVersioned: (buffer) => {
       versionedEncodeCalls += 1;
       assert.ok(Buffer.isBuffer(buffer));
-      assert.deepEqual([...buffer.values()], [0xde, 0xad]);
-      return Buffer.from([0x01, 0xba, 0xdc]);
+      assert.deepEqual([...buffer.values()], [...payload]);
+      return Buffer.from(buffer);
     },
   };
   const fetchImpl = async (url, init) => {
@@ -8788,76 +8790,41 @@ test("submitTransaction preserves native versioned transaction payload", async (
   const client = new ToriiClient(BASE_URL, { fetchImpl, __nativeBinding: nativeBinding });
   const response = await client.submitTransaction(payload);
   assert.deepEqual(response, { ok: true });
-  assert.equal(noritoEncodeCalls, 0);
   assert.equal(versionedEncodeCalls, 1);
 });
 
-test("submitTransaction falls back when native transaction encoder rejects opaque bytes", async () => {
-  const payload = new Uint8Array([0xf0, 0x0d]);
+test("submitTransaction propagates canonical encoder rejection before any request", async () => {
+  const payload = new Uint8Array([0x01, 0xf0, 0x0d]);
   let nativeEncodeCalls = 0;
   const nativeBinding = {
-    encodeSignedTransactionNorito: (buffer) => {
+    encodeSignedTransactionVersioned: (buffer) => {
       nativeEncodeCalls += 1;
       assert.ok(Buffer.isBuffer(buffer));
-      assert.deepEqual([...buffer.values()], [0xf0, 0x0d]);
+      assert.deepEqual([...buffer.values()], [...payload]);
       throw new Error("schema mismatch");
     },
   };
-  const fetchImpl = async (url, init) => {
-    if (url === `${BASE_URL}/v1/node/capabilities`) {
-      return createResponse({
-        status: 200,
-        jsonData: {
-          abi_version: 1,
-          data_model_version: 4,
-          crypto: {
-            sm: {
-              enabled: false,
-              default_hash: "sha2_256",
-              allowed_signing: ["ed25519"],
-              sm2_distid_default: "",
-              openssl_preview: false,
-              acceleration: {
-                scalar: true,
-                neon_sm3: false,
-                neon_sm4: false,
-                policy: "scalar-only",
-              },
-            },
-            curves: {
-              registry_version: 1,
-              allowed_curve_ids: [1],
-            },
-          },
-        },
-        headers: { "content-type": "application/json" },
-      });
-    }
-    assert.equal(url, `${BASE_URL}/v1/pipeline/transactions`);
-    assert.equal(init.method, "POST");
-    assert.deepEqual([...Buffer.from(init.body).values()], [0x01, 0xf0, 0x0d]);
-    return createResponse({
-      status: 202,
-      jsonData: { ok: true },
-      headers: { "content-type": "application/json" },
-    });
+  let fetchCalls = 0;
+  const fetchImpl = async () => {
+    fetchCalls += 1;
+    throw new Error("rejected transaction must fail before fetch");
   };
   const client = new ToriiClient(BASE_URL, { fetchImpl, __nativeBinding: nativeBinding });
-  const response = await client.submitTransaction(payload);
-  assert.deepEqual(response, { ok: true });
+  await assert.rejects(() => client.submitTransaction(payload), /schema mismatch/);
   assert.equal(nativeEncodeCalls, 1);
+  assert.equal(fetchCalls, 0);
 });
 
 test("submitTransaction does not fall back to removed public submit route", async () => {
-  const payload = new Uint8Array([0xfa, 0xce]);
+  const payload = new Uint8Array([0x01, 0xfa, 0xce]);
   const seenUrls = [];
   let nativeEncodeCalls = 0;
   const nativeBinding = {
-    encodeSignedTransactionNorito: (buffer) => {
+    encodeSignedTransactionVersioned: (buffer) => {
       nativeEncodeCalls += 1;
       assert.ok(Buffer.isBuffer(buffer));
-      assert.deepEqual([...buffer.values()], [0xfa, 0xce]);
-      return Buffer.from([0xba, 0xdc, 0x0f, 0xfe]);
+      assert.deepEqual([...buffer.values()], [...payload]);
+      return Buffer.from(buffer);
     },
   };
   const fetchImpl = async (url, init) => {
@@ -8893,7 +8860,7 @@ test("submitTransaction does not fall back to removed public submit route", asyn
     }
     if (url === `${BASE_URL}/v1/pipeline/transactions`) {
       assert.equal(init.method, "POST");
-      assert.deepEqual([...Buffer.from(init.body).values()], [0x01, 0xba, 0xdc, 0x0f, 0xfe]);
+      assert.deepEqual([...Buffer.from(init.body).values()], [...payload]);
       return createResponse({ status: 405 });
     }
     throw new Error(`Unexpected URL ${url}`);
@@ -8908,7 +8875,7 @@ test("submitTransaction does not fall back to removed public submit route", asyn
 });
 
 test("submitTransaction rejects missing node capabilities advert", async () => {
-  const payload = new Uint8Array([0xde, 0xad]);
+  const payload = new Uint8Array([0x01, 0xde, 0xad]);
   const calls = [];
   const fetchImpl = async (url, init) => {
     calls.push({ url, init });
@@ -8921,7 +8888,10 @@ test("submitTransaction rejects missing node capabilities advert", async () => {
     }
     assert.fail(`unexpected transaction submission to ${url} with ${init?.method}`);
   };
-  const client = new ToriiClient(BASE_URL, { fetchImpl });
+  const client = new ToriiClient(BASE_URL, {
+    fetchImpl,
+    __nativeBinding: canonicalTransactionCodecNative(),
+  });
   await assert.rejects(
     () => client.submitTransaction(payload),
     (error) => {
@@ -8936,7 +8906,7 @@ test("submitTransaction rejects missing node capabilities advert", async () => {
 });
 
 test("submitTransaction rejects mismatched data model version", async () => {
-  const payload = new Uint8Array([0x01]);
+  const payload = new Uint8Array([0x01, 0xaa]);
   const fetchImpl = async (url) => {
     if (url === `${BASE_URL}/v1/node/capabilities`) {
       return createResponse({
@@ -8969,7 +8939,10 @@ test("submitTransaction rejects mismatched data model version", async () => {
     }
     throw new Error(`Unexpected URL ${url}`);
   };
-  const client = new ToriiClient(BASE_URL, { fetchImpl });
+  const client = new ToriiClient(BASE_URL, {
+    fetchImpl,
+    __nativeBinding: canonicalTransactionCodecNative(),
+  });
   await assert.rejects(
     () => client.submitTransaction(payload),
     (error) => {
@@ -9642,7 +9615,6 @@ test("getPipelinePreflight fetches diagnostics and classifies queue stalls", asy
     },
     block: { max_transactions: 512 },
     pipeline: {
-      signature_batch_max: 0,
       signature_batch_max_ed25519: 64,
       signature_batch_max_secp256k1: 16,
       signature_batch_max_pqc: 8,
@@ -9692,6 +9664,26 @@ test("getPipelinePreflight fetches diagnostics and classifies queue stalls", asy
   assert.equal(result.fees.sponsor_vault_custody_account_id, "vault@system");
   assert.deepEqual(result.fees.successful_claim_fee_exempt_authorities, ["authority@system"]);
   assert.equal(result.isStatusStalled(status), true);
+});
+
+test("getPipelinePreflight rejects the retired aggregate signature batch field", async () => {
+  const fetchImpl = async () =>
+    createResponse({
+      status: 200,
+      jsonData: {
+        sumeragi: {},
+        admission: {},
+        block: {},
+        pipeline: { signature_batch_max: 0 },
+      },
+      headers: { "content-type": "application/json" },
+    });
+  const client = new ToriiClient(BASE_URL, { fetchImpl });
+
+  await assert.rejects(
+    () => client.getPipelinePreflight(),
+    /pipeline contains unknown field signature_batch_max/,
+  );
 });
 
 test("getPipelineRecoveryFastpqProofs fetches committed proof batches", async () => {
@@ -11793,13 +11785,14 @@ test("getSumeragiStatusTyped rejects malformed liveness diagnostics", async () =
   );
 });
 
-test("retired aggregate Sumeragi telemetry, RBC, and collector helpers are absent", async () => {
+test("retired Sumeragi compatibility helpers are absent", async () => {
   const present = (owner, names) => names.filter((name) => Object.hasOwn(owner, name));
   assert.deepEqual(
     present(ToriiClient.prototype, [
       "getSumeragiTelemetry", "getSumeragiTelemetryTyped",
       "getSumeragiCollectors", "getSumeragiRbc", "getSumeragiRbcSessions",
       "findRbcSamplingCandidate", "getSumeragiRbcDelivered", "sampleRbcChunks",
+      "listSumeragiKeyLifecycle",
     ]),
     [],
   );
@@ -12659,12 +12652,17 @@ test("getStatusSnapshot normalizes payload and tracks metrics", async () => {
       time_since_last_block_ms: 100,
       time_since_last_non_empty_block_ms: 1_000,
       commit_time_ms: 420,
-      da_reschedule_total: "7",
       txs_approved: 100,
       txs_rejected: 2,
       view_changes: 1,
       governance: {
-        proposals: { proposed: 4, approved: 2, rejected: 1, enacted: 1 },
+        proposals: {
+          proposed: 4,
+          rejected: 1,
+          enacted: 1,
+          superseded: 2,
+          execution_failed: 0,
+        },
         protected_namespace: { total_checks: 3, allowed: 2, rejected: 1 },
         manifest_admission: {
           total_checks: 5,
@@ -12766,12 +12764,17 @@ test("getStatusSnapshot normalizes payload and tracks metrics", async () => {
       time_since_last_block_ms: 100,
       time_since_last_non_empty_block_ms: 1_000,
       commit_time_ms: 250,
-      da_reschedule_total: 9,
       txs_approved: 103,
       txs_rejected: 4,
       view_changes: 2,
       governance: {
-        proposals: { proposed: 5, approved: 3, rejected: 1, enacted: 1 },
+        proposals: {
+          proposed: 5,
+          rejected: 1,
+          enacted: 1,
+          superseded: 2,
+          execution_failed: 1,
+        },
         protected_namespace: { total_checks: 3, allowed: 2, rejected: 1 },
         manifest_admission: {
           total_checks: 6,
@@ -12888,13 +12891,19 @@ test("getStatusSnapshot normalizes payload and tracks metrics", async () => {
   assert.equal(statusLivenessElapsedMs(first.status), 1_000);
   assert.equal(isStatusQueueStalled(first.status, 999), true);
   assert.equal(isStatusQueueStalled(first.status, 1_000), false);
-  assert.equal(first.status.da_reschedule_total, 7);
   assert.equal(first.metrics.commit_latency_ms, 420);
   assert.equal(first.metrics.queue_delta, 0);
   assert.equal(first.metrics.tx_approved_delta, 0);
   assert.equal(first.metrics.has_activity, false);
   assert.equal(first.status.raw.commit_time_ms, 420);
   assert.ok(first.status.governance);
+  assert.deepEqual(first.status.governance?.proposals, {
+    proposed: 4,
+    rejected: 1,
+    enacted: 1,
+    superseded: 2,
+    execution_failed: 0,
+  });
   assert.equal(first.status.governance?.manifest_admission.runtime_hook_rejected, 0);
   assert.deepEqual(first.status.lane_commitments, [
     {
@@ -12977,7 +12986,6 @@ test("getStatusSnapshot normalizes payload and tracks metrics", async () => {
   assert.equal(second.metrics.queue_queued, 1);
   assert.equal(second.metrics.queue_inflight, 0);
   assert.equal(second.metrics.queue_delta, -2);
-  assert.equal(second.metrics.da_reschedule_delta, 2);
   assert.equal(second.metrics.tx_approved_delta, 3);
   assert.equal(second.metrics.tx_rejected_delta, 2);
   assert.equal(second.metrics.view_change_delta, 1);
@@ -12998,7 +13006,6 @@ test("getStatusSnapshot rejects non-integer counters", async () => {
         peers: 1.5,
         queue_size: 0,
         commit_time_ms: 1,
-        da_reschedule_total: 0,
         txs_approved: 0,
         txs_rejected: 0,
         view_changes: 0,
@@ -13030,7 +13037,6 @@ test("getStatusSnapshot rejects removed SNARK lane commitments", async () => {
         peers: 1,
         queue_size: 0,
         commit_time_ms: 1,
-        da_reschedule_total: 0,
         txs_approved: 0,
         txs_rejected: 0,
         view_changes: 0,
@@ -13068,7 +13074,6 @@ test("getStatusSnapshot rejects non-integer lane commitment values", async () =>
         peers: 1,
         queue_size: 0,
         commit_time_ms: 1,
-        da_reschedule_total: 0,
         txs_approved: 0,
         txs_rejected: 0,
         view_changes: 0,
@@ -13110,7 +13115,7 @@ test("getStatusSnapshot forwards AbortSignal", async () => {
     assert.strictEqual(init.signal, controller.signal);
     return createResponse({
       status: 200,
-      jsonData: { peers: 1, queue_size: 0, commit_time_ms: 1, da_reschedule_total: 0 },
+      jsonData: { peers: 1, queue_size: 0, commit_time_ms: 1 },
       headers: { "content-type": "application/json" },
     });
   };
@@ -13699,7 +13704,9 @@ registerToriiClientGovernanceTests({
   assert,
   BASE_URL,
   FIXTURE_ALICE_ID,
+  FIXTURE_ALICE_TEST_ID,
   FIXTURE_BOB_ID,
+  FIXTURE_BOB_NARNIA_ID,
   FIXTURE_CAROL_ID,
   GOVERNANCE_NETWORK_ID: VK_SIGNING_NETWORK_ID,
   GOVERNANCE_LOCAL_SIGNING_CONTEXT: VK_LOCAL_SIGNING_CONTEXT,
@@ -24720,7 +24727,7 @@ test("submitTransaction bounds node capabilities before any pipeline side effect
           };
     const client = new ToriiClient(BASE_URL, {
       timeoutMs: 10,
-      __nativeBinding: {},
+      __nativeBinding: canonicalTransactionCodecNative(),
       fetchImpl: async (url) => {
         if (url.endsWith("/v1/node/capabilities")) {
           return {
@@ -24739,7 +24746,7 @@ test("submitTransaction bounds node capabilities before any pipeline side effect
       },
     });
     await assert.rejects(
-      () => client.submitTransaction(Uint8Array.of(1)),
+      () => client.submitTransaction(Uint8Array.of(1, 0xaa)),
       mode === "stalled" ? /body read timed out after 10ms/ : /response limit/,
     );
     assert.equal(pipelineCalls, 0, mode);
@@ -24752,7 +24759,7 @@ test("submitTransaction caller abort does not wait for shared capability validat
   let pipelineCalls = 0;
   const client = new ToriiClient(BASE_URL, {
     timeoutMs: 30,
-    __nativeBinding: {},
+    __nativeBinding: canonicalTransactionCodecNative(),
     fetchImpl: async (url) => {
       if (url.endsWith("/v1/node/capabilities")) {
         return {
@@ -24780,7 +24787,7 @@ test("submitTransaction caller abort does not wait for shared capability validat
   const startedAt = Date.now();
   await assert.rejects(
     () =>
-      client.submitTransaction(Uint8Array.of(1), {
+      client.submitTransaction(Uint8Array.of(1, 0xaa), {
         signal: controller.signal,
       }),
     /caller abandoned validation/,
@@ -24816,7 +24823,7 @@ test("submitTransaction bounds JSON and Norito success receipts after one submit
             };
       const client = new ToriiClient(BASE_URL, {
         timeoutMs: 10,
-        __nativeBinding: {},
+        __nativeBinding: canonicalTransactionCodecNative(),
         fetchImpl: async (url) => {
           if (url.endsWith("/v1/node/capabilities")) {
             return createResponse({
@@ -24839,7 +24846,7 @@ test("submitTransaction bounds JSON and Norito success receipts after one submit
         },
       });
       await assert.rejects(
-        () => client.submitTransaction(Uint8Array.of(1)),
+        () => client.submitTransaction(Uint8Array.of(1, 0xaa)),
         mode === "stalled" ? /body read timed out after 10ms/ : /response limit/,
       );
       assert.equal(pipelineCalls, 1, `${contentType} ${mode}`);
@@ -25050,7 +25057,10 @@ test("http errors surface reject header codes", async () => {
       },
     });
   };
-  const client = new ToriiClient(BASE_URL, { fetchImpl });
+  const client = new ToriiClient(BASE_URL, {
+    fetchImpl,
+    __nativeBinding: canonicalTransactionCodecNative(),
+  });
   await assert.rejects(
     () => client.submitTransaction(new Uint8Array([0x01, 0x02])),
     (error) => {

@@ -574,7 +574,8 @@ fn native_find_accounts_request() -> QueryRequest {
         SelectorTuple::default(),
         norito::codec::Encode::encode(&FindAccounts),
     ));
-    let query = QueryWithParams::new(&query, QueryParams::default());
+    let query = QueryWithParams::new(&query, QueryParams::default())
+        .expect("account query type has a canonical mapping");
     QueryRequest::Start(query)
 }
 fn native_find_permissions_request_with_payload(payload: Vec<u8>) -> QueryRequest {
@@ -588,7 +589,8 @@ fn native_find_permissions_request_with_payload(payload: Vec<u8>) -> QueryReques
         SelectorTuple::default(),
         payload,
     ));
-    let query = QueryWithParams::new(&query, QueryParams::default());
+    let query = QueryWithParams::new(&query, QueryParams::default())
+        .expect("permission query type has a canonical mapping");
     QueryRequest::Start(query)
 }
 fn native_find_permissions_request(account: AccountId) -> QueryRequest {
@@ -1122,21 +1124,20 @@ fn migrate_applies_data_model_from_entrypoint() {
         "permission.can_control_domain_lives".to_owned(),
         Json::new(()),
     );
-    let expected_legacy_names = [
+    let declared_permission_names = [
         "CanMintAsset",
         "CanInvokeContractEntrypoint",
         "CanPublishSpaceDirectoryManifest",
         "CanPublishSpaceDirectoryManifestForUaid",
         "CanPublishSpaceDirectoryManifestForAccountDomain",
     ];
-    assert_eq!(LEGACY_ESCALATION_PERMISSION_NAMES, expected_legacy_names);
-    let legacy_permissions = expected_legacy_names
+    let declared_permissions = declared_permission_names
         .into_iter()
         .map(|name| Permission::new(name.to_owned(), Json::new(())))
         .collect::<BTreeSet<_>>();
     let permissions = core::iter::once(retained_permission.name().to_owned())
         .chain(
-            legacy_permissions
+            declared_permissions
                 .iter()
                 .map(|permission| permission.name().to_owned()),
         )
@@ -1152,16 +1153,16 @@ fn migrate_applies_data_model_from_entrypoint() {
     let bytecode = generate_migration_program(&verdict);
     let raw = data_model_executor::Executor::new(IvmBytecode::from_compiled(bytecode));
     let mut executor = super::Executor::Initial;
-    let role_id: RoleId = "legacy_escalation_role".parse().expect("role id");
+    let role_id: RoleId = "declared_permission_role".parse().expect("role id");
     let stored_permissions = core::iter::once(retained_permission.clone())
-        .chain(legacy_permissions.iter().cloned())
+        .chain(declared_permissions.iter().cloned())
         .collect::<BTreeSet<_>>();
     let mut permission_epochs = BTreeMap::from([(retained_permission.clone(), 8)]);
-    permission_epochs.extend(legacy_permissions.iter().cloned().enumerate().map(
+    permission_epochs.extend(declared_permissions.iter().cloned().enumerate().map(
         |(index, permission)| {
             (
                 permission,
-                9 + u64::try_from(index).expect("legacy permission count fits u64"),
+                9 + u64::try_from(index).expect("declared permission count fits u64"),
             )
         },
     ));
@@ -1180,7 +1181,7 @@ fn migrate_applies_data_model_from_entrypoint() {
     );
     world
         .account_permissions
-        .insert(ALICE_ID.clone(), stored_permissions);
+        .insert(ALICE_ID.clone(), stored_permissions.clone());
     let kura = Kura::blank_kura_for_testing();
     let query_handle = query::store::LiveQueryStore::start_test();
     let state = State::new_with_chain(world, kura, query_handle, ChainId::from("test-chain"));
@@ -1197,18 +1198,18 @@ fn migrate_applies_data_model_from_entrypoint() {
             .account_permissions
             .get(&ALICE_ID)
             .expect("retained account permission entry"),
-        &BTreeSet::from([retained_permission.clone()]),
+        &stored_permissions,
     );
     let role = state_tx.world.roles.get(&role_id).expect("retained role");
     assert_eq!(
         role.permissions().cloned().collect::<BTreeSet<_>>(),
-        BTreeSet::from([retained_permission.clone()]),
+        stored_permissions,
     );
     assert_eq!(role.permission_epochs().get(&retained_permission), Some(&8),);
     assert!(
-        legacy_permissions
+        declared_permissions
             .iter()
-            .all(|permission| !role.permission_epochs().contains_key(permission)),
+            .all(|permission| role.permission_epochs().contains_key(permission)),
     );
     match executor {
         super::Executor::UserProvided(_) => {}

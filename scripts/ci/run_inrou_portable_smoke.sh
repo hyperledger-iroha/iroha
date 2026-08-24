@@ -64,8 +64,8 @@ cd "$ROOT_DIR"
 echo "+ cargo test --locked -p irohad --bin iroha3d build_inrou_user_data_projects_portable_block_mounts_and_allowlist_overlay -- --nocapture"
 cargo test --locked -p irohad --bin iroha3d build_inrou_user_data_projects_portable_block_mounts_and_allowlist_overlay -- --nocapture
 
-echo "+ cargo test --locked -p irohad --bin iroha3d ensure_inrou_portable_root_disk_uses_qcow2_overlay_with_backing_file -- --nocapture"
-cargo test --locked -p irohad --bin iroha3d ensure_inrou_portable_root_disk_uses_qcow2_overlay_with_backing_file -- --nocapture
+echo "+ cargo test --locked -p irohad --bin iroha3d ensure_inrou_portable_root_disk_is_a_standalone_authenticated_copy -- --nocapture"
+cargo test --locked -p irohad --bin iroha3d ensure_inrou_portable_root_disk_is_a_standalone_authenticated_copy -- --nocapture
 
 echo "+ cargo test --locked -p irohad --bin iroha3d inrou_portable_smoke_boots_debian_guest_and_serves_healthcheck -- --ignored --nocapture"
 cargo test --locked -p irohad --bin iroha3d inrou_portable_smoke_boots_debian_guest_and_serves_healthcheck -- --ignored --nocapture

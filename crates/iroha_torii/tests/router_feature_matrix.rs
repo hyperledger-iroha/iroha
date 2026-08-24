@@ -206,17 +206,23 @@ async fn router_builds_under_current_features() {
         resp1.status(),
         StatusCode::OK | StatusCode::TOO_MANY_REQUESTS
     ));
-    for (path, expected_status) in [
-        ("/v1/sumeragi/evidence", StatusCode::METHOD_NOT_ALLOWED),
-        ("/v1/sumeragi/vrf/commit", StatusCode::NOT_FOUND),
-        ("/v1/sumeragi/vrf/reveal", StatusCode::NOT_FOUND),
+    for (method, path, expected_status) in [
+        (
+            "POST",
+            "/v1/sumeragi/evidence",
+            StatusCode::METHOD_NOT_ALLOWED,
+        ),
+        ("POST", "/v1/sumeragi/vrf/commit", StatusCode::NOT_FOUND),
+        ("GET", "/v1/sumeragi/vrf/epoch/0", StatusCode::NOT_FOUND),
+        ("GET", "/v1/sumeragi/vrf/penalties/0", StatusCode::NOT_FOUND),
+        ("POST", "/v1/sumeragi/vrf/reveal", StatusCode::NOT_FOUND),
     ] {
         let response = app
             .clone()
             .oneshot(fixtures::operator_signed_request(
                 &cfg.common.key_pair,
                 Request::builder()
-                    .method("POST")
+                    .method(method)
                     .uri(Uri::from_static(path))
                     .body(axum::body::Body::empty())
                     .unwrap(),
@@ -227,7 +233,7 @@ async fn router_builds_under_current_features() {
         assert_eq!(
             response.status(),
             expected_status,
-            "retired Sumeragi mutation route {path} must remain absent"
+            "retired Sumeragi route {method} {path} must remain absent"
         );
     }
     let resp2 = app

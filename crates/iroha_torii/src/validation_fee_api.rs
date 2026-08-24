@@ -7,10 +7,13 @@ use axum::{
     extract::{ConnectInfo, Extension, Path, State},
     http::HeaderMap,
 };
-use iroha_core::state::{StateReadOnly as _, WorldReadOnly as _};
+use iroha_core::state::{StateReadOnly as _, WorldReadOnly};
 use iroha_data_model::{
     account::AccountId,
-    governance::types::ProposalKind,
+    governance::types::{
+        GovernanceAttemptStatusV1, GovernanceCertificateId, GovernanceCertificateV1,
+        ProposalContentId, ProposalKind,
+    },
     isi::{
         InstructionBox, frame_instruction_payload,
         governance::{ProposeValidationFeePayoutLifecycle, ProposeValidationFeePolicy},
@@ -25,11 +28,9 @@ use iroha_torii_shared::validation_fee_api::{
     ValidationFeeProposalDetailQueryV1, ValidationFeeProposalDetailV1,
     ValidationFeeProposalDraftPayloadV1, ValidationFeeProposalDraftRequestV1,
     ValidationFeeProposalDraftResponseV1, ValidationFeeProposalInstructionDraftV1,
-    ValidationFeeProposalListQueryV1, ValidationFeeProposalListV1,
-    ValidationFeeProposalPipelineStageV1, ValidationFeeProposalPipelineV1,
-    ValidationFeeProposalRecordV1, ValidationFeeProposalStatusV1,
-    decode_validation_fee_proposal_cursor_v1, encode_validation_fee_proposal_cursor_v1,
-    validation_fee_policy_proof_page_tip,
+    ValidationFeeProposalListQueryV1, ValidationFeeProposalListV1, ValidationFeeProposalRecordV1,
+    ValidationFeeProposalStatusV1, decode_validation_fee_proposal_cursor_v1,
+    encode_validation_fee_proposal_cursor_v1, validation_fee_policy_proof_page_tip,
 };
 use mv::storage::StorageReadOnly as _;
 use std::ops::Bound::{Excluded, Unbounded};
@@ -80,31 +81,18 @@ fn retained_proposal_operator(proposal_kind: &ProposalKind) -> Result<&AccountId
         )),
     }
 }
-fn public_pipeline(
-    proposal: &iroha_core::state::GovernanceProposalRecord,
-) -> ValidationFeeProposalPipelineV1 {
-    ValidationFeeProposalPipelineV1 {
-        stages: proposal
-            .pipeline
-            .stages
-            .iter()
-            .map(|stage| ValidationFeeProposalPipelineStageV1 {
-                stage: format!("{:?}", stage.stage),
-                started_at: stage.started_at.to_string(),
-                deadline: stage.deadline.map(|height| height.to_string()),
-                completed_at: stage.completed_at.map(|height| height.to_string()),
-                failure: stage.failure.map(|failure| format!("{failure:?}")),
-            })
-            .collect(),
-    }
-}
 fn public_proposal_record(
+    world: &impl WorldReadOnly,
+    registry: Option<&ValidationFeePolicyRegistryV1>,
     proposal_id: [u8; 32],
     proposal: &iroha_core::state::GovernanceProposalRecord,
-    authorization: Option<
-        &iroha_data_model::validation_fee::ValidationFeeParliamentAuthorizationV1,
-    >,
-) -> Result<ValidationFeeProposalRecordV1, Error> {
+) -> Result<
+    (
+        ValidationFeeProposalRecordV1,
+        Option<GovernanceCertificateV1>,
+    ),
+    Error,
+> {
     if !matches!(
         proposal.kind,
         ProposalKind::ValidationFeePolicy(_) | ProposalKind::ValidationFeePayoutLifecycle(_)
@@ -123,40 +111,99 @@ fn public_proposal_record(
             "validation-fee proposal operator differs from its retained proposer",
         ));
     }
-    if let Some(authorization) = authorization {
-        if let Some(reason) = authorization.invariant_error() {
-            return Err(inconsistent(format!(
-                "validation-fee proposal retained an invalid Parliament certificate: {reason}"
-            )));
-        }
-        if authorization.proposal_fingerprint != proposal_id
-            || authorization.proposal_operator != proposal.proposer
-            || proposal.enacted_at_height != Some(authorization.enacted_at_height)
-            || !matches!(
-                proposal.status,
-                iroha_core::state::GovernanceProposalStatus::Enacted
-                    | iroha_core::state::GovernanceProposalStatus::Superseded
-            )
-        {
+    let proposal_content_id = ProposalContentId::new(proposal_id);
+    let mut attempts = world
+        .parliament_attempts()
+        .iter()
+        .filter(|(_, attempt)| attempt.proposal_content_id() == proposal_content_id)
+        .map(|(_, attempt)| attempt)
+        .collect::<Vec<_>>();
+    attempts.sort_unstable_by_key(|attempt| attempt.attempt().sequence);
+    for (expected_sequence, attempt) in attempts.iter().enumerate() {
+        let expected_sequence = u32::try_from(expected_sequence)
+            .map_err(|_| inconsistent("validation-fee proposal attempt sequence exceeds u32"))?;
+        if attempt.attempt().sequence != expected_sequence {
             return Err(inconsistent(
-                "validation-fee certificate differs from its exact retained proposal",
+                "validation-fee proposal attempt history is not an exact contiguous sequence",
             ));
         }
-    } else if matches!(
-        proposal.status,
-        iroha_core::state::GovernanceProposalStatus::Enacted
-            | iroha_core::state::GovernanceProposalStatus::Superseded
-    ) {
+        attempt.validate().map_err(|error| {
+            inconsistent(format!(
+                "validation-fee proposal retained an invalid Parliament attempt: {error}"
+            ))
+        })?;
+        attempt
+            .validate_proposal_bindings_v1(&proposal.kind)
+            .map_err(|error| {
+                inconsistent(format!(
+                    "validation-fee proposal retained a Parliament attempt with mismatched proposal bindings: {error}"
+                ))
+            })?;
+    }
+    let latest_attempt = attempts.last().copied();
+    let expected_status = latest_attempt.map_or(
+        iroha_core::state::GovernanceProposalStatus::Proposed,
+        |attempt| match attempt.attempt().status {
+            GovernanceAttemptStatusV1::Active | GovernanceAttemptStatusV1::Certified => {
+                iroha_core::state::GovernanceProposalStatus::Proposed
+            }
+            GovernanceAttemptStatusV1::Rejected => {
+                iroha_core::state::GovernanceProposalStatus::Rejected
+            }
+            GovernanceAttemptStatusV1::Enacted => {
+                iroha_core::state::GovernanceProposalStatus::Enacted
+            }
+            GovernanceAttemptStatusV1::Superseded => {
+                iroha_core::state::GovernanceProposalStatus::Superseded
+            }
+            GovernanceAttemptStatusV1::ExecutionFailed => {
+                iroha_core::state::GovernanceProposalStatus::ExecutionFailed
+            }
+        },
+    );
+    if proposal.status != expected_status {
         return Err(inconsistent(
-            "enacted validation-fee proposal has no protected Parliament certificate",
+            "validation-fee proposal status differs from its latest Parliament attempt",
+        ));
+    }
+    let certificate = latest_attempt.and_then(|attempt| attempt.certificate().cloned());
+    let authorization = retained_registry_authorization(registry, proposal_id)?;
+    if proposal.status == iroha_core::state::GovernanceProposalStatus::Enacted {
+        let enacted_attempt_count = attempts
+            .iter()
+            .filter(|attempt| attempt.attempt().status == GovernanceAttemptStatusV1::Enacted)
+            .count();
+        let attempt = latest_attempt.ok_or_else(|| {
+            inconsistent("enacted validation-fee proposal has no Parliament attempt")
+        })?;
+        let certificate = certificate.as_ref().ok_or_else(|| {
+            inconsistent("enacted validation-fee proposal has no Parliament certificate")
+        })?;
+        let authorization = authorization.ok_or_else(|| {
+            inconsistent("enacted validation-fee proposal has no protected registry authorization")
+        })?;
+        if enacted_attempt_count != 1
+            || attempt.terminal_height() != Some(certificate.enact_at_height)
+            || authorization.invariant_error().is_some()
+            || authorization.proposal_fingerprint != proposal_id
+            || authorization.proposal_operator != proposal.proposer
+            || authorization.governance_certificate_id
+                != GovernanceCertificateId::derive_v1(certificate)
+            || &authorization.governance_certificate != certificate
+            || authorization.enacted_at_height != certificate.enact_at_height
+        {
+            return Err(inconsistent(
+                "protected validation-fee authorization differs from the unique enacted Parliament attempt",
+            ));
+        }
+    } else if authorization.is_some() {
+        return Err(inconsistent(
+            "unenacted validation-fee proposal unexpectedly has protected registry authorization",
         ));
     }
     let status = match proposal.status {
         iroha_core::state::GovernanceProposalStatus::Proposed => {
             ValidationFeeProposalStatusV1::Proposed
-        }
-        iroha_core::state::GovernanceProposalStatus::Approved => {
-            ValidationFeeProposalStatusV1::Approved
         }
         iroha_core::state::GovernanceProposalStatus::Rejected => {
             ValidationFeeProposalStatusV1::Rejected
@@ -167,30 +214,19 @@ fn public_proposal_record(
         iroha_core::state::GovernanceProposalStatus::Superseded => {
             ValidationFeeProposalStatusV1::Superseded
         }
+        iroha_core::state::GovernanceProposalStatus::ExecutionFailed => {
+            ValidationFeeProposalStatusV1::ExecutionFailed
+        }
     };
-    Ok(ValidationFeeProposalRecordV1 {
-        proposal_id: hex::encode(proposal_id),
-        proposer: proposal.proposer.clone(),
-        proposal_kind: proposal.kind.clone(),
-        created_height: proposal.created_height.to_string(),
-        status,
-        pipeline: public_pipeline(proposal),
-        governance_certificate_id: authorization
-            .map(|authorization| hex::encode(authorization.governance_certificate_id.as_bytes())),
-        certified_at_height: authorization.map(|authorization| {
-            authorization
-                .governance_certificate
-                .certified_at_height
-                .to_string()
-        }),
-        enact_at_height: authorization.map(|authorization| {
-            authorization
-                .governance_certificate
-                .enact_at_height
-                .to_string()
-        }),
-        enacted_at_height: proposal.enacted_at_height.map(|height| height.to_string()),
-    })
+    Ok((
+        ValidationFeeProposalRecordV1 {
+            proposer: proposal.proposer.clone(),
+            kind: proposal.kind.clone(),
+            created_height: proposal.created_height,
+            status,
+        },
+        certificate,
+    ))
 }
 fn current_validation_fee_registry(
     world: &impl WorldReadOnly,
@@ -302,11 +338,8 @@ pub(crate) async fn handler_proposals(
                 "validation-fee proposal index does not match its exact typed proposal",
             ));
         }
-        proposals.push(public_proposal_record(
-            proposal_id,
-            proposal,
-            retained_registry_authorization(registry.as_ref(), proposal_id)?,
-        )?);
+        let (record, _) = public_proposal_record(&world, registry.as_ref(), proposal_id, proposal)?;
+        proposals.push(record);
         last_key = Some((created_height, proposal_id));
     }
     let next_cursor = if has_more {
@@ -351,15 +384,15 @@ pub(crate) async fn handler_proposal_detail(
         return Err(not_found("validation-fee proposal was not found"));
     }
     let registry = current_validation_fee_registry(&world)?;
-    let authorization = retained_registry_authorization(registry.as_ref(), proposal_id_bytes)?;
+    let (proposal, governance_certificate) =
+        public_proposal_record(&world, registry.as_ref(), proposal_id_bytes, proposal)?;
     Ok(JsonBody(ValidationFeeProposalDetailV1 {
         version: VALIDATION_FEE_PROPOSAL_API_VERSION_V1,
-        proposal: public_proposal_record(proposal_id_bytes, proposal, authorization)?,
+        proposal,
         current_height: u64::try_from(app.state.committed_height())
             .unwrap_or(u64::MAX)
             .to_string(),
-        governance_certificate: authorization
-            .map(|authorization| authorization.governance_certificate.clone()),
+        governance_certificate,
     }))
 }
 fn canonical_draft_instruction(

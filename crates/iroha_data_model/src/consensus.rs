@@ -132,11 +132,23 @@ impl ValidatorSetCheckpoint {
 /// Deterministic `NPoS` state effects embedded in a signed block.
 ///
 /// These effects are applied as part of the committed block transition so every
-/// peer replays the same VRF epoch records and penalty state.
+/// peer replays the same threshold-beacon pulse, legacy VRF audit records, and
+/// penalty state.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct NposConsensusEffects {
-    /// VRF epoch records sealed by this block.
+    /// Unique finalized global threshold-beacon pulse carried by this block.
+    ///
+    /// Partial signatures and reconstruction subsets never enter the signed
+    /// block; validators independently verify this final signature against the
+    /// active public DKG session before applying it.
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
+    pub finalized_global_beacon_pulse: Option<FinalizedGlobalThresholdBeaconPulseV1>,
+    /// Retired commit/reveal records retained only for historical test fixtures.
+    ///
+    /// Production candidate validation and application reject a non-empty
+    /// value; this field is not an entropy source or a live mutation corridor.
     #[norito(default)]
     #[norito(skip_serializing_if = "Vec::is_empty")]
     pub vrf_epoch_seals: Vec<VrfEpochRecord>,
@@ -154,7 +166,8 @@ impl NposConsensusEffects {
     /// Returns true when the bundle carries no committed state changes.
     #[must_use]
     pub fn is_empty(&self) -> bool {
-        self.vrf_epoch_seals.is_empty()
+        self.finalized_global_beacon_pulse.is_none()
+            && self.vrf_epoch_seals.is_empty()
             && self.v2_evidence_admissions.is_empty()
             && self.penalty_actions.is_empty()
     }
@@ -751,14 +764,8 @@ pub struct FinalizedGlobalThresholdBeaconPulseV1 {
     pub transcript_hash: [u8; 32],
     /// Consensus height at which this pulse is finalized.
     pub height: u64,
-    /// Consensus round within `height`; `(height, round)` is strictly monotonic.
+    /// Canonical fixed protocol round (zero in V1), independent of consensus view.
     pub round: u64,
-    /// Identifier of the immediately preceding canonical pulse (or configured origin).
-    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
-    pub previous_pulse_id: [u8; 32],
-    /// Seed of the immediately preceding canonical pulse (or configured origin).
-    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
-    pub previous_seed: [u8; 32],
     /// Exact finalized-chain point authenticated by this pulse.
     pub finalized_chain_anchor: GlobalThresholdBeaconChainAnchorV1,
     /// Canonical compressed BLS12-381 G1 final group signature.
@@ -994,9 +1001,7 @@ mod tests {
             roster_hash: session.roster_hash,
             transcript_hash: session.transcript_hash,
             height: 42,
-            round: 3,
-            previous_pulse_id: [0x88; 32],
-            previous_seed: [0x99; 32],
+            round: 0,
             finalized_chain_anchor: GlobalThresholdBeaconChainAnchorV1 {
                 height: 41,
                 block_hash: HashOf::<crate::block::BlockHeader>::from_untyped_unchecked(
@@ -1231,7 +1236,7 @@ mod tests {
             epoch: 0,
             chain_order_hash: crate::consensus::default_chain_order_hash(),
             rechain_seq: 0,
-            mode_tag: crate::block::consensus::PERMISSIONED_TAG.to_string(),
+            mode_tag: crate::block::consensus_v2::PERMISSIONED_TAG.to_string(),
             highest_qc: None,
             validator_set_hash,
             validator_set_hash_version: VALIDATOR_SET_HASH_VERSION_V1,

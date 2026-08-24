@@ -171,15 +171,6 @@ pub(super) fn verifier_digest() -> Result<[u8; 32], VegaMdlProofErrorV1> {
 pub(super) fn proof_dimensions() -> Result<VegaMdlProofDimensionsV1, VegaMdlProofErrorV1> {
     Ok(microsoft_mc::canonical_figure9_dimensions())
 }
-/// Validate an independently generated Microsoft fixture with first-party code.
-pub(super) fn validate_microsoft_fixture(
-    verifier_key: &[u8],
-    proof: &[u8],
-) -> Result<([u8; 32], VegaMdlProofDimensionsV1, usize, usize), VegaMdlProofErrorV1> {
-    let (digest, dimensions, steps, core) = microsoft_mc::validate_fixture(verifier_key, proof)
-        .map_err(|_| VegaMdlProofErrorV1::VerificationFailed)?;
-    Ok((digest, dimensions, steps.len(), core.len()))
-}
 fn validate_context(context: &VegaMdlProofContextV1<'_>) -> Result<[u8; 32], VegaMdlProofErrorV1> {
     if context.action_index != VEGA_MDL_ACTION_INDEX_V1
         || context.chain_id.is_empty()

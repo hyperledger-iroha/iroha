@@ -96,7 +96,74 @@ fn dispatch_server_operation_with_session(
         IrohaRuntimeProviderSlotV1::SoracloudHfInferenceCredentialProvider.wire_id();
     let bootle_lantern_issuance_slot =
         IrohaRuntimeProviderSlotV1::BootleLanternIssuanceProviderRegistry.wire_id();
+    let global_beacon_partial_signer_slot =
+        IrohaRuntimeProviderSlotV1::GlobalBeaconPartialSigner.wire_id();
+    let parliament_tle_partial_release_signer_slot =
+        IrohaRuntimeProviderSlotV1::ParliamentTlePartialReleaseSigner.wire_id();
     let result = match (request.binding.slot, request.operation) {
+        (slot, OPERATION_QUALIFY_V1)
+            if slot == global_beacon_partial_signer_slot
+                || slot == parliament_tle_partial_release_signer_slot =>
+        {
+            let qualification = if slot == global_beacon_partial_signer_slot {
+                broker_backend!(state, global_beacon_partial_signer)
+                    .qualification()
+                    .map_err(|_| BrokerError::StaleOrRevoked)?
+            } else {
+                broker_backend!(state, parliament_tle_partial_release_signer)
+                    .qualification()
+                    .map_err(|_| BrokerError::StaleOrRevoked)?
+            };
+            if qualification.test_marked
+                || qualification.revision == 0
+                || qualification.policy_digest == [0; 32]
+            {
+                return Err(BrokerError::StaleOrRevoked);
+            }
+            encode_canonical(
+                &QualificationResultWireV1 {
+                    revision: qualification.revision,
+                    policy_digest: qualification.policy_digest,
+                },
+                MAX_CONSENSUS_SIGNER_FRAME_BYTES_V1,
+            )
+        }
+        (slot, OPERATION_GLOBAL_BEACON_PARTIAL_SIGN_V1)
+            if slot == global_beacon_partial_signer_slot =>
+        {
+            let (_, mut aggregator) =
+                decode_global_beacon_partial_sign_request(&request.payload, &state.network_id)?;
+            let backend = broker_backend!(state, global_beacon_partial_signer);
+            let partial = backend
+                .sign_partial(aggregator.session(), aggregator.payload())
+                .map_err(|_| BrokerError::Unavailable)?;
+            aggregator
+                .accept_partial(partial)
+                .map_err(|_| BrokerError::Rejected)?;
+            requalify()?;
+            encode_canonical(
+                &GlobalBeaconPartialSignResultWireV1 { partial },
+                MAX_CONSENSUS_SIGNER_FRAME_BYTES_V1,
+            )
+        }
+        (slot, OPERATION_PARLIAMENT_TLE_PARTIAL_RELEASE_SIGN_V1)
+            if slot == parliament_tle_partial_release_signer_slot =>
+        {
+            let (_, projection) = decode_parliament_tle_partial_release_sign_request(
+                &request.payload,
+                &state.network_id,
+            )?;
+            let backend = broker_backend!(state, parliament_tle_partial_release_signer);
+            let partial = backend
+                .sign_projected_partial_release(&projection)
+                .map_err(|_| BrokerError::Unavailable)?;
+            verify_parliament_tle_partial_release_result(&projection, &partial)?;
+            requalify()?;
+            encode_canonical(
+                &ParliamentTlePartialReleaseSignResultWireV1 { partial },
+                MAX_CONSENSUS_SIGNER_FRAME_BYTES_V1,
+            )
+        }
         (slot, OPERATION_MODERATION_PANEL_NOTIFICATION_ARCHIVE_QUALIFY_V1)
             if slot == moderation_panel_notification_archive_slot =>
         {
@@ -2705,6 +2772,8 @@ fn dispatch_server_operation_with_session(
             )?;
             let provider_request = crate::soracloud_hf_credential::
                 SoracloudHfAuthenticatedInferenceRequestV1::try_new(
+                    std::mem::take(&mut wire.repo_id),
+                    std::mem::take(&mut wire.resolved_revision),
                     std::mem::take(&mut wire.url),
                     std::mem::take(&mut wire.content_type),
                     wire.accept.take(),
@@ -2717,6 +2786,8 @@ fn dispatch_server_operation_with_session(
                 .execute_authenticated(&provider_request)
                 .map_err(soracloud_hf_credential_operation_error)?;
             let response_wire = SoracloudHfAuthenticatedInferenceResponseWireV1 {
+                served_repo_id: response.served_repo_id().to_owned(),
+                served_revision: response.served_revision().to_owned(),
                 status: response.status(),
                 content_type: response.content_type().map(ToOwned::to_owned),
                 content_encoding: response.content_encoding().map(ToOwned::to_owned),

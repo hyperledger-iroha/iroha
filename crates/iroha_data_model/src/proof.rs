@@ -60,6 +60,7 @@ fn take_len_prefixed_slice<'a>(
     feature = "json",
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
 )]
+#[cfg_attr(feature = "json", norito(deny_unknown_fields))]
 pub struct ProofBox {
     /// Identifier of the proof backend/format.
     pub backend: iroha_schema::Ident,
@@ -261,6 +262,7 @@ impl<'a> ncore::DecodeFromSlice<'a> for VerifyingKeyBox {
     feature = "json",
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
 )]
+#[cfg_attr(feature = "json", norito(deny_unknown_fields))]
 pub struct VerifyingKeyId {
     /// Identifier of the proof backend/format.
     pub backend: iroha_schema::Ident,
@@ -444,6 +446,7 @@ impl VerifyingKeyRecord {
 /// Proof attachments carry only a registry reference to the verifying key.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, IntoSchema)]
 #[norito(reuse_archived)]
+#[cfg_attr(feature = "json", norito(deny_unknown_fields))]
 #[cfg_attr(feature = "json", derive(crate::DeriveJsonSerialize))]
 pub struct ProofAttachment {
     /// Identifier of the proof backend/format.
@@ -461,8 +464,7 @@ pub struct ProofAttachment {
             bounded_with = "crate::json_helpers::fixed_bytes::option::serialize_bounded"
         )
     )]
-    #[cfg_attr(feature = "json", norito(skip_serializing_if = "Option::is_none"))]
-    #[norito(default)]
+    #[norito(required)]
     pub vk_commitment: Option<[u8; 32]>,
     /// Optional hash of the verify envelope payload passed via pointer‑ABI TLV (e.g.,
     /// NoritoBytes(OpenVerifyEnvelope)). When present, it is used to bind the verification inputs
@@ -474,12 +476,10 @@ pub struct ProofAttachment {
             bounded_with = "crate::json_helpers::fixed_bytes::option::serialize_bounded"
         )
     )]
-    #[cfg_attr(feature = "json", norito(skip_serializing_if = "Option::is_none"))]
-    #[norito(default)]
+    #[norito(required)]
     pub envelope_hash: Option<[u8; 32]>,
     /// Optional lane privacy proof tying this attachment to a Nexus commitment.
-    #[cfg_attr(feature = "json", norito(skip_serializing_if = "Option::is_none"))]
-    #[norito(default)]
+    #[norito(required)]
     pub lane_privacy: Option<crate::nexus::LanePrivacyProof>,
 }
 impl ProofAttachment {
@@ -823,11 +823,13 @@ fn proof_attachment_json_value_preflight<const MAX_PROOF_BYTES: usize>(
         )?;
     }
     for field in ["vk_commitment", "envelope_hash"] {
-        if let Some(value) = attachment.get(field) {
+        let value = proof_attachment_json_value_required(attachment, field)?;
+        if !value.is_null() {
             proof_attachment_json_value_byte_array(value, field, Some(32), 32)?;
         }
     }
-    if let Some(lane_privacy) = attachment.get("lane_privacy") {
+    let lane_privacy = proof_attachment_json_value_required(attachment, "lane_privacy")?;
+    if !lane_privacy.is_null() {
         proof_attachment_json_value_preflight_lane(lane_privacy)?;
     }
     Ok(())
@@ -1491,22 +1493,37 @@ impl norito::json::JsonDeserialize for ProofAttachment {
                 }
                 "vk_commitment" => {
                     proof_attachment_json_mark_field(&mut seen, VK_COMMITMENT, "vk_commitment")?;
-                    // Optional means absent-or-present; an explicit null is not
-                    // a canonical first-release spelling for a present field.
-                    vk_commitment = Some(object.parse_value::<ProofAttachmentJsonBytes32V1>()?.0);
+                    vk_commitment = object
+                        .parse_value::<Option<ProofAttachmentJsonBytes32V1>>()?
+                        .map(|value| value.0);
                 }
                 "envelope_hash" => {
                     proof_attachment_json_mark_field(&mut seen, ENVELOPE_HASH, "envelope_hash")?;
-                    envelope_hash = Some(object.parse_value::<ProofAttachmentJsonBytes32V1>()?.0);
+                    envelope_hash = object
+                        .parse_value::<Option<ProofAttachmentJsonBytes32V1>>()?
+                        .map(|value| value.0);
                 }
                 "lane_privacy" => {
                     proof_attachment_json_mark_field(&mut seen, LANE_PRIVACY, "lane_privacy")?;
-                    lane_privacy = Some(object.parse_value::<ProofAttachmentJsonLanePrivacyV1>()?);
+                    lane_privacy =
+                        object.parse_value::<Option<ProofAttachmentJsonLanePrivacyV1>>()?;
                 }
                 field => return Err(proof_attachment_json_unknown_field(field, "")),
             }
         }
         object.finish()?;
+        for (field_bit, field) in [
+            (BACKEND, "backend"),
+            (PROOF, "proof"),
+            (VK_REF, "vk_ref"),
+            (VK_COMMITMENT, "vk_commitment"),
+            (ENVELOPE_HASH, "envelope_hash"),
+            (LANE_PRIVACY, "lane_privacy"),
+        ] {
+            if seen & field_bit == 0 {
+                return Err(norito::json::Error::missing_field(field));
+            }
+        }
         let backend = backend.ok_or_else(|| norito::json::Error::missing_field("backend"))?;
         let proof = proof.ok_or_else(|| norito::json::Error::missing_field("proof"))?;
         let vk_ref = vk_ref.ok_or_else(|| norito::json::Error::missing_field("vk_ref"))?;
@@ -3651,12 +3668,35 @@ mod tests {
     }
     #[cfg(feature = "json")]
     #[test]
+    fn proof_primitives_json_reject_unknown_first_release_fields() {
+        let proof = r#"{
+            "backend": "halo2/ipa",
+            "bytes": [1, 2, 3],
+            "future_proof_metadata": true
+        }"#;
+        let error = norito::json::from_str::<ProofBox>(proof)
+            .expect_err("ProofBox must reject unknown first-release fields");
+        assert!(error.to_string().contains("unknown"));
+
+        let verifying_key = r#"{
+            "backend": "halo2/ipa",
+            "name": "vk_1",
+            "future_registry_metadata": true
+        }"#;
+        let error = norito::json::from_str::<VerifyingKeyId>(verifying_key)
+            .expect_err("VerifyingKeyId must reject unknown first-release fields");
+        assert!(error.to_string().contains("unknown"));
+    }
+    #[cfg(feature = "json")]
+    #[test]
     fn proof_attachment_json_accepts_reference_only_payload() {
         let json = r#"{
             "backend": "halo2/ipa",
             "proof": { "backend": "halo2/ipa", "bytes": [1, 2, 3] },
             "vk_ref": { "backend": "halo2/ipa", "name": "vk_1" },
-            "vk_commitment": [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 7]
+            "vk_commitment": [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 7],
+            "envelope_hash": null,
+            "lane_privacy": null
         }"#;
         let attachment: ProofAttachment = norito::json::from_str(json).expect("reference JSON");
         assert_eq!(attachment.backend.as_str(), "halo2/ipa");
@@ -3678,16 +3718,19 @@ mod tests {
         let json = r#"{
             "backend": "halo2/ipa",
             "proof": { "backend": "halo2/ipa", "bytes": [1, 2, 3] },
-            "vk_ref": { "backend": "halo2/ipa", "name": "vk_1" }
+            "vk_ref": { "backend": "halo2/ipa", "name": "vk_1" },
+            "vk_commitment": null,
+            "envelope_hash": null,
+            "lane_privacy": null
         }"#;
         let attachment: ProofAttachment = norito::json::from_str(json).expect("canonical JSON");
         assert_eq!(attachment.proof.bytes, vec![1, 2, 3]);
         let canonical = norito::json::to_json(&attachment).expect("serialize canonical JSON");
         assert!(canonical.contains("\"bytes\":[1,2,3]"));
         assert!(!canonical.contains("bytes_b64"));
-        assert!(!canonical.contains("vk_commitment"));
-        assert!(!canonical.contains("envelope_hash"));
-        assert!(!canonical.contains("lane_privacy"));
+        assert!(canonical.contains("\"vk_commitment\":null"));
+        assert!(canonical.contains("\"envelope_hash\":null"));
+        assert!(canonical.contains("\"lane_privacy\":null"));
         let roundtrip: ProofAttachment =
             norito::json::from_str(&canonical).expect("canonical roundtrip JSON");
         assert_eq!(roundtrip, attachment);
@@ -3701,9 +3744,12 @@ mod tests {
     #[test]
     fn proof_attachment_json_streaming_decoder_is_field_order_independent() {
         let json = r#"{
+            "lane_privacy": null,
             "vk_ref": { "name": "vk_1", "backend": "halo2/ipa" },
+            "envelope_hash": null,
             "proof": { "bytes": [1, 2, 3], "backend": "halo2/ipa" },
-            "backend": "halo2/ipa"
+            "backend": "halo2/ipa",
+            "vk_commitment": null
         }"#;
         let attachment: ProofAttachment =
             norito::json::from_str(json).expect("reordered canonical attachment JSON");
@@ -3767,52 +3813,77 @@ mod tests {
     }
     #[cfg(feature = "json")]
     #[test]
-    fn proof_attachment_json_rejects_present_null_fields() {
+    fn proof_attachment_json_requires_explicit_nullable_fields() {
+        let canonical = r#"{
+            "backend": "halo2/ipa",
+            "proof": { "backend": "halo2/ipa", "bytes": [1] },
+            "vk_ref": { "backend": "halo2/ipa", "name": "vk_1" },
+            "vk_commitment": null,
+            "envelope_hash": null,
+            "lane_privacy": null
+        }"#;
+        let attachment = norito::json::from_str::<ProofAttachment>(canonical)
+            .expect("explicit null is the canonical spelling for an empty nullable field");
+        assert!(attachment.vk_commitment.is_none());
+        assert!(attachment.envelope_hash.is_none());
+        assert!(attachment.lane_privacy.is_none());
+        let value = norito::json::parse_value(canonical).expect("canonical generic JSON fixture");
+        let from_value =
+            <ProofAttachment as norito::json::JsonDeserialize>::json_from_value(&value)
+                .expect("json_from_value accepts the same explicit-null shape");
+        assert_eq!(from_value, attachment);
+
         for json in [
             r#"{
                 "backend": null,
                 "proof": { "backend": "halo2/ipa", "bytes": [1] },
-                "vk_ref": { "backend": "halo2/ipa", "name": "vk_1" }
+                "vk_ref": { "backend": "halo2/ipa", "name": "vk_1" },
+                "vk_commitment": null,
+                "envelope_hash": null,
+                "lane_privacy": null
             }"#,
             r#"{
                 "backend": "halo2/ipa",
                 "proof": null,
-                "vk_ref": { "backend": "halo2/ipa", "name": "vk_1" }
-            }"#,
-            r#"{
-                "backend": "halo2/ipa",
-                "proof": { "backend": "halo2/ipa", "bytes": [1] },
-                "vk_ref": null
-            }"#,
-            r#"{
-                "backend": "halo2/ipa",
-                "proof": { "backend": "halo2/ipa", "bytes": [1] },
                 "vk_ref": { "backend": "halo2/ipa", "name": "vk_1" },
-                "vk_commitment": null
+                "vk_commitment": null,
+                "envelope_hash": null,
+                "lane_privacy": null
             }"#,
             r#"{
                 "backend": "halo2/ipa",
                 "proof": { "backend": "halo2/ipa", "bytes": [1] },
-                "vk_ref": { "backend": "halo2/ipa", "name": "vk_1" },
-                "envelope_hash": null
-            }"#,
-            r#"{
-                "backend": "halo2/ipa",
-                "proof": { "backend": "halo2/ipa", "bytes": [1] },
-                "vk_ref": { "backend": "halo2/ipa", "name": "vk_1" },
+                "vk_ref": null,
+                "vk_commitment": null,
+                "envelope_hash": null,
                 "lane_privacy": null
             }"#,
         ] {
             assert!(
                 norito::json::from_str::<ProofAttachment>(json).is_err(),
-                "present null must not alias an absent first-release field: {json}"
+                "non-nullable field must reject null: {json}"
             );
             let value = norito::json::parse_value(json).expect("valid generic JSON fixture");
             assert!(
                 <ProofAttachment as norito::json::JsonDeserialize>::json_from_value(&value)
                     .is_err(),
-                "json_from_value must enforce the same present-null rule: {json}"
+                "json_from_value must enforce the same non-nullable rule: {json}"
             );
+        }
+
+        for missing_field in ["vk_commitment", "envelope_hash", "lane_privacy"] {
+            let mut value = norito::json::parse_value(canonical).expect("canonical JSON fixture");
+            value
+                .as_object_mut()
+                .expect("attachment object")
+                .remove(missing_field);
+            let json = norito::json::to_json(&value).expect("serialize missing-field fixture");
+            let error = norito::json::from_str::<ProofAttachment>(&json)
+                .expect_err("omitted nullable field must reject in first-release JSON");
+            assert!(error.to_string().contains(missing_field));
+            let error = <ProofAttachment as norito::json::JsonDeserialize>::json_from_value(&value)
+                .expect_err("Value path must reject the same omitted nullable field");
+            assert!(error.to_string().contains(missing_field));
         }
     }
     #[cfg(feature = "json")]
@@ -3948,7 +4019,9 @@ mod tests {
                 "backend": "halo2/ipa",
                 "proof": {{ "backend": "halo2/ipa", "bytes": [1, 2, 3] }},
                 "vk_ref": {{ "backend": "halo2/ipa", "name": "vk_1" }},
-                "envelope_hash": {envelope_hash_json}
+                "vk_commitment": null,
+                "envelope_hash": {envelope_hash_json},
+                "lane_privacy": null
             }}"#
         );
         let attachment: ProofAttachment =
@@ -4138,7 +4211,10 @@ mod tests {
         let proof_backend_json = r#"{
             "backend": "halo2/ipa",
             "proof": { "backend": "stark/fri", "bytes": [1, 2, 3] },
-            "vk_ref": { "backend": "halo2/ipa", "name": "vk_1" }
+            "vk_ref": { "backend": "halo2/ipa", "name": "vk_1" },
+            "vk_commitment": null,
+            "envelope_hash": null,
+            "lane_privacy": null
         }"#;
         let err = norito::json::from_str::<ProofAttachment>(proof_backend_json)
             .expect_err("proof backend mismatch must be rejected");
@@ -4146,7 +4222,10 @@ mod tests {
         let vk_backend_json = r#"{
             "backend": "halo2/ipa",
             "proof": { "backend": "halo2/ipa", "bytes": [1, 2, 3] },
-            "vk_ref": { "backend": "stark/fri", "name": "vk_1" }
+            "vk_ref": { "backend": "stark/fri", "name": "vk_1" },
+            "vk_commitment": null,
+            "envelope_hash": null,
+            "lane_privacy": null
         }"#;
         let err = norito::json::from_str::<ProofAttachment>(vk_backend_json)
             .expect_err("vk_ref backend mismatch must be rejected");
@@ -4178,7 +4257,10 @@ mod tests {
         let json = r#"{
             "backend": "halo2/ipa",
             "proof": { "backend": "halo2/ipa", "bytes": [1, 2, 3] },
-            "vk_ref": { "backend": "halo2/ipa", "name": "   " }
+            "vk_ref": { "backend": "halo2/ipa", "name": "   " },
+            "vk_commitment": null,
+            "envelope_hash": null,
+            "lane_privacy": null
         }"#;
         let err = norito::json::from_str::<ProofAttachment>(json)
             .expect_err("blank verifying key names must be rejected");
@@ -4192,7 +4274,10 @@ mod tests {
                 r#"{
                     "backend": "   ",
                     "proof": { "backend": "   ", "bytes": [1, 2, 3] },
-                    "vk_ref": { "backend": "   ", "name": "vk_1" }
+                    "vk_ref": { "backend": "   ", "name": "vk_1" },
+                    "vk_commitment": null,
+                    "envelope_hash": null,
+                    "lane_privacy": null
                 }"#,
                 "backend",
             ),
@@ -4200,7 +4285,10 @@ mod tests {
                 r#"{
                     "backend": "halo2/ipa",
                     "proof": { "backend": "   ", "bytes": [1, 2, 3] },
-                    "vk_ref": { "backend": "halo2/ipa", "name": "vk_1" }
+                    "vk_ref": { "backend": "halo2/ipa", "name": "vk_1" },
+                    "vk_commitment": null,
+                    "envelope_hash": null,
+                    "lane_privacy": null
                 }"#,
                 "proof.backend",
             ),
@@ -4208,7 +4296,10 @@ mod tests {
                 r#"{
                     "backend": "halo2/ipa",
                     "proof": { "backend": "halo2/ipa", "bytes": [1, 2, 3] },
-                    "vk_ref": { "backend": "   ", "name": "vk_1" }
+                    "vk_ref": { "backend": "   ", "name": "vk_1" },
+                    "vk_commitment": null,
+                    "envelope_hash": null,
+                    "lane_privacy": null
                 }"#,
                 "vk_ref.backend",
             ),
@@ -4234,7 +4325,10 @@ mod tests {
                 r#"{
                     "backend": "Halo2/ipa",
                     "proof": { "backend": "Halo2/ipa", "bytes": [1, 2, 3] },
-                    "vk_ref": { "backend": "Halo2/ipa", "name": "vk_1" }
+                    "vk_ref": { "backend": "Halo2/ipa", "name": "vk_1" },
+                    "vk_commitment": null,
+                    "envelope_hash": null,
+                    "lane_privacy": null
                 }"#
                 .to_owned(),
                 "vk_ref",
@@ -4243,7 +4337,10 @@ mod tests {
                 r#"{
                     "backend": "halo2/ipa",
                     "proof": { "backend": "halo2/ipa", "bytes": [1, 2, 3] },
-                    "vk_ref": { "backend": "halo2/ipa", "name": "Vk_1" }
+                    "vk_ref": { "backend": "halo2/ipa", "name": "Vk_1" },
+                    "vk_commitment": null,
+                    "envelope_hash": null,
+                    "lane_privacy": null
                 }"#
                 .to_owned(),
                 "vk_ref",
@@ -4252,7 +4349,10 @@ mod tests {
                 r#"{
                     "backend": "halo2/ipa",
                     "proof": { "backend": "halo2/ipa", "bytes": [] },
-                    "vk_ref": { "backend": "halo2/ipa", "name": "vk_1" }
+                    "vk_ref": { "backend": "halo2/ipa", "name": "vk_1" },
+                    "vk_commitment": null,
+                    "envelope_hash": null,
+                    "lane_privacy": null
                 }"#
                 .to_owned(),
                 "proof.bytes",
@@ -4263,7 +4363,9 @@ mod tests {
                         "backend": "halo2/ipa",
                         "proof": {{ "backend": "halo2/ipa", "bytes": [1, 2, 3] }},
                         "vk_ref": {{ "backend": "halo2/ipa", "name": "vk_1" }},
-                        "vk_commitment": {zero_hash}
+                        "vk_commitment": {zero_hash},
+                        "envelope_hash": null,
+                        "lane_privacy": null
                     }}"#
                 ),
                 "vk_commitment",
@@ -4274,7 +4376,9 @@ mod tests {
                         "backend": "halo2/ipa",
                         "proof": {{ "backend": "halo2/ipa", "bytes": [1, 2, 3] }},
                         "vk_ref": {{ "backend": "halo2/ipa", "name": "vk_1" }},
-                        "envelope_hash": {zero_hash}
+                        "vk_commitment": null,
+                        "envelope_hash": {zero_hash},
+                        "lane_privacy": null
                     }}"#
                 ),
                 "envelope_hash",
@@ -4285,7 +4389,9 @@ mod tests {
                         "backend": "halo2/ipa",
                         "proof": {{ "backend": "halo2/ipa", "bytes": [1, 2, 3] }},
                         "vk_ref": {{ "backend": "halo2/ipa", "name": "vk_1" }},
-                        "envelope_hash": {forged_hash}
+                        "vk_commitment": null,
+                        "envelope_hash": {forged_hash},
+                        "lane_privacy": null
                     }}"#
                 ),
                 "envelope_hash",

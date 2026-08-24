@@ -47,19 +47,79 @@ fileprivate func decodeCanonicalVpnHex<K: CodingKey>(
     return value
 }
 
-fileprivate func decodeOptionalCanonicalVpnHex<K: CodingKey>(
+fileprivate func decodeCanonicalVpnTrustHex<K: CodingKey>(
     from container: KeyedDecodingContainer<K>,
     forKey key: K,
-    byteCount: Int,
-    field: String
-) throws -> String? {
-    guard container.contains(key), try !container.decodeNil(forKey: key) else { return nil }
-    return try decodeCanonicalVpnHex(
-        from: container,
-        forKey: key,
-        byteCount: byteCount,
-        field: field
-    )
+    field: String,
+    allowEmpty: Bool = false,
+    requireEd25519Point: Bool = false
+) throws -> String {
+    let value = try container.decode(String.self, forKey: key)
+    if allowEmpty, value.isEmpty {
+        return value
+    }
+    guard value.utf8.count == 64,
+          value.utf8.allSatisfy({ byte in
+              (48...57).contains(byte) || (97...102).contains(byte)
+          }) else {
+        throw DecodingError.dataCorruptedError(
+            forKey: key,
+            in: container,
+            debugDescription: "\(field) must be exactly 64 lowercase hexadecimal characters."
+        )
+    }
+    guard value.utf8.contains(where: { $0 != 48 }) else {
+        throw DecodingError.dataCorruptedError(
+            forKey: key,
+            in: container,
+            debugDescription: "\(field) must not be all zero."
+        )
+    }
+    if requireEd25519Point {
+        guard let bytes = Data(hexString: value),
+              Ed25519PublicKeyAdmission.isValidPublicKey(bytes) else {
+            throw DecodingError.dataCorruptedError(
+                forKey: key,
+                in: container,
+                debugDescription: "\(field) must encode a canonical non-small-order Ed25519 public key."
+            )
+        }
+    }
+    return value
+}
+
+fileprivate func decodeCanonicalVpnTlsServerName<K: CodingKey>(
+    from container: KeyedDecodingContainer<K>,
+    forKey key: K,
+    field: String,
+    allowEmpty: Bool = false
+) throws -> String {
+    let value = try container.decode(String.self, forKey: key)
+    if allowEmpty, value.isEmpty {
+        return value
+    }
+    let labels = value.split(separator: ".", omittingEmptySubsequences: false)
+    let isAsciiLetterOrDigit: (UInt8) -> Bool = { byte in
+        (48...57).contains(byte) || (97...122).contains(byte)
+    }
+    let valid = !value.isEmpty
+        && value.utf8.count <= 253
+        && labels.allSatisfy { label in
+            let bytes = Array(label.utf8)
+            return !bytes.isEmpty
+                && bytes.count <= 63
+                && isAsciiLetterOrDigit(bytes[0])
+                && isAsciiLetterOrDigit(bytes[bytes.count - 1])
+                && bytes.allSatisfy { isAsciiLetterOrDigit($0) || $0 == 45 }
+        }
+    guard valid else {
+        throw DecodingError.dataCorruptedError(
+            forKey: key,
+            in: container,
+            debugDescription: "\(field) must be a canonical lowercase ASCII DNS name."
+        )
+    }
+    return value
 }
 
 fileprivate func decodeCanonicalVpnEvenHex<K: CodingKey>(
@@ -266,14 +326,17 @@ public struct ToriiVpnProfile: Decodable, Sendable, Equatable {
     public let mtuBytes: UInt64
     public let meterFamily: String
     public let displayBillingLabel: String
-    public let feeAssetId: String
-    public let escrowAccountId: String
     public let operatorAccountId: String
     public let leaseFee: String
     public let settlementGraceSeconds: UInt64
     public let flowLabelBits: UInt8
     public let paddingBudgetMilliseconds: UInt16
-    public let relayTlsSpkiSha256Hex: String?
+    public let relayIdHex: String
+    public let descriptorCommitHex: String
+    public let tlsServerName: String
+    public let relayTlsSpkiSha256Hex: String
+    public let relayCertificateSha256Hex: String
+    public let directorySnapshotDigestHex: String
 
     private enum CodingKeys: String, CodingKey, CaseIterable {
         case available
@@ -289,14 +352,17 @@ public struct ToriiVpnProfile: Decodable, Sendable, Equatable {
         case mtuBytes = "mtu_bytes"
         case meterFamily = "meter_family"
         case displayBillingLabel = "display_billing_label"
-        case feeAssetId = "fee_asset_id"
-        case escrowAccountId = "escrow_account_id"
         case operatorAccountId = "operator_account_id"
         case leaseFee = "lease_fee"
         case settlementGraceSeconds = "settlement_grace_secs"
         case flowLabelBits = "flow_label_bits"
         case paddingBudgetMilliseconds = "padding_budget_ms"
+        case relayIdHex = "relay_id_hex"
+        case descriptorCommitHex = "descriptor_commit_hex"
+        case tlsServerName = "tls_server_name"
         case relayTlsSpkiSha256Hex = "relay_tls_spki_sha256_hex"
+        case relayCertificateSha256Hex = "relay_certificate_sha256_hex"
+        case directorySnapshotDigestHex = "directory_snapshot_digest_hex"
     }
 
     public init(from decoder: Decoder) throws {
@@ -318,11 +384,15 @@ public struct ToriiVpnProfile: Decodable, Sendable, Equatable {
             allowed: toriiVpnExitClasses,
             field: "vpn profile default_exit_class"
         )
-        relayEndpoint = try decodeNonEmptyVpnString(
-            from: container,
-            forKey: .relayEndpoint,
-            field: "vpn profile relay_endpoint"
-        )
+        if available {
+            relayEndpoint = try decodeNonEmptyVpnString(
+                from: container,
+                forKey: .relayEndpoint,
+                field: "vpn profile relay_endpoint"
+            )
+        } else {
+            relayEndpoint = try container.decode(String.self, forKey: .relayEndpoint)
+        }
         leaseSeconds = try decodeBoundedVpnUInt64(
             from: container,
             forKey: .leaseSeconds,
@@ -361,16 +431,6 @@ public struct ToriiVpnProfile: Decodable, Sendable, Equatable {
             forKey: .displayBillingLabel,
             field: "vpn profile display_billing_label"
         )
-        feeAssetId = try decodeNonEmptyVpnString(
-            from: container,
-            forKey: .feeAssetId,
-            field: "vpn profile fee_asset_id"
-        )
-        escrowAccountId = try decodeNonEmptyVpnString(
-            from: container,
-            forKey: .escrowAccountId,
-            field: "vpn profile escrow_account_id"
-        )
         operatorAccountId = try decodeNonEmptyVpnString(
             from: container,
             forKey: .operatorAccountId,
@@ -397,11 +457,42 @@ public struct ToriiVpnProfile: Decodable, Sendable, Equatable {
             forKey: .paddingBudgetMilliseconds,
             field: "vpn profile padding_budget_ms"
         )
-        relayTlsSpkiSha256Hex = try decodeOptionalCanonicalVpnHex(
+        relayIdHex = try decodeCanonicalVpnTrustHex(
+            from: container,
+            forKey: .relayIdHex,
+            field: "vpn profile relay_id_hex",
+            allowEmpty: !available,
+            requireEd25519Point: true
+        )
+        descriptorCommitHex = try decodeCanonicalVpnTrustHex(
+            from: container,
+            forKey: .descriptorCommitHex,
+            field: "vpn profile descriptor_commit_hex",
+            allowEmpty: !available
+        )
+        tlsServerName = try decodeCanonicalVpnTlsServerName(
+            from: container,
+            forKey: .tlsServerName,
+            field: "vpn profile tls_server_name",
+            allowEmpty: !available
+        )
+        relayTlsSpkiSha256Hex = try decodeCanonicalVpnTrustHex(
             from: container,
             forKey: .relayTlsSpkiSha256Hex,
-            byteCount: 32,
-            field: "vpn profile relay_tls_spki_sha256_hex"
+            field: "vpn profile relay_tls_spki_sha256_hex",
+            allowEmpty: !available
+        )
+        relayCertificateSha256Hex = try decodeCanonicalVpnTrustHex(
+            from: container,
+            forKey: .relayCertificateSha256Hex,
+            field: "vpn profile relay_certificate_sha256_hex",
+            allowEmpty: !available
+        )
+        directorySnapshotDigestHex = try decodeCanonicalVpnTrustHex(
+            from: container,
+            forKey: .directorySnapshotDigestHex,
+            field: "vpn profile directory_snapshot_digest_hex",
+            allowEmpty: !available
         )
     }
 }
@@ -482,10 +573,14 @@ public struct ToriiVpnQuote: Decodable, Sendable, Equatable {
     public let meterFamily: String
     public let flowLabelBits: UInt8
     public let paddingBudgetMilliseconds: UInt16
-    public let relayTlsSpkiSha256Hex: String?
+    public let relayIdHex: String
+    public let descriptorCommitHex: String
+    public let tlsServerName: String
+    public let relayTlsSpkiSha256Hex: String
+    public let relayCertificateSha256Hex: String
+    public let directorySnapshotDigestHex: String
     public let meteringPublicKeyHex: String
-    public let openLeaseInstruction: ToriiVpnTxInstruction?
-    public let txInstructions: [ToriiVpnTxInstruction]
+    public let openLeaseInstruction: ToriiVpnTxInstruction
 
     private enum CodingKeys: String, CodingKey, CaseIterable {
         case quoteId = "quote_id"
@@ -509,10 +604,14 @@ public struct ToriiVpnQuote: Decodable, Sendable, Equatable {
         case meterFamily = "meter_family"
         case flowLabelBits = "flow_label_bits"
         case paddingBudgetMilliseconds = "padding_budget_ms"
+        case relayIdHex = "relay_id_hex"
+        case descriptorCommitHex = "descriptor_commit_hex"
+        case tlsServerName = "tls_server_name"
         case relayTlsSpkiSha256Hex = "relay_tls_spki_sha256_hex"
+        case relayCertificateSha256Hex = "relay_certificate_sha256_hex"
+        case directorySnapshotDigestHex = "directory_snapshot_digest_hex"
         case meteringPublicKeyHex = "metering_public_key_hex"
         case openLeaseInstruction = "open_lease_instruction"
-        case txInstructions = "tx_instructions"
     }
 
     public init(from decoder: Decoder) throws {
@@ -540,9 +639,10 @@ public struct ToriiVpnQuote: Decodable, Sendable, Equatable {
             byteCount: 16,
             field: "vpn quote session_id_hex"
         )
-        paymentReference = try decodeNonEmptyVpnString(
+        paymentReference = try decodeCanonicalVpnHex(
             from: container,
             forKey: .paymentReference,
+            byteCount: 32,
             field: "vpn quote payment_reference"
         )
         accountId = try decodeNonEmptyVpnString(
@@ -617,11 +717,36 @@ public struct ToriiVpnQuote: Decodable, Sendable, Equatable {
             forKey: .paddingBudgetMilliseconds,
             field: "vpn quote padding_budget_ms"
         )
-        relayTlsSpkiSha256Hex = try decodeOptionalCanonicalVpnHex(
+        relayIdHex = try decodeCanonicalVpnTrustHex(
+            from: container,
+            forKey: .relayIdHex,
+            field: "vpn quote relay_id_hex",
+            requireEd25519Point: true
+        )
+        descriptorCommitHex = try decodeCanonicalVpnTrustHex(
+            from: container,
+            forKey: .descriptorCommitHex,
+            field: "vpn quote descriptor_commit_hex"
+        )
+        tlsServerName = try decodeCanonicalVpnTlsServerName(
+            from: container,
+            forKey: .tlsServerName,
+            field: "vpn quote tls_server_name"
+        )
+        relayTlsSpkiSha256Hex = try decodeCanonicalVpnTrustHex(
             from: container,
             forKey: .relayTlsSpkiSha256Hex,
-            byteCount: 32,
             field: "vpn quote relay_tls_spki_sha256_hex"
+        )
+        relayCertificateSha256Hex = try decodeCanonicalVpnTrustHex(
+            from: container,
+            forKey: .relayCertificateSha256Hex,
+            field: "vpn quote relay_certificate_sha256_hex"
+        )
+        directorySnapshotDigestHex = try decodeCanonicalVpnTrustHex(
+            from: container,
+            forKey: .directorySnapshotDigestHex,
+            field: "vpn quote directory_snapshot_digest_hex"
         )
         meteringPublicKeyHex = try decodeCanonicalVpnHex(
             from: container,
@@ -629,15 +754,10 @@ public struct ToriiVpnQuote: Decodable, Sendable, Equatable {
             byteCount: 32,
             field: "vpn quote metering_public_key_hex"
         )
-        openLeaseInstruction = try container.decodeIfPresent(ToriiVpnTxInstruction.self, forKey: .openLeaseInstruction)
-        txInstructions = try container.decode([ToriiVpnTxInstruction].self, forKey: .txInstructions)
-        guard txInstructions.count == 1 else {
-            throw DecodingError.dataCorruptedError(
-                forKey: .txInstructions,
-                in: container,
-                debugDescription: "vpn quote tx_instructions must contain exactly one instruction."
-            )
-        }
+        openLeaseInstruction = try container.decode(
+            ToriiVpnTxInstruction.self,
+            forKey: .openLeaseInstruction
+        )
     }
 }
 
@@ -698,7 +818,12 @@ public struct ToriiVpnSession: Decodable, Sendable, Equatable {
     public let leaseFee: String
     public let flowLabelBits: UInt8
     public let paddingBudgetMilliseconds: UInt16
-    public let relayTlsSpkiSha256Hex: String?
+    public let relayIdHex: String
+    public let descriptorCommitHex: String
+    public let tlsServerName: String
+    public let relayTlsSpkiSha256Hex: String
+    public let relayCertificateSha256Hex: String
+    public let directorySnapshotDigestHex: String
     public let routePushes: [String]
     public let excludedRoutes: [String]
     public let dnsServers: [String]
@@ -727,7 +852,12 @@ public struct ToriiVpnSession: Decodable, Sendable, Equatable {
         case leaseFee = "lease_fee"
         case flowLabelBits = "flow_label_bits"
         case paddingBudgetMilliseconds = "padding_budget_ms"
+        case relayIdHex = "relay_id_hex"
+        case descriptorCommitHex = "descriptor_commit_hex"
+        case tlsServerName = "tls_server_name"
         case relayTlsSpkiSha256Hex = "relay_tls_spki_sha256_hex"
+        case relayCertificateSha256Hex = "relay_certificate_sha256_hex"
+        case directorySnapshotDigestHex = "directory_snapshot_digest_hex"
         case routePushes = "route_pushes"
         case excludedRoutes = "excluded_routes"
         case dnsServers = "dns_servers"
@@ -749,7 +879,7 @@ public struct ToriiVpnSession: Decodable, Sendable, Equatable {
         sessionId = try decodeCanonicalVpnHex(
             from: container,
             forKey: .sessionId,
-            byteCount: 32,
+            byteCount: 16,
             field: "vpn session session_id"
         )
         accountId = try decodeNonEmptyVpnString(
@@ -795,9 +925,10 @@ public struct ToriiVpnSession: Decodable, Sendable, Equatable {
             byteCount: 32,
             field: "vpn session quote_id"
         )
-        paymentReference = try decodeNonEmptyVpnString(
+        paymentReference = try decodeCanonicalVpnHex(
             from: container,
             forKey: .paymentReference,
+            byteCount: 32,
             field: "vpn session payment_reference"
         )
         paymentTransactionHash = try decodeCanonicalVpnHex(
@@ -836,11 +967,36 @@ public struct ToriiVpnSession: Decodable, Sendable, Equatable {
             forKey: .paddingBudgetMilliseconds,
             field: "vpn session padding_budget_ms"
         )
-        relayTlsSpkiSha256Hex = try decodeOptionalCanonicalVpnHex(
+        relayIdHex = try decodeCanonicalVpnTrustHex(
+            from: container,
+            forKey: .relayIdHex,
+            field: "vpn session relay_id_hex",
+            requireEd25519Point: true
+        )
+        descriptorCommitHex = try decodeCanonicalVpnTrustHex(
+            from: container,
+            forKey: .descriptorCommitHex,
+            field: "vpn session descriptor_commit_hex"
+        )
+        tlsServerName = try decodeCanonicalVpnTlsServerName(
+            from: container,
+            forKey: .tlsServerName,
+            field: "vpn session tls_server_name"
+        )
+        relayTlsSpkiSha256Hex = try decodeCanonicalVpnTrustHex(
             from: container,
             forKey: .relayTlsSpkiSha256Hex,
-            byteCount: 32,
             field: "vpn session relay_tls_spki_sha256_hex"
+        )
+        relayCertificateSha256Hex = try decodeCanonicalVpnTrustHex(
+            from: container,
+            forKey: .relayCertificateSha256Hex,
+            field: "vpn session relay_certificate_sha256_hex"
+        )
+        directorySnapshotDigestHex = try decodeCanonicalVpnTrustHex(
+            from: container,
+            forKey: .directorySnapshotDigestHex,
+            field: "vpn session directory_snapshot_digest_hex"
         )
         routePushes = try container.decode([String].self, forKey: .routePushes)
         excludedRoutes = try container.decode([String].self, forKey: .excludedRoutes)
@@ -855,7 +1011,7 @@ public struct ToriiVpnSession: Decodable, Sendable, Equatable {
         helperTicketHex = try decodeCanonicalVpnHex(
             from: container,
             forKey: .helperTicketHex,
-            byteCount: 696,
+            byteCount: 788,
             field: "vpn session helper_ticket_hex"
         )
         bytesIn = try decodeVpnUInt64(
@@ -933,7 +1089,6 @@ public struct ToriiVpnReceipt: Decodable, Sendable, Equatable {
     public let refundedFee: String
     public let leaseIdHex: String
     public let settleLeaseInstruction: ToriiVpnTxInstruction?
-    public let txInstructions: [ToriiVpnTxInstruction]
 
     private enum CodingKeys: String, CodingKey, CaseIterable {
         case sessionId = "session_id"
@@ -958,7 +1113,6 @@ public struct ToriiVpnReceipt: Decodable, Sendable, Equatable {
         case refundedFee = "refunded_fee"
         case leaseIdHex = "lease_id_hex"
         case settleLeaseInstruction = "settle_lease_instruction"
-        case txInstructions = "tx_instructions"
     }
 
     public init(from decoder: Decoder) throws {
@@ -971,7 +1125,7 @@ public struct ToriiVpnReceipt: Decodable, Sendable, Equatable {
         sessionId = try decodeCanonicalVpnHex(
             from: container,
             forKey: .sessionId,
-            byteCount: 32,
+            byteCount: 16,
             field: "vpn receipt session_id"
         )
         accountId = try decodeNonEmptyVpnString(
@@ -1023,7 +1177,7 @@ public struct ToriiVpnReceipt: Decodable, Sendable, Equatable {
         status = try decodeVpnEnum(
             from: container,
             forKey: .status,
-            allowed: ["disconnected", "expired", "replaced", "settled"],
+            allowed: ["disconnected", "expired", "replaced", "settlement_pending", "settled"],
             field: "vpn receipt status"
         )
         receiptSource = try decodeVpnEnum(
@@ -1079,15 +1233,6 @@ public struct ToriiVpnReceipt: Decodable, Sendable, Equatable {
         )
         settleLeaseInstruction = try container.decodeIfPresent(ToriiVpnTxInstruction.self,
                                                                forKey: .settleLeaseInstruction)
-        txInstructions = try container.decode([ToriiVpnTxInstruction].self,
-                                              forKey: .txInstructions)
-        guard txInstructions.count <= 1 else {
-            throw DecodingError.dataCorruptedError(
-                forKey: .txInstructions,
-                in: container,
-                debugDescription: "vpn receipt tx_instructions must contain at most one instruction."
-            )
-        }
     }
 }
 

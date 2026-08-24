@@ -405,7 +405,9 @@ fn durable_block_payload_len_requires_committed_marker() {
     let mut config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
     config.fsync_mode = FsyncMode::Batched;
     config.fsync_interval = Duration::from_secs(3600);
-    let (kura, _) = Kura::new(&config, &RuntimeLaneConfig::default()).expect("kura init");
+    let (kura, _) =
+        Kura::open_test_kura_with_configured_lane_config(&config, &RuntimeLaneConfig::default())
+            .expect("kura init");
     let block = DummyBlocks::new().next();
     let block_hash = block.hash();
     {
@@ -453,7 +455,9 @@ fn replace_top_block_same_hash_requires_durable_marker() {
     let mut config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
     config.fsync_mode = FsyncMode::Batched;
     config.fsync_interval = Duration::from_secs(3600);
-    let (kura, _) = Kura::new(&config, &RuntimeLaneConfig::default()).expect("kura init");
+    let (kura, _) =
+        Kura::open_test_kura_with_configured_lane_config(&config, &RuntimeLaneConfig::default())
+            .expect("kura init");
     let block = DummyBlocks::new().next();
     let block_hash = block.hash();
     {
@@ -495,7 +499,9 @@ fn store_block_is_durable_before_return() {
     let temp_dir = TempDir::new().expect("create temp dir");
     let mut config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
     config.fsync_interval = Duration::from_secs(3600);
-    let (kura, _) = Kura::new(&config, &RuntimeLaneConfig::default()).expect("initialize kura");
+    let (kura, _) =
+        Kura::open_test_kura_with_configured_lane_config(&config, &RuntimeLaneConfig::default())
+            .expect("initialize kura");
     let block = DummyBlocks::new().next();
     let block_hash = block.hash();
     kura.store_block(block).expect("store block");
@@ -633,7 +639,8 @@ fn store_block_rejects_when_budget_exceeded() {
     let temp_dir = TempDir::new().expect("create temp dir");
     let kura_cfg = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
     let (mut kura, _) =
-        Kura::new(&kura_cfg, &RuntimeLaneConfig::default()).expect("initialize kura");
+        Kura::open_test_kura_with_configured_lane_config(&kura_cfg, &RuntimeLaneConfig::default())
+            .expect("initialize kura");
     let baseline = canonical_storage_budget_base_for_test(&kura);
     Arc::get_mut(&mut kura)
         .expect("exclusive kura handle")
@@ -760,7 +767,8 @@ fn store_block_with_merge_entry_counts_budget() {
     let block_required = Kura::block_required_bytes(&block).expect("block bytes");
     let kura_cfg = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
     let (mut kura, _) =
-        Kura::new(&kura_cfg, &RuntimeLaneConfig::default()).expect("initialize kura");
+        Kura::open_test_kura_with_configured_lane_config(&kura_cfg, &RuntimeLaneConfig::default())
+            .expect("initialize kura");
     let baseline = canonical_storage_budget_base_for_test(&kura);
     let association_stage_required = kura
         .canonical_association_stage_additional_bytes(block.as_ref(), None)
@@ -788,7 +796,8 @@ fn store_block_with_merge_entry_counts_budget() {
     let mut kura_cfg = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
     kura_cfg.max_disk_usage_bytes = iroha_config::base::util::Bytes(u64::MAX);
     let (mut kura, _) =
-        Kura::new(&kura_cfg, &RuntimeLaneConfig::default()).expect("initialize kura");
+        Kura::open_test_kura_with_configured_lane_config(&kura_cfg, &RuntimeLaneConfig::default())
+            .expect("initialize kura");
     let baseline = canonical_storage_budget_base_for_test(&kura);
     let parent_association_stage_required = kura
         .canonical_association_stage_additional_bytes(parent.as_ref(), None)
@@ -824,7 +833,8 @@ fn store_block_rejects_when_storage_exceeds_budget() {
     let block2_required = Kura::block_required_bytes(&block2).expect("block2 required bytes");
     let kura_cfg = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
     let (mut kura, _) =
-        Kura::new(&kura_cfg, &RuntimeLaneConfig::default()).expect("initialize kura");
+        Kura::open_test_kura_with_configured_lane_config(&kura_cfg, &RuntimeLaneConfig::default())
+            .expect("initialize kura");
     let baseline = canonical_storage_budget_base_for_test(&kura);
     let block1_peak = block1_required.saturating_add(
         kura.canonical_association_stage_additional_bytes(block1.as_ref(), None)
@@ -846,12 +856,10 @@ fn store_block_rejects_when_storage_exceeds_budget() {
 #[test]
 fn store_block_rejects_when_single_block_exceeds_budget() {
     let temp_dir = TempDir::new().expect("create temp dir");
-    let kura_cfg = kura_config_for_dir(
-        &temp_dir,
-        NonZeroUsize::new(1).expect("non-zero"),
-    );
+    let kura_cfg = kura_config_for_dir(&temp_dir, NonZeroUsize::new(1).expect("non-zero"));
     let (mut kura, _) =
-        Kura::new(&kura_cfg, &RuntimeLaneConfig::default()).expect("initialize kura");
+        Kura::open_test_kura_with_configured_lane_config(&kura_cfg, &RuntimeLaneConfig::default())
+            .expect("initialize kura");
     let used = kura.kura_disk_usage_bytes().expect("baseline usage");
     let overhead = BlockIndex::SIZE.saturating_add(SIZE_OF_BLOCK_HASH);
     let budget_limit = used
@@ -1022,7 +1030,8 @@ fn replace_top_block_rejects_when_replacement_exceeds_budget() {
     let temp_dir = TempDir::new().expect("create temp dir");
     let kura_cfg = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
     let lane_config = RuntimeLaneConfig::default();
-    let (mut kura, _) = Kura::new(&kura_cfg, &lane_config).expect("initialize kura");
+    let (mut kura, _) = Kura::open_test_kura_with_configured_lane_config(&kura_cfg, &lane_config)
+        .expect("initialize kura");
     let make_block = |message: &str| -> SignedBlock {
         let tx = TransactionBuilder::new(
             test_network_id(b"test"),
@@ -1125,7 +1134,8 @@ fn store_block_rejects_when_sidecar_bytes_exceed_budget() {
     let budget_limit = Kura::block_required_bytes(&block).expect("block bytes");
     let kura_cfg = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
     let (mut kura, _) =
-        Kura::new(&kura_cfg, &RuntimeLaneConfig::default()).expect("initialize kura");
+        Kura::open_test_kura_with_configured_lane_config(&kura_cfg, &RuntimeLaneConfig::default())
+            .expect("initialize kura");
     let association_stage_required = kura
         .canonical_association_stage_additional_bytes(block.as_ref(), None)
         .expect("account canonical association stage");
@@ -1151,8 +1161,11 @@ fn store_block_rejects_when_sidecar_bytes_exceed_budget() {
     let native_temp_dir = TempDir::new().expect("create Native AMX budget temp dir");
     let mut native_cfg = kura_config_for_dir(&native_temp_dir, BLOCKS_IN_MEMORY);
     native_cfg.lane_history_retention = nonzero!(2_usize);
-    let (mut native_kura, _) =
-        Kura::new(&native_cfg, &RuntimeLaneConfig::default()).expect("initialize Native Kura");
+    let (mut native_kura, _) = Kura::open_test_kura_with_configured_lane_config(
+        &native_cfg,
+        &RuntimeLaneConfig::default(),
+    )
+    .expect("initialize Native Kura");
     let configured_prune_bound = Kura::native_amx_evidence_prune_intent_max_bytes_for_retention(
         native_cfg.lane_history_retention,
         V2_PENDING_CONTROL_SIDECAR_BYTES.get(),
@@ -1300,7 +1313,9 @@ fn kura_disk_usage_includes_temp_and_debug_files() {
     let temp_dir = TempDir::new().expect("create temp dir");
     let mut kura_cfg = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
     kura_cfg.debug_output_new_blocks = true;
-    let (kura, _) = Kura::new(&kura_cfg, &RuntimeLaneConfig::default()).expect("initialize kura");
+    let (kura, _) =
+        Kura::open_test_kura_with_configured_lane_config(&kura_cfg, &RuntimeLaneConfig::default())
+            .expect("initialize kura");
     let base = kura.disk_usage_bytes().expect("base usage");
     let blocks_dir = RuntimeLaneConfig::default()
         .primary()
@@ -1329,7 +1344,9 @@ fn kura_disk_usage_includes_temp_and_debug_files() {
 fn purge_retired_segments_removes_retired_dir() {
     let temp_dir = TempDir::new().expect("create temp dir");
     let kura_cfg = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
-    let (kura, _) = Kura::new(&kura_cfg, &RuntimeLaneConfig::default()).expect("initialize kura");
+    let (kura, _) =
+        Kura::open_test_kura_with_configured_lane_config(&kura_cfg, &RuntimeLaneConfig::default())
+            .expect("initialize kura");
     let active_merge_dir = temp_dir.path().join("merge_ledger");
     std::fs::create_dir_all(&active_merge_dir).expect("create active merge directory");
     std::fs::write(active_merge_dir.join("accounting-baseline.log"), [0u8; 64])
@@ -1685,7 +1702,9 @@ fn combined_disk_usage_refresh_invalidates_both_caches_on_total_scan_error() {
 fn retired_geometry_evidence_is_accounted_and_never_legacy_purged() {
     let temp_dir = TempDir::new().expect("create temp dir");
     let kura_cfg = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
-    let (kura, _) = Kura::new(&kura_cfg, &RuntimeLaneConfig::default()).expect("initialize kura");
+    let (kura, _) =
+        Kura::open_test_kura_with_configured_lane_config(&kura_cfg, &RuntimeLaneConfig::default())
+            .expect("initialize kura");
     let baseline = kura.refresh_disk_usage_bytes().expect("baseline usage");
     let geometry_file = temp_dir
         .path()
@@ -1759,7 +1778,8 @@ fn store_block_rejects_when_other_lane_storage_exceeds_budget() {
     let block = DummyBlocks::new().next();
     let budget_limit = Kura::block_required_bytes(&block).expect("block bytes");
     let kura_cfg = kura_config_for_path(&store_root, BLOCKS_IN_MEMORY);
-    let (mut kura, _) = Kura::new(&kura_cfg, &lane_config).expect("initialize kura");
+    let (mut kura, _) = Kura::open_test_kura_with_configured_lane_config(&kura_cfg, &lane_config)
+        .expect("initialize kura");
     let association_stage_required = kura
         .canonical_association_stage_additional_bytes(block.as_ref(), None)
         .expect("account canonical association stage");
@@ -1786,7 +1806,8 @@ fn store_block_reclaims_retired_storage_when_budget_exceeded() {
     let budget_limit = Kura::block_required_bytes(&block).expect("block bytes");
     let kura_cfg = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
     let (mut kura, _) =
-        Kura::new(&kura_cfg, &RuntimeLaneConfig::default()).expect("initialize kura");
+        Kura::open_test_kura_with_configured_lane_config(&kura_cfg, &RuntimeLaneConfig::default())
+            .expect("initialize kura");
     let baseline = canonical_storage_budget_base_for_test(&kura);
     let association_stage_required = kura
         .canonical_association_stage_additional_bytes(block.as_ref(), None)
@@ -1814,7 +1835,8 @@ fn store_block_reclaims_retired_storage_when_budget_exceeded() {
 fn store_block_with_merge_entry_repairs_post_commit_append_failure_on_exact_retry() {
     let (_temp_dir, config) = kura_storage_fixture("create Kura root", BLOCKS_IN_MEMORY);
     let (kura, _) =
-        Kura::new(&config, &RuntimeLaneConfig::default()).expect("open persistent Kura");
+        Kura::open_test_kura_with_configured_lane_config(&config, &RuntimeLaneConfig::default())
+            .expect("open persistent Kura");
     let mut blocks = DummyBlocks::new();
     let parent = blocks.next();
     let mut entry = sample_merge_entry(1);
@@ -1854,8 +1876,9 @@ fn store_block_with_merge_entry_repairs_post_commit_append_failure_on_exact_retr
         Err(Error::CanonicalStoragePoisoned)
     ));
     drop(kura);
-    let (kura, BlockCount(count)) = Kura::new(&config, &RuntimeLaneConfig::default())
-        .expect("restart repairs the committed association");
+    let (kura, BlockCount(count)) =
+        Kura::open_test_kura_with_configured_lane_config(&config, &RuntimeLaneConfig::default())
+            .expect("restart repairs the committed association");
     assert_eq!(count, 2);
     assert_eq!(kura.merge_ledger_snapshot(), vec![entry.clone()]);
     let _ = persist_v2_finality_chain_through(&kura, nonzero!(2_usize));
@@ -1891,8 +1914,11 @@ fn merge_append_boundary_failures_recover_for_retry_and_reopen() {
     for retry_before_reopen in [false, true] {
         for failure_point in failure_points {
             let (_temp_dir, config) = kura_storage_fixture("temporary Kura root", BLOCKS_IN_MEMORY);
-            let (kura, _) =
-                Kura::new(&config, &RuntimeLaneConfig::default()).expect("open persistent Kura");
+            let (kura, _) = Kura::open_test_kura_with_configured_lane_config(
+                &config,
+                &RuntimeLaneConfig::default(),
+            )
+            .expect("open persistent Kura");
             let mut blocks = DummyBlocks::new();
             let parent = blocks.next();
             let mut entry = sample_merge_entry(1);
@@ -1933,8 +1959,11 @@ fn merge_append_boundary_failures_recover_for_retry_and_reopen() {
             }
             drop(kura);
             let (reopened, BlockCount(block_count)) =
-                Kura::new(&config, &RuntimeLaneConfig::default())
-                    .expect("reopen and repair the exact append boundary");
+                Kura::open_test_kura_with_configured_lane_config(
+                    &config,
+                    &RuntimeLaneConfig::default(),
+                )
+                .expect("reopen and repair the exact append boundary");
             assert_eq!(block_count, 2);
             assert_eq!(
                 reopened
@@ -1963,7 +1992,11 @@ fn merge_append_boundary_failures_recover_for_retry_and_reopen() {
 fn startup_repairs_each_block_first_merge_publication_crash_window() {
     for published_merge_parts in 0_u8..=2 {
         let (_temp_dir, config) = kura_storage_fixture("temporary Kura root", BLOCKS_IN_MEMORY);
-        let (kura, _) = Kura::new(&config, &RuntimeLaneConfig::default()).expect("open Kura");
+        let (kura, _) = Kura::open_test_kura_with_configured_lane_config(
+            &config,
+            &RuntimeLaneConfig::default(),
+        )
+        .expect("open Kura");
         let mut blocks = DummyBlocks::new();
         let parent = blocks.next();
         let mut entry = sample_merge_entry(1);
@@ -1987,8 +2020,11 @@ fn startup_repairs_each_block_first_merge_publication_crash_window() {
                 .expect("simulate sparse-carrier publication");
         }
         drop(kura);
-        let (reopened, BlockCount(block_count)) =
-            Kura::new(&config, &RuntimeLaneConfig::default()).expect("repair crash image");
+        let (reopened, BlockCount(block_count)) = Kura::open_test_kura_with_configured_lane_config(
+            &config,
+            &RuntimeLaneConfig::default(),
+        )
+        .expect("repair crash image");
         assert_eq!(block_count, 2);
         assert_eq!(
             reopened.get_durable_block_hash(nonzero!(2_usize)),
@@ -2048,7 +2084,8 @@ fn merge_log_truncated_when_block_store_pruned() {
             .append(&sample_merge_entry(2))
             .expect("append second entry");
     }
-    let (kura, block_count) = Kura::new(&config, &lane_cfg).expect("init kura");
+    let (kura, block_count) =
+        Kura::open_test_kura_with_configured_lane_config(&config, &lane_cfg).expect("init kura");
     assert_eq!(block_count.0, 0);
     assert_eq!(kura.merge_ledger_snapshot().len(), 0);
     assert_eq!(
@@ -2300,7 +2337,9 @@ fn store_block_treats_readable_new_marker_after_ack_failure_as_committed() {
     let mut config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
     config.fsync_mode = FsyncMode::Batched;
     config.fsync_interval = Duration::from_secs(60);
-    let (kura, _) = Kura::new(&config, &RuntimeLaneConfig::default()).expect("open Kura");
+    let (kura, _) =
+        Kura::open_test_kura_with_configured_lane_config(&config, &RuntimeLaneConfig::default())
+            .expect("open Kura");
     kura.block_store
         .lock()
         .fail_next_commit_marker_ack_after_persist
@@ -2389,7 +2428,11 @@ fn pre_marker_association_recovery_failure_remains_exactly_retryable() {
 fn post_marker_rewrite_recovery_failure_poison_gates_until_restart() {
     let (_temp_dir, config) = kura_storage_fixture("create Kura root", BLOCKS_IN_MEMORY);
     let replacement = {
-        let (kura, _) = Kura::new(&config, &RuntimeLaneConfig::default()).expect("open Kura");
+        let (kura, _) = Kura::open_test_kura_with_configured_lane_config(
+            &config,
+            &RuntimeLaneConfig::default(),
+        )
+        .expect("open Kura");
         let original = DummyBlocks::new().next();
         let original_hash = original.hash();
         kura.store_block(Arc::clone(&original))
@@ -2438,8 +2481,9 @@ fn post_marker_rewrite_recovery_failure_poison_gates_until_restart() {
         ));
         replacement
     };
-    let (reopened, count) = Kura::new(&config, &RuntimeLaneConfig::default())
-        .expect("restart must complete the marker-selected replacement");
+    let (reopened, count) =
+        Kura::open_test_kura_with_configured_lane_config(&config, &RuntimeLaneConfig::default())
+            .expect("restart must complete the marker-selected replacement");
     assert_eq!(count.0, 1);
     assert_eq!(
         reopened.get_durable_block_hash(nonzero!(1_usize)),
@@ -2458,7 +2502,11 @@ fn unreadable_append_marker_state_poison_gates_live_kura_and_restart_rolls_back(
     config.fsync_mode = FsyncMode::Batched;
     config.fsync_interval = Duration::from_secs(60);
     {
-        let (kura, _) = Kura::new(&config, &RuntimeLaneConfig::default()).expect("open Kura");
+        let (kura, _) = Kura::open_test_kura_with_configured_lane_config(
+            &config,
+            &RuntimeLaneConfig::default(),
+        )
+        .expect("open Kura");
         kura.block_store
             .lock()
             .fail_next_commit_marker_write_and_readback
@@ -2475,8 +2523,9 @@ fn unreadable_append_marker_state_poison_gates_live_kura_and_restart_rolls_back(
             Err(Error::CanonicalStoragePoisoned)
         ));
     }
-    let (reopened, count) = Kura::new(&config, &RuntimeLaneConfig::default())
-        .expect("old marker prunes the ambiguous unpublished append on restart");
+    let (reopened, count) =
+        Kura::open_test_kura_with_configured_lane_config(&config, &RuntimeLaneConfig::default())
+            .expect("old marker prunes the ambiguous unpublished append on restart");
     assert_eq!(count.0, 0);
     assert_eq!(reopened.blocks_count(), 0);
 }
@@ -2542,8 +2591,11 @@ fn unknown_marker_resolution_applies_or_discards_lane_association_stage() {
                 "lane association must wait for marker resolution"
             );
         }
-        let (reopened, count) = Kura::new(&config, &RuntimeLaneConfig::default())
-            .expect("startup resolves lane association stage by marker");
+        let (reopened, count) = Kura::open_test_kura_with_configured_lane_config(
+            &config,
+            &RuntimeLaneConfig::default(),
+        )
+        .expect("startup resolves lane association stage by marker");
         assert_eq!(count.0, usize::from(new_marker_won));
         assert_eq!(
             reopened

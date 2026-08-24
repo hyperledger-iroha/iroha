@@ -15,7 +15,7 @@
 extern "C" {
 #endif
 
-#define CONNECT_NORITO_BRIDGE_ABI_VERSION 22
+#define CONNECT_NORITO_BRIDGE_ABI_VERSION 23
 
 #define CONNECT_NORITO_ERR_ACCOUNT_ADDRESS -200
 #define CONNECT_NORITO_ERR_UNSUPPORTED_ALGORITHM -21
@@ -28,8 +28,13 @@ extern "C" {
 #define CONNECT_NORITO_ERR_DETACHED_TRANSACTION_SIGNATURE -502
 #define CONNECT_NORITO_ERR_CANONICAL_JSON -503
 #define CONNECT_NORITO_ERR_VALIDATION_FEE_POLICY_PROOF -504
+#define CONNECT_NORITO_ERR_PARLIAMENT_TIMED_OVN -505
 #define CONNECT_NORITO_ERR_CONNECT_IDENTITY -410
 #define CONNECT_NORITO_ERR_CONNECT_APPROVAL -411
+
+#define CONNECT_NORITO_PARLIAMENT_TIMED_OVN_SEED_BYTES_V1 32
+#define CONNECT_NORITO_PARLIAMENT_TIMED_OVN_TRUST_ANCHOR_BYTES_V1 32
+#define CONNECT_NORITO_PARLIAMENT_TIMED_OVN_CASTING_PROOF_MAX_BYTES_V1 8388608
 
 #define CONNECT_NORITO_SORAFS_REFERENCE_ORDERBOOK_KIND_ORDER_REQUEST 1
 #define CONNECT_NORITO_SORAFS_REFERENCE_ORDERBOOK_KIND_ORDER_CANCEL 2
@@ -189,6 +194,64 @@ int32_t connect_norito_validation_fee_current_policy_proof_verify_v1(
     unsigned long trusted_checkpoint_context_id_len,
     uint8_t** out_projection_json,
     unsigned long* out_projection_json_len);
+
+// ---------------- Parliament timed-OVN wallet operations ----------------
+
+// Authenticates a terminal proof response against independently configured
+// network/checkpoint/ballot anchors, then canonical-decodes and replay-validates
+// its Core archive and rederives the authenticated compact binding.
+int32_t connect_norito_parliament_timed_ovn_verify_casting_proof_v1(
+    const uint8_t* proof_response_norito,
+    unsigned long proof_response_norito_len,
+    const uint8_t* network_id,
+    unsigned long network_id_len,
+    uint64_t trusted_checkpoint_height,
+    const uint8_t* trusted_checkpoint_context_id,
+    unsigned long trusted_checkpoint_context_id_len,
+    const uint8_t* expected_ballot_attempt_id,
+    unsigned long expected_ballot_attempt_id_len);
+
+// Verifies the same proof and archive before reading the exact 32-byte
+// caller-keystore seed. Only the public registration record is returned.
+// The two output slots must be distinct and must not overlap input storage.
+int32_t connect_norito_parliament_timed_ovn_registration_from_proof_v1(
+    const uint8_t* proof_response_norito,
+    unsigned long proof_response_norito_len,
+    const uint8_t* network_id,
+    unsigned long network_id_len,
+    uint64_t trusted_checkpoint_height,
+    const uint8_t* trusted_checkpoint_context_id,
+    unsigned long trusted_checkpoint_context_id_len,
+    const uint8_t* expected_ballot_attempt_id,
+    unsigned long expected_ballot_attempt_id_len,
+    const char* authority,
+    unsigned long authority_len,
+    const uint8_t* keystore_seed,
+    unsigned long keystore_seed_len,
+    uint8_t** out_registration,
+    unsigned long* out_registration_len);
+
+// Verifies the same proof and archive before reading the seed, reconstructs the
+// exact committed registration, and returns a survivor- and release-bound
+// masked ballot. choice is 0 (Aye), 1 (Nay), or 2 (Abstain).
+// The two output slots must be distinct and must not overlap input storage.
+int32_t connect_norito_parliament_timed_ovn_ballot_from_proof_v1(
+    const uint8_t* proof_response_norito,
+    unsigned long proof_response_norito_len,
+    const uint8_t* network_id,
+    unsigned long network_id_len,
+    uint64_t trusted_checkpoint_height,
+    const uint8_t* trusted_checkpoint_context_id,
+    unsigned long trusted_checkpoint_context_id_len,
+    const uint8_t* expected_ballot_attempt_id,
+    unsigned long expected_ballot_attempt_id_len,
+    const char* authority,
+    unsigned long authority_len,
+    const uint8_t* keystore_seed,
+    unsigned long keystore_seed_len,
+    uint8_t choice,
+    uint8_t** out_ballot,
+    unsigned long* out_ballot_len);
 
 // ---------------- Chain discriminant helpers ----------------
 // Thread-scoped overrides must be exited on the same thread and in LIFO order.
@@ -1769,35 +1832,41 @@ int32_t connect_norito_encode_remove_key_value_signed_transaction_alg(
     uint8_t** out_signed_ptr, unsigned long* out_signed_len,
     uint8_t* out_hash_ptr, unsigned long out_hash_len);
 
-int32_t connect_norito_encode_governance_propose_deploy_signed_transaction(
+/* Canonical first-release deploy proposal signer. Both hash lengths must be 32,
+ * abi_version must be 1, and provenance_present selects exactly either both
+ * provenance strings or neither. Provenance is never synthesized from the
+ * transaction signing key. */
+int32_t connect_norito_encode_governance_propose_deploy_v1_signed_transaction(
     const char* network_id, unsigned long network_id_len,
     const char* authority, unsigned long authority_len,
     uint64_t creation_time_ms,
     uint64_t ttl_ms,
     uint8_t ttl_present,
     const char* contract_address, unsigned long contract_address_len,
-    const char* code_hash_hex, unsigned long code_hash_hex_len,
-    const char* abi_hash_hex, unsigned long abi_hash_hex_len,
-    const char* abi_version, unsigned long abi_version_len,
-    uint64_t window_lower, uint64_t window_upper, uint8_t window_present,
-    uint8_t mode_code, uint8_t mode_present,
+    const uint8_t* code_hash, unsigned long code_hash_len,
+    const uint8_t* abi_hash, unsigned long abi_hash_len,
+    uint16_t abi_version,
+    const char* provenance_signer, unsigned long provenance_signer_len,
+    const char* provenance_signature, unsigned long provenance_signature_len,
+    uint8_t provenance_present,
     const uint8_t* fee_payment_json, unsigned long fee_payment_json_len,
     const uint8_t* private_key, unsigned long private_key_len,
     uint8_t** out_signed_ptr, unsigned long* out_signed_len,
     uint8_t* out_hash_ptr, unsigned long out_hash_len);
 
-int32_t connect_norito_encode_governance_propose_deploy_signed_transaction_alg(
+int32_t connect_norito_encode_governance_propose_deploy_v1_signed_transaction_alg(
     const char* network_id, unsigned long network_id_len,
     const char* authority, unsigned long authority_len,
     uint64_t creation_time_ms,
     uint64_t ttl_ms,
     uint8_t ttl_present,
     const char* contract_address, unsigned long contract_address_len,
-    const char* code_hash_hex, unsigned long code_hash_hex_len,
-    const char* abi_hash_hex, unsigned long abi_hash_hex_len,
-    const char* abi_version, unsigned long abi_version_len,
-    uint64_t window_lower, uint64_t window_upper, uint8_t window_present,
-    uint8_t mode_code, uint8_t mode_present,
+    const uint8_t* code_hash, unsigned long code_hash_len,
+    const uint8_t* abi_hash, unsigned long abi_hash_len,
+    uint16_t abi_version,
+    const char* provenance_signer, unsigned long provenance_signer_len,
+    const char* provenance_signature, unsigned long provenance_signature_len,
+    uint8_t provenance_present,
     const uint8_t* fee_payment_json, unsigned long fee_payment_json_len,
     const uint8_t* private_key, unsigned long private_key_len,
     uint8_t algorithm,
@@ -1860,62 +1929,6 @@ int32_t connect_norito_encode_governance_cast_zk_ballot_signed_transaction_alg(
     const char* election_id, unsigned long election_id_len,
     const char* proof_b64, unsigned long proof_b64_len,
     const uint8_t* public_inputs_json, unsigned long public_inputs_len,
-    const uint8_t* fee_payment_json, unsigned long fee_payment_json_len,
-    const uint8_t* private_key, unsigned long private_key_len,
-    uint8_t algorithm,
-    uint8_t** out_signed_ptr, unsigned long* out_signed_len,
-    uint8_t* out_hash_ptr, unsigned long out_hash_len);
-
-int32_t connect_norito_encode_governance_enact_referendum_signed_transaction(
-    const char* network_id, unsigned long network_id_len,
-    const char* authority, unsigned long authority_len,
-    uint64_t creation_time_ms,
-    uint64_t ttl_ms,
-    uint8_t ttl_present,
-    const char* referendum_id_hex, unsigned long referendum_id_len,
-    const char* preimage_hash_hex, unsigned long preimage_hash_len,
-    uint64_t window_lower, uint64_t window_upper,
-    const uint8_t* fee_payment_json, unsigned long fee_payment_json_len,
-    const uint8_t* private_key, unsigned long private_key_len,
-    uint8_t** out_signed_ptr, unsigned long* out_signed_len,
-    uint8_t* out_hash_ptr, unsigned long out_hash_len);
-
-int32_t connect_norito_encode_governance_enact_referendum_signed_transaction_alg(
-    const char* network_id, unsigned long network_id_len,
-    const char* authority, unsigned long authority_len,
-    uint64_t creation_time_ms,
-    uint64_t ttl_ms,
-    uint8_t ttl_present,
-    const char* referendum_id_hex, unsigned long referendum_id_len,
-    const char* preimage_hash_hex, unsigned long preimage_hash_len,
-    uint64_t window_lower, uint64_t window_upper,
-    const uint8_t* fee_payment_json, unsigned long fee_payment_json_len,
-    const uint8_t* private_key, unsigned long private_key_len,
-    uint8_t algorithm,
-    uint8_t** out_signed_ptr, unsigned long* out_signed_len,
-    uint8_t* out_hash_ptr, unsigned long out_hash_len);
-
-int32_t connect_norito_encode_governance_finalize_referendum_signed_transaction(
-    const char* network_id, unsigned long network_id_len,
-    const char* authority, unsigned long authority_len,
-    uint64_t creation_time_ms,
-    uint64_t ttl_ms,
-    uint8_t ttl_present,
-    const char* referendum_id, unsigned long referendum_id_len,
-    const char* proposal_id_hex, unsigned long proposal_id_len,
-    const uint8_t* fee_payment_json, unsigned long fee_payment_json_len,
-    const uint8_t* private_key, unsigned long private_key_len,
-    uint8_t** out_signed_ptr, unsigned long* out_signed_len,
-    uint8_t* out_hash_ptr, unsigned long out_hash_len);
-
-int32_t connect_norito_encode_governance_finalize_referendum_signed_transaction_alg(
-    const char* network_id, unsigned long network_id_len,
-    const char* authority, unsigned long authority_len,
-    uint64_t creation_time_ms,
-    uint64_t ttl_ms,
-    uint8_t ttl_present,
-    const char* referendum_id, unsigned long referendum_id_len,
-    const char* proposal_id_hex, unsigned long proposal_id_len,
     const uint8_t* fee_payment_json, unsigned long fee_payment_json_len,
     const uint8_t* private_key, unsigned long private_key_len,
     uint8_t algorithm,

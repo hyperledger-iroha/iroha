@@ -106,8 +106,10 @@ nexus_manifest.write_text(
             "lanes": lane_ids,
             "workload_seed": os.environ["IROHA_GSCALE_SEED"],
             "inputs": {
-                "status_file": lifecycle.name,
+                "lifecycle_file": lifecycle.name,
                 "metrics_file": metrics.name,
+                "telemetry_file": None,
+                "alias_migrations": [],
             },
         },
         indent=2,

@@ -1520,7 +1520,8 @@ mod tests {
             SelectorTuple::default(),
             norito::codec::Encode::encode(&FindPeers),
         ));
-        let query = QueryWithParams::new(&query, params);
+        let query =
+            QueryWithParams::new(&query, params).expect("peer query type has a canonical mapping");
         QueryRequest::Start(query)
     }
     #[test]

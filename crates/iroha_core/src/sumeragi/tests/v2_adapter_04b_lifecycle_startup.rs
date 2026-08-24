@@ -695,6 +695,13 @@ fn production_empty_genesis_complete_tip_adopts_control_repair_and_launches() {
         &local_signer,
     )
     .expect("open CompleteTip NPoS lifecycle");
+    let mut npos_beacon = super::super::v2_beacon::V2GlobalBeaconLifecycle::open(
+        &context,
+        state.as_ref(),
+        Some(local_validator),
+        None,
+    )
+    .expect("open CompleteTip global beacon lifecycle");
     let first = super::super::v2_runner::drain_lifecycle_v2_ingress(
         &mut activated,
         &mut active_runner,
@@ -706,6 +713,7 @@ fn production_empty_genesis_complete_tip_adopts_control_repair_and_launches() {
         &mut block_sync,
         &mut block_sync_request,
         &mut npos_vrf,
+        &mut npos_beacon,
         1,
         super::super::v2_runner::LifecycleProducerClaimDispositionV1::initial(),
     )
@@ -735,6 +743,7 @@ fn production_empty_genesis_complete_tip_adopts_control_repair_and_launches() {
             &mut block_sync,
             &mut block_sync_request,
             &mut npos_vrf,
+            &mut npos_beacon,
             1,
             producer_claim,
         )
@@ -1079,32 +1088,11 @@ fn exercise_pending_kura_production_lifecycle(
     assert!(crate::sumeragi::status::v2_status().is_none());
 
     use super::super::v2_effects::PendingKuraApplyRecoveryStage as Stage;
-    let installed_status =
-        pending
-            .with_runner_setup(&mut setup_runner, |executor, _services| {
-                Ok::<
-                    _,
-                    super::super::v2_lifecycle_coordinator::ProductionLifecyclePreActivationErrorV1,
-                >(executor.status())
-            })
-            .expect("inspect installed pending Kura Apply boundary");
-    assert_eq!(
-        installed_status.pending_tip_recovery_stage,
-        Some(Stage::Apply)
-    );
-    assert_eq!(installed_status.pending_fetches, 0);
-    assert_eq!(installed_status.pending_stores, 0);
-    assert_eq!(installed_status.pending_validations, 0);
-    assert_eq!(installed_status.pending_applications, 0);
-    assert_eq!(installed_status.effect_dispatch_queue.depth, 0);
-    assert_eq!(installed_status.runtime_queues.normal.depth, 0);
-    assert_eq!(installed_status.runtime_queues.progress.depth, 0);
-    assert_eq!(installed_status.runtime_queues.completion.depth, 0);
     let completion_deadline = Instant::now() + Duration::from_secs(5);
     let mut recovery_stages = Vec::new();
     loop {
         let progress = pending
-            .drive_apply_recovery_turn(&mut setup_runner)
+            .drive_apply_recovery_turn(&mut setup_runner, 64)
             .unwrap_or_else(|error| panic!("drive pending Kura Apply recovery: {error}"));
         let (completed, observed_stage) = match progress {
             super::super::v2_lifecycle_coordinator::ProductionPendingKuraApplyRecoveryProgressV1::Advanced {
@@ -1976,6 +1964,13 @@ fn production_lifecycle_factory_replays_markers_with_its_retained_apply_dependen
                 &local_signer,
             )
             .expect("open ordinary-tail NPoS lifecycle");
+            let mut npos_beacon = super::super::v2_beacon::V2GlobalBeaconLifecycle::open(
+                &recovered_context,
+                state.as_ref(),
+                Some(local_validator),
+                None,
+            )
+            .expect("open ordinary-tail global beacon lifecycle");
             assert_eq!(
                 activated
                     .consume_prepared_ordinary_ingress_turn(
@@ -1988,6 +1983,7 @@ fn production_lifecycle_factory_replays_markers_with_its_retained_apply_dependen
                         &mut block_sync,
                         &mut block_sync_request,
                         &mut npos_vrf,
+                        &mut npos_beacon,
                     )
                     .expect("consume the exact ordinary runner handoff"),
                 super::super::v2_runner::ordinary_ingress_consumer::ProductionPreparedOrdinaryIngressConsumptionV1::Continue,
@@ -2026,6 +2022,7 @@ fn production_lifecycle_factory_replays_markers_with_its_retained_apply_dependen
                         &mut block_sync,
                         &mut block_sync_request,
                         &mut npos_vrf,
+                        &mut npos_beacon,
                     )
                     .expect("consume the exact malformed-response ordinary handoff"),
                 super::super::v2_runner::ordinary_ingress_consumer::ProductionPreparedOrdinaryIngressConsumptionV1::Continue,
@@ -2057,6 +2054,7 @@ fn production_lifecycle_factory_replays_markers_with_its_retained_apply_dependen
                 &mut block_sync,
                 &mut block_sync_request,
                 &mut npos_vrf,
+                &mut npos_beacon,
                 1,
                 super::super::v2_runner::LifecycleProducerClaimDispositionV1::initial(),
             )

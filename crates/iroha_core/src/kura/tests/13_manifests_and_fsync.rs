@@ -3,7 +3,11 @@ fn kura_init_keeps_blocks_when_commit_manifests_are_missing() {
     let temp_dir = TempDir::new().expect("tempdir");
     let config = kura_config_for_dir(&temp_dir, NonZeroUsize::new(1).expect("non-zero"));
     let blocks = {
-        let (kura, _) = Kura::new(&config, &RuntimeLaneConfig::default()).expect("kura init");
+        let (kura, _) = Kura::open_test_kura_with_configured_lane_config(
+            &config,
+            &RuntimeLaneConfig::default(),
+        )
+        .expect("kura init");
         let blocks = store_dummy_block_arcs(&kura, 2);
         kura.store_commit_manifest(CommitManifest::new(
             1,
@@ -18,7 +22,9 @@ fn kura_init_keeps_blocks_when_commit_manifests_are_missing() {
             .expect("store stale checkpoint 2");
         blocks
     };
-    let (reopened, count) = Kura::new(&config, &RuntimeLaneConfig::default()).expect("reopen kura");
+    let (reopened, count) =
+        Kura::open_test_kura_with_configured_lane_config(&config, &RuntimeLaneConfig::default())
+            .expect("reopen kura");
     assert_eq!(count.0, 2);
     assert_eq!(reopened.blocks_count(), 2);
     assert_eq!(
@@ -53,7 +59,11 @@ fn commit_manifest_recovery_accepts_partial_post_commit_sidecar_windows() {
     let temp_dir = TempDir::new().expect("tempdir");
     let config = kura_config_for_dir(&temp_dir, NonZeroUsize::new(1).expect("non-zero"));
     let blocks = {
-        let (kura, _) = Kura::new(&config, &RuntimeLaneConfig::default()).expect("kura init");
+        let (kura, _) = Kura::open_test_kura_with_configured_lane_config(
+            &config,
+            &RuntimeLaneConfig::default(),
+        )
+        .expect("kura init");
         let blocks = store_dummy_block_arcs(&kura, 3);
         // Height 1 models a crash after the block append and before either WSV sidecar.
         // Height 2 models a crash after checkpoint persistence and before manifest write.
@@ -71,7 +81,9 @@ fn commit_manifest_recovery_accepts_partial_post_commit_sidecar_windows() {
         .expect("store manifest 3 without checkpoint");
         blocks
     };
-    let (reopened, count) = Kura::new(&config, &RuntimeLaneConfig::default()).expect("reopen kura");
+    let (reopened, count) =
+        Kura::open_test_kura_with_configured_lane_config(&config, &RuntimeLaneConfig::default())
+            .expect("reopen kura");
     assert_eq!(count.0, 3);
     assert_eq!(reopened.blocks_count(), 3);
     for (index, block) in blocks.iter().enumerate() {
@@ -489,7 +501,7 @@ fn fast_init_rewrites_tampered_hash_file() {
         file.write_all(&[0xAA; Hash::LENGTH]).unwrap();
         file.flush().unwrap();
     }
-    let (kura, BlockCount(count)) = Kura::new(
+    let (kura, BlockCount(count)) = Kura::open_test_kura_with_configured_lane_config(
         &Config {
             init_mode: InitMode::Fast,
             store_dir: iroha_config::base::WithOrigin::inline(temp_dir.path().to_path_buf()),
@@ -524,7 +536,7 @@ fn fast_init_prunes_truncated_block_data() {
         .unwrap();
     let len = file.metadata().unwrap().len();
     file.set_len(len.saturating_sub(4)).unwrap();
-    let (kura, BlockCount(count)) = Kura::new(
+    let (kura, BlockCount(count)) = Kura::open_test_kura_with_configured_lane_config(
         &Config {
             init_mode: InitMode::Fast,
             store_dir: iroha_config::base::WithOrigin::inline(temp_dir.path().to_path_buf()),
@@ -1021,7 +1033,9 @@ fn writer_loop_records_periodic_fsync_failure_without_panic() {
     let temp_dir = TempDir::new().expect("temp dir");
     let mut config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
     config.fsync_interval = Duration::from_millis(1);
-    let (kura, _) = Kura::new(&config, &RuntimeLaneConfig::default()).expect("kura init");
+    let (kura, _) =
+        Kura::open_test_kura_with_configured_lane_config(&config, &RuntimeLaneConfig::default())
+            .expect("kura init");
     let block = DummyBlocks::new().next();
     {
         let mut store = kura.block_store.lock();

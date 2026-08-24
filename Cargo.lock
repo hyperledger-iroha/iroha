@@ -10292,7 +10292,6 @@ name = "sora-vpn-helper"
 version = "0.0.0"
 dependencies = [
  "blake3",
- "clap",
  "hex",
  "iroha_crypto",
  "iroha_data_model",

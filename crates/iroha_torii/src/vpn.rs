@@ -10,7 +10,7 @@ use iroha_core::{
     state::{VPN_SETTLED_RECEIPT_HISTORY_LIMIT as MAX_RECEIPTS_PER_ACCOUNT, WorldReadOnly},
 };
 use iroha_crypto::{
-    Algorithm, Hash, HashOf, PublicKey,
+    Algorithm, Hash, HashOf, KeyPair, PrivateKey, PublicKey,
     soranet::{certificate::select_vpn_endpoint, directory::GuardDirectorySnapshotV2},
 };
 use iroha_data_model::{
@@ -26,15 +26,18 @@ use iroha_data_model::{
     soranet::vpn::{
         VPN_DEFAULT_TUNNEL_MTU_BYTES, VpnAddressSlotV1, VpnExitClassV1, VpnHelperTicketV1,
         VpnLeaseRecordV1, VpnLeaseStatusV1, VpnQuoteBodyV1, VpnQuotePolicyV1, VpnSessionReceiptV1,
-        VpnSignedQuoteV1, VpnTariffV1, VpnUsageVoucherV1, derive_vpn_address_plan_v1,
-        derive_vpn_address_slot_v1, derive_vpn_lease_id_v1, derive_vpn_session_id_v1,
-        vpn_helper_network_policy_hash_v1,
+        VpnSignedQuoteV1, VpnSignedSessionReceiptV1, VpnTariffV1, VpnUsageVoucherV1,
+        derive_vpn_address_plan_v1, derive_vpn_address_slot_v1, derive_vpn_lease_id_v1,
+        derive_vpn_session_address_plan_v1, derive_vpn_session_id_v1,
+        vpn_account_hash_v1 as account_hash, vpn_helper_network_policy_hash_v1,
+        vpn_tariff_meter_hash_v1,
     },
     transaction::{SignedTransaction, TransactionEntrypoint},
 };
 use iroha_executor_data_model::permission::soranet::CanIssueSoranetVpnQuote;
 use iroha_primitives::numeric::{Numeric, Quantity, RoundingMode};
 use mv::storage::StorageReadOnly;
+use norito::codec::Encode;
 use sha2::{Digest as _, Sha256};
 use std::{
     collections::{HashMap, HashSet},
@@ -47,6 +50,10 @@ const DEFAULT_TUNNEL_ADDRESSES: [&str; 2] = ["10.208.0.2/32", "fd53:7261:6574::2
 // registered accounts. At most one quote and one session are retained per
 // account, and a full cache fails closed instead of evicting unrelated users.
 const VPN_RUNTIME_ACCOUNT_CAPACITY: usize = 4_096;
+/// Maximum request body accepted by any first-release VPN mutation route.
+pub(crate) const VPN_MUTATION_REQUEST_MAX_BYTES_V1: usize = 16 * 1_024;
+const VPN_MAX_SIGNED_RELAY_RECEIPT_NORITO_BYTES_V1: usize = 2 * 1_024;
+const VPN_MAX_CLIENT_VOUCHER_NORITO_BYTES_V1: usize = 1_024;
 /// Immutable VPN relay trust derived from an authenticated guard-directory snapshot.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct VpnRelayTrust {
@@ -468,8 +475,8 @@ pub(crate) struct VpnQuoteRecord {
 /// without requiring request-time scans of the record maps.
 #[derive(Debug)]
 pub(crate) struct VpnRuntimeState {
-    quote_ids_by_account: HashMap<String, String>,
-    session_ids_by_account: HashMap<String, String>,
+    quote_ids_by_account: HashMap<AccountId, String>,
+    session_ids_by_account: HashMap<AccountId, String>,
     settling_session_ids: HashSet<String>,
     quote_capacity: usize,
     session_capacity: usize,
@@ -477,6 +484,8 @@ pub(crate) struct VpnRuntimeState {
     quote_account_lookups: usize,
     #[cfg(test)]
     session_account_lookups: usize,
+    #[cfg(test)]
+    settlement_reservations: usize,
 }
 impl Default for VpnRuntimeState {
     fn default() -> Self {
@@ -490,6 +499,8 @@ impl Default for VpnRuntimeState {
             quote_account_lookups: 0,
             #[cfg(test)]
             session_account_lookups: 0,
+            #[cfg(test)]
+            settlement_reservations: 0,
         }
     }
 }
@@ -504,12 +515,13 @@ impl VpnRuntimeState {
     }
 }
 fn now_ms() -> u64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .expect("system clock should be after unix epoch")
-        .as_millis()
-        .try_into()
-        .unwrap_or(u64::MAX)
+    system_time_ms(SystemTime::now())
+}
+fn system_time_ms(time: SystemTime) -> u64 {
+    time.duration_since(UNIX_EPOCH)
+        .map_or(u64::MAX, |duration| {
+            duration.as_millis().try_into().unwrap_or(u64::MAX)
+        })
 }
 fn conversion_error(message: impl Into<String>) -> Error {
     Error::Query(ValidationFail::QueryFailed(QueryExecutionFail::Conversion(
@@ -518,6 +530,30 @@ fn conversion_error(message: impl Into<String>) -> Error {
 }
 fn not_permitted_error(message: impl Into<String>) -> Error {
     Error::Query(ValidationFail::NotPermitted(message.into()))
+}
+fn ensure_vpn_operator_ticket_signer(private_key: &PrivateKey) -> Result<(), Error> {
+    if private_key.algorithm() != Algorithm::Ed25519 {
+        return Err(not_permitted_error(
+            "vpn operator quote and helper-ticket signing key must use Ed25519",
+        ));
+    }
+    Ok(())
+}
+fn vpn_operator_ticket_signer<'a>(
+    app: &'a SharedAppState,
+    operator_account_id: &AccountId,
+) -> Result<&'a KeyPair, Error> {
+    let signer = app.vpn_operator_signer.as_ref().ok_or_else(|| {
+        not_permitted_error("dedicated VPN operator signer is not configured on this Torii node")
+    })?;
+    ensure_vpn_operator_ticket_signer(signer.private_key())?;
+    let signer_account_id = AccountId::new(signer.public_key().clone());
+    if &signer_account_id != operator_account_id {
+        return Err(not_permitted_error(
+            "vpn operator account must match this Torii node's dedicated quote and helper-ticket signing key",
+        ));
+    }
+    Ok(signer)
 }
 fn inconsistent_vpn_state(message: impl Into<String>) -> Error {
     Error::AppServiceUnavailable {
@@ -548,11 +584,13 @@ fn default_tunnel_addresses() -> Vec<String> {
 fn build_profile_at(
     dto: &ConfigGetDTO,
     trust: Option<&VpnRelayTrust>,
+    operator_signer_available: bool,
     current_ms: u64,
 ) -> VpnProfileResponseDto {
     let vpn = &dto.network.soranet_vpn;
     let trust = trust.filter(|trust| {
         vpn.enabled
+            && operator_signer_available
             && vpn
                 .lease_secs
                 .checked_mul(1_000)
@@ -629,32 +667,15 @@ fn require_signed_request(
         None => Err(not_permitted_error("signed account headers are required")),
     }
 }
-fn relay_session_id_from_session_id(session_id: &str) -> [u8; 16] {
-    let normalized = session_id
-        .trim()
-        .trim_start_matches("0x")
-        .trim_start_matches("0X");
-    let decoded = hex::decode(normalized).expect("stored VPN session id must be canonical hex");
-    decoded
-        .try_into()
-        .expect("stored VPN session id must encode exactly 16 bytes")
-}
-fn fixed_hash_hex(input: &str) -> String {
-    hex::encode(blake3::hash(input.as_bytes()).as_bytes())
-}
-fn fixed_hash_bytes(input: &str) -> [u8; 32] {
-    *blake3::hash(input.as_bytes()).as_bytes()
-}
-fn account_hash(account_id: &AccountId) -> [u8; 32] {
-    fixed_hash_bytes(&account_id.to_string())
-}
 fn decode_hex_32(raw: &str, field: &str) -> Result<[u8; 32], Error> {
     let normalized = raw.trim().trim_start_matches("0x").trim_start_matches("0X");
-    let decoded =
-        hex::decode(normalized).map_err(|err| conversion_error(format!("{field}: {err}")))?;
-    decoded
-        .try_into()
-        .map_err(|_| conversion_error(format!("{field} must decode to 32 bytes")))
+    if normalized.len() != 64 {
+        return Err(conversion_error(format!("{field} must decode to 32 bytes")));
+    }
+    let mut decoded = [0_u8; 32];
+    hex::decode_to_slice(normalized, &mut decoded)
+        .map_err(|err| conversion_error(format!("{field}: {err}")))?;
+    Ok(decoded)
 }
 fn parse_metering_public_key(raw: &str) -> Result<PublicKey, Error> {
     let normalized = raw.trim().trim_start_matches("0x").trim_start_matches("0X");
@@ -710,40 +731,65 @@ fn vpn_tariff_for_lease(lease_fee: &Quantity, lease_secs: u64) -> Result<VpnTari
 fn build_helper_ticket_hex(
     record: &VpnSessionRecord,
     expires_at_ms: u64,
-    secret: Option<&[u8; 32]>,
+    issuer_private_key: &PrivateKey,
 ) -> Result<String, Error> {
-    let secret = secret.ok_or_else(|| {
-        not_permitted_error("vpn helper ticket secret is not configured on this Torii node")
-    })?;
+    let session_id = parse_vpn_session_id_hex(&record.session_id)?;
+    let address_plan = derive_vpn_session_address_plan_v1(session_id);
     VpnHelperTicketV1 {
-        session_id: relay_session_id_from_session_id(&record.session_id),
+        session_id,
         quote_id: decode_hex_32(&record.quote_id, "quote_id")?,
+        lease_id: record.lease_id,
         account_hash: account_hash(&record.account_id),
         relay_id: record.relay_id,
         payment_tx_hash: decode_hex_32(&record.payment_tx_hash, "payment_tx_hash")?,
         metering_public_key: record.metering_public_key.clone(),
         tariff: record.tariff.clone(),
+        client_ipv4_address: address_plan.client_ipv4_address,
+        client_ipv6_address: address_plan.client_ipv6_address,
         network_policy_hash: vpn_helper_network_policy_hash_v1(
+            &record.relay_endpoint,
+            &record.relay_id,
+            &record.descriptor_commit,
+            &record.tls_server_name,
+            &record.relay_tls_spki_sha256,
+            &record.relay_certificate_sha256,
+            &record.directory_snapshot_digest,
+            record.padding_budget_ms,
             &record.route_pushes,
             &record.excluded_routes,
             &record.dns_servers,
             &record.tunnel_addresses,
             record.mtu_bytes,
         ),
+        valid_after_ms: record.connected_at_ms,
         expires_at_ms,
     }
-    .try_to_hex(secret)
+    .try_to_hex(issuer_private_key)
     .map_err(|err| conversion_error(format!("invalid vpn helper ticket: {err}")))
 }
 fn build_quote_id(
+    network_id: &iroha_data_model::NetworkId,
     account_id: &AccountId,
+    metering_public_key: &PublicKey,
     exit_class: &str,
     nonce: &str,
     current_ms: u64,
-) -> String {
-    fixed_hash_hex(&format!(
-        "soranet-vpn-quote-v1:{account_id}:{exit_class}:{nonce}:{current_ms}"
-    ))
+) -> [u8; 32] {
+    fn update_framed(hasher: &mut blake3::Hasher, value: &[u8]) {
+        let length =
+            u64::try_from(value.len()).expect("VPN quote-id components are bounded below u64::MAX");
+        hasher.update(&length.to_be_bytes());
+        hasher.update(value);
+    }
+
+    let mut hasher = blake3::Hasher::new_derive_key("iroha.soranet.vpn.quote-id.v1");
+    update_framed(&mut hasher, network_id.as_bytes());
+    update_framed(&mut hasher, &account_id.encode());
+    update_framed(&mut hasher, &metering_public_key.encode());
+    update_framed(&mut hasher, exit_class.as_bytes());
+    update_framed(&mut hasher, nonce.as_bytes());
+    hasher.update(&current_ms.to_be_bytes());
+    *hasher.finalize().as_bytes()
 }
 fn build_session_id_from_quote(quote: &VpnQuoteRecord) -> String {
     hex::encode(quote.session_id)
@@ -765,7 +811,7 @@ fn tx_instr_from_box(boxed: InstructionBox) -> VpnTxInstructionDto {
 }
 fn settle_lease_instruction(
     lease_id: [u8; 32],
-    relay_receipt: VpnSessionReceiptV1,
+    relay_receipt: VpnSignedSessionReceiptV1,
     voucher: VpnUsageVoucherV1,
 ) -> VpnTxInstructionDto {
     let instruction: InstructionBox = SettleVpnLease::new(lease_id, relay_receipt, voucher).into();
@@ -1069,46 +1115,19 @@ fn receipt_response_from_record(record: &VpnReceiptRecord) -> VpnReceiptResponse
         settle_lease_instruction: record.settle_lease_instruction.clone(),
     }
 }
-fn build_receipt_record(
+fn build_pending_settlement_receipt_record(
     record: &VpnSessionRecord,
-    disconnected_at_ms: u64,
-    status: &str,
-) -> VpnReceiptRecord {
-    let duration_ms = disconnected_at_ms.saturating_sub(record.connected_at_ms);
-    VpnReceiptRecord {
-        session_id: record.session_id.clone(),
-        account_id: record.account_id.clone(),
-        exit_class: record.exit_class.clone(),
-        relay_endpoint: record.relay_endpoint.clone(),
-        meter_family: record.meter_family.clone(),
-        connected_at_ms: record.connected_at_ms,
-        disconnected_at_ms,
-        duration_ms,
-        bytes_in: record.bytes_in,
-        bytes_out: record.bytes_out,
-        status: status.to_owned(),
-        receipt_source: "torii".to_owned(),
-        quote_id: record.quote_id.clone(),
-        payment_tx_hash: record.payment_tx_hash.clone(),
-        fee_asset_id: record.fee_asset_id.clone(),
-        escrow_account_id: record.escrow_account_id.clone(),
-        operator_account_id: record.operator_account_id.clone(),
-        lease_fee: record.lease_fee.clone(),
-        earned_fee: Quantity::zero(),
-        refunded_fee: record.lease_fee.clone(),
-        lease_id_hex: default_lease_id_hex(record),
-        settle_lease_instruction: None,
-    }
-}
-fn build_settled_receipt_record(
-    record: &VpnSessionRecord,
-    relay_receipt: &VpnSessionReceiptV1,
+    signed_relay_receipt: &VpnSignedSessionReceiptV1,
     voucher: &VpnUsageVoucherV1,
     lease_id: [u8; 32],
     lease_id_hex: String,
-    disconnected_at_ms: u64,
 ) -> Result<VpnReceiptRecord, Error> {
-    let duration_ms = disconnected_at_ms.saturating_sub(record.connected_at_ms);
+    let relay_receipt = &signed_relay_receipt.receipt;
+    let connected_at_ms = relay_receipt.started_at_ms.max(record.connected_at_ms);
+    let disconnected_at_ms = relay_receipt.ended_at_ms;
+    let duration_ms = relay_receipt
+        .ended_at_ms
+        .saturating_sub(relay_receipt.started_at_ms);
     let earned_fee = if relay_receipt.earned_fee > record.lease_fee {
         record.lease_fee.clone()
     } else {
@@ -1124,12 +1143,12 @@ fn build_settled_receipt_record(
         exit_class: record.exit_class.clone(),
         relay_endpoint: record.relay_endpoint.clone(),
         meter_family: record.meter_family.clone(),
-        connected_at_ms: record.connected_at_ms,
+        connected_at_ms,
         disconnected_at_ms,
         duration_ms,
         bytes_in: relay_receipt.ingress_bytes,
         bytes_out: relay_receipt.egress_bytes,
-        status: "settled".to_owned(),
+        status: "settlement_pending".to_owned(),
         receipt_source: "relay".to_owned(),
         quote_id: record.quote_id.clone(),
         payment_tx_hash: record.payment_tx_hash.clone(),
@@ -1142,21 +1161,18 @@ fn build_settled_receipt_record(
         lease_id_hex,
         settle_lease_instruction: Some(settle_lease_instruction(
             lease_id,
-            relay_receipt.clone(),
+            signed_relay_receipt.clone(),
             voucher.clone(),
         )),
     })
 }
 fn store_receipt(app: &SharedAppState, receipt: VpnReceiptRecord) {
-    let key = receipt.account_id.to_string();
+    let key = receipt.account_id.clone();
     let mut entry = app.vpn_receipts.entry(key).or_default();
     entry.insert(0, receipt);
     if entry.len() > MAX_RECEIPTS_PER_ACCOUNT {
         entry.truncate(MAX_RECEIPTS_PER_ACCOUNT);
     }
-}
-fn account_runtime_key(account_id: &AccountId) -> String {
-    account_id.to_string()
 }
 fn lock_vpn_runtime(app: &SharedAppState) -> std::sync::MutexGuard<'_, VpnRuntimeState> {
     app.vpn_state_lock
@@ -1169,13 +1185,13 @@ fn remove_quote_by_id_locked(
     quote_id: &str,
 ) -> Option<VpnQuoteRecord> {
     let (_, record) = app.vpn_quotes.remove(quote_id)?;
-    let account_key = account_runtime_key(&record.account_id);
+    let account_key = &record.account_id;
     if state
         .quote_ids_by_account
-        .get(&account_key)
+        .get(account_key)
         .is_some_and(|indexed_id| indexed_id == quote_id)
     {
-        state.quote_ids_by_account.remove(&account_key);
+        state.quote_ids_by_account.remove(account_key);
     }
     Some(record)
 }
@@ -1188,14 +1204,13 @@ fn quote_for_account_locked(
     {
         state.quote_account_lookups += 1;
     }
-    let account_key = account_runtime_key(account_id);
-    let quote_id = state.quote_ids_by_account.get(&account_key)?.clone();
+    let quote_id = state.quote_ids_by_account.get(account_id)?.clone();
     let record = app.vpn_quotes.get(&quote_id).map(|entry| entry.clone());
     match record {
         Some(record) if &record.account_id == account_id => Some(record),
         _ => {
             // Self-heal only the authenticated account's stale reverse entry.
-            state.quote_ids_by_account.remove(&account_key);
+            state.quote_ids_by_account.remove(account_id);
             None
         }
     }
@@ -1232,7 +1247,6 @@ fn insert_quote_locked(
     record: VpnQuoteRecord,
 ) -> Result<(), Error> {
     validate_quote_record_projection(&record, app.state.network_id_ref())?;
-    let account_key = account_runtime_key(&record.account_id);
     let existing = quote_for_account_locked(app, state, &record.account_id);
     if existing.is_none() && state.quote_ids_by_account.len() >= state.quote_capacity {
         return Err(not_permitted_error(
@@ -1251,7 +1265,7 @@ fn insert_quote_locked(
     }
     state
         .quote_ids_by_account
-        .insert(account_key, record.quote_id.clone());
+        .insert(record.account_id.clone(), record.quote_id.clone());
     app.vpn_quotes.insert(record.quote_id.clone(), record);
     Ok(())
 }
@@ -1275,13 +1289,13 @@ fn remove_session_record_locked(
         .vpn_sessions
         .remove(&expected.session_id)
         .map(|(_, record)| record);
-    let account_key = account_runtime_key(&expected.account_id);
+    let account_key = &expected.account_id;
     if state
         .session_ids_by_account
-        .get(&account_key)
+        .get(account_key)
         .is_some_and(|indexed_id| indexed_id == &expected.session_id)
     {
-        state.session_ids_by_account.remove(&account_key);
+        state.session_ids_by_account.remove(account_key);
     }
     app.vpn_used_payments.remove(&expected.payment_tx_hash);
     if let Some(record) = removed.as_ref() {
@@ -1298,14 +1312,13 @@ fn session_for_account_locked(
     {
         state.session_account_lookups += 1;
     }
-    let account_key = account_runtime_key(account_id);
-    let session_id = state.session_ids_by_account.get(&account_key)?.clone();
+    let session_id = state.session_ids_by_account.get(account_id)?.clone();
     let record = app.vpn_sessions.get(&session_id).map(|entry| entry.clone());
     match record {
         Some(record) if &record.account_id == account_id => Some(record),
         _ => {
             // Self-heal only the authenticated account's stale reverse entry.
-            state.session_ids_by_account.remove(&account_key);
+            state.session_ids_by_account.remove(account_id);
             None
         }
     }
@@ -1322,9 +1335,7 @@ fn expire_session_record_locked(
     if state.settling_session_ids.contains(&record.session_id) {
         return true;
     }
-    if let Some(removed) = remove_session_record_locked(app, state, record) {
-        store_receipt(app, build_receipt_record(&removed, current_ms, "expired"));
-    }
+    let _ = remove_session_record_locked(app, state, record);
     true
 }
 fn expire_session_for_account_locked(
@@ -1368,6 +1379,10 @@ fn reserve_session_settlement_locked(
         ));
     }
     state.settling_session_ids.insert(session_id.to_owned());
+    #[cfg(test)]
+    {
+        state.settlement_reservations = state.settlement_reservations.saturating_add(1);
+    }
     Ok(())
 }
 struct VpnSettlementReservation {
@@ -1387,13 +1402,6 @@ impl VpnSettlementReservation {
             active: true,
         })
     }
-    fn finish(mut self, record: &VpnSessionRecord, receipt: VpnReceiptRecord) {
-        self.active = false;
-        let mut state = lock_vpn_runtime(&self.app);
-        state.settling_session_ids.remove(&self.session_id);
-        let _ = remove_session_record_locked(&self.app, &mut state, record);
-        store_receipt(&self.app, receipt);
-    }
 }
 impl Drop for VpnSettlementReservation {
     fn drop(&mut self) {
@@ -1408,9 +1416,8 @@ fn insert_session_locked(
     app: &SharedAppState,
     state: &mut VpnRuntimeState,
     record: VpnSessionRecord,
-    current_ms: u64,
+    _current_ms: u64,
 ) -> Result<(), Error> {
-    let account_key = account_runtime_key(&record.account_id);
     let existing = session_for_account_locked(app, state, &record.account_id);
     if existing.is_none() && state.session_ids_by_account.len() >= state.session_capacity {
         return Err(not_permitted_error(
@@ -1435,20 +1442,13 @@ fn insert_session_locked(
                 "vpn session receipt settlement is in progress",
             ));
         }
-        if let Some(removed) = remove_session_record_locked(app, state, &existing) {
-            let status = if removed.expires_at_ms <= current_ms {
-                "expired"
-            } else {
-                "replaced"
-            };
-            store_receipt(app, build_receipt_record(&removed, current_ms, status));
-        }
+        let _ = remove_session_record_locked(app, state, &existing);
     }
     app.vpn_used_payments
         .insert(record.payment_tx_hash.clone(), ());
     state
         .session_ids_by_account
-        .insert(account_key, record.session_id.clone());
+        .insert(record.account_id.clone(), record.session_id.clone());
     app.vpn_sessions.insert(record.session_id.clone(), record);
     Ok(())
 }
@@ -1458,13 +1458,9 @@ fn list_receipts_for_account(
 ) -> Result<Vec<VpnReceiptResponseDto>, Error> {
     let mut records = app
         .vpn_receipts
-        .get(&account_id.to_string())
+        .get(account_id)
         .map(|entry| entry.iter().cloned().collect::<Vec<_>>())
         .unwrap_or_default();
-    let cached_lease_ids = records
-        .iter()
-        .map(|record| record.lease_id_hex.clone())
-        .collect::<HashSet<_>>();
     let world = app.state.world_view();
     let indexed_leases = world.vpn_settled_leases_by_account().get(account_id);
     for (settled_at_ms, lease_id) in indexed_leases
@@ -1488,14 +1484,14 @@ fn list_receipts_for_account(
             )));
         }
         let lease_id_hex = hex::encode(lease.lease_id);
-        if cached_lease_ids.contains(&lease_id_hex) {
-            continue;
-        }
         let record = receipt_record_from_settled_lease(lease)?.ok_or_else(|| {
             inconsistent_vpn_state(format!(
                 "settled VPN receipt index references incomplete lease {lease_id_hex}"
             ))
         })?;
+        // Committed WSV terminal state is authoritative over any process-local
+        // pending projection for the same lease.
+        records.retain(|cached| cached.lease_id_hex != lease_id_hex);
         records.push(record);
     }
     records.sort_by(|left, right| right.disconnected_at_ms.cmp(&left.disconnected_at_ms));
@@ -1578,27 +1574,39 @@ fn open_lease_matches_quote(
     })?;
     Ok(open.quote == quote.signed_quote)
 }
+
+fn canonical_signed_transaction_hash(tx: &SignedTransaction) -> [u8; 32] {
+    let mut bytes = [0_u8; 32];
+    bytes.copy_from_slice(tx.hash().as_ref());
+    bytes
+}
+
 fn verify_vpn_payment(
     app: &SharedAppState,
     quote: &VpnQuoteRecord,
     payment_tx_hash: &str,
-) -> Result<(), Error> {
+) -> Result<[u8; 32], Error> {
     validate_quote_record_projection(quote, app.state.network_id_ref())?;
     let payment_hash = payment_tx_hash.trim();
     if payment_hash.is_empty() {
         return Err(conversion_error("payment_tx_hash must not be empty"));
     }
     let _ = decode_hex_32(payment_hash, "payment_tx_hash")?;
-    if app.vpn_used_payments.contains_key(payment_hash) {
+    #[cfg(test)]
+    if app.state.committed_height() == 0 && payment_hash == quote.quote_id {
+        return decode_hex_32(payment_hash, "payment_tx_hash");
+    }
+    let (tx, _) = committed_transaction_by_hash(app, payment_hash)?;
+    let canonical_payment_hash = canonical_signed_transaction_hash(&tx);
+    let canonical_payment_hash_hex = hex::encode(canonical_payment_hash);
+    if app
+        .vpn_used_payments
+        .contains_key(&canonical_payment_hash_hex)
+    {
         return Err(not_permitted_error(
             "vpn payment transaction was already used for a session",
         ));
     }
-    #[cfg(test)]
-    if app.state.committed_height() == 0 && payment_hash == quote.quote_id {
-        return Ok(());
-    }
-    let (tx, _) = committed_transaction_by_hash(app, payment_hash)?;
     if tx.authority() != &quote.account_id {
         return Err(not_permitted_error(
             "vpn payment transaction authority does not match signed account",
@@ -1627,17 +1635,39 @@ fn verify_vpn_payment(
         || lease.client_account_id != quote.account_id
         || lease.lease_id != quote.lease_id
         || lease.session_id != quote.session_id
+        || lease.open_tx_hash != canonical_payment_hash
     {
         return Err(not_permitted_error(
             "vpn payment does not resolve to the exact active consensus VPN lease",
         ));
     }
-    Ok(())
+    Ok(canonical_payment_hash)
 }
-fn decode_norito_hex<T: norito::codec::Decode>(raw: &str, field: &str) -> Result<T, Error> {
-    let normalized = raw.trim().trim_start_matches("0x").trim_start_matches("0X");
-    let bytes =
-        hex::decode(normalized).map_err(|err| conversion_error(format!("{field}: {err}")))?;
+fn decode_norito_hex<T: norito::codec::Decode>(
+    raw: &str,
+    field: &str,
+    max_encoded_bytes: usize,
+) -> Result<T, Error> {
+    let max_hex_len = max_encoded_bytes
+        .checked_mul(2)
+        .expect("VPN evidence byte limits fit in usize hexadecimal lengths");
+    if raw.len() > max_hex_len {
+        return Err(conversion_error(format!(
+            "{field} exceeds the V1 limit of {max_encoded_bytes} decoded bytes"
+        )));
+    }
+    if raw.is_empty()
+        || !raw.len().is_multiple_of(2)
+        || !raw
+            .as_bytes()
+            .iter()
+            .all(|byte| byte.is_ascii_digit() || matches!(byte, b'a'..=b'f'))
+    {
+        return Err(conversion_error(format!(
+            "{field} must be non-empty even-length lowercase hexadecimal without a prefix or whitespace"
+        )));
+    }
+    let bytes = hex::decode(raw).map_err(|err| conversion_error(format!("{field}: {err}")))?;
     let mut cursor = bytes.as_slice();
     let decoded = norito::codec::Decode::decode(&mut cursor)
         .map_err(|err| conversion_error(format!("{field} is not valid Norito: {err}")))?;
@@ -1652,21 +1682,105 @@ fn lease_record_by_id(app: &SharedAppState, lease_id: &[u8; 32]) -> Option<VpnLe
     let world = app.state.world_view();
     world.vpn_leases().get(lease_id).cloned()
 }
-fn lease_id_from_session_lookup(app: &SharedAppState, session_id: &str) -> Option<[u8; 32]> {
-    let normalized = session_id
-        .trim()
-        .trim_start_matches("0x")
-        .trim_start_matches("0X");
-    if normalized.len() != 32 {
-        return None;
+fn parse_vpn_session_id_hex(session_id: &str) -> Result<[u8; 16], Error> {
+    if session_id.len() != 32
+        || !session_id
+            .as_bytes()
+            .iter()
+            .all(|byte| byte.is_ascii_digit() || matches!(byte, b'a'..=b'f'))
+    {
+        return Err(conversion_error(
+            "session_id must be exactly 32 lowercase hexadecimal characters",
+        ));
     }
-    let decoded = hex::decode(normalized).ok()?;
-    let session_id: [u8; 16] = decoded.try_into().ok()?;
+    let mut decoded = [0u8; 16];
+    hex::decode_to_slice(session_id, &mut decoded)
+        .map_err(|error| conversion_error(format!("session_id is invalid: {error}")))?;
+    Ok(decoded)
+}
+fn lease_id_from_session_lookup(app: &SharedAppState, session_id: [u8; 16]) -> Option<[u8; 32]> {
     let slot = VpnAddressSlotV1::from_session_id(session_id);
     let world = app.state.world_view();
     let lease_id = *world.vpn_active_lease_by_address_slot().get(&slot)?;
     let lease = world.vpn_leases().get(&lease_id)?;
     (lease.session_id == session_id).then_some(lease_id)
+}
+struct AuthorizedVpnSettlementContext {
+    lease_id: [u8; 32],
+    lease_id_hex: String,
+    session: VpnSessionRecord,
+}
+fn validate_authorized_vpn_settlement(
+    app: &SharedAppState,
+    request: &VpnReceiptSubmitRequestDto,
+    signed_account: &AccountId,
+    signed_relay_receipt: &VpnSignedSessionReceiptV1,
+    voucher: &VpnUsageVoucherV1,
+    current_ms: u64,
+) -> Result<AuthorizedVpnSettlementContext, Error> {
+    let receipt_session_id = signed_relay_receipt.receipt.session_id;
+    let slot = VpnAddressSlotV1::from_session_id(receipt_session_id);
+    // Resolve both the active-session index and lease from one point-in-time
+    // view. This lookup is O(1), and imported VPN leases have already passed
+    // the protocol's fixed structural and encoded-size bounds.
+    let (indexed_lease_id, lease_record) = {
+        let world = app.state.world_view();
+        let indexed_lease_id = *world
+            .vpn_active_lease_by_address_slot()
+            .get(&slot)
+            .ok_or_else(|| {
+                not_permitted_error(
+                    "vpn receipt does not match an active consensus-indexed VPN session",
+                )
+            })?;
+        let lease_record = world.vpn_leases().get(&indexed_lease_id).ok_or_else(|| {
+            inconsistent_vpn_state("active VPN session index references a missing native VPN lease")
+        })?;
+        if lease_record.lease_id != indexed_lease_id {
+            return Err(inconsistent_vpn_state(
+                "active VPN session index key differs from the retained VPN lease id",
+            ));
+        }
+        if lease_record.session_id != receipt_session_id {
+            return Err(not_permitted_error(
+                "vpn receipt does not match an active consensus-indexed VPN session",
+            ));
+        }
+        (indexed_lease_id, lease_record.clone())
+    };
+
+    // An exact authenticated operator match must precede all settlement
+    // reservation state. Otherwise any registered account can transiently
+    // consume the global/per-session settlement capacity for another lease.
+    if signed_account != &lease_record.operator_account_id {
+        return Err(not_permitted_error(
+            "vpn receipt submission must be signed by the configured operator account",
+        ));
+    }
+    let (lease_id, lease_id_hex) =
+        settlement_lease_id_from_request_or_index(request, indexed_lease_id)?;
+    if lease_record.status != VpnLeaseStatusV1::Active {
+        return Err(not_permitted_error("vpn lease is not active"));
+    }
+    if current_ms >= lease_record.refund_available_at_ms() {
+        return Err(not_permitted_error(
+            "vpn lease settlement grace window expired",
+        ));
+    }
+    if signed_relay_receipt.receipt.ended_at_ms > current_ms
+        || voucher.body.issued_at_ms > current_ms
+    {
+        return Err(not_permitted_error(
+            "vpn receipt and voucher must not be dated in the future",
+        ));
+    }
+    let session = session_record_from_lease(&lease_record)?;
+    verify_relay_receipt_for_session(&session, signed_relay_receipt, voucher)?;
+    Ok(AuthorizedVpnSettlementContext {
+        lease_id,
+        lease_id_hex,
+        session,
+    })
 }
 fn session_id_hex_from_lease(record: &VpnLeaseRecordV1) -> String {
     hex::encode(record.session_id)
@@ -1745,7 +1859,7 @@ fn session_record_from_lease(record: &VpnLeaseRecordV1) -> Result<VpnSessionReco
 }
 fn active_session_record_from_wsv(
     app: &SharedAppState,
-    session_id: &str,
+    session_id: [u8; 16],
     current_ms: u64,
 ) -> Result<Option<VpnSessionRecord>, Error> {
     let Some(lease_id) = lease_id_from_session_lookup(app, session_id) else {
@@ -1762,11 +1876,9 @@ fn active_session_record_from_wsv(
     })?;
     ensure_lease_matches_authenticated_trust(&lease_record, trust)?;
     let mut record = session_record_from_lease(&lease_record)?;
-    record.helper_ticket_hex = build_helper_ticket_hex(
-        &record,
-        record.expires_at_ms,
-        app.vpn_helper_ticket_secret.as_ref(),
-    )?;
+    let operator_signer = vpn_operator_ticket_signer(app, &record.operator_account_id)?;
+    record.helper_ticket_hex =
+        build_helper_ticket_hex(&record, record.expires_at_ms, operator_signer.private_key())?;
     Ok(Some(record))
 }
 fn receipt_record_from_settled_lease(
@@ -1775,9 +1887,42 @@ fn receipt_record_from_settled_lease(
     if record.status != VpnLeaseStatusV1::Settled {
         return Ok(None);
     }
-    let Some(relay_receipt) = record.settled_relay_receipt.as_ref() else {
+    let Some(signed_relay_receipt) = record.settled_relay_receipt.as_ref() else {
         return Ok(None);
     };
+    let Some(voucher) = record.settled_client_voucher.as_ref() else {
+        return Ok(None);
+    };
+    let verified_earned_fee = record
+        .verify_settlement_evidence(signed_relay_receipt, voucher)
+        .map_err(|error| {
+            inconsistent_vpn_state(format!(
+                "settled VPN lease retained invalid two-party settlement evidence: {error}"
+            ))
+        })?;
+    if record.relay_receipt_hash != Some(signed_relay_receipt.hash())
+        || record.client_voucher_hash != Some(voucher.hash())
+        || record.highest_voucher_sequence != voucher.body.sequence
+        || record.earned_fee != verified_earned_fee
+    {
+        return Err(inconsistent_vpn_state(
+            "settled VPN lease fields do not match its retained two-party settlement evidence",
+        ));
+    }
+    let accounted_fee = record
+        .earned_fee
+        .checked_add(&record.refunded_fee)
+        .map_err(|error| {
+            inconsistent_vpn_state(format!(
+                "settled VPN lease fee accounting overflows: {error}"
+            ))
+        })?;
+    if accounted_fee != record.lease_fee {
+        return Err(inconsistent_vpn_state(
+            "settled VPN lease does not conserve its escrowed fee",
+        ));
+    }
+    let relay_receipt = &signed_relay_receipt.receipt;
     let session = session_record_from_lease(record)?;
     let connected_at_ms = relay_receipt.started_at_ms.max(record.opened_at_ms);
     let disconnected_at_ms = record.settled_at_ms.unwrap_or(relay_receipt.ended_at_ms);
@@ -1811,10 +1956,16 @@ fn receipt_record_from_settled_lease(
 }
 fn verify_relay_receipt_for_session(
     record: &VpnSessionRecord,
-    relay_receipt: &VpnSessionReceiptV1,
+    signed_relay_receipt: &VpnSignedSessionReceiptV1,
     voucher: &VpnUsageVoucherV1,
 ) -> Result<(), Error> {
-    let expected_session_id = relay_session_id_from_session_id(&record.session_id);
+    signed_relay_receipt.verify().map_err(|error| {
+        not_permitted_error(format!(
+            "vpn relay receipt signature verification failed: {error}"
+        ))
+    })?;
+    let relay_receipt = &signed_relay_receipt.receipt;
+    let expected_session_id = parse_vpn_session_id_hex(&record.session_id)?;
     if relay_receipt.session_id != expected_session_id
         || voucher.body.session_id != expected_session_id
     {
@@ -1864,21 +2015,29 @@ fn verify_relay_receipt_for_session(
     voucher
         .verify()
         .map_err(|err| not_permitted_error(format!("vpn usage voucher signature failed: {err}")))?;
-    if relay_receipt.ingress_bytes != voucher.body.ingress_bytes
-        || relay_receipt.egress_bytes != voucher.body.egress_bytes
-    {
+    let active_ms = relay_receipt
+        .ended_at_ms
+        .checked_sub(relay_receipt.started_at_ms)
+        .ok_or_else(|| not_permitted_error("vpn receipt service interval is inverted"))?;
+    if !voucher.body.authorizes(
+        relay_receipt.ingress_bytes,
+        relay_receipt.egress_bytes,
+        active_ms,
+    ) {
         return Err(not_permitted_error(
-            "vpn receipt byte counters do not match the submitted voucher",
+            "vpn receipt usage exceeds the submitted prepaid voucher ceilings",
         ));
     }
-    if u64::from(relay_receipt.uptime_secs).saturating_mul(1_000) < voucher.body.active_ms {
+    let expected_uptime_secs = u32::try_from(active_ms.div_ceil(1_000))
+        .map_err(|_| not_permitted_error("vpn receipt active time exceeds receipt range"))?;
+    if relay_receipt.uptime_secs != expected_uptime_secs {
         return Err(not_permitted_error(
-            "vpn receipt uptime is below the submitted voucher active time",
+            "vpn receipt uptime must equal its observed service interval rounded up",
         ));
     }
-    if relay_receipt.ended_at_ms < relay_receipt.started_at_ms {
+    if voucher.body.issued_at_ms > relay_receipt.ended_at_ms {
         return Err(not_permitted_error(
-            "vpn receipt end timestamp precedes start timestamp",
+            "vpn receipt ends before the highest prepaid voucher was issued",
         ));
     }
     let expected_exit_class = VpnExitClassV1::try_from_label(&record.exit_class)
@@ -1886,6 +2045,16 @@ fn verify_relay_receipt_for_session(
     if relay_receipt.exit_class != expected_exit_class {
         return Err(not_permitted_error(
             "vpn receipt exit class does not match the signed session",
+        ));
+    }
+    if relay_receipt.cover_bytes != 0 {
+        return Err(not_permitted_error(
+            "vpn settlement receipt must not carry unauthenticated cover telemetry",
+        ));
+    }
+    if relay_receipt.meter_hash != vpn_tariff_meter_hash_v1(&record.tariff) {
+        return Err(not_permitted_error(
+            "vpn receipt meter hash does not match the signed tariff",
         ));
     }
     if relay_receipt.started_at_ms < record.connected_at_ms
@@ -1896,13 +2065,13 @@ fn verify_relay_receipt_for_session(
         ));
     }
     if voucher.body.issued_at_ms < record.connected_at_ms
-        || voucher.body.issued_at_ms > record.expires_at_ms
+        || voucher.body.issued_at_ms >= record.expires_at_ms
     {
         return Err(not_permitted_error(
             "vpn voucher issuance timestamp falls outside the signed session",
         ));
     }
-    let expected_earned_fee = session_earned_fee(record, voucher)?;
+    let expected_earned_fee = session_earned_fee(record, relay_receipt, voucher)?;
     if relay_receipt.earned_fee != expected_earned_fee {
         return Err(not_permitted_error(
             "vpn receipt earned fee does not match the session tariff",
@@ -1912,11 +2081,29 @@ fn verify_relay_receipt_for_session(
 }
 fn session_earned_fee(
     record: &VpnSessionRecord,
+    relay_receipt: &VpnSessionReceiptV1,
     voucher: &VpnUsageVoucherV1,
 ) -> Result<Quantity, Error> {
+    let active_ms = relay_receipt
+        .ended_at_ms
+        .checked_sub(relay_receipt.started_at_ms)
+        .ok_or_else(|| not_permitted_error("vpn receipt service interval is inverted"))?;
+    if !voucher.body.authorizes(
+        relay_receipt.ingress_bytes,
+        relay_receipt.egress_bytes,
+        active_ms,
+    ) {
+        return Err(not_permitted_error(
+            "vpn receipt usage exceeds the submitted prepaid voucher ceilings",
+        ));
+    }
     record
         .tariff
-        .earned_fee(&voucher.body)
+        .fee_for_usage(
+            relay_receipt.ingress_bytes,
+            relay_receipt.egress_bytes,
+            active_ms,
+        )
         .map_err(|err| conversion_error(format!("vpn tariff arithmetic failed: {err}")))
 }
 pub(crate) async fn handle_get_vpn_profile(app: SharedAppState) -> Result<Response, Error> {
@@ -1924,6 +2111,7 @@ pub(crate) async fn handle_get_vpn_profile(app: SharedAppState) -> Result<Respon
     Ok(crate::utils::JsonBody(build_profile_at(
         &dto,
         app.vpn_relay_trust.as_deref(),
+        app.vpn_operator_signer.is_some(),
         now_ms(),
     ))
     .into_response())
@@ -1940,8 +2128,18 @@ pub(crate) async fn handle_create_vpn_quote(
         .map_err(|err| conversion_error(format!("invalid vpn quote create payload: {err}")))?;
     let dto = app.kiso.get_dto().await?;
     let current_ms = now_ms();
-    let profile = build_profile_at(&dto, app.vpn_relay_trust.as_deref(), current_ms);
+    let profile = build_profile_at(
+        &dto,
+        app.vpn_relay_trust.as_deref(),
+        app.vpn_operator_signer.is_some(),
+        current_ms,
+    );
     if !profile.available {
+        if dto.network.soranet_vpn.enabled && app.vpn_operator_signer.is_none() {
+            return Err(not_permitted_error(
+                "vpn operator signer is not configured on this Torii node",
+            ));
+        }
         if dto.network.soranet_vpn.enabled && app.vpn_relay_trust.is_some() {
             return Err(not_permitted_error(
                 "authenticated relay trust does not cover the complete VPN lease",
@@ -1949,34 +2147,30 @@ pub(crate) async fn handle_create_vpn_quote(
         }
         return Err(not_permitted_error("vpn is disabled on this Torii node"));
     }
-    if app.vpn_helper_ticket_secret.is_none() {
-        return Err(not_permitted_error(
-            "vpn helper ticket secret is not configured on this Torii node",
-        ));
-    }
     let trust = app.vpn_relay_trust.as_deref().ok_or_else(|| {
         not_permitted_error("vpn relay trust is not configured on this Torii node")
     })?;
     let exit_class = normalize_exit_class(&request.exit_class, &profile.default_exit_class)?;
     let operator_account_id =
         parse_profile_account_id(&profile.operator_account_id, "operator_account_id")?;
-    let quote_signer_account_id =
-        AccountId::new(app.torii_proxy_bridge_signer.public_key().clone());
-    if operator_account_id != quote_signer_account_id {
-        return Err(not_permitted_error(
-            "vpn operator account must match this Torii node's quote signing key",
-        ));
-    }
+    let operator_signer = vpn_operator_ticket_signer(&app, &operator_account_id)?;
     ensure_vpn_quote_operator_authorized(&app, &operator_account_id)?;
     let metering_public_key = parse_metering_public_key(&request.metering_public_key_hex)?;
     let nonce = headers
         .get(crate::HEADER_NONCE)
         .and_then(|value| value.to_str().ok())
         .unwrap_or("vpn-quote");
-    let quote_id = build_quote_id(&account_id, &exit_class, nonce, current_ms);
-    let quote_id_bytes = decode_hex_32(&quote_id, "quote_id")?;
-    let address_slot = derive_vpn_address_slot_v1(quote_id_bytes);
     let network_id = *app.state.network_id_ref();
+    let quote_id_bytes = build_quote_id(
+        &network_id,
+        &account_id,
+        &metering_public_key,
+        &exit_class,
+        nonce,
+        current_ms,
+    );
+    let quote_id = hex::encode(quote_id_bytes);
+    let address_slot = derive_vpn_address_slot_v1(quote_id_bytes);
     let lease_id = derive_vpn_lease_id_v1(&network_id, quote_id_bytes, &account_id);
     let session_id =
         derive_vpn_session_id_v1(&network_id, quote_id_bytes, &account_id, address_slot);
@@ -2046,7 +2240,7 @@ pub(crate) async fn handle_create_vpn_quote(
             expires_at_ms: quote_expires_at_ms,
             settlement_grace_ms,
         },
-        app.torii_proxy_bridge_signer.private_key(),
+        operator_signer.private_key(),
     )
     .map_err(|error| conversion_error(format!("cannot sign canonical VPN quote: {error}")))?;
     let record = VpnQuoteRecord {
@@ -2140,12 +2334,13 @@ pub(crate) async fn handle_create_vpn_session(
                 "vpn session metering key does not match the quoted native lease",
             ));
         }
+        vpn_operator_ticket_signer(&app, &quote.operator_account_id)?;
         remove_quote_by_id_locked(&app, &mut vpn_state, quote_id)
             .ok_or_else(|| conversion_error("vpn quote disappeared while creating the session"))?
     };
     // Payment verification reads committed WSV/block state and must not hold
     // the compound runtime-cache lock while doing so.
-    verify_vpn_payment(&app, &quote, &payment_tx_hash)?;
+    let canonical_payment_tx_hash = verify_vpn_payment(&app, &quote, &payment_tx_hash)?;
     let session_id = build_session_id_from_quote(&quote);
     let expires_at_ms = quote.quote_expires_at_ms;
     let mut record = VpnSessionRecord {
@@ -2160,7 +2355,7 @@ pub(crate) async fn handle_create_vpn_session(
         meter_family: quote.meter_family,
         quote_id: quote.quote_id,
         payment_reference: quote.payment_reference,
-        payment_tx_hash: payment_tx_hash.clone(),
+        payment_tx_hash: hex::encode(canonical_payment_tx_hash),
         fee_asset_id: quote.fee_asset_id,
         escrow_account_id: quote.escrow_account_id,
         operator_account_id: quote.operator_account_id,
@@ -2185,11 +2380,9 @@ pub(crate) async fn handle_create_vpn_session(
         bytes_in: 0,
         bytes_out: 0,
     };
-    record.helper_ticket_hex = build_helper_ticket_hex(
-        &record,
-        expires_at_ms,
-        app.vpn_helper_ticket_secret.as_ref(),
-    )?;
+    let operator_signer = vpn_operator_ticket_signer(&app, &record.operator_account_id)?;
+    record.helper_ticket_hex =
+        build_helper_ticket_hex(&record, expires_at_ms, operator_signer.private_key())?;
     let response = response_from_record(&record);
     let mut vpn_state = lock_vpn_runtime(&app);
     insert_session_locked(&app, &mut vpn_state, record, current_ms)?;
@@ -2204,18 +2397,14 @@ pub(crate) async fn handle_get_vpn_session(
 ) -> Result<Response, Error> {
     let account_id = require_signed_request(&app, headers, method, uri, &[])?;
     let current_ms = now_ms();
-    let normalized_session_id = session_id.trim();
-    if normalized_session_id.is_empty() {
-        return Err(conversion_error("session_id must not be empty"));
-    }
+    let session_id_bytes = parse_vpn_session_id_hex(session_id)?;
     let cached_record = {
         let mut vpn_state = lock_vpn_runtime(&app);
-        session_by_id_locked(&app, &mut vpn_state, normalized_session_id, current_ms)
+        session_by_id_locked(&app, &mut vpn_state, session_id, current_ms)
     };
     let record = if let Some(record) = cached_record {
         record
-    } else if let Some(record) =
-        active_session_record_from_wsv(&app, normalized_session_id, current_ms)?
+    } else if let Some(record) = active_session_record_from_wsv(&app, session_id_bytes, current_ms)?
     {
         record
     } else {
@@ -2227,48 +2416,6 @@ pub(crate) async fn handle_get_vpn_session(
         ));
     }
     Ok(crate::utils::JsonBody(response_from_record(&record)).into_response())
-}
-pub(crate) async fn handle_delete_vpn_session(
-    app: SharedAppState,
-    method: &Method,
-    uri: &Uri,
-    headers: &HeaderMap,
-    session_id: &str,
-) -> Result<Response, Error> {
-    let account_id = require_signed_request(&app, headers, method, uri, &[])?;
-    let current_ms = now_ms();
-    let normalized_session_id = session_id.trim();
-    if normalized_session_id.is_empty() {
-        return Err(conversion_error("session_id must not be empty"));
-    }
-    let mut vpn_state = lock_vpn_runtime(&app);
-    let Some(record) =
-        session_by_id_locked(&app, &mut vpn_state, normalized_session_id, current_ms)
-    else {
-        return Ok(StatusCode::NOT_FOUND.into_response());
-    };
-    if record.account_id != account_id {
-        return Err(not_permitted_error(
-            "vpn session belongs to a different account",
-        ));
-    }
-    if vpn_state
-        .settling_session_ids
-        .contains(normalized_session_id)
-    {
-        return Err(not_permitted_error(
-            "vpn session receipt settlement is in progress",
-        ));
-    }
-    let removed = remove_session_by_id_locked(&app, &mut vpn_state, normalized_session_id)
-        .ok_or_else(|| conversion_error("vpn session disappeared during delete"))?;
-    let receipt = build_receipt_record(&removed, current_ms, "disconnected");
-    store_receipt(&app, receipt.clone());
-    Ok((
-        StatusCode::OK,
-        crate::utils::JsonBody(receipt_response_from_record(&receipt)),
-    )
-        .into_response())
 }
 pub(crate) async fn handle_list_vpn_receipts(
     app: SharedAppState,
@@ -2297,55 +2444,56 @@ pub(crate) async fn handle_submit_vpn_receipt(
     let signed_account = require_signed_request(&app, headers, method, uri, body)?;
     let request: VpnReceiptSubmitRequestDto = norito::json::from_slice(body)
         .map_err(|err| conversion_error(format!("invalid vpn receipt payload: {err}")))?;
-    let relay_receipt: VpnSessionReceiptV1 =
-        decode_norito_hex(&request.relay_receipt_hex, "relay_receipt_hex")?;
-    let voucher: VpnUsageVoucherV1 =
-        decode_norito_hex(&request.client_voucher_hex, "client_voucher_hex")?;
-    let current_ms = now_ms();
-    let session_id_hex = hex::encode(relay_receipt.session_id);
-    let settlement = VpnSettlementReservation::reserve(&app, session_id_hex.clone())?;
-    // The reservation prevents delete/replacement races without retaining the
-    // runtime-state lock across WSV reads or receipt signature verification.
-    let indexed_lease_id =
-        lease_id_from_session_lookup(&app, &session_id_hex).ok_or_else(|| {
-            not_permitted_error(
-                "vpn receipt does not match an active consensus-indexed VPN session",
-            )
-        })?;
-    let (lease_id, lease_id_hex) =
-        settlement_lease_id_from_request_or_index(&request, indexed_lease_id)?;
-    let lease_record = lease_record_by_id(&app, &lease_id).ok_or_else(|| {
-        not_permitted_error("vpn receipt does not match an on-chain native VPN lease")
-    })?;
-    if lease_record.status != VpnLeaseStatusV1::Active {
-        return Err(not_permitted_error("vpn lease is not active"));
-    }
-    if current_ms >= lease_record.refund_available_at_ms() {
-        return Err(not_permitted_error(
-            "vpn lease settlement grace window expired",
-        ));
-    }
-    if relay_receipt.ended_at_ms > current_ms || voucher.body.issued_at_ms > current_ms {
-        return Err(not_permitted_error(
-            "vpn receipt and voucher must not be dated in the future",
-        ));
-    }
-    let record = session_record_from_lease(&lease_record)?;
-    if signed_account != record.operator_account_id {
-        return Err(not_permitted_error(
-            "vpn receipt submission must be signed by the configured operator account",
-        ));
-    }
-    verify_relay_receipt_for_session(&record, &relay_receipt, &voucher)?;
-    let receipt = build_settled_receipt_record(
-        &record,
+    let relay_receipt: VpnSignedSessionReceiptV1 = decode_norito_hex(
+        &request.relay_receipt_hex,
+        "relay_receipt_hex",
+        VPN_MAX_SIGNED_RELAY_RECEIPT_NORITO_BYTES_V1,
+    )?;
+    let voucher: VpnUsageVoucherV1 = decode_norito_hex(
+        &request.client_voucher_hex,
+        "client_voucher_hex",
+        VPN_MAX_CLIENT_VOUCHER_NORITO_BYTES_V1,
+    )?;
+    let preflight = validate_authorized_vpn_settlement(
+        &app,
+        &request,
+        &signed_account,
         &relay_receipt,
         &voucher,
-        lease_id,
-        lease_id_hex,
-        current_ms,
+        now_ms(),
     )?;
-    settlement.finish(&record, receipt.clone());
+    let session_id_hex = preflight.session.session_id.clone();
+    let preflight_lease_id = preflight.lease_id;
+    let _settlement = VpnSettlementReservation::reserve(&app, session_id_hex.clone())?;
+    // Reservation state cannot make the WSV immutable. Re-resolve the exact
+    // authoritative lease and revalidate both signatures and all evidence
+    // after reservation so a concurrent lifecycle transition cannot be used
+    // to build an instruction from stale preflight state. Consensus performs
+    // the final lifecycle check when the returned instruction is submitted.
+    let authoritative = validate_authorized_vpn_settlement(
+        &app,
+        &request,
+        &signed_account,
+        &relay_receipt,
+        &voucher,
+        now_ms(),
+    )?;
+    if authoritative.lease_id != preflight_lease_id {
+        return Err(not_permitted_error(
+            "vpn session lease changed while settlement was being reserved",
+        ));
+    }
+    let receipt = build_pending_settlement_receipt_record(
+        &authoritative.session,
+        &relay_receipt,
+        &voucher,
+        authoritative.lease_id,
+        authoritative.lease_id_hex,
+    )?;
+    // Validation only prepares a canonical settlement instruction. The active
+    // session and receipt projection remain consensus-derived until that
+    // instruction commits; reporting "settled" here would create a false
+    // local state and permit duplicate provisional receipts.
     Ok((
         StatusCode::CREATED,
         crate::utils::JsonBody(receipt_response_from_record(&receipt)),

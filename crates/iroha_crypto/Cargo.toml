@@ -18,9 +18,6 @@ dev-tools = []
 # General application surface. Consensus-only consumers should use
 # `consensus` so they do not pull PQC and batch-verification helpers.
 application = ["std", "rand", "json", "ecc-batch", "bfv-accel", "pqc"]
-# Compatibility marker for the exported SoraNet record-I/O macro. Tokio names
-# resolve in each consumer crate, so the crypto crate does not own the runtime.
-soranet-record-io = []
 # Cryptography required by consensus and canonical node identities.
 consensus = ["std", "rand", "bls"]
 # Complete shipping node surface.

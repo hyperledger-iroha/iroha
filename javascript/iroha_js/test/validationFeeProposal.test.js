@@ -13,33 +13,9 @@ import {
 import { makeNativeTest } from "./helpers/native.js";
 
 const nativeTest = makeNativeTest(test);
-const bondEscrowAccount = AccountAddress.fromAccount({
-  publicKey: Buffer.from(ed25519.getPublicKey(Buffer.alloc(32, 0x21))),
-}).toI105();
-const slashReceiverAccount = AccountAddress.fromAccount({
-  publicKey: Buffer.from(ed25519.getPublicKey(Buffer.alloc(32, 0x22))),
-}).toI105();
 const proposalOperator = AccountAddress.fromAccount({
   publicKey: Buffer.from(ed25519.getPublicKey(Buffer.alloc(32, 0x23))),
 }).toI105();
-const plainElectorateRules = Object.freeze({
-  voting_asset_id: "5dHF5UNffENuEg9mhjYwY1jcZ1K5",
-  bond_escrow_account: bondEscrowAccount,
-  slash_receiver_account: slashReceiverAccount,
-  ballot_amount: "150",
-  ballot_duration_blocks: "3600",
-  citizenship_amount: "10000",
-  max_members: "256",
-  conviction_step_blocks: "100",
-  max_conviction: "6",
-  min_turnout: "1",
-  approval_threshold_numerator: "1",
-  approval_threshold_denominator: "2",
-  eligibility_rule: Object.freeze({
-    rule: "proposal_operator_at_or_before_gate_others_after_gate",
-    value: null,
-  }),
-});
 const validationFeeNetworkId = NetworkId.fromBytes(
   Buffer.from("13".repeat(32), "hex"),
 ).toString();
@@ -70,15 +46,10 @@ test("validation-fee proposal fingerprint delegates exact native policy and life
         nativeProposalOperator,
         policyJson,
         lifecycleBytes,
-        plainElectorateRulesJson,
       ) {
         assert.equal(nativeProposalOperator, proposalOperator);
         assert.deepEqual(JSON.parse(policyJson), policy);
         assert.deepEqual(lifecycleBytes, Buffer.from(lifecycleId, "hex"));
-        assert.deepEqual(
-          JSON.parse(plainElectorateRulesJson),
-          plainElectorateRules,
-        );
         return Buffer.from("12".repeat(32), "hex");
       },
     },
@@ -87,7 +58,6 @@ test("validation-fee proposal fingerprint delegates exact native policy and life
         proposalOperator,
         policy,
         lifecycleId,
-        plainElectorateRules,
       ),
   );
   assert.equal(fingerprint, "12".repeat(32));
@@ -100,14 +70,9 @@ test("validation-fee proposal fingerprint accepts no-payout and even-ending outp
         nativeProposalOperator,
         _policyJson,
         lifecycleBytes,
-        plainElectorateRulesJson,
       ) {
         assert.equal(nativeProposalOperator, proposalOperator);
         assert.equal(lifecycleBytes, null);
-        assert.deepEqual(
-          JSON.parse(plainElectorateRulesJson),
-          plainElectorateRules,
-        );
         return Buffer.from("34".repeat(32), "hex");
       },
     },
@@ -116,7 +81,6 @@ test("validation-fee proposal fingerprint accepts no-payout and even-ending outp
         proposalOperator,
         { schema_version: 1 },
         null,
-        plainElectorateRules,
       ),
   );
   assert.equal(fingerprint, "34".repeat(32));
@@ -131,14 +95,9 @@ test("validation-fee payout lifecycle fingerprint delegates exact native objects
       validationFeePayoutLifecycleProposalFingerprintV1(
         nativeProposalOperator,
         payoutBindingJson,
-        plainElectorateRulesJson,
       ) {
         assert.equal(nativeProposalOperator, proposalOperator);
         assert.deepEqual(JSON.parse(payoutBindingJson), payoutBinding);
-        assert.deepEqual(
-          JSON.parse(plainElectorateRulesJson),
-          plainElectorateRules,
-        );
         return Buffer.from("56".repeat(32), "hex");
       },
     },
@@ -146,7 +105,6 @@ test("validation-fee payout lifecycle fingerprint delegates exact native objects
       computeValidationFeePayoutLifecycleProposalFingerprintV1(
         proposalOperator,
         payoutBinding,
-        plainElectorateRules,
       ),
   );
   assert.equal(fingerprint, "56".repeat(32));
@@ -165,7 +123,6 @@ test("validation-fee proposal fingerprint rejects legacy lifecycle encodings", (
           proposalOperator,
           { schema_version: 1 },
           `0x${"56".repeat(32)}`,
-          plainElectorateRules,
         ),
       /64 lowercase hexadecimal/u,
     );
@@ -175,7 +132,6 @@ test("validation-fee proposal fingerprint rejects legacy lifecycle encodings", (
           proposalOperator,
           { schema_version: 1 },
           "00".repeat(32),
-          plainElectorateRules,
         ),
       /must be non-zero/u,
     );
@@ -196,20 +152,47 @@ test("validation-fee proposal fingerprints require exact object inputs", () => {
       () =>
         computeValidationFeePolicyProposalFingerprintV1(
           proposalOperator,
-          { schema_version: 1 },
-          null,
-          undefined,
+          [],
         ),
-      /plainElectorateRules must be an exact native object/u,
+      /policy must be an exact native object/u,
     );
     assert.throws(
       () =>
         computeValidationFeePayoutLifecycleProposalFingerprintV1(
           proposalOperator,
           [],
-          plainElectorateRules,
         ),
       /payoutBinding must be an exact native object/u,
+    );
+  });
+});
+
+test("validation-fee proposal fingerprints reject the retired electorate argument", () => {
+  const unexpectedNative = {
+    validationFeePolicyProposalFingerprintV1() {
+      assert.fail("retired policy arguments must not reach native code");
+    },
+    validationFeePayoutLifecycleProposalFingerprintV1() {
+      assert.fail("retired payout arguments must not reach native code");
+    },
+  };
+  withNativeBinding(unexpectedNative, () => {
+    assert.throws(
+      () => computeValidationFeePolicyProposalFingerprintV1(
+        proposalOperator,
+        { schema_version: 1 },
+        null,
+        {},
+      ),
+      /exactly two or three arguments/u,
+    );
+    assert.throws(
+      () => computeValidationFeePayoutLifecycleProposalFingerprintV1(
+        proposalOperator,
+        { entrypoint: "autonomous_validation_fee_tick" },
+        {},
+      ),
+      /exactly two arguments/u,
     );
   });
 });
@@ -228,7 +211,6 @@ test("validation-fee proposal fingerprints require an explicit canonical operato
             invalid,
             { schema_version: 1 },
             null,
-            plainElectorateRules,
           ),
         /proposalOperator must be one canonical domainless AccountId/u,
       );
@@ -253,7 +235,6 @@ test("validation-fee proposal fingerprints require exact native digest lengths",
             proposalOperator,
             { schema_version: 1 },
             null,
-            plainElectorateRules,
           ),
         /policy proposal fingerprint must contain exactly 32 bytes/u,
       );
@@ -262,7 +243,6 @@ test("validation-fee proposal fingerprints require exact native digest lengths",
           computeValidationFeePayoutLifecycleProposalFingerprintV1(
             proposalOperator,
             { entrypoint: "autonomous_validation_fee_tick" },
-            plainElectorateRules,
           ),
         /payout lifecycle proposal fingerprint must contain exactly 32 bytes/u,
       );
@@ -297,7 +277,6 @@ nativeTest("real native addon fingerprints, decodes, and rebuilds the policy ins
       authority,
       policy,
       null,
-      plainElectorateRules,
     );
   assert.match(proposalId, /^[0-9a-f]{64}$/u);
   assert.equal(
@@ -305,7 +284,6 @@ nativeTest("real native addon fingerprints, decodes, and rebuilds the policy ins
       authority,
       policy,
       null,
-      plainElectorateRules,
     ),
     proposalId,
   );
@@ -314,18 +292,14 @@ nativeTest("real native addon fingerprints, decodes, and rebuilds the policy ins
     ProposeValidationFeePolicy: {
       policy,
       payout_lifecycle_proposal_id: null,
-      plain_electorate_rules: plainElectorateRules,
-      referendum_window: { lower: "100", upper: "140" },
-      mode: "Plain",
     },
   };
   const encoded = noritoEncodeInstruction(instruction);
   const decoded = noritoDecodeInstruction(encoded);
-  assert.equal(decoded.ProposeValidationFeePolicy.mode, "Plain");
-  assert.deepEqual(
-    decoded.ProposeValidationFeePolicy.plain_electorate_rules,
-    plainElectorateRules,
-  );
+  assert.deepEqual(Object.keys(decoded.ProposeValidationFeePolicy).sort(), [
+    "payout_lifecycle_proposal_id",
+    "policy",
+  ]);
   assert.deepEqual(
     noritoEncodeInstruction(decoded),
     encoded,

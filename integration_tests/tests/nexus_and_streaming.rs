@@ -18,10 +18,6 @@ mod norito_streaming_feedback;
 mod norito_streaming_negative;
 #[path = "norito_streaming_roundtrip.rs"]
 mod norito_streaming_roundtrip;
-#[path = "sora_parliament_lifecycle_smoke.rs"]
-mod sora_parliament_lifecycle_smoke;
-#[path = "sora_runtime_upgrade_resilience.rs"]
-mod sora_runtime_upgrade_resilience;
 #[path = "sorafs_gateway_capability_refusal.rs"]
 mod sorafs_gateway_capability_refusal;
 #[path = "sorafs_gateway_conformance.rs"]

@@ -3,6 +3,7 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 RUST_LIB="${ROOT_DIR}/crates/connect_norito_bridge/src/lib.rs"
+PARLIAMENT_RUST="${ROOT_DIR}/crates/connect_norito_bridge/src/parliament_timed_ovn_ffi.rs"
 DATA_MODEL_PRIVACY="${ROOT_DIR}/crates/iroha_data_model/src/privacy/protocol.rs"
 HEADER="${ROOT_DIR}/crates/connect_norito_bridge/include/connect_norito_bridge.h"
 UMBRELLA="${ROOT_DIR}/crates/connect_norito_bridge/include/NoritoBridge.h"
@@ -35,6 +36,7 @@ SELF_TESTS=(
   --self-test-missing-privacy-header-symbol
   --self-test-bad-privacy-signature
   --self-test-missing-privacy-rust-symbol
+  --self-test-missing-parliament-header-symbol
   --self-test-missing-sorafs-reference-header-symbol
   --self-test-missing-sorafs-reference-rust-symbol
   --self-test-bad-sorafs-reference-bundle-signature
@@ -53,8 +55,9 @@ run_contract_check() {
   local umbrella="$3"
   local swift_contract="$4"
   local data_model_privacy="$5"
+  local parliament_rust="$6"
 
-  python3 - "${rust_lib}" "${header}" "${umbrella}" "${swift_contract}" "${data_model_privacy}" <<'PY'
+  python3 - "${rust_lib}" "${header}" "${umbrella}" "${swift_contract}" "${data_model_privacy}" "${parliament_rust}" <<'PY'
 from pathlib import Path
 import re
 import sys
@@ -64,6 +67,7 @@ header = Path(sys.argv[2]).read_text(encoding="utf-8")
 umbrella = Path(sys.argv[3]).read_text(encoding="utf-8")
 swift = Path(sys.argv[4]).read_text(encoding="utf-8")
 privacy_model = Path(sys.argv[5]).read_text(encoding="utf-8")
+rust += "\n" + Path(sys.argv[6]).read_text(encoding="utf-8")
 
 KAGEMUSHA_EXPORTS = {
     "connect_norito_kagemusha_receiver_acknowledgement_create_v2",
@@ -176,15 +180,19 @@ DETACHED_EXPORTS = {
     "connect_norito_detached_transaction_scaffold_inspect_v1",
 }
 
+PARLIAMENT_TIMED_OVN_EXPORTS = {
+    "connect_norito_parliament_timed_ovn_verify_casting_proof_v1",
+    "connect_norito_parliament_timed_ovn_ballot_from_proof_v1",
+    "connect_norito_parliament_timed_ovn_registration_from_proof_v1",
+}
+
 TRANSACTION_SIGNER_BASE_EXPORTS = {
     "connect_norito_encode_burn_signed_transaction",
     "connect_norito_encode_claim_identifier_signed_transaction",
     "connect_norito_encode_governance_cast_plain_ballot_signed_transaction",
     "connect_norito_encode_governance_cast_zk_ballot_signed_transaction",
-    "connect_norito_encode_governance_enact_referendum_signed_transaction",
-    "connect_norito_encode_governance_finalize_referendum_signed_transaction",
     "connect_norito_encode_governance_persist_council_signed_transaction",
-    "connect_norito_encode_governance_propose_deploy_signed_transaction",
+    "connect_norito_encode_governance_propose_deploy_v1_signed_transaction",
     "connect_norito_encode_mint_signed_transaction",
     "connect_norito_encode_multisig_register_signed_transaction",
     "connect_norito_encode_register_zk_asset_signed_transaction",
@@ -525,6 +533,19 @@ header_detached = header_exports("connect_norito_detached_transaction_") | heade
 exact("Rust detached transaction", DETACHED_EXPORTS, rust_detached)
 exact("C header detached transaction", DETACHED_EXPORTS, header_detached)
 
+rust_parliament_timed_ovn = rust_exports("connect_norito_parliament_timed_ovn_")
+header_parliament_timed_ovn = header_exports("connect_norito_parliament_timed_ovn_")
+exact(
+    "Rust Parliament timed-OVN",
+    PARLIAMENT_TIMED_OVN_EXPORTS,
+    rust_parliament_timed_ovn,
+)
+exact(
+    "C header Parliament timed-OVN",
+    PARLIAMENT_TIMED_OVN_EXPORTS,
+    header_parliament_timed_ovn,
+)
+
 signer_name = re.compile(
     r"^connect_norito_encode_[a-z0-9_]+_signed_transaction(?:_alg)?$"
 )
@@ -580,6 +601,7 @@ require_signature_parity(
     | PRIVACY_EXPORTS
     | SORAFS_REFERENCE_EXPORTS
     | DETACHED_EXPORTS
+    | PARLIAMENT_TIMED_OVN_EXPORTS
     | rust_transaction_signers
     | {"connect_norito_bridge_abi_version", "connect_norito_free"}
 )
@@ -591,15 +613,39 @@ if re.search(
 ) is None:
     raise SystemExit("connect_norito bridge ABI must use the shared privacy ABI constant")
 if re.search(
-    r"pub\s+const\s+PRIVACY_BRIDGE_ABI_VERSION_V1\s*:\s*u32\s*=\s*22\s*;",
+    r"pub\s+const\s+PRIVACY_BRIDGE_ABI_VERSION_V1\s*:\s*u32\s*=\s*23\s*;",
     privacy_model,
 ) is None:
-    raise SystemExit("shared privacy bridge ABI must be exactly 22")
+    raise SystemExit("shared privacy bridge ABI must be exactly 23")
 if re.search(
-    r"#define\s+CONNECT_NORITO_BRIDGE_ABI_VERSION\s+22(?:\s|$)",
+    r"#define\s+CONNECT_NORITO_BRIDGE_ABI_VERSION\s+23(?:\s|$)",
     header,
 ) is None:
-    raise SystemExit("C bridge ABI macro must be exactly 22")
+    raise SystemExit("C bridge ABI macro must be exactly 23")
+if re.search(r"const\s+ERR_PARLIAMENT_TIMED_OVN\s*:\s*c_int\s*=\s*-505\s*;", rust) is None:
+    raise SystemExit("Rust Parliament timed-OVN error code must be exactly -505")
+if re.search(r"#define\s+CONNECT_NORITO_ERR_PARLIAMENT_TIMED_OVN\s+-505(?:\s|$)", header) is None:
+    raise SystemExit("C Parliament timed-OVN error code must be exactly -505")
+if re.search(
+    r"pub\s+const\s+CONNECT_NORITO_PARLIAMENT_TIMED_OVN_SEED_BYTES_V1\s*:\s*usize\s*=\s*32\s*;",
+    rust,
+) is None:
+    raise SystemExit("Rust Parliament timed-OVN seed width must be exactly 32")
+if re.search(
+    r"#define\s+CONNECT_NORITO_PARLIAMENT_TIMED_OVN_SEED_BYTES_V1\s+32(?:\s|$)",
+    header,
+) is None:
+    raise SystemExit("C Parliament timed-OVN seed width must be exactly 32")
+if re.search(
+    r"#define\s+CONNECT_NORITO_PARLIAMENT_TIMED_OVN_CASTING_PROOF_MAX_BYTES_V1\s+8388608(?:\s|$)",
+    header,
+) is None:
+    raise SystemExit("C Parliament timed-OVN casting-proof bound must be exactly 8 MiB")
+if re.search(
+    r"#define\s+CONNECT_NORITO_PARLIAMENT_TIMED_OVN_TRUST_ANCHOR_BYTES_V1\s+32(?:\s|$)",
+    header,
+) is None:
+    raise SystemExit("C Parliament timed-OVN trust-anchor width must be exactly 32")
 if re.search(r'pub\s+unsafe\s+extern\s+"C"\s+fn\s+connect_norito_bridge_abi_version\s*\(', rust) is None:
     raise SystemExit("Rust bridge ABI export is missing")
 if re.search(r"uint32_t\s+connect_norito_bridge_abi_version\s*\(\s*void\s*\)\s*;", header) is None:
@@ -631,7 +677,7 @@ if swift_proof_exports & swift_protocol_exports:
 expected_protocol_count = len(KAGEMUSHA_EXPORTS) - 4
 if len(swift_proof_exports) != 4 or len(swift_protocol_exports) != expected_protocol_count:
     raise SystemExit(
-        "Swift ABI-22 inventory must contain 4 proof and "
+        "Swift ABI-23 inventory must contain 4 proof and "
         f"{expected_protocol_count} protocol symbols"
     )
 swift_exports = swift_proof_exports | swift_protocol_exports
@@ -646,11 +692,12 @@ if re.search(r"requiredNativeSymbols\s*=\s*requiredProofSymbols\s*\+\s*requiredP
     raise SystemExit("Swift requiredNativeSymbols must combine the exact proof and protocol inventories")
 
 print(
-    "bridge header contract passed: bridge ABI 22, "
+    "bridge header contract passed: bridge ABI 23, "
     f"{len(KAGEMUSHA_EXPORTS)} Kagemusha exports, "
     f"{len(PRIVACY_EXPORTS)} privacy exports, "
-    f"{len(SORAFS_REFERENCE_EXPORTS)} SoraFS exports, and "
-    f"{len(DETACHED_EXPORTS)} detached-transaction exports"
+    f"{len(SORAFS_REFERENCE_EXPORTS)} SoraFS exports, "
+    f"{len(DETACHED_EXPORTS)} detached-transaction exports, and "
+    f"{len(PARLIAMENT_TIMED_OVN_EXPORTS)} Parliament timed-OVN exports"
 )
 PY
 }
@@ -697,6 +744,7 @@ make_negative_workspace() {
   local tmp
   tmp="$(mktemp -d "${TMPDIR:-/tmp}/iroha-bridge-header.XXXXXX")"
   cp "${RUST_LIB}" "${tmp}/lib.rs"
+  cp "${PARLIAMENT_RUST}" "${tmp}/parliament_timed_ovn_ffi.rs"
   cp "${DATA_MODEL_PRIVACY}" "${tmp}/privacy.rs"
   cp "${HEADER}" "${tmp}/connect_norito_bridge.h"
   cp "${UMBRELLA}" "${tmp}/NoritoBridge.h"
@@ -712,7 +760,8 @@ expect_contract_rejection() {
       "${tmp}/connect_norito_bridge.h" \
       "${tmp}/NoritoBridge.h" \
       "${tmp}/KagemushaRecursiveSpendV2.swift" \
-      "${tmp}/privacy.rs" 2>&1)"; then
+      "${tmp}/privacy.rs" \
+      "${tmp}/parliament_timed_ovn_ffi.rs" 2>&1)"; then
     echo "[bridge-header] negative control unexpectedly passed: ${MODE}" >&2
     exit 1
   fi
@@ -736,13 +785,15 @@ if [[ "${MODE}" == --self-test-* ]]; then
     "${HEADER}" \
     "${UMBRELLA}" \
     "${SWIFT_CONTRACT}" \
-    "${DATA_MODEL_PRIVACY}" >/dev/null
+    "${DATA_MODEL_PRIVACY}" \
+    "${PARLIAMENT_RUST}" >/dev/null
   tmp="$(make_negative_workspace)"
   trap 'rm -rf "${tmp}"' EXIT
   tmp_rust="${tmp}/lib.rs"
   tmp_header="${tmp}/connect_norito_bridge.h"
   tmp_umbrella="${tmp}/NoritoBridge.h"
   tmp_swift="${tmp}/KagemushaRecursiveSpendV2.swift"
+  tmp_parliament_rust="${tmp}/parliament_timed_ovn_ffi.rs"
 
   case "${MODE}" in
     --self-test-bad-abi)
@@ -754,6 +805,11 @@ if [[ "${MODE}" == --self-test-* ]]; then
       replace_once "${tmp_header}" \
         "connect_norito_kagemusha_recursive_spend_redeem_v4" \
         "removed_connect_norito_kagemusha_recursive_spend_redeem_v4"
+      ;;
+    --self-test-missing-parliament-header-symbol)
+      replace_once "${tmp_header}" \
+        "connect_norito_parliament_timed_ovn_ballot_from_proof_v1" \
+        "removed_connect_norito_parliament_timed_ovn_ballot_from_proof_v1"
       ;;
     --self-test-forbidden-v3-alias)
       replace_once "${tmp_header}" \
@@ -923,7 +979,8 @@ run_contract_check \
   "${HEADER}" \
   "${UMBRELLA}" \
   "${SWIFT_CONTRACT}" \
-  "${DATA_MODEL_PRIVACY}"
+  "${DATA_MODEL_PRIVACY}" \
+  "${PARLIAMENT_RUST}"
 
 if ! command -v "${CC:-cc}" >/dev/null 2>&1; then
   echo "[connect-norito-header] required C compiler not found: ${CC:-cc}" >&2

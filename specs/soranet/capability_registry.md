@@ -28,10 +28,10 @@ rejected even when its flags differ. For `snnet.pqkem`, `snnet.pqsig`, and
 `snnet.constant_rate`, bit `0x01` is the only defined flag;
 every reserved flag bit is rejected. Implementations reject malformed payload
 lengths and every unknown non-GREASE type rather than treating it as an
-extension. Unknown suite identifiers inside the known `snnet.suite_list` TLV
-remain ignorable during suite intersection. Clients encode TLVs in
-nondecreasing type order, and the complete encoded capability vector is limited
-to 4,096 bytes.
+extension. The first-release `snnet.suite_list` accepts only unique `0x04` and
+`0x05` identifiers; any unknown, retired, or duplicate identifier rejects the
+entire list. Clients encode TLVs in nondecreasing type order, and the complete
+encoded capability vector is limited to 4,096 bytes.
 
 ## Algorithm identifier registries
 

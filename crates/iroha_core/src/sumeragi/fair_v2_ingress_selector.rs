@@ -133,7 +133,8 @@ fn fair_v2_ingress_leader_wire_selector_projection(
                     | ConsensusMessageV2Payload::CommitCertificateRequest(_)
                     | ConsensusMessageV2Payload::CommitCertificateResponse(_)
                     | ConsensusMessageV2Payload::VrfCommit(_)
-                    | ConsensusMessageV2Payload::VrfReveal(_) => None,
+                    | ConsensusMessageV2Payload::VrfReveal(_)
+                    | ConsensusMessageV2Payload::GlobalBeaconPartialSignature(_) => None,
                 }
             })
     });

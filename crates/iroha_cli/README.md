@@ -167,12 +167,13 @@ Build governance transaction skeletons and query governance state via Torii app 
 ```bash
 iroha app gov deploy propose \
   --contract-address irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw \
-  --code-hash 0123...ABCD --abi-hash 0123...ABCD \
-  --abi-version v1 --window-lower 12345 --window-upper 12400 \
-  --mode Plain
+  --code-hash <64-lowercase-hex> --abi-hash <64-lowercase-hex> \
+  --abi-version 1
 ```
 
-Responds with `{ ok, proposal_id, tx_instructions: [{ wire_id, payload_hex }] }`.
+Responds with `{ proposal_id, tx_instructions: [{ wire_id, payload_hex }] }`.
+The certificate lifecycle and enactment height are Core-derived; this command
+accepts no referendum window or voting mode.
 
 - Submit a ballot (auto-detects referendum mode unless overridden):
 
@@ -189,17 +190,9 @@ iroha app gov vote --referendum-id r1 --mode plain --owner <canonical-i105-owner
   --amount 1000 --duration-blocks 6000 --direction Aye
 ```
 
-- Finalize a referendum (compute tally, emit Approved/Rejected):
-
-```bash
-curl -sS -X POST -H 'Content-Type: application/json' \
-  "$TORII/v1/gov/finalize" \
-  -d '{"referendum_id":"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef","proposal_id":"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"}' | jq .
-```
-
-- Build an enactment transaction (for an approved proposal):
-
-  iroha app gov enact --proposal-id 0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
+Proposal-backed Parliament decisions are certificate driven. The node advances
+certified attempts at their consensus-scheduled due height; the CLI does not
+expose client finalization or proposal-enactment drafts.
 
 - Apply protected namespaces on the server (admin/testing):
 

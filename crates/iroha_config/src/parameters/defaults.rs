@@ -15,7 +15,7 @@ use iroha_primitives::numeric::Quantity;
 use nonzero_ext::nonzero;
 use std::{
     collections::BTreeMap,
-    num::{NonZeroU16, NonZeroU32, NonZeroU64, NonZeroUsize},
+    num::{NonZeroU32, NonZeroU64, NonZeroUsize},
     path::PathBuf,
     str::FromStr,
     time::Duration,
@@ -134,10 +134,27 @@ pub mod soracloud_runtime {
     pub const MODEL_ARTIFACT_CACHE_BUDGET_BYTES: NonZeroU64 = nonzero!(1_024_u64 * 1024 * 1024);
     /// Default model-weight cache budget in bytes.
     pub const MODEL_WEIGHT_CACHE_BUDGET_BYTES: NonZeroU64 = nonzero!(4_096_u64 * 1024 * 1024);
-    /// First-release PortableVM capacity for one dedicated QEMU identity.
-    pub const INROU_MAX_CONCURRENT_VMS: NonZeroU16 = nonzero!(1_u16);
     /// Whether this node advertises local Inrou hosting by default.
     pub const INROU_ENABLED: bool = false;
+    /// First uid/gid in the canonical four-slot PortableVM identity reservation.
+    pub const INROU_PORTABLE_VM_ID_BASE: u32 = 70_000;
+    /// Number of canonical PortableVM identities that may coexist on one host.
+    pub const INROU_PORTABLE_VM_ID_SLOT_COUNT: u32 = 4;
+    /// Exclusive upper bound of the canonical PortableVM identity reservation.
+    pub const INROU_PORTABLE_VM_ID_MAX_EXCLUSIVE: u32 =
+        INROU_PORTABLE_VM_ID_BASE + INROU_PORTABLE_VM_ID_SLOT_COUNT;
+    /// Return the canonical PortableVM identity slot for an exact uid/gid pair.
+    #[must_use]
+    pub const fn inrou_portable_vm_identity_slot(uid: u32, gid: u32) -> Option<u32> {
+        if uid != gid
+            || uid < INROU_PORTABLE_VM_ID_BASE
+            || uid >= INROU_PORTABLE_VM_ID_MAX_EXCLUSIVE
+        {
+            None
+        } else {
+            Some(uid - INROU_PORTABLE_VM_ID_BASE)
+        }
+    }
     /// Dedicated QEMU uid. `None` keeps PortableVM hosting fail-closed until configured.
     pub const INROU_PORTABLE_VM_UID: Option<NonZeroU32> = None;
     /// Dedicated QEMU primary gid. `None` keeps PortableVM hosting fail-closed until configured.
@@ -175,6 +192,10 @@ pub mod soracloud_runtime {
     pub const INROU_START_GRACE_MS: u64 = 30_000;
     /// Default shutdown grace window in milliseconds for Inrou microVMs.
     pub const INROU_STOP_GRACE_MS: u64 = 10_000;
+    /// Minimum operator lifecycle grace accepted for Inrou microVMs.
+    pub const INROU_LIFECYCLE_GRACE_MIN_MS: u64 = 100;
+    /// Maximum operator lifecycle grace, matching the public 600-second manifest bound.
+    pub const INROU_LIFECYCLE_GRACE_MAX_MS: u64 = 600_000;
     /// Default outbound egress posture for the embedded runtime manager.
     pub const EGRESS_DEFAULT_ALLOW: bool = false;
     /// Default outbound request-rate cap per service/minute. `None` means quota is unset.
@@ -191,16 +212,21 @@ pub mod soracloud_runtime {
         pub const INFERENCE_BASE_URL: &str = "https://router.huggingface.co/hf-inference/models";
         /// Default per-request timeout when talking to Hugging Face surfaces.
         pub const REQUEST_TIMEOUT_MS: u64 = 15_000;
-        /// Whether generated HF services should prefer local on-node execution by default.
-        pub const LOCAL_EXECUTION_ENABLED: bool = true;
-        /// Default local runner program used to execute the embedded HF adapter.
+        /// Maximum redirects followed by the local Hugging Face importer.
+        pub const IMPORT_MAX_REDIRECTS: u8 = 4;
+        /// Hard maximum number of configured cross-origin redirect origins.
+        pub const IMPORT_REDIRECT_ALLOWED_ORIGINS_LIMIT: usize = 32;
+        /// Whether generated HF services may execute through a host-local runner.
+        ///
+        /// Host-local model execution is unavailable in V1 until it is routed
+        /// through the authenticated Inrou isolation and resource corridor.
+        pub const LOCAL_EXECUTION_ENABLED: bool = false;
+        /// Reserved local runner program; host-local execution is unavailable in V1.
         pub const LOCAL_RUNNER_PROGRAM: &str = "python3";
         /// Default timeout applied to one local runner invocation.
         pub const LOCAL_RUNNER_TIMEOUT_MS: u64 = 120_000;
         /// Default TTL for runtime-originated authoritative model-host heartbeats.
         pub const MODEL_HOST_HEARTBEAT_TTL_MS: u64 = 30_000;
-        /// Whether generated HF services may fall back to the HF Inference bridge.
-        pub const ALLOW_INFERENCE_BRIDGE_FALLBACK: bool = false;
         /// Default maximum number of Hub files imported into the shared local cache for one source.
         pub const IMPORT_MAX_FILES: u32 = 32;
         /// Hard maximum number of Hub files imported for one source.
@@ -243,6 +269,15 @@ pub mod soracloud_runtime {
                 "pytorch_model.bin".to_owned(),
                 "pytorch_model.bin.index.json".to_owned(),
                 "rust_model.ot".to_owned(),
+            ]
+        }
+        /// Exact HTTPS origins admitted for cross-origin Hub download redirects.
+        pub fn import_redirect_allowed_origins() -> Vec<String> {
+            vec![
+                "https://cas-bridge.xethub.hf.co".to_owned(),
+                "https://cdn-lfs.hf.co".to_owned(),
+                "https://cdn-lfs-us-1.hf.co".to_owned(),
+                "https://us.aws.cdn.hf.co".to_owned(),
             ]
         }
     }
@@ -862,13 +897,6 @@ pub mod network {
     /// Operators can raise this together with the receive buffer, accounting
     /// for both reserves once per configured active connection.
     pub const QUIC_DATAGRAM_SEND_BUFFER_BYTES: NonZeroUsize = nonzero!(1024 * 1024_usize);
-    /// Enable SCION-guided outbound peer dialing.
-    ///
-    /// When enabled and a route exists for a peer, the dialer attempts the SCION
-    /// route first before legacy address dialing.
-    pub const SCION_ENABLED: bool = false;
-    /// Allow fallback to legacy dialing when a SCION route is missing or fails.
-    pub const SCION_FALLBACK_TO_LEGACY: bool = true;
     // P2P bounded queue capacities (always enforced)
     // Defaults tuned for ~20,000 TPS environments: prioritize headroom for gossip/low-priority
     // traffic while keeping consensus/control queues responsive.
@@ -3136,7 +3164,7 @@ pub mod nexus {
         /// Total basis points for storage budgeting.
         pub const BPS_TOTAL: u16 = 10_000;
     }
-    /// Default number of execution lanes for the primary-lane compatibility profile.
+    /// Default number of execution lanes when no explicit lane catalog is configured.
     pub const LANE_COUNT: NonZeroU32 = nonzero!(1u32);
     /// Default alias assigned to the primary lane when no catalog entries are provided.
     pub const DEFAULT_LANE_ALIAS: &str = "default";
@@ -3217,9 +3245,9 @@ pub mod nexus {
         /// Whether consensus-driven lane autoscaling is enabled.
         pub const ENABLED: bool = false;
         /// Inclusive lower lane-id bound reserved for autoscale-managed elastic lanes.
-        pub const MIN_LANES: u32 = 1;
+        pub const MIN_LANE_ID: u32 = 1;
         /// Exclusive upper lane-id bound reserved for autoscale-managed elastic lanes.
-        pub const MAX_LANES: u32 = 8;
+        pub const MAX_LANE_ID_EXCLUSIVE: u32 = 8;
         /// Target block interval used by the autoscaler (milliseconds).
         pub const TARGET_BLOCK_MS: u64 = 1_000;
         /// Scale-out latency ratio threshold versus target block interval.
@@ -3530,8 +3558,6 @@ pub mod pipeline {
     pub const IVM_CACHE_MAX_BYTES: usize = 64 * 1024 * 1024; // 64 MiB
     /// Rayon worker cap for prover/trace verification (0 = number of physical cores).
     pub const IVM_PROVER_THREADS: usize = 0;
-    /// Historical aggregate signature batch size (0 disables batching).
-    pub const SIGNATURE_BATCH_MAX: usize = 0;
     /// Ed25519-specific batch size (0 disables batching).
     pub const SIGNATURE_BATCH_MAX_ED25519: usize = 64;
     /// Secp256k1-specific batch size (0 disables batching).
@@ -4192,6 +4218,8 @@ pub mod governance {
     pub const PARLIAMENT_QUORUM_BPS: u16 = 6_667;
     /// Consensus block-height span during which selected primaries and alternates may respond.
     pub const PARLIAMENT_INVITATION_PHASE_BLOCKS: u64 = 3_600;
+    /// Consensus block-height span for public-finding endorsements after Reflection begins.
+    pub const PARLIAMENT_PUBLIC_FINDING_PHASE_BLOCKS: u64 = 3_600;
     /// Default Rules Committee size.
     pub const PARLIAMENT_RULES_COMMITTEE_SIZE: usize = 50;
     /// Default Agenda Council size.
@@ -4222,6 +4250,8 @@ pub mod governance {
         pub const COMMITMENT_PHASE_BLOCKS: u64 = 3_600;
         /// Consensus block-height span between commitment close and the earliest timed release.
         pub const RELEASE_DELAY_BLOCKS: u64 = 600;
+        /// Consensus block-height grace window for aggregate opening after release begins.
+        pub const OPENING_PHASE_BLOCKS: u64 = 600;
         /// Retry attempts permitted after the initial private ballot attempt (hard cap: 16).
         pub const MAX_BALLOT_RETRIES: u32 = 3;
         /// Hard first-release ceiling preventing retry-driven state/time amplification.
@@ -4243,18 +4273,6 @@ pub mod governance {
     pub const CITIZEN_NO_SHOW_SLASH_BPS: u16 = 0;
     /// Legacy service-outcome slash, disabled; misconduct uses ordinary adjudication.
     pub const CITIZEN_MISCONDUCT_SLASH_BPS: u16 = 0;
-    /// Default SLA (blocks) for opening a referendum after proposal submission.
-    pub const PIPELINE_STUDY_SLA_BLOCKS: u64 = 345_600;
-    /// Default SLA (blocks) for the referendum voting window.
-    pub const PIPELINE_REVIEW_SLA_BLOCKS: u64 = 86_400;
-    /// Default SLA (blocks) for recording the referendum decision.
-    pub const PIPELINE_DECISION_SLA_BLOCKS: u64 = 604_800;
-    /// Default SLA (blocks) to enact an approved proposal after decision.
-    pub const PIPELINE_ENACTMENT_SLA_BLOCKS: u64 = 120_960;
-    /// Default SLA (blocks) for rules committee approval.
-    pub const PIPELINE_RULES_SLA_BLOCKS: u64 = 86_400;
-    /// Default SLA (blocks) for agenda council scheduling.
-    pub const PIPELINE_AGENDA_SLA_BLOCKS: u64 = 86_400;
     /// Default per-binding reward amount ("1" XOR).
     pub const VIRAL_FOLLOW_REWARD_AMOUNT: &str = "1";
     /// Default sender bonus amount ("0.1" XOR).
@@ -4554,7 +4572,10 @@ pub mod soranet {
         }
         /// Default settlement grace after disconnect before escrow is refundable.
         pub const SETTLEMENT_GRACE_SECS: u64 = 60;
-        /// Default operator account used when an enabled deployment does not override it.
+        /// Default operator account for the disabled profile.
+        ///
+        /// Enabling VPN requires a dedicated Ed25519 private key that matches
+        /// this single-key account, or an explicit account/key override.
         pub fn operator_account_id() -> String {
             super::super::governance::bond_escrow_account()
         }

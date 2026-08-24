@@ -346,6 +346,7 @@ impl_direct_instruction_box!(crate::isi::verifying_keys::UpdateVerifyingKey);
 impl_direct_instruction_box!(crate::isi::consensus_keys::RegisterConsensusKey);
 impl_direct_instruction_box!(crate::isi::consensus_keys::RotateConsensusKey);
 impl_direct_instruction_box!(crate::isi::consensus_keys::DisableConsensusKey);
+impl_direct_instruction_box!(crate::isi::consensus_keys::ApplyThresholdKeyLifecycleCertificateV1);
 // Domain endorsement management instructions.
 impl_direct_instruction_box!(crate::isi::endorsement::RegisterDomainCommittee);
 impl_direct_instruction_box!(crate::isi::endorsement::SetDomainEndorsementPolicy);
@@ -453,8 +454,6 @@ impl_direct_instruction_box!(crate::isi::alias_setup::RenewAliasLease);
 impl_direct_instruction_box!(crate::isi::alias_setup::ConfigureAliasAutoRenew);
 impl_direct_instruction_box!(crate::isi::alias_setup::RebindAccountAlias);
 impl_direct_instruction_box!(crate::isi::alias_setup::CompareAndSetPrimaryAccountAlias);
-impl_direct_instruction_box!(crate::isi::account_alias_lease::AcquireAccountAliasLease);
-impl_direct_instruction_box!(crate::isi::domain_link::SetAccountAliasBinding);
 impl_direct_instruction_box!(crate::isi::account_recovery::ReplaceAccountController);
 impl_direct_instruction_box!(crate::isi::account_recovery::SetAccountRecoveryPolicy);
 impl_direct_instruction_box!(crate::isi::account_recovery::ClearAccountRecoveryPolicy);
@@ -571,16 +570,6 @@ impl_direct_instruction_box!(crate::isi::transparent::RemoveAssetKeyValue);
 impl_direct_instruction_box!(crate::isi::transparent::AddSignatory);
 impl_direct_instruction_box!(crate::isi::transparent::RemoveSignatory);
 impl_direct_instruction_box!(crate::isi::transparent::SetAccountQuorum);
-#[cfg(feature = "governance")]
-impl_direct_instruction_box!(crate::isi::governance::EnactReferendum);
-#[cfg(feature = "governance")]
-impl_direct_instruction_box!(crate::isi::governance::EnactSccpRouteGovernance);
-#[cfg(feature = "governance")]
-impl_direct_instruction_box!(crate::isi::governance::FinalizeReferendum);
-#[cfg(feature = "governance")]
-impl_direct_instruction_box!(crate::isi::governance::ApproveGovernanceProposal);
-#[cfg(feature = "governance")]
-impl_direct_instruction_box!(crate::isi::governance::CastParliamentBallot);
 impl_direct_instruction_box!(crate::isi::ministry::SubmitAgendaProposal);
 /// Object-safe cloning support for [`Instruction`] trait objects.
 pub trait InstructionDynClone {
@@ -1608,6 +1597,7 @@ impl InstructionRegistry {
         self.insert_entry(entry);
         self
     }
+    #[cfg(test)]
     /// Register a new [`crate::isi::Instruction`] type using a stable wire identifier
     /// and the direct slice decoder.
     ///
@@ -1933,6 +1923,7 @@ macro_rules! isi {
         }
     };
 }
+pub(crate) use isi;
 macro_rules! impl_display {
     (
         $ty:ident $(< $($generic:tt),+ >)?
@@ -2056,8 +2047,6 @@ macro_rules! enum_type {
         }
     };
 }
-/// Legacy paid account-alias acquisition compatibility.
-pub mod account_alias_lease;
 /// Native account controller replacement and social recovery instructions.
 pub mod account_recovery;
 /// Declarative alias setup and explicit alias lifecycle instructions.
@@ -2076,8 +2065,6 @@ pub mod content;
 pub mod contract_alias;
 /// DeFi-native instructions.
 pub mod defi;
-/// Legacy account-alias binding compatibility.
-pub mod domain_link;
 /// Ledger-managed asset escrow instructions.
 pub mod escrow;
 /// Hidden-function-backed identifier policy instructions.
@@ -2944,7 +2931,10 @@ pub mod prelude {
             PublishPedersenParams, PublishPoseidonParams, SetPedersenParamsLifecycle,
             SetPoseidonParamsLifecycle,
         },
-        consensus_keys::{DisableConsensusKey, RegisterConsensusKey, RotateConsensusKey},
+        consensus_keys::{
+            ApplyThresholdKeyLifecycleCertificateV1, DisableConsensusKey, RegisterConsensusKey,
+            RotateConsensusKey,
+        },
         content::{PublishContentBundle, RetireContentBundle},
         contract_alias::SetContractAlias,
         endorsement::{

@@ -42,13 +42,12 @@ present	iroha.sumeragi.qc
 present	iroha.sumeragi.checkpoints
 present	iroha.sumeragi.consensus_keys
 present	iroha.sumeragi.bls_keys
-present	iroha.sumeragi.key_lifecycle
 absent	iroha.sumeragi.telemetry
 absent	iroha.sumeragi.commit_qc.get
 present	iroha.sumeragi.evidence.count
 present	iroha.sumeragi.evidence.list
-present	iroha.sumeragi.vrf.penalties
-present	iroha.sumeragi.vrf.epoch
+absent	iroha.sumeragi.vrf.penalties
+absent	iroha.sumeragi.vrf.epoch
 absent	iroha.sumeragi.evidence.submit
 absent	iroha.sumeragi.vrf.commit
 absent	iroha.sumeragi.vrf.reveal
@@ -79,8 +78,8 @@ absent	iroha.gov.council.persist
 absent	iroha.gov.council.replace
 absent	iroha.gov.council.audit
 absent	iroha.gov.council.derive_vrf
-present	iroha.gov.enact
-present	iroha.gov.finalize
+absent	iroha.gov.enact
+absent	iroha.gov.finalize
 present	iroha.aliases.resolve
 present	iroha.aliases.resolve_index
 present	iroha.contracts.code.get

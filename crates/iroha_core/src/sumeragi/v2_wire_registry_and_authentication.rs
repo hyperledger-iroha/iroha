@@ -1119,7 +1119,10 @@ fn verify_authenticated_message(
         | wire::ConsensusMessageV2Payload::CommitCertificateRequest(_)
         | wire::ConsensusMessageV2Payload::CommitCertificateResponse(_)
         | wire::ConsensusMessageV2Payload::VrfCommit(_)
-        | wire::ConsensusMessageV2Payload::VrfReveal(_) => Err(AdapterError::TransportPayload),
+        | wire::ConsensusMessageV2Payload::VrfReveal(_)
+        | wire::ConsensusMessageV2Payload::GlobalBeaconPartialSignature(_) => {
+            Err(AdapterError::TransportPayload)
+        }
     }
 }
 fn verify_roster_proofs(

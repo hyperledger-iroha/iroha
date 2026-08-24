@@ -54,13 +54,6 @@ macro_rules! built_in_wire_id {
             register = |registry| registry.register_with_id::<$ty>(<$ty>::WIRE_ID)
         )
     };
-    ($ty:ty => $wire_id:literal, register_with_id_slice) => {
-        built_in_wire_id_with_scope!(
-            $ty => $wire_id,
-            governance_only = false,
-            register = |registry| registry.register_with_id_slice::<$ty>($wire_id)
-        )
-    };
 }
 #[cfg(feature = "governance")]
 macro_rules! governance_wire_id {
@@ -98,8 +91,6 @@ pub(super) const ALL: &[BuiltInWireId] = &[
     built_in_wire_id!(RemoveAssetKeyValue => "iroha_data_model::isi::transparent::RemoveAssetKeyValue"),
     built_in_wire_id!(GrantBox => "iroha.grant"),
     built_in_wire_id!(RevokeBox => "iroha.revoke"),
-    built_in_wire_id!(account_alias_lease::AcquireAccountAliasLease => "iroha_data_model::isi::account_alias_lease::AcquireAccountAliasLease"),
-    built_in_wire_id!(domain_link::SetAccountAliasBinding => "identity::SetAccountAliasBinding", register_with_id_slice),
     built_in_wire_id!(offline::TopUpKagemushaRecursiveV4 => "iroha_data_model::isi::offline::TopUpKagemushaRecursiveV4"),
     built_in_wire_id!(offline::RedeemKagemushaRecursiveV4 => "iroha_data_model::isi::offline::RedeemKagemushaRecursiveV4"),
     built_in_wire_id!(offline::ActivateKagemushaRecursiveReleaseV4 => "iroha_data_model::isi::offline::ActivateKagemushaRecursiveReleaseV4"),
@@ -232,6 +223,7 @@ pub(super) const ALL: &[BuiltInWireId] = &[
     built_in_wire_id!(consensus_keys::RegisterConsensusKey => "consensus::RegisterConsensusKey"),
     built_in_wire_id!(consensus_keys::RotateConsensusKey => "consensus::RotateConsensusKey"),
     built_in_wire_id!(consensus_keys::DisableConsensusKey => "consensus::DisableConsensusKey"),
+    built_in_wire_id!(consensus_keys::ApplyThresholdKeyLifecycleCertificateV1 => "iroha.consensus.threshold-key-lifecycle.apply.v1"),
     built_in_wire_id!(endorsement::RegisterDomainCommittee => "nexus::RegisterDomainCommittee"),
     built_in_wire_id!(endorsement::SetDomainEndorsementPolicy => "nexus::SetDomainEndorsementPolicy"),
     built_in_wire_id!(endorsement::SubmitDomainEndorsement => "nexus::SubmitDomainEndorsement"),
@@ -428,16 +420,6 @@ pub(super) const ALL: &[BuiltInWireId] = &[
     governance_wire_id!(governance::SlashGovernanceLock => "iroha_data_model::isi::governance::SlashGovernanceLock"),
     #[cfg(feature = "governance")]
     governance_wire_id!(governance::RestituteGovernanceLock => "iroha_data_model::isi::governance::RestituteGovernanceLock"),
-    #[cfg(feature = "governance")]
-    governance_wire_id!(governance::EnactReferendum => "iroha_data_model::isi::governance::EnactReferendum"),
-    #[cfg(feature = "governance")]
-    governance_wire_id!(governance::EnactSccpRouteGovernance => "iroha_data_model::isi::governance::EnactSccpRouteGovernance"),
-    #[cfg(feature = "governance")]
-    governance_wire_id!(governance::FinalizeReferendum => "iroha_data_model::isi::governance::FinalizeReferendum"),
-    #[cfg(feature = "governance")]
-    governance_wire_id!(governance::ApproveGovernanceProposal => "iroha_data_model::isi::governance::ApproveGovernanceProposal"),
-    #[cfg(feature = "governance")]
-    governance_wire_id!(governance::CastParliamentBallot => "iroha_data_model::isi::governance::CastParliamentBallot"),
     #[cfg(feature = "governance")]
     governance_wire_id!(governance::PersistCouncilForEpoch => "iroha_data_model::isi::governance::PersistCouncilForEpoch"),
     #[cfg(feature = "governance")]

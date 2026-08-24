@@ -11,6 +11,7 @@
 #[cfg(test)]
 use crate::isi::bridge::SccpRouteGovernanceActionV1;
 use crate::{
+    NetworkId,
     account::AccountId,
     asset::AssetId,
     isi::sorafs::SorafsProviderGovernanceActionV1,
@@ -19,7 +20,6 @@ use crate::{
     smart_contract::{ContractAddress, manifest::ManifestProvenance},
     validation_fee::{ValidationFeePolicyV1, ValidationFeeTreasuryPayoutBindingV1},
 };
-use iroha_crypto::{PublicKey, SignatureOf};
 use iroha_primitives::numeric::Quantity;
 use iroha_schema::IntoSchema;
 use norito::codec::{Decode, Encode};
@@ -372,8 +372,26 @@ define_hash32_newtype!(
 );
 define_hash32_newtype!(
     BeaconSessionId,
-    "Identifier for one threshold-beacon key session."
+    "Stable network-scoped identifier for the logical Parliament beacon."
 );
+impl BeaconSessionId {
+    /// Derive the canonical stable Parliament beacon identifier for a network.
+    ///
+    /// This logical identifier deliberately does not name a DKG key session;
+    /// future Parliament slots remain valid across legitimate validator-roster
+    /// and threshold-key rotations.
+    #[must_use]
+    pub fn for_network_v1(network_id: &NetworkId) -> Self {
+        let mut bytes = crate::governance_fingerprint::fingerprint(
+            crate::governance_fingerprint::LOGICAL_BEACON_SESSION_ID_V1,
+            network_id,
+        );
+        if bytes.iter().all(|byte| *byte == 0) {
+            bytes[0] = 1;
+        }
+        Self::new(bytes)
+    }
+}
 define_hash32_newtype!(
     BeaconPulseId,
     "Identifier for one finalized threshold-beacon pulse."
@@ -392,7 +410,7 @@ define_hash32_newtype!(
 );
 
 /// ABI version targeted by the contract manifest.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Encode, Decode, IntoSchema)]
 pub struct AbiVersion(u16);
 impl AbiVersion {
     /// Create a new ABI version wrapper.
@@ -442,6 +460,12 @@ impl JsonDeserialize for AbiVersion {
         u16::json_deserialize(parser).map(Self::from)
     }
 }
+/// Largest integer admitted in first-release public JSON number fields.
+///
+/// Public proposal JSON is consumed by SDK runtimes whose number type is IEEE-754 binary64.
+/// Bounding every number-encoded `u64` at `2^53 - 1` keeps those values exact without giving
+/// structurally shared runtime, Musubi, or SCCP types a context-specific string encoding.
+pub const FIRST_RELEASE_MAX_EXACT_JSON_U64: u64 = (1_u64 << 53) - 1;
 /// Governance proposal kinds supported today.
 #[expect(
     clippy::large_enum_variant,
@@ -487,13 +511,12 @@ pub struct DeployContractProposal {
     /// Canonical public contract address governed by the proposal.
     pub contract_address: ContractAddress,
     /// Blake2b-32 hash of the compiled `.to` bytecode.
-    pub code_hash_hex: ContractCodeHash,
+    pub code_hash: ContractCodeHash,
     /// Blake2b-32 hash of the ABI surface expected by hosts.
-    pub abi_hash_hex: ContractAbiHash,
-    /// ABI version string (e.g., `1`).
+    pub abi_hash: ContractAbiHash,
+    /// ABI version (currently `1`).
     pub abi_version: AbiVersion,
     /// Optional manifest provenance used to attest the manifest when absent on-chain.
-    #[norito(default)]
     pub manifest_provenance: Option<ManifestProvenance>,
 }
 /// Proposal payload for scheduling a runtime upgrade through governance.
@@ -515,7 +538,7 @@ pub struct RuntimeUpgradeProposal {
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
 )]
 pub struct SccpRouteGovernanceProposal {
-    /// Complete network- and action-bound SCCP referendum preimage.
+    /// Complete network- and action-bound SCCP Parliament effect preimage.
     pub anchor: Box<crate::isi::bridge::SccpRouteGovernanceAnchorV1>,
 }
 /// Proposal payload for one closed `SoraFS` provider-owner transition.
@@ -581,43 +604,6 @@ pub struct AtWindow {
     /// Last block in the enactment window (inclusive).
     #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::u64_string"))]
     pub upper: u64,
-}
-/// Consensus-retained evidence for one finalized governance referendum.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
-pub struct GovernanceFinalizationEvidence {
-    /// Deterministic proposal identifier.
-    pub proposal_id: [u8; 32],
-    /// Referendum identifier, equal to the proposal identifier for native governance.
-    pub referendum_id: [u8; 32],
-    /// Block height at which the referendum result was finalized.
-    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::u64_string"))]
-    pub finalized_at_height: u64,
-    /// Voting mode whose tally was finalized.
-    pub mode: VotingMode,
-    /// Final approve weight.
-    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::u128_string"))]
-    pub approve: u128,
-    /// Final reject weight.
-    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::u128_string"))]
-    pub reject: u128,
-    /// Final abstain weight.
-    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::u128_string"))]
-    pub abstain: u128,
-    /// Minimum turnout applied to this result.
-    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::u128_string"))]
-    pub min_turnout: u128,
-    /// Approval-threshold numerator applied to this result.
-    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::u64_string"))]
-    pub approval_threshold_numerator: u64,
-    /// Approval-threshold denominator applied to this result.
-    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::u64_string"))]
-    pub approval_threshold_denominator: u64,
-    /// Final deterministic decision.
-    pub approved: bool,
 }
 /// Governance parameters (subset) — see gov.md for full spec.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
@@ -748,140 +734,6 @@ pub struct Vote {
     pub conviction: u8,
     /// Ballot choice (Aye, Nay, or Abstain).
     pub choice: VoteChoice,
-}
-/// Simple threshold scheme with per-signer signatures.
-pub const ENACTMENT_SIGNATURE_SCHEME_SIMPLE_THRESHOLD: u16 = 1;
-/// Supported signature schemes for enactment certificates.
-#[derive(
-    Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema, Default,
-)]
-pub enum EnactmentSignatureScheme {
-    /// Per-signer signatures validated against the council roster.
-    #[default]
-    SimpleThreshold,
-}
-impl EnactmentSignatureScheme {
-    /// Numeric scheme identifier for on-wire payloads.
-    #[must_use]
-    pub const fn scheme_id(self) -> u16 {
-        match self {
-            Self::SimpleThreshold => ENACTMENT_SIGNATURE_SCHEME_SIMPLE_THRESHOLD,
-        }
-    }
-    /// Canonical string representation.
-    #[must_use]
-    pub const fn as_str(self) -> &'static str {
-        match self {
-            Self::SimpleThreshold => "simple_threshold",
-        }
-    }
-}
-impl fmt::Display for EnactmentSignatureScheme {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(self.as_str())
-    }
-}
-/// Error returned when parsing an enactment signature scheme.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct EnactmentSignatureSchemeParseError(pub String);
-impl fmt::Display for EnactmentSignatureSchemeParseError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "invalid enactment signature scheme `{}`", self.0)
-    }
-}
-impl std::error::Error for EnactmentSignatureSchemeParseError {}
-impl FromStr for EnactmentSignatureScheme {
-    type Err = EnactmentSignatureSchemeParseError;
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        match s.to_ascii_lowercase().as_str() {
-            "simple_threshold" | "simple-threshold" | "simple" => Ok(Self::SimpleThreshold),
-            other => Err(EnactmentSignatureSchemeParseError(other.to_string())),
-        }
-    }
-}
-/// Error returned when converting an unknown scheme id.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct EnactmentSignatureSchemeIdError {
-    /// Unsupported scheme identifier.
-    pub scheme_id: u16,
-}
-impl fmt::Display for EnactmentSignatureSchemeIdError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(
-            f,
-            "unsupported enactment signature scheme id {}",
-            self.scheme_id
-        )
-    }
-}
-impl std::error::Error for EnactmentSignatureSchemeIdError {}
-impl TryFrom<u16> for EnactmentSignatureScheme {
-    type Error = EnactmentSignatureSchemeIdError;
-    fn try_from(value: u16) -> Result<Self, Self::Error> {
-        match value {
-            ENACTMENT_SIGNATURE_SCHEME_SIMPLE_THRESHOLD => Ok(Self::SimpleThreshold),
-            scheme_id => Err(EnactmentSignatureSchemeIdError { scheme_id }),
-        }
-    }
-}
-#[cfg(feature = "json")]
-impl JsonSerialize for EnactmentSignatureScheme {
-    fn json_serialize(&self, out: &mut String) {
-        json::write_json_string(self.as_str(), out);
-    }
-    fn json_serialize_to(
-        &self,
-        out: &mut dyn json::JsonWriteSink,
-    ) -> Result<(), json::BoundedJsonError> {
-        json::write_json_string_to(self.as_str(), out)
-    }
-}
-#[cfg(feature = "json")]
-impl JsonDeserialize for EnactmentSignatureScheme {
-    fn json_deserialize(parser: &mut Parser<'_>) -> Result<Self, json::Error> {
-        let value = parser.parse_string()?;
-        Self::from_str(&value).map_err(|_| json::Error::unknown_field(value))
-    }
-}
-/// Governance enactment certificate payload (signed via [`EnactmentSignatureScheme`]).
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(JsonSerialize, JsonDeserialize))]
-pub struct GovernanceEnactment {
-    /// Referendum that authorised the enactment.
-    pub referendum_id: ProposalId,
-    /// Blake2b-32 hash of the referendum preimage.
-    pub preimage_hash: [u8; 32],
-    /// Inclusive window in which enactment is valid.
-    pub at_window: AtWindow,
-}
-/// Signature over a governance enactment payload.
-#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(JsonSerialize, JsonDeserialize))]
-pub struct GovernanceEnactmentSignature {
-    /// Council member account that produced the signature.
-    pub signer: AccountId,
-    /// Public key used to verify the signature.
-    pub public_key: PublicKey,
-    /// Signature of the enactment payload.
-    pub signature: SignatureOf<GovernanceEnactment>,
-}
-/// Signature bundle for governance enactment certificates.
-#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(JsonSerialize, JsonDeserialize))]
-pub struct GovernanceEnactmentSignatureSet {
-    /// Signature scheme identifier.
-    pub scheme: EnactmentSignatureScheme,
-    /// Collected signatures ordered deterministically by signer account id.
-    pub signatures: Vec<GovernanceEnactmentSignature>,
-}
-/// Signed governance enactment certificate.
-#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(JsonSerialize, JsonDeserialize))]
-pub struct GovernanceEnactmentCertificate {
-    /// Enactment payload being authorized.
-    pub payload: GovernanceEnactment,
-    /// Signature bundle proving authorization.
-    pub signatures: GovernanceEnactmentSignatureSet,
 }
 /// Parliament governance body identifiers.
 #[derive(
@@ -1109,7 +961,7 @@ pub enum GovernanceAttemptStatusV1 {
     /// A competing compare-and-set certificate won first.
     #[codec(index = 4)]
     Superseded,
-    /// The certified effect failed deterministic execution.
+    /// The exact certified effect failed deterministic execution.
     #[codec(index = 5)]
     ExecutionFailed,
 }
@@ -1290,7 +1142,7 @@ pub struct SortitionRequestV1 {
     pub request_height: u64,
     /// Strictly future finalized pulse height consumed by the draw.
     pub pulse_height: u64,
-    /// Threshold-beacon session expected to produce the pulse.
+    /// Stable network-scoped logical beacon expected to produce the pulse.
     pub beacon_session_id: BeaconSessionId,
 }
 
@@ -1826,8 +1678,8 @@ pub enum BallotAttemptStatusV1 {
 /// Deterministic reason a private ballot attempt ended without a result.
 ///
 /// Invalid caller-supplied proofs are rejected and never become lifecycle
-/// state. These reasons are reserved for consensus-observed phase expiry or a
-/// failed aggregate release/opening after the immutable release boundary.
+/// state. These reasons are reserved for phase expiry derived from persisted
+/// state or an unavailable finalized release pulse after its immutable height.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(
     feature = "json",
@@ -1847,9 +1699,97 @@ pub enum ParliamentBallotFailureKindV1 {
     /// The exact committed threshold-beacon pulse was unavailable after its height.
     #[codec(index = 3)]
     ReleasePulseUnavailable,
-    /// The final threshold release or aggregate-only opening failed verification.
+    /// The aggregate was not validly opened before its immutable deadline.
     #[codec(index = 4)]
-    AggregateOpeningFailed,
+    OpeningDeadlineExpired,
+}
+
+/// Closed audit classification for every Parliament body that ends without a result.
+///
+/// Public-finding failures and private-ballot failures share this event-facing
+/// vocabulary so telemetry and audit consumers never need to infer terminal
+/// causes from identifiers or private protocol material.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
+#[cfg_attr(
+    feature = "json",
+    norito(tag = "reason", content = "details", deny_unknown_fields)
+)]
+#[cfg_attr(feature = "json", derive(JsonSerialize, JsonDeserialize))]
+pub enum ParliamentNoResultKindV1 {
+    /// Authenticated absences or immutable split endorsements made quorum unreachable.
+    #[codec(index = 0)]
+    PublicFindingQuorumUnreachable,
+    /// A public-finding body remained below quorum after its frozen deadline.
+    #[codec(index = 1)]
+    PublicFindingDeadlineExpired,
+    /// The proof-validated private-ballot registration corpus missed its deadline.
+    #[codec(index = 2)]
+    BallotRegistrationDeadlineExpired,
+    /// The private-ballot survivor roster missed its deadline.
+    #[codec(index = 3)]
+    BallotSurvivorDeadlineExpired,
+    /// The complete private-ballot commitment corpus missed its deadline.
+    #[codec(index = 4)]
+    BallotCommitmentDeadlineExpired,
+    /// The exact committed private-ballot release pulse was unavailable.
+    #[codec(index = 5)]
+    BallotReleasePulseUnavailable,
+    /// The private-ballot aggregate missed its immutable opening deadline.
+    #[codec(index = 6)]
+    BallotOpeningDeadlineExpired,
+}
+
+impl From<ParliamentBallotFailureKindV1> for ParliamentNoResultKindV1 {
+    fn from(value: ParliamentBallotFailureKindV1) -> Self {
+        match value {
+            ParliamentBallotFailureKindV1::RegistrationDeadlineExpired => {
+                Self::BallotRegistrationDeadlineExpired
+            }
+            ParliamentBallotFailureKindV1::SurvivorDeadlineExpired => {
+                Self::BallotSurvivorDeadlineExpired
+            }
+            ParliamentBallotFailureKindV1::CommitmentDeadlineExpired => {
+                Self::BallotCommitmentDeadlineExpired
+            }
+            ParliamentBallotFailureKindV1::ReleasePulseUnavailable => {
+                Self::BallotReleasePulseUnavailable
+            }
+            ParliamentBallotFailureKindV1::OpeningDeadlineExpired => {
+                Self::BallotOpeningDeadlineExpired
+            }
+        }
+    }
+}
+
+#[derive(Encode)]
+struct ParliamentBallotFailureRootPreimageV1 {
+    governance_attempt_id: GovernanceAttemptId,
+    ballot_attempt_id: BallotAttemptId,
+    failure_kind: ParliamentBallotFailureKindV1,
+    failure_height: u64,
+}
+
+/// Derive the only valid failure root for an objectively failed private ballot.
+///
+/// The root binds the exact governance and ballot attempts, the failure class
+/// derived by Core, and the containing finalized block height. No lifecycle
+/// submitter supplies discretionary failure evidence.
+#[must_use]
+pub fn parliament_ballot_failure_root_v1(
+    governance_attempt_id: GovernanceAttemptId,
+    ballot_attempt_id: BallotAttemptId,
+    failure_kind: ParliamentBallotFailureKindV1,
+    failure_height: u64,
+) -> [u8; 32] {
+    crate::governance_fingerprint::fingerprint(
+        crate::governance_fingerprint::PARLIAMENT_BALLOT_FAILURE_ROOT_V1,
+        &ParliamentBallotFailureRootPreimageV1 {
+            governance_attempt_id,
+            ballot_attempt_id,
+            failure_kind,
+            failure_height,
+        },
+    )
 }
 
 /// Canonical snapshot of one retryable hidden Parliament ballot attempt.
@@ -1886,6 +1826,32 @@ impl BallotAttemptId {
             },
         ))
     }
+}
+
+#[derive(Encode)]
+struct ParliamentBallotParticipantHashPreimageV1 {
+    ballot_attempt_id: BallotAttemptId,
+    member: AccountId,
+}
+
+/// Derive the only valid timed-OVN participant hash for one seated member.
+///
+/// Binding the participant identity to both the authenticated universal
+/// account and the exact ballot attempt prevents a Parliament manager from
+/// registering substitute masking keys or replaying a registration between
+/// ballots.
+#[must_use]
+pub fn parliament_ballot_participant_hash_v1(
+    ballot_attempt_id: BallotAttemptId,
+    member: &AccountId,
+) -> [u8; 32] {
+    crate::governance_fingerprint::fingerprint(
+        crate::governance_fingerprint::BALLOT_PARTICIPANT_HASH_V1,
+        &ParliamentBallotParticipantHashPreimageV1 {
+            ballot_attempt_id,
+            member: member.clone(),
+        },
+    )
 }
 
 #[derive(Encode)]
@@ -2132,6 +2098,38 @@ pub fn parliament_ballot_result_root_v1(
     )
 }
 
+#[derive(Encode)]
+struct ParliamentPublicFindingEndorsementRootPreimageV1 {
+    governance_attempt_id: GovernanceAttemptId,
+    body_instance_id: BodyInstanceId,
+    result_root: [u8; 32],
+    endorsing_assignments: Vec<AssignmentId>,
+}
+
+/// Derive the canonical root of the exact seated assignments endorsing one
+/// public, nonbinding finding.
+///
+/// Callers must supply assignment identifiers in strict canonical order. Core
+/// derives this list from authority-authenticated endorsements; a lifecycle
+/// submitter cannot choose the certificate binding.
+#[must_use]
+pub fn parliament_public_finding_endorsement_root_v1(
+    governance_attempt_id: GovernanceAttemptId,
+    body_instance_id: BodyInstanceId,
+    result_root: [u8; 32],
+    endorsing_assignments: &[AssignmentId],
+) -> [u8; 32] {
+    crate::governance_fingerprint::fingerprint(
+        crate::governance_fingerprint::PARLIAMENT_PUBLIC_FINDING_ENDORSEMENT_ROOT_V1,
+        &ParliamentPublicFindingEndorsementRootPreimageV1 {
+            governance_attempt_id,
+            body_instance_id,
+            result_root,
+            endorsing_assignments: endorsing_assignments.to_vec(),
+        },
+    )
+}
+
 /// Absent compare-and-set head required by a governed effect.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(JsonSerialize, JsonDeserialize))]
@@ -2202,7 +2200,7 @@ pub struct ParliamentBallotCertificateBindingV1 {
     /// Root of the intrinsic timed-OVN ciphertext and one-hot-proof commitments.
     #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
     pub timed_commitment_root: [u8; 32],
-    /// Threshold-beacon key session committed for timed opening.
+    /// Stable network-scoped logical beacon committed for timed opening.
     pub release_beacon_session_id: BeaconSessionId,
     /// Height at which the ballot attempt and release slot were committed.
     pub registered_at_height: u64,
@@ -2224,6 +2222,8 @@ pub struct ParliamentBallotCertificateBindingV1 {
     pub max_corpus_entries: u32,
     /// Earliest finalized pulse height permitted to release the aggregate.
     pub release_height: u64,
+    /// Last height at which the release pulse or aggregate opening may be consumed.
+    pub opening_deadline_height: u64,
     /// Exact finalized threshold-beacon pulse that released the aggregate.
     pub release_pulse_id: BeaconPulseId,
     /// Height at which the exact release pulse was consumed for opening.
@@ -2237,8 +2237,23 @@ pub struct ParliamentBallotCertificateBindingV1 {
     pub outcome: ParliamentAggregateOutcomeV1,
 }
 
+/// Quorum evidence binding one public, nonbinding Parliament body finding.
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
+#[cfg_attr(feature = "json", derive(JsonSerialize, JsonDeserialize))]
+pub struct ParliamentPublicFindingCertificateBindingV1 {
+    /// Root of the strict assignment-id sequence endorsing the accepted result root.
+    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
+    pub endorsement_root: [u8; 32],
+    /// Strictly ordered distinct seated assignments whose authorities endorsed the result.
+    pub endorsing_assignments: Vec<AssignmentId>,
+    /// Number of distinct seated assignments endorsing the accepted result.
+    pub endorsements: u32,
+    /// Immutable `ceil(2 × original_seats / 3)` threshold.
+    pub quorum: u32,
+}
+
 /// Sortition, roster, deliberation, and optional ballot result bound for one body.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(JsonSerialize, JsonDeserialize))]
 pub struct ParliamentBodyCertificateBindingV1 {
     /// Body instance contributing this result.
@@ -2256,6 +2271,8 @@ pub struct ParliamentBodyCertificateBindingV1 {
     pub sortition_request: SortitionRequestV1,
     /// Body role of this result.
     pub body: ParliamentBody,
+    /// Immutable sealed-seat denominator for this body result.
+    pub original_seats: u32,
     /// Beacon key session used for the sortition pulse.
     pub beacon_session_id: BeaconSessionId,
     /// Finalized future pulse consumed by sortition.
@@ -2271,6 +2288,8 @@ pub struct ParliamentBodyCertificateBindingV1 {
     pub result_root: [u8; 32],
     /// Height at which this body result became immutable.
     pub result_height: u64,
+    /// Authority-authenticated quorum binding for a public nonbinding finding.
+    pub public_finding: Option<ParliamentPublicFindingCertificateBindingV1>,
     /// Hidden-ballot binding for a formally voting body; absent for public nonbinding findings.
     pub ballot: Option<ParliamentBallotCertificateBindingV1>,
 }
@@ -2321,12 +2340,18 @@ pub enum GovernanceCertificateErrorV1 {
     MissingPolicyJury,
     /// A Policy or Confirmation Jury result omitted its private ballot binding.
     MissingBindingBallot,
+    /// A nonbinding body result omitted its authenticated public-finding quorum.
+    MissingPublicFinding,
+    /// A public-finding endorsement count/root/quorum was structurally invalid.
+    InvalidPublicFinding,
     /// A successful certificate carried a rejected, no-quorum, or no-result ballot.
     NonApprovingBallot,
     /// The stored tally was malformed.
     InvalidTally(ParliamentTallyErrorV1),
     /// The stored outcome disagreed with the deterministic tally decision.
     TallyOutcomeMismatch,
+    /// A private body result root was not derived from its immutable opening and tally.
+    BallotResultRootMismatch,
     /// A narrow Policy Jury approval did not have exactly one fresh Confirmation Jury result,
     /// or a non-narrow result carried one.
     ConfirmationJuryMismatch,
@@ -2360,12 +2385,21 @@ impl fmt::Display for GovernanceCertificateErrorV1 {
             Self::MissingBindingBallot => {
                 f.write_str("binding jury result is missing its private ballot")
             }
+            Self::MissingPublicFinding => {
+                f.write_str("nonbinding body result is missing public-finding quorum evidence")
+            }
+            Self::InvalidPublicFinding => {
+                f.write_str("public-finding endorsement binding is invalid")
+            }
             Self::NonApprovingBallot => {
                 f.write_str("successful governance certificate contains a non-approving ballot")
             }
             Self::InvalidTally(error) => write!(f, "invalid governance tally: {error}"),
             Self::TallyOutcomeMismatch => {
                 f.write_str("governance ballot outcome does not match its aggregate tally")
+            }
+            Self::BallotResultRootMismatch => {
+                f.write_str("governance private-ballot result root is not canonical")
             }
             Self::ConfirmationJuryMismatch => {
                 f.write_str("Confirmation Jury presence or future-pulse binding is invalid")
@@ -2460,6 +2494,7 @@ impl GovernanceCertificateV1 {
                 || binding.roster_root == [0; 32]
                 || binding.assignment_root == [0; 32]
                 || binding.result_root == [0; 32]
+                || binding.original_seats == 0
             {
                 return Err(GovernanceCertificateErrorV1::ZeroBinding);
             }
@@ -2499,9 +2534,39 @@ impl GovernanceCertificateV1 {
             if matches!(
                 binding.body,
                 ParliamentBody::PolicyJury | ParliamentBody::ConfirmationJury
-            ) && binding.ballot.is_none()
-            {
-                return Err(GovernanceCertificateErrorV1::MissingBindingBallot);
+            ) {
+                if binding.ballot.is_none() || binding.public_finding.is_some() {
+                    return Err(GovernanceCertificateErrorV1::MissingBindingBallot);
+                }
+            } else if binding.public_finding.is_none() || binding.ballot.is_some() {
+                return Err(GovernanceCertificateErrorV1::MissingPublicFinding);
+            }
+            if let Some(public_finding) = binding.public_finding.as_ref() {
+                let quorum = parliament_quorum_seats_v1(binding.original_seats);
+                let endorsements = u32::try_from(public_finding.endorsing_assignments.len())
+                    .map_err(|_| GovernanceCertificateErrorV1::InvalidPublicFinding)?;
+                if public_finding.endorsement_root == [0; 32]
+                    || public_finding.quorum != quorum
+                    || public_finding.endorsements != quorum
+                    || endorsements != public_finding.endorsements
+                    || public_finding
+                        .endorsing_assignments
+                        .iter()
+                        .any(|assignment| assignment.as_bytes() == &[0; 32])
+                    || !public_finding
+                        .endorsing_assignments
+                        .windows(2)
+                        .all(|pair| pair[0] < pair[1])
+                    || public_finding.endorsement_root
+                        != parliament_public_finding_endorsement_root_v1(
+                            self.governance_attempt_id,
+                            binding.body_instance_id,
+                            binding.result_root,
+                            &public_finding.endorsing_assignments,
+                        )
+                {
+                    return Err(GovernanceCertificateErrorV1::InvalidPublicFinding);
+                }
             }
             if let Some(ballot) = binding.ballot {
                 if ballot.ballot_attempt_id.as_bytes() == &[0; 32]
@@ -2547,6 +2612,7 @@ impl GovernanceCertificateV1 {
                     || ballot.survivor_freeze_height <= ballot.registration_close_height
                     || ballot.commitment_close_height <= ballot.survivor_freeze_height
                     || ballot.release_height <= ballot.commitment_close_height
+                    || ballot.opening_deadline_height <= ballot.release_height
                     || ballot.registration_closed_at_height != ballot.registration_close_height
                     || ballot.survivors_frozen_at_height != ballot.survivor_freeze_height
                     || ballot.commitment_closed_at_height != ballot.commitment_close_height
@@ -2555,14 +2621,30 @@ impl GovernanceCertificateV1 {
                     || !(1..=MAX_PARLIAMENT_BALLOT_CORPUS_ENTRIES_V1)
                         .contains(&ballot.max_corpus_entries)
                     || ballot.tally.accepted_ballots > ballot.max_corpus_entries
+                    || ballot.tally.original_seats != binding.original_seats
                     || ballot.opening_height < ballot.release_height
+                    || ballot.opening_height > ballot.opening_deadline_height
                     || binding.result_height < ballot.opening_height
+                    || binding.result_height > ballot.opening_deadline_height
                 {
                     return Err(GovernanceCertificateErrorV1::InvalidLifecycle);
                 }
                 let decision = ballot.tally.decision()?;
                 if decision != ballot.outcome {
                     return Err(GovernanceCertificateErrorV1::TallyOutcomeMismatch);
+                }
+                if binding.result_root
+                    != parliament_ballot_result_root_v1(
+                        self.governance_attempt_id,
+                        binding.body_instance_id,
+                        ballot.ballot_attempt_id,
+                        ballot.opening_root,
+                        ballot.tally,
+                        ballot.outcome,
+                        binding.result_height,
+                    )
+                {
+                    return Err(GovernanceCertificateErrorV1::BallotResultRootMismatch);
                 }
                 if decision != ParliamentAggregateOutcomeV1::Approved {
                     return Err(GovernanceCertificateErrorV1::NonApprovingBallot);
@@ -2607,6 +2689,34 @@ impl GovernanceCertificateId {
         ))
     }
 }
+
+#[derive(Encode)]
+struct ParliamentExecutionFailureRootPreimageV1 {
+    certificate: GovernanceCertificateV1,
+    enactment_height: u64,
+}
+
+/// Derive the only valid failure root for deterministic certified-effect execution.
+///
+/// The root commits to the complete canonical certificate and the exact
+/// finalized height at which its effect was due. Core derives it only after an
+/// isolated effect transaction fails and validates that `enactment_height`
+/// equals the certificate's committed `enact_at_height`; no lifecycle
+/// submitter contributes error text or discretionary failure evidence.
+#[must_use]
+pub fn parliament_execution_failure_root_v1(
+    certificate: &GovernanceCertificateV1,
+    enactment_height: u64,
+) -> [u8; 32] {
+    crate::governance_fingerprint::fingerprint(
+        crate::governance_fingerprint::PARLIAMENT_EXECUTION_FAILURE_ROOT_V1,
+        &ParliamentExecutionFailureRootPreimageV1 {
+            certificate: certificate.clone(),
+            enactment_height,
+        },
+    )
+}
+
 /// Parliament roster for a single body.
 #[derive(Clone, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(JsonSerialize, JsonDeserialize))]
@@ -2637,45 +2747,43 @@ pub struct ParliamentBodies {
     #[norito(default)]
     pub rosters: BTreeMap<ParliamentBody, ParliamentRoster>,
 }
-/// Parliament enactment certificate payload (signed via [`EnactmentSignatureScheme`]).
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(JsonSerialize, JsonDeserialize))]
-pub struct ParliamentEnactment {
-    /// Blake2b-32 hash of the enactment preimage.
-    pub preimage_hash: [u8; 32],
-    /// Inclusive window in which enactment is valid.
-    pub at_window: AtWindow,
-}
-/// Signature over a parliament enactment payload.
-#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(JsonSerialize, JsonDeserialize))]
-pub struct ParliamentEnactmentSignature {
-    /// Parliament member account that produced the signature.
-    pub signer: AccountId,
-    /// Public key used to verify the signature.
-    pub public_key: PublicKey,
-    /// Signature of the enactment payload.
-    pub signature: SignatureOf<ParliamentEnactment>,
-}
-/// Signature bundle for parliament enactment certificates.
-#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(JsonSerialize, JsonDeserialize))]
-pub struct ParliamentEnactmentSignatureSet {
-    /// Signature scheme identifier.
-    pub scheme: EnactmentSignatureScheme,
-    /// Collected signatures ordered deterministically by signer account id.
-    pub signatures: Vec<ParliamentEnactmentSignature>,
-}
-/// Signed parliament enactment certificate.
-#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(JsonSerialize, JsonDeserialize))]
-pub struct ParliamentEnactmentCertificate {
-    /// Enactment payload being authorized.
-    pub payload: ParliamentEnactment,
-    /// Signature bundle proving authorization.
-    pub signatures: ParliamentEnactmentSignatureSet,
-}
 impl ProposalKind {
+    /// Return the first proposal-owned `u64` that cannot be represented exactly by every SDK.
+    ///
+    /// This is an exhaustive traversal of the closed first-release proposal enum, including
+    /// nested SCCP and Musubi payloads. Admission and restore paths use it before proposal state
+    /// can become authoritative.
+    #[must_use]
+    pub fn first_release_exact_json_u64_invariant_error(&self) -> Option<&'static str> {
+        let maximum = FIRST_RELEASE_MAX_EXACT_JSON_U64;
+        match self {
+            Self::DeployContract(_)
+            | Self::ValidationFeePolicy(_)
+            | Self::ValidationFeePayoutLifecycle(_) => None,
+            Self::RuntimeUpgrade(proposal) => {
+                if proposal.manifest.start_height > maximum {
+                    Some(
+                        "runtime-upgrade proposal start height exceeds the exact JSON integer maximum",
+                    )
+                } else if proposal.manifest.end_height > maximum {
+                    Some(
+                        "runtime-upgrade proposal end height exceeds the exact JSON integer maximum",
+                    )
+                } else {
+                    None
+                }
+            }
+            Self::SccpRouteGovernance(proposal) => proposal
+                .anchor
+                .action
+                .first_release_exact_json_u64_invariant_error(maximum),
+            Self::MusubiRegistryGovernance(action) => {
+                action.first_release_exact_json_u64_invariant_error(maximum)
+            }
+            Self::SorafsProviderGovernance(_) => None,
+        }
+    }
+
     /// Compute the deterministic, proposal-kind-separated fingerprint (`Blake2b-32`).
     #[must_use]
     pub fn fingerprint(&self) -> [u8; 32] {
@@ -2856,6 +2964,23 @@ mod tests {
         let result = <ContractCodeHash as DecodeFromSlice>::decode_from_slice(&encoded);
         assert!(result.is_err());
     }
+
+    #[test]
+    fn logical_beacon_session_id_is_stable_nonzero_and_network_scoped() {
+        let network = |marker| {
+            NetworkId::from_genesis_hash(
+                iroha_crypto::HashOf::<crate::block::BlockHeader>::from_untyped_unchecked(
+                    iroha_crypto::Hash::prehashed([marker; iroha_crypto::Hash::LENGTH]),
+                ),
+            )
+        };
+        let first = network(0x51);
+        let second = network(0x52);
+        let first_id = BeaconSessionId::for_network_v1(&first);
+        assert_eq!(first_id, BeaconSessionId::for_network_v1(&first));
+        assert_ne!(first_id, BeaconSessionId::for_network_v1(&second));
+        assert!(first_id.as_bytes().iter().any(|byte| *byte != 0));
+    }
     #[test]
     fn hash_decode_rejects_versioned_payload_with_trailing_bytes() {
         let mut payload = Vec::with_capacity(4 + ContractCodeHash::LENGTH + 1);
@@ -2877,6 +3002,46 @@ mod tests {
         assert_eq!(ParliamentBody::default(), ParliamentBody::AgendaCouncil);
     }
     #[test]
+    fn ballot_failures_map_exhaustively_to_bounded_no_result_classes() {
+        let cases = [
+            (
+                ParliamentBallotFailureKindV1::RegistrationDeadlineExpired,
+                ParliamentNoResultKindV1::BallotRegistrationDeadlineExpired,
+            ),
+            (
+                ParliamentBallotFailureKindV1::SurvivorDeadlineExpired,
+                ParliamentNoResultKindV1::BallotSurvivorDeadlineExpired,
+            ),
+            (
+                ParliamentBallotFailureKindV1::CommitmentDeadlineExpired,
+                ParliamentNoResultKindV1::BallotCommitmentDeadlineExpired,
+            ),
+            (
+                ParliamentBallotFailureKindV1::ReleasePulseUnavailable,
+                ParliamentNoResultKindV1::BallotReleasePulseUnavailable,
+            ),
+            (
+                ParliamentBallotFailureKindV1::OpeningDeadlineExpired,
+                ParliamentNoResultKindV1::BallotOpeningDeadlineExpired,
+            ),
+        ];
+        for (index, (ballot, audit)) in cases.into_iter().enumerate() {
+            assert_eq!(ParliamentNoResultKindV1::from(ballot), audit);
+            assert_eq!(
+                ballot.encode(),
+                u32::try_from(index)
+                    .expect("ballot failure index fits u32")
+                    .to_le_bytes()
+            );
+            assert_eq!(
+                audit.encode(),
+                u32::try_from(index + 2)
+                    .expect("audit failure index fits u32")
+                    .to_le_bytes()
+            );
+        }
+    }
+    #[test]
     fn governance_types_encode() {
         let code_hash = ContractCodeHash::from_hex_str(&"aa".repeat(32)).expect("code hash");
         let abi_hash = ContractAbiHash::from_hex_str(&"bb".repeat(32)).expect("abi hash");
@@ -2884,8 +3049,8 @@ mod tests {
             contract_address: "irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw"
                 .parse()
                 .expect("contract address"),
-            code_hash_hex: code_hash,
-            abi_hash_hex: abi_hash,
+            code_hash,
+            abi_hash,
             abi_version: AbiVersion::new(1),
             manifest_provenance: None,
         };
@@ -2903,10 +3068,7 @@ mod tests {
         match decoded {
             ProposalKind::DeployContract(inner) => {
                 assert_eq!(inner.contract_address, proposal.contract_address);
-                assert_eq!(
-                    inner.code_hash_hex.to_hex(),
-                    proposal.code_hash_hex.to_hex()
-                );
+                assert_eq!(inner.code_hash.to_hex(), proposal.code_hash.to_hex());
             }
             ProposalKind::RuntimeUpgrade(_) => panic!("unexpected runtime-upgrade proposal"),
             ProposalKind::SccpRouteGovernance(_) => {
@@ -2929,20 +3091,21 @@ mod tests {
 
     #[test]
     fn competing_contract_effects_share_one_governed_subject() {
-        let contract_address = "irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw"
-            .parse()
-            .expect("contract address");
+        let contract_address: ContractAddress =
+            "irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw"
+                .parse()
+                .expect("contract address");
         let first = ProposalKind::DeployContract(DeployContractProposal {
             contract_address: contract_address.clone(),
-            code_hash_hex: ContractCodeHash::new([0x11; 32]),
-            abi_hash_hex: ContractAbiHash::new([0x22; 32]),
+            code_hash: ContractCodeHash::new([0x11; 32]),
+            abi_hash: ContractAbiHash::new([0x22; 32]),
             abi_version: AbiVersion::new(1),
             manifest_provenance: None,
         });
         let second = ProposalKind::DeployContract(DeployContractProposal {
             contract_address,
-            code_hash_hex: ContractCodeHash::new([0x33; 32]),
-            abi_hash_hex: ContractAbiHash::new([0x44; 32]),
+            code_hash: ContractCodeHash::new([0x33; 32]),
+            abi_hash: ContractAbiHash::new([0x44; 32]),
             abi_version: AbiVersion::new(1),
             manifest_provenance: None,
         });
@@ -2964,8 +3127,8 @@ mod tests {
             contract_address: "irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw"
                 .parse()
                 .expect("contract address"),
-            code_hash_hex: ContractCodeHash::new([0x11; 32]),
-            abi_hash_hex: ContractAbiHash::new([0x22; 32]),
+            code_hash: ContractCodeHash::new([0x11; 32]),
+            abi_hash: ContractAbiHash::new([0x22; 32]),
             abi_version: AbiVersion::new(1),
             manifest_provenance: None,
         });
@@ -2976,6 +3139,16 @@ mod tests {
         assert!(
             norito::json::from_json::<ProposalKind>(&hostile).is_err(),
             "governance proposal JSON must reject unknown payload fields"
+        );
+
+        let missing_provenance = canonical.replacen(",\"manifest_provenance\":null", "", 1);
+        assert_ne!(
+            missing_provenance, canonical,
+            "canonical proposal JSON must carry the explicit optional provenance field"
+        );
+        assert!(
+            norito::json::from_json::<ProposalKind>(&missing_provenance).is_err(),
+            "governance proposal JSON must reject an omitted manifest_provenance field"
         );
     }
     #[cfg(feature = "json")]
@@ -3055,6 +3228,41 @@ mod tests {
         }
     }
     #[test]
+    fn runtime_upgrade_proposal_bounds_number_encoded_heights() {
+        let proposal = |start_height, end_height| {
+            ProposalKind::RuntimeUpgrade(RuntimeUpgradeProposal {
+                manifest: RuntimeUpgradeManifest {
+                    name: "bounded runtime upgrade".to_owned(),
+                    description: "exact JSON height fixture".to_owned(),
+                    abi_version: 1,
+                    abi_hash: ivm::syscalls::compute_abi_hash(ivm::SyscallPolicy::AbiV1),
+                    added_syscalls: Vec::new(),
+                    added_pointer_types: Vec::new(),
+                    start_height,
+                    end_height,
+                    sbom_digests: Vec::new(),
+                    slsa_attestation: Vec::new(),
+                    provenance: Vec::new(),
+                },
+            })
+        };
+        let maximum = FIRST_RELEASE_MAX_EXACT_JSON_U64;
+        assert_eq!(
+            proposal(maximum - 1, maximum).first_release_exact_json_u64_invariant_error(),
+            None
+        );
+        assert!(
+            proposal(maximum + 1, maximum + 1)
+                .first_release_exact_json_u64_invariant_error()
+                .is_some()
+        );
+        assert!(
+            proposal(maximum, maximum + 1)
+                .first_release_exact_json_u64_invariant_error()
+                .is_some()
+        );
+    }
+    #[test]
     fn sccp_route_governance_proposal_is_boxed_out_of_proposal_kind() {
         assert_eq!(
             core::mem::size_of::<SccpRouteGovernanceProposal>(),
@@ -3072,8 +3280,8 @@ mod tests {
             contract_address: "irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw"
                 .parse()
                 .expect("contract address"),
-            code_hash_hex: ContractCodeHash::from_hex_str(&"11".repeat(32)).expect("code hash"),
-            abi_hash_hex: ContractAbiHash::from_hex_str(&"22".repeat(32)).expect("abi hash"),
+            code_hash: ContractCodeHash::from_hex_str(&"11".repeat(32)).expect("code hash"),
+            abi_hash: ContractAbiHash::from_hex_str(&"22".repeat(32)).expect("abi hash"),
             abi_version: AbiVersion::new(1),
             manifest_provenance: None,
         };
@@ -3149,94 +3357,6 @@ mod tests {
             .expect("rules roster");
         assert_eq!(back.members, roster.members);
         assert_eq!(back.derived_by, roster.derived_by);
-    }
-    #[test]
-    fn enactment_signature_scheme_ids_and_labels() {
-        assert_eq!(
-            EnactmentSignatureScheme::SimpleThreshold.scheme_id(),
-            ENACTMENT_SIGNATURE_SCHEME_SIMPLE_THRESHOLD
-        );
-        assert_eq!(
-            EnactmentSignatureScheme::SimpleThreshold.as_str(),
-            "simple_threshold"
-        );
-        assert_eq!(
-            EnactmentSignatureScheme::try_from(ENACTMENT_SIGNATURE_SCHEME_SIMPLE_THRESHOLD)
-                .expect("valid scheme id"),
-            EnactmentSignatureScheme::SimpleThreshold
-        );
-    }
-    #[test]
-    fn enactment_signature_scheme_parsing_rejects_unknown() {
-        let err = "unknown".parse::<EnactmentSignatureScheme>().unwrap_err();
-        assert_eq!(err.0, "unknown");
-    }
-    #[test]
-    fn governance_enactment_certificate_roundtrip() {
-        let _domain: DomainId = DomainId::try_new("wonderland", "universal").expect("domain id");
-        let keypair = checked_random_keypair();
-        let signer = AccountId::new(keypair.public_key().clone());
-        let payload = GovernanceEnactment {
-            referendum_id: ProposalId([0x10; 32]),
-            preimage_hash: [0x22; 32],
-            at_window: AtWindow {
-                lower: 12,
-                upper: 18,
-            },
-        };
-        let signature = SignatureOf::try_new(keypair.private_key(), &payload)
-            .expect("sign checked governance enactment fixture");
-        signature
-            .verify(keypair.public_key(), &payload)
-            .expect("checked governance enactment fixture verifies");
-        let cert = GovernanceEnactmentCertificate {
-            payload,
-            signatures: GovernanceEnactmentSignatureSet {
-                scheme: EnactmentSignatureScheme::SimpleThreshold,
-                signatures: vec![GovernanceEnactmentSignature {
-                    signer,
-                    public_key: keypair.public_key().clone(),
-                    signature,
-                }],
-            },
-        };
-        let encoded = norito::to_bytes(&cert).expect("encode enactment certificate");
-        let decoded = norito::decode_from_bytes::<GovernanceEnactmentCertificate>(&encoded)
-            .expect("decode enactment certificate");
-        assert_eq!(decoded, cert);
-    }
-    #[test]
-    fn parliament_enactment_certificate_roundtrip() {
-        let _domain: DomainId = DomainId::try_new("wonderland", "universal").expect("domain id");
-        let keypair = checked_random_keypair();
-        let signer = AccountId::new(keypair.public_key().clone());
-        let payload = ParliamentEnactment {
-            preimage_hash: [0x33; 32],
-            at_window: AtWindow {
-                lower: 20,
-                upper: 28,
-            },
-        };
-        let signature = SignatureOf::try_new(keypair.private_key(), &payload)
-            .expect("sign checked parliament enactment fixture");
-        signature
-            .verify(keypair.public_key(), &payload)
-            .expect("checked parliament enactment fixture verifies");
-        let cert = ParliamentEnactmentCertificate {
-            payload,
-            signatures: ParliamentEnactmentSignatureSet {
-                scheme: EnactmentSignatureScheme::SimpleThreshold,
-                signatures: vec![ParliamentEnactmentSignature {
-                    signer,
-                    public_key: keypair.public_key().clone(),
-                    signature,
-                }],
-            },
-        };
-        let encoded = norito::to_bytes(&cert).expect("encode parliament certificate");
-        let decoded = norito::decode_from_bytes::<ParliamentEnactmentCertificate>(&encoded)
-            .expect("decode parliament certificate");
-        assert_eq!(decoded, cert);
     }
     #[test]
     fn canonical_governance_ids_roundtrip_and_reject_legacy_vec_wire() {
@@ -3565,6 +3685,28 @@ mod tests {
             parliament_assignment_plan_root_v1(election_attempt_id, &primary, &alternates, 2,)
         );
     }
+
+    #[test]
+    fn ballot_participant_hash_binds_authenticated_member_and_attempt() {
+        let member = checked_account_id();
+        let other_member = checked_account_id();
+        let first_ballot = BallotAttemptId::new([0xA1; 32]);
+        let other_ballot = BallotAttemptId::new([0xA2; 32]);
+        let participant_hash = parliament_ballot_participant_hash_v1(first_ballot, &member);
+        assert_ne!(participant_hash, [0; 32]);
+        assert_eq!(
+            participant_hash,
+            parliament_ballot_participant_hash_v1(first_ballot, &member)
+        );
+        assert_ne!(
+            participant_hash,
+            parliament_ballot_participant_hash_v1(first_ballot, &other_member)
+        );
+        assert_ne!(
+            participant_hash,
+            parliament_ballot_participant_hash_v1(other_ballot, &member)
+        );
+    }
     #[test]
     fn parliament_lifecycle_snapshots_roundtrip() {
         let governance_attempt_id = GovernanceAttemptId::new([0x51; 32]);
@@ -3680,6 +3822,18 @@ mod tests {
             release_beacon_session_id,
             release_height,
         );
+        let result_height = 200;
+        let opening_root = [0x7E; 32];
+        let outcome = ParliamentAggregateOutcomeV1::Approved;
+        let result_root = parliament_ballot_result_root_v1(
+            governance_attempt_id,
+            body_instance_id,
+            ballot_attempt_id,
+            opening_root,
+            tally,
+            outcome,
+            result_height,
+        );
         let certificate = GovernanceCertificateV1 {
             proposal_content_id,
             governance_attempt_id,
@@ -3692,12 +3846,14 @@ mod tests {
                 sortition_request_id: sortition_request.id,
                 sortition_request,
                 body: ParliamentBody::PolicyJury,
+                original_seats: tally.original_seats,
                 beacon_session_id: BeaconSessionId::new([0x66; 32]),
                 beacon_pulse_id: BeaconPulseId::new([0x67; 32]),
                 roster_root,
                 assignment_root: [0x69; 32],
-                result_root: [0x6A; 32],
-                result_height: 200,
+                result_root,
+                result_height,
+                public_finding: None,
                 ballot: Some(ParliamentBallotCertificateBindingV1 {
                     ballot_attempt_id,
                     ballot_attempt_sequence,
@@ -3710,13 +3866,22 @@ mod tests {
                     no_recovery_root: [0x6E; 32],
                     timed_commitment_root: [0x84; 32],
                     release_beacon_session_id,
-                    registered_at_height: 149,
+                    registered_at_height: 140,
+                    registration_close_height: 142,
+                    survivor_freeze_height: 144,
+                    commitment_close_height: 146,
+                    registration_closed_at_height: 142,
+                    survivors_frozen_at_height: 144,
+                    commitment_closed_at_height: 146,
+                    max_ballot_retries: 3,
+                    max_corpus_entries: 1_000,
                     release_height,
+                    opening_deadline_height: result_height,
                     release_pulse_id: BeaconPulseId::new([0x7D; 32]),
                     opening_height: 150,
-                    opening_root: [0x7E; 32],
+                    opening_root,
                     tally,
-                    outcome: ParliamentAggregateOutcomeV1::Approved,
+                    outcome,
                 }),
             }],
             policy_version: 7,
@@ -3739,6 +3904,120 @@ mod tests {
             .validate()
             .expect("wide Policy Jury approval is a complete structural certificate");
 
+        let mut with_public_finding = certificate.clone();
+        let public_election_attempt_sequence = 0;
+        let public_election_attempt_id = BodyElectionAttemptId::derive_v1(
+            governance_attempt_id,
+            ParliamentBody::RulesCommittee,
+            public_election_attempt_sequence,
+        );
+        let public_request = SortitionRequestV1::try_new_canonical(
+            governance_attempt_id,
+            public_election_attempt_id,
+            ParliamentBody::RulesCommittee,
+            [0xB0; 32],
+            3,
+            3,
+            80,
+            81,
+            BeaconSessionId::new([0xB1; 32]),
+            None,
+        )
+        .expect("canonical public-finding request");
+        let public_roster_root = [0xB2; 32];
+        let public_body_instance_id =
+            BodyInstanceId::derive_v1(public_election_attempt_id, public_roster_root);
+        let public_result_root = [0xB3; 32];
+        let endorsing_assignments =
+            vec![AssignmentId::new([0xB4; 32]), AssignmentId::new([0xB5; 32])];
+        let public_endorsement_root = parliament_public_finding_endorsement_root_v1(
+            governance_attempt_id,
+            public_body_instance_id,
+            public_result_root,
+            &endorsing_assignments,
+        );
+        with_public_finding.body_bindings.insert(
+            0,
+            ParliamentBodyCertificateBindingV1 {
+                body_instance_id: public_body_instance_id,
+                election_attempt_id: public_election_attempt_id,
+                election_attempt_sequence: public_election_attempt_sequence,
+                sortition_request_id: public_request.id,
+                sortition_request: public_request,
+                body: ParliamentBody::RulesCommittee,
+                original_seats: 3,
+                beacon_session_id: BeaconSessionId::new([0xB1; 32]),
+                beacon_pulse_id: BeaconPulseId::new([0xB6; 32]),
+                roster_root: public_roster_root,
+                assignment_root: [0xB7; 32],
+                result_root: public_result_root,
+                result_height: 90,
+                public_finding: Some(ParliamentPublicFindingCertificateBindingV1 {
+                    endorsement_root: public_endorsement_root,
+                    endorsing_assignments,
+                    endorsements: 2,
+                    quorum: 2,
+                }),
+                ballot: None,
+            },
+        );
+        with_public_finding
+            .validate()
+            .expect("public finding carries a self-contained exact quorum binding");
+        assert_eq!(
+            norito::decode_from_bytes::<GovernanceCertificateV1>(
+                &norito::to_bytes(&with_public_finding).expect("encode public-finding certificate")
+            )
+            .expect("decode public-finding certificate"),
+            with_public_finding
+        );
+
+        let mut reordered_endorsers = with_public_finding.clone();
+        reordered_endorsers.body_bindings[0]
+            .public_finding
+            .as_mut()
+            .expect("public binding")
+            .endorsing_assignments
+            .swap(0, 1);
+        assert_eq!(
+            reordered_endorsers.validate(),
+            Err(GovernanceCertificateErrorV1::InvalidPublicFinding)
+        );
+        let mut missing_endorser = with_public_finding.clone();
+        missing_endorser.body_bindings[0]
+            .public_finding
+            .as_mut()
+            .expect("public binding")
+            .endorsing_assignments
+            .pop();
+        assert_eq!(
+            missing_endorser.validate(),
+            Err(GovernanceCertificateErrorV1::InvalidPublicFinding)
+        );
+
+        let execution_failure_root =
+            parliament_execution_failure_root_v1(&certificate, certificate.enact_at_height);
+        assert_ne!(execution_failure_root, [0; 32]);
+        assert_ne!(
+            execution_failure_root,
+            parliament_execution_failure_root_v1(&certificate, certificate.enact_at_height + 1)
+        );
+        let mut different_certificate = certificate.clone();
+        different_certificate.effect_preimage_hash[0] ^= 1;
+        assert_ne!(
+            execution_failure_root,
+            parliament_execution_failure_root_v1(
+                &different_certificate,
+                certificate.enact_at_height,
+            )
+        );
+        let mut noncanonical_result = certificate.clone();
+        noncanonical_result.body_bindings[0].result_root[0] ^= 1;
+        assert_eq!(
+            noncanonical_result.validate(),
+            Err(GovernanceCertificateErrorV1::BallotResultRootMismatch)
+        );
+
         let mut narrow = certificate.clone();
         let policy = narrow
             .body_bindings
@@ -3751,12 +4030,22 @@ mod tests {
             nay: 249,
             abstain: 0,
         };
+        let policy_ballot = policy.ballot.expect("policy ballot");
+        policy.result_root = parliament_ballot_result_root_v1(
+            governance_attempt_id,
+            policy.body_instance_id,
+            policy_ballot.ballot_attempt_id,
+            policy_ballot.opening_root,
+            policy_ballot.tally,
+            policy_ballot.outcome,
+            policy.result_height,
+        );
         assert_eq!(
             narrow.validate(),
             Err(GovernanceCertificateErrorV1::ConfirmationJuryMismatch)
         );
 
-        let mut confirmation = narrow.body_bindings[0];
+        let mut confirmation = narrow.body_bindings[0].clone();
         confirmation.body = ParliamentBody::ConfirmationJury;
         confirmation.election_attempt_sequence = 0;
         confirmation.election_attempt_id = BodyElectionAttemptId::derive_v1(
@@ -3810,8 +4099,17 @@ mod tests {
             no_recovery_root: [0x7C; 32],
             timed_commitment_root: [0x8A; 32],
             release_beacon_session_id: confirmation_release_beacon_session_id,
-            registered_at_height: 249,
+            registered_at_height: 240,
+            registration_close_height: 242,
+            survivor_freeze_height: 244,
+            commitment_close_height: 246,
+            registration_closed_at_height: 242,
+            survivors_frozen_at_height: 244,
+            commitment_closed_at_height: 246,
+            max_ballot_retries: 3,
+            max_corpus_entries: 1_000,
             release_height: confirmation_release_height,
+            opening_deadline_height: confirmation.result_height,
             release_pulse_id: BeaconPulseId::new([0x8C; 32]),
             opening_height: 250,
             opening_root: [0x8D; 32],
@@ -3824,6 +4122,16 @@ mod tests {
             },
             outcome: ParliamentAggregateOutcomeV1::Approved,
         });
+        let confirmation_ballot = confirmation.ballot.expect("confirmation ballot");
+        confirmation.result_root = parliament_ballot_result_root_v1(
+            governance_attempt_id,
+            confirmation.body_instance_id,
+            confirmation_ballot.ballot_attempt_id,
+            confirmation_ballot.opening_root,
+            confirmation_ballot.tally,
+            confirmation_ballot.outcome,
+            confirmation.result_height,
+        );
         narrow.body_bindings.push(confirmation);
         narrow
             .validate()
@@ -3834,6 +4142,194 @@ mod tests {
         assert_eq!(
             narrow.validate(),
             Err(GovernanceCertificateErrorV1::ConfirmationJuryMismatch)
+        );
+    }
+
+    #[test]
+    fn private_ballot_result_root_binds_every_final_component() {
+        let attempt = GovernanceAttemptId::new([0x91; 32]);
+        let body = BodyInstanceId::new([0x92; 32]);
+        let ballot = BallotAttemptId::new([0x93; 32]);
+        let opening = [0x94; 32];
+        let tally = ParliamentAggregateTallyV1 {
+            original_seats: 5,
+            accepted_ballots: 4,
+            aye: 3,
+            nay: 1,
+            abstain: 0,
+        };
+        let outcome = ParliamentAggregateOutcomeV1::Approved;
+        let height = 200;
+        let expected = parliament_ballot_result_root_v1(
+            attempt, body, ballot, opening, tally, outcome, height,
+        );
+        assert_ne!(
+            expected,
+            parliament_ballot_result_root_v1(
+                GovernanceAttemptId::new([0x95; 32]),
+                body,
+                ballot,
+                opening,
+                tally,
+                outcome,
+                height,
+            )
+        );
+        assert_ne!(
+            expected,
+            parliament_ballot_result_root_v1(
+                attempt,
+                BodyInstanceId::new([0x96; 32]),
+                ballot,
+                opening,
+                tally,
+                outcome,
+                height,
+            )
+        );
+        assert_ne!(
+            expected,
+            parliament_ballot_result_root_v1(
+                attempt,
+                body,
+                BallotAttemptId::new([0x97; 32]),
+                opening,
+                tally,
+                outcome,
+                height,
+            )
+        );
+        assert_ne!(
+            expected,
+            parliament_ballot_result_root_v1(
+                attempt, body, ballot, [0x98; 32], tally, outcome, height,
+            )
+        );
+        assert_ne!(
+            expected,
+            parliament_ballot_result_root_v1(
+                attempt,
+                body,
+                ballot,
+                opening,
+                ParliamentAggregateTallyV1 {
+                    aye: 2,
+                    nay: 2,
+                    ..tally
+                },
+                outcome,
+                height,
+            )
+        );
+        assert_ne!(
+            expected,
+            parliament_ballot_result_root_v1(
+                attempt,
+                body,
+                ballot,
+                opening,
+                tally,
+                ParliamentAggregateOutcomeV1::Rejected,
+                height,
+            )
+        );
+        assert_ne!(
+            expected,
+            parliament_ballot_result_root_v1(
+                attempt,
+                body,
+                ballot,
+                opening,
+                tally,
+                outcome,
+                height + 1,
+            )
+        );
+    }
+
+    #[test]
+    fn public_finding_endorsement_root_binds_exact_ordered_supporters() {
+        let attempt = GovernanceAttemptId::new([0xA1; 32]);
+        let body = BodyInstanceId::new([0xA2; 32]);
+        let result = [0xA3; 32];
+        let first = AssignmentId::new([0xA4; 32]);
+        let second = AssignmentId::new([0xA5; 32]);
+        let supporters = [first, second];
+        let expected =
+            parliament_public_finding_endorsement_root_v1(attempt, body, result, &supporters);
+
+        assert_ne!(expected, [0; 32]);
+        assert_ne!(
+            expected,
+            parliament_public_finding_endorsement_root_v1(
+                GovernanceAttemptId::new([0xA6; 32]),
+                body,
+                result,
+                &supporters,
+            )
+        );
+        assert_ne!(
+            expected,
+            parliament_public_finding_endorsement_root_v1(
+                attempt,
+                BodyInstanceId::new([0xA7; 32]),
+                result,
+                &supporters,
+            )
+        );
+        assert_ne!(
+            expected,
+            parliament_public_finding_endorsement_root_v1(attempt, body, [0xA8; 32], &supporters,)
+        );
+        assert_ne!(
+            expected,
+            parliament_public_finding_endorsement_root_v1(attempt, body, result, &[second, first],)
+        );
+        assert_ne!(
+            expected,
+            parliament_public_finding_endorsement_root_v1(attempt, body, result, &[first],)
+        );
+    }
+
+    #[test]
+    fn private_ballot_failure_root_binds_the_derived_failure_identity() {
+        let attempt = GovernanceAttemptId::new([0xA1; 32]);
+        let ballot = BallotAttemptId::new([0xA2; 32]);
+        let kind = ParliamentBallotFailureKindV1::RegistrationDeadlineExpired;
+        let height = 200;
+        let expected = parliament_ballot_failure_root_v1(attempt, ballot, kind, height);
+
+        assert_ne!(expected, [0; 32]);
+        assert_ne!(
+            expected,
+            parliament_ballot_failure_root_v1(
+                GovernanceAttemptId::new([0xA3; 32]),
+                ballot,
+                kind,
+                height,
+            )
+        );
+        assert_ne!(
+            expected,
+            parliament_ballot_failure_root_v1(
+                attempt,
+                BallotAttemptId::new([0xA4; 32]),
+                kind,
+                height,
+            )
+        );
+        assert_ne!(
+            expected,
+            parliament_ballot_failure_root_v1(
+                attempt,
+                ballot,
+                ParliamentBallotFailureKindV1::SurvivorDeadlineExpired,
+                height,
+            )
+        );
+        assert_ne!(
+            expected,
+            parliament_ballot_failure_root_v1(attempt, ballot, kind, height + 1)
         );
     }
 }

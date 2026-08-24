@@ -159,7 +159,8 @@ fn certified_bundle_reservation_rejects_a_missing_outstanding_transient_entry() 
     let config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
     let lane_config = two_lane_runtime_config();
     let lane_id = LaneId::new(1);
-    let (kura, _) = Kura::new(&config, &lane_config).expect("missing transient-entry Kura");
+    let (kura, _) = Kura::open_test_kura_with_configured_lane_config(&config, &lane_config)
+        .expect("missing transient-entry Kura");
     let mut plan = prepare_autonomous_certification_for_capacity(&kura, &lane_config, lane_id).plan;
     let component = plan
         .component_transient_bytes
@@ -184,7 +185,8 @@ fn certified_bundle_rejects_mismatched_authority_before_reserving_or_writing() {
     let config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
     let lane_config = two_lane_runtime_config();
     let lane_id = LaneId::new(1);
-    let (kura, _) = Kura::new(&config, &lane_config).expect("mismatched authority Kura");
+    let (kura, _) = Kura::open_test_kura_with_configured_lane_config(&config, &lane_config)
+        .expect("mismatched authority Kura");
     let prepared = prepare_autonomous_certification_for_capacity(&kura, &lane_config, lane_id);
     let descriptor = &prepared.session.proposal.descriptor;
     let authority = crate::state::CertifiedLaneBlockPersistenceAuthority::for_test(
@@ -213,7 +215,8 @@ fn certified_bundle_authorized_active_slot_reset_publishes_exact_bundle() {
     let config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
     let lane_config = two_lane_runtime_config();
     let lane_id = LaneId::new(1);
-    let (kura, _) = Kura::new(&config, &lane_config).expect("authorized reset Kura");
+    let (kura, _) = Kura::open_test_kura_with_configured_lane_config(&config, &lane_config)
+        .expect("authorized reset Kura");
     let fixture = prepare_certified_bundle_reset_fixture(&kura, &lane_config, lane_id);
     assert_eq!(
         kura.read_certified_lane_block_artifact(lane_id, 1),
@@ -260,7 +263,8 @@ fn certified_bundle_active_slot_reset_without_authority_is_read_only() {
     let config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
     let lane_config = two_lane_runtime_config();
     let lane_id = LaneId::new(1);
-    let (kura, _) = Kura::new(&config, &lane_config).expect("unauthorized reset Kura");
+    let (kura, _) = Kura::open_test_kura_with_configured_lane_config(&config, &lane_config)
+        .expect("unauthorized reset Kura");
     let fixture = prepare_certified_bundle_reset_fixture(&kura, &lane_config, lane_id);
     let tree_before = snapshot_regular_test_tree(temp_dir.path());
     let reservations_before = kura.certified_bundle_capacity_reservations.lock().clone();
@@ -295,7 +299,8 @@ fn certified_bundle_regressed_proposal_height_rejects_before_reserving() {
     let signer = checked_keypair_with_algorithm(Algorithm::BlsNormal);
     let incoming_payload =
         autonomous_capacity_payload_at(lane_id, lane.dataspace_id, 2, 99, &signer);
-    let (kura, _) = Kura::new(&config, &lane_config).expect("proposal regression Kura");
+    let (kura, _) = Kura::open_test_kura_with_configured_lane_config(&config, &lane_config)
+        .expect("proposal regression Kura");
     let prepared = prepare_autonomous_certification_for_capacity_payload(
         &kura,
         &lane_config,
@@ -370,7 +375,8 @@ fn certified_bundle_composite_exact_limit_is_atomic_and_retry_leaks_nothing() {
     let config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
     let lane_config = two_lane_runtime_config();
     let lane_id = LaneId::new(1);
-    let (mut kura, _) = Kura::new(&config, &lane_config).expect("composite capacity Kura");
+    let (mut kura, _) = Kura::open_test_kura_with_configured_lane_config(&config, &lane_config)
+        .expect("composite capacity Kura");
     let prepared = prepare_autonomous_certification_for_capacity(&kura, &lane_config, lane_id);
     let exact_limit = exact_certified_bundle_limit(&kura, &prepared.plan);
     let tree_before = snapshot_regular_test_tree(temp_dir.path());
@@ -423,7 +429,8 @@ fn certified_bundle_frontier_crash_rebuilds_exact_remaining_obligation() {
     let config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
     let lane_config = two_lane_runtime_config();
     let lane_id = LaneId::new(1);
-    let (kura, _) = Kura::new(&config, &lane_config).expect("frontier crash Kura");
+    let (kura, _) = Kura::open_test_kura_with_configured_lane_config(&config, &lane_config)
+        .expect("frontier crash Kura");
     let prepared = prepare_autonomous_certification_for_capacity(&kura, &lane_config, lane_id);
     fail_after_next_autonomous_certified_frontier_for_tests();
     kura.persist_committed_lane_block_session(&prepared.session, &prepared.signer_pops)
@@ -468,7 +475,8 @@ fn certified_frontier_build_only_restart_promotes_then_rebuilds_remaining_obliga
     let lane = lane_config
         .entry(lane_id)
         .expect("frontier build-only lane");
-    let (kura, _) = Kura::new(&config, &lane_config).expect("frontier build-only Kura");
+    let (kura, _) = Kura::open_test_kura_with_configured_lane_config(&config, &lane_config)
+        .expect("frontier build-only Kura");
     let prepared = prepare_autonomous_certification_for_capacity(&kura, &lane_config, lane_id);
     fail_after_next_certified_frontier_build_for_tests();
     kura.persist_committed_lane_block_session(&prepared.session, &prepared.signer_pops)
@@ -509,7 +517,8 @@ fn certified_frontier_build_conflict_fails_before_rebuild_map_publication() {
     let lane = lane_config
         .entry(lane_id)
         .expect("frontier build conflict lane");
-    let (kura, _) = Kura::new(&config, &lane_config).expect("frontier build conflict Kura");
+    let (kura, _) = Kura::open_test_kura_with_configured_lane_config(&config, &lane_config)
+        .expect("frontier build conflict Kura");
     let prepared = prepare_autonomous_certification_for_capacity(&kura, &lane_config, lane_id);
     fail_after_next_certified_frontier_build_for_tests();
     kura.persist_committed_lane_block_session(&prepared.session, &prepared.signer_pops)
@@ -543,7 +552,8 @@ fn certified_pair_crash_rebuilds_only_bundle_obligation() {
     let config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
     let lane_config = two_lane_runtime_config();
     let lane_id = LaneId::new(1);
-    let (kura, _) = Kura::new(&config, &lane_config).expect("bundle crash Kura");
+    let (kura, _) = Kura::open_test_kura_with_configured_lane_config(&config, &lane_config)
+        .expect("bundle crash Kura");
     let prepared = prepare_autonomous_certification_for_capacity(&kura, &lane_config, lane_id);
     fail_next_autonomous_merge_bundle_persistence_for_tests();
     kura.persist_committed_lane_block_session(&prepared.session, &prepared.signer_pops)
@@ -578,7 +588,8 @@ fn durable_bundle_pair_crash_rebuild_consumes_obligation_from_exact_readback() {
     let config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
     let lane_config = two_lane_runtime_config();
     let lane_id = LaneId::new(1);
-    let (kura, _) = Kura::new(&config, &lane_config).expect("durable bundle-pair Kura");
+    let (kura, _) = Kura::open_test_kura_with_configured_lane_config(&config, &lane_config)
+        .expect("durable bundle-pair Kura");
     let prepared = prepare_autonomous_certification_for_capacity(&kura, &lane_config, lane_id);
     fail_after_next_autonomous_merge_bundle_pair_for_tests();
     kura.persist_committed_lane_block_session(&prepared.session, &prepared.signer_pops)
@@ -613,7 +624,8 @@ fn bundle_pair_append_intent_rebuilds_then_repairs_exact_obligation() {
     let lane = lane_config
         .entry(lane_id)
         .expect("bundle append-intent lane");
-    let (mut kura, _) = Kura::new(&config, &lane_config).expect("bundle append-intent Kura");
+    let (mut kura, _) = Kura::open_test_kura_with_configured_lane_config(&config, &lane_config)
+        .expect("bundle append-intent Kura");
     let prepared = prepare_autonomous_certification_for_capacity(&kura, &lane_config, lane_id);
     let exact_limit = exact_certified_bundle_limit(&kura, &prepared.plan);
     Arc::get_mut(&mut kura)
@@ -669,7 +681,8 @@ fn certified_pair_append_intent_rebuilds_and_repairs_at_original_exact_limit() {
     let lane = lane_config
         .entry(lane_id)
         .expect("certified append-intent lane");
-    let (mut kura, _) = Kura::new(&config, &lane_config).expect("certified append-intent Kura");
+    let (mut kura, _) = Kura::open_test_kura_with_configured_lane_config(&config, &lane_config)
+        .expect("certified append-intent Kura");
     let prepared = prepare_autonomous_certification_for_capacity(&kura, &lane_config, lane_id);
     let exact_limit = exact_certified_bundle_limit(&kura, &prepared.plan);
     Arc::get_mut(&mut kura)
@@ -714,7 +727,8 @@ fn assert_authenticated_append_build_restart_at_exact_limit(
     let lane = lane_config
         .entry(lane_id)
         .expect("authenticated build lane");
-    let (mut kura, _) = Kura::new(&config, &lane_config).expect("authenticated build Kura");
+    let (mut kura, _) = Kura::open_test_kura_with_configured_lane_config(&config, &lane_config)
+        .expect("authenticated build Kura");
     let prepared = prepare_autonomous_certification_for_capacity(&kura, &lane_config, lane_id);
     let exact_limit = exact_certified_bundle_limit(&kura, &prepared.plan);
     Arc::get_mut(&mut kura)
@@ -784,7 +798,8 @@ fn assert_append_recovery_restart_rejects_one_under(build_only: bool) {
     let lane_config = two_lane_runtime_config();
     let lane_id = LaneId::new(1);
     let lane = lane_config.entry(lane_id).expect("one-under recovery lane");
-    let (mut kura, _) = Kura::new(&config, &lane_config).expect("one-under recovery Kura");
+    let (mut kura, _) = Kura::open_test_kura_with_configured_lane_config(&config, &lane_config)
+        .expect("one-under recovery Kura");
     let prepared = prepare_autonomous_certification_for_capacity(&kura, &lane_config, lane_id);
     let exact_limit = exact_certified_bundle_limit(&kura, &prepared.plan);
     Arc::get_mut(&mut kura)
@@ -841,7 +856,8 @@ fn lane_retirement_is_blocked_by_outstanding_certified_bundle_reservation() {
     let lane_config = two_lane_runtime_config();
     let lane_id = LaneId::new(1);
     let lane = lane_config.entry(lane_id).expect("retirement blocker lane");
-    let (kura, _) = Kura::new(&config, &lane_config).expect("retirement blocker Kura");
+    let (kura, _) = Kura::open_test_kura_with_configured_lane_config(&config, &lane_config)
+        .expect("retirement blocker Kura");
     let prepared = prepare_autonomous_certification_for_capacity(&kura, &lane_config, lane_id);
     fail_after_next_autonomous_certified_frontier_for_tests();
     kura.persist_committed_lane_block_session(&prepared.session, &prepared.signer_pops)
@@ -860,7 +876,8 @@ fn certified_bundle_preflight_rejects_lone_append_build_without_mutation() {
     let config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
     let lane_config = two_lane_runtime_config();
     let lane_id = LaneId::new(1);
-    let (kura, _) = Kura::new(&config, &lane_config).expect("lone append-build Kura");
+    let (kura, _) = Kura::open_test_kura_with_configured_lane_config(&config, &lane_config)
+        .expect("lone append-build Kura");
     let prepared = prepare_autonomous_certification_for_capacity(&kura, &lane_config, lane_id);
     let lane = lane_config.entry(lane_id).expect("lone-build lane");
     let (_, index_path) = Kura::certified_lane_block_paths_for_entry(lane, temp_dir.path());
@@ -885,7 +902,8 @@ fn certified_bundle_preflight_rejects_authenticated_mismatched_append_build() {
     let lane = lane_config
         .entry(lane_id)
         .expect("mismatched append-build lane");
-    let (kura, _) = Kura::new(&config, &lane_config).expect("mismatched append-build Kura");
+    let (kura, _) = Kura::open_test_kura_with_configured_lane_config(&config, &lane_config)
+        .expect("mismatched append-build Kura");
     let prepared = prepare_autonomous_certification_for_capacity(&kura, &lane_config, lane_id);
     fail_after_bound_progress_append_build_for_tests(0);
     kura.persist_committed_lane_block_session(&prepared.session, &prepared.signer_pops)
@@ -952,7 +970,8 @@ fn certified_bundle_stale_incarnation_reservation_blocks_aba_without_mutation() 
     let config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
     let lane_config = two_lane_runtime_config();
     let lane_id = LaneId::new(1);
-    let (kura, _) = Kura::new(&config, &lane_config).expect("ABA reservation Kura");
+    let (kura, _) = Kura::open_test_kura_with_configured_lane_config(&config, &lane_config)
+        .expect("ABA reservation Kura");
     let prepared = prepare_autonomous_certification_for_capacity(&kura, &lane_config, lane_id);
     let mut stale_plan = prepared.plan.clone();
     stale_plan.identity.lane_incarnation = Hash::new(b"retired composite incarnation");
@@ -992,7 +1011,8 @@ fn certified_bundle_startup_rebuild_publishes_nothing_on_late_route_error() {
     let catalog =
         LaneCatalog::new(nonzero!(3_u32), vec![lane0, lane1, lane2]).expect("three-lane catalog");
     let lane_config = RuntimeLaneConfig::from_catalog(&catalog);
-    let (kura, _) = Kura::new(&config, &lane_config).expect("late-route rebuild Kura");
+    let (kura, _) = Kura::open_test_kura_with_configured_lane_config(&config, &lane_config)
+        .expect("late-route rebuild Kura");
     let prepared =
         prepare_autonomous_certification_for_capacity(&kura, &lane_config, LaneId::new(1));
     fail_after_next_autonomous_certified_frontier_for_tests();

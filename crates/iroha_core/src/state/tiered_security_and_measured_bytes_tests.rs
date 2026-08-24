@@ -172,44 +172,6 @@
         );
     }
     #[test]
-    fn measured_bytes_track_governance_approval_sizes() {
-        use std::collections::BTreeSet;
-        let mut approval = crate::state::GovernanceStageApproval {
-            epoch: 1,
-            approvers: BTreeSet::new(),
-            rejections: BTreeSet::new(),
-            abstentions: BTreeSet::new(),
-            required: 2,
-            quorum_bps: 5000,
-        };
-        let empty_bytes = MeasuredBytes::measured_bytes(&approval);
-        let keypair = iroha_crypto::KeyPair::try_from_seed(
-            b"tiered-approval".to_vec(),
-            iroha_crypto::Algorithm::Ed25519,
-        )
-        .expect("fixture seed must derive a valid keypair");
-        assert!(
-            iroha_crypto::KeyPair::try_from_seed(vec![0; 32], iroha_crypto::Algorithm::Ed25519)
-                .is_err(),
-            "checked Ed25519 seed derivation must reject weak all-zero fixture seeds"
-        );
-        approval
-            .approvers
-            .insert(iroha_data_model::account::AccountId::new(
-                keypair.public_key().clone(),
-            ));
-        let filled_bytes = MeasuredBytes::measured_bytes(&approval);
-        assert!(filled_bytes >= empty_bytes);
-        let mut approvals = crate::state::GovernanceStageApprovals::default();
-        let base_bytes = MeasuredBytes::measured_bytes(&approvals);
-        approvals.stages.insert(
-            iroha_data_model::governance::types::ParliamentBody::AgendaCouncil,
-            approval,
-        );
-        let updated_bytes = MeasuredBytes::measured_bytes(&approvals);
-        assert!(updated_bytes >= base_bytes);
-    }
-    #[test]
     fn measured_bytes_cover_trigger_filters() {
         use iroha_data_model::{
             events::{EventFilterBox, data::DataEventFilter},

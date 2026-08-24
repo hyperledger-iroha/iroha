@@ -36,7 +36,7 @@ final class KagemushaRecursiveSpendTests: XCTestCase {
         ))
     }
 
-    func testTopUpWitnessBindingRetriesOnlySnapshotDriftAndKeepsMatchedSnapshot() throws {
+    func testTopUpWitnessBindingUsesUniversalCapabilityAndAuthoritativeSnapshot() throws {
         let packageRoot = URL(fileURLWithPath: #filePath)
             .deletingLastPathComponent()
             .deletingLastPathComponent()
@@ -51,16 +51,15 @@ final class KagemushaRecursiveSpendTests: XCTestCase {
         let end = try XCTUnwrap(tail.range(of: "    /// Generates a new signing key"))
         let implementation = String(tail[..<end.lowerBound])
 
-        XCTAssertTrue(implementation.contains("for attempt in 0..<3"))
-        XCTAssertTrue(implementation.contains("matching: readiness"))
-        XCTAssertTrue(implementation.contains("if attempt < 2 { continue }"))
         XCTAssertTrue(implementation.contains(
-            "evaluatedBlockHeight: readiness.evaluatedBlockHeight"
+            "_ = try await toriiRestClient.getOfflineCapability()"
         ))
+        XCTAssertTrue(implementation.contains("getZkAssetMerklePathSnapshot("))
         XCTAssertTrue(implementation.contains(
-            "evaluatedBlockHash: readiness.evaluatedBlockHashBytes"
+            "snapshot.evaluatedBlockHeight >= productCapability.minimumEvaluatedBlockHeight"
         ))
-        XCTAssertFalse(implementation.contains("let currentReadiness"))
+        XCTAssertFalse(implementation.contains("matching: readiness"))
+        XCTAssertFalse(implementation.contains("ToriiKagemushaReadiness"))
     }
 
     func testReleaseQualifiedStepEqVerifierKeyIDBindsExactManifest() throws {
@@ -363,7 +362,7 @@ final class KagemushaRecursiveSpendTests: XCTestCase {
         ))
     }
 
-    func testTopUpReadinessExpectationRejectsRoleSubstitutionAndExpiredVerifier() throws {
+    func testTopUpCapabilityRejectsRoleSubstitutionAndExpiredVerifier() throws {
         func binding(
             backend: String = "halo2/ipa",
             circuitID: String = KagemushaRecursiveSpend.topUpShieldCircuitID,
@@ -387,7 +386,7 @@ final class KagemushaRecursiveSpendTests: XCTestCase {
         }
 
         let verifier = try binding()
-        let expected = try KagemushaTopUpShieldReadinessExpectation(
+        let expected = try KagemushaTopUpShieldCapability(
             assetDefinitionID: assetDefinitionID(),
             assetScale: 9,
             minimumEvaluatedBlockHeight: 42,
@@ -401,13 +400,13 @@ final class KagemushaRecursiveSpendTests: XCTestCase {
         XCTAssertThrowsError(try binding(schema: "ab"))
         XCTAssertThrowsError(try binding(maximumProofBytes: 192 * 1024 + 1))
         XCTAssertThrowsError(try binding(activationHeight: 80, withdrawalHeight: 80))
-        XCTAssertThrowsError(try KagemushaTopUpShieldReadinessExpectation(
+        XCTAssertThrowsError(try KagemushaTopUpShieldCapability(
             assetDefinitionID: assetDefinitionID(),
             assetScale: 9,
             minimumEvaluatedBlockHeight: 39,
             verifier: verifier
         ))
-        XCTAssertThrowsError(try KagemushaTopUpShieldReadinessExpectation(
+        XCTAssertThrowsError(try KagemushaTopUpShieldCapability(
             assetDefinitionID: assetDefinitionID(),
             assetScale: 9,
             minimumEvaluatedBlockHeight: 80,
@@ -554,7 +553,7 @@ final class KagemushaRecursiveSpendTests: XCTestCase {
     }
 
     func testABI21InventoryRequiresExplicitFailClosedV4Capabilities() {
-        XCTAssertEqual(KagemushaRecursiveSpend.requiredNativeBridgeAbiVersion, 22)
+        XCTAssertEqual(KagemushaRecursiveSpend.requiredNativeBridgeAbiVersion, 23)
         XCTAssertEqual(
             KagemushaRecursiveSpend.artifactManifestSchemaV4,
             "kagemusha.offline.recursive_spend.artifact_manifest.v4"
@@ -616,7 +615,7 @@ final class KagemushaRecursiveSpendTests: XCTestCase {
     func testLinkedPrivacyRuntimeReportsOneExactFailClosedProductionGate() throws {
         let capabilities = try KagemushaRecursiveSpend.nativeCapabilitiesV4()
 
-        XCTAssertEqual(capabilities.bridgeABIVersion, 22)
+        XCTAssertEqual(capabilities.bridgeABIVersion, 23)
         XCTAssertEqual(capabilities.proofEnvelopeVersion, 5)
         XCTAssertFalse(capabilities.proofBackendAvailable)
         switch (
@@ -628,7 +627,7 @@ final class KagemushaRecursiveSpendTests: XCTestCase {
             break
         default:
             XCTFail(
-                "unexpected bridge-ABI-22 production gate state: "
+                "unexpected bridge-ABI-23 production gate state: "
                     + "\(capabilities.missingGates), "
                     + "compiled=\(KagemushaRecursiveSpend.isProductionCompiledAndLinked)"
             )
@@ -664,7 +663,7 @@ final class KagemushaRecursiveSpendTests: XCTestCase {
         #if canImport(Darwin)
         try requireNativeTestCapability(
             KagemushaRecursiveSpend.hasRequiredNativeSymbols,
-            "ABI-22 bridge is not linked in this test host"
+            "ABI-23 bridge is not linked in this test host"
         )
         // Portable offer projection is protocol parsing, not proof-backend
         // readiness. It must remain callable while the production gate is
@@ -714,7 +713,7 @@ final class KagemushaRecursiveSpendTests: XCTestCase {
         ))
     }
 
-    func testNativeCapabilitiesV4RequireExactBridgeABI22EightRoleContract() throws {
+    func testNativeCapabilitiesV4RequireExactBridgeABI23EightRoleContract() throws {
         let gates = [
             "authenticated-v4-artifact-installation",
             "independent-cryptographic-review",
@@ -743,7 +742,7 @@ final class KagemushaRecursiveSpendTests: XCTestCase {
         )
         let capabilities = try KagemushaRecursiveSpendCodecs
             .decodeNativeCapabilitiesV4(archive)
-        XCTAssertEqual(capabilities.bridgeABIVersion, 22)
+        XCTAssertEqual(capabilities.bridgeABIVersion, 23)
         XCTAssertEqual(capabilities.artifactRoles, KagemushaRecursiveSpend.artifactRolesV4)
         XCTAssertEqual(capabilities.maxProofBytes, maximumProofBytes)
         XCTAssertEqual(capabilities.missingGates, gates)
@@ -766,7 +765,7 @@ final class KagemushaRecursiveSpendTests: XCTestCase {
         var missingRole = KagemushaRecursiveSpend.artifactRolesV4
         missingRole.removeLast()
         XCTAssertThrowsError(try KagemushaRecursiveSpendNativeCapabilitiesV4(
-            bridgeABIVersion: 22,
+            bridgeABIVersion: 23,
             artifactManifestSchema: KagemushaRecursiveSpend.artifactManifestSchemaV4,
             proofBackend: KagemushaRecursiveSpend.pastaCycleBackendV4,
             transcriptProfile: KagemushaRecursiveSpend.pastaCycleTranscriptV4,
@@ -780,7 +779,7 @@ final class KagemushaRecursiveSpendTests: XCTestCase {
         ))
 
         XCTAssertThrowsError(try KagemushaRecursiveSpendNativeCapabilitiesV4(
-            bridgeABIVersion: 22,
+            bridgeABIVersion: 23,
             artifactManifestSchema: KagemushaRecursiveSpend.artifactManifestSchemaV4,
             proofBackend: KagemushaRecursiveSpend.pastaCycleBackendV4,
             transcriptProfile: KagemushaRecursiveSpend.pastaCycleTranscriptV4,

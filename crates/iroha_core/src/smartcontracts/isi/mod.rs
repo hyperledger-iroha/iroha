@@ -141,8 +141,6 @@ define_instruction_handlers! {
     dispatch_instruction::<iroha_data_model::isi::alias_setup::ConfigureAliasAutoRenew>,
     dispatch_instruction::<iroha_data_model::isi::alias_setup::RebindAccountAlias>,
     dispatch_instruction::<iroha_data_model::isi::alias_setup::CompareAndSetPrimaryAccountAlias>,
-    dispatch_instruction::<iroha_data_model::isi::account_alias_lease::AcquireAccountAliasLease>,
-    dispatch_instruction::<iroha_data_model::isi::domain_link::SetAccountAliasBinding>,
     dispatch_instruction::<iroha_data_model::isi::InvalidInstruction>,
     dispatch_instruction::<iroha_data_model::isi::kaigi::CreateKaigi>,
     dispatch_instruction::<iroha_data_model::isi::kaigi::JoinKaigi>,
@@ -471,6 +469,9 @@ define_instruction_handlers! {
     dispatch_instruction::<iroha_data_model::isi::consensus_keys::RegisterConsensusKey>,
     dispatch_instruction::<iroha_data_model::isi::consensus_keys::RotateConsensusKey>,
     dispatch_instruction::<iroha_data_model::isi::consensus_keys::DisableConsensusKey>,
+    dispatch_instruction::<
+        iroha_data_model::isi::consensus_keys::ApplyThresholdKeyLifecycleCertificateV1
+    >,
     dispatch_instruction::<iroha_data_model::isi::endorsement::RegisterDomainCommittee>,
     dispatch_instruction::<iroha_data_model::isi::endorsement::SetDomainEndorsementPolicy>,
     dispatch_instruction::<iroha_data_model::isi::endorsement::SubmitDomainEndorsement>,
@@ -478,7 +479,6 @@ define_instruction_handlers! {
     dispatch_instruction::<iroha_data_model::isi::governance::ProposeDeployContract>,
     dispatch_instruction::<iroha_data_model::isi::governance::ProposeRuntimeUpgradeProposal>,
     dispatch_instruction::<iroha_data_model::isi::governance::ProposeSccpRouteGovernance>,
-    dispatch_instruction::<iroha_data_model::isi::governance::EnactSccpRouteGovernance>,
     dispatch_instruction::<iroha_data_model::isi::governance::ProposeSorafsProviderGovernance>,
     dispatch_instruction::<iroha_data_model::isi::governance::ProposeValidationFeePolicy>,
     dispatch_instruction::<
@@ -486,10 +486,6 @@ define_instruction_handlers! {
     >,
     dispatch_instruction::<iroha_data_model::isi::governance::CastZkBallot>,
     dispatch_instruction::<iroha_data_model::isi::governance::CastPlainBallot>,
-    dispatch_instruction::<iroha_data_model::isi::governance::EnactReferendum>,
-    dispatch_instruction::<iroha_data_model::isi::governance::FinalizeReferendum>,
-    dispatch_instruction::<iroha_data_model::isi::governance::ApproveGovernanceProposal>,
-    dispatch_instruction::<iroha_data_model::isi::governance::CastParliamentBallot>,
     dispatch_instruction::<
         iroha_data_model::isi::governance::CreateParliamentGovernanceAttemptV1
     >,
@@ -590,6 +586,15 @@ mod registry_dispatch_tests {
         registered_native_instruction_type_names().contains(&type_name)
     }
     fn assert_native_registration<T: NativeInstructionRegistered>() {}
+    #[test]
+    fn parliament_lifecycle_and_standalone_ballots_have_native_handlers() {
+        use iroha_data_model::isi::governance;
+
+        assert_native_registration::<governance::CreateParliamentGovernanceAttemptV1>();
+        assert_native_registration::<governance::SubmitParliamentLifecycleTransitionV1>();
+        assert_native_registration::<governance::CastZkBallot>();
+        assert_native_registration::<governance::CastPlainBallot>();
+    }
     #[test]
     fn every_canonical_privacy_instruction_has_a_native_dispatch_impl() {
         use iroha_data_model::isi::privacy;

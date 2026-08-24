@@ -1,8 +1,5 @@
 //! Bridge and exact first-release SCCP commands.
-use std::{
-    fs,
-    path::{Path, PathBuf},
-};
+use crate::{CliOutputFormat, Run, RunContext};
 use base64::Engine as _;
 use clap::Subcommand;
 use eyre::{Result, WrapErr as _, eyre};
@@ -14,7 +11,10 @@ use iroha::{
     },
     data_model::{bridge::SccpRegistryV1, prelude::*},
 };
-use crate::{CliOutputFormat, Run, RunContext};
+use std::{
+    fs,
+    path::{Path, PathBuf},
+};
 #[derive(Subcommand, Debug)]
 pub enum Command {
     /// Emit a bridge receipt as a typed event.
@@ -771,11 +771,11 @@ fn render_sccp_normalized_codec_value(value: &iroha_sccp::SccpNormalizedCodecVal
 }
 #[cfg(test)]
 mod tests {
-    use std::{cell::Cell, path::PathBuf};
+    use super::*;
     use clap::Parser as _;
     use iroha_crypto::{Algorithm, KeyPair, Signature};
+    use std::{cell::Cell, path::PathBuf};
     use tempfile::tempdir;
-    use super::*;
     #[derive(clap::Parser)]
     struct TestCli {
         #[command(subcommand)]

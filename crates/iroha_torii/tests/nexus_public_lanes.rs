@@ -32,6 +32,7 @@ use iroha_data_model::{
     peer::PeerId,
     permission::Permission,
 };
+use iroha_executor_data_model::permission::governance::CanManageConsensusKeys;
 use iroha_primitives::{json::Json, numeric::Quantity};
 use norito::json::{self, Value};
 use std::{net::SocketAddr, num::NonZeroU64, str::FromStr, sync::Arc};
@@ -189,12 +190,7 @@ fn seed_public_lane_state(
 ) {
     let mut block = state.block(block_header(1));
     let mut tx = block.transaction();
-    let manage_consensus_keys = Permission::new(
-        "CanManageConsensusKeys"
-            .parse()
-            .expect("CanManageConsensusKeys permission token"),
-        Json::new(()),
-    );
+    let manage_consensus_keys = Permission::from(CanManageConsensusKeys);
     Grant::account_permission(manage_consensus_keys, validator.clone())
         .execute(validator, &mut tx)
         .expect("grant manage consensus keys");

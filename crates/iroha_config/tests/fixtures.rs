@@ -1827,14 +1827,28 @@ fn taira_config_enables_untrusted_cid_hosting() {
         Some(true),
         "Taira profile should run the Soracloud runtime in production posture"
     );
-    let inrou = runtime.get("inrou").and_then(TomlValue::as_table);
-    assert_ne!(
-        inrou
-            .and_then(|inrou| inrou.get("enabled"))
-            .and_then(TomlValue::as_bool),
+    let inrou = runtime
+        .get("inrou")
+        .and_then(TomlValue::as_table)
+        .expect("the checked Taira profile must enable PortableVM V1 hosting");
+    assert_eq!(
+        inrou.get("enabled").and_then(TomlValue::as_bool),
         Some(true),
-        "first-release Taira must not enable unconfined Inrou hosting"
+        "the checked Taira profile must enable its sole first-release backend"
     );
+    for (field, expected) in [
+        ("portable_vm_uid", 70_000),
+        ("portable_vm_gid", 70_000),
+        ("max_cpu_millis", 8_000),
+        ("max_memory_bytes", 8 * 1024 * 1024 * 1024),
+        ("max_storage_bytes", 64 * 1024 * 1024 * 1024),
+    ] {
+        assert_eq!(
+            inrou.get(field).and_then(TomlValue::as_integer),
+            Some(expected),
+            "Taira must pin the exact PortableVM V1 `{field}` value"
+        );
+    }
     for retired in [
         "backends",
         "max_concurrent_vms",
@@ -1842,10 +1856,30 @@ fn taira_config_enables_untrusted_cid_hosting() {
         "portable_vm_supplementary_gids",
     ] {
         assert!(
-            inrou.is_none_or(|inrou| !inrou.contains_key(retired)),
+            !inrou.contains_key(retired),
             "Taira must not retain retired Inrou selector `{retired}`"
         );
     }
+    let egress = runtime
+        .get("egress")
+        .and_then(TomlValue::as_table)
+        .expect("Taira must configure Soracloud egress budgets");
+    assert_eq!(
+        egress.get("default_allow").and_then(TomlValue::as_bool),
+        Some(false)
+    );
+    assert_eq!(
+        egress
+            .get("rate_per_minute")
+            .and_then(TomlValue::as_integer),
+        Some(600)
+    );
+    assert_eq!(
+        egress
+            .get("max_bytes_per_minute")
+            .and_then(TomlValue::as_integer),
+        Some(100 * 1024 * 1024)
+    );
     assert_eq!(
         runtime
             .get("submission")

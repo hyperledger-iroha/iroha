@@ -14,8 +14,8 @@ use color_eyre::{
     eyre::{WrapErr, eyre},
 };
 use iroha::client::{
-    Client, DataModelCompatibility, PreparedTransactionPayload, TransactionWaitOptions,
-    TransactionWaitOutcome, TransactionWaitTerminalStatus,
+    Client, PreparedTransactionPayload, TransactionWaitOptions, TransactionWaitOutcome,
+    TransactionWaitTerminalStatus,
 };
 use iroha_config::kura::FsyncMode;
 use iroha_crypto::{ExposedPrivateKey, KeyPair};
@@ -4287,7 +4287,6 @@ fn tune_ingress_client(
     request_timeout: Duration,
 ) -> Client {
     client.torii_request_timeout = request_timeout;
-    mark_data_model_submit_compatible(&client.data_model_compatibility);
     if matches!(mode, SubmissionConfirmationMode::AcceptedByIngress) {
         client
             .headers
@@ -4298,12 +4297,6 @@ fn tune_ingress_client(
             Duration::from_millis(IZANAMI_INGRESS_STATUS_TIMEOUT_MS);
     }
     client
-}
-fn mark_data_model_submit_compatible(state: &Arc<StdMutex<DataModelCompatibility>>) {
-    // Izanami owns both the test nodes and clients, so repeated compatibility
-    // probes would measure Torii throttle pressure rather than Sumeragi progress.
-    *state.lock().expect("data model compatibility lock") =
-        DataModelCompatibility::SubmitCompatible;
 }
 async fn await_worker_shutdown_with_timeout(
     handles: Vec<JoinHandle<()>>,
@@ -7605,7 +7598,9 @@ mod tests {
             fault_interval: Duration::from_secs(1)..=Duration::from_secs(1),
             packet_loss_percent: DEFAULT_NETWORK_PACKET_LOSS_PERCENT,
             log_filter: "warn".to_string(),
-            faults: FaultToggles::from_array([false, false, false, false]),
+            faults: FaultToggles::from_enabled_flags([
+                true, true, true, false, false, false, false, false,
+            ]),
             nexus: None,
             diagnostic_dir: None,
         }
@@ -7920,7 +7915,9 @@ mod tests {
             duration: Duration::from_secs(2),
             seed: Some(42),
             fault_interval: Duration::from_secs(5)..=Duration::from_secs(5),
-            faults: FaultToggles::from_array([true, true, true, true]),
+            faults: FaultToggles::from_enabled_flags([
+                true, true, true, true, true, false, true, true,
+            ]),
             nexus: Some(nexus),
             ..test_chaos_config()
         };
@@ -8176,7 +8173,9 @@ mod tests {
             progress_timeout: Duration::from_secs(300),
             tps: 5.0,
             max_inflight: 8,
-            faults: FaultToggles::from_array([true, true, true, true]),
+            faults: FaultToggles::from_enabled_flags([
+                true, true, true, true, true, false, true, true,
+            ]),
             nexus: Some(NexusProfile::sora_defaults().expect("nexus profile")),
             ..test_chaos_config()
         };
@@ -8219,7 +8218,9 @@ mod tests {
             seed: Some(21),
             tps: 7.0,
             max_inflight: 13,
-            faults: FaultToggles::from_array([true, true, true, true]),
+            faults: FaultToggles::from_enabled_flags([
+                true, true, true, true, true, false, true, true,
+            ]),
             ..test_chaos_config()
         };
         assert!(is_shared_host_stable_soak(&config));
@@ -8254,7 +8255,9 @@ mod tests {
             seed: Some(17),
             tps: 3.0,
             max_inflight: 6,
-            faults: FaultToggles::from_array([true, true, true, true]),
+            faults: FaultToggles::from_enabled_flags([
+                true, true, true, true, true, false, true, true,
+            ]),
             nexus: Some(NexusProfile::sora_defaults().expect("nexus profile")),
             ..test_chaos_config()
         };
@@ -8278,7 +8281,9 @@ mod tests {
             seed: Some(9),
             tps: 5.0,
             max_inflight: 8,
-            faults: FaultToggles::from_array([true, true, true, true]),
+            faults: FaultToggles::from_enabled_flags([
+                true, true, true, true, true, false, true, true,
+            ]),
             nexus: Some(NexusProfile::sora_defaults().expect("nexus profile")),
             ..test_chaos_config()
         };
@@ -8299,7 +8304,9 @@ mod tests {
             seed: Some(29),
             tps: 4.0,
             max_inflight: 6,
-            faults: FaultToggles::from_array([true, true, true, true]),
+            faults: FaultToggles::from_enabled_flags([
+                true, true, true, true, true, false, true, true,
+            ]),
             nexus: Some(NexusProfile::sora_defaults().expect("nexus profile")),
             ..test_chaos_config()
         };
@@ -8331,7 +8338,9 @@ mod tests {
             seed: Some(5),
             tps: 5.0,
             max_inflight: 8,
-            faults: FaultToggles::from_array([true, true, true, true]),
+            faults: FaultToggles::from_enabled_flags([
+                true, true, true, true, true, false, true, true,
+            ]),
             ..test_chaos_config()
         };
         assert_eq!(
@@ -8349,7 +8358,9 @@ mod tests {
             seed: Some(5),
             tps: 5.0,
             max_inflight: 8,
-            faults: FaultToggles::from_array([true, true, true, true]),
+            faults: FaultToggles::from_enabled_flags([
+                true, true, true, true, true, false, true, true,
+            ]),
             ..test_chaos_config()
         };
         assert_eq!(
@@ -8372,7 +8383,9 @@ mod tests {
             seed: Some(5),
             tps: 5.0,
             max_inflight: IZANAMI_STABLE_INGRESS_MAX_INFLIGHT_CAP * 8,
-            faults: FaultToggles::from_array([true, true, true, true]),
+            faults: FaultToggles::from_enabled_flags([
+                true, true, true, true, true, false, true, true,
+            ]),
             ..test_chaos_config()
         };
         assert_eq!(
@@ -8397,8 +8410,8 @@ mod tests {
             tps: 200.0,
             max_inflight: 512,
             submitters: 20,
-            faults: FaultToggles::from_explicit_array([
-                true, false, false, false, false, false, false,
+            faults: FaultToggles::from_enabled_flags([
+                true, false, false, false, false, false, false, false,
             ]),
             ..test_chaos_config()
         };
@@ -8426,8 +8439,8 @@ mod tests {
             tps: 200.0,
             max_inflight: 512,
             submitters: 20,
-            faults: FaultToggles::from_explicit_array([
-                false, false, false, true, true, false, false,
+            faults: FaultToggles::from_enabled_flags([
+                false, false, false, true, true, false, false, false,
             ]),
             ..test_chaos_config()
         };
@@ -8525,7 +8538,9 @@ mod tests {
             tps: 5.0,
             max_inflight: IZANAMI_STABLE_INGRESS_MAX_INFLIGHT_CAP * 8,
             workload_profile: WorkloadProfile::Chaos,
-            faults: FaultToggles::from_array([true, true, true, true]),
+            faults: FaultToggles::from_enabled_flags([
+                true, true, true, true, true, false, true, true,
+            ]),
             ..test_chaos_config()
         };
         assert_eq!(
@@ -8775,7 +8790,9 @@ mod tests {
             seed: Some(11),
             tps: 5.0,
             max_inflight: 8,
-            faults: FaultToggles::from_array([true, true, true, true]),
+            faults: FaultToggles::from_enabled_flags([
+                true, true, true, true, true, false, true, true,
+            ]),
             nexus: Some(NexusProfile::sora_defaults().expect("nexus profile")),
             ..test_chaos_config()
         };
@@ -8795,7 +8812,9 @@ mod tests {
         let config = ChaosConfig {
             duration: Duration::from_secs(2),
             fault_interval: Duration::from_secs(5)..=Duration::from_secs(5),
-            faults: FaultToggles::from_array([true, true, true, true]),
+            faults: FaultToggles::from_enabled_flags([
+                true, true, true, true, true, false, true, true,
+            ]),
             nexus: Some(nexus.clone()),
             ..test_chaos_config()
         };
@@ -10251,16 +10270,6 @@ mod tests {
         );
     }
     #[test]
-    fn ingress_clients_mark_submit_compatibility_without_capability_probe() {
-        let state = Arc::new(StdMutex::new(DataModelCompatibility::Unchecked));
-        mark_data_model_submit_compatible(&state);
-        let cached = state.lock().expect("data model compatibility lock").clone();
-        assert!(
-            matches!(cached, DataModelCompatibility::SubmitCompatible),
-            "Izanami hot-path clients should skip repeated /v1/node/capabilities probes"
-        );
-    }
-    #[test]
     fn fault_target_selection_is_deterministic() {
         let mut rng_a = StdRng::seed_from_u64(5);
         let mut rng_b = StdRng::seed_from_u64(5);
@@ -10772,7 +10781,9 @@ mod tests {
         let config = chaos_config_for_audit_window(
             true,
             1,
-            FaultToggles::from_explicit_array([true, false, false, false, false, false, false]),
+            FaultToggles::from_enabled_flags([
+                true, false, false, false, false, false, false, false,
+            ]),
         );
         let options = throughput_confirmation_wait_options_for(&config);
         assert!(npos_extended_confirmation_window_needed(&config));
@@ -10790,7 +10801,9 @@ mod tests {
         let config = chaos_config_for_audit_window(
             true,
             0,
-            FaultToggles::from_explicit_array([false, false, false, false, false, false, false]),
+            FaultToggles::from_enabled_flags([
+                false, false, false, false, false, false, false, false,
+            ]),
         );
         let options = throughput_confirmation_wait_options_for(&config);
         assert!(npos_extended_confirmation_window_needed(&config));
@@ -10804,7 +10817,7 @@ mod tests {
         let config = chaos_config_for_audit_window(
             true,
             1,
-            FaultToggles::from_explicit_array_with_packet_loss([
+            FaultToggles::from_enabled_flags([
                 false, false, false, false, false, true, false, false,
             ]),
         );
@@ -10820,7 +10833,9 @@ mod tests {
         let config = chaos_config_for_audit_window(
             false,
             1,
-            FaultToggles::from_explicit_array([true, false, false, false, false, false, false]),
+            FaultToggles::from_enabled_flags([
+                true, false, false, false, false, false, false, false,
+            ]),
         );
         let options = throughput_confirmation_wait_options_for(&config);
         assert!(!npos_extended_confirmation_window_needed(&config));

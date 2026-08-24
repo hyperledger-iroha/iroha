@@ -1,10 +1,10 @@
 # NoritoBridge XCFramework Artifacts
 
-Current source ABI: 22. ABI 14 added
+Current source ABI: 23. ABI 14 added
 `connect_norito_encode_transfer_instruction_box` for native multisig proposal
 instruction boxes; later additive revisions include the native Kagemusha V2
 surfaces and the bounded SoraFS Governance DAG block/head-chain reference
-validators consumed by the C# SDK. The ABI-22 Kotlin/JVM and Java/Android
+validators consumed by the C# SDK. The ABI-23 Kotlin/JVM and Java/Android
 `NativeSignerBridge` surface additionally requires native-signer JNI contract
 revision 5. Revision 4 sealed the removal of generic `Shield`, `ZkTransfer`, and
 `Unshield` transaction encoders plus native anonymous-escrow and authority-free
@@ -12,8 +12,8 @@ Kaigi helpers from the C and JNI surfaces. The bridge retains specialized
 Kagemusha proof and settlement helpers. `RegisterZkAsset` now carries exactly
 `asset`, `vk_unshield`, and `vk_shield`; optional key presence enables each
 settlement role, with no mode, boolean enablement, or asset-bound transfer-key
-field. The JNI contract revision is checked separately so an older ABI-22
-artifact fails closed instead of exposing a retired transaction surface.
+field. The JNI contract revision is checked separately so an artifact that is
+not exact ABI 23 fails closed instead of exposing a retired transaction surface.
 Revision 5 hard-cuts native transaction signing from human chain labels to the
 exact genesis-derived `NetworkId`: JNI accepts exactly 32 marked hash bytes,
 while the C and Swift surface accepts only canonical checksummed `NetworkId`
@@ -30,8 +30,14 @@ policy, activation, lifecycle, or readiness projection. SDKs must fetch a
 fresh authoritative `PrivacyCapabilitySnapshotV1` from live Torii before
 submitting a privacy proof.
 
+ABI 23 removes the archive-only Parliament timed-OVN wallet entry points. The
+replacement C/JNI functions accept only a terminal canonical casting-proof
+response plus caller-supplied NetworkId, finalized height/context, and ballot
+attempt trust anchors. They verify finality, the fixed witness, membership,
+archive replay, and exact compact binding before borrowing a wallet seed.
+
 The archive checksums below are historical and do not establish a current
-ABI-22/revision-5 artifact. Regenerate, verify, and republish the bridge
+ABI-23/revision-5 artifact. Regenerate, verify, and republish the bridge
 artifacts before cutting an SDK release that depends on the current source
 surface.
 

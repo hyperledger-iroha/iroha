@@ -2960,7 +2960,7 @@ mod tests {
             dedupe_ttl: Duration::from_mins(2),
             dedupe_cap: 8192,
             relay_enabled: false,
-            relay_strategy: "broadcast",
+            relay_strategy: iroha_config::parameters::actual::ConnectRelayStrategy::Broadcast,
             p2p_ttl_hops: 0,
         };
         let bus = Bus::from_config(&cfg, test_network_id());
@@ -3262,7 +3262,7 @@ mod tests {
             dedupe_ttl: Duration::from_mins(2),
             dedupe_cap: 8192,
             relay_enabled: true,
-            relay_strategy: "broadcast",
+            relay_strategy: iroha_config::parameters::actual::ConnectRelayStrategy::Broadcast,
             p2p_ttl_hops: 0,
         };
         let bus = Bus::from_config(&cfg, test_network_id());
@@ -3287,7 +3287,7 @@ mod tests {
             dedupe_ttl: Duration::from_mins(2),
             dedupe_cap: 8192,
             relay_enabled: true,
-            relay_strategy: "broadcast",
+            relay_strategy: iroha_config::parameters::actual::ConnectRelayStrategy::Broadcast,
             p2p_ttl_hops: 0,
         };
         let bus = Bus::from_config(&cfg, test_network_id());
@@ -3346,7 +3346,7 @@ mod tests {
             dedupe_ttl: Duration::from_mins(2),
             dedupe_cap: 8192,
             relay_enabled: true,
-            relay_strategy: "broadcast",
+            relay_strategy: iroha_config::parameters::actual::ConnectRelayStrategy::Broadcast,
             p2p_ttl_hops: 0,
         };
         let bus = Bus::from_config(&cfg, test_network_id());
@@ -3381,7 +3381,7 @@ mod tests {
             dedupe_ttl: Duration::from_mins(2),
             dedupe_cap: 8192,
             relay_enabled: true,
-            relay_strategy: "broadcast",
+            relay_strategy: iroha_config::parameters::actual::ConnectRelayStrategy::Broadcast,
             p2p_ttl_hops: 0,
         };
         let bus = Bus::from_config(&cfg, test_network_id());
@@ -3420,7 +3420,7 @@ mod tests {
             dedupe_ttl: Duration::from_mins(2),
             dedupe_cap: 8192,
             relay_enabled: true,
-            relay_strategy: "broadcast",
+            relay_strategy: iroha_config::parameters::actual::ConnectRelayStrategy::Broadcast,
             p2p_ttl_hops: 0,
         };
         let bus = Bus::from_config(&cfg, test_network_id());
@@ -3620,7 +3620,7 @@ mod tests {
             dedupe_ttl: Duration::from_mins(2),
             dedupe_cap: 8192,
             relay_enabled: true,
-            relay_strategy: "broadcast",
+            relay_strategy: iroha_config::parameters::actual::ConnectRelayStrategy::Broadcast,
             p2p_ttl_hops: 0,
         };
         let bus_primary = Bus::from_config(&cfg, test_network_id());
@@ -3736,7 +3736,7 @@ mod tests {
             dedupe_ttl: Duration::from_mins(2),
             dedupe_cap: 8192,
             relay_enabled: true,
-            relay_strategy: "broadcast",
+            relay_strategy: iroha_config::parameters::actual::ConnectRelayStrategy::Broadcast,
             p2p_ttl_hops: 0,
         };
         let bus = Bus::from_config(&cfg, test_network_id());
@@ -3765,7 +3765,7 @@ mod tests {
             dedupe_ttl: Duration::from_mins(2),
             dedupe_cap: 8192,
             relay_enabled: true,
-            relay_strategy: "broadcast",
+            relay_strategy: iroha_config::parameters::actual::ConnectRelayStrategy::Broadcast,
             p2p_ttl_hops: 0,
         };
         let bus = Bus::from_config(&cfg, test_network_id());
@@ -3791,7 +3791,7 @@ mod tests {
             dedupe_ttl: Duration::from_mins(2),
             dedupe_cap: 8192,
             relay_enabled: true,
-            relay_strategy: "broadcast",
+            relay_strategy: iroha_config::parameters::actual::ConnectRelayStrategy::Broadcast,
             p2p_ttl_hops: 0,
         };
         let bus = Bus::from_config(&cfg, test_network_id());
@@ -3819,7 +3819,7 @@ mod tests {
             dedupe_ttl: Duration::from_mins(2),
             dedupe_cap: 8192,
             relay_enabled: true,
-            relay_strategy: "broadcast",
+            relay_strategy: iroha_config::parameters::actual::ConnectRelayStrategy::Broadcast,
             p2p_ttl_hops: 0,
         };
         let bus = Bus::from_config(&cfg, test_network_id());
@@ -3848,7 +3848,7 @@ mod tests {
             dedupe_ttl: Duration::from_mins(2),
             dedupe_cap: 8192,
             relay_enabled: false,
-            relay_strategy: "broadcast",
+            relay_strategy: iroha_config::parameters::actual::ConnectRelayStrategy::Broadcast,
             p2p_ttl_hops: 0,
         };
         let bus = Bus::from_config(&cfg, test_network_id());
@@ -4130,107 +4130,20 @@ mod tests {
             proto::Dir::WalletToApp
         );
     }
-    #[tokio::test]
-    async fn unsupported_relay_strategy_forces_local_only() {
-        let cfg = iroha_config::parameters::actual::Connect {
-            enabled: true,
-            ws_max_sessions: 1000,
-            ws_per_ip_max_sessions: 10,
-            ws_rate_per_ip_per_min: 120,
-            session_ttl: Duration::from_mins(5),
-            frame_max_bytes: 64_000,
-            session_buffer_max_bytes: 262_144,
-            ping_interval: Duration::from_secs(30),
-            ping_miss_tolerance: 3,
-            ping_min_interval: Duration::from_secs(15),
-            dedupe_ttl: Duration::from_mins(2),
-            dedupe_cap: 8192,
-            relay_enabled: true,
-            relay_strategy: "bogus_strategy",
-            p2p_ttl_hops: 0,
-        };
-        let bus = Bus::from_config(&cfg, test_network_id());
-        let status = bus.status().await;
-        assert_eq!(status.policy.relay_strategy, "local_only");
-        assert_eq!(status.policy.relay_effective_strategy, "local_only");
-        assert!(!status.policy.relay_p2p_attached);
-    }
-    #[tokio::test]
-    async fn relay_strategy_aliases_normalize_to_local_only() {
-        for relay_strategy in ["local_only", "local-only", "local"] {
-            let cfg = iroha_config::parameters::actual::Connect {
-                enabled: true,
-                ws_max_sessions: 1000,
-                ws_per_ip_max_sessions: 10,
-                ws_rate_per_ip_per_min: 120,
-                session_ttl: Duration::from_mins(5),
-                frame_max_bytes: 64_000,
-                session_buffer_max_bytes: 262_144,
-                ping_interval: Duration::from_secs(30),
-                ping_miss_tolerance: 3,
-                ping_min_interval: Duration::from_secs(15),
-                dedupe_ttl: Duration::from_mins(2),
-                dedupe_cap: 8192,
-                relay_enabled: true,
-                relay_strategy,
-                p2p_ttl_hops: 0,
-            };
-            let bus = Bus::from_config(&cfg, test_network_id());
-            let status = bus.status().await;
-            assert_eq!(status.policy.relay_strategy, "local_only");
-            assert_eq!(status.policy.relay_effective_strategy, "local_only");
-            assert!(!status.policy.relay_p2p_attached);
-        }
-    }
-    #[tokio::test]
-    async fn relay_strategy_parser_trims_and_lowercases() {
-        let broadcast_cfg = iroha_config::parameters::actual::Connect {
-            enabled: true,
-            ws_max_sessions: 1000,
-            ws_per_ip_max_sessions: 10,
-            ws_rate_per_ip_per_min: 120,
-            session_ttl: Duration::from_mins(5),
-            frame_max_bytes: 64_000,
-            session_buffer_max_bytes: 262_144,
-            ping_interval: Duration::from_secs(30),
-            ping_miss_tolerance: 3,
-            ping_min_interval: Duration::from_secs(15),
-            dedupe_ttl: Duration::from_mins(2),
-            dedupe_cap: 8192,
-            relay_enabled: true,
-            relay_strategy: "  BROADCAST  ",
-            p2p_ttl_hops: 0,
-        };
-        let broadcast_bus = Bus::from_config(&broadcast_cfg, test_network_id());
-        let broadcast_status = broadcast_bus.status().await;
-        assert_eq!(broadcast_status.policy.relay_strategy, "broadcast");
+    #[test]
+    fn relay_strategy_parser_accepts_exact_v1_names() {
         assert_eq!(
-            broadcast_status.policy.relay_effective_strategy,
-            "local_only"
+            RelayStrategy::from_config(
+                iroha_config::parameters::actual::ConnectRelayStrategy::Broadcast,
+            ),
+            RelayStrategy::Broadcast
         );
-        assert!(!broadcast_status.policy.relay_p2p_attached);
-        let local_cfg = iroha_config::parameters::actual::Connect {
-            enabled: true,
-            ws_max_sessions: 1000,
-            ws_per_ip_max_sessions: 10,
-            ws_rate_per_ip_per_min: 120,
-            session_ttl: Duration::from_mins(5),
-            frame_max_bytes: 64_000,
-            session_buffer_max_bytes: 262_144,
-            ping_interval: Duration::from_secs(30),
-            ping_miss_tolerance: 3,
-            ping_min_interval: Duration::from_secs(15),
-            dedupe_ttl: Duration::from_mins(2),
-            dedupe_cap: 8192,
-            relay_enabled: true,
-            relay_strategy: "  LOCAL-ONLY  ",
-            p2p_ttl_hops: 0,
-        };
-        let local_bus = Bus::from_config(&local_cfg, test_network_id());
-        let local_status = local_bus.status().await;
-        assert_eq!(local_status.policy.relay_strategy, "local_only");
-        assert_eq!(local_status.policy.relay_effective_strategy, "local_only");
-        assert!(!local_status.policy.relay_p2p_attached);
+        assert_eq!(
+            RelayStrategy::from_config(
+                iroha_config::parameters::actual::ConnectRelayStrategy::LocalOnly,
+            ),
+            RelayStrategy::LocalOnly
+        );
     }
     #[tokio::test]
     async fn broadcast_strategy_with_zero_ttl_reports_local_only_when_p2p_attached() {
@@ -4248,7 +4161,7 @@ mod tests {
             dedupe_ttl: Duration::from_mins(2),
             dedupe_cap: 8192,
             relay_enabled: true,
-            relay_strategy: "broadcast",
+            relay_strategy: iroha_config::parameters::actual::ConnectRelayStrategy::Broadcast,
             p2p_ttl_hops: 0,
         };
         let bus = Bus::from_config(&cfg, test_network_id());
@@ -4278,7 +4191,7 @@ mod tests {
             dedupe_ttl: Duration::from_mins(2),
             dedupe_cap: 8192,
             relay_enabled: true,
-            relay_strategy: "broadcast",
+            relay_strategy: iroha_config::parameters::actual::ConnectRelayStrategy::Broadcast,
             p2p_ttl_hops: 1,
         };
         let bus = Bus::from_config(&cfg, test_network_id());
@@ -4334,7 +4247,7 @@ mod tests {
             dedupe_ttl: Duration::from_mins(2),
             dedupe_cap: 8192,
             relay_enabled: true,
-            relay_strategy: "broadcast",
+            relay_strategy: iroha_config::parameters::actual::ConnectRelayStrategy::Broadcast,
             p2p_ttl_hops: 1,
         };
         let bus = Bus::from_config(&cfg, test_network_id());
@@ -4385,7 +4298,7 @@ mod tests {
             dedupe_ttl: Duration::from_mins(2),
             dedupe_cap: 8192,
             relay_enabled: true,
-            relay_strategy: "bogus_strategy",
+            relay_strategy: iroha_config::parameters::actual::ConnectRelayStrategy::LocalOnly,
             p2p_ttl_hops: 0,
         };
         let bus = Bus::from_config(&cfg, test_network_id());
@@ -4411,7 +4324,7 @@ mod tests {
         let status = bus.status().await;
         assert_eq!(
             status.policy.relay_strategy, "local_only",
-            "unsupported relay strategy should be forced to local_only"
+            "local-only policy must remain local"
         );
         assert!(status.policy.relay_p2p_attached);
         assert_eq!(status.policy.relay_effective_strategy, "local_only");
@@ -4434,7 +4347,7 @@ mod tests {
             dedupe_ttl: Duration::from_mins(2),
             dedupe_cap: 8192,
             relay_enabled: false,
-            relay_strategy: "broadcast",
+            relay_strategy: iroha_config::parameters::actual::ConnectRelayStrategy::Broadcast,
             p2p_ttl_hops: 0,
         };
         let bus = Bus::from_config(&cfg, test_network_id());
@@ -5058,7 +4971,7 @@ mod tests {
             dedupe_ttl: Duration::from_mins(2),
             dedupe_cap: 8192,
             relay_enabled: false,
-            relay_strategy: "local_only",
+            relay_strategy: iroha_config::parameters::actual::ConnectRelayStrategy::LocalOnly,
             p2p_ttl_hops: 0,
         };
         let bus = Bus::from_config(&cfg, test_network_id());
@@ -5592,17 +5505,10 @@ enum RelayStrategy {
     LocalOnly,
 }
 impl RelayStrategy {
-    fn from_config(raw: &str) -> Self {
-        match raw.trim().to_ascii_lowercase().as_str() {
-            "broadcast" => Self::Broadcast,
-            "local_only" | "local-only" | "local" => Self::LocalOnly,
-            other => {
-                warn!(
-                    relay_strategy = other,
-                    "connect: unsupported relay strategy, forcing local-only mode"
-                );
-                Self::LocalOnly
-            }
+    fn from_config(raw: iroha_config::parameters::actual::ConnectRelayStrategy) -> Self {
+        match raw {
+            iroha_config::parameters::actual::ConnectRelayStrategy::Broadcast => Self::Broadcast,
+            iroha_config::parameters::actual::ConnectRelayStrategy::LocalOnly => Self::LocalOnly,
         }
     }
     const fn as_str(self) -> &'static str {

@@ -1,14 +1,12 @@
 ---- MODULE SumeragiV2AsyncRankClosureProofs ----
-EXTENDS SumeragiV2Stage2BusyRankScratch,
-        SumeragiV2Stage3CursorKernelScratch,
-        SumeragiV2Stage6CapacityScratch
+EXTENDS SumeragiV2AsyncTimeoutOwnershipProofs
 
 (***************************************************************************
 Acyclic closure of the independently proved protected-service rank leaves.
 
-The Stage-2, Stage-3, and Stage-6 modules extend only the proof-bearing
-asynchronous base.  Consequently their strict corridors cannot import either
-of the aggregate results below, or any of the still-open temporal claims in
+The Stage-2, Stage-3, and Stage-6 leaves come directly from the proof-bearing
+asynchronous base. Consequently their strict corridors cannot import either of
+the aggregate results below, or any of the still-open temporal claims in
 `SumeragiV2AsyncTemporalClosureProofs`.
 ***************************************************************************)
 

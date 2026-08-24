@@ -43,6 +43,90 @@ pub struct DisableConsensusKey {
     /// Identifier of the key being disabled.
     pub id: crate::consensus::ConsensusKeyId,
 }
+
+/// Exact threshold-key lifecycle action authorized by the current validator roster.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+#[norito(tag = "action", content = "value", rename_all = "snake_case")]
+pub enum ThresholdKeyLifecycleActionV1 {
+    /// Atomically install and activate a finalized global-beacon key session.
+    InstallGlobalBeaconKey,
+    /// Retire the exact active global-beacon key session without a successor.
+    RetireGlobalBeaconKey,
+    /// Atomically install and activate a finalized Parliament TLE key session.
+    InstallParliamentTleKey,
+    /// Retire the exact active Parliament TLE key session without a successor.
+    RetireParliamentTleKey,
+}
+
+/// One exact-roster validator signature over a threshold-key lifecycle action.
+#[derive(
+    Debug, Clone, PartialEq, Eq, PartialOrd, Ord, getset::Getters, Decode, Encode, IntoSchema,
+)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+#[getset(get = "pub")]
+pub struct ThresholdKeyLifecycleSignatureV1 {
+    /// Zero-based seat in the exact ordered authenticated validator roster.
+    pub signer_index: u16,
+    /// Signature over the canonical certificate preimage.
+    pub signature: iroha_crypto::Signature,
+}
+
+/// Exact-roster quorum certificate for one threshold-key lifecycle action.
+#[derive(
+    Debug, Clone, PartialEq, Eq, PartialOrd, Ord, getset::Getters, Decode, Encode, IntoSchema,
+)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+#[getset(get = "pub")]
+pub struct ThresholdKeyLifecycleCertificateV1 {
+    /// Fixed certificate layout version.
+    pub version: u16,
+    /// Exact lifecycle action.
+    pub action: ThresholdKeyLifecycleActionV1,
+    /// Exact active session that this action must replace or retire.
+    ///
+    /// `None` is valid only for the first install in this key family. This is
+    /// a committee-certified compare-and-set guard, not a registrar hint.
+    pub expected_active_session_id: Option<[u8; 32]>,
+    /// Incoming block height at which this action must execute.
+    pub effective_height: u64,
+    /// Exact genesis-derived network identity.
+    pub network_id: crate::NetworkId,
+    /// Hash of the exact ordered authenticated validator roster.
+    pub roster_hash: [u8; 32],
+    /// Exact validator committee size.
+    pub committee_size: u16,
+    /// Exact `2f + 1` authorization threshold.
+    pub quorum: u16,
+    /// Exact threshold-key session identifier.
+    pub session_id: [u8; 32],
+    /// Exact finalized DKG transcript commitment.
+    pub transcript_hash: [u8; 32],
+    /// Canonical Core public-state bytes for install actions; empty for retirement.
+    pub public_state: Vec<u8>,
+    /// Strictly ordered unique exact-roster signatures.
+    pub signatures: Vec<ThresholdKeyLifecycleSignatureV1>,
+}
+
+super::isi! {
+    /// Apply one current-roster-certified threshold-key lifecycle action.
+    #[cfg_attr(feature = "json", derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize))]
+    pub struct ApplyThresholdKeyLifecycleCertificateV1 {
+        /// Full proof-carrying exact-roster lifecycle certificate.
+        pub certificate: ThresholdKeyLifecycleCertificateV1,
+    }
+}
+
+impl crate::seal::Instruction for ApplyThresholdKeyLifecycleCertificateV1 {}
 impl crate::seal::Instruction for RegisterConsensusKey {}
 impl crate::seal::Instruction for RotateConsensusKey {}
 impl crate::seal::Instruction for DisableConsensusKey {}
@@ -94,6 +178,24 @@ impl<'a> norito::core::DecodeFromSlice<'a> for DisableConsensusKey {
         Ok((Self { id }, offset))
     }
 }
+impl<'a> norito::core::DecodeFromSlice<'a> for ApplyThresholdKeyLifecycleCertificateV1 {
+    fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), norito::core::Error> {
+        let flags = consensus_key_decode_flags();
+        if flags & norito::core::header_flags::PACKED_STRUCT != 0 {
+            return super::decode_packed_instruction_payload::<Self>(bytes);
+        }
+        let mut offset = 0usize;
+        let certificate = super::decode_aos_canonical_field::<ThresholdKeyLifecycleCertificateV1>(
+            super::read_aos_field(bytes, &mut offset, flags)?,
+            flags,
+        )?;
+        if offset != bytes.len() {
+            return Err(norito::core::Error::LengthMismatch);
+        }
+        norito::core::note_payload_access(bytes, offset);
+        Ok((Self { certificate }, offset))
+    }
+}
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -101,7 +203,7 @@ mod tests {
         ConsensusKeyId, ConsensusKeyRecord, ConsensusKeyRole, ConsensusKeyStatus,
     };
     use crate::isi::test_support::{assert_registry_decodes, assert_slice_roundtrip};
-    use iroha_crypto::{Algorithm, KeyPair, PublicKey};
+    use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair, PublicKey, Signature};
     fn public_key(seed: u8) -> PublicKey {
         let key_pair = KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519)
             .expect("derive checked consensus-key fixture keypair");
@@ -122,6 +224,33 @@ mod tests {
             status: ConsensusKeyStatus::Pending,
         }
     }
+    fn threshold_key_lifecycle_instruction() -> ApplyThresholdKeyLifecycleCertificateV1 {
+        let signer = KeyPair::random();
+        ApplyThresholdKeyLifecycleCertificateV1 {
+            certificate: ThresholdKeyLifecycleCertificateV1 {
+                version: 1,
+                action: ThresholdKeyLifecycleActionV1::RetireGlobalBeaconKey,
+                expected_active_session_id: Some([0x63; 32]),
+                effective_height: 19,
+                network_id: crate::NetworkId::from_genesis_hash(
+                    HashOf::<crate::block::BlockHeader>::from_untyped_unchecked(Hash::prehashed(
+                        [0x61; Hash::LENGTH],
+                    )),
+                ),
+                roster_hash: [0x62; 32],
+                committee_size: 4,
+                quorum: 3,
+                session_id: [0x63; 32],
+                transcript_hash: [0x64; 32],
+                public_state: Vec::new(),
+                signatures: vec![ThresholdKeyLifecycleSignatureV1 {
+                    signer_index: 0,
+                    signature: Signature::try_new(signer.private_key(), b"codec fixture")
+                        .expect("sign codec fixture"),
+                }],
+            },
+        }
+    }
     #[test]
     fn consensus_key_decode_from_slice_roundtrips() {
         assert_slice_roundtrip(RegisterConsensusKey {
@@ -138,13 +267,17 @@ mod tests {
         assert_slice_roundtrip(DisableConsensusKey {
             id: key_id("validator_a"),
         });
+        assert_slice_roundtrip(threshold_key_lifecycle_instruction());
     }
     #[test]
     fn consensus_key_registry_decodes_stable_ids() {
         let registry = crate::isi::InstructionRegistry::new()
             .register_with_id_slice::<RegisterConsensusKey>("consensus::RegisterConsensusKey")
             .register_with_id_slice::<RotateConsensusKey>("consensus::RotateConsensusKey")
-            .register_with_id_slice::<DisableConsensusKey>("consensus::DisableConsensusKey");
+            .register_with_id_slice::<DisableConsensusKey>("consensus::DisableConsensusKey")
+            .register_with_id_slice::<ApplyThresholdKeyLifecycleCertificateV1>(
+                "iroha.consensus.threshold-key-lifecycle.apply.v1",
+            );
         assert_registry_decodes(
             &registry,
             "consensus::RegisterConsensusKey",
@@ -152,6 +285,11 @@ mod tests {
                 id: key_id("validator_a"),
                 record: record("validator_a", 0x73),
             },
+        );
+        assert_registry_decodes(
+            &registry,
+            "iroha.consensus.threshold-key-lifecycle.apply.v1",
+            threshold_key_lifecycle_instruction(),
         );
         assert_registry_decodes(
             &registry,

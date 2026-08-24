@@ -18,6 +18,33 @@ enum DerivedTupleEnum {
     Pair(EnumField, u32),
     Boundary(EnumField, #[norito(skip)] ()),
 }
+#[derive(Debug, PartialEq, Eq)]
+struct LooseScalar(u32);
+impl norito::NoritoSerialize for LooseScalar {
+    fn serialize(&self, encoder: &mut norito::core::Encoder<'_>) -> Result<(), Error> {
+        norito::NoritoSerialize::serialize(&self.0, encoder)
+    }
+    fn encoded_len_hint(&self) -> Option<usize> {
+        norito::NoritoSerialize::encoded_len_hint(&self.0)
+    }
+    fn encoded_len_exact(&self) -> Option<usize> {
+        norito::NoritoSerialize::encoded_len_exact(&self.0)
+    }
+}
+impl<'a> norito::NoritoDeserialize<'a> for LooseScalar {
+    fn deserialize(archived: &'a norito::core::Archived<Self>) -> Self {
+        Self(<u32 as norito::NoritoDeserialize>::deserialize(
+            archived.cast::<u32>(),
+        ))
+    }
+    fn try_deserialize(archived: &'a norito::core::Archived<Self>) -> Result<Self, Error> {
+        <u32 as norito::NoritoDeserialize>::try_deserialize(archived.cast::<u32>()).map(Self)
+    }
+}
+#[derive(Debug, PartialEq, Eq, norito::derive::Encode, norito::derive::Decode)]
+enum LooseTupleEnum {
+    Value(LooseScalar),
+}
 #[test]
 fn derive_decode_rejects_overlong_field() {
     // Craft a payload where the field length claims more bytes than are available.
@@ -96,6 +123,32 @@ fn derived_tuple_enum_rejects_understated_first_field_length() {
         .expect("frame corrupted tuple enum");
     assert!(matches!(
         norito::decode_canonical::<DerivedTupleEnum>(&forged),
+        Err(Error::LengthMismatch)
+    ));
+}
+
+#[test]
+fn derived_tuple_enum_rejects_trailing_bytes_inside_a_field_frame() {
+    let value = LooseTupleEnum::Value(LooseScalar(0x1122_3344));
+    let frame = norito::encode_canonical(&value).expect("encode canonical tuple enum");
+    let view = norito::core::from_bytes_view(&frame).expect("inspect canonical frame");
+    let flags = view.flags();
+    let mut payload = view.as_bytes().to_vec();
+    let field_prefix = 4;
+    let (declared, prefix_len) =
+        norito::core::read_len_from_slice_with_flags(&payload[field_prefix..], flags)
+            .expect("read tuple field length");
+    assert_eq!(
+        prefix_len, 1,
+        "test fixture expects a one-byte canonical length"
+    );
+    payload[field_prefix] = u8::try_from(declared + 1).expect("extend tuple field length");
+    payload.push(0xA5);
+    let forged = norito::core::frame_bare_with_header_flags::<LooseTupleEnum>(&payload, flags)
+        .expect("frame corrupted tuple enum");
+
+    assert!(matches!(
+        norito::decode_canonical::<LooseTupleEnum>(&forged),
         Err(Error::LengthMismatch)
     ));
 }

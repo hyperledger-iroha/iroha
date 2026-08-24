@@ -261,6 +261,25 @@ async fn pipeline_preflight_handler_returns_json_snapshot() {
         payload.get("queue").and_then(|value| value.get("size")),
         Some(&norito::json::Value::from(0_u64))
     );
+    let pipeline = payload
+        .get("pipeline")
+        .and_then(norito::json::Value::as_object)
+        .expect("preflight payload should expose pipeline settings");
+    assert!(
+        pipeline.get("signature_batch_max").is_none(),
+        "preflight payload must not expose the retired aggregate signature-batch field"
+    );
+    for field in [
+        "signature_batch_max_ed25519",
+        "signature_batch_max_secp256k1",
+        "signature_batch_max_pqc",
+        "signature_batch_max_bls",
+    ] {
+        assert!(
+            pipeline.get(field).is_some(),
+            "preflight payload must expose {field}"
+        );
+    }
     assert!(
         payload
             .get("fees")

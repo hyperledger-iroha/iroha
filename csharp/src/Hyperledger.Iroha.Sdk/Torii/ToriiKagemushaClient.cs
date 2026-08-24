@@ -10,27 +10,21 @@ public sealed partial class ToriiClient
     public const int KagemushaManifestVersion = ToriiKagemushaTransport.ManifestVersion;
     public const int KagemushaMaximumHops = ToriiKagemushaTransport.MaxHops;
 
-    public async Task<ToriiKagemushaReadinessV4> GetKagemushaReadinessV4Async(
-        string assetDefinitionId,
+    public async Task<ToriiOfflineStatus> GetOfflineCapabilityAsync(
         CancellationToken cancellationToken = default)
     {
-        var selector = RequireKagemushaSelector(assetDefinitionId, nameof(assetDefinitionId));
-        var query = BuildQueryString(
-        [
-            new KeyValuePair<string, string?>("asset_definition_id", selector),
-        ]);
         using var response = await SendAsync(
             HttpMethod.Get,
             "/v1/offline/readiness",
-            query,
+            query: null,
             content: null,
             accept: "application/json",
             cancellationToken: cancellationToken);
         using var document = await ReadKagemushaJsonAsync(
             response,
-            "Kagemusha readiness response",
+            "Offline capability response",
             cancellationToken);
-        return ParseKagemushaReadiness(document.RootElement, selector);
+        return ParseOfflineCapability(document.RootElement);
     }
 
     public Task<ToriiKagemushaOperationReference> SubmitKagemushaTopUpV4Async(
@@ -114,21 +108,6 @@ public sealed partial class ToriiClient
             location);
     }
 
-    private static string RequireKagemushaSelector(string? value, string parameterName)
-    {
-        ArgumentNullException.ThrowIfNull(value, parameterName);
-        if (value.Length is 0 or > 512
-            || !string.Equals(value, value.Trim(), StringComparison.Ordinal)
-            || value.Any(static character => char.IsControl(character)))
-        {
-            throw new ArgumentException(
-                "Kagemusha asset selector must be exact, non-empty text without control characters.",
-                parameterName);
-        }
-
-        return value;
-    }
-
     private static async Task<JsonDocument> ReadKagemushaJsonAsync(
         HttpResponseMessage response,
         string context,
@@ -149,164 +128,39 @@ public sealed partial class ToriiClient
             cancellationToken);
     }
 
-    private ToriiKagemushaReadinessV4 ParseKagemushaReadiness(
-        JsonElement root,
-        string requestedSelector)
+    private ToriiOfflineStatus ParseOfflineCapability(JsonElement root)
     {
         RequireExactFields(
             root,
-            "Kagemusha readiness response",
+            "Offline capability response",
+            "cash_handoff_capability",
             "required_bridge_abi_version",
             "max_hops",
-            "asset_definition_id",
-            "asset_scale",
-            "evaluated_block_height",
-            "evaluated_block_hash",
-            "active_transfer_verifier",
-            "active_topup_shield_verifier",
-            "active_unshield_verifier",
-            "active_recursive_step_eq_verifier",
-            "active_recursive_step_ep_verifier",
-            "artifact_set",
-            "proof_backend_available",
-            "recursive_lineage_supported",
-            "ready",
-            "blockers");
-        var readiness = root.Deserialize<ToriiKagemushaReadinessV4>(serializerOptions)
-            ?? throw new JsonException("Kagemusha readiness response deserialized to null.");
-        if (readiness.RequiredBridgeAbiVersion != KagemushaRequiredBridgeAbiVersion)
+            "ready");
+        var capability = root.Deserialize<ToriiOfflineStatus>(serializerOptions)
+            ?? throw new JsonException("Offline capability response deserialized to null.");
+        if (!string.Equals(
+                capability.CashHandoffCapability,
+                "cash_handoff_v1",
+                StringComparison.Ordinal))
         {
-            throw new JsonException($"required_bridge_abi_version must be {KagemushaRequiredBridgeAbiVersion}.");
+            throw new JsonException("cash_handoff_capability must be cash_handoff_v1.");
         }
-        if (readiness.MaxHops != KagemushaMaximumHops)
+        if (capability.RequiredBridgeAbiVersion != KagemushaRequiredBridgeAbiVersion)
+        {
+            throw new JsonException(
+                $"required_bridge_abi_version must be {KagemushaRequiredBridgeAbiVersion}.");
+        }
+        if (capability.MaxHops != KagemushaMaximumHops)
         {
             throw new JsonException($"max_hops must be {KagemushaMaximumHops}.");
         }
-        if (requestedSelector.Contains('#')
-            && !string.Equals(readiness.AssetDefinitionId, requestedSelector, StringComparison.Ordinal))
+        if (!capability.Ready)
         {
-            throw new JsonException("asset_definition_id does not match the requested canonical asset.");
-        }
-        RequireLowerHex32(readiness.EvaluatedBlockHash, "evaluated_block_hash");
-
-        var verifierFields = new (string Field, ToriiKagemushaActiveVerifier? Value)[]
-        {
-            ("active_transfer_verifier", readiness.ActiveTransferVerifier),
-            ("active_topup_shield_verifier", readiness.ActiveTopUpShieldVerifier),
-            ("active_unshield_verifier", readiness.ActiveUnshieldVerifier),
-            ("active_recursive_step_eq_verifier", readiness.ActiveRecursiveStepEqVerifier),
-            ("active_recursive_step_ep_verifier", readiness.ActiveRecursiveStepEpVerifier),
-        };
-        foreach (var (field, verifier) in verifierFields)
-        {
-            if (verifier is not null)
-            {
-                ValidateKagemushaVerifier(verifier, field, readiness.EvaluatedBlockHeight);
-            }
+            throw new JsonException("ready must be true for universal offline capability.");
         }
 
-        var hasEq = readiness.ActiveRecursiveStepEqVerifier is not null;
-        var hasEp = readiness.ActiveRecursiveStepEpVerifier is not null;
-        if (hasEq != hasEp)
-        {
-            throw new JsonException("ABI-21 V4 recursive verifier records must be reported as an Eq/Ep pair.");
-        }
-        if ((readiness.ArtifactSet is not null) != hasEq)
-        {
-            throw new JsonException("artifact_set and the ABI-21 V4 Eq/Ep verifier pair must be reported together.");
-        }
-        if (readiness.ArtifactSet is { } artifactSet)
-        {
-            ValidateKagemushaArtifactSet(artifactSet, readiness);
-        }
-        if (readiness.ProofBackendAvailable && readiness.ArtifactSet is null)
-        {
-            throw new JsonException("proof_backend_available requires an authenticated V4 artifact_set.");
-        }
-
-        var expectedLineage = readiness.ProofBackendAvailable
-            && readiness.ArtifactSet is not null
-            && hasEq
-            && hasEp;
-        if (readiness.RecursiveLineageSupported != expectedLineage)
-        {
-            throw new JsonException("recursive_lineage_supported contradicts the ABI-21 runtime conjunction.");
-        }
-        var expectedReady = expectedLineage
-            && readiness.AssetScale is <= 28
-            && readiness.ActiveTransferVerifier is not null
-            && readiness.ActiveTopUpShieldVerifier is not null
-            && readiness.ActiveUnshieldVerifier is not null
-            && readiness.Blockers.Length == 0;
-        if (readiness.Ready != expectedReady)
-        {
-            throw new JsonException("ready contradicts the complete ABI-21 runtime conjunction.");
-        }
-        if (readiness.Blockers.Any(static blocker =>
-                string.IsNullOrWhiteSpace(blocker.Code)
-                || string.IsNullOrWhiteSpace(blocker.Message)))
-        {
-            throw new JsonException("Kagemusha readiness blockers require non-empty code and message fields.");
-        }
-
-        return readiness with { Blockers = readiness.Blockers.ToArray() };
-    }
-
-    private static void ValidateKagemushaVerifier(
-        ToriiKagemushaActiveVerifier verifier,
-        string field,
-        ulong evaluatedHeight)
-    {
-        if (!string.Equals(verifier.Id.Backend, "halo2/ipa", StringComparison.Ordinal)
-            || verifier.Version == 0
-            || verifier.MaxProofBytes == 0
-            || verifier.ActivationHeight > evaluatedHeight
-            || verifier.WithdrawalHeight is { } withdrawalHeight && withdrawalHeight <= evaluatedHeight)
-        {
-            throw new JsonException($"{field} is not active under the production Kagemusha verifier contract.");
-        }
-        RequireLowerHex32(verifier.Commitment, $"{field}.commitment");
-        RequireLowerHex32(verifier.PublicInputsSchemaHash, $"{field}.public_inputs_schema_hash");
-
-        var expectedName = field switch
-        {
-            "active_recursive_step_eq_verifier" => "kagemusha_recursive_step_eq_v4_verifier_record",
-            "active_recursive_step_ep_verifier" => "kagemusha_recursive_step_ep_v4_verifier_record",
-            _ => null,
-        };
-        var expectedCircuit = field switch
-        {
-            "active_recursive_step_eq_verifier" => "kagemusha-recursive-spend-step-eq-compact-layout-v5",
-            "active_recursive_step_ep_verifier" => "kagemusha-recursive-spend-step-ep-compact-lineage-v5",
-            _ => null,
-        };
-        if (expectedName is not null
-            && (!string.Equals(verifier.Id.Name, expectedName, StringComparison.Ordinal)
-                || !string.Equals(verifier.CircuitId, expectedCircuit, StringComparison.Ordinal)))
-        {
-            throw new JsonException($"{field} does not identify its ABI-21 V4 verifier role.");
-        }
-    }
-
-    private static void ValidateKagemushaArtifactSet(
-        ToriiKagemushaAuthenticatedArtifactSetV4 artifactSet,
-        ToriiKagemushaReadinessV4 readiness)
-    {
-        RequireLowerHex32(artifactSet.ManifestSha256, "artifact_set.manifest_sha256");
-        RequireLowerHex32(artifactSet.ReleasePolicySha256, "artifact_set.release_policy_sha256");
-        RequireLowerHex32(artifactSet.ReleaseAttestationSha256, "artifact_set.release_attestation_sha256");
-        if (string.IsNullOrWhiteSpace(artifactSet.Generation)
-            || artifactSet.ActivationHeight == 0
-            || artifactSet.WithdrawalHeight <= artifactSet.ActivationHeight
-            || artifactSet.ActivationHeight > readiness.EvaluatedBlockHeight
-            || artifactSet.WithdrawalHeight <= readiness.EvaluatedBlockHeight
-            || artifactSet.MaxProofBytes == 0
-            || artifactSet.AssetScale != readiness.AssetScale
-            || artifactSet.MaxProofBytes != readiness.ActiveRecursiveStepEqVerifier!.MaxProofBytes
-            || artifactSet.MaxProofBytes != readiness.ActiveRecursiveStepEpVerifier!.MaxProofBytes)
-        {
-            throw new JsonException("artifact_set does not match the authenticated active ABI-21 V4 release.");
-        }
+        return capability;
     }
 
     private static ToriiKagemushaOperationReference ParseKagemushaOperationReference(

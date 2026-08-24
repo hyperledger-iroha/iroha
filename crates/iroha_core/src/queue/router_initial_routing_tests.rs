@@ -223,8 +223,8 @@ fn default_route_elastic_candidates_require_autoscale_metadata() {
             &policy,
             &valid_lane_catalog,
             Some(AutoscaleElasticRange {
-                min_lanes: 1,
-                max_lanes: 9,
+                min_lane_id: 1,
+                max_lane_id_exclusive: 9,
                 current_height: None,
                 required_active_height: None,
             }),
@@ -236,8 +236,8 @@ fn default_route_elastic_candidates_require_autoscale_metadata() {
             &policy,
             &valid_lane_catalog,
             Some(AutoscaleElasticRange {
-                min_lanes: 1,
-                max_lanes: 9,
+                min_lane_id: 1,
+                max_lane_id_exclusive: 9,
                 current_height: Some(6),
                 required_active_height: Some(6),
             }),
@@ -250,8 +250,8 @@ fn default_route_elastic_candidates_require_autoscale_metadata() {
             &policy,
             &valid_lane_catalog,
             Some(AutoscaleElasticRange {
-                min_lanes: 1,
-                max_lanes: 9,
+                min_lane_id: 1,
+                max_lane_id_exclusive: 9,
                 current_height: Some(7),
                 required_active_height: Some(7),
             }),
@@ -274,8 +274,8 @@ fn default_route_elastic_candidates_require_autoscale_metadata() {
             &policy,
             &corrupted_lane_catalog,
             Some(AutoscaleElasticRange {
-                min_lanes: 1,
-                max_lanes: 9,
+                min_lane_id: 1,
+                max_lane_id_exclusive: 9,
                 current_height: None,
                 required_active_height: None,
             }),
@@ -295,8 +295,8 @@ fn default_route_elastic_candidates_require_autoscale_metadata() {
             &policy,
             &mismatched_default_catalog,
             Some(AutoscaleElasticRange {
-                min_lanes: 1,
-                max_lanes: 8,
+                min_lane_id: 1,
+                max_lane_id_exclusive: 8,
                 current_height: None,
                 required_active_height: None,
             }),
@@ -319,8 +319,8 @@ fn default_route_elastic_candidates_reshard_away_after_drain_close() {
             &policy,
             &catalog,
             Some(AutoscaleElasticRange {
-                min_lanes: 1,
-                max_lanes: 2,
+                min_lane_id: 1,
+                max_lane_id_exclusive: 2,
                 current_height: Some(10),
                 required_active_height: Some(10),
             }),
@@ -333,8 +333,8 @@ fn default_route_elastic_candidates_reshard_away_after_drain_close() {
             &policy,
             &catalog,
             Some(AutoscaleElasticRange {
-                min_lanes: 1,
-                max_lanes: 2,
+                min_lane_id: 1,
+                max_lane_id_exclusive: 2,
                 current_height: Some(11),
                 required_active_height: Some(11),
             }),
@@ -352,8 +352,8 @@ fn default_route_elastic_candidates_reshard_away_after_drain_close() {
             &policy,
             &malformed,
             Some(AutoscaleElasticRange {
-                min_lanes: 1,
-                max_lanes: 2,
+                min_lane_id: 1,
+                max_lane_id_exclusive: 2,
                 current_height: Some(10),
                 required_active_height: Some(10),
             }),
@@ -384,8 +384,8 @@ fn default_route_elastic_candidates_apply_autoscale_range_when_available() {
             &policy,
             &lane_catalog,
             Some(AutoscaleElasticRange {
-                min_lanes: 1,
-                max_lanes: 8,
+                min_lane_id: 1,
+                max_lane_id_exclusive: 8,
                 current_height: None,
                 required_active_height: None,
             }),
@@ -397,8 +397,8 @@ fn default_route_elastic_candidates_apply_autoscale_range_when_available() {
             &policy,
             &lane_catalog,
             Some(AutoscaleElasticRange {
-                min_lanes: 2,
-                max_lanes: 7,
+                min_lane_id: 2,
+                max_lane_id_exclusive: 7,
                 current_height: None,
                 required_active_height: None,
             }),
@@ -473,8 +473,8 @@ fn routable_lane_ids_for_nexus_at_height_respects_autoscale_created_height() {
     ]);
     let mut nexus = nexus_with_routing(policy, lane_catalog, DataSpaceCatalog::default());
     nexus.autoscale.enabled = true;
-    nexus.autoscale.min_lanes = nonzero!(1_u32);
-    nexus.autoscale.max_lanes = nonzero!(4_u32);
+    nexus.autoscale.min_lane_id = nonzero!(1_u32);
+    nexus.autoscale.max_lane_id_exclusive = nonzero!(4_u32);
     assert_eq!(
         routable_lane_ids_for_nexus_at_height(&nexus, 6),
         BTreeSet::from([LaneId::SINGLE]),
@@ -500,8 +500,8 @@ fn routable_lane_ids_for_nexus_at_height_rejects_autoscale_owned_default_anchor(
     )]);
     let mut nexus = nexus_with_routing(policy, lane_catalog, DataSpaceCatalog::default());
     nexus.autoscale.enabled = true;
-    nexus.autoscale.min_lanes = nonzero!(1_u32);
-    nexus.autoscale.max_lanes = nonzero!(4_u32);
+    nexus.autoscale.min_lane_id = nonzero!(1_u32);
+    nexus.autoscale.max_lane_id_exclusive = nonzero!(4_u32);
     assert!(
         routable_lane_ids_for_nexus_at_height(&nexus, 1).is_empty(),
         "an autoscale-owned default anchor must not make corrupted no-target routing reachable"
@@ -533,8 +533,8 @@ fn routable_lane_ids_for_nexus_at_height_rejects_off_default_autoscale_owned_rul
         dataspace_catalog(&[(rule_dataspace, "rule-space")]),
     );
     nexus.autoscale.enabled = true;
-    nexus.autoscale.min_lanes = nonzero!(1_u32);
-    nexus.autoscale.max_lanes = nonzero!(4_u32);
+    nexus.autoscale.min_lane_id = nonzero!(1_u32);
+    nexus.autoscale.max_lane_id_exclusive = nonzero!(4_u32);
     assert_eq!(
         routable_lane_ids_for_nexus_at_height(&nexus, 1),
         BTreeSet::from([LaneId::SINGLE]),

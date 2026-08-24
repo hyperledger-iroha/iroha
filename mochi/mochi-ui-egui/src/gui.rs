@@ -40,7 +40,7 @@ use iroha_data_model::{
     block::consensus::{SumeragiDiagnosticsStatus, SumeragiLaneGovernance},
     block::consensus_v2::SumeragiV2Status,
     da::commitment::DaProofScheme,
-    domain::{Domain, DomainId},
+    domain::Domain,
     events::{
         EventBox,
         pipeline::{BlockStatus, PipelineEventBox, TransactionStatus},
@@ -588,15 +588,18 @@ fn apply_profile_override(
     Ok(())
 }
 fn parse_profile_override(value: &str) -> Result<ParsedProfileOverride, CliParseError> {
-    let trimmed = value.trim();
-    if trimmed.is_empty() {
+    if value.is_empty() {
         return Err(CliParseError::new("profile value must not be empty"));
     }
-    if let Some(preset) = parse_profile_preset(trimmed) {
+    if let Some(preset) = parse_profile_preset(value) {
         return Ok(ParsedProfileOverride {
             profile: NetworkProfile::from_preset(preset),
             genesis_profile: None,
         });
+    }
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        return Err(CliParseError::new("profile value must not be empty"));
     }
     if !trimmed.starts_with('{') && !trimmed.contains('=') {
         return Err(CliParseError::new(format!(
@@ -638,7 +641,6 @@ fn parse_profile_table_override(table: &TomlTable) -> Result<ParsedProfileOverri
     let genesis_profile = table
         .get("genesis_profile")
         .and_then(TomlValue::as_str)
-        .map(str::trim)
         .filter(|value| !value.is_empty())
         .map(|value| value.parse().map_err(|err: String| CliParseError::new(err)))
         .transpose()?;
@@ -673,9 +675,8 @@ fn parse_profile_consensus_mode(value: &TomlValue) -> Result<SumeragiConsensusMo
     let raw = value
         .as_str()
         .ok_or_else(|| CliParseError::new("profile override consensus_mode must be a string"))?;
-    let normalized = raw.trim().to_ascii_lowercase().replace('_', "-");
-    match normalized.as_str() {
-        "permissioned" | "permissioned-sumeragi" => Ok(SumeragiConsensusMode::Permissioned),
+    match raw {
+        "permissioned" => Ok(SumeragiConsensusMode::Permissioned),
         "npos" => Ok(SumeragiConsensusMode::Npos),
         other => Err(CliParseError::new(format!(
             "profile override consensus_mode `{other}` is not supported"
@@ -683,10 +684,8 @@ fn parse_profile_consensus_mode(value: &TomlValue) -> Result<SumeragiConsensusMo
     }
 }
 fn parse_profile_preset(value: &str) -> Option<ProfilePreset> {
-    let normalized = value.trim().to_ascii_lowercase().replace('_', "-");
-    match normalized.as_str() {
-        "single-peer" | "single_peer" | "singlepeer" => Some(ProfilePreset::SinglePeer),
-        "four-peer-bft" | "four_peer_bft" | "fourpeerbft" => Some(ProfilePreset::FourPeerBft),
+    match value {
+        "four-peer-bft" => Some(ProfilePreset::FourPeerBft),
         _ => None,
     }
 }
@@ -1098,9 +1097,7 @@ impl ComposerInstructionKind {
             }
             ComposerInstructionKind::GrantRole => InstructionPermission::GrantRole,
             ComposerInstructionKind::RevokeRole => InstructionPermission::RevokeRole,
-            ComposerInstructionKind::AccountAdmissionPolicy => {
-                InstructionPermission::AccountAdmissionPolicy
-            }
+            ComposerInstructionKind::AccountAdmissionPolicy => InstructionPermission::SetParameters,
             ComposerInstructionKind::MultisigPropose => InstructionPermission::MultisigPropose,
         }
     }
@@ -1367,8 +1364,6 @@ impl ComposerTemplate {
             }
             ComposerTemplate::AdmissionPolicyImplicitReceive => {
                 app.composer_instruction_kind = ComposerInstructionKind::AccountAdmissionPolicy;
-                let domain = "wonderland.universal".to_owned();
-                app.composer_admission_domain = domain.clone();
                 app.composer_admission_mode = AccountAdmissionMode::ImplicitReceive;
                 app.composer_admission_max_per_tx = "3".to_owned();
                 app.composer_admission_max_per_block = "10".to_owned();
@@ -1387,8 +1382,6 @@ impl ComposerTemplate {
             }
             ComposerTemplate::AdmissionPolicyExplicitOnly => {
                 app.composer_instruction_kind = ComposerInstructionKind::AccountAdmissionPolicy;
-                let domain = "wonderland.universal".to_owned();
-                app.composer_admission_domain = domain;
                 app.composer_admission_mode = AccountAdmissionMode::ExplicitOnly;
                 app.composer_admission_max_per_tx.clear();
                 app.composer_admission_max_per_block.clear();
@@ -1959,7 +1952,6 @@ struct MochiApp {
     composer_mintability_tokens: u32,
     composer_role_id: String,
     composer_role_account: String,
-    composer_admission_domain: String,
     composer_admission_mode: AccountAdmissionMode,
     composer_admission_max_per_tx: String,
     composer_admission_max_per_block: String,
@@ -2205,7 +2197,6 @@ impl MochiApp {
             composer_mintability_tokens: 1,
             composer_role_id: String::new(),
             composer_role_account: String::new(),
-            composer_admission_domain: String::new(),
             composer_admission_mode: AccountAdmissionMode::ImplicitReceive,
             composer_admission_max_per_tx: String::new(),
             composer_admission_max_per_block: String::new(),
@@ -2568,7 +2559,7 @@ impl MochiApp {
         running.first().cloned()
     }
     fn selected_quickstart_preset(&self, supervisor: &Supervisor) -> ProfilePreset {
-        parse_profile_preset(self.settings_profile_input.trim())
+        parse_profile_preset(&self.settings_profile_input)
             .or(supervisor.profile().preset)
             .unwrap_or(ProfilePreset::FourPeerBft)
     }
@@ -2590,9 +2581,8 @@ impl MochiApp {
         )
     }
     fn effective_profile_recipe(&self, supervisor: &Supervisor) -> String {
-        let trimmed = self.settings_profile_input.trim();
-        if !trimmed.is_empty() {
-            trimmed.to_owned()
+        if !self.settings_profile_input.trim().is_empty() {
+            self.settings_profile_input.clone()
         } else {
             Self::profile_recipe_value(supervisor.profile())
         }
@@ -4834,8 +4824,8 @@ impl MochiApp {
                     .clone()
                     .unwrap_or_else(default_config_path),
             });
-        let profile_override_input = self.settings_profile_input.trim();
-        let profile_override = if profile_override_input.is_empty() {
+        let profile_override_input = self.settings_profile_input.as_str();
+        let profile_override = if profile_override_input.trim().is_empty() {
             None
         } else {
             let parsed = parse_profile_override(profile_override_input)
@@ -6482,9 +6472,6 @@ impl MochiApp {
                 });
                 ui.add_space(8.0);
                 ui.small(match selected_preset {
-                    ProfilePreset::SinglePeer => {
-                        "The historical Single Peer name now launches the mandatory four-validator committee."
-                    }
                     ProfilePreset::FourPeerBft => {
                         "Four Peer BFT is the quorum playground: closer to validator reality for failover, committee, and consensus-path debugging."
                     }
@@ -7045,18 +7032,6 @@ impl MochiApp {
                                     }
                                 }
                             });
-                        ui.add_space(8.0);
-                        ui.label(RichText::new("DA reschedules").strong());
-                        Plot::new("mochi_da_reschedule_plot")
-                            .legend(Legend::default())
-                            .height(130.0)
-                            .show(ui, |plot_ui| {
-                                for alias in peer_aliases {
-                                    if let Some(points) = self.reschedule_plot_points(alias) {
-                                        plot_ui.line(Line::new(alias.clone(), points));
-                                    }
-                                }
-                            });
                     });
                 ui.add_space(8.0);
                 ui.label(RichText::new("Peer status").strong());
@@ -7209,9 +7184,6 @@ impl MochiApp {
     }
     fn view_change_plot_points(&self, alias: &str) -> Option<PlotPoints<'static>> {
         self.status_delta_plot_points(alias, |metrics| metrics.view_change_delta.into())
-    }
-    fn reschedule_plot_points(&self, alias: &str) -> Option<PlotPoints<'static>> {
-        self.status_delta_plot_points(alias, |metrics| metrics.da_reschedule_delta)
     }
     fn status_delta_plot_points<F>(&self, alias: &str, mut mapper: F) -> Option<PlotPoints<'static>>
     where
@@ -9215,16 +9187,7 @@ impl MochiApp {
         }
         Ok(amounts)
     }
-    fn parse_account_admission_policy(
-        &mut self,
-    ) -> Result<(String, AccountAdmissionPolicy), String> {
-        let domain_raw = self.composer_admission_domain.trim().to_owned();
-        self.composer_admission_domain = domain_raw.clone();
-        if domain_raw.is_empty() {
-            return Err("Domain identifier is required.".to_owned());
-        }
-        let domain_id = DomainId::parse_fully_qualified(&domain_raw)
-            .map_err(|err| format!("Invalid domain `{domain_raw}`: {err}"))?;
+    fn parse_account_admission_policy(&mut self) -> Result<AccountAdmissionPolicy, String> {
         let max_per_tx_raw = self.composer_admission_max_per_tx.trim().to_owned();
         self.composer_admission_max_per_tx = max_per_tx_raw.clone();
         let max_per_tx = Self::parse_optional_u32(&max_per_tx_raw, "Max per tx")?;
@@ -9292,7 +9255,7 @@ impl MochiApp {
             min_initial_amounts,
             default_role_on_create,
         };
-        Ok((domain_id.to_string(), policy))
+        Ok(policy)
     }
     fn summarize_private_key(key: &str) -> String {
         let trimmed = key.trim();
@@ -9498,10 +9461,7 @@ impl MochiApp {
             self.composer_instruction_kind,
             ComposerInstructionKind::AccountAdmissionPolicy
         ) {
-            ui.horizontal(|ui| {
-                ui.label("Domain ID");
-                ui.text_edit_singleline(&mut self.composer_admission_domain);
-            });
+            ui.small("This policy is a chain-global custom parameter and applies to every domain.");
             ui.horizontal(|ui| {
                 ui.label("Mode");
                 ComboBox::from_id_salt("mochi_composer_admission_mode")
@@ -10137,14 +10097,14 @@ impl MochiApp {
                 InstructionDraft::revoke_role_from_input(&role, &account)
             }
             ComposerInstructionKind::AccountAdmissionPolicy => {
-                let (domain, policy) = match self.parse_account_admission_policy() {
+                let policy = match self.parse_account_admission_policy() {
                     Ok(value) => value,
                     Err(err) => {
                         self.composer_error = Some(err);
                         return;
                     }
                 };
-                InstructionDraft::account_admission_policy_from_input(&domain, policy)
+                Ok(InstructionDraft::account_admission_policy(policy))
             }
             ComposerInstructionKind::MultisigPropose => {
                 let account = self.composer_multisig_account.trim().to_owned();
@@ -11716,9 +11676,6 @@ impl PeerStatusView {
         }
         if metrics.queue_delta != 0 {
             parts.push(format!("queue {:+}", metrics.queue_delta));
-        }
-        if metrics.da_reschedule_delta > 0 {
-            parts.push(format!("resched +{}", metrics.da_reschedule_delta));
         }
         if metrics.view_change_delta > 0 {
             parts.push(format!("view +{}", metrics.view_change_delta));

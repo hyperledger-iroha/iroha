@@ -861,14 +861,14 @@ async fn backpressured_busy_rejection_cannot_block_proxy_response_dispatch() {
         body: b"response-pump-remains-live".to_vec(),
     };
     let (tx, rx) = tokio::sync::oneshot::channel();
-    app.torii_proxy_pending.lock().await.insert(
+    let _waiter_token = super::register_torii_proxy_pending_waiter(
+        &app,
         (request_id, responder_peer_id.clone()),
-        PendingToriiProxyRequest {
-            sender: tx,
-            max_body_bytes: 1024,
-            strict_queue_plan_synced: false,
-        },
-    );
+        tx,
+        1024,
+        false,
+    )
+    .await;
     super::process_incoming_torii_proxy_response(
         &app,
         responder_peer_id,
@@ -2270,7 +2270,7 @@ async fn core_info_handlers_ok() {
         health
             .get("required_bridge_abi_version")
             .and_then(norito::json::Value::as_u64),
-        Some(22)
+        Some(23)
     );
     assert_eq!(
         health.get("ready").and_then(norito::json::Value::as_bool),

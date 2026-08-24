@@ -18,7 +18,7 @@ final class ToriiKagemushaReceiverLineageAuthTests: XCTestCase {
         #if canImport(Darwin)
         try requireNativeTestCapability(
             KagemushaRecursiveSpend.hasRequiredNativeSymbols,
-            "ABI-22 bridge is not linked in this test host"
+            "ABI-23 bridge is not linked in this test host"
         )
         let payment = try KagemushaPeerTransportTestFixtures.paymentRequest()
         let query = try KagemushaRecipientLineageQueryV2(
