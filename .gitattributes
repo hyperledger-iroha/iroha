@@ -1,4 +1,5 @@
 *.tmpl text eol=lf
+*.tsv text eol=lf
 
 # Byte-exact extracted fixtures preserve their source payload whitespace.
 crates/ivm/src/assets/text_v1/** -whitespace

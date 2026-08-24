@@ -2607,6 +2607,21 @@ fn certified_response_queue_refresh_retries_without_closing_output() {
     );
     assert!(!narrowing_retry.contains("close_output_for_restart()"));
 
+    assert_source_tokens_in_order(
+        response_path,
+        &[
+            "classify_selected_certified_response_priority(&cut)",
+            "SelectedCertifiedResponsePriorityV1::DefinitelyNonPriority",
+            "cut.into_ordinary_turn_cut()",
+            "SelectedCertifiedResponsePriorityV1::OrdinaryClaimed",
+            "capture_lifecycle_ingress_selector(cut)",
+            "self.drive_certified_fetch_ingress_selector(selector, runner)",
+            "SelectedCertifiedResponsePriorityV1::RecoveredClaimed",
+            "prepare_recovered_decision_fetch_from_selected_cut(cut)",
+            "self.drive_recovered_ingress_selector(selector, runner)",
+        ],
+    );
+
     let priority = source_region(
         response_path,
         "let selected_priority = match self",

@@ -1490,6 +1490,12 @@ impl<'source, 'proof, S: ZkAmsMkheRnsNativeSourceSnapshotV1>
         &self.linked
     }
 
+    /// Purpose-bound mutable forwarding for the source-packing replay.  No
+    /// other linked source/terminal state is split from this inventory owner.
+    pub(super) fn source_packing_snapshot_mut_v2(&mut self) -> &mut S {
+        self.linked.source_packing_snapshot_mut_v2()
+    }
+
     pub(super) const fn continuation(&self) -> &'proof [u8] {
         self.continuation
     }

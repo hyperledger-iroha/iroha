@@ -1,9 +1,10 @@
 //! Atomic verifier boundary for the replacement RNS-native composite proof.
 //!
-//! The boundary consumes one canonical envelope, its independently retained
-//! typed source layout/receipt, and the move-only result of the canonical
-//! transcript.  It exposes no downstream verifier trait and no partial stage
-//! receipt: all four sections must pass private first-party adapters before a
+//! The boundary consumes one canonical envelope, one move-only authenticated
+//! source-snapshot owner, and the move-only result of the canonical transcript.
+//! The source layout and structural receipt are derived only from that retained
+//! owner. It exposes no downstream verifier trait and no partial stage receipt:
+//! all four sections must pass private first-party adapters before a
 //! non-authorizing candidate receipt can be minted.
 //!
 //! None of the existing complete proof kernels can currently satisfy that
@@ -11,13 +12,15 @@
 //! now authenticates every qPCS tree, checks all queried opening/batch equations,
 //! all eighteen FRI folds, and the terminal-degree equation. The RLWE/source
 //! linkage is still unavailable. The terminal adapter now checks the complete
-//! 1,536-row cross-basis representation-equality kernel, but source mapping,
-//! terminal materialization, and packing remain unavailable. The cross-field
-//! implementation is fixed to the retired 38-limb shape,
-//! the global-lookup module does not verify a proof, and the authenticated
-//! zero-padding commitment inventory is not yet linked to the source, lookup,
-//! or terminal materialization. Production therefore fails closed with an
-//! explicit unavailable stage. Success here, once those adapters are replaced,
+//! 1,536-row cross-basis representation-equality kernel. A separate private
+//! source-to-terminal mapping prerequisite exists, but this boundary lacks the
+//! exact public-artifact inventory needed to construct its preceding RLWE/source
+//! preflight and that preflight proves no RLWE equality. The 40-limb
+//! cross-field prerequisites are not joined under one authenticated
+//! source/terminal owner, the global-lookup module does not verify a proof, and
+//! the authenticated zero-padding commitment inventory is not yet linked to
+//! the source, lookup, or terminal materialization. Production therefore fails
+//! closed with an explicit unavailable stage. Success here, once those adapters are replaced,
 //! will still be proof verification only and can never grant readiness or
 //! release authority.
 
@@ -37,7 +40,10 @@ use super::{
         ZkAmsMkheRnsNativeTerminalBridgeSectionV1, ZkAmsMkheRnsNativeZeroPaddingSectionV1,
         validate_composite_section_set_exact_v1,
     },
-    rns_native_source::{ZkAmsMkheRnsNativeSourceLayoutV1, ZkAmsMkheRnsNativeSourceReceiptV1},
+    rns_native_source::{
+        ZkAmsMkheRnsNativeSourceLayoutV1, ZkAmsMkheRnsNativeSourceReceiptV1,
+        ZkAmsMkheRnsNativeSourceSnapshotV1,
+    },
     rns_native_terminal_cross_basis::authenticate_rns_native_terminal_cross_basis_kernel_v1,
     rns_native_transcript::{
         ZK_AMS_MKHE_RNS_NATIVE_TRANSCRIPT_CHALLENGE_COUNT_V1, ZkAmsMkheRnsNativeChallengeSeedsV1,
@@ -114,7 +120,7 @@ const VERIFICATION_STAGE_ORDER_V1: [ZkAmsMkheRnsNativeVerificationStageV1;
 /// Failure at the atomic replacement-proof verification boundary.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ZkAmsMkheRnsNativeCompositeVerificationErrorV1 {
-    /// The independently retained source layout/receipt pair did not validate.
+    /// The retained source owner did not yield a valid layout/receipt pair.
     InvalidSourceContext,
     /// Envelope identities did not match the exact source/profile context.
     InvalidEnvelopeContext,
@@ -275,57 +281,78 @@ impl ZkAmsMkheRnsNativeCompositeCandidateReceiptV1 {
 
 /// Atomically verify one replacement composite proof.
 ///
-/// The envelope and transcript are consumed even on failure.  No partial
-/// stage result escapes this boundary. At present a valid cross-basis kernel
-/// still returns
+/// The envelope, source snapshot, and transcript are consumed even on failure.
+/// No partial stage result escapes this boundary. At present a valid cross-basis
+/// kernel still returns
 /// [`ZkAmsMkheRnsNativeCompositeVerificationErrorV1::StageUnavailable`]
-/// because its source mapping, terminal materialization, and packing seals are
-/// not implemented.
+/// because the private source-mapping prerequisite cannot be constructed from
+/// the public facts retained by this boundary and no RLWE-equality verifier is
+/// integrated.
 ///
 /// # Errors
 ///
 /// Rejects mismatched source/envelope/transcript contexts, malformed section
 /// structure, any unavailable proof stage, or any first-party stage failure.
-pub fn verify_zk_ams_mkhe_rns_native_composite_v1(
+pub fn verify_zk_ams_mkhe_rns_native_composite_v1<S>(
     envelope: ZkAmsMkheRnsNativeProofEnvelopeV1,
-    source_layout: ZkAmsMkheRnsNativeSourceLayoutV1,
-    source_receipt: ZkAmsMkheRnsNativeSourceReceiptV1,
+    source_snapshot: S,
     transcript: ZkAmsMkheRnsNativeChallengeSeedsV1,
 ) -> Result<
     ZkAmsMkheRnsNativeCompositeCandidateReceiptV1,
     ZkAmsMkheRnsNativeCompositeVerificationErrorV1,
-> {
+>
+where
+    S: ZkAmsMkheRnsNativeSourceSnapshotV1,
+{
     verify_with_first_party_authority_v1(
         envelope,
-        source_layout,
-        source_receipt,
+        source_snapshot,
         transcript,
         FirstPartyStageAuthorityV1::Production,
     )
 }
 
-fn verify_with_first_party_authority_v1(
+fn verify_with_first_party_authority_v1<S>(
     envelope: ZkAmsMkheRnsNativeProofEnvelopeV1,
-    source_layout: ZkAmsMkheRnsNativeSourceLayoutV1,
-    source_receipt: ZkAmsMkheRnsNativeSourceReceiptV1,
+    source_snapshot: S,
     transcript: ZkAmsMkheRnsNativeChallengeSeedsV1,
     authority: FirstPartyStageAuthorityV1,
 ) -> Result<
     ZkAmsMkheRnsNativeCompositeCandidateReceiptV1,
     ZkAmsMkheRnsNativeCompositeVerificationErrorV1,
-> {
-    ContextCheckedV1::new(
-        envelope,
-        source_layout,
-        source_receipt,
-        transcript,
-        authority,
-    )?
-    .verify_terminal_bridge_v1()?
-    .verify_rns_relation_qpcs_v1()?
-    .verify_cross_field_global_lookup_v1()?
-    .verify_zero_padding_v1()?
-    .finish_v1()
+>
+where
+    S: ZkAmsMkheRnsNativeSourceSnapshotV1,
+{
+    let result = (|| {
+        let source_layout = source_snapshot.layout();
+        source_layout
+            .validate()
+            .map_err(|_| ZkAmsMkheRnsNativeCompositeVerificationErrorV1::InvalidSourceContext)?;
+        let source_receipt = source_snapshot
+            .structural_receipt()
+            .map_err(|_| ZkAmsMkheRnsNativeCompositeVerificationErrorV1::InvalidSourceContext)?;
+        source_receipt
+            .validate(source_layout)
+            .map_err(|_| ZkAmsMkheRnsNativeCompositeVerificationErrorV1::InvalidSourceContext)?;
+
+        ContextCheckedV1::new(
+            envelope,
+            source_layout,
+            source_receipt,
+            transcript,
+            authority,
+        )?
+        .verify_terminal_bridge_v1()?
+        .verify_rns_relation_qpcs_v1()?
+        .verify_cross_field_global_lookup_v1()?
+        .verify_zero_padding_v1()?
+        .finish_v1()
+    })();
+    // Retain the actual snapshot owner until the complete atomic result has
+    // been materialized; no detached layout/receipt pair can outlive it here.
+    drop(source_snapshot);
+    result
 }
 
 struct CandidateAxesV1 {
@@ -537,9 +564,10 @@ fn verify_terminal_hyrax_bp_bridge_production_v1(
             },
         )?;
     // The kernel proves only representation equality for the detached ordered
-    // point rows. The source-to-Hyrax mapping, terminal materialization, and
-    // production source/packing seals remain absent, so the atomic stage may
-    // not pass and no partial token escapes.
+    // point rows. A private source-to-Hyrax mapping prerequisite exists, but
+    // this boundary cannot construct its preceding RLWE/source stage from the
+    // public facts it owns. The atomic stage may not pass and no partial token
+    // escapes.
     Err(
         ZkAmsMkheRnsNativeCompositeVerificationErrorV1::StageUnavailable(
             ZkAmsMkheRnsNativeVerificationStageV1::TerminalHyraxBpBridge,
@@ -590,8 +618,9 @@ fn verify_cross_field_global_lookup_production_v1(
     _descriptor: ZkAmsMkheRnsNativeProofSectionDescriptorV1,
     _section: &[u8],
 ) -> Result<(), ZkAmsMkheRnsNativeCompositeVerificationErrorV1> {
-    // The cross-field prerequisite is fixed to 38 limbs and explicitly lacks
-    // an instantiated global-lookup verifier and production authority.
+    // The 40-limb cross-field prerequisites are not joined under one
+    // authenticated source/terminal owner and explicitly lack an instantiated
+    // global-lookup verifier and production authority.
     Err(
         ZkAmsMkheRnsNativeCompositeVerificationErrorV1::StageUnavailable(
             ZkAmsMkheRnsNativeVerificationStageV1::CrossFieldGlobalLookup,
@@ -622,8 +651,9 @@ fn verify_zero_padding_production_v1(
             ZkAmsMkheRnsNativeVerificationStageV1::ZeroPadding,
         )
     })?;
-    // The committed padding inventory is authenticated as zero, but no
-    // source/global-lookup/terminal owner yet proves that these are the actual
+    // The committed padding inventory is authenticated as zero. Its private
+    // source/terminal linkage prerequisite is not reachable from this
+    // boundary, and no global-lookup verifier proves that these are the actual
     // governed padding lanes. No partial prerequisite escapes this adapter.
     Err(
         ZkAmsMkheRnsNativeCompositeVerificationErrorV1::StageUnavailable(

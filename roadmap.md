@@ -1,6 +1,6 @@
 # Roadmap
 
-Last updated: 2026-08-23
+Last updated: 2026-08-24
 
 This roadmap is the public, high-level view of current Hyperledger Iroha work.
 Completed history lives in [`status.md`](./status.md).
@@ -483,23 +483,26 @@ after every registry, coordinator, executor, service, and worker
 acknowledgement. Superseded generic WAL, storage-recovery, dedicated parked-
 completion, and coordinator-to-runtime ordinal adoption surfaces are absent.
 
-Focused mutable-tree evidence is recorded in `status.md`: the dedicated
-durable-Validate suite is 5/5, the Verus inventory is 29/29, and the exact
-final-source enlarged-stack coordinator aggregate is 462/462. The production
-nine-row Ready-Validate matrix, named lifecycle regressions, both mutation
-corridors, exact `iroha_core` test-target compile, reviewed include closure,
-and legacy-codec guard are green. Current merge reconciliation ratcheted five
-decreased-file baselines down and leaves 18 file-budget findings, including
-merged-tree Sumeragi growth; split work remains outstanding, and allowances
-must not increase. The include manifest contains 66 parents and 398 entries.
-The exact proof-ledger checker has only the separately
-recorded task-start Cargo.lock mismatch outstanding. Still outstanding are
-strict four-validator, current-source release, and broader workspace/Clippy
-evidence. `Cargo.lock` changed concurrently
+Exact checkpoint evidence is recorded in `status.md`. The final source-only
+Sumeragi audit matched the frozen 1,745-path formal cone at SHA-256
+`6078c1e5481ffa9f03e08e8510f4879fb15cb750fcda096fe693b0ac2a5be3e1`
+and all 15/15 combined postimages. Raw source evaluation completed 52/52 with
+zero failures, compaction passed 4/4, the mirror, release/source-seal,
+authoritative production-fidelity, and same-round filters passed, all 18/18
+item seals matched, and all six tamper controls were detected. The exact
+merged-Sumeragi no-run build and 55 focused tests are checkpoint evidence only:
+unrelated Halo/RNS inputs changed later, so they do not qualify the final whole
+tree. The earlier 5/5, 29/29, 462/462, 66-parent/398-entry, and file-budget
+figures are retained as mutable-tree history, not final-postimage evidence.
+Strict four-validator, clean signed current-source release, fresh TLAPS and
+pinned Verus, external signing, and broader workspace/Clippy evidence remain
+outstanding. During the earlier Sumeragi task, `Cargo.lock` changed concurrently
 from task-start SHA-256 `0ddb3f3938cf32035371317100674cd1601c3cb41232237f7a7d28b3aeab6222`
 to `c90b3659d6cb44cd1d6f9e75e7b98aacc0d30bbe23041d4e6e109e8a206fa76b`;
-the Sumeragi task did not edit it, but no byte-identity or old-lock validation
-claim applies to the current candidate.
+that task did not edit it. For the present hard-reset candidate, the latter
+311,172-byte lockfile is the admitted baseline and remains byte-identical across
+HEAD, `MERGE_HEAD`, index, and worktree at Git blob
+`5d04cef722cb695dd636110be01ff8de52ae7b45`; the older hash is historical only.
 
 The outstanding revision-4 work includes:
 
@@ -527,11 +530,20 @@ The outstanding revision-4 work includes:
   genesis-handoff and shard 16 successor exact-recovery promotion logs. Static
   reconstruction, theorem-cap, façade-purity, and unique-provider checks are
   complete, but do not replace backend proof evidence.
-- Execute the repaired mandatory four-peer autoscale lifecycle corridor with
-  release mode enabled. It must prove exact authenticated Hold/Drop evidence on
-  every non-sender receiver, an atomic empty drain fence before each restart,
-  post-restart catch-up, and both lane-incarnation retirement cycles. Also run
-  the focused configuration regression that rejects the retired
+- No current-candidate four-peer network test has run. The earlier `be874`
+  prebuild failed with exit 101 after a transient conflict marker. Two later
+  guarded builds completed, but their external binaries were rejected before
+  admission: the 831-second, 813,873,856-byte
+  `08aba587d01d095c20256690d9b3be5da674defffa9be68d33287b68f2e025dd`
+  build lost its post-build seal to transitive Halo drift, and the 766-second,
+  813,737,616-byte
+  `74d87daa1385a248cb777d4a980ce81b68eb6305fcaf9672bab9062688dc59ea`
+  build observed changes in nine RNS/Halo inputs. Neither binary entered the
+  repository and both network runs were skipped. After at least five minutes
+  of stable relevant source and a quiet Cargo environment, build again and
+  execute the mandatory four-peer autoscale lifecycle corridor, including exact
+  authenticated Hold/Drop evidence, empty drain fences, restart catch-up, both
+  lane-incarnation retirement cycles, and rejection of the retired
   `[sumeragi.debug.rbc]` table.
 - Execute the migrated realistic localnet outage/restart/catch-up scenario and
   the remaining revision-4 queue/baseline fixtures. Then complete the separate
@@ -750,20 +762,17 @@ The outstanding revision-4 work includes:
   the payload-free Fetch `Advanced` plus body-frame Store successor. The
   post-fsync tail is assertion-only and retires the request, ingress, and
   worker index before disarming the output guard. Cold open reconstructs the
-  dedicated live Store carrier; a durable validation marker can advance that
-  exact two-row crash prefix into the existing Apply lineage, while exact
-  collision and stutter tests close both restart cases. The production lifecycle
-  runner now drives this activation path. Decision Apply consumes
-  the sealed Decision-Fetch
-  authority and exact semantically revalidated BodyFrame cut, drives the fixed
-  reducer body sequence, publishes or exact-stutters the complete four-row
-  LedgerV1 successor, installs the final live Apply carrier, and reconstructs
-  that carrier during storage-only restart. Its opaque bounded-I/O attestation
-  now drives a dedicated worker command and guarded result without
-  manufacturing a runtime ownership sidecar. Applied completion rejoins the
-  exact claimed carrier and commits Kura -> LedgerV1 ->
-  coordinator/registry/adapter/executor -> worker acknowledgement in durable
-  order. The typed missing-sidecar retry now republishes only the unchanged
+  dedicated Store owner, while body-store open separately defers the exact
+  validated marker and keeps pending-tip startup storage-only. The production
+  pending-tip driver consumes each local Fetch/Store/Validate stage through its
+  restricted stage consumer. Successful Validate atomically commits the direct
+  reducer update and emits its sole predecessor-derived move-only Apply child;
+  the recovery step advances to Apply before releasing that child to executor
+  dispatch. No recovered pending-Kura Apply carrier, generic pending-specific
+  Apply settlement path, Apply-only gate, compatibility ordinal accessor, or
+  runtime ownership sidecar remains. Applied completion commits Kura →
+  LedgerV1 → coordinator/registry/adapter/executor → worker acknowledgement in
+  durable order. The typed missing-sidecar retry republishes only the unchanged
   task under its existing dedicated key while both fail-stop guards remain
   armed. Settlement first registers the exact round/subject/reference in the
   lane recovery journal. Its stable keyed owner preserves each decided carrier
@@ -1412,17 +1421,17 @@ execute the separate mandatory revision-4 TLC/mutation corridor, and validate
 the signed receipts and completion marker against that same commit and ledger
 digest.
 
-On the current mutable tree, the independent static release inventory contract
-contains 84 legs, 864/864 production tests across 43 modules, 522/522 G-UNIT
-rows, and four mandatory four-peer gates. The grouped fixture SHA-256 is
+An earlier mutable-tree static release inventory contained 84 legs, 864/864
+production tests across 43 modules, 522/522 G-UNIT rows, and four mandatory
+four-peer gates. Its grouped fixture SHA-256 was
 `e4fb62addba3c3b8aecdbff55840e21620c770ab96d346ca55b156cf0239942b`.
-The grouped SDK closure is 1,400 paths at
+Its grouped SDK and diagnostics closures contained 1,400 and 1,402 paths at
 `fdc4c3fb9192277bc6a80018ecb62ed096f12cb41a4c40bde0681ee8f6478577`,
-and diagnostics is 1,402 paths at
+and
 `f2e7d3b79dd311b93f9ade26a846940dcd12b636c551a70800f63817a10bfa4c`.
-The newly declared Java typed-intent path remains untracked, so the exact
-tracked-source gate still awaits authorized staging. These are mutable-tree
-source inventories, not a sealed receipt.
+Those values remain mutable-tree history, not a sealed receipt. The Java
+`TransactionAdmissionIntent.java` path is now tracked, so the earlier
+untracked-source blocker is closed.
 
 Both reproduced clean-`d24` consensus root causes are closed in source and
 their three focused regressions pass. The bounded Kura-backed tag-21 QueuePlan
@@ -25287,10 +25296,20 @@ signed ancestor-linked solid-block header proof,
   (`Mac13,2`, arm64) and AWS Graviton3 `c7g.4xlarge`. The general Kotodama
   `<=5%` comparison is not a substitute for either Numeric V1 calibration
   archive, and neither release-profile archive is currently available.
-- The current C# Numeric V1 and contract-manifest SDK gate is complete on
-  .NET SDK 8.0.419 (`80/80`); it is no longer an environment blocker. The
-  remaining release gates are the controlled performance/calibration evidence,
-  current-source native builds, and the cross-platform SDK qualification above.
+- Current-source Numeric filters pass in Rust 30/30, JavaScript 7/7, Python
+  Numeric-plus-Quantity 25/25, Java 4/4, and Kotlin 4/4. SDK admission/manifest
+  gates pass in JavaScript 8/8, Python 185/185, Java 10 checks, and Kotlin
+  11/11; generated syntax freshness covers 18 files. The golden-fixture
+  SHA-256 is
+  `b5f11fd22856f69165a0c2a6906cea5beeaa46a1aee6c322ed18abc0acefee72`.
+- Swift's direct current-source Numeric harness passes 6/6, but official
+  SwiftPM/native-framework qualification remains blocked by checked-in
+  NoritoBridge ABI21 versus package ABI22. The guarded ABI22 build was rejected
+  after relevant source drift and admitted no artifact.
+- C# cached-current Release runtime checks pass 4/4 and 13/13. Fresh compilation
+  remains blocked because `global.json` pins .NET SDK 8.0.419 while this host
+  provides SDK 8.0.130 and runtime 8.0.30. The earlier pinned 80/80 result is
+  historical and does not qualify the current candidate.
 
 ## Privacy, ZK, and FHE
 

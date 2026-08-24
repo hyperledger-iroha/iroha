@@ -1790,22 +1790,19 @@ fn claimed_relation_surface_is_atomic_move_only_and_source_ordered() {
     assert!(transition.contains("        mut self,"));
     assert!(!transition.contains("&mut self"));
     assert!(!transition.contains("ZkAmsMkheRnsNativeCrossFieldBoundTranscriptV1"));
+    let terminal = transition
+        .find(".bind_provisional_terminal_chronology_v1(roots)")
+        .expect("atomic terminal chronology");
     let split = transition
-        .find("roots.into_cross_field_claim_v1()")
-        .expect("typed terminal split");
-    let claim = transition
-        .find(".bind_claimed_cross_field_root_v1(claim)")
-        .expect("typed claim bind");
-    let successors = transition
-        .find(".bind_remaining_terminal_roots_v1(remaining_roots)")
-        .expect("ordered successor bind");
+        .find(".into_cross_field_obligation_and_global_pending_v1()")
+        .expect("typed cross-field obligation split");
     let obligation = transition
         .find("self.cross_field_root_equality_obligation = Some(equality_obligation)")
         .expect("retained equality obligation");
     let owner = transition
         .find("Ok(RnsNativeCrossFieldRlweClaimedRelationV1")
         .expect("atomic claimed-relation owner");
-    assert!(split < claim && claim < successors && successors < obligation && obligation < owner);
+    assert!(terminal < split && split < obligation && obligation < owner);
 
     let legacy = source
         .find("pub(super) fn bind_claimed_cross_field_root_v1(")
@@ -1952,7 +1949,7 @@ fn membership_backed_point_projection_has_exact_boundary_owners_and_no_join() {
         )
         .expect("provisional q-mask inventory projection")
         .1
-        .split_once("/// Ephemeral adapter")
+        .split_once("/// Private authenticated-inventory projection")
         .expect("provisional q-mask inventory projection boundary")
         .0;
     for exact_projection_step in [
@@ -1979,7 +1976,11 @@ fn membership_backed_point_projection_has_exact_boundary_owners_and_no_join() {
             "provisional q-mask owner gained authority: {forbidden_authority}"
         );
     }
-    let normalized_source = source.split_whitespace().collect::<Vec<_>>().join(" ");
+    let normalized_source = source
+        .replace("///", "")
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ");
     for forbidden_impl in [
         "impl RnsNativeCrossFieldAuthenticatedPublicPointSourceV1 for RnsNativePreQpcsQMaskInventoryPreflightV1",
         "impl RnsNativeCrossFieldAuthoritativeSourceV1 for RnsNativePreQpcsQMaskInventoryPreflightV1",
@@ -2005,7 +2006,7 @@ fn membership_backed_point_projection_has_exact_boundary_owners_and_no_join() {
         .split_once("impl<S, N> RnsNativeCrossFieldAuthenticatedPublicPointSourceV1")
         .expect("public-point membership projection")
         .1
-        .split_once("/// Prover extension")
+        .split_once("/// The two opening owners attached to each direct relation")
         .expect("public-point projection boundary")
         .0;
     for exact_owner in [
@@ -2052,6 +2053,57 @@ fn membership_backed_point_projection_has_exact_boundary_owners_and_no_join() {
         assert!(!SINGLE_OWNER_NUMERIC_MEMBERSHIP_CHRONOLOGY_AVAILABLE_V1);
         assert!(!VERIFIER_NUMERIC_MEMBERSHIP_JOIN_AVAILABLE_V1);
     }
+}
+
+#[test]
+fn authenticated_difference_low_alias_is_borrowed_then_retained_for_source_packing() {
+    let source = include_str!("rns_native_cross_field_rlwe_direct.rs");
+    let adapter = source
+        .split_once("struct RnsNativeMembershipBackedDirectSourceV1")
+        .expect("membership-backed direct adapter")
+        .1
+        .split_once("impl<S, N> RnsNativeCrossFieldNumericCursorV1")
+        .expect("membership-backed direct adapter boundary")
+        .0;
+    assert!(
+        adapter.contains("existing_radix: &'owner RnsNativeExistingRadixDirectAliasV1<'proof>")
+    );
+
+    let claimed = source
+        .split_once("pub(super) fn verify_rns_native_cross_field_rlwe_claimed_with_alias_v2")
+        .expect("claimed direct verifier")
+        .1
+        .split_once("#[cfg(test)]")
+        .expect("claimed direct verifier boundary")
+        .0;
+    let borrowed = claimed
+        .find("existing_radix: &existing_radix")
+        .expect("borrowed direct alias");
+    let retained = claimed
+        .find("existing_radix,")
+        .expect("retained direct alias");
+    assert!(borrowed < retained);
+    assert!(!claimed.contains("existing_radix.clone("));
+    assert!(!claimed.contains("to_vec("));
+
+    let all_roots = source
+        .split_once("pub(super) struct RnsNativeCrossFieldRlweAllRootsVerifiedV2")
+        .expect("all-roots owner")
+        .1
+        .split_once("impl<'source, 'proof, S: ZkAmsMkheRnsNativeSourceSnapshotV1>")
+        .expect("all-roots owner boundary")
+        .0;
+    assert!(all_roots.contains("existing_radix: RnsNativeExistingRadixDirectAliasV1<'proof>"));
+    let projection = source
+        .split_once("pub(super) fn source_packing_difference_low_commitment_v2")
+        .expect("purpose-bound D-low projection")
+        .1
+        .split_once("/// Borrow the exact live source snapshot")
+        .expect("purpose-bound D-low projection boundary")
+        .0;
+    assert!(projection.contains("difference_low_commitment_v1(group, digit)"));
+    assert!(!projection.contains("inventory"));
+    assert!(!projection.contains("from_raw"));
 }
 
 #[test]
@@ -2369,6 +2421,11 @@ fn source_and_transcript_privacy_invariants_are_source_settled() {
             "post-qPCS axis leaked into q-mask root: {post_qpcs_axis}"
         );
     }
+    let normalized_source = source
+        .replace("///", "")
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ");
     for required_inventory_no_go in [
         "current inventory `prior_context_digest_v1` and canonical inventory root",
         "cross-field, global-lookup, and zero-padding roots",
@@ -2378,7 +2435,7 @@ fn source_and_transcript_privacy_invariants_are_source_settled() {
         "current-inventory-prior-context-and-canonical-root-must-not-be-adapted",
     ] {
         assert!(
-            source.contains(required_inventory_no_go),
+            normalized_source.contains(required_inventory_no_go),
             "missing current-inventory NO-GO contract: {required_inventory_no_go}"
         );
     }

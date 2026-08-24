@@ -378,8 +378,8 @@ pub(super) const STATE_TERMINAL_CANDIDATE_BLOCKERS_V2: [StateTerminalCandidateBl
     StateTerminalCandidateBlockerV2::VerifiedReceiptUnavailable,
 ];
 
-pub(super) mod sealed {
-    pub(in crate::zk::offline_cash_v2) trait Sealed {}
+mod sealed {
+    pub trait Sealed {}
 }
 
 /// Marker implemented only by uninhabited terminal adapters in this module.

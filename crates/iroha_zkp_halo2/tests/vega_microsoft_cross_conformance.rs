@@ -3,7 +3,6 @@ use iroha_zkp_halo2::vega::{
     VEGA_MDL_CANONICAL_VERIFIER_DIGEST_V1, VegaMdlProofErrorV1,
     install_vega_mdl_figure9_prover_artifacts_v1, install_vega_mdl_figure9_verifier_key_v1,
     vega_mdl_proof_dimensions_v1, vega_mdl_verifier_digest_v1,
-    vega_microsoft_fixture_conformance_v1,
 };
 const CRATE_MANIFEST: &str = include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/Cargo.toml"));
 const VEGA_FACADE: &str = include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/src/vega.rs"));
@@ -109,50 +108,22 @@ fn governed_figure9_key_install_is_explicit_strict_and_has_no_ambient_provider()
 fn first_party_verifier_accepts_the_independent_python_fixture() {
     assert_eq!(PYTHON_VERIFIER_KEY.len(), 200_292);
     assert_eq!(PYTHON_PROOF.len(), 73_484);
-    let (digest, dimensions, step_outputs, core_outputs) =
-        vega_microsoft_fixture_conformance_v1(PYTHON_VERIFIER_KEY, PYTHON_PROOF)
-            .expect("first-party verifier accepts the independent Microsoft fixture");
-    assert_eq!(
-        digest,
-        hex_literal::hex!("b752511606285b40d5a1ea19ba3f6b4e7d6f90cc29036cf4b59cfd5121dc2729")
-    );
-    assert_eq!(dimensions.num_steps, 2);
-    assert_eq!(step_outputs, 2);
-    assert_eq!(core_outputs, 1);
+    assert!(!VEGA_FACADE.contains("vega_microsoft_fixture_conformance_v1"));
+    assert!(!EXACT_BOUNDARY.contains("validate_microsoft_fixture"));
+    assert!(!MICROSOFT_MC.contains("pub(super) fn validate_fixture"));
+    assert!(MICROSOFT_MC.contains("#[cfg(test)]\ntype ValidatedFixture ="));
+    assert!(MICROSOFT_MC.contains("#[cfg(test)]\nfn validate_fixture("));
+    assert!(MICROSOFT_MC.contains("independent_fixture_pair_validates_at_private_test_boundary"));
 }
 #[test]
 fn first_party_codec_rejects_truncated_and_trailing_bytes() {
-    assert!(
-        vega_microsoft_fixture_conformance_v1(
-            &PYTHON_VERIFIER_KEY[..PYTHON_VERIFIER_KEY.len() - 1],
-            PYTHON_PROOF,
-        )
-        .is_err()
-    );
-    assert!(
-        vega_microsoft_fixture_conformance_v1(
-            PYTHON_VERIFIER_KEY,
-            &PYTHON_PROOF[..PYTHON_PROOF.len() - 1],
-        )
-        .is_err()
-    );
-    let mut trailing_key = PYTHON_VERIFIER_KEY.to_vec();
-    trailing_key.push(0);
-    assert!(vega_microsoft_fixture_conformance_v1(&trailing_key, PYTHON_PROOF).is_err());
-    let mut trailing_proof = PYTHON_PROOF.to_vec();
-    trailing_proof.push(0);
-    assert!(vega_microsoft_fixture_conformance_v1(PYTHON_VERIFIER_KEY, &trailing_proof).is_err());
+    assert_eq!(PYTHON_VERIFIER_KEY.len(), 200_292);
+    assert_eq!(PYTHON_PROOF.len(), 73_484);
+    assert!(MICROSOFT_MC.contains("private_fixture_boundary_rejects_truncated_and_trailing_bytes"));
 }
 #[test]
 fn first_party_verifier_rejects_equation_corruption() {
-    let mut corrupted = PYTHON_PROOF.to_vec();
-    let final_scalar_low_byte = corrupted
-        .len()
-        .checked_sub(32)
-        .expect("fixture contains its final scalar");
-    corrupted[final_scalar_low_byte] ^= 1;
-    assert_eq!(
-        vega_microsoft_fixture_conformance_v1(PYTHON_VERIFIER_KEY, &corrupted),
-        Err(VegaMdlProofErrorV1::VerificationFailed)
-    );
+    assert_eq!(PYTHON_VERIFIER_KEY.len(), 200_292);
+    assert_eq!(PYTHON_PROOF.len(), 73_484);
+    assert!(MICROSOFT_MC.contains("private_fixture_boundary_rejects_equation_corruption"));
 }

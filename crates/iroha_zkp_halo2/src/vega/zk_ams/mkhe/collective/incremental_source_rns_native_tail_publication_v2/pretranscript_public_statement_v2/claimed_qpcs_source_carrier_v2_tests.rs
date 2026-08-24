@@ -59,7 +59,11 @@ fn local_ledger_explicitly_excludes_existing_subtransition_costs() {
         .1
         .split_once("pub(super) struct RnsNativeClaimedQpcsSourceCarrierLocalResourceLedgerV2")
         .expect("ledger declaration boundary")
-        .0;
+        .0
+        .replace("///", "")
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ");
     assert!(ledger_docs.contains("not end-to-end accounting"));
     assert!(ledger_docs.contains("3,520-object/200-evaluation public read"));
     assert!(ledger_docs.contains("complete qPCS/FRI work"));
@@ -225,7 +229,7 @@ fn retained_owners_are_move_only_opaque_and_do_not_downgrade_chronology() {
         .split_once("pub(super) struct RnsNativeQpcsSchedulelessClaimedSourceV1")
         .expect("opaque scheduleless source")
         .1
-        .split_once("impl<S: ZkAmsMkheRnsNativeSourceSnapshotV1>")
+        .split_once("}\n\n/// One move-only owner joining")
         .expect("scheduleless source boundary")
         .0;
     assert_eq!(scheduleless.matches("relation_schedule:").count(), 1);
@@ -294,7 +298,7 @@ fn numeric_authority_moves_once_and_only_the_parent_sidecar_implements_the_curso
     let order = token_cursor
         .find("limb != relation / REPETITIONS_V2")
         .unwrap();
-    let public = token_cursor.find("self.public_evaluations").unwrap();
+    let public = token_cursor.find(".public_evaluations").unwrap();
     let commit = token_cursor.find("self.poisoned = false").unwrap();
     assert!(poison < order && order < public && public < commit);
 
@@ -344,6 +348,7 @@ fn exact_stage_wrapper_has_only_purpose_specific_forward_transitions() {
         "verify_global_inverse_product_v2",
         "verify_global_membership_v2",
         "verify_direct_global_membership_handoff_v2",
+        "verify_source_packing_same_opening_v2",
     ] {
         assert!(source.contains(transition), "missing {transition}");
     }

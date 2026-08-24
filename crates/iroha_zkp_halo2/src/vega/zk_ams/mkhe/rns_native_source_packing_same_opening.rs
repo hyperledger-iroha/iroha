@@ -39,15 +39,14 @@
 //! requested from the predecessor and admitted only after the equation
 //! verifies.
 //!
-//! Production remains unavailable.  No live owner currently retains the 344
-//! reconstructed `D` masks plus 1,032 signed masks, and the authenticated source
-//! snapshot has no purpose-bound mutable replay path through the future
-//! combined direct-plus-membership predecessor.  The generic traits below are
-//! testable contracts, not evidence that either production owner exists.  This
-//! child grants no composite, readiness, receipt, or release authority.
+//! The verifier-side owned join now borrows the authenticated source snapshot
+//! and exact point inventory directly from the combined direct-plus-membership
+//! predecessor.  Live release integration and the prover's 344 reconstructed
+//! `D` masks plus 1,032 signed masks remain unavailable.  This child grants no
+//! composite, readiness, receipt, or release authority.
 #![allow(
     dead_code,
-    reason = "the private same-opening child remains fail-closed until authenticated replay and derived-mask owners exist"
+    reason = "the private same-opening child remains fail-closed until live integration, derived-mask ownership, and qualification evidence exist"
 )]
 
 use core::{convert::Infallible, fmt};
@@ -96,27 +95,28 @@ const FUTURE_DIRECT_MEMBERSHIP_PARENT_CAP_BYTES_V1: usize =
 pub(super) const RNS_NATIVE_SOURCE_PACKING_SAME_OPENING_SUCCESSOR_MAX_BYTES_V1: usize =
     FUTURE_DIRECT_MEMBERSHIP_PARENT_CAP_BYTES_V1 - OWNED_WIRE_BYTES_V1;
 
-const RECORDS_V1: usize = 43;
-const GROUPS_PER_RECORD_V1: usize = 8;
-const DIFFERENCE_GROUPS_V1: usize = RECORDS_V1 * GROUPS_PER_RECORD_V1;
-const SIGNED_ROLES_V1: usize = 3;
-const PLANES_PER_SIGNED_ROLE_V1: usize = 8;
-const SIGNED_OWNERS_V1: usize = RECORDS_V1 * SIGNED_ROLES_V1 * PLANES_PER_SIGNED_ROLE_V1;
-const OWNERS_V1: usize = DIFFERENCE_GROUPS_V1 + SIGNED_OWNERS_V1;
-const VECTOR_COORDINATES_V1: usize = 1 << 14;
-const RADIX_LOW_DIGITS_V1: usize = 17;
+pub(super) const RECORDS_V1: usize = 43;
+pub(super) const GROUPS_PER_RECORD_V1: usize = 8;
+pub(super) const DIFFERENCE_GROUPS_V1: usize = RECORDS_V1 * GROUPS_PER_RECORD_V1;
+pub(super) const SIGNED_ROLES_V1: usize = 3;
+pub(super) const PLANES_PER_SIGNED_ROLE_V1: usize = 8;
+pub(super) const SIGNED_OWNERS_V1: usize = RECORDS_V1 * SIGNED_ROLES_V1 * PLANES_PER_SIGNED_ROLE_V1;
+pub(super) const OWNERS_V1: usize = DIFFERENCE_GROUPS_V1 + SIGNED_OWNERS_V1;
+pub(super) const VECTOR_COORDINATES_V1: usize = 1 << 14;
+pub(super) const RADIX_LOW_DIGITS_V1: usize = 17;
 const RADIX_BASE_V1: u64 = 1 << 15;
-const MAIN_SOURCE_BLOCK_BYTES_V1: usize = 8_192;
-const MAIN_SOURCE_BLOCKS_PER_RECORD_V1: usize = 896;
-const DIFFERENCE_BLOCKS_PER_LOCAL_GROUP_V1: usize = 64;
-const DIFFERENCE_SCALAR_BYTES_V1: usize = 32;
-const DIFFERENCE_SCALARS_PER_BLOCK_V1: usize =
+pub(super) const MAIN_SOURCE_BLOCK_BYTES_V1: usize = 8_192;
+pub(super) const MAIN_SOURCE_BLOCKS_PER_RECORD_V1: usize = 896;
+pub(super) const DIFFERENCE_BLOCKS_PER_LOCAL_GROUP_V1: usize = 64;
+pub(super) const DIFFERENCE_SCALAR_BYTES_V1: usize = 32;
+pub(super) const DIFFERENCE_SCALARS_PER_BLOCK_V1: usize =
     MAIN_SOURCE_BLOCK_BYTES_V1 / DIFFERENCE_SCALAR_BYTES_V1;
-const SIGNED_FIRST_BLOCK_V1: usize = 512;
-const SIGNED_BLOCKS_PER_ROLE_V1: usize = 128;
-const SIGNED_BLOCKS_PER_PLANE_V1: usize = 16;
-const SIGNED_SCALAR_BYTES_V1: usize = 8;
-const SIGNED_SCALARS_PER_BLOCK_V1: usize = MAIN_SOURCE_BLOCK_BYTES_V1 / SIGNED_SCALAR_BYTES_V1;
+pub(super) const SIGNED_FIRST_BLOCK_V1: usize = 512;
+pub(super) const SIGNED_BLOCKS_PER_ROLE_V1: usize = 128;
+pub(super) const SIGNED_BLOCKS_PER_PLANE_V1: usize = 16;
+pub(super) const SIGNED_SCALAR_BYTES_V1: usize = 8;
+pub(super) const SIGNED_SCALARS_PER_BLOCK_V1: usize =
+    MAIN_SOURCE_BLOCK_BYTES_V1 / SIGNED_SCALAR_BYTES_V1;
 const MAX_CHALLENGE_ATTEMPTS_V1: u8 = 128;
 const ERROR_POLYNOMIAL_DEGREE_V1: usize = OWNERS_V1 - 1;
 
@@ -155,7 +155,7 @@ const SOURCE_LANGUAGE_V1: &[u8] = b"move-only-authoritative-replay-source;provid
 const MASK_LANGUAGE_V1: &[u8] = b"move-only-sequential-1376-mask-provider;provider-replay-schedule-is-a-claim-checked-against-the-internally-derived-canonical-digest-retained-by-the-prepared-relation;first-344-masks-are-derived-r_D[g_abs]=sum(h=0..16,B^h*r_Dlow[g_abs,h])+B^17*r_bD[g_abs];next-1032-are-signed-r/e0/e1-masks-in-record-role-plane-order;caller-zeroizing-slot-exists-before-every-fallible-take;provider-finish-consumes-owner;no-production-owner-currently-exists";
 const TRANSCRIPT_LANGUAGE_V1: &[u8] = b"all-canonical-safe-source-points-and-digests-and-typed-successor-independent-safe-core-axes-fixed-before-tau;canonical-replay-schedule=H(fixed-owner-geometry,canonical-safe-source-axes,owner-order);safe-core-order=terminal-predecessor-context-binding,candidate-pre-direct-inventory-context,candidate-pre-direct-inventory-root,existing-radix-candidate-root,direct-core-safe-digest;pre-challenge=H(manifest,source-context-including-canonical-replay-schedule,actual-point-root,safe-core-in-declared-order);exclude-source-statement-anchor,source-final-aggregation-schedule,all-current-inventory-and-chain-envelope-bindings,combined-outer-binding,predecessor-successor/codec,and-current-proof/residual/codec/final-binding-from-tau;Q-computed-after-tau-from-authoritative-replay;Q-encoding-is-tag0||33-zero-bytes-for-identity-or-tag1||canonical-compressed33;c=H(pre-challenge,tau,identity-aware-Q,nonidentity-A);exclude-z/residual/codec/final-binding-from-c;request-and-admit-typed-statement-anchor,final-aggregation,current-inventory,complete-chain,and-combined-outer-bindings-only-after-equation-verifies;128-attempt-nonzero-wide-reduced-tau-and-c;Q-identity-accepted;A-identity-rejected";
 const SOUNDNESS_LANGUAGE_V1: &[u8] = b"statement-is-Fiat-Shamir-Schnorr-proof-of-knowledge-of-aggregate-H-opening-not-vacuous-existence-of-a-discrete-log;assume-SHAKE256-RFC9380-derived-T256-G/H-multigenerator-discrete-relation-and-basis-independence,Schnorr-knowledge-soundness,and-Keccak-ROM;commitments-fixed-before-tau;false-same-opening-gives-nonzero-coordinate-error-polynomial-degree<=1375;ideal-uniform-nonzero-tau-cancellation<=1375/(pT-1)<2^-245.5;each-512-bit-wide-reduction-statistical-distance<pT/(4*2^512);bounded-rejection-exhaustion-fails-closed;union-binding,Schnorr,wide-reduction,and-ROM-terms";
-const INTEGRATION_LANGUAGE_V1: &[u8] = b"insert-immediately-after-the-future-combined-rns-native-direct-plus-global-membership-predecessor;predecessor-must-return-typed-successor-independent-safe-core-and-separate-post-equation-statement-anchor,final-aggregation,current-inventory,complete-chain,and-canonical-combined-outer-bundle;no-source-statement-anchor,final-aggregation-schedule,current-inventory,or-chain-envelope-binding-is-pre-tau;production-requires-purpose-bound-mutable-forwarding-to-authenticated-RLWE-source-snapshot-and-a-1376-slot-derived-mask-owner-bound-to-the-actual-point-root-and-internally-derived-canonical-replay-schedule;legacy-344-source-order-Csrc-masks-are-not-D-packing-masks;child-is-declared-source-settled-and-non-authorizing;no-composite,readiness,receipt,or-release-flag-may-change";
+const INTEGRATION_LANGUAGE_V1: &[u8] = b"insert-immediately-after-the-owned-combined-rns-native-direct-plus-global-membership-predecessor;predecessor-returns-typed-successor-independent-safe-core-and-separate-post-equation-statement-anchor,final-aggregation,current-inventory,complete-chain,and-canonical-combined-outer-bundle;no-source-statement-anchor,final-aggregation-schedule,current-inventory,or-chain-envelope-binding-is-pre-tau;verifier-replay-is-a-purpose-bound-mutable-borrow-of-the-retained-repeatable-authenticated-RLWE-source-snapshot;live-production-entry-and-prover-require-a-1376-slot-derived-mask-owner-bound-to-the-actual-point-root-and-internally-derived-canonical-replay-schedule;legacy-344-source-order-Csrc-masks-are-not-D-packing-masks;child-is-declared-source-settled-and-non-authorizing;no-composite,readiness,receipt,or-release-flag-may-change";
 
 const SAME_OPENING_KERNEL_IMPLEMENTED_V1: bool = true;
 pub(super) const RNS_NATIVE_SOURCE_PACKING_SAME_OPENING_SOURCE_SETTLED_V1: bool = true;
@@ -421,7 +421,9 @@ impl RnsNativeSourcePackingAuthenticatedSourceAxesV1 {
 }
 
 impl RnsNativeSourcePackingSameOpeningContextV1 {
-    const fn authenticated_source_axes_v1(self) -> RnsNativeSourcePackingAuthenticatedSourceAxesV1 {
+    pub(super) const fn authenticated_source_axes_v1(
+        self,
+    ) -> RnsNativeSourcePackingAuthenticatedSourceAxesV1 {
         RnsNativeSourcePackingAuthenticatedSourceAxesV1 {
             profile_manifest_digest: self.profile_manifest_digest,
             source_binding_digest: self.source_binding_digest,
@@ -581,9 +583,9 @@ pub(super) fn difference_source_index_v1(
 
 /// Decode the canonical 32-byte big-endian scalar stored at a `D` index.
 pub(super) fn difference_scalar_from_be_bytes_v1(
-    encoded: [u8; DIFFERENCE_SCALAR_BYTES_V1],
+    encoded: &[u8; DIFFERENCE_SCALAR_BYTES_V1],
 ) -> Result<Scalar, RnsNativeSourcePackingSameOpeningErrorV1> {
-    Scalar::from_be_bytes_exact(encoded)
+    Scalar::from_be_bytes_exact_ref(encoded)
         .map_err(|_| RnsNativeSourcePackingSameOpeningErrorV1::InvalidScalar)
 }
 
@@ -674,11 +676,26 @@ pub(super) fn signed_source_index_v1(
 /// `unsigned_abs` is intentional: it maps `i64::MIN` to magnitude `2^63`
 /// without overflow before applying the field negation.
 pub(super) fn signed_scalar_from_twos_complement_be_i64_v1(
-    encoded: [u8; SIGNED_SCALAR_BYTES_V1],
+    encoded: &[u8; SIGNED_SCALAR_BYTES_V1],
 ) -> Scalar {
-    let signed = i64::from_be_bytes(encoded);
-    let magnitude = Scalar::from_u64(signed.unsigned_abs());
-    if signed < 0 { -magnitude } else { magnitude }
+    let mut bits = 0_u64;
+    for byte in encoded {
+        bits = (bits << 8) | u64::from(*byte);
+    }
+    let mut negative = bits & (1_u64 << 63) != 0;
+    let mut magnitude = if negative {
+        (!bits).wrapping_add(1)
+    } else {
+        bits
+    };
+    let scalar = Scalar::from_u64(magnitude);
+    let result = if negative { -scalar } else { scalar };
+    bits = 0;
+    magnitude = 0;
+    negative = false;
+    core::sync::atomic::compiler_fence(core::sync::atomic::Ordering::SeqCst);
+    let _ = core::hint::black_box((&mut bits, &mut magnitude, &mut negative));
+    result
 }
 
 /// Public completion receipt for the single aggregate source replay.
@@ -802,6 +819,28 @@ pub(super) trait RnsNativeSourcePackingCombinedDirectMembershipPredecessorV1<'pr
     fn combined_outer_bindings_v1(&self) -> RnsNativeSourcePackingCombinedOuterBindingsV1;
 }
 
+/// Concrete predecessor which can mint its authenticated replay only while
+/// the exact direct-plus-membership owner remains mutably borrowed.
+///
+/// The GAT prevents a replay adapter from escaping or being paired with a
+/// different predecessor.  Context and replay are both derived internally;
+/// callers cannot pass detached snapshot identities, points, or source bytes.
+pub(super) trait RnsNativeSourcePackingOwnedReplayPredecessorV2<'proof>:
+    RnsNativeSourcePackingCombinedDirectMembershipPredecessorV1<'proof>
+{
+    type Replay<'owner>: RnsNativeSourcePackingAggregateReplayV1
+    where
+        Self: 'owner;
+
+    fn authenticated_same_opening_context_v2(
+        &self,
+    ) -> Result<RnsNativeSourcePackingSameOpeningContextV1, RnsNativeSourcePackingSameOpeningErrorV1>;
+
+    fn begin_authenticated_replay_v2(
+        &mut self,
+    ) -> Result<Self::Replay<'_>, RnsNativeSourcePackingSameOpeningErrorV1>;
+}
+
 /// Deliberately uninhabited production ownership seal.
 ///
 /// Replacing any field requires a separately audited adapter and declaration
@@ -884,7 +923,7 @@ struct PreparedRelationV1 {
     q_digest: [u8; DIGEST_BYTES_V1],
 }
 
-fn canonical_profile_manifest_digest_v1()
+pub(super) fn canonical_profile_manifest_digest_v1()
 -> Result<[u8; DIGEST_BYTES_V1], RnsNativeSourcePackingSameOpeningErrorV1> {
     let manifest = zk_ams_mkhe_rns_native_profile_manifest_v1()
         .map_err(|_| RnsNativeSourcePackingSameOpeningErrorV1::InvalidContext)?;
@@ -1848,11 +1887,12 @@ impl<'proof, P: RnsNativeSourcePackingCombinedDirectMembershipPredecessorV1<'pro
     }
 }
 
-/// Consume future combined direct-plus-membership evidence into this child.
+/// Test-only detached kernel adapter retained for mutation fixtures.
 ///
-/// No production `P` exists.  The function is present solely to freeze the
-/// eventual insertion point and move-only ownership shape while its production
-/// predecessor remains unavailable.
+/// Production code must use the V2 owned join below; compiling this entry only
+/// for tests prevents a concrete predecessor from being paired with caller-
+/// supplied context or replay state.
+#[cfg(test)]
 pub(super) fn verify_rns_native_source_packing_same_opening_v1<'proof, P, R>(
     previous: P,
     context: RnsNativeSourcePackingSameOpeningContextV1,
@@ -1880,6 +1920,54 @@ where
         wire,
         FUTURE_DIRECT_MEMBERSHIP_PARENT_CAP_BYTES_V1,
     )?;
+    let combined_outer_bindings = previous.combined_outer_bindings_v1();
+    let verified = finalize_verified_kernel_v1(equation_verified, combined_outer_bindings)?;
+    Ok(RnsNativeSourcePackingSameOpeningPrerequisiteV1 {
+        previous,
+        residual: verified.residual,
+        manifest_digest: verified.manifest_digest,
+        source_context_digest: verified.source_context_digest,
+        point_root: verified.point_root,
+        replay_receipt_digest: verified.replay_receipt_digest,
+        pre_challenge_binding_digest: verified.pre_challenge_binding_digest,
+        tau_digest: verified.tau_digest,
+        q_digest: verified.q_digest,
+        proof_digest: verified.proof_digest,
+        residual_digest: verified.residual_digest,
+        binding_digest: verified.binding_digest,
+    })
+}
+
+/// Consume one concrete owned predecessor into the source-packing child.
+///
+/// Unlike the fixture-oriented V1 kernel entry, this production-shaped join
+/// accepts no detached context or replay owner.  The predecessor derives the
+/// authenticated context, lends its exact live snapshot/point inventory to a
+/// one-shot replay, and exposes successor-dependent outer bindings only after
+/// the Schnorr equation succeeds.
+pub(super) fn verify_rns_native_source_packing_same_opening_owned_v2<'proof, P>(
+    mut previous: P,
+) -> Result<
+    RnsNativeSourcePackingSameOpeningPrerequisiteV1<'proof, P>,
+    RnsNativeSourcePackingSameOpeningErrorV1,
+>
+where
+    P: RnsNativeSourcePackingOwnedReplayPredecessorV2<'proof>,
+{
+    let wire: &'proof [u8] = previous.same_opening_successor_v1();
+    let context = previous.authenticated_same_opening_context_v2()?;
+    if context.safe_core != previous.successor_independent_safe_core_v1() {
+        return Err(RnsNativeSourcePackingSameOpeningErrorV1::InvalidContext);
+    }
+    let equation_verified = {
+        let replay = previous.begin_authenticated_replay_v2()?;
+        verify_equation_kernel_v1(
+            context,
+            replay,
+            wire,
+            FUTURE_DIRECT_MEMBERSHIP_PARENT_CAP_BYTES_V1,
+        )?
+    };
     let combined_outer_bindings = previous.combined_outer_bindings_v1();
     let verified = finalize_verified_kernel_v1(equation_verified, combined_outer_bindings)?;
     Ok(RnsNativeSourcePackingSameOpeningPrerequisiteV1 {

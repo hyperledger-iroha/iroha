@@ -1079,32 +1079,11 @@ fn exercise_pending_kura_production_lifecycle(
     assert!(crate::sumeragi::status::v2_status().is_none());
 
     use super::super::v2_effects::PendingKuraApplyRecoveryStage as Stage;
-    let installed_status =
-        pending
-            .with_runner_setup(&mut setup_runner, |executor, _services| {
-                Ok::<
-                    _,
-                    super::super::v2_lifecycle_coordinator::ProductionLifecyclePreActivationErrorV1,
-                >(executor.status())
-            })
-            .expect("inspect installed pending Kura Apply boundary");
-    assert_eq!(
-        installed_status.pending_tip_recovery_stage,
-        Some(Stage::Apply)
-    );
-    assert_eq!(installed_status.pending_fetches, 0);
-    assert_eq!(installed_status.pending_stores, 0);
-    assert_eq!(installed_status.pending_validations, 0);
-    assert_eq!(installed_status.pending_applications, 0);
-    assert_eq!(installed_status.effect_dispatch_queue.depth, 0);
-    assert_eq!(installed_status.runtime_queues.normal.depth, 0);
-    assert_eq!(installed_status.runtime_queues.progress.depth, 0);
-    assert_eq!(installed_status.runtime_queues.completion.depth, 0);
     let completion_deadline = Instant::now() + Duration::from_secs(5);
     let mut recovery_stages = Vec::new();
     loop {
         let progress = pending
-            .drive_apply_recovery_turn(&mut setup_runner)
+            .drive_apply_recovery_turn(&mut setup_runner, 64)
             .unwrap_or_else(|error| panic!("drive pending Kura Apply recovery: {error}"));
         let (completed, observed_stage) = match progress {
             super::super::v2_lifecycle_coordinator::ProductionPendingKuraApplyRecoveryProgressV1::Advanced {

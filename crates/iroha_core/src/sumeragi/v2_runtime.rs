@@ -1,11 +1,14 @@
 //! Serialized runtime shell for the authoritative Sumeragi v2 adapter.
 //!
-//! This module owns scheduling and backpressure, not consensus state.
-//! A class-aware arbiter serially delivers admitted commands to [`SumeragiV2Adapter`]
-//! and returns every [`AdapterEffect`] unchanged. Only `EnterView` is inspected:
-//! installing a certified view alone may restart round and retransmission clocks.
-//! The round deadline grows to a finite ceiling while retransmission stays fixed,
-//! giving post-GST service more room without making a long-idle height wait hours.
+//! This module owns scheduling and backpressure, not consensus state. Every
+//! admitted command is delivered to [`SumeragiV2Adapter`] by one serialized
+//! class-aware arbiter, and all
+//! returned [`AdapterEffect`] values are handed to callers unchanged. The only
+//! effect inspected here is `EnterView`, because installing a certified view is
+//! the sole event allowed to restart the round and retransmission clocks. The
+//! round deadline grows linearly through a finite protocol ceiling while
+//! retransmission stays fixed. This gives post-GST service additional room
+//! without turning a long-idle height's view into an hours-long wait.
 //! Every admitted owner freezes both its receiver-local physical predecessor
 //! cut and its logical lifecycle ordinal. A replay admitted at or after that
 //! cut cannot overtake the owner even when the replay retains an older logical
@@ -14844,6 +14847,37 @@ impl<D: RuntimeDriver> SerializedV2Runtime<D> {
 include!("v2_runtime_ready_validate_publication.rs");
 
 impl SerializedV2Runtime<SumeragiV2Adapter> {
+    /// Stage the deferred pending-Kura validation and its exact Apply successor.
+    ///
+    /// This no-clock seam is available only after the startup Validate effect's
+    /// positional ownership has left the runtime shell. Failure returns the
+    /// move-only marker unchanged; success retains it inside the adapter's
+    /// drop-inert prepared transition.
+    #[allow(clippy::result_large_err)]
+    pub(in crate::sumeragi) fn prepare_pending_kura_validated_apply(
+        &mut self,
+        marker: super::v2::DeferredPendingKuraValidatedMarkerV1,
+        predecessor: &AdapterEffect,
+        ownership: &RuntimeEffectOwnership,
+    ) -> Result<
+        super::v2::PreparedPendingKuraValidatedApplyV1<'_>,
+        (
+            super::v2::DeferredPendingKuraValidatedMarkerV1,
+            AdapterError,
+        ),
+    > {
+        if self.fail_closed
+            || self.clocks_armed
+            || self.ingress.len() != 0
+            || self.pending_effect_ownership.is_some()
+            || self.last_scheduler_ownership.is_some()
+            || !self.pending_leader_wire_terminals.is_empty()
+        {
+            return Err((marker, AdapterError::RecoveredPendingKuraApplyMismatch));
+        }
+        marker.prepare_apply(&mut self.driver, predecessor, ownership)
+    }
+
     /// Freeze the serialized shell around one ordinary Fetch-to-Store preview.
     pub(in crate::sumeragi) fn prepare_certified_fetch_store(
         &mut self,
