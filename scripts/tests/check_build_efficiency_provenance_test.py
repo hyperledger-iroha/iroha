@@ -231,7 +231,7 @@ def test_valid_mocked_object_graph_passes(
     assert report == {
         "roles": 5,
         "selected_paths": 14,
-        "historical_rust_paths": 19_652,
+        "historical_rust_paths": 19_654,
         "cargo_lock_bytes": len(store.lock_bytes),
         "source_budget_bytes": len(store.source_budget_bytes),
     }
