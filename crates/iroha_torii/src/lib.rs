@@ -17924,7 +17924,6 @@ fn soracloud_runtime_status_sections(
     let mut degraded_services = 0_u64;
     let mut unavailable_services = 0_u64;
     let mut max_load_factor_bps = 0_u16;
-    let mut reported_pending_mailbox_messages = 0_u64;
     let mut authoritative_pending_mailbox_messages = 0_u64;
     let mut bundle_cache_misses = 0_u64;
     let mut artifact_cache_misses = 0_u64;
@@ -17946,8 +17945,6 @@ fn soracloud_runtime_status_sections(
                 }
             }
             max_load_factor_bps = max_load_factor_bps.max(plan.load_factor_bps);
-            reported_pending_mailbox_messages = reported_pending_mailbox_messages
-                .saturating_add(u64::from(plan.reported_pending_mailbox_messages));
             authoritative_pending_mailbox_messages = authoritative_pending_mailbox_messages
                 .saturating_add(u64::from(plan.authoritative_pending_mailbox_messages));
             if !plan.bundle_available_locally {
@@ -18016,10 +18013,6 @@ fn soracloud_runtime_status_sections(
         json_entry("apartments", apartment_count),
         json_entry("max_load_factor_bps", max_load_factor_bps),
         json_entry(
-            "reported_pending_mailbox_messages",
-            reported_pending_mailbox_messages,
-        ),
-        json_entry(
             "authoritative_pending_mailbox_messages",
             authoritative_pending_mailbox_messages,
         ),
@@ -18049,9 +18042,10 @@ fn soracloud_hosted_http_topology_section(app: &SharedAppState) -> norito::json:
         if capability.validate().is_ok()
             && capability.validator_account_id == *validator_account_id
             && capability.can_host_replicas_at(now_ms)
-            && iroha_core::soracloud_runtime::soracloud_validator_is_active(
+            && iroha_core::soracloud_runtime::soracloud_validator_has_active_peer_binding(
                 world,
                 validator_account_id,
+                &capability.peer_id,
                 |lane_id| view.is_lane_active_for_authority(lane_id),
             )
         {
@@ -18069,6 +18063,7 @@ fn soracloud_hosted_http_topology_section(app: &SharedAppState) -> norito::json:
                 service_name,
                 service_version,
                 now_ms,
+                u64::try_from(view.height()).unwrap_or(u64::MAX),
                 |lane_id| view.is_lane_active_for_authority(lane_id),
             )
         else {
@@ -29954,7 +29949,7 @@ fn select_authoritative_hosted_http_replica(
 #[cfg(feature = "app_api")]
 fn authoritative_weighted_hosted_http_versions(
     world: &impl WorldReadOnly,
-    current_sequence: u64,
+    current_height: u64,
     service_name: &str,
 ) -> Result<(Vec<(String, u8)>, u64), SoracloudRuntimeExecutionError> {
     let deployment_name: Name = service_name.parse().map_err(|error| {
@@ -29980,7 +29975,7 @@ fn authoritative_weighted_hosted_http_versions(
         )
     })?;
     let lease_status = deployment
-        .hosted_service_lease_status_at(current_sequence)
+        .hosted_service_lease_status_at(current_height)
         .map_err(|error| {
             SoracloudRuntimeExecutionError::new(
                 SoracloudRuntimeExecutionErrorKind::Internal,
@@ -30220,9 +30215,9 @@ fn resolve_hosted_http_runtime_target(
     let now_ms = current_public_ingress_ledger_time_ms(app);
     let state_view = app.state.view();
     let world = state_view.world();
-    let current_sequence = iroha_core::soracloud_runtime::authoritative_soracloud_sequence(world);
+    let current_height = u64::try_from(state_view.height()).unwrap_or(u64::MAX);
     let (weighted_versions, process_generation) =
-        authoritative_weighted_hosted_http_versions(world, current_sequence, &service_name)?;
+        authoritative_weighted_hosted_http_versions(world, current_height, &service_name)?;
     let mut healthy_targets = Vec::with_capacity(weighted_versions.len());
     for (service_version, weight) in &weighted_versions {
         if *weight == 0 {
@@ -30245,6 +30240,7 @@ fn resolve_hosted_http_runtime_target(
             &service_name,
             service_version,
             now_ms,
+            current_height,
             |lane_id| state_view.is_lane_active_for_authority(lane_id),
         )
         .map_err(|message| {
@@ -30391,9 +30387,9 @@ fn resolve_exact_hosted_http_runtime_target(
     let now_ms = current_public_ingress_ledger_time_ms(app);
     let state_view = app.state.view();
     let world = state_view.world();
-    let current_sequence = iroha_core::soracloud_runtime::authoritative_soracloud_sequence(world);
+    let current_height = u64::try_from(state_view.height()).unwrap_or(u64::MAX);
     let (active_versions, process_generation) =
-        authoritative_weighted_hosted_http_versions(world, current_sequence, service_name)?;
+        authoritative_weighted_hosted_http_versions(world, current_height, service_name)?;
     if !active_versions
         .iter()
         .any(|(version, weight)| *weight > 0 && version == service_version)
@@ -30423,6 +30419,7 @@ fn resolve_exact_hosted_http_runtime_target(
         service_version,
         replica_slot,
         now_ms,
+        current_height,
         |lane_id| state_view.is_lane_active_for_authority(lane_id),
     )
     .map_err(|message| {

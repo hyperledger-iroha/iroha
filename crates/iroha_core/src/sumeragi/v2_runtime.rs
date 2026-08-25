@@ -297,6 +297,8 @@ pub(crate) enum RuntimeError<E> {
     FailClosed,
     /// The runner attempted live scheduling before startup finished.
     ClocksNotArmed,
+    /// Interrupted-tip recovery was attempted after live scheduling began.
+    RecoveryAfterClocksArmed,
 }
 impl<E: fmt::Display> fmt::Display for RuntimeError<E> {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -306,6 +308,9 @@ impl<E: fmt::Display> fmt::Display for RuntimeError<E> {
             Self::ClocksNotArmed => {
                 formatter.write_str("Sumeragi v2 pacemaker clocks are not armed")
             }
+            Self::RecoveryAfterClocksArmed => formatter.write_str(
+                "Sumeragi v2 interrupted-tip recovery cannot run after pacemaker clocks are armed",
+            ),
         }
     }
 }
@@ -316,7 +321,7 @@ where
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
             Self::Driver(error) => Some(error),
-            Self::FailClosed | Self::ClocksNotArmed => None,
+            Self::FailClosed | Self::ClocksNotArmed | Self::RecoveryAfterClocksArmed => None,
         }
     }
 }
@@ -17448,4 +17453,26 @@ mod tests {
     include!("tests/v2_runtime_main_06.rs");
     include!("tests/v2_runtime_unsealed_01b_lifecycle_bounds.rs");
     include!("tests/v2_runtime_unsealed_02_owner_retirement_and_fairness.rs");
+
+    #[test]
+    fn interrupted_tip_recovery_rejects_an_armed_runtime() {
+        let started_at = Instant::now();
+        let mut runtime = runtime(
+            FakeDriver::new(tag(0)),
+            started_at,
+            RuntimeQueueConfig::new(5, 1, 1),
+        );
+
+        let error = runtime
+            .step_recovery(started_at)
+            .expect_err("live scheduling must exclude interrupted-tip recovery");
+
+        assert!(matches!(&error, RuntimeError::RecoveryAfterClocksArmed));
+        assert_eq!(
+            error.to_string(),
+            "Sumeragi v2 interrupted-tip recovery cannot run after pacemaker clocks are armed"
+        );
+        assert!(runtime.lifecycle_live_clocks_are_armed());
+        assert!(!runtime.fail_closed);
+    }
 }

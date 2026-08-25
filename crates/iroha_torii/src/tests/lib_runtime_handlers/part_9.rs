@@ -1019,16 +1019,74 @@ async fn soracloud_status_routing_reports_sparse_configured_lane_namespace() {
 #[test]
 fn soracloud_hosted_http_topology_section_excludes_inactive_validator() {
     let mut world = seed_public_soracloud_world();
-    let validator_two = checked_torii_test_account_id(
-        0x7d,
-        "derive hosted HTTP topology second validator fixture key",
+    let service_name: iroha_data_model::name::Name =
+        "web_portal".parse().expect("hosted topology service");
+    let service_version = "2026.02.0";
+    let mut bundle = world
+        .view()
+        .soracloud_service_revisions()
+        .get(&(service_name.to_string(), service_version.to_owned()))
+        .cloned()
+        .expect("public service bundle");
+    bundle.container.runtime = iroha_data_model::soracloud::SoraContainerRuntimeV1::Inrou;
+    bundle.container.inrou = Some(test_inrou_manifest());
+    bundle.container.entrypoint = "/app/main".to_owned();
+    bundle.service.execution_plane =
+        iroha_data_model::soracloud::SoraServiceExecutionPlaneV1::HttpService;
+    bundle.service.replicas = std::num::NonZeroU16::new(2).expect("replicas");
+    bundle.service.state_bindings.clear();
+    bundle.service.handlers.clear();
+    bundle.service.artifacts.clear();
+    bundle.service.lease_volumes = vec![
+        iroha_data_model::soracloud::SoraLeaseVolumeBindingV1 {
+            volume_name: "root_disk".parse().expect("volume"),
+            kind: iroha_data_model::soracloud::SoraLeaseVolumeKindV1::PersistentRootLeaseVolume,
+            storage_class: iroha_data_model::sorafs::pin_registry::StorageClass::Warm,
+            mount_path: "/".to_owned(),
+            max_total_bytes: std::num::NonZeroU64::new(1024 * 1024 * 1024).expect("bytes"),
+        },
+    ];
+    bundle.service.container.manifest_hash = bundle.container_manifest_hash();
+    bundle
+        .validate_for_admission()
+        .expect("hosted topology bundle must pass production admission");
+    world.soracloud_service_revisions_mut_for_testing().insert(
+        (service_name.to_string(), service_version.to_owned()),
+        bundle.clone(),
     );
-    let alice_peer_id =
-        checked_torii_test_peer_id(0x7e, "derive hosted HTTP topology validator peer fixture key")
-            .to_string();
-    let validator_two_peer_id =
-        checked_torii_test_peer_id(0x7f, "derive hosted HTTP topology validator peer fixture key")
-            .to_string();
+    let service_lease = hosted_http_service_lease_state(
+        iroha_data_model::soracloud::SoraServiceLeaseStatusV1::Active,
+        "50".parse().expect("runtime balance"),
+        u64::MAX,
+    );
+    let mut deployment = world
+        .view()
+        .soracloud_service_deployments()
+        .get(&service_name)
+        .cloned()
+        .expect("public service deployment");
+    deployment.current_service_manifest_hash = bundle.service_manifest_hash();
+    deployment.current_container_manifest_hash = bundle.container_manifest_hash();
+    deployment.service_lease = Some(service_lease.clone());
+    deployment.lease_volume_states =
+        hosted_http_lease_volume_states(&bundle, Some(&service_lease));
+    deployment
+        .validate()
+        .expect("hosted topology deployment must pass production validation");
+    iroha_core::soracloud_runtime::validate_soracloud_deployment_lease_volume_bindings(
+        &deployment,
+        &bundle,
+    )
+    .expect("hosted topology storage rows must exactly match the admitted bundle");
+    world
+        .soracloud_service_deployments_mut_for_testing()
+        .insert(service_name, deployment);
+    let alice_peer_id = PeerId::from(ALICE_ID.expect_single_signatory().clone()).to_string();
+    let (validator_two, validator_two_peer_id) = checked_torii_test_inrou_host_identity(
+        0x7d,
+        "derive canonical hosted HTTP topology second validator host fixture key",
+    );
+    let validator_two_peer_id = validator_two_peer_id.to_string();
     for (validator_account_id, status, peer_id) in [
         (
             ALICE_ID.clone(),
@@ -1061,84 +1119,87 @@ fn soracloud_hosted_http_topology_section_excludes_inactive_validator() {
             },
         );
     }
+    let alice_capability = iroha_data_model::soracloud::SoraInrouHostCapabilityRecordV1 {
+        schema_version: iroha_data_model::soracloud::SORA_INROU_HOST_CAPABILITY_RECORD_VERSION_V1,
+        validator_account_id: ALICE_ID.clone(),
+        peer_id: alice_peer_id.clone(),
+        supported_guest_isas: std::collections::BTreeSet::from([
+            iroha_data_model::soracloud::SoraInrouGuestIsaV1::X8664,
+        ]),
+        max_hosted_replica_capacity:
+            iroha_data_model::soracloud::SORA_INROU_HOSTED_REPLICA_CAPACITY_V1,
+        max_cpu_millis: 2_000,
+        max_memory_bytes: 2 * 1024 * 1024 * 1024,
+        max_storage_bytes: 16 * 1024 * 1024 * 1024,
+        geography_tags: Default::default(),
+        observed_latency_ms: None,
+        advertised_at_ms: 1,
+        heartbeat_expires_at_ms: u64::MAX,
+    };
+    alice_capability
+        .validate()
+        .expect("active topology capability fixture must be production-valid");
     world
         .soracloud_inrou_host_capabilities_mut_for_testing()
-        .insert(
-            ALICE_ID.clone(),
-            iroha_data_model::soracloud::SoraInrouHostCapabilityRecordV1 {
-                schema_version:
-                    iroha_data_model::soracloud::SORA_INROU_HOST_CAPABILITY_RECORD_VERSION_V1,
+        .insert(ALICE_ID.clone(), alice_capability);
+    let validator_two_capability = iroha_data_model::soracloud::SoraInrouHostCapabilityRecordV1 {
+        schema_version: iroha_data_model::soracloud::SORA_INROU_HOST_CAPABILITY_RECORD_VERSION_V1,
+        validator_account_id: validator_two.clone(),
+        peer_id: validator_two_peer_id.clone(),
+        supported_guest_isas: std::collections::BTreeSet::from([
+            iroha_data_model::soracloud::SoraInrouGuestIsaV1::X8664,
+        ]),
+        max_hosted_replica_capacity:
+            iroha_data_model::soracloud::SORA_INROU_HOSTED_REPLICA_CAPACITY_V1,
+        max_cpu_millis: 1_000,
+        max_memory_bytes: 1024 * 1024 * 1024,
+        max_storage_bytes: 8 * 1024 * 1024 * 1024,
+        geography_tags: Default::default(),
+        observed_latency_ms: None,
+        advertised_at_ms: 1,
+        heartbeat_expires_at_ms: u64::MAX,
+    };
+    validator_two_capability
+        .validate()
+        .expect("inactive topology capability fixture must still be production-valid");
+    world
+        .soracloud_inrou_host_capabilities_mut_for_testing()
+        .insert(validator_two.clone(), validator_two_capability);
+    let placement_record = iroha_data_model::soracloud::SoraInrouServicePlacementRecordV1 {
+        schema_version: iroha_data_model::soracloud::SORA_INROU_SERVICE_PLACEMENT_RECORD_VERSION_V1,
+        service_name: "web_portal".parse().expect("service"),
+        service_version: "2026.02.0".to_owned(),
+        desired_replica_count: 2,
+        eligible_validator_count: 2,
+        placements: vec![
+            iroha_data_model::soracloud::SoraInrouReplicaPlacementV1 {
+                replica_slot: 1,
                 validator_account_id: ALICE_ID.clone(),
-                peer_id: alice_peer_id.clone(),
-                supported_guest_isas: std::collections::BTreeSet::from([
-                    iroha_data_model::soracloud::SoraInrouGuestIsaV1::X8664,
-                ]),
-                max_hosted_replica_capacity:
-                    iroha_data_model::soracloud::SORA_INROU_HOSTED_REPLICA_CAPACITY_V1,
-                max_cpu_millis: 2_000,
-                max_memory_bytes: 2 * 1024 * 1024 * 1024,
-                max_storage_bytes: 16 * 1024 * 1024 * 1024,
-                geography_tags: Default::default(),
-                observed_latency_ms: None,
-                advertised_at_ms: 1,
-                heartbeat_expires_at_ms: u64::MAX,
+                peer_id: alice_peer_id,
+                selected_guest_isa: iroha_data_model::soracloud::SoraInrouGuestIsaV1::X8664,
+                selected_geography_tag: None,
+                selection_latency_ms: None,
             },
-        );
-    world
-        .soracloud_inrou_host_capabilities_mut_for_testing()
-        .insert(
-            validator_two.clone(),
-            iroha_data_model::soracloud::SoraInrouHostCapabilityRecordV1 {
-                schema_version:
-                    iroha_data_model::soracloud::SORA_INROU_HOST_CAPABILITY_RECORD_VERSION_V1,
-                validator_account_id: validator_two.clone(),
-                peer_id: validator_two_peer_id.clone(),
-                supported_guest_isas: std::collections::BTreeSet::from([
-                    iroha_data_model::soracloud::SoraInrouGuestIsaV1::X8664,
-                ]),
-                max_hosted_replica_capacity:
-                    iroha_data_model::soracloud::SORA_INROU_HOSTED_REPLICA_CAPACITY_V1,
-                max_cpu_millis: 1_000,
-                max_memory_bytes: 1024 * 1024 * 1024,
-                max_storage_bytes: 8 * 1024 * 1024 * 1024,
-                geography_tags: Default::default(),
-                observed_latency_ms: None,
-                advertised_at_ms: 1,
-                heartbeat_expires_at_ms: u64::MAX,
+            iroha_data_model::soracloud::SoraInrouReplicaPlacementV1 {
+                replica_slot: 2,
+                validator_account_id: validator_two,
+                peer_id: validator_two_peer_id,
+                selected_guest_isa: iroha_data_model::soracloud::SoraInrouGuestIsaV1::X8664,
+                selected_geography_tag: None,
+                selection_latency_ms: None,
             },
-        );
+        ],
+        reconciled_at_ms: 1,
+        last_error: None,
+    };
+    placement_record
+        .validate()
+        .expect("topology placement fixture must be production-valid");
     world
         .soracloud_inrou_service_placements_mut_for_testing()
         .insert(
             ("web_portal".to_owned(), "2026.02.0".to_owned()),
-            iroha_data_model::soracloud::SoraInrouServicePlacementRecordV1 {
-                schema_version:
-                    iroha_data_model::soracloud::SORA_INROU_SERVICE_PLACEMENT_RECORD_VERSION_V1,
-                service_name: "web_portal".parse().expect("service"),
-                service_version: "2026.02.0".to_owned(),
-                desired_replica_count: 2,
-                eligible_validator_count: 2,
-                placements: vec![
-                    iroha_data_model::soracloud::SoraInrouReplicaPlacementV1 {
-                        replica_slot: 1,
-                        validator_account_id: ALICE_ID.clone(),
-                        peer_id: alice_peer_id,
-                        selected_guest_isa: iroha_data_model::soracloud::SoraInrouGuestIsaV1::X8664,
-                        selected_geography_tag: None,
-                        selection_latency_ms: None,
-                    },
-                    iroha_data_model::soracloud::SoraInrouReplicaPlacementV1 {
-                        replica_slot: 2,
-                        validator_account_id: validator_two,
-                        peer_id: validator_two_peer_id,
-                        selected_guest_isa: iroha_data_model::soracloud::SoraInrouGuestIsaV1::X8664,
-                        selected_geography_tag: None,
-                        selection_latency_ms: None,
-                    },
-                ],
-                reconciled_at_ms: 1,
-                last_error: None,
-            },
+            placement_record,
         );
     let app = mk_app_state_for_tests_with_world(world);
     let topology = super::soracloud_hosted_http_topology_section(&app);

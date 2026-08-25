@@ -1,5 +1,13 @@
 const INROU_HEALTH_SERVER_PY: &str = include_str!("fixtures/inrou_health_server.py");
 
+fn url_host_port(url: &str) -> Option<(String, u16)> {
+    let parsed = reqwest::Url::parse(url).ok()?;
+    Some((
+        parsed.host_str()?.to_owned(),
+        parsed.port_or_known_default()?,
+    ))
+}
+
 #[test]
 #[ignore = "requires an unprivileged guest plus a complete canonical IROHA_INROU_PORTABLE_SMOKE_BUNDLE_FILE"]
 fn inrou_portable_smoke_boots_external_bundle_and_serves_healthcheck() -> Result<()> {
@@ -11,7 +19,6 @@ fn inrou_portable_smoke_boots_external_bundle_and_serves_healthcheck() -> Result
         );
         return Ok(());
     }
-    require_portable_smoke_prerequisites()?;
     let external_bundle =
         portable_smoke_required_env_path("IROHA_INROU_PORTABLE_SMOKE_BUNDLE_FILE")?;
     let external_entrypoint = std::env::var("IROHA_INROU_PORTABLE_SMOKE_ENTRYPOINT")
@@ -19,7 +26,8 @@ fn inrou_portable_smoke_boots_external_bundle_and_serves_healthcheck() -> Result
     let external_healthcheck = std::env::var("IROHA_INROU_PORTABLE_SMOKE_HEALTHCHECK")
         .unwrap_or_else(|_| "/health".to_owned());
     let temp_dir = tempfile::tempdir()?;
-    let selected_guest_isa = current_host_inrou_guest_isa();
+    let selected_guest_isa =
+        current_host_inrou_guest_isa().expect("tests require a supported Inrou host ISA");
     let local_peer_id = canonical_inrou_test_peer_id();
     let mut config = test_runtime_manager_config(temp_dir.path().to_path_buf())
         .with_local_host_identity(ALICE_ID.clone(), local_peer_id);
@@ -111,7 +119,7 @@ fn inrou_portable_smoke_boots_external_bundle_and_serves_healthcheck() -> Result
     bundle
         .validate_for_admission()
         .map_err(|error| eyre::eyre!("invalid external Inrou smoke-test bundle: {error}"))?;
-    let mut state = test_state()?;
+    let mut state = test_state();
     let deployment_state = sample_deployment_state(&bundle);
     {
         let world = &mut Arc::get_mut(&mut state).expect("unique test state").world;
@@ -159,7 +167,10 @@ fn inrou_portable_smoke_boots_external_bundle_and_serves_healthcheck() -> Result
         artifacts_root.join(hash_cache_name(bundle.container.bundle_hash)),
         &bundle_bytes,
     )?;
-    let manager = SoracloudRuntimeManager::new(config, Arc::clone(&state));
+    let mut manager = SoracloudRuntimeManager::new(config, Arc::clone(&state));
+    manager
+        .qualify_inrou_startup_capability()
+        .wrap_err("qualify the exact production Inrou launcher for the ignored smoke test")?;
     manager.reconcile_once()?;
     let service_dir = temp_dir
         .path()
@@ -273,7 +284,7 @@ fn ivm_host_egress_fetch_enforces_allowlist_rate_and_byte_limits() -> Result<()>
         },
         BTreeMap::new(),
     );
-    let response = host.egress_fetch(SoracloudEgressFetchRequestV1 {
+    let response = host.egress_fetch(&SoracloudEgressFetchRequestV1 {
         url: url.clone(),
         expected_hash: Some(expected_hash),
         max_bytes: 32,
@@ -283,7 +294,7 @@ fn ivm_host_egress_fetch_enforces_allowlist_rate_and_byte_limits() -> Result<()>
     assert_eq!(response.body, body);
     assert_eq!(response.body_hash, expected_hash);
     let rate_limited = host
-        .egress_fetch(SoracloudEgressFetchRequestV1 {
+        .egress_fetch(&SoracloudEgressFetchRequestV1 {
             url,
             expected_hash: Some(expected_hash),
             max_bytes: 32,
@@ -291,7 +302,7 @@ fn ivm_host_egress_fetch_enforces_allowlist_rate_and_byte_limits() -> Result<()>
         .expect_err("second request must exceed the per-minute rate limit");
     assert_eq!(rate_limited, VMError::PermissionDenied);
     let disallowed = host
-        .egress_fetch(SoracloudEgressFetchRequestV1 {
+        .egress_fetch(&SoracloudEgressFetchRequestV1 {
             url: "http://example.com/blocked".to_owned(),
             expected_hash: Some(Hash::new(b"blocked")),
             max_bytes: 32,
@@ -323,7 +334,7 @@ fn ivm_host_egress_fetch_enforces_allowlist_rate_and_byte_limits() -> Result<()>
         BTreeMap::new(),
     );
     let byte_limited = byte_limited_host
-        .egress_fetch(SoracloudEgressFetchRequestV1 {
+        .egress_fetch(&SoracloudEgressFetchRequestV1 {
             url,
             expected_hash: Some(Hash::new(b"too-large")),
             max_bytes: 16,
@@ -367,7 +378,7 @@ fn ivm_host_egress_fetch_rejects_oversized_content_type() -> Result<()> {
         BTreeMap::new(),
     );
     let error = host
-        .egress_fetch(SoracloudEgressFetchRequestV1 {
+        .egress_fetch(&SoracloudEgressFetchRequestV1 {
             url,
             expected_hash: Some(expected_hash),
             max_bytes: 32,
@@ -402,7 +413,7 @@ fn ivm_host_egress_fetch_rejects_allowlisted_host_on_unlisted_port() -> Result<(
         BTreeMap::new(),
     );
     let error = host
-        .egress_fetch(SoracloudEgressFetchRequestV1 {
+        .egress_fetch(&SoracloudEgressFetchRequestV1 {
             url: "http://127.0.0.1:9/disallowed-port".to_owned(),
             expected_hash: Some(Hash::new(b"blocked")),
             max_bytes: 32,
@@ -413,7 +424,7 @@ fn ivm_host_egress_fetch_rejects_allowlisted_host_on_unlisted_port() -> Result<(
 }
 #[test]
 fn execute_ordered_mailbox_returns_deterministic_failure_for_missing_bundle_cache() -> Result<()> {
-    let state = test_state()?;
+    let state = test_state();
     let mut bundle = load_deployment_bundle_fixture()?;
     let artifact_bytes = simple_soracloud_contract_artifact(&["apply_update"]);
     bundle.container.bundle_hash = Hash::new(&artifact_bytes);
@@ -443,7 +454,7 @@ fn execute_ordered_mailbox_returns_deterministic_failure_for_missing_bundle_cach
 }
 #[test]
 fn warmed_ordered_mailbox_invalidates_a_changed_bundle_file() -> Result<()> {
-    let state = test_state()?;
+    let state = test_state();
     let mut bundle = load_deployment_bundle_fixture()?;
     let artifact_bytes = simple_soracloud_contract_artifact(&["apply_update"]);
     bundle.container.bundle_hash = Hash::new(&artifact_bytes);
@@ -492,7 +503,7 @@ fn warmed_ordered_mailbox_invalidates_a_changed_bundle_file() -> Result<()> {
 }
 #[test]
 fn execute_local_read_fails_closed_when_runtime_snapshot_is_behind() -> Result<()> {
-    let mut state = test_state()?;
+    let mut state = test_state();
     let mut bundle = load_deployment_bundle_fixture()?;
     let bundle_bytes = b"ivm bundle bytes".to_vec();
     bundle.container.bundle_hash = Hash::new(&bundle_bytes);

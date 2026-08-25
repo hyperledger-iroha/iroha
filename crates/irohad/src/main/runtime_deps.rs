@@ -1,3 +1,5 @@
+use mv::storage::StorageReadOnly as _;
+
 /// Runtime-only daemon dependencies supplied by the deployment launcher.
 ///
 /// Implementations of the moderation wrapper, privacy-cycle PRF provider, stream-token and native
@@ -154,7 +156,7 @@ pub struct IrohaRuntimeDeps {
 enum ThresholdSignerStartupReadinessV1 {
     Ready,
     ParliamentTleShareUnavailable {
-        key_session_id: iroha_core::governance::timed_ovn::TleKeySessionId,
+        key_session_id: iroha_core::tle_release::TleKeySessionId,
     },
 }
 
@@ -169,7 +171,7 @@ fn require_global_beacon_signer_for_local_seat_v1(
 }
 
 fn parliament_tle_signer_readiness_for_local_seat_v1(
-    key_session_id: iroha_core::governance::timed_ovn::TleKeySessionId,
+    key_session_id: iroha_core::tle_release::TleKeySessionId,
     local_has_committee_seat: bool,
     signer_is_resolved: bool,
 ) -> ThresholdSignerStartupReadinessV1 {
@@ -185,18 +187,14 @@ fn validate_threshold_signer_startup_readiness_v1(
     local_peer: &PeerId,
     runtime_deps: &IrohaRuntimeDeps,
 ) -> Result<ThresholdSignerStartupReadinessV1, &'static str> {
-    use iroha_core::state::{GLOBAL_THRESHOLD_BEACON_SINGLETON_KEY, WorldReadOnly as _};
+    use iroha_core::state::WorldReadOnly as _;
 
     let world = state.world_view();
     let topology = state.commit_topology_snapshot();
     let topology_roster_hash =
         iroha_core::beacon::global_threshold_beacon_roster_hash_v1(&topology);
     let committed_height = u64::try_from(state.committed_height()).unwrap_or(u64::MAX);
-    if let Some(active_session_id) = world
-        .global_beacon_active_session()
-        .get(&GLOBAL_THRESHOLD_BEACON_SINGLETON_KEY)
-        .copied()
-    {
+    if let Some(active_session_id) = world.active_global_beacon_key_session() {
         let record = world
             .global_beacon_key_sessions()
             .get(&active_session_id)
@@ -729,7 +727,7 @@ mod parliament_tle_release_tests {
             Ok(())
         );
 
-        let session_id = iroha_core::governance::timed_ovn::TleKeySessionId::new([0x71; 32]);
+        let session_id = iroha_core::tle_release::TleKeySessionId::new([0x71; 32]);
         assert_eq!(
             parliament_tle_signer_readiness_for_local_seat_v1(session_id, true, false),
             ThresholdSignerStartupReadinessV1::ParliamentTleShareUnavailable {

@@ -44215,6 +44215,9 @@ mod validation_fee_torii_ingress_tests {
     use iroha_config::parameters::actual::ParliamentTimedOvn;
     use iroha_core::{
         block::{BlockBuilder, ValidBlock},
+        governance::parliament::{
+            ParliamentAttemptStateV1, ParliamentDecisionModeV1, RequiredParliamentBodyV1,
+        },
         kura::Kura,
         query::store::LiveQueryStore,
         queue::{Queue, TransactionGuard},

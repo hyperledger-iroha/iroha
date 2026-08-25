@@ -212,6 +212,7 @@ pub(super) const ALL: &[BuiltInWireId] = &[
     built_in_wire_id!(soracloud::ReportSoracloudServiceLeaseUsage => "soracloud::ReportSoracloudServiceLeaseUsage"),
     built_in_wire_id!(soracloud::RecordSoracloudMailboxMessage => "soracloud::RecordSoracloudMailboxMessage"),
     built_in_wire_id!(soracloud::RecordSoracloudRuntimeReceipt => "soracloud::RecordSoracloudRuntimeReceipt"),
+    built_in_wire_id!(soracloud::ApplySoracloudOrderedMailboxResult => "soracloud::ApplySoracloudOrderedMailboxResult"),
     built_in_wire_id!(soracloud::RecordSoracloudPrivateUploadedModelExecutionReceipt => "soracloud::RecordSoracloudPrivateUploadedModelExecutionReceipt"),
     built_in_wire_id!(ExecuteTrigger => "iroha.execute_trigger"),
     built_in_wire_id!(Upgrade => "iroha.upgrade"),

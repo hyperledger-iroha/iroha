@@ -1,3 +1,10 @@
+use crate::{
+    ConsensusSignerProviderQualificationV1, GlobalBeaconPartialSignerBrokerBackendErrorV1,
+    GlobalBeaconPartialSignerBrokerBackendV1,
+    ParliamentTlePartialReleaseSignerBrokerBackendErrorV1,
+    ParliamentTlePartialReleaseSignerBrokerBackendV1,
+};
+
 #[test]
 fn fenced_privacy_head_reader_binding_is_exact_and_drift_checked() {
     let binding = privacy_reader_binding();

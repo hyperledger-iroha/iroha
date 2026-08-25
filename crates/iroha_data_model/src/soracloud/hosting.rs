@@ -510,9 +510,9 @@ impl SoraModelHostCapabilityRecordV1 {
             self.schema_version,
             SORA_MODEL_HOST_CAPABILITY_RECORD_VERSION_V1,
         )?;
-        validate_nonblank_field(
+        validate_validator_account_peer_id(
             "sora model host capability record",
-            "peer_id",
+            &self.validator_account_id,
             &self.peer_id,
         )?;
         if self.supported_backends.is_empty() {
@@ -619,7 +619,11 @@ impl SoraInrouHostCapabilityRecordV1 {
             self.schema_version,
             SORA_INROU_HOST_CAPABILITY_RECORD_VERSION_V1,
         )?;
-        validate_peer_id_field("sora inrou host capability record", &self.peer_id)?;
+        validate_validator_account_peer_id(
+            "sora inrou host capability record",
+            &self.validator_account_id,
+            &self.peer_id,
+        )?;
         if self.supported_guest_isas.len() != 1 {
             return Err(invalid_field(
                 "sora inrou host capability record",
@@ -721,7 +725,11 @@ impl SoraInrouReplicaPlacementV1 {
                 "must be greater than zero",
             ));
         }
-        validate_peer_id_field("sora inrou replica placement", &self.peer_id)?;
+        validate_validator_account_peer_id(
+            "sora inrou replica placement",
+            &self.validator_account_id,
+            &self.peer_id,
+        )?;
         if let Some(tag) = self.selected_geography_tag.as_ref() {
             validate_distribution_geography_tag(
                 "sora inrou replica placement",
@@ -811,7 +819,6 @@ impl SoraInrouServicePlacementRecordV1 {
             ));
         }
         let mut seen_validators = BTreeSet::new();
-        let mut seen_peer_ids = BTreeSet::new();
         for (index, placement) in self.placements.iter().enumerate() {
             placement.validate()?;
             let expected_slot = u16::try_from(index + 1)
@@ -831,13 +838,6 @@ impl SoraInrouServicePlacementRecordV1 {
                     "sora inrou service placement record",
                     "placements",
                     "each placement must use a distinct validator account",
-                ));
-            }
-            if !seen_peer_ids.insert(placement.peer_id.clone()) {
-                return Err(invalid_field(
-                    "sora inrou service placement record",
-                    "placements",
-                    "each placement must use a distinct peer ID",
                 ));
             }
         }
@@ -911,9 +911,9 @@ impl SoraHfPlacementHostAssignmentV1 {
     /// # Errors
     /// Returns [`SoracloudManifestError`] when the routing metadata is empty.
     pub fn validate(&self) -> Result<(), SoracloudManifestError> {
-        validate_nonblank_field(
+        validate_validator_account_peer_id(
             "sora hf placement host assignment",
-            "peer_id",
+            &self.validator_account_id,
             &self.peer_id,
         )?;
         validate_nonblank_field(
@@ -978,6 +978,15 @@ impl SoraHfPlacementRecordV1 {
             ("selection_seed_hash", self.selection_seed_hash),
         ] {
             validate_soracloud_digest_hash("sora hf placement record", field, digest)?;
+        }
+        let expected_placement_id =
+            derive_hf_placement_id_v1(self.pool_id, self.selection_seed_hash)?;
+        if self.placement_id != expected_placement_id {
+            return Err(invalid_field(
+                "sora hf placement record",
+                "placement_id",
+                "must be canonically derived from pool_id and selection_seed_hash",
+            ));
         }
         self.resource_profile.validate()?;
         if self.adaptive_target_host_count == 0 {
@@ -1657,6 +1666,36 @@ impl SoraHfSharedLeaseMemberV1 {
                 "must be >= joined_at_ms",
             ));
         }
+        for (field, refunded, paid) in [
+            ("total_refunded", &self.total_refunded, &self.total_paid),
+            (
+                "total_compute_refunded",
+                &self.total_compute_refunded,
+                &self.total_compute_paid,
+            ),
+        ] {
+            if refunded > paid {
+                return Err(invalid_field(
+                    "sora hf shared lease member",
+                    field,
+                    "must not exceed the corresponding total paid",
+                ));
+            }
+        }
+        if self.last_charge > self.total_paid {
+            return Err(invalid_field(
+                "sora hf shared lease member",
+                "last_charge",
+                "must not exceed total_paid",
+            ));
+        }
+        if self.last_compute_charge > self.total_compute_paid {
+            return Err(invalid_field(
+                "sora hf shared lease member",
+                "last_compute_charge",
+                "must not exceed total_compute_paid",
+            ));
+        }
         for service_name in &self.service_bindings {
             if service_name.trim().is_empty() {
                 return Err(invalid_field(
@@ -2013,11 +2052,11 @@ pub struct SoraAgentApartmentRecordV1 {
     /// Audit sequence that deployed the apartment.
     pub deployed_sequence: u64,
     /// Audit sequence when the current lease began.
-    pub lease_started_sequence: u64,
+    pub lease_started_height: u64,
     /// Audit sequence when the lease expires.
-    pub lease_expires_sequence: u64,
+    pub lease_expires_height: u64,
     /// Audit sequence of the latest lease renewal.
-    pub last_renewed_sequence: u64,
+    pub last_renewed_height: u64,
     /// Deterministic restart count.
     pub restart_count: u32,
     /// Audit sequence of the last restart, when any.
@@ -2090,9 +2129,9 @@ impl SoraAgentApartmentRecordV1 {
         for (field, value) in [
             ("process_generation", self.process_generation),
             ("deployed_sequence", self.deployed_sequence),
-            ("lease_started_sequence", self.lease_started_sequence),
-            ("lease_expires_sequence", self.lease_expires_sequence),
-            ("last_renewed_sequence", self.last_renewed_sequence),
+            ("lease_started_height", self.lease_started_height),
+            ("lease_expires_height", self.lease_expires_height),
+            ("last_renewed_height", self.last_renewed_height),
             ("process_started_sequence", self.process_started_sequence),
             ("last_active_sequence", self.last_active_sequence),
         ] {
@@ -2104,18 +2143,18 @@ impl SoraAgentApartmentRecordV1 {
                 ));
             }
         }
-        if self.lease_expires_sequence <= self.lease_started_sequence {
+        if self.lease_expires_height <= self.lease_started_height {
             return Err(invalid_field(
                 "sora agent apartment record",
-                "lease_expires_sequence",
-                "must be greater than lease_started_sequence",
+                "lease_expires_height",
+                "must be greater than lease_started_height",
             ));
         }
-        if self.last_renewed_sequence < self.lease_started_sequence {
+        if self.last_renewed_height < self.lease_started_height {
             return Err(invalid_field(
                 "sora agent apartment record",
-                "last_renewed_sequence",
-                "must be >= lease_started_sequence",
+                "last_renewed_height",
+                "must be >= lease_started_height",
             ));
         }
         Ok(())
@@ -2326,14 +2365,18 @@ pub struct SoraAgentApartmentAuditEventV1 {
     pub schema_version: u16,
     /// Deterministic Soracloud audit sequence.
     pub sequence: u64,
+    /// Consensus block height that committed the transition.
+    pub block_height: u64,
+    /// Consensus block timestamp used for UTC-day spend accounting.
+    pub block_timestamp_ms: u64,
     /// Agent-apartment action that produced the event.
     pub action: SoraAgentApartmentActionV1,
     /// Logical apartment identifier.
     pub apartment_name: Name,
     /// Resulting runtime status.
     pub status: SoraAgentRuntimeStatusV1,
-    /// Lease-expiry sequence after the event.
-    pub lease_expires_sequence: u64,
+    /// Lease-expiry consensus height after the event.
+    pub lease_expires_height: u64,
     /// Hash of the admitted apartment manifest.
     pub manifest_hash: Hash,
     /// Restart count after the event.
@@ -2419,17 +2462,17 @@ impl SoraAgentApartmentAuditEventV1 {
             self.schema_version,
             SORA_AGENT_APARTMENT_AUDIT_EVENT_VERSION_V1,
         )?;
-        if self.sequence == 0 {
+        if self.sequence == 0 || self.block_height == 0 || self.block_timestamp_ms == 0 {
             return Err(invalid_field(
                 "sora agent apartment audit event",
                 "sequence",
-                "must be greater than zero",
+                "sequence, block_height, and block_timestamp_ms must be greater than zero",
             ));
         }
-        if self.lease_expires_sequence == 0 {
+        if self.lease_expires_height == 0 {
             return Err(invalid_field(
                 "sora agent apartment audit event",
-                "lease_expires_sequence",
+                "lease_expires_height",
                 "must be greater than zero",
             ));
         }
@@ -2481,11 +2524,16 @@ impl SoraAgentApartmentAuditEventV1 {
             ));
         }
         if self.action == SoraAgentApartmentActionV1::AutonomyRunExecuted {
-            if self.run_id.is_none() {
+            if self.run_id.is_none()
+                || self.request_id.as_deref() != self.run_id.as_deref()
+                || self.artifact_hash.is_none()
+                || self.run_label.is_none()
+                || self.budget_units.is_none()
+            {
                 return Err(invalid_field(
                     "sora agent apartment audit event",
                     "run_id",
-                    "autonomy execution events require a run_id",
+                    "autonomy execution events require matching request/run ids and complete approved-run attribution",
                 ));
             }
             if self.result_commitment.is_none() {
@@ -2500,6 +2548,68 @@ impl SoraAgentApartmentAuditEventV1 {
                     "sora agent apartment audit event",
                     "succeeded",
                     "autonomy execution events require a success flag",
+                ));
+            }
+            let service_context_count = [
+                self.service_name.is_some(),
+                self.service_version.is_some(),
+                self.handler_name.is_some(),
+            ]
+            .into_iter()
+            .filter(|present| *present)
+            .count();
+            if !matches!(service_context_count, 0 | 3) {
+                return Err(invalid_field(
+                    "sora agent apartment audit event",
+                    "service_name",
+                    "autonomy execution service_name, service_version, and handler_name must be populated together",
+                ));
+            }
+            if self.journal_artifact_hash.is_none() {
+                return Err(invalid_field(
+                    "sora agent apartment audit event",
+                    "journal_artifact_hash",
+                    "autonomy execution events require their node-local execution-summary artifact hash",
+                ));
+            }
+            match self.succeeded {
+                Some(true)
+                    if self.reason.is_some()
+                        || self.runtime_receipt_id.is_none()
+                        || self.checkpoint_artifact_hash.is_none()
+                        || service_context_count != 3 =>
+                {
+                    return Err(invalid_field(
+                        "sora agent apartment audit event",
+                        "succeeded",
+                        "successful autonomy execution requires complete service context, runtime receipt, journal, and checkpoint attribution without an error",
+                    ));
+                }
+                Some(false)
+                    if self.reason.is_none()
+                        || self.runtime_receipt_id.is_some()
+                        || self.checkpoint_artifact_hash.is_some() =>
+                {
+                    return Err(invalid_field(
+                        "sora agent apartment audit event",
+                        "succeeded",
+                        "failed autonomy execution requires an error and journal but cannot claim a runtime receipt or checkpoint",
+                    ));
+                }
+                _ => {}
+            }
+            if self.asset_definition.is_some()
+                || self.amount.is_some()
+                || self.capability.is_some()
+                || self.from_apartment.is_some()
+                || self.to_apartment.is_some()
+                || self.channel.is_some()
+                || self.payload_hash.is_some()
+            {
+                return Err(invalid_field(
+                    "sora agent apartment audit event",
+                    "action",
+                    "autonomy execution events cannot carry wallet, policy, or mailbox attribution",
                 ));
             }
         }
@@ -2945,6 +3055,10 @@ pub struct SoraServiceAuditEventV1 {
     pub schema_version: u16,
     /// Monotonic audit/event sequence.
     pub sequence: u64,
+    /// Consensus block height that committed the transition.
+    pub block_height: u64,
+    /// Consensus block timestamp that committed the transition.
+    pub block_timestamp_ms: u64,
     /// Lifecycle action that produced the event.
     pub action: SoraServiceLifecycleActionV1,
     /// Service affected by the transition.
@@ -2958,6 +3072,16 @@ pub struct SoraServiceAuditEventV1 {
     pub service_manifest_hash: Hash,
     /// Container manifest hash bound to the transition.
     pub container_manifest_hash: Hash,
+    /// Post-transition process generation.
+    pub process_generation: u64,
+    /// Post-transition config materialization generation.
+    pub config_generation: u64,
+    /// Post-transition secret materialization generation.
+    pub secret_generation: u64,
+    /// Commitment to the complete post-transition config projection.
+    pub config_snapshot_hash: Hash,
+    /// Commitment to the complete post-transition encrypted-secret projection.
+    pub secret_snapshot_hash: Hash,
     /// Governance transaction hash; the wire key is explicitly null when absent.
     #[norito(required)]
     pub governance_tx_hash: Option<Hash>,
@@ -2967,15 +3091,13 @@ pub struct SoraServiceAuditEventV1 {
     /// State key associated with this event; the wire key is explicitly null when absent.
     #[norito(required)]
     pub state_key: Option<String>,
-    /// Service config entry; the wire key is explicitly null when absent.
+    /// Canonically ordered config deltas needed to replay this transition exactly.
+    pub config_mutations: Vec<SoraServiceConfigMutationV1>,
+    /// Canonically ordered encrypted-secret deltas needed to replay this transition exactly.
+    pub secret_mutations: Vec<SoraServiceSecretMutationV1>,
+    /// Complete post-transition rollout state; the wire key is explicitly null when absent.
     #[norito(required)]
-    pub config_name: Option<String>,
-    /// Service secret entry; the wire key is explicitly null when absent.
-    #[norito(required)]
-    pub secret_name: Option<String>,
-    /// Rollout handle; the wire key is explicitly null when absent.
-    #[norito(required)]
-    pub rollout_handle: Option<String>,
+    pub rollout_state: Option<SoraServiceRolloutStateV1>,
     /// Decryption policy name; the wire key is explicitly null when absent.
     #[norito(required)]
     pub policy_name: Option<Name>,
@@ -2994,6 +3116,12 @@ pub struct SoraServiceAuditEventV1 {
     /// Break-glass justification; the wire key is explicitly null when absent.
     #[norito(required)]
     pub break_glass_reason: Option<String>,
+    /// Accepted lease-usage transition input; null for non-lease actions.
+    #[norito(required)]
+    pub lease_usage: Option<SoraServiceLeaseUsageAuditV1>,
+    /// Commitment to the complete post-transition hosted-service lease; null when unchanged.
+    #[norito(required)]
+    pub service_lease_commitment: Option<Hash>,
     /// Hosted-service reporting-epoch rollover payload; the wire key is
     /// explicitly null for every other lifecycle action.
     #[norito(required)]
@@ -3009,6 +3137,7 @@ impl SoraServiceAuditEventV1 {
     pub fn validate(&self) -> Result<(), SoracloudManifestError> {
         self.validate_required_fields()?;
         self.validate_optional_fields()?;
+        self.validate_action_fields()?;
         self.validate_break_glass_fields()?;
         self.validate_reporting_epoch_rollover()
     }
@@ -3018,11 +3147,11 @@ impl SoraServiceAuditEventV1 {
             self.schema_version,
             SORA_SERVICE_AUDIT_EVENT_VERSION_V1,
         )?;
-        if self.sequence == 0 {
+        if self.sequence == 0 || self.block_height == 0 || self.block_timestamp_ms == 0 {
             return Err(invalid_field(
                 "sora service audit event",
                 "sequence",
-                "must be greater than zero",
+                "sequence, block_height, and block_timestamp_ms must be greater than zero",
             ));
         }
         if self
@@ -3047,19 +3176,38 @@ impl SoraServiceAuditEventV1 {
             "container_manifest_hash",
             self.container_manifest_hash,
         )?;
+        if self.process_generation == 0 {
+            return Err(invalid_field(
+                "sora service audit event",
+                "process_generation",
+                "must be greater than zero",
+            ));
+        }
+        validate_soracloud_digest_hash(
+            "sora service audit event",
+            "config_snapshot_hash",
+            self.config_snapshot_hash,
+        )?;
+        validate_soracloud_digest_hash(
+            "sora service audit event",
+            "secret_snapshot_hash",
+            self.secret_snapshot_hash,
+        )?;
         Ok(())
     }
     fn validate_optional_fields(&self) -> Result<(), SoracloudManifestError> {
-        if self
-            .rollout_handle
-            .as_ref()
-            .is_some_and(|handle| handle.trim().is_empty())
-        {
-            return Err(invalid_field(
+        if let Some(rollout) = self.rollout_state.as_ref() {
+            rollout.validate()?;
+        }
+        if let Some(lease_usage) = self.lease_usage.as_ref() {
+            lease_usage.validate()?;
+        }
+        if let Some(service_lease_commitment) = self.service_lease_commitment {
+            validate_soracloud_digest_hash(
                 "sora service audit event",
-                "rollout_handle",
-                "must not be empty when provided",
-            ));
+                "service_lease_commitment",
+                service_lease_commitment,
+            )?;
         }
         if self
             .state_key
@@ -3083,11 +3231,31 @@ impl SoraServiceAuditEventV1 {
                 "must start with '/' when provided",
             ));
         }
-        if let Some(config_name) = self.config_name.as_deref() {
-            validate_service_material_name("sora service audit event", "config_name", config_name)?;
+        let mut previous_config_name = None;
+        for mutation in &self.config_mutations {
+            mutation.validate_at_sequence(self.sequence)?;
+            let config_name = mutation.config_name();
+            if previous_config_name.is_some_and(|previous| previous >= config_name) {
+                return Err(invalid_field(
+                    "sora service audit event",
+                    "config_mutations",
+                    "must be strictly sorted by config name without duplicates",
+                ));
+            }
+            previous_config_name = Some(config_name);
         }
-        if let Some(secret_name) = self.secret_name.as_deref() {
-            validate_service_material_name("sora service audit event", "secret_name", secret_name)?;
+        let mut previous_secret_name = None;
+        for mutation in &self.secret_mutations {
+            mutation.validate_at_sequence(self.sequence)?;
+            let secret_name = mutation.secret_name();
+            if previous_secret_name.is_some_and(|previous| previous >= secret_name) {
+                return Err(invalid_field(
+                    "sora service audit event",
+                    "secret_mutations",
+                    "must be strictly sorted by secret name without duplicates",
+                ));
+            }
+            previous_secret_name = Some(secret_name);
         }
         if self
             .jurisdiction_tag
@@ -3123,6 +3291,290 @@ impl SoraServiceAuditEventV1 {
         }
         Ok(())
     }
+    fn validate_action_fields(&self) -> Result<(), SoracloudManifestError> {
+        use SoraServiceLifecycleActionV1 as Action;
+
+        let (required, allowed): (&[&str], &[&str]) = match self.action {
+            Action::Deploy => (&[], &["service_lease_commitment"]),
+            Action::Upgrade => (
+                &["rollout_state"],
+                &["rollout_state", "service_lease_commitment"],
+            ),
+            Action::LeaseUsage | Action::LeaseReportingEpochRollover => (
+                &["lease_usage", "service_lease_commitment"],
+                &["lease_usage", "service_lease_commitment"],
+            ),
+            Action::ConfigMutation | Action::SecretMutation => (&[], &[]),
+            Action::StateMutation => (
+                &["governance_tx_hash", "binding_name", "state_key"],
+                &["governance_tx_hash", "binding_name", "state_key"],
+            ),
+            Action::FheJobRun => (
+                &[
+                    "governance_tx_hash",
+                    "binding_name",
+                    "state_key",
+                    "policy_name",
+                    "policy_snapshot_hash",
+                ],
+                &[
+                    "governance_tx_hash",
+                    "binding_name",
+                    "state_key",
+                    "policy_name",
+                    "policy_snapshot_hash",
+                ],
+            ),
+            Action::FhePolicyRegister | Action::FhePolicyRotate | Action::FhePolicyRevoke => (
+                &["governance_tx_hash", "policy_name", "policy_snapshot_hash"],
+                &["governance_tx_hash", "policy_name", "policy_snapshot_hash"],
+            ),
+            Action::DecryptionRequest => (
+                &[
+                    "governance_tx_hash",
+                    "binding_name",
+                    "state_key",
+                    "policy_name",
+                    "policy_snapshot_hash",
+                    "jurisdiction_tag",
+                    "break_glass",
+                ],
+                &[
+                    "governance_tx_hash",
+                    "binding_name",
+                    "state_key",
+                    "policy_name",
+                    "policy_snapshot_hash",
+                    "jurisdiction_tag",
+                    "consent_evidence_hash",
+                    "break_glass",
+                    "break_glass_reason",
+                ],
+            ),
+            Action::Rollout => (
+                &["governance_tx_hash", "rollout_state"],
+                &["governance_tx_hash", "rollout_state"],
+            ),
+            Action::Rollback => (
+                &[],
+                &[
+                    "governance_tx_hash",
+                    "rollout_state",
+                    "service_lease_commitment",
+                ],
+            ),
+            Action::CiphertextQuery => {
+                return Err(invalid_field(
+                    "sora service audit event",
+                    "action",
+                    "CiphertextQuery is a read-only response action and must not be persisted as a lifecycle event",
+                ));
+            }
+        };
+        let presence = [
+            ("governance_tx_hash", self.governance_tx_hash.is_some()),
+            ("binding_name", self.binding_name.is_some()),
+            ("state_key", self.state_key.is_some()),
+            ("rollout_state", self.rollout_state.is_some()),
+            ("policy_name", self.policy_name.is_some()),
+            ("policy_snapshot_hash", self.policy_snapshot_hash.is_some()),
+            ("jurisdiction_tag", self.jurisdiction_tag.is_some()),
+            (
+                "consent_evidence_hash",
+                self.consent_evidence_hash.is_some(),
+            ),
+            ("break_glass", self.break_glass.is_some()),
+            ("break_glass_reason", self.break_glass_reason.is_some()),
+            ("lease_usage", self.lease_usage.is_some()),
+            (
+                "service_lease_commitment",
+                self.service_lease_commitment.is_some(),
+            ),
+        ];
+        for (field, present) in presence {
+            if required.contains(&field) && !present {
+                return Err(invalid_field(
+                    "sora service audit event",
+                    field,
+                    "must be present for this lifecycle action",
+                ));
+            }
+            if present && !allowed.contains(&field) {
+                return Err(invalid_field(
+                    "sora service audit event",
+                    field,
+                    "must be null for this lifecycle action",
+                ));
+            }
+        }
+
+        let material_shape_valid = match self.action {
+            Action::Deploy | Action::Upgrade => {
+                self.config_mutations
+                    .iter()
+                    .all(|mutation| matches!(mutation, SoraServiceConfigMutationV1::Upsert(_)))
+                    && self
+                        .secret_mutations
+                        .iter()
+                        .all(|mutation| matches!(mutation, SoraServiceSecretMutationV1::Upsert(_)))
+            }
+            Action::ConfigMutation => {
+                self.config_mutations.len() == 1 && self.secret_mutations.is_empty()
+            }
+            Action::SecretMutation => {
+                self.config_mutations.is_empty() && self.secret_mutations.len() == 1
+            }
+            _ => self.config_mutations.is_empty() && self.secret_mutations.is_empty(),
+        };
+        if !material_shape_valid {
+            return Err(invalid_field(
+                "sora service audit event",
+                "config_mutations",
+                "material deltas must be exact for the lifecycle action and admissions may only upsert",
+            ));
+        }
+
+        match self.action {
+            Action::Deploy
+            | Action::ConfigMutation
+            | Action::SecretMutation
+            | Action::StateMutation
+            | Action::FheJobRun
+            | Action::FhePolicyRegister
+            | Action::FhePolicyRotate
+            | Action::FhePolicyRevoke
+            | Action::DecryptionRequest => {
+                if self.from_version.is_some() {
+                    return Err(invalid_field(
+                        "sora service audit event",
+                        "from_version",
+                        "must be null for this lifecycle action",
+                    ));
+                }
+            }
+            Action::Upgrade | Action::Rollback => {
+                let Some(from_version) = self.from_version.as_deref() else {
+                    return Err(invalid_field(
+                        "sora service audit event",
+                        "from_version",
+                        "must be present for this lifecycle action",
+                    ));
+                };
+                if from_version == self.to_version {
+                    return Err(invalid_field(
+                        "sora service audit event",
+                        "from_version",
+                        "must differ from to_version for this lifecycle action",
+                    ));
+                }
+            }
+            Action::Rollout => {
+                if self.from_version.as_deref() != Some(self.to_version.as_str()) {
+                    return Err(invalid_field(
+                        "sora service audit event",
+                        "from_version",
+                        "rollout progress must bind an unchanged active version",
+                    ));
+                }
+            }
+            Action::LeaseUsage | Action::LeaseReportingEpochRollover => {
+                if self.from_version.as_deref() != Some(self.to_version.as_str()) {
+                    return Err(invalid_field(
+                        "sora service audit event",
+                        "from_version",
+                        "lease accounting must bind an unchanged deployment version",
+                    ));
+                }
+            }
+            Action::CiphertextQuery => {}
+        }
+        if self.action == Action::Rollback
+            && (self.governance_tx_hash.is_some() != self.rollout_state.is_some())
+        {
+            return Err(invalid_field(
+                "sora service audit event",
+                "rollout_state",
+                "rollback governance_tx_hash and rollout_state must be populated together",
+            ));
+        }
+        if self.action == Action::Rollback
+            && self.rollout_state.is_some()
+            && self.service_lease_commitment.is_some()
+        {
+            return Err(invalid_field(
+                "sora service audit event",
+                "service_lease_commitment",
+                "automatic rollout rollback must preserve rather than replace lease state",
+            ));
+        }
+        if let Some(rollout) = self.rollout_state.as_ref() {
+            let handle = rollout.rollout_handle.as_str();
+            let expected_prefix = format!("{}:rollout:", self.service_name);
+            let Some(sequence) = handle.strip_prefix(&expected_prefix) else {
+                return Err(invalid_field(
+                    "sora service audit event",
+                    "rollout_state.rollout_handle",
+                    "must use the canonical `<service>:rollout:<creation-sequence>` namespace",
+                ));
+            };
+            let parsed_sequence = sequence.parse::<u64>().map_err(|_| {
+                invalid_field(
+                    "sora service audit event",
+                    "rollout_state.rollout_handle",
+                    "must end in a canonical positive creation sequence",
+                )
+            })?;
+            if parsed_sequence == 0 || parsed_sequence.to_string() != sequence {
+                return Err(invalid_field(
+                    "sora service audit event",
+                    "rollout_state.rollout_handle",
+                    "must end in a canonical positive creation sequence",
+                ));
+            }
+            if parsed_sequence != rollout.created_sequence {
+                return Err(invalid_field(
+                    "sora service audit event",
+                    "rollout_state.created_sequence",
+                    "must equal the creation sequence encoded in rollout_handle",
+                ));
+            }
+            let rollout_shape_valid = match self.action {
+                Action::Upgrade => {
+                    rollout.created_sequence == self.sequence
+                        && rollout.updated_sequence == self.sequence
+                        && self.from_version.as_deref() == Some(rollout.baseline_version.as_str())
+                        && self.to_version == rollout.candidate_version
+                        && matches!(
+                            rollout.stage,
+                            SoraRolloutStageV1::Canary | SoraRolloutStageV1::Promoted
+                        )
+                }
+                Action::Rollout => {
+                    rollout.updated_sequence == self.sequence
+                        && self.to_version == rollout.candidate_version
+                        && matches!(
+                            rollout.stage,
+                            SoraRolloutStageV1::Canary | SoraRolloutStageV1::Promoted
+                        )
+                }
+                Action::Rollback => {
+                    rollout.updated_sequence == self.sequence
+                        && self.from_version.as_deref() == Some(rollout.candidate_version.as_str())
+                        && self.to_version == rollout.baseline_version
+                        && rollout.stage == SoraRolloutStageV1::RolledBack
+                }
+                _ => false,
+            };
+            if !rollout_shape_valid {
+                return Err(invalid_field(
+                    "sora service audit event",
+                    "rollout_state",
+                    "must be the exact post-transition rollout state for this lifecycle action",
+                ));
+            }
+        }
+        Ok(())
+    }
     fn validate_break_glass_fields(&self) -> Result<(), SoracloudManifestError> {
         if self
             .break_glass_reason
@@ -3152,57 +3604,64 @@ impl SoraServiceAuditEventV1 {
         Ok(())
     }
     fn validate_reporting_epoch_rollover(&self) -> Result<(), SoracloudManifestError> {
-        match (self.action, self.lease_reporting_epoch_rollover.as_ref()) {
-            (SoraServiceLifecycleActionV1::LeaseReportingEpochRollover, Some(rollover)) => {
-                rollover.validate()?;
-                if rollover.reporter_account_id.try_signatory() != Some(&self.signer) {
-                    return Err(invalid_field(
-                        "sora service audit event",
-                        "lease_reporting_epoch_rollover.reporter_account_id",
-                        "single-signatory reporter must match the audit signer",
-                    ));
-                }
-                if self.from_version.as_deref() != Some(self.to_version.as_str()) {
-                    return Err(invalid_field(
-                        "sora service audit event",
-                        "from_version",
-                        "reporting rollover must bind an unchanged deployment version",
-                    ));
-                }
-                if self.governance_tx_hash.is_some()
-                    || self.binding_name.is_some()
-                    || self.state_key.is_some()
-                    || self.config_name.is_some()
-                    || self.secret_name.is_some()
-                    || self.rollout_handle.is_some()
-                    || self.policy_name.is_some()
-                    || self.policy_snapshot_hash.is_some()
-                    || self.jurisdiction_tag.is_some()
-                    || self.consent_evidence_hash.is_some()
-                    || self.break_glass.is_some()
-                    || self.break_glass_reason.is_some()
-                {
+        let usage = self.lease_usage.as_ref();
+        if let Some(usage) = usage
+            && usage
+                .assignment
+                .placement
+                .validator_account_id
+                .try_signatory()
+                != Some(&self.signer)
+        {
+            return Err(invalid_field(
+                "sora service audit event",
+                "lease_usage.assignment.placement.validator_account_id",
+                "single-signatory reporter must match the audit signer",
+            ));
+        }
+        match self.action {
+            SoraServiceLifecycleActionV1::LeaseUsage => {
+                if self.lease_reporting_epoch_rollover.is_some() {
                     return Err(invalid_field(
                         "sora service audit event",
                         "lease_reporting_epoch_rollover",
-                        "reporting rollover must not carry fields from another lifecycle action",
+                        "must be null for same-epoch LeaseUsage",
                     ));
                 }
                 Ok(())
             }
-            (SoraServiceLifecycleActionV1::LeaseReportingEpochRollover, None) => {
-                Err(invalid_field(
-                    "sora service audit event",
-                    "lease_reporting_epoch_rollover",
-                    "must be present for LeaseReportingEpochRollover",
-                ))
+            SoraServiceLifecycleActionV1::LeaseReportingEpochRollover => {
+                let Some(rollover) = self.lease_reporting_epoch_rollover.as_ref() else {
+                    return Err(invalid_field(
+                        "sora service audit event",
+                        "lease_reporting_epoch_rollover",
+                        "must be present for LeaseReportingEpochRollover",
+                    ));
+                };
+                rollover.validate()?;
+                let usage = usage.expect("rollover action-field validation requires usage");
+                if usage.reporting_epoch != rollover.new_reporting_epoch
+                    || usage.assignment.service_version != rollover.active_service_version
+                    || usage.assignment.placement.replica_slot != rollover.replica_slot
+                    || usage.assignment.placement.validator_account_id
+                        != rollover.reporter_account_id
+                    || usage.replica_accounted_egress_bytes != 0
+                    || usage.finalize_reporter
+                {
+                    return Err(invalid_field(
+                        "sora service audit event",
+                        "lease_reporting_epoch_rollover",
+                        "usage, settlement, and successor opener must describe one exact rollover",
+                    ));
+                }
+                Ok(())
             }
-            (_, Some(_)) => Err(invalid_field(
+            _ if self.lease_reporting_epoch_rollover.is_some() => Err(invalid_field(
                 "sora service audit event",
                 "lease_reporting_epoch_rollover",
                 "must be null for non-rollover lifecycle actions",
             )),
-            (_, None) => Ok(()),
+            _ => Ok(()),
         }
     }
 }
@@ -3239,14 +3698,6 @@ pub struct SoraServiceRuntimeStateV1 {
     pub load_factor_bps: u16,
     /// Active materialized bundle hash.
     pub materialized_bundle_hash: Hash,
-    /// Active rollout handle; the wire key is explicitly null when absent.
-    #[norito(required)]
-    pub rollout_handle: Option<String>,
-    /// Pending ordered mailbox messages for the service.
-    pub pending_mailbox_message_count: u32,
-    /// Last emitted runtime receipt identifier; the wire key is explicitly null when absent.
-    #[norito(required)]
-    pub last_receipt_id: Option<Hash>,
 }
 impl SoraServiceRuntimeStateV1 {
     /// Validate runtime-state bounds and formatting.
@@ -3272,27 +3723,11 @@ impl SoraServiceRuntimeStateV1 {
                 "must be within 0..=10_000",
             ));
         }
-        if let Some(handle) = self.rollout_handle.as_ref()
-            && handle.trim().is_empty()
-        {
-            return Err(invalid_field(
-                "sora service runtime state",
-                "rollout_handle",
-                "must not be empty when provided",
-            ));
-        }
         validate_soracloud_digest_hash(
             "sora service runtime state",
             "materialized_bundle_hash",
             self.materialized_bundle_hash,
         )?;
-        if let Some(last_receipt_id) = self.last_receipt_id {
-            validate_soracloud_digest_hash(
-                "sora service runtime state",
-                "last_receipt_id",
-                last_receipt_id,
-            )?;
-        }
         Ok(())
     }
 }
@@ -3325,11 +3760,6 @@ pub struct SoraInrouReplicaRuntimeStateV1 {
     pub reporting_epoch: u64,
     /// Total authoritative egress bytes accounted for the placed replica so far.
     pub accounted_egress_bytes: u64,
-    /// Pending ordered mailbox messages projected for the placed replica.
-    pub pending_mailbox_message_count: u32,
-    /// Last emitted runtime receipt identifier; the wire key is explicitly null when absent.
-    #[norito(required)]
-    pub last_receipt_id: Option<Hash>,
     /// Timestamp when this replica state was last refreshed.
     pub updated_at_ms: u64,
     /// Human-readable last runtime error, when present.
@@ -3360,7 +3790,11 @@ impl SoraInrouReplicaRuntimeStateV1 {
                 "must be greater than zero",
             ));
         }
-        validate_peer_id_field("sora inrou replica runtime state", &self.peer_id)?;
+        validate_validator_account_peer_id(
+            "sora inrou replica runtime state",
+            &self.validator_account_id,
+            &self.peer_id,
+        )?;
         if self.load_factor_bps > 10_000 {
             return Err(invalid_field(
                 "sora inrou replica runtime state",
@@ -3387,13 +3821,6 @@ impl SoraInrouReplicaRuntimeStateV1 {
             "materialized_bundle_hash",
             self.materialized_bundle_hash,
         )?;
-        if let Some(last_receipt_id) = self.last_receipt_id {
-            validate_soracloud_digest_hash(
-                "sora inrou replica runtime state",
-                "last_receipt_id",
-                last_receipt_id,
-            )?;
-        }
         Ok(())
     }
 }
@@ -3404,7 +3831,10 @@ impl SoraInrouReplicaRuntimeStateV1 {
 pub struct SoraServiceMailboxMessageV1 {
     /// Schema version; must equal [`SORA_SERVICE_MAILBOX_MESSAGE_VERSION_V1`].
     pub schema_version: u16,
-    /// Deterministic message identifier.
+    /// Ledger-derived deterministic message identifier.
+    ///
+    /// Submissions must carry the zero prehash sentinel; the ledger replaces it after binding the
+    /// active service revisions and authoritative delivery schedule.
     pub message_id: Hash,
     /// Source service name.
     pub from_service: Name,
@@ -3423,24 +3853,56 @@ pub struct SoraServiceMailboxMessageV1 {
     /// Commitment over the opaque message payload.
     pub payload_commitment: Hash,
     /// Relative delivery delay requested by the source runtime.
-    pub delivery_delay_sequences: u32,
+    pub delivery_delay_blocks: u32,
     /// Ledger-assigned ordered sequence at which the message was enqueued.
     ///
     /// A [`crate::isi::soracloud::RecordSoracloudMailboxMessage`] submission must set this and the
     /// two derived scheduling fields below to zero. Ledger execution assigns all three from the
     /// canonical Soracloud sequence domain and the destination handler's mailbox contract.
     pub enqueue_sequence: u64,
-    /// Ledger-derived earliest sequence at which the message may execute.
-    pub available_after_sequence: u64,
-    /// Ledger-derived sequence at which the message expires.
-    pub expires_at_sequence: u64,
+    /// Consensus block height in which the message was enqueued.
+    pub enqueue_height: u64,
+    /// Ledger-derived earliest height at which the message may execute.
+    pub available_after_height: u64,
+    /// Ledger-derived height at which the message expires.
+    pub expires_at_height: u64,
 }
+
+/// Derive the canonical ledger-assigned identity for one ordered mailbox message.
+///
+/// Every immutable source, destination, payload, delay, and ledger-assigned schedule field is
+/// bound. The message identifier itself is deliberately excluded.
+#[must_use]
+pub fn derive_soracloud_mailbox_message_id_v1(message: &SoraServiceMailboxMessageV1) -> Hash {
+    let mut transcript = Vec::new();
+    for part in [
+        "soracloud:service-mailbox-message:v1".encode(),
+        message.schema_version.encode(),
+        message.from_service.encode(),
+        message.from_service_version.encode(),
+        message.from_handler.encode(),
+        message.to_service.encode(),
+        message.to_service_version.encode(),
+        message.to_handler.encode(),
+        message.payload_bytes.encode(),
+        message.payload_commitment.encode(),
+        message.delivery_delay_blocks.encode(),
+        message.enqueue_sequence.encode(),
+        message.enqueue_height.encode(),
+        message.available_after_height.encode(),
+        message.expires_at_height.encode(),
+    ] {
+        transcript.extend(part);
+    }
+    Hash::new(transcript)
+}
+
 impl SoraServiceMailboxMessageV1 {
     /// Validate a ledger-assigned mailbox message.
     ///
     /// # Errors
     /// Returns [`SoracloudManifestError`] when schema versions mismatch or
-    /// availability/expiry sequences are inconsistent.
+    /// availability/expiry heights are inconsistent.
     pub fn validate(&self) -> Result<(), SoracloudManifestError> {
         self.validate_with_sequence_state(true)
     }
@@ -3459,11 +3921,19 @@ impl SoraServiceMailboxMessageV1 {
             self.schema_version,
             SORA_SERVICE_MAILBOX_MESSAGE_VERSION_V1,
         )?;
-        validate_soracloud_digest_hash(
-            "sora service mailbox message",
-            "message_id",
-            self.message_id,
-        )?;
+        if require_assigned_schedule {
+            validate_soracloud_digest_hash(
+                "sora service mailbox message",
+                "message_id",
+                self.message_id,
+            )?;
+        } else if self.message_id != Hash::prehashed([0; Hash::LENGTH]) {
+            return Err(invalid_field(
+                "sora service mailbox message",
+                "message_id",
+                "must be the all-zero ledger-assignment sentinel before submission",
+            ));
+        }
         if require_assigned_schedule {
             validate_nonblank_field(
                 "sora service mailbox message",
@@ -3489,8 +3959,9 @@ impl SoraServiceMailboxMessageV1 {
         )?;
         if require_assigned_schedule
             && (self.enqueue_sequence == 0
-                || self.available_after_sequence == 0
-                || self.expires_at_sequence == 0)
+                || self.enqueue_height == 0
+                || self.available_after_height == 0
+                || self.expires_at_height == 0)
         {
             return Err(invalid_field(
                 "sora service mailbox message",
@@ -3500,8 +3971,9 @@ impl SoraServiceMailboxMessageV1 {
         }
         if !require_assigned_schedule
             && (self.enqueue_sequence != 0
-                || self.available_after_sequence != 0
-                || self.expires_at_sequence != 0)
+                || self.enqueue_height != 0
+                || self.available_after_height != 0
+                || self.expires_at_height != 0)
         {
             return Err(invalid_field(
                 "sora service mailbox message",
@@ -3509,11 +3981,11 @@ impl SoraServiceMailboxMessageV1 {
                 "ledger-assigned schedule fields must be zero before ledger submission",
             ));
         }
-        if require_assigned_schedule && self.available_after_sequence < self.enqueue_sequence {
+        if require_assigned_schedule && self.available_after_height < self.enqueue_height {
             return Err(invalid_field(
                 "sora service mailbox message",
-                "available_after_sequence",
-                "must be >= enqueue_sequence",
+                "available_after_height",
+                "must be >= enqueue_height",
             ));
         }
         if Hash::new(self.payload_bytes.as_slice()) != self.payload_commitment {
@@ -3523,27 +3995,24 @@ impl SoraServiceMailboxMessageV1 {
                 "must match payload_bytes",
             ));
         }
-        if require_assigned_schedule && self.expires_at_sequence <= self.available_after_sequence {
+        if require_assigned_schedule && self.expires_at_height <= self.available_after_height {
             return Err(invalid_field(
                 "sora service mailbox message",
-                "expires_at_sequence",
-                "must be greater than available_after_sequence",
+                "expires_at_height",
+                "must be greater than available_after_height",
+            ));
+        }
+        if require_assigned_schedule
+            && self.message_id != derive_soracloud_mailbox_message_id_v1(self)
+        {
+            return Err(invalid_field(
+                "sora service mailbox message",
+                "message_id",
+                "must equal the canonical ledger-derived mailbox message identity",
             ));
         }
         Ok(())
     }
-}
-/// Exact Inrou replica assignment that executed a Soracloud workload.
-#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[norito(deny_unknown_fields)]
-pub struct SoraRuntimeInrouReplicaHostV1 {
-    /// One-based replica slot in the active service placement.
-    pub replica_slot: u16,
-    /// Validator account assigned to the replica.
-    pub validator_account_id: AccountId,
-    /// Peer identifier bound to the active replica assignment.
-    pub peer_id: String,
 }
 /// Exact HF model-host assignment that executed a Soracloud workload.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
@@ -3552,9 +4021,27 @@ pub struct SoraRuntimeInrouReplicaHostV1 {
 pub struct SoraRuntimeHfModelHostV1 {
     /// Authoritative HF placement identifier.
     pub placement_id: Hash,
+    /// Canonical imported HF source served by the placement.
+    pub source_id: Hash,
+    /// Shared-lease pool whose window created the placement.
+    pub pool_id: Hash,
+    /// Deterministic selection seed for the exact placement window.
+    pub selection_seed_hash: Hash,
     /// Validator account assigned to the model host.
     pub validator_account_id: AccountId,
     /// Peer identifier bound to the active model-host assignment.
+    pub peer_id: String,
+}
+/// Exact active validator selected to execute one deterministic mailbox message.
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[norito(deny_unknown_fields)]
+pub struct SoraRuntimeDeterministicValidatorHostV1 {
+    /// Active public lane whose validator record was selected.
+    pub lane_id: LaneId,
+    /// Validator account selected by the message-bound rendezvous rule.
+    pub validator_account_id: AccountId,
+    /// Peer identifier in the exact active validator record.
     pub peer_id: String,
 }
 /// Exact authoritative host assignment that executed a Soracloud workload.
@@ -3563,34 +4050,47 @@ pub struct SoraRuntimeHfModelHostV1 {
 #[cfg_attr(feature = "json", norito(tag = "host_kind", content = "value"))]
 #[norito(deny_unknown_fields)]
 pub enum SoraRuntimeExecutionHostV1 {
-    /// One placed Inrou replica assigned to the executing validator.
-    InrouReplica(SoraRuntimeInrouReplicaHostV1),
+    /// Active public-lane validator selected for deterministic IVM mailbox execution.
+    DeterministicValidator(SoraRuntimeDeterministicValidatorHostV1),
     /// One active Hugging Face model-host placement assignment.
     HfModelHost(SoraRuntimeHfModelHostV1),
 }
 impl SoraRuntimeExecutionHostV1 {
     /// Validate structural execution-host attribution.
     ///
-    /// Authoritative placement and capability bindings are validated by ledger execution.
+    /// Active capability and assignment eligibility are validated by ledger execution. The
+    /// immutable source, pool, seed, and placement identity remain self-verifying after the active
+    /// lease window rolls over.
     pub fn validate(&self) -> Result<(), SoracloudManifestError> {
         match self {
-            Self::InrouReplica(host) => {
-                if host.replica_slot == 0 {
+            Self::DeterministicValidator(host) => validate_validator_account_peer_id(
+                "sora runtime execution host",
+                &host.validator_account_id,
+                &host.peer_id,
+            ),
+            Self::HfModelHost(host) => {
+                for (field, digest) in [
+                    ("placement_id", host.placement_id),
+                    ("source_id", host.source_id),
+                    ("pool_id", host.pool_id),
+                    ("selection_seed_hash", host.selection_seed_hash),
+                ] {
+                    validate_soracloud_digest_hash("sora runtime execution host", field, digest)?;
+                }
+                let expected_placement_id =
+                    derive_hf_placement_id_v1(host.pool_id, host.selection_seed_hash)?;
+                if host.placement_id != expected_placement_id {
                     return Err(invalid_field(
                         "sora runtime execution host",
-                        "replica_slot",
-                        "must be greater than zero",
+                        "placement_id",
+                        "must be canonically derived from pool_id and selection_seed_hash",
                     ));
                 }
-                validate_nonblank_field("sora runtime execution host", "peer_id", &host.peer_id)
-            }
-            Self::HfModelHost(host) => {
-                validate_soracloud_digest_hash(
+                validate_validator_account_peer_id(
                     "sora runtime execution host",
-                    "placement_id",
-                    host.placement_id,
-                )?;
-                validate_nonblank_field("sora runtime execution host", "peer_id", &host.peer_id)
+                    &host.validator_account_id,
+                    &host.peer_id,
+                )
             }
         }
     }
@@ -3598,9 +4098,159 @@ impl SoraRuntimeExecutionHostV1 {
     #[must_use]
     pub fn validator_account_id(&self) -> &AccountId {
         match self {
-            Self::InrouReplica(host) => &host.validator_account_id,
+            Self::DeterministicValidator(host) => &host.validator_account_id,
             Self::HfModelHost(host) => &host.validator_account_id,
         }
+    }
+}
+/// One state effect emitted by deterministic ordered-mailbox execution.
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[norito(deny_unknown_fields)]
+pub struct SoraOrderedMailboxStateMutationV1 {
+    /// Schema version; must equal [`SORA_ORDERED_MAILBOX_STATE_MUTATION_VERSION_V1`].
+    pub schema_version: u16,
+    /// Declared service-state binding.
+    pub binding_name: Name,
+    /// Canonical key scoped by the binding.
+    pub state_key: String,
+    /// Mutation mode to apply.
+    pub operation: SoraStateMutationOperationV1,
+    /// Encryption contract enforced by the binding.
+    pub encryption: SoraStateEncryptionV1,
+    /// Full value for an upsert and explicit null for a delete.
+    #[norito(required)]
+    pub value_payload: Option<Vec<u8>>,
+}
+impl SoraOrderedMailboxStateMutationV1 {
+    /// Validate the structural mutation envelope.
+    pub fn validate(&self) -> Result<(), SoracloudManifestError> {
+        validate_schema_version(
+            "sora ordered mailbox state mutation",
+            self.schema_version,
+            SORA_ORDERED_MAILBOX_STATE_MUTATION_VERSION_V1,
+        )?;
+        if self.state_key.trim().is_empty() || !self.state_key.starts_with('/') {
+            return Err(invalid_field(
+                "sora ordered mailbox state mutation",
+                "state_key",
+                "must be a non-empty absolute binding key",
+            ));
+        }
+        match (self.operation, self.value_payload.as_ref()) {
+            (SoraStateMutationOperationV1::Upsert, Some(payload)) if !payload.is_empty() => Ok(()),
+            (SoraStateMutationOperationV1::Delete, None) => Ok(()),
+            (SoraStateMutationOperationV1::Upsert, _) => Err(invalid_field(
+                "sora ordered mailbox state mutation",
+                "value_payload",
+                "must be non-empty for an upsert",
+            )),
+            (SoraStateMutationOperationV1::Delete, Some(_)) => Err(invalid_field(
+                "sora ordered mailbox state mutation",
+                "value_payload",
+                "must be null for a delete",
+            )),
+        }
+    }
+}
+/// Atomic effects and receipt produced by one deterministic mailbox execution.
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[norito(deny_unknown_fields)]
+pub struct SoraOrderedMailboxResultV1 {
+    /// Schema version; must equal [`SORA_ORDERED_MAILBOX_RESULT_VERSION_V1`].
+    pub schema_version: u16,
+    /// Committed height whose exact state snapshot was executed.
+    pub observed_height: u64,
+    /// Committed tip hash whose exact state snapshot was executed.
+    #[norito(required)]
+    pub observed_block_hash: Option<Hash>,
+    /// Next authoritative Soracloud sequence observed before execution.
+    pub observed_sequence: u64,
+    /// Ordered state effects to apply atomically.
+    pub state_mutations: Vec<SoraOrderedMailboxStateMutationV1>,
+    /// Ordered outbound messages to admit atomically.
+    pub outbound_mailbox_messages: Vec<SoraServiceMailboxMessageV1>,
+    /// Commitment to the runtime response bytes, including an empty response.
+    pub response_commitment: Hash,
+    /// Runtime-owned commitment distinguishing success and deterministic failure outcomes.
+    pub runtime_execution_commitment: Hash,
+    /// Response media type when the handler emitted one.
+    #[norito(required)]
+    pub content_type: Option<String>,
+    /// Exact runtime-state row observed before execution, used as an in-block OCC precondition.
+    #[norito(required)]
+    pub observed_runtime_state: Option<SoraServiceRuntimeStateV1>,
+    /// Runtime-state projection to persist after the effects.
+    #[norito(required)]
+    pub runtime_state: Option<SoraServiceRuntimeStateV1>,
+    /// Submission-sentinel receipt that consumes the source message.
+    pub runtime_receipt: SoraRuntimeReceiptV1,
+}
+impl SoraOrderedMailboxResultV1 {
+    /// Validate the submission envelope before ledger-specific authorization and OCC checks.
+    pub fn validate_submission(&self) -> Result<(), SoracloudManifestError> {
+        validate_schema_version(
+            "sora ordered mailbox result",
+            self.schema_version,
+            SORA_ORDERED_MAILBOX_RESULT_VERSION_V1,
+        )?;
+        if self.observed_height == 0 {
+            return Err(invalid_field(
+                "sora ordered mailbox result",
+                "observed_height",
+                "must be greater than zero",
+            ));
+        }
+        if self.observed_sequence == 0 {
+            return Err(invalid_field(
+                "sora ordered mailbox result",
+                "observed_sequence",
+                "must be greater than zero",
+            ));
+        }
+        if self
+            .content_type
+            .as_ref()
+            .is_some_and(|value| value.trim().is_empty())
+        {
+            return Err(invalid_field(
+                "sora ordered mailbox result",
+                "content_type",
+                "must not be blank when present",
+            ));
+        }
+        for mutation in &self.state_mutations {
+            mutation.validate()?;
+        }
+        for message in &self.outbound_mailbox_messages {
+            message.validate_submission()?;
+        }
+        if let Some(state) = self.observed_runtime_state.as_ref() {
+            state.validate()?;
+        }
+        if let Some(state) = self.runtime_state.as_ref() {
+            state.validate()?;
+        }
+        self.runtime_receipt.validate_submission()?;
+        if self.runtime_receipt.mailbox_message_id.is_none() {
+            return Err(invalid_field(
+                "sora ordered mailbox result",
+                "runtime_receipt.mailbox_message_id",
+                "must identify the consumed mailbox message",
+            ));
+        }
+        if !matches!(
+            self.runtime_receipt.execution_host.as_ref(),
+            Some(SoraRuntimeExecutionHostV1::DeterministicValidator(_))
+        ) {
+            return Err(invalid_field(
+                "sora ordered mailbox result",
+                "runtime_receipt.execution_host",
+                "must carry deterministic-validator attribution",
+            ));
+        }
+        Ok(())
     }
 }
 /// Authoritative execution receipt emitted by the generic Soracloud runtime.
@@ -3644,6 +4294,26 @@ pub struct SoraRuntimeReceiptV1 {
     /// Checkpoint artifact hash; the wire key is explicitly null when absent.
     #[norito(required)]
     pub checkpoint_artifact_hash: Option<Hash>,
+}
+/// Derive the sequence-independent identifier for a non-mailbox runtime receipt.
+///
+/// The identifier binds every immutable execution and artifact-attribution field while excluding
+/// only the ledger-assigned sequence and the identifier itself.
+#[must_use]
+pub fn derive_soracloud_local_read_receipt_id_v1(receipt: &SoraRuntimeReceiptV1) -> Hash {
+    Hash::new(Encode::encode(&(
+        "soracloud:local-read-receipt:v1",
+        receipt.service_name.as_ref(),
+        receipt.service_version.as_str(),
+        receipt.handler_name.as_ref(),
+        receipt.handler_class,
+        receipt.request_commitment,
+        receipt.result_commitment,
+        receipt.certified_by,
+        receipt.execution_host.clone(),
+        receipt.journal_artifact_hash,
+        receipt.checkpoint_artifact_hash,
+    )))
 }
 impl SoraRuntimeReceiptV1 {
     /// Validate a ledger-assigned runtime receipt.

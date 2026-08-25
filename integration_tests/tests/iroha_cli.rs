@@ -3979,7 +3979,7 @@ async fn soracloud_agent_runtime_state_recovers_after_peer_restart_live_torii_co
     );
     assert!(
         apartment
-            .get("lease_remaining_ticks")
+            .get("lease_remaining_blocks")
             .and_then(Value::as_u64)
             .is_some_and(|ticks| ticks > 0)
     );

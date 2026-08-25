@@ -147,6 +147,28 @@ fn validate_peer_id_field(
     }
     Ok(())
 }
+fn validate_validator_account_peer_id(
+    manifest: &'static str,
+    validator_account_id: &AccountId,
+    peer_id: &str,
+) -> Result<(), SoracloudManifestError> {
+    validate_peer_id_field(manifest, peer_id)?;
+    let signatory = validator_account_id.try_signatory().ok_or_else(|| {
+        invalid_field(
+            manifest,
+            "validator_account_id",
+            "account-derived peer identity requires a single-signatory validator account",
+        )
+    })?;
+    if PeerId::from(signatory.clone()).to_string() != peer_id {
+        return Err(invalid_field(
+            manifest,
+            "peer_id",
+            "peer must be derived from the validator account's single signatory",
+        ));
+    }
+    Ok(())
+}
 fn validate_optional_nonempty(
     manifest: &'static str,
     field: &'static str,
@@ -1341,12 +1363,12 @@ pub struct SoraHttpServiceEconomicsV1 {
     pub deployment_deposit: Quantity,
     /// Prepaid runtime balance used for fail-closed admission and routing.
     pub prepaid_runtime_balance: Quantity,
-    /// Lease duration, measured in Soracloud audit sequences.
-    pub lease_duration_sequences: NonZeroU64,
-    /// Runtime charge applied per active sequence.
-    pub runtime_price_per_sequence: Quantity,
-    /// Storage charge applied per GiB and active sequence.
-    pub storage_price_per_gib_sequence: Quantity,
+    /// Lease duration, measured in consensus blocks.
+    pub lease_duration_blocks: NonZeroU64,
+    /// Runtime charge applied per active block.
+    pub runtime_price_per_block: Quantity,
+    /// Storage charge applied per GiB and active block.
+    pub storage_price_per_gib_block: Quantity,
     /// Egress charge applied per MiB when runtime accounting reports traffic.
     pub egress_price_per_mib: Quantity,
 }
@@ -1357,9 +1379,9 @@ impl Default for SoraHttpServiceEconomicsV1 {
             quota_class: "taira-open".to_owned(),
             deployment_deposit: xor_quantity_from_nanos(1_000_000_000),
             prepaid_runtime_balance: xor_quantity_from_nanos(50_000_000_000),
-            lease_duration_sequences: NonZeroU64::new(86_400).expect("non-zero lease duration"),
-            runtime_price_per_sequence: xor_quantity_from_nanos(250_000),
-            storage_price_per_gib_sequence: xor_quantity_from_nanos(25_000),
+            lease_duration_blocks: NonZeroU64::new(86_400).expect("non-zero lease duration"),
+            runtime_price_per_block: xor_quantity_from_nanos(250_000),
+            storage_price_per_gib_block: xor_quantity_from_nanos(25_000),
             egress_price_per_mib: xor_quantity_from_nanos(5_000),
         }
     }
@@ -1385,12 +1407,12 @@ impl SoraHttpServiceEconomicsV1 {
             ("deployment_deposit", &self.deployment_deposit),
             ("prepaid_runtime_balance", &self.prepaid_runtime_balance),
             (
-                "runtime_price_per_sequence",
-                &self.runtime_price_per_sequence,
+                "runtime_price_per_block",
+                &self.runtime_price_per_block,
             ),
             (
-                "storage_price_per_gib_sequence",
-                &self.storage_price_per_gib_sequence,
+                "storage_price_per_gib_block",
+                &self.storage_price_per_gib_block,
             ),
             ("egress_price_per_mib", &self.egress_price_per_mib),
         ] {
@@ -1414,7 +1436,7 @@ pub enum SoraServiceLeaseStatusV1 {
     /// Lease is active and the service may be routed/materialized.
     #[default]
     Active,
-    /// Lease expired at or before the observed sequence.
+    /// Lease expired at or before the observed consensus height.
     Expired,
     /// Prepaid runtime balance is exhausted.
     Exhausted,
@@ -1428,6 +1450,45 @@ pub enum SoraServiceLeaseStatusV1 {
 /// newly assigned reporter may advance the reporting epoch only after every
 /// prior checkpoint is terminal and no prior reporter remains actively placed.
 pub const SORA_SERVICE_LEASE_MAX_EGRESS_REPORTER_CHECKPOINTS_V1: usize = 4_096;
+/// Immutable placement evidence bound to one admitted egress reporter.
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[norito(deny_unknown_fields)]
+pub struct SoraServiceLeaseReporterAssignmentV1 {
+    /// Schema version; must equal
+    /// [`SORA_SERVICE_LEASE_REPORTER_ASSIGNMENT_VERSION_V1`].
+    pub schema_version: u16,
+    /// Exact service revision served by the assigned replica.
+    pub service_version: String,
+    /// Complete authoritative Inrou placement admitted for this reporter.
+    pub placement: SoraInrouReplicaPlacementV1,
+    /// Consensus timestamp of the placement reconciliation that produced this assignment.
+    pub placement_reconciled_at_ms: u64,
+}
+impl SoraServiceLeaseReporterAssignmentV1 {
+    /// Validate immutable reporter-assignment evidence.
+    pub fn validate(&self) -> Result<(), SoracloudManifestError> {
+        validate_schema_version(
+            "sora service lease reporter assignment",
+            self.schema_version,
+            SORA_SERVICE_LEASE_REPORTER_ASSIGNMENT_VERSION_V1,
+        )?;
+        validate_nonblank_field(
+            "sora service lease reporter assignment",
+            "service_version",
+            &self.service_version,
+        )?;
+        self.placement.validate()?;
+        if self.placement_reconciled_at_ms == 0 {
+            return Err(invalid_field(
+                "sora service lease reporter assignment",
+                "placement_reconciled_at_ms",
+                "must be greater than zero",
+            ));
+        }
+        Ok(())
+    }
+}
 /// One reporting-epoch-bound replica reporter's monotonic egress checkpoint.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
@@ -1435,19 +1496,54 @@ pub const SORA_SERVICE_LEASE_MAX_EGRESS_REPORTER_CHECKPOINTS_V1: usize = 4_096;
 pub struct SoraServiceLeaseEgressCheckpointV1 {
     /// Reporting epoch in which this checkpoint was admitted.
     pub reporting_epoch: u64,
-    /// Service revision for which the replica emitted this usage.
-    pub active_service_version: String,
-    /// One-based placed replica slot.
-    pub replica_slot: u16,
-    /// Validator authority authenticated when the checkpoint was accepted.
-    pub validator_account_id: AccountId,
+    /// Immutable placement evidence authenticated when the checkpoint was admitted.
+    pub assignment: SoraServiceLeaseReporterAssignmentV1,
     /// Monotonic egress bytes emitted by this exact reporter identity.
     pub accounted_egress_bytes: u64,
+    /// Consensus height of the most recent accepted update for this reporter.
+    pub last_updated_height: u64,
     /// Whether this reporter identity has submitted its terminal checkpoint.
     ///
     /// An identical active placement may reopen the checkpoint before serving
     /// again. A former reporter may only replay the exact terminal value.
     pub finalize_reporter: bool,
+    /// Whether consensus force-finalized an idle reporter after the protocol grace.
+    pub forced_finalization: bool,
+}
+/// Exact input accepted for one hosted-service egress checkpoint transition.
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[norito(deny_unknown_fields)]
+pub struct SoraServiceLeaseUsageAuditV1 {
+    /// Schema version; must equal [`SORA_SERVICE_LEASE_USAGE_AUDIT_VERSION_V1`].
+    pub schema_version: u16,
+    /// Reporting epoch targeted by the accepted transition.
+    pub reporting_epoch: u64,
+    /// Immutable placement evidence authenticated for this transition.
+    pub assignment: SoraServiceLeaseReporterAssignmentV1,
+    /// Exact monotonic bytes supplied by this reporter identity.
+    pub replica_accounted_egress_bytes: u64,
+    /// Whether the reporter closed its current-epoch checkpoint.
+    pub finalize_reporter: bool,
+}
+impl SoraServiceLeaseUsageAuditV1 {
+    /// Validate structural lease-usage audit material.
+    pub fn validate(&self) -> Result<(), SoracloudManifestError> {
+        validate_schema_version(
+            "sora service lease usage audit",
+            self.schema_version,
+            SORA_SERVICE_LEASE_USAGE_AUDIT_VERSION_V1,
+        )?;
+        if self.reporting_epoch == 0 {
+            return Err(invalid_field(
+                "sora service lease usage audit",
+                "reporting_epoch",
+                "must be greater than zero",
+            ));
+        }
+        self.assignment.validate()?;
+        Ok(())
+    }
 }
 /// Typed audit payload for one hosted-service reporting-epoch rollover.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
@@ -1458,7 +1554,7 @@ pub struct SoraServiceLeaseReportingEpochRolloverV1 {
     /// [`SORA_SERVICE_LEASE_REPORTING_EPOCH_ROLLOVER_VERSION_V1`].
     pub schema_version: u16,
     /// Immutable economic lease incarnation to which the rollover belongs.
-    pub lease_started_sequence: u64,
+    pub lease_started_height: u64,
     /// Epoch whose terminal counters were settled.
     pub previous_reporting_epoch: u64,
     /// Exact successor epoch opened by the rollover.
@@ -1471,6 +1567,8 @@ pub struct SoraServiceLeaseReportingEpochRolloverV1 {
     pub replica_slot: u16,
     /// Number of terminal prior-epoch checkpoints folded into settlement.
     pub finalized_checkpoint_count: u32,
+    /// Number of idle prior-epoch checkpoints force-finalized during rollover.
+    pub forced_finalized_checkpoint_count: u32,
     /// Exact prior-epoch bytes added to the settlement baseline.
     pub settled_egress_bytes_delta: u128,
     /// Exact cumulative settled bytes after the rollover.
@@ -1488,10 +1586,10 @@ impl SoraServiceLeaseReportingEpochRolloverV1 {
             self.schema_version,
             SORA_SERVICE_LEASE_REPORTING_EPOCH_ROLLOVER_VERSION_V1,
         )?;
-        if self.lease_started_sequence == 0 {
+        if self.lease_started_height == 0 {
             return Err(invalid_field(
                 "sora service lease reporting epoch rollover",
-                "lease_started_sequence",
+                "lease_started_height",
                 "must be greater than zero",
             ));
         }
@@ -1525,6 +1623,13 @@ impl SoraServiceLeaseReportingEpochRolloverV1 {
                 "must equal the reporting-epoch checkpoint limit",
             ));
         }
+        if self.forced_finalized_checkpoint_count > self.finalized_checkpoint_count {
+            return Err(invalid_field(
+                "sora service lease reporting epoch rollover",
+                "forced_finalized_checkpoint_count",
+                "must not exceed finalized_checkpoint_count",
+            ));
+        }
         if self
             .settled_egress_bytes
             .checked_sub(self.settled_egress_bytes_delta)
@@ -1554,16 +1659,16 @@ pub struct SoraServiceLeaseStateV1 {
     pub deployment_deposit: Quantity,
     /// Prepaid runtime balance available to the service.
     pub prepaid_runtime_balance: Quantity,
-    /// Runtime charge applied per active sequence.
-    pub runtime_price_per_sequence: Quantity,
-    /// Storage charge applied per GiB and active sequence.
-    pub storage_price_per_gib_sequence: Quantity,
+    /// Runtime charge applied per active block.
+    pub runtime_price_per_block: Quantity,
+    /// Storage charge applied per GiB and active block.
+    pub storage_price_per_gib_block: Quantity,
     /// Egress charge applied per MiB when usage is reported.
     pub egress_price_per_mib: Quantity,
-    /// Sequence when the lease became active.
-    pub lease_started_sequence: u64,
-    /// Sequence after which the lease must fail closed.
-    pub lease_expires_sequence: u64,
+    /// Consensus block height when the lease became active.
+    pub lease_started_height: u64,
+    /// Consensus block height at which the lease must fail closed.
+    pub lease_expires_height: u64,
     /// Monotonic reporting epoch, independent of the economic lease clock.
     pub reporting_epoch: u64,
     /// Exact bytes settled from all finalized prior reporting epochs.
@@ -1619,12 +1724,12 @@ impl SoraServiceLeaseStateV1 {
         for (field, value) in [
             ("deployment_deposit", &self.deployment_deposit),
             (
-                "runtime_price_per_sequence",
-                &self.runtime_price_per_sequence,
+                "runtime_price_per_block",
+                &self.runtime_price_per_block,
             ),
             (
-                "storage_price_per_gib_sequence",
-                &self.storage_price_per_gib_sequence,
+                "storage_price_per_gib_block",
+                &self.storage_price_per_gib_block,
             ),
             ("egress_price_per_mib", &self.egress_price_per_mib),
         ] {
@@ -1637,8 +1742,8 @@ impl SoraServiceLeaseStateV1 {
             }
         }
         for (field, value) in [
-            ("lease_started_sequence", self.lease_started_sequence),
-            ("lease_expires_sequence", self.lease_expires_sequence),
+            ("lease_started_height", self.lease_started_height),
+            ("lease_expires_height", self.lease_expires_height),
             ("reporting_epoch", self.reporting_epoch),
         ] {
             if value == 0 {
@@ -1649,11 +1754,11 @@ impl SoraServiceLeaseStateV1 {
                 ));
             }
         }
-        if self.lease_expires_sequence <= self.lease_started_sequence {
+        if self.lease_expires_height <= self.lease_started_height {
             return Err(invalid_field(
                 "sora service lease state",
-                "lease_expires_sequence",
-                "must be greater than lease_started_sequence",
+                "lease_expires_height",
+                "must be greater than lease_started_height",
             ));
         }
         if self
@@ -1675,18 +1780,19 @@ impl SoraServiceLeaseStateV1 {
                     "checkpoint reporting_epoch must match the active reporting_epoch",
                 ));
             }
-            if checkpoint.active_service_version.trim().is_empty() {
+            checkpoint.assignment.validate()?;
+            if checkpoint.last_updated_height == 0 {
                 return Err(invalid_field(
                     "sora service lease state",
                     "egress_reporter_checkpoints",
-                    "service versions must not be empty",
+                    "last_updated_height must be greater than zero",
                 ));
             }
-            if checkpoint.replica_slot == 0 {
+            if checkpoint.forced_finalization && !checkpoint.finalize_reporter {
                 return Err(invalid_field(
                     "sora service lease state",
                     "egress_reporter_checkpoints",
-                    "replica slots must be greater than zero",
+                    "forced_finalization requires a terminal checkpoint",
                 ));
             }
         }
@@ -1705,15 +1811,15 @@ impl SoraServiceLeaseStateV1 {
             .any(|checkpoints| {
                 let left = (
                     checkpoints[0].reporting_epoch,
-                    checkpoints[0].active_service_version.as_str(),
-                    checkpoints[0].replica_slot,
-                    &checkpoints[0].validator_account_id,
+                    checkpoints[0].assignment.service_version.as_str(),
+                    checkpoints[0].assignment.placement.replica_slot,
+                    &checkpoints[0].assignment.placement.validator_account_id,
                 );
                 let right = (
                     checkpoints[1].reporting_epoch,
-                    checkpoints[1].active_service_version.as_str(),
-                    checkpoints[1].replica_slot,
-                    &checkpoints[1].validator_account_id,
+                    checkpoints[1].assignment.service_version.as_str(),
+                    checkpoints[1].assignment.placement.replica_slot,
+                    &checkpoints[1].assignment.placement.validator_account_id,
                 );
                 left >= right
             })
@@ -1741,31 +1847,31 @@ impl SoraServiceLeaseStateV1 {
         }
         Ok(())
     }
-    /// Estimated accounting sequences elapsed under the current lease.
+    /// Estimated accounting blocks elapsed under the current lease.
     #[must_use]
-    pub fn billed_sequences_at(&self, current_sequence: u64) -> u64 {
-        current_sequence
-            .min(self.lease_expires_sequence)
-            .saturating_sub(self.lease_started_sequence)
+    pub fn billed_blocks_at(&self, current_height: u64) -> u64 {
+        current_height
+            .min(self.lease_expires_height)
+            .saturating_sub(self.lease_started_height)
     }
-    /// Estimated remaining nominal prepaid balance at the observed sequence.
+    /// Estimated remaining nominal prepaid balance at the observed height.
     ///
     /// # Errors
     /// Returns a bounded-domain error if an exact accounting intermediate is unrepresentable.
     pub fn remaining_balance(
         &self,
-        current_sequence: u64,
+        current_height: u64,
         accounted_storage_bytes: u64,
     ) -> Result<Quantity, NumericOperationError> {
-        let billed_sequences = self.billed_sequences_at(current_sequence);
+        let billed_blocks = self.billed_blocks_at(current_height);
         let runtime_cost = self
-            .runtime_price_per_sequence
-            .try_mul_decimal(&Numeric::from(billed_sequences))?;
+            .runtime_price_per_block
+            .try_mul_decimal(&Numeric::from(billed_blocks))?;
         let storage_gib =
             u128::from(accounted_storage_bytes).div_ceil(u128::from(SORA_STORAGE_BYTES_PER_GIB));
-        let storage_units = u128::from(billed_sequences) * storage_gib;
+        let storage_units = u128::from(billed_blocks) * storage_gib;
         let storage_cost = self
-            .storage_price_per_gib_sequence
+            .storage_price_per_gib_block
             .try_mul_decimal(&Numeric::new(storage_units, 0))?;
         let egress_mib = u128::from(self.accounted_egress_bytes)
             .div_ceil(u128::from(SORA_NETWORK_BYTES_PER_MIB));
@@ -1781,41 +1887,50 @@ impl SoraServiceLeaseStateV1 {
             self.prepaid_runtime_balance.checked_sub(&total_cost)
         }
     }
-    /// Effective lease status at the observed sequence.
+    /// Effective lease status at the observed height.
     ///
     /// # Errors
     /// Returns a bounded-domain accounting error.
     pub fn status_at(
         &self,
-        current_sequence: u64,
+        current_height: u64,
         accounted_storage_bytes: u64,
     ) -> Result<SoraServiceLeaseStatusV1, NumericOperationError> {
         if self.status == SoraServiceLeaseStatusV1::Suspended {
             return Ok(SoraServiceLeaseStatusV1::Suspended);
         }
-        if current_sequence >= self.lease_expires_sequence {
+        if current_height >= self.lease_expires_height {
             return Ok(SoraServiceLeaseStatusV1::Expired);
         }
         if self
-            .remaining_balance(current_sequence, accounted_storage_bytes)?
+            .remaining_balance(current_height, accounted_storage_bytes)?
             .is_zero()
         {
             return Ok(SoraServiceLeaseStatusV1::Exhausted);
         }
         Ok(self.status)
     }
-    /// Returns `true` when the lease is still active at the observed sequence.
+    /// Returns `true` when the lease is still active at the observed height.
     ///
     /// # Errors
     /// Returns a bounded-domain accounting error.
     pub fn is_active_at(
         &self,
-        current_sequence: u64,
+        current_height: u64,
         accounted_storage_bytes: u64,
     ) -> Result<bool, NumericOperationError> {
-        Ok(self.status_at(current_sequence, accounted_storage_bytes)?
+        Ok(self.status_at(current_height, accounted_storage_bytes)?
             == SoraServiceLeaseStatusV1::Active)
     }
+}
+/// Derive the domain-separated commitment to a complete hosted-service lease state.
+#[must_use]
+pub fn derive_soracloud_service_lease_commitment_v1(
+    lease: &SoraServiceLeaseStateV1,
+) -> Hash {
+    let mut transcript = "soracloud:service-lease-state:v1".encode();
+    transcript.extend(lease.encode());
+    Hash::new(transcript)
 }
 /// Authoritative leased-volume state recorded by the hosting control plane.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
@@ -1834,10 +1949,10 @@ pub struct SoraServiceLeaseVolumeStateV1 {
     pub mount_path: String,
     /// Maximum logical bytes retained for this volume.
     pub max_total_bytes: u64,
-    /// Sequence when the binding lease became active.
-    pub lease_started_sequence: u64,
-    /// Sequence when the binding lease expires.
-    pub lease_expires_sequence: u64,
+    /// Consensus height when the binding lease became active.
+    pub lease_started_height: u64,
+    /// Consensus height when the binding lease expires.
+    pub lease_expires_height: u64,
     /// Monotonic platform-side generation for the authoritative binding.
     pub authoritative_generation: u64,
     /// Latest sequence that materialized this binding on a host, when known.
@@ -1869,8 +1984,8 @@ impl SoraServiceLeaseVolumeStateV1 {
         }
         for (field, value) in [
             ("max_total_bytes", self.max_total_bytes),
-            ("lease_started_sequence", self.lease_started_sequence),
-            ("lease_expires_sequence", self.lease_expires_sequence),
+            ("lease_started_height", self.lease_started_height),
+            ("lease_expires_height", self.lease_expires_height),
             ("authoritative_generation", self.authoritative_generation),
         ] {
             if value == 0 {
@@ -1881,11 +1996,11 @@ impl SoraServiceLeaseVolumeStateV1 {
                 ));
             }
         }
-        if self.lease_expires_sequence <= self.lease_started_sequence {
+        if self.lease_expires_height <= self.lease_started_height {
             return Err(invalid_field(
                 "sora service lease volume state",
-                "lease_expires_sequence",
-                "must be greater than lease_started_sequence",
+                "lease_expires_height",
+                "must be greater than lease_started_height",
             ));
         }
         if self
@@ -1902,8 +2017,8 @@ impl SoraServiceLeaseVolumeStateV1 {
     }
     /// Returns `true` when the volume lease is still active.
     #[must_use]
-    pub fn is_active_at(&self, current_sequence: u64) -> bool {
-        current_sequence < self.lease_expires_sequence
+    pub fn is_active_at(&self, current_height: u64) -> bool {
+        current_height < self.lease_expires_height
     }
 }
 /// State namespace addressed by a service binding.
@@ -2110,8 +2225,8 @@ pub struct SoraMailboxContractV1 {
     pub max_pending_messages: NonZeroU32,
     /// Maximum payload size per message.
     pub max_message_bytes: NonZeroU64,
-    /// Retention bound in authoritative Soracloud sequence steps.
-    pub retention_sequences: NonZeroU32,
+    /// Retention bound in consensus blocks.
+    pub retention_blocks: NonZeroU32,
 }
 impl SoraMailboxContractV1 {
     /// Validate deterministic mailbox-contract constraints.
@@ -2429,10 +2544,10 @@ impl SoraServiceManifestV1 {
         };
         let storage_cost = self
             .economics
-            .storage_price_per_gib_sequence
+            .storage_price_per_gib_block
             .try_mul_decimal(&Numeric::new(storage_gib, 0))?;
         self.economics
-            .runtime_price_per_sequence
+            .runtime_price_per_block
             .checked_add(&storage_cost)
     }
 }

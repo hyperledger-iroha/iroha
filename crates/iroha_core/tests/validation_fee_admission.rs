@@ -2,7 +2,6 @@
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 use iroha_config::parameters::actual::ParliamentTimedOvn;
 use iroha_core::{
-    block::{BlockBuilder, ValidBlock},
     governance::{
         manifest::LaneManifestRegistry,
         parliament::{
@@ -16,10 +15,7 @@ use iroha_core::{
     state::{State, StateTransaction, World, WorldReadOnly},
     tx::AcceptedTransaction,
 };
-use iroha_crypto::{
-    Algorithm, Hash, KeyPair,
-    blake2::{Blake2b512, Digest as _},
-};
+use iroha_crypto::{Algorithm, Hash, KeyPair};
 use iroha_data_model::{
     account::AccountId,
     asset::{Asset, AssetDefinition, AssetDefinitionId, AssetId},
@@ -30,14 +26,13 @@ use iroha_data_model::{
         time::{ExecutionTime, TimeEventFilter},
     },
     governance::types::{
-        BallotAttemptId, BeaconPulseId, BeaconSessionId, BodyElectionAttemptId, BodyInstanceId,
+        BallotAttemptId, BeaconPulseId, BeaconSessionId, BodyElectionAttemptId,
         DeliberationPhaseV1, GovernanceAttemptId, GovernanceAttemptStatusV1, GovernanceAttemptV1,
         GovernanceCertificateId, GovernanceExpectedHeadAbsentV1, GovernanceExpectedHeadV1,
         GovernanceStageV1, ParliamentAggregateOutcomeV1, ParliamentAggregateTallyV1,
-        ParliamentBodies, ParliamentBody, ParliamentRoster, ProposalContentId, ProposalKind,
-        RiskTierV1, SortitionRequestV1, TleKeySessionId, TleSessionId,
-        ValidationFeePayoutLifecycleProposal, ValidationFeePolicyProposal,
-        parliament_candidate_root_v1,
+        ParliamentBody, ProposalContentId, ProposalKind, RiskTierV1, SortitionRequestV1,
+        TleKeySessionId, TleSessionId, ValidationFeePayoutLifecycleProposal,
+        ValidationFeePolicyProposal, parliament_candidate_root_v1,
     },
     isi::{SetParameter, Transfer, TransferAssetBatch, TransferAssetBatchEntry},
     nexus::DataSpaceId,
@@ -62,7 +57,7 @@ use iroha_data_model::{
 };
 use iroha_primitives::{json::Json, numeric::NumericSpec};
 use mv::storage::StorageReadOnly;
-use sha2::Sha256;
+use sha2::{Digest as _, Sha256};
 use std::{num::NonZeroU64, sync::Arc};
 const TEST_VALIDATION_FEE_ASSET_SCALE: u8 = VALIDATION_FEE_DS_SCALE;
 const TEST_POLICY_ENACTMENT_HEIGHT: u64 = 7_202;
@@ -317,7 +312,7 @@ fn test_state() -> (
         Account::new(pool_contract_address().subject_id()).build(&user),
     ];
     accounts.extend((2..=6).map(|seed| Account::new(account(seed).0).build(&user)));
-    let mut state = State::new_for_testing(
+    let state = State::new_for_testing(
         World::with_assets(
             [domain],
             accounts,
@@ -352,19 +347,6 @@ fn accept_transaction(state: &State, tx: SignedTransaction) -> AcceptedTransacti
     )
     .expect("transaction admission should pass stateless checks")
 }
-fn commit_empty_genesis_like_block(state: &State) {
-    let block_signer = key_pair(240);
-    let new_block = BlockBuilder::new(Vec::new())
-        .chain(0, None)
-        .sign(block_signer.private_key())
-        .unpack(|_| {});
-    let mut state_block = state.block(new_block.header());
-    let valid_block =
-        ValidBlock::validate_unchecked(new_block.into(), &mut state_block).unpack(|_| {});
-    let committed_block = valid_block.commit_unchecked().unpack(|_| {});
-    let _events = state_block.apply_without_execution(&committed_block, Vec::new());
-    state_block.commit().expect("commit initial block hash");
-}
 fn validation_fee_policy(
     state: &State,
     fee_asset: AssetDefinitionId,
@@ -387,46 +369,6 @@ fn validation_fee_policy(
         exemption_classes: vec![VALIDATION_FEE_TREASURY_PAYOUT_EXEMPTION_CLASS.to_owned()],
         treasury_payout_binding: Some(payout_binding),
     }
-}
-fn test_parliament_bodies(selection_epoch: u64) -> ParliamentBodies {
-    let member = account(250).0;
-    let rosters = [
-        ParliamentBody::RulesCommittee,
-        ParliamentBody::AgendaCouncil,
-        ParliamentBody::InterestPanel,
-        ParliamentBody::ReviewPanel,
-        ParliamentBody::CoordinationCouncil,
-        ParliamentBody::FmaCommittee,
-        ParliamentBody::OversightCommittee,
-        ParliamentBody::PolicyJury,
-    ]
-    .into_iter()
-    .map(|body| {
-        (
-            body,
-            ParliamentRoster {
-                body,
-                epoch: selection_epoch,
-                members: vec![member.clone()],
-                alternates: Vec::new(),
-                candidate_count: 1,
-                derived_by: iroha_data_model::isi::governance::CouncilDerivationKind::Sortition,
-            },
-        )
-    })
-    .collect();
-    ParliamentBodies {
-        selection_epoch,
-        rosters,
-    }
-}
-fn test_roster_root(selection_epoch: u64) -> [u8; 32] {
-    let encoded = norito::encode_canonical(&test_parliament_bodies(selection_epoch))
-        .expect("canonically encode Parliament bodies");
-    let digest = Blake2b512::digest(encoded);
-    let mut root = [0; 32];
-    root.copy_from_slice(&digest[..32]);
-    root
 }
 fn parliament_test_root(tag: u8) -> [u8; 32] {
     [tag.max(1); 32]
@@ -846,7 +788,6 @@ fn policy_registry(state: &State, policy: &ValidationFeePolicyV1) -> ValidationF
 fn seed_canonical_enacted_proposal(
     kind: ProposalKind,
     proposer: &AccountId,
-    enacted_at_height: u64,
     state_transaction: &mut StateTransaction<'_, '_>,
 ) -> [u8; 32] {
     let proposal_id = kind.fingerprint();
@@ -982,12 +923,7 @@ fn install_canonical_post_enactment_validation_fee_state(
             ProposalContentId::new(proposal_id)
         );
         assert_eq!(
-            seed_canonical_enacted_proposal(
-                proposal_kind,
-                authority,
-                TEST_POLICY_ENACTMENT_HEIGHT,
-                &mut state_transaction,
-            ),
+            seed_canonical_enacted_proposal(proposal_kind, authority, &mut state_transaction),
             proposal_id
         );
         let governance_attempt_id = attempt.attempt().id;
@@ -1326,7 +1262,6 @@ fn asset_balance(world: &impl WorldReadOnly, asset_id: &AssetId) -> Quantity {
 #[test]
 fn raw_fee_asset_transfer_is_rejected_without_exact_active_validation_fee() {
     let (state, user, user_key_pair, recipient, treasury, fee_asset) = test_state();
-    commit_empty_genesis_like_block(&state);
     let policy = validation_fee_policy(&state, fee_asset.clone(), treasury);
     install_canonical_post_enactment_validation_fee_state(
         &state,
@@ -1369,7 +1304,6 @@ fn raw_fee_asset_transfer_is_rejected_without_exact_active_validation_fee() {
 #[test]
 fn validation_fee_registry_cannot_be_installed_through_generic_parameter_path() {
     let (state, user, _, _, treasury, fee_asset) = test_state();
-    commit_empty_genesis_like_block(&state);
     let policy = validation_fee_policy(&state, fee_asset, treasury);
     let custom = policy_registry(&state, &policy).into_custom_parameter();
     let mut block = state.block(block_header(
@@ -1389,7 +1323,6 @@ fn validation_fee_registry_cannot_be_installed_through_generic_parameter_path() 
 #[test]
 fn active_registry_rejects_missing_enacted_parliament_attempt() {
     let (state, user, user_key_pair, recipient, treasury, fee_asset) = test_state();
-    commit_empty_genesis_like_block(&state);
     let policy = validation_fee_policy(&state, fee_asset.clone(), treasury);
     install_canonical_post_enactment_validation_fee_state(
         &state,
@@ -1437,7 +1370,6 @@ fn active_registry_rejects_missing_enacted_parliament_attempt() {
 #[test]
 fn enacted_lifecycle_pins_exact_wrapper_pool_and_asset_effect_permissions() {
     let (state, user, user_key_pair, recipient, treasury, fee_asset) = test_state();
-    commit_empty_genesis_like_block(&state);
     let policy = validation_fee_policy(&state, fee_asset, treasury.clone());
     install_canonical_post_enactment_validation_fee_state(&state, &user, &user_key_pair, policy);
     let wrapper_permission: iroha_data_model::permission::Permission =
@@ -1495,7 +1427,6 @@ fn enacted_lifecycle_pins_exact_wrapper_pool_and_asset_effect_permissions() {
 #[test]
 fn ivm_proved_overlay_reaches_active_validation_fee_admission() {
     let (state, user, user_key_pair, recipient, treasury, fee_asset) = test_state();
-    commit_empty_genesis_like_block(&state);
     let policy = validation_fee_policy(&state, fee_asset.clone(), treasury.clone());
     install_canonical_post_enactment_validation_fee_state(
         &state,
@@ -1552,7 +1483,6 @@ fn ivm_proved_overlay_reaches_active_validation_fee_admission() {
 #[test]
 fn principal_and_fee_commit_atomically_under_active_validation_fee_policy() {
     let (state, user, user_key_pair, recipient, treasury, fee_asset) = test_state();
-    commit_empty_genesis_like_block(&state);
     let policy = validation_fee_policy(&state, fee_asset.clone(), treasury.clone());
     install_canonical_post_enactment_validation_fee_state(
         &state,
@@ -1735,7 +1665,6 @@ fn principal_and_fee_commit_atomically_under_active_validation_fee_policy() {
 #[test]
 fn fee_instruction_policy_hash_amount_and_treasury_are_covered_by_user_signature() {
     let (state, user, user_key_pair, recipient, treasury, fee_asset) = test_state();
-    commit_empty_genesis_like_block(&state);
     let policy = validation_fee_policy(&state, fee_asset.clone(), treasury);
     install_canonical_post_enactment_validation_fee_state(
         &state,

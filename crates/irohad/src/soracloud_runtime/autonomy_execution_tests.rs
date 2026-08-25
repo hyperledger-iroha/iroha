@@ -4,7 +4,8 @@ fn autonomy_workflow_json_is_exact_and_requires_explicit_nullable_step_id() -> R
         "workflow_version": 1,
         "steps": [{"step_id": null, "request": {"inputs": "alpha"}}],
     });
-    let parsed = parse_apartment_autonomy_workflow_spec(&canonical)?
+    let parsed = parse_apartment_autonomy_workflow_spec(&canonical)
+        .map_err(|error| eyre::eyre!("{error:?}"))?
         .expect("canonical workflow must be recognized");
     assert_eq!(parsed.len(), 1);
     assert_eq!(parsed[0].step_id, None);
@@ -49,7 +50,7 @@ fn autonomy_workflow_json_is_exact_and_requires_explicit_nullable_step_id() -> R
 
 #[test]
 fn execute_apartment_generated_hf_autonomy_run_stays_inert_and_persists_failure() -> Result<()> {
-    let mut state = test_state()?;
+    let mut state = test_state();
     let fixture = insert_generated_hf_service_fixture(
         &mut state,
         "hf_agent_service",
@@ -81,9 +82,9 @@ fn execute_apartment_generated_hf_autonomy_run_stays_inert_and_persists_failure(
         manifest_hash: Hash::new(Encode::encode(&manifest)),
         status: SoraAgentRuntimeStatusV1::Running,
         deployed_sequence: 1,
-        lease_started_sequence: 1,
-        lease_expires_sequence: 400,
-        last_renewed_sequence: 1,
+        lease_started_height: 1,
+        lease_expires_height: 400,
+        last_renewed_height: 1,
         restart_count: 0,
         last_restart_sequence: None,
         last_restart_reason: None,
@@ -150,16 +151,22 @@ fn execute_apartment_generated_hf_autonomy_run_stays_inert_and_persists_failure(
         content_length: u64::try_from(weight_payload.len())?,
         lfs_sha256: hex::encode(iroha_crypto::sha256(weight_payload)),
     }];
-    let model_info_payload = norito::json::to_vec(&norito::json!({
+    let weight_lfs_sha256 = required_weight_files[0].lfs_sha256.clone();
+    let weight_content_length = required_weight_files[0].content_length;
+    let model_info = norito::json!({
         "sha": TEST_HF_COMMIT_OID,
         "siblings": [{
             "rfilename": "model.safetensors",
             "lfs": {
-                "sha256": required_weight_files[0].lfs_sha256.clone(),
-                "size": required_weight_files[0].content_length
+                "sha256": weight_lfs_sha256,
+                "size": weight_content_length
             }
         }]
-    }))?;
+    });
+    let weight_selection =
+        derive_hf_weight_selection_v1(&model_info, 1, u64::MAX, u64::MAX)?
+            .expect("autonomy fixture must select its authenticated weight");
+    let model_info_payload = norito::json::to_vec(&model_info)?;
     write_bytes_atomic(&source_root.join("model_info.json"), &model_info_payload)?;
     write_json_atomic(
         &source_root.join("import_manifest.json"),
@@ -177,13 +184,9 @@ fn execute_apartment_generated_hf_autonomy_run_stays_inert_and_persists_failure(
             imported_at_ms: 20,
             model_info_content_length: Some(u64::try_from(model_info_payload.len())?),
             model_info_payload_hash: Some(Hash::new(&model_info_payload).to_string()),
-            selected_weight_format: Some(HfImportWeightFormatV1::Safetensors),
+            selected_weight_format: Some(weight_selection.model_format),
             weight_selection_commitment: Some(
-                hf_weight_selection_commitment(
-                    HfImportWeightFormatV1::Safetensors,
-                    &required_weight_files,
-                )
-                .to_string(),
+                weight_selection.weight_selection_commitment.to_string(),
             ),
             required_weight_files,
             imported_files: vec![
@@ -267,7 +270,7 @@ fn execute_apartment_generated_hf_autonomy_run_stays_inert_and_persists_failure(
 }
 #[test]
 fn execute_apartment_generated_hf_autonomy_workflow_stays_inert_before_first_step() -> Result<()> {
-    let mut state = test_state()?;
+    let mut state = test_state();
     let fixture = insert_generated_hf_service_fixture(
         &mut state,
         "hf_agent_workflow_service",
@@ -300,9 +303,9 @@ fn execute_apartment_generated_hf_autonomy_workflow_stays_inert_before_first_ste
         manifest_hash: Hash::new(Encode::encode(&manifest)),
         status: SoraAgentRuntimeStatusV1::Running,
         deployed_sequence: 1,
-        lease_started_sequence: 1,
-        lease_expires_sequence: 400,
-        last_renewed_sequence: 1,
+        lease_started_height: 1,
+        lease_expires_height: 400,
+        last_renewed_height: 1,
         restart_count: 0,
         last_restart_sequence: None,
         last_restart_reason: None,
@@ -369,16 +372,22 @@ fn execute_apartment_generated_hf_autonomy_workflow_stays_inert_before_first_ste
         content_length: u64::try_from(weight_payload.len())?,
         lfs_sha256: hex::encode(iroha_crypto::sha256(weight_payload)),
     }];
-    let model_info_payload = norito::json::to_vec(&norito::json!({
+    let weight_lfs_sha256 = required_weight_files[0].lfs_sha256.clone();
+    let weight_content_length = required_weight_files[0].content_length;
+    let model_info = norito::json!({
         "sha": TEST_HF_COMMIT_OID,
         "siblings": [{
             "rfilename": "model.safetensors",
             "lfs": {
-                "sha256": required_weight_files[0].lfs_sha256.clone(),
-                "size": required_weight_files[0].content_length
+                "sha256": weight_lfs_sha256,
+                "size": weight_content_length
             }
         }]
-    }))?;
+    });
+    let weight_selection =
+        derive_hf_weight_selection_v1(&model_info, 1, u64::MAX, u64::MAX)?
+            .expect("autonomy fixture must select its authenticated weight");
+    let model_info_payload = norito::json::to_vec(&model_info)?;
     write_bytes_atomic(&source_root.join("model_info.json"), &model_info_payload)?;
     write_json_atomic(
         &source_root.join("import_manifest.json"),
@@ -396,13 +405,9 @@ fn execute_apartment_generated_hf_autonomy_workflow_stays_inert_before_first_ste
             imported_at_ms: 20,
             model_info_content_length: Some(u64::try_from(model_info_payload.len())?),
             model_info_payload_hash: Some(Hash::new(&model_info_payload).to_string()),
-            selected_weight_format: Some(HfImportWeightFormatV1::Safetensors),
+            selected_weight_format: Some(weight_selection.model_format),
             weight_selection_commitment: Some(
-                hf_weight_selection_commitment(
-                    HfImportWeightFormatV1::Safetensors,
-                    &required_weight_files,
-                )
-                .to_string(),
+                weight_selection.weight_selection_commitment.to_string(),
             ),
             required_weight_files,
             imported_files: vec![

@@ -368,7 +368,7 @@ pub struct SoracloudEmitMailboxMessageRequestV1 {
     /// Opaque mailbox payload bytes.
     pub payload_bytes: Vec<u8>,
     /// Number of authoritative Soracloud sequence steps to delay delivery.
-    pub delivery_delay_sequences: u32,
+    pub delivery_delay_blocks: u32,
 }
 impl SoracloudEmitMailboxMessageRequestV1 {
     /// Validate outbound mailbox request fields.
@@ -384,7 +384,10 @@ impl SoracloudEmitMailboxMessageRequestV1 {
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
 pub struct SoracloudEmitMailboxMessageResponseV1 {
-    /// Deterministic mailbox message identifier.
+    /// Deterministic execution-local staging identifier.
+    ///
+    /// The ledger derives the canonical persisted mailbox message identifier after assigning the
+    /// authoritative service versions and delivery schedule.
     pub message_id: Hash,
     /// Commitment over the emitted mailbox payload.
     pub payload_commitment: Hash,
@@ -1191,28 +1194,28 @@ pub fn encode_rollout_provenance_payload(
 /// Encode the canonical provenance signature payload for apartment deployment.
 ///
 /// The payload layout is a Norito tuple in this exact field order:
-/// `(manifest, lease_ticks, autonomy_budget_units)`.
+/// `(manifest, lease_blocks, autonomy_budget_units)`.
 ///
 /// # Errors
 /// Returns an encoding error when Norito serialization fails.
 pub fn encode_agent_deploy_provenance_payload(
     manifest: AgentApartmentManifestV1,
-    lease_ticks: u64,
+    lease_blocks: u64,
     autonomy_budget_units: Option<u64>,
 ) -> Result<Vec<u8>, norito::Error> {
-    norito::encode_canonical(&(manifest, lease_ticks, autonomy_budget_units))
+    norito::encode_canonical(&(manifest, lease_blocks, autonomy_budget_units))
 }
 /// Encode the canonical provenance signature payload for apartment lease renewal.
 ///
-/// The payload layout is a Norito tuple in this exact field order: `(apartment_name, lease_ticks)`.
+/// The payload layout is a Norito tuple in this exact field order: `(apartment_name, lease_blocks)`.
 ///
 /// # Errors
 /// Returns an encoding error when Norito serialization fails.
 pub fn encode_agent_lease_renew_provenance_payload(
     apartment_name: &str,
-    lease_ticks: u64,
+    lease_blocks: u64,
 ) -> Result<Vec<u8>, norito::Error> {
-    norito::encode_canonical(&(apartment_name, lease_ticks))
+    norito::encode_canonical(&(apartment_name, lease_blocks))
 }
 /// Encode the canonical provenance signature payload for apartment restart requests.
 ///

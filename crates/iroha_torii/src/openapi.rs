@@ -906,20 +906,21 @@ mod tests {
                 "bundle_root",
                 "service_name",
                 "weight_version",
-                "policy_id",
-                "model",
-                "plaintext_input_i32",
-                "input_artifact",
-                "output_artifact",
-                "emitted_sequence",
                 "decryption_request_id",
+                "input_artifact",
             ],
             &[],
         );
         assert_strict_object_schema(
             schemas,
             "PrivateUploadedModelExecuteResponse",
-            &["schema_version", "status", "receipt", "tx_instructions"],
+            &[
+                "schema_version",
+                "status",
+                "receipt",
+                "output_artifact",
+                "tx_instructions",
+            ],
             &[],
         );
         assert_eq!(
@@ -949,6 +950,8 @@ mod tests {
                 "model_manifest_digest",
                 "model_bundle_root",
                 "policy_id",
+                "decryption_request_id",
+                "attesting_validator",
                 "input_artifact",
                 "output_artifact",
                 "input_commitment",
@@ -973,39 +976,6 @@ mod tests {
                 "continue_cursor",
             ],
             &[],
-        );
-        assert_strict_object_schema(
-            schemas,
-            "PrivateUploadedModelQuantizedCpuModelDto",
-            &[
-                "input_len",
-                "output_len",
-                "weights_i8",
-                "bias_i32",
-                "output_shift",
-                "output_min",
-                "output_max",
-            ],
-            &[],
-        );
-        assert_eq!(
-            component_properties(schemas, "PrivateUploadedModelQuantizedCpuModelDto")["input_len"]
-                .get("minimum")
-                .and_then(Value::as_u64),
-            Some(1)
-        );
-        assert_eq!(
-            component_properties(schemas, "PrivateUploadedModelQuantizedCpuModelDto")["output_len"]
-                .get("minimum")
-                .and_then(Value::as_u64),
-            Some(1)
-        );
-        assert_eq!(
-            component_properties(schemas, "PrivateUploadedModelQuantizedCpuModelDto")
-                ["output_shift"]
-                .get("maximum")
-                .and_then(Value::as_u64),
-            Some(30)
         );
         let artifact_roles =
             component_properties(schemas, "SoraPrivateModelArtifactRefV1")["artifact_role"]
@@ -4939,5 +4909,7 @@ mod tests {
     include!("openapi/tests/diagnostics_schemas.rs");
     include!("openapi/tests/finality_app_contracts.rs");
     include!("openapi/tests/iso20022_auth.rs");
+    include!("openapi/tests/json_value_contract.rs");
+    include!("openapi/tests/soracloud_lease_contracts.rs");
     include!("openapi/tests/vpn_da.rs");
 }

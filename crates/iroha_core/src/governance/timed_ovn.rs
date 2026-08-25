@@ -2186,7 +2186,7 @@ mod tests {
 
         let mut tampered = sealed.public_state().clone();
         tampered.ballot_records[0][TIMED_OVN_BALLOT_RECORD_BYTES_V1 - 1] ^= 1;
-        assert!(tampered.validate(&tle.key).is_err());
+        assert!(tampered.clone().validate(&tle.key).is_err());
         let mut invalid_release = final_release;
         invalid_release.signature[0] ^= 1;
         let invalid_signature_first = TimedOvnLifecycleStateV1::Sealed(tampered.clone())

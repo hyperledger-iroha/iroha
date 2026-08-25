@@ -18805,7 +18805,11 @@ pub mod isi {
     }
     #[cfg(test)]
     mod tests {
-        use crate::{smartcontracts::triggers::set::SetReadOnly, state::StateBlock};
+        use crate::{
+            governance::parliament::{ParliamentDecisionModeV1, RequiredParliamentBodyV1},
+            smartcontracts::triggers::set::SetReadOnly,
+            state::StateBlock,
+        };
         use core::num::{NonZeroU32, NonZeroU64};
         use iroha_config::parameters::actual::LaneConfig as RuntimeLaneConfig;
         use iroha_crypto::{Algorithm, Hash, KeyPair, Signature};
@@ -18830,9 +18834,8 @@ pub mod isi {
                 ContractAbiHash, ContractCodeHash, GovernanceAttemptId, GovernanceAttemptStatusV1,
                 GovernanceAttemptV1, GovernanceCertificateId, GovernanceCertificateV1,
                 GovernanceExpectedHeadV1, GovernanceStageV1, ParliamentAggregateOutcomeV1,
-                ParliamentAggregateTallyV1, ParliamentBody, ParliamentDecisionModeV1,
-                ProposalContentId, ProposalKind, RequiredParliamentBodyV1, SortitionRequestV1,
-                TleKeySessionId, TleSessionId, parliament_candidate_root_v1,
+                ParliamentAggregateTallyV1, ParliamentBody, ProposalContentId, ProposalKind,
+                SortitionRequestV1, TleKeySessionId, TleSessionId, parliament_candidate_root_v1,
                 parliament_execution_failure_root_v1,
             },
             isi::{
@@ -19357,9 +19360,8 @@ pub mod isi {
                 &mut state_transaction,
             )
             .expect_err("a certificate for another exact network must not mutate SCCP state");
-            assert_err!(
-                format!("{error:?}"),
-                "different exact NetworkId",
+            assert!(
+                format!("{error:?}").contains("different exact NetworkId"),
                 "unexpected foreign-network rejection: {error:?}"
             );
             assert_eq!(state_transaction.sccp_registry.revision(), before);
@@ -19544,7 +19546,7 @@ pub mod isi {
                             tle_key_session_id,
                             release_beacon_session_id,
                             30,
-                            crate::governance::parliament::ParliamentTimedOvn {
+                            iroha_config::parameters::actual::ParliamentTimedOvn {
                                 registration_phase_blocks: 2,
                                 survivor_freeze_phase_blocks: 2,
                                 commitment_phase_blocks: 2,
@@ -20420,6 +20422,7 @@ pub mod isi {
                 let $state = blank_state();
                 let $block = new_dummy_block();
                 let mut $state_block = $state.block($block.as_ref().header());
+                #[allow(unused_mut)]
                 let mut $stx = $state_block.transaction();
             };
         }

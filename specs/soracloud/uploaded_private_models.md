@@ -11,16 +11,17 @@ uploaded-model path:
 
 - `POST /v1/soracloud/model/upload/register`
 
-Torii also exposes upload readiness and deterministic private execution
-endpoints:
+Torii also exposes upload readiness endpoints and reserves private-execution
+routes:
 
 - `GET /v1/soracloud/model/upload/encryption-recipient` (public, one response
   object capped at 64 KiB of encoded JSON)
 - `GET /v1/soracloud/model/upload/status` (exact-network canonical account
   authentication)
-- `POST /v1/soracloud/model/upload/private/execute`
+- `POST /v1/soracloud/model/upload/private/execute` (fail-closed; unavailable in
+  the first release)
 - `GET /v1/soracloud/model/upload/private/receipts` (exact-network canonical
-  account authentication; private, non-storable responses)
+  account authentication; no receipts can exist in the first release)
 
 ## Register Flow
 
@@ -62,22 +63,12 @@ prepare the storage, runtime, and signing surfaces as one controlled change.
    provenance signatures. The bundle provenance and final registry provenance
    must cover the exact committed roots, artifact id, weight version, dataset
    reference, policy id, and SoraFS digest.
-5. For private execution, require clients to call
-   `POST /v1/soracloud/model/upload/private/execute` and inspect the returned
-   receipt. Route the returned
-   `RecordSoracloudPrivateUploadedModelExecutionReceipt` instruction to a
-   controlled `CanManageSoracloud` authority for signing and submission;
-   validators and ordinary client authorities cannot commit this privileged
-   ledger projection. The JavaScript helper returns an unsigned instruction
-   skeleton only; raw private keys must not be embedded in helper inputs,
-   browser payloads, logs, or repository files.
-6. After submission, query
-   `GET /v1/soracloud/model/upload/private/receipts` with the expected service,
-   model id, weight version, and `count_mode=exact` when an operator needs an
-   audited total. Sign the exact GET path and sorted query with the configured
-   NetworkId and local account key; an API token is not a substitute for this
-   proof. Compare the committed receipt commitments and encrypted artifact
-   references with the runtime response before marking the release complete.
+5. Do not enable or advertise private execution in the first release. The
+   execute route validates the exact registered bundle, committed decryption
+   request, policy, and encrypted input reference, then returns a conflict
+   response without loading model plaintext, publishing output, or emitting a
+   receipt. Receipt instructions are rejected by consensus and persisted
+   private receipts are rejected during state restore.
 
 ## Chain State
 
@@ -103,50 +94,28 @@ model id.
 
 ## Runtime Posture
 
-Production V1 exposes only the deterministic quantized CPU private runtime for
-uploaded models admitted with `DeterministicQuantizedCpuV1`. The CPU runtime is
-the authoritative semantics: fixed signed-integer linear operations,
-nearest-away-from-zero rounding, saturating output bounds, and stable receipt
-commitments. Hardware acceleration is not part of the V1 correctness surface.
+Private uploaded-model execution is not part of the first-release correctness
+surface. A safe implementation still requires all of the following as one
+atomic, consensus-verifiable path:
 
-The private execution route validates that the finalized uploaded-model bundle
-is backed by an active approved SoraFS pin, validates encrypted input and output
-artifact references against active approved SoraFS pins, executes the CPU
-reference runtime, and returns:
+- loading and authenticating the exact finalized SoraFS bundle;
+- opening it only under the exact committed decryption authorization;
+- deterministic inference over ciphertext-referenced input;
+- encrypted output publication and pinning before success is observable; and
+- a self-contained validator attestation that binds the decryption request,
+  input artifact, output artifact, runtime, and exact model release.
 
-- `SoraPrivateUploadedModelExecutionReceiptV1`, containing only commitments,
-  runtime version, policy id, bundle identifiers, and encrypted artifact
-  references;
-- `tx_instructions`, containing a canonical
-  `RecordSoracloudPrivateUploadedModelExecutionReceipt` instruction payload for
-  signing and transaction submission by a `CanManageSoracloud` authority.
+Until that path exists, Torii never accepts caller-supplied model weights,
+plaintext, output claims, execution-host claims, or policy overrides. The
+execute request contains only the exact service/model selectors, committed
+`decryption_request_id`, and encrypted input artifact. A valid request ends in
+an explicit unavailable/conflict response; it does not produce an instruction
+skeleton or receipt. Consensus receipt persistence and snapshot restore both
+fail closed.
 
-Plaintext input and output are runtime-local and must not be written to chain
-state. Committed chain state stores receipt commitments and encrypted artifact
-references only. Receipt identifiers are append-only: a later instruction
-cannot replace an already committed receipt.
-
-Committed private uploaded-model receipts can be queried with optional
-`receipt_id`, `service_name`, `model_id`, `weight_version`, `limit`, and
-`count_mode` filters. The list response defaults to `count_mode=bounded` and
-accepts explicit `count_mode=exact` when clients need a `total`. It includes
-pagination metadata (`returned_items`, `remaining_items`, `has_more`,
-`count_mode`) alongside the receipt records.
-
-The JavaScript SDK exposes unsigned helpers for this V1 flow:
-`buildSoracloudPrivateUploadedModelExecuteRequest`,
-`buildSoracloudPrivateUploadedModelReceiptQuery`, and
-`privateUploadedModelReceiptInstruction`. These helpers normalize the Torii
-request/query shapes, reject embedded signing secrets, and extract the returned
-receipt instruction skeleton for external transaction signing by a controlled
-`CanManageSoracloud` authority.
-
-The Kotlin core SDK and Java Android SDK mirror the client-visible response
-parsers for private execute and committed receipt-list responses. Both expose a
-helper that extracts the
-`RecordSoracloudPrivateUploadedModelExecutionReceipt` instruction skeleton from
-the Torii response so mobile clients can pass it to a manager-controlled
-external transaction signing pipeline.
+SDK request/query helpers may encode the reserved wire shape, but applications
+must treat the route as unavailable and must not implement a signing or receipt
+submission workflow for this release.
 
 ## Production Gates
 
@@ -211,12 +180,12 @@ Focused V1 coverage should include:
 - approved active SoraFS pin succeeds;
 - missing, pending, and retired SoraFS pins fail;
 - world state contains no uploaded-model bytes;
-- deterministic quantized CPU private execution emits stable receipts and a
-  receipt-recording transaction instruction;
-- receipt recording rejects validators and other authorities that do not hold
-  `CanManageSoracloud`;
-- receipt recording rejects non-deterministic uploaded-model formats and
-  mismatched manifest, bundle-root, or policy bindings;
+- private execution accepts only the ciphertext-reference request shape and
+  validates the exact committed decryption authorization before returning an
+  explicit unavailable/conflict response;
+- private execution emits neither a receipt nor a transaction instruction;
+- consensus receipt recording and snapshot restore reject every private
+  uploaded-model receipt until the complete artifact execution path exists;
 - production and non-production parsing accept only the exact opt-in
   PortableVM V1 shape; retired selectors and programmatic shape drift are
   configuration or startup errors;
@@ -225,5 +194,5 @@ Focused V1 coverage should include:
   QMP, connector, and firewall checks;
 - unavailable PortableVm capability rejects startup, and capability loss withdraws
   the host advert and reconciles affected placements;
-- JavaScript Soracloud helpers expose unsigned drafts and do not accept raw
-  private keys.
+- SDK Soracloud helpers do not accept raw private keys and clearly expose the
+  private execution route as unavailable for the first release.

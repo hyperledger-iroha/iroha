@@ -5262,15 +5262,6 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
         self.commit_ready_body_install(ready_plan);
         self.publish_status(services)
     }
-    /// Consume startup or reducer effects in their exact emitted order.
-    #[cfg(test)]
-    pub(crate) fn consume_effects<S: V2EffectServices>(
-        &mut self,
-        effects: Vec<AdapterEffect>,
-        services: &mut S,
-    ) -> Result<usize, EffectExecutorError> {
-        self.consume_effects_with_runner_decision_cleanup(effects, services, None)
-    }
     /// Retain one reducer batch while optionally fencing its exact Apply until
     /// the synchronous runner has retired process-local Decision losers.
     fn consume_effects_with_runner_decision_cleanup<S: V2EffectServices>(
@@ -7015,14 +7006,6 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
             return Err(self.close(error, services));
         }
         Ok(count)
-    }
-    #[cfg(test)]
-    fn consume_pacemaker_effects<S: V2EffectServices>(
-        &mut self,
-        effects: Vec<AdapterEffect>,
-        services: &mut S,
-    ) -> Result<usize, EffectExecutorError> {
-        self.consume_pacemaker_effects_with_runner_decision_cleanup(effects, services, None)
     }
     fn consume_pacemaker_effects_with_runner_decision_cleanup<S: V2EffectServices>(
         &mut self,
@@ -9620,6 +9603,58 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
                 })?;
         }
         Ok(())
+    }
+    /// Reject any interrupted-tip recovery effect that cannot be satisfied
+    /// entirely from the exact process-local recovery catalogs.
+    fn ensure_pending_tip_recovery_effect_is_local(
+        &self,
+        effect: &AdapterEffect,
+    ) -> Result<(), EffectExecutorError> {
+        let local_only_error = || {
+            EffectExecutorError::Contract(
+                "interrupted-tip recovery attempted a non-local consensus effect before finality"
+                    .to_owned(),
+            )
+        };
+        match effect {
+            AdapterEffect::FetchBody { round, subject, .. } => self
+                .recovered_bodies
+                .contains_key(&(*round, *subject))
+                .then_some(())
+                .ok_or_else(local_only_error),
+            AdapterEffect::StoreBody { round, subject, .. } => self
+                .durable_bodies
+                .contains_key(&(*round, *subject))
+                .then_some(())
+                .ok_or_else(local_only_error),
+            AdapterEffect::ValidateBody { round, subject, .. } => self
+                .validated_bodies
+                .contains_key(&(*round, *subject))
+                .then_some(())
+                .ok_or_else(local_only_error),
+            AdapterEffect::Apply {
+                subject,
+                certificate,
+                ..
+            } => self
+                .pending_tip_recovery
+                .as_ref()
+                .filter(|evidence| {
+                    evidence.commit_qc() == certificate
+                        && evidence.commit_subject() == *subject
+                        && self
+                            .validated_bodies
+                            .get(&(evidence.durable_round(), evidence.durable_subject()))
+                            == Some(evidence.validated_receipt())
+                })
+                .map(|_| ())
+                .ok_or_else(local_only_error),
+            AdapterEffect::Sign { .. }
+            | AdapterEffect::Broadcast(_)
+            | AdapterEffect::EnterView { .. }
+            | AdapterEffect::ReportEquivocation { .. }
+            | AdapterEffect::ReportInvalidCertifiedBody { .. } => Err(local_only_error()),
+        }
     }
     #[cfg(test)]
     fn bind_body_pipeline_owner(

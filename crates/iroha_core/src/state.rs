@@ -1018,6 +1018,7 @@ macro_rules! with_world_overlay_fields {
             musubi_locations_by_replication_order,
             musubi_locations_by_pin,
             musubi_replication_shortfall_releases,
+            soracloud_sequence_watermark,
             musubi_namespace_bindings,
             musubi_aliases,
             musubi_alias_history,
@@ -4198,6 +4199,8 @@ pub struct World {
     pub(crate) musubi_resolver_index_revision: Cell<MusubiResolverIndexRevisionV1>,
     /// Exact count of releases bound to archives below fresh-selection quorum.
     pub(crate) musubi_replication_shortfall_releases: Cell<u64>,
+    /// Greatest globally allocated Soracloud audit sequence, or zero before the first allocation.
+    pub(crate) soracloud_sequence_watermark: Cell<u64>,
     /// Admitted Soracloud service revisions keyed by `(service_name, service_version)`.
     pub(crate) soracloud_service_revisions: Storage<(String, String), SoraDeploymentBundleV1>,
     /// Current Soracloud deployment state keyed by service name.
@@ -4899,6 +4902,8 @@ pub struct WorldBlock<'world> {
     pub(crate) musubi_resolver_index_revision: CellBlock<'world, MusubiResolverIndexRevisionV1>,
     /// Exact count of releases bound to archives below fresh-selection quorum.
     pub(crate) musubi_replication_shortfall_releases: CellBlock<'world, u64>,
+    /// Greatest globally allocated Soracloud audit sequence.
+    pub(crate) soracloud_sequence_watermark: CellBlock<'world, u64>,
     /// Admitted Soracloud service revisions.
     pub(crate) soracloud_service_revisions:
         StorageBlock<'world, (String, String), SoraDeploymentBundleV1>,
@@ -5249,13 +5254,6 @@ impl WorldBlock<'_> {
         self.external_event_buf
             .push(iroha_data_model::events::EventBox::from(pbox));
     }
-    /// Mutable access to VRF epoch randomness and participation records.
-    #[cfg(test)]
-    pub fn vrf_epochs_mut(
-        &mut self,
-    ) -> &mut StorageBlock<'_, u64, iroha_data_model::consensus::VrfEpochRecord> {
-        &mut self.vrf_epochs
-    }
     fn tiered_snapshot_diff(&self) -> TieredSnapshotDiff {
         let mut diff = TieredSnapshotDiff::default();
         macro_rules! collect_reverts {
@@ -5473,6 +5471,7 @@ impl WorldBlock<'_> {
             musubi_registry_policy,
             musubi_resolver_index_revision,
             musubi_replication_shortfall_releases,
+            soracloud_sequence_watermark,
             merge_hint_roots,
             merge_global_state_root,
         );
@@ -6206,6 +6205,8 @@ pub struct WorldTransaction<'block, 'world> {
         CellTransaction<'block, 'world, MusubiResolverIndexRevisionV1>,
     /// Exact count of releases bound to archives below fresh-selection quorum.
     pub(crate) musubi_replication_shortfall_releases: CellTransaction<'block, 'world, u64>,
+    /// Greatest globally allocated Soracloud audit sequence.
+    pub(crate) soracloud_sequence_watermark: CellTransaction<'block, 'world, u64>,
     /// Admitted Soracloud service revisions.
     pub(crate) soracloud_service_revisions:
         StorageTransaction<'block, 'world, (String, String), SoraDeploymentBundleV1>,
@@ -8320,6 +8321,8 @@ pub struct WorldView<'world> {
     pub(crate) musubi_resolver_index_revision: CellView<'world, MusubiResolverIndexRevisionV1>,
     /// Exact count of releases bound to archives below fresh-selection quorum.
     pub(crate) musubi_replication_shortfall_releases: CellView<'world, u64>,
+    /// Greatest globally allocated Soracloud audit sequence.
+    pub(crate) soracloud_sequence_watermark: CellView<'world, u64>,
     /// Admitted Soracloud service revisions.
     pub(crate) soracloud_service_revisions:
         StorageView<'world, (String, String), SoraDeploymentBundleV1>,
@@ -10253,7 +10256,7 @@ pub struct State {
     pub pipeline: iroha_config::parameters::actual::Pipeline,
     /// Shared pipeline worker pool snapshot (derived from pipeline config).
     pipeline_parallelism: PipelineParallelism,
-    /// Optional shared Soracloud runtime handle used for replicated mailbox execution.
+    /// Optional node-local Soracloud runtime handle; never consulted by production replay.
     soracloud_runtime:
         parking_lot::RwLock<Option<crate::soracloud_runtime::SharedSoracloudRuntime>>,
     /// Stateless validation cache shared across blocks.
@@ -11101,7 +11104,7 @@ pub struct StateBlock<'state> {
     pub query_handle: &'state LiveQueryStoreHandle,
     /// Authenticated ledger time used by queries in this block scope.
     query_ledger_time_ms: Option<u64>,
-    /// Optional shared Soracloud runtime handle used for ordered mailbox execution.
+    /// Optional node-local Soracloud runtime handle; production replay does not consult it.
     pub soracloud_runtime: Option<crate::soracloud_runtime::SharedSoracloudRuntime>,
     /// Cached snapshot of account identifiers for this block.
     accounts_snapshot_cache: SyncOnceCell<Arc<Vec<AccountId>>>,
@@ -18685,6 +18688,8 @@ macro_rules! world_ro_accessors {
             cell_inner musubi_resolver_index_revision: u64;
             /// Exact count of releases bound to archives below fresh-selection quorum.
             cell_copy musubi_replication_shortfall_releases: u64;
+            /// Greatest globally allocated Soracloud audit sequence, or zero for an empty world.
+            cell_copy soracloud_sequence_watermark: u64;
             /// Admitted Soracloud service revisions keyed by `(service_name, service_version)` (read-only).
             storage soracloud_service_revisions: (String, String) => SoraDeploymentBundleV1;
             /// Current Soracloud deployment state keyed by service name (read-only).
@@ -19119,6 +19124,13 @@ pub trait WorldReadOnly {
         policy_id: iroha_data_model::privacy::PrivacyPolicyIdV1,
     ) -> core::result::Result<iroha_data_model::privacy::BootleLanternIssuerPolicyV1, String>;
     world_ro_accessors!(governance, declaration);
+    /// Return the singleton global threshold-beacon key session selected for
+    /// new consensus pulses.
+    fn active_global_beacon_key_session(&self) -> Option<[u8; 32]> {
+        self.global_beacon_active_session()
+            .get(&GLOBAL_THRESHOLD_BEACON_SINGLETON_KEY)
+            .copied()
+    }
     /// Return the exact TLE key session currently eligible for new ballots.
     fn active_tle_key_session(&self) -> Option<TleKeySessionId> {
         self.tle_active_key_session()
@@ -20226,6 +20238,7 @@ impl<'world> WorldBlock<'world> {
             musubi_registry_policy,
             musubi_resolver_index_revision,
             musubi_replication_shortfall_releases,
+            soracloud_sequence_watermark,
             soracloud_service_revisions,
             soracloud_service_deployments,
             soracloud_app_infra_states,
@@ -20383,6 +20396,7 @@ impl<'world> WorldBlock<'world> {
         musubi_registry_policy.commit();
         musubi_resolver_index_revision.commit();
         musubi_replication_shortfall_releases.commit();
+        soracloud_sequence_watermark.commit();
         soracloud_service_revisions.commit();
         soracloud_service_deployments.commit();
         soracloud_app_infra_states.commit();
@@ -22092,6 +22106,7 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
             musubi_registry_policy,
             musubi_resolver_index_revision,
             musubi_replication_shortfall_releases,
+            soracloud_sequence_watermark,
             soracloud_service_revisions,
             soracloud_service_deployments,
             soracloud_app_infra_states,
@@ -22299,6 +22314,7 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
         musubi_registry_policy.apply();
         musubi_resolver_index_revision.apply();
         musubi_replication_shortfall_releases.apply();
+        soracloud_sequence_watermark.apply();
         soracloud_service_revisions.apply();
         soracloud_service_deployments.apply();
         soracloud_app_infra_states.apply();
@@ -23721,14 +23737,14 @@ impl State {
     pub(crate) fn kura_handle(&self) -> Arc<Kura> {
         Arc::clone(&self.kura)
     }
-    /// Install or clear the shared Soracloud runtime handle used by core execution paths.
+    /// Install or clear the node-local Soracloud runtime handle.
     pub fn set_soracloud_runtime(
         &self,
         runtime: Option<crate::soracloud_runtime::SharedSoracloudRuntime>,
     ) {
         *self.soracloud_runtime.write() = runtime;
     }
-    /// Return the shared Soracloud runtime handle when the execution plane is available.
+    /// Return the node-local Soracloud runtime handle when the execution plane is available.
     #[must_use]
     pub fn soracloud_runtime(&self) -> Option<crate::soracloud_runtime::SharedSoracloudRuntime> {
         self.soracloud_runtime.read().clone()
@@ -50399,6 +50415,25 @@ mod musubi_replication_shortfall_state_tests {
         assert!(
             write_set.windows(field.len()).any(|window| window == field),
             "Native AMX write set must commit to the persisted shortfall aggregate"
+        );
+    }
+}
+#[cfg(test)]
+mod soracloud_sequence_watermark_state_tests {
+    use super::*;
+
+    #[test]
+    fn watermark_defaults_to_zero_and_is_bound_into_native_amx_write_sets() {
+        let world = World::default();
+        assert_eq!(*world.soracloud_sequence_watermark.view().get(), 0);
+
+        let mut block = world.block();
+        *block.soracloud_sequence_watermark.get_mut() = 1;
+        let write_set = block.merge_execution_write_set_bytes();
+        let field = b"soracloud_sequence_watermark";
+        assert!(
+            write_set.windows(field.len()).any(|window| window == field),
+            "Native AMX write set must commit to the persisted Soracloud sequence watermark"
         );
     }
 }

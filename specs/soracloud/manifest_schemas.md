@@ -29,7 +29,7 @@ manifests. See `uploaded_private_models.md`.
 ## Hosted-service reporting epochs
 
 The hosted-service economic lease and its usage-reporting epoch are separate
-clocks. `lease_started_sequence`, `lease_expires_sequence`, prepaid balance,
+clocks. `lease_started_height`, `lease_expires_height`, prepaid balance,
 and the admitted runtime/storage/egress unit prices remain fixed for one
 economic lease. An upgrade or rollback that retains that lease must reject
 unit-price drift; a reporting rollover never renews or reprices the lease and

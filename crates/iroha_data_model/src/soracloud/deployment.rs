@@ -30,6 +30,8 @@ pub enum SoraServiceLifecycleActionV1 {
     Rollout,
     /// Reversion to an already admitted baseline revision.
     Rollback,
+    /// One exact accepted hosted-service egress checkpoint transition.
+    LeaseUsage,
     /// Atomic settlement and successor opening of a hosted-service reporting epoch.
     LeaseReportingEpochRollover,
 }
@@ -211,6 +213,30 @@ impl SoraServiceRolloutStateV1 {
                 "must be greater than zero",
             ));
         }
+        match self.stage {
+            SoraRolloutStageV1::Canary if self.health_failures >= self.max_health_failures => {
+                return Err(invalid_field(
+                    "sora service rollout state",
+                    "health_failures",
+                    "canary rollouts must remain below the automatic rollback threshold",
+                ));
+            }
+            SoraRolloutStageV1::Promoted if self.health_failures != 0 => {
+                return Err(invalid_field(
+                    "sora service rollout state",
+                    "health_failures",
+                    "promoted rollouts must clear consecutive health failures",
+                ));
+            }
+            SoraRolloutStageV1::RolledBack if self.health_failures < self.max_health_failures => {
+                return Err(invalid_field(
+                    "sora service rollout state",
+                    "health_failures",
+                    "rolled-back rollouts must meet the automatic rollback threshold",
+                ));
+            }
+            _ => {}
+        }
         if self.health_window_secs == 0 {
             return Err(invalid_field(
                 "sora service rollout state",
@@ -389,6 +415,31 @@ impl SoraServiceDeploymentStateV1 {
         if let Some(last_rollout) = self.last_rollout.as_ref() {
             last_rollout.validate()?;
         }
+        match (self.active_rollout.as_ref(), self.last_rollout.as_ref()) {
+            (Some(active), Some(last)) if active == last => {}
+            (Some(_), Some(_)) => {
+                return Err(invalid_field(
+                    "sora service deployment state",
+                    "active_rollout",
+                    "must exactly equal last_rollout while a canary is active",
+                ));
+            }
+            (Some(_), None) => {
+                return Err(invalid_field(
+                    "sora service deployment state",
+                    "last_rollout",
+                    "must retain the active rollout",
+                ));
+            }
+            (None, Some(last)) if last.stage == SoraRolloutStageV1::Canary => {
+                return Err(invalid_field(
+                    "sora service deployment state",
+                    "active_rollout",
+                    "must retain a canary last_rollout until it is promoted or rolled back",
+                ));
+            }
+            (None, Some(_)) | (None, None) => {}
+        }
         if let Some(lease) = self.service_lease.as_ref() {
             lease.validate()?;
         }
@@ -410,8 +461,8 @@ impl SoraServiceDeploymentStateV1 {
         }
         if let Some(lease) = self.service_lease.as_ref()
             && self.lease_volume_states.iter().any(|volume| {
-                volume.lease_started_sequence != lease.lease_started_sequence
-                    || volume.lease_expires_sequence != lease.lease_expires_sequence
+                volume.lease_started_height != lease.lease_started_height
+                    || volume.lease_expires_height != lease.lease_expires_height
             })
         {
             return Err(invalid_field(
@@ -429,45 +480,45 @@ impl SoraServiceDeploymentStateV1 {
             acc.saturating_add(volume.max_total_bytes)
         })
     }
-    /// Effective hosted-service lease status at the observed sequence.
+    /// Effective hosted-service lease status at the observed consensus height.
     ///
     /// # Errors
     /// Returns a bounded-domain accounting error.
     pub fn hosted_service_lease_status_at(
         &self,
-        current_sequence: u64,
+        current_height: u64,
     ) -> Result<Option<SoraServiceLeaseStatusV1>, NumericOperationError> {
         self.service_lease.as_ref().map_or(Ok(None), |lease| {
             lease
-                .status_at(current_sequence, self.accounted_storage_bytes())
+                .status_at(current_height, self.accounted_storage_bytes())
                 .map(Some)
         })
     }
-    /// Effective remaining prepaid runtime balance at the observed sequence.
+    /// Effective remaining prepaid runtime balance at the observed consensus height.
     ///
     /// # Errors
     /// Returns a bounded-domain accounting error.
     pub fn hosted_service_remaining_balance(
         &self,
-        current_sequence: u64,
+        current_height: u64,
     ) -> Result<Option<Quantity>, NumericOperationError> {
         self.service_lease.as_ref().map_or(Ok(None), |lease| {
             lease
-                .remaining_balance(current_sequence, self.accounted_storage_bytes())
+                .remaining_balance(current_height, self.accounted_storage_bytes())
                 .map(Some)
         })
     }
     /// Returns `true` when the hosted-service plane may still be routed and
-    /// materialized at the observed sequence.
+    /// materialized at the observed consensus height.
     ///
     /// # Errors
     /// Returns a bounded-domain accounting error.
     pub fn hosted_service_lease_active_at(
         &self,
-        current_sequence: u64,
+        current_height: u64,
     ) -> Result<bool, NumericOperationError> {
         self.service_lease.as_ref().map_or(Ok(false), |lease| {
-            lease.is_active_at(current_sequence, self.accounted_storage_bytes())
+            lease.is_active_at(current_height, self.accounted_storage_bytes())
         })
     }
 }
@@ -1010,6 +1061,115 @@ impl SoraServiceSecretEntryV1 {
         }
         self.envelope.validate()
     }
+}
+
+/// Exact replay material for one authoritative service-config transition.
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[cfg_attr(feature = "json", norito(tag = "operation", content = "value"))]
+#[norito(deny_unknown_fields)]
+pub enum SoraServiceConfigMutationV1 {
+    /// Create or replace the complete config entry.
+    Upsert(SoraServiceConfigEntryV1),
+    /// Delete the named entry, which must already exist in the replayed projection.
+    Delete(String),
+}
+impl SoraServiceConfigMutationV1 {
+    /// Stable service-scoped entry name affected by the transition.
+    #[must_use]
+    pub fn config_name(&self) -> &str {
+        match self {
+            Self::Upsert(entry) => &entry.config_name,
+            Self::Delete(config_name) => config_name,
+        }
+    }
+
+    /// Validate canonical mutation material at its audit sequence.
+    pub fn validate_at_sequence(&self, sequence: u64) -> Result<(), SoracloudManifestError> {
+        match self {
+            Self::Upsert(entry) => {
+                entry.validate()?;
+                if entry.last_update_sequence != sequence {
+                    return Err(invalid_field(
+                        "sora service config mutation",
+                        "last_update_sequence",
+                        "upsert entry must be materialized at the containing audit sequence",
+                    ));
+                }
+            }
+            Self::Delete(config_name) => validate_service_material_name(
+                "sora service config mutation",
+                "config_name",
+                config_name,
+            )?,
+        }
+        Ok(())
+    }
+}
+
+/// Exact replay material for one authoritative encrypted-secret transition.
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[cfg_attr(feature = "json", norito(tag = "operation", content = "value"))]
+#[norito(deny_unknown_fields)]
+pub enum SoraServiceSecretMutationV1 {
+    /// Create or replace the complete encrypted-secret entry.
+    Upsert(SoraServiceSecretEntryV1),
+    /// Delete the named entry, which must already exist in the replayed projection.
+    Delete(String),
+}
+impl SoraServiceSecretMutationV1 {
+    /// Stable service-scoped entry name affected by the transition.
+    #[must_use]
+    pub fn secret_name(&self) -> &str {
+        match self {
+            Self::Upsert(entry) => &entry.secret_name,
+            Self::Delete(secret_name) => secret_name,
+        }
+    }
+
+    /// Validate canonical mutation material at its audit sequence.
+    pub fn validate_at_sequence(&self, sequence: u64) -> Result<(), SoracloudManifestError> {
+        match self {
+            Self::Upsert(entry) => {
+                entry.validate()?;
+                if entry.last_update_sequence != sequence {
+                    return Err(invalid_field(
+                        "sora service secret mutation",
+                        "last_update_sequence",
+                        "upsert entry must be materialized at the containing audit sequence",
+                    ));
+                }
+            }
+            Self::Delete(secret_name) => validate_service_material_name(
+                "sora service secret mutation",
+                "secret_name",
+                secret_name,
+            )?,
+        }
+        Ok(())
+    }
+}
+
+/// Commit to the complete canonical post-transition config projection.
+#[must_use]
+pub fn derive_soracloud_service_config_snapshot_hash_v1(
+    entries: &BTreeMap<String, SoraServiceConfigEntryV1>,
+) -> Hash {
+    Hash::new(Encode::encode(&(
+        "soracloud.service.config.snapshot.v1",
+        entries.clone(),
+    )))
+}
+/// Commit to the complete canonical post-transition encrypted-secret projection.
+#[must_use]
+pub fn derive_soracloud_service_secret_snapshot_hash_v1(
+    entries: &BTreeMap<String, SoraServiceSecretEntryV1>,
+) -> Hash {
+    Hash::new(Encode::encode(&(
+        "soracloud.service.secret.snapshot.v1",
+        entries.clone(),
+    )))
 }
 /// Authoritative service-state entry tracked for Soracloud bindings.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
@@ -2142,6 +2302,9 @@ impl SoraPrivateModelArtifactRefV1 {
         Ok(())
     }
 }
+/// Runtime version string for deterministic private uploaded-model execution v1.
+pub const SORACLOUD_PRIVATE_MODEL_RUNTIME_VERSION_V1: &str = "soracloud.quantized-cpu.v1";
+
 /// Receipt committed for deterministic private uploaded-model execution.
 ///
 /// The receipt intentionally carries only commitments and encrypted artifact
@@ -2168,6 +2331,14 @@ pub struct SoraPrivateUploadedModelExecutionReceiptV1 {
     pub model_bundle_root: Hash,
     /// Decryption or release policy identifier used by the execution.
     pub policy_id: String,
+    /// Exact committed authorization record that released the encrypted input.
+    pub decryption_request_id: String,
+    /// Active validator attesting the receipt transaction.
+    ///
+    /// This is deliberately not remote-executor attribution. A producer must derive this
+    /// identity from its own local validator configuration and the ledger verifies it against
+    /// the transaction authority.
+    pub attesting_validator: SoraRuntimeDeterministicValidatorHostV1,
     /// Encrypted input artifact persisted outside chain state.
     pub input_artifact: SoraPrivateModelArtifactRefV1,
     /// Encrypted output artifact persisted outside chain state.
@@ -2186,6 +2357,149 @@ pub struct SoraPrivateUploadedModelExecutionReceiptV1 {
     /// ledger execution replaces the sentinel with the next authoritative Soracloud sequence.
     pub emitted_sequence: u64,
 }
+
+fn append_private_uploaded_model_receipt_transcript_part<T: Encode>(
+    transcript: &mut Vec<u8>,
+    value: &T,
+) {
+    transcript.extend(value.encode());
+}
+
+/// Derive the canonical V1 request commitment for a private uploaded-model receipt.
+///
+/// Every field needed to resolve the exact encrypted model, input envelope, and requested output
+/// destination is bound. The ledger-assigned sequence and result-side plaintext commitment are
+/// deliberately excluded.
+#[must_use]
+pub fn derive_soracloud_private_model_request_commitment_v1(
+    receipt: &SoraPrivateUploadedModelExecutionReceiptV1,
+) -> Hash {
+    let mut transcript = Vec::new();
+    append_private_uploaded_model_receipt_transcript_part(
+        &mut transcript,
+        &"soracloud:private-model-request:v1".to_owned(),
+    );
+    append_private_uploaded_model_receipt_transcript_part(&mut transcript, &receipt.schema_version);
+    append_private_uploaded_model_receipt_transcript_part(&mut transcript, &receipt.service_name);
+    append_private_uploaded_model_receipt_transcript_part(&mut transcript, &receipt.model_id);
+    append_private_uploaded_model_receipt_transcript_part(&mut transcript, &receipt.weight_version);
+    append_private_uploaded_model_receipt_transcript_part(
+        &mut transcript,
+        &receipt.runtime_version,
+    );
+    append_private_uploaded_model_receipt_transcript_part(
+        &mut transcript,
+        &receipt.model_manifest_digest,
+    );
+    append_private_uploaded_model_receipt_transcript_part(
+        &mut transcript,
+        &receipt.model_bundle_root,
+    );
+    append_private_uploaded_model_receipt_transcript_part(&mut transcript, &receipt.policy_id);
+    append_private_uploaded_model_receipt_transcript_part(
+        &mut transcript,
+        &receipt.decryption_request_id,
+    );
+    append_private_uploaded_model_receipt_transcript_part(
+        &mut transcript,
+        &receipt.attesting_validator,
+    );
+    append_private_uploaded_model_receipt_transcript_part(&mut transcript, &receipt.input_artifact);
+    append_private_uploaded_model_receipt_transcript_part(
+        &mut transcript,
+        &receipt.output_artifact,
+    );
+    append_private_uploaded_model_receipt_transcript_part(
+        &mut transcript,
+        &receipt.input_commitment,
+    );
+    Hash::new(transcript)
+}
+
+/// Derive the canonical V1 result commitment for a private uploaded-model receipt.
+#[must_use]
+pub fn derive_soracloud_private_model_result_commitment_v1(
+    receipt: &SoraPrivateUploadedModelExecutionReceiptV1,
+) -> Hash {
+    let mut transcript = Vec::new();
+    append_private_uploaded_model_receipt_transcript_part(
+        &mut transcript,
+        &"soracloud:private-model-result:v1".to_owned(),
+    );
+    append_private_uploaded_model_receipt_transcript_part(&mut transcript, &receipt.schema_version);
+    append_private_uploaded_model_receipt_transcript_part(
+        &mut transcript,
+        &receipt.runtime_version,
+    );
+    append_private_uploaded_model_receipt_transcript_part(
+        &mut transcript,
+        &receipt.output_artifact,
+    );
+    append_private_uploaded_model_receipt_transcript_part(
+        &mut transcript,
+        &receipt.output_commitment,
+    );
+    Hash::new(transcript)
+}
+
+/// Derive the canonical sequence-independent V1 private uploaded-model receipt identifier.
+///
+/// The identifier binds every immutable receipt field while excluding only the identifier itself
+/// and the ledger-assigned emission sequence.
+#[must_use]
+pub fn derive_soracloud_private_uploaded_model_execution_receipt_id_v1(
+    receipt: &SoraPrivateUploadedModelExecutionReceiptV1,
+) -> Hash {
+    let mut transcript = Vec::new();
+    append_private_uploaded_model_receipt_transcript_part(
+        &mut transcript,
+        &"soracloud:private-model-execution-receipt:v1".to_owned(),
+    );
+    append_private_uploaded_model_receipt_transcript_part(&mut transcript, &receipt.schema_version);
+    append_private_uploaded_model_receipt_transcript_part(&mut transcript, &receipt.service_name);
+    append_private_uploaded_model_receipt_transcript_part(&mut transcript, &receipt.model_id);
+    append_private_uploaded_model_receipt_transcript_part(&mut transcript, &receipt.weight_version);
+    append_private_uploaded_model_receipt_transcript_part(
+        &mut transcript,
+        &receipt.runtime_version,
+    );
+    append_private_uploaded_model_receipt_transcript_part(
+        &mut transcript,
+        &receipt.model_manifest_digest,
+    );
+    append_private_uploaded_model_receipt_transcript_part(
+        &mut transcript,
+        &receipt.model_bundle_root,
+    );
+    append_private_uploaded_model_receipt_transcript_part(&mut transcript, &receipt.policy_id);
+    append_private_uploaded_model_receipt_transcript_part(
+        &mut transcript,
+        &receipt.decryption_request_id,
+    );
+    append_private_uploaded_model_receipt_transcript_part(&mut transcript, &receipt.input_artifact);
+    append_private_uploaded_model_receipt_transcript_part(
+        &mut transcript,
+        &receipt.output_artifact,
+    );
+    append_private_uploaded_model_receipt_transcript_part(
+        &mut transcript,
+        &receipt.input_commitment,
+    );
+    append_private_uploaded_model_receipt_transcript_part(
+        &mut transcript,
+        &receipt.output_commitment,
+    );
+    append_private_uploaded_model_receipt_transcript_part(
+        &mut transcript,
+        &receipt.request_commitment,
+    );
+    append_private_uploaded_model_receipt_transcript_part(
+        &mut transcript,
+        &receipt.result_commitment,
+    );
+    Hash::new(transcript)
+}
+
 impl SoraPrivateUploadedModelExecutionReceiptV1 {
     /// Validate ledger-persisted private uploaded-model execution receipt metadata.
     ///
@@ -2216,6 +2530,7 @@ impl SoraPrivateUploadedModelExecutionReceiptV1 {
             ("weight_version", self.weight_version.as_str()),
             ("runtime_version", self.runtime_version.as_str()),
             ("policy_id", self.policy_id.as_str()),
+            ("decryption_request_id", self.decryption_request_id.as_str()),
         ] {
             validate_nonblank_field(
                 "sora private uploaded model execution receipt",
@@ -2229,6 +2544,13 @@ impl SoraPrivateUploadedModelExecutionReceiptV1 {
                     "must be canonical and free of control characters",
                 ));
             }
+        }
+        if self.runtime_version != SORACLOUD_PRIVATE_MODEL_RUNTIME_VERSION_V1 {
+            return Err(invalid_field(
+                "sora private uploaded model execution receipt",
+                "runtime_version",
+                "must equal the canonical deterministic private-model runtime version",
+            ));
         }
         for (field, digest) in [
             ("receipt_id", self.receipt_id),
@@ -2260,6 +2582,8 @@ impl SoraPrivateUploadedModelExecutionReceiptV1 {
         }
         self.input_artifact.validate()?;
         self.output_artifact.validate()?;
+        SoraRuntimeExecutionHostV1::DeterministicValidator(self.attesting_validator.clone())
+            .validate()?;
         if self.input_artifact.artifact_role != "input" {
             return Err(invalid_field(
                 "sora private uploaded model execution receipt",
@@ -2272,6 +2596,32 @@ impl SoraPrivateUploadedModelExecutionReceiptV1 {
                 "sora private uploaded model execution receipt",
                 "output_artifact.artifact_role",
                 "must be `output`",
+            ));
+        }
+        let expected_request_commitment =
+            derive_soracloud_private_model_request_commitment_v1(self);
+        if self.request_commitment != expected_request_commitment {
+            return Err(invalid_field(
+                "sora private uploaded model execution receipt",
+                "request_commitment",
+                "must bind the exact canonical model and encrypted input envelope",
+            ));
+        }
+        let expected_result_commitment = derive_soracloud_private_model_result_commitment_v1(self);
+        if self.result_commitment != expected_result_commitment {
+            return Err(invalid_field(
+                "sora private uploaded model execution receipt",
+                "result_commitment",
+                "must bind the exact canonical runtime and encrypted output envelope",
+            ));
+        }
+        let expected_receipt_id =
+            derive_soracloud_private_uploaded_model_execution_receipt_id_v1(self);
+        if self.receipt_id != expected_receipt_id {
+            return Err(invalid_field(
+                "sora private uploaded model execution receipt",
+                "receipt_id",
+                "must equal the canonical sequence-independent receipt identifier",
             ));
         }
         Ok(())

@@ -603,15 +603,31 @@ fn soracloud_runtime_records_are_visible_through_world_view() {
             economics: iroha_data_model::soracloud::SoraHttpServiceEconomicsV1::default(),
             state_bindings: Vec::new(),
             lease_volumes: Vec::new(),
-            handlers: vec![iroha_data_model::soracloud::SoraServiceHandlerV1 {
-                handler_name: "query".parse().expect("valid name"),
-                class: iroha_data_model::soracloud::SoraServiceHandlerClassV1::Query,
-                entrypoint: "serve_query".to_string(),
-                route_path: Some("/query".to_string()),
-                certified_response:
-                    iroha_data_model::soracloud::SoraCertifiedResponsePolicyV1::AuditReceipt,
-                mailbox: None,
-            }],
+            handlers: vec![
+                iroha_data_model::soracloud::SoraServiceHandlerV1 {
+                    handler_name: "query".parse().expect("valid name"),
+                    class: iroha_data_model::soracloud::SoraServiceHandlerClassV1::Query,
+                    entrypoint: "serve_query".to_string(),
+                    route_path: Some("/query".to_string()),
+                    certified_response:
+                        iroha_data_model::soracloud::SoraCertifiedResponsePolicyV1::AuditReceipt,
+                    mailbox: None,
+                },
+                iroha_data_model::soracloud::SoraServiceHandlerV1 {
+                    handler_name: "update".parse().expect("valid name"),
+                    class: iroha_data_model::soracloud::SoraServiceHandlerClassV1::Update,
+                    entrypoint: "apply_update".to_string(),
+                    route_path: None,
+                    certified_response:
+                        iroha_data_model::soracloud::SoraCertifiedResponsePolicyV1::None,
+                    mailbox: Some(iroha_data_model::soracloud::SoraMailboxContractV1 {
+                        queue_name: "updates".parse().expect("valid mailbox name"),
+                        max_pending_messages: std::num::NonZeroU32::new(8).expect("nonzero"),
+                        max_message_bytes: std::num::NonZeroU64::new(1_024).expect("nonzero"),
+                        retention_blocks: std::num::NonZeroU32::new(4).expect("nonzero"),
+                    }),
+                },
+            ],
             artifacts: vec![iroha_data_model::soracloud::SoraArtifactRefV1 {
                 kind: iroha_data_model::soracloud::SoraArtifactKindV1::StaticAsset,
                 artifact_hash: Hash::new(b"asset"),
@@ -658,9 +674,6 @@ fn soracloud_runtime_records_are_visible_through_world_view() {
             health_status: iroha_data_model::soracloud::SoraServiceHealthStatusV1::Healthy,
             load_factor_bps: 250,
             materialized_bundle_hash: Hash::new(b"bundle"),
-            rollout_handle: Some("rollout-1".to_string()),
-            pending_mailbox_message_count: 1,
-            last_receipt_id: Some(Hash::new(b"receipt")),
         },
     );
     world
@@ -670,24 +683,39 @@ fn soracloud_runtime_records_are_visible_through_world_view() {
             iroha_data_model::soracloud::SoraServiceAuditEventV1 {
                 schema_version: iroha_data_model::soracloud::SORA_SERVICE_AUDIT_EVENT_VERSION_V1,
                 sequence: 4,
+                block_height: 4,
+                block_timestamp_ms: 4_000,
                 action: iroha_data_model::soracloud::SoraServiceLifecycleActionV1::Deploy,
                 service_name: service_name.clone(),
                 from_version: None,
                 to_version: service_version.clone(),
                 service_manifest_hash: Hash::new(b"service-manifest"),
                 container_manifest_hash: Hash::new(b"container-manifest"),
+                process_generation: 1,
+                config_generation: 0,
+                secret_generation: 0,
+                config_snapshot_hash:
+                    iroha_data_model::soracloud::derive_soracloud_service_config_snapshot_hash_v1(
+                        &BTreeMap::new(),
+                    ),
+                secret_snapshot_hash:
+                    iroha_data_model::soracloud::derive_soracloud_service_secret_snapshot_hash_v1(
+                        &BTreeMap::new(),
+                    ),
                 governance_tx_hash: None,
                 binding_name: None,
                 state_key: None,
-                config_name: None,
-                secret_name: None,
-                rollout_handle: None,
+                config_mutations: Vec::new(),
+                secret_mutations: Vec::new(),
+                rollout_state: None,
                 policy_name: None,
                 policy_snapshot_hash: None,
                 jurisdiction_tag: None,
                 consent_evidence_hash: None,
                 break_glass: None,
                 break_glass_reason: None,
+                lease_usage: None,
+                service_lease_commitment: None,
                 lease_reporting_epoch_rollover: None,
                 signer: crate::state::checked_keypair().public_key().clone(),
             },
@@ -917,44 +945,51 @@ fn soracloud_runtime_records_are_visible_through_world_view() {
                 signer: crate::state::checked_keypair().public_key().clone(),
             },
         );
-    world.soracloud_mailbox_messages_mut_for_testing().insert(
-        Hash::new(b"message"),
-        SoraServiceMailboxMessageV1 {
-            schema_version: iroha_data_model::soracloud::SORA_SERVICE_MAILBOX_MESSAGE_VERSION_V1,
-            message_id: Hash::new(b"message"),
-            from_service: service_name.clone(),
-            from_service_version: "1.0.0".to_string(),
-            from_handler: "query".parse().expect("valid name"),
-            to_service: service_name.clone(),
-            to_service_version: "1.0.0".to_string(),
-            to_handler: "query".parse().expect("valid name"),
-            payload_bytes: b"payload".to_vec(),
-            payload_commitment: Hash::new(b"payload"),
-            delivery_delay_sequences: 0,
-            enqueue_sequence: 4,
-            available_after_sequence: 4,
-            expires_at_sequence: 8,
-        },
-    );
-    world.soracloud_runtime_receipts_mut_for_testing().insert(
-        Hash::new(b"receipt"),
-        SoraRuntimeReceiptV1 {
-            schema_version: iroha_data_model::soracloud::SORA_RUNTIME_RECEIPT_VERSION_V1,
-            receipt_id: Hash::new(b"receipt"),
-            service_name: service_name.clone(),
-            service_version: service_version.clone(),
-            handler_name: "query".parse().expect("valid name"),
-            handler_class: iroha_data_model::soracloud::SoraServiceHandlerClassV1::Query,
-            request_commitment: Hash::new(b"request"),
-            result_commitment: Hash::new(b"result"),
-            certified_by: iroha_data_model::soracloud::SoraCertifiedResponsePolicyV1::AuditReceipt,
-            emitted_sequence: 5,
-            mailbox_message_id: None,
-            journal_artifact_hash: None,
-            checkpoint_artifact_hash: None,
-            execution_host: None,
-        },
-    );
+    let mut mailbox_message = SoraServiceMailboxMessageV1 {
+        schema_version: iroha_data_model::soracloud::SORA_SERVICE_MAILBOX_MESSAGE_VERSION_V1,
+        message_id: Hash::prehashed([0; Hash::LENGTH]),
+        from_service: service_name.clone(),
+        from_service_version: "1.0.0".to_string(),
+        from_handler: "update".parse().expect("valid name"),
+        to_service: service_name.clone(),
+        to_service_version: "1.0.0".to_string(),
+        to_handler: "update".parse().expect("valid name"),
+        payload_bytes: b"payload".to_vec(),
+        payload_commitment: Hash::new(b"payload"),
+        delivery_delay_blocks: 0,
+        enqueue_sequence: 11,
+        enqueue_height: 11,
+        available_after_height: 11,
+        expires_at_height: 15,
+    };
+    mailbox_message.message_id =
+        iroha_data_model::soracloud::derive_soracloud_mailbox_message_id_v1(&mailbox_message);
+    let mailbox_message_id = mailbox_message.message_id;
+    world
+        .soracloud_mailbox_messages_mut_for_testing()
+        .insert(mailbox_message_id, mailbox_message);
+    let mut runtime_receipt = SoraRuntimeReceiptV1 {
+        schema_version: iroha_data_model::soracloud::SORA_RUNTIME_RECEIPT_VERSION_V1,
+        receipt_id: Hash::prehashed([0; Hash::LENGTH]),
+        service_name: service_name.clone(),
+        service_version: service_version.clone(),
+        handler_name: "query".parse().expect("valid name"),
+        handler_class: iroha_data_model::soracloud::SoraServiceHandlerClassV1::Query,
+        request_commitment: Hash::new(b"request"),
+        result_commitment: Hash::new(b"result"),
+        certified_by: iroha_data_model::soracloud::SoraCertifiedResponsePolicyV1::AuditReceipt,
+        emitted_sequence: 12,
+        mailbox_message_id: None,
+        journal_artifact_hash: None,
+        checkpoint_artifact_hash: None,
+        execution_host: None,
+    };
+    runtime_receipt.receipt_id =
+        iroha_data_model::soracloud::derive_soracloud_local_read_receipt_id_v1(&runtime_receipt);
+    let runtime_receipt_id = runtime_receipt.receipt_id;
+    world
+        .soracloud_runtime_receipts_mut_for_testing()
+        .insert(runtime_receipt_id, runtime_receipt);
     let view = world.view();
     assert!(
         view.soracloud_service_revisions()
@@ -970,8 +1005,8 @@ fn soracloud_runtime_records_are_visible_through_world_view() {
         view.soracloud_service_runtime()
             .get(&service_name)
             .expect("runtime state")
-            .pending_mailbox_message_count,
-        1
+            .active_service_version,
+        service_version
     );
     assert!(view.soracloud_service_audit_events().get(&4).is_some());
     assert!(
@@ -1025,12 +1060,12 @@ fn soracloud_runtime_records_are_visible_through_world_view() {
     );
     assert!(
         view.soracloud_mailbox_messages()
-            .get(&Hash::new(b"message"))
+            .get(&mailbox_message_id)
             .is_some()
     );
     assert!(
         view.soracloud_runtime_receipts()
-            .get(&Hash::new(b"receipt"))
+            .get(&runtime_receipt_id)
             .is_some()
     );
 }
