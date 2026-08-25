@@ -137,6 +137,10 @@ test('OpenAPI Cargo paths use the shared no-interference policy', async () => {
     join(repoRoot, 'scripts', 'sumeragi_v2_release_process_policy.sh'),
     'utf8',
   );
+  const integrationBuild = await readFile(
+    join(repoRoot, 'integration_tests', 'build.rs'),
+    'utf8',
+  );
 
   for (const source of [gate, generator]) {
     assert.match(source, /source "\$\{PROCESS_POLICY\}"/);
@@ -202,6 +206,22 @@ test('OpenAPI Cargo paths use the shared no-interference policy', async () => {
   assert.match(gate, /--signature-envelope/);
   assert.match(generator, /--unsigned-manifest/);
   assert.match(generator, /--signature-envelope/);
+  assert.match(
+    generator,
+    /IROHA_TEST_PREBUILD_READ_ONLY_SOURCE=1[\s\S]*?NORITO_SKIP_BINDINGS_SYNC=1[\s\S]*?run_cargo run/,
+  );
+  assert.match(
+    integrationBuild,
+    /READ_ONLY_SOURCE_ENV: &str = "IROHA_TEST_PREBUILD_READ_ONLY_SOURCE"/,
+  );
+  assert.match(
+    integrationBuild,
+    /target_dir\.join\("integration-tests-prebuilt"\)/,
+  );
+  assert.match(
+    integrationBuild,
+    /Component::CurDir \| Component::ParentDir/,
+  );
 
   for (const source of [gate, generator]) {
     assert.match(

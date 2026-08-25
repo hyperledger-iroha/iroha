@@ -1,13 +1,17 @@
 //! Build script that stages deterministic IVM sample bytecode for integration tests.
 //!
-//! The fixtures are versioned under `integration_tests/fixtures/ivm` and copied
-//! into `crates/ivm/target/prebuilt/samples` so existing test helpers keep
-//! working without compiling Kotodama/IVM logic in the build script.
+//! The fixtures are versioned under `integration_tests/fixtures/ivm`. Normal
+//! test builds copy them into `crates/ivm/target/prebuilt/samples` so existing
+//! helpers keep working without compiling Kotodama/IVM logic here. Sealed
+//! release replays redirect those derived bytes below the external Cargo target
+//! and never write into their read-only source mirror.
 use std::{
-    env, fs,
-    path::{Path, PathBuf},
+    env::{self, VarError},
+    fs,
+    path::{Component, Path, PathBuf},
 };
 const SAMPLE_MANIFEST: &str = include_str!("../crates/ivm/prebuilt_samples.txt");
+const READ_ONLY_SOURCE_ENV: &str = "IROHA_TEST_PREBUILD_READ_ONLY_SOURCE";
 fn prebuilt_sample_names() -> Vec<&'static str> {
     SAMPLE_MANIFEST
         .lines()
@@ -25,6 +29,27 @@ fn workspace_root() -> PathBuf {
 fn sample_path(dir: &Path, name: &str) -> PathBuf {
     dir.join(name).with_extension("to")
 }
+fn prebuilt_dir(root: &Path) -> PathBuf {
+    match env::var(READ_ONLY_SOURCE_ENV) {
+        Err(VarError::NotPresent) => root.join("crates/ivm/target/prebuilt"),
+        Ok(value) if value == "1" => {
+            let target_dir = PathBuf::from(
+                env::var_os("CARGO_TARGET_DIR")
+                    .expect("read-only source prebuild requires CARGO_TARGET_DIR"),
+            );
+            assert!(
+                target_dir.is_absolute()
+                    && !target_dir.components().any(|component| {
+                        matches!(component, Component::CurDir | Component::ParentDir)
+                    }),
+                "read-only source prebuild requires an absolute normalized CARGO_TARGET_DIR"
+            );
+            target_dir.join("integration-tests-prebuilt")
+        }
+        Ok(_) => panic!("{READ_ONLY_SOURCE_ENV} must be exactly 1 when present"),
+        Err(VarError::NotUnicode(_)) => panic!("{READ_ONLY_SOURCE_ENV} must be valid Unicode"),
+    }
+}
 fn write_file_if_changed(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
     if let Ok(existing) = fs::read(path)
         && existing == bytes
@@ -39,9 +64,11 @@ fn write_file_if_changed(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
 fn main() {
     println!("cargo:rerun-if-changed=build.rs");
     println!("cargo:rerun-if-changed=../crates/ivm/prebuilt_samples.txt");
+    println!("cargo:rerun-if-env-changed={READ_ONLY_SOURCE_ENV}");
+    println!("cargo:rerun-if-env-changed=CARGO_TARGET_DIR");
     let root = workspace_root();
     let fixtures_dir = root.join("integration_tests/fixtures/ivm");
-    let prebuilt_dir = root.join("crates/ivm/target/prebuilt");
+    let prebuilt_dir = prebuilt_dir(&root);
     let samples_dir = prebuilt_dir.join("samples");
     if let Ok(entries) = fs::read_dir(&fixtures_dir) {
         for entry in entries.flatten() {
