@@ -9526,7 +9526,8 @@ fn generate_openapi(
     unsigned_manifest: bool,
 ) -> Result<(), Box<dyn Error>> {
     let spec = require_release_router_openapi(try_generate_router_openapi())?;
-    let formatted = json::to_string_pretty(&spec)?;
+    let mut formatted = json::to_string_pretty(&spec)?;
+    formatted.push('\n');
     let emits_manifest = signature_envelope.is_some() || unsigned_manifest;
     if emits_manifest
         && !outputs

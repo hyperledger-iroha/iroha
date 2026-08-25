@@ -235,6 +235,11 @@ test('OpenAPI Cargo paths use the shared no-interference policy', async () => {
     xtask,
     /manifest_store_dir = data_dir\.join\("da-manifests"\)/,
   );
+  assert.match(
+    xtask,
+    /formatted\.push\('\\n'\)/,
+    'OpenAPI replay must preserve the canonical trailing newline',
+  );
 
   for (const source of [gate, generator]) {
     assert.match(
