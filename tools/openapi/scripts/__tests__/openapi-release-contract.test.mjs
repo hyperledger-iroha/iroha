@@ -141,6 +141,7 @@ test('OpenAPI Cargo paths use the shared no-interference policy', async () => {
     join(repoRoot, 'integration_tests', 'build.rs'),
     'utf8',
   );
+  const xtask = await readFile(join(repoRoot, 'xtask', 'src', 'main.rs'), 'utf8');
 
   for (const source of [gate, generator]) {
     assert.match(source, /source "\$\{PROCESS_POLICY\}"/);
@@ -221,6 +222,18 @@ test('OpenAPI Cargo paths use the shared no-interference policy', async () => {
   assert.match(
     integrationBuild,
     /Component::CurDir \| Component::ParentDir/,
+  );
+  assert.match(
+    xtask,
+    /configure_openapi_router_data_paths\(&mut cfg, data_dir\.path\(\)\)/,
+  );
+  assert.match(
+    xtask,
+    /replay_cache_store_dir = data_dir\.join\("da-replay"\)/,
+  );
+  assert.match(
+    xtask,
+    /manifest_store_dir = data_dir\.join\("da-manifests"\)/,
   );
 
   for (const source of [gate, generator]) {

@@ -13670,8 +13670,9 @@ fn try_generate_router_openapi() -> Result<Option<Value>, Box<dyn Error>> {
 }
 async fn generate_router_openapi_async() -> Result<Option<Value>, Box<dyn Error>> {
     const OPENAPI_ENDPOINT_CANDIDATES: &[&str] = &["/openapi.json", "/openapi"];
-    let _data_dir = TestDataDirGuard::new();
+    let data_dir = TestDataDirGuard::new();
     let mut cfg = mk_minimal_root_cfg();
+    configure_openapi_router_data_paths(&mut cfg, data_dir.path());
     let mut tokens = vec!["Test-Token".to_owned()];
     if let Ok(single) = std::env::var("TORII_OPENAPI_TOKEN")
         && !single.is_empty()
@@ -13716,6 +13717,25 @@ async fn generate_router_openapi_async() -> Result<Option<Value>, Box<dyn Error>
     let router = torii.api_router_for_tests();
     let spec = fetch_openapi_from_router(router, OPENAPI_ENDPOINT_CANDIDATES).await;
     Ok(spec)
+}
+fn configure_openapi_router_data_paths(cfg: &mut actual::Root, data_dir: &Path) {
+    cfg.torii.da_ingest.replay_cache_store_dir = data_dir.join("da-replay");
+    cfg.torii.da_ingest.manifest_store_dir = data_dir.join("da-manifests");
+}
+#[cfg(test)]
+#[test]
+fn openapi_router_data_paths_are_isolated_below_guarded_storage() {
+    let data_dir = TestDataDirGuard::new();
+    let mut cfg = mk_minimal_root_cfg();
+    configure_openapi_router_data_paths(&mut cfg, data_dir.path());
+    assert_eq!(
+        cfg.torii.da_ingest.replay_cache_store_dir,
+        data_dir.path().join("da-replay")
+    );
+    assert_eq!(
+        cfg.torii.da_ingest.manifest_store_dir,
+        data_dir.path().join("da-manifests")
+    );
 }
 fn openapi_router_state(
     cfg: &actual::Root,
