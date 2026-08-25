@@ -2,7 +2,7 @@
 
 REPLAY_TRACE_SOURCE_SHA256 = {
     "Cargo.lock": (
-        "c90b3659d6cb44cd1d6f9e75e7b98aacc0d30bbe23041d4e6e109e8a206fa76b"
+        "4bcc609d3cb6010c88739f1b6adc5a82a6eedebee87b61ea2d3eb1806b10d492"
     ),
     "formal/sumeragi_v2/SumeragiV2TraceWitness.tla": (
         "74c07afb81ce6e5552df12d856ee4d73940bca909e12eff869b959af64f2368d"

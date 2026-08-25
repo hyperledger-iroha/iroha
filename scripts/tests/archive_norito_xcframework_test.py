@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+from collections import Counter
 import fcntl
 import hashlib
 import importlib.util
@@ -20,6 +21,7 @@ import zipfile
 
 
 ROOT = Path(__file__).resolve().parents[2]
+BUILDER = ROOT / "scripts/build_norito_xcframework.sh"
 OWNER = ROOT / "scripts/archive_norito_xcframework.py"
 VALIDATOR = ROOT / "scripts/validate_norito_bridge_xcframework.py"
 SOURCE_DATE_EPOCH = "1700000001"
@@ -64,6 +66,199 @@ def load_validator_module():
     sys.modules[spec.name] = module
     spec.loader.exec_module(module)
     return module
+
+
+def native_symbol_probe_source() -> str:
+    builder = BUILDER.read_text(encoding="utf-8")
+    marker = (
+        '    "${pqclean_candidates[0]}" "${keccak_candidates[0]}" '
+        "<<'PY' || exit 1\n"
+    )
+    start = builder.index(marker) + len(marker)
+    end = builder.index("\nPY\n", start)
+    return builder[start:end] + "\n"
+
+
+class BuildNoritoXcframeworkArchiveTests(unittest.TestCase):
+    def test_native_symbol_probe_keeps_union_check_and_bounds_nm_stderr(self) -> None:
+        with tempfile.TemporaryDirectory(
+            prefix="norito-bridge-nm-probe-test."
+        ) as temporary:
+            root = Path(temporary)
+            nm = root / "nm"
+            nm.write_text(
+                f"""#!{sys.executable}
+from pathlib import Path
+import sys
+
+archive = Path(sys.argv[-1]).name
+symbols = {{
+    "dep-pqclean.a": "_pqclean_common\\n",
+    "dep-keccak.a": "_keccak\\n",
+    "staged.a": "_bridge\\n_pqclean_common\\n_keccak\\n",
+    "missing.a": "_bridge\\n_pqclean_common\\n",
+}}
+if archive == "failed.a":
+    sys.stderr.write("nm-prefix:" + ("x" * 8192) + ":nm-tail")
+    raise SystemExit(23)
+sys.stdout.write(symbols[archive])
+""",
+                encoding="utf-8",
+            )
+            nm.chmod(0o700)
+            archives = {
+                name: root / name
+                for name in (
+                    "dep-pqclean.a",
+                    "dep-keccak.a",
+                    "staged.a",
+                    "missing.a",
+                    "failed.a",
+                )
+            }
+            for archive in archives.values():
+                archive.touch()
+
+            def probe(staged: str) -> subprocess.CompletedProcess[str]:
+                return subprocess.run(
+                    [
+                        sys.executable,
+                        "-I",
+                        "-S",
+                        "-B",
+                        "-",
+                        str(nm),
+                        str(archives[staged]),
+                        str(archives["dep-pqclean.a"]),
+                        str(archives["dep-keccak.a"]),
+                    ],
+                    check=False,
+                    input=native_symbol_probe_source(),
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    text=True,
+                )
+
+            complete = probe("staged.a")
+            self.assertEqual(complete.returncode, 0, complete.stderr)
+
+            missing = probe("missing.a")
+            self.assertNotEqual(missing.returncode, 0)
+            self.assertIn(
+                "staged Apple archive omitted pqcrypto native symbols: _keccak",
+                missing.stderr,
+            )
+
+            failed = probe("failed.a")
+            self.assertNotEqual(failed.returncode, 0)
+            self.assertIn("nm exited with status 23", failed.stderr)
+            self.assertIn("stderr: nm-prefix:", failed.stderr)
+            self.assertIn("...[truncated]", failed.stderr)
+            self.assertNotIn(":nm-tail", failed.stderr)
+            self.assertLess(len(failed.stderr), 2_500)
+
+    @unittest.skipUnless(sys.platform == "darwin", "requires Apple archive tools")
+    def test_real_apple_libtool_reindexes_source_without_duplicate_members(
+        self,
+    ) -> None:
+        def pinned_tool(name: str) -> Path:
+            result = subprocess.run(
+                ["/usr/bin/xcrun", "--find", name],
+                check=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+            )
+            tool = Path(result.stdout.strip()).resolve(strict=True)
+            self.assertTrue(os.access(tool, os.X_OK))
+            return tool
+
+        clang = pinned_tool("clang")
+        libtool = pinned_tool("libtool")
+        nm = pinned_tool("nm")
+        ar = pinned_tool("ar")
+
+        with tempfile.TemporaryDirectory(
+            prefix="norito-bridge-real-libtool-test."
+        ) as temporary:
+            root = Path(temporary)
+
+            def run(tool: Path, *arguments: object, source: str | None = None) -> str:
+                result = subprocess.run(
+                    [str(tool), *(str(argument) for argument in arguments)],
+                    executable=str(tool),
+                    check=True,
+                    input=source,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    text=True,
+                )
+                return result.stdout
+
+            objects = {
+                "bridge.o": "int bridge(void) { return 1; }\n",
+                "pqclean_common.o": "int pqclean_common(void) { return 2; }\n",
+                "keccak4x.o": "int keccak4x(void) { return 3; }\n",
+            }
+            for name, source in objects.items():
+                run(clang, "-x", "c", "-c", "-o", root / name, "-", source=source)
+
+            source_archive = root / "source.a"
+            pqclean_archive = root / "libpqclean_common.a"
+            keccak_archive = root / "libkeccak4x.a"
+            combined_archive = root / "combined.a"
+            staged_one = root / "staged-one.a"
+            staged_two = root / "staged-two.a"
+
+            def archive(output: Path, *inputs: Path) -> None:
+                run(
+                    libtool,
+                    "-static",
+                    "-D",
+                    "-a",
+                    "-no_warning_for_no_symbols",
+                    "-o",
+                    output,
+                    *inputs,
+                )
+
+            archive(
+                source_archive,
+                root / "bridge.o",
+                root / "pqclean_common.o",
+                root / "keccak4x.o",
+            )
+            archive(pqclean_archive, root / "pqclean_common.o")
+            archive(keccak_archive, root / "keccak4x.o")
+            archive(
+                combined_archive,
+                source_archive,
+                pqclean_archive,
+                keccak_archive,
+            )
+            archive(staged_one, source_archive)
+            archive(staged_two, source_archive)
+
+            def members(path: Path) -> list[str]:
+                return [
+                    member
+                    for member in run(ar, "-t", path).splitlines()
+                    if member and not member.startswith("__.SYMDEF")
+                ]
+
+            combined_members = Counter(members(combined_archive))
+            self.assertEqual(combined_members["pqclean_common.o"], 2)
+            self.assertEqual(combined_members["keccak4x.o"], 2)
+            self.assertEqual(members(staged_one), members(source_archive))
+            self.assertEqual(len(members(staged_one)), len(set(members(staged_one))))
+            self.assertEqual(staged_one.read_bytes(), staged_two.read_bytes())
+
+            expected_symbols = set(
+                run(nm, "-gUj", pqclean_archive).splitlines()
+            ) | set(run(nm, "-gUj", keccak_archive).splitlines())
+            actual_symbols = set(run(nm, "-gUj", staged_one).splitlines())
+            self.assertTrue(expected_symbols)
+            self.assertFalse(expected_symbols - actual_symbols)
 
 
 class ArchiveNoritoXcframeworkTests(unittest.TestCase):
@@ -784,7 +979,24 @@ print(f"{digest} {size}")
         self.assertIn("libpqclean_common.a", builder)
         self.assertIn("libkeccak*x.a", builder)
         self.assertIn("ZERO_AR_DATE=1", builder)
-        self.assertIn("-no_warning_for_no_symbols", builder)
+        self.assertIn(
+            '"$LIBTOOL_BINARY" -static -D -a -no_warning_for_no_symbols',
+            builder,
+        )
+        self.assertIn(
+            '-o "$staged_library" \\\n    "$source_library" \\\n    || exit 1',
+            builder,
+        )
+        self.assertNotIn(
+            '"$source_library" "${pqclean_candidates[0]}"',
+            builder,
+        )
+        self.assertIn(
+            "expected = set().union(*(defined_symbols(archive) for archive in dependencies))",
+            builder,
+        )
+        self.assertIn("NM_STDERR_LIMIT = 2048", builder)
+        self.assertIn("stderr: {bounded_nm_stderr(error.stderr)}", builder)
         self.assertIn("staged Apple archive omitted pqcrypto native symbols", builder)
 
     def test_checker_nested_source_seal_is_no_site_and_no_bytecode(self) -> None:

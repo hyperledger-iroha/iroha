@@ -4613,7 +4613,7 @@ pub mod settlement {
     pub mod offline {
         use std::path::PathBuf;
         /// Maximum estimated decoded Kagemusha verifier bytes retained by one node.
-        pub const KAGEMUSHA_MAX_DECODED_BYTES: u64 = 256 * 1024 * 1024;
+        pub const KAGEMUSHA_MAX_DECODED_BYTES: u64 = 272 * 1024 * 1024;
         /// No Kagemusha release policy is trusted unless an operator configures one.
         #[must_use]
         pub const fn kagemusha_release_policy_path() -> Option<PathBuf> {

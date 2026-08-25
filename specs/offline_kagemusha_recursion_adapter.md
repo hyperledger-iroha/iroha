@@ -357,7 +357,10 @@ remains capable of representing smaller development fixtures, but such a
 fixture is not admissible as ABI-21 release evidence.
 
 Runtime qualification keeps its decoded working set beneath the non-raiseable
-256 MiB catalog budget. It never materializes a processed proving key: each
+272 MiB catalog budget. The conservative fixed-K17 two-profile estimate is
+279,192,800 bytes (266.259 MiB), so the ceiling is the next 16 MiB boundary and
+retains roughly 5.7 MiB beyond the estimate. It never materializes a processed
+proving key: each
 multi-gigabyte PK is authenticated with fixed 64 KiB scratch, checked against
 the exact processed-key geometry, and its bounded embedded-VK prefix is hashed
 and matched to the separately parsed VK. Full `ProvingKey` parsing remains

@@ -7,7 +7,6 @@ use iroha_crypto::{
     },
 };
 use norito::json::{self, Value};
-use rand_core_06::OsRng;
 use std::{
     error::Error,
     fs,
@@ -54,10 +53,7 @@ pub fn generate_sm_operator_snippet(
             let seed = decode_hex(&seed_hex)?;
             Sm2PrivateKey::from_seed(distid.clone(), &seed)?
         }
-        None => {
-            let mut rng = OsRng;
-            Sm2PrivateKey::random(distid.clone(), &mut rng)?
-        }
+        None => Sm2PrivateKey::try_random_from_os(distid.clone())?,
     };
     let material = SmOperatorKeyMaterial::new(&private)?;
     let json_target = options

@@ -909,6 +909,38 @@ impl LaneExecutablePayloadV1 {
             && origin.qc_mode_tag == candidate.qc_mode_tag
     }
 }
+
+/// Build a producer-authenticated executable payload for downstream crate tests.
+///
+/// The helper deliberately delegates to the production constructor so fixtures
+/// cannot reproduce its private domain-separated preimages incorrectly.
+#[doc(hidden)]
+#[cfg(any(test, feature = "iroha-core-tests"))]
+#[allow(clippy::too_many_arguments)]
+pub fn lane_executable_payload_for_testing(
+    network_id: NetworkId,
+    epoch: u64,
+    origin_proposal: LaneBlockProposalV1,
+    entrypoints: Vec<TransactionEntrypoint>,
+    reservation_keys: Vec<LaneQueueReservationKeyV2>,
+    routing_plans: Vec<RoutingPlan>,
+    native_amx_receipts: Vec<Option<NativeAmxReceipt>>,
+    producer: PeerId,
+    private_key: &PrivateKey,
+) -> std::result::Result<LaneExecutablePayloadV1, &'static str> {
+    LaneExecutablePayloadV1::new_signed_with_reservations(
+        network_id,
+        epoch,
+        origin_proposal,
+        entrypoints,
+        reservation_keys,
+        routing_plans,
+        native_amx_receipts,
+        producer,
+        private_key,
+    )
+    .map_err(|_| "failed to construct authenticated lane executable payload fixture")
+}
 /// Encode a validated hint-free payload into its exact global anchor envelope.
 ///
 /// Callers must construct and sign the payload before the carrier block exists.

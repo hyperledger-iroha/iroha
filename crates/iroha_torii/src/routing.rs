@@ -10580,7 +10580,10 @@ fn reject_direct_multisig_signing(
                         .is_some()
                 })
     );
-    if only_custom_instruction_envelopes {
+    let exact_kagemusha_release_lifecycle =
+        iroha_core::torii_proxy::validate_ordinary_kagemusha_lifecycle_signed_transaction(tx)
+            .is_ok();
+    if only_custom_instruction_envelopes || exact_kagemusha_release_lifecycle {
         return None;
     }
     let rejection = SignatureVerificationFail::new(
@@ -10701,6 +10704,70 @@ mod multisig_guard_tests {
         assert!(
             rejection.is_none(),
             "multisig custom instruction envelopes must pass admission guard"
+        );
+    }
+    routing_test! { sync exact_kagemusha_lifecycle_multisig_is_not_rejected
+        use iroha_data_model::{
+            isi::offline::CancelKagemushaRecursiveReleaseV4,
+            offline::{
+                KAGEMUSHA_V4_RELEASE_CANCELLATION_SCHEMA_V1,
+                KAGEMUSHA_V4_RELEASE_LIFECYCLE_VERSION_V1, KagemushaExactBytesDigestV1,
+                KagemushaV4ReleaseCancellationV1, KagemushaV4ReleaseLifecycleReasonV1,
+            },
+        };
+
+        let domain_id: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
+        let governors = [0xea_u8, 0xeb].map(|seed| {
+            super::checked_routing_fixture_keypair(
+                seed,
+                iroha_crypto::Algorithm::Ed25519,
+                "derive Kagemusha lifecycle multisig fixture key",
+            )
+        });
+        let policy = MultisigPolicy::new(
+            2,
+            governors
+                .iter()
+                .map(|governor| {
+                    MultisigMember::new(governor.public_key().clone(), 1).unwrap()
+                })
+                .collect(),
+        )
+        .unwrap();
+        let multisig_id = AccountId::new_multisig(policy);
+        let domain = Domain::new(domain_id).build(multisig_id.account());
+        let multisig_account =
+            Account::new(multisig_id.account().clone()).build(multisig_id.account());
+        let world = World::with([domain], [multisig_account], []);
+        let kura = Kura::blank_kura_for_testing();
+        let query_handle = LiveQueryStore::start_test();
+        let state = State::new_for_testing(world, kura, query_handle);
+        let cancellation =
+            CancelKagemushaRecursiveReleaseV4::new(KagemushaV4ReleaseCancellationV1 {
+                schema: KAGEMUSHA_V4_RELEASE_CANCELLATION_SCHEMA_V1.to_owned(),
+                version: KAGEMUSHA_V4_RELEASE_LIFECYCLE_VERSION_V1,
+                promotion_id: [0x11; 32],
+                manifest_sha256: [0x22; 32],
+                expected_predecessor_lifecycle: KagemushaExactBytesDigestV1 {
+                    byte_len: 1,
+                    sha256: [0x33; 32],
+                },
+                transition_id: [0x55; 32],
+                reason: KagemushaV4ReleaseLifecycleReasonV1::GovernanceCancelled,
+                evidence: None,
+            });
+        let tx = TransactionBuilder::new(
+            *state.network_id_ref(),
+            multisig_id.into(),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .with_instructions([cancellation])
+        .sign_multisig([governors[0].private_key(), governors[1].private_key()]);
+
+        let rejection = reject_direct_multisig_signing(&state, &tx);
+        assert!(
+            rejection.is_none(),
+            "the exact signed Kagemusha lifecycle carrier must pass Torii's multisig guard"
         );
     }
 }
