@@ -588,6 +588,11 @@ build_unsigned_replay_bundle() {
     --verify --root "${source_root}" --no-writable-paths
   verify_replay_source_identity "${source_root}"
   cp -R "${REPLAY_BASELINE}/." "${output_dir}/"
+  if [[ -n "$(find "${output_dir}" -type l -print -quit)" ]]; then
+    echo "error: OpenAPI replay baseline copy contains a symbolic link." >&2
+    exit 1
+  fi
+  chmod -R u+w "${output_dir}"
   cp "${generated_dir}/torii.json" "${output_dir}/torii.json"
   cp "${generated_dir}/manifest.json" "${output_dir}/manifest.json"
   sync_unsigned_replay_bundle \
