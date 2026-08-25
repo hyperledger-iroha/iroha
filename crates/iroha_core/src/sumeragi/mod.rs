@@ -1438,13 +1438,16 @@ fn fair_v2_ingress_same_control_slot(
 /// A direct Vote may deliberately remain in fair ingress until its Proposal
 /// binds the execution commitment. Requiring that blocked Vote to cross before
 /// same-view timeout shares creates a circular dependency: those shares must
-/// assemble the TC which retires the view's proposal and vote work. An already
+/// assemble the TC which retires the view's proposal and vote work. The same
+/// cycle exists when one validator's already-counted TimeoutVote owns the
+/// barrier, so another validator's exact-view share may cross it. An already
 /// assembled TC for that view or a later one has the same dependency. Every
 /// candidate still crosses normal downstream authentication and quorum checks;
 /// this helper only allows the verifier to observe it when the immutable
 /// control owner is currently inadmissible.
 fn fair_v2_ingress_timeout_control_advances_owner(
     owner: &FairV2IngressLeaderWireToken,
+    candidate: Option<&FairV2IngressLeaderWireToken>,
     inbound: &InboundBlockMessage,
 ) -> bool {
     use iroha_data_model::block::consensus_v2::ConsensusMessageV2Payload;
@@ -1465,8 +1468,25 @@ fn fair_v2_ingress_timeout_control_advances_owner(
     let (round, view_advances) = match &message.payload {
         ConsensusMessageV2Payload::TimeoutVote(vote) => (
             vote.round,
-            owner.identity.phase != FairV2IngressLeaderWirePhase::TimeoutVote
-                && v2_core::timeout_vote_view_is_admissible(owner.identity.view, vote.round.view),
+            if owner.identity.phase == FairV2IngressLeaderWirePhase::TimeoutVote {
+                candidate.is_some_and(|candidate| {
+                    candidate.identity.phase == FairV2IngressLeaderWirePhase::TimeoutVote
+                        && candidate.slot.phase == FairV2IngressLeaderWirePhase::TimeoutVote
+                        && candidate.source_class == FairV2IngressLeaderWireSourceClass::Control
+                        && candidate.slot.chunk_index.is_none()
+                        && candidate.identity.context_id == vote.round.context_id
+                        && candidate.identity.height == vote.round.height
+                        && candidate.identity.view == vote.round.view
+                        && candidate.identity.view == owner.identity.view
+                        && candidate.identity.semantic_origin == *inbound.sender()
+                        && candidate.slot.semantic_origin == candidate.identity.semantic_origin
+                        && candidate.identity.semantic_origin != owner.identity.semantic_origin
+                        && candidate.identity.canonical_wire_hash
+                            == CryptoHash::new(message.encode())
+                })
+            } else {
+                v2_core::timeout_vote_view_is_admissible(owner.identity.view, vote.round.view)
+            },
         ),
         ConsensusMessageV2Payload::TimeoutCertificate(certificate) => (
             certificate.round,
@@ -3368,6 +3388,21 @@ pub(crate) struct FairV2IngressSnapshot {
     /// than the age of an earlier empty-queue scheduler turn.
     pub(crate) service_idle_age: Option<Duration>,
 }
+
+/// Scalar-only record of the most recent composite fair-selector attempt.
+/// It retains no peer, message, predicate, queue cut, or lifecycle digest.
+#[derive(Clone, Copy, Debug)]
+struct FairV2IngressSelectorAttemptDiagnosticV1 {
+    observed_at: Instant,
+    physical_cut: u128,
+    depth: usize,
+    gate_blocked: usize,
+    gate_strict: usize,
+    gate_dependency: usize,
+    predicate_tested: usize,
+    predicate_rejected: usize,
+    selected: bool,
+}
 /// Invalid message or byte capacity for the active roster's fair v2 ingress lanes.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct FairV2IngressCapacityError {
@@ -4019,6 +4054,9 @@ pub(crate) struct FairV2Ingress {
     /// pre-publication compare-and-swap witness.
     producer_publication_lock: Mutex<()>,
     state: Mutex<FairV2IngressState>,
+    /// Published only after dropping queue state; readers follow the same
+    /// state-then-diagnostic, never nested, lock order.
+    last_selector_attempt: Mutex<Option<FairV2IngressSelectorAttemptDiagnosticV1>>,
 }
 impl FairV2Ingress {
     #[cfg(test)]
@@ -4121,6 +4159,7 @@ impl FairV2Ingress {
                 leader_wire_context: None,
                 open: false,
             }),
+            last_selector_attempt: Mutex::new(None),
         }
     }
     fn debug_assert_consistent(&self, state: &FairV2IngressState) {

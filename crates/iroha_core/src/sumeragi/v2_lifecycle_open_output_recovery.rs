@@ -232,6 +232,14 @@ impl super::ProductionLifecycleOwnerV1 {
             .is_some_and(|outputs| !outputs.entries.is_empty())
     }
 
+    /// Return only the number of authenticated cold output owners retained by
+    /// this height; payload and lifecycle identity remain sealed.
+    pub(in crate::sumeragi) fn recovered_lifecycle_output_count(&self) -> usize {
+        self.recovered_lifecycle_outputs
+            .as_ref()
+            .map_or(0, |outputs| outputs.entries.len())
+    }
+
     /// Authenticate one Ready cold-open Broadcast retained outside the registry.
     ///
     /// Absence is not authority: callers must separately prove that the exact

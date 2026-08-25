@@ -7,7 +7,7 @@ use super::*;
 use crate::sumeragi::v2_lifecycle_coordinator::{
     AdmissionDecision, CertifiedServeSchedulerObservationV1, LifecycleIngressSelectorError,
     LifecycleLedgerV1, LifecycleValidateSidecarDriveV1, ReadyValidateSuccessorDispatchV1,
-    SelectedCertifiedResponsePriorityV1, WaitToken, claim_certified_serve_turn_v1,
+    SelectedCertifiedResponsePriorityV1, WaitSource, WaitToken, claim_certified_serve_turn_v1,
 };
 #[cfg(test)]
 pub(in crate::sumeragi) use crate::sumeragi::v2_runner::ordinary_ingress_consumer::ProductionPreparedCertifiedServeTestSettlementV1;
@@ -1194,6 +1194,40 @@ impl LaunchedProductionLifecycleV1 {
             return ProductionLifecycleCompletionPreGateV1::Ordinary(runner);
         }
 
+        let current_validate_fence_wait =
+            self.pending_lifecycle_completion
+                .as_ref()
+                .and_then(|pending| match pending {
+                    PendingLifecycleCompletionV1::ReadyValidateSuccessor(successor) => {
+                        successor.reducer_fence_wait()
+                    }
+                    _ => None,
+                });
+        if let Some(wait) = current_validate_fence_wait {
+            let fence = self.executor.lifecycle_reducer_fence_observation();
+            if fence.source() == wait.source() && fence.generation() <= wait.observed_generation() {
+                match self
+                    .services
+                    .prepare_ordinary_completion_behind_validate_fence()
+                {
+                    Ok(true) => {
+                        return ProductionLifecycleCompletionPreGateV1::Ordinary(runner);
+                    }
+                    Ok(false) => {}
+                    Err(reason) => {
+                        iroha_logger::error!(
+                            %reason,
+                            "ordinary Completion fence bypass classification failed closed"
+                        );
+                        self.close_output_for_restart();
+                        return ProductionLifecycleCompletionPreGateV1::Selected(
+                            ProductionLifecycleCompletionSelectionV1::RestartRequired,
+                        );
+                    }
+                }
+            }
+        }
+
         if let Some(pending) = self.pending_lifecycle_completion.take() {
             let selected = match pending {
                 PendingLifecycleCompletionV1::LifecycleDecisionApplyDeferred(deferred) => {
@@ -2134,6 +2168,174 @@ impl ActivatedProductionLifecycleV1 {
         runner: LifecycleCurrentRunnerTurn<'cursor>,
     ) -> ProductionLifecycleIngressTurnV1<'cursor> {
         self.launched.drive_ingress_turn(runner)
+    }
+
+    /// Emit a read-only, rate-limited ownership census when a non-empty fair
+    /// ingress has retained its oldest owner for a full liveness interval.
+    ///
+    /// These owners are intentionally private to the launched lifecycle and
+    /// worker service. Keeping the diagnostic here preserves that boundary
+    /// while making a stale claim, parked capacity wait, blocked I/O FIFO, and
+    /// selector barrier distinguishable in one operator record.
+    pub(in crate::sumeragi) fn log_scheduler_stall_diagnostic(
+        &mut self,
+        _runner: &mut crate::sumeragi::v2_runner::ProductionLifecycleActiveRunnerBorrowV1,
+        producer_claim: crate::sumeragi::v2_runner::LifecycleProducerClaimDispositionV1,
+        ingress: &FairV2Ingress,
+        ingress_oldest_age: Option<Duration>,
+        ingress_service_idle_age: Option<Duration>,
+        last_advance_executor_yield: Option<(
+            &'static str,
+            crate::sumeragi::v2_runner::AdvanceExecutorYieldV1,
+            Duration,
+        )>,
+    ) {
+        use crate::sumeragi::v2_runner::LifecycleProducerClaimDispositionV1 as Claim;
+
+        let (
+            producer_claim_kind,
+            producer_claim_ordinal,
+            producer_claim_child_ordinal,
+            producer_claim_wait_source,
+            producer_claim_wait_generation,
+        ) = match producer_claim {
+            Claim::Eligible => ("Eligible", None, None, None, None),
+            Claim::AwaitingValidateSuccessor { ordinal } => {
+                ("AwaitingValidateSuccessor", Some(ordinal), None, None, None)
+            }
+            Claim::AwaitingValidateFence { ordinal, wait } => {
+                let source = match wait.source() {
+                    WaitSource::Capacity(_) => "Capacity",
+                    WaitSource::External(_) => "External",
+                    WaitSource::Recovery(_) => "Recovery",
+                    WaitSource::ProducerTurn(_) => "ProducerTurn",
+                };
+                (
+                    "AwaitingValidateFence",
+                    Some(ordinal),
+                    None,
+                    Some(source),
+                    Some(wait.observed_generation()),
+                )
+            }
+            Claim::AwaitingLiveApplyQueue {
+                parent_ordinal,
+                child_ordinal,
+            } => (
+                "AwaitingLiveApplyQueue",
+                Some(parent_ordinal),
+                Some(child_ordinal),
+                None,
+                None,
+            ),
+            Claim::AwaitingCompletion => ("AwaitingCompletion", None, None, None, None),
+            Claim::AwaitingValidateSidecar => ("AwaitingValidateSidecar", None, None, None, None),
+            Claim::AwaitingApplyCompletion => ("AwaitingApplyCompletion", None, None, None, None),
+            Claim::ApplyTerminalSettled => ("ApplyTerminalSettled", None, None, None, None),
+            Claim::AwaitingReplayCompletion => ("AwaitingReplayCompletion", None, None, None, None),
+        };
+        let active_lease = self
+            .launched
+            .owner
+            .lifecycle_active_lease_scheduler_snapshot();
+        let (active_lease_ordinal, active_lease_work_class, active_lease_stage) = active_lease
+            .map_or((None, None, None), |(ordinal, work_class, stage)| {
+                (Some(ordinal), Some(work_class), Some(stage))
+            });
+        let pending_completion =
+            self.launched
+                .pending_lifecycle_completion
+                .as_ref()
+                .map(|pending| match pending {
+                    PendingLifecycleCompletionV1::LifecycleDecisionApplyDeferred(_) => {
+                        "LifecycleDecisionApplyDeferred"
+                    }
+                    PendingLifecycleCompletionV1::CertifiedFetch(_) => "CertifiedFetch",
+                    PendingLifecycleCompletionV1::RecoveredDecisionFetch(_) => {
+                        "RecoveredDecisionFetch"
+                    }
+                    PendingLifecycleCompletionV1::RecoveredSign(_) => "RecoveredSign",
+                    PendingLifecycleCompletionV1::Validate(_) => "Validate",
+                    PendingLifecycleCompletionV1::ReadyValidateSuccessor(_) => {
+                        "ReadyValidateSuccessor"
+                    }
+                    PendingLifecycleCompletionV1::DeferredValidate(_) => "DeferredValidate",
+                    PendingLifecycleCompletionV1::RegisteredDeferredValidate(_) => {
+                        "RegisteredDeferredValidate"
+                    }
+                });
+        let pending_capacity = self
+            .launched
+            .pending_ingress_capacity
+            .as_ref()
+            .map(|pending| match pending {
+                PendingIngressCapacityV1::CertifiedFetch(wait) => (
+                    "CertifiedFetch",
+                    format!("{:?}", wait.capacity_status(&self.launched.services)),
+                ),
+                PendingIngressCapacityV1::RecoveredDecisionFetch(wait) => (
+                    "RecoveredDecisionFetch",
+                    format!("{:?}", wait.capacity_status(&self.launched.services)),
+                ),
+                PendingIngressCapacityV1::CertifiedServe(wait) => (
+                    "CertifiedServe",
+                    format!("{:?}", wait.status(&self.launched.services)),
+                ),
+            });
+        let (pending_capacity_kind, pending_capacity_status) = pending_capacity
+            .as_ref()
+            .map_or((None, None), |(kind, status)| {
+                (Some(*kind), Some(status.as_str()))
+            });
+        let executor_status = self.launched.executor.status();
+        let io = self.launched.services.lifecycle_io_scheduler_snapshot();
+        let exact_output = self.launched.services.exact_output_scheduler_snapshot();
+        let recovered_lifecycle_outputs = self.launched.owner.recovered_lifecycle_output_count();
+        let fair_selector = ingress
+            .scheduler_stall_diagnostic()
+            .unwrap_or_else(|error| format!("unavailable: {error}"));
+        iroha_logger::warn!(
+            height = self.launched.executor.context().height,
+            context_id = ?self.launched.executor.context().id(),
+            producer_claim_kind,
+            ?producer_claim_ordinal,
+            ?producer_claim_child_ordinal,
+            ?producer_claim_wait_source,
+            ?producer_claim_wait_generation,
+            ?active_lease_ordinal,
+            ?active_lease_work_class,
+            ?active_lease_stage,
+            ?ingress_oldest_age,
+            ?ingress_service_idle_age,
+            ?last_advance_executor_yield,
+            recovered_lifecycle_outputs,
+            pending_completion = ?pending_completion,
+            pending_capacity_kind = ?pending_capacity_kind,
+            pending_capacity_status = ?pending_capacity_status,
+            pending_live_wal_sign = self
+                .launched
+                .executor
+                .has_pending_live_wal_sign_admission(),
+            pending_lifecycle_output_admission = self
+                .launched
+                .executor
+                .has_pending_lifecycle_output_admissions(),
+            pending_durable_validate_admission = self
+                .launched
+                .executor
+                .has_pending_durable_validate_admissions(),
+            pending_signatures = executor_status.pending_signatures,
+            pending_fetches = executor_status.pending_fetches,
+            pending_stores = executor_status.pending_stores,
+            pending_validations = executor_status.pending_validations,
+            pending_outputs = executor_status.pending_outputs,
+            pending_applications = executor_status.pending_applications,
+            queued_runtime_completions = executor_status.queued_runtime_completions,
+            ?io,
+            ?exact_output,
+            fair_selector = %fair_selector,
+            "Sumeragi v2 outer scheduler starvation ownership census"
+        );
     }
 
     /// Consume one opaque ordinary handoff through the exact runner-owned tail.

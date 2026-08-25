@@ -12,13 +12,13 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 ASSET_PATH = ROOT / "crates/iroha_core/src/sumeragi/source_contracts_v1.txt"
 SUPPORT_PATH = ROOT / "crates/iroha_core/src/sumeragi/v2_lifecycle_coordinator_support.rs"
-EXPECTED_CASE_COUNT = 52
+EXPECTED_CASE_COUNT = 53
 BASELINE_RUST_LINES = 5_779
-MAX_POSTIMAGE_RUST_LINES = 3_609
-MINIMUM_NET_REDUCTION = 2_170
-EXPECTED_ASSET_LENGTH = 475_201
-EXPECTED_ASSET_SHA256 = "2366606c6c57c95a97ebd34b75a9edf89669b47aaee2d4a22005b0f8d76b5f6b"
-EXPECTED_CASE_IDS_SHA256 = "c00f7bf8c8c4a38b7cfa0a456ee10ec2bb8573ce6aac5330f5d377025ab298b6"
+MAX_POSTIMAGE_RUST_LINES = 3_621
+MINIMUM_NET_REDUCTION = 2_158
+EXPECTED_ASSET_LENGTH = 504_023
+EXPECTED_ASSET_SHA256 = "49cebc533e8a510f9f2260ac75095ab2d4fc71e8d6ceabbbf2b771dc8f88462a"
+EXPECTED_CASE_IDS_SHA256 = "cbb80aba2a9376f83abafbd26313371656fb97053cac13566b3b828831068f13"
 
 HOST_PREIMAGE_SHA256 = {
     "crates/iroha_core/src/sumeragi/tests/v2_adapter_05_direct_lifecycle_recovered_wal_seal_case.rs": "fe0afaffcbabfeb1d2fdae88d871e380ca1484c80cc2cd0d3a8ce492c6949446",
@@ -29,10 +29,10 @@ HOST_PREIMAGE_SHA256 = {
 }
 HOST_POSTIMAGE_SHA256 = {
     "crates/iroha_core/src/sumeragi/tests/v2_adapter_05_direct_lifecycle_recovered_wal_seal_case.rs": "5b3988299c7873cb3cd0cf70f4007007d570cbb324c7c9adbf237ef4fbc6afda",
-    "crates/iroha_core/src/sumeragi/tests/v2_lifecycle_replay_authority_cases.rs": "cafb63f1161f2cd95185b4c46ccb6bd7eb09cd0afee0f5c07afa894c39ad4678",
-    "crates/iroha_core/src/sumeragi/tests/v2_lifecycle_work_registry_exact_registry_cases.rs": "bc57cf6e598cf680a57ac43295e7efbd5dc44cd036199144a3e325f4fe3b8fa6",
+    "crates/iroha_core/src/sumeragi/tests/v2_lifecycle_replay_authority_cases.rs": "b5c5f21c05911a258c3ba4159ea010c2238be3d1b2719cba6bebfa7d9b570338",
+    "crates/iroha_core/src/sumeragi/tests/v2_lifecycle_work_registry_exact_registry_cases.rs": "c56fca490c5bddae181abf7f7c02ec0dc230ce6171302b8b0f8215f50d0cfd34",
     "crates/iroha_core/src/sumeragi/tests/v2_lifecycle_work_registry_replay_evidence_cases.rs": "c6427c6b098be208556e08222f31507d024f5c63524fb43a5e5c7822b65711e7",
-    "crates/iroha_core/src/sumeragi/v2_lifecycle_coordinator_support.rs": "a267e6147cabfe7dd05f4e2a15458ce3fa5428a3b7633b353963a0f50b5e2da1",
+    "crates/iroha_core/src/sumeragi/v2_lifecycle_coordinator_support.rs": "468c5bbd308bd6b8f124eada81223cc889cb5376acf5900da9d1ec712511721b",
 }
 
 MIGRATED_TESTS = {
@@ -46,6 +46,7 @@ MIGRATED_TESTS = {
     ),
     "crates/iroha_core/src/sumeragi/tests/v2_lifecycle_work_registry_exact_registry_cases.rs": (
         "remote_proposal_replay_pre_admission_is_closed_exact_and_live",
+        "stored_replay_store_coalescing_and_cleanup_are_owner_closed",
         "invalid_body_replay_pre_admission_is_closed_exact_and_lifecycle_owned",
         "live_validate_sign_join_is_linear_opaque_and_scheduler_owned",
         "ready_validate_execution_surface_is_closed_borrow_bound_and_scheduler_owned",
@@ -57,11 +58,13 @@ MIGRATED_TESTS = {
 
 NEW_CASE_CONTRACT_COUNTS = {
     "recovered_wal_vote_sign_seal_is_move_only_exact_and_owner_wired": 338,
+    "stored_replay_store_coalescing_and_cleanup_are_owner_closed": 44,
     "ready_validate_execution_surface_is_closed_borrow_bound_and_scheduler_owned": 196,
     "certified_pipeline_replay_evidence_is_retained_by_every_closed_carrier": 35,
 }
 MIGRATED_CASE_SHA256 = {
-    "recovered_wal_vote_sign_seal_is_move_only_exact_and_owner_wired": "8d461314d4d76d1dddc42d4fc21f908c1369874d90c96256f3184eec0949d4f0",
+    "recovered_wal_vote_sign_seal_is_move_only_exact_and_owner_wired": "7e61f7612fa106e3a3649ba8720b172f5d1ec4e901f35c4cf310038b46ba521e",
+    "stored_replay_store_coalescing_and_cleanup_are_owner_closed": "9119448ec51c39bb6088d219218dc59d25e15cff729fc145d5644eda8037a8ff",
     "ready_validate_execution_surface_is_closed_borrow_bound_and_scheduler_owned": "03b7d7a3a9843536bca8c686937561c0c12eea4281e9850de7ee7c841cf6ac48",
     "certified_pipeline_replay_evidence_is_retained_by_every_closed_carrier": "ddb35ea319aba502839875f5548a17c0329dabe8e6d44e99b865e146417e6e23",
 }

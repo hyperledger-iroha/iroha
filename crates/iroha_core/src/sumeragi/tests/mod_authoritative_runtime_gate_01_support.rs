@@ -650,18 +650,26 @@ fn bind_test_leader_wire_gate(
     round: wire::ConsensusRound,
     max_chunk_count: u32,
 ) -> TempDir {
+    bind_test_leader_wire_gate_for_roster(ingress, &[validator.clone()], round, max_chunk_count)
+}
+fn bind_test_leader_wire_gate_for_roster(
+    ingress: &Arc<super::FairV2Ingress>,
+    validators: &[PeerId],
+    round: wire::ConsensusRound,
+    max_chunk_count: u32,
+) -> TempDir {
     ingress.close();
     ingress
-        .configure_roster([validator.clone()])
-        .expect("one-validator fair-ingress geometry");
+        .configure_roster(validators.iter().cloned())
+        .expect("test-validator fair-ingress geometry");
     ingress.require_leader_wire_lifecycle_gate();
     ingress.state.lock().leader_wire_max_chunk_count = max_chunk_count;
     let directory = TempDir::new().expect("temporary leader-wire directory");
     let wal_path = directory.path().join("safety.wal");
     let owner = [0xA6; 32];
-    let roster = [validator.clone()].into_iter().collect();
+    let roster = validators.iter().cloned().collect();
     let capacity = super::serviced_candidate_store::LeaderWireLifecycleStoreGate::derived_capacity(
-        1,
+        validators.len(),
         max_chunk_count,
     )
     .expect("finite leader-wire geometry");

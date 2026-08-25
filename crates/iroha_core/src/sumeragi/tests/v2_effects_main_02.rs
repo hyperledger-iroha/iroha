@@ -241,6 +241,107 @@ fn retained_producer_suffix_allows_exact_payload_chunk_to_release_fetch_capacity
     assert!(!executor.status().fail_closed);
 }
 #[test]
+fn retained_effect_debt_admits_only_pacemaker_progress_leader_wires() {
+    let fixture = Fixture::new();
+    let mut executor = fixture.executor(EffectQueueConfig::new(1, 2, 1 << 20, 2));
+    let mut services = fixture.services();
+    executor
+        .consume_effects(vec![timeout_sign(&fixture, 0)], &mut services)
+        .expect("fill the sole signing slot");
+    executor
+        .consume_effects(vec![timeout_sign(&fixture, 1)], &mut services)
+        .expect("retain one ordinary reducer-effect suffix");
+    assert!(executor.retained_effect_batch.is_some());
+    executor.runtime.protected_commit = Some((
+        fixture.manifest.round,
+        fixture.manifest.subject,
+        fixture_execution_commitment(),
+    ));
+
+    let sender = fixture.context.roster[0].validator.clone();
+    let can_drain = |executor: &V2EffectExecutor<FakeRuntime>,
+                     message: &wire::ConsensusMessageV2| {
+        let inbound = crate::sumeragi::fair_v2_ingress_admit_for_test(
+            InboundBlockMessage::from_authenticated_peer(
+                BlockMessage::V2(message.clone()),
+                sender.clone(),
+            ),
+        );
+        v2_ingress_head_can_drain(&inbound, executor, None)
+    };
+    let prepare_qc = wire::ConsensusMessageV2::new(
+        wire::ConsensusMessageV2Payload::QuorumCertificate(fixture.qc(wire::GlobalPhase::Prepare)),
+    );
+    let timeout_vote = wire::ConsensusMessageV2::new(wire::ConsensusMessageV2Payload::TimeoutVote(
+        wire::TimeoutVote {
+            round: fixture.manifest.round,
+            highest_prepare_qc: None,
+            signer: 0,
+            signature: vec![0x72],
+        },
+    ));
+    let timeout_certificate = wire::ConsensusMessageV2::new(
+        wire::ConsensusMessageV2Payload::TimeoutCertificate(timeout_certificate(&fixture)),
+    );
+    let mut prepare_vote = vote(&fixture);
+    prepare_vote.signature = vec![0x73];
+    let prepare_vote =
+        wire::ConsensusMessageV2::new(wire::ConsensusMessageV2Payload::Vote(prepare_vote));
+    let mut exact_commit_vote = vote(&fixture);
+    exact_commit_vote.phase = wire::GlobalPhase::Commit;
+    exact_commit_vote.signature = vec![0x74];
+    let exact_commit_vote =
+        wire::ConsensusMessageV2::new(wire::ConsensusMessageV2Payload::Vote(exact_commit_vote));
+    let mut mismatched_commit_vote = vote(&fixture);
+    mismatched_commit_vote.phase = wire::GlobalPhase::Commit;
+    mismatched_commit_vote.subject.block_hash =
+        HashOf::from_untyped_unchecked(Hash::new(b"effects retained-debt mismatched commit"));
+    mismatched_commit_vote.signature = vec![0x75];
+    let mismatched_commit_vote = wire::ConsensusMessageV2::new(
+        wire::ConsensusMessageV2Payload::Vote(mismatched_commit_vote),
+    );
+    let proposal = proposal(&fixture);
+    let assert_matrix = |executor: &V2EffectExecutor<FakeRuntime>, debt: &str| {
+        assert!(
+            can_drain(executor, &prepare_qc),
+            "PrepareQC must reach the protected Progress prefix across {debt} debt"
+        );
+        assert!(
+            can_drain(executor, &timeout_vote),
+            "TimeoutVote must reach the protected Progress prefix across {debt} debt"
+        );
+        assert!(
+            can_drain(executor, &timeout_certificate),
+            "the certified timeout escape remains admissible across {debt} debt"
+        );
+        assert!(
+            can_drain(executor, &exact_commit_vote),
+            "the exact active-lock CommitVote reaches Progress across {debt} debt"
+        );
+        assert!(
+            !can_drain(executor, &proposal),
+            "Proposal remains behind {debt} reducer-effect order"
+        );
+        assert!(
+            !can_drain(executor, &prepare_vote),
+            "PrepareVote remains ordinary ingress across {debt} debt"
+        );
+        assert!(
+            !can_drain(executor, &mismatched_commit_vote),
+            "a mismatched CommitVote remains ordinary across {debt} debt"
+        );
+    };
+    assert_matrix(&executor, "retained");
+    assert!(executor.retained_effect_batch.is_some());
+    executor
+        .park_retained_effect_batch()
+        .expect("park the exact ordinary suffix behind protected Progress");
+    assert!(executor.retained_effect_batch.is_none());
+    assert!(executor.parked_effect_batch.is_some());
+    assert_matrix(&executor, "parked");
+    assert!(!executor.status().fail_closed);
+}
+#[test]
 fn retained_effect_batch_rejects_overtaking_and_oversize_before_partial_dispatch() {
     let fixture = Fixture::new();
     let mut executor = fixture.executor(EffectQueueConfig::new(1, 2, 1 << 20, 2));
@@ -270,6 +371,29 @@ fn retained_effect_batch_rejects_overtaking_and_oversize_before_partial_dispatch
         executor.consume_effects(oversized, &mut services),
         Err(EffectExecutorError::Contract(reason)) if reason.contains("adapter bound")
     ));
+    assert_eq!(
+        executor.runtime.effect_ownership_calls, 0,
+        "oversized adapter output fails before moving any lifecycle sidecar"
+    );
+    assert!(services.broadcasts.is_empty());
+    assert!(executor.status().fail_closed);
+}
+#[test]
+fn oversized_pacemaker_batch_fails_before_moving_effect_ownership() {
+    let fixture = Fixture::new();
+    let mut executor = fixture.executor(EffectQueueConfig::default());
+    let mut services = fixture.services();
+    let oversized = (0..=MAX_EFFECTS_PER_STEP)
+        .map(|_| AdapterEffect::Broadcast(proposal(&fixture)))
+        .collect::<Vec<_>>();
+    assert!(matches!(
+        executor.consume_pacemaker_effects(oversized, &mut services),
+        Err(EffectExecutorError::Contract(reason)) if reason.contains("adapter bound")
+    ));
+    assert_eq!(
+        executor.runtime.effect_ownership_calls, 0,
+        "oversized pacemaker output fails before moving any lifecycle sidecar"
+    );
     assert!(services.broadcasts.is_empty());
     assert!(executor.status().fail_closed);
 }

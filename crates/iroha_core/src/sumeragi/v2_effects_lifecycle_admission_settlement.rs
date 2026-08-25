@@ -86,11 +86,11 @@ impl AuthenticatedGenesisReplayStageV1 {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 enum AuthenticatedGenesisStoreReplayDispositionV1 {
     None,
     Advance,
-    Retry,
+    Retry(RuntimeEffectOwnership),
 }
 
 /// Inert runtime fingerprint for one replay-authorized Validate after its
@@ -102,6 +102,7 @@ enum DurableValidateRetrySealV1 {
     Live {
         effect: AdapterEffect,
         ownership: RuntimeEffectOwnership,
+        store_terminal: Option<DurableStoreTerminalRetrySealV1>,
     },
     /// Cold recovery retains a registry-authenticated inert owner. The `Arc`
     /// permits transactional executor snapshots without making the move-only
@@ -122,13 +123,20 @@ impl DurableValidateRetrySealV1 {
         effect: &AdapterEffect,
         ownership: &RuntimeEffectOwnership,
         pending: &PendingDurableValidateAdmissionV1,
+        store_terminal: Option<DurableStoreTerminalRetrySealV1>,
     ) -> Option<Self> {
         matches!(effect, AdapterEffect::ValidateBody { .. })
             .then_some(())
-            .filter(|()| pending.exactly_matches_retry(effect, ownership))?;
+            .filter(|()| {
+                pending.exactly_matches_retry(effect, ownership)
+                    && store_terminal
+                        .as_ref()
+                        .is_none_or(|store| store.exactly_precedes_validate(effect))
+            })?;
         Some(Self::Live {
             effect: effect.clone(),
             ownership: ownership.clone(),
+            store_terminal,
         })
     }
 
@@ -141,6 +149,7 @@ impl DurableValidateRetrySealV1 {
             Self::Live {
                 effect: incumbent_effect,
                 ownership: incumbent_ownership,
+                store_terminal,
             } => {
                 let (
                     AdapterEffect::ValidateBody {
@@ -166,6 +175,9 @@ impl DurableValidateRetrySealV1 {
                     || incumbent_ownership
                         .exact_pending_adapter_effect_binding(incumbent_effect)
                         .is_err()
+                    || store_terminal
+                        .as_ref()
+                        .is_some_and(|store| !store.exactly_precedes_validate(effect))
                 {
                     return Err(
                         "durable Validate retry changed its exact body, tag, or incumbent owner"
@@ -183,6 +195,7 @@ impl DurableValidateRetrySealV1 {
                     seal: Self::Live {
                         effect: effect.clone(),
                         ownership: ownership.clone(),
+                        store_terminal: store_terminal.clone(),
                     },
                     ownership,
                 })
@@ -199,6 +212,29 @@ impl DurableValidateRetrySealV1 {
                 })
             }
         }
+    }
+
+    /// Project one late durable Store carrier through the inert predecessor
+    /// owner retained when this live Validate admission consumed its replay.
+    fn project_store_terminal_retry(
+        &self,
+        durable_receipt: &DurableBodyReceipt,
+        effect: &AdapterEffect,
+        incoming: &RuntimeEffectOwnership,
+    ) -> Result<Option<RuntimeEffectOwnership>, String> {
+        let Self::Live {
+            store_terminal: Some(store_terminal),
+            ..
+        } = self
+        else {
+            return Ok(None);
+        };
+        store_terminal
+            .project_retry_ownership(durable_receipt, effect, incoming)
+            .map(Some)
+            .ok_or_else(|| {
+                "post-Validate Store terminal changed its durable body or exact owner".to_owned()
+            })
     }
 
     /// Project a durable commitment join without mutating the current seal.
@@ -643,6 +679,7 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
         effect: &AdapterEffect,
         ownership: &RuntimeEffectOwnership,
         pending: PendingDurableValidateAdmissionV1,
+        store_terminal: Option<DurableStoreTerminalRetrySealV1>,
     ) -> Result<(), EffectExecutorError> {
         if self.pending_durable_validate_admissions.contains_key(&key)
             || self.durable_validate_retry_seals.contains_key(&key)
@@ -654,14 +691,18 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
                 "durable Validate duplicated its exact lifecycle admission owner".to_owned(),
             ));
         }
-        let seal = DurableValidateRetrySealV1::seal_exact(effect, ownership, &pending).ok_or_else(
-            || {
+        let seal = DurableValidateRetrySealV1::seal_exact(
+            effect,
+            ownership,
+            &pending,
+            store_terminal,
+        )
+        .ok_or_else(|| {
                 EffectExecutorError::Contract(
                     "durable Validate could not seal its exact post-admission retry owner"
                         .to_owned(),
                 )
-            },
-        )?;
+            })?;
         let previous = self
             .pending_durable_validate_admissions
             .insert(key, pending);
@@ -752,6 +793,34 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
     }
 }
 
+/// Bounded outcome census for one lifecycle-output settlement pass.
+///
+/// Only a newly completed output crossed service I/O and the terminal durability
+/// boundary. Exact terminal duplicates stutter before service I/O, so they must
+/// not by themselves preempt the following serialized ingress turn.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[must_use = "the lifecycle-output settlement census controls executor yielding"]
+pub(in crate::sumeragi) struct LifecycleOutputAdmissionSettlementSummaryV1 {
+    newly_completed: usize,
+    already_completed: usize,
+}
+
+impl LifecycleOutputAdmissionSettlementSummaryV1 {
+    #[cfg(test)]
+    pub(in crate::sumeragi) const fn newly_completed(self) -> usize {
+        self.newly_completed
+    }
+
+    #[cfg(test)]
+    pub(in crate::sumeragi) const fn already_completed(self) -> usize {
+        self.already_completed
+    }
+
+    pub(in crate::sumeragi) const fn requires_outer_executor_yield(self) -> bool {
+        self.newly_completed > 0
+    }
+}
+
 impl V2EffectExecutor<SerializedV2Runtime> {
     /// Return whether a signed/diagnostic output is parked at the lifecycle cut.
     pub(in crate::sumeragi) fn has_pending_lifecycle_output_admissions(&self) -> bool {
@@ -763,14 +832,14 @@ impl V2EffectExecutor<SerializedV2Runtime> {
         &mut self,
         owner: &mut ProductionLifecycleOwnerV1,
         services: &mut S,
-    ) -> Result<usize, EffectExecutorError> {
+    ) -> Result<LifecycleOutputAdmissionSettlementSummaryV1, EffectExecutorError> {
         self.ensure_open()?;
         let keys = self
             .pending_lifecycle_output_admissions
             .keys()
             .copied()
             .collect::<Vec<_>>();
-        let mut completed = 0usize;
+        let mut summary = LifecycleOutputAdmissionSettlementSummaryV1::default();
         for key in keys {
             let Some(pending) = self.pending_lifecycle_output_admissions.remove(&key) else {
                 continue;
@@ -780,9 +849,11 @@ impl V2EffectExecutor<SerializedV2Runtime> {
                     self.execute_lifecycle_output_service(effect, ownership, services)
                 });
             match settlement {
-                ProductionLifecycleOutputAdmissionSettlementV1::Completed
-                | ProductionLifecycleOutputAdmissionSettlementV1::AlreadyCompleted => {
-                    completed = completed.saturating_add(1);
+                ProductionLifecycleOutputAdmissionSettlementV1::Completed => {
+                    summary.newly_completed = summary.newly_completed.saturating_add(1);
+                }
+                ProductionLifecycleOutputAdmissionSettlementV1::AlreadyCompleted => {
+                    summary.already_completed = summary.already_completed.saturating_add(1);
                 }
                 ProductionLifecycleOutputAdmissionSettlementV1::Deferred(pending) => {
                     let previous = self
@@ -817,7 +888,7 @@ impl V2EffectExecutor<SerializedV2Runtime> {
                 }
             }
         }
-        Ok(completed)
+        Ok(summary)
     }
 
     /// Return whether an exact durable Validate owner is parked at lifecycle admission.
@@ -1139,6 +1210,96 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
         Ok(())
     }
 
+    /// Rebind a later Store carrier to the immutable owner retained by its
+    /// exact durable Proposal/genesis replay or by the inert Store terminal
+    /// seal which survives that replay's Validate handoff.
+    ///
+    /// The Store handler repeats this projection when the effect dispatches,
+    /// but a queued `BodyStored` terminal is queried while the adapter batch is
+    /// still being retained.  Performing the same typed, read-only projection
+    /// here prevents that earlier query from presenting a fresh weaker owner
+    /// to the runtime without weakening the foreign-stale-owner guard.
+    fn stored_replay_incumbent_store_ownership(
+        &self,
+        key: (wire::ConsensusRound, wire::BlockSubject),
+        effect: &AdapterEffect,
+        incoming: &RuntimeEffectOwnership,
+    ) -> Result<Option<RuntimeEffectOwnership>, EffectExecutorError> {
+        if self.authenticated_genesis_replay.contains_key(&key)
+            && self.remote_proposal_replay.contains_key(&key)
+        {
+            return Err(EffectExecutorError::Contract(
+                "one stored body retained two replay lineages".to_owned(),
+            ));
+        }
+        let replay_retained = match (
+            self.remote_proposal_replay.get(&key),
+            self.authenticated_genesis_replay.get(&key),
+        ) {
+            (Some(RemoteProposalReplayStageV1::Stored { replay, ownership }), None) => {
+                let receipt = self.durable_bodies.get(&key).ok_or_else(|| {
+                    EffectExecutorError::Contract(
+                        "stored Proposal replay lost its durable receipt during retention"
+                            .to_owned(),
+                    )
+                })?;
+                Some(
+                    replay
+                        .project_retry_ownership(receipt, ownership, effect, incoming)
+                        .ok_or_else(|| {
+                            EffectExecutorError::Contract(
+                                "stored body replay could not project its incumbent Store owner"
+                                    .to_owned(),
+                            )
+                        })?,
+                )
+            }
+            (None, Some(AuthenticatedGenesisReplayStageV1::Stored { replay, ownership })) => {
+                let receipt = self.durable_bodies.get(&key).ok_or_else(|| {
+                    EffectExecutorError::Contract(
+                        "stored authenticated-genesis replay lost its durable receipt during retention"
+                            .to_owned(),
+                    )
+                })?;
+                Some(
+                    replay
+                        .project_retry_ownership(receipt, ownership, effect, incoming)
+                        .ok_or_else(|| {
+                            EffectExecutorError::Contract(
+                                "stored body replay could not project its incumbent Store owner"
+                                    .to_owned(),
+                            )
+                        })?,
+                )
+            }
+            _ => None,
+        };
+        let sealed_retained = self
+            .durable_validate_retry_seals
+            .get(&key)
+            .map(|seal| {
+                let receipt = self.durable_bodies.get(&key).ok_or_else(|| {
+                    EffectExecutorError::Contract(
+                        "post-Validate Store terminal lost its durable receipt".to_owned(),
+                    )
+                })?;
+                seal.project_store_terminal_retry(receipt, effect, incoming)
+                    .map_err(EffectExecutorError::Contract)
+            })
+            .transpose()?
+            .flatten();
+        if sealed_retained.is_some()
+            && (self.remote_proposal_replay.contains_key(&key)
+                || self.authenticated_genesis_replay.contains_key(&key))
+        {
+            return Err(EffectExecutorError::Contract(
+                "one durable Store retained both a replay phase and post-Validate terminal owner"
+                    .to_owned(),
+            ));
+        }
+        Ok(replay_retained.or(sealed_retained))
+    }
+
     fn stored_replay_incumbent_validate_ownership(
         &self,
         key: (wire::ConsensusRound, wire::BlockSubject),
@@ -1385,14 +1546,29 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
                 }
                 return Ok(AuthenticatedGenesisStoreReplayDispositionV1::Advance);
             }
-            Some(AuthenticatedGenesisReplayStageV1::Store { replay, .. }) => {
-                if !replay.exactly_matches_retry(effect, ownership) {
-                    return Err(EffectExecutorError::Contract(
-                        "authenticated-genesis Store retry changed its exact replay owner"
-                            .to_owned(),
-                    ));
-                }
-                return Ok(AuthenticatedGenesisStoreReplayDispositionV1::Retry);
+            Some(AuthenticatedGenesisReplayStageV1::Store { work_id, replay }) => {
+                let adopted = self
+                    .pending_stores
+                    .get(work_id)
+                    .filter(|pending| {
+                        (pending.task.manifest.round, pending.task.manifest.subject) == key
+                    })
+                    .and_then(|pending| {
+                        replay.project_retry_ownership(
+                            pending.task.ownership(),
+                            effect,
+                            ownership,
+                        )
+                    })
+                    .ok_or_else(|| {
+                        EffectExecutorError::Contract(
+                            "authenticated-genesis Store retry changed its exact replay owner"
+                                .to_owned(),
+                        )
+                    })?;
+                return Ok(AuthenticatedGenesisStoreReplayDispositionV1::Retry(
+                    adopted,
+                ));
             }
             Some(AuthenticatedGenesisReplayStageV1::Stored {
                 replay,
@@ -1403,16 +1579,17 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
                         "durable authenticated-genesis replay lost its body receipt".to_owned(),
                     )
                 })?;
-                if ownership != stored_ownership
-                    || !replay.exactly_retains_owned_store(receipt, stored_ownership)
-                    || !replay.exactly_matches_retry(effect, receipt)
-                {
-                    return Err(EffectExecutorError::Contract(
-                        "durable authenticated-genesis Store retry changed its replay owner"
-                            .to_owned(),
-                    ));
-                }
-                return Ok(AuthenticatedGenesisStoreReplayDispositionV1::Retry);
+                let adopted = replay
+                    .project_retry_ownership(receipt, stored_ownership, effect, ownership)
+                    .ok_or_else(|| {
+                        EffectExecutorError::Contract(
+                            "durable authenticated-genesis Store retry changed its replay owner"
+                                .to_owned(),
+                        )
+                    })?;
+                return Ok(AuthenticatedGenesisStoreReplayDispositionV1::Retry(
+                    adopted,
+                ));
             }
             Some(AuthenticatedGenesisReplayStageV1::BodyAvailable(_)) | None => {}
         }
@@ -1717,6 +1894,14 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
             else {
                 unreachable!("preflighted authenticated-genesis Store replay remains installed")
             };
+            let store_terminal = stored
+                .seal_store_terminal_retry(&receipt, &store_ownership)
+                .ok_or_else(|| {
+                    EffectExecutorError::Contract(
+                        "authenticated-genesis Validate could not seal its durable Store terminal"
+                            .to_owned(),
+                    )
+                })?;
             let validate_ownership = ownership;
             let validate = match self.protected_decision {
                 Some((decision_round, proposal_round, decision_subject, execution_commitment))
@@ -1758,6 +1943,7 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
                 &effect,
                 &validate_ownership,
                 validate.into_pending_durable_validate_admission(),
+                Some(store_terminal),
             )?;
             return Ok(None);
         }
@@ -1782,9 +1968,59 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
                 }
             }
             None => {
-                return Err(EffectExecutorError::Contract(
-                    "ValidateBody omitted its mandatory lifecycle replay owner".to_owned(),
-                ));
+                // A TC may promote an older PrepareQC after a newer durable
+                // Prepare high-water mark caused ordinary Proposal replay to
+                // retire. Rejoin only the currently protected full PrepareQC
+                // to this exact recovered manifest/receipt and runtime
+                // statement. This remains a normal LocalBody lifecycle
+                // admission; it neither synthesizes certified-Fetch authority
+                // nor bypasses the registry transaction.
+                let authority_certificate = self
+                    .exact_remote_proposal_validate_authority_certificate(&effect, &ownership)?;
+                let Some(certificate) = authority_certificate
+                    .filter(|certificate| certificate.phase == wire::GlobalPhase::Prepare)
+                else {
+                    return Err(EffectExecutorError::Contract(
+                        "ValidateBody omitted its mandatory lifecycle replay owner".to_owned(),
+                    ));
+                };
+                let (manifest, recovered_receipt) = self
+                    .recovered_bodies
+                    .get(&key)
+                    .cloned()
+                    .ok_or_else(|| {
+                        EffectExecutorError::Contract(
+                            "protected-lock ValidateBody omitted its exact recovered body frame"
+                                .to_owned(),
+                        )
+                    })?;
+                if recovered_receipt != receipt {
+                    return Err(EffectExecutorError::Contract(
+                        "protected-lock ValidateBody changed its durable body receipt".to_owned(),
+                    ));
+                }
+                let validate_ownership = ownership;
+                let prepared = PreparedLocalBodyValidateReplayPreAdmission::seal_exact_protected_lock_validate(
+                    effect.clone(),
+                    validate_ownership.clone(),
+                    manifest,
+                    receipt,
+                    certificate,
+                )
+                .map_err(|_| {
+                    EffectExecutorError::Contract(
+                        "protected-lock ValidateBody could not reseal exact lifecycle replay"
+                            .to_owned(),
+                    )
+                })?;
+                self.install_pending_durable_validate_admission(
+                    key,
+                    &effect,
+                    &validate_ownership,
+                    prepared.into_pending_durable_validate_admission(),
+                    None,
+                )?;
+                return Ok(None);
             }
         }
         let authority_certificate =
@@ -1796,6 +2032,13 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
         else {
             unreachable!("preflighted Proposal Store replay remains installed")
         };
+        let store_terminal = stored
+            .seal_store_terminal_retry(&receipt, &store_ownership)
+            .ok_or_else(|| {
+                EffectExecutorError::Contract(
+                    "Proposal Validate could not seal its durable Store terminal".to_owned(),
+                )
+            })?;
         let validate_ownership = ownership;
         let validate = match self.protected_decision {
             Some((decision_round, proposal_round, decision_subject, execution_commitment))
@@ -1856,6 +2099,7 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
             &effect,
             &validate_ownership,
             validate.into_pending_durable_validate_admission(),
+            Some(store_terminal),
         )?;
         Ok(None)
     }

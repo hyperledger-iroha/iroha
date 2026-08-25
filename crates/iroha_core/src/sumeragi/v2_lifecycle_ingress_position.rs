@@ -3,9 +3,10 @@ use super::super::{
     FairV2Ingress, FairV2IngressClass, FairV2IngressDequeueDisposition, FairV2IngressEntry,
     FairV2IngressLeaderWirePhase, FairV2IngressLeaderWireSelectorProjection,
     FairV2IngressLeaderWireToken, FairV2IngressOwnershipEvidence, FairV2IngressQueueGateVerdict,
-    FairV2IngressSource, FairV2IngressSourceClass, FairV2IngressState, FairV2IngressWireKey,
-    InboundBlockMessage, fair_v2_ingress_leader_wire_selector_projection,
-    fair_v2_ingress_queue_gate_verdict, message::BlockMessage, select_fair_v2_ingress_candidate,
+    FairV2IngressSelectorAttemptDiagnosticV1, FairV2IngressSource, FairV2IngressSourceClass,
+    FairV2IngressState, FairV2IngressWireKey, InboundBlockMessage,
+    fair_v2_ingress_leader_wire_selector_projection, fair_v2_ingress_queue_gate_verdict,
+    message::BlockMessage, select_fair_v2_ingress_candidate,
 };
 use super::schema::{LifecycleContext, LifecycleDigest};
 use iroha_crypto::Hash;
@@ -1009,18 +1010,53 @@ impl FairV2Ingress {
                     .collect::<Result<Vec<_>, _>>()
             })
             .collect::<Result<Vec<_>, _>>()?;
+        let (gate_blocked, gate_strict, gate_dependency) = selector_occurrences.values().fold(
+            (0usize, 0usize, 0usize),
+            |(blocked, strict, dependency), occurrence| match occurrence.queue_gate() {
+                FairV2IngressQueueGateVerdict::Blocked => {
+                    (blocked.saturating_add(1), strict, dependency)
+                }
+                FairV2IngressQueueGateVerdict::Strict => {
+                    (blocked, strict.saturating_add(1), dependency)
+                }
+                FairV2IngressQueueGateVerdict::Dependency => {
+                    (blocked, strict, dependency.saturating_add(1))
+                }
+            },
+        );
+        let mut predicate_tested = 0usize;
+        let mut predicate_rejected = 0usize;
+        let selected = select_fair_v2_ingress_candidate(
+            &candidates,
+            |occurrence| {
+                (
+                    occurrence.physical_admission_ordinal(),
+                    occurrence.queue_gate(),
+                    occurrence.is_obsolete(),
+                )
+            },
+            |occurrence| {
+                predicate_tested = predicate_tested.saturating_add(1);
+                let accepted = predicate(occurrence);
+                if !accepted {
+                    predicate_rejected = predicate_rejected.saturating_add(1);
+                }
+                accepted
+            },
+        );
+        *self.last_selector_attempt.lock() = Some(FairV2IngressSelectorAttemptDiagnosticV1 {
+            observed_at: Instant::now(),
+            physical_cut,
+            depth: selector_occurrences.len(),
+            gate_blocked,
+            gate_strict,
+            gate_dependency,
+            predicate_tested,
+            predicate_rejected,
+            selected: selected.is_some(),
+        });
         let Some((selected_source_index, selected_physical_ordinal, selected_disposition)) =
-            select_fair_v2_ingress_candidate(
-                &candidates,
-                |occurrence| {
-                    (
-                        occurrence.physical_admission_ordinal(),
-                        occurrence.queue_gate(),
-                        occurrence.is_obsolete(),
-                    )
-                },
-                |occurrence| predicate(occurrence),
-            )
+            selected
         else {
             return Ok(None);
         };
@@ -2195,6 +2231,18 @@ mod tests {
                 .expect("a false pure predicate is a valid retained turn")
                 .is_none()
         );
+        let rejected_attempt = ingress
+            .last_selector_attempt
+            .lock()
+            .expect("the composite selector publishes its scalar attempt");
+        assert_eq!(rejected_attempt.depth, depth);
+        assert!(rejected_attempt.gate_strict > 0);
+        assert_eq!(
+            rejected_attempt.predicate_rejected,
+            rejected_attempt.predicate_tested
+        );
+        assert!(rejected_attempt.predicate_tested > 0);
+        assert!(!rejected_attempt.selected);
         let state = ingress.state.lock();
         assert_eq!(state.len, depth);
         assert_eq!(state.ready.iter().cloned().collect::<Vec<_>>(), ready);

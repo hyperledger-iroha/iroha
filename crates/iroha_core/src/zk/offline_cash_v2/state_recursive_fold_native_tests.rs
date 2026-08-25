@@ -1,7 +1,7 @@
 use halo2_proofs::{
     halo2curves::{
         CurveExt as _,
-        group::Curve as _,
+        group::{Curve as _, cofactor::CofactorCurveAffine as _},
         pasta::{Ep, EpAffine, Eq, EqAffine, Fp, Fq},
     },
     poly::{commitment::ParamsProver as _, ipa::commitment::ParamsIPA},
@@ -95,6 +95,34 @@ fn canonical_ep(
         &encode_accumulator_v2(accumulator).expect("k=17 Ep output encodes"),
     )
     .expect("generated Ep accumulator is canonical")
+}
+
+fn decision_valid_eq_accumulator_v2(
+    params: &ParamsIPA<EqAffine>,
+    input_index: usize,
+) -> IpaAccumulator<EqAffine, NativeLoader> {
+    let tail = Fp::from(100 + input_index as u64);
+    let mut xi = vec![Fp::from(0); STATE_RECURSIVE_FOLD_K_V2 as usize];
+    *xi.last_mut().expect("k=17 Eq accumulator has a tail") = tail;
+
+    // For xi = [0, ..., 0, tail], BGH19's h-coefficient vector is
+    // [1, tail, 0, ..., 0], so this is exactly commit(G, h(xi)).
+    let u = (params.get_g()[0].to_curve() + params.get_g()[1] * tail).to_affine();
+    IpaAccumulator::new(xi, u)
+}
+
+fn decision_valid_ep_accumulator_v2(
+    params: &ParamsIPA<EpAffine>,
+    input_index: usize,
+) -> IpaAccumulator<EpAffine, NativeLoader> {
+    let tail = Fq::from(700 + input_index as u64);
+    let mut xi = vec![Fq::from(0); STATE_RECURSIVE_FOLD_K_V2 as usize];
+    *xi.last_mut().expect("k=17 Ep accumulator has a tail") = tail;
+
+    // The same sparse h(xi) construction keeps every input distinct while
+    // making each accumulator satisfy the IPA deciding relation exactly.
+    let u = (params.get_g()[0].to_curve() + params.get_g()[1] * tail).to_affine();
+    IpaAccumulator::new(xi, u)
 }
 
 fn state_fields(parity: OfflineCashHalo2ParityV2) -> OfflineCashStateAbiFieldsV2 {
@@ -200,14 +228,8 @@ fn eq_fixture_v2() -> (
 ) {
     let params = ParamsIPA::<EqAffine>::new(STATE_RECURSIVE_FOLD_K_V2);
     let inputs: [IpaAccumulator<EqAffine, NativeLoader>;
-        STATE_RECURSIVE_FOLD_INPUTS_PER_PARITY_V2] = std::array::from_fn(|input_index| {
-        IpaAccumulator::new(
-            (0..STATE_RECURSIVE_FOLD_K_V2)
-                .map(|round| Fp::from(100 + input_index as u64 * 32 + u64::from(round)))
-                .collect(),
-            params.get_g()[input_index + 3],
-        )
-    });
+        STATE_RECURSIVE_FOLD_INPUTS_PER_PARITY_V2] =
+        std::array::from_fn(|input_index| decision_valid_eq_accumulator_v2(&params, input_index));
     let canonical_inputs = std::array::from_fn(|index| canonical_eq(&inputs[index]));
     let hash_to_curve = Eq::hash_to_curve(HALO2_PARAMETERS_DOMAIN_V2);
     let proving_key = IpaProvingKey::new(
@@ -223,7 +245,7 @@ fn eq_fixture_v2() -> (
     let proving_svk = proving_key.svk();
     let verifier_svk = eq_succinct_verifying_key_v2();
     assert_eq!(proving_svk.domain.k, verifier_svk.domain.k);
-    assert_eq!(proving_svk.domain.gen, verifier_svk.domain.gen);
+    assert_eq!(proving_svk.domain.r#gen, verifier_svk.domain.r#gen);
     assert_eq!(proving_svk.g, verifier_svk.g);
     assert_eq!(proving_svk.h, verifier_svk.h);
     assert_eq!(proving_svk.s, verifier_svk.s);
@@ -254,14 +276,8 @@ fn ep_fixture_v2() -> (
 ) {
     let params = ParamsIPA::<EpAffine>::new(STATE_RECURSIVE_FOLD_K_V2);
     let inputs: [IpaAccumulator<EpAffine, NativeLoader>;
-        STATE_RECURSIVE_FOLD_INPUTS_PER_PARITY_V2] = std::array::from_fn(|input_index| {
-        IpaAccumulator::new(
-            (0..STATE_RECURSIVE_FOLD_K_V2)
-                .map(|round| Fq::from(700 + input_index as u64 * 32 + u64::from(round)))
-                .collect(),
-            params.get_g()[input_index + 11],
-        )
-    });
+        STATE_RECURSIVE_FOLD_INPUTS_PER_PARITY_V2] =
+        std::array::from_fn(|input_index| decision_valid_ep_accumulator_v2(&params, input_index));
     let canonical_inputs = std::array::from_fn(|index| canonical_ep(&inputs[index]));
     let hash_to_curve = Ep::hash_to_curve(HALO2_PARAMETERS_DOMAIN_V2);
     let proving_key = IpaProvingKey::new(
@@ -277,7 +293,7 @@ fn ep_fixture_v2() -> (
     let proving_svk = proving_key.svk();
     let verifier_svk = ep_succinct_verifying_key_v2();
     assert_eq!(proving_svk.domain.k, verifier_svk.domain.k);
-    assert_eq!(proving_svk.domain.gen, verifier_svk.domain.gen);
+    assert_eq!(proving_svk.domain.r#gen, verifier_svk.domain.r#gen);
     assert_eq!(proving_svk.g, verifier_svk.g);
     assert_eq!(proving_svk.h, verifier_svk.h);
     assert_eq!(proving_svk.s, verifier_svk.s);

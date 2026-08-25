@@ -121,7 +121,6 @@ impl CoreZkAmsMkheRnsNativeSourceSnapshotV1 {
         drop(self.main.take());
         drop(self.nonce.take());
     }
-
 }
 
 /// Unwind guard which makes the two-spool snapshot one fail-stop owner.
@@ -330,10 +329,7 @@ impl ZkAmsMkheRnsNativeSourceSnapshotV1 for CoreZkAmsMkheRnsNativeSourceSnapshot
     }
 }
 
-impl ZkAmsMkheRnsNativeRepeatableSourceSnapshotV1
-    for CoreZkAmsMkheRnsNativeSourceSnapshotV1
-{
-}
+impl ZkAmsMkheRnsNativeRepeatableSourceSnapshotV1 for CoreZkAmsMkheRnsNativeSourceSnapshotV1 {}
 
 fn read_error_poisons_v1(error: ConfidentialSpoolErrorV1) -> bool {
     match error {
@@ -443,12 +439,8 @@ mod tests {
         context_digest: [u8; 32],
         tags: [u8; 2],
     ) -> ConfidentialSpoolSnapshotV1 {
-        let layout = ConfidentialSpoolLayoutV1::new_v1(
-            2,
-            arena.plaintext_bytes(),
-            context_digest,
-        )
-        .expect("reduced conformance layout");
+        let layout = ConfidentialSpoolLayoutV1::new_v1(2, arena.plaintext_bytes(), context_digest)
+            .expect("reduced conformance layout");
         let mut writer = ConfidentialSpoolWriterV1::create_in_v1(directory, layout)
             .expect("reduced conformance writer");
         for (slot, tag) in tags.into_iter().enumerate() {
@@ -463,9 +455,7 @@ mod tests {
     }
 
     #[cfg(unix)]
-    fn reduced_snapshot_v1(
-        wrong_main_context: bool,
-    ) -> CoreZkAmsMkheRnsNativeSourceSnapshotV1 {
+    fn reduced_snapshot_v1(wrong_main_context: bool) -> CoreZkAmsMkheRnsNativeSourceSnapshotV1 {
         let directory = tempfile::tempdir().expect("reduced conformance directory");
         let layout = source_layout();
         let mut main_context = layout.arena_context_digest(ZkAmsMkheRnsNativeSourceArenaV1::Main);
@@ -553,9 +543,11 @@ mod tests {
             ),
             Err(ZkAmsMkheRnsNativeSourceErrorV1::UnexpectedWrite)
         ));
-        assert!(snapshot
-            .read_slot(ZkAmsMkheRnsNativeSourceArenaV1::Main, 0)
-            .is_ok());
+        assert!(
+            snapshot
+                .read_slot(ZkAmsMkheRnsNativeSourceArenaV1::Main, 0)
+                .is_ok()
+        );
         assert_eq!(snapshot.structural_receipt(), Ok(receipt));
         assert!(snapshot.main.is_some() && snapshot.nonce.is_some());
     }
@@ -569,9 +561,11 @@ mod tests {
             Err(ZkAmsMkheRnsNativeSourceErrorV1::InvalidContext)
         ));
         assert!(snapshot.main.is_some() && snapshot.nonce.is_some());
-        assert!(snapshot
-            .read_slot(ZkAmsMkheRnsNativeSourceArenaV1::Nonce, 1)
-            .is_ok());
+        assert!(
+            snapshot
+                .read_slot(ZkAmsMkheRnsNativeSourceArenaV1::Nonce, 1)
+                .is_ok()
+        );
         assert_eq!(
             map_spool_error_v1(ConfidentialSpoolErrorV1::ContextDigestMismatch),
             ZkAmsMkheRnsNativeSourceErrorV1::InvalidContext
@@ -596,10 +590,8 @@ mod tests {
             snapshot.injected_read_error = Some(raw_error);
             assert!(matches!(
                 snapshot.read_slot(ZkAmsMkheRnsNativeSourceArenaV1::Main, 0),
-                Err(
-                    ZkAmsMkheRnsNativeSourceErrorV1::Authentication
-                        | ZkAmsMkheRnsNativeSourceErrorV1::Storage
-                )
+                Err(ZkAmsMkheRnsNativeSourceErrorV1::Authentication
+                    | ZkAmsMkheRnsNativeSourceErrorV1::Storage)
             ));
             assert!(snapshot.main.is_none() && snapshot.nonce.is_none());
             for arena in [

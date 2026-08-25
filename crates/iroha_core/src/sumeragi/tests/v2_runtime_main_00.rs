@@ -1385,6 +1385,9 @@ fn preowned_leader_wire_ownerships_with_dequeue_mode(
     Vec<FairV2IngressOwnershipEvidence>,
 ) {
     let directory = TempDir::new().expect("temporary preowned leader-wire directory");
+    let transport_completion_byte_reserve =
+        super::super::fair_v2_ingress_required_transport_completion_bytes(context.da_layout)
+            .max(super::super::MAX_LANE_COMPLETION_MESSAGE_WIRE_BYTES);
     let ingress = Arc::new(
         super::super::FairV2Ingress::new_with_source_geometry_and_transport_frame_caps(
             64,
@@ -1392,7 +1395,7 @@ fn preowned_leader_wire_ownerships_with_dequeue_mode(
             64 * 1024 * 1024,
             super::super::CERTIFIED_FENCE_ESCAPE_RESERVE_BYTES,
             8 * 1024 * 1024,
-            8 * 1024 * 1024,
+            transport_completion_byte_reserve,
             usize::MAX,
             usize::MAX,
             usize::MAX,
@@ -1524,7 +1527,7 @@ fn preowned_leader_wire_ownerships_with_dequeue_mode(
         .collect();
     (directory, ingress, ownerships)
 }
-fn preowned_leader_wire_ownerships(
+pub(in crate::sumeragi) fn preowned_leader_wire_ownerships(
     context: &wire::HeightContext,
     messages: &[(wire::ConsensusMessageV2, PeerId)],
     lifecycle_ordinals: RuntimeLifecycleOrdinalSource,

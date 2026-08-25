@@ -1455,18 +1455,47 @@ fn validate_secret_free_config_template_v1(config: &toml::Value) -> color_eyre::
         .get("credentials")
         .and_then(toml::Value::as_array)
         .ok_or_else(|| eyre!("Taira onboarding credentials must be an array"))?;
-    if credentials.len() != 1 {
-        bail!("Taira config template must contain exactly one placeholder onboarding credential");
+    let expected_credentials = [
+        (
+            "REPLACE_WITH_TAIRA_BOI_ONBOARDING_CREDENTIAL_ID",
+            "is2",
+            "REPLACE_WITH_TAIRA_BOI_ONBOARDING_TOKEN_HASH",
+        ),
+        (
+            "REPLACE_WITH_TAIRA_DPN_ONBOARDING_CREDENTIAL_ID",
+            "dpn",
+            "REPLACE_WITH_TAIRA_DPN_ONBOARDING_TOKEN_HASH",
+        ),
+    ];
+    if credentials.len() != expected_credentials.len() {
+        bail!("Taira config template must contain exactly two placeholder onboarding credentials");
     }
-    let credential = credentials[0]
-        .as_table()
-        .ok_or_else(|| eyre!("Taira onboarding credential must be a table"))?;
-    expect_toml_string_v1(
-        credential,
-        "token_hash",
-        "REPLACE_WITH_TAIRA_ONBOARDING_TOKEN_HASH",
-        "Taira onboarding token digest",
-    )?;
+    for (index, (credential, (expected_id, expected_dataspace, expected_token_hash))) in
+        credentials.iter().zip(expected_credentials).enumerate()
+    {
+        let label = format!("Taira onboarding credential {index}");
+        let credential = credential
+            .as_table()
+            .ok_or_else(|| eyre!("{label} must be a table"))?;
+        let actual_keys = credential
+            .keys()
+            .map(String::as_str)
+            .collect::<BTreeSet<_>>();
+        let expected_keys = ["id", "scope", "token_hash"]
+            .into_iter()
+            .collect::<BTreeSet<_>>();
+        if actual_keys != expected_keys {
+            bail!("{label} must contain exactly id, scope, and token_hash");
+        }
+        expect_toml_string_v1(credential, "id", expected_id, &label)?;
+        expect_toml_string_v1(credential, "token_hash", expected_token_hash, &label)?;
+        let scope = toml_table_field_v1(credential, "scope", &label)?;
+        if scope.len() != 1
+            || scope.get("dataspace").and_then(toml::Value::as_str) != Some(expected_dataspace)
+        {
+            bail!("{label} must bind exactly the {expected_dataspace} dataspace");
+        }
+    }
     expect_toml_string_v1(
         toml_table_field_v1(torii, "faucet", "Taira torii config")?,
         "private_key_file",

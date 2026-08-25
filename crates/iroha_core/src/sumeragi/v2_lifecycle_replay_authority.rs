@@ -3991,8 +3991,8 @@ impl LocalValidateReplayEvidenceV1 {
         }
         let family = match self.family {
             LocalValidateReplayFamilyV1::Assembled(family) => family,
-            LocalValidateReplayFamilyV1::AuthenticatedGenesis(_) => {
-                unreachable!("authenticated genesis cannot project LocalProposalReady")
+            LocalValidateReplayFamilyV1::AuthenticatedCertified(_) => {
+                unreachable!("authenticated certified Validate cannot project LocalProposalReady")
             }
         };
         Ok(LocalProposalReadyReplayEvidenceV1 {

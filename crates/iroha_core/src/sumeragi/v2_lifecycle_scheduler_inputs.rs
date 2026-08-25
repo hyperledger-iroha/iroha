@@ -5201,14 +5201,15 @@ impl ProductionLifecycleOwnerV1 {
                 crate::sumeragi::v2_effects::EffectQueueConfig::default(),
             )
             .expect("open the clean lifecycle Completion executor");
-        let fixture = crate::sumeragi::v2_worker::tests::install_lifecycle_planner_io_for_test(
-            services,
-            context,
-            output_guard,
-            body_store,
-            identity.clone(),
-            class_capacity,
-        );
+        let fixture = crate::sumeragi::v2_worker::tests::install_lifecycle_planner_io_for_local_validator_for_test(
+                services,
+                context,
+                local_validator,
+                output_guard,
+                body_store,
+                identity.clone(),
+                class_capacity,
+            );
         self.body_store_identity = Some(identity);
         (executor, fixture)
     }

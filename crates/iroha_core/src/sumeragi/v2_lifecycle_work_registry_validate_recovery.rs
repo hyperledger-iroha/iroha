@@ -1546,7 +1546,10 @@ enum ReadyValidateSuccessorIdentityV1 {
 ///
 /// The launched Completion owner retains this token ahead of physical queue
 /// classification so the same-address successor is freshly authenticated and
-/// reduced before any Runtime turn can rediscover Apply.
+/// reduced before any Runtime turn can rediscover Apply. While the token is
+/// parked on an unchanged reducer fence, one ordinary physical completion may
+/// pass through so the exact causal callback can advance that fence; dedicated
+/// lifecycle completions remain behind this owner.
 #[must_use = "the exact Ready Validate successor must be synchronously resolved"]
 pub(in crate::sumeragi) struct ReadyValidateSuccessorV1 {
     identity: ReadyValidateSuccessorIdentityV1,

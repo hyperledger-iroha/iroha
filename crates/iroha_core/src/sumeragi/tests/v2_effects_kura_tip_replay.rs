@@ -986,9 +986,17 @@ fn retained_recovery_retry_consumes_decision_retirement_terminal_same_cycle() {
     };
     assert_eq!(
         executor
-            .consume_effects(vec![timeout_sign(&fixture, 0), fetch], &mut services)
-            .expect("retain the exact recovery fetch at pending-work capacity"),
+            .consume_effects(vec![timeout_sign(&fixture, 0)], &mut services)
+            .expect("fill pending-work capacity with the timeout-sign owner"),
         1
+    );
+    let ownership = authenticated_proposal_fetch_ownership(&fixture, &fetch, 9_052);
+    executor.runtime.exact_effect_ownership = Some((fetch.clone(), ownership));
+    assert_eq!(
+        executor
+            .consume_effects(vec![fetch], &mut services)
+            .expect("retain the exact recovery fetch at pending-work capacity"),
+        0
     );
     assert!(executor.retained_effect_batch.is_some());
     let durable = DurableBodyReceipt::for_test(
@@ -1038,18 +1046,18 @@ fn body_fetch_authority_upgrades_monotonically_in_both_orders() {
     let sources = certified_sources(&fixture, &prepare);
     let mut executor = fixture.executor(EffectQueueConfig::default());
     let mut services = fixture.services();
+    let ordinary = AdapterEffect::FetchBody {
+        tag: tag(0),
+        round: fixture.manifest.round,
+        subject: fixture.manifest.subject,
+        manifest: Some(fixture.manifest.clone()),
+        certified_sources: Vec::new(),
+        certificate: None,
+    };
+    let ownership = authenticated_proposal_fetch_ownership(&fixture, &ordinary, 9_053);
+    executor.runtime.exact_effect_ownership = Some((ordinary.clone(), ownership));
     executor
-        .consume_effects(
-            vec![AdapterEffect::FetchBody {
-                tag: tag(0),
-                round: fixture.manifest.round,
-                subject: fixture.manifest.subject,
-                manifest: Some(fixture.manifest.clone()),
-                certified_sources: Vec::new(),
-                certificate: None,
-            }],
-            &mut services,
-        )
+        .consume_effects(vec![ordinary], &mut services)
         .expect("proposal starts ordinary acquisition");
     let work_id = services.fetch_tasks[0].id();
     executor
@@ -1190,18 +1198,18 @@ fn authenticated_genesis_satisfies_later_view_fetch_through_normal_body_pipeline
     let manifest = manifest_at_view(&fixture, 5);
     let round = manifest.round;
     let subject = manifest.subject;
+    let fetch = AdapterEffect::FetchBody {
+        tag: tag(5),
+        round,
+        subject,
+        manifest: Some(manifest.clone()),
+        certified_sources: Vec::new(),
+        certificate: None,
+    };
+    let fetch_ownership = authenticated_proposal_fetch_ownership(&fixture, &fetch, 9_050);
+    executor.runtime.exact_effect_ownership = Some((fetch.clone(), fetch_ownership.clone()));
     executor
-        .consume_effects(
-            vec![AdapterEffect::FetchBody {
-                tag: tag(5),
-                round,
-                subject,
-                manifest: Some(manifest.clone()),
-                certified_sources: Vec::new(),
-                certificate: None,
-            }],
-            &mut services,
-        )
+        .consume_effects(vec![fetch], &mut services)
         .expect("derive the later-view manifest from authenticated genesis");
     assert!(services.fetch_tasks.is_empty());
     assert!(executor.pending_fetches.is_empty());
@@ -1217,15 +1225,17 @@ fn authenticated_genesis_satisfies_later_view_fetch_through_normal_body_pipeline
         executor.runtime.completions,
         vec![RuntimeCompletion::BodyAvailable(tag(5), manifest.clone())]
     );
+    let store = AdapterEffect::StoreBody {
+        tag: tag(5),
+        round,
+        subject,
+    };
+    let store_ownership = fetch_ownership
+        .rebind_as_inherited_adapter_effect(&store)
+        .expect("inherit the authenticated Proposal owner into Store");
+    executor.runtime.exact_effect_ownership = Some((store.clone(), store_ownership.clone()));
     executor
-        .consume_effects(
-            vec![AdapterEffect::StoreBody {
-                tag: tag(5),
-                round,
-                subject,
-            }],
-            &mut services,
-        )
+        .consume_effects(vec![store], &mut services)
         .expect("enter the ordinary durable-store stage");
     assert_eq!(services.store_tasks.len(), 1);
     assert_eq!(services.store_tasks[0].manifest(), &manifest);
@@ -1239,15 +1249,17 @@ fn authenticated_genesis_satisfies_later_view_fetch_through_normal_body_pipeline
         .complete_body_store(store_completion, &mut services)
         .expect("complete the current-round durable store");
     assert_eq!(executor.durable_bodies[&(round, subject)].round(), round);
+    let validate = AdapterEffect::ValidateBody {
+        tag: tag(5),
+        round,
+        subject,
+    };
+    let validate_ownership = store_ownership
+        .rebind_as_inherited_adapter_effect(&validate)
+        .expect("inherit the authenticated Proposal owner into Validate");
+    executor.runtime.exact_effect_ownership = Some((validate.clone(), validate_ownership));
     executor
-        .consume_effects(
-            vec![AdapterEffect::ValidateBody {
-                tag: tag(5),
-                round,
-                subject,
-            }],
-            &mut services,
-        )
+        .consume_effects(vec![validate], &mut services)
         .expect("enter ordinary deterministic validation");
     assert_eq!(executor.pending_durable_validate_admissions.len(), 1);
     assert!(
@@ -1257,6 +1269,138 @@ fn authenticated_genesis_satisfies_later_view_fetch_through_normal_body_pipeline
     );
     assert!(executor.validated_bodies.is_empty());
 }
+
+#[test]
+fn enter_view_preserves_inflight_authenticated_genesis_store_replay() {
+    let fixture = Fixture::new();
+    let mut executor = fixture.executor(EffectQueueConfig::default());
+    executor.runtime.retain_body_available_effect_ownership = true;
+    let mut services = fixture.services();
+    let key = (fixture.manifest.round, fixture.manifest.subject);
+    let original_tag = tag(0);
+    let next_tag = tag(1);
+    let prepare = fixture.qc(wire::GlobalPhase::Prepare);
+    executor
+        .install_authenticated_genesis_body_for_test(&fixture.block)
+        .expect("retain authenticated staged genesis");
+    executor
+        .consume_effects(
+            vec![AdapterEffect::FetchBody {
+                tag: original_tag,
+                round: fixture.manifest.round,
+                subject: fixture.manifest.subject,
+                manifest: Some(fixture.manifest.clone()),
+                certified_sources: certified_sources(&fixture, &prepare),
+                certificate: Some(prepare.clone()),
+            }],
+            &mut services,
+        )
+        .expect("project authenticated genesis into the exact body pipeline");
+    executor
+        .consume_effects(
+            vec![AdapterEffect::StoreBody {
+                tag: original_tag,
+                round: fixture.manifest.round,
+                subject: fixture.manifest.subject,
+            }],
+            &mut services,
+        )
+        .expect("start the authenticated-genesis durable Store");
+    let store_id = services.store_tasks[0].id();
+    assert!(matches!(
+        executor.authenticated_genesis_replay.get(&key),
+        Some(AuthenticatedGenesisReplayStageV1::Store { work_id, .. })
+            if *work_id == store_id
+    ));
+    // Direct executor fixtures retain the synthetic BodyAvailable completion;
+    // model the reducer having consumed it before emitting StoreBody.
+    executor.runtime.completions.clear();
+
+    let mut timeout = timeout_certificate(&fixture);
+    timeout.groups[0].highest_prepare_qc = Some(prepare.clone());
+    executor.runtime.round_tag = Some(next_tag);
+    executor.runtime.locked_body = Some(key);
+    executor
+        .install_view(
+            next_tag,
+            timeout,
+            Some(prepare.clone()),
+            None,
+            &mut services,
+        )
+        .expect("EnterView detaches but preserves authenticated-genesis Store replay");
+    assert!(executor.pending_stores[&store_id].consumer.is_none());
+    assert!(matches!(
+        executor.authenticated_genesis_replay.get(&key),
+        Some(AuthenticatedGenesisReplayStageV1::Store { work_id, .. })
+            if *work_id == store_id
+    ));
+
+    executor
+        .consume_effects(
+            vec![AdapterEffect::StoreBody {
+                tag: next_tag,
+                round: fixture.manifest.round,
+                subject: fixture.manifest.subject,
+            }],
+            &mut services,
+        )
+        .expect("current Store adopts the detached authenticated-genesis pipeline");
+    assert_eq!(
+        executor
+            .body_pipeline_owners
+            .get(&key)
+            .map(|owner| owner.tag),
+        Some(next_tag),
+    );
+    assert_eq!(
+        services.store_tasks.len(),
+        1,
+        "authenticated-genesis Store handoff must not duplicate physical I/O",
+    );
+
+    let completion = services.execute_store(store_id);
+    assert_eq!(
+        executor
+            .complete_body_store(completion, &mut services)
+            .expect("late genesis Store completion advances its exact replay owner"),
+        CompletionDisposition::Accepted
+    );
+    assert!(matches!(
+        executor.authenticated_genesis_replay.get(&key),
+        Some(AuthenticatedGenesisReplayStageV1::Stored { .. })
+    ));
+
+    executor
+        .consume_effects(
+            vec![AdapterEffect::StoreBody {
+                tag: next_tag,
+                round: fixture.manifest.round,
+                subject: fixture.manifest.subject,
+            }],
+            &mut services,
+        )
+        .expect("later-view Store adopts the durable authenticated-genesis replay owner");
+    assert_eq!(
+        services.store_tasks.len(),
+        1,
+        "durable authenticated-genesis retry must not duplicate Store I/O",
+    );
+    assert!(matches!(
+        executor.runtime.completions.last(),
+        Some(RuntimeCompletion::BodyStored(completion_tag, round, subject, _))
+            if *completion_tag == next_tag
+                && *round == fixture.manifest.round
+                && *subject == fixture.manifest.subject
+    ));
+    assert!(matches!(
+        executor.authenticated_genesis_replay.get(&key),
+        Some(AuthenticatedGenesisReplayStageV1::Stored { .. })
+    ));
+    assert!(!executor.status().fail_closed);
+    assert!(services.closed.is_empty());
+}
+
 #[test]
 fn authenticated_genesis_satisfies_manifestless_certified_decision_fetch_locally() {
     let fixture = Fixture::new();
@@ -1346,18 +1490,18 @@ fn authenticated_genesis_cache_does_not_satisfy_a_different_subject() {
     let proposal_round = round(&fixture.context, 4);
     let (subject, body) = distinct_body(&fixture);
     let manifest = canonical_payload_manifest(&fixture.context, proposal_round, subject, &body);
+    let fetch = AdapterEffect::FetchBody {
+        tag: tag(4),
+        round: proposal_round,
+        subject,
+        manifest: Some(manifest.clone()),
+        certified_sources: Vec::new(),
+        certificate: None,
+    };
+    let ownership = authenticated_proposal_fetch_ownership(&fixture, &fetch, 9_051);
+    executor.runtime.exact_effect_ownership = Some((fetch.clone(), ownership));
     executor
-        .consume_effects(
-            vec![AdapterEffect::FetchBody {
-                tag: tag(4),
-                round: proposal_round,
-                subject,
-                manifest: Some(manifest.clone()),
-                certified_sources: Vec::new(),
-                certificate: None,
-            }],
-            &mut services,
-        )
+        .consume_effects(vec![fetch], &mut services)
         .expect("unrelated proposal uses network acquisition");
     assert_eq!(services.fetch_tasks.len(), 1);
     assert_eq!(services.fetch_tasks[0].manifest(), Some(&manifest));
@@ -1378,6 +1522,9 @@ fn retained_exact_body_pipeline_prevents_reacquisition_at_every_stage() {
         certified_sources: Vec::new(),
         certificate: None,
     };
+    let fetch_ownership = authenticated_proposal_fetch_ownership(&fixture, &fetch, 9_054);
+    executor.runtime.exact_effect_ownership =
+        Some((fetch.clone(), fetch_ownership.clone()));
     executor
         .consume_effects(vec![fetch.clone()], &mut services)
         .expect("start one exact acquisition");
@@ -1398,15 +1545,17 @@ fn retained_exact_body_pipeline_prevents_reacquisition_at_every_stage() {
     assert!(executor.pending_fetches.is_empty());
     assert_eq!(executor.ready_bodies.len(), 1);
     assert_eq!(executor.runtime.queued_commands(), 1);
+    let store = AdapterEffect::StoreBody {
+        tag: tag(0),
+        round: fixture.manifest.round,
+        subject: fixture.manifest.subject,
+    };
+    let store_ownership = fetch_ownership
+        .rebind_as_inherited_adapter_effect(&store)
+        .expect("inherit the authenticated Proposal owner into Store");
+    executor.runtime.exact_effect_ownership = Some((store.clone(), store_ownership));
     executor
-        .consume_effects(
-            vec![AdapterEffect::StoreBody {
-                tag: tag(0),
-                round: fixture.manifest.round,
-                subject: fixture.manifest.subject,
-            }],
-            &mut services,
-        )
+        .consume_effects(vec![store], &mut services)
         .expect("advance body into exact store ownership");
     executor
         .consume_effects(vec![fetch.clone()], &mut services)
@@ -1549,6 +1698,8 @@ fn conflicting_fetch_retransmission_fails_closed() {
         certified_sources: Vec::new(),
         certificate: None,
     };
+    let ownership = authenticated_proposal_fetch_ownership(&fixture, &effect, 9_055);
+    executor.runtime.exact_effect_ownership = Some((effect.clone(), ownership));
     executor
         .consume_effects(vec![effect], &mut services)
         .expect("first fetch");

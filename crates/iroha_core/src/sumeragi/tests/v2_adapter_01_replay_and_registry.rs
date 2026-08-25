@@ -1140,6 +1140,74 @@ fn recovered_validation_authority_uses_locked_certificate_round() {
     assert!(!authority.authorizes(proposal_round, locked_subject));
 }
 #[test]
+fn recovered_lockless_highest_prepare_retains_exact_validation_authority() {
+    let directory = TempDir::new().expect("temporary directory");
+    let (mut adapter, startup) = open_test(&directory).expect("open adapter");
+    assert!(startup.is_empty());
+    let round = wire::ConsensusRound {
+        context_id: adapter.wire_context.id(),
+        height: adapter.wire_context.height,
+        view: 0,
+    };
+    let prepared_subject = subject(0xAB);
+    let wire_prepare = wire::QuorumCertificate {
+        round,
+        proposal_round: round,
+        phase: wire::GlobalPhase::Prepare,
+        subject: prepared_subject,
+        execution_commitment: execution_commitment(0xAB),
+        signers: vec![0, 1, 2],
+        aggregate_signature: vec![0xAB; 96],
+    };
+    let core_context = adapter.reducer.context().clone();
+    let prepare = adapter
+        .registry
+        .qc_to_core(&wire_prepare, &adapter.wire_context)
+        .expect("register the durable highest PrepareQC");
+    let local_validator = adapter
+        .registry
+        .validator_id(0)
+        .expect("local fixture validator");
+    adapter.reducer = reducer::Reducer::recover(
+        core_context,
+        Some(local_validator),
+        reducer::Generation::new(2),
+        [reducer::WalEntry::new(
+            reducer::PersistenceId::new(1),
+            reducer::WalRecord::ObservePrepare(prepare),
+        )],
+    )
+    .expect("recover the lockless durable highest PrepareQC");
+    assert!(adapter.reducer.durable_state().locked().is_none());
+    assert_eq!(
+        adapter
+            .replayed_highest_prepare_certificate_ref()
+            .expect("project the replayed highest Prepare reference"),
+        Some(wire_prepare.as_ref())
+    );
+    let authority = adapter
+        .recovered_validation_authority(&[])
+        .expect("mint the recovered highest-Prepare frontier");
+    assert_eq!(authority.len(), 1);
+    assert!(authority.authorizes(round, prepared_subject));
+
+    let (runtime, startup) = super::super::v2_runtime::SerializedV2Runtime::new(
+        adapter,
+        Vec::new(),
+        Instant::now(),
+        Duration::from_secs(10),
+        super::super::v2_runtime::RuntimeQueueConfig::new(8, 2, 2),
+    )
+    .expect("wrap the recovered adapter in the serialized runtime");
+    assert!(startup.is_empty());
+    assert_eq!(
+        runtime
+            .replayed_highest_prepare_certificate_ref()
+            .expect("project the replayed highest Prepare through the runtime"),
+        Some(wire_prepare.as_ref())
+    );
+}
+#[test]
 fn timeout_signed_callback_is_restart_scoped_before_control_delivery() {
     let directory = TempDir::new().expect("temporary directory");
     let timeout_signature = vec![0xF1; 96];

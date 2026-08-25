@@ -808,6 +808,35 @@ impl LifecyclePlannerIoFixture {
             }
         }
     }
+    /// Execute one ordinary consensus Sign through the real worker helper and completion FIFO.
+    pub(in crate::sumeragi) fn execute_one_consensus_sign_fixture(
+        &self,
+        services: &ProductionV2Services,
+    ) {
+        let command = self
+            .command_rx
+            .try_recv()
+            .expect("one ordinary consensus Sign remains queued");
+        let V2IoCommand::Sign {
+            task,
+            restore_outbound_payload,
+        } = command
+        else {
+            panic!("expected the exact ordinary consensus Sign command")
+        };
+        let work_id = task.id();
+        let completion = sign_consensus_task(
+            &self.body_store,
+            &self.context,
+            &services.key_pair,
+            task,
+            restore_outbound_payload,
+        )
+        .expect("sign the exact ordinary consensus task");
+        self.command_rx.complete_work(work_id);
+        try_send_tracked_completion(&self.completion_tx, &self.admission, completion)
+            .expect("publish the ordinary signature completion");
+    }
     /// Execute one exact certified-Fetch persistence command through the same
     /// ownership transitions as the production worker and publish its guarded
     /// completion into the service's sole physical completion FIFO.
@@ -931,6 +960,28 @@ pub(in crate::sumeragi) fn install_lifecycle_planner_io_for_test(
         services,
         context,
         0,
+        active_tag,
+        output_guard,
+        body_store,
+        identity,
+        class_capacity,
+    )
+}
+/// Install a moved exact store for the selected local validator at the service's active tag.
+pub(in crate::sumeragi) fn install_lifecycle_planner_io_for_local_validator_for_test(
+    services: &mut ProductionV2Services,
+    context: wire::HeightContext,
+    local_validator: wire::ValidatorIndex,
+    output_guard: Arc<ConsensusOutputGuard>,
+    body_store: V2BodyStore,
+    identity: V2BodyStoreInstanceIdentity,
+    class_capacity: usize,
+) -> LifecyclePlannerIoFixture {
+    let active_tag = services.active_tag;
+    install_lifecycle_planner_io_for_validator_for_test(
+        services,
+        context,
+        local_validator,
         active_tag,
         output_guard,
         body_store,

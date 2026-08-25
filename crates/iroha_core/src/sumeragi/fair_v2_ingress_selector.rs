@@ -74,6 +74,43 @@ fn fair_v2_ingress_leader_wire_selector_projection(
         let carrier_ordinal = carrier_ordinals
             .remove(&owner.token)
             .ok_or_else(|| "leader-wire selector lost its exact fair-ingress carrier".to_owned())?;
+        // A restored token keeps its logical admission ordinal, so derive the
+        // immutable prefix from its fresh physical carrier. Every dequeue must
+        // reduce this exact per-source prefix before the carrier may cross.
+        for (source, lane) in &state.lanes {
+            let actual_predecessors = lane
+                .entries
+                .iter()
+                .filter(|entry| entry.admission_ordinal < carrier_ordinal)
+                .count();
+            let retained_predecessors = owner
+                .ingress_predecessors
+                .get(source)
+                .copied()
+                .unwrap_or(0);
+            if retained_predecessors != actual_predecessors {
+                return Err(format!(
+                    "leader-wire selector changed its exact ingress predecessor geometry for \
+                     source class {:?}: retained {retained_predecessors}, actual \
+                     {actual_predecessors}",
+                    source.class(),
+                ));
+            }
+        }
+        // Authenticated non-validator lanes disappear after their final
+        // dequeue. Their retained zero is equivalent to an absent map entry;
+        // a positive count would name physical ownership that no longer exists.
+        if let Some((source, retained_predecessors)) = owner
+            .ingress_predecessors
+            .iter()
+            .find(|(source, count)| **count != 0 && !state.lanes.contains_key(*source))
+        {
+            return Err(format!(
+                "leader-wire selector changed its exact ingress predecessor geometry for \
+                 removed source class {:?}: retained {retained_predecessors}, actual 0",
+                source.class(),
+            ));
+        }
         active_carriers.push((owner, carrier_ordinal));
     }
     if !carrier_ordinals.is_empty() {
@@ -196,7 +233,11 @@ fn fair_v2_ingress_queue_gate_verdict(
                 )
         });
     let timeout_control_dependency = leader_wire_barrier.is_some_and(|owner| {
-        fair_v2_ingress_timeout_control_advances_owner(&owner.token, &entry.inbound)
+        fair_v2_ingress_timeout_control_advances_owner(
+            &owner.token,
+            entry.leader_wire_token.as_ref(),
+            &entry.inbound,
+        )
     });
     let authenticated_certified_fence_escape =
         fair_v2_ingress_is_certified_fence_escape(&entry.inbound);
@@ -213,5 +254,90 @@ fn fair_v2_ingress_queue_gate_verdict(
         FairV2IngressQueueGateVerdict::Dependency
     } else {
         FairV2IngressQueueGateVerdict::Strict
+    }
+}
+
+impl FairV2Ingress {
+    /// Render the private selector geometry for a rate-limited starvation
+    /// warning. The snapshot is read-only and never advances the service
+    /// clock, rotates a source, or observes durable obsolescence.
+    pub(crate) fn scheduler_stall_diagnostic(&self) -> Result<String, String> {
+        let state = self.state.lock();
+        let projection =
+            fair_v2_ingress_leader_wire_selector_projection(&state, false, None)?;
+        let mut message_counts = BTreeMap::<u8, (FairV2IngressMessageKind, usize)>::new();
+        let mut blocked = 0usize;
+        let mut strict = 0usize;
+        let mut dependency = 0usize;
+        for (source, lane) in &state.lanes {
+            for (index, entry) in lane.entries.iter().enumerate() {
+                if let Some(kind) = FairV2IngressMessageKind::classify(entry.inbound.message()) {
+                    message_counts
+                        .entry(kind.projection_code())
+                        .and_modify(|(_, count)| *count = count.saturating_add(1))
+                        .or_insert((kind, 1));
+                }
+                match fair_v2_ingress_queue_gate_verdict(source, lane, index, &projection) {
+                    FairV2IngressQueueGateVerdict::Blocked => {
+                        blocked = blocked.saturating_add(1);
+                    }
+                    FairV2IngressQueueGateVerdict::Strict => {
+                        strict = strict.saturating_add(1);
+                    }
+                    FairV2IngressQueueGateVerdict::Dependency => {
+                        dependency = dependency.saturating_add(1);
+                    }
+                }
+            }
+        }
+        let message_counts = message_counts
+            .into_values()
+            .collect::<Vec<(FairV2IngressMessageKind, usize)>>();
+        let selected_barrier = projection.selected_barrier.as_ref().map(|record| {
+            let predecessor_total = record.ingress_predecessors.values().sum::<usize>();
+            let predecessor_source_count = record
+                .ingress_predecessors
+                .values()
+                .filter(|count| **count != 0)
+                .count();
+            format!(
+                "source_class={:?}, phase={:?}, view={}, scheduler_ordinal={}, carrier_ordinal={:?}, predecessor_total={}, predecessor_source_count={}",
+                record.token.source_class,
+                record.token.identity.phase,
+                record.token.identity.view,
+                record.token.scheduler_ordinal,
+                projection.selected_carrier_ordinal,
+                predecessor_total,
+                predecessor_source_count,
+            )
+        });
+        let current_physical_cut = u128::from(state.last_admission_ordinal).saturating_add(1);
+        let current_depth = state.len;
+        let current = format!(
+            "depth={}, ready_sources={}, active_leader_carriers={}, selected_barrier={selected_barrier:?}, gate_blocked={blocked}, gate_strict={strict}, gate_dependency={dependency}, message_counts={message_counts:?}",
+            state.len,
+            state.ready.len(),
+            projection.active_carriers.len(),
+        );
+        drop(state);
+        let now = Instant::now();
+        let last_attempt = *self.last_selector_attempt.lock();
+        let last_attempt = last_attempt.map(|attempt| {
+            let fresh = attempt.physical_cut == current_physical_cut
+                && attempt.depth == current_depth;
+            format!(
+                "age={:?}, fresh={fresh}, physical_cut={}, depth={}, gate_blocked={}, gate_strict={}, gate_dependency={}, predicate_tested={}, predicate_rejected={}, selected={}",
+                now.saturating_duration_since(attempt.observed_at),
+                attempt.physical_cut,
+                attempt.depth,
+                attempt.gate_blocked,
+                attempt.gate_strict,
+                attempt.gate_dependency,
+                attempt.predicate_tested,
+                attempt.predicate_rejected,
+                attempt.selected,
+            )
+        });
+        Ok(format!("{current}, last_selector_attempt={last_attempt:?}"))
     }
 }

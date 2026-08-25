@@ -720,9 +720,9 @@ fn parse_contracts() -> Result<Vec<Case>, String> {
             _ => return Err(format!("invalid source contract asset line {line_number}")),
         }
     }
-    if current.is_some() || cases.len() != 52 {
+    if current.is_some() || cases.len() != 53 {
         return Err(format!(
-            "source contract asset must contain exactly 52 closed cases"
+            "source contract asset must contain exactly 53 closed cases"
         ));
     }
     Ok(cases)
@@ -787,21 +787,27 @@ pub(crate) fn run_source_contract(id: &str) {
     for contract in &case.contracts {
         match contract {
             Contract::Required(region_id, needle, diagnostic) => {
-                let parts = region(case, region_id).unwrap_or_else(|error| panic!("{error}"));
+                let parts = region(case, region_id).unwrap_or_else(|error| {
+                    panic!("source contract {id} region {region_id}: {error}")
+                });
                 assert!(
                     parts.iter().any(|part| part.contains(needle)),
                     "{diagnostic}"
                 );
             }
             Contract::Forbidden(region_id, needle, diagnostic) => {
-                let parts = region(case, region_id).unwrap_or_else(|error| panic!("{error}"));
+                let parts = region(case, region_id).unwrap_or_else(|error| {
+                    panic!("source contract {id} region {region_id}: {error}")
+                });
                 assert!(
                     parts.iter().all(|part| !part.contains(needle)),
                     "{diagnostic}"
                 );
             }
             Contract::Count(region_id, needle, expected, diagnostic) => {
-                let parts = region(case, region_id).unwrap_or_else(|error| panic!("{error}"));
+                let parts = region(case, region_id).unwrap_or_else(|error| {
+                    panic!("source contract {id} region {region_id}: {error}")
+                });
                 let actual = parts
                     .iter()
                     .map(|part| part.matches(needle).count())
@@ -810,7 +816,9 @@ pub(crate) fn run_source_contract(id: &str) {
             }
             Contract::Order(region_id, anchors, diagnostic) => {
                 let text = region(case, region_id)
-                    .unwrap_or_else(|error| panic!("{error}"))
+                    .unwrap_or_else(|error| {
+                        panic!("source contract {id} region {region_id}: {error}")
+                    })
                     .join("\n");
                 let mut remainder = text.as_str();
                 for anchor in anchors {
@@ -853,7 +861,7 @@ fn source_contract_case_ids_are_unique() {
         cases.iter().all(|case| ids.insert(case.id.as_str())),
         "source contract case IDs must be unique"
     );
-    assert_eq!(ids.len(), 52, "source contract inventory drifted");
+    assert_eq!(ids.len(), 53, "source contract inventory drifted");
     for id in ids {
         run_source_contract(id);
     }

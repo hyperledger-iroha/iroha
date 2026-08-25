@@ -124,11 +124,12 @@ const ROUTE_NEUTRAL_SERVICED_CANDIDATE_CLASS: u8 = u8::MAX;
 const MAX_ADAPTER_EFFECTS_PER_MACRO_STEP: usize = reducer::MAX_EFFECTS_PER_STEP;
 /// Maximum validation-marker identities which can be authoritative at restart.
 ///
-/// The replayed adapter contributes at most one durable lock and one durable
-/// decision in addition to its already-bounded startup effect batch. Historical
-/// view-local markers outside this frontier remain body-availability evidence,
-/// but cannot force synchronous execution or restore vote authority.
-const MAX_RECOVERED_VALIDATION_AUTHORITIES: usize = MAX_ADAPTER_EFFECTS_PER_MACRO_STEP + 2;
+/// The replayed adapter contributes at most one durable highest Prepare, one
+/// durable lock, and one durable decision in addition to its already-bounded
+/// startup effect batch. Historical view-local markers outside this frontier
+/// remain body-availability evidence, but cannot force synchronous execution or
+/// restore vote authority.
+const MAX_RECOVERED_VALIDATION_AUTHORITIES: usize = MAX_ADAPTER_EFFECTS_PER_MACRO_STEP + 3;
 /// Largest record-specific `Persist -> Persisted` flattened batch.
 ///
 /// The witness is locally formed `InstallTimeout`: its individual TimeoutVote
@@ -303,8 +304,8 @@ impl LocalProposalDirective {
 ///
 /// Construction is restricted to a fully replayed adapter, so a checksummed
 /// body-store marker cannot select itself for recovery. The bounded key set is
-/// derived only from the durable lock/decision and the adapter's first replay
-/// batch.
+/// derived only from the durable highest Prepare, lock/decision, and the
+/// adapter's first replay batch.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct RecoveredValidationAuthority {
     context_id: wire::HeightContextId,
@@ -9243,6 +9244,16 @@ pub(crate) enum AdapterError {
     /// A signer index was outside the frozen roster.
     #[error("Sumeragi v2 validator index {0} is outside the frozen roster")]
     ValidatorIndexOutOfRange(u32),
+    /// A valid TimeoutVote was relayed under a different semantic origin.
+    #[error(
+        "authenticated Sumeragi v2 TimeoutVote signer index {signer} does not match semantic origin {semantic_origin}"
+    )]
+    AuthenticatedTimeoutVoteOriginMismatch {
+        /// Frozen-roster signer index carried by the authenticated vote.
+        signer: u32,
+        /// End-to-end authenticated protocol origin retained by fair ingress.
+        semantic_origin: PeerId,
+    },
     /// A reducer validator token was not present in the adapter mapping.
     #[error("unknown executable Sumeragi v2 validator token {0}")]
     UnknownValidator(reducer::ValidatorId),
@@ -10367,9 +10378,9 @@ impl SumeragiV2Adapter {
     /// Mint the bounded validation-marker frontier authorized by WAL replay.
     ///
     /// Marker files from superseded views remain checksummed local data, not
-    /// restart authority. Only the active durable lock/decision and exact body
-    /// identities referenced by the first replay batch can be rebound before
-    /// live ingress opens.
+    /// restart authority. Only the durable highest Prepare, active durable
+    /// lock/decision, and exact body identities referenced by the first replay
+    /// batch can be rebound before live ingress opens.
     pub(crate) fn recovered_validation_authority(
         &self,
         startup_effects: &[AdapterEffect],
@@ -10390,6 +10401,9 @@ impl SumeragiV2Adapter {
             keys.insert((round, subject));
             Ok(())
         };
+        if let Some(certificate) = self.replayed_highest_prepare_certificate_ref()? {
+            retain(certificate.proposal_round, certificate.subject)?;
+        }
         if let Some(certificate) = self.reducer.durable_state().locked() {
             retain(
                 self.registry.round_to_wire(certificate.proposal_round()),
@@ -10996,6 +11010,31 @@ impl SumeragiV2Adapter {
                         certificate.subject(),
                     )?,
                 ))
+            })
+            .transpose()
+    }
+    /// Return the exact highest Prepare certificate retained by safety-WAL replay.
+    ///
+    /// This frontier is distinct from the voting lock: a node may durably
+    /// observe a PrepareQC before a TimeoutCertificate promotes any PrepareQC
+    /// into the active lock.
+    pub(crate) fn replayed_highest_prepare_certificate_ref(
+        &self,
+    ) -> Result<Option<wire::QuorumCertificateRef>, AdapterError> {
+        self.reducer
+            .durable_state()
+            .highest_prepare()
+            .map(|certificate| {
+                Ok(wire::QuorumCertificateRef {
+                    round: self.registry.round_to_wire(certificate.round()),
+                    proposal_round: self.registry.round_to_wire(certificate.proposal_round()),
+                    phase: WireRegistry::phase_to_wire(certificate.phase()),
+                    subject: self.registry.subject(certificate.subject())?,
+                    execution_commitment: self.registry.execution_commitment(
+                        certificate.proposal_round(),
+                        certificate.subject(),
+                    )?,
+                })
             })
             .transpose()
     }

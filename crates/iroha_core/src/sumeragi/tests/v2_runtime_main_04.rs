@@ -702,6 +702,155 @@ fn two_fresh_timeout_vote_slots_replenish_once_and_close_a_four_validator_view()
     assert!(!runtime.fail_closed);
 }
 #[test]
+fn mismatched_timeout_vote_origin_is_nonfatal_and_does_not_hide_distinct_share() {
+    let directory = TempDir::new().expect("temporary mismatched-TV runtime directory");
+    let (mut runtime, context, keys) = authenticated_network_runtime_with_local_validator(
+        &directory,
+        RuntimeQueueConfig::new(4, 1, 1),
+        Some(0),
+    );
+    let lifecycle_ordinals = runtime.ingress.lifecycle_ordinals.clone();
+    let (_leader_wire_directory, leader_wire_ingress, ownerships) =
+        preowned_leader_wire_ownerships(&context, &[], lifecycle_ordinals);
+    assert!(ownerships.is_empty());
+    let started_at = Instant::now();
+    runtime
+        .arm_live_clocks(started_at)
+        .expect("arm the mismatch runtime");
+    runtime
+        .set_ingress_physical_cut(leader_wire_ingress.next_physical_admission_ordinal())
+        .expect("publish the empty fair-ingress cut before timeout");
+    let timeout_step = runtime
+        .step(started_at + runtime.round_timeout())
+        .expect("the local timeout opens its finite TV episode");
+    let RuntimeStep::Advanced(timeout_effects) = timeout_step else {
+        panic!("absolute timeout unexpectedly idled")
+    };
+    assert_eq!(
+        runtime
+            .take_last_scheduler_ownership()
+            .expect("timeout publishes scheduler ownership")
+            .selected,
+        RuntimeSelectedOwnerKind::Timeout
+    );
+    let timeout_effect_ownership = runtime
+        .take_effect_ownership(timeout_effects.len())
+        .expect("timeout Sign retains its exact lifecycle owner");
+    let [timeout_effect_owner] = timeout_effect_ownership.as_slice() else {
+        panic!("timeout emits one exact signing effect")
+    };
+    runtime
+        .set_external_lifecycle_owners(vec![timeout_effect_owner.owner().clone()])
+        .expect("publish the pending local timeout signer");
+
+    let mismatched_message = signed_runtime_timeout_vote(&context, &keys, 0, 1);
+    let mismatched_origin = context.roster[2].validator.clone();
+    let first_valid_message = signed_runtime_timeout_vote(&context, &keys, 0, 3);
+    let first_valid_origin = context.roster[3].validator.clone();
+    let second_valid_message = signed_runtime_timeout_vote(&context, &keys, 0, 1);
+    let second_valid_origin = context.roster[1].validator.clone();
+    assert_eq!(
+        second_valid_message, mismatched_message,
+        "identical inner vote bytes remain independent across authenticated semantic origins"
+    );
+    for (message, origin) in [
+        (&mismatched_message, &mismatched_origin),
+        (&first_valid_message, &first_valid_origin),
+        (&second_valid_message, &second_valid_origin),
+    ] {
+        assert!(matches!(
+            leader_wire_ingress.try_push(InboundBlockMessage::from_authenticated_peer(
+                BlockMessage::V2(message.clone()),
+                origin.clone(),
+            )),
+            Ok(super::super::FairV2IngressPushDisposition::Enqueued)
+        ));
+    }
+
+    for (valid_message, valid_origin) in [
+        (&first_valid_message, &first_valid_origin),
+        (&second_valid_message, &second_valid_origin),
+    ] {
+        let mut valid_inbound = leader_wire_ingress
+            .try_recv_if(|inbound| {
+                let BlockMessage::V2(candidate) = inbound.message() else {
+                    return false;
+                };
+                inbound.sender() == valid_origin
+                    && inbound.ingress_ownership().is_some_and(|ownership| {
+                        runtime.can_admit_timeout_vote_recovery_episode(candidate, ownership)
+                    })
+            })
+            .expect("a valid distinct share crosses the mismatched retained owner");
+        let valid_ownership = valid_inbound
+            .take_ingress_ownership()
+            .expect("the valid share retains exact checked-dequeue ownership");
+        runtime
+            .enqueue_network_with_ingress_ownership(valid_message.clone(), valid_ownership)
+            .expect("the valid share enters the protected Progress prefix");
+    }
+    assert_eq!(leader_wire_ingress.len(), 1);
+    assert_eq!(runtime.queued_commands(), 2);
+    assert!(
+        runtime
+            .ingress
+            .check_capacity(CommandClass::Progress)
+            .is_err(),
+        "two valid shares fill the configured Progress prefix"
+    );
+    assert_eq!(
+        runtime
+            .timeout_recovery_episode
+            .as_ref()
+            .expect("the timeout episode retains the valid share")
+            .admitted_timeout_vote_owners
+            .len(),
+        2
+    );
+
+    let mut mismatched_inbound = leader_wire_ingress
+        .try_recv_if(|inbound| {
+            let BlockMessage::V2(candidate) = inbound.message() else {
+                return false;
+            };
+            inbound.ingress_ownership().is_some_and(|ownership| {
+                runtime.can_admit_network_message_with_ingress_ownership(candidate, ownership)
+            })
+        })
+        .expect("the mismatched wire drains to authenticated rejection");
+    let mismatched_ownership = mismatched_inbound
+        .take_ingress_ownership()
+        .expect("the mismatched wire retains exact terminal ownership");
+    assert!(
+        mismatched_ownership.leader_wire_runtime_receipt().is_some(),
+        "runner terminalization receives the exact runtime receipt"
+    );
+    match runtime.enqueue_network_with_ingress_ownership(mismatched_message, mismatched_ownership) {
+        Err(NetworkIngressError::Authentication(
+            AdapterError::AuthenticatedTimeoutVoteOriginMismatch {
+                signer,
+                semantic_origin,
+            },
+        )) => {
+            assert_eq!(signer, 1);
+            assert_eq!(semantic_origin, mismatched_origin);
+        }
+        other => panic!("unexpected mismatched TimeoutVote admission: {other:?}"),
+    }
+    assert_eq!(runtime.queued_commands(), 2);
+    assert_eq!(
+        runtime
+            .timeout_recovery_episode
+            .as_ref()
+            .expect("the timeout episode retains the valid share")
+            .admitted_timeout_vote_owners
+            .len(),
+        2,
+        "remote authentication rejection cannot consume another finite source slot"
+    );
+    assert!(!runtime.fail_closed);
+}
+#[test]
 fn restored_timeout_vote_reactivation_binds_fresh_carrier_before_runtime_admission() {
     let runtime_directory = TempDir::new().expect("temporary restored-TV runtime directory");
     let (mut runtime, context, keys) = authenticated_network_runtime_with_local_validator(

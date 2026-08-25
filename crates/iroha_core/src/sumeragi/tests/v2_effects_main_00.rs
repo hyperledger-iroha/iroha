@@ -166,6 +166,12 @@ struct FakeRuntime {
     decision_on_next_step: Option<DurableDecision>,
     round_tag: Option<EventTag>,
     locked_body: Option<(wire::ConsensusRound, wire::BlockSubject)>,
+    highest_prepare: Option<wire::QuorumCertificateRef>,
+    protected_commit: Option<(
+        wire::ConsensusRound,
+        wire::BlockSubject,
+        wire::ExecutionCommitment,
+    )>,
     fail_enqueue: bool,
     fail_enqueue_hits: usize,
     panic_step: bool,
@@ -183,6 +189,7 @@ struct FakeRuntime {
     retain_body_available_effect_ownership: bool,
     live_proposal_intent_wal_sign: Option<(AdapterEffect, LiveProposalIntentWalSignHandoffV1)>,
     terminal_body_candidate_owners: BTreeMap<Hash, RuntimeEffectOwnership>,
+    terminal_body_candidate_queries: Vec<RuntimeEffectOwnership>,
     terminal_body_candidate_commits: usize,
     external_lifecycle_owners: Vec<RuntimeLifecycleOwner>,
     external_lifecycle_owner_capacity: Option<usize>,
@@ -334,6 +341,28 @@ impl EffectRuntime for FakeRuntime {
         _ingress_ownership: &FairV2IngressOwnershipEvidence,
     ) -> bool {
         false
+    }
+
+    fn wire_ingress_may_use_pacemaker_progress(
+        &self,
+        payload: &wire::ConsensusMessageV2Payload,
+    ) -> bool {
+        matches!(
+            payload,
+            wire::ConsensusMessageV2Payload::QuorumCertificate(_)
+                | wire::ConsensusMessageV2Payload::TimeoutCertificate(_)
+                | wire::ConsensusMessageV2Payload::TimeoutVote(_)
+        ) || matches!(
+            (payload, self.protected_commit.as_ref()),
+            (
+                wire::ConsensusMessageV2Payload::Vote(vote),
+                Some((round, subject, execution_commitment)),
+            ) if vote.phase == wire::GlobalPhase::Commit
+                && vote.round == *round
+                && vote.proposal_round == *round
+                && vote.subject == *subject
+                && vote.execution_commitment == *execution_commitment
+        )
     }
 
     fn step_effects(&mut self, _now: Instant) -> Result<RuntimeStep<AdapterEffect>, String> {
@@ -524,6 +553,7 @@ impl EffectRuntime for FakeRuntime {
         Ok(RuntimeReconciliationFrontier {
             tag: self.round_tag,
             locked_body: self.locked_body,
+            highest_prepare: self.highest_prepare,
             lock_is_authoritative: self.locked_body.is_some(),
             decision: self.decided_body,
         })
@@ -945,6 +975,7 @@ impl EffectRuntime for FakeRuntime {
         if !ownership.exactly_binds_adapter_effect(effect) {
             return Err("fake runtime terminal query received the wrong effect owner".to_owned());
         }
+        self.terminal_body_candidate_queries.push(ownership.clone());
         let identity = ownership.candidate_semantic_identity().ok_or_else(|| {
             "fake runtime terminal query omitted the candidate identity".to_owned()
         })?;

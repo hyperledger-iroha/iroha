@@ -9546,8 +9546,12 @@ pub(crate) trait RuntimeDriver {
     }
     /// Return whether the unauthenticated wire shape could match a protected
     /// active-lock item after authentication.
-    #[cfg(test)]
-    fn wire_ingress_may_use_progress(&self, payload: &wire::ConsensusMessageV2Payload) -> bool;
+    ///
+    /// Synthetic drivers remain conservative unless they model an exact lock;
+    /// the production adapter overrides this with its durable-lock predicate.
+    fn wire_ingress_may_use_progress(&self, _payload: &wire::ConsensusMessageV2Payload) -> bool {
+        false
+    }
 }
 impl RuntimeDriver for SumeragiV2Adapter {
     type Command = AdapterCommand;
@@ -10108,7 +10112,6 @@ impl RuntimeDriver for SumeragiV2Adapter {
             | AdapterEffect::ReportInvalidCertifiedBody { .. } => None,
         }
     }
-    #[cfg(test)]
     fn wire_ingress_may_use_progress(&self, payload: &wire::ConsensusMessageV2Payload) -> bool {
         SumeragiV2Adapter::wire_ingress_may_use_progress(self, payload)
     }
@@ -10355,6 +10358,21 @@ enum RuntimeTimeoutVoteEpisodeDisposition {
     PreCutDescent,
     RestoredDescent,
     FreshReplenishment,
+}
+/// Binding between one TimeoutVote's authenticated signer and its immutable
+/// fair-ingress semantic origin.
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum RuntimeTimeoutVoteOriginBinding {
+    NotApplicable,
+    Exact,
+    /// Authentication must reject this wire before reducer admission.
+    UnauthenticatedSignerIndex,
+    /// The inner signature is valid, but another peer relayed it as its own
+    /// semantic protocol message.
+    Mismatch {
+        signer: u32,
+        semantic_origin: iroha_data_model::peer::PeerId,
+    },
 }
 /// Immutable owner retained for one roster source in a timeout-recovery
 /// episode.
@@ -14671,6 +14689,21 @@ impl<D: RuntimeDriver> SerializedV2Runtime<D> {
         };
         class.is_none_or(|class| self.ingress.check_capacity(class).is_ok())
     }
+    /// Return whether one raw network payload can become an authenticated
+    /// pacemaker Progress root.
+    ///
+    /// QCs, TCs, and TimeoutVotes have a closed wire-level Progress class. A
+    /// Vote joins that class only when its complete statement matches the
+    /// driver's active durable lock. The caller must still run ordinary
+    /// authentication and exact ownership admission before enqueueing the
+    /// occurrence.
+    pub(crate) fn wire_ingress_may_use_pacemaker_progress(
+        &self,
+        payload: &wire::ConsensusMessageV2Payload,
+    ) -> bool {
+        matches!(network_command_class(payload), Some(CommandClass::Progress))
+            || self.driver.wire_ingress_may_use_progress(payload)
+    }
     /// Tag of the view which owns the absolute clocks.
     pub(crate) const fn round_tag(&self) -> EventTag {
         self.round_tag
@@ -14992,6 +15025,55 @@ impl SerializedV2Runtime<SumeragiV2Adapter> {
         self.driver
             .prepare_lifecycle_decision_apply_completion(authority)
     }
+    /// Validate the process-local TimeoutVote token independently of the
+    /// remote signer/origin binding.
+    ///
+    /// Token geometry is local integrity evidence and remains fail-closed. An
+    /// invalid or mismatched wire signer is remote authentication input: the
+    /// read-only fair selector may drain it so the authenticated admission
+    /// seam can reject it and retire the exact volatile lifecycle owner.
+    fn timeout_vote_origin_binding(
+        &self,
+        payload: &wire::ConsensusMessageV2Payload,
+        token: Option<&FairV2IngressLeaderWireToken>,
+    ) -> Result<RuntimeTimeoutVoteOriginBinding, EnqueueError> {
+        let wire::ConsensusMessageV2Payload::TimeoutVote(vote) = payload else {
+            return Ok(RuntimeTimeoutVoteOriginBinding::NotApplicable);
+        };
+        let token = token.ok_or(EnqueueError::FailClosed)?;
+        let context = self.driver.wire_context();
+        let roster = context
+            .roster
+            .iter()
+            .map(|entry| entry.validator.clone())
+            .collect::<BTreeSet<_>>();
+        if !token.validate_exact(
+            context.id(),
+            context.height,
+            &roster,
+            context.da_layout.max_chunk_count,
+        ) || token.identity.phase != FairV2IngressLeaderWirePhase::TimeoutVote
+            || token.identity.context_id != vote.round.context_id
+            || token.identity.height != vote.round.height
+            || token.identity.view != vote.round.view
+            || token.identity.subject_hash != iroha_crypto::Hash::new([])
+        {
+            return Err(EnqueueError::FailClosed);
+        }
+        let Ok(signer_index) = usize::try_from(vote.signer) else {
+            return Ok(RuntimeTimeoutVoteOriginBinding::UnauthenticatedSignerIndex);
+        };
+        let Some(signer) = context.roster.get(signer_index) else {
+            return Ok(RuntimeTimeoutVoteOriginBinding::UnauthenticatedSignerIndex);
+        };
+        if token.identity.semantic_origin != signer.validator {
+            return Ok(RuntimeTimeoutVoteOriginBinding::Mismatch {
+                signer: vote.signer,
+                semantic_origin: token.identity.semantic_origin.clone(),
+            });
+        }
+        Ok(RuntimeTimeoutVoteOriginBinding::Exact)
+    }
     fn timeout_vote_recovery_candidate_from_fair(
         &self,
         payload: &wire::ConsensusMessageV2Payload,
@@ -15041,9 +15123,9 @@ impl SerializedV2Runtime<SumeragiV2Adapter> {
         token: &FairV2IngressLeaderWireToken,
         physical_ordinal: u64,
     ) -> Result<Option<RuntimeTimeoutVoteEpisodeCandidate>, EnqueueError> {
-        let wire::ConsensusMessageV2Payload::TimeoutVote(vote) = payload else {
+        if !matches!(payload, wire::ConsensusMessageV2Payload::TimeoutVote(_)) {
             return Ok(None);
-        };
+        }
         let context = self.driver.wire_context();
         if !wire_payload_matches_current_strict_timeout_recovery_round(
             payload,
@@ -15065,28 +15147,8 @@ impl SerializedV2Runtime<SumeragiV2Adapter> {
         if episode.pre_frozen_retransmit.is_some() {
             return Ok(None);
         }
-        let roster = context
-            .roster
-            .iter()
-            .map(|entry| entry.validator.clone())
-            .collect::<BTreeSet<_>>();
-        let signer_index = usize::try_from(vote.signer).map_err(|_| EnqueueError::FailClosed)?;
-        let signer = context
-            .roster
-            .get(signer_index)
-            .ok_or(EnqueueError::FailClosed)?;
-        if !token.validate_exact(
-            context.id(),
-            context.height,
-            &roster,
-            context.da_layout.max_chunk_count,
-        ) || token.identity.phase != FairV2IngressLeaderWirePhase::TimeoutVote
-            || token.identity.context_id != vote.round.context_id
-            || token.identity.height != vote.round.height
-            || token.identity.view != vote.round.view
-            || token.identity.subject_hash != iroha_crypto::Hash::new([])
-            || token.identity.semantic_origin != signer.validator
-            || token.slot.semantic_origin != signer.validator
+        if self.timeout_vote_origin_binding(payload, Some(token))?
+            != RuntimeTimeoutVoteOriginBinding::Exact
         {
             return Err(EnqueueError::FailClosed);
         }
@@ -15876,6 +15938,12 @@ impl SerializedV2Runtime<SumeragiV2Adapter> {
     ) -> Result<super::v2::LocalProposalDirective, AdapterError> {
         self.driver.local_proposal_directive()
     }
+    /// Return the exact highest Prepare reference reconstructed by safety-WAL replay.
+    pub(crate) fn replayed_highest_prepare_certificate_ref(
+        &self,
+    ) -> Result<Option<wire::QuorumCertificateRef>, AdapterError> {
+        self.driver.replayed_highest_prepare_certificate_ref()
+    }
     /// Return the exact Decision key reconstructed by safety-WAL replay.
     pub(crate) fn replayed_decision_key(
         &self,
@@ -15982,6 +16050,36 @@ impl SerializedV2Runtime<SumeragiV2Adapter> {
         // clone here avoids publishing a runtime terminal obligation for an
         // authentication or capacity rejection.
         let leader_wire_registration = ingress_ownership.clone();
+        let timeout_vote_origin_binding = if matches!(
+            &message.payload,
+            wire::ConsensusMessageV2Payload::TimeoutVote(_)
+        ) {
+            let token = match ingress_ownership.leader_wire_token() {
+                Ok(token) => token,
+                Err(_) => {
+                    self.latch_fail_closed(
+                        "TimeoutVote ingress had conflicting leader-wire token ownership",
+                    );
+                    return Err(NetworkIngressError::FailClosed);
+                }
+            };
+            match self.timeout_vote_origin_binding(&message.payload, token) {
+                Ok(binding) => binding,
+                Err(_) => {
+                    self.latch_fail_closed(
+                        "TimeoutVote ingress changed its exact local token geometry",
+                    );
+                    return Err(NetworkIngressError::FailClosed);
+                }
+            }
+        } else {
+            RuntimeTimeoutVoteOriginBinding::NotApplicable
+        };
+        let may_be_remote_timeout_vote_rejection = matches!(
+            &timeout_vote_origin_binding,
+            RuntimeTimeoutVoteOriginBinding::Mismatch { .. }
+                | RuntimeTimeoutVoteOriginBinding::UnauthenticatedSignerIndex
+        );
         let default_class = classify_reducer_network_ingress(self.fail_closed, &message.payload)?;
         let deferred_owner = self.driver.deferred_authenticated_message_owner(&message);
         if let wire::ConsensusMessageV2Payload::QuorumCertificate(certificate) = &message.payload {
@@ -15999,12 +16097,15 @@ impl SerializedV2Runtime<SumeragiV2Adapter> {
         // so it can release its ingress occurrence. An exact Busy-deferred
         // aggregate certificate may likewise spend authentication work without
         // claiming a second queue slot. Otherwise, only the adapter's exact
-        // active-lock match may proceed after the normal prefix fills.
-        // Authentication below remains mandatory before either form of
-        // coalescing.
+        // active-lock match may proceed after the normal prefix fills. One
+        // finite roster-owned TimeoutVote carrier whose signer/origin binding
+        // is structurally rejectable may also spend authentication work so it
+        // cannot pin fair ingress behind a full Progress prefix.
+        // Authentication below remains mandatory before coalescing or remote
+        // rejection.
         let may_be_exact_locked_commit =
             self.driver.wire_ingress_may_use_progress(&message.payload);
-        if deferred_owner.is_none() {
+        if deferred_owner.is_none() && !may_be_remote_timeout_vote_rejection {
             self.ingress
                 .check_authenticated_wire_capacity_with_ownership(
                     &message,
@@ -16022,6 +16123,58 @@ impl SerializedV2Runtime<SumeragiV2Adapter> {
             }
             Err(error) => return Err(NetworkIngressError::Authentication(error)),
         };
+        let authenticated_timeout_vote_origin_binding = if matches!(
+            authenticated.payload(),
+            wire::ConsensusMessageV2Payload::TimeoutVote(_)
+        ) {
+            let token = match ingress_ownership.leader_wire_token() {
+                Ok(token) => token,
+                Err(_) => {
+                    self.latch_fail_closed(
+                        "authentication changed TimeoutVote leader-wire token ownership",
+                    );
+                    return Err(NetworkIngressError::FailClosed);
+                }
+            };
+            match self.timeout_vote_origin_binding(authenticated.payload(), token) {
+                Ok(binding) => binding,
+                Err(_) => {
+                    self.latch_fail_closed(
+                        "authentication changed TimeoutVote local token geometry",
+                    );
+                    return Err(NetworkIngressError::FailClosed);
+                }
+            }
+        } else {
+            RuntimeTimeoutVoteOriginBinding::NotApplicable
+        };
+        if authenticated_timeout_vote_origin_binding != timeout_vote_origin_binding {
+            self.latch_fail_closed(
+                "network authentication changed the TimeoutVote signer/origin binding",
+            );
+            return Err(NetworkIngressError::FailClosed);
+        }
+        match authenticated_timeout_vote_origin_binding {
+            RuntimeTimeoutVoteOriginBinding::NotApplicable
+            | RuntimeTimeoutVoteOriginBinding::Exact => {}
+            RuntimeTimeoutVoteOriginBinding::Mismatch {
+                signer,
+                semantic_origin,
+            } => {
+                return Err(NetworkIngressError::Authentication(
+                    AdapterError::AuthenticatedTimeoutVoteOriginMismatch {
+                        signer,
+                        semantic_origin,
+                    },
+                ));
+            }
+            RuntimeTimeoutVoteOriginBinding::UnauthenticatedSignerIndex => {
+                self.latch_fail_closed(
+                    "network authentication accepted an out-of-roster TimeoutVote signer",
+                );
+                return Err(NetworkIngressError::FailClosed);
+            }
+        }
         let authenticated_deferred_owner = self
             .driver
             .deferred_authenticated_message_owner(authenticated.wire_envelope());
@@ -16320,6 +16473,19 @@ impl SerializedV2Runtime<SumeragiV2Adapter> {
         }
         if self.fail_closed {
             return Some(false);
+        }
+        match self.timeout_vote_origin_binding(&runtime_message.payload, Some(token)) {
+            Ok(RuntimeTimeoutVoteOriginBinding::Mismatch { .. })
+            | Ok(RuntimeTimeoutVoteOriginBinding::UnauthenticatedSignerIndex) => {
+                // Remote signer/origin failures must reach authentication and
+                // volatile terminalization instead of pinning a fair lane.
+                return Some(true);
+            }
+            Ok(RuntimeTimeoutVoteOriginBinding::NotApplicable)
+            | Ok(RuntimeTimeoutVoteOriginBinding::Exact) => {}
+            // Local token corruption likewise drains only so the mutating
+            // seam can latch the precise fail-closed invariant.
+            Err(_) => return Some(true),
         }
         if let Some((round, _)) = self
             .driver
@@ -17580,7 +17746,7 @@ impl SerializedV2Runtime<SumeragiV2Adapter> {
 }
 include!("v2_runtime/network_ingress_classification.rs");
 #[cfg(test)]
-mod tests {
+pub(in crate::sumeragi) mod tests {
     include!("tests/v2_runtime_pending_binding_cases.rs");
     include!("tests/v2_runtime_main_00.rs");
     include!("tests/v2_runtime_main_01.rs");

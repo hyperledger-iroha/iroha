@@ -344,9 +344,9 @@ pub(in crate::sumeragi) use work_registry::{
     ReadyValidateSuccessorV1, ReadyValidatedExecutorCatalogAuthorityV1,
 };
 pub(in crate::sumeragi) use work_registry::{
-    LifecycleOutputAdmissionKeyV1, PendingDurableValidateAdmissionV1,
-    PendingLifecycleOutputAdmissionV1, PendingLiveWalSignAdmissionV1,
-    PreparedAuthenticatedGenesisFetchReplayPreAdmission,
+    DurableStoreTerminalRetrySealV1, LifecycleOutputAdmissionKeyV1,
+    PendingDurableValidateAdmissionV1, PendingLifecycleOutputAdmissionV1,
+    PendingLiveWalSignAdmissionV1, PreparedAuthenticatedGenesisFetchReplayPreAdmission,
     PreparedAuthenticatedGenesisStoreReplayPreAdmission,
     PreparedAuthenticatedGenesisStoredReplayPreAdmission,
     PreparedLocalBodyValidateReplayPreAdmission, PreparedRemoteProposalFetchReplayPreAdmission,
@@ -417,6 +417,17 @@ impl Drop for ProductionLifecycleApplyServiceLaunchPermitSealV1 {
     fn drop(&mut self) {}
 }
 impl ProductionLifecycleOwnerV1 {
+    /// Project the sole active lease to non-sensitive scheduler scalars for a
+    /// rate-limited local starvation diagnostic.
+    pub(in crate::sumeragi) fn lifecycle_active_lease_scheduler_snapshot(
+        &self,
+    ) -> Option<(u128, LifecycleWorkClass, LifecycleStageKind)> {
+        self.coordinator
+            .active_lease
+            .as_ref()
+            .map(|lease| (lease.ordinal(), lease.work_class(), lease.stage().kind()))
+    }
+
     /// Bind the Kura and exact Apply service authenticated by the production factory.
     ///
     /// Test-only raw-root fixtures never call this method and remain

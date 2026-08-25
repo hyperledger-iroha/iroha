@@ -245,6 +245,7 @@ mod tests {
                  --plan-template ./privacy-plan.staging.json \
                  --config-template ./config.staging.toml \
                  --genesis-template ./genesis.staging.json \
+                 --nevo-review ./nevo-review.json \
                  --plan-output ./privacy-plan.release.json \
                  --config-output ./config.release.toml \
                  --genesis-output ./genesis.release.json \
