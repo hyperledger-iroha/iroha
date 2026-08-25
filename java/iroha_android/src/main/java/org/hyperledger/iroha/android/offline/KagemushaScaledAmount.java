@@ -6,7 +6,7 @@ import java.util.List;
 import java.util.Objects;
 
 /** Exact positive Kagemusha amount in authoritative asset-scale atomic units. */
-public final class KagemushaScaledAmount {
+final class KagemushaScaledAmount {
   public static final int MAXIMUM_SCALE = 28;
   public static final String MAXIMUM_ATOMIC_UNITS =
       "340282366920938463463374607431768211455";

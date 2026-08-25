@@ -1,7 +1,7 @@
 import CryptoKit
 import Foundation
 
-public struct KagemushaNFCMessages: Equatable, Sendable {
+package struct KagemushaNFCMessages: Equatable, Sendable {
     public let readerPrompt: String
     public let cardPrompt: String
     public let success: String
@@ -27,7 +27,7 @@ public struct KagemushaNFCMessages: Equatable, Sendable {
     )
 }
 
-public struct KagemushaNFCConfiguration: Equatable, Sendable {
+package struct KagemushaNFCConfiguration: Equatable, Sendable {
     public let applicationIdentifier: Data
     public let chainDiscriminant: UInt16
     public let cardSessionEnabled: Bool
@@ -63,14 +63,14 @@ public struct KagemushaNFCConfiguration: Equatable, Sendable {
     }
 }
 
-public enum KagemushaNFCAvailabilityReason: String, Equatable, Sendable {
+package enum KagemushaNFCAvailabilityReason: String, Equatable, Sendable {
     case unsupportedDevice = "unsupported_device"
     case missingEntitlementOrProfile = "missing_entitlement_or_profile"
     case ineligibleDevice = "ineligible_device"
     case disabledByApplication = "disabled_by_application"
 }
 
-public struct KagemushaNFCAvailability: Equatable, Sendable {
+package struct KagemushaNFCAvailability: Equatable, Sendable {
     public let isAvailable: Bool
     public let reason: KagemushaNFCAvailabilityReason?
 
@@ -81,7 +81,7 @@ public struct KagemushaNFCAvailability: Equatable, Sendable {
     }
 }
 
-public enum KagemushaNFCError: Error, Equatable, LocalizedError, Sendable {
+package enum KagemushaNFCError: Error, Equatable, LocalizedError, Sendable {
     case unavailable
     case missingEntitlementOrProfile
     case ineligibleDevice
@@ -160,7 +160,7 @@ public enum KagemushaNFCError: Error, Equatable, LocalizedError, Sendable {
     }
 }
 
-public enum KagemushaNFCEvent: Equatable, Sendable {
+package enum KagemushaNFCEvent: Equatable, Sendable {
     case sessionStarted
     case peerConnected
     case receiveRequestRead(KagemushaRecipientReceiveOfferV2)
@@ -171,7 +171,7 @@ public enum KagemushaNFCEvent: Equatable, Sendable {
     case bytesTransferred(completed: Int, total: Int)
 }
 
-public struct KagemushaNFCPayloadInfo: Equatable, Sendable {
+package struct KagemushaNFCPayloadInfo: Equatable, Sendable {
     public let transportVersion: UInt8
     public let kind: KagemushaPeerPayloadKind
     public let payloadLength: Int
@@ -179,7 +179,7 @@ public struct KagemushaNFCPayloadInfo: Equatable, Sendable {
     public let sha256: Data
 }
 
-public enum KagemushaNFCCommand: Equatable, Sendable {
+package enum KagemushaNFCCommand: Equatable, Sendable {
     case select
     case selectOtherApplication
     case getInfo
@@ -192,7 +192,7 @@ public enum KagemushaNFCCommand: Equatable, Sendable {
 }
 
 /// Pure ISO-7816 framing shared by the iOS reader/card adapters and test peers.
-public enum KagemushaNFCProtocol {
+package enum KagemushaNFCProtocol {
     /// First-release V4 carries typed Norito bytes with an explicit 32-bit
     /// offset inside every read/write command body. Retired P1/P2 16-bit
     /// offset commands are rejected as non-canonical.
@@ -610,7 +610,7 @@ public enum KagemushaNFCProtocol {
     }
 }
 
-public enum KagemushaNFCCardRejectionReason: Equatable, Sendable {
+package enum KagemushaNFCCardRejectionReason: Equatable, Sendable {
     case conditionsNotSatisfied
     case wrongData
     case unsupportedCommand
@@ -619,7 +619,7 @@ public enum KagemushaNFCCardRejectionReason: Equatable, Sendable {
     case invalidCommittedPayload
 }
 
-public struct KagemushaNFCCardHandleResult: Equatable, Sendable {
+package struct KagemushaNFCCardHandleResult: Equatable, Sendable {
     public let response: Data
     public let committedPayload: KagemushaPeerPayload?
     public let acknowledgementReadRange: Range<Int>?
@@ -640,7 +640,7 @@ public struct KagemushaNFCCardHandleResult: Equatable, Sendable {
 
 /// Deterministic card-side state machine. It contains no CoreNFC dependency and
 /// can therefore be fuzzed and reused by other Apple transports.
-public final class KagemushaNFCCardStateMachine: @unchecked Sendable {
+package final class KagemushaNFCCardStateMachine: @unchecked Sendable {
     public let applicationIdentifier: Data
 
     private let lock = NSLock()
@@ -962,7 +962,7 @@ private extension Data {
 
 /// iOS ISO-7816 reader adapter. The app supplies all localized messages and
 /// the closure that constructs the payment from the typed receive request.
-public final class KagemushaNFCReader: NSObject, @unchecked Sendable {
+package final class KagemushaNFCReader: NSObject, @unchecked Sendable {
     public static var isAvailable: Bool { NFCTagReaderSession.readingAvailable }
 
     private let configuration: KagemushaNFCConfiguration
@@ -1232,7 +1232,7 @@ private final class KagemushaUncheckedISO7816Tag: @unchecked Sendable {
 /// iOS 17.4+ card-emulation adapter. Availability is controlled explicitly by
 /// `KagemushaNFCConfiguration`; the SDK never reads application build flags or
 /// bundle metadata.
-public final class KagemushaNFCCardSession: @unchecked Sendable {
+package final class KagemushaNFCCardSession: @unchecked Sendable {
     private let configuration: KagemushaNFCConfiguration
     private let lock = NSLock()
     private var runtime: AnyObject?
@@ -1389,7 +1389,7 @@ private final class KagemushaNFCCardRuntime {
     }
 }
 #else
-public final class KagemushaNFCReader: @unchecked Sendable {
+package final class KagemushaNFCReader: @unchecked Sendable {
     public static var isAvailable: Bool { false }
     public init(configuration: KagemushaNFCConfiguration) { _ = configuration }
     public func cancel() {}
@@ -1405,7 +1405,7 @@ public final class KagemushaNFCReader: @unchecked Sendable {
     }
 }
 
-public final class KagemushaNFCCardSession: @unchecked Sendable {
+package final class KagemushaNFCCardSession: @unchecked Sendable {
     public init(configuration: KagemushaNFCConfiguration) { _ = configuration }
     public static func availability(
         configuration: KagemushaNFCConfiguration

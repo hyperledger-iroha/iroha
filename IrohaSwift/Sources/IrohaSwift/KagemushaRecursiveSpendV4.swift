@@ -1,7 +1,7 @@
 import Foundation
 
 /// The authenticated ABI22 artifact generation selected by a V4 operation.
-public struct KagemushaRecursiveSpendArtifactBindingV4: Equatable, Hashable, Sendable {
+package struct KagemushaRecursiveSpendArtifactBindingV4: Equatable, Hashable, Sendable {
     public let version: UInt16
     public let generation: String
     public let manifestSHA256: Data
@@ -30,7 +30,7 @@ public struct KagemushaRecursiveSpendArtifactBindingV4: Equatable, Hashable, Sen
 /// The frozen summary wire intentionally omits the NetworkId. Callers must not
 /// use this projection to authenticate a network independently of the native
 /// bridge that validated the opaque bundle.
-public struct KagemushaRecursiveSpendBundleSummaryV4: Equatable, Sendable {
+package struct KagemushaRecursiveSpendBundleSummaryV4: Equatable, Sendable {
     public let assetDefinitionID: String
     public let amount: KagemushaScaledAmount
     public let noteCommitment: Data
@@ -50,7 +50,7 @@ public struct KagemushaRecursiveSpendBundleSummaryV4: Equatable, Sendable {
 }
 
 /// Opaque ABI22 recursive state. Its archive is decoded only as a V4 bundle.
-public struct KagemushaRecursiveSpendBundleV4: Equatable, Sendable {
+package struct KagemushaRecursiveSpendBundleV4: Equatable, Sendable {
     public let noritoArchive: Data
 
     public init(noritoArchive: Data) throws {
@@ -79,7 +79,7 @@ public struct KagemushaRecursiveSpendBundleV4: Equatable, Sendable {
 
 /// Public split fields needed for idempotency and receiver binding. The rest
 /// of the transition remains an authenticated opaque Norito carrier.
-public struct KagemushaRecursiveSpendSplitIntentV4: Equatable, Sendable {
+package struct KagemushaRecursiveSpendSplitIntentV4: Equatable, Sendable {
     public let noritoArchive: Data
     public let recipientRequestDigest: Data
     public let operationID: Data
@@ -92,7 +92,7 @@ public struct KagemushaRecursiveSpendSplitIntentV4: Equatable, Sendable {
 }
 
 /// Recipient-only ABI22 peer envelope. Sender change is never projected.
-public struct KagemushaRecursiveSpendPeerPaymentV4: Equatable, Sendable {
+package struct KagemushaRecursiveSpendPeerPaymentV4: Equatable, Sendable {
     public let recipientBundle: KagemushaRecursiveSpendBundleV4
     public let recipientMembershipWitness: KagemushaNoteMembershipWitness
     public let topUpProvenance: KagemushaRecursiveSpendTopUpProvenanceV4
@@ -132,7 +132,7 @@ public struct KagemushaRecursiveSpendPeerPaymentV4: Equatable, Sendable {
 }
 
 /// Finalized top-up receipt whose public statement selects an ABI22 release.
-public struct KagemushaRecursiveSpendTopUpAnchorV4: Equatable, Sendable {
+package struct KagemushaRecursiveSpendTopUpAnchorV4: Equatable, Sendable {
     public let version: UInt16
     public let networkID: NetworkId
     public let topUpOperationID: Data
@@ -173,7 +173,7 @@ public struct KagemushaRecursiveSpendTopUpAnchorV4: Equatable, Sendable {
 }
 
 /// Complete V4 origin evidence. The consensus proof remains the stable V2 leaf.
-public struct KagemushaRecursiveSpendTopUpFinalityEvidenceV4: Equatable, Sendable {
+package struct KagemushaRecursiveSpendTopUpFinalityEvidenceV4: Equatable, Sendable {
     public let noritoArchive: Data
 
     public init(noritoArchive: Data) throws {
@@ -206,7 +206,7 @@ public struct KagemushaRecursiveSpendTopUpFinalityEvidenceV4: Equatable, Sendabl
 
 /// Canonical, authenticated origin inventory carried by every ABI22 branch.
 /// Evidence ordering is consensus-visible and is never normalized by the SDK.
-public struct KagemushaRecursiveSpendTopUpProvenanceV4: Equatable, Sendable {
+package struct KagemushaRecursiveSpendTopUpProvenanceV4: Equatable, Sendable {
     public let noritoArchive: Data
 
     public init(noritoArchive: Data) throws {
@@ -275,7 +275,7 @@ public struct KagemushaRecursiveSpendTopUpProvenanceV4: Equatable, Sendable {
 
 /// Local-only ABI22 shield proof request. It contains note secrets and must
 /// never be persisted or sent to Torii.
-public struct KagemushaTopUpShieldBuildRequestV4: Equatable, Sendable {
+package struct KagemushaTopUpShieldBuildRequestV4: Equatable, Sendable {
     public let version: UInt16
     public let networkID: NetworkId
     public let assetID: String
@@ -361,7 +361,7 @@ public struct KagemushaTopUpShieldBuildRequestV4: Equatable, Sendable {
 }
 
 /// Canonical unsigned ABI22 online-to-offline request fields.
-public struct KagemushaRecursiveSpendTopUpUnsignedV4: Equatable, Sendable {
+package struct KagemushaRecursiveSpendTopUpUnsignedV4: Equatable, Sendable {
     public let version: UInt16
     public let assetID: String
     public let amount: KagemushaScaledAmount
@@ -425,7 +425,7 @@ public struct KagemushaRecursiveSpendTopUpUnsignedV4: Equatable, Sendable {
 }
 
 /// Authoritative ABI22 Torii top-up request.
-public struct KagemushaRecursiveSpendTopUpRequestV4: Equatable, Sendable {
+package struct KagemushaRecursiveSpendTopUpRequestV4: Equatable, Sendable {
     public let unsigned: KagemushaRecursiveSpendTopUpUnsignedV4
     public let authorization: KagemushaRequestAuthorization
     public let noritoArchive: Data
@@ -447,7 +447,7 @@ public struct KagemushaRecursiveSpendTopUpRequestV4: Equatable, Sendable {
 }
 
 /// One output insertion path owned exclusively by the ABI22 local carrier.
-public struct KagemushaOutputMembershipLeafPathsV4: Equatable, Sendable {
+package struct KagemushaOutputMembershipLeafPathsV4: Equatable, Sendable {
     public let leafIndex: UInt32
     public let updatePath: PrivacyConfidentialMerklePathWitnessV2
     public let membershipPath: PrivacyConfidentialMerklePathWitnessV2
@@ -478,7 +478,7 @@ public struct KagemushaOutputMembershipLeafPathsV4: Equatable, Sendable {
 }
 
 /// Exact output-update witness decoded only by the ABI-22 bridge.
-public struct KagemushaOutputMembershipPathsV4: Equatable, Sendable {
+package struct KagemushaOutputMembershipPathsV4: Equatable, Sendable {
     public let initialRoot: Data
     public let finalRoot: Data
     public let recipient: KagemushaOutputMembershipLeafPathsV4?
@@ -563,7 +563,7 @@ public struct KagemushaOutputMembershipPathsV4: Equatable, Sendable {
 /// Authenticated next-zero cursor. Wallets persist these canonical bytes with
 /// every branch and compare them to the frontier returned by native restore
 /// validation before allowing the branch to become spendable.
-public struct KagemushaOutputMembershipFrontierV4: Equatable, Sendable {
+package struct KagemushaOutputMembershipFrontierV4: Equatable, Sendable {
     public let noritoArchive: Data
 
     public init(noritoArchive: Data) throws {
@@ -611,7 +611,7 @@ public struct KagemushaOutputMembershipFrontierV4: Equatable, Sendable {
 }
 
 /// Canonical ABI22 initialization request before local secret witnesses are added.
-public struct KagemushaRecursiveSpendInitRequestV4: Equatable, Sendable {
+package struct KagemushaRecursiveSpendInitRequestV4: Equatable, Sendable {
     public let topUpAnchor: KagemushaRecursiveSpendTopUpAnchorV4
     public let topUpFinalityProof: KagemushaTopUpFinalityProofArchive
     public let topUpFinalityRosterArtifact: KagemushaTopUpFinalityRosterArtifactArchive
@@ -635,7 +635,7 @@ public struct KagemushaRecursiveSpendInitRequestV4: Equatable, Sendable {
 }
 
 /// Secret-bearing local ABI22 initialization input.
-public struct KagemushaRecursiveSpendInitLocalRequestV4: Equatable, Sendable {
+package struct KagemushaRecursiveSpendInitLocalRequestV4: Equatable, Sendable {
     public let request: KagemushaRecursiveSpendInitRequestV4
     public let opening: KagemushaNoteOpening
     public let outputMembershipPaths: KagemushaOutputMembershipPathsV4
@@ -664,7 +664,7 @@ public struct KagemushaRecursiveSpendInitLocalRequestV4: Equatable, Sendable {
 }
 
 /// One genuine ABI22 previous-proof package.
-public struct KagemushaRecursiveSpendAppendInputV4: Equatable, Sendable {
+package struct KagemushaRecursiveSpendAppendInputV4: Equatable, Sendable {
     public let previousBundle: KagemushaRecursiveSpendBundleV4
     public let topUpProvenance: KagemushaRecursiveSpendTopUpProvenanceV4
 
@@ -678,7 +678,7 @@ public struct KagemushaRecursiveSpendAppendInputV4: Equatable, Sendable {
 }
 
 /// Secret-bearing spendable local state used only by ABI22 builders.
-public struct KagemushaRecursiveSpendSpendableBranchV4: Equatable, Sendable {
+package struct KagemushaRecursiveSpendSpendableBranchV4: Equatable, Sendable {
     public let bundle: KagemushaRecursiveSpendBundleV4
     public let membershipWitness: KagemushaNoteMembershipWitness
     public let opening: KagemushaNoteOpening
@@ -764,7 +764,7 @@ struct KagemushaRecursiveSpendRedemptionChangePrepareRequestV4: Equatable, Senda
 
 /// Native-derived secret opening and complete public descriptor for a
 /// partial-redemption change note.
-public struct KagemushaRecursiveSpendRedemptionChangePreparationV4:
+package struct KagemushaRecursiveSpendRedemptionChangePreparationV4:
     Equatable, Sendable
 {
     public let opening: KagemushaNoteOpening
@@ -850,7 +850,7 @@ struct KagemushaRecursiveSpendPeerSplitChangePrepareRequestV4: Equatable, Sendab
 }
 
 /// Owned native-derived sender change for an ordinary peer split.
-public struct KagemushaRecursiveSpendPeerSplitChangePreparationV4: Equatable, Sendable {
+package struct KagemushaRecursiveSpendPeerSplitChangePreparationV4: Equatable, Sendable {
     public let opening: KagemushaNoteOpening
     public let output: KagemushaSpendableNoteDescriptor
     public let amount: KagemushaScaledAmount
@@ -893,7 +893,7 @@ public struct KagemushaRecursiveSpendPeerSplitChangePreparationV4: Equatable, Se
 
 /// Secret-bearing ABI-22 append input. It encodes the flat V4 bridge carrier,
 /// not a version wrapper around the frozen request.
-public struct KagemushaRecursiveSpendAppendLocalRequestV4: Equatable, Sendable {
+package struct KagemushaRecursiveSpendAppendLocalRequestV4: Equatable, Sendable {
     public let previousInputs: [KagemushaRecursiveSpendAppendInputV4]
     public let inputOpenings: [KagemushaNoteOpening]
     public let inputMembershipWitnesses: [KagemushaNoteMembershipWitness]
@@ -953,7 +953,7 @@ public struct KagemushaRecursiveSpendAppendLocalRequestV4: Equatable, Sendable {
 /// native ABI22 decoder revalidates every field before proving. Callers bind
 /// it to the authenticated artifact release that was durable with the wallet
 /// reservation and must verify the returned operation/request digests.
-public struct KagemushaRecursiveSpendPersistedAppendLocalRequestV4: Equatable, Sendable {
+package struct KagemushaRecursiveSpendPersistedAppendLocalRequestV4: Equatable, Sendable {
     public let noritoArchive: Data
     public let artifactBinding: KagemushaRecursiveSpendArtifactBindingV4
 
@@ -978,7 +978,7 @@ public struct KagemushaRecursiveSpendPersistedAppendLocalRequestV4: Equatable, S
 }
 
 /// Canonical ABI22 receiver-verification request.
-public struct KagemushaRecursiveSpendVerifyRequestV4: Equatable, Sendable {
+package struct KagemushaRecursiveSpendVerifyRequestV4: Equatable, Sendable {
     public let bundle: KagemushaRecursiveSpendBundleV4
     public let recipientRequest: KagemushaRecipientPaymentRequest
     public let topUpProvenance: KagemushaRecursiveSpendTopUpProvenanceV4
@@ -1016,7 +1016,7 @@ public struct KagemushaRecursiveSpendVerifyRequestV4: Equatable, Sendable {
 }
 
 /// Explicit ABI22 local verification carrier.
-public struct KagemushaRecursiveSpendVerifyLocalRequestV4: Equatable, Sendable {
+package struct KagemushaRecursiveSpendVerifyLocalRequestV4: Equatable, Sendable {
     public let request: KagemushaRecursiveSpendVerifyRequestV4
 
     public init(request: KagemushaRecursiveSpendVerifyRequestV4) {
@@ -1030,7 +1030,7 @@ public struct KagemushaRecursiveSpendVerifyLocalRequestV4: Equatable, Sendable {
 
 /// Secret-bearing ABI22 redemption input. Native derives the V4 public
 /// redemption transition and proof; neither is caller-supplied.
-public struct KagemushaRecursiveSpendRedeemLocalRequestV4: Equatable, Sendable {
+package struct KagemushaRecursiveSpendRedeemLocalRequestV4: Equatable, Sendable {
     public let input: KagemushaRecursiveSpendSpendableBranchV4
     public let recipient: String
     public let publicAmount: KagemushaScaledAmount
@@ -1083,7 +1083,7 @@ public struct KagemushaRecursiveSpendRedeemLocalRequestV4: Equatable, Sendable {
 }
 
 /// Typed, exact ABI22 initialization output.
-public struct KagemushaRecursiveSpendInitResultV4: Equatable, Sendable {
+package struct KagemushaRecursiveSpendInitResultV4: Equatable, Sendable {
     public let bundle: KagemushaRecursiveSpendBundleV4
     public let membershipWitness: KagemushaNoteMembershipWitness
     public let topUpProvenance: KagemushaRecursiveSpendTopUpProvenanceV4
@@ -1114,7 +1114,7 @@ public struct KagemushaRecursiveSpendInitResultV4: Equatable, Sendable {
 }
 
 /// Typed, exact ABI22 split output with recipient-only peer projection.
-public struct KagemushaRecursiveSpendSplitResultV4: Equatable, Sendable {
+package struct KagemushaRecursiveSpendSplitResultV4: Equatable, Sendable {
     public let split: KagemushaRecursiveSpendSplitIntentV4
     public let splitBindingDigest: Data
     public let recipientBundle: KagemushaRecursiveSpendBundleV4
@@ -1167,7 +1167,7 @@ public struct KagemushaRecursiveSpendSplitResultV4: Equatable, Sendable {
 }
 
 /// Typed terminal decision and exact verified ABI22 state.
-public struct KagemushaRecursiveSpendVerifyResultV4: Equatable, Sendable {
+package struct KagemushaRecursiveSpendVerifyResultV4: Equatable, Sendable {
     public let valid: Bool
     public let chainAdmissible: Bool
     public let lineageRedeemable: Bool
@@ -1221,7 +1221,7 @@ public struct KagemushaRecursiveSpendVerifyResultV4: Equatable, Sendable {
 }
 
 /// Canonical unsigned ABI22 redemption request projection.
-public struct KagemushaRecursiveSpendRedeemUnsignedV4: Equatable, Sendable {
+package struct KagemushaRecursiveSpendRedeemUnsignedV4: Equatable, Sendable {
     public let version: UInt16
     public let operationID: Data
     public let noritoArchive: Data
@@ -1252,7 +1252,7 @@ public struct KagemushaRecursiveSpendRedeemUnsignedV4: Equatable, Sendable {
 }
 
 /// Typed, exact ABI22 redemption-build output.
-public struct KagemushaRecursiveSpendRedeemBuildResultV4: Equatable, Sendable {
+package struct KagemushaRecursiveSpendRedeemBuildResultV4: Equatable, Sendable {
     public let unsigned: KagemushaRecursiveSpendRedeemUnsignedV4
     public let authorizationDigest: Data
     public let offlineChangeBundle: KagemushaRecursiveSpendBundleV4?
@@ -1302,7 +1302,7 @@ public struct KagemushaRecursiveSpendRedeemBuildResultV4: Equatable, Sendable {
 }
 
 /// Final ABI22 redemption request plus proof-bound recovery state.
-public struct KagemushaRecursiveSpendRedeemResultV4: Equatable, Sendable {
+package struct KagemushaRecursiveSpendRedeemResultV4: Equatable, Sendable {
     public let version: UInt16
     public let redeemRequestArchive: Data
     public let offlineChangeBundle: KagemushaRecursiveSpendBundleV4?
@@ -1329,7 +1329,7 @@ public struct KagemushaRecursiveSpendRedeemResultV4: Equatable, Sendable {
     }
 }
 
-public extension KagemushaRecursiveSpend {
+package extension KagemushaRecursiveSpend {
     /// Derive partial-redemption change entirely inside the native bridge.
     ///
     /// The input bundle and opening are reauthenticated by native code. The

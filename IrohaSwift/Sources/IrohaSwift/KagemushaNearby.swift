@@ -8,13 +8,13 @@ import Foundation
 @preconcurrency import MultipeerConnectivity
 #endif
 
-public enum KagemushaNearbyPairingSymbol: String, CaseIterable, Codable, Sendable {
+package enum KagemushaNearbyPairingSymbol: String, CaseIterable, Codable, Sendable {
     case stars = "nearby_pairing_stars"
     case bird = "nearby_pairing_bird"
     case mask = "nearby_pairing_mask"
 }
 
-public struct KagemushaNearbyPairingChallenge: Equatable, Hashable, Codable, Sendable {
+package struct KagemushaNearbyPairingChallenge: Equatable, Hashable, Codable, Sendable {
     public let symbol: KagemushaNearbyPairingSymbol
 
     public init(symbol: KagemushaNearbyPairingSymbol) {
@@ -36,13 +36,13 @@ public struct KagemushaNearbyPairingChallenge: Equatable, Hashable, Codable, Sen
     }
 }
 
-public enum KagemushaNearbyPairingDecision: Equatable, Sendable {
+package enum KagemushaNearbyPairingDecision: Equatable, Sendable {
     case accepted
     case mismatch
     case cancelled
 }
 
-public enum KagemushaNearbyEvent: Equatable, Sendable {
+package enum KagemushaNearbyEvent: Equatable, Sendable {
     case requestingLocalNetworkPermission
     case browsing
     case advertising(KagemushaNearbyPairingChallenge)
@@ -56,7 +56,7 @@ public enum KagemushaNearbyEvent: Equatable, Sendable {
     case acknowledgementReceived(KagemushaReceiverAcknowledgement)
 }
 
-public enum KagemushaNearbyError: Error, Equatable, LocalizedError, Sendable {
+package enum KagemushaNearbyError: Error, Equatable, LocalizedError, Sendable {
     case unavailable
     case busy
     case timedOut
@@ -309,7 +309,7 @@ enum KagemushaNearbyEnvelopeCodec {
     }
 }
 
-public enum KagemushaNearbyTransportPolicy {
+package enum KagemushaNearbyTransportPolicy {
     public static let serviceName = KagemushaPeerTransportContract.nearbyServiceName
     public static let bonjourService = KagemushaPeerTransportContract.nearbyBonjourService
     public static let discoveryInfo = ["protocol": "kagemusha-v2"]
@@ -333,7 +333,7 @@ public enum KagemushaNearbyTransportPolicy {
 /// closed until the SDK has an audited, transcript-bound ephemeral ECDH flow
 /// authenticated by device certificates.  Enabling a build condition alone is
 /// deliberately insufficient: an audit must also change this source constant.
-public enum KagemushaNearbyAuthenticationPolicy {
+package enum KagemushaNearbyAuthenticationPolicy {
     public static let requiresCertificateAuthenticatedECDHTranscript = true
     public static let hasAuditedAuthenticatedTranscriptBackend = false
 }
@@ -409,7 +409,7 @@ private final class KagemushaNearbyNetworkPreflight: @unchecked Sendable {
 }
 #endif
 
-public final class KagemushaNearbyExchange: @unchecked Sendable {
+package final class KagemushaNearbyExchange: @unchecked Sendable {
     public static var isAvailable: Bool {
         KagemushaNearbyAuthenticationPolicy.hasAuditedAuthenticatedTranscriptBackend
     }
@@ -1052,7 +1052,7 @@ private final class KagemushaNearbyPlatformDelegate: NSObject,
     }
 }
 #else
-public final class KagemushaNearbyExchange: @unchecked Sendable {
+package final class KagemushaNearbyExchange: @unchecked Sendable {
     public static var isAvailable: Bool {
         KagemushaNearbyAuthenticationPolicy.hasAuditedAuthenticatedTranscriptBackend
     }

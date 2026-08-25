@@ -4,7 +4,7 @@ import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 
 @Serializable
-enum class KagemushaNearbyPairingSymbol(val code: Int) {
+internal enum class KagemushaNearbyPairingSymbol(val code: Int) {
     @SerialName("nearby_pairing_stars") STARS(1),
     @SerialName("nearby_pairing_bird") BIRD(2),
     @SerialName("nearby_pairing_mask") MASK(3);
@@ -17,10 +17,10 @@ enum class KagemushaNearbyPairingSymbol(val code: Int) {
 
 @JvmInline
 @Serializable
-value class KagemushaNearbyPairingChallenge(val symbol: KagemushaNearbyPairingSymbol)
+internal value class KagemushaNearbyPairingChallenge(val symbol: KagemushaNearbyPairingSymbol)
 
 @Serializable
-enum class KagemushaNearbyMessageKind(val code: Int) {
+internal enum class KagemushaNearbyMessageKind(val code: Int) {
     @SerialName("receive_request") RECEIVE_REQUEST(1),
     @SerialName("payment") PAYMENT(2),
     @SerialName("acknowledgement") ACKNOWLEDGEMENT(3),
@@ -32,7 +32,7 @@ enum class KagemushaNearbyMessageKind(val code: Int) {
     }
 }
 
-data class KagemushaNearbyDecoded(
+internal data class KagemushaNearbyDecoded(
     val messageKind: KagemushaNearbyMessageKind,
     val payload: KagemushaPeerPayload?,
     val pairingChallenge: KagemushaNearbyPairingChallenge?,
@@ -45,7 +45,7 @@ data class KagemushaNearbyDecoded(
  * NFC, and the final Nearby rail without expanding a portable receive offer through JSON/Base64.
  * The fixed header is `PKNB1 || kind:u8 || pairing:u8 || reserved:u8 || length:u32be`.
  */
-object KagemushaNearbyEnvelopeCodec {
+internal object KagemushaNearbyEnvelopeCodec {
     const val MAXIMUM_ENVELOPE_BYTES = 32_704
     const val HEADER_LENGTH = 12
     private val MAGIC = "PKNB1".toByteArray(Charsets.US_ASCII)
@@ -190,7 +190,7 @@ object KagemushaNearbyEnvelopeCodec {
     }
 }
 
-object KagemushaNearbyTransportPolicy {
+internal object KagemushaNearbyTransportPolicy {
     const val SERVICE_NAME = KagemushaPeerTransportContract.NEARBY_SERVICE_NAME
     const val BONJOUR_SERVICE = KagemushaPeerTransportContract.NEARBY_BONJOUR_SERVICE
     const val DISCOVERY_PROTOCOL = "kagemusha-v2"

@@ -4,7 +4,7 @@ import java.io.ByteArrayOutputStream
 import java.security.MessageDigest
 import java.util.zip.CRC32
 
-data class KagemushaQrStreamOptions(
+internal data class KagemushaQrStreamOptions(
     val chunkSize: Int = STANDARD_CHUNK_SIZE,
     val parityGroup: Int = STANDARD_PARITY_GROUP,
 ) {
@@ -28,7 +28,7 @@ data class KagemushaQrStreamOptions(
     }
 }
 
-data class KagemushaQrDecodeResult(
+internal data class KagemushaQrDecodeResult(
     val payload: KagemushaPeerPayload?,
     val payloadKind: KagemushaPeerPayloadKind?,
     val receivedDataFrames: Int,
@@ -41,7 +41,7 @@ data class KagemushaQrDecodeResult(
         else minOf(1.0, receivedDataFrames.toDouble() / totalDataFrames.toDouble())
 }
 
-object KagemushaQrStreamCodec {
+internal object KagemushaQrStreamCodec {
     const val MAXIMUM_FRAME_TEXT_BYTES = 6 + ((542 * 4 + 2) / 3)
 
     @JvmStatic
@@ -122,7 +122,7 @@ object KagemushaQrStreamCodec {
     }
 }
 
-class KagemushaQrStreamDecoder {
+internal class KagemushaQrStreamDecoder {
     private var streamId: ByteArray? = null
     private var envelope: KagemushaQrEnvelope? = null
     private var dataFrames = linkedMapOf<Int, ByteArray>()
@@ -316,9 +316,9 @@ class KagemushaQrStreamDecoder {
     }
 }
 
-enum class KagemushaQrFrameKind(val code: Int) { HEADER(0), DATA(1), PARITY(2) }
+internal enum class KagemushaQrFrameKind(val code: Int) { HEADER(0), DATA(1), PARITY(2) }
 
-class KagemushaQrEnvelope private constructor(
+internal class KagemushaQrEnvelope private constructor(
     val payloadKind: KagemushaPeerPayloadKind,
     val parityGroup: Int,
     val chunkSize: Int,
@@ -406,7 +406,7 @@ class KagemushaQrEnvelope private constructor(
     }
 }
 
-class KagemushaQrFrame(
+internal class KagemushaQrFrame(
     val kind: KagemushaQrFrameKind,
     streamId: ByteArray,
     val index: Int,

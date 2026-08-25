@@ -22,7 +22,7 @@ import org.hyperledger.iroha.android.tx.SignedTransaction;
 import org.hyperledger.iroha.android.tx.TransactionBuilder;
 
 /** Canonical one-instruction transaction for the mobile bridge ABI22 device-attestation path. */
-public final class RegisterOfflineDeviceAttestation {
+final class RegisterOfflineDeviceAttestation {
 
   private static final long DEFAULT_TRANSACTION_TTL_MS = 100_000L;
 

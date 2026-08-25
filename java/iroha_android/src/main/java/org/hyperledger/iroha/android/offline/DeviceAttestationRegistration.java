@@ -18,7 +18,7 @@ import org.hyperledger.iroha.android.crypto.IrohaHash;
  * <p>This type mirrors {@code OfflineDeviceAttestationRegistration} exactly. Native clients use
  * bridge ABI 22; the registration's on-chain format marker remains version 1.
  */
-public final class DeviceAttestationRegistration {
+final class DeviceAttestationRegistration {
 
   /** Sole native bridge ABI supported by the first-release Kagemusha client. */
   public static final int REQUIRED_NATIVE_BRIDGE_ABI_VERSION = 22;

@@ -2,7 +2,7 @@ import Foundation
 
 /// Bounded, presentation-safe terminal failure returned by a canonical
 /// Kagemusha operation status resource.
-public struct KagemushaOperationTerminalFailure: Equatable, Sendable {
+package struct KagemushaOperationTerminalFailure: Equatable, Sendable {
     public static let maximumCodeUTF8Bytes = 64
     public static let maximumMessageUTF8Bytes = 1_024
 
@@ -72,7 +72,7 @@ public struct KagemushaOperationTerminalFailure: Equatable, Sendable {
 
 /// The authoritative Torii POST surface whose exact rejection contract was
 /// used for classification.
-public enum KagemushaSubmissionTarget: String, Codable, Equatable, Sendable {
+package enum KagemushaSubmissionTarget: String, Codable, Equatable, Sendable {
     case offlineTopUp = "offline_top_up"
     case offlineRedeem = "offline_redeem"
     case signedTransaction = "signed_transaction"
@@ -97,7 +97,7 @@ public enum KagemushaSubmissionTarget: String, Codable, Equatable, Sendable {
 /// before Torii admitted the request. Applications must persist
 /// this value with the operation journal and require explicit reconciliation;
 /// it is never permission to automatically replay the POST.
-public struct KagemushaDefinitiveSubmissionFailure: Codable, Equatable, Sendable {
+package struct KagemushaDefinitiveSubmissionFailure: Codable, Equatable, Sendable {
     public static let maximumMessageUTF8Bytes = 1_024
 
     public let target: KagemushaSubmissionTarget
@@ -248,7 +248,7 @@ private struct KagemushaFinalityDynamicCodingKey: CodingKey {
 
 /// Safe classification of a failed Kagemusha POST. No raw transport error or
 /// unbounded response text escapes this value.
-public enum KagemushaSubmissionFailureDisposition: Equatable, Sendable {
+package enum KagemushaSubmissionFailureDisposition: Equatable, Sendable {
     /// Torii may have accepted the request; reconcile status and never issue a
     /// second POST in the same invocation.
     case ambiguous
@@ -260,7 +260,7 @@ public enum KagemushaSubmissionFailureDisposition: Equatable, Sendable {
 
 /// Endpoint-scoped post-admission-safe classification. Only exact status/code
 /// pairs published by the authoritative Torii contract can be definitive.
-public enum KagemushaSubmissionFailureClassifier {
+package enum KagemushaSubmissionFailureClassifier {
     private static let commonBadRequestRejectCodes: Set<String> = [
         "idempotency_key_invalid",
         "idempotency_key_missing",
@@ -390,7 +390,7 @@ public enum KagemushaSubmissionFailureClassifier {
     }
 }
 
-public enum KagemushaOperationFinalityError: Error, Equatable, Sendable {
+package enum KagemushaOperationFinalityError: Error, Equatable, Sendable {
     case invalidConfiguration(String)
     case continuityViolation(String)
     case alreadyResolving(String)
@@ -418,7 +418,7 @@ extension KagemushaOperationFinalityError: LocalizedError {
 /// Poll bounds for ``KagemushaOperationFinalityCoordinator``. The upper
 /// limits prevent hostile or accidentally unbounded configuration from
 /// turning one operation into an effectively permanent task.
-public struct KagemushaOperationFinalityConfiguration: Equatable, Sendable {
+package struct KagemushaOperationFinalityConfiguration: Equatable, Sendable {
     public static let maximumSupportedPollAttempts = 10_000
     public static let minimumSupportedPollingIntervalNanoseconds: UInt64 =
         1_000_000_000
@@ -506,14 +506,14 @@ public struct KagemushaOperationFinalityConfiguration: Equatable, Sendable {
 /// Explicit durable acceptance continuity supplied on every resolution.
 /// `.unaccepted` permits the exact authoritative-404 submission gate;
 /// `.accepted` permanently disables that gate and binds all later status.
-public enum KagemushaOperationContinuity: Equatable, Sendable {
+package enum KagemushaOperationContinuity: Equatable, Sendable {
     case unaccepted
     case accepted(transactionHash: String, submittedAtMs: UInt64?)
 }
 
 /// The request whose embedded operation identity controls the complete
 /// status-first lifecycle. Callers cannot independently supply a kind or ID.
-public enum KagemushaOperationSubmission: Equatable, Sendable {
+package enum KagemushaOperationSubmission: Equatable, Sendable {
     case topUp(KagemushaTopUpRequest)
     case redeem(KagemushaRedeemRequest)
 
@@ -535,7 +535,7 @@ public enum KagemushaOperationSubmission: Equatable, Sendable {
 /// Typed transport seam for the sole Kagemusha Torii lifecycle. The
 /// submission receives the exact request that supplied the coordinator's
 /// operation ID and kind.
-public protocol KagemushaOperationFinalityTransport: Sendable {
+package protocol KagemushaOperationFinalityTransport: Sendable {
     func getKagemushaOperationStatus(
         operationId: String,
         chainDiscriminant: UInt16
@@ -547,7 +547,7 @@ public protocol KagemushaOperationFinalityTransport: Sendable {
 }
 
 extension ToriiClient: KagemushaOperationFinalityTransport {
-    public func submitKagemushaOperation(
+    package func submitKagemushaOperation(
         _ operation: KagemushaOperationSubmission
     ) async throws -> KagemushaOperationReference {
         switch operation {
@@ -561,7 +561,7 @@ extension ToriiClient: KagemushaOperationFinalityTransport {
 
 /// Bounded terminal rejection metadata. The raw Torii error envelope is never
 /// exposed through finality resolution.
-public struct KagemushaOperationFinalRejection: Equatable, Sendable {
+package struct KagemushaOperationFinalRejection: Equatable, Sendable {
     public let operationId: String
     public let kind: KagemushaOperationKind
     public let transactionHash: String
@@ -582,7 +582,7 @@ public struct KagemushaOperationFinalRejection: Equatable, Sendable {
 
 /// A bounded terminal result from the status resource or a definitive
 /// pre-admission HTTP client failure.
-public enum KagemushaOperationFinalityOutcome: Equatable, Sendable {
+package enum KagemushaOperationFinalityOutcome: Equatable, Sendable {
     case applied(KagemushaOperationStatus.Applied)
     case rejected(KagemushaOperationFinalRejection)
     case definitiveSubmissionFailure(KagemushaDefinitiveSubmissionFailure)
@@ -590,7 +590,7 @@ public enum KagemushaOperationFinalityOutcome: Equatable, Sendable {
 
 /// The authoritative terminal result paired with the caller's latest durable
 /// state. The SDK never creates a competing journal or artifact store.
-public struct KagemushaOperationFinalityResolution<State> {
+package struct KagemushaOperationFinalityResolution<State> {
     public let outcome: KagemushaOperationFinalityOutcome
     public let state: State
 
@@ -608,7 +608,7 @@ public struct KagemushaOperationFinalityResolution<State> {
 /// an authoritative HTTP 404, readiness has been revalidated, and the exact
 /// operation's attempt marker has been persisted. Ambiguous POST responses are
 /// resolved exclusively through the status resource.
-public enum KagemushaOperationFinalityCoordinator {
+package enum KagemushaOperationFinalityCoordinator {
     typealias Sleeper = (_ nanoseconds: UInt64) async throws -> Void
     typealias MonotonicNow = () -> UInt64
 

@@ -1,7 +1,7 @@
 import Foundation
 
 /// Canonical first-release Kagemusha routes on Torii's `/v1/offline` wire namespace.
-public enum KagemushaToriiAPI {
+package enum KagemushaToriiAPI {
     public enum Endpoint: String, Sendable {
         case readiness = "/v1/offline/readiness"
         case topUp = "/v1/offline/top-up"
@@ -21,7 +21,7 @@ public enum KagemushaToriiAPI {
 /// Construction is restricted to native receive-offer verification of the request digest,
 /// registration tuple/lifetime, admitting transaction and Merkle paths, policy, header, and
 /// historical V2 finality certificate.
-public struct KagemushaRecipientRegistrationLineage: Equatable, Sendable {
+package struct KagemushaRecipientRegistrationLineage: Equatable, Sendable {
     public static let maximumArchiveBytes = 4 * 1024 * 1024
     public let noritoArchive: Data
 
@@ -38,7 +38,7 @@ public struct KagemushaRecipientRegistrationLineage: Equatable, Sendable {
 
 /// App-owned durable checkpoint supplied to native receive-offer verification.
 /// `contextID` is the exact marked Iroha HeightContextId.
-public struct KagemushaFinalityCheckpointV2: Equatable, Sendable {
+package struct KagemushaFinalityCheckpointV2: Equatable, Sendable {
     public let height: UInt64
     public let contextID: Data
 
@@ -64,13 +64,13 @@ public struct KagemushaFinalityCheckpointV2: Equatable, Sendable {
     }
 }
 
-public struct KagemushaProjectedRecipientReceiveOfferV2: Equatable, Sendable {
+package struct KagemushaProjectedRecipientReceiveOfferV2: Equatable, Sendable {
     public let request: KagemushaRecipientPaymentRequest
     public let lineageArchive: Data
     public let publisherCheckpointEnvelope: Data
 }
 
-public struct KagemushaVerifiedRecipientReceiveOfferV2: Equatable, Sendable {
+package struct KagemushaVerifiedRecipientReceiveOfferV2: Equatable, Sendable {
     public let request: KagemushaRecipientPaymentRequest
     public let lineage: KagemushaRecipientRegistrationLineage
     public let publisherCheckpointEnvelope: Data
@@ -80,7 +80,7 @@ public struct KagemushaVerifiedRecipientReceiveOfferV2: Equatable, Sendable {
 /// Canonical portable receive offer carried as the Kagemusha IPM1
 /// RECEIVE_REQUEST body. Native projection is the only decoder, so Swift never
 /// guesses the Rust `Archived<T>` alignment or header padding.
-public struct KagemushaRecipientReceiveOfferV2: Equatable, Sendable {
+package struct KagemushaRecipientReceiveOfferV2: Equatable, Sendable {
     public static let maximumArchiveBytes = 24_576
     public static let maximumPublisherEnvelopeBytes = 2_048
     public let noritoArchive: Data
@@ -231,16 +231,16 @@ public struct KagemushaRecipientReceiveOfferV2: Equatable, Sendable {
     }
 }
 
-public enum KagemushaOperationKind: String, Codable, Equatable, Sendable {
+package enum KagemushaOperationKind: String, Codable, Equatable, Sendable {
     case topUp = "top_up"
     case redeem
 }
 
-public enum KagemushaOperationState: String, Codable, Equatable, Sendable {
+package enum KagemushaOperationState: String, Codable, Equatable, Sendable {
     case pending
 }
 
-public enum KagemushaOperationError: Error, LocalizedError, Equatable, Sendable {
+package enum KagemushaOperationError: Error, LocalizedError, Equatable, Sendable {
     case invalidField(String)
     case invalidNoritoArchive
 
@@ -255,7 +255,7 @@ public enum KagemushaOperationError: Error, LocalizedError, Equatable, Sendable 
 }
 
 /// A schema-bound Kagemusha top-up command submitted directly to Torii.
-public struct KagemushaTopUpRequest: Equatable, Sendable {
+package struct KagemushaTopUpRequest: Equatable, Sendable {
     /// Exact bridge ABI-22 / Kagemusha V4 top-up archive ceiling enforced by Torii.
     public static let maximumArchiveBytes = 512 * 1_024
     /// Lowercase hex derived from the archive's nonzero 32-byte operation ID.
@@ -280,7 +280,7 @@ public struct KagemushaTopUpRequest: Equatable, Sendable {
 }
 
 /// A schema-bound Kagemusha redemption command submitted directly to Torii.
-public struct KagemushaRedeemRequest: Equatable, Sendable {
+package struct KagemushaRedeemRequest: Equatable, Sendable {
     /// Exact bridge ABI-22 / Kagemusha V4 redemption archive ceiling enforced by Torii.
     public static let maximumArchiveBytes = 48 * 1_024 * 1_024
     /// Lowercase hex derived from the archive's nonzero 32-byte operation ID.
@@ -304,7 +304,7 @@ public struct KagemushaRedeemRequest: Equatable, Sendable {
     public func noritoArchive() -> Data { archive }
 }
 
-public struct KagemushaOperationReference: Codable, Equatable, Sendable {
+package struct KagemushaOperationReference: Codable, Equatable, Sendable {
     public let operationId: String
     public let kind: KagemushaOperationKind
     public let state: KagemushaOperationState
@@ -364,7 +364,7 @@ public struct KagemushaOperationReference: Codable, Equatable, Sendable {
 ///
 /// The public API intentionally exposes the current semantic name while the
 /// versioned consensus wire type remains an internal codec detail.
-public struct KagemushaTopUpAnchor: Equatable, Sendable {
+package struct KagemushaTopUpAnchor: Equatable, Sendable {
     private let archive: Data
     private let anchorDigest: Data
     /// Exact genesis-derived network identity authenticated by the anchor.
@@ -411,9 +411,9 @@ public struct KagemushaTopUpAnchor: Equatable, Sendable {
 
 /// Opaque typed consensus proof returned by the canonical Torii top-up
 /// operation status resource.
-public typealias KagemushaTopUpFinalityProof = KagemushaTopUpFinalityProofArchive
+package typealias KagemushaTopUpFinalityProof = KagemushaTopUpFinalityProofArchive
 
-public struct KagemushaTopUpResult: Equatable, Sendable {
+package struct KagemushaTopUpResult: Equatable, Sendable {
     public let transactionHash: String
     public let finalizedBlockHeight: UInt64
     public let serverTimeMs: UInt64
@@ -448,7 +448,7 @@ public struct KagemushaTopUpResult: Equatable, Sendable {
     }
 }
 
-public struct KagemushaRedeemResult: Equatable, Sendable {
+package struct KagemushaRedeemResult: Equatable, Sendable {
     public let transactionHash: String
     public let finalizedBlockHeight: UInt64
     public let serverTimeMs: UInt64
@@ -473,12 +473,12 @@ public struct KagemushaRedeemResult: Equatable, Sendable {
     }
 }
 
-public enum KagemushaOperationResult: Equatable, Sendable {
+package enum KagemushaOperationResult: Equatable, Sendable {
     case topUp(KagemushaTopUpResult)
     case redeem(KagemushaRedeemResult)
 }
 
-public struct KagemushaQueueErrorSnapshot: Equatable, Sendable {
+package struct KagemushaQueueErrorSnapshot: Equatable, Sendable {
     public let state: String
     public let queued: UInt64
     public let capacity: UInt64
@@ -495,7 +495,7 @@ public struct KagemushaQueueErrorSnapshot: Equatable, Sendable {
     }
 }
 
-public struct KagemushaAxtErrorDetails: Equatable, Sendable {
+package struct KagemushaAxtErrorDetails: Equatable, Sendable {
     public let code: String?
     public let reason: String?
     public let snapshotVersion: UInt64?
@@ -527,7 +527,7 @@ public struct KagemushaAxtErrorDetails: Equatable, Sendable {
     }
 }
 
-public struct KagemushaOperationErrorDetails: Equatable, Sendable {
+package struct KagemushaOperationErrorDetails: Equatable, Sendable {
     public let layer: String?
     public let rejectCode: String?
     public let queue: KagemushaQueueErrorSnapshot?
@@ -598,7 +598,7 @@ public struct KagemushaOperationErrorDetails: Equatable, Sendable {
     }
 }
 
-public struct KagemushaOperationErrorEnvelope: Equatable, Sendable {
+package struct KagemushaOperationErrorEnvelope: Equatable, Sendable {
     public let code: String
     public let message: String
     public let details: KagemushaOperationErrorDetails?
@@ -618,7 +618,7 @@ public struct KagemushaOperationErrorEnvelope: Equatable, Sendable {
 }
 
 /// Pollable state returned by `/v1/offline/operations/{operation_id}`.
-public enum KagemushaOperationStatus: Equatable, Sendable {
+package enum KagemushaOperationStatus: Equatable, Sendable {
     /// Validated payload for a queued or not-yet-finalized operation.
     public struct Pending: Equatable, Sendable {
         public let operationId: String
@@ -697,7 +697,7 @@ public enum KagemushaOperationStatus: Equatable, Sendable {
     }
 }
 
-public enum KagemushaOperationCodec {
+package enum KagemushaOperationCodec {
     /// A reference contains only bounded identifiers, tags, a status URI, and
     /// a timestamp. Reject oversized input before Norito frame parsing.
     public static let referenceMaximumArchiveBytes = 4 * 1_024

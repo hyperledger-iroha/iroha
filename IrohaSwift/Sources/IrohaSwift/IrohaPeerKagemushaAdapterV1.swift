@@ -4,7 +4,7 @@ import Foundation
 /// bounded IPM1 small-handoff rail. It never reconstructs Norito bytes and
 /// does not alter mobile bridge ABI22. Full Kagemusha V4 archives up to 32 MiB
 /// stay on the existing typed Kagemusha rails.
-public enum IrohaPeerKagemushaAdapterV1 {
+package enum IrohaPeerKagemushaAdapterV1 {
     /// The only IPM1 schema accepted for mainline native Kagemusha archives.
     public static let nativeArchiveSchemaVersion: UInt16 = 0x0102
 
@@ -44,7 +44,7 @@ public enum IrohaPeerKagemushaAdapterV1 {
     }
 }
 
-public extension KagemushaPeerPayload {
+package extension KagemushaPeerPayload {
     func irohaPeerWireMessage(
         compressionPolicy: IrohaPeerWireCompressionPolicyV1 = .disabled,
         limits: IrohaPeerWireLimitsV1 = .peerV1

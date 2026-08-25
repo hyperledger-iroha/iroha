@@ -22,7 +22,7 @@ import java.util.zip.CRC32;
  * most one missing data frame per fixed parity group, and rolls back its complete state when a frame
  * is invalid.
  */
-public final class KagemushaQrStream {
+final class KagemushaQrStream {
   public static final int MINIMUM_CHUNK_SIZE = 64;
   public static final int MAXIMUM_CHUNK_SIZE = 512;
   public static final int MINIMUM_PARITY_GROUP = 2;

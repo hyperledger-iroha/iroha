@@ -27,7 +27,6 @@ import org.hyperledger.iroha.android.model.NetworkId;
 import org.hyperledger.iroha.android.model.TransactionPayload;
 import org.hyperledger.iroha.android.model.instructions.RegisterZkAssetInstruction;
 import org.hyperledger.iroha.android.model.instructions.TransferWirePayloadEncoder;
-import org.hyperledger.iroha.android.offline.KagemushaRecursiveSpendProver;
 import org.hyperledger.iroha.android.sccp.SccpV1;
 import org.hyperledger.iroha.android.testing.TestAssetDefinitionIds;
 import org.hyperledger.iroha.android.testing.TestEd25519Keys;
@@ -218,26 +217,36 @@ public final class ExplicitChainContextTests {
 
   @Test
   public void nativeAccountEntryPointsExposeAnExplicitChainArgument() {
+    final Class<?> retainedKagemushaProver = legacyKagemushaRecursiveSpendProver();
     assertAllMethodOverloadsHaveIntParameter(
         NativeSignerBridge.class, "encodeRegisterZkAssetSignedTransaction", 2);
     assertMethodHasIntParameter(
         NativeSignerBridge.class, "nativeEncodeRegisterZkAssetSignedTransaction", 2);
 
     assertMethodHasIntParameter(
-        KagemushaRecursiveSpendProver.class, "prepareRequestAuthorization", 1);
-    assertMethodHasIntParameter(KagemushaRecursiveSpendProver.class, "prepareTopUp", 1);
+        retainedKagemushaProver, "prepareRequestAuthorization", 1);
+    assertMethodHasIntParameter(retainedKagemushaProver, "prepareTopUp", 1);
     assertMethodHasIntParameter(
-        KagemushaRecursiveSpendProver.class, "prepareRecipientPaymentRequest", 1);
+        retainedKagemushaProver, "prepareRecipientPaymentRequest", 1);
     assertMethodHasIntParameter(
-        KagemushaRecursiveSpendProver.class, "buildRedeemRequestV4", 2);
+        retainedKagemushaProver, "buildRedeemRequestV4", 2);
     assertMethodHasIntParameter(
-        KagemushaRecursiveSpendProver.class, "nativePrepareAuthorizationV2", 1);
+        retainedKagemushaProver, "nativePrepareAuthorizationV2", 1);
     assertMethodHasIntParameter(
-        KagemushaRecursiveSpendProver.class, "nativePrepareTopUpV4", 1);
+        retainedKagemushaProver, "nativePrepareTopUpV4", 1);
     assertMethodHasIntParameter(
-        KagemushaRecursiveSpendProver.class, "nativePrepareRecipientRequestV2", 1);
+        retainedKagemushaProver, "nativePrepareRecipientRequestV2", 1);
     assertMethodHasIntParameter(
-        KagemushaRecursiveSpendProver.class, "nativeBuildRedeemRequestV4", 5);
+        retainedKagemushaProver, "nativeBuildRedeemRequestV4", 5);
+  }
+
+  private static Class<?> legacyKagemushaRecursiveSpendProver() {
+    try {
+      return Class.forName(
+          "org.hyperledger.iroha.android.offline.KagemushaRecursiveSpendProver");
+    } catch (final ClassNotFoundException exception) {
+      throw new AssertionError("retained internal Kagemusha prover is missing", exception);
+    }
   }
 
   @Test

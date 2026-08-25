@@ -50,7 +50,7 @@ import java.util.concurrent.atomic.AtomicBoolean;
  * authorization finalizer, and removes the exhausted alias. StrongBox is requested only through
  * {@link StrongBoxPolicy#REQUIRED}; failure never falls back to TEE.
  */
-public final class KagemushaAndroidKeyMint {
+final class KagemushaAndroidKeyMint {
   public static final int MINIMUM_API_LEVEL = Build.VERSION_CODES.S;
   public static final String KEY_ALGORITHM = KeyProperties.KEY_ALGORITHM_EC;
   public static final String CURVE_NAME = "secp256r1";

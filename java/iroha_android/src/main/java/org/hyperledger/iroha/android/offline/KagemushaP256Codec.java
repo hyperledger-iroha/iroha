@@ -9,7 +9,7 @@ import java.util.Arrays;
 import java.util.Objects;
 
 /** Strict, selector-free NIST P-256 codec for the sole Kagemusha device authority. */
-public final class KagemushaP256Codec {
+final class KagemushaP256Codec {
 
   public static final int SCALAR_BYTES = 32;
   public static final int PUBLIC_KEY_BYTES = 65;

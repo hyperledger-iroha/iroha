@@ -25,7 +25,7 @@ import org.hyperledger.iroha.sdk.norito.SchemaHash
  * archives. Proof execution remains fail-closed while the native backend reports unavailable.
  * Every recursive lifecycle result is projected through native bridge ABI 22 and decoded as V4.
  */
-class KagemushaRecursiveSpendProver private constructor() {
+internal class KagemushaRecursiveSpendProver private constructor() {
     /** Retryable contention signal raised before a second proof request is copied. */
     class ProofWorkerBusyException internal constructor(
         message: String,

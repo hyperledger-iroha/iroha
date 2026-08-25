@@ -16,7 +16,7 @@ import org.hyperledger.iroha.sdk.crypto.IrohaHash
  * Kagemusha model. Native attestation acquisition uses bridge ABI 22;
  * the on-chain registration format marker remains version 1.
  */
-class DeviceAttestationRegistration(
+internal class DeviceAttestationRegistration(
     val version: Int,
     val platform: String,
     val keyId: String,

@@ -1,7 +1,7 @@
 import Foundation
 import CryptoKit
 
-public enum KagemushaDeviceAttestation {
+package enum KagemushaDeviceAttestation {
     public static let deviceAttestationChallengeDomain = "iroha:kagemusha:device-attestation-challenge:v1"
     public static let deviceAttestationEvidencePrefix = "offline-device-attestation-evidence-v1"
     public static let registrationVersion: UInt16 = 1
@@ -14,7 +14,7 @@ public enum KagemushaDeviceAttestation {
 
 }
 
-public enum KagemushaDeviceAttestationError: Error, LocalizedError, Equatable {
+package enum KagemushaDeviceAttestationError: Error, LocalizedError, Equatable {
     case invalidHashLength(field: String, expected: Int, actual: Int)
     case invalidHash(field: String)
     case invalidRegistrationVersion(UInt16)
@@ -49,7 +49,7 @@ public enum KagemushaDeviceAttestationError: Error, LocalizedError, Equatable {
     }
 }
 
-public struct KagemushaDeviceAttestationRegistration: Equatable, Sendable {
+package struct KagemushaDeviceAttestationRegistration: Equatable, Sendable {
     public let version: UInt16
     public let platform: String
     public let keyId: String
@@ -632,7 +632,7 @@ fileprivate struct OfflineAndroidKeyMintChallengePreimage {
     }
 }
 
-public struct RegisterKagemushaDeviceAttestationRequest: Sendable {
+package struct RegisterKagemushaDeviceAttestationRequest: Sendable {
     public let networkId: NetworkId
     public let authority: String
     public let registration: KagemushaDeviceAttestationRegistration
@@ -1090,7 +1090,7 @@ enum KagemushaDeviceAttestationEncoding {
     }
 }
 
-public struct KagemushaDeviceAttestationUnsignedTransaction: Sendable {
+package struct KagemushaDeviceAttestationUnsignedTransaction: Sendable {
     public let signingHash: Data
     fileprivate let transactionPayload: Data
 
@@ -1102,7 +1102,7 @@ public struct KagemushaDeviceAttestationUnsignedTransaction: Sendable {
     }
 }
 
-public enum KagemushaDeviceAttestationSignedTransactionError: Error, LocalizedError, Equatable {
+package enum KagemushaDeviceAttestationSignedTransactionError: Error, LocalizedError, Equatable {
     case invalidCanonicalNorito(String)
     case registrationIdMismatch
     case networkIdMismatch
@@ -1133,7 +1133,7 @@ public enum KagemushaDeviceAttestationSignedTransactionError: Error, LocalizedEr
 /// This type is intended for crash-safe status-first replay. It retains the exact
 /// submitted bytes, recomputes their canonical payload identity, and proves that the sole
 /// embedded instruction carries the expected canonical device registration.
-public struct KagemushaDeviceAttestationSignedTransaction: Sendable {
+package struct KagemushaDeviceAttestationSignedTransaction: Sendable {
     public let envelope: SignedTransactionEnvelope
     public let registrationId: Data
     public let networkId: NetworkId
@@ -1777,7 +1777,7 @@ private enum KagemushaDeviceAttestationTransactionEncoder {
     }
 }
 
-public extension IrohaSDK {
+package extension IrohaSDK {
     func buildUnsignedRegisterKagemushaDeviceAttestation(
         request: RegisterKagemushaDeviceAttestationRequest
     ) throws -> KagemushaDeviceAttestationUnsignedTransaction {

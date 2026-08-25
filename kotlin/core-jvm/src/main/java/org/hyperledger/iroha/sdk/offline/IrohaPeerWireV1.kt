@@ -597,7 +597,7 @@ class IrohaPeerWireMessageV1 private constructor(
 }
 
 /** Bounded small-handoff adapter to the existing native-canonical Kagemusha API. */
-object IrohaPeerKagemushaAdapterV1 {
+internal object IrohaPeerKagemushaAdapterV1 {
     const val NATIVE_ARCHIVE_SCHEMA_VERSION = 0x0102
 
     @JvmStatic

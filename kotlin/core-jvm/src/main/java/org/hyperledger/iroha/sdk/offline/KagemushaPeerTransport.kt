@@ -2,7 +2,7 @@ package org.hyperledger.iroha.sdk.offline
 
 import java.util.Base64
 
-enum class KagemushaPeerPayloadKind(
+internal enum class KagemushaPeerPayloadKind(
     val code: Int,
     val textPrefix: String,
     val contentType: String,
@@ -32,7 +32,7 @@ enum class KagemushaPeerPayloadKind(
     }
 }
 
-object KagemushaPeerTransportContract {
+internal object KagemushaPeerTransportContract {
     const val RECEIVE_REQUEST_TEXT_PREFIX = "PKK2R."
     const val PAYMENT_TEXT_PREFIX = "PKK2P."
     const val ACKNOWLEDGEMENT_TEXT_PREFIX = "PKK2A."
@@ -50,7 +50,7 @@ object KagemushaPeerTransportContract {
         KagemushaRecursiveSpendProver.MAX_PEER_TEXT_ENVELOPE_BYTES
 }
 
-sealed class KagemushaPeerPayload {
+internal sealed class KagemushaPeerPayload {
     abstract val kind: KagemushaPeerPayloadKind
     abstract fun archive(): ByteArray
 
@@ -101,7 +101,7 @@ sealed class KagemushaPeerPayload {
     }
 }
 
-object KagemushaPeerTextCodec {
+internal object KagemushaPeerTextCodec {
     private val encoder = Base64.getUrlEncoder().withoutPadding()
     private val decoder = Base64.getUrlDecoder()
 

@@ -6,7 +6,7 @@ package org.hyperledger.iroha.android.offline;
 import java.util.Arrays;
 
 /** Immutable canonical 64-byte raw low-S P-256 Kagemusha device signature. */
-public final class KagemushaDeviceSignatureV2 {
+final class KagemushaDeviceSignatureV2 {
   private final byte[] value;
 
   public KagemushaDeviceSignatureV2(final byte[] rawBytes) {

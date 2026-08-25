@@ -5,7 +5,7 @@ import java.util.Arrays;
 import java.util.Objects;
 
 /** Exact PKNB1 Kagemusha Nearby envelope and fail-closed authenticated-transport policy. */
-public final class KagemushaNearby {
+final class KagemushaNearby {
   public static final int MAXIMUM_ENVELOPE_BYTES = 32_704;
   public static final int HEADER_LENGTH = 12;
   public static final String SERVICE_NAME = KagemushaPeerTransport.NEARBY_SERVICE_NAME;

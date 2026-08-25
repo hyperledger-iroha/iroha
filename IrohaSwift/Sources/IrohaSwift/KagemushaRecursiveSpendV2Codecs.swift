@@ -1,6 +1,6 @@
 import Foundation
 
-public enum KagemushaRecursiveSpendCodecs {
+package enum KagemushaRecursiveSpendCodecs {
     public static func decodeNativeCapabilitiesV4(
         _ archive: Data
     ) throws -> KagemushaRecursiveSpendNativeCapabilitiesV4 {

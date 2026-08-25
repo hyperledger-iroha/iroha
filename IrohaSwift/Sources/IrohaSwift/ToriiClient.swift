@@ -22417,7 +22417,7 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
     }
 
     @discardableResult
-    public func submitKagemushaTopUp(
+    package func submitKagemushaTopUp(
         _ request: KagemushaTopUpRequest,
         completion: @escaping (Result<KagemushaOperationReference, Swift.Error>) -> Void
     ) -> Task<Void, Never> {
@@ -22425,7 +22425,7 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
     }
 
     @discardableResult
-    public func submitKagemushaRedeem(
+    package func submitKagemushaRedeem(
         _ request: KagemushaRedeemRequest,
         completion: @escaping (Result<KagemushaOperationReference, Swift.Error>) -> Void
     ) -> Task<Void, Never> {
@@ -22433,7 +22433,7 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
     }
 
     @discardableResult
-    public func getKagemushaOperationStatus(
+    package func getKagemushaOperationStatus(
         operationId: String,
         chainDiscriminant: UInt16,
         completion: @escaping (Result<KagemushaOperationStatus, Swift.Error>) -> Void
@@ -25927,7 +25927,7 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
         return try decodeJSON(ToriiOfflineStatus.self, from: data)
     }
 
-    public func submitKagemushaTopUp(
+    package func submitKagemushaTopUp(
         _ requestBody: KagemushaTopUpRequest
     ) async throws -> KagemushaOperationReference {
         try await submitKagemushaOperation(
@@ -25938,7 +25938,7 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
         )
     }
 
-    public func submitKagemushaRedeem(
+    package func submitKagemushaRedeem(
         _ requestBody: KagemushaRedeemRequest
     ) async throws -> KagemushaOperationReference {
         try await submitKagemushaOperation(
@@ -25949,7 +25949,7 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
         )
     }
 
-    public func getKagemushaOperationStatus(
+    package func getKagemushaOperationStatus(
         operationId: String,
         chainDiscriminant: UInt16
     ) async throws -> KagemushaOperationStatus {

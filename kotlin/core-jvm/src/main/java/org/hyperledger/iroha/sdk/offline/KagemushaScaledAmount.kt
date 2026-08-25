@@ -3,7 +3,7 @@ package org.hyperledger.iroha.sdk.offline
 import java.math.BigInteger
 
 /** Exact positive Kagemusha amount in authoritative asset-scale atomic units. */
-class KagemushaScaledAmount private constructor(
+internal class KagemushaScaledAmount private constructor(
     val atomicUnits: String,
     val scale: Int,
 ) {

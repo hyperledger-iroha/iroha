@@ -6,7 +6,7 @@ import Foundation
 /// The source must invoke `stream` synchronously, in file order, and must not
 /// retain its consumer. The coordinator independently verifies offsets, byte
 /// count, and SHA-256 before allowing native finalization.
-public struct KagemushaRecursiveSpendArtifactStream: Sendable {
+package struct KagemushaRecursiveSpendArtifactStream: Sendable {
     public let role: KagemushaRecursiveSpendArtifactRoleV4
     public let expectedSHA256: Data
     public let byteCount: UInt64
@@ -50,7 +50,7 @@ public struct KagemushaRecursiveSpendArtifactStream: Sendable {
 /// A lease becomes stale after a successful rotation, rollback, or explicit
 /// uninstall. Keep every proof operation inside `withInstalledArtifactSet` so
 /// another thread cannot rotate the process-wide native generation midway.
-public final class KagemushaRecursiveSpendInstalledArtifactLease: @unchecked Sendable {
+package final class KagemushaRecursiveSpendInstalledArtifactLease: @unchecked Sendable {
     public let binding: KagemushaRecursiveSpendArtifactBindingV4
     public let manifestSHA256: Data
     /// The eight authenticated artifact digests, in canonical V4 role order.
@@ -89,7 +89,7 @@ public final class KagemushaRecursiveSpendInstalledArtifactLease: @unchecked Sen
 /// native atomic install. A failed candidate is cancelled without changing the
 /// coordinator's prior generation. Reacquiring an older release performs an
 /// explicit rollback and invalidates leases for the release it replaces.
-public final class KagemushaRecursiveSpendArtifactCoordinator: @unchecked Sendable {
+package final class KagemushaRecursiveSpendArtifactCoordinator: @unchecked Sendable {
     public static let requiredArtifactCount =
         KagemushaRecursiveSpendArtifactRoleV4.allCases.count
     public static let shared = KagemushaRecursiveSpendArtifactCoordinator(

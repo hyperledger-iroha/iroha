@@ -4,7 +4,7 @@ import java.util.Arrays;
 import java.util.Objects;
 
 /** Bounded small-handoff adapter to the existing native-canonical Kagemusha API. */
-public final class IrohaPeerKagemushaAdapterV1 {
+final class IrohaPeerKagemushaAdapterV1 {
   public static final int NATIVE_ARCHIVE_SCHEMA_VERSION = 0x0102;
 
   private IrohaPeerKagemushaAdapterV1() {}

@@ -13,7 +13,7 @@ import java.math.BigInteger
  * fixed-width `r || s` and must already use low-S form. Platform ECDSA APIs commonly return DER;
  * [rawLowSFromStrictDer] accepts only minimal DER and normalizes its valid S scalar to low-S.
  */
-object KagemushaP256Codec {
+internal object KagemushaP256Codec {
     const val SCALAR_BYTES: Int = 32
     const val PUBLIC_KEY_BYTES: Int = 65
     const val RAW_SIGNATURE_BYTES: Int = 64
@@ -167,7 +167,7 @@ object KagemushaP256Codec {
 }
 
 /** Immutable canonical Kagemusha device-authority public key. */
-class KagemushaDevicePublicKeyV2(sec1Bytes: ByteArray) {
+internal class KagemushaDevicePublicKeyV2(sec1Bytes: ByteArray) {
     private val value = KagemushaP256Codec.requireUncompressedPublicKey(sec1Bytes)
 
     fun sec1Bytes(): ByteArray = value.copyOf()
@@ -179,7 +179,7 @@ class KagemushaDevicePublicKeyV2(sec1Bytes: ByteArray) {
 }
 
 /** Immutable canonical Kagemusha raw low-S device-authority signature. */
-class KagemushaDeviceSignatureV2(rawBytes: ByteArray) {
+internal class KagemushaDeviceSignatureV2(rawBytes: ByteArray) {
     private val value = KagemushaP256Codec.requireRawLowSSignature(rawBytes)
 
     fun rawBytes(): ByteArray = value.copyOf()

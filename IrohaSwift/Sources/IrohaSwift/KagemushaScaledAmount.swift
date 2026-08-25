@@ -6,7 +6,7 @@ import Foundation
 /// balances use Iroha `Quantity` values. Keeping the asset scale beside the
 /// atomic value prevents callers from accidentally charging or minting the
 /// atomic integer as a scale-zero public amount.
-public struct KagemushaScaledAmount: Equatable, Hashable, Sendable {
+package struct KagemushaScaledAmount: Equatable, Hashable, Sendable {
     public static let maximumScale: UInt32 = 28
     public static let maximumAtomicUnits = "340282366920938463463374607431768211455"
 
@@ -198,7 +198,7 @@ public struct KagemushaScaledAmount: Equatable, Hashable, Sendable {
     }
 }
 
-public enum KagemushaScaledAmountError: Error, Equatable, LocalizedError {
+package enum KagemushaScaledAmountError: Error, Equatable, LocalizedError {
     case invalidDecimal
     case excessPrecision
     case invalidAtomicUnits

@@ -9,7 +9,7 @@ import java.util.List;
 import java.util.Objects;
 
 /** Platform-neutral NFC APDU datastream used by Android HCE/IsoDep and iOS CardSession peers. */
-public final class KagemushaNfcProtocol {
+final class KagemushaNfcProtocol {
   private static final byte[] CANONICAL_AID =
       new byte[] {(byte) 0xF0, 0x50, 0x4B, 0x45, 0x50, 0x4B, 0x52, 0x4E, 0x46, 0x43, 0x01};
   public static final String AID_HEX = IrohaPeerNfcV1.APPLICATION_IDENTIFIER_HEX;

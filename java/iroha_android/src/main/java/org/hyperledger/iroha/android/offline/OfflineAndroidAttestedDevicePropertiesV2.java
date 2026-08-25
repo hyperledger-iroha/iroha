@@ -8,7 +8,7 @@ import java.util.Arrays;
 import java.util.Objects;
 
 /** Exact ABI22 snapshot of Android build, patch, and verified-boot properties. */
-public final class OfflineAndroidAttestedDevicePropertiesV2 {
+final class OfflineAndroidAttestedDevicePropertiesV2 {
   public static final int VERSION = 2;
   public static final int MAX_PROPERTY_UTF8_BYTES = 128;
   public static final int MAX_VERIFIED_BOOT_KEY_BYTES = 1_024;

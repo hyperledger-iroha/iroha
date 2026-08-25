@@ -3,7 +3,7 @@ import Foundation
 /// The three peer-carried Kagemusha archives.
 ///
 /// Raw values are part of the first-release NFC/QR/Nearby wire contract.
-public enum KagemushaPeerPayloadKind: UInt8, CaseIterable, Codable, Sendable {
+package enum KagemushaPeerPayloadKind: UInt8, CaseIterable, Codable, Sendable {
     case receiveRequest = 1
     case payment = 2
     case acknowledgement = 3
@@ -46,7 +46,7 @@ public enum KagemushaPeerPayloadKind: UInt8, CaseIterable, Codable, Sendable {
 }
 
 /// Stable identifiers shared by every first-release Kagemusha peer transport.
-public enum KagemushaPeerTransportContract {
+package enum KagemushaPeerTransportContract {
     public static let receiveRequestTextPrefix = "PKK2R."
     public static let paymentTextPrefix = "PKK2P."
     public static let acknowledgementTextPrefix = "PKK2A."
@@ -78,7 +78,7 @@ public enum KagemushaPeerTransportContract {
 }
 
 /// A canonical, decoded Kagemusha peer archive.
-public enum KagemushaPeerPayload: Equatable, Sendable {
+package enum KagemushaPeerPayload: Equatable, Sendable {
     /// Kagemusha V4 carries the whole portable offer (signed request, reusable
     /// lineage, and publisher checkpoint envelope) under wire kind 1.
     case receiveRequest(KagemushaRecipientReceiveOfferV2)
@@ -148,7 +148,7 @@ public enum KagemushaPeerPayload: Equatable, Sendable {
 /// A completed sender-side peer exchange. Callers must still perform the
 /// acknowledgement's cryptographic sender verification before releasing any
 /// locally reserved inputs.
-public struct KagemushaPeerSendResult: Equatable, Sendable {
+package struct KagemushaPeerSendResult: Equatable, Sendable {
     public let payment: KagemushaRecursiveSpendPeerPaymentV4
     public let acknowledgement: KagemushaReceiverAcknowledgement
 
@@ -161,7 +161,7 @@ public struct KagemushaPeerSendResult: Equatable, Sendable {
     }
 }
 
-public enum KagemushaPeerTransportError: Error, Equatable, LocalizedError, Sendable {
+package enum KagemushaPeerTransportError: Error, Equatable, LocalizedError, Sendable {
     case emptyPayload
     case archiveTooLarge(actual: Int, maximum: Int)
     case textEnvelopeTooLarge(actual: Int, maximum: Int)
@@ -194,7 +194,7 @@ public enum KagemushaPeerTransportError: Error, Equatable, LocalizedError, Senda
 }
 
 /// Canonical `PKK2R.`, `PKK2P.`, and `PKK2A.` text envelopes.
-public enum KagemushaPeerTextCodec {
+package enum KagemushaPeerTextCodec {
     public static func encode(_ payload: KagemushaPeerPayload) throws -> String {
         let archive = payload.archive
         guard !archive.isEmpty else {

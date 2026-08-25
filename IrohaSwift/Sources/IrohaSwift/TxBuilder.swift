@@ -807,7 +807,7 @@ public enum PipelineStatusError: Error, LocalizedError {
 /// Exact cached top-up-shield verifier identity that an online preparation is
 /// allowed to use. A wallet builds this from its authenticated product
 /// capability and must refresh that capability after verifier rotation.
-public struct KagemushaTopUpShieldVerifierBinding: Equatable, Sendable {
+package struct KagemushaTopUpShieldVerifierBinding: Equatable, Sendable {
     public let backend: String
     public let name: String
     public let version: UInt32
@@ -886,7 +886,7 @@ public struct KagemushaTopUpShieldVerifierBinding: Equatable, Sendable {
 /// Legacy-named product expectation supplied by the app for an online top-up.
 /// It binds the selected asset and verifier lifecycle; it is not universal
 /// offline discovery or backend readiness.
-public struct KagemushaTopUpShieldReadinessExpectation: Equatable, Sendable {
+package struct KagemushaTopUpShieldReadinessExpectation: Equatable, Sendable {
     public let assetDefinitionID: String
     public let assetScale: UInt32
     public let minimumEvaluatedBlockHeight: UInt64
@@ -912,7 +912,7 @@ public struct KagemushaTopUpShieldReadinessExpectation: Equatable, Sendable {
 }
 
 /// Reproducible live binding retained with a staged top-up until finality.
-public struct KagemushaTopUpShieldSnapshotBinding: Equatable, Sendable {
+package struct KagemushaTopUpShieldSnapshotBinding: Equatable, Sendable {
     public let assetDefinitionID: String
     public let assetScale: UInt32
     public let evaluatedBlockHeight: UInt64
@@ -925,7 +925,7 @@ public struct KagemushaTopUpShieldSnapshotBinding: Equatable, Sendable {
 /// Unsigned top-up plus the exact live readiness/tree observation used to
 /// construct it. Wallets persist this atomically with note secrets before
 /// signing or submitting the request.
-public struct KagemushaTopUpShieldPreparation: Equatable, Sendable {
+package struct KagemushaTopUpShieldPreparation: Equatable, Sendable {
     public let unsigned: KagemushaRecursiveSpendTopUpUnsignedV4
     public let opening: KagemushaNoteOpening
     /// Exact post-top-up membership and dummy-zero paths retained in encrypted
@@ -1035,7 +1035,7 @@ public final class IrohaSDK: @unchecked Sendable {
     /// persist atomically in encrypted storage before submission. Only the
     /// unsigned request is sent to Torii; the opening remains local.
     @available(iOS 15.0, macOS 12.0, *)
-    public func prepareKagemushaTopUpShield(
+    package func prepareKagemushaTopUpShield(
         networkId: NetworkId,
         assetId: String,
         amount: KagemushaScaledAmount,

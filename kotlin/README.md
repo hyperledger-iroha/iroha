@@ -296,23 +296,17 @@ is capped at 24,660 bytes. That is a hard constructor ceiling. Wire policies
 likewise cannot exceed 32 KiB canonical or 24,576 encoded bytes for the bounded
 Kagemusha handoff.
 
-IPM1 admits profile `2` / schema `0x0102` as a 24,576-byte bounded handoff for
-a mainline typed Kagemusha V4 native archive. Profile `3` / schema `0x0100`
-carries only the exact canonical `kgm2:` text from `OfflineCashPeerAdapterV1`.
+IPM1 retains profile `2` / schema `0x0102` only as internal compatibility
+substrate. Its typed Kagemusha adapter and PKK2/PKKQ1 QR, NFC, Nearby, prover,
+and recursive-spend models are not application APIs. Profile `3` / schema
+`0x0100` carries the sole public product transport: exact canonical `kgm2:`
+text from `OfflineCashPeerAdapterV1`.
 Its request/payment/ACK raw maxima are 768/7,936/256 bytes and text maxima are
 1,029/10,587/347 bytes; 9,211 raw and 12,288 text are aggregate session caps,
 not per-message limits. Generic IPM validates exact canonical framing without
-native code; the typed adapters then perform deeper semantic decoding. Mobile
-native calls cross ABI22 while Kagemusha's protocol/data ABI remains V4. Full V4
-QR/NFC/native archives up to 32 MiB continue to use the independent
-`KagemushaQrStreamCodec`, `KagemushaNfcProtocol`, and
-`KagemushaNearbyEnvelopeCodec` rails. Kagemusha retains its distinct
-`PKK2*`/`PKKQ1` text and Bonjour identifiers, while NFC uses the sole canonical
-AID `F0504B45504B524E464301`. Nearby uses the authenticated binary `PKNB1`
-envelope and its own smaller bound. Those rails are never negotiated,
-reinterpreted, or used as fallback for IPM1. `IrohaPeer*V1` has no
-unauthenticated Nearby, untyped raw-text, alternate profile representation,
-alias, or migration fallback.
+native code; the public Offline Cash adapter then performs deeper semantic
+decoding. Do not use retained profile `2` for a product, sidecar, or demo
+representation.
 
 These transport changes are client-side and require no backend API change.
 
@@ -324,15 +318,13 @@ typed adapter.
 `PEER_OPTIMIZED` compression is cross-rail and
 uses zlib only when it saves at least 32 bytes and one 256-byte shard.
 
-Do not stop at generic structural acceptance for a production profile-2
-payload; wrap and decode it through `IrohaPeerKagemushaAdapterV1` so deeper
-typed semantics are enforced. Apply the same rule to profile 3 with the
-context-bound `OfflineCashPeerAdapterV1`; on rejection, quarantine the stream
-ID returned by `OfflineCashQrStreamDecoderV1`. The canonical
+For product traffic, decode profile 3 through the context-bound
+`OfflineCashPeerAdapterV1`; on rejection, quarantine the stream ID returned by
+`OfflineCashQrStreamDecoderV1`. The canonical
 `../fixtures/offline/kagemusha_peer_transport_v2.json` vector
 pins a qualified 49-byte structural archive and its exact IPM1, IQR1, NFC, and
 authenticated Nearby bytes across Swift, Kotlin, and Java. Its one-byte body is
-not semantically valid and must not be passed to the typed adapter. From this
+legacy compatibility data and is not a product payload. From this
 directory, run both portable and Android adapter coverage with:
 
 ```bash
@@ -437,15 +429,13 @@ Malformed or schema-expanded terminal envelopes fail closed as
 A reconnect to either canonical feed starts a new live subscription and can
 have a gap.
 
-### Kagemusha proof artifacts
+### Offline Cash V1 proof artifacts
 
-ABI V1 exposes no generic shield, shielded-transfer, or unshield instruction or
-native signer method; confidential movement uses the typed Kagemusha lifecycle.
-`core-jvm` exposes the exact native bridge ABI 22 and Kagemusha V4 typed init, fractional append/change,
-verification, and redemption builders through the fixed native surface. It also provides exact
-scaled amounts, V4 artifact streaming and backend-capability checks, plus the sole current
-`DeviceAttestationRegistration` / `RegisterOfflineDeviceAttestation` transaction path. The latter
-validates finalized platform material and emits exactly one native registration instruction.
+The exact ABI22 Kagemusha V4 builders, scaled amounts, artifact streaming,
+attestation registration, and PKK2/PKKQ1 transport models remain internal
+implementation substrate. Kotlin applications use the public Offline Cash V1
+types, `OfflineCashPeerAdapterV1`, `OfflineCashQrStream*V1`, wallet session,
+artifact installer, and device lifecycle bridge.
 
 The clean Offline Cash V1 lifecycle additionally requires one rollback-resistant
 intent slot, an exact-next monetary counter, trusted time, authenticated terminal

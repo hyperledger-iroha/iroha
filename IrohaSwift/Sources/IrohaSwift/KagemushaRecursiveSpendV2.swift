@@ -9,7 +9,7 @@ import DeviceCheck
 import Darwin
 #endif
 
-public enum KagemushaRecursiveSpendError: Error, Equatable, LocalizedError {
+package enum KagemushaRecursiveSpendError: Error, Equatable, LocalizedError {
     case invalidField(String)
     case invalidArchive(String)
     case nativeBridgeUnavailable
@@ -58,7 +58,7 @@ enum KagemushaRecursiveSpendWorkerPermit {
 /// Exact capability record returned by the explicitly versioned ABI-22/V4
 /// bridge. Older capability archives cannot be reinterpreted as permission to
 /// invoke this prover.
-public struct KagemushaRecursiveSpendNativeCapabilitiesV4: Equatable, Sendable {
+package struct KagemushaRecursiveSpendNativeCapabilitiesV4: Equatable, Sendable {
     public let bridgeABIVersion: UInt32
     public let artifactManifestSchema: String
     public let proofBackend: String
@@ -128,7 +128,7 @@ public struct KagemushaRecursiveSpendNativeCapabilitiesV4: Equatable, Sendable {
     }
 }
 
-public enum KagemushaRecursiveSpend {
+package enum KagemushaRecursiveSpend {
     /// Exact verifier-registry roles carried by the five readiness fields.
     /// A field is valid only for its matching role and circuit; roles are not
     /// interchangeable even though Torii uses one common record shape.
@@ -751,7 +751,7 @@ public enum KagemushaRecursiveSpend {
 
 }
 
-public struct KagemushaPublicKey: Equatable, Hashable, Sendable {
+package struct KagemushaPublicKey: Equatable, Hashable, Sendable {
     public let algorithm: UInt8
     public let payload: Data
 
@@ -772,7 +772,7 @@ public struct KagemushaPublicKey: Equatable, Hashable, Sendable {
 ///
 /// The protocol accepts exactly one canonical uncompressed SEC1 NIST P-256
 /// point (`0x04 || x || y`). It intentionally has no algorithm selector.
-public struct KagemushaDevicePublicKeyV2: Equatable, Hashable, Sendable {
+package struct KagemushaDevicePublicKeyV2: Equatable, Hashable, Sendable {
     public static let sec1ByteCount = 65
     public let sec1Bytes: Data
 
@@ -813,7 +813,7 @@ public struct KagemushaDevicePublicKeyV2: Equatable, Hashable, Sendable {
 }
 
 /// Canonical fixed-width low-S ECDSA-P256-SHA256 device signature (`r || s`).
-public struct KagemushaDeviceSignatureV2: Equatable, Hashable, Sendable {
+package struct KagemushaDeviceSignatureV2: Equatable, Hashable, Sendable {
     public static let rawByteCount = 64
     private static let scalarByteCount = 32
     private static let order = Data([
@@ -899,7 +899,7 @@ public struct KagemushaDeviceSignatureV2: Equatable, Hashable, Sendable {
     }
 }
 
-public struct KagemushaSpendableNoteDescriptor: Equatable, Hashable, Sendable {
+package struct KagemushaSpendableNoteDescriptor: Equatable, Hashable, Sendable {
     public let networkID: NetworkId
     public let assetDefinitionID: String
     public let noteCommitment: Data
@@ -947,7 +947,7 @@ public struct KagemushaSpendableNoteDescriptor: Equatable, Hashable, Sendable {
 /// state should persist that key's secure reference once and store only the
 /// note-specific rho and diversifier beside each note; this value is the
 /// transient bridge-bound reconstruction.
-public struct KagemushaNoteOpening: Equatable, Sendable {
+package struct KagemushaNoteOpening: Equatable, Sendable {
     public let spendKey: Data
     public let rho: Data
     public let diversifier: Data
@@ -977,7 +977,7 @@ public struct KagemushaNoteOpening: Equatable, Sendable {
 /// mandatory dummy slot and never authorizes a second parent. This local
 /// archive is never sent to Torii; the public data-model form is embedded beside
 /// a recipient bundle so the receiver can persist independently spendable cash.
-public struct KagemushaNoteMembershipWitness: Equatable, Sendable {
+package struct KagemushaNoteMembershipWitness: Equatable, Sendable {
     public let leafIndex: UInt32
     public let inputPath: PrivacyConfidentialMerklePathWitnessV2
     public let dummyInputPath: PrivacyConfidentialMerklePathWitnessV2
@@ -1031,7 +1031,7 @@ public struct KagemushaNoteMembershipWitness: Equatable, Sendable {
 /// Paths proving that one confidential output was inserted and remains a
 /// member of the tree after the complete operation. Commitments are omitted:
 /// native code derives and binds them from the finalized operation.
-public struct KagemushaConfidentialVerifierBinding: Equatable, Sendable {
+package struct KagemushaConfidentialVerifierBinding: Equatable, Sendable {
     public let role: KagemushaRecursiveSpend.VerifierRole
     public let backend: String
     public let name: String
@@ -1087,7 +1087,7 @@ public struct KagemushaConfidentialVerifierBinding: Equatable, Sendable {
     var identifier: String { "\(backend):\(name)" }
 }
 
-public struct KagemushaRecipientOutputDerivationRequest: Equatable, Sendable {
+package struct KagemushaRecipientOutputDerivationRequest: Equatable, Sendable {
     public let networkID: NetworkId
     public let assetDefinitionID: String
     public let amount: KagemushaScaledAmount
@@ -1131,7 +1131,7 @@ public struct KagemushaRecipientOutputDerivationRequest: Equatable, Sendable {
     }
 }
 
-public struct KagemushaRecipientOutputDerivationResult: Equatable, Sendable {
+package struct KagemushaRecipientOutputDerivationResult: Equatable, Sendable {
     public let recipientOutput: KagemushaSpendableNoteDescriptor
     /// Opaque sender-prover archive containing only amount, rho, and owner tag.
     /// Carry this unchanged in the signed peer request; never interpret it in wallet code.
@@ -1159,7 +1159,7 @@ public struct KagemushaRecipientOutputDerivationResult: Equatable, Sendable {
     }
 }
 
-public struct KagemushaRecursiveSpendBranchPath: Equatable, Hashable, Sendable {
+package struct KagemushaRecursiveSpendBranchPath: Equatable, Hashable, Sendable {
     public static let maximumDepth: UInt8 = 64
     public let lineageRoot: Data
     public let depth: UInt8
@@ -1256,7 +1256,7 @@ public struct KagemushaRecursiveSpendBranchPath: Equatable, Hashable, Sendable {
 /// edge. Each tag is the domain-separated 192-bit prefix of the producing
 /// proof-bound 256-bit transition digest. Swift exposes one `Data` per tag;
 /// Norito concatenates them into a single exact-depth byte vector.
-public struct KagemushaRecursiveSpendBranchClaim: Equatable, Hashable, Sendable {
+package struct KagemushaRecursiveSpendBranchClaim: Equatable, Hashable, Sendable {
     public let path: KagemushaRecursiveSpendBranchPath
     public let transitionTags: [Data]
 
@@ -1308,7 +1308,7 @@ public struct KagemushaRecursiveSpendBranchClaim: Equatable, Hashable, Sendable 
     }
 }
 
-public struct KagemushaRecipientPaymentRequestSigningPayload: Equatable, Sendable {
+package struct KagemushaRecipientPaymentRequestSigningPayload: Equatable, Sendable {
     public let networkID: NetworkId
     public let assetDefinitionID: String
     public let amount: KagemushaScaledAmount
@@ -1407,7 +1407,7 @@ public struct KagemushaRecipientPaymentRequestSigningPayload: Equatable, Sendabl
     }
 }
 
-public struct KagemushaRecipientPaymentRequest: Equatable, Sendable {
+package struct KagemushaRecipientPaymentRequest: Equatable, Sendable {
     public let payload: KagemushaRecipientPaymentRequestSigningPayload
     public let signature: KagemushaDeviceSignatureV2
     public let archive: Data
@@ -1443,7 +1443,7 @@ public struct KagemushaRecipientPaymentRequest: Equatable, Sendable {
     }
 }
 
-public struct KagemushaVerifiedRecipientPaymentRequest: Equatable, Sendable {
+package struct KagemushaVerifiedRecipientPaymentRequest: Equatable, Sendable {
     public let request: KagemushaRecipientPaymentRequest
     public let digest: Data
     public let verifiedAtMilliseconds: UInt64
@@ -1464,7 +1464,7 @@ public struct KagemushaVerifiedRecipientPaymentRequest: Equatable, Sendable {
 /// The discriminants are part of the local preparation ABI and must stay in
 /// lockstep with `KagemushaRequestAuthorizationPlatformV2` in the native
 /// bridge. There is intentionally no stringly-typed fallback variant.
-public enum KagemushaOnlineHardwareAssertionPlatform: UInt32, Equatable, Hashable, Sendable {
+package enum KagemushaOnlineHardwareAssertionPlatform: UInt32, Equatable, Hashable, Sendable {
     case androidKeyMint = 0
     case iosAppAttest = 1
 
@@ -1481,7 +1481,7 @@ public enum KagemushaOnlineHardwareAssertionPlatform: UInt32, Equatable, Hashabl
 /// Canonical hardware assertion returned by the native authorization finalizer.
 /// Platform APIs emit strict ASN.1 DER; the native boundary converts that DER
 /// to the unique low-S `r || s` representation stored here and on the wire.
-public enum KagemushaOnlineHardwareAssertion: Equatable, Sendable {
+package enum KagemushaOnlineHardwareAssertion: Equatable, Sendable {
     case androidKeyMint(signature: KagemushaDeviceSignatureV2)
     case iosAppAttest(
         authenticatorData: Data,
@@ -1519,7 +1519,7 @@ public enum KagemushaOnlineHardwareAssertion: Equatable, Sendable {
 /// Unsigned public fields of the self-contained hardware authorization used by
 /// online top-up and redemption. Private keys, DER signatures, and App Attest
 /// assertion bytes are deliberately absent from this value.
-public struct KagemushaRequestAuthorizationFields: Equatable, Sendable {
+package struct KagemushaRequestAuthorizationFields: Equatable, Sendable {
     public let authority: String
     public let deviceID: String
     public let assetDefinitionID: String
@@ -1602,7 +1602,7 @@ public struct KagemushaRequestAuthorizationFields: Equatable, Sendable {
 /// Opaque native-checked unsigned authorization retained across one hardware
 /// signing call. It is not a `KagemushaRequestAuthorizationV2` archive and can
 /// never be submitted as a signed authorization.
-public struct KagemushaRequestAuthorizationPreparation: Equatable, Sendable {
+package struct KagemushaRequestAuthorizationPreparation: Equatable, Sendable {
     public let fields: KagemushaRequestAuthorizationFields
     public let signingBytes: Data
     let preparationArchive: Data
@@ -1805,7 +1805,7 @@ public struct KagemushaRequestAuthorizationPreparation: Equatable, Sendable {
     }
 }
 
-public struct KagemushaRequestAuthorization: Equatable, Sendable {
+package struct KagemushaRequestAuthorization: Equatable, Sendable {
     public let fields: KagemushaRequestAuthorizationFields
     public let hardwareAssertion: KagemushaOnlineHardwareAssertion
     public let archive: Data
@@ -1840,7 +1840,7 @@ public struct KagemushaRequestAuthorization: Equatable, Sendable {
 /// The request must be built from Torii's verified `next_zero_path` snapshot.
 /// It contains note secrets and therefore must never be persisted, logged, or
 /// submitted to Torii; native code returns only the canonical unsigned top-up.
-public struct KagemushaTopUpShieldEvidence: Equatable, Sendable {
+package struct KagemushaTopUpShieldEvidence: Equatable, Sendable {
     public let initialRoot: Data
     public let finalizedRoot: Data
     public let leafIndex: UInt32
@@ -1869,7 +1869,7 @@ public struct KagemushaTopUpShieldEvidence: Equatable, Sendable {
     }
 }
 
-public struct KagemushaTopUpFinalityProofArchive: Equatable, Sendable {
+package struct KagemushaTopUpFinalityProofArchive: Equatable, Sendable {
     public let noritoArchive: Data
 
     public init(noritoArchive: Data) throws {
@@ -1892,7 +1892,7 @@ public struct KagemushaTopUpFinalityProofArchive: Equatable, Sendable {
 /// The artifact is opaque to application code. Native verification validates
 /// its exact authenticated SHA-256, network id, activation windows, ordered BLS
 /// keys, PoPs, and generation.
-public struct KagemushaTopUpFinalityRosterArtifactArchive: Equatable, Sendable {
+package struct KagemushaTopUpFinalityRosterArtifactArchive: Equatable, Sendable {
     public let noritoArchive: Data
 
     public init(noritoArchive: Data) throws {
@@ -1914,7 +1914,7 @@ public struct KagemushaTopUpFinalityRosterArtifactArchive: Equatable, Sendable {
 
 /// Canonical authenticated V4 release manifest passed opaquely to the native
 /// artifact loader. Application code never derives proof parameters from it.
-public struct KagemushaRecursiveSpendArtifactManifestArchive: Equatable, Sendable {
+package struct KagemushaRecursiveSpendArtifactManifestArchive: Equatable, Sendable {
     public let noritoArchive: Data
     public let sha256: Data
 
@@ -1937,7 +1937,7 @@ public struct KagemushaRecursiveSpendArtifactManifestArchive: Equatable, Sendabl
 }
 
 /// Installed ABI-22/V4 generation bound to its authenticated manifest.
-public struct KagemushaRecursiveSpendInstalledArtifactSetV4: Equatable, Sendable {
+package struct KagemushaRecursiveSpendInstalledArtifactSetV4: Equatable, Sendable {
     public let binding: KagemushaRecursiveSpendArtifactBindingV4
     public let manifest: KagemushaRecursiveSpendArtifactManifestArchive
 
@@ -1967,7 +1967,7 @@ public struct KagemushaRecursiveSpendInstalledArtifactSetV4: Equatable, Sendable
 }
 
 /// Receiver acknowledgement shared unchanged by the V4 peer-payment flow.
-public struct KagemushaReceiverAcknowledgementPayload: Equatable, Sendable {
+package struct KagemushaReceiverAcknowledgementPayload: Equatable, Sendable {
     public let operationID: Data
     public let recipientRequestDigest: Data
     public let paymentBundleDigest: Data
@@ -2030,7 +2030,7 @@ public struct KagemushaReceiverAcknowledgementPayload: Equatable, Sendable {
     }
 }
 
-public struct KagemushaReceiverAcknowledgement: Equatable, Sendable {
+package struct KagemushaReceiverAcknowledgement: Equatable, Sendable {
     public let payload: KagemushaReceiverAcknowledgementPayload
     public let signature: KagemushaDeviceSignatureV2
     public let archive: Data
@@ -2103,7 +2103,7 @@ public struct KagemushaReceiverAcknowledgement: Equatable, Sendable {
     }
 }
 
-public struct KagemushaReceiverAcknowledgementVerifyResult: Equatable, Sendable {
+package struct KagemushaReceiverAcknowledgementVerifyResult: Equatable, Sendable {
     public let valid: Bool
     public let operationID: Data
     public let recipientRequestDigest: Data
@@ -2111,7 +2111,7 @@ public struct KagemushaReceiverAcknowledgementVerifyResult: Equatable, Sendable 
     public let acknowledgementDigest: Data
 }
 
-public enum KagemushaRecursiveSpendArtifactRoleV4: Int, CaseIterable, Sendable {
+package enum KagemushaRecursiveSpendArtifactRoleV4: Int, CaseIterable, Sendable {
     case stepEqParamsIpa
     case stepEqProvingKey
     case stepEqVerifyingKey
@@ -2126,7 +2126,7 @@ public enum KagemushaRecursiveSpendArtifactRoleV4: Int, CaseIterable, Sendable {
     }
 }
 
-public final class KagemushaRecursiveSpendArtifactIngest: @unchecked Sendable {
+package final class KagemushaRecursiveSpendArtifactIngest: @unchecked Sendable {
     public let role: KagemushaRecursiveSpendArtifactRoleV4
     public let manifest: KagemushaRecursiveSpendArtifactManifestArchive
     public let artifactSHA256: Data
@@ -2291,7 +2291,7 @@ public final class KagemushaRecursiveSpendArtifactIngest: @unchecked Sendable {
 /// it must never be accepted from the same downloaded bundle as the manifest.
 /// Native also authenticates the runner-signed internal-validation receipt before
 /// it consumes any finalized artifact handle.
-public struct KagemushaRecursiveSpendReleaseAuthenticationV4: Sendable {
+package struct KagemushaRecursiveSpendReleaseAuthenticationV4: Sendable {
     public let trustedPolicyNorito: Data
     public let releaseAttestationNorito: Data
     public let internalValidationReceiptNorito: Data
@@ -2348,7 +2348,7 @@ public struct KagemushaRecursiveSpendReleaseAuthenticationV4: Sendable {
 /// Each artifact is still streamed independently, but `install()` is the only
 /// operation that transfers ownership to the prover. Native resolves the
 /// required files from the manifest and either consumes the complete set or none.
-public final class KagemushaRecursiveSpendArtifactInstallSessionV4: @unchecked Sendable {
+package final class KagemushaRecursiveSpendArtifactInstallSessionV4: @unchecked Sendable {
     public let manifest: KagemushaRecursiveSpendArtifactManifestArchive
     public let binding: KagemushaRecursiveSpendArtifactBindingV4
     public let authentication: KagemushaRecursiveSpendReleaseAuthenticationV4

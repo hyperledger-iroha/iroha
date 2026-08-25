@@ -525,19 +525,13 @@ The application entry points are:
   `IrohaPeerNfcReaderExchangeV1.run(...)` directly, preserving both durable
   checkpoint callbacks.
 
-The bounded Retail V1 Kagemusha handoff uses profile `2` and only schema `0x0102`.
-`IrohaPeerKagemushaAdapterV1` rejects every other schema before invoking the
-native archive decoder, and its IPM1 adapter fails explicitly above the 24,576
-byte whole-offer body ceiling (24,660 bytes with the IPM1 header). The
-independent ABI22 APIs remain
-`KagemushaQRStreamCodec`, `KagemushaNFCProtocol`, and
-`KagemushaNearbyExchange`, with distinct `PKK2*`/`PKKQ1`, the canonical
-`F0504B45504B524E464301` SDK NFC AID, and
-Bonjour/Multipeer identifiers. They are never negotiated, reinterpreted, or
-used as fallback for Retail V1. Full QR, NFC, and native ABI22 archives up to
-32 MiB continue to use those rails; Kagemusha Nearby's JSON/text envelope has
-its own smaller bound. The profile identifier must not be used for a different
-sidecar or demo encoding.
+Profile `2` / schema `0x0102` and the legacy PKK2/PKKQ1 QR, NFC, Nearby, typed
+adapter, and recursive-spend codecs remain package-internal compatibility
+substrate. They are not exported to applications and must not be used as a
+product transport. The sole public product handoff is Offline Cash V1: profile
+`3` / schema `0x0100`, canonical `kgm2:` text, `OfflineCashPeerAdapterV1`, and
+`OfflineCashQRStreamV1`. Generic IPM1 framing remains public for protocol
+plumbing, but it does not expose the retained profile-2 typed transport.
 
 This transport hardening is client-side and requires no backend API change.
 
@@ -554,35 +548,26 @@ swift test --disable-automatic-resolution --filter KagemushaPeerTransportTests
 See the [peer transport V1 guide](../specs/peer_transport_v1.md) for byte
 layouts, fixture hashes, Android permissions, and durability boundaries.
 
-### Kagemusha offline cash lifecycle
+### Offline Cash V1 lifecycle
 
-IrohaSwift exposes only Kagemusha offline cash. There is no runtime product-mode
+IrohaSwift exposes only the Offline Cash V1 product lifecycle. There is no runtime product-mode
 field or wallet-selectable offline API. The native artifact wire contract is
 authenticated internally and is not another public API. It has no `mode` field;
 the manifest schema/version, ABI, proof backend, transcript, and circuit IDs
 identify the exact contract.
 
-Use the typed `KagemushaRecursiveSpend` and
-`KagemushaRecursiveSpendCodecs` APIs for top-up, recipient-request creation,
-split/append, receiver verification and acknowledgement, and full or partial
-redemption. Amounts are canonical atomic `u128` values paired with the
-asset-definition scale; callers must reject excess decimal precision instead of
-rounding.
+Use `OfflineCashPaymentRequestV1`, `OfflineCashPaymentV1`,
+`OfflineCashAcknowledgementV1`, `OfflineCashWalletSessionV1`, and
+`OfflineCashPeerAdapterV1` for product flows. The retained recursive-spend
+builders, prover bindings, PKK2/PKKQ1 models, and legacy top-up/redeem Torii
+helpers are package-internal implementation details.
 
 Wallet applications own encrypted note state and peer transport. Persist the
-opaque bundle, recipient output, optional sender change, artifact binding, and
-operation status at each commit boundary. Fetch the complete ABI-22/V4 artifact set,
-wrap each one-shot source in `KagemushaRecursiveSpendArtifactStream`, and acquire
-it through a `KagemushaRecursiveSpendArtifactCoordinator` created with
-`.authenticated(...)` from deployment-provisioned release trust. Keep every proof
-operation inside the returned lease's `withInstalledArtifactSet` callback. The
-coordinator verifies the exact manifest generation and eight-file inventory:
-`ParamsIPA`, processed proving key, processed verifying key, and final-key
-selector-zero bootstrap witness for each Eq/Ep parity. The two bounded circuit
-parameter records are authenticated inline in the manifest rather than streamed
-as extra files. The coordinator verifies lengths, offsets, and digests;
-serializes install, use, rotation, and uninstall; and fails stale leases closed.
-No network or artifact access belongs on the offline send or receive path.
+opaque session material and operation status at each commit boundary. Install
+the complete authenticated Offline Cash V1 artifact inventory through
+`OfflineCashArtifactSetInstallerV1`; no legacy artifact coordinator or prover
+type is part of the application API. No network or artifact access belongs on
+the offline send or receive path.
 
 The clean Offline Cash V1 state machine additionally requires a platform service
 with one rollback-resistant intent slot, an exact-next monetary counter, trusted

@@ -5,7 +5,7 @@ import java.util.Base64;
 import java.util.Objects;
 
 /** Canonical first-release Kagemusha peer identifiers and PKK2R/P/A text envelopes. */
-public final class KagemushaPeerTransport {
+final class KagemushaPeerTransport {
   public static final String RECEIVE_REQUEST_TEXT_PREFIX = "PKK2R.";
   public static final String PAYMENT_TEXT_PREFIX = "PKK2P.";
   public static final String ACKNOWLEDGEMENT_TEXT_PREFIX = "PKK2A.";

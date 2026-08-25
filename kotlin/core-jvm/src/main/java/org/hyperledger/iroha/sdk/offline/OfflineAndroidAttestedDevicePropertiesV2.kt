@@ -4,7 +4,7 @@
 package org.hyperledger.iroha.sdk.offline
 
 /** Hardware boundary authenticated by an Android Key Attestation leaf. */
-enum class OfflineAndroidDeviceSecurityLevelV2(internal val noritoDiscriminant: Long) {
+internal enum class OfflineAndroidDeviceSecurityLevelV2(internal val noritoDiscriminant: Long) {
     TRUSTED_ENVIRONMENT(0),
     STRONG_BOX(1),
 }
@@ -16,7 +16,7 @@ enum class OfflineAndroidDeviceSecurityLevelV2(internal val noritoDiscriminant: 
  * after key generation. Core compares this submitted snapshot with the certificate chain before
  * admitting the registration.
  */
-class OfflineAndroidAttestedDevicePropertiesV2(
+internal class OfflineAndroidAttestedDevicePropertiesV2(
     val version: Int,
     val attestationVersion: Long,
     val keymintVersion: Long,

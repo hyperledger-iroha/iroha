@@ -9,6 +9,7 @@ import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertThrows;
 import static org.junit.Assert.assertTrue;
 
+import java.lang.reflect.Modifier;
 import java.security.GeneralSecurityException;
 import java.security.KeyPair;
 import java.security.KeyPairGenerator;
@@ -23,6 +24,11 @@ import org.junit.Test;
 
 /** Exact argument and signature-flow tests for the physical Android KeyMint profile. */
 public final class KagemushaAndroidKeyMintTests {
+
+  @Test
+  public void keyMintImplementationIsNotPartOfThePublicJavaApi() {
+    assertFalse(Modifier.isPublic(KagemushaAndroidKeyMint.class.getModifiers()));
+  }
 
   @Test
   public void highLevelRegistrationDerivesAndUsesTheExactPreKeyChallenge() throws Exception {

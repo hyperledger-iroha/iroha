@@ -1,7 +1,7 @@
 import CryptoKit
 import Foundation
 
-public enum KagemushaQRStreamError: Error, Equatable, LocalizedError, Sendable {
+package enum KagemushaQRStreamError: Error, Equatable, LocalizedError, Sendable {
     case invalidOptions
     case payloadTooLarge(actual: Int, maximum: Int)
     case malformedFrame
@@ -42,7 +42,7 @@ public enum KagemushaQRStreamError: Error, Equatable, LocalizedError, Sendable {
     }
 }
 
-public struct KagemushaQRStreamOptions: Equatable, Sendable {
+package struct KagemushaQRStreamOptions: Equatable, Sendable {
     public static let minimumChunkSize = 64
     public static let maximumChunkSize = 512
     public static let minimumParityGroup = 2
@@ -70,7 +70,7 @@ public struct KagemushaQRStreamOptions: Equatable, Sendable {
     }
 }
 
-public struct KagemushaQRDecodeResult: Equatable, Sendable {
+package struct KagemushaQRDecodeResult: Equatable, Sendable {
     public let payload: KagemushaPeerPayload?
     public let payloadKind: KagemushaPeerPayloadKind?
     public let receivedDataFrames: Int
@@ -88,7 +88,7 @@ public struct KagemushaQRDecodeResult: Equatable, Sendable {
 /// Fixed-XOR parity QR framing for canonical Kagemusha peer archives.
 ///
 /// Each parity frame recovers at most one missing chunk in its fixed group.
-public enum KagemushaQRStreamCodec {
+package enum KagemushaQRStreamCodec {
     /// Exact upper bound for an unpadded base64url frame, including `PKKQ1.`.
     /// This is checked before allocating the decoded frame bytes.
     static let maximumFrameTextBytes =
@@ -178,7 +178,7 @@ public enum KagemushaQRStreamCodec {
     }
 }
 
-public final class KagemushaQRStreamDecoder: @unchecked Sendable {
+package final class KagemushaQRStreamDecoder: @unchecked Sendable {
     private static let maximumDataFrames =
         (KagemushaPeerTransportContract.maximumArchiveBytes
             + KagemushaQRStreamOptions.minimumChunkSize - 1)

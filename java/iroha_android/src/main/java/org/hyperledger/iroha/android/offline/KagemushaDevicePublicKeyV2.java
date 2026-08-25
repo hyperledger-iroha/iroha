@@ -6,7 +6,7 @@ package org.hyperledger.iroha.android.offline;
 import java.util.Arrays;
 
 /** Immutable canonical 65-byte uncompressed P-256 Kagemusha device public key. */
-public final class KagemushaDevicePublicKeyV2 {
+final class KagemushaDevicePublicKeyV2 {
   private final byte[] value;
 
   public KagemushaDevicePublicKeyV2(final byte[] sec1Bytes) {

@@ -4,7 +4,7 @@
 package org.hyperledger.iroha.android.offline;
 
 /** Hardware boundary authenticated by an Android Key Attestation leaf. */
-public enum OfflineAndroidDeviceSecurityLevelV2 {
+enum OfflineAndroidDeviceSecurityLevelV2 {
   TRUSTED_ENVIRONMENT(0),
   STRONG_BOX(1);
 

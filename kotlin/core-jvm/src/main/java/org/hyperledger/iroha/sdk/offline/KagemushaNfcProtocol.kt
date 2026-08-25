@@ -2,7 +2,7 @@ package org.hyperledger.iroha.sdk.offline
 
 import java.security.MessageDigest
 
-class KagemushaNfcPayloadInfo(
+internal class KagemushaNfcPayloadInfo(
     val transportVersion: Int,
     val kind: KagemushaPeerPayloadKind,
     val payloadLength: Int,
@@ -20,7 +20,7 @@ class KagemushaNfcPayloadInfo(
     override fun hashCode(): Int = 31 * kind.hashCode() + digest.contentHashCode()
 }
 
-sealed class KagemushaNfcCommand {
+internal sealed class KagemushaNfcCommand {
     data object Select : KagemushaNfcCommand()
     data object SelectOtherApplication : KagemushaNfcCommand()
     data object GetInfo : KagemushaNfcCommand()
@@ -49,7 +49,7 @@ sealed class KagemushaNfcCommand {
     data object Invalid : KagemushaNfcCommand()
 }
 
-object KagemushaNfcProtocol {
+internal object KagemushaNfcProtocol {
     const val RAW_TRANSPORT_VERSION = 4
     const val MINIMUM_APPLICATION_IDENTIFIER_BYTES = 5
     const val MAXIMUM_APPLICATION_IDENTIFIER_BYTES = 16
@@ -369,7 +369,7 @@ object KagemushaNfcProtocol {
         require(length in 1..maximum) { "Invalid NFC chunk length" }
 }
 
-class KagemushaNfcPayloadAssembler(
+internal class KagemushaNfcPayloadAssembler(
     val kind: KagemushaPeerPayloadKind,
     val expectedLength: Int,
     expectedSha256: ByteArray,

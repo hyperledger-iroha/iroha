@@ -254,25 +254,16 @@ dependencies, so Java and Kotlin do not maintain divergent cryptographic or
 APDU implementations. The shared vector is
 `../../fixtures/offline/kagemusha_peer_transport_v2.json`.
 
-IPM1 admits profile `2` / schema `0x0102` as a 24,576-byte bounded handoff for
-a mainline typed Kagemusha V4 native archive. Profile `3` / schema `0x0100`
-carries only exact canonical `kgm2:` Offline Cash V1 text. Its
+IPM1 retains profile `2` / schema `0x0102` only as package-private compatibility
+substrate. Its typed Kagemusha adapter and PKK2/PKKQ1 QR, NFC, and Nearby
+facades are not Java application APIs. Profile `3` / schema `0x0100` carries
+the sole public product transport: exact canonical `kgm2:` Offline Cash V1 text. Its
 request/payment/ACK raw maxima are 768/7,936/256 bytes and text maxima are
 1,029/10,587/347 bytes; 9,211 raw and 12,288 text are aggregate session caps,
 not per-message limits. Generic IPM validates canonical framing without native
 code; production code then performs deeper semantic decoding through the typed
-adapter. Mobile native calls cross ABI22 while Kagemusha's protocol/data ABI
-remains V4. Full V4
-QR/NFC/native archives up to 32 MiB continue to use the independent
-`KagemushaQrStream`, `KagemushaNfcProtocol`, and `KagemushaNearby`
-facades. Kagemusha retains its distinct `PKK2*`/`PKKQ1` text and Bonjour
-identifiers, while NFC uses the sole canonical AID
-`F0504B45504B524E464301`. Nearby uses the authenticated binary `PKNB1`
-envelope and its own smaller bound. Those rails are never negotiated,
-reinterpreted, or used as fallback for IPM1. The
-no-untyped-raw-text/no-unauthenticated-Nearby rule applies to `IrohaPeer*V1`;
-the retained V4 family also has no old AID. Do not use profile `2` for a
-sidecar/demo representation.
+Offline Cash adapter supplied by the transitive Kotlin SDK. Do not use retained
+profile `2` for a product, sidecar, or demo representation.
 
 These transport changes are client-side and require no backend API change.
 
@@ -408,26 +399,14 @@ System.out.println(formats.i105Warning);
 Use `displayFormats()` whenever UI layers need to render or copy addresses so the warning text and
 network prefix stay aligned with `specs/sns/address_display_guidelines.md`.
 
-## Kagemusha proof artifacts and device registration
+## Offline Cash V1 proof artifacts and device registration
 
-ABI V1 exposes no generic shield, shielded-transfer, or unshield instruction or
-native signer method; confidential movement uses the typed Kagemusha lifecycle.
-The Android/JVM offline surface has exactly two current pieces. `KagemushaRecursiveSpendProver`
-requires native bridge ABI 22, streams the eight authenticated V4 proof artifacts into an atomic
-generation install, and exposes typed `initSpendV4`, `appendSpendV4`, `verifySpendV4`, and
-`buildRedeemV4` calls over the fixed native exports. `KagemushaScaledAmount` converts decimal input to positive
-`u128` atomic units exactly at the authoritative asset scale and never rounds. The standalone
-`DeviceAttestationRegistration` plus `RegisterOfflineDeviceAttestation` path validates finalized
-KeyMint/App Attest material and builds the exact one-instruction on-chain registration transaction.
-Android products remain fail-closed until the native proof backend reports available and the
-matching artifact generation is installed. The exact external inventory is `ParamsIPA`, processed
-proving key, processed verifying key, and final-key selector-zero bootstrap witness for each Eq/Ep
-parity. Bounded circuit parameters are authenticated inline in the V4 manifest, not streamed as
-extra artifacts. The protocol and JVM append builder accept one or two
-inputs and enforce an eight-peer-hop ceiling natively. Inputs are canonicalized by authenticated
-bundle digest; duplicate or conflicting exact-state branches fail closed. Peer request and
-acknowledgement signing expose only strict P-256 device key/signature wrappers; callers never pass
-native wire discriminants.
+Legacy Kagemusha recursive-spend, scaled-amount, attestation-registration, and
+PKK2/PKKQ1 transport classes remain package-private so the SDK can preserve its
+internal ABI22 implementation. They are not Java product APIs. Applications use
+the transitive Kotlin Offline Cash V1 facade for typed requests, payments,
+acknowledgements, `kgm2:` transport, wallet sessions, artifact installation, and
+device lifecycle discovery.
 
 The clean Offline Cash V1 state machine has a stronger device boundary than a
 single-use KeyMint signing key: one rollback-resistant intent slot, an exact-next
