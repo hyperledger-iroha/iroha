@@ -3053,8 +3053,9 @@ mod parliament_draft_response_validation_tests {
 
     #[test]
     fn attempt_read_state_payload_must_be_one_valid_bounded_norito_frame() {
-        let frame = norito::to_bytes_bounded(&42_u64, PARLIAMENT_ATTEMPT_READ_MAX_STATE_BYTES_V1)
-            .expect("encode Parliament read state fixture");
+        let frame =
+            norito::core::to_bytes_bounded(&42_u64, PARLIAMENT_ATTEMPT_READ_MAX_STATE_BYTES_V1)
+                .expect("encode Parliament read state fixture");
         assert!(validate_parliament_attempt_state_frame(&hex::encode(&frame)).is_ok());
 
         let mut corrupted = frame;
@@ -3231,10 +3232,10 @@ fn validate_deploy_contract_proposal_draft_response(
     Ok(())
 }
 
-fn sccp_route_governance_proposal_id(
+fn sccp_route_governance_proposal_kind(
     network_id: iroha_data_model::NetworkId,
     action: &iroha_data_model::isi::bridge::SccpRouteGovernanceActionV1,
-) -> [u8; 32] {
+) -> iroha_data_model::governance::types::ProposalKind {
     use iroha_data_model::governance::types::{ProposalKind, SccpRouteGovernanceProposal};
     let anchor = iroha_data_model::isi::bridge::SccpRouteGovernanceAnchorV1 {
         network_id,
@@ -3243,21 +3244,21 @@ fn sccp_route_governance_proposal_id(
     ProposalKind::SccpRouteGovernance(SccpRouteGovernanceProposal {
         anchor: Box::new(anchor),
     })
-    .fingerprint()
 }
+
+fn sccp_route_governance_proposal_id(
+    network_id: iroha_data_model::NetworkId,
+    action: &iroha_data_model::isi::bridge::SccpRouteGovernanceActionV1,
+) -> [u8; 32] {
+    sccp_route_governance_proposal_kind(network_id, action).fingerprint()
+}
+
 fn validate_sccp_route_governance_draft_response(
     response: &SccpRouteGovernanceProposalDraftResponseV1,
     request: &SccpRouteGovernanceProposalDraftRequestV1,
     network_id: iroha_data_model::NetworkId,
 ) -> Result<()> {
-    use iroha_data_model::governance::types::{ProposalKind, SccpRouteGovernanceProposal};
-
-    let proposal = ProposalKind::SccpRouteGovernance(SccpRouteGovernanceProposal {
-        anchor: Box::new(iroha_data_model::isi::bridge::SccpRouteGovernanceAnchorV1 {
-            network_id,
-            action: request.action.clone(),
-        }),
-    });
+    let proposal = sccp_route_governance_proposal_kind(network_id, &request.action);
     if let Some(reason) = proposal.first_release_exact_json_u64_invariant_error() {
         return Err(eyre!(reason));
     }
@@ -16897,18 +16898,11 @@ impl Client {
         &self,
         request: &SccpRouteGovernanceProposalDraftRequestV1,
     ) -> Result<SccpRouteGovernanceProposalDraftResponseV1> {
-        use iroha_data_model::governance::types::{ProposalKind, SccpRouteGovernanceProposal};
-
         request
             .action
             .validate_static()
             .map_err(|error| eyre!("invalid SCCP route-governance action: {error}"))?;
-        let proposal = ProposalKind::SccpRouteGovernance(SccpRouteGovernanceProposal {
-            anchor: Box::new(iroha_data_model::isi::bridge::SccpRouteGovernanceAnchorV1 {
-                network_id: self.network_id,
-                action: request.action.clone(),
-            }),
-        });
+        let proposal = sccp_route_governance_proposal_kind(self.network_id, &request.action);
         if let Some(reason) = proposal.first_release_exact_json_u64_invariant_error() {
             return Err(eyre!(reason));
         }

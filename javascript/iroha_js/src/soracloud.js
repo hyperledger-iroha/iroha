@@ -190,20 +190,6 @@ export async function requestSoracloudAppInfraStatus(
   return client._maybeJson(response);
 }
 
-function normalizeSignedI32(value, field) {
-  if (!Number.isInteger(value) || value < -2147483648 || value > 2147483647) {
-    throw new TypeError(`${field} must be a signed 32-bit integer`);
-  }
-  return value;
-}
-
-function normalizeSignedI8(value, field) {
-  if (!Number.isInteger(value) || value < -128 || value > 127) {
-    throw new TypeError(`${field} must be a signed 8-bit integer`);
-  }
-  return value;
-}
-
 function normalizeArray(input, field) {
   const value = input?.[field];
   if (!Array.isArray(value)) {
@@ -273,70 +259,6 @@ function normalizePrivateArtifactRef(input, field, expectedRole) {
       `${field}.ciphertextBytes`,
     ),
     artifact_role: role,
-  };
-}
-
-function normalizeQuantizedCpuModel(input) {
-  const model = input?.model;
-  if (model == null || typeof model !== "object" || Array.isArray(model)) {
-    throw new TypeError("model must be an object");
-  }
-  rejectSoracloudSigningSecrets(model);
-  requireExactObject(model, "model", [
-    "inputLen",
-    "outputLen",
-    "weightsI8",
-    "biasI32",
-    "outputShift",
-    "outputMin",
-    "outputMax",
-  ]);
-  const inputLen = normalizeSafePositiveIntegerValue(
-    model.inputLen,
-    "model.inputLen",
-  );
-  const outputLen = normalizeSafePositiveIntegerValue(
-    model.outputLen,
-    "model.outputLen",
-  );
-  const weights = normalizeArray({ value: model.weightsI8 }, "value").map(
-    (value, index) => normalizeSignedI8(value, `model.weightsI8[${index}]`),
-  );
-  const bias = normalizeArray({ value: model.biasI32 }, "value").map(
-    (value, index) => normalizeSignedI32(value, `model.biasI32[${index}]`),
-  );
-  if (weights.length !== inputLen * outputLen) {
-    throw new TypeError("model.weightsI8 length must equal inputLen * outputLen");
-  }
-  if (bias.length !== outputLen) {
-    throw new TypeError("model.biasI32 length must equal outputLen");
-  }
-  const outputShift = normalizeSafeIntegerValue(
-    model.outputShift,
-    "model.outputShift",
-  );
-  if (outputShift > 30) {
-    throw new TypeError("model.outputShift must be <= 30");
-  }
-  const outputMin = normalizeSignedI32(
-    model.outputMin,
-    "model.outputMin",
-  );
-  const outputMax = normalizeSignedI32(
-    model.outputMax,
-    "model.outputMax",
-  );
-  if (outputMin > outputMax) {
-    throw new TypeError("model.outputMin must be <= model.outputMax");
-  }
-  return {
-    input_len: inputLen,
-    output_len: outputLen,
-    weights_i8: weights,
-    bias_i32: bias,
-    output_shift: outputShift,
-    output_min: outputMin,
-    output_max: outputMax,
   };
 }
 
@@ -989,12 +911,13 @@ export function assembleSoracloudHfDeployRequest(draft, provenances = {}) {
 }
 
 /**
- * Build a deterministic private uploaded-model execution request.
+ * Build a canonical private uploaded-model execution request.
  *
- * The helper only normalizes client-side request shape. It never accepts raw
- * signing secrets and does not submit the returned receipt instruction.
+ * Exactly one model selector is required. The committed decryption request
+ * authorizes the encrypted input artifact; model bytes, plaintext, execution
+ * claims, and output destinations are never accepted from the caller.
  *
- * @param {{ serviceName: string, weightVersion: string, modelId: string | null, modelName: string | null, bundleRoot: string | null, policyId: string, decryptionRequestId: string | null, model: { inputLen: number, outputLen: number, weightsI8: number[], biasI32: number[], outputShift: number, outputMin: number, outputMax: number }, plaintextInputI32: number[], inputArtifact: Record<string, unknown>, outputArtifact: Record<string, unknown>, emittedSequence: number | bigint | string }} input
+ * @param {{ serviceName: string, weightVersion: string, modelId: string | null, modelName: string | null, bundleRoot: string | null, decryptionRequestId: string, inputArtifact: Record<string, unknown> }} input
  * @returns {Record<string, unknown>}
  */
 export function buildSoracloudPrivateUploadedModelExecuteRequest(input = {}) {
@@ -1005,13 +928,8 @@ export function buildSoracloudPrivateUploadedModelExecuteRequest(input = {}) {
     "modelId",
     "modelName",
     "bundleRoot",
-    "policyId",
     "decryptionRequestId",
-    "model",
-    "plaintextInputI32",
     "inputArtifact",
-    "outputArtifact",
-    "emittedSequence",
   ]);
   const modelId = nullableString(input, "modelId");
   const modelName = nullableString(input, "modelName");
@@ -1019,25 +937,15 @@ export function buildSoracloudPrivateUploadedModelExecuteRequest(input = {}) {
     throw new TypeError("exactly one of modelId or modelName must be provided");
   }
   const bundleRoot = nullableString(input, "bundleRoot");
-  const decryptionRequestId = nullableString(input, "decryptionRequestId");
-  const plaintextInput = normalizeArray(input, "plaintextInputI32").map((value, index) =>
-    normalizeSignedI32(value, `plaintextInputI32[${index}]`),
-  );
-  const request = {
+  return {
     service_name: requireString(input, "serviceName"),
     weight_version: requireString(input, "weightVersion"),
     model_id: modelId,
     model_name: modelName,
     bundle_root: bundleRoot,
-    policy_id: requireString(input, "policyId"),
-    decryption_request_id: decryptionRequestId,
-    model: normalizeQuantizedCpuModel(input),
-    plaintext_input_i32: plaintextInput,
+    decryption_request_id: requireString(input, "decryptionRequestId"),
     input_artifact: normalizePrivateArtifactRef(input, "inputArtifact", "input"),
-    output_artifact: normalizePrivateArtifactRef(input, "outputArtifact", "output"),
-    emitted_sequence: normalizeSafePositiveInteger(input, "emittedSequence"),
   };
-  return request;
 }
 
 /**

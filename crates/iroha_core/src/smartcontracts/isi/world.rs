@@ -20424,6 +20424,7 @@ pub mod isi {
                 let $state = blank_state();
                 let $block = new_dummy_block();
                 let mut $state_block = $state.block($block.as_ref().header());
+                #[allow(unused_mut)]
                 let mut $stx = $state_block.transaction();
             };
         }

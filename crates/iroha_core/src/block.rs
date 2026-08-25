@@ -4178,9 +4178,7 @@ pub(crate) mod valid {
     fn collect_ready_soracloud_mailbox_messages(
         state_transaction: &StateTransaction<'_, '_>,
     ) -> Vec<SoraServiceMailboxMessageV1> {
-        let execution_sequence =
-            crate::smartcontracts::isi::soracloud::next_soracloud_audit_sequence(state_transaction)
-                .expect("test mailbox execution requires an available Soracloud audit sequence");
+        let observed_height = state_transaction.block_height();
         let consumed: BTreeSet<Hash> = state_transaction
             .world
             .soracloud_runtime_receipts
@@ -4195,18 +4193,18 @@ pub(crate) mod valid {
                 if consumed.contains(message_id) {
                     return None;
                 }
-                if message.available_after_sequence > execution_sequence {
+                if message.available_after_height > observed_height {
                     return None;
                 }
-                if message.expires_at_sequence <= execution_sequence {
+                if message.expires_at_height <= observed_height {
                     return None;
                 }
                 Some(message.clone())
             })
             .collect();
         messages.sort_unstable_by(|left, right| {
-            left.available_after_sequence
-                .cmp(&right.available_after_sequence)
+            left.available_after_height
+                .cmp(&right.available_after_height)
                 .then_with(|| left.enqueue_sequence.cmp(&right.enqueue_sequence))
                 .then_with(|| left.message_id.cmp(&right.message_id))
         });
@@ -4217,9 +4215,7 @@ pub(crate) mod valid {
         state_transaction: &StateTransaction<'_, '_>,
         service_name: &iroha_data_model::name::Name,
     ) -> u32 {
-        let current_sequence =
-            crate::smartcontracts::isi::soracloud::next_soracloud_audit_sequence(state_transaction)
-                .unwrap_or(u64::MAX);
+        let current_height = state_transaction.block_height();
         let consumed: BTreeSet<Hash> = state_transaction
             .world
             .soracloud_runtime_receipts
@@ -4234,7 +4230,7 @@ pub(crate) mod valid {
                 .filter(|(message_id, message)| {
                     !consumed.contains(message_id)
                         && message.to_service == *service_name
-                        && message.expires_at_sequence > current_sequence
+                        && message.expires_at_height > current_height
                 })
                 .count(),
         )
@@ -4259,11 +4255,10 @@ pub(crate) mod valid {
         );
         let receipt_id = Hash::new(
             format!(
-                "soracloud:runtime-failure-receipt:{}:{}:{}:{}:{}",
+                "soracloud:runtime-failure-receipt:{}:{}:{}:{}",
                 request.mailbox_message.message_id,
                 request.deployment.service_name,
                 request.deployment.current_service_version,
-                request.execution_sequence,
                 outcome_label,
             )
             .as_bytes(),
@@ -4275,18 +4270,8 @@ pub(crate) mod valid {
             health_status: SoraServiceHealthStatusV1::Degraded,
             load_factor_bps: 0,
             materialized_bundle_hash: request.bundle.container.bundle_hash,
-            rollout_handle: request
-                .deployment
-                .active_rollout
-                .as_ref()
-                .map(|rollout| rollout.rollout_handle.clone()),
-            pending_mailbox_message_count: request.authoritative_pending_mailbox_messages,
-            last_receipt_id: None,
         });
         runtime_state.health_status = SoraServiceHealthStatusV1::Degraded;
-        runtime_state.pending_mailbox_message_count = request
-            .authoritative_pending_mailbox_messages
-            .saturating_sub(1);
         SoracloudOrderedMailboxExecutionResult {
             state_mutations: Vec::new(),
             outbound_mailbox_messages: Vec::new(),
@@ -4307,7 +4292,7 @@ pub(crate) mod valid {
                 request_commitment: request.mailbox_message.payload_commitment,
                 result_commitment,
                 certified_by: iroha_data_model::soracloud::SoraCertifiedResponsePolicyV1::None,
-                emitted_sequence: request.execution_sequence,
+                emitted_sequence: 0,
                 mailbox_message_id: Some(request.mailbox_message.message_id),
                 journal_artifact_hash: None,
                 checkpoint_artifact_hash: None,
@@ -4366,10 +4351,10 @@ pub(crate) mod valid {
                 &receipt.request_commitment, &mailbox_message.payload_commitment
             ));
         }
-        if receipt.emitted_sequence != request.execution_sequence {
+        if receipt.emitted_sequence != 0 {
             return Err(format!(
-                "receipt emitted sequence `{}` does not match request execution sequence `{}`",
-                receipt.emitted_sequence, request.execution_sequence
+                "receipt emitted sequence `{}` is not the required submission sentinel",
+                receipt.emitted_sequence
             ));
         }
         Ok(())
@@ -4417,7 +4402,7 @@ pub(crate) mod valid {
                 observed_height: state_transaction.block_height(),
                 observed_block_hash: StateReadOnly::latest_block_hash(&state_transaction)
                     .map(Hash::from),
-                execution_sequence:
+                observed_sequence:
                     crate::smartcontracts::isi::soracloud::next_soracloud_audit_sequence(
                         &state_transaction,
                     )
@@ -4485,7 +4470,7 @@ pub(crate) mod valid {
                         None,
                         None,
                         runtime_receipt.receipt_id,
-                        request.execution_sequence,
+                        request.observed_sequence,
                     )
                 {
                     warn!(

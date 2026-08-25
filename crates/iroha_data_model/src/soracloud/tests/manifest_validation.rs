@@ -188,7 +188,7 @@ fn staged_service_and_container_v1_records_reject_unknown_fields() {
             queue_name: "updates".parse().expect("valid name"),
             max_pending_messages: NonZeroU32::new(8).expect("nonzero"),
             max_message_bytes: NonZeroU64::new(1024).expect("nonzero"),
-            retention_sequences: NonZeroU32::new(64).expect("nonzero"),
+            retention_blocks: NonZeroU32::new(64).expect("nonzero"),
         },
         SoraMailboxContractV1,
         "mailbox contract"
@@ -1773,11 +1773,11 @@ fn service_lease_v1_json_requires_explicit_null_empty_and_closed_fields() {
         quota_class: economics.quota_class,
         deployment_deposit: economics.deployment_deposit,
         prepaid_runtime_balance: economics.prepaid_runtime_balance,
-        runtime_price_per_sequence: economics.runtime_price_per_sequence,
-        storage_price_per_gib_sequence: economics.storage_price_per_gib_sequence,
+        runtime_price_per_block: economics.runtime_price_per_block,
+        storage_price_per_gib_block: economics.storage_price_per_gib_block,
         egress_price_per_mib: economics.egress_price_per_mib,
-        lease_started_sequence: 1,
-        lease_expires_sequence: 100,
+        lease_started_height: 1,
+        lease_expires_height: 100,
         reporting_epoch: 1,
         settled_egress_bytes: 0,
         egress_reporter_checkpoints: Vec::new(),
@@ -1791,18 +1791,30 @@ fn service_lease_v1_json_requires_explicit_null_empty_and_closed_fields() {
         storage_class: StorageClass::Warm,
         mount_path: "/".to_owned(),
         max_total_bytes: 8 * 1024 * 1024 * 1024,
-        lease_started_sequence: 1,
-        lease_expires_sequence: 100,
+        lease_started_height: 1,
+        lease_expires_height: 100,
         authoritative_generation: 1,
         last_materialized_sequence: None,
     };
     let checkpoint = SoraServiceLeaseEgressCheckpointV1 {
         reporting_epoch: 1,
-        active_service_version: "1.0.0".to_owned(),
-        replica_slot: 1,
-        validator_account_id: sample_account_id(202),
+        assignment: SoraServiceLeaseReporterAssignmentV1 {
+            schema_version: SORA_SERVICE_LEASE_REPORTER_ASSIGNMENT_VERSION_V1,
+            service_version: "1.0.0".to_owned(),
+            placement: SoraInrouReplicaPlacementV1 {
+                replica_slot: 1,
+                validator_account_id: sample_account_id(202),
+                peer_id: sample_peer_id(202),
+                selected_guest_isa: SoraInrouGuestIsaV1::X8664,
+                selected_geography_tag: None,
+                selection_latency_ms: None,
+            },
+            placement_reconciled_at_ms: 1,
+        },
         accounted_egress_bytes: 0,
+        last_updated_height: 1,
         finalize_reporter: false,
+        forced_finalization: false,
     };
 
     let lease_json = norito::json::to_value(&lease).expect("serialize service lease state");
@@ -1901,9 +1913,6 @@ fn service_runtime_state_validate_rejects_load_out_of_range() {
         health_status: SoraServiceHealthStatusV1::Healthy,
         load_factor_bps: 10_001,
         materialized_bundle_hash: sample_hash(160),
-        rollout_handle: Some("rollout-1".to_string()),
-        pending_mailbox_message_count: 2,
-        last_receipt_id: Some(sample_hash(161)),
     };
     let error = runtime_state
         .validate()
@@ -1916,14 +1925,30 @@ zero_prehash_field_rejection_test! {
     sample_service_runtime_state();
     materialized_bundle_hash = zero_digest =>
         ("materialized_bundle_hash", "materialized bundle placeholder hash must fail admission");
-    last_receipt_id = Some(zero_digest) =>
-        ("last_receipt_id", "last receipt placeholder hash must fail admission");
 }
 #[test]
 fn inrou_host_capability_record_validate_accepts_hosting_advert() {
     sample_inrou_host_capability_record()
         .validate()
         .expect("valid Inrou host capability advert should pass");
+}
+#[test]
+fn model_host_capability_record_rejects_peer_from_another_account() {
+    let mut capability = sample_model_host_capability_record();
+    capability.peer_id = sample_peer_id(0xC4);
+    let error = capability
+        .validate()
+        .expect_err("an HF host peer belonging to another account must fail");
+    assert_soracloud_invalid_field(error, "peer_id");
+}
+#[test]
+fn hf_placement_host_assignment_rejects_peer_from_another_account() {
+    let mut placement = sample_hf_placement_record();
+    placement.assigned_hosts[0].peer_id = sample_peer_id(0xC4);
+    let error = placement
+        .validate()
+        .expect_err("an HF placement peer belonging to another account must fail");
+    assert_soracloud_invalid_field(error, "peer_id");
 }
 #[test]
 fn inrou_host_capability_record_validate_rejects_zero_capacity() {
@@ -1976,6 +2001,19 @@ fn inrou_host_capability_record_validate_rejects_noncanonical_peer_id() {
     );
 }
 #[test]
+fn inrou_host_capability_record_rejects_peer_from_another_account() {
+    let mut capability = sample_inrou_host_capability_record();
+    capability.peer_id = sample_peer_id(0xD2);
+    let error = capability
+        .validate()
+        .expect_err("a canonical peer belonging to another account must fail");
+    assert_soracloud_invalid_field(error, "peer_id");
+    assert!(
+        !capability.can_host_replicas_at(capability.advertised_at_ms),
+        "mismatched account/peer attribution must never remain placement-eligible"
+    );
+}
+#[test]
 fn inrou_service_placement_record_validate_rejects_duplicate_slots() {
     let mut placement = sample_inrou_service_placement_record();
     placement.placements.push(placement.placements[0].clone());
@@ -1983,6 +2021,15 @@ fn inrou_service_placement_record_validate_rejects_duplicate_slots() {
         .validate()
         .expect_err("duplicate replica slots must fail validation");
     assert_soracloud_invalid_field(error, "placements");
+}
+#[test]
+fn inrou_service_placement_record_rejects_peer_from_another_account() {
+    let mut placement = sample_inrou_service_placement_record();
+    placement.placements[0].peer_id = sample_peer_id(0xD2);
+    let error = placement
+        .validate()
+        .expect_err("a placed peer belonging to another validator account must fail");
+    assert_soracloud_invalid_field(error, "peer_id");
 }
 #[test]
 fn inrou_replica_runtime_state_validate_rejects_missing_peer_id() {
@@ -1999,14 +2046,21 @@ fn inrou_replica_runtime_state_validate_rejects_missing_peer_id() {
         }
     ));
 }
+#[test]
+fn inrou_replica_runtime_state_rejects_peer_from_another_account() {
+    let mut runtime_state = sample_inrou_replica_runtime_state();
+    runtime_state.peer_id = sample_peer_id(0xD2);
+    let error = runtime_state
+        .validate()
+        .expect_err("an Inrou runtime peer belonging to another account must fail");
+    assert_soracloud_invalid_field(error, "peer_id");
+}
 zero_prehash_field_rejection_test! {
     inrou_replica_runtime_state_validate_rejects_zero_prehash_digest_sentinels,
     zero_digest,
     sample_inrou_replica_runtime_state();
     materialized_bundle_hash = zero_digest =>
         ("materialized_bundle_hash", "materialized bundle placeholder hash must fail admission");
-    last_receipt_id = Some(zero_digest) =>
-        ("last_receipt_id", "last receipt placeholder hash must fail admission");
 }
 #[test]
 fn service_rollout_state_validate_rejects_promoted_partial_traffic() {
@@ -2242,24 +2296,33 @@ fn service_audit_event_validate_rejects_zero_sequence() {
     let event = SoraServiceAuditEventV1 {
         schema_version: SORA_SERVICE_AUDIT_EVENT_VERSION_V1,
         sequence: 0,
+        block_height: 1,
+        block_timestamp_ms: 1,
         action: SoraServiceLifecycleActionV1::Deploy,
         service_name: "portal".parse().expect("valid name"),
         from_version: None,
         to_version: "1.0.0".to_string(),
         service_manifest_hash: sample_hash(172),
         container_manifest_hash: sample_hash(173),
+        process_generation: 1,
+        config_generation: 0,
+        secret_generation: 0,
+        config_snapshot_hash: derive_soracloud_service_config_snapshot_hash_v1(&BTreeMap::new()),
+        secret_snapshot_hash: derive_soracloud_service_secret_snapshot_hash_v1(&BTreeMap::new()),
         governance_tx_hash: None,
         binding_name: None,
         state_key: None,
-        config_name: None,
-        secret_name: None,
-        rollout_handle: None,
+        config_mutations: Vec::new(),
+        secret_mutations: Vec::new(),
+        rollout_state: None,
         policy_name: None,
         policy_snapshot_hash: None,
         jurisdiction_tag: None,
         consent_evidence_hash: None,
         break_glass: None,
         break_glass_reason: None,
+        lease_usage: None,
+        service_lease_commitment: None,
         lease_reporting_epoch_rollover: None,
         signer: sample_signer(),
     };
@@ -2282,6 +2345,10 @@ zero_prehash_field_rejection_test! {
         ("policy_snapshot_hash", "policy snapshot placeholder hash must fail admission");
     consent_evidence_hash = Some(zero_digest) =>
         ("consent_evidence_hash", "consent evidence placeholder hash must fail admission");
+    config_snapshot_hash = zero_digest =>
+        ("config_snapshot_hash", "config snapshot placeholder hash must fail admission");
+    secret_snapshot_hash = zero_digest =>
+        ("secret_snapshot_hash", "secret snapshot placeholder hash must fail admission");
 }
 #[test]
 fn service_state_entry_validate_allows_plaintext_rows() {
@@ -2394,24 +2461,33 @@ fn service_audit_event_validate_requires_break_glass_reason_when_enabled() {
     let event = SoraServiceAuditEventV1 {
         schema_version: SORA_SERVICE_AUDIT_EVENT_VERSION_V1,
         sequence: 1,
+        block_height: 1,
+        block_timestamp_ms: 1,
         action: SoraServiceLifecycleActionV1::DecryptionRequest,
         service_name: "portal".parse().expect("valid name"),
         from_version: None,
         to_version: "1.0.0".to_string(),
         service_manifest_hash: sample_hash(174),
         container_manifest_hash: sample_hash(175),
+        process_generation: 1,
+        config_generation: 0,
+        secret_generation: 0,
+        config_snapshot_hash: derive_soracloud_service_config_snapshot_hash_v1(&BTreeMap::new()),
+        secret_snapshot_hash: derive_soracloud_service_secret_snapshot_hash_v1(&BTreeMap::new()),
         governance_tx_hash: Some(sample_hash(176)),
         binding_name: Some("private_state".parse().expect("valid name")),
         state_key: Some("/state/private/patient-1".to_string()),
-        config_name: None,
-        secret_name: None,
-        rollout_handle: None,
+        config_mutations: Vec::new(),
+        secret_mutations: Vec::new(),
+        rollout_state: None,
         policy_name: Some("phi_threshold_policy".parse().expect("valid name")),
         policy_snapshot_hash: Some(sample_hash(177)),
         jurisdiction_tag: Some("us_hipaa".to_string()),
         consent_evidence_hash: None,
         break_glass: Some(true),
         break_glass_reason: None,
+        lease_usage: None,
+        service_lease_commitment: None,
         lease_reporting_epoch_rollover: None,
         signer: sample_signer(),
     };
@@ -2433,15 +2509,16 @@ fn service_mailbox_message_validate_rejects_expired_message() {
         to_handler: "private_update".parse().expect("valid name"),
         payload_bytes: b"ciphertext".to_vec(),
         payload_commitment: Hash::new(b"ciphertext"),
-        delivery_delay_sequences: 2,
+        delivery_delay_blocks: 2,
         enqueue_sequence: 10,
-        available_after_sequence: 12,
-        expires_at_sequence: 12,
+        enqueue_height: 10,
+        available_after_height: 12,
+        expires_at_height: 12,
     };
     let error = message
         .validate()
         .expect_err("message expiry must be after availability");
-    assert_soracloud_invalid_field(error, "expires_at_sequence");
+    assert_soracloud_invalid_field(error, "expires_at_height");
 }
 #[test]
 fn service_mailbox_message_validate_rejects_payload_commitment_mismatch() {
@@ -2456,10 +2533,11 @@ fn service_mailbox_message_validate_rejects_payload_commitment_mismatch() {
         to_handler: "private_update".parse().expect("valid name"),
         payload_bytes: b"ciphertext".to_vec(),
         payload_commitment: sample_hash(163),
-        delivery_delay_sequences: 0,
+        delivery_delay_blocks: 0,
         enqueue_sequence: 10,
-        available_after_sequence: 10,
-        expires_at_sequence: 12,
+        enqueue_height: 10,
+        available_after_height: 10,
+        expires_at_height: 12,
     };
     let error = message
         .validate()
@@ -2471,7 +2549,13 @@ fn service_mailbox_message_validation_separates_submission_and_persisted_schedul
     let mut message = sample_service_mailbox_message();
     message
         .validate()
-        .expect("ledger-assigned mailbox schedule must validate");
+        .expect("canonical ledger-assigned mailbox message must validate");
+    let error = message
+        .validate_submission()
+        .expect_err("mailbox submission must not carry a caller-selected identifier");
+    assert_soracloud_invalid_field(error, "message_id");
+
+    message.message_id = Hash::prehashed([0; Hash::LENGTH]);
     let error = message
         .validate_submission()
         .expect_err("mailbox submission must not carry ledger-bound service versions");
@@ -2485,17 +2569,117 @@ fn service_mailbox_message_validation_separates_submission_and_persisted_schedul
     assert_soracloud_invalid_field(error, "enqueue_sequence");
 
     message.enqueue_sequence = 0;
-    message.available_after_sequence = 0;
-    message.expires_at_sequence = 0;
+    message.available_after_height = 0;
+    message.expires_at_height = 0;
     message
         .validate_submission()
         .expect("zero-sentinel mailbox submission must validate");
+    message.message_id = sample_hash(162);
     message.from_service_version = "2026.1".to_owned();
     message.to_service_version = "2026.1".to_owned();
     let error = message
         .validate()
         .expect_err("persisted mailbox message requires a ledger-assigned schedule");
     assert_soracloud_invalid_field(error, "enqueue_sequence");
+}
+#[test]
+fn service_mailbox_message_id_binds_every_immutable_field() {
+    let message = sample_service_mailbox_message();
+    let canonical_id = message.message_id;
+
+    macro_rules! assert_field_bound {
+        ($field:literal, $mutate:expr) => {{
+            let mut changed = message.clone();
+            ($mutate)(&mut changed);
+            assert_ne!(
+                derive_soracloud_mailbox_message_id_v1(&changed),
+                canonical_id,
+                "mailbox message identity must bind {}",
+                $field
+            );
+        }};
+    }
+    assert_field_bound!(
+        "schema_version",
+        |changed: &mut SoraServiceMailboxMessageV1| {
+            changed.schema_version += 1;
+        }
+    );
+    assert_field_bound!(
+        "from_service",
+        |changed: &mut SoraServiceMailboxMessageV1| {
+            changed.from_service = "other_source".parse().expect("valid source name");
+        }
+    );
+    assert_field_bound!(
+        "from_service_version",
+        |changed: &mut SoraServiceMailboxMessageV1| {
+            changed.from_service_version = "2026.2".to_owned();
+        }
+    );
+    assert_field_bound!(
+        "from_handler",
+        |changed: &mut SoraServiceMailboxMessageV1| {
+            changed.from_handler = "other_update".parse().expect("valid handler name");
+        }
+    );
+    assert_field_bound!("to_service", |changed: &mut SoraServiceMailboxMessageV1| {
+        changed.to_service = "other_destination".parse().expect("valid service name");
+    });
+    assert_field_bound!(
+        "to_service_version",
+        |changed: &mut SoraServiceMailboxMessageV1| {
+            changed.to_service_version = "2026.2".to_owned();
+        }
+    );
+    assert_field_bound!("to_handler", |changed: &mut SoraServiceMailboxMessageV1| {
+        changed.to_handler = "other_handler".parse().expect("valid handler name");
+    });
+    assert_field_bound!(
+        "payload_bytes",
+        |changed: &mut SoraServiceMailboxMessageV1| {
+            changed.payload_bytes = b"other ciphertext".to_vec();
+        }
+    );
+    assert_field_bound!(
+        "payload_commitment",
+        |changed: &mut SoraServiceMailboxMessageV1| {
+            changed.payload_commitment = sample_hash(163);
+        }
+    );
+    assert_field_bound!(
+        "delivery_delay_blocks",
+        |changed: &mut SoraServiceMailboxMessageV1| {
+            changed.delivery_delay_blocks = 1;
+        }
+    );
+    assert_field_bound!(
+        "enqueue_sequence",
+        |changed: &mut SoraServiceMailboxMessageV1| {
+            changed.enqueue_sequence += 1;
+        }
+    );
+    assert_field_bound!(
+        "available_after_height",
+        |changed: &mut SoraServiceMailboxMessageV1| {
+            changed.available_after_height += 1;
+        }
+    );
+    assert_field_bound!(
+        "expires_at_height",
+        |changed: &mut SoraServiceMailboxMessageV1| {
+            changed.expires_at_height += 1;
+        }
+    );
+
+    let mut substituted = message;
+    substituted.payload_bytes = b"attacker-selected ciphertext".to_vec();
+    substituted.payload_commitment = Hash::new(&substituted.payload_bytes);
+    assert_eq!(substituted.message_id, canonical_id);
+    let error = substituted
+        .validate()
+        .expect_err("payload substitution under a canonical message id must fail");
+    assert_soracloud_invalid_field(error, "message_id");
 }
 zero_prehash_field_rejection_test! {
     service_mailbox_message_validate_rejects_zero_prehash_digest_sentinels,
@@ -2565,6 +2749,8 @@ fn private_runtime_receipt_validation_separates_submission_and_persisted_sequenc
 }
 #[test]
 fn runtime_receipt_validate_rejects_invalid_host_attribution() {
+    let pool_id = sample_hash(170);
+    let selection_seed_hash = sample_hash(172);
     let receipt = SoraRuntimeReceiptV1 {
         schema_version: SORA_RUNTIME_RECEIPT_VERSION_V1,
         receipt_id: sample_hash(167),
@@ -2576,11 +2762,15 @@ fn runtime_receipt_validate_rejects_invalid_host_attribution() {
         result_commitment: sample_hash(169),
         certified_by: SoraCertifiedResponsePolicyV1::AuditReceipt,
         emitted_sequence: 45,
-        execution_host: Some(SoraRuntimeExecutionHostV1::InrouReplica(
-            SoraRuntimeInrouReplicaHostV1 {
-            replica_slot: 0,
-            validator_account_id: sample_account_id(171),
-            peer_id: "12D3KooWRuntimePrimary".to_string(),
+        execution_host: Some(SoraRuntimeExecutionHostV1::HfModelHost(
+            SoraRuntimeHfModelHostV1 {
+                placement_id: derive_hf_placement_id_v1(pool_id, selection_seed_hash)
+                    .expect("canonical sample placement id"),
+                source_id: sample_hash(173),
+                pool_id,
+                selection_seed_hash,
+                validator_account_id: sample_account_id(171),
+                peer_id: " ".to_owned(),
             },
         )),
         mailbox_message_id: None,
@@ -2590,7 +2780,61 @@ fn runtime_receipt_validate_rejects_invalid_host_attribution() {
     let error = receipt
         .validate()
         .expect_err("invalid host attribution must be rejected");
-    assert_soracloud_invalid_field(error, "replica_slot");
+    assert_soracloud_invalid_field(error, "peer_id");
+}
+#[test]
+fn deterministic_validator_host_requires_canonical_account_peer_binding() {
+    let mut receipt = sample_runtime_receipt();
+    receipt.execution_host = Some(SoraRuntimeExecutionHostV1::DeterministicValidator(
+        SoraRuntimeDeterministicValidatorHostV1 {
+            lane_id: LaneId::SINGLE,
+            validator_account_id: sample_account_id(171),
+            peer_id: sample_peer_id(171),
+        },
+    ));
+    receipt
+        .validate()
+        .expect("matching single-signatory validator host must validate");
+
+    let Some(SoraRuntimeExecutionHostV1::DeterministicValidator(host)) =
+        receipt.execution_host.as_mut()
+    else {
+        unreachable!("fixture carries deterministic-validator attribution")
+    };
+    host.peer_id = sample_peer_id(172);
+    let error = receipt
+        .validate()
+        .expect_err("a syntactically valid peer from another account must be rejected");
+    assert_soracloud_invalid_field(error, "peer_id");
+}
+#[test]
+fn hf_model_host_receipt_requires_canonical_account_peer_binding() {
+    let mut receipt = sample_runtime_receipt();
+    receipt
+        .validate()
+        .expect("matching single-signatory HF model host must validate structurally");
+    let Some(SoraRuntimeExecutionHostV1::HfModelHost(host)) = receipt.execution_host.as_mut()
+    else {
+        unreachable!("fixture carries HF model-host attribution")
+    };
+    host.peer_id = sample_peer_id(172);
+    let error = receipt
+        .validate()
+        .expect_err("an HF receipt peer belonging to another account must fail");
+    assert_soracloud_invalid_field(error, "peer_id");
+}
+#[test]
+fn hf_model_host_receipt_requires_canonical_placement_context() {
+    let mut receipt = sample_runtime_receipt();
+    let Some(SoraRuntimeExecutionHostV1::HfModelHost(host)) = receipt.execution_host.as_mut()
+    else {
+        unreachable!("fixture carries HF model-host attribution")
+    };
+    host.selection_seed_hash = sample_hash(174);
+    let error = receipt
+        .validate()
+        .expect_err("placement id must be derived from the attributed pool and selection seed");
+    assert_soracloud_invalid_field(error, "placement_id");
 }
 zero_prehash_field_rejection_test! {
     runtime_receipt_validate_rejects_zero_prehash_digest_sentinels,
@@ -2614,8 +2858,11 @@ fn runtime_receipt_validate_rejects_zero_hf_placement_digest() {
     receipt.execution_host = Some(SoraRuntimeExecutionHostV1::HfModelHost(
         SoraRuntimeHfModelHostV1 {
             placement_id: Hash::prehashed([0; Hash::LENGTH]),
+            source_id: sample_hash(173),
+            pool_id: sample_hash(170),
+            selection_seed_hash: sample_hash(172),
             validator_account_id: sample_account_id(171),
-            peer_id: "12D3KooWRuntimePrimary".to_string(),
+            peer_id: sample_peer_id(171),
         },
     ));
     let error = receipt

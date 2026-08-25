@@ -2714,10 +2714,10 @@ async fn validate_generated_hf_proxy_response_authority_rejects_mismatched_recei
         panic!("generated HF proxy receipt must carry HF execution-host attribution");
     };
     host.peer_id = checked_torii_test_peer_id(
-            0x7c,
-            "derive generated-HF proxy mismatched receipt fixture key",
-        )
-        .to_string();
+        0x7c,
+        "derive generated-HF proxy mismatched receipt fixture key",
+    )
+    .to_string();
     let error = super::validate_generated_hf_proxy_response_authority(
         &app,
         &request,
@@ -2815,17 +2815,16 @@ async fn run_generated_hf_failure_report_case(case: GeneratedHfFailureReportCase
                 .runtime_receipt
                 .as_mut()
                 .expect("generated HF proxy receipt");
-            let Some(
-                iroha_data_model::soracloud::SoraRuntimeExecutionHostV1::HfModelHost(host),
-            ) = receipt.execution_host.as_mut()
+            let Some(iroha_data_model::soracloud::SoraRuntimeExecutionHostV1::HfModelHost(host)) =
+                receipt.execution_host.as_mut()
             else {
                 panic!("generated HF proxy receipt must carry HF execution-host attribution");
             };
             host.peer_id = checked_torii_test_peer_id(
-                    0x7c,
-                    "derive generated-HF proxy mismatched receipt fixture key",
-                )
-                .to_string();
+                0x7c,
+                "derive generated-HF proxy mismatched receipt fixture key",
+            )
+            .to_string();
             super::validate_generated_hf_proxy_response_authority(
                 &app,
                 &request,

@@ -51,21 +51,8 @@ function validPrivateExecuteInput(overrides = {}) {
     modelId: "upload-1",
     modelName: null,
     bundleRoot: null,
-    policyId: "policy-1",
-    decryptionRequestId: null,
-    model: {
-      inputLen: 2,
-      outputLen: 1,
-      weightsI8: [3, -2],
-      biasI32: [1],
-      outputShift: 1,
-      outputMin: -16,
-      outputMax: 16,
-    },
-    plaintextInputI32: [5, -3],
+    decryptionRequestId: "decrypt-upload-input",
     inputArtifact: validPrivateArtifact("input"),
-    outputArtifact: validPrivateArtifact("output"),
-    emittedSequence: 17,
     ...overrides,
   };
 }
@@ -1095,39 +1082,30 @@ test("assembleSoracloudHfDeployRequest rejects unknown draft payload fields", ()
   );
 });
 
-test("buildSoracloudPrivateUploadedModelExecuteRequest normalizes deterministic CPU requests", () => {
+test("buildSoracloudPrivateUploadedModelExecuteRequest normalizes canonical encrypted-input requests", () => {
   const request = buildSoracloudPrivateUploadedModelExecuteRequest(
     validPrivateExecuteInput({ bundleRoot: "bundle-root" }),
   );
 
-  assert.equal(request.service_name, "portal");
-  assert.equal(request.model_id, "upload-1");
-  assert.equal(request.model_name, null);
-  assert.equal(request.weight_version, "v1");
-  assert.equal(request.bundle_root, "bundle-root");
-  assert.equal(request.decryption_request_id, null);
-  assert.deepEqual(request.model, {
-    input_len: 2,
-    output_len: 1,
-    weights_i8: [3, -2],
-    bias_i32: [1],
-    output_shift: 1,
-    output_min: -16,
-    output_max: 16,
+  assert.deepEqual(request, {
+    service_name: "portal",
+    weight_version: "v1",
+    model_id: "upload-1",
+    model_name: null,
+    bundle_root: "bundle-root",
+    decryption_request_id: "decrypt-upload-input",
+    input_artifact: {
+      schema_version: 1,
+      sorafs_manifest_digest: "input-manifest-digest",
+      artifact_hash: "input-artifact-hash",
+      ciphertext_bytes: 64,
+      artifact_role: "input",
+    },
   });
-  assert.deepEqual(request.plaintext_input_i32, [5, -3]);
-  assert.deepEqual(request.input_artifact, {
-    schema_version: 1,
-    sorafs_manifest_digest: "input-manifest-digest",
-    artifact_hash: "input-artifact-hash",
-    ciphertext_bytes: 64,
-    artifact_role: "input",
-  });
-  assert.equal(Object.hasOwn(request, "private_key"), false);
 });
 
 test("buildSoracloudPrivateUploadedModelExecuteRequest rejects aliases, omissions, and exotic keys", () => {
-  for (const field of ["modelName", "bundleRoot", "decryptionRequestId"]) {
+  for (const field of Object.keys(validPrivateExecuteInput())) {
     const input = validPrivateExecuteInput();
     delete input[field];
     assert.throws(
@@ -1142,12 +1120,8 @@ test("buildSoracloudPrivateUploadedModelExecuteRequest rejects aliases, omission
     "model_id",
     "model_name",
     "bundle_root",
-    "policy_id",
     "decryption_request_id",
-    "plaintext_input_i32",
     "input_artifact",
-    "output_artifact",
-    "emitted_sequence",
   ]) {
     assert.throws(
       () =>
@@ -1159,14 +1133,26 @@ test("buildSoracloudPrivateUploadedModelExecuteRequest rejects aliases, omission
     );
   }
 
-  assert.throws(
-    () =>
-      buildSoracloudPrivateUploadedModelExecuteRequest({
-        ...validPrivateExecuteInput(),
-        model: { ...validPrivateExecuteInput().model, input_len: 2 },
-      }),
-    /model\.input_len is not accepted/,
-  );
+  for (const retiredField of [
+    "policyId",
+    "model",
+    "plaintextInputI32",
+    "outputArtifact",
+    "emittedSequence",
+    "policy_id",
+    "plaintext_input_i32",
+    "output_artifact",
+    "emitted_sequence",
+  ]) {
+    assert.throws(
+      () =>
+        buildSoracloudPrivateUploadedModelExecuteRequest({
+          ...validPrivateExecuteInput(),
+          [retiredField]: true,
+        }),
+      new RegExp(`input\\.${retiredField} is not accepted`),
+    );
+  }
   assert.throws(
     () =>
       buildSoracloudPrivateUploadedModelExecuteRequest({
@@ -1208,7 +1194,7 @@ test("buildSoracloudPrivateUploadedModelExecuteRequest accepts modelName selecto
   assert.equal(request.model_id, null);
 });
 
-test("buildSoracloudPrivateUploadedModelExecuteRequest rejects malformed deterministic CPU requests", () => {
+test("buildSoracloudPrivateUploadedModelExecuteRequest rejects invalid selectors, release ids, artifacts, and secrets", () => {
   assert.throws(
     () =>
       buildSoracloudPrivateUploadedModelExecuteRequest(
@@ -1219,14 +1205,16 @@ test("buildSoracloudPrivateUploadedModelExecuteRequest rejects malformed determi
   assert.throws(
     () =>
       buildSoracloudPrivateUploadedModelExecuteRequest(
-        validPrivateExecuteInput({
-          model: {
-            ...validPrivateExecuteInput().model,
-            weightsI8: [1],
-          },
-        }),
+        validPrivateExecuteInput({ modelId: null }),
       ),
-    /model\.weightsI8 length must equal inputLen \* outputLen/,
+    /exactly one of modelId or modelName/,
+  );
+  assert.throws(
+    () =>
+      buildSoracloudPrivateUploadedModelExecuteRequest(
+        validPrivateExecuteInput({ decryptionRequestId: null }),
+      ),
+    /decryptionRequestId must be a non-empty string/,
   );
   assert.throws(
     () =>

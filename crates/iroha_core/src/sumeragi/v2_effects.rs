@@ -9604,6 +9604,8 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
         }
         Ok(())
     }
+    /// Reject any interrupted-tip recovery effect that cannot be satisfied
+    /// entirely from the exact process-local recovery catalogs.
     fn ensure_pending_tip_recovery_effect_is_local(
         &self,
         effect: &AdapterEffect,

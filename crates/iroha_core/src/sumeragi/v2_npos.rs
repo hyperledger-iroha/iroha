@@ -1644,12 +1644,13 @@ mod tests {
         }
 
         let forbidden = ["feature = ", "\"iroha-core-tests\""].concat();
-        let source = include_str!("v2_npos.rs");
         let source_root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/sumeragi");
         assert_source_tree_is_feature_invariant(&source_root, &forbidden);
         let daemon_manifest = include_str!("../../../irohad/Cargo.toml");
         assert!(
-            daemon_manifest.contains("features = [\"runtime\", \"iroha-core-tests\"]"),
+            daemon_manifest.contains(
+                "features = [\"runtime\", \"iroha-core-tests\", \"sumeragi-main-loop-tests\"]"
+            ),
             "regression must exercise the daemon test/integration feature closure"
         );
         let state_source = include_str!("../state.rs");
@@ -1709,6 +1710,7 @@ mod tests {
         ] {
             assert_declaration_is_test_only(block_source, declaration);
         }
+        let source = include_str!("v2_npos.rs");
         for declaration in [
             "const VRF_INPUT_DOMAIN",
             "fn derive_vrf_material_from_key",

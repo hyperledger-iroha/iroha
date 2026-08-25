@@ -15,12 +15,13 @@ use crate::{
         soracloud::{
             AcknowledgeSoracloudAgentMessage, AdvanceSoracloudRollout, AdvertiseSoracloudInrouHost,
             AdvertiseSoracloudModelHost, AllowSoracloudAgentAutonomyArtifact,
-            ApproveSoracloudAgentWalletSpend, CheckpointSoracloudTrainingJob,
-            ClearSoracloudInrouReplicaRuntimeState, DeleteSoracloudServiceConfig,
-            DeleteSoracloudServiceSecret, DeploySoracloudAgentApartment, DeploySoracloudService,
-            EnqueueSoracloudAgentMessage, FinalizeSoracloudUploadedModelBundle,
-            HeartbeatSoracloudModelHost, JoinSoracloudHfSharedLease, LeaveSoracloudHfSharedLease,
-            MutateSoracloudState, PromoteSoracloudModelWeight, ReconcileSoracloudInrouPlacements,
+            ApplySoracloudOrderedMailboxResult, ApproveSoracloudAgentWalletSpend,
+            CheckpointSoracloudTrainingJob, ClearSoracloudInrouReplicaRuntimeState,
+            DeleteSoracloudServiceConfig, DeleteSoracloudServiceSecret,
+            DeploySoracloudAgentApartment, DeploySoracloudService, EnqueueSoracloudAgentMessage,
+            FinalizeSoracloudUploadedModelBundle, HeartbeatSoracloudModelHost,
+            JoinSoracloudHfSharedLease, LeaveSoracloudHfSharedLease, MutateSoracloudState,
+            PromoteSoracloudModelWeight, ReconcileSoracloudInrouPlacements,
             RecordSoracloudAgentAutonomyExecution, RecordSoracloudDecryptionRequest,
             RecordSoracloudMailboxMessage, RecordSoracloudPrivateUploadedModelExecutionReceipt,
             RecordSoracloudRuntimeReceipt, RegisterSoracloudFhePolicy,
@@ -556,6 +557,11 @@ fn visit_soracloud_training_instruction<V: Visit + ?Sized>(
         visitor.visit_record_soracloud_runtime_receipt(v);
     } else if let Some(v) = isi
         .as_any()
+        .downcast_ref::<ApplySoracloudOrderedMailboxResult>()
+    {
+        visitor.visit_apply_soracloud_ordered_mailbox_result(v);
+    } else if let Some(v) = isi
+        .as_any()
         .downcast_ref::<RecordSoracloudPrivateUploadedModelExecutionReceipt>()
     {
         visitor.visit_record_soracloud_private_uploaded_model_execution_receipt(v);
@@ -871,6 +877,7 @@ macro_rules! instruction_visitors {
             visit_report_soracloud_service_lease_usage(&ReportSoracloudServiceLeaseUsage),
             visit_record_soracloud_mailbox_message(&RecordSoracloudMailboxMessage),
             visit_record_soracloud_runtime_receipt(&RecordSoracloudRuntimeReceipt),
+            visit_apply_soracloud_ordered_mailbox_result(&ApplySoracloudOrderedMailboxResult),
             visit_record_soracloud_private_uploaded_model_execution_receipt(
                 &RecordSoracloudPrivateUploadedModelExecutionReceipt
             ),

@@ -51,7 +51,7 @@ use iroha_core::privacy_profiles::{
     compiled_privacy_profile_catalog_v1, validate_local_privacy_compiled_profile_catalog_archive_v1,
 };
 use iroha_core::soracloud_runtime::{
-    HF_GENERATED_AGENT_AUTONOMY_BUDGET_UNITS, HF_GENERATED_AGENT_LEASE_TICKS,
+    HF_GENERATED_AGENT_AUTONOMY_BUDGET_UNITS, HF_GENERATED_AGENT_LEASE_BLOCKS,
     build_soracloud_hf_generated_agent_manifest, build_soracloud_hf_generated_service_bundle,
 };
 use iroha_core::zk::confidential_v2::{
@@ -1551,7 +1551,7 @@ pub fn soracloud_build_hf_deploy_request_json(
                 build_soracloud_hf_generated_agent_manifest(apartment_name, &generated_bundle);
             let payload = encode_agent_deploy_provenance_payload(
                 manifest,
-                HF_GENERATED_AGENT_LEASE_TICKS,
+                HF_GENERATED_AGENT_LEASE_BLOCKS,
                 Some(HF_GENERATED_AGENT_AUTONOMY_BUDGET_UNITS),
             )
             .map_err(norito_to_napi)?;

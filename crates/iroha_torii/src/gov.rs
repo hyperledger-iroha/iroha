@@ -3220,7 +3220,12 @@ seiyaku GovernedReadFixture {
     fn queue_instruction_skeleton(harness: &GovHarness, tx_instructions: &[TxInstr]) {
         let instructions = tx_instructions
             .iter()
-            .map(decode_tx_instruction)
+            .map(|instruction| {
+                let payload =
+                    hex::decode(&instruction.payload_hex).expect("instruction payload hex");
+                iroha_data_model::isi::decode_instruction_from_pair(&instruction.wire_id, &payload)
+                    .expect("instruction payload decode")
+            })
             .collect::<Vec<_>>();
         let tx = iroha_data_model::transaction::signed::TransactionBuilder::new(
             *harness.state.network_id_ref(),

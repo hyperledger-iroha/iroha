@@ -13930,17 +13930,7 @@ export interface SoracloudPrivateArtifactRefInput {
   sorafsManifestDigest: string;
   artifactHash: string;
   ciphertextBytes: number | bigint | string;
-  artifactRole: "input" | "output";
-}
-
-export interface SoracloudPrivateQuantizedCpuModelInput {
-  inputLen: number | bigint | string;
-  outputLen: number | bigint | string;
-  weightsI8: number[];
-  biasI32: number[];
-  outputShift: number | bigint | string;
-  outputMin: number;
-  outputMax: number;
+  artifactRole: "input";
 }
 
 export interface SoracloudPrivateUploadedModelExecuteInput {
@@ -13949,13 +13939,8 @@ export interface SoracloudPrivateUploadedModelExecuteInput {
   modelId: string | null;
   modelName: string | null;
   bundleRoot: string | null;
-  policyId: string;
-  decryptionRequestId: string | null;
-  model: SoracloudPrivateQuantizedCpuModelInput;
-  plaintextInputI32: number[];
+  decryptionRequestId: string;
   inputArtifact: SoracloudPrivateArtifactRefInput;
-  outputArtifact: SoracloudPrivateArtifactRefInput;
-  emittedSequence: number | bigint | string;
 }
 
 export interface SoracloudPrivateUploadedModelReceiptQueryInput {

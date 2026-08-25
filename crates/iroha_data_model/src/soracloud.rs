@@ -12,6 +12,7 @@ use crate::{
     account::AccountId,
     asset::AssetDefinitionId,
     name::Name,
+    nexus::LaneId,
     peer::PeerId,
     proof::ProofAttachment,
     sorafs::pin_registry::{
@@ -320,6 +321,48 @@ pub fn derive_hf_source_id_v1(
         })?;
     Ok(Hash::new(payload))
 }
+/// Derive the canonical placement identifier for one HF lease pool and selection seed.
+///
+/// # Errors
+/// Returns [`SoracloudManifestError`] when the canonical preimage cannot be encoded.
+pub fn derive_hf_placement_id_v1(
+    pool_id: Hash,
+    selection_seed_hash: Hash,
+) -> Result<Hash, SoracloudManifestError> {
+    let payload = norito::to_bytes(&("soracloud:hf-placement-id:v1", pool_id, selection_seed_hash))
+        .map_err(|error| {
+            invalid_field(
+                "sora hf placement identity",
+                "placement_id",
+                format!("failed to encode the canonical placement preimage: {error}"),
+            )
+        })?;
+    Ok(Hash::new(payload))
+}
+/// Derive the canonical shared-lease pool identifier from its immutable pricing dimensions.
+///
+/// # Errors
+/// Returns [`SoracloudManifestError`] when the canonical preimage cannot be encoded.
+pub fn derive_hf_shared_lease_pool_id_v1(
+    source_id: Hash,
+    storage_class: StorageClass,
+    lease_term_ms: u64,
+) -> Result<Hash, SoracloudManifestError> {
+    let payload = norito::to_bytes(&(
+        "soracloud:hf-shared-lease-pool-id:v1",
+        source_id,
+        storage_class,
+        lease_term_ms,
+    ))
+    .map_err(|error| {
+        invalid_field(
+            "sora hf shared lease pool identity",
+            "pool_id",
+            format!("failed to encode the canonical pool preimage: {error}"),
+        )
+    })?;
+    Ok(Hash::new(payload))
+}
 /// Schema version for [`SoraModelHostCapabilityRecordV1`].
 pub const SORA_MODEL_HOST_CAPABILITY_RECORD_VERSION_V1: u16 = 1;
 /// Schema version for [`SoraInrouHostCapabilityRecordV1`].
@@ -355,6 +398,10 @@ pub const SORA_INROU_REPLICA_RUNTIME_STATE_VERSION_V1: u16 = 1;
 pub const SORA_SERVICE_MAILBOX_MESSAGE_VERSION_V1: u16 = 1;
 /// Schema version for [`SoraRuntimeReceiptV1`].
 pub const SORA_RUNTIME_RECEIPT_VERSION_V1: u16 = 1;
+/// Schema version for [`SoraOrderedMailboxStateMutationV1`].
+pub const SORA_ORDERED_MAILBOX_STATE_MUTATION_VERSION_V1: u16 = 1;
+/// Schema version for [`SoraOrderedMailboxResultV1`].
+pub const SORA_ORDERED_MAILBOX_RESULT_VERSION_V1: u16 = 1;
 /// Schema version for [`CanonicalRequestWitnessV1`].
 pub const CANONICAL_REQUEST_WITNESS_VERSION_V1: u16 = 1;
 /// Schema version for [`SoracloudHostRequestEnvelopeV1`].
@@ -367,6 +414,12 @@ pub const SORA_SERVICE_ROLLOUT_STATE_VERSION_V1: u16 = 1;
 pub const SORA_SERVICE_DEPLOYMENT_STATE_VERSION_V1: u16 = 1;
 /// Schema version for [`SoraServiceLeaseStateV1`].
 pub const SORA_SERVICE_LEASE_STATE_VERSION_V1: u16 = 1;
+/// Consensus-block grace before an idle egress reporter may be force-finalized.
+pub const SORA_SERVICE_LEASE_REPORTER_IDLE_GRACE_BLOCKS_V1: u64 = 10_000;
+/// Schema version for [`SoraServiceLeaseUsageAuditV1`].
+pub const SORA_SERVICE_LEASE_USAGE_AUDIT_VERSION_V1: u16 = 1;
+/// Schema version for [`SoraServiceLeaseReporterAssignmentV1`].
+pub const SORA_SERVICE_LEASE_REPORTER_ASSIGNMENT_VERSION_V1: u16 = 1;
 /// Schema version for [`SoraServiceLeaseReportingEpochRolloverV1`].
 pub const SORA_SERVICE_LEASE_REPORTING_EPOCH_ROLLOVER_VERSION_V1: u16 = 1;
 /// Schema version for [`SoraServiceLeaseVolumeStateV1`].

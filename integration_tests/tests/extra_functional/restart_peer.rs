@@ -11,13 +11,14 @@ use iroha::{
         isi::{
             soracloud::{
                 DeploySoracloudService, FinalizeSoracloudUploadedModelBundle,
-                RecordSoracloudPrivateUploadedModelExecutionReceipt,
-                RegisterSoracloudUploadedModelBundle,
+                RecordSoracloudDecryptionRequest, RegisterSoracloudUploadedModelBundle,
             },
             sorafs::RegisterPinManifest,
         },
         smart_contract::manifest::ManifestProvenance,
         soracloud::{
+            DECRYPTION_AUTHORITY_POLICY_VERSION_V1, DECRYPTION_REQUEST_VERSION_V1,
+            DecryptionAuthorityModeV1, DecryptionAuthorityPolicyV1, DecryptionRequestV1,
             SORA_CONTAINER_MANIFEST_VERSION_V1, SORA_DEPLOYMENT_BUNDLE_VERSION_V1,
             SORA_PRIVATE_MODEL_ARTIFACT_REF_VERSION_V1, SORA_SERVICE_MANIFEST_VERSION_V1,
             SORA_STATE_BINDING_VERSION_V1, SORA_UPLOADED_MODEL_BUNDLE_VERSION_V1,
@@ -26,15 +27,15 @@ use iroha::{
             SoraCapabilityPolicyV1, SoraCertifiedResponsePolicyV1, SoraContainerManifestRefV1,
             SoraContainerManifestV1, SoraContainerRuntimeV1, SoraDeploymentBundleV1,
             SoraNetworkAllowlistEntryV1, SoraNetworkPolicyV1, SoraPrivateModelArtifactRefV1,
-            SoraPrivateUploadedModelExecutionReceiptV1, SoraResourceLimitsV1, SoraRolloutPolicyV1,
-            SoraRouteTargetV1, SoraRouteVisibilityV1, SoraServiceExecutionPlaneV1,
-            SoraServiceHandlerClassV1, SoraServiceHandlerV1, SoraServiceManifestV1,
-            SoraServiceMutationPreconditionV1, SoraStateBindingV1, SoraStateEncryptionV1,
-            SoraStateMutabilityV1, SoraStateScopeV1, SoraTlsModeV1, SoraUploadedModelBundleV1,
-            SoraUploadedModelEncryptionRecipientV1, SoraUploadedModelKeyEncapsulationV1,
-            SoraUploadedModelKeyWrapAeadV1, SoraUploadedModelPricingPolicyV1,
-            SoraUploadedModelRuntimeFormatV1, SoraUploadedModelWrappedKeyV1,
-            encode_bundle_with_materials_provenance_payload,
+            SoraResourceLimitsV1, SoraRolloutPolicyV1, SoraRouteTargetV1, SoraRouteVisibilityV1,
+            SoraServiceExecutionPlaneV1, SoraServiceHandlerClassV1, SoraServiceHandlerV1,
+            SoraServiceManifestV1, SoraServiceMutationPreconditionV1, SoraStateBindingV1,
+            SoraStateEncryptionV1, SoraStateMutabilityV1, SoraStateScopeV1, SoraTlsModeV1,
+            SoraUploadedModelBundleV1, SoraUploadedModelEncryptionRecipientV1,
+            SoraUploadedModelKeyEncapsulationV1, SoraUploadedModelKeyWrapAeadV1,
+            SoraUploadedModelPricingPolicyV1, SoraUploadedModelRuntimeFormatV1,
+            SoraUploadedModelWrappedKeyV1, encode_bundle_with_materials_provenance_payload,
+            encode_decryption_request_provenance_payload,
             encode_uploaded_model_bundle_register_provenance_payload,
             encode_uploaded_model_finalize_provenance_payload,
         },
@@ -66,33 +67,23 @@ const PRIVATE_MODEL_SERVICE_NAME: &str = "portal";
 const PRIVATE_MODEL_SERVICE_VERSION: &str = "1.0.0";
 const PRIVATE_MODEL_ID: &str = "vision_model";
 const PRIVATE_MODEL_NAME: &str = "vision";
-const PRIVATE_MODEL_WEIGHT_VERSION: &str = "v1";
+const PRIVATE_MODEL_WEIGHT_VERSION: &str = PRIVATE_MODEL_SERVICE_VERSION;
 const PRIVATE_MODEL_ARTIFACT_ID: &str = "vision_model_artifact";
 const PRIVATE_MODEL_DATASET_REF: &str = "sorafs://private-upload-fixture";
-const PRIVATE_MODEL_POLICY_ID: &str = "policy-private-release";
-#[derive(Clone, Debug, iroha::data_model::JsonSerialize)]
-struct PrivateUploadedModelQuantizedCpuModelDtoForTest {
-    input_len: u64,
-    output_len: u64,
-    weights_i8: Vec<i8>,
-    bias_i32: Vec<i32>,
-    output_shift: u8,
-    output_min: i32,
-    output_max: i32,
-}
+const PRIVATE_MODEL_POLICY_ID: &str = "private_release_policy";
+const PRIVATE_MODEL_DECRYPTION_REQUEST_ID: &str = "private-upload-input-release";
 #[derive(Clone, Debug, iroha::data_model::JsonSerialize)]
 struct PrivateUploadedModelExecuteRequestForTest {
     service_name: String,
     weight_version: String,
+    #[norito(required)]
     model_id: Option<String>,
+    #[norito(required)]
     model_name: Option<String>,
+    #[norito(required)]
     bundle_root: Option<Hash>,
-    policy_id: String,
-    decryption_request_id: Option<String>,
-    model: PrivateUploadedModelQuantizedCpuModelDtoForTest,
-    plaintext_input_i32: Vec<i32>,
+    decryption_request_id: String,
     input_artifact: SoraPrivateModelArtifactRefV1,
-    output_artifact: SoraPrivateModelArtifactRefV1,
 }
 fn with_soracloud_private_runtime_bootstrap(mut builder: NetworkBuilder) -> NetworkBuilder {
     for instruction in sorafs_pin_fee_bootstrap_instructions() {
@@ -220,7 +211,7 @@ fn soracloud_private_model_service_bundle() -> SoraDeploymentBundleV1 {
                 binding_name: "session".parse().expect("valid binding name"),
                 key_prefix: "/state/session".to_owned(),
                 scope: SoraStateScopeV1::ServiceState,
-                encryption: SoraStateEncryptionV1::Plaintext,
+                encryption: SoraStateEncryptionV1::ClientCiphertext,
                 mutability: SoraStateMutabilityV1::ReadOnly,
                 max_item_bytes: NonZeroU64::new(1024).expect("non-zero item size"),
                 max_total_bytes: NonZeroU64::new(2048).expect("non-zero total size"),
@@ -357,10 +348,68 @@ fn private_model_artifact_ref(
         artifact_role: role.to_owned(),
     }
 }
+fn private_uploaded_model_decryption_policy() -> DecryptionAuthorityPolicyV1 {
+    DecryptionAuthorityPolicyV1 {
+        schema_version: DECRYPTION_AUTHORITY_POLICY_VERSION_V1,
+        policy_name: PRIVATE_MODEL_POLICY_ID
+            .parse()
+            .expect("valid private-model decryption policy name"),
+        mode: DecryptionAuthorityModeV1::ClientHeld,
+        approver_quorum: NonZeroU16::new(1).expect("non-zero approver quorum"),
+        approver_ids: vec![
+            "private_model_owner"
+                .parse()
+                .expect("valid private-model approver name"),
+        ],
+        allow_break_glass: false,
+        jurisdiction_tag: "integration_test".to_owned(),
+        require_consent_evidence: false,
+        max_ttl_blocks: NonZeroU32::new(128).expect("non-zero decryption TTL"),
+        audit_tag: "private_model.execute".to_owned(),
+    }
+}
+fn private_uploaded_model_decryption_request(
+    input_artifact: &SoraPrivateModelArtifactRefV1,
+) -> DecryptionRequestV1 {
+    DecryptionRequestV1 {
+        schema_version: DECRYPTION_REQUEST_VERSION_V1,
+        request_id: PRIVATE_MODEL_DECRYPTION_REQUEST_ID.to_owned(),
+        policy_name: PRIVATE_MODEL_POLICY_ID
+            .parse()
+            .expect("valid private-model decryption policy name"),
+        binding_name: "session"
+            .parse()
+            .expect("valid private-model state binding name"),
+        state_key: "/state/session/private-upload-input".to_owned(),
+        ciphertext_commitment: input_artifact.artifact_hash,
+        justification: "deterministic private uploaded-model execution".to_owned(),
+        jurisdiction_tag: "integration_test".to_owned(),
+        consent_evidence_hash: None,
+        requested_ttl_blocks: NonZeroU32::new(64).expect("non-zero requested decryption TTL"),
+        break_glass: false,
+        break_glass_reason: None,
+        governance_tx_hash: Hash::new(b"private-upload-decryption-governance"),
+    }
+}
+fn private_uploaded_model_decryption_provenance(
+    service_name: &iroha::data_model::name::Name,
+    policy: &DecryptionAuthorityPolicyV1,
+    request: &DecryptionRequestV1,
+) -> Result<ManifestProvenance> {
+    let payload = encode_decryption_request_provenance_payload(
+        service_name.as_ref(),
+        policy.clone(),
+        request.clone(),
+    )?;
+    Ok(ManifestProvenance {
+        signer: ALICE_KEYPAIR.public_key().clone(),
+        signature: Signature::try_new(ALICE_KEYPAIR.private_key(), &payload)?,
+    })
+}
 fn private_uploaded_model_execute_request(
     bundle: &SoraUploadedModelBundleV1,
+    decryption_request_id: &str,
     input_artifact: SoraPrivateModelArtifactRefV1,
-    output_artifact: SoraPrivateModelArtifactRefV1,
 ) -> PrivateUploadedModelExecuteRequestForTest {
     PrivateUploadedModelExecuteRequestForTest {
         service_name: bundle.service_name.to_string(),
@@ -368,20 +417,8 @@ fn private_uploaded_model_execute_request(
         model_id: Some(bundle.model_id.clone()),
         model_name: None,
         bundle_root: Some(bundle.bundle_root),
-        policy_id: bundle.decryption_policy_ref.clone(),
-        decryption_request_id: None,
-        model: PrivateUploadedModelQuantizedCpuModelDtoForTest {
-            input_len: 2,
-            output_len: 1,
-            weights_i8: vec![3, -2],
-            bias_i32: vec![1],
-            output_shift: 1,
-            output_min: -16,
-            output_max: 16,
-        },
-        plaintext_input_i32: vec![5, -3],
+        decryption_request_id: decryption_request_id.to_owned(),
         input_artifact,
-        output_artifact,
     }
 }
 #[tokio::test]
@@ -922,8 +959,11 @@ fn add_canonical_app_headers(
 }
 #[tokio::test]
 #[allow(clippy::too_many_lines)]
-async fn soracloud_private_uploaded_model_receipt_survives_four_peer_restart() -> Result<()> {
-    let test_name = stringify!(soracloud_private_uploaded_model_receipt_survives_four_peer_restart);
+async fn soracloud_private_uploaded_model_execute_remains_fail_closed_after_four_peer_restart()
+-> Result<()> {
+    let test_name = stringify!(
+        soracloud_private_uploaded_model_execute_remains_fail_closed_after_four_peer_restart
+    );
     let Some(network) = sandbox::start_network_async_or_skip(
         with_soracloud_private_runtime_bootstrap(NetworkBuilder::new().with_peers(4)),
         test_name,
@@ -934,13 +974,12 @@ async fn soracloud_private_uploaded_model_receipt_survives_four_peer_restart() -
     };
     let (model_digest, model_pin) = register_private_model_pin(4_352, 0xC1)?;
     let (input_digest, input_pin) = register_private_model_pin(64, 0xC2)?;
-    let (output_digest, output_pin) = register_private_model_pin(96, 0xC3)?;
     let input_artifact =
         private_model_artifact_ref("input", input_digest, b"private-input-artifact", 64);
-    let output_artifact =
-        private_model_artifact_ref("output", output_digest, b"private-output-artifact", 96);
     let service_bundle = soracloud_private_model_service_bundle();
     let uploaded_bundle = private_uploaded_model_bundle(model_digest);
+    let decryption_policy = private_uploaded_model_decryption_policy();
+    let decryption_request = private_uploaded_model_decryption_request(&input_artifact);
     let weight_artifact_hash = Hash::new(b"private-weight-artifact");
     let training_config_hash = Hash::new(b"private-training-config");
     let reproducibility_hash = Hash::new(b"private-reproducibility");
@@ -948,13 +987,23 @@ async fn soracloud_private_uploaded_model_receipt_survives_four_peer_restart() -
     let setup_instructions = vec![
         model_pin.into(),
         input_pin.into(),
-        output_pin.into(),
         DeploySoracloudService {
             bundle: service_bundle.clone(),
             initial_service_configs: BTreeMap::new(),
             initial_service_secrets: BTreeMap::new(),
             precondition: SoraServiceMutationPreconditionV1::ServiceAbsent,
             provenance: soracloud_service_bundle_provenance(&service_bundle)?,
+        }
+        .into(),
+        RecordSoracloudDecryptionRequest {
+            service_name: uploaded_bundle.service_name.clone(),
+            policy: decryption_policy.clone(),
+            request: decryption_request.clone(),
+            provenance: private_uploaded_model_decryption_provenance(
+                &uploaded_bundle.service_name,
+                &decryption_policy,
+                &decryption_request,
+            )?,
         }
         .into(),
     ];
@@ -1028,55 +1077,11 @@ async fn soracloud_private_uploaded_model_receipt_survives_four_peer_restart() -
     }
     let execute_request = private_uploaded_model_execute_request(
         &uploaded_bundle,
+        &decryption_request.request_id,
         input_artifact.clone(),
-        output_artifact.clone(),
     );
-    let receipt = post_private_uploaded_model_execute(&network.client(), &execute_request).await?;
-    receipt.validate_submission().map_err(|err| {
-        eyre!("private uploaded-model receipt submission did not validate: {err}")
-    })?;
-    assert_eq!(receipt.service_name, uploaded_bundle.service_name);
-    assert_eq!(receipt.model_id, uploaded_bundle.model_id);
-    assert_eq!(receipt.weight_version, uploaded_bundle.weight_version);
-    assert_eq!(
-        receipt.model_manifest_digest,
-        uploaded_bundle.sorafs_manifest_digest
-    );
-    assert_eq!(receipt.input_artifact, input_artifact);
-    assert_eq!(receipt.output_artifact, output_artifact);
-    let receipt_instruction = RecordSoracloudPrivateUploadedModelExecutionReceipt {
-        receipt: receipt.clone(),
-    };
-    let receipt_client = network.client();
-    let receipt_res: eyre::Result<()> = spawn_blocking(move || {
-        receipt_client
-            .submit_all_blocking::<InstructionBox>(
-                [receipt_instruction.into()],
-                iroha::data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
-            )
-            .map(|_| ())
-    })
-    .await
-    .map_err(eyre::Report::from)?;
-    if sandbox::handle_result(receipt_res, test_name)?.is_none() {
-        return Ok(());
-    }
-    if sandbox::handle_result(network.ensure_blocks(4).await, test_name)?.is_none() {
-        return Ok(());
-    }
-    let committed = wait_for_private_uploaded_model_receipt(
-        network.client(),
-        receipt.clone(),
-        network.sync_timeout(),
-    )
-    .await?;
-    assert!(committed.emitted_sequence > 0);
-    committed
-        .validate()
-        .map_err(|err| eyre!("committed private receipt did not validate: {err}"))?;
-    let mut expected_persisted_receipt = receipt.clone();
-    expected_persisted_receipt.emitted_sequence = committed.emitted_sequence;
-    assert_eq!(committed, expected_persisted_receipt);
+    assert_private_uploaded_model_execute_unavailable(&network.client(), &execute_request).await?;
+    assert_no_private_uploaded_model_receipts(&network.client(), &uploaded_bundle).await?;
     network.shutdown().await;
     for peer in network.peers() {
         remove_optional_recovery_sidecars(&peer.kura_store_dir())?;
@@ -1085,32 +1090,22 @@ async fn soracloud_private_uploaded_model_receipt_survives_four_peer_restart() -
     for peer in network.peers() {
         timeout(network.peer_startup_timeout(), async {
             peer.start_checked(config_layers.iter(), None).await?;
-            peer.once_block(4).await;
+            peer.once_block(3).await;
             Ok::<(), eyre::Report>(())
         })
         .await
         .map_err(eyre::Report::new)??;
     }
     for peer in network.peers() {
-        let restored = wait_for_private_uploaded_model_receipt(
-            peer.client(),
-            receipt.clone(),
-            network.sync_timeout(),
-        )
-        .await?;
-        assert_eq!(
-            restored,
-            expected_persisted_receipt,
-            "restarted peer {} rebuilt a different Soracloud private receipt",
-            peer.id()
-        );
+        assert_private_uploaded_model_execute_unavailable(&peer.client(), &execute_request).await?;
+        assert_no_private_uploaded_model_receipts(&peer.client(), &uploaded_bundle).await?;
     }
     Ok(())
 }
-async fn post_private_uploaded_model_execute(
+async fn assert_private_uploaded_model_execute_unavailable(
     client: &Client,
     request: &PrivateUploadedModelExecuteRequestForTest,
-) -> Result<SoraPrivateUploadedModelExecutionReceiptV1> {
+) -> Result<()> {
     let url = client
         .torii_url
         .join("/v1/soracloud/model/upload/private/execute")?;
@@ -1125,76 +1120,52 @@ async fn post_private_uploaded_model_execute(
         .await?;
     let status = response.status();
     let response_body = response.bytes().await?.to_vec();
-    if !status.is_success() {
+    if status != reqwest::StatusCode::CONFLICT {
         return Err(eyre!(
-            "private uploaded-model execute returned status {}: {}",
-            status,
+            "private uploaded-model execute returned status {status}, expected 409 Conflict: {}",
             String::from_utf8_lossy(&response_body)
         ));
     }
     let value: Value = json::from_slice(&response_body)?;
     let root = value
         .as_object()
-        .ok_or_else(|| eyre!("private execute response was not a JSON object"))?;
-    assert_eq!(root.get("schema_version").and_then(Value::as_u64), Some(1));
-    let instructions = root
-        .get("tx_instructions")
-        .and_then(Value::as_array)
-        .ok_or_else(|| eyre!("private execute response omitted tx_instructions"))?;
-    let instruction = instructions
-        .first()
-        .and_then(Value::as_object)
-        .ok_or_else(|| eyre!("private execute response omitted receipt instruction"))?;
-    assert_eq!(
-        instruction.get("wire_id").and_then(Value::as_str),
-        Some(
-            "iroha_data_model::isi::soracloud::RecordSoracloudPrivateUploadedModelExecutionReceipt"
-        )
-    );
-    let payload_hex = instruction
-        .get("payload_hex")
-        .and_then(Value::as_str)
-        .ok_or_else(|| eyre!("private execute response omitted receipt instruction payload"))?;
-    if payload_hex.is_empty() {
+        .ok_or_else(|| eyre!("private execute error was not a JSON object"))?;
+    if root.get("code").and_then(Value::as_str) != Some("conflict") {
         return Err(eyre!(
-            "private execute response returned an empty receipt instruction payload"
+            "private uploaded-model execute returned a non-conflict error body: {value:?}"
         ));
     }
-    let receipt_value = root
-        .get("receipt")
-        .ok_or_else(|| eyre!("private execute response omitted receipt"))?;
-    Ok(json::from_value(receipt_value.clone())?)
-}
-async fn wait_for_private_uploaded_model_receipt(
-    client: Client,
-    expected: SoraPrivateUploadedModelExecutionReceiptV1,
-    timeout_after: Duration,
-) -> Result<SoraPrivateUploadedModelExecutionReceiptV1> {
-    let deadline = Instant::now() + timeout_after;
-    let mut last_error = eyre!("private uploaded-model receipt was not observed before timeout");
-    loop {
-        match fetch_private_uploaded_model_receipt(&client, &expected).await {
-            Ok(receipt) => return Ok(receipt),
-            Err(err) => last_error = err,
-        }
-        if Instant::now() >= deadline {
-            break;
-        }
-        sleep(Duration::from_millis(200)).await;
+    let message = root
+        .get("message")
+        .and_then(Value::as_str)
+        .ok_or_else(|| eyre!("private execute conflict omitted its message"))?;
+    if !message.contains("cannot yet load and decrypt the exact finalized SoraFS bundle")
+        || !message.contains("no execution receipt was emitted")
+    {
+        return Err(eyre!(
+            "private uploaded-model execute returned an unexpected conflict: {message}"
+        ));
     }
-    Err(last_error)
+    for forbidden in ["receipt", "output_artifact", "tx_instructions"] {
+        if root.contains_key(forbidden) {
+            return Err(eyre!(
+                "fail-closed private execute response unexpectedly exposed `{forbidden}`: {value:?}"
+            ));
+        }
+    }
+    Ok(())
 }
-async fn fetch_private_uploaded_model_receipt(
+async fn assert_no_private_uploaded_model_receipts(
     client: &Client,
-    expected: &SoraPrivateUploadedModelExecutionReceiptV1,
-) -> Result<SoraPrivateUploadedModelExecutionReceiptV1> {
+    bundle: &SoraUploadedModelBundleV1,
+) -> Result<()> {
     let mut url = client
         .torii_url
         .join("/v1/soracloud/model/upload/private/receipts")?;
     url.query_pairs_mut()
-        .append_pair("service_name", expected.service_name.as_ref())
-        .append_pair("model_id", &expected.model_id)
-        .append_pair("weight_version", &expected.weight_version)
+        .append_pair("service_name", bundle.service_name.as_ref())
+        .append_pair("model_id", &bundle.model_id)
+        .append_pair("weight_version", &bundle.weight_version)
         .append_pair("limit", "1")
         .append_pair("count_mode", "exact");
     let response = integration_tests::http::client()
@@ -1221,43 +1192,28 @@ async fn fetch_private_uploaded_model_receipt(
             "private receipt query did not preserve exact count mode: {value:?}"
         ));
     }
-    if root.get("returned_items").and_then(Value::as_u64) != Some(1) {
-        return Err(eyre!(
-            "private receipt query did not return exactly one item: {value:?}"
-        ));
-    }
-    if root.get("remaining_items").and_then(Value::as_u64) != Some(0) {
-        return Err(eyre!(
-            "private receipt query reported unexpected remaining_items: {value:?}"
-        ));
+    for (field, expected) in [("returned_items", 0), ("remaining_items", 0), ("total", 0)] {
+        if root.get(field).and_then(Value::as_u64) != Some(expected) {
+            return Err(eyre!(
+                "private receipt query reported nonzero `{field}` after rejected execution: {value:?}"
+            ));
+        }
     }
     if root.get("has_more").and_then(Value::as_bool) != Some(false) {
         return Err(eyre!(
-            "private receipt query reported unexpected has_more: {value:?}"
-        ));
-    }
-    if root.get("total").and_then(Value::as_u64) != Some(1) {
-        return Err(eyre!(
-            "private receipt query reported unexpected exact total: {value:?}"
+            "private receipt query reported has_more after rejected execution: {value:?}"
         ));
     }
     let receipts = root
         .get("receipts")
         .and_then(Value::as_array)
         .ok_or_else(|| eyre!("private receipt query response omitted receipts"))?;
-    let receipt_value = receipts
-        .first()
-        .ok_or_else(|| eyre!("private receipt query returned no receipts"))?;
-    let receipt: SoraPrivateUploadedModelExecutionReceiptV1 =
-        json::from_value(receipt_value.clone())?;
-    if receipt.receipt_id != expected.receipt_id {
+    if !receipts.is_empty() {
         return Err(eyre!(
-            "private receipt query returned receipt `{}` instead of `{}`",
-            receipt.receipt_id,
-            expected.receipt_id
+            "rejected private execution persisted unexpected receipts: {value:?}"
         ));
     }
-    Ok(receipt)
+    Ok(())
 }
 #[tokio::test]
 async fn restarted_peer_with_mismatched_genesis_pubkey_is_rejected() -> Result<()> {

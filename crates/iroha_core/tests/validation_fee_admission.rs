@@ -2,7 +2,6 @@
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 use iroha_config::parameters::actual::ParliamentTimedOvn;
 use iroha_core::{
-    block::{BlockBuilder, ValidBlock},
     governance::{
         manifest::LaneManifestRegistry,
         parliament::{
@@ -347,19 +346,6 @@ fn accept_transaction(state: &State, tx: SignedTransaction) -> AcceptedTransacti
         crypto.as_ref(),
     )
     .expect("transaction admission should pass stateless checks")
-}
-fn commit_empty_genesis_like_block(state: &State) {
-    let block_signer = key_pair(240);
-    let new_block = BlockBuilder::new(Vec::new())
-        .chain(0, None)
-        .sign(block_signer.private_key())
-        .unpack(|_| {});
-    let mut state_block = state.block(new_block.header());
-    let valid_block =
-        ValidBlock::validate_unchecked(new_block.into(), &mut state_block).unpack(|_| {});
-    let committed_block = valid_block.commit_unchecked().unpack(|_| {});
-    let _events = state_block.apply_without_execution(&committed_block, Vec::new());
-    state_block.commit().expect("commit initial block hash");
 }
 fn validation_fee_policy(
     state: &State,
@@ -937,7 +923,7 @@ fn install_canonical_post_enactment_validation_fee_state(
             ProposalContentId::new(proposal_id)
         );
         assert_eq!(
-            seed_canonical_enacted_proposal(proposal_kind, authority, &mut state_transaction,),
+            seed_canonical_enacted_proposal(proposal_kind, authority, &mut state_transaction),
             proposal_id
         );
         let governance_attempt_id = attempt.attempt().id;
@@ -1276,7 +1262,6 @@ fn asset_balance(world: &impl WorldReadOnly, asset_id: &AssetId) -> Quantity {
 #[test]
 fn raw_fee_asset_transfer_is_rejected_without_exact_active_validation_fee() {
     let (state, user, user_key_pair, recipient, treasury, fee_asset) = test_state();
-    commit_empty_genesis_like_block(&state);
     let policy = validation_fee_policy(&state, fee_asset.clone(), treasury);
     install_canonical_post_enactment_validation_fee_state(
         &state,
@@ -1319,7 +1304,6 @@ fn raw_fee_asset_transfer_is_rejected_without_exact_active_validation_fee() {
 #[test]
 fn validation_fee_registry_cannot_be_installed_through_generic_parameter_path() {
     let (state, user, _, _, treasury, fee_asset) = test_state();
-    commit_empty_genesis_like_block(&state);
     let policy = validation_fee_policy(&state, fee_asset, treasury);
     let custom = policy_registry(&state, &policy).into_custom_parameter();
     let mut block = state.block(block_header(
@@ -1339,7 +1323,6 @@ fn validation_fee_registry_cannot_be_installed_through_generic_parameter_path() 
 #[test]
 fn active_registry_rejects_missing_enacted_parliament_attempt() {
     let (state, user, user_key_pair, recipient, treasury, fee_asset) = test_state();
-    commit_empty_genesis_like_block(&state);
     let policy = validation_fee_policy(&state, fee_asset.clone(), treasury);
     install_canonical_post_enactment_validation_fee_state(
         &state,
@@ -1387,7 +1370,6 @@ fn active_registry_rejects_missing_enacted_parliament_attempt() {
 #[test]
 fn enacted_lifecycle_pins_exact_wrapper_pool_and_asset_effect_permissions() {
     let (state, user, user_key_pair, recipient, treasury, fee_asset) = test_state();
-    commit_empty_genesis_like_block(&state);
     let policy = validation_fee_policy(&state, fee_asset, treasury.clone());
     install_canonical_post_enactment_validation_fee_state(&state, &user, &user_key_pair, policy);
     let wrapper_permission: iroha_data_model::permission::Permission =
@@ -1445,7 +1427,6 @@ fn enacted_lifecycle_pins_exact_wrapper_pool_and_asset_effect_permissions() {
 #[test]
 fn ivm_proved_overlay_reaches_active_validation_fee_admission() {
     let (state, user, user_key_pair, recipient, treasury, fee_asset) = test_state();
-    commit_empty_genesis_like_block(&state);
     let policy = validation_fee_policy(&state, fee_asset.clone(), treasury.clone());
     install_canonical_post_enactment_validation_fee_state(
         &state,
@@ -1502,7 +1483,6 @@ fn ivm_proved_overlay_reaches_active_validation_fee_admission() {
 #[test]
 fn principal_and_fee_commit_atomically_under_active_validation_fee_policy() {
     let (state, user, user_key_pair, recipient, treasury, fee_asset) = test_state();
-    commit_empty_genesis_like_block(&state);
     let policy = validation_fee_policy(&state, fee_asset.clone(), treasury.clone());
     install_canonical_post_enactment_validation_fee_state(
         &state,
@@ -1685,7 +1665,6 @@ fn principal_and_fee_commit_atomically_under_active_validation_fee_policy() {
 #[test]
 fn fee_instruction_policy_hash_amount_and_treasury_are_covered_by_user_signature() {
     let (state, user, user_key_pair, recipient, treasury, fee_asset) = test_state();
-    commit_empty_genesis_like_block(&state);
     let policy = validation_fee_policy(&state, fee_asset.clone(), treasury);
     install_canonical_post_enactment_validation_fee_state(
         &state,

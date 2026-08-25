@@ -947,6 +947,110 @@ fn private_uploaded_model_execution_receipt_round_trips_and_validates() {
         }
     ));
 }
+
+#[test]
+fn private_uploaded_model_execution_receipt_requires_canonical_commitments_and_identity() {
+    let canonical = sample_private_uploaded_model_execution_receipt();
+
+    let mut substituted_runtime = canonical.clone();
+    substituted_runtime.runtime_version = "soracloud.quantized-cpu.v2".to_owned();
+    substituted_runtime.request_commitment =
+        derive_soracloud_private_model_request_commitment_v1(&substituted_runtime);
+    substituted_runtime.result_commitment =
+        derive_soracloud_private_model_result_commitment_v1(&substituted_runtime);
+    substituted_runtime.receipt_id =
+        derive_soracloud_private_uploaded_model_execution_receipt_id_v1(&substituted_runtime);
+    let error = substituted_runtime
+        .validate()
+        .expect_err("a substituted private runtime version must fail validation");
+    assert!(matches!(
+        error,
+        SoracloudManifestError::InvalidField {
+            manifest: "sora private uploaded model execution receipt",
+            field: "runtime_version",
+            ..
+        }
+    ));
+
+    let mut substituted_request = canonical.clone();
+    substituted_request.request_commitment = sample_hash(0xE1);
+    substituted_request.receipt_id =
+        derive_soracloud_private_uploaded_model_execution_receipt_id_v1(&substituted_request);
+    let error = substituted_request
+        .validate()
+        .expect_err("a substituted private request commitment must fail validation");
+    assert!(matches!(
+        error,
+        SoracloudManifestError::InvalidField {
+            manifest: "sora private uploaded model execution receipt",
+            field: "request_commitment",
+            ..
+        }
+    ));
+
+    let mut substituted_output_destination = canonical.clone();
+    substituted_output_destination.output_artifact.artifact_hash = sample_hash(0xE4);
+    substituted_output_destination.result_commitment =
+        derive_soracloud_private_model_result_commitment_v1(&substituted_output_destination);
+    substituted_output_destination.receipt_id =
+        derive_soracloud_private_uploaded_model_execution_receipt_id_v1(
+            &substituted_output_destination,
+        );
+    let error = substituted_output_destination
+        .validate()
+        .expect_err("a substituted private output destination must invalidate the request");
+    assert!(matches!(
+        error,
+        SoracloudManifestError::InvalidField {
+            manifest: "sora private uploaded model execution receipt",
+            field: "request_commitment",
+            ..
+        }
+    ));
+
+    let mut substituted_result = canonical.clone();
+    substituted_result.result_commitment = sample_hash(0xE2);
+    substituted_result.receipt_id =
+        derive_soracloud_private_uploaded_model_execution_receipt_id_v1(&substituted_result);
+    let error = substituted_result
+        .validate()
+        .expect_err("a substituted private result commitment must fail validation");
+    assert!(matches!(
+        error,
+        SoracloudManifestError::InvalidField {
+            manifest: "sora private uploaded model execution receipt",
+            field: "result_commitment",
+            ..
+        }
+    ));
+
+    let mut substituted_id = canonical.clone();
+    substituted_id.receipt_id = sample_hash(0xE3);
+    let error = substituted_id
+        .validate()
+        .expect_err("a substituted private receipt id must fail validation");
+    assert!(matches!(
+        error,
+        SoracloudManifestError::InvalidField {
+            manifest: "sora private uploaded model execution receipt",
+            field: "receipt_id",
+            ..
+        }
+    ));
+
+    let canonical_id = canonical.receipt_id;
+    let mut submission = canonical;
+    submission.emitted_sequence = 0;
+    assert_eq!(
+        derive_soracloud_private_uploaded_model_execution_receipt_id_v1(&submission),
+        canonical_id,
+        "ledger assignment must not change private receipt identity"
+    );
+    submission
+        .validate_submission()
+        .expect("the canonical identity must remain valid before sequence assignment");
+}
+
 #[test]
 fn hf_source_record_validation_accepts_consistent_state() {
     sample_hf_source_record().validate().expect("valid source");

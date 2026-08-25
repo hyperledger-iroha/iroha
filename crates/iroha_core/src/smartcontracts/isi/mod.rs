@@ -387,6 +387,7 @@ define_instruction_handlers! {
     dispatch_instruction::<iroha_data_model::isi::soracloud::ReportSoracloudServiceLeaseUsage>,
     dispatch_instruction::<iroha_data_model::isi::soracloud::RecordSoracloudMailboxMessage>,
     dispatch_instruction::<iroha_data_model::isi::soracloud::RecordSoracloudRuntimeReceipt>,
+    dispatch_instruction::<iroha_data_model::isi::soracloud::ApplySoracloudOrderedMailboxResult>,
     dispatch_instruction::<
         iroha_data_model::isi::soracloud::RecordSoracloudPrivateUploadedModelExecutionReceipt
     >,

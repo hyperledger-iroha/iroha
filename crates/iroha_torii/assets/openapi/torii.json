@@ -1089,17 +1089,17 @@
               }
             ]
           },
-          "lease_expires_sequence": {
+          "lease_expires_height": {
             "format": "uint64",
             "minimum": 0,
             "type": "integer"
           },
-          "lease_remaining_ticks": {
+          "lease_remaining_blocks": {
             "format": "uint64",
             "minimum": 0,
             "type": "integer"
           },
-          "lease_started_sequence": {
+          "lease_started_height": {
             "format": "uint64",
             "minimum": 0,
             "type": "integer"
@@ -1186,9 +1186,9 @@
           "apartment_name",
           "manifest_hash",
           "status",
-          "lease_started_sequence",
-          "lease_expires_sequence",
-          "lease_remaining_ticks",
+          "lease_started_height",
+          "lease_expires_height",
+          "lease_remaining_blocks",
           "restart_count",
           "state_quota_bytes",
           "tool_capability_count",
@@ -1560,12 +1560,12 @@
               }
             ]
           },
-          "lease_expires_sequence": {
+          "lease_expires_height": {
             "format": "uint64",
             "minimum": 0,
             "type": "integer"
           },
-          "lease_remaining_ticks": {
+          "lease_remaining_blocks": {
             "format": "uint64",
             "minimum": 0,
             "type": "integer"
@@ -1631,8 +1631,8 @@
           "apartment_name",
           "sequence",
           "status",
-          "lease_expires_sequence",
-          "lease_remaining_ticks",
+          "lease_expires_height",
+          "lease_remaining_blocks",
           "manifest_hash",
           "revoked_policy_capability_count",
           "budget_ceiling_units",
@@ -1660,7 +1660,7 @@
             "minimum": 0,
             "type": "integer"
           },
-          "lease_ticks": {
+          "lease_blocks": {
             "format": "uint64",
             "minimum": 0,
             "type": "integer"
@@ -1671,7 +1671,7 @@
         },
         "required": [
           "manifest",
-          "lease_ticks",
+          "lease_blocks",
           "autonomy_budget_units"
         ],
         "type": "object"
@@ -1682,7 +1682,7 @@
           "apartment_name": {
             "type": "string"
           },
-          "lease_ticks": {
+          "lease_blocks": {
             "format": "uint64",
             "minimum": 0,
             "type": "integer"
@@ -1690,7 +1690,7 @@
         },
         "required": [
           "apartment_name",
-          "lease_ticks"
+          "lease_blocks"
         ],
         "type": "object"
       },
@@ -5637,15 +5637,19 @@
               }
             ]
           },
-          "config_name": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ]
+          "config_generation": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "config_mutations": {
+            "items": {
+              "$ref": "#/components/schemas/SoraServiceConfigMutationV1"
+            },
+            "type": "array"
+          },
+          "config_snapshot_hash": {
+            "$ref": "#/components/schemas/Hash"
           },
           "consent_evidence_hash": {
             "anyOf": [
@@ -5690,6 +5694,26 @@
               }
             ]
           },
+          "lease_reporting_epoch_rollover": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/SoraServiceLeaseReportingEpochRolloverV1"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "lease_usage": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/SoraServiceLeaseUsageAuditV1"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "policy_name": {
             "anyOf": [
               {
@@ -5710,30 +5734,49 @@
               }
             ]
           },
-          "rollout_handle": {
+          "process_generation": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "rollout_state": {
             "anyOf": [
               {
-                "type": "string"
+                "$ref": "#/components/schemas/RolloutRuntimeState"
               },
               {
                 "type": "null"
               }
             ]
           },
-          "secret_name": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ]
+          "secret_generation": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "secret_mutations": {
+            "items": {
+              "$ref": "#/components/schemas/SoraServiceSecretMutationV1"
+            },
+            "type": "array"
+          },
+          "secret_snapshot_hash": {
+            "$ref": "#/components/schemas/Hash"
           },
           "sequence": {
             "format": "uint64",
             "minimum": 0,
             "type": "integer"
+          },
+          "service_lease_commitment": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Hash"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "service_manifest_hash": {
             "$ref": "#/components/schemas/Hash"
@@ -5766,18 +5809,26 @@
           "to_version",
           "service_manifest_hash",
           "container_manifest_hash",
+          "process_generation",
+          "config_generation",
+          "secret_generation",
+          "config_snapshot_hash",
+          "secret_snapshot_hash",
           "binding_name",
           "state_key",
-          "config_name",
-          "secret_name",
+          "config_mutations",
+          "secret_mutations",
           "governance_tx_hash",
-          "rollout_handle",
+          "rollout_state",
           "policy_name",
           "policy_snapshot_hash",
           "jurisdiction_tag",
           "consent_evidence_hash",
           "break_glass",
           "break_glass_reason",
+          "lease_usage",
+          "service_lease_commitment",
+          "lease_reporting_epoch_rollover",
           "signed_by"
         ],
         "type": "object"
@@ -6091,28 +6142,6 @@
               }
             ]
           },
-          "lease_expires_sequence": {
-            "anyOf": [
-              {
-                "format": "uint64",
-                "minimum": 0,
-                "type": "integer"
-              },
-              {
-                "type": "null"
-              }
-            ]
-          },
-          "prepaid_runtime_balance": {
-            "anyOf": [
-              {
-                "$ref": "#/components/schemas/Quantity"
-              },
-              {
-                "type": "null"
-              }
-            ]
-          },
           "public_discovery_cid_host_url": {
             "anyOf": [
               {
@@ -6143,26 +6172,6 @@
               }
             ]
           },
-          "quota_class": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ]
-          },
-          "remaining_runtime_balance": {
-            "anyOf": [
-              {
-                "$ref": "#/components/schemas/Quantity"
-              },
-              {
-                "type": "null"
-              }
-            ]
-          },
           "revision_count": {
             "format": "uint32",
             "maximum": 4294967295,
@@ -6180,10 +6189,10 @@
             "minimum": 0,
             "type": "integer"
           },
-          "service_lease_status": {
+          "service_lease": {
             "anyOf": [
               {
-                "$ref": "#/components/schemas/SoraServiceLeaseStatusV1"
+                "$ref": "#/components/schemas/ControlPlaneServiceLeaseSnapshot"
               },
               {
                 "type": "null"
@@ -6202,11 +6211,7 @@
           "secret_generation",
           "config_entry_count",
           "secret_entry_count",
-          "quota_class",
-          "service_lease_status",
-          "lease_expires_sequence",
-          "prepaid_runtime_balance",
-          "remaining_runtime_balance",
+          "service_lease",
           "public_discovery_content_cid",
           "public_discovery_url",
           "public_discovery_cid_host_url",
@@ -12599,49 +12604,47 @@
             },
             "type": "array"
           },
-          "provenance_attestation_hash": {
-            "$ref": "#/components/schemas/Hash"
-          },
           "recent_access_events": {
             "items": {
               "$ref": "#/components/schemas/HealthAccessAuditEntry"
             },
             "type": "array"
           },
-          "reproducibility_hash": {
-            "$ref": "#/components/schemas/Hash"
-          },
           "schema_version": {
             "const": 1,
             "type": "integer"
           },
           "service_name": {
-            "type": "string"
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
-          "training_config_hash": {
-            "$ref": "#/components/schemas/Hash"
-          },
-          "training_job_id": {
-            "type": "string"
-          },
-          "weight_artifact_hash": {
-            "$ref": "#/components/schemas/Hash"
-          },
-          "weight_version": {
-            "type": "string"
+          "total_access_events": {
+            "format": "uint32",
+            "maximum": 4294967295,
+            "minimum": 0,
+            "type": "integer"
           }
         },
         "required": [
+          "schema_version",
           "service_name",
-          "model_name",
-          "weight_version",
-          "training_job_id",
-          "parent_version",
-          "weight_artifact_hash",
-          "dataset_ref",
-          "training_config_hash",
-          "reproducibility_hash",
-          "provenance_attestation_hash"
+          "jurisdiction_tag",
+          "generated_at_sequence",
+          "total_access_events",
+          "break_glass_events",
+          "non_break_glass_events",
+          "consent_evidence_present_events",
+          "consent_evidence_coverage_bps",
+          "recent_access_events",
+          "jurisdiction_stats",
+          "data_flow_attestations",
+          "policy_diff_history"
         ],
         "type": "object"
       },
@@ -23726,25 +23729,10 @@
             ]
           },
           "decryption_request_id": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ]
-          },
-          "emitted_sequence": {
-            "format": "uint64",
-            "minimum": 0,
-            "type": "integer"
+            "type": "string"
           },
           "input_artifact": {
             "$ref": "#/components/schemas/SoraPrivateModelArtifactRefV1"
-          },
-          "model": {
-            "$ref": "#/components/schemas/PrivateUploadedModelQuantizedCpuModelDto"
           },
           "model_id": {
             "anyOf": [
@@ -23766,21 +23754,6 @@
               }
             ]
           },
-          "output_artifact": {
-            "$ref": "#/components/schemas/SoraPrivateModelArtifactRefV1"
-          },
-          "plaintext_input_i32": {
-            "items": {
-              "format": "int32",
-              "maximum": 2147483647,
-              "minimum": -2147483648,
-              "type": "integer"
-            },
-            "type": "array"
-          },
-          "policy_id": {
-            "type": "string"
-          },
           "service_name": {
             "type": "string"
           },
@@ -23794,13 +23767,8 @@
           "model_id",
           "model_name",
           "bundle_root",
-          "policy_id",
           "decryption_request_id",
-          "model",
-          "plaintext_input_i32",
-          "input_artifact",
-          "output_artifact",
-          "emitted_sequence"
+          "input_artifact"
         ],
         "type": "object"
       },
@@ -23809,6 +23777,9 @@
         "properties": {
           "receipt": {
             "$ref": "#/components/schemas/SoraPrivateUploadedModelExecutionReceiptV1"
+          },
+          "output_artifact": {
+            "$ref": "#/components/schemas/SoraPrivateModelArtifactRefV1"
           },
           "schema_version": {
             "const": 1,
@@ -23828,68 +23799,8 @@
           "schema_version",
           "status",
           "receipt",
+          "output_artifact",
           "tx_instructions"
-        ],
-        "type": "object"
-      },
-      "PrivateUploadedModelQuantizedCpuModelDto": {
-        "additionalProperties": false,
-        "properties": {
-          "bias_i32": {
-            "items": {
-              "format": "int32",
-              "maximum": 2147483647,
-              "minimum": -2147483648,
-              "type": "integer"
-            },
-            "type": "array"
-          },
-          "input_len": {
-            "format": "uint64",
-            "minimum": 1,
-            "type": "integer"
-          },
-          "output_len": {
-            "format": "uint64",
-            "minimum": 1,
-            "type": "integer"
-          },
-          "output_max": {
-            "format": "int32",
-            "maximum": 2147483647,
-            "minimum": -2147483648,
-            "type": "integer"
-          },
-          "output_min": {
-            "format": "int32",
-            "maximum": 2147483647,
-            "minimum": -2147483648,
-            "type": "integer"
-          },
-          "output_shift": {
-            "format": "uint8",
-            "maximum": 30,
-            "minimum": 0,
-            "type": "integer"
-          },
-          "weights_i8": {
-            "items": {
-              "format": "int8",
-              "maximum": 127,
-              "minimum": -128,
-              "type": "integer"
-            },
-            "type": "array"
-          }
-        },
-        "required": [
-          "input_len",
-          "output_len",
-          "weights_i8",
-          "bias_i32",
-          "output_shift",
-          "output_min",
-          "output_max"
         ],
         "type": "object"
       },
@@ -31842,7 +31753,7 @@
           "egress_price_per_mib": {
             "$ref": "#/components/schemas/Quantity"
           },
-          "lease_duration_sequences": {
+          "lease_duration_blocks": {
             "format": "uint64",
             "minimum": 1,
             "type": "integer"
@@ -31853,14 +31764,14 @@
           "quota_class": {
             "type": "string"
           },
-          "runtime_price_per_sequence": {
+          "runtime_price_per_block": {
             "$ref": "#/components/schemas/Quantity"
           },
           "schema_version": {
             "const": 1,
             "type": "integer"
           },
-          "storage_price_per_gib_sequence": {
+          "storage_price_per_gib_block": {
             "$ref": "#/components/schemas/Quantity"
           }
         },
@@ -31869,9 +31780,9 @@
           "quota_class",
           "deployment_deposit",
           "prepaid_runtime_balance",
-          "lease_duration_sequences",
-          "runtime_price_per_sequence",
-          "storage_price_per_gib_sequence",
+          "lease_duration_blocks",
+          "runtime_price_per_block",
+          "storage_price_per_gib_block",
           "egress_price_per_mib"
         ],
         "type": "object"
@@ -32019,6 +31930,58 @@
         ],
         "type": "object"
       },
+      "SoraInrouReplicaPlacementV1": {
+        "additionalProperties": false,
+        "properties": {
+          "peer_id": {
+            "type": "string"
+          },
+          "replica_slot": {
+            "format": "uint16",
+            "maximum": 65535,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "selected_geography_tag": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "selected_guest_isa": {
+            "$ref": "#/components/schemas/SoraInrouGuestIsaV1"
+          },
+          "selection_latency_ms": {
+            "anyOf": [
+              {
+                "format": "uint32",
+                "maximum": 4294967295,
+                "minimum": 0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "validator_account_id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "replica_slot",
+          "validator_account_id",
+          "peer_id",
+          "selected_guest_isa",
+          "selected_geography_tag",
+          "selection_latency_ms"
+        ],
+        "type": "object"
+      },
       "SoraLeaseVolumeBindingV1": {
         "additionalProperties": false,
         "properties": {
@@ -32159,7 +32122,7 @@
           "queue_name": {
             "type": "string"
           },
-          "retention_sequences": {
+          "retention_blocks": {
             "format": "uint32",
             "maximum": 4294967295,
             "minimum": 1,
@@ -32170,7 +32133,7 @@
           "queue_name",
           "max_pending_messages",
           "max_message_bytes",
-          "retention_sequences"
+          "retention_blocks"
         ],
         "type": "object"
       },
@@ -32376,6 +32339,12 @@
       "SoraPrivateUploadedModelExecutionReceiptV1": {
         "additionalProperties": false,
         "properties": {
+          "attesting_validator": {
+            "$ref": "#/components/schemas/SoraRuntimeDeterministicValidatorHostV1"
+          },
+          "decryption_request_id": {
+            "type": "string"
+          },
           "emitted_sequence": {
             "format": "uint64",
             "minimum": 0,
@@ -32438,6 +32407,8 @@
           "model_manifest_digest",
           "model_bundle_root",
           "policy_id",
+          "decryption_request_id",
+          "attesting_validator",
           "input_artifact",
           "output_artifact",
           "input_commitment",
@@ -32562,11 +32533,11 @@
             "additionalProperties": false,
             "properties": {
               "host_kind": {
-                "const": "InrouReplica",
+                "const": "DeterministicValidator",
                 "type": "string"
               },
               "value": {
-                "$ref": "#/components/schemas/SoraRuntimeInrouReplicaHostV1"
+                "$ref": "#/components/schemas/SoraRuntimeDeterministicValidatorHostV1"
               }
             },
             "required": [
@@ -32603,35 +32574,47 @@
           "placement_id": {
             "$ref": "#/components/schemas/Hash"
           },
+          "pool_id": {
+            "$ref": "#/components/schemas/Hash"
+          },
+          "selection_seed_hash": {
+            "$ref": "#/components/schemas/Hash"
+          },
+          "source_id": {
+            "$ref": "#/components/schemas/Hash"
+          },
           "validator_account_id": {
             "type": "string"
           }
         },
         "required": [
           "placement_id",
+          "source_id",
+          "pool_id",
+          "selection_seed_hash",
           "validator_account_id",
           "peer_id"
         ],
         "type": "object"
       },
-      "SoraRuntimeInrouReplicaHostV1": {
+      "SoraRuntimeDeterministicValidatorHostV1": {
         "additionalProperties": false,
         "properties": {
-          "peer_id": {
-            "type": "string"
-          },
-          "replica_slot": {
-            "format": "uint16",
-            "maximum": 65535,
+          "lane_id": {
+            "format": "uint32",
+            "maximum": 4294967295,
             "minimum": 0,
             "type": "integer"
+          },
+          "peer_id": {
+            "type": "string"
           },
           "validator_account_id": {
             "type": "string"
           }
         },
         "required": [
-          "replica_slot",
+          "lane_id",
           "validator_account_id",
           "peer_id"
         ],
@@ -32700,6 +32683,75 @@
             },
             "required": [
               "visibility",
+              "value"
+            ],
+            "type": "object"
+          }
+        ]
+      },
+      "SoraServiceConfigEntryV1": {
+        "additionalProperties": false,
+        "properties": {
+          "config_name": {
+            "type": "string"
+          },
+          "last_update_sequence": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "schema_version": {
+            "const": 1,
+            "type": "integer"
+          },
+          "value_hash": {
+            "$ref": "#/components/schemas/Hash"
+          },
+          "value_json": {
+            "$ref": "#/components/schemas/JsonValue"
+          }
+        },
+        "required": [
+          "schema_version",
+          "config_name",
+          "value_json",
+          "value_hash",
+          "last_update_sequence"
+        ],
+        "type": "object"
+      },
+      "SoraServiceConfigMutationV1": {
+        "oneOf": [
+          {
+            "additionalProperties": false,
+            "properties": {
+              "operation": {
+                "const": "Upsert",
+                "type": "string"
+              },
+              "value": {
+                "$ref": "#/components/schemas/SoraServiceConfigEntryV1"
+              }
+            },
+            "required": [
+              "operation",
+              "value"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "operation": {
+                "const": "Delete",
+                "type": "string"
+              },
+              "value": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "operation",
               "value"
             ],
             "type": "object"
@@ -33088,6 +33140,71 @@
           "artifacts"
         ],
         "type": "object"
+      },
+      "SoraServiceSecretEntryV1": {
+        "additionalProperties": false,
+        "properties": {
+          "envelope": {
+            "$ref": "#/components/schemas/SecretEnvelopeV1"
+          },
+          "last_update_sequence": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "schema_version": {
+            "const": 1,
+            "type": "integer"
+          },
+          "secret_name": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "schema_version",
+          "secret_name",
+          "envelope",
+          "last_update_sequence"
+        ],
+        "type": "object"
+      },
+      "SoraServiceSecretMutationV1": {
+        "oneOf": [
+          {
+            "additionalProperties": false,
+            "properties": {
+              "operation": {
+                "const": "Upsert",
+                "type": "string"
+              },
+              "value": {
+                "$ref": "#/components/schemas/SoraServiceSecretEntryV1"
+              }
+            },
+            "required": [
+              "operation",
+              "value"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "operation": {
+                "const": "Delete",
+                "type": "string"
+              },
+              "value": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "operation",
+              "value"
+            ],
+            "type": "object"
+          }
+        ]
       },
       "SoraStateBindingV1": {
         "additionalProperties": false,
@@ -33889,6 +34006,40 @@
               "value"
             ],
             "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "action": {
+                "const": "LeaseUsage",
+                "type": "string"
+              },
+              "value": {
+                "type": "null"
+              }
+            },
+            "required": [
+              "action",
+              "value"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "action": {
+                "const": "LeaseReportingEpochRollover",
+                "type": "string"
+              },
+              "value": {
+                "type": "null"
+              }
+            },
+            "required": [
+              "action",
+              "value"
+            ],
+            "type": "object"
           }
         ]
       },
@@ -34243,7 +34394,7 @@
             "minimum": 0,
             "type": "integer"
           },
-          "lease_expires_sequence": {
+          "lease_expires_height": {
             "format": "uint64",
             "minimum": 0,
             "type": "integer"
@@ -34286,7 +34437,7 @@
           "manifest_hash",
           "status",
           "process_generation",
-          "lease_expires_sequence",
+          "lease_expires_height",
           "last_active_sequence",
           "materialization_dir",
           "pending_wallet_request_count",
@@ -34663,7 +34814,7 @@
           "kind": {
             "$ref": "#/components/schemas/SoraLeaseVolumeKindV1"
           },
-          "lease_expires_sequence": {
+          "lease_expires_height": {
             "format": "uint64",
             "minimum": 0,
             "type": "integer"
@@ -34697,7 +34848,7 @@
           "storage_class",
           "mount_path",
           "max_total_bytes",
-          "lease_expires_sequence",
+          "lease_expires_height",
           "authoritative_generation",
           "local_materialization_dir"
         ],
@@ -34723,7 +34874,7 @@
           "queue_name": {
             "type": "string"
           },
-          "retention_sequences": {
+          "retention_blocks": {
             "format": "uint32",
             "maximum": 4294967295,
             "minimum": 0,
@@ -34735,7 +34886,7 @@
           "queue_name",
           "max_pending_messages",
           "max_message_bytes",
-          "retention_sequences"
+          "retention_blocks"
         ],
         "type": "object"
       },
@@ -34920,7 +35071,7 @@
               }
             ]
           },
-          "lease_expires_sequence": {
+          "lease_expires_height": {
             "anyOf": [
               {
                 "format": "uint64",
@@ -34999,12 +35150,6 @@
                 "type": "null"
               }
             ]
-          },
-          "reported_pending_mailbox_messages": {
-            "format": "uint32",
-            "maximum": 4294967295,
-            "minimum": 0,
-            "type": "integer"
           },
           "role": {
             "$ref": "#/components/schemas/SoracloudRuntimeRevisionRole"
@@ -35087,14 +35232,13 @@
           "local_replicas",
           "health_status",
           "load_factor_bps",
-          "reported_pending_mailbox_messages",
           "authoritative_pending_mailbox_messages",
           "rollout_handle",
           "config_generation",
           "secret_generation",
           "quota_class",
           "service_lease_status",
-          "lease_expires_sequence",
+          "lease_expires_height",
           "remaining_runtime_balance",
           "config_entry_count",
           "secret_entry_count",
@@ -35269,11 +35413,6 @@
                 "minimum": 0,
                 "type": "integer"
               },
-              "reported_pending_mailbox_messages": {
-                "format": "uint64",
-                "minimum": 0,
-                "type": "integer"
-              },
               "service_revisions": {
                 "format": "uint64",
                 "minimum": 0,
@@ -35290,7 +35429,6 @@
               "service_revisions",
               "apartments",
               "max_load_factor_bps",
-              "reported_pending_mailbox_messages",
               "authoritative_pending_mailbox_messages",
               "bundle_cache_misses",
               "artifact_cache_misses"
@@ -44991,6 +45129,2523 @@
         ],
         "type": "object",
         "x-iroha-norito-schema": "iroha.torii.v1.parliament.timed_ovn_casting_proof.response"
+      },
+      "ControlPlaneServiceLeaseSnapshot": {
+        "additionalProperties": false,
+        "properties": {
+          "authoritative_state": {
+            "$ref": "#/components/schemas/SoraServiceLeaseStateV1"
+          },
+          "effective_status": {
+            "$ref": "#/components/schemas/SoraServiceLeaseStatusV1"
+          },
+          "remaining_runtime_balance": {
+            "$ref": "#/components/schemas/Quantity"
+          }
+        },
+        "required": [
+          "authoritative_state",
+          "effective_status",
+          "remaining_runtime_balance"
+        ],
+        "type": "object"
+      },
+      "HealthDataFlowAttestation": {
+        "additionalProperties": false,
+        "properties": {
+          "binding_name": {
+            "type": "string"
+          },
+          "current_version": {
+            "type": "string"
+          },
+          "encryption": {
+            "$ref": "#/components/schemas/SoraStateEncryptionV1"
+          },
+          "key_prefix": {
+            "type": "string"
+          },
+          "mutability": {
+            "$ref": "#/components/schemas/SoraStateMutabilityV1"
+          },
+          "service_name": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "service_name",
+          "current_version",
+          "binding_name",
+          "key_prefix",
+          "encryption",
+          "mutability"
+        ],
+        "type": "object"
+      },
+      "HealthJurisdictionStat": {
+        "additionalProperties": false,
+        "properties": {
+          "access_event_count": {
+            "format": "uint32",
+            "maximum": 4294967295,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "break_glass_event_count": {
+            "format": "uint32",
+            "maximum": 4294967295,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "jurisdiction_tag": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "jurisdiction_tag",
+          "access_event_count",
+          "break_glass_event_count"
+        ],
+        "type": "object"
+      },
+      "HealthPolicyDiffEntry": {
+        "additionalProperties": false,
+        "properties": {
+          "event_count": {
+            "format": "uint32",
+            "maximum": 4294967295,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "first_seen_sequence": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "jurisdiction_tag": {
+            "type": "string"
+          },
+          "last_seen_sequence": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "policy_name": {
+            "type": "string"
+          },
+          "policy_snapshot_hash": {
+            "$ref": "#/components/schemas/Hash"
+          }
+        },
+        "required": [
+          "policy_name",
+          "jurisdiction_tag",
+          "policy_snapshot_hash",
+          "first_seen_sequence",
+          "last_seen_sequence",
+          "event_count"
+        ],
+        "type": "object"
+      },
+      "HedgeIntentDirectionV1": {
+        "oneOf": [
+          {
+            "additionalProperties": false,
+            "properties": {
+              "direction": {
+                "const": "sell_xor",
+                "type": "string"
+              },
+              "value": {
+                "type": "null"
+              }
+            },
+            "required": [
+              "direction",
+              "value"
+            ],
+            "type": "object"
+          }
+        ]
+      },
+      "HedgeIntentDispositionV1": {
+        "oneOf": [
+          {
+            "additionalProperties": false,
+            "properties": {
+              "disposition": {
+                "const": "executable",
+                "type": "string"
+              },
+              "value": {
+                "type": "null"
+              }
+            },
+            "required": [
+              "disposition",
+              "value"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "disposition": {
+                "const": "governed_overflow",
+                "type": "string"
+              },
+              "value": {
+                "type": "null"
+              }
+            },
+            "required": [
+              "disposition",
+              "value"
+            ],
+            "type": "object"
+          }
+        ]
+      },
+      "HedgeIntentPageV1": {
+        "additionalProperties": false,
+        "properties": {
+          "anchor": {
+            "$ref": "#/components/schemas/HedgingBillingProjectionAnchorV1"
+          },
+          "automatic_execution_enabled": {
+            "const": false,
+            "type": "boolean"
+          },
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/HedgeIntentV1"
+            },
+            "maxItems": 100,
+            "type": "array"
+          },
+          "next_cursor": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/HedgingBillingBytes32V1"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "anchor",
+          "items",
+          "next_cursor",
+          "automatic_execution_enabled"
+        ],
+        "type": "object"
+      },
+      "HedgeIntentV1": {
+        "additionalProperties": false,
+        "properties": {
+          "automatic_execution": {
+            "const": false,
+            "type": "boolean"
+          },
+          "direction": {
+            "$ref": "#/components/schemas/HedgeIntentDirectionV1"
+          },
+          "disposition": {
+            "$ref": "#/components/schemas/HedgeIntentDispositionV1"
+          },
+          "expires_at_unix": {
+            "format": "uint64",
+            "minimum": 1,
+            "type": "integer"
+          },
+          "finalized_cursor": {
+            "$ref": "#/components/schemas/HedgingBillingFinalizedCursorV1"
+          },
+          "intent_id": {
+            "$ref": "#/components/schemas/HedgingBillingBytes32V1"
+          },
+          "max_slippage_bps": {
+            "format": "uint16",
+            "maximum": 10000,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "network_id": {
+            "$ref": "#/components/schemas/NetworkId"
+          },
+          "period_close_digest": {
+            "$ref": "#/components/schemas/HedgingBillingBytes32V1"
+          },
+          "period_end_unix": {
+            "format": "uint64",
+            "minimum": 1,
+            "type": "integer"
+          },
+          "reference_price_decision_id": {
+            "$ref": "#/components/schemas/HedgingBillingBytes32V1"
+          },
+          "service_policy_digest": {
+            "$ref": "#/components/schemas/HedgingBillingBytes32V1"
+          },
+          "statement_bundle_digest": {
+            "$ref": "#/components/schemas/HedgingBillingBytes32V1"
+          },
+          "version": {
+            "enum": [
+              1
+            ],
+            "format": "uint8",
+            "type": "integer"
+          },
+          "xor_amount": {
+            "$ref": "#/components/schemas/XorQuantity"
+          }
+        },
+        "required": [
+          "version",
+          "intent_id",
+          "network_id",
+          "service_policy_digest",
+          "period_close_digest",
+          "period_end_unix",
+          "finalized_cursor",
+          "reference_price_decision_id",
+          "statement_bundle_digest",
+          "direction",
+          "disposition",
+          "xor_amount",
+          "max_slippage_bps",
+          "expires_at_unix",
+          "automatic_execution"
+        ],
+        "type": "object"
+      },
+      "HedgingBillingApiErrorV1": {
+        "additionalProperties": false,
+        "properties": {
+          "code": {
+            "enum": [
+              "acknowledgement_proof_body_required",
+              "acknowledgement_proof_body_too_large",
+              "acknowledgement_request_binding_unavailable",
+              "billing_acknowledgement_conflict",
+              "billing_manager_role_required",
+              "billing_statement_not_found",
+              "canonical_account_encoding_unavailable",
+              "canonical_authentication_required",
+              "canonical_norito_content_type_required",
+              "duplicate_query_parameter",
+              "hedging_billing_projection_changed",
+              "hedging_billing_resource_exhausted",
+              "hedging_billing_runtime_busy",
+              "hedging_billing_runtime_unavailable",
+              "invalid_bounded_canonical_norito_acknowledgement",
+              "invalid_hedging_billing_request",
+              "invalid_lower_hex_digest",
+              "invalid_page_limit",
+              "method_not_allowed",
+              "query_too_long",
+              "required_query_parameter_missing",
+              "too_many_query_parameters",
+              "treasury_or_hedging_observer_role_required",
+              "unexpected_query",
+              "unknown_query_parameter",
+              "zero_digest_forbidden"
+            ],
+            "type": "string"
+          },
+          "schema": {
+            "const": "sorafs.hedging_billing.error.v1",
+            "type": "string"
+          }
+        },
+        "required": [
+          "schema",
+          "code"
+        ],
+        "type": "object"
+      },
+      "HedgingBillingBytes32V1": {
+        "description": "Exact native Norito JSON representation of one 32-byte digest or cursor as uppercase hexadecimal. HTTP query and path parameters use their separately documented lowercase form.",
+        "maxLength": 64,
+        "minLength": 64,
+        "pattern": "^[0-9A-F]{64}$",
+        "type": "string"
+      },
+      "HedgingBillingDaemonStatusV1": {
+        "additionalProperties": false,
+        "properties": {
+          "anchor": {
+            "$ref": "#/components/schemas/HedgingBillingProjectionAnchorV1"
+          },
+          "automatic_hedge_execution_enabled": {
+            "const": false,
+            "type": "boolean"
+          },
+          "external_dependencies_healthy": {
+            "type": "boolean"
+          },
+          "finalized_head_height": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "finalized_lag_blocks": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "finalized_projection_ready": {
+            "type": "boolean"
+          },
+          "last_tick_fresh": {
+            "type": "boolean"
+          },
+          "last_tick_healthy": {
+            "type": "boolean"
+          },
+          "live": {
+            "type": "boolean"
+          },
+          "ready": {
+            "type": "boolean"
+          },
+          "service": {
+            "$ref": "#/components/schemas/HedgingBillingServiceStatusV1"
+          }
+        },
+        "required": [
+          "anchor",
+          "service",
+          "live",
+          "external_dependencies_healthy",
+          "last_tick_healthy",
+          "last_tick_fresh",
+          "finalized_projection_ready",
+          "finalized_head_height",
+          "finalized_lag_blocks",
+          "automatic_hedge_execution_enabled",
+          "ready"
+        ],
+        "type": "object"
+      },
+      "HedgingBillingExposureItemV1": {
+        "additionalProperties": false,
+        "properties": {
+          "automatic_execution": {
+            "const": false,
+            "type": "boolean"
+          },
+          "cursor": {
+            "$ref": "#/components/schemas/HedgingBillingBytes32V1"
+          },
+          "finalized_cursor": {
+            "$ref": "#/components/schemas/HedgingBillingFinalizedCursorV1"
+          },
+          "hedge_intent_id": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/HedgingBillingBytes32V1"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "hedge_threshold_reached": {
+            "type": "boolean"
+          },
+          "period_close_digest": {
+            "$ref": "#/components/schemas/HedgingBillingBytes32V1"
+          },
+          "period_end_unix": {
+            "format": "uint64",
+            "minimum": 1,
+            "type": "integer"
+          },
+          "statement_count": {
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "xor_exposure": {
+            "$ref": "#/components/schemas/XorQuantity"
+          }
+        },
+        "required": [
+          "cursor",
+          "period_close_digest",
+          "period_end_unix",
+          "finalized_cursor",
+          "statement_count",
+          "xor_exposure",
+          "hedge_threshold_reached",
+          "hedge_intent_id",
+          "automatic_execution"
+        ],
+        "type": "object"
+      },
+      "HedgingBillingExposurePageV1": {
+        "additionalProperties": false,
+        "properties": {
+          "anchor": {
+            "$ref": "#/components/schemas/HedgingBillingProjectionAnchorV1"
+          },
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/HedgingBillingExposureItemV1"
+            },
+            "maxItems": 100,
+            "type": "array"
+          },
+          "next_cursor": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/HedgingBillingBytes32V1"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "anchor",
+          "items",
+          "next_cursor"
+        ],
+        "type": "object"
+      },
+      "HedgingBillingFinalizedCursorV1": {
+        "additionalProperties": false,
+        "properties": {
+          "block_hash": {
+            "$ref": "#/components/schemas/HedgingBillingBytes32V1"
+          },
+          "finalized_at_unix": {
+            "format": "uint64",
+            "minimum": 1,
+            "type": "integer"
+          },
+          "height": {
+            "format": "uint64",
+            "minimum": 1,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "height",
+          "block_hash",
+          "finalized_at_unix"
+        ],
+        "type": "object"
+      },
+      "HedgingBillingProjectionAnchorV1": {
+        "additionalProperties": false,
+        "properties": {
+          "active_epoch_sequence": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "active_policy_revision": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "checkpoint_fingerprint": {
+            "$ref": "#/components/schemas/HedgingBillingBytes32V1"
+          },
+          "compacted_through_period_end_unix": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "finalized_cursor": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/HedgingBillingFinalizedCursorV1"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "next_event_sequence": {
+            "format": "uint64",
+            "minimum": 1,
+            "type": "integer"
+          },
+          "retention_scope": {
+            "$ref": "#/components/schemas/HedgingBillingRetentionScopeV1"
+          },
+          "service_policy_digest": {
+            "$ref": "#/components/schemas/HedgingBillingBytes32V1"
+          }
+        },
+        "required": [
+          "checkpoint_fingerprint",
+          "finalized_cursor",
+          "next_event_sequence",
+          "active_epoch_sequence",
+          "active_policy_revision",
+          "service_policy_digest",
+          "compacted_through_period_end_unix",
+          "retention_scope"
+        ],
+        "type": "object"
+      },
+      "HedgingBillingReconciliationStatusV1": {
+        "additionalProperties": false,
+        "properties": {
+          "anchor": {
+            "$ref": "#/components/schemas/HedgingBillingProjectionAnchorV1"
+          },
+          "failed_ticks": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "last_tick_healthy": {
+            "type": "boolean"
+          },
+          "pending_delivery_operations": {
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "successful_ticks": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "anchor",
+          "last_tick_healthy",
+          "successful_ticks",
+          "failed_ticks",
+          "pending_delivery_operations"
+        ],
+        "type": "object"
+      },
+      "HedgingBillingRetentionScopeV1": {
+        "oneOf": [
+          {
+            "additionalProperties": false,
+            "properties": {
+              "scope": {
+                "const": "active_epoch_only",
+                "type": "string"
+              },
+              "value": {
+                "type": "null"
+              }
+            },
+            "required": [
+              "scope",
+              "value"
+            ],
+            "type": "object"
+          }
+        ]
+      },
+      "HedgingBillingServiceStatusV1": {
+        "additionalProperties": false,
+        "properties": {
+          "acknowledged": {
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "dead_letter": {
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "finalized_height": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "hedge_intents": {
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "next_event_sequence": {
+            "format": "uint64",
+            "minimum": 1,
+            "type": "integer"
+          },
+          "next_period_end_unix": {
+            "format": "uint64",
+            "minimum": 1,
+            "type": "integer"
+          },
+          "publication_ambiguous": {
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "published": {
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "ready_for_publication": {
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "ready_for_signing": {
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "signing": {
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "next_event_sequence",
+          "finalized_height",
+          "next_period_end_unix",
+          "ready_for_signing",
+          "signing",
+          "ready_for_publication",
+          "publication_ambiguous",
+          "published",
+          "acknowledged",
+          "dead_letter",
+          "hedge_intents"
+        ],
+        "type": "object"
+      },
+      "HfDeployPayload": {
+        "additionalProperties": false,
+        "properties": {
+          "apartment_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "base_fee": {
+            "$ref": "#/components/schemas/Quantity"
+          },
+          "lease_asset_definition_id": {
+            "type": "string"
+          },
+          "lease_term_ms": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "model_name": {
+            "type": "string"
+          },
+          "repo_id": {
+            "type": "string"
+          },
+          "revision": {
+            "type": "string"
+          },
+          "service_name": {
+            "type": "string"
+          },
+          "storage_class": {
+            "enum": [
+              "hot",
+              "warm",
+              "cold"
+            ],
+            "type": "string"
+          }
+        },
+        "required": [
+          "repo_id",
+          "revision",
+          "model_name",
+          "service_name",
+          "apartment_name",
+          "storage_class",
+          "lease_term_ms",
+          "lease_asset_definition_id",
+          "base_fee"
+        ],
+        "type": "object"
+      },
+      "HfLeaseLeavePayload": {
+        "additionalProperties": false,
+        "properties": {
+          "apartment_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "lease_term_ms": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "repo_id": {
+            "type": "string"
+          },
+          "revision": {
+            "type": "string"
+          },
+          "service_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "storage_class": {
+            "enum": [
+              "hot",
+              "warm",
+              "cold"
+            ],
+            "type": "string"
+          }
+        },
+        "required": [
+          "repo_id",
+          "revision",
+          "storage_class",
+          "lease_term_ms",
+          "service_name",
+          "apartment_name"
+        ],
+        "type": "object"
+      },
+      "HfLeaseRenewPayload": {
+        "additionalProperties": false,
+        "properties": {
+          "apartment_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "base_fee": {
+            "$ref": "#/components/schemas/Quantity"
+          },
+          "lease_asset_definition_id": {
+            "type": "string"
+          },
+          "lease_term_ms": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "model_name": {
+            "type": "string"
+          },
+          "repo_id": {
+            "type": "string"
+          },
+          "revision": {
+            "type": "string"
+          },
+          "service_name": {
+            "type": "string"
+          },
+          "storage_class": {
+            "enum": [
+              "hot",
+              "warm",
+              "cold"
+            ],
+            "type": "string"
+          }
+        },
+        "required": [
+          "repo_id",
+          "revision",
+          "model_name",
+          "service_name",
+          "apartment_name",
+          "storage_class",
+          "lease_term_ms",
+          "lease_asset_definition_id",
+          "base_fee"
+        ],
+        "type": "object"
+      },
+      "HfSharedLeaseStatusResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "audit_event_count": {
+            "format": "uint32",
+            "maximum": 4294967295,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "compute_reservation_fee": {
+            "$ref": "#/components/schemas/Quantity"
+          },
+          "eligible_host_count": {
+            "format": "uint32",
+            "maximum": 4294967295,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "importer_pending": {
+            "type": "boolean"
+          },
+          "latest_audit_event": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/SoraHfSharedLeaseAuditEventV1"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "member": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/SoraHfSharedLeaseMemberV1"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "placement": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/SoraHfPlacementRecordV1"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "pool": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/SoraHfSharedLeasePoolV1"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "runtime_projection": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/SoracloudRuntimeHfSourcePlan"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "schema_version": {
+            "const": 1,
+            "type": "integer"
+          },
+          "source": {
+            "$ref": "#/components/schemas/SoraHfSourceRecordV1"
+          },
+          "storage_base_fee": {
+            "$ref": "#/components/schemas/Quantity"
+          },
+          "warm_host_count": {
+            "format": "uint32",
+            "maximum": 4294967295,
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "schema_version",
+          "source",
+          "runtime_projection",
+          "pool",
+          "member",
+          "placement",
+          "latest_audit_event",
+          "audit_event_count",
+          "storage_base_fee",
+          "compute_reservation_fee",
+          "eligible_host_count",
+          "warm_host_count",
+          "importer_pending"
+        ],
+        "type": "object"
+      },
+      "IdentifierClaimLookupResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "account_id": {
+            "description": "Canonical account identifier currently bound to the UAID.",
+            "type": "string"
+          },
+          "expires_at_ms": {
+            "description": "Optional identifier-claim expiry timestamp in milliseconds since Unix epoch.",
+            "format": "uint64",
+            "type": "integer"
+          },
+          "opaque_id": {
+            "description": "Derived opaque identifier literal.",
+            "type": "string"
+          },
+          "policy_id": {
+            "description": "Identifier policy namespace bound to the claim.",
+            "type": "string"
+          },
+          "receipt_hash": {
+            "description": "Deterministic hidden-function receipt hash for the original evaluation.",
+            "type": "string"
+          },
+          "uaid": {
+            "description": "UAID currently bound to the opaque identifier.",
+            "type": "string"
+          },
+          "verified_at_ms": {
+            "description": "Ledger timestamp in milliseconds when the identifier claim was accepted.",
+            "format": "uint64",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "policy_id",
+          "opaque_id",
+          "receipt_hash",
+          "uaid",
+          "account_id",
+          "verified_at_ms"
+        ],
+        "type": "object"
+      },
+      "IdentifierPolicyListResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "items": {
+            "description": "Registered identifier policies.",
+            "items": {
+              "$ref": "#/components/schemas/IdentifierPolicySummary"
+            },
+            "type": "array"
+          },
+          "total": {
+            "description": "Number of policies returned.",
+            "format": "uint64",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "total",
+          "items"
+        ],
+        "type": "object"
+      },
+      "IdentifierPolicySummary": {
+        "additionalProperties": false,
+        "properties": {
+          "active": {
+            "description": "Whether the policy is active for new claims and resolutions.",
+            "type": "boolean"
+          },
+          "backend": {
+            "description": "Hidden-function backend advertised by the policy commitment.",
+            "type": "string"
+          },
+          "input_encryption": {
+            "description": "Optional encrypted-input scheme published for this policy.",
+            "type": "string"
+          },
+          "input_encryption_public_parameters": {
+            "description": "Optional hex-encoded Norito payload containing the public input-encryption parameters.",
+            "type": "string"
+          },
+          "input_encryption_public_parameters_decoded": {
+            "$ref": "#/components/schemas/BfvIdentifierPublicParameters"
+          },
+          "normalization": {
+            "description": "Client-side canonicalization mode required before encrypted input is produced.",
+            "type": "string"
+          },
+          "note": {
+            "description": "Optional human-readable note attached to the policy.",
+            "type": "string"
+          },
+          "output_opening_public_key": {
+            "description": "Public key used to verify externally signed RAM-LFE output openings.",
+            "type": "string"
+          },
+          "owner": {
+            "description": "Canonical account identifier that owns the policy.",
+            "type": "string"
+          },
+          "policy_id": {
+            "description": "Identifier policy namespace literal (`<kind>#<business_rule>`).",
+            "type": "string"
+          },
+          "program_id": {
+            "description": "RAM-LFE program policy used by this identifier policy.",
+            "type": "string"
+          },
+          "proof_verifier": {
+            "$ref": "#/components/schemas/RamLfeProofVerifierMetadata"
+          },
+          "ram_fhe_profile": {
+            "$ref": "#/components/schemas/BfvRamProgramProfile"
+          },
+          "resolver_public_key": {
+            "description": "Public key used to verify resolution receipts.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "policy_id",
+          "program_id",
+          "owner",
+          "active",
+          "normalization",
+          "resolver_public_key",
+          "output_opening_public_key",
+          "backend"
+        ],
+        "type": "object"
+      },
+      "IdentifierResolutionReceiptPayload": {
+        "additionalProperties": false,
+        "properties": {
+          "account_id": {
+            "description": "Canonical account identifier currently bound to the UAID.",
+            "type": "string"
+          },
+          "execution": {
+            "$ref": "#/components/schemas/RamLfeExecutionReceiptPayload"
+          },
+          "opaque_id": {
+            "description": "Derived opaque identifier literal.",
+            "type": "string"
+          },
+          "opening": {
+            "$ref": "#/components/schemas/RamLfeOutputOpening"
+          },
+          "policy_id": {
+            "description": "Identifier policy namespace used for the resolution.",
+            "type": "string"
+          },
+          "receipt_hash": {
+            "description": "Deterministic hidden-function receipt hash for this evaluation.",
+            "type": "string"
+          },
+          "uaid": {
+            "description": "UAID currently bound to the opaque identifier.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "policy_id",
+          "execution",
+          "opening",
+          "opaque_id",
+          "receipt_hash",
+          "uaid",
+          "account_id"
+        ],
+        "type": "object"
+      },
+      "IdentifierResolveRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "encrypted_input": {
+            "description": "Hex-encoded Norito BFV ciphertext envelope. Plaintext hidden-function inputs are rejected.",
+            "type": "string"
+          },
+          "output_opening": {
+            "$ref": "#/components/schemas/RamLfeOutputOpening"
+          },
+          "policy_id": {
+            "description": "Identifier policy namespace literal (`<kind>#<business_rule>`).",
+            "type": "string"
+          }
+        },
+        "required": [
+          "policy_id",
+          "encrypted_input",
+          "output_opening"
+        ],
+        "type": "object"
+      },
+      "IdentifierResolveResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "attestation": {
+            "$ref": "#/components/schemas/RamLfeReceiptAttestation"
+          },
+          "payload": {
+            "$ref": "#/components/schemas/IdentifierResolutionReceiptPayload"
+          }
+        },
+        "required": [
+          "payload",
+          "attestation"
+        ],
+        "type": "object"
+      },
+      "InviteMusubiPackageMaintainerV1": {
+        "additionalProperties": false,
+        "properties": {
+          "expected_governance_revision": {
+            "$ref": "#/components/schemas/MusubiPositiveU64V1"
+          },
+          "expires_at_height": {
+            "$ref": "#/components/schemas/MusubiPositiveU64V1"
+          },
+          "invite_id": {
+            "$ref": "#/components/schemas/MusubiDigest32V1"
+          },
+          "invited_account": {
+            "$ref": "#/components/schemas/MusubiAccountIdV1"
+          },
+          "package": {
+            "$ref": "#/components/schemas/MusubiPackageIdV1"
+          },
+          "role": {
+            "$ref": "#/components/schemas/MusubiPackageRoleV1"
+          }
+        },
+        "required": [
+          "package",
+          "invite_id",
+          "invited_account",
+          "role",
+          "expires_at_height",
+          "expected_governance_revision"
+        ],
+        "type": "object"
+      },
+      "JsonValue": {
+        "additionalProperties": true,
+        "description": "Arbitrary JSON payload.",
+        "type": [
+          "object",
+          "array",
+          "string",
+          "number",
+          "boolean",
+          "null"
+        ]
+      },
+      "KaigiId": {
+        "additionalProperties": false,
+        "properties": {
+          "call_name": {
+            "description": "Call name within the domain namespace.",
+            "type": "string"
+          },
+          "domain_id": {
+            "description": "Domain that owns the Kaigi call.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "domain_id",
+          "call_name"
+        ],
+        "type": "object"
+      },
+      "KaigiRelayDetail": {
+        "additionalProperties": false,
+        "properties": {
+          "hpke_public_key_b64": {
+            "description": "Base64-encoded HPKE public key advertised by the relay.",
+            "type": "string"
+          },
+          "metrics": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/KaigiRelayDomainMetrics"
+              }
+            ],
+            "description": "Aggregated counters for the relay's owning domain."
+          },
+          "notes": {
+            "description": "Free-form notes accompanying the latest health report.",
+            "type": "string"
+          },
+          "relay": {
+            "$ref": "#/components/schemas/KaigiRelaySummary"
+          },
+          "reported_by": {
+            "description": "Account identifier that submitted the latest health report.",
+            "type": "string"
+          },
+          "reported_call": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/KaigiId"
+              }
+            ],
+            "description": "Kaigi call associated with the latest health report, when available."
+          }
+        },
+        "required": [
+          "relay",
+          "hpke_public_key_b64"
+        ],
+        "type": "object"
+      },
+      "KaigiRelayDomainMetrics": {
+        "additionalProperties": false,
+        "properties": {
+          "domain": {
+            "description": "Domain label for the aggregated counters.",
+            "type": "string"
+          },
+          "failovers_total": {
+            "description": "Total relay failovers observed for the domain.",
+            "format": "uint64",
+            "type": "integer"
+          },
+          "health_reports_total": {
+            "description": "Total relay health reports recorded for the domain.",
+            "format": "uint64",
+            "type": "integer"
+          },
+          "manifest_updates_total": {
+            "description": "Total relay manifest updates observed for the domain.",
+            "format": "uint64",
+            "type": "integer"
+          },
+          "registrations_total": {
+            "description": "Total relay registrations observed for the domain.",
+            "format": "uint64",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "domain",
+          "registrations_total",
+          "manifest_updates_total",
+          "failovers_total",
+          "health_reports_total"
+        ],
+        "type": "object"
+      },
+      "KaigiRelayHealthSnapshot": {
+        "additionalProperties": false,
+        "properties": {
+          "degraded_total": {
+            "description": "Number of relays currently reported degraded.",
+            "format": "uint64",
+            "type": "integer"
+          },
+          "domains": {
+            "description": "Per-domain relay metrics.",
+            "items": {
+              "$ref": "#/components/schemas/KaigiRelayDomainMetrics"
+            },
+            "type": "array"
+          },
+          "failovers_total": {
+            "description": "Total relay failovers observed.",
+            "format": "uint64",
+            "type": "integer"
+          },
+          "healthy_total": {
+            "description": "Number of relays currently reported healthy.",
+            "format": "uint64",
+            "type": "integer"
+          },
+          "registrations_total": {
+            "description": "Total relay registrations observed.",
+            "format": "uint64",
+            "type": "integer"
+          },
+          "reports_total": {
+            "description": "Total relay health reports observed.",
+            "format": "uint64",
+            "type": "integer"
+          },
+          "unavailable_total": {
+            "description": "Number of relays currently reported unavailable.",
+            "format": "uint64",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "healthy_total",
+          "degraded_total",
+          "unavailable_total",
+          "reports_total",
+          "registrations_total",
+          "failovers_total",
+          "domains"
+        ],
+        "type": "object"
+      },
+      "KaigiRelayStatus": {
+        "description": "Reported relay health label.",
+        "enum": [
+          "healthy",
+          "degraded",
+          "unavailable"
+        ],
+        "type": "string"
+      },
+      "KaigiRelaySummary": {
+        "additionalProperties": false,
+        "properties": {
+          "bandwidth_class": {
+            "description": "Advertised bandwidth class (relative scale; larger values indicate higher capacity).",
+            "maximum": 255,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "domain": {
+            "description": "Domain that registered the relay.",
+            "type": "string"
+          },
+          "hpke_fingerprint_hex": {
+            "description": "Hex-encoded BLAKE3 fingerprint of the relay's HPKE public key.",
+            "type": "string"
+          },
+          "relay_id": {
+            "description": "Relay account identifier rendered as canonical I105 literal.",
+            "type": "string"
+          },
+          "reported_at_ms": {
+            "description": "Milliseconds since UNIX epoch of the latest health report.",
+            "format": "uint64",
+            "type": "integer"
+          },
+          "status": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/KaigiRelayStatus"
+              }
+            ],
+            "description": "Latest health status when available."
+          }
+        },
+        "required": [
+          "relay_id",
+          "domain",
+          "bandwidth_class",
+          "hpke_fingerprint_hex"
+        ],
+        "type": "object"
+      },
+      "KaigiRelaySummaryList": {
+        "additionalProperties": false,
+        "properties": {
+          "items": {
+            "description": "Relay summaries.",
+            "items": {
+              "$ref": "#/components/schemas/KaigiRelaySummary"
+            },
+            "type": "array"
+          },
+          "total": {
+            "description": "Total number of relay entries returned.",
+            "format": "uint64",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "total",
+          "items"
+        ],
+        "type": "object"
+      },
+      "LaneFastpqProofMaterial": {
+        "additionalProperties": false,
+        "properties": {
+          "proof_digest": {
+            "$ref": "#/components/schemas/Hash"
+          },
+          "verified_at_height": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "proof_digest",
+          "verified_at_height"
+        ],
+        "type": "object"
+      },
+      "LaneLiquidityProfile": {
+        "additionalProperties": false,
+        "description": "Canonical externally tagged Norito JSON unit enum.",
+        "properties": {
+          "profile": {
+            "enum": [
+              "Tier1",
+              "Tier2",
+              "Tier3"
+            ],
+            "type": "string"
+          },
+          "state": {
+            "type": "null"
+          }
+        },
+        "required": [
+          "profile",
+          "state"
+        ],
+        "type": "object"
+      },
+      "LanePrivacyProof": {
+        "additionalProperties": false,
+        "properties": {
+          "commitment_id": {
+            "description": "Norito JSON tuple representation of a lane commitment identifier.",
+            "items": {
+              "format": "uint16",
+              "maximum": 65535,
+              "minimum": 0,
+              "type": "integer"
+            },
+            "maxItems": 1,
+            "minItems": 1,
+            "type": "array"
+          },
+          "witness": {
+            "discriminator": {
+              "propertyName": "kind"
+            },
+            "oneOf": [
+              {
+                "additionalProperties": false,
+                "properties": {
+                  "kind": {
+                    "const": "merkle",
+                    "type": "string"
+                  },
+                  "payload": {
+                    "additionalProperties": false,
+                    "properties": {
+                      "leaf": {
+                        "description": "Norito JSON representation of the 32-byte committed leaf.",
+                        "items": {
+                          "format": "uint8",
+                          "maximum": 255,
+                          "minimum": 0,
+                          "type": "integer"
+                        },
+                        "maxItems": 32,
+                        "minItems": 32,
+                        "type": "array"
+                      },
+                      "proof": {
+                        "additionalProperties": false,
+                        "properties": {
+                          "audit_path": {
+                            "description": "Complete non-sparse leaf-to-root path.",
+                            "items": {
+                              "$ref": "#/components/schemas/Hash"
+                            },
+                            "maxItems": 255,
+                            "minItems": 1,
+                            "type": "array"
+                          },
+                          "leaf_index": {
+                            "format": "uint32",
+                            "maximum": 4294967295,
+                            "minimum": 0,
+                            "type": "integer"
+                          }
+                        },
+                        "required": [
+                          "leaf_index",
+                          "audit_path"
+                        ],
+                        "type": "object"
+                      }
+                    },
+                    "required": [
+                      "leaf",
+                      "proof"
+                    ],
+                    "type": "object"
+                  }
+                },
+                "required": [
+                  "kind",
+                  "payload"
+                ],
+                "type": "object"
+              }
+            ]
+          }
+        },
+        "required": [
+          "commitment_id",
+          "witness"
+        ],
+        "type": "object"
+      },
+      "LaneRelayEnvelope": {
+        "additionalProperties": false,
+        "properties": {
+          "block_header": {
+            "$ref": "#/components/schemas/BlockHeader"
+          },
+          "block_height": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "da_commitment_hash": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Hash"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "dataspace_id": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "fastpq_proof": {
+            "$ref": "#/components/schemas/LaneFastpqProofMaterial"
+          },
+          "lane_block_descriptor_hash": {
+            "$ref": "#/components/schemas/Hash"
+          },
+          "lane_id": {
+            "format": "uint32",
+            "maximum": 4294967295,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "lane_incarnation": {
+            "$ref": "#/components/schemas/Hash"
+          },
+          "manifest_root": {
+            "description": "Canonical uppercase 32-byte Norito JSON hex.",
+            "pattern": "^[0-9A-F]{64}$",
+            "type": "string"
+          },
+          "qc": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Qc"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "rbc_bytes_total": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "settlement_commitment": {
+            "$ref": "#/components/schemas/LaneSettlementCommitment"
+          },
+          "settlement_hash": {
+            "$ref": "#/components/schemas/Hash"
+          }
+        },
+        "required": [
+          "lane_id",
+          "lane_incarnation",
+          "dataspace_id",
+          "block_height",
+          "block_header",
+          "qc",
+          "da_commitment_hash",
+          "settlement_commitment",
+          "settlement_hash",
+          "rbc_bytes_total"
+        ],
+        "type": "object"
+      },
+      "LaneSettlementCommitment": {
+        "additionalProperties": false,
+        "properties": {
+          "block_height": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "dataspace_id": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "lane_id": {
+            "format": "uint32",
+            "maximum": 4294967295,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "lane_incarnation": {
+            "$ref": "#/components/schemas/Hash"
+          },
+          "native_amx_receipts": {
+            "items": {
+              "$ref": "#/components/schemas/NativeAmxReceipt"
+            },
+            "maxItems": 4096,
+            "type": "array",
+            "uniqueItems": true
+          },
+          "nexus_fee_receipts": {
+            "description": "Versioned Nexus fee receipts with exact recomputation inputs.",
+            "items": {
+              "$ref": "#/components/schemas/NexusFeeReceipt"
+            },
+            "type": "array",
+            "uniqueItems": true
+          },
+          "receipts": {
+            "items": {
+              "$ref": "#/components/schemas/LaneSettlementReceipt"
+            },
+            "type": "array"
+          },
+          "swap_metadata": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/LaneSwapMetadata"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "total_local_amount": {
+            "$ref": "#/components/schemas/Quantity"
+          },
+          "total_xor_after_haircut": {
+            "$ref": "#/components/schemas/Quantity"
+          },
+          "total_xor_due": {
+            "$ref": "#/components/schemas/Quantity"
+          },
+          "total_xor_variance": {
+            "$ref": "#/components/schemas/Quantity"
+          },
+          "tx_count": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "block_height",
+          "lane_id",
+          "lane_incarnation",
+          "dataspace_id",
+          "tx_count",
+          "total_local_amount",
+          "total_xor_due",
+          "total_xor_after_haircut",
+          "total_xor_variance",
+          "swap_metadata",
+          "receipts",
+          "nexus_fee_receipts",
+          "native_amx_receipts"
+        ],
+        "type": "object"
+      },
+      "LaneSettlementReceipt": {
+        "additionalProperties": false,
+        "properties": {
+          "local_amount": {
+            "$ref": "#/components/schemas/Quantity"
+          },
+          "source_id": {
+            "description": "Transaction-linked settlement receipt source id as canonical uppercase 32-byte Norito JSON hex.",
+            "pattern": "^[0-9A-F]{64}$",
+            "type": "string"
+          },
+          "timestamp_ms": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "xor_after_haircut": {
+            "$ref": "#/components/schemas/Quantity"
+          },
+          "xor_due": {
+            "$ref": "#/components/schemas/Quantity"
+          },
+          "xor_variance": {
+            "$ref": "#/components/schemas/Quantity"
+          }
+        },
+        "required": [
+          "source_id",
+          "local_amount",
+          "xor_due",
+          "xor_after_haircut",
+          "xor_variance",
+          "timestamp_ms"
+        ],
+        "type": "object"
+      },
+      "LaneSwapMetadata": {
+        "additionalProperties": false,
+        "properties": {
+          "epsilon_bps": {
+            "format": "uint16",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "liquidity_profile": {
+            "$ref": "#/components/schemas/LaneLiquidityProfile"
+          },
+          "twap_local_per_xor": {
+            "type": "string"
+          },
+          "twap_window_seconds": {
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "volatility_class": {
+            "$ref": "#/components/schemas/LaneVolatilityClass"
+          }
+        },
+        "required": [
+          "epsilon_bps",
+          "twap_window_seconds",
+          "liquidity_profile",
+          "twap_local_per_xor",
+          "volatility_class"
+        ],
+        "type": "object"
+      },
+      "LaneVolatilityClass": {
+        "additionalProperties": false,
+        "description": "Canonical externally tagged Norito JSON unit enum.",
+        "properties": {
+          "bucket": {
+            "enum": [
+              "Stable",
+              "Elevated",
+              "Dislocated"
+            ],
+            "type": "string"
+          },
+          "state": {
+            "type": "null"
+          }
+        },
+        "required": [
+          "bucket",
+          "state"
+        ],
+        "type": "object"
+      },
+      "ManifestAliasBinding": {
+        "additionalProperties": false,
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "namespace": {
+            "type": "string"
+          },
+          "proof": {
+            "contentEncoding": "base64",
+            "description": "Canonical RFC 4648 standard padded base64 emitted by native Norito JSON.",
+            "pattern": "^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/][AQgw]==|[A-Za-z0-9+/]{2}[AEIMQUYcgkosw048]=)?$",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "namespace",
+          "proof"
+        ],
+        "type": "object"
+      },
+      "ManifestDigest": {
+        "description": "Canonical 32-byte SoraFS manifest digest.",
+        "items": {
+          "maximum": 255,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "maxItems": 32,
+        "minItems": 32,
+        "type": "array"
+      },
+      "ManifestProvenance": {
+        "additionalProperties": false,
+        "properties": {
+          "signature": {
+            "description": "Canonical uppercase hexadecimal signature over the manifest payload.",
+            "minLength": 2,
+            "pattern": "^(?:[0-9A-F]{2})+$",
+            "type": "string"
+          },
+          "signer": {
+            "description": "Canonical multihash public key that signed the manifest payload.",
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "required": [
+          "signer",
+          "signature"
+        ],
+        "type": "object"
+      },
+      "MerkleDirection": {
+        "additionalProperties": false,
+        "description": "Canonical tagged Norito JSON direction of a sibling node.",
+        "properties": {
+          "direction": {
+            "enum": [
+              "Left",
+              "Right"
+            ],
+            "type": "string"
+          },
+          "value": {
+            "type": "null"
+          }
+        },
+        "required": [
+          "direction",
+          "value"
+        ],
+        "type": "object"
+      },
+      "MerklePathItem": {
+        "additionalProperties": false,
+        "properties": {
+          "direction": {
+            "$ref": "#/components/schemas/MerkleDirection"
+          },
+          "sibling": {
+            "$ref": "#/components/schemas/DaIrohaHash"
+          }
+        },
+        "required": [
+          "sibling",
+          "direction"
+        ],
+        "type": "object"
+      },
+      "ModelArtifactRegisterPayload": {
+        "additionalProperties": false,
+        "properties": {
+          "dataset_ref": {
+            "type": "string"
+          },
+          "model_name": {
+            "type": "string"
+          },
+          "provenance_attestation_hash": {
+            "$ref": "#/components/schemas/Hash"
+          },
+          "reproducibility_hash": {
+            "$ref": "#/components/schemas/Hash"
+          },
+          "service_name": {
+            "type": "string"
+          },
+          "training_config_hash": {
+            "$ref": "#/components/schemas/Hash"
+          },
+          "training_job_id": {
+            "type": "string"
+          },
+          "weight_artifact_hash": {
+            "$ref": "#/components/schemas/Hash"
+          }
+        },
+        "required": [
+          "service_name",
+          "model_name",
+          "training_job_id",
+          "weight_artifact_hash",
+          "dataset_ref",
+          "training_config_hash",
+          "reproducibility_hash",
+          "provenance_attestation_hash"
+        ],
+        "type": "object"
+      },
+      "ModelArtifactStatusEntry": {
+        "additionalProperties": false,
+        "properties": {
+          "artifact_id": {
+            "type": "string"
+          },
+          "chunk_manifest_root": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Hash"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "consumed_by_version": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "dataset_ref": {
+            "type": "string"
+          },
+          "model_name": {
+            "type": "string"
+          },
+          "provenance_attestation_hash": {
+            "$ref": "#/components/schemas/Hash"
+          },
+          "registered_sequence": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "reproducibility_hash": {
+            "$ref": "#/components/schemas/Hash"
+          },
+          "service_name": {
+            "type": "string"
+          },
+          "training_config_hash": {
+            "$ref": "#/components/schemas/Hash"
+          },
+          "training_job_id": {
+            "type": "string"
+          },
+          "weight_artifact_hash": {
+            "$ref": "#/components/schemas/Hash"
+          },
+          "weight_version": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "service_name",
+          "model_name",
+          "artifact_id",
+          "training_job_id",
+          "weight_version",
+          "weight_artifact_hash",
+          "dataset_ref",
+          "training_config_hash",
+          "reproducibility_hash",
+          "provenance_attestation_hash",
+          "registered_sequence",
+          "consumed_by_version",
+          "chunk_manifest_root"
+        ],
+        "type": "object"
+      },
+      "ModelArtifactStatusResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "artifact": {
+            "$ref": "#/components/schemas/ModelArtifactStatusEntry"
+          },
+          "artifact_count": {
+            "format": "uint32",
+            "maximum": 4294967295,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "artifacts": {
+            "items": {
+              "$ref": "#/components/schemas/ModelArtifactStatusEntry"
+            },
+            "type": "array"
+          },
+          "model_name": {
+            "type": "string"
+          },
+          "schema_version": {
+            "const": 1,
+            "type": "integer"
+          },
+          "service_name": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "schema_version",
+          "service_name",
+          "model_name",
+          "artifact_count",
+          "artifact",
+          "artifacts"
+        ],
+        "type": "object"
+      },
+      "ModelHostAdvertisePayload": {
+        "additionalProperties": false,
+        "properties": {
+          "capability": {
+            "$ref": "#/components/schemas/SoraModelHostCapabilityRecordV1"
+          }
+        },
+        "required": [
+          "capability"
+        ],
+        "type": "object"
+      },
+      "ModelHostHeartbeatPayload": {
+        "additionalProperties": false,
+        "properties": {
+          "heartbeat_expires_at_ms": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "validator_account_id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "validator_account_id",
+          "heartbeat_expires_at_ms"
+        ],
+        "type": "object"
+      },
+      "ModelHostStatusResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "active_host_count": {
+            "format": "uint32",
+            "maximum": 4294967295,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "hosts": {
+            "items": {
+              "$ref": "#/components/schemas/SoraModelHostCapabilityRecordV1"
+            },
+            "type": "array"
+          },
+          "schema_version": {
+            "const": 1,
+            "type": "integer"
+          },
+          "validator_account_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "schema_version",
+          "validator_account_id",
+          "active_host_count",
+          "hosts"
+        ],
+        "type": "object"
+      },
+      "ModelHostWithdrawPayload": {
+        "additionalProperties": false,
+        "properties": {
+          "validator_account_id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "validator_account_id"
+        ],
+        "type": "object"
+      },
+      "ModelWeightPromotePayload": {
+        "additionalProperties": false,
+        "properties": {
+          "gate_approved": {
+            "type": "boolean"
+          },
+          "gate_report_hash": {
+            "$ref": "#/components/schemas/Hash"
+          },
+          "model_name": {
+            "type": "string"
+          },
+          "service_name": {
+            "type": "string"
+          },
+          "weight_version": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "service_name",
+          "model_name",
+          "weight_version",
+          "gate_approved",
+          "gate_report_hash"
+        ],
+        "type": "object"
+      },
+      "ModelWeightRegisterPayload": {
+        "additionalProperties": false,
+        "properties": {
+          "dataset_ref": {
+            "type": "string"
+          },
+          "model_name": {
+            "type": "string"
+          },
+          "parent_version": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "provenance_attestation_hash": {
+            "$ref": "#/components/schemas/Hash"
+          },
+          "reproducibility_hash": {
+            "$ref": "#/components/schemas/Hash"
+          },
+          "service_name": {
+            "type": "string"
+          },
+          "training_config_hash": {
+            "$ref": "#/components/schemas/Hash"
+          },
+          "training_job_id": {
+            "type": "string"
+          },
+          "weight_artifact_hash": {
+            "$ref": "#/components/schemas/Hash"
+          },
+          "weight_version": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "service_name",
+          "model_name",
+          "weight_version",
+          "training_job_id",
+          "parent_version",
+          "weight_artifact_hash",
+          "dataset_ref",
+          "training_config_hash",
+          "reproducibility_hash",
+          "provenance_attestation_hash"
+        ],
+        "type": "object"
+      },
+      "SoraServiceLeaseEgressCheckpointV1": {
+        "additionalProperties": false,
+        "properties": {
+          "accounted_egress_bytes": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "assignment": {
+            "$ref": "#/components/schemas/SoraServiceLeaseReporterAssignmentV1"
+          },
+          "finalize_reporter": {
+            "type": "boolean"
+          },
+          "forced_finalization": {
+            "type": "boolean"
+          },
+          "last_updated_height": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "reporting_epoch": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "reporting_epoch",
+          "assignment",
+          "accounted_egress_bytes",
+          "last_updated_height",
+          "finalize_reporter",
+          "forced_finalization"
+        ],
+        "type": "object"
+      },
+      "SoraServiceLeaseReporterAssignmentV1": {
+        "additionalProperties": false,
+        "properties": {
+          "placement": {
+            "$ref": "#/components/schemas/SoraInrouReplicaPlacementV1"
+          },
+          "placement_reconciled_at_ms": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "schema_version": {
+            "const": 1,
+            "type": "integer"
+          },
+          "service_version": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "schema_version",
+          "service_version",
+          "placement",
+          "placement_reconciled_at_ms"
+        ],
+        "type": "object"
+      },
+      "SoraServiceLeaseReportingEpochRolloverV1": {
+        "additionalProperties": false,
+        "properties": {
+          "active_service_version": {
+            "type": "string"
+          },
+          "finalized_checkpoint_count": {
+            "format": "uint32",
+            "maximum": 4294967295,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "forced_finalized_checkpoint_count": {
+            "format": "uint32",
+            "maximum": 4294967295,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "lease_started_height": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "new_reporting_epoch": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "previous_reporting_epoch": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "replica_slot": {
+            "format": "uint16",
+            "maximum": 65535,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "reporter_account_id": {
+            "type": "string"
+          },
+          "schema_version": {
+            "const": 1,
+            "type": "integer"
+          },
+          "settled_egress_bytes": {
+            "format": "uint128",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "settled_egress_bytes_delta": {
+            "format": "uint128",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "schema_version",
+          "lease_started_height",
+          "previous_reporting_epoch",
+          "new_reporting_epoch",
+          "reporter_account_id",
+          "active_service_version",
+          "replica_slot",
+          "finalized_checkpoint_count",
+          "forced_finalized_checkpoint_count",
+          "settled_egress_bytes_delta",
+          "settled_egress_bytes"
+        ],
+        "type": "object"
+      },
+      "SoraServiceLeaseStateV1": {
+        "additionalProperties": false,
+        "properties": {
+          "accounted_egress_bytes": {
+            "format": "uint128",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "deployment_deposit": {
+            "$ref": "#/components/schemas/Quantity"
+          },
+          "egress_price_per_mib": {
+            "$ref": "#/components/schemas/Quantity"
+          },
+          "egress_reporter_checkpoints": {
+            "items": {
+              "$ref": "#/components/schemas/SoraServiceLeaseEgressCheckpointV1"
+            },
+            "type": "array"
+          },
+          "last_status_reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "lease_expires_height": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "lease_started_height": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "prepaid_runtime_balance": {
+            "$ref": "#/components/schemas/Quantity"
+          },
+          "quota_class": {
+            "type": "string"
+          },
+          "reporting_epoch": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "runtime_price_per_block": {
+            "$ref": "#/components/schemas/Quantity"
+          },
+          "schema_version": {
+            "const": 1,
+            "type": "integer"
+          },
+          "settled_egress_bytes": {
+            "format": "uint128",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "status": {
+            "$ref": "#/components/schemas/SoraServiceLeaseStatusV1"
+          },
+          "storage_price_per_gib_block": {
+            "$ref": "#/components/schemas/Quantity"
+          }
+        },
+        "required": [
+          "schema_version",
+          "status",
+          "quota_class",
+          "deployment_deposit",
+          "prepaid_runtime_balance",
+          "runtime_price_per_block",
+          "storage_price_per_gib_block",
+          "egress_price_per_mib",
+          "lease_started_height",
+          "lease_expires_height",
+          "reporting_epoch",
+          "settled_egress_bytes",
+          "egress_reporter_checkpoints",
+          "accounted_egress_bytes",
+          "last_status_reason"
+        ],
+        "type": "object"
+      },
+      "SoraServiceLeaseUsageAuditV1": {
+        "additionalProperties": false,
+        "properties": {
+          "assignment": {
+            "$ref": "#/components/schemas/SoraServiceLeaseReporterAssignmentV1"
+          },
+          "finalize_reporter": {
+            "type": "boolean"
+          },
+          "replica_accounted_egress_bytes": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "reporting_epoch": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "schema_version": {
+            "const": 1,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "schema_version",
+          "reporting_epoch",
+          "assignment",
+          "replica_accounted_egress_bytes",
+          "finalize_reporter"
+        ],
+        "type": "object"
       }
     },
     "securitySchemes": {
@@ -71368,7 +74023,7 @@
     },
     "/v1/soracloud/status": {
       "get": {
-        "description": "Fetch the exact V1 Soracloud service-health, routing, hosted-HTTP topology, resource-pressure, failed-admission, runtime-manager, and control-plane projections. Routing reports configured_lane_count, declared_lane_count, active lane ids/count, and autoscale-capacity lane ids/count separately.",
+        "description": "Fetch the exact V1 Soracloud service-health, routing, hosted-HTTP topology, resource-pressure, failed-admission, runtime-manager, and control-plane projections. Routing reports `configured_lane_count`, `declared_lane_count`, `active_lane_ids`/`active_lane_count`, and `autoscale_capacity_lane_ids`/`autoscale_capacity_lane_count` separately.",
         "parameters": [
           {
             "description": "Authorizing canonical account. Required with the signature/timestamp/nonce proof set; optional when X-Iroha-Witness identifies the subject account.",

@@ -92,7 +92,7 @@ use iroha::{
     },
 };
 use iroha_core::soracloud_runtime::{
-    HF_GENERATED_AGENT_AUTONOMY_BUDGET_UNITS, HF_GENERATED_AGENT_LEASE_TICKS,
+    HF_GENERATED_AGENT_AUTONOMY_BUDGET_UNITS, HF_GENERATED_AGENT_LEASE_BLOCKS,
     build_soracloud_hf_generated_agent_manifest, build_soracloud_hf_generated_service_bundle,
 };
 use iroha_crypto::{Hash, KeyPair, Signature};
@@ -4822,7 +4822,7 @@ define_live_mutation_args! {
         manifest: PathBuf,
         /// Lease length, measured in deterministic control-plane sequence ticks.
         #[arg(long, value_name = "TICKS", default_value_t = 120)]
-        lease_ticks: u64,
+        lease_blocks: u64,
         /// Initial autonomy execution budget units.
         #[arg(long, value_name = "UNITS", default_value_t = AGENT_AUTONOMY_DEFAULT_BUDGET_UNITS)]
         autonomy_budget_units: u64,
@@ -4830,7 +4830,7 @@ define_live_mutation_args! {
 }
 impl AgentDeployArgs {
     fn run(self, authority: &AccountId, key_pair: &KeyPair) -> Result<norito::json::Value> {
-        if self.lease_ticks == 0 {
+        if self.lease_blocks == 0 {
             return Err(eyre!("--lease-ticks must be greater than zero"));
         }
         if self.autonomy_budget_units == 0 {
@@ -4842,7 +4842,7 @@ impl AgentDeployArgs {
         let torii_url = require_torii_url(self.torii_url.as_deref())?;
         let request = signed_agent_deploy_request(
             manifest,
-            self.lease_ticks,
+            self.lease_blocks,
             self.autonomy_budget_units,
             authority,
             key_pair,
@@ -4867,18 +4867,18 @@ define_live_mutation_args! {
         apartment_name: String,
         /// Lease extension ticks.
         #[arg(long, value_name = "TICKS", default_value_t = 120)]
-        lease_ticks: u64,
+        lease_blocks: u64,
     }
 }
 impl AgentLeaseRenewArgs {
     fn run(self, authority: &AccountId, key_pair: &KeyPair) -> Result<norito::json::Value> {
-        if self.lease_ticks == 0 {
+        if self.lease_blocks == 0 {
             return Err(eyre!("--lease-ticks must be greater than zero"));
         }
         let torii_url = require_torii_url(self.torii_url.as_deref())?;
         let request = signed_agent_lease_renew_request(
             &self.apartment_name,
-            self.lease_ticks,
+            self.lease_blocks,
             authority,
             key_pair,
         )?;
@@ -9442,7 +9442,7 @@ struct ServiceStatusOutput {
     #[norito(required)]
     service_lease_status: Option<SoraServiceLeaseStatusV1>,
     #[norito(required)]
-    lease_expires_sequence: Option<u64>,
+    lease_expires_height: Option<u64>,
     #[norito(required)]
     prepaid_runtime_balance: Option<Quantity>,
     #[norito(required)]
@@ -10401,7 +10401,7 @@ struct RolloutAdvancePayload {
 #[norito(deny_unknown_fields)]
 struct AgentDeployPayload {
     manifest: AgentApartmentManifestV1,
-    lease_ticks: u64,
+    lease_blocks: u64,
     autonomy_budget_units: u64,
 }
 #[derive(
@@ -10415,7 +10415,7 @@ struct AgentDeployPayload {
 #[norito(deny_unknown_fields)]
 struct AgentLeaseRenewPayload {
     apartment_name: String,
-    lease_ticks: u64,
+    lease_blocks: u64,
 }
 #[derive(
     Clone,
@@ -12483,14 +12483,14 @@ fn signed_rollout_request(
 }
 fn signed_agent_deploy_request(
     manifest: AgentApartmentManifestV1,
-    lease_ticks: u64,
+    lease_blocks: u64,
     autonomy_budget_units: u64,
     _authority: &AccountId,
     key_pair: &KeyPair,
 ) -> Result<SignedAgentDeployRequest> {
     let payload = AgentDeployPayload {
         manifest,
-        lease_ticks,
+        lease_blocks,
         autonomy_budget_units,
     };
     let encoded = encode_agent_deploy_signature_payload(&payload)
@@ -12502,19 +12502,19 @@ fn signed_agent_deploy_request(
 }
 fn signed_agent_lease_renew_request(
     apartment_name: &str,
-    lease_ticks: u64,
+    lease_blocks: u64,
     _authority: &AccountId,
     key_pair: &KeyPair,
 ) -> Result<SignedAgentLeaseRenewRequest> {
     if apartment_name.trim().is_empty() {
         return Err(eyre!("--apartment-name must not be empty"));
     }
-    if lease_ticks == 0 {
+    if lease_blocks == 0 {
         return Err(eyre!("--lease-ticks must be greater than zero"));
     }
     let payload = AgentLeaseRenewPayload {
         apartment_name: apartment_name.to_owned(),
-        lease_ticks,
+        lease_blocks,
     };
     let encoded = encode_agent_lease_renew_signature_payload(&payload)
         .wrap_err("failed to encode agent lease renew payload for signing")?;
@@ -12634,7 +12634,7 @@ fn sign_generated_hf_apartment_provenance(
 ) -> Result<ManifestProvenance> {
     let payload = encode_agent_deploy_provenance_payload(
         manifest.clone(),
-        HF_GENERATED_AGENT_LEASE_TICKS,
+        HF_GENERATED_AGENT_LEASE_BLOCKS,
         Some(HF_GENERATED_AGENT_AUTONOMY_BUDGET_UNITS),
     )
     .wrap_err("failed to encode generated HF apartment manifest for signing")?;
@@ -13568,7 +13568,7 @@ fn encode_rollout_signature_payload(payload: &RolloutAdvancePayload) -> Result<V
 fn encode_agent_deploy_signature_payload(payload: &AgentDeployPayload) -> Result<Vec<u8>> {
     encode_agent_deploy_provenance_payload(
         payload.manifest.clone(),
-        payload.lease_ticks,
+        payload.lease_blocks,
         Some(payload.autonomy_budget_units),
     )
     .wrap_err("failed to encode agent deploy signature payload tuple")
@@ -13576,7 +13576,7 @@ fn encode_agent_deploy_signature_payload(payload: &AgentDeployPayload) -> Result
 fn encode_agent_lease_renew_signature_payload(payload: &AgentLeaseRenewPayload) -> Result<Vec<u8>> {
     encode_agent_lease_renew_provenance_payload(
         payload.apartment_name.as_str(),
-        payload.lease_ticks,
+        payload.lease_blocks,
     )
     .wrap_err("failed to encode agent lease renew signature payload tuple")
 }
@@ -14509,6 +14509,7 @@ fn fetch_torii_soracloud_status(
 /// canonical account-authenticated GET boundary as every protected Soracloud
 /// read. The caller retains the HTTP status so convergence diagnostics remain
 /// fail-closed without treating an authentication failure as topology data.
+#[cfg(test)]
 pub(crate) fn fetch_taira_inrou_canary_status(
     torii_url: &str,
     timeout_secs: u64,
@@ -16093,13 +16094,13 @@ fn service_handler(
         route_path: route_path.map(ToOwned::to_owned),
         certified_response,
         mailbox: mailbox.map(
-            |(queue_name, max_pending_messages, max_message_bytes, retention_sequences)| {
+            |(queue_name, max_pending_messages, max_message_bytes, retention_blocks)| {
                 SoraMailboxContractV1 {
                     queue_name: queue_name.parse().expect("literal queue name is valid"),
                     max_pending_messages: NonZeroU32::new(max_pending_messages)
                         .expect("nonzero literal"),
                     max_message_bytes: NonZeroU64::new(max_message_bytes).expect("nonzero literal"),
-                    retention_sequences: NonZeroU32::new(retention_sequences)
+                    retention_blocks: NonZeroU32::new(retention_blocks)
                         .expect("nonzero literal"),
                 }
             },
@@ -21176,7 +21177,7 @@ mod tests {
             secret_entry_count: 0,
             quota_class: None,
             service_lease_status: None,
-            lease_expires_sequence: None,
+            lease_expires_height: None,
             prepaid_runtime_balance: None,
             remaining_runtime_balance: None,
             public_discovery_content_cid: Some("bafyteststatus".to_owned()),
@@ -23878,7 +23879,7 @@ mod tests {
 
         let agent_deploy = AgentDeployPayload {
             manifest: fixture_agent_apartment(),
-            lease_ticks: 120,
+            lease_blocks: 120,
             autonomy_budget_units: 500,
         };
         let mut missing_budget = json::to_value(&agent_deploy).expect("serialize agent deploy");
@@ -24026,13 +24027,13 @@ mod tests {
         agent_deploy_signature_payload_layout_is_canonical_tuple,
         payload = AgentDeployPayload {
             manifest: fixture_agent_apartment(),
-            lease_ticks: 120,
+            lease_blocks: 120,
             autonomy_budget_units: 500,
         },
         encode_agent_deploy_signature_payload,
         (
             payload.manifest.clone(),
-            payload.lease_ticks,
+            payload.lease_blocks,
             Some(payload.autonomy_budget_units),
         )
     );
@@ -24040,10 +24041,10 @@ mod tests {
         agent_lease_renew_signature_payload_layout_is_canonical_tuple,
         payload = AgentLeaseRenewPayload {
             apartment_name: "ops_agent".to_owned(),
-            lease_ticks: 120,
+            lease_blocks: 120,
         },
         encode_agent_lease_renew_signature_payload,
-        (payload.apartment_name.as_str(), payload.lease_ticks)
+        (payload.apartment_name.as_str(), payload.lease_blocks)
     );
     signature_payload_layout_case!(
         agent_restart_signature_payload_layout_is_canonical_tuple,

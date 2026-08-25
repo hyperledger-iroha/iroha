@@ -167,7 +167,7 @@ pub enum IrohaRuntimeProviderSlotV1 {
 }
 impl IrohaRuntimeProviderSlotV1 {
     /// Every first-release runtime-provider slot in wire-ID order.
-    pub const ALL: [Self; 62] = [
+    pub const ALL: [Self; 61] = [
         Self::ModerationQuarantineKeyWrapper,
         Self::PrivacyCyclePrfProvider,
         Self::PrivacyReleaseAnchor,
@@ -3768,7 +3768,7 @@ mod tests {
     }
     #[test]
     fn runtime_provider_slot_wire_ids_are_stable_and_ordered() {
-        let mut seen = [false; 63];
+        let mut seen = [false; 62];
         for (index, slot) in IrohaRuntimeProviderSlotV1::ALL.into_iter().enumerate() {
             let wire_id = slot.wire_id();
             assert_eq!(
@@ -3790,7 +3790,7 @@ mod tests {
             seen[1..].iter().all(|present| *present),
             "the V1 slot inventory must not omit a wire ID"
         );
-        for unknown in [0, 63, u16::MAX] {
+        for unknown in [0, 62, u16::MAX] {
             assert_eq!(
                 IrohaRuntimeProviderSlotV1::from_wire_id(unknown),
                 None,
