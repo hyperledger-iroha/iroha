@@ -28,7 +28,8 @@ use iroha_core::soracloud_runtime::{
     SORACLOUD_PRIVATE_UPLOADED_MODEL_EXECUTION_JOURNAL_VERSION_V1,
     SORACLOUD_PRIVATE_UPLOADED_MODEL_EXECUTION_MAX_SUBMISSION_ATTEMPTS_V1,
     SoracloudApartmentAutonomyExecutionSummaryV1, SoracloudApartmentExecutionRequest,
-    SoracloudLocalReadKind, SoracloudPrivateUploadedModelExecutionJournalV1,
+    SoracloudLocalReadKind, SoracloudPrivateUploadedModelExecutionJournalPhaseV1,
+    SoracloudPrivateUploadedModelExecutionJournalV1,
     SoracloudPrivateUploadedModelExecutionRequestV1, SoracloudRuntimeExecutionError,
     SoracloudRuntimeExecutionErrorKind, SoracloudRuntimeHfSourcePlan,
     SoracloudRuntimeHfSourceStatus, authoritative_soracloud_sequence,
@@ -6287,58 +6288,20 @@ fn recover_private_execution_submission(
         "prepared output",
     )?;
 
-    let pipeline_status = entry.transaction_hash.and_then(|hash| {
-        let typed_hash = HashOf::<SignedTransaction>::from_untyped_unchecked(hash);
-        app.pipeline_status_cache.lookup(&typed_hash)
-    });
-    if matches!(
-        pipeline_status.as_ref().map(|status| status.kind),
-        Some(crate::PipelineStatusKind::Rejected)
-    ) {
-        return Err(SoracloudError::conflict(format!(
-            "private execution transaction for decryption request `{}` was permanently rejected; a new governed release is required",
-            request.decryption_request_id
-        )));
-    }
-    let queue_pending = entry.transaction_hash.is_some_and(|hash| {
-        app.queue.contains_pending_hash(
-            iroha_core::tx::external_entrypoint_hash_from_signed_hash(
-                HashOf::<SignedTransaction>::from_untyped_unchecked(hash),
-            ),
-            &app.state,
+    // The runtime owns observation and replacement of the exact phase transaction. Keeping that
+    // decision inside the locked durable outbox prevents Torii's pipeline cache from racing a pin
+    // commitment or advancing to the receipt before replication quorum is authoritative.
+    let transaction_hash = runtime
+        .advance_private_uploaded_model_execution(
+            entry.output_manifest_payload.clone(),
+            entry.receipt.clone(),
         )
-    });
-    let transaction_hash = match (entry.transaction_hash, pipeline_status) {
-        (Some(hash), Some(status))
-            if !matches!(status.kind, crate::PipelineStatusKind::Expired) =>
-        {
-            hash
-        }
-        (Some(hash), None) if queue_pending => hash,
-        (Some(expired_hash), Some(status))
-            if matches!(status.kind, crate::PipelineStatusKind::Expired) =>
-        {
-            runtime
-                .persist_private_uploaded_model_execution(
-                    entry.output_manifest_payload.clone(),
-                    entry.receipt.clone(),
-                    Some(expired_hash),
-                )
-                .map_err(map_private_runtime_error)?
-        }
-        _ => runtime
-            .persist_private_uploaded_model_execution(
-                entry.output_manifest_payload.clone(),
-                entry.receipt.clone(),
-                None,
-            )
-            .map_err(map_private_runtime_error)?,
-    };
+        .map_err(map_private_runtime_error)?;
     let response = PrivateUploadedModelExecuteResponse {
         schema_version: 1,
         status: status.clone(),
         submission_status: "submitted".to_owned(),
-        transaction_hash: Some(transaction_hash),
+        transaction_hash,
         output_artifact,
         receipt: entry.receipt,
     };
@@ -6475,6 +6438,14 @@ fn authoritative_private_uploaded_model_execute_response(
             "private runtime returned output encryption metadata different from the request",
         ));
     }
+    // Inference is intentionally outside consensus and may take long enough to consume the
+    // retention margin checked before execution. Refresh the authoritative pin immediately after
+    // inference so the output manifest never inherits a stale recovery horizon.
+    let input_pin = require_active_private_model_artifact_pin(
+        app,
+        &request.input_artifact,
+        required_retention_margin_seconds,
+    )?;
     let output = build_private_output_manifest(
         result.encrypted_output_artifact_bytes.as_slice(),
         &input_pin,
@@ -6488,6 +6459,14 @@ fn authoritative_private_uploaded_model_execute_response(
         app,
         &output,
         result.encrypted_output_artifact_bytes.as_slice(),
+    )?;
+    // Local ingest can itself be slow. Do not publish durable outbox evidence unless the source
+    // pin still covers the complete bounded registration, replication, and receipt-recovery
+    // window. Consensus independently enforces the output horizon at receipt commitment.
+    require_active_private_model_artifact_pin(
+        app,
+        &request.input_artifact,
+        required_retention_margin_seconds,
     )?;
     // Close the state-change race before enqueueing. Consensus performs this validation again at
     // the exact execution height inside the same transaction as output-pin registration.
@@ -6537,6 +6516,7 @@ fn authoritative_private_uploaded_model_execute_response(
         request_fingerprint,
         output_manifest_payload: output.manifest_payload.clone(),
         receipt: receipt.clone(),
+        phase: SoracloudPrivateUploadedModelExecutionJournalPhaseV1::OutputPin,
         transaction_hash: None,
         signed_transaction: None,
         submission_attempt: 0,
@@ -6545,13 +6525,13 @@ fn authoritative_private_uploaded_model_execute_response(
         .store_private_uploaded_model_execution_journal(journal.clone())
         .map_err(map_private_runtime_error)?;
     let transaction_hash = runtime
-        .persist_private_uploaded_model_execution(output.manifest_payload, receipt.clone(), None)
+        .advance_private_uploaded_model_execution(output.manifest_payload, receipt.clone())
         .map_err(map_private_runtime_error)?;
     let response = PrivateUploadedModelExecuteResponse {
         schema_version: 1,
         status,
         submission_status: "submitted".to_owned(),
-        transaction_hash: Some(transaction_hash),
+        transaction_hash,
         output_artifact: output.artifact,
         receipt,
     };

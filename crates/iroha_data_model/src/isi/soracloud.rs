@@ -1295,22 +1295,17 @@ impl PartialOrd for RecordSoracloudRuntimeReceipt {
         Some(encoded_order(self, other))
     }
 }
-/// Atomically register a private execution output manifest and persist its authoritative receipt.
+/// Persist an authoritative private execution receipt for an already durable output manifest.
 ///
 /// This runtime-owned ledger projection requires the transaction authority to be the receipt's
 /// exact active validator attester. Recorded receipt identifiers are immutable and cannot be
-/// replaced. Exact retries are idempotent even when the original transaction committed after the
-/// submitting runtime restarted.
+/// replaced. Consensus requires the receipt's exact output pin to be approved, retain an adequate
+/// horizon, and have its deterministic automatic replication order completed. Exact retries are
+/// idempotent even when the original transaction committed after the submitting runtime restarted.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
 pub struct RecordSoracloudPrivateUploadedModelExecutionReceipt {
-    /// Canonical Norito-encoded `sorafs_manifest::ManifestV1` for the encrypted output artifact.
-    ///
-    /// Consensus derives the manifest digest and content length from these bytes and requires an
-    /// exact match with `receipt.output_artifact` before registering the pin and receipt together.
-    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::base64_vec"))]
-    pub output_manifest_payload: Vec<u8>,
     /// Private uploaded-model execution receipt to persist.
     pub receipt: SoraPrivateUploadedModelExecutionReceiptV1,
 }
@@ -1709,7 +1704,6 @@ impl_soracloud_decode_from_slice!(ApplySoracloudOrderedMailboxResult {
     result: SoraOrderedMailboxResultV1,
 });
 impl_soracloud_decode_from_slice!(RecordSoracloudPrivateUploadedModelExecutionReceipt {
-    output_manifest_payload: Vec<u8>,
     receipt: SoraPrivateUploadedModelExecutionReceiptV1,
 });
 #[cfg(test)]
@@ -1818,6 +1812,10 @@ mod tests {
                     ciphertext_bytes: 32,
                     artifact_role: "output".to_owned(),
                 },
+                output_replication_order_id:
+                    crate::sorafs::pin_registry::derive_sorafs_auto_replication_order_id_v1(
+                        &crate::sorafs::pin_registry::ManifestDigest::new([0xB2; 32]),
+                    ),
                 input_commitment: hash("input"),
                 output_commitment: hash("output"),
                 output_recipient: output_recipient(),
@@ -1834,10 +1832,7 @@ mod tests {
             crate::soracloud::derive_soracloud_private_uploaded_model_execution_receipt_id_v1(
                 &receipt,
             );
-        RecordSoracloudPrivateUploadedModelExecutionReceipt {
-            output_manifest_payload: vec![0x01, 0x02, 0x03],
-            receipt,
-        }
+        RecordSoracloudPrivateUploadedModelExecutionReceipt { receipt }
     }
     #[test]
     fn soracloud_decode_from_slice_roundtrips_simple_instructions() {

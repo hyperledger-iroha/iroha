@@ -327,8 +327,8 @@ function normalizeLeaseAssetDefinitionId(input) {
 }
 
 function normalizeExactUnsignedByteArray(value, field, expectedLength) {
-  if (!Array.isArray(value)) {
-    throw new TypeError(`${field} must be an array`);
+  if (!Array.isArray(value) || Object.getPrototypeOf(value) !== Array.prototype) {
+    throw new TypeError(`${field} must be a plain array`);
   }
   if (value.length !== expectedLength) {
     throw new TypeError(`${field} must contain exactly ${expectedLength} bytes`);
@@ -345,15 +345,21 @@ function normalizeExactUnsignedByteArray(value, field, expectedLength) {
       throw new TypeError(`${field}.${property} is not accepted`);
     }
   }
-  const bytes = Array.from(value, (byte, index) => {
+  const bytes = [];
+  for (let index = 0; index < expectedLength; index += 1) {
     if (!Object.hasOwn(value, index)) {
       throw new TypeError(`${field}[${index}] is required`);
     }
+    const descriptor = Object.getOwnPropertyDescriptor(value, String(index));
+    if (descriptor == null || !("value" in descriptor) || descriptor.enumerable !== true) {
+      throw new TypeError(`${field}[${index}] must be an enumerable data property`);
+    }
+    const byte = descriptor.value;
     if (!Number.isInteger(byte) || byte < 0 || byte > 0xff) {
       throw new TypeError(`${field}[${index}] must be an unsigned byte`);
     }
-    return byte;
-  });
+    bytes.push(byte);
+  }
   return bytes;
 }
 

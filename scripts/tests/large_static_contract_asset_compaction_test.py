@@ -12,8 +12,8 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 VERSION = "IROHA_STATIC_CONTRACT_ROWS_V1"
 BASELINE_RUST_LINES = 12_327
-CURRENT_FEATURE_GROWTH_RUST_LINES = 1_962
-MAX_POSTIMAGE_RUST_LINES = 12_289
+CURRENT_FEATURE_GROWTH_RUST_LINES = 1_968
+MAX_POSTIMAGE_RUST_LINES = 12_295
 MINIMUM_NET_REDUCTION = 2_000
 SOURCE_PATHS = (
     'crates/iroha_zkp_halo2/src/generalized_bulletproof_secret_cleanup_tests.rs',

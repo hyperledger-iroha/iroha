@@ -13929,9 +13929,9 @@ export function assembleSoracloudHfDeployRequest(
 
 export interface SoracloudPrivateArtifactRefInput {
   schemaVersion: number | bigint | string;
-  /** Exact 32-byte SoraFS manifest digest. */
+  /** Plain dense JavaScript array of exactly 32 unsigned SoraFS manifest-digest bytes. */
   sorafsManifestDigest: ReadonlyArray<number>;
-  /** Canonical 36-byte CIDv1/dag-cbor/BLAKE3-256 root. */
+  /** Plain dense JavaScript array of exactly 36 canonical CIDv1/dag-cbor/BLAKE3-256 bytes. */
   sorafsRootCid: ReadonlyArray<number>;
   /** Exact uppercase checksummed marker-bit Iroha Hash literal. */
   artifactHash: string;

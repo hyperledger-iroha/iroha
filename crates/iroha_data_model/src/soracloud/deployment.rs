@@ -2920,6 +2920,13 @@ impl SoraPrivateQuantizedCpuOutputV1 {
 /// Runtime version string for deterministic private uploaded-model execution v1.
 pub const SORACLOUD_PRIVATE_MODEL_RUNTIME_VERSION_V1: &str = "soracloud.quantized-cpu.v1";
 
+/// Minimum remaining `SoraFS` retention required when a private execution receipt commits.
+///
+/// This consensus floor gives operators ten minutes to serve or repair the replicated encrypted
+/// output after the receipt becomes authoritative. Runtime admission may require a longer horizon
+/// to cover its configured recovery and transaction-submission budget.
+pub const SORACLOUD_PRIVATE_OUTPUT_MIN_RETENTION_SECS_V1: u64 = 10 * 60;
+
 /// Receipt committed for deterministic private uploaded-model execution.
 ///
 /// The receipt intentionally carries only commitments and encrypted artifact
@@ -2962,6 +2969,11 @@ pub struct SoraPrivateUploadedModelExecutionReceiptV1 {
     pub input_artifact: SoraPrivateModelArtifactRefV1,
     /// Encrypted output artifact persisted outside chain state.
     pub output_artifact: SoraPrivateModelArtifactRefV1,
+    /// Exact completed generic `SoraFS` replication order proving output durability.
+    ///
+    /// The identifier is deterministically known from the output manifest digest before pin
+    /// registration, while consensus requires the referenced order to be complete before commit.
+    pub output_replication_order_id: ReplicationOrderId,
     /// Runtime-blinded commitment over the canonical plaintext input envelope.
     pub input_commitment: Hash,
     /// Runtime-blinded commitment over the canonical plaintext output envelope.
@@ -3042,6 +3054,10 @@ pub fn derive_soracloud_private_model_request_commitment_v1(
     );
     append_private_uploaded_model_receipt_transcript_part(
         &mut transcript,
+        &receipt.output_replication_order_id,
+    );
+    append_private_uploaded_model_receipt_transcript_part(
+        &mut transcript,
         &receipt.input_commitment,
     );
     append_private_uploaded_model_receipt_transcript_part(
@@ -3074,6 +3090,10 @@ pub fn derive_soracloud_private_model_result_commitment_v1(
     append_private_uploaded_model_receipt_transcript_part(
         &mut transcript,
         &receipt.output_artifact,
+    );
+    append_private_uploaded_model_receipt_transcript_part(
+        &mut transcript,
+        &receipt.output_replication_order_id,
     );
     append_private_uploaded_model_receipt_transcript_part(
         &mut transcript,
@@ -3128,6 +3148,10 @@ pub fn derive_soracloud_private_uploaded_model_execution_receipt_id_v1(
     );
     append_private_uploaded_model_receipt_transcript_part(
         &mut transcript,
+        &receipt.output_replication_order_id,
+    );
+    append_private_uploaded_model_receipt_transcript_part(
+        &mut transcript,
         &receipt.input_commitment,
     );
     append_private_uploaded_model_receipt_transcript_part(
@@ -3165,6 +3189,7 @@ impl SoraPrivateUploadedModelExecutionReceiptV1 {
     pub fn validate_submission(&self) -> Result<(), SoracloudManifestError> {
         self.validate_with_sequence_state(false)
     }
+
     fn validate_with_sequence_state(
         &self,
         require_assigned_sequence: bool,
@@ -3257,6 +3282,18 @@ impl SoraPrivateUploadedModelExecutionReceiptV1 {
         }
         self.input_artifact.validate()?;
         self.output_artifact.validate()?;
+        if self
+            .output_replication_order_id
+            .as_bytes()
+            .iter()
+            .all(|byte| *byte == 0)
+        {
+            return Err(invalid_field(
+                "sora private uploaded model execution receipt",
+                "output_replication_order_id",
+                "must not be the zero replication-order identifier",
+            ));
+        }
         self.output_recipient.validate()?;
         SoraRuntimeExecutionHostV1::DeterministicValidator(self.attesting_validator.clone())
             .validate()?;

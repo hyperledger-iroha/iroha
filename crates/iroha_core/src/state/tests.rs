@@ -33322,6 +33322,10 @@ fn sample_snapshot_private_uploaded_model_receipt(
         },
         input_artifact: sample_snapshot_private_model_artifact("input", 0xB1),
         output_artifact: sample_snapshot_private_model_artifact("output", 0xB2),
+        output_replication_order_id:
+            iroha_data_model::sorafs::pin_registry::derive_sorafs_auto_replication_order_id_v1(
+                &ManifestDigest::new([0xB2; 32]),
+            ),
         input_commitment: Hash::new(b"snapshot-private-input"),
         output_commitment: Hash::new(b"snapshot-private-output"),
         request_commitment: Hash::prehashed([0; 32]),

@@ -1047,6 +1047,12 @@ mod tests {
             document["paths"]["/v1/soracloud/model/upload/private/receipts"]["get"]["parameters"]
                 .as_array()
                 .expect("private uploaded-model receipt query parameters");
+        assert!(
+            parameters
+                .iter()
+                .any(|parameter| parameter["name"].as_str() == Some("cursor")),
+            "private uploaded-model receipt query must expose its continuation cursor",
+        );
         let count_mode = parameters
             .iter()
             .find(|parameter| parameter["name"].as_str() == Some("count_mode"))

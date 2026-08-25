@@ -6363,63 +6363,13 @@ pub(crate) fn write_soracloud_runtime_receipt(
         .insert(receipt.receipt_id, receipt);
     Ok(())
 }
-fn validate_soracloud_private_output_manifest_binding(
-    output_manifest_payload: &[u8],
-    output_artifact: &SoraPrivateModelArtifactRefV1,
-) -> Result<(), InstructionExecutionError> {
-    if output_manifest_payload.is_empty()
-        || output_manifest_payload.len() > sorafs_manifest::MAX_MANIFEST_ENCODED_BYTES
-    {
-        return Err(invalid_parameter(format!(
-            "private output manifest payload has {} bytes; expected 1..={}",
-            output_manifest_payload.len(),
-            sorafs_manifest::MAX_MANIFEST_ENCODED_BYTES,
-        )));
-    }
-    let manifest = sorafs_manifest::decode_manifest_v1_canonical(output_manifest_payload).map_err(
-        |error| {
-            invalid_parameter(format!(
-                "invalid canonical private output ManifestV1 payload: {error}"
-            ))
-        },
-    )?;
-    let digest = ManifestDigest::from_manifest(&manifest).map_err(|error| {
-        invalid_parameter(format!(
-            "failed to derive private output manifest digest: {error}"
-        ))
-    })?;
-    let root_cid =
-        iroha_data_model::sorafs::pin_registry::ManifestRootCid::try_from_slice(&manifest.root_cid)
-            .map_err(|error| {
-                invalid_parameter(format!(
-                    "private output manifest root CID is not canonical: {error}"
-                ))
-            })?;
-    if digest != output_artifact.sorafs_manifest_digest
-        || root_cid != output_artifact.sorafs_root_cid
-        || manifest.content_length != output_artifact.ciphertext_bytes
-    {
-        return Err(InstructionExecutionError::InvariantViolation(
-            "private output manifest digest, root CID, or content length does not match the receipt artifact"
-                .into(),
-        ));
-    }
-    Ok(())
-}
-
 pub(crate) fn write_soracloud_private_uploaded_model_execution_receipt(
     state_transaction: &mut StateTransaction<'_, '_>,
-    authority: &AccountId,
-    output_manifest_payload: Vec<u8>,
     mut receipt: SoraPrivateUploadedModelExecutionReceiptV1,
 ) -> Result<(), InstructionExecutionError> {
     receipt
         .validate_submission()
         .map_err(|err| invalid_parameter(err.to_string()))?;
-    validate_soracloud_private_output_manifest_binding(
-        &output_manifest_payload,
-        &receipt.output_artifact,
-    )?;
 
     // Exact retries are a no-op even if the referenced artifacts were retired after the
     // original execution. The persisted sequence is ledger-owned and is the only field a
@@ -6636,76 +6586,67 @@ pub(crate) fn write_soracloud_private_uploaded_model_execution_receipt(
         ));
     }
 
-    let require_artifact_pin = |artifact: &SoraPrivateModelArtifactRefV1,
-                                require_approved: bool|
-     -> Result<(), InstructionExecutionError> {
-        let pin = state_transaction
-            .world
-            .pin_manifests
-            .get(&artifact.sorafs_manifest_digest)
-            .ok_or_else(|| {
-                InstructionExecutionError::InvariantViolation(
-                    format!(
-                        "private `{}` artifact SoraFS manifest {:?} is not registered",
-                        artifact.artifact_role, artifact.sorafs_manifest_digest
+    let require_artifact_pin =
+        |artifact: &SoraPrivateModelArtifactRefV1| -> Result<(), InstructionExecutionError> {
+            let pin = state_transaction
+                .world
+                .pin_manifests
+                .get(&artifact.sorafs_manifest_digest)
+                .ok_or_else(|| {
+                    InstructionExecutionError::InvariantViolation(
+                        format!(
+                            "private `{}` artifact SoraFS manifest {:?} is not registered",
+                            artifact.artifact_role, artifact.sorafs_manifest_digest
+                        )
+                        .into(),
                     )
-                    .into(),
-                )
-            })?;
-        match pin.status {
-            PinStatus::Approved(_) => {}
-            PinStatus::Pending if !require_approved => {}
-            PinStatus::Pending => {
+                })?;
+            match pin.status {
+                PinStatus::Approved(_) => {}
+                PinStatus::Pending => {
+                    return Err(InstructionExecutionError::InvariantViolation(
+                        format!(
+                            "private `{}` artifact SoraFS manifest {:?} is not approved",
+                            artifact.artifact_role, artifact.sorafs_manifest_digest
+                        )
+                        .into(),
+                    ));
+                }
+                PinStatus::Retired(epoch) => {
+                    return Err(InstructionExecutionError::InvariantViolation(
+                        format!(
+                            "private `{}` artifact SoraFS manifest {:?} retired at epoch {epoch}",
+                            artifact.artifact_role, artifact.sorafs_manifest_digest
+                        )
+                        .into(),
+                    ));
+                }
+            }
+            if pin.digest != artifact.sorafs_manifest_digest
+                || pin.root_cid != artifact.sorafs_root_cid
+                || pin.content_length != artifact.ciphertext_bytes
+            {
                 return Err(InstructionExecutionError::InvariantViolation(
                     format!(
-                        "private `{}` artifact SoraFS manifest {:?} is not approved",
-                        artifact.artifact_role, artifact.sorafs_manifest_digest
+                        "private `{}` artifact does not exactly match its SoraFS pin record",
+                        artifact.artifact_role
                     )
                     .into(),
                 ));
             }
-            PinStatus::Retired(epoch) => {
-                return Err(InstructionExecutionError::InvariantViolation(
-                    format!(
-                        "private `{}` artifact SoraFS manifest {:?} retired at epoch {epoch}",
-                        artifact.artifact_role, artifact.sorafs_manifest_digest
-                    )
-                    .into(),
-                ));
-            }
-        }
-        if pin.digest != artifact.sorafs_manifest_digest
-            || pin.root_cid != artifact.sorafs_root_cid
-            || pin.content_length != artifact.ciphertext_bytes
-        {
-            return Err(InstructionExecutionError::InvariantViolation(
-                format!(
-                    "private `{}` artifact does not exactly match its SoraFS pin record",
-                    artifact.artifact_role
-                )
-                .into(),
-            ));
-        }
-        if artifact.artifact_role == "output"
-            && pin.submitted_by != receipt.attesting_validator.validator_account_id
-        {
-            return Err(InstructionExecutionError::InvariantViolation(
-                "private output artifact pin submitter must equal the attesting validator".into(),
-            ));
-        }
-        Ok(())
-    };
-    require_artifact_pin(&receipt.input_artifact, true)?;
-    // A governed SoraFS policy can leave an output pin pending. An exact existing pin is reused;
-    // otherwise the canonical payload is registered below only after every receipt precondition
-    // and the final ledger-owned sequence have been validated.
-    let output_pin_exists = state_transaction
-        .world
-        .pin_manifests
-        .get(&receipt.output_artifact.sorafs_manifest_digest)
-        .is_some();
-    if output_pin_exists {
-        require_artifact_pin(&receipt.output_artifact, false)?;
+            Ok(())
+        };
+    require_artifact_pin(&receipt.input_artifact)?;
+    let durability = crate::soracloud_runtime::validate_soracloud_private_output_durability_v1(
+        &state_transaction.world,
+        &receipt,
+        state_transaction.block_unix_timestamp_ms() / 1_000,
+    )
+    .map_err(|message| InstructionExecutionError::InvariantViolation(message.into()))?;
+    if durability != crate::soracloud_runtime::SoracloudPrivateOutputDurabilityStatusV1::Ready {
+        return Err(InstructionExecutionError::InvariantViolation(
+            format!("private output is not durably replicated: {durability:?}").into(),
+        ));
     }
 
     if state_transaction
@@ -6732,14 +6673,6 @@ pub(crate) fn write_soracloud_private_uploaded_model_execution_receipt(
         .validate()
         .map_err(|err| invalid_parameter(err.to_string()))?;
 
-    if !output_pin_exists {
-        iroha_data_model::isi::sorafs::RegisterPinManifest::new(
-            output_manifest_payload,
-            None,
-            None,
-        )
-        .execute(authority, state_transaction)?;
-    }
     ensure_soracloud_sequence_is_next(state_transaction, receipt.emitted_sequence)?;
     state_transaction
         .world
@@ -18686,10 +18619,7 @@ impl Execute for isi::RecordSoracloudPrivateUploadedModelExecutionReceipt {
         authority: &AccountId,
         state_transaction: &mut StateTransaction<'_, '_>,
     ) -> Result<(), InstructionExecutionError> {
-        let Self {
-            output_manifest_payload,
-            receipt,
-        } = self;
+        let Self { receipt } = self;
         if receipt.network_id != *state_transaction.network_id() {
             return Err(InstructionExecutionError::InvariantViolation(
                 "private uploaded-model receipt belongs to another network".into(),
@@ -18710,8 +18640,6 @@ impl Execute for isi::RecordSoracloudPrivateUploadedModelExecutionReceipt {
         {
             return write_soracloud_private_uploaded_model_execution_receipt(
                 state_transaction,
-                authority,
-                output_manifest_payload,
                 receipt,
             );
         }
@@ -18733,12 +18661,7 @@ impl Execute for isi::RecordSoracloudPrivateUploadedModelExecutionReceipt {
                     .into(),
             ));
         }
-        write_soracloud_private_uploaded_model_execution_receipt(
-            state_transaction,
-            authority,
-            output_manifest_payload,
-            receipt,
-        )
+        write_soracloud_private_uploaded_model_execution_receipt(state_transaction, receipt)
     }
 }
 #[cfg(all(test, feature = "zk-stark"))]

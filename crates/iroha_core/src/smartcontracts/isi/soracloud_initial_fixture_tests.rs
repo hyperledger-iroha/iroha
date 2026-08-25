@@ -1240,6 +1240,10 @@ fn service_runtime_mutations_require_exact_validator_placement() -> Result<(), e
         },
         input_artifact: private_artifact("input", 0xD2),
         output_artifact: private_artifact("output", 0xD3),
+        output_replication_order_id:
+            iroha_data_model::sorafs::pin_registry::derive_sorafs_auto_replication_order_id_v1(
+                &ManifestDigest::new([0xD3; 32]),
+            ),
         input_commitment: Hash::new(b"input-commitment"),
         output_commitment: Hash::new(b"output-commitment"),
         request_commitment: Hash::prehashed([0; 32]),
@@ -1250,6 +1254,10 @@ fn service_runtime_mutations_require_exact_validator_placement() -> Result<(), e
     let (private_output_manifest_payload, private_output_manifest_digest) =
         private_artifact_manifest_fixture(0xD3, private_receipt.output_artifact.ciphertext_bytes);
     private_receipt.output_artifact.sorafs_manifest_digest = private_output_manifest_digest;
+    private_receipt.output_replication_order_id =
+        iroha_data_model::sorafs::pin_registry::derive_sorafs_auto_replication_order_id_v1(
+            &private_output_manifest_digest,
+        );
     private_receipt.request_commitment =
         derive_soracloud_private_model_request_commitment_v1(&private_receipt);
     private_receipt.result_commitment =
@@ -1257,7 +1265,6 @@ fn service_runtime_mutations_require_exact_validator_placement() -> Result<(), e
     private_receipt.receipt_id =
         derive_soracloud_private_uploaded_model_execution_receipt_id_v1(&private_receipt);
     let private_receipt_error = isi::RecordSoracloudPrivateUploadedModelExecutionReceipt {
-        output_manifest_payload: private_output_manifest_payload.clone(),
         receipt: private_receipt.clone(),
     }
     .execute(&BOB_ID, &mut stx)
@@ -1283,7 +1290,6 @@ fn service_runtime_mutations_require_exact_validator_placement() -> Result<(), e
     wrong_peer_receipt.receipt_id =
         derive_soracloud_private_uploaded_model_execution_receipt_id_v1(&wrong_peer_receipt);
     let wrong_peer_error = isi::RecordSoracloudPrivateUploadedModelExecutionReceipt {
-        output_manifest_payload: private_output_manifest_payload.clone(),
         receipt: wrong_peer_receipt,
     }
     .execute(&ALICE_ID, &mut stx)
@@ -1302,7 +1308,6 @@ fn service_runtime_mutations_require_exact_validator_placement() -> Result<(), e
     inactive_lane_receipt.receipt_id =
         derive_soracloud_private_uploaded_model_execution_receipt_id_v1(&inactive_lane_receipt);
     let inactive_lane_error = isi::RecordSoracloudPrivateUploadedModelExecutionReceipt {
-        output_manifest_payload: private_output_manifest_payload.clone(),
         receipt: inactive_lane_receipt,
     }
     .execute(&ALICE_ID, &mut stx)
@@ -1313,7 +1318,6 @@ fn service_runtime_mutations_require_exact_validator_placement() -> Result<(), e
             if message.contains("attesting_validator must exactly match the authority's active public-lane validator record")
     ));
     let missing_model_pin_error = isi::RecordSoracloudPrivateUploadedModelExecutionReceipt {
-        output_manifest_payload: private_output_manifest_payload,
         receipt: private_receipt.clone(),
     }
     .execute(&ALICE_ID, &mut stx)

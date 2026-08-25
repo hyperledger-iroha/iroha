@@ -17,7 +17,8 @@ use crate::{
     peer::PeerId,
     proof::ProofAttachment,
     sorafs::pin_registry::{
-        MANIFEST_ROOT_CID_LENGTH, ManifestDigest, ManifestRootCid, StorageClass,
+        MANIFEST_ROOT_CID_LENGTH, ManifestDigest, ManifestRootCid, ReplicationOrderId,
+        StorageClass, derive_sorafs_auto_replication_order_id_v1,
     },
     zk::{BackendTag, OpenVerifyEnvelope, OpenVerifyEnvelopeBounds, StarkFriOpenProofV1},
 };

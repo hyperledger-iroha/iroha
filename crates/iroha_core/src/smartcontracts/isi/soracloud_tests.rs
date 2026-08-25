@@ -25474,18 +25474,13 @@ fn private_uploaded_model_execution_receipt_persists_idempotently_from_exact_art
     .execute(&SAMPLE_GENESIS_ACCOUNT_ID, &mut stx)?;
     seed_test_call_hash(&mut stx, 0xD1);
 
-    let (model_manifest_payload, model_digest) =
-        private_artifact_manifest_fixture(0xD1, 4_352);
+    let (model_manifest_payload, model_digest) = private_artifact_manifest_fixture(0xD1, 4_352);
     let mut bundle = sample_uploaded_model_bundle("portal", model_digest);
     bundle.runtime_format =
         iroha_data_model::soracloud::SoraUploadedModelRuntimeFormatV1::DeterministicQuantizedCpuV1;
     bundle.decryption_policy_ref = "private_release".to_owned();
-    iroha_data_model::isi::sorafs::RegisterPinManifest::new(
-        model_manifest_payload,
-        None,
-        None,
-    )
-    .execute(&ALICE_ID, &mut stx)?;
+    iroha_data_model::isi::sorafs::RegisterPinManifest::new(model_manifest_payload, None, None)
+        .execute(&ALICE_ID, &mut stx)?;
     stx.world.soracloud_uploaded_model_bundles.insert(
         (
             bundle.service_name.as_ref().to_owned(),
@@ -25512,12 +25507,8 @@ fn private_uploaded_model_execution_receipt_persists_idempotently_from_exact_art
         private_artifact_manifest_fixture(0xD3, 64);
     let mut output_artifact = artifact("output", 0xD3);
     output_artifact.sorafs_manifest_digest = output_manifest_digest;
-    iroha_data_model::isi::sorafs::RegisterPinManifest::new(
-        input_manifest_payload,
-        None,
-        None,
-    )
-    .execute(&ALICE_ID, &mut stx)?;
+    iroha_data_model::isi::sorafs::RegisterPinManifest::new(input_manifest_payload, None, None)
+        .execute(&ALICE_ID, &mut stx)?;
     let mut policy = sample_decryption_policy();
     policy.policy_name = bundle
         .decryption_policy_ref
@@ -25602,6 +25593,10 @@ fn private_uploaded_model_execution_receipt_persists_idempotently_from_exact_art
         },
         input_artifact,
         output_artifact,
+        output_replication_order_id:
+            iroha_data_model::sorafs::pin_registry::derive_sorafs_auto_replication_order_id_v1(
+                &output_manifest_digest,
+            ),
         input_commitment: Hash::new(b"input-commitment"),
         output_commitment: Hash::new(b"output-commitment"),
         request_commitment: Hash::prehashed([0; 32]),
@@ -25614,7 +25609,6 @@ fn private_uploaded_model_execution_receipt_persists_idempotently_from_exact_art
     receipt.receipt_id = derive_soracloud_private_uploaded_model_execution_receipt_id_v1(&receipt);
 
     let unfinalized_error = isi::RecordSoracloudPrivateUploadedModelExecutionReceipt {
-        output_manifest_payload: output_manifest_payload.clone(),
         receipt: receipt.clone(),
     }
     .execute(&ALICE_ID, &mut stx)
@@ -25644,7 +25638,6 @@ fn private_uploaded_model_execution_receipt_persists_idempotently_from_exact_art
         .expect("finalized artifact projection")
         .dataset_ref = "dataset://different".to_string();
     let linkage_error = isi::RecordSoracloudPrivateUploadedModelExecutionReceipt {
-        output_manifest_payload: output_manifest_payload.clone(),
         receipt: receipt.clone(),
     }
     .execute(&ALICE_ID, &mut stx)
@@ -25668,7 +25661,6 @@ fn private_uploaded_model_execution_receipt_persists_idempotently_from_exact_art
         .checked_add(2)
         .expect("fixture sequence increment");
     let sequence_pair_error = isi::RecordSoracloudPrivateUploadedModelExecutionReceipt {
-        output_manifest_payload: output_manifest_payload.clone(),
         receipt: receipt.clone(),
     }
     .execute(&ALICE_ID, &mut stx)
@@ -25699,7 +25691,6 @@ fn private_uploaded_model_execution_receipt_persists_idempotently_from_exact_art
         .expect("finalized weight projection")
         .registered_sequence = u64::MAX;
     let sequence_overflow_error = isi::RecordSoracloudPrivateUploadedModelExecutionReceipt {
-        output_manifest_payload: output_manifest_payload.clone(),
         receipt: receipt.clone(),
     }
     .execute(&ALICE_ID, &mut stx)
@@ -25725,7 +25716,6 @@ fn private_uploaded_model_execution_receipt_persists_idempotently_from_exact_art
         .soracloud_service_audit_events
         .insert(2, mismatched_sequence_event);
     let sequence_error = isi::RecordSoracloudPrivateUploadedModelExecutionReceipt {
-        output_manifest_payload: output_manifest_payload.clone(),
         receipt: receipt.clone(),
     }
     .execute(&ALICE_ID, &mut stx)
@@ -25741,7 +25731,6 @@ fn private_uploaded_model_execution_receipt_persists_idempotently_from_exact_art
         .soracloud_service_audit_events
         .insert(2, overflowing_ttl_event);
     let ttl_error = isi::RecordSoracloudPrivateUploadedModelExecutionReceipt {
-        output_manifest_payload: output_manifest_payload.clone(),
         receipt: receipt.clone(),
     }
     .execute(&ALICE_ID, &mut stx)
@@ -25756,7 +25745,6 @@ fn private_uploaded_model_execution_receipt_persists_idempotently_from_exact_art
         .insert(2, original_release_event);
 
     isi::RecordSoracloudPrivateUploadedModelExecutionReceipt {
-        output_manifest_payload: output_manifest_payload.clone(),
         receipt: receipt.clone(),
     }
     .execute(&ALICE_ID, &mut stx)?;
@@ -25785,7 +25773,6 @@ fn private_uploaded_model_execution_receipt_persists_idempotently_from_exact_art
     assert_eq!(output_pin_before_replay.submitted_by, ALICE_ID.clone());
 
     isi::RecordSoracloudPrivateUploadedModelExecutionReceipt {
-        output_manifest_payload: output_manifest_payload.clone(),
         receipt: receipt.clone(),
     }
     .execute(&ALICE_ID, &mut stx)?;
@@ -25803,10 +25790,14 @@ fn private_uploaded_model_execution_receipt_persists_idempotently_from_exact_art
     );
 
     let mut conflicting = receipt;
-    let (conflicting_output_manifest_payload, conflicting_output_manifest_digest) =
+    let (_conflicting_output_manifest_payload, conflicting_output_manifest_digest) =
         private_artifact_manifest_fixture(0xD4, 64);
     conflicting.output_artifact = artifact("output", 0xD4);
     conflicting.output_artifact.sorafs_manifest_digest = conflicting_output_manifest_digest;
+    conflicting.output_replication_order_id =
+        iroha_data_model::sorafs::pin_registry::derive_sorafs_auto_replication_order_id_v1(
+            &conflicting_output_manifest_digest,
+        );
     conflicting.output_commitment = Hash::new(b"conflicting-output");
     conflicting.request_commitment =
         derive_soracloud_private_model_request_commitment_v1(&conflicting);
@@ -25822,7 +25813,6 @@ fn private_uploaded_model_execution_receipt_persists_idempotently_from_exact_art
         "conflicting output starts without a pin"
     );
     let error = isi::RecordSoracloudPrivateUploadedModelExecutionReceipt {
-        output_manifest_payload: conflicting_output_manifest_payload,
         receipt: conflicting.clone(),
     }
     .execute(&ALICE_ID, &mut stx)
@@ -26648,8 +26638,7 @@ fn soracloud_uploaded_model_finalize_rejects_duplicate_release_across_model_name
             .is_none()
     );
     crate::soracloud_runtime::validate_finalized_soracloud_uploaded_model_release(
-        &stx.world,
-        &bundle,
+        &stx.world, &bundle,
     )
     .expect("a rejected cross-model replay must leave the original release executable");
     Ok(())

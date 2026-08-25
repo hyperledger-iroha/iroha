@@ -1159,9 +1159,24 @@ test("buildSoracloudPrivateUploadedModelExecuteRequest normalizes encrypted exec
   input.inputArtifact.sorafsRootCid[4] = 0xff;
   assert.equal(request.input_artifact.sorafs_manifest_digest[0], 1);
   assert.equal(request.input_artifact.sorafs_root_cid[4], 1);
+  assert.equal(Object.hasOwn(request, "private_key"), false);
 });
 
 test("buildSoracloudPrivateUploadedModelExecuteRequest requires dense byte arrays", () => {
+  class ExoticByteArray extends Array {}
+  const subclassedDigest = new ExoticByteArray(...SORAFS_MANIFEST_DIGEST);
+  assert.throws(
+    () =>
+      buildSoracloudPrivateUploadedModelExecuteRequest(
+        validPrivateExecuteInput({
+          inputArtifact: validPrivateArtifact("input", {
+            sorafsManifestDigest: subclassedDigest,
+          }),
+        }),
+      ),
+    /inputArtifact\.sorafsManifestDigest must be a plain array/,
+  );
+
   const sparseDigest = [...SORAFS_MANIFEST_DIGEST];
   delete sparseDigest[7];
   assert.throws(
@@ -1188,6 +1203,48 @@ test("buildSoracloudPrivateUploadedModelExecuteRequest requires dense byte array
         }),
       ),
     /inputArtifact\.sorafsManifestDigest\.byteLength is not accepted/,
+  );
+
+  let accessorRead = false;
+  const accessorDigest = [...SORAFS_MANIFEST_DIGEST];
+  Object.defineProperty(accessorDigest, "7", {
+    configurable: true,
+    enumerable: true,
+    get() {
+      accessorRead = true;
+      return 8;
+    },
+  });
+  assert.throws(
+    () =>
+      buildSoracloudPrivateUploadedModelExecuteRequest(
+        validPrivateExecuteInput({
+          inputArtifact: validPrivateArtifact("input", {
+            sorafsManifestDigest: accessorDigest,
+          }),
+        }),
+      ),
+    /inputArtifact\.sorafsManifestDigest\[7\] must be an enumerable data property/,
+  );
+  assert.equal(accessorRead, false, "byte-array accessors must be rejected before invocation");
+
+  const hiddenDigest = [...SORAFS_MANIFEST_DIGEST];
+  Object.defineProperty(hiddenDigest, "7", {
+    configurable: true,
+    enumerable: false,
+    value: 8,
+    writable: true,
+  });
+  assert.throws(
+    () =>
+      buildSoracloudPrivateUploadedModelExecuteRequest(
+        validPrivateExecuteInput({
+          inputArtifact: validPrivateArtifact("input", {
+            sorafsManifestDigest: hiddenDigest,
+          }),
+        }),
+      ),
+    /inputArtifact\.sorafsManifestDigest\[7\] must be an enumerable data property/,
   );
 });
 
@@ -1262,6 +1319,17 @@ test("buildSoracloudPrivateUploadedModelExecuteRequest rejects aliases, omission
         },
       }),
     /inputArtifact\.artifact_hash is not accepted/,
+  );
+  assert.throws(
+    () =>
+      buildSoracloudPrivateUploadedModelExecuteRequest({
+        ...validPrivateExecuteInput(),
+        inputArtifact: {
+          ...validPrivateArtifact("input"),
+          sorafs_root_cid: SORAFS_ROOT_CID,
+        },
+      }),
+    /inputArtifact\.sorafs_root_cid is not accepted/,
   );
   assert.throws(
     () =>
@@ -1387,6 +1455,15 @@ test("buildSoracloudPrivateUploadedModelExecuteRequest rejects invalid selectors
         }),
       ),
     /inputArtifact\.schemaVersion must be 1/,
+  );
+  const missingRootCid = validPrivateArtifact("input");
+  delete missingRootCid.sorafsRootCid;
+  assert.throws(
+    () =>
+      buildSoracloudPrivateUploadedModelExecuteRequest(
+        validPrivateExecuteInput({ inputArtifact: missingRootCid }),
+      ),
+    /inputArtifact\.sorafsRootCid is required/,
   );
   assert.throws(
     () =>

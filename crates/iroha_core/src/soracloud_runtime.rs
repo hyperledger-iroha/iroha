@@ -39,7 +39,10 @@ use iroha_data_model::{
         SoraTlsModeV1, SoraUploadedModelBundleV1, SoraUploadedModelEncryptionRecipientV1,
         SoraUploadedModelKeyEncapsulationV1, SoraUploadedModelKeyWrapAeadV1,
     },
-    sorafs::pin_registry::{ManifestDigest, StorageClass},
+    sorafs::pin_registry::{
+        ManifestDigest, ManifestRootCid, PinStatus, ReplicationOrderId, ReplicationOrderStatus,
+        StorageClass, derive_sorafs_auto_replication_order_id_v1,
+    },
     transaction::SignedTransaction,
 };
 use iroha_primitives::numeric::Quantity;
@@ -76,6 +79,152 @@ pub fn latest_soracloud_sequence(world: &impl WorldReadOnly) -> u64 {
 #[must_use]
 pub fn authoritative_soracloud_sequence(world: &impl WorldReadOnly) -> u64 {
     latest_soracloud_sequence(world).saturating_add(1)
+}
+
+/// Chain-authoritative progress of one private execution output toward durable receipt commit.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SoracloudPrivateOutputDurabilityStatusV1 {
+    /// The exact output manifest has not reached the pin registry yet.
+    AwaitingPinRegistration,
+    /// The exact output pin exists and awaits governance approval.
+    AwaitingPinApproval,
+    /// The approved pin has not produced its deterministic replication order yet.
+    AwaitingReplicationOrder,
+    /// The exact canonical order is still collecting provider ingest completions.
+    AwaitingReplicationQuorum {
+        /// Distinct provider completions already retained by consensus.
+        completed_replicas: u16,
+        /// Exact pin-policy quorum required for receipt persistence.
+        required_replicas: u16,
+    },
+    /// The exact pin is approved, sufficiently retained, and fully replicated.
+    Ready,
+}
+
+/// Inspect the chain-authoritative durability evidence for a private execution output.
+///
+/// Both runtime recovery and consensus receipt execution use this predicate so a journal can
+/// advance to receipt submission only under the exact invariant the ledger will enforce.
+/// `receipt_epoch` is the consensus Unix-seconds epoch of the state view used for the decision.
+///
+/// # Errors
+///
+/// Returns a deterministic error when the output pin is missing, mismatched, inactive, too near
+/// expiry, or its unique automatic replication order has not reached its exact provider quorum.
+pub fn validate_soracloud_private_output_durability_v1(
+    world: &impl WorldReadOnly,
+    receipt: &SoraPrivateUploadedModelExecutionReceiptV1,
+    receipt_epoch: u64,
+) -> Result<SoracloudPrivateOutputDurabilityStatusV1, String> {
+    use iroha_data_model::soracloud::SORACLOUD_PRIVATE_OUTPUT_MIN_RETENTION_SECS_V1;
+
+    let artifact = &receipt.output_artifact;
+    let expected_order_id =
+        derive_sorafs_auto_replication_order_id_v1(&artifact.sorafs_manifest_digest);
+    if receipt.output_replication_order_id != expected_order_id {
+        return Err(
+            "private output receipt does not reference its deterministic replication order"
+                .to_owned(),
+        );
+    }
+    let Some(pin) = world.pin_manifests().get(&artifact.sorafs_manifest_digest) else {
+        return Ok(SoracloudPrivateOutputDurabilityStatusV1::AwaitingPinRegistration);
+    };
+    if pin.digest != artifact.sorafs_manifest_digest
+        || pin.root_cid != artifact.sorafs_root_cid
+        || pin.content_length != artifact.ciphertext_bytes
+    {
+        return Err("private output artifact does not exactly match its SoraFS pin".to_owned());
+    }
+    if pin.submitted_by != receipt.attesting_validator.validator_account_id {
+        return Err(
+            "private output pin submitter must equal the receipt's attesting validator".to_owned(),
+        );
+    }
+    let minimum_retention_epoch = receipt_epoch
+        .checked_add(SORACLOUD_PRIVATE_OUTPUT_MIN_RETENTION_SECS_V1)
+        .ok_or_else(|| "private output minimum retention epoch overflowed".to_owned())?;
+    if pin.policy.retention_epoch < minimum_retention_epoch {
+        return Err(format!(
+            "private output SoraFS pin retention epoch {} is below required epoch {minimum_retention_epoch}",
+            pin.policy.retention_epoch
+        ));
+    }
+    let approved_epoch = match pin.status {
+        PinStatus::Approved(epoch) if epoch <= receipt_epoch => epoch,
+        PinStatus::Approved(_) => {
+            return Err("private output SoraFS pin approval epoch is in the future".to_owned());
+        }
+        PinStatus::Pending => {
+            return Ok(SoracloudPrivateOutputDurabilityStatusV1::AwaitingPinApproval);
+        }
+        PinStatus::Retired(epoch) => {
+            return Err(format!(
+                "private output SoraFS pin retired at epoch {epoch}"
+            ));
+        }
+    };
+
+    let Some(order) = world
+        .replication_orders()
+        .get(&receipt.output_replication_order_id)
+    else {
+        return Ok(SoracloudPrivateOutputDurabilityStatusV1::AwaitingReplicationOrder);
+    };
+    if order.order_id != receipt.output_replication_order_id
+        || order.manifest_digest != pin.digest
+        || order.manifest_root_cid != pin.root_cid
+        || order.musubi_archive.is_some()
+        || order.issued_epoch < approved_epoch
+    {
+        return Err(
+            "private output replication order does not exactly bind its approved generic pin"
+                .to_owned(),
+        );
+    }
+    let order_label = hex::encode(order.order_id.as_bytes());
+    let canonical_order =
+        crate::smartcontracts::isi::sorafs::validate_stored_replication_order(order, &order_label)
+            .map_err(|error| format!("invalid private output replication order: {error}"))?;
+    if canonical_order.target_replicas != pin.policy.min_replicas {
+        return Err(
+            "private output replication order does not target the exact pin-policy quorum"
+                .to_owned(),
+        );
+    }
+    let completed_replicas = u16::try_from(order.provider_completions.len())
+        .map_err(|_| "private output replication completion count overflowed".to_owned())?;
+    let completion_epoch = match order.status {
+        ReplicationOrderStatus::Completed(epoch) if epoch <= receipt_epoch => Some(epoch),
+        ReplicationOrderStatus::Completed(_) => {
+            return Err("private output replication completion epoch is in the future".to_owned());
+        }
+        ReplicationOrderStatus::Pending => {
+            return Ok(
+                SoracloudPrivateOutputDurabilityStatusV1::AwaitingReplicationQuorum {
+                    completed_replicas,
+                    required_replicas: pin.policy.min_replicas,
+                },
+            );
+        }
+        ReplicationOrderStatus::Expired(epoch) => {
+            return Err(format!(
+                "private output replication order expired at epoch {epoch}"
+            ));
+        }
+    };
+    if completed_replicas != pin.policy.min_replicas
+        || order
+            .provider_completions
+            .last()
+            .is_none_or(|completion| Some(completion.completion_epoch) != completion_epoch)
+    {
+        return Err(
+            "private output replication order does not contain the exact pin-policy provider quorum"
+                .to_owned(),
+        );
+    }
+    Ok(SoracloudPrivateOutputDurabilityStatusV1::Ready)
 }
 
 /// Validate the exact writer-produced finalization projections for an uploaded-model bundle.
@@ -2122,17 +2271,18 @@ pub trait SoracloudRuntimeReadHandle: Send + Sync {
             "durable private uploaded-model execution recovery is unavailable on this runtime",
         ))
     }
-    /// Atomically submit output-manifest registration and private receipt persistence.
+    /// Advance the durable output-pin-then-receipt submission state machine by one safe step.
     ///
     /// `output_manifest_payload` must be the exact canonical `ManifestV1` bytes whose digest and
-    /// content length are carried by `receipt.output_artifact`. The returned hash identifies the
-    /// signed transaction containing the single atomic output-manifest-and-receipt instruction.
-    fn persist_private_uploaded_model_execution(
+    /// content length are carried by `receipt.output_artifact`. Implementations first submit that
+    /// exact pin, then wait for authoritative approval and replication quorum before submitting a
+    /// receipt-only transaction. The optional hash identifies the current phase transaction; it
+    /// is absent only when an externally registered exact pin is still awaiting durability.
+    fn advance_private_uploaded_model_execution(
         &self,
         _output_manifest_payload: Vec<u8>,
         _receipt: SoraPrivateUploadedModelExecutionReceiptV1,
-        _replace_expired_transaction: Option<Hash>,
-    ) -> Result<Hash, SoracloudRuntimeExecutionError> {
+    ) -> Result<Option<Hash>, SoracloudRuntimeExecutionError> {
         Err(SoracloudRuntimeExecutionError::new(
             SoracloudRuntimeExecutionErrorKind::Unavailable,
             "private uploaded-model receipt persistence is unavailable on this runtime",
@@ -2350,6 +2500,14 @@ pub struct SoracloudPrivateUploadedModelExecutionResultV1 {
 pub const SORACLOUD_PRIVATE_UPLOADED_MODEL_EXECUTION_JOURNAL_VERSION_V1: u16 = 1;
 /// Maximum freshly signed transaction attempts retained for one exact private execution.
 pub const SORACLOUD_PRIVATE_UPLOADED_MODEL_EXECUTION_MAX_SUBMISSION_ATTEMPTS_V1: u8 = 3;
+/// Durable submission phase for a private execution outbox entry.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode)]
+pub enum SoracloudPrivateUploadedModelExecutionJournalPhaseV1 {
+    /// Register the exact encrypted output manifest with the authoritative pin registry.
+    OutputPin,
+    /// Persist the receipt after the output pin has reached replication quorum.
+    Receipt,
+}
 /// Ciphertext-only prepared/submitted state used to recover private execution across restarts.
 ///
 /// Decrypted model, input, and output payloads are deliberately absent. The referenced encrypted
@@ -2368,6 +2526,8 @@ pub struct SoracloudPrivateUploadedModelExecutionJournalV1 {
     pub output_manifest_payload: Vec<u8>,
     /// Canonical receipt submission with ledger-owned sequence and height still zero.
     pub receipt: SoraPrivateUploadedModelExecutionReceiptV1,
+    /// Current two-phase durable submission step.
+    pub phase: SoracloudPrivateUploadedModelExecutionJournalPhaseV1,
     /// Most recently submitted signed transaction hash, absent while merely prepared.
     pub transaction_hash: Option<Hash>,
     /// Exact signed transaction persisted before enqueue, absent while merely prepared.
@@ -2408,21 +2568,36 @@ impl SoracloudPrivateUploadedModelExecutionJournalV1 {
             .map_err(|error| format!("invalid journal output ManifestV1: {error}"))?;
         let digest = ManifestDigest::from_manifest(&manifest)
             .map_err(|error| format!("derive journal output manifest digest: {error}"))?;
+        let root_cid = ManifestRootCid::try_from_slice(&manifest.root_cid)
+            .map_err(|error| format!("derive journal output manifest root CID: {error}"))?;
         if digest != self.receipt.output_artifact.sorafs_manifest_digest
+            || root_cid != self.receipt.output_artifact.sorafs_root_cid
             || manifest.content_length != self.receipt.output_artifact.ciphertext_bytes
         {
             return Err(
-                "private execution journal manifest does not match its receipt output artifact"
+                "private execution journal manifest digest, root CID, or content length does not match its receipt output artifact"
                     .to_owned(),
             );
         }
         match (&self.signed_transaction, self.transaction_hash) {
             (None, None) if self.submission_attempt == 0 => {}
-            (Some(transaction), Some(hash))
-                if self.submission_attempt > 0
-                    && self.submission_attempt
-                        <= SORACLOUD_PRIVATE_UPLOADED_MODEL_EXECUTION_MAX_SUBMISSION_ATTEMPTS_V1
-                    && Hash::from(transaction.hash()) == hash => {}
+            (Some(transaction), Some(hash)) => {
+                if self.submission_attempt == 0
+                    || self.submission_attempt
+                        > SORACLOUD_PRIVATE_UPLOADED_MODEL_EXECUTION_MAX_SUBMISSION_ATTEMPTS_V1
+                    || Hash::from(transaction.hash()) != hash
+                {
+                    return Err(
+                        "private execution journal signed transaction, hash, and attempt are inconsistent"
+                            .to_owned(),
+                    );
+                }
+                transaction.verify_signature().map_err(|error| {
+                    format!(
+                        "private execution journal signed transaction failed signature verification: {error}"
+                    )
+                })?;
+            }
             _ => {
                 return Err(
                     "private execution journal signed transaction, hash, and attempt are inconsistent"
@@ -3269,6 +3444,9 @@ mod tests {
             attesting_validator: checked_validator_host(),
             input_artifact: sample_private_model_artifact_ref("input", 0x51),
             output_artifact: sample_private_model_artifact_ref("output", 0x52),
+            output_replication_order_id: derive_sorafs_auto_replication_order_id_v1(
+                &ManifestDigest::new([0x52; 32]),
+            ),
             input_commitment: Hash::new(b"sequence-private-input"),
             output_commitment: Hash::new(b"sequence-private-output"),
             output_recipient,
