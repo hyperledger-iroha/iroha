@@ -2932,6 +2932,182 @@ impl Kura {
             blocks_in_memory,
         )
     }
+    /// Build and persist a cryptographically valid finality chain for stored test blocks.
+    ///
+    /// The helper is restricted to crate and downstream test builds. It binds
+    /// each execution commitment to the exact stored wire and any compact merge
+    /// reference already carried by the block.
+    #[doc(hidden)]
+    #[cfg(any(test, feature = "iroha-core-tests"))]
+    pub fn persist_v2_finality_chain_for_testing(
+        &self,
+        height: NonZeroUsize,
+    ) -> std::result::Result<Vec<V2FinalityArtifact>, String> {
+        fn artifact_for_block(
+            block: &SignedBlock,
+            parent: Option<&V2FinalityArtifact>,
+            keypairs: &[KeyPair],
+        ) -> std::result::Result<V2FinalityArtifact, String> {
+            let roster = keypairs
+                .iter()
+                .map(|keypair| ValidatorPower {
+                    validator: PeerId::new(keypair.public_key().clone()),
+                    power: 1,
+                })
+                .collect::<Vec<_>>();
+            let height = block.header().height().get();
+            let expected_height = parent.map_or(1, |artifact| artifact.height.saturating_add(1));
+            if height != expected_height {
+                return Err("test finality chain is not contiguous".to_owned());
+            }
+            let context = HeightContext {
+                network_id: NetworkId::from_genesis_hash(
+                    HashOf::<BlockHeader>::from_untyped_unchecked(Hash::new(
+                        b"kura downstream finality fixture genesis",
+                    )),
+                ),
+                protocol_version: iroha_data_model::block::consensus_v2::PROTOCOL_VERSION,
+                height,
+                epoch: 0,
+                epoch_end_height: 100,
+                next_epoch_snapshot: None,
+                mode: ConsensusMode::Permissioned,
+                parent_commit_qc: parent.map(|artifact| artifact.commit_qc.clone()),
+                snapshot_bootstrap: None,
+                quorum: DualQuorum::from_roster(&roster)
+                    .map_err(|error| format!("invalid test finality quorum: {error}"))?,
+                roster,
+                nexus_amx_context_hash: Hash::new(b"kura downstream finality nexus context"),
+                execution_policy_hash: Hash::new(b"kura downstream finality execution policy"),
+                da_layout: DataAvailabilityLayout {
+                    encoding: iroha_data_model::block::consensus_v2::PayloadEncoding::ReedSolomon16,
+                    chunk_size_bytes: 1_024,
+                    data_shards: 1,
+                    parity_shards: 1,
+                    max_payload_size_bytes: 4_096,
+                    max_chunk_count: 8,
+                },
+                leader_seed: [0x42; 32],
+            };
+            let executed_block_wire = block
+                .encode_wire()
+                .map_err(|error| format!("failed to encode test finality block: {error}"))?;
+            let height_bytes = height.to_le_bytes();
+            let mut execution_commitment = ExecutionCommitment::new_without_merge_carrier(
+                Hash::new_from_chunks(&[
+                    b"kura downstream finality parent state".as_slice(),
+                    height_bytes.as_slice(),
+                ]),
+                Hash::new_from_chunks(&[
+                    b"kura downstream finality post state".as_slice(),
+                    height_bytes.as_slice(),
+                ]),
+                Hash::new_from_chunks(&[
+                    b"kura downstream finality ordinary writes".as_slice(),
+                    height_bytes.as_slice(),
+                ]),
+                None,
+                0,
+                u64::try_from(executed_block_wire.len())
+                    .map_err(|_| "test finality wire length does not fit u64".to_owned())?,
+                Hash::new(&executed_block_wire),
+            )
+            .map_err(|error| format!("invalid test execution commitment: {error}"))?;
+            execution_commitment.merge_carrier = block
+                .execution_context()
+                .and_then(|context| context.merge_entry.as_ref())
+                .map(|reference| {
+                    iroha_data_model::block::consensus_v2::MergeCarrierCommitmentV1::new(
+                        reference.entry_hash,
+                    )
+                });
+            let subject = BlockSubject {
+                parent_block_hash: block.header().prev_block_hash(),
+                block_hash: block.hash(),
+                payload_hash: block
+                    .canonical_proposal_wire_hash()
+                    .map_err(|error| format!("failed to hash test proposal wire: {error}"))?,
+            };
+            let round = iroha_data_model::block::consensus_v2::ConsensusRound {
+                context_id: context.id(),
+                height,
+                view: block.header().view_change_index(),
+            };
+            let signer_count =
+                crate::sumeragi::network_topology::commit_quorum_from_len(keypairs.len());
+            let signers = (0..signer_count)
+                .map(|index| {
+                    u32::try_from(index)
+                        .map_err(|_| "test finality signer index does not fit u32".to_owned())
+                })
+                .collect::<std::result::Result<Vec<_>, _>>()?;
+            let mut commit_qc = QuorumCertificate {
+                round,
+                proposal_round: round,
+                phase: iroha_data_model::block::consensus_v2::GlobalPhase::Commit,
+                subject,
+                execution_commitment,
+                signers,
+                aggregate_signature: vec![1],
+            };
+            let preimage = commit_qc
+                .signer_preimage(&context, 0)
+                .map_err(|error| format!("invalid test finality signer preimage: {error}"))?;
+            let signatures = keypairs
+                .iter()
+                .take(signer_count)
+                .map(|keypair| {
+                    Signature::try_new(keypair.private_key(), &preimage)
+                        .map(|signature| signature.payload().to_vec())
+                        .map_err(|error| format!("failed to sign test finality vote: {error}"))
+                })
+                .collect::<std::result::Result<Vec<_>, _>>()?;
+            let signature_refs = signatures.iter().map(Vec::as_slice).collect::<Vec<_>>();
+            commit_qc.aggregate_signature =
+                iroha_crypto::bls_normal_aggregate_signatures(&signature_refs)
+                    .map_err(|error| format!("failed to aggregate test finality votes: {error}"))?;
+            let validator_set_pops = keypairs
+                .iter()
+                .map(|keypair| {
+                    iroha_crypto::bls_normal_pop_prove(keypair.private_key()).map_err(|error| {
+                        format!("failed to prove test finality key possession: {error}")
+                    })
+                })
+                .collect::<std::result::Result<Vec<_>, _>>()?;
+            let artifact = V2FinalityArtifact::new(context, subject, commit_qc, validator_set_pops);
+            artifact
+                .verify()
+                .map_err(|error| format!("test finality artifact did not verify: {error}"))?;
+            Ok(artifact)
+        }
+
+        let mut keypairs = (0_u8..4)
+            .map(|index| {
+                KeyPair::try_from_seed(
+                    vec![0xA0_u8.saturating_add(index); 32],
+                    Algorithm::BlsNormal,
+                )
+                .map_err(|error| format!("failed to derive test finality key: {error}"))
+            })
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+        keypairs.sort_by(|left, right| {
+            PeerId::new(left.public_key().clone()).cmp(&PeerId::new(right.public_key().clone()))
+        });
+        let mut artifacts = Vec::with_capacity(height.get());
+        for block_height in 1..=height.get() {
+            let block_height = NonZeroUsize::new(block_height)
+                .ok_or_else(|| "test finality height is zero".to_owned())?;
+            let block = self
+                .get_block_without_merge_sidecar(block_height)
+                .ok_or_else(|| format!("test block {block_height} is unavailable"))?;
+            let artifact = artifact_for_block(block.as_ref(), artifacts.last(), &keypairs)?;
+            let _receipt = self
+                .store_v2_finality_artifact(&artifact)
+                .map_err(|error| format!("failed to persist test finality: {error}"))?;
+            artifacts.push(artifact);
+        }
+        Ok(artifacts)
+    }
     fn blank_kura_for_testing_with_lane_config_and_retention(
         lane_config: &LaneConfig,
         blocks_in_memory: NonZeroUsize,

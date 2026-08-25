@@ -1897,9 +1897,16 @@ mod tests {
             defaults::kura,
         },
     };
-    use iroha_core::kura::Kura;
     use iroha_core::state::World;
-    use iroha_crypto::{Algorithm, Hash, HashOf, Signature, SignatureOf};
+    use iroha_core::{
+        kura::{CertifiedLaneBlockArtifact, CertifiedLaneBlockArtifactFormat, Kura},
+        lane_consensus::{
+            LaneBlockVoteV1, LanePayloadAvailabilityVoteV1, aggregate_lane_block_votes_to_qc,
+            lane_executable_payload_for_testing,
+        },
+        queue::{LaneQueueReservationKeyV2, RoutingDecision, RoutingPlan},
+    };
+    use iroha_crypto::{Algorithm, Hash, HashOf, Signature, SignatureOf, bls_normal_pop_prove};
     use iroha_data_model::{
         ChainId, NetworkId, Registrable as _,
         account::Account,
@@ -1909,14 +1916,14 @@ mod tests {
             CertifiedMergeLedgerReference, SignedBlock,
             consensus::{
                 CertPhase, LaneBlockCommitment, LaneBlockDescriptorV1, LaneBlockProposalV1,
-                LaneBlockQcV1,
+                LanePayloadAvailabilityBodyV1, SumeragiLanePayloadOwnership,
             },
         },
         consensus::VALIDATOR_SET_HASH_VERSION_V1,
         domain::DomainId,
         merge::{
-            MergeExecutionBatch, MergeLaneBinding, MergeLaneExecution, MergeLaneSnapshot,
-            MergeLedgerEntry, MergeQuorumCertificate,
+            MergeExecutionBatch, MergeLaneBinding, MergeLaneExecution, MergeLaneSignerProof,
+            MergeLaneSnapshot, MergeLedgerEntry, MergeQuorumCertificate,
         },
         nexus::{DataSpaceId, LaneId},
         offline::{
@@ -1932,11 +1939,13 @@ mod tests {
         trigger::DataTriggerSequence,
     };
     use std::{
+        collections::BTreeMap,
         num::{NonZeroU64, NonZeroUsize},
         sync::Barrier,
         time::Duration,
     };
     use tempfile::TempDir;
+
     fn submission_test_issuer() -> Arc<OfflineCommandRuntime> {
         submission_test_issuer_with_limits(64, 64 * ADMITTED_OPERATION_ACCOUNTED_BYTES)
     }
@@ -2356,72 +2365,237 @@ mod tests {
         let entrypoint = TransactionEntrypoint::External(transaction);
         let entrypoint_hashes = vec![Hash::from(entrypoint.hash())];
         let result_hashes = vec![Hash::from(result.hash())];
-        let validator_set = vec![PeerId::new(history_block_signer().public_key().clone())];
+        let validator = KeyPair::try_from_seed(vec![0x54; 32], Algorithm::BlsNormal)
+            .expect("derive offline merge lane validator");
+        let validator_set = vec![PeerId::new(validator.public_key().clone())];
         let lane_incarnation = Hash::new(b"offline-status-merge-lane-incarnation");
-        let mut descriptor = LaneBlockDescriptorV1 {
+        let mut ownership = SumeragiLanePayloadOwnership {
+            proposal_height: carrier_header.height().get(),
+            proposal_view: carrier_header.view_change_index(),
             lane_id: LaneId::SINGLE,
             dataspace_id: DataSpaceId::UNIVERSAL,
             lane_incarnation,
-            proposal_height: carrier_header.height().get(),
-            previous_lane_block_height: 0,
-            previous_lane_block_descriptor_hash: None,
             lane_block_height: 1,
             lane_block_view: 0,
-            subject_hash: Hash::new(b"offline-status-merge-subject"),
-            payload_ownership_hash: Hash::new(b"offline-status-merge-ownership"),
-            rbc_instance_hash: Hash::new(b"offline-status-merge-rbc"),
+            subject_hash: Hash::prehashed([0; Hash::LENGTH]),
+            qc_mode_tag: "permissioned:offline-status-merge-fixture".to_owned(),
             accepted_candidate_indices: vec![0],
             accepted_transaction_hashes: entrypoint_hashes.clone(),
+            previous_lane_block_height: 0,
+            previous_lane_block_descriptor_hash: None,
+            lane_block_descriptor_hash: Some(Hash::new(
+                b"offline-status-merge-descriptor-placeholder",
+            )),
+            lane_block_descriptor_validator_set: validator_set.clone(),
+            lane_block_descriptor_validator_count: 1,
+            lane_block_descriptor_min_quorum: 1,
+            payload_ownership_hash: Hash::prehashed([0; Hash::LENGTH]),
+            rbc_instance_hash: Hash::prehashed([0; Hash::LENGTH]),
+        };
+        let replay = ownership
+            .compute_replay_hashes()
+            .expect("compute offline merge lane ownership hashes");
+        ownership.subject_hash = replay.subject_hash;
+        ownership.payload_ownership_hash = replay.payload_ownership_hash;
+        ownership.rbc_instance_hash = replay.rbc_instance_hash;
+        ownership.lane_block_descriptor_hash = Some(replay.lane_block_descriptor_hash);
+        ownership
+            .validate_replay_material()
+            .expect("validate offline merge lane ownership hashes");
+        let descriptor = LaneBlockDescriptorV1 {
+            lane_id: ownership.lane_id,
+            dataspace_id: ownership.dataspace_id,
+            lane_incarnation: ownership.lane_incarnation,
+            proposal_height: ownership.proposal_height,
+            previous_lane_block_height: ownership.previous_lane_block_height,
+            previous_lane_block_descriptor_hash: ownership.previous_lane_block_descriptor_hash,
+            lane_block_height: ownership.lane_block_height,
+            lane_block_view: ownership.lane_block_view,
+            subject_hash: ownership.subject_hash,
+            payload_ownership_hash: ownership.payload_ownership_hash,
+            rbc_instance_hash: ownership.rbc_instance_hash,
+            accepted_candidate_indices: ownership.accepted_candidate_indices.clone(),
+            accepted_transaction_hashes: ownership.accepted_transaction_hashes.clone(),
             validator_set_hash_version: VALIDATOR_SET_HASH_VERSION_V1,
             validator_set_hash: HashOf::new(&validator_set),
             validator_set: validator_set.clone(),
             validator_count: 1,
             min_quorum: 1,
-            qc_mode_tag: "offline-status-merge-fixture".to_owned(),
-            descriptor_hash: Hash::prehashed([0; Hash::LENGTH]),
+            qc_mode_tag: ownership.qc_mode_tag.clone(),
+            descriptor_hash: replay.lane_block_descriptor_hash,
         };
-        descriptor.descriptor_hash = descriptor.computed_descriptor_hash();
         let mut proposal = LaneBlockProposalV1 {
             descriptor,
             proposal_hash: Hash::prehashed([0; Hash::LENGTH]),
             payload_block_hint: None,
         };
         proposal.proposal_hash = proposal.computed_proposal_hash();
-        let lane_qc = |phase| LaneBlockQcV1 {
-            body: proposal.vote_body(phase),
-            validator_set_hash_version: VALIDATOR_SET_HASH_VERSION_V1,
-            validator_set_hash: HashOf::new(&validator_set),
-            validator_set: validator_set.clone(),
-            signers_bitmap: Vec::new(),
-            bls_aggregate_signature: Vec::new(),
-            payload_availability_qc: None,
+        iroha_core::lane_consensus::validate_lane_block_proposal(&proposal)
+            .expect("validate offline merge lane proposal");
+
+        let routing_plan =
+            RoutingPlan::single(RoutingDecision::new(LaneId::SINGLE, DataSpaceId::UNIVERSAL));
+        let reservation_key = LaneQueueReservationKeyV2 {
+            version: LaneQueueReservationKeyV2::VERSION,
+            entrypoint_hash: entrypoint.hash(),
+            queue_plan_admission_binding_hash: Hash::new(
+                b"offline-status-merge-queue-plan-binding",
+            ),
+            routing_plan_digest: routing_plan.digest(),
+            coordinator_leg: routing_plan.coordinator_leg(),
+            lane_id: proposal.descriptor.lane_id,
+            dataspace_id: proposal.descriptor.dataspace_id,
+            lane_incarnation: proposal.descriptor.lane_incarnation,
+            proposal_height: proposal.descriptor.proposal_height,
+            lane_block_height: proposal.descriptor.lane_block_height,
+            lane_block_view: proposal.descriptor.lane_block_view,
+            reservation_owner_hash: Hash::new(b"offline-status-merge-reservation-owner"),
+            proposal_identity_hash: proposal.proposal_hash,
         };
-        let prepare_qc = lane_qc(CertPhase::Prepare);
-        let commit_qc = lane_qc(CertPhase::Commit);
-        let settlement_commitment = merge_history_settlement(lane_incarnation);
-        let settlement_hash =
-            iroha_data_model::nexus::compute_settlement_hash(&settlement_commitment)
-                .expect("hash offline merge settlement fixture");
+        let reservation_keys = vec![reservation_key];
+        let routing_plans = vec![routing_plan];
+        let native_amx_receipts = vec![None];
         let autonomous_network_id =
             NetworkId::from_genesis_hash(HashOf::<BlockHeader>::from_untyped_unchecked(Hash::new(
                 b"offline-status-merge-genesis",
             )));
+        let autonomous_epoch = 1;
+        let producer = validator_set[0].clone();
+        let autonomous_payload = lane_executable_payload_for_testing(
+            autonomous_network_id,
+            autonomous_epoch,
+            proposal.clone(),
+            vec![entrypoint.clone()],
+            reservation_keys.clone(),
+            routing_plans.clone(),
+            native_amx_receipts.clone(),
+            producer.clone(),
+            validator.private_key(),
+        )
+        .expect("build offline merge autonomous payload");
+        let autonomous_payload_hash = autonomous_payload.payload_hash;
+        let availability_body = LanePayloadAvailabilityBodyV1 {
+            version: 1,
+            network_id: autonomous_network_id,
+            epoch: autonomous_epoch,
+            lane_id: proposal.descriptor.lane_id,
+            dataspace_id: proposal.descriptor.dataspace_id,
+            lane_incarnation: proposal.descriptor.lane_incarnation,
+            proposal_height: proposal.descriptor.proposal_height,
+            lane_block_height: proposal.descriptor.lane_block_height,
+            origin_lane_block_view: proposal.descriptor.lane_block_view,
+            origin_proposal_hash: proposal.proposal_hash,
+            origin_descriptor_hash: proposal.descriptor.descriptor_hash,
+            current_lane_block_view: proposal.descriptor.lane_block_view,
+            current_proposal_hash: proposal.proposal_hash,
+            current_descriptor_hash: proposal.descriptor.descriptor_hash,
+            current_subject_hash: proposal.descriptor.subject_hash,
+            current_payload_ownership_hash: proposal.descriptor.payload_ownership_hash,
+            current_rbc_instance_hash: proposal.descriptor.rbc_instance_hash,
+            executable_payload_hash: autonomous_payload_hash,
+            validator_set_hash_version: proposal.descriptor.validator_set_hash_version,
+            validator_set_hash: proposal.descriptor.validator_set_hash,
+            validator_count: proposal.descriptor.validator_count,
+            min_quorum: proposal.descriptor.min_quorum,
+            qc_mode_tag: proposal.descriptor.qc_mode_tag.clone(),
+        };
+        let validator_pop =
+            bls_normal_pop_prove(validator.private_key()).expect("prove offline merge validator");
+        let availability_vote = LanePayloadAvailabilityVoteV1 {
+            body: availability_body.clone(),
+            signer: producer.clone(),
+            validator_set_pops: vec![validator_pop.clone()],
+            bls_signature: Signature::try_new(
+                validator.private_key(),
+                &availability_body.signature_preimage(),
+            )
+            .expect("sign offline merge payload availability vote")
+            .payload()
+            .to_vec(),
+        };
+        let prepare_body = proposal.vote_body(CertPhase::Prepare);
+        let prepare_vote = LaneBlockVoteV1 {
+            body: prepare_body.clone(),
+            payload_availability_vote: Some(availability_vote),
+            signer: producer.clone(),
+            bls_signature: Signature::try_new(
+                validator.private_key(),
+                &prepare_body.signature_preimage(),
+            )
+            .expect("sign offline merge lane prepare vote")
+            .payload()
+            .to_vec(),
+        };
+        let prepare_qc =
+            aggregate_lane_block_votes_to_qc(prepare_body, validator_set.clone(), &[prepare_vote])
+                .expect("aggregate offline merge lane prepare QC");
+        let commit_body = proposal.vote_body(CertPhase::Commit);
+        let commit_vote = LaneBlockVoteV1 {
+            body: commit_body.clone(),
+            payload_availability_vote: None,
+            signer: producer,
+            bls_signature: Signature::try_new(
+                validator.private_key(),
+                &commit_body.signature_preimage(),
+            )
+            .expect("sign offline merge lane commit vote")
+            .payload()
+            .to_vec(),
+        };
+        let commit_qc =
+            aggregate_lane_block_votes_to_qc(commit_body, validator_set.clone(), &[commit_vote])
+                .expect("aggregate offline merge lane commit QC");
+        let signer_pops = BTreeMap::from([(validator.public_key().clone(), validator_pop.clone())]);
+        let certified = CertifiedLaneBlockArtifact {
+            format: CertifiedLaneBlockArtifactFormat::Current,
+            proposal: proposal.clone(),
+            prepare_qc: prepare_qc.clone(),
+            commit_qc: commit_qc.clone(),
+            signer_pops,
+        };
+        let (source_bundle, source_bundle_hash) =
+            Kura::encode_autonomous_lane_merge_bundle_for_testing(
+                autonomous_payload,
+                prepare_qc.clone(),
+                certified,
+            )
+            .expect("encode offline merge autonomous lane bundle");
+        let encoded_reservation_keys = reservation_keys
+            .iter()
+            .map(|reservation| {
+                norito::encode_canonical(reservation)
+                    .expect("encode offline merge lane reservation")
+            })
+            .collect();
+        let encoded_routing_plans = routing_plans
+            .iter()
+            .map(|plan| {
+                norito::encode_canonical(plan).expect("encode offline merge lane routing plan")
+            })
+            .collect();
+        let settlement_commitment = merge_history_settlement(lane_incarnation);
+        let settlement_hash =
+            iroha_data_model::nexus::compute_settlement_hash(&settlement_commitment)
+                .expect("hash offline merge settlement fixture");
         let execution = MergeLaneExecution {
-            source_bundle: vec![0xA5],
-            source_bundle_hash: Hash::new(b"offline-status-merge-source"),
+            source_bundle,
+            source_bundle_hash,
             proposal: proposal.clone(),
             origin_proposal: proposal,
             prepare_qc,
             commit_qc,
-            signer_proofs: Vec::new(),
+            signer_proofs: vec![MergeLaneSignerProof {
+                public_key: validator.public_key().clone(),
+                proof_of_possession: validator_pop,
+            }],
             autonomous_network_id,
-            autonomous_epoch: 1,
-            autonomous_payload_hash: Hash::new(b"offline-status-merge-payload"),
+            autonomous_epoch,
+            autonomous_payload_hash,
             entrypoint_hashes,
             entrypoints: vec![entrypoint],
-            reservation_keys: vec![vec![0x01]],
-            routing_plans: vec![vec![0x02]],
-            native_amx_receipts: vec![None],
+            reservation_keys: encoded_reservation_keys,
+            routing_plans: encoded_routing_plans,
+            native_amx_receipts,
             result_hashes,
             results: vec![result],
             settlement_commitment: settlement_commitment.clone(),
@@ -2790,6 +2964,10 @@ mod tests {
         let carrier = attach_committed_merge_reference(carrier, &entry);
         kura.store_block_with_merge_entry(carrier, &entry)
             .expect("commit merge execution carrier and exact sidecar");
+        kura.persist_v2_finality_chain_for_testing(
+            NonZeroUsize::new(2).expect("merge carrier height is non-zero"),
+        )
+        .expect("persist exact merge carrier finality chain");
         assert!(
             kura.get_merge_entry_by_carrier_height(
                 NonZeroUsize::new(2).expect("merge carrier height is non-zero")
