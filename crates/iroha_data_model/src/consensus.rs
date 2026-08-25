@@ -953,13 +953,17 @@ mod tests {
             responses_end_height: 30,
         };
         let dealer_commitments = (1_u16..=4)
-            .map(|dealer_index| GlobalThresholdBeaconDkgDealerCommitmentV1 {
-                dealer_index,
-                coefficient_commitments: vec![[dealer_index as u8 + 0x20; 96]; 2],
-                constant_term_proof: GlobalThresholdBeaconDkgConstantProofV1 {
-                    commitment: [dealer_index as u8 + 0x30; 96],
-                    response: [dealer_index as u8 + 0x40; 32],
-                },
+            .map(|dealer_index| {
+                let dealer_marker = u8::try_from(dealer_index)
+                    .expect("threshold beacon fixture dealer indices 1..=4 fit in u8");
+                GlobalThresholdBeaconDkgDealerCommitmentV1 {
+                    dealer_index,
+                    coefficient_commitments: vec![[dealer_marker + 0x20; 96]; 2],
+                    constant_term_proof: GlobalThresholdBeaconDkgConstantProofV1 {
+                        commitment: [dealer_marker + 0x30; 96],
+                        response: [dealer_marker + 0x40; 32],
+                    },
+                }
             })
             .collect();
         GlobalThresholdBeaconKeySessionV1 {
@@ -971,10 +975,14 @@ mod tests {
             threshold: 2,
             group_public_key: [0x44; 96],
             public_shares: (1_u16..=4)
-                .map(|index| GlobalThresholdBeaconPublicShareV1 {
-                    index,
-                    participant_seat_binding: [index as u8; 32],
-                    public_key_share: [index as u8 + 0x50; 96],
+                .map(|index| {
+                    let share_marker = u8::try_from(index)
+                        .expect("threshold beacon fixture share indices 1..=4 fit in u8");
+                    GlobalThresholdBeaconPublicShareV1 {
+                        index,
+                        participant_seat_binding: [share_marker; 32],
+                        public_key_share: [share_marker + 0x50; 96],
+                    }
                 })
                 .collect(),
             adaptive_dkg: GlobalThresholdBeaconDkgTranscriptV1 {

@@ -40,8 +40,8 @@ use iroha_data_model::{
         SoraUploadedModelKeyEncapsulationV1, SoraUploadedModelKeyWrapAeadV1,
     },
     sorafs::pin_registry::{
-        ManifestDigest, ManifestRootCid, PinStatus, ReplicationOrderId, ReplicationOrderStatus,
-        StorageClass, derive_sorafs_auto_replication_order_id_v1,
+        ManifestDigest, ManifestRootCid, PinStatus, ReplicationOrderStatus, StorageClass,
+        derive_sorafs_auto_replication_order_id_v1,
     },
     transaction::SignedTransaction,
 };

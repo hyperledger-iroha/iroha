@@ -983,19 +983,19 @@ impl<P: ThresholdBlsPurpose> DasRenDealerSecret<P> {
         if coefficients[0][1] != zero || coefficients[0][2] != zero {
             return Err(ThresholdBlsError::InvalidCoefficientCommitment);
         }
-        let h = parameters.h_point()?;
-        let v = parameters.v_point()?;
+        let h_generator = parameters.h_point()?;
+        let v_generator = parameters.v_point()?;
         let mut commitment_bytes = Vec::with_capacity(coefficients.len());
         for coefficient in coefficients.iter() {
-            let s = decode_scalar(&coefficient[0])?;
-            let r = decode_scalar(&coefficient[1])?;
-            let u = decode_scalar(&coefficient[2])?;
-            if commitment_bytes.is_empty() && s == Scalar::from(0_u64) {
+            let secret_coefficient = decode_scalar(&coefficient[0])?;
+            let h_blinding_coefficient = decode_scalar(&coefficient[1])?;
+            let v_blinding_coefficient = decode_scalar(&coefficient[2])?;
+            if commitment_bytes.is_empty() && secret_coefficient == Scalar::from(0_u64) {
                 return Err(ThresholdBlsError::InvalidCoefficientCommitment);
             }
-            let point = G2Projective::generator() * s
-                + G2Projective::from(h) * r
-                + G2Projective::from(v) * u;
+            let point = G2Projective::generator() * secret_coefficient
+                + G2Projective::from(h_generator) * h_blinding_coefficient
+                + G2Projective::from(v_generator) * v_blinding_coefficient;
             if bool::from(point.is_identity()) {
                 return Err(ThresholdBlsError::InvalidCoefficientCommitment);
             }
@@ -1214,6 +1214,7 @@ impl<P: ThresholdBlsPurpose> fmt::Debug for AdaptiveThresholdBlsPublicShare<P> {
         formatter
             .debug_struct("AdaptiveThresholdBlsPublicShare")
             .field("purpose", &P::ROLE_TAG)
+            .field("parameters_digest", &hex::encode(self.parameters_digest))
             .field("index", &self.index)
             .field("participant_hash", &hex::encode(self.participant_hash))
             .field("bytes", &hex::encode(self.bytes))
@@ -1375,6 +1376,10 @@ impl<P: ThresholdBlsPurpose> AdaptiveThresholdBlsPublicTranscript<P> {
     ///
     /// Returns [`ThresholdBlsError`] for a zero event hash, wrong session,
     /// noncanonical/insufficient qualified set, or degenerate aggregate point.
+    #[expect(
+        clippy::large_types_passed_by_value,
+        reason = "the public constructor stores the immutable parameter snapshot and preserves its established by-value API"
+    )]
     pub fn from_qualified_dealers(
         parameters: AdaptiveThresholdBlsParameters<P>,
         validated_dealers: &[ValidatedDealerCommitment<P>],
@@ -1506,6 +1511,11 @@ impl<P: ThresholdBlsPurpose> AdaptiveThresholdBlsPublicTranscript<P> {
     ///
     /// This constructor-authenticated type returns `Ok(())`; malformed remote
     /// input cannot instantiate it without passing all DKG checks.
+    #[expect(
+        clippy::unused_self,
+        clippy::unnecessary_wraps,
+        reason = "this instance-level fallible gate intentionally matches the legacy transcript API"
+    )]
     pub const fn ensure_adaptive_protocol_ready(&self) -> Result<(), ThresholdBlsError> {
         Ok(())
     }
@@ -1970,6 +1980,10 @@ impl<P: ThresholdBlsPurpose> ThresholdBlsPublicTranscript<P> {
     /// # Errors
     ///
     /// Always returns [`ThresholdBlsError::AdaptiveProtocolNotReady`] for this legacy type.
+    #[expect(
+        clippy::unused_self,
+        reason = "the transcript type carried by this instance determines the fail-closed readiness result"
+    )]
     pub const fn ensure_adaptive_protocol_ready(&self) -> Result<(), ThresholdBlsError> {
         Err(ThresholdBlsError::AdaptiveProtocolNotReady)
     }
@@ -2011,7 +2025,7 @@ fn decode_scalar(bytes: &[u8; 32]) -> Result<Scalar, ThresholdBlsError> {
         .ok_or(ThresholdBlsError::InvalidScalar)
 }
 
-fn scalar_from_transcript(hasher: Sha256) -> Result<Scalar, ThresholdBlsError> {
+fn scalar_from_transcript(hasher: &Sha256) -> Result<Scalar, ThresholdBlsError> {
     for counter in 0_u32..=SCALAR_REJECTION_LIMIT {
         let mut attempt = hasher.clone();
         attempt.update(counter.to_be_bytes());
@@ -2053,7 +2067,9 @@ fn dealer_pok_challenge<P: ThresholdBlsPurpose>(
     parameters.session.write_canonical(&mut session);
     hasher.update(session);
     hasher.update(dealer_index.to_be_bytes());
-    hasher.update((coefficients.len() as u32).to_be_bytes());
+    let coefficient_count = u32::try_from(coefficients.len())
+        .map_err(|_| ThresholdBlsError::InvalidCoefficientCommitment)?;
+    hasher.update(coefficient_count.to_be_bytes());
     for coefficient in coefficients {
         if coefficient.parameters_digest != parameters.digest() {
             return Err(ThresholdBlsError::SessionMismatch);
@@ -2061,7 +2077,7 @@ fn dealer_pok_challenge<P: ThresholdBlsPurpose>(
         hasher.update(coefficient.bytes);
     }
     hasher.update(proof.commitment);
-    scalar_from_transcript(hasher)
+    scalar_from_transcript(&hasher)
 }
 
 fn evaluate_commitments<P: ThresholdBlsPurpose>(
@@ -2130,7 +2146,9 @@ fn compute_adaptive_transcript_hash<P: ThresholdBlsPurpose>(
     hasher.update(THRESHOLD_BLS_PROTOCOL_VERSION_V1.to_be_bytes());
     hasher.update(parameters.digest());
     hasher.update(dkg_event_hash);
-    hasher.update((dealers.len() as u32).to_be_bytes());
+    let dealer_count = u32::try_from(dealers.len())
+        .expect("validated dealer count is bounded by the v1 committee maximum");
+    hasher.update(dealer_count.to_be_bytes());
     for (dealer, index) in dealers.iter().zip(qualified_indices) {
         hasher.update(index.to_be_bytes());
         for coefficient in &dealer.coefficients {
@@ -2178,7 +2196,7 @@ fn partial_proof_challenge<P: ThresholdBlsPurpose>(
     hasher.update(message_h1.to_compressed());
     hasher.update(partial.index.to_be_bytes());
     hasher.update(share.participant_hash);
-    scalar_from_transcript(hasher)
+    scalar_from_transcript(&hasher)
 }
 
 fn lagrange_at_zero(index: u16, indices: &[u16]) -> Result<Scalar, ThresholdBlsError> {
@@ -2478,7 +2496,7 @@ mod tests {
             largest.maximum_distinct_share_exposures_without_rotation(),
             10
         );
-        assert!(!THRESHOLD_BLS_PROACTIVE_REFRESH_SUPPORTED_V1);
+        const { assert!(!THRESHOLD_BLS_PROACTIVE_REFRESH_SUPPORTED_V1) };
     }
 
     #[test]
@@ -2547,7 +2565,7 @@ mod tests {
                 ThresholdBlsPublicShare::from_bytes(
                     *session.session_id(),
                     index,
-                    binding(index as u8 + 20),
+                    binding(u8::try_from(index).expect("test participant index fits in u8") + 20),
                     share_key.as_bytes(),
                 )
                 .expect("share")
@@ -2599,7 +2617,7 @@ mod tests {
                 ThresholdBlsPublicShare::from_bytes(
                     *session.session_id(),
                     index,
-                    binding(index as u8 + 20),
+                    binding(u8::try_from(index).expect("test participant index fits in u8") + 20),
                     share_key.as_bytes(),
                 )
                 .expect("share")
@@ -2641,7 +2659,7 @@ mod tests {
                 ThresholdBlsPublicShare::from_bytes(
                     *session.session_id(),
                     index,
-                    binding(index as u8 + 20),
+                    binding(u8::try_from(index).expect("test participant index fits in u8") + 20),
                     share_key.as_bytes(),
                 )
                 .expect("share")
@@ -2676,6 +2694,22 @@ mod tests {
         let other = AdaptiveThresholdBlsParameters::derive(&other).expect("other parameters");
         assert_ne!(first.h_bytes(), other.h_bytes());
         assert_ne!(first.v_bytes(), other.v_bytes());
+    }
+
+    #[test]
+    fn adaptive_public_share_debug_includes_parameter_binding() {
+        let parameters_digest = binding(4);
+        let share = AdaptiveThresholdBlsPublicShare::<BeaconPurpose> {
+            parameters_digest,
+            index: 1,
+            participant_hash: binding(5),
+            bytes: [6; THRESHOLD_BLS_PUBLIC_KEY_BYTES],
+            marker: PhantomData,
+        };
+
+        let rendered = format!("{share:?}");
+        assert!(rendered.contains("parameters_digest"));
+        assert!(rendered.contains(&hex::encode(parameters_digest)));
     }
 
     #[test]

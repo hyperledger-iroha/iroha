@@ -372,7 +372,10 @@ fn rebuild_control_leg_committee(
     let validator_set_hash = HashOf::new(&validator_set);
     let mut leg = source.clone();
     leg.participant_proposal.descriptor.validator_set_hash = validator_set_hash;
-    leg.participant_proposal.descriptor.validator_set = validator_set.clone();
+    leg.participant_proposal
+        .descriptor
+        .validator_set
+        .clone_from(&validator_set);
     leg.participant_proposal.descriptor.validator_count = validator_count;
     leg.participant_proposal.descriptor.min_quorum = min_quorum;
     leg.participant_proposal.descriptor.descriptor_hash = leg
@@ -715,7 +718,8 @@ fn committee_consistency_controls(
     let mut duplicate_validators = canonical_validators.clone();
     duplicate_validators[1] = duplicate_validators[0].clone();
     let mut duplicate_pops = canonical_pops.clone();
-    duplicate_pops[1] = duplicate_pops[0].clone();
+    let (source_pops, remaining_pops) = duplicate_pops.split_at_mut(1);
+    remaining_pops[0].clone_from(&source_pops[0]);
     let duplicate_signer_keys = (0..MIN_QUORUM)
         .map(|validator_index| {
             let key_index = if validator_index == 1 {

@@ -25,6 +25,7 @@ enum AoSEnum {
     Tuple(TuplePayload),
     Struct(StructPayload),
 }
+#[cfg_attr(feature = "schema-structural", derive(iroha_schema::TypeId))]
 #[derive(norito::derive::NoritoSerialize, norito::derive::NoritoDeserialize, Debug, PartialEq)]
 #[norito(decode_from_slice)]
 enum AoSNamedEnum {
@@ -35,6 +36,40 @@ enum AoSNamedEnum {
     },
     Unit,
 }
+#[cfg(feature = "schema-structural")]
+#[derive(iroha_schema::IntoSchema)]
+#[allow(dead_code)]
+struct AoSNamedEnumStructLikeSchema {
+    label: String,
+    data: Vec<u8>,
+    code: u16,
+}
+#[cfg(feature = "schema-structural")]
+impl iroha_schema::IntoSchema for AoSNamedEnum {
+    fn type_name() -> String {
+        "AoSNamedEnum".to_owned()
+    }
+    fn update_schema_map(map: &mut iroha_schema::MetaMap) {
+        if map.contains_key::<Self>() {
+            return;
+        }
+        map.insert::<Self>(iroha_schema::Metadata::Enum(iroha_schema::EnumMeta {
+            variants: vec![
+                iroha_schema::EnumVariant {
+                    tag: "StructLike".to_owned(),
+                    discriminant: 0,
+                    ty: Some(core::any::TypeId::of::<AoSNamedEnumStructLikeSchema>()),
+                },
+                iroha_schema::EnumVariant {
+                    tag: "Unit".to_owned(),
+                    discriminant: 1,
+                    ty: None,
+                },
+            ],
+        }));
+        <AoSNamedEnumStructLikeSchema as iroha_schema::IntoSchema>::update_schema_map(map);
+    }
+}
 #[derive(
     IntoSchema, norito::derive::NoritoSerialize, norito::derive::NoritoDeserialize, Debug, PartialEq,
 )]
@@ -42,10 +77,38 @@ enum AoSU8ArrayEnum {
     Unit,
     Bytes([u8; 12]),
 }
+#[cfg_attr(feature = "schema-structural", derive(iroha_schema::TypeId))]
 #[derive(norito::derive::NoritoSerialize, norito::derive::NoritoDeserialize, Debug, PartialEq)]
 enum NamedArrayEnum {
     Raw { prefix: i32, bytes: [u8; 32] },
 }
+#[cfg(feature = "schema-structural")]
+#[derive(iroha_schema::IntoSchema)]
+#[allow(dead_code)]
+struct NamedArrayEnumRawSchema {
+    prefix: i32,
+    bytes: [u8; 32],
+}
+#[cfg(feature = "schema-structural")]
+impl iroha_schema::IntoSchema for NamedArrayEnum {
+    fn type_name() -> String {
+        "NamedArrayEnum".to_owned()
+    }
+    fn update_schema_map(map: &mut iroha_schema::MetaMap) {
+        if map.contains_key::<Self>() {
+            return;
+        }
+        map.insert::<Self>(iroha_schema::Metadata::Enum(iroha_schema::EnumMeta {
+            variants: vec![iroha_schema::EnumVariant {
+                tag: "Raw".to_owned(),
+                discriminant: 0,
+                ty: Some(core::any::TypeId::of::<NamedArrayEnumRawSchema>()),
+            }],
+        }));
+        <NamedArrayEnumRawSchema as iroha_schema::IntoSchema>::update_schema_map(map);
+    }
+}
+#[cfg_attr(feature = "schema-structural", derive(iroha_schema::IntoSchema))]
 #[derive(norito::derive::NoritoSerialize, norito::derive::NoritoDeserialize, Debug, PartialEq)]
 struct NestedNamedArray {
     first: String,

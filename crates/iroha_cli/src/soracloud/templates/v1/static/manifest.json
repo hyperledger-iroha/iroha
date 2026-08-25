@@ -33,15 +33,16 @@
     },
     {
       "path": "single_api_contract.ko",
-      "byte_length": 379,
-      "sha256": "db7b1dd35dbd660ad1767b06fa7cfb5fb4d167bbc591e3c73421d3c477d6f244",
+      "byte_length": 441,
+      "sha256": "9145ec0275153b88ee7ec718d32fc15ab960d9c52baa94f74a9a65e1ebc8a479",
       "layout": "UTF-8 Soracloud template bytes, preserved verbatim",
       "source_preimages": [
         {
           "path": "../../../../soracloud.rs",
-          "start_line": 16927,
+          "start_line": 17569,
           "physical_lines": 18,
-          "sha256": "6b195553d0e5eb2abee1fb20f6be61961e50190e4680a4d0fd53c913500cbe04"
+          "sha256": "1798832f33ecd4d1d571bc8e3fc6c44744a87ddf229fed975b74fac777ad5596",
+          "source_commit": "6ab89267ff378f45135db8313ad444952d5b7fbe"
         }
       ]
     },
@@ -61,15 +62,16 @@
     },
     {
       "path": "hayahi_app_contract.ko",
-      "byte_length": 3740,
-      "sha256": "0ace07619aaebad293034640025e95c46b3d804db8495c400cc2524acf9d0f30",
+      "byte_length": 4233,
+      "sha256": "5b9888b08963563469e5add9b9c478d77ff9a092eac473d41b44611f6c1351b0",
       "layout": "UTF-8 Soracloud template bytes, preserved verbatim",
       "source_preimages": [
         {
           "path": "../../../../soracloud.rs",
-          "start_line": 17205,
+          "start_line": 17595,
           "physical_lines": 121,
-          "sha256": "61ab0dd3e10af9fa8e6fc97a3a00be4af3a3f0df9be80b9fe91504f77ff5e0dc"
+          "sha256": "9f580190c3e6ff24c59af1f7d68d99edccc52334633d4a5bb1cbcc434b7264a8",
+          "source_commit": "6ab89267ff378f45135db8313ad444952d5b7fbe"
         }
       ]
     },
@@ -89,43 +91,46 @@
     },
     {
       "path": "http_service_release.sh",
-      "byte_length": 503,
-      "sha256": "8d4a54119ee7d35ac36ddbb6d459c556953e631d461bb2cf25674980bd154b86",
+      "byte_length": 569,
+      "sha256": "5c6b4ea141cd10ced54ea2d18573a2c0d46f6666156e85bdd8fcd2726ce1adab",
       "layout": "UTF-8 Soracloud template bytes, preserved verbatim",
       "source_preimages": [
         {
           "path": "../../../../soracloud.rs",
-          "start_line": 17482,
-          "physical_lines": 23,
-          "sha256": "e8cdf49d4c3cb0e63dce9a6bc7c1371a1a0bb3aea9b18a1fc59f17dce5efe387"
+          "start_line": 17789,
+          "physical_lines": 24,
+          "sha256": "4151d09a54b451d6af0d38b6bced37eff703e4f012ee398e7297b4e830bd17c4",
+          "source_commit": "6ab89267ff378f45135db8313ad444952d5b7fbe"
         }
       ]
     },
     {
       "path": "http_service_deploy.sh",
-      "byte_length": 513,
-      "sha256": "bbec4fadbc1b9bff3c2e40c2242679128c5adaf7c4faba14f6cce452bcc98352",
+      "byte_length": 579,
+      "sha256": "21cd884eeda01115fea7aebe8880cdd1b72b35d3337bb134e6e55d864d72b8cb",
       "layout": "UTF-8 Soracloud template bytes, preserved verbatim",
       "source_preimages": [
         {
           "path": "../../../../soracloud.rs",
-          "start_line": 17510,
-          "physical_lines": 23,
-          "sha256": "219f6f7c139e7f49441ecd41f68980beb16614dbc08da5461e73099c58139e57"
+          "start_line": 17817,
+          "physical_lines": 24,
+          "sha256": "2bfddb458086cb68773df000a6c2ce9506c5d5e2ead0c2900ad860fcdb6f9944",
+          "source_commit": "6ab89267ff378f45135db8313ad444952d5b7fbe"
         }
       ]
     },
     {
       "path": "http_service_upgrade.sh",
-      "byte_length": 514,
-      "sha256": "a2fc2c91b332208abe61c7f08dce1398b29930e5f4c7453b42f92217711807d8",
+      "byte_length": 580,
+      "sha256": "e1691de5510aeaa7c3ecc76ea44f6fb35e6ff1293c0ad6edb6f8151def1eeec5",
       "layout": "UTF-8 Soracloud template bytes, preserved verbatim",
       "source_preimages": [
         {
           "path": "../../../../soracloud.rs",
-          "start_line": 17538,
-          "physical_lines": 23,
-          "sha256": "6e54a1d96882cbc6225610fe3717de2d3e69416b5f4f6a8b9e55bcf437bd6eab"
+          "start_line": 17845,
+          "physical_lines": 24,
+          "sha256": "58d728b340a9595bbacead96a78b6122169c083cafd5c9d1c1346df5d59524a7",
+          "source_commit": "6ab89267ff378f45135db8313ad444952d5b7fbe"
         }
       ]
     },

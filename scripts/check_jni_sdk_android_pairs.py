@@ -15,10 +15,17 @@ JNI_SOURCE = REPO_ROOT / "crates/connect_norito_bridge/src/platform_jni/part_3.r
 SDK_PREFIX = "Java_org_hyperledger_iroha_sdk_"
 ANDROID_PREFIX = "Java_org_hyperledger_iroha_android_"
 MACRO_NAME = "jni_sdk_android_pairs"
-EXPECTED_MACRO_DIGEST = "11de37a9ba22a1c17f322b2803478a5670ecc17166b23526f080c54fbb8a84bb"
-EXPECTED_ABI_DIGEST = "fa65747adf061879da05b24aeea39d04f3476db289ac590171225ba15a9b491a"
+KAGEMUSHA_FORWARDER_MACRO_NAME = "kagemusha_sdk_android_forwarders"
+EXPECTED_MACRO_DIGEST = "75234f8e3dfcdaa54347f628fd7fb7118de18003baed0e3c37750cd283db2468"
+EXPECTED_KAGEMUSHA_FORWARDER_CONTRACT_DIGEST = (
+    "2cf93c8ffea407114fadc68cb9954f76046310410428d13c3d536fdd90f0aa38"
+)
+EXPECTED_KAGEMUSHA_FORWARDER_INVOCATION_DIGEST = (
+    "07a2dfa9a07610d63e65dc628b3cafc0134d3899a9b4a7b25cbaca1346cc4566"
+)
+EXPECTED_ABI_DIGEST = "09e0644b5c2fb70abdafd7544ecda9616763972fb5e0016166d4a18e8c88eebd"
 EXPECTED_ATTRIBUTE_DIGEST = (
-    "aec610f58c5bc0aaa9d05c7ae73730bc6ae2535c72a2e1b5643a0f446c707eaf"
+    "dbb897b6f95cb72cb30a974d0adb283e775ba3a5464b8b1386726ab13a796bcd"
 )
 
 EXPECTED_METHODS = {
@@ -127,6 +134,14 @@ EXPECTED_SUFFIXES = tuple(
     for bridge, methods in EXPECTED_METHODS.items()
     for method in methods
 )
+KAGEMUSHA_FORWARDER_METHODS = EXPECTED_METHODS[
+    "offline_KagemushaRecursiveSpendProver"
+][2:]
+KAGEMUSHA_FORWARDER_SUFFIXES = tuple(
+    f"offline_KagemushaRecursiveSpendProver_{method}"
+    for method in KAGEMUSHA_FORWARDER_METHODS
+)
+EXPECTED_STANDARD_SUFFIXES = EXPECTED_SUFFIXES[: -len(KAGEMUSHA_FORWARDER_SUFFIXES)]
 
 
 class AuditError(ValueError):
@@ -248,8 +263,8 @@ def _attribute_text(fragment: str, platform: str) -> str:
     return "".join(attributes)
 
 
-def _macro_invocation(source: str) -> tuple[str, int, int]:
-    """Return the paired macro body and its source boundaries."""
+def _macro_invocations(source: str) -> tuple[str, ...]:
+    """Return every paired macro invocation body in source order."""
 
     definition_start = source.find(f"macro_rules! {MACRO_NAME}")
     invocation_start = source.find(f"{MACRO_NAME}! {{")
@@ -262,15 +277,72 @@ def _macro_invocation(source: str) -> tuple[str, int, int]:
             "paired JNI macro expansion contract changed: "
             f"expected {EXPECTED_MACRO_DIGEST}, found {macro_digest}"
         )
-    opening = source.index("{", invocation_start)
-    closing = _matching_brace(source, opening)
-    return source[opening + 1 : closing], opening + 1, closing
+    bodies = []
+    cursor = invocation_start
+    marker = f"{MACRO_NAME}! {{"
+    while cursor >= 0:
+        opening = source.index("{", cursor)
+        closing = _matching_brace(source, opening)
+        bodies.append(source[opening + 1 : closing])
+        cursor = source.find(marker, closing + 1)
+    return tuple(bodies)
+
+
+def _kagemusha_forwarder_contract(source: str) -> tuple[tuple[str, ...], str]:
+    """Validate the typed Kagemusha pair generator and return its exact inventory."""
+
+    contract_start = source.find("type JniByteArray =")
+    definition_start = source.find(
+        f"macro_rules! {KAGEMUSHA_FORWARDER_MACRO_NAME}", contract_start
+    )
+    if contract_start < 0 or definition_start < 0:
+        raise AuditError("typed Kagemusha JNI forwarder contract is missing")
+    definition_open = source.index("{", definition_start)
+    definition_close = _matching_brace(source, definition_open)
+    contract = " ".join(source[contract_start : definition_close + 1].split())
+    contract_digest = hashlib.sha256(contract.encode()).hexdigest()
+    if contract_digest != EXPECTED_KAGEMUSHA_FORWARDER_CONTRACT_DIGEST:
+        raise AuditError(
+            "typed Kagemusha JNI forwarder expansion contract changed: "
+            f"expected {EXPECTED_KAGEMUSHA_FORWARDER_CONTRACT_DIGEST}, "
+            f"found {contract_digest}"
+        )
+
+    marker = f"{KAGEMUSHA_FORWARDER_MACRO_NAME}! {{"
+    invocation_start = source.find(marker, definition_close + 1)
+    if invocation_start < 0 or source.find(marker, invocation_start + 1) >= 0:
+        raise AuditError("typed Kagemusha JNI forwarders require exactly one invocation")
+    invocation_open = source.index("{", invocation_start)
+    invocation_close = _matching_brace(source, invocation_open)
+    body = source[invocation_open + 1 : invocation_close]
+    normalized_body = " ".join(body.split())
+    invocation_digest = hashlib.sha256(normalized_body.encode()).hexdigest()
+    if invocation_digest != EXPECTED_KAGEMUSHA_FORWARDER_INVOCATION_DIGEST:
+        raise AuditError(
+            "typed Kagemusha JNI forwarder invocation contract changed: "
+            f"expected {EXPECTED_KAGEMUSHA_FORWARDER_INVOCATION_DIGEST}, "
+            f"found {invocation_digest}"
+        )
+    methods = tuple(
+        re.findall(
+            r"(?m)^\s*(?:#\[[^\n]+\]\s*)*(native[A-Za-z0-9_]+)\s*\{",
+            body,
+        )
+    )
+    if methods != KAGEMUSHA_FORWARDER_METHODS:
+        raise AuditError(
+            "typed Kagemusha JNI forwarder inventory changed: expected "
+            f"{len(KAGEMUSHA_FORWARDER_METHODS)} ordered pairs, found {len(methods)}"
+        )
+    record = contract_digest + "\0" + invocation_digest
+    return KAGEMUSHA_FORWARDER_SUFFIXES, record
 
 
 def audit_source(source: str) -> AuditResult:
     """Validate the exact paired export, signature, body, and attribute inventory."""
 
-    body, _body_start, _body_end = _macro_invocation(source)
+    bodies = _macro_invocations(source)
+    body = "\n".join(bodies)
     cursor = 0
     observed_suffixes = []
     abi_records = []
@@ -340,12 +412,12 @@ def audit_source(source: str) -> AuditResult:
         )
         cursor = body_close + 1
 
-    if tuple(observed_suffixes) != EXPECTED_SUFFIXES:
+    if tuple(observed_suffixes) != EXPECTED_STANDARD_SUFFIXES:
         raise AuditError(
             "paired JNI export inventory changed: expected "
-            f"{len(EXPECTED_SUFFIXES)} ordered pairs, found {len(observed_suffixes)}"
+            f"{len(EXPECTED_STANDARD_SUFFIXES)} ordered pairs, found {len(observed_suffixes)}"
         )
-    for suffix in EXPECTED_SUFFIXES:
+    for suffix in EXPECTED_STANDARD_SUFFIXES:
         sdk_name = SDK_PREFIX + suffix
         android_name = ANDROID_PREFIX + suffix
         if source.count(sdk_name) != 1 or source.count(android_name) != 1:
@@ -353,6 +425,13 @@ def audit_source(source: str) -> AuditResult:
         direct_android = f'pub unsafe extern "system" fn {android_name}('
         if direct_android in source:
             raise AuditError(f"Android wrapper escaped the exact pair macro: {android_name}")
+
+    forwarder_suffixes, forwarder_record = _kagemusha_forwarder_contract(source)
+    observed_suffixes.extend(forwarder_suffixes)
+    if tuple(observed_suffixes) != EXPECTED_SUFFIXES:
+        raise AuditError("combined paired JNI export inventory changed")
+    abi_records.append("typed-kagemusha-forwarders\0" + forwarder_record)
+    attribute_records.append("typed-kagemusha-forwarders\0" + forwarder_record)
 
     abi_digest = hashlib.sha256("\0\0".join(sorted(abi_records)).encode()).hexdigest()
     if abi_digest != EXPECTED_ABI_DIGEST:

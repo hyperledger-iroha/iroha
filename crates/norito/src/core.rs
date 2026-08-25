@@ -1702,6 +1702,12 @@ impl SequenceSpan {
     pub fn len(&self) -> usize {
         self.end.saturating_sub(self.start)
     }
+    /// Whether the planned element payload is empty.
+    #[doc(hidden)]
+    #[inline]
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
 }
 /// Planned element spans and total bytes consumed by a binary sequence.
 #[doc(hidden)]

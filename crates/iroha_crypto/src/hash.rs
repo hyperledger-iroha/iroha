@@ -351,7 +351,7 @@ crate::ffi::ffi_item! {
         #[deref]
         #[deref_mut]
         Hash,
-        PhantomData<T>,
+        PhantomData<fn() -> T>,
     );
     // SAFETY: `HashOf` has no trap representation in `Hash`
     ffi_type(unsafe {robust})
@@ -514,6 +514,14 @@ mod ffi {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn typed_hash_thread_safety_does_not_depend_on_marker() {
+        fn assert_send_sync<T: Send + Sync>() {}
+
+        assert_send_sync::<HashOf<std::rc::Rc<()>>>();
+    }
+
     #[test]
     fn blake2_32b() {
         let mut hasher = Blake2b256::new();

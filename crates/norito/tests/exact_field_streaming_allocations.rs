@@ -70,6 +70,7 @@ fn large_allocations_during(threshold: usize, operation: impl FnOnce()) -> usize
     LARGE_ALLOCATION_THRESHOLD.with(|current| current.set(usize::MAX));
     LARGE_ALLOCATIONS.with(Cell::get)
 }
+#[cfg_attr(feature = "schema-structural", derive(iroha_schema::IntoSchema))]
 struct ExactBlob(Vec<u8>);
 impl NoritoSerialize for ExactBlob {
     fn serialize(&self, writer: &mut Encoder<'_>) -> Result<(), Error> {
@@ -82,32 +83,39 @@ impl NoritoSerialize for ExactBlob {
         NoritoSerialize::encoded_len_exact(&self.0)
     }
 }
+#[cfg_attr(feature = "schema-structural", derive(iroha_schema::IntoSchema))]
 struct UnknownBlob(Vec<u8>);
 impl NoritoSerialize for UnknownBlob {
     fn serialize(&self, writer: &mut Encoder<'_>) -> Result<(), Error> {
         NoritoSerialize::serialize(&self.0, writer)
     }
 }
+#[cfg_attr(feature = "schema-structural", derive(iroha_schema::IntoSchema))]
 #[derive(NoritoSerialize)]
 struct ExactInner {
     payload: ExactBlob,
 }
+#[cfg_attr(feature = "schema-structural", derive(iroha_schema::IntoSchema))]
 #[derive(NoritoSerialize)]
 struct UnknownInner {
     payload: UnknownBlob,
 }
+#[cfg_attr(feature = "schema-structural", derive(iroha_schema::IntoSchema))]
 #[derive(NoritoSerialize)]
 struct ExactOuter {
     inner: ExactInner,
 }
+#[cfg_attr(feature = "schema-structural", derive(iroha_schema::IntoSchema))]
 #[derive(NoritoSerialize)]
 struct UnknownOuter {
     inner: UnknownInner,
 }
+#[cfg_attr(feature = "schema-structural", derive(iroha_schema::IntoSchema))]
 #[derive(NoritoSerialize)]
 enum ExactEnum {
     Payload(ExactBlob),
 }
+#[cfg_attr(feature = "schema-structural", derive(iroha_schema::IntoSchema))]
 #[derive(NoritoSerialize)]
 enum UnknownEnum {
     Payload(UnknownBlob),

@@ -257,6 +257,7 @@ fn box_roundtrip() {
     let decoded = Box::<String>::decode_all(&mut &bytes[..]).expect("box decode");
     assert_eq!(str_box, decoded);
 }
+#[cfg_attr(feature = "schema-structural", derive(iroha_schema::IntoSchema))]
 #[derive(Encode, Decode, PartialEq, Debug)]
 enum RecursiveExpression {
     Literal(u32),

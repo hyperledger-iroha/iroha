@@ -6,15 +6,16 @@
   "assets": [
     {
       "path": "hayahi_app_readme.tmpl",
-      "byte_length": 2273,
-      "sha256": "13c6a424737ce0da7bda33f22ce443bdea0db89b40dfd05573070cb2a47829b7",
+      "byte_length": 2317,
+      "sha256": "ecb0b8f44fc9f9d64cbbf62121b5320a7c09d7ec0343ec7b022634dd257ca464",
       "layout": "UTF-8 Soracloud format template bytes with symbolic placeholders and LF endings",
       "source_preimages": [
         {
           "path": "../../../soracloud.rs",
-          "start_line": 18668,
-          "physical_lines": 81,
-          "sha256": "ce520fcd0cb26edacca526ca39040d76d0b00b46b92c9b6f3b252bc9007d941a"
+          "start_line": 17880,
+          "physical_lines": 82,
+          "sha256": "932f14367d55be5021dab4d8e3ea1678920c2f93cadc6e8e2eaadc1bd7aab1a8",
+          "source_commit": "77cefc4ffa5440821d38c7b56eef95369193d4a3"
         }
       ]
     },
@@ -68,23 +69,25 @@
       "source_preimages": [
         {
           "path": "../../../soracloud.rs",
-          "start_line": 17200,
-          "physical_lines": 166,
-          "sha256": "7cce5dd2223c686aebda24b96224cdd2e51b9537456dfa58094090631e7e9748"
+          "start_line": 17801,
+          "physical_lines": 165,
+          "sha256": "5dcc47c3ebd2ef666f6f741139f4442858000a09aa3c4bd98f6c49d902de8ac5",
+          "source_commit": "caea9dbaeb26919c2bcff23a9f284d71b6807851"
         }
       ]
     },
     {
       "path": "http_service_server_mjs.tmpl",
-      "byte_length": 2589,
-      "sha256": "eab5a7be2696ad8ebb8e1da8ae5af45411bd7de3596b1fabab9c220039162540",
+      "byte_length": 2767,
+      "sha256": "077f596bd38fe0c13a714abb96eb990aec65476912a519fb505e48b44631b19f",
       "layout": "UTF-8 Soracloud format template bytes with symbolic placeholders and LF endings",
       "source_preimages": [
         {
           "path": "../../../soracloud.rs",
-          "start_line": 16815,
-          "physical_lines": 103,
-          "sha256": "013d558a8ba75667a6720dfa20df35f73603011cd80d20ef2a18116a360ee0dc"
+          "start_line": 17667,
+          "physical_lines": 104,
+          "sha256": "026f95468f54d4a5796d1299a1e1d35458070dbcbd78b4b98d32c22aad86bafe",
+          "source_commit": "caea9dbaeb26919c2bcff23a9f284d71b6807851"
         }
       ]
     },
@@ -104,15 +107,16 @@
     },
     {
       "path": "pii_app_readme.tmpl",
-      "byte_length": 2292,
-      "sha256": "d1733fdce6fdc9576544067bc8539ea28bc220581c25dd9a6b01c8cfa127061c",
+      "byte_length": 2333,
+      "sha256": "773b55330b0e852937e4af98975d097d7c4bb16bfaae8099a54862631e9dcef2",
       "layout": "UTF-8 Soracloud format template bytes with symbolic placeholders and LF endings",
       "source_preimages": [
         {
           "path": "../../../soracloud.rs",
-          "start_line": 18599,
-          "physical_lines": 68,
-          "sha256": "c991d3f05ad577a29b393227ed1a24c8b988a9de04424c70014f811d8bfb588c"
+          "start_line": 18413,
+          "physical_lines": 67,
+          "sha256": "dac05f54de0d33abf51a08dfb5dc6167898386458081623ca4baeb9573a8a2d8",
+          "source_commit": "caea9dbaeb26919c2bcff23a9f284d71b6807851"
         }
       ]
     },
@@ -258,15 +262,16 @@
     },
     {
       "path": "split_app_live_readme.tmpl",
-      "byte_length": 1852,
-      "sha256": "187676bf24aea05a28bda82ead892f4c6f750f344066c86f1de1535f4e0465cd",
+      "byte_length": 2060,
+      "sha256": "9c588e3eeec88f68c5faba659519fb008cbbd15fe75ceebc0818570288e256a7",
       "layout": "UTF-8 Soracloud format template bytes with symbolic placeholders and LF endings",
       "source_preimages": [
         {
           "path": "../../../soracloud.rs",
-          "start_line": 17931,
-          "physical_lines": 71,
-          "sha256": "4941a6b8722cd32dba26efb10a735a35e83660bea1c862a642e3239fa298a9a9"
+          "start_line": 18012,
+          "physical_lines": 72,
+          "sha256": "89a29cf5318f3f63abb35c646d076c2573ad30f078f1ccdfc6e88b83b97086e6",
+          "source_commit": "caea9dbaeb26919c2bcff23a9f284d71b6807851"
         }
       ]
     },
@@ -286,15 +291,16 @@
     },
     {
       "path": "split_app_readme.tmpl",
-      "byte_length": 6885,
-      "sha256": "eb300f94122656d22d1ac391ee0fadcbb6cfef891fd0e4de6e4261043d6cb19f",
+      "byte_length": 6847,
+      "sha256": "bbf160015bfc9a4bd1f434d6d73ab2f48e484d21465214b3e768b0928454cc00",
       "layout": "UTF-8 Soracloud format template bytes with symbolic placeholders and LF endings",
       "source_preimages": [
         {
           "path": "../../../soracloud.rs",
-          "start_line": 18079,
-          "physical_lines": 167,
-          "sha256": "5f9542c0201cbc519976020533b85e3fda7354a5fc78ed6de2704fddd4545cbe"
+          "start_line": 18121,
+          "physical_lines": 165,
+          "sha256": "3bbd352d1e986dac56ea0197a9e7e3efe9ce288bf971f302c63df6fd255f996e",
+          "source_commit": "caea9dbaeb26919c2bcff23a9f284d71b6807851"
         }
       ]
     },
@@ -356,15 +362,16 @@
     },
     {
       "path": "webapp_readme.tmpl",
-      "byte_length": 1889,
-      "sha256": "f78313284e446e8c74c1fb91b08e49f6480565a2882ad77b52aace58796c254e",
+      "byte_length": 1929,
+      "sha256": "a6e938f83d8b6f3d15a88091eb8010faa2bb9a27e63c0de32e3a3030efe96b28",
       "layout": "UTF-8 Soracloud format template bytes with symbolic placeholders and LF endings",
       "source_preimages": [
         {
           "path": "../../../soracloud.rs",
-          "start_line": 18539,
-          "physical_lines": 59,
-          "sha256": "e60661fb650ce7cf9df755cd78986f2bcc6ccd0a432b1bfbf61046cea8074712"
+          "start_line": 18353,
+          "physical_lines": 58,
+          "sha256": "15d9ac6c440c9ca49accfa33a0fd36ebb232550480ad1f3ce5c2378f7793b3b5",
+          "source_commit": "caea9dbaeb26919c2bcff23a9f284d71b6807851"
         }
       ]
     },

@@ -215,7 +215,7 @@ use iroha_data_model::{
         soracloud_fhe_public_key_proof_open_verify_bounds,
         soracloud_fhe_public_key_proof_public_inputs_schema_hash_v1,
     },
-    sorafs::pin_registry::{ManifestDigest, PinStatus, StorageClass},
+    sorafs::pin_registry::{PinStatus, StorageClass},
     zk::{BackendTag, OpenVerifyEnvelope, OpenVerifyEnvelopeBounds, StarkFriOpenProofV1},
 };
 use iroha_primitives::{

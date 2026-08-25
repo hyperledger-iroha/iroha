@@ -4603,7 +4603,7 @@ fn build_pqfs_relay_response(
 }
 fn process_nk2_client_hello<R: TryCryptoRng>(
     client_init: &[u8],
-    parsed: ClientHelloParsed,
+    parsed: &ClientHelloParsed,
     params: &RuntimeParams<'_>,
     rng: &mut R,
     kem_suite: MlKemSuite,
@@ -4612,8 +4612,7 @@ fn process_nk2_client_hello<R: TryCryptoRng>(
     let client_static_public = parsed.client_static_public.ok_or_else(|| {
         HarnessError::Validation("NK2 handshake requires client static key".into())
     })?;
-    let client_forward = parsed.forward_kem_public.clone();
-    if client_forward.is_some() {
+    if parsed.forward_kem_public.is_some() {
         return Err(HarnessError::Validation(
             "NK2 handshake must not include forward KEM payload".into(),
         ));
@@ -4627,7 +4626,7 @@ fn process_nk2_client_hello<R: TryCryptoRng>(
     )?;
     let primary = RuntimeKemArtifacts::encapsulate(kem_suite, &parsed.client_kem_public)?;
     let transcript =
-        compute_relay_transcript(&parsed, &noise.nonce, params, HandshakeSuite::Nk2Hybrid)?;
+        compute_relay_transcript(parsed, &noise.nonce, params, HandshakeSuite::Nk2Hybrid)?;
     let (session_key, confirmation) = derive_session_key_and_confirmation(SessionKeyInputs {
         suite: HandshakeSuite::Nk2Hybrid,
         transcript_hash: &transcript,
@@ -4703,13 +4702,13 @@ impl Nk3ConfirmationBundle {
 }
 fn process_nk3_client_hello<R: TryCryptoRng>(
     client_commit: &[u8],
-    parsed: ClientHelloParsed,
+    parsed: &ClientHelloParsed,
     params: &RuntimeParams<'_>,
     rng: &mut R,
     kem_suite: MlKemSuite,
     relay_identity_key: &KeyPair,
 ) -> Result<(Vec<u8>, SessionSecrets), HarnessError> {
-    let requirements = Nk3HandshakeRequirements::collect(&parsed)?;
+    let requirements = Nk3HandshakeRequirements::collect(parsed)?;
     let noise = RelayNoiseState::generate(rng)?;
     let noise_xx_dh = derive_relay_noise_xx_dh(
         &noise.ephemeral_secret,
@@ -4720,7 +4719,7 @@ fn process_nk3_client_hello<R: TryCryptoRng>(
     let primary = RuntimeKemArtifacts::encapsulate(kem_suite, &parsed.client_kem_public)?;
     let forward = RuntimeKemArtifacts::encapsulate(kem_suite, &requirements.forward_public)?;
     let transcript = compute_relay_transcript(
-        &parsed,
+        parsed,
         &noise.nonce,
         params,
         HandshakeSuite::Nk3PqForwardSecure,
@@ -4817,12 +4816,22 @@ pub fn process_client_hello<R: TryCryptoRng>(
         });
     }
     match parsed.handshake_suite {
-        HandshakeSuite::Nk2Hybrid => {
-            process_nk2_client_hello(client_hello, parsed, params, rng, profile.suite(), key_pair)
-        }
-        HandshakeSuite::Nk3PqForwardSecure => {
-            process_nk3_client_hello(client_hello, parsed, params, rng, profile.suite(), key_pair)
-        }
+        HandshakeSuite::Nk2Hybrid => process_nk2_client_hello(
+            client_hello,
+            &parsed,
+            params,
+            rng,
+            profile.suite(),
+            key_pair,
+        ),
+        HandshakeSuite::Nk3PqForwardSecure => process_nk3_client_hello(
+            client_hello,
+            &parsed,
+            params,
+            rng,
+            profile.suite(),
+            key_pair,
+        ),
     }
 }
 fn validate_runtime_params(params: &RuntimeParams<'_>) -> Result<(), HarnessError> {

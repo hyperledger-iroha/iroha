@@ -777,6 +777,10 @@ impl ParliamentTimedOvnCastingContextResponseV1 {
     /// # Errors
     /// Returns a stable message for unsupported, oversized, noncanonical,
     /// cross-bound, or phase-inconsistent public state.
+    #[expect(
+        clippy::too_many_lines,
+        reason = "ordered public-context checks preserve stable error precedence"
+    )]
     pub fn validate_for_ballot(
         &self,
         expected_ballot_attempt_id: BallotAttemptId,

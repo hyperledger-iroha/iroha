@@ -79,11 +79,11 @@ const INSTRUCTION_PROVIDER_1_SEED: u8 = 0x90;
 const INSTRUCTION_PROVIDER_2_SEED: u8 = 0x91;
 const INSTRUCTION_PROVIDER_3_SEED: u8 = 0x92;
 #[cfg_attr(test, allow(dead_code))]
-pub(crate) const MUSUBI_FIXTURE_OUTPUTS: [&str; 2] = [
+pub const MUSUBI_FIXTURE_OUTPUTS: [&str; 2] = [
     "fixtures/musubi/instructions_v1.json",
     "fixtures/musubi/sdk_v1.json",
 ];
-pub(crate) fn fixture_network_id() -> NetworkId {
+pub fn fixture_network_id() -> NetworkId {
     let network_id = NetworkId::from_genesis_hash(HashOf::<BlockHeader>::from_untyped_unchecked(
         Hash::prehashed([FIXTURE_NETWORK_MARKER; Hash::LENGTH]),
     ));
@@ -94,12 +94,12 @@ pub(crate) fn fixture_network_id() -> NetworkId {
     );
     network_id
 }
-pub(crate) fn keypair(seed: u8) -> KeyPair {
+pub fn keypair(seed: u8) -> KeyPair {
     assert_ne!(seed, 0, "fixture signing seeds must be non-zero");
     KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519)
         .expect("fixed fixture seed derives an Ed25519 keypair")
 }
-pub(crate) fn account(seed: u8) -> AccountId {
+pub fn account(seed: u8) -> AccountId {
     AccountId::new(keypair(seed).public_key().clone())
 }
 fn package(home_dataspace: u64, scope: MusubiPackageScopeV1, name: &str) -> MusubiPackageIdV1 {
@@ -152,7 +152,7 @@ fn encode_hex(bytes: &[u8]) -> String {
     }
     output
 }
-fn render_instruction_case<T>(id: &str, value: T) -> Value
+fn render_instruction_case<T>(id: &str, value: &T) -> Value
 where
     T: Clone
         + Debug
@@ -164,22 +164,22 @@ where
         + 'static,
     for<'a> T: NoritoDeserialize<'a>,
 {
-    let semantic = json::to_value(&value).expect("encode typed instruction semantic JSON");
+    let semantic = json::to_value(value).expect("encode typed instruction semantic JSON");
     let semantic_decoded: T =
         json::from_value(semantic.clone()).expect("decode typed instruction semantic JSON");
-    assert_eq!(semantic_decoded, value);
-    let (bare_payload, header_flags) = norito::codec::encode_with_header_flags(&value);
+    assert_eq!(&semantic_decoded, value);
+    let (bare_payload, header_flags) = norito::codec::encode_with_header_flags(value);
     let concrete_frame =
         norito::core::frame_bare_with_header_flags::<T>(&bare_payload, header_flags)
             .expect("frame concrete instruction");
     let concrete_decoded: T =
         norito::decode_from_bytes(&concrete_frame).expect("decode concrete instruction frame");
-    assert_eq!(concrete_decoded, value);
+    assert_eq!(&concrete_decoded, value);
     assert_eq!(
         norito::core::to_bytes(&concrete_decoded).expect("re-encode concrete instruction frame"),
         concrete_frame
     );
-    let boxed: InstructionBox = value.clone().into();
+    let boxed: InstructionBox = (*value).clone().into();
     let wire_id = instruction_wire_id(&boxed)
         .expect("every fixture instruction must be registered")
         .to_owned();
@@ -194,7 +194,7 @@ where
             .as_any()
             .downcast_ref::<T>()
             .expect("registered instruction concrete type"),
-        &value
+        value
     );
     let (instruction_box_pair, pair_flags) = norito::codec::encode_with_header_flags(&boxed);
     assert_eq!(pair_flags, header_flags);
@@ -210,7 +210,7 @@ where
             .as_any()
             .downcast_ref::<T>()
             .expect("bare pair concrete type"),
-        &value
+        value
     );
     let (reencoded_pair, reencoded_pair_flags) =
         norito::codec::encode_with_header_flags(&pair_decoded);
@@ -228,7 +228,7 @@ where
             .as_any()
             .downcast_ref::<T>()
             .expect("standalone frame concrete type"),
-        &value
+        value
     );
     assert_eq!(
         norito::core::to_bytes(&standalone_decoded)
@@ -250,7 +250,11 @@ where
 }
 /// Construct the complete instruction fixture from concrete Rust values.
 #[must_use]
-pub(crate) fn instruction_document() -> Value {
+#[expect(
+    clippy::too_many_lines,
+    reason = "the ordered cases form the closed V1 instruction fixture inventory"
+)]
+pub fn instruction_document() -> Value {
     let accept = AcceptMusubiPackageMaintainerV1 {
         package: package(7, MusubiPackageScopeV1::DataspaceRoot, "math-utils"),
         invite_id: MusubiInviteIdV1::new([0x11; 32]),
@@ -1025,34 +1029,34 @@ pub(crate) fn instruction_document() -> Value {
         policy_action.action_digest()
     );
     let cases = vec![
-        render_instruction_case("accept-root-max-revision", accept),
-        render_instruction_case("revoke-domain-invitation", revoke),
-        render_instruction_case("register-alias-domain-target", alias),
-        render_instruction_case("assert-prerelease-digest", assertion),
-        render_instruction_case("retire-location-max-revision", retire),
-        render_instruction_case("unyank-domain-release-high-revision", unyank),
-        render_instruction_case("remove-root-maintainer-high-revision", remove),
+        render_instruction_case("accept-root-max-revision", &accept),
+        render_instruction_case("revoke-domain-invitation", &revoke),
+        render_instruction_case("register-alias-domain-target", &alias),
+        render_instruction_case("assert-prerelease-digest", &assertion),
+        render_instruction_case("retire-location-max-revision", &retire),
+        render_instruction_case("unyank-domain-release-high-revision", &unyank),
+        render_instruction_case("remove-root-maintainer-high-revision", &remove),
         render_instruction_case(
             "register-domain-namespace-max-generation",
-            register_namespace,
+            &register_namespace,
         ),
-        render_instruction_case("invite-domain-maintainer-max-expiry", invite),
-        render_instruction_case("promote-root-member-to-owner-high-revision", promote),
-        render_instruction_case("recover-domain-package-three-owners", recover),
-        render_instruction_case("retarget-one-character-alias-high-revision", retarget),
-        render_instruction_case("takedown-max-major-prerelease", takedown),
+        render_instruction_case("invite-domain-maintainer-max-expiry", &invite),
+        render_instruction_case("promote-root-member-to-owner-high-revision", &promote),
+        render_instruction_case("recover-domain-package-three-owners", &recover),
+        render_instruction_case("retarget-one-character-alias-high-revision", &retarget),
+        render_instruction_case("takedown-max-major-prerelease", &takedown),
         render_instruction_case(
             "register-archive-max-bounds-signed-receipt",
-            register_archive,
+            &register_archive,
         ),
         render_instruction_case(
             "register-provider-bundle-attestation",
-            register_provider_attestation,
+            &register_provider_attestation,
         ),
-        render_instruction_case("add-location-three-signed-providers", add_location),
-        render_instruction_case("publish-delegated-domain-release", publish),
-        render_instruction_case("replace-domain-metadata-high-revision", set_metadata),
-        render_instruction_case("set-allowlisted-policy-repriced-aliases", set_policy),
+        render_instruction_case("add-location-three-signed-providers", &add_location),
+        render_instruction_case("publish-delegated-domain-release", &publish),
+        render_instruction_case("replace-domain-metadata-high-revision", &set_metadata),
+        render_instruction_case("set-allowlisted-policy-repriced-aliases", &set_policy),
     ];
     norito::json!({
         "format": "iroha-musubi-instructions-v1",

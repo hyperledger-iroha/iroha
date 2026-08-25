@@ -364,6 +364,7 @@ async fn fetch_metrics(client: &Client, url: Url) -> Result<Snapshot> {
     }
     decoder.finish()
 }
+#[cfg(test)]
 fn parse_metrics(text: &str) -> Snapshot {
     let mut snap = Snapshot::default();
     for line in text.lines() {

@@ -5,14 +5,17 @@ use norito::{
     decode_from_bytes,
 };
 use std::collections::{BTreeMap, BTreeSet};
+#[cfg_attr(feature = "schema-structural", derive(iroha_schema::IntoSchema))]
 #[derive(Debug, PartialEq, Eq, Encode, Decode)]
 struct NamedPackedSelfDelimiting {
     domains: BTreeSet<String>,
     alias: Option<String>,
     metadata: BTreeMap<String, String>,
 }
+#[cfg_attr(feature = "schema-structural", derive(iroha_schema::IntoSchema))]
 #[derive(Debug, PartialEq, Eq, Encode, Decode)]
 struct TuplePackedSelfDelimiting(BTreeSet<String>, Option<String>, Vec<String>);
+#[cfg_attr(feature = "schema-structural", derive(iroha_schema::TypeId))]
 #[derive(Debug, PartialEq, Eq, Encode, Decode)]
 enum PackedSelfDelimitingEnum {
     Named {
@@ -21,6 +24,45 @@ enum PackedSelfDelimitingEnum {
         metadata: BTreeMap<String, String>,
     },
     Tuple(BTreeSet<String>, Option<String>, Vec<String>),
+}
+#[cfg(feature = "schema-structural")]
+#[derive(iroha_schema::IntoSchema)]
+#[allow(dead_code)]
+struct PackedSelfDelimitingEnumNamedSchema {
+    domains: BTreeSet<String>,
+    alias: Option<String>,
+    metadata: BTreeMap<String, String>,
+}
+#[cfg(feature = "schema-structural")]
+#[derive(iroha_schema::IntoSchema)]
+#[allow(dead_code)]
+struct PackedSelfDelimitingEnumTupleSchema(BTreeSet<String>, Option<String>, Vec<String>);
+#[cfg(feature = "schema-structural")]
+impl iroha_schema::IntoSchema for PackedSelfDelimitingEnum {
+    fn type_name() -> String {
+        "PackedSelfDelimitingEnum".to_owned()
+    }
+    fn update_schema_map(map: &mut iroha_schema::MetaMap) {
+        if map.contains_key::<Self>() {
+            return;
+        }
+        map.insert::<Self>(iroha_schema::Metadata::Enum(iroha_schema::EnumMeta {
+            variants: vec![
+                iroha_schema::EnumVariant {
+                    tag: "Named".to_owned(),
+                    discriminant: 0,
+                    ty: Some(core::any::TypeId::of::<PackedSelfDelimitingEnumNamedSchema>()),
+                },
+                iroha_schema::EnumVariant {
+                    tag: "Tuple".to_owned(),
+                    discriminant: 1,
+                    ty: Some(core::any::TypeId::of::<PackedSelfDelimitingEnumTupleSchema>()),
+                },
+            ],
+        }));
+        <PackedSelfDelimitingEnumNamedSchema as iroha_schema::IntoSchema>::update_schema_map(map);
+        <PackedSelfDelimitingEnumTupleSchema as iroha_schema::IntoSchema>::update_schema_map(map);
+    }
 }
 fn packed_struct_roundtrip<T>(value: &T) -> T
 where

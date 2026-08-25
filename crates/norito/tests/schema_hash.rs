@@ -25,6 +25,13 @@ enum StableEnum {
 #[derive(
     Debug, PartialEq, Eq, iroha_schema::IntoSchema, DeriveNoritoSerialize, DeriveNoritoDeserialize,
 )]
+#[cfg_attr(
+    feature = "schema-structural",
+    expect(
+        dead_code,
+        reason = "the default-schema fixture is exercised only by the type-name schema mode"
+    )
+)]
 struct DefaultSchemaStruct {
     value: u32,
 }

@@ -1003,8 +1003,8 @@ fn gov_propose_deploy_against_mock() {
     response_map.insert(
         "tx_instructions".to_string(),
         norito::json!([{
-            "wire_id": wire_id,
-            "payload_hex": hex::encode(framed),
+            "wire_id": (wire_id),
+            "payload_hex": (hex::encode(framed)),
         }]),
     );
     config_payload_map.insert(

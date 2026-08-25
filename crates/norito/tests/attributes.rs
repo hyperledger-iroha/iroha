@@ -27,6 +27,7 @@ const fn custom_default() -> u16 {
     41
 }
 
+#[cfg_attr(feature = "schema-structural", derive(iroha_schema::IntoSchema))]
 #[derive(Debug, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 struct TupleDefaults(
     u32,
@@ -34,6 +35,7 @@ struct TupleDefaults(
     #[norito(default = "custom_default")] u16,
 );
 
+#[cfg_attr(feature = "schema-structural", derive(iroha_schema::TypeId))]
 #[derive(Debug, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 enum NamedDecision {
     Accepted {
@@ -45,11 +47,71 @@ enum NamedDecision {
     },
 }
 
+#[cfg(feature = "schema-structural")]
+#[derive(iroha_schema::IntoSchema)]
+#[allow(dead_code)]
+struct NamedDecisionAcceptedSchema {
+    source: u32,
+    program_revision: Option<u64>,
+    marker: u16,
+}
+
+#[cfg(feature = "schema-structural")]
+impl iroha_schema::IntoSchema for NamedDecision {
+    fn type_name() -> String {
+        "NamedDecision".to_owned()
+    }
+
+    fn update_schema_map(map: &mut iroha_schema::MetaMap) {
+        if map.contains_key::<Self>() {
+            return;
+        }
+        map.insert::<Self>(iroha_schema::Metadata::Enum(iroha_schema::EnumMeta {
+            variants: vec![iroha_schema::EnumVariant {
+                tag: "Accepted".to_owned(),
+                discriminant: 0,
+                ty: Some(core::any::TypeId::of::<NamedDecisionAcceptedSchema>()),
+            }],
+        }));
+        <NamedDecisionAcceptedSchema as iroha_schema::IntoSchema>::update_schema_map(map);
+    }
+}
+
+#[cfg_attr(feature = "schema-structural", derive(iroha_schema::TypeId))]
 #[derive(NoritoSerialize)]
 enum IncompleteNamedDecision {
     Accepted { source: u32 },
 }
 
+#[cfg(feature = "schema-structural")]
+#[derive(iroha_schema::IntoSchema)]
+#[allow(dead_code)]
+struct IncompleteNamedDecisionAcceptedSchema {
+    source: u32,
+}
+
+#[cfg(feature = "schema-structural")]
+impl iroha_schema::IntoSchema for IncompleteNamedDecision {
+    fn type_name() -> String {
+        "IncompleteNamedDecision".to_owned()
+    }
+
+    fn update_schema_map(map: &mut iroha_schema::MetaMap) {
+        if map.contains_key::<Self>() {
+            return;
+        }
+        map.insert::<Self>(iroha_schema::Metadata::Enum(iroha_schema::EnumMeta {
+            variants: vec![iroha_schema::EnumVariant {
+                tag: "Accepted".to_owned(),
+                discriminant: 0,
+                ty: Some(core::any::TypeId::of::<IncompleteNamedDecisionAcceptedSchema>()),
+            }],
+        }));
+        <IncompleteNamedDecisionAcceptedSchema as iroha_schema::IntoSchema>::update_schema_map(map);
+    }
+}
+
+#[cfg_attr(feature = "schema-structural", derive(iroha_schema::TypeId))]
 #[derive(Debug, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 enum TupleDecision {
     Accepted(
@@ -59,16 +121,45 @@ enum TupleDecision {
     ),
 }
 
+#[cfg(feature = "schema-structural")]
+#[derive(iroha_schema::IntoSchema)]
+#[allow(dead_code)]
+struct TupleDecisionAcceptedSchema(u32, Option<u64>, u16);
+
+#[cfg(feature = "schema-structural")]
+impl iroha_schema::IntoSchema for TupleDecision {
+    fn type_name() -> String {
+        "TupleDecision".to_owned()
+    }
+
+    fn update_schema_map(map: &mut iroha_schema::MetaMap) {
+        if map.contains_key::<Self>() {
+            return;
+        }
+        map.insert::<Self>(iroha_schema::Metadata::Enum(iroha_schema::EnumMeta {
+            variants: vec![iroha_schema::EnumVariant {
+                tag: "Accepted".to_owned(),
+                discriminant: 0,
+                ty: Some(core::any::TypeId::of::<TupleDecisionAcceptedSchema>()),
+            }],
+        }));
+        <TupleDecisionAcceptedSchema as iroha_schema::IntoSchema>::update_schema_map(map);
+    }
+}
+
+#[cfg_attr(feature = "schema-structural", derive(iroha_schema::IntoSchema))]
 #[derive(NoritoSerialize)]
 enum IncompleteTupleDecision {
     Accepted(u32),
 }
 
+#[cfg_attr(feature = "schema-structural", derive(iroha_schema::IntoSchema))]
 #[derive(NoritoSerialize)]
 struct IncompleteSkipDefault {
     a: u32,
 }
 
+#[cfg_attr(feature = "schema-structural", derive(iroha_schema::IntoSchema))]
 #[derive(Debug, Default, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 enum DecisionMode {
     #[default]
@@ -76,12 +167,41 @@ enum DecisionMode {
     Manual,
 }
 
+#[cfg_attr(feature = "schema-structural", derive(iroha_schema::TypeId))]
 #[derive(Debug, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 enum DefaultedDecisionMode {
     Accepted {
         #[norito(default)]
         mode: DecisionMode,
     },
+}
+
+#[cfg(feature = "schema-structural")]
+#[derive(iroha_schema::IntoSchema)]
+#[allow(dead_code)]
+struct DefaultedDecisionModeAcceptedSchema {
+    mode: DecisionMode,
+}
+
+#[cfg(feature = "schema-structural")]
+impl iroha_schema::IntoSchema for DefaultedDecisionMode {
+    fn type_name() -> String {
+        "DefaultedDecisionMode".to_owned()
+    }
+
+    fn update_schema_map(map: &mut iroha_schema::MetaMap) {
+        if map.contains_key::<Self>() {
+            return;
+        }
+        map.insert::<Self>(iroha_schema::Metadata::Enum(iroha_schema::EnumMeta {
+            variants: vec![iroha_schema::EnumVariant {
+                tag: "Accepted".to_owned(),
+                discriminant: 0,
+                ty: Some(core::any::TypeId::of::<DefaultedDecisionModeAcceptedSchema>()),
+            }],
+        }));
+        <DefaultedDecisionModeAcceptedSchema as iroha_schema::IntoSchema>::update_schema_map(map);
+    }
 }
 
 fn binary_layouts() -> [u8; 3] {

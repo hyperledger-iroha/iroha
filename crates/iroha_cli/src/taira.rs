@@ -2840,6 +2840,7 @@ fn error_value(code: &str, message: &str) -> Value {
 mod tests {
     use super::*;
     use iroha::data_model::{DataSpaceId, nexus::FeeDebitSource};
+    use iroha_crypto::Hash;
     use iroha_i18n::{Bundle, Language, Localizer};
     use iroha_torii_shared::{
         FeeQuoteDecision, FeeQuoteObservation, FeeQuoteRequest, FeeQuoteResponse, uri as torii_uri,
@@ -4556,10 +4557,10 @@ mod tests {
                 .all(|ch| ch.is_ascii_lowercase() || ch.is_ascii_digit() || ch == '@')
         );
         for retired in ["Taira Rollout Canary!", "taira-rollout-canary", ""] {
-            build_alias(retired, key_pair.public_key(), "wonderland.universal")
+            let _ = build_alias(retired, key_pair.public_key(), "wonderland.universal")
                 .expect_err("alias prefixes are never sanitized or defaulted");
         }
-        build_alias(DEFAULT_ALIAS_PREFIX, key_pair.public_key(), "wonderland.")
+        let _ = build_alias(DEFAULT_ALIAS_PREFIX, key_pair.public_key(), "wonderland.")
             .expect_err("dataspace labels are never defaulted");
     }
     #[test]
@@ -4581,7 +4582,8 @@ mod tests {
             "https://taira.sora.org#fragment",
             "HTTPS://TAIRA.SORA.ORG",
         ] {
-            normalize_root_url(invalid).expect_err("noncanonical public roots must fail closed");
+            let _ = normalize_root_url(invalid)
+                .expect_err("noncanonical public roots must fail closed");
         }
     }
     #[test]
@@ -5001,7 +5003,7 @@ mod tests {
                 .expect("read config")
                 .contains("private_key = ")
         );
-        write_runtime_config(&path, &config)
+        let _ = write_runtime_config(&path, &config)
             .expect_err("an existing runtime config must never be replaced");
     }
     #[test]

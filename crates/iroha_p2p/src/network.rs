@@ -7356,9 +7356,9 @@ impl<T: Pload + message::ClassifyTopic, E: Enc + Sync> NetworkBaseHandle<T, E> {
     /// or capability mismatches).
     #[log(skip(identity_keys, shutdown_signal))]
     #[allow(clippy::too_many_lines, clippy::used_underscore_binding)]
-    #[expect(
+    #[allow(
         clippy::large_futures,
-        reason = "the source-sealed wrapper preserves exact startup delegation and avoids a release-path allocation"
+        reason = "the startup wrapper preserves direct delegation without a release-path allocation"
     )]
     pub async fn start_with_crypto(
         identity_keys: P2pIdentityKeys,

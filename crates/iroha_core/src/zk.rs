@@ -8918,10 +8918,6 @@ fn verify_ipa_open_envelope(proof: &ProofBox) -> bool {
             proof.as_ref(),
             metadata,
         ),
-        #[cfg(feature = "goldilocks_backend")]
-        DecodedEnvelope::Goldilocks { .. } => return false,
-        #[cfg(not(feature = "goldilocks_backend"))]
-        DecodedEnvelope::Goldilocks => return false,
         DecodedEnvelope::Bn254 {
             params,
             proof,
@@ -8937,6 +8933,7 @@ fn verify_ipa_open_envelope(proof: &ProofBox) -> bool {
             proof.as_ref(),
             metadata,
         ),
+        _ => return false,
     };
     res.is_ok()
 }

@@ -27,7 +27,7 @@ class JniSdkAndroidPairGuardTests(unittest.TestCase):
 
     def test_repository_inventory_is_exact(self) -> None:
         result = GUARD.audit_source(SOURCE)
-        self.assertEqual(94, result.pair_count)
+        self.assertEqual(91, result.pair_count)
         self.assertEqual(GUARD.EXPECTED_ABI_DIGEST, result.abi_digest)
         self.assertEqual(GUARD.EXPECTED_ATTRIBUTE_DIGEST, result.attribute_digest)
 
@@ -60,11 +60,20 @@ class JniSdkAndroidPairGuardTests(unittest.TestCase):
 
     def test_rejects_macro_expansion_drift(self) -> None:
         mutated = SOURCE.replace(
-            ") -> $return_type $body\n            $(#[$android_attribute])*",
-            ") -> $return_type { $body }\n            $(#[$android_attribute])*",
+            ") $(-> $return_type:ty)? $body:block\n        )*",
+            ") -> $return_type:ty $body:block\n        )*",
             1,
         )
         with self.assertRaisesRegex(GUARD.AuditError, "macro expansion contract changed"):
+            GUARD.audit_source(mutated)
+
+    def test_rejects_typed_kagemusha_forwarder_drift(self) -> None:
+        mutated = SOURCE.replace(
+            "nativeArtifactWriteV4 { handle long, chunk bytes }",
+            "nativeArtifactWriteV4 { chunk bytes, handle long }",
+            1,
+        )
+        with self.assertRaisesRegex(GUARD.AuditError, "forwarder invocation contract changed"):
             GUARD.audit_source(mutated)
 
 

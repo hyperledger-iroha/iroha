@@ -3,12 +3,10 @@
 //! The handle maintained here keeps per-peer `StreamingSession` records so that incoming
 //! control-plane frames (key updates, content-key rotations) can be validated and made
 //! available to higher-level components.
+use crate::secure_file_metadata::{self, SecureMetadata};
 #[cfg(feature = "telemetry")]
 use crate::telemetry::StreamingTelemetry;
-use crate::{
-    IrohaNetwork, NetworkMessage,
-    secure_file_metadata::{self, SecureMetadata},
-};
+use crate::{IrohaNetwork, NetworkMessage};
 use blake3::Hasher as Blake3Hasher;
 use data_events::{
     DomainEvent, StreamingPrivacyRelay, StreamingPrivacyRoute, StreamingRouteBinding,

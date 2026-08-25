@@ -2429,8 +2429,12 @@ impl GovernanceCertificateV1 {
     /// checks and never infers a missing result.
     ///
     /// # Errors
-    /// Returns GovernanceCertificateErrorV1 for an inert, duplicated,
+    /// Returns [`GovernanceCertificateErrorV1`] for an inert, duplicated,
     /// reordered, incomplete, non-approving, or temporally invalid certificate.
+    #[expect(
+        clippy::too_many_lines,
+        reason = "the closed certificate invariant set remains auditable as one validation pass"
+    )]
     pub fn validate(&self) -> Result<(), GovernanceCertificateErrorV1> {
         if self.proposal_content_id.as_bytes() == &[0; 32]
             || self.governance_attempt_id.as_bytes() == &[0; 32]
@@ -2498,12 +2502,19 @@ impl GovernanceCertificateV1 {
             {
                 return Err(GovernanceCertificateErrorV1::ZeroBinding);
             }
+            let request_id_matches = request.id == binding.sortition_request_id;
+            let governance_attempt_matches =
+                request.governance_attempt_id == self.governance_attempt_id;
+            let election_attempt_matches =
+                request.body_election_attempt_id == binding.election_attempt_id;
+            let body_matches = request.body == binding.body;
+            let beacon_session_matches = request.beacon_session_id == binding.beacon_session_id;
             if request.validate(None).is_err()
-                || request.id != binding.sortition_request_id
-                || request.governance_attempt_id != self.governance_attempt_id
-                || request.body_election_attempt_id != binding.election_attempt_id
-                || request.body != binding.body
-                || request.beacon_session_id != binding.beacon_session_id
+                || !request_id_matches
+                || !governance_attempt_matches
+                || !election_attempt_matches
+                || !body_matches
+                || !beacon_session_matches
             {
                 return Err(GovernanceCertificateErrorV1::SortitionRequestMismatch);
             }
@@ -2607,6 +2618,9 @@ impl GovernanceCertificateV1 {
                 {
                     return Err(GovernanceCertificateErrorV1::DuplicateBinding);
                 }
+                let body_result_is_in_opening_window = (ballot.opening_height
+                    ..=ballot.opening_deadline_height)
+                    .contains(&binding.result_height);
                 if ballot.registered_at_height == 0
                     || ballot.registration_close_height <= ballot.registered_at_height
                     || ballot.survivor_freeze_height <= ballot.registration_close_height
@@ -2624,8 +2638,7 @@ impl GovernanceCertificateV1 {
                     || ballot.tally.original_seats != binding.original_seats
                     || ballot.opening_height < ballot.release_height
                     || ballot.opening_height > ballot.opening_deadline_height
-                    || binding.result_height < ballot.opening_height
-                    || binding.result_height > ballot.opening_deadline_height
+                    || !body_result_is_in_opening_window
                 {
                     return Err(GovernanceCertificateErrorV1::InvalidLifecycle);
                 }
@@ -2759,7 +2772,8 @@ impl ProposalKind {
         match self {
             Self::DeployContract(_)
             | Self::ValidationFeePolicy(_)
-            | Self::ValidationFeePayoutLifecycle(_) => None,
+            | Self::ValidationFeePayoutLifecycle(_)
+            | Self::SorafsProviderGovernance(_) => None,
             Self::RuntimeUpgrade(proposal) => {
                 if proposal.manifest.start_height > maximum {
                     Some(
@@ -2780,7 +2794,6 @@ impl ProposalKind {
             Self::MusubiRegistryGovernance(action) => {
                 action.first_release_exact_json_u64_invariant_error(maximum)
             }
-            Self::SorafsProviderGovernance(_) => None,
         }
     }
 
@@ -3777,6 +3790,10 @@ mod tests {
         );
     }
     #[test]
+    #[expect(
+        clippy::too_many_lines,
+        reason = "the certificate audit keeps the complete body/ballot fixture and root-binding mutations together"
+    )]
     fn governance_certificate_v1_roundtrip_binds_body_and_ballot_roots() {
         let tally = ParliamentAggregateTallyV1 {
             original_seats: 500,

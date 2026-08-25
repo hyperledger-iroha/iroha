@@ -270,7 +270,7 @@ WAVE_TWO_TARGETS = (
 WAVE_TWO_MANIFEST_BASE_SHA256 = {
     "crates/iroha_derive": "93c00d79bedfb21c6f4be400b7090050faedd8beeac477ce119ef03695e30b35",
     "crates/iroha_monitor": "b939b6dacf84952700e3d4fe47d657c31cfa90b2a29894f9334edba541483bb5",
-    "crates/iroha_primitives": "e50a81a1a73a621cf671aaf80b82fbf490487e85518fc472177d10bb33947ed2",
+    "crates/iroha_primitives": "094bbfb1e32d123a20708cf0650b79985bd23b5edccc9b04ac771ae785fe4dc5",
     "crates/iroha_version_derive": "d652a0868d36147e19e196692830566858eed0a46b92b752ae451a93eaeb2977",
     "crates/iroha_zkp_halo2": "a36b5af199792222b2622bced949bac7599fea6e9d6137ab336543226f8152aa",
     "crates/soranet_pq": "09814d2ba4ed385c0683a0ecb7b8936b99f7df631391ce09dbe783e96c791c83",
@@ -285,21 +285,21 @@ WAVE_TWO_SOURCE_SHA256 = {
     "crates/iroha_derive/tests/container_enum_from_variant.rs": "f8a93d96864140846183f29253dbedf47a21980e2b171bf1bfb4c370f6b313af",
     "crates/iroha_derive/tests/enum_from_variant_attrs.rs": "bd4fc5f4611a55b4fe34837a265c4ed156ae56fea64ba7ab59bdad958d1ee093",
     "crates/iroha_derive/tests/ui.rs": "a4a0541a2832119a443d3d1b79826a8417090906e78479641d90c61e6e7b5408",
-    "crates/iroha_monitor/tests/attach_render.rs": "a556a01b6ebac2ad4820f3def963bb222f09e190d456e520ff61e7107d7dc4d2",
+    "crates/iroha_monitor/tests/attach_render.rs": "5a0a4d33f18592fdd0ec0bd801bebcbbbfa3236a8a891725f3ef053b450ac264",
     "crates/iroha_monitor/tests/http_limits.rs": "36fc8d7a4b767480ebd33994cd875825787ee09f6c93247e37763e73bffb37bc",
     "crates/iroha_monitor/tests/invalid_credentials.rs": "6802abad720812bd69e29f7ee620f7d6ff8f52ea49c322de0606c47851586c25",
-    "crates/iroha_monitor/tests/smoke.rs": "5b74f2816cd63b0e5ab354cc44b632499341b4364d3aab110db5263b0042ae0d",
+    "crates/iroha_monitor/tests/smoke.rs": "837dadf20cf4ad8c5fb6a1b03dbc12686c681e7597fc4e43cb2eeda98ddd11c9",
     "crates/iroha_primitives/tests/addr_parsing.rs": "609cdcf28f60920931fc88b584cab6d319bd6983eaf734fe746c39e53e2bb3d3",
     "crates/iroha_primitives/tests/numeric_inspect.rs": "5034969e36547a4b70294280f6ba2dbdec1089eae5b8f6aac4dbc51685205459",
     "crates/iroha_primitives/tests/ui.rs": "ca0d4e7a21ea77122e52f0ad9f2eb14c0a9d4865fb556db3ba3d935521e04818",
     "crates/iroha_version_derive/tests/codec.rs": "f4386043897cf21f4c4115ad453c1495a59d258b65e12471dc5ea75e116ccf46",
     "crates/iroha_version_derive/tests/json.rs": "8092c6769cdeec5ffde1cacf13626193c88324ae8d76a940cc41a5d29d21a041",
     "crates/iroha_version_derive/tests/ui.rs": "72fcf2f051e0f9d9d85a5918820d62e2d65168d4ad00d8cb7eb7584236776823",
-    "crates/iroha_zkp_halo2/tests/vega_engine_reachability.rs": "6350e46bd567e6eb2ea523e725e50fb93d76878c76244b27220456a692a520f9",
+    "crates/iroha_zkp_halo2/tests/vega_engine_reachability.rs": "6a014a9cbbc9482ff6796f86ec762bf1c699eeb014a0ac6db5d32939a049c11e",
     "crates/iroha_zkp_halo2/tests/vega_microsoft_cross_conformance.rs": "5cde89a58cffa1e77d578b20c44a92b30e924b6fe80eb9a3d56cc84b81039d23",
     "crates/soranet_pq/tests/kat_vectors.rs": "84b89d698051989013d4147dffd10d5261c741e352f213ad9150aa0b1c28321c",
     "crates/soranet_pq/tests/pq_kat.rs": "69491d6c86e58a8f3edb74d40ca46cd261801fbfbd2f459cfcd86cfe64fcc98a",
-    "crates/sorafs_node/tests/cli.rs": "7e8d976e7fc2e1496d4d5524191faa0d8f0268138c13ad8e6c61273d9703ff43",
+    "crates/sorafs_node/tests/cli.rs": "ba3232c0349859e47003b163faf21b7cc4a0b86f3a3217f0c9c2750a0ec6ef1f",
     "crates/sorafs_node/tests/pin_workflows.rs": "24e7d0547db730c3eb561c55d606b4f5526309b29432923d048f9b511e8f675d",
     "mochi/mochi-core/tests/composer_drafts.rs": "9aee3bade320bf3c19c9cb00cd8d2e8dab96250d3e91c058b97331bac4daf32b",
     "mochi/mochi-core/tests/torii_streams.rs": "9eeff756579057756031e656fe84e404d0931461b06c8afcce035a9327a6bdc0",
@@ -308,7 +308,7 @@ WAVE_TWO_SOURCE_SHA256 = {
     "tools/soranet-handshake-harness/tests/fixtures_verify.rs": "8487b4d970bdf1cdbab49a344bfbc07c7e7e2e4b3ca701f97c8811952d7e48dc",
     "tools/soranet-handshake-harness/tests/interop_parity.rs": "8f6fdaa1660770c86bd0d5a1c1c6c6b8cd61fdbf6bef95749c9694e1896aa745",
     "tools/soranet-handshake-harness/tests/perf_gate.rs": "daa16e6ec412927c7a6adc7056b34c22e69e9fb6be4fd934aa43bfa1c49dbff2",
-    "tools/soranet-handshake-harness/tests/simulate_cli.rs": "bf336921bcf4832dccab35e2adf36f64d606db46b76c53b8e42d5f56c52ff9c2",
+    "tools/soranet-handshake-harness/tests/simulate_cli.rs": "da3e01bfc1434feabbce2e46ec22fb420a37d779cc1c74459caa8283da241363",
 }
 
 WAVE_TWO_TARGET_INVENTORY_SHA256 = (
@@ -318,7 +318,7 @@ WAVE_TWO_MODULE_INVENTORY_SHA256 = (
     "931d70b2ecfbf8865ee9e1c9ed4486b4280d508cb109776b52b8e4397bed56f6"
 )
 WAVE_TWO_TEST_INVENTORY_SHA256 = (
-    "5ed15c8aa7951bbab01d42c03820f284ccfc6e4a793b911eb66ed5495bf76d30"
+    "d1f595e10d9f0c50607357285fdb8d4a2ba2fc235f1925c38262f98fb44acccc"
 )
 
 SERIAL_GUARD_SOURCE = """fn serial_guard() -> std::sync::MutexGuard<'static, ()> {
@@ -543,7 +543,7 @@ def validate_wave_two(sources: dict[str, str] | None = None) -> None:
         for attribute, name in _test_items(source):
             test_rows.append(f"{path}\0{attribute}\0{name}\n")
     test_digest = hashlib.sha256("".join(test_rows).encode()).hexdigest()
-    if len(test_rows) != 60 or test_digest != WAVE_TWO_TEST_INVENTORY_SHA256:
+    if len(test_rows) != 64 or test_digest != WAVE_TWO_TEST_INVENTORY_SHA256:
         raise AssertionError("wave-two test ID, attribute, or order drifted")
 
 
@@ -713,7 +713,7 @@ WAVE_THREE_SOURCE_SHA256 = {
     "crates/iroha/tests/tx_ttl.rs": "7c17dbea1faa9569c7fe481a850f48fc59476316eac99d93c7509bdde62f6c82",
     "crates/iroha_p2p/tests/mod.rs": "3f464bb6ad0588884947c4e2c557bf8ce89ccaa0f8f83b872aab2ad9b1bcf118",
     "crates/iroha_p2p/tests/retired_relay_surface.rs": "e6199a3e93277a89ea49b2fcb22628a34f59473f26b7199a07201233d5bdd000",
-    "crates/norito_derive/tests/strict_json.rs": "6dc05f698def2803c35c3e08526ba6f7fb29d7a7d86714662f415503f9de34cb",
+    "crates/norito_derive/tests/strict_json.rs": "1022432b2449e94b613404c68319cc8803a005c185826c7b47c8e4fc1615c206",
     "crates/norito_derive/tests/ui.rs": "0d9b0871576c8f2c2f475c08c532a61e298959f2937236d0b24240b3e9010536",
     "crates/sorafs_chunker/tests/backpressure.rs": "6a633a8e836441f35e952ca526d225f5d8b60cb42bcf26d2db08635d91c39363",
     "crates/sorafs_chunker/tests/one_gib.rs": "d9457984ecff184b50f38cd4b791a84bb3bf518a8696d34fba2cb68dcf60d547",
@@ -730,7 +730,7 @@ WAVE_THREE_MODULE_INVENTORY_SHA256 = (
     "d036081bdc704d58b0ac69272555570adb2d86437c3d3185333cd4e3c40c7ae0"
 )
 WAVE_THREE_TEST_INVENTORY_SHA256 = (
-    "3bd3ea43b20a472f3e5656b3ae6096e8fe7a348136c6559b21549752a34f257e"
+    "ba62f8e3b79609f2afb5a393fe5f2cb754a648963fd89f4fe81d8fbc0eb4db51"
 )
 WAVE_THREE_DOC_PATH = "specs/sorafs/chunker_profile_authoring.md"
 WAVE_THREE_OLD_DOC_COMMAND = (
@@ -890,7 +890,7 @@ def validate_wave_three(
         for attributes, name in _wave_three_test_items(source):
             test_rows.append(f"{path}\0{attributes}\0{name}\n")
     test_digest = hashlib.sha256("".join(test_rows).encode()).hexdigest()
-    if len(test_rows) != 36 or test_digest != WAVE_THREE_TEST_INVENTORY_SHA256:
+    if len(test_rows) != 37 or test_digest != WAVE_THREE_TEST_INVENTORY_SHA256:
         raise AssertionError("wave-three test ID, attribute, or order drifted")
 
     docs = sources[WAVE_THREE_DOC_PATH]
@@ -1114,14 +1114,14 @@ WAVE_FOUR_ROOT_MODULES = {
 }
 
 WAVE_FOUR_MANIFEST_BASE_SHA256 = {
-    "crates/iroha_core": "c2c3c34263cb9a4199518ee55ff1f081c00199460fe8fdc2610fde36c17034e1",
-    "crates/iroha_data_model": "2cc2b7167159ef10fdde5dd493a1298a08f6a79729fdde111e17d767c1b5396e",
+    "crates/iroha_core": "c6fb98ed5052fd5e2c2ecf0f32845eb28f21430a60e48bfbc661036acb8229a6",
+    "crates/iroha_data_model": "a118894c9a3465a9532ae6ecc2358753ef41de84e6346a2b328c8183f421ea20",
     "crates/iroha_data_model_derive": "9d6ae350da056233903b17e51a6d6c616b39060a0e2916ace12b20604b13fbb1",
 }
 
 WAVE_FOUR_SOURCE_SHA256 = {
     "crates/iroha_core/tests/swift_confidential_unshield_redeem.rs": "158977f8837214618d7e9aa4623b58b0b278f71488528c9b015b682a1f74fb66",
-    "crates/iroha_core/tests/kaigi_privacy.rs": "a4aa54ac64369f3335c017d05dd5392b36284cba671105546caa24b94c800040",
+    "crates/iroha_core/tests/kaigi_privacy.rs": "ca7b75630e8256409d8dc56a8432f576d0d1bd08680de03db625dcbd255dfc06",
     "crates/iroha_core/tests/kagemusha_artifact_v4_streaming.rs": "cd36e1946b112a27381760e32b6b67e52af3ef9bb94224c1a1025c224abf6bee",
     "crates/iroha_core/tests/common/world_fixture.rs": "0b5a48b01d34081f8f1948c4557c2aaf673ffea21f24a7680e76437e9ba6fdbf",
     "crates/iroha_data_model/tests/query_serialization_allocations.rs": "d737cadc0ed62a5f78aa95af8667edd7383d04ad7d5f28804b04114da1946133",
@@ -1172,7 +1172,7 @@ WAVE_FOUR_MODULE_INVENTORY_SHA256 = (
     "c28fc0e6af8901152d4da26c538661e9cd865fac5e045ffdd83dc7a35f3db465"
 )
 WAVE_FOUR_TEST_INVENTORY_SHA256 = (
-    "555378335996d3ac24f1682c4738db0450c578e337f8f219ad4a174e48de943e"
+    "ca7bd522f46077145181d42a826d73102285d3db01e2a4205114bad17498c71e"
 )
 
 
@@ -1373,9 +1373,9 @@ class WaveFourIntegrationTargetConsolidationTest(unittest.TestCase):
             _replace_once(
                 sources,
                 "crates/iroha_core/tests/kaigi_privacy.rs",
-                "#[test]\nfn kaigi_privacy_join_updates_record_and_private_leave_is_rejected()",
+                "#[test]\nfn kaigi_privacy_join_fails_closed_until_authority_is_bound()",
                 "#[ignore]\n#[test]\n"
-                "fn kaigi_privacy_join_updates_record_and_private_leave_is_rejected()",
+                "fn kaigi_privacy_join_fails_closed_until_authority_is_bound()",
             ),
             _replace_once(
                 sources,

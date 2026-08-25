@@ -166,10 +166,10 @@ LOCK_PIN = FilePin(
 REPLACEMENT_PINS = (
     FilePin(
         "crates/iroha_core/src/streaming.rs",
-        "97328024c7ae0fe0d07a81d3198893ac237de1a8",
-        "e09177dcf832f61971ea5c7cac6255c9f2429265a7b9c93d4d0054813b8324c9",
+        "e280345a3c0d211e16137d88cc522c0305ee2f26",
+        "48535dd18a998c8196782b7ba4727af9f81674d54923a3c5b3fe0c5606b1a50d",
         258_160,
-        6_405,
+        6_403,
     ),
     FilePin(
         "crates/norito/examples/telemetry_dump.rs",

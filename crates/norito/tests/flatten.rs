@@ -2,12 +2,14 @@ use norito::{
     NoritoDeserialize, NoritoSerialize,
     core::{self as norito_core, DecodeFlagsGuard, DecodeFromSlice, header_flags},
 };
+#[cfg_attr(feature = "schema-structural", derive(iroha_schema::IntoSchema))]
 #[derive(Debug, Clone, PartialEq, NoritoSerialize, NoritoDeserialize)]
 #[norito(decode_from_slice)]
 struct InnerSelector {
     first: Option<u32>,
     second: Option<String>,
 }
+#[cfg_attr(feature = "schema-structural", derive(iroha_schema::IntoSchema))]
 #[derive(Debug, Clone, PartialEq, NoritoSerialize, NoritoDeserialize)]
 #[norito(decode_from_slice)]
 struct OuterRequest {

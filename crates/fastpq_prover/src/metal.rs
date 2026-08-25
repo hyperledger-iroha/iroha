@@ -6849,10 +6849,10 @@ mod tests {
         state.record_launch(0, start + Duration::from_millis(1));
         state.record_completion(0, start + Duration::from_millis(2));
         state.record_completion(0, start + Duration::from_millis(3));
-        let stats = state.snapshot(2);
-        assert_eq!(stats.dispatch_count, 2);
-        assert_eq!(stats.max_in_flight, 2);
-        assert_eq!(stats.overlap_ms, 1.0);
+        let snapshot = state.snapshot(2);
+        assert_eq!(snapshot.dispatch_count, 2);
+        assert_eq!(snapshot.max_in_flight, 2);
+        assert_eq!(snapshot.overlap_ms, 1.0);
     }
     #[test]
     fn bounded_ticket_window_drains_in_fifo_order() {
@@ -6925,8 +6925,10 @@ mod tests {
     }
     #[test]
     fn poseidon_dispatch_staging_uses_deeper_completion_backed_pipe() {
-        assert!(super::POSEIDON_DISPATCH_PIPE_DEPTH > 1);
-        assert!(super::POSEIDON_DISPATCH_PIPE_DEPTH <= super::DEFAULT_MAX_COMMAND_BUFFERS);
+        const {
+            assert!(super::POSEIDON_DISPATCH_PIPE_DEPTH > 1);
+            assert!(super::POSEIDON_DISPATCH_PIPE_DEPTH <= super::DEFAULT_MAX_COMMAND_BUFFERS);
+        }
     }
     #[test]
     fn column_staging_stats_capture_events() {

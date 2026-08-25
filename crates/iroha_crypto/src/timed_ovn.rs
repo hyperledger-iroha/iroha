@@ -424,7 +424,7 @@ impl TimedOvnOfficialReleaseAuditStatementV1 {
         Ok(statement)
     }
 
-    fn to_wire_prefix(&self) -> [u8; TIMED_OVN_OFFICIAL_RELEASE_AUDIT_STATEMENT_BYTES_V1] {
+    fn to_wire_prefix(self) -> [u8; TIMED_OVN_OFFICIAL_RELEASE_AUDIT_STATEMENT_BYTES_V1] {
         let mut bytes = [0_u8; TIMED_OVN_OFFICIAL_RELEASE_AUDIT_STATEMENT_BYTES_V1];
         let mut cursor = 0_usize;
         append_fixed(
@@ -537,6 +537,10 @@ impl TimedOvnOfficialReleaseAuditManifestV1 {
     }
 
     /// Encode the complete canonical fixed-width manifest.
+    #[expect(
+        clippy::wrong_self_convention,
+        reason = "the established canonical encoding API accepts a shared reference"
+    )]
     #[must_use]
     pub fn to_bytes(&self) -> [u8; TIMED_OVN_OFFICIAL_RELEASE_AUDIT_MANIFEST_BYTES_V1] {
         let mut bytes = [0_u8; TIMED_OVN_OFFICIAL_RELEASE_AUDIT_MANIFEST_BYTES_V1];
@@ -632,18 +636,18 @@ pub fn timed_ovn_parameter_hash_v1() -> [u8; 32] {
         hasher.update(field);
     }
 
+    fn encode_width(width: usize) -> [u8; 4] {
+        u32::try_from(width)
+            .expect("fixed timed-OVN suite width fits u32")
+            .to_be_bytes()
+    }
+
     let mut hasher = Sha256::new();
     update_field(&mut hasher, PARAMETER_PROFILE_DOMAIN_V1);
     update_field(&mut hasher, b"BLS12-381-GT-FP12-BE576-G2-COMPRESSED");
     update_field(&mut hasher, &TIMED_OVN_PROTOCOL_VERSION_V1.to_be_bytes());
-    update_field(
-        &mut hasher,
-        &(TIMED_OVN_CHOICE_COUNT_V1 as u32).to_be_bytes(),
-    );
-    update_field(
-        &mut hasher,
-        &(TIMED_OVN_MAX_PARTICIPANTS_V1 as u32).to_be_bytes(),
-    );
+    update_field(&mut hasher, &encode_width(TIMED_OVN_CHOICE_COUNT_V1));
+    update_field(&mut hasher, &encode_width(TIMED_OVN_MAX_PARTICIPANTS_V1));
     for width in [
         TIMED_OVN_GT_BYTES_V1,
         TIMED_OVN_G2_BYTES_V1,
@@ -652,7 +656,7 @@ pub fn timed_ovn_parameter_hash_v1() -> [u8; 32] {
         REGISTRATION_WIRE_BYTES_V1,
         BALLOT_WIRE_BYTES_V1,
     ] {
-        update_field(&mut hasher, &(width as u32).to_be_bytes());
+        update_field(&mut hasher, &encode_width(width));
     }
     let transcript_fields: [&[u8]; 10] = [
         SESSION_DOMAIN_V1,
@@ -842,7 +846,7 @@ impl GtElement {
         // obtains it from a subgroup-checked pairing or canonical decoder, for
         // which conjugation is the target-group inverse.  The function mutates
         // exactly the referenced value and retains no pointer.
-        unsafe { blst::blst_fp12_conjugate(&mut inverse) };
+        unsafe { blst::blst_fp12_conjugate(&raw mut inverse) };
         Self(inverse)
     }
 }
@@ -854,13 +858,13 @@ fn fp_from_bendian(bytes: &[u8; FP_BYTES]) -> blst_fp {
     // valid, aligned output.  blst reads 48 bytes, initializes `value`, and
     // retains neither pointer.  The caller enforces canonicality by exactly
     // re-encoding the complete fp12 value before accepting it.
-    unsafe { blst::blst_fp_from_bendian(&mut value, bytes.as_ptr()) };
+    unsafe { blst::blst_fp_from_bendian(&raw mut value, bytes.as_ptr()) };
     value
 }
 
-fn select_fp12(left: blst_fp12, right: blst_fp12, bit: u8) -> blst_fp12 {
+fn select_fp12(left: &blst_fp12, right: &blst_fp12, bit: u8) -> blst_fp12 {
     let mask = 0_u64.wrapping_sub(u64::from(bit & 1));
-    let mut selected = left;
+    let mut selected = *left;
     for fp6 in 0..2 {
         for fp2 in 0..3 {
             for fp in 0..2 {
@@ -875,13 +879,13 @@ fn select_fp12(left: blst_fp12, right: blst_fp12, bit: u8) -> blst_fp12 {
     selected
 }
 
-fn ct_gt_scalar_mul(base: GtElement, scalar_be: &ScalarBytes) -> GtElement {
+fn ct_gt_scalar_mul(base: &GtElement, scalar_be: &ScalarBytes) -> GtElement {
     let mut ignored = [0_usize; 3];
     ct_gt_scalar_mul_inner::<false>(base, scalar_be, &mut ignored)
 }
 
 fn ct_gt_scalar_mul_inner<const COUNT: bool>(
-    base: GtElement,
+    base: &GtElement,
     scalar_be: &ScalarBytes,
     counts: &mut [usize; 3],
 ) -> GtElement {
@@ -889,9 +893,9 @@ fn ct_gt_scalar_mul_inner<const COUNT: bool>(
     for byte in scalar_be {
         for shift in (0..8).rev() {
             let squared = accumulator.multiply(accumulator);
-            let multiplied = squared.multiply(base);
+            let multiplied = squared.multiply(*base);
             let bit = (byte >> shift) & 1;
-            accumulator = GtElement(select_fp12(squared.0, multiplied.0, bit));
+            accumulator = GtElement(select_fp12(&squared.0, &multiplied.0, bit));
             if COUNT {
                 counts[0] += 1;
                 counts[1] += 1;
@@ -1040,8 +1044,8 @@ impl TimedOvnRegistrationV1 {
                 &self.public_keys[option],
                 &self.proofs[option].commitment,
             )?;
-            let lhs = ct_gt_scalar_mul(generator, &response.to_bytes_be());
-            let rhs = commitment.multiply(ct_gt_scalar_mul(public_key, &challenge.to_bytes_be()));
+            let lhs = ct_gt_scalar_mul(&generator, &response.to_bytes_be());
+            let rhs = commitment.multiply(ct_gt_scalar_mul(&public_key, &challenge.to_bytes_be()));
             if lhs != rhs {
                 return Err(TimedOvnError::InvalidProofOfPossession);
             }
@@ -1103,8 +1107,8 @@ impl TimedOvnRegistrationSecretV1 {
             let nonce_bytes = Zeroizing::new(random_nonzero_scalar_bytes(rng)?);
             let secret = decode_scalar(&secret_bytes)?;
             let nonce = decode_scalar(&nonce_bytes)?;
-            let public_key = ct_gt_scalar_mul(generator, &secret_bytes).to_bytes();
-            let commitment = ct_gt_scalar_mul(generator, &nonce_bytes).to_bytes();
+            let public_key = ct_gt_scalar_mul(&generator, &secret_bytes).to_bytes();
+            let commitment = ct_gt_scalar_mul(&generator, &nonce_bytes).to_bytes();
             let challenge =
                 pop_challenge(session, &participant_hash, option, &public_key, &commitment)?;
             scalar_bytes[option] = secret_bytes;
@@ -1156,6 +1160,10 @@ impl TimedOvnRosterV1 {
     ///
     /// Returns [`TimedOvnError`] unless registrations are already ordered,
     /// proof-valid, unique, nonempty, and within the v1 bound.
+    #[expect(
+        clippy::large_types_passed_by_value,
+        reason = "the public constructor stores the frozen session and preserves its established ownership API"
+    )]
     pub fn new(
         session: TimedOvnSessionV1,
         registrations: Vec<TimedOvnRegistrationV1>,
@@ -1254,6 +1262,10 @@ impl TimedOvnSurvivorRosterV1 {
     ///
     /// Returns [`TimedOvnError`] for a reordered/unknown survivor, mismatched
     /// future identity, malformed release term, or identity masking key.
+    #[expect(
+        clippy::large_types_passed_by_value,
+        reason = "the public constructor stores the release identity and preserves its established ownership API"
+    )]
     pub fn new(
         roster: &TimedOvnRosterV1,
         survivor_ids: &[[u8; 32]],
@@ -1333,7 +1345,7 @@ impl TimedOvnSurvivorRosterV1 {
             })
             .map_err(|_| TimedOvnError::UnknownParticipant)?;
         let mut points = [[0_u8; TIMED_OVN_GT_BYTES_V1]; TIMED_OVN_CHOICE_COUNT_V1];
-        for option in 0..TIMED_OVN_CHOICE_COUNT_V1 {
+        for (option, point) in points.iter_mut().enumerate() {
             let mut mask = GtElement::identity();
             for registration in &self.registrations[..index] {
                 mask = mask.multiply(GtElement::from_bytes(
@@ -1349,7 +1361,7 @@ impl TimedOvnSurvivorRosterV1 {
             if mask.is_identity() {
                 return Err(TimedOvnError::IdentityElement);
             }
-            points[option] = mask.to_bytes();
+            *point = mask.to_bytes();
         }
         Ok(TimedOvnMaskingKeysV1 {
             session_digest: self.session.digest(),
@@ -1595,16 +1607,15 @@ impl TimedOvnMaskedBallotV1 {
         let challenges = decode_scalar_array(&self.proof.challenges)?;
         let responses_x = decode_scalar_matrix(&self.proof.responses_x)?;
         let responses_r = decode_scalar_matrix(&self.proof.responses_r)?;
-        let commitments = reconstruct_or_commitments(
-            &public_keys,
-            &mask_points,
-            &ephemerals,
-            &ballot_points,
-            release_term,
-            &challenges,
-            &responses_x,
-            &responses_r,
-        )?;
+        let statements = OrProofStatements {
+            public_keys: &public_keys,
+            masks: &mask_points,
+            ephemerals: &ephemerals,
+            ballot_points: &ballot_points,
+            release_term: &release_term,
+        };
+        let commitments =
+            reconstruct_or_commitments(&statements, &challenges, &responses_x, &responses_r)?;
         let expected = ballot_challenge(
             survivors,
             &self.participant_hash,
@@ -1646,6 +1657,10 @@ impl TimedOvnRegistrationSecretV1 {
     ///
     /// Returns [`TimedOvnError`] for a secret/binding mismatch, randomness
     /// failure, or degenerate frozen survivor context.
+    #[expect(
+        clippy::too_many_lines,
+        reason = "keeping the OR-proof construction contiguous makes transcript ordering and zeroization auditable"
+    )]
     pub fn cast_ballot_with_rng<R: TryCryptoRng + ?Sized>(
         &self,
         survivors: &TimedOvnSurvivorRosterV1,
@@ -1664,8 +1679,8 @@ impl TimedOvnRegistrationSecretV1 {
         let public_keys = decode_gt_array(&registration.public_keys, false)?;
         let mask_points = decode_gt_array(&masks.points, false)?;
         let generator = target_generator()?;
-        for option in 0..TIMED_OVN_CHOICE_COUNT_V1 {
-            if ct_gt_scalar_mul(generator, &self.scalar_bytes[option]) != public_keys[option] {
+        for (option, public_key) in public_keys.iter().enumerate() {
+            if ct_gt_scalar_mul(&generator, &self.scalar_bytes[option]) != *public_key {
                 return Err(TimedOvnError::SecretMismatch);
             }
         }
@@ -1690,9 +1705,9 @@ impl TimedOvnRegistrationSecretV1 {
             } else {
                 GtElement::identity()
             };
-            let commitment = ct_gt_scalar_mul(mask_points[option], &self.scalar_bytes[option])
+            let commitment = ct_gt_scalar_mul(&mask_points[option], &self.scalar_bytes[option])
                 .multiply(vote)
-                .multiply(ct_gt_scalar_mul(release_term, &r_bytes[option]));
+                .multiply(ct_gt_scalar_mul(&release_term, &r_bytes[option]));
             if commitment.is_identity() {
                 return Err(TimedOvnError::IdentityElement);
             }
@@ -1713,6 +1728,13 @@ impl TimedOvnRegistrationSecretV1 {
         let mut commitments = OrCommitments::identity();
         let ephemerals = decode_g2_array(&u)?;
         let ballot_points = decode_gt_array(&c, false)?;
+        let statements = OrProofStatements {
+            public_keys: &public_keys,
+            masks: &mask_points,
+            ephemerals: &ephemerals,
+            ballot_points: &ballot_points,
+            release_term: &release_term,
+        };
         for branch in 0..TIMED_OVN_CHOICE_COUNT_V1 {
             if branch == true_branch {
                 for option in 0..TIMED_OVN_CHOICE_COUNT_V1 {
@@ -1720,11 +1742,11 @@ impl TimedOvnRegistrationSecretV1 {
                     true_nonce_r[option] = random_nonzero_scalar_bytes(rng)?;
                     let nonce_r = decode_scalar(&true_nonce_r[option])?;
                     commitments.x[branch][option] =
-                        ct_gt_scalar_mul(generator, &true_nonce_x[option]);
+                        ct_gt_scalar_mul(&generator, &true_nonce_x[option]);
                     commitments.r[branch][option] = G2Projective::generator() * nonce_r;
                     commitments.relation[branch][option] =
-                        ct_gt_scalar_mul(mask_points[option], &true_nonce_x[option])
-                            .multiply(ct_gt_scalar_mul(release_term, &true_nonce_r[option]));
+                        ct_gt_scalar_mul(&mask_points[option], &true_nonce_x[option])
+                            .multiply(ct_gt_scalar_mul(&release_term, &true_nonce_r[option]));
                 }
             } else {
                 challenges[branch] = decode_scalar(&random_nonzero_scalar_bytes(rng)?)?;
@@ -1735,12 +1757,8 @@ impl TimedOvnRegistrationSecretV1 {
                         decode_scalar(&random_nonzero_scalar_bytes(rng)?)?;
                 }
                 reconstruct_branch(
+                    &statements,
                     branch,
-                    &public_keys,
-                    &mask_points,
-                    &ephemerals,
-                    &ballot_points,
-                    release_term,
                     challenges[branch],
                     &responses_x[branch],
                     &responses_r[branch],
@@ -1825,12 +1843,16 @@ impl OrCommitments {
     }
 }
 
+struct OrProofStatements<'a> {
+    public_keys: &'a [GtElement; TIMED_OVN_CHOICE_COUNT_V1],
+    masks: &'a [GtElement; TIMED_OVN_CHOICE_COUNT_V1],
+    ephemerals: &'a [G2Affine; TIMED_OVN_CHOICE_COUNT_V1],
+    ballot_points: &'a [GtElement; TIMED_OVN_CHOICE_COUNT_V1],
+    release_term: &'a GtElement,
+}
+
 fn reconstruct_or_commitments(
-    public_keys: &[GtElement; TIMED_OVN_CHOICE_COUNT_V1],
-    masks: &[GtElement; TIMED_OVN_CHOICE_COUNT_V1],
-    ephemerals: &[G2Affine; TIMED_OVN_CHOICE_COUNT_V1],
-    ballot_points: &[GtElement; TIMED_OVN_CHOICE_COUNT_V1],
-    release_term: GtElement,
+    statements: &OrProofStatements<'_>,
     challenges: &[Scalar; TIMED_OVN_CHOICE_COUNT_V1],
     responses_x: &[[Scalar; TIMED_OVN_CHOICE_COUNT_V1]; TIMED_OVN_CHOICE_COUNT_V1],
     responses_r: &[[Scalar; TIMED_OVN_CHOICE_COUNT_V1]; TIMED_OVN_CHOICE_COUNT_V1],
@@ -1838,12 +1860,8 @@ fn reconstruct_or_commitments(
     let mut commitments = OrCommitments::identity();
     for branch in 0..TIMED_OVN_CHOICE_COUNT_V1 {
         reconstruct_branch(
+            statements,
             branch,
-            public_keys,
-            masks,
-            ephemerals,
-            ballot_points,
-            release_term,
             challenges[branch],
             &responses_x[branch],
             &responses_r[branch],
@@ -1854,17 +1872,12 @@ fn reconstruct_or_commitments(
     Ok(commitments)
 }
 
-#[allow(clippy::too_many_arguments)]
 fn reconstruct_branch(
+    statements: &OrProofStatements<'_>,
     branch: usize,
-    public_keys: &[GtElement; TIMED_OVN_CHOICE_COUNT_V1],
-    masks: &[GtElement; TIMED_OVN_CHOICE_COUNT_V1],
-    ephemerals: &[G2Affine; TIMED_OVN_CHOICE_COUNT_V1],
-    ballot_points: &[GtElement; TIMED_OVN_CHOICE_COUNT_V1],
-    release_term: GtElement,
     challenge: Scalar,
-    responses_x: &[Scalar; TIMED_OVN_CHOICE_COUNT_V1],
-    responses_r: &[Scalar; TIMED_OVN_CHOICE_COUNT_V1],
+    secret_responses: &[Scalar; TIMED_OVN_CHOICE_COUNT_V1],
+    randomness_responses: &[Scalar; TIMED_OVN_CHOICE_COUNT_V1],
     commitments: &mut OrCommitments,
 ) -> Result<(), TimedOvnError> {
     if branch >= TIMED_OVN_CHOICE_COUNT_V1 {
@@ -1873,20 +1886,26 @@ fn reconstruct_branch(
     let generator = target_generator()?;
     let challenge_bytes = challenge.to_bytes_be();
     for option in 0..TIMED_OVN_CHOICE_COUNT_V1 {
-        let response_x = responses_x[option].to_bytes_be();
-        let response_r = responses_r[option].to_bytes_be();
-        let statement = if option == branch {
-            ballot_points[option].multiply(generator.inverse())
+        let secret_response_bytes = secret_responses[option].to_bytes_be();
+        let randomness_response_bytes = randomness_responses[option].to_bytes_be();
+        let ballot_statement = if option == branch {
+            statements.ballot_points[option].multiply(generator.inverse())
         } else {
-            ballot_points[option]
+            statements.ballot_points[option]
         };
-        commitments.x[branch][option] = ct_gt_scalar_mul(generator, &response_x)
-            .multiply(ct_gt_scalar_mul(public_keys[option], &challenge_bytes).inverse());
-        commitments.r[branch][option] = G2Projective::generator() * responses_r[option]
-            - G2Projective::from(ephemerals[option]) * challenge;
-        commitments.relation[branch][option] = ct_gt_scalar_mul(masks[option], &response_x)
-            .multiply(ct_gt_scalar_mul(release_term, &response_r))
-            .multiply(ct_gt_scalar_mul(statement, &challenge_bytes).inverse());
+        commitments.x[branch][option] = ct_gt_scalar_mul(&generator, &secret_response_bytes)
+            .multiply(
+                ct_gt_scalar_mul(&statements.public_keys[option], &challenge_bytes).inverse(),
+            );
+        commitments.r[branch][option] = G2Projective::generator() * randomness_responses[option]
+            - G2Projective::from(statements.ephemerals[option]) * challenge;
+        commitments.relation[branch][option] =
+            ct_gt_scalar_mul(&statements.masks[option], &secret_response_bytes)
+                .multiply(ct_gt_scalar_mul(
+                    statements.release_term,
+                    &randomness_response_bytes,
+                ))
+                .multiply(ct_gt_scalar_mul(&ballot_statement, &challenge_bytes).inverse());
     }
     Ok(())
 }
@@ -1909,7 +1928,7 @@ fn pop_challenge(
     hasher.update([option_tag]);
     hasher.update(public_key);
     hasher.update(commitment);
-    scalar_from_transcript(hasher)
+    scalar_from_transcript(&hasher)
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1941,18 +1960,18 @@ fn ballot_challenge(
         hasher.update(ephemerals[option]);
         hasher.update(ballot_points[option]);
     }
-    for branch in 0..TIMED_OVN_CHOICE_COUNT_V1 {
-        hasher.update([OPTION_TAGS_V1[branch]]);
+    for (branch, option_tag) in OPTION_TAGS_V1.iter().copied().enumerate() {
+        hasher.update([option_tag]);
         for option in 0..TIMED_OVN_CHOICE_COUNT_V1 {
             hasher.update(commitments.x[branch][option].to_bytes());
             hasher.update(commitments.r[branch][option].to_affine().to_compressed());
             hasher.update(commitments.relation[branch][option].to_bytes());
         }
     }
-    scalar_from_transcript(hasher)
+    scalar_from_transcript(&hasher)
 }
 
-fn scalar_from_transcript(hasher: Sha256) -> Result<Scalar, TimedOvnError> {
+fn scalar_from_transcript(hasher: &Sha256) -> Result<Scalar, TimedOvnError> {
     for counter in 0_u32..=SCALAR_REJECTION_LIMIT {
         let mut attempt = hasher.clone();
         attempt.update(counter.to_be_bytes());
@@ -2010,7 +2029,7 @@ impl TimedOvnAggregateV1 {
             .map_err(|_| TimedOvnError::ReleaseFailed)?;
         let generator = target_generator()?;
         let mut counts = [0_u16; TIMED_OVN_CHOICE_COUNT_V1];
-        for option in 0..TIMED_OVN_CHOICE_COUNT_V1 {
+        for (option, count) in counts.iter_mut().enumerate() {
             // Identity aggregates are valid: non-identity per-ballot
             // ephemerals can sum to zero, and sealed GT terms can multiply to
             // one. Rejecting either only after the complete corpus was frozen
@@ -2024,7 +2043,7 @@ impl TimedOvnAggregateV1 {
                 pairing_gt(&secret_point, &aggregate_u)?
             };
             let opened = aggregate_c.multiply(release.inverse());
-            counts[option] = bounded_discrete_log(opened, generator, self.accepted_ballots)
+            *count = bounded_discrete_log(&opened, &generator, self.accepted_ballots)
                 .ok_or(TimedOvnError::MaskCancellationFailed)?;
         }
         let total = counts
@@ -2127,16 +2146,16 @@ pub fn aggregate_timed_ovn_ballots_v1(
     })
 }
 
-fn bounded_discrete_log(target: GtElement, generator: GtElement, max: u16) -> Option<u16> {
+fn bounded_discrete_log(target: &GtElement, generator: &GtElement, max: u16) -> Option<u16> {
     if usize::from(max) > TIMED_OVN_MAX_PARTICIPANTS_V1 {
         return None;
     }
     let mut candidate = GtElement::identity();
     for count in 0_u16..=max {
-        if candidate == target {
+        if candidate == *target {
             return Some(count);
         }
-        candidate = candidate.multiply(generator);
+        candidate = candidate.multiply(*generator);
     }
     None
 }
@@ -2175,7 +2194,9 @@ fn roster_root(session: &TimedOvnSessionV1, registrations: &[TimedOvnRegistratio
     hasher.update(ROSTER_ROOT_DOMAIN_V1);
     hasher.update(TIMED_OVN_PROTOCOL_VERSION_V1.to_be_bytes());
     hasher.update(session.canonical_bytes());
-    hasher.update((registrations.len() as u32).to_be_bytes());
+    let registration_count =
+        u32::try_from(registrations.len()).expect("validated timed-OVN roster length fits u32");
+    hasher.update(registration_count.to_be_bytes());
     for registration in registrations {
         hasher.update(registration.to_bytes());
     }
@@ -2192,7 +2213,9 @@ fn survivor_root(
     hasher.update(TIMED_OVN_PROTOCOL_VERSION_V1.to_be_bytes());
     hasher.update(session.canonical_bytes());
     hasher.update(roster_root);
-    hasher.update((registrations.len() as u32).to_be_bytes());
+    let registration_count =
+        u32::try_from(registrations.len()).expect("validated timed-OVN survivor length fits u32");
+    hasher.update(registration_count.to_be_bytes());
     for registration in registrations {
         hasher.update(registration.participant_hash);
         for public_key in registration.public_keys {
@@ -2490,7 +2513,7 @@ mod tests {
                 binding(11),
                 binding(12),
                 binding(13),
-                *fixture.session.tle_master_public_key(),
+                *fixture.roster.session.tle_master_public_key(),
             ),
             Err(TimedOvnError::ParameterProfileMismatch)
         );
@@ -2535,7 +2558,7 @@ mod tests {
     fn ct_gt_multiplication_matches_public_blstrs_path() {
         let scalar = Scalar::from(0xdead_beef_u64);
         let generator = target_generator().expect("generator");
-        let actual = ct_gt_scalar_mul(generator, &scalar.to_bytes_be());
+        let actual = ct_gt_scalar_mul(&generator, &scalar.to_bytes_be());
 
         let scaled_g1 = (G1Affine::generator() * scalar).to_affine();
         let direct_pairing = pairing_gt(&scaled_g1, &G2Affine::generator()).expect("pairing");
@@ -2553,7 +2576,7 @@ mod tests {
         let mut observed = Vec::new();
         for scalar in scalars {
             let mut counts = [0_usize; 3];
-            let _ = ct_gt_scalar_mul_inner::<true>(generator, &scalar.to_bytes_be(), &mut counts);
+            let _ = ct_gt_scalar_mul_inner::<true>(&generator, &scalar.to_bytes_be(), &mut counts);
             observed.push(counts);
         }
         assert_eq!(observed[0], observed[1]);
@@ -2602,13 +2625,13 @@ mod tests {
 
     #[test]
     fn folded_tle_term_opens_only_the_exact_aggregate() {
-        let fixture = fixture(13);
-        let ballots = cast_fixture_ballots(&fixture, 14);
+        let scenario = fixture(13);
+        let ballots = cast_fixture_ballots(&scenario, 14);
         let aggregate =
-            aggregate_timed_ovn_ballots_v1(&fixture.survivors, &ballots).expect("aggregate");
+            aggregate_timed_ovn_ballots_v1(&scenario.survivors, &ballots).expect("aggregate");
         assert_eq!(aggregate.accepted_ballots(), 3);
         assert_eq!(
-            aggregate.open_and_tally(&fixture.survivors, &fixture.identity_secret),
+            aggregate.open_and_tally(&scenario.survivors, &scenario.identity_secret),
             Ok(TimedOvnTallyV1 {
                 aye: 1,
                 nay: 1,
@@ -2617,12 +2640,12 @@ mod tests {
         );
 
         assert_eq!(
-            aggregate_timed_ovn_ballots_v1(&fixture.survivors, &ballots[..2]),
+            aggregate_timed_ovn_ballots_v1(&scenario.survivors, &ballots[..2]),
             Err(TimedOvnError::NonCanonicalBallotCorpus)
         );
         let other = fixture(21);
         assert_eq!(
-            aggregate.open_and_tally(&fixture.survivors, &other.identity_secret),
+            aggregate.open_and_tally(&scenario.survivors, &other.identity_secret),
             Err(TimedOvnError::ReleaseFailed)
         );
     }
@@ -2633,18 +2656,18 @@ mod tests {
         let ballots = cast_fixture_ballots(&fixture, 23);
         let mut aggregate =
             aggregate_timed_ovn_ballots_v1(&fixture.survivors, &ballots).expect("aggregate");
-        let identity_g2 = G2Affine::identity().to_compressed();
-        let identity_gt = GtElement::identity();
+        let identity_g2_bytes = G2Affine::identity().to_compressed();
+        let identity_gt_element = GtElement::identity();
         let generator = target_generator().expect("generator");
 
         // This is the algebraically valid edge reached when the complete
         // corpus' release exponents cancel. It must remain openable even
         // though every individual ballot ephemeral was non-identity.
-        aggregate.aggregate_u = [identity_g2; TIMED_OVN_CHOICE_COUNT_V1];
+        aggregate.aggregate_u = [identity_g2_bytes; TIMED_OVN_CHOICE_COUNT_V1];
         aggregate.aggregate_c = [
-            identity_gt.to_bytes(),
-            ct_gt_scalar_mul(generator, &Scalar::from(3_u64).to_bytes_be()).to_bytes(),
-            identity_gt.to_bytes(),
+            identity_gt_element.to_bytes(),
+            ct_gt_scalar_mul(&generator, &Scalar::from(3_u64).to_bytes_be()).to_bytes(),
+            identity_gt_element.to_bytes(),
         ];
         assert_eq!(
             aggregate.open_and_tally(&fixture.survivors, &fixture.identity_secret),
@@ -2753,7 +2776,7 @@ mod tests {
             aggregate_timed_ovn_ballots_v1(&fixture.survivors, &ballots).expect("aggregate");
         let generator = target_generator().expect("generator");
         aggregate.aggregate_c[0] =
-            ct_gt_scalar_mul(generator, &Scalar::from(999_u64).to_bytes_be()).to_bytes();
+            ct_gt_scalar_mul(&generator, &Scalar::from(999_u64).to_bytes_be()).to_bytes();
         assert!(matches!(
             aggregate.open_and_tally(&fixture.survivors, &fixture.identity_secret),
             Err(TimedOvnError::MaskCancellationFailed | TimedOvnError::InvalidTally)
@@ -2761,6 +2784,10 @@ mod tests {
     }
 
     #[test]
+    #[expect(
+        clippy::too_many_lines,
+        reason = "cohesive signed-manifest acceptance and fail-closed rejection matrix"
+    )]
     fn official_release_audit_manifest_is_exact_signed_and_release_only() {
         // These are synthetic test vectors. They are not an external audit or
         // an approval of any production artifact.
@@ -2936,7 +2963,7 @@ mod tests {
     #[test]
     fn bounded_decoder_rejects_count_above_limit() {
         let generator = target_generator().expect("generator");
-        let point = ct_gt_scalar_mul(generator, &Scalar::from(1_001_u64).to_bytes_be());
-        assert_eq!(bounded_discrete_log(point, generator, 1_000), None);
+        let point = ct_gt_scalar_mul(&generator, &Scalar::from(1_001_u64).to_bytes_be());
+        assert_eq!(bounded_discrete_log(&point, &generator, 1_000), None);
     }
 }

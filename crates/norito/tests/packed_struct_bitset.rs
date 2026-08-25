@@ -13,6 +13,7 @@ fn encode_bare_with_flags<T: NoritoSerialize>(value: &T, flags: u8) -> Vec<u8> {
     norito::core::serialize_to_buffer(value, &mut payload).expect("serialize");
     payload
 }
+#[cfg_attr(feature = "schema-structural", derive(iroha_schema::IntoSchema))]
 #[derive(Debug, Clone, PartialEq, NoritoSerialize, NoritoDeserialize)]
 struct SelfDelimExample {
     id: u32,
@@ -20,28 +21,35 @@ struct SelfDelimExample {
     values: Vec<u8>,
     labels: BTreeMap<String, u32>,
 }
+#[cfg_attr(feature = "schema-structural", derive(iroha_schema::IntoSchema))]
 #[derive(Debug, Clone, PartialEq, NoritoSerialize, NoritoDeserialize)]
 struct Nested {
     name: String,
 }
+#[cfg_attr(feature = "schema-structural", derive(iroha_schema::IntoSchema))]
 #[derive(Debug, Clone, PartialEq, NoritoSerialize, NoritoDeserialize)]
 struct NeedsSize {
     id: u32,
     nested: Nested,
 }
+#[cfg_attr(feature = "schema-structural", derive(iroha_schema::IntoSchema))]
 #[derive(Debug, Clone, PartialEq, NoritoSerialize, NoritoDeserialize)]
 struct Tiny(u32);
+#[cfg_attr(feature = "schema-structural", derive(iroha_schema::IntoSchema))]
 #[derive(Debug, Clone, PartialEq, NoritoSerialize, NoritoDeserialize)]
 struct NamedTiny {
     inner: Tiny,
 }
+#[cfg_attr(feature = "schema-structural", derive(iroha_schema::IntoSchema))]
 #[derive(Debug, Clone, PartialEq, NoritoSerialize, NoritoDeserialize)]
 struct TupleTiny(Tiny);
+#[cfg_attr(feature = "schema-structural", derive(iroha_schema::IntoSchema))]
 #[derive(Debug, Clone, PartialEq, NoritoSerialize, NoritoDeserialize)]
 struct NamedMixed {
     fixed: u32,
     inner: Tiny,
 }
+#[cfg_attr(feature = "schema-structural", derive(iroha_schema::IntoSchema))]
 #[derive(Debug, Clone, PartialEq, NoritoSerialize, NoritoDeserialize)]
 struct TupleMixed(u32, Tiny);
 fn decode_bare_with_flags<T>(payload: &[u8], flags: u8) -> Result<T, Error>

@@ -1251,7 +1251,7 @@ fn service_runtime_mutations_require_exact_validator_placement() -> Result<(), e
         emitted_sequence: 0,
         emitted_block_height: 0,
     };
-    let (private_output_manifest_payload, private_output_manifest_digest) =
+    let (_private_output_manifest_payload, private_output_manifest_digest) =
         private_artifact_manifest_fixture(0xD3, private_receipt.output_artifact.ciphertext_bytes);
     private_receipt.output_artifact.sorafs_manifest_digest = private_output_manifest_digest;
     private_receipt.output_replication_order_id =

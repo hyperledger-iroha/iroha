@@ -4,6 +4,11 @@ fn fixed_seq_header(count: u64) -> Vec<u8> {
     count.to_le_bytes().to_vec()
 }
 #[test]
+fn sequence_span_reports_empty_payloads() {
+    assert!(SequenceSpan { start: 4, end: 4 }.is_empty());
+    assert!(!SequenceSpan { start: 4, end: 5 }.is_empty());
+}
+#[test]
 fn length_prefixed_fixed_width_spans() {
     let mut bytes = fixed_seq_header(2);
     bytes.extend_from_slice(&1u64.to_le_bytes());

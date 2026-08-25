@@ -1,8 +1,8 @@
-//! SoraNet VPN cell layout, control-plane metadata, and billing receipts.
+//! `SoraNet` VPN cell layout, control-plane metadata, and billing receipts.
 //!
-//! This module pins the fixed 1024-byte cell format used by the native SoraNet VPN overlay so that
-//! control-plane surfaces, SDKs, and harnesses share the same framing. Cells carry a compact header
-//! (flow label + sequence/ack + padding budget) followed by a padded payload. Control-plane
+//! This module pins the fixed 1024-byte cell format used by the native `SoraNet` VPN overlay so
+//! that control-plane surfaces, SDKs, and harnesses share the same framing. Cells carry a compact
+//! header (flow label + sequence/ack + padding budget) followed by a padded payload. Control-plane
 //! envelopes describe DNS/route pushes, guard/exit selection, and metering receipts so exit
 //! gateways can emit deterministic Norito payloads for governance.
 use super::RelayId;
@@ -1288,6 +1288,10 @@ impl VpnLeaseRecordV1 {
     /// # Errors
     /// Returns [`VpnSettlementEvidenceError`] when any signature, identity,
     /// prepaid ceiling, timestamp, or deterministic accounting invariant fails.
+    #[expect(
+        clippy::too_many_lines,
+        reason = "ordered settlement checks form one auditable evidence invariant"
+    )]
     pub fn verify_settlement_evidence(
         &self,
         signed_receipt: &VpnSignedSessionReceiptV1,
@@ -1864,7 +1868,7 @@ fn decode_helper_ticket_fields(bytes: &[u8]) -> Result<VpnHelperTicketV1, VpnHel
 /// routes are applied in order. Every variable-length value is length-delimited, each sequence has
 /// an explicit element count, and integers are big-endian, so no two policy tuples share a
 /// serialization. The V1 QUIC ALPN is protocol-fixed rather than caller-controlled and is also
-/// authenticated by the SoraNet handshake. Callers must separately enforce canonical endpoint,
+/// authenticated by the `SoraNet` handshake. Callers must separately enforce canonical endpoint,
 /// server-name, CIDR, and IP-address syntax.
 #[must_use]
 #[allow(clippy::too_many_arguments)]

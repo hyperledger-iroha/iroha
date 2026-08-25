@@ -2086,6 +2086,10 @@ mod tests {
     }
     #[cfg(feature = "json")]
     #[test]
+    #[expect(
+        clippy::too_many_lines,
+        reason = "the closed service-control JSON matrix keeps every instruction and explicit-null contract auditable together"
+    )]
     fn soracloud_service_control_v1_is_closed_and_requires_explicit_state_nulls() {
         macro_rules! assert_closed {
             ($value:expr, $ty:ty, $label:literal) => {{
@@ -2287,6 +2291,10 @@ mod tests {
     }
     #[cfg(feature = "json")]
     #[test]
+    #[expect(
+        clippy::too_many_lines,
+        reason = "the authenticated instruction graph is a closed rejection matrix that stays auditable as one list"
+    )]
     fn authenticated_soracloud_instruction_graph_rejects_unknown_fields() {
         macro_rules! assert_unknown_rejected {
             ($ty:ty, $label:literal) => {{
@@ -2406,6 +2414,10 @@ mod tests {
     }
     #[cfg(feature = "json")]
     #[test]
+    #[expect(
+        clippy::too_many_lines,
+        reason = "the explicit-nullability matrix keeps every authenticated instruction key auditable in one test"
+    )]
     fn authenticated_soracloud_instruction_graph_requires_explicit_nullable_keys() {
         macro_rules! assert_required_nulls {
             ($value:expr, $ty:ty, [$($field:literal),+ $(,)?], $label:literal) => {{

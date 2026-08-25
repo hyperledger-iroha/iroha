@@ -30,7 +30,7 @@ def test_musubi_fixture_owner_is_declared_but_never_default() -> None:
     metadata = TARGET_INVENTORY.load_metadata(ROOT)
     target = ("iroha_data_model", "musubi_fixtures")
 
-    assert TARGET_INVENTORY.EXPECTED_DECLARED_BIN_COUNT == 111
+    assert TARGET_INVENTORY.EXPECTED_DECLARED_BIN_COUNT == 112
     assert target in TARGET_INVENTORY.all_workspace_bins(metadata)
     assert target not in TARGET_INVENTORY.resolved_default_bins(metadata)
 

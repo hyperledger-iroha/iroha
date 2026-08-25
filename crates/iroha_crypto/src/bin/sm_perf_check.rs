@@ -736,7 +736,6 @@ fn write_capture_json(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::fmt::Write as _;
     use tempfile::TempDir;
     fn complete_benchmark_entries() -> Vec<(&'static str, f64)> {
         BENCH_SPECS.iter().map(|spec| (spec.key, 1.0)).collect()

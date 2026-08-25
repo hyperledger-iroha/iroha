@@ -30,19 +30,61 @@ struct S {
     a: u32,
     b: String,
 }
+#[cfg_attr(feature = "schema-structural", derive(iroha_schema::IntoSchema))]
 #[derive(NoritoSerialize)]
 struct NamedByteArrays {
     tag: u8,
     digest: [u8; 32],
     suffix: [u8; 7],
 }
+#[cfg_attr(feature = "schema-structural", derive(iroha_schema::IntoSchema))]
 #[derive(NoritoSerialize)]
 struct TupleByteArrays(u8, [u8; 32], [u8; 7]);
+#[cfg_attr(feature = "schema-structural", derive(iroha_schema::TypeId))]
 #[derive(Clone, Debug, PartialEq, NoritoSerialize, NoritoDeserialize)]
 enum EnumByteArrays {
     Tuple([u8; 32], u16),
     Named { digest: [u8; 32], suffix: [u8; 7] },
 }
+#[cfg(feature = "schema-structural")]
+#[derive(iroha_schema::IntoSchema)]
+#[allow(dead_code)]
+struct EnumByteArraysTupleSchema([u8; 32], u16);
+#[cfg(feature = "schema-structural")]
+#[derive(iroha_schema::IntoSchema)]
+#[allow(dead_code)]
+struct EnumByteArraysNamedSchema {
+    digest: [u8; 32],
+    suffix: [u8; 7],
+}
+#[cfg(feature = "schema-structural")]
+impl iroha_schema::IntoSchema for EnumByteArrays {
+    fn type_name() -> String {
+        "EnumByteArrays".to_owned()
+    }
+    fn update_schema_map(map: &mut iroha_schema::MetaMap) {
+        if map.contains_key::<Self>() {
+            return;
+        }
+        map.insert::<Self>(iroha_schema::Metadata::Enum(iroha_schema::EnumMeta {
+            variants: vec![
+                iroha_schema::EnumVariant {
+                    tag: "Tuple".to_owned(),
+                    discriminant: 0,
+                    ty: Some(core::any::TypeId::of::<EnumByteArraysTupleSchema>()),
+                },
+                iroha_schema::EnumVariant {
+                    tag: "Named".to_owned(),
+                    discriminant: 1,
+                    ty: Some(core::any::TypeId::of::<EnumByteArraysNamedSchema>()),
+                },
+            ],
+        }));
+        <EnumByteArraysTupleSchema as iroha_schema::IntoSchema>::update_schema_map(map);
+        <EnumByteArraysNamedSchema as iroha_schema::IntoSchema>::update_schema_map(map);
+    }
+}
+#[cfg_attr(feature = "schema-structural", derive(iroha_schema::IntoSchema))]
 #[derive(Debug, PartialEq, NoritoSerialize, NoritoDeserialize)]
 struct NestedEnumByteArrays {
     prefix: u8,

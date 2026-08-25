@@ -14,7 +14,9 @@ ROOT = Path(__file__).resolve().parents[2]
 RELEASE_WORKFLOW = ROOT / ".github" / "workflows" / "workspace_release.yml"
 PR_WORKFLOW = ROOT / ".github" / "workflows" / "pr.yml"
 PINNED_RUST = "1.93.1"
+CHECKOUT_COMMIT = "11d5960a326750d5838078e36cf38b85af677262"
 SETUP_RUST_TOOLCHAIN_COMMIT = "166cdcfd11aee3cb47222f9ddb555ce30ddb9659"
+SETUP_PYTHON_COMMIT = "a26af69be951a213d495a4c3e4e4022e16d87065"
 RUST_CACHE_COMMIT = "e18b497796c12c097a38f9edb9d0641fb99eee32"
 COMPILE_UNIT_BASELINE = ROOT / "ci" / "compile_unit_baselines.json"
 COMPILE_UNIT_GUARD_COMMAND = (
@@ -27,11 +29,55 @@ COMPILE_UNIT_GUARD_COMMAND = (
 )
 COMPILE_UNIT_REPORT = "target/ci/iroha-data-model-compile-units.json"
 COMPILE_UNIT_ARTIFACT_IDENTITY = "cargo-package-target-features-profile-v2"
+BUILD_EFFICIENCY_PROVENANCE = ROOT / "ci" / "build_efficiency_provenance.json"
 BUILD_EFFICIENCY_PROVENANCE_COMMAND = (
     "python3 -I -S scripts/check_build_efficiency_provenance.py"
 )
 BUILD_EFFICIENCY_PROVENANCE_TEST = (
     "scripts/tests/check_build_efficiency_provenance_test.py"
+)
+PR_SOURCE_BUDGET_STEP_NAME = "Enforce authenticated source-file budget"
+PR_SOURCE_BUDGET_COMMAND_ERROR = (
+    "PR source-budget named step must run the exact authenticated command"
+)
+PR_SOURCE_BUDGET_ENVELOPE_ERROR = (
+    "PR source-budget guard execution envelope must be fail-closed"
+)
+PR_SOURCE_BUDGET_ORDER_ERROR = (
+    "PR source-budget guard must precede candidate-controlled run steps"
+)
+PR_SOURCE_BUDGET_PREFIX_ERROR = (
+    "PR source-budget guard must follow only the exact pinned setup steps"
+)
+PR_SOURCE_BUDGET_PRE_GUARD_STEPS = (
+    f"      - uses: actions/checkout@{CHECKOUT_COMMIT}\n"
+    "        with:\n"
+    "          fetch-depth: 0\n"
+    "          persist-credentials: false\n"
+    "      - uses: actions-rust-lang/setup-rust-toolchain@"
+    f"{SETUP_RUST_TOOLCHAIN_COMMIT}\n"
+    "        with:\n"
+    '          cache: "false"\n'
+    f"          toolchain: {PINNED_RUST}\n"
+    f"      - uses: actions/setup-python@{SETUP_PYTHON_COMMIT}\n"
+    "        with:\n"
+    '          python-version: "3.11"\n'
+)
+DANGEROUS_ENVIRONMENT_KEY = re.compile(
+    r"(?m)^[ \t]*(?:[\"'])?"
+    r"(?:PATH|BASH_ENV|ENV|NODE_OPTIONS|PYTHONHOME|PYTHONPATH|"
+    r"LD_PRELOAD|LD_LIBRARY_PATH|LD_AUDIT|DYLD_[A-Z0-9_]+|"
+    r"GCONV_PATH|GIT_EXEC_PATH|RUBYOPT|PERL5OPT)"
+    r"(?:[\"'])?[ \t]*:"
+)
+DANGEROUS_INLINE_ENVIRONMENT_KEY = re.compile(
+    r"(?m)^[ \t]*(?:-[ \t]+)?(?:[\"']env[\"']|env)"
+    r"[ \t]*:[ \t]*\{[^}\n]*"
+    r"(?:[\"'])?"
+    r"(?:PATH|BASH_ENV|ENV|NODE_OPTIONS|PYTHONHOME|PYTHONPATH|"
+    r"LD_PRELOAD|LD_LIBRARY_PATH|LD_AUDIT|DYLD_[A-Z0-9_]+|"
+    r"GCONV_PATH|GIT_EXEC_PATH|RUBYOPT|PERL5OPT)"
+    r"(?:[\"'])?[ \t]*:"
 )
 REQUIRED_NUMERIC_TEST_COMMANDS = (
     "cargo test --locked -p ivm --test ivm_group_06 numeric_",
@@ -62,6 +108,62 @@ def _normalized(text: str) -> str:
     """Collapse YAML presentation whitespace for command assertions."""
 
     return " ".join(text.split())
+
+
+def _signed_lock_anchor_commit() -> str:
+    """Return the provenance-authenticated commit accepted by source-budget CI."""
+
+    payload = json.loads(BUILD_EFFICIENCY_PROVENANCE.read_text(encoding="utf-8"))
+    commit = payload["lineage"]["signed_lock_anchor"]["commit"]
+    if not isinstance(commit, str) or re.fullmatch(r"[0-9a-f]{40}", commit) is None:
+        raise AssertionError("signed-lock provenance anchor must be a lowercase SHA-1")
+    return commit
+
+
+def _pr_source_budget_command() -> str:
+    """Return the sole command allowed in the named PR source-budget step."""
+
+    return (
+        'python3 -I -S scripts/check_source_file_budget.py '
+        '--base-ref "${{ github.event.pull_request.base.sha }}" '
+        f"--accepted-ref {_signed_lock_anchor_commit()}"
+    )
+
+
+def _named_step_run_scalar(job: str, name: str) -> str | None:
+    """Extract one named step's run scalar from the workflow's fixed indentation."""
+
+    step_pattern = re.compile(
+        r"(?ms)^      - name: (?P<name>[^\n]+)\n"
+        r"(?P<body>.*?)(?=^      - |\Z)"
+    )
+    matches = [match for match in step_pattern.finditer(job) if match["name"] == name]
+    if len(matches) != 1:
+        return None
+
+    lines = matches[0].group(0).splitlines()
+    run_indices = [
+        index for index, line in enumerate(lines) if line.startswith("        run:")
+    ]
+    if len(run_indices) != 1:
+        return None
+
+    run_index = run_indices[0]
+    if run_index != 1:
+        return None
+    run_header = lines[run_index].removeprefix("        run:").strip()
+    trailing_lines = lines[run_index + 1 :]
+    if run_header not in {"|", "|-", "|+", ">", ">-", ">+"}:
+        if trailing_lines or not run_header:
+            return None
+        return run_header
+
+    scalar_lines: list[str] = []
+    for line in trailing_lines:
+        if line and not line.startswith("          "):
+            return None
+        scalar_lines.append(line[10:] if line else "")
+    return "\n".join(scalar_lines)
 
 
 def _replace_once(text: str, old: str, new: str) -> str:
@@ -222,7 +324,6 @@ def _validate_pr_parity(workflow: str) -> list[str]:
             "python3 scripts/check_cargo_feature_hygiene.py",
             "python3 scripts/check_workspace_target_inventory.py",
             BUILD_EFFICIENCY_PROVENANCE_COMMAND,
-            "python3 scripts/check_source_file_budget.py --require-objective",
             "python3 scripts/check_generated_artifacts.py",
             'FULL_REQUESTED: ${{ contains(github.event.pull_request.labels.*.name, '
             "'ci/full') }}",
@@ -237,6 +338,93 @@ def _validate_pr_parity(workflow: str) -> list[str]:
                 errors.append(
                     f"PR Rust classifier is missing required behavior: {requirement}"
                 )
+        source_budget_run = _named_step_run_scalar(
+            classifier_job, PR_SOURCE_BUDGET_STEP_NAME
+        )
+        if (
+            source_budget_run is None
+            or _normalized(source_budget_run) != _pr_source_budget_command()
+        ):
+            errors.append(PR_SOURCE_BUDGET_COMMAND_ERROR)
+        workflow_header = workflow.split("\njobs:\n", 1)[0]
+        unsafe_workflow_defaults = re.search(
+            r"(?m)^(?:[\"']defaults[\"']|defaults)\s*:", workflow_header
+        )
+        unsafe_job_defaults = re.search(
+            r"(?m)^    (?:[\"']defaults[\"']|defaults)\s*:", classifier_job
+        )
+        unsafe_continue = re.search(
+            r"(?m)^    (?:[\"']continue-on-error[\"']|continue-on-error)\s*:",
+            classifier_job,
+        )
+        unsafe_root_path = re.search(
+            r"(?mi)^(?:  PATH\s*:|env\s*:[^\n]*\bPATH\s*:)",
+            workflow_header,
+        )
+        unsafe_job_path = re.search(
+            r"(?mi)^(?:      PATH\s*:|    env\s*:[^\n]*\bPATH\s*:)",
+            classifier_job,
+        )
+        unsafe_container = re.search(
+            r"(?m)^    (?:[\"']container[\"']|container)\s*:", classifier_job
+        )
+        runner_lines = re.findall(r"(?m)^    runs-on:[^\n]*$", classifier_job)
+        unsafe_runner = (
+            None
+            if runner_lines == ["    runs-on: ubuntu-latest"]
+            else "unexpected runner"
+        )
+        unsafe_loader_environment = any(
+            pattern.search(scope) is not None
+            for scope in (workflow_header, classifier_job)
+            for pattern in (
+                DANGEROUS_ENVIRONMENT_KEY,
+                DANGEROUS_INLINE_ENVIRONMENT_KEY,
+            )
+        )
+        unsafe_environment_alias = re.search(
+            r"(?m)^[ \t]*(?:(?:[\"']env[\"']|env)\s*:\s*[&*]|"
+            r"(?:[\"']<<[\"']|<<)\s*:)",
+            f"{workflow_header}\n{classifier_job}",
+        )
+        if any(
+            guard is not None
+            for guard in (
+                unsafe_workflow_defaults,
+                unsafe_job_defaults,
+                unsafe_continue,
+                unsafe_root_path,
+                unsafe_job_path,
+                unsafe_container,
+                unsafe_runner,
+                unsafe_environment_alias,
+            )
+        ) or unsafe_loader_environment:
+            errors.append(PR_SOURCE_BUDGET_ENVELOPE_ERROR)
+        source_step_marker = f"      - name: {PR_SOURCE_BUDGET_STEP_NAME}\n"
+        source_step_position = classifier_job.find(source_step_marker)
+        steps_marker = "    steps:\n"
+        steps_position = classifier_job.find(steps_marker)
+        pre_guard_start = (
+            -1 if steps_position < 0 else steps_position + len(steps_marker)
+        )
+        if (
+            pre_guard_start < 0
+            or source_step_position < pre_guard_start
+            or classifier_job[pre_guard_start:source_step_position]
+            != PR_SOURCE_BUDGET_PRE_GUARD_STEPS
+        ):
+            errors.append(PR_SOURCE_BUDGET_PREFIX_ERROR)
+        first_run_position = classifier_job.find("\n        run:")
+        source_run_position = classifier_job.find(
+            "\n        run:", source_step_position
+        )
+        if (
+            source_step_position < 0
+            or first_run_position < 0
+            or source_run_position != first_run_position
+        ):
+            errors.append(PR_SOURCE_BUDGET_ORDER_ERROR)
         provenance_position = normalized_classifier.find(
             BUILD_EFFICIENCY_PROVENANCE_COMMAND
         )
@@ -247,7 +435,6 @@ def _validate_pr_parity(workflow: str) -> list[str]:
             "python3 scripts/check_workspace_target_inventory.py",
             "python3 scripts/check_compile_time_table_assets.py",
             "python3 scripts/check_dependency_budget.py",
-            "python3 scripts/check_source_file_budget.py --require-objective",
         )
         if provenance_position >= 0 and any(
             normalized_classifier.find(command) < provenance_position
@@ -256,7 +443,7 @@ def _validate_pr_parity(workflow: str) -> list[str]:
         ):
             errors.append(
                 "PR build-efficiency provenance guard must run before dependency, "
-                "source-budget, and Cargo-facing checks"
+                "and Cargo-facing checks"
             )
 
     affected_job = _job_block(workflow, "rust_affected")
@@ -569,6 +756,259 @@ def test_release_workflow_guard_rejects_weakening(
                 f"          {BUILD_EFFICIENCY_PROVENANCE_COMMAND}",
             ),
             "PR build-efficiency provenance guard must run before",
+        ),
+        (
+            lambda workflow: _replace_once_in_job(
+                workflow,
+                "rust_changes",
+                '--base-ref "${{ github.event.pull_request.base.sha }}"',
+                '--baseline-ref "${{ github.event.pull_request.base.sha }}"',
+            ),
+            PR_SOURCE_BUDGET_COMMAND_ERROR,
+        ),
+        (
+            lambda workflow: _replace_once_in_job(
+                workflow,
+                "rust_changes",
+                f"--accepted-ref {_signed_lock_anchor_commit()}",
+                f"--anchor-ref {_signed_lock_anchor_commit()}",
+            ),
+            PR_SOURCE_BUDGET_COMMAND_ERROR,
+        ),
+        (
+            lambda workflow: _replace_once_in_job(
+                workflow,
+                "rust_changes",
+                f"--accepted-ref {_signed_lock_anchor_commit()}",
+                f"--accepted-ref {'0' * 40}",
+            ),
+            PR_SOURCE_BUDGET_COMMAND_ERROR,
+        ),
+        (
+            lambda workflow: _replace_once_in_job(
+                workflow,
+                "rust_changes",
+                f"actions/checkout@{CHECKOUT_COMMIT}",
+                "actions/checkout@v4",
+            ),
+            PR_SOURCE_BUDGET_PREFIX_ERROR,
+        ),
+        (
+            lambda workflow: _replace_once_in_job(
+                workflow,
+                "rust_changes",
+                "actions-rust-lang/setup-rust-toolchain@"
+                f"{SETUP_RUST_TOOLCHAIN_COMMIT}",
+                "actions-rust-lang/setup-rust-toolchain@v1",
+            ),
+            PR_SOURCE_BUDGET_PREFIX_ERROR,
+        ),
+        (
+            lambda workflow: _replace_once_in_job(
+                workflow,
+                "rust_changes",
+                f"actions/setup-python@{SETUP_PYTHON_COMMIT}",
+                "actions/setup-python@v6",
+            ),
+            PR_SOURCE_BUDGET_PREFIX_ERROR,
+        ),
+        (
+            lambda workflow: _replace_once_in_job(
+                workflow,
+                "rust_changes",
+                "      - name: Enforce authenticated source-file budget\n",
+                "      - uses: ./ci/malicious-action\n"
+                "      - name: Enforce authenticated source-file budget\n",
+            ),
+            PR_SOURCE_BUDGET_PREFIX_ERROR,
+        ),
+        (
+            lambda workflow: _replace_once_in_job(
+                workflow,
+                "rust_changes",
+                "    timeout-minutes: 15\n",
+                "    timeout-minutes: 15\n"
+                "    container:\n"
+                "      image: ghcr.io/attacker/fake-runner:latest\n",
+            ),
+            PR_SOURCE_BUDGET_ENVELOPE_ERROR,
+        ),
+        (
+            lambda workflow: _replace_once_in_job(
+                workflow,
+                "rust_changes",
+                "    timeout-minutes: 15\n",
+                "    timeout-minutes: 15\n"
+                '    "container":\n'
+                "      image: ghcr.io/attacker/fake-runner:latest\n",
+            ),
+            PR_SOURCE_BUDGET_ENVELOPE_ERROR,
+        ),
+        (
+            lambda workflow: _replace_once_in_job(
+                workflow,
+                "rust_changes",
+                "    runs-on: ubuntu-latest\n",
+                "    runs-on: [self-hosted, attacker]\n",
+            ),
+            PR_SOURCE_BUDGET_ENVELOPE_ERROR,
+        ),
+        (
+            lambda workflow: _replace_once(
+                workflow,
+                "env:\n  CARGO_TERM_COLOR: always\n",
+                "env:\n"
+                "  BASH_ENV: ./ci/bypass.sh\n"
+                "  CARGO_TERM_COLOR: always\n",
+            ),
+            PR_SOURCE_BUDGET_ENVELOPE_ERROR,
+        ),
+        (
+            lambda workflow: _replace_once_in_job(
+                workflow,
+                "rust_changes",
+                "    timeout-minutes: 15\n",
+                "    timeout-minutes: 15\n"
+                "    env:\n"
+                "      NODE_OPTIONS: --require=./ci/bypass.js\n",
+            ),
+            PR_SOURCE_BUDGET_ENVELOPE_ERROR,
+        ),
+        (
+            lambda workflow: _replace_once_in_job(
+                workflow,
+                "rust_changes",
+                "    timeout-minutes: 15\n",
+                "    timeout-minutes: 15\n    env: *hostile-environment\n",
+            ),
+            PR_SOURCE_BUDGET_ENVELOPE_ERROR,
+        ),
+        (
+            lambda workflow: _replace_once_in_job(
+                workflow,
+                "rust_changes",
+                "      - name: Enforce authenticated source-file budget\n"
+                "        run: >-\n",
+                "      - name: Enforce authenticated source-file budget\n"
+                "        env:\n"
+                "          LD_PRELOAD: ./ci/bypass.so\n"
+                "        run: >-\n",
+            ),
+            PR_SOURCE_BUDGET_ENVELOPE_ERROR,
+        ),
+        (
+            lambda workflow: _replace_once_in_job(
+                workflow,
+                "rust_changes",
+                "          python3 -I -S scripts/check_source_file_budget.py\n",
+                "          true # python3 -I -S scripts/check_source_file_budget.py\n",
+            ),
+            PR_SOURCE_BUDGET_COMMAND_ERROR,
+        ),
+        (
+            lambda workflow: _replace_once_in_job(
+                workflow,
+                "rust_changes",
+                "          python3 -I -S scripts/check_source_file_budget.py\n",
+                "          echo python3 -I -S scripts/check_source_file_budget.py\n",
+            ),
+            PR_SOURCE_BUDGET_COMMAND_ERROR,
+        ),
+        (
+            lambda workflow: _replace_once_in_job(
+                workflow,
+                "rust_changes",
+                f"          --accepted-ref {_signed_lock_anchor_commit()}\n",
+                f"          --accepted-ref {_signed_lock_anchor_commit()} || true\n",
+            ),
+            PR_SOURCE_BUDGET_COMMAND_ERROR,
+        ),
+        (
+            lambda workflow: _replace_once_in_job(
+                workflow,
+                "rust_changes",
+                "    timeout-minutes: 15\n",
+                "    timeout-minutes: 15\n    continue-on-error: true\n",
+            ),
+            PR_SOURCE_BUDGET_ENVELOPE_ERROR,
+        ),
+        (
+            lambda workflow: _replace_once(
+                workflow,
+                "\nenv:\n",
+                "\ndefaults:\n  run:\n    shell: bash {0} || true\n\nenv:\n",
+            ),
+            PR_SOURCE_BUDGET_ENVELOPE_ERROR,
+        ),
+        (
+            lambda workflow: _replace_once_in_job(
+                workflow,
+                "rust_changes",
+                "    timeout-minutes: 15\n",
+                "    timeout-minutes: 15\n"
+                "    defaults:\n"
+                "      run:\n"
+                "        shell: bash {0} || true\n",
+            ),
+            PR_SOURCE_BUDGET_ENVELOPE_ERROR,
+        ),
+        (
+            lambda workflow: _replace_once(
+                workflow,
+                "env:\n  CARGO_TERM_COLOR: always\n",
+                "env:\n  PATH: ./scripts:/usr/bin\n  CARGO_TERM_COLOR: always\n",
+            ),
+            PR_SOURCE_BUDGET_ENVELOPE_ERROR,
+        ),
+        (
+            lambda workflow: _replace_once_in_job(
+                workflow,
+                "rust_changes",
+                "    timeout-minutes: 15\n",
+                "    timeout-minutes: 15\n"
+                "    env:\n"
+                "      PATH: ./scripts:/usr/bin\n",
+            ),
+            PR_SOURCE_BUDGET_ENVELOPE_ERROR,
+        ),
+        (
+            lambda workflow: _replace_once_in_job(
+                workflow,
+                "rust_changes",
+                "      - name: Enforce authenticated source-file budget\n"
+                "        run: >-\n"
+                "          python3 -I -S scripts/check_source_file_budget.py\n"
+                '          --base-ref "${{ github.event.pull_request.base.sha }}"\n'
+                f"          --accepted-ref {_signed_lock_anchor_commit()}\n"
+                "      - name: Install pinned router-test dependency\n"
+                "        run: python3 -m pip install --disable-pip-version-check pytest==9.0.3\n",
+                "      - name: Install pinned router-test dependency\n"
+                "        run: python3 -m pip install --disable-pip-version-check pytest==9.0.3\n"
+                "      - name: Enforce authenticated source-file budget\n"
+                "        run: >-\n"
+                "          python3 -I -S scripts/check_source_file_budget.py\n"
+                '          --base-ref "${{ github.event.pull_request.base.sha }}"\n'
+                f"          --accepted-ref {_signed_lock_anchor_commit()}\n",
+            ),
+            PR_SOURCE_BUDGET_ORDER_ERROR,
+        ),
+        (
+            lambda workflow: _replace_once_in_job(
+                workflow,
+                "rust_changes",
+                f"          --accepted-ref {_signed_lock_anchor_commit()}\n",
+                f"          --accepted-ref {_signed_lock_anchor_commit()} ; true\n",
+            ),
+            PR_SOURCE_BUDGET_COMMAND_ERROR,
+        ),
+        (
+            lambda workflow: _replace_once_in_job(
+                workflow,
+                "rust_changes",
+                f"          --accepted-ref {_signed_lock_anchor_commit()}\n",
+                f"          --accepted-ref {_signed_lock_anchor_commit()} && true\n",
+            ),
+            PR_SOURCE_BUDGET_COMMAND_ERROR,
         ),
         (
             lambda workflow: _replace_once_in_job(

@@ -1,23 +1,62 @@
 use norito::{Error, codec::Decode as NoritoDecode};
 use std::io::Cursor;
+#[cfg_attr(feature = "schema-structural", derive(iroha_schema::IntoSchema))]
 #[derive(norito::derive::Encode, norito::derive::Decode)]
 struct Wrapper {
     value: String,
 }
+#[cfg_attr(feature = "schema-structural", derive(iroha_schema::IntoSchema))]
 #[derive(norito::derive::Encode, norito::derive::Decode)]
 struct Dual {
     first: String,
     second: String,
 }
+#[cfg_attr(feature = "schema-structural", derive(iroha_schema::IntoSchema))]
 #[derive(norito::derive::Encode, norito::derive::Decode)]
 struct TupleDual(String, String);
+#[cfg_attr(feature = "schema-structural", derive(iroha_schema::IntoSchema))]
 #[derive(Debug, PartialEq, Eq, norito::derive::Encode, norito::derive::Decode)]
 struct EnumField(u32);
+#[cfg_attr(feature = "schema-structural", derive(iroha_schema::TypeId))]
 #[derive(Debug, PartialEq, Eq, norito::derive::Encode, norito::derive::Decode)]
 enum DerivedTupleEnum {
     Pair(EnumField, u32),
     Boundary(EnumField, #[norito(skip)] ()),
 }
+#[cfg(feature = "schema-structural")]
+#[derive(iroha_schema::IntoSchema)]
+#[allow(dead_code)]
+struct DerivedTupleEnumPairSchema(EnumField, u32);
+
+#[cfg(feature = "schema-structural")]
+impl iroha_schema::IntoSchema for DerivedTupleEnum {
+    fn type_name() -> String {
+        "DerivedTupleEnum".to_owned()
+    }
+
+    fn update_schema_map(map: &mut iroha_schema::MetaMap) {
+        if map.contains_key::<Self>() {
+            return;
+        }
+        map.insert::<Self>(iroha_schema::Metadata::Enum(iroha_schema::EnumMeta {
+            variants: vec![
+                iroha_schema::EnumVariant {
+                    tag: "Pair".to_owned(),
+                    discriminant: 0,
+                    ty: Some(core::any::TypeId::of::<DerivedTupleEnumPairSchema>()),
+                },
+                iroha_schema::EnumVariant {
+                    tag: "Boundary".to_owned(),
+                    discriminant: 1,
+                    ty: Some(core::any::TypeId::of::<EnumField>()),
+                },
+            ],
+        }));
+        <DerivedTupleEnumPairSchema as iroha_schema::IntoSchema>::update_schema_map(map);
+        <EnumField as iroha_schema::IntoSchema>::update_schema_map(map);
+    }
+}
+#[cfg_attr(feature = "schema-structural", derive(iroha_schema::IntoSchema))]
 #[derive(Debug, PartialEq, Eq)]
 struct LooseScalar(u32);
 impl norito::NoritoSerialize for LooseScalar {
@@ -41,6 +80,7 @@ impl<'a> norito::NoritoDeserialize<'a> for LooseScalar {
         <u32 as norito::NoritoDeserialize>::try_deserialize(archived.cast::<u32>()).map(Self)
     }
 }
+#[cfg_attr(feature = "schema-structural", derive(iroha_schema::IntoSchema))]
 #[derive(Debug, PartialEq, Eq, norito::derive::Encode, norito::derive::Decode)]
 enum LooseTupleEnum {
     Value(LooseScalar),

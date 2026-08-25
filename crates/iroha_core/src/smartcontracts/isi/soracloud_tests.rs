@@ -25503,7 +25503,7 @@ fn private_uploaded_model_execution_receipt_persists_idempotently_from_exact_art
         private_artifact_manifest_fixture(0xD2, 64);
     let mut input_artifact = artifact("input", 0xD2);
     input_artifact.sorafs_manifest_digest = input_manifest_digest;
-    let (output_manifest_payload, output_manifest_digest) =
+    let (_output_manifest_payload, output_manifest_digest) =
         private_artifact_manifest_fixture(0xD3, 64);
     let mut output_artifact = artifact("output", 0xD3);
     output_artifact.sorafs_manifest_digest = output_manifest_digest;

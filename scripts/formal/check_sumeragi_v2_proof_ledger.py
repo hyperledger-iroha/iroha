@@ -30127,7 +30127,7 @@ if max_frame_bytes > crate::MAX_ENCRYPTED_FRAME_BYTES {
         expected_attributes=(
             "#[log(skip(identity_keys, shutdown_signal))]",
             "#[allow(clippy::too_many_lines, clippy::used_underscore_binding)]",
-            "#[expect(\n        clippy::large_futures,\n        reason = \"the source-sealed wrapper preserves exact startup delegation and avoids a release-path allocation\"\n    )]",
+            "#[allow(\n        clippy::large_futures,\n        reason = \"the startup wrapper preserves direct delegation without a release-path allocation\"\n    )]",
         ),
     )
     _require_rust_item_token_sha256(

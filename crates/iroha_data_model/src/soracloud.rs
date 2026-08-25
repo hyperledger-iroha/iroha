@@ -17,8 +17,7 @@ use crate::{
     peer::PeerId,
     proof::ProofAttachment,
     sorafs::pin_registry::{
-        MANIFEST_ROOT_CID_LENGTH, ManifestDigest, ManifestRootCid, ReplicationOrderId,
-        StorageClass, derive_sorafs_auto_replication_order_id_v1,
+        MANIFEST_ROOT_CID_LENGTH, ManifestDigest, ManifestRootCid, ReplicationOrderId, StorageClass,
     },
     zk::{BackendTag, OpenVerifyEnvelope, OpenVerifyEnvelopeBounds, StarkFriOpenProofV1},
 };
@@ -476,6 +475,8 @@ include!("soracloud/host_protocol.rs");
 include!("soracloud/prelude.rs");
 #[cfg(test)]
 mod tests {
+    use crate::sorafs::pin_registry::derive_sorafs_auto_replication_order_id_v1;
+
     include!("soracloud/tests/fixtures_and_manifests.rs");
     include!("soracloud/tests/proof_schemas.rs");
     include!("soracloud/tests/proof_validation.rs");

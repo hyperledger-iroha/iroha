@@ -19,6 +19,32 @@ fn quantity_micro_projection_preserves_fractional_xor() {
         "quantity micro projection",
     );
 }
+#[cfg(feature = "otel-exporter")]
+#[test]
+fn storage_utilisation_projection_reports_percent() {
+    assert_float_metric_eq(
+        storage_utilisation_percent(1, 4),
+        25.0,
+        "storage utilisation",
+    );
+}
+#[cfg(feature = "otel-exporter")]
+#[test]
+fn quantity_nano_counter_projection_truncates_and_saturates() {
+    let sub_nano = "0.0000000009"
+        .parse::<iroha_data_model::prelude::Quantity>()
+        .expect("canonical sub-nano quantity");
+    let one_nano = "0.000000001"
+        .parse::<iroha_data_model::prelude::Quantity>()
+        .expect("canonical one-nano quantity");
+    let oversized = "18446744074"
+        .parse::<iroha_data_model::prelude::Quantity>()
+        .expect("canonical oversized quantity");
+
+    assert_eq!(quantity_to_nano_u64_saturating(&sub_nano), 0);
+    assert_eq!(quantity_to_nano_u64_saturating(&one_nano), 1);
+    assert_eq!(quantity_to_nano_u64_saturating(&oversized), u64::MAX);
+}
 #[test]
 fn metrics_lifecycle() {
     let metrics = Metrics::default();
@@ -2070,7 +2096,6 @@ fn sample_status() -> Status {
             prf_view: 2,
             lane_governance_sealed_total: 0,
             lane_governance_sealed_aliases: Vec::new(),
-            ..SumeragiConsensusStatus::default()
         }),
         governance: GovernanceStatus {
             proposals: GovernanceProposalCounters {

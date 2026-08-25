@@ -689,7 +689,7 @@ mod tests {
     }
     #[test]
     fn governance_hash_ids_are_canonical_json_storage_keys() {
-        fn check<T>(key: T)
+        fn check<T>(key: &T)
         where
             T: JsonKeyCodec + core::fmt::Debug + PartialEq,
         {
@@ -697,13 +697,14 @@ mod tests {
             key.encode_json_key(&mut encoded);
             let mut parser = Parser::new(&encoded);
             let raw = parser.parse_string().expect("parse governance storage key");
-            assert_eq!(T::decode_json_key(&raw).expect("decode storage key"), key);
+            let decoded = T::decode_json_key(&raw).expect("decode storage key");
+            assert_eq!(&decoded, key);
             assert!(T::decode_json_key(&raw.to_uppercase()).is_err());
         }
 
-        check(GovernanceAttemptId::new([0xab; 32]));
-        check(BallotAttemptId::new([0xbc; 32]));
-        check(TleKeySessionId::new([0xcd; 32]));
+        check(&GovernanceAttemptId::new([0xab; 32]));
+        check(&BallotAttemptId::new([0xbc; 32]));
+        check(&TleKeySessionId::new([0xcd; 32]));
     }
     #[test]
     fn account_id_json_key_codec_roundtrip() {

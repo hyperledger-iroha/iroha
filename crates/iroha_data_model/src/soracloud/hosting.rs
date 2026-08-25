@@ -24,7 +24,7 @@ pub enum SoraHfModelFormatV1 {
 }
 /// Canonical GGUF weight-file suffixes admitted by HF profile derivation and import.
 pub const SORA_HF_GGUF_WEIGHT_FILE_EXTENSIONS_V1: &[&str] = &[".gguf"];
-/// Canonical SafeTensors weight-file suffixes admitted by HF profile derivation and import.
+/// Canonical `SafeTensors` weight-file suffixes admitted by HF profile derivation and import.
 pub const SORA_HF_SAFETENSORS_WEIGHT_FILE_EXTENSIONS_V1: &[&str] = &[".safetensors"];
 /// Canonical PyTorch-compatible weight-file suffixes admitted by HF profile derivation and import.
 pub const SORA_HF_PYTORCH_WEIGHT_FILE_EXTENSIONS_V1: &[&str] = &[".bin", ".pt", ".pth", ".ot"];
@@ -98,7 +98,7 @@ fn hf_weight_path_is_canonical_v1(path: &str) -> bool {
 }
 /// Derive the exact first-release weight contract from one HF model-info response.
 ///
-/// Selection precedence is GGUF, SafeTensors, then `PyTorch`. The complete provider sibling array
+/// Selection precedence is GGUF, `SafeTensors`, then `PyTorch`. The complete provider sibling array
 /// is bounded before processing; duplicate paths are sorted and coalesced only when their LFS
 /// metadata is identical. Every selected shard must carry a positive LFS size and canonical
 /// lowercase SHA-256 digest and must fit the configured per-file and aggregate importer budgets.
@@ -107,6 +107,10 @@ fn hf_weight_path_is_canonical_v1(path: &str) -> bool {
 /// Returns [`SoracloudManifestError`] when provider metadata is malformed, ambiguous, unbounded,
 /// unauthenticated, or exceeds the supplied import limits.
 #[cfg(feature = "json")]
+#[expect(
+    clippy::too_many_lines,
+    reason = "weight selection validates one bounded provider response in a single auditable pass"
+)]
 pub fn derive_hf_weight_selection_v1(
     model_info: &Value,
     maximum_files: u32,
@@ -158,10 +162,7 @@ pub fn derive_hf_weight_selection_v1(
             return Err(invalid_field(
                 manifest,
                 "siblings",
-                format!(
-                    "path exceeds the {}-byte limit",
-                    SORA_HF_MODEL_INFO_MAX_STRING_BYTES_V1
-                ),
+                format!("path exceeds the {SORA_HF_MODEL_INFO_MAX_STRING_BYTES_V1}-byte limit"),
             ));
         }
         let lfs = match entry.get("lfs") {
@@ -2456,6 +2457,10 @@ impl SoraAgentApartmentAuditEventV1 {
     /// # Errors
     /// Returns [`SoracloudManifestError`] when schema versions mismatch or
     /// required identifiers are empty.
+    #[expect(
+        clippy::too_many_lines,
+        reason = "the closed audit-event field matrix remains auditable in one validation pass"
+    )]
     pub fn validate(&self) -> Result<(), SoracloudManifestError> {
         validate_schema_version(
             "sora agent apartment audit event",
@@ -3291,6 +3296,10 @@ impl SoraServiceAuditEventV1 {
         }
         Ok(())
     }
+    #[expect(
+        clippy::too_many_lines,
+        reason = "the closed lifecycle-action field matrix is intentionally validated together"
+    )]
     fn validate_action_fields(&self) -> Result<(), SoracloudManifestError> {
         use SoraServiceLifecycleActionV1 as Action;
 
@@ -3909,6 +3918,10 @@ impl SoraServiceMailboxMessageV1 {
     /// Validate a mailbox message prepared for ledger submission.
     ///
     /// Submission messages carry zero sentinels for all ledger-owned schedule fields.
+    ///
+    /// # Errors
+    /// Returns [`SoracloudManifestError`] when schema, routing, commitment, or
+    /// ledger-owned sentinel fields are invalid.
     pub fn validate_submission(&self) -> Result<(), SoracloudManifestError> {
         self.validate_with_sequence_state(false)
     }
@@ -4061,6 +4074,10 @@ impl SoraRuntimeExecutionHostV1 {
     /// Active capability and assignment eligibility are validated by ledger execution. The
     /// immutable source, pool, seed, and placement identity remain self-verifying after the active
     /// lease window rolls over.
+    ///
+    /// # Errors
+    /// Returns [`SoracloudManifestError`] when host identity fields, commitments,
+    /// or the canonical placement identifier are invalid.
     pub fn validate(&self) -> Result<(), SoracloudManifestError> {
         match self {
             Self::DeterministicValidator(host) => validate_validator_account_peer_id(
@@ -4124,6 +4141,10 @@ pub struct SoraOrderedMailboxStateMutationV1 {
 }
 impl SoraOrderedMailboxStateMutationV1 {
     /// Validate the structural mutation envelope.
+    ///
+    /// # Errors
+    /// Returns [`SoracloudManifestError`] when the schema, binding key, or
+    /// operation-specific value payload is invalid.
     pub fn validate(&self) -> Result<(), SoracloudManifestError> {
         validate_schema_version(
             "sora ordered mailbox state mutation",
@@ -4189,6 +4210,10 @@ pub struct SoraOrderedMailboxResultV1 {
 }
 impl SoraOrderedMailboxResultV1 {
     /// Validate the submission envelope before ledger-specific authorization and OCC checks.
+    ///
+    /// # Errors
+    /// Returns [`SoracloudManifestError`] when the execution context, effects,
+    /// runtime state, content metadata, or receipt submission sentinel is invalid.
     pub fn validate_submission(&self) -> Result<(), SoracloudManifestError> {
         validate_schema_version(
             "sora ordered mailbox result",

@@ -332,6 +332,26 @@ ConcreteLifecycleWorkKind::DurableRecoveredDecisionApply(apply)
         scheduler_path,
         scheduler_dispatch,
         """
+let key = attestation.dispatch_key();
+let executor_available = executor
+    .lifecycle_decision_apply_dispatch_available()
+    .map_err(ProductionCompletionDispatchErrorV1::LiveApplyReconciliation)?;
+(
+    AuthenticatedLifecycleCompletionReadyV1::Apply(attestation),
+    Some(LifecycleCompletionCapacityProbeV1::Apply {
+        ordinal: *ordinal,
+        key,
+        executor_available,
+    }),
+)
+""",
+        "Apply capacity probe must preserve exact executor-availability error provenance",
+        errors,
+    )
+    _require_rust_token_sequence(
+        scheduler_path,
+        scheduler_dispatch,
+        """
 if !reservation.preflight(&prepared) {
     return Err(ProductionCompletionDispatchErrorV1::ReservedOwnerMismatch);
 }

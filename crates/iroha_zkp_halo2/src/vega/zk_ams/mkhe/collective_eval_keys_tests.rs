@@ -1,6 +1,6 @@
 // Collective evaluated-key tests included from the parent module.
 use super::*;
-use crate::vega::MaskedRelaxedRandomErrorV1;
+use crate::vega::{MaskedRelaxedRandomErrorV1, zk_ams::mkhe::gadget_decompose};
 use std::{cell::Cell, collections::BTreeSet};
 const TEST_MODULI: [u64; 2] = [2_013_265_921, 1_811_939_329];
 const TEST_ROOTS: [u64; 2] = [1_400_279_418, 677_356_115];
@@ -565,6 +565,40 @@ fn exact_compact_digits(
             (b, a)
         })
         .collect()
+}
+fn apply_compact_switch(
+    profile: &BgvProfile,
+    constant: &RnsPolynomial,
+    linear: &RnsPolynomial,
+    switched: &RnsPolynomial,
+    digits: &[(RnsPolynomial, RnsPolynomial)],
+) -> Result<(RnsPolynomial, RnsPolynomial), ZkAmsMkheErrorV1> {
+    constant.validate(profile)?;
+    linear.validate(profile)?;
+    switched.validate(profile)?;
+    if digits.len() != profile.gadget_digits {
+        return Err(ZkAmsMkheErrorV1::MissingEvaluatedKey);
+    }
+    checked_ring_multiplication_work(
+        profile,
+        digits
+            .len()
+            .checked_mul(2)
+            .ok_or(ZkAmsMkheErrorV1::ResourceCeilingExceeded)?,
+    )?;
+    let decomposition = gadget_decompose(profile, switched)?;
+    let mut output_constant = clone_rns_exact(profile, constant)?;
+    let mut output_linear = clone_rns_exact(profile, linear)?;
+    for (digit_index, plaintext_digit) in decomposition.iter().enumerate() {
+        let (stored_b, seeded_a) = digits
+            .get(digit_index)
+            .ok_or(ZkAmsMkheErrorV1::MissingEvaluatedKey)?;
+        stored_b.validate(profile)?;
+        seeded_a.validate(profile)?;
+        output_constant = output_constant.add(&plaintext_digit.mul(stored_b, profile)?, profile)?;
+        output_linear = output_linear.add(&plaintext_digit.mul(seeded_a, profile)?, profile)?;
+    }
+    Ok((output_constant, output_linear))
 }
 #[test]
 fn all_38_streamed_digits_match_full_balanced_reference_at_boundaries() {

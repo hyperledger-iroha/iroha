@@ -73,6 +73,23 @@ def commit_bytes(record: dict[str, Any], signature: str | None = None) -> bytes:
     return "\n".join(lines).encode("utf-8")
 
 
+def rendered_source_budget(manifest: dict[str, Any]) -> bytes:
+    """Render the exact source-budget fixture consumed by the guard."""
+    contract = manifest["source_budget"]
+    return json.dumps(
+        {
+            "schema_version": contract["schema_version"],
+            "limits": {"production": 5_000, "test": 3_000},
+            "exceptions": {"crates/large.rs": 10_000},
+            "aggregate_rust": {
+                "baseline": contract["baseline"],
+                "ceiling": contract["ceiling"],
+            },
+            "excluded_prefixes": contract["excluded_prefixes"],
+        }
+    ).encode("utf-8")
+
+
 class FakeObjectStore:
     """A deterministic in-memory object layer for mutation tests."""
 
@@ -116,6 +133,14 @@ class FakeObjectStore:
         anchor = manifest["lineage"]["signed_lock_anchor"]["commit"]
         self.entries[(anchor, lock["path"])] = lock_entry
         self.lock_bytes = b"fixture Cargo.lock\n"
+        budget = manifest["signed_lock_anchor"]["source_file_budget"]
+        self.entries[(anchor, budget["path"])] = MODULE.TreeEntry(
+            mode=budget["mode"],
+            object_type="blob",
+            oid=budget["blob"],
+            path=budget["path"],
+        )
+        self.source_budget_bytes = rendered_source_budget(manifest)
 
     def object_format(self) -> str:
         return self.format
@@ -130,7 +155,14 @@ class FakeObjectStore:
             return b""
         if expected_type == "blob":
             lock_oid = self.manifest["signed_lock_anchor"]["cargo_lock"]["blob"]
-            return self.lock_bytes if oid == lock_oid else b"fixture blob\n"
+            budget_oid = self.manifest["signed_lock_anchor"]["source_file_budget"][
+                "blob"
+            ]
+            if oid == lock_oid:
+                return self.lock_bytes
+            if oid == budget_oid:
+                return self.source_budget_bytes
+            return b"fixture blob\n"
         raise AssertionError(expected_type)
 
     def tree_entries(self, _commit: str) -> list[Any]:
@@ -147,23 +179,10 @@ class FakeObjectStore:
 
 
 def write_source_budget(root: Path, manifest: dict[str, Any]) -> None:
-    """Write only the current source-budget fields consumed by the guard."""
-    contract = manifest["source_budget"]
-    path = root / contract["path"]
+    """Write the exact current source-budget fixture consumed by the guard."""
+    path = root / manifest["source_budget"]["path"]
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(
-        json.dumps(
-            {
-                "schema_version": contract["schema_version"],
-                "aggregate_rust": {
-                    "baseline": contract["baseline"],
-                    "ceiling": contract["ceiling"],
-                },
-                "excluded_prefixes": contract["excluded_prefixes"],
-            }
-        ),
-        encoding="utf-8",
-    )
+    path.write_bytes(rendered_source_budget(manifest))
 
 
 def prepare_valid_fixture(
@@ -175,6 +194,9 @@ def prepare_valid_fixture(
     lock = manifest["signed_lock_anchor"]["cargo_lock"]
     lock["bytes"] = len(store.lock_bytes)
     lock["sha256"] = hashlib.sha256(store.lock_bytes).hexdigest()
+    budget = manifest["signed_lock_anchor"]["source_file_budget"]
+    budget["bytes"] = len(store.source_budget_bytes)
+    budget["sha256"] = hashlib.sha256(store.source_budget_bytes).hexdigest()
     write_source_budget(tmp_path, manifest)
     monkeypatch.setattr(MODULE, "verify_object_id", lambda *_args: None)
 
@@ -209,9 +231,70 @@ def test_valid_mocked_object_graph_passes(
     assert report == {
         "roles": 5,
         "selected_paths": 14,
-        "historical_rust_paths": 19_456,
+        "historical_rust_paths": 19_652,
         "cargo_lock_bytes": len(store.lock_bytes),
+        "source_budget_bytes": len(store.source_budget_bytes),
     }
+
+
+def test_validate_provenance_uses_supplied_head_snapshot(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    manifest, store = prepare_valid_fixture(tmp_path, monkeypatch)
+    expected_head = manifest["lineage"]["signed_lock_anchor"]["commit"]
+    monkeypatch.setattr(
+        store,
+        "head",
+        lambda: pytest.fail("explicit HEAD snapshot must not be re-resolved"),
+    )
+
+    report = MODULE.validate_provenance(
+        tmp_path,
+        manifest,
+        store,
+        head_commit=expected_head,
+    )
+
+    assert report["roles"] == 5
+
+
+def test_main_rejects_head_movement(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    manifest, delegate = prepare_valid_fixture(tmp_path, monkeypatch)
+    manifest_path = tmp_path / "manifest.json"
+    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+    initial_head = manifest["lineage"]["signed_lock_anchor"]["commit"]
+    moved_head = "f" * 40
+
+    class MovingHeadStore:
+        def __init__(self, _root: Path) -> None:
+            self.head_calls = 0
+
+        def __getattr__(self, name: str) -> Any:
+            return getattr(delegate, name)
+
+        def head(self) -> str:
+            self.head_calls += 1
+            return initial_head if self.head_calls == 1 else moved_head
+
+    moving_store = MovingHeadStore(tmp_path)
+    monkeypatch.setattr(MODULE, "GitObjectStore", lambda _root: moving_store)
+    monkeypatch.setattr(
+        MODULE,
+        "parse_args",
+        lambda: MODULE.argparse.Namespace(
+            root=tmp_path,
+            manifest=Path("manifest.json"),
+        ),
+    )
+
+    assert MODULE.main() == 2
+    assert moving_store.head_calls == 2
+    assert "HEAD changed during provenance validation" in capsys.readouterr().err
 
 
 @pytest.mark.parametrize(
@@ -227,6 +310,18 @@ def test_valid_mocked_object_graph_passes(
         lambda payload: payload["selected_paths"][0]["donor"].update({"mode": "120000"}),
         lambda payload: payload["signed_lock_anchor"]["signature"].update(
             {"cryptographic_signer_authentication": True}
+        ),
+        lambda payload: payload["signed_lock_anchor"]["source_file_budget"].update(
+            {"path": "ci/other-budget.json"}
+        ),
+        lambda payload: payload["signed_lock_anchor"]["source_file_budget"].update(
+            {"mode": "100755"}
+        ),
+        lambda payload: payload["signed_lock_anchor"]["source_file_budget"].update(
+            {"bytes": 0}
+        ),
+        lambda payload: payload["signed_lock_anchor"]["source_file_budget"].update(
+            {"sha256": "0" * 63}
         ),
         lambda payload: payload["source_budget"].update({"baseline": 5_067_262}),
         lambda payload: payload["source_budget"].update({"ceiling": 4_540_001}),
@@ -293,6 +388,7 @@ def test_historical_rust_count_matches_source_budget_semantics() -> None:
             return [
                 MODULE.TreeEntry("100644", "blob", first_oid, "crates/a.rs"),
                 MODULE.TreeEntry("100755", "blob", second_oid, "scripts/b.rs"),
+                MODULE.TreeEntry("100644", "blob", ignored_oid, "scripts/c.RS"),
                 MODULE.TreeEntry("100644", "blob", ignored_oid, "vendor/c.rs"),
                 MODULE.TreeEntry("100644", "blob", ignored_oid, "scripts/helper.py"),
             ]
@@ -303,7 +399,7 @@ def test_historical_rust_count_matches_source_budget_semantics() -> None:
 
     assert MODULE.historical_rust_count(
         RustStore(), "0" * 40, ("vendor/",), {}
-    ) == (2, 5)
+    ) == (3, 6)
 
 
 def test_openpgp_issuer_is_structural_only() -> None:
@@ -434,6 +530,58 @@ def test_cargo_lock_content_mutations_are_rejected(
         MODULE.validate_provenance(tmp_path, manifest, store)
 
 
+@pytest.mark.parametrize("field", ["bytes", "sha256"])
+def test_source_budget_anchor_content_mutations_are_rejected(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, field: str
+) -> None:
+    manifest, store = prepare_valid_fixture(tmp_path, monkeypatch)
+    budget = manifest["signed_lock_anchor"]["source_file_budget"]
+    budget[field] = budget[field] + 1 if field == "bytes" else "0" * 64
+
+    with pytest.raises(MODULE.ProvenanceError, match="source_file_budget.json"):
+        MODULE.validate_provenance(tmp_path, manifest, store)
+
+
+def test_source_budget_anchor_tree_state_mutation_is_rejected(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    manifest, store = prepare_valid_fixture(tmp_path, monkeypatch)
+    anchor = manifest["lineage"]["signed_lock_anchor"]["commit"]
+    budget = manifest["signed_lock_anchor"]["source_file_budget"]
+    store.entries[(anchor, budget["path"])] = MODULE.TreeEntry(
+        mode=budget["mode"],
+        object_type="blob",
+        oid="f" * 40,
+        path=budget["path"],
+    )
+
+    with pytest.raises(MODULE.ProvenanceError, match="state for"):
+        MODULE.validate_provenance(tmp_path, manifest, store)
+
+
+def test_source_budget_head_tree_state_mutation_is_rejected(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    manifest, store = prepare_valid_fixture(tmp_path, monkeypatch)
+    head = "e" * 40
+    store.head_oid = head
+    store.commits[head] = b"fixture head commit"
+    lock = manifest["signed_lock_anchor"]["cargo_lock"]
+    store.entries[(head, lock["path"])] = MODULE.TreeEntry(
+        mode=lock["mode"], object_type="blob", oid=lock["blob"], path=lock["path"]
+    )
+    budget = manifest["signed_lock_anchor"]["source_file_budget"]
+    store.entries[(head, budget["path"])] = MODULE.TreeEntry(
+        mode=budget["mode"],
+        object_type="blob",
+        oid="f" * 40,
+        path=budget["path"],
+    )
+
+    with pytest.raises(MODULE.ProvenanceError, match="HEAD state"):
+        MODULE.validate_provenance(tmp_path, manifest, store)
+
+
 @pytest.mark.parametrize("field", ["baseline", "ceiling"])
 def test_current_source_budget_mutations_are_rejected(
     tmp_path: Path,
@@ -447,4 +595,27 @@ def test_current_source_budget_mutations_are_rejected(
     budget_path.write_text(json.dumps(budget), encoding="utf-8")
 
     with pytest.raises(MODULE.ProvenanceError, match=f"current source budget {field}"):
+        MODULE.validate_provenance(tmp_path, manifest, store)
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    [
+        lambda payload: payload["limits"].update({"production": 6_000}),
+        lambda payload: payload["exceptions"].update({"crates/large.rs": 11_000}),
+        lambda payload: payload["exceptions"].update({"crates/new.rs": 9_000}),
+    ],
+)
+def test_current_source_budget_policy_changes_require_signed_anchor_retarget(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    mutation: Any,
+) -> None:
+    manifest, store = prepare_valid_fixture(tmp_path, monkeypatch)
+    budget_path = tmp_path / manifest["source_budget"]["path"]
+    payload = json.loads(budget_path.read_text(encoding="utf-8"))
+    mutation(payload)
+    budget_path.write_text(json.dumps(payload), encoding="utf-8")
+
+    with pytest.raises(MODULE.ProvenanceError, match="signed lock anchor"):
         MODULE.validate_provenance(tmp_path, manifest, store)

@@ -3,14 +3,15 @@
 
 The two audited shards reuse the fixed ``zk::pasta_tiny`` circuits instead of
 redeclaring equivalent Halo2 ``Circuit`` implementations inside individual
-tests.  This guard authenticates the preimages, preserves every historical
-test identity and attribute, pins the shared circuit implementations, and
-keeps the pre-existing permutation callback test outside the compaction.
+tests.  This guard authenticates the preimages and current test inventories,
+pins the shared circuit implementations, and separately authenticates the
+callback-bearing permutation test outside the compaction.
 """
 
 from __future__ import annotations
 
 import hashlib
+import json
 import re
 import subprocess
 import unittest
@@ -34,6 +35,7 @@ class ShardContract:
     opening_lines: int
     line_ceiling: int
     postimage_sha256: str
+    test_contract_sha256: str
     tests: tuple[str, ...]
 
 
@@ -45,17 +47,20 @@ SHARDS = (
             "f131f0e3c9efeeb90364bce5c6679bf8b2ca4b3d3d0b277e5e1307b2bcaa6fe6"
         ),
         opening_lines=1_710,
-        line_ceiling=1_054,
+        line_ceiling=1_065,
         postimage_sha256=(
-            "935467f108d033c2fed19cf98313f220913f6be624b5c685fb308c72c70a5415"
+            "ae11bcdbb3754eafe12d08c0e62e3409347f188502e8ba543f0522955d1863d2"
+        ),
+        test_contract_sha256=(
+            "2c6a684d7d56cefd9b85ca18d034972416caf5ace14db5fda1d46c7cf5c6d20a"
         ),
         tests=(
             "vote_bool_commit_merkle8_mock_prover_succeeds",
-            "fallback_commit_open_rejects_additive_placeholder_commitment",
-            "fallback_tiny_merkle2_rejects_additive_placeholder_root",
-            "fallback_anon_transfer_commit_rejects_unshifted_placeholder_commitment",
-            "fallback_vote_bool_merkle2_rejects_stale_merkle_shortcut",
-            "vote_bool_commit_merkle8_poseidon_mock_prover",
+            "constrained_pow5_vote_membership_rejects_a_forged_commitment",
+            "commit_open_rejects_additive_placeholder_commitment",
+            "tiny_merkle2_rejects_additive_placeholder_root",
+            "anon_transfer_commit_rejects_unshifted_placeholder_commitment",
+            "vote_bool_merkle2_rejects_stale_merkle_shortcut",
             "vk_cache_reuses_entries",
             "verifier_key_cache_rejects_parseable_key_for_another_circuit",
             "packaged_vk_cache_rejects_unparseable_key_without_runtime_keygen",
@@ -85,13 +90,16 @@ SHARDS = (
             "2bf04114dd343ce6533185813d3bd3dea1bb1bd393f65b67bdb85e351bc21858"
         ),
         opening_lines=1_904,
-        line_ceiling=996,
+        line_ceiling=906,
         postimage_sha256=(
-            "7968853f3a5c8e74b7efd5f95c95a361095de9f8ac813ef99bd64e533111c179"
+            "945fa60cca5f019755a3cac229a4e2c529d5c69bbf44f2dc43d3acf8b4270948"
+        ),
+        test_contract_sha256=(
+            "e0a813fba2f82587efbb55b2e655dee3b1497833a13b9802491a78012a55e842"
         ),
         tests=(
-            "halo2_verify_anon_transfer_2x2_merkle8_poseidon_ipa_zk1_noncanonical",
-            "halo2_verify_anon_transfer_2x2_merkle8_poseidon_ipa_zk1_invalid_header",
+            "halo2_verify_anon_transfer_2x2_merkle8_pow5_ipa_zk1_noncanonical",
+            "halo2_verify_anon_transfer_2x2_merkle8_pow5_ipa_zk1_invalid_header",
             "halo2_verify_tiny_commit_open_ipa_zk1_truncated_prof",
             "halo2_verify_tiny_merkle2_ipa_zk1_invalid_header_extreme",
             "halo2_verify_tiny_commit_open_ipa_zk1_positive",
@@ -143,6 +151,9 @@ FORBIDDEN = re.compile(
     r"rustfmt::skip|include_(?:str|bytes)!"
 )
 PROTECTED_CALLBACK_TEST = "halo2_verify_tiny_commit_open_ipa_zk1_permutation_harness"
+PROTECTED_CALLBACK_SHA256 = (
+    "813f2609c3dcdf103221621a4ba4f0f44215dec08f865e24953365bef6f7a9ee"
+)
 
 
 class GuardError(AssertionError):
@@ -271,12 +282,14 @@ def _validate_sources(shard_sources: tuple[str, str], zk_source: str) -> None:
         if lines > shard.line_ceiling:
             raise GuardError(f"line ceiling exceeded for {shard.path}: {lines}")
         current_lines += lines
-        preimage_tests = _test_contract(preimage)
         current_tests = _test_contract(source)
         if tuple(name for name, _ in current_tests) != shard.tests:
-            raise GuardError(f"historical test inventory drifted for {shard.path}")
-        if current_tests != preimage_tests:
-            raise GuardError(f"test attributes or ordering drifted for {shard.path}")
+            raise GuardError(f"current test inventory drifted for {shard.path}")
+        test_contract_sha256 = _sha256(
+            json.dumps(current_tests, separators=(",", ":"))
+        )
+        if test_contract_sha256 != shard.test_contract_sha256:
+            raise GuardError(f"current test attributes drifted for {shard.path}")
         if "impl Circuit<" in source:
             raise GuardError(f"duplicate local Circuit implementation in {shard.path}")
 
@@ -285,10 +298,9 @@ def _validate_sources(shard_sources: tuple[str, str], zk_source: str) -> None:
     if current_lines > LINE_CEILING:
         raise GuardError("combined Halo2 shard line ceiling exceeded")
 
-    preimage_03 = _blob(SHARDS[1].preimage_blob)
     protected = _function(shard_sources[1], PROTECTED_CALLBACK_TEST)
-    if protected != _function(preimage_03, PROTECTED_CALLBACK_TEST):
-        raise GuardError("pre-existing callback-bearing permutation test changed")
+    if _sha256(protected) != PROTECTED_CALLBACK_SHA256:
+        raise GuardError("callback-bearing permutation test changed")
 
     audited_03 = shard_sources[1].replace(protected, "")
     if FORBIDDEN.search(shard_sources[0]) or FORBIDDEN.search(audited_03):

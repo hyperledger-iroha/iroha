@@ -62,12 +62,14 @@ struct Bn254PoseidonCudaSlice {
     offset: u32,
     len: u32,
 }
+#[cfg(all(feature = "fastpq-gpu", test))]
+type WaitHook = Box<dyn FnOnce(&mut [u64]) + Send>;
 #[cfg(feature = "fastpq-gpu")]
 pub(crate) struct PendingCudaDispatch {
     handle: Option<NonNull<c_void>>,
     output_len: usize,
     #[cfg(test)]
-    wait_hook: Option<Box<dyn FnOnce(&mut [u64]) + Send>>,
+    wait_hook: Option<WaitHook>,
 }
 #[cfg(feature = "fastpq-gpu")]
 impl PendingCudaDispatch {

@@ -521,6 +521,7 @@ pub mod codec {
             }
         }
         #[derive(Debug, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
+        #[cfg_attr(feature = "schema-structural", derive(::iroha_schema::IntoSchema))]
         struct AdaptiveFixedFields {
             tag: u8,
             digest: [u8; 32],

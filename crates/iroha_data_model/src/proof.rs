@@ -51,14 +51,14 @@ fn take_len_prefixed_slice<'a>(
 /// Split the two fields shared by proof and verifier-key byte boxes without allocating.
 ///
 /// These boxes use a bounded custom decoder, so they must parse every advertised struct
-/// layout themselves instead of assuming the length-prefixed AoS layout. The returned byte
+/// layout themselves instead of assuming the length-prefixed `AoS` layout. The returned byte
 /// field includes its sequence-length header, allowing callers to reject oversized payloads
 /// before `Vec<u8>` allocates.
-fn take_byte_box_fields<'a>(
-    bytes: &'a [u8],
+fn take_byte_box_fields(
+    bytes: &[u8],
     max_byte_field_len: usize,
     max_payload_len: Option<usize>,
-) -> Result<(&'a [u8], &'a [u8], usize), ncore::Error> {
+) -> Result<(&[u8], &[u8], usize), ncore::Error> {
     if !ncore::use_packed_struct() {
         let mut offset = 0usize;
         let backend = take_len_prefixed_slice(bytes, &mut offset, MAX_BACKEND_FIELD_BYTES)?;

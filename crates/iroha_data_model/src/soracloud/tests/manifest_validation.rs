@@ -131,6 +131,10 @@ fn service_validate_accepts_valid_manifest() {
 }
 #[cfg(feature = "json")]
 #[test]
+#[expect(
+    clippy::too_many_lines,
+    reason = "the staged service and container JSON graph is intentionally audited as one closed matrix"
+)]
 fn staged_service_and_container_v1_records_reject_unknown_fields() {
     macro_rules! assert_unknown_rejected {
         ($value:expr, $ty:ty, $label:literal) => {{
@@ -1036,6 +1040,10 @@ fn assert_inrou_published_artifact_field_is_required(published: &Value, field: &
 
 #[cfg(feature = "json")]
 #[test]
+#[expect(
+    clippy::too_many_lines,
+    reason = "the Inrou tagged-enum JSON graph is intentionally audited as one closed matrix"
+)]
 fn inrou_v1_tagged_enum_envelopes_reject_unknown_fields() {
     macro_rules! assert_unknown_rejected {
         ($value:expr, $ty:ty, $label:literal) => {{
@@ -1765,6 +1773,10 @@ fn service_state_entry_v1_requires_explicit_nullable_fhe_metadata_and_closed_fie
 }
 #[cfg(feature = "json")]
 #[test]
+#[expect(
+    clippy::too_many_lines,
+    reason = "the service-lease null, empty, and closed-field matrix is intentionally audited together"
+)]
 fn service_lease_v1_json_requires_explicit_null_empty_and_closed_fields() {
     let economics = SoraHttpServiceEconomicsV1::default();
     let lease = SoraServiceLeaseStateV1 {
@@ -2155,6 +2167,10 @@ fn service_deployment_state_validate_rejects_zero_or_full_canary_allocations() {
     }
 }
 #[test]
+#[expect(
+    clippy::too_many_lines,
+    reason = "the complete active-canary relation graph is intentionally exercised in one fixture"
+)]
 fn service_deployment_state_validate_requires_exact_active_canary_relation() {
     let mut deployment = SoraServiceDeploymentStateV1 {
         schema_version: SORA_SERVICE_DEPLOYMENT_STATE_VERSION_V1,

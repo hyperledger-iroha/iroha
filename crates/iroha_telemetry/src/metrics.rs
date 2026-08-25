@@ -470,7 +470,7 @@ pub struct SorafsFetchOtel {
     #[cfg(feature = "otel-exporter")]
     classical_ratio: OtelHistogram<f64>,
     #[cfg(feature = "otel-exporter")]
-    classical_selected: OtelHistogram<f64>,
+    classical_selected: OtelHistogram<u64>,
     #[cfg(feature = "otel-exporter")]
     brownouts_total: Counter<u64>,
     #[cfg(feature = "otel-exporter")]
@@ -549,7 +549,7 @@ impl SorafsFetchOtel {
                 .with_unit("ratio")
                 .build();
             let classical_selected = meter
-                .f64_histogram("sorafs.fetch.classical_selected")
+                .u64_histogram("sorafs.fetch.classical_selected")
                 .with_description("Classical relay selections observed per session.")
                 .with_unit("relays")
                 .build();
@@ -785,7 +785,7 @@ impl SorafsFetchOtel {
         {
             let mut attrs = self.manifest_attributes(manifest_id, region, job_id);
             attrs.push(KeyValue::new("stage", stage.to_string()));
-            self.classical_selected.record(selected as f64, &attrs);
+            self.classical_selected.record(selected, &attrs);
         }
         let _ = (self, manifest_id, region, job_id, stage, selected);
     }
@@ -1068,7 +1068,7 @@ pub struct SorafsRepairOtel {
     #[cfg(feature = "otel-exporter")]
     backlog_oldest_age_seconds: OtelHistogram<f64>,
     #[cfg(feature = "otel-exporter")]
-    queue_depth: OtelHistogram<f64>,
+    queue_depth: OtelHistogram<u64>,
     #[cfg(feature = "otel-exporter")]
     lease_expired_total: Counter<u64>,
     #[cfg(feature = "otel-exporter")]
@@ -1102,7 +1102,7 @@ impl SorafsRepairOtel {
                 .with_unit("s")
                 .build();
             let queue_depth = meter
-                .f64_histogram("sorafs.repair.queue_depth")
+                .u64_histogram("sorafs.repair.queue_depth")
                 .with_description("SoraFS repair queue depth per provider.")
                 .with_unit("tasks")
                 .build();
@@ -1163,7 +1163,7 @@ impl SorafsRepairOtel {
         #[cfg(feature = "otel-exporter")]
         {
             self.queue_depth.record(
-                depth as f64,
+                depth,
                 &[opentelemetry::KeyValue::new(
                     "provider",
                     provider.to_owned(),
@@ -1200,13 +1200,13 @@ impl SorafsRepairOtel {
 #[derive(Clone)]
 pub struct SorafsGcOtel {
     #[cfg(feature = "otel-exporter")]
-    runs_total: Counter<u64>,
+    runs: Counter<u64>,
     #[cfg(feature = "otel-exporter")]
-    evictions_total: Counter<u64>,
+    evictions: Counter<u64>,
     #[cfg(feature = "otel-exporter")]
-    bytes_freed_total: Counter<u64>,
+    bytes_freed: Counter<u64>,
     #[cfg(feature = "otel-exporter")]
-    blocked_total: Counter<u64>,
+    blocked: Counter<u64>,
 }
 impl Default for SorafsGcOtel {
     fn default() -> Self {
@@ -1221,27 +1221,27 @@ impl SorafsGcOtel {
         #[cfg(feature = "otel-exporter")]
         {
             let meter = opentelemetry::global::meter("sorafs.gc");
-            let runs_total = meter
+            let runs = meter
                 .u64_counter("sorafs.gc.runs_total")
                 .with_description("SoraFS GC runs grouped by result.")
                 .build();
-            let evictions_total = meter
+            let evictions = meter
                 .u64_counter("sorafs.gc.evictions_total")
                 .with_description("SoraFS GC evictions grouped by reason.")
                 .build();
-            let bytes_freed_total = meter
+            let bytes_freed = meter
                 .u64_counter("sorafs.gc.bytes_freed_total")
                 .with_description("SoraFS GC freed bytes grouped by reason.")
                 .build();
-            let blocked_total = meter
+            let blocked = meter
                 .u64_counter("sorafs.gc.blocked_total")
                 .with_description("SoraFS GC evictions blocked grouped by reason.")
                 .build();
             Self {
-                runs_total,
-                evictions_total,
-                bytes_freed_total,
-                blocked_total,
+                runs,
+                evictions,
+                bytes_freed,
+                blocked,
             }
         }
         #[cfg(not(feature = "otel-exporter"))]
@@ -1253,7 +1253,7 @@ impl SorafsGcOtel {
     pub fn record_run(&self, result: &'static str) {
         #[cfg(feature = "otel-exporter")]
         {
-            self.runs_total
+            self.runs
                 .add(1, &[KeyValue::new("result", result.to_owned())]);
         }
         let _ = result;
@@ -1263,8 +1263,8 @@ impl SorafsGcOtel {
         #[cfg(feature = "otel-exporter")]
         {
             let labels = [KeyValue::new("reason", reason.to_owned())];
-            self.evictions_total.add(1, &labels);
-            self.bytes_freed_total.add(freed_bytes, &labels);
+            self.evictions.add(1, &labels);
+            self.bytes_freed.add(freed_bytes, &labels);
         }
         let _ = (reason, freed_bytes);
     }
@@ -1272,7 +1272,7 @@ impl SorafsGcOtel {
     pub fn record_blocked(&self, reason: &str) {
         #[cfg(feature = "otel-exporter")]
         {
-            self.blocked_total
+            self.blocked
                 .add(1, &[KeyValue::new("reason", reason.to_owned())]);
         }
         let _ = reason;
@@ -1490,6 +1490,36 @@ struct PorSnapshot {
     success: u64,
     failure: u64,
 }
+
+#[cfg(feature = "otel-exporter")]
+#[expect(
+    clippy::cast_precision_loss,
+    reason = "storage utilisation is an approximate floating-point telemetry ratio and never feeds consensus"
+)]
+fn storage_utilisation_percent(bytes_used: u64, bytes_capacity: u64) -> f64 {
+    (bytes_used as f64 / bytes_capacity as f64) * 100.0
+}
+
+#[cfg(feature = "otel-exporter")]
+#[expect(
+    clippy::cast_possible_truncation,
+    clippy::cast_sign_loss,
+    reason = "the value is checked to be finite, positive, and below u64::MAX before fractional telemetry nanos are intentionally truncated"
+)]
+fn quantity_to_nano_u64_saturating(value: &Quantity) -> u64 {
+    let nanos = quantity_to_nano_f64(value);
+    if nanos.is_nan() {
+        return u64::MAX;
+    }
+    if nanos <= 0.0 {
+        return 0;
+    }
+    if nanos.is_infinite() || nanos >= u64_to_f64(u64::MAX) {
+        return u64::MAX;
+    }
+    nanos as u64
+}
+
 /// OpenTelemetry instrumentation for embedded SoraFS node metrics.
 pub struct SorafsNodeOtel {
     #[cfg(feature = "otel-exporter")]
@@ -1818,16 +1848,14 @@ impl SorafsNodeOtel {
         {
             let attrs = [KeyValue::new("provider_id", provider_id.to_string())];
             if bytes_capacity > 0 {
-                let utilisation = (bytes_used as f64 / bytes_capacity as f64) * 100.0;
+                let utilisation = storage_utilisation_percent(bytes_used, bytes_capacity);
                 self.capacity_ratio_pct.record(utilisation, &attrs);
             }
             let mut totals = self
                 .por_totals
                 .lock()
                 .expect("sorafs node otel totals mutex poisoned");
-            let entry = totals
-                .entry(provider_id.to_string())
-                .or_insert_with(PorSnapshot::default);
+            let entry = totals.entry(provider_id.to_string()).or_default();
             if por_samples_success >= entry.success {
                 let delta = por_samples_success - entry.success;
                 if delta > 0 {
@@ -1884,7 +1912,7 @@ impl SorafsNodeOtel {
             self.deal_outstanding_nano
                 .record(quantity_to_nano_f64(outstanding), &provider_attrs);
             if !bond_slash.is_zero() {
-                let increment = quantity_to_nano_f64(bond_slash).min(u64::MAX as f64) as u64;
+                let increment = quantity_to_nano_u64_saturating(bond_slash);
                 self.deal_bond_slash_nano.add(increment, &provider_attrs);
             }
         }

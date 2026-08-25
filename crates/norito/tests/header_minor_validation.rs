@@ -4,6 +4,7 @@ use norito::{
     core::{Compression, Error, NoritoSerialize, VERSION_MAJOR, VERSION_MINOR, header_flags},
     decode_from_bytes,
 };
+#[cfg_attr(feature = "schema-structural", derive(iroha_schema::IntoSchema))]
 #[derive(NoritoSerialize)]
 struct FixedFields {
     tag: u8,

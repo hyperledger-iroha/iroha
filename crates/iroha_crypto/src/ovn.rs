@@ -270,6 +270,10 @@ impl OvnRegistrationV1 {
     }
 
     /// Encode the canonical fixed-width registration.
+    #[expect(
+        clippy::wrong_self_convention,
+        reason = "the established canonical encoding API accepts a shared reference"
+    )]
     #[must_use]
     pub fn to_bytes(&self) -> Vec<u8> {
         let mut bytes = Vec::with_capacity(REGISTRATION_WIRE_BYTES_V1);
@@ -512,7 +516,7 @@ impl OvnSurvivorRosterV1 {
                 .get(roster_cursor)
                 .filter(|registration| registration.participant_hash == *survivor_id)
                 .ok_or(OvnError::NonCanonicalSurvivorSet)?;
-            registrations.push(registration.clone());
+            registrations.push(*registration);
             roster_cursor += 1;
         }
         let survivor_root = survivor_root(&roster.session, &roster.roster_root, &registrations);
@@ -556,7 +560,7 @@ impl OvnSurvivorRosterV1 {
             })
             .map_err(|_| OvnError::UnknownParticipant)?;
         let mut masking_points = core::array::from_fn(|_| RistrettoPoint::identity());
-        for option in 0..OVN_CHOICE_COUNT_V1 {
+        for (option, masking_point) in masking_points.iter_mut().enumerate() {
             let mut masking_key = RistrettoPoint::identity();
             for registration in &self.registrations[..index] {
                 masking_key += decode_nonidentity_point(&registration.public_keys[option])?;
@@ -567,7 +571,7 @@ impl OvnSurvivorRosterV1 {
             if masking_key == RistrettoPoint::identity() {
                 return Err(OvnError::IdentityPoint);
             }
-            masking_points[option] = masking_key;
+            *masking_point = masking_key;
         }
         Ok(OvnMaskingKeysV1 {
             session_digest: self.session.digest(),
@@ -684,6 +688,10 @@ impl OvnMaskedBallotV1 {
     }
 
     /// Encode the canonical fixed-width ballot and proof.
+    #[expect(
+        clippy::wrong_self_convention,
+        reason = "the established canonical encoding API accepts a shared reference"
+    )]
     #[must_use]
     pub fn to_bytes(&self) -> Vec<u8> {
         let mut bytes = Vec::with_capacity(BALLOT_WIRE_BYTES_V1);
@@ -1311,7 +1319,7 @@ mod tests {
         let encoded = registration.to_bytes();
         assert_eq!(
             OvnRegistrationV1::from_bytes(&session, &encoded),
-            Ok(registration.clone())
+            Ok(registration)
         );
         assert_eq!(
             OvnRegistrationV1::from_bytes(&session, &encoded[..encoded.len() - 1]),
@@ -1348,10 +1356,7 @@ mod tests {
             registrations.push(registration);
         }
         assert_eq!(
-            OvnRosterV1::new(
-                session,
-                vec![registrations[0].clone(), registrations[0].clone()]
-            ),
+            OvnRosterV1::new(session, vec![registrations[0], registrations[0]]),
             Err(OvnError::DuplicateParticipant)
         );
         registrations.reverse();
@@ -1396,7 +1401,9 @@ mod tests {
                     .cast_ballot_with_rng(
                         &survivors,
                         choice,
-                        &mut ChaCha20Rng::from_seed([40 + index as u8; 32]),
+                        &mut ChaCha20Rng::from_seed(
+                            [u8::try_from(40 + index).expect("four-seat fixture seed fits u8"); 32],
+                        ),
                     )
                     .expect("ballot")
             })
@@ -1405,7 +1412,7 @@ mod tests {
             ballot.verify(&survivors).expect("verify ballot");
             assert_eq!(
                 OvnMaskedBallotV1::from_bytes(&survivors, &ballot.to_bytes()),
-                Ok(ballot.clone())
+                Ok(*ballot)
             );
         }
         let aggregate = aggregate_ballots_v1(&survivors, &ballots).expect("aggregate");
@@ -1429,7 +1436,7 @@ mod tests {
                 &mut ChaCha20Rng::from_seed([50; 32]),
             )
             .expect("ballot");
-        let mut forged = ballot.clone();
+        let mut forged = ballot;
         let second = decode_point(&forged.points[1]).expect("point") + RISTRETTO_BASEPOINT_POINT;
         forged.points[1] = second.compress().to_bytes();
         assert_eq!(forged.verify(&survivors), Err(OvnError::InvalidBallotProof));
@@ -1463,7 +1470,9 @@ mod tests {
                     .cast_ballot_with_rng(
                         &survivors,
                         OvnChoiceV1::Abstain,
-                        &mut ChaCha20Rng::from_seed([60 + index as u8; 32]),
+                        &mut ChaCha20Rng::from_seed(
+                            [u8::try_from(60 + index).expect("four-seat fixture seed fits u8"); 32],
+                        ),
                     )
                     .expect("ballot"),
             );

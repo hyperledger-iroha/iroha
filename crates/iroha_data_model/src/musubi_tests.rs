@@ -194,6 +194,10 @@ fn release(name: &str, version: &str) -> MusubiReleaseIdV1 {
     MusubiReleaseIdV1::new(package(name), version.parse().expect("version"))
 }
 #[test]
+#[expect(
+    clippy::too_many_lines,
+    reason = "one closed test covers every number-encoded Musubi Parliament role"
+)]
 fn parliament_actions_check_every_number_encoded_u64_role() {
     let maximum = crate::parliament_types::FIRST_RELEASE_MAX_EXACT_JSON_U64;
     let hostile = maximum + 1;
@@ -239,16 +243,18 @@ fn parliament_actions_check_every_number_encoded_u64_role() {
         })
     };
 
-    let mut baseline_policy = MusubiRegistryPolicyV1::default();
-    baseline_policy.revision = maximum;
-    baseline_policy.allowlisted_dataspaces = vec![DataSpaceId::new(maximum)];
-    baseline_policy.alias_pricing = MusubiAliasPricingPolicyV1 {
+    let baseline_policy = MusubiRegistryPolicyV1 {
         revision: maximum,
-        length_1_xor: maximum,
-        length_2_xor: maximum,
-        length_3_xor: maximum,
-        length_4_xor: maximum,
-        length_5_to_32_xor: maximum,
+        allowlisted_dataspaces: vec![DataSpaceId::new(maximum)],
+        alias_pricing: MusubiAliasPricingPolicyV1 {
+            revision: maximum,
+            length_1_xor: maximum,
+            length_2_xor: maximum,
+            length_3_xor: maximum,
+            length_4_xor: maximum,
+            length_5_to_32_xor: maximum,
+        },
+        ..MusubiRegistryPolicyV1::default()
     };
     for within in [
         recover(maximum, maximum),

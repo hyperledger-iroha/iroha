@@ -16,8 +16,8 @@ import subprocess
 import sys
 import tempfile
 from collections import defaultdict, deque
-from collections.abc import Iterable, Sequence
-from dataclasses import dataclass
+from collections.abc import Iterable, Mapping, Sequence
+from dataclasses import dataclass, field
 from pathlib import Path, PurePosixPath
 from typing import Any
 
@@ -46,6 +46,29 @@ class WorkspacePackage:
     package_id: str
     name: str
     directory: PurePosixPath
+    feature_definitions: dict[str, tuple[str, ...]]
+    dependencies: tuple["WorkspaceDependency", ...]
+
+
+@dataclass(frozen=True)
+class WorkspaceDependency:
+    """One Cargo dependency declaration targeting another workspace package."""
+
+    alias: str
+    package: str
+    optional: bool
+    uses_default_features: bool
+    features: tuple[str, ...]
+    kind: str
+    target: str | None
+
+
+@dataclass(frozen=True)
+class FeatureExclusion:
+    """A host-specific feature omitted from generic Clippy and docs."""
+
+    features: tuple[str, ...]
+    reason: str
 
 
 @dataclass(frozen=True)
@@ -57,6 +80,7 @@ class LaneManifest:
     all_patterns: tuple[str, ...]
     ignore_patterns: tuple[str, ...]
     lane_patterns: dict[str, tuple[str, ...]]
+    feature_exclusions: dict[str, FeatureExclusion] = field(default_factory=dict)
 
     @property
     def package_lane(self) -> dict[str, str]:
@@ -179,24 +203,152 @@ def workspace_packages(
     """Extract unique workspace package ownership from Cargo metadata."""
 
     member_ids = set(metadata.get("workspace_members", ()))
-    packages: dict[str, WorkspacePackage] = {}
+    raw_workspace_packages: dict[str, dict[str, Any]] = {}
+    names: dict[str, str] = {}
     for raw in metadata.get("packages", ()):
         if raw.get("id") not in member_ids:
             continue
+        package_id = raw.get("id")
         name = raw.get("name")
         manifest_path = raw.get("manifest_path")
-        if not isinstance(name, str) or not isinstance(manifest_path, str):
+        if (
+            not isinstance(package_id, str)
+            or not isinstance(name, str)
+            or not isinstance(manifest_path, str)
+        ):
             raise ClassificationError(
                 "Cargo metadata contains an invalid workspace package"
             )
-        if name in packages:
+        if name in names.values():
             raise ClassificationError(f"workspace package name is not unique: {name}")
-        directory = _repository_relative(Path(manifest_path).parent, root)
-        packages[name] = WorkspacePackage(raw["id"], name, directory)
-    missing_ids = member_ids - {package.package_id for package in packages.values()}
+        raw_workspace_packages[package_id] = raw
+        names[package_id] = name
+    missing_ids = member_ids - set(raw_workspace_packages)
     if missing_ids:
         raise ClassificationError(
             f"Cargo metadata omits workspace package records: {sorted(missing_ids)}"
+        )
+
+    resolved_targets: dict[tuple[str, str], set[str]] = defaultdict(set)
+    resolve = metadata.get("resolve")
+    if isinstance(resolve, dict) and isinstance(resolve.get("nodes"), list):
+        for node in resolve["nodes"]:
+            if not isinstance(node, dict):
+                raise ClassificationError(
+                    "Cargo metadata contains an invalid resolve node"
+                )
+            dependent_id = node.get("id")
+            if dependent_id not in raw_workspace_packages:
+                continue
+            raw_deps = node.get("deps", ())
+            if not isinstance(raw_deps, list):
+                raise ClassificationError(
+                    "Cargo metadata contains invalid resolved dependencies"
+                )
+            for dependency in raw_deps:
+                if not isinstance(dependency, dict):
+                    raise ClassificationError(
+                        "Cargo metadata contains invalid resolved dependencies"
+                    )
+                alias = dependency.get("name")
+                target = names.get(dependency.get("pkg"))
+                if isinstance(alias, str) and alias and target is not None:
+                    resolved_targets[(dependent_id, alias)].add(target)
+
+    package_directories = {
+        Path(raw["manifest_path"]).parent.resolve(): names[package_id]
+        for package_id, raw in raw_workspace_packages.items()
+    }
+    packages: dict[str, WorkspacePackage] = {}
+    workspace_names = set(names.values())
+    for package_id, raw in raw_workspace_packages.items():
+        name = names[package_id]
+        manifest_path = raw["manifest_path"]
+        directory = _repository_relative(Path(manifest_path).parent, root)
+        raw_features = raw.get("features", {})
+        if not isinstance(raw_features, dict) or not all(
+            isinstance(feature, str)
+            and feature
+            and isinstance(members, list)
+            and all(isinstance(member, str) and member for member in members)
+            for feature, members in raw_features.items()
+        ):
+            raise ClassificationError(
+                f"Cargo metadata contains invalid features for package {name!r}"
+            )
+        feature_definitions = {
+            feature: tuple(members) for feature, members in raw_features.items()
+        }
+        raw_dependencies = raw.get("dependencies", [])
+        if not isinstance(raw_dependencies, list):
+            raise ClassificationError(
+                f"Cargo metadata contains invalid dependencies for package {name!r}"
+            )
+        dependencies: list[WorkspaceDependency] = []
+        for dependency in raw_dependencies:
+            if not isinstance(dependency, dict):
+                raise ClassificationError(
+                    f"Cargo metadata contains invalid dependencies for package {name!r}"
+                )
+            dependency_name = dependency.get("name")
+            rename = dependency.get("rename")
+            optional = dependency.get("optional")
+            uses_default_features = dependency.get("uses_default_features")
+            dependency_features = dependency.get("features")
+            kind = dependency.get("kind")
+            target = dependency.get("target")
+            path = dependency.get("path")
+            if (
+                not isinstance(dependency_name, str)
+                or not dependency_name
+                or (rename is not None and (not isinstance(rename, str) or not rename))
+                or not isinstance(optional, bool)
+                or not isinstance(uses_default_features, bool)
+                or not isinstance(dependency_features, list)
+                or not all(
+                    isinstance(feature, str) and feature
+                    for feature in dependency_features
+                )
+                or kind not in (None, "normal", "dev", "build")
+                or (target is not None and not isinstance(target, str))
+                or (path is not None and not isinstance(path, str))
+            ):
+                raise ClassificationError(
+                    f"Cargo metadata contains invalid dependencies for package {name!r}"
+                )
+            alias = rename or dependency_name
+            targets = set(resolved_targets.get((package_id, alias), ()))
+            if path is not None:
+                path_target = package_directories.get(Path(path).resolve())
+                if path_target is not None:
+                    targets.add(path_target)
+            if (
+                not targets
+                and dependency_name in workspace_names
+                and dependency.get("source") is None
+            ):
+                # Path dependencies normally carry both `path` and a resolve edge.
+                # Retain this source-less fallback so disabled optional and
+                # target-specific workspace edges cannot disappear from validation.
+                targets.add(dependency_name)
+            for dependency_target in sorted(targets):
+                dependencies.append(
+                    WorkspaceDependency(
+                        alias=alias,
+                        package=dependency_target,
+                        optional=optional,
+                        uses_default_features=uses_default_features,
+                        features=tuple(dependency_features),
+                        kind=kind or "normal",
+                        target=target,
+                    )
+                )
+        packages[name] = WorkspacePackage(
+            package_id,
+            name,
+            directory,
+            feature_definitions,
+            tuple(dependencies),
         )
     return packages
 
@@ -242,12 +394,31 @@ def load_lane_manifest(path: Path = DEFAULT_MANIFEST) -> LaneManifest:
         lane: _patterns(raw_lane_patterns.get(lane, ()), f"paths.lanes.{lane}")
         for lane in lanes
     }
+    raw_feature_exclusions = raw.get("feature_exclusions", {})
+    if not isinstance(raw_feature_exclusions, dict):
+        raise ClassificationError("feature_exclusions must be a table")
+    feature_exclusions: dict[str, FeatureExclusion] = {}
+    for package, settings in raw_feature_exclusions.items():
+        if not isinstance(settings, dict) or set(settings) != {"features", "reason"}:
+            raise ClassificationError(
+                f"feature_exclusions.{package} must contain exactly features and reason"
+            )
+        features = _feature_names(
+            settings["features"], f"feature_exclusions.{package}.features"
+        )
+        reason = settings["reason"]
+        if not isinstance(reason, str) or not reason.strip():
+            raise ClassificationError(
+                f"feature_exclusions.{package}.reason must be non-empty"
+            )
+        feature_exclusions[package] = FeatureExclusion(features, reason)
     return LaneManifest(
         lanes=lanes,
         generated_patterns=generated_patterns,
         all_patterns=all_patterns,
         ignore_patterns=ignore_patterns,
         lane_patterns=lane_patterns,
+        feature_exclusions=feature_exclusions,
     )
 
 
@@ -260,6 +431,130 @@ def _patterns(raw: Any, field: str) -> tuple[str, ...]:
     ):
         raise ClassificationError(f"{field} must contain relative glob strings")
     return tuple(raw)
+
+
+def _feature_names(raw: Any, field: str) -> tuple[str, ...]:
+    """Validate a non-empty list of unique Cargo feature names."""
+
+    if not isinstance(raw, list) or not raw or not all(
+        isinstance(feature, str)
+        and feature
+        and set(feature) <= PACKAGE_NAME_CHARACTERS
+        for feature in raw
+    ):
+        raise ClassificationError(f"{field} must contain Cargo feature names")
+    if len(set(raw)) != len(raw):
+        raise ClassificationError(f"{field} must not contain duplicates")
+    if "default" in raw:
+        raise ClassificationError(f"{field} cannot exclude the default feature")
+    return tuple(sorted(raw))
+
+
+def _workspace_feature_closure(
+    root_profiles: Mapping[str, Iterable[str]],
+    packages: Mapping[str, WorkspacePackage],
+) -> set[tuple[str, str]]:
+    """Conservatively resolve Cargo features reachable from command roots.
+
+    Generic Clippy uses all targets, and generic documentation is deliberately
+    checked against the same upper bound. Consequently every normal, build,
+    development, and target-specific workspace dependency declaration is
+    considered. External dependencies cannot re-enable a workspace exclusion
+    and are omitted when metadata is normalized.
+    """
+
+    dependencies_by_alias: dict[
+        tuple[str, str], tuple[WorkspaceDependency, ...]
+    ] = {}
+    for package in packages.values():
+        grouped: dict[str, list[WorkspaceDependency]] = defaultdict(list)
+        for dependency in package.dependencies:
+            grouped[dependency.alias].append(dependency)
+        dependencies_by_alias.update(
+            {
+                (package.name, alias): tuple(dependencies)
+                for alias, dependencies in grouped.items()
+            }
+        )
+
+    active_packages: set[str] = set()
+    active_dependencies: set[tuple[str, str]] = set()
+    enabled_features: set[tuple[str, str]] = set()
+    weak_features: dict[tuple[str, str], set[str]] = defaultdict(set)
+    pending_packages: deque[str] = deque()
+    pending_dependencies: deque[tuple[str, str]] = deque()
+    pending_features: deque[tuple[str, str]] = deque()
+
+    def activate_package(package_name: str) -> None:
+        if package_name not in active_packages:
+            active_packages.add(package_name)
+            pending_packages.append(package_name)
+
+    def activate_dependency(package_name: str, alias: str) -> None:
+        key = (package_name, alias)
+        if key in dependencies_by_alias and key not in active_dependencies:
+            active_dependencies.add(key)
+            pending_dependencies.append(key)
+
+    def enable_feature(package_name: str, feature: str) -> None:
+        key = (package_name, feature)
+        if key not in enabled_features:
+            enabled_features.add(key)
+            pending_features.append(key)
+
+    for root_package, root_features in root_profiles.items():
+        activate_package(root_package)
+        for feature in root_features:
+            enable_feature(root_package, feature)
+
+    while pending_packages or pending_dependencies or pending_features:
+        while pending_packages:
+            package_name = pending_packages.popleft()
+            package = packages[package_name]
+            for dependency in package.dependencies:
+                if not dependency.optional:
+                    activate_dependency(package_name, dependency.alias)
+
+        while pending_dependencies:
+            package_name, alias = pending_dependencies.popleft()
+            for dependency in dependencies_by_alias[(package_name, alias)]:
+                activate_package(dependency.package)
+                definitions = packages[dependency.package].feature_definitions
+                if dependency.uses_default_features and "default" in definitions:
+                    enable_feature(dependency.package, "default")
+                for feature in dependency.features:
+                    enable_feature(dependency.package, feature)
+                for feature in weak_features[(package_name, alias)]:
+                    enable_feature(dependency.package, feature)
+
+        while pending_features:
+            package_name, feature = pending_features.popleft()
+            package = packages[package_name]
+            for member in package.feature_definitions.get(feature, ()):
+                if member in package.feature_definitions:
+                    enable_feature(package_name, member)
+                    continue
+                if member.startswith("dep:"):
+                    activate_dependency(package_name, member.removeprefix("dep:"))
+                    continue
+                if "/" in member:
+                    alias, dependency_feature = member.split("/", 1)
+                    weak = alias.endswith("?")
+                    alias = alias.removesuffix("?")
+                    dependency_key = (package_name, alias)
+                    if weak:
+                        weak_features[dependency_key].add(dependency_feature)
+                        if dependency_key not in active_dependencies:
+                            continue
+                    else:
+                        activate_dependency(package_name, alias)
+                    for dependency in dependencies_by_alias.get(dependency_key, ()):
+                        enable_feature(dependency.package, dependency_feature)
+                    continue
+                # Cargo's legacy implicit optional-dependency feature syntax.
+                activate_dependency(package_name, member)
+
+    return enabled_features
 
 
 def validate_manifest(
@@ -285,6 +580,82 @@ def validate_manifest(
         errors.append(f"workspace packages missing from lanes: {missing}")
     if stale:
         errors.append(f"lane packages absent from workspace: {stale}")
+    unknown_exclusion_packages = sorted(
+        set(manifest.feature_exclusions) - workspace_names
+    )
+    if unknown_exclusion_packages:
+        errors.append(
+            "feature exclusions reference packages absent from workspace: "
+            f"{unknown_exclusion_packages}"
+        )
+    for package_name, exclusion in manifest.feature_exclusions.items():
+        package = packages.get(package_name)
+        if package is None:
+            continue
+        definitions = package.feature_definitions
+        unknown_features = sorted(set(exclusion.features) - set(definitions))
+        if unknown_features:
+            errors.append(
+                f"feature exclusions for {package_name} are absent from Cargo metadata: "
+                f"{unknown_features}"
+            )
+            continue
+    valid_exclusions = {
+        (package_name, feature)
+        for package_name, exclusion in manifest.feature_exclusions.items()
+        if package_name in packages
+        for feature in exclusion.features
+        if feature in packages[package_name].feature_definitions
+    }
+    reenabled_by_profile: list[str] = []
+
+    def record_reenabled(profile: str, reached: set[tuple[str, str]]) -> None:
+        reenabled_by_profile.extend(
+            f"{profile} -> {package_name}/{feature}"
+            for package_name, feature in sorted(valid_exclusions & reached)
+        )
+
+    for lane, lane_packages in manifest.lanes.items():
+        ordinary_profiles = {
+            package_name: set(packages[package_name].feature_definitions)
+            for package_name in lane_packages
+            if package_name in packages
+            and package_name not in manifest.feature_exclusions
+        }
+        if not ordinary_profiles:
+            continue
+        ordinary_names = list(ordinary_profiles)
+        profile = (
+            ordinary_names[0]
+            if len(ordinary_names) == 1
+            else f"{lane} lane [{', '.join(ordinary_names)}]"
+        )
+        record_reenabled(
+            profile,
+            _workspace_feature_closure(ordinary_profiles, packages),
+        )
+
+    for package_name, exclusion in manifest.feature_exclusions.items():
+        package = packages.get(package_name)
+        if package is None:
+            continue
+        enabled_roots = set(package.feature_definitions) - {
+            "default",
+            *exclusion.features,
+        }
+        if "default" in package.feature_definitions:
+            enabled_roots.add("default")
+        record_reenabled(
+            package_name,
+            _workspace_feature_closure(
+                {package_name: enabled_roots}, packages
+            ),
+        )
+    if reenabled_by_profile:
+        errors.append(
+            "feature exclusions are re-enabled by generic command profiles: "
+            f"{reenabled_by_profile}"
+        )
     pattern_owners: dict[str, list[str]] = defaultdict(list)
     for pattern in manifest.generated_patterns:
         pattern_owners[pattern].append("generated")
@@ -536,7 +907,11 @@ def default_base(root: Path = ROOT) -> str | None:
 
 
 def commands_for_checks(
-    packages: Sequence[str], checks: Sequence[str]
+    packages: Sequence[str],
+    checks: Sequence[str],
+    *,
+    feature_exclusions: Mapping[str, FeatureExclusion] | None = None,
+    workspace: Mapping[str, WorkspacePackage] | None = None,
 ) -> list[list[str]]:
     """Build locked, package-scoped Cargo validation commands."""
 
@@ -549,25 +924,70 @@ def commands_for_checks(
     ]
     if invalid_packages:
         raise ClassificationError(f"invalid Cargo package names: {invalid_packages}")
+    exclusions = feature_exclusions or {}
+    if exclusions and workspace is None:
+        raise ClassificationError(
+            "workspace metadata is required when feature exclusions are configured"
+        )
+    selected_exclusions = {
+        package: exclusions[package] for package in packages if package in exclusions
+    }
+    ordinary_packages = [
+        package for package in packages if package not in selected_exclusions
+    ]
     package_args = [
         argument for package in packages for argument in ("-p", package)
     ]
-    commands: list[list[str]] = []
-    for check in checks:
-        if check == "clippy":
+    ordinary_package_args = [
+        argument for package in ordinary_packages for argument in ("-p", package)
+    ]
+
+    def feature_complete_commands(check: str) -> list[list[str]]:
+        check_args = ["--all-targets"] if check == "clippy" else ["--no-deps"]
+        suffix = ["--", "-D", "warnings"] if check == "clippy" else []
+        commands = []
+        if ordinary_packages:
             commands.append(
                 [
                     "cargo",
-                    "clippy",
+                    check,
                     "--locked",
-                    "--all-targets",
+                    *check_args,
                     "--all-features",
-                    *package_args,
-                    "--",
-                    "-D",
-                    "warnings",
+                    *ordinary_package_args,
+                    *suffix,
                 ]
             )
+        for package, exclusion in selected_exclusions.items():
+            assert workspace is not None
+            metadata = workspace.get(package)
+            if metadata is None:
+                raise ClassificationError(
+                    f"selected Cargo package is absent from workspace metadata: {package}"
+                )
+            enabled = sorted(
+                set(metadata.feature_definitions)
+                - {"default", *exclusion.features}
+            )
+            feature_args = ["--features", ",".join(enabled)] if enabled else []
+            commands.append(
+                [
+                    "cargo",
+                    check,
+                    "--locked",
+                    *check_args,
+                    "-p",
+                    package,
+                    *feature_args,
+                    *suffix,
+                ]
+            )
+        return commands
+
+    commands: list[list[str]] = []
+    for check in checks:
+        if check == "clippy":
+            commands.extend(feature_complete_commands("clippy"))
         elif check == "build":
             commands.append(["cargo", "build", "--locked", *package_args])
         elif check == "test":
@@ -575,16 +995,7 @@ def commands_for_checks(
                 ["cargo", "test", "--locked", "--no-fail-fast", *package_args]
             )
         elif check == "doc":
-            commands.append(
-                [
-                    "cargo",
-                    "doc",
-                    "--locked",
-                    "--no-deps",
-                    "--all-features",
-                    *package_args,
-                ]
-            )
+            commands.extend(feature_complete_commands("doc"))
         else:
             raise ClassificationError(
                 f"unknown check {check!r}; choose from {', '.join(CHECK_NAMES)}"
@@ -598,10 +1009,17 @@ def run_checks(
     *,
     root: Path = ROOT,
     dry_run: bool = False,
+    feature_exclusions: Mapping[str, FeatureExclusion] | None = None,
+    workspace: Mapping[str, WorkspacePackage] | None = None,
 ) -> None:
     """Execute locked Cargo checks for a deterministic package set."""
 
-    commands = commands_for_checks(packages, checks)
+    commands = commands_for_checks(
+        packages,
+        checks,
+        feature_exclusions=feature_exclusions,
+        workspace=workspace,
+    )
     if not commands:
         print("No affected Rust packages; Cargo validation is not required.")
         return
@@ -751,6 +1169,7 @@ def build_parser() -> argparse.ArgumentParser:
     run.add_argument(
         "--dry-run", action="store_true", help="print commands without executing them"
     )
+    run.add_argument("--manifest", default=str(DEFAULT_MANIFEST))
     return parser
 
 
@@ -779,10 +1198,16 @@ def main(argv: Sequence[str] | None = None) -> int:
             if args.github_output:
                 _write_github_output(Path(args.github_output), result)
         elif args.command == "run":
+            metadata = load_cargo_metadata()
+            packages = workspace_packages(metadata)
+            manifest = load_lane_manifest(Path(args.manifest))
+            validate_manifest(manifest, packages)
             run_checks(
                 _parse_packages(args.packages),
                 _parse_checks(args.checks),
                 dry_run=args.dry_run,
+                feature_exclusions=manifest.feature_exclusions,
+                workspace=packages,
             )
         else:
             raise ClassificationError(f"unsupported command: {args.command}")

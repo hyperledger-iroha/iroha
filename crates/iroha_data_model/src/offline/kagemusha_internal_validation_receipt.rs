@@ -1567,6 +1567,10 @@ pub(super) mod internal_validation_receipt_tests {
         KeyPair::from_seed(vec![0xA7; 32], Algorithm::Ed25519)
     }
 
+    #[expect(
+        clippy::too_many_lines,
+        reason = "one canonical receipt body keeps every tool, command, fuzz, and source-digest binding coherent"
+    )]
     fn valid_body(
         validation_runner: &KeyPair,
     ) -> KagemushaRecursiveSpendInternalValidationReceiptBodyV1 {

@@ -73,7 +73,6 @@ SUCCESSOR_PRODUCTION_SOURCE_FIXTURE_FILES = (
     "crates/iroha_core/src/sumeragi/tests/v2_worker_main_01.rs",
     "crates/iroha_core/src/sumeragi/tests/v2_worker_lifecycle_capacity_cases.rs",
     "crates/iroha_core/src/sumeragi/tests/v2_worker_recovered_lifecycle_output_cases.rs",
-    "crates/iroha_core/src/sumeragi/tests/v2_runner_unsealed_00.rs",
     "crates/iroha_core/src/snapshot.rs",
     "crates/iroha_core/src/state.rs",
     "crates/iroha_core/src/kura.rs",
@@ -198,6 +197,13 @@ LIFECYCLE_DECISION_APPLY_LINEAGE_MUTATIONS = (
         "fn dispatch_completion_with_runner_debt_and_required_ordinal(",
         ".map_err(ProductionCompletionDispatchErrorV1::LiveApplyReconciliation)?;",
         ".map_err(ProductionCompletionDispatchErrorV1::Service)?;",
+        "Apply capacity probe must preserve exact executor-availability error provenance",
+    ),
+    (
+        "crates/iroha_core/src/sumeragi/v2_lifecycle_scheduler_inputs.rs",
+        "let executor_dispatch = executor",
+        ".map_err(ProductionCompletionDispatchErrorV1::LiveApplyReconciliation)?;",
+        ".map_err(ProductionCompletionDispatchErrorV1::Service)?;",
         "neutral Apply reservation must join executor evidence before one-shot queue publication",
     ),
     (
@@ -223,10 +229,10 @@ LIFECYCLE_DECISION_APPLY_LINEAGE_MUTATIONS = (
     ),
     (
         "crates/iroha_core/src/sumeragi/v2_lifecycle_launch.rs",
-        "fn settle_lifecycle_decision_apply_completion_owner(",
+        "fn settle_applied_lifecycle_decision_apply_completion(",
         "persist_exact_staged_successor(&staged)",
         "persist_inexact_staged_successor(&staged)",
-        "neutral lifecycle Apply durable terminal settlement",
+        "lifecycle Apply durable terminal settlement and direct status publication",
     ),
     (
         "crates/iroha_core/src/sumeragi/v2_lifecycle_launch.rs",
@@ -266,7 +272,16 @@ LIFECYCLE_DECISION_APPLY_LINEAGE_MUTATIONS = (
 )
 assert len(LIFECYCLE_DECISION_APPLY_LINEAGE_MUTATIONS) == len(
     set(LIFECYCLE_DECISION_APPLY_LINEAGE_MUTATIONS)
-) == 22
+) == 24
+
+
+def test_lifecycle_decision_apply_lineage_source_fidelity_is_current() -> None:
+    """The reviewed lifecycle Apply lineage corridor accepts its source baseline."""
+
+    module = load_checker()
+    assert module._lifecycle_decision_apply_lineage_source_fidelity_errors(
+        ROOT_DIR
+    ) == []
 
 
 @pytest.mark.parametrize(
@@ -3615,7 +3630,7 @@ SUCCESSOR_PRODUCTION_SOURCE_MAPPING_MUTATIONS = (
 
 assert len(SUCCESSOR_PRODUCTION_SOURCE_MAPPING_MUTATIONS) == len(
     set(SUCCESSOR_PRODUCTION_SOURCE_MAPPING_MUTATIONS)
-) == 403
+) == 430
 
 
 @pytest.mark.parametrize(

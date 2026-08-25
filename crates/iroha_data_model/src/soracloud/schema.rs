@@ -1467,6 +1467,12 @@ pub struct SoraServiceLeaseReporterAssignmentV1 {
 }
 impl SoraServiceLeaseReporterAssignmentV1 {
     /// Validate immutable reporter-assignment evidence.
+    ///
+    /// # Errors
+    /// Returns [`SoracloudManifestError::UnsupportedVersion`] for an unsupported
+    /// schema version, [`SoracloudManifestError::EmptyField`] for blank service or
+    /// placement text, and [`SoracloudManifestError::InvalidField`] when the
+    /// placement or reconciliation timestamp violates its invariants.
     pub fn validate(&self) -> Result<(), SoracloudManifestError> {
         validate_schema_version(
             "sora service lease reporter assignment",
@@ -1528,6 +1534,11 @@ pub struct SoraServiceLeaseUsageAuditV1 {
 }
 impl SoraServiceLeaseUsageAuditV1 {
     /// Validate structural lease-usage audit material.
+    ///
+    /// # Errors
+    /// Returns [`SoracloudManifestError::UnsupportedVersion`] for an unsupported
+    /// schema version, [`SoracloudManifestError::InvalidField`] for a zero reporting
+    /// epoch, and propagates any reporter-assignment validation error.
     pub fn validate(&self) -> Result<(), SoracloudManifestError> {
         validate_schema_version(
             "sora service lease usage audit",
@@ -1714,6 +1725,7 @@ impl SoraServiceLeaseStateV1 {
     ///
     /// # Errors
     /// Returns [`SoracloudManifestError`] when required lifecycle or pricing fields are invalid.
+    #[expect(clippy::too_many_lines, reason = "cohesive lease-accounting invariant validation")]
     pub fn validate(&self) -> Result<(), SoracloudManifestError> {
         validate_schema_version(
             "sora service lease state",
@@ -1873,7 +1885,8 @@ impl SoraServiceLeaseStateV1 {
         let storage_cost = self
             .storage_price_per_gib_block
             .try_mul_decimal(&Numeric::new(storage_units, 0))?;
-        let egress_mib = u128::from(self.accounted_egress_bytes)
+        let egress_mib = self
+            .accounted_egress_bytes
             .div_ceil(u128::from(SORA_NETWORK_BYTES_PER_MIB));
         let egress_cost = self
             .egress_price_per_mib

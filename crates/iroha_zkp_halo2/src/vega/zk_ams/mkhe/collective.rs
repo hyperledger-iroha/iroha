@@ -3174,12 +3174,6 @@ impl ZkAmsMkheCollectiveLevelOneV1 {
         }
         Ok(())
     }
-    pub(super) const fn constant(&self) -> &RnsPolynomial {
-        &self.constant
-    }
-    pub(super) const fn linear(&self) -> &RnsPolynomial {
-        &self.linear
-    }
     #[allow(
         dead_code,
         reason = "used by the private fail-closed collective evaluated-key runtime"

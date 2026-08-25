@@ -8,6 +8,7 @@ use iroha_zkp_halo2::{
 pub fn verify_open_envelope(raw: &[u8]) -> Result<bool, iroha_zkp_halo2::Error> {
     let env: OpenVerifyEnvelope = ivm_abi::codec::decode_canonical_norito(raw)
         .map_err(|_| iroha_zkp_halo2::Error::VerificationFailed)?;
+    let backend = iroha_zkp_halo2::ZkCurveId::from_u16(env.params.curve_id);
     let decoded = nh::decode_envelope(&env)?;
     let mut tr = Transcript::new(&env.transcript_label);
     let metadata = env.transcript_metadata();
@@ -42,17 +43,8 @@ pub fn verify_open_envelope(raw: &[u8]) -> Result<bool, iroha_zkp_halo2::Error> 
             proof.as_ref(),
             metadata,
         ),
-        #[cfg(feature = "goldilocks_backend")]
-        DecodedEnvelope::Goldilocks { .. } => {
-            return Err(iroha_zkp_halo2::Error::UnsupportedBackend {
-                backend: iroha_zkp_halo2::ZkCurveId::Goldilocks,
-            });
-        }
-        #[cfg(not(feature = "goldilocks_backend"))]
-        DecodedEnvelope::Goldilocks => {
-            return Err(iroha_zkp_halo2::Error::UnsupportedBackend {
-                backend: iroha_zkp_halo2::ZkCurveId::Goldilocks,
-            });
+        _ => {
+            return Err(iroha_zkp_halo2::Error::UnsupportedBackend { backend });
         }
     };
     match result {

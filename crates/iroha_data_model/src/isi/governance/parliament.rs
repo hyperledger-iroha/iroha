@@ -490,10 +490,6 @@ pub enum ParliamentAutomaticExecutionOutcomeV1 {
 /// Heights representing when a transition executes are intentionally absent:
 /// Core supplies the containing block height.  Future sortition and release
 /// heights remain explicit because they are immutable precommitments.
-#[expect(
-    clippy::large_enum_variant,
-    reason = "closed transition variants retain their canonical direct Norito payloads"
-)]
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(
     feature = "json",

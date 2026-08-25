@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import importlib.util
 import json
 import os
 import stat
@@ -12,6 +13,22 @@ import sys
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 from typing import Any, Iterable
+
+
+_PROVENANCE_MODULE_NAME = "_iroha_build_efficiency_provenance"
+_PROVENANCE_PATH = Path(__file__).with_name("check_build_efficiency_provenance.py")
+_PROVENANCE_SPEC = importlib.util.spec_from_file_location(
+    _PROVENANCE_MODULE_NAME,
+    _PROVENANCE_PATH,
+)
+if _PROVENANCE_SPEC is None or _PROVENANCE_SPEC.loader is None:
+    raise RuntimeError(f"cannot load provenance checker from {_PROVENANCE_PATH}")
+if _PROVENANCE_MODULE_NAME in sys.modules:
+    provenance = sys.modules[_PROVENANCE_MODULE_NAME]
+else:
+    provenance = importlib.util.module_from_spec(_PROVENANCE_SPEC)
+    sys.modules[_PROVENANCE_MODULE_NAME] = provenance
+    _PROVENANCE_SPEC.loader.exec_module(provenance)
 
 
 SCHEMA_VERSION = 1
@@ -113,6 +130,22 @@ def parse_args() -> argparse.Namespace:
             "aggregate_rust.ceiling."
         ),
     )
+    mode.add_argument(
+        "--base-ref",
+        help=(
+            "Compare the strict objective findings with a Git base commit and "
+            "fail for new or worsened debt. Unchanged or reduced base-branch "
+            "debt remains visible without blocking unrelated pull requests."
+        ),
+    )
+    parser.add_argument(
+        "--accepted-ref",
+        help=(
+            "Additional signed repair commit whose inherited debt may be used "
+            "with --base-ref. The ref must match the build-efficiency "
+            "provenance anchor and be an ancestor of HEAD."
+        ),
+    )
     parser.add_argument(
         "--json-out",
         type=Path,
@@ -137,9 +170,8 @@ def parse_non_negative_int(payload: Any, field: str) -> int:
     return payload
 
 
-def load_budget(path: Path) -> Budget:
-    """Load and validate a source budget baseline."""
-    payload: Any = json.loads(path.read_text(encoding="utf-8"))
+def parse_budget(payload: Any) -> Budget:
+    """Validate and decode one source budget payload."""
     if not isinstance(payload, dict):
         raise ValueError("source budget must be a JSON object")
     if payload.get("schema_version") != SCHEMA_VERSION:
@@ -174,6 +206,10 @@ def load_budget(path: Path) -> Budget:
         if not isinstance(raw_path, str):
             raise ValueError("source budget exception paths must be strings")
         normalized = normalize_relative_path(raw_path)
+        if normalized in exceptions:
+            raise ValueError(
+                f"source budget repeats normalized exception path {normalized!r}"
+            )
         exceptions[normalized] = parse_non_negative_int(
             raw_limit, f"exceptions.{normalized}"
         )
@@ -235,6 +271,12 @@ def load_budget(path: Path) -> Budget:
     )
 
 
+def load_budget(path: Path) -> Budget:
+    """Load and strictly validate a source budget baseline."""
+    payload = provenance.strict_json_file(path, str(path))
+    return parse_budget(payload)
+
+
 def normalize_relative_path(path: str | PurePosixPath) -> str:
     """Return one canonical, repository-relative POSIX path."""
     normalized = str(path).replace("\\", "/")
@@ -274,10 +316,15 @@ def is_source_path(path: str) -> bool:
     return PurePosixPath(path).suffix.lower() in SOURCE_SUFFIXES
 
 
+def is_rust_path(path: str) -> bool:
+    """Return whether a tracked path is Rust source, ignoring suffix case."""
+    return PurePosixPath(path).suffix.lower() == ".rs"
+
+
 def is_test_path(path: str) -> bool:
     """Classify source paths that are tests, fixtures, examples, or benchmarks."""
     pure = PurePosixPath(path)
-    parts = set(pure.parts)
+    parts = {part.lower() for part in pure.parts}
     name = pure.name.lower()
     return (
         bool(parts & {"benches", "examples", "fixtures", "test", "tests"})
@@ -317,9 +364,159 @@ def collect_counts(
     return counts
 
 
+def resolve_git_commit(store: Any, ref: str, label: str) -> str:
+    """Resolve one ref through the provenance checker's hardened Git reader."""
+    if not isinstance(ref, str) or not ref or "\0" in ref:
+        raise ValueError(f"{label} must be a non-empty Git ref")
+    raw = store._run(  # The checker intentionally centralizes sanitized Git I/O.
+        "rev-parse",
+        "--verify",
+        "--end-of-options",
+        f"{ref}^{{commit}}",
+    ).stdout
+    try:
+        commit = provenance.require_oid(raw.decode("ascii").strip(), label)
+    except UnicodeError as error:
+        raise ValueError(f"{label} resolved to a non-ASCII commit id") from error
+    commit_bytes = store.object_bytes(commit, "commit")
+    provenance.verify_object_id(commit, "commit", commit_bytes)
+    return commit
+
+
+def collect_counts_at_git_ref(
+    root: Path,
+    ref: str,
+    excluded_prefixes: tuple[str, ...],
+    *,
+    store: Any | None = None,
+) -> tuple[dict[str, int], str]:
+    """Count governed source lines from one exact Git commit without checkout."""
+    object_store = provenance.GitObjectStore(root) if store is None else store
+    commit = resolve_git_commit(object_store, ref, "source budget ref")
+    entries = [
+        entry
+        for entry in object_store.tree_entries(commit)
+        if is_source_path(entry.path)
+        and not is_excluded(entry.path, excluded_prefixes)
+    ]
+    for entry in entries:
+        if (
+            entry.object_type != "blob"
+            or entry.mode not in provenance.REGULAR_FILE_MODES
+        ):
+            raise ValueError(
+                f"{entry.path} is not a regular source blob at {commit}"
+            )
+    blobs = object_store.blob_bytes_many([entry.oid for entry in entries])
+    counts: dict[str, int] = {}
+    for entry in entries:
+        payload = blobs[entry.oid]
+        provenance.verify_object_id(entry.oid, "blob", payload)
+        try:
+            counts[entry.path] = len(payload.decode("utf-8").splitlines())
+        except UnicodeError as error:
+            raise ValueError(
+                f"source budget source is not UTF-8 at {commit}: {entry.path}"
+            ) from error
+    return counts, commit
+
+
+def load_budget_at_git_ref(store: Any, commit: str, relative: str) -> Budget:
+    """Load an exact strict source budget from a commit tree."""
+    path = provenance.require_safe_path(relative, "source budget path")
+    entry = store.tree_entry(commit, path)
+    if entry is None:
+        raise ValueError(f"source budget path {path!r} is missing at {commit}")
+    if (
+        entry.object_type != "blob"
+        or entry.mode not in provenance.REGULAR_FILE_MODES
+    ):
+        raise ValueError(f"source budget path {path!r} is not a regular blob")
+    blob = store.object_bytes(entry.oid, "blob")
+    provenance.verify_object_id(entry.oid, "blob", blob)
+    try:
+        text = blob.decode("utf-8")
+    except UnicodeError as error:
+        raise ValueError(f"source budget path {path!r} is not UTF-8") from error
+    payload = provenance.strict_json_loads(text, f"{path} at {commit}")
+    return parse_budget(payload)
+
+
 def limit_for(path: str, budget: Budget) -> int:
     """Return the default limit for one source path."""
     return budget.test_limit if is_test_path(path) else budget.production_limit
+
+
+def validate_candidate_budget_policy(candidate: Budget, floor: Budget) -> None:
+    """Reject candidate policy changes that weaken a committed comparison floor."""
+    if candidate.production_limit > floor.production_limit:
+        raise ValueError("candidate production limit exceeds the comparison floor")
+    if candidate.test_limit > floor.test_limit:
+        raise ValueError("candidate test limit exceeds the comparison floor")
+
+    added_exclusions = sorted(
+        candidate_prefix
+        for candidate_prefix in candidate.excluded_prefixes
+        if not any(
+            candidate_prefix.startswith(floor_prefix)
+            for floor_prefix in floor.excluded_prefixes
+        )
+    )
+    if added_exclusions:
+        raise ValueError(
+            "candidate source budget expands excluded prefixes: "
+            f"{', '.join(added_exclusions)}"
+        )
+
+    added_exceptions = sorted(set(candidate.exceptions) - set(floor.exceptions))
+    if added_exceptions:
+        raise ValueError(
+            "candidate source budget adds exceptions: "
+            f"{', '.join(added_exceptions)}"
+        )
+    raised_exceptions = sorted(
+        path
+        for path, limit in candidate.exceptions.items()
+        if limit > floor.exceptions[path]
+    )
+    if raised_exceptions:
+        raise ValueError(
+            "candidate source budget raises exceptions: "
+            f"{', '.join(raised_exceptions)}"
+        )
+
+    candidate_aggregate = candidate.aggregate_rust
+    floor_aggregate = floor.aggregate_rust
+    if candidate_aggregate is None or floor_aggregate is None:
+        raise ValueError("candidate and comparison budgets require aggregate_rust")
+    if candidate_aggregate.baseline != floor_aggregate.baseline:
+        raise ValueError("candidate aggregate Rust baseline changed")
+    if candidate_aggregate.ceiling != floor_aggregate.ceiling:
+        raise ValueError("candidate aggregate Rust ceiling changed")
+    if candidate_aggregate.ratchet_ceiling > floor_aggregate.ratchet_ceiling:
+        raise ValueError("candidate aggregate Rust ratchet ceiling increased")
+    floor_target = floor_aggregate.working_target
+    candidate_target = candidate_aggregate.working_target
+    if floor_target is not None and (
+        candidate_target is None or candidate_target > floor_target
+    ):
+        raise ValueError("candidate aggregate Rust working target increased")
+
+
+def invalid_current_exception_paths(
+    counts: dict[str, int], budget: Budget
+) -> set[str]:
+    """Return exception paths whose current tree is not their exact ratchet."""
+    invalid: set[str] = set()
+    for path, baseline in budget.exceptions.items():
+        lines = counts.get(path)
+        if (
+            lines is None
+            or baseline <= limit_for(path, budget)
+            or lines != baseline
+        ):
+            invalid.add(path)
+    return invalid
 
 
 def evaluate(
@@ -367,7 +564,7 @@ def evaluate(
         findings.append(Finding(path, "stale exception for a missing or excluded source"))
     if budget.aggregate_rust is not None:
         rust_lines = sum(
-            lines for path, lines in counts.items() if path.endswith(".rs")
+            lines for path, lines in counts.items() if is_rust_path(path)
         )
         aggregate_limit = (
             budget.aggregate_rust.ceiling
@@ -388,6 +585,125 @@ def evaluate(
                 )
             )
     return findings
+
+
+def evaluate_against_base(
+    counts: dict[str, int],
+    comparison_counts: dict[str, int],
+    budget: Budget,
+    *,
+    comparison_budget: Budget | None = None,
+) -> tuple[list[Finding], list[Finding]]:
+    """Compare the candidate with one topology-selected committed floor."""
+    floor_budget = budget if comparison_budget is None else comparison_budget
+    base_finding_paths = {
+        finding.path
+        for finding in evaluate(
+            comparison_counts,
+            floor_budget,
+            require_objective=True,
+        )
+    }
+    current = evaluate(counts, budget, require_objective=True)
+    exact_exception_failures = invalid_current_exception_paths(counts, budget)
+    current_rust_lines = sum(
+        lines for path, lines in counts.items() if is_rust_path(path)
+    )
+    comparison_rust_lines = sum(
+        lines for path, lines in comparison_counts.items() if is_rust_path(path)
+    )
+    candidate_only = []
+    inherited = []
+    for finding in current:
+        if finding.path in exact_exception_failures:
+            candidate_only.append(finding)
+            continue
+        if finding.path not in base_finding_paths:
+            candidate_only.append(finding)
+            continue
+        if finding.path == "<aggregate Rust>":
+            worsened = current_rust_lines > comparison_rust_lines
+        else:
+            current_lines = counts.get(finding.path)
+            comparison_lines = comparison_counts.get(finding.path)
+            worsened = (
+                current_lines is None
+                or comparison_lines is None
+                or current_lines > comparison_lines
+            )
+        (candidate_only if worsened else inherited).append(finding)
+    return candidate_only, inherited
+
+
+def validate_accepted_ref(
+    root: Path,
+    ref: str,
+    *,
+    candidate_commit: str | None = None,
+    store: Any | None = None,
+) -> str:
+    """Resolve an accepted ref after validating all pinned provenance."""
+    manifest_path = root / "ci/build_efficiency_provenance.json"
+    payload = provenance.strict_json_file(
+        manifest_path,
+        "ci/build_efficiency_provenance.json",
+    )
+    object_store = provenance.GitObjectStore(root) if store is None else store
+    head = (
+        object_store.head()
+        if candidate_commit is None
+        else provenance.require_oid(candidate_commit, "source-budget HEAD snapshot")
+    )
+    provenance.validate_provenance(
+        root,
+        payload,
+        object_store,
+        head_commit=head,
+    )
+    # Full schema and Git validation above makes this lookup trusted.
+    expected = payload["lineage"]["signed_lock_anchor"]["commit"]
+    commit = resolve_git_commit(object_store, ref, "accepted source-budget ref")
+    if commit != expected:
+        raise ValueError(
+            "accepted source-budget ref does not match the signed lock anchor"
+        )
+    if commit == head or not object_store.is_ancestor(commit, head):
+        raise ValueError(
+            "accepted source-budget ref must be a strict ancestor of HEAD"
+        )
+    return commit
+
+
+def validate_comparison_topology(
+    store: Any,
+    base_commit: str,
+    accepted_commit: str | None = None,
+    *,
+    candidate_commit: str | None = None,
+) -> str:
+    """Return the newest comparable floor below the candidate HEAD."""
+    head = (
+        store.head()
+        if candidate_commit is None
+        else provenance.require_oid(candidate_commit, "source-budget HEAD snapshot")
+    )
+    if base_commit == head or not store.is_ancestor(base_commit, head):
+        raise ValueError("source-budget base must be a strict ancestor of HEAD")
+    if accepted_commit is None:
+        return base_commit
+    if accepted_commit == head or not store.is_ancestor(accepted_commit, head):
+        raise ValueError(
+            "accepted source-budget ref must be a strict ancestor of HEAD"
+        )
+    if base_commit == accepted_commit:
+        return base_commit
+    if store.is_ancestor(base_commit, accepted_commit):
+        return accepted_commit
+    if store.is_ancestor(accepted_commit, base_commit):
+        return base_commit
+    raise ValueError(
+        "source-budget base and accepted ref must be comparable ancestors of HEAD"
+    )
 
 
 def baseline_payload(
@@ -453,6 +769,8 @@ def main() -> int:
     )
 
     try:
+        if args.accepted_ref is not None and args.base_ref is None:
+            raise ValueError("--accepted-ref requires --base-ref")
         if args.write_baseline:
             production_limit = DEFAULT_PRODUCTION_LIMIT
             test_limit = DEFAULT_TEST_LIMIT
@@ -489,18 +807,90 @@ def main() -> int:
             )
             return 0
 
-        budget = load_budget(baseline_path)
-        counts = collect_counts(
-            root,
-            tracked_paths(root),
-            budget.excluded_prefixes,
-        )
-        findings = evaluate(
-            counts,
-            budget,
-            require_objective=args.require_objective,
-        )
-    except (OSError, ValueError, json.JSONDecodeError, subprocess.CalledProcessError) as err:
+        base_commit = None
+        accepted_commit = None
+        comparison_commit = None
+        inherited_findings: list[Finding] = []
+        if args.base_ref is not None:
+            object_store = provenance.GitObjectStore(root)
+            candidate_commit = resolve_git_commit(
+                object_store,
+                "HEAD",
+                "source-budget candidate ref",
+            )
+            base_commit = resolve_git_commit(
+                object_store,
+                args.base_ref,
+                "source-budget base ref",
+            )
+            try:
+                baseline_relative = baseline_path.resolve().relative_to(root).as_posix()
+            except ValueError as error:
+                raise ValueError(
+                    "source budget baseline must be inside the repository for "
+                    "Git comparison"
+                ) from error
+            budget = load_budget_at_git_ref(
+                object_store,
+                candidate_commit,
+                baseline_relative,
+            )
+            counts, resolved_candidate_commit = collect_counts_at_git_ref(
+                root,
+                candidate_commit,
+                budget.excluded_prefixes,
+                store=object_store,
+            )
+            if resolved_candidate_commit != candidate_commit:
+                raise ValueError("source-budget candidate commit identity changed")
+            if args.accepted_ref is not None:
+                accepted_commit = validate_accepted_ref(
+                    root,
+                    args.accepted_ref,
+                    candidate_commit=candidate_commit,
+                    store=object_store,
+                )
+            comparison_commit = validate_comparison_topology(
+                object_store,
+                base_commit,
+                accepted_commit,
+                candidate_commit=candidate_commit,
+            )
+            comparison_budget = load_budget_at_git_ref(
+                object_store,
+                comparison_commit,
+                baseline_relative,
+            )
+            validate_candidate_budget_policy(budget, comparison_budget)
+            comparison_counts, resolved_comparison_commit = collect_counts_at_git_ref(
+                root,
+                comparison_commit,
+                comparison_budget.excluded_prefixes,
+                store=object_store,
+            )
+            if resolved_comparison_commit != comparison_commit:
+                raise ValueError("source-budget comparison commit identity changed")
+            findings, inherited_findings = evaluate_against_base(
+                counts,
+                comparison_counts,
+                budget,
+                comparison_budget=comparison_budget,
+            )
+            if object_store.head() != candidate_commit:
+                raise ValueError("HEAD changed during source-budget validation")
+        else:
+            budget = load_budget(baseline_path)
+            counts = collect_counts(
+                root,
+                tracked_paths(root),
+                budget.excluded_prefixes,
+            )
+            findings = evaluate(
+                counts,
+                budget,
+                require_objective=args.require_objective,
+            )
+    except (OSError, ValueError) as err:
         print(f"ERROR: source file budget check failed: {err}", file=sys.stderr)
         return 2
 
@@ -511,13 +901,22 @@ def main() -> int:
         "production_limit": budget.production_limit,
         "test_limit": budget.test_limit,
         "rust_lines": sum(
-            lines for path, lines in counts.items() if path.endswith(".rs")
+            lines for path, lines in counts.items() if is_rust_path(path)
         ),
         "findings": [
             {"path": finding.path, "message": finding.message}
             for finding in findings
         ],
     }
+    if base_commit is not None:
+        report["base_comparison"] = {
+            "commit": base_commit,
+            "accepted_commit": accepted_commit,
+            "floor_commit": comparison_commit,
+            "inherited_finding_paths": sorted(
+                {finding.path for finding in inherited_findings}
+            ),
+        }
     if budget.aggregate_rust is not None:
         rust_lines = report["rust_lines"]
         assert isinstance(rust_lines, int)
@@ -554,6 +953,16 @@ def main() -> int:
             f"ratchet={aggregate_report['ratchet_ceiling']} "
             f"objective_met={str(aggregate_report['objective_met']).lower()} "
             f"gap={aggregate_report['gap_to_ceiling']}",
+            file=human_stream,
+        )
+    if base_commit is not None:
+        print(
+            "base_comparison: "
+            f"commit={base_commit} "
+            f"accepted={accepted_commit or 'none'} "
+            f"floor={comparison_commit} "
+            f"inherited={len({finding.path for finding in inherited_findings})} "
+            f"candidate_only={len(findings)}",
             file=human_stream,
         )
     for finding in findings:

@@ -244,6 +244,7 @@ fn decode_field_prefix_allows_trailing_bytes_and_reports_consumption() {
     assert_eq!(used, encoded_len);
 }
 #[derive(Clone, Debug, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
+#[cfg_attr(feature = "schema-structural", derive(::iroha_schema::IntoSchema))]
 #[norito(decode_from_slice)]
 struct PrefixRecord {
     label: String,
@@ -559,6 +560,7 @@ fn decode_field_canonical_propagates_access_from_misaligned_copy() {
 }
 static PANIC_ON_SERIALIZE: AtomicBool = AtomicBool::new(false);
 #[derive(Clone, Debug, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
+#[cfg_attr(feature = "schema-structural", derive(::iroha_schema::IntoSchema))]
 struct CanonicalStruct {
     a: u32,
     b: Vec<u64>,
@@ -608,10 +610,51 @@ fn decode_field_canonical_does_not_recompute_for_derived_struct() {
     PANIC_ON_SERIALIZE.store(false, Ordering::Relaxed);
 }
 #[derive(Clone, Debug, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
+#[cfg_attr(feature = "schema-structural", derive(::iroha_schema::TypeId))]
 enum CanonicalEnum {
     Unit,
     One(u32),
     Many { a: u32, b: Vec<u8> },
+}
+#[cfg(feature = "schema-structural")]
+#[derive(::iroha_schema::IntoSchema)]
+#[allow(dead_code)]
+struct CanonicalEnumManySchema {
+    a: u32,
+    b: Vec<u8>,
+}
+#[cfg(feature = "schema-structural")]
+impl ::iroha_schema::IntoSchema for CanonicalEnum {
+    fn type_name() -> String {
+        "CanonicalEnum".to_owned()
+    }
+
+    fn update_schema_map(map: &mut ::iroha_schema::MetaMap) {
+        if map.contains_key::<Self>() {
+            return;
+        }
+        map.insert::<Self>(::iroha_schema::Metadata::Enum(::iroha_schema::EnumMeta {
+            variants: vec![
+                ::iroha_schema::EnumVariant {
+                    tag: "Unit".to_owned(),
+                    discriminant: 0,
+                    ty: None,
+                },
+                ::iroha_schema::EnumVariant {
+                    tag: "One".to_owned(),
+                    discriminant: 1,
+                    ty: Some(core::any::TypeId::of::<u32>()),
+                },
+                ::iroha_schema::EnumVariant {
+                    tag: "Many".to_owned(),
+                    discriminant: 2,
+                    ty: Some(core::any::TypeId::of::<CanonicalEnumManySchema>()),
+                },
+            ],
+        }));
+        <u32 as ::iroha_schema::IntoSchema>::update_schema_map(map);
+        <CanonicalEnumManySchema as ::iroha_schema::IntoSchema>::update_schema_map(map);
+    }
 }
 #[repr(transparent)]
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -828,6 +871,7 @@ fn byte_sink_with_headroom_from_preserves_capacity() {
     assert!(sink.buf.capacity() >= cap);
 }
 #[derive(Clone, Copy, Debug, PartialEq)]
+#[cfg_attr(feature = "schema-structural", derive(::iroha_schema::IntoSchema))]
 struct BadExactLen(u32);
 impl crate::NoritoSerialize for BadExactLen {
     fn serialize(&self, encoder: &mut Encoder<'_>) -> Result<(), Error> {
@@ -1077,10 +1121,12 @@ fn write_len_prefixed_exact_matches_buffered_output() {
     assert_eq!(exact, buffered);
 }
 #[derive(Clone, Debug, PartialEq, crate::Encode, crate::Decode)]
+#[cfg_attr(feature = "schema-structural", derive(::iroha_schema::IntoSchema))]
 struct BadExactWrapper {
     inner: BadExactLen,
 }
 #[derive(Clone, Debug, PartialEq, crate::Encode, crate::Decode)]
+#[cfg_attr(feature = "schema-structural", derive(::iroha_schema::IntoSchema))]
 enum BadExactEnum {
     One(BadExactLen),
 }
@@ -1105,6 +1151,7 @@ fn truncated_derived_enum_tag_is_a_length_error() {
 #[test]
 fn truncated_derived_struct_bitset_is_a_length_error() {
     #[derive(Clone, Debug, PartialEq, Eq, crate::Encode, crate::Decode)]
+    #[cfg_attr(feature = "schema-structural", derive(::iroha_schema::IntoSchema))]
     struct BitsetRecord {
         code: u8,
         digest: [u8; 32],

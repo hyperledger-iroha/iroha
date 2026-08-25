@@ -36,7 +36,7 @@ REQUIRED_ROLE_IDS = {
     "donor": "d130c985b46ff8beb99c20b25b36bbdeb506e4c9",
     "source_budget_baseline": "cd05eebfc07c9742734b9d684394c4fe89cdb7c5",
     "protected_integration": "d248cbd127b0188282b761c85239a62c0c4c3d80",
-    "signed_lock_anchor": "93fa4c1848d7ed5c282bbc78ad0db2205c308d8b",
+    "signed_lock_anchor": "93f686e11757cf0624b8f45b5b65b30d99797e6c",
 }
 REQUIRED_ANCESTRY = (
     ("implementation_origin", "donor"),
@@ -145,8 +145,8 @@ def strict_json_loads(text: str, label: str) -> Any:
         raise ProvenanceError(f"{label} is not valid JSON: {err}") from err
 
 
-def read_regular_utf8(path: Path, label: str) -> str:
-    """Read one regular, non-symlink UTF-8 file."""
+def read_regular_bytes(path: Path, label: str) -> bytes:
+    """Read one regular, non-symlink file as exact bytes."""
     try:
         metadata = path.lstat()
     except OSError as err:
@@ -154,8 +154,16 @@ def read_regular_utf8(path: Path, label: str) -> str:
     if not stat.S_ISREG(metadata.st_mode):
         raise ProvenanceError(f"{label} must be a regular file")
     try:
-        return path.read_text(encoding="utf-8")
-    except (OSError, UnicodeError) as err:
+        return path.read_bytes()
+    except OSError as err:
+        raise ProvenanceError(f"cannot read {label}: {err}") from err
+
+
+def read_regular_utf8(path: Path, label: str) -> str:
+    """Read one regular, non-symlink UTF-8 file."""
+    try:
+        return read_regular_bytes(path, label).decode("utf-8")
+    except UnicodeError as err:
         raise ProvenanceError(f"cannot read {label} as UTF-8: {err}") from err
 
 
@@ -776,11 +784,16 @@ def validate_manifest_schema(payload: Any) -> dict[str, Any]:
             raise ProvenanceError(f"donor-origin path {path!r} must have a donor state")
     if observed_paths != expected_paths:
         raise ProvenanceError(
-            "selected_paths must contain exactly the 17 required paths in sorted order"
+            "selected_paths must contain exactly "
+            f"the {len(expected_paths)} required paths in sorted order"
         )
 
     anchor = require_object(manifest["signed_lock_anchor"], "signed_lock_anchor")
-    require_exact_keys(anchor, {"commit_role", "signature", "cargo_lock"}, "signed_lock_anchor")
+    require_exact_keys(
+        anchor,
+        {"commit_role", "signature", "cargo_lock", "source_file_budget"},
+        "signed_lock_anchor",
+    )
     if anchor["commit_role"] != "signed_lock_anchor":
         raise ProvenanceError("signed_lock_anchor.commit_role must name signed_lock_anchor")
     signature = require_object(anchor["signature"], "signed_lock_anchor.signature")
@@ -826,6 +839,37 @@ def validate_manifest_schema(payload: Any) -> dict[str, Any]:
     require_oid(lock["blob"], "signed_lock_anchor.cargo_lock.blob")
     require_int(lock["bytes"], "signed_lock_anchor.cargo_lock.bytes", positive=True)
     require_sha256(lock["sha256"], "signed_lock_anchor.cargo_lock.sha256")
+
+    budget_artifact = require_object(
+        anchor["source_file_budget"], "signed_lock_anchor.source_file_budget"
+    )
+    require_exact_keys(
+        budget_artifact,
+        {"path", "mode", "blob", "bytes", "sha256"},
+        "signed_lock_anchor.source_file_budget",
+    )
+    budget_path = require_safe_path(
+        budget_artifact["path"], "signed_lock_anchor.source_file_budget.path"
+    )
+    if budget_path != REQUIRED_SOURCE_BUDGET["path"]:
+        raise ProvenanceError(
+            "source_file_budget.path must be "
+            f"{REQUIRED_SOURCE_BUDGET['path']!r}"
+        )
+    if budget_artifact["mode"] != "100644":
+        raise ProvenanceError("source_file_budget.mode must be '100644'")
+    require_oid(
+        budget_artifact["blob"], "signed_lock_anchor.source_file_budget.blob"
+    )
+    require_int(
+        budget_artifact["bytes"],
+        "signed_lock_anchor.source_file_budget.bytes",
+        positive=True,
+    )
+    require_sha256(
+        budget_artifact["sha256"],
+        "signed_lock_anchor.source_file_budget.sha256",
+    )
 
     source_budget = require_object(manifest["source_budget"], "source_budget")
     require_exact_keys(
@@ -903,7 +947,10 @@ def historical_rust_count(
     """Count tracked regular Rust files with source-budget line semantics."""
     entries: list[TreeEntry] = []
     for entry in store.tree_entries(commit):
-        if not entry.path.endswith(".rs") or entry.path.startswith(excluded_prefixes):
+        if (
+            PurePosixPath(entry.path).suffix.lower() != ".rs"
+            or entry.path.startswith(excluded_prefixes)
+        ):
             continue
         if entry.object_type != "blob" or entry.mode not in REGULAR_FILE_MODES:
             raise ProvenanceError(
@@ -920,10 +967,26 @@ def historical_rust_count(
     return len(entries), sum(line_cache[entry.oid] for entry in entries)
 
 
-def verify_current_source_budget(root: Path, contract: Mapping[str, Any]) -> None:
-    """Verify the current source budget retains the pinned baseline and goal."""
+def verify_current_source_budget(
+    root: Path,
+    contract: Mapping[str, Any],
+    pinned_bytes: bytes,
+) -> None:
+    """Verify the current source budget retains the complete pinned policy.
+
+    Even a policy-tightening ratchet therefore requires an explicit signed-anchor
+    retarget rather than an unpinned edit to limits, exceptions, or other fields.
+    """
     path = root / str(contract["path"])
-    payload = require_object(strict_json_file(path, str(contract["path"])), "current source budget")
+    label = str(contract["path"])
+    current_bytes = read_regular_bytes(path, label)
+    try:
+        current_text = current_bytes.decode("utf-8")
+    except UnicodeError as err:
+        raise ProvenanceError(f"cannot read {label} as UTF-8: {err}") from err
+    payload = require_object(
+        strict_json_loads(current_text, label), "current source budget"
+    )
     schema = require_int(payload.get("schema_version"), "current source budget.schema_version")
     if schema != contract["schema_version"]:
         raise ProvenanceError("current source budget schema_version changed")
@@ -947,16 +1010,30 @@ def verify_current_source_budget(root: Path, contract: Mapping[str, Any]) -> Non
     )
     if parsed_prefixes != tuple(contract["excluded_prefixes"]):
         raise ProvenanceError("current source budget exclusions changed")
+    if current_bytes != pinned_bytes:
+        raise ProvenanceError(
+            "current source budget bytes differ from the signed lock anchor"
+        )
 
 
-def validate_provenance(root: Path, payload: Any, store: Any) -> dict[str, int]:
-    """Validate the complete build-efficiency provenance contract."""
+def validate_provenance(
+    root: Path,
+    payload: Any,
+    store: Any,
+    *,
+    head_commit: str | None = None,
+) -> dict[str, int]:
+    """Validate the complete contract against one immutable HEAD snapshot."""
     manifest = validate_manifest_schema(payload)
     if store.object_format() != manifest["object_format"]:
         raise ProvenanceError(
             f"repository object format is not {manifest['object_format']!r}"
         )
-    head = store.head()
+    head = (
+        store.head()
+        if head_commit is None
+        else require_oid(head_commit, "provenance HEAD snapshot")
+    )
     head_raw = store.object_bytes(head, "commit")
     verify_object_id(head, "commit", head_raw)
 
@@ -1074,18 +1151,50 @@ def validate_provenance(root: Path, payload: Any, store: Any) -> dict[str, int]:
             f"Cargo.lock SHA-256 is {lock_sha256}, expected {lock['sha256']}"
         )
 
+    budget_artifact = anchor_contract["source_file_budget"]
+    budget_state = (budget_artifact["mode"], budget_artifact["blob"])
+    verify_tree_state(
+        store,
+        anchor_commit,
+        budget_artifact["path"],
+        budget_state,
+        "signed lock anchor",
+        verified_blobs,
+    )
+    verify_tree_state(
+        store,
+        head,
+        budget_artifact["path"],
+        budget_state,
+        "HEAD",
+        verified_blobs,
+    )
+    budget_bytes = verified_blobs[budget_artifact["blob"]]
+    if len(budget_bytes) != budget_artifact["bytes"]:
+        raise ProvenanceError(
+            "ci/source_file_budget.json has "
+            f"{len(budget_bytes)} bytes, expected {budget_artifact['bytes']}"
+        )
+    budget_sha256 = hashlib.sha256(budget_bytes).hexdigest()
+    if budget_sha256 != budget_artifact["sha256"]:
+        raise ProvenanceError(
+            "ci/source_file_budget.json SHA-256 is "
+            f"{budget_sha256}, expected {budget_artifact['sha256']}"
+        )
+
     source_budget = manifest["source_budget"]
     baseline_role = source_budget["commit_role"]
     if lineage[baseline_role]["rust"]["lines"] != source_budget["baseline"]:
         raise ProvenanceError(
             "source budget baseline does not equal its pinned commit's Rust count"
         )
-    verify_current_source_budget(root, source_budget)
+    verify_current_source_budget(root, source_budget, budget_bytes)
     return {
         "roles": len(lineage),
         "selected_paths": len(manifest["selected_paths"]),
         "historical_rust_paths": total_historical_paths,
         "cargo_lock_bytes": len(lock_bytes),
+        "source_budget_bytes": len(budget_bytes),
     }
 
 
@@ -1099,7 +1208,15 @@ def main() -> int:
         manifest_relative = require_safe_path(manifest_path.as_posix(), "--manifest")
         manifest = strict_json_file(root / manifest_relative, manifest_relative)
         store = GitObjectStore(root)
-        report = validate_provenance(root, manifest, store)
+        head_commit = store.head()
+        report = validate_provenance(
+            root,
+            manifest,
+            store,
+            head_commit=head_commit,
+        )
+        if store.head() != head_commit:
+            raise ProvenanceError("HEAD changed during provenance validation")
     except (OSError, ProvenanceError) as err:
         print(f"ERROR: build-efficiency provenance check failed: {err}", file=sys.stderr)
         return 2
@@ -1108,6 +1225,7 @@ def main() -> int:
         f"roles={report['roles']} selected_paths={report['selected_paths']} "
         f"historical_rust_paths={report['historical_rust_paths']} "
         f"cargo_lock_bytes={report['cargo_lock_bytes']} "
+        f"source_budget_bytes={report['source_budget_bytes']} "
         "structural_signature_only=true "
         f"baseline={REQUIRED_SOURCE_BUDGET['baseline']} "
         f"ceiling={REQUIRED_SOURCE_BUDGET['ceiling']}"

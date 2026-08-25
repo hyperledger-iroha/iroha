@@ -17566,24 +17566,7 @@ fn webapp_frontend_app_vue(service_name: &str) -> String {
 }
 fn single_api_contract_ko(app_name: &str) -> String {
     let seiyaku_name = format!("{}_api_service", normalized_contract_identifier(app_name));
-    r#"seiyaku __CONTRACT_NAME__ {
-    view fn main() -> Json {
-        return json {
-            app: "__APP_NAME__",
-            status: "ready",
-        };
-    }
-
-    view fn serve_healthz(bytes _request_body, Json _request_meta, int observed_height) -> Json {
-        return json {
-            app: "__APP_NAME__",
-            observed_height: observed_height,
-            route: "/api/healthz",
-            status: "ready",
-        };
-    }
-}
-"#
+    include_str!("soracloud/templates/v1/static/single_api_contract.ko")
         .replace("__CONTRACT_NAME__", &seiyaku_name)
         .replace("__APP_NAME__", app_name)
 }
@@ -17592,127 +17575,7 @@ fn pii_app_frontend_app_vue(service_name: &str) -> String {
         .replace("__SERVICE_NAME__", service_name)
 }
 fn hayahi_app_contract_ko(service_name: &str) -> String {
-    r#"seiyaku __CONTRACT_NAME__ {
-    view fn main() -> Json {
-        return json {
-            entrypoint: "main",
-            runtime: "soracloud_ivm",
-            service: "__SERVICE_NAME__",
-            status: "compiled",
-        };
-    }
-
-    view fn serve_health(bytes _request_body, Json _request_meta, int observed_height) -> Json {
-        return json {
-            observed_height: observed_height,
-            ok: true,
-            route: "/api/v1/health",
-            service: "__SERVICE_NAME__",
-        };
-    }
-
-    view fn serve_state_overview(bytes _request_body, Json _request_meta, int observed_height) -> Json {
-        return json {
-            observed_height: observed_height,
-            route: "/api/v1/state/overview",
-            service: "__SERVICE_NAME__",
-            storage: "service_manifest_state_bindings",
-        };
-    }
-
-    view fn serve_collector_status(bytes _request_body, Json _request_meta, int observed_height) -> Json {
-        return json {
-            collectors: "validator_workers",
-            observed_height: observed_height,
-            route: "/api/v1/collector/status",
-            service: "__SERVICE_NAME__",
-        };
-    }
-
-    view fn serve_auth_me(bytes _request_body, Json _request_meta, int observed_height) -> Json {
-        return json {
-            auth_surface: "/api/auth/me",
-            observed_height: observed_height,
-            service: "__SERVICE_NAME__",
-            wallet_session_mode: "planned",
-        };
-    }
-
-    view fn serve_user_preferences(bytes _request_body, Json _request_meta, int observed_height) -> Json {
-        return json {
-            observed_height: observed_height,
-            route: "/api/v1/user/preferences",
-            service: "__SERVICE_NAME__",
-            storage_scope: "confidential_state",
-        };
-    }
-
-    view fn serve_saved_searches(bytes _request_body, Json _request_meta, int observed_height) -> Json {
-        return json {
-            observed_height: observed_height,
-            route: "/api/v1/user/saved-searches",
-            service: "__SERVICE_NAME__",
-            storage_scope: "confidential_state",
-        };
-    }
-
-    view fn issue_auth_challenge(bytes _request_body, int execution_sequence, int observed_height) -> Json {
-        return json {
-            execution_sequence: execution_sequence,
-            observed_height: observed_height,
-            route: "/api/auth/challenge",
-            service: "__SERVICE_NAME__",
-        };
-    }
-
-    view fn enqueue_search_request(bytes _request_body, int execution_sequence, int observed_height) -> Json {
-        return json {
-            execution_sequence: execution_sequence,
-            observed_height: observed_height,
-            route: "/api/v1/search",
-            service: "__SERVICE_NAME__",
-        };
-    }
-
-    view fn complete_auth_login(bytes _request_body, int execution_sequence, int observed_height) -> Json {
-        return json {
-            execution_sequence: execution_sequence,
-            observed_height: observed_height,
-            route: "/api/auth/login",
-            service: "__SERVICE_NAME__",
-        };
-    }
-
-    view fn close_auth_session(bytes _request_body, int execution_sequence, int observed_height) -> Json {
-        return json {
-            execution_sequence: execution_sequence,
-            observed_height: observed_height,
-            route: "/api/auth/logout",
-            service: "__SERVICE_NAME__",
-        };
-    }
-
-    view fn store_user_preferences(bytes _request_body, int execution_sequence, int observed_height) -> Json {
-        return json {
-            execution_sequence: execution_sequence,
-            observed_height: observed_height,
-            route: "/api/v1/user/preferences",
-            service: "__SERVICE_NAME__",
-            storage_scope: "confidential_state",
-        };
-    }
-
-    view fn store_saved_search(bytes _request_body, int execution_sequence, int observed_height) -> Json {
-        return json {
-            execution_sequence: execution_sequence,
-            observed_height: observed_height,
-            route: "/api/v1/user/saved-searches",
-            service: "__SERVICE_NAME__",
-            storage_scope: "confidential_state",
-        };
-    }
-}
-"#
+    include_str!("soracloud/templates/v1/static/hayahi_app_contract.ko")
         .replace("__CONTRACT_NAME__", "HayahiSoracloudCore")
         .replace("__SERVICE_NAME__", service_name)
 }
@@ -17786,86 +17649,17 @@ fn http_service_doctor_sh() -> String {
 }
 fn http_service_release_sh() -> String {
     let prelude = iroha_shell_command_prelude();
-    r#"#!/usr/bin/env bash
-set -euo pipefail
-
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-{prelude}
-
-: "${TORII_URL:?Set TORII_URL to the Torii base URL, for example http://127.0.0.1:8080}"
-
-"$SCRIPT_DIR/doctor.sh"
-
-args=(
-  soracloud service deploy
-  --container "$SCRIPT_DIR/container_manifest.json"
-  --service "$SCRIPT_DIR/service_manifest.json"
-  --bundle-file "$SCRIPT_DIR/http-service/build/http-service.tgz"
-  --torii-url "$TORII_URL"
-)
-
-if [[ -n "${API_TOKEN:-}" ]]; then
-  args+=(--api-token "$API_TOKEN")
-fi
-
-exec "${IROHA_CMD[@]}" "${args[@]}" "$@"
-"#
+    include_str!("soracloud/templates/v1/static/http_service_release.sh")
         .replace("{prelude}", prelude)
 }
 fn http_service_deploy_sh() -> String {
     let prelude = iroha_shell_command_prelude();
-    r#"#!/usr/bin/env bash
-set -euo pipefail
-
-SCRIPT_DIR="$(cd "$(dirname "${{BASH_SOURCE[0]}}")" && pwd)"
-{prelude}
-
-: "${TORII_URL:?Set TORII_URL to the Torii base URL, for example http://127.0.0.1:8080}"
-
-"$SCRIPT_DIR/build-and-sync.sh"
-
-args=(
-  soracloud service deploy
-  --container "$SCRIPT_DIR/container_manifest.json"
-  --service "$SCRIPT_DIR/service_manifest.json"
-  --bundle-file "$SCRIPT_DIR/http-service/build/http-service.tgz"
-  --torii-url "$TORII_URL"
-)
-
-if [[ -n "${API_TOKEN:-}" ]]; then
-  args+=(--api-token "$API_TOKEN")
-fi
-
-exec "${IROHA_CMD[@]}" "${args[@]}" "$@"
-"#
+    include_str!("soracloud/templates/v1/static/http_service_deploy.sh")
         .replace("{prelude}", prelude)
 }
 fn http_service_upgrade_sh() -> String {
     let prelude = iroha_shell_command_prelude();
-    r#"#!/usr/bin/env bash
-set -euo pipefail
-
-SCRIPT_DIR="$(cd "$(dirname "${{BASH_SOURCE[0]}}")" && pwd)"
-{prelude}
-
-: "${TORII_URL:?Set TORII_URL to the Torii base URL, for example http://127.0.0.1:8080}"
-
-"$SCRIPT_DIR/build-and-sync.sh"
-
-args=(
-  soracloud service upgrade
-  --container "$SCRIPT_DIR/container_manifest.json"
-  --service "$SCRIPT_DIR/service_manifest.json"
-  --bundle-file "$SCRIPT_DIR/http-service/build/http-service.tgz"
-  --torii-url "$TORII_URL"
-)
-
-if [[ -n "${API_TOKEN:-}" ]]; then
-  args+=(--api-token "$API_TOKEN")
-fi
-
-exec "${IROHA_CMD[@]}" "${args[@]}" "$@"
-"#
+    include_str!("soracloud/templates/v1/static/http_service_upgrade.sh")
         .replace("{prelude}", prelude)
 }
 fn http_service_server_mjs(service_name: &str) -> String {
@@ -18148,7 +17942,7 @@ mod tests {
         refresh_taira_container_reference(&mut lifecycle);
         validate_taira_inrou_canary_bundle(&lifecycle)
             .expect("generic admission still accepts the alternate lifecycle");
-        validate_taira_inrou_canary_source_bundle(&lifecycle)
+        let _ = validate_taira_inrou_canary_source_bundle(&lifecycle)
             .expect_err("release staging must reject an alternate lifecycle");
 
         let mut rollout = canonical_taira_inrou_bundle_fixture();
@@ -18159,7 +17953,7 @@ mod tests {
             .expect("refresh immutable rollout revision identity");
         validate_taira_inrou_canary_bundle(&rollout)
             .expect("generic admission still accepts the alternate rollout policy");
-        validate_taira_inrou_canary_source_bundle(&rollout)
+        let _ = validate_taira_inrou_canary_source_bundle(&rollout)
             .expect_err("release staging must reject an alternate rollout policy");
     }
     #[test]
@@ -18366,7 +18160,7 @@ mod tests {
             }
         }
 
-        create_taira_inrou_canary_workspace(&kernel, &rootfs, &initrd, &output)
+        let _ = create_taira_inrou_canary_workspace(&kernel, &rootfs, &initrd, &output)
             .expect_err("existing workspaces must never be reused");
         validate_generated_taira_inrou_workspace(&output)
             .expect("failed reuse must preserve the original valid workspace");
@@ -18418,7 +18212,7 @@ mod tests {
 
         let mut trailing = canonical;
         trailing.push(0);
-        validate_taira_inrou_canary_bundle_payload(&trailing)
+        let _ = validate_taira_inrou_canary_bundle_payload(&trailing)
             .expect_err("trailing archive bytes must fail");
     }
     fn python3_available() -> bool {
@@ -21576,7 +21370,7 @@ mod tests {
                 .and_then(norito::json::Value::as_object_mut)
                 .expect("control-plane object")
                 .remove(field);
-            StatusOutput::from_network(endpoint.clone(), omitted, None)
+            let _ = StatusOutput::from_network(endpoint.clone(), omitted, None)
                 .expect_err("an omitted canonical control-plane key must fail");
         }
 
@@ -21586,7 +21380,7 @@ mod tests {
             .and_then(norito::json::Value::as_object_mut)
             .expect("control-plane object")
             .insert("legacy_services".to_owned(), norito::json::Value::Null);
-        StatusOutput::from_network(endpoint.clone(), unknown, None)
+        let _ = StatusOutput::from_network(endpoint.clone(), unknown, None)
             .expect_err("an unknown control-plane key must fail");
 
         let mut malformed = canonical.clone();
@@ -21595,7 +21389,7 @@ mod tests {
             .and_then(norito::json::Value::as_object_mut)
             .expect("control-plane object")
             .insert("services".to_owned(), norito::json::Value::Null);
-        StatusOutput::from_network(endpoint.clone(), malformed, None)
+        let _ = StatusOutput::from_network(endpoint.clone(), malformed, None)
             .expect_err("a malformed control-plane service list must fail");
 
         let mut inconsistent = canonical;
@@ -23444,6 +23238,7 @@ mod tests {
             },
             BTreeMap::new(),
             BTreeMap::new(),
+            SoraServiceMutationPreconditionV1::ServiceAbsent,
             Some(&authority),
             &key_pair,
         )
@@ -23495,6 +23290,7 @@ mod tests {
                 services: Vec::new(),
             },
             Vec::new(),
+            SoraAppInfraMutationPreconditionV1::AppAbsent,
             &key_pair,
         )
         .expect("canonical signed app request");
@@ -24398,7 +24194,7 @@ mod tests {
             "01234567",
             "0123456789ABCDEF0123456789ABCDEF01234567",
         ] {
-            parse_hf_revision_arg(revision)
+            let _ = parse_hf_revision_arg(revision)
                 .expect_err("mutable or noncanonical revision must fail");
         }
     }

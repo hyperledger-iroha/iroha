@@ -13,8 +13,9 @@ ROOT = Path(__file__).resolve().parents[2]
 SOURCE = ROOT / "crates/iroha_data_model/src/isi/mod.rs"
 PREIMAGE_BLOB = "20d76d60119fc6fdf216fd073760935d98dae984"
 PREIMAGE_LINES = 4_094
-POSTIMAGE_REGION_LINES = 397
-EXPECTED_DIRECT_SITES = 270
+POSTIMAGE_REGION_LINES = 396
+PREIMAGE_DIRECT_SITES = 270
+EXPECTED_DIRECT_SITES = 272
 
 REGION_START = "impl crate::seal::Instruction for InstructionBox {}"
 REGION_END = "/// Object-safe cloning support for [`Instruction`] trait objects."
@@ -39,6 +40,42 @@ SPECIAL_IMPL = """impl From<crate::isi::soracloud::RecordSoracloudPrivateUploade
 SPECIAL_CALL = """impl_direct_instruction_box!(
     crate::isi::soracloud::RecordSoracloudPrivateUploadedModelExecutionReceipt
 );"""
+
+CURRENT_PROJECTION_REMOVALS = (
+    "impl_direct_instruction_box!(crate::isi::account_alias_lease::AcquireAccountAliasLease);\n",
+    "impl_direct_instruction_box!(crate::isi::domain_link::SetAccountAliasBinding);\n",
+    '#[cfg(feature = "governance")]\nimpl_direct_instruction_box!(crate::isi::governance::EnactReferendum);\n',
+    '#[cfg(feature = "governance")]\nimpl_direct_instruction_box!(crate::isi::governance::EnactSccpRouteGovernance);\n',
+    '#[cfg(feature = "governance")]\nimpl_direct_instruction_box!(crate::isi::governance::FinalizeReferendum);\n',
+    '#[cfg(feature = "governance")]\nimpl_direct_instruction_box!(crate::isi::governance::ApproveGovernanceProposal);\n',
+    '#[cfg(feature = "governance")]\nimpl_direct_instruction_box!(crate::isi::governance::CastParliamentBallot);\n',
+)
+
+CURRENT_PROJECTION_INSERTIONS = (
+    (
+        "impl_direct_instruction_box!(crate::isi::soracloud::RecordSoracloudRuntimeReceipt);\n",
+        "impl_direct_instruction_box!(crate::isi::soracloud::ApplySoracloudOrderedMailboxResult);\n",
+    ),
+    (
+        "impl_direct_instruction_box!(crate::isi::consensus_keys::DisableConsensusKey);\n",
+        "impl_direct_instruction_box!(crate::isi::consensus_keys::ApplyThresholdKeyLifecycleCertificateV1);\n",
+    ),
+    (
+        "impl_direct_instruction_box!(crate::isi::offline::ActivateKagemushaRecursiveReleaseV4);\n",
+        "impl_direct_instruction_box!(crate::isi::offline::EnableKagemushaRecursiveIssuanceV4);\n"
+        "impl_direct_instruction_box!(crate::isi::offline::CancelKagemushaRecursiveReleaseV4);\n"
+        "impl_direct_instruction_box!(crate::isi::offline::DeactivateKagemushaRecursiveIssuanceV4);\n"
+        "impl_direct_instruction_box!(crate::isi::offline::RecordKagemushaTairaCanaryV4);\n"
+        "impl_direct_instruction_box!(crate::isi::offline::AuthorizeKagemushaTairaCanaryV4);\n",
+    ),
+    (
+        "impl_direct_instruction_box!(crate::isi::governance::ProposeValidationFeePayoutLifecycle);\n",
+        '#[cfg(feature = "governance")]\n'
+        "impl_direct_instruction_box!(crate::isi::governance::CreateParliamentGovernanceAttemptV1);\n"
+        '#[cfg(feature = "governance")]\n'
+        "impl_direct_instruction_box!(crate::isi::governance::SubmitParliamentLifecycleTransitionV1);\n",
+    ),
+)
 
 MACRO_AND_MARKER = """impl crate::seal::Instruction for InstructionBox {}
 
@@ -92,11 +129,21 @@ def _compact(preimage: str) -> str:
         )
 
     region = DIRECT_IMPL.sub(replace_direct, region)
-    if replaced != EXPECTED_DIRECT_SITES - 1:
+    if replaced != PREIMAGE_DIRECT_SITES - 1:
         raise AssertionError(f"expected 269 regular sites, found {replaced}")
     if region.count(SPECIAL_IMPL) != 1:
         raise AssertionError("private uploaded-model receipt impl changed")
     region = region.replace(SPECIAL_IMPL, SPECIAL_CALL)
+    if region.count("impl_direct_instruction_box!(") != PREIMAGE_DIRECT_SITES:
+        raise AssertionError("authenticated preimage invocation count drifted")
+    for removal in CURRENT_PROJECTION_REMOVALS:
+        if region.count(removal) != 1:
+            raise AssertionError("current projection removal changed")
+        region = region.replace(removal, "", 1)
+    for anchor, insertion in CURRENT_PROJECTION_INSERTIONS:
+        if region.count(anchor) != 1:
+            raise AssertionError("current projection insertion anchor changed")
+        region = region.replace(anchor, anchor + insertion, 1)
     if region.count("impl_direct_instruction_box!(") != EXPECTED_DIRECT_SITES:
         raise AssertionError("typed invocation count drifted")
     return preimage[:start] + region + preimage[end:]

@@ -603,11 +603,11 @@ mod tests {
         ParliamentLifecycleTransitionV1,
     };
 
-    fn assert_roundtrip(event: GovernanceEvent) {
-        let bytes = norito::to_bytes(&event).expect("encode canonical governance event");
+    fn assert_roundtrip(event: &GovernanceEvent) {
+        let bytes = norito::to_bytes(event).expect("encode canonical governance event");
         let decoded = norito::decode_from_bytes::<GovernanceEvent>(&bytes)
             .expect("decode canonical governance event");
-        assert_eq!(decoded, event);
+        assert_eq!(&decoded, event);
     }
 
     #[test]
@@ -616,7 +616,7 @@ mod tests {
         let governance_attempt_id = GovernanceAttemptId::new([0x12; 32]);
         let body_instance_id = BodyInstanceId::new([0x13; 32]);
         let ballot_attempt_id = BallotAttemptId::new([0x14; 32]);
-        assert_roundtrip(GovernanceEvent::ParliamentAttemptCreated(
+        assert_roundtrip(&GovernanceEvent::ParliamentAttemptCreated(
             GovernanceParliamentAttemptCreated {
                 proposal_content_id,
                 governance_attempt_id,
@@ -630,7 +630,7 @@ mod tests {
                 at_height: 99,
             },
         ));
-        assert_roundtrip(GovernanceEvent::ParliamentLifecycleTransitionApplied(
+        assert_roundtrip(&GovernanceEvent::ParliamentLifecycleTransitionApplied(
             GovernanceParliamentLifecycleTransitionApplied {
                 proposal_content_id,
                 governance_attempt_id,
@@ -643,7 +643,7 @@ mod tests {
                 at_height: 100,
             },
         ));
-        assert_roundtrip(GovernanceEvent::ParliamentLifecycleTransitionApplied(
+        assert_roundtrip(&GovernanceEvent::ParliamentLifecycleTransitionApplied(
             GovernanceParliamentLifecycleTransitionApplied {
                 proposal_content_id,
                 governance_attempt_id,
@@ -655,7 +655,7 @@ mod tests {
                 at_height: 101,
             },
         ));
-        assert_roundtrip(GovernanceEvent::ParliamentLifecycleTransitionApplied(
+        assert_roundtrip(&GovernanceEvent::ParliamentLifecycleTransitionApplied(
             GovernanceParliamentLifecycleTransitionApplied {
                 proposal_content_id,
                 governance_attempt_id,
@@ -673,7 +673,7 @@ mod tests {
                 failure_root: [0x22; 32],
             },
         );
-        assert_roundtrip(GovernanceEvent::ParliamentLifecycleTransitionApplied(
+        assert_roundtrip(&GovernanceEvent::ParliamentLifecycleTransitionApplied(
             GovernanceParliamentLifecycleTransitionApplied {
                 proposal_content_id,
                 governance_attempt_id,
@@ -685,7 +685,7 @@ mod tests {
                 at_height: 102,
             },
         ));
-        assert_roundtrip(GovernanceEvent::ParliamentAttemptTransitioned(
+        assert_roundtrip(&GovernanceEvent::ParliamentAttemptTransitioned(
             GovernanceParliamentAttemptTransitioned {
                 proposal_content_id,
                 governance_attempt_id,
@@ -694,7 +694,7 @@ mod tests {
                 at_height: 100,
             },
         ));
-        assert_roundtrip(GovernanceEvent::ParliamentBodyTransitioned(
+        assert_roundtrip(&GovernanceEvent::ParliamentBodyTransitioned(
             GovernanceParliamentBodyTransitioned {
                 governance_attempt_id,
                 body_instance_id,
@@ -703,7 +703,7 @@ mod tests {
                 at_height: 101,
             },
         ));
-        assert_roundtrip(GovernanceEvent::ParliamentBallotTransitioned(
+        assert_roundtrip(&GovernanceEvent::ParliamentBallotTransitioned(
             GovernanceParliamentBallotTransitioned {
                 body_instance_id,
                 ballot_attempt_id,
@@ -739,7 +739,7 @@ mod tests {
             encoded.len() < 512,
             "audit event must not duplicate evidence"
         );
-        assert_roundtrip(event);
+        assert_roundtrip(&event);
     }
 
     #[test]
@@ -748,7 +748,7 @@ mod tests {
         let governance_attempt_id = GovernanceAttemptId::new([0x22; 32]);
         let body_instance_id = BodyInstanceId::new([0x23; 32]);
         let ballot_attempt_id = BallotAttemptId::new([0x24; 32]);
-        assert_roundtrip(GovernanceEvent::ParliamentConcentrationWarning(
+        assert_roundtrip(&GovernanceEvent::ParliamentConcentrationWarning(
             GovernanceParliamentConcentrationWarning {
                 warning: ParliamentConcentrationWarningV1 {
                     body_instance_id,
@@ -761,7 +761,7 @@ mod tests {
                 at_height: 200,
             },
         ));
-        assert_roundtrip(GovernanceEvent::ParliamentAggregateFinalized(
+        assert_roundtrip(&GovernanceEvent::ParliamentAggregateFinalized(
             GovernanceParliamentAggregateFinalized {
                 proposal_content_id,
                 governance_attempt_id,
@@ -779,7 +779,7 @@ mod tests {
                 at_height: 201,
             },
         ));
-        assert_roundtrip(GovernanceEvent::ParliamentCertificateIssued(
+        assert_roundtrip(&GovernanceEvent::ParliamentCertificateIssued(
             GovernanceParliamentCertificateIssued {
                 certificate_id: GovernanceCertificateId::new([0x25; 32]),
                 proposal_content_id,
@@ -792,7 +792,7 @@ mod tests {
 
     #[test]
     fn threshold_key_lifecycle_event_roundtrips() {
-        assert_roundtrip(GovernanceEvent::ThresholdKeyLifecycleApplied(
+        assert_roundtrip(&GovernanceEvent::ThresholdKeyLifecycleApplied(
             GovernanceThresholdKeyLifecycleAppliedV1 {
                 action: crate::isi::consensus_keys::ThresholdKeyLifecycleActionV1::InstallGlobalBeaconKey,
                 session_id: [0x31; 32],

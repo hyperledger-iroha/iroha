@@ -1,6 +1,6 @@
 # Roadmap
 
-Last updated: 2026-08-25
+Last updated: 2026-08-26
 
 This roadmap is the public, high-level view of current Hyperledger Iroha work.
 Completed history lives in [`status.md`](./status.md).
@@ -15,8 +15,6 @@ Completed history lives in [`status.md`](./status.md).
 
 ## Merged-candidate compile recovery
 
-- Type the two large Halo2 tail-publication ledger equations explicitly so the
-  normal lint policy accepts their values without wrapping or lint overrides.
 - After the merge is recorded as a signed, clean source commit, replay the
   Torii OpenAPI owner and synchronize the complete five-file artifact bundle.
   The embedded source-owned specification is synchronized with the reconciled

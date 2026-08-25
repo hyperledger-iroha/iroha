@@ -128,6 +128,10 @@ impl SoraServiceRolloutStateV1 {
     ///
     /// # Errors
     /// Returns [`SoracloudManifestError`] when version, traffic, or handle invariants are violated.
+    #[expect(
+        clippy::too_many_lines,
+        reason = "keeping the complete rollout invariant audit together makes phase transitions reviewable"
+    )]
     pub fn validate(&self) -> Result<(), SoracloudManifestError> {
         validate_schema_version(
             "sora service rollout state",
@@ -438,7 +442,7 @@ impl SoraServiceDeploymentStateV1 {
                     "must retain a canary last_rollout until it is promoted or rolled back",
                 ));
             }
-            (None, Some(_)) | (None, None) => {}
+            (None, _) => {}
         }
         if let Some(lease) = self.service_lease.as_ref() {
             lease.validate()?;
@@ -1126,6 +1130,10 @@ impl SoraServiceConfigMutationV1 {
     }
 
     /// Validate canonical mutation material at its audit sequence.
+    ///
+    /// # Errors
+    /// Returns [`SoracloudManifestError`] when the mutation is malformed or an
+    /// upsert entry does not carry the containing audit sequence.
     pub fn validate_at_sequence(&self, sequence: u64) -> Result<(), SoracloudManifestError> {
         match self {
             Self::Upsert(entry) => {
@@ -1170,6 +1178,10 @@ impl SoraServiceSecretMutationV1 {
     }
 
     /// Validate canonical mutation material at its audit sequence.
+    ///
+    /// # Errors
+    /// Returns [`SoracloudManifestError`] when the mutation is malformed or an
+    /// upsert entry does not carry the containing audit sequence.
     pub fn validate_at_sequence(&self, sequence: u64) -> Result<(), SoracloudManifestError> {
         match self {
             Self::Upsert(entry) => {
@@ -1868,7 +1880,7 @@ impl SoraModelProvenanceRefV1 {
         Ok(())
     }
 }
-/// Package format admitted for SoraFS-backed uploaded-model registration.
+/// Package format admitted for `SoraFS`-backed uploaded-model registration.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, IntoSchema, Default)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[cfg_attr(feature = "json", norito(tag = "runtime_format", content = "value"))]
@@ -2300,7 +2312,7 @@ impl SoraUploadedModelBundleV1 {
         Ok(())
     }
 }
-/// SoraFS-backed encrypted artifact reference for private uploaded-model execution.
+/// `SoraFS`-backed encrypted artifact reference for private uploaded-model execution.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
@@ -2446,7 +2458,7 @@ pub enum SoraPrivateModelArtifactContextV1 {
 impl SoraPrivateModelArtifactContextV1 {
     const MAX_CONTEXT_IDENTIFIER_BYTES: usize = 256;
 
-    /// Return the canonical artifact role string used by SoraFS references.
+    /// Return the canonical artifact role string used by `SoraFS` references.
     #[must_use]
     pub const fn artifact_role(&self) -> &'static str {
         match self {
@@ -2607,7 +2619,7 @@ pub fn encode_soracloud_private_model_payload_aad_v1(
     transcript
 }
 
-/// Canonical encrypted private-model artifact stored as exact SoraFS content.
+/// Canonical encrypted private-model artifact stored as exact `SoraFS` content.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
@@ -2663,8 +2675,7 @@ impl SoraPrivateModelEncryptedArtifactV1 {
                 "sora private model encrypted artifact",
                 "wrapped_key.nonce",
                 format!(
-                    "AES-256-GCM nonce must be exactly {} bytes",
-                    SORA_PRIVATE_MODEL_AEAD_NONCE_BYTES_V1
+                    "AES-256-GCM nonce must be exactly {SORA_PRIVATE_MODEL_AEAD_NONCE_BYTES_V1} bytes"
                 ),
             ));
         }
@@ -2682,8 +2693,7 @@ impl SoraPrivateModelEncryptedArtifactV1 {
                 "sora private model encrypted artifact",
                 "payload_nonce",
                 format!(
-                    "AES-256-GCM nonce must be exactly {} bytes",
-                    SORA_PRIVATE_MODEL_AEAD_NONCE_BYTES_V1
+                    "AES-256-GCM nonce must be exactly {SORA_PRIVATE_MODEL_AEAD_NONCE_BYTES_V1} bytes"
                 ),
             ));
         }
@@ -2781,20 +2791,14 @@ impl SoraPrivateQuantizedCpuModelV1 {
             return Err(invalid_field(
                 "sora private quantized CPU model",
                 "input_len",
-                format!(
-                    "must be in 1..={}",
-                    SORA_PRIVATE_QUANTIZED_CPU_MAX_INPUTS_V1
-                ),
+                format!("must be in 1..={SORA_PRIVATE_QUANTIZED_CPU_MAX_INPUTS_V1}"),
             ));
         }
         if output_len == 0 || output_len > SORA_PRIVATE_QUANTIZED_CPU_MAX_OUTPUTS_V1 {
             return Err(invalid_field(
                 "sora private quantized CPU model",
                 "output_len",
-                format!(
-                    "must be in 1..={}",
-                    SORA_PRIVATE_QUANTIZED_CPU_MAX_OUTPUTS_V1
-                ),
+                format!("must be in 1..={SORA_PRIVATE_QUANTIZED_CPU_MAX_OUTPUTS_V1}"),
             ));
         }
         let expected_weights = input_len.checked_mul(output_len).ok_or_else(|| {
@@ -2811,8 +2815,7 @@ impl SoraPrivateQuantizedCpuModelV1 {
                 "sora private quantized CPU model",
                 "weights_i8",
                 format!(
-                    "must contain exactly {expected_weights} entries and not exceed {}",
-                    SORA_PRIVATE_QUANTIZED_CPU_MAX_WEIGHTS_V1
+                    "must contain exactly {expected_weights} entries and not exceed {SORA_PRIVATE_QUANTIZED_CPU_MAX_WEIGHTS_V1}"
                 ),
             ));
         }
@@ -2870,8 +2873,7 @@ impl SoraPrivateQuantizedCpuInputV1 {
                 "sora private quantized CPU input",
                 "values_i32",
                 format!(
-                    "length must be in 1..={}",
-                    SORA_PRIVATE_QUANTIZED_CPU_MAX_INPUTS_V1
+                    "length must be in 1..={SORA_PRIVATE_QUANTIZED_CPU_MAX_INPUTS_V1}"
                 ),
             ));
         }
@@ -2908,8 +2910,7 @@ impl SoraPrivateQuantizedCpuOutputV1 {
                 "sora private quantized CPU output",
                 "values_i32",
                 format!(
-                    "length must be in 1..={}",
-                    SORA_PRIVATE_QUANTIZED_CPU_MAX_OUTPUTS_V1
+                    "length must be in 1..={SORA_PRIVATE_QUANTIZED_CPU_MAX_OUTPUTS_V1}"
                 ),
             ));
         }
@@ -3190,6 +3191,10 @@ impl SoraPrivateUploadedModelExecutionReceiptV1 {
         self.validate_with_sequence_state(false)
     }
 
+    #[expect(
+        clippy::too_many_lines,
+        reason = "keeping the complete receipt invariant audit together makes commitment checks reviewable"
+    )]
     fn validate_with_sequence_state(
         &self,
         require_assigned_sequence: bool,

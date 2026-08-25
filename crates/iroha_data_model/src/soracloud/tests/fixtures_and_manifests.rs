@@ -146,6 +146,10 @@ fn app_infra_manifest_hash_and_provenance_are_canonical() {
 }
 #[cfg(feature = "json")]
 #[test]
+#[expect(
+    clippy::too_many_lines,
+    reason = "the complete app-infrastructure JSON field matrix is intentionally audited together"
+)]
 fn app_infra_v1_json_graph_is_closed_and_requires_explicit_nullable_and_vector_keys() {
     macro_rules! assert_closed {
         ($value:expr, $ty:ty, $label:literal) => {{
@@ -623,12 +627,12 @@ fn hf_weight_selection_rejects_unauthenticated_ambiguous_or_over_budget_shards()
         "siblings": [{"rfilename": "../model.gguf", "lfs": {"sha256": traversal_digest, "size": 8}}]
     });
     assert!(derive_hf_weight_selection_v1(&traversal, 1, 8, 8).is_err());
-    let shard_a_digest = "11".repeat(32);
-    let shard_b_digest = "22".repeat(32);
+    let primary_digest = "11".repeat(32);
+    let secondary_hash = "22".repeat(32);
     let two_shards = norito::json!({
         "siblings": [
-            {"rfilename": "a.gguf", "lfs": {"sha256": shard_a_digest, "size": 5}},
-            {"rfilename": "b.gguf", "lfs": {"sha256": shard_b_digest, "size": 5}}
+            {"rfilename": "a.gguf", "lfs": {"sha256": primary_digest, "size": 5}},
+            {"rfilename": "b.gguf", "lfs": {"sha256": secondary_hash, "size": 5}}
         ]
     });
     assert!(derive_hf_weight_selection_v1(&two_shards, 1, 8, 10).is_err());
@@ -1088,6 +1092,10 @@ fn sample_model_artifact_audit_event() -> SoraModelArtifactAuditEventV1 {
 }
 #[cfg(feature = "json")]
 #[test]
+#[expect(
+    clippy::too_many_lines,
+    reason = "the closed deployment and hosting JSON graph is intentionally audited together"
+)]
 fn canonical_deployment_and_hosting_json_graph_rejects_unknown_fields() {
     macro_rules! assert_unknown_rejected {
         ($ty:ty, $label:literal) => {{
@@ -1216,6 +1224,10 @@ fn canonical_deployment_and_hosting_json_graph_rejects_unknown_fields() {
 }
 #[cfg(feature = "json")]
 #[test]
+#[expect(
+    clippy::too_many_lines,
+    reason = "the deployment and hosting required-key matrix is intentionally audited together"
+)]
 fn canonical_deployment_and_hosting_json_graph_requires_explicit_keys() {
     macro_rules! assert_required_keys {
         (
@@ -1610,6 +1622,10 @@ fn inrou_v1_wire_records_require_every_canonical_field() {
     );
 }
 #[test]
+#[expect(
+    clippy::too_many_lines,
+    reason = "the retired Inrou wire-layout matrix is intentionally exercised as one protocol graph"
+)]
 fn inrou_v1_norito_records_reject_retired_backend_selector_layouts() {
     #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Encode)]
     enum RetiredBackend {

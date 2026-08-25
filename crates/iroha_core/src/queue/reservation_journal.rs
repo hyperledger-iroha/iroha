@@ -14,7 +14,7 @@ use super::{
     LaneQueueReservationReleaseBarrierV3, LaneQueueReservationReleaseCompletionV5,
     QueuePlanReservationPhaseV1,
 };
-use crate::secure_file_metadata::{self, SecureMetadata};
+use crate::secure_file_metadata::{self as sfm, SecureMetadata};
 use crate::sumeragi::v2_core::{
     CanonicalIdentityProjection, CheckedProductionTransition, IDENTITY_DOMAIN_DURABLE_ARTIFACT,
     IDENTITY_KIND_LANE_QUEUE_RELEASE_BARRIER, IDENTITY_KIND_LANE_QUEUE_RESERVATION,
@@ -2312,7 +2312,7 @@ impl LaneQueueReservationJournal {
         )?;
         let (replay_state, transition_seal) =
             IndexedReservationReplayState::from_replay(&replay, limits.max_owned_transactions)?;
-        let file_revision = journal_file_revision(&secure_file_metadata::from_file(&file)?);
+        let file_revision = journal_file_revision(&sfm::from_file(&file)?);
         let file_content_identity = checked_file_content_identity(
             &path,
             &mut file,
@@ -2659,7 +2659,7 @@ impl LaneQueueReservationJournal {
         self.parent.sync_all()?;
         self.verify_cached_storage_at_len(expected_end)?;
         self.known_len = expected_end;
-        self.file_revision = journal_file_revision(&secure_file_metadata::from_file(&self.file)?);
+        self.file_revision = journal_file_revision(&sfm::from_file(&self.file)?);
         #[cfg(test)]
         let authorization = if inject_after_sync_before_replay_publication {
             let mut authorization = authorization;
@@ -2858,7 +2858,7 @@ impl LaneQueueReservationJournal {
             self.poisoned = true;
             return Err(error);
         }
-        let replacement_metadata = match secure_file_metadata::from_file(&self.file) {
+        let replacement_metadata = match sfm::from_file(&self.file) {
             Ok(metadata) => metadata,
             Err(error) => {
                 self.poisoned = true;
@@ -2908,9 +2908,8 @@ impl LaneQueueReservationJournal {
     }
     fn verify_cached_storage_unchanged(&self) -> io::Result<()> {
         self.verify_cached_storage_at_len(self.known_len)?;
-        if journal_file_revision(&secure_file_metadata::from_file(&self.file)?)
-            != self.file_revision
-        {
+        let observed_revision = journal_file_revision(&sfm::from_file(&self.file)?);
+        if observed_revision != self.file_revision {
             return Err(invalid_data(
                 "lane reservation journal metadata changed outside its durable owner",
             ));
@@ -2979,9 +2978,9 @@ where
 {
     ensure_file_bound(len, limits)?;
     validate_file_snapshot(path, file, identity, len, parent, parent_identity)?;
-    let revision = journal_file_revision(&secure_file_metadata::from_file(file)?);
+    let revision = journal_file_revision(&sfm::from_file(file)?);
     let before_digest = hash_open_journal(file, len)?;
-    if journal_file_revision(&secure_file_metadata::from_file(file)?) != revision {
+    if journal_file_revision(&sfm::from_file(file)?) != revision {
         return Err(invalid_data(
             "lane reservation journal metadata changed while hashing before replay",
         ));
@@ -3001,9 +3000,7 @@ where
     }
     let after_digest = hash_open_journal(file, len)?;
     validate_file_snapshot(path, file, identity, len, parent, parent_identity)?;
-    if journal_file_revision(&secure_file_metadata::from_file(file)?) != revision
-        || after_digest != before_digest
-    {
+    if journal_file_revision(&sfm::from_file(file)?) != revision || after_digest != before_digest {
         return Err(invalid_data(
             "lane reservation journal content or metadata changed during replay",
         ));
@@ -3030,14 +3027,14 @@ fn checked_file_content_identity(
     parent_identity: JournalFileIdentity,
 ) -> io::Result<Hash> {
     validate_file_snapshot(path, file, identity, expected_len, parent, parent_identity)?;
-    if journal_file_revision(&secure_file_metadata::from_file(file)?) != expected_revision {
+    if journal_file_revision(&sfm::from_file(file)?) != expected_revision {
         return Err(invalid_data(
             "lane reservation journal metadata changed before content authentication",
         ));
     }
     let digest = hash_open_journal(file, expected_len)?;
     validate_file_snapshot(path, file, identity, expected_len, parent, parent_identity)?;
-    if journal_file_revision(&secure_file_metadata::from_file(file)?) != expected_revision {
+    if journal_file_revision(&sfm::from_file(file)?) != expected_revision {
         return Err(invalid_data(
             "lane reservation journal metadata changed during content authentication",
         ));
@@ -4491,8 +4488,8 @@ fn journal_file_is_indirect(metadata: &SecureMetadata) -> bool {
     metadata.file_type().is_symlink() || journal_file_is_reparse_point(metadata)
 }
 fn verify_open_regular_directory(path: &Path, directory: &File) -> io::Result<JournalFileIdentity> {
-    let path_metadata = secure_file_metadata::from_path(path)?;
-    let opened = secure_file_metadata::from_file(directory)?;
+    let path_metadata = sfm::from_path(path)?;
+    let opened = sfm::from_file(directory)?;
     let path_identity = journal_file_identity(&path_metadata);
     let opened_identity = journal_file_identity(&opened);
     if journal_file_is_indirect(&path_metadata)
@@ -4567,7 +4564,7 @@ fn prepare_regular_journal_parent(path: &Path) -> io::Result<()> {
 }
 fn prepare_regular_journal_path(path: &Path) -> io::Result<()> {
     prepare_regular_journal_parent(path)?;
-    match secure_file_metadata::from_path(path) {
+    match sfm::from_path(path) {
         Ok(metadata) => {
             if journal_file_is_indirect(&metadata) || !metadata.is_file() {
                 return Err(invalid_data(
@@ -4605,7 +4602,7 @@ fn reconcile_compaction_temp(
     replay: &LaneQueueReservationReplay,
 ) -> io::Result<()> {
     let tmp = path.with_extension("reservation-compact.tmp");
-    let metadata = match secure_file_metadata::from_path(&tmp) {
+    let metadata = match sfm::from_path(&tmp) {
         Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(()),
         Ok(metadata) => metadata,
         Err(error) => return Err(error),
@@ -4653,7 +4650,7 @@ fn reconcile_compaction_temp(
         ));
     }
     drop(temp);
-    let before_remove = secure_file_metadata::from_path(&tmp)?;
+    let before_remove = sfm::from_path(&tmp)?;
     if journal_file_identity(&before_remove) != temp_identity
         || !journal_file_is_single_link(&before_remove)
     {
@@ -4672,7 +4669,7 @@ fn reconcile_compaction_temp(
     }
 }
 fn reject_existing_compaction_temp(path: &Path) -> io::Result<()> {
-    match secure_file_metadata::from_path(path) {
+    match sfm::from_path(path) {
         Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(()),
         Ok(metadata) => {
             let kind = if journal_file_is_indirect(&metadata) {
@@ -4693,7 +4690,7 @@ fn reject_existing_compaction_temp(path: &Path) -> io::Result<()> {
     }
 }
 fn validate_regular_path(path: &Path) -> io::Result<()> {
-    let metadata = secure_file_metadata::from_path(path)?;
+    let metadata = sfm::from_path(path)?;
     let identity = journal_file_identity(&metadata);
     if journal_file_is_indirect(&metadata)
         || !metadata.is_file()
@@ -4711,8 +4708,8 @@ fn validate_regular_path(path: &Path) -> io::Result<()> {
     Ok(())
 }
 fn verify_open_regular_path(path: &Path, file: &File) -> io::Result<JournalFileIdentity> {
-    let path_metadata = secure_file_metadata::from_path(path)?;
-    let opened = secure_file_metadata::from_file(file)?;
+    let path_metadata = sfm::from_path(path)?;
+    let opened = sfm::from_file(file)?;
     let path_identity = journal_file_identity(&path_metadata);
     let opened_identity = journal_file_identity(&opened);
     if journal_file_is_indirect(&path_metadata)

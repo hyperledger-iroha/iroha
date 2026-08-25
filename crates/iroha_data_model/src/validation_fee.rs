@@ -1326,6 +1326,10 @@ mod parliament_tests {
     fn proposal_operator() -> AccountId {
         account(7)
     }
+    #[expect(
+        clippy::too_many_lines,
+        reason = "one authorization fixture keeps its governance, sortition, ballot, and enactment bindings coherent"
+    )]
     fn authorization(
         proposal_fingerprint: [u8; 32],
         marker: u8,

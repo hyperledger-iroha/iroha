@@ -3,6 +3,7 @@ use norito::{
     NoritoDeserialize, NoritoSerialize, core as norito_core, crc64_fallback, decode_from_bytes,
     hardware_crc64, to_bytes,
 };
+#[cfg_attr(feature = "schema-structural", derive(iroha_schema::IntoSchema))]
 #[derive(Debug, PartialEq, NoritoSerialize, NoritoDeserialize)]
 struct Sample {
     a: u64,

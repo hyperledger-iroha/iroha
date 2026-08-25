@@ -1481,7 +1481,7 @@ pub mod genesis_instructions_json {
     }
     fn parse_account_id(value: &str, label: &'static str) -> Result<AccountId, json::Error> {
         AccountId::parse_encoded(value)
-            .map(|parsed| parsed.into_account_id())
+            .map(iroha_data_model::account::ParsedAccountId::into_account_id)
             .map_err(|err| json::Error::Message(format!("invalid {label}: {err}")))
     }
     fn parse_domain_id(value: &str, label: &'static str) -> Result<DomainId, json::Error> {

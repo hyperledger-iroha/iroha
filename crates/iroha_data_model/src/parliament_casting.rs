@@ -287,6 +287,12 @@ impl ParliamentTimedOvnCastingSnapshotCommitmentV1 {
     }
 
     /// Commit a strictly ballot-id-ordered set of independently valid bindings.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the evaluated height is zero, the binding count exceeds
+    /// its representable or protocol limit, a binding is invalid or non-canonically
+    /// ordered, or a non-empty binding tree cannot produce a root.
     pub fn from_ordered_bindings(
         evaluated_height: u64,
         bindings: &[ParliamentTimedOvnCastingContextBindingV1],
@@ -470,6 +476,11 @@ impl ParliamentTimedOvnCastingWitnessProofV1 {
     }
 
     /// Decode and return the exact canonical snapshot commitment.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the stored value cannot be decoded canonically or the
+    /// decoded commitment has an incoherent version, height, root, or count.
     pub fn commitment(&self) -> Result<ParliamentTimedOvnCastingSnapshotCommitmentV1, String> {
         let commitment: ParliamentTimedOvnCastingSnapshotCommitmentV1 =
             norito::decode_canonical(&self.value).map_err(|error| {
@@ -554,7 +565,10 @@ mod tests {
         let snapshot =
             ParliamentTimedOvnCastingSnapshotCommitmentV1::from_ordered_bindings(12, &bindings)
                 .expect("snapshot");
-        let tree = MerkleTree::from_iter(bindings.iter().map(HashOf::new));
+        let tree = bindings
+            .iter()
+            .map(HashOf::new)
+            .collect::<MerkleTree<ParliamentTimedOvnCastingContextBindingV1>>();
         let proof = ParliamentTimedOvnCastingContextMembershipProofV1::new(
             tree.get_proof(1).expect("second proof"),
         );
@@ -597,7 +611,10 @@ mod tests {
         let snapshot =
             ParliamentTimedOvnCastingSnapshotCommitmentV1::from_ordered_bindings(12, &bindings)
                 .expect("casting snapshot");
-        let tree = MerkleTree::from_iter(bindings.iter().map(HashOf::new));
+        let tree = bindings
+            .iter()
+            .map(HashOf::new)
+            .collect::<MerkleTree<ParliamentTimedOvnCastingContextBindingV1>>();
         let membership = ParliamentTimedOvnCastingContextMembershipProofV1::new(
             tree.get_proof(0).expect("first membership proof"),
         );

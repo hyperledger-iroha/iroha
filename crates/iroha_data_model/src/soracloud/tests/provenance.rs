@@ -1049,6 +1049,10 @@ fn sample_agent_apartment_audit_event() -> SoraAgentApartmentAuditEventV1 {
 }
 #[cfg(feature = "json")]
 #[test]
+#[expect(
+    clippy::too_many_lines,
+    reason = "the agent-hosting nullable and vector key matrix is intentionally audited together"
+)]
 fn canonical_agent_hosting_records_require_explicit_null_and_empty_keys() {
     macro_rules! assert_required_keys {
         (
@@ -1899,6 +1903,10 @@ fn sample_host_egress_response_envelope() -> SoracloudHostResponseEnvelopeV1 {
 }
 #[cfg(feature = "json")]
 #[test]
+#[expect(
+    clippy::too_many_lines,
+    reason = "the direct host-protocol JSON graph is intentionally audited as one closed matrix"
+)]
 fn host_protocol_v1_json_rejects_unknown_fields_across_the_direct_graph() {
     macro_rules! assert_unknown_rejected {
         ($value:expr, $ty:ty, $label:literal) => {{
@@ -2111,6 +2119,10 @@ fn host_protocol_v1_json_rejects_unknown_fields_across_the_direct_graph() {
 }
 #[cfg(feature = "json")]
 #[test]
+#[expect(
+    clippy::too_many_lines,
+    reason = "the host-protocol null and empty key matrix is intentionally audited together"
+)]
 fn host_protocol_v1_json_requires_explicit_null_and_empty_keys() {
     macro_rules! assert_required_fields {
         ($value:expr, $ty:ty, [$($field:literal),+ $(,)?], $label:literal) => {{
@@ -2283,6 +2295,10 @@ fn host_protocol_v1_json_requires_explicit_null_and_empty_keys() {
 }
 #[cfg(feature = "json")]
 #[test]
+#[expect(
+    clippy::too_many_lines,
+    reason = "the signed FHE request JSON graph is intentionally audited as one canonical-key matrix"
+)]
 fn signed_fhe_request_model_v1_json_is_closed_and_requires_canonical_keys() {
     macro_rules! assert_closed {
         ($value:expr, $ty:ty, $label:literal) => {{

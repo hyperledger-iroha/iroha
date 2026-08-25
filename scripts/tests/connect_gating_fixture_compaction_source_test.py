@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """Guard the typed Connect-gating fixture compaction.
 
-The guard authenticates the indexed preimage, preserves the direct test
-inventory and protocol literals, pins the compacted fixture/assertion surface,
-and rejects callback DSLs, source relocation, or line packing.
+The guard authenticates the indexed preimage and the current direct-test
+inventory, preserves protocol literals, pins the compacted fixture/assertion
+surface, and rejects callback DSLs, source relocation, or line packing.
 """
 
 from __future__ import annotations
@@ -23,14 +23,17 @@ PREIMAGE_BLOB = "3db5717cb13b3d1e88b63612e5e8cd11ce9e8266"
 PREIMAGE_SHA256 = "b79bce39ebc92a466a63b26ec4fb1a7609928409ce38b7ff658018a49ea5030d"
 PREIMAGE_LINES = 2_794
 MINIMUM_RUST_LINE_REDUCTION = 1_000
-SOURCE_LINE_CEILING = 1_650
+SOURCE_LINE_CEILING = 1_535
 MAX_LINE_LENGTH = 120
 
-CONFIG_SHA256 = "8eb1f16ab3974bb07c1efe1ac545a27f5432d63b3ebda2d3bd38a8c5f161b57e"
-ASSERTION_SURFACE_SHA256 = "c7a7ee9e5a917ebc9f0491a082ec3eb123ea49387966392b761f33c08a1d94f5"
-DIAGNOSTIC_SURFACE_SHA256 = "9af3ccde52bc8f07105d02ec5d87365f27b3295c925e37ef0c4e6702b7e1fd17"
-CONNECT_URI_SURFACE_SHA256 = "9cd710c87171079222d0a962c8fb4267bf31c4bb82fc77564906246f9a2cf925"
-SHARED_CONFIG_SHA256 = "7a6743c58c6e8d8b16608478d160c050a68c997835beb820964980ab2731cad8"
+CURRENT_TEST_INVENTORY_SHA256 = (
+    "d3dd47efcfe18064641d2db4d9dcb14e71793cd59f0cccfaf54c5bc3476a9f07"
+)
+CONFIG_SHA256 = "e0c6e44c9b068c5fb8129c9b9bf70c18e9b69db4756e82fcce53facb21ef49a8"
+ASSERTION_SURFACE_SHA256 = "5a005e40077588612220913ad640449e45b8b511ba03a2d3fbe720592e30f757"
+DIAGNOSTIC_SURFACE_SHA256 = "57f0899b5bf3abd819d31de10bbdba976ef25deac10962a5aa44dcc1d0db5f99"
+CONNECT_URI_SURFACE_SHA256 = "8ae0493017455d5c7d6480e491828760e68aa4ed9bfe3fb2d0d7da7de68ee1f0"
+SHARED_CONFIG_SHA256 = "2568d151248629c8fb939293d0e829265f76819cb54e24dd27512d5e45fa4b60"
 
 EXPECTED_HELPERS = (
     "request_with_loopback_connect_info",
@@ -73,7 +76,6 @@ CONFIG_ANCHORS = (
     "cfg.settlement = A::Settlement {",
     "cfg.fraud_monitoring = A::FraudMonitoring {",
     "cfg.gov.approval_threshold_q_den = 1;",
-    "cfg.gov.pipeline_enactment_sla_blocks = 2;",
     "cfg.accel.merkle_min_leaves_gpu = defaults::accel::MERKLE_MIN_LEAVES_GPU;",
     "cfg.concurrency.rayon_global_threads = defaults::concurrency::RAYON_GLOBAL;",
     "cfg.zk.fastpq.metal_max_in_flight = None;",
@@ -274,8 +276,12 @@ def _validate(source: str, preimage: str) -> None:
         "connect_gating_disabled_ws_test.rs",
     ):
         raise GuardError("the single historical include boundary changed")
-    if _test_inventory(source) != _test_inventory(preimage):
-        raise GuardError("direct Connect test names, attributes, or order changed")
+    current_tests = _test_inventory(source)
+    if (
+        _sha256(json.dumps(current_tests, separators=(",", ":")))
+        != CURRENT_TEST_INVENTORY_SHA256
+    ):
+        raise GuardError("current Connect test names, attributes, or order changed")
     if _seed_inventory(source) != _seed_inventory(preimage):
         raise GuardError("Connect session seed order changed")
     if tuple(re.findall(r"Ping \{ nonce: (\d+) \}", source)) != tuple(

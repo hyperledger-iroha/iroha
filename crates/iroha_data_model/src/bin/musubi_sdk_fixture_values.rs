@@ -370,6 +370,10 @@ fn canonical_vectors() -> Value {
         "requirement_matches": requirement_matches,
     })
 }
+#[expect(
+    clippy::too_many_lines,
+    reason = "the ordered routes form the closed V1 SDK fixture inventory"
+)]
 fn routes() -> Vec<Value> {
     let network_id = fixture_network_id();
     let snapshot = snapshot();
@@ -778,7 +782,7 @@ fn rejection_vectors() -> Value {
 }
 /// Construct the complete SDK fixture from concrete request and response types.
 #[must_use]
-pub(crate) fn sdk_document() -> Value {
+pub fn sdk_document() -> Value {
     norito::json!({
         "format": "iroha-musubi-sdk-v1",
         "fixture_version": 1,

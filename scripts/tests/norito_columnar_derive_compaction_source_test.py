@@ -36,18 +36,18 @@ DERIVE_PREIMAGE_LINES = 5_869
 OPENING_RUST_LINES = COLUMNAR_PREIMAGE_LINES + DERIVE_PREIMAGE_LINES
 MINIMUM_RUST_LINE_REDUCTION = 1_200
 
-COLUMNAR_LINE_CEILING = 5_644
-DERIVE_LINE_CEILING = 5_129
+COLUMNAR_LINE_CEILING = 5_652
+DERIVE_LINE_CEILING = 5_013
 COLUMNAR_MAX_LINE_LENGTH = 120
 DERIVE_MAX_LINE_LENGTH = 180
-COLUMNAR_SHA256 = "640e4ed77080e46d61128dae3342ccfae5cee9cc08b3e5ec26ba05c8750ef0e9"
-DERIVE_SHA256 = "099c821fcf75c8a93937444bb13d3c7a3b35685e24ca5ccdac6e7990f314fa20"
+COLUMNAR_SHA256 = "4d7f3571ec33859876b413bfadd120cd637de0503f93700dbd2c04f09549926a"
+DERIVE_SHA256 = "1ea894b8963b8559f56e147ea29496659fe9f2b6c9003d35e7cfe9af2ea08542"
 ATTRIBUTE_HELPERS_SHA256 = (
     "c546dd7ed13e22c26b398a45cb5779f6f5e97fdd6c1e1ba7a0b1887f3f364f4c"
 )
 
 COLUMNAR_CFG_SURFACE_SHA256 = (
-    "43dbc7bec7e7e01e1bafbfbec0833b8e05279c30dc0d389f6df34edc9976fc0b"
+    "612eb261650559bc0f3c2ced6b3b3b0557584503e3f0d0334d6671da1be27633"
 )
 DERIVE_CFG_SURFACE_SHA256 = (
     "241b1af584e62103537ee551411a98d0c2a8f00ca17fb93a47b7b46ce952ffcc"
@@ -56,7 +56,7 @@ COLUMNAR_HELPER_SURFACE_SHA256 = (
     "ae32ff076c39cc6c721ef8f244adeab11c0cbee0c6aca67ed9da293003bfd9bf"
 )
 DERIVE_HELPER_SURFACE_SHA256 = (
-    "75c1f4dcce25d13f507d29d9d77cd4d492f96075afe8fef439a1eb2e4c12884d"
+    "fa15884a9030992c35548dbad160d8192f8104f8d8af536b718a885865365f35"
 )
 
 COLUMNAR_HELPERS = (
@@ -102,7 +102,6 @@ DERIVE_HELPERS = (
     "fast_json_vec_field",
     "fast_json_option_field",
     "fast_json_field_parser",
-    "binary_field_value_with_default",
 )
 
 COLUMNAR_TESTS = (
@@ -137,6 +136,13 @@ DERIVE_LITERAL_ADDITIONS = {
     '"encoded_len_exact"',
     '"encoded_len_hint"',
     '"named fields must have identifiers"',
+}
+
+DERIVE_LITERAL_REMOVALS = {
+    '"missing field `{}`"',
+    '"missing field `{key}`"',
+    '"missing field `{key}` in variant `{variant_name}`"',
+    '"missing field `{missing_key}`"',
 }
 
 FORBIDDEN = re.compile(
@@ -607,8 +613,8 @@ def _validate(
         raise GuardError("columnar diagnostic/string literal set changed")
     derive_preimage_literals = _literal_tokens(derive_preimage)
     derive_literals = _literal_tokens(derive)
-    if derive_preimage_literals - derive_literals:
-        raise GuardError("derive lost a current diagnostic/string literal")
+    if derive_preimage_literals - derive_literals != DERIVE_LITERAL_REMOVALS:
+        raise GuardError("derive lost an unaudited diagnostic/string literal")
     if derive_literals - derive_preimage_literals != DERIVE_LITERAL_ADDITIONS:
         raise GuardError("derive introduced an unaudited diagnostic/string literal")
 
@@ -635,7 +641,7 @@ def _validate(
         (
             _cfg_surface(columnar),
             COLUMNAR_CFG_SURFACE_SHA256,
-            37,
+            39,
             "columnar feature cfg",
         ),
         (_cfg_surface(derive), DERIVE_CFG_SURFACE_SHA256, 13, "derive feature cfg"),

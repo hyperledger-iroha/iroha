@@ -1,4 +1,5 @@
 //! Exact slice decoding tests for the Norito codec facade.
+#[cfg_attr(feature = "schema-structural", derive(iroha_schema::IntoSchema))]
 #[derive(Debug, PartialEq, norito::derive::NoritoSerialize, norito::derive::NoritoDeserialize)]
 #[norito(decode_from_slice)]
 struct ExactPayload {

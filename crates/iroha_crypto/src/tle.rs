@@ -1,6 +1,6 @@
 //! Parliament timelock-encryption KEM/DEM helpers.
 //!
-//! The v1 envelope is a fixed Boneh--Franklin FullIdent-style transform over
+//! The v1 envelope is a fixed Boneh--Franklin `FullIdent`-style transform over
 //! BLS12-381 followed by HKDF-SHA256 and XChaCha20-Poly1305. The independently
 //! generated TLE master key is in G2; the future identity private key (the
 //! threshold release signature) is in G1. Type-level key roles prevent a
@@ -37,9 +37,9 @@ pub const TLE_PROTOCOL_VERSION_V1: u16 = 1;
 pub const TLE_MAX_AAD_BYTES_V1: usize = 16 * 1024;
 /// Maximum encrypted masked-opening bytes accepted by the v1 envelope.
 pub const TLE_MAX_PLAINTEXT_BYTES_V1: usize = 64 * 1024;
-/// Width of the random FullIdent sigma value.
+/// Width of the random `FullIdent` sigma value.
 pub const TLE_SIGMA_BYTES_V1: usize = 32;
-/// Width of the random data-encryption key wrapped by FullIdent.
+/// Width of the random data-encryption key wrapped by `FullIdent`.
 pub const TLE_DEK_BYTES_V1: usize = 32;
 /// Width of the XChaCha20-Poly1305 nonce.
 pub const TLE_NONCE_BYTES_V1: usize = 24;
@@ -95,7 +95,7 @@ pub enum TleError {
     /// The supplied identity, session, or AAD did not match the envelope binding.
     #[error("TLE envelope binding mismatch")]
     BindingMismatch,
-    /// FullIdent consistency or AEAD authentication failed.
+    /// `FullIdent` consistency or AEAD authentication failed.
     #[error("TLE envelope opening failed")]
     OpenFailed,
     /// Hash-to-scalar rejection sampling exhausted its defensive bound.
@@ -289,7 +289,7 @@ impl TleReleaseIdentityV1 {
     }
 }
 
-/// Canonical FullIdent KEM plus XChaCha20-Poly1305 DEM envelope.
+/// Canonical `FullIdent` KEM plus XChaCha20-Poly1305 DEM envelope.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TleEnvelopeV1 {
     session_id: [u8; 32],
@@ -332,8 +332,8 @@ impl TleEnvelopeV1 {
             .checked_sub(cursor)
             .ok_or(TleError::InvalidEnvelope)?;
         if ciphertext_len != remaining
-            || ciphertext_len < TLE_TAG_BYTES_V1
-            || ciphertext_len > TLE_MAX_PLAINTEXT_BYTES_V1 + TLE_TAG_BYTES_V1
+            || !(TLE_TAG_BYTES_V1..=TLE_MAX_PLAINTEXT_BYTES_V1 + TLE_TAG_BYTES_V1)
+                .contains(&ciphertext_len)
         {
             return Err(TleError::InvalidEnvelope);
         }
@@ -393,7 +393,7 @@ impl TleEnvelopeV1 {
         &self.aad_digest
     }
 
-    /// Return the canonical compressed FullIdent `U` point in G2.
+    /// Return the canonical compressed `FullIdent` `U` point in G2.
     #[must_use]
     pub const fn kem_u(&self) -> &[u8; THRESHOLD_BLS_PUBLIC_KEY_BYTES] {
         &self.u
@@ -476,7 +476,7 @@ impl TleIdentitySecretKeyV1 {
 
     /// Open and authenticate one envelope for the exact release identity and AAD.
     ///
-    /// FullIdent consistency and AEAD failures deliberately collapse to
+    /// `FullIdent` consistency and AEAD failures deliberately collapse to
     /// [`TleError::OpenFailed`] to avoid exposing a useful validity oracle.
     ///
     /// # Errors
@@ -1001,6 +1001,21 @@ mod tests {
 
     #[test]
     fn size_and_inert_rng_bounds_fail_closed() {
+        #[derive(Debug)]
+        struct ZeroRng;
+        impl rand_core::RngCore for ZeroRng {
+            fn next_u32(&mut self) -> u32 {
+                0
+            }
+            fn next_u64(&mut self) -> u64 {
+                0
+            }
+            fn fill_bytes(&mut self, destination: &mut [u8]) {
+                destination.fill(0);
+            }
+        }
+        impl rand_core::CryptoRng for ZeroRng {}
+
         let (master, identity, _) = fixture();
         assert_eq!(
             seal_tle_v1_with_rng(
@@ -1022,21 +1037,6 @@ mod tests {
             ),
             Err(TleError::PlaintextTooLarge)
         );
-
-        #[derive(Debug)]
-        struct ZeroRng;
-        impl rand_core::RngCore for ZeroRng {
-            fn next_u32(&mut self) -> u32 {
-                0
-            }
-            fn next_u64(&mut self) -> u64 {
-                0
-            }
-            fn fill_bytes(&mut self, destination: &mut [u8]) {
-                destination.fill(0);
-            }
-        }
-        impl rand_core::CryptoRng for ZeroRng {}
         assert_eq!(
             seal_tle_v1_with_rng(&master, &identity, b"aad", b"opening", &mut ZeroRng),
             Err(TleError::InertRandomness)

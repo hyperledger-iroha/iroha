@@ -21,6 +21,27 @@ workflow continues to run the complete workspace matrix on `main`, tags, and
 manual release gates. Apply the `ci/full` label to a pull request to force all
 seven routed Rust lanes before merge.
 
+Generic Clippy and documentation commands enable every feature declared in
+locked Cargo metadata except the host/toolchain-specific or intentionally
+non-production roots listed under `feature_exclusions`. Each excluded package
+is checked in a separate Cargo invocation. Before generating commands, the
+router validates the complete ordinary package group for each lane, a
+monotonic upper bound for every dynamically selected subset, while retaining
+each excluded package's separate remaining-feature profile. It rejects unknown
+exclusions and follows workspace dependency aliases, fixed/default dependency
+features, and `dep:`, strong, and weak feature edges to reject cross-root Cargo
+feature unification that re-enables an exclusion. Development, build, and
+target-specific dependency declarations are included in that fail-closed upper
+bound.
+
+The dedicated nightly CUDA workflow covers IVM, FastPQ, Norito CUDA helpers,
+and the JNI bridge on CUDA hosts. It does not directly exercise the
+`iroha_core/cuda` or `irohad/accel-cuda` roots, which remain excluded from
+generic hosts pending dedicated qualification. The other exclusions require
+unstable compiler intrinsics, native host libraries, authenticated builder
+inputs, or test-only compilation and likewise must not leak back into generic
+Clippy or rustdoc.
+
 Use the same routing locally:
 
 ```sh
@@ -59,9 +80,11 @@ therefore runs the guard with Rust 1.93.1.
 `python3 -I -S scripts/check_build_efficiency_provenance.py` verifies the five
 pinned implementation, donor, source-budget, protected-integration, and lock
 anchor commits from local full-history Git objects. It checks their exact
-trees, ordered parents, ancestry, historical Rust counts, the 17 selected path
+trees, ordered parents, ancestry, historical Rust counts, the 14 selected path
 states, the anchor and current `HEAD` `Cargo.lock`, and the current 4,540,000
-line ceiling before dependency, source-budget, or release Cargo work.
+line ceiling before dependency, source-budget, or release Cargo work. The
+checker resolves `HEAD` once, uses that object ID throughout validation, and
+rejects a ref that moves before validation completes.
 
 The anchor's OpenPGP issuer fingerprint is structural metadata bound by the
 pinned commit object. No trusted public key is part of this contract, so the
@@ -129,12 +152,23 @@ Six fast, read-only checks keep structural and provisioning debt from returning:
   checked-in `aggregate_rust` section pins the reviewed first-party Rust
   baseline, a ceiling requiring at least a 10% reduction, and a lower working
   target. The default invocation enforces `ratchet_ceiling` as an exact
-  no-growth cap, while CI and release gates pass `--require-objective` to make
-  the hard ceiling mandatory. JSON reports say whether the objective is met
-  and expose the remaining gap. The ratchet may only move downward during the
-  transition, and must converge to the hard ceiling. `--write-baseline`
-  preserves all reviewed aggregate targets rather than redefining them from
-  the current tree.
+  no-growth cap. Pull-request CI passes `--base-ref` and applies the strict
+  hard-ceiling evaluation to both trees, failing new finding paths and any
+  per-file or aggregate debt that grows relative to the exact base commit;
+  the current repair rollout also accepts the provenance-authenticated signed
+  lock anchor. The newer of the two comparable ancestors is the sole policy
+  and count floor; divergent ancestors fail closed. Unchanged or reduced
+  inherited debt remains visible without blocking unrelated changes, while
+  candidate growth beyond that authenticated floor fails. The PR workflow
+  permits only the exact pinned checkout, Rust setup, and Python setup actions
+  before this guard, and rejects alternate runners, job containers, or shell,
+  language, and dynamic-loader environment injection. Release gates pass
+  `--require-objective` and
+  continue to require the hard ceiling unconditionally. JSON reports say
+  whether the objective is met and expose the remaining gap. The ratchet may
+  only move downward during the transition, and must converge to the hard
+  ceiling. `--write-baseline` preserves all reviewed aggregate targets rather
+  than redefining them from the current tree.
 
 The aggregate baseline is the task-start tree at
 `cd05eebfc07c9742734b9d684394c4fe89cdb7c5`: 5,067,263 logical Rust lines.

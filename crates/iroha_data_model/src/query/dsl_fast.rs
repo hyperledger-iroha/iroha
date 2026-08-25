@@ -973,7 +973,7 @@ impl<T> norito::json::JsonSerialize for SelectorTuple<T> {
                 SelectorMode::Full => "Full",
                 SelectorMode::IdsOnly => "IdsOnly",
             };
-            return norito::json::write_json_string_to(mode, out);
+            norito::json::write_json_string_to(mode, out)
         }
         #[cfg(not(feature = "ids_projection"))]
         {
@@ -2094,7 +2094,7 @@ mod checked_json_tests {
         );
         assert_exact(&SelectorTuple::<crate::domain::Domain>::default());
         #[cfg(feature = "ids_projection")]
-        assert_exact(&SelectorMode::IdsOnly);
+        assert_exact(&SelectorTuple::<crate::domain::Domain>::ids_only());
     }
 }
 /// Prelude re-export for the lightweight query DSL.

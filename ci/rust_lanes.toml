@@ -132,6 +132,30 @@ packages = [
 description = "Cross-component, multi-peer integration coverage."
 packages = ["integration_tests"]
 
+# Generic hosts type-check and document every declared feature except these
+# host/toolchain-specific or intentionally non-production roots. The enabled
+# set is derived from locked Cargo metadata, so newly declared portable
+# features enter the generic lanes automatically.
+[feature_exclusions.ivm]
+features = ["beep", "cuda", "htm"]
+reason = "CUDA awaits qualified PTX provenance, HTM needs unstable RTM intrinsics, and beep needs host ALSA development files."
+
+[feature_exclusions.iroha_core]
+features = ["cuda", "kagemusha-candidate-source-seal", "kaigi_privacy_mocks"]
+reason = "CUDA forwards qualified IVM code, the source seal requires its authenticated builder environment, and privacy mocks intentionally reject non-test builds."
+
+[feature_exclusions.irohad]
+features = ["accel-cuda", "beep"]
+reason = "The daemon roots forward qualified CUDA backends and IVM's host-ALSA beep support."
+
+[feature_exclusions.connect_norito_bridge]
+features = ["cuda"]
+reason = "The JNI bridge CUDA root forwards IVM's qualification-only CUDA feature."
+
+[feature_exclusions.iroha_audio]
+features = ["libopus"]
+reason = "The libopus backend needs native CMake and Opus tooling absent from generic CI hosts."
+
 [paths]
 # Generated work products never seed a compile lane, including when nested in a
 # package directory. The always-on generated-artifact guard independently

@@ -8,11 +8,17 @@ use std::{
     io::Cursor,
     sync::{Arc, Barrier},
 };
+#[cfg_attr(feature = "schema-structural", derive(iroha_schema::IntoSchema))]
+#[derive(Debug, PartialEq, Eq, Encode, Decode)]
+struct NamedSequence {
+    values: Vec<u16>,
+}
+#[cfg_attr(feature = "schema-structural", derive(iroha_schema::IntoSchema))]
 #[derive(Debug, PartialEq, Eq, Encode, Decode)]
 enum WrappedSequence {
     Direct(Vec<u16>),
     Boxed(Box<Vec<u16>>),
-    Named { values: Vec<u16> },
+    Named(NamedSequence),
 }
 fn limits(max_sequence_elements: usize) -> DecodeLimits {
     DecodeLimits::new(
@@ -77,9 +83,9 @@ fn enum_canonical_decoders_preserve_terminal_sequence_limits() {
     for value in [
         WrappedSequence::Direct(vec![1, 2, 3, 4]),
         WrappedSequence::Boxed(Box::new(vec![1, 2, 3, 4])),
-        WrappedSequence::Named {
+        WrappedSequence::Named(NamedSequence {
             values: vec![1, 2, 3, 4],
-        },
+        }),
     ] {
         let bytes = norito::to_bytes(&value).expect("encode wrapped sequence");
         let error = norito::decode_from_bytes_with_limits::<WrappedSequence>(&bytes, limits(3))
@@ -639,7 +645,7 @@ fn concurrent_scopes_keep_independent_budgets() {
 #[cfg(feature = "parallel-decode")]
 #[test]
 fn parallel_workers_inherit_the_active_limit_for_nested_sequences() {
-    use norito::{NoritoSerialize as _, SequencePlan, SequenceSpan};
+    use norito::{SequencePlan, SequenceSpan};
     let mut encoded_element = Vec::new();
     norito::core::serialize_to_buffer(&vec![0xA5_u8; 1025], &mut encoded_element)
         .expect("encode nested byte sequence");
