@@ -426,16 +426,16 @@ class TransactionFixtureParityTest {
         for (field in listOf("network_id", "payload.network_id")) {
             val descriptor = payloadSourceDescriptor()
             if (field == "network_id") {
-                descriptor[field] = TEST_NETWORK_ID.lowercase()
+                descriptor[field] = TEST_NETWORK_ID.uppercase()
             } else {
-                payloadObject(descriptor)["network_id"] = TEST_NETWORK_ID.lowercase()
+                payloadObject(descriptor)["network_id"] = TEST_NETWORK_ID.uppercase()
             }
             val error = assertFailsWith<IllegalArgumentException> {
                 AndroidFixtureSupport.payloadFixtureFromValue(descriptor)
             }
             assertEquals(
                 true,
-                error.message?.contains("exact canonical hash encoding"),
+                error.message?.contains("64-character lowercase hexadecimal NetworkId"),
                 error.message,
             )
         }
@@ -530,7 +530,7 @@ class TransactionFixtureParityTest {
                 "contract_address" to
                     "irohac1qyqqqqqqqqqqqqputuv64zhf0a0a4hhlqdj2lhnwuzq4xjq3qexfh",
                 "expected_code_hash" to
-                    "hash:0E5751C026E543B2E8AB2EB06099DAA1D1E5DF47778F7787FAAB45CDF12FE3A9#6A22",
+                    "0e5751c026e543b2e8ab2eb06099daa1d1e5df47778f7787faab45cdf12fe3a9",
                 "entrypoint" to "run",
                 "arguments" to listOf(1L, 2L, 3L, 4L),
             ),
@@ -968,7 +968,7 @@ class TransactionFixtureParityTest {
         private const val CANONICAL_AUTHORITY =
             "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV"
         private const val TEST_NETWORK_ID =
-            "hash:32C903E5B3497E34C2B844EBFE8A39C19E6CF8F95D44C1FFB8BA9DCB42F91149#A2F0"
+            "32c903e5b3497e34c2b844ebfe8a39c19e6cf8f95d44c1ffb8ba9dcb42f91149"
         private const val SIGNED_SCHEMA = "iroha.transaction.SignedTransaction.v1"
         private const val TRANSACTION_PAYLOAD_TYPE =
             "iroha_data_model::transaction::signed::model::TransactionPayload"

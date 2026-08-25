@@ -11,9 +11,9 @@
 # authenticated selection, never aliases or fallback inputs.
 
 readonly PRIVACY_SDK_FROZEN_RELEASE_CARGO_LOCK_SHA256=\
-"cd9e829e454171f17540abeb7fd1aa14129252082bd8b076a0199b0ffa4e3f79"
+"ccf4acebfe63ad981193b87afd559c195d8a67642d9536b8082f77bbf24a11f0"
 readonly PRIVACY_SDK_TRACKED_ROOT_CARGO_LOCK_SHA256=\
-"c90b3659d6cb44cd1d6f9e75e7b98aacc0d30bbe23041d4e6e109e8a206fa76b"
+"ad0d209abaa51d4c77a9e67ccbb0c7660a0f8b7b5dbe3e3fbe4a70e142711bf7"
 
 privacy_sdk_resolve_cargo_lockfile() {
   local repository_root="$1"
@@ -186,6 +186,8 @@ try:
     before = os.fstat(descriptor)
     if not stat.S_ISREG(before.st_mode):
         raise SystemExit(f"error: {path} is not a regular file")
+    if before.st_nlink != 1:
+        raise SystemExit(f"error: {path} must be a singly linked regular file")
     if before.st_size < 0 or before.st_size > MAX_BYTES:
         raise SystemExit(f"error: {path} exceeds the file-seal size limit")
     digest = hashlib.sha256()
@@ -1575,7 +1577,7 @@ privacy_sdk_provision_ci_cargo_lock() {
     "${PRIVACY_SDK_FROZEN_RELEASE_CARGO_LOCK_SHA256}:"*) ;;
     *)
       echo \
-        "error: generated privacy Cargo.lock candidate does not match the distinct immutable cd9e release authority; external release-artifact requalification is required" \
+        "error: generated privacy Cargo.lock candidate does not match the distinct immutable release authority; release-artifact requalification is required" \
         >&2
       return 1
       ;;

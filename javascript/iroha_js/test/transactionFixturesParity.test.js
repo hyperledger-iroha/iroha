@@ -129,8 +129,8 @@ function assertFixtureSchemaManifest(document) {
   }
 }
 const fixtureNetworkId =
-  "hash:32C903E5B3497E34C2B844EBFE8A39C19E6CF8F95D44C1FFB8BA9DCB42F91149#A2F0";
-const networkIdPattern = /^hash:([0-9A-F]{64})#([0-9A-F]{4})$/u;
+  "32c903e5b3497e34c2b844ebfe8a39c19e6cf8f95d44c1ffb8ba9dcb42f91149";
+const networkIdPattern = /^[0-9a-f]{64}$/u;
 
 function decodeCanonicalBase64(value, context) {
   if (
@@ -167,35 +167,12 @@ function requireExactFields(record, expected, context) {
   }
 }
 
-function crc16CcittFalse(bytes) {
-  let crc = 0xffff;
-  for (const byte of bytes) {
-    crc ^= byte << 8;
-    for (let bit = 0; bit < 8; bit += 1) {
-      crc =
-        crc & 0x8000 ? ((crc << 1) ^ 0x1021) & 0xffff : (crc << 1) & 0xffff;
-    }
-  }
-  return crc;
-}
-
 function validateNetworkId(value, context) {
-  const match = typeof value === "string" ? networkIdPattern.exec(value) : null;
-  if (match === null) {
+  if (typeof value !== "string" || !networkIdPattern.test(value)) {
     throw new Error(`${context}.network_id must be a canonical NetworkId`);
   }
-  const [, hashBody, checksum] = match;
-  const expectedChecksum = crc16CcittFalse(
-    Buffer.from(`hash:${hashBody}`, "ascii"),
-  )
-    .toString(16)
-    .toUpperCase()
-    .padStart(4, "0");
-  const hashBytes = Buffer.from(hashBody, "hex");
-  if (
-    checksum !== expectedChecksum ||
-    (hashBytes[hashBytes.length - 1] & 1) !== 1
-  ) {
+  const hashBytes = Buffer.from(value, "hex");
+  if ((hashBytes[hashBytes.length - 1] & 1) !== 1) {
     throw new Error(`${context}.network_id must be a canonical NetworkId`);
   }
 }
@@ -1017,8 +994,9 @@ test("fixture schemas require canonical network identity and reject legacy chain
 
   for (const invalidNetworkId of [
     "00000002",
-    fixtureNetworkId.toLowerCase(),
-    `${fixtureNetworkId.slice(0, -4)}0000`,
+    fixtureNetworkId.toUpperCase(),
+    `hash:${fixtureNetworkId}`,
+    `${fixtureNetworkId.slice(0, -1)}8`,
   ]) {
     assert.throws(
       () =>

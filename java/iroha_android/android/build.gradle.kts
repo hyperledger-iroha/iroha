@@ -100,6 +100,11 @@ android {
     }
 
     sourceSets {
+        getByName("test") {
+            // Reuse the single shared deterministic NetworkId helper without compiling the
+            // core module's complete JVM test suite into this Android unit-test variant.
+            java.directories.add("../src/test/java/org/hyperledger/iroha/android/testing")
+        }
         getByName("androidTest") {
             assets.srcDir("../../../fixtures/offline")
         }

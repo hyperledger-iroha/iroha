@@ -14,6 +14,7 @@ pub(crate) struct UnsignedReceiveRequestV1 {
     recipient: AccountId,
     receiver_balance_commitment: Digest,
     recipient_key_reference: Digest,
+    recipient_encryption_public_key: Digest,
     receiver_public_key: KagemushaDevicePublicKeyV2,
     request_id: Digest,
     issued_at_ms: u64,
@@ -48,6 +49,7 @@ impl UnsignedReceiveRequestV1 {
         recipient: AccountId,
         receiver_balance_commitment: Digest,
         recipient_key_reference: Digest,
+        recipient_encryption_public_key: Digest,
         receiver_public_key: KagemushaDevicePublicKeyV2,
         request_id: Digest,
         issued_at_ms: u64,
@@ -63,6 +65,7 @@ impl UnsignedReceiveRequestV1 {
             recipient,
             receiver_balance_commitment,
             recipient_key_reference,
+            recipient_encryption_public_key,
             receiver_public_key,
             request_id,
             issued_at_ms,
@@ -88,6 +91,7 @@ impl UnsignedReceiveRequestV1 {
             request.recipient.clone(),
             request.receiver_balance_commitment,
             request.recipient_key_reference,
+            request.recipient_encryption_public_key,
             request.receiver_public_key,
             request.request_id,
             request.issued_at_ms,
@@ -104,6 +108,7 @@ impl UnsignedReceiveRequestV1 {
         if self.release_id == [0; 32]
             || self.receiver_balance_commitment == [0; 32]
             || self.recipient_key_reference == [0; 32]
+            || self.recipient_encryption_public_key == [0; 32]
             || self.request_id == [0; 32]
             || self.hardware_policy_id == [0; 32]
             || self.network_id.as_bytes().iter().all(|byte| *byte == 0)
@@ -114,7 +119,12 @@ impl UnsignedReceiveRequestV1 {
             || self.recipient_key_reference
                 != iroha_data_model::offline::offline_cash_receiver_key_reference_v1(
                     &self.receiver_public_key,
+                    self.recipient_encryption_public_key,
                 )
+            || iroha_data_model::offline::validate_offline_cash_recipient_encryption_public_key_v1(
+                self.recipient_encryption_public_key,
+            )
+            .is_err()
             || self.receiver_public_key.validate().is_err()
         {
             return Err(StateTransitionErrorV1::InvalidRequest);
@@ -135,6 +145,7 @@ impl UnsignedReceiveRequestV1 {
             &self.recipient,
             self.receiver_balance_commitment,
             self.recipient_key_reference,
+            self.recipient_encryption_public_key,
             self.receiver_public_key,
             self.request_id,
             self.issued_at_ms,
@@ -167,6 +178,7 @@ impl UnsignedReceiveRequestV1 {
             recipient: self.recipient,
             receiver_balance_commitment: self.receiver_balance_commitment,
             recipient_key_reference: self.recipient_key_reference,
+            recipient_encryption_public_key: self.recipient_encryption_public_key,
             receiver_public_key: self.receiver_public_key,
             request_id: self.request_id,
             issued_at_ms: self.issued_at_ms,
@@ -199,6 +211,7 @@ pub(crate) struct PendingOwnerV1 {
     pub(super) issued_at_ms: u64,
     pub(super) expires_at_ms: u64,
     pub(super) recipient_key_reference: Digest,
+    pub(super) recipient_encryption_public_key: Digest,
     pub(super) receiver_public_key: KagemushaDevicePublicKeyV2,
     pub(super) intent_authorization: HardwareIntentAuthorizationOwnerV1,
 }
@@ -392,6 +405,7 @@ where
         issued_at_ms: request.issued_at_ms,
         expires_at_ms: request.expires_at_ms,
         recipient_key_reference: request.recipient_key_reference,
+        recipient_encryption_public_key: request.recipient_encryption_public_key,
         receiver_public_key: request.receiver_public_key,
         intent_authorization: authorization,
     };
@@ -450,6 +464,7 @@ where
         issued_at_ms: request.issued_at_ms,
         expires_at_ms: request.expires_at_ms,
         recipient_key_reference: request.recipient_key_reference,
+        recipient_encryption_public_key: request.recipient_encryption_public_key,
         receiver_public_key: request.receiver_public_key,
         intent_authorization: authorization,
     })

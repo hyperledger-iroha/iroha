@@ -166,6 +166,9 @@ pub enum TrustedBlockProofAnchorError {
     /// The exact executed block wire could not be encoded canonically.
     #[error("failed to encode the authenticated executed block wire")]
     ExecutedBlockWireEncoding,
+    /// The authenticated execution commitment carries a different exact wire length.
+    #[error("execution commitment does not bind the supplied executed block wire length")]
+    ExecutedBlockWireLengthMismatch,
     /// The authenticated execution commitment belongs to a different block wire.
     #[error("execution commitment does not bind the supplied executed block wire")]
     ExecutedBlockWireMismatch,
@@ -229,9 +232,15 @@ impl TrustedBlockProofAnchor {
         execution_commitment: &ExecutionCommitment,
         entry_hash: &HashOf<TransactionEntrypoint>,
     ) -> Result<Self, TrustedBlockProofAnchorError> {
-        let executed_block_wire_hash = block
-            .executed_block_wire_hash()
+        let executed_block_wire = block
+            .encode_wire()
             .map_err(|_| TrustedBlockProofAnchorError::ExecutedBlockWireEncoding)?;
+        let executed_block_wire_len = u64::try_from(executed_block_wire.len())
+            .map_err(|_| TrustedBlockProofAnchorError::ExecutedBlockWireEncoding)?;
+        if executed_block_wire_len != execution_commitment.executed_block_wire_len {
+            return Err(TrustedBlockProofAnchorError::ExecutedBlockWireLengthMismatch);
+        }
+        let executed_block_wire_hash = Hash::new(&executed_block_wire);
         if executed_block_wire_hash != execution_commitment.executed_block_wire_hash {
             return Err(TrustedBlockProofAnchorError::ExecutedBlockWireMismatch);
         }
@@ -845,14 +854,16 @@ mod tests {
     #[test]
     fn trusted_anchor_rejects_cryptographically_finalized_wrong_executed_wire() {
         let (block, _, external_hash, _) = authenticated_block_with_scheduled_entry();
-        let wrong_executed_block_wire = b"different finalized executed block wire";
+        let exact_wire = block.encode_wire().expect("fixture executed wire");
+        let mut wrong_executed_block_wire = exact_wire.clone();
+        wrong_executed_block_wire[0] ^= 0x80;
         let wrong_execution_commitment = ExecutionCommitment::without_topups_or_merge_carrier(
             Hash::new(b"wrong-wire parent state"),
             Hash::new(b"wrong-wire post state"),
             Hash::new(b"wrong-wire ordinary writes"),
             u64::try_from(wrong_executed_block_wire.len())
                 .expect("wrong fixture wire length fits u64"),
-            Hash::new(wrong_executed_block_wire),
+            Hash::new(&wrong_executed_block_wire),
         );
         let artifact = finalized_artifact_for_block(&block, &wrong_execution_commitment);
         assert_eq!(
@@ -862,6 +873,28 @@ mod tests {
                 &external_hash,
             ),
             Err(TrustedBlockProofAnchorError::ExecutedBlockWireMismatch)
+        );
+    }
+    #[cfg(feature = "transparent_api")]
+    #[test]
+    fn trusted_anchor_rejects_cryptographically_finalized_wrong_executed_wire_length() {
+        let (block, artifact, external_hash, _) = authenticated_block_with_scheduled_entry();
+        let mut wrong_artifact = artifact.clone();
+        wrong_artifact
+            .commit_qc
+            .execution_commitment
+            .executed_block_wire_len += 1;
+        // The mutation invalidates the QC, so rebuild a fully signed artifact around the wrong
+        // length to prove that length is independently checked after valid finality.
+        let wrong_commitment = wrong_artifact.commit_qc.execution_commitment;
+        let wrong_artifact = finalized_artifact_for_block(&block, &wrong_commitment);
+        assert_eq!(
+            TrustedBlockProofAnchor::from_untrusted_finality_artifact(
+                &block,
+                &wrong_artifact,
+                &external_hash,
+            ),
+            Err(TrustedBlockProofAnchorError::ExecutedBlockWireLengthMismatch)
         );
     }
     #[cfg(feature = "transparent_api")]

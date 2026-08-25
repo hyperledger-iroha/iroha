@@ -900,9 +900,35 @@ where
         round_challenges: &[AssignedValue<Inner<C>>],
         folded_generator: &DeferredScalarPoint<C>,
     ) -> Result<Vec<AssignedValue<Inner<C>>>, Error> {
+        self.assigned_accumulator_instance_limbs_with_version_v1(
+            ctx,
+            KAGEMUSHA_IPA_ACCUMULATION_WIRE_VERSION_V4,
+            authenticated_round_count,
+            round_challenges,
+            folded_generator,
+        )
+    }
+
+    /// Constrain the common scalar-challenge/compressed-point projection under
+    /// an explicitly authenticated application wire version.
+    ///
+    /// Kagemusha V4 uses version 5 while clean Offline Cash V1 uses version 1;
+    /// the remaining `2 + 2*k + 2` cell geometry is identical. Keeping the
+    /// version a fixed circuit argument prevents either protocol from silently
+    /// inheriting the other's public metadata.
+    pub(super) fn assigned_accumulator_instance_limbs_with_version_v1(
+        &self,
+        ctx: &mut ScalarContext<C>,
+        authenticated_wire_version: u16,
+        authenticated_round_count: u32,
+        round_challenges: &[AssignedValue<Inner<C>>],
+        folded_generator: &DeferredScalarPoint<C>,
+    ) -> Result<Vec<AssignedValue<Inner<C>>>, Error> {
         let expected_len = kagemusha_ipa_accumulator_instance_limbs_v4(authenticated_round_count)
             .map_err(Error::AssertionFailure)?;
-        if usize::try_from(authenticated_round_count).ok() != Some(round_challenges.len()) {
+        if authenticated_wire_version == 0
+            || usize::try_from(authenticated_round_count).ok() != Some(round_challenges.len())
+        {
             return Err(Error::InvalidInstances);
         }
         let mut bytes = Vec::with_capacity((round_challenges.len() + 1) * 32);
@@ -912,9 +938,10 @@ where
         bytes.extend(self.assigned_point_bytes(ctx, folded_generator)?);
         let gate = self.scalar.clone();
         let mut limbs = Vec::with_capacity(expected_len);
-        limbs.push(ctx.main().load_constant(Inner::<C>::from(u64::from(
-            KAGEMUSHA_IPA_ACCUMULATION_WIRE_VERSION_V4,
-        ))));
+        limbs.push(
+            ctx.main()
+                .load_constant(Inner::<C>::from(u64::from(authenticated_wire_version))),
+        );
         limbs.push(
             ctx.main()
                 .load_constant(Inner::<C>::from(u64::from(authenticated_round_count))),
@@ -1778,9 +1805,13 @@ where
             .collect::<Vec<_>>();
         dense_jobs.queue_constrained(ctx.main(), self.scalar.field, &sources)
     }
-    /// Retain the former generic MSM only for focused legacy-equivalence tests.
-    #[cfg(test)]
-    pub(super) fn constrain_deferred_equation_batch_generic_v5(
+    /// Enforce the complete batched equation with the serial Base-graph MSM.
+    ///
+    /// This is the compact-column alternative used by Offline Cash V1. It
+    /// preserves the identical coefficient derivation and identity equation
+    /// as the dedicated dense machine, while trading rows for columns so the
+    /// final wire proof can use the authenticated eight-advice packed layout.
+    pub(super) fn constrain_deferred_equation_batch_serial_v1(
         &mut self,
         ctx: &mut SinglePhaseCoreManager<Outer<C>>,
         audit: &AssignedDeferredPointAudit<C>,
@@ -2199,7 +2230,7 @@ mod tests {
         let digest_words = KagemushaSha256JobsV4::default()
             .digest_constrained(ctx.main(), &bytes)
             .expect("fixed reciprocal V6 digest");
-        chip.constrain_deferred_equation_batch_generic_v5(
+        chip.constrain_deferred_equation_batch_serial_v1(
             &mut ctx,
             &audit,
             &selectors,

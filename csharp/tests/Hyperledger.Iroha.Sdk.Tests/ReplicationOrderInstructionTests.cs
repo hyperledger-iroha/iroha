@@ -6,7 +6,7 @@ namespace Hyperledger.Iroha.Sdk.Tests;
 
 public sealed class ReplicationOrderInstructionTests
 {
-    private const string FixtureNetworkId = "hash:32C903E5B3497E34C2B844EBFE8A39C19E6CF8F95D44C1FFB8BA9DCB42F91149#A2F0";
+    private const string FixtureNetworkId = "32c903e5b3497e34c2b844ebfe8a39c19e6cf8f95d44c1ffb8ba9dcb42f91149";
     private const string OrderId =
         "abababababababababababababababababababababababababababababababab";
     private const string ArchiveId =

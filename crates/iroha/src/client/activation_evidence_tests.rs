@@ -76,6 +76,39 @@ fn canonical_executed_block_reader_binds_route_wire_and_committed_evidence() {
 }
 
 #[test]
+fn canonical_executed_block_reader_accepts_exact_rejected_result() {
+    let client = client_with_base_url(base_url());
+    mark_data_model_compatible(&client);
+    let (height, mut block, _) = canonical_executed_block_fixture();
+    let rejection = iroha_data_model::transaction::TransactionResultInner::Err(
+        TransactionRejectionReason::Validation(ValidationFail::NotPermitted(
+            "business execution rejected after fee debit".to_owned(),
+        )),
+    );
+    assert!(block.update_transaction_result(0, &rejection));
+    let committed = CommittedTransaction {
+        block_hash: block.hash(),
+        entrypoint_hash: block.entrypoint_hashes().next().expect("entrypoint hash"),
+        entrypoint_proof: block.entrypoint_proofs().next().expect("entrypoint proof"),
+        entrypoint: block.entrypoints_cloned().next().expect("entrypoint"),
+        result_hash: block.result_hashes().next().expect("result hash"),
+        result_proof: block.result_proofs().next().expect("result proof"),
+        result: block.results().next().cloned().expect("result"),
+        merge_inclusion: None,
+    };
+    assert!(committed.result().is_err());
+    assert!(committed.verify_inclusion_in_block(&block));
+    let wire = block.encode_wire().expect("canonical rejected block wire");
+    let actual = capture_request(
+        mk_response(StatusCode::OK, wire.clone(), Some(APPLICATION_NORITO)),
+        || client.get_canonical_executed_block_wire(height, &committed),
+    )
+    .0
+    .expect("rejected committed result remains valid exact block evidence");
+    assert_eq!(actual, wire);
+}
+
+#[test]
 fn canonical_executed_block_reader_rejects_trailing_wire_and_wrong_carrier_hash() {
     let client = client_with_base_url(base_url());
     mark_data_model_compatible(&client);

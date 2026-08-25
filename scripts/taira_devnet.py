@@ -38,6 +38,7 @@ try:
         CHAIN_DISCRIMINANT as DEFAULT_CHAIN_DISCRIMINANT,
         PEER_COUNT,
         network_id_from_genesis_hash,
+        norito_hash_literal_from_genesis_hash,
     )
 except ModuleNotFoundError:
     from scripts.taira_constants import (
@@ -45,6 +46,7 @@ except ModuleNotFoundError:
         CHAIN_DISCRIMINANT as DEFAULT_CHAIN_DISCRIMINANT,
         PEER_COUNT,
         network_id_from_genesis_hash,
+        norito_hash_literal_from_genesis_hash,
     )
 
 
@@ -432,6 +434,7 @@ def require_bundle_identity(target: Path, roots: Sequence[str]) -> None:
     ).strip()
     try:
         expected_network_id = network_id_from_genesis_hash(expected_hash)
+        expected_config_hash = norito_hash_literal_from_genesis_hash(expected_hash)
     except ValueError as error:
         fail(f"generated genesis hash is invalid: {target / 'genesis.expected_hash'}: {error}")
     if quoted_assignment(client, "network_id") != expected_network_id:
@@ -446,7 +449,7 @@ def require_bundle_identity(target: Path, roots: Sequence[str]) -> None:
             != DEFAULT_CHAIN_DISCRIMINANT
         ):
             fail(f"peer{index} config has the wrong Taira chain discriminant: {config}")
-        if quoted_assignment(config, "expected_hash") != expected_network_id:
+        if quoted_assignment(config, "expected_hash") != expected_config_hash:
             fail(f"peer{index} config genesis hash does not match the generated bundle: {config}")
         port = root.removeprefix("http://127.0.0.1:").removesuffix("/")
         address = re.compile(

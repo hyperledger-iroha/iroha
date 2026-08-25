@@ -1,4 +1,4 @@
-//! Authenticated framing and role-safe carriers for Kagemusha ABI-21 artifacts.
+//! Authenticated framing and role-safe carriers for Kagemusha Kagemusha V4 artifacts.
 //!
 //! V4 packages are selector-free and intentionally reject any pre-release format. Every
 //! release-sized allocation is preceded by a fixed upper-bound, descriptor, and framing check.
@@ -36,7 +36,7 @@ use std::{
     path::{Path, PathBuf},
     sync::atomic::{AtomicU64, Ordering},
 };
-/// Framing magic for a streamed ABI-21 artifact.
+/// Framing magic for a streamed Kagemusha V4 artifact.
 pub const KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_ARTIFACT_MAGIC_V4: &[u8; 8] =
     KAGEMUSHA_RECURSIVE_SPEND_ARTIFACT_KEY_MAGIC_V4;
 /// Defensive limit checked before allocating an encoded V4 header.
@@ -595,7 +595,7 @@ pub struct KagemushaValidatedArtifactPayloadV4 {
     header: KagemushaRecursiveSpendPastaCycleArtifactHeaderV4,
     payload: Vec<u8>,
 }
-/// Trust mode attached to one parsed ABI-21 inventory.
+/// Trust mode attached to one parsed Kagemusha V4 inventory.
 ///
 /// The candidate variant authenticates pre-promotion qualification inputs. Keeping the mode in the
 /// carrier prevents a candidate payload from being relabelled as release-authenticated material

@@ -137,8 +137,8 @@ class IrohaPeerTransportV1Test {
         assertEquals(0x0102, wrapped.canonicalPayload.schemaVersion)
         assertContentEquals(archive, wrapped.canonicalPayload.bytes)
         assertContentEquals(archive, IrohaPeerKagemushaAdapterV1.decode(wrapped).archive())
-        assertEquals(12_425, archive.size)
-        assertEquals(12_509, wrapped.encode().size)
+        assertEquals(12_423, archive.size)
+        assertEquals(12_507, wrapped.encode().size)
 
         val tooSmall = IrohaPeerWireLimitsV1(
             maximumCanonicalBytes = 32 * 1024,
@@ -154,7 +154,7 @@ class IrohaPeerTransportV1Test {
     }
 
     @Test
-    fun `Kagemusha profile requires exact native independent ABI21 envelope`() {
+    fun `Kagemusha profile requires exact native bridge independent Norito envelope`() {
         val canonical = kagemushaArchive(
             IrohaPeerPayloadKind.RECEIVE_REQUEST,
             byteArrayOf(0x51),

@@ -2776,11 +2776,6 @@ enum RestartEffectSource {
     DiagnosticOnly,
 }
 pub(crate) trait EffectRuntime {
-    /// Return whether live pacemaker clocks crossed their one-shot activation.
-    /// Synthetic test runtimes are permanently unarmed unless they override it.
-    fn live_clocks_are_armed(&self) -> bool {
-        false
-    }
     /// Decide whether the runtime accepts one exact fair-ingress ownership carrier.
     fn can_admit_network_message_with_ingress_ownership(
         &self,
@@ -3088,10 +3083,6 @@ pub(crate) trait EffectRuntime {
     fn watchdog_threshold(&self) -> Duration;
 }
 impl EffectRuntime for SerializedV2Runtime {
-    fn live_clocks_are_armed(&self) -> bool {
-        self.lifecycle_live_clocks_are_armed()
-    }
-
     fn can_admit_network_message_with_ingress_ownership(
         &self,
         message: &wire::ConsensusMessageV2,

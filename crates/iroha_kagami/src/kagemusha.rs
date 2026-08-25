@@ -1,4 +1,4 @@
-//! Authenticated Kagemusha ABI-21/V4 release verification and activation preparation.
+//! Authenticated bridge ABI-22 / Kagemusha V4 release verification and activation preparation.
 mod taira;
 use crate::{ExplicitExitError, Outcome, RunArgs};
 use clap::{Args as ClapArgs, Subcommand};
@@ -178,10 +178,10 @@ pub struct Args {
 }
 #[derive(Debug, Subcommand)]
 enum Command {
-    /// Verify one complete authenticated ABI-21/V4 release directory.
+    /// Verify one complete authenticated bridge ABI-22 / Kagemusha V4 release directory.
     #[command(name = "verify-release-v4")]
     VerifyReleaseV4(VerifyReleaseV4Args),
-    /// Verify an ABI-21/V4 release and atomically write its typed promotion record.
+    /// Verify a bridge ABI-22 / Kagemusha V4 release and atomically write its typed promotion record.
     #[command(name = "promote-release-v4")]
     PromoteReleaseV4(PromoteReleaseV4Args),
     /// Build one release-bound activation instruction from an authenticated V4 catalog.
@@ -208,7 +208,7 @@ enum Command {
 }
 #[derive(Debug, ClapArgs)]
 struct VerifyReleaseV4Args {
-    /// Immutable directory containing the exact eighteen-file promoted ABI-21/V4 inventory.
+    /// Immutable directory containing the exact eighteen-file promoted bridge ABI-22 / Kagemusha V4 inventory.
     #[arg(long)]
     bundle_dir: PathBuf,
     /// Canonical release policy provisioned alongside the candidate release.
@@ -226,7 +226,7 @@ struct VerifyReleaseV4Args {
 }
 #[derive(Debug, ClapArgs)]
 struct PromoteReleaseV4Args {
-    /// Directory containing the exact seventeen-file pre-promotion ABI-21/V4 candidate.
+    /// Directory containing the exact seventeen-file pre-promotion bridge ABI-22 / Kagemusha V4 candidate.
     #[arg(long)]
     bundle_dir: PathBuf,
     /// Canonical release policy provisioned alongside the candidate release.
@@ -3406,7 +3406,7 @@ mod tests {
         ));
     }
     #[test]
-    fn v4_report_inventory_is_the_canonical_eight_role_abi21_order() {
+    fn v4_report_inventory_is_the_canonical_eight_role_v4_order() {
         assert_eq!(
             REPORT_ARTIFACT_PURPOSES_V4,
             [

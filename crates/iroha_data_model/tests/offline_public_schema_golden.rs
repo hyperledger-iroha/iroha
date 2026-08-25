@@ -42,7 +42,7 @@ fn structural_schema_hash<T: IntoSchema>() -> String {
     hex::encode(&hasher.finalize()[..16])
 }
 #[test]
-fn public_offline_request_structural_schemas_are_frozen_for_abi21_v4() {
+fn public_offline_request_structural_schemas_are_frozen_for_v4() {
     assert_eq!(
         structural_schema_hash::<KagemushaRecursiveSpendTopUpRequestV4>(),
         "7929db5019d35b407eddbccbd7b0529b"
@@ -54,7 +54,7 @@ fn public_offline_request_structural_schemas_are_frozen_for_abi21_v4() {
 }
 
 #[test]
-fn public_kagemusha_release_provenance_schemas_are_frozen_for_abi21_v4() {
+fn public_kagemusha_release_provenance_schemas_are_frozen_for_v4() {
     assert_eq!(
         [
             structural_schema_hash::<KagemushaRecursiveSpendArtifactManifestV4>(),

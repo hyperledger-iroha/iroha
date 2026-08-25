@@ -8,7 +8,7 @@ namespace Hyperledger.Iroha.Sdk.Tests;
 public sealed class TransactionTtlContractTests
 {
     private const string FixtureSeedHex = "616e64726f69642d666978747572652d7369676e696e672d6b65792d30313032";
-    private const string FixtureNetworkId = "hash:32C903E5B3497E34C2B844EBFE8A39C19E6CF8F95D44C1FFB8BA9DCB42F91149#A2F0";
+    private const string FixtureNetworkId = "32c903e5b3497e34c2b844ebfe8a39c19e6cf8f95d44c1ffb8ba9dcb42f91149";
     private const string FixtureAccountId = "sorauﾛ1NｲﾘｳdPBeｼRoｸQ2ﾔgｼQqeｶﾍｽﾁhRW2ｺｿZ9ﾕｦUﾅRX5NJYH53";
     private const string FixtureAssetDefinitionId = "62Fk4FPcMuLvW5QjDGNF2a4jAmjM";
 
@@ -105,9 +105,10 @@ public sealed class TransactionTtlContractTests
     [Theory]
     [InlineData("{\"chain\":\"00000042\"}")]
     [InlineData("{\"network_id\":\"00000042\"}")]
+    [InlineData("{\"network_id\":\"32C903E5B3497E34C2B844EBFE8A39C19E6CF8F95D44C1FFB8BA9DCB42F91149\"}")]
+    [InlineData("{\"network_id\":\"32c903e5b3497e34c2b844ebfe8a39c19e6cf8f95d44c1ffb8ba9dcb42f91148\"}")]
     [InlineData("{\"network_id\":\"hash:32c903e5b3497e34c2b844ebfe8a39c19e6cf8f95d44c1ffb8ba9dcb42f91149#a2f0\"}")]
-    [InlineData("{\"network_id\":\"hash:32C903E5B3497E34C2B844EBFE8A39C19E6CF8F95D44C1FFB8BA9DCB42F91149#0000\"}")]
-    [InlineData("{\"network_id\":\"hash:32C903E5B3497E34C2B844EBFE8A39C19E6CF8F95D44C1FFB8BA9DCB42F91148#B2D1\"}")]
+    [InlineData("{\"network_id\":\"hash:32C903E5B3497E34C2B844EBFE8A39C19E6CF8F95D44C1FFB8BA9DCB42F91149#A2F0\"}")]
     public void CanonicalTransactionFixtureDescriptorRejectsLegacyOrMalformedNetworkIdentity(string json)
     {
         using var document = JsonDocument.Parse(json);

@@ -40,7 +40,7 @@ def test_render_fixture_maps_the_strict_five_line_contract() -> None:
     decoded = json.loads(rendered)
 
     assert decoded == {
-        "fixture": "offline_device_attestation_abi21",
+        "fixture": "offline_device_attestation_abi22",
         "generated_by": "kotlin-fixture-gen offline-device-attestation",
         "registration_hex": "abcd",
         "challenge_hash_hex": "22" * 32,
@@ -214,7 +214,7 @@ def test_workflow_watches_and_executes_the_fixture_contract() -> None:
     assert "scripts/tests/check_swift_offline_device_attestation_fixture_test.py" in workflow
     assert (
         "IrohaSwift/Tests/IrohaSwiftTests/Fixtures/"
-        "offline_device_attestation_abi21.json"
+        "offline_device_attestation_abi22.json"
     ) in workflow
-    assert "OfflineDeviceAttestationABI21ParityTests.swift" in swift_gate
-    assert "--filter OfflineDeviceAttestationABI21ParityTests" in swift_gate
+    assert "OfflineDeviceAttestationABI22ParityTests.swift" in swift_gate
+    assert "--filter OfflineDeviceAttestationABI22ParityTests" in swift_gate

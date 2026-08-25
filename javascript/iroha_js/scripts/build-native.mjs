@@ -33,10 +33,12 @@ import {
   resolveNativeBuildProfile,
 } from "./native-build-profile.mjs";
 import {
+  assertSelectedCargoLockSeal,
   createNativeBuildProvenance,
   invalidateNativeBuildProvenance,
   NATIVE_BUILD_CARGO_LOCK_ENV,
   readNativeBuildSourceState,
+  readSelectedCargoLockSeal,
   readStableRegularFile,
   readStableRegularFileDigest,
   writeNativeBuildProvenance,
@@ -247,18 +249,17 @@ function canonicalBuildInputs(repoRoot, env) {
     join(repoRoot, "Cargo.toml"),
     "Native build root Cargo.toml",
   );
-  const expectedLock = join(repoRoot, "Cargo.lock");
-  if (env[NATIVE_BUILD_CARGO_LOCK_ENV] !== expectedLock) {
+  const cargoLock = canonicalRegularFile(
+    env[NATIVE_BUILD_CARGO_LOCK_ENV],
+    "Native build selected Cargo.lock",
+  );
+  if (basename(cargoLock) !== "Cargo.lock") {
     throw new Error(
       "Native build requires " +
         NATIVE_BUILD_CARGO_LOCK_ENV +
-        " to name the root Cargo.lock.",
+        " to name a Cargo.lock file.",
     );
   }
-  const cargoLock = canonicalRegularFile(
-    env[NATIVE_BUILD_CARGO_LOCK_ENV],
-    "Native build root Cargo.lock",
-  );
   return Object.freeze({ cargoLock, cargoManifest });
 }
 
@@ -760,6 +761,10 @@ export function runNativeBuild({
   const cargoProfile = resolveNativeBuildProfile(env);
   const root = canonicalRepoRoot(repoRoot);
   const inputs = canonicalBuildInputs(root, env);
+  const cargoLockSeal = readSelectedCargoLockSeal(root, { env });
+  if (cargoLockSeal.path !== inputs.cargoLock) {
+    throw new Error("Native build selected Cargo.lock path changed during authentication.");
+  }
   const executables = validatePinnedExecutables(root, env);
   const target = canonicalTargetRoot(root, env);
   const nativePath = nativeBuildOutputPath({
@@ -778,6 +783,7 @@ export function runNativeBuild({
   }
 
   const sourceBefore = readSourceState(root, { env });
+  assertSelectedCargoLockSeal(cargoLockSeal);
   const suppliedRevision = env.IROHA_GIT_COMMIT_HASH;
   if (
     suppliedRevision !== undefined &&
@@ -790,87 +796,106 @@ export function runNativeBuild({
   releaseProfileRequiresCleanSource(cargoProfile, sourceBefore);
 
   const outputBefore = cargoArtifactIdentityOrNull(nativePath);
+  assertSelectedCargoLockSeal(cargoLockSeal);
   invalidateProvenance(nativePath);
-  const buildArgs = [
-    "build",
-    "--locked",
-    "--offline",
-    "--jobs",
-    "1",
-    "-Z",
-    "unstable-options",
-    "--lockfile-path",
-    inputs.cargoLock,
-    "--manifest-path",
-    inputs.cargoManifest,
-    "--package",
-    INTENDED_PACKAGE,
-    "--lib",
-    "--target-dir",
-    target.canonicalPath,
-    "--message-format=json-render-diagnostics",
-    ...cargoBuildArgsForNativeProfile(cargoProfile),
-  ];
-  const cargoEnv = {
-    ...env,
-    CARGO: executables.cargoPath,
-    CARGO_TARGET_DIR: target.canonicalPath,
-    [NATIVE_BUILD_CARGO_LOCK_ENV]: inputs.cargoLock,
-    IROHA_GIT_COMMIT_HASH: sourceBefore.sourceGitRevision,
-    RUSTC: executables.rustcPath,
-    RUSTDOC: executables.rustdocPath,
-  };
-  const build = runCargo(executables.cargoPath, buildArgs, {
-    cargoEnv,
-    cwd: root,
-  });
-  forwardCargoRenderedDiagnostics(build?.stdout);
-  if (build?.error !== undefined) {
-    throw new Error(
-      "Cargo could not be executed: " +
-        (build.error?.message ?? String(build.error)),
-    );
-  }
-  if (build?.status !== 0) return build?.status ?? 1;
-
-  const artifact = verifyCargoArtifactMessages(build.stdout, {
-    cargoProfile,
-    nativePath,
-    repoRoot: root,
-  });
-  const outputAfterCargo = cargoArtifactSourceIdentity(nativePath);
-  if (
-    artifact.fresh === false &&
-    outputBefore !== null &&
-    sameOutputIdentity(outputBefore, outputAfterCargo)
-  ) {
-    throw new Error(
-      "A non-fresh Cargo artifact did not update the native output.",
-    );
-  }
-
-  const sealedOutput = sealCargoArtifactInPlace(nativePath);
-  const sourceAfter = readSourceState(root, { env });
-  const provenance = createProvenance({
-    cargoProfile,
-    nativePath,
-    sourceBefore,
-    sourceAfter,
-  });
-  if (provenance.native_sha256 !== sealedOutput.sha256) {
-    throw new Error(
-      "Native build provenance does not match the authenticated output.",
-    );
-  }
-  assertDirectoryIdentity(target, "Native build Cargo target directory");
-  writeProvenance(nativePath, provenance);
   try {
+    assertSelectedCargoLockSeal(cargoLockSeal);
+    const buildArgs = [
+      "build",
+      "--locked",
+      "--offline",
+      "--jobs",
+      "1",
+      "-Z",
+      "unstable-options",
+      "--lockfile-path",
+      inputs.cargoLock,
+      "--manifest-path",
+      inputs.cargoManifest,
+      "--package",
+      INTENDED_PACKAGE,
+      "--lib",
+      "--target-dir",
+      target.canonicalPath,
+      "--message-format=json-render-diagnostics",
+      ...cargoBuildArgsForNativeProfile(cargoProfile),
+    ];
+    const cargoEnv = {
+      ...env,
+      CARGO: executables.cargoPath,
+      CARGO_TARGET_DIR: target.canonicalPath,
+      [NATIVE_BUILD_CARGO_LOCK_ENV]: inputs.cargoLock,
+      IROHA_GIT_COMMIT_HASH: sourceBefore.sourceGitRevision,
+      RUSTC: executables.rustcPath,
+      RUSTDOC: executables.rustdocPath,
+    };
+    let build;
+    try {
+      build = runCargo(executables.cargoPath, buildArgs, {
+        cargoEnv,
+        cwd: root,
+      });
+    } finally {
+      assertSelectedCargoLockSeal(cargoLockSeal);
+    }
+    forwardCargoRenderedDiagnostics(build?.stdout);
+    if (build?.error !== undefined) {
+      throw new Error(
+        "Cargo could not be executed: " +
+          (build.error?.message ?? String(build.error)),
+      );
+    }
+    if (build?.status !== 0) {
+      assertSelectedCargoLockSeal(cargoLockSeal);
+      return build?.status ?? 1;
+    }
+
+    const artifact = verifyCargoArtifactMessages(build.stdout, {
+      cargoProfile,
+      nativePath,
+      repoRoot: root,
+    });
+    assertSelectedCargoLockSeal(cargoLockSeal);
+    const outputAfterCargo = cargoArtifactSourceIdentity(nativePath);
+    if (
+      artifact.fresh === false &&
+      outputBefore !== null &&
+      sameOutputIdentity(outputBefore, outputAfterCargo)
+    ) {
+      throw new Error(
+        "A non-fresh Cargo artifact did not update the native output.",
+      );
+    }
+
+    assertSelectedCargoLockSeal(cargoLockSeal);
+    const sealedOutput = sealCargoArtifactInPlace(nativePath);
+    assertSelectedCargoLockSeal(cargoLockSeal);
+    const sourceAfter = readSourceState(root, { env });
+    assertSelectedCargoLockSeal(cargoLockSeal);
+    const provenance = createProvenance({
+      cargoProfile,
+      nativePath,
+      sourceBefore,
+      sourceAfter,
+    });
+    assertSelectedCargoLockSeal(cargoLockSeal);
+    if (provenance.native_sha256 !== sealedOutput.sha256) {
+      throw new Error(
+        "Native build provenance does not match the authenticated output.",
+      );
+    }
+    assertDirectoryIdentity(target, "Native build Cargo target directory");
+    assertSelectedCargoLockSeal(cargoLockSeal);
+    writeProvenance(nativePath, provenance);
+    assertSelectedCargoLockSeal(cargoLockSeal);
     const sourceAfterPublication = readSourceState(root, { env });
+    assertSelectedCargoLockSeal(cargoLockSeal);
     if (!sameSourceState(sourceAfter, sourceAfterPublication)) {
       throw new Error(
         "Native build source changed while provenance was published.",
       );
     }
+    assertSelectedCargoLockSeal(cargoLockSeal);
   } catch (error) {
     invalidateProvenance(nativePath);
     throw error;

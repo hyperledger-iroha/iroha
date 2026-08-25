@@ -24,7 +24,7 @@ fn request_with_body(uri: Uri, headers: HeaderMap, body: Body) -> Request<Body> 
     request
 }
 fn foreign_network_id() -> NetworkId {
-    "hash:0000000000000000000000000000000000000000000000000000000000000003#E54C"
+    "0000000000000000000000000000000000000000000000000000000000000003"
         .parse()
         .expect("canonical foreign NetworkId")
 }

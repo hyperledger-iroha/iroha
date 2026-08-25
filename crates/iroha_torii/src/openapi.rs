@@ -1187,6 +1187,25 @@ mod tests {
             operation_response_schema_ref(details, "200", "transaction details"),
             "#/components/schemas/PipelineTransactionDetailsResponse"
         );
+        let details_schema = schemas["PipelineTransactionDetailsResponse"]
+            .as_object()
+            .expect("transaction details schema");
+        let details_properties = details_schema["properties"]
+            .as_object()
+            .expect("transaction details properties");
+        assert!(details_properties.contains_key("fee_payment_intent"));
+        assert!(details_properties.contains_key("fee_payment"));
+        let details_required = details_schema["required"]
+            .as_array()
+            .expect("transaction details required fields");
+        for required in ["fee_payment_intent", "fee_payment"] {
+            assert!(
+                details_required
+                    .iter()
+                    .any(|value| value.as_str() == Some(required)),
+                "transaction details must require `{required}`"
+            );
+        }
         assert_eq!(
             details.get(TOOL_EFFECT_EXTENSION).and_then(Value::as_str),
             Some("read")
@@ -2764,7 +2783,7 @@ mod tests {
         assert_eq!(
             component_required(schemas, "OfflineSpendBundle"),
             ["statement", "operation", "recursive_proof"],
-            "an ABI-21 spendable bundle must carry its statement and exact operation row"
+            "a Kagemusha V4 spendable bundle must carry its statement and exact operation row"
         );
         for [owner, forbidden] in openapi_contract_fixed_rows::<2>(
             "openapi.generated_spec_documents_strict_typed_offline_request_schemas_and_states.rows.1",
@@ -2800,6 +2819,35 @@ mod tests {
                 property_array_bounds(schemas, owner, property),
                 (1, 2),
                 "{owner}.{property} must expose the one-or-two-input bound"
+            );
+        }
+        let capability = component_properties(schemas, "OfflineCapabilityStatus");
+        assert_eq!(capability["ready"]["const"].as_bool(), Some(false));
+        assert_eq!(
+            property_array_bounds(schemas, "OfflineCapabilityStatus", "blockers"),
+            (3, 3),
+            "asset-neutral capability discovery must expose every canonical fail-closed blocker"
+        );
+        let capability_blockers = capability["blockers"]["prefixItems"]
+            .as_array()
+            .expect("asset-neutral capability positional blocker schemas");
+        assert_eq!(
+            capability_blockers.len(),
+            iroha_data_model::offline::OFFLINE_CAPABILITY_ACTIVATION_BLOCKERS_V1.len()
+        );
+        assert_eq!(capability["blockers"]["items"].as_bool(), Some(false));
+        for (schema, (expected_code, expected_message)) in capability_blockers
+            .iter()
+            .zip(iroha_data_model::offline::OFFLINE_CAPABILITY_ACTIVATION_BLOCKERS_V1)
+        {
+            assert_eq!(schema["additionalProperties"].as_bool(), Some(false));
+            assert_eq!(
+                schema["properties"]["code"]["const"].as_str(),
+                Some(expected_code)
+            );
+            assert_eq!(
+                schema["properties"]["message"]["const"].as_str(),
+                Some(expected_message)
             );
         }
         let readiness = schemas
@@ -2964,8 +3012,8 @@ mod tests {
             assert!(
                 readiness_properties[property]["description"]
                     .as_str()
-                    .is_some_and(|description| description.contains("ABI-21 V4")),
-                "{property} must describe the active ABI-21 V4 readiness contract"
+                    .is_some_and(|description| description.contains("Kagemusha V4")),
+                "{property} must describe the active Kagemusha V4 readiness contract"
             );
         }
         let readiness_scale = readiness

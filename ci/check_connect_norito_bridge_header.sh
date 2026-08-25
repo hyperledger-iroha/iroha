@@ -75,8 +75,6 @@ KAGEMUSHA_EXPORTS = {
     "connect_norito_kagemusha_recipient_payment_request_create_v2",
     "connect_norito_kagemusha_recipient_payment_request_signing_bytes_v2",
     "connect_norito_kagemusha_recipient_payment_request_verify_v2",
-    "connect_norito_kagemusha_recipient_lineage_query_create_v2",
-    "connect_norito_kagemusha_recipient_registration_lineage_verify_v2",
     "connect_norito_kagemusha_recipient_receive_offer_create_v2",
     "connect_norito_kagemusha_recipient_receive_offer_project_v2",
     "connect_norito_kagemusha_recipient_receive_offer_verify_v2",
@@ -133,6 +131,8 @@ KAGEMUSHA_CANDIDATE_LAB_EXPORTS = {
 }
 FORBIDDEN_FIRST_RELEASE_EXPORTS = {
     "connect_norito_kagemusha_recipient_registration_lineage_verify_v1",
+    "connect_norito_kagemusha_recipient_lineage_query_create_v2",
+    "connect_norito_kagemusha_recipient_registration_lineage_verify_v2",
     "connect_norito_kagemusha_request_authorization_create_v2",
     "iroha_privacy_capabilities_v1",
     "iroha_privacy_validate_capabilities_v1",
@@ -762,7 +762,7 @@ if [[ "${MODE}" == --self-test-* ]]; then
       ;;
     --self-test-forbidden-lineage-v1)
       replace_once "${tmp_header}" \
-        "connect_norito_kagemusha_recipient_registration_lineage_verify_v2" \
+        "connect_norito_kagemusha_recipient_receive_offer_verify_v2" \
         "connect_norito_kagemusha_recipient_registration_lineage_verify_v1"
       ;;
     --self-test-forbidden-auth-create-v2)

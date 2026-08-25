@@ -63,7 +63,7 @@ MANIFEST_FIXTURE_FIELDS = frozenset(
         "time_to_live_ms",
     }
 )
-NETWORK_ID_LITERAL = re.compile(r"hash:([0-9A-F]{64})#([0-9A-F]{4})")
+NETWORK_ID_LITERAL = re.compile(r"[0-9a-f]{64}")
 TRANSACTION_PAYLOAD_FIELDS = (
     "domain",
     "authority",
@@ -142,24 +142,10 @@ def _require_exact_fields(
         )
 
 
-def _crc16_ccitt_false(payload: bytes) -> int:
-    crc = 0xFFFF
-    for byte in payload:
-        crc ^= byte << 8
-        for _ in range(8):
-            crc = (
-                ((crc << 1) ^ 0x1021) & 0xFFFF if crc & 0x8000 else (crc << 1) & 0xFFFF
-            )
-    return crc
-
-
 def _require_network_id(value: str, context: str) -> str:
-    matched = NETWORK_ID_LITERAL.fullmatch(value)
-    if matched is None:
+    if NETWORK_ID_LITERAL.fullmatch(value) is None:
         raise SystemExit(f"[error] {context} is not a canonical network_id")
-    body, checksum = matched.groups()
-    expected_checksum = _crc16_ccitt_false(f"hash:{body}".encode("ascii"))
-    if checksum != f"{expected_checksum:04X}" or bytes.fromhex(body)[-1] & 1 != 1:
+    if bytes.fromhex(value)[-1] & 1 != 1:
         raise SystemExit(f"[error] {context} is not a canonical network_id")
     return value
 
@@ -379,7 +365,7 @@ def _transaction_payload_network_id(data: bytes, context: str) -> bytes:
 def _require_transaction_network_id(
     payload: bytes, network_id: str, context: str
 ) -> None:
-    expected = bytes.fromhex(network_id[5:69])
+    expected = bytes.fromhex(network_id)
     if _transaction_payload_network_id(payload, context) != expected:
         raise ValueError(f"{context} network_id does not match its manifest")
 

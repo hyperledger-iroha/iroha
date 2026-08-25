@@ -13536,7 +13536,7 @@ excluded from the first release.
   `--phase-evidence-dir` logs must report the standard checked layouts without
   echoing the operator-supplied directory.
 - Keep Kagemusha offline-to-offline payments routed only through the single
-  mode-free ABI-21/manifest-V4 protocol. SDK and native bindings expose the
+  mode-free bridge-ABI-22/Kagemusha-manifest-V4 protocol. SDK and native bindings expose the
   exact typed request/result and V4 artifact schemas required by that protocol,
   but no runtime product, version, or compatibility selector. All
   archive decoders must reject unknown, duplicate,
@@ -20341,16 +20341,32 @@ digest-bound pending-XSD source probe summaries for reviewed
   `zk-trace/mock-proof` artifacts while the real transparent IVM trace prover
   remains future work.
   Kagemusha is the single mode-free offline-cash protocol. Its current artifact
-	  and readiness contract is exact bridge ABI 22 with authenticated manifest V4
+  and readiness contract is exact bridge ABI 22 with authenticated manifest V4
   artifacts: exactly eight external Eq/Ep roles with circuit parameters inline.
   Versioned type names are internal wire and artifact schema identifiers only.
   Runtime, SDK, CLI,
   packaging, capability, and documentation surfaces expose no product/version
-  discriminator or compatibility branch. The real EqAffine/Vesta transition
-  proof and EpAffine/Pallas recursive state wrapper must bind amount
-  conservation, at most two inputs, lineage/nullifier uniqueness, chain, asset,
-  scale, finality, boundary continuity, and the maximum-hop limit under fixed
-  verifier keys with terminal IPA verification. Init, append, verify, top-up,
+  discriminator or compatibility branch. Core now constructs the complete
+  typed 229-word STATE public ABI, authenticates the exact Eq/Fp and Ep/Fq
+  parameters and verifier keys, verifies both augmented current proofs, and
+  terminally decides both IPA histories. Backend construction drops the
+  authenticated artifact source after parsing, so peer verification performs
+  no artifact fetch. The host wire boundary also
+  reconstructs and validates the canonical send transition and semantic
+  digests before verifier dispatch. The internal profile digest now binds the
+  compiled bridge ABI 22, Kagemusha data-wire V4, and artifact-manifest schema
+  and version V4 constants. It does not map the public eight-role V4 release to
+  the internal 22-role STATE/helper inventory; a governed mapping and its
+  signed artifacts remain an exact release blocker. This does not yet supply
+  production authority: a replacement reviewed STATE/helper profile must
+  constrain the
+  send transition and semantic hashes inside both circuits and recursively
+  enforce GuardUse, PlatformBind, AndroidKeyCert, GuardBundle, and canonical
+  P-256 verification. That reviewed EqAffine/Vesta transition proof and
+  EpAffine/Pallas recursive state wrapper must also bind amount conservation,
+  at most two inputs, lineage/nullifier uniqueness, chain, asset, scale,
+  finality, boundary continuity, and the maximum-hop limit under fixed verifier
+  keys with terminal IPA verification. Init, append, verify, top-up,
   redeem, and change resolve their exact authenticated V4 release rather than a
   global proof-backend flag. Top-up and change require the selected release's
   issuance window to be active; full redemption remains available after

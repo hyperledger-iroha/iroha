@@ -21,8 +21,9 @@ the PY6 gate.
 
 > Set `IROHA_NETWORK_ID`, `IROHA_TORII_URL`, `IROHA_TORII_AUTH_TOKEN`, and
 > `IROHA_TORII_API_TOKEN` in your shell before running the snippets below.
-> `IROHA_NETWORK_ID` must be the deployment's exact canonical checksummed
-> genesis-derived `NetworkId`, not an operator-selected chain label.
+> `IROHA_NETWORK_ID` must be the deployment's exact canonical lowercase
+> 64-hex genesis-derived `NetworkId`, with the final marker bit set—not an
+> operator-selected chain label or tagged Norito-JSON hash.
 
 ## 1. Install and configure the SDK
 

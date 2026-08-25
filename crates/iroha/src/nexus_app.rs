@@ -838,13 +838,13 @@ mod tests {
     }
     fn fixture_network_id() -> NetworkId {
         let literal = fixture_string("network_id");
-        let encoded = norito::json::to_json(&literal).expect("encode fixture NetworkId literal");
-        let network_id = norito::json::from_str::<NetworkId>(&encoded)
-            .expect("decode canonical fixture NetworkId literal");
+        let network_id = literal
+            .parse::<NetworkId>()
+            .expect("parse canonical raw fixture NetworkId literal");
         assert_eq!(
-            norito::json::to_json(&network_id).expect("re-encode fixture NetworkId"),
-            encoded,
-            "fixture NetworkId must use the canonical checksummed JSON spelling"
+            network_id.to_string(),
+            literal,
+            "fixture NetworkId must use canonical raw lowercase hexadecimal text"
         );
         network_id
     }

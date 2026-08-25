@@ -4,6 +4,10 @@ All notable changes to `@iroha/iroha-js` are documented in this file.
 
 ## [Unreleased]
 
+- Added a strict, canonically account-signed `getAssetTransferControl` read for
+  `/v1/controls/asset-transfer/query`, including typed availability, cap,
+  usage, and ledger-checkpoint projections for safe control snapshot/restore
+  workflows.
 - Added native and pure-JavaScript Norito parity for the complete account-scoped
   asset transfer-control family. Node and browser entry points now expose
   typed blacklist and calendar-cap builders alongside directional
@@ -246,7 +250,7 @@ All notable changes to `@iroha/iroha-js` are documented in this file.
   ArrayBuffers remain supported. Code-byte, simulation, derivation, and proof
   responses now enforce declared and streamed endpoint-specific byte caps
   before fatal UTF-8 decoding and strict JSON parsing. Validation-fee authority
-  now comes only from bounded Parliament proof pages verified by the ABI 21
+  now comes only from bounded Parliament proof pages verified by the ABI22
   native bridge against an immutable ledger binding and durable checkpoint;
   caller-supplied policy signatures and keysets were removed. Proved-IVM
   submission quotes the exact unsigned payload, rebuilds the signature-bound

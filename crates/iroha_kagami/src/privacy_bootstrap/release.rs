@@ -52,7 +52,7 @@ const POLICY_ID_DOMAIN_V1: &[u8] = b"iroha.taira.privacy.bootle-lantern.policy.v
 const BROKER_EXPORT_SCHEMA_V1: &str = "iroha.taira.privacy.bootle-lantern-broker-public.v1";
 const ROLLOUT_PLAN_PATH_V1: &str = "configs/soranexus/taira/privacy_rollout_plan_v1.json";
 const ROLLOUT_PLAN_SHA256_V1: &str =
-    "6db9c54ebfa147a57199b02f476929389b0751d59c8387da2e0104d16200ce65";
+    "22924ed74daaa2fc6e0712ccc30e998d662886e60a4dc709a74eed61331ca9f1";
 const CANONICAL_PLAN_TEMPLATE_V1: &[u8] =
     include_bytes!("../../../../configs/soranexus/taira/privacy_bootstrap_plan.json");
 const CANONICAL_CONFIG_TEMPLATE_V1: &[u8] =

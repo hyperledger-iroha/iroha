@@ -158,7 +158,8 @@ cargo run -p sorafs_orchestrator --bin sorafs_cli -- \
   `--chunk-plan` or `--chunk-digest-sha3` is optional verification evidence; if
   present, it must match the embedded commitment exactly.
 - `--network-id` is the exact runtime identity derived from the expected
-  genesis-header hash. The CLI signs one transaction for that identity. The
+  genesis-header hash, encoded as 64 lowercase hexadecimal characters with
+  the marker bit set. The CLI signs one transaction for that identity. The
   retired `--submitted-epoch` and `--resolve-submitted-epoch` flags are rejected:
   Core records submission, approval, and retirement epochs from block consensus
   time, while the manifest's retention epoch remains its prepaid deadline.

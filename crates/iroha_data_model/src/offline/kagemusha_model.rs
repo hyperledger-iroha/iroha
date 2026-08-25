@@ -920,7 +920,7 @@ mod model {
         #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
         pub release_attestation_sha256: [u8; 32],
     }
-    /// Immutable ABI-21 candidate captured before external review and device evidence exist.
+    /// Immutable Kagemusha V4 candidate captured before external review and device evidence exist.
     ///
     /// The embedded manifest commits the independently reviewed clean source
     /// closure, authenticated source-seal projection, reviewed Cargo/rustc
@@ -1188,7 +1188,7 @@ mod model {
         /// SHA-256 of the complete retained review report.
         #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
         pub report_sha256: [u8; 32],
-        /// Exact Eq-then-Ep cryptographic artifact roles reviewed for ABI-21.
+        /// Exact Eq-then-Ep cryptographic artifact roles reviewed for Kagemusha V4.
         pub artifact_roles: Vec<String>,
         /// Exact ordered set of mandatory, independently evidenced checks.
         pub checks: Vec<KagemushaRecursiveSpendCryptographicReviewCheckResultV4>,
@@ -1203,7 +1203,7 @@ mod model {
         /// Signature over the exact domain, candidate, report, roles, and checks.
         pub signature: SignatureOf<KagemushaRecursiveSpendCryptographicReviewPayloadV4>,
     }
-    /// Canonical signed independent cryptographic-review evidence for ABI-21/V4.
+    /// Canonical signed independent cryptographic-review evidence for bridge ABI-22 / Kagemusha V4.
     #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
     #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
     #[norito(deny_unknown_fields)]
@@ -1350,7 +1350,7 @@ mod model {
         /// Verified signer key.
         pub public_key: PublicKey,
     }
-    /// Deterministic ABI-21 deployment marker written only after V4 release verification.
+    /// Deterministic Kagemusha V4 deployment marker written only after V4 release verification.
     #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
     #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
     pub struct KagemushaRecursiveSpendPromotedReleaseV4 {
@@ -1402,12 +1402,12 @@ mod model {
         pub artifact_inventory_verified: bool,
         /// Native bridge ABI required to consume this promoted release.
         pub bridge_abi_version: u32,
-        /// Exact Eq-then-Ep eight-role artifact inventory selected by ABI-21.
+        /// Exact Eq-then-Ep eight-role artifact inventory selected by Kagemusha V4.
         pub artifact_roles: Vec<String>,
         /// Authenticated release-specific proof-pair byte ceiling.
         pub max_proof_bytes: u32,
     }
-    /// Complete signed ABI-21 release material persisted by consensus activation.
+    /// Complete signed Kagemusha V4 release material persisted by consensus activation.
     ///
     /// The receipt and two external-evidence fields contain canonical signed
     /// artifacts, never raw device logs, parameters, proving keys, or bootstrap
@@ -1429,7 +1429,7 @@ mod model {
         /// Promotion marker binding the candidate, policy, release, and inventory.
         pub promotion_record: KagemushaRecursiveSpendPromotedReleaseV4,
     }
-    /// Atomic consensus payload for one ABI-21 release and its two terminal verifiers.
+    /// Atomic consensus payload for one Kagemusha V4 release and its two terminal verifiers.
     #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
     #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
     #[norito(deny_unknown_fields)]
@@ -1710,11 +1710,11 @@ mod model {
     /// Installed authenticated V4 release selected by a degree-parameterized operation.
     ///
     /// The explicit wire version prevents an unversioned historical binding
-    /// from being interpreted as an ABI-21 release identity.
+    /// from being interpreted as a Kagemusha V4 release identity.
     #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
     #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
     pub struct KagemushaRecursiveSpendArtifactBindingV4 {
-        /// Exact ABI-21 binding version. Only `4` is accepted.
+        /// Exact Kagemusha V4 binding version. Only `4` is accepted.
         pub version: u16,
         /// Human-readable authenticated V4 release generation.
         pub generation: String,
@@ -1781,7 +1781,7 @@ mod model {
         #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
         pub acknowledgement_digest: [u8; 32],
     }
-    /// Native capability record for the explicitly versioned ABI-21 backend.
+    /// Native capability record for the explicitly versioned Kagemusha V4 backend.
     #[derive(Debug, Clone, PartialEq, Eq, Decode, Encode, IntoSchema)]
     #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
     pub struct KagemushaRecursiveSpendNativeCapabilitiesV4 {
@@ -1852,7 +1852,7 @@ mod model {
         /// Canonical adapter-owned V4 Eq/Ep proof-pair bytes.
         pub proof: ProofBox,
     }
-    /// Exact fixed-size ABI-21 public operation row bound by the terminal proof.
+    /// Exact fixed-size Kagemusha V4 public operation row bound by the terminal proof.
     ///
     /// Each consecutive group of eight limbs is one canonical Pallas-field
     /// element in little-endian `u32` order. Core rejects non-canonical field
@@ -1868,7 +1868,7 @@ mod model {
         )]
         pub limbs: [u32; KAGEMUSHA_RECURSIVE_SPEND_OPERATION_LIMBS_V4],
     }
-    /// Peer-to-peer split transition carried by an ABI-21 recursive output.
+    /// Peer-to-peer split transition carried by a Kagemusha V4 recursive output.
     #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
     #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
     pub struct KagemushaRecursiveSpendPeerSplitTransitionV4 {
@@ -1888,7 +1888,7 @@ mod model {
         /// Maximum peer-hop count among the consumed parent bundles.
         pub parent_max_peer_hop_count: u32,
     }
-    /// Partial-redemption change transition carried by an ABI-21 child statement.
+    /// Partial-redemption change transition carried by a Kagemusha V4 child statement.
     #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
     #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
     pub struct KagemushaRecursiveSpendRedemptionChangeTransitionV4 {
@@ -1906,7 +1906,7 @@ mod model {
         /// Parent peer-hop count.
         pub parent_peer_hop_count: u32,
     }
-    /// Mutually exclusive semantic transition that produced an ABI-21 state.
+    /// Mutually exclusive semantic transition that produced a Kagemusha V4 state.
     #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
     #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
     #[norito(tag = "transition", content = "value", rename_all = "snake_case")]
@@ -1916,7 +1916,7 @@ mod model {
         /// Proof-bound partial-redemption change child.
         RedemptionChange(KagemushaRecursiveSpendRedemptionChangeTransitionV4),
     }
-    /// Canonical public statement bound by an ABI-21 recursive proof.
+    /// Canonical public statement bound by a Kagemusha V4 recursive proof.
     #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
     #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
     pub struct KagemushaRecursiveSpendPublicStatementV4 {
@@ -1941,7 +1941,7 @@ mod model {
         pub current_note: KagemushaSpendableNoteDescriptorV2,
         /// Transition-bound conflict claims.
         pub branch_claims: Vec<KagemushaRecursiveSpendBranchClaimV2>,
-        /// Binding-only semantic transition under the sole ABI-21 wire layout.
+        /// Binding-only semantic transition under the sole Kagemusha V4 wire layout.
         pub transition: Option<KagemushaRecursiveSpendTransitionV4>,
         /// Authenticated V4 proving-artifact release.
         pub artifact_binding: KagemushaRecursiveSpendArtifactBindingV4,
@@ -1960,7 +1960,7 @@ mod model {
         /// Explicitly versioned envelope containing the opaque native pair.
         pub proof_envelope: KagemushaPastaCycleProofEnvelopeV4,
     }
-    /// Independently spendable ABI-21 recursive state.
+    /// Independently spendable Kagemusha V4 recursive state.
     #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
     #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
     pub struct KagemushaRecursiveSpendBundleV4 {
@@ -2016,7 +2016,7 @@ mod model {
         #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
         pub anchor_digest: [u8; 32],
     }
-    /// Canonical unsigned ABI-21 online-to-offline fields covered by payer authorization.
+    /// Canonical unsigned Kagemusha V4 online-to-offline fields covered by payer authorization.
     #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
     #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
     #[norito(deny_unknown_fields)]
@@ -2031,13 +2031,13 @@ mod model {
         pub current_note: KagemushaSpendableNoteDescriptorV2,
         /// Proof that inserts this note without consuming a confidential input.
         pub shield_evidence: KagemushaTopUpShieldEvidenceV2,
-        /// Authenticated ABI-21 release selected for recursive initialization.
+        /// Authenticated Kagemusha V4 release selected for recursive initialization.
         pub artifact_binding: KagemushaRecursiveSpendArtifactBindingV4,
         /// Globally unique replay-stable operation identifier.
         #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
         pub operation_id: [u8; 32],
     }
-    /// Authoritative ABI-21 chain-facing online-to-offline request.
+    /// Authoritative Kagemusha V4 chain-facing online-to-offline request.
     #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
     #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
     #[norito(schema_name = "iroha.torii.v1.offline.top_up.request")]
@@ -2053,7 +2053,7 @@ mod model {
         pub current_note: KagemushaSpendableNoteDescriptorV2,
         /// Proof that inserts this note without consuming a confidential input.
         pub shield_evidence: KagemushaTopUpShieldEvidenceV2,
-        /// Authenticated ABI-21 release selected for recursive initialization.
+        /// Authenticated Kagemusha V4 release selected for recursive initialization.
         pub artifact_binding: KagemushaRecursiveSpendArtifactBindingV4,
         /// Globally unique replay-stable operation identifier.
         #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
@@ -2061,7 +2061,7 @@ mod model {
         /// Self-contained payer/device authorization.
         pub authorization: KagemushaRequestAuthorizationV2,
     }
-    /// Public V4 split transition with an ABI-21 output binding.
+    /// Public V4 split transition with a Kagemusha V4 output binding.
     #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
     #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
     pub struct KagemushaRecursiveSpendSplitIntentV4 {
@@ -2090,7 +2090,7 @@ mod model {
         #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
         pub operation_id: [u8; 32],
     }
-    /// Public V4 redemption transition with an optional ABI-21 change binding.
+    /// Public V4 redemption transition with an optional Kagemusha V4 change binding.
     #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
     #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
     pub struct KagemushaRecursiveSpendRedemptionIntentV4 {
@@ -2131,7 +2131,7 @@ mod model {
         #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
         pub operation_id: [u8; 32],
     }
-    /// ABI-21 local initialization request.
+    /// Kagemusha V4 local initialization request.
     #[derive(Debug, Clone, PartialEq, Eq, Decode, Encode, IntoSchema)]
     #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
     pub struct KagemushaRecursiveSpendInitRequestV4 {
@@ -2144,7 +2144,7 @@ mod model {
         /// Authenticated V4 artifact release.
         pub artifact_binding: KagemushaRecursiveSpendArtifactBindingV4,
     }
-    /// ABI-21 initialization result.
+    /// Kagemusha V4 initialization result.
     #[derive(Debug, Clone, PartialEq, Eq, Decode, Encode, IntoSchema)]
     #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
     pub struct KagemushaRecursiveSpendInitResultV4 {
@@ -2162,12 +2162,12 @@ mod model {
     #[derive(Debug, Clone, PartialEq, Eq, Decode, Encode, IntoSchema)]
     #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
     pub struct KagemushaRecursiveSpendAppendInputV4 {
-        /// Previous spendable ABI-21 recursive state.
+        /// Previous spendable Kagemusha V4 recursive state.
         pub previous_bundle: KagemushaRecursiveSpendBundleV4,
         /// Complete authenticated top-up provenance required to verify this parent offline.
         pub topup_provenance: KagemushaRecursiveSpendTopUpProvenanceV4,
     }
-    /// ABI-21 recursive append request.
+    /// Kagemusha V4 recursive append request.
     #[derive(Debug, Clone, PartialEq, Eq, Decode, Encode, IntoSchema)]
     #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
     pub struct KagemushaRecursiveSpendAppendRequestV4 {
@@ -2180,7 +2180,7 @@ mod model {
         /// Signed proof-evaluation snapshot; verifiers must also be live at execution.
         pub block_height: u64,
     }
-    /// Result of one ABI-21 recursive split append.
+    /// Result of one Kagemusha V4 recursive split append.
     #[derive(Debug, Clone, PartialEq, Eq, Decode, Encode, IntoSchema)]
     #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
     pub struct KagemushaRecursiveSpendSplitResultV4 {
@@ -2202,11 +2202,11 @@ mod model {
         /// Complete provenance for sender change, present exactly with change.
         pub change_topup_provenance: Option<KagemushaRecursiveSpendTopUpProvenanceV4>,
     }
-    /// Recipient-only ABI-21 peer payload emitted from a local split result.
+    /// Recipient-only Kagemusha V4 peer payload emitted from a local split result.
     #[derive(Debug, Clone, PartialEq, Eq, Decode, Encode, IntoSchema)]
     #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
     pub struct KagemushaRecursiveSpendPeerPaymentV4 {
-        /// Receiver-owned independently spendable ABI-21 branch.
+        /// Receiver-owned independently spendable Kagemusha V4 branch.
         pub recipient_bundle: KagemushaRecursiveSpendBundleV4,
         /// Proof-bound membership state required for the recipient's next spend.
         pub recipient_membership_witness: KagemushaNoteMembershipWitnessV2,
@@ -2217,12 +2217,12 @@ mod model {
     #[derive(Debug, Clone, PartialEq, Eq, Decode, Encode, IntoSchema)]
     #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
     pub struct KagemushaRecursiveSpendTopUpFinalityEvidenceV4 {
-        /// Complete finalized ABI-21 top-up receipt.
+        /// Complete finalized Kagemusha V4 top-up receipt.
         pub topup_anchor: KagemushaRecursiveSpendTopUpAnchorV4,
         /// Consensus proof for the compact anchor reference.
         pub topup_finality_proof: KagemushaTopUpFinalityProofV2,
     }
-    /// Complete authenticated top-up provenance carried by every spendable ABI-21 branch.
+    /// Complete authenticated top-up provenance carried by every spendable Kagemusha V4 branch.
     #[derive(Debug, Clone, PartialEq, Eq, Decode, Encode, IntoSchema)]
     #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
     pub struct KagemushaRecursiveSpendTopUpProvenanceV4 {
@@ -2231,11 +2231,11 @@ mod model {
         /// Complete evidence in the exact order of the branch statement's anchor references.
         pub topup_finality_evidence: Vec<KagemushaRecursiveSpendTopUpFinalityEvidenceV4>,
     }
-    /// ABI-21 receiver-verification request.
+    /// Kagemusha V4 receiver-verification request.
     #[derive(Debug, Clone, PartialEq, Eq, Decode, Encode, IntoSchema)]
     #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
     pub struct KagemushaRecursiveSpendVerifyRequestV4 {
-        /// Scale- and split-bound ABI-21 recursive bundle.
+        /// Scale- and split-bound Kagemusha V4 recursive bundle.
         pub bundle: KagemushaRecursiveSpendBundleV4,
         /// Receiver request that the final branch must match.
         pub recipient_request: KagemushaRecipientPaymentRequestV2,
@@ -2250,7 +2250,7 @@ mod model {
         /// Authoritative current Unix time in milliseconds.
         pub verified_at_ms: u64,
     }
-    /// Opaque-safe summary decoded from an ABI-21 bundle.
+    /// Opaque-safe summary decoded from a Kagemusha V4 bundle.
     #[derive(Debug, Clone, PartialEq, Eq, Decode, Encode, IntoSchema)]
     #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
     pub struct KagemushaRecursiveSpendBundleSummaryV4 {
@@ -2278,7 +2278,7 @@ mod model {
         #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
         pub bundle_digest: [u8; 32],
     }
-    /// Typed ABI-21 receiver-verification result.
+    /// Typed Kagemusha V4 receiver-verification result.
     #[derive(Debug, Clone, PartialEq, Eq, Decode, Encode, IntoSchema)]
     #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
     pub struct KagemushaRecursiveSpendVerifyResultV4 {
@@ -2290,7 +2290,7 @@ mod model {
         pub lineage_redeemable: bool,
         /// Chain supports redemption without a record-backed witness.
         pub witnessless_redemption_supported: bool,
-        /// Verified ABI-21 bundle summary.
+        /// Verified Kagemusha V4 bundle summary.
         pub summary: KagemushaRecursiveSpendBundleSummaryV4,
         /// Canonical receiver request digest.
         #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
@@ -2322,7 +2322,7 @@ mod model {
         /// Recursive proof making the child independently spendable.
         pub bundle: KagemushaRecursiveSpendBundleV4,
     }
-    /// ABI-21 native redemption builder input.
+    /// Kagemusha V4 native redemption builder input.
     #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
     #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
     pub struct KagemushaRecursiveSpendRedeemBuildRequestV4 {
@@ -2342,7 +2342,7 @@ mod model {
         #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
         pub operation_id: [u8; 32],
     }
-    /// Canonical unsigned ABI-21 chain redemption fields.
+    /// Canonical unsigned Kagemusha V4 chain redemption fields.
     #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
     #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
     pub struct KagemushaRecursiveSpendRedeemUnsignedV4 {
@@ -2366,7 +2366,7 @@ mod model {
         #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
         pub operation_id: [u8; 32],
     }
-    /// Prepared unsigned ABI-21 redemption result.
+    /// Prepared unsigned Kagemusha V4 redemption result.
     #[derive(Debug, Clone, PartialEq, Eq, Decode, Encode, IntoSchema)]
     #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
     pub struct KagemushaRecursiveSpendRedeemBuildResultV4 {
@@ -2385,7 +2385,7 @@ mod model {
         #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
         pub operation_id: [u8; 32],
     }
-    /// Versioned ABI-21 offline-to-online request.
+    /// Versioned Kagemusha V4 offline-to-online request.
     #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
     #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
     #[norito(schema_name = "iroha.torii.v1.offline.redeem.request")]
@@ -2413,11 +2413,11 @@ mod model {
         /// Self-contained recipient/device authorization.
         pub authorization: KagemushaRequestAuthorizationV2,
     }
-    /// Typed native ABI-21 redemption output.
+    /// Typed native Kagemusha V4 redemption output.
     #[derive(Debug, Clone, PartialEq, Eq, Decode, Encode, IntoSchema)]
     #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
     pub struct KagemushaRecursiveSpendRedeemResultV4 {
-        /// Exact ABI-21 result wire version. Only `4` is accepted.
+        /// Exact Kagemusha V4 result wire version. Only `4` is accepted.
         pub version: u16,
         /// Canonical `KagemushaRecursiveSpendRedeemRequestV4` archive.
         pub redeem_request_archive: Vec<u8>,

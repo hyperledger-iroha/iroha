@@ -16,7 +16,7 @@ from typing import Sequence
 
 DEFAULT_FIXTURE = Path(
     "IrohaSwift/Tests/IrohaSwiftTests/Fixtures/"
-    "offline_device_attestation_abi21.json"
+    "offline_device_attestation_abi22.json"
 )
 GENERATOR_SUBCOMMAND = "offline-device-attestation"
 GENERATED_BY = f"kotlin-fixture-gen {GENERATOR_SUBCOMMAND}"
@@ -68,7 +68,7 @@ def render_fixture(generator_output: bytes) -> bytes:
     )
 
     document = {
-        "fixture": "offline_device_attestation_abi21",
+        "fixture": "offline_device_attestation_abi22",
         "generated_by": GENERATED_BY,
         "registration_hex": registration_hex,
         "challenge_hash_hex": challenge_hash_hex,

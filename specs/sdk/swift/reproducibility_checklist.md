@@ -47,7 +47,10 @@ Document any deviations (e.g., simulator fallback, manual fixture slot) in a sho
   `rustup target add aarch64-apple-ios aarch64-apple-ios-sim x86_64-apple-ios aarch64-apple-darwin`.
 - SwiftPM (`swift` CLI), `zipinfo`, exact Python 3.12, `jq`, and `shasum`.
 - One pre-created, canonical, non-symbolic, writable `CARGO_TARGET_DIR` outside
-  the Iroha source tree. The root `Cargo.lock` is the only accepted lockfile.
+  the Iroha source tree. Ordinary builds use the root `Cargo.lock`; the
+  authenticated privacy lane uses its distinct frozen external lock selected by
+  `IROHA_PRIVACY_RELEASE_CARGO_LOCKFILE_PATH`. Arbitrary CLI lock selection is
+  rejected.
 - Clean workspace (`git status` must be empty) checked out at the release tag.
 - Access to the repository's reviewed canonical Norito fixture tree and an
   absent absolute external path for a create-only owner publication.

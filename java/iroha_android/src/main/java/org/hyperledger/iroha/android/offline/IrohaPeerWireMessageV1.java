@@ -17,6 +17,8 @@ public final class IrohaPeerWireMessageV1 {
       IrohaPeerWireLimitsV1.PEER_V1.maximumCanonicalBytes();
   public static final int MAXIMUM_KAGEMUSHA_ENCODED_BYTES =
       IrohaPeerWireLimitsV1.PEER_V1.maximumKagemushaEncodedBytes();
+  public static final int MAXIMUM_OFFLINE_CASH_ENCODED_BYTES =
+      IrohaPeerWireLimitsV1.PEER_V1.maximumOfflineCashEncodedBytes();
 
   private static final byte[] MAGIC = "IPM1".getBytes(StandardCharsets.US_ASCII);
   private static final byte[] CANONICAL_DOMAIN =
@@ -130,7 +132,8 @@ public final class IrohaPeerWireMessageV1 {
     final int schemaVersion = readU16(data, 10);
     requireProfileSchema(profile, schemaVersion);
     final int canonicalLength = checkedLength(readU32(data, 12), limits.maximumCanonicalBytes());
-    final int encodedLength = checkedLength(readU32(data, 16), limits.maximumEncodedBytes(profile));
+    final int encodedLength =
+        checkedLength(readU32(data, 16), limits.maximumEncodedBytes(profile, kind));
     require(data.length == HEADER_LENGTH + encodedLength, "Peer message length mismatch");
     require(encoding != IrohaPeerContentEncodingV1.ZLIB
             || canonicalZlibLength(canonicalLength, encodedLength),
@@ -180,7 +183,8 @@ public final class IrohaPeerWireMessageV1 {
     require(schema != 0, "Malformed IPM1 header");
     requireProfileSchema(profile, schema);
     final int canonicalLength = checkedLength(readU32(data, 12), limits.maximumCanonicalBytes());
-    final int encodedLength = checkedLength(readU32(data, 16), limits.maximumEncodedBytes(profile));
+    final int encodedLength =
+        checkedLength(readU32(data, 16), limits.maximumEncodedBytes(profile, kind));
     require(encoding != IrohaPeerContentEncodingV1.NONE || canonicalLength == encodedLength,
         "Malformed IPM1 header");
     require(encoding != IrohaPeerContentEncodingV1.ZLIB
@@ -294,7 +298,7 @@ public final class IrohaPeerWireMessageV1 {
     Objects.requireNonNull(limits, "limits");
     require(payload.byteCount() <= limits.maximumCanonicalBytes(),
         "Peer canonical payload exceeds its bound");
-    final int maximumEncoded = limits.maximumEncodedBytes(payload.profile());
+    final int maximumEncoded = limits.maximumEncodedBytes(payload.profile(), payload.kind());
     final byte[] canonical = payload.bytes();
     final byte[] compressed = policy == IrohaPeerWireCompressionPolicyV1.PEER_OPTIMIZED
         ? deflateZlib(canonical) : null;

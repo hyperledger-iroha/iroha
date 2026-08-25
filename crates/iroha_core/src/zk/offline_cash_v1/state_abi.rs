@@ -1,19 +1,21 @@
 //! Exact field-neutral public-instance ABI for Offline Cash V1 STATE proofs.
 //!
-//! The semantic layout is 229 canonical little-endian `u32` words. Seven
-//! consecutive words are packed as one 224-bit little-endian integer, yielding
-//! exactly 33 cells in one instance column on both Pasta fields. The last cell
-//! contains five words and two mandatory zero words. No field reduction is
-//! permitted by this encoding.
+//! The final recursive `State` wrapper exposes 229 canonical little-endian
+//! `u32` words (33 packed cells). Its `StateLeaf` relation exposes only the
+//! first 93 semantic words (14 packed cells); the wrapper alone owns the final
+//! 136-word reciprocal-audit binding. This split prevents a proof-transcript
+//! fixed point in which a leaf proof would depend on an audit derived from that
+//! same proof. Seven words are packed into one 224-bit field element without
+//! field reduction on either Pasta parity.
 
 use core::fmt;
 
 use super::{
     OfflineCashHalo2ParityV1,
-    halo2_primitives::validate_offline_cash_history_v1,
     protocol::{
         OFFLINE_CASH_STATE_ABI_WORDS_V1, OFFLINE_CASH_STATE_INSTANCE_CELLS_MAX_V1,
-        OFFLINE_CASH_STATE_INSTANCE_CELLS_V1, OFFLINE_CASH_STATE_WORDS_PER_INSTANCE_V1,
+        OFFLINE_CASH_STATE_INSTANCE_CELLS_V1, OFFLINE_CASH_STATE_LEAF_INSTANCE_CELLS_V1,
+        OFFLINE_CASH_STATE_SEMANTIC_ABI_WORDS_V1, OFFLINE_CASH_STATE_WORDS_PER_INSTANCE_V1,
         OfflineCashHalo2CircuitRoleV1, offline_cash_halo2_protocol_identity_v1,
     },
     state_relation::offline_cash_receive_semantic_digest_v1,
@@ -22,7 +24,8 @@ use super::{
 use halo2_proofs::halo2curves::ff::PrimeField;
 use iroha_data_model::offline::{
     KAGEMUSHA_SCALED_AMOUNT_MAX_SCALE_V2, OFFLINE_CASH_HALO2_K_V1,
-    OFFLINE_CASH_HISTORY_ACCUMULATOR_BYTES_V1, OFFLINE_CASH_WIRE_VERSION_V1,
+    OFFLINE_CASH_RECURSIVE_PAIR_BINDING_WORDS_V1, OFFLINE_CASH_WIRE_VERSION_V1,
+    OfflineCashRecursivePairBindingV1, OfflineCashRecursivePairTopologyV1,
     OfflineCashTransferStatementV1,
 };
 
@@ -30,7 +33,7 @@ const ABI_VERSION: u32 = 1;
 const FIXED_PARENT_COUNT: u32 = 2;
 const DIGEST_WORDS: usize = 8;
 const DIGEST_FIELDS: usize = 10;
-const HISTORY_WORDS: usize = OFFLINE_CASH_HISTORY_ACCUMULATOR_BYTES_V1 / 4;
+const RECURSIVE_PAIR_BINDING_WORDS: usize = OFFLINE_CASH_RECURSIVE_PAIR_BINDING_WORDS_V1;
 const PACKED_CELL_BYTES: usize = 28;
 
 pub(super) const STATE_ABI_WORDS: usize = OFFLINE_CASH_STATE_ABI_WORDS_V1 as usize;
@@ -39,6 +42,9 @@ pub(super) const STATE_WORDS_PER_INSTANCE: usize =
 pub(super) const STATE_INSTANCE_CELLS: usize = OFFLINE_CASH_STATE_INSTANCE_CELLS_V1 as usize;
 pub(super) const STATE_INSTANCE_CELLS_MAX: usize =
     OFFLINE_CASH_STATE_INSTANCE_CELLS_MAX_V1 as usize;
+pub(super) const STATE_LEAF_ABI_WORDS: usize = OFFLINE_CASH_STATE_SEMANTIC_ABI_WORDS_V1 as usize;
+pub(super) const STATE_LEAF_INSTANCE_CELLS: usize =
+    OFFLINE_CASH_STATE_LEAF_INSTANCE_CELLS_V1 as usize;
 
 pub(super) const STATE_PARITY_WORD: usize = 3;
 pub(super) const STATE_OPERATION_WORD: usize = 4;
@@ -55,14 +61,15 @@ pub(super) const LINK_WORD_START: usize = 72;
 pub(super) const TRANSITION_WORD_START: usize = 80;
 pub(super) const AMOUNT_WORD_START: usize = 88;
 pub(super) const SCALE_WORD: usize = 92;
-const HISTORY_WORD_START: usize = 93;
+pub(super) const RECURSIVE_PAIR_BINDING_WORD_START: usize = STATE_LEAF_ABI_WORDS;
 
-const _: () = assert!(OFFLINE_CASH_HISTORY_ACCUMULATOR_BYTES_V1 % 4 == 0);
 const _: () = assert!(DIGEST_WORDS * DIGEST_FIELDS == 80);
-const _: () = assert!(HISTORY_WORD_START + HISTORY_WORDS == STATE_ABI_WORDS);
+const _: () =
+    assert!(RECURSIVE_PAIR_BINDING_WORD_START + RECURSIVE_PAIR_BINDING_WORDS == STATE_ABI_WORDS);
 const _: () = assert!(STATE_WORDS_PER_INSTANCE == PACKED_CELL_BYTES / 4);
 const _: () = assert!(STATE_INSTANCE_CELLS == STATE_ABI_WORDS.div_ceil(STATE_WORDS_PER_INSTANCE));
 const _: () = assert!(STATE_INSTANCE_CELLS <= STATE_INSTANCE_CELLS_MAX);
+const _: () = assert!(STATE_LEAF_INSTANCE_CELLS == 14);
 
 /// Exact STATE operation selected by the public words.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -83,8 +90,8 @@ pub(super) enum OfflineCashStateAbiErrorV1 {
     ContextMismatch,
     /// A receive output is not a canonical positive fixed-two-parent relation.
     InvalidReceiveOutput,
-    /// The parity-specific 544-byte delayed history is malformed.
-    InvalidHistory,
+    /// The shared 136-word recursive-pair binding is malformed.
+    InvalidRecursivePairBinding,
     /// A structural header, digest, amount, protocol, or operation is invalid.
     InvalidLayout,
     /// A private balance/credit opening does not satisfy the selected public relation.
@@ -101,7 +108,9 @@ impl fmt::Display for OfflineCashStateAbiErrorV1 {
             Self::InvalidSendStatement => "invalid offline-cash STATE send statement",
             Self::ContextMismatch => "offline-cash STATE context mismatch",
             Self::InvalidReceiveOutput => "invalid offline-cash STATE receive output",
-            Self::InvalidHistory => "invalid offline-cash STATE history",
+            Self::InvalidRecursivePairBinding => {
+                "invalid offline-cash STATE recursive-pair binding"
+            }
             Self::InvalidLayout => "invalid offline-cash STATE instance layout",
             Self::InvalidPrivateWitness => "invalid offline-cash STATE private witness",
             Self::NonCanonicalPacking => "non-canonical offline-cash STATE instance packing",
@@ -114,9 +123,16 @@ impl std::error::Error for OfflineCashStateAbiErrorV1 {}
 
 /// Canonical semantic words and their selected Pasta parity.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub(super) struct OfflineCashStatePublicInstancesV1 {
+pub(crate) struct OfflineCashStatePublicInstancesV1 {
     parity: OfflineCashHalo2ParityV1,
     words: [u32; STATE_ABI_WORDS],
+}
+
+/// Fixed-point-free public input of the private `StateLeaf` relation.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct OfflineCashStateLeafPublicInstancesV1 {
+    parity: OfflineCashHalo2ParityV1,
+    words: [u32; STATE_LEAF_ABI_WORDS],
 }
 
 /// Exact public fields consumed by the private STATE relation.
@@ -136,13 +152,12 @@ pub(super) struct OfflineCashStateRelationPublicV1 {
     pub(super) scale: u32,
 }
 
-impl OfflineCashStatePublicInstancesV1 {
-    /// Build the exact public relation for a sender split.
+impl OfflineCashStateLeafPublicInstancesV1 {
+    /// Build the fixed-point-free leaf relation for a sender split.
     pub(super) fn send_split(
         context: &OfflineCashStateContextV1,
         statement: &OfflineCashTransferStatementV1,
         parity: OfflineCashHalo2ParityV1,
-        history: &[u8],
     ) -> Result<Self, OfflineCashStateAbiErrorV1> {
         statement
             .validate()
@@ -167,32 +182,15 @@ impl OfflineCashStatePublicInstancesV1 {
             statement.transition_digest,
             statement.amount,
             statement.scale,
-            history,
         )
     }
 
-    /// Build the exact public relation for a receiver fold produced by Core.
+    /// Build the fixed-point-free leaf relation for a receiver fold.
     pub(super) fn receive_fold(
         output: &ReceiveFoldOutputV1,
         parity: OfflineCashHalo2ParityV1,
-        history: &[u8],
     ) -> Result<Self, OfflineCashStateAbiErrorV1> {
-        if output.release_id == [0; 32]
-            || output.context_digest == [0; 32]
-            || output.request_digest == [0; 32]
-            || output.balance_parent == [0; 32]
-            || output.credit_parent == [0; 32]
-            || output.next_head == [0; 32]
-            || output.send_transition_digest == [0; 32]
-            || output.receive_transition_digest == [0; 32]
-            || output.amount == 0
-            || output.scale > KAGEMUSHA_SCALED_AMOUNT_MAX_SCALE_V2
-            || output.balance_parent == output.credit_parent
-            || output.next_head == output.balance_parent
-            || output.next_head == output.credit_parent
-        {
-            return Err(OfflineCashStateAbiErrorV1::InvalidReceiveOutput);
-        }
+        validate_receive_output(output)?;
         Self::build(
             parity,
             OfflineCashStateOperationV1::ReceiveFold,
@@ -207,7 +205,6 @@ impl OfflineCashStatePublicInstancesV1 {
             output.receive_transition_digest,
             output.amount,
             output.scale,
-            history,
         )
     }
 
@@ -226,17 +223,14 @@ impl OfflineCashStatePublicInstancesV1 {
         transition_digest: [u8; 32],
         amount: u128,
         scale: u32,
-        history: &[u8],
     ) -> Result<Self, OfflineCashStateAbiErrorV1> {
-        validate_offline_cash_history_v1(parity, history)
-            .map_err(|_| OfflineCashStateAbiErrorV1::InvalidHistory)?;
         if amount == 0 || scale > KAGEMUSHA_SCALED_AMOUNT_MAX_SCALE_V2 {
             return Err(OfflineCashStateAbiErrorV1::InvalidLayout);
         }
         let protocol_digest =
             offline_cash_halo2_protocol_identity_v1(parity, OfflineCashHalo2CircuitRoleV1::State)
                 .digest();
-        let mut words = [0_u32; STATE_ABI_WORDS];
+        let mut words = [0_u32; STATE_LEAF_ABI_WORDS];
         words[..8].copy_from_slice(&[
             ABI_VERSION,
             u32::from(OFFLINE_CASH_WIRE_VERSION_V1),
@@ -245,7 +239,7 @@ impl OfflineCashStatePublicInstancesV1 {
             operation as u32,
             FIXED_PARENT_COUNT,
             DIGEST_WORDS as u32,
-            HISTORY_WORDS as u32,
+            RECURSIVE_PAIR_BINDING_WORDS as u32,
         ]);
         for (offset, digest) in [
             (RELEASE_WORD_START, release_id),
@@ -268,13 +262,87 @@ impl OfflineCashStatePublicInstancesV1 {
             *target = u32::from_le_bytes(chunk.try_into().expect("four-byte amount limb"));
         }
         words[SCALE_WORD] = scale;
-        for (target, chunk) in words[HISTORY_WORD_START..]
-            .iter_mut()
-            .zip(history.chunks_exact(4))
-        {
-            *target = u32::from_le_bytes(chunk.try_into().expect("four-byte history limb"));
-        }
         let instances = Self { parity, words };
+        instances.validate_structure()?;
+        Ok(instances)
+    }
+
+    /// Selected Pasta parity.
+    pub(super) const fn parity(&self) -> OfflineCashHalo2ParityV1 {
+        self.parity
+    }
+
+    /// Exact 93 public semantic words.
+    pub(super) const fn words(&self) -> &[u32; STATE_LEAF_ABI_WORDS] {
+        &self.words
+    }
+
+    /// Recover the public fields constrained by the private relation.
+    pub(super) fn relation_public(
+        &self,
+    ) -> Result<OfflineCashStateRelationPublicV1, OfflineCashStateAbiErrorV1> {
+        relation_public_from_words(&self.words)
+    }
+
+    /// Convert the canonical 93 words to the exact 14-cell leaf instance column.
+    pub(super) fn field_instances<F: PrimeField>(&self) -> [F; STATE_LEAF_INSTANCE_CELLS] {
+        std::array::from_fn(|cell_index| {
+            let start = cell_index * STATE_WORDS_PER_INSTANCE;
+            let end = start
+                .saturating_add(STATE_WORDS_PER_INSTANCE)
+                .min(STATE_LEAF_ABI_WORDS);
+            pack_words_as_field::<F>(&self.words[start..end])
+        })
+    }
+
+    fn validate_structure(&self) -> Result<(), OfflineCashStateAbiErrorV1> {
+        validate_semantic_structure(self.parity, &self.words)
+    }
+}
+
+impl OfflineCashStatePublicInstancesV1 {
+    /// Build the exact public relation for a sender split.
+    pub(super) fn send_split(
+        context: &OfflineCashStateContextV1,
+        statement: &OfflineCashTransferStatementV1,
+        parity: OfflineCashHalo2ParityV1,
+        recursive_pair_binding: &OfflineCashRecursivePairBindingV1,
+    ) -> Result<Self, OfflineCashStateAbiErrorV1> {
+        let leaf = OfflineCashStateLeafPublicInstancesV1::send_split(context, statement, parity)?;
+        Self::from_leaf(leaf, recursive_pair_binding)
+    }
+
+    /// Build the exact public relation for a receiver fold produced by Core.
+    pub(super) fn receive_fold(
+        output: &ReceiveFoldOutputV1,
+        parity: OfflineCashHalo2ParityV1,
+        recursive_pair_binding: &OfflineCashRecursivePairBindingV1,
+    ) -> Result<Self, OfflineCashStateAbiErrorV1> {
+        let leaf = OfflineCashStateLeafPublicInstancesV1::receive_fold(output, parity)?;
+        Self::from_leaf(leaf, recursive_pair_binding)
+    }
+
+    pub(super) fn from_leaf(
+        leaf: OfflineCashStateLeafPublicInstancesV1,
+        recursive_pair_binding: &OfflineCashRecursivePairBindingV1,
+    ) -> Result<Self, OfflineCashStateAbiErrorV1> {
+        if recursive_pair_binding
+            .topology()
+            .map_err(|_| OfflineCashStateAbiErrorV1::InvalidRecursivePairBinding)?
+            != OfflineCashRecursivePairTopologyV1::State
+        {
+            return Err(OfflineCashStateAbiErrorV1::InvalidRecursivePairBinding);
+        }
+        let recursive_pair_words = recursive_pair_binding
+            .canonical_words()
+            .map_err(|_| OfflineCashStateAbiErrorV1::InvalidRecursivePairBinding)?;
+        let mut words = [0_u32; STATE_ABI_WORDS];
+        words[..STATE_LEAF_ABI_WORDS].copy_from_slice(leaf.words());
+        words[RECURSIVE_PAIR_BINDING_WORD_START..].copy_from_slice(&recursive_pair_words);
+        let instances = Self {
+            parity: leaf.parity(),
+            words,
+        };
         instances.validate_structure()?;
         Ok(instances)
     }
@@ -289,46 +357,28 @@ impl OfflineCashStatePublicInstancesV1 {
         &self.words
     }
 
+    /// Project the exact fixed-point-free 93-word input proved by `StateLeaf`.
+    pub(super) fn state_leaf(&self) -> OfflineCashStateLeafPublicInstancesV1 {
+        let mut words = [0_u32; STATE_LEAF_ABI_WORDS];
+        words.copy_from_slice(&self.words[..STATE_LEAF_ABI_WORDS]);
+        OfflineCashStateLeafPublicInstancesV1 {
+            parity: self.parity,
+            words,
+        }
+    }
+
     /// Exact operation encoded in word four.
     pub(super) fn operation(
         &self,
     ) -> Result<OfflineCashStateOperationV1, OfflineCashStateAbiErrorV1> {
-        match self.words[STATE_OPERATION_WORD] {
-            value if value == OfflineCashStateOperationV1::SendSplit as u32 => {
-                Ok(OfflineCashStateOperationV1::SendSplit)
-            }
-            value if value == OfflineCashStateOperationV1::ReceiveFold as u32 => {
-                Ok(OfflineCashStateOperationV1::ReceiveFold)
-            }
-            _ => Err(OfflineCashStateAbiErrorV1::InvalidLayout),
-        }
+        operation_from_words(&self.words)
     }
 
     /// Recover the exact public subset constrained by the private relation.
     pub(super) fn relation_public(
         &self,
     ) -> Result<OfflineCashStateRelationPublicV1, OfflineCashStateAbiErrorV1> {
-        let mut amount = [0_u8; 16];
-        for (chunk, word) in amount
-            .chunks_exact_mut(4)
-            .zip(&self.words[AMOUNT_WORD_START..AMOUNT_WORD_START + 4])
-        {
-            chunk.copy_from_slice(&word.to_le_bytes());
-        }
-        Ok(OfflineCashStateRelationPublicV1 {
-            operation: self.operation()?,
-            release_id: read_digest_words(&self.words, RELEASE_WORD_START),
-            semantic_digest: read_digest_words(&self.words, SEMANTIC_WORD_START),
-            context_digest: read_digest_words(&self.words, CONTEXT_WORD_START),
-            request_digest: read_digest_words(&self.words, REQUEST_WORD_START),
-            parent_0: read_digest_words(&self.words, PARENT_0_WORD_START),
-            parent_1: read_digest_words(&self.words, PARENT_1_WORD_START),
-            result: read_digest_words(&self.words, RESULT_WORD_START),
-            link: read_digest_words(&self.words, LINK_WORD_START),
-            transition_digest: read_digest_words(&self.words, TRANSITION_WORD_START),
-            transfer: u128::from_le_bytes(amount),
-            scale: self.words[SCALE_WORD],
-        })
+        relation_public_from_words(&self.words)
     }
 
     /// Canonical field-neutral 28-byte cells before conversion to Fp or Fq.
@@ -355,6 +405,13 @@ impl OfflineCashStatePublicInstancesV1 {
                 .min(STATE_ABI_WORDS);
             pack_words_as_field::<F>(&self.words[start..end])
         })
+    }
+
+    /// Recover the exact shared recursive-pair binding bound into this ABI.
+    pub(super) fn recursive_pair_binding(
+        &self,
+    ) -> Result<OfflineCashRecursivePairBindingV1, OfflineCashStateAbiErrorV1> {
+        recursive_pair_binding(&self.words)
     }
 
     /// Strictly recover semantic words from the field-neutral packed bytes.
@@ -386,55 +443,8 @@ impl OfflineCashStatePublicInstancesV1 {
     }
 
     fn validate_structure(&self) -> Result<(), OfflineCashStateAbiErrorV1> {
-        if self.words[..8]
-            != [
-                ABI_VERSION,
-                u32::from(OFFLINE_CASH_WIRE_VERSION_V1),
-                OFFLINE_CASH_HALO2_K_V1,
-                self.parity as u32,
-                self.words[STATE_OPERATION_WORD],
-                FIXED_PARENT_COUNT,
-                DIGEST_WORDS as u32,
-                HISTORY_WORDS as u32,
-            ]
-            || self.operation().is_err()
-            || self.words[AMOUNT_WORD_START..AMOUNT_WORD_START + 4]
-                .iter()
-                .all(|word| *word == 0)
-            || self.words[SCALE_WORD] > KAGEMUSHA_SCALED_AMOUNT_MAX_SCALE_V2
-        {
-            return Err(OfflineCashStateAbiErrorV1::InvalidLayout);
-        }
-        let expected_protocol = offline_cash_halo2_protocol_identity_v1(
-            self.parity,
-            OfflineCashHalo2CircuitRoleV1::State,
-        )
-        .digest();
-        if read_digest_words(&self.words, STATE_PROTOCOL_WORD_START) != expected_protocol {
-            return Err(OfflineCashStateAbiErrorV1::InvalidLayout);
-        }
-        for offset in [
-            RELEASE_WORD_START,
-            STATE_PROTOCOL_WORD_START,
-            SEMANTIC_WORD_START,
-            CONTEXT_WORD_START,
-            REQUEST_WORD_START,
-            PARENT_0_WORD_START,
-            PARENT_1_WORD_START,
-            RESULT_WORD_START,
-            LINK_WORD_START,
-            TRANSITION_WORD_START,
-        ] {
-            if self.words[offset..offset + DIGEST_WORDS]
-                .iter()
-                .all(|word| *word == 0)
-            {
-                return Err(OfflineCashStateAbiErrorV1::InvalidLayout);
-            }
-        }
-        let history = history_bytes(&self.words);
-        validate_offline_cash_history_v1(self.parity, &history)
-            .map_err(|_| OfflineCashStateAbiErrorV1::InvalidHistory)
+        validate_semantic_structure(self.parity, &self.words[..STATE_LEAF_ABI_WORDS])?;
+        recursive_pair_binding(&self.words).map(|_| ())
     }
 }
 
@@ -446,7 +456,7 @@ pub(super) fn fixed_state_word_v1(parity: OfflineCashHalo2ParityV1, index: usize
         STATE_PARITY_WORD => Some(parity as u32),
         5 => Some(FIXED_PARENT_COUNT),
         6 => Some(DIGEST_WORDS as u32),
-        7 => Some(HISTORY_WORDS as u32),
+        7 => Some(RECURSIVE_PAIR_BINDING_WORDS as u32),
         STATE_PROTOCOL_WORD_START..=23 => {
             let digest = offline_cash_halo2_protocol_identity_v1(
                 parity,
@@ -475,7 +485,7 @@ pub(super) fn pack_words_as_field<F: PrimeField>(words: &[u32]) -> F {
     })
 }
 
-fn write_digest_words(words: &mut [u32; STATE_ABI_WORDS], offset: usize, digest: [u8; 32]) {
+fn write_digest_words(words: &mut [u32], offset: usize, digest: [u8; 32]) {
     for (target, chunk) in words[offset..offset + DIGEST_WORDS]
         .iter_mut()
         .zip(digest.chunks_exact(4))
@@ -484,7 +494,7 @@ fn write_digest_words(words: &mut [u32; STATE_ABI_WORDS], offset: usize, digest:
     }
 }
 
-fn read_digest_words(words: &[u32; STATE_ABI_WORDS], offset: usize) -> [u8; 32] {
+fn read_digest_words(words: &[u32], offset: usize) -> [u8; 32] {
     let mut digest = [0_u8; 32];
     for (chunk, word) in digest
         .chunks_exact_mut(4)
@@ -495,17 +505,127 @@ fn read_digest_words(words: &[u32; STATE_ABI_WORDS], offset: usize) -> [u8; 32] 
     digest
 }
 
-fn history_bytes(
-    words: &[u32; STATE_ABI_WORDS],
-) -> [u8; OFFLINE_CASH_HISTORY_ACCUMULATOR_BYTES_V1] {
-    let mut history = [0_u8; OFFLINE_CASH_HISTORY_ACCUMULATOR_BYTES_V1];
-    for (chunk, word) in history
+fn operation_from_words(
+    words: &[u32],
+) -> Result<OfflineCashStateOperationV1, OfflineCashStateAbiErrorV1> {
+    match words[STATE_OPERATION_WORD] {
+        value if value == OfflineCashStateOperationV1::SendSplit as u32 => {
+            Ok(OfflineCashStateOperationV1::SendSplit)
+        }
+        value if value == OfflineCashStateOperationV1::ReceiveFold as u32 => {
+            Ok(OfflineCashStateOperationV1::ReceiveFold)
+        }
+        _ => Err(OfflineCashStateAbiErrorV1::InvalidLayout),
+    }
+}
+
+fn relation_public_from_words(
+    words: &[u32],
+) -> Result<OfflineCashStateRelationPublicV1, OfflineCashStateAbiErrorV1> {
+    let mut amount = [0_u8; 16];
+    for (chunk, word) in amount
         .chunks_exact_mut(4)
-        .zip(&words[HISTORY_WORD_START..])
+        .zip(&words[AMOUNT_WORD_START..AMOUNT_WORD_START + 4])
     {
         chunk.copy_from_slice(&word.to_le_bytes());
     }
-    history
+    Ok(OfflineCashStateRelationPublicV1 {
+        operation: operation_from_words(words)?,
+        release_id: read_digest_words(words, RELEASE_WORD_START),
+        semantic_digest: read_digest_words(words, SEMANTIC_WORD_START),
+        context_digest: read_digest_words(words, CONTEXT_WORD_START),
+        request_digest: read_digest_words(words, REQUEST_WORD_START),
+        parent_0: read_digest_words(words, PARENT_0_WORD_START),
+        parent_1: read_digest_words(words, PARENT_1_WORD_START),
+        result: read_digest_words(words, RESULT_WORD_START),
+        link: read_digest_words(words, LINK_WORD_START),
+        transition_digest: read_digest_words(words, TRANSITION_WORD_START),
+        transfer: u128::from_le_bytes(amount),
+        scale: words[SCALE_WORD],
+    })
+}
+
+fn validate_semantic_structure(
+    parity: OfflineCashHalo2ParityV1,
+    words: &[u32],
+) -> Result<(), OfflineCashStateAbiErrorV1> {
+    if words.len() != STATE_LEAF_ABI_WORDS
+        || words[..8]
+            != [
+                ABI_VERSION,
+                u32::from(OFFLINE_CASH_WIRE_VERSION_V1),
+                OFFLINE_CASH_HALO2_K_V1,
+                parity as u32,
+                words[STATE_OPERATION_WORD],
+                FIXED_PARENT_COUNT,
+                DIGEST_WORDS as u32,
+                RECURSIVE_PAIR_BINDING_WORDS as u32,
+            ]
+        || operation_from_words(words).is_err()
+        || words[AMOUNT_WORD_START..AMOUNT_WORD_START + 4]
+            .iter()
+            .all(|word| *word == 0)
+        || words[SCALE_WORD] > KAGEMUSHA_SCALED_AMOUNT_MAX_SCALE_V2
+    {
+        return Err(OfflineCashStateAbiErrorV1::InvalidLayout);
+    }
+    let expected_protocol =
+        offline_cash_halo2_protocol_identity_v1(parity, OfflineCashHalo2CircuitRoleV1::State)
+            .digest();
+    if read_digest_words(words, STATE_PROTOCOL_WORD_START) != expected_protocol {
+        return Err(OfflineCashStateAbiErrorV1::InvalidLayout);
+    }
+    for offset in [
+        RELEASE_WORD_START,
+        STATE_PROTOCOL_WORD_START,
+        SEMANTIC_WORD_START,
+        CONTEXT_WORD_START,
+        REQUEST_WORD_START,
+        PARENT_0_WORD_START,
+        PARENT_1_WORD_START,
+        RESULT_WORD_START,
+        LINK_WORD_START,
+        TRANSITION_WORD_START,
+    ] {
+        if words[offset..offset + DIGEST_WORDS]
+            .iter()
+            .all(|word| *word == 0)
+        {
+            return Err(OfflineCashStateAbiErrorV1::InvalidLayout);
+        }
+    }
+    Ok(())
+}
+
+fn validate_receive_output(output: &ReceiveFoldOutputV1) -> Result<(), OfflineCashStateAbiErrorV1> {
+    if output.release_id == [0; 32]
+        || output.context_digest == [0; 32]
+        || output.request_digest == [0; 32]
+        || output.balance_parent == [0; 32]
+        || output.credit_parent == [0; 32]
+        || output.next_head == [0; 32]
+        || output.send_transition_digest == [0; 32]
+        || output.receive_transition_digest == [0; 32]
+        || output.amount == 0
+        || output.scale > KAGEMUSHA_SCALED_AMOUNT_MAX_SCALE_V2
+        || output.balance_parent == output.credit_parent
+        || output.next_head == output.balance_parent
+        || output.next_head == output.credit_parent
+    {
+        return Err(OfflineCashStateAbiErrorV1::InvalidReceiveOutput);
+    }
+    Ok(())
+}
+
+fn recursive_pair_binding(
+    words: &[u32; STATE_ABI_WORDS],
+) -> Result<OfflineCashRecursivePairBindingV1, OfflineCashStateAbiErrorV1> {
+    let pair_words: [u32; OFFLINE_CASH_RECURSIVE_PAIR_BINDING_WORDS_V1] = words
+        [RECURSIVE_PAIR_BINDING_WORD_START..]
+        .try_into()
+        .expect("STATE recursive-pair word count is fixed");
+    OfflineCashRecursivePairBindingV1::from_canonical_words(pair_words)
+        .map_err(|_| OfflineCashStateAbiErrorV1::InvalidRecursivePairBinding)
 }
 
 fn receive_semantic_digest(output: &ReceiveFoldOutputV1) -> [u8; 32] {

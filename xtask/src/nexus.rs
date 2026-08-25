@@ -44,7 +44,7 @@ use std::{
 use time::{OffsetDateTime, format_description::well_known::Rfc3339};
 const NEXUS_CONNECT_FIXTURE_OUTPUT: &str = "fixtures/sdk/nexus_connect_transfer_v1.json";
 const NEXUS_CONNECT_FIXTURE_NETWORK_ID: &str =
-    "hash:32C903E5B3497E34C2B844EBFE8A39C19E6CF8F95D44C1FFB8BA9DCB42F91149#A2F0";
+    "32c903e5b3497e34c2b844ebfe8a39c19e6cf8f95d44c1ffb8ba9dcb42f91149";
 const NEXUS_CONNECT_FIXTURE_CHAIN_ID: &str = "test-chain";
 const NEXUS_CONNECT_FIXTURE_CHAIN_DISCRIMINANT: u16 = 369;
 const NEXUS_CONNECT_FIXTURE_CREATION_TIME_MS: u64 = 1_700_000_000_000;
@@ -200,9 +200,8 @@ fn nexus_connect_json_object(
     JsonValue::Object(map)
 }
 fn nexus_connect_network_id() -> Result<NetworkId, Box<dyn Error>> {
-    let network_id_json = json::to_json(&NEXUS_CONNECT_FIXTURE_NETWORK_ID)?;
-    let network_id = json::from_str::<NetworkId>(&network_id_json)?;
-    if json::to_json(&network_id)? != network_id_json {
+    let network_id = NEXUS_CONNECT_FIXTURE_NETWORK_ID.parse::<NetworkId>()?;
+    if network_id.to_string() != NEXUS_CONNECT_FIXTURE_NETWORK_ID {
         return Err("canonical Nexus fixture NetworkId did not round-trip byte-for-byte".into());
     }
     Ok(network_id)

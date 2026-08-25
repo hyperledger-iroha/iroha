@@ -32,7 +32,7 @@ from iroha_python import (
 pair = derive_ed25519_keypair_from_seed(b"demo-seed")
 authority = pair.default_account_id("wonderland")  # Canonical I105 account id
 network_id = NetworkId.parse(
-    "hash:A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5#95D7"
+    "a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5"
 )
 instruction = Instruction.register_domain("wonderland")
 
@@ -235,7 +235,7 @@ response = client.submit_account_faucet_claim(
 ```
 
 Faucet puzzles use `scrypt-leading-zero-bits-v2` with mandatory positive
-difficulty. The solver parses the puzzle's canonical checksummed `network_id`
+difficulty. The solver parses the puzzle's exact 64-character lowercase hexadecimal `network_id`
 as a typed `NetworkId` and hashes its raw 32 bytes into the challenge before
 the exact canonical I105 account id and anchor, so a solution cannot be replayed
 against a same-label network with a different genesis.
@@ -275,7 +275,7 @@ requesting an unsigned transaction draft from Torii:
 from iroha_python import LocalSigningContext, NetworkId, ToriiClient
 
 network_id = NetworkId.parse(
-    "hash:A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5#95D7"
+    "a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5"
 )
 
 signing_client = ToriiClient(
@@ -365,7 +365,7 @@ from iroha_python import (
 )
 
 network_id = NetworkId.parse(
-    "hash:A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5#95D7"
+    "a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5"
 )
 
 spec = DataspaceSpec(
@@ -472,7 +472,7 @@ from iroha_python import NetworkId, TransactionConfig, TransactionDraft, authori
 draft = TransactionDraft(
     TransactionConfig(
         network_id=NetworkId.parse(
-            "hash:A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5#95D7"
+            "a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5"
         ),
         authority="<canonical_i105_account_id>",
         # The payer and gas bound are fixed before quoting; Torii supplies the
@@ -1046,8 +1046,12 @@ the optional `settle_lease_instruction` field.
 
 Build transactions with ergonomic helpers that wrap the low-level `Instruction` APIs:
 Every signing configuration takes one typed, canonical `NetworkId` derived from
-the genesis-header hash. Ordinary transaction APIs reject operator-selected
-chain labels and bare hash bytes.
+the genesis-header hash. Its public text is exactly 64 lowercase hexadecimal
+characters and its final byte has the marker bit set. Generic JSON `Hash`
+values retain their separate checksummed
+`hash:<64 uppercase hex digits>#<4 uppercase CRC-16 digits>` contract.
+Ordinary transaction APIs reject operator-selected chain labels and bare hash
+bytes.
 
 ```python
 from iroha_python import (
@@ -1062,7 +1066,7 @@ from iroha_python import (
 
 config = TransactionConfig(
     network_id=NetworkId.parse(
-        "hash:A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5#95D7"
+        "a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5"
     ),
     authority="sorauﾛ1NcMBm2dﾌBokヱDﾑﾅekAbｶﾍﾜﾇﾐMFｽヱﾋZﾘ2u4WGUMMS63EY6",
     fee_payment=authority_fee_payment(charge_limits=[]),
@@ -1123,7 +1127,7 @@ from iroha_python import Instruction, NetworkId, TransactionConfig, TransactionD
 
 mixed = TransactionDraft(TransactionConfig(
     network_id=NetworkId.parse(
-        "hash:A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5#95D7"
+        "a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5"
     ),
     authority=authority_account_id,
     fee_payment=authority_fee_payment(charge_limits=[], gas_limit=500_000),
@@ -1156,7 +1160,7 @@ requested_fee_payment = sponsor_fee_payment(
 
 config = TransactionConfig(
     network_id=NetworkId.parse(
-        "hash:A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5#95D7"
+        "a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5"
     ),
     authority=authority_account_id,
     fee_payment=requested_fee_payment,
@@ -1397,7 +1401,7 @@ Run the end-to-end Connect CLI helper to stage a session and emit an Open contro
 ```bash
 python -m iroha_python.examples.connect_flow \
   --base-url http://127.0.0.1:8080 \
-  --network-id '<exact-checksummed-network-id>' \
+  --network-id '<64-lowercase-hex-network-id>' \
   --sid '<derived-base64url-sid>' \
   --app-public-key '<32-byte-x25519-public-key-hex>' \
   --nonce '<16-byte-nonce-hex>' \
@@ -1905,7 +1909,7 @@ register = Instruction.register_time_trigger(
 # 2) Submit the transaction and wait for confirmation.
 envelope, status = client.build_and_submit_transaction(
     network_id=NetworkId.parse(
-        "hash:A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5#95D7"
+        "a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5"
     ),
     authority="sorauﾛ1NcMBm2dﾌBokヱDﾑﾅekAbｶﾍﾜﾇﾐMFｽヱﾋZﾘ2u4WGUMMS63EY6",
     private_key=bytes.fromhex("11" * 32),

@@ -234,9 +234,11 @@ fn split_conserves_fractional_value_and_produces_disjoint_siblings() {
     );
 }
 #[test]
-fn abi21_split_uses_v4_digest_and_rejects_nonconservation() {
+fn v4_split_uses_v4_digest_and_rejects_nonconservation() {
     let split = split_intent_v4();
-    split.validate_public_binding().expect("valid ABI-21 split");
+    split
+        .validate_public_binding()
+        .expect("valid Kagemusha V4 split");
     assert_eq!(
         split.input_amount().expect("validated V4 input total"),
         KagemushaScaledAmountV2::new(TOTAL, SCALE).expect("total amount")
@@ -264,11 +266,11 @@ fn abi21_split_uses_v4_digest_and_rejects_nonconservation() {
     ));
 }
 #[test]
-fn abi21_redemption_binds_change_claims_and_rejects_artifact_omission() {
+fn v4_redemption_binds_change_claims_and_rejects_artifact_omission() {
     let intent = redemption_intent_v4(TRANSFER, Some(CHANGE));
     intent
         .validate_public_binding()
-        .expect("valid ABI-21 partial redemption");
+        .expect("valid Kagemusha V4 partial redemption");
     let claims = intent
         .change_branch_claims()
         .expect("proof-bound V4 change claims");

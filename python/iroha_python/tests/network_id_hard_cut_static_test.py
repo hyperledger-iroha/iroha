@@ -329,8 +329,17 @@ def test_pyo3_boundary_and_native_signer_revision_are_exact_abi22_v5() -> None:
         encoding="utf-8"
     )
 
-    assert "norito::json::from_value::<NetworkId>" in rust
+    network_id_start = rust.index("impl PyNetworkId {")
+    network_id_end = rust.index(
+        '#[pyclass(from_py_object, name = "DomainId"', network_id_start
+    )
+    network_id = rust[network_id_start:network_id_end]
+    assert "value.parse::<NetworkId>()" in network_id
+    assert "norito::json::from_value::<NetworkId>" not in network_id
+    assert "norito::json::to_value(network_id)" not in rust
     assert "canonical_network_id_literal(&inner)? != value" in rust
+    assert "Ok(network_id.to_string())" in rust
+    assert "64 lowercase hexadecimal characters" in network_id
     assert "NetworkId must carry the canonical Iroha hash marker bit" in rust
     assert "RETIRED_NETWORK_FIELDS: [&str; 7]" in rust
     for retired in RETIRED_DOMAIN_NAMES:

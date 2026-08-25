@@ -11,7 +11,7 @@ namespace Hyperledger.Iroha.Sdk.Tests;
 
 public sealed class AssetQuantityInstructionTests
 {
-    private const string NetworkIdLiteral = "hash:32C903E5B3497E34C2B844EBFE8A39C19E6CF8F95D44C1FFB8BA9DCB42F91149#A2F0";
+    private const string NetworkIdLiteral = "32c903e5b3497e34c2b844ebfe8a39c19e6cf8f95d44c1ffb8ba9dcb42f91149";
     private static NetworkId FixtureNetworkId => NetworkId.Parse(NetworkIdLiteral);
     private const string AccountId = "sorauﾛ1NｲﾘｳdPBeｼRoｸQ2ﾔgｼQqeｶﾍｽﾁhRW2ｺｿZ9ﾕｦUﾅRX5NJYH53";
     private const string AssetDefinitionId = "62Fk4FPcMuLvW5QjDGNF2a4jAmjM";

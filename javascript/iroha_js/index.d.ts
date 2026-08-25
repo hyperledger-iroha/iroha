@@ -76,9 +76,22 @@ export interface OfflineStatus {
   readonly cash_handoff_capability: "cash_handoff_v1";
   readonly required_bridge_abi_version: 22;
   readonly max_hops: 8;
-  readonly ready: true;
+  readonly ready: false;
   readonly assets: readonly [];
-  readonly blockers: readonly [];
+  readonly blockers: readonly [
+    Readonly<{
+      code: "offline_cash_authenticated_release_unavailable";
+      message: "No authenticated Offline Cash V1 release is selected by this asset-neutral response.";
+    }>,
+    Readonly<{
+      code: "offline_cash_eligible_asset_unavailable";
+      message: "No eligible Offline Cash V1 asset is selected by this asset-neutral response.";
+    }>,
+    Readonly<{
+      code: "offline_cash_proof_backend_unavailable";
+      message: "No reviewed production Offline Cash V1 proof and secure-device backend is authenticated by this response.";
+    }>,
+  ];
 }
 
 export type KagemushaOperationKind = Readonly<{
@@ -5375,6 +5388,45 @@ export interface ToriiConfigurationSnapshot {
 
 export interface ToriiRuntimeAbiActiveResponse {
   abiVersion: number;
+}
+
+export type ToriiAssetTransferAvailability = "Enabled" | "Disabled";
+export type ToriiAssetTransferControlWindow = "DAY" | "WEEK" | "MONTH";
+
+export interface ToriiAssetTransferControlLimit {
+  window: ToriiAssetTransferControlWindow;
+  capAmount: string | null;
+}
+
+export interface ToriiAssetTransferUsageBucket {
+  window: ToriiAssetTransferControlWindow;
+  bucketStart: string;
+  spentAmount: string;
+  capAmount: string | null;
+}
+
+export interface ToriiAssetTransferControl {
+  accountId: string;
+  assetDefinitionId: string;
+  availabilityRevision: number;
+  incoming: ToriiAssetTransferAvailability;
+  outgoing: ToriiAssetTransferAvailability;
+  availabilityReason: string | null;
+  blacklisted: boolean;
+  holdingLimit: string | null;
+  limits: ReadonlyArray<ToriiAssetTransferControlLimit>;
+  updatedAt: string | null;
+}
+
+export interface ToriiAssetTransferControlCheckpoint {
+  blockHeight: number;
+  blockHash: string;
+}
+
+export interface ToriiAssetTransferControlResponse {
+  control: ToriiAssetTransferControl;
+  usages: ReadonlyArray<ToriiAssetTransferUsageBucket>;
+  checkpoint: ToriiAssetTransferControlCheckpoint | null;
 }
 
 export interface ToriiRuntimeAbiHashResponse {
@@ -10869,6 +10921,11 @@ export declare class ToriiClient {
     options?: { signal?: AbortSignal },
   ): Promise<ToriiSccpBridgeSubmitResponse>;
   getRuntimeAbiActive(options: RequiredCanonicalRequestOptions): Promise<ToriiRuntimeAbiActiveResponse>;
+  getAssetTransferControl(
+    accountId: string,
+    assetDefinitionId: string,
+    options: RequiredCanonicalRequestOptions,
+  ): Promise<ToriiAssetTransferControlResponse>;
   getRuntimeAbiHash(options?: {
     signal?: AbortSignal;
   }): Promise<ToriiRuntimeAbiHashResponse>;

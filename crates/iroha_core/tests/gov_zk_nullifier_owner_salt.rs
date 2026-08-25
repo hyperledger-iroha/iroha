@@ -24,7 +24,7 @@ fn proposal_contract_address(
     owner: &iroha_data_model::account::AccountId,
 ) -> iroha_data_model::smart_contract::ContractAddress {
     iroha_data_model::smart_contract::ContractAddress::derive(
-        &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
+        &"0000000000000000000000000000000000000000000000000000000000000001"
             .parse()
             .expect("canonical test network id"),
         owner,

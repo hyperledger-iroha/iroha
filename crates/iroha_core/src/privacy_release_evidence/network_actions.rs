@@ -9,15 +9,25 @@ use iroha_data_model::{
     metadata::Metadata,
     prelude::{AccountId, AssetDefinitionId, NetworkId},
     privacy::{
-        OrchardHalo2ActionsStatementV1, PqMaspStarkStatementV1, PrivacyConsensusLimitsV1,
-        PrivacyJindoFieldElementV1, PrivacyNativeConsensusBindingV1, PrivacyOrchardActionV1,
-        PrivacyOrchardPoolBootstrapV1, PrivacyPoolIdV1, PrivacyPqMaspPoolBootstrapV1,
-        PrivacyProofBytesV1, PrivacyProofEnvelopeV1, PrivacyProofManagedPoolBootstrapV1,
-        PrivacyProofV1, PrivacyStatementContextV1, PrivacyStatementDigestV1, PrivacyStatementV1,
+        IrohaZkAmsStatementV1, OrchardHalo2ActionsStatementV1, PqMaspStarkStatementV1,
+        PrivacyConsensusLimitsV1, PrivacyIssuerIdV1, PrivacyJindoFieldElementV1,
+        PrivacyNativeConsensusBindingV1, PrivacyOrchardActionV1, PrivacyOrchardPoolBootstrapV1,
+        PrivacyP256PointV1, PrivacyPolicyDigestV1, PrivacyPolicyIdV1, PrivacyPoolIdV1,
+        PrivacyPqMaspPoolBootstrapV1, PrivacyProofBytesV1, PrivacyProofEnvelopeV1,
+        PrivacyProofManagedPoolBootstrapV1, PrivacyProofV1, PrivacyRootV1,
+        PrivacyStatementContextV1, PrivacyStatementDigestV1, PrivacyStatementV1,
         PrivacyTransactionIntentDigestV1, PrivacyValueBalanceDirectionV1, PrivacyValueBalanceV1,
-        PrivacyVegaIssuerRecordV1, PrivacyVegaMdlDateV1,
+        PrivacyVegaIssuerRecordV1, PrivacyVegaMdlDateV1, PrivacyZkAmsActionV1,
+        PrivacyZkAmsAdmissionAnchorV1, PrivacyZkAmsBatchAdmissionV1, PrivacyZkAmsCredentialNonceV1,
+        PrivacyZkAmsKeyImageV1, PrivacyZkAmsPersonhoodCredentialV1, PrivacyZkAmsProvisionAccountV1,
+        PrivacyZkAmsRegistryBootstrapV1, PrivacyZkAmsRegistryRecordDigestV1,
+        PrivacyZkAmsSeedPublicKeyV1, PrivacyZkAmsSubjectCommitmentV1, ZK_AMS_PHC_VERSION_V1,
+        ZK_AMS_REGISTRY_BOOTSTRAP_INITIAL_EPOCH_V1, zk_ams_registry_record_digest_v1,
     },
     transaction::{FeePaymentIntent, SignedTransaction, TransactionBuilder, TransactionPayload},
+};
+use p256::ecdsa::{
+    Signature as P256Signature, SigningKey as P256SigningKey, signature::hazmat::PrehashSigner as _,
 };
 use sha2::{Digest as _, Sha256};
 use std::{num::NonZeroU32, time::Duration};
@@ -37,6 +47,14 @@ use crate::privacy_engines::{
     vega::{
         VegaPrivacyActionTransactionContextV1, VegaPrivacyActionWitnessMaterialV1,
         build_signed_vega_privacy_action_with_rng_v1,
+    },
+    zk_ams::{
+        SignedZkAmsPrivacyActionV1, ZK_AMS_MAX_ADMISSION_BATCH_SIZE_V1, ZK_AMS_MIN_RING_SIZE_V1,
+        ZkAmsBatchCredentialWitnessV1, ZkAmsMaskedProverConfigV1, ZkAmsPrivacyActionEffectV1,
+        ZkAmsPrivacyActionGovernanceV1, ZkAmsPrivacyActionTransactionContextV1, ZkAmsSeedSecretV1,
+        build_signed_zk_ams_batch_admission_privacy_action_with_rng_v1,
+        build_signed_zk_ams_provision_privacy_action_with_rng_v1, zk_ams_key_image_v1,
+        zk_ams_registry_transition_root_v1, zk_ams_seed_public_key_v1,
     },
 };
 pub use retained::{
@@ -122,6 +140,43 @@ pub struct PrivacyReleasePqMaspNetworkActionsV1 {
     /// Exact fresh replay statement used after peer restart.
     pub post_restart_replay_statement: PqMaspStarkStatementV1,
 }
+/// Exact two-batch admission and successor-state provisioning sequence for ZK-AMS.
+///
+/// Credential, issuer-signing, seed-secret, proof-randomness, and transaction-signing material
+/// remains internal to the builder. The returned bootstrap and statements contain only the typed
+/// public state that a sealed controller must register, submit, and verify in order.
+#[derive(Clone, Debug)]
+pub struct PrivacyReleaseZkAmsNetworkActionsV1 {
+    /// First eight-anchor admission transaction, from bootstrap epoch one to epoch two.
+    pub first_admission_transaction: SignedTransaction,
+    /// Second eight-anchor admission transaction, from epoch two to epoch three.
+    pub second_admission_transaction: SignedTransaction,
+    /// Minimum-ring account-provisioning transaction against the epoch-three state.
+    pub provision_transaction: SignedTransaction,
+    /// Immutable governed registry bootstrap required before either admission.
+    pub bootstrap: PrivacyZkAmsRegistryBootstrapV1,
+    /// Exact public statement carried by `first_admission_transaction`.
+    pub first_admission_statement: IrohaZkAmsStatementV1,
+    /// Exact public statement carried by `second_admission_transaction`.
+    pub second_admission_statement: IrohaZkAmsStatementV1,
+    /// Exact public statement carried by `provision_transaction`.
+    pub provision_statement: IrohaZkAmsStatementV1,
+}
+
+struct ZkAmsReleaseCredentialFixtureV1 {
+    credential: PrivacyZkAmsPersonhoodCredentialV1,
+    issuer_signature: [u8; 64],
+    seed_secret: ZkAmsSeedSecretV1,
+}
+
+struct ZkAmsReleasePublicLineageV1 {
+    bootstrap: PrivacyZkAmsRegistryBootstrapV1,
+    first_admission: PrivacyZkAmsBatchAdmissionV1,
+    second_admission: PrivacyZkAmsBatchAdmissionV1,
+    provision: PrivacyZkAmsProvisionAccountV1,
+    first_registry_record_digest: PrivacyZkAmsRegistryRecordDigestV1,
+    second_registry_record_digest: PrivacyZkAmsRegistryRecordDigestV1,
+}
 fn network_seed_v1(master: [u8; 32], purpose: &[u8], index: u8) -> [u8; 32] {
     let mut hash = Sha256::new();
     hash.update(b"iroha.privacy.release.network-action.seed.v1");
@@ -138,6 +193,317 @@ fn network_seed_v1(master: [u8; 32], purpose: &[u8], index: u8) -> [u8; 32] {
         seed[0] = 1;
     }
     seed
+}
+
+fn zk_ams_issuer_public_key_v1() -> Result<PrivacyP256PointV1, PrivacyReleaseEvidenceErrorClassV1> {
+    let signing_key = P256SigningKey::from_bytes((&[7_u8; 32]).into())
+        .map_err(|_| PrivacyReleaseEvidenceErrorClassV1::FixtureConstructionFailed)?;
+    let encoded = signing_key.verifying_key().to_encoded_point(true);
+    let bytes: [u8; 33] = encoded
+        .as_bytes()
+        .try_into()
+        .map_err(|_| PrivacyReleaseEvidenceErrorClassV1::FixtureConstructionFailed)?;
+    Ok(PrivacyP256PointV1::new(bytes))
+}
+
+fn zk_ams_release_fixture_v1(
+    fixture_seed: [u8; 32],
+) -> Result<
+    (
+        PrivacyZkAmsRegistryBootstrapV1,
+        Vec<ZkAmsReleaseCredentialFixtureV1>,
+    ),
+    PrivacyReleaseEvidenceErrorClassV1,
+> {
+    if fixture_seed == [0; 32]
+        || ZK_AMS_MIN_RING_SIZE_V1
+            != ZK_AMS_MAX_ADMISSION_BATCH_SIZE_V1
+                .checked_mul(2)
+                .ok_or(PrivacyReleaseEvidenceErrorClassV1::EvidenceInvariant)?
+    {
+        return Err(PrivacyReleaseEvidenceErrorClassV1::FixtureConstructionFailed);
+    }
+    let issuer_signing_key = P256SigningKey::from_bytes((&[7_u8; 32]).into())
+        .map_err(|_| PrivacyReleaseEvidenceErrorClassV1::FixtureConstructionFailed)?;
+    let issuer_id = PrivacyIssuerIdV1::new([0x31; 32]);
+    let registry_id = iroha_data_model::privacy::PrivacyZkAmsRegistryIdV1::new([0x33; 32]);
+    let policy_id = PrivacyPolicyIdV1::new([0x35; 32]);
+    let bootstrap = PrivacyZkAmsRegistryBootstrapV1 {
+        issuer_id,
+        registry_id,
+        policy_id,
+        issuer_public_key: zk_ams_issuer_public_key_v1()?,
+        policy_digest: PrivacyPolicyDigestV1::new([0x36; 32]),
+        initial_registry_root: PrivacyRootV1::new([0x37; 32]),
+        initial_registry_epoch: ZK_AMS_REGISTRY_BOOTSTRAP_INITIAL_EPOCH_V1,
+    };
+    bootstrap
+        .validate()
+        .map_err(|_| PrivacyReleaseEvidenceErrorClassV1::FixtureConstructionFailed)?;
+    let mut seed_material = (0..ZK_AMS_MIN_RING_SIZE_V1)
+        .map(|index| {
+            let index = u8::try_from(index)
+                .map_err(|_| PrivacyReleaseEvidenceErrorClassV1::EvidenceInvariant)?;
+            let mut rng =
+                EvidenceRng06::new(network_seed_v1(fixture_seed, b"zk-ams-seed-secret", index));
+            let seed_secret = ZkAmsSeedSecretV1::generate(&mut rng)
+                .map_err(|_| PrivacyReleaseEvidenceErrorClassV1::FixtureConstructionFailed)?;
+            Ok((zk_ams_seed_public_key_v1(&seed_secret), seed_secret))
+        })
+        .collect::<Result<Vec<_>, PrivacyReleaseEvidenceErrorClassV1>>()?;
+    seed_material.sort_by_key(|(public_key, _)| *public_key);
+    if !seed_material.windows(2).all(|pair| pair[0].0 < pair[1].0) {
+        return Err(PrivacyReleaseEvidenceErrorClassV1::EvidenceInvariant);
+    }
+    let credentials = seed_material
+        .into_iter()
+        .enumerate()
+        .map(|(index, (seed_public_key, seed_secret))| {
+            let index = u8::try_from(index)
+                .map_err(|_| PrivacyReleaseEvidenceErrorClassV1::EvidenceInvariant)?;
+            let subject_byte = 0x41_u8
+                .checked_add(index)
+                .ok_or(PrivacyReleaseEvidenceErrorClassV1::EvidenceInvariant)?;
+            let nonce_byte = 0x51_u8
+                .checked_add(index)
+                .ok_or(PrivacyReleaseEvidenceErrorClassV1::EvidenceInvariant)?;
+            let credential = PrivacyZkAmsPersonhoodCredentialV1 {
+                version: ZK_AMS_PHC_VERSION_V1,
+                issuer_id,
+                policy_id,
+                subject_commitment: PrivacyZkAmsSubjectCommitmentV1::new([subject_byte; 32]),
+                seed_public_key: PrivacyZkAmsSeedPublicKeyV1::new(seed_public_key),
+                credential_nonce: PrivacyZkAmsCredentialNonceV1::new([nonce_byte; 32]),
+            };
+            let signature: P256Signature = issuer_signing_key
+                .sign_prehash(credential.digest().as_bytes())
+                .map_err(|_| PrivacyReleaseEvidenceErrorClassV1::FixtureConstructionFailed)?;
+            let signature = signature.normalize_s().unwrap_or(signature);
+            Ok(ZkAmsReleaseCredentialFixtureV1 {
+                credential,
+                issuer_signature: signature.to_bytes().into(),
+                seed_secret,
+            })
+        })
+        .collect::<Result<Vec<_>, PrivacyReleaseEvidenceErrorClassV1>>()?;
+    if credentials.len() != ZK_AMS_MIN_RING_SIZE_V1 {
+        return Err(PrivacyReleaseEvidenceErrorClassV1::EvidenceInvariant);
+    }
+    Ok((bootstrap, credentials))
+}
+
+fn zk_ams_next_root_v1(
+    registry_id: iroha_data_model::privacy::PrivacyZkAmsRegistryIdV1,
+    current_root: PrivacyRootV1,
+    current_epoch: u64,
+    next_epoch: u64,
+    anchors: &[PrivacyZkAmsAdmissionAnchorV1],
+) -> Result<PrivacyRootV1, PrivacyReleaseEvidenceErrorClassV1> {
+    let batch_size = u32::try_from(anchors.len())
+        .map_err(|_| PrivacyReleaseEvidenceErrorClassV1::EvidenceInvariant)?;
+    Ok(anchors
+        .iter()
+        .copied()
+        .enumerate()
+        .fold(current_root, |prior_root, (index, anchor)| {
+            zk_ams_registry_transition_root_v1(
+                registry_id,
+                prior_root,
+                current_epoch,
+                next_epoch,
+                batch_size,
+                u32::try_from(index).expect("eight ZK-AMS admission anchors fit u32"),
+                anchor,
+            )
+        }))
+}
+
+fn zk_ams_release_public_lineage_v1(
+    bootstrap: PrivacyZkAmsRegistryBootstrapV1,
+    credentials: &[ZkAmsReleaseCredentialFixtureV1],
+    provision_account_id: AccountId,
+) -> Result<ZkAmsReleasePublicLineageV1, PrivacyReleaseEvidenceErrorClassV1> {
+    if credentials.len() != ZK_AMS_MIN_RING_SIZE_V1 {
+        return Err(PrivacyReleaseEvidenceErrorClassV1::EvidenceInvariant);
+    }
+    let all_anchors = credentials
+        .iter()
+        .map(|fixture| PrivacyZkAmsAdmissionAnchorV1 {
+            phc_hash: fixture.credential.digest(),
+            seed_public_key: fixture.credential.seed_public_key,
+        })
+        .collect::<Vec<_>>();
+    let (first_anchors, second_anchors) = all_anchors.split_at(ZK_AMS_MAX_ADMISSION_BATCH_SIZE_V1);
+    if first_anchors.len() != ZK_AMS_MAX_ADMISSION_BATCH_SIZE_V1
+        || second_anchors.len() != ZK_AMS_MAX_ADMISSION_BATCH_SIZE_V1
+    {
+        return Err(PrivacyReleaseEvidenceErrorClassV1::EvidenceInvariant);
+    }
+    let first_epoch = bootstrap
+        .initial_registry_epoch
+        .checked_add(1)
+        .ok_or(PrivacyReleaseEvidenceErrorClassV1::EvidenceInvariant)?;
+    let first_root = zk_ams_next_root_v1(
+        bootstrap.registry_id,
+        bootstrap.initial_registry_root,
+        bootstrap.initial_registry_epoch,
+        first_epoch,
+        first_anchors,
+    )?;
+    let first_admission = PrivacyZkAmsBatchAdmissionV1 {
+        account_registry_root: bootstrap.initial_registry_root,
+        account_registry_root_epoch: bootstrap.initial_registry_epoch,
+        next_account_registry_root: first_root,
+        next_account_registry_root_epoch: first_epoch,
+        anchors: first_anchors.to_vec(),
+    };
+    let first_registry_record_digest = zk_ams_registry_record_digest_v1(
+        bootstrap.issuer_id,
+        bootstrap.registry_id,
+        bootstrap.policy_id,
+        bootstrap.issuer_policy_record_digest(),
+        bootstrap.policy_digest,
+        first_root,
+        first_epoch,
+    );
+    let second_epoch = first_epoch
+        .checked_add(1)
+        .ok_or(PrivacyReleaseEvidenceErrorClassV1::EvidenceInvariant)?;
+    let second_root = zk_ams_next_root_v1(
+        bootstrap.registry_id,
+        first_root,
+        first_epoch,
+        second_epoch,
+        second_anchors,
+    )?;
+    let second_admission = PrivacyZkAmsBatchAdmissionV1 {
+        account_registry_root: first_root,
+        account_registry_root_epoch: first_epoch,
+        next_account_registry_root: second_root,
+        next_account_registry_root_epoch: second_epoch,
+        anchors: second_anchors.to_vec(),
+    };
+    let second_registry_record_digest = zk_ams_registry_record_digest_v1(
+        bootstrap.issuer_id,
+        bootstrap.registry_id,
+        bootstrap.policy_id,
+        bootstrap.issuer_policy_record_digest(),
+        bootstrap.policy_digest,
+        second_root,
+        second_epoch,
+    );
+    let signer_secret = credentials
+        .get(5)
+        .ok_or(PrivacyReleaseEvidenceErrorClassV1::EvidenceInvariant)?;
+    let provision = PrivacyZkAmsProvisionAccountV1 {
+        account_registry_root: second_root,
+        account_registry_root_epoch: second_epoch,
+        admitted_seed_key_ring: all_anchors
+            .iter()
+            .map(|anchor| anchor.seed_public_key)
+            .collect(),
+        account_id: provision_account_id,
+        key_image: PrivacyZkAmsKeyImageV1::new(
+            zk_ams_key_image_v1(&signer_secret.seed_secret)
+                .map_err(|_| PrivacyReleaseEvidenceErrorClassV1::FixtureConstructionFailed)?,
+        ),
+    };
+    Ok(ZkAmsReleasePublicLineageV1 {
+        bootstrap,
+        first_admission,
+        second_admission,
+        provision,
+        first_registry_record_digest,
+        second_registry_record_digest,
+    })
+}
+
+fn zk_ams_action_context_v1(
+    context: &PrivacyReleaseTransactionContextV1,
+) -> ZkAmsPrivacyActionTransactionContextV1 {
+    ZkAmsPrivacyActionTransactionContextV1 {
+        network_id: context.network_id,
+        authority: context.authority.clone(),
+        creation_time: context.creation_time,
+        time_to_live: context.time_to_live,
+        nonce: context.nonce,
+        fee_payment: context.fee_payment.clone(),
+        metadata: context.metadata.clone(),
+    }
+}
+
+fn zk_ams_governance_v1(
+    bootstrap: PrivacyZkAmsRegistryBootstrapV1,
+    registry_record_digest: PrivacyZkAmsRegistryRecordDigestV1,
+) -> ZkAmsPrivacyActionGovernanceV1 {
+    ZkAmsPrivacyActionGovernanceV1 {
+        issuer_id: bootstrap.issuer_id,
+        issuer_public_key: bootstrap.issuer_public_key,
+        issuer_policy_record_digest: bootstrap.issuer_policy_record_digest(),
+        registry_id: bootstrap.registry_id,
+        registry_record_digest,
+        policy_id: bootstrap.policy_id,
+        policy_digest: bootstrap.policy_digest,
+    }
+}
+
+fn zk_ams_statement_from_signed_v1(
+    signed: &SignedZkAmsPrivacyActionV1,
+    expected_effect: ZkAmsPrivacyActionEffectV1,
+) -> Result<IrohaZkAmsStatementV1, PrivacyReleaseEvidenceErrorClassV1> {
+    signed
+        .signed_transaction()
+        .verify_signature()
+        .map_err(|_| PrivacyReleaseEvidenceErrorClassV1::EvidenceInvariant)?;
+    let (intent, submission) = signed
+        .signed_transaction()
+        .payload()
+        .privacy_transaction_intent_binding_if_present_v1()
+        .map_err(|_| PrivacyReleaseEvidenceErrorClassV1::EvidenceInvariant)?
+        .ok_or(PrivacyReleaseEvidenceErrorClassV1::EvidenceInvariant)?;
+    let PrivacyStatementV1::IrohaZkAmsV1(statement) = &submission.envelope.statement else {
+        return Err(PrivacyReleaseEvidenceErrorClassV1::EvidenceInvariant);
+    };
+    let observed_effect = match &statement.action {
+        PrivacyZkAmsActionV1::BatchAdmission(_) => ZkAmsPrivacyActionEffectV1::BatchAdmission,
+        PrivacyZkAmsActionV1::ProvisionAccount(_) => ZkAmsPrivacyActionEffectV1::ProvisionAccount,
+    };
+    if signed.effect() != expected_effect
+        || observed_effect != expected_effect
+        || signed.transaction_intent_digest() != *intent.as_bytes()
+        || statement.context.transaction_intent_digest != intent
+        || signed.transaction_hash() != *signed.signed_transaction().hash().as_ref()
+    {
+        return Err(PrivacyReleaseEvidenceErrorClassV1::EvidenceInvariant);
+    }
+    Ok(statement.clone())
+}
+
+fn zk_ams_contexts_form_sequence_v1(
+    first: &PrivacyReleaseTransactionContextV1,
+    second: &PrivacyReleaseTransactionContextV1,
+    provision: &PrivacyReleaseTransactionContextV1,
+) -> bool {
+    let same_signed_fields = |other: &PrivacyReleaseTransactionContextV1| {
+        first.network_id == other.network_id
+            && first.authority == other.authority
+            && first.time_to_live == other.time_to_live
+            && first.fee_payment == other.fee_payment
+            && first.metadata == other.metadata
+            && first.genesis_hash == other.genesis_hash
+    };
+    let strictly_increasing_nonce = matches!(
+        (first.nonce, second.nonce, provision.nonce),
+        (Some(first), Some(second), Some(provision))
+            if first.get() < second.get() && second.get() < provision.get()
+    );
+    same_signed_fields(second)
+        && same_signed_fields(provision)
+        && first.creation_time < second.creation_time
+        && second.creation_time < provision.creation_time
+        && strictly_increasing_nonce
+        && first.genesis_hash != [0; 32]
+        && first.network_id.as_bytes() == &first.genesis_hash
 }
 fn statement_context_v1(
     transaction: &PrivacyReleaseTransactionContextV1,
@@ -372,6 +738,182 @@ pub fn build_privacy_release_vega_network_action_v1(
     Ok(PrivacyReleaseVegaNetworkActionV1 {
         transaction: signed.into_signed_transaction(),
         issuer_record: fixture.issuer_record,
+    })
+}
+
+/// Build the canonical network-bound ZK-AMS minimum-ring lifecycle bundle.
+///
+/// The sequence contains exactly two eight-anchor admissions followed by one account provision
+/// against their common successor state. It constructs transactions only: callers remain
+/// responsible for registering the returned bootstrap, submitting each transaction in order, and
+/// establishing authoritative network outcomes.
+#[allow(clippy::too_many_lines)]
+pub fn build_privacy_release_zk_ams_network_actions_v1(
+    first_admission_context: PrivacyReleaseTransactionContextV1,
+    second_admission_context: PrivacyReleaseTransactionContextV1,
+    provision_context: PrivacyReleaseTransactionContextV1,
+    provision_account_id: AccountId,
+    fixture_seed: [u8; 32],
+    private_key: &PrivateKey,
+) -> Result<PrivacyReleaseZkAmsNetworkActionsV1, PrivacyReleaseEvidenceErrorClassV1> {
+    if !zk_ams_contexts_form_sequence_v1(
+        &first_admission_context,
+        &second_admission_context,
+        &provision_context,
+    ) || provision_account_id == first_admission_context.authority
+    {
+        return Err(PrivacyReleaseEvidenceErrorClassV1::FixtureConstructionFailed);
+    }
+    let (bootstrap, credentials) = zk_ams_release_fixture_v1(fixture_seed)?;
+    let lineage = zk_ams_release_public_lineage_v1(bootstrap, &credentials, provision_account_id)?;
+    let first_witnesses = credentials[..ZK_AMS_MAX_ADMISSION_BATCH_SIZE_V1]
+        .iter()
+        .map(|fixture| {
+            ZkAmsBatchCredentialWitnessV1::new(
+                &fixture.credential,
+                &fixture.issuer_signature,
+                &fixture.seed_secret,
+            )
+        })
+        .collect::<Vec<_>>();
+    let mut first_rng =
+        EvidenceRng06::new(network_seed_v1(fixture_seed, b"zk-ams-admission-proof", 0));
+    let first_signed = build_signed_zk_ams_batch_admission_privacy_action_with_rng_v1(
+        zk_ams_action_context_v1(&first_admission_context),
+        zk_ams_governance_v1(
+            lineage.bootstrap,
+            lineage.bootstrap.registry_record_digest(),
+        ),
+        lineage.first_admission.clone(),
+        &first_witnesses,
+        ZkAmsMaskedProverConfigV1::new(1)
+            .map_err(|_| PrivacyReleaseEvidenceErrorClassV1::FixtureConstructionFailed)?,
+        first_admission_context.genesis_hash,
+        private_key,
+        &mut first_rng,
+    )
+    .map_err(|_| PrivacyReleaseEvidenceErrorClassV1::NativeProverRejected)?;
+    let first_admission_statement =
+        zk_ams_statement_from_signed_v1(&first_signed, ZkAmsPrivacyActionEffectV1::BatchAdmission)?;
+
+    let second_witnesses = credentials[ZK_AMS_MAX_ADMISSION_BATCH_SIZE_V1..]
+        .iter()
+        .map(|fixture| {
+            ZkAmsBatchCredentialWitnessV1::new(
+                &fixture.credential,
+                &fixture.issuer_signature,
+                &fixture.seed_secret,
+            )
+        })
+        .collect::<Vec<_>>();
+    let mut second_rng =
+        EvidenceRng06::new(network_seed_v1(fixture_seed, b"zk-ams-admission-proof", 1));
+    let second_signed = build_signed_zk_ams_batch_admission_privacy_action_with_rng_v1(
+        zk_ams_action_context_v1(&second_admission_context),
+        zk_ams_governance_v1(lineage.bootstrap, lineage.first_registry_record_digest),
+        lineage.second_admission.clone(),
+        &second_witnesses,
+        ZkAmsMaskedProverConfigV1::new(1)
+            .map_err(|_| PrivacyReleaseEvidenceErrorClassV1::FixtureConstructionFailed)?,
+        second_admission_context.genesis_hash,
+        private_key,
+        &mut second_rng,
+    )
+    .map_err(|_| PrivacyReleaseEvidenceErrorClassV1::NativeProverRejected)?;
+    let second_admission_statement = zk_ams_statement_from_signed_v1(
+        &second_signed,
+        ZkAmsPrivacyActionEffectV1::BatchAdmission,
+    )?;
+
+    let signer_index = 5_usize;
+    let signer_secret = credentials
+        .get(signer_index)
+        .ok_or(PrivacyReleaseEvidenceErrorClassV1::EvidenceInvariant)?;
+    let mut provision_rng =
+        EvidenceRng06::new(network_seed_v1(fixture_seed, b"zk-ams-provision-proof", 0));
+    let provision_signed = build_signed_zk_ams_provision_privacy_action_with_rng_v1(
+        zk_ams_action_context_v1(&provision_context),
+        zk_ams_governance_v1(lineage.bootstrap, lineage.second_registry_record_digest),
+        lineage.provision.clone(),
+        signer_index,
+        &signer_secret.seed_secret,
+        provision_context.genesis_hash,
+        private_key,
+        &mut provision_rng,
+    )
+    .map_err(|_| PrivacyReleaseEvidenceErrorClassV1::NativeProverRejected)?;
+    let provision_statement = zk_ams_statement_from_signed_v1(
+        &provision_signed,
+        ZkAmsPrivacyActionEffectV1::ProvisionAccount,
+    )?;
+
+    let transaction_hashes = [
+        first_signed.transaction_hash(),
+        second_signed.transaction_hash(),
+        provision_signed.transaction_hash(),
+    ];
+    let transaction_intents = [
+        first_signed.transaction_intent_digest(),
+        second_signed.transaction_intent_digest(),
+        provision_signed.transaction_intent_digest(),
+    ];
+    let first_governance = zk_ams_governance_v1(
+        lineage.bootstrap,
+        lineage.bootstrap.registry_record_digest(),
+    );
+    let second_governance =
+        zk_ams_governance_v1(lineage.bootstrap, lineage.first_registry_record_digest);
+    let provision_governance =
+        zk_ams_governance_v1(lineage.bootstrap, lineage.second_registry_record_digest);
+    let statement_matches_governance =
+        |statement: &IrohaZkAmsStatementV1, governance: ZkAmsPrivacyActionGovernanceV1| {
+            statement.issuer_id == governance.issuer_id
+                && statement.issuer_public_key == governance.issuer_public_key
+                && statement.issuer_policy_record_digest == governance.issuer_policy_record_digest
+                && statement.registry_id == governance.registry_id
+                && statement.registry_record_digest == governance.registry_record_digest
+                && statement.policy_id == governance.policy_id
+                && statement.policy_digest == governance.policy_digest
+        };
+    if transaction_hashes
+        .iter()
+        .enumerate()
+        .any(|(index, hash)| transaction_hashes[..index].contains(hash))
+        || transaction_intents
+            .iter()
+            .enumerate()
+            .any(|(index, intent)| transaction_intents[..index].contains(intent))
+        || first_admission_statement.action
+            != PrivacyZkAmsActionV1::BatchAdmission(lineage.first_admission.clone())
+        || second_admission_statement.action
+            != PrivacyZkAmsActionV1::BatchAdmission(lineage.second_admission.clone())
+        || provision_statement.action
+            != PrivacyZkAmsActionV1::ProvisionAccount(lineage.provision.clone())
+        || !statement_matches_governance(&first_admission_statement, first_governance)
+        || !statement_matches_governance(&second_admission_statement, second_governance)
+        || !statement_matches_governance(&provision_statement, provision_governance)
+        || lineage.first_admission.anchors.len() != ZK_AMS_MAX_ADMISSION_BATCH_SIZE_V1
+        || lineage.second_admission.anchors.len() != ZK_AMS_MAX_ADMISSION_BATCH_SIZE_V1
+        || lineage.provision.admitted_seed_key_ring.len() != ZK_AMS_MIN_RING_SIZE_V1
+        || lineage.second_admission.account_registry_root
+            != lineage.first_admission.next_account_registry_root
+        || lineage.second_admission.account_registry_root_epoch
+            != lineage.first_admission.next_account_registry_root_epoch
+        || lineage.provision.account_registry_root
+            != lineage.second_admission.next_account_registry_root
+        || lineage.provision.account_registry_root_epoch
+            != lineage.second_admission.next_account_registry_root_epoch
+    {
+        return Err(PrivacyReleaseEvidenceErrorClassV1::EvidenceInvariant);
+    }
+    Ok(PrivacyReleaseZkAmsNetworkActionsV1 {
+        first_admission_transaction: first_signed.into_signed_transaction(),
+        second_admission_transaction: second_signed.into_signed_transaction(),
+        provision_transaction: provision_signed.into_signed_transaction(),
+        bootstrap: lineage.bootstrap,
+        first_admission_statement,
+        second_admission_statement,
+        provision_statement,
     })
 }
 /// Build one canonical network-bound Orchard action through the production
@@ -700,4 +1242,51 @@ pub fn build_privacy_release_pq_masp_network_actions_v1(
         replay_statement,
         post_restart_replay_statement,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use iroha_crypto::{Algorithm, PublicKey};
+
+    #[test]
+    fn zk_ams_public_lineage_is_exactly_two_batches_then_minimum_ring_provision() {
+        let (bootstrap, credentials) =
+            zk_ams_release_fixture_v1([0x29; 32]).expect("construct ZK-AMS fixture");
+        let account_key = PrivateKey::from_bytes(Algorithm::Ed25519, &[0x2a; 32])
+            .expect("construct provision account key");
+        let lineage = zk_ams_release_public_lineage_v1(
+            bootstrap,
+            &credentials,
+            AccountId::new(PublicKey::from(account_key)),
+        )
+        .expect("construct public ZK-AMS lineage");
+
+        assert_eq!(lineage.first_admission.anchors.len(), 8);
+        assert_eq!(lineage.second_admission.anchors.len(), 8);
+        assert_eq!(lineage.first_admission.account_registry_root_epoch, 1);
+        assert_eq!(lineage.first_admission.next_account_registry_root_epoch, 2);
+        assert_eq!(lineage.second_admission.account_registry_root_epoch, 2);
+        assert_eq!(lineage.second_admission.next_account_registry_root_epoch, 3);
+        assert_eq!(
+            lineage.second_admission.account_registry_root,
+            lineage.first_admission.next_account_registry_root
+        );
+        assert_eq!(lineage.provision.account_registry_root_epoch, 3);
+        assert_eq!(
+            lineage.provision.account_registry_root,
+            lineage.second_admission.next_account_registry_root
+        );
+        assert_eq!(lineage.provision.admitted_seed_key_ring.len(), 16);
+        assert_eq!(
+            lineage.provision.admitted_seed_key_ring,
+            lineage
+                .first_admission
+                .anchors
+                .iter()
+                .chain(&lineage.second_admission.anchors)
+                .map(|anchor| anchor.seed_public_key)
+                .collect::<Vec<_>>()
+        );
+    }
 }

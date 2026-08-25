@@ -81,7 +81,7 @@ final class AliasSetupV1Tests: XCTestCase {
 
         let invalidNetworkIds: [Any] = [
             ["kind": "genesis"],
-            ["kind": "unknown", "value": TestNetworkIds.canonical.literal],
+            ["kind": "unknown", "value": TestNetworkIds.canonical.noritoJSONLiteral],
             "hash:32C903E5B3497E34C2B844EBFE8A39C19E6CF8F95D44C1FFB8BA9DCB42F91148#B2D1",
         ]
         for invalidNetworkId in invalidNetworkIds {
@@ -254,7 +254,11 @@ final class AliasSetupV1Tests: XCTestCase {
         let canonicalJSON = try XCTUnwrap(
             String(data: JSONEncoder().encode(plan), encoding: .utf8)
         )
-        XCTAssertTrue(canonicalJSON.contains("\"network_id\":\"\(TestNetworkIds.canonical.literal)\""))
+        XCTAssertTrue(
+            canonicalJSON.contains(
+                "\"network_id\":\"\(TestNetworkIds.canonical.noritoJSONLiteral)\""
+            )
+        )
         let legacyJSON = canonicalJSON.replacingOccurrences(
             of: "\"network_id\"",
             with: "\"chain_id\""
@@ -587,7 +591,11 @@ final class AliasSetupV1Tests: XCTestCase {
         let renewalJSON = try XCTUnwrap(
             String(data: JSONEncoder().encode(renewalPlan), encoding: .utf8)
         )
-        XCTAssertTrue(renewalJSON.contains("\"network_id\":\"\(TestNetworkIds.canonical.literal)\""))
+        XCTAssertTrue(
+            renewalJSON.contains(
+                "\"network_id\":\"\(TestNetworkIds.canonical.noritoJSONLiteral)\""
+            )
+        )
         let legacyRenewalJSON = renewalJSON.replacingOccurrences(
             of: "\"network_id\"",
             with: "\"chain_id\""

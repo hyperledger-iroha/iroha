@@ -38,7 +38,7 @@ privacy-exact12-conformance = []
 gost = ["iroha_crypto/gost"]
 bls = ["iroha_crypto/bls"]
 sm = ["iroha_crypto/sm"]
-# Compile the ABI-21 Kagemusha recursive backend as production-promoted.
+# Compile the Kagemusha V4 recursive backend as production-promoted.
 # This is deliberately non-default and is selected by the shipping bridge's
 # `privacy-production-enabled` feature; runtime readiness still requires an
 # authenticated eight-artifact release installation.
@@ -139,6 +139,11 @@ required-features = ["dev-tools", "test-fixtures"]
 [[bin]]
 name = "qr_stream_fixtures"
 path = "src/bin/qr_stream_fixtures.rs"
+required-features = ["dev-tools", "test-fixtures"]
+
+[[bin]]
+name = "offline_cash_peer_fixtures"
+path = "src/bin/offline_cash_peer_fixtures.rs"
 required-features = ["dev-tools", "test-fixtures"]
 
 [[bin]]

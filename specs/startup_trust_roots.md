@@ -117,15 +117,18 @@ artifact and replay invariants.
 1. Distribute the same signed genesis artifact and configured public key to
    every node before first start.
 2. Record its exact consensus-header hash through exactly one of
-   `genesis.expected_hash` or `genesis.expected_hash_file` on every node. Kagami prints this value after signing.
-   `--expected-hash-out <name>.expected_hash` writes the canonical one-line value
-   and atomically publishes `<name>.identity.toml`, which binds the same exact
-   hash as client `network_id` and validator `genesis.expected_hash` in one
-   artifact. Production validators and clients consume that same one-line file
-   through `expected_hash_file` and `network_id_file`; deployment renderers consume the paired artifact instead of
-   assembling the two security domains independently. Generated localnets also
-   decode the signed body back and check the same value in every peer config.
-   Use normal seedless
+   `genesis.expected_hash` or `genesis.expected_hash_file` on every node. Inline
+   typed `genesis.expected_hash` uses tagged `hash:UPPER#CRC` Norito text; the
+   public identity file uses raw lowercase marked hash text. Kagami prints the
+   raw value after signing. `--expected-hash-out <name>.expected_hash` writes the
+   canonical one-line value and atomically publishes `<name>.identity.toml`,
+   which binds the same exact hash as raw client `network_id` and tagged
+   validator `genesis.expected_hash` in one artifact. Production validators and
+   clients consume that same one-line file through `expected_hash_file` and
+   `network_id_file`; deployment renderers consume the paired artifact instead
+   of assembling the two security domains independently. Generated localnets
+   also decode the signed body back and check the same hash bytes in every peer
+   config. Use normal seedless
    `kagami docker` generation so the same prepared validator bundle and all
    three operator-approved files are validated before Compose is written.
 3. Verify the external artifact and configured hash are identical before first

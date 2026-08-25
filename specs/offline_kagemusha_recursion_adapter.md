@@ -1,7 +1,7 @@
 # Kagemusha recursive-verifier adapter audit
 
-This note records the proof-system boundary for the sole ABI-21/V4 Kagemusha
-recursive-spend lifecycle.
+This note records the proof-system boundary for the sole Kagemusha data ABI V4
+recursive-spend lifecycle exposed through mobile bridge ABI22.
 It is an implementation audit, not a readiness claim. The production backend
 remains unavailable until the fixed-key paired deferred verifier and its
 release artifacts pass every soundness, device, and chain gate.
@@ -190,7 +190,7 @@ logical transition carries an `EqAffine`/Vesta proof and an `EpAffine`/Pallas
 proof for the same exact transition. The next pair closes both parent halves;
 it never replaces one current parity with a temporal predecessor proof.
 Artifacts bind both VKs, both parameter generations, and the complete 138-limb
-compact V5 field-neutral state nested inside ABI-21/V4. Each parity exposes an
+compact V5 field-neutral state nested inside bridge ABI-22 / Kagemusha data ABI V4. Each parity exposes an
 exact 66-element public column at authenticated degree 17. The supported
 same-scalar-field tuples compile: an `EqAffine` proof can be loaded in an `Fp`
 circuit and the reciprocal `EpAffine` proof in an `Fq` circuit. Earlier direct
@@ -218,7 +218,7 @@ opening residual is not an IPA decision. Native/in-circuit transcript parity,
 substitution tests, both outer proofs, recursive accumulation, and both terminal
 decisions are mandatory before `CircuitVerifierUnavailable` can be removed.
 
-## ABI-21 and artifact V4 contract
+## Mobile bridge ABI22 and Kagemusha data/artifact V4 contract
 
 The current contract is bridge ABI `22`, manifest schema
 `kagemusha.offline.recursive_spend.artifact_manifest.v4`, proof backend
@@ -240,7 +240,8 @@ activation window and proof-pair limit.
 `KagemushaRecursiveSpendStateBoundaryV5` crosses the field boundary as the
 canonical V5 layout version followed by all 138 explicit little-endian `u32`
 result-state limbs, including the statement's append-only
-`next_zero_leaf_index`. ABI 21 and manifest V4 remain the only lifecycle, but
+`next_zero_leaf_index`. Mobile bridge ABI22 and Kagemusha data ABI V4 remain
+the only lifecycle, but
 keys, bootstrap witnesses, proofs, manifests, and schema hashes from the former
 large layout are incompatible and must not be reused. The nested compact
 profile fixes the single public-instance column at 66 field elements and degree
@@ -354,7 +355,7 @@ is not a trust anchor.
 The release candidate boundary requires at least four public validators in
 every supplied top-up-finality roster window. The general roster data model
 remains capable of representing smaller development fixtures, but such a
-fixture is not admissible as ABI-21 release evidence.
+fixture is not admissible as Kagemusha data ABI V4 release evidence.
 
 Runtime qualification keeps its decoded working set beneath the non-raiseable
 256 MiB catalog budget. It never materializes a processed proving key: each

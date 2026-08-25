@@ -3420,7 +3420,7 @@ fn qualify_evidence_viewer_transparency_publisher_dependency(
 mod tests {
     use super::*;
     use iroha_config_base::{toml::TomlSource, util::Bytes};
-    use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair};
+    use iroha_crypto::{Algorithm, HashOf, KeyPair};
     use std::{
         path::Path,
         sync::{
@@ -5154,20 +5154,23 @@ mod tests {
         let path = Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("../../defaults/kagami/iroha3-dev/config.toml");
         let source = std::fs::read_to_string(path).expect("read checked-in default daemon config");
-        let mut table: toml::Table = toml::from_str(&source).expect("parse default daemon config");
+        let table: toml::Table = toml::from_str(&source).expect("parse default daemon config");
         let expected_hash = table
-            .get_mut("genesis")
-            .and_then(toml::Value::as_table_mut)
-            .and_then(|genesis| genesis.get_mut("expected_hash"))
-            .expect("default daemon genesis expected-hash placeholder");
-        assert_eq!(
-            expected_hash.as_str(),
-            Some("REPLACE_WITH_GENESIS_EXPECTED_HASH")
+            .get("genesis")
+            .and_then(toml::Value::as_table)
+            .and_then(|genesis| genesis.get("expected_hash"))
+            .and_then(toml::Value::as_str)
+            .expect("default daemon genesis expected-hash literal");
+        let hash_body = norito::literal::parse("hash", expected_hash)
+            .expect("default daemon genesis expected hash must be a tagged Norito literal");
+        assert!(
+            !hash_body.bytes().any(|byte| byte.is_ascii_lowercase()),
+            "default daemon genesis expected hash body must be uppercase"
         );
-        // This test-only value permits inspection of unrelated provider bindings without making
-        // the checked-in signing profile a runnable validator config.
-        *expected_hash = toml::Value::String(
-            Hash::new(b"runtime-provider non-runtime profile inspection").to_string(),
+        assert_eq!(
+            expected_hash,
+            norito::literal::format("hash", hash_body).as_str(),
+            "default daemon genesis expected hash must be canonical"
         );
         Config::from_toml_source(TomlSource::inline(table))
             .expect("resolve checked-in default daemon config for inspection")

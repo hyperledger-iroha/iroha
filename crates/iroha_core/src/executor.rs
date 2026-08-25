@@ -5,7 +5,9 @@
 use crate::zk::PreverifyResult;
 use crate::{
     gas as isi_gas,
-    settlement::{PendingNexusFeeReceipt, PendingSettlement, VolatilityBucket},
+    settlement::{
+        PendingDirectFeePaymentCharge, PendingNexusFeeReceipt, PendingSettlement, VolatilityBucket,
+    },
     smartcontracts::{
         Execute as _, code,
         isi::offline::{
@@ -4965,7 +4967,8 @@ impl Executor {
                     .unwrap_or(DataSpaceId::UNIVERSAL),
             ),
         };
-        let payer_asset = AssetId::with_scope(asset_definition_id.clone(), payer, payer_scope);
+        let payer_asset =
+            AssetId::with_scope(asset_definition_id.clone(), payer.clone(), payer_scope);
         let transfer_result = if let Some(program_id) = fee_sponsor {
             let charge = VerifiedFeeSponsorCharge::transfer(
                 authority.clone(),
@@ -5005,12 +5008,42 @@ impl Executor {
             state_transaction,
             tx_hash,
             settlement_source_id,
-            asset_definition_id,
-            qty,
+            asset_definition_id.clone(),
+            qty.clone(),
             twap_local_per_xor,
             liquidity_profile,
             volatility_bucket,
-        )
+        )?;
+        if state_transaction.nexus.fees.settlement_mode
+            == iroha_config::parameters::actual::NexusFeeSettlementMode::Direct
+        {
+            let (debit_source, sponsor_program_revision) = fee_sponsor.map_or_else(
+                || (FeeDebitSource::Account(authority.clone()), None),
+                |program_id| {
+                    (
+                        FeeDebitSource::SponsorProgram(program_id.clone()),
+                        transaction
+                            .fee_payment_intent()
+                            .sponsor_program()
+                            .map(|(_, revision)| revision),
+                    )
+                },
+            );
+            let fee_asset_scale = definition.spec().scale().unwrap_or_else(|| qty.scale());
+            state_transaction.record_direct_fee_payment_charge(
+                tx_hash,
+                debit_source,
+                payer,
+                sponsor_program_revision,
+                PendingDirectFeePaymentCharge {
+                    kind: FeeChargeKind::PipelineGas,
+                    fee_asset_id: asset_definition_id,
+                    fee_asset_scale,
+                    charged_quantity: qty,
+                },
+            )?;
+        }
+        Ok(())
     }
     #[allow(clippy::too_many_lines)]
     fn charge_nexus_fees(
@@ -5160,7 +5193,18 @@ impl Executor {
             });
             return Ok(());
         }
-        let payer_asset = AssetId::new(asset_def, payer.clone());
+        let fee_asset_scale = state_transaction
+            .world
+            .asset_definition(&asset_def)
+            .map_err(|error| {
+                ValidationFail::InternalError(format!(
+                    "validated Nexus fee asset definition disappeared before debit: {error}"
+                ))
+            })?
+            .spec()
+            .scale()
+            .unwrap_or_else(|| fee.scale());
+        let payer_asset = AssetId::new(asset_def.clone(), payer.clone());
         let asset_label = payer_asset.definition().to_string();
         let previous_tx_dataspace_id = state_transaction.current_dataspace_id;
         let previous_world_dataspace_id = state_transaction.world.current_dataspace_id;
@@ -5210,6 +5254,22 @@ impl Executor {
             );
             ValidationFail::from(err)
         })?;
+        let debit_source = sponsor.as_ref().map_or_else(
+            || FeeDebitSource::Account(authority.clone()),
+            |program_id| FeeDebitSource::SponsorProgram(program_id.clone()),
+        );
+        state_transaction.record_direct_fee_payment_charge(
+            tx_hash,
+            debit_source,
+            payer,
+            program_revision,
+            PendingDirectFeePaymentCharge {
+                kind: FeeChargeKind::Nexus,
+                fee_asset_id: asset_def,
+                fee_asset_scale,
+                charged_quantity: fee.clone(),
+            },
+        )?;
         // Stage the charged event so rejected transactions don't report successful debits.
         state_transaction.stage_nexus_fee_event(NexusFeeEvent::Charged {
             payer_kind,
@@ -11184,7 +11244,7 @@ mod tests {
     fn fee_sponsor_operations_preserve_every_mixed_batch_item() {
         let authority = checked_account_id();
         let contract_address = ContractAddress::derive(
-            &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
+            &"0000000000000000000000000000000000000000000000000000000000000001"
                 .parse()
                 .expect("canonical test network id"),
             &authority,
@@ -11472,7 +11532,7 @@ mod tests {
         let authority = checked_account_id();
         let citizen_target = checked_account_id();
         let network_id: NetworkId =
-            "hash:32C903E5B3497E34C2B844EBFE8A39C19E6CF8F95D44C1FFB8BA9DCB42F91149#A2F0"
+            "32c903e5b3497e34c2b844ebfe8a39c19e6cf8f95d44c1ffb8ba9dcb42f91149"
                 .parse()
                 .expect("canonical test network id");
         let contract_address =
@@ -11887,7 +11947,7 @@ mod tests {
         // The address deliberately embeds the attacker as its subject. Contract subjects are
         // not registrar authorities and therefore cannot mint invocation permissions.
         let contract = ContractAddress::derive(
-            &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
+            &"0000000000000000000000000000000000000000000000000000000000000001"
                 .parse()
                 .expect("canonical test network id"),
             &adjacent_owner,
@@ -13097,7 +13157,7 @@ mod tests {
     fn lifecycle_runtime_context_rejects_binding_mutations_for_every_executor_path() {
         let subject = checked_account_id();
         let contract_address = ContractAddress::derive(
-            &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
+            &"0000000000000000000000000000000000000000000000000000000000000001"
                 .parse()
                 .expect("canonical test network id"),
             &subject,
@@ -13165,7 +13225,7 @@ mod tests {
         let deployer = checked_account_id();
         let destination = checked_account_id();
         let contract_address = ContractAddress::derive(
-            &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
+            &"0000000000000000000000000000000000000000000000000000000000000001"
                 .parse()
                 .expect("canonical test network id"),
             &deployer,
@@ -13314,7 +13374,7 @@ mod tests {
             "inconsistent contract context reached the user executor: {error}",
         );
         let sibling_address = ContractAddress::derive(
-            &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
+            &"0000000000000000000000000000000000000000000000000000000000000001"
                 .parse()
                 .expect("canonical test network id"),
             &deployer,
@@ -13426,7 +13486,7 @@ mod tests {
                 .build(&authority);
         let account = Account::new(authority.clone()).build(&authority);
         let contract_address = ContractAddress::derive(
-            &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
+            &"0000000000000000000000000000000000000000000000000000000000000001"
                 .parse()
                 .expect("canonical test network id"),
             &authority,
@@ -14112,7 +14172,7 @@ mod tests {
             ivm::verify_contract_artifact(&program).expect("verify prepared contract fixture");
         let code_hash = ivm::contract_code_hash(&program);
         let contract_address = ContractAddress::derive(
-            &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
+            &"0000000000000000000000000000000000000000000000000000000000000001"
                 .parse()
                 .expect("canonical test network id"),
             &authority,
@@ -17038,7 +17098,7 @@ mod tests {
         let deployer = checked_account_id();
         let destination = checked_account_id();
         let contract_address = ContractAddress::derive(
-            &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
+            &"0000000000000000000000000000000000000000000000000000000000000001"
                 .parse()
                 .expect("canonical test network id"),
             &deployer,
@@ -17139,7 +17199,7 @@ mod tests {
             .contract_subject_addresses
             .insert(contract_subject.clone(), contract_address.clone());
         let inactive_address = ContractAddress::derive(
-            &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
+            &"0000000000000000000000000000000000000000000000000000000000000001"
                 .parse()
                 .expect("canonical test network id"),
             &deployer,
@@ -17211,7 +17271,7 @@ mod tests {
             user2.clone(),
         ));
         let contract_address = ContractAddress::derive(
-            &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
+            &"0000000000000000000000000000000000000000000000000000000000000001"
                 .parse()
                 .expect("canonical test network id"),
             &alice_id,
@@ -17289,7 +17349,7 @@ mod tests {
             user2.clone(),
         ));
         let contract_address = ContractAddress::derive(
-            &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
+            &"0000000000000000000000000000000000000000000000000000000000000001"
                 .parse()
                 .expect("canonical test network id"),
             &alice_id,
@@ -17343,7 +17403,7 @@ mod tests {
             beneficiary.clone(),
         ));
         let contract_address = ContractAddress::derive(
-            &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
+            &"0000000000000000000000000000000000000000000000000000000000000001"
                 .parse()
                 .expect("canonical test network id"),
             &alice_id,
@@ -17397,7 +17457,7 @@ mod tests {
             let state = state_after_genesis(world);
             let mut block = state.block(BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0));
             let contract_address = ContractAddress::derive(
-                &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
+                &"0000000000000000000000000000000000000000000000000000000000000001"
                     .parse()
                     .expect("canonical test network id"),
                 &alice_id,
@@ -17512,7 +17572,7 @@ mod tests {
                 other => panic!("unsupported test instruction kind {other}"),
             };
             let contract_address = ContractAddress::derive(
-                &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
+                &"0000000000000000000000000000000000000000000000000000000000000001"
                     .parse()
                     .expect("canonical test network id"),
                 &caller,
@@ -18317,7 +18377,7 @@ seiyaku GuardedValue {
         let mut world = World::with([domain], [account], []);
         let code_hash = ivm::contract_code_hash(&program);
         let contract_address = ContractAddress::derive(
-            &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
+            &"0000000000000000000000000000000000000000000000000000000000000001"
                 .parse()
                 .expect("canonical test network id"),
             &authority,
@@ -18652,7 +18712,7 @@ seiyaku OrderedBatchGuard {
         let mut world = World::with([domain], [account], []);
         let code_hash = ivm::contract_code_hash(&program);
         let contract_address = ContractAddress::derive(
-            &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
+            &"0000000000000000000000000000000000000000000000000000000000000001"
                 .parse()
                 .expect("canonical test network id"),
             &authority,
@@ -18867,7 +18927,7 @@ seiyaku MeteredFailure {
         let account = Account::new(authority.clone()).build(&authority);
         let code_hash = ivm::contract_code_hash(&program);
         let contract_address = ContractAddress::derive(
-            &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
+            &"0000000000000000000000000000000000000000000000000000000000000001"
                 .parse()
                 .expect("canonical test network id"),
             &authority,
@@ -19064,7 +19124,7 @@ seiyaku IdentityRequired {
     #[test]
     fn contract_invocation_rejects_a_live_code_rebind() {
         let contract_address = ContractAddress::derive(
-            &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
+            &"0000000000000000000000000000000000000000000000000000000000000001"
                 .parse()
                 .expect("canonical test network id"),
             &ALICE_ID,
@@ -19111,7 +19171,7 @@ seiyaku IdentityRequired {
             Some("ContractAdmin")
         );
         let contract_address = ContractAddress::derive(
-            &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
+            &"0000000000000000000000000000000000000000000000000000000000000001"
                 .parse()
                 .expect("canonical test network id"),
             &ALICE_ID,
@@ -19152,7 +19212,7 @@ seiyaku IdentityRequired {
         let prepared = ivm::prepare_contract(Arc::<[u8]>::from(program))
             .expect("prepare nested-view contract");
         let contract_address = ContractAddress::derive(
-            &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
+            &"0000000000000000000000000000000000000000000000000000000000000001"
                 .parse()
                 .expect("canonical test network id"),
             &ALICE_ID,
@@ -19322,7 +19382,7 @@ seiyaku IdentityRequired {
     fn top_level_contract_invocation_uses_branded_lifecycle_permissions() {
         use iroha_data_model::smart_contract::manifest::EntryPointKind;
         let contract_address = ContractAddress::derive(
-            &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
+            &"0000000000000000000000000000000000000000000000000000000000000001"
                 .parse()
                 .expect("canonical test network id"),
             &ALICE_ID,

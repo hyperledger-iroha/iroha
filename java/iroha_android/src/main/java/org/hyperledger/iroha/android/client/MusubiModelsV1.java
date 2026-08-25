@@ -1649,7 +1649,7 @@ public final class MusubiModelsV1 {
 
     @Override Object toJsonValue() {
       return object(
-          "network_id", networkId.toString(),
+          "network_id", networkId.noritoJsonLiteral(),
           "snapshot", snapshot.toJsonValue(),
           "home_release", homeRelease.toJsonValue(),
           "universal_release", universalRelease.toJsonValue());
@@ -2038,7 +2038,7 @@ public final class MusubiModelsV1 {
 
     @Override Object toJsonValue() {
       return object(
-          "network_id", networkId.toString(),
+          "network_id", networkId.noritoJsonLiteral(),
           "publisher", publisher,
           "ingress_broker", ingressBroker,
           "seed_provider", Collections.singletonList(seedProvider),
@@ -2291,7 +2291,7 @@ public final class MusubiModelsV1 {
 
     @Override Object toJsonValue() {
       return object(
-          "network_id", networkId.toString(),
+          "network_id", networkId.noritoJsonLiteral(),
           "provider_id", Collections.singletonList(providerId),
           "completed_by", completedBy,
           "completion_authority", completionAuthority.toJsonValue(),
@@ -3539,7 +3539,7 @@ public final class MusubiModelsV1 {
       for (final ResolverReleaseRow item : items) values.add(item.toJsonValue());
       return object(
           "query", query.toJsonValue(),
-          "network_id", networkId.toString(),
+          "network_id", networkId.noritoJsonLiteral(),
           "items", values,
           "next_cursor", nextCursor == null ? null : nextCursor.toJsonValue(),
           "snapshot", snapshot.toJsonValue());
@@ -3610,7 +3610,7 @@ public final class MusubiModelsV1 {
       final List<Object> values = new ArrayList<>();
       for (final ArchiveLocation item : items) values.add(item.toJsonValue());
       return object(
-          "network_id", networkId.toString(),
+          "network_id", networkId.noritoJsonLiteral(),
           "archive", archive.toJsonValue(),
           "items", values,
           "next_cursor", nextCursor == null ? null : nextCursor.toJsonValue(),
@@ -3686,7 +3686,7 @@ public final class MusubiModelsV1 {
       final List<Object> values = new ArrayList<>();
       for (final ArchiveRetentionDecision item : items) values.add(item.toJsonValue());
       return object(
-          "network_id", networkId.toString(),
+          "network_id", networkId.noritoJsonLiteral(),
           "items", values,
           "finalized_time_ms", finalizedTimeMs,
           "snapshot", snapshot.toJsonValue());
@@ -3791,7 +3791,7 @@ public final class MusubiModelsV1 {
       for (final OrderedPackageEntry item : items) values.add(item.toJsonValue());
       return object(
           "query", query.toJsonValue(),
-          "network_id", networkId.toString(),
+          "network_id", networkId.noritoJsonLiteral(),
           "namespace_binding", namespaceBinding.toJsonValue(),
           "items", values,
           "next_cursor", nextCursor == null ? null : nextCursor.toJsonValue(),

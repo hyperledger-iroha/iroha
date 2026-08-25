@@ -369,7 +369,7 @@ fn fx_deployment_preserves_intrinsic_and_private_policy_participants() {
     let fixture = fixture(None);
     let code = vec![0xCA, 0xFE, 0xBA, 0xBE];
     let contract_address = ContractAddress::derive(
-        &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
+        &"0000000000000000000000000000000000000000000000000000000000000001"
             .parse()
             .expect("canonical test network id"),
         &ALICE_ID,

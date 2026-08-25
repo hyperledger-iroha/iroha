@@ -278,11 +278,11 @@
   ],
   "signed_lock_anchor": {
     "cargo_lock": {
-      "blob": "5d04cef722cb695dd636110be01ff8de52ae7b45",
-      "bytes": 311172,
+      "blob": "0cc0412a7f02bea63995a00bb7cad302a7045538",
+      "bytes": 311202,
       "mode": "100644",
       "path": "Cargo.lock",
-      "sha256": "c90b3659d6cb44cd1d6f9e75e7b98aacc0d30bbe23041d4e6e109e8a206fa76b"
+      "sha256": "ad0d209abaa51d4c77a9e67ccbb0c7660a0f8b7b5dbe3e3fbe4a70e142711bf7"
     },
     "commit_role": "signed_lock_anchor",
     "signature": {

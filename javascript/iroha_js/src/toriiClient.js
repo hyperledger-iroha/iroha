@@ -235,6 +235,7 @@ const VERIFYING_KEY_CLIENT_URL = new URL(
   import.meta.url,
 ).href;
 const PRIVACY_CAPABILITIES_JSON_MAX_BYTES = 256 * 1024;
+const ASSET_TRANSFER_CONTROL_JSON_MAX_BYTES = 256 * 1024;
 const PIPELINE_RECEIPT_MAX_BYTES = 1024 * 1024;
 const PIPELINE_STATUS_JSON_MAX_BYTES = 1024 * 1024;
 const SORAFS_REPUTATION_JSON_MAX_BYTES = 4 * 1024 * 1024;
@@ -6731,6 +6732,48 @@ export class ToriiClient {
     await this._expectStatus(response, [200]);
     const payload = await this._maybeJson(response);
     return normalizeRuntimeAbiActiveResponse(payload);
+  }
+
+  /**
+   * Read the native transfer-control state for one exact account and asset definition.
+   * The POST is canonically account-signed so callers can safely snapshot state before
+   * exercising freeze/cap controls and restore the same revision afterwards.
+   * @param {string} accountId Canonical I105 account identifier.
+   * @param {string} assetDefinitionId Canonical asset-definition identifier.
+   * @param {{signal?: AbortSignal, canonicalAuth: CanonicalRequestAuth}} options
+   * @returns {Promise<ToriiAssetTransferControlResponse>}
+   */
+  async getAssetTransferControl(accountId, assetDefinitionId, options) {
+    const normalizedAccountId = ToriiClient._normalizeAccountId(accountId, "accountId");
+    const normalizedAssetDefinitionId = normalizeAssetDefinitionId(
+      assetDefinitionId,
+      "assetDefinitionId",
+    );
+    const { signal, canonicalAuth } = normalizeVpnSessionOptions(
+      options,
+      "getAssetTransferControl",
+    );
+    const response = await this._request("POST", "/v1/controls/asset-transfer/query", {
+      headers: JSON_REQUEST_HEADERS,
+      body: JSON.stringify({
+        account_id: normalizedAccountId,
+        asset_definition_id: normalizedAssetDefinitionId,
+      }),
+      signal,
+      canonicalAuth,
+    });
+    await this._expectStatus(response, [200], {
+      maximumBodyBytes: ASSET_TRANSFER_CONTROL_JSON_MAX_BYTES,
+      responseLabel: "asset transfer control response",
+      signal,
+    });
+    const payload = await this._readBoundedLosslessIntegerJson(
+      response,
+      ASSET_TRANSFER_CONTROL_JSON_MAX_BYTES,
+      "asset transfer control response",
+      { signal },
+    );
+    return normalizeAssetTransferControlResponse(payload);
   }
 
   /**
@@ -15337,6 +15380,143 @@ function normalizeRuntimeAbiActiveResponse(payload) {
       "runtime abi active response.abi_version",
       { allowZero: false },
     ),
+  };
+}
+
+function normalizeAssetTransferAvailabilityResponse(value, context) {
+  const record = ensureRecord(value, context);
+  assertSupportedOptionKeys(record, new Set(["state", "value"]), context);
+  if (!Object.prototype.hasOwnProperty.call(record, "state")
+      || !Object.prototype.hasOwnProperty.call(record, "value")) {
+    throw new TypeError(`${context} must contain exact state and value fields`);
+  }
+  if (record.value !== null) {
+    throw new TypeError(`${context}.value must be null for a unit availability state`);
+  }
+  if (record.state !== "Enabled" && record.state !== "Disabled") {
+    throw new TypeError(`${context}.state must be Enabled or Disabled`);
+  }
+  return record.state;
+}
+
+function normalizeAssetTransferControlWindow(value, context) {
+  if (value !== "DAY" && value !== "WEEK" && value !== "MONTH") {
+    throw new TypeError(`${context} must be DAY, WEEK, or MONTH`);
+  }
+  return value;
+}
+
+function normalizeOptionalCanonicalQuantity(value, context) {
+  return value === undefined || value === null
+    ? null
+    : requireCanonicalQuantity(value, context);
+}
+
+function normalizeAssetTransferControlResponse(payload) {
+  const context = "asset transfer control response";
+  const record = ensureRecord(payload, context);
+  assertSupportedOptionKeys(record, new Set(["control", "usages", "checkpoint"]), context);
+  const control = ensureRecord(record.control, `${context}.control`);
+  assertSupportedOptionKeys(
+    control,
+    new Set([
+      "account_id",
+      "asset_definition_id",
+      "availability_revision",
+      "incoming",
+      "outgoing",
+      "availability_reason",
+      "blacklisted",
+      "holding_limit",
+      "limits",
+      "updated_at",
+    ]),
+    `${context}.control`,
+  );
+  const limits = requireDenseArray(control.limits, `${context}.control.limits`).map(
+    (value, index) => {
+      const itemContext = `${context}.control.limits[${index}]`;
+      const item = ensureRecord(value, itemContext);
+      assertSupportedOptionKeys(item, new Set(["window", "cap_amount"]), itemContext);
+      return {
+        window: normalizeAssetTransferControlWindow(item.window, `${itemContext}.window`),
+        capAmount: normalizeOptionalCanonicalQuantity(item.cap_amount, `${itemContext}.cap_amount`),
+      };
+    },
+  );
+  const usages = requireDenseArray(record.usages ?? [], `${context}.usages`).map(
+    (value, index) => {
+      const itemContext = `${context}.usages[${index}]`;
+      const item = ensureRecord(value, itemContext);
+      assertSupportedOptionKeys(
+        item,
+        new Set(["window", "bucket_start", "spent_amount", "cap_amount"]),
+        itemContext,
+      );
+      return {
+        window: normalizeAssetTransferControlWindow(item.window, `${itemContext}.window`),
+        bucketStart: requireNonEmptyString(item.bucket_start, `${itemContext}.bucket_start`),
+        spentAmount: requireCanonicalQuantity(item.spent_amount, `${itemContext}.spent_amount`),
+        capAmount: normalizeOptionalCanonicalQuantity(item.cap_amount, `${itemContext}.cap_amount`),
+      };
+    },
+  );
+  let checkpoint = null;
+  if (record.checkpoint !== undefined && record.checkpoint !== null) {
+    const checkpointContext = `${context}.checkpoint`;
+    const item = ensureRecord(record.checkpoint, checkpointContext);
+    assertSupportedOptionKeys(item, new Set(["block_height", "block_hash"]), checkpointContext);
+    checkpoint = {
+      blockHeight: ToriiClient._normalizeUnsignedInteger(
+        item.block_height,
+        `${checkpointContext}.block_height`,
+        { allowZero: false },
+      ),
+      blockHash: normalizeIrohaHashHex32(
+        item.block_hash,
+        `${checkpointContext}.block_hash`,
+      ),
+    };
+  }
+  return {
+    control: {
+      accountId: ToriiClient._normalizeAccountId(control.account_id, `${context}.control.account_id`),
+      assetDefinitionId: normalizeAssetDefinitionId(
+        control.asset_definition_id,
+        `${context}.control.asset_definition_id`,
+      ),
+      availabilityRevision: ToriiClient._normalizeUnsignedInteger(
+        control.availability_revision,
+        `${context}.control.availability_revision`,
+        { allowZero: true },
+      ),
+      incoming: normalizeAssetTransferAvailabilityResponse(
+        control.incoming,
+        `${context}.control.incoming`,
+      ),
+      outgoing: normalizeAssetTransferAvailabilityResponse(
+        control.outgoing,
+        `${context}.control.outgoing`,
+      ),
+      availabilityReason: control.availability_reason === undefined
+        || control.availability_reason === null
+        ? null
+        : requireNonEmptyString(
+          control.availability_reason,
+          `${context}.control.availability_reason`,
+        ),
+      blacklisted: requireExactBoolean(control.blacklisted, `${context}.control.blacklisted`),
+      holdingLimit: normalizeOptionalCanonicalQuantity(
+        control.holding_limit,
+        `${context}.control.holding_limit`,
+      ),
+      limits,
+      updatedAt: control.updated_at === undefined || control.updated_at === null
+        ? null
+        : requireNonEmptyString(control.updated_at, `${context}.control.updated_at`),
+    },
+    usages,
+    checkpoint,
   };
 }
 

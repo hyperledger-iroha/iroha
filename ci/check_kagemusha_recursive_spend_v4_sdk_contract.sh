@@ -126,7 +126,7 @@ texts: dict[str, str] = {}
 for label, relative in paths.items():
     absolute = root / relative
     if not absolute.is_file():
-        raise SystemExit(f"required ABI21 contract file is missing: {relative}")
+        raise SystemExit(f"required bridge ABI22 / Kagemusha V4 contract file is missing: {relative}")
     texts[label] = absolute.read_text(encoding="utf-8")
 
 mobile_check_test_shellcheck = (
@@ -291,14 +291,14 @@ require_regex(
 for label, expected_size, expected_sha256 in (
     ("recipient_request_vector", 753,
      "d325566b1117fa368703a971367056173f2d8349d2e86101dc06187aaf8fd2b4"),
-    ("recipient_receive_offer_vector", 12_425,
-     "80a240eb19cabc0853a257b90c4e8a53b0ec0641acc9d7cb0080a4d6de77ec93"),
-    ("recipient_lineage_vector", 11_299,
-     "e9c3ab0cdf2781062dfe5539a5ed4e180cd29530e482eefa7693477e88a20f16"),
+    ("recipient_receive_offer_vector", 12_423,
+     "6b38813ab66f1ecb83861d1641454e2d4de438472189b02ccca52a22bc6431df"),
+    ("recipient_lineage_vector", 11_297,
+     "b61dd641527bfb9e09479906c008b6c061b54009229e6e9ec5f0717572cfb561"),
     ("recipient_checkpoint_vector", 393,
      "ed6f4796046ee1d35f844cc862586dbe1d7d0f59db51638c33559052f4196bef"),
-    ("peer_payment_vector", 12_896,
-     "37ee56ad5663ab67b8b5b9a72927f1e0811142122bf04fa28a55634f96b7d3af"),
+    ("peer_payment_vector", 12_884,
+     "424a7bde9ed5bcf0382f18f1f0dcb9a8c499b16b35355134d8025db6a34b347f"),
 ):
     vector = canonical_hex_vector(label)
     if len(vector) != expected_size:
@@ -356,7 +356,7 @@ for needle in (
 ):
     require("swift_peer_fixtures", needle)
 for needle in (
-    '"37ee56ad5663ab67b8b5b9a72927f1e0811142122bf04fa28a55634f96b7d3af"',
+    '"424a7bde9ed5bcf0382f18f1f0dcb9a8c499b16b35355134d8025db6a34b347f"',
     '"cb6508a5aa6b56ada90978d4db638b2176f20f154e9de4ed8a450d95a940c71b"',
     ".archiveTooLarge(",
     "maximumTextArchiveBytes",
@@ -702,7 +702,7 @@ for method, native_call, result_type in (
     require_regex(
         "swift_v4",
         rf"static\s+func\s+{method}\s*\([\s\S]{{0,1800}}?\.{native_call}\s*\([\s\S]{{0,900}}?{result_type}\s*\(",
-        f"direct Swift ABI21 lifecycle {method}",
+        f"direct Swift Kagemusha V4 lifecycle {method}",
     )
 
 if texts["swift_v4"].count(
@@ -755,7 +755,7 @@ for label in ("rust", "kotlin", "java"):
     for forbidden in ("nativeWrapInitRequestV4", "nativeWrapAppendRequestV4",
                       "nativeWrapVerifyRequestV4", "nativeWrapRedeemRequestV4"):
         if forbidden in texts[label]:
-            errors.append(f"{paths[label]}: forbidden ABI20-to-ABI21 wrapper {forbidden!r}")
+            errors.append(f"{paths[label]}: forbidden legacy-to-V4 wrapper {forbidden!r}")
 
 for label in ("swift", "swift_v4", "swift_v4_codecs", "swift_native"):
     for forbidden in (
@@ -784,7 +784,7 @@ if re.search(
     texts["swift"],
 ):
     errors.append(
-        f"{paths['swift']}: frozen Swift lifecycle must not invoke an ABI21 symbol"
+        f"{paths['swift']}: frozen Swift lifecycle must not invoke a V4 symbol"
     )
 
 for label in ("kotlin", "java"):
@@ -985,7 +985,7 @@ release_pairs = tuple(re.findall(
 ))
 if release_pairs != tuple(zip(v4_roles, v4_files)):
     errors.append(
-        f"{paths['xcframework_build']}: ABI21 release artifact metadata is not canonical: "
+        f"{paths['xcframework_build']}: Kagemusha V4 release artifact metadata is not canonical: "
         f"{release_pairs!r}"
     )
 
@@ -1034,7 +1034,7 @@ require("header", "domain-separated digest")
 require_regex(
     "header",
     r"exact\s+eight-artifact\s+KRV4\s+inventory",
-    "exact-eight ABI21 inventory documentation",
+    "exact-eight Kagemusha V4 inventory documentation",
 )
 require_regex(
     "java",
@@ -1094,6 +1094,31 @@ for method in native_methods:
                 f"Rust JNI export {package}.{method}",
             )
 
+offline_cash_v1_symbols = (
+    "connect_norito_offline_cash_payment_request_canonicalize_v1",
+    "connect_norito_offline_cash_payment_canonicalize_v1",
+    "connect_norito_offline_cash_payment_canonicalize_for_session_v1",
+    "connect_norito_offline_cash_acknowledgement_canonicalize_v1",
+    "connect_norito_offline_cash_peer_encode_payment_request_v1",
+    "connect_norito_offline_cash_peer_decode_payment_request_v1",
+    "connect_norito_offline_cash_peer_encode_payment_v1",
+    "connect_norito_offline_cash_peer_decode_payment_v1",
+    "connect_norito_offline_cash_peer_encode_acknowledgement_v1",
+    "connect_norito_offline_cash_peer_decode_acknowledgement_v1",
+    "connect_norito_offline_cash_release_probe_v1",
+    "connect_norito_offline_cash_artifact_begin_v1",
+    "connect_norito_offline_cash_artifact_write_v1",
+    "connect_norito_offline_cash_artifact_finalize_v1",
+    "connect_norito_offline_cash_artifact_cancel_v1",
+    "connect_norito_offline_cash_artifact_set_install_v1",
+    "connect_norito_offline_cash_artifact_set_uninstall_v1",
+    "connect_norito_offline_cash_wallet_session_open_v1",
+    "connect_norito_offline_cash_wallet_session_open_bound_v1",
+    "connect_norito_offline_cash_wallet_session_accept_payment_v1",
+    "connect_norito_offline_cash_wallet_session_accept_acknowledgement_v1",
+    "connect_norito_offline_cash_wallet_session_state_v1",
+    "connect_norito_offline_cash_wallet_session_close_v1",
+)
 privacy_compiled_profile_symbols = (
     "iroha_privacy_compiled_profile_catalog_v1",
     "iroha_privacy_validate_compiled_profile_catalog_v1",
@@ -1113,6 +1138,7 @@ base_bridge_symbols = (
     "connect_norito_canonical_json_blake3_v1",
     "connect_norito_encode_account_onboarding_plan_body_v1",
     "connect_norito_alias_instruction_round_trip_v1",
+    *offline_cash_v1_symbols,
     *privacy_compiled_profile_symbols,
     "connect_norito_sorafs_reference_validate_bundle_json",
     "connect_norito_sorafs_reference_validate_governance_json",
@@ -1155,8 +1181,6 @@ c_symbols = (
     "connect_norito_kagemusha_recipient_payment_request_signing_bytes_v2",
     "connect_norito_kagemusha_recipient_payment_request_create_v2",
     "connect_norito_kagemusha_recipient_payment_request_verify_v2",
-    "connect_norito_kagemusha_recipient_lineage_query_create_v2",
-    "connect_norito_kagemusha_recipient_registration_lineage_verify_v2",
     "connect_norito_kagemusha_recipient_receive_offer_create_v2",
     "connect_norito_kagemusha_recipient_receive_offer_project_v2",
     "connect_norito_kagemusha_recipient_receive_offer_verify_v2",
@@ -1242,10 +1266,22 @@ if actual_privacy_compiled_profile_symbols != privacy_compiled_profile_symbols:
         f"(found {len(actual_privacy_compiled_profile_symbols)})"
     )
 
+actual_offline_cash_v1_symbols = parse_shell_symbol_array(
+    "mobile_check", "OFFLINE_CASH_V1_C_SYMBOLS"
+)
+if actual_offline_cash_v1_symbols != offline_cash_v1_symbols:
+    errors.append(
+        f"{paths['mobile_check']}: exact ordered "
+        f"{len(offline_cash_v1_symbols)}-symbol Offline Cash V1 C inventory mismatch "
+        f"(found {len(actual_offline_cash_v1_symbols)})"
+    )
+
 actual_required_bridge_symbols: list[str] = []
 for value in parse_shell_symbol_array("mobile_check", "REQUIRED_BRIDGE_SYMBOLS"):
     if value == "${KAGEMUSHA_C_SYMBOLS[@]}":
         actual_required_bridge_symbols.extend(actual_kagemusha_symbols)
+    elif value == "${OFFLINE_CASH_V1_C_SYMBOLS[@]}":
+        actual_required_bridge_symbols.extend(actual_offline_cash_v1_symbols)
     elif value == "${SORAFS_APPEAL_FINANCE_C_SYMBOLS[@]}":
         actual_required_bridge_symbols.extend(actual_appeal_finance_symbols)
     elif value == "${PRIVACY_COMPILED_PROFILE_C_SYMBOLS[@]}":
@@ -1302,7 +1338,7 @@ for symbol in c_symbols:
     for label in ("xcframework_build", "mobile_check", "mobile_check_test"):
         require(label, symbol)
 
-# First-release ABI-21 does not publish compatibility aliases for recursive
+# Kagemusha V4 does not publish compatibility aliases for recursive
 # lifecycle or artifact installation. Shared V2 leaf primitives above remain
 # intentionally legal because V4 reuses their unchanged wire types.
 forbidden_recursive_alias = re.compile(
@@ -1328,12 +1364,14 @@ swift_symbol_inventory = "\n".join(
 if forbidden_recursive_alias.search(swift_symbol_inventory):
     errors.append(f"{paths['swift']}: required-symbol inventory contains a V2/V3 lifecycle alias")
 
-# The first release has only the query-backed lineage verifier and the two
-# physical authorization finalizers. The fail-only lineage verifier, generic
-# authorization creator, and their JNI creator shims must not reappear in any
-# published source inventory.
+# Receiver lineage is validated only as part of a portable receive offer. The
+# retired standalone lineage query/verifier, fail-only V1 verifier, generic
+# authorization creator, and their JNI shims must not reappear in any published
+# source inventory.
 forbidden_first_release_c_exports = (
     "connect_norito_kagemusha_recipient_registration_lineage_verify_v1",
+    "connect_norito_kagemusha_recipient_lineage_query_create_v2",
+    "connect_norito_kagemusha_recipient_registration_lineage_verify_v2",
     "connect_norito_kagemusha_request_authorization_create_v2",
 )
 for symbol in forbidden_first_release_c_exports:
@@ -1350,23 +1388,31 @@ for symbol in forbidden_first_release_c_exports:
         errors.append(f"{paths['mobile_check']}: first-release compatibility C export {symbol} is forbidden")
 
 for label in ("kotlin", "java"):
-    if re.search(r"\bnativeCreateAuthorizationV2\s*\(", texts[label]):
-        errors.append(
-            f"{paths[label]}: first-release JNI compatibility method "
-            "nativeCreateAuthorizationV2 is forbidden"
-        )
+    for method in (
+        "nativeCreateAuthorizationV2",
+        "nativeCreateRecipientLineageQueryV2",
+        "nativeVerifyRecipientRegistrationLineageV2",
+    ):
+        if re.search(rf"\b{re.escape(method)}\s*\(", texts[label]):
+            errors.append(
+                f"{paths[label]}: first-release JNI compatibility method "
+                f"{method} is forbidden"
+            )
 for package in (
     "org_hyperledger_iroha_sdk_offline",
     "org_hyperledger_iroha_android_offline",
 ):
-    forbidden_jni_symbol = (
-        f"Java_{package}_KagemushaRecursiveSpendProver_nativeCreateAuthorizationV2"
-    )
-    if re.search(rf"\bfn\s+{re.escape(forbidden_jni_symbol)}\s*\(", texts["rust"]):
-        errors.append(
-            f"{paths['rust']}: first-release JNI compatibility export "
-            f"{forbidden_jni_symbol} is forbidden"
-        )
+    for method in (
+        "nativeCreateAuthorizationV2",
+        "nativeCreateRecipientLineageQueryV2",
+        "nativeVerifyRecipientRegistrationLineageV2",
+    ):
+        forbidden_jni_symbol = f"Java_{package}_KagemushaRecursiveSpendProver_{method}"
+        if re.search(rf"\bfn\s+{re.escape(forbidden_jni_symbol)}\s*\(", texts["rust"]):
+            errors.append(
+                f"{paths['rust']}: first-release JNI compatibility export "
+                f"{forbidden_jni_symbol} is forbidden"
+            )
 
 for macro in (
     "CONNECT_NORITO_ERR_KAGEMUSHA_RECURSIVE_SPEND_V4_UNAVAILABLE",
@@ -1375,7 +1421,7 @@ for macro in (
     require("header", macro)
 
 if errors:
-    print("Kagemusha ABI21 SDK contract failed:", file=sys.stderr)
+    print("Kagemusha bridge ABI22 / data ABI V4 SDK contract failed:", file=sys.stderr)
     for error in errors:
         print(f" - {error}", file=sys.stderr)
     raise SystemExit(1)
@@ -1655,7 +1701,7 @@ if mode == "--self-test":
     )
 
 print(
-    "Kagemusha ABI21 SDK contract passed: exact8 DM/Kagami/bundle inventory, "
+    "Kagemusha bridge ABI22 / data ABI V4 SDK contract passed: exact8 DM/Kagami/bundle inventory, "
     "digest-bound offline peer-payment fixture, and promotion-record-bound direct "
     "C/JNI/Swift/Kotlin/Java lifecycle parity are complete"
     + ("; negative self-tests passed." if mode == "--self-test" else ".")

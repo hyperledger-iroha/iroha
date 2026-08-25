@@ -101,6 +101,8 @@ run_python312_clean() {
 #   Kotlin/Java parity drift should not block rebuilding the Swift bridge artifact.
 # - Requires: Python 3.12, rustup + cargo, xcodebuild, lipo, and the exact
 #   externally selected Cargo target/rustc/rustdoc build envelope.
+# - IROHA_PRIVACY_RELEASE_CARGO_LOCKFILE_PATH selects the authenticated external
+#   privacy-release lock; ordinary builds consume the repository-root lock.
 # - MOBILE_SDK_PYTHON_BINARY may select an absolute canonical Python 3.12
 #   executable when the fixed Homebrew/system locators are unavailable.
 #
@@ -337,7 +339,15 @@ BRIDGE_VERSION=""
 ARCHIVE_OUTPUT=""
 PRIVACY_PRODUCTION_ENABLED=0
 ALLOW_DIRTY_SOURCE=0
-CARGO_LOCKFILE="$ROOT_DIR/Cargo.lock"
+if [[ -n "${IROHA_PRIVACY_RELEASE_CARGO_LOCKFILE_PATH+x}" ]]; then
+  if [[ -z "${IROHA_PRIVACY_RELEASE_CARGO_LOCKFILE_PATH}" ]]; then
+    echo "[-] IROHA_PRIVACY_RELEASE_CARGO_LOCKFILE_PATH must not be empty" >&2
+    exit 1
+  fi
+  CARGO_LOCKFILE="$IROHA_PRIVACY_RELEASE_CARGO_LOCKFILE_PATH"
+else
+  CARGO_LOCKFILE="$ROOT_DIR/Cargo.lock"
+fi
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --bridge-version)
@@ -569,7 +579,7 @@ run_isolated_python() {
     "$PYTHON_BINARY" -I -S -B "$@"
 }
 
-selected_cargo_lock_sha256() {
+selected_cargo_lock_seal() {
   run_isolated_python - "$CARGO_LOCKFILE" <<'PY'
 import hashlib
 import os
@@ -593,26 +603,79 @@ if (
     resolved != candidate
     or stat.S_ISLNK(metadata.st_mode)
     or not stat.S_ISREG(metadata.st_mode)
+    or metadata.st_nlink != 1
 ):
-    raise SystemExit("selected Cargo lock must be a non-symbolic regular file")
+    raise SystemExit(
+        "selected Cargo lock must be a singly linked non-symbolic regular file"
+    )
+flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
+descriptor = os.open(candidate, flags)
 digest = hashlib.sha256()
-with candidate.open("rb") as handle:
-    while chunk := handle.read(1024 * 1024):
+try:
+    before = os.fstat(descriptor)
+    if not stat.S_ISREG(before.st_mode) or before.st_nlink != 1:
+        raise SystemExit("selected Cargo lock must remain singly linked")
+    observed = 0
+    while chunk := os.read(descriptor, 1024 * 1024):
+        observed += len(chunk)
         digest.update(chunk)
-print(digest.hexdigest())
+    after = os.fstat(descriptor)
+finally:
+    os.close(descriptor)
+before_identity = (
+    before.st_dev,
+    before.st_ino,
+    before.st_mode,
+    before.st_nlink,
+    before.st_size,
+    before.st_mtime_ns,
+    before.st_ctime_ns,
+)
+after_identity = (
+    after.st_dev,
+    after.st_ino,
+    after.st_mode,
+    after.st_nlink,
+    after.st_size,
+    after.st_mtime_ns,
+    after.st_ctime_ns,
+)
+visible = candidate.lstat()
+if (
+    before_identity != after_identity
+    or observed != before.st_size
+    or stat.S_ISLNK(visible.st_mode)
+    or (visible.st_dev, visible.st_ino) != (before.st_dev, before.st_ino)
+):
+    raise SystemExit("selected Cargo lock changed identity while it was read")
+print(
+    ":".join(
+        (
+            digest.hexdigest(),
+            str(before.st_dev),
+            str(before.st_ino),
+            str(before.st_mode),
+            str(before.st_nlink),
+            str(before.st_size),
+            str(before.st_mtime_ns),
+            str(before.st_ctime_ns),
+        )
+    )
+)
 PY
 }
 
-CARGO_LOCK_SHA256_START="$(selected_cargo_lock_sha256)"
+CARGO_LOCK_SEAL_START="$(selected_cargo_lock_seal)"
+CARGO_LOCK_SHA256_START="${CARGO_LOCK_SEAL_START%%:*}"
 
 assert_selected_cargo_lock() {
   local phase="$1"
-  local current_digest
-  if ! current_digest="$(selected_cargo_lock_sha256)"; then
+  local current_seal
+  if ! current_seal="$(selected_cargo_lock_seal)"; then
     echo "[-] Selected Cargo lock became unreadable during $phase" >&2
     exit 1
   fi
-  if [[ "$current_digest" != "$CARGO_LOCK_SHA256_START" ]]; then
+  if [[ "$current_seal" != "$CARGO_LOCK_SEAL_START" ]]; then
     echo "[-] Selected Cargo lock changed during $phase" >&2
     exit 1
   fi
@@ -1297,6 +1360,18 @@ cat > "$PUBLISH_MANIFEST" <<EOF
     "connect_norito_offline_cash_peer_encode_acknowledgement_v1",
     "connect_norito_offline_cash_peer_decode_acknowledgement_v1",
     "connect_norito_offline_cash_release_probe_v1",
+    "connect_norito_offline_cash_artifact_begin_v1",
+    "connect_norito_offline_cash_artifact_write_v1",
+    "connect_norito_offline_cash_artifact_finalize_v1",
+    "connect_norito_offline_cash_artifact_cancel_v1",
+    "connect_norito_offline_cash_artifact_set_install_v1",
+    "connect_norito_offline_cash_artifact_set_uninstall_v1",
+    "connect_norito_offline_cash_wallet_session_open_v1",
+    "connect_norito_offline_cash_wallet_session_open_bound_v1",
+    "connect_norito_offline_cash_wallet_session_accept_payment_v1",
+    "connect_norito_offline_cash_wallet_session_accept_acknowledgement_v1",
+    "connect_norito_offline_cash_wallet_session_state_v1",
+    "connect_norito_offline_cash_wallet_session_close_v1",
     "iroha_privacy_compiled_profile_catalog_v1",
     "iroha_privacy_validate_compiled_profile_catalog_v1",
     "iroha_privacy_exact12_fixture_bundle_v1",
@@ -1341,8 +1416,6 @@ cat > "$PUBLISH_MANIFEST" <<EOF
     "connect_norito_kagemusha_recipient_payment_request_signing_bytes_v2",
     "connect_norito_kagemusha_recipient_payment_request_create_v2",
     "connect_norito_kagemusha_recipient_payment_request_verify_v2",
-    "connect_norito_kagemusha_recipient_lineage_query_create_v2",
-    "connect_norito_kagemusha_recipient_registration_lineage_verify_v2",
     "connect_norito_kagemusha_recipient_receive_offer_create_v2",
     "connect_norito_kagemusha_recipient_receive_offer_project_v2",
     "connect_norito_kagemusha_recipient_receive_offer_verify_v2",
@@ -1362,14 +1435,25 @@ cat > "$PUBLISH_MANIFEST" <<EOF
     "connect_norito_get_chain_discriminant",
     "connect_norito_set_chain_discriminant",
     "connect_norito_kagemusha_recipient_registration_lineage_verify_v1",
+    "connect_norito_kagemusha_recipient_lineage_query_create_v2",
+    "connect_norito_kagemusha_recipient_registration_lineage_verify_v2",
     "connect_norito_kagemusha_request_authorization_create_v2",
     "iroha_privacy_capabilities_v1",
     "iroha_privacy_validate_capabilities_v1",
     "iroha_privacy_proof_request_v1",
     "iroha_privacy_build_proof_v1",
     "iroha_privacy_verify_proof_v1",
+    "CONNECT_NORITO_OFFLINE_CASH_TESTNET_DEVICE_EMULATOR_DO_NOT_SHIP_V1",
+    "connect_norito_offline_cash_device_capabilities_v1",
+    "connect_norito_offline_cash_device_execute_v1",
+    "Java_org_hyperledger_iroha_sdk_offline_OfflineCashDeviceLifecycleBridgeV1_00024NativeEndpoint_nativeCapabilitiesV1",
+    "Java_org_hyperledger_iroha_sdk_offline_OfflineCashDeviceLifecycleBridgeV1_00024NativeEndpoint_nativeExecuteV1",
     "Java_org_hyperledger_iroha_sdk_offline_KagemushaRecursiveSpendProver_nativeCreateAuthorizationV2",
-    "Java_org_hyperledger_iroha_android_offline_KagemushaRecursiveSpendProver_nativeCreateAuthorizationV2"
+    "Java_org_hyperledger_iroha_android_offline_KagemushaRecursiveSpendProver_nativeCreateAuthorizationV2",
+    "Java_org_hyperledger_iroha_sdk_offline_KagemushaRecursiveSpendProver_nativeCreateRecipientLineageQueryV2",
+    "Java_org_hyperledger_iroha_android_offline_KagemushaRecursiveSpendProver_nativeCreateRecipientLineageQueryV2",
+    "Java_org_hyperledger_iroha_sdk_offline_KagemushaRecursiveSpendProver_nativeVerifyRecipientRegistrationLineageV2",
+    "Java_org_hyperledger_iroha_android_offline_KagemushaRecursiveSpendProver_nativeVerifyRecipientRegistrationLineageV2"
   ],
   "kagemusha_mobile_artifact_roles": [
     {
@@ -1542,6 +1626,7 @@ env -i \
   "$ROOT_DIR/scripts/update_norito_bridge_swift_pins.py" \
   --root "$ROOT_DIR" \
   --artifact-dir "$PUBLISH_ROOT" \
+  --lockfile-path "$CARGO_LOCKFILE" \
   --output "$PUBLISH_PROSPECTIVE_LOADER" \
   --expected-preimage-sha256 "$SWIFT_PIN_PREIMAGE_SHA256"
 
@@ -1727,6 +1812,7 @@ PY
 run_isolated_python \
   "$ROOT_DIR/scripts/validate_norito_bridge_xcframework.py" \
   --root "$ROOT_DIR" \
+  --lockfile-path "$CARGO_LOCKFILE" \
   --xcframework "$PUBLISH_XCFRAMEWORK" \
   --manifest "$PUBLISH_MANIFEST" \
   --manifest-link "$PUBLISH_MANIFEST_LINK" \
@@ -1753,6 +1839,7 @@ assert_bridge_source_seal "pre-publication artifact verification"
 echo "[+] Removing task-owned staging intermediates before publication" >&2
 rm -rf "$STAGE_DIR"
 
+assert_bridge_source_seal "the XCFramework publication exchange"
 run_isolated_python - \
   "$PUBLISH_XCFRAMEWORK" "$FINAL_XCFRAMEWORK" "$FINAL_MANIFEST" \
   "$CANONICAL_MANIFEST_RELATIVE_TARGET" <<'PY'
@@ -1921,6 +2008,8 @@ prepare_stable_manifest_link(
 publish(staged_xcframework, final_xcframework)
 PY
 
+assert_bridge_source_seal "the published XCFramework"
+
 echo "[+] Atomically published XCFramework and canonical manifest: $FINAL_XCFRAMEWORK" >&2
 echo "[+] Public manifest link: $FINAL_MANIFEST -> $CANONICAL_MANIFEST_RELATIVE_TARGET" >&2
 
@@ -1951,6 +2040,10 @@ if [[ -n "$ARCHIVE_OUTPUT" ]]; then
     "$PYTHON_BINARY" -I -S -B "$ARCHIVE_OWNER" \
       --xcframework "$FINAL_XCFRAMEWORK" \
       --output "$ARCHIVE_OUTPUT" \
-      --scratch-dir "$BUILD_DIR"
+      --scratch-dir "$BUILD_DIR" \
+      --lockfile-path "$CARGO_LOCKFILE"
+  assert_bridge_source_seal "the archive publication"
   echo "[+] Deterministic XCFramework archive: $ARCHIVE_OUTPUT" >&2
 fi
+
+assert_bridge_source_seal "the completed Apple artifact build"

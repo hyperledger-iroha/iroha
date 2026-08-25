@@ -554,16 +554,19 @@ where
         payment
             .validate_against(request)
             .map_err(|_| StateTransitionErrorV1::CreditMismatch)?;
+        let statement = payment
+            .reconstruct_statement(request)
+            .map_err(|_| StateTransitionErrorV1::CreditMismatch)?;
         let payment_digest = payment
             .canonical_digest_against(request)
             .map_err(|_| StateTransitionErrorV1::CreditMismatch)?;
         let encrypted_credit_digest: Digest = Sha256::digest(&payment.encrypted_credit).into();
         if payment_digest != verification.payment_digest()
-            || payment.statement.credit_commitment != verification.credit_commitment()
-            || payment.statement.transition_digest != verification.transition_digest()
-            || payment.statement.request_digest != request_digest
-            || payment.statement.receiver_before != balance.head
-            || payment.statement.amount != verification.amount()
+            || statement.credit_commitment != verification.credit_commitment()
+            || statement.transition_digest != verification.transition_digest()
+            || statement.request_digest != request_digest
+            || statement.receiver_before != balance.head
+            || statement.amount != verification.amount()
             || verification.encrypted_credit_digest() != encrypted_credit_digest
             || opening.encrypted_credit_digest != verification.encrypted_credit_digest()
             || opening.recipient_key_reference != verification.recipient_key_reference()
@@ -587,11 +590,12 @@ where
             expires_at_ms: request.expires_at_ms,
             recipient_key_reference: request.recipient_key_reference,
             receiver_public_key: request.receiver_public_key,
+            recipient_encryption_public_key: request.recipient_encryption_public_key,
             intent_authorization,
         };
-        Ok::<_, StateTransitionErrorV1>((pending, outcome))
+        Ok::<_, StateTransitionErrorV1>((pending, outcome, statement))
     })();
-    let (pending, outcome) = match recovered {
+    let (pending, outcome, statement) = match recovered {
         Ok(recovered) => recovered,
         Err(error) => {
             return Err(ReceiveFoldRecoveryRejectionV1 {
@@ -601,8 +605,7 @@ where
             });
         }
     };
-    let credit = match bind_verified_credit_v1(&pending, &payment.statement, verification, opening)
-    {
+    let credit = match bind_verified_credit_v1(&pending, &statement, verification, opening) {
         Ok(credit) => credit,
         Err(rejection) => {
             return Err(ReceiveFoldRecoveryRejectionV1 {

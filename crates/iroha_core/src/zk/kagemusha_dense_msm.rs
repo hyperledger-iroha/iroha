@@ -158,7 +158,7 @@ where
 }
 /// Circuit-owned normalized-GLV dense MSM jobs.
 #[derive(Clone, Debug)]
-pub(super) struct KagemushaDenseMsmJobsV5<C>
+pub(crate) struct KagemushaDenseMsmJobsV5<C>
 where
     C: CurveAffineExt,
     Base<C>: BigPrimeField,
@@ -178,27 +178,28 @@ where
         }
     }
 }
-/// Three disjoint fixed-selector lanes for the dense audit.
+/// A fixed number of disjoint fixed-selector lanes for the dense audit.
 ///
 /// The bus and accumulator coordinates are equality enabled.  The bus binds
 /// each lane to the Base graph; accumulator copies join lane endpoints into a
 /// ring whose closure enforces the original logical MSM identity.
 #[derive(Clone, Debug)]
-pub(crate) struct KagemushaDenseMsmConfigV5 {
-    lanes: [KagemushaDenseMsmLaneConfigV5; DENSE_LANES],
+pub(crate) struct KagemushaDenseMsmConfigV5<const LANES: usize = DENSE_LANES> {
+    lanes: [KagemushaDenseMsmLaneConfigV5; LANES],
 }
 #[derive(Clone, Debug)]
 struct KagemushaDenseMsmLaneConfigV5 {
     columns: [Column<Advice>; DENSE_COLUMNS],
     q_enable: Column<Fixed>,
 }
-impl KagemushaDenseMsmConfigV5 {
+impl<const LANES: usize> KagemushaDenseMsmConfigV5<LANES> {
     /// Allocate dedicated advice columns and install the dense gate.
     pub(crate) fn configure<C>(meta: &mut ConstraintSystem<Base<C>>) -> Self
     where
         C: CurveAffineExt,
         Base<C>: BigPrimeField + WithSmallOrderMulGroup<3>,
     {
+        assert!(LANES > 0 && LANES <= DENSE_LANES);
         Self {
             lanes: std::array::from_fn(|_| {
                 let columns = std::array::from_fn(|_| meta.advice_column());
@@ -537,13 +538,13 @@ where
         Ok(())
     }
     /// Preserve job shape while hiding all raw witnesses.
-    pub(super) fn unknown(&self) -> Self {
+    pub(crate) fn unknown(&self) -> Self {
         let mut clone = self.clone();
         clone.use_unknown = true;
         clone
     }
     /// Return the exact maximum raw-row count across the physical lanes.
-    pub(super) fn required_rows(&self) -> Result<usize, String> {
+    pub(crate) fn required_rows(&self) -> Result<usize, String> {
         let mut lane_rows = [0_usize; DENSE_LANES];
         for job in &self.jobs {
             let lane_count = job.source_count_tags.len();
@@ -562,7 +563,7 @@ where
     }
     /// Return the exact queued-job, source, and row geometry used by the
     /// authenticated composite-circuit capacity check.
-    pub(super) fn capacity_profile(&self) -> Result<(usize, usize, usize), String> {
+    pub(crate) fn capacity_profile(&self) -> Result<(usize, usize, usize), String> {
         let sources = self.jobs.iter().try_fold(0_usize, |total, job| {
             total
                 .checked_add(job.sources.len())
@@ -570,8 +571,16 @@ where
         })?;
         Ok((self.jobs.len(), sources, self.required_rows()?))
     }
+    /// Maximum physical lane count selected by any queued logical MSM.
+    pub(crate) fn required_lane_count(&self) -> usize {
+        self.jobs
+            .iter()
+            .map(|job| job.source_count_tags.len())
+            .max()
+            .unwrap_or(0)
+    }
     /// Reject jobs which exceed the authenticated usable-row budget.
-    pub(super) fn validate_capacity(&self, usable_rows: usize) -> Result<(), String> {
+    pub(crate) fn validate_capacity(&self, usable_rows: usize) -> Result<(), String> {
         let required = self.required_rows()?;
         if required > usable_rows {
             return Err(format!(
@@ -580,16 +589,38 @@ where
         }
         Ok(())
     }
-    /// Realize all queued dense MSMs after Base synthesis.
-    pub(super) fn synthesize(
+    /// Reject jobs which cannot be realized by the authenticated physical-lane
+    /// count as well as the usable-row budget. This is deliberately checked
+    /// before synthesis so a role-local one-lane wrapper cannot silently fall
+    /// back to the legacy three-lane geometry.
+    pub(crate) fn validate_capacity_for_lanes(
         &self,
-        config: &KagemushaDenseMsmConfigV5,
+        usable_rows: usize,
+        configured_lanes: usize,
+    ) -> Result<(), String> {
+        if configured_lanes == 0 || configured_lanes > DENSE_LANES {
+            return Err(format!(
+                "Kagemusha dense MSM configured lane count {configured_lanes} is outside 1..={DENSE_LANES}"
+            ));
+        }
+        let required_lanes = self.required_lane_count();
+        if required_lanes > configured_lanes {
+            return Err(format!(
+                "Kagemusha dense MSM requires {required_lanes} physical lanes, exceeding authenticated {configured_lanes}-lane geometry"
+            ));
+        }
+        self.validate_capacity(usable_rows)
+    }
+    /// Realize all queued dense MSMs after Base synthesis.
+    pub(crate) fn synthesize<const LANES: usize>(
+        &self,
+        config: &KagemushaDenseMsmConfigV5<LANES>,
         layouter: &mut impl Layouter<Base<C>>,
         copy_manager: &SharedCopyConstraintManager<Base<C>>,
         witness_gen_only: bool,
         usable_rows: usize,
     ) -> Result<(), Error> {
-        self.validate_capacity(usable_rows)
+        self.validate_capacity_for_lanes(usable_rows, LANES)
             .map_err(|_| Error::Synthesis)?;
         let physical_cells = if witness_gen_only {
             None
@@ -599,8 +630,7 @@ where
             // multi-million-entry map beside the dense trace.
             Some(copy_manager.lock().map_err(|_| Error::Synthesis)?)
         };
-        let mut lane_rows: [Vec<RawRow<Base<C>>>; DENSE_LANES] =
-            std::array::from_fn(|_| Vec::new());
+        let mut lane_rows: [Vec<RawRow<Base<C>>>; LANES] = std::array::from_fn(|_| Vec::new());
         let mut rings = Vec::<Vec<LaneEndpoint>>::with_capacity(self.jobs.len());
         for (job_index, job) in self.jobs.iter().enumerate() {
             let lane_count = job.source_count_tags.len();
@@ -631,11 +661,9 @@ where
         layouter.assign_region(
             || "Kagemusha dense normalized-GLV MSM",
             |mut region| {
-                let mut buses: [Vec<Cell>; DENSE_LANES] = std::array::from_fn(|_| Vec::new());
-                let mut accumulator_x: [Vec<Cell>; DENSE_LANES] =
-                    std::array::from_fn(|_| Vec::new());
-                let mut accumulator_y: [Vec<Cell>; DENSE_LANES] =
-                    std::array::from_fn(|_| Vec::new());
+                let mut buses: [Vec<Cell>; LANES] = std::array::from_fn(|_| Vec::new());
+                let mut accumulator_x: [Vec<Cell>; LANES] = std::array::from_fn(|_| Vec::new());
+                let mut accumulator_y: [Vec<Cell>; LANES] = std::array::from_fn(|_| Vec::new());
                 for (lane, rows) in lane_rows.iter().enumerate() {
                     let lane_config = &config.lanes[lane];
                     buses[lane].reserve(rows.len());
@@ -1555,13 +1583,23 @@ mod tests {
     #[test]
     fn configuration_stays_at_degree_five() {
         let mut meta = ConstraintSystem::<Fq>::default();
-        let _config = KagemushaDenseMsmConfigV5::configure::<EqAffine>(&mut meta);
+        let _config = KagemushaDenseMsmConfigV5::<DENSE_LANES>::configure::<EqAffine>(&mut meta);
         assert_eq!(meta.num_advice_columns(), DENSE_LANES * DENSE_COLUMNS);
         assert_eq!(meta.num_fixed_columns(), DENSE_LANES);
         assert_eq!(meta.num_selectors(), 0);
         assert_eq!(meta.permutation().get_columns().len(), DENSE_LANES * 3);
         assert_eq!(meta.degree(), 5);
         assert_eq!(248 * ROWS_PER_SOURCE + 3, 41_667);
+    }
+    #[test]
+    fn offline_cash_single_lane_configuration_is_exactly_37_1_3() {
+        let mut meta = ConstraintSystem::<Fq>::default();
+        let _config = KagemushaDenseMsmConfigV5::<1>::configure::<EqAffine>(&mut meta);
+        assert_eq!(meta.num_advice_columns(), 37);
+        assert_eq!(meta.num_fixed_columns(), 1);
+        assert_eq!(meta.num_selectors(), 0);
+        assert_eq!(meta.permutation().get_columns().len(), 3);
+        assert_eq!(meta.degree(), 5);
     }
     #[test]
     fn k17_lane_geometry_fits_the_production_source_count() {
@@ -1589,6 +1627,41 @@ mod tests {
             use_unknown: false,
         };
         assert_eq!(jobs.capacity_profile(), Ok((1, 1_867, 104_667)));
+    }
+    #[test]
+    fn single_lane_geometry_fails_closed_for_multiple_lanes_or_k16_row_overflow() {
+        const K16_USABLE_ROWS: usize = (1 << 16) - 9;
+        let point = Eq::generator().to_affine();
+        let two_lane = KagemushaDenseMsmJobsV5 {
+            jobs: vec![DenseMsmJob {
+                start_tag: assigned(Fq::ONE),
+                source_count_tags: vec![assigned(Fq::from(391)), assigned(Fq::from(390))],
+                sources: vec![unit_scalar_source(point); 781],
+            }],
+            use_unknown: false,
+        };
+        let lane_error = two_lane
+            .validate_capacity_for_lanes(K17_USABLE_ROWS, 1)
+            .expect_err("two-lane trace must not enter the Offline Cash one-lane config");
+        assert!(lane_error.contains("requires 2 physical lanes"));
+
+        let row_overflow = KagemushaDenseMsmJobsV5 {
+            jobs: vec![DenseMsmJob {
+                start_tag: assigned(Fq::ONE),
+                source_count_tags: vec![assigned(Fq::from(391))],
+                sources: vec![unit_scalar_source(point); 391],
+            }],
+            use_unknown: false,
+        };
+        assert_eq!(row_overflow.required_lane_count(), 1);
+        assert_eq!(
+            row_overflow.required_rows(),
+            Ok(391 * ROWS_PER_SOURCE + ROWS_PER_JOB)
+        );
+        let row_error = row_overflow
+            .validate_capacity_for_lanes(K16_USABLE_ROWS, 1)
+            .expect_err("one-lane trace beyond k16 usable rows must fail closed");
+        assert!(row_error.contains("exceeding 65527"));
     }
     const QUEUE_TEST_K: u32 = 9;
     const QUEUE_TEST_UNUSABLE_ROWS: usize = 9;
@@ -1755,24 +1828,27 @@ mod tests {
         }
     }
     #[derive(Clone)]
-    struct DenseRowsCircuit {
+    struct DenseRowsCircuit<const LANES: usize = DENSE_LANES> {
         lane_rows: Vec<Vec<RawRow<Fq>>>,
     }
-    impl Circuit<Fq> for DenseRowsCircuit {
-        type Config = KagemushaDenseMsmConfigV5;
+    impl<const LANES: usize> Circuit<Fq> for DenseRowsCircuit<LANES> {
+        type Config = KagemushaDenseMsmConfigV5<LANES>;
         type FloorPlanner = SimpleFloorPlanner;
         type Params = ();
         fn without_witnesses(&self) -> Self {
             self.clone()
         }
         fn configure(meta: &mut ConstraintSystem<Fq>) -> Self::Config {
-            KagemushaDenseMsmConfigV5::configure::<EqAffine>(meta)
+            KagemushaDenseMsmConfigV5::<LANES>::configure::<EqAffine>(meta)
         }
         fn synthesize(
             &self,
             config: Self::Config,
             mut layouter: impl Layouter<Fq>,
         ) -> Result<(), Error> {
+            if self.lane_rows.is_empty() || self.lane_rows.len() > LANES {
+                return Err(Error::Synthesis);
+            }
             layouter.assign_region(
                 || "dense test rows",
                 |mut region| {
@@ -1858,7 +1934,7 @@ mod tests {
             ],
             2,
         );
-        let prover = MockProver::run(9, &DenseRowsCircuit { lane_rows }, vec![])
+        let prover = MockProver::run(9, &DenseRowsCircuit::<DENSE_LANES> { lane_rows }, vec![])
             .expect("two-lane mock prover runs");
         prover.assert_satisfied();
     }
@@ -1874,7 +1950,7 @@ mod tests {
             ],
             2,
         );
-        let prover = MockProver::run(9, &DenseRowsCircuit { lane_rows }, vec![])
+        let prover = MockProver::run(9, &DenseRowsCircuit::<DENSE_LANES> { lane_rows }, vec![])
             .expect("two-lane mock prover runs");
         assert!(prover.verify().is_err());
     }
@@ -1891,13 +1967,65 @@ mod tests {
         assert_eq!(rows.len(), 2 * ROWS_PER_SOURCE + 3);
         let prover = MockProver::run(
             9,
-            &DenseRowsCircuit {
+            &DenseRowsCircuit::<DENSE_LANES> {
                 lane_rows: vec![rows],
             },
             vec![],
         )
         .expect("mock prover runs");
         prover.assert_satisfied();
+    }
+    #[test]
+    fn one_lane_accept_reject_behavior_matches_default_geometry() {
+        let point = Eq::generator().to_affine();
+        let accepting = build_test_lane_rows(
+            vec![unit_scalar_source(point), unit_scalar_source(-point)],
+            1,
+        );
+        MockProver::run(
+            9,
+            &DenseRowsCircuit::<1> {
+                lane_rows: accepting.clone(),
+            },
+            vec![],
+        )
+        .expect("single-lane accepting circuit")
+        .assert_satisfied();
+        MockProver::run(
+            9,
+            &DenseRowsCircuit::<DENSE_LANES> {
+                lane_rows: accepting,
+            },
+            vec![],
+        )
+        .expect("default-lane accepting circuit")
+        .assert_satisfied();
+
+        let rejecting = build_test_lane_rows(vec![unit_scalar_source(point)], 1);
+        assert!(
+            MockProver::run(
+                9,
+                &DenseRowsCircuit::<1> {
+                    lane_rows: rejecting.clone(),
+                },
+                vec![],
+            )
+            .expect("single-lane rejecting circuit")
+            .verify()
+            .is_err()
+        );
+        assert!(
+            MockProver::run(
+                9,
+                &DenseRowsCircuit::<DENSE_LANES> {
+                    lane_rows: rejecting,
+                },
+                vec![],
+            )
+            .expect("default-lane rejecting circuit")
+            .verify()
+            .is_err()
+        );
     }
     #[test]
     fn source_major_machine_rejects_a_nonzero_result() {
@@ -1910,7 +2038,7 @@ mod tests {
         let rows = build_job_rows::<EqAffine>(&job, 0).expect("complete affine trace");
         let prover = MockProver::run(
             9,
-            &DenseRowsCircuit {
+            &DenseRowsCircuit::<DENSE_LANES> {
                 lane_rows: vec![rows],
             },
             vec![],
@@ -1932,7 +2060,7 @@ mod tests {
         rows[0].values[START] = Fq::ZERO;
         let prover = MockProver::run(
             9,
-            &DenseRowsCircuit {
+            &DenseRowsCircuit::<DENSE_LANES> {
                 lane_rows: vec![rows],
             },
             vec![],

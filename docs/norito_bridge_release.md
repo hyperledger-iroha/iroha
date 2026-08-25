@@ -6,7 +6,9 @@ from an ignored local `dist/` directory or an explicitly configured external
 artifact directory. CocoaPods consumes the same ZIP through the generated,
 checksum-pinned `NoritoBridge` binary pod. `IrohaSwift/VERSION` owns the shared
 source-pod, binary-pod, tag, and archive SemVer. The Rust sources are instead
-bound by the reviewed commit, source fingerprint, and root lockfile. For
+bound by the reviewed commit, source fingerprint, and selected authenticated
+lockfile. Ordinary builds use the root lock; the privacy lane uses the distinct
+frozen lock selected by `IROHA_PRIVACY_RELEASE_CARGO_LOCKFILE_PATH`. For
 end-to-end instructions on consuming a published artifact inside an app, see the
 [public Swift SDK tutorial](https://docs.iroha.tech/guide/tutorials/swift.html).
 
@@ -31,7 +33,8 @@ that workflow for local release verification.
 3. Keep `IrohaSwift/VERSION`, the Swift loader's expected version, and the
    reviewed release version map aligned.
 4. Do not require numeric equality with `crates/norito/Cargo.toml`; authenticate
-   the exact Rust source commit, source fingerprint, and root lockfile instead.
+   the exact Rust source commit, source fingerprint, and selected authenticated
+   lockfile instead.
 
 ## Build steps
 
@@ -72,8 +75,11 @@ that workflow for local release verification.
    per-slice SHA-256 hashes. Before publication the helper invokes
    `scripts/check_mobile_sdk_artifacts.sh --apple-only` against the staged generation; a
    checker or `xcodebuild` failure leaves the live generation unchanged. The
-   first-release builder has no skip-build, preserved-target, alternate-lock, or
-   manual XCFramework fallback mode. Override only the recorded bridge version with
+   first-release builder has no skip-build, preserved-target, arbitrary CLI
+   alternate-lock, or manual XCFramework fallback mode. The ordinary lane uses
+   the root lock; the authenticated privacy lane may select its frozen external
+   `Cargo.lock` only through `IROHA_PRIVACY_RELEASE_CARGO_LOCKFILE_PATH`.
+   Override only the recorded bridge version with
    `--bridge-version <version>` when needed. `--allow-dirty-source` is for local
    integration artifacts and must not be used for a release artifact.
    `scripts/update_norito_bridge_swift_pins.py` has no in-place update mode: use

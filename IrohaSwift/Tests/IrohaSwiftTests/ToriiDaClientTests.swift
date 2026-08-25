@@ -89,7 +89,10 @@ final class ToriiDaClientTests: XCTestCase {
         XCTAssertTrue(FileManager.default.fileExists(atPath: requestURL.path))
         let data = try Data(contentsOf: requestURL)
         let json = try JSONSerialization.jsonObject(with: data) as? [String: Any]
-        XCTAssertEqual(json?["network_id"] as? String, TestNetworkIds.canonical.literal)
+        XCTAssertEqual(
+            json?["network_id"] as? String,
+            TestNetworkIds.canonical.noritoJSONLiteral
+        )
         XCTAssertEqual(json?["owner"] as? String, owner)
         XCTAssertEqual(json?["lane_id"] as? Int, 7)
     }

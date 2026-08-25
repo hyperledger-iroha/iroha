@@ -1,10 +1,4 @@
 //! Space Directory operator helpers.
-use std::{
-    fs,
-    path::{Path, PathBuf},
-    str::FromStr,
-    time::{SystemTime, UNIX_EPOCH},
-};
 use crate::{Run, RunContext};
 use eyre::{Result, WrapErr, eyre};
 use iroha::data_model::{
@@ -31,6 +25,12 @@ use norito::json::{self, JsonDeserialize, JsonSerialize, Value as JsonValue};
 use reqwest::{
     blocking::Client as BlockingHttpClient,
     header::{ACCEPT, HeaderValue},
+};
+use std::{
+    fs,
+    path::{Path, PathBuf},
+    str::FromStr,
+    time::{SystemTime, UNIX_EPOCH},
 };
 use url::Url;
 const SPACE_DIRECTORY_INPUT_MAX_BYTES_V1: usize = super::MAX_CLI_STDIN_BYTES_V1;
@@ -1744,10 +1744,9 @@ mod tests {
             let account_id = AccountId::new(key_pair.public_key().clone());
             let cfg = Config {
                 chain: ChainId::from("00000000-0000-0000-0000-000000000000"),
-                network_id:
-                    "hash:32C903E5B3497E34C2B844EBFE8A39C19E6CF8F95D44C1FFB8BA9DCB42F91149#A2F0"
-                        .parse()
-                        .expect("network id"),
+                network_id: "32c903e5b3497e34c2b844ebfe8a39c19e6cf8f95d44c1ffb8ba9dcb42f91149"
+                    .parse()
+                    .expect("network id"),
                 account: account_id,
                 account_chain_discriminant:
                     iroha_config::parameters::defaults::common::chain_discriminant(),

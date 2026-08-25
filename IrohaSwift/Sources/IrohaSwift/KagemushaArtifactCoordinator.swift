@@ -1,7 +1,7 @@
 import CryptoKit
 import Foundation
 
-/// One one-shot source for a complete, published ABI-21 `KRV4KEY` artifact.
+/// One one-shot source for a complete, published Kagemusha V4 `KRV4KEY` artifact.
 ///
 /// The source must invoke `stream` synchronously, in file order, and must not
 /// retain its consumer. The coordinator independently verifies offsets, byte
@@ -83,7 +83,7 @@ public final class KagemushaRecursiveSpendInstalledArtifactLease: @unchecked Sen
     }
 }
 
-/// Process-wide owner for the single mode-free ABI-21 Kagemusha artifact set.
+/// Process-wide owner for the single mode-free Kagemusha V4 artifact set.
 ///
 /// Candidate artifacts are completely streamed and authenticated before the
 /// native atomic install. A failed candidate is cancelled without changing the

@@ -1323,7 +1323,7 @@ fn ws_ticket_accepts_session_id_alias() {
 #[test]
 fn build_connect_session_create_body_derives_exact_network_sid() {
     let args = norito::json!({
-        "network_id": "hash:4141414141414141414141414141414141414141414141414141414141414141#7023",
+        "network_id": "4141414141414141414141414141414141414141414141414141414141414141",
         "app_pk": "AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE",
         "nonce": "AgICAgICAgICAgICAgICAg",
         "node": "https://node.example"
@@ -1337,7 +1337,7 @@ fn build_connect_session_create_body_derives_exact_network_sid() {
     );
     assert_eq!(
         payload.get("network_id").and_then(Value::as_str),
-        args.get("network_id").and_then(Value::as_str)
+        Some("hash:4141414141414141414141414141414141414141414141414141414141414141#7023")
     );
     assert_eq!(
         payload.get("app_pk").and_then(Value::as_str),
@@ -1363,7 +1363,7 @@ fn build_connect_session_create_body_rejects_retired_identity_inputs() {
         "node_url",
     ] {
         let mut args = norito::json!({
-            "network_id": "hash:4141414141414141414141414141414141414141414141414141414141414141#7023",
+            "network_id": "4141414141414141414141414141414141414141414141414141414141414141",
             "app_pk": "AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE",
             "nonce": "AgICAgICAgICAgICAgICAg"
         });
@@ -1382,7 +1382,7 @@ fn build_connect_session_create_body_rejects_retired_identity_inputs() {
 fn build_connect_session_create_body_rejects_missing_or_noncanonical_identity() {
     let valid = || {
         norito::json!({
-            "network_id": "hash:32C903E5B3497E34C2B844EBFE8A39C19E6CF8F95D44C1FFB8BA9DCB42F91149#A2F0",
+            "network_id": "32c903e5b3497e34c2b844ebfe8a39c19e6cf8f95d44c1ffb8ba9dcb42f91149",
             "app_pk": "AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE",
             "nonce": "AgICAgICAgICAgICAgICAg"
         })
@@ -1398,7 +1398,15 @@ fn build_connect_session_create_body_rejects_missing_or_noncanonical_identity() 
     let mutations = [
         (
             "network_id",
-            "hash:32c903e5b3497e34c2b844ebfe8a39c19e6cf8f95d44c1ffb8ba9dcb42f91149#a2f0",
+            "hash:32C903E5B3497E34C2B844EBFE8A39C19E6CF8F95D44C1FFB8BA9DCB42F91149#A2F0",
+        ),
+        (
+            "network_id",
+            "32C903E5B3497E34C2B844EBFE8A39C19E6CF8F95D44C1FFB8BA9DCB42F91149",
+        ),
+        (
+            "network_id",
+            "32c903e5b3497e34c2b844ebfe8a39c19e6cf8f95d44c1ffb8ba9dcb42f91148",
         ),
         ("app_pk", "AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE="),
         ("app_pk", "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"),
@@ -1434,6 +1442,14 @@ fn connect_session_create_tool_schema_has_only_hard_cut_identity() {
             .get("properties")
             .and_then(Value::as_object)
             .expect("schema properties");
+        assert_eq!(
+            properties
+                .get("network_id")
+                .and_then(Value::as_object)
+                .and_then(|network_id| network_id.get("pattern"))
+                .and_then(Value::as_str),
+            Some("^[0-9a-f]{63}[13579bdf]$")
+        );
         for retired in [
             "sid",
             "session_id",

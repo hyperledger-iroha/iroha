@@ -9,6 +9,7 @@ import {
   mkdtempSync,
   readFileSync,
   realpathSync,
+  renameSync,
   rmSync,
   writeFileSync,
 } from "node:fs";
@@ -22,6 +23,10 @@ import {
   NATIVE_BUILD_PROFILE_ENV,
   resolveNativeBuildProfile,
 } from "../scripts/native-build-profile.mjs";
+import {
+  nativeBuildProvenancePath,
+  writeNativeBuildProvenance,
+} from "../scripts/native-build-provenance.mjs";
 import {
   nativeBuildOutputPath,
   runNativeBuild,
@@ -239,8 +244,16 @@ test("native output requires the caller-provided absolute Cargo target", () => {
   );
 });
 
-test("native build uses the live root, root lock, pinned Cargo, and shared target", (t) => {
+test("native build uses the live root, selected lock, pinned Cargo, and shared target", (t) => {
   const fixture = createFixture(t);
+  const selectedLock = path.join(
+    path.dirname(fixture.repoRoot),
+    "privacy-release",
+    "Cargo.lock",
+  );
+  mkdirSync(path.dirname(selectedLock), { recursive: true });
+  writeFileSync(selectedLock, "version = 4\n");
+  fixture.env.IROHA_JS_CARGO_LOCKFILE_PATH = selectedLock;
   const state = sourceState();
   let invalidated;
   let written;
@@ -281,7 +294,7 @@ test("native build uses the live root, root lock, pinned Cargo, and shared targe
         "-Z",
         "unstable-options",
         "--lockfile-path",
-        path.join(fixture.repoRoot, "Cargo.lock"),
+        selectedLock,
         "--manifest-path",
         path.join(fixture.repoRoot, "Cargo.toml"),
         "--package",
@@ -491,6 +504,37 @@ test("source drift after Cargo prevents provenance publication", (t) => {
   assert.equal(writes, 0);
 });
 
+test("same-byte selected lock replacement invalidates published provenance", (t) => {
+  const fixture = createFixture(t);
+  const selectedLock = fixture.env.IROHA_JS_CARGO_LOCKFILE_PATH;
+  const replacement = path.join(fixture.repoRoot, ".Cargo.lock.replacement");
+  const state = sourceState();
+
+  assert.throws(
+    () =>
+      runNativeBuild({
+        repoRoot: fixture.repoRoot,
+        env: fixture.env,
+        platform: "linux",
+        readSourceState: () => state,
+        runCargo() {
+          writeNativeOutput(fixture);
+          return {
+            status: 0,
+            stdout: successfulCargoJson(fixture),
+          };
+        },
+        writeProvenance(nativePath, provenance) {
+          writeNativeBuildProvenance(nativePath, provenance);
+          writeFileSync(replacement, readFileSync(selectedLock));
+          renameSync(replacement, selectedLock);
+        },
+      }),
+    /Cargo\.lock changed while it was in use/u,
+  );
+  assert.equal(existsSync(nativeBuildProvenancePath(fixture.nativePath)), false);
+});
+
 for (const profile of ["release", "deploy"]) {
   test(profile + " native build rejects a dirty source before Cargo", (t) => {
     const fixture = createFixture(t, { profile });
@@ -535,12 +579,9 @@ test("the live build rejects incomplete or redirected build envelopes", async (t
       },
     },
     {
-      label: /to name the root Cargo.lock/u,
+      label: /selected Cargo.lock must be an absolute canonical path/u,
       mutate(env) {
-        env.IROHA_JS_CARGO_LOCKFILE_PATH = path.join(
-          fixture.repoRoot,
-          "alternate.lock",
-        );
+        env.IROHA_JS_CARGO_LOCKFILE_PATH = "Cargo.lock";
       },
     },
     {

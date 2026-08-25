@@ -434,7 +434,10 @@ final class ToriiGovernanceBallotModelTests: XCTestCase {
         GovernanceBallotStubURLProtocol.handler = { request in
             XCTAssertEqual(request.url?.path, "/v1/gov/ballots/zk-v1")
             let body = self.bodyJSON(from: request)
-            XCTAssertEqual(body["network_id"] as? String, TestNetworkIds.canonical.literal)
+            XCTAssertEqual(
+                body["network_id"] as? String,
+                TestNetworkIds.canonical.noritoJSONLiteral
+            )
             XCTAssertNil(body["chain_id"])
             XCTAssertEqual(
                 request.value(forHTTPHeaderField: "X-Iroha-Account"),
@@ -488,7 +491,10 @@ final class ToriiGovernanceBallotModelTests: XCTestCase {
         GovernanceBallotStubURLProtocol.handler = { request in
             XCTAssertEqual(request.url?.path, "/v1/gov/ballots/zk-v1/ballot-proof")
             let body = self.bodyJSON(from: request)
-            XCTAssertEqual(body["network_id"] as? String, TestNetworkIds.canonical.literal)
+            XCTAssertEqual(
+                body["network_id"] as? String,
+                TestNetworkIds.canonical.noritoJSONLiteral
+            )
             XCTAssertNil(body["chain_id"])
             let ballot = body["ballot"] as? [String: Any]
             XCTAssertEqual(ballot?["backend"] as? String, "halo2/ipa")
@@ -542,7 +548,10 @@ final class ToriiGovernanceBallotModelTests: XCTestCase {
             XCTAssertEqual(request.url?.path, "/v1/gov/parliament/ballots")
             let body = self.bodyJSON(from: request)
             XCTAssertEqual(body["authority"] as? String, owner)
-            XCTAssertEqual(body["network_id"] as? String, TestNetworkIds.canonical.literal)
+            XCTAssertEqual(
+                body["network_id"] as? String,
+                TestNetworkIds.canonical.noritoJSONLiteral
+            )
             XCTAssertNil(body["chain_id"])
             XCTAssertEqual(body["proposal_id"] as? String, proposalId)
             XCTAssertEqual(body["body"] as? String, "policy-jury")

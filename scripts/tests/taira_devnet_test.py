@@ -86,12 +86,13 @@ class FakeRuntime:
                 executable(target / name, b"#!/usr/bin/env bash\n")
             genesis_hash = "a" * 63 + "b"
             network_id = module.network_id_from_genesis_hash(genesis_hash)
+            config_hash = module.norito_hash_literal_from_genesis_hash(genesis_hash)
             for index in range(module.PEER_COUNT):
                 sorafs_dir = target / "state" / f"peer{index}" / "sorafs"
                 (target / f"peer{index}.toml").write_text(
                     f'chain = "{module.DEFAULT_CHAIN_ID}"\n'
                     f"chain_discriminant = {module.DEFAULT_CHAIN_DISCRIMINANT}\n"
-                    f'[genesis]\nexpected_hash = "{network_id}"\n'
+                    f'[genesis]\nexpected_hash = "{config_hash}"\n'
                     f'address = "addr:127.0.0.1:{api_port + index}#ABCD"\n'
                     "[nexus.storage]\n"
                     f"local_budget_bytes = {module.GENERATED_LOCALNET_NEXUS_STORAGE_BYTES}\n"
@@ -223,6 +224,24 @@ class TairaDevnetTests(unittest.TestCase):
             "fc56984b-2be7-431d-840e-21514d1883f0",
         )
         self.assertEqual(module.DEFAULT_CHAIN_DISCRIMINANT, 369)
+
+    def test_network_id_text_is_raw_lowercase_and_marker_bound(self) -> None:
+        canonical = "a" * 63 + "b"
+        self.assertEqual(module.network_id_from_genesis_hash(canonical), canonical)
+        self.assertEqual(
+            module.norito_hash_literal_from_genesis_hash(canonical),
+            "hash:" + canonical.upper() + "#3E38",
+        )
+        for invalid in (
+            canonical.upper(),
+            f"hash:{canonical.upper()}#0000",
+            "0" * 64,
+            "a" * 64,
+        ):
+            with self.subTest(invalid=invalid), self.assertRaisesRegex(
+                ValueError, "marker bit set"
+            ):
+                module.network_id_from_genesis_hash(invalid)
 
     def up_args(self, *extra: str):
         """Parse a no-build ``up`` command for this test directory."""
@@ -772,7 +791,7 @@ class TairaDevnetTests(unittest.TestCase):
         ):
             module.check(args, run=runtime.run, request=runtime.request)
 
-    def test_check_rejects_client_network_id_checksum_drift(self) -> None:
+    def test_check_rejects_client_network_id_drift(self) -> None:
         runtime = FakeRuntime()
         module.up(self.up_args(), run=runtime.run, request=runtime.request)
         client = self.root / "state" / "network" / "client.toml"
@@ -793,7 +812,7 @@ class TairaDevnetTests(unittest.TestCase):
         config = self.root / "state" / "network" / "peer2.toml"
         contents = config.read_text(encoding="utf-8")
         network_id = module.quoted_assignment(config, "expected_hash")
-        foreign = module.network_id_from_genesis_hash("1" * 63 + "3")
+        foreign = module.norito_hash_literal_from_genesis_hash("1" * 63 + "3")
         config.write_text(contents.replace(network_id, foreign), encoding="utf-8")
         args = module.parser().parse_args(
             ["--dir", str(self.root / "state"), "check", "--timeout-seconds", "1"]

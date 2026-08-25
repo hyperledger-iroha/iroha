@@ -8,7 +8,7 @@ Not published to Maven Central yet. Build locally and consume via `mavenLocal()`
 
 | Artifact | Type | Description |
 |----------|------|-------------|
-| `org.hyperledger.iroha.sdk:core-jvm` | JAR | Pure Kotlin/JVM models, codec, crypto, clients, and ABI-22/V4 artifact streaming |
+| `org.hyperledger.iroha.sdk:core-jvm` | JAR | Pure Kotlin/JVM models, codec, crypto, clients, and native bridge ABI 22 with Kagemusha V4 artifact streaming |
 | `org.hyperledger.iroha.sdk:client-android` | AAR | Android keystore, device telemetry, IrohaKeyManager, shared JNI bridge for ML-DSA / offline flows |
 | `org.hyperledger.iroha.sdk:offline-wallet-android` | AAR | Offline-wallet integration built on `client-android`; use this artifact for Android offline cash |
 
@@ -33,7 +33,8 @@ implementation("org.hyperledger.iroha.sdk:offline-wallet-android:0.1.0")
 ### Transaction identity
 
 Every ordinary `TransactionPayload` requires a nominal, immutable `NetworkId` parsed from the
-exact canonical checksummed 32-byte genesis-header hash literal. The Norito codec emits it only as
+exact 64-character lowercase hexadecimal genesis-header hash, whose final byte has the marker bit
+set. The Norito codec emits it only as
 `TransactionDomain::Network`; the genesis-only domain is not constructible through the SDK and is
 rejected while decoding. JSON transaction surfaces use
 `"domain":{"kind":"network","value":"<canonical NetworkId>"}` and reject the retired `chain`,
@@ -69,8 +70,10 @@ Alias inputs must already use the exact canonical `label@dataspace` or
 structural preflight; Torii remains authoritative for UTS-46, active bindings,
 and controller verification.
 The first-release signing domain is an exact genesis-derived
-`hash:<64 uppercase hex digits>#<4 uppercase CRC-16 digits>` `NetworkId` whose decoded 32-byte
-value carries the V1 marker bit. Canonical nonces contain 1--256 visible ASCII bytes. Methods are
+64-character lowercase hexadecimal `NetworkId` whose decoded 32-byte value carries the V1 marker
+bit. Generic JSON `Hash` values retain their separate checksummed
+`hash:<64 uppercase hex digits>#<4 uppercase CRC-16 digits>` contract. Canonical nonces contain
+1--256 visible ASCII bytes. Methods are
 non-empty ASCII HTTP tokens of at most 32 bytes, and URI signers require an exact root-relative
 ASCII raw path of at most 64 KiB; absolute inputs must be hierarchical HTTP(S) URIs with an
 authority and no fragment.
@@ -293,10 +296,14 @@ is capped at 24,660 bytes. That is a hard constructor ceiling. Wire policies
 likewise cannot exceed 32 KiB canonical or 24,576 encoded bytes for the bounded
 Kagemusha handoff.
 
-IPM1 admits only profile `2` / schema `0x0102` as a 24,576-byte bounded
-handoff for a mainline typed Kagemusha native archive. Generic IPM validates
-its exact ABI22 envelope without native code; `IrohaPeerKagemushaAdapterV1`
-then performs deeper typed semantic decoding. Full ABI22
+IPM1 admits profile `2` / schema `0x0102` as a 24,576-byte bounded handoff for
+a mainline typed Kagemusha V4 native archive. Profile `3` / schema `0x0100`
+carries only the exact canonical `kgm2:` text from `OfflineCashPeerAdapterV1`.
+Its request/payment/ACK raw maxima are 768/7,936/256 bytes and text maxima are
+1,029/10,587/347 bytes; 9,211 raw and 12,288 text are aggregate session caps,
+not per-message limits. Generic IPM validates exact canonical framing without
+native code; the typed adapters then perform deeper semantic decoding. Mobile
+native calls cross ABI22 while Kagemusha's protocol/data ABI remains V4. Full V4
 QR/NFC/native archives up to 32 MiB continue to use the independent
 `KagemushaQrStreamCodec`, `KagemushaNfcProtocol`, and
 `KagemushaNearbyEnvelopeCodec` rails. Kagemusha retains its distinct
@@ -304,13 +311,13 @@ QR/NFC/native archives up to 32 MiB continue to use the independent
 AID `F0504B45504B524E464301`. Nearby uses the authenticated binary `PKNB1`
 envelope and its own smaller bound. Those rails are never negotiated,
 reinterpreted, or used as fallback for IPM1. `IrohaPeer*V1` has no
-unauthenticated Nearby, raw-text, alternate profile representation, alias, or
-migration fallback.
+unauthenticated Nearby, untyped raw-text, alternate profile representation,
+alias, or migration fallback.
 
 These transport changes are client-side and require no backend API change.
 
-The sole first-release IPM1 profile code 2 requires schema `0x0102`.
-Construction and decode enforce native-independent ABI22 NRT0 framing, the
+The first-release profile/schema pairs are `2`/`0x0102` and `3`/`0x0100`.
+Construction and decode enforce native-independent canonical NRT0 framing, the
 authoritative fully-qualified kind schema, CRC64, exact compact-length flags,
 and static padding (request/payment 8, ACK 0). Deeper semantics remain in the
 typed adapter.
@@ -319,7 +326,9 @@ uses zlib only when it saves at least 32 bytes and one 256-byte shard.
 
 Do not stop at generic structural acceptance for a production profile-2
 payload; wrap and decode it through `IrohaPeerKagemushaAdapterV1` so deeper
-typed semantics are enforced. The canonical
+typed semantics are enforced. Apply the same rule to profile 3 with the
+context-bound `OfflineCashPeerAdapterV1`; on rejection, quarantine the stream
+ID returned by `OfflineCashQrStreamDecoderV1`. The canonical
 `../fixtures/offline/kagemusha_peer_transport_v2.json` vector
 pins a qualified 49-byte structural archive and its exact IPM1, IQR1, NFC, and
 authenticated Nearby bytes across Swift, Kotlin, and Java. Its one-byte body is
@@ -432,7 +441,7 @@ have a gap.
 
 ABI V1 exposes no generic shield, shielded-transfer, or unshield instruction or
 native signer method; confidential movement uses the typed Kagemusha lifecycle.
-`core-jvm` exposes the exact ABI-22/V4 typed Kagemusha init, fractional append/change,
+`core-jvm` exposes the exact native bridge ABI 22 and Kagemusha V4 typed init, fractional append/change,
 verification, and redemption builders through the fixed native surface. It also provides exact
 scaled amounts, V4 artifact streaming and backend-capability checks, plus the sole current
 `DeviceAttestationRegistration` / `RegisterOfflineDeviceAttestation` transaction path. The latter
@@ -449,6 +458,19 @@ only the bounded V1 command frame and does not expose an old V4/V5 selector.
 See [`specs/offline_cash_device_bridge_v1.md`](../specs/offline_cash_device_bridge_v1.md)
 for exact frame offsets, feature bits, and optional native entry points.
 
+Install the clean Offline Cash V1 proof release with
+`OfflineCashArtifactSetInstallerV1.install` before opening a receiver session.
+The call streams exactly one regular file for every case of the canonical
+34-role `OfflineCashArtifactRoleV1` inventory and supplies the independently
+trusted manifest SHA-256, internal validation receipt, authority policy, and
+threshold release attestation. Native code pins and reauthenticates every file;
+no path string crosses JNI. `OfflineCashWalletSessionV1` then retains the
+move-only paired-proof receipt inside an opaque native handle so only the exact
+bound acknowledgement can advance the session. Release replacement or removal
+invalidates old sessions. This verification does not replace the secure-device
+journal/outbox bridge, so Android remains online-only when that production
+service is unavailable.
+
 Artifact streaming installs
 exactly eight Pasta artifacts atomically: `ParamsIPA`, processed proving key, processed verifying
 key, and final-key selector-zero bootstrap witness for each Eq/Ep parity. Each profile's bounded
@@ -460,9 +482,9 @@ attestation, benchmark evidence, and cryptographic review. The receipt and revie
 to 1 MiB; an authenticated-but-unpromoted release cannot be installed.
 
 `KagemushaRecursiveSpendProver.newToriiClient` requires a genesis-derived
-`LocalSigningContext`. Its receiver-lineage method additionally requires a per-call
-`ToriiCanonicalRequestAuth` and signs the exact NetworkId, POST path, and Norito selector body with
-fresh metadata; the resulting transport request is one-shot and cannot be redirected or retried.
+`LocalSigningContext` and exposes only readiness, top-up, redeem, and operation-status routes.
+Receiver-registration lineage is carried inside the portable receive offer and verified locally by
+the native Kagemusha V4 receive-offer verifier; it is not fetched from Torii.
 
 Lifecycle calls fail closed until the proof backend and the exact manifest-bound artifact set are
 available. Request and result archives stay typed and canonically framed while recursive proof,
@@ -743,7 +765,7 @@ instructions, any mismatch in the complete verifying-key record, and signing
 messages that do not match the payload prehash:
 
 ```kotlin
-val networkId = NetworkId.parse("<canonical_network_id_hash_literal>")
+val networkId = NetworkId.parse("<64-lowercase-hex-network-id>")
 val config = ClientConfig.builder()
     .setLocalSigningContext(LocalSigningContext(networkId))
     // Configure the Torii endpoint and other client policy here.

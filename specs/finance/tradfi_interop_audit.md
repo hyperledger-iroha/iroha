@@ -876,7 +876,7 @@ does not claim direct live SWIFT, Fedwire, SEPA, or CSD network connectivity.
   while the required rail operator-private-key file and any notary bearer-token
   file must stay outside the corresponding stage source root and receipt
   directory before child execution. Rail planning also requires a canonical
-  checksummed genesis-derived `network_id`, rejects the retired rail
+  raw lowercase 64-hex genesis-derived `network_id`, rejects the retired rail
   `bearer_token_file`, emits exact `--network-id` and
   `--operator-private-key-file` adapter inputs, and redacts both rail key and
   notary token paths in its summary. It verifies generated
@@ -1951,7 +1951,8 @@ The JSON runbook is intentionally strict. It must label `provider` and
   external operator directories.
 Endpoint URLs must not contain embedded credentials,
 params, query strings, or fragments. The rail stage requires the exact
-genesis-derived checksummed `network_id` and a runtime-only
+genesis-derived raw lowercase 64-hex `network_id` with its final marker bit set,
+and a runtime-only
 `operator_private_key_file`; it has no bearer-token fallback. Notary bearer
 tokens remain separate runtime-only inputs. The runner does not read either
 secret and redacts both secret-file arguments in the summary. Production canaries should use
@@ -1983,7 +1984,7 @@ paths, inboxes, and `audit_export_dir` locations.
     "inbox_dir": "inbox",
     "torii_base_url": "https://torii.example.internal",
     "receipt_dir": "receipts/rail",
-    "network_id": "hash:0808080808080808080808080808080808080808080808080808080808080809#9F75",
+    "network_id": "0808080808080808080808080808080808080808080808080808080808080809",
     "operator_private_key_file": "secrets/torii.operator.key"
   },
   "notary": {
@@ -2202,7 +2203,7 @@ archived canary summary records `plan_only=true`. Bearer-token arguments for
 the notary stage and operator-private-key arguments for the rail
 stage must be redacted in either separate-value or `--flag=<path>` form. Rail
 commands containing the retired `--bearer-token-file` flag are rejected. Rail
-commands must contain one canonical checksummed `--network-id` plus one redacted
+commands must contain one canonical raw lowercase 64-hex `--network-id` plus one redacted
 `--operator-private-key-file`; missing values, a wrong checksum, a cleared Iroha
 marker bit, duplicate flags, or an unredacted key path fail replay. The `--allow-*`
   flags, including

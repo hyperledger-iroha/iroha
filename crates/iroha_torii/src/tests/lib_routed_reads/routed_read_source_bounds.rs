@@ -177,7 +177,7 @@ fn contract_alias_borrowed_json_matches_owned_dto_at_exact_cap() {
         "derive routed contract-alias source fixture",
     );
     let contract_address = iroha_data_model::smart_contract::ContractAddress::derive(
-        &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
+        &"0000000000000000000000000000000000000000000000000000000000000001"
             .parse()
             .expect("canonical network id"),
         &authority,

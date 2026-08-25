@@ -47,6 +47,7 @@ pub(crate) struct PastaIpaProofShapeV1 {
     commitments: usize,
     evaluations: usize,
     transcript_elements: usize,
+    ordinary_proof_bytes: u32,
     augmented_proof_bytes: u32,
 }
 
@@ -144,6 +145,12 @@ impl PastaIpaProofShapeV1 {
         self.transcript_elements
     }
 
+    /// Exact canonical ordinary Poseidon proof length, with no appended
+    /// folded-generator/history suffix.
+    pub(crate) const fn ordinary_proof_bytes(&self) -> u32 {
+        self.ordinary_proof_bytes
+    }
+
     /// Exact augmented proof length in bytes.
     pub(crate) const fn augmented_proof_bytes(&self) -> u32 {
         self.augmented_proof_bytes
@@ -158,9 +165,18 @@ impl PastaIpaProofShapeV1 {
 pub(crate) fn pasta_ipa_direct_instance_compile_config_v1(
     public_len: usize,
 ) -> snark_verifier::system::halo2::Config {
+    pasta_ipa_direct_instances_compile_config_v1(&[public_len])
+}
+
+/// Build the reviewed direct-instance IPA profile for every configured public
+/// column. This is required by Offline Cash helper leaves whose second,
+/// intermediate-only column binds SEC1-plus-digest bytes into recursion.
+pub(crate) fn pasta_ipa_direct_instances_compile_config_v1(
+    public_lens: &[usize],
+) -> snark_verifier::system::halo2::Config {
     snark_verifier::system::halo2::Config::ipa()
         .set_query_instance(false)
-        .with_num_instance(vec![public_len])
+        .with_num_instance(public_lens.to_vec())
 }
 
 /// Compute the exact Axiom IPA augmented-proof transcript shape.
@@ -287,15 +303,22 @@ where
         .and_then(|count| count.checked_add(point_sets.len()))
         .and_then(|count| count.checked_add(2))
         .ok_or_else(|| "proof evaluation count overflow".to_owned())?;
-    let transcript_elements = commitments
+    let ordinary_transcript_elements = commitments
         .checked_add(evaluations)
-        .and_then(|count| count.checked_add(1))
+        .ok_or_else(|| "ordinary proof element count overflow".to_owned())?;
+    let transcript_elements = ordinary_transcript_elements
+        .checked_add(1)
         .ok_or_else(|| "augmented proof element count overflow".to_owned())?;
+    let ordinary_transcript_bytes = ordinary_transcript_elements
+        .checked_mul(32)
+        .ok_or_else(|| "ordinary proof byte length overflow".to_owned())?;
     let transcript_bytes = transcript_elements
         .checked_mul(32)
         .ok_or_else(|| "augmented proof byte length overflow".to_owned())?;
     let augmented_proof_bytes = u32::try_from(transcript_bytes)
         .map_err(|_| "augmented proof byte length does not fit u32".to_owned())?;
+    let ordinary_proof_bytes = u32::try_from(ordinary_transcript_bytes)
+        .map_err(|_| "ordinary proof byte length does not fit u32".to_owned())?;
 
     Ok(PastaIpaProofShapeV1 {
         k,
@@ -314,6 +337,7 @@ where
         commitments,
         evaluations,
         transcript_elements,
+        ordinary_proof_bytes,
         augmented_proof_bytes,
     })
 }

@@ -51,7 +51,7 @@ async fn kaigi_relay_diagnostics_reject_legacy_or_precomputed_auth_headers() {
     assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
 }
 fn foreign_network_id() -> NetworkId {
-    "hash:0000000000000000000000000000000000000000000000000000000000000003#E54C"
+    "0000000000000000000000000000000000000000000000000000000000000003"
         .parse()
         .expect("canonical foreign NetworkId")
 }

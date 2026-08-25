@@ -273,7 +273,7 @@ fn alias_binding_rejects_incoherent_lease_windows() {
     assert!(error.to_string().contains("requires lease_expiry_ms"));
     let mut world = World::new();
     let contract_address = ContractAddress::derive(
-        &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
+        &"0000000000000000000000000000000000000000000000000000000000000001"
             .parse()
             .expect("canonical test network id"),
         &ALICE_ID,
@@ -320,7 +320,7 @@ fn alias_index_rebuild_rejects_incoherent_persisted_lease_windows() {
         .expect_err("asset alias rebuild must reject grace without a lease");
     assert!(error.contains("requires lease_expiry_ms"));
     let contract_address = ContractAddress::derive(
-        &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
+        &"0000000000000000000000000000000000000000000000000000000000000001"
             .parse()
             .expect("canonical test network id"),
         &ALICE_ID,
@@ -349,7 +349,7 @@ fn alias_index_rebuild_rejects_incoherent_persisted_lease_windows() {
 fn world_bind_contract_alias_keeps_indexes_consistent() {
     let mut world = World::new();
     let contract_address = ContractAddress::derive(
-        &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
+        &"0000000000000000000000000000000000000000000000000000000000000001"
             .parse()
             .expect("canonical test network id"),
         &ALICE_ID,
@@ -358,7 +358,7 @@ fn world_bind_contract_alias_keeps_indexes_consistent() {
     )
     .expect("contract address");
     let other_contract_address = ContractAddress::derive(
-        &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
+        &"0000000000000000000000000000000000000000000000000000000000000001"
             .parse()
             .expect("canonical test network id"),
         &ALICE_ID,
@@ -419,7 +419,7 @@ fn world_bind_contract_alias_keeps_indexes_consistent() {
 fn contract_alias_time_lookup_rejects_index_without_binding_record() {
     let mut world = World::new();
     let contract_address = ContractAddress::derive(
-        &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
+        &"0000000000000000000000000000000000000000000000000000000000000001"
             .parse()
             .expect("canonical test network id"),
         &ALICE_ID,

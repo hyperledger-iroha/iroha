@@ -6,6 +6,8 @@
 use crate::cli_output::print_with_optional_text;
 use crate::{Run, RunContext};
 use eyre::{Result, WrapErr, eyre};
+#[cfg(test)]
+use iroha::client::AccountAliasListItemV1;
 use iroha::client::{
     AccountAliasIndexResolutionV1, AccountAliasResolutionV1, AccountAliasesByAccountRequestV1,
     AccountAliasesByAccountV1, Client,
@@ -18,16 +20,14 @@ use iroha::data_model::{
         AliasSetupStatusV1, AliasTransactionPlanV1,
     },
 };
+#[cfg(test)]
+use iroha_i18n::{Bundle, Language, Localizer};
 use std::{
     fmt::Write as _,
     fs,
     io::Write as _,
     path::{Path, PathBuf},
 };
-#[cfg(test)]
-use iroha::client::AccountAliasListItemV1;
-#[cfg(test)]
-use iroha_i18n::{Bundle, Language, Localizer};
 #[derive(clap::Subcommand, Debug)]
 pub enum Command {
     /// Inspect authenticated account-onboarding readiness.
@@ -895,10 +895,9 @@ mod tests {
             let account = AccountId::new(kp.public_key().clone());
             let cfg = Config {
                 chain: ChainId::from("test-chain"),
-                network_id:
-                    "hash:32C903E5B3497E34C2B844EBFE8A39C19E6CF8F95D44C1FFB8BA9DCB42F91149#A2F0"
-                        .parse()
-                        .expect("network id"),
+                network_id: "32c903e5b3497e34c2b844ebfe8a39c19e6cf8f95d44c1ffb8ba9dcb42f91149"
+                    .parse()
+                    .expect("network id"),
                 account,
                 account_chain_discriminant:
                     iroha_config::parameters::defaults::common::chain_discriminant(),

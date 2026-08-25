@@ -8,23 +8,36 @@ use halo2_proofs::{
 };
 
 use super::{
-    BALANCE_HEAD_MESSAGE_BYTES_V1, CREDIT_HEAD_MESSAGE_BYTES_V1, OfflineCashStatePrivateWitnessV1,
+    ASSET_ID_FRAME_BYTES_V1, BALANCE_HEAD_MESSAGE_BYTES_V1, CREDIT_HEAD_MESSAGE_BYTES_V1,
+    NETWORK_ID_FRAME_BYTES_V1, NORITO_FRAME_PAYLOAD_OFFSET_V1, OfflineCashStatePrivateWitnessV1,
     RECEIVE_OPENING_DOMAIN_V1, RECEIVE_OPENING_MESSAGE_BYTES_V1, RECEIVE_SEMANTIC_DOMAIN_V1,
     RECEIVE_SEMANTIC_MESSAGE_BYTES_V1, RECEIVE_TRANSITION_DOMAIN_V1,
-    RECEIVE_TRANSITION_MESSAGE_BYTES_V1, SEND_SPLIT_BRANCH_DOMAIN_V1,
+    RECEIVE_TRANSITION_MESSAGE_BYTES_V1, SEND_SEMANTIC_AFTER_OFFSET_V1,
+    SEND_SEMANTIC_AMOUNT_OFFSET_V1, SEND_SEMANTIC_ASSET_OFFSET_V1, SEND_SEMANTIC_BEFORE_OFFSET_V1,
+    SEND_SEMANTIC_CREDIT_OFFSET_V1, SEND_SEMANTIC_MESSAGE_BYTES_V1,
+    SEND_SEMANTIC_NETWORK_OFFSET_V1, SEND_SEMANTIC_RECEIVER_OFFSET_V1,
+    SEND_SEMANTIC_RELEASE_OFFSET_V1, SEND_SEMANTIC_REQUEST_OFFSET_V1,
+    SEND_SEMANTIC_SCALE_OFFSET_V1, SEND_SEMANTIC_TRANSITION_OFFSET_V1, SEND_SPLIT_BRANCH_DOMAIN_V1,
     SEND_SPLIT_RECEIVER_BRANCH_MESSAGE_BYTES_V1, SEND_SPLIT_RECEIVER_BRANCH_V1,
     SEND_SPLIT_SEED_DOMAIN_V1, SEND_SPLIT_SEED_MESSAGE_BYTES_V1,
     SEND_SPLIT_SENDER_BRANCH_MESSAGE_BYTES_V1, SEND_SPLIT_SENDER_BRANCH_V1,
-    STATE_HEAD_FRAME_VERSION_V1, STATE_LINEAGE_DOMAIN_V1, STATE_LINEAGE_MESSAGE_BYTES_V1,
+    SEND_TRANSITION_AFTER_OFFSET_V1, SEND_TRANSITION_AMOUNT_OFFSET_V1,
+    SEND_TRANSITION_ASSET_OFFSET_V1, SEND_TRANSITION_BEFORE_OFFSET_V1,
+    SEND_TRANSITION_CREDIT_OFFSET_V1, SEND_TRANSITION_MESSAGE_BYTES_V1,
+    SEND_TRANSITION_NETWORK_OFFSET_V1, SEND_TRANSITION_RECEIVER_OFFSET_V1,
+    SEND_TRANSITION_RELEASE_OFFSET_V1, SEND_TRANSITION_REQUEST_OFFSET_V1,
+    SEND_TRANSITION_SCALE_OFFSET_V1, STATE_CONTEXT_MESSAGE_BYTES_V1, STATE_HEAD_FRAME_VERSION_V1,
+    STATE_LINEAGE_DOMAIN_V1, STATE_LINEAGE_MESSAGE_BYTES_V1,
 };
 use crate::zk::offline_cash_v1::state_abi::{
     AMOUNT_WORD_START, CONTEXT_WORD_START, LINK_WORD_START, PARENT_0_WORD_START,
     PARENT_1_WORD_START, RELEASE_WORD_START, REQUEST_WORD_START, RESULT_WORD_START, SCALE_WORD,
-    SEMANTIC_WORD_START, STATE_ABI_WORDS, STATE_OPERATION_WORD, TRANSITION_WORD_START,
+    SEMANTIC_WORD_START, STATE_LEAF_ABI_WORDS, STATE_OPERATION_WORD, TRANSITION_WORD_START,
 };
 use crate::zk::offline_cash_v1::state_sha::{
     OfflineCashStateShaByteV1, OfflineCashStateShaConfigV1, OfflineCashStateShaWordV1,
 };
+use crate::zk::offline_cash_v1::state_transition::CONTEXT_DOMAIN;
 
 const BYTE_BITS: usize = 8;
 const BYTE_ROWS: usize = BYTE_BITS + 1;
@@ -515,7 +528,7 @@ fn optional_bytes<const N: usize>(value: Option<[u8; N]>) -> [Option<u8>; N] {
 }
 
 fn words_as_bytes<const N: usize>(
-    words: Option<&[u32; STATE_ABI_WORDS]>,
+    words: Option<&[u32; STATE_LEAF_ABI_WORDS]>,
     start: usize,
 ) -> [Option<u8>; N] {
     std::array::from_fn(|byte_index| {
@@ -527,7 +540,7 @@ fn assign_public_bytes_v1<const N: usize, F: PrimeField>(
     layouter: &mut impl Layouter<F>,
     config: &OfflineCashStateRelationConfigV1,
     label: &'static str,
-    words: Option<&[u32; STATE_ABI_WORDS]>,
+    words: Option<&[u32; STATE_LEAF_ABI_WORDS]>,
     word_cells: &[Cell],
     start: usize,
 ) -> Result<[AssignedStateByteV1; N], PlonkError> {
@@ -768,6 +781,158 @@ fn select_bytes_v1<const N: usize, F: PrimeField>(
     selected.try_into().map_err(|_| PlonkError::Synthesis)
 }
 
+fn constrain_send_equal_bytes_v1<F: PrimeField>(
+    layouter: &mut impl Layouter<F>,
+    config: &OfflineCashStateRelationConfigV1,
+    operation: Option<u32>,
+    operation_cell: Cell,
+    expected: &[AssignedStateByteV1],
+    actual: &[AssignedStateByteV1],
+) -> Result<(), PlonkError> {
+    if expected.len() != actual.len() {
+        return Err(PlonkError::Synthesis);
+    }
+    layouter.assign_region(
+        || "bind canonical SendSplit message bytes",
+        |mut region| {
+            for (row, (expected, actual)) in expected.iter().zip(actual).enumerate() {
+                config.q_select.enable(&mut region, row)?;
+                let op = region
+                    .assign_advice(
+                        config.operation,
+                        row,
+                        option_field::<F>(operation.map(u64::from)),
+                    )
+                    .cell();
+                region.constrain_equal(op, operation_cell);
+                let copied_expected = region
+                    .assign_advice(
+                        config.select_left,
+                        row,
+                        expected.value.map(|byte| F::from(u64::from(byte))),
+                    )
+                    .cell();
+                region.constrain_equal(copied_expected, expected.cell);
+                for column in [config.select_right, config.select_output] {
+                    let copied_actual = region
+                        .assign_advice(
+                            column,
+                            row,
+                            actual.value.map(|byte| F::from(u64::from(byte))),
+                        )
+                        .cell();
+                    region.constrain_equal(copied_actual, actual.cell);
+                }
+            }
+            Ok(())
+        },
+    )
+}
+
+#[derive(Clone, Copy)]
+struct SendStatementMessageOffsetsV1 {
+    release: usize,
+    network: usize,
+    asset: usize,
+    scale: usize,
+    amount: usize,
+    request: usize,
+    before: usize,
+    after: usize,
+    receiver: usize,
+    credit: usize,
+    transition: Option<usize>,
+}
+
+const SEND_TRANSITION_OFFSETS_V1: SendStatementMessageOffsetsV1 = SendStatementMessageOffsetsV1 {
+    release: SEND_TRANSITION_RELEASE_OFFSET_V1,
+    network: SEND_TRANSITION_NETWORK_OFFSET_V1,
+    asset: SEND_TRANSITION_ASSET_OFFSET_V1,
+    scale: SEND_TRANSITION_SCALE_OFFSET_V1,
+    amount: SEND_TRANSITION_AMOUNT_OFFSET_V1,
+    request: SEND_TRANSITION_REQUEST_OFFSET_V1,
+    before: SEND_TRANSITION_BEFORE_OFFSET_V1,
+    after: SEND_TRANSITION_AFTER_OFFSET_V1,
+    receiver: SEND_TRANSITION_RECEIVER_OFFSET_V1,
+    credit: SEND_TRANSITION_CREDIT_OFFSET_V1,
+    transition: None,
+};
+
+const SEND_SEMANTIC_OFFSETS_V1: SendStatementMessageOffsetsV1 = SendStatementMessageOffsetsV1 {
+    release: SEND_SEMANTIC_RELEASE_OFFSET_V1,
+    network: SEND_SEMANTIC_NETWORK_OFFSET_V1,
+    asset: SEND_SEMANTIC_ASSET_OFFSET_V1,
+    scale: SEND_SEMANTIC_SCALE_OFFSET_V1,
+    amount: SEND_SEMANTIC_AMOUNT_OFFSET_V1,
+    request: SEND_SEMANTIC_REQUEST_OFFSET_V1,
+    before: SEND_SEMANTIC_BEFORE_OFFSET_V1,
+    after: SEND_SEMANTIC_AFTER_OFFSET_V1,
+    receiver: SEND_SEMANTIC_RECEIVER_OFFSET_V1,
+    credit: SEND_SEMANTIC_CREDIT_OFFSET_V1,
+    transition: Some(SEND_SEMANTIC_TRANSITION_OFFSET_V1),
+};
+
+#[allow(clippy::too_many_arguments)]
+fn constrain_send_statement_message_v1<F: PrimeField>(
+    layouter: &mut impl Layouter<F>,
+    config: &OfflineCashStateRelationConfigV1,
+    operation: Option<u32>,
+    operation_cell: Cell,
+    message: &[AssignedStateByteV1],
+    offsets: SendStatementMessageOffsetsV1,
+    release: &[AssignedStateByteV1; DIGEST_BYTES],
+    network: &[AssignedStateByteV1],
+    asset: &[AssignedStateByteV1],
+    scale: &[AssignedStateByteV1; 4],
+    amount: &[AssignedStateByteV1; AMOUNT_BYTES],
+    request: &[AssignedStateByteV1; DIGEST_BYTES],
+    before: &[AssignedStateByteV1; DIGEST_BYTES],
+    after: &[AssignedStateByteV1; DIGEST_BYTES],
+    receiver: &[AssignedStateByteV1; DIGEST_BYTES],
+    credit: &[AssignedStateByteV1; DIGEST_BYTES],
+    transition: &[AssignedStateByteV1; DIGEST_BYTES],
+) -> Result<(), PlonkError> {
+    let bindings = [
+        (offsets.release, release.as_slice()),
+        (offsets.network, network),
+        (offsets.asset, asset),
+        (offsets.scale, scale.as_slice()),
+        (offsets.amount, amount.as_slice()),
+        (offsets.request, request.as_slice()),
+        (offsets.before, before.as_slice()),
+        (offsets.after, after.as_slice()),
+        (offsets.receiver, receiver.as_slice()),
+        (offsets.credit, credit.as_slice()),
+    ];
+    for (offset, expected) in bindings {
+        let actual = message
+            .get(offset..offset + expected.len())
+            .ok_or(PlonkError::Synthesis)?;
+        constrain_send_equal_bytes_v1(
+            layouter,
+            config,
+            operation,
+            operation_cell,
+            expected,
+            actual,
+        )?;
+    }
+    if let Some(offset) = offsets.transition {
+        let actual = message
+            .get(offset..offset + DIGEST_BYTES)
+            .ok_or(PlonkError::Synthesis)?;
+        constrain_send_equal_bytes_v1(
+            layouter,
+            config,
+            operation,
+            operation_cell,
+            transition,
+            actual,
+        )?;
+    }
+    Ok(())
+}
+
 fn assign_conservation_v1<F: PrimeField>(
     layouter: &mut impl Layouter<F>,
     config: &OfflineCashStateRelationConfigV1,
@@ -915,6 +1080,33 @@ fn begin_head_message<F: PrimeField>(domain: &[u8]) -> Vec<OfflineCashStateShaBy
     let mut message = begin_framed_message(domain);
     append_constant_field(&mut message, &STATE_HEAD_FRAME_VERSION_V1.to_le_bytes());
     message
+}
+
+fn state_context_message_v1<F: PrimeField>(
+    release: &[AssignedStateByteV1; DIGEST_BYTES],
+    network_id_frame: &[AssignedStateByteV1; NETWORK_ID_FRAME_BYTES_V1],
+    asset_id_frame: &[AssignedStateByteV1; ASSET_ID_FRAME_BYTES_V1],
+    scale: &[AssignedStateByteV1; 4],
+) -> Vec<OfflineCashStateShaByteV1<F>> {
+    let mut message = begin_framed_message(CONTEXT_DOMAIN);
+    for field in [
+        release.as_slice(),
+        network_id_frame.as_slice(),
+        asset_id_frame.as_slice(),
+        scale.as_slice(),
+    ] {
+        append_dynamic(&mut message, field);
+    }
+    message
+}
+
+fn private_raw_message_v1<F: PrimeField>(
+    bytes: &[AssignedStateByteV1],
+) -> Vec<OfflineCashStateShaByteV1<F>> {
+    bytes
+        .iter()
+        .map(|byte| OfflineCashStateShaByteV1::constrained(byte.value, byte.cell))
+        .collect()
 }
 
 fn balance_message_v1<F: PrimeField>(
@@ -1248,13 +1440,13 @@ fn bind_send_sha_digest_v1<F: PrimeField>(
 }
 
 pub(in crate::zk::offline_cash_v1) fn synthesize_relation_v1<F: PrimeField>(
-    words: Option<&[u32; STATE_ABI_WORDS]>,
+    words: Option<&[u32; STATE_LEAF_ABI_WORDS]>,
     witness: Option<&OfflineCashStatePrivateWitnessV1>,
     config: &OfflineCashStateRelationConfigV1,
     word_cells: &[Cell],
     layouter: &mut impl Layouter<F>,
 ) -> Result<(), PlonkError> {
-    if word_cells.len() != STATE_ABI_WORDS {
+    if word_cells.len() != STATE_LEAF_ABI_WORDS {
         return Err(PlonkError::Synthesis);
     }
     let operation = words.map(|words| words[STATE_OPERATION_WORD]);
@@ -1446,6 +1638,74 @@ pub(in crate::zk::offline_cash_v1) fn synthesize_relation_v1<F: PrimeField>(
         "STATE recipient key reference",
         witness.map(|w| w.recipient_key_reference),
     )?;
+    let network_id_frame = assign_private_bytes_v1(
+        layouter,
+        config,
+        "STATE canonical NetworkId frame",
+        witness.map(|w| w.network_id_frame),
+    )?;
+    let asset_id_frame = assign_private_bytes_v1(
+        layouter,
+        config,
+        "STATE canonical asset frame",
+        witness.map(|w| w.asset_id_frame),
+    )?;
+    let send_transition_message = assign_private_bytes_v1(
+        layouter,
+        config,
+        "STATE canonical SendSplit transition message",
+        witness.map(|w| w.send_transition_message),
+    )?;
+    let send_semantic_message = assign_private_bytes_v1(
+        layouter,
+        config,
+        "STATE canonical SendSplit semantic message",
+        witness.map(|w| w.send_semantic_message),
+    )?;
+    let network_id_payload = network_id_frame
+        .get(NORITO_FRAME_PAYLOAD_OFFSET_V1..)
+        .ok_or(PlonkError::Synthesis)?;
+    let asset_id_payload = asset_id_frame
+        .get(NORITO_FRAME_PAYLOAD_OFFSET_V1..)
+        .ok_or(PlonkError::Synthesis)?;
+    constrain_send_statement_message_v1(
+        layouter,
+        config,
+        operation,
+        word_cells[STATE_OPERATION_WORD],
+        &send_transition_message,
+        SEND_TRANSITION_OFFSETS_V1,
+        &release,
+        network_id_payload,
+        asset_id_payload,
+        &scale,
+        &transfer,
+        &request,
+        &parent_0,
+        &result,
+        &parent_1,
+        &link,
+        &transition,
+    )?;
+    constrain_send_statement_message_v1(
+        layouter,
+        config,
+        operation,
+        word_cells[STATE_OPERATION_WORD],
+        &send_semantic_message,
+        SEND_SEMANTIC_OFFSETS_V1,
+        &release,
+        network_id_payload,
+        asset_id_payload,
+        &scale,
+        &transfer,
+        &request,
+        &parent_0,
+        &result,
+        &parent_1,
+        &link,
+        &transition,
+    )?;
     for (label, binding) in [
         ("nonzero STATE wallet binding", &wallet),
         ("nonzero STATE guard device", &device),
@@ -1568,6 +1828,9 @@ pub(in crate::zk::offline_cash_v1) fn synthesize_relation_v1<F: PrimeField>(
             &transfer,
             &scale,
         ),
+        state_context_message_v1::<F>(&release, &network_id_frame, &asset_id_frame, &scale),
+        private_raw_message_v1::<F>(&send_transition_message),
+        private_raw_message_v1::<F>(&send_semantic_message),
     ];
     let expected_job_bytes = [
         BALANCE_HEAD_MESSAGE_BYTES_V1,
@@ -1580,6 +1843,9 @@ pub(in crate::zk::offline_cash_v1) fn synthesize_relation_v1<F: PrimeField>(
         RECEIVE_OPENING_MESSAGE_BYTES_V1,
         RECEIVE_TRANSITION_MESSAGE_BYTES_V1,
         RECEIVE_SEMANTIC_MESSAGE_BYTES_V1,
+        STATE_CONTEXT_MESSAGE_BYTES_V1,
+        SEND_TRANSITION_MESSAGE_BYTES_V1,
+        SEND_SEMANTIC_MESSAGE_BYTES_V1,
     ];
     if jobs
         .iter()
@@ -1639,6 +1905,30 @@ pub(in crate::zk::offline_cash_v1) fn synthesize_relation_v1<F: PrimeField>(
         operation,
         word_cells[STATE_OPERATION_WORD],
         &digests[9],
+        &semantic,
+    )?;
+    bind_send_sha_digest_v1(
+        layouter,
+        config,
+        operation,
+        word_cells[STATE_OPERATION_WORD],
+        &digests[10],
+        &context,
+    )?;
+    bind_send_sha_digest_v1(
+        layouter,
+        config,
+        operation,
+        word_cells[STATE_OPERATION_WORD],
+        &digests[11],
+        &transition,
+    )?;
+    bind_send_sha_digest_v1(
+        layouter,
+        config,
+        operation,
+        word_cells[STATE_OPERATION_WORD],
+        &digests[12],
         &semantic,
     )?;
     Ok(())

@@ -15,7 +15,7 @@ final class DetachedTransactionNativeBridgeTests: XCTestCase {
               "schema":"iroha.detached_transaction_scaffold.v1",
               "payload_signing_hash_hex":"\(hashA)",
               "authority":"sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV",
-              "network_id":"\(networkId.literal)",
+              "network_id":"\(networkId.noritoJSONLiteral)",
               "creation_time_ms":18446744073709551615,
               "time_to_live_ms":60000,
               "metadata":{"signed":-9223372036854775808,"unsigned":18446744073709551615,"nested":{"ok":true}},
@@ -47,7 +47,7 @@ final class DetachedTransactionNativeBridgeTests: XCTestCase {
         ] {
             let json = Data(
                 """
-                {"schema":"iroha.detached_transaction_scaffold.v1","payload_signing_hash_hex":"\(hashA)","authority":"source","network_id":"\(networkId.literal)","creation_time_ms":1,"time_to_live_ms":60000,"metadata":{},"entrypoint_hash_hex":"\(hashB)","executable":{"kind":"asset_transfer","asset_definition_id":"asset","asset_scope":\(scopeJSON),"source_asset_id":"asset#source","source_account_id":"source","destination_account_id":"destination","amount":"1.25"}}
+                {"schema":"iroha.detached_transaction_scaffold.v1","payload_signing_hash_hex":"\(hashA)","authority":"source","network_id":"\(networkId.noritoJSONLiteral)","creation_time_ms":1,"time_to_live_ms":60000,"metadata":{},"entrypoint_hash_hex":"\(hashB)","executable":{"kind":"asset_transfer","asset_definition_id":"asset","asset_scope":\(scopeJSON),"source_asset_id":"asset#source","source_account_id":"source","destination_account_id":"destination","amount":"1.25"}}
                 """.utf8
             )
             let inspection = try DetachedTransactionBridgeJSONCodec.decodeInspection(json)
@@ -61,7 +61,7 @@ final class DetachedTransactionNativeBridgeTests: XCTestCase {
 
     func testInspectionRejectsSchemaHashBase64AndScopeSubstitution() {
         let valid = """
-        {"schema":"iroha.detached_transaction_scaffold.v1","payload_signing_hash_hex":"\(hashA)","authority":"a","network_id":"\(networkId.literal)","creation_time_ms":1,"time_to_live_ms":60000,"metadata":{},"entrypoint_hash_hex":"\(hashB)","executable":{"kind":"contract_call","contract_address":"x","expected_code_hash":"hash:contract","entrypoint":"y","arguments_b64":null}}
+        {"schema":"iroha.detached_transaction_scaffold.v1","payload_signing_hash_hex":"\(hashA)","authority":"a","network_id":"\(networkId.noritoJSONLiteral)","creation_time_ms":1,"time_to_live_ms":60000,"metadata":{},"entrypoint_hash_hex":"\(hashB)","executable":{"kind":"contract_call","contract_address":"x","expected_code_hash":"hash:contract","entrypoint":"y","arguments_b64":null}}
         """
         let hostile = [
             valid.replacingOccurrences(of: "iroha.detached_transaction_scaffold.v1", with: "other"),
@@ -71,8 +71,12 @@ final class DetachedTransactionNativeBridgeTests: XCTestCase {
             valid.replacingOccurrences(of: "\"expected_code_hash\":\"hash:contract\"", with: "\"expected_code_hash\":\"\""),
             valid.replacingOccurrences(of: "\"kind\":\"contract_call\"", with: "\"kind\":\"ivm\""),
             valid.replacingOccurrences(of: "\"time_to_live_ms\":60000", with: "\"time_to_live_ms\":null"),
-            valid.replacingOccurrences(of: networkId.literal, with: networkId.literal.lowercased()),
-            valid.replacingOccurrences(of: networkId.literal, with: "network-label"),
+            valid.replacingOccurrences(
+                of: networkId.noritoJSONLiteral,
+                with: networkId.noritoJSONLiteral.lowercased()
+            ),
+            valid.replacingOccurrences(of: networkId.noritoJSONLiteral, with: networkId.literal),
+            valid.replacingOccurrences(of: networkId.noritoJSONLiteral, with: "network-label"),
             valid.replacingOccurrences(of: "\"schema\":", with: "\"future\":true,\"schema\":"),
             valid.replacingOccurrences(
                 of: "\"schema\":\"iroha.detached_transaction_scaffold.v1\"",

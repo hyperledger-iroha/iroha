@@ -17,16 +17,18 @@ fn compiled_profile_digest_mutations_v1() -> [fn(&mut CompiledPrivacyProfileV1);
     ]
 }
 #[test]
-fn zk_ace_is_unavailable_and_bootle_release_context_binds_every_profile_digest() {
+fn zk_ace_is_activatable_and_bootle_release_context_binds_every_profile_digest() {
     let zk_ace = PrivacyProtocolIdV1::ZkAcePqAuthorizationV0;
-    assert_eq!(
-        compiled_privacy_profile_v1(zk_ace),
-        Err(
-            crate::privacy_profiles::CompiledPrivacyProfileErrorV1::EngineUnavailable {
-                protocol_id: zk_ace,
-            }
-        )
-    );
+    let zk_ace_profile = compiled_privacy_profile_v1(zk_ace).expect("compiled ZK-ACE V2 profile");
+    for digest in [
+        *zk_ace_profile.parameter_id.as_bytes(),
+        *zk_ace_profile.parameter_digest.as_bytes(),
+        *zk_ace_profile.verifier_digest.as_bytes(),
+        *zk_ace_profile.statement_schema_digest.as_bytes(),
+        *zk_ace_profile.engine_manifest_digest.as_bytes(),
+    ] {
+        assert_ne!(digest, [0; 32]);
+    }
 
     let protocol_id = PrivacyProtocolIdV1::IrohaBootleLanternAnoncredV1;
     let profile = compiled_privacy_profile_v1(protocol_id).expect("compiled profile");
@@ -1415,20 +1417,27 @@ fn jindo_release_descriptor_does_not_condition_individual_s35_challenges_on_unit
 }
 
 #[test]
-fn zk_ace_release_stages_fail_closed_without_an_activatable_profile() {
+fn zk_ace_release_descriptor_pins_the_activatable_parallel_lane_profile() {
     let protocol_id = PrivacyProtocolIdV1::ZkAcePqAuthorizationV0;
     let descriptor = privacy_release_protocol_descriptor_v1(protocol_id);
-    assert!(descriptor.contains("activation=disabled"));
-    assert!(descriptor.contains("commitment-binding-ceiling=32-bits"));
+    assert!(descriptor.contains("activation=enabled"));
+    assert!(descriptor.contains("commitment=4-independent-length-framed-lane-domain-hashes"));
+    assert!(descriptor.contains("air=4-parallel-poseidon-lanes+complete-quadratic-x7"));
+    assert!(descriptor.contains("trace-width=136"));
+    assert!(descriptor.contains("proof-cap=1427158 exact bytes"));
+    assert!(compiled_privacy_profile_v1(protocol_id).is_ok());
+}
+
+#[test]
+#[ignore = "operator-only native construction of every 1.4 MiB ZK-ACE release proof"]
+fn zk_ace_release_stages_exercise_the_activatable_profile() {
+    let protocol_id = PrivacyProtocolIdV1::ZkAcePqAuthorizationV0;
     for case_kind in PrivacyReleaseCaseKindV1::ALL {
-        assert_eq!(
-            run_privacy_release_stage_v1(protocol_id, case_kind),
-            Err(PrivacyReleaseEvidenceErrorV1 {
-                protocol_id,
-                case_kind,
-                class: PrivacyReleaseEvidenceErrorClassV1::ProtocolUnavailable,
-            })
-        );
+        let evidence = run_privacy_release_stage_v1(protocol_id, case_kind)
+            .unwrap_or_else(|error| panic!("{case_kind:?}: {error:?}"));
+        assert_eq!(evidence.protocol_id, protocol_id);
+        assert_eq!(evidence.case_kind, case_kind);
+        assert_eq!(evidence.proof_artifacts[0].proof_bytes_ceiling, 1_427_158);
     }
 }
 

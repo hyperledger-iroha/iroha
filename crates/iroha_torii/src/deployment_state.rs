@@ -569,7 +569,7 @@ mod tests {
         let app = fixture_app(&authority, None, NonceFixture::U64(7));
         let alias: ContractAlias = "deploy::universal".parse().expect("contract alias");
         let previous = ContractAddress::derive(
-            &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
+            &"0000000000000000000000000000000000000000000000000000000000000001"
                 .parse()
                 .expect("canonical test network id"),
             &authority,
@@ -601,7 +601,7 @@ mod tests {
             chain_discriminant().to_string()
         );
         let new_address = ContractAddress::derive(
-            &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
+            &"0000000000000000000000000000000000000000000000000000000000000001"
                 .parse()
                 .expect("canonical test network id"),
             &authority,
@@ -620,7 +620,7 @@ mod tests {
         let authority = AccountId::new(authority_key.public_key().clone());
         let app = fixture_app(&authority, None, NonceFixture::U64(1));
         let previous = ContractAddress::derive(
-            &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
+            &"0000000000000000000000000000000000000000000000000000000000000001"
                 .parse()
                 .expect("canonical test network id"),
             &authority,

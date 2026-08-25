@@ -9,10 +9,14 @@
 use iroha_config::parameters::actual as config;
 use iroha_crypto::HashOf;
 use iroha_data_model::{
+    account::AccountId,
     asset::AssetDefinitionId,
     block::consensus::{LaneSettlementReceipt, NexusFeeReceipt, NexusFeeScheduleInputs},
     nexus::{DataSpaceId, FeeDebitSource, LaneId},
-    transaction::SignedTransaction,
+    transaction::{
+        FeeChargeKind, FeePaymentCharge, FeePaymentReceipt, SignedTransaction,
+        TransactionResultInner,
+    },
 };
 #[cfg(any(feature = "telemetry", test))]
 use iroha_primitives::bigint::BigInt;
@@ -238,6 +242,106 @@ pub struct PendingNexusFeeReceipt {
     /// Fee schedule inputs used to compute [`Self::fee_amount`].
     pub schedule: NexusFeeScheduleInputs,
 }
+/// One actual direct-settlement charge staged until its transaction's fee effects commit.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PendingDirectFeePaymentCharge {
+    /// Fee component successfully debited.
+    pub kind: FeeChargeKind,
+    /// Canonical asset definition debited.
+    pub fee_asset_id: AssetDefinitionId,
+    /// Asset scale used for the exact minor-unit projection.
+    pub fee_asset_scale: u32,
+    /// Exact successful debit quantity.
+    pub charged_quantity: Quantity,
+}
+/// Actual direct-settlement fee effects staged under one signed transaction hash.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PendingDirectFeePaymentReceipt {
+    /// Exact signed transaction whose fee debit committed.
+    pub transaction_hash: HashOf<SignedTransaction>,
+    /// Typed authority-account or sponsor-program source.
+    pub debit_source: FeeDebitSource,
+    /// Concrete account balance debited by settlement.
+    pub debited_account_id: AccountId,
+    /// Immutable sponsor revision, when sponsored.
+    pub sponsor_program_revision: Option<u64>,
+    /// Actual components keyed into canonical fee-kind order.
+    pub charges: BTreeMap<FeeChargeKind, PendingDirectFeePaymentCharge>,
+}
+impl PendingDirectFeePaymentReceipt {
+    /// Construct a pending receipt from its first successful charge.
+    #[must_use]
+    pub fn new(
+        transaction_hash: HashOf<SignedTransaction>,
+        debit_source: FeeDebitSource,
+        debited_account_id: AccountId,
+        sponsor_program_revision: Option<u64>,
+        charge: PendingDirectFeePaymentCharge,
+    ) -> Self {
+        Self {
+            transaction_hash,
+            debit_source,
+            debited_account_id,
+            sponsor_program_revision,
+            charges: BTreeMap::from([(charge.kind, charge)]),
+        }
+    }
+    /// Merge another actual component from the same atomic fee-payment operation.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error for a mismatched payer/source or duplicate fee kind.
+    pub fn record_charge(
+        &mut self,
+        transaction_hash: HashOf<SignedTransaction>,
+        debit_source: FeeDebitSource,
+        debited_account_id: AccountId,
+        sponsor_program_revision: Option<u64>,
+        charge: PendingDirectFeePaymentCharge,
+    ) -> Result<(), &'static str> {
+        if self.transaction_hash != transaction_hash
+            || self.debit_source != debit_source
+            || self.debited_account_id != debited_account_id
+            || self.sponsor_program_revision != sponsor_program_revision
+        {
+            return Err("direct fee components disagree on transaction or debit source");
+        }
+        if self.charges.insert(charge.kind, charge).is_some() {
+            return Err("direct fee components contain a duplicate fee kind");
+        }
+        Ok(())
+    }
+    /// Finalize the staged actual debit under its exact result and CommitQC carrier coordinates.
+    pub fn into_final_receipt(
+        self,
+        execution_outcome: &TransactionResultInner,
+        applied_block_height: u64,
+        applied_block_hash: HashOf<iroha_data_model::block::BlockHeader>,
+    ) -> Result<FeePaymentReceipt, iroha_data_model::transaction::FeePaymentReceiptError> {
+        let charges = self
+            .charges
+            .into_values()
+            .map(|charge| {
+                FeePaymentCharge::try_new(
+                    charge.kind,
+                    charge.fee_asset_id,
+                    charge.fee_asset_scale,
+                    charge.charged_quantity,
+                )
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        FeePaymentReceipt::try_new(
+            self.transaction_hash,
+            self.debit_source,
+            self.debited_account_id,
+            self.sponsor_program_revision,
+            charges,
+            execution_outcome,
+            applied_block_height,
+            applied_block_hash,
+        )
+    }
+}
 impl PendingNexusFeeReceipt {
     /// Bind the pending receipt to the finalized lane block coordinates.
     #[must_use]
@@ -281,6 +385,7 @@ impl PendingSettlement {
 pub struct SettlementAccumulator {
     records: BTreeMap<HashOf<SignedTransaction>, PendingSettlement>,
     nexus_fee_records: BTreeMap<HashOf<SignedTransaction>, PendingNexusFeeReceipt>,
+    direct_fee_payment_records: BTreeMap<HashOf<SignedTransaction>, PendingDirectFeePaymentReceipt>,
 }
 impl SettlementAccumulator {
     /// Record a settlement receipt for the given transaction hash.
@@ -294,6 +399,20 @@ impl SettlementAccumulator {
         record: PendingNexusFeeReceipt,
     ) {
         self.nexus_fee_records.insert(tx_hash, record);
+    }
+    /// Record one committed direct-settlement fee payment for the block result.
+    pub fn record_direct_fee_payment(
+        &mut self,
+        tx_hash: HashOf<SignedTransaction>,
+        record: PendingDirectFeePaymentReceipt,
+    ) {
+        assert_eq!(tx_hash, record.transaction_hash);
+        assert!(
+            self.direct_fee_payment_records
+                .insert(tx_hash, record)
+                .is_none(),
+            "a block cannot commit two direct fee receipts for one signed transaction"
+        );
     }
     /// Iterate accumulated Nexus fee receipts without draining them.
     pub fn nexus_fee_records(
@@ -311,9 +430,17 @@ impl SettlementAccumulator {
     ) -> BTreeMap<HashOf<SignedTransaction>, PendingNexusFeeReceipt> {
         core::mem::take(&mut self.nexus_fee_records)
     }
+    /// Drain actual direct-settlement fee payments for result-leaf attachment.
+    pub fn drain_direct_fee_payments(
+        &mut self,
+    ) -> BTreeMap<HashOf<SignedTransaction>, PendingDirectFeePaymentReceipt> {
+        core::mem::take(&mut self.direct_fee_payment_records)
+    }
     /// Whether the accumulator currently stores no receipts.
     pub fn is_empty(&self) -> bool {
-        self.records.is_empty() && self.nexus_fee_records.is_empty()
+        self.records.is_empty()
+            && self.nexus_fee_records.is_empty()
+            && self.direct_fee_payment_records.is_empty()
     }
 }
 #[cfg(test)]

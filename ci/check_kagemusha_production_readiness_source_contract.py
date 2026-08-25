@@ -416,7 +416,7 @@ def static_errors(overrides: dict[str, str] | None = None) -> list[str]:
                 SCHEMA_GOLDEN,
             )
         ),
-        "Rust ABI-21/V4 corridor",
+        "Rust bridge ABI-22 / Kagemusha data ABI V4 corridor",
         errors,
         *RETIRED_RECURSIVE_LIFECYCLE_TYPES,
         *RETIRED_RECURSIVE_V3_MARKERS,

@@ -9995,7 +9995,7 @@ mod tests {
         let state = test_state();
         let authority = (*ALICE_ID).clone();
         let contract_address = ContractAddress::derive(
-            &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
+            &"0000000000000000000000000000000000000000000000000000000000000001"
                 .parse()
                 .expect("canonical test network id"),
             &authority,
@@ -10037,7 +10037,7 @@ mod tests {
         let authority = (*ALICE_ID).clone();
         let benefit_dataspace = DataSpaceId::new(42);
         let contract_address = ContractAddress::derive(
-            &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
+            &"0000000000000000000000000000000000000000000000000000000000000001"
                 .parse()
                 .expect("canonical test network id"),
             &authority,
@@ -10076,7 +10076,7 @@ mod tests {
         let dynamic_dataspace =
             crate::sns::dataspace_id_for_sns_alias("is").expect("dynamic dataspace id");
         let contract_address = ContractAddress::derive(
-            &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
+            &"0000000000000000000000000000000000000000000000000000000000000001"
                 .parse()
                 .expect("canonical test network id"),
             &authority,
@@ -10115,7 +10115,7 @@ mod tests {
         let authority = (*ALICE_ID).clone();
         let dynamic_dataspace = DataSpaceId::new(4_242);
         let contract_address = ContractAddress::derive(
-            &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
+            &"0000000000000000000000000000000000000000000000000000000000000001"
                 .parse()
                 .expect("canonical test network id"),
             &authority,
@@ -10148,7 +10148,7 @@ mod tests {
         let state = test_state();
         let authority = (*ALICE_ID).clone();
         let contract_address = ContractAddress::derive(
-            &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
+            &"0000000000000000000000000000000000000000000000000000000000000001"
                 .parse()
                 .expect("canonical test network id"),
             &authority,
@@ -10198,7 +10198,7 @@ mod tests {
         let dynamic_dataspace =
             crate::sns::dataspace_id_for_sns_alias("is").expect("dynamic dataspace id");
         let contract_address = ContractAddress::derive(
-            &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
+            &"0000000000000000000000000000000000000000000000000000000000000001"
                 .parse()
                 .expect("canonical test network id"),
             &authority,
@@ -10242,7 +10242,7 @@ mod tests {
         let state = test_state();
         let authority = (*ALICE_ID).clone();
         let contract_address = ContractAddress::derive(
-            &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
+            &"0000000000000000000000000000000000000000000000000000000000000001"
                 .parse()
                 .expect("canonical test network id"),
             &authority,
@@ -10269,7 +10269,7 @@ mod tests {
         let state = test_state();
         let authority = (*ALICE_ID).clone();
         let contract_address = ContractAddress::derive(
-            &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
+            &"0000000000000000000000000000000000000000000000000000000000000001"
                 .parse()
                 .expect("canonical test network id"),
             &authority,
@@ -10298,7 +10298,7 @@ mod tests {
         let state = test_state();
         let authority = (*ALICE_ID).clone();
         let contract_address = ContractAddress::derive(
-            &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
+            &"0000000000000000000000000000000000000000000000000000000000000001"
                 .parse()
                 .expect("canonical test network id"),
             &authority,
@@ -10338,7 +10338,7 @@ mod tests {
         let mut state = test_state();
         let authority = (*ALICE_ID).clone();
         let contract_address = ContractAddress::derive(
-            &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
+            &"0000000000000000000000000000000000000000000000000000000000000001"
                 .parse()
                 .expect("canonical test network id"),
             &authority,

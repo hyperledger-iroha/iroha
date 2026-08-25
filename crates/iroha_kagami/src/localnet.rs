@@ -5197,10 +5197,7 @@ fn write_client_config(
     let chain_discriminant_line = chain_discriminant.map_or_else(String::new, |value| {
         format!("chain_discriminant = {value}\n")
     });
-    let network_id = norito::literal::format(
-        "hash",
-        &genesis_expected_hash.to_string().to_ascii_uppercase(),
-    );
+    let network_id = genesis_expected_hash.to_string();
     let rendered = format!(
         concat!(
             "chain = \"{chain}\"\n",
@@ -8344,12 +8341,13 @@ mod tests {
         let tmp = tempfile::tempdir().expect("tmp dir");
         let host =
             CanonicalHost::parse(DEFAULT_PUBLIC_HOST, "--public-host").expect("canonicalize host");
+        let genesis_hash = Hash::prehashed([0x42; Hash::LENGTH]);
         write_client_config(
             tmp.path(),
             8080,
             &host,
             DEFAULT_CHAIN_ID,
-            HashOf::from_untyped_unchecked(Hash::prehashed([0x42; Hash::LENGTH])),
+            HashOf::from_untyped_unchecked(genesis_hash),
             None,
             &localnet_client_identity(None, false).expect("default client"),
         )
@@ -8364,7 +8362,7 @@ mod tests {
             .expect("network id")
             .parse::<NetworkId>()
             .expect("canonical network id");
-        assert_eq!(network_id.as_bytes(), &[0x42; Hash::LENGTH]);
+        assert_eq!(network_id.as_bytes(), genesis_hash.as_ref());
         assert_eq!(
             value
                 .get("torii_url")

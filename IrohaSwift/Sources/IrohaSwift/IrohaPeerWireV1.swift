@@ -7,6 +7,7 @@ public enum IrohaPeerWireProfileV1: UInt16, CaseIterable, Sendable {
     /// Reserved on the wire so a zero-filled or omitted profile is never accepted.
     case reject = 0
     case kagemusha = 2
+    case offlineCashV1 = 3
 }
 
 /// Wire-stable transfer phases carried by an `IPM1` peer message.
@@ -28,6 +29,7 @@ public extension IrohaPeerWireProfileV1 {
         switch self {
         case .reject: return 0
         case .kagemusha: return 0x0102
+        case .offlineCashV1: return 0x0100
         }
     }
 }
@@ -68,32 +70,42 @@ public struct IrohaPeerWireLimitsV1: Equatable, Sendable {
     /// portable receiver-lineage offer on the smallest shared NFC rail. Text
     /// and static-QR codecs retain their independent, smaller rail limits.
     public static let maximumKagemushaProfileBytes = 24_576
+    /// Largest single Offline Cash V1 peer message. The 12,288-byte value in
+    /// the protocol is an aggregate text-session cap, not a per-message cap.
+    public static let maximumOfflineCashProfileBytes =
+        OfflineCashPeerAdapterV1.maximumPaymentTextBytes
 
     public let maximumCanonicalBytes: Int
     public let maximumKagemushaEncodedBytes: Int
+    public let maximumOfflineCashEncodedBytes: Int
 
     public init(
         maximumCanonicalBytes: Int = 32 * 1024,
-        maximumKagemushaEncodedBytes: Int = Self.maximumKagemushaProfileBytes
+        maximumKagemushaEncodedBytes: Int = Self.maximumKagemushaProfileBytes,
+        maximumOfflineCashEncodedBytes: Int = Self.maximumOfflineCashProfileBytes
     ) {
         precondition(
             Self.areValid(
                 maximumCanonicalBytes: maximumCanonicalBytes,
-                maximumKagemushaEncodedBytes: maximumKagemushaEncodedBytes
+                maximumKagemushaEncodedBytes: maximumKagemushaEncodedBytes,
+                maximumOfflineCashEncodedBytes: maximumOfflineCashEncodedBytes
             )
         )
         self.maximumCanonicalBytes = maximumCanonicalBytes
         self.maximumKagemushaEncodedBytes = maximumKagemushaEncodedBytes
+        self.maximumOfflineCashEncodedBytes = maximumOfflineCashEncodedBytes
     }
 
     public static let peerV1 = IrohaPeerWireLimitsV1()
 
     static func areValid(
         maximumCanonicalBytes: Int,
-        maximumKagemushaEncodedBytes: Int
+        maximumKagemushaEncodedBytes: Int,
+        maximumOfflineCashEncodedBytes: Int = Self.maximumOfflineCashProfileBytes
     ) -> Bool {
         (1...(32 * 1_024)).contains(maximumCanonicalBytes) &&
-            (1...maximumKagemushaProfileBytes).contains(maximumKagemushaEncodedBytes)
+            (1...maximumKagemushaProfileBytes).contains(maximumKagemushaEncodedBytes) &&
+            (1...maximumOfflineCashProfileBytes).contains(maximumOfflineCashEncodedBytes)
     }
 
     public func maximumEncodedBytes(for profile: IrohaPeerWireProfileV1) throws -> Int {
@@ -102,6 +114,33 @@ public struct IrohaPeerWireLimitsV1: Equatable, Sendable {
             throw IrohaPeerWireMessageErrorV1.invalidProfile(profile.rawValue)
         case .kagemusha:
             return maximumKagemushaEncodedBytes
+        case .offlineCashV1:
+            return maximumOfflineCashEncodedBytes
+        }
+    }
+
+    /// Kind-aware encoded-body ceiling. Offline Cash V1 has three distinct
+    /// canonical text maxima and must never inherit the aggregate session cap.
+    public func maximumEncodedBytes(
+        for profile: IrohaPeerWireProfileV1,
+        kind: IrohaPeerWireKindV1
+    ) throws -> Int {
+        switch profile {
+        case .reject:
+            throw IrohaPeerWireMessageErrorV1.invalidProfile(profile.rawValue)
+        case .kagemusha:
+            return maximumKagemushaEncodedBytes
+        case .offlineCashV1:
+            let protocolMaximum: Int
+            switch kind {
+            case .receiveRequest:
+                protocolMaximum = OfflineCashPeerAdapterV1.maximumPaymentRequestTextBytes
+            case .payment:
+                protocolMaximum = OfflineCashPeerAdapterV1.maximumPaymentTextBytes
+            case .acknowledgement:
+                protocolMaximum = OfflineCashPeerAdapterV1.maximumAcknowledgementTextBytes
+            }
+            return min(maximumOfflineCashEncodedBytes, protocolMaximum)
         }
     }
 }
@@ -245,7 +284,7 @@ public struct IrohaPeerWireMessageV1: Equatable, Sendable {
             kind: kind,
             canonicalPayload: canonicalPayload
         )
-        let maximumEncoded = try limits.maximumEncodedBytes(for: profile)
+        let maximumEncoded = try limits.maximumEncodedBytes(for: profile, kind: kind)
         let selected = try Self.selectEncoding(
             canonicalPayload,
             policy: compressionPolicy,
@@ -324,7 +363,7 @@ public struct IrohaPeerWireMessageV1: Equatable, Sendable {
                 maximum: limits.maximumCanonicalBytes
             )
         }
-        let maximumEncoded = try limits.maximumEncodedBytes(for: profile)
+        let maximumEncoded = try limits.maximumEncodedBytes(for: profile, kind: kind)
         guard encodedLength <= maximumEncoded else {
             throw IrohaPeerWireMessageErrorV1.encodedLengthOutOfRange(
                 actual: encodedLength,
@@ -422,11 +461,15 @@ public struct IrohaPeerWireMessageV1: Equatable, Sendable {
         kind: IrohaPeerWireKindV1,
         canonicalPayload: Data
     ) throws {
+        if profile == .offlineCashV1 {
+            try validateOfflineCashPeerText(canonicalPayload, kind: kind)
+            return
+        }
         guard profile == .kagemusha else { return }
         do {
             // Transport acceptance is deliberately native-independent:
             // canonical compact Norito framing, checksum, and the exact
-            // kind-specific ABI-21 schema. Deeper semantic validation remains
+            // kind-specific ABI-22 schema. Deeper semantic validation remains
             // in IrohaPeerKagemushaAdapterV1/KagemushaPeerPayload.
             try KagemushaRecursiveSpend.requireArchive(
                 canonicalPayload,
@@ -436,6 +479,76 @@ public struct IrohaPeerWireMessageV1: Equatable, Sendable {
         } catch {
             throw IrohaPeerWireMessageErrorV1.invalidCanonicalPayload(
                 profile: profile,
+                kind: kind
+            )
+        }
+    }
+
+    private static func validateOfflineCashPeerText(
+        _ canonicalPayload: Data,
+        kind: IrohaPeerWireKindV1
+    ) throws {
+        let textMaximum: Int
+        let rawMaximum: Int
+        let schema: String
+        let requiredPadding: Int
+        switch kind {
+        case .receiveRequest:
+            textMaximum = OfflineCashPeerAdapterV1.maximumPaymentRequestTextBytes
+            rawMaximum = OfflineCashPaymentRequestV1.maximumCanonicalBytes
+            schema =
+                "iroha_data_model::offline::offline_cash_v1::OfflineCashPaymentRequestV1"
+            requiredPadding = 8
+        case .payment:
+            textMaximum = OfflineCashPeerAdapterV1.maximumPaymentTextBytes
+            rawMaximum = OfflineCashPaymentV1.maximumCanonicalBytes
+            schema = "iroha_data_model::offline::offline_cash_v1::OfflineCashPaymentV1"
+            requiredPadding = 8
+        case .acknowledgement:
+            textMaximum = OfflineCashPeerAdapterV1.maximumAcknowledgementTextBytes
+            rawMaximum = OfflineCashAcknowledgementV1.maximumCanonicalBytes
+            schema =
+                "iroha_data_model::offline::offline_cash_v1::OfflineCashAcknowledgementV1"
+            requiredPadding = 0
+        }
+        guard canonicalPayload.count <= textMaximum,
+              let text = String(data: canonicalPayload, encoding: .utf8),
+              Data(text.utf8) == canonicalPayload,
+              text.hasPrefix(OfflineCashPeerAdapterV1.textPrefix) else {
+            throw IrohaPeerWireMessageErrorV1.invalidCanonicalPayload(
+                profile: .offlineCashV1,
+                kind: kind
+            )
+        }
+        let body = String(text.dropFirst(OfflineCashPeerAdapterV1.textPrefix.count))
+        let allowed = CharacterSet(charactersIn:
+            "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_"
+        )
+        guard !body.isEmpty,
+              body.unicodeScalars.allSatisfy({ allowed.contains($0) }) else {
+            throw IrohaPeerWireMessageErrorV1.invalidCanonicalPayload(
+                profile: .offlineCashV1,
+                kind: kind
+            )
+        }
+        let padding = String(repeating: "=", count: (4 - body.utf8.count % 4) % 4)
+        let standard = body.replacingOccurrences(of: "-", with: "+")
+            .replacingOccurrences(of: "_", with: "/") + padding
+        guard let decoded = Data(base64Encoded: standard),
+              decoded.count <= rawMaximum,
+              decoded.base64EncodedString()
+                .replacingOccurrences(of: "+", with: "-")
+                .replacingOccurrences(of: "/", with: "_")
+                .replacingOccurrences(of: "=", with: "") == body,
+              let archive = noritoDecodeFrame(decoded),
+              archive.header.schema == noritoSchemaHash(forTypeName: schema),
+              archive.header.compression == .none,
+              archive.header.flags == NoritoHeader.compactLen,
+              archive.paddingLength == requiredPadding,
+              !archive.payload.isEmpty,
+              archive.header.encode() == decoded.prefix(NoritoHeader.encodedLength) else {
+            throw IrohaPeerWireMessageErrorV1.invalidCanonicalPayload(
+                profile: .offlineCashV1,
                 kind: kind
             )
         }

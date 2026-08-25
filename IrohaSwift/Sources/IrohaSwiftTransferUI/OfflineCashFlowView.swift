@@ -82,7 +82,7 @@ public struct IrohaOfflineTransferTransportPicker: View {
 
     private func subtitle(for kind: IrohaOfflineTransferTransportKind) -> String {
         switch kind {
-        case .qr: return "Show or scan a canonical ABI-21 payment stream."
+        case .qr: return "Show or scan a canonical Kagemusha V4 payment stream."
         case .nfc: return "Tap phones for an authenticated local handoff."
         case .nearby: return "Pair nearby phones with the matching picture."
         }

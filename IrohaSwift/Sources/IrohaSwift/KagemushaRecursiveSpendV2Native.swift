@@ -29,23 +29,6 @@ extension NoritoNativeBridge {
         UInt64,
         UnsafeMutablePointer<UnsafeMutablePointer<UInt8>?>?, UnsafeMutablePointer<CUnsignedLong>?
     ) -> Int32
-    private typealias KagemushaRecipientLineageQueryCreateV2Fn = @convention(c) (
-        UnsafePointer<UInt8>?, CUnsignedLong,
-        UInt16,
-        UnsafePointer<UInt8>?, CUnsignedLong,
-        UnsafePointer<UInt8>?, CUnsignedLong,
-        UnsafePointer<UInt8>?, CUnsignedLong,
-        UInt64,
-        UnsafeMutablePointer<UnsafeMutablePointer<UInt8>?>?, UnsafeMutablePointer<CUnsignedLong>?
-    ) -> Int32
-    private typealias KagemushaRecipientLineageVerifyV2Fn = @convention(c) (
-        UnsafePointer<UInt8>?, CUnsignedLong,
-        UnsafePointer<UInt8>?, CUnsignedLong,
-        UInt64, UInt64,
-        UnsafePointer<UInt8>?, CUnsignedLong,
-        UnsafeMutablePointer<UnsafeMutablePointer<UInt8>?>?, UnsafeMutablePointer<CUnsignedLong>?,
-        UnsafeMutablePointer<UnsafeMutablePointer<UInt8>?>?, UnsafeMutablePointer<CUnsignedLong>?
-    ) -> Int32
     private typealias KagemushaRecipientOfferProjectV2Fn = @convention(c) (
         UnsafePointer<UInt8>?, CUnsignedLong,
         UnsafeMutablePointer<UnsafeMutablePointer<UInt8>?>?, UnsafeMutablePointer<CUnsignedLong>?,
@@ -348,136 +331,6 @@ extension NoritoNativeBridge {
             archive: requestArchive,
             milliseconds: verifiedAtMilliseconds
         )
-    }
-
-    func kagemushaRecipientLineageQueryCreateV2(
-        chainDiscriminant: UInt16,
-        networkID: NetworkId,
-        recipient: Data,
-        receiverDeviceID: Data,
-        assetDefinitionID: Data,
-        trustedCheckpointHeight: UInt64
-    ) throws -> Data? {
-        let networkIDLiteral = Data(networkID.literal.utf8)
-        guard !recipient.isEmpty, recipient.count <= 512,
-              !receiverDeviceID.isEmpty, receiverDeviceID.count <= 128,
-              !assetDefinitionID.isEmpty, assetDefinitionID.count <= 512,
-              trustedCheckpointHeight > 0 else {
-            throw NativeBridgeError.kagemushaProve
-        }
-        #if canImport(Darwin)
-        guard let function = resolveKagemushaV2Symbol(
-            "connect_norito_kagemusha_recipient_lineage_query_create_v2",
-            as: KagemushaRecipientLineageQueryCreateV2Fn.self
-        ) else { return nil }
-        var output: UnsafeMutablePointer<UInt8>?
-        var outputLength: CUnsignedLong = 0
-        let status = networkIDLiteral.withUnsafeBytes { networkBuffer in
-            recipient.withUnsafeBytes { recipientBuffer in
-                receiverDeviceID.withUnsafeBytes { deviceBuffer in
-                    assetDefinitionID.withUnsafeBytes { assetBuffer in
-                        function(
-                            networkBuffer.bindMemory(to: UInt8.self).baseAddress,
-                            CUnsignedLong(networkBuffer.count),
-                            chainDiscriminant,
-                            recipientBuffer.bindMemory(to: UInt8.self).baseAddress,
-                            CUnsignedLong(recipientBuffer.count),
-                            deviceBuffer.bindMemory(to: UInt8.self).baseAddress,
-                            CUnsignedLong(deviceBuffer.count),
-                            assetBuffer.bindMemory(to: UInt8.self).baseAddress,
-                            CUnsignedLong(assetBuffer.count),
-                            trustedCheckpointHeight,
-                            &output,
-                            &outputLength
-                        )
-                    }
-                }
-            }
-        }
-        let result = try copyKagemushaV2Output(
-            status: status,
-            pointer: output,
-            length: outputLength
-        )
-        guard result.map({ !$0.isEmpty && $0.count
-            <= KagemushaRecipientLineageQueryV2.maximumArchiveBytes }) ?? true else {
-            throw NativeBridgeError.kagemushaProve
-        }
-        return result
-        #else
-        return nil
-        #endif
-    }
-
-    func kagemushaRecipientRegistrationLineageVerifyV2(
-        requestArchive: Data,
-        lineageArchive: Data,
-        verifiedAtMilliseconds: UInt64,
-        trustedCheckpointHeight: UInt64,
-        trustedCheckpointContextID: Data
-    ) throws -> (lineage: Data, promotedCheckpoint: Data)? {
-        #if canImport(Darwin)
-        guard verifiedAtMilliseconds > 0,
-              trustedCheckpointHeight > 0,
-              !requestArchive.isEmpty,
-              requestArchive.count <= KagemushaRecursiveSpend.maximumPeerArchiveBytesV2,
-              !lineageArchive.isEmpty,
-              lineageArchive.count <= KagemushaRecipientRegistrationLineage.maximumArchiveBytes,
-              trustedCheckpointContextID.count == 32,
-              trustedCheckpointContextID.contains(where: { $0 != 0 }) else {
-            throw NativeBridgeError.kagemushaProve
-        }
-        guard let function = resolveKagemushaV2Symbol(
-            "connect_norito_kagemusha_recipient_registration_lineage_verify_v2",
-            as: KagemushaRecipientLineageVerifyV2Fn.self
-        ), let freeFunction = resolveKagemushaV2Symbol(
-            "connect_norito_free",
-            as: KagemushaV2FreeFn.self
-        ) else { return nil }
-        var lineageOutput: UnsafeMutablePointer<UInt8>?
-        var lineageOutputLength: CUnsignedLong = 0
-        var checkpointOutput: UnsafeMutablePointer<UInt8>?
-        var checkpointOutputLength: CUnsignedLong = 0
-        let status = requestArchive.withUnsafeBytes { requestBuffer in
-            lineageArchive.withUnsafeBytes { lineageBuffer in
-                trustedCheckpointContextID.withUnsafeBytes { contextBuffer in
-                    function(
-                        requestBuffer.bindMemory(to: UInt8.self).baseAddress,
-                        CUnsignedLong(requestBuffer.count),
-                        lineageBuffer.bindMemory(to: UInt8.self).baseAddress,
-                        CUnsignedLong(lineageBuffer.count),
-                        verifiedAtMilliseconds,
-                        trustedCheckpointHeight,
-                        contextBuffer.bindMemory(to: UInt8.self).baseAddress,
-                        CUnsignedLong(contextBuffer.count),
-                        &lineageOutput,
-                        &lineageOutputLength,
-                        &checkpointOutput,
-                        &checkpointOutputLength
-                    )
-                }
-            }
-        }
-        defer {
-            if let lineageOutput { freeFunction(lineageOutput) }
-            if let checkpointOutput { freeFunction(checkpointOutput) }
-        }
-        if let error = NativeBridgeError.fromStatus(status) { throw error }
-        guard let lineageOutput,
-              lineageOutputLength > 0,
-              lineageOutputLength
-                <= CUnsignedLong(KagemushaRecipientRegistrationLineage.maximumArchiveBytes),
-              let checkpointOutput,
-              checkpointOutputLength == 40 else {
-            throw NativeBridgeError.kagemushaProve
-        }
-        return (
-            Data(bytes: lineageOutput, count: Int(lineageOutputLength)),
-            Data(bytes: checkpointOutput, count: 40)
-        )
-        #else
-        return nil
-        #endif
     }
 
     func kagemushaRecipientReceiveOfferCreateV2(
@@ -788,9 +641,12 @@ extension NoritoNativeBridge {
               let rawSignature,
               rawSignatureLength == CUnsignedLong(KagemushaDeviceSignatureV2.rawByteCount),
               let authenticatorData,
-              (KagemushaRecursiveSpend.minimumIosAppAttestAuthenticatorDataBytesV2...
-                  KagemushaRecursiveSpend.maximumIosAppAttestAuthenticatorDataBytesV2)
-                .contains(Int(authenticatorDataLength)) else {
+              authenticatorDataLength >= CUnsignedLong(
+                  KagemushaRecursiveSpend.minimumIosAppAttestAuthenticatorDataBytesV2
+              ),
+              authenticatorDataLength <= CUnsignedLong(
+                  KagemushaRecursiveSpend.maximumIosAppAttestAuthenticatorDataBytesV2
+              ) else {
             throw NativeBridgeError.kagemushaProve
         }
         return (

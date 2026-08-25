@@ -24,7 +24,9 @@ mod model {
     ///
     /// Unlike [`ChainId`], this value is not an operator-selected label. Distinct genesis
     /// headers necessarily produce distinct network identities, so signed protocol messages can
-    /// use this type as an exact-lineage domain separator.
+    /// use this type as an exact-lineage domain separator. Public text uses exactly 64 lowercase
+    /// hexadecimal characters with the marker bit set; Norito JSON uses the checksummed hash
+    /// literal inherited from [`HashOf`].
     #[derive(Debug, Display, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, IntoSchema)]
     #[repr(transparent)]
     #[schema(transparent)]
@@ -63,9 +65,20 @@ mod model {
         }
     }
     impl core::str::FromStr for NetworkId {
-        type Err = iroha_crypto::error::ParseError;
+        type Err = ParseError;
         fn from_str(value: &str) -> Result<Self, Self::Err> {
-            value.parse::<HashOf<BlockHeader>>().map(Self::from)
+            const INVALID_NETWORK_ID: &str = "NetworkId must be exactly 64 lowercase hexadecimal characters with its marker bit set";
+            if value.len() != iroha_crypto::Hash::LENGTH * 2
+                || !value
+                    .bytes()
+                    .all(|byte| byte.is_ascii_digit() || matches!(byte, b'a'..=b'f'))
+            {
+                return Err(ParseError::new(INVALID_NETWORK_ID));
+            }
+            value
+                .parse::<HashOf<BlockHeader>>()
+                .map(Self::from)
+                .map_err(|_| ParseError::new(INVALID_NETWORK_ID))
         }
     }
     #[cfg(feature = "json")]
@@ -476,6 +489,25 @@ mod tests {
                 .expect("text roundtrip"),
             network_id
         );
+        assert_eq!(
+            network_id.to_string(),
+            "a5".repeat(iroha_crypto::Hash::LENGTH)
+        );
+    }
+    #[test]
+    fn network_id_text_rejects_noncanonical_or_unmarked_literals() {
+        let canonical = "a5".repeat(iroha_crypto::Hash::LENGTH);
+        let uppercase = canonical.to_ascii_uppercase();
+        let checksummed = format!("hash:{uppercase}#0000");
+        let prefixed = format!("0x{canonical}");
+        let unmarked = "a4".repeat(iroha_crypto::Hash::LENGTH);
+        let short = "a5".repeat(iroha_crypto::Hash::LENGTH - 1);
+        for invalid in [uppercase, checksummed, prefixed, unmarked, short] {
+            assert!(
+                invalid.parse::<NetworkId>().is_err(),
+                "noncanonical NetworkId must fail: {invalid}"
+            );
+        }
     }
     #[cfg(feature = "json")]
     #[test]

@@ -13,9 +13,9 @@ public sealed class ToriiRuntimeGovernanceAuthenticationTests
     private const string AccountId =
         "sorauﾛ1NｲﾘｳdPBeｼRoｸQ2ﾔgｼQqeｶﾍｽﾁhRW2ｺｿZ9ﾕｦUﾅRX5NJYH53";
     private const string ExactNetworkIdLiteral =
-        "hash:32C903E5B3497E34C2B844EBFE8A39C19E6CF8F95D44C1FFB8BA9DCB42F91149#A2F0";
+        "32c903e5b3497e34c2b844ebfe8a39c19e6cf8f95d44c1ffb8ba9dcb42f91149";
     private const string ForeignNetworkIdLiteral =
-        "hash:82531CE8EAE8BFF6BEECA4698BFD13A3BC8BEC5F0EE0D23D428C97FC17AB0F3B#3E94";
+        "82531ce8eae8bff6beeca4698bfd13a3bc8bec5f0ee0d23d428c97fc17ab0f3b";
     private static readonly byte[] PrivateKeySeed = Convert.FromHexString(
         "616e64726f69642d666978747572652d7369676e696e672d6b65792d30313032");
 

@@ -79,7 +79,7 @@ public enum KagemushaPeerTransportContract {
 
 /// A canonical, decoded Kagemusha peer archive.
 public enum KagemushaPeerPayload: Equatable, Sendable {
-    /// ABI-21 carries the whole portable offer (signed request, reusable
+    /// Kagemusha V4 carries the whole portable offer (signed request, reusable
     /// lineage, and publisher checkpoint envelope) under wire kind 1.
     case receiveRequest(KagemushaRecipientReceiveOfferV2)
     case payment(KagemushaRecursiveSpendPeerPaymentV4)

@@ -31,10 +31,10 @@ import org.hyperledger.iroha.sdk.core.model.NetworkId
 /** Cross-SDK checks for the Rust-owned Musubi first-release JSON fixture. */
 class MusubiSdkV1FixtureTest {
     private val networkId = NetworkId.parse(
-        "hash:32C903E5B3497E34C2B844EBFE8A39C19E6CF8F95D44C1FFB8BA9DCB42F91149#A2F0",
+        "32c903e5b3497e34c2b844ebfe8a39c19e6cf8f95d44c1ffb8ba9dcb42f91149",
     )
     private val otherNetworkId = NetworkId.parse(
-        "hash:0E5751C026E543B2E8AB2EB06099DAA1D1E5DF47778F7787FAAB45CDF12FE3A9#6A22",
+        "0e5751c026e543b2e8ab2eb06099daa1d1e5df47778f7787faab45cdf12fe3a9",
     )
     private val keyPair = KeyPairGenerator.getInstance("Ed25519").generateKeyPair()
     private val accountId = keyPair.public.encoded.let { encoded ->
@@ -278,7 +278,7 @@ class MusubiSdkV1FixtureTest {
             ),
         )
         val client = MusubiToriiClientV1.builder()
-            .baseUri(URI.create("http://localhost:8080"))
+            .baseUri(URI.create("https://localhost:8080"))
             .executor(executor)
             .localSigningContext(LocalSigningContext(networkId))
             .build()
@@ -459,7 +459,7 @@ class MusubiSdkV1FixtureTest {
             it["path"] as String to MusubiJsonV1.encode(it["response"])
         })
         val client = MusubiToriiClientV1.builder()
-            .baseUri(URI.create("http://localhost:8080"))
+            .baseUri(URI.create("https://localhost:8080"))
             .executor(executor)
             .localSigningContext(LocalSigningContext(networkId))
             .build()
@@ -509,7 +509,7 @@ class MusubiSdkV1FixtureTest {
             val request = MusubiJsonV1.decodeQuery(path, requestValue)
             val executor = FixtureExecutor(mapOf(path to MusubiJsonV1.encode(route["response"])))
             val client = MusubiToriiClientV1.builder()
-                .baseUri(URI.create("http://localhost:8080"))
+                .baseUri(URI.create("https://localhost:8080"))
                 .executor(executor)
                 .localSigningContext(LocalSigningContext(networkId))
                 .build()
@@ -595,7 +595,7 @@ class MusubiSdkV1FixtureTest {
             mapOf(MusubiToriiClientV1.VERSIONS_PATH to MusubiJsonV1.encode(responseValue)),
         )
         val client = MusubiToriiClientV1.builder()
-            .baseUri(URI.create("http://localhost:8080"))
+            .baseUri(URI.create("https://localhost:8080"))
             .executor(executor)
             .localSigningContext(LocalSigningContext(networkId))
             .build()
@@ -627,7 +627,7 @@ class MusubiSdkV1FixtureTest {
             objectValue(objectValue(response["query"])["page"])["limit"] = 49L
             val executor = FixtureExecutor(mapOf(path to MusubiJsonV1.encode(response)))
             val client = MusubiToriiClientV1.builder()
-                .baseUri(URI.create("http://localhost:8080"))
+                .baseUri(URI.create("https://localhost:8080"))
                 .executor(executor)
                 .localSigningContext(LocalSigningContext(networkId))
                 .build()

@@ -4983,7 +4983,7 @@ if self_test:
             errors.append(f"readiness self-test helper failed unexpectedly: {error}")
 if errors:
     print(
-        f"Kagemusha ABI-21/V4 (native bridge ABI 22) {mode} corridor failed:",
+        f"Kagemusha data ABI V4 (native bridge ABI 22) {mode} corridor failed:",
         file=sys.stderr,
     )
     for error in errors:
@@ -4991,12 +4991,12 @@ if errors:
     raise SystemExit(1)
 if mode == "candidate":
     print(
-        "Kagemusha ABI-21/V4 (native bridge ABI 22) static candidate corridor passed; "
+        "Kagemusha data ABI V4 (native bridge ABI 22) static candidate corridor passed; "
         "production promotion was not evaluated."
     )
 else:
     print(
-        "Kagemusha ABI-21/V4 (native bridge ABI 22) production promotion verification "
+        "Kagemusha data ABI V4 (native bridge ABI 22) production promotion verification "
         "corridor passed; no publication or activation was performed."
     )
 PY

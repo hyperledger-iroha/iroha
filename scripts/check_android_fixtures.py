@@ -33,7 +33,7 @@ MAX_U64 = 0xFFFF_FFFF_FFFF_FFFF
 MAX_QUANTITY_SCALE = 28
 MAX_QUANTITY_TEXT_LENGTH = 155
 MAX_QUANTITY_MANTISSA_TEXT = str((1 << 511) - 1)
-NETWORK_ID_LITERAL = re.compile(r"hash:([0-9A-F]{64})#([0-9A-F]{4})")
+NETWORK_ID_LITERAL = re.compile(r"[0-9a-f]{64}")
 QUANTITY_LITERAL = re.compile(r"(0|[1-9][0-9]*)(?:\.([0-9]*[1-9]))?")
 FEE_CHARGE_KIND_ORDER = {"nexus": 0, "pipeline_gas": 1}
 
@@ -380,31 +380,13 @@ def is_valid_transaction_nonce(value: object) -> bool:
     )
 
 
-def _crc16_ccitt_false(payload: bytes) -> int:
-    crc = 0xFFFF
-    for byte in payload:
-        crc ^= byte << 8
-        for _ in range(8):
-            crc = (
-                ((crc << 1) ^ 0x1021) & 0xFFFF
-                if crc & 0x8000
-                else (crc << 1) & 0xFFFF
-            )
-    return crc
-
-
 def validate_network_id(value: object, context: str) -> str:
-    """Require the exact canonical hash literal used by ``NetworkId``."""
+    """Require exact raw lowercase marked hexadecimal ``NetworkId`` text."""
     if not isinstance(value, str):
         raise ValueError(f"{context} has invalid network_id")
-    matched = NETWORK_ID_LITERAL.fullmatch(value)
-    if matched is None:
+    if NETWORK_ID_LITERAL.fullmatch(value) is None:
         raise ValueError(f"{context} has invalid canonical network_id")
-    body, checksum = matched.groups()
-    expected_checksum = _crc16_ccitt_false(f"hash:{body}".encode("ascii"))
-    if checksum != f"{expected_checksum:04X}":
-        raise ValueError(f"{context} has invalid canonical network_id checksum")
-    if bytes.fromhex(body)[-1] & 1 != 1:
+    if bytes.fromhex(value)[-1] & 1 != 1:
         raise ValueError(f"{context} has unmarked network_id hash")
     return value
 
@@ -519,7 +501,7 @@ def transaction_payload_network_id(data: bytes, context: str) -> bytes:
 def require_transaction_network_id(
     payload: bytes, network_id: str, context: str
 ) -> None:
-    expected = bytes.fromhex(network_id[5:69])
+    expected = bytes.fromhex(network_id)
     if transaction_payload_network_id(payload, context) != expected:
         raise ValueError(f"{context} network_id does not match its descriptor")
 

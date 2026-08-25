@@ -3,7 +3,7 @@
     "authority": "sorauﾛ1NｲﾘｳdPBeｼRoｸQ2ﾔgｼQqeｶﾍｽﾁhRW2ｺｿZ9ﾕｦUﾅRX5NJYH53",
     "creation_time_ms": 1735000100000,
     "name": "typed_fee_payment_gas_limit",
-    "network_id": "hash:32C903E5B3497E34C2B844EBFE8A39C19E6CF8F95D44C1FFB8BA9DCB42F91149#A2F0",
+    "network_id": "32c903e5b3497e34c2b844ebfe8a39c19e6cf8f95d44c1ffb8ba9dcb42f91149",
     "nonce": 100,
     "payload": {
       "admission_intent": {
@@ -34,7 +34,7 @@
       "metadata": {
         "checked": true
       },
-      "network_id": "hash:32C903E5B3497E34C2B844EBFE8A39C19E6CF8F95D44C1FFB8BA9DCB42F91149#A2F0",
+      "network_id": "32c903e5b3497e34c2b844ebfe8a39c19e6cf8f95d44c1ffb8ba9dcb42f91149",
       "nonce": 100,
       "time_to_live_ms": 5000
     },
@@ -48,7 +48,7 @@
     "authority": "sorauﾛ1NｲﾘｳdPBeｼRoｸQ2ﾔgｼQqeｶﾍｽﾁhRW2ｺｿZ9ﾕｦUﾅRX5NJYH53",
     "creation_time_ms": 1735000200000,
     "name": "register_asset_definition",
-    "network_id": "hash:32C903E5B3497E34C2B844EBFE8A39C19E6CF8F95D44C1FFB8BA9DCB42F91149#A2F0",
+    "network_id": "32c903e5b3497e34c2b844ebfe8a39c19e6cf8f95d44c1ffb8ba9dcb42f91149",
     "nonce": 7,
     "payload": {
       "admission_intent": {
@@ -73,7 +73,7 @@
         }
       },
       "metadata": {},
-      "network_id": "hash:32C903E5B3497E34C2B844EBFE8A39C19E6CF8F95D44C1FFB8BA9DCB42F91149#A2F0",
+      "network_id": "32c903e5b3497e34c2b844ebfe8a39c19e6cf8f95d44c1ffb8ba9dcb42f91149",
       "nonce": 7,
       "time_to_live_ms": 10000
     },
@@ -87,7 +87,7 @@
     "authority": "sorauﾛ1NｲﾘｳdPBeｼRoｸQ2ﾔgｼQqeｶﾍｽﾁhRW2ｺｿZ9ﾕｦUﾅRX5NJYH53",
     "creation_time_ms": 1735000300000,
     "name": "transfer_asset",
-    "network_id": "hash:32C903E5B3497E34C2B844EBFE8A39C19E6CF8F95D44C1FFB8BA9DCB42F91149#A2F0",
+    "network_id": "32c903e5b3497e34c2b844ebfe8a39c19e6cf8f95d44c1ffb8ba9dcb42f91149",
     "nonce": 13,
     "payload": {
       "admission_intent": {
@@ -112,7 +112,7 @@
         }
       },
       "metadata": {},
-      "network_id": "hash:32C903E5B3497E34C2B844EBFE8A39C19E6CF8F95D44C1FFB8BA9DCB42F91149#A2F0",
+      "network_id": "32c903e5b3497e34c2b844ebfe8a39c19e6cf8f95d44c1ffb8ba9dcb42f91149",
       "nonce": 13,
       "time_to_live_ms": 4000
     },
@@ -126,7 +126,7 @@
     "authority": "sorauﾛ1NｲﾘｳdPBeｼRoｸQ2ﾔgｼQqeｶﾍｽﾁhRW2ｺｿZ9ﾕｦUﾅRX5NJYH53",
     "creation_time_ms": 1735000400000,
     "name": "transfer_domain",
-    "network_id": "hash:32C903E5B3497E34C2B844EBFE8A39C19E6CF8F95D44C1FFB8BA9DCB42F91149#A2F0",
+    "network_id": "32c903e5b3497e34c2b844ebfe8a39c19e6cf8f95d44c1ffb8ba9dcb42f91149",
     "nonce": null,
     "payload": {
       "admission_intent": {
@@ -151,7 +151,7 @@
         }
       },
       "metadata": {},
-      "network_id": "hash:32C903E5B3497E34C2B844EBFE8A39C19E6CF8F95D44C1FFB8BA9DCB42F91149#A2F0",
+      "network_id": "32c903e5b3497e34c2b844ebfe8a39c19e6cf8f95d44c1ffb8ba9dcb42f91149",
       "nonce": null,
       "time_to_live_ms": 3000
     },
@@ -165,7 +165,7 @@
     "authority": "sorauﾛ1NｲﾘｳdPBeｼRoｸQ2ﾔgｼQqeｶﾍｽﾁhRW2ｺｿZ9ﾕｦUﾅRX5NJYH53",
     "creation_time_ms": 1735000500000,
     "name": "transfer_asset_definition",
-    "network_id": "hash:32C903E5B3497E34C2B844EBFE8A39C19E6CF8F95D44C1FFB8BA9DCB42F91149#A2F0",
+    "network_id": "32c903e5b3497e34c2b844ebfe8a39c19e6cf8f95d44c1ffb8ba9dcb42f91149",
     "nonce": null,
     "payload": {
       "admission_intent": {
@@ -190,7 +190,7 @@
         }
       },
       "metadata": {},
-      "network_id": "hash:32C903E5B3497E34C2B844EBFE8A39C19E6CF8F95D44C1FFB8BA9DCB42F91149#A2F0",
+      "network_id": "32c903e5b3497e34c2b844ebfe8a39c19e6cf8f95d44c1ffb8ba9dcb42f91149",
       "nonce": null,
       "time_to_live_ms": 2000
     },
@@ -204,7 +204,7 @@
     "authority": "sorauﾛ1NｲﾘｳdPBeｼRoｸQ2ﾔgｼQqeｶﾍｽﾁhRW2ｺｿZ9ﾕｦUﾅRX5NJYH53",
     "creation_time_ms": 1735003300000,
     "name": "transfer_nft_demo",
-    "network_id": "hash:32C903E5B3497E34C2B844EBFE8A39C19E6CF8F95D44C1FFB8BA9DCB42F91149#A2F0",
+    "network_id": "32c903e5b3497e34c2b844ebfe8a39c19e6cf8f95d44c1ffb8ba9dcb42f91149",
     "nonce": null,
     "payload": {
       "admission_intent": {
@@ -229,7 +229,7 @@
         }
       },
       "metadata": {},
-      "network_id": "hash:32C903E5B3497E34C2B844EBFE8A39C19E6CF8F95D44C1FFB8BA9DCB42F91149#A2F0",
+      "network_id": "32c903e5b3497e34c2b844ebfe8a39c19e6cf8f95d44c1ffb8ba9dcb42f91149",
       "nonce": null,
       "time_to_live_ms": 100000
     },
@@ -243,7 +243,7 @@
     "authority": "sorauﾛ1NｲﾘｳdPBeｼRoｸQ2ﾔgｼQqeｶﾍｽﾁhRW2ｺｿZ9ﾕｦUﾅRX5NJYH53",
     "creation_time_ms": 1735000600000,
     "name": "mint_asset",
-    "network_id": "hash:32C903E5B3497E34C2B844EBFE8A39C19E6CF8F95D44C1FFB8BA9DCB42F91149#A2F0",
+    "network_id": "32c903e5b3497e34c2b844ebfe8a39c19e6cf8f95d44c1ffb8ba9dcb42f91149",
     "nonce": null,
     "payload": {
       "admission_intent": {
@@ -268,7 +268,7 @@
         }
       },
       "metadata": {},
-      "network_id": "hash:32C903E5B3497E34C2B844EBFE8A39C19E6CF8F95D44C1FFB8BA9DCB42F91149#A2F0",
+      "network_id": "32c903e5b3497e34c2b844ebfe8a39c19e6cf8f95d44c1ffb8ba9dcb42f91149",
       "nonce": null,
       "time_to_live_ms": 2500
     },
@@ -282,7 +282,7 @@
     "authority": "sorauﾛ1NｲﾘｳdPBeｼRoｸQ2ﾔgｼQqeｶﾍｽﾁhRW2ｺｿZ9ﾕｦUﾅRX5NJYH53",
     "creation_time_ms": 1735000700000,
     "name": "burn_asset",
-    "network_id": "hash:32C903E5B3497E34C2B844EBFE8A39C19E6CF8F95D44C1FFB8BA9DCB42F91149#A2F0",
+    "network_id": "32c903e5b3497e34c2b844ebfe8a39c19e6cf8f95d44c1ffb8ba9dcb42f91149",
     "nonce": null,
     "payload": {
       "admission_intent": {
@@ -307,7 +307,7 @@
         }
       },
       "metadata": {},
-      "network_id": "hash:32C903E5B3497E34C2B844EBFE8A39C19E6CF8F95D44C1FFB8BA9DCB42F91149#A2F0",
+      "network_id": "32c903e5b3497e34c2b844ebfe8a39c19e6cf8f95d44c1ffb8ba9dcb42f91149",
       "nonce": null,
       "time_to_live_ms": 1500
     },
@@ -321,7 +321,7 @@
     "authority": "sorauﾛ1NｲﾘｳdPBeｼRoｸQ2ﾔgｼQqeｶﾍｽﾁhRW2ｺｿZ9ﾕｦUﾅRX5NJYH53",
     "creation_time_ms": 1735000800000,
     "name": "grant_revoke_permission",
-    "network_id": "hash:32C903E5B3497E34C2B844EBFE8A39C19E6CF8F95D44C1FFB8BA9DCB42F91149#A2F0",
+    "network_id": "32c903e5b3497e34c2b844ebfe8a39c19e6cf8f95d44c1ffb8ba9dcb42f91149",
     "nonce": null,
     "payload": {
       "admission_intent": {
@@ -350,7 +350,7 @@
         }
       },
       "metadata": {},
-      "network_id": "hash:32C903E5B3497E34C2B844EBFE8A39C19E6CF8F95D44C1FFB8BA9DCB42F91149#A2F0",
+      "network_id": "32c903e5b3497e34c2b844ebfe8a39c19e6cf8f95d44c1ffb8ba9dcb42f91149",
       "nonce": null,
       "time_to_live_ms": 3500
     },
@@ -364,7 +364,7 @@
     "authority": "sorauﾛ1NｲﾘｳdPBeｼRoｸQ2ﾔgｼQqeｶﾍｽﾁhRW2ｺｿZ9ﾕｦUﾅRX5NJYH53",
     "creation_time_ms": 1735000900000,
     "name": "grant_revoke_role",
-    "network_id": "hash:32C903E5B3497E34C2B844EBFE8A39C19E6CF8F95D44C1FFB8BA9DCB42F91149#A2F0",
+    "network_id": "32c903e5b3497e34c2b844ebfe8a39c19e6cf8f95d44c1ffb8ba9dcb42f91149",
     "nonce": null,
     "payload": {
       "admission_intent": {
@@ -393,7 +393,7 @@
         }
       },
       "metadata": {},
-      "network_id": "hash:32C903E5B3497E34C2B844EBFE8A39C19E6CF8F95D44C1FFB8BA9DCB42F91149#A2F0",
+      "network_id": "32c903e5b3497e34c2b844ebfe8a39c19e6cf8f95d44c1ffb8ba9dcb42f91149",
       "nonce": null,
       "time_to_live_ms": 3200
     },
@@ -407,7 +407,7 @@
     "authority": "sorauﾛ1NｲﾘｳdPBeｼRoｸQ2ﾔgｼQqeｶﾍｽﾁhRW2ｺｿZ9ﾕｦUﾅRX5NJYH53",
     "creation_time_ms": 1735001000000,
     "name": "grant_revoke_role_permission",
-    "network_id": "hash:32C903E5B3497E34C2B844EBFE8A39C19E6CF8F95D44C1FFB8BA9DCB42F91149#A2F0",
+    "network_id": "32c903e5b3497e34c2b844ebfe8a39c19e6cf8f95d44c1ffb8ba9dcb42f91149",
     "nonce": null,
     "payload": {
       "admission_intent": {
@@ -436,7 +436,7 @@
         }
       },
       "metadata": {},
-      "network_id": "hash:32C903E5B3497E34C2B844EBFE8A39C19E6CF8F95D44C1FFB8BA9DCB42F91149#A2F0",
+      "network_id": "32c903e5b3497e34c2b844ebfe8a39c19e6cf8f95d44c1ffb8ba9dcb42f91149",
       "nonce": null,
       "time_to_live_ms": 3100
     },
@@ -450,7 +450,7 @@
     "authority": "sorauﾛ1NｲﾘｳdPBeｼRoｸQ2ﾔgｼQqeｶﾍｽﾁhRW2ｺｿZ9ﾕｦUﾅRX5NJYH53",
     "creation_time_ms": 1735002100000,
     "name": "asset_metadata_parity",
-    "network_id": "hash:32C903E5B3497E34C2B844EBFE8A39C19E6CF8F95D44C1FFB8BA9DCB42F91149#A2F0",
+    "network_id": "32c903e5b3497e34c2b844ebfe8a39c19e6cf8f95d44c1ffb8ba9dcb42f91149",
     "nonce": null,
     "payload": {
       "admission_intent": {
@@ -479,7 +479,7 @@
         }
       },
       "metadata": {},
-      "network_id": "hash:32C903E5B3497E34C2B844EBFE8A39C19E6CF8F95D44C1FFB8BA9DCB42F91149#A2F0",
+      "network_id": "32c903e5b3497e34c2b844ebfe8a39c19e6cf8f95d44c1ffb8ba9dcb42f91149",
       "nonce": null,
       "time_to_live_ms": 100000
     },
@@ -493,7 +493,7 @@
     "authority": "sorauﾛ1NｲﾘｳdPBeｼRoｸQ2ﾔgｼQqeｶﾍｽﾁhRW2ｺｿZ9ﾕｦUﾅRX5NJYH53",
     "creation_time_ms": 1735002200000,
     "name": "set_parameter_next_mode",
-    "network_id": "hash:32C903E5B3497E34C2B844EBFE8A39C19E6CF8F95D44C1FFB8BA9DCB42F91149#A2F0",
+    "network_id": "32c903e5b3497e34c2b844ebfe8a39c19e6cf8f95d44c1ffb8ba9dcb42f91149",
     "nonce": null,
     "payload": {
       "admission_intent": {
@@ -518,7 +518,7 @@
         }
       },
       "metadata": {},
-      "network_id": "hash:32C903E5B3497E34C2B844EBFE8A39C19E6CF8F95D44C1FFB8BA9DCB42F91149#A2F0",
+      "network_id": "32c903e5b3497e34c2b844ebfe8a39c19e6cf8f95d44c1ffb8ba9dcb42f91149",
       "nonce": null,
       "time_to_live_ms": 100000
     },
@@ -532,7 +532,7 @@
     "authority": "sorauﾛ1NｲﾘｳdPBeｼRoｸQ2ﾔgｼQqeｶﾍｽﾁhRW2ｺｿZ9ﾕｦUﾅRX5NJYH53",
     "creation_time_ms": 1735002400000,
     "name": "executor_upgrade_demo",
-    "network_id": "hash:32C903E5B3497E34C2B844EBFE8A39C19E6CF8F95D44C1FFB8BA9DCB42F91149#A2F0",
+    "network_id": "32c903e5b3497e34c2b844ebfe8a39c19e6cf8f95d44c1ffb8ba9dcb42f91149",
     "nonce": null,
     "payload": {
       "admission_intent": {
@@ -557,7 +557,7 @@
         }
       },
       "metadata": {},
-      "network_id": "hash:32C903E5B3497E34C2B844EBFE8A39C19E6CF8F95D44C1FFB8BA9DCB42F91149#A2F0",
+      "network_id": "32c903e5b3497e34c2b844ebfe8a39c19e6cf8f95d44c1ffb8ba9dcb42f91149",
       "nonce": null,
       "time_to_live_ms": 100000
     },
@@ -571,7 +571,7 @@
     "authority": "sorauﾛ1NｲﾘｳdPBeｼRoｸQ2ﾔgｼQqeｶﾍｽﾁhRW2ｺｿZ9ﾕｦUﾅRX5NJYH53",
     "creation_time_ms": 1735002500000,
     "name": "register_peer_with_pop_demo",
-    "network_id": "hash:32C903E5B3497E34C2B844EBFE8A39C19E6CF8F95D44C1FFB8BA9DCB42F91149#A2F0",
+    "network_id": "32c903e5b3497e34c2b844ebfe8a39c19e6cf8f95d44c1ffb8ba9dcb42f91149",
     "nonce": null,
     "payload": {
       "admission_intent": {
@@ -596,7 +596,7 @@
         }
       },
       "metadata": {},
-      "network_id": "hash:32C903E5B3497E34C2B844EBFE8A39C19E6CF8F95D44C1FFB8BA9DCB42F91149#A2F0",
+      "network_id": "32c903e5b3497e34c2b844ebfe8a39c19e6cf8f95d44c1ffb8ba9dcb42f91149",
       "nonce": null,
       "time_to_live_ms": 100000
     },
@@ -610,7 +610,7 @@
     "authority": "sorauﾛ1NｲﾘｳdPBeｼRoｸQ2ﾔgｼQqeｶﾍｽﾁhRW2ｺｿZ9ﾕｦUﾅRX5NJYH53",
     "creation_time_ms": 1735002600000,
     "name": "unregister_peer_demo",
-    "network_id": "hash:32C903E5B3497E34C2B844EBFE8A39C19E6CF8F95D44C1FFB8BA9DCB42F91149#A2F0",
+    "network_id": "32c903e5b3497e34c2b844ebfe8a39c19e6cf8f95d44c1ffb8ba9dcb42f91149",
     "nonce": null,
     "payload": {
       "admission_intent": {
@@ -635,7 +635,7 @@
         }
       },
       "metadata": {},
-      "network_id": "hash:32C903E5B3497E34C2B844EBFE8A39C19E6CF8F95D44C1FFB8BA9DCB42F91149#A2F0",
+      "network_id": "32c903e5b3497e34c2b844ebfe8a39c19e6cf8f95d44c1ffb8ba9dcb42f91149",
       "nonce": null,
       "time_to_live_ms": 100000
     },
@@ -649,7 +649,7 @@
     "authority": "sorauﾛ1NｲﾘｳdPBeｼRoｸQ2ﾔgｼQqeｶﾍｽﾁhRW2ｺｿZ9ﾕｦUﾅRX5NJYH53",
     "creation_time_ms": 1735002700000,
     "name": "register_role_demo",
-    "network_id": "hash:32C903E5B3497E34C2B844EBFE8A39C19E6CF8F95D44C1FFB8BA9DCB42F91149#A2F0",
+    "network_id": "32c903e5b3497e34c2b844ebfe8a39c19e6cf8f95d44c1ffb8ba9dcb42f91149",
     "nonce": null,
     "payload": {
       "admission_intent": {
@@ -674,7 +674,7 @@
         }
       },
       "metadata": {},
-      "network_id": "hash:32C903E5B3497E34C2B844EBFE8A39C19E6CF8F95D44C1FFB8BA9DCB42F91149#A2F0",
+      "network_id": "32c903e5b3497e34c2b844ebfe8a39c19e6cf8f95d44c1ffb8ba9dcb42f91149",
       "nonce": null,
       "time_to_live_ms": 100000
     },
@@ -688,7 +688,7 @@
     "authority": "sorauﾛ1NｲﾘｳdPBeｼRoｸQ2ﾔgｼQqeｶﾍｽﾁhRW2ｺｿZ9ﾕｦUﾅRX5NJYH53",
     "creation_time_ms": 1735002800000,
     "name": "register_nft_demo",
-    "network_id": "hash:32C903E5B3497E34C2B844EBFE8A39C19E6CF8F95D44C1FFB8BA9DCB42F91149#A2F0",
+    "network_id": "32c903e5b3497e34c2b844ebfe8a39c19e6cf8f95d44c1ffb8ba9dcb42f91149",
     "nonce": null,
     "payload": {
       "admission_intent": {
@@ -713,7 +713,7 @@
         }
       },
       "metadata": {},
-      "network_id": "hash:32C903E5B3497E34C2B844EBFE8A39C19E6CF8F95D44C1FFB8BA9DCB42F91149#A2F0",
+      "network_id": "32c903e5b3497e34c2b844ebfe8a39c19e6cf8f95d44c1ffb8ba9dcb42f91149",
       "nonce": null,
       "time_to_live_ms": 100000
     },
@@ -727,7 +727,7 @@
     "authority": "sorauﾛ1NｲﾘｳdPBeｼRoｸQ2ﾔgｼQqeｶﾍｽﾁhRW2ｺｿZ9ﾕｦUﾅRX5NJYH53",
     "creation_time_ms": 1735002900000,
     "name": "trigger_repetitions_demo",
-    "network_id": "hash:32C903E5B3497E34C2B844EBFE8A39C19E6CF8F95D44C1FFB8BA9DCB42F91149#A2F0",
+    "network_id": "32c903e5b3497e34c2b844ebfe8a39c19e6cf8f95d44c1ffb8ba9dcb42f91149",
     "nonce": null,
     "payload": {
       "admission_intent": {
@@ -756,7 +756,7 @@
         }
       },
       "metadata": {},
-      "network_id": "hash:32C903E5B3497E34C2B844EBFE8A39C19E6CF8F95D44C1FFB8BA9DCB42F91149#A2F0",
+      "network_id": "32c903e5b3497e34c2b844ebfe8a39c19e6cf8f95d44c1ffb8ba9dcb42f91149",
       "nonce": null,
       "time_to_live_ms": 100000
     },
@@ -770,7 +770,7 @@
     "authority": "sorauﾛ1NｲﾘｳdPBeｼRoｸQ2ﾔgｼQqeｶﾍｽﾁhRW2ｺｿZ9ﾕｦUﾅRX5NJYH53",
     "creation_time_ms": 1735003000000,
     "name": "register_time_trigger_demo",
-    "network_id": "hash:32C903E5B3497E34C2B844EBFE8A39C19E6CF8F95D44C1FFB8BA9DCB42F91149#A2F0",
+    "network_id": "32c903e5b3497e34c2b844ebfe8a39c19e6cf8f95d44c1ffb8ba9dcb42f91149",
     "nonce": null,
     "payload": {
       "admission_intent": {
@@ -795,7 +795,7 @@
         }
       },
       "metadata": {},
-      "network_id": "hash:32C903E5B3497E34C2B844EBFE8A39C19E6CF8F95D44C1FFB8BA9DCB42F91149#A2F0",
+      "network_id": "32c903e5b3497e34c2b844ebfe8a39c19e6cf8f95d44c1ffb8ba9dcb42f91149",
       "nonce": null,
       "time_to_live_ms": 100000
     },
@@ -809,7 +809,7 @@
     "authority": "sorauﾛ1NｲﾘｳdPBeｼRoｸQ2ﾔgｼQqeｶﾍｽﾁhRW2ｺｿZ9ﾕｦUﾅRX5NJYH53",
     "creation_time_ms": 1735003100000,
     "name": "register_precommit_trigger_demo",
-    "network_id": "hash:32C903E5B3497E34C2B844EBFE8A39C19E6CF8F95D44C1FFB8BA9DCB42F91149#A2F0",
+    "network_id": "32c903e5b3497e34c2b844ebfe8a39c19e6cf8f95d44c1ffb8ba9dcb42f91149",
     "nonce": null,
     "payload": {
       "admission_intent": {
@@ -834,7 +834,7 @@
         }
       },
       "metadata": {},
-      "network_id": "hash:32C903E5B3497E34C2B844EBFE8A39C19E6CF8F95D44C1FFB8BA9DCB42F91149#A2F0",
+      "network_id": "32c903e5b3497e34c2b844ebfe8a39c19e6cf8f95d44c1ffb8ba9dcb42f91149",
       "nonce": null,
       "time_to_live_ms": 100000
     },
@@ -848,7 +848,7 @@
     "authority": "sorauﾛ1NｲﾘｳdPBeｼRoｸQ2ﾔgｼQqeｶﾍｽﾁhRW2ｺｿZ9ﾕｦUﾅRX5NJYH53",
     "creation_time_ms": 1735003200000,
     "name": "register_pipeline_trigger_demo",
-    "network_id": "hash:32C903E5B3497E34C2B844EBFE8A39C19E6CF8F95D44C1FFB8BA9DCB42F91149#A2F0",
+    "network_id": "32c903e5b3497e34c2b844ebfe8a39c19e6cf8f95d44c1ffb8ba9dcb42f91149",
     "nonce": null,
     "payload": {
       "admission_intent": {
@@ -873,7 +873,7 @@
         }
       },
       "metadata": {},
-      "network_id": "hash:32C903E5B3497E34C2B844EBFE8A39C19E6CF8F95D44C1FFB8BA9DCB42F91149#A2F0",
+      "network_id": "32c903e5b3497e34c2b844ebfe8a39c19e6cf8f95d44c1ffb8ba9dcb42f91149",
       "nonce": null,
       "time_to_live_ms": 100000
     },
@@ -887,7 +887,7 @@
     "authority": "sorauﾛ1NｲﾘｳdPBeｼRoｸQ2ﾔgｼQqeｶﾍｽﾁhRW2ｺｿZ9ﾕｦUﾅRX5NJYH53",
     "creation_time_ms": 1735000200000,
     "name": "repo_initiate_tri_party",
-    "network_id": "hash:32C903E5B3497E34C2B844EBFE8A39C19E6CF8F95D44C1FFB8BA9DCB42F91149#A2F0",
+    "network_id": "32c903e5b3497e34c2b844ebfe8a39c19e6cf8f95d44c1ffb8ba9dcb42f91149",
     "nonce": 11,
     "payload": {
       "admission_intent": {
@@ -912,7 +912,7 @@
         }
       },
       "metadata": {},
-      "network_id": "hash:32C903E5B3497E34C2B844EBFE8A39C19E6CF8F95D44C1FFB8BA9DCB42F91149#A2F0",
+      "network_id": "32c903e5b3497e34c2b844ebfe8a39c19e6cf8f95d44c1ffb8ba9dcb42f91149",
       "nonce": 11,
       "time_to_live_ms": 10000
     },
@@ -926,7 +926,7 @@
     "authority": "sorauﾛ1NｲﾘｳdPBeｼRoｸQ2ﾔgｼQqeｶﾍｽﾁhRW2ｺｿZ9ﾕｦUﾅRX5NJYH53",
     "creation_time_ms": 1735606000000,
     "name": "repo_reverse_unwind",
-    "network_id": "hash:32C903E5B3497E34C2B844EBFE8A39C19E6CF8F95D44C1FFB8BA9DCB42F91149#A2F0",
+    "network_id": "32c903e5b3497e34c2b844ebfe8a39c19e6cf8f95d44c1ffb8ba9dcb42f91149",
     "nonce": 12,
     "payload": {
       "admission_intent": {
@@ -951,7 +951,7 @@
         }
       },
       "metadata": {},
-      "network_id": "hash:32C903E5B3497E34C2B844EBFE8A39C19E6CF8F95D44C1FFB8BA9DCB42F91149#A2F0",
+      "network_id": "32c903e5b3497e34c2b844ebfe8a39c19e6cf8f95d44c1ffb8ba9dcb42f91149",
       "nonce": 12,
       "time_to_live_ms": 8000
     },
@@ -965,7 +965,7 @@
     "authority": "sorauﾛ1NｲﾘｳdPBeｼRoｸQ2ﾔgｼQqeｶﾍｽﾁhRW2ｺｿZ9ﾕｦUﾅRX5NJYH53",
     "creation_time_ms": 1735000400000,
     "name": "settlement_dvp_atomic",
-    "network_id": "hash:32C903E5B3497E34C2B844EBFE8A39C19E6CF8F95D44C1FFB8BA9DCB42F91149#A2F0",
+    "network_id": "32c903e5b3497e34c2b844ebfe8a39c19e6cf8f95d44c1ffb8ba9dcb42f91149",
     "nonce": 13,
     "payload": {
       "admission_intent": {
@@ -990,7 +990,7 @@
         }
       },
       "metadata": {},
-      "network_id": "hash:32C903E5B3497E34C2B844EBFE8A39C19E6CF8F95D44C1FFB8BA9DCB42F91149#A2F0",
+      "network_id": "32c903e5b3497e34c2b844ebfe8a39c19e6cf8f95d44c1ffb8ba9dcb42f91149",
       "nonce": 13,
       "time_to_live_ms": 7000
     },
@@ -1004,7 +1004,7 @@
     "authority": "sorauﾛ1NｲﾘｳdPBeｼRoｸQ2ﾔgｼQqeｶﾍｽﾁhRW2ｺｿZ9ﾕｦUﾅRX5NJYH53",
     "creation_time_ms": 1735000500000,
     "name": "settlement_pvp_net",
-    "network_id": "hash:32C903E5B3497E34C2B844EBFE8A39C19E6CF8F95D44C1FFB8BA9DCB42F91149#A2F0",
+    "network_id": "32c903e5b3497e34c2b844ebfe8a39c19e6cf8f95d44c1ffb8ba9dcb42f91149",
     "nonce": 14,
     "payload": {
       "admission_intent": {
@@ -1029,7 +1029,7 @@
         }
       },
       "metadata": {},
-      "network_id": "hash:32C903E5B3497E34C2B844EBFE8A39C19E6CF8F95D44C1FFB8BA9DCB42F91149#A2F0",
+      "network_id": "32c903e5b3497e34c2b844ebfe8a39c19e6cf8f95d44c1ffb8ba9dcb42f91149",
       "nonce": 14,
       "time_to_live_ms": 7000
     },
@@ -1043,7 +1043,7 @@
     "authority": "sorauﾛ1NｲﾘｳdPBeｼRoｸQ2ﾔgｼQqeｶﾍｽﾁhRW2ｺｿZ9ﾕｦUﾅRX5NJYH53",
     "creation_time_ms": 1735003400000,
     "name": "mixed_executable_batch",
-    "network_id": "hash:32C903E5B3497E34C2B844EBFE8A39C19E6CF8F95D44C1FFB8BA9DCB42F91149#A2F0",
+    "network_id": "32c903e5b3497e34c2b844ebfe8a39c19e6cf8f95d44c1ffb8ba9dcb42f91149",
     "nonce": 21,
     "payload": {
       "admission_intent": {
@@ -1091,7 +1091,7 @@
       "metadata": {
         "fixture": "mixed-batch"
       },
-      "network_id": "hash:32C903E5B3497E34C2B844EBFE8A39C19E6CF8F95D44C1FFB8BA9DCB42F91149#A2F0",
+      "network_id": "32c903e5b3497e34c2b844ebfe8a39c19e6cf8f95d44c1ffb8ba9dcb42f91149",
       "nonce": 21,
       "time_to_live_ms": 5000
     },

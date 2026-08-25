@@ -1,5 +1,5 @@
 #[test]
-fn abi21_lifecycle_digest_domains_are_distinct_from_v2() {
+fn v4_lifecycle_digest_domains_are_distinct_from_v2() {
     let v4 = [
         KAGEMUSHA_TOPUP_PAYLOAD_DIGEST_DOMAIN_V4,
         KAGEMUSHA_TOPUP_ANCHOR_DIGEST_DOMAIN_V4,

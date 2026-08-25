@@ -124,6 +124,15 @@ on:
       - "javascript/iroha_js/src/strictLosslessJson.js"
       - "javascript/iroha_js/src/toriiBrowserClient.js"
       - "javascript/iroha_js/src/toriiClient.js"
+      - "javascript/iroha_js/scripts/build-native.mjs"
+      - "javascript/iroha_js/scripts/build-dist.mjs"
+      - "javascript/iroha_js/scripts/copy-native.mjs"
+      - "javascript/iroha_js/scripts/native-build-provenance.mjs"
+      - "javascript/iroha_js/scripts/native-build-profile.mjs"
+      - "javascript/iroha_js/src/native.js"
+      - "javascript/iroha_js/src/nativeArtifactHash.js"
+      - "javascript/iroha_js/package.json"
+      - "javascript/iroha_js/package-lock.json"
       - "javascript/iroha_js/index.d.ts"
       - "javascript/iroha_js/privacy-capabilities.d.ts"
       - "javascript/iroha_js/README.md"
@@ -131,6 +140,9 @@ on:
       - "javascript/iroha_js/test/privacyCatalogParity.test.js"
       - "javascript/iroha_js/test/privacyNative.test.js"
       - "javascript/iroha_js/test/privacyNative.integration.test.js"
+      - "javascript/iroha_js/test/nativeBuildProfile.test.js"
+      - "javascript/iroha_js/test/nativeBuildProvenance.test.js"
+      - "javascript/iroha_js/test/privacyExact12Network.test.js"
       - "javascript/iroha_js/test/privacyCapabilities.test.js"
       - "javascript/iroha_js/test/instructionBuilders.test.js"
       - "javascript/iroha_js/test/proofAttachmentParity.test.js"
@@ -319,18 +331,16 @@ jobs:
         with:
           name: privacy-jvm-native-abi22-${{ github.sha }}
           path: ${{ runner.temp }}/privacy-jvm-native-abi22
-      - name: Authenticate distinct privacy release lock and enforce requalification blocker
+      - name: Authenticate distinct privacy release lock
         run: |
           release_lock="$RUNNER_TEMP/privacy-jvm-native-abi22/Cargo.lock"
-          [[ "$("$MOBILE_SDK_PYTHON_BINARY" -I -S -c 'import hashlib,pathlib,sys; print(hashlib.sha256(pathlib.Path(sys.argv[1]).read_bytes()).hexdigest())' "$release_lock")" == "cd9e829e454171f17540abeb7fd1aa14129252082bd8b076a0199b0ffa4e3f79" ]]
-          [[ "$("$MOBILE_SDK_PYTHON_BINARY" -I -S -c 'import hashlib,pathlib; print(hashlib.sha256(pathlib.Path("Cargo.lock").read_bytes()).hexdigest())')" == "c90b3659d6cb44cd1d6f9e75e7b98aacc0d30bbe23041d4e6e109e8a206fa76b" ]]
+          [[ "$("$MOBILE_SDK_PYTHON_BINARY" -I -S -c 'import hashlib,pathlib,sys; print(hashlib.sha256(pathlib.Path(sys.argv[1]).read_bytes()).hexdigest())' "$release_lock")" == "ccf4acebfe63ad981193b87afd559c195d8a67642d9536b8082f77bbf24a11f0" ]]
+          [[ "$("$MOBILE_SDK_PYTHON_BINARY" -I -S -c 'import hashlib,pathlib; print(hashlib.sha256(pathlib.Path("Cargo.lock").read_bytes()).hexdigest())')" == "ad0d209abaa51d4c77a9e67ccbb0c7660a0f8b7b5dbe3e3fbe4a70e142711bf7" ]]
           ! cmp -s "$release_lock" Cargo.lock
           source_date_epoch="$(git show -s --format=%ct "$GITHUB_SHA")"
           [[ "$source_date_epoch" =~ ^[1-9][0-9]*$ ]]
           echo "SOURCE_DATE_EPOCH=$source_date_epoch" >> "$GITHUB_ENV"
           echo "IROHA_PRIVACY_RELEASE_CARGO_LOCKFILE_PATH=$release_lock" >> "$GITHUB_ENV"
-          echo "::error::Swift privacy release tooling is not yet requalified to consume the distinct external cd9e Cargo.lock without replacing the tracked c90b root authority"
-          exit 1
       - name: Prepare external privacy Swift build and artifact roots
         run: |
           artifact_dir="$RUNNER_TEMP/iroha-privacy-swift-artifacts"
@@ -343,9 +353,11 @@ jobs:
           echo "NORITO_BRIDGE_OUT_DIR=$artifact_dir" >> "$GITHUB_ENV"
           echo "NORITO_BRIDGE_BUILD_DIR=$build_dir" >> "$GITHUB_ENV"
       - name: Install Apple Rust targets and prime frozen dependencies
+        env:
+          RUSTC_BOOTSTRAP: "1"
         run: |
           rustup target add --toolchain 1.93.1-aarch64-apple-darwin aarch64-apple-ios aarch64-apple-ios-sim x86_64-apple-ios aarch64-apple-darwin x86_64-apple-darwin
-          cargo fetch --locked
+          cargo fetch --locked -Z unstable-options --lockfile-path "$IROHA_PRIVACY_RELEASE_CARGO_LOCKFILE_PATH"
       - name: Bind the external privacy Swift Cargo envelope
         run: |
           cargo_target="$RUNNER_TEMP/iroha-privacy-swift-cargo"
@@ -369,8 +381,8 @@ jobs:
       - name: Revalidate frozen Swift inputs and ABI22 artifacts
         if: always()
         run: |
-          [[ "$("$MOBILE_SDK_PYTHON_BINARY" -I -S -c 'import hashlib,pathlib; print(hashlib.sha256(pathlib.Path("Cargo.lock").read_bytes()).hexdigest())')" == "c90b3659d6cb44cd1d6f9e75e7b98aacc0d30bbe23041d4e6e109e8a206fa76b" ]]
-          [[ "$("$MOBILE_SDK_PYTHON_BINARY" -I -S -c 'import hashlib,pathlib,sys; print(hashlib.sha256(pathlib.Path(sys.argv[1]).read_bytes()).hexdigest())' "$IROHA_PRIVACY_RELEASE_CARGO_LOCKFILE_PATH")" == "cd9e829e454171f17540abeb7fd1aa14129252082bd8b076a0199b0ffa4e3f79" ]]
+          [[ "$("$MOBILE_SDK_PYTHON_BINARY" -I -S -c 'import hashlib,pathlib; print(hashlib.sha256(pathlib.Path("Cargo.lock").read_bytes()).hexdigest())')" == "ad0d209abaa51d4c77a9e67ccbb0c7660a0f8b7b5dbe3e3fbe4a70e142711bf7" ]]
+          [[ "$("$MOBILE_SDK_PYTHON_BINARY" -I -S -c 'import hashlib,pathlib,sys; print(hashlib.sha256(pathlib.Path(sys.argv[1]).read_bytes()).hexdigest())' "$IROHA_PRIVACY_RELEASE_CARGO_LOCKFILE_PATH")" == "ccf4acebfe63ad981193b87afd559c195d8a67642d9536b8082f77bbf24a11f0" ]]
           scripts/check_mobile_sdk_artifacts.sh --apple-only
 
   privacy_jvm_sdk_tests:
@@ -465,8 +477,8 @@ jobs:
           PRIVACY_CSHARP_PYTHON: ${{ steps.privacy-csharp-python.outputs.python-path }}
         run: |
           input="$RUNNER_TEMP/privacy-jvm-native-abi22"
-          [[ "$("$PRIVACY_CSHARP_PYTHON" -I -S -c 'import hashlib,pathlib,sys; print(hashlib.sha256(pathlib.Path(sys.argv[1]).read_bytes()).hexdigest())' "$input/Cargo.lock")" == "cd9e829e454171f17540abeb7fd1aa14129252082bd8b076a0199b0ffa4e3f79" ]]
-          [[ "$("$PRIVACY_CSHARP_PYTHON" -I -S -c 'import hashlib,pathlib; print(hashlib.sha256(pathlib.Path("Cargo.lock").read_bytes()).hexdigest())')" == "c90b3659d6cb44cd1d6f9e75e7b98aacc0d30bbe23041d4e6e109e8a206fa76b" ]]
+          [[ "$("$PRIVACY_CSHARP_PYTHON" -I -S -c 'import hashlib,pathlib,sys; print(hashlib.sha256(pathlib.Path(sys.argv[1]).read_bytes()).hexdigest())' "$input/Cargo.lock")" == "ccf4acebfe63ad981193b87afd559c195d8a67642d9536b8082f77bbf24a11f0" ]]
+          [[ "$("$PRIVACY_CSHARP_PYTHON" -I -S -c 'import hashlib,pathlib; print(hashlib.sha256(pathlib.Path("Cargo.lock").read_bytes()).hexdigest())')" == "ad0d209abaa51d4c77a9e67ccbb0c7660a0f8b7b5dbe3e3fbe4a70e142711bf7" ]]
           "$PRIVACY_CSHARP_PYTHON" -I -S scripts/check_native_sdk_abi22_artifact.py verify \
             --artifact "$input/libconnect_norito_bridge.so" \
             --manifest "$input/native-sdk-abi22-csharp.json" \
@@ -519,24 +531,32 @@ jobs:
         with:
           name: privacy-jvm-native-abi22-${{ github.sha }}
           path: ${{ runner.temp }}/privacy-jvm-native-abi22
-      - name: Authenticate distinct privacy release lock and enforce requalification blocker
+      - name: Authenticate distinct privacy release lock
         env:
           PRIVACY_JS_PYTHON: ${{ steps.privacy-js-python.outputs.python-path }}
         run: |
           release_lock="$RUNNER_TEMP/privacy-jvm-native-abi22/Cargo.lock"
-          [[ "$("$PRIVACY_JS_PYTHON" -I -S -c 'import hashlib,pathlib,sys; print(hashlib.sha256(pathlib.Path(sys.argv[1]).read_bytes()).hexdigest())' "$release_lock")" == "cd9e829e454171f17540abeb7fd1aa14129252082bd8b076a0199b0ffa4e3f79" ]]
-          [[ "$("$PRIVACY_JS_PYTHON" -I -S -c 'import hashlib,pathlib; print(hashlib.sha256(pathlib.Path("Cargo.lock").read_bytes()).hexdigest())')" == "c90b3659d6cb44cd1d6f9e75e7b98aacc0d30bbe23041d4e6e109e8a206fa76b" ]]
+          [[ "$("$PRIVACY_JS_PYTHON" -I -S -c 'import hashlib,pathlib,sys; print(hashlib.sha256(pathlib.Path(sys.argv[1]).read_bytes()).hexdigest())' "$release_lock")" == "ccf4acebfe63ad981193b87afd559c195d8a67642d9536b8082f77bbf24a11f0" ]]
+          [[ "$("$PRIVACY_JS_PYTHON" -I -S -c 'import hashlib,pathlib; print(hashlib.sha256(pathlib.Path("Cargo.lock").read_bytes()).hexdigest())')" == "ad0d209abaa51d4c77a9e67ccbb0c7660a0f8b7b5dbe3e3fbe4a70e142711bf7" ]]
           ! cmp -s "$release_lock" Cargo.lock
-          echo "::error::JavaScript privacy release tooling is not yet requalified to consume the distinct external cd9e Cargo.lock without replacing the tracked c90b root authority"
-          exit 1
+          echo "IROHA_PRIVACY_RELEASE_CARGO_LOCKFILE_PATH=$release_lock" >> "$GITHUB_ENV"
       - name: Prime privacy N-API dependencies from the frozen lock
-        run: cargo fetch --locked
+        env:
+          RUSTC_BOOTSTRAP: "1"
+        run: cargo fetch --locked -Z unstable-options --lockfile-path "$IROHA_PRIVACY_RELEASE_CARGO_LOCKFILE_PATH"
       - name: Install JavaScript SDK dependencies
         run: npm ci --prefix javascript/iroha_js
       - name: Privacy JavaScript SDK tests through authenticated N-API ABI22
         env:
           PRIVACY_JS_SDK_PYTHON_BIN: ${{ steps.privacy-js-python.outputs.python-path }}
         run: ci/check_privacy_js_sdk.sh
+      - name: Revalidate frozen JavaScript lock inputs
+        if: always()
+        env:
+          PRIVACY_JS_PYTHON: ${{ steps.privacy-js-python.outputs.python-path }}
+        run: |
+          [[ "$("$PRIVACY_JS_PYTHON" -I -S -c 'import hashlib,pathlib; print(hashlib.sha256(pathlib.Path("Cargo.lock").read_bytes()).hexdigest())')" == "ad0d209abaa51d4c77a9e67ccbb0c7660a0f8b7b5dbe3e3fbe4a70e142711bf7" ]]
+          [[ "$("$PRIVACY_JS_PYTHON" -I -S -c 'import hashlib,pathlib,sys; print(hashlib.sha256(pathlib.Path(sys.argv[1]).read_bytes()).hexdigest())' "$IROHA_PRIVACY_RELEASE_CARGO_LOCKFILE_PATH")" == "ccf4acebfe63ad981193b87afd559c195d8a67642d9536b8082f77bbf24a11f0" ]]
 
   privacy_python_sdk_tests:
     runs-on: ubuntu-latest

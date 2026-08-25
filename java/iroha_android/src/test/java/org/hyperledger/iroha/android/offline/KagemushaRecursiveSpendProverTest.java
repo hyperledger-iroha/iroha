@@ -9,13 +9,8 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
-import java.security.KeyPair;
-import java.security.KeyPairGenerator;
-import java.security.PrivateKey;
-import java.security.Signature;
 import java.util.ArrayList;
 import java.util.Arrays;
-import java.util.Base64;
 import java.util.Collections;
 import java.util.HashSet;
 import java.util.List;
@@ -25,10 +20,7 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicReference;
-import org.hyperledger.iroha.android.client.CanonicalRequestSigner;
 import org.hyperledger.iroha.android.client.LocalSigningContext;
-import org.hyperledger.iroha.android.client.ToriiCanonicalRequestAuth;
-import org.hyperledger.iroha.android.client.transport.RequestReplayPolicy;
 import org.hyperledger.iroha.android.client.transport.TransportRequest;
 import org.hyperledger.iroha.android.client.transport.TransportResponse;
 import org.hyperledger.iroha.android.model.NetworkId;
@@ -36,7 +28,7 @@ import org.hyperledger.iroha.norito.CRC64;
 import org.hyperledger.iroha.norito.NoritoHeader;
 import org.hyperledger.iroha.norito.SchemaHash;
 
-/** Source-level checks for the ABI-22 bridge carrying the Kagemusha ABI-22/V4 lifecycle. */
+/** Source checks for native bridge ABI 22 carrying the distinct Kagemusha V4 lifecycle. */
 public final class KagemushaRecursiveSpendProverTest {
   public static void main(final String[] args) {
     heavyProofPermitIsReentrantButRejectsAnotherThreadWithoutWaiting();
@@ -284,19 +276,6 @@ public final class KagemushaRecursiveSpendProverTest {
         .orElseThrow();
     assert nativeRecipientRequest.getParameterCount() == 14;
     assert nativeRecipientRequest.getParameterTypes()[1] == int.class;
-    final Method[] lineageQueryMethods = Arrays.stream(methods)
-        .filter(method -> Modifier.isPublic(method.getModifiers()))
-        .filter(method -> method.getName().equals("createRecipientLineageQueryV2"))
-        .toArray(Method[]::new);
-    assert lineageQueryMethods.length == 1;
-    assert lineageQueryMethods[0].getParameterCount() == 6;
-    assert lineageQueryMethods[0].getParameterTypes()[1] == int.class;
-    final Method nativeLineageQuery = Arrays.stream(methods)
-        .filter(method -> method.getName().equals("nativeCreateRecipientLineageQueryV2"))
-        .findFirst()
-        .orElseThrow();
-    assert nativeLineageQuery.getParameterCount() == 6;
-    assert nativeLineageQuery.getParameterTypes()[1] == int.class;
     final Method appendNative = Arrays.stream(methods)
         .filter(method -> method.getName().equals("nativeBuildAppendRequestV4"))
         .findFirst()
@@ -1619,19 +1598,7 @@ public final class KagemushaRecursiveSpendProverTest {
   private static void toriiLifecycleRoutesAndHeadersAreExact() {
     final NetworkId networkId =
         NetworkId.parse(
-            "hash:32C903E5B3497E34C2B844EBFE8A39C19E6CF8F95D44C1FFB8BA9DCB42F91149#A2F0");
-    final NetworkId otherNetworkId =
-        NetworkId.parse(
-            "hash:0E5751C026E543B2E8AB2EB06099DAA1D1E5DF47778F7787FAAB45CDF12FE3A9#6A22");
-    final KeyPair keyPair = generateEd25519KeyPair();
-    final long timestampMs = 1_700_000_000_500L;
-    final String nonce = "offline-lineage-1";
-    final ToriiCanonicalRequestAuth canonicalAuth =
-        new ToriiCanonicalRequestAuth(
-            "alice@universal",
-            message -> signEd25519(keyPair.getPrivate(), message),
-            timestampMs,
-            nonce);
+            "32c903e5b3497e34c2b844ebfe8a39c19e6cf8f95d44c1ffb8ba9dcb42f91149");
     final AtomicReference<TransportRequest> captured = new AtomicReference<>();
     final org.hyperledger.iroha.android.client.transport.TransportExecutor neverTransport =
         request -> {
@@ -1650,8 +1617,7 @@ public final class KagemushaRecursiveSpendProverTest {
             request -> {
               captured.set(request);
               final boolean capability = request.uri().getPath().endsWith("/readiness");
-              final boolean lineage = request.uri().getPath().endsWith("/receiver-lineage");
-              final boolean command = "POST".equals(request.method()) && !lineage;
+              final boolean command = "POST".equals(request.method());
               return CompletableFuture.completedFuture(
                   TransportResponse.builder()
                       .setStatusCode(command ? 202 : 200)
@@ -1664,8 +1630,6 @@ public final class KagemushaRecursiveSpendProverTest {
                               : archive(
                                   command
                                       ? "OfflineOperationReference"
-                                      : lineage
-                                          ? "iroha_torii_shared::offline_api::OfflineRecipientRegistrationLineage"
                                       : request.uri().getPath().contains("/operations/")
                                           ? "OfflineOperationStatus"
                                           : unexpectedToriiRoute(request)))
@@ -1678,89 +1642,25 @@ public final class KagemushaRecursiveSpendProverTest {
     assert Arrays.stream(KagemushaRecursiveSpendProver.ToriiClient.class.getDeclaredMethods())
         .noneMatch(method -> method.getName().equals("getReadiness"))
         : "selector-taking offline readiness alias must remain absent";
+    assert Arrays.stream(KagemushaRecursiveSpendProver.ToriiClient.class.getDeclaredMethods())
+        .noneMatch(method -> method.getName().equals("getRecipientRegistrationLineage"))
+        : "receiver lineage must remain internal to portable receive-offer verification";
     assert !status.mandatory();
     assert status.cashHandoffCapability().equals("cash_handoff_v1");
     assert status.requiredBridgeAbiVersion() == 22;
     assert status.maximumHops() == 8;
-    assert status.ready();
+    assert !status.ready();
     assert status.assets().isEmpty();
-    assert status.blockers().isEmpty();
+    assert status.blockers().size() == 3;
+    assert status.blockers().get(0).code()
+        .equals("offline_cash_authenticated_release_unavailable");
+    assert status.blockers().get(1).code()
+        .equals("offline_cash_eligible_asset_unavailable");
+    assert status.blockers().get(2).code()
+        .equals("offline_cash_proof_backend_unavailable");
     assert captured.get().uri().toString()
         .equals("https://torii.example/api/v1/offline/readiness");
     assert captured.get().headers().get("Accept").equals(Arrays.asList("application/json"));
-
-    final KagemushaRecursiveSpendProver.RecipientLineageQueryV2 query = construct(
-        KagemushaRecursiveSpendProver.RecipientLineageQueryV2.class,
-        new Class<?>[] {byte[].class},
-        archive("iroha_torii_shared::offline_api::OfflineRecipientLineageRequest"));
-    client.getRecipientRegistrationLineage(query, canonicalAuth).join();
-    final TransportRequest lineageRequest = captured.get();
-    assert lineageRequest.uri().getPath().equals("/api/v1/offline/receiver-lineage");
-    assert lineageRequest.headers().get("Content-Type")
-        .equals(Arrays.asList("application/x-norito"));
-    assert lineageRequest.headers().get(CanonicalRequestSigner.HEADER_ACCOUNT)
-        .equals(Arrays.asList("alice@universal"));
-    assert lineageRequest.headers().get(CanonicalRequestSigner.HEADER_TIMESTAMP_MS)
-        .equals(Arrays.asList(Long.toString(timestampMs)));
-    assert lineageRequest.headers().get(CanonicalRequestSigner.HEADER_NONCE)
-        .equals(Arrays.asList(nonce));
-    assert lineageRequest.replayPolicy() == RequestReplayPolicy.ONE_SHOT;
-    final byte[] signature =
-        Base64.getDecoder()
-            .decode(
-                lineageRequest.headers().get(CanonicalRequestSigner.HEADER_SIGNATURE).get(0));
-    assert verifyEd25519(
-        keyPair,
-        CanonicalRequestSigner.canonicalRequestSignatureMessage(
-            networkId,
-            lineageRequest.method(),
-            lineageRequest.uri(),
-            lineageRequest.body(),
-            timestampMs,
-            nonce),
-        signature);
-    assert !verifyEd25519(
-        keyPair,
-        CanonicalRequestSigner.canonicalRequestSignatureMessage(
-            otherNetworkId,
-            lineageRequest.method(),
-            lineageRequest.uri(),
-            lineageRequest.body(),
-            timestampMs,
-            nonce),
-        signature);
-    assert !verifyEd25519(
-        keyPair,
-        CanonicalRequestSigner.canonicalRequestSignatureMessage(
-            networkId,
-            "GET",
-            lineageRequest.uri(),
-            lineageRequest.body(),
-            timestampMs,
-            nonce),
-        signature);
-    assert !verifyEd25519(
-        keyPair,
-        CanonicalRequestSigner.canonicalRequestSignatureMessage(
-            networkId,
-            lineageRequest.method(),
-            URI.create("https://torii.example/api/v1/offline/readiness"),
-            lineageRequest.body(),
-            timestampMs,
-            nonce),
-        signature);
-    final byte[] substitutedBody =
-        Arrays.copyOf(lineageRequest.body(), lineageRequest.body().length + 1);
-    assert !verifyEd25519(
-        keyPair,
-        CanonicalRequestSigner.canonicalRequestSignatureMessage(
-            networkId,
-            lineageRequest.method(),
-            lineageRequest.uri(),
-            substitutedBody,
-            timestampMs,
-            nonce),
-        signature);
 
     final String operationId = repeat("11", 32);
     client
@@ -1789,8 +1689,11 @@ public final class KagemushaRecursiveSpendProverTest {
 
   private static String universalOfflineCapabilityJson() {
     return "{\"mandatory\":false,\"cash_handoff_capability\":\"cash_handoff_v1\","
-        + "\"required_bridge_abi_version\":22,\"max_hops\":8,\"ready\":true,"
-        + "\"assets\":[],\"blockers\":[]}";
+        + "\"required_bridge_abi_version\":22,\"max_hops\":8,\"ready\":false,"
+        + "\"assets\":[],\"blockers\":["
+        + "{\"code\":\"offline_cash_authenticated_release_unavailable\",\"message\":\"No authenticated Offline Cash V1 release is selected by this asset-neutral response.\"},"
+        + "{\"code\":\"offline_cash_eligible_asset_unavailable\",\"message\":\"No eligible Offline Cash V1 asset is selected by this asset-neutral response.\"},"
+        + "{\"code\":\"offline_cash_proof_backend_unavailable\",\"message\":\"No reviewed production Offline Cash V1 proof and secure-device backend is authenticated by this response.\"}]}";
   }
 
   private static String unexpectedToriiRoute(final TransportRequest request) {
@@ -1799,13 +1702,16 @@ public final class KagemushaRecursiveSpendProverTest {
 
   private static void offlineCapabilityRejectsBackendReadinessClaims() {
     final List<String> invalidPayloads = Arrays.asList(
-        "{\"mandatory\":true,\"cash_handoff_capability\":\"cash_handoff_v1\",\"required_bridge_abi_version\":22,\"max_hops\":8,\"ready\":true,\"assets\":[],\"blockers\":[]}",
+        "{\"mandatory\":true,\"cash_handoff_capability\":\"cash_handoff_v1\",\"required_bridge_abi_version\":22,\"max_hops\":8,\"ready\":false,\"assets\":[],\"blockers\":[{\"code\":\"backend_gate\",\"message\":\"blocked\"}]}",
         "{\"mandatory\":false,\"cash_handoff_capability\":\"cash_handoff_v2\",\"required_bridge_abi_version\":22,\"max_hops\":8,\"ready\":true,\"assets\":[],\"blockers\":[]}",
         "{\"mandatory\":false,\"cash_handoff_capability\":\"cash_handoff_v1\",\"required_bridge_abi_version\":21,\"max_hops\":8,\"ready\":true,\"assets\":[],\"blockers\":[]}",
         "{\"mandatory\":false,\"cash_handoff_capability\":\"cash_handoff_v1\",\"required_bridge_abi_version\":22,\"max_hops\":9,\"ready\":true,\"assets\":[],\"blockers\":[]}",
         "{\"mandatory\":false,\"cash_handoff_capability\":\"cash_handoff_v1\",\"required_bridge_abi_version\":22,\"max_hops\":8,\"ready\":false,\"assets\":[],\"blockers\":[]}",
+        "{\"mandatory\":false,\"cash_handoff_capability\":\"cash_handoff_v1\",\"required_bridge_abi_version\":22,\"max_hops\":8,\"ready\":\"false\",\"assets\":[],\"blockers\":[{\"code\":\"backend_gate\",\"message\":\"blocked\"}]}",
         "{\"mandatory\":false,\"cash_handoff_capability\":\"cash_handoff_v1\",\"required_bridge_abi_version\":22,\"max_hops\":8,\"ready\":true,\"assets\":[{}],\"blockers\":[]}",
         "{\"mandatory\":false,\"cash_handoff_capability\":\"cash_handoff_v1\",\"required_bridge_abi_version\":22,\"max_hops\":8,\"ready\":true,\"assets\":[],\"blockers\":[{\"code\":\"unexpected\",\"message\":\"unexpected\"}]}",
+        "{\"mandatory\":false,\"cash_handoff_capability\":\"cash_handoff_v1\",\"required_bridge_abi_version\":22,\"max_hops\":8,\"ready\":false,\"assets\":[],\"blockers\":[{\"code\":\"duplicate\",\"message\":\"first\"},{\"code\":\"duplicate\",\"message\":\"second\"}]}",
+        "{\"mandatory\":false,\"cash_handoff_capability\":\"cash_handoff_v1\",\"required_bridge_abi_version\":22,\"max_hops\":8,\"ready\":false,\"assets\":[],\"blockers\":[{\"code\":\"offline_cash_proof_backend_unavailable\",\"message\":\"No reviewed production Offline Cash V1 proof and secure-device backend is authenticated by this response.\"},{\"code\":\"offline_cash_eligible_asset_unavailable\",\"message\":\"No eligible Offline Cash V1 asset is selected by this asset-neutral response.\"},{\"code\":\"offline_cash_authenticated_release_unavailable\",\"message\":\"No authenticated Offline Cash V1 release is selected by this asset-neutral response.\"}]}",
         "{\"mandatory\":false,\"cash_handoff_capability\":\"cash_handoff_v1\",\"required_bridge_abi_version\":22,\"max_hops\":8,\"ready\":true,\"assets\":[],\"blockers\":[],\"future\":true}");
     for (final String payload : invalidPayloads) {
       final KagemushaRecursiveSpendProver.ToriiClient client =
@@ -1819,7 +1725,7 @@ public final class KagemushaRecursiveSpendProverTest {
                       .build()),
               new LocalSigningContext(
                   NetworkId.parse(
-                      "hash:32C903E5B3497E34C2B844EBFE8A39C19E6CF8F95D44C1FFB8BA9DCB42F91149#A2F0")));
+                      "32c903e5b3497e34c2b844ebfe8a39c19e6cf8f95d44c1ffb8ba9dcb42f91149")));
       boolean rejected = false;
       try {
         client.getOfflineCapability().join();
@@ -1849,7 +1755,6 @@ public final class KagemushaRecursiveSpendProverTest {
             "buildRedeemV4",
             "buildRedeemRequestV4",
             "buildVerifyRequestV4",
-            "createRecipientLineageQueryV2",
             "createRecipientReceiveOfferV2",
             "decodeAppendRequestV4",
             "decodeBundleV4",
@@ -1912,7 +1817,6 @@ public final class KagemushaRecursiveSpendProverTest {
             "verifyAcknowledgement",
             "verifyRecipientPaymentRequest",
             "verifyRecipientReceiveOfferV2",
-            "verifyRecipientRegistrationLineageV2",
             "verifySpendV4",
             "validateTopUpProvenanceV4"))) : methods;
     final Set<String> declaredNames = new TreeSet<>();
@@ -1926,6 +1830,10 @@ public final class KagemushaRecursiveSpendProverTest {
         "buildInitRequest",
         "buildRedeemRequest",
         "buildVerifyRequest",
+        "createRecipientLineageQueryV2",
+        "verifyRecipientRegistrationLineageV2",
+        "nativeCreateRecipientLineageQueryV2",
+        "nativeVerifyRecipientRegistrationLineageV2",
         "nativeProjectInitResultV2",
         "nativeRestoreSpendableBranchV2")) {
       assert !declaredNames.contains(retired) : retired;
@@ -2071,37 +1979,6 @@ public final class KagemushaRecursiveSpendProverTest {
         siblings,
         directions,
         root);
-  }
-
-  private static KeyPair generateEd25519KeyPair() {
-    try {
-      return KeyPairGenerator.getInstance("Ed25519").generateKeyPair();
-    } catch (final Exception error) {
-      throw new AssertionError(error);
-    }
-  }
-
-  private static byte[] signEd25519(final PrivateKey privateKey, final byte[] message) {
-    try {
-      final Signature signer = Signature.getInstance("Ed25519");
-      signer.initSign(privateKey);
-      signer.update(message);
-      return signer.sign();
-    } catch (final Exception error) {
-      throw new AssertionError(error);
-    }
-  }
-
-  private static boolean verifyEd25519(
-      final KeyPair keyPair, final byte[] message, final byte[] signature) {
-    try {
-      final Signature verifier = Signature.getInstance("Ed25519");
-      verifier.initVerify(keyPair.getPublic());
-      verifier.update(message);
-      return verifier.verify(signature);
-    } catch (final Exception error) {
-      throw new AssertionError(error);
-    }
   }
 
   private static void assertThrowsIllegalArgument(final Runnable action) {

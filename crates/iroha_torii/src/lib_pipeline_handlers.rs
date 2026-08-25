@@ -1527,6 +1527,31 @@ fn pipeline_transaction_details_response(
     }
     let block_height = u64::try_from(block_height.get())
         .map_err(|_| pipeline_status_projection_error("committed height exceeds u64"))?;
+    let signed_transaction = match transaction.entrypoint() {
+        TransactionEntrypoint::External(transaction) => transaction,
+        TransactionEntrypoint::SealedReveal(reveal) => reveal.signed_transaction(),
+        TransactionEntrypoint::SealedCommitment(_) | TransactionEntrypoint::Time(_) => {
+            return Err(pipeline_status_projection_error(
+                "authenticated transaction details require an exact signed transaction",
+            ));
+        }
+    };
+    let fee_payment_intent = signed_transaction.fee_payment_intent().clone();
+    let fee_payment = transaction.result().fee_payment().cloned();
+    if let Some(receipt) = fee_payment.as_ref() {
+        receipt
+            .validate_committed_binding(
+                transaction.entrypoint(),
+                transaction.result(),
+                block_height,
+                transaction.block_hash(),
+            )
+            .map_err(|error| {
+                pipeline_status_projection_error(format!(
+                    "stored fee-payment receipt failed committed binding: {error}"
+                ))
+            })?;
+    }
     let hash = entrypoint_hash.to_string();
     Ok(PipelineTransactionDetailsResponse {
         trigger_completions: trigger_completion_summaries_for_entrypoint_hash(
@@ -1535,6 +1560,10 @@ fn pipeline_transaction_details_response(
             &hash,
         ),
         hash,
+        fee_payment_intent,
+        // Construct both representations from the same owned value. Clients still compare the
+        // top-level field to `transaction.result.fee_payment` and reject any conflicting wire.
+        fee_payment,
         transaction,
     })
 }

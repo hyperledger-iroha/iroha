@@ -1056,8 +1056,6 @@ pub mod offline {
     };
     /// Fetch the node's universal offline-wallet interface capability.
     pub const READINESS_PATH: &str = "/v1/offline/readiness";
-    /// Resolve proof-bearing active registration lineage for an authenticated account.
-    pub const RECIPIENT_LINEAGE_PATH: &str = "/v1/offline/receiver-lineage";
     /// Submit a signed online-to-offline top-up operation.
     pub const TOP_UP_PATH: &str = "/v1/offline/top-up";
     /// Submit a signed offline redemption operation.
@@ -1077,20 +1075,6 @@ pub mod offline {
     .with_feature_gate(FeatureGate::Feature("app_api"))
     .with_projections(RouteProjections::ALL)
     .with_implicit_head(true)
-    .with_cors_options(true);
-    /// Descriptor for proof-bearing receiver-registration lineage resolution.
-    pub const RECIPIENT_LINEAGE: RouteDescriptor = RouteDescriptor::new(
-        "offline.receiver_lineage",
-        HttpMethod::Post,
-        RECIPIENT_LINEAGE_PATH,
-        ApiSurface::Public,
-        Listener::Torii,
-        RouteEffect::ExpensiveCompute,
-        AdmissionPolicy::AuthenticatedAccount,
-    )
-    .with_authentication(AuthenticationPolicy::CanonicalAccountSignature)
-    .with_feature_gate(FeatureGate::Feature("app_api"))
-    .with_projections(RouteProjections::ALL)
     .with_cors_options(true);
     /// Descriptor for online-to-offline top-up submission.
     pub const TOP_UP: RouteDescriptor = RouteDescriptor::new(
@@ -1135,8 +1119,7 @@ pub mod offline {
     .with_implicit_head(true)
     .with_cors_options(true);
     /// Canonical first-release offline API catalog.
-    pub const ROUTES: &[RouteDescriptor] =
-        &[READINESS, RECIPIENT_LINEAGE, TOP_UP, REDEEM, OPERATION];
+    pub const ROUTES: &[RouteDescriptor] = &[READINESS, TOP_UP, REDEEM, OPERATION];
 }
 /// Alias lookup, private evaluation, and recipient-resolution descriptors.
 pub mod aliases {

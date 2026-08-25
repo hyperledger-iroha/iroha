@@ -2,6 +2,21 @@ package org.hyperledger.iroha.sdk.offline
 
 import java.nio.charset.StandardCharsets
 
+/** Exact public byte ceilings for the first Offline Cash V1 transport release. */
+object OfflineCashLimitsV1 {
+    const val PAYMENT_REQUEST_RAW_MAX_BYTES: Int = 768
+    const val PAYMENT_RAW_MAX_BYTES: Int = 7_936
+    const val ACKNOWLEDGEMENT_RAW_MAX_BYTES: Int = 256
+    const val PAYMENT_REQUEST_TEXT_MAX_BYTES: Int = 1_029
+    const val PAYMENT_TEXT_MAX_BYTES: Int = 10_587
+    const val ACKNOWLEDGEMENT_TEXT_MAX_BYTES: Int = 347
+    const val RAW_SESSION_MAX_BYTES: Int = 9_211
+    const val TEXT_SESSION_MAX_BYTES: Int = 12_288
+    const val PAIRED_PROOF_MAX_BYTES: Int = 6_400
+    const val PARITY_PROOF_MAX_BYTES: Int = 3_200
+    const val ENCRYPTED_CREDIT_MAX_BYTES: Int = 384
+}
+
 /** Exact canonical receiver request for the clean-slate Offline Cash V1 wire contract. */
 class OfflineCashPaymentRequestV1(canonicalNorito: ByteArray) {
     private val canonical = OfflineCashNativeV1.canonicalizePaymentRequest(canonicalNorito)
@@ -14,7 +29,8 @@ class OfflineCashPaymentRequestV1(canonicalNorito: ByteArray) {
     override fun hashCode(): Int = canonical.contentHashCode()
 
     companion object {
-        const val MAX_CANONICAL_BYTES: Int = 768
+        const val MAX_CANONICAL_BYTES: Int =
+            OfflineCashLimitsV1.PAYMENT_REQUEST_RAW_MAX_BYTES
 
         @JvmStatic
         fun decodeCanonical(canonicalNorito: ByteArray): OfflineCashPaymentRequestV1 =
@@ -41,7 +57,7 @@ class OfflineCashPaymentV1(
     override fun hashCode(): Int = 31 * request.hashCode() + canonical.contentHashCode()
 
     companion object {
-        const val MAX_CANONICAL_BYTES: Int = 7_936
+        const val MAX_CANONICAL_BYTES: Int = OfflineCashLimitsV1.PAYMENT_RAW_MAX_BYTES
 
         @JvmStatic
         fun decodeCanonical(
@@ -75,7 +91,8 @@ class OfflineCashAcknowledgementV1(
         31 * (31 * request.hashCode() + payment.hashCode()) + canonical.contentHashCode()
 
     companion object {
-        const val MAX_CANONICAL_BYTES: Int = 256
+        const val MAX_CANONICAL_BYTES: Int =
+            OfflineCashLimitsV1.ACKNOWLEDGEMENT_RAW_MAX_BYTES
 
         @JvmStatic
         fun decodeCanonical(
@@ -125,34 +142,43 @@ class OfflineCashReleaseStatusV1 internal constructor(
 }
 
 enum class OfflineCashWalletSessionStateV1 {
+    UNAVAILABLE,
     RECEIVE_REQUEST_READY,
-    PAYMENT_COMMITTED,
-    ACKNOWLEDGED,
+    PAYMENT_VERIFIED,
+    ACKNOWLEDGEMENT_VERIFIED,
 }
 
 enum class OfflineCashWalletSessionEventV1 {
-    PAYMENT_COMMITTED,
-    PAYMENT_REPLAY,
-    ACKNOWLEDGED,
-    ACKNOWLEDGEMENT_REPLAY,
+    PAYMENT_VERIFIED,
+    PAYMENT_VERIFICATION_REPLAY,
+    ACKNOWLEDGEMENT_VERIFIED,
+    ACKNOWLEDGEMENT_VERIFICATION_REPLAY,
 }
 
 /**
- * Opaque fail-closed wallet state machine for one receiver-bound Offline Cash V1 handoff.
+ * Opaque fail-closed proof-verification state machine for one receiver-bound Offline Cash V1
+ * handoff.
  *
  * Construction cryptographically binds the signed runtime manifest's release id and artifact
- * manifest SHA-256 to the authenticated installed native artifact set. There is deliberately no
+ * manifest SHA-256 to the authenticated installed native artifact set. `PAYMENT_VERIFIED` and
+ * `ACKNOWLEDGEMENT_VERIFIED` describe only native cryptographic verification and retention in this
+ * process. They do not mean that the secure-device journal, exact-next counter, wallet balance,
+ * payment outbox, or acknowledgement store was mutated durably. Only the sealed Core lifecycle
+ * joined to a qualifying device backend may authorize those effects. There is deliberately no
  * production bypass or app-owned emulator constructor.
  */
 class OfflineCashWalletSessionV1(
     val request: OfflineCashPaymentRequestV1,
     expectedReleaseId: ByteArray,
     expectedArtifactManifestSHA256: ByteArray,
-) {
+    val expectedNetworkIdLiteral: String,
+    val expectedAssetDefinitionId: String,
+) : AutoCloseable {
     private val releaseId = expectedReleaseId.copyOf()
     private val artifactManifest = expectedArtifactManifestSHA256.copyOf()
-    private var committedPayment: OfflineCashPaymentV1? = null
-    private var acceptedAcknowledgement: OfflineCashAcknowledgementV1? = null
+    private var verifiedPayment: OfflineCashPaymentV1? = null
+    private var verifiedAcknowledgement: OfflineCashAcknowledgementV1? = null
+    private var nativeHandle: Long = 0
 
     init {
         require(releaseId.size == 32 && releaseId.any { it.toInt() != 0 }) {
@@ -161,17 +187,56 @@ class OfflineCashWalletSessionV1(
         require(artifactManifest.size == 32 && artifactManifest.any { it.toInt() != 0 }) {
             "expectedArtifactManifestSHA256 must be a non-zero 32-byte digest"
         }
+        require(
+            expectedNetworkIdLiteral.length == 64 &&
+                expectedNetworkIdLiteral.all { it in '0'..'9' || it in 'a'..'f' },
+        ) { "expectedNetworkIdLiteral must be an exact lowercase 64-hex NetworkId" }
+        require(
+            expectedAssetDefinitionId.isNotEmpty() &&
+                expectedAssetDefinitionId.length <= 64 &&
+                expectedAssetDefinitionId.all { character ->
+                    character in '1'..'9' ||
+                        character in 'A'..'H' ||
+                        character in 'J'..'N' ||
+                        character in 'P'..'Z' ||
+                        character in 'a'..'k' ||
+                        character in 'm'..'z'
+                },
+        ) { "expectedAssetDefinitionId must be a bounded canonical Base58 literal" }
         val status = OfflineCashReleaseStatusV1.installed()
         check(status.matches(releaseId, artifactManifest)) {
             status.blocker ?: "offline-cash-v1-installed-release-mismatch"
         }
+        val networkIdBytes = expectedNetworkIdLiteral.toByteArray(StandardCharsets.UTF_8)
+        val assetDefinitionIdBytes = expectedAssetDefinitionId.toByteArray(StandardCharsets.UTF_8)
+        nativeHandle = try {
+            OfflineCashNativeV1.walletSessionOpenBound(
+                request.encodeCanonical(),
+                releaseId,
+                artifactManifest,
+                networkIdBytes,
+                assetDefinitionIdBytes,
+            )
+        } finally {
+            networkIdBytes.fill(0)
+            assetDefinitionIdBytes.fill(0)
+        }
+        check(nativeHandle > 0) { "native Offline Cash V1 session did not return a handle" }
     }
 
     val state: OfflineCashWalletSessionStateV1
-        @Synchronized get() = when {
-            acceptedAcknowledgement != null -> OfflineCashWalletSessionStateV1.ACKNOWLEDGED
-            committedPayment != null -> OfflineCashWalletSessionStateV1.PAYMENT_COMMITTED
-            else -> OfflineCashWalletSessionStateV1.RECEIVE_REQUEST_READY
+        @Synchronized get() {
+            if (nativeHandle == 0L) return OfflineCashWalletSessionStateV1.UNAVAILABLE
+            return runCatching { OfflineCashNativeV1.walletSessionState(nativeHandle) }
+                .map { state ->
+                    when (state) {
+                        1 -> OfflineCashWalletSessionStateV1.RECEIVE_REQUEST_READY
+                        2 -> OfflineCashWalletSessionStateV1.PAYMENT_VERIFIED
+                        3 -> OfflineCashWalletSessionStateV1.ACKNOWLEDGEMENT_VERIFIED
+                        else -> OfflineCashWalletSessionStateV1.UNAVAILABLE
+                    }
+                }
+                .getOrDefault(OfflineCashWalletSessionStateV1.UNAVAILABLE)
         }
 
     fun expectedReleaseId(): ByteArray = releaseId.copyOf()
@@ -179,63 +244,97 @@ class OfflineCashWalletSessionV1(
     fun expectedArtifactManifestSHA256(): ByteArray = artifactManifest.copyOf()
 
     @Synchronized
-    fun payment(): OfflineCashPaymentV1? = committedPayment
+    fun payment(): OfflineCashPaymentV1? = verifiedPayment
 
     @Synchronized
-    fun acknowledgement(): OfflineCashAcknowledgementV1? = acceptedAcknowledgement
+    fun acknowledgement(): OfflineCashAcknowledgementV1? = verifiedAcknowledgement
 
     @Synchronized
     fun acceptPayment(canonicalNorito: ByteArray): OfflineCashWalletSessionEventV1 {
-        check(acceptedAcknowledgement == null) { "payment cannot follow acknowledgement" }
-        val sessionCanonical = OfflineCashNativeV1.canonicalizePaymentForSession(
-            request.encodeCanonical(),
+        check(nativeHandle != 0L) { "Offline Cash V1 session is closed" }
+        val observedNowMilliseconds = System.currentTimeMillis()
+        check(observedNowMilliseconds > 0) { "system time precedes the Unix epoch" }
+        val sessionCanonical = OfflineCashNativeV1.walletSessionAcceptPayment(
+            nativeHandle,
             canonicalNorito,
-            artifactManifest,
+            observedNowMilliseconds,
         )
         val candidate = OfflineCashPaymentV1(request, sessionCanonical)
-        committedPayment?.let { existing ->
-            if (existing == candidate) return OfflineCashWalletSessionEventV1.PAYMENT_REPLAY
+        verifiedPayment?.let { existing ->
+            if (existing == candidate) {
+                return OfflineCashWalletSessionEventV1.PAYMENT_VERIFICATION_REPLAY
+            }
             throw IllegalArgumentException("conflicting Offline Cash V1 payment")
         }
-        committedPayment = candidate
-        return OfflineCashWalletSessionEventV1.PAYMENT_COMMITTED
+        check(verifiedAcknowledgement == null) { "payment cannot follow acknowledgement" }
+        verifiedPayment = candidate
+        return OfflineCashWalletSessionEventV1.PAYMENT_VERIFIED
     }
 
     @Synchronized
     fun acceptAcknowledgement(canonicalNorito: ByteArray): OfflineCashWalletSessionEventV1 {
-        val payment = checkNotNull(committedPayment) { "acknowledgement requires a payment" }
-        val candidate = OfflineCashAcknowledgementV1(request, payment, canonicalNorito)
-        acceptedAcknowledgement?.let { existing ->
+        check(nativeHandle != 0L) { "Offline Cash V1 session is closed" }
+        val payment = checkNotNull(verifiedPayment) { "acknowledgement requires a payment" }
+        val sessionCanonical = OfflineCashNativeV1.walletSessionAcceptAcknowledgement(
+            nativeHandle,
+            canonicalNorito,
+        )
+        val candidate = OfflineCashAcknowledgementV1(request, payment, sessionCanonical)
+        verifiedAcknowledgement?.let { existing ->
             if (existing == candidate) {
-                return OfflineCashWalletSessionEventV1.ACKNOWLEDGEMENT_REPLAY
+                return OfflineCashWalletSessionEventV1.ACKNOWLEDGEMENT_VERIFICATION_REPLAY
             }
             throw IllegalArgumentException("conflicting Offline Cash V1 acknowledgement")
         }
-        acceptedAcknowledgement = candidate
-        return OfflineCashWalletSessionEventV1.ACKNOWLEDGED
+        verifiedAcknowledgement = candidate
+        return OfflineCashWalletSessionEventV1.ACKNOWLEDGEMENT_VERIFIED
+    }
+
+    @Synchronized
+    override fun close() {
+        val handle = nativeHandle
+        if (handle == 0L) return
+        OfflineCashNativeV1.walletSessionClose(handle)
+        nativeHandle = 0
     }
 }
 
 /** Strict canonical `kgm2:` peer transport adapter, distinct from PKK1 transport. */
 object OfflineCashPeerAdapterV1 {
     const val TEXT_PREFIX: String = "kgm2:"
-    const val MAX_TEXT_SESSION_BYTES: Int = 12_288
+    const val MAX_RAW_SESSION_BYTES: Int = OfflineCashLimitsV1.RAW_SESSION_MAX_BYTES
+    const val MAX_TEXT_SESSION_BYTES: Int = OfflineCashLimitsV1.TEXT_SESSION_MAX_BYTES
+    const val MAX_PAYMENT_REQUEST_TEXT_BYTES: Int =
+        OfflineCashLimitsV1.PAYMENT_REQUEST_TEXT_MAX_BYTES
+    const val MAX_PAYMENT_TEXT_BYTES: Int = OfflineCashLimitsV1.PAYMENT_TEXT_MAX_BYTES
+    const val MAX_ACKNOWLEDGEMENT_TEXT_BYTES: Int =
+        OfflineCashLimitsV1.ACKNOWLEDGEMENT_TEXT_MAX_BYTES
 
     @JvmStatic
     fun encodePaymentRequest(request: OfflineCashPaymentRequestV1): String =
-        OfflineCashNativeV1.peerEncodePaymentRequest(request.encodeCanonical())
+        requirePeerText(
+            OfflineCashNativeV1.peerEncodePaymentRequest(request.encodeCanonical()),
+            MAX_PAYMENT_REQUEST_TEXT_BYTES,
+        )
 
     @JvmStatic
     fun decodePaymentRequest(text: String): OfflineCashPaymentRequestV1 =
-        OfflineCashPaymentRequestV1(OfflineCashNativeV1.peerDecodePaymentRequest(text))
+        OfflineCashPaymentRequestV1(
+            OfflineCashNativeV1.peerDecodePaymentRequest(
+                requirePeerText(text, MAX_PAYMENT_REQUEST_TEXT_BYTES),
+            ),
+        )
 
     @JvmStatic
     fun encodePayment(
         request: OfflineCashPaymentRequestV1,
         payment: OfflineCashPaymentV1,
-    ): String = OfflineCashNativeV1.peerEncodePayment(
-        request.encodeCanonical(),
-        payment.encodeCanonical(),
+    ): String = requirePeerText(
+        OfflineCashNativeV1.peerEncodePayment(
+            request.encodeCanonical(),
+            payment.encodeCanonical(),
+        ),
+        MAX_PAYMENT_TEXT_BYTES,
     )
 
     @JvmStatic
@@ -244,7 +343,10 @@ object OfflineCashPeerAdapterV1 {
         text: String,
     ): OfflineCashPaymentV1 = OfflineCashPaymentV1(
         request,
-        OfflineCashNativeV1.peerDecodePayment(request.encodeCanonical(), text),
+        OfflineCashNativeV1.peerDecodePayment(
+            request.encodeCanonical(),
+            requirePeerText(text, MAX_PAYMENT_TEXT_BYTES),
+        ),
     )
 
     @JvmStatic
@@ -252,10 +354,13 @@ object OfflineCashPeerAdapterV1 {
         request: OfflineCashPaymentRequestV1,
         payment: OfflineCashPaymentV1,
         acknowledgement: OfflineCashAcknowledgementV1,
-    ): String = OfflineCashNativeV1.peerEncodeAcknowledgement(
-        request.encodeCanonical(),
-        payment.encodeCanonical(),
-        acknowledgement.encodeCanonical(),
+    ): String = requirePeerText(
+        OfflineCashNativeV1.peerEncodeAcknowledgement(
+            request.encodeCanonical(),
+            payment.encodeCanonical(),
+            acknowledgement.encodeCanonical(),
+        ),
+        MAX_ACKNOWLEDGEMENT_TEXT_BYTES,
     )
 
     @JvmStatic
@@ -269,9 +374,21 @@ object OfflineCashPeerAdapterV1 {
         OfflineCashNativeV1.peerDecodeAcknowledgement(
             request.encodeCanonical(),
             payment.encodeCanonical(),
-            text,
+            requirePeerText(text, MAX_ACKNOWLEDGEMENT_TEXT_BYTES),
         ),
     )
+
+    private fun requirePeerText(text: String, maximumTextBytes: Int): String {
+        val bytes = text.toByteArray(StandardCharsets.UTF_8)
+        try {
+            require(bytes.size <= maximumTextBytes && text.startsWith(TEXT_PREFIX)) {
+                "Offline Cash V1 peer text exceeds its kind bound or prefix is invalid"
+            }
+            return text
+        } finally {
+            bytes.fill(0)
+        }
+    }
 }
 
 /** ABI22 JNI boundary. Public callers use the typed wrappers above. */
@@ -313,6 +430,97 @@ internal object OfflineCashNativeV1 {
     ): ByteArray {
         requireLoaded()
         return nativeCanonicalizeAcknowledgementV1(request, payment, acknowledgement)
+    }
+
+    fun walletSessionOpenBound(
+        request: ByteArray,
+        expectedReleaseId: ByteArray,
+        expectedArtifactManifestSHA256: ByteArray,
+        expectedNetworkId: ByteArray,
+        expectedAssetDefinitionId: ByteArray,
+    ): Long {
+        requireLoaded()
+        return nativeWalletSessionOpenBoundV1(
+            request,
+            expectedReleaseId,
+            expectedArtifactManifestSHA256,
+            expectedNetworkId,
+            expectedAssetDefinitionId,
+        )
+    }
+
+    fun walletSessionAcceptPayment(
+        handle: Long,
+        payment: ByteArray,
+        observedNowMilliseconds: Long,
+    ): ByteArray {
+        requireLoaded()
+        return nativeWalletSessionAcceptPaymentV1(handle, payment, observedNowMilliseconds)
+    }
+
+    fun walletSessionAcceptAcknowledgement(
+        handle: Long,
+        acknowledgement: ByteArray,
+    ): ByteArray {
+        requireLoaded()
+        return nativeWalletSessionAcceptAcknowledgementV1(handle, acknowledgement)
+    }
+
+    fun walletSessionState(handle: Long): Int {
+        requireLoaded()
+        return nativeWalletSessionStateV1(handle)
+    }
+
+    fun walletSessionClose(handle: Long) {
+        requireLoaded()
+        nativeWalletSessionCloseV1(handle)
+    }
+
+    fun artifactBegin(manifest: ByteArray, role: Int): Long {
+        requireLoaded()
+        return nativeArtifactBeginV1(manifest, role)
+    }
+
+    fun artifactWrite(handle: Long, chunk: ByteArray) {
+        requireLoaded()
+        nativeArtifactWriteV1(handle, chunk)
+    }
+
+    fun artifactFinalize(handle: Long) {
+        requireLoaded()
+        nativeArtifactFinalizeV1(handle)
+    }
+
+    fun artifactCancel(handle: Long) {
+        requireLoaded()
+        nativeArtifactCancelV1(handle)
+    }
+
+    fun artifactSetInstall(
+        manifest: ByteArray,
+        expectedManifestSHA256: ByteArray,
+        validationReceipt: ByteArray,
+        trustedPolicy: ByteArray,
+        releaseAttestation: ByteArray,
+        handles: LongArray,
+    ) {
+        requireLoaded()
+        nativeArtifactSetInstallV1(
+            manifest,
+            expectedManifestSHA256,
+            validationReceipt,
+            trustedPolicy,
+            releaseAttestation,
+            handles,
+        )
+    }
+
+    fun artifactSetUninstall(
+        expectedReleaseId: ByteArray,
+        expectedManifestSHA256: ByteArray,
+    ) {
+        requireLoaded()
+        nativeArtifactSetUninstallV1(expectedReleaseId, expectedManifestSHA256)
     }
 
     fun peerEncodePaymentRequest(request: ByteArray): String {
@@ -440,4 +648,43 @@ internal object OfflineCashNativeV1 {
         text: ByteArray,
     ): ByteArray
     @JvmStatic private external fun nativeReleaseProbeV1(): Array<ByteArray>
+    @JvmStatic private external fun nativeWalletSessionOpenV1(
+        request: ByteArray,
+        expectedReleaseId: ByteArray,
+        expectedArtifactManifestSHA256: ByteArray,
+    ): Long
+    @JvmStatic private external fun nativeWalletSessionOpenBoundV1(
+        request: ByteArray,
+        expectedReleaseId: ByteArray,
+        expectedArtifactManifestSHA256: ByteArray,
+        expectedNetworkId: ByteArray,
+        expectedAssetDefinitionId: ByteArray,
+    ): Long
+    @JvmStatic private external fun nativeWalletSessionAcceptPaymentV1(
+        handle: Long,
+        payment: ByteArray,
+        observedNowMilliseconds: Long,
+    ): ByteArray
+    @JvmStatic private external fun nativeWalletSessionAcceptAcknowledgementV1(
+        handle: Long,
+        acknowledgement: ByteArray,
+    ): ByteArray
+    @JvmStatic private external fun nativeWalletSessionStateV1(handle: Long): Int
+    @JvmStatic private external fun nativeWalletSessionCloseV1(handle: Long)
+    @JvmStatic private external fun nativeArtifactBeginV1(manifest: ByteArray, role: Int): Long
+    @JvmStatic private external fun nativeArtifactWriteV1(handle: Long, chunk: ByteArray)
+    @JvmStatic private external fun nativeArtifactFinalizeV1(handle: Long)
+    @JvmStatic private external fun nativeArtifactCancelV1(handle: Long)
+    @JvmStatic private external fun nativeArtifactSetInstallV1(
+        manifest: ByteArray,
+        expectedManifestSHA256: ByteArray,
+        validationReceipt: ByteArray,
+        trustedPolicy: ByteArray,
+        releaseAttestation: ByteArray,
+        handles: LongArray,
+    )
+    @JvmStatic private external fun nativeArtifactSetUninstallV1(
+        expectedReleaseId: ByteArray,
+        expectedManifestSHA256: ByteArray,
+    )
 }

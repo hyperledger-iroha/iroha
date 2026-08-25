@@ -7424,9 +7424,9 @@ impl Client {
                 "offline capability response does not advertise the canonical peer-spend hop limit"
             ));
         }
-        if !status.ready {
+        if status.ready {
             return Err(eyre!(
-                "offline capability response must report the universally compiled capability as ready"
+                "offline capability response must not claim production readiness without evaluated backend, release, and asset evidence"
             ));
         }
         if !status.assets.is_empty() {
@@ -7434,17 +7434,19 @@ impl Client {
                 "offline capability response must not contain asset-specific readiness entries"
             ));
         }
-        if !status.blockers.is_empty() {
+        if status.blockers != iroha_data_model::offline::offline_capability_activation_blockers_v1()
+        {
             return Err(eyre!(
-                "offline capability response must not contain backend readiness blockers"
+                "offline capability response does not contain the canonical fail-closed activation blockers"
             ));
         }
         Ok(())
     }
-    /// Discover the universally compiled offline cash-handoff capability.
+    /// Discover the compiled cash-handoff contract and fail-closed activation status.
     ///
-    /// The capability is independent of backend configuration, asset catalogs,
-    /// and dataspace routing, so this request never includes an asset selector.
+    /// This asset-neutral request never includes an asset selector. It cannot
+    /// claim production authority without evaluated backend, release, and asset
+    /// evidence, so the current contract carries canonical blockers.
     ///
     /// # Errors
     /// Returns an error for transport failures, non-success responses, malformed
@@ -8029,9 +8031,9 @@ mod offline_client_tests {
             required_bridge_abi_version:
                 iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_NATIVE_BRIDGE_ABI_V4,
             max_hops: iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_MAX_PEER_HOPS_V2,
-            ready: true,
+            ready: false,
             assets: Vec::new(),
-            blockers: Vec::new(),
+            blockers: iroha_data_model::offline::offline_capability_activation_blockers_v1(),
         }
     }
     #[test]
@@ -8051,9 +8053,12 @@ mod offline_client_tests {
         assert_eq!(result.cash_handoff_capability, "cash_handoff_v1");
         assert_eq!(result.required_bridge_abi_version, 22);
         assert_eq!(result.max_hops, 8);
-        assert!(result.ready);
+        assert!(!result.ready);
         assert!(result.assets.is_empty());
-        assert!(result.blockers.is_empty());
+        assert_eq!(
+            result.blockers,
+            iroha_data_model::offline::offline_capability_activation_blockers_v1()
+        );
         let snapshots = snapshots.lock().expect("snapshots");
         assert_eq!(snapshots.len(), 1);
         let snapshot = &snapshots[0];
@@ -8077,17 +8082,26 @@ mod offline_client_tests {
         let mut wrong_hops = universal_offline_capability();
         wrong_hops.max_hops = 7;
         cases.push(wrong_hops);
-        let mut not_ready = universal_offline_capability();
-        not_ready.ready = false;
-        cases.push(not_ready);
-        let mut blocked = universal_offline_capability();
-        blocked
+        let mut falsely_ready = universal_offline_capability();
+        falsely_ready.ready = true;
+        cases.push(falsely_ready);
+        let mut extra_blocker = universal_offline_capability();
+        extra_blocker
             .blockers
             .push(iroha_torii_shared::offline_api::OfflineReadinessBlocker {
                 code: "backend_gate".to_owned(),
                 message: "Backend readiness must not gate the capability.".to_owned(),
             });
-        cases.push(blocked);
+        cases.push(extra_blocker);
+        let mut missing_blocker = universal_offline_capability();
+        missing_blocker.blockers.pop();
+        cases.push(missing_blocker);
+        let mut reordered_blockers = universal_offline_capability();
+        reordered_blockers.blockers.swap(0, 1);
+        cases.push(reordered_blockers);
+        let mut altered_blocker_message = universal_offline_capability();
+        altered_blocker_message.blockers[0].message.push('!');
+        cases.push(altered_blocker_message);
         for capability in cases {
             let response = HttpResponse::builder()
                 .status(StatusCode::OK)

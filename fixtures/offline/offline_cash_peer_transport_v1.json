@@ -1,0 +1,161 @@
+{
+  "fixture_version": 1,
+  "limits": {
+    "acknowledgement_raw_max_bytes": 256,
+    "acknowledgement_text_max_bytes": 347,
+    "encrypted_credit_max_bytes": 384,
+    "history_accumulator_bytes_per_parity": 544,
+    "paired_proof_max_bytes": 6400,
+    "paired_proof_target_bytes": 6144,
+    "parity_proof_max_bytes": 3200,
+    "payment_raw_max_bytes": 7936,
+    "payment_request_raw_max_bytes": 768,
+    "payment_request_text_max_bytes": 1029,
+    "payment_text_max_bytes": 10587,
+    "raw_session_max_bytes": 9211,
+    "raw_session_target_bytes": 8960,
+    "text_session_max_bytes": 12288
+  },
+  "messages": {
+    "acknowledgement": {
+      "iroha_peer_wire_profile": 3,
+      "kgm2_text": "kgm2:TlJUMAAAimWXNbsTlu8jUWyWnz0dGQDRAAAAAAAAAOQVlG9Gj5NKAgIBACABAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBASDWTWoitBR6uBvbJaJBSZbQYUFBptnB3viAlcNZe_JS1SCyG9IlT5spBMynEsBw1Bzpj3qZ5DxeF_lyaGUME_vz_yALCwsLCwsLCwsLCwsLCwsLCwsLCwsLCwsLCwsLCwsLCwjpAwAAAAAAAEDBWPAX-u_IYctg8JINL0pW6zkRAoftyITEb1YmYAGf8n6UI1dpMau2r1VbJVjJbzsBDbwkES9h80nI4ZdxnAhl",
+      "kgm2_text_bytes": 337,
+      "kgm2_text_sha256_hex": "6185628a16fc2148d9bc74f508899a7b374a195e16f0331bf77cd6f8c8194932",
+      "maximum_kgm2_text_bytes": 347,
+      "maximum_raw_norito_bytes": 256,
+      "native_text_schema_version": 256,
+      "norito_header": {
+        "checksum_crc64_xz_hex": "4a938f466f9415e4",
+        "compression": "none",
+        "compression_id": 0,
+        "enabled_flags": [
+          "compact_len"
+        ],
+        "flags": 2,
+        "flags_hex": "02",
+        "header_bytes": 40,
+        "header_hex": "4e52543000008a659735bb1396ef23516c969f3d1d1900d100000000000000e415946f468f934a02",
+        "magic_ascii": "NRT0",
+        "major_version": 0,
+        "minor_version": 0,
+        "padding_bytes": 0,
+        "padding_must_be_zero": true,
+        "payload_bytes": 209,
+        "payload_sha256_hex": "b51b1b26c74afaccba6268a92eabc4ab321e0c51ededb37d7eab4448319cd822",
+        "rust_type_name_schema": "iroha_data_model::offline::offline_cash_v1::OfflineCashAcknowledgementV1",
+        "schema_hash_hex": "8a659735bb1396ef23516c969f3d1d19"
+      },
+      "payload_kind_id": 3,
+      "peer_payload_kind": "acknowledgement",
+      "raw_norito_bytes": 249,
+      "raw_norito_hex": "4e52543000008a659735bb1396ef23516c969f3d1d1900d100000000000000e415946f468f934a0202010020010101010101010101010101010101010101010101010101010101010101010120d64d6a22b4147ab81bdb25a2414996d0614141a6d9c1def88095c3597bf252d520b21bd2254f9b2904cca712c070d41ce98f7a99e43c5e17f97268650c13fbf3ff200b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b08e90300000000000040c158f017faefc861cb60f0920d2f4a56eb39110287edc884c46f562660019ff27e9423576931abb6af555b2558c96f3b010dbc24112f61f349c8e197719c0865",
+      "raw_norito_sha256_hex": "bdaac558d98fca17954478b17f810e4f5f4d6cdb905f18410317a3c7fb0b5940",
+      "rust_type": "iroha_data_model::offline::offline_cash_v1::OfflineCashAcknowledgementV1",
+      "semantic_valid": true,
+      "stage": "receiver_acknowledgement_after_persist"
+    },
+    "payment": {
+      "iroha_peer_wire_profile": 3,
+      "kgm2_text": "kgm2:TlJUMAAAqOxhPNnkvy0N6GtHn9nKHgDjBwAAAAAAAJwpxVm1O38KAgAAAAAAAAAAAgEAINZNaiK0FHq4G9slokFJltBhQUGm2cHe-ICVw1l78lLVwgICAQAgAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEgCc-fbEylINj-MWdAm0RG1SAPmOv_IPHRlU9YR55GF2sgAVMBDwHVAewBfwHGAUwBwgG7AeoBLAE2AfkBDwG6AWcEBAAAABA5MAAAAAAAAAAAAAAAAAAAINZNaiK0FHq4G9slokFJltBhQUGm2cHe-ICVw1l78lLVIAUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFIAYGBgYGBgYGBgYGBgYGBgYGBgYGBgYGBgYGBgYGBgYGIAICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICIAcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHIAMzMRmf5Xlym9EtTQfaILbpnUh3dgBtt8j3pr-BwT-TzgsCAQAgCAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAggCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkgPQztAZUiNlXaZ0LRowNEoNqhUhQQtjlVN4jgeMzc0V2IAYAAAAAAAAAAoaGhoaGhoaGhoaGhoaGhoaGhoaGhoaGhoaGhoaGhoaGhoaGhoaGhoaGhoaGhoaGhoaGhoaGhoaGhoaGhoaGhoaGhoaGhoaGhoaGhoaGhoaGhoaGhoaGhoaGhoaGhoaGhoaGhoaGhoaGhoaGhoaGhoaGhoaGhoaGhoaGhoaGhoaGIAYAAAAAAAAAAsrKysrKysrKysrKysrKysrKysrKysrKysrKysrKysrKysrKysrKysrKysrKysrKysrKysrKysrKysrKysrKysrKysrKysrKysrKysrKysrKysrKysrKysrKysrKysrKysrKysrKysrKysrKysrKysrKysrKysrKysrKysrKysrKoBCACAAAAAAAAw8PDw8PDw8PDw8PDw8PDw8PDw8PDw8PDw8PDw8PDw8PDw8PDw8PDw8PDw8PDw8PDw8PDw8PDw8PDw8PDw8PDw8PDw8PDw8PDw8PDw8PDw8PDw8PDw8PDw8PDw8PDw8PDw8PDw8PDw8PDw8PDw8PDw8PDw8PDw8PDw8PDw8PDw8PDw8PDw8PDw8PDw8PDw8PDw8PDw8PDw8PDw8PDw8PDw8PDw8PDw8PDw8PDw8PDw8PDw8PDw8PDw8PDw8PDw8PDw8PDw8PDw8PDw8PDw8PDw8PDw8PDw8PDw8PDw8PDw8PDw8PDw8PDw8PDw8PDw8PDw8PDw8PDw8PDw8PDw8PDw8PDw8PDw8PDw8PDw8PDw8PDw8PDw8PDw8PDw8PDw8PDw8PDw8PDw8PDw8PDw8PDw8PDw8PDw8PDw8PDw8PDw8PDw8PDw8PDw8PDw8PDw8PDw8PDw8PDw8PDw8PDw8PDw8PDw8PDw8PDw8PDw8PDw8PDw8PDw8PDw8PDw8PDw8PDw8PDw8PDw8PDw8PDw8PDw8PDw8PDw8PDw8PDw8PDw8PDw8PDw8PDw8PDw8PDw8PDw8PDw8PDw8PDw8PDw8PDw8PDw8PDw8PDw8PDw8PDw8PDw8PDw8PDw8PDw8PDw8PDw8PDw8PDw8PDw8PDw8PDw8PDw8PDw8PDw8PDw8PDw8PDw8PDw8PDw8PDw8PDw8PDw8PDw8PDw8PDw8PDw8PDw6gEIAIAAAAAAADU1NTU1NTU1NTU1NTU1NTU1NTU1NTU1NTU1NTU1NTU1NTU1NTU1NTU1NTU1NTU1NTU1NTU1NTU1NTU1NTU1NTU1NTU1NTU1NTU1NTU1NTU1NTU1NTU1NTU1NTU1NTU1NTU1NTU1NTU1NTU1NTU1NTU1NTU1NTU1NTU1NTU1NTU1NTU1NTU1NTU1NTU1NTU1NTU1NTU1NTU1NTU1NTU1NTU1NTU1NTU1NTU1NTU1NTU1NTU1NTU1NTU1NTU1NTU1NTU1NTU1NTU1NTU1NTU1NTU1NTU1NTU1NTU1NTU1NTU1NTU1NTU1NTU1NTU1NTU1NTU1NTU1NTU1NTU1NTU1NTU1NTU1NTU1NTU1NTU1NTU1NTU1NTU1NTU1NTU1NTU1NTU1NTU1NTU1NTU1NTU1NTU1NTU1NTU1NTU1NTU1NTU1NTU1NTU1NTU1NTU1NTU1NTU1NTU1NTU1NTU1NTU1NTU1NTU1NTU1NTU1NTU1NTU1NTU1NTU1NTU1NTU1NTU1NTU1NTU1NTU1NTU1NTU1NTU1NTU1NTU1NTU1NTU1NTU1NTU1NTU1NTU1NTU1NTU1NTU1NTU1NTU1NTU1NTU1NTU1NTU1NTU1NTU1NTU1NTU1NTU1NTU1NTU1NTU1NTU1NTU1NTU1NTU1NTU1NTU1NTU1NTU1NTU1NTU1NTU1NTU1NTU1NTU1NTU1NTU1NTU1NTU1NTU1NTU1NTU1NTU1NTUiAGAAAAAAAAAAOXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXlIAoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoK",
+      "kgm2_text_bytes": 2761,
+      "kgm2_text_sha256_hex": "82cb095d8f3c889fe6c6031b91587aa87175a3f0cd3d0dd689dc02fd948df584",
+      "maximum_kgm2_text_bytes": 10587,
+      "maximum_raw_norito_bytes": 7936,
+      "native_text_schema_version": 256,
+      "norito_header": {
+        "checksum_crc64_xz_hex": "0a7f3bb559c5299c",
+        "compression": "none",
+        "compression_id": 0,
+        "enabled_flags": [
+          "compact_len"
+        ],
+        "flags": 2,
+        "flags_hex": "02",
+        "header_bytes": 40,
+        "header_hex": "4e5254300000a8ec613cd9e4bf2d0de86b479fd9ca1e00e3070000000000009c29c559b53b7f0a02",
+        "magic_ascii": "NRT0",
+        "major_version": 0,
+        "minor_version": 0,
+        "padding_bytes": 8,
+        "padding_must_be_zero": true,
+        "payload_bytes": 2019,
+        "payload_sha256_hex": "5844551183b0b5f075b8fae1ec18beefe5e4e019f9a1de3c425e8d43702024b3",
+        "rust_type_name_schema": "iroha_data_model::offline::offline_cash_v1::OfflineCashPaymentV1",
+        "schema_hash_hex": "a8ec613cd9e4bf2d0de86b479fd9ca1e"
+      },
+      "payload_kind_id": 2,
+      "peer_payload_kind": "payment",
+      "raw_norito_bytes": 2067,
+      "raw_norito_hex": "4e5254300000a8ec613cd9e4bf2d0de86b479fd9ca1e00e3070000000000009c29c559b53b7f0a02000000000000000002010020d64d6a22b4147ab81bdb25a2414996d0614141a6d9c1def88095c3597bf252d5c2020201002001010101010101010101010101010101010101010101010101010101010101012009cf9f6c4ca520d8fe3167409b4446d5200f98ebff20f1d1954f58479e46176b200153010f01d501ec017f01c6014c01c201bb01ea012c013601f9010f01ba01670404000000103930000000000000000000000000000020d64d6a22b4147ab81bdb25a2414996d0614141a6d9c1def88095c3597bf252d520050505050505050505050505050505050505050505050505050505050505050520060606060606060606060606060606060606060606060606060606060606060620020202020202020202020202020202020202020202020202020202020202020220070707070707070707070707070707070707070707070707070707070707070720033331199fe579729bd12d4d07da20b6e99d487776006db7c8f7a6bf81c13f93ce0b020100200808080808080808080808080808080808080808080808080808080808080808200909090909090909090909090909090909090909090909090909090909090909203d0ced0195223655da6742d1a30344a0daa1521410b639553788e078ccdcd15d88018000000000000000a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a188018000000000000000b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2a8042002000000000000c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3a8042002000000000000d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d488018000000000000000e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5200a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a",
+      "raw_norito_sha256_hex": "1ae347afa882e91c292bc56ce0fcf48c31d5c3691a61bbae6e40a3e9ce626c7b",
+      "rust_type": "iroha_data_model::offline::offline_cash_v1::OfflineCashPaymentV1",
+      "semantic_valid": true,
+      "stage": "sender_payment"
+    },
+    "payment_request": {
+      "iroha_peer_wire_profile": 3,
+      "kgm2_text": "kgm2:TlJUMAAA0R1RPXjALrQOdsru7ZDHrQDlAQAAAAAAAO7XawqcJUzOAgAAAAAAAAAAAgEAIAEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBIAnPn2xMpSDY_jFnQJtERtUgD5jr_yDx0ZVPWEeeRhdrIAFTAQ8B1QHsAX8BxgFMAcIBuwHqASwBNgH5AQ8BugFnBAQAAAAQOTAAAAAAAAAAAAAAAAAAAE8AAAAASiEAAAAAAAAAAQABKQHlAYMBOgGRAVoBZAEpAaQB4wGnAZQBhAF1AcMBOAHvAUMBbgG4ASsB6AGcAZIB8AFZAXABRAEDAdsBnQFVIAICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICIH-f8yVb1T_NUrjwpMec_j76k7U6WI6TN_BjEAcQtQPVQQQeGFMv1HVMAvMEHZx1zrM7g__YGsfOT-iCzLHJi8WJbqRsMRxOL_QN2Wo2U-bkVEXTLf5Ibs7XXHqQxqGIgcCjIAMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDCOgDAAAAAAAACEjuAAAAAAAAIAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEQFYJ-oQyhFg57CZ7NQQIHz4SXQZVUQiJmOVVfGiH0LqmHaKcRYLI1WJNZLPDMZ40wHLgbw7mLQc7CqE8BUFrUmM",
+      "kgm2_text_bytes": 716,
+      "kgm2_text_sha256_hex": "55a641c16196b3d89cef3b79f3690bb0af9675475d920548f99e6777fc7de64c",
+      "maximum_kgm2_text_bytes": 1029,
+      "maximum_raw_norito_bytes": 768,
+      "native_text_schema_version": 256,
+      "norito_header": {
+        "checksum_crc64_xz_hex": "ce4c259c0a6bd7ee",
+        "compression": "none",
+        "compression_id": 0,
+        "enabled_flags": [
+          "compact_len"
+        ],
+        "flags": 2,
+        "flags_hex": "02",
+        "header_bytes": 40,
+        "header_hex": "4e5254300000d11d513d78c02eb40e76caeeed90c7ad00e501000000000000eed76b0a9c254cce02",
+        "magic_ascii": "NRT0",
+        "major_version": 0,
+        "minor_version": 0,
+        "padding_bytes": 8,
+        "padding_must_be_zero": true,
+        "payload_bytes": 485,
+        "payload_sha256_hex": "0b099abd224587a2ea6b3811de5398be7d781f71008aade0023636daa6b120a1",
+        "rust_type_name_schema": "iroha_data_model::offline::offline_cash_v1::OfflineCashPaymentRequestV1",
+        "schema_hash_hex": "d11d513d78c02eb40e76caeeed90c7ad"
+      },
+      "payload_kind_id": 1,
+      "peer_payload_kind": "receive_request",
+      "raw_norito_bytes": 533,
+      "raw_norito_hex": "4e5254300000d11d513d78c02eb40e76caeeed90c7ad00e501000000000000eed76b0a9c254cce0200000000000000000201002001010101010101010101010101010101010101010101010101010101010101012009cf9f6c4ca520d8fe3167409b4446d5200f98ebff20f1d1954f58479e46176b200153010f01d501ec017f01c6014c01c201bb01ea012c013601f9010f01ba0167040400000010393000000000000000000000000000004f000000004a21000000000000000100012901e50183013a0191015a0164012901a401e301a701940184017501c3013801ef0143016e01b8012b01e8019c019201f0015901700144010301db019d0155200202020202020202020202020202020202020202020202020202020202020202207f9ff3255bd53fcd52b8f0a4c79cfe3efa93b53a588e9337f063100710b503d541041e18532fd4754c02f3041d9c75ceb33b83ffd81ac7ce4fe882ccb1c98bc5896ea46c311c4e2ff40dd96a3653e6e45445d32dfe486eced75c7a90c6a18881c0a320030303030303030303030303030303030303030303030303030303030303030308e8030000000000000848ee000000000000200404040404040404040404040404040404040404040404040404040404040404405609fa8432845839ec267b3504081f3e125d065551088998e5557c6887d0baa61da29c4582c8d5624d64b3c3319e34c072e06f0ee62d073b0aa13c05416b5263",
+      "raw_norito_sha256_hex": "2988b8e5116464169f1f7898f9224086bea7443afab7c4b7f7743e980d9a1234",
+      "rust_type": "iroha_data_model::offline::offline_cash_v1::OfflineCashPaymentRequestV1",
+      "semantic_valid": true,
+      "stage": "receiver_payment_request"
+    }
+  },
+  "native_bridge_abi": 22,
+  "purpose": "Cross-SDK canonical kgm2 and profile-3 transport interoperability; deterministic proof blobs exercise bounded adapter admission and are not production proving evidence.",
+  "schema": "iroha.offline-cash.peer-transport.v1",
+  "semantic_validation": "All three messages pass the native Offline Cash V1 typed adapter and complete-session binding checks.",
+  "session": {
+    "kgm2_text_bytes": 3814,
+    "payment_digest_hex": "b21bd2254f9b2904cca712c070d41ce98f7a99e43c5e17f97268650c13fbf3ff",
+    "raw_norito_bytes": 2849,
+    "receiver_balance_commitment_after_persist_hex": "0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b",
+    "release_id_hex": "0101010101010101010101010101010101010101010101010101010101010101",
+    "request_digest_hex": "d64d6a22b4147ab81bdb25a2414996d0614141a6d9c1def88095c3597bf252d5",
+    "wire_version": 1
+  },
+  "source": "Rust OfflineCashPeerAdapterV1 over canonical Norito",
+  "transport": {
+    "base64url_padding": false,
+    "iroha_peer_wire_profile": 3,
+    "native_text_schema_version": 256,
+    "ordered_stages": [
+      "receiver_payment_request",
+      "sender_payment",
+      "receiver_acknowledgement_after_persist"
+    ],
+    "text_encoding": "UTF-8 kgm2 prefix plus unpadded canonical Base64URL",
+    "text_prefix": "kgm2:"
+  }
+}

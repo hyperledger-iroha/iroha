@@ -1647,6 +1647,16 @@ async fn transaction_details_allows_sender_and_batch_recipient_but_rejects_other
         let details: iroha_torii_shared::PipelineTransactionDetailsResponse =
             norito::json::from_slice(&body).expect("typed transaction-details JSON");
         assert_eq!(details.transaction.entrypoint_hash(), &entrypoint_hash);
+        let signed = match details.transaction.entrypoint() {
+            TransactionEntrypoint::External(transaction) => transaction,
+            _ => panic!("transaction-details fixture uses an external transaction"),
+        };
+        assert_eq!(&details.fee_payment_intent, signed.fee_payment_intent());
+        assert_eq!(
+            details.fee_payment.as_ref(),
+            details.transaction.result().fee_payment(),
+            "top-level actual receipt must be field-equal to the committed nested receipt"
+        );
         assert_eq!(
             details.transaction.result().batch_transfer_outcomes(),
             &[outcome.clone()]

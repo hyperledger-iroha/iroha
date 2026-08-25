@@ -56,7 +56,7 @@ def main() -> None:
     parser.add_argument(
         "--network-id",
         required=True,
-        help="Exact canonical checksummed genesis-derived NetworkId literal",
+        help="Exact 64-character lowercase hexadecimal genesis-derived NetworkId",
     )
     parser.add_argument(
         "--authority",

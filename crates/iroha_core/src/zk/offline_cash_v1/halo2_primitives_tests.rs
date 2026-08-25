@@ -3,37 +3,36 @@ use halo2_proofs::{
     circuit::{Layouter, SimpleFloorPlanner, Value},
     halo2curves::{
         ff::{Field, PrimeField},
-        group::{GroupEncoding as _, prime::PrimeCurveAffine as _},
+        group::{Curve as _, GroupEncoding as _, prime::PrimeCurveAffine as _},
         pasta::{EpAffine, EqAffine, Fp, Fq},
     },
-    plonk::{
-        Advice, Circuit, Column, ConstraintSystem, Error as PlonkError, Instance, VerifyingKey,
-        create_proof as halo2_create_proof, keygen_pk, keygen_vk,
-    },
+    plonk::{Advice, Circuit, Column, ConstraintSystem, Error as PlonkError, Instance, keygen_vk},
     poly::{
         commitment::{Params as _, ParamsProver as _},
-        ipa::{
-            commitment::{IPACommitmentScheme, ParamsIPA},
-            multiopen::ProverIPA,
-        },
+        ipa::commitment::ParamsIPA,
     },
-    transcript::{Blake2bWrite, Challenge255, TranscriptWriterBuffer as _},
 };
-use rand_core_06::OsRng;
+use iroha_data_model::offline::OfflineCashIpaLineageV1;
 
-use super::OfflineCashHalo2ParityV1;
 use super::halo2_primitives::{
     OfflineCashHalo2PrimitiveErrorV1, parse_offline_cash_ep_params_v1,
     parse_offline_cash_eq_params_v1, parse_processed_verifier_key_v1,
-    test_support::{
-        decide_claim_for_test, derive_claim, encode_history, history_from_ep_parts,
-        history_from_eq_parts, parse_ep_history, parse_eq_history, parse_params_for_k,
-        verify_augmented_claim_for_test,
-    },
-    validate_offline_cash_history_v1,
+    test_support::parse_params_for_k,
+};
+use super::helper_recursion::{
+    OfflineCashRecursiveLineageErrorV1, offline_cash_lineage_to_ep_v1,
+    offline_cash_lineage_to_eq_v1,
 };
 
 const TEST_K: u32 = 4;
+const FIXTURE_EQ_FOLDED_GENERATOR_V1: [u8; 32] = [
+    0x00, 0x00, 0x00, 0x00, 0x21, 0xeb, 0x46, 0x8c, 0xdd, 0xa8, 0x94, 0x09, 0xfc, 0x98, 0x46, 0x22,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x40,
+];
+const FIXTURE_EP_FOLDED_GENERATOR_V1: [u8; 32] = [
+    0x00, 0x00, 0x00, 0x00, 0xed, 0x30, 0x2d, 0x99, 0x1b, 0xf9, 0x4c, 0x09, 0xfc, 0x98, 0x46, 0x22,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x40,
+];
 
 #[derive(Clone)]
 struct PublicValue<F: Field> {
@@ -93,90 +92,98 @@ fn params_bytes<C: halo2_proofs::halo2curves::CurveAffine>(params: &ParamsIPA<C>
     bytes
 }
 
-fn eq_fixture() -> (ParamsIPA<EqAffine>, VerifyingKey<EqAffine>, Vec<u8>, Fp) {
-    let params = ParamsIPA::<EqAffine>::new(TEST_K);
-    let value = Fp::from(7);
-    let circuit = PublicValue { value };
-    let vk = keygen_vk(&params, &circuit).expect("Eq test VK");
-    let pk = keygen_pk(&params, vk.clone(), &circuit).expect("Eq test PK");
-    let column = [value];
-    let columns: [&[Fp]; 1] = [&column];
-    let instances: [&[&[Fp]]; 1] = [&columns];
-    let mut transcript = Blake2bWrite::<_, EqAffine, Challenge255<EqAffine>>::init(Vec::new());
-    halo2_create_proof::<
-        IPACommitmentScheme<EqAffine>,
-        ProverIPA<'_, EqAffine>,
-        Challenge255<EqAffine>,
-        _,
-        _,
-        _,
-    >(&params, &pk, &[circuit], &instances, OsRng, &mut transcript)
-    .expect("Eq test proof");
-    (params, vk, transcript.finalize(), value)
-}
-
-fn ep_fixture() -> (ParamsIPA<EpAffine>, VerifyingKey<EpAffine>, Vec<u8>, Fq) {
-    let params = ParamsIPA::<EpAffine>::new(TEST_K);
-    let value = Fq::from(11);
-    let circuit = PublicValue { value };
-    let vk = keygen_vk(&params, &circuit).expect("Ep test VK");
-    let pk = keygen_pk(&params, vk.clone(), &circuit).expect("Ep test PK");
-    let column = [value];
-    let columns: [&[Fq]; 1] = [&column];
-    let instances: [&[&[Fq]]; 1] = [&columns];
-    let mut transcript = Blake2bWrite::<_, EpAffine, Challenge255<EpAffine>>::init(Vec::new());
-    halo2_create_proof::<
-        IPACommitmentScheme<EpAffine>,
-        ProverIPA<'_, EpAffine>,
-        Challenge255<EpAffine>,
-        _,
-        _,
-        _,
-    >(&params, &pk, &[circuit], &instances, OsRng, &mut transcript)
-    .expect("Ep test proof");
-    (params, vk, transcript.finalize(), value)
-}
-
 #[test]
-fn fixed_history_codec_is_challenge_major_and_strict_for_both_parities() {
-    let eq_challenges = std::array::from_fn(|index| Fp::from((index + 1) as u64));
-    let eq = history_from_eq_parts(eq_challenges, EqAffine::generator()).expect("Eq history");
-    let eq_bytes = encode_history(&eq);
-    for (index, challenge) in eq_challenges.iter().enumerate() {
-        assert_eq!(
-            &eq_bytes[index * 32..(index + 1) * 32],
-            challenge.to_repr().as_ref()
-        );
-    }
-    assert_eq!(
-        &eq_bytes[16 * 32..],
-        EqAffine::generator().to_bytes().as_ref()
-    );
-    assert_eq!(parse_eq_history(&eq_bytes).expect("parse Eq"), eq);
-    validate_offline_cash_history_v1(OfflineCashHalo2ParityV1::Eq, &eq_bytes).expect("validate Eq");
+fn carried_lineage_is_curve_aware_and_rejects_noncanonical_values() {
+    let eq_challenges = std::array::from_fn(|index| {
+        let encoded = Fp::from((index + 1) as u64).to_repr();
+        let mut bytes = [0_u8; 32];
+        bytes.copy_from_slice(encoded.as_ref());
+        bytes
+    });
+    let mut eq_generator = [0_u8; 32];
+    eq_generator.copy_from_slice(EqAffine::generator().to_bytes().as_ref());
+    assert_eq!(eq_generator, FIXTURE_EQ_FOLDED_GENERATOR_V1);
+    let eq_lineage = OfflineCashIpaLineageV1::new(eq_challenges, eq_generator)
+        .expect("canonical Eq lineage wire");
+    let parsed_eq = offline_cash_lineage_to_eq_v1(&eq_lineage).expect("strict Eq lineage");
+    assert_eq!(parsed_eq.xi.len(), 16);
+    assert_eq!(parsed_eq.u, EqAffine::generator());
 
-    let ep_challenges = std::array::from_fn(|index| Fq::from((index + 17) as u64));
-    let ep = history_from_ep_parts(ep_challenges, EpAffine::generator()).expect("Ep history");
-    let ep_bytes = encode_history(&ep);
-    assert_eq!(parse_ep_history(&ep_bytes).expect("parse Ep"), ep);
-    validate_offline_cash_history_v1(OfflineCashHalo2ParityV1::Ep, &ep_bytes).expect("validate Ep");
+    let ep_challenges = std::array::from_fn(|index| {
+        let encoded = Fq::from((index + 17) as u64).to_repr();
+        let mut bytes = [0_u8; 32];
+        bytes.copy_from_slice(encoded.as_ref());
+        bytes
+    });
+    let mut ep_generator = [0_u8; 32];
+    ep_generator.copy_from_slice(EpAffine::generator().to_bytes().as_ref());
+    assert_eq!(ep_generator, FIXTURE_EP_FOLDED_GENERATOR_V1);
+    let ep_lineage = OfflineCashIpaLineageV1::new(ep_challenges, ep_generator)
+        .expect("canonical Ep lineage wire");
+    let parsed_ep = offline_cash_lineage_to_ep_v1(&ep_lineage).expect("strict Ep lineage");
+    assert_eq!(parsed_ep.xi.len(), 16);
+    assert_eq!(parsed_ep.u, EpAffine::generator());
 
-    assert_eq!(
-        parse_eq_history(&eq_bytes[..eq_bytes.len() - 1]),
-        Err(OfflineCashHalo2PrimitiveErrorV1::InvalidHistory)
-    );
-    let mut noncanonical_scalar = eq_bytes;
-    noncanonical_scalar[..32].fill(0xff);
-    assert_eq!(
-        parse_eq_history(&noncanonical_scalar),
-        Err(OfflineCashHalo2PrimitiveErrorV1::InvalidHistory)
-    );
-    let mut identity = eq_bytes;
-    identity[16 * 32..].copy_from_slice(EqAffine::identity().to_bytes().as_ref());
-    assert_eq!(
-        parse_eq_history(&identity),
-        Err(OfflineCashHalo2PrimitiveErrorV1::InvalidHistory)
-    );
+    let mut noncanonical_scalar = eq_lineage;
+    noncanonical_scalar.round_challenges[..32].fill(0xff);
+    assert!(matches!(
+        offline_cash_lineage_to_eq_v1(&noncanonical_scalar),
+        Err(OfflineCashRecursiveLineageErrorV1::NonCanonicalScalar)
+    ));
+
+    assert!(matches!(
+        offline_cash_lineage_to_ep_v1(&eq_lineage),
+        Err(OfflineCashRecursiveLineageErrorV1::NonCanonicalOrIdentityPoint)
+    ));
+    let one_bit_invalid = (0..256)
+        .find_map(|bit| {
+            let mut mutated = eq_lineage;
+            mutated.folded_generator[bit / 8] ^= 1 << (bit % 8);
+            matches!(
+                offline_cash_lineage_to_eq_v1(&mutated),
+                Err(OfflineCashRecursiveLineageErrorV1::NonCanonicalOrIdentityPoint)
+            )
+            .then_some(mutated)
+        })
+        .expect("at least one one-bit point mutation is non-canonical");
+    assert!(matches!(
+        offline_cash_lineage_to_eq_v1(&one_bit_invalid),
+        Err(OfflineCashRecursiveLineageErrorV1::NonCanonicalOrIdentityPoint)
+    ));
+
+    let eq_only_point = (1_u64..=1_024)
+        .find_map(|scalar| {
+            let point = (EqAffine::generator() * Fp::from(scalar)).to_affine();
+            let mut bytes = [0_u8; 32];
+            bytes.copy_from_slice(point.to_bytes().as_ref());
+            Option::<EpAffine>::from(EpAffine::from_bytes(&bytes.into()))
+                .is_none()
+                .then_some(bytes)
+        })
+        .expect("an Eq point outside the Ep curve exists in the bounded search");
+    let wrong_ep_curve = OfflineCashIpaLineageV1::new(ep_challenges, eq_only_point)
+        .expect("field-neutral lineage accepts curve parsing in Core");
+    assert!(matches!(
+        offline_cash_lineage_to_ep_v1(&wrong_ep_curve),
+        Err(OfflineCashRecursiveLineageErrorV1::NonCanonicalOrIdentityPoint)
+    ));
+
+    let ep_only_point = (1_u64..=1_024)
+        .find_map(|scalar| {
+            let point = (EpAffine::generator() * Fq::from(scalar)).to_affine();
+            let mut bytes = [0_u8; 32];
+            bytes.copy_from_slice(point.to_bytes().as_ref());
+            Option::<EqAffine>::from(EqAffine::from_bytes(&bytes.into()))
+                .is_none()
+                .then_some(bytes)
+        })
+        .expect("an Ep point outside the Eq curve exists in the bounded search");
+    let wrong_eq_curve = OfflineCashIpaLineageV1::new(eq_challenges, ep_only_point)
+        .expect("field-neutral lineage accepts curve parsing in Core");
+    assert!(matches!(
+        offline_cash_lineage_to_eq_v1(&wrong_eq_curve),
+        Err(OfflineCashRecursiveLineageErrorV1::NonCanonicalOrIdentityPoint)
+    ));
 }
 
 #[test]
@@ -273,59 +280,5 @@ fn processed_vk_parser_preflights_exact_circuit_and_roundtrips_both_parities() {
         parse_processed_verifier_key_v1::<EqAffine, PublicValue<Fp>>(&trailing, TEST_K)
             .unwrap_err(),
         OfflineCashHalo2PrimitiveErrorV1::InvalidVerifierKeyEncoding
-    );
-}
-
-#[test]
-fn augmented_current_proof_strategy_binds_and_decides_eq_history() {
-    let (params, vk, proof, value) = eq_fixture();
-    let column = [value];
-    let columns: [&[Fp]; 1] = [&column];
-    let instances: [&[&[Fp]]; 1] = [&columns];
-    let accumulator = derive_claim(&params, &vk, &proof, &instances).expect("derive Eq claim");
-    let mut augmented = proof;
-    augmented.extend_from_slice(accumulator.g.to_bytes().as_ref());
-    verify_augmented_claim_for_test(&params, &vk, &augmented, &instances, &accumulator)
-        .expect("verify exact Eq augmented proof");
-    decide_claim_for_test(&params, &accumulator).expect("decide Eq claim");
-
-    let mut changed_challenge = accumulator.clone();
-    changed_challenge.u_packed[0] += Fp::ONE;
-    assert_eq!(
-        verify_augmented_claim_for_test(&params, &vk, &augmented, &instances, &changed_challenge,),
-        Err(OfflineCashHalo2PrimitiveErrorV1::HistoryBindingMismatch)
-    );
-    assert_eq!(
-        decide_claim_for_test(&params, &changed_challenge),
-        Err(OfflineCashHalo2PrimitiveErrorV1::InvalidHistoryDecision)
-    );
-    let wrong_column = [value + Fp::ONE];
-    let wrong_columns: [&[Fp]; 1] = [&wrong_column];
-    let wrong_instances: [&[&[Fp]]; 1] = [&wrong_columns];
-    assert_eq!(
-        verify_augmented_claim_for_test(&params, &vk, &augmented, &wrong_instances, &accumulator,),
-        Err(OfflineCashHalo2PrimitiveErrorV1::InvalidProof)
-    );
-}
-
-#[test]
-fn augmented_current_proof_strategy_binds_and_decides_ep_history() {
-    let (params, vk, proof, value) = ep_fixture();
-    let column = [value];
-    let columns: [&[Fq]; 1] = [&column];
-    let instances: [&[&[Fq]]; 1] = [&columns];
-    let accumulator = derive_claim(&params, &vk, &proof, &instances).expect("derive Ep claim");
-    let mut augmented = proof;
-    augmented.extend_from_slice(accumulator.g.to_bytes().as_ref());
-    verify_augmented_claim_for_test(&params, &vk, &augmented, &instances, &accumulator)
-        .expect("verify exact Ep augmented proof");
-    decide_claim_for_test(&params, &accumulator).expect("decide Ep claim");
-
-    let mut wrong_suffix = augmented;
-    let last = wrong_suffix.len() - 1;
-    wrong_suffix[last] ^= 1;
-    assert_eq!(
-        verify_augmented_claim_for_test(&params, &vk, &wrong_suffix, &instances, &accumulator,),
-        Err(OfflineCashHalo2PrimitiveErrorV1::HistoryBindingMismatch)
     );
 }

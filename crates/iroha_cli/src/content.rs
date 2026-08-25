@@ -1,10 +1,4 @@
 //! Content hosting helpers.
-use std::{
-    collections::BTreeMap,
-    fs,
-    num::{NonZeroU32, NonZeroU64},
-    path::{Path, PathBuf},
-};
 use crate::{Run, RunContext};
 use eyre::{Result, WrapErr};
 use iroha::data_model::{
@@ -17,6 +11,12 @@ use iroha::data_model::{
 use iroha_config::parameters::{actual, defaults};
 use iroha_core::smartcontracts::isi::content::{hash_index, parse_tar_index};
 use iroha_crypto::Hash;
+use std::{
+    collections::BTreeMap,
+    fs,
+    num::{NonZeroU32, NonZeroU64},
+    path::{Path, PathBuf},
+};
 const TAR_BLOCK_BYTES: u64 = 512;
 const TAR_TRAILER_BYTES: u64 = TAR_BLOCK_BYTES * 2;
 #[derive(clap::Subcommand, Debug)]

@@ -4547,7 +4547,7 @@ fn replace_confidential_path_leaf_v3(
 ///
 /// The supplied path must prove the canonical empty leaf at `next_zero_leaf_index`. Outputs are
 /// inserted consecutively, and every returned membership path is rebound to the final root. This
-/// is the only supported local derivation for ABI-21 output-membership witnesses.
+/// is the only supported local derivation for Kagemusha V4 output-membership witnesses.
 #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
 pub fn derive_confidential_sequential_append_paths_v3(
     next_zero_leaf_index: usize,

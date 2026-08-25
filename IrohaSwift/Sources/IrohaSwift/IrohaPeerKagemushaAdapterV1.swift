@@ -2,8 +2,8 @@ import Foundation
 
 /// Narrow adapter between mainline native-canonical Kagemusha archives and the
 /// bounded IPM1 small-handoff rail. It never reconstructs Norito bytes and
-/// does not alter the native bridge ABI. Full ABI21 archives up to 32 MiB stay
-/// on the existing typed Kagemusha rails.
+/// does not alter mobile bridge ABI22. Full Kagemusha V4 archives up to 32 MiB
+/// stay on the existing typed Kagemusha rails.
 public enum IrohaPeerKagemushaAdapterV1 {
     /// The only IPM1 schema accepted for mainline native Kagemusha archives.
     public static let nativeArchiveSchemaVersion: UInt16 = 0x0102

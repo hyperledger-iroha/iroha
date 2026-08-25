@@ -266,7 +266,7 @@ public struct IrohaOfflineTransferTransportChoice: View {
     }
 }
 
-/// Generates either one canonical direct envelope or the ABI-21 QR stream.
+/// Generates either one canonical direct envelope or the Kagemusha V4 QR stream.
 public enum IrohaOfflineFountainPayloadFrames {
     public static let defaultSingleFrameLimitBytes = 320
 

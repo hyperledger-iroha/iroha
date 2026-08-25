@@ -556,7 +556,8 @@ final class TransactionPayloadFixtures {
     try {
       return NetworkId.parse(networkId);
     } catch (final IllegalArgumentException ex) {
-      throw new IllegalStateException(field + " must be a canonical network hash identity", ex);
+      throw new IllegalStateException(
+          field + " must be an exact 64-character lowercase hexadecimal NetworkId", ex);
     }
   }
 

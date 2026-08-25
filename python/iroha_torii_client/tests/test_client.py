@@ -6726,9 +6726,13 @@ def test_get_offline_capability_is_asset_neutral_and_exact() -> None:
     assert capability.cash_handoff_capability == "cash_handoff_v1"
     assert capability.required_bridge_abi_version == 22
     assert capability.max_hops == 8
-    assert capability.ready is True
+    assert capability.ready is False
     assert capability.assets == ()
-    assert capability.blockers == ()
+    assert [blocker.code for blocker in capability.blockers] == [
+        "offline_cash_authenticated_release_unavailable",
+        "offline_cash_eligible_asset_unavailable",
+        "offline_cash_proof_backend_unavailable",
+    ]
     call = session.calls[0]
     assert call["method"] == "GET"
     assert call["url"].endswith("/v1/offline/readiness")
@@ -6743,10 +6747,18 @@ def test_get_offline_capability_rejects_non_universal_claims() -> None:
         _offline_capability_payload(cash_handoff_capability="cash_handoff_v2"),
         _offline_capability_payload(required_bridge_abi_version=20),
         _offline_capability_payload(max_hops=7),
-        _offline_capability_payload(ready=False),
+        _offline_capability_payload(ready="false"),
+        _offline_capability_payload(ready=True),
+        _offline_capability_payload(blockers=[]),
         _offline_capability_payload(assets=[{"asset_definition_id": "asset-specific"}]),
         _offline_capability_payload(
-            blockers=[{"code": "backend_gate", "message": "not universal"}]
+            blockers=[
+                {"code": "backend_gate", "message": "blocked"},
+                {"code": "backend_gate", "message": "duplicate"},
+            ]
+        ),
+        _offline_capability_payload(
+            blockers=list(reversed(_offline_capability_payload()["blockers"]))
         ),
         _offline_capability_payload(unexpected_field=True),
     ]
@@ -6977,7 +6989,7 @@ def test_kagemusha_top_up_anchor_is_closed_typed_and_cross_checked() -> None:
     assert status.result.kind == "top_up"
     typed_anchor = status.result.result.anchor
     assert isinstance(typed_anchor, OfflineTopUpAnchor)
-    # ABI-21 promotes the finalized anchor and its authenticated artifact
+    # Kagemusha V4 promotes the finalized anchor and its authenticated artifact
     # binding atomically to the V4 wire contract.
     assert typed_anchor.version == 4
     assert typed_anchor.network_id == OFFLINE_NETWORK_ID
@@ -7612,7 +7624,7 @@ def test_offline_error_details_reject_malformed_nested_types_and_ranges() -> Non
 
 def test_offline_json_decoder_rejects_duplicates_non_finite_depth_and_size() -> None:
     valid = json.dumps(_offline_capability_payload())
-    duplicate = valid.replace('"ready": true', '"ready": true, "ready": true')
+    duplicate = valid.replace('"ready": false', '"ready": false, "ready": false')
     assert duplicate != valid, "duplicate-key fixture must actually introduce a duplicate"
     non_finite = valid.replace('"max_hops": 8', '"max_hops": NaN')
     infinity = valid.replace('"max_hops": 8', '"max_hops": Infinity')

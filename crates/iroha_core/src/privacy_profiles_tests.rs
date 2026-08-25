@@ -280,8 +280,8 @@ mod tests {
         );
         #[cfg(feature = "zk-stark")]
         assert_eq!(
-            ZK_ACE_PARAMETER_SET_LABEL_V1,
-            b"goldilocks-dense-mds-poseidon-x7-transparent-stark-candidate-v1"
+            ZK_ACE_PARAMETER_SET_LABEL_V2,
+            b"goldilocks-dense-mds-poseidon-x7-four-independent-parallel-lanes-width136-transparent-stark-v2"
         );
         for stale_geometry in [
             b"mask255".as_slice(),
@@ -301,7 +301,7 @@ mod tests {
             );
             #[cfg(feature = "zk-stark")]
             assert!(
-                !ZK_ACE_PARAMETER_SET_LABEL_V1
+                !ZK_ACE_PARAMETER_SET_LABEL_V2
                     .windows(stale_geometry.len())
                     .any(|window| window == stale_geometry)
             );
@@ -1225,12 +1225,67 @@ mod tests {
         }
     }
     #[test]
-    fn zk_ace_remains_fail_closed_without_a_128_bit_commitment_profile() {
+    fn zk_ace_profile_is_deterministic_complete_and_activatable() {
         let protocol_id = PrivacyProtocolIdV1::ZkAcePqAuthorizationV0;
+        let first = compiled_privacy_profile_v1(protocol_id).expect("compiled ZK-ACE V2 profile");
+        let second = compiled_privacy_profile_v1(protocol_id).expect("deterministic profile");
+        assert_eq!(first, second);
         assert_eq!(
-            compiled_privacy_profile_v1(protocol_id),
-            Err(CompiledPrivacyProfileErrorV1::EngineUnavailable { protocol_id })
+            first.proof_system_id,
+            PrivacyProofSystemIdV1::StarkFriSha256Goldilocks
         );
+        assert_eq!(first.engine_id, PrivacyEngineIdV1::NativeGoldilocksStarkFri);
+        assert_eq!(
+            first.protocol_limits,
+            PrivacyProtocolActivationLimitsV1::ZkAcePqAuthorizationV0
+        );
+        assert_eq!(
+            (
+                hex::encode(first.parameter_id.as_bytes()),
+                hex::encode(first.parameter_digest.as_bytes()),
+                hex::encode(first.verifier_digest.as_bytes()),
+                hex::encode(first.statement_schema_digest.as_bytes()),
+                hex::encode(first.engine_manifest_digest.as_bytes()),
+            ),
+            (
+                "8cd1133f0ecb38be9a0415d6ee6820d749774f85bf7a14322c87cf20a6b020ef".to_owned(),
+                "de9b95fcd70b649683a68d70eb6a3e20cddd11bfbe573d4b84fef3101f3160a8".to_owned(),
+                "a643b7cc5af4196ddd01e623fc4d90240f75de7f22890e2b1957a401e62889ec".to_owned(),
+                "f3ad87fd78c4a837c9cb9b74fa7d009a0fb58e507c49386252d8c9458c1b9150".to_owned(),
+                "ce150b8c66e3fdeca709a60ce39eed85239e4c9d8b635d41f793cb46c8931fca".to_owned(),
+            ),
+            "every consensus-critical ZK-ACE V2 profile binding is a pinned KAT"
+        );
+        for digest in [
+            *first.parameter_id.as_bytes(),
+            *first.parameter_digest.as_bytes(),
+            *first.verifier_digest.as_bytes(),
+            *first.statement_schema_digest.as_bytes(),
+            *first.engine_manifest_digest.as_bytes(),
+        ] {
+            assert_ne!(digest, [0; 32]);
+        }
+        let valid = first.activation_record(PrivacyProtocolLifecycleV1::Proposed(
+            PrivacyProposedLifecycleV1 {
+                proposed_at_height: 100,
+                activate_at_height: 400,
+            },
+        ));
+        validate_compiled_privacy_activation_v1(&valid).expect("exact ZK-ACE V2 profile");
+        let mutations: [fn(&mut PrivacyProtocolActivationRecordV1); 7] = [
+            |record| record.parameter_id.0[0] ^= 1,
+            |record| record.parameter_digest.0[0] ^= 1,
+            |record| record.verifier_digest.0[0] ^= 1,
+            |record| record.statement_schema_digest.0[0] ^= 1,
+            |record| record.engine_manifest_digest.0[0] ^= 1,
+            |record| record.proof_system_id = PrivacyProofSystemIdV1::Halo2IpaPasta,
+            |record| record.engine_id = PrivacyEngineIdV1::NativeHalo2Orchard,
+        ];
+        for mutate in mutations {
+            let mut changed = valid;
+            mutate(&mut changed);
+            assert!(validate_compiled_privacy_activation_v1(&changed).is_err());
+        }
     }
     #[test]
     fn zk_ams_profile_is_unavailable_until_every_mkhe_gate_closes() {

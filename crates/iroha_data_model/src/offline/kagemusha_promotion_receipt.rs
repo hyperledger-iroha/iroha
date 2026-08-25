@@ -3028,6 +3028,7 @@ mod tests {
         let result = TransactionResult(
             TransactionResultInner::Ok(DataTriggerSequence::default()),
             Vec::new(),
+            None,
         );
         let result_hash = HashOf::new(&result);
         let result_tree = MerkleTree::from_iter([result_hash]);

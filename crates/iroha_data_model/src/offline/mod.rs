@@ -97,8 +97,15 @@ pub const KAGEMUSHA_RECURSIVE_SPEND_MAX_PEER_HOPS_V2: u32 = 8;
 pub const KAGEMUSHA_RECURSIVE_SPEND_TRANSITION_TAG_BYTES_V2: usize = 24;
 /// Current compact top-up finality proof layout.
 pub const KAGEMUSHA_TOPUP_FINALITY_PROOF_VERSION_V2: u16 = 1;
-/// Current trusted validator-roster artifact layout.
+/// Historical wire-layout version of the trusted validator-roster artifact.
+///
+/// Kagemusha V4 deliberately embeds this already-deployed typed payload; V4
+/// release code must use the explicit V4 alias below rather than implying that
+/// the surrounding release still uses the V2 protocol.
 pub const KAGEMUSHA_TOPUP_FINALITY_ROSTER_ARTIFACT_VERSION_V2: u16 = 1;
+/// Canonical V4 release alias for the unchanged V2 roster wire layout.
+pub const KAGEMUSHA_TOPUP_FINALITY_ROSTER_ARTIFACT_VERSION_V4: u16 =
+    KAGEMUSHA_TOPUP_FINALITY_ROSTER_ARTIFACT_VERSION_V2;
 /// Consensus maximum matching the block-local bounded Merkle tree.
 pub const KAGEMUSHA_TOPUP_FINALITY_MAX_ANCHORS_PER_BLOCK_V2: u32 = 16;
 /// Maximum balanced-Merkle siblings for 16 block-local anchors.
@@ -551,17 +558,28 @@ pub const KAGEMUSHA_RECURSIVE_SPEND_ARTIFACT_ROLES_V4: [&str; 8] = [
 ];
 /// Circuit/verifier role used by the compact Commit-QC plus anchor-path verifier.
 pub const KAGEMUSHA_TOPUP_FINALITY_CIRCUIT_ID_V2: &str = "kagemusha-topup-finality-qc-merkle-v2";
-/// Canonical release-manifest purpose of the trusted validator-roster artifact.
+/// Canonical V4 release alias for the unchanged V2 roster circuit.
+pub const KAGEMUSHA_TOPUP_FINALITY_CIRCUIT_ID_V4: &str = KAGEMUSHA_TOPUP_FINALITY_CIRCUIT_ID_V2;
+/// Historical manifest purpose of the V2 trusted validator-roster payload.
 pub const KAGEMUSHA_TOPUP_FINALITY_ROSTER_ARTIFACT_PURPOSE_V2: &str = "topup_finality_roster";
-/// Exact Norito type stored in the finality-roster artifact file.
+/// Canonical V4 release alias for the unchanged roster purpose.
+pub const KAGEMUSHA_TOPUP_FINALITY_ROSTER_ARTIFACT_PURPOSE_V4: &str =
+    KAGEMUSHA_TOPUP_FINALITY_ROSTER_ARTIFACT_PURPOSE_V2;
+/// Exact historical Norito type stored in the finality-roster artifact file.
 pub const KAGEMUSHA_TOPUP_FINALITY_ROSTER_ARTIFACT_TYPE_V2: &str =
     "iroha_data_model::offline::model::KagemushaTopUpFinalityRosterArtifactV2";
+/// Canonical V4 release alias for the unchanged V2 roster Norito type.
+pub const KAGEMUSHA_TOPUP_FINALITY_ROSTER_ARTIFACT_TYPE_V4: &str =
+    KAGEMUSHA_TOPUP_FINALITY_ROSTER_ARTIFACT_TYPE_V2;
 /// Canonical release file name for the top-up finality roster.
 pub const KAGEMUSHA_TOPUP_FINALITY_ROSTER_FILE_NAME_V2: &str = "topup-finality-roster.norito";
 /// Canonical V4 release name for the unchanged typed finality roster payload.
 pub const KAGEMUSHA_TOPUP_FINALITY_ROSTER_FILE_NAME_V4: &str = "topup-finality-roster-v4.norito";
 /// Maximum roster size, pinned above one full 31-validator window by an exact wire-shape test.
 pub const KAGEMUSHA_TOPUP_FINALITY_ROSTER_ARTIFACT_MAX_BYTES_V2: u64 = 2 * 1024 * 1024;
+/// Canonical V4 release alias for the unchanged V2 roster payload bound.
+pub const KAGEMUSHA_TOPUP_FINALITY_ROSTER_ARTIFACT_MAX_BYTES_V4: u64 =
+    KAGEMUSHA_TOPUP_FINALITY_ROSTER_ARTIFACT_MAX_BYTES_V2;
 /// Native-width mirror of [`KAGEMUSHA_TOPUP_FINALITY_ROSTER_ARTIFACT_MAX_BYTES_V2`].
 const KAGEMUSHA_TOPUP_FINALITY_ROSTER_ARTIFACT_MAX_BYTES_USIZE_V2: usize = 2 * 1024 * 1024;
 /// Production-promotion gate for the ABI-22/V4 paired recursive backend.
@@ -605,7 +623,7 @@ pub enum KagemushaValidationError {
     /// A transition did not consume its parent nullifier.
     RecursiveSpendMissingPreviousNullifier,
     /// The authenticated paired-proof Pasta backend is not linked.
-    RecursiveSpendV2ProofBackendUnavailable,
+    RecursiveSpendProofBackendUnavailable,
 }
 impl core::fmt::Display for KagemushaValidationError {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
@@ -630,7 +648,7 @@ impl core::fmt::Display for KagemushaValidationError {
             Self::RecursiveSpendMissingPreviousNullifier => {
                 f.write_str("Kagemusha transition does not consume its parent nullifier")
             }
-            Self::RecursiveSpendV2ProofBackendUnavailable => {
+            Self::RecursiveSpendProofBackendUnavailable => {
                 f.write_str("authenticated Kagemusha recursive proof backend is unavailable")
             }
         }
@@ -1908,7 +1926,7 @@ impl KagemushaRecipientPaymentRequestSigningPayloadV2 {
     }
 }
 impl KagemushaRecipientPaymentRequestV2 {
-    /// Exact network for the requested offline note.
+    /// Exact network for the requested offline cash payment.
     #[must_use]
     pub fn network_id(&self) -> &NetworkId {
         &self.network_id
@@ -2784,12 +2802,12 @@ impl KagemushaTopUpFinalityRosterArtifactReferenceV4 {
         if !is_kagemusha_portable_file_name(&self.file_name)
             || self.file_name != KAGEMUSHA_TOPUP_FINALITY_ROSTER_FILE_NAME_V4
             || self.size_bytes == 0
-            || self.size_bytes > KAGEMUSHA_TOPUP_FINALITY_ROSTER_ARTIFACT_MAX_BYTES_V2
+            || self.size_bytes > KAGEMUSHA_TOPUP_FINALITY_ROSTER_ARTIFACT_MAX_BYTES_V4
             || self.sha256 == [0; 32]
             || !is_kagemusha_portable_identifier(&self.artifact_generation)
-            || self.circuit_id != KAGEMUSHA_TOPUP_FINALITY_CIRCUIT_ID_V2
-            || self.purpose != KAGEMUSHA_TOPUP_FINALITY_ROSTER_ARTIFACT_PURPOSE_V2
-            || self.artifact_type != KAGEMUSHA_TOPUP_FINALITY_ROSTER_ARTIFACT_TYPE_V2
+            || self.circuit_id != KAGEMUSHA_TOPUP_FINALITY_CIRCUIT_ID_V4
+            || self.purpose != KAGEMUSHA_TOPUP_FINALITY_ROSTER_ARTIFACT_PURPOSE_V4
+            || self.artifact_type != KAGEMUSHA_TOPUP_FINALITY_ROSTER_ARTIFACT_TYPE_V4
             || self.required_bridge_abi_version != KAGEMUSHA_RECURSIVE_SPEND_NATIVE_BRIDGE_ABI_V4
         {
             return Err(KagemushaValidationError::InvalidRecursiveSpendProof {
@@ -3780,6 +3798,29 @@ mod kagemusha_v4_artifact_contract_tests {
     fn digest(label: &[u8]) -> [u8; 32] {
         Sha256::digest(label).into()
     }
+
+    #[test]
+    fn v4_backend_error_and_roster_aliases_do_not_regress_to_protocol_v2_names() {
+        let source = include_str!("mod.rs");
+        assert!(!source.contains(concat!("RecursiveSpendV2", "ProofBackendUnavailable")));
+        assert_eq!(
+            KAGEMUSHA_TOPUP_FINALITY_ROSTER_ARTIFACT_VERSION_V4,
+            KAGEMUSHA_TOPUP_FINALITY_ROSTER_ARTIFACT_VERSION_V2
+        );
+        assert_eq!(
+            KAGEMUSHA_TOPUP_FINALITY_ROSTER_ARTIFACT_PURPOSE_V4,
+            KAGEMUSHA_TOPUP_FINALITY_ROSTER_ARTIFACT_PURPOSE_V2
+        );
+        assert_eq!(
+            KAGEMUSHA_TOPUP_FINALITY_ROSTER_ARTIFACT_TYPE_V4,
+            KAGEMUSHA_TOPUP_FINALITY_ROSTER_ARTIFACT_TYPE_V2
+        );
+        assert_eq!(
+            KAGEMUSHA_TOPUP_FINALITY_ROSTER_ARTIFACT_MAX_BYTES_V4,
+            KAGEMUSHA_TOPUP_FINALITY_ROSTER_ARTIFACT_MAX_BYTES_V2
+        );
+    }
+
     fn encode_with_alternate_norito_layout<T: norito::NoritoSerialize>(value: &T) -> Vec<u8> {
         let alternate_flags =
             norito::core::default_encode_flags() ^ norito::core::header_flags::COMPACT_LEN;
@@ -5015,7 +5056,7 @@ mod kagemusha_v4_artifact_contract_tests {
         }
     }
     #[test]
-    fn offline_note_inputs_reject_zero_network_identity() {
+    fn kagemusha_v4_inputs_reject_zero_network_identity() {
         let mut note = retired_top_up_fixture().current_note;
         note.network_id = NetworkId::from_genesis_hash(iroha_crypto::HashOf::<
             crate::block::BlockHeader,
@@ -5700,7 +5741,7 @@ mod kagemusha_v4_artifact_contract_tests {
                 &mut legacy_encoded.as_slice(),
             )
             .is_err(),
-            "the legacy field layout must not decode as ABI-21"
+            "the legacy field layout must not decode as Kagemusha V4"
         );
     }
     include!("kagemusha_activation_instruction_inline_tests.rs");
@@ -6666,7 +6707,7 @@ mod kagemusha_v4_lifecycle_domain_tests {
     use super::*;
     include!("kagemusha_v4_lifecycle_digest_domain_test.rs");
     #[test]
-    fn abi21_operation_vector_rejects_noncanonical_pallas_elements() {
+    fn v4_operation_vector_rejects_noncanonical_pallas_elements() {
         let mut limbs = [0_u32; KAGEMUSHA_RECURSIVE_SPEND_OPERATION_LIMBS_V4];
         limbs[0] = 1;
         KagemushaRecursiveSpendOperationVectorV4 { limbs }

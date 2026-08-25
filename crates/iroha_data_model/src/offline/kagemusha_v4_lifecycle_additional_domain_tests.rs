@@ -1,7 +1,7 @@
 mod kagemusha_v4_lifecycle_additional_domain_tests {
     use super::*;
     #[test]
-    fn abi21_bundle_request_and_redemption_domains_are_unique() {
+    fn v4_bundle_request_and_redemption_domains_are_unique() {
         let v4 = [
             KAGEMUSHA_RECURSIVE_SPEND_BUNDLE_DIGEST_DOMAIN_V4,
             KAGEMUSHA_REDEEM_PAYLOAD_DIGEST_DOMAIN_V4,
@@ -23,7 +23,7 @@ mod kagemusha_v4_lifecycle_additional_domain_tests {
         );
     }
     #[test]
-    fn abi21_chain_request_size_caps_are_inclusive_and_fail_one_byte_over() {
+    fn v4_chain_request_size_caps_are_inclusive_and_fail_one_byte_over() {
         for maximum in [
             KAGEMUSHA_RECURSIVE_SPEND_TOPUP_REQUEST_MAX_BYTES_V4,
             KAGEMUSHA_RECURSIVE_SPEND_REDEEM_REQUEST_MAX_BYTES_V4,

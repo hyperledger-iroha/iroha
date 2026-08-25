@@ -167,9 +167,9 @@ payer, program/revision, and gas bound, replace only that field, then sign and
 submit the unchanged payload. The client does not infer a sponsor, reserve a
 quote, or fall back to the authority. Legacy transaction metadata keys
 `fee_sponsor`, `gas_asset_id`, and `gas_limit` are rejected.
-`IROHA_NETWORK_ID` must be the canonical checksummed hash literal generated
-from the deployment genesis; a display chain label is never accepted as a
-signing domain.
+`IROHA_NETWORK_ID` must be the canonical lowercase 64-hex public `NetworkId`
+generated from the deployment genesis, with the final marker bit set; a display
+chain label or tagged Norito-JSON hash is never accepted as a signing domain.
 
 ## Signed SoraFS orderbook submission
 

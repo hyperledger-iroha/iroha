@@ -32,6 +32,29 @@ private typealias OfflineCashReleaseProbeFn = @convention(c) (
     UnsafeMutablePointer<UInt8>?, CUnsignedLong,
     UnsafeMutablePointer<UInt8>?, CUnsignedLong
 ) -> Int32
+private typealias OfflineCashWalletSessionOpenBoundFn = @convention(c) (
+    UnsafePointer<UInt8>?, CUnsignedLong,
+    UnsafePointer<UInt8>?, CUnsignedLong,
+    UnsafePointer<UInt8>?, CUnsignedLong,
+    UnsafePointer<UInt8>?, CUnsignedLong,
+    UnsafePointer<UInt8>?, CUnsignedLong,
+    UnsafeMutablePointer<UInt64>?
+) -> Int32
+private typealias OfflineCashWalletSessionAcceptPaymentFn = @convention(c) (
+    UInt64,
+    UnsafePointer<UInt8>?, CUnsignedLong,
+    UInt64,
+    UnsafeMutablePointer<UnsafeMutablePointer<UInt8>?>?, UnsafeMutablePointer<CUnsignedLong>?
+) -> Int32
+private typealias OfflineCashWalletSessionAcceptAcknowledgementFn = @convention(c) (
+    UInt64,
+    UnsafePointer<UInt8>?, CUnsignedLong,
+    UnsafeMutablePointer<UnsafeMutablePointer<UInt8>?>?, UnsafeMutablePointer<CUnsignedLong>?
+) -> Int32
+private typealias OfflineCashWalletSessionStateFn = @convention(c) (
+    UInt64, UnsafeMutablePointer<UInt8>?
+) -> Int32
+private typealias OfflineCashWalletSessionCloseFn = @convention(c) (UInt64) -> Int32
 
 extension NoritoNativeBridge {
     private func copyOfflineCashOutput(
@@ -198,6 +221,133 @@ extension NoritoNativeBridge {
             blocker: nil
         )
     }
+
+    fileprivate func offlineCashWalletSessionOpenBoundV1(
+        request: Data,
+        expectedReleaseId: Data,
+        expectedArtifactManifestSHA256: Data,
+        expectedNetworkIDLiteral: Data,
+        expectedAssetDefinitionID: Data
+    ) throws -> UInt64 {
+        guard let function = resolveKagemushaV2Symbol(
+            "connect_norito_offline_cash_wallet_session_open_bound_v1",
+            as: OfflineCashWalletSessionOpenBoundFn.self
+        ) else {
+            throw OfflineCashV1Error.nativeBridgeABI22Unavailable
+        }
+        var handle: UInt64 = 0
+        let status = request.withUnsafeBytes { requestBuffer in
+            expectedReleaseId.withUnsafeBytes { releaseBuffer in
+                expectedArtifactManifestSHA256.withUnsafeBytes { manifestBuffer in
+                    expectedNetworkIDLiteral.withUnsafeBytes { networkBuffer in
+                        expectedAssetDefinitionID.withUnsafeBytes { assetBuffer in
+                            function(
+                                requestBuffer.bindMemory(to: UInt8.self).baseAddress,
+                                CUnsignedLong(requestBuffer.count),
+                                releaseBuffer.bindMemory(to: UInt8.self).baseAddress,
+                                CUnsignedLong(releaseBuffer.count),
+                                manifestBuffer.bindMemory(to: UInt8.self).baseAddress,
+                                CUnsignedLong(manifestBuffer.count),
+                                networkBuffer.bindMemory(to: UInt8.self).baseAddress,
+                                CUnsignedLong(networkBuffer.count),
+                                assetBuffer.bindMemory(to: UInt8.self).baseAddress,
+                                CUnsignedLong(assetBuffer.count),
+                                &handle
+                            )
+                        }
+                    }
+                }
+            }
+        }
+        guard status == 0, handle != 0 else {
+            throw OfflineCashV1Error.installedReleaseMismatch
+        }
+        return handle
+    }
+
+    fileprivate func offlineCashWalletSessionAcceptPaymentV1(
+        handle: UInt64,
+        payment: Data,
+        observedNowMilliseconds: UInt64
+    ) throws -> Data {
+        guard let function = resolveKagemushaV2Symbol(
+            "connect_norito_offline_cash_wallet_session_accept_payment_v1",
+            as: OfflineCashWalletSessionAcceptPaymentFn.self
+        ) else {
+            throw OfflineCashV1Error.nativeBridgeABI22Unavailable
+        }
+        var output: UnsafeMutablePointer<UInt8>?
+        var outputLength: CUnsignedLong = 0
+        let status = payment.withUnsafeBytes { buffer in
+            function(
+                handle,
+                buffer.bindMemory(to: UInt8.self).baseAddress,
+                CUnsignedLong(buffer.count),
+                observedNowMilliseconds,
+                &output,
+                &outputLength
+            )
+        }
+        return try copyOfflineCashOutput(
+            status: status,
+            pointer: output,
+            length: outputLength
+        )
+    }
+
+    fileprivate func offlineCashWalletSessionAcceptAcknowledgementV1(
+        handle: UInt64,
+        acknowledgement: Data
+    ) throws -> Data {
+        guard let function = resolveKagemushaV2Symbol(
+            "connect_norito_offline_cash_wallet_session_accept_acknowledgement_v1",
+            as: OfflineCashWalletSessionAcceptAcknowledgementFn.self
+        ) else {
+            throw OfflineCashV1Error.nativeBridgeABI22Unavailable
+        }
+        var output: UnsafeMutablePointer<UInt8>?
+        var outputLength: CUnsignedLong = 0
+        let status = acknowledgement.withUnsafeBytes { buffer in
+            function(
+                handle,
+                buffer.bindMemory(to: UInt8.self).baseAddress,
+                CUnsignedLong(buffer.count),
+                &output,
+                &outputLength
+            )
+        }
+        return try copyOfflineCashOutput(
+            status: status,
+            pointer: output,
+            length: outputLength
+        )
+    }
+
+    fileprivate func offlineCashWalletSessionStateV1(handle: UInt64) throws -> UInt8 {
+        guard let function = resolveKagemushaV2Symbol(
+            "connect_norito_offline_cash_wallet_session_state_v1",
+            as: OfflineCashWalletSessionStateFn.self
+        ) else {
+            throw OfflineCashV1Error.nativeBridgeABI22Unavailable
+        }
+        var state: UInt8 = 0
+        guard function(handle, &state) == 0, (1...3).contains(state) else {
+            throw OfflineCashV1Error.invalidStateTransition("native_session_unavailable")
+        }
+        return state
+    }
+
+    fileprivate func offlineCashWalletSessionCloseV1(handle: UInt64) throws {
+        guard let function = resolveKagemushaV2Symbol(
+            "connect_norito_offline_cash_wallet_session_close_v1",
+            as: OfflineCashWalletSessionCloseFn.self
+        ) else {
+            throw OfflineCashV1Error.nativeBridgeABI22Unavailable
+        }
+        guard function(handle) == 0 else {
+            throw OfflineCashV1Error.invalidStateTransition("native_session_close_rejected")
+        }
+    }
 }
 
 public struct OfflineCashPaymentRequestV1: Equatable, Sendable {
@@ -324,31 +474,43 @@ public struct OfflineCashReleaseStatusV1: Equatable, Sendable {
 }
 
 public enum OfflineCashWalletSessionStateV1: String, Equatable, Sendable {
+    case unavailable
     case receiveRequestReady
-    case paymentCommitted
-    case acknowledged
+    case paymentVerified
+    case acknowledgementVerified
 }
 
 public enum OfflineCashWalletSessionEventV1: String, Equatable, Sendable {
-    case paymentCommitted
-    case paymentReplay
-    case acknowledged
-    case acknowledgementReplay
+    case paymentVerified
+    case paymentVerificationReplay
+    case acknowledgementVerified
+    case acknowledgementVerificationReplay
 }
 
-/// Opaque, monotonic and fail-closed receiver session. No production bypass is exposed.
+/// Opaque, monotonic and fail-closed receiver proof-verification session.
+///
+/// States `paymentVerified` and `acknowledgementVerified` describe only native cryptographic
+/// verification and retention inside this process. They do not mean that the secure-device
+/// journal, exact-next counter, wallet balance, payment outbox, or acknowledgement store was
+/// mutated durably. Only the sealed Core lifecycle joined to a qualifying device backend may
+/// authorize those effects. No production bypass is exposed.
 public final class OfflineCashWalletSessionV1 {
     public let request: OfflineCashPaymentRequestV1
     public let expectedReleaseId: Data
     public let expectedArtifactManifestSHA256: Data
+    public let expectedNetworkID: NetworkId
+    public let expectedAssetDefinitionID: String
     private let lock = NSLock()
-    private var committedPayment: OfflineCashPaymentV1?
-    private var acceptedAcknowledgement: OfflineCashAcknowledgementV1?
+    private var nativeHandle: UInt64?
+    private var verifiedPayment: OfflineCashPaymentV1?
+    private var verifiedAcknowledgement: OfflineCashAcknowledgementV1?
 
     public init(
         request: OfflineCashPaymentRequestV1,
         expectedReleaseId: Data,
-        expectedArtifactManifestSHA256: Data
+        expectedArtifactManifestSHA256: Data,
+        expectedNetworkID: NetworkId,
+        expectedAssetDefinitionID: String
     ) throws {
         guard expectedReleaseId.count == 32,
               expectedReleaseId.contains(where: { $0 != 0 }) else {
@@ -357,6 +519,19 @@ public final class OfflineCashWalletSessionV1 {
         guard expectedArtifactManifestSHA256.count == 32,
               expectedArtifactManifestSHA256.contains(where: { $0 != 0 }) else {
             throw OfflineCashV1Error.invalidDigest("expectedArtifactManifestSHA256")
+        }
+        let assetBytes = Data(expectedAssetDefinitionID.utf8)
+        let isCanonicalBase58 = !assetBytes.isEmpty && assetBytes.count <= 64
+            && assetBytes.allSatisfy { byte in
+                (byte >= 49 && byte <= 57)
+                    || (byte >= 65 && byte <= 72)
+                    || (byte >= 74 && byte <= 78)
+                    || (byte >= 80 && byte <= 90)
+                    || (byte >= 97 && byte <= 107)
+                    || (byte >= 109 && byte <= 122)
+            }
+        guard isCanonicalBase58 else {
+            throw OfflineCashV1Error.invalidCanonicalMessage
         }
         let status = OfflineCashReleaseStatusV1.installed()
         guard status.available else {
@@ -370,90 +545,136 @@ public final class OfflineCashWalletSessionV1 {
         ) else {
             throw OfflineCashV1Error.installedReleaseMismatch
         }
+        let nativeHandle = try NoritoNativeBridge.shared.offlineCashWalletSessionOpenBoundV1(
+            request: request.canonicalNorito,
+            expectedReleaseId: expectedReleaseId,
+            expectedArtifactManifestSHA256: expectedArtifactManifestSHA256,
+            expectedNetworkIDLiteral: Data(expectedNetworkID.literal.utf8),
+            expectedAssetDefinitionID: assetBytes
+        )
         self.request = request
         self.expectedReleaseId = expectedReleaseId
         self.expectedArtifactManifestSHA256 = expectedArtifactManifestSHA256
+        self.expectedNetworkID = expectedNetworkID
+        self.expectedAssetDefinitionID = expectedAssetDefinitionID
+        self.nativeHandle = nativeHandle
+    }
+
+    deinit {
+        if let nativeHandle {
+            try? NoritoNativeBridge.shared.offlineCashWalletSessionCloseV1(handle: nativeHandle)
+        }
     }
 
     public var state: OfflineCashWalletSessionStateV1 {
         lock.lock()
         defer { lock.unlock() }
-        if acceptedAcknowledgement != nil { return .acknowledged }
-        if committedPayment != nil { return .paymentCommitted }
-        return .receiveRequestReady
+        guard let nativeHandle,
+              let state = try? NoritoNativeBridge.shared.offlineCashWalletSessionStateV1(
+                handle: nativeHandle
+              ) else {
+            return .unavailable
+        }
+        switch state {
+        case 1: return .receiveRequestReady
+        case 2: return .paymentVerified
+        case 3: return .acknowledgementVerified
+        default: return .unavailable
+        }
     }
 
     public var payment: OfflineCashPaymentV1? {
         lock.lock()
         defer { lock.unlock() }
-        return committedPayment
+        return verifiedPayment
     }
 
     public var acknowledgement: OfflineCashAcknowledgementV1? {
         lock.lock()
         defer { lock.unlock() }
-        return acceptedAcknowledgement
+        return verifiedAcknowledgement
     }
 
     public func acceptPayment(
         canonicalNorito: Data
     ) throws -> OfflineCashWalletSessionEventV1 {
-        let sessionCanonical = try NoritoNativeBridge.shared.offlineCashTernary(
-            symbol: "connect_norito_offline_cash_payment_canonicalize_for_session_v1",
-            first: request.canonicalNorito,
-            second: canonicalNorito,
-            third: expectedArtifactManifestSHA256
-        )
+        lock.lock()
+        defer { lock.unlock() }
+        guard let nativeHandle else {
+            throw OfflineCashV1Error.invalidStateTransition("session_closed")
+        }
+        let observed = Date().timeIntervalSince1970 * 1_000
+        guard observed.isFinite, observed > 0, observed <= Double(UInt64.max) else {
+            throw OfflineCashV1Error.invalidStateTransition("invalid_observed_time")
+        }
+        let sessionCanonical = try NoritoNativeBridge.shared
+            .offlineCashWalletSessionAcceptPaymentV1(
+                handle: nativeHandle,
+                payment: canonicalNorito,
+                observedNowMilliseconds: UInt64(observed.rounded(.down))
+            )
         let candidate = try OfflineCashPaymentV1(
             request: request,
             canonicalNorito: sessionCanonical
         )
-        lock.lock()
-        defer { lock.unlock() }
-        guard acceptedAcknowledgement == nil else {
-            throw OfflineCashV1Error.invalidStateTransition("payment_after_acknowledgement")
-        }
-        if let committedPayment {
-            guard committedPayment == candidate else {
+        if let verifiedPayment {
+            guard verifiedPayment == candidate else {
                 throw OfflineCashV1Error.invalidStateTransition("conflicting_payment")
             }
-            return .paymentReplay
+            return .paymentVerificationReplay
         }
-        committedPayment = candidate
-        return .paymentCommitted
+        verifiedPayment = candidate
+        return .paymentVerified
     }
 
     public func acceptAcknowledgement(
         canonicalNorito: Data
     ) throws -> OfflineCashWalletSessionEventV1 {
         lock.lock()
-        guard let payment = committedPayment else {
-            lock.unlock()
+        defer { lock.unlock() }
+        guard let nativeHandle else {
+            throw OfflineCashV1Error.invalidStateTransition("session_closed")
+        }
+        guard let payment = verifiedPayment else {
             throw OfflineCashV1Error.invalidStateTransition("acknowledgement_before_payment")
         }
-        lock.unlock()
+        let sessionCanonical = try NoritoNativeBridge.shared
+            .offlineCashWalletSessionAcceptAcknowledgementV1(
+                handle: nativeHandle,
+                acknowledgement: canonicalNorito
+            )
         let candidate = try OfflineCashAcknowledgementV1(
             request: request,
             payment: payment,
-            canonicalNorito: canonicalNorito
+            canonicalNorito: sessionCanonical
         )
-        lock.lock()
-        defer { lock.unlock() }
-        if let acceptedAcknowledgement {
-            guard acceptedAcknowledgement == candidate else {
+        if let verifiedAcknowledgement {
+            guard verifiedAcknowledgement == candidate else {
                 throw OfflineCashV1Error.invalidStateTransition("conflicting_acknowledgement")
             }
-            return .acknowledgementReplay
+            return .acknowledgementVerificationReplay
         }
-        acceptedAcknowledgement = candidate
-        return .acknowledged
+        verifiedAcknowledgement = candidate
+        return .acknowledgementVerified
+    }
+
+    public func close() throws {
+        lock.lock()
+        defer { lock.unlock() }
+        guard let nativeHandle else { return }
+        try NoritoNativeBridge.shared.offlineCashWalletSessionCloseV1(handle: nativeHandle)
+        self.nativeHandle = nil
     }
 }
 
 /// Strict `kgm2:` peer adapter. It is intentionally disjoint from PKK1 transport.
 public struct OfflineCashPeerAdapterV1: Sendable {
     public static let textPrefix = "kgm2:"
+    public static let maximumRawSessionBytes = 9_211
     public static let maximumTextSessionBytes = 12_288
+    public static let maximumPaymentRequestTextBytes = 1_029
+    public static let maximumPaymentTextBytes = 10_587
+    public static let maximumAcknowledgementTextBytes = 347
 
     public init() {}
 
@@ -462,7 +683,8 @@ public struct OfflineCashPeerAdapterV1: Sendable {
             NoritoNativeBridge.shared.offlineCashUnary(
                 symbol: "connect_norito_offline_cash_peer_encode_payment_request_v1",
                 input: request.canonicalNorito
-            )
+            ),
+            maximumTextBytes: Self.maximumPaymentRequestTextBytes
         )
     }
 
@@ -470,7 +692,8 @@ public struct OfflineCashPeerAdapterV1: Sendable {
         try OfflineCashPaymentRequestV1(
             canonicalNorito: peerDecodeUnary(
                 symbol: "connect_norito_offline_cash_peer_decode_payment_request_v1",
-                text: text
+                text: text,
+                maximumTextBytes: Self.maximumPaymentRequestTextBytes
             )
         )
     }
@@ -484,7 +707,8 @@ public struct OfflineCashPeerAdapterV1: Sendable {
                 symbol: "connect_norito_offline_cash_peer_encode_payment_v1",
                 first: request.canonicalNorito,
                 second: payment.canonicalNorito
-            )
+            ),
+            maximumTextBytes: Self.maximumPaymentTextBytes
         )
     }
 
@@ -492,7 +716,8 @@ public struct OfflineCashPeerAdapterV1: Sendable {
         request: OfflineCashPaymentRequestV1,
         text: String
     ) throws -> OfflineCashPaymentV1 {
-        guard let bytes = text.data(using: .utf8), bytes.count <= Self.maximumTextSessionBytes else {
+        guard let bytes = text.data(using: .utf8),
+              bytes.count <= Self.maximumPaymentTextBytes else {
             throw OfflineCashV1Error.invalidPeerText
         }
         let canonical = try NoritoNativeBridge.shared.offlineCashBinary(
@@ -514,7 +739,8 @@ public struct OfflineCashPeerAdapterV1: Sendable {
                 first: request.canonicalNorito,
                 second: payment.canonicalNorito,
                 third: acknowledgement.canonicalNorito
-            )
+            ),
+            maximumTextBytes: Self.maximumAcknowledgementTextBytes
         )
     }
 
@@ -523,7 +749,8 @@ public struct OfflineCashPeerAdapterV1: Sendable {
         payment: OfflineCashPaymentV1,
         text: String
     ) throws -> OfflineCashAcknowledgementV1 {
-        guard let bytes = text.data(using: .utf8), bytes.count <= Self.maximumTextSessionBytes else {
+        guard let bytes = text.data(using: .utf8),
+              bytes.count <= Self.maximumAcknowledgementTextBytes else {
             throw OfflineCashV1Error.invalidPeerText
         }
         let canonical = try NoritoNativeBridge.shared.offlineCashTernary(
@@ -539,15 +766,19 @@ public struct OfflineCashPeerAdapterV1: Sendable {
         )
     }
 
-    private func peerDecodeUnary(symbol: String, text: String) throws -> Data {
-        guard let bytes = text.data(using: .utf8), bytes.count <= Self.maximumTextSessionBytes else {
+    private func peerDecodeUnary(
+        symbol: String,
+        text: String,
+        maximumTextBytes: Int
+    ) throws -> Data {
+        guard let bytes = text.data(using: .utf8), bytes.count <= maximumTextBytes else {
             throw OfflineCashV1Error.invalidPeerText
         }
         return try NoritoNativeBridge.shared.offlineCashUnary(symbol: symbol, input: bytes)
     }
 
-    private func text(_ data: Data) throws -> String {
-        guard data.count <= Self.maximumTextSessionBytes,
+    private func text(_ data: Data, maximumTextBytes: Int) throws -> String {
+        guard data.count <= maximumTextBytes,
               let value = String(data: data, encoding: .utf8),
               value.hasPrefix(Self.textPrefix) else {
             throw OfflineCashV1Error.invalidPeerText

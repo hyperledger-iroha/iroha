@@ -28,7 +28,7 @@ class IrohaPeerQRFrameV1(
 
     init {
         require(stream.size == 16) { "Malformed IRQR stream identifier" }
-        require(total in 1..maximumDataShards(profile) && index in 0..0xffff) {
+        require(total in 1..maximumDataShards(profile, payloadKind) && index in 0..0xffff) {
             "Malformed IRQR frame index"
         }
         require(framePayload.size <= 0xffff) { "Malformed IRQR frame payload" }
@@ -37,7 +37,7 @@ class IrohaPeerQRFrameV1(
                 index == 0 && total == 1 &&
                     framePayload.size > IrohaPeerWireMessageV1.HEADER_LENGTH &&
                     framePayload.size <= IrohaPeerWireMessageV1.HEADER_LENGTH +
-                    maximumEncodedBytes(profile),
+                    maximumEncodedBytes(profile, payloadKind),
             ) { "Malformed complete IRQR frame" }
             IrohaPeerQRFrameKindV1.HEADER -> require(
                 index == 0 && framePayload.size == IrohaPeerWireMessageV1.HEADER_LENGTH,
@@ -117,12 +117,14 @@ class IrohaPeerQRFrameV1(
         }
 
         private fun maximumEncodedBytes(
-            @Suppress("UNUSED_PARAMETER") profile: IrohaPeerPayloadProfile,
-        ): Int =
-            IrohaPeerWireMessageV1.MAXIMUM_KAGEMUSHA_ENCODED_BYTES
+            profile: IrohaPeerPayloadProfile,
+            kind: IrohaPeerPayloadKind,
+        ): Int = IrohaPeerWireLimitsV1.PEER_V1.maximumEncodedBytes(profile, kind)
 
-        private fun maximumDataShards(profile: IrohaPeerPayloadProfile): Int =
-            (maximumEncodedBytes(profile) + 255) / 256
+        private fun maximumDataShards(
+            profile: IrohaPeerPayloadProfile,
+            kind: IrohaPeerPayloadKind,
+        ): Int = (maximumEncodedBytes(profile, kind) + 255) / 256
     }
 }
 
@@ -287,10 +289,14 @@ class IrohaPeerQRScanResultV1 internal constructor(
     val message: IrohaPeerWireMessageV1?,
     val profile: IrohaPeerPayloadProfile?,
     val payloadKind: IrohaPeerPayloadKind?,
+    streamId: ByteArray,
     val receivedDataFrames: Int,
     val totalDataFrames: Int,
     val recoveredDataFrames: Int,
+    val isDuplicate: Boolean,
 ) {
+    private val stream = streamId.copyOf()
+    val streamId: ByteArray get() = stream.copyOf()
     val isComplete: Boolean get() = message != null
     val progress: Double get() = when {
         totalDataFrames > 0 -> minOf(1.0, receivedDataFrames.toDouble() / totalDataFrames.toDouble())
@@ -506,9 +512,11 @@ class IrohaPeerQRScanSessionV1 @JvmOverloads constructor(
                     message,
                     frame.profile,
                     frame.payloadKind,
+                    frame.streamId,
                     0,
                     0,
                     0,
+                    false,
                 )
             } catch (failure: RuntimeException) {
                 quarantine(key, nowMillis)
@@ -546,12 +554,15 @@ class IrohaPeerQRScanSessionV1 @JvmOverloads constructor(
                 encoded.fill(0)
             }
             candidates[key] = candidate
-            return result(candidate)
+            return result(candidate, isDuplicate = true)
         }
 
         try {
             val maximumShards =
-                (IrohaPeerWireMessageV1.MAXIMUM_KAGEMUSHA_ENCODED_BYTES +
+                (IrohaPeerWireLimitsV1.PEER_V1.maximumEncodedBytes(
+                    frame.profile,
+                    frame.payloadKind,
+                ) +
                     IrohaPeerQRCodecV1.SHARD_BYTES - 1) / IrohaPeerQRCodecV1.SHARD_BYTES
             require(frame.total <= maximumShards) { "IRQR total exceeds profile bound" }
             candidate.declaredTotal?.let {
@@ -609,14 +620,16 @@ class IrohaPeerQRScanSessionV1 @JvmOverloads constructor(
                         message,
                         frame.profile,
                         frame.payloadKind,
+                        frame.streamId,
                         dataCount(header),
                         dataCount(header),
                         candidate.recovered.size,
+                        false,
                     )
                 }
             }
             candidates[key] = candidate
-            return result(candidate)
+            return result(candidate, isDuplicate = false)
         } catch (failure: RuntimeException) {
             encoded.fill(0)
             candidate.clear()
@@ -705,13 +718,18 @@ class IrohaPeerQRScanSessionV1 @JvmOverloads constructor(
             require(it in 1..0xffff)
         }
 
-    private fun result(candidate: Candidate) = IrohaPeerQRScanResultV1(
+    private fun result(
+        candidate: Candidate,
+        isDuplicate: Boolean,
+    ) = IrohaPeerQRScanResultV1(
         null,
         candidate.profile,
         candidate.payloadKind,
+        candidate.streamId,
         candidate.dataFrames.size,
         candidate.header?.let(::dataCount) ?: 0,
         candidate.recovered.size,
+        isDuplicate,
     )
 
     private fun quarantine(key: StreamKey, nowMillis: Long) {

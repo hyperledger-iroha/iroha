@@ -27,10 +27,10 @@ import org.junit.Test;
 public final class AliasSetupModelsTests {
   private static final NetworkId TEST_NETWORK_ID =
       NetworkId.parse(
-          "hash:32C903E5B3497E34C2B844EBFE8A39C19E6CF8F95D44C1FFB8BA9DCB42F91149#A2F0");
+          "32c903e5b3497e34c2b844ebfe8a39c19e6cf8f95d44c1ffb8ba9dcb42f91149");
   private static final NetworkId OTHER_NETWORK_ID =
       NetworkId.parse(
-          "hash:0E5751C026E543B2E8AB2EB06099DAA1D1E5DF47778F7787FAAB45CDF12FE3A9#6A22");
+          "0e5751c026e543b2e8ab2eb06099daa1d1e5df47778f7787faab45cdf12fe3a9");
 
   @Test
   public void parsesCatalogFreeAccountAliasForms() throws Exception {
@@ -370,7 +370,8 @@ public final class AliasSetupModelsTests {
         new AliasTransactionPlanV1(
             original.body(), HashLiteral.canonicalize(AliasPlanVerifier.canonicalHash(bodyBytes)));
     final String canonicalJson = JsonEncoder.encode(checksummed.toJsonMap());
-    assert canonicalJson.contains("\"network_id\":\"" + TEST_NETWORK_ID.literal() + "\"");
+    assert canonicalJson.contains(
+        "\"network_id\":\"" + TEST_NETWORK_ID.noritoJsonLiteral() + "\"");
     assert !canonicalJson.contains("\"chain_id\"");
     final AliasTransactionPlanV1 parsed =
         AliasTransactionPlanJsonParser.parse(canonicalJson.getBytes(StandardCharsets.UTF_8));
@@ -493,7 +494,8 @@ public final class AliasSetupModelsTests {
         new AliasLifecycleTransactionPlanV1(
             body, hex(AliasPlanVerifier.canonicalLifecycleHash(bodyBytes)));
     final String canonicalJson = JsonEncoder.encode(plan.toJsonMap());
-    assert canonicalJson.contains("\"network_id\":\"" + TEST_NETWORK_ID.literal() + "\"");
+    assert canonicalJson.contains(
+        "\"network_id\":\"" + TEST_NETWORK_ID.noritoJsonLiteral() + "\"");
     assert !canonicalJson.contains("\"chain_id\"");
     final AliasLifecycleTransactionPlanV1 parsed =
         AliasLifecycleTransactionPlanJsonParser.parse(

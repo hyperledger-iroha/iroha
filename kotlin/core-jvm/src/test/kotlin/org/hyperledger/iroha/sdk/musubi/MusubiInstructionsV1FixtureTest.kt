@@ -421,7 +421,7 @@ class MusubiInstructionsV1FixtureTest {
         readField(transactionDecoder, "authority")
         readField(transactionDecoder, "creation_time_ms")
         val executablePayload = readField(transactionDecoder, "executable")
-        repeat(5) { index -> readField(transactionDecoder, "tail[$index]") }
+        repeat(6) { index -> readField(transactionDecoder, "tail[$index]") }
         assertEquals(0, transactionDecoder.remaining())
 
         val executableDecoder = canonicalDecoder(executablePayload)
@@ -1208,7 +1208,7 @@ class MusubiInstructionsV1FixtureTest {
             "nonce",
         )
         val typedBinding = MusubiSeedIngressReceiptBindingV1(
-            NetworkId.parse(binding.string("network_id")),
+            NetworkId.parseNoritoJsonLiteral(binding.string("network_id")),
             binding.string("publisher"),
             binding.string("ingress_broker"),
             newtypeText(binding["seed_provider"]),
@@ -1266,7 +1266,7 @@ class MusubiInstructionsV1FixtureTest {
         val anchor = binding.objectValue("finalized_anchor")
         anchor.requireKeys("height", "block_hash")
         val typedBinding = MusubiProviderBundleVerificationBindingV1(
-            NetworkId.parse(binding.string("network_id")),
+            NetworkId.parseNoritoJsonLiteral(binding.string("network_id")),
             newtypeText(binding["provider_id"]),
             binding.string("completed_by"),
             MusubiProviderIngestCompletionAuthorityV1(

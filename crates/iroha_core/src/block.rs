@@ -10143,6 +10143,60 @@ pub(crate) mod valid {
                 TransactionEntrypoint::SealedCommitment(_) | TransactionEntrypoint::Time(_) => None,
             }
         }
+        /// Finalize every successful direct fee debit into its exact transaction-result leaf.
+        ///
+        /// This runs after execution outcomes are fixed but before the exact executed block wire
+        /// is committed by Sumeragi. A rejected business result is intentionally eligible when
+        /// its fee-only state transaction committed; no pending debit means no receipt.
+        fn finalize_direct_fee_payment_receipts(
+            block: &mut SignedBlock,
+            state_block: &mut StateBlock<'_>,
+        ) -> Result<(), BlockValidationError> {
+            let pending = state_block.drain_direct_fee_payment_records();
+            let block_height = block.header().height().get();
+            let block_hash = block.hash();
+            let mut outcomes_by_tx_hash = BTreeMap::new();
+            for (_, entrypoint, result) in block.entrypoint_results() {
+                let Some(transaction) = Self::signed_transaction_from_entrypoint(&entrypoint)
+                else {
+                    continue;
+                };
+                let transaction_hash = transaction.hash();
+                if outcomes_by_tx_hash
+                    .insert(transaction_hash, result.0.clone())
+                    .is_some()
+                {
+                    return Err(Self::execution_context_error(format!(
+                        "duplicate signed transaction {transaction_hash} while finalizing direct fee receipts"
+                    )));
+                }
+            }
+            let mut receipts = BTreeMap::new();
+            for (transaction_hash, record) in pending {
+                let outcome = outcomes_by_tx_hash.get(&transaction_hash).ok_or_else(|| {
+                    Self::execution_context_error(format!(
+                        "direct fee debit references transaction {transaction_hash} absent from the executed block"
+                    ))
+                })?;
+                let receipt = record
+                    .into_final_receipt(outcome, block_height, block_hash)
+                    .map_err(|error| {
+                        Self::execution_context_error(format!(
+                            "failed to finalize direct fee receipt for transaction {transaction_hash}: {error}"
+                        ))
+                    })?;
+                if receipts.insert(transaction_hash, receipt).is_some() {
+                    return Err(Self::execution_context_error(format!(
+                        "duplicate direct fee receipt for transaction {transaction_hash}"
+                    )));
+                }
+            }
+            block.set_fee_payment_receipts(receipts).map_err(|error| {
+                Self::execution_context_error(format!(
+                    "failed to attach direct fee receipts before execution commitment: {error}"
+                ))
+            })
+        }
         fn collect_external_signed_transactions(block: &SignedBlock) -> Vec<&SignedTransaction> {
             block
                 .external_entrypoints_slice()
@@ -11492,6 +11546,7 @@ pub(crate) mod valid {
             block
                 .set_batch_transfer_outcomes(batch_transfer_outcomes)
                 .map_err(|_| BlockValidationError::MerkleRootMismatch)?;
+            Self::finalize_direct_fee_payment_receipts(block, state_block)?;
             block.set_committed_fragment_count(committed_fragment_count);
             let lane_finality_statements = Self::finalize_lane_settlement_evidence(
                 block,
@@ -15468,6 +15523,7 @@ pub(crate) mod valid {
             block
                 .set_batch_transfer_outcomes(batch_transfer_outcomes)
                 .map_err(|_| BlockValidationError::MerkleRootMismatch)?;
+            Self::finalize_direct_fee_payment_receipts(block, state_block)?;
             block.set_committed_fragment_count(committed_fragment_count);
             let lane_finality_statements = Self::finalize_lane_settlement_evidence(
                 block,
@@ -29664,7 +29720,7 @@ seiyaku GuardedOverlay {
             .expect("compiled contract interface");
         let code_hash = ivm::contract_code_hash(&program);
         let contract_address = iroha_data_model::smart_contract::ContractAddress::derive(
-            &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
+            &"0000000000000000000000000000000000000000000000000000000000000001"
                 .parse()
                 .expect("canonical test network id"),
             &authority,
@@ -29805,7 +29861,7 @@ seiyaku DynamicAccessCounter {
             .expect("compiled contract interface");
         let code_hash = ivm::contract_code_hash(&program);
         let contract_address = iroha_data_model::smart_contract::ContractAddress::derive(
-            &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
+            &"0000000000000000000000000000000000000000000000000000000000000001"
                 .parse()
                 .expect("canonical test network id"),
             &alice,
@@ -29972,7 +30028,7 @@ seiyaku DynamicTarget {
             .expect("compiled contract interface");
         let code_hash = ivm::contract_code_hash(&program);
         let contract_address = iroha_data_model::smart_contract::ContractAddress::derive(
-            &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
+            &"0000000000000000000000000000000000000000000000000000000000000001"
                 .parse()
                 .expect("canonical test network id"),
             &alice,

@@ -114,8 +114,9 @@ MOBILE_SDK_PYTHON_BINARY may select an absolute, already-canonical regular
 Python 3.12 executable when the fixed Homebrew/system locators are unavailable.
 Source-authenticated packaging invokes scripts/check_mobile_sdk_artifacts.sh
 and therefore also requires exact Rust 1.93.1 RUSTC/RUSTDOC plus one canonical
-writable external CARGO_TARGET_DIR. Only the repository-root Cargo.lock is
-accepted.
+writable external CARGO_TARGET_DIR. The authenticated privacy lane may select a
+distinct Cargo.lock with IROHA_PRIVACY_RELEASE_CARGO_LOCKFILE_PATH; ordinary
+packaging consumes the repository-root Cargo.lock.
 Apple packaging additionally requires an explicit canonical SOURCE_DATE_EPOCH;
 the deterministic archive owner normalizes every ZIP entry to that instant.
 
@@ -747,6 +748,7 @@ PY
 
 package_apple() {
   local artifact_root
+  local apple_cargo_lockfile
   local xcframework
   local bridge_manifest
   local pod_version
@@ -754,6 +756,16 @@ package_apple() {
   local apple_zip
   local versioned_manifest
   local podspec
+
+  if [[ -n "${IROHA_PRIVACY_RELEASE_CARGO_LOCKFILE_PATH+x}" ]]; then
+    if [[ -z "${IROHA_PRIVACY_RELEASE_CARGO_LOCKFILE_PATH}" ]]; then
+      echo "[mobile-sdk-package] ERROR: IROHA_PRIVACY_RELEASE_CARGO_LOCKFILE_PATH must not be empty" >&2
+      exit 64
+    fi
+    apple_cargo_lockfile="$IROHA_PRIVACY_RELEASE_CARGO_LOCKFILE_PATH"
+  else
+    apple_cargo_lockfile="$ROOT_DIR/Cargo.lock"
+  fi
 
   if [[ ! -f "$ROOT_DIR/IrohaSwift/VERSION" || -L "$ROOT_DIR/IrohaSwift/VERSION" ]]; then
     echo "[mobile-sdk-package] ERROR: IrohaSwift VERSION must be a regular non-symbolic file" >&2
@@ -818,7 +830,8 @@ package_apple() {
     "$PYTHON_BINARY" -I -S -B "$APPLE_ARCHIVE_OWNER" \
       --xcframework "$xcframework" \
       --output "$apple_zip" \
-      --scratch-dir "$OUT_PARENT"
+      --scratch-dir "$OUT_PARENT" \
+      --lockfile-path "$apple_cargo_lockfile"
   run_isolated_python - "$apple_zip" "$versioned_manifest" "$pod_version" <<'PY'
 import json
 import os

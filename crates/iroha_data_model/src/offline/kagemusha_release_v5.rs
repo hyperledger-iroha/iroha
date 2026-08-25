@@ -2135,7 +2135,7 @@ impl KagemushaAuthenticatedReleaseV5 {
     }
 }
 impl KagemushaRecursiveSpendPromotedReleaseV4 {
-    /// Validate the standalone ABI-21 promotion marker.
+    /// Validate the standalone Kagemusha V4 promotion marker.
     ///
     /// # Errors
     ///

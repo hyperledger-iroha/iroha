@@ -296,14 +296,16 @@ fn canonical_payment_digest(
     let request_digest = request
         .canonical_digest()
         .map_err(|_| StateTransitionErrorV1::InvalidRequest)?;
+    let payment_statement = payment
+        .reconstruct_statement(request)
+        .map_err(|_| StateTransitionErrorV1::CreditMismatch)?;
     if request_digest != plan.request_digest
         || request.receiver_balance_commitment != plan.receiver_head
         || request.recipient_key_reference != plan.recipient_key_reference
         || request.issued_at_ms != plan.issued_at_ms
         || request.expires_at_ms != plan.expires_at_ms
         || request.amount != plan.amount
-        || payment.request_digest != plan.request_digest
-        || payment.statement != plan.statement
+        || payment_statement != plan.statement
     {
         return Err(StateTransitionErrorV1::RequestMismatch);
     }

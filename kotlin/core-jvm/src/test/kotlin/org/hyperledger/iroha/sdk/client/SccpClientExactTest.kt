@@ -2180,7 +2180,7 @@ class SccpClientExactTest {
     private companion object {
         const val TAIRA_CHAIN_ID = "fc56984b-2be7-431d-840e-21514d1883f0"
         val TAIRA_NETWORK_ID = NetworkId.parse(
-            "hash:82531CE8EAE8BFF6BEECA4698BFD13A3BC8BEC5F0EE0D23D428C97FC17AB0F3B#3E94",
+            "82531ce8eae8bff6beeca4698bfd13a3bc8bec5f0ee0d23d428c97fc17ab0f3b",
         )
         // These authenticate this fixture's semantic commitments and deployment code hashes.
         const val DEFAULT_ROUTE_CONFIG_HASH =

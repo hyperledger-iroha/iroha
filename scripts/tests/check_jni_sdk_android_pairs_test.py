@@ -27,7 +27,8 @@ class JniSdkAndroidPairGuardTests(unittest.TestCase):
 
     def test_repository_inventory_is_exact(self) -> None:
         result = GUARD.audit_source(SOURCE)
-        self.assertEqual(94, result.pair_count)
+        self.assertEqual(63, result.pair_count)
+        self.assertEqual(3, len(GUARD._macro_invocations(SOURCE)))
         self.assertEqual(GUARD.EXPECTED_ABI_DIGEST, result.abi_digest)
         self.assertEqual(GUARD.EXPECTED_ATTRIBUTE_DIGEST, result.attribute_digest)
 
@@ -49,6 +50,30 @@ class JniSdkAndroidPairGuardTests(unittest.TestCase):
         with self.assertRaisesRegex(GUARD.AuditError, "signature/body contract changed"):
             GUARD.audit_source(mutated)
 
+    def test_rejects_second_macro_invocation_symbol_drift(self) -> None:
+        mutated = SOURCE.replace(
+            "Java_org_hyperledger_iroha_android_offline_KagemushaRecursiveSpendProver_nativePastaCycleV4BackendAvailable();",
+            "Java_org_hyperledger_iroha_android_offline_KagemushaRecursiveSpendProver_nativePastaCycleV4BackendAvailableV2();",
+            1,
+        )
+        with self.assertRaisesRegex(GUARD.AuditError, "suffix mismatch"):
+            GUARD.audit_source(mutated)
+
+    def test_rejects_third_macro_invocation_body_drift(self) -> None:
+        mutated = SOURCE.replace(
+            "java_offline_cash_v1_canonicalize_request(&mut env, request)",
+            "java_offline_cash_v1_canonicalize_payment(&mut env, request, request)",
+            1,
+        )
+        with self.assertRaisesRegex(GUARD.AuditError, "signature/body contract changed"):
+            GUARD.audit_source(mutated)
+
+    def test_ignores_macro_invocation_text_in_comments(self) -> None:
+        result = GUARD.audit_source(
+            SOURCE + "\n// jni_sdk_android_pairs! { this is not an invocation }\n"
+        )
+        self.assertEqual(63, result.pair_count)
+
     def test_rejects_platform_documentation_drift(self) -> None:
         mutated = SOURCE.replace(
             "Validate a Torii Exact12 capability manifest for the Java Android SDK.",
@@ -60,8 +85,8 @@ class JniSdkAndroidPairGuardTests(unittest.TestCase):
 
     def test_rejects_macro_expansion_drift(self) -> None:
         mutated = SOURCE.replace(
-            ") -> $return_type $body\n            $(#[$android_attribute])*",
-            ") -> $return_type { $body }\n            $(#[$android_attribute])*",
+            ") $(-> $return_type)? $body\n            $(#[$android_attribute])*",
+            ") $(-> $return_type)? { $body }\n            $(#[$android_attribute])*",
             1,
         )
         with self.assertRaisesRegex(GUARD.AuditError, "macro expansion contract changed"):

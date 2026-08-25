@@ -23,6 +23,8 @@ extern "C" {
 #define CONNECT_NORITO_ERR_KAGEMUSHA_RECURSIVE_SPEND_V4_UNAVAILABLE -316
 #define CONNECT_NORITO_ERR_KAGEMUSHA_RECURSIVE_SPEND_V4_ARTIFACT -317
 #define CONNECT_NORITO_ERR_KAGEMUSHA_BUSY -318
+#define CONNECT_NORITO_ERR_OFFLINE_CASH_ARTIFACT -319
+#define CONNECT_NORITO_ERR_OFFLINE_CASH_SESSION -320
 #define CONNECT_NORITO_ERR_SORAFS_REFERENCE -114
 #define CONNECT_NORITO_ERR_DETACHED_TRANSACTION_SCAFFOLD -501
 #define CONNECT_NORITO_ERR_DETACHED_TRANSACTION_SIGNATURE -502
@@ -241,6 +243,11 @@ int32_t connect_norito_offline_cash_payment_canonicalize_v1(
     const uint8_t* request_ptr, unsigned long request_len,
     const uint8_t* payment_ptr, unsigned long payment_len,
     uint8_t** out_ptr, unsigned long* out_len);
+// Compatibility one-shot verifier. It succeeds only after the governed
+// 34-role release registry resolves request.release_id, the supplied manifest
+// digest matches, and both current parity proofs terminate successfully.
+// Prefer the opaque wallet-session API below when acknowledgement verification
+// must retain the move-only proof receipt.
 int32_t connect_norito_offline_cash_payment_canonicalize_for_session_v1(
     const uint8_t* request_ptr, unsigned long request_len,
     const uint8_t* payment_ptr, unsigned long payment_len,
@@ -279,14 +286,81 @@ int32_t connect_norito_offline_cash_peer_decode_acknowledgement_v1(
 
 // Initializes both 32-byte identities on every successful probe. Callers must
 // require available == 1 and exact equality with both values in their signed
-// runtime manifest. ABI22 currently reports unavailable until the dedicated
-// 22-artifact Offline Cash V1 release registry is production-published; it
+// runtime manifest. ABI22 reports unavailable unless the dedicated 34-role
+// Offline Cash V1 artifact registry has authenticated an installed release; it
 // never substitutes the Kagemusha V4 artifact manifest.
 int32_t connect_norito_offline_cash_release_probe_v1(
     uint8_t* out_available,
     uint8_t* out_release_id, unsigned long out_release_id_len,
     uint8_t* out_artifact_manifest_sha256,
     unsigned long out_artifact_manifest_sha256_len);
+
+// Stream and authenticate the complete ordered 34-role Offline Cash V1
+// artifact inventory. `role` is the zero-based index in the canonical
+// OfflineCashArtifactRoleV1::ALL order. Final install consumes exactly 34
+// ordered handles and atomically replaces the active verifier only after the
+// threshold release, all file digests, parameters, and Eq/Ep STATE verifier
+// keys authenticate and parse.
+int32_t connect_norito_offline_cash_artifact_begin_v1(
+    const uint8_t* manifest_ptr, unsigned long manifest_len,
+    uint8_t role, uint64_t* out_handle);
+int32_t connect_norito_offline_cash_artifact_write_v1(
+    uint64_t handle,
+    const uint8_t* chunk_ptr, unsigned long chunk_len);
+int32_t connect_norito_offline_cash_artifact_finalize_v1(uint64_t handle);
+int32_t connect_norito_offline_cash_artifact_cancel_v1(uint64_t handle);
+int32_t connect_norito_offline_cash_artifact_set_install_v1(
+    const uint8_t* manifest_ptr, unsigned long manifest_len,
+    const uint8_t* expected_manifest_digest_ptr,
+    unsigned long expected_manifest_digest_len,
+    const uint8_t* validation_receipt_ptr,
+    unsigned long validation_receipt_len,
+    const uint8_t* trusted_policy_ptr, unsigned long trusted_policy_len,
+    const uint8_t* release_attestation_ptr,
+    unsigned long release_attestation_len,
+    const uint64_t* handles_ptr, unsigned long handles_len);
+int32_t connect_norito_offline_cash_artifact_set_uninstall_v1(
+    const uint8_t* expected_release_id_ptr,
+    unsigned long expected_release_id_len,
+    const uint8_t* expected_manifest_digest_ptr,
+    unsigned long expected_manifest_digest_len);
+
+// Opaque receiver session pinned to the currently active authenticated
+// release. Payment admission retains Core's move-only paired-proof receipt;
+// acknowledgement admission must validate against that exact receipt. Host
+// `observed_now_ms` is only a proof-liveness observation: the secure-device
+// bridge must independently enforce trusted time before durable state mutation.
+int32_t connect_norito_offline_cash_wallet_session_open_v1(
+    const uint8_t* request_ptr, unsigned long request_len,
+    const uint8_t* expected_release_id_ptr,
+    unsigned long expected_release_id_len,
+    const uint8_t* expected_manifest_digest_ptr,
+    unsigned long expected_manifest_digest_len,
+    uint64_t* out_handle);
+int32_t connect_norito_offline_cash_wallet_session_open_bound_v1(
+    const uint8_t* request_ptr, unsigned long request_len,
+    const uint8_t* expected_release_id_ptr,
+    unsigned long expected_release_id_len,
+    const uint8_t* expected_manifest_digest_ptr,
+    unsigned long expected_manifest_digest_len,
+    const uint8_t* expected_network_id_ptr,
+    unsigned long expected_network_id_len,
+    const uint8_t* expected_asset_definition_id_ptr,
+    unsigned long expected_asset_definition_id_len,
+    uint64_t* out_handle);
+int32_t connect_norito_offline_cash_wallet_session_accept_payment_v1(
+    uint64_t handle,
+    const uint8_t* payment_ptr, unsigned long payment_len,
+    uint64_t observed_now_ms,
+    uint8_t** out_ptr, unsigned long* out_len);
+int32_t connect_norito_offline_cash_wallet_session_accept_acknowledgement_v1(
+    uint64_t handle,
+    const uint8_t* acknowledgement_ptr, unsigned long acknowledgement_len,
+    uint8_t** out_ptr, unsigned long* out_len);
+// State codes: 1=request ready, 2=payment committed, 3=acknowledged.
+int32_t connect_norito_offline_cash_wallet_session_state_v1(
+    uint64_t handle, uint8_t* out_state);
+int32_t connect_norito_offline_cash_wallet_session_close_v1(uint64_t handle);
 
 // ---------------- Kagemusha recursive spend ABI 22/V4 ----------------
 // JVM/Android projection tuples use an exact four-byte big-endian version and
@@ -548,40 +622,6 @@ int32_t connect_norito_kagemusha_recipient_payment_request_verify_v2(
     uint64_t verified_at_ms,
     uint8_t** out_digest_ptr,
     unsigned long* out_digest_len);
-
-// Build a reusable Torii lineage query from the receiver tuple. `network_id`
-// is the canonical 74-byte checksummed NetworkId literal; the remaining
-// selector components are canonical UTF-8 text. No payment request is required.
-int32_t connect_norito_kagemusha_recipient_lineage_query_create_v2(
-    const uint8_t* network_id_ptr,
-    unsigned long network_id_len,
-    uint16_t chain_discriminant,
-    const uint8_t* recipient_ptr,
-    unsigned long recipient_len,
-    const uint8_t* receiver_device_id_ptr,
-    unsigned long receiver_device_id_len,
-    const uint8_t* asset_ptr,
-    unsigned long asset_len,
-    uint64_t trusted_checkpoint_height,
-    uint8_t** out_query_ptr,
-    unsigned long* out_query_len);
-
-// Verify the reusable lineage against the later signed payment request and a
-// caller-owned durable checkpoint. The second output is exactly 40 bytes:
-// evaluated height in big-endian order followed by HeightContextId bytes.
-int32_t connect_norito_kagemusha_recipient_registration_lineage_verify_v2(
-    const uint8_t* request_norito_ptr,
-    unsigned long request_norito_len,
-    const uint8_t* lineage_norito_ptr,
-    unsigned long lineage_norito_len,
-    uint64_t verified_at_ms,
-    uint64_t trusted_checkpoint_height,
-    const uint8_t* trusted_checkpoint_context_id_ptr,
-    unsigned long trusted_checkpoint_context_id_len,
-    uint8_t** out_lineage_ptr,
-    unsigned long* out_lineage_len,
-    uint8_t** out_promoted_checkpoint_ptr,
-    unsigned long* out_promoted_checkpoint_len);
 
 int32_t connect_norito_kagemusha_recipient_receive_offer_create_v2(
     const uint8_t* request_norito_ptr,
@@ -1632,8 +1672,8 @@ int32_t connect_norito_encode_confidential_encrypted_payload(
 //   0  success
 //  -1  null pointer provided for input/output
 //  -2  invalid UTF-8 in input strings
-//  -3  network_id parse failure (requires one exact canonical checksummed
-//      `hash:<64 uppercase hex>#<CRC16>` genesis-hash literal)
+//  -3  network_id parse failure (requires exactly 64 lowercase hex characters
+//      encoding the marked genesis hash; the final nibble is odd)
 //  -4  authority account id parse failure
 //  -5  asset definition id parse failure
 //  -6  destination account id parse failure

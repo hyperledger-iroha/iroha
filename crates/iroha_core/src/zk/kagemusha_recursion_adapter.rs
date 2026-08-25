@@ -1,7 +1,8 @@
 //! Fail-closed boundary for Kagemusha Pasta-cycle recursion.
 //! Retired cross-field loaders and degree-20 keys caused multi-gigabyte RSS; neither is a fallback.
-//! Compact V5 keeps ABI 21/manifest V4, k17 parities, one 66-cell column, a private 138-`u32` state,
-//! and 5-GiB processed-key caps; proving spools authenticated keys serially and verification uses fixed scratch.
+//! Compact V5 keeps mobile bridge ABI22/Kagemusha data ABI V4, k17 parities,
+//! one 66-cell column, a private 138-`u32` state, and 5-GiB processed-key caps;
+//! proving spools authenticated keys serially and verification uses fixed scratch.
 //! Eq/Fp and Ep/Fq values derive from proof bytes; production still requires archive, review, and device gates.
 use super::kagemusha_accumulation::{
     KAGEMUSHA_IPA_ACCUMULATION_WIRE_VERSION_V4, KagemushaIpaAccumulationProofV4,
@@ -9,7 +10,8 @@ use super::kagemusha_accumulation::{
 };
 use super::kagemusha_dense_msm::{KagemushaDenseMsmConfigV5, KagemushaDenseMsmJobsV5};
 use super::kagemusha_sha256_v4::{
-    KagemushaSha256ByteV4, KagemushaSha256ConfigV4, KagemushaSha256JobsV4,
+    KagemushaConstrainedSha256V1, KagemushaSha256ByteV4, KagemushaSha256ConfigV4,
+    KagemushaSha256JobsV4,
 };
 use super::kagemusha_step_transition::{
     KAGEMUSHA_STEP_OPERATION_FIELD_ELEMENTS_V4, KAGEMUSHA_STEP_OPERATION_LIMBS_V4,
@@ -2611,7 +2613,7 @@ impl KagemushaSemanticBoundaryV4 {
         Ok(())
     }
 }
-/// Degree-parameterized V4 Step inputs: ABI-21 fixes the prefix, while two IPA slices vary at offsets
+/// Degree-parameterized V4 Step inputs: Kagemusha V4 fixes the prefix, while two IPA slices vary at offsets
 /// derived from authenticated [`KagemushaStepCircuitParamsV4`].
 #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
 pub struct KagemushaPastaCyclePublicInputsV4 {
@@ -2674,7 +2676,7 @@ impl KagemushaPastaCyclePublicInputsV4 {
             parent_eq_deferred_sha256: self.parent_eq_deferred_sha256,
             parent_ep_deferred_sha256: self.parent_ep_deferred_sha256,
         }
-        // Preserve ABI-21 bundle-digest parent order; V1 state lexicographic order is unrelated.
+        // Preserve Kagemusha V4 bundle-digest parent order; V1 state lexicographic order is unrelated.
         .validate_with_parent_state_order(
             proof_step_count,
             false,
@@ -2966,7 +2968,7 @@ impl KagemushaCompactPublicInputsV5 {
         Ok(cells.into_iter().map(F::from_u128).collect())
     }
 }
-/// Backend-native V4 Eq/Ep pair in canonical Norito ABI-21 bytes,
+/// Backend-native V4 Eq/Ep pair in canonical Norito Kagemusha V4 bytes,
 /// handled only by Core.
 #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
 pub(crate) struct KagemushaPastaCycleProofPairV4 {
@@ -3035,7 +3037,7 @@ impl KagemushaPastaCycleProofPairV4 {
         }
         Ok(eq_layout)
     }
-    /// Decode canonical opaque ABI-21 bytes and validate against the authenticated release profile.
+    /// Decode canonical opaque Kagemusha V4 bytes and validate against the authenticated release profile.
     pub(crate) fn decode_authenticated(
         bytes: &[u8],
         step_eq_params: &KagemushaStepCircuitParamsV4,
@@ -3148,6 +3150,361 @@ fn catch_kagemusha_native_verifier_panic<T>(
 ) -> Result<T, String> {
     std::panic::catch_unwind(std::panic::AssertUnwindSafe(verify))
         .map_err(|_| format!("Kagemusha V4 {label} rejected an invalid native verifier relation"))
+}
+
+/// Construct the reviewed Pasta IPA succinct key directly from canonical
+/// transparent parameters. The construction is generic over either Pasta
+/// parity and is shared by native and in-circuit Offline Cash verification.
+pub(crate) fn poseidon_ipa_succinct_vk_v1<C>(
+    params: &halo2_proofs::poly::ipa::commitment::ParamsIPA<C>,
+) -> Result<snark_verifier::pcs::ipa::IpaSuccinctVerifyingKey<C>, String>
+where
+    C: halo2_base::utils::CurveAffineExt,
+{
+    use halo2_proofs::{
+        halo2curves::{CurveExt as _, group::Curve as _},
+        poly::commitment::{Params as _, ParamsProver as _},
+    };
+    use snark_verifier::{
+        pcs::ipa::IpaSuccinctVerifyingKey,
+        util::arithmetic::{Domain, root_of_unity},
+    };
+    let k = usize::try_from(params.k())
+        .map_err(|_| "Poseidon IPA parameter degree does not fit usize".to_owned())?;
+    let hash_to_curve = C::CurveExt::hash_to_curve("Halo2-Parameters");
+    Ok(IpaSuccinctVerifyingKey::new(
+        Domain::new(k, root_of_unity(k)),
+        params.get_g()[0],
+        hash_to_curve(&[2]).to_affine(),
+        Some(hash_to_curve(&[1]).to_affine()),
+    ))
+}
+
+/// Construct the matching native deciding key from the same authenticated
+/// transparent parameters used by the ordinary Poseidon verifier.
+pub(crate) fn poseidon_ipa_deciding_key_v1<C>(
+    params: &halo2_proofs::poly::ipa::commitment::ParamsIPA<C>,
+) -> Result<snark_verifier::pcs::ipa::IpaDecidingKey<C>, String>
+where
+    C: halo2_base::utils::CurveAffineExt,
+{
+    use halo2_proofs::poly::commitment::ParamsProver as _;
+    Ok(snark_verifier::pcs::ipa::IpaDecidingKey::new(
+        poseidon_ipa_succinct_vk_v1(params)?,
+        params.get_g().to_vec(),
+    ))
+}
+
+/// Terminally decide one native Poseidon IPA accumulator against the exact
+/// authenticated parameter generator vector.
+pub(crate) fn decide_poseidon_accumulator_native_v1<C>(
+    params: &halo2_proofs::poly::ipa::commitment::ParamsIPA<C>,
+    accumulator: snark_verifier::pcs::ipa::IpaAccumulator<
+        C,
+        snark_verifier::loader::native::NativeLoader,
+    >,
+) -> Result<(), String>
+where
+    C: halo2_base::utils::CurveAffineExt,
+{
+    use snark_verifier::{
+        loader::native::NativeLoader,
+        pcs::{
+            AccumulationDecider,
+            ipa::{Bgh19, IpaAs},
+        },
+    };
+    let expected_rounds = usize::try_from(halo2_proofs::poly::commitment::Params::k(params))
+        .map_err(|_| "Poseidon IPA deciding-key degree does not fit usize".to_owned())?;
+    if accumulator.xi.len() != expected_rounds || bool::from(accumulator.u.is_identity()) {
+        return Err("Poseidon IPA accumulator has the wrong degree or identity point".to_owned());
+    }
+    <IpaAs<C, Bgh19> as AccumulationDecider<C, NativeLoader>>::decide(
+        &poseidon_ipa_deciding_key_v1(params)?,
+        accumulator,
+    )
+    .map_err(|error| format!("Poseidon IPA accumulator decision failed: {error:?}"))
+}
+
+/// Compile one authenticated verifier key with the exact direct-instance
+/// shape of every public column. No column may be silently omitted.
+pub(crate) fn compile_poseidon_direct_instance_protocol_v1<C>(
+    params: &halo2_proofs::poly::ipa::commitment::ParamsIPA<C>,
+    verifying_key: &halo2_proofs::plonk::VerifyingKey<C>,
+    instance_column_lengths: &[usize],
+) -> Result<snark_verifier::verifier::plonk::PlonkProtocol<C>, String>
+where
+    C: halo2_base::utils::CurveAffineExt,
+{
+    if instance_column_lengths.is_empty() || instance_column_lengths.contains(&0) {
+        return Err("Poseidon IPA direct-instance shape is empty".to_owned());
+    }
+    Ok(snark_verifier::system::halo2::compile(
+        params,
+        verifying_key,
+        super::pasta_ipa_recursion::pasta_ipa_direct_instances_compile_config_v1(
+            instance_column_lengths,
+        ),
+    ))
+}
+
+/// Parse and succinctly verify one exact ordinary Poseidon/direct-instance IPA
+/// proof natively. The returned accumulator is not acceptance authority until
+/// the caller terminally decides it (or binds it into the reviewed reciprocal
+/// audit construction).
+pub(crate) fn verify_poseidon_child_proof_native_v1<C>(
+    params: &halo2_proofs::poly::ipa::commitment::ParamsIPA<C>,
+    verifying_key: &halo2_proofs::plonk::VerifyingKey<C>,
+    instances: &[Vec<C::ScalarExt>],
+    ordinary_proof: &[u8],
+    max_proof_bytes: usize,
+) -> Result<
+    snark_verifier::pcs::ipa::IpaAccumulator<C, snark_verifier::loader::native::NativeLoader>,
+    String,
+>
+where
+    C: halo2_base::utils::CurveAffineExt,
+    C::ScalarExt: ff::FromUniformBytes<64>,
+{
+    use snark_verifier::{
+        loader::native::NativeLoader,
+        pcs::ipa::{Bgh19, IpaAs},
+        system::halo2::transcript::halo2::PoseidonTranscript,
+        verifier::{SnarkVerifier as _, plonk::PlonkSuccinctVerifier},
+    };
+    if max_proof_bytes == 0
+        || ordinary_proof.is_empty()
+        || ordinary_proof.len() > max_proof_bytes
+        || instances.is_empty()
+        || instances.iter().any(Vec::is_empty)
+    {
+        return Err("Poseidon IPA ordinary proof or instances are empty/out of bounds".to_owned());
+    }
+    type Transcript<C, S> = PoseidonTranscript<
+        C,
+        NativeLoader,
+        S,
+        KAGEMUSHA_POSEIDON_WIDTH,
+        KAGEMUSHA_POSEIDON_RATE,
+        KAGEMUSHA_POSEIDON_FULL_ROUNDS,
+        KAGEMUSHA_POSEIDON_PARTIAL_ROUNDS,
+    >;
+    let succinct_vk = poseidon_ipa_succinct_vk_v1(params)?;
+    let instance_lengths = instances.iter().map(Vec::len).collect::<Vec<_>>();
+    let protocol =
+        compile_poseidon_direct_instance_protocol_v1(params, verifying_key, &instance_lengths)?;
+    let mut cursor = std::io::Cursor::new(ordinary_proof);
+    let mut transcript = Transcript::<C, _>::new::<KAGEMUSHA_POSEIDON_SECURE_MDS>(&mut cursor);
+    let parsed = catch_kagemusha_native_verifier_panic("Poseidon child proof parse", || {
+        PlonkSuccinctVerifier::<IpaAs<C, Bgh19>>::read_proof(
+            &succinct_vk,
+            &protocol,
+            instances,
+            &mut transcript,
+        )
+    })?
+    .map_err(|error| format!("failed to parse Poseidon child proof: {error:?}"))?;
+    let accumulators =
+        catch_kagemusha_native_verifier_panic("Poseidon child proof verification", || {
+            PlonkSuccinctVerifier::<IpaAs<C, Bgh19>>::verify(
+                &succinct_vk,
+                &protocol,
+                instances,
+                &parsed,
+            )
+        })?
+        .map_err(|error| format!("Poseidon child succinct verification failed: {error:?}"))?;
+    if cursor.position()
+        != u64::try_from(ordinary_proof.len())
+            .map_err(|_| "Poseidon proof length does not fit u64".to_owned())?
+    {
+        return Err("Poseidon child proof has trailing bytes".to_owned());
+    }
+    let [accumulator]: [_; 1] = accumulators.try_into().map_err(|values: Vec<_>| {
+        format!(
+            "Poseidon child proof emitted {} opening accumulators instead of one",
+            values.len()
+        )
+    })?;
+    Ok(accumulator)
+}
+
+/// Create one canonical ordinary Poseidon/direct-instance IPA proof. The
+/// caller owns any higher-level pair binding; this function never appends a
+/// folded-generator or history suffix.
+#[cfg(feature = "dev-tools")]
+pub(in crate::zk) fn create_poseidon_direct_instance_proof_v1<C, CircuitType>(
+    params: &halo2_proofs::poly::ipa::commitment::ParamsIPA<C>,
+    proving_key: halo2_proofs::plonk::ProvingKey<C>,
+    circuit: CircuitType,
+    instances: &[Vec<C::ScalarExt>],
+) -> Result<(Vec<u8>, halo2_proofs::plonk::VerifyingKey<C>), String>
+where
+    C: halo2_base::utils::CurveAffineExt,
+    C::ScalarExt: ff::FromUniformBytes<64>,
+    CircuitType: halo2_proofs::plonk::Circuit<C::ScalarExt>,
+{
+    use halo2_proofs::{
+        plonk::{create_proof_consuming, verify_proof},
+        poly::ipa::commitment::IPACommitmentScheme,
+    };
+    use rand_core_06::OsRng;
+    use snark_verifier::{
+        loader::native::NativeLoader,
+        system::halo2::transcript::halo2::{ChallengeScalar, PoseidonTranscript},
+    };
+    if instances.is_empty() || instances.iter().any(Vec::is_empty) {
+        return Err("Poseidon direct-instance proof instances are empty".to_owned());
+    }
+    type Transcript<C, S> = PoseidonTranscript<
+        C,
+        NativeLoader,
+        S,
+        KAGEMUSHA_POSEIDON_WIDTH,
+        KAGEMUSHA_POSEIDON_RATE,
+        KAGEMUSHA_POSEIDON_FULL_ROUNDS,
+        KAGEMUSHA_POSEIDON_PARTIAL_ROUNDS,
+    >;
+    let columns = instances.iter().map(Vec::as_slice).collect::<Vec<_>>();
+    let proof_instances: [&[&[C::ScalarExt]]; 1] = [columns.as_slice()];
+    let mut transcript = Transcript::<C, _>::new::<KAGEMUSHA_POSEIDON_SECURE_MDS>(Vec::new());
+    let verifying_key = create_proof_consuming::<
+        IPACommitmentScheme<C>,
+        KagemushaDirectInstanceProverIpa<'_, C>,
+        ChallengeScalar<C>,
+        _,
+        _,
+        _,
+    >(
+        params,
+        proving_key,
+        circuit,
+        &proof_instances,
+        OsRng,
+        &mut transcript,
+    )
+    .map_err(|error| format!("failed to create Poseidon direct-instance proof: {error}"))?;
+    halo2_proofs::release_allocator_slack();
+    let proof = transcript.finalize();
+    let mut verification_transcript =
+        Transcript::<C, _>::new::<KAGEMUSHA_POSEIDON_SECURE_MDS>(proof.as_slice());
+    verify_proof::<
+        IPACommitmentScheme<C>,
+        KagemushaDirectInstanceVerifierIpa<'_, C>,
+        ChallengeScalar<C>,
+        _,
+        _,
+    >(
+        params,
+        &verifying_key,
+        KagemushaDirectInstanceSingleStrategy::from_params(params),
+        &proof_instances,
+        &mut verification_transcript,
+    )
+    .map_err(|error| format!("failed to verify Poseidon direct-instance proof: {error}"))?;
+    halo2_proofs::release_allocator_slack();
+    Ok((proof, verifying_key))
+}
+
+/// Create and self-verify one canonical Poseidon BGH19 fold over two or more
+/// child accumulators.
+///
+/// The result is still a delayed IPA lineage. Recursive wrappers must bind its
+/// reviewed 36-cell k=16 projection to a parity-local instance column, and the
+/// terminal native verifier must decide that carried lineage in addition to
+/// the wrapper proof's own accumulator.
+#[cfg(feature = "dev-tools")]
+pub(in crate::zk) fn create_poseidon_accumulator_fold_proof_v1<C>(
+    params: &halo2_proofs::poly::ipa::commitment::ParamsIPA<C>,
+    inputs: &[snark_verifier::pcs::ipa::IpaAccumulator<
+        C,
+        snark_verifier::loader::native::NativeLoader,
+    >],
+) -> Result<
+    (
+        Vec<u8>,
+        snark_verifier::pcs::ipa::IpaAccumulator<C, snark_verifier::loader::native::NativeLoader>,
+    ),
+    String,
+>
+where
+    C: halo2_base::utils::CurveAffineExt,
+    C::ScalarExt: ff::FromUniformBytes<64>,
+{
+    use halo2_proofs::poly::commitment::{Params as _, ParamsProver as _};
+    use rand_core_06::OsRng;
+    use snark_verifier::{
+        loader::native::NativeLoader,
+        pcs::{
+            AccumulationScheme, AccumulationSchemeProver,
+            ipa::{Bgh19, IpaAs, IpaProvingKey},
+        },
+        system::halo2::transcript::halo2::PoseidonTranscript,
+    };
+    type Transcript<C, S> = PoseidonTranscript<
+        C,
+        NativeLoader,
+        S,
+        KAGEMUSHA_POSEIDON_WIDTH,
+        KAGEMUSHA_POSEIDON_RATE,
+        KAGEMUSHA_POSEIDON_FULL_ROUNDS,
+        KAGEMUSHA_POSEIDON_PARTIAL_ROUNDS,
+    >;
+    let round_count = usize::try_from(params.k())
+        .map_err(|_| "Poseidon accumulator-fold degree does not fit usize".to_owned())?;
+    if inputs.len() < 2
+        || round_count == 0
+        || inputs
+            .iter()
+            .any(|input| input.xi.len() != round_count || bool::from(input.u.is_identity()))
+    {
+        return Err("Poseidon accumulator-fold input shape is invalid".to_owned());
+    }
+    let succinct_vk = poseidon_ipa_succinct_vk_v1(params)?;
+    let proving_key = IpaProvingKey::new(
+        succinct_vk.domain.clone(),
+        params.get_g().to_vec(),
+        succinct_vk.h,
+        succinct_vk.s,
+    );
+    let mut transcript = Transcript::<C, _>::new::<KAGEMUSHA_POSEIDON_SECURE_MDS>(Vec::new());
+    let created = <IpaAs<C, Bgh19> as AccumulationSchemeProver<C>>::create_proof(
+        &proving_key,
+        inputs,
+        &mut transcript,
+        OsRng,
+    )
+    .map_err(|error| format!("failed to create Poseidon accumulator fold: {error:?}"))?;
+    let proof = transcript.finalize();
+    let expected_bytes = kagemusha_ipa_accumulation_proof_bytes_v4(params.k())?;
+    if proof.len() != expected_bytes {
+        return Err("Poseidon accumulator-fold transcript length mismatch".to_owned());
+    }
+    let mut cursor = std::io::Cursor::new(proof.as_slice());
+    let verified = {
+        let mut transcript = Transcript::<C, _>::new::<KAGEMUSHA_POSEIDON_SECURE_MDS>(&mut cursor);
+        let parsed = <IpaAs<C, Bgh19> as AccumulationScheme<C, NativeLoader>>::read_proof(
+            &succinct_vk,
+            inputs,
+            &mut transcript,
+        )
+        .map_err(|error| format!("failed to parse Poseidon accumulator fold: {error:?}"))?;
+        <IpaAs<C, Bgh19> as AccumulationScheme<C, NativeLoader>>::verify(
+            &succinct_vk,
+            inputs,
+            &parsed,
+        )
+        .map_err(|error| format!("failed to verify Poseidon accumulator fold: {error:?}"))?
+    };
+    if cursor.position()
+        != u64::try_from(proof.len())
+            .map_err(|_| "Poseidon accumulator-fold length does not fit u64".to_owned())?
+        || created.xi != verified.xi
+        || created.u != verified.u
+    {
+        return Err("Poseidon accumulator fold is non-canonical or has trailing bytes".to_owned());
+    }
+    Ok((proof, verified))
 }
 /// Fully verify and terminally decide a degree-parameterized V4 Eq proof.
 pub(crate) fn terminal_verify_step_eq_v4(
@@ -4562,14 +4919,12 @@ mod source_parser_preflight_tests {
         trailing.push(0);
         let mut cursor = Cursor::new(trailing.as_slice());
         let mut scanner = KagemushaWireScannerV4::new(&mut cursor, "trailing VK");
-        assert!(
-            preflight_kagemusha_processed_vk_v4(
-                &mut scanner,
-                shape(),
-                Some(trailing.len() as u64),
-            )
-            .is_err()
-        );
+        assert!(preflight_kagemusha_processed_vk_v4(
+            &mut scanner,
+            shape(),
+            Some(trailing.len() as u64),
+        )
+        .is_err());
     }
     #[test]
     fn proving_key_preflight_rejects_polynomial_length_and_vector_count_before_allocation() {
@@ -5533,7 +5888,7 @@ impl KagemushaPastaCycleTerminalVerifierV4 {
             step_ep_verifying_key,
         })
     }
-    /// Decide an ABI-21 pair after matching canonical public state, keeping folds private.
+    /// Decide a Kagemusha V4 pair after matching canonical public state, keeping folds private.
     pub(crate) fn verify_encoded_pair_binding(
         &self,
         bytes: &[u8],
@@ -7176,7 +7531,7 @@ impl KagemushaPastaCycleProverV4 {
         )
     }
     /// Prove and terminally decide one operation, then expose only canonical
-    /// opaque ABI-21 bytes to the public lifecycle facade.
+    /// opaque Kagemusha V4 bytes to the public lifecycle facade.
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn prove_operation_encoded_v4(
         &self,
@@ -8510,7 +8865,7 @@ impl KagemushaPastaCycleSourceBackedProverV4 {
 }
 /// Circuit-side parent-proof and lineage-accumulation primitives shared by
 /// the fixed StepEq and StepEp builders.
-mod scalar_lineage_v1 {
+pub(crate) mod scalar_lineage_v1 {
     use super::{
         KAGEMUSHA_COMPACT_PARENT_COUNT_OFFSET_V5,
         KAGEMUSHA_COMPILED_PROTOCOL_IDENTITY_POSEIDON_DOMAIN_V2,
@@ -8556,7 +8911,8 @@ mod scalar_lineage_v1 {
         ops::Range,
         rc::Rc,
     };
-    type DeferredLoader<'chip, C> = Rc<Halo2Loader<C, DeferredScalarEccChip<'chip, C>>>;
+    pub(in crate::zk) type DeferredLoader<'chip, C> =
+        Rc<Halo2Loader<C, DeferredScalarEccChip<'chip, C>>>;
     type DeferredLoadedScalar<'chip, C> =
         snark_verifier::loader::halo2::Scalar<C, DeferredScalarEccChip<'chip, C>>;
     type DeferredPoseidon<'chip, C> = Poseidon<
@@ -8565,7 +8921,8 @@ mod scalar_lineage_v1 {
         KAGEMUSHA_POSEIDON_WIDTH,
         KAGEMUSHA_POSEIDON_RATE,
     >;
-    pub(super) type DeferredAccumulator<'chip, C> = IpaAccumulator<C, DeferredLoader<'chip, C>>;
+    pub(in crate::zk) type DeferredAccumulator<'chip, C> =
+        IpaAccumulator<C, DeferredLoader<'chip, C>>;
     type DeferredTranscript<'chip, C, R> = PoseidonTranscript<
         C,
         DeferredLoader<'chip, C>,
@@ -8972,7 +9329,7 @@ mod scalar_lineage_v1 {
             identity_digest: digest,
         })
     }
-    fn load_native_accumulator<'chip, C>(
+    pub(in crate::zk) fn load_native_accumulator<'chip, C>(
         loader: &DeferredLoader<'chip, C>,
         accumulator: &IpaAccumulator<C, NativeLoader>,
     ) -> DeferredAccumulator<'chip, C>
@@ -9173,6 +9530,448 @@ mod scalar_lineage_v1 {
     include!("kagemusha_recursion_adapter/scalar_lineage_parent_verifier_v4.rs");
     #[cfg(feature = "kagemusha-generation-memory-lab")]
     include!("kagemusha_recursion_adapter/scalar_lineage_parent_verifier_v7.rs");
+
+    /// One always-present Poseidon child proof constrained by the generic
+    /// recursive verifier. Protocol commitments are loaded as circuit
+    /// constants, so the resulting wrapper VK authenticates their exact
+    /// identity; child public instances remain assigned cells for exact
+    /// application-specific copy constraints.
+    pub(in crate::zk) struct ConstrainedPoseidonChildProofV1<'chip, C>
+    where
+        C: CurveAffineExt,
+        C::Base: BigPrimeField,
+        C::ScalarExt: BigPrimeField,
+    {
+        pub(in crate::zk) accumulator: DeferredAccumulator<'chip, C>,
+        pub(in crate::zk) instances: Vec<Vec<AssignedValue<C::ScalarExt>>>,
+        pub(in crate::zk) deferred_equations: Range<usize>,
+    }
+
+    /// Verify one complete ordinary Poseidon/IPA proof in-circuit under a
+    /// constant authenticated compiled protocol.
+    ///
+    /// This is the narrow application-neutral extraction used by Offline Cash
+    /// wrappers. It has no Kagemusha parent-count, live-bit, public-offset,
+    /// carried-lineage, or bootstrap semantics.
+    pub(in crate::zk) fn constrain_poseidon_child_proof_v1<'chip, C>(
+        loader: &DeferredLoader<'chip, C>,
+        succinct_vk: &IpaSuccinctVerifyingKey<C>,
+        protocol: &PlonkProtocol<C>,
+        instances: &[Vec<C::ScalarExt>],
+        proof_bytes: &[u8],
+        max_proof_bytes: usize,
+    ) -> Result<ConstrainedPoseidonChildProofV1<'chip, C>, Error>
+    where
+        C: CurveAffineExt,
+        C::Base: BigPrimeField,
+        C::ScalarExt: BigPrimeField,
+    {
+        if max_proof_bytes == 0
+            || proof_bytes.is_empty()
+            || proof_bytes.len() > max_proof_bytes
+            || instances.len() != protocol.num_instance.len()
+            || instances
+                .iter()
+                .zip(&protocol.num_instance)
+                .any(|(column, expected)| column.len() != *expected)
+        {
+            return Err(Error::InvalidInstances);
+        }
+        let loaded_instances = instances
+            .iter()
+            .map(|column| {
+                column
+                    .iter()
+                    .map(|value| loader.assign_scalar(*value))
+                    .collect::<Vec<_>>()
+            })
+            .collect::<Vec<_>>();
+        let loaded_protocol = protocol.loaded(loader);
+        let start = loader.ecc_chip().equation_count();
+        let (reader, position) = ExactReader::new(proof_bytes);
+        let mut transcript =
+            DeferredTranscript::new::<KAGEMUSHA_POSEIDON_SECURE_MDS>(loader, reader);
+        let parsed = PlonkSuccinctVerifier::<IpaAs<C, Bgh19>>::read_proof(
+            succinct_vk,
+            &loaded_protocol,
+            &loaded_instances,
+            &mut transcript,
+        )?;
+        let mut accumulators = PlonkSuccinctVerifier::<IpaAs<C, Bgh19>>::verify(
+            succinct_vk,
+            &loaded_protocol,
+            &loaded_instances,
+            &parsed,
+        )?;
+        if position.get() != proof_bytes.len() || accumulators.len() != 1 {
+            return Err(transcript_error(
+                "recursive Poseidon child proof has trailing bytes or the wrong accumulator count",
+            ));
+        }
+        let end = loader.ecc_chip().equation_count();
+        if start >= end {
+            return Err(Error::AssertionFailure(
+                "recursive Poseidon child emitted no deferred equations".to_owned(),
+            ));
+        }
+        Ok(ConstrainedPoseidonChildProofV1 {
+            accumulator: accumulators.remove(0),
+            instances: loaded_instances
+                .iter()
+                .map(|column| column.iter().map(|value| *value.assigned()).collect())
+                .collect(),
+            deferred_equations: start..end,
+        })
+    }
+
+    /// Fold two or more already constrained child accumulators with one exact
+    /// Poseidon BGH19 proof, returning the deferred equation range created by
+    /// the fold.
+    pub(in crate::zk) fn constrain_poseidon_child_fold_v1<'chip, C>(
+        loader: &DeferredLoader<'chip, C>,
+        succinct_vk: &IpaSuccinctVerifyingKey<C>,
+        inputs: &[DeferredAccumulator<'chip, C>],
+        proof_bytes: &[u8],
+        expected_proof_bytes: usize,
+    ) -> Result<(DeferredAccumulator<'chip, C>, Range<usize>), Error>
+    where
+        C: CurveAffineExt,
+        C::Base: BigPrimeField,
+        C::ScalarExt: BigPrimeField,
+    {
+        let start = loader.ecc_chip().equation_count();
+        let accumulated = verify_fold(
+            loader,
+            succinct_vk,
+            inputs,
+            proof_bytes,
+            expected_proof_bytes,
+        )?;
+        let end = loader.ecc_chip().equation_count();
+        if start >= end {
+            return Err(Error::AssertionFailure(
+                "recursive Poseidon child fold emitted no deferred equations".to_owned(),
+            ));
+        }
+        Ok((accumulated, start..end))
+    }
+
+    /// Bind one already-folded child lineage to its parity-local public
+    /// accumulator column.
+    ///
+    /// The column uses a shared field-neutral layout: two metadata cells, two
+    /// 128-bit limbs for each of `k` IPA challenges, and two limbs for the
+    /// canonical compressed point (`2 + 2*k + 2`, exactly 36 cells at k=16).
+    /// The authenticated wire version is an explicit circuit constant because
+    /// Kagemusha V4 uses version 5 while clean Offline Cash V1 uses version 1.
+    /// Terminal verification must decide both the wrapper's outer accumulator
+    /// and this carried lineage against authenticated parameters.
+    pub(in crate::zk) fn constrain_poseidon_folded_accumulator_instance_v1<C>(
+        loader: &DeferredLoader<'_, C>,
+        authenticated_wire_version: u16,
+        authenticated_round_count: u32,
+        folded: &DeferredAccumulator<'_, C>,
+        expected_instance_cells: &[AssignedValue<C::ScalarExt>],
+    ) -> Result<(), Error>
+    where
+        C: CurveAffineExt,
+        C::Base: BigPrimeField,
+        C::ScalarExt: BigPrimeField,
+    {
+        let expected_len = usize::try_from(
+            authenticated_round_count
+                .checked_mul(2)
+                .and_then(|value| value.checked_add(4))
+                .ok_or(Error::InvalidInstances)?,
+        )
+        .map_err(|_| Error::InvalidInstances)?;
+        if authenticated_wire_version == 0
+            || authenticated_round_count == 0
+            || folded.xi.len()
+                != usize::try_from(authenticated_round_count)
+                    .map_err(|_| Error::InvalidInstances)?
+            || expected_instance_cells.len() != expected_len
+        {
+            return Err(Error::InvalidInstances);
+        }
+        let challenges = folded
+            .xi
+            .iter()
+            .map(|challenge| *challenge.assigned())
+            .collect::<Vec<_>>();
+        let point = folded.u.assigned().clone();
+        let chip = loader.ecc_chip();
+        let mut ctx = loader.ctx_mut();
+        let actual = chip.assigned_accumulator_instance_limbs_with_version_v1(
+            &mut ctx,
+            authenticated_wire_version,
+            authenticated_round_count,
+            &challenges,
+            &point,
+        )?;
+        if actual.len() != expected_len {
+            return Err(Error::InvalidInstances);
+        }
+        for (actual, expected) in actual.iter().zip(expected_instance_cells) {
+            ctx.main().constrain_equal(actual, expected);
+        }
+        Ok(())
+    }
+
+    /// One fixed, always-enabled range of deferred equations emitted by an
+    /// ordinary child verifier or an accumulation fold. Tags are application
+    /// constants authenticated by the wrapper VK and the pair-binding stage
+    /// digest.
+    #[derive(Clone, Debug, PartialEq, Eq)]
+    pub(in crate::zk) struct PoseidonDeferredEquationStageV1 {
+        range: Range<usize>,
+        tag: u32,
+    }
+
+    impl PoseidonDeferredEquationStageV1 {
+        pub(in crate::zk) fn new(range: Range<usize>, tag: u32) -> Result<Self, Error> {
+            if range.is_empty() || tag == 0 {
+                return Err(Error::InvalidInstances);
+            }
+            Ok(Self { range, tag })
+        }
+
+        pub(in crate::zk) const fn tag(&self) -> u32 {
+            self.tag
+        }
+
+        pub(in crate::zk) fn range(&self) -> Range<usize> {
+            self.range.clone()
+        }
+    }
+
+    /// Assigned cells in one parity's canonical reciprocal-pair binding.
+    pub(in crate::zk) struct PoseidonRecursiveAuditBindingCellsV1<'a, F>
+    where
+        F: ff::Field,
+    {
+        /// Eight little-endian `u32` words of the canonical audit SHA-256.
+        /// Source/equation counts and the complete ordered stage-tag plan are
+        /// already absorbed by this digest and fixed by the authenticated
+        /// wrapper protocol/VK; they are deliberately not duplicated on wire.
+        pub(in crate::zk) audit_digest_words: &'a [AssignedValue<F>],
+    }
+
+    /// Bind Table16's eight big-endian SHA-256 words to the canonical Offline
+    /// Cash representation, which stores each four-byte digest chunk as a
+    /// little-endian `u32`. The bit permutation is constrained in Base; it is
+    /// not a host-side byte-order conversion.
+    pub(in crate::zk) fn constrain_sha256_digest_words_le_v1<F>(
+        ctx: &mut halo2_base::Context<F>,
+        range: &halo2_base::gates::RangeChip<F>,
+        digest_be_words: &[AssignedValue<F>],
+        expected_le_words: &[AssignedValue<F>],
+    ) -> Result<(), Error>
+    where
+        F: BigPrimeField,
+    {
+        if digest_be_words.len() != 8 || expected_le_words.len() != 8 {
+            return Err(Error::InvalidInstances);
+        }
+        for (actual_be, expected_le) in digest_be_words.iter().zip(expected_le_words) {
+            let bits_le = range.gate().num_to_bits(ctx, *actual_be, 32);
+            let byte_swapped = range.gate().inner_product(
+                ctx,
+                bits_le.into_iter(),
+                (0..32).map(|source_bit| {
+                    let source_byte = source_bit / 8;
+                    let bit_in_byte = source_bit % 8;
+                    let destination_bit = (3 - source_byte) * 8 + bit_in_byte;
+                    Constant(F::from(1_u64 << destination_bit))
+                }),
+            );
+            ctx.constrain_equal(&byte_swapped, expected_le);
+        }
+        Ok(())
+    }
+
+    /// Opaque scalar-prepass output. It has no authority by itself: the same
+    /// audit identity is constrained in the scalar half and every equation is
+    /// enforced by the reciprocal point half's dense MSM.
+    #[derive(Clone)]
+    pub(in crate::zk) struct PoseidonRecursiveScalarAuditV1<C>
+    where
+        C: CurveAffineExt,
+        C::Base: BigPrimeField,
+        C::ScalarExt: BigPrimeField,
+    {
+        pub(super) witness: crate::zk::kagemusha_cycle_loader::DeferredEquationWitness<C>,
+        pub(super) stages: Vec<PoseidonDeferredEquationStageV1>,
+    }
+
+    fn validate_poseidon_stage_plan_v1(
+        stages: &[PoseidonDeferredEquationStageV1],
+        equation_count: usize,
+    ) -> Result<(), Error> {
+        if stages.is_empty() || equation_count == 0 {
+            return Err(Error::InvalidInstances);
+        }
+        let mut cursor = 0_usize;
+        for stage in stages {
+            if stage.tag == 0 || stage.range.start != cursor || stage.range.end > equation_count {
+                return Err(Error::InvalidInstances);
+            }
+            cursor = stage.range.end;
+        }
+        if cursor != equation_count {
+            return Err(Error::InvalidInstances);
+        }
+        Ok(())
+    }
+
+    impl<C> PoseidonRecursiveScalarAuditV1<C>
+    where
+        C: CurveAffineExt,
+        C::Base: BigPrimeField,
+        C::ScalarExt: BigPrimeField,
+    {
+        pub(in crate::zk) fn source_count(&self) -> usize {
+            self.witness.sources.len()
+        }
+
+        pub(in crate::zk) fn equation_count(&self) -> usize {
+            self.witness.equations.len()
+        }
+
+        pub(in crate::zk) fn stage_count(&self) -> usize {
+            self.stages.len()
+        }
+
+        /// Derive the exact native audit identity installed into the shared
+        /// pair binding before either reciprocal proof is created.
+        pub(in crate::zk) fn audit_sha256(&self) -> Result<[u8; 32], Error>
+        where
+            C::Base: ff::PrimeField,
+        {
+            validate_poseidon_stage_plan_v1(&self.stages, self.witness.equations.len())?;
+            let mut gate_tags = Vec::with_capacity(self.witness.equations.len());
+            for stage in &self.stages {
+                gate_tags.extend(std::iter::repeat_n(stage.tag, stage.range.len()));
+            }
+            let mut elements =
+                crate::zk::kagemusha_cycle_loader::kagemusha_poseidon_domain_elements::<C::ScalarExt>(
+                    crate::zk::kagemusha_cycle_loader::KAGEMUSHA_DEFERRED_AUDIT_POSEIDON_DOMAIN_V6,
+                    crate::zk::kagemusha_cycle_loader::KAGEMUSHA_DEFERRED_AUDIT_VERSION_V6,
+                );
+            elements.push(C::ScalarExt::from(
+                u64::try_from(self.witness.sources.len()).map_err(|_| Error::InvalidInstances)?,
+            ));
+            elements.push(C::ScalarExt::from(
+                u64::try_from(self.witness.equations.len()).map_err(|_| Error::InvalidInstances)?,
+            ));
+            for source in &self.witness.sources {
+                if bool::from(source.is_identity()) {
+                    return Err(Error::InvalidInstances);
+                }
+                elements.extend(
+                    super::kagemusha_compressed_point_poseidon_elements(*source)
+                        .map_err(transcript_error)?,
+                );
+            }
+            for (equation, tag) in self.witness.equations.iter().zip(gate_tags) {
+                elements.push(C::ScalarExt::from(u64::from(tag)));
+                elements.push(C::ScalarExt::ONE);
+                elements.push(C::ScalarExt::from(
+                    u64::try_from(equation.len()).map_err(|_| Error::InvalidInstances)?,
+                ));
+                for (source_index, coefficient) in equation {
+                    elements.push(C::ScalarExt::from(
+                        u64::try_from(*source_index).map_err(|_| Error::InvalidInstances)?,
+                    ));
+                    elements.push(*coefficient);
+                }
+            }
+            let poseidon = super::kagemusha_native_poseidon_digest(&elements);
+            super::kagemusha_short_poseidon_sha256(
+                crate::zk::kagemusha_cycle_loader::KAGEMUSHA_DEFERRED_AUDIT_SHA256_DOMAIN_V6,
+                crate::zk::kagemusha_cycle_loader::KAGEMUSHA_DEFERRED_AUDIT_VERSION_V6,
+                poseidon,
+            )
+            .map_err(transcript_error)
+        }
+    }
+
+    /// Capture the complete fixed scalar audit after all child/fold verifier
+    /// calls. This prepass output is later supplied to the reciprocal partner.
+    pub(in crate::zk) fn capture_poseidon_recursive_scalar_audit_v1<C>(
+        loader: &DeferredLoader<'_, C>,
+        stages: &[PoseidonDeferredEquationStageV1],
+    ) -> Result<PoseidonRecursiveScalarAuditV1<C>, Error>
+    where
+        C: CurveAffineExt,
+        C::Base: BigPrimeField,
+        C::ScalarExt: BigPrimeField,
+    {
+        let witness = loader.ecc_chip().witness();
+        validate_poseidon_stage_plan_v1(stages, witness.equations.len())?;
+        Ok(PoseidonRecursiveScalarAuditV1 {
+            witness,
+            stages: stages.to_vec(),
+        })
+    }
+
+    /// Bind one parity's complete scalar audit and fixed stage plan to its
+    /// canonical pair-binding cells, then return the opaque reciprocal witness.
+    pub(in crate::zk) fn constrain_poseidon_recursive_scalar_audit_v1<C, S>(
+        loader: &DeferredLoader<'_, C>,
+        sha_jobs: &mut S,
+        stages: &[PoseidonDeferredEquationStageV1],
+        expected: PoseidonRecursiveAuditBindingCellsV1<'_, C::ScalarExt>,
+    ) -> Result<PoseidonRecursiveScalarAuditV1<C>, Error>
+    where
+        C: CurveAffineExt,
+        C::Base: BigPrimeField,
+        C::ScalarExt: BigPrimeField,
+        S: crate::zk::kagemusha_sha256_v4::KagemushaConstrainedSha256V1<C::ScalarExt>,
+    {
+        if expected.audit_digest_words.len() != 8 {
+            return Err(Error::InvalidInstances);
+        }
+        let output = capture_poseidon_recursive_scalar_audit_v1(loader, stages)?;
+        let chip = loader.ecc_chip();
+        let mut gate_tags = Vec::with_capacity(output.equation_count());
+        for stage in stages {
+            gate_tags.extend(std::iter::repeat_n(stage.tag, stage.range.len()));
+        }
+        let mut ctx = loader.ctx_mut();
+        let selectors = (0..output.equation_count())
+            .map(|_| ctx.main().load_constant(C::ScalarExt::ONE))
+            .collect::<Vec<_>>();
+        let elements =
+            chip.assigned_equation_poseidon_elements_v6(&mut ctx, &gate_tags, &selectors)?;
+        drop(ctx);
+        drop(chip);
+        let poseidon_digest = poseidon_digest_assigned(loader, elements);
+        let chip = loader.ecc_chip();
+        let mut ctx = loader.ctx_mut();
+        let mut bytes = Vec::new();
+        push_constant_bytes(
+            &mut bytes,
+            crate::zk::kagemusha_cycle_loader::KAGEMUSHA_DEFERRED_AUDIT_SHA256_DOMAIN_V6,
+        );
+        push_constant_bytes(&mut bytes, &[0]);
+        push_constant_bytes(
+            &mut bytes,
+            &crate::zk::kagemusha_cycle_loader::KAGEMUSHA_DEFERRED_AUDIT_VERSION_V6.to_le_bytes(),
+        );
+        bytes.extend(chip.assigned_scalar_bytes(&mut ctx, poseidon_digest));
+        let digest = sha_jobs
+            .digest_constrained_v1(ctx.main(), &bytes)
+            .map_err(transcript_error)?;
+        constrain_sha256_digest_words_le_v1(
+            ctx.main(),
+            chip.range(),
+            &digest,
+            expected.audit_digest_words,
+        )?;
+        Ok(output)
+    }
+
     /// Verify all degree-derived stages for one V4 parent slot; selector-zero bootstrap material remains fully parseable.
     #[allow(clippy::too_many_arguments)]
     pub(super) fn constrain_parent_scalar_lineage_v4<'chip, C>(
@@ -13065,8 +13864,7 @@ where
     C::Base: halo2_base::utils::BigPrimeField,
 {
     Dense(&'a mut KagemushaDenseMsmJobsV5<C>),
-    #[cfg(test)]
-    GenericTest,
+    Serial,
 }
 pub(super) fn constrain_reciprocal_poseidon_v6<'chip, C>(
     ctx: &mut halo2_base::gates::flex_gate::threads::SinglePhaseCoreManager<C::Base>,
@@ -13201,9 +13999,8 @@ where
                 ctx, &audit, &selectors, &digest, dense_jobs,
             )?;
         }
-        #[cfg(test)]
-        KagemushaDeferredMsmV5::GenericTest => {
-            chip.constrain_deferred_equation_batch_generic_v5(ctx, &audit, &selectors, &digest)?;
+        KagemushaDeferredMsmV5::Serial => {
+            chip.constrain_deferred_equation_batch_serial_v1(ctx, &audit, &selectors, &digest)?;
         }
     }
     for (present, expected_words) in slot_present.into_iter().zip(expected_words) {
@@ -13217,6 +14014,120 @@ where
         }
     }
     Ok((digest, source_encodings))
+}
+
+/// Enforce one complete reciprocal audit with the compact serial Base-graph
+/// point equation. This has exactly the same authenticated scalar challenge,
+/// stage schedule, source assignment, and identity requirement as the dense
+/// path; only the physical row/column schedule differs.
+pub(in crate::zk) fn constrain_poseidon_reciprocal_audit_serial_v1<C, S>(
+    builder: &mut halo2_base::gates::circuit::builder::BaseCircuitBuilder<C::Base>,
+    sha_jobs: &mut S,
+    reciprocal: &scalar_lineage_v1::PoseidonRecursiveScalarAuditV1<C>,
+    expected: scalar_lineage_v1::PoseidonRecursiveAuditBindingCellsV1<'_, C::Base>,
+) -> Result<(), String>
+where
+    C: halo2_base::utils::CurveAffineExt,
+    C::Base: halo2_base::utils::BigPrimeField
+        + halo2_base::utils::ScalarField
+        + ff::WithSmallOrderMulGroup<3>,
+    C::ScalarExt: halo2_base::utils::BigPrimeField + ff::WithSmallOrderMulGroup<3>,
+    S: KagemushaConstrainedSha256V1<C::Base>,
+{
+    constrain_poseidon_reciprocal_audit_with_msm_v1(
+        builder,
+        sha_jobs,
+        KagemushaDeferredMsmV5::Serial,
+        reciprocal,
+        expected,
+    )
+}
+
+fn constrain_poseidon_reciprocal_audit_with_msm_v1<C, S>(
+    builder: &mut halo2_base::gates::circuit::builder::BaseCircuitBuilder<C::Base>,
+    sha_jobs: &mut S,
+    msm: KagemushaDeferredMsmV5<'_, C>,
+    reciprocal: &scalar_lineage_v1::PoseidonRecursiveScalarAuditV1<C>,
+    expected: scalar_lineage_v1::PoseidonRecursiveAuditBindingCellsV1<'_, C::Base>,
+) -> Result<(), String>
+where
+    C: halo2_base::utils::CurveAffineExt,
+    C::Base: halo2_base::utils::BigPrimeField
+        + halo2_base::utils::ScalarField
+        + ff::WithSmallOrderMulGroup<3>,
+    C::ScalarExt: halo2_base::utils::BigPrimeField + ff::WithSmallOrderMulGroup<3>,
+    S: KagemushaConstrainedSha256V1<C::Base>,
+{
+    use crate::zk::kagemusha_cycle_loader::{LIMB_BITS, LIMBS};
+    use halo2_ecc::fields::fp::FpChip;
+    use std::mem;
+    if expected.audit_digest_words.len() != 8
+        || reciprocal.source_count() == 0
+        || reciprocal.equation_count() == 0
+        || reciprocal.stage_count() == 0
+    {
+        return Err("Poseidon reciprocal audit binding has an invalid shape".to_owned());
+    }
+    let mut cursor = 0_usize;
+    let mut gate_tags = Vec::with_capacity(reciprocal.equation_count());
+    for stage in &reciprocal.stages {
+        let range = stage.range();
+        if stage.tag() == 0 || range.start != cursor || range.end > reciprocal.equation_count() {
+            return Err("Poseidon reciprocal audit stage plan is non-canonical".to_owned());
+        }
+        gate_tags.extend(std::iter::repeat_n(stage.tag(), range.len()));
+        cursor = range.end;
+    }
+    if cursor != reciprocal.equation_count() {
+        return Err("Poseidon reciprocal audit stage plan is incomplete".to_owned());
+    }
+
+    let range = builder.range_chip();
+    let base = FpChip::<C::Base, C::Base>::new(&range, LIMB_BITS, LIMBS);
+    let scalar = FpChip::<C::Base, C::ScalarExt>::new(&range, LIMB_BITS, LIMBS);
+    let mut ctx = mem::take(builder.pool(0));
+    let mut chip = crate::zk::kagemusha_cycle_loader::PastaCycleEccChip::<C>::new(&base, &scalar);
+    let selectors = (0..reciprocal.equation_count())
+        .map(|_| ctx.main().load_constant(C::Base::ONE))
+        .collect::<Vec<_>>();
+    let audit =
+        chip.assign_deferred_equations_with_selectors(&mut ctx, &reciprocal.witness, &selectors)?;
+    let (elements, _) =
+        chip.assigned_equation_poseidon_elements_v6(&mut ctx, &audit, &gate_tags, &selectors)?;
+    let poseidon_digest = constrain_reciprocal_poseidon_v6::<C>(&mut ctx, &base, &scalar, elements);
+    let mut bytes = Vec::new();
+    bytes.extend(
+        crate::zk::kagemusha_cycle_loader::KAGEMUSHA_DEFERRED_AUDIT_SHA256_DOMAIN_V6
+            .iter()
+            .copied()
+            .map(KagemushaSha256ByteV4::constant),
+    );
+    bytes.push(KagemushaSha256ByteV4::constant(0));
+    bytes.extend(
+        crate::zk::kagemusha_cycle_loader::KAGEMUSHA_DEFERRED_AUDIT_VERSION_V6
+            .to_le_bytes()
+            .into_iter()
+            .map(KagemushaSha256ByteV4::constant),
+    );
+    bytes.extend(chip.assigned_scalar_bytes(&mut ctx, &poseidon_digest));
+    let digest = sha_jobs.digest_constrained_v1(ctx.main(), &bytes)?;
+    match msm {
+        KagemushaDeferredMsmV5::Dense(dense_jobs) => chip.constrain_deferred_equation_batch_v5(
+            &mut ctx, &audit, &selectors, &digest, dense_jobs,
+        )?,
+        KagemushaDeferredMsmV5::Serial => {
+            chip.constrain_deferred_equation_batch_serial_v1(&mut ctx, &audit, &selectors, &digest)?
+        }
+    }
+    scalar_lineage_v1::constrain_sha256_digest_words_le_v1(
+        ctx.main(),
+        base.range,
+        &digest,
+        expected.audit_digest_words,
+    )
+    .map_err(|error| format!("failed to bind reciprocal audit byte order: {error:?}"))?;
+    *builder.pool(0) = ctx;
+    Ok(())
 }
 /// Reconstruct reciprocal compiled-protocol identity, binding release words to V6 sources and the authenticated V2 digest.
 fn constrain_reciprocal_protocol_identity<'chip, C>(

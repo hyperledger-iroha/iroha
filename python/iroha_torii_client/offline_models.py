@@ -255,7 +255,7 @@ class OfflineSpendBranchJson(_OfflineTaggedUnitJsonOptional):
 
 
 class KagemushaArtifactBindingV4Json(TypedDict):
-    """Identity of the one authenticated Kagemusha ABI-21/V4 release."""
+    """Identity of the one authenticated bridge ABI-22 / Kagemusha V4 release."""
 
     version: Literal[4]
     generation: str

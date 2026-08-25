@@ -2,7 +2,7 @@ import Foundation
 
 /// Transport-neutral NFC V1 constants for exchanging `IPM1` messages.
 ///
-/// This protocol is intentionally independent from the ABI-21 Kagemusha bulk
+/// This protocol is intentionally independent from the Kagemusha V4 bulk
 /// rail. V1 has one application identifier, one command set, and no codec
 /// negotiation or fallback.
 public enum IrohaPeerNfcV1 {

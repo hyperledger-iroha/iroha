@@ -474,21 +474,15 @@ pub fn encrypt_reject_current(
 
 #[cfg(test)]
 fn parse_canonical_network_id_literal(literal: &str) -> NetworkId {
-    let body = norito::literal::parse("hash", literal)
-        .expect("fixture NetworkId must be a checksummed hash literal");
-    assert!(
-        !body.bytes().any(|byte| byte.is_ascii_lowercase()),
-        "fixture NetworkId hash body must use uppercase hexadecimal"
-    );
+    let network_id = literal
+        .parse::<NetworkId>()
+        .expect("fixture NetworkId must be exact raw lowercase marked hex");
     assert_eq!(
-        norito::literal::format("hash", body),
+        network_id.to_string(),
         literal,
-        "fixture NetworkId must use the exact canonical checksum rendering"
+        "fixture NetworkId must be canonical"
     );
-    let genesis_hash = body
-        .parse::<iroha_crypto::Hash>()
-        .expect("fixture NetworkId must contain a valid genesis hash");
-    NetworkId::from_genesis_hash(iroha_crypto::HashOf::from_untyped_unchecked(genesis_hash))
+    network_id
 }
 
 #[cfg(test)]

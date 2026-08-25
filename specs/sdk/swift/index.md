@@ -252,7 +252,8 @@ lifecycles. Use `getOfflineCapability()`, `submitKagemushaTopUp(_:)`,
 alias is exposed.
 
 Capability discovery is not per-asset or per-dataspace backend readiness. The
-SDK accepts only the exact ABI-21 `cash_handoff_v1` contract with maximum hop
+SDK accepts only the exact mobile bridge ABI22 / Kagemusha data ABI V4
+`cash_handoff_v1` contract with maximum hop
 count 8, `mandatory: false`, `ready: true`, and empty `assets` and `blockers`.
 No asset metadata, escrow catalog, dataspace enrollment, or backend enable flag
 is required for an app to expose offline user interfaces. Apps must not gate

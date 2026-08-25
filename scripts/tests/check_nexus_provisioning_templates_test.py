@@ -19,6 +19,8 @@ SPEC.loader.exec_module(guard)
 
 HASH_IDENTITY = "hash:" + "A5" * 32 + "#95D7"
 OTHER_HASH_IDENTITY = "hash:" + "B7" * 32 + "#5D6D"
+NETWORK_IDENTITY = "a5" * 32
+OTHER_NETWORK_IDENTITY = "b7" * 32
 
 
 def _server(private_field: str = "private_key_file") -> str:
@@ -46,7 +48,7 @@ identity_private_key_file = "/run/secrets/iroha/streaming-key"
 
 def _client() -> str:
     return f'''\
-network_id = "{HASH_IDENTITY}"
+network_id = "{NETWORK_IDENTITY}"
 
 [account]
 public_key = "public"
@@ -84,7 +86,10 @@ def test_inline_validator_secret_fails(tmp_path: pathlib.Path) -> None:
 def test_client_and_validator_identity_drift_fails(tmp_path: pathlib.Path) -> None:
     _write_repository(tmp_path)
     client = tmp_path / guard.CLIENT_TEMPLATE
-    client.write_text(_client().replace(HASH_IDENTITY, OTHER_HASH_IDENTITY), encoding="utf-8")
+    client.write_text(
+        _client().replace(NETWORK_IDENTITY, OTHER_NETWORK_IDENTITY),
+        encoding="utf-8",
+    )
     with pytest.raises(guard.ProvisioningTemplateError, match="same exact genesis identity"):
         guard.validate_repository(tmp_path)
 
@@ -125,6 +130,32 @@ def test_placeholder_identity_fails(tmp_path: pathlib.Path) -> None:
         guard.validate_repository(tmp_path)
 
 
+def test_client_tagged_identity_fails(tmp_path: pathlib.Path) -> None:
+    _write_repository(tmp_path)
+    client = tmp_path / guard.CLIENT_TEMPLATE
+    client.write_text(
+        _client().replace(NETWORK_IDENTITY, HASH_IDENTITY),
+        encoding="utf-8",
+    )
+    with pytest.raises(
+        guard.ProvisioningTemplateError, match="raw lowercase NetworkId"
+    ):
+        guard.validate_client_template(client)
+
+
+def test_server_raw_identity_fails(tmp_path: pathlib.Path) -> None:
+    _write_repository(tmp_path)
+    server = tmp_path / guard.SERVER_TEMPLATES[0]
+    server.write_text(
+        _server().replace(HASH_IDENTITY, NETWORK_IDENTITY),
+        encoding="utf-8",
+    )
+    with pytest.raises(
+        guard.ProvisioningTemplateError, match="canonical concrete hash"
+    ):
+        guard.validate_server_template(server)
+
+
 def test_paired_public_identity_file_passes(tmp_path: pathlib.Path) -> None:
     _write_repository(tmp_path)
     server_source = f'expected_hash_file = "{guard.PUBLIC_IDENTITY_ROOT}/genesis.expected_hash"'
@@ -137,7 +168,7 @@ def test_paired_public_identity_file_passes(tmp_path: pathlib.Path) -> None:
         )
     client = tmp_path / guard.CLIENT_TEMPLATE
     client.write_text(
-        _client().replace(f'network_id = "{HASH_IDENTITY}"', client_source),
+        _client().replace(f'network_id = "{NETWORK_IDENTITY}"', client_source),
         encoding="utf-8",
     )
     guard.validate_repository(tmp_path)

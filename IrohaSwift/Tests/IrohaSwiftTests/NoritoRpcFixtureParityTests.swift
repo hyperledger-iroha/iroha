@@ -22,7 +22,7 @@ final class NoritoRpcFixtureParityTests: XCTestCase {
         XCTAssertEqual(
             nativeBridgeABIVersion(),
             21,
-            "required transaction fixture decode must execute through ABI-21"
+            "required transaction fixture decode must execute through bridge ABI22"
         )
         for name in loader.names {
             try assertFixtureNativeRoundTrip(loader: loader, name: name)
@@ -172,24 +172,29 @@ final class NoritoRpcFixtureParityTests: XCTestCase {
     }
 
     func testFixtureLoaderRequiresCanonicalNetworkId() {
-        let invalid = NoritoRpcFixtureLoader.Entry(
-            name: "invalid-network",
-            authority: "authority",
-            networkId: FixtureConstants.networkId.lowercased(),
-            creationTimeMs: 1,
-            timeToLiveMs: 100_000,
-            nonce: nil,
-            encodedFile: "invalid-network.norito",
-            encodedLen: 1,
-            signedLen: 1,
-            payloadBase64: "AA==",
-            signedBase64: "AQ==",
-            payloadHash: "payload-hash",
-            signedHash: "signed-hash"
-        )
-        XCTAssertThrowsError(try NoritoRpcFixtureLoader.validatedEntries([invalid])) { error in
-            guard case FixtureError.invalidNetworkId = error else {
-                return XCTFail("unexpected network identity error: \(error)")
+        for networkId in [
+            FixtureConstants.networkId.uppercased(),
+            "hash:32C903E5B3497E34C2B844EBFE8A39C19E6CF8F95D44C1FFB8BA9DCB42F91149#A2F0",
+        ] {
+            let invalid = NoritoRpcFixtureLoader.Entry(
+                name: "invalid-network",
+                authority: "authority",
+                networkId: networkId,
+                creationTimeMs: 1,
+                timeToLiveMs: 100_000,
+                nonce: nil,
+                encodedFile: "invalid-network.norito",
+                encodedLen: 1,
+                signedLen: 1,
+                payloadBase64: "AA==",
+                signedBase64: "AQ==",
+                payloadHash: "payload-hash",
+                signedHash: "signed-hash"
+            )
+            XCTAssertThrowsError(try NoritoRpcFixtureLoader.validatedEntries([invalid])) { error in
+                guard case FixtureError.invalidNetworkId = error else {
+                    return XCTFail("unexpected network identity error: \(error)")
+                }
             }
         }
     }
@@ -595,7 +600,7 @@ final class NoritoRpcFixtureParityTests: XCTestCase {
         XCTAssertEqual(
             nativeSignedTransactionDecodeStatus(signedBytes),
             -2,
-            "ABI-21 must reject the unversioned bare signed transaction fixture: \(name)"
+            "Bridge ABI22 must reject the unversioned bare signed transaction fixture: \(name)"
         )
         let versionedSignedBytes = versionedSignedTransaction(signedBytes)
         XCTAssertEqual(versionedSignedBytes.first, FixtureConstants.signedTransactionVersion)
@@ -622,10 +627,11 @@ final class NoritoRpcFixtureParityTests: XCTestCase {
                                name: name)
         let decodedDomain = try XCTUnwrap(payload["domain"] as? [String: Any])
         XCTAssertEqual(decodedDomain["kind"] as? String, "network")
+        let expectedNetworkId = try NetworkId(literal: fixture.entry.networkId)
         XCTAssertEqual(
             decodedDomain["value"] as? String,
-            fixture.entry.networkId,
-            "network_id mismatch in decode for \(name)"
+            expectedNetworkId.noritoJSONLiteral,
+            "Norito JSON network_id mismatch in decode for \(name)"
         )
         if let creation = payload["creation_time_ms"] as? NSNumber {
             XCTAssertEqual(
@@ -747,11 +753,11 @@ private struct NoritoRpcFixtureLoader {
             name = try container.decode(String.self, forKey: .name)
             authority = try container.decode(String.self, forKey: .authority)
             networkId = try container.decode(String.self, forKey: .networkId)
-            guard ToriiNativeAmxWire.isCanonicalHash(networkId) else {
+            guard isCanonicalNetworkIdDescriptorText(networkId) else {
                 throw DecodingError.dataCorruptedError(
                     forKey: .networkId,
                     in: container,
-                    debugDescription: "network_id must be an exact canonical NetworkId hash literal"
+                    debugDescription: "network_id must use exact raw lowercase marked hash text"
                 )
             }
             creationTimeMs = try container.decode(UInt64.self, forKey: .creationTimeMs)
@@ -808,11 +814,11 @@ private struct NoritoRpcFixtureLoader {
             name = try container.decode(String.self, forKey: .name)
             authority = try container.decode(String.self, forKey: .authority)
             networkId = try container.decode(String.self, forKey: .networkId)
-            guard ToriiNativeAmxWire.isCanonicalHash(networkId) else {
+            guard isCanonicalNetworkIdDescriptorText(networkId) else {
                 throw DecodingError.dataCorruptedError(
                     forKey: .networkId,
                     in: container,
-                    debugDescription: "network_id must be an exact canonical NetworkId hash literal"
+                    debugDescription: "network_id must use exact raw lowercase marked hash text"
                 )
             }
             creationTimeMs = try container.decode(UInt64.self, forKey: .creationTimeMs)
@@ -859,11 +865,11 @@ private struct NoritoRpcFixtureLoader {
             let container = try decoder.container(keyedBy: CodingKeys.self)
             authority = try container.decode(String.self, forKey: .authority)
             networkId = try container.decode(String.self, forKey: .networkId)
-            guard ToriiNativeAmxWire.isCanonicalHash(networkId) else {
+            guard isCanonicalNetworkIdDescriptorText(networkId) else {
                 throw DecodingError.dataCorruptedError(
                     forKey: .networkId,
                     in: container,
-                    debugDescription: "network_id must be an exact canonical NetworkId hash literal"
+                    debugDescription: "network_id must use exact raw lowercase marked hash text"
                 )
             }
             creationTimeMs = try container.decode(UInt64.self, forKey: .creationTimeMs)
@@ -1291,7 +1297,7 @@ private struct NoritoRpcFixtureLoader {
         var signedHashes = Set<String>()
         var signedBytesValues = Set<Data>()
         for entry in fixtures {
-            guard ToriiNativeAmxWire.isCanonicalHash(entry.networkId) else {
+            guard isCanonicalNetworkIdDescriptorText(entry.networkId) else {
                 throw FixtureError.invalidNetworkId(entry.networkId)
             }
             guard entry.timeToLiveMs > 0 else {
@@ -1355,8 +1361,8 @@ private struct NoritoRpcFixtureLoader {
             guard entries[entry.name] == nil else {
                 throw FixtureError.duplicateFixtureName(entry.name)
             }
-            guard ToriiNativeAmxWire.isCanonicalHash(entry.networkId),
-                  ToriiNativeAmxWire.isCanonicalHash(entry.payload.networkId) else {
+            guard isCanonicalNetworkIdDescriptorText(entry.networkId),
+                  isCanonicalNetworkIdDescriptorText(entry.payload.networkId) else {
                 throw FixtureError.invalidNetworkId(entry.networkId)
             }
             guard entry.authority == entry.payload.authority,
@@ -1484,6 +1490,13 @@ private func requireCanonicalFixtureFrame(
     return frame.payload
 }
 
+private func isCanonicalNetworkIdDescriptorText(_ literal: String) -> Bool {
+    guard let networkId = try? NetworkId(literal: literal) else {
+        return false
+    }
+    return networkId.literal == literal
+}
+
 private enum FixtureConstants {
     static let networkPrefix: UInt16 = 753
     static let signedTransactionVersion: UInt8 = 1
@@ -1492,7 +1505,7 @@ private enum FixtureConstants {
     static let signedTransactionType =
         "iroha_data_model::transaction::signed::model::SignedTransaction"
     static let networkId =
-        "hash:32C903E5B3497E34C2B844EBFE8A39C19E6CF8F95D44C1FFB8BA9DCB42F91149#A2F0"
+        "32c903e5b3497e34c2b844ebfe8a39c19e6cf8f95d44c1ffb8ba9dcb42f91149"
 }
 
 private func versionedSignedTransaction(_ bareSignedTransaction: Data) -> Data {

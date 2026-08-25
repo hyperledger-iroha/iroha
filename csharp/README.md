@@ -378,7 +378,7 @@ sends the nonce-bearing body once without redirects or retries.
   collection mutations cannot drift the effective client serializer
 - faucet PoW solving validates `StartNonce`/`MaxAttempts` ranges before scrypt
   derivation so nonce enumeration cannot overflow mid-search
-- a managed faucet PoW solver for `scrypt-leading-zero-bits-v2`, plus `ToriiClient` helpers that can fetch the current puzzle and prepare or submit a faucet claim for a canonical I105 account id; puzzles carry the exact checksummed `NetworkId` and I105 chain discriminant, and the challenge binds the raw 32-byte network identity before the account and anchor; difficulty is mandatory and positive, while account ids, puzzle algorithm labels, anchor/salt/nonce hex, positive anchor-age bounds, bounded scrypt work factors including parallelization and ROMix memory, and mandatory claim PoW fields are validated before hashing or HTTP dispatch
+- a managed faucet PoW solver for `scrypt-leading-zero-bits-v2`, plus `ToriiClient` helpers that can fetch the current puzzle and prepare or submit a faucet claim for a canonical I105 account id; puzzles carry the exact 64-character lowercase hexadecimal `NetworkId` and I105 chain discriminant, and the challenge binds the raw 32-byte network identity before the account and anchor; difficulty is mandatory and positive, while account ids, puzzle algorithm labels, anchor/salt/nonce hex, positive anchor-age bounds, bounded scrypt work factors including parallelization and ROMix memory, and mandatory claim PoW fields are validated before hashing or HTTP dispatch
 - `ToriiApiException` for non-success HTTP responses, preserving status code, request URI, and valid UTF-8 response bodies while redacting malformed UTF-8 bodies
 - native Ethereum and BSC mainnet SCCP helpers for execution-provider chain-id
   validation, inbound receipt/source-event evidence, outbound Groth16 calldata,
@@ -603,14 +603,14 @@ Optional live-smoke environment variables:
 - `IROHA_CSHARP_SMOKE_SORAFS_CID` and optional `IROHA_CSHARP_SMOKE_SORAFS_PATH` to also probe `/v1/sorafs/cid/{cid}` plus `/sorafs/cid/{cid}/...`
 
 The live smoke requires runtime-only `IROHA_CSHARP_CANONICAL_ACCOUNT_ID`,
-`IROHA_CSHARP_PRIVATE_KEY_SEED_HEX`, and the deployment's exact checksummed
-`IROHA_CSHARP_NETWORK_ID`. They authenticate node-capability and active-ABI reads
+`IROHA_CSHARP_PRIVATE_KEY_SEED_HEX`, and the deployment's exact 64-character
+lowercase hexadecimal `IROHA_CSHARP_NETWORK_ID`. They authenticate node-capability and active-ABI reads
 and also enable the signed VPN quote probe; do not persist these values in source.
 
 ## Fee quotes and sponsor programs
 
-Every `TransactionBuilder` requires the exact checksummed `NetworkId` derived
-from the deployment's genesis header and a `FeePaymentIntent`. Ordinary client
+Every `TransactionBuilder` requires the exact 64-character lowercase hexadecimal
+`NetworkId` derived from the deployment's genesis header and a `FeePaymentIntent`. Ordinary client
 transactions cannot use the genesis transaction-domain marker. The guided ledger
 flow freezes the unsigned payload, account-signs `POST /v1/fees/quote`, verifies
 that the quote retained the payer, exact sponsor program/revision, and gas

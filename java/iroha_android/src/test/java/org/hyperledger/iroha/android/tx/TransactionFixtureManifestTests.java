@@ -33,7 +33,6 @@ import org.hyperledger.iroha.android.model.TransactionPayload;
 import org.hyperledger.iroha.android.norito.NoritoJavaCodecAdapter;
 import org.hyperledger.iroha.android.norito.SignedTransactionEncoder;
 import org.hyperledger.iroha.android.testing.SimpleJson;
-import org.hyperledger.iroha.android.util.HashLiteral;
 import org.hyperledger.iroha.norito.NoritoAdapters;
 import org.hyperledger.iroha.norito.NoritoCodec;
 import org.hyperledger.iroha.norito.NoritoDecoder;
@@ -214,13 +213,13 @@ public final class TransactionFixtureManifestTests {
         new LinkedHashMap<>(asMap(fixtures.get(0), "fixture"));
     final String networkId =
         requireString(nonCanonical.get("network_id"), "fixture.network_id");
-    nonCanonical.put("network_id", networkId.toLowerCase(java.util.Locale.ROOT));
+    nonCanonical.put("network_id", networkId.toUpperCase(java.util.Locale.ROOT));
     assertFixtureMutationRejected(
         manifest,
         fixtures,
         nonCanonical,
         manifestPath,
-        "exact canonical hash encoding");
+        "64-character lowercase hexadecimal NetworkId");
   }
 
   @Test
@@ -1091,7 +1090,7 @@ public final class TransactionFixtureManifestTests {
     if ((networkIdBytes[networkIdBytes.length - 1] & 1) != 1) {
       throw new IllegalStateException(name + ": payload network_id hash marker bit must be set");
     }
-    final String networkId = HashLiteral.canonicalize(networkIdBytes);
+    final String networkId = NetworkId.fromBytes(networkIdBytes).literal();
     final String authority = decodeAuthorityField(authorityField, name + ".payload.authority");
     final long creationTimeMs =
         decodeFieldPayload(creationField, UINT64_ADAPTER, name + ".payload.creation_time_ms");
@@ -2083,19 +2082,11 @@ public final class TransactionFixtureManifestTests {
 
   private static String requireNetworkId(final Object value, final String field) {
     final String networkId = requireString(value, field);
-    final String canonical;
-    try {
-      canonical = HashLiteral.canonicalize(HashLiteral.decode(networkId));
-    } catch (final IllegalArgumentException ex) {
-      throw new IllegalStateException(field + " must be a canonical network hash identity", ex);
-    }
-    if (!canonical.equals(networkId)) {
-      throw new IllegalStateException(field + " must use its exact canonical hash encoding");
-    }
     try {
       NetworkId.parse(networkId);
     } catch (final IllegalArgumentException ex) {
-      throw new IllegalStateException(field + " must be a canonical network hash identity", ex);
+      throw new IllegalStateException(
+          field + " must be an exact 64-character lowercase hexadecimal NetworkId", ex);
     }
     return networkId;
   }

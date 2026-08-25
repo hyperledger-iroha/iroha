@@ -2381,7 +2381,7 @@ mod tests {
             "root_asset".parse().expect("asset name"),
         );
         let contract = ContractAddress::derive(
-            &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
+            &"0000000000000000000000000000000000000000000000000000000000000001"
                 .parse()
                 .expect("canonical test network id"),
             &adjacent_owner,
@@ -2440,7 +2440,7 @@ mod tests {
         let context = make_context(&authority, 2);
         let raw = PermissionObject::from(CanInvokeContractEntrypoint {
             contract: ContractAddress::derive(
-                &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
+                &"0000000000000000000000000000000000000000000000000000000000000001"
                     .parse()
                     .expect("canonical test network id"),
                 &make_other_account_id(),

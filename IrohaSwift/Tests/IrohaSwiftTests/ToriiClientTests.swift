@@ -523,7 +523,7 @@ final class ToriiClientTests: XCTestCase {
     private func canonicalUnsignedFeePayload(
         domain: ToriiJSONValue = .object([
             "kind": .string("network"),
-            "value": .string(TestNetworkIds.canonical.literal),
+            "value": .string(TestNetworkIds.canonical.noritoJSONLiteral),
         ])
     ) throws -> [String: ToriiJSONValue] {
         let feePayment = try JSONDecoder().decode(
@@ -5733,7 +5733,7 @@ final class ToriiClientTests: XCTestCase {
         let nonceLiteral = toriiClientTestBase64URL(nonce)
         let connectResponse = toriiClientTestConnectSessionResponse(
             sid: sidLiteral,
-            networkID: networkID.literal,
+            networkID: networkID.noritoJSONLiteral,
             appPublicKey: appPublicKeyLiteral,
             nonce: nonceLiteral,
             node: "node-1"
@@ -5743,7 +5743,7 @@ final class ToriiClientTests: XCTestCase {
             XCTAssertEqual(request.httpMethod, "POST")
             let body = self.bodyJSON(from: request)
             XCTAssertEqual(body["sid"] as? String, sidLiteral)
-            XCTAssertEqual(body["network_id"] as? String, networkID.literal)
+            XCTAssertEqual(body["network_id"] as? String, networkID.noritoJSONLiteral)
             XCTAssertEqual(body["app_pk"] as? String, appPublicKeyLiteral)
             XCTAssertEqual(body["nonce"] as? String, nonceLiteral)
             XCTAssertEqual(body["node"] as? String, "node-1")
@@ -10772,16 +10772,29 @@ final class ToriiClientTests: XCTestCase {
     }
 
     @available(iOS 15.0, macOS 12.0, *)
-    func testGetOfflineCapabilityParsesExactUniversalContractOnExactRoute() async throws {
+    func testGetOfflineCapabilityParsesExactFailClosedUniversalContractOnExactRoute() async throws {
         let payload = """
         {
           "mandatory": false,
           "cash_handoff_capability": "cash_handoff_v1",
           "required_bridge_abi_version": 22,
           "max_hops": 8,
-          "ready": true,
+          "ready": false,
           "assets": [],
-          "blockers": []
+          "blockers": [
+            {
+              "code": "offline_cash_authenticated_release_unavailable",
+              "message": "No authenticated Offline Cash V1 release is selected by this asset-neutral response."
+            },
+            {
+              "code": "offline_cash_eligible_asset_unavailable",
+              "message": "No eligible Offline Cash V1 asset is selected by this asset-neutral response."
+            },
+            {
+              "code": "offline_cash_proof_backend_unavailable",
+              "message": "No reviewed production Offline Cash V1 proof and secure-device backend is authenticated by this response."
+            }
+          ]
         }
         """.data(using: .utf8)!
 
@@ -10803,9 +10816,16 @@ final class ToriiClientTests: XCTestCase {
         XCTAssertEqual(status.cashHandoffCapability, "cash_handoff_v1")
         XCTAssertEqual(status.requiredBridgeAbiVersion, 22)
         XCTAssertEqual(status.maxHops, 8)
-        XCTAssertTrue(status.ready)
+        XCTAssertFalse(status.ready)
         XCTAssertTrue(status.assets.isEmpty)
-        XCTAssertTrue(status.blockers.isEmpty)
+        XCTAssertEqual(
+            status.blockers.map(\.code),
+            [
+                "offline_cash_authenticated_release_unavailable",
+                "offline_cash_eligible_asset_unavailable",
+                "offline_cash_proof_backend_unavailable",
+            ]
+        )
     }
 
     @available(iOS 15.0, macOS 12.0, *)
@@ -10836,6 +10856,34 @@ final class ToriiClientTests: XCTestCase {
                 XCTFail("expected non-universal offline capability to fail")
             } catch {
                 // Exact universal discovery is fail-closed.
+            }
+        }
+    }
+
+    @available(iOS 15.0, macOS 12.0, *)
+    func testGetOfflineCapabilityRejectsReadyClaimAndActivationBlockerDrift() async throws {
+        let canonicalBlockers = #"[{"code":"offline_cash_authenticated_release_unavailable","message":"No authenticated Offline Cash V1 release is selected by this asset-neutral response."},{"code":"offline_cash_eligible_asset_unavailable","message":"No eligible Offline Cash V1 asset is selected by this asset-neutral response."},{"code":"offline_cash_proof_backend_unavailable","message":"No reviewed production Offline Cash V1 proof and secure-device backend is authenticated by this response."}]"#
+        let reorderedBlockers = #"[{"code":"offline_cash_eligible_asset_unavailable","message":"No eligible Offline Cash V1 asset is selected by this asset-neutral response."},{"code":"offline_cash_authenticated_release_unavailable","message":"No authenticated Offline Cash V1 release is selected by this asset-neutral response."},{"code":"offline_cash_proof_backend_unavailable","message":"No reviewed production Offline Cash V1 proof and secure-device backend is authenticated by this response."}]"#
+        let invalidPayloads = [
+            #"{"mandatory":false,"cash_handoff_capability":"cash_handoff_v1","required_bridge_abi_version":22,"max_hops":8,"ready":true,"assets":[],"blockers":\#(canonicalBlockers)}"#,
+            #"{"mandatory":false,"cash_handoff_capability":"cash_handoff_v1","required_bridge_abi_version":22,"max_hops":8,"ready":false,"assets":[],"blockers":\#(reorderedBlockers)}"#,
+        ]
+
+        for payload in invalidPayloads {
+            StubURLProtocol.handler = { request in
+                let response = HTTPURLResponse(
+                    url: request.url!,
+                    statusCode: 200,
+                    httpVersion: nil,
+                    headerFields: ["Content-Type": "application/json"]
+                )!
+                return (response, Data(payload.utf8))
+            }
+            do {
+                _ = try await makeClient().getOfflineCapability()
+                XCTFail("expected fail-closed offline capability drift to fail")
+            } catch {
+                // Readiness and canonical blocker order are part of the wire contract.
             }
         }
     }
@@ -12989,7 +13037,7 @@ final class ToriiClientHeaderTests: XCTestCase {
             XCTAssertEqual(domain?["kind"] as? String, "network")
             XCTAssertEqual(
                 domain?["value"] as? String,
-                TestNetworkIds.canonical.literal
+                TestNetworkIds.canonical.noritoJSONLiteral
             )
             XCTAssertEqual(Set(domain?.keys.map { $0 } ?? []), Set(["kind", "value"]))
             XCTAssertNil(payload?["chain"])
@@ -13032,7 +13080,7 @@ final class ToriiClientHeaderTests: XCTestCase {
             ("genesis", .object(["kind": .string("genesis")])),
             ("unknown kind", .object([
                 "kind": .string("unknown"),
-                "value": .string(TestNetworkIds.canonical.literal),
+                "value": .string(TestNetworkIds.canonical.noritoJSONLiteral),
             ])),
             ("unmarked alias", .object([
                 "kind": .string("network"),
@@ -13040,7 +13088,7 @@ final class ToriiClientHeaderTests: XCTestCase {
             ])),
             ("extra field", .object([
                 "kind": .string("network"),
-                "value": .string(TestNetworkIds.canonical.literal),
+                "value": .string(TestNetworkIds.canonical.noritoJSONLiteral),
                 "chain": .string("legacy"),
             ])),
         ]

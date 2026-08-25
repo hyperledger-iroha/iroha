@@ -46,7 +46,7 @@ public final class OfflineCashDeviceLifecycleBridgeV1 {
     STALE_OR_CONCURRENT,
     INTENT_MISMATCH,
     TRUSTED_TIME_REJECTED,
-    REJECTED,
+    POLICY_REJECTED,
     MISSING,
     CONFLICT,
     CORRUPT,

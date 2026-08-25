@@ -37,8 +37,9 @@ MOBILE_SDK_ALLOW_DIRTY_SOURCE=1) permits a local integration artifact only when
 its manifest dirty bit and exact dependency-closure fingerprint match.
 MOBILE_SDK_APPLE_ARTIFACT_DIR may point Apple validation at a staged artifact
 directory; it defaults to <root>/dist.
-Apple source authentication always binds <root>/Cargo.lock. Alternate lockfiles
-are not part of the first-release artifact contract.
+Apple source authentication binds the exact lock selected by
+IROHA_PRIVACY_RELEASE_CARGO_LOCKFILE_PATH when that authenticated privacy lane
+is active; ordinary checks bind <root>/Cargo.lock.
 Source authentication requires Python 3.12, exact Rust 1.93.1 RUSTC/RUSTDOC,
 and an explicit canonical writable CARGO_TARGET_DIR outside the Iroha source
 tree. The reviewed envelope uses CARGO_BUILD_JOBS=1, CARGO_INCREMENTAL=0,
@@ -122,7 +123,15 @@ if [[ -n "${MOBILE_SDK_APPLE_CARGO_LOCK_PATH+x}" ]]; then
   echo "[mobile-sdk-artifacts] ERROR: MOBILE_SDK_APPLE_CARGO_LOCK_PATH is not part of the first-release artifact contract" >&2
   exit 64
 fi
-APPLE_CARGO_LOCKFILE="$ROOT_DIR/Cargo.lock"
+if [[ -n "${IROHA_PRIVACY_RELEASE_CARGO_LOCKFILE_PATH+x}" ]]; then
+  if [[ -z "${IROHA_PRIVACY_RELEASE_CARGO_LOCKFILE_PATH}" ]]; then
+    echo "[mobile-sdk-artifacts] ERROR: IROHA_PRIVACY_RELEASE_CARGO_LOCKFILE_PATH must not be empty" >&2
+    exit 64
+  fi
+  APPLE_CARGO_LOCKFILE="$IROHA_PRIVACY_RELEASE_CARGO_LOCKFILE_PATH"
+else
+  APPLE_CARGO_LOCKFILE="$ROOT_DIR/Cargo.lock"
+fi
 
 resolve_trusted_python312() {
   local candidate canonical
@@ -508,8 +517,6 @@ KAGEMUSHA_C_SYMBOLS=(
   connect_norito_kagemusha_recipient_payment_request_signing_bytes_v2
   connect_norito_kagemusha_recipient_payment_request_create_v2
   connect_norito_kagemusha_recipient_payment_request_verify_v2
-  connect_norito_kagemusha_recipient_lineage_query_create_v2
-  connect_norito_kagemusha_recipient_registration_lineage_verify_v2
   connect_norito_kagemusha_recipient_receive_offer_create_v2
   connect_norito_kagemusha_recipient_receive_offer_project_v2
   connect_norito_kagemusha_recipient_receive_offer_verify_v2
@@ -550,6 +557,18 @@ OFFLINE_CASH_V1_C_SYMBOLS=(
   connect_norito_offline_cash_peer_encode_acknowledgement_v1
   connect_norito_offline_cash_peer_decode_acknowledgement_v1
   connect_norito_offline_cash_release_probe_v1
+  connect_norito_offline_cash_artifact_begin_v1
+  connect_norito_offline_cash_artifact_write_v1
+  connect_norito_offline_cash_artifact_finalize_v1
+  connect_norito_offline_cash_artifact_cancel_v1
+  connect_norito_offline_cash_artifact_set_install_v1
+  connect_norito_offline_cash_artifact_set_uninstall_v1
+  connect_norito_offline_cash_wallet_session_open_v1
+  connect_norito_offline_cash_wallet_session_open_bound_v1
+  connect_norito_offline_cash_wallet_session_accept_payment_v1
+  connect_norito_offline_cash_wallet_session_accept_acknowledgement_v1
+  connect_norito_offline_cash_wallet_session_state_v1
+  connect_norito_offline_cash_wallet_session_close_v1
 )
 
 REQUIRED_BRIDGE_SYMBOLS=(
@@ -583,14 +602,25 @@ FORBIDDEN_MOBILE_BRIDGE_SYMBOLS=(
   connect_norito_get_chain_discriminant
   connect_norito_set_chain_discriminant
   connect_norito_kagemusha_recipient_registration_lineage_verify_v1
+  connect_norito_kagemusha_recipient_lineage_query_create_v2
+  connect_norito_kagemusha_recipient_registration_lineage_verify_v2
   connect_norito_kagemusha_request_authorization_create_v2
   iroha_privacy_capabilities_v1
   iroha_privacy_validate_capabilities_v1
   iroha_privacy_proof_request_v1
   iroha_privacy_build_proof_v1
   iroha_privacy_verify_proof_v1
+  CONNECT_NORITO_OFFLINE_CASH_TESTNET_DEVICE_EMULATOR_DO_NOT_SHIP_V1
+  connect_norito_offline_cash_device_capabilities_v1
+  connect_norito_offline_cash_device_execute_v1
+  Java_org_hyperledger_iroha_sdk_offline_OfflineCashDeviceLifecycleBridgeV1_00024NativeEndpoint_nativeCapabilitiesV1
+  Java_org_hyperledger_iroha_sdk_offline_OfflineCashDeviceLifecycleBridgeV1_00024NativeEndpoint_nativeExecuteV1
   Java_org_hyperledger_iroha_sdk_offline_KagemushaRecursiveSpendProver_nativeCreateAuthorizationV2
   Java_org_hyperledger_iroha_android_offline_KagemushaRecursiveSpendProver_nativeCreateAuthorizationV2
+  Java_org_hyperledger_iroha_sdk_offline_KagemushaRecursiveSpendProver_nativeCreateRecipientLineageQueryV2
+  Java_org_hyperledger_iroha_android_offline_KagemushaRecursiveSpendProver_nativeCreateRecipientLineageQueryV2
+  Java_org_hyperledger_iroha_sdk_offline_KagemushaRecursiveSpendProver_nativeVerifyRecipientRegistrationLineageV2
+  Java_org_hyperledger_iroha_android_offline_KagemushaRecursiveSpendProver_nativeVerifyRecipientRegistrationLineageV2
 )
 
 # Exact JNI allow-list for each supported Java namespace. As with the C list,
@@ -616,7 +646,6 @@ KAGEMUSHA_JNI_METHODS=(
   nativeBuildTopUpProvenanceV4
   nativeBuildVerifyRequestV4
   nativeCreateAcknowledgementV2
-  nativeCreateRecipientLineageQueryV2
   nativeCreateRecipientReceiveOfferV2
   nativeCreateRecipientRequestV2
   nativeDeriveOutputMembershipPathsV4
@@ -649,7 +678,6 @@ KAGEMUSHA_JNI_METHODS=(
   nativeValidateTopUpProvenanceV4
   nativeVerifyAcknowledgementV2
   nativeVerifyRecipientReceiveOfferV2
-  nativeVerifyRecipientRegistrationLineageV2
   nativeVerifyRecipientRequestV2
   nativeVerifySpendV4
 )
@@ -889,7 +917,7 @@ hash_file() {
   fi
 }
 
-canonical_cargo_lock_sha256() {
+canonical_cargo_lock_seal() {
   local lock_file="$1"
   run_isolated_checker_python - "$lock_file" <<'PY'
 import hashlib
@@ -914,14 +942,85 @@ if (
     resolved != candidate
     or stat.S_ISLNK(metadata.st_mode)
     or not stat.S_ISREG(metadata.st_mode)
+    or metadata.st_nlink != 1
 ):
-    raise SystemExit("selected Cargo lock must be a non-symbolic regular file")
+    raise SystemExit(
+        "selected Cargo lock must be a singly linked non-symbolic regular file"
+    )
+flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
+descriptor = os.open(candidate, flags)
 digest = hashlib.sha256()
-with candidate.open("rb") as handle:
-    while chunk := handle.read(1024 * 1024):
+try:
+    before = os.fstat(descriptor)
+    if not stat.S_ISREG(before.st_mode) or before.st_nlink != 1:
+        raise SystemExit("selected Cargo lock must remain singly linked")
+    observed = 0
+    while chunk := os.read(descriptor, 1024 * 1024):
+        observed += len(chunk)
         digest.update(chunk)
-print(digest.hexdigest())
+    after = os.fstat(descriptor)
+finally:
+    os.close(descriptor)
+before_identity = (
+    before.st_dev,
+    before.st_ino,
+    before.st_mode,
+    before.st_nlink,
+    before.st_size,
+    before.st_mtime_ns,
+    before.st_ctime_ns,
+)
+after_identity = (
+    after.st_dev,
+    after.st_ino,
+    after.st_mode,
+    after.st_nlink,
+    after.st_size,
+    after.st_mtime_ns,
+    after.st_ctime_ns,
+)
+visible = candidate.lstat()
+if (
+    before_identity != after_identity
+    or observed != before.st_size
+    or stat.S_ISLNK(visible.st_mode)
+    or (visible.st_dev, visible.st_ino) != (before.st_dev, before.st_ino)
+):
+    raise SystemExit("selected Cargo lock changed identity while it was read")
+print(
+    ":".join(
+        (
+            digest.hexdigest(),
+            str(before.st_dev),
+            str(before.st_ino),
+            str(before.st_mode),
+            str(before.st_nlink),
+            str(before.st_size),
+            str(before.st_mtime_ns),
+            str(before.st_ctime_ns),
+        )
+    )
+)
 PY
+}
+
+if ! APPLE_CARGO_LOCK_SEAL_START="$(
+  canonical_cargo_lock_seal "$APPLE_CARGO_LOCKFILE"
+)"; then
+  echo "[mobile-sdk-artifacts] ERROR: selected Apple Cargo lock is not a stable singly linked canonical file" >&2
+  exit 69
+fi
+
+assert_apple_cargo_lock() {
+  local current_seal
+  if ! current_seal="$(canonical_cargo_lock_seal "$APPLE_CARGO_LOCKFILE")"; then
+    echo "[mobile-sdk-artifacts] ERROR: selected Apple Cargo lock became unreadable" >&2
+    return 1
+  fi
+  if [[ "$current_seal" != "$APPLE_CARGO_LOCK_SEAL_START" ]]; then
+    echo "[mobile-sdk-artifacts] ERROR: selected Apple Cargo lock changed during validation" >&2
+    return 1
+  fi
 }
 
 hash_zip_entry() {
@@ -2282,6 +2381,7 @@ PY
     if ! run_isolated_checker_python \
       "$ROOT_DIR/scripts/validate_norito_bridge_xcframework.py" \
       --root "$ROOT_DIR" \
+      --lockfile-path "$APPLE_CARGO_LOCKFILE" \
       --xcframework "$xcframework" \
       --manifest "$embedded_manifest" \
       --manifest-link "$manifest" \
@@ -2536,9 +2636,12 @@ PY
     local manifest_lock_hash selected_lock_hash
     manifest_lock_hash="$(manifest_json_value "$manifest" cargo_lock_sha256 2>/dev/null || true)"
     if [[ -n "$APPLE_CARGO_LOCKFILE" ]]; then
-      if ! selected_lock_hash="$(canonical_cargo_lock_sha256 "$APPLE_CARGO_LOCKFILE")"; then
-        fail "selected Apple Cargo lock is not an absolute canonical non-symbolic regular file"
-      elif [[ "$manifest_lock_hash" != "$selected_lock_hash" ]]; then
+      if ! assert_apple_cargo_lock; then
+        fail "selected Apple Cargo lock identity is no longer authenticated"
+      else
+        selected_lock_hash="${APPLE_CARGO_LOCK_SEAL_START%%:*}"
+      fi
+      if [[ -n "$selected_lock_hash" && "$manifest_lock_hash" != "$selected_lock_hash" ]]; then
         fail "NoritoBridge artifact selected Cargo lock digest does not match checkout"
       fi
     fi
@@ -3547,9 +3650,11 @@ check_android_package() {
 check_bridge_source_contract
 
 if [[ "$CHECK_APPLE" == "1" ]]; then
+  assert_apple_cargo_lock || FAILURES=1
   check_swift_kagemusha_source_contract
   check_swift_package
   check_xcframework
+  assert_apple_cargo_lock || FAILURES=1
 fi
 
 if [[ "$CHECK_ANDROID" == "1" ]]; then

@@ -40,7 +40,7 @@ fn typed_validation_fee_registry_fails_closed_without_governance() {
     let proposal_id = [0x12; 32];
     let policy = ValidationFeePolicyV1 {
         schema_version: VALIDATION_FEE_POLICY_SCHEMA_VERSION,
-        network_id: "hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
+        network_id: "0000000000000000000000000000000000000000000000000000000000000001"
             .parse::<NetworkId>()
             .expect("canonical validation-fee network id"),
         policy_version: 1,

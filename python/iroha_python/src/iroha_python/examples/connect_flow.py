@@ -16,7 +16,7 @@ Example usage:
 ```bash
 python -m iroha_python.examples.connect_flow \\
   --base-url http://127.0.0.1:8080 \\
-  --network-id '<exact-checksummed-network-id>' \\
+  --network-id '<64-lowercase-hex-network-id>' \\
   --sid '<derived-base64url-sid>' \\
   --app-public-key '<32-byte-x25519-public-key-hex>' \\
   --nonce '<16-byte-nonce-hex>' \\
@@ -319,7 +319,10 @@ def main() -> None:
         help="Torii base URL (default: %(default)s)",
     )
     parser.add_argument("--sid", help="Canonical unpadded base64url session identifier")
-    parser.add_argument("--network-id", help="Exact checksummed NetworkId for the deployment")
+    parser.add_argument(
+        "--network-id",
+        help="Exact 64-character lowercase hexadecimal NetworkId for the deployment",
+    )
     parser.add_argument("--nonce", help="Hex-encoded 16-byte Connect session nonce")
     parser.add_argument(
         "--node",

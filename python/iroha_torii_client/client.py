@@ -1775,7 +1775,7 @@ class RuntimeUpgradeTxResponse:
 
 @dataclass(frozen=True)
 class KagemushaTopUpRequestV4:
-    """Canonical ABI-21/V4 Norito top-up request and operation identifier."""
+    """Canonical bridge ABI-22 / Kagemusha V4 Norito top-up request and operation identifier."""
 
     norito: bytes
     operation_id: str
@@ -1792,7 +1792,7 @@ class KagemushaTopUpRequestV4:
 
 @dataclass(frozen=True)
 class KagemushaRedeemRequestV4:
-    """Canonical ABI-21/V4 Norito redemption request and operation identifier."""
+    """Canonical bridge ABI-22 / Kagemusha V4 Norito redemption request and operation identifier."""
 
     norito: bytes
     operation_id: str
@@ -1846,6 +1846,20 @@ _KAGEMUSHA_REDEEM_MAX_NORITO_REQUEST_BYTES = 48 * 1024 * 1024
 _KAGEMUSHA_REQUIRED_BRIDGE_ABI_VERSION = 22
 _KAGEMUSHA_MAX_HOPS = 8
 _KAGEMUSHA_CASH_HANDOFF_CAPABILITY = "cash_handoff_v1"
+_OFFLINE_CAPABILITY_ACTIVATION_BLOCKERS_V1 = (
+    (
+        "offline_cash_authenticated_release_unavailable",
+        "No authenticated Offline Cash V1 release is selected by this asset-neutral response.",
+    ),
+    (
+        "offline_cash_eligible_asset_unavailable",
+        "No eligible Offline Cash V1 asset is selected by this asset-neutral response.",
+    ),
+    (
+        "offline_cash_proof_backend_unavailable",
+        "No reviewed production Offline Cash V1 proof and secure-device backend is authenticated by this response.",
+    ),
+)
 _KAGEMUSHA_RECURSIVE_PROOF_PAIR_MAX_BYTES_V4 = 16 * 1024 * 1024
 _KAGEMUSHA_VERIFIER_BACKEND = "halo2/ipa"
 _KAGEMUSHA_VERIFIER_ROLES = {
@@ -2199,13 +2213,49 @@ def _offline_top_up_shield_evidence_request(value: Any, context: str) -> None:
 
 @dataclass(frozen=True)
 class OfflineReadinessBlocker:
-    """Legacy command-specific proof-material diagnostic.
-
-    This type never represents deployment, dataspace, or asset enrollment.
-    """
+    """Stable fail-closed offline-cash readiness diagnostic."""
 
     code: str
     message: str
+
+
+def _offline_readiness_blockers(
+    value: Any,
+    context: str,
+) -> Tuple[OfflineReadinessBlocker, ...]:
+    if not isinstance(value, list):
+        raise RuntimeError(f"{context} must be an array")
+    blockers: List[OfflineReadinessBlocker] = []
+    blocker_codes: set[str] = set()
+    for index, raw in enumerate(value):
+        blocker_context = f"{context}[{index}]"
+        blocker = _offline_mapping(raw, blocker_context)
+        _offline_exact_object_fields(
+            blocker,
+            blocker_context,
+            required=("code", "message"),
+        )
+        code = _offline_exact_string(
+            _offline_required(blocker, "code", blocker_context),
+            f"{blocker_context}.code",
+        )
+        if _OFFLINE_ERROR_CODE_RE.fullmatch(code) is None:
+            raise RuntimeError(
+                f"{blocker_context}.code must be a stable lowercase code of 1 to 64 characters"
+            )
+        if code in blocker_codes:
+            raise RuntimeError(f"{context} repeats blocker code {code}")
+        blocker_codes.add(code)
+        message = _offline_required(blocker, "message", blocker_context)
+        if not isinstance(message, str):
+            raise RuntimeError(f"{blocker_context}.message must be a string")
+        _offline_exact_string(message, f"{blocker_context}.message")
+        if len(message) > 1024:
+            raise RuntimeError(
+                f"{blocker_context}.message must not exceed 1024 Unicode characters"
+            )
+        blockers.append(OfflineReadinessBlocker(code=code, message=message))
+    return tuple(blockers)
 
 
 @dataclass(frozen=True)
@@ -2232,7 +2282,7 @@ class OfflineActiveTransferVerifier:
 
 @dataclass(frozen=True)
 class OfflineAuthenticatedArtifactSet:
-    """Exact authenticated ABI-21 V4 recursive release selected for readiness."""
+    """Exact authenticated Kagemusha V4 recursive release selected for readiness."""
 
     generation: str
     manifest_sha256: str
@@ -2262,7 +2312,7 @@ class OfflineStatus:
     max_hops: int
     ready: bool
     assets: Tuple[()]
-    blockers: Tuple[()]
+    blockers: Tuple[OfflineReadinessBlocker, ...]
 
     @classmethod
     def from_payload(cls, payload: Mapping[str, Any]) -> "OfflineStatus":
@@ -2315,22 +2365,28 @@ class OfflineStatus:
         if max_hops != _KAGEMUSHA_MAX_HOPS:
             raise RuntimeError(f"{context}.max_hops must be {_KAGEMUSHA_MAX_HOPS}")
         ready = _offline_required(record, "ready", context)
-        if ready is not True:
-            raise RuntimeError(f"{context}.ready must be true")
+        if ready is not False:
+            raise RuntimeError(f"{context}.ready must be false")
         assets = _offline_required(record, "assets", context)
         if not isinstance(assets, list) or assets:
             raise RuntimeError(f"{context}.assets must be an empty array")
-        blockers = _offline_required(record, "blockers", context)
-        if not isinstance(blockers, list) or blockers:
-            raise RuntimeError(f"{context}.blockers must be an empty array")
+        blockers = _offline_readiness_blockers(
+            _offline_required(record, "blockers", context),
+            f"{context}.blockers",
+        )
+        blocker_projection = tuple((blocker.code, blocker.message) for blocker in blockers)
+        if blocker_projection != _OFFLINE_CAPABILITY_ACTIVATION_BLOCKERS_V1:
+            raise RuntimeError(
+                f"{context}.blockers must contain the three ordered canonical activation blockers"
+            )
         return cls(
             mandatory=False,
             cash_handoff_capability=_KAGEMUSHA_CASH_HANDOFF_CAPABILITY,
             required_bridge_abi_version=_KAGEMUSHA_REQUIRED_BRIDGE_ABI_VERSION,
             max_hops=_KAGEMUSHA_MAX_HOPS,
-            ready=True,
+            ready=False,
             assets=(),
-            blockers=(),
+            blockers=blockers,
         )
 
 
@@ -2734,17 +2790,17 @@ class OfflineReadiness:
         )
         if (recursive_verifiers[0] is None) != (recursive_verifiers[1] is None):
             raise RuntimeError(
-                f"{context} must report the ABI-21 V4 recursive verifier pair atomically"
+                f"{context} must report the Kagemusha V4 recursive verifier pair atomically"
             )
         if artifact_set is None:
             if any(verifier is not None for verifier in recursive_verifiers):
                 raise RuntimeError(
-                    f"{context}.artifact_set must accompany the ABI-21 V4 recursive verifier pair"
+                    f"{context}.artifact_set must accompany the Kagemusha V4 recursive verifier pair"
                 )
         else:
             if any(verifier is None for verifier in recursive_verifiers):
                 raise RuntimeError(
-                    f"{context}.artifact_set requires the ABI-21 V4 recursive verifier pair"
+                    f"{context}.artifact_set requires the Kagemusha V4 recursive verifier pair"
                 )
             if asset_scale != artifact_set.asset_scale:
                 raise RuntimeError(
@@ -2756,10 +2812,10 @@ class OfflineReadiness:
             ):
                 if verifier is None:
                     raise RuntimeError(
-                        f"{context}.{field} is required with the ABI-21 V4 artifact set"
+                        f"{context}.{field} is required with the Kagemusha V4 artifact set"
                     )
                 if verifier.version == 0:
-                    raise RuntimeError(f"{context}.{field}.version must be positive for ABI-21 V4")
+                    raise RuntimeError(f"{context}.{field}.version must be positive for Kagemusha V4")
                 if verifier.max_proof_bytes != artifact_set.max_proof_bytes:
                     raise RuntimeError(
                         f"{context}.{field}.max_proof_bytes must equal artifact_set.max_proof_bytes"
@@ -2786,38 +2842,10 @@ class OfflineReadiness:
         if not isinstance(ready, bool):
             raise RuntimeError(f"{context}.ready must be a boolean")
         raw_blockers = _offline_required(record, "blockers", context)
-        if not isinstance(raw_blockers, list):
-            raise RuntimeError(f"{context}.blockers must be an array")
-        blockers: List[OfflineReadinessBlocker] = []
-        blocker_codes: set[str] = set()
-        for index, raw in enumerate(raw_blockers):
-            blocker_context = f"{context}.blockers[{index}]"
-            blocker = _offline_mapping(raw, blocker_context)
-            _offline_exact_object_fields(
-                blocker,
-                blocker_context,
-                required=("code", "message"),
-            )
-            code = _offline_exact_string(
-                _offline_required(blocker, "code", blocker_context),
-                f"{blocker_context}.code",
-            )
-            if _OFFLINE_ERROR_CODE_RE.fullmatch(code) is None:
-                raise RuntimeError(
-                    f"{blocker_context}.code must be a stable lowercase code of 1 to 64 characters"
-                )
-            if code in blocker_codes:
-                raise RuntimeError(f"{context}.blockers repeats blocker code {code}")
-            blocker_codes.add(code)
-            message = _offline_required(blocker, "message", blocker_context)
-            if not isinstance(message, str):
-                raise RuntimeError(f"{blocker_context}.message must be a string")
-            _offline_exact_string(message, f"{blocker_context}.message")
-            if len(message) > 1024:
-                raise RuntimeError(
-                    f"{blocker_context}.message must not exceed 1024 Unicode characters"
-                )
-            blockers.append(OfflineReadinessBlocker(code=code, message=message))
+        blockers = list(
+            _offline_readiness_blockers(raw_blockers, f"{context}.blockers")
+        )
+        blocker_codes = {blocker.code for blocker in blockers}
         recursive_registry_codes = blocker_codes & {
             "recursive_v4_registry_unavailable",
             "recursive_v4_registry_malformed",
@@ -2825,7 +2853,7 @@ class OfflineReadiness:
         if artifact_set is None:
             if len(recursive_registry_codes) != 1:
                 raise RuntimeError(
-                    f"{context}.artifact_set null requires exactly one ABI-21 V4 registry blocker"
+                    f"{context}.artifact_set null requires exactly one Kagemusha V4 registry blocker"
                 )
             if proof_backend_available:
                 raise RuntimeError(
@@ -2833,7 +2861,7 @@ class OfflineReadiness:
                 )
         elif recursive_registry_codes:
             raise RuntimeError(
-                f"{context}.artifact_set contradicts the ABI-21 V4 registry blocker set"
+                f"{context}.artifact_set contradicts the Kagemusha V4 registry blocker set"
             )
         if ("asset_scale_unavailable" in blocker_codes) != (asset_scale is None):
             raise RuntimeError(
@@ -2881,7 +2909,7 @@ class OfflineReadiness:
         )
         if recursive_lineage_supported != expected_recursive_lineage_supported:
             raise RuntimeError(
-                f"{context}.recursive_lineage_supported must equal the exact authenticated ABI-21 lineage conjunction"
+                f"{context}.recursive_lineage_supported must equal the exact authenticated Kagemusha V4 lineage conjunction"
             )
         lineage_blocked = "recursive_lineage_unavailable" in blocker_codes
         if lineage_blocked == recursive_lineage_supported:
@@ -2903,7 +2931,7 @@ class OfflineReadiness:
         )
         if ready != expected_ready:
             raise RuntimeError(
-                f"{context}.ready must equal the complete ABI-21 runtime conjunction"
+                f"{context}.ready must equal the complete Kagemusha V4 runtime conjunction"
             )
         return cls(
             required_bridge_abi_version=required_bridge_abi_version,
@@ -2982,7 +3010,7 @@ class OfflineVerifierKeyId:
 
 @dataclass(frozen=True)
 class KagemushaArtifactBindingV4:
-    """Content-addressed ABI-21/V4 recursive proof release."""
+    """Content-addressed bridge ABI-22 / Kagemusha V4 recursive proof release."""
 
     version: Literal[4]
     generation: str

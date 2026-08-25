@@ -54,6 +54,7 @@ public final class DeviceAttestationRegistration {
   private final String iosEnvironment;
   private final String androidPackageName;
   private final byte[] androidSigningCertificateSha256;
+  private final OfflineAndroidAttestedDevicePropertiesV2 androidAttestedDeviceProperties;
   private final KagemushaDevicePublicKeyV2 publicKey;
   private final String assertionScheme;
   private final String assertionKeyAlgorithm;
@@ -102,6 +103,63 @@ public final class DeviceAttestationRegistration {
       final long recentBlockHeight,
       final byte[] recentBlockHash,
       final long expiresAtMs) {
+    this(
+        version,
+        platform,
+        keyId,
+        deviceId,
+        accountId,
+        assetDefinitionId,
+        iosTeamId,
+        iosBundleId,
+        iosEnvironment,
+        androidPackageName,
+        androidSigningCertificateSha256,
+        null,
+        publicKey,
+        assertionScheme,
+        assertionKeyAlgorithm,
+        assertionPublicKey,
+        assertionUsageCountLimit,
+        oneUse,
+        challengeHash,
+        attestationReportHash,
+        attestationReport,
+        evidenceHash,
+        evidence,
+        recentBlockHeight,
+        recentBlockHash,
+        expiresAtMs);
+  }
+
+  /** Construct the exact current registration, including optional ABI22 Android properties. */
+  public DeviceAttestationRegistration(
+      final int version,
+      final String platform,
+      final String keyId,
+      final String deviceId,
+      final String accountId,
+      final String assetDefinitionId,
+      final String iosTeamId,
+      final String iosBundleId,
+      final String iosEnvironment,
+      final String androidPackageName,
+      final byte[] androidSigningCertificateSha256,
+      final OfflineAndroidAttestedDevicePropertiesV2 androidAttestedDeviceProperties,
+      final KagemushaDevicePublicKeyV2 publicKey,
+      final String assertionScheme,
+      final String assertionKeyAlgorithm,
+      final byte[] assertionPublicKey,
+      final Integer assertionUsageCountLimit,
+      final boolean oneUse,
+      final byte[] challengeHash,
+      final byte[] attestationReportHash,
+      final byte[] attestationReport,
+      final byte[] evidenceHash,
+      final byte[] evidence,
+      final long recentBlockHeight,
+      final byte[] recentBlockHash,
+      final long expiresAtMs) {
     this.version = version;
     this.platform = requireExactText(platform, "platform");
     this.keyId = requireExactText(keyId, "key_id");
@@ -114,6 +172,7 @@ public final class DeviceAttestationRegistration {
     this.androidPackageName =
         requireOptionalExactText(androidPackageName, "android_package_name");
     this.androidSigningCertificateSha256 = copyNullable(androidSigningCertificateSha256);
+    this.androidAttestedDeviceProperties = androidAttestedDeviceProperties;
     this.publicKey = Objects.requireNonNull(publicKey, "public_key");
     this.assertionScheme = requireExactText(assertionScheme, "assertion_scheme");
     this.assertionKeyAlgorithm =
@@ -295,7 +354,9 @@ public final class DeviceAttestationRegistration {
         throw new IllegalArgumentException(
             "ios_environment must be production or development");
       }
-      if (androidPackageName != null || androidSigningCertificateSha256 != null) {
+      if (androidPackageName != null
+          || androidSigningCertificateSha256 != null
+          || androidAttestedDeviceProperties != null) {
         throw new IllegalArgumentException("iOS App Attest must not carry Android app metadata");
       }
       return;
@@ -422,6 +483,10 @@ public final class DeviceAttestationRegistration {
     return copyNullable(androidSigningCertificateSha256);
   }
 
+  public OfflineAndroidAttestedDevicePropertiesV2 androidAttestedDeviceProperties() {
+    return androidAttestedDeviceProperties;
+  }
+
   public KagemushaDevicePublicKeyV2 publicKey() {
     return publicKey;
   }
@@ -500,6 +565,7 @@ public final class DeviceAttestationRegistration {
         && Objects.equals(iosEnvironment, other.iosEnvironment)
         && Objects.equals(androidPackageName, other.androidPackageName)
         && Arrays.equals(androidSigningCertificateSha256, other.androidSigningCertificateSha256)
+        && Objects.equals(androidAttestedDeviceProperties, other.androidAttestedDeviceProperties)
         && publicKey.equals(other.publicKey)
         && assertionScheme.equals(other.assertionScheme)
         && assertionKeyAlgorithm.equals(other.assertionKeyAlgorithm)
@@ -527,6 +593,7 @@ public final class DeviceAttestationRegistration {
             iosBundleId,
             iosEnvironment,
             androidPackageName,
+            androidAttestedDeviceProperties,
             publicKey,
             assertionScheme,
             assertionKeyAlgorithm,

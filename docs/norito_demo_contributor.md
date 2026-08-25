@@ -16,7 +16,9 @@ Norito bridge/Connect stack into Xcode projects, see the
    values to match your environment. The app reads these variables on launch:
    - `TORII_NODE_URL` — base REST URL (WebSocket URLs are derived from it).
    - `CONNECT_TOKEN_APP` / `CONNECT_TOKEN_WALLET` / `CONNECT_TOKEN_RELAY` — role and relay tokens returned by `/v1/connect/session`.
-   - `CONNECT_NETWORK_ID` — exact canonical checksummed genesis-derived network identity.
+   - `CONNECT_NETWORK_ID` — exact 64-character lowercase marked genesis-hash text.
+     The demo converts it to tagged checksummed Norito JSON only for the
+     `/v1/connect/session` body and generated Connect deep link.
    - The app generates a fresh 32-byte app key and non-zero 16-byte nonce, derives
      `sid = BLAKE2b-256("iroha-connect|sid|" || NetworkId_bytes || app_pk || nonce)`,
      and rejects a Torii response that substitutes any launch identity field.

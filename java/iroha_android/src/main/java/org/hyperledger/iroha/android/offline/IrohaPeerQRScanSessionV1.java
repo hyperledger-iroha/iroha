@@ -107,9 +107,11 @@ public final class IrohaPeerQRScanSessionV1 {
         result.getPayloadKind() == null
             ? null
             : IrohaPeerPayloadKind.fromCode(result.getPayloadKind().getCode()),
+        result.getStreamId(),
         result.getReceivedDataFrames(),
         result.getTotalDataFrames(),
-        result.getRecoveredDataFrames());
+        result.getRecoveredDataFrames(),
+        result.isDuplicate());
   }
 
   private static org.hyperledger.iroha.sdk.offline.IrohaPeerPayloadProfile sharedProfile(

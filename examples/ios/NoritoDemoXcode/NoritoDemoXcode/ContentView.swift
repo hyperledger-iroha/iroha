@@ -41,7 +41,7 @@ final class ConnectViewModel: ObservableObject {
   @Published var approveSigValid: Bool? = nil
   @Published var verifiedAccount: String = ""
   // Permissions + Proof UI state
-  @Published var networkId: String = "hash:32C903E5B3497E34C2B844EBFE8A39C19E6CF8F95D44C1FFB8BA9DCB42F91149#A2F0"
+  @Published var networkId: String = "32c903e5b3497e34c2b844ebfe8a39c19e6cf8f95d44c1ffb8ba9dcb42f91149"
   @Published var reqPermSignRaw: Bool = true
   @Published var reqPermSignTx: Bool = true
   @Published var reqEventDisplay: Bool = true
@@ -128,6 +128,7 @@ final class ConnectViewModel: ObservableObject {
 
   var walletDeepLink: String {
     guard !sid.isEmpty, !tokenWallet.isEmpty, !tokenRelay.isEmpty,
+          let networkIdJSONLiteral = noritoJSONNetworkId(networkId),
           let appPublicKey = dataFromBase64OrBase64URL(lastAppPubB64),
           appPublicKey.count == 32, launchNonce.count == 16 else { return "" }
     var components = URLComponents()
@@ -135,7 +136,7 @@ final class ConnectViewModel: ObservableObject {
     components.host = "connect"
     components.queryItems = [
       URLQueryItem(name: "sid", value: sid),
-      URLQueryItem(name: "network_id", value: networkId),
+      URLQueryItem(name: "network_id", value: networkIdJSONLiteral),
       URLQueryItem(name: "app_pk", value: base64url(appPublicKey)),
       URLQueryItem(name: "nonce", value: base64url(launchNonce)),
       URLQueryItem(name: "node", value: baseURL),
@@ -159,8 +160,9 @@ final class ConnectViewModel: ObservableObject {
     let appPk = Data()
 #endif
 
-    guard let networkIdBytes = decodeNetworkId(networkId) else {
-      log("CONNECT_NETWORK_ID must be a canonical NetworkId")
+    guard let networkIdBytes = decodeNetworkId(networkId),
+          let networkIdJSONLiteral = noritoJSONNetworkId(networkId) else {
+      log("CONNECT_NETWORK_ID must be exact raw lowercase NetworkId text")
       return
     }
     var nonce = Data(count: 16)
@@ -182,7 +184,7 @@ final class ConnectViewModel: ObservableObject {
     req.setValue("application/json", forHTTPHeaderField: "Accept")
     let body: [String: Any] = [
       "sid": sidB64,
-      "network_id": networkId,
+      "network_id": networkIdJSONLiteral,
       "app_pk": base64url(appPk),
       "nonce": base64url(nonce),
       "node": baseURL,
@@ -198,7 +200,7 @@ final class ConnectViewModel: ObservableObject {
       do {
         if let json = try JSONSerialization.jsonObject(with: data) as? [String: Any] {
           guard (json["sid"] as? String) == sidB64,
-                (json["network_id"] as? String) == self.networkId,
+                (json["network_id"] as? String) == networkIdJSONLiteral,
                 (json["app_pk"] as? String) == self.base64url(appPk),
                 (json["nonce"] as? String) == self.base64url(nonce) else {
             self.log("Session response substituted the launch identity")
@@ -659,25 +661,27 @@ final class ConnectViewModel: ObservableObject {
 
   private func decodeNetworkId(_ literal: String) -> Data? {
     let bytes = Array(literal.utf8)
-    guard bytes.count == 74, Array(bytes[0..<5]) == Array("hash:".utf8),
-          bytes[69] == 0x23, bytes[5..<69].allSatisfy(isUpperHex),
-          bytes[70..<74].allSatisfy(isUpperHex),
-          let checksum = UInt16(String(decoding: bytes[70..<74], as: UTF8.self), radix: 16),
-          checksum == crc16(bytes[0..<69]) else { return nil }
+    guard bytes.count == 64, bytes.allSatisfy(isLowerHex) else { return nil }
     var raw = Data(capacity: 32)
-    for index in stride(from: 5, to: 69, by: 2) {
+    for index in stride(from: 0, to: 64, by: 2) {
       guard let high = hexNibble(bytes[index]), let low = hexNibble(bytes[index + 1]) else { return nil }
       raw.append((high << 4) | low)
     }
     return raw.count == 32 && raw[31] & 1 == 1 ? raw : nil
   }
 
-  private func isUpperHex(_ byte: UInt8) -> Bool {
-    (byte >= 0x30 && byte <= 0x39) || (byte >= 0x41 && byte <= 0x46)
+  private func isLowerHex(_ byte: UInt8) -> Bool {
+    (byte >= 0x30 && byte <= 0x39) || (byte >= 0x61 && byte <= 0x66)
   }
 
   private func hexNibble(_ byte: UInt8) -> UInt8? {
-    byte <= 0x39 ? byte - 0x30 : (byte >= 0x41 && byte <= 0x46 ? byte - 0x41 + 10 : nil)
+    byte <= 0x39 ? byte - 0x30 : (byte >= 0x61 && byte <= 0x66 ? byte - 0x61 + 10 : nil)
+  }
+
+  private func noritoJSONNetworkId(_ literal: String) -> String? {
+    guard decodeNetworkId(literal) != nil else { return nil }
+    let prefix = "hash:" + literal.uppercased()
+    return prefix + String(format: "#%04X", crc16(prefix.utf8))
   }
 
   private func crc16<S: Sequence>(_ bytes: S) -> UInt16 where S.Element == UInt8 {

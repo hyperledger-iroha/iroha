@@ -164,10 +164,13 @@ framing instead of the finite HTTP envelope.
 `GET /v1/offline/readiness` is retained as a compatibility name for universal
 offline-wallet capability discovery. It does not evaluate a validator, asset,
 domain, dataspace, escrow account, verifier catalog, or deployment profile.
-Every app-API build returns the same asset-neutral ABI-21/V4
-`cash_handoff_v1` contract with `mandatory: false`, `ready: true`, and empty
-`assets` and `blockers` arrays. Clients must not use this response, `/health`,
-or `/readyz` as an offline-feature admission gate.
+Every app-API build returns the same asset-neutral bridge ABI-22 / Kagemusha data ABI V4
+`cash_handoff_v1` contract with `mandatory: false` and an empty `assets` array.
+Because this projection does not evaluate an authenticated proof backend,
+release, or eligible asset, it reports `ready: false` with the three canonical
+`offline_cash_*_unavailable` blockers. Clients may use it to discover the wire
+contract but must not treat it, `/health`, or `/readyz` as production proof
+authority.
 
 Proof, authority, balance, release, and lineage errors belong to the specific
 top-up or redemption command that references them. Such an error uses the

@@ -25,7 +25,37 @@ class OfflineCashDeviceLifecycleBridgeV1Test {
 
     @Test
     fun `exact capabilities unlock all journal and outbox operations`() {
+        assertEquals(14, OfflineCashDeviceLifecycleBridgeV1.OPERATION_COUNT)
+        assertEquals(96, OfflineCashDeviceLifecycleBridgeV1.CAPABILITY_FRAME_BYTES)
+        assertEquals(0x1ff, OfflineCashDeviceLifecycleBridgeV1.REQUIRED_CAPABILITY_MASK)
+        assertEquals(
+            (1..OfflineCashDeviceLifecycleBridgeV1.OPERATION_COUNT).toList(),
+            OfflineCashDeviceLifecycleBridgeV1.Operation.values().map { it.code },
+        )
+        assertEquals(
+            (0..9).toList(),
+            OfflineCashDeviceLifecycleBridgeV1.Status.values().map { it.code },
+        )
+        assertEquals(
+            listOf(
+                "SUCCESS",
+                "UNAVAILABLE",
+                "STALE_OR_CONCURRENT",
+                "INTENT_MISMATCH",
+                "TRUSTED_TIME_REJECTED",
+                "POLICY_REJECTED",
+                "MISSING",
+                "CONFLICT",
+                "CORRUPT",
+                "MALFORMED_REQUEST",
+            ),
+            OfflineCashDeviceLifecycleBridgeV1.Status.values().map { it.name },
+        )
         val endpoint = FakeEndpoint()
+        assertEquals(
+            OfflineCashDeviceLifecycleBridgeV1.CAPABILITY_FRAME_BYTES,
+            endpoint.capabilityFrame.size,
+        )
         val bridge = OfflineCashDeviceLifecycleBridgeV1.withEndpointForTests(endpoint)
         assertEquals(OfflineCashDeviceLifecycleBridgeV1.Availability.AVAILABLE, bridge.availability)
         assertContentEquals(fixed(0x22, 32), bridge.capabilities()!!.hardwarePolicyId())

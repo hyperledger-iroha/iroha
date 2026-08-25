@@ -158,9 +158,9 @@ for retired_hop in (16, 32, 64):
 
 print(
     "Kagemusha peer transport bounds are internally consistent: "
-    "the ABI-21/V4 archive permits 32 MiB, the canonical 12,896-byte ABI-21 peer-payment "
+    "the Kagemusha V4 archive permits 32 MiB, the canonical 12,896-byte V4 peer-payment "
     "fixture remains pinned in the QR and NFC transport tests, and the "
     "12 KiB text envelope derives an independent 9,211-byte raw sub-cap; runtime proof use "
-    "still requires the authenticated installed ABI-21/V4 artifact set and promotion evidence."
+    "still requires the authenticated installed Kagemusha V4 artifact set and promotion evidence."
 )
 PY

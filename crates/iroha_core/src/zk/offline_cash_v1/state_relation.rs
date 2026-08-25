@@ -7,14 +7,19 @@
 
 use core::fmt;
 
-use iroha_data_model::offline::OFFLINE_CASH_WIRE_VERSION_V1;
+use iroha_data_model::{
+    NetworkId,
+    asset::AssetDefinitionId,
+    offline::{OFFLINE_CASH_WIRE_VERSION_V1, OfflineCashTransferStatementV1},
+};
 use sha2::{Digest as _, Sha256};
 use zeroize::{Zeroize, Zeroizing};
 
 use super::state_abi::{
-    OfflineCashStateAbiErrorV1, OfflineCashStateOperationV1, OfflineCashStatePublicInstancesV1,
-    OfflineCashStateRelationPublicV1,
+    OfflineCashStateAbiErrorV1, OfflineCashStateLeafPublicInstancesV1, OfflineCashStateOperationV1,
+    OfflineCashStatePublicInstancesV1, OfflineCashStateRelationPublicV1,
 };
+use super::state_transition::{STATE_CONTEXT_MESSAGE_BYTES_V1, state_context_message_v1};
 
 #[path = "state_relation_circuit.rs"]
 pub(super) mod circuit;
@@ -32,6 +37,39 @@ pub(super) const SEND_SPLIT_SENDER_BRANCH_V1: &[u8] = b"sender";
 pub(super) const SEND_SPLIT_RECEIVER_BRANCH_V1: &[u8] = b"receiver";
 pub(super) const STATE_LINEAGE_DOMAIN_V1: &[u8] = b"iroha:offline-cash:v1:state-lineage";
 pub(super) const STATE_HEAD_FRAME_VERSION_V1: u16 = OFFLINE_CASH_WIRE_VERSION_V1;
+
+/// Exact canonical Norito frame bytes for the fixed-width network identity.
+pub(super) const NETWORK_ID_FRAME_BYTES_V1: usize = 72;
+/// Exact canonical Norito frame bytes for the UUID-backed asset identity.
+pub(super) const ASSET_ID_FRAME_BYTES_V1: usize = 72;
+/// Exact canonical Norito/SHA-256 SendSplit transition message bytes.
+pub(super) const SEND_TRANSITION_MESSAGE_BYTES_V1: usize = 441;
+/// Exact canonical Norito/SHA-256 SendSplit semantic message bytes.
+pub(super) const SEND_SEMANTIC_MESSAGE_BYTES_V1: usize = 421;
+const SEND_TRANSITION_DIGEST_PREFIX_BYTES_V1: usize = 52;
+pub(super) const SEND_SEMANTIC_DIGEST_PREFIX_BYTES_V1: usize = 51;
+pub(super) const NORITO_FRAME_PAYLOAD_OFFSET_V1: usize = 40;
+pub(super) const SEND_TRANSITION_RELEASE_OFFSET_V1: usize = 156;
+pub(super) const SEND_TRANSITION_NETWORK_OFFSET_V1: usize = 189;
+pub(super) const SEND_TRANSITION_ASSET_OFFSET_V1: usize = 222;
+pub(super) const SEND_TRANSITION_SCALE_OFFSET_V1: usize = 255;
+pub(super) const SEND_TRANSITION_AMOUNT_OFFSET_V1: usize = 260;
+pub(super) const SEND_TRANSITION_REQUEST_OFFSET_V1: usize = 277;
+pub(super) const SEND_TRANSITION_BEFORE_OFFSET_V1: usize = 310;
+pub(super) const SEND_TRANSITION_AFTER_OFFSET_V1: usize = 343;
+pub(super) const SEND_TRANSITION_RECEIVER_OFFSET_V1: usize = 376;
+pub(super) const SEND_TRANSITION_CREDIT_OFFSET_V1: usize = 409;
+pub(super) const SEND_SEMANTIC_RELEASE_OFFSET_V1: usize = 103;
+pub(super) const SEND_SEMANTIC_NETWORK_OFFSET_V1: usize = 136;
+pub(super) const SEND_SEMANTIC_ASSET_OFFSET_V1: usize = 169;
+pub(super) const SEND_SEMANTIC_SCALE_OFFSET_V1: usize = 202;
+pub(super) const SEND_SEMANTIC_AMOUNT_OFFSET_V1: usize = 207;
+pub(super) const SEND_SEMANTIC_REQUEST_OFFSET_V1: usize = 224;
+pub(super) const SEND_SEMANTIC_BEFORE_OFFSET_V1: usize = 257;
+pub(super) const SEND_SEMANTIC_AFTER_OFFSET_V1: usize = 290;
+pub(super) const SEND_SEMANTIC_RECEIVER_OFFSET_V1: usize = 323;
+pub(super) const SEND_SEMANTIC_CREDIT_OFFSET_V1: usize = 356;
+pub(super) const SEND_SEMANTIC_TRANSITION_OFFSET_V1: usize = 389;
 
 const DIGEST_BYTES: usize = 32;
 const AMOUNT_BYTES: usize = 16;
@@ -127,6 +165,15 @@ const _: () = assert!(SEND_SPLIT_RECEIVER_BRANCH_MESSAGE_BYTES_V1 == 103);
 const _: () = assert!(RECEIVE_OPENING_MESSAGE_BYTES_V1 == 273);
 const _: () = assert!(RECEIVE_TRANSITION_MESSAGE_BYTES_V1 == 341);
 const _: () = assert!(RECEIVE_SEMANTIC_MESSAGE_BYTES_V1 == 430);
+const _: () = assert!(NETWORK_ID_FRAME_BYTES_V1 == 40 + DIGEST_BYTES);
+const _: () = assert!(ASSET_ID_FRAME_BYTES_V1 == 40 + DIGEST_BYTES);
+const _: () = assert!(STATE_CONTEXT_MESSAGE_BYTES_V1 == 257);
+const _: () = assert!(SEND_TRANSITION_MESSAGE_BYTES_V1 == 441);
+const _: () = assert!(SEND_SEMANTIC_MESSAGE_BYTES_V1 == 421);
+const _: () = assert!(SEND_TRANSITION_DIGEST_PREFIX_BYTES_V1 == 43 + 1 + 8);
+const _: () = assert!(SEND_SEMANTIC_DIGEST_PREFIX_BYTES_V1 == 42 + 1 + 8);
+const _: () = assert!(SEND_TRANSITION_CREDIT_OFFSET_V1 + DIGEST_BYTES == 441);
+const _: () = assert!(SEND_SEMANTIC_TRANSITION_OFFSET_V1 + DIGEST_BYTES == 421);
 
 fn append_frame_field(target: &mut Vec<u8>, field: &[u8]) {
     target.extend_from_slice(
@@ -145,6 +192,11 @@ fn framed_message(domain: &[u8], fields: &[&[u8]], expected_len: usize) -> Zeroi
     }
     assert_eq!(message.len(), expected_len, "fixed STATE frame geometry");
     message
+}
+
+fn zeroizing_exact_array<const N: usize>(bytes: Vec<u8>) -> Option<[u8; N]> {
+    let bytes = Zeroizing::new(bytes);
+    bytes.as_slice().try_into().ok()
 }
 
 fn framed_head_message(
@@ -608,6 +660,10 @@ pub(super) struct OfflineCashStatePrivateWitnessV1 {
     pub(super) next_lineage_digest: [u8; 32],
     pub(super) send_split_seed: [u8; 32],
     pub(super) recipient_key_reference: [u8; 32],
+    pub(super) network_id_frame: [u8; NETWORK_ID_FRAME_BYTES_V1],
+    pub(super) asset_id_frame: [u8; ASSET_ID_FRAME_BYTES_V1],
+    pub(super) send_transition_message: [u8; SEND_TRANSITION_MESSAGE_BYTES_V1],
+    pub(super) send_semantic_message: [u8; SEND_SEMANTIC_MESSAGE_BYTES_V1],
 }
 
 impl fmt::Debug for OfflineCashStatePrivateWitnessV1 {
@@ -637,6 +693,10 @@ impl Drop for OfflineCashStatePrivateWitnessV1 {
         self.next_lineage_digest.zeroize();
         self.send_split_seed.zeroize();
         self.recipient_key_reference.zeroize();
+        self.network_id_frame.zeroize();
+        self.asset_id_frame.zeroize();
+        self.send_transition_message.zeroize();
+        self.send_semantic_message.zeroize();
     }
 }
 
@@ -657,6 +717,10 @@ impl OfflineCashStatePrivateWitnessV1 {
         next_lineage_digest: [u8; 32],
         send_split_seed: [u8; 32],
         recipient_key_reference: [u8; 32],
+        network_id_frame: [u8; NETWORK_ID_FRAME_BYTES_V1],
+        asset_id_frame: [u8; ASSET_ID_FRAME_BYTES_V1],
+        send_transition_message: [u8; SEND_TRANSITION_MESSAGE_BYTES_V1],
+        send_semantic_message: [u8; SEND_SEMANTIC_MESSAGE_BYTES_V1],
     ) -> Result<Self, OfflineCashStateAbiErrorV1> {
         let witness = Self {
             operation,
@@ -673,6 +737,10 @@ impl OfflineCashStatePrivateWitnessV1 {
             next_lineage_digest,
             send_split_seed,
             recipient_key_reference,
+            network_id_frame,
+            asset_id_frame,
+            send_transition_message,
+            send_semantic_message,
         };
         if witness.before_opening == [0; 32]
             || witness.after_opening == [0; 32]
@@ -685,6 +753,16 @@ impl OfflineCashStatePrivateWitnessV1 {
             || (operation == OfflineCashStateOperationV1::SendSplit
                 && witness.send_split_seed == [0; 32])
             || witness.recipient_key_reference == [0; 32]
+            || (operation == OfflineCashStateOperationV1::SendSplit
+                && (witness.network_id_frame == [0; NETWORK_ID_FRAME_BYTES_V1]
+                    || witness.asset_id_frame == [0; ASSET_ID_FRAME_BYTES_V1]
+                    || witness.send_transition_message == [0; SEND_TRANSITION_MESSAGE_BYTES_V1]
+                    || witness.send_semantic_message == [0; SEND_SEMANTIC_MESSAGE_BYTES_V1]))
+            || (operation == OfflineCashStateOperationV1::ReceiveFold
+                && (witness.network_id_frame != [0; NETWORK_ID_FRAME_BYTES_V1]
+                    || witness.asset_id_frame != [0; ASSET_ID_FRAME_BYTES_V1]
+                    || witness.send_transition_message != [0; SEND_TRANSITION_MESSAGE_BYTES_V1]
+                    || witness.send_semantic_message != [0; SEND_SEMANTIC_MESSAGE_BYTES_V1]))
         {
             return Err(OfflineCashStateAbiErrorV1::InvalidPrivateWitness);
         }
@@ -706,7 +784,26 @@ impl OfflineCashStatePrivateWitnessV1 {
         next_lineage_digest: [u8; 32],
         send_split_seed: [u8; 32],
         recipient_key_reference: [u8; 32],
+        statement: &OfflineCashTransferStatementV1,
     ) -> Result<Self, OfflineCashStateAbiErrorV1> {
+        let network_id_frame = norito::encode_canonical(&statement.network_id)
+            .ok()
+            .and_then(zeroizing_exact_array::<NETWORK_ID_FRAME_BYTES_V1>)
+            .ok_or(OfflineCashStateAbiErrorV1::InvalidPrivateWitness)?;
+        let asset_id_frame = norito::encode_canonical(&statement.asset)
+            .ok()
+            .and_then(zeroizing_exact_array::<ASSET_ID_FRAME_BYTES_V1>)
+            .ok_or(OfflineCashStateAbiErrorV1::InvalidPrivateWitness)?;
+        let send_transition_message = statement
+            .canonical_transition_digest_message()
+            .ok()
+            .and_then(zeroizing_exact_array::<SEND_TRANSITION_MESSAGE_BYTES_V1>)
+            .ok_or(OfflineCashStateAbiErrorV1::InvalidPrivateWitness)?;
+        let send_semantic_message = statement
+            .canonical_semantic_digest_message()
+            .ok()
+            .and_then(zeroizing_exact_array::<SEND_SEMANTIC_MESSAGE_BYTES_V1>)
+            .ok_or(OfflineCashStateAbiErrorV1::InvalidPrivateWitness)?;
         Self::new(
             OfflineCashStateOperationV1::SendSplit,
             before_amount,
@@ -722,6 +819,10 @@ impl OfflineCashStatePrivateWitnessV1 {
             next_lineage_digest,
             send_split_seed,
             recipient_key_reference,
+            network_id_frame,
+            asset_id_frame,
+            send_transition_message,
+            send_semantic_message,
         )
     }
 
@@ -755,12 +856,27 @@ impl OfflineCashStatePrivateWitnessV1 {
             next_lineage_digest,
             [0; 32],
             recipient_key_reference,
+            [0; NETWORK_ID_FRAME_BYTES_V1],
+            [0; ASSET_ID_FRAME_BYTES_V1],
+            [0; SEND_TRANSITION_MESSAGE_BYTES_V1],
+            [0; SEND_SEMANTIC_MESSAGE_BYTES_V1],
         )
     }
 
     pub(super) fn validate_against(
         &self,
         instances: &OfflineCashStatePublicInstancesV1,
+    ) -> Result<(), OfflineCashStateAbiErrorV1> {
+        let public = instances.relation_public()?;
+        if public.operation != self.operation || !self.relation_matches(&public) {
+            return Err(OfflineCashStateAbiErrorV1::InvalidPrivateWitness);
+        }
+        Ok(())
+    }
+
+    pub(super) fn validate_against_leaf(
+        &self,
+        instances: &OfflineCashStateLeafPublicInstancesV1,
     ) -> Result<(), OfflineCashStateAbiErrorV1> {
         let public = instances.relation_public()?;
         if public.operation != self.operation || !self.relation_matches(&public) {
@@ -845,6 +961,52 @@ impl OfflineCashStatePrivateWitnessV1 {
             return false;
         }
         if self.operation == OfflineCashStateOperationV1::SendSplit {
+            let Ok(network_id) = norito::decode_canonical::<NetworkId>(&self.network_id_frame)
+            else {
+                return false;
+            };
+            let Ok(asset) = norito::decode_canonical::<AssetDefinitionId>(&self.asset_id_frame)
+            else {
+                return false;
+            };
+            let Some(statement_frame) = self
+                .send_semantic_message
+                .get(SEND_SEMANTIC_DIGEST_PREFIX_BYTES_V1..)
+            else {
+                return false;
+            };
+            let Ok(statement) =
+                norito::decode_canonical::<OfflineCashTransferStatementV1>(statement_frame)
+            else {
+                return false;
+            };
+            if statement.version != OFFLINE_CASH_WIRE_VERSION_V1
+                || statement.release_id != public.release_id
+                || statement.network_id != network_id
+                || statement.asset != asset
+                || statement.scale != public.scale
+                || statement.amount != public.transfer
+                || statement.request_digest != public.request_digest
+                || statement.sender_before != public.parent_0
+                || statement.sender_after != public.result
+                || statement.receiver_before != public.parent_1
+                || statement.credit_commitment != public.link
+                || statement.transition_digest != public.transition_digest
+                || statement
+                    .canonical_transition_digest_message()
+                    .ok()
+                    .is_none_or(|message| {
+                        message.as_slice() != self.send_transition_message.as_slice()
+                    })
+                || statement
+                    .canonical_semantic_digest_message()
+                    .ok()
+                    .is_none_or(|message| {
+                        message.as_slice() != self.send_semantic_message.as_slice()
+                    })
+            {
+                return false;
+            }
             let expected_seed = offline_cash_send_split_seed_v1(
                 &public.context_digest,
                 &self.wallet_binding,
@@ -858,11 +1020,21 @@ impl OfflineCashStatePrivateWitnessV1 {
             );
             let (expected_after_opening, expected_credit_opening) =
                 offline_cash_send_split_openings_v1(&expected_seed);
-            // Canonical Norito transition/semantic reconstruction and recursive
-            // hardware-helper binding remain fail-closed production blockers.
+            let context_message = state_context_message_v1(
+                &public.release_id,
+                &self.network_id_frame,
+                &self.asset_id_frame,
+                public.scale,
+            );
             return self.send_split_seed == *expected_seed
                 && self.after_opening == *expected_after_opening
-                && self.credit_opening == *expected_credit_opening;
+                && self.credit_opening == *expected_credit_opening
+                && <[u8; 32]>::from(Sha256::digest(context_message.as_slice()))
+                    == public.context_digest
+                && <[u8; 32]>::from(Sha256::digest(self.send_transition_message.as_slice()))
+                    == public.transition_digest
+                && <[u8; 32]>::from(Sha256::digest(self.send_semantic_message.as_slice()))
+                    == public.semantic_digest;
         }
         let expected_after_opening = offline_cash_receive_opening_v1(
             &public.context_digest,
@@ -941,6 +1113,49 @@ impl OfflineCashStatePrivateWitnessV1 {
     #[cfg(test)]
     pub(super) fn corrupt_send_split_seed_for_test(&mut self) {
         self.send_split_seed[0] ^= 1;
+    }
+
+    #[cfg(test)]
+    pub(super) fn corrupt_network_frame_for_test(&mut self) {
+        self.network_id_frame[0] ^= 1;
+    }
+
+    #[cfg(test)]
+    pub(super) fn corrupt_asset_frame_for_test(&mut self) {
+        self.asset_id_frame[6] ^= 1;
+    }
+
+    #[cfg(test)]
+    pub(super) fn corrupt_send_transition_message_for_test(&mut self) {
+        self.send_transition_message[SEND_TRANSITION_REQUEST_OFFSET_V1] ^= 1;
+    }
+
+    #[cfg(test)]
+    pub(super) fn corrupt_send_semantic_length_for_test(&mut self) {
+        self.send_semantic_message[43] ^= 1;
+    }
+
+    #[cfg(test)]
+    pub(super) fn reorder_send_semantic_fields_for_test(&mut self) {
+        for index in 0..DIGEST_BYTES {
+            self.send_semantic_message.swap(
+                SEND_SEMANTIC_BEFORE_OFFSET_V1 + index,
+                SEND_SEMANTIC_AFTER_OFFSET_V1 + index,
+            );
+        }
+    }
+
+    #[cfg(test)]
+    pub(super) fn replace_send_transition_message_for_test(
+        &mut self,
+        message: &[u8],
+    ) -> Result<(), OfflineCashStateAbiErrorV1> {
+        let replacement: [u8; SEND_TRANSITION_MESSAGE_BYTES_V1] = message
+            .try_into()
+            .map_err(|_| OfflineCashStateAbiErrorV1::InvalidPrivateWitness)?;
+        self.send_transition_message.zeroize();
+        self.send_transition_message = replacement;
+        Ok(())
     }
 
     #[cfg(test)]

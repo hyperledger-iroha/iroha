@@ -7,7 +7,6 @@ public enum KagemushaToriiAPI {
         case topUp = "/v1/offline/top-up"
         case redeem = "/v1/offline/redeem"
         case operations = "/v1/offline/operations"
-        case receiverLineage = "/v1/offline/receiver-lineage"
 
         public var path: String { rawValue }
     }
@@ -17,11 +16,11 @@ public enum KagemushaToriiAPI {
     }
 }
 
-/// Native-verified proof that a signed payment request's exact receiver registration is finalized.
+/// Native-verified receiver registration lineage carried inside a portable receive offer.
 ///
-/// Construction is restricted to the Torii client after native verification of the request
-/// digest, registration tuple/lifetime, admitting transaction and Merkle paths, policy, header,
-/// and historical V2 finality certificate.
+/// Construction is restricted to native receive-offer verification of the request digest,
+/// registration tuple/lifetime, admitting transaction and Merkle paths, policy, header, and
+/// historical V2 finality certificate.
 public struct KagemushaRecipientRegistrationLineage: Equatable, Sendable {
     public static let maximumArchiveBytes = 4 * 1024 * 1024
     public let noritoArchive: Data
@@ -37,8 +36,8 @@ public struct KagemushaRecipientRegistrationLineage: Equatable, Sendable {
     }
 }
 
-/// App-owned durable checkpoint supplied to native receiver-lineage
-/// verification. `contextID` is the exact marked Iroha HeightContextId.
+/// App-owned durable checkpoint supplied to native receive-offer verification.
+/// `contextID` is the exact marked Iroha HeightContextId.
 public struct KagemushaFinalityCheckpointV2: Equatable, Sendable {
     public let height: UInt64
     public let contextID: Data
@@ -62,97 +61,6 @@ public struct KagemushaFinalityCheckpointV2: Equatable, Sendable {
             ($0 << 8) | UInt64($1)
         }
         try self.init(height: height, contextID: Data(promotedCheckpointBytes.suffix(32)))
-    }
-}
-
-/// Canonical reusable Torii query for one receiver registration tuple.
-public struct KagemushaRecipientLineageQueryV2: Equatable, Sendable {
-    public static let maximumArchiveBytes = 32 * 1_024
-    public let noritoArchive: Data
-    public let trustedCheckpointHeight: UInt64
-
-    public init(
-        networkID: NetworkId,
-        recipient: String,
-        chainDiscriminant: UInt16,
-        receiverDeviceID: String,
-        assetDefinitionID: String,
-        trustedCheckpointHeight: UInt64
-    ) throws {
-        _ = try KagemushaRecursiveSpend.canonicalAccountAddress(
-            recipient,
-            field: "lineageQuery.recipient",
-            expectedChainDiscriminant: chainDiscriminant
-        )
-        try KagemushaRecursiveSpend.requirePortableText(
-            receiverDeviceID,
-            field: "lineageQuery.receiverDeviceID"
-        )
-        guard AssetDefinitionAddress.decode(assetDefinitionID) != nil,
-              (1...UInt64(Int64.max)).contains(trustedCheckpointHeight),
-              let archive = try NoritoNativeBridge.shared
-                  .kagemushaRecipientLineageQueryCreateV2(
-                      chainDiscriminant: chainDiscriminant,
-                      networkID: networkID,
-                      recipient: Data(recipient.utf8),
-                      receiverDeviceID: Data(receiverDeviceID.utf8),
-                      assetDefinitionID: Data(assetDefinitionID.utf8),
-                      trustedCheckpointHeight: trustedCheckpointHeight
-                  ) else {
-            if AssetDefinitionAddress.decode(assetDefinitionID) == nil
-                || !(1...UInt64(Int64.max)).contains(trustedCheckpointHeight) {
-                throw KagemushaRecursiveSpendError.invalidField("lineageQuery")
-            }
-            throw KagemushaRecursiveSpendError.nativeBridgeUnavailable
-        }
-        guard !archive.isEmpty, archive.count <= Self.maximumArchiveBytes else {
-            throw KagemushaRecursiveSpendError.invalidArchive("lineageQuery")
-        }
-        self.noritoArchive = archive
-        self.trustedCheckpointHeight = trustedCheckpointHeight
-    }
-}
-
-public struct KagemushaVerifiedRecipientRegistrationLineageV2: Equatable, Sendable {
-    public let lineage: KagemushaRecipientRegistrationLineage
-    public let promotedCheckpoint: KagemushaFinalityCheckpointV2
-}
-
-public extension KagemushaRecipientRegistrationLineage {
-    static func verifyV2(
-        request: KagemushaRecipientPaymentRequest,
-        lineageArchive: Data,
-        verifiedAtMilliseconds: UInt64,
-        trustedCheckpoint: KagemushaFinalityCheckpointV2
-    ) throws -> KagemushaVerifiedRecipientRegistrationLineageV2 {
-        guard (1...UInt64(Int64.max)).contains(verifiedAtMilliseconds),
-              !lineageArchive.isEmpty,
-              lineageArchive.count <= Self.maximumArchiveBytes,
-              let result = try NoritoNativeBridge.shared
-                .kagemushaRecipientRegistrationLineageVerifyV2(
-                    requestArchive: request.archive,
-                    lineageArchive: lineageArchive,
-                    verifiedAtMilliseconds: verifiedAtMilliseconds,
-                    trustedCheckpointHeight: trustedCheckpoint.height,
-                    trustedCheckpointContextID: trustedCheckpoint.contextID
-                ) else {
-            if verifiedAtMilliseconds == 0 || lineageArchive.isEmpty
-                || lineageArchive.count > Self.maximumArchiveBytes {
-                throw KagemushaRecursiveSpendError.invalidField("receiverLineage")
-            }
-            throw KagemushaRecursiveSpendError.nativeBridgeUnavailable
-        }
-        guard result.lineage == lineageArchive else {
-            throw KagemushaRecursiveSpendError.invalidArchive("receiverLineage.canonical")
-        }
-        return KagemushaVerifiedRecipientRegistrationLineageV2(
-            lineage: try KagemushaRecipientRegistrationLineage(
-                verifiedArchive: result.lineage
-            ),
-            promotedCheckpoint: try KagemushaFinalityCheckpointV2(
-                promotedCheckpointBytes: result.promotedCheckpoint
-            )
-        )
     }
 }
 
@@ -348,7 +256,7 @@ public enum KagemushaOperationError: Error, LocalizedError, Equatable, Sendable 
 
 /// A schema-bound Kagemusha top-up command submitted directly to Torii.
 public struct KagemushaTopUpRequest: Equatable, Sendable {
-    /// Exact ABI-21/V4 top-up archive ceiling enforced by Torii.
+    /// Exact bridge ABI-22 / Kagemusha V4 top-up archive ceiling enforced by Torii.
     public static let maximumArchiveBytes = 512 * 1_024
     /// Lowercase hex derived from the archive's nonzero 32-byte operation ID.
     public let operationId: String
@@ -373,7 +281,7 @@ public struct KagemushaTopUpRequest: Equatable, Sendable {
 
 /// A schema-bound Kagemusha redemption command submitted directly to Torii.
 public struct KagemushaRedeemRequest: Equatable, Sendable {
-    /// Exact ABI-21/V4 redemption archive ceiling enforced by Torii.
+    /// Exact bridge ABI-22 / Kagemusha V4 redemption archive ceiling enforced by Torii.
     public static let maximumArchiveBytes = 48 * 1_024 * 1_024
     /// Lowercase hex derived from the archive's nonzero 32-byte operation ID.
     public let operationId: String

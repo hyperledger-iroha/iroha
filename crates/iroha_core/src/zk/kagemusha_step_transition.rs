@@ -84,7 +84,7 @@ use iroha_data_model::offline::{
     kagemusha_confidential_amount_encoding_v2, kagemusha_recursive_spend_transition_tag_v2,
 };
 use norito::codec::{Decode, Encode};
-/// Number of canonical Pallas-field elements in one ABI-21 V4 operation row.
+/// Number of canonical Pallas-field elements in one Kagemusha V4 operation row.
 pub const KAGEMUSHA_STEP_OPERATION_FIELD_ELEMENTS_V4: usize = 135;
 /// Exact number of little-endian `u32` limbs carrying the operation row.
 pub const KAGEMUSHA_STEP_OPERATION_LIMBS_V4: usize = KAGEMUSHA_STEP_OPERATION_FIELD_ELEMENTS_V4 * 8;
@@ -164,7 +164,7 @@ impl KagemushaStepOperationVectorV4 {
         }
         Ok(fields)
     }
-    /// Match every operation field derivable from an ABI-21 terminal
+    /// Match every operation field derivable from a Kagemusha V4 terminal
     /// statement before accepting the proof pair.
     ///
     /// The Step relation exposes the statement digest and the semantic operation as separate public
@@ -759,7 +759,7 @@ fn build_init_operation_v4(
     Ok(KagemushaStepOperationVectorV4::from_fields(fields))
 }
 impl KagemushaStepOperationVectorV4 {
-    /// Construct an ABI-21 initialization operation directly from the V4
+    /// Construct a Kagemusha V4 initialization operation directly from the V4
     /// finalized receipt and V4 public statement. The V4 carriers are
     /// validated in place without projecting through a retired lifecycle carrier.
     pub fn from_init_v4(
@@ -887,7 +887,7 @@ impl KagemushaStepOperationVectorV4 {
             expected_operation_tag,
         )
     }
-    /// Construct an ABI-21 append operation directly from the V4 split intent
+    /// Construct a Kagemusha V4 append operation directly from the V4 split intent
     /// and selected V4 child statement.
     pub fn from_append_v4(
         split: &KagemushaRecursiveSpendSplitIntentV4,
@@ -1088,7 +1088,7 @@ impl KagemushaStepOperationVectorV4 {
         fields[O_TRANSFER_OUTPUT_1] = fields[O_CHANGE_COMMITMENT];
         Ok(Self::from_fields(fields))
     }
-    /// Construct an ABI-21 partial-redemption operation directly from the V4
+    /// Construct a Kagemusha V4 partial-redemption operation directly from the V4
     /// redemption intent and V4 change statement.
     pub fn from_redemption_change_v4(
         intent: &KagemushaRecursiveSpendRedemptionIntentV4,
@@ -1112,7 +1112,7 @@ impl KagemushaStepOperationVectorV4 {
         }
         Self::from_redemption_change_public_v4(intent, statement)
     }
-    /// Reconstruct the exact public ABI-21 redemption-change operation at a
+    /// Reconstruct the exact public Kagemusha V4 redemption-change operation at a
     /// terminal verifier. Confidential membership paths are proved inside the
     /// carried pair; no private witness is accepted or synthesized here.
     pub fn from_redemption_change_public_v4(

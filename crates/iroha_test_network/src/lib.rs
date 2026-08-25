@@ -8867,18 +8867,11 @@ impl NetworkPeer {
                     .write("chain", config::chain_id().to_string())
                     .write(
                         "network_id",
-                        norito::literal::format(
-                            "hash",
-                            &self
-                                .network_id
-                                .get()
-                                .copied()
-                                .expect(
-                                    "peer must be attached to a network before creating clients",
-                                )
-                                .to_string()
-                                .to_ascii_uppercase(),
-                        ),
+                        self.network_id
+                            .get()
+                            .copied()
+                            .expect("peer must be attached to a network before creating clients")
+                            .to_string(),
                     )
                     .write(["account", "domain"], default_account_domain)
                     .write(

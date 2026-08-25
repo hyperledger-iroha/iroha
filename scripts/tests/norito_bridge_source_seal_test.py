@@ -183,18 +183,32 @@ class NoritoBridgeSourceSealTests(unittest.TestCase):
             str(root_lock),
         )
 
-    def test_selected_lock_must_be_exact_root_regular_and_non_symbolic(self) -> None:
+    def test_selected_lock_must_be_canonical_regular_and_non_symbolic(self) -> None:
         root_lock = self.root / "Cargo.lock"
         self.assertEqual(seal.selected_lockfile_path(self.root), root_lock)
         self.assertEqual(seal.selected_lockfile_path(self.root, root_lock), root_lock)
 
-        with self.assertRaisesRegex(RuntimeError, "explicit root Cargo lock"):
+        with self.assertRaisesRegex(RuntimeError, "must be absolute"):
             seal.selected_lockfile_path(self.root, Path("Cargo.lock"))
 
         alternate = self.root / "alternate-Cargo.lock"
         alternate.write_text("# alternate lock\n", encoding="utf-8")
-        with self.assertRaisesRegex(RuntimeError, "explicit root Cargo lock"):
+        with self.assertRaisesRegex(RuntimeError, "must end in Cargo.lock"):
             seal.selected_lockfile_path(self.root, alternate)
+
+        with tempfile.TemporaryDirectory(
+            prefix="privacy-release-lock-"
+        ) as external_directory:
+            external_lock = Path(external_directory).resolve() / "Cargo.lock"
+            external_lock.write_text("# external lock\n", encoding="utf-8")
+            self.assertEqual(
+                seal.selected_lockfile_path(self.root, external_lock), external_lock
+            )
+            hardlink = Path(external_directory).resolve() / "linked-Cargo.lock"
+            os.link(external_lock, hardlink)
+            with self.assertRaisesRegex(RuntimeError, "singly linked"):
+                seal.selected_lockfile_path(self.root, external_lock)
+            hardlink.unlink()
 
         root_lock.unlink()
         with self.assertRaisesRegex(RuntimeError, "non-symbolic regular file"):

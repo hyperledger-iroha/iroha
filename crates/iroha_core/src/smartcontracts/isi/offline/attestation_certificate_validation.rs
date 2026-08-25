@@ -663,14 +663,14 @@ fn validate_android_key_attestation_certificate_chain_time_profile(
     Ok(())
 }
 
-fn validate_android_key_attestation_certificate_chain(
+fn validate_android_key_attestation_certificate_chain<'root>(
     certificate_chain: &[Vec<u8>],
-    trusted_roots_der: &[Vec<u8>],
+    trusted_roots_der: &'root [Vec<u8>],
     revoked_certificate_tbs_sha256: &HashSet<[u8; 32]>,
     non_valid_certificate_serials: &HashSet<String>,
     evaluation_time: X509EvaluationTime,
     registration_expiry_time: X509EvaluationTime,
-) -> Result<(), Error> {
+) -> Result<&'root [u8], Error> {
     if certificate_chain.is_empty()
         || certificate_chain.len() > OFFLINE_ATTESTATION_MAX_X509_CHAIN_CERTIFICATES
         || trusted_roots_der.is_empty()
@@ -759,7 +759,7 @@ fn validate_android_key_attestation_certificate_chain(
             evaluation_time,
             registration_expiry_time,
         ) {
-            Ok(()) => return Ok(()),
+            Ok(()) => return Ok(root_der),
             Err(error) => {
                 if profile_failure.is_none() {
                     profile_failure = Some(error);
@@ -806,7 +806,7 @@ fn validate_android_key_attestation_certificate_chain(
             evaluation_time,
             registration_expiry_time,
         ) {
-            Ok(()) => return Ok(()),
+            Ok(()) => return Ok(root_der),
             Err(error) => {
                 if profile_failure.is_none() {
                     profile_failure = Some(error);

@@ -82,7 +82,7 @@ class ClientConfigManifestLoaderTest {
         )
         assertFalse(load(manifest()).localSigningContext().isPresent)
         assertFailsWith<IllegalStateException> {
-            load(manifest(extra = ""","network_id":"${TEST_NETWORK_ID.lowercase()}""""))
+            load(manifest(extra = ""","network_id":"${TEST_NETWORK_ID.uppercase()}""""))
         }
     }
 
@@ -132,6 +132,6 @@ class ClientConfigManifestLoaderTest {
 
     private companion object {
         private const val TEST_NETWORK_ID =
-            "hash:32C903E5B3497E34C2B844EBFE8A39C19E6CF8F95D44C1FFB8BA9DCB42F91149#A2F0"
+            "32c903e5b3497e34c2b844ebfe8a39c19e6cf8f95d44c1ffb8ba9dcb42f91149"
     }
 }

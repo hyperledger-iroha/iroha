@@ -17366,10 +17366,9 @@ json_response_fixture!(StatusCode::OK, &norito::json!({
             let account = AccountId::new(kp.public_key().clone());
             let cfg = Config {
                 chain: ChainId::from("test-chain"),
-                network_id:
-                    "hash:32C903E5B3497E34C2B844EBFE8A39C19E6CF8F95D44C1FFB8BA9DCB42F91149#A2F0"
-                        .parse()
-                        .expect("network id"),
+                network_id: "32c903e5b3497e34c2b844ebfe8a39c19e6cf8f95d44c1ffb8ba9dcb42f91149"
+                    .parse()
+                    .expect("network id"),
                 account,
                 account_chain_discriminant:
                     iroha_config::parameters::defaults::common::chain_discriminant(),
@@ -17873,7 +17872,7 @@ json_response_fixture!(StatusCode::OK, &norito::json!({
             fs::metadata(&output_path).expect("token metadata").mode() & 0o077,
             0
         );
-        HandshakeTokenIssueArgs::emit(
+        let _existing_output_error = HandshakeTokenIssueArgs::emit(
             &mut ctx,
             &artifacts,
             &output_path,

@@ -4,7 +4,7 @@ import test from "node:test";
 import { NetworkId, networkIdBytes } from "../src/networkId.js";
 
 const CANONICAL_NETWORK_ID =
-  "hash:32C903E5B3497E34C2B844EBFE8A39C19E6CF8F95D44C1FFB8BA9DCB42F91149#A2F0";
+  "32c903e5b3497e34c2b844ebfe8a39c19e6cf8f95d44c1ffb8ba9dcb42f91149";
 const CANONICAL_BYTES = Buffer.from(
   "32C903E5B3497E34C2B844EBFE8A39C19E6CF8F95D44C1FFB8BA9DCB42F91149",
   "hex",
@@ -37,9 +37,9 @@ test("NetworkId rejects labels, aliases, malformed literals, and unmarked bytes"
   assert.throws(() => new NetworkId(), /must be created/u);
   for (const literal of [
     "wonderland",
-    CANONICAL_NETWORK_ID.toLowerCase(),
-    CANONICAL_NETWORK_ID.replace("hash:", "Hash:"),
-    `${CANONICAL_NETWORK_ID.slice(0, -1)}1`,
+    CANONICAL_NETWORK_ID.toUpperCase(),
+    `hash:${CANONICAL_NETWORK_ID}`,
+    `${CANONICAL_NETWORK_ID.slice(0, -1)}8`,
     ` ${CANONICAL_NETWORK_ID}`,
   ]) {
     assert.throws(() => NetworkId.parse(literal), /NetworkId/u);

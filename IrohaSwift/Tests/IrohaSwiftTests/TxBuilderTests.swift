@@ -1899,7 +1899,7 @@ final class TxBuilderTests: XCTestCase {
             return
         }
         XCTAssertTrue(json.contains("\"domain\""))
-        XCTAssertTrue(json.contains(Self.fixtureNetworkId.literal))
+        XCTAssertTrue(json.contains(Self.fixtureNetworkId.noritoJSONLiteral))
         XCTAssertFalse(json.contains("\"chain\""))
         XCTAssertTrue(json.contains("\"instructions\""))
     }

@@ -1,7 +1,7 @@
 //! Exact field-neutral public ABI for Offline Cash V1 hardware helpers.
 //!
-//! Every helper role repeats one common semantic statement so a future
-//! `GuardBundle` circuit can join child proofs by exact public equality rather
+//! Every helper role repeats one common semantic statement so the authenticated
+//! `GuardBundle` composition boundary joins child proofs by exact public equality rather
 //! than by a host-selected subset. The layout is 184 canonical little-endian
 //! `u32` words, packed seven words per 224-bit field element into one 27-cell
 //! instance column on either Pasta field. The last cell contains two words and
@@ -218,7 +218,12 @@ impl OfflineCashHelperPublicInstancesV1 {
         role: OfflineCashHalo2CircuitRoleV1,
     ) -> Result<Self, OfflineCashHelperAbiErrorV1> {
         statement.validate_layout()?;
-        if role == OfflineCashHalo2CircuitRoleV1::State {
+        if matches!(
+            role,
+            OfflineCashHalo2CircuitRoleV1::State
+                | OfflineCashHalo2CircuitRoleV1::StateLeaf
+                | OfflineCashHalo2CircuitRoleV1::P256V3
+        ) {
             return Err(OfflineCashHelperAbiErrorV1::InvalidLayout);
         }
         let mut words = [0_u32; HELPER_ABI_WORDS];
@@ -305,6 +310,11 @@ impl OfflineCashHelperPublicInstancesV1 {
 
     pub(super) const fn words(&self) -> &[u32; HELPER_ABI_WORDS] {
         &self.words
+    }
+
+    #[cfg(test)]
+    pub(super) fn overwrite_word_for_test(&mut self, index: usize, value: u32) {
+        self.words[index] = value;
     }
 
     pub(super) fn statement(
@@ -418,26 +428,30 @@ impl OfflineCashHelperPublicInstancesV1 {
     }
 
     fn validate_structure(&self) -> Result<(), OfflineCashHelperAbiErrorV1> {
-        if self.role == OfflineCashHalo2CircuitRoleV1::State
-            || self.words[..16]
-                != [
-                    ABI_VERSION,
-                    u32::from(OFFLINE_CASH_WIRE_VERSION_V1),
-                    OFFLINE_CASH_HALO2_K_V1,
-                    self.parity as u32,
-                    self.role as u32,
-                    self.words[HELPER_OPERATION_WORD],
-                    self.words[HELPER_ANDROID_PRESENT_WORD],
-                    DIGEST_WORDS as u32,
-                    self.words[HELPER_FROM_LOW_WORD],
-                    self.words[HELPER_FROM_HIGH_WORD],
-                    self.words[HELPER_TO_LOW_WORD],
-                    self.words[HELPER_TO_HIGH_WORD],
-                    DIGEST_FIELDS as u32,
-                    HELPER_WORDS_PER_INSTANCE as u32,
-                    HELPER_INSTANCE_CELLS as u32,
-                    0,
-                ]
+        if matches!(
+            self.role,
+            OfflineCashHalo2CircuitRoleV1::State
+                | OfflineCashHalo2CircuitRoleV1::StateLeaf
+                | OfflineCashHalo2CircuitRoleV1::P256V3
+        ) || self.words[..16]
+            != [
+                ABI_VERSION,
+                u32::from(OFFLINE_CASH_WIRE_VERSION_V1),
+                OFFLINE_CASH_HALO2_K_V1,
+                self.parity as u32,
+                self.role as u32,
+                self.words[HELPER_OPERATION_WORD],
+                self.words[HELPER_ANDROID_PRESENT_WORD],
+                DIGEST_WORDS as u32,
+                self.words[HELPER_FROM_LOW_WORD],
+                self.words[HELPER_FROM_HIGH_WORD],
+                self.words[HELPER_TO_LOW_WORD],
+                self.words[HELPER_TO_HIGH_WORD],
+                DIGEST_FIELDS as u32,
+                HELPER_WORDS_PER_INSTANCE as u32,
+                HELPER_INSTANCE_CELLS as u32,
+                0,
+            ]
             || !matches!(
                 self.words[HELPER_OPERATION_WORD],
                 value if value == OfflineCashHelperOperationV1::SendSplit as u32
@@ -451,6 +465,103 @@ impl OfflineCashHelperPublicInstancesV1 {
         }
         self.decode_statement()?.validate_layout()
     }
+}
+
+/// Exact same-proof-parity public-equality boundary enforced by one
+/// authenticated `GuardBundle` scalar-verifier half. The reciprocal partner
+/// enforces this half's deferred curve equations over the other Pasta field.
+///
+/// This value validates public-instance identity and role topology; the sibling
+/// proof owner constructs it only after each mapped ordinary child proof has
+/// been constrained and its carried lineage joined. Keeping the equality logic independently typed
+/// prevents any adapter from joining a host-selected subset of the 184-word
+/// statement or silently omitting the optional Android child.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) struct OfflineCashGuardBundleChildPublicEqualityV1 {
+    parent_parity: OfflineCashHalo2ParityV1,
+    child_parity: OfflineCashHalo2ParityV1,
+    statement: OfflineCashHelperStatementV1,
+    android_child_present: bool,
+}
+
+impl OfflineCashGuardBundleChildPublicEqualityV1 {
+    /// Close the exact same-proof-parity fixed-slot `GuardUse + PlatformBind +
+    /// AndroidKeyCert + GuardBundleLeaf -> GuardBundle` public topology.
+    pub(super) fn new(
+        guard_bundle: &OfflineCashHelperPublicInstancesV1,
+        guard_use: &OfflineCashHelperPublicInstancesV1,
+        platform_bind: &OfflineCashHelperPublicInstancesV1,
+        android_key_cert: Option<&OfflineCashHelperPublicInstancesV1>,
+        guard_bundle_leaf: &OfflineCashHelperPublicInstancesV1,
+    ) -> Result<Self, OfflineCashHelperAbiErrorV1> {
+        let android_key_cert =
+            android_key_cert.ok_or(OfflineCashHelperAbiErrorV1::InvalidLayout)?;
+        // The reviewed split verifier runs transcript/scalar arithmetic in the
+        // proof curve's scalar field: Eq::Scalar=Fp and Ep::Scalar=Fq. Hence
+        // each wrapper scalar-verifies same-parity children; its reciprocal
+        // sibling enforces the deferred group equations.
+        let child_parity = guard_bundle.parity();
+        if guard_bundle.role() != OfflineCashHalo2CircuitRoleV1::GuardBundle
+            || guard_use.role() != OfflineCashHalo2CircuitRoleV1::GuardUse
+            || platform_bind.role() != OfflineCashHalo2CircuitRoleV1::PlatformBind
+            || guard_use.parity() != child_parity
+            || platform_bind.parity() != child_parity
+            || android_key_cert.role() != OfflineCashHalo2CircuitRoleV1::AndroidKeyCert
+            || android_key_cert.parity() != child_parity
+            || guard_bundle_leaf.role() != OfflineCashHalo2CircuitRoleV1::GuardBundleLeaf
+            || guard_bundle_leaf.parity() != child_parity
+        {
+            return Err(OfflineCashHelperAbiErrorV1::InvalidLayout);
+        }
+
+        let statement = guard_bundle.statement()?;
+        if guard_use.statement()? != statement
+            || platform_bind.statement()? != statement
+            || android_key_cert.statement()? != statement
+            || guard_bundle_leaf.statement()? != statement
+            || !helper_child_semantic_words_equal(guard_bundle, guard_use)
+            || !helper_child_semantic_words_equal(guard_bundle, platform_bind)
+            || !helper_child_semantic_words_equal(guard_bundle, android_key_cert)
+            || !helper_child_semantic_words_equal(guard_bundle, guard_bundle_leaf)
+        {
+            return Err(OfflineCashHelperAbiErrorV1::InvalidLayout);
+        }
+
+        Ok(Self {
+            parent_parity: guard_bundle.parity(),
+            child_parity,
+            statement,
+            android_child_present: statement.android_key_cert_present,
+        })
+    }
+
+    pub(super) const fn parent_parity(self) -> OfflineCashHalo2ParityV1 {
+        self.parent_parity
+    }
+
+    pub(super) const fn child_parity(self) -> OfflineCashHalo2ParityV1 {
+        self.child_parity
+    }
+
+    pub(super) const fn statement(self) -> OfflineCashHelperStatementV1 {
+        self.statement
+    }
+
+    pub(super) const fn android_child_present(self) -> bool {
+        self.android_child_present
+    }
+}
+
+fn helper_child_semantic_words_equal(
+    guard_bundle: &OfflineCashHelperPublicInstancesV1,
+    child: &OfflineCashHelperPublicInstancesV1,
+) -> bool {
+    (0..HELPER_ABI_WORDS).all(|index| {
+        index == HELPER_PARITY_WORD
+            || index == HELPER_ROLE_WORD
+            || (HELPER_PROTOCOL_WORD_START..RELEASE_WORD_START).contains(&index)
+            || guard_bundle.words()[index] == child.words()[index]
+    })
 }
 
 pub(super) fn fixed_helper_word_v1(

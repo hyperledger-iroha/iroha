@@ -3885,7 +3885,7 @@ mod tests_overlay_manifest {
             crate::query::store::LiveQueryStore::start_test(),
         );
         let contract_address = ContractAddress::derive(
-            &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
+            &"0000000000000000000000000000000000000000000000000000000000000001"
                 .parse()
                 .expect("canonical test network id"),
             &authority,
@@ -3976,7 +3976,7 @@ mod tests_overlay_manifest {
         .build(&authority);
         let account = build_wonderland_account(&authority);
         let contract_address = ContractAddress::derive(
-            &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
+            &"0000000000000000000000000000000000000000000000000000000000000001"
                 .parse()
                 .expect("canonical test network id"),
             &authority,
@@ -4437,7 +4437,7 @@ seiyaku RebuildArguments {
                 .expect("bounded rebuild argument record");
         let (authority, _) = gen_account_in("wonderland");
         let contract_address = ContractAddress::derive(
-            &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
+            &"0000000000000000000000000000000000000000000000000000000000000001"
                 .parse()
                 .expect("canonical test network id"),
             &authority,
@@ -4605,7 +4605,7 @@ seiyaku QuarantineArguments {
         .build(&authority);
         let account = build_wonderland_account(&authority);
         let contract_address = ContractAddress::derive(
-            &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
+            &"0000000000000000000000000000000000000000000000000000000000000001"
                 .parse()
                 .expect("canonical test network id"),
             &authority,
@@ -4866,7 +4866,7 @@ seiyaku ProtectedParameterizedOverlay {
         .build(&authority);
         let account = build_wonderland_account(&authority);
         let contract_address = ContractAddress::derive(
-            &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
+            &"0000000000000000000000000000000000000000000000000000000000000001"
                 .parse()
                 .expect("canonical test network id"),
             &authority,
@@ -4926,7 +4926,7 @@ seiyaku ProtectedParameterizedOverlay {
         const REQUIRED_PERMISSION: &str = "CanInvokeContractEntrypoint";
         let (authority, keypair) = gen_account_in("wonderland");
         let contract_address = ContractAddress::derive(
-            &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
+            &"0000000000000000000000000000000000000000000000000000000000000001"
                 .parse()
                 .expect("canonical test network id"),
             &authority,
@@ -5438,7 +5438,7 @@ seiyaku GuardedOverlayRebound {
         const CHILD_PERMISSION: &str = "CanInvokeContractEntrypoint";
         let (authority, _) = gen_account_in("wonderland");
         let root_address = ContractAddress::derive(
-            &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
+            &"0000000000000000000000000000000000000000000000000000000000000001"
                 .parse()
                 .expect("canonical test network id"),
             &authority,
@@ -5447,7 +5447,7 @@ seiyaku GuardedOverlayRebound {
         )
         .expect("derive root contract address");
         let child_address = ContractAddress::derive(
-            &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
+            &"0000000000000000000000000000000000000000000000000000000000000001"
                 .parse()
                 .expect("canonical test network id"),
             &authority,
@@ -6519,7 +6519,7 @@ seiyaku ProtectedProvedOverlay {
         let account = build_wonderland_account(&authority);
         let mut world = crate::state::World::with([domain], [account], []);
         let contract_address = ContractAddress::derive(
-            &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
+            &"0000000000000000000000000000000000000000000000000000000000000001"
                 .parse()
                 .expect("canonical test network id"),
             &authority,
@@ -8118,7 +8118,7 @@ seiyaku DeriveDispatch {
         let account = build_wonderland_account(&authority);
         let mut world = crate::state::World::with([domain], [account], []);
         let contract_address = ContractAddress::derive(
-            &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
+            &"0000000000000000000000000000000000000000000000000000000000000001"
                 .parse()
                 .expect("canonical test network id"),
             &authority,
@@ -8213,7 +8213,7 @@ seiyaku DeriveDispatch {
         let (authority, _) = gen_account_in("wonderland");
         let (other_authority, _) = gen_account_in("wonderland");
         let root_address = ContractAddress::derive(
-            &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
+            &"0000000000000000000000000000000000000000000000000000000000000001"
                 .parse()
                 .expect("canonical test network id"),
             &authority,
@@ -8222,7 +8222,7 @@ seiyaku DeriveDispatch {
         )
         .expect("derive root contract address");
         let child_address = ContractAddress::derive(
-            &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
+            &"0000000000000000000000000000000000000000000000000000000000000001"
                 .parse()
                 .expect("canonical test network id"),
             &authority,
@@ -8376,7 +8376,7 @@ seiyaku ProtectedProved {
         .build(&authority);
         let account = build_wonderland_account(&authority);
         let contract_address = ContractAddress::derive(
-            &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
+            &"0000000000000000000000000000000000000000000000000000000000000001"
                 .parse()
                 .expect("canonical test network id"),
             &authority,
@@ -8503,7 +8503,7 @@ seiyaku ProtectedProved {
             .expect("sample raw contract artifact must verify");
         let code_hash = verified.code_hash;
         let address = ContractAddress::derive(
-            &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
+            &"0000000000000000000000000000000000000000000000000000000000000001"
                 .parse()
                 .expect("canonical test network id"),
             authority,
@@ -8708,7 +8708,7 @@ seiyaku AliasBoundArguments {
         let kp = checked_keypair();
         let authority = AccountId::new(kp.public_key().clone());
         let contract_address = ContractAddress::derive(
-            &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
+            &"0000000000000000000000000000000000000000000000000000000000000001"
                 .parse()
                 .expect("canonical test network id"),
             &authority,
@@ -8874,7 +8874,7 @@ seiyaku AliasBoundArguments {
         let kp = checked_keypair();
         let authority = AccountId::new(kp.public_key().clone());
         let contract_address = ContractAddress::derive(
-            &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
+            &"0000000000000000000000000000000000000000000000000000000000000001"
                 .parse()
                 .expect("canonical test network id"),
             &authority,

@@ -648,7 +648,7 @@ impl KagemushaRecursiveSpendVerifyRequestV4 {
     }
 }
 impl KagemushaRecursiveSpendVerifyResultV4 {
-    /// Enforce the single successful ABI-21 receiver-acceptance contract.
+    /// Enforce the single successful Kagemusha V4 receiver-acceptance contract.
     ///
     /// # Errors
     ///
@@ -691,7 +691,7 @@ impl KagemushaRecursiveSpendVerifyResultV4 {
     }
 }
 impl KagemushaRecursiveSpendRedeemBuildRequestV4 {
-    /// Validate the common full/partial ABI-21 redemption-builder input.
+    /// Validate the common full/partial Kagemusha V4 redemption-builder input.
     ///
     /// # Errors
     ///

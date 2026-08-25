@@ -84,6 +84,96 @@ mod unix {
         }
         Ok(())
     }
+    fn validated_private_path(path: &Path) -> Result<PathBuf> {
+        let absolute_path = absolute(path)?;
+        let temporary_root = absolute(&std::env::temp_dir())?;
+        let resolved = match absolute_path.strip_prefix(&temporary_root) {
+            Ok(relative) => {
+                let relative = relative.to_path_buf();
+                if relative
+                    .components()
+                    .any(|component| !matches!(component, Component::Normal(_)))
+                {
+                    return Err(eyre!(
+                        "private path below the system temporary directory contains an ambiguous component: {}",
+                        absolute_path.display()
+                    ));
+                }
+                let mut current = temporary_root.clone();
+                let mut has_system_alias = false;
+                loop {
+                    let metadata = fs::symlink_metadata(&current).wrap_err_with(|| {
+                        format!(
+                            "inspect system temporary directory component {}",
+                            current.display()
+                        )
+                    })?;
+                    if metadata.file_type().is_symlink() {
+                        if metadata.uid() != 0 {
+                            return Err(eyre!(
+                                "system temporary directory contains a non-system symbolic link: {}",
+                                current.display()
+                            ));
+                        }
+                        has_system_alias = true;
+                    }
+                    let Some(parent) = current.parent() else {
+                        break;
+                    };
+                    if parent == current {
+                        break;
+                    }
+                    current = parent.to_path_buf();
+                }
+                if has_system_alias {
+                    let followed = fs::metadata(&temporary_root).wrap_err_with(|| {
+                        format!(
+                            "inspect system temporary directory {}",
+                            temporary_root.display()
+                        )
+                    })?;
+                    if !followed.is_dir()
+                        || followed.uid() != current_uid()
+                        || followed.mode() & 0o777 != PRIVATE_DIRECTORY_MODE
+                    {
+                        return Err(eyre!(
+                            "aliased system temporary directory must be owner-held mode 0700: {}",
+                            temporary_root.display()
+                        ));
+                    }
+                    let canonical_root = fs::canonicalize(&temporary_root).wrap_err_with(|| {
+                        format!(
+                            "canonicalize system temporary directory {}",
+                            temporary_root.display()
+                        )
+                    })?;
+                    reject_symlink_components(&canonical_root)?;
+                    let canonical = fs::symlink_metadata(&canonical_root).wrap_err_with(|| {
+                        format!(
+                            "inspect canonical system temporary directory {}",
+                            canonical_root.display()
+                        )
+                    })?;
+                    if canonical.file_type().is_symlink()
+                        || !canonical.is_dir()
+                        || canonical.dev() != followed.dev()
+                        || canonical.ino() != followed.ino()
+                    {
+                        return Err(eyre!(
+                            "system temporary directory changed while resolving its system alias: {}",
+                            temporary_root.display()
+                        ));
+                    }
+                    canonical_root.join(&relative)
+                } else {
+                    absolute_path
+                }
+            }
+            Err(_) => absolute_path,
+        };
+        reject_symlink_components(&resolved)?;
+        Ok(resolved)
+    }
     fn current_uid() -> u32 {
         rustix::process::geteuid().as_raw()
     }
@@ -156,9 +246,9 @@ mod unix {
             Ok(())
         }
     }
-    fn validate_private_directory(path: &Path) -> Result<()> {
-        reject_symlink_components(path)?;
-        let lexical = fs::symlink_metadata(path)
+    fn validate_private_directory(path: &Path) -> Result<PathBuf> {
+        let path = validated_private_path(path)?;
+        let lexical = fs::symlink_metadata(&path)
             .wrap_err_with(|| format!("inspect private directory {}", path.display()))?;
         if !lexical.is_dir()
             || lexical.file_type().is_symlink()
@@ -170,7 +260,7 @@ mod unix {
                 path.display()
             ));
         }
-        let opened = File::open(path)
+        let opened = File::open(&path)
             .wrap_err_with(|| format!("open private directory {}", path.display()))?;
         let observed = opened
             .metadata()
@@ -181,19 +271,19 @@ mod unix {
                 path.display()
             ));
         }
-        Ok(())
+        Ok(path)
     }
     pub fn prepare_empty_private_directory(path: &Path) -> Result<()> {
-        reject_symlink_components(path)?;
+        let path = validated_private_path(path)?;
         if !path.exists() {
             let mut builder = DirBuilder::new();
             builder.mode(PRIVATE_DIRECTORY_MODE);
             builder
-                .create(path)
+                .create(&path)
                 .wrap_err_with(|| format!("create private directory {}", path.display()))?;
         }
-        validate_private_directory(path)?;
-        if fs::read_dir(path)
+        validate_private_directory(&path)?;
+        if fs::read_dir(&path)
             .wrap_err_with(|| format!("read private directory {}", path.display()))?
             .next()
             .is_some()
@@ -594,14 +684,15 @@ mod unix {
         path: &Path,
         owner_executable_files: &BTreeSet<PathBuf>,
     ) -> Result<()> {
-        let opened_root = open_private_tree_root(path)?;
+        let path = validated_private_path(path)?;
+        let opened_root = open_private_tree_root(&path)?;
         #[cfg(test)]
-        replace_private_tree_ancestor_for_test(path);
+        replace_private_tree_ancestor_for_test(&path);
         let mut entries_seen = 0;
         let mut seen_owner_executable_files = BTreeSet::new();
         harden_private_directory_contents(
             &opened_root.root,
-            path,
+            &path,
             0,
             &mut entries_seen,
             owner_executable_files,
@@ -626,7 +717,7 @@ mod unix {
                 path.display()
             ));
         }
-        opened_root.verify_ancestry(path)?;
+        opened_root.verify_ancestry(&path)?;
         Ok(())
     }
     #[cfg(test)]
@@ -637,9 +728,11 @@ mod unix {
         path: &Path,
         owner_executable_files: &[&Path],
     ) -> Result<()> {
+        let input_path = path;
+        let path = validated_private_path(input_path)?;
         let mut validated = BTreeSet::new();
         for candidate in owner_executable_files {
-            let relative = candidate.strip_prefix(path).map_err(|_| {
+            let relative = candidate.strip_prefix(input_path).map_err(|_| {
                 eyre!(
                     "private executable must be inside the hardened tree: {}",
                     candidate.display()
@@ -655,14 +748,21 @@ mod unix {
                     candidate.display()
                 ));
             }
-            if !validated.insert((*candidate).to_path_buf()) {
+            let candidate = validated_private_path(candidate)?;
+            candidate.strip_prefix(&path).map_err(|_| {
+                eyre!(
+                    "private executable must be inside the hardened tree after resolving the approved system temp ancestor: {}",
+                    candidate.display()
+                )
+            })?;
+            if !validated.insert(candidate.clone()) {
                 return Err(eyre!(
                     "duplicate private executable path: {}",
                     candidate.display()
                 ));
             }
         }
-        harden_private_tree_inner(path, &validated)
+        harden_private_tree_inner(&path, &validated)
     }
     fn random_temporary_path(parent: &Path, target_name: &str) -> Result<PathBuf> {
         let mut random = [0_u8; 16];
@@ -682,8 +782,13 @@ mod unix {
         let parent = path
             .parent()
             .ok_or_else(|| eyre!("private output path has no parent"))?;
-        validate_private_directory(parent)?;
-        match fs::symlink_metadata(path) {
+        let file_name = path
+            .file_name()
+            .ok_or_else(|| eyre!("private output path has no filename"))?
+            .to_os_string();
+        let parent = validate_private_directory(parent)?;
+        let path = parent.join(&file_name);
+        match fs::symlink_metadata(&path) {
             Ok(_) => {
                 return Err(eyre!(
                     "refusing to overwrite private output: {}",
@@ -693,11 +798,10 @@ mod unix {
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
             Err(error) => return Err(error).wrap_err("inspect private output destination"),
         }
-        let name = path
-            .file_name()
-            .and_then(|value| value.to_str())
+        let name = file_name
+            .to_str()
             .ok_or_else(|| eyre!("private output filename is not UTF-8"))?;
-        let temporary = random_temporary_path(parent, name)?;
+        let temporary = random_temporary_path(&parent, name)?;
         let mut options = OpenOptions::new();
         options
             .write(true)
@@ -719,11 +823,11 @@ mod unix {
             file.write_all(raw)
                 .wrap_err("write private temporary file")?;
             file.sync_all().wrap_err("sync private temporary file")?;
-            fs::hard_link(&temporary, path).wrap_err_with(|| {
+            fs::hard_link(&temporary, &path).wrap_err_with(|| {
                 format!("atomically publish private output {}", path.display())
             })?;
             fs::remove_file(&temporary).wrap_err("remove private temporary link")?;
-            File::open(parent)
+            File::open(&parent)
                 .and_then(|directory| directory.sync_all())
                 .wrap_err("sync private output directory")?;
             Ok(())
@@ -735,15 +839,15 @@ mod unix {
         result
     }
     pub fn read_private_file(path: &Path) -> Result<Vec<u8>> {
-        reject_symlink_components(path)?;
-        let lexical = fs::symlink_metadata(path)
+        let path = validated_private_path(path)?;
+        let lexical = fs::symlink_metadata(&path)
             .wrap_err_with(|| format!("inspect private file {}", path.display()))?;
         let mut options = OpenOptions::new();
         options
             .read(true)
             .custom_flags(libc::O_CLOEXEC | libc::O_NOFOLLOW);
         let mut file = options
-            .open(path)
+            .open(&path)
             .wrap_err_with(|| format!("open private file {}", path.display()))?;
         let before = file.metadata().wrap_err("inspect opened private file")?;
         if lexical.file_type().is_symlink()
@@ -800,6 +904,39 @@ mod unix {
             set_mode(guard.path(), PRIVATE_DIRECTORY_MODE);
             let root = fs::canonicalize(guard.path()).expect("canonicalize private root");
             (guard, root)
+        }
+        #[test]
+        fn private_path_canonicalizes_the_approved_system_temp_ancestor() {
+            let guard = tempfile::tempdir().expect("create private root");
+            let candidate = guard.path().join("private-output");
+            let temporary_root = absolute(&std::env::temp_dir()).expect("absolute temp root");
+            let relative = absolute(&candidate)
+                .expect("absolute candidate")
+                .strip_prefix(&temporary_root)
+                .expect("tempfile must be below system temp root")
+                .to_path_buf();
+            let expected = fs::canonicalize(&temporary_root)
+                .expect("canonical system temp root")
+                .join(relative);
+            assert_eq!(
+                validated_private_path(&candidate).expect("validate private temp path"),
+                expected
+            );
+        }
+        #[test]
+        fn private_path_still_rejects_a_symlink_below_the_approved_temp_ancestor() {
+            let guard = tempfile::tempdir().expect("create private root");
+            let actual = guard.path().join("actual");
+            fs::create_dir(&actual).expect("create actual directory");
+            let alias = guard.path().join("alias");
+            symlink(&actual, &alias).expect("create descendant symlink");
+            let error = validated_private_path(&alias.join("private-output"))
+                .expect_err("descendant symlink must fail closed");
+            assert!(
+                error
+                    .to_string()
+                    .contains("private path contains a symbolic link")
+            );
         }
         #[test]
         fn private_file_roundtrip_accepts_exact_size_limit() {
@@ -1005,11 +1142,7 @@ mod unix {
             let spelled_root = alias.join("private");
             let error = harden_private_tree(&spelled_root)
                 .expect_err("a preexisting intermediate ancestor symlink must fail closed");
-            assert!(
-                error
-                    .to_string()
-                    .contains("symbolic link or non-directory component")
-            );
+            assert!(error.to_string().contains("symbolic link"));
             assert_eq!(mode(&actual_root), PRIVATE_DIRECTORY_MODE);
         }
     }

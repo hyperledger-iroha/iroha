@@ -2084,7 +2084,7 @@ mod tests {
             "--chain-id",
             "fc56984b-2be7-431d-840e-21514d1883f0",
             "--network-id",
-            "hash:A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5#95D7",
+            "a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5",
             "--handle",
             "runtime://privacy/bootle-lantern/taira-primary",
             "--revision",

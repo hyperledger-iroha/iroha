@@ -834,7 +834,7 @@ class AliasTransactionPlanBodyV1(
     override fun toJsonMap(): Map<String, Any?> = linkedMapOf(
         "version" to version,
         "authority" to authority,
-        "network_id" to networkId.literal,
+        "network_id" to networkId.noritoJsonLiteral,
         "anchor" to anchor.toJsonMap(),
         "resources" to resources.map { it.toJsonMap() },
         "instructions" to instructions.map { it.toJsonMap() },
@@ -914,7 +914,7 @@ class AliasLifecycleTransactionPlanBodyV1(
     override fun toJsonMap(): Map<String, Any?> = linkedMapOf(
         "version" to version,
         "authority" to authority,
-        "network_id" to networkId.literal,
+        "network_id" to networkId.noritoJsonLiteral,
         "anchor" to anchor.toJsonMap(),
         "operation" to operation.toJsonMap(),
         "disposition" to disposition.toJsonMap(),

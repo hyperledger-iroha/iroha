@@ -18,6 +18,21 @@ import {
 
 const OPERATION_ID = "11".repeat(32);
 const TRANSACTION_HASH = "22".repeat(32);
+const ACTIVATION_BLOCKERS = [
+  {
+    code: "offline_cash_authenticated_release_unavailable",
+    message: "No authenticated Offline Cash V1 release is selected by this asset-neutral response.",
+  },
+  {
+    code: "offline_cash_eligible_asset_unavailable",
+    message: "No eligible Offline Cash V1 asset is selected by this asset-neutral response.",
+  },
+  {
+    code: "offline_cash_proof_backend_unavailable",
+    message:
+      "No reviewed production Offline Cash V1 proof and secure-device backend is authenticated by this response.",
+  },
+];
 
 function jsonResponse(payload, { status = 200, headers = {} } = {}) {
   return new Response(JSON.stringify(payload), {
@@ -32,9 +47,9 @@ function universalCapability(overrides = {}) {
     cash_handoff_capability: "cash_handoff_v1",
     required_bridge_abi_version: 22,
     max_hops: 8,
-    ready: true,
+    ready: false,
     assets: [],
-    blockers: [],
+    blockers: ACTIVATION_BLOCKERS.map((blocker) => ({ ...blocker })),
     ...overrides,
   };
 }
@@ -88,6 +103,25 @@ test("Kagemusha JavaScript surface is transport-only ABI-22/V4", () => {
   assert.throws(
     () => normalizeOfflineStatus(universalCapability({ required_bridge_abi_version: 19 })),
     /required_bridge_abi_version must be 22/u,
+  );
+  const capability = normalizeOfflineStatus(universalCapability());
+  assert.equal(capability.ready, false);
+  assert.deepEqual(capability.blockers, ACTIVATION_BLOCKERS);
+  assert.throws(
+    () => normalizeOfflineStatus(universalCapability({ ready: true })),
+    /ready must be false/u,
+  );
+  assert.throws(
+    () =>
+      normalizeOfflineStatus(
+        universalCapability({
+          blockers: [
+            ...ACTIVATION_BLOCKERS.slice(0, 2),
+            { ...ACTIVATION_BLOCKERS[2], code: "proof_backend_unavailable" },
+          ],
+        }),
+      ),
+    /not the canonical activation blocker/u,
   );
   assert.throws(
     () => normalizeKagemushaTopUpRequestV4({ ...requestV4(), version: 3 }),
@@ -187,7 +221,8 @@ test("ToriiBrowserClient exposes the same transport-only Kagemusha contract", as
   const reference = await client.submitKagemushaTopUpV4(requestV4());
   const status = await client.getKagemushaOperationStatus(OPERATION_ID);
 
-  assert.equal(capability.ready, true);
+  assert.equal(capability.ready, false);
+  assert.deepEqual(capability.blockers, ACTIVATION_BLOCKERS);
   assert.equal(observed[0].url.search, "");
   assert.equal(reference.state.state, "pending");
   assert.equal(status.state, "pending");

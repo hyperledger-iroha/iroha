@@ -553,7 +553,7 @@ final class KagemushaRecursiveSpendTests: XCTestCase {
         ))
     }
 
-    func testABI21InventoryRequiresExplicitFailClosedV4Capabilities() {
+    func testV4InventoryRequiresExplicitFailClosedCapabilities() {
         XCTAssertEqual(KagemushaRecursiveSpend.requiredNativeBridgeAbiVersion, 22)
         XCTAssertEqual(
             KagemushaRecursiveSpend.artifactManifestSchemaV4,

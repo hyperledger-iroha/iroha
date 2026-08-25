@@ -89,6 +89,7 @@ impl Run for KagemushaCommand {
         }
     }
 }
+#[cfg(test)]
 fn parse_canonical_sha256(value: &str) -> Result<[u8; 32], String> {
     if value.len() != 64
         || !value
@@ -102,10 +103,12 @@ fn parse_canonical_sha256(value: &str) -> Result<[u8; 32], String> {
         .map_err(|_| "expected exactly 64 lowercase hexadecimal characters".to_owned())?;
     Ok(digest)
 }
+#[cfg(test)]
 fn parse_promotion_id(value: &str) -> Result<[u8; 32], String> {
     let digest = parse_nonzero_canonical_sha256(value)?;
     Ok(digest)
 }
+#[cfg(test)]
 fn parse_nonzero_canonical_sha256(value: &str) -> Result<[u8; 32], String> {
     let digest = parse_canonical_sha256(value)?;
     if digest == [0; 32] {

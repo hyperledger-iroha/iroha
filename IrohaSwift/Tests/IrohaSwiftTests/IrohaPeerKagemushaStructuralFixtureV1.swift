@@ -1,7 +1,7 @@
 import Foundation
 @testable import IrohaSwift
 
-/// Canonical ABI-21 transport framing with an intentionally opaque body.
+/// Canonical bridge ABI22 / Kagemusha data ABI V4 transport framing with an intentionally opaque body.
 /// This proves the IPM layer only; callers must not treat it as a semantically
 /// valid request/payment/acknowledgement or pass it to the typed adapter.
 func irohaPeerKagemushaStructuralArchiveV1(

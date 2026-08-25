@@ -32,7 +32,7 @@ public final class TransactionPayloadFixtureTests {
 
   private static final String SAMPLE_AUTHORITY = sampleAuthority((byte) 0x11);
   private static final String TEST_NETWORK_ID =
-      "hash:32C903E5B3497E34C2B844EBFE8A39C19E6CF8F95D44C1FFB8BA9DCB42F91149#A2F0";
+      "32c903e5b3497e34c2b844ebfe8a39c19e6cf8f95d44c1ffb8ba9dcb42f91149";
   private static final String TRANSACTION_PAYLOAD_TYPE =
       "iroha_data_model::transaction::signed::model::TransactionPayload";
 
@@ -191,22 +191,22 @@ public final class TransactionPayloadFixtureTests {
 
   @Test
   public void fixtureLoaderRejectsNonCanonicalNetworkIdentity() {
-    final Map<String, Object> lowercaseTopLevel = ttlFixture(100_000L, 100_000L);
-    lowercaseTopLevel.put("network_id", TEST_NETWORK_ID.toLowerCase(java.util.Locale.ROOT));
+    final Map<String, Object> uppercaseTopLevel = ttlFixture(100_000L, 100_000L);
+    uppercaseTopLevel.put("network_id", TEST_NETWORK_ID.toUpperCase(java.util.Locale.ROOT));
     assertThrowsContaining(
-        () -> TransactionPayloadFixtures.Fixture.fromObject(lowercaseTopLevel),
-        "canonical network hash identity",
-        "top-level network_id must use canonical hash text");
+        () -> TransactionPayloadFixtures.Fixture.fromObject(uppercaseTopLevel),
+        "64-character lowercase hexadecimal NetworkId",
+        "top-level network_id must use canonical lowercase text");
 
-    final Map<String, Object> lowercasePayload = ttlFixture(100_000L, 100_000L);
+    final Map<String, Object> uppercasePayload = ttlFixture(100_000L, 100_000L);
     @SuppressWarnings("unchecked")
-    final Map<String, Object> nestedLowercase =
-        (Map<String, Object>) lowercasePayload.get("payload");
-    nestedLowercase.put("network_id", TEST_NETWORK_ID.toLowerCase(java.util.Locale.ROOT));
+    final Map<String, Object> nestedUppercase =
+        (Map<String, Object>) uppercasePayload.get("payload");
+    nestedUppercase.put("network_id", TEST_NETWORK_ID.toUpperCase(java.util.Locale.ROOT));
     assertThrowsContaining(
-        () -> TransactionPayloadFixtures.Fixture.fromObject(lowercasePayload),
-        "canonical network hash identity",
-        "payload network_id must use canonical hash text");
+        () -> TransactionPayloadFixtures.Fixture.fromObject(uppercasePayload),
+        "64-character lowercase hexadecimal NetworkId",
+        "payload network_id must use canonical lowercase text");
   }
 
   @Test
@@ -344,7 +344,7 @@ public final class TransactionPayloadFixtureTests {
             .equals(invocation.contractAddress()) : name + ": contract address mismatch";
         assert Arrays.equals(
                 HashLiteral.decode(
-                    "hash:0E5751C026E543B2E8AB2EB06099DAA1D1E5DF47778F7787FAAB45CDF12FE3A9#6A22"),
+                    "0e5751c026e543b2e8ab2eb06099daa1d1e5df47778f7787faab45cdf12fe3a9"),
                 invocation.expectedCodeHash()) : name + ": expected code hash mismatch";
         assert "run".equals(invocation.entrypoint()) : name + ": entrypoint mismatch";
         assert Arrays.equals(new byte[] {1, 2, 3, 4}, invocation.arguments())

@@ -1,6 +1,6 @@
 // Exact NetworkId governance ballot and capability regressions.
 fn foreign_network_id() -> iroha_data_model::NetworkId {
-    "hash:0000000000000000000000000000000000000000000000000000000000000003#E54C"
+    "0000000000000000000000000000000000000000000000000000000000000003"
         .parse()
         .expect("canonical foreign network id")
 }

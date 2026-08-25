@@ -27,11 +27,11 @@ public enum KagemushaRecursiveSpendError: Error, Equatable, LocalizedError {
         case .nativeBridgeUnavailable:
             return "The ABI-22 Kagemusha recursive spend bridge is unavailable."
         case .proofBackendUnavailable:
-            return "Kagemusha recursive spend V4 is unavailable until the ABI-21 proof backend is promoted."
+            return "Kagemusha recursive spend V4 is unavailable until the Kagemusha V4 proof backend is promoted."
         case .proofWorkerBusy:
             return "Another Kagemusha proof operation is active; retry after it completes."
         case .finalityTrustUnavailable:
-            return "Kagemusha top-up finality requires an authenticated ABI-21 release and matching validator roster."
+            return "Kagemusha top-up finality requires an authenticated Kagemusha V4 release and matching validator roster."
         case .hardwareAssertionUnavailable:
             return "The requested physical hardware assertion service is unavailable on this device."
         }
@@ -497,8 +497,6 @@ public enum KagemushaRecursiveSpend {
         "connect_norito_kagemusha_recipient_payment_request_signing_bytes_v2",
         "connect_norito_kagemusha_recipient_payment_request_create_v2",
         "connect_norito_kagemusha_recipient_payment_request_verify_v2",
-        "connect_norito_kagemusha_recipient_lineage_query_create_v2",
-        "connect_norito_kagemusha_recipient_registration_lineage_verify_v2",
         "connect_norito_kagemusha_recipient_receive_offer_create_v2",
         "connect_norito_kagemusha_recipient_receive_offer_project_v2",
         "connect_norito_kagemusha_recipient_receive_offer_verify_v2",

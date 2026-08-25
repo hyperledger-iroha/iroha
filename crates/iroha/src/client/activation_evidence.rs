@@ -2,7 +2,9 @@
 
 use crate::data_model::block::{
     BlockHeader, decode_framed_signed_block,
-    proofs::AUTHENTICATED_BLOCK_PROOFS_MAX_BLOCK_WIRE_BYTES_V1,
+    proofs::{
+        AUTHENTICATED_BLOCK_PROOFS_MAX_BLOCK_WIRE_BYTES_V1, TrustedBlockProofAnchor,
+    },
 };
 use iroha_data_model::{
     bridge::{
@@ -88,7 +90,9 @@ impl Client {
     /// The returned bytes are accepted only when the route yields bounded Norito, the block
     /// round-trips to the byte-identical canonical [`SignedBlock`] wire, its requested height and
     /// block hash match, its entrypoint/result Merkle material is internally consistent, and the
-    /// supplied successful committed transaction verifies against that exact carrier block.
+    /// supplied applied-or-rejected committed transaction verifies against that exact carrier
+    /// block. This distinction matters for fee settlement because a rejected business execution
+    /// can still carry an actual committed debit receipt.
     ///
     /// # Errors
     ///
@@ -145,17 +149,67 @@ impl Client {
         block
             .validate_result_merkle_cache()
             .map_err(|error| eyre!("executed block result Merkle cache is invalid: {error}"))?;
-        if committed.result().is_err() {
-            return Err(eyre!(
-                "committed transaction carries a rejected execution result"
-            ));
-        }
         if !committed.verify_inclusion_in_block(&block) {
             return Err(eyre!(
                 "committed transaction does not verify against the exact executed block"
             ));
         }
         Ok(canonical)
+    }
+
+    /// Fetch and authenticate the exact result-bearing carrier under a trusted CommitQC chain.
+    ///
+    /// The caller must initialize `verifier` with an externally pinned first height-context id
+    /// and present receipt carriers in immediate chain order (fetching intervening proofs when
+    /// necessary). This method verifies the committed transaction's entry/result proofs, advances
+    /// a trial verifier through the exact CommitQC, then derives a [`TrustedBlockProofAnchor`].
+    /// That anchor independently checks the QC-signed executed-block wire byte length and hash
+    /// before authenticating the result leaf containing any fee-payment receipt. Verifier state is
+    /// published only after every binding succeeds.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error for any canonical-wire, transaction inclusion, trusted context/successor,
+    /// CommitQC cryptography, exact wire length/hash, or Merkle proof mismatch.
+    pub fn get_finality_authenticated_executed_block_wire(
+        &self,
+        height: NonZeroU64,
+        committed: &CommittedTransaction,
+        verifier: &mut BridgeFinalityVerifier,
+    ) -> Result<Vec<u8>> {
+        let wire = self.get_canonical_executed_block_wire(height, committed)?;
+        let block = norito::core::with_decode_limits_scope(
+            norito::canonical_decode_limits(wire.len()),
+            || decode_framed_signed_block(&wire),
+        )
+        .map_err(|error| eyre!("failed to decode already-canonical executed block: {error}"))?;
+        let mut trial_verifier = verifier.clone();
+        let proof = self.get_bridge_finality_proof(
+            height,
+            *committed.block_hash(),
+            &mut trial_verifier,
+        )?;
+        let anchor = TrustedBlockProofAnchor::from_untrusted_finality_artifact(
+            &block,
+            &proof.finality_artifact,
+            committed.entrypoint_hash(),
+        )
+        .map_err(|error| eyre!("CommitQC does not authenticate executed block wire: {error}"))?;
+        let block_proofs = block
+            .proofs_for_entry_hash(committed.entrypoint_hash())
+            .ok_or_else(|| eyre!("authenticated carrier cannot derive transaction proofs"))?;
+        if !block_proofs.verify(&anchor) {
+            return Err(eyre!(
+                "transaction entry/result proofs do not verify under the CommitQC-authenticated carrier"
+            ));
+        }
+        if block_proofs.result_proof.leaf() != committed.result_hash() {
+            return Err(eyre!(
+                "CommitQC-authenticated result proof does not bind the committed transaction result"
+            ));
+        }
+        *verifier = trial_verifier;
+        Ok(wire)
     }
 
     fn fetch_bridge_finality_proof_at_height(

@@ -852,7 +852,8 @@ def _check_cargo_workflow(
             "rustup target add --toolchain 1.93.1-aarch64-apple-darwin "
             "aarch64-apple-ios aarch64-apple-ios-sim x86_64-apple-ios "
             "aarch64-apple-darwin x86_64-apple-darwin",
-            "cargo fetch --locked",
+            "cargo fetch --locked -Z unstable-options --lockfile-path "
+            '"$IROHA_PRIVACY_RELEASE_CARGO_LOCKFILE_PATH"',
         )
     )
     additional_cargo_policies = {
@@ -888,7 +889,11 @@ def _check_cargo_workflow(
             },
             {
                 "name": "Prime privacy N-API dependencies from the frozen lock",
-                "run": "cargo fetch --locked",
+                "env": (("RUSTC_BOOTSTRAP", '"1"'),),
+                "run": (
+                    "cargo fetch --locked -Z unstable-options --lockfile-path "
+                    '"$IROHA_PRIVACY_RELEASE_CARGO_LOCKFILE_PATH"'
+                ),
             },
         ),
         "privacy_swift_sdk_parse": (
@@ -899,15 +904,16 @@ def _check_cargo_workflow(
             },
             {
                 "name": "Install Apple Rust targets and prime frozen dependencies",
+                "env": (("RUSTC_BOOTSTRAP", '"1"'),),
                 "run": swift_fetch_run,
             },
         ),
     }
     native_lane_job_digests = {
-        "privacy_swift_sdk_parse": "7f7765d55844744f84df43017b29fe1539e42b700ce86f6e16507cec6a243ecf",
+        "privacy_swift_sdk_parse": "54be4bbfb520af36bc109353e62a702a909b84a6b03ad2f9e42168f8f1948be9",
         "privacy_jvm_sdk_tests": "1f430f2e88d3c455e8ed0a5182308627d6657099093d6c6021c308bbf12aedcb",
-        "privacy_csharp_sdk_tests": "9d449aa16a205b2faf73847b2e863c18c673d51e831efb83396d9e196d021604",
-        "privacy_javascript_sdk_tests": "2a4fe6a4326a2987e8093b5a2a8919b3265364af8ec40287f6ad8d33db701112",
+        "privacy_csharp_sdk_tests": "3ba46c1d0cc8f20fed30bcfac3db06f36583eff0aa9eae5930cdb28fb792ade4",
+        "privacy_javascript_sdk_tests": "81709f95b24685e6f4d7e2b73e65f89cc20e8926d2d39a3a8765c14d0da299b8",
     }
 
     require(
@@ -1217,7 +1223,7 @@ def _check_cargo_workflow(
         "privacy-swift-python": 1,
         "privacy-jvm-python": 4,
         "privacy-csharp-python": 3,
-        "privacy-js-python": 2,
+        "privacy-js-python": 3,
         "privacy-python": 8,
     }
     require(

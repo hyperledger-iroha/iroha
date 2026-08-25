@@ -16,7 +16,6 @@ import java.util.function.Supplier;
 import org.hyperledger.iroha.android.client.JsonNumbers;
 import org.hyperledger.iroha.android.client.JsonParser;
 import org.hyperledger.iroha.android.client.LocalSigningContext;
-import org.hyperledger.iroha.android.client.ToriiCanonicalRequestAuth;
 import org.hyperledger.iroha.android.client.transport.TransportExecutor;
 import org.hyperledger.iroha.android.client.transport.TransportRequest;
 import org.hyperledger.iroha.android.client.transport.TransportResponse;
@@ -26,12 +25,12 @@ import org.hyperledger.iroha.norito.NoritoHeader;
 import org.hyperledger.iroha.norito.SchemaHash;
 
 /**
- * Native bridge ABI 22 for Kagemusha ABI-22/V4 artifact streaming and capabilities.
+ * Native bridge ABI 22 for Kagemusha protocol/data V4 artifact streaming and capabilities.
  *
  * <p>This is the sole first-release offline-cash surface. It authenticates the opaque eight-file proof
  * artifact set and validates exact typed request/payment/acknowledgement and proof-bound membership
  * archives. Proof execution remains fail-closed while the native backend reports unavailable.
- * Every recursive lifecycle result is projected only through an ABI-22/V4 native decoder.
+ * Every recursive lifecycle result is projected through native bridge ABI 22 and decoded as V4.
  */
 public final class KagemushaRecursiveSpendProver {
   /** Retryable contention signal raised before a second proof request is copied. */
@@ -106,10 +105,10 @@ public final class KagemushaRecursiveSpendProver {
   public static final int MAX_LOCAL_RESULT_ARCHIVE_BYTES_V4 = 64 * 1024 * 1024 + 64;
   public static final int MAX_LOCAL_REQUEST_ARCHIVE_BYTES = MAX_LOCAL_REQUEST_ARCHIVE_BYTES_V4;
   public static final int MAX_LOCAL_RESULT_ARCHIVE_BYTES = MAX_LOCAL_RESULT_ARCHIVE_BYTES_V4;
-  /** Exact Torii body ceiling for the ABI-22/V4 top-up route. */
+  /** Exact Torii body ceiling for the Kagemusha V4 top-up route. */
   public static final int MAX_TORII_TOP_UP_REQUEST_BYTES_V4 = 512 * 1024;
 
-  /** Exact Torii body ceiling for the ABI-22/V4 redemption route. */
+  /** Exact Torii body ceiling for the Kagemusha V4 redemption route. */
   public static final int MAX_TORII_REDEEM_REQUEST_BYTES_V4 = 48 * 1024 * 1024;
 
   private static final int MAX_REQUEST_AUTHORIZATION_BYTES = 512 * 1024;
@@ -1123,61 +1122,6 @@ public final class KagemushaRecursiveSpendProver {
             "requestDigest"),
         verifiedAtMilliseconds,
         projection);
-  }
-
-  /** Create the request-independent selector used to prefetch portable receiver lineage. */
-  public static RecipientLineageQueryV2 createRecipientLineageQueryV2(
-      final NetworkId networkId,
-      final int chainDiscriminant,
-      final String recipientAccountId,
-      final String receiverDeviceId,
-      final String assetDefinitionId,
-      final long trustedCheckpointHeight) {
-    requireArtifactBridge();
-    if (trustedCheckpointHeight <= 0) {
-      throw new IllegalArgumentException("trustedCheckpointHeight must be positive");
-    }
-    return new RecipientLineageQueryV2(
-        nativeCreateRecipientLineageQueryV2(
-            Objects.requireNonNull(networkId, "networkId").bytes(),
-            requireChainDiscriminant(chainDiscriminant),
-            utf8(recipientAccountId, "recipientAccountId"),
-            utf8(receiverDeviceId, "receiverDeviceId"),
-            utf8(assetDefinitionId, "assetDefinitionId"),
-            trustedCheckpointHeight));
-  }
-
-  /** Verify signed request, active-state lineage and a bounded finality suffix locally. */
-  public static VerifiedRecipientRegistrationLineageV2 verifyRecipientRegistrationLineageV2(
-      final RecipientPaymentRequest request,
-      final RecipientRegistrationLineage lineage,
-      final long verifiedAtMilliseconds,
-      final long trustedCheckpointHeight,
-      final byte[] trustedCheckpointContextId) {
-    requireArtifactBridge();
-    if (verifiedAtMilliseconds <= 0) {
-      throw new IllegalArgumentException("verifiedAtMilliseconds must be positive");
-    }
-    if (trustedCheckpointHeight <= 0) {
-      throw new IllegalArgumentException("trustedCheckpointHeight must be positive");
-    }
-    final byte[] trustedContext =
-        requireFinalityCheckpointContext(
-            trustedCheckpointContextId, "trustedCheckpointContextId");
-    try {
-      final byte[][] fields = nativeVerifyRecipientRegistrationLineageV2(
-              Objects.requireNonNull(request, "request").noritoEncoded(),
-              Objects.requireNonNull(lineage, "lineage").noritoEncoded(),
-              verifiedAtMilliseconds,
-              trustedCheckpointHeight,
-              trustedContext);
-      requireFieldCount(fields, 2, "verified recipient lineage");
-      return new VerifiedRecipientRegistrationLineageV2(
-          new RecipientRegistrationLineage(fields[0]),
-          new FinalityCheckpointPromotionV2(fields[1]));
-    } finally {
-      Arrays.fill(trustedContext, (byte) 0);
-    }
   }
 
   /** Build one canonical receive offer carrying request, lineage and publisher envelope. */
@@ -2400,16 +2344,6 @@ public final class KagemushaRecursiveSpendProver {
     }
   }
 
-  public static final class RecipientLineageQueryV2 extends CanonicalArchive {
-    private RecipientLineageQueryV2(final byte[] archive) {
-      super(
-          archive,
-          "iroha_torii_shared::offline_api::OfflineRecipientLineageRequest",
-          "recipientLineageQuery",
-          MAX_PEER_ARCHIVE_BYTES_V2);
-    }
-  }
-
   /** Portable proof material; it becomes trusted only through a V2 native verifier result. */
   public static final class RecipientRegistrationLineage extends CanonicalArchive {
     private RecipientRegistrationLineage(final byte[] archive) {
@@ -3393,21 +3327,6 @@ public final class KagemushaRecursiveSpendProver {
     public byte[] contextId() { return Arrays.copyOfRange(encoded, 8, encoded.length); }
   }
 
-  public static final class VerifiedRecipientRegistrationLineageV2 {
-    private final RecipientRegistrationLineage lineage;
-    private final FinalityCheckpointPromotionV2 promotedCheckpoint;
-
-    private VerifiedRecipientRegistrationLineageV2(
-        final RecipientRegistrationLineage lineage,
-        final FinalityCheckpointPromotionV2 promotedCheckpoint) {
-      this.lineage = Objects.requireNonNull(lineage, "lineage");
-      this.promotedCheckpoint = Objects.requireNonNull(promotedCheckpoint, "promotedCheckpoint");
-    }
-
-    public RecipientRegistrationLineage lineage() { return lineage; }
-    public FinalityCheckpointPromotionV2 promotedCheckpoint() { return promotedCheckpoint; }
-  }
-
   public static final class RecipientReceiveOfferProjectionV2 {
     private final RecipientPaymentRequest request;
     private final RecipientRegistrationLineage lineage;
@@ -4019,6 +3938,18 @@ public final class KagemushaRecursiveSpendProver {
             "ready",
             "assets",
             "blockers"));
+    private static final List<ReadinessBlocker> ACTIVATION_BLOCKERS =
+        Collections.unmodifiableList(
+            Arrays.asList(
+                new ReadinessBlocker(
+                    "offline_cash_authenticated_release_unavailable",
+                    "No authenticated Offline Cash V1 release is selected by this asset-neutral response."),
+                new ReadinessBlocker(
+                    "offline_cash_eligible_asset_unavailable",
+                    "No eligible Offline Cash V1 asset is selected by this asset-neutral response."),
+                new ReadinessBlocker(
+                    "offline_cash_proof_backend_unavailable",
+                    "No reviewed production Offline Cash V1 proof and secure-device backend is authenticated by this response.")));
 
     private final boolean mandatory;
     private final String cashHandoffCapability;
@@ -4051,17 +3982,25 @@ public final class KagemushaRecursiveSpendProver {
         throw new IllegalArgumentException(
             "maximumHops must match the cash_handoff_v1 bound");
       }
-      if (!ready) {
+      if (ready) {
         throw new IllegalArgumentException(
-            "ready must be true for universal offline capability");
+            "ready must be false for asset-neutral offline capability");
       }
       if (!assets.isEmpty()) {
         throw new IllegalArgumentException(
             "assets must be empty because capability is asset-neutral");
       }
-      if (!blockers.isEmpty()) {
+      if (blockers.size() != ACTIVATION_BLOCKERS.size()) {
         throw new IllegalArgumentException(
-            "blockers must be empty for universal offline capability");
+            "blockers must contain the three ordered canonical activation blockers");
+      }
+      for (int index = 0; index < blockers.size(); index++) {
+        final ReadinessBlocker actual = blockers.get(index);
+        final ReadinessBlocker expected = ACTIVATION_BLOCKERS.get(index);
+        if (!actual.code().equals(expected.code()) || !actual.message().equals(expected.message())) {
+          throw new IllegalArgumentException(
+              "blockers must contain the three ordered canonical activation blockers");
+        }
       }
       this.mandatory = mandatory;
       this.cashHandoffCapability = cashHandoffCapability;
@@ -4093,10 +4032,11 @@ public final class KagemushaRecursiveSpendProver {
         throw new IllegalStateException(
             "offline capability response has an invalid universal field type");
       }
-      if (!parsedAssets.isEmpty() || !parsedBlockers.isEmpty()) {
+      if (!parsedAssets.isEmpty()) {
         throw new IllegalStateException(
-            "offline capability assets and blockers must be empty");
+            "offline capability assets must be empty");
       }
+      final List<ReadinessBlocker> blockers = decodeBlockers(parsedBlockers);
       return new OfflineStatus(
           mandatory,
           capability,
@@ -4106,7 +4046,44 @@ public final class KagemushaRecursiveSpendProver {
           JsonNumbers.asInt(root.get("max_hops"), "offline capability max_hops"),
           ready,
           Collections.emptyList(),
-          Collections.emptyList());
+          blockers);
+    }
+
+    private static List<ReadinessBlocker> decodeBlockers(final List<?> values) {
+      final List<ReadinessBlocker> blockers = new ArrayList<>();
+      final List<String> codes = new ArrayList<>();
+      for (int index = 0; index < values.size(); index++) {
+        final Object value = values.get(index);
+        if (!(value instanceof Map<?, ?> blocker)
+            || blocker.size() != 2
+            || !blocker.containsKey("code")
+            || !blocker.containsKey("message")) {
+          throw new IllegalStateException(
+              "offline capability blocker must contain exactly code and message");
+        }
+        final Object codeValue = blocker.get("code");
+        final Object messageValue = blocker.get("message");
+        if (!(codeValue instanceof String code)
+            || !code.matches("[a-z][a-z0-9_]{0,63}")) {
+          throw new IllegalStateException(
+              "offline capability blocker code must be canonical lowercase text");
+        }
+        if (codes.contains(code)) {
+          throw new IllegalStateException(
+              "offline capability repeats blocker code " + code);
+        }
+        if (!(messageValue instanceof String message)
+            || message.isEmpty()
+            || !message.equals(message.trim())
+            || message.codePointCount(0, message.length()) > 1024
+            || message.codePoints().anyMatch(Character::isISOControl)) {
+          throw new IllegalStateException(
+              "offline capability blocker message must be canonical bounded text");
+        }
+        codes.add(code);
+        blockers.add(new ReadinessBlocker(code, message));
+      }
+      return blockers;
     }
 
     public boolean mandatory() { return mandatory; }
@@ -4227,7 +4204,7 @@ public final class KagemushaRecursiveSpendProver {
       if (maximumProofBytes <= 0
           || maximumProofBytes > MAXIMUM_RECURSIVE_PROOF_PAIR_BYTES_V4) {
         throw new IllegalArgumentException(
-            "artifactMaximumProofBytes exceeds the ABI-21 V4 release limit");
+            "artifactMaximumProofBytes exceeds the Kagemusha data ABI V4 release limit");
       }
       if (assetScale < 0 || assetScale > KagemushaScaledAmount.MAXIMUM_SCALE) {
         throw new IllegalArgumentException(
@@ -4509,13 +4486,12 @@ public final class KagemushaRecursiveSpendProver {
     public OperationRejection rejection() { return rejection; }
   }
 
-  /** Strict typed client for the five first-release Kagemusha Torii routes. */
+  /** Strict typed client for the four first-release Kagemusha Torii routes. */
   public static final class ToriiClient {
     public static final String READINESS_PATH = "/v1/offline/readiness";
     public static final String TOP_UP_PATH = "/v1/offline/top-up";
     public static final String REDEEM_PATH = "/v1/offline/redeem";
     public static final String OPERATIONS_PATH = "/v1/offline/operations";
-    public static final String RECEIVER_LINEAGE_PATH = "/v1/offline/receiver-lineage";
     public static final String JSON_MEDIA_TYPE = "application/json";
     public static final String NORITO_MEDIA_TYPE = "application/x-norito";
 
@@ -4555,15 +4531,6 @@ public final class KagemushaRecursiveSpendProver {
               200,
               JSON_MEDIA_TYPE)
           .thenApply(response -> OfflineStatus.decode(response.body()));
-    }
-
-    public CompletableFuture<RecipientRegistrationLineage> getRecipientRegistrationLineage(
-        final RecipientLineageQueryV2 query, final ToriiCanonicalRequestAuth canonicalAuth) {
-      return execute(
-              KagemushaToriiLineageRequest.build(
-                  baseUri, query, localSigningContext, canonicalAuth),
-              200)
-          .thenApply(response -> new RecipientRegistrationLineage(response.body()));
     }
 
     public CompletableFuture<OperationReference> submitTopUp(
@@ -5023,19 +4990,6 @@ public final class KagemushaRecursiveSpendProver {
       byte[] diversifier);
   private static native byte[] nativeCreateRecipientRequestV2(byte[] payload, byte[] signature);
   private static native byte[] nativeVerifyRecipientRequestV2(byte[] request, long verifiedAtMilliseconds);
-  private static native byte[] nativeCreateRecipientLineageQueryV2(
-      byte[] networkId,
-      int chainDiscriminant,
-      byte[] recipient,
-      byte[] receiverDeviceId,
-      byte[] asset,
-      long trustedCheckpointHeight);
-  private static native byte[][] nativeVerifyRecipientRegistrationLineageV2(
-      byte[] request,
-      byte[] lineage,
-      long verifiedAtMilliseconds,
-      long trustedCheckpointHeight,
-      byte[] trustedCheckpointContextId);
   private static native byte[] nativeCreateRecipientReceiveOfferV2(
       byte[] request, byte[] lineage, byte[] publisherCheckpointEnvelope);
   private static native byte[][] nativeProjectRecipientReceiveOfferV2(byte[] offer);

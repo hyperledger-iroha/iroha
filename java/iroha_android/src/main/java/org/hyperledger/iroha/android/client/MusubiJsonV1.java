@@ -116,7 +116,8 @@ final class MusubiJsonV1 {
     final ResolverReleaseRow universalRelease =
         parseResolverRow(root.get("universal_release"), "response.universal_release");
     return new ExactReleaseSnapshot(
-        NetworkId.parse(string(root.get("network_id"), "response.network_id")),
+        NetworkId.parseNoritoJsonLiteral(
+            string(root.get("network_id"), "response.network_id")),
         snapshot, homeRelease, universalRelease);
   }
 
@@ -245,7 +246,8 @@ final class MusubiJsonV1 {
     final ResolverIndexPage page = new ResolverIndexPage(
         (ResolverIndexQuery) decodeQuery(
             MusubiToriiClientV1.RESOLVER_INDEX_PATH, root.get("query")),
-        NetworkId.parse(string(root.get("network_id"), "response.network_id")),
+        NetworkId.parseNoritoJsonLiteral(
+            string(root.get("network_id"), "response.network_id")),
         items,
         cursor,
         snapshot);
@@ -302,7 +304,8 @@ final class MusubiJsonV1 {
     final FinalizedCursor cursor = root.get("next_cursor") == null
         ? null : parseCursor(root.get("next_cursor"), "response.next_cursor");
     return new ArchiveLocationPage(
-        NetworkId.parse(string(root.get("network_id"), "response.network_id")),
+        NetworkId.parseNoritoJsonLiteral(
+            string(root.get("network_id"), "response.network_id")),
         parseArchiveRecord(root.get("archive"), "response.archive"),
         items,
         cursor,
@@ -322,7 +325,8 @@ final class MusubiJsonV1 {
           raw.get(index), "response.items[" + index + "]"));
     }
     return new ArchiveRetentionPage(
-        NetworkId.parse(string(root.get("network_id"), "response.network_id")),
+        NetworkId.parseNoritoJsonLiteral(
+            string(root.get("network_id"), "response.network_id")),
         items,
         u64(root.get("finalized_time_ms"), "response.finalized_time_ms"),
         parseSnapshot(root.get("snapshot"), "response.snapshot"));
@@ -369,7 +373,8 @@ final class MusubiJsonV1 {
     final OrderedPrefixPage page = new OrderedPrefixPage(
         (OrderedPrefixQuery) decodeQuery(
             MusubiToriiClientV1.ORDERED_PREFIX_PATH, root.get("query")),
-        NetworkId.parse(string(root.get("network_id"), "response.network_id")),
+        NetworkId.parseNoritoJsonLiteral(
+            string(root.get("network_id"), "response.network_id")),
         parseNamespaceBinding(root.get("namespace_binding"), "response.namespace_binding"),
         items,
         cursor,
@@ -1116,7 +1121,7 @@ final class MusubiJsonV1 {
                 "car_body_digest", "car_body_length", "nonce"));
     final SeedIngressReceiptBinding typedBinding =
         new SeedIngressReceiptBinding(
-            NetworkId.parse(
+            NetworkId.parseNoritoJsonLiteral(
                 string(binding.get("network_id"), field + ".payload.binding.network_id")),
             string(binding.get("publisher"), field + ".payload.binding.publisher"),
             string(binding.get("ingress_broker"), field + ".payload.binding.ingress_broker"),
@@ -1217,7 +1222,8 @@ final class MusubiJsonV1 {
             keys("height", "block_hash"));
     final ProviderBundleVerificationBinding typedBinding =
         new ProviderBundleVerificationBinding(
-            NetworkId.parse(string(binding.get("network_id"), bindingField + ".network_id")),
+            NetworkId.parseNoritoJsonLiteral(
+                string(binding.get("network_id"), bindingField + ".network_id")),
             newtypeText(binding.get("provider_id"), bindingField + ".provider_id"),
             string(binding.get("completed_by"), bindingField + ".completed_by"),
             new ProviderCompletionAuthority(

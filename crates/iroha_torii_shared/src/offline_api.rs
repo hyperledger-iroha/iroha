@@ -81,19 +81,13 @@ pub fn decode_offline_cash_acknowledgement_v1(
     OfflineCashAcknowledgementV1::decode_canonical_exact_against(bytes, request, payment)
 }
 
-/// Stable public Norito schema name for the request-independent lineage query.
-pub const OFFLINE_RECIPIENT_LINEAGE_REQUEST_SCHEMA_NAME: &str =
-    "iroha.torii.v1.offline.recipient_lineage.request";
-/// Stable public Norito schema name for the proof-bearing receiver-lineage response.
-pub const OFFLINE_RECIPIENT_LINEAGE_RESPONSE_SCHEMA_NAME: &str =
-    "iroha.torii.v1.offline.recipient_lineage.response";
-/// Current proof-bearing receiver-lineage request/response layout.
+/// Current portable proof-bearing receiver-lineage layout.
 pub const OFFLINE_RECIPIENT_LINEAGE_VERSION: u16 = 2;
 /// Maximum number of consecutive finality proofs, including the trusted checkpoint proof.
 pub const OFFLINE_RECIPIENT_LINEAGE_MAX_FINALITY_PROOFS: usize = 64;
 /// Maximum canonical bytes occupied by the bounded finality chain.
 pub const OFFLINE_RECIPIENT_LINEAGE_MAX_FINALITY_CHAIN_BYTES: usize = 3 * 1024 * 1024;
-/// Defensive response bound shared by maintained mobile clients.
+/// Defensive canonical archive bound shared by maintained mobile clients.
 pub const OFFLINE_RECIPIENT_LINEAGE_MAX_RESPONSE_BYTES: usize = 4 * 1024 * 1024;
 /// Maximum opaque publisher checkpoint envelope carried by a peer receive offer.
 pub const OFFLINE_RECIPIENT_OFFER_MAX_PUBLISHER_ENVELOPE_BYTES: usize = 2 * 1024;
@@ -104,7 +98,7 @@ pub const OFFLINE_RECIPIENT_OFFER_PEER_WIRE_HEADER_BYTES: usize = 84;
 /// Maximum uncompressed peer-wire message containing one canonical offer.
 pub const OFFLINE_RECIPIENT_OFFER_MAX_PEER_WIRE_BYTES: usize =
     OFFLINE_RECIPIENT_OFFER_PEER_WIRE_HEADER_BYTES + OFFLINE_RECIPIENT_OFFER_MAX_PEER_BYTES;
-/// Request-independent receiver tuple whose proof can be prefetched while online.
+/// Receiver tuple authenticated by a portable registration lineage.
 #[derive(
     Debug, Clone, PartialEq, Eq, JsonDeserialize, JsonSerialize, NoritoDeserialize, NoritoSerialize,
 )]
@@ -119,23 +113,6 @@ pub struct OfflineRecipientLineageSelectorV2 {
     /// Offline-cash asset definition.
     pub asset: AssetDefinitionId,
 }
-/// Receiver-lineage query guided by an externally trusted mobile checkpoint.
-///
-/// The height is not itself a trust anchor. Native verification also requires
-/// the checkpoint context id from release-pinned or previously verified local
-/// state and rejects a response whose first proof does not match both values.
-#[derive(
-    Debug, Clone, PartialEq, Eq, JsonDeserialize, JsonSerialize, NoritoDeserialize, NoritoSerialize,
-)]
-#[norito(deny_unknown_fields)]
-pub struct OfflineRecipientLineageRequest {
-    /// Query layout version.
-    pub version: u16,
-    /// Request-independent receiver tuple.
-    pub selector: OfflineRecipientLineageSelectorV2,
-    /// Height of the externally trusted checkpoint proof which must start the response chain.
-    pub trusted_checkpoint_height: u64,
-}
 /// Reusable proof-bearing active registration lineage for one receiver tuple.
 ///
 /// Authorization comes exclusively from the end-of-block active-receiver
@@ -147,7 +124,7 @@ pub struct OfflineRecipientLineageRequest {
 )]
 #[norito(deny_unknown_fields)]
 pub struct OfflineRecipientRegistrationLineage {
-    /// Response layout version.
+    /// Portable lineage layout version.
     pub version: u16,
     /// Request-independent tuple authenticated by this reusable proof.
     pub selector: OfflineRecipientLineageSelectorV2,
@@ -157,7 +134,7 @@ pub struct OfflineRecipientRegistrationLineage {
     pub active_receiver_membership: KagemushaActiveReceiverMembershipProofV1,
     /// Fixed synthetic write and 256-level path to the evaluated ordinary-write root.
     pub active_receiver_witness: KagemushaActiveReceiverWitnessProofV1,
-    /// Bounded consecutive chain beginning at the publisher checkpoint used for prefetch.
+    /// Bounded consecutive chain beginning at the publisher-selected checkpoint.
     pub finality_chain: Vec<BridgeFinalityProof>,
     /// Context id of the last verified proof, suitable for durable checkpoint promotion.
     pub evaluated_context_id: HeightContextId,
@@ -383,7 +360,7 @@ pub struct OfflineRecipientReceiveOfferV2 {
     pub version: u16,
     /// Exact later-created signed payment request.
     pub request: KagemushaRecipientPaymentRequestV2,
-    /// Reusable receiver lineage prefetched while online.
+    /// Publisher-supplied reusable receiver lineage.
     pub lineage: OfflineRecipientRegistrationLineage,
     /// Optional app-publisher checkpoint update envelope, capped at 2 KiB.
     pub publisher_checkpoint_envelope: Option<Vec<u8>>,
@@ -660,18 +637,21 @@ mod tests {
             required_bridge_abi_version:
                 iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_NATIVE_BRIDGE_ABI_V4,
             max_hops: iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_MAX_PEER_HOPS_V2,
-            ready: true,
+            ready: false,
             assets: Vec::new(),
-            blockers: Vec::new(),
+            blockers: iroha_data_model::offline::offline_capability_activation_blockers_v1(),
         }
     }
     #[test]
     fn universal_capability_roundtrips_without_asset_enrollment() {
         let capability = universal_capability_status();
         assert!(!capability.mandatory);
-        assert!(capability.ready);
+        assert!(!capability.ready);
         assert!(capability.assets.is_empty());
-        assert!(capability.blockers.is_empty());
+        assert_eq!(
+            capability.blockers,
+            iroha_data_model::offline::offline_capability_activation_blockers_v1()
+        );
         let json = norito::json::to_vec(&capability).expect("encode capability JSON");
         let decoded_json: OfflineStatus =
             norito::json::from_slice(&json).expect("decode capability JSON");

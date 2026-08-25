@@ -149,7 +149,7 @@ seiyaku VendorBridgeGate {
     .execute(&authority, &mut stx)
     .expect("register vendor-bridge contract manifest");
     let contract_address = ContractAddress::derive(
-        &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
+        &"0000000000000000000000000000000000000000000000000000000000000001"
             .parse()
             .expect("canonical test network id"),
         &authority,

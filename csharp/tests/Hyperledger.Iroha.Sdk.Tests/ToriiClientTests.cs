@@ -22,8 +22,8 @@ public sealed partial class ToriiClientTests
     private const string OnboardingFixtureAlias = "merchant@banka.paynet";
     private static readonly byte[] CanonicalPrivateKeySeed = Convert.FromHexString("616e64726f69642d666978747572652d7369676e696e672d6b65792d30313032");
     private const string CanonicalAccountId = "sorauﾛ1NｲﾘｳdPBeｼRoｸQ2ﾔgｼQqeｶﾍｽﾁhRW2ｺｿZ9ﾕｦUﾅRX5NJYH53";
-    private const string CanonicalNetworkId = "hash:32C903E5B3497E34C2B844EBFE8A39C19E6CF8F95D44C1FFB8BA9DCB42F91149#A2F0";
-    private const string AlternateNetworkId = "hash:82531CE8EAE8BFF6BEECA4698BFD13A3BC8BEC5F0EE0D23D428C97FC17AB0F3B#3E94";
+    private const string CanonicalNetworkId = "32c903e5b3497e34c2b844ebfe8a39c19e6cf8f95d44c1ffb8ba9dcb42f91149";
+    private const string AlternateNetworkId = "82531ce8eae8bff6beeca4698bfd13a3bc8bec5f0ee0d23d428c97fc17ab0f3b";
     private static readonly string MultisigMemberAccountId1 = TestAccountId(0x41);
     private static readonly string MultisigMemberAccountId2 = TestAccountId(0x42);
     private static readonly string CanonicalMultisigAccountId = TestAccountId(0x43);
@@ -13194,7 +13194,7 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
             Content = new StringContent("""
                 {
                   "algorithm": "scrypt-leading-zero-bits-v2",
-                  "network_id": "hash:32C903E5B3497E34C2B844EBFE8A39C19E6CF8F95D44C1FFB8BA9DCB42F91149#A2F0",
+                  "network_id": "32c903e5b3497e34c2b844ebfe8a39c19e6cf8f95d44c1ffb8ba9dcb42f91149",
                   "chain_discriminant": 753,
                   "difficulty_bits": 10,
                   "anchor_height": 68,
@@ -13227,7 +13227,7 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
         yield return new object[] { "algorithm", ToriiAccountFaucetPow.Algorithm + "\u0001", "control characters" };
         yield return new object[] { "algorithm", "scrypt-leading-zero-bits-v1", ToriiAccountFaucetPow.Algorithm };
         yield return new object?[] { "network_id", null, "canonical NetworkId string" };
-        yield return new object[] { "network_id", AlternateNetworkId.ToLowerInvariant(), "canonical checksummed NetworkId" };
+        yield return new object[] { "network_id", AlternateNetworkId.ToUpperInvariant(), "64 lowercase hexadecimal NetworkId" };
         yield return new object[] { "difficulty_bits", (byte)0, "positive" };
         yield return new object[] { "anchor_height", 0UL, "positive" };
         yield return new object?[] { "anchor_block_hash_hex", null, "must not be null" };
@@ -13784,7 +13784,7 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
                 Content = new StringContent("""
                     {
                       "algorithm": "scrypt-leading-zero-bits-v2",
-                      "network_id": "hash:32C903E5B3497E34C2B844EBFE8A39C19E6CF8F95D44C1FFB8BA9DCB42F91149#A2F0",
+                      "network_id": "32c903e5b3497e34c2b844ebfe8a39c19e6cf8f95d44c1ffb8ba9dcb42f91149",
                       "chain_discriminant": 753,
                       "difficulty_bits": 8,
                       "anchor_height": 68,
@@ -13822,7 +13822,7 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
                     Content = new StringContent("""
                         {
                           "algorithm": "scrypt-leading-zero-bits-v2",
-                          "network_id": "hash:32C903E5B3497E34C2B844EBFE8A39C19E6CF8F95D44C1FFB8BA9DCB42F91149#A2F0",
+                          "network_id": "32c903e5b3497e34c2b844ebfe8a39c19e6cf8f95d44c1ffb8ba9dcb42f91149",
                           "chain_discriminant": 753,
                           "difficulty_bits": 8,
                           "anchor_height": 68,

@@ -1,14 +1,14 @@
-//! Exact Eq/Fp and Ep/Fq STATE relation circuits.
+//! Exact Eq/Fp and Ep/Fq `StateLeaf` relation circuits.
 //!
 //! These fixed-shape circuits range-constrain every semantic `u32`, enforce the
-//! exact header/parity/protocol/operation contract, bind the 229 words to 33
+//! exact header/parity/protocol/operation contract, bind the 93 semantic words to 14
 //! canonical 224-bit cells in one public-instance column, enforce exact u128
 //! send/receive conservation, constrain the three canonical private heads, and
 //! close deterministic opening/transition/semantic hashing for `ReceiveFold`,
-//! and constrain the deterministic seed and both branch openings for
-//! `SendSplit`. Recursive parents, helper proofs, and canonical `SendSplit`
-//! transition/semantic hashing remain deferred. Consequently the production
-//! verifier remains unavailable.
+//! and constrain the deterministic seed, both branch openings, canonical
+//! context, and exact Norito transition/semantic hashing for `SendSplit`.
+//! The separate final `State` wrapper recursively authenticates this leaf and
+//! owns the 136-word reciprocal-audit tail, avoiding a transcript fixed point.
 
 use std::sync::Mutex;
 
@@ -28,9 +28,9 @@ use halo2_proofs::{
 use super::{
     OfflineCashHalo2ParityV1,
     state_abi::{
-        OfflineCashStateAbiErrorV1, OfflineCashStatePublicInstancesV1, STATE_ABI_WORDS,
-        STATE_INSTANCE_CELLS, STATE_INSTANCE_CELLS_MAX, STATE_OPERATION_WORD,
-        STATE_WORDS_PER_INSTANCE, fixed_state_word_v1, pack_words_as_field,
+        OfflineCashStateAbiErrorV1, OfflineCashStateLeafPublicInstancesV1,
+        STATE_INSTANCE_CELLS_MAX, STATE_LEAF_ABI_WORDS, STATE_LEAF_INSTANCE_CELLS,
+        STATE_OPERATION_WORD, STATE_WORDS_PER_INSTANCE, fixed_state_word_v1, pack_words_as_field,
     },
     state_relation::{
         OfflineCashStatePrivateWitnessV1,
@@ -44,8 +44,8 @@ const U32_BITS: usize = 32;
 const WORD_ROWS: usize = U32_BITS + 1;
 const PACKED_BITS: u32 = (STATE_WORDS_PER_INSTANCE * U32_BITS) as u32;
 
-const _: () = assert!(STATE_INSTANCE_CELLS <= STATE_INSTANCE_CELLS_MAX);
-const _: () = assert!(STATE_ABI_WORDS * WORD_ROWS + STATE_INSTANCE_CELLS < (1 << 16));
+const _: () = assert!(STATE_LEAF_INSTANCE_CELLS <= STATE_INSTANCE_CELLS_MAX);
+const _: () = assert!(STATE_LEAF_ABI_WORDS * WORD_ROWS + STATE_LEAF_INSTANCE_CELLS < (1 << 16));
 
 #[derive(Clone, Debug)]
 pub(super) struct OfflineCashStateCircuitConfigV1 {
@@ -159,7 +159,7 @@ fn option_field<F: PrimeField>(value: Option<u64>) -> Value<F> {
 }
 
 fn synthesize_state_v1<F: PrimeField>(
-    words: Option<&[u32; STATE_ABI_WORDS]>,
+    words: Option<&[u32; STATE_LEAF_ABI_WORDS]>,
     private_witness: Option<&OfflineCashStatePrivateWitnessV1>,
     parity: OfflineCashHalo2ParityV1,
     config: OfflineCashStateCircuitConfigV1,
@@ -168,8 +168,8 @@ fn synthesize_state_v1<F: PrimeField>(
     let word_cells = layouter.assign_region(
         || "offline cash STATE canonical u32 words",
         |mut region| {
-            let mut cells = Vec::with_capacity(STATE_ABI_WORDS);
-            for word_index in 0..STATE_ABI_WORDS {
+            let mut cells = Vec::with_capacity(STATE_LEAF_ABI_WORDS);
+            for word_index in 0..STATE_LEAF_ABI_WORDS {
                 let base = word_index * WORD_ROWS;
                 config.q_start.enable(&mut region, base)?;
                 region.assign_advice(config.accumulator, base, Value::known(F::ZERO));
@@ -230,13 +230,13 @@ fn synthesize_state_v1<F: PrimeField>(
     let packed_cells = layouter.assign_region(
         || "offline cash STATE canonical 224-bit public cells",
         |mut region| {
-            let mut cells = Vec::with_capacity(STATE_INSTANCE_CELLS);
-            for cell_index in 0..STATE_INSTANCE_CELLS {
+            let mut cells = Vec::with_capacity(STATE_LEAF_INSTANCE_CELLS);
+            for cell_index in 0..STATE_LEAF_INSTANCE_CELLS {
                 config.q_pack.enable(&mut region, cell_index)?;
                 let start = cell_index * STATE_WORDS_PER_INSTANCE;
                 let end = start
                     .saturating_add(STATE_WORDS_PER_INSTANCE)
-                    .min(STATE_ABI_WORDS);
+                    .min(STATE_LEAF_ABI_WORDS);
                 for lane in 0..STATE_WORDS_PER_INSTANCE {
                     let word_index = start + lane;
                     if word_index < end {
@@ -277,23 +277,23 @@ fn synthesize_state_v1<F: PrimeField>(
     Ok(())
 }
 
-/// Exact Eq/Fp public-binding scaffold for the STATE role.
-pub(super) struct OfflineCashEqStateCircuitV1 {
-    words: Option<[u32; STATE_ABI_WORDS]>,
+/// Exact Eq/Fp public-binding circuit for the `StateLeaf` role.
+pub(super) struct OfflineCashEqStateLeafCircuitV1 {
+    words: Option<[u32; STATE_LEAF_ABI_WORDS]>,
     private_witness: Mutex<Option<OfflineCashStatePrivateWitnessV1>>,
 }
 
-impl core::fmt::Debug for OfflineCashEqStateCircuitV1 {
+impl core::fmt::Debug for OfflineCashEqStateLeafCircuitV1 {
     fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         formatter
-            .debug_struct("OfflineCashEqStateCircuitV1")
+            .debug_struct("OfflineCashEqStateLeafCircuitV1")
             .field("has_public_words", &self.words.is_some())
             .field("private_witness", &"[REDACTED]")
             .finish()
     }
 }
 
-impl Default for OfflineCashEqStateCircuitV1 {
+impl Default for OfflineCashEqStateLeafCircuitV1 {
     fn default() -> Self {
         Self {
             words: None,
@@ -302,15 +302,15 @@ impl Default for OfflineCashEqStateCircuitV1 {
     }
 }
 
-impl OfflineCashEqStateCircuitV1 {
+impl OfflineCashEqStateLeafCircuitV1 {
     pub(super) fn new(
-        instances: OfflineCashStatePublicInstancesV1,
+        instances: OfflineCashStateLeafPublicInstancesV1,
         private_witness: OfflineCashStatePrivateWitnessV1,
     ) -> Result<Self, OfflineCashStateAbiErrorV1> {
         if instances.parity() != OfflineCashHalo2ParityV1::Eq {
             return Err(OfflineCashStateAbiErrorV1::ParityMismatch);
         }
-        private_witness.validate_against(&instances)?;
+        private_witness.validate_against_leaf(&instances)?;
         Ok(Self {
             words: Some(*instances.words()),
             private_witness: Mutex::new(Some(private_witness)),
@@ -319,7 +319,7 @@ impl OfflineCashEqStateCircuitV1 {
 
     #[cfg(test)]
     pub(super) fn from_words_for_test(
-        words: [u32; STATE_ABI_WORDS],
+        words: [u32; STATE_LEAF_ABI_WORDS],
         private_witness: OfflineCashStatePrivateWitnessV1,
     ) -> Self {
         Self {
@@ -338,7 +338,7 @@ impl OfflineCashEqStateCircuitV1 {
     }
 }
 
-impl Circuit<Fp> for OfflineCashEqStateCircuitV1 {
+impl Circuit<Fp> for OfflineCashEqStateLeafCircuitV1 {
     type Config = OfflineCashStateCircuitConfigV1;
     type FloorPlanner = V1;
     #[cfg(feature = "circuit-params")]
@@ -382,23 +382,23 @@ impl Circuit<Fp> for OfflineCashEqStateCircuitV1 {
     }
 }
 
-/// Exact Ep/Fq public-binding scaffold for the STATE role.
-pub(super) struct OfflineCashEpStateCircuitV1 {
-    words: Option<[u32; STATE_ABI_WORDS]>,
+/// Exact Ep/Fq public-binding circuit for the `StateLeaf` role.
+pub(super) struct OfflineCashEpStateLeafCircuitV1 {
+    words: Option<[u32; STATE_LEAF_ABI_WORDS]>,
     private_witness: Mutex<Option<OfflineCashStatePrivateWitnessV1>>,
 }
 
-impl core::fmt::Debug for OfflineCashEpStateCircuitV1 {
+impl core::fmt::Debug for OfflineCashEpStateLeafCircuitV1 {
     fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         formatter
-            .debug_struct("OfflineCashEpStateCircuitV1")
+            .debug_struct("OfflineCashEpStateLeafCircuitV1")
             .field("has_public_words", &self.words.is_some())
             .field("private_witness", &"[REDACTED]")
             .finish()
     }
 }
 
-impl Default for OfflineCashEpStateCircuitV1 {
+impl Default for OfflineCashEpStateLeafCircuitV1 {
     fn default() -> Self {
         Self {
             words: None,
@@ -407,15 +407,15 @@ impl Default for OfflineCashEpStateCircuitV1 {
     }
 }
 
-impl OfflineCashEpStateCircuitV1 {
+impl OfflineCashEpStateLeafCircuitV1 {
     pub(super) fn new(
-        instances: OfflineCashStatePublicInstancesV1,
+        instances: OfflineCashStateLeafPublicInstancesV1,
         private_witness: OfflineCashStatePrivateWitnessV1,
     ) -> Result<Self, OfflineCashStateAbiErrorV1> {
         if instances.parity() != OfflineCashHalo2ParityV1::Ep {
             return Err(OfflineCashStateAbiErrorV1::ParityMismatch);
         }
-        private_witness.validate_against(&instances)?;
+        private_witness.validate_against_leaf(&instances)?;
         Ok(Self {
             words: Some(*instances.words()),
             private_witness: Mutex::new(Some(private_witness)),
@@ -424,7 +424,7 @@ impl OfflineCashEpStateCircuitV1 {
 
     #[cfg(test)]
     pub(super) fn from_words_for_test(
-        words: [u32; STATE_ABI_WORDS],
+        words: [u32; STATE_LEAF_ABI_WORDS],
         private_witness: OfflineCashStatePrivateWitnessV1,
     ) -> Self {
         Self {
@@ -443,7 +443,7 @@ impl OfflineCashEpStateCircuitV1 {
     }
 }
 
-impl Circuit<Fq> for OfflineCashEpStateCircuitV1 {
+impl Circuit<Fq> for OfflineCashEpStateLeafCircuitV1 {
     type Config = OfflineCashStateCircuitConfigV1;
     type FloorPlanner = V1;
     #[cfg(feature = "circuit-params")]

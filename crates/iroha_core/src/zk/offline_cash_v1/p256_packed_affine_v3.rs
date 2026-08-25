@@ -1,13 +1,18 @@
-//! Private, non-authorizing packed affine P-256 ECDSA prototype.
+//! Private packed affine P-256 ECDSA child circuit.
 //!
-//! This privately declared module is source-settled evidence for a fail-closed
-//! k=17 candidate, not a backend or GuardBundle eligibility path.
-//! The circuit keeps the reviewed current-query proof shape (eight equality
-//! advice columns, one direct instance column, four fixed queries, two lookup
-//! arguments, degree seven, and 3,264 augmented IPA bytes) while replacing the
-//! row-infeasible recursive-FMA transpose with a packed row machine. Production
-//! row reporting remains closed until real synthesis, key generation, proof,
-//! and verification evidence has been admitted by a separately governed path.
+//! This privately declared module is the k=16 P-256 child relation selected
+//! only through the Offline Cash authenticated role/parity artifact boundary.
+//! Its degree-ten current-row machine contains two isolated eight-column
+//! logical lanes. Only rows with the same authenticated `(opcode, range_tag)`
+//! are paired, all equality aliases retain their lane offset, and public Bind
+//! rows deliberately use lane zero alone. This halves the semantic row count
+//! without changing a P-256 relation and honestly keeps the child on the same
+//! k=16 IPA domain as every other GuardBundle child. The internal ordinary
+//! Poseidon proof is 4,544 bytes; it is private recursion evidence and is not
+//! subject to the 3,200-byte final-State wire cap. Focused qualification covers
+//! the configured shape, real k=16 synthesis/KAT, key generation, and both
+//! Pasta fields; production activation separately requires reviewed signed
+//! artifacts and the secure backend gate.
 //!
 //! Range lookups use the field-sound tuple
 //! `(s * value, s^2 * value) in {(t * u, t^2 * u)}`. Every active width has a
@@ -24,9 +29,12 @@
 //! through the verifier-derived instance tail. Complete affine exceptional
 //! cases, canonical coordinates, low-S, digest/x single reduction, inactive
 //! witness zeroization, and an exact row-cap diagnostic are part of this
-//! prototype.
+//! circuit.
 
-use std::{collections::HashMap, marker::PhantomData};
+use std::{
+    collections::{BTreeMap, HashMap},
+    marker::PhantomData,
+};
 
 use der_parser::num_bigint::{BigInt, BigUint, Sign};
 use halo2_base::{
@@ -44,8 +52,10 @@ use halo2_base::{
 };
 use zeroize::Zeroizing;
 
-const K: u32 = 17;
-const ADVICE_COLUMNS: usize = 8;
+const K: u32 = 16;
+const LOGICAL_LANE_COLUMNS: usize = 8;
+const LOGICAL_LANES: usize = 2;
+const ADVICE_COLUMNS: usize = LOGICAL_LANE_COLUMNS * LOGICAL_LANES;
 const PUBLIC_BYTES: usize = 65 + 32 + 64;
 const LOOKUP_BITS: usize = 15;
 const RANGE_CHUNK_BITS: [usize; 11] = [2, 4, 6, 8, 9, 10, 11, 12, 13, 14, 15];
@@ -73,13 +83,16 @@ const MAXIMUM_CARRY_BIAS_BITS: usize = 90;
 const PACKED_COEFFICIENT_BOUND_BITS: usize = 176;
 const WINDOW_BITS: usize = 4;
 const WINDOWS: usize = 256 / WINDOW_BITS;
-const K17_MAX_ASSIGNED_ROWS: usize = (1 << K) - 9;
-const P256_PACKED_AFFINE_V3_SEMANTIC_ROWS: usize = 108_877;
-const P256_PACKED_AFFINE_V3_RESERVED_ROWS: usize = 16_384;
+const K16_MAX_ASSIGNED_ROWS: usize = (1 << K) - 9;
+// The two-lane transpose overlays every sign and select relation on lookup-only
+// rows, then pads its exact 64,886 semantic rows to the fixed typed-table
+// height. The table remains the dominant region and leaves 162 usable rows.
+const P256_PACKED_AFFINE_V3_SEMANTIC_ROWS: usize = 64_886;
+const P256_PACKED_AFFINE_V3_RESERVED_ROWS: usize = TABLE_ROWS - P256_PACKED_AFFINE_V3_SEMANTIC_ROWS;
 const P256_PACKED_AFFINE_V3_UPPER_ROWS: usize =
     P256_PACKED_AFFINE_V3_SEMANTIC_ROWS + P256_PACKED_AFFINE_V3_RESERVED_ROWS;
 const P256_PACKED_AFFINE_V3_HEADROOM_ROWS: usize =
-    K17_MAX_ASSIGNED_ROWS - P256_PACKED_AFFINE_V3_UPPER_ROWS;
+    K16_MAX_ASSIGNED_ROWS - P256_PACKED_AFFINE_V3_UPPER_ROWS;
 
 const AGGREGATE_SLOPE_RELATIONS: usize = 398;
 const X_RELATIONS: usize = 398;
@@ -125,26 +138,26 @@ pub(super) struct P256PackedAffineShapeV3 {
     pub(super) lookup_arguments: usize,
     pub(super) proof_points: usize,
     pub(super) proof_scalars: usize,
-    pub(super) raw_proof_bytes: usize,
-    pub(super) augmented_proof_bytes: usize,
+    /// Exact ordinary Poseidon-transcript proof bytes. Offline Cash V1 does
+    /// not append the legacy 32-byte folded-generator suffix.
+    pub(super) ordinary_proof_bytes: usize,
 }
 
 pub(super) const P256_PACKED_AFFINE_SHAPE_V3: P256PackedAffineShapeV3 = P256PackedAffineShapeV3 {
-    degree: 7,
-    advice_columns: 8,
-    advice_queries: 8,
+    degree: 10,
+    advice_columns: 16,
+    advice_queries: 16,
     instance_columns: 1,
     instance_queries: 1,
     fixed_columns: 4,
     fixed_queries: 4,
     selectors: 0,
-    equality_columns: 8,
+    equality_columns: 16,
     permutation_chunks: 2,
-    lookup_arguments: 2,
-    proof_points: 59,
-    proof_scalars: 42,
-    raw_proof_bytes: 3_232,
-    augmented_proof_bytes: 3_264,
+    lookup_arguments: 4,
+    proof_points: 74,
+    proof_scalars: 68,
+    ordinary_proof_bytes: 4_544,
 };
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -159,7 +172,11 @@ pub(super) struct P256PackedAffineRowsV3 {
     pub(super) sign_rows: usize,
     pub(super) selection_rows: usize,
     pub(super) lookup_only_rows: usize,
+    /// Disabled rows between the assigned relation and the reviewed semantic
+    /// padding boundary.
     pub(super) padding_rows: usize,
+    /// Additional disabled rows forced by the larger fixed typed table.
+    pub(super) table_padding_rows: usize,
     pub(super) semantic_rows: usize,
     pub(super) reserved_rows: usize,
     pub(super) upper_rows: usize,
@@ -268,11 +285,10 @@ impl<F: BigPrimeField> P256PackedAffineEcdsaCircuitV3<F> {
     }
 
     pub(super) fn row_report(&self) -> Result<P256PackedAffineRowsV3, Error> {
-        // A source-level ledger is not synthesized evidence. This public-to-
-        // the-parent-module diagnostic deliberately stays closed until a
-        // separately reviewed backend admits both Pasta keygen/prove/verify
-        // artifacts for this exact circuit identity.
-        Err(Error::Synthesis)
+        // Geometry reporting is diagnostic, not release authority. Production
+        // admission remains bound to authenticated artifacts, while callers
+        // can still fail closed on the exact common-k16 trace capacity.
+        self.build_trace().map(|trace| trace.rows)
     }
 
     #[cfg(test)]
@@ -322,6 +338,11 @@ impl<F: BigPrimeField> P256PackedAffineEcdsaCircuitV3<F> {
         self.build_builder_diagnostic()?.finish()
     }
 
+    #[cfg(test)]
+    fn build_trace_unbounded_for_test(&self) -> Result<PackedTrace<F>, P256PackedAffineFailureV3> {
+        transpose_packed_trace_with_capacity(self.build_builder_diagnostic()?, false)
+    }
+
     fn build_builder_diagnostic(&self) -> Result<PackedBuilder<F>, P256PackedAffineFailureV3> {
         let mut builder = PackedBuilder::new();
         constrain_ecdsa(
@@ -336,7 +357,9 @@ impl<F: BigPrimeField> P256PackedAffineEcdsaCircuitV3<F> {
 }
 
 #[derive(Clone, Debug)]
-pub(super) struct P256PackedAffineConfigV3 {
+/// Physical common-k16 dual-lane configuration shared by the opaque Eq/Ep
+/// child wrappers in the enclosing ZK module.
+pub(in crate::zk) struct P256PackedAffineConfigV3 {
     advice: [Column<Advice>; ADVICE_COLUMNS],
     instance: Column<Instance>,
     opcode: Column<Fixed>,
@@ -354,17 +377,24 @@ enum Opcode {
     Sparse = 3,
     Dense = 4,
     Select = 5,
-    // Numeric opcode six is deliberately unused. Wide carry rows use the
-    // Dense layout, which makes every active selector vanish at fixed-zero
-    // unusable and blinding rows without raising the maximum degree.
+    // Lookup-only rows retain their two typed-range cells while using the six
+    // otherwise idle cells for Boolean, signed-magnitude, or select checks.
+    LookupBoolean = 6,
     Sign = 7,
+    LookupSign = 8,
+    LookupSelect = 9,
 }
 
-const Q_BIND_ROOTS: [u64; 6] = [0, 2, 3, 4, 5, 7];
-const Q_SPARSE_ROOTS: [u64; 4] = [0, 2, 4, 5];
-const Q_DENSE_ROOTS: [u64; 5] = [0, 2, 3, 5, 7];
-const Q_SELECT_ROOTS: [u64; 5] = [0, 2, 3, 4, 7];
-const Q_SIGN_ROOTS: [u64; 5] = [0, 2, 3, 4, 5];
+const Q_BIND_ROOTS: [u64; 9] = [0, 2, 3, 4, 5, 6, 7, 8, 9];
+// Sparse deliberately also evaluates on Bind (all relation cells are zero)
+// and standalone Sign (the signed-magnitude identity is the same cubic).
+const Q_SPARSE_ROOTS: [u64; 7] = [0, 2, 4, 5, 6, 8, 9];
+const Q_DENSE_ROOTS: [u64; 8] = [0, 2, 3, 5, 6, 7, 8, 9];
+const Q_SELECT_ROOTS: [u64; 8] = [0, 2, 3, 4, 6, 7, 8, 9];
+const Q_SIGN_ROOTS: [u64; 8] = [0, 2, 3, 4, 5, 6, 8, 9];
+const Q_LOOKUP_BOOLEAN_ROOTS: [u64; 8] = [0, 2, 3, 4, 5, 7, 8, 9];
+const Q_LOOKUP_SIGN_ROOTS: [u64; 8] = [0, 2, 3, 4, 5, 6, 7, 9];
+const Q_LOOKUP_SELECT_ROOTS: [u64; 8] = [0, 2, 3, 4, 5, 6, 7, 8];
 
 fn roots_except<F: BigPrimeField>(opcode: Expression<F>, roots: &[u64]) -> Expression<F> {
     roots
@@ -392,9 +422,9 @@ impl P256PackedAffineConfigV3 {
             let public = meta.query_instance(instance, Rotation::cur());
             let op = meta.query_fixed(opcode, Rotation::cur());
 
-            // Every selector has an explicit fixed-zero root. Numeric opcode
-            // six is unused, allowing the lowest-degree overlap polynomials
-            // below. On assigned rows their only deliberate overlaps are:
+            // Every selector that could see a nonzero unusable/blinding row
+            // has an explicit fixed-zero root. On assigned rows the only
+            // deliberate overlaps are:
             //
             // * Bind: all semantic columns are zero (the instance is v7);
             // * Sign under q_sparse: sign*(-2)*m + m - signed = 0;
@@ -403,61 +433,133 @@ impl P256PackedAffineConfigV3 {
             // q_range additionally vanishes on lookup-bearing Sparse rows by
             // its (opcode - 3) factor. Its tag factor makes it vanish on every
             // other semantic, padding, unusable, and blinding row.
-            let q_bind = roots_except(op.clone(), &Q_BIND_ROOTS);
-            let q_range = meta.query_fixed(range_tag, Rotation::cur())
-                * (op.clone() - Expression::Constant(F::from(3)));
-            let q_sparse = roots_except(op.clone(), &Q_SPARSE_ROOTS);
-            let q_dense = roots_except(op.clone(), &Q_DENSE_ROOTS);
-            let q_select = roots_except(op.clone(), &Q_SELECT_ROOTS);
-            let q_sign = roots_except(op, &Q_SIGN_ROOTS);
+            let mut lane_constraints = |v: &[Expression<F>], bind_public: Option<Expression<F>>| {
+                let public_or_zero = bind_public
+                    .clone()
+                    .unwrap_or_else(|| Expression::Constant(F::ZERO));
+                let q_bind = roots_except(op.clone(), &Q_BIND_ROOTS);
+                let q_range = [3_u64, 6, 8, 9].into_iter().fold(
+                    meta.query_fixed(range_tag, Rotation::cur()),
+                    |value, root| value * (op.clone() - Expression::Constant(F::from(root))),
+                );
+                let q_sparse = roots_except(op.clone(), &Q_SPARSE_ROOTS);
+                let q_dense = roots_except(op.clone(), &Q_DENSE_ROOTS);
+                let q_select = roots_except(op.clone(), &Q_SELECT_ROOTS);
+                let q_sign = roots_except(op.clone(), &Q_SIGN_ROOTS);
+                let q_lookup_boolean = roots_except(op.clone(), &Q_LOOKUP_BOOLEAN_ROOTS);
+                let q_lookup_sign = roots_except(op.clone(), &Q_LOOKUP_SIGN_ROOTS);
+                let q_lookup_select = roots_except(op.clone(), &Q_LOOKUP_SELECT_ROOTS);
 
-            let range_recomposition = v[0].clone()
-                + v[1].clone() * Expression::Constant(F::from(1_u64 << 15))
-                + v[2].clone() * Expression::Constant(F::from(1_u64 << 30))
-                + v[3].clone() * Expression::Constant(F::from(1_u64 << 45))
-                + v[4].clone() * Expression::Constant(F::from(1_u64 << 60))
-                + v[5].clone()
-                    * Expression::Constant(biguint_to_fe::<F>(&(BigUint::from(1_u8) << 75_usize)))
-                - v[6].clone();
-            let sparse = v[3].clone() * v[1].clone() * v[2].clone() + v[6].clone() - v[5].clone();
-            let dense = v[0].clone() * v[1].clone()
-                + v[2].clone() * v[3].clone()
-                + v[4].clone() * v[7].clone()
-                + v[6].clone()
-                - v[5].clone();
-            let select_zero =
-                v[0].clone() + v[6].clone() * (v[1].clone() - v[0].clone()) - v[2].clone();
-            let select_one =
-                v[3].clone() + v[6].clone() * (v[4].clone() - v[3].clone()) - v[5].clone();
-            let sign_zero = v[5].clone()
-                - v[2].clone()
-                    * (Expression::Constant(F::ONE)
-                        - Expression::Constant(F::from(2)) * v[3].clone());
-            let sign_one = v[4].clone()
-                - v[0].clone()
-                    * (Expression::Constant(F::ONE)
-                        - Expression::Constant(F::from(2)) * v[3].clone());
+                let range_recomposition = v[0].clone()
+                    + v[1].clone() * Expression::Constant(F::from(1_u64 << 15))
+                    + v[2].clone() * Expression::Constant(F::from(1_u64 << 30))
+                    + v[3].clone() * Expression::Constant(F::from(1_u64 << 45))
+                    + v[4].clone() * Expression::Constant(F::from(1_u64 << 60))
+                    + v[5].clone()
+                        * Expression::Constant(biguint_to_fe::<F>(
+                            &(BigUint::from(1_u8) << 75_usize),
+                        ))
+                    - v[6].clone();
+                let sparse =
+                    v[3].clone() * v[1].clone() * v[2].clone() + v[6].clone() - v[5].clone();
+                let dense = v[0].clone() * v[1].clone()
+                    + v[2].clone() * v[3].clone()
+                    + v[4].clone() * v[7].clone()
+                    + v[6].clone()
+                    - v[5].clone();
+                let select_zero =
+                    v[0].clone() + v[6].clone() * (v[1].clone() - v[0].clone()) - v[2].clone();
+                let select_one =
+                    v[3].clone() + v[6].clone() * (v[4].clone() - v[3].clone()) - v[5].clone();
+                let sign_zero = v[5].clone()
+                    - v[2].clone()
+                        * (Expression::Constant(F::ONE)
+                            - Expression::Constant(F::from(2)) * v[3].clone());
+                let sign_one = v[4].clone()
+                    - v[0].clone()
+                        * (Expression::Constant(F::ONE)
+                            - Expression::Constant(F::from(2)) * v[3].clone());
+                // LookupSign keeps v0/v4 for typed range cells. The remaining
+                // six cells encode two signed magnitudes with one common
+                // `(sign, active)` pair:
+                //   v1=sign, v2=active, v3/v5=magnitude/signed lane zero,
+                //   v6/v7=magnitude/signed lane one.
+                let lookup_sign_zero = v[5].clone()
+                    - v[3].clone()
+                        * (Expression::Constant(F::ONE)
+                            - Expression::Constant(F::from(2)) * v[1].clone());
+                let lookup_sign_one = v[7].clone()
+                    - v[6].clone()
+                        * (Expression::Constant(F::ONE)
+                            - Expression::Constant(F::from(2)) * v[1].clone())
+                    - public_or_zero.clone();
+                // LookupSelect keeps v0/v4 for typed range cells and carries
+                // one complete select in v1/v2/v3 with its bit in v5.
+                let lookup_select =
+                    v[1].clone() + v[5].clone() * (v[2].clone() - v[1].clone()) - v[3].clone();
 
-            vec![
-                q_bind * (v[7].clone() - public),
-                q_range.clone() * range_recomposition,
-                q_range.clone() * (Expression::Constant(F::ONE) - v[7].clone()) * v[6].clone(),
-                q_sparse * sparse,
-                q_dense * dense,
-                q_select.clone() * select_zero,
-                q_select * select_one,
-                q_sign.clone() * sign_zero,
-                q_sign.clone() * sign_one,
-                q_sign.clone() * v[3].clone() * (v[3].clone() - Expression::Constant(F::ONE)),
-                q_sign.clone() * (Expression::Constant(F::ONE) - v[7].clone()) * v[2].clone(),
-                q_sign.clone() * (Expression::Constant(F::ONE) - v[7].clone()) * v[0].clone(),
-                q_sign * (Expression::Constant(F::ONE) - v[7].clone()) * v[3].clone(),
-            ]
+                let mut constraints = match bind_public {
+                    Some(public) => vec![q_bind.clone() * (v[7].clone() - public)],
+                    None => v
+                        .iter()
+                        .map(|value| q_bind.clone() * value.clone())
+                        .collect(),
+                };
+                constraints.extend([
+                    q_range.clone() * range_recomposition,
+                    q_range.clone() * (Expression::Constant(F::ONE) - v[7].clone()) * v[6].clone(),
+                    q_sparse * sparse,
+                    q_dense * dense,
+                    q_select.clone() * select_zero,
+                    q_select * select_one,
+                    q_sign.clone() * sign_zero,
+                    q_sign.clone() * sign_one,
+                    q_sign.clone() * v[3].clone() * (v[3].clone() - Expression::Constant(F::ONE)),
+                    q_sign.clone() * (Expression::Constant(F::ONE) - v[7].clone()) * v[2].clone(),
+                    q_sign.clone() * (Expression::Constant(F::ONE) - v[7].clone()) * v[0].clone(),
+                    q_sign * (Expression::Constant(F::ONE) - v[7].clone()) * v[3].clone(),
+                    q_lookup_sign.clone() * lookup_sign_zero,
+                    q_lookup_sign.clone() * lookup_sign_one,
+                    q_lookup_sign.clone()
+                        * v[1].clone()
+                        * (v[1].clone() - Expression::Constant(F::ONE)),
+                    q_lookup_sign.clone()
+                        * (Expression::Constant(F::ONE) - v[2].clone())
+                        * v[3].clone(),
+                    q_lookup_sign.clone()
+                        * (Expression::Constant(F::ONE) - v[2].clone())
+                        * v[6].clone(),
+                    q_lookup_sign * (Expression::Constant(F::ONE) - v[2].clone()) * v[1].clone(),
+                    q_lookup_select.clone() * lookup_select,
+                    q_lookup_select.clone()
+                        * v[5].clone()
+                        * (v[5].clone() - Expression::Constant(F::ONE)),
+                ]);
+                for column in [1_usize, 2, 3, 5, 6, 7] {
+                    let value = if column == 7 {
+                        v[column].clone() - public_or_zero.clone()
+                    } else {
+                        v[column].clone()
+                    };
+                    constraints.push(
+                        q_lookup_boolean.clone()
+                            * value.clone()
+                            * (value - Expression::Constant(F::ONE)),
+                    );
+                }
+                constraints
+            };
+
+            let mut constraints = lane_constraints(&v[..LOGICAL_LANE_COLUMNS], Some(public));
+            constraints.extend(lane_constraints(&v[LOGICAL_LANE_COLUMNS..], None));
+            constraints
         });
 
         for (label, column) in [
-            ("packed typed range lane zero", advice[0]),
-            ("packed typed range lane one", advice[4]),
+            ("packed typed range physical zero logical zero", advice[0]),
+            ("packed typed range physical one logical zero", advice[4]),
+            ("packed typed range physical zero logical one", advice[8]),
+            ("packed typed range physical one logical one", advice[12]),
         ] {
             meta.lookup_any(label, |meta| {
                 let tag = meta.query_fixed(range_tag, Rotation::cur());
@@ -593,9 +695,99 @@ impl<F: BigPrimeField> AssignedRow<F> {
     }
 
     fn set(&mut self, column: usize, variable: CellVar<F>) {
+        debug_assert!(column < LOGICAL_LANE_COLUMNS);
         self.values[column] = variable.value;
         self.aliases.push((variable.id, column));
     }
+
+    fn copy_logical_lane_from(
+        &mut self,
+        lane: usize,
+        source: &Self,
+    ) -> Result<(), P256PackedAffineFailureV3> {
+        if lane >= LOGICAL_LANES
+            || source.opcode != self.opcode
+            || source.range_bits != self.range_bits
+            || source
+                .aliases
+                .iter()
+                .any(|(_, column)| *column >= LOGICAL_LANE_COLUMNS)
+        {
+            return Err(P256PackedAffineFailureV3::Source(
+                "two-lane transpose crossed an opcode, range tag, or logical-lane boundary",
+            ));
+        }
+        let offset = lane * LOGICAL_LANE_COLUMNS;
+        self.values[offset..offset + LOGICAL_LANE_COLUMNS]
+            .copy_from_slice(&source.values[..LOGICAL_LANE_COLUMNS]);
+        self.aliases.extend(
+            source
+                .aliases
+                .iter()
+                .map(|(variable, column)| (*variable, offset + *column)),
+        );
+        Ok(())
+    }
+}
+
+/// Pack only equal `(opcode, range_tag)` logical rows. No expression uses a
+/// rotation, so deterministic reordering among tag buckets is semantics-free;
+/// equality aliases keep their original variable id and receive exactly one
+/// lane offset. Bind rows never enter this function because the single public
+/// instance query belongs exclusively to logical lane zero.
+fn pack_identical_logical_rows_v3<F: BigPrimeField>(
+    logical_rows: Vec<AssignedRow<F>>,
+) -> Result<Vec<AssignedRow<F>>, P256PackedAffineFailureV3> {
+    let mut buckets = BTreeMap::<(u64, usize), Vec<AssignedRow<F>>>::new();
+    for row in logical_rows {
+        if row.opcode == Opcode::Bind {
+            return Err(P256PackedAffineFailureV3::Source(
+                "public Bind row reached the private two-lane packer",
+            ));
+        }
+        buckets
+            .entry((row.opcode as u64, row.range_bits))
+            .or_default()
+            .push(row);
+    }
+
+    let mut packed = Vec::new();
+    for ((_opcode, range_bits), rows) in buckets {
+        for pair in rows.chunks(LOGICAL_LANES) {
+            let mut physical = AssignedRow::zero(pair[0].opcode);
+            physical.range_bits = range_bits;
+            for (lane, logical) in pair.iter().enumerate() {
+                physical.copy_logical_lane_from(lane, logical)?;
+            }
+            packed.push(physical);
+        }
+    }
+    Ok(packed)
+}
+
+fn next_lookup_overlay_row_v3<'a, F>(
+    rows: &'a mut [AssignedRow<F>],
+    cursor: &mut usize,
+    opcode: Opcode,
+) -> Result<&'a mut AssignedRow<F>, P256PackedAffineFailureV3> {
+    let row = rows
+        .get_mut(*cursor)
+        .ok_or(P256PackedAffineFailureV3::Source(
+            "lookup-only range rows cannot host every sign and select relation",
+        ))?;
+    *cursor += 1;
+    if row.opcode != Opcode::Sparse
+        || row
+            .aliases
+            .iter()
+            .any(|(_, column)| *column != 0 && *column != 4)
+    {
+        return Err(P256PackedAffineFailureV3::Source(
+            "lookup overlay encountered a nonempty semantic cell",
+        ));
+    }
+    row.opcode = opcode;
+    Ok(row)
 }
 
 #[derive(Clone, Debug)]
@@ -1565,7 +1757,7 @@ impl<F: BigPrimeField> PackedBuilder<F> {
     }
 
     fn finish(self) -> Result<PackedTrace<F>, P256PackedAffineFailureV3> {
-        transpose_packed_trace(self)
+        transpose_packed_trace_with_capacity(self, true)
     }
 }
 
@@ -3718,7 +3910,7 @@ impl<F: BigPrimeField> PackedTrace<F> {
         config: &P256PackedAffineConfigV3,
         layouter: &mut impl Layouter<F>,
     ) -> Result<(), Error> {
-        if self.rows.total_rows > K17_MAX_ASSIGNED_ROWS {
+        if self.rows.total_rows > K16_MAX_ASSIGNED_ROWS {
             return Err(Error::Synthesis);
         }
         layouter.assign_region(
@@ -3767,12 +3959,13 @@ impl<F: BigPrimeField> PackedTrace<F> {
     }
 }
 
-fn transpose_packed_trace<F: BigPrimeField>(
+fn transpose_packed_trace_with_capacity<F: BigPrimeField>(
     mut builder: PackedBuilder<F>,
+    enforce_capacity: bool,
 ) -> Result<PackedTrace<F>, P256PackedAffineFailureV3> {
     // These are layout constants, so force them into the verifier-bound tail
     // before destructuring the builder. They may already be cached.
-    let (one, minus_two, negative_radix) = ensure_layout_constants(&mut builder);
+    let (one, _minus_two, negative_radix) = ensure_layout_constants(&mut builder);
     let _zero = *builder
         .constants
         .get(&BigInt::from(0))
@@ -3823,6 +4016,7 @@ fn transpose_packed_trace<F: BigPrimeField>(
 
     let mut pending = HashMap::<usize, Vec<CellVar<F>>>::new();
     let mut range_lookups = 0_usize;
+    let mut range_logical_rows = Vec::new();
     for range in range_rows {
         let mut row = AssignedRow::zero(Opcode::Range);
         let chunks = &range.bounded.chunks;
@@ -3857,9 +4051,11 @@ fn transpose_packed_trace<F: BigPrimeField>(
             }
             pending.entry(chunk.bits).or_default().push(chunk.cell);
         }
-        rows_data.push(row);
+        range_logical_rows.push(row);
     }
-    let range_rows_count = rows_data.len() - binding_rows;
+    let range_physical_rows = pack_identical_logical_rows_v3(range_logical_rows)?;
+    let range_rows_count = range_physical_rows.len();
+    rows_data.extend(range_physical_rows);
 
     let mut sparse_assigned = sparse_rows
         .into_iter()
@@ -3895,10 +4091,82 @@ fn transpose_packed_trace<F: BigPrimeField>(
             lookup_row += 1;
         }
     }
-    let lookup_only_rows = sparse_assigned.len() - original_sparse_rows;
-    rows_data.extend(sparse_assigned);
-    let sparse_rows_count = original_sparse_rows;
+    let mut lookup_only_logical_rows = sparse_assigned.split_off(original_sparse_rows);
+    let sparse_physical_rows = pack_identical_logical_rows_v3(sparse_assigned)?;
+    let sparse_rows_count = sparse_physical_rows.len();
+    rows_data.extend(sparse_physical_rows);
 
+    // Range-only Sparse rows use columns 0 and 4 for their two typed lookup
+    // cells; the other six cells were previously authenticated zero padding.
+    // Reuse that already-paid row height for every standalone Boolean, sign,
+    // and select relation. Each overlay has its own fixed opcode and gate, so
+    // no witness chooses which polynomial is active. All copied variables
+    // retain their original equality identity.
+    let mut lookup_overlay_cursor = 0_usize;
+    let mut pure_booleans = BTreeMap::<usize, CellVar<F>>::new();
+    let mut nontrivial_signs = BTreeMap::<(usize, usize), Vec<SignLane<F>>>::new();
+    for lane in sign_lanes {
+        if lane.magnitude.id == _zero.id && lane.signed.id == _zero.id && lane.active.id == one.id {
+            pure_booleans.entry(lane.sign.id).or_insert(lane.sign);
+        } else {
+            nontrivial_signs
+                .entry((lane.sign.id, lane.active.id))
+                .or_default()
+                .push(lane);
+        }
+    }
+    let boolean_cells = pure_booleans.into_values().collect::<Vec<_>>();
+    for cells in boolean_cells.chunks(6) {
+        let row = next_lookup_overlay_row_v3(
+            &mut lookup_only_logical_rows,
+            &mut lookup_overlay_cursor,
+            Opcode::LookupBoolean,
+        )?;
+        for (column, cell) in [1_usize, 2, 3, 5, 6, 7]
+            .into_iter()
+            .zip(cells.iter().copied())
+        {
+            row.set(column, cell);
+        }
+    }
+    for ((_sign_id, _active_id), lanes) in nontrivial_signs {
+        for pair in lanes.chunks(2) {
+            let row = next_lookup_overlay_row_v3(
+                &mut lookup_only_logical_rows,
+                &mut lookup_overlay_cursor,
+                Opcode::LookupSign,
+            )?;
+            row.set(1, pair[0].sign);
+            row.set(2, pair[0].active);
+            row.set(3, pair[0].magnitude);
+            row.set(5, pair[0].signed);
+            if let Some(second) = pair.get(1) {
+                if second.sign.id != pair[0].sign.id || second.active.id != pair[0].active.id {
+                    return Err(P256PackedAffineFailureV3::Source(
+                        "lookup sign overlay crossed a sign or active identity",
+                    ));
+                }
+                row.set(6, second.magnitude);
+                row.set(7, second.signed);
+            }
+        }
+    }
+    for lane in selects {
+        let row = next_lookup_overlay_row_v3(
+            &mut lookup_only_logical_rows,
+            &mut lookup_overlay_cursor,
+            Opcode::LookupSelect,
+        )?;
+        row.set(1, lane.left);
+        row.set(2, lane.right);
+        row.set(3, lane.output);
+        row.set(5, lane.bit);
+    }
+    let lookup_only_physical_rows = pack_identical_logical_rows_v3(lookup_only_logical_rows)?;
+    let lookup_only_rows = lookup_only_physical_rows.len();
+    rows_data.extend(lookup_only_physical_rows);
+
+    let mut dense_logical_rows = Vec::new();
     for relation in dense_rows {
         let mut row = AssignedRow::zero(Opcode::Dense);
         row.set(0, relation.products[0].0);
@@ -3909,11 +4177,13 @@ fn transpose_packed_trace<F: BigPrimeField>(
         row.set(7, relation.products[2].1);
         row.set(5, relation.output);
         row.set(6, relation.accumulator);
-        rows_data.push(row);
+        dense_logical_rows.push(row);
     }
-    let dense_rows_count =
-        rows_data.len() - binding_rows - range_rows_count - original_sparse_rows - lookup_only_rows;
+    let dense_physical_rows = pack_identical_logical_rows_v3(dense_logical_rows)?;
+    let dense_rows_count = dense_physical_rows.len();
+    rows_data.extend(dense_physical_rows);
 
+    let mut wide_logical_rows = Vec::new();
     for relation in wide_rows {
         // Wide carry equality is a Dense row:
         // left*1 + right*1 + carry_out*(-B) + carry_in - constant = 0.
@@ -3926,78 +4196,15 @@ fn transpose_packed_trace<F: BigPrimeField>(
         row.set(5, relation.constant);
         row.set(6, relation.carry_in);
         row.set(7, negative_radix);
-        rows_data.push(row);
+        wide_logical_rows.push(row);
     }
-    let wide_rows_count = rows_data.len()
-        - binding_rows
-        - range_rows_count
-        - original_sparse_rows
-        - lookup_only_rows
-        - dense_rows_count;
+    let wide_physical_rows = pack_identical_logical_rows_v3(wide_logical_rows)?;
+    let wide_rows_count = wide_physical_rows.len();
+    rows_data.extend(wide_physical_rows);
 
-    let mut signs_by_key = HashMap::<(usize, usize), Vec<SignLane<F>>>::new();
-    for lane in sign_lanes {
-        signs_by_key
-            .entry((lane.sign.id, lane.active.id))
-            .or_default()
-            .push(lane);
-    }
-    let mut sign_keys = signs_by_key.keys().copied().collect::<Vec<_>>();
-    sign_keys.sort_unstable();
-    let mut sign_rows_count = 0_usize;
-    for sign_key in sign_keys {
-        let lanes = signs_by_key
-            .remove(&sign_key)
-            .expect("sign key was collected from this map");
-        for pair in lanes.chunks(2) {
-            let mut row = AssignedRow::zero(Opcode::Sign);
-            // q_sparse proves lane zero as
-            // sign*(-2)*magnitude + magnitude - signed = 0. q_sign
-            // independently proves both lane equations and sign booleanity.
-            row.set(1, minus_two);
-            row.set(2, pair[0].magnitude);
-            row.set(3, pair[0].sign);
-            row.set(5, pair[0].signed);
-            row.set(6, pair[0].magnitude);
-            row.set(7, pair[0].active);
-            if let Some(second) = pair.get(1) {
-                debug_assert_eq!(second.sign.id, pair[0].sign.id);
-                debug_assert_eq!(second.active.id, pair[0].active.id);
-                row.set(0, second.magnitude);
-                row.set(4, second.signed);
-            }
-            rows_data.push(row);
-            sign_rows_count += 1;
-        }
-    }
-
-    let mut selects_by_bit = HashMap::<usize, Vec<SelectLane<F>>>::new();
-    for lane in selects {
-        selects_by_bit.entry(lane.bit.id).or_default().push(lane);
-    }
-    let mut bit_ids = selects_by_bit.keys().copied().collect::<Vec<_>>();
-    bit_ids.sort_unstable();
-    let mut selection_rows = 0_usize;
-    for bit_id in bit_ids {
-        let lanes = selects_by_bit
-            .remove(&bit_id)
-            .expect("bit id was collected from this map");
-        for pair in lanes.chunks(2) {
-            let mut row = AssignedRow::zero(Opcode::Select);
-            row.set(0, pair[0].left);
-            row.set(1, pair[0].right);
-            row.set(2, pair[0].output);
-            row.set(6, pair[0].bit);
-            if let Some(second) = pair.get(1) {
-                debug_assert_eq!(second.bit.id, pair[0].bit.id);
-                row.set(3, second.left);
-                row.set(4, second.right);
-                row.set(5, second.output);
-            }
-            rows_data.push(row);
-            selection_rows += 1;
-        }
-    }
+    // All sign/select relations are carried by the lookup overlay above.
+    let sign_rows_count = 0;
+    let selection_rows = 0;
 
     if relation_counts != ModularRelationKind::EXPECTED_COUNTS {
         return Err(P256PackedAffineFailureV3::Source(
@@ -4009,9 +4216,9 @@ fn transpose_packed_trace<F: BigPrimeField>(
             "verifier-bound family offset count is not exactly 30 plus 3",
         ));
     }
-    if constant_instances.len() != 228 {
+    if constant_instances.len() != 235 {
         return Err(P256PackedAffineFailureV3::Source(
-            "verifier-derived constant tail is not exactly 228 field elements",
+            "verifier-derived constant tail is not exactly 235 field elements",
         ));
     }
 
@@ -4019,8 +4226,9 @@ fn transpose_packed_trace<F: BigPrimeField>(
     let padding_rows = P256_PACKED_AFFINE_V3_SEMANTIC_ROWS.saturating_sub(assigned_semantic_rows);
     let semantic_rows = assigned_semantic_rows + padding_rows;
     let total_rows = semantic_rows.max(TABLE_ROWS);
-    if assigned_semantic_rows > P256_PACKED_AFFINE_V3_SEMANTIC_ROWS
-        || P256_PACKED_AFFINE_V3_UPPER_ROWS > K17_MAX_ASSIGNED_ROWS
+    if enforce_capacity
+        && (assigned_semantic_rows > P256_PACKED_AFFINE_V3_SEMANTIC_ROWS
+            || P256_PACKED_AFFINE_V3_UPPER_ROWS > K16_MAX_ASSIGNED_ROWS)
     {
         let rows = P256PackedAffineRowsV3 {
             binding_rows,
@@ -4034,10 +4242,11 @@ fn transpose_packed_trace<F: BigPrimeField>(
             selection_rows,
             lookup_only_rows,
             padding_rows: 0,
+            table_padding_rows: total_rows.saturating_sub(assigned_semantic_rows),
             semantic_rows: assigned_semantic_rows,
             reserved_rows: P256_PACKED_AFFINE_V3_RESERVED_ROWS,
             upper_rows: assigned_semantic_rows + P256_PACKED_AFFINE_V3_RESERVED_ROWS,
-            headroom_rows: K17_MAX_ASSIGNED_ROWS
+            headroom_rows: K16_MAX_ASSIGNED_ROWS
                 .saturating_sub(assigned_semantic_rows + P256_PACKED_AFFINE_V3_RESERVED_ROWS),
             table_rows: TABLE_ROWS,
             total_rows,
@@ -4058,6 +4267,16 @@ fn transpose_packed_trace<F: BigPrimeField>(
         });
     }
     rows_data.resize_with(total_rows, || AssignedRow::zero(Opcode::Disabled));
+    let upper_rows = if enforce_capacity {
+        P256_PACKED_AFFINE_V3_UPPER_ROWS
+    } else {
+        semantic_rows + P256_PACKED_AFFINE_V3_RESERVED_ROWS
+    };
+    let headroom_rows = if enforce_capacity {
+        P256_PACKED_AFFINE_V3_HEADROOM_ROWS
+    } else {
+        K16_MAX_ASSIGNED_ROWS.saturating_sub(upper_rows)
+    };
     let rows = P256PackedAffineRowsV3 {
         binding_rows,
         caller_instance_rows,
@@ -4070,10 +4289,11 @@ fn transpose_packed_trace<F: BigPrimeField>(
         selection_rows,
         lookup_only_rows,
         padding_rows,
+        table_padding_rows: total_rows - semantic_rows,
         semantic_rows,
         reserved_rows: P256_PACKED_AFFINE_V3_RESERVED_ROWS,
-        upper_rows: P256_PACKED_AFFINE_V3_UPPER_ROWS,
-        headroom_rows: P256_PACKED_AFFINE_V3_HEADROOM_ROWS,
+        upper_rows,
+        headroom_rows,
         table_rows: TABLE_ROWS,
         total_rows,
         range_lookups,

@@ -27,6 +27,12 @@ public_address = "addr:nexus.mof2.sora.org:1337#D017"
 [torii]
 address = "addr:0.0.0.0:8080#B922"
 
+[torii.mcp]
+enabled = true
+profile = "writer"
+expose_operator_routes = false
+allow_tool_prefixes = ["iroha."]
+
 [torii.da_ingest.replication_policy.default_retention]
 hot_retention_secs = 21600          # 6 h
 cold_retention_secs = 2592000       # 30 d

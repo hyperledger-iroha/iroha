@@ -3,8 +3,9 @@
 Kagemusha is the single offline-cash protocol in the first release. It supports
 exact decimal amounts, sender change, offline multihop
 spending, and full or partial online redemption. There is no runtime product
-mode or alternative offline API. ABI 21 and the V4 chain, recursive, and
-artifact carriers are the sole lifecycle surface. V2 names remain only for the
+mode or alternative offline API. Mobile bridge ABI22 and the Kagemusha data
+ABI V4 chain, recursive, and artifact carriers are the sole lifecycle surface.
+V2 names remain only for the
 unchanged amount, note-opening, authorization, membership, and finality leaf
 types that V4 embeds directly. The manifest and native capability schemas have
 no `mode` field; schema/version, backend, transcript, and circuit identities
@@ -13,7 +14,7 @@ pin the exact cryptographic contract.
 ## Universal capability contract
 
 Offline cash is a wallet and device protocol, not a validator deployment mode.
-Every Iroha deployment exposes the ABI-21/V4 and `cash_handoff_v1` surfaces
+Every Iroha deployment exposes mobile bridge ABI22, Kagemusha data ABI V4, and the `cash_handoff_v1` surfaces
 needed to build an offline user experience. Operators do not enable that
 capability per node, asset, domain, dataspace, or routing container. In particular,
 there is no `settlement.offline.enabled` switch, `offline.enabled` asset
@@ -28,6 +29,16 @@ readiness; wallet/device state and the absence of an asset-specific proof
 release cannot make a validator unhealthy. A command that references missing,
 inactive, malformed, or unauthorized proof material is rejected as that
 command's validation result rather than changing node admission.
+
+The asset-neutral `GET /v1/offline/readiness` projection advertises the contract
+without evaluating deployment evidence. It therefore returns exactly
+`mandatory = false`, `ready = false`, bridge ABI 22, maximum hop count 8, an
+empty `assets` array, and the ordered
+`offline_cash_authenticated_release_unavailable`,
+`offline_cash_eligible_asset_unavailable`, and
+`offline_cash_proof_backend_unavailable` blockers. This fail-closed projection
+is not a substitute for command-scoped release, asset, backend, or secure-device
+authorization.
 
 ## Amounts and assets
 
@@ -62,7 +73,7 @@ The lifecycle uses exactly four Torii routes:
 
 | Method | Path | Purpose |
 | --- | --- | --- |
-| `GET` | `/v1/offline/readiness` | Discover the universal ABI-21/V4 offline protocol capability |
+| `GET` | `/v1/offline/readiness` | Discover the universal mobile bridge ABI22 / Kagemusha data ABI V4 offline capability |
 | `POST` | `/v1/offline/top-up` | Submit `OfflineTopUpRequest` |
 | `POST` | `/v1/offline/redeem` | Submit `OfflineRedeemRequest` |
 | `GET` | `/v1/offline/operations/{operation_id}` | Observe durable operation state and finality |
@@ -129,7 +140,7 @@ an existing half-pair, a missing leaf, a malformed value, or a value above the
 anchor amount fails closed.
 
 After finality the wallet creates the initial recursive bundle
-with the ABI-21 SDK's `initSpendV4`. The note is not available for offline use until both the chain
+with the Kagemusha data ABI V4 SDK's `initSpendV4`. The note is not available for offline use until both the chain
 operation and local encrypted-state transition are durable.
 
 ## Offline transfer
@@ -403,7 +414,7 @@ active.
 ## Validator provisioning and activation
 
 No validator provisioning step enables offline support. Offline routes and
-ABI-21/V4 command types are present even when no Kagemusha release cache is
+Mobile bridge ABI22 / Kagemusha data ABI V4 command types are present even when no Kagemusha release cache is
 installed and no asset has yet been used by an offline wallet. Escrow account
 identity is derived deterministically when an online top-up or redemption
 command executes; it is not selected through node configuration and does not
@@ -711,7 +722,7 @@ reviewed deterministic migration.
 
 ## Production boundary
 
-Admission is selected by each transaction's exact authenticated ABI-21/V4
+Admission is selected by each transaction's exact authenticated bridge ABI-22 / Kagemusha data ABI V4
 release binding. Consensus must contain the release-qualified Eq/Ep records
 required by that transaction, and the production verifier must construct from
 authenticated material. There is no process-wide boolean admission shortcut,
@@ -721,7 +732,7 @@ per-asset enablement bit, or node-readiness consequence.
 candidate change set. It may be changed only by the final signed promotion
 commit after the authenticated review, benchmark, physical-device, and
 role-threshold evidence has been added. Even after promotion it is not by
-itself authorization for a transaction: the exact authenticated ABI-21/V4
+itself authorization for a transaction: the exact authenticated bridge ABI-22 / Kagemusha data ABI V4
 material referenced by that transaction must validate and construct
 successfully. None of these transaction checks gates node startup or health.
 Top-up and redemption change additionally require the governed selected
@@ -808,7 +819,7 @@ Catalog export fails closed if that dynamic step transition cannot be proved.
 Physical-device evidence is collected before finalization with the separate,
 off-by-default `kagemusha-candidate-evidence-lab` build. That build accepts only
 the exact reviewed candidate plus its exact ordered eight KRV4 artifacts and
-calls the same ABI-21/V4 prover, verifier, and recursion protocol through the
+calls the same bridge ABI-22 / Kagemusha data ABI V4 prover, verifier, and recursion protocol through the
 ABI-22 Connect native bridge. Its symbols, marker-bearing native library, and
 test host are distinct from production and are rejected by production
 packaging. The normal artifact install and proof entrypoints remain unavailable,

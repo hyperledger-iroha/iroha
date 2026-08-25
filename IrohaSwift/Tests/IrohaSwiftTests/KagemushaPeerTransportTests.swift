@@ -157,20 +157,20 @@ final class KagemushaPeerTransportTests: XCTestCase {
             projection.request.payload.assetDefinitionID,
             "7ZepsJTHCVLKsrFFNZGSRGZgvBhv"
         )
-        XCTAssertEqual(offer.noritoArchive.count, 12_425)
+        XCTAssertEqual(offer.noritoArchive.count, 12_423)
         XCTAssertEqual(
             sha256Hex(offer.noritoArchive),
-            "80a240eb19cabc0853a257b90c4e8a53b0ec0641acc9d7cb0080a4d6de77ec93"
+            "6b38813ab66f1ecb83861d1641454e2d4de438472189b02ccca52a22bc6431df"
         )
         XCTAssertEqual(projection.request.archive.count, 753)
         XCTAssertEqual(
             sha256Hex(projection.request.archive),
             "d325566b1117fa368703a971367056173f2d8349d2e86101dc06187aaf8fd2b4"
         )
-        XCTAssertEqual(projection.lineageArchive.count, 11_299)
+        XCTAssertEqual(projection.lineageArchive.count, 11_297)
         XCTAssertEqual(
             sha256Hex(projection.lineageArchive),
-            "e9c3ab0cdf2781062dfe5539a5ed4e180cd29530e482eefa7693477e88a20f16"
+            "b61dd641527bfb9e09479906c008b6c061b54009229e6e9ec5f0717572cfb561"
         )
         XCTAssertEqual(projection.publisherCheckpointEnvelope.count, 393)
         XCTAssertEqual(
@@ -219,7 +219,7 @@ final class KagemushaPeerTransportTests: XCTestCase {
         ), text)
     }
 
-    func testCanonicalPaymentFixtureUsesFirstReleaseABI21Envelope() throws {
+    func testCanonicalPaymentFixtureUsesKagemushaDataABIV4Envelope() throws {
         let request = try KagemushaPeerTransportTestFixtures.paymentRequest()
         let payment = try KagemushaPeerTransportTestFixtures.payment(request: request)
         let verifiedRequest = try request.verified(atMilliseconds: 1_900_000_001_000)
@@ -234,7 +234,7 @@ final class KagemushaPeerTransportTests: XCTestCase {
         XCTAssertEqual(payment.archive.count, 12_896)
         XCTAssertEqual(
             sha256Hex(payment.archive),
-            "37ee56ad5663ab67b8b5b9a72927f1e0811142122bf04fa28a55634f96b7d3af"
+            "424a7bde9ed5bcf0382f18f1f0dcb9a8c499b16b35355134d8025db6a34b347f"
         )
         XCTAssertEqual(
             verifiedRequest.digest.hexEncodedString(),
@@ -251,7 +251,7 @@ final class KagemushaPeerTransportTests: XCTestCase {
         XCTAssertEqual(summary.branchClaims.count, 1)
         XCTAssertEqual(
             summary.artifactBinding.generation,
-            "swift-kagemusha-abi21-fixture"
+            "swift-kagemusha-v4-fixture"
         )
         XCTAssertEqual(summary.artifactBinding.manifestSHA256, Data(repeating: 0x51, count: 32))
         XCTAssertEqual(

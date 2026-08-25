@@ -28,7 +28,7 @@ use iroha_data_model::{
 use mv::storage::StorageReadOnly;
 fn deploy_contract_address() -> iroha_data_model::smart_contract::ContractAddress {
     iroha_data_model::smart_contract::ContractAddress::derive(
-        &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
+        &"0000000000000000000000000000000000000000000000000000000000000001"
             .parse()
             .expect("canonical test network id"),
         &iroha_test_samples::ALICE_ID,

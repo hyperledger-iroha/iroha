@@ -62,17 +62,22 @@ pub fn is_stark_fri_v1_backend_label(backend: &str) -> bool {
 }
 /// Domain tag used when deriving ZK-ACE identity commitments and replay nullifiers.
 pub const ZK_ACE_PQ_AUTHORIZATION_V0_DOMAIN_TAG: &str = "iroha:zk-ace:pq-authorization:v0";
-/// Fixed action class of the disabled ZK-ACE candidate.
+/// Fixed action class of the ZK-ACE authorization profile.
 pub const ZK_ACE_PQ_AUTHORIZATION_V0_ACTION_TRANSFER: &str = "transparent_asset_transfer";
 /// Permanent Norito schema identity for the typed ZK-ACE public-input wrapper.
 pub const ZK_ACE_PRIVACY_PUBLIC_INPUTS_SCHEMA_NAME_V1: &str =
     "iroha.privacy.zk-ace.public-inputs.v1";
 /// Exact type-name-independent transfer-digest preimage schema.
-pub const ZK_ACE_TRANSFER_DIGEST_SCHEMA_V1: &[u8] = b"framing=poseidon-domain-words:dense-mds-goldilocks-x7:domain-length-u64+7byte-le-limbs:part-count-u64:each-part-length-u64+7byte-le-limbs|part0=this-schema|part1=source:account-canonical-hex-v1-utf8|part2=destination:account-canonical-hex-v1-utf8|part3=asset-definition-id:uuid-bytes16|part4=amount:u128be|part5=network-id:bytes32|part6=action-class:utf8|part7=policy-digest:bytes32";
+pub const ZK_ACE_TRANSFER_DIGEST_SCHEMA_V2: &[u8] = b"framing=poseidon-four-independent-lane-domains-v2:dense-mds-goldilocks-x7:lane-domain-schema+base-domain-length-u64be+base-domain+lane-u8:domain-length-u64+7byte-le-limbs:part-count-u64:each-part-length-u64+7byte-le-limbs|part0=this-schema|part1=source:account-canonical-hex-v1-utf8|part2=destination:account-canonical-hex-v1-utf8|part3=asset-definition-id:uuid-bytes16|part4=amount:u128be|part5=network-id:bytes32|part6=action-class:utf8|part7=policy-digest:bytes32";
 /// Maximum source accounts that one ZK-ACE identity commitment may authorize.
 pub const ZK_ACE_MAX_ALLOWED_ACCOUNTS: usize = 16;
 /// Number of bytes packed into each Goldilocks field limb for ZK-ACE hashes.
 pub const ZK_ACE_PACKED_LIMB_BYTES: usize = 7;
+/// Number of independent Poseidon commitment lanes in the remediated profile.
+pub const ZK_ACE_INDEPENDENT_COMMITMENT_LANES_V2: u8 = 4;
+/// Collision-free framing prefix for one independent Poseidon lane domain.
+pub const ZK_ACE_INDEPENDENT_LANE_DOMAIN_SCHEMA_V2: &[u8] =
+    b"iroha:zk-ace:dense-mds-goldilocks-x7:independent-lane-domain:v2";
 /// Default maximum proof payload size accepted by generic `OpenVerify` admission.
 pub const OPEN_VERIFY_DEFAULT_MAX_PROOF_BYTES: usize = 64 * 1024 * 1024;
 /// Default maximum circuit identifier size accepted by generic `OpenVerify` admission.
@@ -556,7 +561,7 @@ pub fn derive_zk_ace_privacy_authorization_digest(
     let mut normalized = public_inputs.statement.clone();
     normalized.replay_nullifier = PrivacyNullifierV1::new([0; 32]);
     let statement_bytes = norito::encode_canonical(&normalized)?;
-    Ok(zk_ace_dense_mds_goldilocks_x7_domain_hash_v1(
+    Ok(zk_ace_dense_mds_goldilocks_x7_domain_hash_v2(
         b"zk-ace.privacy-authorization.v1",
         &[
             &public_inputs.version.to_be_bytes(),
@@ -582,26 +587,46 @@ pub fn zk_ace_pack_bytes_to_field_limbs(bytes: &[u8]) -> ZkAcePackedBytesV1 {
         limbs,
     }
 }
+/// Construct the exact domain of one independent ZK-ACE Poseidon lane.
+///
+/// The base domain is length-framed before the lane tag, so neither domain
+/// concatenation nor a caller-controlled suffix can alias another lane.
+#[must_use]
+pub fn zk_ace_dense_mds_goldilocks_x7_lane_domain_v2(domain: &[u8], lane: u8) -> Vec<u8> {
+    let mut framed =
+        Vec::with_capacity(ZK_ACE_INDEPENDENT_LANE_DOMAIN_SCHEMA_V2.len() + 8 + domain.len() + 1);
+    framed.extend_from_slice(ZK_ACE_INDEPENDENT_LANE_DOMAIN_SCHEMA_V2);
+    framed.extend_from_slice(
+        &u64::try_from(domain.len())
+            .unwrap_or(u64::MAX)
+            .to_be_bytes(),
+    );
+    framed.extend_from_slice(domain);
+    framed.push(lane);
+    framed
+}
 /// Domain-separated dense-MDS Goldilocks Poseidon `x^7` hash over canonical byte parts.
 ///
-/// Its four returned words are sequential outputs of one capacity-1 sponge and
-/// therefore provide only about 32 bits of generic collision resistance as a
-/// combined digest. ZK-ACE production activation remains disabled until four
-/// independent lane-domain hashes replace this candidate construction.
+/// Each returned word is the first rate output of a fresh sponge under a
+/// distinct, length-framed lane domain. The four independent 64-bit field
+/// commitments provide the compiled 128-bit generic collision target.
 #[must_use]
-pub fn zk_ace_dense_mds_goldilocks_x7_domain_hash_v1(domain: &[u8], parts: &[&[u8]]) -> [u8; 32] {
-    let words = zk_ace_dense_mds_goldilocks_x7_domain_words_v1(domain, parts);
-    let mut sponge = fastpq_isi::poseidon::PoseidonSponge::new();
-    sponge.absorb_slice(&words);
+pub fn zk_ace_dense_mds_goldilocks_x7_domain_hash_v2(domain: &[u8], parts: &[&[u8]]) -> [u8; 32] {
     let mut out = [0u8; 32];
-    for chunk in out.chunks_exact_mut(core::mem::size_of::<u64>()) {
+    for (lane, chunk) in (0..ZK_ACE_INDEPENDENT_COMMITMENT_LANES_V2)
+        .zip(out.chunks_exact_mut(core::mem::size_of::<u64>()))
+    {
+        let lane_domain = zk_ace_dense_mds_goldilocks_x7_lane_domain_v2(domain, lane);
+        let words = zk_ace_dense_mds_goldilocks_x7_domain_words_v2(&lane_domain, parts);
+        let mut sponge = fastpq_isi::poseidon::PoseidonSponge::new();
+        sponge.absorb_slice(&words);
         chunk.copy_from_slice(&sponge.squeeze_element().to_le_bytes());
     }
     out
 }
 /// Canonical Goldilocks preimage used by ZK-ACE dense-MDS Poseidon `x^7` hashing.
 #[must_use]
-pub fn zk_ace_dense_mds_goldilocks_x7_domain_words_v1(domain: &[u8], parts: &[&[u8]]) -> Vec<u64> {
+pub fn zk_ace_dense_mds_goldilocks_x7_domain_words_v2(domain: &[u8], parts: &[&[u8]]) -> Vec<u64> {
     let mut words = Vec::new();
     let domain = zk_ace_pack_bytes_to_field_limbs(domain);
     words.push(domain.length);
@@ -615,7 +640,7 @@ pub fn zk_ace_dense_mds_goldilocks_x7_domain_words_v1(domain: &[u8], parts: &[&[
     words
 }
 fn zk_ace_poseidon_bytes(domain: &[u8], parts: &[&[u8]]) -> [u8; 32] {
-    zk_ace_dense_mds_goldilocks_x7_domain_hash_v1(domain, parts)
+    zk_ace_dense_mds_goldilocks_x7_domain_hash_v2(domain, parts)
 }
 /// Derive the ZK-ACE identity commitment from its private witness components.
 pub fn derive_zk_ace_identity_commitment(
@@ -677,7 +702,7 @@ pub fn derive_zk_ace_transfer_digest(
     Ok(zk_ace_poseidon_bytes(
         b"zk-ace.transparent-transfer.v1",
         &[
-            ZK_ACE_TRANSFER_DIGEST_SCHEMA_V1,
+            ZK_ACE_TRANSFER_DIGEST_SCHEMA_V2,
             from_literal.as_bytes(),
             to_literal.as_bytes(),
             &asset_bytes,
@@ -729,6 +754,37 @@ mod tests {
         )
     }
     #[test]
+    fn zk_ace_v2_commitment_uses_four_distinct_fresh_poseidon_domains() {
+        let domain = b"zk-ace.test.commitment.v2";
+        let parts: [&[u8]; 3] = [b"alpha", b"beta", b"gamma"];
+        let digest = zk_ace_dense_mds_goldilocks_x7_domain_hash_v2(domain, &parts);
+        let mut lane_domains = BTreeSet::new();
+
+        for (lane, digest_word) in (0..ZK_ACE_INDEPENDENT_COMMITMENT_LANES_V2)
+            .zip(digest.chunks_exact(core::mem::size_of::<u64>()))
+        {
+            let lane_domain = zk_ace_dense_mds_goldilocks_x7_lane_domain_v2(domain, lane);
+            assert!(lane_domains.insert(lane_domain.clone()));
+            let words = zk_ace_dense_mds_goldilocks_x7_domain_words_v2(&lane_domain, &parts);
+            let mut independently_initialized = fastpq_isi::poseidon::PoseidonSponge::new();
+            independently_initialized.absorb_slice(&words);
+            assert_eq!(
+                digest_word,
+                independently_initialized.squeeze_element().to_le_bytes()
+            );
+        }
+        assert_eq!(
+            lane_domains.len(),
+            usize::from(ZK_ACE_INDEPENDENT_COMMITMENT_LANES_V2)
+        );
+
+        let mutated_parts: [&[u8]; 3] = [b"alpha", b"beta", b"gammA"];
+        assert_ne!(
+            digest,
+            zk_ace_dense_mds_goldilocks_x7_domain_hash_v2(domain, &mutated_parts)
+        );
+    }
+    #[test]
     fn zk_ace_transfer_digest_is_domainless_and_discriminant_independent() {
         let from = account(0x42);
         let to = account(0x43);
@@ -756,7 +812,7 @@ mod tests {
         let expected = zk_ace_poseidon_bytes(
             b"zk-ace.transparent-transfer.v1",
             &[
-                ZK_ACE_TRANSFER_DIGEST_SCHEMA_V1,
+                ZK_ACE_TRANSFER_DIGEST_SCHEMA_V2,
                 from_canonical.as_bytes(),
                 to_canonical.as_bytes(),
                 &asset_bytes,
@@ -1367,15 +1423,15 @@ mod tests {
         );
         assert_eq!(
             hex::encode(identity_commitment),
-            "c6b2d67fbc837b72de0097e8e7d3b451ff09c76a9e99f6c42ef43ae1ec5777f5"
+            "c56b3f07e9c6782a12d537c243b9b060cbf29dfa1c95ca0c8431effec8b8773c"
         );
         assert_eq!(
             hex::encode(tx_digest),
-            "71af728bb6110a1cca751e6fe253742d4c30d8f69e3be2ebf056447088aec13e"
+            "4840488d8c43511d67ccc5cd6c5a21d39df98b3ed0728e0eb2b6bcdda64a61b7"
         );
         assert_eq!(
             hex::encode(replay_nullifier),
-            "6496615988495f553fb17dc9dd01cb49c002e870c4e4987aabefe5bf104c732c"
+            "caf6948941420120192935df0b19497dc04c01688d179c5fa49180563998472e"
         );
     }
     #[cfg(feature = "json")]

@@ -29,7 +29,11 @@ mod release;
 const REPORT_SCHEMA_V1: &str = "iroha.taira.privacy-governance-templates.v1";
 const NOTICE_INTERVAL_BLOCKS_V1: u64 = 300;
 const OBSERVATION_INTERVAL_BLOCKS_V1: u64 = 300;
-const WAVE_PROPOSED_AT_HEIGHTS_V1: [u64; 4] = [1, 602, 1_203, 1_804];
+const DEFAULT_FIRST_PROPOSED_AT_HEIGHT_V1: u64 = 1;
+const DEFAULT_PROPOSAL_WAVE_SPACING_BLOCKS_V1: u64 =
+    NOTICE_INTERVAL_BLOCKS_V1 + OBSERVATION_INTERVAL_BLOCKS_V1 + 1;
+#[cfg(test)]
+const DEFAULT_WAVE_PROPOSED_AT_HEIGHTS_V1: [u64; 4] = [1, 602, 1_203, 1_804];
 const MAX_INSTRUCTIONS_JSON_BYTES_V1: u64 = 4 * 1024 * 1024;
 const MAX_REPORT_JSON_BYTES_V1: u64 = 8 * 1024 * 1024;
 /// Emit or validate the exact first-release Taira privacy bootstrap.
@@ -58,6 +62,12 @@ struct EmitTairaV1Args {
     /// New file receiving base64 Norito instructions and deterministic digests.
     #[arg(long)]
     report_output: PathBuf,
+    /// Committed height of the first proposal wave.
+    #[arg(long, default_value_t = DEFAULT_FIRST_PROPOSED_AT_HEIGHT_V1)]
+    first_proposed_at_height: u64,
+    /// Positive committed-height distance between proposal waves.
+    #[arg(long, default_value_t = DEFAULT_PROPOSAL_WAVE_SPACING_BLOCKS_V1)]
+    proposal_wave_spacing_blocks: u64,
 }
 #[derive(Debug, ClapArgs)]
 struct ValidateTairaV1Args {
@@ -67,6 +77,59 @@ struct ValidateTairaV1Args {
     /// Canonical digest inventory emitted alongside the instruction array.
     #[arg(long)]
     report: PathBuf,
+    /// Committed height of the first proposal wave used during emission.
+    #[arg(long, default_value_t = DEFAULT_FIRST_PROPOSED_AT_HEIGHT_V1)]
+    first_proposed_at_height: u64,
+    /// Positive committed-height distance between proposal waves used during emission.
+    #[arg(long, default_value_t = DEFAULT_PROPOSAL_WAVE_SPACING_BLOCKS_V1)]
+    proposal_wave_spacing_blocks: u64,
+}
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct ProposalWaveScheduleV1 {
+    first_proposed_at_height: u64,
+    spacing_blocks: u64,
+}
+impl ProposalWaveScheduleV1 {
+    fn new(first_proposed_at_height: u64, spacing_blocks: u64) -> color_eyre::Result<Self> {
+        if first_proposed_at_height == 0 {
+            bail!("first proposal-wave height must be positive");
+        }
+        if spacing_blocks == 0 {
+            bail!("proposal-wave spacing must be positive");
+        }
+        let schedule = Self {
+            first_proposed_at_height,
+            spacing_blocks,
+        };
+        let heights = schedule.proposed_at_heights()?;
+        heights[3]
+            .checked_add(NOTICE_INTERVAL_BLOCKS_V1)
+            .ok_or_else(|| eyre!("final proposal-wave activation height overflows u64"))?;
+        Ok(schedule)
+    }
+
+    fn proposed_at_heights(self) -> color_eyre::Result<[u64; 4]> {
+        let mut heights = [0_u64; 4];
+        for (wave, height) in heights.iter_mut().enumerate() {
+            let offset = self
+                .spacing_blocks
+                .checked_mul(u64::try_from(wave).expect("four-wave index fits u64"))
+                .ok_or_else(|| eyre!("proposal-wave height offset overflows u64"))?;
+            *height = self
+                .first_proposed_at_height
+                .checked_add(offset)
+                .ok_or_else(|| eyre!("proposal-wave height overflows u64"))?;
+        }
+        Ok(heights)
+    }
+}
+impl Default for ProposalWaveScheduleV1 {
+    fn default() -> Self {
+        Self {
+            first_proposed_at_height: DEFAULT_FIRST_PROPOSED_AT_HEIGHT_V1,
+            spacing_blocks: DEFAULT_PROPOSAL_WAVE_SPACING_BLOCKS_V1,
+        }
+    }
 }
 #[derive(Clone, Debug)]
 struct TairaPrivacyBootstrapArtifactsV1 {
@@ -79,7 +142,11 @@ impl<T: Write> RunArgs<T> for Args {
     fn run(self, writer: &mut std::io::BufWriter<T>) -> Outcome {
         match self.command {
             Command::EmitTairaV1(args) => {
-                let artifacts = build_taira_privacy_bootstrap_v1()?;
+                let schedule = ProposalWaveScheduleV1::new(
+                    args.first_proposed_at_height,
+                    args.proposal_wave_spacing_blocks,
+                )?;
+                let artifacts = build_taira_privacy_bootstrap_for_schedule_v1(schedule)?;
                 write_new_artifact_pair(
                     &args.instructions_output,
                     &artifacts.instructions_json,
@@ -93,10 +160,16 @@ impl<T: Write> RunArgs<T> for Args {
                     "report_path": (args.report_output.display().to_string()),
                     "report_json_sha256": (hex::encode(sha256(&artifacts.report_json))),
                     "instruction_count": (PrivacyProtocolIdV1::COUNT as u64),
+                    "first_proposed_at_height": (schedule.first_proposed_at_height),
+                    "proposal_wave_spacing_blocks": (schedule.spacing_blocks),
                 });
                 writeln!(writer, "{}", norito::json::to_json(&status)?)?;
             }
             Command::ValidateTairaV1(args) => {
+                let schedule = ProposalWaveScheduleV1::new(
+                    args.first_proposed_at_height,
+                    args.proposal_wave_spacing_blocks,
+                )?;
                 let instructions_json = read_bounded(
                     &args.instructions,
                     MAX_INSTRUCTIONS_JSON_BYTES_V1,
@@ -107,7 +180,11 @@ impl<T: Write> RunArgs<T> for Args {
                     MAX_REPORT_JSON_BYTES_V1,
                     "privacy bootstrap report",
                 )?;
-                validate_taira_privacy_bootstrap_v1(&instructions_json, &report_json)?;
+                validate_taira_privacy_bootstrap_for_schedule_v1(
+                    &instructions_json,
+                    &report_json,
+                    schedule,
+                )?;
                 let status = norito::json!({
                     "status": "validated",
                     "instructions_path": (args.instructions.display().to_string()),
@@ -115,6 +192,8 @@ impl<T: Write> RunArgs<T> for Args {
                     "report_path": (args.report.display().to_string()),
                     "report_json_sha256": (hex::encode(sha256(&report_json))),
                     "instruction_count": (PrivacyProtocolIdV1::COUNT as u64),
+                    "first_proposed_at_height": (schedule.first_proposed_at_height),
+                    "proposal_wave_spacing_blocks": (schedule.spacing_blocks),
                 });
                 writeln!(writer, "{}", norito::json::to_json(&status)?)?;
             }
@@ -140,7 +219,9 @@ const fn rollout_wave_index_v1(protocol: PrivacyProtocolIdV1) -> usize {
         PrivacyProtocolIdV1::IrohaZkX509StarkP256V0 | PrivacyProtocolIdV1::IrohaZkAmsV1 => 3,
     }
 }
-fn build_taira_privacy_bootstrap_v1() -> color_eyre::Result<TairaPrivacyBootstrapArtifactsV1> {
+fn build_taira_privacy_bootstrap_for_schedule_v1(
+    schedule: ProposalWaveScheduleV1,
+) -> color_eyre::Result<TairaPrivacyBootstrapArtifactsV1> {
     let profiles = PrivacyProtocolIdV1::ALL
         .into_iter()
         .map(|protocol_id| {
@@ -152,7 +233,7 @@ fn build_taira_privacy_bootstrap_v1() -> color_eyre::Result<TairaPrivacyBootstra
             })
         })
         .collect::<color_eyre::Result<Vec<_>>>()?;
-    let artifacts = build_artifacts_from_profiles_v1(&profiles)?;
+    let artifacts = build_artifacts_from_profiles_with_schedule_v1(&profiles, schedule)?;
     let local_catalog = compiled_privacy_profile_catalog_v1()
         .map_err(|source| eyre!("local compiled privacy catalog is invalid: {source}"))?;
     if artifacts.catalog != local_catalog {
@@ -162,8 +243,15 @@ fn build_taira_privacy_bootstrap_v1() -> color_eyre::Result<TairaPrivacyBootstra
     }
     Ok(artifacts)
 }
+#[cfg(test)]
 fn build_artifacts_from_profiles_v1(
     profiles: &[CompiledPrivacyProfileV1],
+) -> color_eyre::Result<TairaPrivacyBootstrapArtifactsV1> {
+    build_artifacts_from_profiles_with_schedule_v1(profiles, ProposalWaveScheduleV1::default())
+}
+fn build_artifacts_from_profiles_with_schedule_v1(
+    profiles: &[CompiledPrivacyProfileV1],
+    schedule: ProposalWaveScheduleV1,
 ) -> color_eyre::Result<TairaPrivacyBootstrapArtifactsV1> {
     if profiles.len() != PrivacyProtocolIdV1::COUNT {
         bail!(
@@ -175,6 +263,7 @@ fn build_artifacts_from_profiles_v1(
     let mut seen = BTreeSet::new();
     let mut instructions = Vec::with_capacity(PrivacyProtocolIdV1::COUNT);
     let mut catalog_rows = Vec::with_capacity(PrivacyProtocolIdV1::COUNT);
+    let proposed_at_heights = schedule.proposed_at_heights()?;
     for (index, (profile, expected_protocol)) in profiles
         .iter()
         .copied()
@@ -195,10 +284,12 @@ fn build_artifacts_from_profiles_v1(
             );
         }
         let wave = rollout_wave_index_v1(profile.protocol_id);
-        let proposed_at_height = WAVE_PROPOSED_AT_HEIGHTS_V1[wave];
+        let proposed_at_height = proposed_at_heights[wave];
         let lifecycle = PrivacyProtocolLifecycleV1::Proposed(PrivacyProposedLifecycleV1 {
             proposed_at_height,
-            activate_at_height: proposed_at_height + NOTICE_INTERVAL_BLOCKS_V1,
+            activate_at_height: proposed_at_height
+                .checked_add(NOTICE_INTERVAL_BLOCKS_V1)
+                .ok_or_else(|| eyre!("privacy activation height overflows u64"))?,
         });
         let activation = profile.activation_record(lifecycle);
         activation.validate().map_err(|source| {
@@ -222,11 +313,12 @@ fn build_artifacts_from_profiles_v1(
     catalog.validate().map_err(|source| {
         eyre!("derived exact-12 compiled-profile catalog is invalid: {source}")
     })?;
-    render_artifacts_v1(instructions, catalog)
+    render_artifacts_v1(instructions, catalog, schedule)
 }
 fn render_artifacts_v1(
     instructions: Vec<InstructionBox>,
     catalog: PrivacyCompiledProfileCatalogV1,
+    schedule: ProposalWaveScheduleV1,
 ) -> color_eyre::Result<TairaPrivacyBootstrapArtifactsV1> {
     let mut instructions_json = String::new();
     genesis_instructions_json::serialize(&instructions, &mut instructions_json);
@@ -256,6 +348,7 @@ fn render_artifacts_v1(
             "genesis_activation_forbidden": true,
             "notice_interval_blocks": (NOTICE_INTERVAL_BLOCKS_V1),
             "observation_interval_blocks": (OBSERVATION_INTERVAL_BLOCKS_V1),
+            "proposal_wave_heights": (schedule.proposed_at_heights()?.to_vec()),
             "instruction_wire_id": (RegisterPrivacyProtocolActivationV1::WIRE_ID),
             "instruction_encoding": "norito-instruction-box-base64",
             "protocol_count": (PrivacyProtocolIdV1::COUNT as u64),
@@ -284,13 +377,24 @@ fn validate_taira_privacy_bootstrap_v1(
     instructions_json: &[u8],
     report_json: &[u8],
 ) -> color_eyre::Result<()> {
+    validate_taira_privacy_bootstrap_for_schedule_v1(
+        instructions_json,
+        report_json,
+        ProposalWaveScheduleV1::default(),
+    )
+}
+fn validate_taira_privacy_bootstrap_for_schedule_v1(
+    instructions_json: &[u8],
+    report_json: &[u8],
+    schedule: ProposalWaveScheduleV1,
+) -> color_eyre::Result<()> {
     if u64::try_from(instructions_json.len()).unwrap_or(u64::MAX) > MAX_INSTRUCTIONS_JSON_BYTES_V1 {
         bail!("privacy bootstrap instructions exceed the fixed byte limit");
     }
     if u64::try_from(report_json.len()).unwrap_or(u64::MAX) > MAX_REPORT_JSON_BYTES_V1 {
         bail!("privacy bootstrap report exceeds the fixed byte limit");
     }
-    let expected = build_taira_privacy_bootstrap_v1()?;
+    let expected = build_taira_privacy_bootstrap_for_schedule_v1(schedule)?;
     validate_artifacts_against_v1(instructions_json, report_json, &expected)
 }
 fn validate_artifacts_against_v1(
@@ -410,6 +514,15 @@ fn validate_report_inventory_v1(
     let labels = report_string_array_v1(registration, "protocol_labels")?;
     let base64_values = report_string_array_v1(registration, "instruction_norito_base64")?;
     let hashes = report_string_array_v1(registration, "instruction_norito_sha256")?;
+    let proposal_wave_heights = report_u64_array_v1(registration, "proposal_wave_heights")?;
+    if proposal_wave_heights.len() != 4
+        || proposal_wave_heights.iter().any(|height| *height == 0)
+        || proposal_wave_heights
+            .windows(2)
+            .any(|pair| pair[0] >= pair[1])
+    {
+        bail!("privacy bootstrap report must bind four strictly increasing proposal-wave heights");
+    }
     for (field, len) in [
         ("protocol_labels", labels.len()),
         ("instruction_norito_base64", base64_values.len()),
@@ -430,6 +543,19 @@ fn validate_report_inventory_v1(
         .enumerate()
     {
         let activation = privacy_activation_at_v1(instruction, index)?;
+        let PrivacyProtocolLifecycleV1::Proposed(proposed) = activation.lifecycle else {
+            bail!("privacy bootstrap instruction {index} is not a proposed activation");
+        };
+        let wave = rollout_wave_index_v1(activation.protocol_id);
+        if proposed.proposed_at_height != proposal_wave_heights[wave]
+            || proposed.activate_at_height
+                != proposed
+                    .proposed_at_height
+                    .checked_add(NOTICE_INTERVAL_BLOCKS_V1)
+                    .ok_or_else(|| eyre!("privacy activation height overflows u64"))?
+        {
+            bail!("privacy bootstrap report proposal-wave height mismatch at index {index}");
+        }
         if *label != activation.protocol_id.canonical_label() {
             bail!("privacy bootstrap report label mismatch at index {index}");
         }
@@ -473,6 +599,20 @@ fn report_string_array_v1<'a>(
         .map(|(index, value)| {
             value.as_str().ok_or_else(|| {
                 eyre!("privacy bootstrap report `{field}` entry {index} must be a string")
+            })
+        })
+        .collect()
+}
+fn report_u64_array_v1(fields: &norito::json::Map, field: &str) -> color_eyre::Result<Vec<u64>> {
+    fields
+        .get(field)
+        .and_then(JsonValue::as_array)
+        .ok_or_else(|| eyre!("privacy bootstrap report `{field}` must be an array"))?
+        .iter()
+        .enumerate()
+        .map(|(index, value)| {
+            value.as_u64().ok_or_else(|| {
+                eyre!("privacy bootstrap report `{field}` entry {index} must be a u64")
             })
         })
         .collect()
@@ -666,7 +806,12 @@ mod tests {
         expected: &TairaPrivacyBootstrapArtifactsV1,
         instructions: Vec<InstructionBox>,
     ) -> TairaPrivacyBootstrapArtifactsV1 {
-        render_artifacts_v1(instructions, expected.catalog.clone()).expect("render mutation")
+        render_artifacts_v1(
+            instructions,
+            expected.catalog.clone(),
+            ProposalWaveScheduleV1::default(),
+        )
+        .expect("render mutation")
     }
     fn replace_activation(
         instructions: &mut [InstructionBox],
@@ -689,7 +834,8 @@ mod tests {
         for (index, protocol) in PrivacyProtocolIdV1::ALL.into_iter().enumerate() {
             let activation = privacy_activation_at_v1(&first.instructions[index], index)
                 .expect("governance activation template");
-            let proposed_at_height = WAVE_PROPOSED_AT_HEIGHTS_V1[rollout_wave_index_v1(protocol)];
+            let proposed_at_height =
+                DEFAULT_WAVE_PROPOSED_AT_HEIGHTS_V1[rollout_wave_index_v1(protocol)];
             assert_eq!(
                 activation.lifecycle,
                 PrivacyProtocolLifecycleV1::Proposed(PrivacyProposedLifecycleV1 {
@@ -700,6 +846,63 @@ mod tests {
         }
         validate_artifacts_against_v1(&first.instructions_json, &first.report_json, &first)
             .expect("validate exact-12 fixture");
+    }
+    #[test]
+    fn committed_height_anchor_renders_four_consecutive_proposal_waves() {
+        let fixture = fixture_artifacts();
+        let profiles = fixture
+            .catalog
+            .protocols
+            .iter()
+            .map(|row| {
+                let PrivacyCompiledProfileResultV1::Available(profile) = row.compiled_profile
+                else {
+                    panic!("test catalog profile must be available")
+                };
+                CompiledPrivacyProfileV1 {
+                    protocol_id: profile.protocol_id,
+                    proof_system_id: profile.proof_system_id,
+                    engine_id: profile.engine_id,
+                    parameter_id: profile.parameter_id,
+                    parameter_digest: profile.parameter_digest,
+                    verifier_digest: profile.verifier_digest,
+                    statement_schema_digest: profile.statement_schema_digest,
+                    engine_manifest_digest: profile.engine_manifest_digest,
+                    protocol_limits: profile.protocol_limits,
+                }
+            })
+            .collect::<Vec<_>>();
+        let schedule = ProposalWaveScheduleV1::new(97, 1).expect("height-aware schedule");
+        let artifacts = build_artifacts_from_profiles_with_schedule_v1(&profiles, schedule)
+            .expect("height-aware exact-12 artifacts");
+        for (index, protocol) in PrivacyProtocolIdV1::ALL.into_iter().enumerate() {
+            let activation = privacy_activation_at_v1(&artifacts.instructions[index], index)
+                .expect("governance activation template");
+            let proposed_at_height = 97 + rollout_wave_index_v1(protocol) as u64;
+            assert_eq!(
+                activation.lifecycle,
+                PrivacyProtocolLifecycleV1::Proposed(PrivacyProposedLifecycleV1 {
+                    proposed_at_height,
+                    activate_at_height: proposed_at_height + NOTICE_INTERVAL_BLOCKS_V1,
+                })
+            );
+        }
+        let report: JsonValue =
+            norito::json::from_slice(&artifacts.report_json).expect("parse report");
+        assert_eq!(
+            report["governance_activation_templates"]["proposal_wave_heights"],
+            norito::json!([97_u64, 98_u64, 99_u64, 100_u64])
+        );
+        validate_artifacts_against_v1(
+            &artifacts.instructions_json,
+            &artifacts.report_json,
+            &artifacts,
+        )
+        .expect("validate height-aware exact-12 artifacts");
+
+        assert!(ProposalWaveScheduleV1::new(0, 1).is_err());
+        assert!(ProposalWaveScheduleV1::new(1, 0).is_err());
+        assert!(ProposalWaveScheduleV1::new(u64::MAX, 1).is_err());
     }
     #[test]
     fn source_failure_prevents_partial_eleven_profile_artifact() {
@@ -790,15 +993,15 @@ mod tests {
                     activation.lifecycle =
                         PrivacyProtocolLifecycleV1::Proposed(PrivacyProposedLifecycleV1 {
                             proposed_at_height: 2,
-                            activate_at_height: WAVE_PROPOSED_AT_HEIGHTS_V1[0]
+                            activate_at_height: DEFAULT_WAVE_PROPOSED_AT_HEIGHTS_V1[0]
                                 + NOTICE_INTERVAL_BLOCKS_V1,
                         });
                 }
                 1 => {
                     activation.lifecycle =
                         PrivacyProtocolLifecycleV1::Proposed(PrivacyProposedLifecycleV1 {
-                            proposed_at_height: WAVE_PROPOSED_AT_HEIGHTS_V1[0],
-                            activate_at_height: WAVE_PROPOSED_AT_HEIGHTS_V1[0]
+                            proposed_at_height: DEFAULT_WAVE_PROPOSED_AT_HEIGHTS_V1[0],
+                            activate_at_height: DEFAULT_WAVE_PROPOSED_AT_HEIGHTS_V1[0]
                                 + NOTICE_INTERVAL_BLOCKS_V1
                                 + 1,
                         });
@@ -814,8 +1017,8 @@ mod tests {
                 _ => {
                     activation.pending_protocol_limits_tightening =
                         Some(PrivacyProtocolLimitsTighteningV1 {
-                            scheduled_at_height: WAVE_PROPOSED_AT_HEIGHTS_V1[0],
-                            effective_at_height: WAVE_PROPOSED_AT_HEIGHTS_V1[0]
+                            scheduled_at_height: DEFAULT_WAVE_PROPOSED_AT_HEIGHTS_V1[0],
+                            effective_at_height: DEFAULT_WAVE_PROPOSED_AT_HEIGHTS_V1[0]
                                 + NOTICE_INTERVAL_BLOCKS_V1,
                             next_limits: activation.protocol_limits,
                         });

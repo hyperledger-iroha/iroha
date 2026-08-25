@@ -1506,7 +1506,7 @@ mod tests {
         "/../fixtures/composer/draft_pin_manifest.json"
     ));
     fn test_network_id() -> NetworkId {
-        "hash:32C903E5B3497E34C2B844EBFE8A39C19E6CF8F95D44C1FFB8BA9DCB42F91149#A2F0"
+        "32c903e5b3497e34c2b844ebfe8a39c19e6cf8f95d44c1ffb8ba9dcb42f91149"
             .parse()
             .expect("test network id")
     }
@@ -1630,7 +1630,7 @@ mod tests {
         )
         .into();
         let contract_address = iroha_data_model::smart_contract::ContractAddress::derive(
-            &"hash:32C903E5B3497E34C2B844EBFE8A39C19E6CF8F95D44C1FFB8BA9DCB42F91149#A2F0"
+            &"32c903e5b3497e34c2b844ebfe8a39c19e6cf8f95d44c1ffb8ba9dcb42f91149"
                 .parse()
                 .expect("canonical test network id"),
             &ALICE_ID,

@@ -5214,7 +5214,7 @@ mod tests {
         .expect("fixture seed derives a valid keypair");
         let authority = iroha_data_model::account::AccountId::new(keypair.public_key().clone());
         let contract_address = iroha_data_model::smart_contract::ContractAddress::derive(
-            &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
+            &"0000000000000000000000000000000000000000000000000000000000000001"
                 .parse()
                 .expect("canonical test network id"),
             &authority,

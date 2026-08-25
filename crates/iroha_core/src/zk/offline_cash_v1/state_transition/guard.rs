@@ -382,7 +382,7 @@ pub(crate) enum HardwareGuardErrorV1 {
     /// The request is not live according to the backend's trusted clock.
     TrustedTimeRejected,
     /// The hardware policy, key, or counter state rejected the operation.
-    Rejected,
+    PolicyRejected,
 }
 
 /// Private supertrait namespace for trusted platform adapters.

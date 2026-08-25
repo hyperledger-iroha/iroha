@@ -1,6 +1,6 @@
 import Foundation
 
-/// Canonical Norito encoders for the distinct ABI-21 local lifecycle.
+/// Canonical Norito encoders for the distinct Kagemusha V4 local lifecycle.
 /// These functions construct the V4 bridge structs field-for-field; no older
 /// request, bundle, result, or local carrier is nested or reinterpreted.
 enum KagemushaRecursiveSpendCodecsV4 {

@@ -613,7 +613,7 @@ pub mod offline {
         pub struct CanManageOfflineEscrow;
     }
     permission! {
-        /// Permission to activate an authenticated Kagemusha ABI-21/V4 recursive release.
+        /// Permission to activate an authenticated bridge ABI-22 / Kagemusha V4 recursive release.
         #[derive(Copy)]
         pub struct CanActivateKagemushaRecursiveReleaseV4;
     }

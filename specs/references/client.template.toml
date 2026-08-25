@@ -1,5 +1,5 @@
 # chain =
-# network_id = "hash:REPLACE_WITH_EXACT_GENESIS_HEADER_HASH#CHECKSUM"
+# network_id = "replace_with_exact_64_lowercase_hex_genesis_header_hash"
 
 ## Configure the Torii endpoint via this file. Environment variable overrides exist for developer tooling but are not meant for operator workflows.
 # torii_url = "http://127.0.0.1:8080"

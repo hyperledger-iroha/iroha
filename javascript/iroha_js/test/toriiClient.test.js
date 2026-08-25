@@ -110,7 +110,7 @@ if (sumeragiDiagnosticsFocus !== null && typeof nodeTest.only === "function") {
 const BASE_URL = "https://localhost:8080";
 const GOVERNANCE_PROPOSAL_ID = "ab".repeat(32);
 const VK_SIGNING_NETWORK_ID = NetworkId.parse(
-  "hash:32C903E5B3497E34C2B844EBFE8A39C19E6CF8F95D44C1FFB8BA9DCB42F91149#A2F0",
+  "32c903e5b3497e34c2b844ebfe8a39c19e6cf8f95d44c1ffb8ba9dcb42f91149",
 );
 const VK_LOCAL_SIGNING_CONTEXT = new LocalSigningContext(
   VK_SIGNING_NETWORK_ID,
@@ -13386,6 +13386,157 @@ test("getRuntimeAbiActive rejects unsupported option fields", async () => {
   await assert.rejects(
     () => client.getRuntimeAbiActive({ signal: new AbortController().signal, extra: "nope" }),
     /getRuntimeAbiActive options contains unsupported fields: extra/,
+  );
+});
+
+test("getAssetTransferControl signs the exact query and normalizes the snapshot", async () => {
+  let captured;
+  const fetchImpl = async (url, init) => {
+    captured = { url, init };
+    return createResponse({
+      status: 200,
+      jsonData: {
+        control: {
+          account_id: FIXTURE_ALICE_ID,
+          asset_definition_id: FIXTURE_ASSET_ID_A,
+          availability_revision: 5,
+          incoming: { state: "Enabled", value: null },
+          outgoing: { state: "Disabled", value: null },
+          availability_reason: "daily cap review",
+          blacklisted: false,
+          holding_limit: "1000",
+          limits: [
+            { window: "DAY", cap_amount: "100" },
+            { window: "WEEK", cap_amount: null },
+          ],
+          updated_at: "2026-08-24T01:02:03Z",
+        },
+        usages: [
+          {
+            window: "DAY",
+            bucket_start: "2026-08-24T00:00:00Z",
+            spent_amount: "25",
+            cap_amount: "100",
+          },
+        ],
+        checkpoint: {
+          block_height: 42,
+          block_hash: "ab".repeat(32),
+        },
+      },
+      headers: { "content-type": "application/json" },
+    });
+  };
+  const client = new ToriiClient(BASE_URL, { fetchImpl });
+  const result = await client.getAssetTransferControl(
+    FIXTURE_ALICE_ID,
+    FIXTURE_ASSET_ID_A,
+    { canonicalAuth: APPLICATION_CANONICAL_AUTH },
+  );
+  assert.equal(captured.url, `${BASE_URL}/v1/controls/asset-transfer/query`);
+  assert.equal(captured.init.method, "POST");
+  assert.deepEqual(JSON.parse(captured.init.body), {
+    account_id: FIXTURE_ALICE_ID,
+    asset_definition_id: FIXTURE_ASSET_ID_A,
+  });
+  const requestHeaders = new Map(
+    Object.entries(captured.init.headers).map(([name, value]) => [name.toLowerCase(), value]),
+  );
+  for (const header of [
+    "x-iroha-account",
+    "x-iroha-signature",
+    "x-iroha-timestamp-ms",
+    "x-iroha-nonce",
+  ]) {
+    assert.equal(typeof requestHeaders.get(header), "string");
+  }
+  assert.deepEqual(result, {
+    control: {
+      accountId: FIXTURE_ALICE_ID,
+      assetDefinitionId: FIXTURE_ASSET_ID_A,
+      availabilityRevision: 5,
+      incoming: "Enabled",
+      outgoing: "Disabled",
+      availabilityReason: "daily cap review",
+      blacklisted: false,
+      holdingLimit: "1000",
+      limits: [
+        { window: "DAY", capAmount: "100" },
+        { window: "WEEK", capAmount: null },
+      ],
+      updatedAt: "2026-08-24T01:02:03Z",
+    },
+    usages: [
+      {
+        window: "DAY",
+        bucketStart: "2026-08-24T00:00:00Z",
+        spentAmount: "25",
+        capAmount: "100",
+      },
+    ],
+    checkpoint: { blockHeight: 42, blockHash: "ab".repeat(32) },
+  });
+});
+
+test("getAssetTransferControl fails closed on malformed state and missing auth", async () => {
+  const malformedClient = new ToriiClient(BASE_URL, {
+    fetchImpl: async () => createResponse({
+      status: 200,
+      jsonData: {
+        control: {
+          account_id: FIXTURE_ALICE_ID,
+          asset_definition_id: FIXTURE_ASSET_ID_A,
+          availability_revision: 0,
+          incoming: "Enabled",
+          outgoing: { state: "Enabled", value: null },
+          blacklisted: false,
+          limits: [],
+        },
+        usages: [],
+        checkpoint: null,
+      },
+      headers: { "content-type": "application/json" },
+    }),
+  });
+  await assert.rejects(
+    () => malformedClient.getAssetTransferControl(
+      FIXTURE_ALICE_ID,
+      FIXTURE_ASSET_ID_A,
+      { canonicalAuth: APPLICATION_CANONICAL_AUTH },
+    ),
+    /control\.incoming must be an object/,
+  );
+  await assert.rejects(
+    () => malformedClient.getAssetTransferControl(FIXTURE_ALICE_ID, FIXTURE_ASSET_ID_A),
+    /options\.canonicalAuth is required/,
+  );
+
+  const malformedCheckpointClient = new ToriiClient(BASE_URL, {
+    fetchImpl: async () => createResponse({
+      status: 200,
+      jsonData: {
+        control: {
+          account_id: FIXTURE_ALICE_ID,
+          asset_definition_id: FIXTURE_ASSET_ID_A,
+          availability_revision: 0,
+          incoming: { state: "Enabled", value: null },
+          outgoing: { state: "Enabled", value: null },
+          blacklisted: false,
+          limits: [],
+        },
+        usages: [],
+        checkpoint: { block_height: 1, block_hash: "not-a-hash" },
+      },
+      headers: { "content-type": "application/json" },
+    }),
+  });
+  await assert.rejects(
+    () => malformedCheckpointClient.getAssetTransferControl(
+      FIXTURE_ALICE_ID,
+      FIXTURE_ASSET_ID_A,
+      { canonicalAuth: APPLICATION_CANONICAL_AUTH },
+    ),
+    /checkpoint\.block_hash must be a 32-byte hex string/,
   );
 });
 

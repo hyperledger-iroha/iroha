@@ -1,16 +1,16 @@
-use std::{collections::BTreeSet, io::Cursor, sync::Arc};
-
-use halo2_proofs::halo2curves::{
-    group::prime::PrimeCurveAffine as _,
-    pasta::{EpAffine, EqAffine, Fp, Fq},
+use std::{
+    collections::BTreeSet,
+    io::{Cursor, Seek as _, SeekFrom, Write as _},
+    sync::Arc,
 };
+
 use iroha_data_model::offline::{
     OFFLINE_CASH_HALO2_K_V1, OFFLINE_CASH_PARAMS_BYTES_V1, OfflineCashArtifactBindingV1,
     OfflineCashArtifactRoleV1, OfflineCashAuthenticatedReleaseV1,
 };
 use sha2::{Digest as _, Sha256};
 
-use super::*;
+use super::{halo2_backend::OfflineCashHalo2VerifierBackendV1, *};
 
 #[derive(Clone, Copy)]
 enum SourceBehavior {
@@ -102,48 +102,51 @@ fn source_with_behavior(behavior: SourceBehavior) -> Arc<TestArtifactSource> {
     })
 }
 
-fn canonical_eq_history() -> Vec<u8> {
-    let history = super::halo2_primitives::test_support::history_from_eq_parts(
-        std::array::from_fn(|index| Fp::from((index + 1) as u64)),
-        EqAffine::generator(),
-    )
-    .expect("canonical Eq history");
-    super::halo2_primitives::test_support::encode_history(&history).to_vec()
-}
-
-fn canonical_ep_history() -> Vec<u8> {
-    let history = super::halo2_primitives::test_support::history_from_ep_parts(
-        std::array::from_fn(|index| Fq::from((index + 1) as u64)),
-        EpAffine::generator(),
-    )
-    .expect("canonical Ep history");
-    super::halo2_primitives::test_support::encode_history(&history).to_vec()
+fn artifact_files(
+    payloads: &[(OfflineCashArtifactRoleV1, Vec<u8>)],
+) -> Vec<(OfflineCashArtifactRoleV1, std::fs::File)> {
+    payloads
+        .iter()
+        .map(|(role, payload)| {
+            let mut file = tempfile::tempfile().expect("create anonymous regular artifact file");
+            file.write_all(payload)
+                .expect("write complete artifact file");
+            file.seek(SeekFrom::Start(0)).expect("rewind artifact file");
+            (*role, file)
+        })
+        .collect()
 }
 
 #[test]
-fn profile_pins_k_finite_roles_caps_and_distinct_protocols() {
+fn profile_pins_public_contract_k_finite_roles_caps_and_distinct_protocols() {
     assert_eq!(OFFLINE_CASH_HALO2_K_V1, 16);
     assert_eq!(
         hex::encode(offline_cash_halo2_profile_digest_v1()),
-        "2efa29961b13b00a106dcb9ffbcf491f0fefd9013063659a8b5a92eb1cc823af"
+        "c73faa73caa6159316f87947816ecfd43c1bd2b586dd150891b9e99373d60152"
     );
     assert_eq!(OfflineCashHalo2ParityV1::ALL.len(), 2);
-    assert_eq!(OfflineCashHalo2CircuitRoleV1::ALL.len(), 5);
+    assert_eq!(OfflineCashHalo2CircuitRoleV1::ALL.len(), 8);
 
     let expected = [
-        "67bad7b6145ef44e1bcb06ab01a1e0c5efd688292b9f652e6b8f4f86971a6c7d",
-        "a0ac04d998f0e0f258d49c246c91e0642716219f3194cdb02bcaf39a7e58056f",
-        "bea057eb94775db5cccfa58a422cd837d823aa98756956136eafecc6a92b9b67",
-        "dc2aae8a1bac738c7c165c6610799015c2198394bbe1d83f7eb0424ecea1aba8",
-        "919ecb15bb10adb53676c222bf95b099c6d16a236557a7987e3708625042936f",
-        "4956489041a0d65a3cf8e4c172817e77ee04ab975916915e1228c57b59c68f7a",
-        "e07865b759cf9b3dc5b367144a73ec7e64fd404db8885d5f6a8f1cea2f163bf9",
-        "956d9c0a4284dcf2ea263342b4f0199802a1e7de0fa257c22eda0abdff720799",
-        "f6f0cd2e1bc1d7b493a0b2568220d1536448977dad24ea834dc6b8b232aef667",
-        "993041665fa8e420ca8509b70cd8e460f65018fda09cd348bd7ad6ef756c6f7a",
+        "ff078de121d1a59afe992fd49fe71966a328de59795e5d0892fed5ec4c0040dc",
+        "86f2b4257464dfbf7a8756a98d359adfed51b37122e281214001ff8481ff929f",
+        "d479e97fe1ba9bb996689b73ba5f081b8ecd2442b1081caae679dbd42dc3484b",
+        "782e7c21f52e666714769f5db6554d4313b81034616738b1743b05393832ac33",
+        "34ebc9bf9f81943a2b5900041e66592235b2ede15fb0b55df6661ea2b6abb14c",
+        "85cd051adb52110b8a5bdb3a3c87d4857b5ebd3ef6d2035119cac169269a408e",
+        "7841ab2596d3385e01f0a53d379d525e9357cc339da5a150edbc11aa5024648d",
+        "6b73120690837aa75a8f49cd5be11dd05a7cdc9bd3f65ba9c0bbcb0cfe5f6217",
+        "f9eca727b3657e1794bd0fb7062396899a1013efef4f9fe48c1121d74b876133",
+        "9cadf62765eb7551c8d56e12d9c863a5aef25dc1a53ac19637fcf81242e7b223",
+        "cd65ef1b1576c1c115603175b0f5b1fb5643ade0bd4fa52e38c3829686e4d00a",
+        "b0f28d619d5a5299b12badf4ae4efceed5a3de0ea1107d014a8ac17e641fac54",
+        "80b6fc92e32ad117610d42841968a7e7959365cceded60e2a03a7f6671d8333e",
+        "aa7671ca094a41db951a0a825350921cd1966330b8a6b9f1bf36c768c6d9c4d8",
+        "330bc59c9ccef9434fd8e60bfc046e2a5c4a4fa9ef64fddb30ac0927e5c5c76e",
+        "a20d1659d66d8ae2ae5152590bdb27ac311c598bdf7317fc3d7d31360748a012",
     ];
     let mut identities = BTreeSet::new();
-    let mut identity_index = 0;
+    let mut actual = Vec::with_capacity(expected.len());
     for parity in OfflineCashHalo2ParityV1::ALL {
         for role in OfflineCashHalo2CircuitRoleV1::ALL {
             let identity = offline_cash_halo2_protocol_identity_v1(parity, role);
@@ -151,26 +154,26 @@ fn profile_pins_k_finite_roles_caps_and_distinct_protocols() {
             assert_eq!(identity.circuit_role(), role);
             assert_ne!(identity.digest(), [0; 32]);
             assert!(identities.insert(identity.digest()));
-            assert_eq!(hex::encode(identity.digest()), expected[identity_index]);
-            identity_index += 1;
+            actual.push(hex::encode(identity.digest()));
         }
     }
-    assert_eq!(identities.len(), 10);
+    assert_eq!(actual, expected);
+    assert_eq!(identities.len(), 16);
     assert_eq!(super::protocol::OFFLINE_CASH_STATE_ABI_WORDS_V1, 229);
     assert_eq!(super::protocol::OFFLINE_CASH_STATE_WORDS_PER_INSTANCE_V1, 7);
-    assert_eq!(super::protocol::OFFLINE_CASH_STATE_INSTANCE_COLUMNS_V1, 1);
+    assert_eq!(super::protocol::OFFLINE_CASH_STATE_INSTANCE_COLUMNS_V1, 2);
     assert_eq!(super::protocol::OFFLINE_CASH_STATE_INSTANCE_CELLS_V1, 33);
     assert_eq!(
         super::protocol::OFFLINE_CASH_STATE_INSTANCE_CELLS_MAX_V1,
         50
     );
     assert_eq!(super::protocol::OFFLINE_CASH_STATE_SHA_LANES_V1, 5);
-    assert_eq!(super::protocol::OFFLINE_CASH_STATE_SHA_JOBS_V1, 10);
+    assert_eq!(super::protocol::OFFLINE_CASH_STATE_SHA_JOBS_V1, 13);
     assert_eq!(
         super::protocol::OFFLINE_CASH_STATE_SHA_JOB_BLOCKS_V1,
-        [6, 6, 5, 6, 6, 2, 2, 5, 6, 7]
+        [6, 6, 5, 6, 6, 2, 2, 5, 6, 7, 5, 8, 7]
     );
-    assert_eq!(super::protocol::OFFLINE_CASH_STATE_SHA_TOTAL_BLOCKS_V1, 51);
+    assert_eq!(super::protocol::OFFLINE_CASH_STATE_SHA_TOTAL_BLOCKS_V1, 71);
     assert_eq!(super::protocol::OFFLINE_CASH_HELPER_ABI_WORDS_V1, 184);
     assert_eq!(
         super::protocol::OFFLINE_CASH_HELPER_WORDS_PER_INSTANCE_V1,
@@ -253,9 +256,9 @@ fn manifest_rejects_cross_role_artifact_digest_aliasing() {
 #[test]
 fn artifact_source_authenticates_all_required_verifier_bytes() {
     let source = source_with_behavior(SourceBehavior::Normal);
-    let backend = OfflineCashHalo2VerifierBackendV1::from_artifact_source(source)
+    let artifacts = OfflineCashAuthenticatedVerifierArtifactsV1::load(source)
         .expect("hash-authenticated verifier artifacts");
-    let manifest = backend.artifact_manifest();
+    let manifest = artifacts.manifest();
     assert_eq!(
         manifest.state_protocol_digest(OfflineCashHalo2ParityV1::Eq),
         offline_cash_halo2_protocol_identity_v1(
@@ -268,6 +271,65 @@ fn artifact_source_authenticates_all_required_verifier_bytes() {
         manifest.artifact(OfflineCashArtifactRoleV1::StateVkEp).role,
         OfflineCashArtifactRoleV1::StateVkEp
     );
+}
+
+#[test]
+fn authenticated_file_set_pins_and_authenticates_all_34_roles() {
+    let payloads = artifact_payloads();
+    let release =
+        super::terminal_tests::authenticated_release_for_artifacts(artifact_bindings(&payloads));
+    let expected_release_id = release.release_id();
+    let expected_manifest_digest = release.manifest_digest();
+    let source = OfflineCashAuthenticatedArtifactFileSetV1::new(release, artifact_files(&payloads))
+        .expect("complete canonical file set authenticates");
+    assert_eq!(
+        source.artifact_count(),
+        OfflineCashArtifactRoleV1::ALL.len()
+    );
+    assert_eq!(source.release_id(), expected_release_id);
+    assert_eq!(source.manifest_digest(), expected_manifest_digest);
+
+    OfflineCashAuthenticatedVerifierArtifactsV1::load(Arc::new(source))
+        .expect("pinned file set remains valid for the first-party verifier loader");
+}
+
+#[test]
+fn authenticated_file_set_rejects_role_order_and_post_install_mutation() {
+    let payloads = artifact_payloads();
+    let release =
+        super::terminal_tests::authenticated_release_for_artifacts(artifact_bindings(&payloads));
+    let mut wrong_order = artifact_files(&payloads);
+    wrong_order.swap(0, 1);
+    assert!(matches!(
+        OfflineCashAuthenticatedArtifactFileSetV1::new(release, wrong_order),
+        Err(OfflineCashArtifactFileSetErrorV1::InvalidInventory)
+    ));
+
+    let release =
+        super::terminal_tests::authenticated_release_for_artifacts(artifact_bindings(&payloads));
+    let files = artifact_files(&payloads);
+    let state_vk_index = OfflineCashArtifactRoleV1::ALL
+        .iter()
+        .position(|role| *role == OfflineCashArtifactRoleV1::StateVkEq)
+        .expect("StateVkEq belongs to the finite inventory");
+    let mut external = files[state_vk_index]
+        .1
+        .try_clone()
+        .expect("clone test file handle");
+    let source = OfflineCashAuthenticatedArtifactFileSetV1::new(release, files)
+        .expect("initial exact bytes authenticate");
+    external
+        .seek(SeekFrom::Start(0))
+        .expect("seek external file handle");
+    external
+        .write_all(&[0xFF])
+        .expect("mutate one byte through the external handle");
+    external.flush().expect("flush external mutation");
+
+    assert!(matches!(
+        OfflineCashAuthenticatedVerifierArtifactsV1::load(Arc::new(source)),
+        Err(OfflineCashHalo2ArtifactErrorV1::DigestMismatch)
+    ));
 }
 
 #[test]
@@ -308,13 +370,13 @@ fn helper_artifact_boundary_is_exact_authenticated_and_non_authorizing() {
         ),
         (
             OfflineCashHalo2ParityV1::Eq,
-            OfflineCashHalo2CircuitRoleV1::GuardBundle,
-            OfflineCashArtifactRoleV1::GuardBundleVkEq,
+            OfflineCashHalo2CircuitRoleV1::GuardBundleLeaf,
+            OfflineCashArtifactRoleV1::GuardBundleLeafVkEq,
         ),
         (
             OfflineCashHalo2ParityV1::Ep,
-            OfflineCashHalo2CircuitRoleV1::GuardBundle,
-            OfflineCashArtifactRoleV1::GuardBundleVkEp,
+            OfflineCashHalo2CircuitRoleV1::GuardBundleLeaf,
+            OfflineCashArtifactRoleV1::GuardBundleLeafVkEp,
         ),
     ];
     for (parity, role, verifier_role) in cases {
@@ -377,8 +439,8 @@ fn helper_artifact_boundary_is_exact_authenticated_and_non_authorizing() {
     let mut corrupt = payloads;
     let (_, helper_vk) = corrupt
         .iter_mut()
-        .find(|(role, _)| *role == OfflineCashArtifactRoleV1::GuardBundleVkEp)
-        .expect("Ep GuardBundle VK");
+        .find(|(role, _)| *role == OfflineCashArtifactRoleV1::GuardBundleLeafVkEp)
+        .expect("Ep GuardBundleLeaf VK");
     helper_vk[0] ^= 1;
     let corrupt_source = Arc::new(TestArtifactSource {
         release,
@@ -390,17 +452,99 @@ fn helper_artifact_boundary_is_exact_authenticated_and_non_authorizing() {
     assert_eq!(
         corrupt_artifacts.authenticate_helper_verifier(
             OfflineCashHalo2ParityV1::Ep,
-            OfflineCashHalo2CircuitRoleV1::GuardBundle,
+            OfflineCashHalo2CircuitRoleV1::GuardBundleLeaf,
             corrupt_artifacts
                 .manifest()
-                .artifact(OfflineCashArtifactRoleV1::GuardBundleVkEp),
+                .artifact(OfflineCashArtifactRoleV1::GuardBundleLeafVkEp),
             corrupt_artifacts.manifest().protocol_digest(
                 OfflineCashHalo2ParityV1::Ep,
-                OfflineCashHalo2CircuitRoleV1::GuardBundle,
+                OfflineCashHalo2CircuitRoleV1::GuardBundleLeaf,
             ),
         ),
         Err(OfflineCashHalo2ArtifactErrorV1::DigestMismatch)
     );
+}
+
+#[test]
+fn public_abi22_and_kagemusha_v4_contract_are_profile_bound() {
+    use iroha_data_model::offline::{
+        KAGEMUSHA_RECURSIVE_SPEND_ARTIFACT_MANIFEST_SCHEMA_V4,
+        KAGEMUSHA_RECURSIVE_SPEND_ARTIFACT_MANIFEST_SCHEMA_V5,
+        KAGEMUSHA_RECURSIVE_SPEND_ARTIFACT_MANIFEST_VERSION_V4,
+        KAGEMUSHA_RECURSIVE_SPEND_NATIVE_BRIDGE_ABI_V4, KAGEMUSHA_RECURSIVE_SPEND_WIRE_VERSION_V4,
+    };
+
+    let canonical = offline_cash_halo2_profile_digest_v1();
+    assert_eq!(KAGEMUSHA_RECURSIVE_SPEND_NATIVE_BRIDGE_ABI_V4, 22);
+    assert_eq!(KAGEMUSHA_RECURSIVE_SPEND_WIRE_VERSION_V4, 4);
+    assert_eq!(KAGEMUSHA_RECURSIVE_SPEND_ARTIFACT_MANIFEST_VERSION_V4, 4);
+    assert_eq!(
+        canonical,
+        super::protocol::offline_cash_halo2_profile_digest_for_public_contract_test_v1(
+            KAGEMUSHA_RECURSIVE_SPEND_NATIVE_BRIDGE_ABI_V4,
+            KAGEMUSHA_RECURSIVE_SPEND_WIRE_VERSION_V4,
+            KAGEMUSHA_RECURSIVE_SPEND_ARTIFACT_MANIFEST_SCHEMA_V4,
+            KAGEMUSHA_RECURSIVE_SPEND_ARTIFACT_MANIFEST_VERSION_V4,
+        )
+    );
+
+    let substitutions = [
+        (
+            21,
+            KAGEMUSHA_RECURSIVE_SPEND_WIRE_VERSION_V4,
+            KAGEMUSHA_RECURSIVE_SPEND_ARTIFACT_MANIFEST_SCHEMA_V4,
+            KAGEMUSHA_RECURSIVE_SPEND_ARTIFACT_MANIFEST_VERSION_V4,
+        ),
+        (
+            KAGEMUSHA_RECURSIVE_SPEND_NATIVE_BRIDGE_ABI_V4,
+            3,
+            KAGEMUSHA_RECURSIVE_SPEND_ARTIFACT_MANIFEST_SCHEMA_V4,
+            KAGEMUSHA_RECURSIVE_SPEND_ARTIFACT_MANIFEST_VERSION_V4,
+        ),
+        (
+            KAGEMUSHA_RECURSIVE_SPEND_NATIVE_BRIDGE_ABI_V4,
+            KAGEMUSHA_RECURSIVE_SPEND_WIRE_VERSION_V4,
+            KAGEMUSHA_RECURSIVE_SPEND_ARTIFACT_MANIFEST_SCHEMA_V5,
+            KAGEMUSHA_RECURSIVE_SPEND_ARTIFACT_MANIFEST_VERSION_V4,
+        ),
+        (
+            KAGEMUSHA_RECURSIVE_SPEND_NATIVE_BRIDGE_ABI_V4,
+            KAGEMUSHA_RECURSIVE_SPEND_WIRE_VERSION_V4,
+            KAGEMUSHA_RECURSIVE_SPEND_ARTIFACT_MANIFEST_SCHEMA_V4,
+            5,
+        ),
+    ];
+    for (bridge_abi, data_wire, manifest_schema, manifest_version) in substitutions {
+        let substituted =
+            super::protocol::offline_cash_halo2_profile_digest_for_public_contract_test_v1(
+                bridge_abi,
+                data_wire,
+                manifest_schema,
+                manifest_version,
+            );
+        assert_ne!(substituted, canonical);
+
+        let payloads = artifact_payloads();
+        let release = super::terminal_tests::authenticated_release_for_artifacts_and_protocol(
+            artifact_bindings(&payloads),
+            substituted,
+            offline_cash_halo2_protocol_identity_v1(
+                OfflineCashHalo2ParityV1::Eq,
+                OfflineCashHalo2CircuitRoleV1::State,
+            )
+            .digest(),
+            offline_cash_halo2_protocol_identity_v1(
+                OfflineCashHalo2ParityV1::Ep,
+                OfflineCashHalo2CircuitRoleV1::State,
+            )
+            .digest(),
+        );
+        assert_eq!(
+            OfflineCashHalo2ArtifactManifestV1::from_authenticated_release(&release).unwrap_err(),
+            OfflineCashHalo2ArtifactErrorV1::ProfileMismatch,
+            "public contract substitution must fail before artifact parsing"
+        );
+    }
 }
 
 #[test]
@@ -461,80 +605,38 @@ fn artifact_corruption_and_callback_contracts_fail_closed() {
 }
 
 #[test]
-fn wrong_role_protocol_and_all_proofs_remain_rejected() {
+fn malformed_semantic_artifacts_and_role_substitution_fail_before_verification() {
     let source = source_with_behavior(SourceBehavior::Normal);
-    let backend = OfflineCashHalo2VerifierBackendV1::from_artifact_source(source)
+    assert_eq!(
+        OfflineCashHalo2VerifierBackendV1::from_artifact_source(source.clone()).unwrap_err(),
+        OfflineCashHalo2ArtifactErrorV1::InvalidParameterArtifact
+    );
+
+    let artifacts = OfflineCashAuthenticatedVerifierArtifactsV1::load(source)
         .expect("hash-authenticated verifier artifacts");
-    let manifest = backend.artifact_manifest();
-    let eq_history = canonical_eq_history();
-    let ep_history = canonical_ep_history();
-    let proof = [0x32; 128];
-    let semantic = [0x33; 32];
+    let manifest = artifacts.manifest();
     let eq_vk = manifest.artifact(OfflineCashArtifactRoleV1::StateVkEq);
     let eq_protocol = manifest.state_protocol_digest(OfflineCashHalo2ParityV1::Eq);
     let ep_vk = manifest.artifact(OfflineCashArtifactRoleV1::StateVkEp);
-    let ep_protocol = manifest.state_protocol_digest(OfflineCashHalo2ParityV1::Ep);
-
-    let unavailable = backend
-        .verify_eq_current(eq_vk, eq_protocol, semantic, &proof, &eq_history)
-        .expect_err("skeleton must never accept a proof");
-    assert!(unavailable.contains("verification is unavailable"));
-    assert!(
-        backend
-            .verify_ep_current(ep_vk, ep_protocol, semantic, &proof, &ep_history)
-            .expect_err("Ep skeleton must never accept a proof")
-            .contains("verification is unavailable")
-    );
-    assert!(
-        backend
-            .decide_eq_history(eq_vk, eq_protocol, &eq_history)
-            .expect_err("Eq history skeleton must never decide")
-            .contains("verification is unavailable")
-    );
-    assert!(
-        backend
-            .decide_ep_history(ep_vk, ep_protocol, &ep_history)
-            .expect_err("Ep history skeleton must never decide")
-            .contains("verification is unavailable")
-    );
-
-    assert!(
-        backend
-            .verify_eq_current(ep_vk, eq_protocol, semantic, &proof, &eq_history)
-            .expect_err("role substitution")
-            .contains("manifest")
+    assert_eq!(
+        artifacts.authenticate_state_verifier(OfflineCashHalo2ParityV1::Eq, ep_vk, eq_protocol,),
+        Err(OfflineCashHalo2ArtifactErrorV1::InvalidManifest)
     );
     let mut wrong_protocol = eq_protocol;
     wrong_protocol[0] ^= 1;
-    assert!(
-        backend
-            .verify_eq_current(eq_vk, wrong_protocol, semantic, &proof, &eq_history)
-            .expect_err("protocol substitution")
-            .contains("protocol")
-    );
-    assert!(
-        backend
-            .verify_eq_current(eq_vk, eq_protocol, [0; 32], &proof, &eq_history)
-            .expect_err("zero semantic identity")
-            .contains("proof shape")
+    assert_eq!(
+        artifacts.authenticate_state_verifier(OfflineCashHalo2ParityV1::Eq, eq_vk, wrong_protocol,),
+        Err(OfflineCashHalo2ArtifactErrorV1::ProtocolMismatch)
     );
 }
 
 #[test]
-fn terminal_boundary_cannot_mint_receipt_from_backend_skeleton() {
+fn terminal_boundary_cannot_mint_receipt_from_unparsed_artifact_bytes() {
     let source = source_with_behavior(SourceBehavior::Normal);
-    let backend = OfflineCashHalo2VerifierBackendV1::from_artifact_source(source.clone())
-        .expect("hash-authenticated verifier artifacts");
-    let request = super::terminal_tests::request(source.authenticated_release());
-    let payment = super::terminal_tests::payment(source.authenticated_release(), &request);
-    let verifier = OfflineCashTerminalVerifierV1::new(source.authenticated_release(), &backend);
-    assert!(matches!(
-        verifier.verify_payment(&request, &payment, 2_000),
-        Err(OfflineCashVerificationErrorV1::Cryptographic {
-            stage: OfflineCashVerificationStageV1::EqCurrent,
-            ..
-        })
-    ));
+    assert_eq!(
+        OfflineCashHalo2VerifierBackendV1::from_artifact_source(source).unwrap_err(),
+        OfflineCashHalo2ArtifactErrorV1::InvalidParameterArtifact
+    );
 }
 
 #[test]
@@ -572,19 +674,21 @@ fn shared_pasta_profile_is_fixed_and_offline_cash_preflight_is_non_activating() 
     let protocol = include_str!("protocol.rs");
     assert!(protocol.contains("preflight_offline_cash_recursion_activation_v1"));
     assert!(protocol.contains("Passing this gate is deliberately not proof authority"));
-    assert!(
-        protocol.contains(
-            "const TRANSCRIPT_REVISION: &[u8] = b\"Blake2bRead+Blake2bWrite/Challenge255\""
-        )
-    );
+    assert!(protocol.contains("snark-verifier/PoseidonTranscript(width3,rate2,full8,partial57"));
+    assert!(protocol.contains("state-compact100-wire+guard-bundle-canonical68-domain-sha256-join"));
+    assert!(!protocol.contains(concat!("compact", "68-wire")));
     let backend = include_str!("halo2_backend.rs");
-    assert!(backend.contains("VerificationUnavailable"));
+    assert!(backend.contains("terminal_verify_eq_outer_and_carried_v1"));
+    assert!(backend.contains("terminal_verify_ep_outer_and_carried_v1"));
+    assert!(!backend.contains(concat!("verify_augmented_", "ipa_proof_v1")));
+    assert!(!backend.contains(concat!("OfflineCashIpa", "HistoryV1")));
+    assert!(backend.contains("authorize_verified_credit"));
     assert!(!backend.contains("preflight_offline_cash_recursion_activation_v1"));
 }
 
 #[test]
-fn staged_warning_allowance_is_confined_and_proof_authority_stays_core_private() {
-    const STAGING_REASON: &str = "staged offline-cash boundary remains disconnected until exact STATE circuits and activation wiring land";
+fn staged_warning_is_confined_and_public_verifier_facade_is_unforgeable() {
+    const STAGING_REASON: &str = "offline-cash STATE verification is connected but production authority remains blocked on the governed proof cap, reviewed recursion, and secure-device activation";
 
     fn without_whitespace(source: &str) -> String {
         source
@@ -638,9 +742,18 @@ fn staged_warning_allowance_is_confined_and_proof_authority_stays_core_private()
             let acceptance_authority = ["Verifier", "Proof", "VerifiedOfflineCashCredit"]
                 .iter()
                 .any(|name| line.contains(name));
+            let allowed_opaque_facade = [
+                "pub enum OfflineCashHalo2ArtifactErrorV1",
+                "pub enum OfflineCashVerificationStageV1",
+                "pub enum OfflineCashVerificationErrorV1",
+                "pub struct VerifiedOfflineCashCreditV1",
+                "pub struct OfflineCashVerifierV1",
+            ]
+            .iter()
+            .any(|declaration| line.starts_with(declaration));
             assert!(
-                !(externally_public && acceptance_authority),
-                "offline-cash proof-acceptance authority must remain Core-private: {line}"
+                !(externally_public && acceptance_authority && !allowed_opaque_facade),
+                "only the exact opaque Core verifier facade may be public: {line}"
             );
         }
     }
@@ -655,8 +768,16 @@ fn staged_warning_allowance_is_confined_and_proof_authority_stays_core_private()
     assert!(!compact_root.contains("pubtraitOfflineCashPairedProofVerifierV1"));
     assert!(!compact_root.contains("pubmodpaired_verifier_sealed"));
     assert!(compact_backend.contains("pub(crate)structOfflineCashHalo2VerifierBackendV1"));
-    assert!(backend.contains("FULL_STATE_TYPED_PUBLIC_INSTANCES_REQUIRED_BEFORE_ACTIVATION"));
-    assert!(!backend.contains("OfflineCashStatePublicInstancesV1"));
+    assert!(backend.contains("OfflineCashStatePublicInstancesV1"));
+    assert!(backend.contains("parse_processed_verifier_key_v1"));
+    assert!(backend.contains("PRODUCTION_ACTIVATION_BLOCKER_V1"));
     assert!(!compact_backend.contains("pubstructOfflineCashHalo2VerifierBackendV1"));
     assert!(!compact_root.contains("pubusehalo2_backend::OfflineCashHalo2VerifierBackendV1"));
+    assert!(compact_root.contains("pubstructOfflineCashVerifierV1{"));
+    assert!(compact_root.contains("pubstructVerifiedOfflineCashCreditV1{"));
+    assert!(compact_root.contains(
+        "pubfnfrom_authenticated_artifact_file_set(source:OfflineCashAuthenticatedArtifactFileSetV1,)->Result<Self,OfflineCashHalo2ArtifactErrorV1>"
+    ));
+    assert!(!compact_root.contains("pubfnnew(release:&OfflineCashAuthenticatedReleaseV1"));
+    assert!(!compact_root.contains("pubfnfrom_artifact_source"));
 }

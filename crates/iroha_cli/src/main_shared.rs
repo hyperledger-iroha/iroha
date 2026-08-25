@@ -5067,8 +5067,9 @@ mod transaction {
             iroha::data_model::isi::asset_transfer_control::SetAssetTransferControl => "AssetTransfer.SetControl",
             iroha::data_model::isi::nexus::CreateFeeSponsorProgram => "FeeSponsor.CreateProgram",
             iroha::data_model::isi::nexus::StageFeeSponsorProgramRevision => "FeeSponsor.StageRevision",
-            iroha::data_model::isi::nexus::ActivateFeeSponsorProgramRevision => "FeeSponsor.ActivateRevision",
             iroha::data_model::isi::nexus::EnrollFeeSponsorBeneficiary => "FeeSponsor.EnrollBeneficiary",
+            iroha::data_model::isi::nexus::FundFeeSponsorProgram => "FeeSponsor.FundProgram",
+            iroha::data_model::isi::nexus::ActivateFeeSponsorProgramRevision => "FeeSponsor.ActivateRevision",
             iroha::data_model::isi::offline::RecordKagemushaTairaCanaryV4 => "Kagemusha.RecordTairaCanaryV4",
             iroha::data_model::isi::offline::AuthorizeKagemushaTairaCanaryV4 => "Kagemusha.AuthorizeTairaCanaryV4",
             iroha::data_model::isi::offline::RegisterOfflineDeviceAttestation => "Kagemusha.RegisterDeviceAttestation",
@@ -5164,10 +5165,17 @@ mod transaction {
     #[cfg(test)]
     mod inspect_tests {
         use super::*;
-        use iroha::data_model::{
-            domain::{Domain, DomainId},
-            isi::Register,
+        use iroha::{
+            crypto::{Algorithm, KeyPair},
+            data_model::{
+                account::AccountId,
+                asset::AssetDefinitionId,
+                domain::{Domain, DomainId},
+                isi::{Register, nexus::FundFeeSponsorProgram},
+                nexus::FeeSponsorProgramId,
+            },
         };
+        use iroha_primitives::numeric::Quantity;
         use sha2::Digest as _;
 
         #[test]
@@ -5234,8 +5242,51 @@ mod transaction {
                 .and_then(|rows| rows.first())
                 .and_then(norito::json::Value::as_object)
                 .expect("one inspection row");
-            assert_eq!(row.get("semantic_type").and_then(|value| value.as_str()), Some("Log"));
-            assert_eq!(row.get("wire_id").and_then(|value| value.as_str()), Some("iroha.log"));
+            assert_eq!(
+                row.get("semantic_type").and_then(|value| value.as_str()),
+                Some("Log")
+            );
+            assert_eq!(
+                row.get("wire_id").and_then(|value| value.as_str()),
+                Some("iroha.log")
+            );
+        }
+
+        #[test]
+        fn inspection_reports_fund_fee_sponsor_program_semantics() {
+            let sponsor = AccountId::new(
+                KeyPair::try_from_seed(vec![0x5a; 32], Algorithm::Ed25519)
+                    .expect("deterministic sponsor key")
+                    .public_key()
+                    .clone(),
+            );
+            let instruction: InstructionBox = FundFeeSponsorProgram {
+                program_id: FeeSponsorProgramId::new(
+                    sponsor,
+                    "gate3".parse().expect("program name"),
+                ),
+                asset_definition_id: AssetDefinitionId::derive_from_components(
+                    DomainId::try_new("fees", "universal").expect("fee domain"),
+                    "xor".parse().expect("fee asset name"),
+                ),
+                amount: Quantity::from(100_u64),
+            }
+            .into();
+            let report = inspect_instruction_array(&[instruction]).expect("inspect sponsor fund");
+            let row = report
+                .get("instructions")
+                .and_then(norito::json::Value::as_array)
+                .and_then(|rows| rows.first())
+                .and_then(norito::json::Value::as_object)
+                .expect("one inspection row");
+            assert_eq!(
+                row.get("semantic_type").and_then(|value| value.as_str()),
+                Some("FeeSponsor.FundProgram")
+            );
+            assert_eq!(
+                row.get("wire_id").and_then(|value| value.as_str()),
+                Some("nexus::FundFeeSponsorProgram")
+            );
         }
     }
     #[derive(clap::Args, Debug)]

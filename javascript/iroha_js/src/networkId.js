@@ -1,7 +1,5 @@
-import { computeHashLiteralCrc } from "./hashLiteralCrc.js";
-
 const NETWORK_ID_BYTE_LENGTH = 32;
-const HASH_LITERAL_PATTERN = /^hash:([0-9A-F]{64})#([0-9A-F]{4})$/u;
+const NETWORK_ID_LITERAL_PATTERN = /^[0-9a-f]{64}$/u;
 const CONSTRUCTION_TOKEN = Symbol("NetworkId construction token");
 const networkIdStorage = new WeakMap();
 
@@ -30,12 +28,9 @@ function validateRawNetworkId(bytes, context) {
 }
 
 function canonicalLiteral(bytes) {
-  const body = Array.from(bytes, (byte) =>
-    byte.toString(16).toUpperCase().padStart(2, "0"),
+  return Array.from(bytes, (byte) =>
+    byte.toString(16).padStart(2, "0"),
   ).join("");
-  const prefix = `hash:${body}`;
-  const checksum = computeHashLiteralCrc("hash", body);
-  return `${prefix}#${checksum}`;
 }
 
 /**
@@ -59,25 +54,21 @@ export class NetworkId {
     Object.freeze(this);
   }
 
-  /** Parse one exact checksummed uppercase Iroha hash literal. */
+  /** Parse one exact lowercase marked 32-byte Iroha hash literal. */
   static parse(literal) {
     if (typeof literal !== "string") {
       throw new TypeError("NetworkId literal must be a string");
     }
-    const match = HASH_LITERAL_PATTERN.exec(literal);
-    if (match === null) {
+    if (!NETWORK_ID_LITERAL_PATTERN.test(literal)) {
       throw new TypeError(
-        "NetworkId must be an exact canonical checksummed 32-byte Iroha hash literal",
+        "NetworkId must be an exact canonical lowercase 32-byte Iroha hash literal",
       );
     }
     const bytes = Uint8Array.from(
-      match[1].match(/../gu),
+      literal.match(/../gu),
       (pair) => Number.parseInt(pair, 16),
     );
     validateRawNetworkId(bytes, "NetworkId");
-    if (canonicalLiteral(bytes) !== literal) {
-      throw new TypeError("NetworkId literal checksum is invalid");
-    }
     return new NetworkId(CONSTRUCTION_TOKEN, bytes, literal);
   }
 

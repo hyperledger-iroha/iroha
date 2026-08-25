@@ -25,7 +25,7 @@ VALIDATOR = ROOT / "scripts/validate_norito_bridge_xcframework.py"
 SOURCE_DATE_EPOCH = "1700000001"
 NORMALIZED_ZIP_TIME = (2023, 11, 14, 22, 13, 20)
 KNOWN_FIXTURE_ARCHIVE_SHA256 = (
-    "21802302734a4a873e18593da08c7cbb6ba9ff4c49ffa7fb8288a92e5832412a"
+    "1403d831d2c264259db952386ec4e750d0bf4d9b420b9d4f610cb69795803b57"
 )
 SLICE_METADATA = {
     "ios-arm64": ("ios", ["arm64"], None),
@@ -189,6 +189,7 @@ class ArchiveNoritoXcframeworkTests(unittest.TestCase):
         self.mechanical_runner.write_text(
             """\
 import importlib.util
+import os
 from pathlib import Path
 import sys
 
@@ -207,10 +208,20 @@ def load(name, path):
 
 owner = load("mechanical_archive_owner", Path(sys.argv[1]))
 validator = load("mechanical_archive_validator", Path(sys.argv[2]))
-validator._validate_repository_provenance = lambda _root, _payload: None
+validator._validate_repository_provenance = lambda *_args: None
 owner._load_generation_validator = lambda: validator
-owner._validate_native_binaries = lambda _snapshot, _validator: None
-digest, size = owner.archive_xcframework(sys.argv[3], sys.argv[4], sys.argv[5])
+def validate_native(_snapshot, _validator):
+    selected = os.environ.get("ARCHIVE_TEST_REPLACE_SELECTED_LOCK")
+    if selected:
+        path = Path(selected)
+        replacement = path.with_name("replacement-Cargo.lock")
+        replacement.write_bytes(path.read_bytes())
+        replacement.replace(path)
+owner._validate_native_binaries = validate_native
+lockfile = sys.argv[6] if len(sys.argv) == 7 else None
+digest, size = owner.archive_xcframework(
+    sys.argv[3], sys.argv[4], sys.argv[5], lockfile
+)
 print(f"{digest} {size}")
 """,
             encoding="utf-8",
@@ -223,25 +234,29 @@ print(f"{digest} {size}")
         expect_success: bool = True,
         environment_updates: dict[str, str] | None = None,
         pass_fds: tuple[int, ...] = (),
+        lockfile: Path | None = None,
     ) -> subprocess.CompletedProcess[str]:
         environment = os.environ.copy()
         environment["SOURCE_DATE_EPOCH"] = SOURCE_DATE_EPOCH
         environment.pop("NORITO_BRIDGE_OUTPUT_LOCK_FD", None)
         if environment_updates is not None:
             environment.update(environment_updates)
+        command = [
+            sys.executable,
+            "-I",
+            "-S",
+            "-B",
+            str(self.mechanical_runner),
+            str(OWNER),
+            str(VALIDATOR),
+            str(self.framework),
+            str(output),
+            str(self.scratch_root),
+        ]
+        if lockfile is not None:
+            command.append(str(lockfile))
         result = subprocess.run(
-            [
-                sys.executable,
-                "-I",
-                "-S",
-                "-B",
-                str(self.mechanical_runner),
-                str(OWNER),
-                str(VALIDATOR),
-                str(self.framework),
-                str(output),
-                str(self.scratch_root),
-            ],
+            command,
             check=False,
             capture_output=True,
             text=True,
@@ -254,6 +269,22 @@ print(f"{digest} {size}")
         if not expect_success and result.returncode == 0:
             self.fail("archive owner unexpectedly succeeded")
         return result
+
+    def test_selected_lock_inode_replacement_blocks_archive_publication(self) -> None:
+        selected_lock = self.root / "privacy-release" / "Cargo.lock"
+        selected_lock.parent.mkdir()
+        selected_lock.write_bytes((ROOT / "Cargo.lock").read_bytes())
+        output = self.output_root / "replaced-lock.zip"
+        result = self._run(
+            output,
+            expect_success=False,
+            environment_updates={
+                "ARCHIVE_TEST_REPLACE_SELECTED_LOCK": str(selected_lock)
+            },
+            lockfile=selected_lock,
+        )
+        self.assertIn("changed before archive publication", result.stderr)
+        self.assertFalse(output.exists())
 
     def test_sorted_archive_is_stable_across_source_mtime_and_mode_changes(self) -> None:
         first = self.output_root / "first.zip"
@@ -670,9 +701,11 @@ print(f"{digest} {size}")
             "_load_generation_validator",
             return_value=CapturingValidator,
         ):
-            owner._validate_generation(self.framework)
+            selected_lock = self.root / "privacy-release" / "Cargo.lock"
+            owner._validate_generation(self.framework, selected_lock)
 
         self.assertIs(captured["verify_repository_provenance"], True)
+        self.assertEqual(captured["lockfile_path"], selected_lock)
         self.assertFalse((self.artifact_root / "NoritoBridge.artifacts.json").exists())
 
     def test_repository_provenance_rejection_blocks_publication(self) -> None:

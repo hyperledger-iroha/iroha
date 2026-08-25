@@ -50,10 +50,10 @@ import org.hyperledger.iroha.sdk.tx.norito.NoritoJavaCodecAdapter
 
 class HttpClientTransportTest {
     private val verifyingKeyNetworkId = NetworkId.parse(
-        "hash:32C903E5B3497E34C2B844EBFE8A39C19E6CF8F95D44C1FFB8BA9DCB42F91149#A2F0",
+        "32c903e5b3497e34c2b844ebfe8a39c19e6cf8f95d44c1ffb8ba9dcb42f91149",
     )
     private val otherNetworkId = NetworkId.parse(
-        "hash:0E5751C026E543B2E8AB2EB06099DAA1D1E5DF47778F7787FAAB45CDF12FE3A9#6A22",
+        "0e5751c026e543b2e8ab2eb06099daa1d1e5df47778f7787faab45cdf12fe3a9",
     )
     private val validEd25519PublicKeyHex = TestEd25519Keys.publicKeyHex(0x22)
     private val ed25519IdentityKeyHex = "01" + "00".repeat(31)
@@ -1865,7 +1865,7 @@ class HttpClientTransportTest {
                 "kind" to "network",
                 "value" to verifyingKeyNetworkId.literal,
             ),
-            "authority" to "alice",
+            "authority" to "alice@universal",
             "fee_payment" to testFeePayment(9_000L).toJsonMap(),
         )
 
@@ -1919,7 +1919,7 @@ class HttpClientTransportTest {
                 "kind" to "network",
                 "value" to verifyingKeyNetworkId.literal,
             ),
-            "authority" to "alice",
+            "authority" to "alice@universal",
             "fee_payment" to testFeePayment(9_000L).toJsonMap(),
         )
 
@@ -1933,7 +1933,7 @@ class HttpClientTransportTest {
             add(validPayload().apply {
                 this["domain"] = mapOf(
                     "kind" to "network",
-                    "value" to verifyingKeyNetworkId.literal.lowercase(),
+                    "value" to verifyingKeyNetworkId.literal.uppercase(),
                 )
             })
             add(validPayload().apply {
@@ -1989,7 +1989,7 @@ class HttpClientTransportTest {
                             "kind" to "network",
                             "value" to verifyingKeyNetworkId.literal,
                         ),
-                        "authority" to "alice",
+                        "authority" to "alice@universal",
                         "fee_payment" to requested.toJsonMap(),
                     ),
                     auth,

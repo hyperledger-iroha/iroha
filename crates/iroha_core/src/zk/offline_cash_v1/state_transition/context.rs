@@ -39,11 +39,11 @@ impl OfflineCashStateContextV1 {
             .map_err(|_| StateTransitionErrorV1::InvalidContext)?;
         let asset_bytes =
             norito::encode_canonical(&asset).map_err(|_| StateTransitionErrorV1::InvalidContext)?;
-        let scale_bytes = scale.to_le_bytes();
-        let digest = digest_framed(
-            CONTEXT_DOMAIN,
-            &[&release_id, &network_bytes, &asset_bytes, &scale_bytes],
-        );
+        let message = state_context_message_v1(&release_id, &network_bytes, &asset_bytes, scale);
+        if message.len() != STATE_CONTEXT_MESSAGE_BYTES_V1 {
+            return Err(StateTransitionErrorV1::InvalidContext);
+        }
+        let digest = Sha256::digest(message.as_slice()).into();
         Ok(Self {
             release_id,
             network_id,

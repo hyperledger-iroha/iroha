@@ -367,7 +367,7 @@ impl KagemushaCatalogSealedParityQualificationV1 {
         )
     }
 }
-/// One startup-authenticated ABI-21 release retained for consensus execution.
+/// One startup-authenticated Kagemusha V4 release retained for consensus execution.
 pub(crate) struct KagemushaCachedReleaseV4 {
     release_record: iroha_data_model::offline::KagemushaRecursiveSpendReleaseRecordV4,
     qualification_receipt_sha256: [u8; 32],

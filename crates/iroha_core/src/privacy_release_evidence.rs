@@ -16,7 +16,8 @@ pub use network_actions::{
     PrivacyReleaseJindoNetworkActionV1, PrivacyReleaseOrchardNetworkActionV1,
     PrivacyReleasePqMaspNetworkActionsV1, PrivacyReleaseTransactionContextV1,
     PrivacyReleaseVeRangeNetworkActionV1, PrivacyReleaseVegaNetworkActionV1,
-    PrivacyReleaseZkAceNetworkActionV1, build_privacy_release_anonymous_pgc_network_action_v1,
+    PrivacyReleaseZkAceNetworkActionV1, PrivacyReleaseZkAmsNetworkActionsV1,
+    build_privacy_release_anonymous_pgc_network_action_v1,
     build_privacy_release_bootle_lantern_network_action_v1,
     build_privacy_release_fcmp_network_action_v1,
     build_privacy_release_ivm_private_note_network_action_v1,
@@ -24,6 +25,7 @@ pub use network_actions::{
     build_privacy_release_pq_masp_network_actions_v1, build_privacy_release_vega_network_action_v1,
     build_privacy_release_verange_network_action_v1,
     build_privacy_release_zk_ace_network_action_v1,
+    build_privacy_release_zk_ams_network_actions_v1,
 };
 use retained_native::{run_ivm_private_note_stage_v1, run_pq_masp_stage_v1};
 #[cfg(test)]

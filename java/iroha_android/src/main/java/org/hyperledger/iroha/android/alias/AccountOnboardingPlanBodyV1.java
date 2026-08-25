@@ -81,7 +81,7 @@ public final class AccountOnboardingPlanBodyV1 extends AliasJsonValue {
     map.put("version", version);
     map.put("request", request.toJsonMap());
     map.put("authority", authority);
-    map.put("network_id", networkId.literal());
+    map.put("network_id", networkId.noritoJsonLiteral());
     map.put("anchor", anchor.toJsonMap());
     map.put("resource", resource.toJsonMap());
     map.put("acquisition", acquisition.toJsonMap());

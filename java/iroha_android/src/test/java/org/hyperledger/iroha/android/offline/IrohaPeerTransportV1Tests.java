@@ -12,6 +12,7 @@ import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Base64;
 import java.util.List;
 import java.util.Map;
 import java.util.zip.Deflater;
@@ -34,10 +35,97 @@ public final class IrohaPeerTransportV1Tests {
   @Test
   public void wireLimitsCannotExceedV1HardCeilings() {
     new IrohaPeerWireLimitsV1(32 * 1_024, 24_576);
+    new IrohaPeerWireLimitsV1(32 * 1_024, 24_576, 10_587);
     assertThrows(IllegalArgumentException.class,
         () -> new IrohaPeerWireLimitsV1(32 * 1_024 + 1, 24_576));
     assertThrows(IllegalArgumentException.class,
         () -> new IrohaPeerWireLimitsV1(32 * 1_024, 24_577));
+    assertThrows(IllegalArgumentException.class,
+        () -> new IrohaPeerWireLimitsV1(32 * 1_024, 24_576, 10_588));
+  }
+
+  @Test
+  public void offlineCashProfileRequiresCanonicalBoundedKgm2Text() {
+    final byte[] canonical = offlineCashPeerText(IrohaPeerPayloadKind.PAYMENT, 49);
+    final IrohaPeerWireMessageV1 message =
+        new IrohaPeerWireMessageV1(
+            new IrohaPeerCanonicalPayload(
+                IrohaPeerPayloadProfile.OFFLINE_CASH_V1,
+                IrohaPeerPayloadKind.PAYMENT,
+                0x0100,
+                canonical));
+    assertEquals(3, IrohaPeerPayloadProfile.OFFLINE_CASH_V1.code());
+    assertEquals(
+        IrohaPeerPayloadProfile.OFFLINE_CASH_V1,
+        IrohaPeerPayloadProfile.fromCode(3));
+    assertEquals(10_587, IrohaPeerWireLimitsV1.PEER_V1.maximumEncodedBytes(
+        IrohaPeerPayloadProfile.OFFLINE_CASH_V1));
+    assertEquals(1_029, IrohaPeerWireLimitsV1.PEER_V1.maximumEncodedBytes(
+        IrohaPeerPayloadProfile.OFFLINE_CASH_V1, IrohaPeerPayloadKind.RECEIVE_REQUEST));
+    assertEquals(10_587, IrohaPeerWireLimitsV1.PEER_V1.maximumEncodedBytes(
+        IrohaPeerPayloadProfile.OFFLINE_CASH_V1, IrohaPeerPayloadKind.PAYMENT));
+    assertEquals(347, IrohaPeerWireLimitsV1.PEER_V1.maximumEncodedBytes(
+        IrohaPeerPayloadProfile.OFFLINE_CASH_V1, IrohaPeerPayloadKind.ACKNOWLEDGEMENT));
+    assertEquals(message, IrohaPeerWireMessageV1.decode(message.encode()));
+
+    final List<String> frames = IrohaPeerQRCodecV1.encode(message);
+    assertEquals(1, frames.size());
+    assertEquals(
+        IrohaPeerPayloadProfile.OFFLINE_CASH_V1,
+        IrohaPeerQRCodecV1.decodeFrame(frames.get(0)).profile());
+
+    for (final String invalid : List.of("kgm2:", "kgm2:AA=", "kgm2:+A")) {
+      assertThrows(
+          IllegalArgumentException.class,
+          () -> new IrohaPeerCanonicalPayload(
+              IrohaPeerPayloadProfile.OFFLINE_CASH_V1,
+              IrohaPeerPayloadKind.PAYMENT,
+              0x0100,
+              invalid.getBytes(StandardCharsets.UTF_8)));
+    }
+    final byte[] wrongSchema = offlineCashPeerText(
+        IrohaPeerPayloadKind.RECEIVE_REQUEST, 49);
+    assertThrows(
+        IllegalArgumentException.class,
+        () -> new IrohaPeerCanonicalPayload(
+            IrohaPeerPayloadProfile.OFFLINE_CASH_V1,
+            IrohaPeerPayloadKind.PAYMENT,
+            0x0100,
+            wrongSchema));
+
+    final byte[] requestMaximum = offlineCashPeerText(
+        IrohaPeerPayloadKind.RECEIVE_REQUEST, 768);
+    final byte[] paymentMaximum = offlineCashPeerText(
+        IrohaPeerPayloadKind.PAYMENT, 7_936);
+    final byte[] acknowledgementMaximum = offlineCashPeerText(
+        IrohaPeerPayloadKind.ACKNOWLEDGEMENT, 256);
+    assertEquals(1_029, requestMaximum.length);
+    assertEquals(10_587, paymentMaximum.length);
+    assertEquals(347, acknowledgementMaximum.length);
+    new IrohaPeerCanonicalPayload(
+        IrohaPeerPayloadProfile.OFFLINE_CASH_V1,
+        IrohaPeerPayloadKind.RECEIVE_REQUEST,
+        0x0100,
+        requestMaximum);
+    new IrohaPeerCanonicalPayload(
+        IrohaPeerPayloadProfile.OFFLINE_CASH_V1,
+        IrohaPeerPayloadKind.PAYMENT,
+        0x0100,
+        paymentMaximum);
+    new IrohaPeerCanonicalPayload(
+        IrohaPeerPayloadProfile.OFFLINE_CASH_V1,
+        IrohaPeerPayloadKind.ACKNOWLEDGEMENT,
+        0x0100,
+        acknowledgementMaximum);
+    final byte[] oversizedPayment = offlineCashPeerText(
+        IrohaPeerPayloadKind.PAYMENT, 7_937);
+    assertThrows(
+        IllegalArgumentException.class,
+        () -> new IrohaPeerCanonicalPayload(
+            IrohaPeerPayloadProfile.OFFLINE_CASH_V1,
+            IrohaPeerPayloadKind.PAYMENT,
+            0x0100,
+            oversizedPayment));
   }
 
   @Test
@@ -52,7 +140,7 @@ public final class IrohaPeerTransportV1Tests {
   }
 
   @Test
-  public void kagemushaProfileRequiresExactNativeIndependentAbi21Envelope() {
+  public void kagemushaProfileRequiresExactNativeIndependentAbi22Envelope() {
     final byte[] canonical =
         kagemushaArchive(IrohaPeerPayloadKind.RECEIVE_REQUEST, new byte[] {0x51});
     assertEquals(49, canonical.length);
@@ -391,6 +479,32 @@ public final class IrohaPeerTransportV1Tests {
         NoritoHeader.COMPACT_LEN,
         NoritoHeader.COMPRESSION_NONE);
     return concat(header.encode(), new byte[padding], payload);
+  }
+
+  private static byte[] offlineCashPeerText(
+      final IrohaPeerPayloadKind kind, final int rawArchiveBytes) {
+    final String schema = switch (kind) {
+      case RECEIVE_REQUEST ->
+          "iroha_data_model::offline::offline_cash_v1::OfflineCashPaymentRequestV1";
+      case PAYMENT ->
+          "iroha_data_model::offline::offline_cash_v1::OfflineCashPaymentV1";
+      case ACKNOWLEDGEMENT ->
+          "iroha_data_model::offline::offline_cash_v1::OfflineCashAcknowledgementV1";
+    };
+    final int padding = kind == IrohaPeerPayloadKind.ACKNOWLEDGEMENT ? 0 : 8;
+    final int payloadBytes = rawArchiveBytes - NoritoHeader.HEADER_LENGTH - padding;
+    if (payloadBytes <= 0) throw new IllegalArgumentException("Offline Cash fixture is too small");
+    final byte[] payload = new byte[payloadBytes];
+    Arrays.fill(payload, (byte) 0x41);
+    final NoritoHeader header = new NoritoHeader(
+        SchemaHash.hash16(schema),
+        payload.length,
+        CRC64.compute(payload),
+        NoritoHeader.COMPACT_LEN,
+        NoritoHeader.COMPRESSION_NONE);
+    final byte[] archive = concat(header.encode(), new byte[padding], payload);
+    return ("kgm2:" + Base64.getUrlEncoder().withoutPadding().encodeToString(archive))
+        .getBytes(StandardCharsets.UTF_8);
   }
 
   private static byte[] rehashKagemushaMessage(

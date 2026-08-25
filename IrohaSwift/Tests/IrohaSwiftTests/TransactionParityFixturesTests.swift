@@ -370,6 +370,24 @@ final class TransactionParityFixturesTests: XCTestCase {
         }
     }
 
+    func testSwiftPayloadRequiresRawCanonicalNetworkIdText() throws {
+        let entry = try decodeFirstSwiftPayload { _ in }
+        XCTAssertEqual(entry.payload.networkId.literal, TestNetworkIds.canonical.literal)
+
+        for invalid in [
+            TestNetworkIds.canonical.literal.uppercased(),
+            TestNetworkIds.canonical.noritoJSONLiteral,
+            String(TestNetworkIds.canonical.literal.dropLast()) + "8",
+        ] {
+            XCTAssertThrowsError(
+                try decodeFirstSwiftPayload { payload in
+                    payload["network_id"] = invalid
+                },
+                invalid
+            )
+        }
+    }
+
     func testSwiftPayloadRequiresAuthorityFeePayer() throws {
         let invalidPayers: [Any] = ["owner", "Authority", "", true]
         for payer in invalidPayers {
@@ -1211,7 +1229,16 @@ private struct TransactionPayloadSpec: Decodable {
             context: "Swift parity transaction payload"
         )
         let container = try decoder.container(keyedBy: CodingKeys.self)
-        networkId = try container.decode(NetworkId.self, forKey: .networkId)
+        let networkIdLiteral = try container.decode(String.self, forKey: .networkId)
+        do {
+            networkId = try NetworkId(literal: networkIdLiteral)
+        } catch {
+            throw DecodingError.dataCorruptedError(
+                forKey: .networkId,
+                in: container,
+                debugDescription: "network_id must use exact raw lowercase marked hash text"
+            )
+        }
         authority = try container.decode(String.self, forKey: .authority)
         creationTimeMs = try container.decode(UInt64.self, forKey: .creationTimeMs)
         executable = try container.decode(TransactionExecutable.self, forKey: .executable)

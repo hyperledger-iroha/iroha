@@ -47,7 +47,7 @@ fn reputation_auth_headers_match_the_exact_canonical_preimage() {
     let mutated_query =
         Url::parse("http://127.0.0.1/v1/sorafs/reputation/events?limit=2").expect("mutated query");
     let foreign_network =
-        "hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
+        "0000000000000000000000000000000000000000000000000000000000000001"
             .parse()
             .expect("foreign canonical network identity");
     for mutated in [

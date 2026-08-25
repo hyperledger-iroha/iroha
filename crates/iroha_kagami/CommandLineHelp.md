@@ -68,7 +68,7 @@ Common tasks:
 * `docker` — Generate validator-only Docker Compose from a prepared bundle or explicit dev seed
 * `keys` — Generate cryptographic key pairs and optional validator Proofs-of-Possession
 * `genesis` — Commands related to genesis
-* `kagemusha` — Verify and promote authenticated Kagemusha ABI-21/V4 artifact releases
+* `kagemusha` — Verify and promote authenticated bridge ABI-22 / Kagemusha V4 artifact releases
 * `privacy-bootstrap` — Emit and validate fail-closed Taira exact-12 privacy bootstrap artifacts
 * `verify` — Verify a genesis manifest against a preset profile
 * `advanced` — Advanced low-level helpers for codec conversion, schema generation, block inspection, and docs
@@ -477,14 +477,14 @@ Expand a genesis manifest and show the final ordered transactions
 
 ## `kagami kagemusha`
 
-Verify and promote authenticated Kagemusha ABI-21/V4 artifact releases
+Verify and promote authenticated bridge ABI-22 / Kagemusha V4 artifact releases
 
 **Usage:** `kagami kagemusha <COMMAND>`
 
 ###### **Subcommands:**
 
-* `verify-release-v4` — Verify one complete authenticated ABI-21/V4 release directory
-* `promote-release-v4` — Verify an ABI-21/V4 release and atomically write its typed promotion record
+* `verify-release-v4` — Verify one complete authenticated bridge ABI-22 / Kagemusha V4 release directory
+* `promote-release-v4` — Verify a bridge ABI-22 / Kagemusha V4 release and atomically write its typed promotion record
 * `prepare-activation-v4` — Build one release-bound activation instruction from an authenticated V4 catalog
 * `prepare-release-circuit-params-v4` — Atomically publish the canonical reviewed Eq/Ep first-release circuit parameters
 * `prepare-taira-release-roster-v4` — Build the actual rendered Taira validator roster for signed V4 release generation
@@ -494,13 +494,13 @@ Verify and promote authenticated Kagemusha ABI-21/V4 artifact releases
 
 ## `kagami kagemusha verify-release-v4`
 
-Verify one complete authenticated ABI-21/V4 release directory
+Verify one complete authenticated bridge ABI-22 / Kagemusha V4 release directory
 
 **Usage:** `kagami kagemusha verify-release-v4 [OPTIONS] --bundle-dir <BUNDLE_DIR> --release-policy <RELEASE_POLICY> --benchmark-evidence <BENCHMARK_EVIDENCE> --cryptographic-review <CRYPTOGRAPHIC_REVIEW>`
 
 ###### **Options:**
 
-* `--bundle-dir <BUNDLE_DIR>` — Immutable directory containing the exact eighteen-file promoted ABI-21/V4 inventory
+* `--bundle-dir <BUNDLE_DIR>` — Immutable directory containing the exact eighteen-file promoted bridge ABI-22 / Kagemusha V4 inventory
 * `--release-policy <RELEASE_POLICY>` — Canonical release policy provisioned alongside the candidate release
 * `--benchmark-evidence <BENCHMARK_EVIDENCE>` — Signed physical-device benchmark evidence file
 * `--cryptographic-review <CRYPTOGRAPHIC_REVIEW>` — Canonical signed, candidate-bound cryptographic review Norito file
@@ -510,13 +510,13 @@ Verify one complete authenticated ABI-21/V4 release directory
 
 ## `kagami kagemusha promote-release-v4`
 
-Verify an ABI-21/V4 release and atomically write its typed promotion record
+Verify a bridge ABI-22 / Kagemusha V4 release and atomically write its typed promotion record
 
 **Usage:** `kagami kagemusha promote-release-v4 [OPTIONS] --bundle-dir <BUNDLE_DIR> --release-policy <RELEASE_POLICY> --promotion-record <PROMOTION_RECORD> --benchmark-evidence <BENCHMARK_EVIDENCE> --cryptographic-review <CRYPTOGRAPHIC_REVIEW>`
 
 ###### **Options:**
 
-* `--bundle-dir <BUNDLE_DIR>` — Directory containing the exact seventeen-file pre-promotion ABI-21/V4 candidate
+* `--bundle-dir <BUNDLE_DIR>` — Directory containing the exact seventeen-file pre-promotion bridge ABI-22 / Kagemusha V4 candidate
 * `--release-policy <RELEASE_POLICY>` — Canonical release policy provisioned alongside the candidate release
 * `--promotion-record <PROMOTION_RECORD>` — New path for the canonical Norito promotion record; it is never overwritten
 * `--benchmark-evidence <BENCHMARK_EVIDENCE>` — Signed physical-device benchmark evidence file

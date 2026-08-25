@@ -479,18 +479,13 @@ internal object AndroidFixtureSupport {
 
     private fun requiredNetworkId(value: Any?, field: String): String {
         val networkId = requiredString(value, field)
-        val canonical = try {
-            HashLiteral.canonicalize(HashLiteral.decode(networkId))
-        } catch (ex: IllegalArgumentException) {
-            throw IllegalArgumentException("$field must be a canonical network hash identity", ex)
-        }
-        require(canonical == networkId) {
-            "$field must use its exact canonical hash encoding"
-        }
         try {
             NetworkId.parse(networkId)
         } catch (ex: IllegalArgumentException) {
-            throw IllegalArgumentException("$field must be a canonical network hash identity", ex)
+            throw IllegalArgumentException(
+                "$field must be an exact 64-character lowercase hexadecimal NetworkId",
+                ex,
+            )
         }
         return networkId
     }

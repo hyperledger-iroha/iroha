@@ -169,13 +169,6 @@ macro_rules! named_route_policy_test {
 }
 
 named_route_policy_test!(
-    offline_receiver_lineage_requires_account_authentication_before_expensive_proof_work,
-    {
-        assert_route_policy(offline::RECIPIENT_LINEAGE, ACCOUNT_EXPENSIVE);
-    }
-);
-
-named_route_policy_test!(
     application_query_posts_authenticate_before_expensive_compute,
     {
         assert_route_policies(

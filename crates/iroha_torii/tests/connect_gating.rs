@@ -171,9 +171,14 @@ fn connect_session_request_body(seed: u8) -> (String, String) {
     let nonce = [seed.wrapping_add(1); 16];
     let sid = iroha_torii_shared::connect_sdk::derive_session_id(&network_id, &app_pk, &nonce);
     let sid_b64 = B64.encode(sid);
+    let network_id_json = norito::json::to_value(&network_id)
+        .expect("NetworkId JSON serialization")
+        .as_str()
+        .expect("NetworkId JSON must be a string")
+        .to_owned();
     let body = norito::json::to_json(&iroha_torii::json_object(vec![
         ("sid", Some(sid_b64.clone())),
-        ("network_id", Some(network_id.to_string())),
+        ("network_id", Some(network_id_json)),
         ("app_pk", Some(B64.encode(app_pk))),
         ("nonce", Some(B64.encode(nonce))),
         ("node", Option::<String>::None),

@@ -1128,10 +1128,9 @@ mod tests {
     }
     #[test]
     fn release_roster_rejects_height_two_withdrawal() {
-        let network_id =
-            "hash:82531CE8EAE8BFF6BEECA4698BFD13A3BC8BEC5F0EE0D23D428C97FC17AB0F3B#3E94"
-                .parse()
-                .expect("deterministic Taira test network identity");
+        let network_id = "82531ce8eae8bff6beeca4698bfd13a3bc8bec5f0ee0d23d428c97fc17ab0f3b"
+            .parse()
+            .expect("deterministic Taira test network identity");
         let error =
             taira_release_roster_v4(network_id, Vec::new(), TAIRA_RELEASE_ACTIVATION_HEIGHT_V4)
                 .expect_err("an empty issuance window must fail");

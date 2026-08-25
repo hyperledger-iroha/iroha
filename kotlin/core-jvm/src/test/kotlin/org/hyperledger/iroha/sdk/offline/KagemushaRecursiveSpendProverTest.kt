@@ -5,9 +5,6 @@ import java.nio.charset.StandardCharsets
 import java.nio.file.Files
 import java.nio.file.Path
 import java.nio.file.Paths
-import java.security.KeyPairGenerator
-import java.security.Signature
-import java.util.Base64
 import java.util.concurrent.CompletableFuture
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
@@ -18,9 +15,7 @@ import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 import kotlin.test.assertFailsWith
-import org.hyperledger.iroha.sdk.client.CanonicalRequestSigner
 import org.hyperledger.iroha.sdk.client.LocalSigningContext
-import org.hyperledger.iroha.sdk.client.ToriiCanonicalRequestAuth
 import org.hyperledger.iroha.sdk.client.transport.RequestReplayPolicy
 import org.hyperledger.iroha.sdk.norito.CRC64
 import org.hyperledger.iroha.sdk.norito.NoritoHeader
@@ -675,25 +670,6 @@ class KagemushaRecursiveSpendProverTest {
             ByteArray::class.java,
         )
         assertEquals(14, nativeRecipientRequest.parameterCount)
-        val lineageQueryMethods = KagemushaRecursiveSpendProver::class.java.declaredMethods
-            .filter {
-                java.lang.reflect.Modifier.isPublic(it.modifiers) &&
-                    !it.isSynthetic &&
-                    it.name == "createRecipientLineageQueryV2"
-            }
-        assertEquals(1, lineageQueryMethods.size)
-        assertEquals(6, lineageQueryMethods.single().parameterCount)
-        assertEquals(java.lang.Integer.TYPE, lineageQueryMethods.single().parameterTypes[1])
-        val nativeLineageQuery = KagemushaRecursiveSpendProver::class.java.getDeclaredMethod(
-            "nativeCreateRecipientLineageQueryV2",
-            ByteArray::class.java,
-            java.lang.Integer.TYPE,
-            ByteArray::class.java,
-            ByteArray::class.java,
-            ByteArray::class.java,
-            java.lang.Long.TYPE,
-        )
-        assertEquals(6, nativeLineageQuery.parameterCount)
         val installFactory = KagemushaRecursiveSpendProver::class.java.getDeclaredMethod(
             "beginArtifactInstallSession",
             ByteArray::class.java,
@@ -773,7 +749,6 @@ class KagemushaRecursiveSpendProverTest {
                 "buildRedeemV4",
                 "buildRedeemRequestV4",
                 "buildVerifyRequestV4",
-                "createRecipientLineageQueryV2",
                 "createRecipientReceiveOfferV2",
                 "decodeAppendRequestV4",
                 "decodeBundleV4",
@@ -836,7 +811,6 @@ class KagemushaRecursiveSpendProverTest {
                 "verifyAcknowledgement",
                 "verifyRecipientPaymentRequest",
                 "verifyRecipientReceiveOfferV2",
-                "verifyRecipientRegistrationLineageV2",
                 "verifySpendV4",
                 "validateTopUpProvenanceV4",
             ),
@@ -852,6 +826,10 @@ class KagemushaRecursiveSpendProverTest {
             "buildInitRequest",
             "buildRedeemRequest",
             "buildVerifyRequest",
+            "createRecipientLineageQueryV2",
+            "verifyRecipientRegistrationLineageV2",
+            "nativeCreateRecipientLineageQueryV2",
+            "nativeVerifyRecipientRegistrationLineageV2",
             "nativeProjectInitResultV2",
             "nativeRestoreSpendableBranchV2",
         )) {
@@ -1766,19 +1744,7 @@ class KagemushaRecursiveSpendProverTest {
     @Test
     fun toriiLifecycleRoutesAndHeadersAreExact() {
         val networkId = org.hyperledger.iroha.sdk.core.model.NetworkId.parse(
-            "hash:32C903E5B3497E34C2B844EBFE8A39C19E6CF8F95D44C1FFB8BA9DCB42F91149#A2F0",
-        )
-        val otherNetworkId = org.hyperledger.iroha.sdk.core.model.NetworkId.parse(
-            "hash:0E5751C026E543B2E8AB2EB06099DAA1D1E5DF47778F7787FAAB45CDF12FE3A9#6A22",
-        )
-        val keyPair = KeyPairGenerator.getInstance("Ed25519").generateKeyPair()
-        val timestampMs = 1_700_000_000_500L
-        val nonce = "offline-lineage-1"
-        val canonicalAuth = ToriiCanonicalRequestAuth(
-            "alice@universal",
-            keyPair.private,
-            timestampMs,
-            nonce,
+            "32c903e5b3497e34c2b844ebfe8a39c19e6cf8f95d44c1ffb8ba9dcb42f91149",
         )
         val captured = AtomicReference<TransportRequest>()
         val neverTransport = object : TransportExecutor {
@@ -1800,8 +1766,7 @@ class KagemushaRecursiveSpendProverTest {
                 override fun execute(request: TransportRequest): CompletableFuture<TransportResponse> {
                     captured.set(request)
                     val capability = request.uri.path.endsWith("/readiness")
-                    val lineage = request.uri.path.endsWith("/receiver-lineage")
-                    val command = request.method == "POST" && !lineage
+                    val command = request.method == "POST"
                     return CompletableFuture.completedFuture(
                         TransportResponse.builder()
                             .setStatusCode(if (command) 202 else 200)
@@ -1811,14 +1776,12 @@ class KagemushaRecursiveSpendProverTest {
                             )
                             .setBody(
                                 if (capability) {
-                                    """{"mandatory":false,"cash_handoff_capability":"cash_handoff_v1","required_bridge_abi_version":22,"max_hops":8,"ready":true,"assets":[],"blockers":[]}"""
+                                    """{"mandatory":false,"cash_handoff_capability":"cash_handoff_v1","required_bridge_abi_version":22,"max_hops":8,"ready":false,"assets":[],"blockers":[{"code":"offline_cash_authenticated_release_unavailable","message":"No authenticated Offline Cash V1 release is selected by this asset-neutral response."},{"code":"offline_cash_eligible_asset_unavailable","message":"No eligible Offline Cash V1 asset is selected by this asset-neutral response."},{"code":"offline_cash_proof_backend_unavailable","message":"No reviewed production Offline Cash V1 proof and secure-device backend is authenticated by this response."}]}"""
                                         .toByteArray(StandardCharsets.UTF_8)
                                 } else {
                                     archive(
                                         if (command) {
                                             "OfflineOperationReference"
-                                        } else if (lineage) {
-                                            "iroha_torii_shared::offline_api::OfflineRecipientRegistrationLineage"
                                         } else if (request.uri.path.contains("/operations/")) {
                                             "OfflineOperationStatus"
                                         } else {
@@ -1841,87 +1804,81 @@ class KagemushaRecursiveSpendProverTest {
             },
             "selector-taking offline readiness alias must remain absent",
         )
+        assertTrue(
+            KagemushaRecursiveSpendProver.ToriiClient::class.java.declaredMethods.none {
+                it.name == "getRecipientRegistrationLineage"
+            },
+            "receiver lineage must remain internal to portable receive-offer verification",
+        )
         assertFalse(status.mandatory)
         assertEquals("cash_handoff_v1", status.cashHandoffCapability)
         assertEquals(22, status.requiredBridgeAbiVersion)
         assertEquals(8, status.maximumHops)
-        assertTrue(status.ready)
+        assertFalse(status.ready)
         assertTrue(status.assets.isEmpty())
-        assertTrue(status.blockers.isEmpty())
+        assertEquals(
+            listOf(
+                "offline_cash_authenticated_release_unavailable",
+                "offline_cash_eligible_asset_unavailable",
+                "offline_cash_proof_backend_unavailable",
+            ),
+            status.blockers.map { it.code },
+        )
         assertEquals(
             "https://torii.example/api/v1/offline/readiness",
             captured.get().uri.toString(),
         )
         assertEquals(listOf("application/json"), captured.get().headers["Accept"])
 
-        val lineageQuery = KagemushaRecursiveSpendProver.RecipientLineageQueryV2(
-            archive("iroha_torii_shared::offline_api::OfflineRecipientLineageRequest"),
-        )
-        client.getRecipientRegistrationLineage(lineageQuery, canonicalAuth).join()
-        val lineageRequest = captured.get()
-        assertEquals("/api/v1/offline/receiver-lineage", lineageRequest.uri.path)
-        assertEquals(listOf("application/x-norito"), lineageRequest.headers["Content-Type"])
-        assertEquals(
-            listOf("alice@universal"),
-            lineageRequest.headers[CanonicalRequestSigner.HEADER_ACCOUNT],
-        )
-        assertEquals(
-            listOf(timestampMs.toString()),
-            lineageRequest.headers[CanonicalRequestSigner.HEADER_TIMESTAMP_MS],
-        )
-        assertEquals(listOf(nonce), lineageRequest.headers[CanonicalRequestSigner.HEADER_NONCE])
-        assertEquals(RequestReplayPolicy.ONE_SHOT, lineageRequest.replayPolicy)
-        val signature = Base64.getDecoder().decode(
-            lineageRequest.headers.getValue(CanonicalRequestSigner.HEADER_SIGNATURE).single(),
-        )
-        fun verifiesOn(
-            candidate: org.hyperledger.iroha.sdk.core.model.NetworkId = networkId,
-            method: String = lineageRequest.method,
-            uri: URI = lineageRequest.uri,
-            body: ByteArray = lineageRequest.body,
-        ): Boolean {
-            val verifier = Signature.getInstance("Ed25519")
-            verifier.initVerify(keyPair.public)
-            verifier.update(
-                CanonicalRequestSigner.canonicalRequestSignatureMessage(
-                    candidate,
-                    method,
-                    uri,
-                    body,
-                    timestampMs,
-                    nonce,
-                ),
-            )
-            return verifier.verify(signature)
-        }
-        assertTrue(verifiesOn())
-        assertFalse(verifiesOn(candidate = otherNetworkId))
-        assertFalse(verifiesOn(method = "GET"))
-        assertFalse(verifiesOn(uri = URI.create("https://torii.example/api/v1/offline/readiness")))
-        assertFalse(verifiesOn(body = lineageRequest.body + byteArrayOf(0)))
-
         val operationId = "11".repeat(32)
+        val topUpBody = archive("iroha.torii.v1.offline.top_up.request")
+        val topUpRequest = KagemushaRecursiveSpendProver.TopUpRequest(topUpBody)
         client.submitTopUp(
-            KagemushaRecursiveSpendProver.TopUpRequest(
-                archive("iroha.torii.v1.offline.top_up.request"),
-            ),
+            topUpRequest,
             operationId,
         ).join()
-        assertEquals("POST", captured.get().method)
-        assertEquals("/api/v1/offline/top-up", captured.get().uri.path)
+        val firstTopUp = captured.get()
+        assertEquals("POST", firstTopUp.method)
+        assertEquals("/api/v1/offline/top-up", firstTopUp.uri.path)
         assertEquals(
             listOf("application/x-norito"),
-            captured.get().headers["Content-Type"],
+            firstTopUp.headers["Content-Type"],
         )
-        assertEquals(listOf(operationId), captured.get().headers["Idempotency-Key"])
+        assertEquals(listOf(operationId), firstTopUp.headers["Idempotency-Key"])
+        assertEquals(RequestReplayPolicy.ONE_SHOT, firstTopUp.replayPolicy)
+        assertContentEquals(topUpBody, firstTopUp.body)
+        client.submitTopUp(topUpRequest, operationId).join()
+        val retriedTopUp = captured.get()
+        assertContentEquals(firstTopUp.body, retriedTopUp.body)
+        assertEquals(firstTopUp.headers["Idempotency-Key"], retriedTopUp.headers["Idempotency-Key"])
 
+        val redeemBody = archive("iroha.torii.v1.offline.redeem.request")
+        val redeemRequest = KagemushaRecursiveSpendProver.RedeemSubmissionRequest(redeemBody)
         client.submitRedeem(
-            KagemushaRecursiveSpendProver.RedeemSubmissionRequest(
-                archive("iroha.torii.v1.offline.redeem.request"),
-            ),
+            redeemRequest,
             operationId,
         ).join()
-        assertEquals("/api/v1/offline/redeem", captured.get().uri.path)
+        val firstRedeem = captured.get()
+        assertEquals("/api/v1/offline/redeem", firstRedeem.uri.path)
+        assertEquals(listOf(operationId), firstRedeem.headers["Idempotency-Key"])
+        assertContentEquals(redeemBody, firstRedeem.body)
+        client.submitRedeem(redeemRequest, operationId).join()
+        val retriedRedeem = captured.get()
+        assertContentEquals(firstRedeem.body, retriedRedeem.body)
+        assertEquals(firstRedeem.headers["Idempotency-Key"], retriedRedeem.headers["Idempotency-Key"])
+
+        listOf(
+            "0".repeat(64),
+            "AB".repeat(32),
+            "11".repeat(32) + "#A2F0",
+        ).forEach { invalidId ->
+            assertFailsWith<IllegalArgumentException> {
+                client.submitTopUp(topUpRequest, invalidId)
+            }
+            assertFailsWith<IllegalArgumentException> {
+                client.submitRedeem(redeemRequest, invalidId)
+            }
+        }
 
         client.getOperation(operationId).join()
         assertEquals("/api/v1/offline/operations/$operationId", captured.get().uri.path)
@@ -1930,13 +1887,16 @@ class KagemushaRecursiveSpendProverTest {
     @Test
     fun offlineCapabilityRejectsBackendReadinessClaims() {
         val invalidPayloads = listOf(
-            """{"mandatory":true,"cash_handoff_capability":"cash_handoff_v1","required_bridge_abi_version":22,"max_hops":8,"ready":true,"assets":[],"blockers":[]}""",
+            """{"mandatory":true,"cash_handoff_capability":"cash_handoff_v1","required_bridge_abi_version":22,"max_hops":8,"ready":false,"assets":[],"blockers":[{"code":"backend_gate","message":"blocked"}]}""",
             """{"mandatory":false,"cash_handoff_capability":"cash_handoff_v2","required_bridge_abi_version":22,"max_hops":8,"ready":true,"assets":[],"blockers":[]}""",
             """{"mandatory":false,"cash_handoff_capability":"cash_handoff_v1","required_bridge_abi_version":21,"max_hops":8,"ready":true,"assets":[],"blockers":[]}""",
             """{"mandatory":false,"cash_handoff_capability":"cash_handoff_v1","required_bridge_abi_version":22,"max_hops":9,"ready":true,"assets":[],"blockers":[]}""",
             """{"mandatory":false,"cash_handoff_capability":"cash_handoff_v1","required_bridge_abi_version":22,"max_hops":8,"ready":false,"assets":[],"blockers":[]}""",
+            """{"mandatory":false,"cash_handoff_capability":"cash_handoff_v1","required_bridge_abi_version":22,"max_hops":8,"ready":"false","assets":[],"blockers":[{"code":"backend_gate","message":"blocked"}]}""",
             """{"mandatory":false,"cash_handoff_capability":"cash_handoff_v1","required_bridge_abi_version":22,"max_hops":8,"ready":true,"assets":[{}],"blockers":[]}""",
             """{"mandatory":false,"cash_handoff_capability":"cash_handoff_v1","required_bridge_abi_version":22,"max_hops":8,"ready":true,"assets":[],"blockers":[{"code":"unexpected","message":"unexpected"}]}""",
+            """{"mandatory":false,"cash_handoff_capability":"cash_handoff_v1","required_bridge_abi_version":22,"max_hops":8,"ready":false,"assets":[],"blockers":[{"code":"duplicate","message":"first"},{"code":"duplicate","message":"second"}]}""",
+            """{"mandatory":false,"cash_handoff_capability":"cash_handoff_v1","required_bridge_abi_version":22,"max_hops":8,"ready":false,"assets":[],"blockers":[{"code":"offline_cash_proof_backend_unavailable","message":"No reviewed production Offline Cash V1 proof and secure-device backend is authenticated by this response."},{"code":"offline_cash_eligible_asset_unavailable","message":"No eligible Offline Cash V1 asset is selected by this asset-neutral response."},{"code":"offline_cash_authenticated_release_unavailable","message":"No authenticated Offline Cash V1 release is selected by this asset-neutral response."}]}""",
             """{"mandatory":false,"cash_handoff_capability":"cash_handoff_v1","required_bridge_abi_version":22,"max_hops":8,"ready":true,"assets":[],"blockers":[],"future":true}""",
         )
         invalidPayloads.forEach { payload ->

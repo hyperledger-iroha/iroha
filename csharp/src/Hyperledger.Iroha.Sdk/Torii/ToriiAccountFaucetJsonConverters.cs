@@ -113,7 +113,9 @@ internal static class ToriiAccountFaucetJson
         }
         catch (FormatException error)
         {
-            throw new JsonException($"{field} must be a canonical checksummed NetworkId.", error);
+            throw new JsonException(
+                $"{field} must be exactly 64 lowercase hexadecimal NetworkId characters with the marker bit set.",
+                error);
         }
     }
 

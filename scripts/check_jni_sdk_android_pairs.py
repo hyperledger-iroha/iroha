@@ -15,10 +15,10 @@ JNI_SOURCE = REPO_ROOT / "crates/connect_norito_bridge/src/platform_jni/part_3.r
 SDK_PREFIX = "Java_org_hyperledger_iroha_sdk_"
 ANDROID_PREFIX = "Java_org_hyperledger_iroha_android_"
 MACRO_NAME = "jni_sdk_android_pairs"
-EXPECTED_MACRO_DIGEST = "11de37a9ba22a1c17f322b2803478a5670ecc17166b23526f080c54fbb8a84bb"
-EXPECTED_ABI_DIGEST = "fa65747adf061879da05b24aeea39d04f3476db289ac590171225ba15a9b491a"
+EXPECTED_MACRO_DIGEST = "75234f8e3dfcdaa54347f628fd7fb7118de18003baed0e3c37750cd283db2468"
+EXPECTED_ABI_DIGEST = "8cb01531db3ac3cf6796bc18779d7e73ace6947b38d2b30bc3ff4ce9b3841f54"
 EXPECTED_ATTRIBUTE_DIGEST = (
-    "aec610f58c5bc0aaa9d05c7ae73730bc6ae2535c72a2e1b5643a0f446c707eaf"
+    "36c5c95a0c31ecf9c82f6c6d837db0e7783fb3eacb002a10cb775e65157d7227"
 )
 
 EXPECTED_METHODS = {
@@ -69,60 +69,31 @@ EXPECTED_METHODS = {
     "offline_KagemushaRecursiveSpendProver": (
         "nativeBridgeAbiVersion",
         "nativePastaCycleV4BackendAvailable",
-        "nativeArtifactBeginV4",
-        "nativeArtifactWriteV4",
-        "nativeArtifactFinalizeV4",
-        "nativeArtifactCancelV4",
-        "nativeArtifactSetInstallV4",
-        "nativeArtifactSetIsInstalledV4",
-        "nativeInstalledManifestSha256V4",
-        "nativeBuildArtifactBindingV4",
-        "nativeArtifactSetUninstallV4",
-        "nativeInitSpendV4",
-        "nativeAppendSpendV4",
-        "nativeVerifySpendV4",
-        "nativeBuildRedeemV4",
-        "nativePrepareRecipientRequestV2",
-        "nativeCreateRecipientRequestV2",
-        "nativeVerifyRecipientRequestV2",
-        "nativeCreateRecipientLineageQueryV2",
-        "nativeVerifyRecipientRegistrationLineageV2",
-        "nativeCreateRecipientReceiveOfferV2",
-        "nativeProjectRecipientReceiveOfferV2",
-        "nativeVerifyRecipientReceiveOfferV2",
-        "nativeBuildOutputMembershipFrontierV4",
-        "nativeDeriveOutputMembershipPathsV4",
-        "nativeValidateSpendableBranchV4",
-        "nativeBuildOutputMembershipPathsV4",
-        "nativeBuildInitRequestV4",
-        "nativeBuildTopUpProvenanceV4",
-        "nativeValidateTopUpProvenanceV4",
-        "nativeBuildAppendRequestV4",
-        "nativeBuildVerifyRequestV4",
-        "nativeBuildRedeemRequestV4",
-        "nativeProjectPeerPaymentV4",
-        "nativeProjectInitResultV4",
-        "nativeProjectSplitResultV4",
-        "nativeProjectVerifyResultV4",
-        "nativeProjectRedeemBuildResultV4",
-        "nativePrepareAcknowledgementV2",
-        "nativeCreateAcknowledgementV2",
-        "nativeVerifyAcknowledgementV2",
-        "nativeProjectReadinessV4",
-        "nativeProjectAuthenticatedArtifactSetV4",
-        "nativeProjectActiveVerifierV2",
-        "nativePrepareAuthorizationV2",
-        "nativeFinalizeHardwareAuthorizationV2",
-        "nativeFinalizeIosAppAttestAuthorizationV2",
-        "nativeFinalizeTopUpV4",
-        "nativeFinalizeRedeemV4",
-        "nativePrepareTopUpV4",
-        "nativeProjectOperationStatusV4",
-        "nativeBranchClaimsConflictV2",
-        "nativePrepareRedemptionChangeV4",
-        "nativePreparePeerSplitChangeV4",
-        "nativePrepareNoteOpeningV2",
-        "nativeProjectRecipientRequestV2",
+    ),
+    "offline_OfflineCashNativeV1": (
+        "nativeCanonicalizePaymentRequestV1",
+        "nativeCanonicalizePaymentV1",
+        "nativeCanonicalizePaymentForSessionV1",
+        "nativeCanonicalizeAcknowledgementV1",
+        "nativePeerEncodePaymentRequestV1",
+        "nativePeerDecodePaymentRequestV1",
+        "nativePeerEncodePaymentV1",
+        "nativePeerDecodePaymentV1",
+        "nativePeerEncodeAcknowledgementV1",
+        "nativePeerDecodeAcknowledgementV1",
+        "nativeReleaseProbeV1",
+        "nativeWalletSessionOpenV1",
+        "nativeWalletSessionOpenBoundV1",
+        "nativeArtifactBeginV1",
+        "nativeArtifactWriteV1",
+        "nativeArtifactFinalizeV1",
+        "nativeArtifactCancelV1",
+        "nativeArtifactSetInstallV1",
+        "nativeArtifactSetUninstallV1",
+        "nativeWalletSessionAcceptPaymentV1",
+        "nativeWalletSessionAcceptAcknowledgementV1",
+        "nativeWalletSessionStateV1",
+        "nativeWalletSessionCloseV1",
     ),
 }
 EXPECTED_SUFFIXES = tuple(
@@ -251,13 +222,51 @@ def _attribute_text(fragment: str, platform: str) -> str:
     return "".join(attributes)
 
 
-def _macro_invocation(source: str) -> tuple[str, int, int]:
-    """Return the paired macro body and its source boundaries."""
+def _find_code_token(source: str, token: str, start: int = 0) -> int:
+    """Find one Rust token outside comments and quoted literals."""
 
-    definition_start = source.find(f"macro_rules! {MACRO_NAME}")
-    invocation_start = source.find(f"{MACRO_NAME}! {{")
+    cursor = start
+    block_comment_depth = 0
+    while cursor < len(source):
+        if block_comment_depth:
+            if source.startswith("/*", cursor):
+                block_comment_depth += 1
+                cursor += 2
+            elif source.startswith("*/", cursor):
+                block_comment_depth -= 1
+                cursor += 2
+            else:
+                cursor += 1
+            continue
+        if source.startswith("//", cursor):
+            newline = source.find("\n", cursor + 2)
+            cursor = len(source) if newline < 0 else newline + 1
+            continue
+        if source.startswith("/*", cursor):
+            block_comment_depth = 1
+            cursor += 2
+            continue
+        quoted_end = _skip_quoted(source, cursor)
+        if quoted_end is not None:
+            cursor = quoted_end
+            continue
+        if source.startswith(token, cursor):
+            return cursor
+        cursor += 1
+    return -1
+
+
+def _macro_invocations(source: str) -> tuple[tuple[str, int, int], ...]:
+    """Return every paired macro body and its source boundaries in source order."""
+
+    definition_token = f"macro_rules! {MACRO_NAME}"
+    invocation_token = f"{MACRO_NAME}! {{"
+    definition_start = _find_code_token(source, definition_token)
+    invocation_start = _find_code_token(source, invocation_token)
     if definition_start != 0 or invocation_start < 0:
-        raise AuditError("paired JNI macro definition and invocation must lead part_3.rs")
+        raise AuditError("paired JNI macro definition and invocations must lead part_3.rs")
+    if _find_code_token(source, definition_token, definition_start + len(definition_token)) >= 0:
+        raise AuditError("paired JNI macro must be defined exactly once")
     macro_definition = source[definition_start:invocation_start]
     macro_digest = hashlib.sha256(" ".join(macro_definition.split()).encode()).hexdigest()
     if macro_digest != EXPECTED_MACRO_DIGEST:
@@ -265,83 +274,92 @@ def _macro_invocation(source: str) -> tuple[str, int, int]:
             "paired JNI macro expansion contract changed: "
             f"expected {EXPECTED_MACRO_DIGEST}, found {macro_digest}"
         )
-    opening = source.index("{", invocation_start)
-    closing = _matching_brace(source, opening)
-    return source[opening + 1 : closing], opening + 1, closing
+    invocations = []
+    cursor = invocation_start
+    while cursor >= 0:
+        opening = source.index("{", cursor)
+        closing = _matching_brace(source, opening)
+        invocations.append((source[opening + 1 : closing], opening + 1, closing))
+        cursor = _find_code_token(source, invocation_token, closing + 1)
+    return tuple(invocations)
 
 
 def audit_source(source: str) -> AuditResult:
     """Validate the exact paired export, signature, body, and attribute inventory."""
 
-    body, _body_start, _body_end = _macro_invocation(source)
-    cursor = 0
     observed_suffixes = []
     abi_records = []
     attribute_records = []
-    while True:
-        cursor += len(body[cursor:]) - len(body[cursor:].lstrip())
-        if cursor == len(body):
-            break
-        if not body.startswith("android:", cursor):
-            raise AuditError(f"unexpected token before paired wrapper {len(observed_suffixes) + 1}")
-        android_preamble_start = cursor + len("android:")
-        android_match = re.search(
-            rf"fn ({re.escape(ANDROID_PREFIX)}[A-Za-z0-9_]+)\(\);",
-            body[android_preamble_start:],
-        )
-        if android_match is None:
-            raise AuditError("paired wrapper is missing its full Android export identifier")
-        android_start = android_preamble_start + android_match.start()
-        android_end = android_preamble_start + android_match.end()
-        android_name = android_match.group(1)
-        android_attributes = _attribute_text(
-            body[android_preamble_start:android_start], "Android"
-        )
-        if "#[unsafe(no_mangle)]" in android_attributes:
-            raise AuditError("Android no_mangle must be supplied exactly once by the pair macro")
-
-        sdk_label = re.match(r"\s*sdk:", body[android_end:])
-        if sdk_label is None:
-            raise AuditError(f"{android_name} is not followed by its SDK wrapper")
-        sdk_preamble_start = android_end + sdk_label.end()
-        sdk_item = body.find('pub unsafe extern "system" fn ', sdk_preamble_start)
-        if sdk_item < 0:
-            raise AuditError(f"{android_name} has no unsafe system SDK function item")
-        sdk_attributes = _attribute_text(body[sdk_preamble_start:sdk_item], "SDK")
-        if sdk_attributes.count("#[unsafe(no_mangle)]\n") != 1:
-            raise AuditError("SDK wrapper must retain exactly one unsafe no_mangle attribute")
-        sdk_match = re.match(
-            rf'pub unsafe extern "system" fn ({re.escape(SDK_PREFIX)}[A-Za-z0-9_]+)\(',
-            body[sdk_item:],
-        )
-        if sdk_match is None:
-            raise AuditError(f"{android_name} has a malformed SDK function declaration")
-        sdk_name = sdk_match.group(1)
-        body_open = body.find("{", sdk_item + sdk_match.end())
-        if body_open < 0:
-            raise AuditError(f"{sdk_name} has no function body")
-        body_close = _matching_brace(body, body_open)
-        function_item = body[sdk_item : body_close + 1]
-
-        sdk_suffix = sdk_name.removeprefix(SDK_PREFIX)
-        android_suffix = android_name.removeprefix(ANDROID_PREFIX)
-        if sdk_suffix != android_suffix:
-            raise AuditError(
-                f"paired export suffix mismatch: SDK {sdk_suffix}, Android {android_suffix}"
+    for body, _body_start, _body_end in _macro_invocations(source):
+        cursor = 0
+        while True:
+            cursor += len(body[cursor:]) - len(body[cursor:].lstrip())
+            if cursor == len(body):
+                break
+            if not body.startswith("android:", cursor):
+                raise AuditError(
+                    f"unexpected token before paired wrapper {len(observed_suffixes) + 1}"
+                )
+            android_preamble_start = cursor + len("android:")
+            android_match = re.search(
+                rf"fn ({re.escape(ANDROID_PREFIX)}[A-Za-z0-9_]+)\(\);",
+                body[android_preamble_start:],
             )
-        observed_suffixes.append(sdk_suffix)
-        abi_records.append(
-            sdk_suffix + "\0" + function_item.replace(sdk_name, "__JNI_EXPORT__", 1)
-        )
-        attribute_records.append(
-            sdk_suffix
-            + "\0"
-            + sdk_attributes
-            + "\0"
-            + android_attributes
-            + "#[unsafe(no_mangle)]\n"
-        )
-        cursor = body_close + 1
+            if android_match is None:
+                raise AuditError("paired wrapper is missing its full Android export identifier")
+            android_start = android_preamble_start + android_match.start()
+            android_end = android_preamble_start + android_match.end()
+            android_name = android_match.group(1)
+            android_attributes = _attribute_text(
+                body[android_preamble_start:android_start], "Android"
+            )
+            if "#[unsafe(no_mangle)]" in android_attributes:
+                raise AuditError(
+                    "Android no_mangle must be supplied exactly once by the pair macro"
+                )
+
+            sdk_label = re.match(r"\s*sdk:", body[android_end:])
+            if sdk_label is None:
+                raise AuditError(f"{android_name} is not followed by its SDK wrapper")
+            sdk_preamble_start = android_end + sdk_label.end()
+            sdk_item = body.find('pub unsafe extern "system" fn ', sdk_preamble_start)
+            if sdk_item < 0:
+                raise AuditError(f"{android_name} has no unsafe system SDK function item")
+            sdk_attributes = _attribute_text(body[sdk_preamble_start:sdk_item], "SDK")
+            if sdk_attributes.count("#[unsafe(no_mangle)]\n") != 1:
+                raise AuditError("SDK wrapper must retain exactly one unsafe no_mangle attribute")
+            sdk_match = re.match(
+                rf'pub unsafe extern "system" fn ({re.escape(SDK_PREFIX)}[A-Za-z0-9_]+)\(',
+                body[sdk_item:],
+            )
+            if sdk_match is None:
+                raise AuditError(f"{android_name} has a malformed SDK function declaration")
+            sdk_name = sdk_match.group(1)
+            body_open = body.find("{", sdk_item + sdk_match.end())
+            if body_open < 0:
+                raise AuditError(f"{sdk_name} has no function body")
+            body_close = _matching_brace(body, body_open)
+            function_item = body[sdk_item : body_close + 1]
+
+            sdk_suffix = sdk_name.removeprefix(SDK_PREFIX)
+            android_suffix = android_name.removeprefix(ANDROID_PREFIX)
+            if sdk_suffix != android_suffix:
+                raise AuditError(
+                    f"paired export suffix mismatch: SDK {sdk_suffix}, Android {android_suffix}"
+                )
+            observed_suffixes.append(sdk_suffix)
+            abi_records.append(
+                sdk_suffix + "\0" + function_item.replace(sdk_name, "__JNI_EXPORT__", 1)
+            )
+            attribute_records.append(
+                sdk_suffix
+                + "\0"
+                + sdk_attributes
+                + "\0"
+                + android_attributes
+                + "#[unsafe(no_mangle)]\n"
+            )
+            cursor = body_close + 1
 
     if tuple(observed_suffixes) != EXPECTED_SUFFIXES:
         raise AuditError(

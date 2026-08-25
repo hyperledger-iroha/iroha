@@ -22814,7 +22814,7 @@ seiyaku GovernanceLifecycle {
             let abi_hash_bytes: [u8; 32] = abi_hash.into();
             DeployContractProposal {
                 contract_address: ContractAddress::derive(
-                    &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
+                    &"0000000000000000000000000000000000000000000000000000000000000001"
                         .parse()
                         .expect("canonical test network id"),
                     authority,
@@ -32848,7 +32848,7 @@ seiyaku GovernanceLifecycle {
             register_manifest
                 .expect_execute(&ALICE_ID, &mut stx, "authorized manifest registration");
             let contract_address = ContractAddress::derive(
-                &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
+                &"0000000000000000000000000000000000000000000000000000000000000001"
                     .parse()
                     .expect("canonical test network id"),
                 &ALICE_ID,
@@ -33069,7 +33069,7 @@ seiyaku GovernanceLifecycle {
             );
             assert_contains!(message, "does not match authority", "unexpected wrong-address error: {message}");
             let wrong_dataspace_address = ContractAddress::derive(
-                &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
+                &"0000000000000000000000000000000000000000000000000000000000000001"
                     .parse()
                     .expect("canonical test network id"),
                 &ALICE_ID,
@@ -33249,7 +33249,7 @@ seiyaku GovernanceLifecycle {
             };
             stx.world.contract_manifests.insert(code_hash, manifest);
             let contract_address = ContractAddress::derive(
-                &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
+                &"0000000000000000000000000000000000000000000000000000000000000001"
                     .parse()
                     .expect("canonical test network id"),
                 &ALICE_ID,

@@ -3547,12 +3547,12 @@ mod tests {
         ensure_canonical_taira_client_identity(&config).expect("canonical Taira identity");
 
         config.chain = "iroha3-taira".into();
-        ensure_canonical_taira_client_identity(&config)
+        let _retired_alias_error = ensure_canonical_taira_client_identity(&config)
             .expect_err("retired chain alias must fail before publication");
 
         config.chain = DEFAULT_CHAIN_ID.into();
         config.account_chain_discriminant = DEFAULT_CHAIN_DISCRIMINANT + 1;
-        ensure_canonical_taira_client_identity(&config)
+        let _wrong_discriminant_error = ensure_canonical_taira_client_identity(&config)
             .expect_err("wrong Taira discriminant must fail before publication");
     }
     #[test]

@@ -46,7 +46,8 @@ class TransactionPayloadTest {
                 null,
                 null,
                 FeePaymentIntent.authority(emptyList()),
-                null,
+                null, // admissionIntent
+                null, // metadata
                 null, // attachments
                 0x1bf,
                 null,
@@ -70,7 +71,8 @@ class TransactionPayloadTest {
                 null,
                 null,
                 FeePaymentIntent.authority(emptyList()),
-                null,
+                null, // admissionIntent
+                null, // metadata
                 null, // attachments
                 0x1bf,
                 null,
@@ -97,17 +99,18 @@ class TransactionPayloadTest {
     @Test
     fun networkIdRejectsNonCanonicalText() {
         val error = assertFailsWith<IllegalArgumentException> {
-            NetworkId.parse(TEST_NETWORK_ID.literal.lowercase())
+            NetworkId.parse(TEST_NETWORK_ID.literal.uppercase())
         }
-        assertTrue(error.message?.contains("exact canonical") == true)
+        assertTrue(error.message?.contains("64 lowercase hexadecimal") == true)
     }
 
     @Test
-    fun `networkId requires a checked 32 byte genesis hash`() {
+    fun `networkId requires an exact marked 32 byte genesis hash`() {
         for (invalid in listOf(
-            TEST_NETWORK_ID.literal.dropLast(1) + "1",
-            TEST_NETWORK_ID.literal.removeSuffix("#A2F0"),
+            TEST_NETWORK_ID.literal.dropLast(1) + "8",
+            TEST_NETWORK_ID.literal.dropLast(1),
             "32C903E5B3497E34C2B844EBFE8A39C19E6CF8F95D44C1FFB8BA9DCB42F91149",
+            "hash:32C903E5B3497E34C2B844EBFE8A39C19E6CF8F95D44C1FFB8BA9DCB42F91149#A2F0",
             "network-label",
         )) {
             assertFailsWith<IllegalArgumentException> {
@@ -117,6 +120,10 @@ class TransactionPayloadTest {
         assertEquals(
             TEST_NETWORK_ID,
             NetworkId.fromBytes(TEST_NETWORK_ID.bytes()),
+        )
+        assertEquals(
+            "32c903e5b3497e34c2b844ebfe8a39c19e6cf8f95d44c1ffb8ba9dcb42f91149",
+            TEST_NETWORK_ID.literal,
         )
     }
 
@@ -414,10 +421,10 @@ class TransactionPayloadTest {
         private const val CONTRACT_ADDRESS =
             "irohac1qyqqqqqqqqqqqqputuv64zhf0a0a4hhlqdj2lhnwuzq4xjq3qexfh"
         private val TEST_NETWORK_ID = NetworkId.parse(
-            "hash:32C903E5B3497E34C2B844EBFE8A39C19E6CF8F95D44C1FFB8BA9DCB42F91149#A2F0",
+            "32c903e5b3497e34c2b844ebfe8a39c19e6cf8f95d44c1ffb8ba9dcb42f91149",
         )
         private val OTHER_NETWORK_ID = NetworkId.parse(
-            "hash:0E5751C026E543B2E8AB2EB06099DAA1D1E5DF47778F7787FAAB45CDF12FE3A9#6A22",
+            "0e5751c026e543b2e8ab2eb06099daa1d1e5df47778f7787faab45cdf12fe3a9",
         )
     }
 }

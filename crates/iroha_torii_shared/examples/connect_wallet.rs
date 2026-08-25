@@ -3,7 +3,7 @@
 //! Usage (demo):
 //!   cargo run -p `iroha_torii_shared` --example `connect_wallet` -- \
 //!     --node <http://127.0.0.1:8080> --sid <base64url> \
-//!     --network-id <hash:...#....> --app-pk <base64url> --nonce <base64url> \
+//!     --network-id <64-lowercase-hex> --app-pk <base64url> --nonce <base64url> \
 //!     --token <`token_wallet`> --relay <`token_relay`> \
 //!     [--action ok|reject|close]
 //!
@@ -46,7 +46,7 @@ async fn main() -> anyhow::Result<()> {
     let network_id_literal = required_arg(&mut args, "--network-id")?;
     let network_id: NetworkId = network_id_literal.parse()?;
     if network_id.to_string() != network_id_literal {
-        anyhow::bail!("--network-id must use the canonical checksummed spelling");
+        anyhow::bail!("--network-id must use canonical raw lowercase hexadecimal text");
     }
     let app_pk_b64 = required_arg(&mut args, "--app-pk")?;
     let nonce_b64 = required_arg(&mut args, "--nonce")?;

@@ -997,7 +997,10 @@ internal object CandidateLabHarness {
     }
 
     private fun installCandidate(context: Context): AcceptedIdentity {
-        check(KagemushaCandidateLabNative.nativeBridgeAbiVersion() == 22)
+        check(
+            KagemushaCandidateLabNative.nativeBridgeAbiVersion() ==
+                KagemushaCandidateLabNative.REQUIRED_BRIDGE_ABI,
+        )
         check(!KagemushaCandidateLabNative.nativeProductionCapabilityObservedV4()) {
             "candidate lab native library unexpectedly reports production capability"
         }
@@ -1582,7 +1585,10 @@ internal object CandidateLabHarness {
             "native accepted candidate must report a clean source tree"
         }
         val bridgeAbi = requireAscii(fields[8], "bridge ABI").toInt()
-        check(bridgeAbi == 21)
+        check(bridgeAbi == KagemushaCandidateLabNative.REQUIRED_BRIDGE_ABI) {
+            "native accepted identity must report exact bridge ABI " +
+                KagemushaCandidateLabNative.REQUIRED_BRIDGE_ABI
+        }
         check(candidateSha == BuildConfig.CANDIDATE_RECORD_SHA256)
         check(manifestSha == BuildConfig.CANDIDATE_MANIFEST_SHA256)
         check(generation == BuildConfig.GENERATION)

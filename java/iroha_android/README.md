@@ -254,10 +254,15 @@ dependencies, so Java and Kotlin do not maintain divergent cryptographic or
 APDU implementations. The shared vector is
 `../../fixtures/offline/kagemusha_peer_transport_v2.json`.
 
-IPM1 admits only profile `2` / schema `0x0102` as a 24,576-byte bounded
-handoff for a mainline typed Kagemusha native archive. Generic IPM validates
-its exact ABI22 envelope without native code; production code then performs
-deeper semantic decoding through `IrohaPeerKagemushaAdapterV1`. Full ABI22
+IPM1 admits profile `2` / schema `0x0102` as a 24,576-byte bounded handoff for
+a mainline typed Kagemusha V4 native archive. Profile `3` / schema `0x0100`
+carries only exact canonical `kgm2:` Offline Cash V1 text. Its
+request/payment/ACK raw maxima are 768/7,936/256 bytes and text maxima are
+1,029/10,587/347 bytes; 9,211 raw and 12,288 text are aggregate session caps,
+not per-message limits. Generic IPM validates canonical framing without native
+code; production code then performs deeper semantic decoding through the typed
+adapter. Mobile native calls cross ABI22 while Kagemusha's protocol/data ABI
+remains V4. Full V4
 QR/NFC/native archives up to 32 MiB continue to use the independent
 `KagemushaQrStream`, `KagemushaNfcProtocol`, and `KagemushaNearby`
 facades. Kagemusha retains its distinct `PKK2*`/`PKKQ1` text and Bonjour
@@ -265,14 +270,14 @@ identifiers, while NFC uses the sole canonical AID
 `F0504B45504B524E464301`. Nearby uses the authenticated binary `PKNB1`
 envelope and its own smaller bound. Those rails are never negotiated,
 reinterpreted, or used as fallback for IPM1. The
-no-raw-text/no-unauthenticated-Nearby rule applies to `IrohaPeer*V1`; the
-retained ABI22 family also has no old AID. Do not use profile `2` for a
+no-untyped-raw-text/no-unauthenticated-Nearby rule applies to `IrohaPeer*V1`;
+the retained V4 family also has no old AID. Do not use profile `2` for a
 sidecar/demo representation.
 
 These transport changes are client-side and require no backend API change.
 
-The sole first-release IPM1 profile code 2 requires schema `0x0102`.
-Construction and decode enforce native-independent ABI22 NRT0 framing, the
+The first-release profile/schema pairs are `2`/`0x0102` and `3`/`0x0100`.
+Construction and decode enforce native-independent canonical NRT0 framing, the
 authoritative fully-qualified kind schema, CRC64, exact compact-length flags,
 and static padding (request/payment 8, ACK 0). Deeper semantics remain in the
 typed adapter.
@@ -442,10 +447,9 @@ internal-validation receipt, benchmark evidence, and cryptographic review. The r
 are each limited to 1 MiB. An authenticated-but-unpromoted release cannot become active.
 
 `newToriiClient(...)` requires an exact genesis-derived `LocalSigningContext` and exposes the
-query-free, asset-neutral `getOfflineCapability`, `getRecipientRegistrationLineage`, `submitTopUp`,
-`submitRedeem`, and `getOperation`. Receiver-lineage proof construction additionally requires a
-per-call `ToriiCanonicalRequestAuth`; the client signs the exact NetworkId, POST path, and Norito
-selector body with fresh metadata and emits a one-shot request. Commands send the typed Norito
+query-free, asset-neutral `getOfflineCapability`, `submitTopUp`, `submitRedeem`, and `getOperation`.
+Receiver-registration lineage is carried inside the portable receive offer and verified locally by
+the native Kagemusha V4 receive-offer verifier; it is not fetched from Torii. Commands send the typed Norito
 request directly with `application/x-norito` and the signed lowercase operation id as
 `Idempotency-Key`; responses must be typed Norito as well. Top-up
 bodies are limited to 512 KiB and redemption bodies to 48 MiB, exposed as
@@ -634,8 +638,12 @@ non-canonical Norito, another network or authority, extra/substituted
 instructions, any mismatch in the complete verifying-key record, and signing
 messages that do not match the payload prehash:
 
+Public `NetworkId` text is exactly 64 lowercase hexadecimal characters and its final byte has the
+marker bit set. Generic JSON `Hash` values retain their separate checksummed
+`hash:<64 uppercase hex digits>#<4 uppercase CRC-16 digits>` contract.
+
 ```java
-NetworkId networkId = NetworkId.parse("<canonical_network_id_hash_literal>");
+NetworkId networkId = NetworkId.parse("<64-lowercase-hex-network-id>");
 ClientConfig config =
     ClientConfig.builder()
         .setLocalSigningContext(new LocalSigningContext(networkId))
@@ -1257,7 +1265,7 @@ import org.hyperledger.iroha.android.model.NetworkId;
 URI uri = URI.create("https://torii.example/v1/node/capabilities");
 NetworkId networkId =
     NetworkId.parse(
-        "hash:32C903E5B3497E34C2B844EBFE8A39C19E6CF8F95D44C1FFB8BA9DCB42F91149#A2F0");
+        "32c903e5b3497e34c2b844ebfe8a39c19e6cf8f95d44c1ffb8ba9dcb42f91149");
 long timestampMs = System.currentTimeMillis();
 String nonce = "fresh-visible-ascii-nonce";
 ToriiCanonicalRequestAuth auth =

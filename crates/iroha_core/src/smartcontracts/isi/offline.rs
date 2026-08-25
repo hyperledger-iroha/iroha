@@ -191,11 +191,11 @@ fn decode_canonical_offline_proof_envelope(
 ) -> Result<OpenVerifyEnvelope, Error> {
     norito::decode_canonical(bytes).map_err(|_| labeled_invariant("invalid_proof", message).into())
 }
-/// Key-material-free projection of one authenticated ABI-21 recursive verifier.
+/// Key-material-free projection of one authenticated Kagemusha V4 recursive verifier.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct KagemushaRecursiveVerifierReadinessV4 {
     /// Stable Torii role; consensus storage IDs are release-qualified by the owner-manifest digest.
-    /// Readiness exposes the fixed ABI-21 Eq/Ep role rather than that rotating identity.
+    /// Readiness exposes the fixed Kagemusha V4 Eq/Ep role rather than that rotating identity.
     pub id: iroha_data_model::proof::VerifyingKeyId,
     /// Governance-managed version of the selected registry record.
     pub version: u32,
@@ -268,7 +268,7 @@ pub struct KagemushaRecursiveReadinessV4 {
     /// `None` only when the authenticated material constructs the configured verifier.
     pub proof_backend_error: Option<String>,
 }
-/// Exact transaction-selected ABI-21 release authenticated for admission.
+/// Exact transaction-selected Kagemusha V4 release authenticated for admission.
 ///
 /// Unlike readiness selection, this projection does not require the release's
 /// issuance window to be open. That distinction lets already-issued notes use
@@ -338,7 +338,7 @@ fn indexed_kagemusha_v4_verifier_v4(
 }
 /// Visit every release whose terminal Eq/Ep verifier records have Active status.
 ///
-/// Terminal records deliberately outlive their issuance windows so historic offline notes can still
+/// Terminal records deliberately outlive their issuance windows so historic offline cash can still
 /// be redeemed. A command that explicitly uses the release cache therefore authenticates every
 /// Active version, including future-activation records, not merely the newest registry entry. This
 /// is command-scoped validation, never node startup or capability admission.
@@ -541,7 +541,7 @@ fn project_kagemusha_v4_verifier(
         withdrawal_height: Some(artifact_set.withdrawal_height),
     }
 }
-/// Resolve the exact active ABI-21 Eq/Ep registry release for Torii readiness.
+/// Resolve the exact active Kagemusha V4 Eq/Ep registry release for Torii readiness.
 ///
 /// This is read-only and does not admit, verify, or redeem a transaction.
 pub fn resolve_kagemusha_recursive_readiness_v4(
@@ -801,7 +801,8 @@ pub fn ensure_kagemusha_active_release_material_v4(
     )?;
     if covered_manifest_digests.is_empty() {
         return Err(
-            "no active authenticated ABI-21/V4 Kagemusha Eq/Ep release is installed".to_owned(),
+            "no active authenticated bridge ABI-22 / Kagemusha V4 Eq/Ep release is installed"
+                .to_owned(),
         );
     }
     for (key, payload) in world.smart_contract_state().iter() {
@@ -1045,6 +1046,20 @@ pub mod isi {
     }
     struct AndroidKeyMintReport {
         certificates: Vec<Vec<u8>>,
+    }
+    /// Exact fixed-width projection emitted only after native KeyMint, X.509,
+    /// governed-root, revocation, status, and device-eligibility validation.
+    ///
+    /// This token is crate-private and non-authorizing. The offline-cash helper
+    /// relation consumes it to avoid accepting caller-normalized DER facts.
+    #[derive(PartialEq, Eq)]
+    pub(crate) struct OfflineCashValidatedAndroidKeyMintFixedSourceV1 {
+        pub(crate) issuer_public_key_sec1: [u8; 65],
+        pub(crate) certificate_signature_raw: [u8; 64],
+        pub(crate) certificate_sha256: [u8; 32],
+        pub(crate) tbs_certificate_sha256: [u8; 32],
+        pub(crate) trusted_root_der_sha256: [u8; 32],
+        pub(crate) attestation_report_sha256: [u8; 32],
     }
     struct AndroidKeyDescription {
         attestation_challenge: Vec<u8>,
@@ -2173,7 +2188,8 @@ pub mod isi {
         let mut active_account_count = 0_usize;
         let mut seen_replay_keys = BTreeSet::new();
         let mut plan = KagemushaOnlineRegistrationAdmissionPlanV1::default();
-        // TODO: Replace this correctness-bounded prefix scan with consensus-maintained counters and an expiry cache to make admission and snapshot derivation cheaper.
+        // Admission deliberately derives its counts from the bounded consensus
+        // prefix so correctness never depends on a separately maintained cache.
         let range_start = kagemusha_online_registration_range_start();
         for (existing_key, existing_archive) in state_transaction
             .world
@@ -4931,11 +4947,11 @@ pub mod isi {
         level == OFFLINE_ATTESTATION_ANDROID_SECURITY_LEVEL_TRUSTED_ENVIRONMENT
             || level == OFFLINE_ATTESTATION_ANDROID_SECURITY_LEVEL_STRONG_BOX
     }
-    fn validate_android_keymint_report(
+    fn validate_android_keymint_report_and_project_fixed_source_v1(
         registration: &OfflineDeviceAttestationRegistration,
         policy: &OfflineDeviceAttestationPolicy,
         block_unix_timestamp_ms: u64,
-    ) -> Result<(), Error> {
+    ) -> Result<OfflineCashValidatedAndroidKeyMintFixedSourceV1, Error> {
         let report = parse_android_keymint_report(registration)?;
         let trusted_roots =
             trusted_root_der_for_platform(policy, &registration.platform, block_unix_timestamp_ms)?;
@@ -4960,7 +4976,7 @@ pub mod isi {
                 .checked_sub(1)
                 .ok_or_else(|| invalid_attestation("Android registration expiry underflows"))?,
         )?;
-        validate_android_key_attestation_certificate_chain(
+        let trusted_root_der = validate_android_key_attestation_certificate_chain(
             &report.certificates,
             &trusted_roots,
             &revoked_certificate_tbs_sha256,
@@ -5054,7 +5070,152 @@ pub mod isi {
         // certificate key has been authenticated, so a submitted identifier
         // cannot select or substitute a different assertion key.
         validate_android_key_id(registration)?;
-        Ok(())
+
+        let issuer_der = report
+            .certificates
+            .get(1)
+            .map(Vec::as_slice)
+            .unwrap_or(trusted_root_der);
+        let issuer_certificate = parse_x509_certificate_der(issuer_der)?;
+        if attested_certificate.issuer() != issuer_certificate.subject()
+            || attested_certificate
+                .signature_algorithm
+                .algorithm
+                .to_id_string()
+                != "1.2.840.10045.4.3.2"
+        {
+            return Err(labeled_invariant(
+                "invalid_attestation",
+                "Android KeyMint helper projection requires a P-256/SHA-256 leaf certificate signature",
+            )
+            .into());
+        }
+        let issuer_public_key = x509_subject_public_key_bytes(&issuer_certificate);
+        let issuer_public_key_sec1: [u8; 65] = issuer_public_key.try_into().map_err(|_| {
+            labeled_invariant(
+                "invalid_attestation",
+                "Android KeyMint helper projection requires an uncompressed P-256 issuer key",
+            )
+        })?;
+        p256::ecdsa::VerifyingKey::from_sec1_bytes(&issuer_public_key_sec1).map_err(|_| {
+            labeled_invariant(
+                "invalid_attestation",
+                "Android KeyMint helper projection issuer key is not canonical P-256 SEC1",
+            )
+        })?;
+        let certificate_signature = p256::ecdsa::Signature::from_der(
+            attested_certificate.signature_value.data.as_ref(),
+        )
+        .map_err(|_| {
+            labeled_invariant(
+                "invalid_attestation",
+                "Android KeyMint helper projection leaf signature is not canonical ECDSA DER",
+            )
+        })?;
+        let certificate_signature = certificate_signature
+            .normalize_s()
+            .unwrap_or(certificate_signature);
+        let certificate_signature_raw: [u8; 64] = certificate_signature.to_bytes().into();
+        Ok(OfflineCashValidatedAndroidKeyMintFixedSourceV1 {
+            issuer_public_key_sec1,
+            certificate_signature_raw,
+            certificate_sha256: sha256_bytes(attested_certificate_der),
+            tbs_certificate_sha256: sha256_bytes(attested_certificate.tbs_certificate.as_ref()),
+            trusted_root_der_sha256: sha256_bytes(trusted_root_der),
+            attestation_report_sha256: sha256_bytes(&registration.attestation_report),
+        })
+    }
+    fn validate_android_keymint_report(
+        registration: &OfflineDeviceAttestationRegistration,
+        policy: &OfflineDeviceAttestationPolicy,
+        block_unix_timestamp_ms: u64,
+    ) -> Result<(), Error> {
+        validate_android_keymint_report_and_project_fixed_source_v1(
+            registration,
+            policy,
+            block_unix_timestamp_ms,
+        )
+        .map(drop)
+    }
+    /// Validate one finalized-policy-bound Android registration and emit only
+    /// the fixed P-256/DER identities consumed by the offline-cash helper.
+    ///
+    /// This read-only mapping repeats the complete registration shape,
+    /// challenge, evidence, policy-lifetime, KeyMint, X.509, revocation,
+    /// governed-root, and eligibility checks. It deliberately does not grant
+    /// transaction admission or proof-verification authority.
+    pub(crate) fn offline_cash_android_keymint_fixed_source_v1(
+        registration: &OfflineDeviceAttestationRegistration,
+        policy: &OfflineDeviceAttestationPolicy,
+        evaluation_time_ms: u64,
+    ) -> Result<OfflineCashValidatedAndroidKeyMintFixedSourceV1, Error> {
+        if registration.version != 2
+            || registration.platform != OFFLINE_ATTESTATION_PLATFORM_ANDROID_KEYMINT
+            || registration.assertion_public_key.is_empty()
+            || is_zero_hash(&registration.challenge_hash)
+            || is_zero_hash(&registration.attestation_report_hash)
+            || is_zero_hash(&registration.evidence_hash)
+            || is_zero_hash(&registration.recent_block_hash)
+            || registration.expires_at_ms <= evaluation_time_ms
+        {
+            return Err(labeled_invariant(
+                "invalid_attestation",
+                "Android KeyMint helper source registration shape is invalid or expired",
+            )
+            .into());
+        }
+        validate_offline_attestation_registration_identifiers(registration)?;
+        validate_offline_attestation_platform_profile(registration)?;
+        validate_offline_attestation_optional_metadata(registration)?;
+        validate_offline_attestation_evidence_bytes(registration)?;
+        let expected_challenge_hash = registration.canonical_challenge_hash().map_err(|error| {
+            labeled_invariant(
+                "invalid_attestation",
+                format!("failed to encode Offline attestation challenge preimage: {error}"),
+            )
+        })?;
+        if registration.challenge_hash != expected_challenge_hash {
+            return Err(labeled_invariant(
+                "invalid_attestation",
+                "Android KeyMint helper source challenge hash is not canonical",
+            )
+            .into());
+        }
+        validate_offline_attestation_policy(policy, evaluation_time_ms)?;
+        let lifetime_policy = offline_attestation_policy_for_registration_lifetime(
+            policy,
+            &registration.platform,
+            evaluation_time_ms,
+            registration.expires_at_ms,
+        )?;
+        validate_offline_attestation_policy(&lifetime_policy, evaluation_time_ms)?;
+        validate_offline_attestation_policy_status_coverage(
+            &lifetime_policy,
+            registration.expires_at_ms,
+        )?;
+        let fixed_source = validate_android_keymint_report_and_project_fixed_source_v1(
+            registration,
+            &lifetime_policy,
+            evaluation_time_ms,
+        )?;
+        let last_valid_ms = registration
+            .expires_at_ms
+            .checked_sub(1)
+            .ok_or_else(|| invalid_attestation("Android registration expiry underflows"))?;
+        validate_offline_attestation_policy(&lifetime_policy, last_valid_ms)?;
+        let expiry_fixed_source = validate_android_keymint_report_and_project_fixed_source_v1(
+            registration,
+            &lifetime_policy,
+            last_valid_ms,
+        )?;
+        if fixed_source != expiry_fixed_source {
+            return Err(labeled_invariant(
+                "invalid_attestation",
+                "Android KeyMint helper source changed across its admitted lifetime",
+            )
+            .into());
+        }
+        Ok(fixed_source)
     }
     fn validate_offline_attestation_report(
         registration: &OfflineDeviceAttestationRegistration,

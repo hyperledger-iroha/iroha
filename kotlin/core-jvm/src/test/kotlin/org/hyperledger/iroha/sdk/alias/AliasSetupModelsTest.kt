@@ -376,7 +376,7 @@ class AliasSetupModelsTest {
             HashLiteral.canonicalize(AliasPlanVerifier.canonicalHash(bodyBytes)),
         )
         val canonicalJson = JsonEncoder.encode(checksummed.toJsonMap())
-        assertTrue("\"network_id\":\"${TEST_NETWORK_ID.literal}\"" in canonicalJson)
+        assertTrue("\"network_id\":\"${TEST_NETWORK_ID.noritoJsonLiteral}\"" in canonicalJson)
         assertFalse("\"chain_id\"" in canonicalJson)
         val parsed = AliasTransactionPlanJsonParser.parse(
             canonicalJson.toByteArray(StandardCharsets.UTF_8),
@@ -489,7 +489,7 @@ class AliasSetupModelsTest {
             hex(AliasPlanVerifier.canonicalLifecycleHash(bodyBytes)),
         )
         val canonicalJson = JsonEncoder.encode(plan.toJsonMap())
-        assertTrue("\"network_id\":\"${TEST_NETWORK_ID.literal}\"" in canonicalJson)
+        assertTrue("\"network_id\":\"${TEST_NETWORK_ID.noritoJsonLiteral}\"" in canonicalJson)
         assertFalse("\"chain_id\"" in canonicalJson)
         val parsed = AliasLifecycleTransactionPlanJsonParser.parse(
             canonicalJson.toByteArray(StandardCharsets.UTF_8),
@@ -1069,7 +1069,7 @@ class AliasSetupModelsTest {
 
     private companion object {
         private val TEST_NETWORK_ID = NetworkId.parse(
-            "hash:32C903E5B3497E34C2B844EBFE8A39C19E6CF8F95D44C1FFB8BA9DCB42F91149#A2F0",
+            "32c903e5b3497e34c2b844ebfe8a39c19e6cf8f95d44c1ffb8ba9dcb42f91149",
         )
         private val OTHER_NETWORK_ID = NetworkId.fromBytes(ByteArray(NetworkId.BYTE_LENGTH) { 0xA5.toByte() })
     }

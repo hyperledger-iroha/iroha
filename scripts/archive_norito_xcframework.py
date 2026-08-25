@@ -465,7 +465,7 @@ def _load_generation_validator():
     return module
 
 
-def _validate_generation(snapshot: Path):
+def _validate_generation(snapshot: Path, lockfile_path: Path | None = None):
     validator = _load_generation_validator()
     manifest_path = snapshot / MANIFEST_NAME
     manifest_link = snapshot.parent / MANIFEST_NAME
@@ -480,6 +480,7 @@ def _validate_generation(snapshot: Path):
             expected_link_target=expected_link_target,
             swift_loader=None,
             verify_repository_provenance=True,
+            lockfile_path=lockfile_path,
         )
     except validator.ValidationError as error:
         fail(f"XCFramework generation is not canonical: {error}")
@@ -796,6 +797,7 @@ def archive_xcframework(
     source_raw: str,
     output_raw: str,
     scratch_raw: str,
+    lockfile_raw: str | None = None,
 ) -> tuple[str, int]:
     repository_root = _repository_root()
     source = _canonical_existing_directory(source_raw, "NoritoBridge XCFramework")
@@ -843,7 +845,12 @@ def archive_xcframework(
                 f"[norito-bridge-archive] retained-snapshot={snapshot_container}",
                 file=sys.stderr,
             )
-            validator = _validate_generation(snapshot)
+            lockfile_path = Path(lockfile_raw) if lockfile_raw is not None else None
+            validator = _validate_generation(snapshot, lockfile_path)
+            selected_lockfile = validator._selected_lockfile(
+                repository_root, lockfile_path
+            )
+            selected_lock_seal = validator._cargo_lock_seal(selected_lockfile)
             _validate_native_binaries(snapshot, validator)
             temporary_archive = _write_archive(
                 snapshot,
@@ -851,6 +858,12 @@ def archive_xcframework(
                 stamp,
                 digests,
             )
+            # Source and lock provenance can change while native inspection and
+            # ZIP emission run. Revalidate the complete repository closure and
+            # require the exact selected lock inode immediately before publish.
+            _validate_generation(snapshot, lockfile_path)
+            if validator._cargo_lock_seal(selected_lockfile) != selected_lock_seal:
+                fail("selected Cargo.lock changed before archive publication")
             archive_lock.assert_held()
             _atomic_publish(
                 temporary_archive,
@@ -880,6 +893,7 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--xcframework", required=True)
     parser.add_argument("--output", required=True)
     parser.add_argument("--scratch-dir", required=True)
+    parser.add_argument("--lockfile-path")
     return parser.parse_args()
 
 
@@ -896,6 +910,7 @@ def main() -> None:
         args.xcframework,
         args.output,
         args.scratch_dir,
+        args.lockfile_path,
     )
     print(f"[norito-bridge-archive] sha256={digest} bytes={size} path={args.output}")
 

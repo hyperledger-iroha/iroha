@@ -11,18 +11,38 @@ use iroha_schema::IntoSchema;
 use norito::codec::{Decode, Encode};
 use sha2::{Digest as _, Sha256};
 
-/// Fixed Halo2 domain exponent for every offline-cash proof role.
+/// Fixed Halo2 domain exponent for STATE and helper proof roles.
 pub const OFFLINE_CASH_HALO2_K_V1: u32 = 16;
-/// Exact serialized transparent IPA parameters for either Pasta parity.
-pub const OFFLINE_CASH_PARAMS_BYTES_V1: u64 = 4_194_372;
+/// Fixed Halo2 domain exponent for the P-256 V3 child proof role.
+pub const OFFLINE_CASH_P256_V3_HALO2_K_V1: u32 = 16;
+const OFFLINE_CASH_PASTA_COMPRESSED_POINT_BYTES_V1: u64 = 32;
+const OFFLINE_CASH_HALO2_PARAMS_LENGTH_PREFIX_BYTES_V1: u64 = 4;
+/// Exact serialized transparent k=16 IPA parameters for either Pasta parity.
+///
+/// Every Offline Cash V1 circuit role consumes this one authenticated common
+/// domain; there is no larger P-256-only parameter set to substitute.
+pub const OFFLINE_CASH_PARAMS_BYTES_V1: u64 = ((2 * (1_u64 << OFFLINE_CASH_HALO2_K_V1)) + 2)
+    * OFFLINE_CASH_PASTA_COMPRESSED_POINT_BYTES_V1
+    + OFFLINE_CASH_HALO2_PARAMS_LENGTH_PREFIX_BYTES_V1;
+const _: () = assert!(OFFLINE_CASH_P256_V3_HALO2_K_V1 == OFFLINE_CASH_HALO2_K_V1);
+const _: () = assert!(OFFLINE_CASH_PARAMS_BYTES_V1 == 4_194_372);
 /// Maximum processed state proving-key bytes for either parity.
 pub const OFFLINE_CASH_STATE_PROVING_KEY_MAX_BYTES_V1: u64 = 48_234_934;
 /// Maximum processed helper proving-key bytes for either parity.
 pub const OFFLINE_CASH_HELPER_PROVING_KEY_MAX_BYTES_V1: u64 = 64 * 1024 * 1024;
+/// Maximum processed P-256 V3 child proving-key bytes for either parity.
+///
+/// The reviewed k=16 V3 geometry has four fixed and sixteen permutation
+/// polynomials. Its canonical processed frame is bounded by 90,243,260 bytes
+/// when the authenticated verifying key reaches its separate 64 KiB ceiling,
+/// so 64 MiB cannot represent this exact circuit. The 96 MiB envelope leaves
+/// bounded framing headroom while the complete artifact set remains subject
+/// to its independent 1 GiB limit.
+pub const OFFLINE_CASH_P256_V3_PROVING_KEY_MAX_BYTES_V1: u64 = 96 * 1024 * 1024;
 /// Maximum processed verifying-key bytes for one role and parity.
 pub const OFFLINE_CASH_VERIFYING_KEY_MAX_BYTES_V1: u64 = 64 * 1024;
 /// Maximum complete preinstalled offline artifact package.
-pub const OFFLINE_CASH_ARTIFACT_SET_MAX_BYTES_V1: u64 = 512 * 1024 * 1024;
+pub const OFFLINE_CASH_ARTIFACT_SET_MAX_BYTES_V1: u64 = 1024 * 1024 * 1024;
 /// Maximum whole-process resident memory during proving or verification.
 pub const OFFLINE_CASH_PROCESS_RSS_MAX_BYTES_V1: u64 = 128 * 1024 * 1024;
 /// Minimum distinct reproducible builds required by validation.
@@ -106,11 +126,35 @@ pub enum OfflineCashArtifactRoleV1 {
     GuardBundlePkEp,
     /// Ep/Fq `GuardBundle` verifying key.
     GuardBundleVkEp,
+    /// Eq/Fp P-256 V3 child proving key shared by platform and Android statements.
+    P256V3PkEq,
+    /// Eq/Fp P-256 V3 child verifying key shared by platform and Android statements.
+    P256V3VkEq,
+    /// Ep/Fq P-256 V3 child proving key shared by platform and Android statements.
+    P256V3PkEp,
+    /// Ep/Fq P-256 V3 child verifying key shared by platform and Android statements.
+    P256V3VkEp,
+    /// Eq/Fp STATE relation leaf proving key.
+    StateLeafPkEq,
+    /// Eq/Fp STATE relation leaf verifying key.
+    StateLeafVkEq,
+    /// Ep/Fq STATE relation leaf proving key.
+    StateLeafPkEp,
+    /// Ep/Fq STATE relation leaf verifying key.
+    StateLeafVkEp,
+    /// Eq/Fp GuardBundle SHA-relation leaf proving key.
+    GuardBundleLeafPkEq,
+    /// Eq/Fp GuardBundle SHA-relation leaf verifying key.
+    GuardBundleLeafVkEq,
+    /// Ep/Fq GuardBundle SHA-relation leaf proving key.
+    GuardBundleLeafPkEp,
+    /// Ep/Fq GuardBundle SHA-relation leaf verifying key.
+    GuardBundleLeafVkEp,
 }
 
 impl OfflineCashArtifactRoleV1 {
     /// Exact canonically ordered release inventory.
-    pub const ALL: [Self; 22] = [
+    pub const ALL: [Self; 34] = [
         Self::ParamsEq,
         Self::ParamsEp,
         Self::StatePkEq,
@@ -133,6 +177,18 @@ impl OfflineCashArtifactRoleV1 {
         Self::GuardBundleVkEq,
         Self::GuardBundlePkEp,
         Self::GuardBundleVkEp,
+        Self::P256V3PkEq,
+        Self::P256V3VkEq,
+        Self::P256V3PkEp,
+        Self::P256V3VkEp,
+        Self::StateLeafPkEq,
+        Self::StateLeafVkEq,
+        Self::StateLeafPkEp,
+        Self::StateLeafVkEp,
+        Self::GuardBundleLeafPkEq,
+        Self::GuardBundleLeafVkEq,
+        Self::GuardBundleLeafPkEp,
+        Self::GuardBundleLeafVkEp,
     ];
 
     const fn is_params(self) -> bool {
@@ -140,7 +196,10 @@ impl OfflineCashArtifactRoleV1 {
     }
 
     const fn is_state_pk(self) -> bool {
-        matches!(self, Self::StatePkEq | Self::StatePkEp)
+        matches!(
+            self,
+            Self::StatePkEq | Self::StatePkEp | Self::StateLeafPkEq | Self::StateLeafPkEp
+        )
     }
 
     const fn is_helper_pk(self) -> bool {
@@ -154,7 +213,13 @@ impl OfflineCashArtifactRoleV1 {
                 | Self::AndroidKeyCertPkEp
                 | Self::GuardBundlePkEq
                 | Self::GuardBundlePkEp
+                | Self::GuardBundleLeafPkEq
+                | Self::GuardBundleLeafPkEp
         )
+    }
+
+    const fn is_p256_v3_pk(self) -> bool {
+        matches!(self, Self::P256V3PkEq | Self::P256V3PkEp)
     }
 
     const fn is_vk(self) -> bool {
@@ -162,6 +227,8 @@ impl OfflineCashArtifactRoleV1 {
             self,
             Self::StateVkEq
                 | Self::StateVkEp
+                | Self::StateLeafVkEq
+                | Self::StateLeafVkEp
                 | Self::GuardUseVkEq
                 | Self::GuardUseVkEp
                 | Self::PlatformBindVkEq
@@ -170,6 +237,10 @@ impl OfflineCashArtifactRoleV1 {
                 | Self::AndroidKeyCertVkEp
                 | Self::GuardBundleVkEq
                 | Self::GuardBundleVkEp
+                | Self::GuardBundleLeafVkEq
+                | Self::GuardBundleLeafVkEp
+                | Self::P256V3VkEq
+                | Self::P256V3VkEp
         )
     }
 }
@@ -524,6 +595,9 @@ fn validate_artifacts(
         } else if artifact.role.is_helper_pk() {
             artifact.byte_len != 0
                 && artifact.byte_len <= OFFLINE_CASH_HELPER_PROVING_KEY_MAX_BYTES_V1
+        } else if artifact.role.is_p256_v3_pk() {
+            artifact.byte_len != 0
+                && artifact.byte_len <= OFFLINE_CASH_P256_V3_PROVING_KEY_MAX_BYTES_V1
         } else if artifact.role.is_vk() {
             artifact.byte_len != 0 && artifact.byte_len <= OFFLINE_CASH_VERIFYING_KEY_MAX_BYTES_V1
         } else {

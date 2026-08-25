@@ -167,7 +167,7 @@ final class IrohaPeerQRV1Tests: XCTestCase {
         guard case .completed(let staticDecoded) = staticEvent else {
             return XCTFail("Expected complete-frame decoding")
         }
-        XCTAssertEqual(staticDecoded, small)
+        XCTAssertEqual(staticDecoded.message, small)
 
         let message = try makeMessage(count: 600, seed: 2)
         XCTAssertNil(try IrohaPeerQRCodecV1.staticCompleteTextCandidate(for: message))
@@ -242,8 +242,9 @@ final class IrohaPeerQRV1Tests: XCTestCase {
         guard case .completed(let decoded) = event else {
             return XCTFail("Expected parity-assisted completion")
         }
-        XCTAssertEqual(decoded, message)
-        XCTAssertEqual(decoded.canonicalPayload, message.canonicalPayload)
+        XCTAssertEqual(decoded.message, message)
+        XCTAssertEqual(decoded.message.canonicalPayload, message.canonicalPayload)
+        XCTAssertEqual(decoded.progress.recoveredDataShards, 1)
     }
 
     func testConflictingDuplicateQuarantinesOnlyThatStream() throws {
@@ -318,17 +319,17 @@ final class IrohaPeerQRV1Tests: XCTestCase {
         guard case .completed(let completed) = try session.ingest(text, atUptime: 100) else {
             return XCTFail("Expected structural IPM1 completion")
         }
-        XCTAssertEqual(completed, message)
+        XCTAssertEqual(completed.message, message)
         XCTAssertEqual(session.activeStreamCount, 0)
 
-        try session.quarantine(streamID: completed.streamID, atUptime: 100)
+        try session.quarantine(streamID: completed.message.streamID, atUptime: 100)
         XCTAssertThrowsError(try session.ingest(text, atUptime: 102.999)) { error in
             XCTAssertEqual(error as? IrohaPeerQRErrorV1, .streamQuarantined)
         }
         guard case .completed(let retried) = try session.ingest(text, atUptime: 103) else {
             return XCTFail("Expected reuse at the quarantine deadline")
         }
-        XCTAssertEqual(retried, message)
+        XCTAssertEqual(retried.message, message)
         XCTAssertThrowsError(
             try session.quarantine(streamID: Data(repeating: 0, count: 15), atUptime: 104)
         ) { error in
@@ -659,7 +660,7 @@ final class IrohaPeerQRV1Tests: XCTestCase {
         guard case .completed(let decoded) = accepted else {
             return XCTFail("Expected configurable Kagemusha schema completion")
         }
-        XCTAssertEqual(decoded, kagemusha)
+        XCTAssertEqual(decoded.message, kagemusha)
     }
 
     fileprivate struct FrameLookup: Hashable {

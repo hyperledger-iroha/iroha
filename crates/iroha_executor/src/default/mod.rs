@@ -548,7 +548,7 @@ mod contract_deployment_bootstrap_tests {
         let authority = account(1);
         let code_hash = Hash::new(b"executor lifecycle dispatch code");
         let contract_address = ContractAddress::derive(
-            &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
+            &"0000000000000000000000000000000000000000000000000000000000000001"
                 .parse()
                 .expect("canonical test network id"),
             &authority,
@@ -719,7 +719,7 @@ mod contract_deployment_bootstrap_tests {
             CommitContractDeployment {
                 expected_deploy_nonce: 0,
                 contract_address: ContractAddress::derive(
-                    &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
+                    &"0000000000000000000000000000000000000000000000000000000000000001"
                         .parse()
                         .expect("canonical test network id"),
                     &authority,
@@ -1016,7 +1016,7 @@ impl InstructionDispatch for InstructionBox {
         if let Some(isi) = any.downcast_ref::<SetContractAlias>() {
             execute!(executor, isi);
         }
-        // Core owns offline note/device validation and the exact governance permissions for
+        // Core owns offline cash/device validation and the exact governance permissions for
         // attestation-policy mutations. Forward every native offline instruction so those
         // consensus-critical checks run.
         if let Some(isi) = any.downcast_ref::<TopUpKagemushaRecursiveV4>() {
@@ -1706,7 +1706,7 @@ mod core_authorization_dispatch_tests {
     fn default_executor_forwards_the_complete_kagemusha_canary_lifecycle() {
         let source = include_str!("mod.rs");
         let start = source
-            .find("// Core owns offline note/device validation")
+            .find("// Core owns offline cash/device validation")
             .expect("Kagemusha dispatch marker");
         let tail = &source[start..];
         let end = tail

@@ -71,7 +71,7 @@ fn governance_contract_address(contract_id: &str) -> ContractAddress {
         other => panic!("unexpected governance test contract id `{other}`"),
     };
     ContractAddress::derive(
-        &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
+        &"0000000000000000000000000000000000000000000000000000000000000001"
             .parse()
             .expect("canonical test network id"),
         &ALICE_ID,

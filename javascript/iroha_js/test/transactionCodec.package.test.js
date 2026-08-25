@@ -162,7 +162,7 @@ test("packed browser declarations compile without ambient Node types", () => {
         'import { browserTransactionCodec, buildBrowserTransferPayload } from "@iroha/iroha-js/transaction-codec";',
         "const codec: NexusTransactionCodec = browserTransactionCodec;",
         "new NexusAppClient({ transactionCodec: codec });",
-        'const networkId = NetworkId.parse("hash:32C903E5B3497E34C2B844EBFE8A39C19E6CF8F95D44C1FFB8BA9DCB42F91149#A2F0");',
+        'const networkId = NetworkId.parse("32c903e5b3497e34c2b844ebfe8a39c19e6cf8f95d44c1ffb8ba9dcb42f91149");',
         "const bytes: Uint8Array = buildBrowserTransferPayload({",
         '  networkId, authority: "authority", sourceAssetHoldingId: "asset#authority",',
         '  quantity: "1", destinationAccountId: "destination",',

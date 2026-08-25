@@ -1995,7 +1995,7 @@ mod tests {
     fn executable_ref_json_roundtrip_mixed_batch() {
         let authority = sample_authority();
         let contract_address = iroha_data_model::smart_contract::ContractAddress::derive(
-            &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
+            &"0000000000000000000000000000000000000000000000000000000000000001"
                 .parse()
                 .expect("canonical test network id"),
             &authority,

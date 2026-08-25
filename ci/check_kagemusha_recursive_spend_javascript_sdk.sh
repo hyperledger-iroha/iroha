@@ -43,4 +43,4 @@ if grep -REni 'export[[:space:]]+(class|function|const)[[:space:]]+[^[:space:]]*
   exit 1
 fi
 
-echo "Kagemusha JavaScript boundary passed: ABI-21/V4 Torii DTOs are present without a native prover claim."
+echo "Kagemusha JavaScript boundary passed: Kagemusha data ABI V4 Torii DTOs are present without a native prover claim."

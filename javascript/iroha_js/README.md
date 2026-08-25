@@ -163,8 +163,9 @@ The JavaScript package exposes the four stable Kagemusha Torii routes through
 `submitKagemushaRedeemV4`, and `getKagemushaOperationStatus`. Readiness is
 an asset-neutral protocol capability compiled into every deployment. Discovery
 accepts only the exact `cash_handoff_v1`, bridge ABI 22, eight-hop universal
-`OfflineStatus` with `mandatory: false`, `ready: true`, and empty asset and
-blocker lists. No selector-taking readiness alias is exported.
+`OfflineStatus` with `mandatory: false`, `ready: false`, an empty asset list,
+and the three canonical activation blockers. Capability discovery therefore
+never grants production admission. No selector-taking readiness alias is exported.
 
 This is deliberately a transport-only boundary. Command helpers require an
 externally produced `{ version: 4, operationId, norito }` archive and never
@@ -238,8 +239,8 @@ binding. This deliberately narrow surface supports one `Transfer::Asset`
 instruction, single-key Ed25519 I105 authorities, canonical asset identifiers,
 and accounts sharing one Taira-style network prefix/chain discriminant.
 Every ordinary transaction carries a nominal `NetworkId`: the exact marked
-32-byte genesis-header hash, rendered as a canonical checksummed Iroha hash
-literal. Human-readable `chain`, `chainId`, and `chain_id` transaction fields
+32-byte genesis-header hash, rendered as exactly 64 lowercase hexadecimal
+characters. Human-readable `chain`, `chainId`, and `chain_id` transaction fields
 are rejected; they are not aliases for this consensus identity.
 
 ```js
@@ -251,7 +252,7 @@ import {
 } from "@iroha/iroha-js/transaction-codec";
 
 const networkId = NetworkId.parse(
-  "hash:32C903E5B3497E34C2B844EBFE8A39C19E6CF8F95D44C1FFB8BA9DCB42F91149#A2F0",
+  "32c903e5b3497e34c2b844ebfe8a39c19e6cf8f95d44c1ffb8ba9dcb42f91149",
 );
 const payloadBytes = buildBrowserTransferPayload({
   networkId,
@@ -3810,11 +3811,11 @@ file; selecting the live suite without `IROHA_TORII_INTEGRATION_URL` fails.
 - `IROHA_TORII_INTEGRATION_AUTH_TOKEN` — optional bearer token for auth-protected deployments.
 - `IROHA_TORII_INTEGRATION_CONFIG` — optional path to an `iroha_config` JSON file; when present the test asserts that `extractToriiFeatureConfig()` normalises ISO bridge and Connect settings.
 - `IROHA_TORII_INTEGRATION_CONNECT_SESSION` — optional JSON string containing the exact registration payload for `createConnectSession()`: `sid`, canonical `network_id`, base64url `app_pk`, base64url `nonce`, and optional `node`.
-- `IROHA_TORII_INTEGRATION_CONNECT_PREVIEW` — optional JSON object consumed by the Connect preview bootstrapper test (`{"network_id":"hash:<genesis>#<checksum>","node":"torii.devnet.example","sessionOptions":{"node":"ingress.devnet.example"}}`). When present and `IROHA_TORII_INTEGRATION_MUTATE=1`, the suite calls `bootstrapConnectPreviewSession()`, validates the deeplink URIs/tokens, and deletes the staged session.
+- `IROHA_TORII_INTEGRATION_CONNECT_PREVIEW` — optional JSON object consumed by the Connect preview bootstrapper test (`{"network_id":"<64-lowercase-genesis-hex>","node":"torii.devnet.example","sessionOptions":{"node":"ingress.devnet.example"}}`). When present and `IROHA_TORII_INTEGRATION_MUTATE=1`, the suite calls `bootstrapConnectPreviewSession()`, validates the deeplink URIs/tokens, and deletes the staged session.
 - `IROHA_TORII_INTEGRATION_CONNECT_APP` — optional JSON object describing a Connect app registration payload (`{"appId":"demo","namespaces":["apps"],"metadata":{"suite":"ci"}}`); when present and `IROHA_TORII_INTEGRATION_MUTATE=1`, the suite registers the app, verifies that list/get/iterator APIs return it, and then deletes it.
 - `IROHA_TORII_INTEGRATION_CONTRACT_CALL` — optional JSON object describing a contract call payload (for example: `{"contractAddress":"irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw","entrypoint":"ping","payload":{"value":1},"feePayment":{"payer":"authority","value":{"charge_limits":[{"kind":{"kind":"pipeline_gas","value":null},"asset_definition_id":"xor#universal","max_amount":"1500000"}],"gas_limit":1500000}}}`). When supplied alongside `IROHA_TORII_INTEGRATION_MUTATE=1`, the suite invokes `ToriiClient.prepareContractCall` and validates the returned local-signing draft. The helper accepts camelCase keys plus overrides for `authority` and the required exact quoted `feePayment` intent.
 - `IROHA_TORII_INTEGRATION_GOV_BALLOT` — optional JSON object ({`referendumId`,`owner`,`amount`,`durationBlocks`,`direction`} are the common keys) drafted via `governanceSubmitPlainBallot` when `IROHA_TORII_INTEGRATION_MUTATE=1`. Missing fields default to the configured `authority` and exact `NetworkId`, so the env var only needs vote-specific fields.
-- `IROHA_TORII_INTEGRATION_NETWORK_ID` — canonical checksummed genesis-derived `NetworkId` used by Connect, governance drafts, and ordinary mutation transactions.
+- `IROHA_TORII_INTEGRATION_NETWORK_ID` — canonical raw lowercase genesis-derived `NetworkId` used by Connect, governance drafts, and ordinary mutation transactions.
 - `IROHA_TORII_INTEGRATION_ACCOUNT_ID` / `IROHA_TORII_INTEGRATION_PRIVATE_KEY_HEX` — optional overrides for the default signer (`defaults/client.toml`); the defaults target the canonical encoded account id derived from `account.public_key`.
 - `IROHA_TORII_INTEGRATION_MUTATE` — set to `1` to enable mutation tests (registering disposable domains via the builder helpers). The docker harness described below enables this flag automatically.
 - `IROHA_TORII_INTEGRATION_STREAM_ENABLED` — set to `1` (alongside `IROHA_TORII_INTEGRATION_MUTATE=1`) to exercise the event-stream coverage that waits for a `Pipeline.Block` SSE and asserts the typed payload mirrors Torii’s stream schema. Leave unset when SSE endpoints are disabled or proxied away.
@@ -4022,7 +4023,7 @@ Its top-up and redemption bodies are canonical manifest-V4 Norito archives and
 its peer-transfer keys must remain device-bound, so browser and Node
 applications must not hand-encode those payloads. They may submit and poll an
 archive produced by a supported IrohaSwift or JVM wallet through the typed
-ABI-21/V4 Torii helpers described above.
+bridge ABI-22 / Kagemusha data ABI V4 Torii helpers described above.
 
 for await (const assetDef of torii.iterateAssetDefinitions({
   pageSize: 50,

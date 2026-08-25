@@ -4,12 +4,12 @@
 //! validator lifecycle, submission, direct peer queries, replay attempts, and
 //! outcome validation. This binary deliberately has no endpoint or credential
 //! input. Each admitted v1 operation accepts one bounded public network context
-//! on stdin and returns one genuine proof-bearing transaction on stdout.
+//! on stdin and returns one explicit bundle of genuine proof-bearing transactions on stdout.
 //! Witness and signing material are derived and consumed inside this process
-//! and never cross the IPC boundary. Vega remains absent until its exact
-//! governed Figure 9 proving artifacts are available; ZK-AMS and ZK-X509 also
-//! remain absent until their native release paths are genuinely available, so
-//! receipt issuance remains closed.
+//! and never cross the IPC boundary. Vega uses its native production action
+//! builder. ZK-AMS returns its complete two-admission-plus-provision construction
+//! sequence. ZK-X509 remains absent until its production pins are complete, and
+//! receipt issuance remains closed until a sealed controller proves network outcomes.
 use iroha_core::{
     privacy::PRIVACY_MIN_ACTIVATION_DELAY_BLOCKS_V1,
     privacy_profiles::compiled_privacy_profile_v1,
@@ -21,8 +21,10 @@ use iroha_core::{
         build_privacy_release_jindo_network_action_v1,
         build_privacy_release_orchard_network_action_v1,
         build_privacy_release_pq_masp_network_actions_v1,
+        build_privacy_release_vega_network_action_v1,
         build_privacy_release_verange_network_action_v1,
         build_privacy_release_zk_ace_network_action_v1,
+        build_privacy_release_zk_ams_network_actions_v1,
     },
 };
 use iroha_crypto::{Algorithm, Hash, HashOf, PrivateKey, PublicKey};
@@ -33,7 +35,9 @@ use iroha_data_model::{
     privacy::{
         PrivacyCompiledProfileSnapshotV1, PrivacyPolicyIdV1, PrivacyPoolIdV1,
         PrivacyProposedLifecycleV1, PrivacyProtocolActivationLimitsV1, PrivacyProtocolIdV1,
-        PrivacyProtocolLifecycleV1, TAIRA_PRIVACY_MAX_ACTION_BYTES_V1,
+        PrivacyProtocolLifecycleV1, PrivacyZkAmsActionV1, PrivacyZkAmsBatchAdmissionV1,
+        PrivacyZkAmsProvisionAccountV1, PrivacyZkAmsRegistryBootstrapV1,
+        TAIRA_PRIVACY_MAX_ACTION_BYTES_V1,
     },
     transaction::{FeePaymentIntent, SignedTransaction},
 };
@@ -49,11 +53,14 @@ use std::{
 use zeroize::Zeroizing;
 const REQUEST_SCHEMA: &str = "iroha.taira.privacy_action_driver_request";
 const RESPONSE_SCHEMA: &str = "iroha.taira.privacy_action_driver_response";
-const SCHEMA_VERSION: u8 = 1;
+const REQUEST_SCHEMA_VERSION: u8 = 1;
+const RESPONSE_SCHEMA_VERSION: u8 = 2;
 const ZK_ACE_OPERATION: &str = "build-zk-ace-action-v1";
 const ANONYMOUS_PGC_OPERATION: &str = "build-anonymous-pgc-action-v1";
 const VERANGE_OPERATION: &str = "build-verange-action-v1";
-const UNAVAILABLE_VEGA_OPERATION: &str = "build-vega-action-v1";
+const VEGA_OPERATION: &str = "build-vega-action-v1";
+const ZK_AMS_OPERATION: &str = "build-zk-ams-action-v1";
+const UNAVAILABLE_ZK_X509_OPERATION: &str = "build-zk-x509-action-v1";
 const JINDO_OPERATION: &str = "build-jindo-action-v1";
 const BOOTLE_LANTERN_OPERATION: &str = "build-bootle-lantern-action-v1";
 const ORCHARD_OPERATION: &str = "build-orchard-action-v1";
@@ -67,7 +74,8 @@ const VERANGE_SETUP_IDENTITY_BINDING_DOMAIN: &[u8] =
     b"iroha.taira.verange_qualification_setup_identity.v1\0";
 const MAX_REQUEST_BYTES: u64 = 16 * 1024;
 const MAX_TRANSACTION_BYTES: usize = TAIRA_PRIVACY_MAX_ACTION_BYTES_V1 as usize;
-const MAX_RESPONSE_BYTES: usize = 2 * MAX_TRANSACTION_BYTES
+const MAX_TRANSACTION_BUNDLE_ACTIONS: usize = 4;
+const MAX_RESPONSE_BYTES: usize = 2 * MAX_TRANSACTION_BYTES * MAX_TRANSACTION_BUNDLE_ACTIONS
     + 2 * MAX_COMPILED_PROFILE_BYTES
     + 2 * MAX_ACTIVATION_TEMPLATE_BYTES
     + MAX_REQUEST_BYTES as usize;
@@ -82,7 +90,7 @@ const CONSTRUCTION_ONLY_STATUS: &str = "constructible";
 const JINDO_EXPERIMENTAL_STATUS: &str = "available-experimental";
 const MISSING_CONTROLLER_CASE_EVIDENCE: &str = "MissingSealedControllerProtocolCaseEvidence";
 const MISSING_ADMISSION_ARTIFACT_BUNDLE: &str = "MissingCanonicalAdmissionArtifactBundle";
-const MISSING_GOVERNED_FIGURE9_PROVER_ARTIFACTS: &str = "MissingGovernedFigure9ProverArtifacts";
+const MISSING_ZK_X509_PRODUCTION_PINS: &str = "MissingZkX509ProductionKatAndResourcePins";
 const MISSING_JINDO_KNOWLEDGE_SOUNDNESS: &str = "MissingDistributionWideKnowledgeSoundnessEvidence";
 const MISSING_VERANGE_SETUP_AUTHORITY: &str =
     "MissingExactGenesisSourceClosedControllerSetupAuthorityIdentity";
@@ -93,6 +101,12 @@ const MISSING_VERANGE_STATE_QUERY_EVIDENCE: &str =
 const VERANGE_PUBLIC_ADMISSION_ARTIFACT_SCHEMA: &str =
     "iroha.taira.verange_public_admission_artifacts";
 const VERANGE_PUBLIC_ADMISSION_ARTIFACT_SCHEMA_VERSION: u8 = 1;
+const ZK_AMS_PUBLIC_ADMISSION_ARTIFACT_SCHEMA: &str =
+    "iroha.taira.zk_ams_public_admission_artifacts";
+const ZK_AMS_PUBLIC_ADMISSION_ARTIFACT_SCHEMA_VERSION: u8 = 1;
+const SINGLE_TRANSACTION_BUNDLE_KIND: &str = "single-action-v1";
+const ZK_AMS_TRANSACTION_BUNDLE_KIND: &str = "zk-ams-admission-provision-sequence-v1";
+const PQ_MASP_TRANSACTION_BUNDLE_KIND: &str = "pq-masp-release-sequence-v1";
 const VERANGE_SETUP_REQUIREMENTS_SCHEMA: &str =
     "iroha.taira.verange_qualification_setup_requirements";
 const VERANGE_SETUP_REQUIREMENTS_SCHEMA_VERSION: u8 = 1;
@@ -110,7 +124,7 @@ struct ConstructibleOperationSpecV1 {
     operation: &'static str,
     protocol: &'static str,
 }
-const CONSTRUCTIBLE_OPERATION_SPECS_V1: [ConstructibleOperationSpecV1; 9] = [
+const CONSTRUCTIBLE_OPERATION_SPECS_V1: [ConstructibleOperationSpecV1; 11] = [
     ConstructibleOperationSpecV1 {
         operation: ZK_ACE_OPERATION,
         protocol: "zk-ace-pq-authorization-v0",
@@ -122,6 +136,14 @@ const CONSTRUCTIBLE_OPERATION_SPECS_V1: [ConstructibleOperationSpecV1; 9] = [
     ConstructibleOperationSpecV1 {
         operation: VERANGE_OPERATION,
         protocol: "verange-transparent-range-v1",
+    },
+    ConstructibleOperationSpecV1 {
+        operation: VEGA_OPERATION,
+        protocol: "vega-existing-credential-zk-v0",
+    },
+    ConstructibleOperationSpecV1 {
+        operation: ZK_AMS_OPERATION,
+        protocol: "iroha-zk-ams-v1",
     },
     ConstructibleOperationSpecV1 {
         operation: JINDO_OPERATION,
@@ -155,7 +177,10 @@ fn constructible_operation_spec_v1(operation: &str) -> Option<ConstructibleOpera
         .find(|spec| spec.operation == operation)
 }
 fn unavailable_operation_reason_v1(operation: &str) -> Option<&'static str> {
-    (operation == UNAVAILABLE_VEGA_OPERATION).then_some(MISSING_GOVERNED_FIGURE9_PROVER_ARTIFACTS)
+    match operation {
+        UNAVAILABLE_ZK_X509_OPERATION => Some(MISSING_ZK_X509_PRODUCTION_PINS),
+        _ => None,
+    }
 }
 #[derive(Debug, Clone, norito::JsonDeserialize, norito::JsonSerialize)]
 #[norito(deny_unknown_fields)]
@@ -184,21 +209,132 @@ struct RequestIdBodyV1 {
     ttl_millis: u64,
 }
 #[derive(Debug, norito::JsonSerialize)]
-struct BuildActionResponseV1 {
+struct BuildActionResponseV2 {
     availability: String,
     candidate_binding_sha256: String,
     limitations: Vec<String>,
     network_outcome_authoritative: bool,
     operation: String,
     protocol: String,
-    public_admission_artifacts: Option<VeRangePublicAdmissionArtifactsV1>,
     qualification_scope: String,
     request_id: String,
     schema: String,
     schema_version: u8,
+    transaction_bundle: BuildActionTransactionBundleV1,
+    verange_public_admission_artifacts: Option<VeRangePublicAdmissionArtifactsV1>,
+    zk_ams_public_admission_artifacts: Option<ZkAmsPublicAdmissionArtifactsV1>,
+}
+#[derive(Debug, norito::JsonSerialize)]
+struct BuildActionTransactionBundleV1 {
+    kind: String,
+    transaction_count: u8,
+    transactions: Vec<BuildActionTransactionV1>,
+}
+#[derive(Debug, norito::JsonSerialize)]
+struct BuildActionTransactionV1 {
+    ordinal: u8,
+    role: String,
     transaction_hash_hex: String,
     transaction_norito_hex: String,
     transaction_sha256: String,
+}
+/// Typed public ZK-AMS registry material needed to execute the returned sequence.
+///
+/// Issuer credentials, issuer signatures, seed secrets, witnesses, proof entropy, and transaction
+/// signing material never cross the native builder boundary.
+#[derive(Debug, norito::JsonSerialize)]
+struct ZkAmsPublicAdmissionArtifactsV1 {
+    bootstrap: PrivacyZkAmsRegistryBootstrapV1,
+    first_admission: PrivacyZkAmsBatchAdmissionV1,
+    provision: PrivacyZkAmsProvisionAccountV1,
+    schema: String,
+    schema_version: u8,
+    second_admission: PrivacyZkAmsBatchAdmissionV1,
+}
+enum ActionTransactionBundleDraftV1 {
+    Single(SignedTransaction),
+    ZkAms {
+        first_admission_transaction: SignedTransaction,
+        second_admission_transaction: SignedTransaction,
+        provision_transaction: SignedTransaction,
+    },
+    PqMasp {
+        preactivation_transaction: SignedTransaction,
+        canonical_transaction: SignedTransaction,
+        replay_transaction: SignedTransaction,
+        post_restart_replay_transaction: SignedTransaction,
+    },
+}
+impl ActionTransactionBundleDraftV1 {
+    fn encode(self) -> Result<BuildActionTransactionBundleV1, String> {
+        let (kind, transactions) = match self {
+            Self::Single(transaction) => (
+                SINGLE_TRANSACTION_BUNDLE_KIND,
+                vec![("canonical", transaction)],
+            ),
+            Self::ZkAms {
+                first_admission_transaction,
+                second_admission_transaction,
+                provision_transaction,
+            } => (
+                ZK_AMS_TRANSACTION_BUNDLE_KIND,
+                vec![
+                    ("admission_batch_1", first_admission_transaction),
+                    ("admission_batch_2", second_admission_transaction),
+                    ("provision", provision_transaction),
+                ],
+            ),
+            Self::PqMasp {
+                preactivation_transaction,
+                canonical_transaction,
+                replay_transaction,
+                post_restart_replay_transaction,
+            } => (
+                PQ_MASP_TRANSACTION_BUNDLE_KIND,
+                vec![
+                    ("preactivation", preactivation_transaction),
+                    ("canonical", canonical_transaction),
+                    ("replay", replay_transaction),
+                    ("post_restart_replay", post_restart_replay_transaction),
+                ],
+            ),
+        };
+        if transactions.is_empty() || transactions.len() > MAX_TRANSACTION_BUNDLE_ACTIONS {
+            return Err("action-driver transaction bundle violates its action bound".to_owned());
+        }
+        let mut observed_roles = Vec::with_capacity(transactions.len());
+        let mut observed_hashes = Vec::with_capacity(transactions.len());
+        let mut encoded_transactions = Vec::with_capacity(transactions.len());
+        for (index, (role, transaction)) in transactions.into_iter().enumerate() {
+            if role.is_empty() || observed_roles.contains(&role) {
+                return Err("action-driver transaction bundle has an invalid role".to_owned());
+            }
+            let transaction_bytes = transaction.encode_versioned();
+            if transaction_bytes.is_empty() || transaction_bytes.len() > MAX_TRANSACTION_BYTES {
+                return Err("encoded action-driver transaction violates its byte bound".to_owned());
+            }
+            let transaction_hash = *transaction.hash().as_ref();
+            if observed_hashes.contains(&transaction_hash) {
+                return Err("action-driver transaction bundle contains duplicate hashes".to_owned());
+            }
+            observed_roles.push(role);
+            observed_hashes.push(transaction_hash);
+            encoded_transactions.push(BuildActionTransactionV1 {
+                ordinal: u8::try_from(index)
+                    .map_err(|_| "action-driver transaction ordinal overflowed".to_owned())?,
+                role: role.to_owned(),
+                transaction_hash_hex: hex::encode(transaction_hash),
+                transaction_norito_hex: hex::encode(&transaction_bytes),
+                transaction_sha256: sha256_hex(&transaction_bytes),
+            });
+        }
+        Ok(BuildActionTransactionBundleV1 {
+            kind: kind.to_owned(),
+            transaction_count: u8::try_from(encoded_transactions.len())
+                .map_err(|_| "action-driver transaction count overflowed".to_owned())?,
+            transactions: encoded_transactions,
+        })
+    }
 }
 /// Public-only material a future sealed controller needs to admit the exact
 /// deterministic VeRange action identity and compiled verifier profile.
@@ -310,9 +446,9 @@ fn operation_limitations_v1(protocol: &str) -> Vec<String> {
             MISSING_VERANGE_SETUP_TRANSACTION_BUNDLE.to_owned(),
             MISSING_VERANGE_STATE_QUERY_EVIDENCE.to_owned(),
         ]);
-    } else if protocol != "iroha-jindo-polynomial-commitment-v0" {
+    } else if protocol != "iroha-zk-ams-v1" && protocol != "iroha-jindo-polynomial-commitment-v0" {
         limitations.push(MISSING_ADMISSION_ARTIFACT_BUNDLE.to_owned());
-    } else {
+    } else if protocol == "iroha-jindo-polynomial-commitment-v0" {
         limitations.push(MISSING_JINDO_KNOWLEDGE_SOUNDNESS.to_owned());
     }
     limitations
@@ -374,7 +510,7 @@ fn bounded_ed25519_authority_v1(
             "VeRange {label} authority account ID is not bounded ASCII"
         ));
     }
-    Ok((account_id, public_key_bytes))
+    Ok((account_id, public_key_bytes.to_vec()))
 }
 fn verange_setup_authority_v1(candidate: &[u8; 32]) -> Result<AccountId, String> {
     let seed = Zeroizing::new(derive_nonzero_verange_setup_seed(candidate));
@@ -556,8 +692,8 @@ fn incremented_context_v1(
         genesis_hash: context.genesis_hash,
     })
 }
-fn build_response(request: BuildActionRequestV1) -> Result<BuildActionResponseV1, String> {
-    if request.schema != REQUEST_SCHEMA || request.schema_version != SCHEMA_VERSION {
+fn build_response(request: BuildActionRequestV1) -> Result<BuildActionResponseV2, String> {
+    if request.schema != REQUEST_SCHEMA || request.schema_version != REQUEST_SCHEMA_VERSION {
         return Err("action-driver request selects an unsupported contract".to_owned());
     }
     if let Some(reason) = unavailable_operation_reason_v1(&request.operation) {
@@ -619,7 +755,7 @@ fn build_response(request: BuildActionRequestV1) -> Result<BuildActionResponseV1
         metadata: Metadata::default(),
         genesis_hash: network_id_bytes,
     };
-    let public_admission_artifacts = (operation.operation == VERANGE_OPERATION)
+    let verange_public_admission_artifacts = (operation.operation == VERANGE_OPERATION)
         .then(|| {
             verange_public_admission_artifacts_v1(
                 &authority,
@@ -629,9 +765,10 @@ fn build_response(request: BuildActionRequestV1) -> Result<BuildActionResponseV1
             )
         })
         .transpose()?;
+    let mut zk_ams_public_admission_artifacts = None;
     let pool_id = PrivacyPoolIdV1::new(pool_seed);
-    let transaction: SignedTransaction = match operation.operation {
-        ZK_ACE_OPERATION => {
+    let transaction_bundle = match operation.operation {
+        ZK_ACE_OPERATION => ActionTransactionBundleDraftV1::Single(
             build_privacy_release_zk_ace_network_action_v1(
                 context,
                 authority,
@@ -643,9 +780,9 @@ fn build_response(request: BuildActionRequestV1) -> Result<BuildActionResponseV1
                 &private_key,
             )
             .map_err(|error| format!("native ZK-ACE action construction failed: {error:?}"))?
-            .transaction
-        }
-        ANONYMOUS_PGC_OPERATION => {
+            .transaction,
+        ),
+        ANONYMOUS_PGC_OPERATION => ActionTransactionBundleDraftV1::Single(
             build_privacy_release_anonymous_pgc_network_action_v1(
                 context,
                 asset_definition_id,
@@ -655,9 +792,9 @@ fn build_response(request: BuildActionRequestV1) -> Result<BuildActionResponseV1
                 &private_key,
             )
             .map_err(|error| format!("native Anonymous-PGC action construction failed: {error:?}"))?
-            .transaction
-        }
-        VERANGE_OPERATION => {
+            .transaction,
+        ),
+        VERANGE_OPERATION => ActionTransactionBundleDraftV1::Single(
             build_privacy_release_verange_network_action_v1(
                 context,
                 asset_definition_id,
@@ -667,14 +804,63 @@ fn build_response(request: BuildActionRequestV1) -> Result<BuildActionResponseV1
                 &private_key,
             )
             .map_err(|error| format!("native VeRange action construction failed: {error:?}"))?
-            .transaction
+            .transaction,
+        ),
+        VEGA_OPERATION => ActionTransactionBundleDraftV1::Single(
+            build_privacy_release_vega_network_action_v1(context, *fixture_seed, &private_key)
+                .map_err(|error| format!("native Vega action construction failed: {error:?}"))?
+                .transaction,
+        ),
+        ZK_AMS_OPERATION => {
+            let second_admission_context = incremented_context_v1(&context, 1, 1)?;
+            let provision_context = incremented_context_v1(&context, 2, 2)?;
+            let actions = build_privacy_release_zk_ams_network_actions_v1(
+                context,
+                second_admission_context,
+                provision_context,
+                counterparty,
+                *fixture_seed,
+                &private_key,
+            )
+            .map_err(|error| format!("native ZK-AMS action construction failed: {error:?}"))?;
+            let first_admission = match actions.first_admission_statement.action {
+                PrivacyZkAmsActionV1::BatchAdmission(action) => action,
+                PrivacyZkAmsActionV1::ProvisionAccount(_) => {
+                    return Err("native ZK-AMS first action is not an admission".to_owned());
+                }
+            };
+            let second_admission = match actions.second_admission_statement.action {
+                PrivacyZkAmsActionV1::BatchAdmission(action) => action,
+                PrivacyZkAmsActionV1::ProvisionAccount(_) => {
+                    return Err("native ZK-AMS second action is not an admission".to_owned());
+                }
+            };
+            let provision = match actions.provision_statement.action {
+                PrivacyZkAmsActionV1::ProvisionAccount(action) => action,
+                PrivacyZkAmsActionV1::BatchAdmission(_) => {
+                    return Err("native ZK-AMS third action is not a provision".to_owned());
+                }
+            };
+            zk_ams_public_admission_artifacts = Some(ZkAmsPublicAdmissionArtifactsV1 {
+                bootstrap: actions.bootstrap,
+                first_admission,
+                provision,
+                schema: ZK_AMS_PUBLIC_ADMISSION_ARTIFACT_SCHEMA.to_owned(),
+                schema_version: ZK_AMS_PUBLIC_ADMISSION_ARTIFACT_SCHEMA_VERSION,
+                second_admission,
+            });
+            ActionTransactionBundleDraftV1::ZkAms {
+                first_admission_transaction: actions.first_admission_transaction,
+                second_admission_transaction: actions.second_admission_transaction,
+                provision_transaction: actions.provision_transaction,
+            }
         }
-        JINDO_OPERATION => {
+        JINDO_OPERATION => ActionTransactionBundleDraftV1::Single(
             build_privacy_release_jindo_network_action_v1(context, *fixture_seed, &private_key)
                 .map_err(|error| format!("native Jindo action construction failed: {error:?}"))?
-                .transaction
-        }
-        BOOTLE_LANTERN_OPERATION => {
+                .transaction,
+        ),
+        BOOTLE_LANTERN_OPERATION => ActionTransactionBundleDraftV1::Single(
             build_privacy_release_bootle_lantern_network_action_v1(
                 context,
                 *fixture_seed,
@@ -683,9 +869,9 @@ fn build_response(request: BuildActionRequestV1) -> Result<BuildActionResponseV1
             .map_err(|error| {
                 format!("native Bootle/Lantern action construction failed: {error:?}")
             })?
-            .transaction
-        }
-        ORCHARD_OPERATION => {
+            .transaction,
+        ),
+        ORCHARD_OPERATION => ActionTransactionBundleDraftV1::Single(
             build_privacy_release_orchard_network_action_v1(
                 context,
                 pool_id,
@@ -696,9 +882,9 @@ fn build_response(request: BuildActionRequestV1) -> Result<BuildActionResponseV1
                 &private_key,
             )
             .map_err(|error| format!("native Orchard action construction failed: {error:?}"))?
-            .transaction
-        }
-        FCMP_OPERATION => {
+            .transaction,
+        ),
+        FCMP_OPERATION => ActionTransactionBundleDraftV1::Single(
             build_privacy_release_fcmp_network_action_v1(
                 context,
                 asset_definition_id,
@@ -707,9 +893,9 @@ fn build_response(request: BuildActionRequestV1) -> Result<BuildActionResponseV1
                 &private_key,
             )
             .map_err(|error| format!("native FCMP++ action construction failed: {error:?}"))?
-            .transaction
-        }
-        IVM_PRIVATE_NOTE_OPERATION => {
+            .transaction,
+        ),
+        IVM_PRIVATE_NOTE_OPERATION => ActionTransactionBundleDraftV1::Single(
             build_privacy_release_ivm_private_note_network_action_v1(
                 context,
                 asset_definition_id,
@@ -719,19 +905,15 @@ fn build_response(request: BuildActionRequestV1) -> Result<BuildActionResponseV1
                 &private_key,
             )
             .map_err(|error| format!("native private-IVM action construction failed: {error:?}"))?
-            .transaction
-        }
+            .transaction,
+        ),
         PQ_MASP_OPERATION => {
-            let preactivation_context = incremented_context_v1(&context, 1, 1)?;
+            let canonical_context = incremented_context_v1(&context, 1, 1)?;
             let replay_context = incremented_context_v1(&context, 2, 2)?;
             let post_restart_replay_context = incremented_context_v1(&context, 3, 3)?;
-            // The constructor returns the full preactivation/canonical/replay/
-            // post-restart set, but the v1 IPC has no typed artifact bundle.
-            // Returning only this canonical transaction therefore remains
-            // explicitly construction-only and cannot satisfy a controller case.
             let actions = build_privacy_release_pq_masp_network_actions_v1(
-                preactivation_context,
                 context,
+                canonical_context,
                 replay_context,
                 post_restart_replay_context,
                 *fixture_seed,
@@ -743,30 +925,30 @@ fn build_response(request: BuildActionRequestV1) -> Result<BuildActionResponseV1
                     "PQ-MASP request asset differs from the native release fixture".to_owned(),
                 );
             }
-            actions.canonical_transaction
+            ActionTransactionBundleDraftV1::PqMasp {
+                preactivation_transaction: actions.preactivation_transaction,
+                canonical_transaction: actions.canonical_transaction,
+                replay_transaction: actions.replay_transaction,
+                post_restart_replay_transaction: actions.post_restart_replay_transaction,
+            }
         }
         _ => return Err("action-driver operation table is internally inconsistent".to_owned()),
-    };
-    let transaction_bytes = transaction.encode_versioned();
-    if transaction_bytes.is_empty() || transaction_bytes.len() > MAX_TRANSACTION_BYTES {
-        return Err("encoded action-driver transaction violates its byte bound".to_owned());
     }
-    let transaction_hash_hex = hex::encode(transaction.hash().as_ref());
-    Ok(BuildActionResponseV1 {
+    .encode()?;
+    Ok(BuildActionResponseV2 {
         availability: operation_availability_v1(operation.protocol).to_owned(),
         candidate_binding_sha256: request.candidate_binding_sha256,
         limitations: operation_limitations_v1(operation.protocol),
         network_outcome_authoritative: false,
         operation: operation.operation.to_owned(),
         protocol: operation.protocol.to_owned(),
-        public_admission_artifacts,
         qualification_scope: QUALIFICATION_SCOPE.to_owned(),
         request_id: request.request_id,
         schema: RESPONSE_SCHEMA.to_owned(),
-        schema_version: SCHEMA_VERSION,
-        transaction_hash_hex,
-        transaction_norito_hex: hex::encode(&transaction_bytes),
-        transaction_sha256: sha256_hex(&transaction_bytes),
+        schema_version: RESPONSE_SCHEMA_VERSION,
+        transaction_bundle,
+        verange_public_admission_artifacts,
+        zk_ams_public_admission_artifacts,
     })
 }
 fn run() -> Result<(), String> {
@@ -855,13 +1037,15 @@ mod tests {
     }
     #[test]
     fn operation_table_contains_only_genuine_release_action_paths() {
-        assert_eq!(CONSTRUCTIBLE_OPERATION_SPECS_V1.len(), 9);
+        assert_eq!(CONSTRUCTIBLE_OPERATION_SPECS_V1.len(), 11);
         assert_eq!(
             CONSTRUCTIBLE_OPERATION_SPECS_V1.map(|spec| spec.protocol),
             [
                 "zk-ace-pq-authorization-v0",
                 "anonymous-pgc-k-out-of-n-v1",
                 "verange-transparent-range-v1",
+                "vega-existing-credential-zk-v0",
+                "iroha-zk-ams-v1",
                 "iroha-jindo-polynomial-commitment-v0",
                 "iroha-bootle-lantern-anoncred-v1",
                 "orchard-halo2-actions-v1",
@@ -873,42 +1057,42 @@ mod tests {
         assert!(
             CONSTRUCTIBLE_OPERATION_SPECS_V1
                 .iter()
-                .all(|spec| !matches!(
-                    spec.protocol,
-                    "vega-existing-credential-zk-v0"
-                        | "iroha-zk-ams-v1"
-                        | "iroha-zk-x509-stark-p256-v0"
-                ))
+                .all(|spec| spec.protocol != "iroha-zk-x509-stark-p256-v0")
         );
     }
 
     #[test]
-    fn vega_is_rejected_before_request_material_derivation_with_exact_reason() {
+    fn vega_uses_the_native_network_action_builder() {
+        assert_eq!(
+            constructible_operation_spec_v1(VEGA_OPERATION),
+            Some(ConstructibleOperationSpecV1 {
+                operation: VEGA_OPERATION,
+                protocol: "vega-existing-credential-zk-v0",
+            })
+        );
+        assert!(DRIVER_SOURCE.contains("build_privacy_release_vega_network_action_v1"));
+        let retired_blocker = ["MissingGovernedFigure9", "ProverArtifacts"].concat();
+        assert!(!DRIVER_SOURCE.contains(&retired_blocker));
+    }
+
+    #[test]
+    fn unfinished_zk_x509_path_fails_before_secret_derivation() {
         let request = BuildActionRequestV1 {
             asset_definition_id: String::new(),
             candidate_binding_sha256: String::new(),
             creation_time_millis: 0,
             network_id_hex: String::new(),
             nonce: 0,
-            operation: UNAVAILABLE_VEGA_OPERATION.to_owned(),
+            operation: UNAVAILABLE_ZK_X509_OPERATION.to_owned(),
             request_id: String::new(),
             schema: REQUEST_SCHEMA.to_owned(),
-            schema_version: SCHEMA_VERSION,
+            schema_version: REQUEST_SCHEMA_VERSION,
             ttl_millis: 0,
         };
-        assert!(constructible_operation_spec_v1(UNAVAILABLE_VEGA_OPERATION).is_none());
         assert_eq!(
-            build_response(request).expect_err("Vega must remain unavailable"),
-            MISSING_GOVERNED_FIGURE9_PROVER_ARTIFACTS
+            build_response(request).expect_err("path must fail closed"),
+            MISSING_ZK_X509_PRODUCTION_PINS
         );
-        assert_eq!(
-            DRIVER_SOURCE
-                .matches("\"MissingGovernedFigure9ProverArtifacts\"")
-                .count(),
-            1
-        );
-        let retired_builder = ["build_privacy_release_", "vega_network_action_v1"].concat();
-        assert!(!DRIVER_SOURCE.contains(&retired_builder));
         let response_source = DRIVER_SOURCE
             .split_once("fn build_response")
             .expect("build-response boundary")
@@ -923,6 +1107,157 @@ mod tests {
                 < response_source
                     .find("let signing_seed")
                     .expect("secret seed derivation")
+        );
+    }
+
+    #[test]
+    fn zk_ams_uses_native_three_transaction_builder_and_public_only_artifacts() {
+        assert_eq!(
+            constructible_operation_spec_v1(ZK_AMS_OPERATION),
+            Some(ConstructibleOperationSpecV1 {
+                operation: ZK_AMS_OPERATION,
+                protocol: "iroha-zk-ams-v1",
+            })
+        );
+        assert!(DRIVER_SOURCE.contains("build_privacy_release_zk_ams_network_actions_v1"));
+        for required in [
+            "first_admission_transaction: actions.first_admission_transaction",
+            "second_admission_transaction: actions.second_admission_transaction",
+            "provision_transaction: actions.provision_transaction",
+            "admission_batch_1",
+            "admission_batch_2",
+            "provision",
+        ] {
+            assert!(DRIVER_SOURCE.contains(required), "missing {required}");
+        }
+        assert_eq!(
+            operation_limitations_v1("iroha-zk-ams-v1"),
+            vec![MISSING_CONTROLLER_CASE_EVIDENCE.to_owned()]
+        );
+        let artifact_fields = DRIVER_SOURCE
+            .split_once("struct ZkAmsPublicAdmissionArtifactsV1")
+            .expect("ZK-AMS public artifact struct")
+            .1
+            .split_once("enum ActionTransactionBundleDraftV1")
+            .expect("transaction-bundle draft follows artifact struct")
+            .0;
+        for forbidden in [
+            "credential",
+            "issuer_signature",
+            "seed_secret",
+            "witness",
+            "private_key",
+            "signing_seed",
+        ] {
+            assert!(
+                !artifact_fields.contains(forbidden),
+                "public ZK-AMS artifacts expose forbidden field {forbidden}"
+            );
+        }
+    }
+
+    #[test]
+    fn pq_masp_response_keeps_all_four_semantic_transactions() {
+        let pq_branch = DRIVER_SOURCE
+            .split_once("PQ_MASP_OPERATION =>")
+            .expect("PQ-MASP match branch")
+            .1
+            .split_once("_ => return Err")
+            .expect("end of operation match")
+            .0;
+        for required in [
+            "preactivation_transaction: actions.preactivation_transaction",
+            "canonical_transaction: actions.canonical_transaction",
+            "replay_transaction: actions.replay_transaction",
+            "post_restart_replay_transaction: actions.post_restart_replay_transaction",
+        ] {
+            assert!(pq_branch.contains(required), "missing {required}");
+        }
+        let retired_limitation = ["v1 IPC has no typed", " artifact bundle"].concat();
+        assert!(!DRIVER_SOURCE.contains(&retired_limitation));
+        let retired_comment = ["Returning only this", " canonical transaction"].concat();
+        assert!(!DRIVER_SOURCE.contains(&retired_comment));
+    }
+
+    #[test]
+    fn response_v2_has_one_explicit_ordered_bundle_and_no_singular_transaction_aliases() {
+        let response = BuildActionResponseV2 {
+            availability: CONSTRUCTION_ONLY_STATUS.to_owned(),
+            candidate_binding_sha256: "11".repeat(32),
+            limitations: vec![MISSING_CONTROLLER_CASE_EVIDENCE.to_owned()],
+            network_outcome_authoritative: false,
+            operation: ZK_AMS_OPERATION.to_owned(),
+            protocol: "iroha-zk-ams-v1".to_owned(),
+            qualification_scope: QUALIFICATION_SCOPE.to_owned(),
+            request_id: "22".repeat(32),
+            schema: RESPONSE_SCHEMA.to_owned(),
+            schema_version: RESPONSE_SCHEMA_VERSION,
+            transaction_bundle: BuildActionTransactionBundleV1 {
+                kind: ZK_AMS_TRANSACTION_BUNDLE_KIND.to_owned(),
+                transaction_count: 3,
+                transactions: ["admission_batch_1", "admission_batch_2", "provision"]
+                    .into_iter()
+                    .enumerate()
+                    .map(|(ordinal, role)| BuildActionTransactionV1 {
+                        ordinal: u8::try_from(ordinal).expect("three fixture ordinals fit u8"),
+                        role: role.to_owned(),
+                        transaction_hash_hex: "33".repeat(32),
+                        transaction_norito_hex: "44".repeat(8),
+                        transaction_sha256: "55".repeat(32),
+                    })
+                    .collect(),
+            },
+            verange_public_admission_artifacts: None,
+            zk_ams_public_admission_artifacts: None,
+        };
+        let encoded = norito::json::to_string(&response).expect("encode v2 response");
+        let value: norito::json::Value =
+            norito::json::from_str(&encoded).expect("parse v2 response");
+        let object = value.as_object().expect("v2 response object");
+        assert_eq!(
+            object
+                .get("schema_version")
+                .and_then(norito::json::Value::as_u64),
+            Some(u64::from(RESPONSE_SCHEMA_VERSION))
+        );
+        assert!(object.contains_key("transaction_bundle"));
+        for retired in [
+            "transaction_hash_hex",
+            "transaction_norito_hex",
+            "transaction_sha256",
+        ] {
+            assert!(
+                !object.contains_key(retired),
+                "retained top-level {retired}"
+            );
+        }
+        let bundle = object
+            .get("transaction_bundle")
+            .and_then(norito::json::Value::as_object)
+            .expect("transaction bundle object");
+        assert_eq!(
+            bundle
+                .get("transaction_count")
+                .and_then(norito::json::Value::as_u64),
+            Some(3)
+        );
+        let transactions = bundle
+            .get("transactions")
+            .and_then(norito::json::Value::as_array)
+            .expect("transaction bundle array");
+        let roles = transactions
+            .iter()
+            .map(|transaction| {
+                transaction
+                    .as_object()
+                    .and_then(|object| object.get("role"))
+                    .and_then(norito::json::Value::as_str)
+                    .expect("transaction role")
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            roles,
+            ["admission_batch_1", "admission_batch_2", "provision"]
         );
     }
 }

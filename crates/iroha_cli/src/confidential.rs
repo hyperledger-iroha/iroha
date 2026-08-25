@@ -1,13 +1,13 @@
 //! Confidential asset CLI helpers (wallet/offline tooling).
-use std::{fs, path::PathBuf};
+use crate::{Run, RunContext};
 use base64::Engine as _;
 use clap::Subcommand;
 use eyre::{Context, Result};
 use hex::encode as hex_encode;
 use iroha_crypto::{ConfidentialKeyset, derive_keyset_from_slice};
 use rand::{rand_core::TryCryptoRng, rngs::OsRng};
+use std::{fs, path::PathBuf};
 use zeroize::Zeroizing;
-use crate::{Run, RunContext};
 /// Confidential CLI subcommands.
 #[derive(Subcommand, Debug)]
 pub enum Command {
@@ -144,7 +144,6 @@ fn parse_hex_32(hex_str: &str) -> Result<[u8; 32]> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::fmt::{self, Display};
     use iroha::{
         config::Config,
         crypto::{Algorithm, KeyPair},
@@ -153,6 +152,7 @@ mod tests {
     use iroha_i18n::{Bundle, Language, Localizer};
     use norito::json::{self, JsonSerialize};
     use rand::rand_core::{TryCryptoRng, TryRngCore};
+    use std::fmt::{self, Display};
     use url::Url;
     struct FailingConfidentialSeedRng;
     #[derive(Debug)]
@@ -205,10 +205,9 @@ mod tests {
             let account_id = AccountId::new(key_pair.public_key().clone());
             let cfg = Config {
                 chain: ChainId::from("00000000-0000-0000-0000-000000000000"),
-                network_id:
-                    "hash:32C903E5B3497E34C2B844EBFE8A39C19E6CF8F95D44C1FFB8BA9DCB42F91149#A2F0"
-                        .parse()
-                        .expect("network id"),
+                network_id: "32c903e5b3497e34c2b844ebfe8a39c19e6cf8f95d44c1ffb8ba9dcb42f91149"
+                    .parse()
+                    .expect("network id"),
                 account: account_id,
                 account_chain_discriminant:
                     iroha_config::parameters::defaults::common::chain_discriminant(),

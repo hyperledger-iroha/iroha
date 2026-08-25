@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import os
 import re
+import shutil
 import subprocess
 import tempfile
 import unittest
@@ -78,8 +79,9 @@ class PrivacySwiftNativeContractTests(unittest.TestCase):
             source.index('bash "${APPLE_ARTIFACT_CHECKER}" --apple-only'),
             source.index('"${SWIFT_BIN}" test'),
         )
-        blocker = "external-lock requalification"
-        self.assertIn(blocker, source)
+        self.assertNotIn("external-lock requalification", source)
+        authenticated = "privacy Swift external Cargo.lock is not the frozen release lock"
+        self.assertIn(authenticated, source)
         for invocation in (
             'DEVELOPER_DIR="$(xcode-select -p)"',
             "xcodebuild -version",
@@ -87,16 +89,24 @@ class PrivacySwiftNativeContractTests(unittest.TestCase):
             '"${SWIFTC_BIN}" --version',
             '"${SWIFT_BIN}" test',
         ):
-            self.assertLess(source.index(blocker), source.index(invocation))
+            self.assertLess(source.index(authenticated), source.index(invocation))
 
-    def test_swift_requalification_blocker_stops_direct_execution(self) -> None:
+    def test_swift_external_lock_requalification_runs_fail_closed(self) -> None:
         source = read("ci/check_privacy_swift_sdk.sh")
+        tracked_digest = re.search(
+            r'TRACKED_ROOT_CARGO_LOCK_SHA256="([0-9a-f]{64})"', source
+        )
+        release_digest = re.search(
+            r'FROZEN_CARGO_LOCK_SHA256="([0-9a-f]{64})"', source
+        )
+        self.assertIsNotNone(tracked_digest)
+        self.assertIsNotNone(release_digest)
         with tempfile.TemporaryDirectory() as temporary:
             base = Path(temporary).resolve()
             root, artifact, scratch, tools = (
                 base / name for name in ("repo", "artifact", "scratch", "bin")
             )
-            for directory in (root / "scripts", artifact, scratch, tools):
+            for directory in (root / "scripts", root / "ci", artifact, scratch, tools):
                 directory.mkdir(parents=True)
             (artifact / "NoritoBridge.xcframework").mkdir()
             tracked, release, log = root / "Cargo.lock", base / "Cargo.lock", base / "calls"
@@ -105,13 +115,26 @@ class PrivacySwiftNativeContractTests(unittest.TestCase):
             fake_python = tools / "python"
             fake_python.write_text(
                 "#!/usr/bin/env bash\n"
-                f'[[ "${{!#}}" == "{tracked}" ]] && echo "c90b3659d6cb44cd1d6f9e75e7b98aacc0d30bbe23041d4e6e109e8a206fa76b" || echo "cd9e829e454171f17540abeb7fd1aa14129252082bd8b076a0199b0ffa4e3f79"\n',
+                "last=${!#}\n"
+                "if [[ \" $* \" != *\" -S \"* ]]; then\n"
+                f'  if [[ "$last" == "{tracked}" ]]; then echo tracked-seal; '
+                f'elif grep -qx release "{release}"; then echo release-seal; '
+                "else echo changed-release-seal; fi\n"
+                f'elif [[ "$last" == "{tracked}" ]]; then\n'
+                f'  [[ "${{PRIVACY_TEST_BAD_DIGEST:-}}" == tracked ]] && echo "{'0' * 64}" || echo "{tracked_digest.group(1)}"\n'
+                "else\n"
+                f'  [[ "${{PRIVACY_TEST_BAD_DIGEST:-}}" == release ]] && echo "{'0' * 64}" || echo "{release_digest.group(1)}"\n'
+                "fi\n",
                 encoding="utf-8",
             )
             (tools / "uname").write_text("#!/usr/bin/env bash\necho Darwin\n", encoding="utf-8")
             tool_stub = (
                 '#!/usr/bin/env bash\necho "${0##*/}" >>"$PRIVACY_TEST_LOG"\n'
                 '[[ "${0##*/}" == xcode-select ]] && echo /Applications/Xcode.app/Contents/Developer\n'
+                'if [[ "${0##*/}" == swift && "${PRIVACY_TEST_MUTATE_RELEASE:-0}" == 1 ]]; then\n'
+                '  printf "mutated\\n" >"$IROHA_PRIVACY_RELEASE_CARGO_LOCKFILE_PATH"\n'
+                "fi\n"
+                "exit 0\n"
             )
             for name in ("xcode-select", "xcodebuild", "swiftc", "swift"):
                 (tools / name).write_text(tool_stub, encoding="utf-8")
@@ -134,22 +157,49 @@ class PrivacySwiftNativeContractTests(unittest.TestCase):
                 "MOBILE_SDK_PYTHON_BINARY": str(fake_python),
                 "IROHA_PRIVACY_RELEASE_CARGO_LOCKFILE_PATH": str(release),
             }
-            gate = base / "gate.sh"
+            shutil.copy2(
+                REPO_ROOT / "ci/privacy_sdk_cargo_lockfile.sh",
+                root / "ci/privacy_sdk_cargo_lockfile.sh",
+            )
+            gate = root / "ci/check_privacy_swift_sdk.sh"
             gate.write_text(source, encoding="utf-8")
             result = subprocess.run(
                 ["bash", str(gate)], env=environment, text=True, capture_output=True
             )
-            self.assertEqual(result.returncode, 1)
-            self.assertIn("external-lock requalification", result.stderr)
-            self.assertFalse(log.exists(), "blocker allowed artifact/Xcode execution")
+            self.assertEqual(result.returncode, 0, result.stderr)
+            calls = log.read_text(encoding="utf-8")
+            for invocation in ("xcode-select", "xcodebuild", "artifact-checker", "swiftc", "swift"):
+                self.assertIn(invocation, calls)
 
-            marker = source.index("external-lock requalification")
-            exit_at = source.index("exit 1", marker)
-            gate.write_text(source[:exit_at] + ": # negative control" + source[exit_at + 6 :], encoding="utf-8")
-            result = subprocess.run(
-                ["bash", str(gate)], env=environment, text=True, capture_output=True
+            for bad_digest, expected_error in (
+                ("tracked", "tracked root Cargo.lock authority changed"),
+                ("release", "external Cargo.lock is not the frozen release lock"),
+            ):
+                log.unlink(missing_ok=True)
+                rejected = subprocess.run(
+                    ["bash", str(gate)],
+                    env={**environment, "PRIVACY_TEST_BAD_DIGEST": bad_digest},
+                    text=True,
+                    capture_output=True,
+                )
+                self.assertEqual(rejected.returncode, 1)
+                self.assertIn(expected_error, rejected.stderr)
+                self.assertFalse(log.exists(), "digest failure allowed tool execution")
+
+            release.write_text("release\n", encoding="utf-8")
+            log.unlink(missing_ok=True)
+            rejected = subprocess.run(
+                ["bash", str(gate)],
+                env={**environment, "PRIVACY_TEST_MUTATE_RELEASE": "1"},
+                text=True,
+                capture_output=True,
             )
-            self.assertIn("xcode-select", log.read_text(encoding="utf-8"))
+            self.assertEqual(rejected.returncode, 1)
+            self.assertIn(
+                "privacy Swift external Cargo.lock changed",
+                rejected.stderr,
+            )
+            self.assertIn("swift", log.read_text(encoding="utf-8"))
 
     def test_package_manifest_requires_the_external_artifact(self) -> None:
         source = read("IrohaSwift/Package.swift")
@@ -164,6 +214,39 @@ class PrivacySwiftNativeContractTests(unittest.TestCase):
             "validateBridgeArtifact(at: bridgeAbsolutePath)",
         ):
             self.assertIn(marker, source)
+
+    def test_apple_artifact_tools_bind_an_explicit_privacy_release_lock(self) -> None:
+        for relative in (
+            "scripts/build_norito_xcframework.sh",
+            "scripts/check_mobile_sdk_artifacts.sh",
+        ):
+            source = read(relative)
+            self.assertIn(
+                '${IROHA_PRIVACY_RELEASE_CARGO_LOCKFILE_PATH+x}', source, relative
+            )
+            self.assertIn(
+                "IROHA_PRIVACY_RELEASE_CARGO_LOCKFILE_PATH must not be empty",
+                source,
+                relative,
+            )
+            self.assertIn('$ROOT_DIR/Cargo.lock', source, relative)
+        builder = read("scripts/build_norito_xcframework.sh")
+        checker = read("scripts/check_mobile_sdk_artifacts.sh")
+        updater = builder[builder.index(
+            '"$ROOT_DIR/scripts/update_norito_bridge_swift_pins.py"'
+        ) : builder.index('run_isolated_python - \\\n', builder.index(
+            '"$ROOT_DIR/scripts/update_norito_bridge_swift_pins.py"'
+        ))]
+        validator = builder[builder.index(
+            '"$ROOT_DIR/scripts/validate_norito_bridge_xcframework.py"'
+        ) : builder.index('assert_bridge_source_seal "staged artifact validation"')]
+        archive = builder[builder.index(
+            '"$PYTHON_BINARY" -I -S -B "$ARCHIVE_OWNER"'
+        ) : builder.index('assert_bridge_source_seal "the archive publication"')]
+        self.assertIn('--lockfile-path "$CARGO_LOCKFILE"', updater)
+        self.assertIn('--lockfile-path "$CARGO_LOCKFILE"', validator)
+        self.assertIn('--lockfile-path "$CARGO_LOCKFILE"', archive)
+        self.assertIn('--lockfile-path "$APPLE_CARGO_LOCKFILE"', checker)
 
     def test_cocoapods_bridge_lint_cannot_capability_skip(self) -> None:
         source = read("scripts/check_swift_pod_bridge.sh")

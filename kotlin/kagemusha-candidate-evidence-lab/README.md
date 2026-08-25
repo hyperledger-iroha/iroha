@@ -1,7 +1,7 @@
 # Kagemusha candidate evidence lab (never ship)
 
 This module is a marker-bearing Android application used only to gather real
-ABI-21 evidence from a physical ARM64 device before a candidate is promoted.
+native bridge ABI 22 evidence from a physical ARM64 device before a candidate is promoted.
 It is not in the normal Gradle project graph, has no publication, has no
 `INTERNET` permission, disables its release variant, and stores every build
 intermediate under the exact candidate directory:

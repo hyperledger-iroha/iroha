@@ -1288,7 +1288,6 @@ async fn mcp_jsonrpc_includes_universal_offline_operations_for_operator_profile(
     let names = list_all_tool_names(&app).await;
     let expected = [
         "torii.get_v1_offline_readiness",
-        "torii.post_v1_offline_receiver_lineage",
         "torii.post_v1_offline_top_up",
         "torii.post_v1_offline_redeem",
         "torii.get_v1_offline_operations_operation_id",

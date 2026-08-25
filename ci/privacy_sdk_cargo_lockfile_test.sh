@@ -166,6 +166,9 @@ RESOLVED_PRIVATE_LOCK="$(
 
 mkdir -p "${PRIVATE_ROOT}/hardlink"
 ln "${PRIVATE_ROOT}/Cargo.lock" "${PRIVATE_ROOT}/hardlink/Cargo.lock"
+expect_failure \
+  "must be a singly linked regular file" \
+  privacy_sdk_file_seal "${PRIVATE_ROOT}/Cargo.lock"
 IROHA_PRIVACY_CARGO_LOCKFILE_PATH="${PRIVATE_ROOT}/hardlink/Cargo.lock"
 expect_failure \
   "must be singly linked" \
@@ -1281,6 +1284,9 @@ export PROVISION_CARGO_LOG
 mkdir -p "${PROVISION_REPOSITORY}/.cargo" "${PROVISION_BIN}"
 : >"${PROVISION_REPOSITORY}/Cargo.toml"
 install_tracked_test_root_lock "${PROVISION_REPOSITORY}"
+PROVISION_WORKSPACE_SEAL="$(
+  privacy_sdk_file_seal "${PROVISION_REPOSITORY}/Cargo.lock"
+)"
 write_test_rust_toolchain "${PROVISION_REPOSITORY}"
 cp "${SOURCE_ROOT}/.cargo/config.toml" \
   "${PROVISION_REPOSITORY}/.cargo/config.toml"
@@ -1319,7 +1325,7 @@ printf '%s\n' \
   '  printf "%s\\n" "# adversarial provisioning workspace lock" >"${FAKE_PROVISION_WORKSPACE_LOCK}"' \
   'fi' \
   >"${PROVISION_BIN}/cargo"
-install -m 600 "${SOURCE_ROOT}/Cargo.lock" "${PROVISION_BIN}/frozen-Cargo.lock"
+install -m 600 "${IROHA_PRIVACY_RELEASE_CARGO_LOCKFILE_PATH:?privacy SDK lockfile self-test requires the authenticated external release Cargo.lock}" "${PROVISION_BIN}/frozen-Cargo.lock"
 chmod 700 "${PROVISION_BIN}/cargo"
 printf '%s\n' '#!/usr/bin/env bash' 'exit 0' >"${PROVISION_BIN}/rustc"
 printf '%s\n' '#!/usr/bin/env bash' 'exit 0' >"${PROVISION_BIN}/rustdoc"
@@ -1642,10 +1648,10 @@ PATH="${PROVISION_BIN}:${PATH}" \
     "${PROVISION_BIN}/rustup" \
     "1.93.1-x86_64-unknown-linux-gnu" \
     "${TEST_PYTHON}" >/dev/null
-if [[ -e "${PROVISION_REPOSITORY}/Cargo.lock" || -L "${PROVISION_REPOSITORY}/Cargo.lock" ]]; then
-  echo "CI provisioning created workspace Cargo.lock" >&2
-  exit 1
-fi
+privacy_sdk_assert_file_seal \
+  "${PROVISION_REPOSITORY}/Cargo.lock" \
+  "${PROVISION_WORKSPACE_SEAL}" \
+  "tracked root Cargo.lock"
 assert_exact_lines "${PROVISION_CARGO_LOG}" \
   "invocation" \
   "CARGO_HOME=${PROVISION_CORRIDOR}/cargo-home" \
@@ -1816,7 +1822,7 @@ cp "${SOURCE_ROOT}/.cargo/config.toml" \
 : >"${PROVISION_BAD_ENV}"
 : >"${PROVISION_BAD_PATH}"
 expect_failure \
-  "external lock generation created workspace Cargo.lock" \
+  "external lock generation changed the tracked root Cargo.lock" \
   env \
   FAKE_PROVISION_WORKSPACE_LOCK="${PROVISION_BAD_REPOSITORY}/Cargo.lock" \
   PROVISION_CARGO_LOG="${PROVISION_CARGO_LOG}" \
@@ -1858,12 +1864,17 @@ INTEGRATION_VENV="${TEST_ROOT}/fake venv"$'\n'"record-boundary"
 INTEGRATION_BIN="${TEST_ROOT}/integration-toolchain/1.93.1-aarch64-apple-darwin/bin"
 INTEGRATION_SELECTED_LOCK="${INTEGRATION_PRIVATE_ROOT}/Cargo.lock"
 prepare_python_guard_root "${INTEGRATION_ROOT}"
+INTEGRATION_WORKSPACE_SEAL="$(
+  privacy_sdk_file_seal "${INTEGRATION_ROOT}/Cargo.lock" "${TEST_PYTHON}"
+)"
 mkdir -p \
   "${INTEGRATION_PRIVATE_ROOT}" \
   "$(dirname "${INTEGRATION_SELECTED_LOCK}")" \
   "${INTEGRATION_VENV}/bin" \
   "${INTEGRATION_BIN}"
-install -m 600 "${SOURCE_ROOT}/Cargo.lock" "${INTEGRATION_SELECTED_LOCK}"
+install -m 600 \
+  "${IROHA_PRIVACY_RELEASE_CARGO_LOCKFILE_PATH:?privacy SDK lockfile self-test requires the authenticated external release Cargo.lock}" \
+  "${INTEGRATION_SELECTED_LOCK}"
 
 INTEGRATION_CARGO_LOG="${TEST_ROOT}/integration-cargo.log"
 INTEGRATION_PYTHON_LOG="${TEST_ROOT}/integration-python.log"
@@ -3376,7 +3387,10 @@ fi
 
 MISSING_WORKSPACE_ROOT="${TEST_ROOT}/missing-workspace-lock-repository"
 prepare_python_guard_root "${MISSING_WORKSPACE_ROOT}"
-run_python_guard_for_root "${MISSING_WORKSPACE_ROOT}" env \
+rm "${MISSING_WORKSPACE_ROOT}/Cargo.lock"
+expect_failure \
+  "privacy SDK CI requires the sealed tracked root Cargo.lock" \
+  run_python_guard_for_root "${MISSING_WORKSPACE_ROOT}" env \
   INTEGRATION_CARGO_LOG="${INTEGRATION_CARGO_LOG}" \
   IROHA_PRIVACY_CARGO_LOCKFILE_PATH="${INTEGRATION_PRIVATE_ROOT}/Cargo.lock" \
   IROHA_PRIVACY_REAL_CARGO="${INTEGRATION_BIN}/cargo" \
@@ -3390,21 +3404,22 @@ run_python_guard_for_root "${MISSING_WORKSPACE_ROOT}" env \
   PRIVACY_PYTHON_SDK_TEST_VENV="${INTEGRATION_VENV}" \
   PATH="${INTEGRATION_BIN}:${PATH}" \
   bash "${SCRIPT_DIR}/check_privacy_python_sdk.sh"
-if [[ -e "${MISSING_WORKSPACE_ROOT}/Cargo.lock" || -L "${MISSING_WORKSPACE_ROOT}/Cargo.lock" ]]; then
+if [[ -e "${MISSING_WORKSPACE_ROOT}/Cargo.lock" || \
+  -L "${MISSING_WORKSPACE_ROOT}/Cargo.lock" ]]; then
   echo "Python SDK guard created Cargo.lock in an initially clean workspace" >&2
   exit 1
 fi
 
-CREATED_WORKSPACE_ROOT="${TEST_ROOT}/created-workspace-lock-repository"
-prepare_python_guard_root "${CREATED_WORKSPACE_ROOT}"
+MUTATED_WORKSPACE_ROOT="${TEST_ROOT}/mutated-workspace-lock-repository"
+prepare_python_guard_root "${MUTATED_WORKSPACE_ROOT}"
 expect_failure \
-  "workspace Cargo.lock was created" \
-  run_python_guard_for_root "${CREATED_WORKSPACE_ROOT}" \
+  "workspace Cargo.lock changed" \
+  run_python_guard_for_root "${MUTATED_WORKSPACE_ROOT}" \
   env \
-  FAKE_MATURIN_MUTATE_PATH="${CREATED_WORKSPACE_ROOT}/Cargo.lock" \
+  FAKE_MATURIN_MUTATE_PATH="${MUTATED_WORKSPACE_ROOT}/Cargo.lock" \
   INTEGRATION_CARGO_LOG="${INTEGRATION_CARGO_LOG}" \
   IROHA_PRIVACY_CARGO_LOCKFILE_PATH="${INTEGRATION_PRIVATE_ROOT}/Cargo.lock" \
-  PRIVACY_PYTHON_SDK_ROOT="${CREATED_WORKSPACE_ROOT}" \
+  PRIVACY_PYTHON_SDK_ROOT="${MUTATED_WORKSPACE_ROOT}" \
   PRIVACY_PYTHON_SDK_PYTHON_BIN="${TEST_PYTHON}" \
   PRIVACY_PYTHON_SDK_TEST_MODE=1 \
   PRIVACY_PYTHON_SDK_TEST_VENV="${INTEGRATION_VENV}" \
@@ -3444,9 +3459,9 @@ if [[ -e "${VENV_RUSTC_SHADOW_MARKER}" || -L "${VENV_RUSTC_SHADOW_MARKER}" ]]; t
   exit 1
 fi
 
-privacy_sdk_assert_optional_file_state \
+privacy_sdk_assert_file_seal \
   "${INTEGRATION_ROOT}/Cargo.lock" \
-  "absent" \
+  "${INTEGRATION_WORKSPACE_SEAL}" \
   "integration workspace Cargo.lock" \
   "${TEST_PYTHON}"
 privacy_sdk_assert_file_seal \
@@ -4167,7 +4182,9 @@ run_wheel_mutation_negative_control() {
   local wheel_selected="${TEST_ROOT}/wheel-${phase}-private/Cargo.lock"
   prepare_python_guard_root "${wheel_root}"
   mkdir -p "$(dirname "${wheel_selected}")"
-  install -m 600 "${SOURCE_ROOT}/Cargo.lock" "${wheel_selected}"
+  install -m 600 \
+    "${IROHA_PRIVACY_RELEASE_CARGO_LOCKFILE_PATH:?privacy SDK lockfile self-test requires the authenticated external release Cargo.lock}" \
+    "${wheel_selected}"
   expect_failure \
     "fresh private wheel changed" \
     run_python_guard_for_root "${wheel_root}" \
@@ -4194,11 +4211,13 @@ run_mutation_negative_control() {
   local expected_failure
   prepare_python_guard_root "${mutation_root}"
   mkdir -p "$(dirname "${mutation_selected}")"
-  install -m 600 "${SOURCE_ROOT}/Cargo.lock" "${mutation_selected}"
+  install -m 600 \
+    "${IROHA_PRIVACY_RELEASE_CARGO_LOCKFILE_PATH:?privacy SDK lockfile self-test requires the authenticated external release Cargo.lock}" \
+    "${mutation_selected}"
   case "${target_kind}" in
     workspace)
       mutation_target="${mutation_root}/Cargo.lock"
-      expected_failure="workspace Cargo.lock was created"
+      expected_failure="workspace Cargo.lock changed"
       ;;
     selected)
       mutation_target="${mutation_selected}"
@@ -4245,7 +4264,9 @@ run_artifact_set_negative_control() {
   local artifact_directory="${artifact_root}/python/iroha_python/src/iroha_python"
   prepare_python_guard_root "${artifact_root}"
   mkdir -p "$(dirname "${artifact_selected}")"
-  install -m 600 "${SOURCE_ROOT}/Cargo.lock" "${artifact_selected}"
+  install -m 600 \
+    "${IROHA_PRIVACY_RELEASE_CARGO_LOCKFILE_PATH:?privacy SDK lockfile self-test requires the authenticated external release Cargo.lock}" \
+    "${artifact_selected}"
   expect_failure \
     "checkout Python native artifacts" \
     run_python_guard_for_root "${artifact_root}" \
@@ -4268,12 +4289,12 @@ run_artifact_set_negative_control delete
 run_artifact_set_negative_control hardlink
 run_artifact_set_negative_control symlink
 
-# JavaScript's native builder still requires a root-selected lock. Until it is
-# requalified for the distinct external cd9e authority, the gate must stop
-# before Cargo rather than replacing the tracked c90b root.
-grep -Fq 'TRACKED_ROOT_CARGO_LOCK_SHA256="c90b3659d6cb44cd1d6f9e75e7b98aacc0d30bbe23041d4e6e109e8a206fa76b"' "${SCRIPT_DIR}/check_privacy_js_sdk.sh"
-grep -Fq 'FROZEN_CARGO_LOCK_SHA256="cd9e829e454171f17540abeb7fd1aa14129252082bd8b076a0199b0ffa4e3f79"' "${SCRIPT_DIR}/check_privacy_js_sdk.sh"
-grep -Fq 'external-lock requalification' "${SCRIPT_DIR}/check_privacy_js_sdk.sh"
+# JavaScript's native builder consumes the authenticated distinct release lock
+# while preserving the tracked root as a separate immutable source authority.
+grep -Fq 'TRACKED_ROOT_CARGO_LOCK_SHA256="ad0d209abaa51d4c77a9e67ccbb0c7660a0f8b7b5dbe3e3fbe4a70e142711bf7"' "${SCRIPT_DIR}/check_privacy_js_sdk.sh"
+grep -Fq 'FROZEN_CARGO_LOCK_SHA256="ccf4acebfe63ad981193b87afd559c195d8a67642d9536b8082f77bbf24a11f0"' "${SCRIPT_DIR}/check_privacy_js_sdk.sh"
+! grep -Fq 'external-lock requalification' "${SCRIPT_DIR}/check_privacy_js_sdk.sh"
+grep -Fq 'export IROHA_JS_CARGO_LOCKFILE_PATH="${PRIVACY_RELEASE_CARGO_LOCK}"' "${SCRIPT_DIR}/check_privacy_js_sdk.sh"
 ! grep -Eq '(install|rm -f --).*\$\{WORKSPACE_CARGO_LOCKFILE\}' "${SCRIPT_DIR}/check_privacy_js_sdk.sh"
 
 # Source-level CI coverage: the root lock is tracked as the exact source
@@ -4300,7 +4321,7 @@ PYTHON_PYPROJECT_PATH="${SOURCE_ROOT}/python/iroha_python/pyproject.toml"
 [[ "$(grep -Fc '${{ steps.privacy-swift-python.outputs.python-path }}' "${WORKFLOW_PATH}")" -eq 1 ]]
 [[ "$(grep -Fc '${{ steps.privacy-jvm-python.outputs.python-path }}' "${WORKFLOW_PATH}")" -eq 4 ]]
 [[ "$(grep -Fc '${{ steps.privacy-csharp-python.outputs.python-path }}' "${WORKFLOW_PATH}")" -eq 3 ]]
-[[ "$(grep -Fc '${{ steps.privacy-js-python.outputs.python-path }}' "${WORKFLOW_PATH}")" -eq 2 ]]
+[[ "$(grep -Fc '${{ steps.privacy-js-python.outputs.python-path }}' "${WORKFLOW_PATH}")" -eq 3 ]]
 if grep -Fq 'cache-dependency-path: python/iroha_python/requirements-ci.lock' \
   "${WORKFLOW_PATH}" || grep -Fq 'Swatinem/rust-cache@' "${WORKFLOW_PATH}"; then
   echo "privacy workflow retained a forbidden pip or Rust cache action" >&2
@@ -4599,7 +4620,7 @@ fi
 "${TEST_PYTHON}" -I - "${WORKFLOW_PATH}" <<'PY'
 import re, sys
 from pathlib import Path
-workflow = Path(sys.argv[1]).read_text(encoding="utf-8"); frozen = "cd9e829e454171f17540abeb7fd1aa14129252082bd8b076a0199b0ffa4e3f79"
+workflow = Path(sys.argv[1]).read_text(encoding="utf-8"); frozen = "ccf4acebfe63ad981193b87afd559c195d8a67642d9536b8082f77bbf24a11f0"
 private = {
     "privacy_native_bridge_tests": ("privacy SDK", "native Cargo", "cargo test -p connect_norito_bridge", None, 0, False),
     "privacy_jvm_sdk_tests": ("privacy JVM", "JVM native", "ci/check_privacy_jvm_sdk.sh", "privacy-jvm-python", 4, True),
@@ -4636,7 +4657,7 @@ def validate(source: str) -> None:
         "privacy-swift-python": 1,
         "privacy-jvm-python": 4,
         "privacy-csharp-python": 3,
-        "privacy-js-python": 2,
+        "privacy-js-python": 3,
         "privacy-python": 8,
     }
     for setup_id, count in setup_counts.items():
@@ -4672,7 +4693,7 @@ def validate(source: str) -> None:
             (
                 "Install host-qualified privacy",
                 "Download frozen source-bound privacy lock input",
-                "Authenticate distinct privacy release lock and enforce requalification blocker",
+                "Authenticate distinct privacy release lock",
                 frozen,
                 fetch,
                 "cargo fetch --locked",
@@ -4682,6 +4703,17 @@ def validate(source: str) -> None:
         )
         if "provision-ci" in block or "verify-ci" in block:
             raise AssertionError(f"{name} mixed private and artifact lock policies")
+        if (
+            "IROHA_PRIVACY_RELEASE_CARGO_LOCKFILE_PATH" not in block
+            or '--lockfile-path "$IROHA_PRIVACY_RELEASE_CARGO_LOCKFILE_PATH"' not in block
+            or "requalification blocker" in block
+        ):
+            raise AssertionError(f"{name} lost external-lock consumption")
+        fetch_start = block.find(fetch)
+        fetch_end = block.find(consumer, fetch_start)
+        fetch_step = block[fetch_start:fetch_end]
+        if 'RUSTC_BOOTSTRAP: "1"' not in fetch_step:
+            raise AssertionError(f"{name} lost stable-Cargo bootstrap for external-lock fetch")
 def mutated_job(source: str, name: str, marker: str) -> str:
     match = job_match(source, name)
     original = match.group(0)
@@ -4698,13 +4730,18 @@ for name in private:
     for marker in ("provision-ci", "verify-ci", "RUSTUP_DIST_SERVER", "cargo fetch --locked"):
         must_reject(mutated_job(workflow, name, marker), f"{name} {marker}")
 for name in artifact:
-    for marker in ("Download frozen source-bound privacy lock input", frozen, "cargo fetch --locked"):
+    for marker in (
+        "Download frozen source-bound privacy lock input",
+        frozen,
+        'RUSTC_BOOTSTRAP: "1"',
+        "cargo fetch --locked",
+    ):
         must_reject(mutated_job(workflow, name, marker), f"{name} {marker}")
 PY
 ! grep -Eq '(^|[[:space:]])cp[[:space:]].*Cargo\.lock' "${WORKFLOW_PATH}" || { echo "privacy SDK workflow copies Cargo.lock into the tracked root" >&2; exit 1; }
 [[ "$(grep -Ec 'install -m 600 .*Cargo\.lock.*Cargo\.lock' "${WORKFLOW_PATH}")" -eq 0 ]] && grep -Fxq '**/Cargo.lock' "${SOURCE_ROOT}/.gitignore" && grep -Fxq '!/Cargo.lock' "${SOURCE_ROOT}/.gitignore"
 ROOT_LOCK_INDEX_ENTRY="$(git -C "${SOURCE_ROOT}" ls-files --stage -- Cargo.lock)"; ROOT_LOCK_HEAD_ENTRY="$(git -C "${SOURCE_ROOT}" ls-tree HEAD -- Cargo.lock)"
 [[ "${ROOT_LOCK_INDEX_ENTRY}" =~ ^100644\ ([0-9a-f]{40})\ 0$'\t'Cargo\.lock$ ]]; ROOT_LOCK_INDEX_OID="${BASH_REMATCH[1]}"
-[[ "${ROOT_LOCK_HEAD_ENTRY}" =~ ^100644\ blob\ ([0-9a-f]{40})$'\t'Cargo\.lock$ ]]; ROOT_LOCK_HEAD_OID="${BASH_REMATCH[1]}"; [[ "${ROOT_LOCK_INDEX_OID}" == "${ROOT_LOCK_HEAD_OID}" && "$(git -C "${SOURCE_ROOT}" hash-object --no-filters -- Cargo.lock)" == "${ROOT_LOCK_INDEX_OID}" && "$(python3 -I -S -c 'import hashlib,pathlib,sys; print(hashlib.sha256(pathlib.Path(sys.argv[1]).read_bytes()).hexdigest())' "${SOURCE_ROOT}/Cargo.lock")" == "c90b3659d6cb44cd1d6f9e75e7b98aacc0d30bbe23041d4e6e109e8a206fa76b" ]]
+[[ "${ROOT_LOCK_HEAD_ENTRY}" =~ ^100644\ blob\ ([0-9a-f]{40})$'\t'Cargo\.lock$ ]]; ROOT_LOCK_HEAD_OID="${BASH_REMATCH[1]}"; [[ "${ROOT_LOCK_INDEX_OID}" == "${ROOT_LOCK_HEAD_OID}" && "$(git -C "${SOURCE_ROOT}" hash-object --no-filters -- Cargo.lock)" == "${ROOT_LOCK_INDEX_OID}" && "$(python3 -I -S -c 'import hashlib,pathlib,sys; print(hashlib.sha256(pathlib.Path(sys.argv[1]).read_bytes()).hexdigest())' "${SOURCE_ROOT}/Cargo.lock")" == "ad0d209abaa51d4c77a9e67ccbb0c7660a0f8b7b5dbe3e3fbe4a70e142711bf7" ]]
 grep -Fq 'PRIVACY_SDK_FROZEN_RELEASE_CARGO_LOCK_SHA256=' "${SCRIPT_DIR}/privacy_sdk_cargo_lockfile.sh" && grep -Fq 'PRIVACY_SDK_TRACKED_ROOT_CARGO_LOCK_SHA256=' "${SCRIPT_DIR}/privacy_sdk_cargo_lockfile.sh"
 printf '%s\n' "privacy SDK authenticated Cargo.lock guard tests passed"

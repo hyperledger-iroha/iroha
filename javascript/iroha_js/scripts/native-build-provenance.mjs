@@ -534,6 +534,20 @@ function assertSelectedCargoLockUnchanged(cargoLock) {
   }
 }
 
+/** Capture the exact selected Cargo.lock path, digest, and stable inode. */
+export function readSelectedCargoLockSeal(
+  repoRoot,
+  { env = process.env } = {},
+) {
+  return selectedCargoLock(repoRoot, env);
+}
+
+/** Reject any path, byte, metadata, or inode drift from a captured lock seal. */
+export function assertSelectedCargoLockSeal(cargoLock) {
+  assertSelectedCargoLockUnchanged(cargoLock);
+  return cargoLock;
+}
+
 const UNSUPPORTED_DIRECTORY_SYNC_CODES = new Set([
   "EACCES",
   "EBADF",

@@ -23,6 +23,11 @@ path = "src/bin/fastpq_fixture_capture.rs"
 required-features = ["dev-tools"]
 
 [[bin]]
+name = "offline_cash_artifact_candidate_v1"
+path = "src/bin/offline_cash_artifact_candidate_v1.rs"
+required-features = ["dev-tools", "zk-halo2-ipa"]
+
+[[bin]]
 name = "kagemusha_recursive_spend_v4_bundle"
 path = "src/bin/kagemusha_recursive_spend_v4_bundle.rs"
 required-features = ["dev-tools", "zk-halo2-ipa", "kagemusha-candidate-evidence-lab"]
@@ -125,7 +130,7 @@ zk-tests = ["iroha-core-tests"]
 # Enable developer Halo2 test vectors (heavy tooling, opt-in only).
 halo2-dev-tests = []
 # Non-shipping, opt-in path for collecting physical-device evidence from a
-# clean ABI-21 candidate before release promotion. This never enables the
+# clea Kagemusha V4 candidate before release promotion. This never enables the
 # production proof-backend availability gate.
 kagemusha-candidate-evidence-lab = []
 # Non-shipping, opt-in full compact-generation memory diagnostic. It emits no
@@ -207,7 +212,7 @@ regex = "1.11.0"
 http = "1.3.1"
 halo2_proofs = { version = "0.5.1", package = "halo2-axiom", features = ["batch", "multicore"] }
 ff = "0.13.1"
-# Kagemusha's ABI-21 Pasta-cycle backend uses the Axiom Poseidon transcript
+# Kagemusha's Kagemusha V4 Pasta-cycle backend uses the Axiom Poseidon transcript
 # and IPA verifier in production. These revisions are already pinned by the
 # workspace lockfile and the Pasta field adapter is source-scoped in the root
 # manifest; keep them here so consensus verification never depends on a

@@ -469,6 +469,29 @@ else:
         errors.append("candidate-lab header guard is missing its exported marker declaration")
 
 harness = text["harness"]
+shared_abi_pin = r"KagemushaCandidateLabNative\.REQUIRED_BRIDGE_ABI"
+for pattern, message in (
+    (
+        r"KagemushaCandidateLabNative\.nativeBridgeAbiVersion\(\)\s*==\s*" +
+        shared_abi_pin,
+        "candidate lab must compare the loaded native bridge ABI with the shared ABI-22 pin",
+    ),
+    (
+        r"check\(\s*bridgeAbi\s*==\s*" + shared_abi_pin + r"\s*\)",
+        "candidate lab must compare the native accepted identity with the shared ABI-22 pin",
+    ),
+):
+    if re.search(pattern, harness) is None:
+        errors.append(message)
+for retired_pattern in (
+    r"nativeBridgeAbiVersion\(\)\s*==\s*(?:21|22)\b",
+    r"\bbridgeAbi\s*==\s*(?:21|22)\b",
+):
+    if re.search(retired_pattern, harness):
+        errors.append(
+            "candidate lab must not carry a private numeric bridge-ABI expectation: "
+            + retired_pattern
+        )
 transcript_fields = {
     "schema", "slot_id", "candidate_record_sha256", "candidate_manifest_sha256",
     "candidate_stage_manifest_path", "candidate_stage_manifest_sha256",

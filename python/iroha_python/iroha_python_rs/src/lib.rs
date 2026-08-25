@@ -8894,29 +8894,21 @@ impl PyNetworkId {
     }
 }
 fn canonical_network_id_literal(network_id: &NetworkId) -> PyResult<String> {
-    let value = norito::json::to_value(network_id)
-        .map_err(|err| PyRuntimeError::new_err(format!("failed to serialize NetworkId: {err}")))?;
-    value
-        .as_str()
-        .map(str::to_owned)
-        .ok_or_else(|| PyRuntimeError::new_err("NetworkId JSON must be a string literal"))
+    Ok(network_id.to_string())
 }
 #[pymethods]
 impl PyNetworkId {
-    /// Parse one exact canonical checksummed genesis-header hash literal.
+    /// Parse one exact 64-character lowercase hexadecimal genesis-header hash.
     #[staticmethod]
     fn parse(value: &str) -> PyResult<Self> {
-        let inner = norito::json::from_value::<NetworkId>(norito::json::Value::String(
-            value.to_owned(),
-        ))
-        .map_err(|_| {
+        let inner = value.parse::<NetworkId>().map_err(|_| {
             PyValueError::new_err(
-                "NetworkId must be an exact canonical checksummed 32-byte Iroha hash literal",
+                "NetworkId must be exactly 64 lowercase hexadecimal characters with its marker bit set",
             )
         })?;
         if canonical_network_id_literal(&inner)? != value {
             return Err(PyValueError::new_err(
-                "NetworkId must be an exact canonical checksummed 32-byte Iroha hash literal",
+                "NetworkId must be exactly 64 lowercase hexadecimal characters with its marker bit set",
             ));
         }
         Ok(Self { inner })
@@ -8926,7 +8918,7 @@ impl PyNetworkId {
     fn from_bytes(value: &[u8]) -> PyResult<Self> {
         Self::from_exact_bytes(value)
     }
-    /// Return the canonical checksummed hash literal.
+    /// Return the exact 64-character lowercase hexadecimal literal.
     #[getter]
     fn literal(&self) -> PyResult<String> {
         canonical_network_id_literal(&self.inner)

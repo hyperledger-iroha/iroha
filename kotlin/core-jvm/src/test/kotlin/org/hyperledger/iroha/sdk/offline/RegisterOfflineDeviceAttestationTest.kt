@@ -25,7 +25,7 @@ import kotlin.test.assertFailsWith
 import kotlin.test.assertFalse
 import kotlin.test.assertIs
 
-/** Exact Rust/Kotlin parity and adversarial coverage for the sole ABI-21 registration path. */
+/** Exact Rust/Kotlin parity and adversarial coverage for the native bridge ABI 22 path. */
 class RegisterOfflineDeviceAttestationTest {
 
     @Test
@@ -104,6 +104,44 @@ class RegisterOfflineDeviceAttestationTest {
             ),
         )
         request.validateExactPayload(request.transactionPayload())
+    }
+
+    @Test
+    fun `Android attested properties Some round trips without changing pre-key challenge`() {
+        val accountId = FixtureGeneratorRunner.run("offline-device-attestation")[3]
+        val withoutProperties = registration(accountId)
+        val properties = OfflineAndroidAttestedDevicePropertiesV2(
+            version = OfflineAndroidAttestedDevicePropertiesV2.VERSION,
+            attestationVersion = 400,
+            keymintVersion = 300,
+            securityLevel = OfflineAndroidDeviceSecurityLevelV2.STRONG_BOX,
+            brand = "Iroha",
+            device = "abi22-device",
+            product = "abi22-product",
+            manufacturer = "Hyperledger",
+            model = "Kagemusha",
+            osVersion = 14,
+            osPatchLevel = 202608,
+            vendorPatchLevel = 202608,
+            bootPatchLevel = 202608,
+            verifiedBootKey = bytes("abi22-verified-boot-key"),
+            verifiedBootHash = sha256(bytes("abi22-verified-boot-hash")),
+        )
+        val withProperties = registration(
+            accountId,
+            attestedProperties = properties,
+        )
+
+        assertContentEquals(withoutProperties.challengeHash, withProperties.challengeHash)
+        assertFalse(withoutProperties.noritoEncoded().contentEquals(withProperties.noritoEncoded()))
+        assertEquals(properties, withProperties.androidAttestedDeviceProperties)
+        assertEquals(
+            withProperties,
+            DeviceAttestationRegistration.decodeCanonical(
+                withProperties.noritoEncoded(),
+                AccountAddress.DEFAULT_I105_DISCRIMINANT,
+            ),
+        )
     }
 
     @Test
@@ -275,7 +313,7 @@ class RegisterOfflineDeviceAttestationTest {
 
     companion object {
         private val TEST_NETWORK_ID = NetworkId.parse(
-            "hash:32C903E5B3497E34C2B844EBFE8A39C19E6CF8F95D44C1FFB8BA9DCB42F91149#A2F0",
+            "32c903e5b3497e34c2b844ebfe8a39c19e6cf8f95d44c1ffb8ba9dcb42f91149",
         )
         private const val P256_GENERATOR =
             "04" +
@@ -296,9 +334,10 @@ class RegisterOfflineDeviceAttestationTest {
 
         private fun registration(
             accountId: String,
-            packageName: String = "org.hyperledger.iroha.abi20.fixture",
+            packageName: String = "org.hyperledger.iroha.abi22.fixture",
             signingCertificate: ByteArray =
-                sha256(bytes("abi20-unit-test-signing-certificate")),
+                sha256(bytes("abi22-unit-test-signing-certificate")),
+            attestedProperties: OfflineAndroidAttestedDevicePropertiesV2? = null,
             challengeHash: ByteArray? = null,
             reportHash: ByteArray? = null,
             evidenceHash: ByteArray? = null,
@@ -309,7 +348,7 @@ class RegisterOfflineDeviceAttestationTest {
                 version = 1,
                 platform = DeviceAttestationRegistration.ANDROID_KEYMINT_PLATFORM,
                 keyId = hexLower(sha256(assertionPublicKey)),
-                deviceId = "abi20-android-unit-test-device",
+                deviceId = "abi22-android-unit-test-device",
                 accountId = accountId,
                 assetDefinitionId = null,
                 iosTeamId = null,
@@ -317,6 +356,7 @@ class RegisterOfflineDeviceAttestationTest {
                 iosEnvironment = null,
                 androidPackageName = packageName,
                 androidSigningCertificateSha256 = signingCertificate,
+                androidAttestedDeviceProperties = attestedProperties,
                 publicKey = KagemushaDevicePublicKeyV2(hexToBytes(P256_GENERATOR)),
                 assertionScheme =
                     DeviceAttestationRegistration.ANDROID_KEYMINT_ASSERTION_SCHEME,
@@ -328,11 +368,11 @@ class RegisterOfflineDeviceAttestationTest {
                 challengeHash = challengeHash,
                 attestationReportHash = reportHash,
                 attestationReport =
-                    bytes("abi20-unit-test-not-physical-attestation-evidence"),
+                    bytes("abi22-unit-test-not-physical-attestation-evidence"),
                 evidenceHash = evidenceHash,
                 evidence = evidence,
                 recentBlockHeight = 42,
-                recentBlockHash = IrohaHash.prehash(bytes("abi20-unit-test-block")),
+                recentBlockHash = IrohaHash.prehash(bytes("abi22-unit-test-block")),
                 expiresAtMs = 2_000_000_000_000,
             )
         }

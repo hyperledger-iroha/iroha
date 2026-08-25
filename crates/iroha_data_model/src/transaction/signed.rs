@@ -15,7 +15,7 @@ use crate::{
     },
     metadata::Metadata,
     name::Name,
-    nexus::FeeSponsorProgramId,
+    nexus::{FeeDebitSource, FeeSponsorProgramId},
     privacy::{
         PrivacyNullifierV1, PrivacyStatementDigestV1, PrivacyStatementV1,
         PrivacyTransactionIntentDigestV1, PrivacyVegaDeviceAuthenticationDigestV1,
@@ -27,7 +27,7 @@ use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STANDARD};
 use derive_more::{Deref, Display, From, TryInto};
 use iroha_crypto::{Algorithm, Hash, HashOf, PublicKey, Signature, SignatureOf};
 use iroha_data_model_derive::model;
-use iroha_primitives::numeric::Quantity;
+use iroha_primitives::numeric::{MAX_DECIMAL_SCALE, Quantity};
 use iroha_primitives::{const_vec::ConstVec, json::Json, time::TimeSource};
 use iroha_schema::IntoSchema;
 use iroha_version::Version;
@@ -415,14 +415,68 @@ mod model {
         /// Scheduled time trigger that initiates a transaction.
         Time(TimeTriggerEntrypoint),
     }
+    /// One actual direct-settlement fee component debited while applying a transaction.
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
+    #[cfg_attr(
+        feature = "json",
+        derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+    )]
+    #[norito(deny_unknown_fields)]
+    pub struct FeePaymentCharge {
+        /// Fee component whose actual debit this row records.
+        pub kind: FeeChargeKind,
+        /// Exact canonical asset definition debited for this component.
+        pub fee_asset_id: AssetDefinitionId,
+        /// Asset scale used to project the charged quantity into minor units.
+        pub fee_asset_scale: u32,
+        /// Exact quantity successfully debited during transaction application.
+        pub charged_quantity: Quantity,
+        /// Exact positive minor-unit amount, encoded as a canonical decimal integer.
+        pub charged_minor_units: String,
+    }
+    /// Finality-bound receipt for the actual direct-settlement fee debit.
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
+    #[cfg_attr(
+        feature = "json",
+        derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+    )]
+    #[norito(deny_unknown_fields)]
+    pub struct FeePaymentReceipt {
+        /// Receipt schema version.
+        pub version: u16,
+        /// Exact signed transaction whose fee debit committed, regardless of business outcome.
+        pub transaction_hash: HashOf<SignedTransaction>,
+        /// Typed authority-account or sponsor-program funding source.
+        pub debit_source: FeeDebitSource,
+        /// Exact concrete account balance from which settlement removed funds.
+        pub debited_account_id: AccountId,
+        /// Exact sponsor program, repeated in a flat field for authenticated clients.
+        #[norito(required)]
+        pub sponsor_program_id: Option<FeeSponsorProgramId>,
+        /// Exact non-zero immutable sponsor revision, when sponsored.
+        #[norito(required)]
+        pub sponsor_program_revision: Option<NonZeroU64>,
+        /// Canonically ordered actual direct-settlement debit components.
+        pub charges: Vec<FeePaymentCharge>,
+        /// Height of the block that applied the transaction.
+        pub applied_block_height: u64,
+        /// Consensus hash of the block that applied the transaction.
+        pub applied_block_hash: HashOf<crate::block::BlockHeader>,
+        /// Domain-separated digest of the exact applied/rejected result before receipt attachment.
+        pub execution_outcome_digest: Hash,
+        /// Domain-separated deterministic digest of every preceding receipt field.
+        pub receipt_digest: Hash,
+    }
     /// The outcome of processing a transaction:
     /// either a sequence of data triggers, or a rejection reason.
-    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, IntoSchema)]
     #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
     pub struct TransactionResult(
         pub TransactionResultInner,
         /// Durable per-leg receipts emitted by an independently settled native transfer batch.
         pub Vec<AssetBatchTransferOutcome>,
+        /// Actual direct-settlement debit, present only when the fee debit itself committed.
+        pub Option<FeePaymentReceipt>,
     );
     /// The outcome of processing a transaction:
     /// either a sequence of data triggers, or a rejection reason.
@@ -446,6 +500,69 @@ mod model {
     #[display("ExecutionStep")]
     #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
     pub struct ExecutionStep(pub ConstVec<InstructionBox>);
+}
+
+/// Backward-compatible transaction-result decoder.
+///
+/// The third field was added after Minamoto blocks with a two-field result tuple had already
+/// been persisted.  Keeping the default on this private carrier lets the current decoder accept
+/// both layouts without changing the public model or its historical `None` encoding.
+#[derive(Decode)]
+struct TransactionResultWire(
+    TransactionResultInner,
+    Vec<AssetBatchTransferOutcome>,
+    #[norito(default)] Option<FeePaymentReceipt>,
+);
+
+impl norito::core::NoritoSerialize for TransactionResult {
+    fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), norito::core::Error> {
+        match self.2.as_ref() {
+            // This must remain byte-identical to the historical two-field tuple.  In particular,
+            // an absent receipt is not encoded as a present third `Option::None` field.
+            None => {
+                norito::core::NoritoSerialize::serialize(&(self.0.clone(), self.1.clone()), writer)
+            }
+            Some(_) => norito::core::NoritoSerialize::serialize(
+                &(self.0.clone(), self.1.clone(), self.2.clone()),
+                writer,
+            ),
+        }
+    }
+
+    fn encoded_len_hint(&self) -> Option<usize> {
+        self.encoded_len_exact()
+    }
+
+    fn encoded_len_exact(&self) -> Option<usize> {
+        match self.2.as_ref() {
+            None => {
+                norito::core::NoritoSerialize::encoded_len_exact(&(self.0.clone(), self.1.clone()))
+            }
+            Some(_) => norito::core::NoritoSerialize::encoded_len_exact(&(
+                self.0.clone(),
+                self.1.clone(),
+                self.2.clone(),
+            )),
+        }
+    }
+}
+
+impl<'de> norito::core::NoritoDeserialize<'de> for TransactionResult {
+    fn deserialize(archived: &'de norito::core::Archived<Self>) -> Self {
+        Self::try_deserialize(archived).expect("TransactionResult decode")
+    }
+
+    fn try_deserialize(
+        archived: &'de norito::core::Archived<Self>,
+    ) -> Result<Self, norito::core::Error> {
+        // `Archived::cast` only retags Norito's byte-cursor view; it does not reinterpret either
+        // Rust struct's memory layout.  The private wire type owns the complete field decoding.
+        let TransactionResultWire(inner, batch_transfer_outcomes, fee_payment) =
+            <TransactionResultWire as norito::core::NoritoDeserialize<'de>>::try_deserialize(
+                archived.cast(),
+            )?;
+        Ok(Self(inner, batch_transfer_outcomes, fee_payment))
+    }
 }
 // Keep explicit slice decoders for hot ingress paths. The generic derived
 // decoders regressed on versioned payloads carrying adaptive Norito bodies.
@@ -708,6 +825,24 @@ pub const MULTISIG_SIGNING_UNSUPPORTED_REASON: &str =
     "multisig authority requires bundled signatures for verification";
 /// Domain separation tag for sealed transaction commitment hashing.
 pub const SEALED_TRANSACTION_COMMITMENT_DOMAIN: &[u8] = b"iroha.sealed_tx.v1";
+/// Domain separator for deterministic final fee-payment receipt digests.
+pub const FEE_PAYMENT_RECEIPT_DIGEST_DOMAIN_V1: &[u8] = b"iroha.fee-payment-receipt.v1";
+/// Domain separator for the exact pre-receipt execution outcome bound by a fee receipt.
+pub const FEE_PAYMENT_EXECUTION_OUTCOME_DIGEST_DOMAIN_V1: &[u8] =
+    b"iroha.fee-payment-execution-outcome.v1";
+#[derive(Encode)]
+struct FeePaymentReceiptDigestPayload {
+    version: u16,
+    transaction_hash: HashOf<SignedTransaction>,
+    debit_source: FeeDebitSource,
+    debited_account_id: AccountId,
+    sponsor_program_id: Option<FeeSponsorProgramId>,
+    sponsor_program_revision: Option<NonZeroU64>,
+    charges: Vec<FeePaymentCharge>,
+    applied_block_height: u64,
+    applied_block_hash: HashOf<crate::block::BlockHeader>,
+    execution_outcome_digest: Hash,
+}
 /// Structural error in a signature-bound fee payment intent.
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
 pub enum FeePaymentIntentError {
@@ -731,6 +866,82 @@ pub enum FeePaymentIntentError {
     /// Retired metadata keys must never coexist with the typed fee surface.
     #[error("legacy transaction metadata key `{0}` is not supported")]
     LegacyMetadataKey(String),
+}
+/// Structural or binding error in a final fee-payment receipt.
+#[derive(Debug, Clone, PartialEq, Eq, Error)]
+pub enum FeePaymentReceiptError {
+    /// Only the current closed receipt version is accepted.
+    #[error("unsupported fee-payment receipt version {0}")]
+    UnsupportedVersion(u16),
+    /// An actual charge must be positive.
+    #[error("fee-payment charge {0:?} is zero")]
+    ZeroCharge(FeeChargeKind),
+    /// The asset cannot express the charged quantity at the recorded minor-unit scale.
+    #[error(
+        "fee-payment charge {kind:?} has quantity scale {quantity_scale} above asset scale {asset_scale}"
+    )]
+    QuantityScaleExceedsAsset {
+        /// Fee component carrying the invalid scale.
+        kind: FeeChargeKind,
+        /// Canonical quantity scale.
+        quantity_scale: u32,
+        /// Recorded asset scale.
+        asset_scale: u32,
+    },
+    /// The receipt cannot claim an asset scale outside the closed numeric protocol bound.
+    #[error(
+        "fee-payment charge {kind:?} has asset scale {asset_scale} above the protocol maximum {maximum}"
+    )]
+    AssetScaleTooLarge {
+        /// Fee component carrying the invalid scale.
+        kind: FeeChargeKind,
+        /// Untrusted scale carried by the receipt.
+        asset_scale: u32,
+        /// Closed V1 numeric scale limit.
+        maximum: u32,
+    },
+    /// The stored decimal integer does not match the exact charged quantity and asset scale.
+    #[error("fee-payment charge {0:?} has non-canonical minor units")]
+    InvalidMinorUnits(FeeChargeKind),
+    /// A receipt must carry at least one successful debit.
+    #[error("fee-payment receipt has no actual charges")]
+    EmptyCharges,
+    /// Components must appear once each in canonical fee-kind order.
+    #[error("fee-payment receipt charges are duplicated or not canonically ordered")]
+    NonCanonicalChargeOrder,
+    /// Authority-paid receipts must name the exact transaction authority and no sponsor fields.
+    #[error("authority fee-payment receipt has inconsistent debit or sponsor fields")]
+    InvalidAuthoritySource,
+    /// Sponsored receipts must name the exact program and a non-zero immutable revision.
+    #[error("sponsored fee-payment receipt has inconsistent program fields")]
+    InvalidSponsorSource,
+    /// Applied block heights start at one.
+    #[error("fee-payment receipt has zero applied block height")]
+    ZeroAppliedBlockHeight,
+    /// The digest could not be encoded deterministically.
+    #[error("failed to encode fee-payment receipt digest payload: {0}")]
+    DigestEncoding(String),
+    /// The stored receipt digest does not authenticate its fields.
+    #[error("fee-payment receipt digest mismatch")]
+    DigestMismatch,
+    /// The receipt is not bound to the exact committed transaction.
+    #[error("fee-payment receipt transaction hash mismatch")]
+    TransactionHashMismatch,
+    /// The receipt is not bound to the exact applied block.
+    #[error("fee-payment receipt block coordinates mismatch")]
+    BlockCoordinatesMismatch,
+    /// The receipt is not bound to the exact applied/rejected execution outcome.
+    #[error("fee-payment receipt execution outcome mismatch")]
+    ExecutionOutcomeMismatch,
+    /// Only entrypoints containing an exact signed transaction can carry this receipt.
+    #[error("fee-payment receipt is attached to an entrypoint without a signed transaction")]
+    UnsupportedEntrypoint,
+    /// The receipt's payer does not match the signature-bound fee-payment intent.
+    #[error("fee-payment receipt payer does not match the signed fee-payment intent")]
+    SignedPayerMismatch,
+    /// An actual component is not covered by the exact signed asset and maximum.
+    #[error("fee-payment charge {0:?} is not authorized by the signed fee-payment limits")]
+    ChargeNotAuthorized(FeeChargeKind),
 }
 impl FeeChargeLimit {
     /// Construct a signature-bound limit for one exact fee component and asset.
@@ -2004,6 +2215,10 @@ impl norito::json::JsonSerialize for TransactionResult {
         norito::json::write_json_string("batch_transfer_outcomes", out);
         out.push(':');
         norito::json::JsonSerialize::json_serialize(&self.1, out);
+        out.push(',');
+        norito::json::write_json_string("fee_payment", out);
+        out.push(':');
+        norito::json::JsonSerialize::json_serialize(&self.2, out);
         out.push('}');
     }
     fn json_serialize_to(
@@ -2024,6 +2239,8 @@ impl norito::json::JsonSerialize for TransactionResult {
         }
         out.push_str(",\"batch_transfer_outcomes\":")?;
         norito::json::JsonSerialize::json_serialize_to(&self.1, out)?;
+        out.push_str(",\"fee_payment\":")?;
+        norito::json::JsonSerialize::json_serialize_to(&self.2, out)?;
         out.push('}')?;
         out.end_container();
         Ok(())
@@ -2038,6 +2255,7 @@ impl norito::json::JsonDeserialize for TransactionResult {
         parser.consume_char(b'{')?;
         let mut inner = None;
         let mut batch_transfer_outcomes = None;
+        let mut fee_payment = None;
         loop {
             parser.skip_ws();
             if parser.try_consume_char(b'}')? {
@@ -2070,6 +2288,12 @@ impl norito::json::JsonDeserialize for TransactionResult {
                     batch_transfer_outcomes =
                         Some(Vec::<AssetBatchTransferOutcome>::json_deserialize(parser)?);
                 }
+                "fee_payment" => {
+                    if fee_payment.is_some() {
+                        return Err(norito::json::Error::duplicate_field("fee_payment"));
+                    }
+                    fee_payment = Some(Option::<FeePaymentReceipt>::json_deserialize(parser)?);
+                }
                 other => return Err(norito::json::Error::unknown_field(other.to_owned())),
             }
             parser.skip_ws();
@@ -2082,6 +2306,7 @@ impl norito::json::JsonDeserialize for TransactionResult {
         Ok(TransactionResult(
             inner.ok_or_else(|| norito::json::Error::missing_field("Ok or Err"))?,
             batch_transfer_outcomes.unwrap_or_default(),
+            fee_payment.unwrap_or_default(),
         ))
     }
 }
@@ -2538,12 +2763,283 @@ impl TransactionEntrypoint {
         }
     }
 }
+impl FeePaymentCharge {
+    /// Construct one exact actual direct-settlement charge and its canonical minor-unit text.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the amount is zero or cannot be expressed at `fee_asset_scale`.
+    pub fn try_new(
+        kind: FeeChargeKind,
+        fee_asset_id: AssetDefinitionId,
+        fee_asset_scale: u32,
+        charged_quantity: Quantity,
+    ) -> Result<Self, FeePaymentReceiptError> {
+        if charged_quantity.is_zero() {
+            return Err(FeePaymentReceiptError::ZeroCharge(kind));
+        }
+        let charged_minor_units = Self::minor_units(&charged_quantity, fee_asset_scale, kind)?;
+        Ok(Self {
+            kind,
+            fee_asset_id,
+            fee_asset_scale,
+            charged_quantity,
+            charged_minor_units,
+        })
+    }
+    fn minor_units(
+        quantity: &Quantity,
+        asset_scale: u32,
+        kind: FeeChargeKind,
+    ) -> Result<String, FeePaymentReceiptError> {
+        if asset_scale > MAX_DECIMAL_SCALE {
+            return Err(FeePaymentReceiptError::AssetScaleTooLarge {
+                kind,
+                asset_scale,
+                maximum: MAX_DECIMAL_SCALE,
+            });
+        }
+        let quantity_scale = quantity.scale();
+        let zero_count = asset_scale.checked_sub(quantity_scale).ok_or(
+            FeePaymentReceiptError::QuantityScaleExceedsAsset {
+                kind,
+                quantity_scale,
+                asset_scale,
+            },
+        )?;
+        let mut minor_units = quantity.mantissa().to_string();
+        minor_units.extend(
+            core::iter::repeat('0')
+                .take(usize::try_from(zero_count).expect("bounded scale fits usize")),
+        );
+        Ok(minor_units)
+    }
+    fn validate(&self) -> Result<(), FeePaymentReceiptError> {
+        if self.charged_quantity.is_zero() {
+            return Err(FeePaymentReceiptError::ZeroCharge(self.kind));
+        }
+        let expected = Self::minor_units(&self.charged_quantity, self.fee_asset_scale, self.kind)?;
+        if self.charged_minor_units != expected {
+            return Err(FeePaymentReceiptError::InvalidMinorUnits(self.kind));
+        }
+        Ok(())
+    }
+}
+impl FeePaymentReceipt {
+    /// First closed receipt version committed inside transaction-result leaves.
+    pub const VERSION: u16 = 1;
+    /// Construct and digest an actual direct-settlement receipt.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error for an inconsistent payer, empty/duplicate charges, zero block height,
+    /// or a deterministic digest encoding failure.
+    pub fn try_new(
+        transaction_hash: HashOf<SignedTransaction>,
+        debit_source: FeeDebitSource,
+        debited_account_id: AccountId,
+        sponsor_program_revision: Option<u64>,
+        mut charges: Vec<FeePaymentCharge>,
+        execution_outcome: &TransactionResultInner,
+        applied_block_height: u64,
+        applied_block_hash: HashOf<crate::block::BlockHeader>,
+    ) -> Result<Self, FeePaymentReceiptError> {
+        charges.sort_by_key(|charge| charge.kind);
+        let (sponsor_program_id, sponsor_program_revision) = match &debit_source {
+            FeeDebitSource::Account(account_id) => {
+                if account_id != &debited_account_id || sponsor_program_revision.is_some() {
+                    return Err(FeePaymentReceiptError::InvalidAuthoritySource);
+                }
+                (None, None)
+            }
+            FeeDebitSource::SponsorProgram(program_id) => {
+                let revision = sponsor_program_revision
+                    .and_then(NonZeroU64::new)
+                    .ok_or(FeePaymentReceiptError::InvalidSponsorSource)?;
+                (Some(program_id.clone()), Some(revision))
+            }
+        };
+        let mut receipt = Self {
+            version: Self::VERSION,
+            transaction_hash,
+            debit_source,
+            debited_account_id,
+            sponsor_program_id,
+            sponsor_program_revision,
+            charges,
+            applied_block_height,
+            applied_block_hash,
+            execution_outcome_digest: Self::execution_outcome_digest(execution_outcome)?,
+            receipt_digest: Hash::new([]),
+        };
+        receipt.validate_without_digest()?;
+        receipt.receipt_digest = receipt.computed_receipt_digest()?;
+        Ok(receipt)
+    }
+    fn digest_payload(&self) -> FeePaymentReceiptDigestPayload {
+        FeePaymentReceiptDigestPayload {
+            version: self.version,
+            transaction_hash: self.transaction_hash,
+            debit_source: self.debit_source.clone(),
+            debited_account_id: self.debited_account_id.clone(),
+            sponsor_program_id: self.sponsor_program_id.clone(),
+            sponsor_program_revision: self.sponsor_program_revision,
+            charges: self.charges.clone(),
+            applied_block_height: self.applied_block_height,
+            applied_block_hash: self.applied_block_hash,
+            execution_outcome_digest: self.execution_outcome_digest,
+        }
+    }
+    /// Compute the domain-separated digest of the exact applied/rejected result before the
+    /// receipt is attached to its result leaf.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error only when the canonical result cannot be encoded.
+    pub fn execution_outcome_digest(
+        outcome: &TransactionResultInner,
+    ) -> Result<Hash, FeePaymentReceiptError> {
+        let encoded = norito::encode_canonical(outcome)
+            .map_err(|error| FeePaymentReceiptError::DigestEncoding(error.to_string()))?;
+        Ok(Hash::new_from_chunks(&[
+            FEE_PAYMENT_EXECUTION_OUTCOME_DIGEST_DOMAIN_V1,
+            &encoded,
+        ]))
+    }
+    /// Recompute the domain-separated digest authenticating this receipt.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error only when the canonical receipt projection cannot be encoded.
+    pub fn computed_receipt_digest(&self) -> Result<Hash, FeePaymentReceiptError> {
+        let encoded = norito::encode_canonical(&self.digest_payload())
+            .map_err(|error| FeePaymentReceiptError::DigestEncoding(error.to_string()))?;
+        let mut preimage =
+            Vec::with_capacity(FEE_PAYMENT_RECEIPT_DIGEST_DOMAIN_V1.len() + encoded.len());
+        preimage.extend_from_slice(FEE_PAYMENT_RECEIPT_DIGEST_DOMAIN_V1);
+        preimage.extend_from_slice(&encoded);
+        Ok(Hash::new(preimage))
+    }
+    fn validate_without_digest(&self) -> Result<(), FeePaymentReceiptError> {
+        if self.version != Self::VERSION {
+            return Err(FeePaymentReceiptError::UnsupportedVersion(self.version));
+        }
+        if self.charges.is_empty() {
+            return Err(FeePaymentReceiptError::EmptyCharges);
+        }
+        if self
+            .charges
+            .windows(2)
+            .any(|pair| pair[0].kind >= pair[1].kind)
+        {
+            return Err(FeePaymentReceiptError::NonCanonicalChargeOrder);
+        }
+        for charge in &self.charges {
+            charge.validate()?;
+        }
+        match &self.debit_source {
+            FeeDebitSource::Account(account_id) => {
+                if account_id != &self.debited_account_id
+                    || self.sponsor_program_id.is_some()
+                    || self.sponsor_program_revision.is_some()
+                {
+                    return Err(FeePaymentReceiptError::InvalidAuthoritySource);
+                }
+            }
+            FeeDebitSource::SponsorProgram(program_id) => {
+                if self.sponsor_program_id.as_ref() != Some(program_id)
+                    || self.sponsor_program_revision.is_none()
+                {
+                    return Err(FeePaymentReceiptError::InvalidSponsorSource);
+                }
+            }
+        }
+        if self.applied_block_height == 0 {
+            return Err(FeePaymentReceiptError::ZeroAppliedBlockHeight);
+        }
+        Ok(())
+    }
+    /// Validate the closed receipt schema and its deterministic digest.
+    ///
+    /// # Errors
+    ///
+    /// Returns the first structural or digest mismatch.
+    pub fn validate(&self) -> Result<(), FeePaymentReceiptError> {
+        self.validate_without_digest()?;
+        if self.computed_receipt_digest()? != self.receipt_digest {
+            return Err(FeePaymentReceiptError::DigestMismatch);
+        }
+        Ok(())
+    }
+    /// Validate this receipt against its exact signed entrypoint, result, and carrier block.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error for a mismatched outcome, signed intent, coordinates, charge limits, or
+    /// any structural/digest failure. Both applied and rejected business outcomes are valid when
+    /// the actual fee debit committed.
+    pub fn validate_committed_binding(
+        &self,
+        entrypoint: &TransactionEntrypoint,
+        result: &TransactionResultInner,
+        applied_block_height: u64,
+        applied_block_hash: &HashOf<crate::block::BlockHeader>,
+    ) -> Result<(), FeePaymentReceiptError> {
+        self.validate()?;
+        if self.applied_block_height != applied_block_height
+            || &self.applied_block_hash != applied_block_hash
+        {
+            return Err(FeePaymentReceiptError::BlockCoordinatesMismatch);
+        }
+        if self.execution_outcome_digest != Self::execution_outcome_digest(result)? {
+            return Err(FeePaymentReceiptError::ExecutionOutcomeMismatch);
+        }
+        let transaction = match entrypoint {
+            TransactionEntrypoint::External(transaction) => transaction,
+            TransactionEntrypoint::SealedReveal(reveal) => reveal.signed_transaction(),
+            TransactionEntrypoint::SealedCommitment(_) | TransactionEntrypoint::Time(_) => {
+                return Err(FeePaymentReceiptError::UnsupportedEntrypoint);
+            }
+        };
+        if transaction.hash() != self.transaction_hash {
+            return Err(FeePaymentReceiptError::TransactionHashMismatch);
+        }
+        match (transaction.fee_payment_intent(), &self.debit_source) {
+            (FeePaymentIntent::Authority(_), FeeDebitSource::Account(account_id))
+                if account_id == transaction.authority()
+                    && &self.debited_account_id == transaction.authority()
+                    && self.sponsor_program_id.is_none()
+                    && self.sponsor_program_revision.is_none() => {}
+            (FeePaymentIntent::Sponsor(payment), FeeDebitSource::SponsorProgram(program_id))
+                if program_id == &payment.program_id
+                    && self.sponsor_program_id.as_ref() == Some(&payment.program_id)
+                    && self.sponsor_program_revision.map(NonZeroU64::get)
+                        == Some(payment.program_revision) => {}
+            _ => return Err(FeePaymentReceiptError::SignedPayerMismatch),
+        }
+        for charge in &self.charges {
+            let authorized = transaction
+                .fee_payment_intent()
+                .charge_limits()
+                .iter()
+                .any(|limit| {
+                    limit.kind == charge.kind
+                        && limit.asset_definition_id == charge.fee_asset_id
+                        && charge.charged_quantity <= limit.max_amount
+                });
+            if !authorized {
+                return Err(FeePaymentReceiptError::ChargeNotAuthorized(charge.kind));
+            }
+        }
+        Ok(())
+    }
+}
 impl TransactionResult {
     /// Construct a transaction result without independent-batch receipts.
     #[inline]
     #[must_use]
     pub fn new(inner: TransactionResultInner) -> Self {
-        Self(inner, Vec::new())
+        Self(inner, Vec::new(), None)
     }
     /// Durable per-leg receipts emitted by an independently settled native transfer batch.
     #[inline]
@@ -2555,6 +3051,17 @@ impl TransactionResult {
     #[inline]
     pub fn set_batch_transfer_outcomes(&mut self, outcomes: Vec<AssetBatchTransferOutcome>) {
         self.1 = outcomes;
+    }
+    /// Actual direct-settlement fee receipt committed by this result leaf, when charged.
+    #[inline]
+    #[must_use]
+    pub fn fee_payment(&self) -> Option<&FeePaymentReceipt> {
+        self.2.as_ref()
+    }
+    /// Replace the actual direct-settlement receipt committed by this result leaf.
+    #[inline]
+    pub fn set_fee_payment(&mut self, receipt: Option<FeePaymentReceipt>) {
+        self.2 = receipt;
     }
     /// Hash for this transaction result.
     #[inline]

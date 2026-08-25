@@ -1359,7 +1359,7 @@ object NativeAmxV2 {
         ConsensusHash(string(value, path))
 
     private fun networkId(value: Any?, path: String): NetworkId =
-        NetworkId.parse(string(value, path))
+        NetworkId.parseNoritoJsonLiteral(string(value, path))
 
     private fun optionalHash(
         record: Map<String, Any?>,

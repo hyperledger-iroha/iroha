@@ -310,6 +310,23 @@ class CandidateStagerTests(unittest.TestCase):
         )
         self.assertIn("private const val TAIRA_I105_CHAIN_DISCRIMINANT = 369", source)
 
+    def test_candidate_identity_uses_the_shared_abi22_pin(self) -> None:
+        source = HARNESS.read_text(encoding="utf-8")
+        normalized = " ".join(source.split())
+        self.assertIn(
+            "KagemushaCandidateLabNative.nativeBridgeAbiVersion() == "
+            "KagemushaCandidateLabNative.REQUIRED_BRIDGE_ABI",
+            normalized,
+        )
+        self.assertIn(
+            "check(bridgeAbi == KagemushaCandidateLabNative.REQUIRED_BRIDGE_ABI)",
+            normalized,
+        )
+        self.assertNotIn("nativeBridgeAbiVersion() == 21", normalized)
+        self.assertNotIn("nativeBridgeAbiVersion() == 22", normalized)
+        self.assertNotIn("bridgeAbi == 21", normalized)
+        self.assertNotIn("bridgeAbi == 22", normalized)
+
     def test_scenario_authority_pins_the_public_taira_discriminant(self) -> None:
         self.assertEqual(stage.PUBLIC_TAIRA_CHAIN_DISCRIMINANT, 369)
         source = SCRIPT.read_text(encoding="utf-8")

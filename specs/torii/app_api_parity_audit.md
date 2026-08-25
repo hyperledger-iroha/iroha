@@ -38,9 +38,11 @@ feature-gated route builders (`add_app_api_routes`, `add_contracts_and_vk_routes
   unchanged. Canonical form queries ignore empty `&` segments, preserve empty
   names and values, apply byte-precise lossy UTF-8 decoding, sort by UTF-8
   bytes, and use the application/x-www-form-urlencoded safe set.
-- First-release network binding accepts only the exact genesis-derived
-  `hash:<64 uppercase hex digits>#<4 uppercase CRC-16 digits>` `NetworkId`
-  literal whose decoded 32-byte value carries the V1 marker bit. Canonical
+- First-release public-text network binding accepts only the exact genesis-derived
+  `<64 lowercase hex digits>` `NetworkId` whose decoded 32-byte value carries
+  the V1 marker bit. Norito JSON continues to encode typed `NetworkId` values
+  as checksummed `hash:<64 uppercase hex digits>#<4 uppercase CRC-16 digits>`.
+  Canonical
   nonces contain 1--256 visible ASCII bytes (`0x21..0x7e`). Methods are
   non-empty ASCII HTTP tokens of at most 32 bytes, and SDK URI signers require
   the exact root-relative ASCII wire path of at most 64 KiB.
@@ -64,12 +66,12 @@ feature-gated route builders (`add_app_api_routes`, `add_contracts_and_vk_routes
   deployment:
 ```ts
 import { buildCanonicalRequestHeaders, NetworkId } from "@iroha/iroha-js";
-const networkId = NetworkId.parse("hash:32C903E5B3497E34C2B844EBFE8A39C19E6CF8F95D44C1FFB8BA9DCB42F91149#A2F0");
+const networkId = NetworkId.parse("32c903e5b3497e34c2b844ebfe8a39c19e6cf8f95d44c1ffb8ba9dcb42f91149");
 const headers = buildCanonicalRequestHeaders({ accountId, networkId, method: "get", path: "/v1/node/capabilities", query: "", body: "", privateKey });
 await fetch(`${torii}/v1/node/capabilities`, { headers });
 ```
 ```swift
-let networkId = try NetworkId(literal: "hash:32C903E5B3497E34C2B844EBFE8A39C19E6CF8F95D44C1FFB8BA9DCB42F91149#A2F0")
+let networkId = try NetworkId(literal: "32c903e5b3497e34c2b844ebfe8a39c19e6cf8f95d44c1ffb8ba9dcb42f91149")
 let headers = try CanonicalRequest.signingHeaders(accountId: accountId,
                                                   networkId: networkId,
                                                   method: "get",
@@ -80,7 +82,7 @@ let headers = try CanonicalRequest.signingHeaders(accountId: accountId,
 ```
 ```kotlin
 val networkId = NetworkId.parse(
-    "hash:32C903E5B3497E34C2B844EBFE8A39C19E6CF8F95D44C1FFB8BA9DCB42F91149#A2F0",
+    "32c903e5b3497e34c2b844ebfe8a39c19e6cf8f95d44c1ffb8ba9dcb42f91149",
 )
 val headers = CanonicalRequestSigner.buildHeaders(
     networkId,
@@ -93,7 +95,7 @@ val headers = CanonicalRequestSigner.buildHeaders(
 ```
 ```java
 NetworkId networkId = NetworkId.parse(
-    "hash:32C903E5B3497E34C2B844EBFE8A39C19E6CF8F95D44C1FFB8BA9DCB42F91149#A2F0");
+    "32c903e5b3497e34c2b844ebfe8a39c19e6cf8f95d44c1ffb8ba9dcb42f91149");
 ToriiCanonicalRequestAuth canonicalAuth =
     new ToriiCanonicalRequestAuth(accountId, signatureProvider);
 long timestampMs = System.currentTimeMillis();

@@ -47,7 +47,7 @@ public final class AliasTransactionPlanJsonParser {
     return new AliasSetupModels.AliasTransactionPlanBodyV1(
         intField(root, "version", "body.version"),
         stringField(root, "authority", "body.authority"),
-        NetworkId.parse(stringField(root, "network_id", "body.network_id")),
+        NetworkId.parseNoritoJsonLiteral(stringField(root, "network_id", "body.network_id")),
         parseAnchor(objectField(root, "anchor", "body.anchor")),
         mapObjects(root, "resources", "body.resources", AliasTransactionPlanJsonParser::parseResource),
         mapObjects(root, "instructions", "body.instructions", AliasTransactionPlanJsonParser::parseFrame),

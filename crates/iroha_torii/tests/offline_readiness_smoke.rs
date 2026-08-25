@@ -68,9 +68,12 @@ async fn offline_router_exposes_only_the_final_first_release_contract() {
     assert_eq!(capability.cash_handoff_capability, "cash_handoff_v1");
     assert_eq!(capability.required_bridge_abi_version, 22);
     assert_eq!(capability.max_hops, 8);
-    assert!(capability.ready);
+    assert!(!capability.ready);
     assert!(capability.assets.is_empty());
-    assert!(capability.blockers.is_empty());
+    assert_eq!(
+        capability.blockers,
+        iroha_data_model::offline::offline_capability_activation_blockers_v1()
+    );
     let legacy_selector = fixtures::request(
         &app,
         Request::builder()

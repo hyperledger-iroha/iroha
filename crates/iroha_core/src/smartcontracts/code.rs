@@ -893,7 +893,7 @@ mod tests {
         let manifest = manifest.signed(&kp);
         register_manifest(&authority, manifest.clone(), &mut stx).expect("register manifest");
         let contract_address = ContractAddress::derive(
-            &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
+            &"0000000000000000000000000000000000000000000000000000000000000001"
                 .parse()
                 .expect("canonical test network id"),
             &authority,
@@ -992,7 +992,7 @@ mod tests {
         let manifest = manifest.signed(&kp);
         register_manifest(&authority, manifest, &mut stx).expect("register manifest");
         let contract_address = ContractAddress::derive(
-            &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
+            &"0000000000000000000000000000000000000000000000000000000000000001"
                 .parse()
                 .expect("canonical test network id"),
             &authority,
@@ -1014,7 +1014,7 @@ mod tests {
         let mut block = state.block(default_header(1));
         let mut transaction = block.transaction();
         let contract_address = ContractAddress::derive(
-            &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
+            &"0000000000000000000000000000000000000000000000000000000000000001"
                 .parse()
                 .expect("canonical test network id"),
             &authority,
@@ -1224,7 +1224,7 @@ seiyaku LifecycleTwo {
         let mut transaction = block.transaction();
         transaction.tx_call_hash = Some(Hash::new(b"one-execution-two-lifecycle-transitions"));
         let contract_address = ContractAddress::derive(
-            &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
+            &"0000000000000000000000000000000000000000000000000000000000000001"
                 .parse()
                 .expect("canonical test network id"),
             &authority,
@@ -1258,7 +1258,7 @@ seiyaku LifecycleTwo {
     fn stale_hajimari_completion_rejects_deactivate_reactivate_aba() {
         let (state, authority, keypair) = test_state();
         let contract_address = ContractAddress::derive(
-            &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
+            &"0000000000000000000000000000000000000000000000000000000000000001"
                 .parse()
                 .expect("canonical test network id"),
             &authority,
@@ -1353,7 +1353,7 @@ seiyaku LifecycleAba {
         let mut block = state.block(default_header(1));
         let mut transaction = block.transaction();
         let contract_address = ContractAddress::derive(
-            &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
+            &"0000000000000000000000000000000000000000000000000000000000000001"
                 .parse()
                 .expect("canonical test network id"),
             &authority,
@@ -1525,7 +1525,7 @@ seiyaku LifecycleAba {
     fn subject_binding_initialization_builds_reverse_index() {
         let authority = AccountId::new(checked_keypair().public_key().clone());
         let address = ContractAddress::derive(
-            &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
+            &"0000000000000000000000000000000000000000000000000000000000000001"
                 .parse()
                 .expect("canonical test network id"),
             &authority,
@@ -1560,7 +1560,7 @@ seiyaku LifecycleAba {
         let authority_keypair = checked_keypair();
         let authority = AccountId::new(authority_keypair.public_key().clone());
         let address = ContractAddress::derive(
-            &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
+            &"0000000000000000000000000000000000000000000000000000000000000001"
                 .parse()
                 .expect("canonical test network id"),
             &authority,

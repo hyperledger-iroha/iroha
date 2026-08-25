@@ -40,4 +40,4 @@ if grep -REni '(class|record|interface)[[:space:]]+[^[:space:]]*Kagemusha[^[:spa
   exit 1
 fi
 
-echo "Kagemusha C# boundary passed: ABI-21/V4 Torii DTOs are present without a native prover claim."
+echo "Kagemusha C# boundary passed: Kagemusha data ABI V4 Torii DTOs are present without a native prover claim."

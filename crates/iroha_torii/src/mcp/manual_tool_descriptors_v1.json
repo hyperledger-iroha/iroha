@@ -68,8 +68,8 @@
         "properties": {
           "network_id": {
             "type": "string",
-            "pattern": "^hash:[0-9A-F]{64}#[0-9A-F]{4}$",
-            "description": "Canonical checksummed genesis-derived NetworkId."
+            "pattern": "^[0-9a-f]{63}[13579bdf]$",
+            "description": "Canonical raw lowercase genesis-derived NetworkId with its marker bit set."
           },
           "app_pk": {
             "type": "string",
@@ -125,8 +125,8 @@
           },
           "network_id": {
             "type": "string",
-            "pattern": "^hash:[0-9A-F]{64}#[0-9A-F]{4}$",
-            "description": "Canonical checksummed genesis-derived NetworkId."
+            "pattern": "^[0-9a-f]{63}[13579bdf]$",
+            "description": "Canonical raw lowercase genesis-derived NetworkId with its marker bit set."
           },
           "app_pk": {
             "type": "string",

@@ -176,10 +176,12 @@ use iroha_data_model::{
         ValidationFeeTreasuryPayoutBindingV1,
     },
 };
+#[cfg(test)]
+use std::mem;
 use std::{
     collections::{BTreeMap, HashSet},
     convert::{TryFrom, TryInto},
-    fmt, fs, mem,
+    fmt, fs,
     num::{NonZeroU32, NonZeroU64},
     panic::{AssertUnwindSafe, catch_unwind},
     path::PathBuf,

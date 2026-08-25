@@ -146,7 +146,7 @@ enum Command {
     /// Commands related to genesis
     #[clap(subcommand)]
     Genesis(genesis::Args),
-    /// Verify and promote authenticated Kagemusha ABI-21/V4 artifact releases
+    /// Verify and promote authenticated bridge ABI-22 / Kagemusha V4 artifact releases
     Kagemusha(kagemusha::Args),
     /// Emit and validate fail-closed Taira exact-12 privacy bootstrap artifacts
     PrivacyBootstrap(privacy_bootstrap::Args),
@@ -224,7 +224,9 @@ mod tests {
             parse(
                 "kagami privacy-bootstrap emit-taira-v1 \
                  --instructions-output ./privacy-instructions.json \
-                 --report-output ./privacy-report.json"
+                 --report-output ./privacy-report.json \
+                 --first-proposed-at-height 97 \
+                 --proposal-wave-spacing-blocks 1"
             )
             .is_ok()
         );
@@ -232,7 +234,9 @@ mod tests {
             parse(
                 "kagami privacy-bootstrap validate-taira-v1 \
                  --instructions ./privacy-instructions.json \
-                 --report ./privacy-report.json"
+                 --report ./privacy-report.json \
+                 --first-proposed-at-height 97 \
+                 --proposal-wave-spacing-blocks 1"
             )
             .is_ok()
         );
@@ -312,7 +316,7 @@ mod tests {
     fn kagemusha_v4_commands_are_distinct_and_require_complete_evidence() {
         assert!(
             parse("kagami kagemusha verify-release-v4 --bundle-dir ./release-v4").is_err(),
-            "ABI-21 verification must hash-check both independent evidence files"
+            "Kagemusha V4 verification must hash-check both independent evidence files"
         );
         assert!(
             parse(
@@ -353,7 +357,7 @@ mod tests {
                  --cryptographic-review ./review.evidence"
             )
             .is_err(),
-            "ABI-21 verification must receive the canonical policy explicitly"
+            "Kagemusha V4 verification must receive the canonical policy explicitly"
         );
         assert!(
             parse(

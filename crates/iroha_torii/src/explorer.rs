@@ -591,6 +591,10 @@ pub(crate) struct ExplorerTransactionDetailDto {
     pub status: String,
     pub rejection_reason: Option<ExplorerTransactionRejectionDto>,
     pub executable_payload: Value,
+    /// Exact signature-bound fee intent committed with the transaction.
+    pub fee_payment_intent: iroha_data_model::transaction::FeePaymentIntent,
+    /// Actual direct-settlement debit committed inside the transaction result, when present.
+    pub fee_payment: Option<iroha_data_model::transaction::FeePaymentReceipt>,
     pub metadata: Value,
     pub nonce: Option<u64>,
     pub signature: String,
@@ -1332,6 +1336,8 @@ pub(crate) fn transaction_detail_dto_with_hash(
                 message: format_rejection_reason_message(reason),
             }),
         executable_payload: executable_payload(tx.instructions()),
+        fee_payment_intent: tx.fee_payment_intent().clone(),
+        fee_payment: result.fee_payment().cloned(),
         metadata: metadata_to_json(tx.metadata()),
         nonce: tx.nonce().map(|nonce| nonce.get().into()),
         signature: hex::encode(tx.signature().payload().payload()),
@@ -2783,13 +2789,12 @@ mod tests {
             "purpose".parse().unwrap(),
             json::Value::String("test".into()),
         );
-        let mut builder = TransactionBuilder::new(
-            test_network_id(),
-            ALICE_ID.clone(),
-            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
-        )
-        .with_instructions(iter::empty::<iroha_data_model::isi::InstructionBox>())
-        .with_metadata(metadata);
+        let fee_payment =
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None);
+        let mut builder =
+            TransactionBuilder::new(test_network_id(), ALICE_ID.clone(), fee_payment.clone())
+                .with_instructions(iter::empty::<iroha_data_model::isi::InstructionBox>())
+                .with_metadata(metadata);
         builder.set_creation_time(StdDuration::from_millis(1_700_000_000));
         builder
             .set_ttl(StdDuration::from_secs(30))
@@ -2801,6 +2806,8 @@ mod tests {
         assert_eq!(dto.block, 12);
         assert_eq!(dto.status, "Rejected");
         assert_eq!(dto.authority, ALICE_ID.to_string());
+        assert_eq!(dto.fee_payment_intent, fee_payment);
+        assert!(dto.fee_payment.is_none());
         assert_eq!(dto.nonce, Some(7));
         assert!(dto.time_to_live.is_some());
         assert_eq!(
@@ -2830,6 +2837,22 @@ mod tests {
             }
             _ => panic!("rejection reason should serialize into object"),
         }
+        let serialized_detail = json::to_value(&dto).expect("transaction detail should serialize");
+        let serialized_fee = json::to_value(&fee_payment).expect("fee intent should serialize");
+        assert_eq!(
+            serialized_detail
+                .as_object()
+                .and_then(|object| object.get("fee_payment_intent")),
+            Some(&serialized_fee),
+            "transaction detail must expose the exact committed fee intent"
+        );
+        assert_eq!(
+            serialized_detail
+                .as_object()
+                .and_then(|object| object.get("fee_payment")),
+            Some(&Value::Null),
+            "transaction detail must expose actual settlement separately and explicitly null"
+        );
     }
     #[test]
     fn transaction_detail_includes_repetition_error_context_in_message() {

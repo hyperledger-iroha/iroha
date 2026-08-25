@@ -313,7 +313,7 @@ final class IrohaPeerWireMessageV1Tests: XCTestCase {
         }
     }
 
-    func testKagemushaProfileRequiresExactNativeIndependentABI21Envelope() throws {
+    func testKagemushaProfileRequiresExactNativeIndependentV4Envelope() throws {
         let canonical = irohaPeerKagemushaStructuralArchiveV1(
             kind: .receiveRequest,
             payload: Data([0x51])

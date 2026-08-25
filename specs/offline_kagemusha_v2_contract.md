@@ -1,8 +1,8 @@
 # Retained V2 primitives and the V4 lifecycle
 
-Kagemusha is the only offline-cash protocol. ABI 21, manifest V4, and the V4
-top-up, recursive, verification, and redemption carriers are the sole
-lifecycle. The `V2` suffix survives only on unchanged leaf primitives that V4
+Kagemusha is the only offline-cash protocol. Mobile bridge ABI22, Kagemusha
+data ABI V4, and the V4 top-up, recursive, verification, and redemption
+carriers are the sole lifecycle. The `V2` suffix survives only on unchanged leaf primitives that V4
 intentionally embeds: scaled amounts, note descriptors and openings,
 authorization, recipient requests and acknowledgements, membership paths, and
 top-up finality proofs. A V2 or V3 lifecycle archive is never upgraded to V4.
@@ -127,9 +127,13 @@ The complete first-release route set is:
 The legacy-named readiness route reports the universal, asset-neutral
 application protocol: `mandatory = false`,
 `cash_handoff_capability = "cash_handoff_v1"`, bridge ABI 22, maximum hop count
-8, `ready = true`, and empty `assets` and `blockers`. It takes no required query
+8, `ready = false`, an empty `assets` array, and the exact ordered
+`offline_cash_authenticated_release_unavailable`,
+`offline_cash_eligible_asset_unavailable`, and
+`offline_cash_proof_backend_unavailable` blockers. It takes no required query
 and never evaluates an asset, domain, dataspace, verifier catalog, or proof
-backend. Wallet/device handoff must continue without network discovery.
+backend. The response advertises the wire contract but grants no production
+proof authority; wallet/device handoff must continue without network discovery.
 
 Top-up and redemption accept no JSON body or encoded-byte wrapper. A canonical
 lowercase 64-hex `Idempotency-Key` equals the signed operation id. Identical

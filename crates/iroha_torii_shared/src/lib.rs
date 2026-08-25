@@ -5,7 +5,7 @@ use iroha_data_model::{
     nexus::{DataSpaceId, FeeDebitSource, FeeSponsorProgramId, UniversalAccountId},
     prelude::Quantity,
     query::CommittedTransaction,
-    transaction::{FeeChargeKind, FeePaymentIntent, TransactionPayload},
+    transaction::{FeeChargeKind, FeePaymentIntent, FeePaymentReceipt, TransactionPayload},
 };
 use norito::derive::{JsonDeserialize, JsonSerialize, NoritoDeserialize, NoritoSerialize};
 /// Shared data-availability helpers (sampling, assignment).
@@ -146,9 +146,6 @@ pub mod uri {
     pub const QUERY: &str = "/v1/query";
     /// URI used to evaluate offline-payment readiness.
     pub const OFFLINE_READINESS: &str = crate::route_catalog::offline::READINESS_PATH;
-    /// URI used to resolve proof-bearing active receiver registration lineage.
-    pub const OFFLINE_RECIPIENT_LINEAGE: &str =
-        crate::route_catalog::offline::RECIPIENT_LINEAGE_PATH;
     /// URI used to submit an online-to-offline top-up operation.
     pub const OFFLINE_TOP_UP: &str = crate::route_catalog::offline::TOP_UP_PATH;
     /// URI used to submit an offline redemption operation.
@@ -705,11 +702,20 @@ pub struct PipelineTransactionStatus {
 #[derive(
     JsonDeserialize, JsonSerialize, NoritoDeserialize, NoritoSerialize, Debug, Clone, PartialEq, Eq,
 )]
+#[norito(deny_unknown_fields)]
 pub struct PipelineTransactionDetailsResponse {
     /// Canonical signed transaction hash requested by the caller.
     pub hash: String,
     /// Exact committed transaction, including its entrypoint, result, and batch receipts.
     pub transaction: CommittedTransaction,
+    /// Exact signature-bound fee intent; never an actual-settlement receipt.
+    pub fee_payment_intent: FeePaymentIntent,
+    /// Actual direct-settlement receipt, byte/field-equal to the nested result field when present.
+    ///
+    /// This field is required even when null so legacy `fee_payment`-as-intent responses fail
+    /// closed instead of being silently reinterpreted.
+    #[norito(required)]
+    pub fee_payment: Option<FeePaymentReceipt>,
     /// Trigger completions associated with the exact committed entrypoint.
     pub trigger_completions: Vec<TriggerCompletionSummary>,
 }

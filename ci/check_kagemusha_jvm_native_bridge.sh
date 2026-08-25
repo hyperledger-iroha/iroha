@@ -671,11 +671,28 @@ forbidden = {
     "connect_norito_get_chain_discriminant",
     "connect_norito_set_chain_discriminant",
     "connect_norito_kagemusha_recipient_registration_lineage_verify_v1",
+    "connect_norito_kagemusha_recipient_lineage_query_create_v2",
+    "connect_norito_kagemusha_recipient_registration_lineage_verify_v2",
     "connect_norito_kagemusha_request_authorization_create_v2",
+    "CONNECT_NORITO_OFFLINE_CASH_TESTNET_DEVICE_EMULATOR_DO_NOT_SHIP_V1",
+    "connect_norito_offline_cash_device_capabilities_v1",
+    "connect_norito_offline_cash_device_execute_v1",
+    "Java_org_hyperledger_iroha_sdk_offline_"
+    "OfflineCashDeviceLifecycleBridgeV1_00024NativeEndpoint_nativeCapabilitiesV1",
+    "Java_org_hyperledger_iroha_sdk_offline_"
+    "OfflineCashDeviceLifecycleBridgeV1_00024NativeEndpoint_nativeExecuteV1",
     "Java_org_hyperledger_iroha_sdk_offline_"
     "KagemushaRecursiveSpendProver_nativeCreateAuthorizationV2",
     "Java_org_hyperledger_iroha_android_offline_"
     "KagemushaRecursiveSpendProver_nativeCreateAuthorizationV2",
+    "Java_org_hyperledger_iroha_sdk_offline_"
+    "KagemushaRecursiveSpendProver_nativeCreateRecipientLineageQueryV2",
+    "Java_org_hyperledger_iroha_android_offline_"
+    "KagemushaRecursiveSpendProver_nativeCreateRecipientLineageQueryV2",
+    "Java_org_hyperledger_iroha_sdk_offline_"
+    "KagemushaRecursiveSpendProver_nativeVerifyRecipientRegistrationLineageV2",
+    "Java_org_hyperledger_iroha_android_offline_"
+    "KagemushaRecursiveSpendProver_nativeVerifyRecipientRegistrationLineageV2",
 }
 missing = sorted(required - symbols)
 present_forbidden = sorted(forbidden & symbols)

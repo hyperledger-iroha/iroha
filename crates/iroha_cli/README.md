@@ -86,7 +86,8 @@ Operator reads require an explicit runtime key file whose public key is allowlis
 Pass the absolute file path on every invocation; the CLI does not read this credential from the
 environment or client TOML and never substitutes the account key. On Unix the file must be an
 owner-owned, singly linked regular file with exact mode `0600`. Requests are signed for the exact
-`network_id` in `client.toml`.
+`network_id` in `client.toml`. That public config value is exactly 64 lowercase hexadecimal
+characters with the marker bit set; checksummed `hash:UPPER#CRC` text is reserved for Norito JSON.
 
 Fetch the exact reducer-owned consensus status:
 

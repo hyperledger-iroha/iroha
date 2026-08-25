@@ -52,7 +52,7 @@ fi
   IrohaSwift/Tests/IrohaSwiftTests/KagemushaHardwareAuthorizationV2Tests.swift \
   IrohaSwift/Tests/IrohaSwiftTests/KagemushaDeviceAttestationSignedTransactionTests.swift \
   IrohaSwift/Tests/IrohaSwiftTests/KagemushaScaledAmountTests.swift \
-  IrohaSwift/Tests/IrohaSwiftTests/OfflineDeviceAttestationABI21ParityTests.swift \
+  IrohaSwift/Tests/IrohaSwiftTests/OfflineDeviceAttestationABI22ParityTests.swift \
   IrohaSwift/Tests/IrohaSwiftTests/ConnectAsyncSequenceTests.swift \
   IrohaSwift/Tests/IrohaSwiftTests/ConnectClientTests.swift \
   IrohaSwift/Tests/IrohaSwiftTests/ConnectCryptoTests.swift \
@@ -124,7 +124,7 @@ fi
 
 (
   cd IrohaSwift
-  run_swift_test --filter OfflineDeviceAttestationABI21ParityTests
+  run_swift_test --filter OfflineDeviceAttestationABI22ParityTests
 )
 
 (

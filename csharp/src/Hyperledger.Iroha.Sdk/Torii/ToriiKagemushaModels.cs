@@ -58,7 +58,7 @@ public sealed record class ToriiKagemushaActiveVerifier
 }
 
 /// <summary>
-/// Authenticated ABI-21/manifest-V4 release selected by Torii.
+/// Authenticated Kagemusha V4/manifest-V4 release selected by Torii.
 /// </summary>
 public sealed record class ToriiKagemushaAuthenticatedArtifactSetV4
 {
@@ -88,7 +88,7 @@ public sealed record class ToriiKagemushaAuthenticatedArtifactSetV4
 }
 
 /// <summary>
-/// Snapshot-bound ABI-21/V4 Kagemusha readiness projection.
+/// Snapshot-bound bridge ABI-22 / Kagemusha V4 readiness projection.
 /// </summary>
 public sealed record class ToriiKagemushaReadinessV4
 {

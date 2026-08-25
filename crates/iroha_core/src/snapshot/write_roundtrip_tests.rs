@@ -251,7 +251,7 @@ async fn signed_snapshot_roundtrip_preserves_authoritative_alias_revert_maps() {
         bindings.commit();
     }
     let contract_address = ContractAddress::derive(
-        &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
+        &"0000000000000000000000000000000000000000000000000000000000000001"
             .parse()
             .expect("canonical test network id"),
         &owner,

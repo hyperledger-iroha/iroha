@@ -53,7 +53,7 @@ internal object MusubiJsonV1 {
             "response.universal_release",
         )
         return MusubiExactReleaseSnapshotV1(
-            NetworkId.parse(string(root["network_id"], "response.network_id")),
+            NetworkId.parseNoritoJsonLiteral(string(root["network_id"], "response.network_id")),
             snapshot,
             homeRelease,
             universalRelease,
@@ -187,7 +187,7 @@ internal object MusubiJsonV1 {
         return MusubiResolverIndexPageV1(
             decodeQuery("/v1/musubi/queries/resolver-index", root["query"])
                 as MusubiResolverIndexQueryV1,
-            NetworkId.parse(string(root["network_id"], "response.network_id")),
+            NetworkId.parseNoritoJsonLiteral(string(root["network_id"], "response.network_id")),
             items,
             cursor,
             snapshot,
@@ -236,7 +236,7 @@ internal object MusubiJsonV1 {
             parseArchiveLocation(item, "response.items[$index]")
         }
         return MusubiArchiveLocationPageV1(
-            NetworkId.parse(string(root["network_id"], "response.network_id")),
+            NetworkId.parseNoritoJsonLiteral(string(root["network_id"], "response.network_id")),
             parseArchiveRecord(root["archive"], "response.archive"),
             items,
             cursor,
@@ -254,7 +254,7 @@ internal object MusubiJsonV1 {
             parseArchiveRetentionDecision(item, "response.items[$index]")
         }
         return MusubiArchiveRetentionPageV1(
-            NetworkId.parse(string(root["network_id"], "response.network_id")),
+            NetworkId.parseNoritoJsonLiteral(string(root["network_id"], "response.network_id")),
             items,
             u64(root["finalized_time_ms"], "response.finalized_time_ms"),
             parseSnapshot(root["snapshot"], "response.snapshot"),
@@ -296,7 +296,7 @@ internal object MusubiJsonV1 {
         return MusubiOrderedPrefixPageV1(
             decodeQuery("/v1/musubi/queries/ordered-prefix", root["query"])
                 as MusubiOrderedPrefixQueryV1,
-            NetworkId.parse(string(root["network_id"], "response.network_id")),
+            NetworkId.parseNoritoJsonLiteral(string(root["network_id"], "response.network_id")),
             parseNamespaceBinding(root["namespace_binding"], "response.namespace_binding"),
             items,
             cursor,
@@ -1147,7 +1147,7 @@ internal object MusubiJsonV1 {
             ),
         )
         val typedBinding = MusubiSeedIngressReceiptBindingV1(
-            NetworkId.parse(
+            NetworkId.parseNoritoJsonLiteral(
                 string(binding["network_id"], "$field.payload.binding.network_id"),
             ),
             string(binding["publisher"], "$field.payload.binding.publisher"),
@@ -1260,7 +1260,7 @@ internal object MusubiJsonV1 {
             setOf("height", "block_hash"),
         )
         val typedBinding = MusubiProviderBundleVerificationBindingV1(
-            NetworkId.parse(
+            NetworkId.parseNoritoJsonLiteral(
                 string(binding["network_id"], "$field.payload.binding.network_id"),
             ),
             newtypeText(binding["provider_id"], "$field.payload.binding.provider_id"),

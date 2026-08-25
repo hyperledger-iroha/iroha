@@ -1,4 +1,4 @@
-//! Generate the canonical ABI-21 Kagemusha peer-payment fixture used by Swift tests.
+//! Generate the canonical Kagemusha data ABI V4 peer-payment fixture used by Swift tests.
 use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair};
 use iroha_data_model::{
     NetworkId,
@@ -410,7 +410,7 @@ fn fixture(request: &KagemushaRecipientPaymentRequestV2) -> KagemushaRecursiveSp
     let asset = request.asset().clone();
     let binding = KagemushaRecursiveSpendArtifactBindingV4 {
         version: KAGEMUSHA_RECURSIVE_SPEND_WIRE_VERSION_V4,
-        generation: "swift-kagemusha-abi21-fixture".to_owned(),
+        generation: "swift-kagemusha-v4-fixture".to_owned(),
         manifest_sha256: [0x51; 32],
     };
     let mut validator_keys = (0_u8..4)

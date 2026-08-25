@@ -47,7 +47,7 @@ directory already contains a file, preventing partial or mixed releases.
 `bundle_version: 1`. It records:
 
 - `bridge_abi_version: u32`, `wire_version: 4`, `network_id` equal to the
-  canonical checksummed hash literal of the exact Taira genesis header,
+  canonical raw lowercase 64-hex text of the exact Taira genesis header,
   `canonical_ds_asset_definition_id` equal to the typed `ds#boi.is` ID, and
   `asset_scale: 2`;
 - `evaluated_block_height`, `evaluated_block_hash_hex`,

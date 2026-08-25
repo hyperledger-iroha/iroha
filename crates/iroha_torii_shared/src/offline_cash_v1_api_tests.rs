@@ -7,13 +7,17 @@ use iroha_data_model::{
     block::BlockHeader,
     domain::DomainId,
     offline::{
-        KagemushaDevicePublicKeyV2, KagemushaDeviceSignatureV2,
-        OFFLINE_CASH_HISTORY_ACCUMULATOR_BYTES_V1, OfflineCashPairedProofV1,
+        KagemushaDevicePublicKeyV2, KagemushaDeviceSignatureV2, OfflineCashIpaLineageV1,
+        OfflineCashPairedProofV1, OfflineCashRecursivePairBindingV1, OfflineCashTransferResultV1,
         OfflineCashTransferStatementV1, offline_cash_receiver_key_reference_v1,
     },
 };
 
 const FIXTURE_PUBLIC_KEY_HEX: &str = "041e18532fd4754c02f3041d9c75ceb33b83ffd81ac7ce4fe882ccb1c98bc5896ea46c311c4e2ff40dd96a3653e6e45445d32dfe486eced75c7a90c6a18881c0a3";
+const FIXTURE_ENCRYPTION_PUBLIC_KEY: [u8; 32] = [
+    0x85, 0x20, 0xf0, 0x09, 0x89, 0x30, 0xa7, 0x54, 0x74, 0x8b, 0x7d, 0xdc, 0xb4, 0x3e, 0xf7, 0x5a,
+    0x0d, 0xbf, 0x3a, 0x0d, 0x26, 0x38, 0x1a, 0xf4, 0xeb, 0xa4, 0xa9, 0x8e, 0xaa, 0x9b, 0x4e, 0x6a,
+];
 const FIXTURE_REQUEST_SIGNATURE_HEX: &str = "710623ea92107972f5941bb99b4a8a0befb12a00e6c2a8c21e14fa98204dfc54042c045b5eeedfb52c9482cbafb4a44a95f8472039dbffd67658a749701848e0";
 const FIXTURE_OTHER_REQUEST_SIGNATURE_HEX: &str = "d08f44598c21854fb9bd0ad67cbbbf5be69f7e5bbdde7fc17b1912e5288c0fbc5f4b1735e1488ee5c5f704846307a8972634e2b8535a5ecd86b1dab27af6bdef";
 const FIXTURE_ACKNOWLEDGEMENT_SIGNATURE_HEX: &str = "e0aa7ce4bc306377b2a70b28e1f6fd9e269d7eefd1051f7c99d4e203c30c4d405aa182e83eefc8fe327fdc53d5c101b97e2ecdc1af5c430f9f7fe9ffab6862b5";
@@ -81,7 +85,11 @@ fn request_with_id(request_id: [u8; 32]) -> OfflineCashPaymentRequestV1 {
         amount: 12_345,
         recipient: account(),
         receiver_balance_commitment: [2; 32],
-        recipient_key_reference: offline_cash_receiver_key_reference_v1(&public_key),
+        recipient_key_reference: offline_cash_receiver_key_reference_v1(
+            &public_key,
+            FIXTURE_ENCRYPTION_PUBLIC_KEY,
+        ),
+        recipient_encryption_public_key: FIXTURE_ENCRYPTION_PUBLIC_KEY,
         receiver_public_key: public_key,
         request_id,
         issued_at_ms: 1_000,
@@ -93,6 +101,14 @@ fn request_with_id(request_id: [u8; 32]) -> OfflineCashPaymentRequestV1 {
 
 fn request() -> OfflineCashPaymentRequestV1 {
     request_with_id([3; 32])
+}
+
+fn test_lineage(marker: u8) -> OfflineCashIpaLineageV1 {
+    OfflineCashIpaLineageV1::new(
+        std::array::from_fn(|index| [u8::try_from(index + 1).expect("lineage index fits"); 32]),
+        [marker; 32],
+    )
+    .expect("fixed-shape test lineage")
 }
 
 fn payment(request: &OfflineCashPaymentRequestV1) -> OfflineCashPaymentV1 {
@@ -113,23 +129,26 @@ fn payment(request: &OfflineCashPaymentRequestV1) -> OfflineCashPaymentV1 {
     }
     .seal_transition()
     .expect("seal transition");
-    let semantic_digest = statement.canonical_digest().expect("statement digest");
+    let transfer = OfflineCashTransferResultV1::from_statement_against(&statement, request)
+        .expect("compact statement carrier");
     OfflineCashPaymentV1 {
         version: OFFLINE_CASH_WIRE_VERSION_V1,
-        request_digest,
-        statement,
+        transfer,
         proof: OfflineCashPairedProofV1 {
             version: OFFLINE_CASH_WIRE_VERSION_V1,
-            eq_protocol_digest: [8; 32],
-            ep_protocol_digest: [9; 32],
-            semantic_digest,
             eq_proof: vec![0xA1; 128],
             ep_proof: vec![0xB2; 128],
-            eq_history: vec![0xC3; OFFLINE_CASH_HISTORY_ACCUMULATOR_BYTES_V1],
-            ep_history: vec![0xD4; OFFLINE_CASH_HISTORY_ACCUMULATOR_BYTES_V1],
+            eq_carried_lineage: test_lineage(0xA5),
+            ep_carried_lineage: test_lineage(0xB6),
+            recursive_pair_binding: OfflineCashRecursivePairBindingV1::new_state(
+                [0xC3; 32],
+                [0xD4; 32],
+                &OfflineCashRecursivePairBindingV1::new_guard_bundle([0xA1; 32], [0xB2; 32])
+                    .expect("GuardBundle pair binding"),
+            )
+            .expect("recursive pair binding"),
         },
         encrypted_credit: vec![0xE5; 128],
-        artifact_manifest_digest: [10; 32],
     }
 }
 

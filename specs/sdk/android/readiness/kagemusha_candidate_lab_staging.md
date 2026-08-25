@@ -1,4 +1,4 @@
-# Kagemusha ABI-21 Android candidate staging
+# Kagemusha data ABI V4 / mobile bridge ABI22 Android candidate staging
 
 The physical-device lab accepts only a candidate generated from the exact
 current Iroha checkout. It does not synthesize proofs, consensus data,

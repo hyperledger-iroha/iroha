@@ -3116,7 +3116,7 @@ public struct MusubiSeedIngressReceiptBindingV1: Codable, Hashable, Sendable {
         self.carBodyLength = carBodyLength
         self.nonce = nonce
         self.raw = [
-            "network_id": .string(networkId.literal),
+            "network_id": .string(networkId.noritoJSONLiteral),
             "publisher": .string(publisher),
             "ingress_broker": .string(ingressBroker),
             "seed_provider": musubiRawNewtypeTextValue(seedProvider),
@@ -3140,7 +3140,7 @@ public struct MusubiSeedIngressReceiptBindingV1: Codable, Hashable, Sendable {
         let value = try decoder.singleValueContainer().decode(MusubiJSONValueV1.self)
         raw = try musubiRawObject(value, field: "seed-ingress binding", exactKeys: keys)
         networkId = try NetworkId(
-            literal: musubiRawString(raw["network_id"], field: "binding.network_id")
+            noritoJSONLiteral: musubiRawString(raw["network_id"], field: "binding.network_id")
         )
         publisher = try musubiRawString(raw["publisher"], field: "binding.publisher")
         ingressBroker = try musubiRawString(

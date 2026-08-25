@@ -1,5 +1,3 @@
-using System.Globalization;
-using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 
@@ -13,7 +11,7 @@ public sealed class NetworkId : IEquatable<NetworkId>
 {
     public const int ByteLength = 32;
 
-    private const int CanonicalLiteralLength = 74;
+    private const int CanonicalLiteralLength = ByteLength * 2;
     private readonly byte[] bytes;
     private readonly string literal;
 
@@ -23,37 +21,21 @@ public sealed class NetworkId : IEquatable<NetworkId>
         this.bytes = bytes;
     }
 
-    /// <summary>Parses one exact checksummed uppercase Norito Hash literal.</summary>
+    /// <summary>Parses one exact 64-character lowercase hexadecimal network id.</summary>
     public static NetworkId Parse(string value)
     {
         ArgumentNullException.ThrowIfNull(value);
         if (value.Length != CanonicalLiteralLength
-            || !value.StartsWith("hash:", StringComparison.Ordinal)
-            || value[69] != '#')
+            || value.Any(static item => !IsLowerHex(item)))
         {
             throw new FormatException(
-                "Network id must be a canonical checksummed Norito Hash literal.");
+                "Network id must be exactly 64 lowercase hexadecimal characters.");
         }
 
-        var body = value.Substring(5, 64);
-        var checksum = value.Substring(70, 4);
-        if (body.Any(static item => !IsUpperHex(item))
-            || checksum.Any(static item => !IsUpperHex(item))
-            || !ushort.TryParse(
-                checksum,
-                NumberStyles.HexNumber,
-                CultureInfo.InvariantCulture,
-                out var supplied)
-            || supplied != Crc16(Encoding.ASCII.GetBytes($"hash:{body}")))
-        {
-            throw new FormatException(
-                "Network id has a malformed or invalid Norito Hash checksum.");
-        }
-
-        var decoded = Convert.FromHexString(body);
+        var decoded = Convert.FromHexString(value);
         if ((decoded[^1] & 1) == 0)
         {
-            throw new FormatException("Network id Hash marker bit must be set.");
+            throw new FormatException("Network id hash marker bit must be set.");
         }
 
         return new NetworkId(value, decoded);
@@ -78,25 +60,8 @@ public sealed class NetworkId : IEquatable<NetworkId>
 
     public static bool operator !=(NetworkId? left, NetworkId? right) => !(left == right);
 
-    private static bool IsUpperHex(char value) =>
-        value is >= '0' and <= '9' or >= 'A' and <= 'F';
-
-    private static ushort Crc16(ReadOnlySpan<byte> value)
-    {
-        var crc = 0xffff;
-        foreach (var item in value)
-        {
-            crc ^= item << 8;
-            for (var bit = 0; bit < 8; bit++)
-            {
-                crc = (crc & 0x8000) != 0
-                    ? ((crc << 1) ^ 0x1021) & 0xffff
-                    : (crc << 1) & 0xffff;
-            }
-        }
-
-        return (ushort)crc;
-    }
+    private static bool IsLowerHex(char value) =>
+        value is >= '0' and <= '9' or >= 'a' and <= 'f';
 }
 
 internal sealed class NetworkIdJsonConverter : JsonConverter<NetworkId>
@@ -113,7 +78,9 @@ internal sealed class NetworkIdJsonConverter : JsonConverter<NetworkId>
         }
         catch (FormatException error)
         {
-            throw new JsonException("NetworkId must be a canonical checksummed literal.", error);
+            throw new JsonException(
+                "NetworkId must be exactly 64 lowercase hexadecimal characters with its marker bit set.",
+                error);
         }
     }
 

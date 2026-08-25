@@ -31,6 +31,7 @@ use toml::Value;
 use url::Url;
 const CANONICAL_TAIRA_CHAIN_ID: &str = "fc56984b-2be7-431d-840e-21514d1883f0";
 const CANONICAL_TAIRA_CHAIN_DISCRIMINANT: u16 = 369;
+const DEFAULT_TAIRA_PROFILE_CONFIG: &str = "/run/secrets/taira-canary-client.toml";
 #[derive(Debug, Parser)]
 #[command(
     about = "Create, stage, fund, enroll, and activate an exact Taira fee sponsor program",
@@ -54,14 +55,26 @@ struct Args {
     #[arg(long)]
     fund_amount: Quantity,
     /// Consensus height at which revision 1 becomes active.
-    #[arg(long)]
-    activate_at_height: u64,
+    #[arg(
+        long,
+        required_unless_present = "activate_at_next_block",
+        conflicts_with = "activate_at_next_block"
+    )]
+    activate_at_height: Option<u64>,
+    /// Hermetic-only activation at the peer's exact next block. Requires loopback Torii and
+    /// `--hermetic-client-config`; no retry or second transaction is attempted.
+    #[arg(long, conflicts_with = "activate_at_height")]
+    activate_at_next_block: bool,
     /// Exact beneficiary to enroll. May be repeated. The sponsor is enrolled when omitted.
     #[arg(long = "beneficiary", value_name = "I105")]
     beneficiaries: Vec<String>,
     /// Runtime-only client profile containing the sponsor signer. This command never modifies it.
-    #[arg(long, default_value = "/run/secrets/taira-canary-client.toml")]
+    #[arg(long, default_value = DEFAULT_TAIRA_PROFILE_CONFIG)]
     profile_config: PathBuf,
+    /// Owner-only generated localnet client config. This explicit hermetic mode never applies to
+    /// the default Taira profile path and never prints its inline signer.
+    #[arg(long)]
+    hermetic_client_config: Option<PathBuf>,
     #[arg(long, default_value_t = 600)]
     status_timeout_secs: u64,
 }
@@ -133,6 +146,56 @@ fn taira_profile_signer(path: &Path) -> Result<(String, String, NetworkId)> {
     }
     let private_key = private_key.to_owned();
     Ok((authority, private_key, network_id))
+}
+
+fn require_owner_only_regular_file(path: &Path, label: &str) -> Result<()> {
+    let metadata = std::fs::symlink_metadata(path)
+        .wrap_err_with(|| format!("inspect {label} {}", path.display()))?;
+    if metadata.file_type().is_symlink() || !metadata.is_file() {
+        bail!("{label} must be a regular non-symlink file");
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt as _;
+        if metadata.permissions().mode() & 0o077 != 0 {
+            bail!("{label} must be owner-only");
+        }
+    }
+    Ok(())
+}
+
+fn load_hermetic_client_config(
+    path: &Path,
+    chain_id: &ChainId,
+    chain_discriminant: u16,
+    torii_url: &Url,
+) -> Result<Config> {
+    require_owner_only_regular_file(path, "hermetic client config")?;
+    if torii_url.scheme() != "http"
+        || torii_url.host_str() != Some("127.0.0.1")
+        || torii_url.port().is_none()
+        || torii_url.path() != "/"
+        || torii_url.query().is_some()
+        || torii_url.fragment().is_some()
+        || !torii_url.username().is_empty()
+        || torii_url.password().is_some()
+    {
+        bail!("hermetic Torii URL must be exactly http://127.0.0.1:<port>/");
+    }
+    let config = Config::load_file(path)
+        .map_err(|error| eyre::eyre!("load hermetic client config: {error:?}"))?;
+    if &config.chain != chain_id {
+        bail!("hermetic client chain differs from --chain-id");
+    }
+    if config.account_chain_discriminant != chain_discriminant {
+        bail!("hermetic client chain discriminant differs from --chain-discriminant");
+    }
+    if config.torii_api_url.as_str().trim_end_matches('/')
+        != torii_url.as_str().trim_end_matches('/')
+    {
+        bail!("hermetic client Torii URL differs from --torii-url");
+    }
+    Ok(config)
 }
 fn parse_taira_account(account: &str, discriminant: u16) -> Result<AccountId> {
     if account.contains('@') {
@@ -221,20 +284,53 @@ fn main() -> Result<()> {
     if args.fund_amount.is_zero() {
         bail!("--fund-amount must be positive");
     }
-    let (profile_account, profile_private_key, network_id) =
-        taira_profile_signer(&args.profile_config)?;
-    let profile_account = parse_taira_account(&profile_account, args.chain_discriminant)?;
-    let private_key = profile_private_key
-        .parse::<ExposedPrivateKey>()
-        .wrap_err("parse profile private key")?
-        .0;
-    let key_pair = KeyPair::from_private_key(private_key).wrap_err("derive key pair")?;
-    let signer = AccountId::new(key_pair.public_key().clone());
-    if signer != profile_account {
-        bail!(
-            "profile signer account `{signer}` does not match profile authority `{profile_account}`"
-        );
-    }
+    let mut client_config = if let Some(path) = args.hermetic_client_config.as_deref() {
+        if args.profile_config != PathBuf::from(DEFAULT_TAIRA_PROFILE_CONFIG) {
+            bail!("--profile-config cannot be combined with --hermetic-client-config");
+        }
+        load_hermetic_client_config(
+            path,
+            &args.chain_id,
+            args.chain_discriminant,
+            &args.torii_url,
+        )?
+    } else {
+        let (profile_account, profile_private_key, network_id) =
+            taira_profile_signer(&args.profile_config)?;
+        let profile_account = parse_taira_account(&profile_account, args.chain_discriminant)?;
+        let private_key = profile_private_key
+            .parse::<ExposedPrivateKey>()
+            .wrap_err("parse profile private key")?
+            .0;
+        let key_pair = KeyPair::from_private_key(private_key).wrap_err("derive key pair")?;
+        let signer = AccountId::new(key_pair.public_key().clone());
+        if signer != profile_account {
+            bail!(
+                "profile signer account `{signer}` does not match profile authority `{profile_account}`"
+            );
+        }
+        Config {
+            chain: args.chain_id.clone(),
+            network_id,
+            account: signer,
+            account_chain_discriminant: args.chain_discriminant,
+            key_pair,
+            basic_auth: None,
+            torii_api_url: args.torii_url.clone(),
+            torii_request_timeout: config::DEFAULT_TORII_REQUEST_TIMEOUT,
+            transaction_ttl: Duration::from_secs(900),
+            transaction_status_timeout: Duration::from_secs(args.status_timeout_secs),
+            transaction_add_nonce: true,
+            connect_queue_root: config::default_connect_queue_root(),
+            soracloud_http_witness_file: None,
+            sorafs_alias_cache: default_alias_cache_policy(),
+            sorafs_anonymity_policy: AnonymityPolicy::GuardPq,
+            sorafs_rollout_phase: SorafsRolloutPhase::default(),
+        }
+    };
+    client_config.transaction_status_timeout = Duration::from_secs(args.status_timeout_secs);
+    client_config.transaction_add_nonce = true;
+    let signer = client_config.account.clone();
     let revision: FeeSponsorProgramRevision =
         read_norito_json(&args.revision_json, "program revision JSON")?;
     revision
@@ -265,31 +361,28 @@ fn main() -> Result<()> {
             .map(|literal| parse_taira_account(literal, args.chain_discriminant))
             .collect::<Result<Vec<_>>>()?
     };
+    let client = Client::new(client_config);
+    let activate_at_height = if args.activate_at_next_block {
+        if args.hermetic_client_config.is_none() {
+            bail!("--activate-at-next-block requires --hermetic-client-config");
+        }
+        client
+            .get_status()
+            .wrap_err("query exact next hermetic activation height")?
+            .blocks
+            .checked_add(1)
+            .ok_or_else(|| eyre::eyre!("next hermetic activation height overflow"))?
+    } else {
+        args.activate_at_height
+            .ok_or_else(|| eyre::eyre!("--activate-at-height is required"))?
+    };
     let instructions = provisioning_instructions(
         revision,
         signer.clone(),
         beneficiaries,
         args.fund_amount,
-        args.activate_at_height,
+        activate_at_height,
     );
-    let client = Client::new(Config {
-        chain: args.chain_id,
-        network_id,
-        account: signer,
-        account_chain_discriminant: args.chain_discriminant,
-        key_pair,
-        basic_auth: None,
-        torii_api_url: args.torii_url,
-        torii_request_timeout: config::DEFAULT_TORII_REQUEST_TIMEOUT,
-        transaction_ttl: Duration::from_secs(900),
-        transaction_status_timeout: Duration::from_secs(args.status_timeout_secs),
-        transaction_add_nonce: true,
-        connect_queue_root: config::default_connect_queue_root(),
-        soracloud_http_witness_file: None,
-        sorafs_alias_cache: default_alias_cache_policy(),
-        sorafs_anonymity_policy: AnonymityPolicy::GuardPq,
-        sorafs_rollout_phase: SorafsRolloutPhase::default(),
-    });
     let mut payload = client.try_build_transaction_payload_from_items(
         instructions,
         fee_payment.clone(),
@@ -305,7 +398,9 @@ fn main() -> Result<()> {
     let transaction = client.try_sign_transaction_payload(payload)?;
     let hash = client.submit_transaction_blocking(&transaction)?;
     let receipt = norito::json!({
+        "schema": "iroha.taira-fee-sponsor-provision.v1",
         "hash": hash,
+        "activate_at_height": activate_at_height,
         "transaction": transaction,
         "fee_quote": quote,
     });

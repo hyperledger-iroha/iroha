@@ -230,6 +230,75 @@ impl fmt::Display for SetBatchTransferOutcomesError {
     }
 }
 impl std::error::Error for SetBatchTransferOutcomesError {}
+/// Error returned when actual direct-settlement fee receipts cannot be attached to result leaves.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SetFeePaymentReceiptsError {
+    /// The block does not yet carry transaction results.
+    MissingTransactionResults,
+    /// Entrypoint and result counts differ.
+    ResultCountMismatch {
+        /// Number of canonical entrypoints.
+        entrypoints: usize,
+        /// Number of canonical transaction results.
+        results: usize,
+    },
+    /// A receipt references a signed transaction absent from this block.
+    UnknownTransaction {
+        /// Unknown signed transaction hash.
+        hash: HashOf<SignedTransaction>,
+    },
+    /// One signed transaction hash identifies more than one result leaf.
+    AmbiguousTransaction {
+        /// Ambiguous signed transaction hash.
+        hash: HashOf<SignedTransaction>,
+    },
+    /// A receipt failed its exact transaction, result, payer, or block binding.
+    InvalidReceipt {
+        /// Signed transaction hash used to select the result leaf.
+        hash: HashOf<SignedTransaction>,
+        /// Closed receipt validation failure.
+        source: crate::transaction::signed::FeePaymentReceiptError,
+    },
+}
+impl fmt::Display for SetFeePaymentReceiptsError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::MissingTransactionResults => {
+                f.write_str("cannot attach fee-payment receipts before transaction results")
+            }
+            Self::ResultCountMismatch {
+                entrypoints,
+                results,
+            } => write!(
+                f,
+                "cannot attach fee-payment receipts to misaligned block results: {entrypoints} entrypoints, {results} results",
+            ),
+            Self::UnknownTransaction { hash } => {
+                write!(
+                    f,
+                    "fee-payment receipt references unknown transaction {hash}"
+                )
+            }
+            Self::AmbiguousTransaction { hash } => {
+                write!(f, "fee-payment receipt transaction {hash} is ambiguous")
+            }
+            Self::InvalidReceipt { hash, source } => {
+                write!(
+                    f,
+                    "invalid fee-payment receipt for transaction {hash}: {source}"
+                )
+            }
+        }
+    }
+}
+impl std::error::Error for SetFeePaymentReceiptsError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::InvalidReceipt { source, .. } => Some(source),
+            _ => None,
+        }
+    }
+}
 impl SignedBlock {
     /// Create new block with a given signature
     ///
@@ -591,6 +660,92 @@ impl SignedBlock {
         }
         for (index, receipts) in assignments {
             result.transaction_results[index].set_batch_transfer_outcomes(receipts);
+        }
+        result.result_merkle = result
+            .transaction_results
+            .iter()
+            .map(TransactionResult::hash)
+            .collect();
+        self.payload.header.result_merkle_root = result.result_merkle.root();
+        Ok(())
+    }
+    /// Attach actual direct-settlement receipts to their exact result leaves.
+    ///
+    /// Every receipt is checked against the signed fee intent, exact execution outcome, and
+    /// carrier coordinates before this method mutates the block. The result Merkle cache and
+    /// header projection are then rebuilt. Consensus authenticates the resulting receipt only
+    /// when a verified Sumeragi-v2 CommitQC binds this exact executed block wire.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`SetFeePaymentReceiptsError`] for missing/misaligned results, unknown or
+    /// duplicate signed transaction identities, or any structural/binding failure.
+    #[cfg(feature = "transparent_api")]
+    pub fn set_fee_payment_receipts(
+        &mut self,
+        receipts: BTreeMap<
+            HashOf<SignedTransaction>,
+            crate::transaction::signed::FeePaymentReceipt,
+        >,
+    ) -> Result<(), SetFeePaymentReceiptsError> {
+        let entrypoints = self.entrypoints_cloned().collect::<Vec<_>>();
+        let block_height = self.payload.header.height().get();
+        let block_hash = self.payload.header.hash();
+        let result = self
+            .result
+            .as_mut()
+            .ok_or(SetFeePaymentReceiptsError::MissingTransactionResults)?;
+        if entrypoints.len() != result.transaction_results.len() {
+            return Err(SetFeePaymentReceiptsError::ResultCountMismatch {
+                entrypoints: entrypoints.len(),
+                results: result.transaction_results.len(),
+            });
+        }
+        let mut result_index_by_tx_hash = BTreeMap::new();
+        for (index, entrypoint) in entrypoints.iter().enumerate() {
+            let transaction = match entrypoint {
+                TransactionEntrypoint::External(transaction) => transaction,
+                TransactionEntrypoint::SealedReveal(reveal) => reveal.signed_transaction(),
+                TransactionEntrypoint::SealedCommitment(_) | TransactionEntrypoint::Time(_) => {
+                    continue;
+                }
+            };
+            let transaction_hash = transaction.hash();
+            if result_index_by_tx_hash
+                .insert(transaction_hash, index)
+                .is_some()
+            {
+                return Err(SetFeePaymentReceiptsError::AmbiguousTransaction {
+                    hash: transaction_hash,
+                });
+            }
+        }
+        let mut assignments = Vec::with_capacity(receipts.len());
+        for (transaction_hash, receipt) in receipts {
+            let index = result_index_by_tx_hash
+                .get(&transaction_hash)
+                .copied()
+                .ok_or(SetFeePaymentReceiptsError::UnknownTransaction {
+                    hash: transaction_hash,
+                })?;
+            receipt
+                .validate_committed_binding(
+                    &entrypoints[index],
+                    &result.transaction_results[index],
+                    block_height,
+                    &block_hash,
+                )
+                .map_err(|source| SetFeePaymentReceiptsError::InvalidReceipt {
+                    hash: transaction_hash,
+                    source,
+                })?;
+            assignments.push((index, receipt));
+        }
+        for transaction_result in &mut result.transaction_results {
+            transaction_result.set_fee_payment(None);
+        }
+        for (index, receipt) in assignments {
+            result.transaction_results[index].set_fee_payment(Some(receipt));
         }
         result.result_merkle = result
             .transaction_results
@@ -2495,6 +2650,137 @@ mod tests {
         let deframed = deframe_versioned_signed_block_bytes(&framed).expect("deframe framed block");
         assert_eq!(deframed.bare_versioned.as_ref(), versioned.as_slice());
         assert!(deframed.bytes.as_ref()[1..].starts_with(MAGIC.as_slice()));
+    }
+    #[cfg(feature = "transparent_api")]
+    #[test]
+    fn historical_two_field_transaction_result_block_decodes_reencodes_and_replays() {
+        #[derive(Clone, Encode)]
+        struct HistoricalTransactionResultV0(
+            crate::transaction::signed::TransactionResultInner,
+            Vec<crate::events::data::prelude::AssetBatchTransferOutcome>,
+        );
+        #[derive(Encode)]
+        struct HistoricalBlockResultV0 {
+            time_triggers: Vec<crate::trigger::TimeTriggerEntrypoint>,
+            merkle: MerkleTree<crate::transaction::signed::TransactionEntrypoint>,
+            result_merkle: MerkleTree<crate::transaction::signed::TransactionResult>,
+            transaction_results: Vec<HistoricalTransactionResultV0>,
+            committed_fragment_count: u64,
+            fastpq_transcripts: BTreeMap<Hash, Vec<crate::fastpq::TransferTranscript>>,
+            axt_envelopes: Vec<crate::nexus::AxtEnvelopeRecord>,
+            trigger_completions: Vec<crate::events::trigger_completed::TriggerCompletedEvent>,
+            axt_policy_snapshot: crate::nexus::AxtPolicySnapshot,
+            axt_transitioned_dataspaces: BTreeSet<crate::nexus::DataSpaceId>,
+            lane_finality_statements: Vec<crate::nexus::LaneFinalityStatement>,
+        }
+        #[derive(Encode)]
+        struct HistoricalSignedBlockV0 {
+            signatures: BTreeSet<BlockSignature>,
+            payload: BlockPayload,
+            result: Option<HistoricalBlockResultV0>,
+        }
+
+        let keypair = KeyPair::try_from_seed(vec![0xA7; 32], Algorithm::Ed25519)
+            .expect("deterministic historical block signer");
+        let authority = crate::account::AccountId::new(keypair.public_key().clone());
+        let transaction = TransactionBuilder::new_genesis(
+            authority,
+            crate::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .sign(keypair.private_key());
+        let entry_hash = transaction.hash_as_entrypoint();
+        let mut block = SignedBlock::genesis(vec![transaction], keypair.private_key(), None, None);
+        block
+            .set_transaction_results(
+                Vec::new(),
+                &[entry_hash],
+                vec![TransactionResultInner::Ok(DataTriggerSequence::default())],
+            )
+            .expect("attach historical execution result");
+        let current_result = block.result.clone().expect("block result");
+        let historical_transaction_results = current_result
+            .transaction_results
+            .iter()
+            .map(|result| HistoricalTransactionResultV0(result.0.clone(), result.1.clone()))
+            .collect::<Vec<_>>();
+        for (historical_result, current_result) in historical_transaction_results
+            .iter()
+            .zip(current_result.transaction_results.iter())
+        {
+            let historical_bytes = historical_result.encode();
+            assert_eq!(current_result.encode(), historical_bytes);
+            assert_eq!(
+                current_result.hash(),
+                HashOf::from_untyped_unchecked(Hash::new(&historical_bytes)),
+            );
+        }
+        let historical_result_merkle: MerkleTree<crate::transaction::signed::TransactionResult> =
+            historical_transaction_results
+                .iter()
+                .map(|result| HashOf::from_untyped_unchecked(Hash::new(result.encode())))
+                .collect();
+        let historical_result_root = historical_result_merkle
+            .root()
+            .expect("historical result Merkle root");
+        let mut historical_payload = block.payload.clone();
+        historical_payload.header.result_merkle_root = Some(historical_result_root);
+        let historical = HistoricalSignedBlockV0 {
+            signatures: block.signatures.clone(),
+            payload: historical_payload,
+            result: Some(HistoricalBlockResultV0 {
+                time_triggers: current_result.time_triggers,
+                merkle: current_result.merkle,
+                result_merkle: historical_result_merkle,
+                transaction_results: historical_transaction_results,
+                committed_fragment_count: current_result.committed_fragment_count,
+                fastpq_transcripts: current_result.fastpq_transcripts,
+                axt_envelopes: current_result.axt_envelopes,
+                trigger_completions: current_result.trigger_completions,
+                axt_policy_snapshot: current_result.axt_policy_snapshot,
+                axt_transitioned_dataspaces: current_result.axt_transitioned_dataspaces,
+                lane_finality_statements: current_result.lane_finality_statements,
+            }),
+        };
+        norito::core::reset_decode_state();
+        let historical_payload = norito::codec::encode_adaptive(&historical);
+        let mut versioned = Vec::with_capacity(1 + historical_payload.len());
+        versioned.push(block.version());
+        versioned.extend_from_slice(&historical_payload);
+        let historical_wire = frame_versioned_signed_block_bytes(&versioned)
+            .expect("frame historical two-field block fixture");
+
+        let decoded = decode_framed_signed_block(&historical_wire)
+            .expect("current decoder accepts historical two-field block fixture");
+        assert!(
+            decoded
+                .results()
+                .all(|result| result.fee_payment().is_none())
+        );
+        assert_eq!(
+            decoded.header().result_merkle_root(),
+            Some(historical_result_root)
+        );
+        decoded
+            .validate_result_merkle_cache()
+            .expect("genuine historical result Merkle cache remains valid");
+        let replay_wire = decoded
+            .encode_wire()
+            .expect("re-encode historical block with the legacy None carrier");
+        assert_eq!(
+            replay_wire, historical_wire,
+            "decode/re-encode must preserve the exact historical executed-block wire"
+        );
+        let replayed = decode_framed_signed_block(&replay_wire)
+            .expect("Kura replay decoder accepts the exact historical block");
+        assert_eq!(decoded, replayed);
+        replayed
+            .validate_result_merkle_cache()
+            .expect("Kura replay preserves the historical result root");
+        assert!(
+            replayed
+                .results()
+                .all(|result| result.fee_payment().is_none())
+        );
     }
     #[test]
     fn versioned_block_roundtrip_preserves_instruction_order() {

@@ -34,7 +34,9 @@ object AliasTransactionPlanJsonParser {
         return AliasTransactionPlanBodyV1(
             intField(root, "version", "body.version"),
             stringField(root, "authority", "body.authority"),
-            NetworkId.parse(stringField(root, "network_id", "body.network_id")),
+            NetworkId.parseNoritoJsonLiteral(
+                stringField(root, "network_id", "body.network_id"),
+            ),
             parseAnchor(objectField(root, "anchor", "body.anchor")),
             arrayField(root, "resources", "body.resources").mapIndexed { index, value ->
                 parseResource(objectValue(value, "body.resources[$index]"), "body.resources[$index]")

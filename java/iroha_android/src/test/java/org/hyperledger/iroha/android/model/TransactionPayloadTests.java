@@ -23,7 +23,7 @@ public final class TransactionPayloadTests {
   private static final String CONTRACT_ADDRESS =
       "irohac1qyqqqqqqqqqqqqputuv64zhf0a0a4hhlqdj2lhnwuzq4xjq3qexfh";
   private static final String TEST_NETWORK_ID_LITERAL =
-      "hash:32C903E5B3497E34C2B844EBFE8A39C19E6CF8F95D44C1FFB8BA9DCB42F91149#A2F0";
+      "32c903e5b3497e34c2b844ebfe8a39c19e6cf8f95d44c1ffb8ba9dcb42f91149";
   private static final NetworkId TEST_NETWORK_ID = NetworkId.parse(TEST_NETWORK_ID_LITERAL);
   private static final String AUTHORITY = sampleAuthority();
 
@@ -101,9 +101,10 @@ public final class TransactionPayloadTests {
   public void transactionPayloadRequiresNominalNetworkId() {
     for (final String invalid :
         Arrays.asList(
-            TEST_NETWORK_ID_LITERAL.toLowerCase(Locale.ROOT),
-            TEST_NETWORK_ID_LITERAL.substring(0, TEST_NETWORK_ID_LITERAL.length() - 1) + "1",
-            TEST_NETWORK_ID_LITERAL.substring(0, TEST_NETWORK_ID_LITERAL.indexOf('#')),
+            TEST_NETWORK_ID_LITERAL.toUpperCase(Locale.ROOT),
+            TEST_NETWORK_ID_LITERAL.substring(0, TEST_NETWORK_ID_LITERAL.length() - 1) + "8",
+            TEST_NETWORK_ID_LITERAL.substring(0, TEST_NETWORK_ID_LITERAL.length() - 1),
+            "hash:32C903E5B3497E34C2B844EBFE8A39C19E6CF8F95D44C1FFB8BA9DCB42F91149#A2F0",
             "unicode-\u00e9",
             "network-label")) {
       assertIllegalArgument(() -> NetworkId.parse(invalid), "NetworkId");

@@ -86,11 +86,15 @@ def validate(
     expected_link_target,
     swift_loader=None,
     verify_repository_provenance=False,
+    lockfile_path=None,
 ):
     if verify_repository_provenance is not True:
         raise ValidationError("full repository provenance was not requested")
     if os.environ.get("PIN_OWNER_TEST_REJECT_PROVENANCE") == "1":
         raise ValidationError("simulated stale repository provenance")
+    expected_lock = os.environ.get("PIN_OWNER_TEST_EXPECT_LOCKFILE")
+    if expected_lock is not None and str(lockfile_path) != expected_lock:
+        raise ValidationError("selected external lock was not propagated")
     lock_path = manifest_path.parent.parent / ".NoritoBridge.publish.lockfile"
     if os.environ.get("PIN_OWNER_TEST_ASSERT_LOCK_HELD") == "1":
         descriptor = os.open(lock_path, os.O_RDWR)
@@ -321,6 +325,22 @@ def validate(
 
         self.write_loader(self.hashes)
         self.assertEqual(self.run_owner("--check").returncode, 0)
+
+    def test_external_lock_is_propagated_to_manifest_validation(self) -> None:
+        external_lock = self.temporary_root / "privacy-release" / "Cargo.lock"
+        external_lock.parent.mkdir()
+        external_lock.write_text("version = 4\n", encoding="utf-8")
+        self.write_loader(self.hashes)
+        result = self.run_owner(
+            "--check",
+            "--lockfile-path",
+            str(external_lock),
+            environment={
+                **os.environ,
+                "PIN_OWNER_TEST_EXPECT_LOCKFILE": str(external_lock),
+            },
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
 
     def test_output_mode_never_mutates_the_loader(self) -> None:
         preimage = self.loader.read_bytes()

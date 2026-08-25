@@ -142,6 +142,18 @@ EXPECTED_REQUIRED_SYMBOLS = [
     "connect_norito_offline_cash_peer_encode_acknowledgement_v1",
     "connect_norito_offline_cash_peer_decode_acknowledgement_v1",
     "connect_norito_offline_cash_release_probe_v1",
+    "connect_norito_offline_cash_artifact_begin_v1",
+    "connect_norito_offline_cash_artifact_write_v1",
+    "connect_norito_offline_cash_artifact_finalize_v1",
+    "connect_norito_offline_cash_artifact_cancel_v1",
+    "connect_norito_offline_cash_artifact_set_install_v1",
+    "connect_norito_offline_cash_artifact_set_uninstall_v1",
+    "connect_norito_offline_cash_wallet_session_open_v1",
+    "connect_norito_offline_cash_wallet_session_open_bound_v1",
+    "connect_norito_offline_cash_wallet_session_accept_payment_v1",
+    "connect_norito_offline_cash_wallet_session_accept_acknowledgement_v1",
+    "connect_norito_offline_cash_wallet_session_state_v1",
+    "connect_norito_offline_cash_wallet_session_close_v1",
     "iroha_privacy_compiled_profile_catalog_v1",
     "iroha_privacy_validate_compiled_profile_catalog_v1",
     "iroha_privacy_exact12_fixture_bundle_v1",
@@ -186,8 +198,6 @@ EXPECTED_REQUIRED_SYMBOLS = [
     "connect_norito_kagemusha_recipient_payment_request_signing_bytes_v2",
     "connect_norito_kagemusha_recipient_payment_request_create_v2",
     "connect_norito_kagemusha_recipient_payment_request_verify_v2",
-    "connect_norito_kagemusha_recipient_lineage_query_create_v2",
-    "connect_norito_kagemusha_recipient_registration_lineage_verify_v2",
     "connect_norito_kagemusha_recipient_receive_offer_create_v2",
     "connect_norito_kagemusha_recipient_receive_offer_project_v2",
     "connect_norito_kagemusha_recipient_receive_offer_verify_v2",
@@ -207,14 +217,25 @@ EXPECTED_FORBIDDEN_SYMBOLS = [
     "connect_norito_get_chain_discriminant",
     "connect_norito_set_chain_discriminant",
     "connect_norito_kagemusha_recipient_registration_lineage_verify_v1",
+    "connect_norito_kagemusha_recipient_lineage_query_create_v2",
+    "connect_norito_kagemusha_recipient_registration_lineage_verify_v2",
     "connect_norito_kagemusha_request_authorization_create_v2",
     "iroha_privacy_capabilities_v1",
     "iroha_privacy_validate_capabilities_v1",
     "iroha_privacy_proof_request_v1",
     "iroha_privacy_build_proof_v1",
     "iroha_privacy_verify_proof_v1",
+    "CONNECT_NORITO_OFFLINE_CASH_TESTNET_DEVICE_EMULATOR_DO_NOT_SHIP_V1",
+    "connect_norito_offline_cash_device_capabilities_v1",
+    "connect_norito_offline_cash_device_execute_v1",
+    "Java_org_hyperledger_iroha_sdk_offline_OfflineCashDeviceLifecycleBridgeV1_00024NativeEndpoint_nativeCapabilitiesV1",
+    "Java_org_hyperledger_iroha_sdk_offline_OfflineCashDeviceLifecycleBridgeV1_00024NativeEndpoint_nativeExecuteV1",
     "Java_org_hyperledger_iroha_sdk_offline_KagemushaRecursiveSpendProver_nativeCreateAuthorizationV2",
     "Java_org_hyperledger_iroha_android_offline_KagemushaRecursiveSpendProver_nativeCreateAuthorizationV2",
+    "Java_org_hyperledger_iroha_sdk_offline_KagemushaRecursiveSpendProver_nativeCreateRecipientLineageQueryV2",
+    "Java_org_hyperledger_iroha_android_offline_KagemushaRecursiveSpendProver_nativeCreateRecipientLineageQueryV2",
+    "Java_org_hyperledger_iroha_sdk_offline_KagemushaRecursiveSpendProver_nativeVerifyRecipientRegistrationLineageV2",
+    "Java_org_hyperledger_iroha_android_offline_KagemushaRecursiveSpendProver_nativeVerifyRecipientRegistrationLineageV2",
 ]
 LIBRARY_NAME = "libNoritoBridge.a"
 MANIFEST_NAME = "NoritoBridge.artifacts.json"
@@ -414,6 +435,60 @@ def _sha256(path: Path) -> str:
     return digest.hexdigest()
 
 
+def _cargo_lock_seal(path: Path) -> tuple[str, int, int, int, int, int, int, int]:
+    """Authenticate one selected Cargo.lock through a stable unique inode."""
+
+    flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
+    try:
+        descriptor = os.open(path, flags)
+    except OSError as error:
+        raise ValidationError("selected Cargo.lock is unavailable") from error
+    try:
+        before = os.fstat(descriptor)
+        if not stat.S_ISREG(before.st_mode) or before.st_nlink != 1:
+            raise ValidationError(
+                "selected Cargo.lock must be a singly linked regular file"
+            )
+        digest = hashlib.sha256()
+        observed = 0
+        while chunk := os.read(descriptor, 1024 * 1024):
+            observed += len(chunk)
+            digest.update(chunk)
+        after = os.fstat(descriptor)
+    finally:
+        os.close(descriptor)
+    before_identity = (
+        before.st_dev,
+        before.st_ino,
+        before.st_mode,
+        before.st_nlink,
+        before.st_size,
+        before.st_mtime_ns,
+        before.st_ctime_ns,
+    )
+    after_identity = (
+        after.st_dev,
+        after.st_ino,
+        after.st_mode,
+        after.st_nlink,
+        after.st_size,
+        after.st_mtime_ns,
+        after.st_ctime_ns,
+    )
+    try:
+        visible = path.lstat()
+    except OSError as error:
+        raise ValidationError("selected Cargo.lock became unavailable") from error
+    if (
+        before_identity != after_identity
+        or observed != before.st_size
+        or stat.S_ISLNK(visible.st_mode)
+        or (visible.st_dev, visible.st_ino) != (before.st_dev, before.st_ino)
+    ):
+        raise ValidationError("selected Cargo.lock changed identity while it was read")
+    return (digest.hexdigest(), *before_identity)
+
+
 def _exact_entries(path: Path, expected: set[str], label: str) -> None:
     try:
         actual = {entry.name for entry in path.iterdir()}
@@ -515,10 +590,28 @@ def _validate_build_environment(root: Path, environment: object) -> None:
         raise ValidationError("artifact hermetic runner digest does not match source")
 
 
-def _validate_root_identity(root: Path, payload: dict[str, object]) -> None:
-    lockfile = root / "Cargo.lock"
-    _regular_file(lockfile, "selected root Cargo.lock")
-    if _sha256(lockfile) != payload["cargo_lock_sha256"]:
+def _selected_lockfile(root: Path, configured: Path | None) -> Path:
+    lockfile = configured if configured is not None else root / "Cargo.lock"
+    if not lockfile.is_absolute() or lockfile != Path(os.path.abspath(lockfile)):
+        raise ValidationError("selected Cargo.lock path must be absolute and canonical")
+    if lockfile.name != "Cargo.lock":
+        raise ValidationError("selected Cargo.lock path must end in Cargo.lock")
+    _regular_file(lockfile, "selected Cargo.lock")
+    try:
+        resolved = lockfile.resolve(strict=True)
+    except OSError as error:
+        raise ValidationError("selected Cargo.lock is unavailable") from error
+    if resolved != lockfile:
+        raise ValidationError("selected Cargo.lock path contains a symbolic link")
+    if lockfile.lstat().st_nlink != 1:
+        raise ValidationError("selected Cargo.lock must be a singly linked regular file")
+    return lockfile
+
+
+def _validate_root_identity(
+    root: Path, payload: dict[str, object], lockfile: Path
+) -> None:
+    if _cargo_lock_seal(lockfile)[0] != payload["cargo_lock_sha256"]:
         raise ValidationError("artifact Cargo.lock digest does not match source")
 
     header = root / "crates/connect_norito_bridge/include/connect_norito_bridge.h"
@@ -556,7 +649,9 @@ def _validate_root_identity(root: Path, payload: dict[str, object]) -> None:
         raise ValidationError("authoritative privacy bridge ABI is not exact 22")
 
 
-def _load_manifest(manifest_path: Path, root: Path) -> dict[str, object]:
+def _load_manifest(
+    manifest_path: Path, root: Path, lockfile: Path
+) -> dict[str, object]:
     _regular_file(manifest_path, "embedded artifact manifest")
     try:
         payload = json.loads(
@@ -611,7 +706,7 @@ def _load_manifest(manifest_path: Path, root: Path) -> dict[str, object]:
         raise ValidationError("artifact slice hash registry is not exact")
     if any(not isinstance(value, str) or SHA256.fullmatch(value) is None for value in hashes.values()):
         raise ValidationError("artifact slice hash is not canonical")
-    _validate_root_identity(root, payload)
+    _validate_root_identity(root, payload, lockfile)
     return payload
 
 
@@ -802,8 +897,11 @@ def _validate_tool_provenance(
 def _validate_repository_provenance(
     root: Path,
     payload: dict[str, object],
+    lockfile: Path | None = None,
 ) -> None:
     """Recompute the selected source closure for a standalone archive owner."""
+
+    lockfile = _selected_lockfile(root, lockfile)
 
     source_seal = _load_repository_module(
         root,
@@ -815,7 +913,6 @@ def _validate_repository_provenance(
         "check_mobile_sdk_artifact_pin_commit.py",
         "norito_bridge_pin_commit_for_provenance_validation",
     )
-    lockfile = root / "Cargo.lock"
     try:
         _validate_tool_provenance(payload, source_seal)
         inputs = source_seal.seal_inputs(root, "apple", lockfile)
@@ -862,14 +959,17 @@ def validate(
     expected_link_target: str,
     swift_loader: Path | None = None,
     verify_repository_provenance: bool = False,
+    lockfile_path: Path | None = None,
 ) -> dict[str, object]:
     root = root.resolve(strict=True)
+    lockfile = _selected_lockfile(root, lockfile_path)
+    initial_lock_seal = _cargo_lock_seal(lockfile)
     if xcframework.is_symlink() or not xcframework.is_dir():
         raise ValidationError("XCFramework root is not a non-symbolic directory")
     if manifest_path != xcframework / MANIFEST_NAME:
         raise ValidationError("embedded artifact manifest has a non-canonical location")
     _reject_internal_symlinks(xcframework)
-    payload = _load_manifest(manifest_path, root)
+    payload = _load_manifest(manifest_path, root, lockfile)
 
     expected_top_level = {"Info.plist", MANIFEST_NAME, *EXPECTED_SLICES}
     if payload["privacy_production_enabled"] is True:
@@ -1000,13 +1100,19 @@ def validate(
     if swift_loader is not None:
         _validate_swift_pins(root, swift_loader, hashes)
     if verify_repository_provenance:
-        _validate_repository_provenance(root, payload)
+        if lockfile_path is None:
+            _validate_repository_provenance(root, payload)
+        else:
+            _validate_repository_provenance(root, payload, lockfile)
+    if _cargo_lock_seal(lockfile) != initial_lock_seal:
+        raise ValidationError("selected Cargo.lock changed during artifact validation")
     return payload
 
 
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser()
     parser.add_argument("--root", required=True, type=Path)
+    parser.add_argument("--lockfile-path", type=Path)
     parser.add_argument("--xcframework", required=True, type=Path)
     parser.add_argument("--manifest", required=True, type=Path)
     parser.add_argument("--manifest-link", required=True, type=Path)
@@ -1025,6 +1131,7 @@ def main() -> int:
             manifest_link=arguments.manifest_link,
             expected_link_target=arguments.expected_link_target,
             swift_loader=arguments.swift_loader,
+            lockfile_path=arguments.lockfile_path,
         )
     except (OSError, UnicodeError, ValidationError) as error:
         print(f"[-] {error}", file=sys.stderr)

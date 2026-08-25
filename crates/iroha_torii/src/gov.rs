@@ -2456,7 +2456,7 @@ mod tests {
         );
         if with_permissions {
             let contract_address = iroha_data_model::smart_contract::ContractAddress::derive(
-                &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
+                &"0000000000000000000000000000000000000000000000000000000000000001"
                     .parse()
                     .expect("canonical test network id"),
                 &authority,
@@ -2587,7 +2587,7 @@ seiyaku GovernedReadFixture {
         );
         let signed_manifest = manifest.signed(&harness.authority_keypair);
         let contract_address = iroha_data_model::smart_contract::ContractAddress::derive(
-            &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
+            &"0000000000000000000000000000000000000000000000000000000000000001"
                 .parse()
                 .expect("canonical test network id"),
             &harness.authority,
@@ -4237,7 +4237,7 @@ seiyaku GovernedReadFixture {
     async fn governed_contract_read_serializes_exact_inactive_shape() {
         let harness = mk_governance_harness(true);
         let contract_address = iroha_data_model::smart_contract::ContractAddress::derive(
-            &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
+            &"0000000000000000000000000000000000000000000000000000000000000001"
                 .parse()
                 .expect("canonical test network id"),
             &harness.authority,
@@ -4327,7 +4327,7 @@ seiyaku GovernedReadFixture {
     async fn governed_contract_read_rejects_incomplete_active_state() {
         let harness = mk_governance_harness(true);
         let contract_address = iroha_data_model::smart_contract::ContractAddress::derive(
-            &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
+            &"0000000000000000000000000000000000000000000000000000000000000001"
                 .parse()
                 .expect("canonical test network id"),
             &harness.authority,

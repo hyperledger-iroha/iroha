@@ -22,7 +22,7 @@ sys.modules[SPEC.name] = MODULE
 SPEC.loader.exec_module(MODULE)
 
 TEST_NETWORK_ID = (
-    "hash:32C903E5B3497E34C2B844EBFE8A39C19E6CF8F95D44C1FFB8BA9DCB42F91149#A2F0"
+    "32c903e5b3497e34c2b844ebfe8a39c19e6cf8f95d44c1ffb8ba9dcb42f91149"
 )
 
 
@@ -35,7 +35,7 @@ def _signed_transaction(payload: bytes, signature: bytes) -> bytes:
 
 
 def _transaction_payload(suffix: bytes = b"") -> bytes:
-    identity = bytes.fromhex(TEST_NETWORK_ID[5:69])
+    identity = bytes.fromhex(TEST_NETWORK_ID)
     domain = (0).to_bytes(4, "little") + _field(identity)
     return _field(domain) + suffix
 

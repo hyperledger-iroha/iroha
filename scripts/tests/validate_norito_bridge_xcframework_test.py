@@ -6,6 +6,7 @@ from __future__ import annotations
 import hashlib
 import importlib.util
 import json
+import os
 from pathlib import Path
 import plistlib
 import sys
@@ -161,9 +162,10 @@ class StrictNoritoBridgeValidatorTests(unittest.TestCase):
             encoding="utf-8",
         )
 
-    def validate(self) -> None:
+    def validate(self, lockfile_path: Path | None = None) -> None:
         validator.validate(
             root=ROOT,
+            lockfile_path=lockfile_path,
             xcframework=self.xcframework,
             manifest_path=self.manifest,
             manifest_link=self.manifest_link,
@@ -173,6 +175,49 @@ class StrictNoritoBridgeValidatorTests(unittest.TestCase):
 
     def test_accepts_only_the_canonical_inventory(self) -> None:
         self.validate()
+
+    def test_accepts_and_authenticates_an_explicit_external_lock(self) -> None:
+        lock_directory = Path(self.temporary.name).resolve() / "privacy-release"
+        lock_directory.mkdir()
+        external_lock = lock_directory / "Cargo.lock"
+        external_lock.write_text("version = 4\n", encoding="utf-8")
+        self.payload["cargo_lock_sha256"] = hashlib.sha256(
+            external_lock.read_bytes()
+        ).hexdigest()
+        self.write_manifest()
+
+        self.validate(external_lock)
+        with self.assertRaisesRegex(validator.ValidationError, "Cargo.lock digest"):
+            self.validate()
+
+        linked_lock = lock_directory / "linked" / "Cargo.lock"
+        linked_lock.parent.symlink_to(lock_directory, target_is_directory=True)
+        with self.assertRaisesRegex(validator.ValidationError, "symbolic link"):
+            self.validate(linked_lock)
+
+        hardlink = lock_directory / "hardlink-Cargo.lock"
+        os.link(external_lock, hardlink)
+        with self.assertRaisesRegex(validator.ValidationError, "singly linked"):
+            self.validate(external_lock)
+        hardlink.unlink()
+
+        original_validate_pins = validator._validate_swift_pins
+
+        def replace_lock_then_validate(*args: object, **kwargs: object) -> None:
+            replacement = lock_directory / "replacement-Cargo.lock"
+            replacement.write_bytes(external_lock.read_bytes())
+            replacement.replace(external_lock)
+            original_validate_pins(*args, **kwargs)
+
+        with mock.patch.object(
+            validator,
+            "_validate_swift_pins",
+            side_effect=replace_lock_then_validate,
+        ):
+            with self.assertRaisesRegex(
+                validator.ValidationError, "changed during artifact validation"
+            ):
+                self.validate(external_lock)
 
     def test_rejects_unknown_manifest_fields_and_stale_pins(self) -> None:
         self.payload["legacy_hash"] = "4" * 64

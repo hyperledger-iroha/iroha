@@ -56,12 +56,12 @@ class IsoOperatorCanaryAuthTest(unittest.TestCase):
                 self.assertEqual(rc, 2)
                 self.assertIn(f"rail.{field} must be a non-empty string", stderr)
 
-    def test_rail_rejects_wrong_checksum_and_forged_marker_bit(self):
-        even_prefix = "hash:" + ("08" * 32)
-        forged_marker = (
-            f"{even_prefix}#{CANARY._crc16_ccitt_false(even_prefix.encode('ascii')):04X}"
+    def test_rail_rejects_noncanonical_text_and_unmarked_identity(self):
+        cases = (
+            "A5" * 32,
+            f"hash:{'A5' * 32}#95D7",
+            "08" * 32,
         )
-        cases = (TEST_NETWORK_ID[:-1] + "4", forged_marker)
         for network_id in cases:
             with self.subTest(network_id=network_id), tempfile.TemporaryDirectory() as raw_root:
                 root = Path(raw_root)
@@ -82,7 +82,7 @@ class IsoOperatorCanaryAuthTest(unittest.TestCase):
                 )
 
                 self.assertEqual(rc, 2)
-                self.assertIn("canonical checksummed NetworkId", stderr)
+                self.assertIn("canonical raw lowercase NetworkId", stderr)
 
     def test_rail_rejects_retired_bearer_and_emits_signed_adapter_inputs(self):
         with tempfile.TemporaryDirectory() as raw_root:

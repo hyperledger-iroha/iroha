@@ -36,7 +36,7 @@ final class ConnectViewModelTests: XCTestCase {
       "CONNECT_TOKEN_APP": "app-token",
       "CONNECT_TOKEN_WALLET": "wallet-token",
       "CONNECT_TOKEN_RELAY": "relay-token",
-      "CONNECT_NETWORK_ID": "hash:32C903E5B3497E34C2B844EBFE8A39C19E6CF8F95D44C1FFB8BA9DCB42F91149#A2F0",
+      "CONNECT_NETWORK_ID": "32c903e5b3497e34c2b844ebfe8a39c19e6cf8f95d44c1ffb8ba9dcb42f91149",
       "CONNECT_ROLE": "wallet",
       "CONNECT_PEER_PUB_B64": "cGVlci1wdWI=",
       "CONNECT_SHARED_KEY_B64": "c2hhcmVkLWtleQ==",
@@ -60,7 +60,7 @@ final class ConnectViewModelTests: XCTestCase {
     XCTAssertEqual(viewModel.tokenApp, "app-token")
     XCTAssertEqual(viewModel.tokenWallet, "wallet-token")
     XCTAssertEqual(viewModel.tokenRelay, "relay-token")
-    XCTAssertEqual(viewModel.networkId, "hash:32C903E5B3497E34C2B844EBFE8A39C19E6CF8F95D44C1FFB8BA9DCB42F91149#A2F0")
+    XCTAssertEqual(viewModel.networkId, "32c903e5b3497e34c2b844ebfe8a39c19e6cf8f95d44c1ffb8ba9dcb42f91149")
     XCTAssertEqual(viewModel.role, .wallet)
     XCTAssertEqual(viewModel.peerPubB64, "cGVlci1wdWI=")
     XCTAssertEqual(viewModel.aeadKeyB64, "c2hhcmVkLWtleQ==")

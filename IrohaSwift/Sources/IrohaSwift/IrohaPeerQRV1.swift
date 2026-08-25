@@ -96,7 +96,7 @@ public struct IrohaPeerQRFrameV1: Equatable, Sendable {
               index >= 0, index <= Int(UInt16.max), payload.count <= Int(UInt16.max) else {
             throw IrohaPeerQRErrorV1.invalidFrameShape
         }
-        let maximumDataShards = try limits.maximumEncodedBytes(for: profile)
+        let maximumDataShards = try limits.maximumEncodedBytes(for: profile, kind: payloadKind)
             .qrCeilingDivisor(IrohaPeerWireMessageV1.qrDataShardBytes)
         guard total <= maximumDataShards else { throw IrohaPeerQRErrorV1.messageTooLarge }
         switch frameKind {
@@ -104,7 +104,7 @@ public struct IrohaPeerQRFrameV1: Equatable, Sendable {
             guard index == 0, total == 1,
                   payload.count > IrohaPeerWireMessageV1.headerBytes,
                   payload.count <= IrohaPeerWireMessageV1.headerBytes
-                    + (try limits.maximumEncodedBytes(for: profile)) else {
+                    + (try limits.maximumEncodedBytes(for: profile, kind: payloadKind)) else {
                 throw IrohaPeerQRErrorV1.invalidFrameShape
             }
         case .header:
@@ -233,7 +233,10 @@ public enum IrohaPeerQRCodecV1 {
         limits: IrohaPeerWireLimitsV1 = .peerV1
     ) throws -> String? {
         let messageByteCount = IrohaPeerWireMessageV1.headerBytes + message.encodedBody.count
-        let maximumEncodedBytes = try limits.maximumEncodedBytes(for: message.profile)
+        let maximumEncodedBytes = try limits.maximumEncodedBytes(
+            for: message.profile,
+            kind: message.kind
+        )
         guard messageByteCount > IrohaPeerWireMessageV1.headerBytes,
               messageByteCount <= IrohaPeerWireMessageV1.headerBytes + maximumEncodedBytes else {
             throw IrohaPeerQRErrorV1.invalidFrameShape
@@ -422,10 +425,15 @@ public struct IrohaPeerQRScanProgressV1: Equatable, Sendable {
     }
 }
 
+public struct IrohaPeerQRScanCompletionV1: Equatable, Sendable {
+    public let message: IrohaPeerWireMessageV1
+    public let progress: IrohaPeerQRScanProgressV1
+}
+
 public enum IrohaPeerQRScanEventV1: Equatable, Sendable {
     case accepted(IrohaPeerQRScanProgressV1)
     case duplicate(IrohaPeerQRScanProgressV1)
-    case completed(IrohaPeerWireMessageV1)
+    case completed(IrohaPeerQRScanCompletionV1)
 }
 
 /// Bounded, multi-stream animated QR decoder. State expires by both idle and
@@ -581,7 +589,17 @@ public final class IrohaPeerQRScanSessionV1: @unchecked Sendable {
                     throw IrohaPeerQRErrorV1.invalidMessage
                 }
                 candidates.removeValue(forKey: frame.streamID)
-                return .completed(message)
+                return .completed(
+                    IrohaPeerQRScanCompletionV1(
+                        message: message,
+                        progress: IrohaPeerQRScanProgressV1(
+                            streamID: frame.streamID,
+                            receivedDataShards: 0,
+                            totalDataShards: 0,
+                            recoveredDataShards: 0
+                        )
+                    )
+                )
             } catch {
                 quarantineLocked(frame.streamID, at: now)
                 throw (error as? IrohaPeerQRErrorV1) ?? .invalidMessage
@@ -671,9 +689,15 @@ public final class IrohaPeerQRScanSessionV1: @unchecked Sendable {
                 recoverData(in: &candidate, total: header.dataShardCount)
                 if candidate.data.count == header.dataShardCount {
                     let message = try finish(candidate, header: header)
+                    let completionProgress = progress(for: candidate)
                     candidates.removeValue(forKey: frame.streamID)
                     quarantinedUntil.removeValue(forKey: frame.streamID)
-                    return .completed(message)
+                    return .completed(
+                        IrohaPeerQRScanCompletionV1(
+                            message: message,
+                            progress: completionProgress
+                        )
+                    )
                 }
             }
             candidates[frame.streamID] = candidate
@@ -691,7 +715,10 @@ public final class IrohaPeerQRScanSessionV1: @unchecked Sendable {
         _ frame: IrohaPeerQRFrameV1,
         candidate: Candidate
     ) throws {
-        let maximumShards = try wireLimits.maximumEncodedBytes(for: frame.profile)
+        let maximumShards = try wireLimits.maximumEncodedBytes(
+            for: frame.profile,
+            kind: frame.payloadKind
+        )
             .qrCeilingDivisor(IrohaPeerWireMessageV1.qrDataShardBytes)
         guard frame.total <= maximumShards else { throw IrohaPeerQRErrorV1.messageTooLarge }
         if let header = candidate.header {

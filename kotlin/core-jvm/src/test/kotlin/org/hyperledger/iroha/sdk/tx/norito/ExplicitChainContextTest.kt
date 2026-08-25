@@ -206,11 +206,6 @@ class ExplicitChainContextTest {
         )
         assertMethodHasIntParameter(
             KagemushaRecursiveSpendProver::class.java,
-            "createRecipientLineageQueryV2",
-            1,
-        )
-        assertMethodHasIntParameter(
-            KagemushaRecursiveSpendProver::class.java,
             "buildRedeemRequestV4",
             2,
         )
@@ -227,11 +222,6 @@ class ExplicitChainContextTest {
         assertMethodHasIntParameter(
             KagemushaRecursiveSpendProver::class.java,
             "nativePrepareRecipientRequestV2",
-            1,
-        )
-        assertMethodHasIntParameter(
-            KagemushaRecursiveSpendProver::class.java,
-            "nativeCreateRecipientLineageQueryV2",
             1,
         )
         assertMethodHasIntParameter(

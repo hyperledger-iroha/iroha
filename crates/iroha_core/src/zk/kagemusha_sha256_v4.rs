@@ -62,6 +62,15 @@ enum KagemushaSha256ByteSourceV4<F: ScalarField> {
     Constant(u8),
     Constrained(AssignedValue<F>),
 }
+
+/// Exact constant-or-assigned byte source consumed by the compact Offline
+/// Cash SHA machine. The assigned variant carries the original virtual-cell
+/// identity so the packed raw layout can copy-constrain it.
+#[derive(Clone, Copy, Debug)]
+pub(super) enum KagemushaSha256ByteBindingV1<F: ScalarField> {
+    Constant(u8),
+    Assigned(AssignedValue<F>),
+}
 /// A SHA-256 message byte carrying its circuit provenance.
 ///
 /// Constants remain Table16 constants. Dynamic bytes can only be constructed
@@ -121,6 +130,19 @@ impl<F: BigPrimeField> KagemushaSha256ByteV4<F> {
         match self.source {
             KagemushaSha256ByteSourceV4::Constant(_) => None,
             KagemushaSha256ByteSourceV4::Constrained(assigned) => Some(assigned),
+        }
+    }
+
+    /// Preserve the exact source provenance for a sibling constrained SHA
+    /// implementation. No unchecked byte constructor is exposed.
+    pub(super) fn binding_v1(self) -> KagemushaSha256ByteBindingV1<F> {
+        match self.source {
+            KagemushaSha256ByteSourceV4::Constant(byte) => {
+                KagemushaSha256ByteBindingV1::Constant(byte)
+            }
+            KagemushaSha256ByteSourceV4::Constrained(assigned) => {
+                KagemushaSha256ByteBindingV1::Assigned(assigned)
+            }
         }
     }
     /// Range-check one assigned source exactly once and retain that proof for
@@ -189,6 +211,20 @@ pub(crate) struct KagemushaSha256JobsV4<F: ScalarField> {
     break_chain_at_block: Option<usize>,
     #[cfg(test)]
     skip_iv_reset_at_job: Option<usize>,
+}
+
+/// Common constrained SHA-256 boundary used by the wide Table16 helper
+/// circuits and the compact current-row final-State wrapper.
+pub(in crate::zk) trait KagemushaConstrainedSha256V1<F>
+where
+    F: BigPrimeField + PrimeField + From<u64>,
+{
+    /// Hash the exact proven byte sequence and return eight big-endian words.
+    fn digest_constrained_v1(
+        &mut self,
+        ctx: &mut Context<F>,
+        message: &[KagemushaSha256ByteV4<F>],
+    ) -> Result<[AssignedValue<F>; DIGEST_SIZE], String>;
 }
 impl<F: ScalarField> Default for KagemushaSha256JobsV4<F> {
     fn default() -> Self {
@@ -297,9 +333,15 @@ where
     }
     /// Return the exact queued-job, compression-block, and per-lane row
     /// geometry used by the authenticated composite-circuit capacity check.
-    pub(crate) fn capacity_profile(&self) -> Result<(usize, usize, usize), String> {
+    pub(crate) fn capacity_profile_for_lanes(
+        &self,
+        lane_count: usize,
+    ) -> Result<(usize, usize, usize), String> {
+        if lane_count == 0 || lane_count > KAGEMUSHA_SHA256_LANES_V4 {
+            return Err("Kagemusha SHA-256 lane count is invalid".to_owned());
+        }
         let blocks = self.compression_blocks()?;
-        let lane_blocks = blocks.div_ceil(KAGEMUSHA_SHA256_LANES_V4);
+        let lane_blocks = blocks.div_ceil(lane_count);
         let required = lane_blocks
             .checked_mul(SHA256_ROWS_PER_BLOCK_V4)
             .and_then(|rows| {
@@ -312,13 +354,20 @@ where
             .max(SHA256_TABLE_ROWS_V4);
         Ok((self.jobs.len(), blocks, required))
     }
-    /// Conservative per-lane capacity bound for authenticated usable rows.
-    pub(crate) fn validate_capacity(&self, usable_rows: usize) -> Result<(), String> {
-        let (_, blocks, required) = self.capacity_profile()?;
+    /// Return the production five-lane geometry.
+    pub(crate) fn capacity_profile(&self) -> Result<(usize, usize, usize), String> {
+        self.capacity_profile_for_lanes(KAGEMUSHA_SHA256_LANES_V4)
+    }
+    /// Conservative capacity bound for a role-specialized lane count.
+    pub(crate) fn validate_capacity_for_lanes(
+        &self,
+        usable_rows: usize,
+        lane_count: usize,
+    ) -> Result<(), String> {
+        let (_, blocks, required) = self.capacity_profile_for_lanes(lane_count)?;
         if required > usable_rows {
             return Err(format!(
-                "Kagemusha SHA-256 requires {required} rows per Table16 lane for {blocks} blocks, \
-                 exceeding {usable_rows} authenticated usable rows"
+                "Kagemusha SHA-256 requires {required} rows per Table16 lane for {blocks} blocks, exceeding {usable_rows} authenticated usable rows"
             ));
         }
         Ok(())
@@ -359,17 +408,18 @@ where
     }
     /// Realize all jobs after Base synthesis populated the physical cell map.
     ///
-    /// Blocks are routed globally in job/block order across lanes 0..4.
+    /// Blocks are routed globally in job/block order across the configured
+    /// authenticated lane count.
     /// Every job starts from the standard IV; multi-block chaining is
     /// copy-constrained even when consecutive blocks use different lanes.
-    pub(crate) fn synthesize(
+    pub(crate) fn synthesize<const LANES: usize>(
         &self,
-        config: &KagemushaSha256ConfigV4,
+        config: &KagemushaSha256ConfigV4<LANES>,
         layouter: &mut impl Layouter<F>,
         copy_manager: &SharedCopyConstraintManager<F>,
         usable_rows: usize,
     ) -> Result<(), Error> {
-        self.validate_capacity(usable_rows)
+        self.validate_capacity_for_lanes(usable_rows, LANES)
             .map_err(|_| Error::Synthesis)?;
         Table16Chip::<F>::load(config.lanes[0].clone(), layouter)?;
         let chips = config.lanes.clone().map(Table16Chip::<F>::construct);
@@ -473,7 +523,7 @@ where
             if !blocks.remainder().is_empty() {
                 return Err(Error::Synthesis);
             }
-            let first_lane = global_block_index % KAGEMUSHA_SHA256_LANES_V4;
+            let first_lane = global_block_index % LANES;
             let first_block: [PaddedByte<F>; BLOCK_BYTE_SIZE] =
                 first.to_vec().try_into().map_err(|_| Error::Synthesis)?;
             let first_words =
@@ -496,7 +546,7 @@ where
             let mut final_lane = first_lane;
             global_block_index += 1;
             for block in blocks {
-                let lane = global_block_index % KAGEMUSHA_SHA256_LANES_V4;
+                let lane = global_block_index % LANES;
                 let block: [PaddedByte<F>; BLOCK_BYTE_SIZE] =
                     block.to_vec().try_into().map_err(|_| Error::Synthesis)?;
                 let words = chips[lane].assign_padded_block(layouter, block, global_block_index)?;
@@ -548,18 +598,35 @@ where
         Ok(())
     }
 }
-/// Five Table16 lanes sharing one spread table and one fixed constant column.
-#[derive(Clone, Debug)]
-pub(crate) struct KagemushaSha256ConfigV4 {
-    lanes: [Table16Config; KAGEMUSHA_SHA256_LANES_V4],
+
+impl<F> KagemushaConstrainedSha256V1<F> for KagemushaSha256JobsV4<F>
+where
+    F: BigPrimeField + PrimeField + From<u64>,
+{
+    fn digest_constrained_v1(
+        &mut self,
+        ctx: &mut Context<F>,
+        message: &[KagemushaSha256ByteV4<F>],
+    ) -> Result<[AssignedValue<F>; DIGEST_SIZE], String> {
+        self.digest_constrained(ctx, message)
+    }
 }
-impl KagemushaSha256ConfigV4 {
+/// A fixed number of Table16 lanes sharing one spread table and one fixed
+/// constant column. The default remains the reviewed five-lane Kagemusha V4
+/// schedule; Offline Cash final wrappers use a separately authenticated
+/// single-lane schedule to minimize proof commitments while reusing rows.
+#[derive(Clone, Debug)]
+pub(crate) struct KagemushaSha256ConfigV4<const LANES: usize = KAGEMUSHA_SHA256_LANES_V4> {
+    lanes: [Table16Config; LANES],
+}
+impl<const LANES: usize> KagemushaSha256ConfigV4<LANES> {
     pub(crate) fn configure<F>(meta: &mut ConstraintSystem<F>) -> Self
     where
         F: PrimeField,
     {
+        assert!(LANES > 0 && LANES <= KAGEMUSHA_SHA256_LANES_V4);
         Self {
-            lanes: Table16Chip::<F>::configure_lanes::<KAGEMUSHA_SHA256_LANES_V4>(meta),
+            lanes: Table16Chip::<F>::configure_lanes::<LANES>(meta),
         }
     }
 }
@@ -861,10 +928,16 @@ mod tests {
     fn k16_capacity_uses_only_the_loaded_spread_table_rows() {
         let jobs = KagemushaSha256JobsV4::<Fp>::default();
         assert_eq!(TABLE16_SPREAD_TABLE_ROWS, (1 << 16) - TEST_UNUSABLE_ROWS);
-        assert_eq!(jobs.validate_capacity(TABLE16_SPREAD_TABLE_ROWS), Ok(()));
+        assert_eq!(
+            jobs.validate_capacity_for_lanes(TABLE16_SPREAD_TABLE_ROWS, KAGEMUSHA_SHA256_LANES_V4,),
+            Ok(())
+        );
         assert!(
-            jobs.validate_capacity(TABLE16_SPREAD_TABLE_ROWS - 1)
-                .is_err()
+            jobs.validate_capacity_for_lanes(
+                TABLE16_SPREAD_TABLE_ROWS - 1,
+                KAGEMUSHA_SHA256_LANES_V4,
+            )
+            .is_err()
         );
     }
     #[test]

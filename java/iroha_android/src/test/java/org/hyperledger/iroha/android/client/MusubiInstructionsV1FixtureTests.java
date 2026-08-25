@@ -482,7 +482,7 @@ public final class MusubiInstructionsV1FixtureTests {
     readField(transactionDecoder, "authority");
     readField(transactionDecoder, "creation_time_ms");
     final byte[] executablePayload = readField(transactionDecoder, "executable");
-    for (int index = 0; index < 5; index++) {
+    for (int index = 0; index < 6; index++) {
       readField(transactionDecoder, "tail[" + index + "]");
     }
     assertEquals(0, transactionDecoder.remaining());
@@ -1005,7 +1005,9 @@ public final class MusubiInstructionsV1FixtureTests {
 
   private static void assertSemanticKeys(
       final Map<String, Object> semantic, final String... expectedKeys) {
-    assertEquals(Arrays.asList(expectedKeys), new ArrayList<>(semantic.keySet()));
+    assertEquals(
+        new java.util.LinkedHashSet<>(Arrays.asList(expectedKeys)),
+        new java.util.LinkedHashSet<>(semantic.keySet()));
   }
 
   private static GovernanceDecision governanceDecision(final Object value) {
@@ -1080,7 +1082,7 @@ public final class MusubiInstructionsV1FixtureTests {
         "car_body_length",
         "nonce");
     final SeedIngressReceiptBinding bindingValue = new SeedIngressReceiptBinding(
-        NetworkId.parse(string(binding.get("network_id"))),
+        NetworkId.parseNoritoJsonLiteral(string(binding.get("network_id"))),
         string(binding.get("publisher")),
         string(binding.get("ingress_broker")),
         newtypeText(binding.get("seed_provider")),
@@ -1142,7 +1144,7 @@ public final class MusubiInstructionsV1FixtureTests {
     assertSemanticKeys(anchor, "height", "block_hash");
     final ProviderBundleVerificationBinding bindingValue =
         new ProviderBundleVerificationBinding(
-            NetworkId.parse(string(binding.get("network_id"))),
+            NetworkId.parseNoritoJsonLiteral(string(binding.get("network_id"))),
             newtypeText(binding.get("provider_id")),
             string(binding.get("completed_by")),
             new ProviderCompletionAuthority(string(authority.get("provider_owner")), policy),

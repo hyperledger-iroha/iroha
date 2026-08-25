@@ -31,7 +31,8 @@ use super::{
     },
 };
 
-const CONTEXT_DOMAIN: &[u8] = b"iroha:offline-cash:v1:private-context";
+pub(super) const CONTEXT_DOMAIN: &[u8] = b"iroha:offline-cash:v1:private-context";
+pub(super) const STATE_CONTEXT_MESSAGE_BYTES_V1: usize = 257;
 const OPEN_PENDING_DOMAIN: &[u8] = b"iroha:offline-cash:v1:open-pending";
 const CANCEL_PENDING_DOMAIN: &[u8] = b"iroha:offline-cash:v1:cancel-expired-pending";
 const GUARD_CHALLENGE_DOMAIN: &[u8] = b"iroha:offline-cash:v1:guard-challenge";
@@ -63,6 +64,34 @@ fn digest_framed(domain: &[u8], parts: &[&[u8]]) -> Digest {
     hasher.finalize().into()
 }
 
+/// Source-authoritative canonical context preimage shared by the state owner
+/// and the Halo2 host relation.
+pub(super) fn state_context_message_v1(
+    release_id: &Digest,
+    network_id_frame: &[u8],
+    asset_id_frame: &[u8],
+    scale: u32,
+) -> Zeroizing<Vec<u8>> {
+    let scale = scale.to_le_bytes();
+    let fields = [
+        CONTEXT_DOMAIN,
+        release_id.as_slice(),
+        network_id_frame,
+        asset_id_frame,
+        scale.as_slice(),
+    ];
+    let mut message = Zeroizing::new(Vec::with_capacity(STATE_CONTEXT_MESSAGE_BYTES_V1));
+    for field in fields {
+        message.extend_from_slice(
+            &u64::try_from(field.len())
+                .expect("Offline Cash context field length fits u64")
+                .to_le_bytes(),
+        );
+        message.extend_from_slice(field);
+    }
+    message
+}
+
 fn secret_digest(domain: &[u8], parts: &[&[u8]]) -> Zeroizing<Digest> {
     Zeroizing::new(digest_framed(domain, parts))
 }
@@ -73,6 +102,10 @@ mod balance;
 mod context;
 /// Terminal-bound receiver credit ownership.
 mod credit;
+/// Strict X25519/XChaCha20-Poly1305 receiver credit envelope.
+pub(crate) mod credit_cipher;
+/// Core-owned typed ABI for the optional authenticated device lifecycle.
+pub(crate) mod device_bridge;
 /// Sealed exact-next hardware guard capabilities.
 mod guard;
 /// Authenticated durable staging for sender payment publication.
@@ -176,6 +209,8 @@ pub(crate) enum StateTransitionErrorV1 {
     TerminalVerificationMismatch,
     /// Authenticated ciphertext/opening/key-reference binding differs.
     EncryptedOpeningMismatch,
+    /// A healthy cryptographic random source was unavailable for credit encryption.
+    CreditEncryptionUnavailable,
     /// A prepared transition no longer names the current owner state.
     StaleState,
     /// Prepared private values or their public statement were corrupted.
@@ -227,6 +262,9 @@ impl fmt::Display for StateTransitionErrorV1 {
             }
             Self::EncryptedOpeningMismatch => {
                 formatter.write_str("offline-cash encrypted opening binding mismatch")
+            }
+            Self::CreditEncryptionUnavailable => {
+                formatter.write_str("offline-cash credit encryption randomness unavailable")
             }
             Self::StaleState => formatter.write_str("offline-cash state changed after preparation"),
             Self::CorruptPlan => formatter.write_str("offline-cash prepared transition corrupted"),

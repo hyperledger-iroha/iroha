@@ -66,14 +66,14 @@ mod tests {
             "--chain-id",
             "sora.production",
             "--network-id",
-            "hash:A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5#95D7",
+            "a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5",
             "--once",
         ])
         .expect("parse canonical launcher arguments");
         assert_eq!(args.chain_id, ChainId::from("sora.production"));
         assert_eq!(
             args.network_id.to_string(),
-            "hash:A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5#95D7"
+            "a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5"
         );
         assert!(args.once);
         assert!(
@@ -84,7 +84,7 @@ mod tests {
                 "--chain-id",
                 "not canonical",
                 "--network-id",
-                "hash:A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5#95D7",
+                "a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5",
             ])
             .is_err()
         );

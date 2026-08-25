@@ -478,18 +478,19 @@ mod tests {
     }
 }
 impl Client {
-    /// Fetch the exact successful committed transaction selected by its entrypoint hash.
+    /// Fetch an exact applied-or-rejected committed transaction selected by its entrypoint hash.
     ///
     /// This uses the dedicated authenticated transaction-details route with the one canonical
     /// `FindTransactions` equality predicate accepted by Torii. The response must be canonical
     /// bounded Norito and must repeat the requested entrypoint hash, a self-consistent entrypoint
-    /// and result hash, and a successful execution result.
+    /// and result hash. It also requires the signature-bound `fee_payment_intent` separately from
+    /// the actual `fee_payment` receipt and rejects every top-level/nested conflict.
     ///
     /// # Errors
     ///
     /// Returns an error if request binding or signing fails, Torii rejects the query, the response
     /// violates the strict transport/codec contract, or any requested hash/result binding differs.
-    pub fn get_successful_transaction_details(
+    pub fn get_transaction_details(
         &self,
         entrypoint_hash: HashOf<TransactionEntrypoint>,
     ) -> Result<PipelineTransactionDetailsResponse, QueryError> {
@@ -535,7 +536,58 @@ impl Client {
                 "transaction-details response does not match the requested entrypoint/result hash"
             )));
         }
-        if transaction.result().is_err() {
+        let signed_transaction = match transaction.entrypoint() {
+            TransactionEntrypoint::External(transaction) => transaction,
+            TransactionEntrypoint::SealedReveal(reveal) => reveal.signed_transaction(),
+            TransactionEntrypoint::SealedCommitment(_) | TransactionEntrypoint::Time(_) => {
+                return Err(QueryError::Other(eyre!(
+                    "transaction-details response does not contain an exact signed transaction"
+                )));
+            }
+        };
+        if &details.fee_payment_intent != signed_transaction.fee_payment_intent() {
+            return Err(QueryError::Other(eyre!(
+                "transaction-details fee_payment_intent differs from the signed transaction"
+            )));
+        }
+        if details.fee_payment.as_ref() != transaction.result().fee_payment() {
+            return Err(QueryError::Other(eyre!(
+                "transaction-details top-level fee_payment conflicts with the committed result"
+            )));
+        }
+        if let Some(receipt) = details.fee_payment.as_ref() {
+            receipt
+                .validate_committed_binding(
+                    transaction.entrypoint(),
+                    transaction.result(),
+                    receipt.applied_block_height,
+                    transaction.block_hash(),
+                )
+                .map_err(|error| {
+                    QueryError::Other(eyre!(
+                        "transaction-details fee_payment receipt is invalid: {error}"
+                    ))
+                })?;
+        }
+        Ok(details)
+    }
+
+    /// Fetch the exact successful committed transaction selected by its entrypoint hash.
+    ///
+    /// This compatibility helper applies the historical success-only policy after the complete
+    /// closed authenticated-detail contract has been validated. Fee-audit callers that must
+    /// support rejected-but-charged transactions use [`Self::get_transaction_details`].
+    ///
+    /// # Errors
+    ///
+    /// Returns every error from [`Self::get_transaction_details`] and rejects an exact committed
+    /// business result whose outcome is `Err`.
+    pub fn get_successful_transaction_details(
+        &self,
+        entrypoint_hash: HashOf<TransactionEntrypoint>,
+    ) -> Result<PipelineTransactionDetailsResponse, QueryError> {
+        let details = self.get_transaction_details(entrypoint_hash)?;
+        if details.transaction.result().is_err() {
             return Err(QueryError::Other(eyre!(
                 "transaction-details response contains a rejected transaction result"
             )));
@@ -1074,10 +1126,12 @@ mod query_errors_handling {
             DataTriggerSequence, TransactionBuilder, TransactionResult,
         };
         let (authority, key_pair) = gen_account_in("wonderland");
+        let fee_payment_intent =
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None);
         let signed = TransactionBuilder::new(
             crate::client::test_network_id(),
             authority,
-            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+            fee_payment_intent.clone(),
         )
         .try_sign(key_pair.private_key())
         .expect("sign transaction-details fixture");
@@ -1101,6 +1155,8 @@ mod query_errors_handling {
             PipelineTransactionDetailsResponse {
                 hash: entrypoint_hash.to_string(),
                 transaction,
+                fee_payment_intent,
+                fee_payment: None,
                 trigger_completions: Vec::new(),
             },
         )
@@ -1234,6 +1290,98 @@ mod query_errors_handling {
         )
         .expect_err("result hash mismatch must be rejected");
         assert!(error.to_string().contains("entrypoint/result hash"));
+    }
+    #[test]
+    fn transaction_details_reader_rejects_fee_intent_alias_and_receipt_conflicts() {
+        let client = compatible_client_with_conflicting_wire_headers();
+        let (entrypoint_hash, mut wrong_intent) = successful_transaction_details_fixture();
+        wrong_intent.fee_payment_intent =
+            iroha_data_model::transaction::FeePaymentIntent::authority(
+                Vec::new(),
+                NonZeroU64::new(1),
+            );
+        let encoded = norito::to_bytes(&wrong_intent).expect("encode wrong fee intent response");
+        let error = with_mock_http(
+            move |_| {
+                Ok(Response::builder()
+                    .status(HttpStatusCode::OK)
+                    .header("content-type", APPLICATION_NORITO)
+                    .body(encoded.clone())
+                    .expect("wrong fee intent response"))
+            },
+            || client.get_transaction_details(entrypoint_hash),
+        )
+        .expect_err("top-level fee intent must equal the signed transaction");
+        assert!(error.to_string().contains("fee_payment_intent"));
+
+        let client = compatible_client_with_conflicting_wire_headers();
+        let (entrypoint_hash, mut conflicting_receipt) = successful_transaction_details_fixture();
+        let signed = match conflicting_receipt.transaction.entrypoint() {
+            TransactionEntrypoint::External(transaction) => transaction,
+            _ => panic!("fixture uses external transaction"),
+        };
+        let asset = iroha_data_model::asset::AssetDefinitionId::derive_from_components(
+            iroha_data_model::domain::DomainId::try_new("fees", "universal").expect("fee domain"),
+            "xor".parse().expect("fee asset name"),
+        );
+        let charge = iroha_data_model::transaction::FeePaymentCharge::try_new(
+            iroha_data_model::transaction::FeeChargeKind::Nexus,
+            asset,
+            0,
+            Quantity::from(1_u32),
+        )
+        .expect("bounded receipt charge");
+        conflicting_receipt.fee_payment = Some(
+            iroha_data_model::transaction::FeePaymentReceipt::try_new(
+                signed.hash(),
+                iroha_data_model::nexus::FeeDebitSource::Account(signed.authority().clone()),
+                signed.authority().clone(),
+                None,
+                vec![charge],
+                conflicting_receipt.transaction.result(),
+                1,
+                *conflicting_receipt.transaction.block_hash(),
+            )
+            .expect("structurally valid conflicting top-level receipt"),
+        );
+        let encoded =
+            norito::to_bytes(&conflicting_receipt).expect("encode conflicting receipt response");
+        let error = with_mock_http(
+            move |_| {
+                Ok(Response::builder()
+                    .status(HttpStatusCode::OK)
+                    .header("content-type", APPLICATION_NORITO)
+                    .body(encoded.clone())
+                    .expect("conflicting receipt response"))
+            },
+            || client.get_transaction_details(entrypoint_hash),
+        )
+        .expect_err("top-level receipt must equal the committed nested receipt");
+        assert!(
+            error
+                .to_string()
+                .contains("top-level fee_payment conflicts")
+        );
+    }
+    #[test]
+    fn transaction_details_legacy_fee_payment_shape_fails_closed() {
+        #[derive(norito::codec::Encode)]
+        struct LegacyTransactionDetailsResponse {
+            hash: String,
+            transaction: CommittedTransaction,
+            trigger_completions: Vec<iroha_torii_shared::TriggerCompletionSummary>,
+        }
+        let (_, current) = successful_transaction_details_fixture();
+        let legacy = LegacyTransactionDetailsResponse {
+            hash: current.hash,
+            transaction: current.transaction,
+            trigger_completions: current.trigger_completions,
+        };
+        let bytes = legacy.encode();
+        assert!(
+            PipelineTransactionDetailsResponse::decode_all(&mut bytes.as_slice()).is_err(),
+            "a response without distinct intent and actual-receipt fields must not decode"
+        );
     }
     fn with_mock_http<R>(
         responder: impl Fn(RequestSnapshot) -> Result<Response<Vec<u8>>> + Send + Sync + 'static,

@@ -65,7 +65,7 @@ fn malformed_invocation_arguments_fail_during_context_preparation() {
             .expect("encode valid argument fixture");
     *malformed.last_mut().expect("record hash byte") ^= 0x80;
     let contract_address = ContractAddress::derive(
-        &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
+        &"0000000000000000000000000000000000000000000000000000000000000001"
             .parse()
             .expect("canonical test network id"),
         &ALICE_ID,
@@ -144,7 +144,7 @@ fn contract_entrypoint_permission_accepts_direct_and_role_grants() {
     let mut block = state.block(header);
     let mut tx = block.transaction();
     let contract_address = ContractAddress::derive(
-        &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
+        &"0000000000000000000000000000000000000000000000000000000000000001"
             .parse()
             .expect("canonical test network id"),
         &authority,
@@ -189,7 +189,7 @@ fn contract_entrypoint_permission_accepts_direct_and_role_grants() {
         contract_permission_context(contract_address.clone(), "wrong_entrypoint"),
         contract_permission_context(
             ContractAddress::derive(
-                &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
+                &"0000000000000000000000000000000000000000000000000000000000000001"
                     .parse()
                     .expect("canonical test network id"),
                 &authority,

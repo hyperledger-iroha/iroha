@@ -16,7 +16,9 @@ Clients likewise configure exactly one exact-network source: inline
 `network_id` or a canonical one-line `network_id_file`. Production templates
 point `network_id_file` at the same `/run/iroha/genesis.expected_hash` artifact
 used by validator `genesis.expected_hash_file`; missing, duplicate, multiline,
-or non-canonical values fail before a request can be signed.
+or non-canonical values fail before a request can be signed. Public config and
+argument text is exactly 64 lowercase hexadecimal characters with the hash
+marker bit set; the `hash:UPPER#CRC` spelling is reserved for Norito JSON.
 
 ### `torii.transport.norito_rpc`
 

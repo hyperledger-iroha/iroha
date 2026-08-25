@@ -1,5 +1,5 @@
 //! Subscription plan and billing helpers.
-use std::{fs, path::PathBuf};
+use crate::{Run, RunContext};
 use eyre::{Result, WrapErr};
 use iroha::{
     client::Client,
@@ -11,7 +11,7 @@ use iroha::{
     },
 };
 use iroha_primitives::numeric::Quantity;
-use crate::{Run, RunContext};
+use std::{fs, path::PathBuf};
 #[derive(clap::Subcommand, Debug)]
 pub enum Command {
     /// Manage subscription plans (asset definition metadata).
@@ -384,10 +384,6 @@ fn load_plan<C: RunContext>(
 }
 #[cfg(test)]
 mod tests {
-    use std::{
-        fs,
-        time::{SystemTime, UNIX_EPOCH},
-    };
     use super::*;
     use iroha::data_model::{
         account::AccountId,
@@ -402,6 +398,10 @@ mod tests {
         trigger::TriggerId,
     };
     use iroha_crypto::{Algorithm, KeyPair};
+    use std::{
+        fs,
+        time::{SystemTime, UNIX_EPOCH},
+    };
     struct DummyContext;
     impl RunContext for DummyContext {
         fn config(&self) -> &crate::Config {

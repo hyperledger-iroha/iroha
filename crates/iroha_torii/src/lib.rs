@@ -5885,7 +5885,6 @@ async fn enforce_offline_cache_policy(
 ) -> Result<axum::response::Response, Infallible> {
     const OPERATION_PREFIX: &str = "/v1/offline/operations/";
     const READINESS_PATH: &str = "/v1/offline/readiness";
-    const RECIPIENT_LINEAGE_PATH: &str = "/v1/offline/receiver-lineage";
     const TOP_UP_PATH: &str = "/v1/offline/top-up";
     const REDEEM_PATH: &str = "/v1/offline/redeem";
     let route = req.extensions().get::<MatchedRouteMetadata>();
@@ -5901,11 +5900,8 @@ async fn enforce_offline_cache_policy(
         id == route_catalog::offline::TOP_UP.stable_route_id()
             || id == route_catalog::offline::REDEEM.stable_route_id()
     }) || matches!(req.uri().path(), TOP_UP_PATH | REDEEM_PATH);
-    let recipient_lineage = route.is_some_and(|route| {
-        route.stable_route_id() == route_catalog::offline::RECIPIENT_LINEAGE.stable_route_id()
-    }) || req.uri().path() == RECIPIENT_LINEAGE_PATH;
     let mut response = next.run(req).await;
-    let policy = if operation_status || command || recipient_lineage {
+    let policy = if operation_status || command {
         Some("no-store")
     } else if readiness {
         if matches!(response.status(), StatusCode::OK | StatusCode::NOT_MODIFIED) {
@@ -12122,214 +12118,6 @@ async fn handler_offline_readiness(
     append_vary_accept(response.headers_mut());
     Ok(response)
 }
-#[cfg(feature = "app_api")]
-fn offline_receiver_lineage_inconsistent(message: impl Into<String>) -> Error {
-    Error::AppServiceUnavailable {
-        code: "offline_receiver_lineage_inconsistent",
-        message: message.into(),
-    }
-}
-#[cfg(feature = "app_api")]
-#[axum::debug_handler]
-async fn handler_offline_recipient_lineage(
-    State(app): State<SharedAppState>,
-    headers: axum::http::HeaderMap,
-    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
-    crate::utils::extractors::OfflineNorito(request): crate::utils::extractors::OfflineNorito<
-        iroha_torii_shared::offline_api::OfflineRecipientLineageRequest,
-    >,
-) -> Result<NoritoBody<iroha_torii_shared::offline_api::OfflineRecipientRegistrationLineage>, Error>
-{
-    check_access(
-        &app,
-        &headers,
-        Some(remote.ip()),
-        "v1/offline/receiver-lineage",
-    )
-    .await?;
-    let state_view = app.state.view();
-    let evaluated_height = u64::try_from(state_view.height()).map_err(|_| {
-        offline_receiver_lineage_inconsistent(
-            "The evaluated block height does not fit the public lineage contract.",
-        )
-    })?;
-    let evaluated_block = state_view
-        .latest_block()
-        .ok_or_else(|| Error::AppNotFound {
-            code: "offline_receiver_lineage_unavailable",
-            message: "No committed block is available for receiver-lineage evaluation.".to_owned(),
-        })?;
-    let evaluated_header = evaluated_block.header();
-    let evaluated_at_ms =
-        u64::try_from(evaluated_header.creation_time().as_millis()).unwrap_or(u64::MAX);
-    if request.version != iroha_torii_shared::offline_api::OFFLINE_RECIPIENT_LINEAGE_VERSION
-        || request.trusted_checkpoint_height == 0
-    {
-        return Err(Error::AppQueryValidation {
-            code: "offline_receiver_lineage_request_invalid",
-            message: "The receiver-lineage query version or checkpoint height is invalid."
-                .to_owned(),
-        });
-    }
-    let selector = &request.selector;
-    if selector.network_id != *app.state.network_id_ref() {
-        return Err(Error::AppQueryValidation {
-            code: "offline_receiver_lineage_network_mismatch",
-            message: "The receiver-lineage selector targets a different network.".to_owned(),
-        });
-    }
-    if selector.receiver_device_id.is_empty()
-        || selector.receiver_device_id.len() > 128
-        || selector.receiver_device_id.trim() != selector.receiver_device_id
-        || selector.receiver_device_id.chars().any(char::is_control)
-    {
-        return Err(Error::AppQueryValidation {
-            code: "offline_receiver_lineage_request_invalid",
-            message: "The receiver device identifier is invalid.".to_owned(),
-        });
-    }
-    let snapshot =
-        iroha_core::smartcontracts::isi::offline::isi::derive_kagemusha_active_receiver_snapshot_v1(
-            state_view.world(),
-            evaluated_height,
-            evaluated_at_ms,
-        )
-        .map_err(offline_receiver_lineage_inconsistent)?;
-    let receiver_key = iroha_data_model::offline::KagemushaActiveReceiverKeyV1 {
-        account_id: selector.recipient.clone(),
-        device_id: selector.receiver_device_id.clone(),
-        asset_definition_id: selector.asset.clone(),
-    };
-    let (active_receiver_entry, active_receiver_membership) = snapshot
-        .active_membership(&receiver_key)
-        .map_err(|message| {
-            if message.contains("not active") {
-                Error::AppNotFound {
-                    code: "offline_receiver_not_registered",
-                    message,
-                }
-            } else if message.contains("multiple") {
-                Error::AppConflict {
-                    code: "offline_receiver_registration_ambiguous",
-                    message,
-                }
-            } else {
-                offline_receiver_lineage_inconsistent(message)
-            }
-        })?;
-    let iroha_data_model::offline::KagemushaActiveReceiverEntryV1::Active(active) =
-        &active_receiver_entry
-    else {
-        return Err(Error::AppConflict {
-            code: "offline_receiver_registration_ambiguous",
-            message: "The receiver tuple has multiple active registrations.".to_owned(),
-        });
-    };
-    let resolution = iroha_core::smartcontracts::isi::offline::isi::resolve_kagemusha_active_receiver_registration_v1(
-        state_view.world(),
-        active,
-        evaluated_height,
-        evaluated_at_ms,
-    )
-    .map_err(offline_receiver_lineage_inconsistent)?;
-    if *active.value.registration_hash.as_ref() != resolution.registration_hash
-        || *active.value.admission_policy_hash.as_ref() != resolution.admission_policy_hash
-        || active.value.admission_height != resolution.admission_height
-        || active.value.admission_transaction_hash.as_ref()
-            != resolution.admission_transaction_hash.as_ref()
-        || active.value.public_key != resolution.registration.public_key
-    {
-        return Err(offline_receiver_lineage_inconsistent(
-            "The active-receiver snapshot disagrees with protected registration state.",
-        ));
-    }
-    let evaluated_block_hash = evaluated_block.hash();
-    drop(evaluated_block);
-    drop(state_view);
-    let active_receiver_witness = app
-        .kura
-        .kagemusha_active_receiver_witness_proof_v1(evaluated_height)
-        .map_err(|error| {
-            offline_receiver_lineage_inconsistent(format!(
-                "The evaluated active-receiver witness proof is invalid: {error}"
-            ))
-        })?
-        .ok_or_else(|| {
-            offline_receiver_lineage_inconsistent(
-                "The evaluated block has no retained active-receiver witness proof.",
-            )
-        })?;
-    if active_receiver_witness
-        .commitment()
-        .map_err(offline_receiver_lineage_inconsistent)?
-        != snapshot.commitment
-    {
-        return Err(offline_receiver_lineage_inconsistent(
-            "The retained receiver witness commitment differs from the evaluated state snapshot.",
-        ));
-    }
-    let proof_count = evaluated_height
-        .checked_sub(request.trusted_checkpoint_height)
-        .and_then(|gap| gap.checked_add(1))
-        .and_then(|count| usize::try_from(count).ok())
-        .ok_or_else(|| Error::AppQueryValidation {
-            code: "offline_receiver_lineage_checkpoint_invalid",
-            message: "The trusted checkpoint is newer than the evaluated block.".to_owned(),
-        })?;
-    if proof_count > iroha_torii_shared::offline_api::OFFLINE_RECIPIENT_LINEAGE_MAX_FINALITY_PROOFS
-    {
-        return Err(Error::AppConflict {
-            code: "offline_receiver_lineage_checkpoint_too_old",
-            message: "The trusted checkpoint is outside the bounded 63-block advancement window."
-                .to_owned(),
-        });
-    }
-    let mut finality_chain = Vec::with_capacity(proof_count);
-    for height in request.trusted_checkpoint_height..=evaluated_height {
-        finality_chain.push(
-            iroha_core::bridge::build_finality_proof(app.state.as_ref(), height).map_err(
-                |error| {
-                    offline_receiver_lineage_inconsistent(format!(
-                        "The finality proof at height {height} is unavailable: {error}"
-                    ))
-                },
-            )?,
-        );
-    }
-    let finality_chain_bytes =
-        norito::core::encoded_frame_len(&finality_chain).map_err(|error| {
-            offline_receiver_lineage_inconsistent(format!(
-                "The finality proof chain cannot be encoded: {error}"
-            ))
-        })?;
-    if finality_chain_bytes
-        > iroha_torii_shared::offline_api::OFFLINE_RECIPIENT_LINEAGE_MAX_FINALITY_CHAIN_BYTES
-    {
-        return Err(Error::AppConflict {
-            code: "offline_receiver_lineage_checkpoint_too_old",
-            message: "The finality proof chain exceeds the bounded mobile response budget."
-                .to_owned(),
-        });
-    }
-    let evaluated_context_id = finality_chain
-        .last()
-        .ok_or_else(|| offline_receiver_lineage_inconsistent("The finality chain is empty."))?
-        .finality_artifact
-        .context_id();
-    Ok(NoritoBody(
-        iroha_torii_shared::offline_api::OfflineRecipientRegistrationLineage {
-            version: iroha_torii_shared::offline_api::OFFLINE_RECIPIENT_LINEAGE_VERSION,
-            selector: request.selector,
-            active_receiver_entry,
-            active_receiver_membership,
-            active_receiver_witness,
-            finality_chain,
-            evaluated_context_id,
-            evaluated_block_height: evaluated_height,
-            evaluated_block_hash: hex::encode(evaluated_block_hash.as_ref()),
-        },
-    ))
-}
 #[cfg(all(test, feature = "app_api"))]
 mod universal_offline_capability_tests {
     use super::{
@@ -12338,15 +12126,18 @@ mod universal_offline_capability_tests {
         universal_offline_capability_status,
     };
     #[test]
-    fn universal_capability_is_ready_and_asset_neutral() {
+    fn universal_capability_advertises_contract_but_fails_closed_without_runtime_evidence() {
         let capability = universal_offline_capability_status();
         assert!(!capability.mandatory);
         assert_eq!(capability.cash_handoff_capability, "cash_handoff_v1");
         assert_eq!(capability.required_bridge_abi_version, 22);
         assert_eq!(capability.max_hops, 8);
-        assert!(capability.ready);
+        assert!(!capability.ready);
         assert!(capability.assets.is_empty());
-        assert!(capability.blockers.is_empty());
+        assert_eq!(
+            capability.blockers,
+            iroha_data_model::offline::offline_capability_activation_blockers_v1()
+        );
         let (json_content_type, json) = encode_offline_capability_representation(
             &capability,
             crate::utils::ResponseFormat::Json,
@@ -15123,9 +14914,9 @@ fn universal_offline_capability_status() -> iroha_torii_shared::offline_api::Off
         required_bridge_abi_version:
             iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_NATIVE_BRIDGE_ABI_V4,
         max_hops: iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_MAX_PEER_HOPS_V2,
-        ready: true,
+        ready: false,
         assets: Vec::new(),
-        blockers: Vec::new(),
+        blockers: iroha_data_model::offline::offline_capability_activation_blockers_v1(),
     }
 }
 /// GET `/health` — ordinary Torii health, independent of wallet UI features.
@@ -45908,12 +45699,9 @@ impl Torii {
             offline_top_up_body_limit(transaction_max_content_len);
         let offline_redeem_body_limit_bytes =
             offline_redeem_body_limit(transaction_max_content_len);
-        let offline_recipient_lineage_body_limit_bytes =
-            <iroha_torii_shared::offline_api::OfflineRecipientLineageRequest as crate::utils::extractors::OfflineCanonicalNoritoSchema>::MAX_BODY_BYTES;
         mount_catalog_route_rows!(
             builder, offline;
             READINESS => public_get(handler_offline_readiness);
-            RECIPIENT_LINEAGE => limited_canonical_account_post(handler_offline_recipient_lineage, app_state, offline_recipient_lineage_body_limit_bytes, offline_recipient_lineage_body_limit_bytes);
             TOP_UP => limited_canonical_signed_post(handler_offline_top_up, offline_top_up_body_limit_bytes);
             REDEEM => limited_canonical_signed_post(handler_offline_redeem, offline_redeem_body_limit_bytes);
             OPERATION => public_get(handler_offline_operation_status);

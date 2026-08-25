@@ -35,7 +35,9 @@ object AliasLifecycleTransactionPlanJsonParser {
         return AliasLifecycleTransactionPlanBodyV1(
             parser.intField(root, "version", "body.version"),
             parser.stringField(root, "authority", "body.authority"),
-            NetworkId.parse(parser.stringField(root, "network_id", "body.network_id")),
+            NetworkId.parseNoritoJsonLiteral(
+                parser.stringField(root, "network_id", "body.network_id"),
+            ),
             parser.parseAnchor(parser.objectField(root, "anchor", "body.anchor")),
             parseOperation(parser.objectField(root, "operation", "body.operation"), "body.operation"),
             parseDisposition(

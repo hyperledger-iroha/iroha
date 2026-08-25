@@ -163,6 +163,9 @@ internal object OfflineDeviceAttestationCodec {
             field(encoder) { optionString(it, value.iosEnvironment) }
             field(encoder) { optionString(it, value.androidPackageName) }
             field(encoder) { optionBytes(it, value.androidSigningCertificateSha256) }
+            field(encoder) {
+                optionAndroidAttestedDeviceProperties(it, value.androidAttestedDeviceProperties)
+            }
             field(encoder) { p256PublicKey(it, value.publicKey.sec1Bytes()) }
             field(encoder) { string(it, value.assertionScheme) }
             field(encoder) { string(it, value.assertionKeyAlgorithm) }
@@ -199,6 +202,8 @@ internal object OfflineDeviceAttestationCodec {
                 iosEnvironment = readField(decoder, ::readOptionString),
                 androidPackageName = readField(decoder, ::readOptionString),
                 androidSigningCertificateSha256 = readField(decoder, ::readOptionBytes),
+                androidAttestedDeviceProperties =
+                    readField(decoder, ::readOptionAndroidAttestedDeviceProperties),
                 publicKey = KagemushaDevicePublicKeyV2(readField(decoder, ::readP256PublicKey)),
                 assertionScheme = readField(decoder, ::readString),
                 assertionKeyAlgorithm = readField(decoder, ::readString),
@@ -417,6 +422,68 @@ internal object OfflineDeviceAttestationCodec {
         else -> throw IllegalArgumentException("invalid option tag")
     }
 
+    private fun optionAndroidAttestedDeviceProperties(
+        encoder: NoritoEncoder,
+        value: OfflineAndroidAttestedDevicePropertiesV2?,
+    ) {
+        option(encoder, value) { encodeAndroidAttestedDeviceProperties(it, requireNotNull(value)) }
+    }
+
+    private fun readOptionAndroidAttestedDeviceProperties(
+        decoder: NoritoDecoder,
+    ): OfflineAndroidAttestedDevicePropertiesV2? = when (decoder.readByte()) {
+        0 -> null
+        1 -> readField(decoder, ::readAndroidAttestedDeviceProperties)
+        else -> throw IllegalArgumentException("invalid option tag")
+    }
+
+    private fun encodeAndroidAttestedDeviceProperties(
+        encoder: NoritoEncoder,
+        value: OfflineAndroidAttestedDevicePropertiesV2,
+    ) {
+        field(encoder) { it.writeUInt(value.version.toLong(), 16) }
+        field(encoder) { it.writeUInt(value.attestationVersion, 32) }
+        field(encoder) { it.writeUInt(value.keymintVersion, 32) }
+        field(encoder) { it.writeUInt(value.securityLevel.noritoDiscriminant, 32) }
+        field(encoder) { string(it, value.brand) }
+        field(encoder) { string(it, value.device) }
+        field(encoder) { string(it, value.product) }
+        field(encoder) { string(it, value.manufacturer) }
+        field(encoder) { string(it, value.model) }
+        field(encoder) { it.writeUInt(value.osVersion, 32) }
+        field(encoder) { it.writeUInt(value.osPatchLevel, 32) }
+        field(encoder) { it.writeUInt(value.vendorPatchLevel, 32) }
+        field(encoder) { it.writeUInt(value.bootPatchLevel, 32) }
+        field(encoder) { bytes(it, value.verifiedBootKey) }
+        field(encoder) { it.writeBytes(value.verifiedBootHash) }
+    }
+
+    private fun readAndroidAttestedDeviceProperties(
+        decoder: NoritoDecoder,
+    ): OfflineAndroidAttestedDevicePropertiesV2 = OfflineAndroidAttestedDevicePropertiesV2(
+        version = readField(decoder) { checkedU16(it.readUInt(16)) },
+        attestationVersion = readField(decoder) { checkedUnsignedU32(it.readUInt(32)) },
+        keymintVersion = readField(decoder) { checkedUnsignedU32(it.readUInt(32)) },
+        securityLevel = readField(decoder) {
+            when (it.readUInt(32)) {
+                0L -> OfflineAndroidDeviceSecurityLevelV2.TRUSTED_ENVIRONMENT
+                1L -> OfflineAndroidDeviceSecurityLevelV2.STRONG_BOX
+                else -> throw IllegalArgumentException("invalid Android device security level")
+            }
+        },
+        brand = readField(decoder, ::readString),
+        device = readField(decoder, ::readString),
+        product = readField(decoder, ::readString),
+        manufacturer = readField(decoder, ::readString),
+        model = readField(decoder, ::readString),
+        osVersion = readField(decoder) { checkedUnsignedU32(it.readUInt(32)) },
+        osPatchLevel = readField(decoder) { checkedUnsignedU32(it.readUInt(32)) },
+        vendorPatchLevel = readField(decoder) { checkedUnsignedU32(it.readUInt(32)) },
+        bootPatchLevel = readField(decoder) { checkedUnsignedU32(it.readUInt(32)) },
+        verifiedBootKey = readField(decoder, ::readBytes),
+        verifiedBootHash = readField(decoder) { it.readBytes(32) },
+    )
+
     private fun optionU32(encoder: NoritoEncoder, value: Int?) {
         option(encoder, value) { it.writeUInt(requireNotNull(value).toLong(), 32) }
     }
@@ -482,6 +549,13 @@ internal object OfflineDeviceAttestationCodec {
     private fun checkedU32(value: Long): Int {
         require(value in 0..Int.MAX_VALUE.toLong()) { "u32 exceeds supported JVM range" }
         return value.toInt()
+    }
+
+    private fun checkedUnsignedU32(value: Long): Long {
+        require(value in 0..OfflineAndroidAttestedDevicePropertiesV2.U32_MAX) {
+            "u32 exceeds supported range"
+        }
+        return value
     }
 
     private fun checkedLength(value: Long, field: String): Int {

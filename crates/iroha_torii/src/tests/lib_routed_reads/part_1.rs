@@ -1441,7 +1441,7 @@ async fn routed_contract_alias_sanitizer_rejects_forged_subject_payload() {
     let forged_subject = routed_read_test_account(0x99);
     let app = mk_app_state_for_tests_with_world(world_with_account(&authority));
     let contract_address = iroha_data_model::smart_contract::ContractAddress::derive(
-        &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
+        &"0000000000000000000000000000000000000000000000000000000000000001"
             .parse()
             .expect("canonical test network id"),
         &authority,
@@ -1499,7 +1499,7 @@ async fn protected_alias_reads_ignore_unsigned_public_upstream() {
     let mut app = mk_app_state_for_tests_with_world(world_with_account(&authority));
     bind_account_alias_for_test(&app, &authority, "merchant@universal");
     let contract_address = iroha_data_model::smart_contract::ContractAddress::derive(
-        &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
+        &"0000000000000000000000000000000000000000000000000000000000000001"
             .parse()
             .expect("canonical test network id"),
         &authority,

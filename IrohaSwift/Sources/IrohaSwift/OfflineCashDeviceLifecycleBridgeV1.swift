@@ -37,7 +37,7 @@ public enum OfflineCashDeviceLifecycleStatusV1: UInt8, Sendable {
   case staleOrConcurrent = 2
   case intentMismatch = 3
   case trustedTimeRejected = 4
-  case rejected = 5
+  case policyRejected = 5
   case missing = 6
   case conflict = 7
   case corrupt = 8
@@ -194,8 +194,9 @@ public final class OfflineCashDeviceLifecycleBridgeV1 {
       }
 
       static func create() -> NativeEndpoint? {
-        // TODO: ship these optional symbols only with an audited device service that provides
-        // the complete journal/counter/outbox contract; App Attest by itself is insufficient.
+        // These symbols are intentionally optional. Production packaging must omit them until
+        // an audited service provides the complete journal/counter/outbox contract; App Attest
+        // by itself is insufficient.
         let (handle, _) = NoritoBridgeLoader.openHandle()
         guard let handle,
           let capabilitiesSymbol = dlsym(

@@ -115,6 +115,7 @@ fn assigned_digest_words<F: halo2_base::utils::ScalarField>(
 }
 #[test]
 fn v6_native_and_scalar_audit_commitments_match_in_both_parities() {
+    use crate::zk::kagemusha_cycle_loader::{DeferredScalarEccChip, LIMB_BITS, LIMBS};
     use halo2_base::{gates::circuit::builder::BaseCircuitBuilder, utils::ScalarField};
     use halo2_ecc::fields::fp::FpChip;
     use halo2_proofs::{
@@ -122,7 +123,6 @@ fn v6_native_and_scalar_audit_commitments_match_in_both_parities() {
         halo2curves::pasta::{EpAffine, EqAffine},
     };
     use snark_verifier::loader::halo2::{EccInstructions as _, Halo2Loader};
-    use crate::zk::kagemusha_cycle_loader::{DeferredScalarEccChip, LIMB_BITS, LIMBS};
     fn assert_parity<C>()
     where
         C: halo2_base::utils::CurveAffineExt,
@@ -207,12 +207,12 @@ fn v6_native_and_scalar_audit_commitments_match_in_both_parities() {
 }
 #[test]
 fn v6_host_deferred_audit_commitment_binds_complete_one_parent_branch_select() {
-    use halo2_proofs::halo2curves::{group::prime::PrimeCurveAffine as _, pasta::EqAffine};
     use crate::zk::kagemusha_cycle_loader::{
         DeferredEquationWitness, KAGEMUSHA_DEFERRED_AUDIT_POSEIDON_DOMAIN_V6,
         KAGEMUSHA_DEFERRED_AUDIT_SHA256_DOMAIN_V6, KAGEMUSHA_DEFERRED_AUDIT_VERSION_V6,
         kagemusha_poseidon_domain_elements,
     };
+    use halo2_proofs::halo2curves::{group::prime::PrimeCurveAffine as _, pasta::EqAffine};
     let source = EqAffine::generator();
     let coefficients = [3_u64, 5, 7, 11, 13, 17, 19, 23];
     let witness = DeferredEquationWitness::<EqAffine> {
@@ -309,9 +309,9 @@ where
         + ff::WithSmallOrderMulGroup<3>,
     C::ScalarExt: halo2_base::utils::BigPrimeField + ff::WithSmallOrderMulGroup<3>,
 {
+    use crate::zk::kagemusha_cycle_loader::{LIMB_BITS, LIMBS};
     use halo2_base::gates::circuit::builder::BaseCircuitBuilder;
     use halo2_ecc::fields::fp::FpChip;
-    use crate::zk::kagemusha_cycle_loader::{LIMB_BITS, LIMBS};
     let mut builder = BaseCircuitBuilder::<C::Base>::new(false)
         .use_k(17)
         .use_lookup_bits(16);
@@ -341,7 +341,7 @@ where
         current_parent_count,
         parent_counts,
         [&expected_words[0], &expected_words[1]],
-        KagemushaDeferredMsmV5::GenericTest,
+        KagemushaDeferredMsmV5::Serial,
     )
     .expect("complete V4 reciprocal audit shape");
     *builder.pool(0) = ctx;
@@ -350,6 +350,7 @@ where
 }
 #[test]
 fn v4_one_parent_branch_select_reciprocal_substitution_fails_for_both_parities() {
+    use crate::zk::kagemusha_cycle_loader::DeferredEquationWitness;
     use halo2_proofs::{
         dev::MockProver,
         halo2curves::{
@@ -357,7 +358,6 @@ fn v4_one_parent_branch_select_reciprocal_substitution_fails_for_both_parities()
             pasta::{EpAffine, EqAffine},
         },
     };
-    use crate::zk::kagemusha_cycle_loader::DeferredEquationWitness;
     fn assert_join<C>(source: C)
     where
         C: halo2_base::utils::CurveAffineExt,
@@ -1077,6 +1077,9 @@ fn compact_poseidon_sha_wrappers_are_one_block_and_bind_metadata() {
 }
 #[test]
 fn protocol_identity_v2_matches_native_scalar_and_reciprocal_in_both_parities() {
+    use crate::zk::kagemusha_cycle_loader::{
+        DeferredScalarEccChip, LIMB_BITS, LIMBS, PastaCycleEccChip,
+    };
     use halo2_base::{
         gates::circuit::{BaseCircuitParams, builder::BaseCircuitBuilder},
         utils::ScalarField,
@@ -1088,9 +1091,6 @@ fn protocol_identity_v2_matches_native_scalar_and_reciprocal_in_both_parities() 
         poly::{commitment::ParamsProver as _, ipa::commitment::ParamsIPA},
     };
     use snark_verifier::loader::halo2::Halo2Loader;
-    use crate::zk::kagemusha_cycle_loader::{
-        DeferredScalarEccChip, LIMB_BITS, LIMBS, PastaCycleEccChip,
-    };
     fn assert_parity<C>(parity: KagemushaPastaCycleParityV1)
     where
         C: halo2_base::utils::CurveAffineExt,

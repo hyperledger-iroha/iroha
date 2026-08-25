@@ -1,9 +1,9 @@
-/// Canonical public-input schema hash for the ABI-21/V4 `StepEq` verifier record.
+/// Canonical public-input schema hash for the bridge ABI-22 / Kagemusha V4 `StepEq` verifier record.
 #[must_use]
 pub fn kagemusha_recursive_spend_step_eq_public_inputs_schema_hash_v4() -> [u8; 32] {
     Hash::new(KAGEMUSHA_RECURSIVE_SPEND_STEP_EQ_PUBLIC_INPUTS_SCHEMA_V4).into()
 }
-/// Canonical public-input schema hash for the ABI-21/V4 `StepEp` verifier record.
+/// Canonical public-input schema hash for the bridge ABI-22 / Kagemusha V4 `StepEp` verifier record.
 #[must_use]
 pub fn kagemusha_recursive_spend_step_ep_public_inputs_schema_hash_v4() -> [u8; 32] {
     Hash::new(KAGEMUSHA_RECURSIVE_SPEND_STEP_EP_PUBLIC_INPUTS_SCHEMA_V4).into()

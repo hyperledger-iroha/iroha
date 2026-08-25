@@ -476,9 +476,9 @@ mod tests {
             cash_handoff_capability: "cash_handoff_v1".to_owned(),
             required_bridge_abi_version: 22,
             max_hops: 8,
-            ready: true,
+            ready: false,
             assets: Vec::new(),
-            blockers: Vec::new(),
+            blockers: iroha_data_model::offline::offline_capability_activation_blockers_v1(),
         };
         let response = super::handle_status(
             &telemetry,

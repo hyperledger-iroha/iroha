@@ -52,14 +52,15 @@ public final class IrohaPeerQRFrameV1 {
     this.streamId = Objects.requireNonNull(streamId, "streamId").clone();
     this.payload = Objects.requireNonNull(payload, "payload").clone();
     require(this.streamId.length == 16, "Malformed IRQR stream identifier");
-    require(total >= 1 && total <= maximumDataShards(profile) && index >= 0 && index <= 0xffff,
+    require(total >= 1 && total <= maximumDataShards(profile, payloadKind)
+            && index >= 0 && index <= 0xffff,
         "Malformed IRQR frame index");
     require(this.payload.length <= 0xffff, "Malformed IRQR payload");
     switch (frameKind) {
       case COMPLETE -> require(index == 0 && total == 1
               && this.payload.length > IrohaPeerWireMessageV1.HEADER_LENGTH
               && this.payload.length <= IrohaPeerWireMessageV1.HEADER_LENGTH
-                  + maximumEncodedBytes(profile),
+                  + maximumEncodedBytes(profile, payloadKind),
           "Malformed complete IRQR frame");
       case HEADER -> require(index == 0
               && this.payload.length == IrohaPeerWireMessageV1.HEADER_LENGTH,
@@ -146,12 +147,14 @@ public final class IrohaPeerQRFrameV1 {
         Arrays.copyOfRange(data, PAYLOAD_OFFSET, payloadEnd));
   }
 
-  private static int maximumEncodedBytes(final IrohaPeerPayloadProfile profile) {
-    return IrohaPeerWireMessageV1.MAXIMUM_KAGEMUSHA_ENCODED_BYTES;
+  private static int maximumEncodedBytes(
+      final IrohaPeerPayloadProfile profile, final IrohaPeerPayloadKind kind) {
+    return IrohaPeerWireLimitsV1.PEER_V1.maximumEncodedBytes(profile, kind);
   }
 
-  private static int maximumDataShards(final IrohaPeerPayloadProfile profile) {
-    return (maximumEncodedBytes(profile) + 255) / 256;
+  private static int maximumDataShards(
+      final IrohaPeerPayloadProfile profile, final IrohaPeerPayloadKind kind) {
+    return (maximumEncodedBytes(profile, kind) + 255) / 256;
   }
 
   @Override

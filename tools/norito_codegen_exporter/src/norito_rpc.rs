@@ -1459,13 +1459,11 @@ fn parse_account_id(value: &str) -> Result<AccountId> {
     Ok(account)
 }
 fn parse_network_id(value: &str) -> Result<NetworkId> {
-    let encoded = Value::String(value.to_owned());
-    let network_id = json::from_value::<NetworkId>(encoded.clone())
+    let network_id = value
+        .parse::<NetworkId>()
         .with_context(|| format!("invalid canonical network id '{value}'"))?;
-    let canonical = json::to_value(&network_id)
-        .context("failed to render the canonical network id JSON literal")?;
-    if canonical != encoded {
-        bail!("network id '{value}' must use its exact canonical hash encoding");
+    if network_id.to_string() != value {
+        bail!("network id '{value}' must use exact raw lowercase marked hex");
     }
     Ok(network_id)
 }
@@ -3379,7 +3377,7 @@ mod tests {
     use iroha_primitives::numeric::NumericSpec;
     use std::fs;
     const TEST_NETWORK_ID: &str =
-        "hash:32C903E5B3497E34C2B844EBFE8A39C19E6CF8F95D44C1FFB8BA9DCB42F91149#A2F0";
+        "32c903e5b3497e34c2b844ebfe8a39c19e6cf8f95d44c1ffb8ba9dcb42f91149";
     fn checked_in_alias_setup_fixture() -> AliasSetupFixtureBytes {
         let path = workspace_root().join(ALIAS_SETUP_FIXTURE_V1);
         AliasSetupFixtureBytes::try_new(fs::read(&path).expect("read alias-setup fixture"))
@@ -4200,14 +4198,11 @@ mod tests {
     #[test]
     fn network_id_parser_requires_exact_canonical_hash_encoding() {
         let parsed = parse_network_id(TEST_NETWORK_ID).expect("canonical network id");
-        assert_eq!(
-            json::to_value(&parsed).expect("render canonical network id"),
-            Value::String(TEST_NETWORK_ID.to_owned())
-        );
+        assert_eq!(parsed.to_string(), TEST_NETWORK_ID);
         for rejected in [
-            TEST_NETWORK_ID.to_ascii_lowercase(),
-            TEST_NETWORK_ID[5..69].to_owned(),
-            TEST_NETWORK_ID.replace("#A2F0", "#0000"),
+            TEST_NETWORK_ID.to_ascii_uppercase(),
+            format!("hash:{TEST_NETWORK_ID}"),
+            format!("{}8", &TEST_NETWORK_ID[..TEST_NETWORK_ID.len() - 1]),
         ] {
             assert!(
                 parse_network_id(&rejected).is_err(),

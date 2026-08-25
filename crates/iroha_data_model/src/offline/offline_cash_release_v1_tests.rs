@@ -22,6 +22,38 @@ fn artifacts() -> Vec<OfflineCashArtifactBindingV1> {
         .collect()
 }
 
+#[test]
+fn common_k16_params_length_and_manifest_admission_are_exact() {
+    const PASTA_COMPRESSED_POINT_BYTES: u64 = 32;
+    const HALO2_PARAMS_LENGTH_PREFIX_BYTES: u64 = 4;
+    const RETIRED_K17_PARAMS_BYTES: u64 = 8_388_676;
+
+    assert_eq!(OFFLINE_CASH_HALO2_K_V1, 16);
+    assert_eq!(OFFLINE_CASH_P256_V3_HALO2_K_V1, 16);
+    let domain_rows = 1_u64 << OFFLINE_CASH_HALO2_K_V1;
+    let expected_params_bytes =
+        (2 * domain_rows + 2) * PASTA_COMPRESSED_POINT_BYTES + HALO2_PARAMS_LENGTH_PREFIX_BYTES;
+    assert_eq!(expected_params_bytes, 4_194_372);
+    assert_eq!(OFFLINE_CASH_PARAMS_BYTES_V1, expected_params_bytes);
+
+    let valid_artifacts = artifacts();
+    assert!(offline_cash_artifact_set_digest_v1(&valid_artifacts).is_ok());
+
+    let valid_receipt = receipt(&valid_artifacts);
+    let mut retired_k17_manifest = manifest(valid_artifacts, &valid_receipt);
+    retired_k17_manifest.artifacts[0].byte_len = RETIRED_K17_PARAMS_BYTES;
+    retired_k17_manifest = retired_k17_manifest
+        .seal()
+        .expect("reseal substituted manifest");
+    let encoded =
+        norito::encode_canonical(&retired_k17_manifest).expect("encode substituted manifest");
+    assert_eq!(
+        OfflineCashReleaseManifestV1::decode_canonical_exact(&encoded),
+        Err(OfflineCashReleaseErrorV1::InvalidArtifactSet),
+        "a retired k17 Params artifact must not enter the common-k16 release inventory"
+    );
+}
+
 fn receipt(artifacts: &[OfflineCashArtifactBindingV1]) -> OfflineCashInternalValidationReceiptV1 {
     OfflineCashInternalValidationReceiptV1 {
         version: OFFLINE_CASH_WIRE_VERSION_V1,

@@ -78,6 +78,9 @@ class MobileSdkPackagePublisherTests(unittest.TestCase):
         shutil.copy2(PODSPEC_RENDERER, scripts / PODSPEC_RENDERER.name)
         swift_root = self.repository / "IrohaSwift"
         swift_root.mkdir()
+        (self.repository / "Cargo.lock").write_text(
+            "root lock\n", encoding="utf-8"
+        )
         (swift_root / "VERSION").write_text(f"{VERSION}\n", encoding="ascii")
         template_parent = self.repository / "crates/connect_norito_bridge"
         template_parent.mkdir(parents=True)
@@ -198,12 +201,20 @@ class MobileSdkPackagePublisherTests(unittest.TestCase):
                 parser.add_argument("--xcframework", required=True)
                 parser.add_argument("--output", required=True)
                 parser.add_argument("--scratch-dir", required=True)
+                parser.add_argument("--lockfile-path", required=True)
                 arguments = parser.parse_args()
                 source = Path(arguments.xcframework)
                 output = Path(arguments.output)
                 scratch = Path(arguments.scratch_dir)
+                selected_lock = Path(arguments.lockfile_path)
                 if scratch != output.parent.parent:
                     raise SystemExit("Apple archive scratch directory was not external")
+                if (
+                    not selected_lock.is_absolute()
+                    or selected_lock.name != "Cargo.lock"
+                    or not selected_lock.is_file()
+                ):
+                    raise SystemExit("Apple archive selected lock was not forwarded")
                 required_seal_environment = {
                     "NORITO_BRIDGE_SEAL_HOME",
                     "NORITO_BRIDGE_SEAL_CARGO_HOME",
@@ -245,6 +256,10 @@ class MobileSdkPackagePublisherTests(unittest.TestCase):
                         "NoritoBridge.xcframework/NoritoBridge.artifacts.json",
                         payload,
                     )
+                    archive.writestr(
+                        "NoritoBridge.xcframework/selected-lock-path.txt",
+                        str(selected_lock),
+                    )
                 """
             ),
             encoding="utf-8",
@@ -273,10 +288,17 @@ class MobileSdkPackagePublisherTests(unittest.TestCase):
             tool.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
             tool.chmod(0o755)
             tools[environment_name] = tool
+        privacy_release = self.temporary_root / "privacy-release"
+        privacy_release.mkdir()
+        privacy_release_lock = privacy_release / "Cargo.lock"
+        privacy_release_lock.write_text("privacy release lock\n", encoding="utf-8")
         return {
             name: str(path.resolve(strict=True))
             for name, path in {**directories, **tools}.items()
-        } | {"MOBILE_SDK_APPLE_ARTIFACT_DIR": str(artifact_root)}
+        } | {
+            "MOBILE_SDK_APPLE_ARTIFACT_DIR": str(artifact_root),
+            "IROHA_PRIVACY_RELEASE_CARGO_LOCKFILE_PATH": str(privacy_release_lock),
+        }
 
     def _seed_previous_release(self) -> Path:
         self.output.mkdir(parents=True, exist_ok=True)
@@ -443,6 +465,13 @@ class MobileSdkPackagePublisherTests(unittest.TestCase):
         self.assertTrue(podspec.is_file())
         self.assertFalse((self.output / ".NoritoBridge.archive.lockfile").exists())
         self._assert_no_publish_stage()
+        with zipfile.ZipFile(archive) as packaged:
+            self.assertEqual(
+                packaged.read(
+                    "NoritoBridge.xcframework/selected-lock-path.txt"
+                ).decode("utf-8"),
+                seal_environment["IROHA_PRIVACY_RELEASE_CARGO_LOCKFILE_PATH"],
+            )
 
         rendered = podspec.read_text(encoding="utf-8")
         archive_sha256 = hashlib.sha256(archive.read_bytes()).hexdigest()
@@ -480,6 +509,38 @@ class MobileSdkPackagePublisherTests(unittest.TestCase):
             checksum_paths,
             {archive.name, versioned_manifest.name, podspec.name, package_manifest.name},
         )
+
+    def test_apple_package_rejects_empty_privacy_release_lock_selection(self) -> None:
+        seal_environment = self._write_fake_apple_owner()
+        seal_environment["IROHA_PRIVACY_RELEASE_CARGO_LOCKFILE_PATH"] = ""
+        result = self._package(
+            mode="apple",
+            SOURCE_DATE_EPOCH="1700000000",
+            **seal_environment,
+        )
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn(
+            "IROHA_PRIVACY_RELEASE_CARGO_LOCKFILE_PATH must not be empty",
+            result.stderr,
+        )
+
+    def test_ordinary_apple_package_defaults_to_repository_root_lock(self) -> None:
+        seal_environment = self._write_fake_apple_owner()
+        seal_environment.pop("IROHA_PRIVACY_RELEASE_CARGO_LOCKFILE_PATH")
+        result = self._package(
+            mode="apple",
+            SOURCE_DATE_EPOCH="1700000000",
+            **seal_environment,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        archive = self.output / f"NoritoBridge-v{VERSION}.xcframework.zip"
+        with zipfile.ZipFile(archive) as packaged:
+            self.assertEqual(
+                packaged.read(
+                    "NoritoBridge.xcframework/selected-lock-path.txt"
+                ).decode("utf-8"),
+                str(self.repository / "Cargo.lock"),
+            )
 
     def test_apple_manifest_version_must_match_pod_version(self) -> None:
         seal_environment = self._write_fake_apple_owner()

@@ -1,8 +1,8 @@
 # Iroha peer transport V1
 
-This document defines the transport-neutral **Kagemusha Offline Peer V1** family:
-IPM1 messages, IQR1/IRQR QR, authenticated IPN1 Nearby, and the F049 NFC
-application. The envelope carries canonical
+This document defines the transport-neutral **Iroha Offline Peer V1** family:
+IPM1 messages, IQR1/IRQR QR, authenticated IPN1 Nearby, and the NFC
+application. The envelope carries canonical Kagemusha V4 or Offline Cash V1
 application bytes unchanged; QR, NFC, and Nearby are presentation or delivery
 layers around the same message.
 
@@ -19,13 +19,16 @@ A canonical payload consists of:
 
 - profile `2` for a bounded handoff of the mainline typed Kagemusha native
   archive;
+- profile `3` for the exact canonical `kgm2:` UTF-8 text emitted by
+  `OfflineCashPeerAdapterV1`;
 - kind `1` receive request, `2` payment, or `3` acknowledgement;
-- the profile's sole unsigned 16-bit schema version, `0x0102`; and
+- the profile's sole unsigned 16-bit schema version (`0x0102` for profile `2`,
+  `0x0100` for profile `3`); and
 - non-empty canonical bytes bounded to 32 KiB.
 
-Profile adapters preserve canonical bytes exactly. There is no generic text
+Profile adapters preserve canonical bytes exactly. There is no generic untyped text
 payload codec, retired profile alias, or migration shim that can bypass the
-typed ABI21 archive boundary.
+typed Kagemusha V4 / Offline Cash V1 boundary exposed by mobile bridge ABI22.
 
 Profile `2` supports only schema `0x0102`. Generic IPM construction and decode
 validate native-independent canonical Norito framing before accepting it:
@@ -34,14 +37,27 @@ body, and the authoritative fully-qualified kind schema. Receive requests and
 payments require exactly eight zero padding bytes after the 40-byte header;
 acknowledgements require zero. The Kagemusha adapter then delegates deeper
 semantic decoding to the existing typed decoder and never rebuilds Norito
-bytes. Full ABI21
+bytes. Full Kagemusha V4
 Kagemusha QR/NFC/native archives may be up to 32 MiB and continue to use their
 existing typed rails; IPM1 profile `2` is an explicit 24,576-byte bounded
 small-handoff, not a replacement for those rails. NFC does not permit a
 mixed-profile phase policy.
 
+Profile `3` accepts only canonical Base64URL-without-padding `kgm2:` text whose
+decoded bytes are the exact kind-specific compact Norito archive: no
+compression, exact schema hash, CRC64, non-empty body, and static padding of
+eight bytes for requests/payments or zero for acknowledgements. Raw maxima are
+768 request bytes, 7,936 payment bytes, and 256 acknowledgement bytes; the
+corresponding single-message text maxima are 1,029, 10,587, and 347 bytes. The
+9,211-byte raw and 12,288-byte text limits are aggregate three-message session
+caps and must not be used as per-message allocation ceilings. Structural
+transport validation precedes context-bound semantic validation by
+`OfflineCashPeerAdapterV1`; an application that rejects the completed context
+quarantines its 16-byte stream ID before resuming capture.
+
 The first-release "no fallback" rule admits only profile `2` / schema `0x0102`
-to `IrohaPeer*V1`. The independent Kagemusha ABI21 bulk family remains
+and profile `3` / schema `0x0100` to `IrohaPeer*V1`. The independent Kagemusha
+V4 bulk family remains
 available and is never negotiated, reinterpreted, or selected as fallback:
 
 - Swift retains `KagemushaQRStreamCodec`, `KagemushaNFCProtocol`, and
@@ -95,7 +111,9 @@ reduces `ceil(length / 256)`; otherwise it emits encoding `0`. A decoder accepts
 encoding `1` only as a complete stream with the canonical `78 9c` header, no
 dictionary or trailing bytes, a valid Adler-32, and exactly the declared
 decompressed length. This decision is shared by QR, NFC, and Nearby. Encoded
-bodies are bounded to 24,576 bytes for the Kagemusha handoff.
+bodies are bounded to 24,576 bytes for the Kagemusha handoff. Offline Cash
+bodies use the kind-specific text maxima of 1,029 bytes for requests, 10,587
+for payments, and 347 for acknowledgements.
 Hashes and declared lengths are verified before a message is exposed.
 
 ## IQR1 text and IRQR frames
@@ -149,8 +167,9 @@ A wrong-schema complete frame or header is quarantined before completion;
 trailing parity and repeated headers remain quarantined until expiry, while a
 successful completion itself is not quarantined. If application-domain
 validation rejects a structurally valid completed IPM1 message, call the scan
-session's bounded `quarantine(streamID, ...)` API before resuming capture; its
-16-byte IDs use the same capped table and absolute lifetime. Explicit scanner
+session's bounded `quarantine(streamID, ...)` API before resuming capture. The
+Offline Cash QR wrappers expose the same stream ID and quarantine operation.
+Stream IDs use the same capped table and absolute lifetime. Explicit scanner
 times must be nonnegative and monotonic; Swift also rejects non-finite values,
 and integer deadline arithmetic saturates rather than wrapping.
 The standard values are also hard V1 maxima: at most three active streams,

@@ -701,6 +701,7 @@ fn assert_all_exact_duplicate_certificate_nullifier_results(
                     ),
                 ))),
                 batch_outcomes,
+                _,
             ) => {
                 ensure!(
                     message.as_str() == DUPLICATE_CERTIFICATE_NULLIFIER_MESSAGE,

@@ -1485,7 +1485,7 @@ public enum KagemushaRecursiveSpendCodecs {
         return data
     }
 
-    /// Decode the wallet-safe projection produced by the ABI-21 bundle gate.
+    /// Decode the wallet-safe projection produced by the Kagemusha V4 bundle gate.
     public static func decodeBundleSummaryV4(
         _ archive: Data
     ) throws -> KagemushaRecursiveSpendBundleSummaryV4 {

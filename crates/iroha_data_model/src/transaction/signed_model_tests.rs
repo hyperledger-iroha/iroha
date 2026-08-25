@@ -2,7 +2,7 @@ use super::*;
 use crate::{
     Domain, DomainId, Level,
     account::{MultisigMember, MultisigPolicy},
-    prelude::{Log, Register, TriggerId},
+    prelude::{Log, Register, TransactionRejectionReason, TriggerId},
     privacy::{
         IROHA_JINDO_FIELD_ELEMENT_BYTES_V1, IROHA_JINDO_LATTICE_COMMITMENT_BYTES_V1,
         IrohaIvmPrivateNoteStarkStatementV1, IrohaJindoPolynomialCommitmentStatementV1,
@@ -1695,6 +1695,161 @@ fn fee_payment_intent_requires_canonical_positive_component_limits() {
             kind: FeeChargeKind::Nexus,
             asset_definition_id: asset,
         }
+    );
+}
+fn fee_payment_receipt_fixture(
+    outcome: &TransactionResultInner,
+) -> (SignedTransaction, TransactionEntrypoint, FeePaymentReceipt) {
+    let private_key: iroha_crypto::PrivateKey =
+        "802620CCF31D85E3B32A4BEA59987CE0C78E3B8E2DB93881468AB2435FE45D5C9DCD53"
+            .parse()
+            .expect("fee receipt fixture private key");
+    let authority = AccountId::new(iroha_crypto::PublicKey::from(private_key.clone()));
+    let asset = sample_fee_asset();
+    let transaction = TransactionBuilder::new(
+        test_network_id(0x4A),
+        authority.clone(),
+        FeePaymentIntent::authority(
+            vec![FeeChargeLimit::new(
+                FeeChargeKind::Nexus,
+                asset.clone(),
+                Quantity::from(10_u32),
+            )],
+            None,
+        ),
+    )
+    .with_instructions([Log::new(Level::INFO, "fee receipt fixture".into())])
+    .sign(&private_key);
+    let entrypoint = TransactionEntrypoint::External(transaction.clone());
+    let header = crate::block::BlockHeader::new(
+        NonZeroU64::new(7).expect("non-zero fixture height"),
+        None,
+        None,
+        None,
+        1,
+        0,
+    );
+    let charge = FeePaymentCharge::try_new(FeeChargeKind::Nexus, asset, 2, Quantity::from(5_u32))
+        .expect("bounded exact fee charge");
+    let receipt = FeePaymentReceipt::try_new(
+        transaction.hash(),
+        FeeDebitSource::Account(authority.clone()),
+        authority,
+        None,
+        vec![charge],
+        outcome,
+        7,
+        header.hash(),
+    )
+    .expect("valid exact fee receipt");
+    (transaction, entrypoint, receipt)
+}
+#[test]
+fn fee_payment_receipt_binds_applied_and_rejected_charged_results() {
+    let applied = TransactionResultInner::Ok(DataTriggerSequence::default());
+    let (_, applied_entrypoint, applied_receipt) = fee_payment_receipt_fixture(&applied);
+    applied_receipt
+        .validate_committed_binding(
+            &applied_entrypoint,
+            &applied,
+            applied_receipt.applied_block_height,
+            &applied_receipt.applied_block_hash,
+        )
+        .expect("applied charged transaction receipt binds");
+
+    let rejected = TransactionResultInner::Err(TransactionRejectionReason::Validation(
+        crate::ValidationFail::NotPermitted("business operation rejected".to_owned()),
+    ));
+    let (_, rejected_entrypoint, rejected_receipt) = fee_payment_receipt_fixture(&rejected);
+    rejected_receipt
+        .validate_committed_binding(
+            &rejected_entrypoint,
+            &rejected,
+            rejected_receipt.applied_block_height,
+            &rejected_receipt.applied_block_hash,
+        )
+        .expect("rejected-but-charged transaction receipt binds");
+    assert!(
+        TransactionResult::new(rejected).fee_payment().is_none(),
+        "a rejection with no successful debit must not synthesize a receipt"
+    );
+}
+#[test]
+fn fee_payment_receipt_rejects_spoofed_outcome_digest_and_unbounded_scale() {
+    let outcome = TransactionResultInner::Ok(DataTriggerSequence::default());
+    let (_, entrypoint, receipt) = fee_payment_receipt_fixture(&outcome);
+    let other_outcome = TransactionResultInner::Err(TransactionRejectionReason::Validation(
+        crate::ValidationFail::NotPermitted("different outcome".to_owned()),
+    ));
+    assert_eq!(
+        receipt.validate_committed_binding(
+            &entrypoint,
+            &other_outcome,
+            receipt.applied_block_height,
+            &receipt.applied_block_hash,
+        ),
+        Err(FeePaymentReceiptError::ExecutionOutcomeMismatch)
+    );
+    let mut spoofed_digest = receipt.clone();
+    spoofed_digest.receipt_digest = Hash::new(b"spoofed receipt digest");
+    assert_eq!(
+        spoofed_digest.validate(),
+        Err(FeePaymentReceiptError::DigestMismatch)
+    );
+    assert_eq!(
+        FeePaymentCharge::try_new(
+            FeeChargeKind::Nexus,
+            sample_fee_asset(),
+            iroha_primitives::numeric::MAX_DECIMAL_SCALE + 1,
+            Quantity::from(1_u32),
+        ),
+        Err(FeePaymentReceiptError::AssetScaleTooLarge {
+            kind: FeeChargeKind::Nexus,
+            asset_scale: iroha_primitives::numeric::MAX_DECIMAL_SCALE + 1,
+            maximum: iroha_primitives::numeric::MAX_DECIMAL_SCALE,
+        })
+    );
+}
+#[test]
+fn historical_two_field_transaction_result_defaults_receipt_to_none() {
+    #[derive(norito::codec::Encode)]
+    struct HistoricalTransactionResultV0(TransactionResultInner, Vec<AssetBatchTransferOutcome>);
+    let outcome = TransactionResultInner::Ok(DataTriggerSequence::default());
+    let historical = HistoricalTransactionResultV0(outcome.clone(), Vec::new());
+    let historical_bytes = historical.encode();
+    let current = TransactionResult(outcome, Vec::new(), None);
+    let current_bytes = current.encode();
+    assert_eq!(
+        current_bytes, historical_bytes,
+        "an absent receipt must preserve the exact historical two-field bytes"
+    );
+    assert_eq!(
+        current.hash(),
+        HashOf::from_untyped_unchecked(Hash::new(&historical_bytes)),
+        "an absent receipt must preserve the historical result leaf hash"
+    );
+    let decoded = TransactionResult::decode_all(&mut historical_bytes.as_slice())
+        .expect("current result decoder accepts the historical two-field wire");
+    assert!(decoded.fee_payment().is_none());
+    assert_eq!(decoded.encode(), historical_bytes);
+    let replayed = TransactionResult::decode_all(&mut current_bytes.as_slice())
+        .expect("current result replays after canonical re-encoding");
+    assert_eq!(decoded, replayed);
+
+    let (_, _, receipt) = fee_payment_receipt_fixture(&decoded.0);
+    let with_receipt = TransactionResult(decoded.0.clone(), Vec::new(), Some(receipt));
+    let receipt_bytes = with_receipt.encode();
+    assert_ne!(receipt_bytes, historical_bytes);
+    let mut malformed_receipt_bytes = receipt_bytes.clone();
+    malformed_receipt_bytes.pop();
+    assert!(
+        TransactionResult::decode_all(&mut malformed_receipt_bytes.as_slice()).is_err(),
+        "a present but truncated third field must not fall back to the historical default"
+    );
+    assert_eq!(
+        TransactionResult::decode_all(&mut receipt_bytes.as_slice())
+            .expect("three-field receipt wire decodes"),
+        with_receipt
     );
 }
 #[test]

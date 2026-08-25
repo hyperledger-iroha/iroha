@@ -77,7 +77,7 @@ public final class AliasLifecycleTransactionPlanBodyV1 extends AliasJsonValue {
     final Map<String, Object> map = new LinkedHashMap<>();
     map.put("version", version);
     map.put("authority", authority);
-    map.put("network_id", networkId.literal());
+    map.put("network_id", networkId.noritoJsonLiteral());
     map.put("anchor", anchor.toJsonMap());
     map.put("operation", operation.toJsonMap());
     map.put("disposition", disposition.toJsonMap());

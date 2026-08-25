@@ -28,6 +28,8 @@ class DeviceAttestationRegistration(
     val iosEnvironment: String?,
     val androidPackageName: String?,
     androidSigningCertificateSha256: ByteArray?,
+    /** Hardware-authenticated Android properties; absent for iOS and synthetic codec fixtures. */
+    val androidAttestedDeviceProperties: OfflineAndroidAttestedDevicePropertiesV2? = null,
     val publicKey: KagemushaDevicePublicKeyV2,
     val assertionScheme: String,
     val assertionKeyAlgorithm: String,
@@ -178,7 +180,11 @@ class DeviceAttestationRegistration(
                 require(iosEnvironment == "production" || iosEnvironment == "development") {
                     "ios_environment must be production or development"
                 }
-                require(androidPackageName == null && _androidSigningCertificateSha256 == null) {
+                require(
+                    androidPackageName == null &&
+                        _androidSigningCertificateSha256 == null &&
+                        androidAttestedDeviceProperties == null,
+                ) {
                     "iOS App Attest must not carry Android app metadata"
                 }
             }
@@ -202,6 +208,7 @@ class DeviceAttestationRegistration(
             iosEnvironment == other.iosEnvironment &&
             androidPackageName == other.androidPackageName &&
             nullableBytesEqual(_androidSigningCertificateSha256, other._androidSigningCertificateSha256) &&
+            androidAttestedDeviceProperties == other.androidAttestedDeviceProperties &&
             publicKey == other.publicKey &&
             assertionScheme == other.assertionScheme &&
             assertionKeyAlgorithm == other.assertionKeyAlgorithm &&
@@ -230,6 +237,7 @@ class DeviceAttestationRegistration(
             iosBundleId,
             iosEnvironment,
             androidPackageName,
+            androidAttestedDeviceProperties,
             publicKey,
             assertionScheme,
             assertionKeyAlgorithm,

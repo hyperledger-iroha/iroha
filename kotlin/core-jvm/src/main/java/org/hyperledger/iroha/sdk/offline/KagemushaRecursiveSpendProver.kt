@@ -6,13 +6,11 @@ import java.util.ArrayList
 import java.util.Collections
 import java.util.concurrent.CompletableFuture
 import java.util.concurrent.locks.ReentrantLock
-import org.hyperledger.iroha.sdk.client.CanonicalRequestSigner
 import org.hyperledger.iroha.sdk.client.transport.TransportExecutor
 import org.hyperledger.iroha.sdk.client.transport.TransportRequest
 import org.hyperledger.iroha.sdk.client.transport.TransportResponse
 import org.hyperledger.iroha.sdk.client.JsonParser
 import org.hyperledger.iroha.sdk.client.LocalSigningContext
-import org.hyperledger.iroha.sdk.client.ToriiCanonicalRequestAuth
 import org.hyperledger.iroha.sdk.client.ZkMerklePathEntry
 import org.hyperledger.iroha.sdk.client.ZkMerklePathResponse
 import org.hyperledger.iroha.sdk.core.model.NetworkId
@@ -20,12 +18,12 @@ import org.hyperledger.iroha.sdk.norito.NoritoHeader
 import org.hyperledger.iroha.sdk.norito.SchemaHash
 
 /**
- * Native bridge ABI 22 for Kagemusha ABI-22/V4 artifact streaming and capabilities.
+ * Native bridge ABI 22 for Kagemusha protocol/data V4 artifact streaming and capabilities.
  *
  * This is the sole first-release offline-cash surface. It authenticates the opaque eight-file proof
  * artifact set and validates exact typed request/payment/acknowledgement and proof-bound membership
  * archives. Proof execution remains fail-closed while the native backend reports unavailable.
- * Every recursive lifecycle result is projected only through an ABI-22/V4 native decoder.
+ * Every recursive lifecycle result is projected through native bridge ABI 22 and decoded as V4.
  */
 class KagemushaRecursiveSpendProver private constructor() {
     /** Retryable contention signal raised before a second proof request is copied. */
@@ -98,10 +96,10 @@ class KagemushaRecursiveSpendProver private constructor() {
         const val MAX_LOCAL_RESULT_ARCHIVE_BYTES_V4: Int = 64 * 1024 * 1024 + 64
         const val MAX_LOCAL_REQUEST_ARCHIVE_BYTES: Int = MAX_LOCAL_REQUEST_ARCHIVE_BYTES_V4
         const val MAX_LOCAL_RESULT_ARCHIVE_BYTES: Int = MAX_LOCAL_RESULT_ARCHIVE_BYTES_V4
-        /** Exact Torii body ceiling for the ABI-22/V4 top-up route. */
+        /** Exact Torii body ceiling for the Kagemusha V4 top-up route. */
         const val MAX_TORII_TOP_UP_REQUEST_BYTES_V4: Int = 512 * 1024
 
-        /** Exact Torii body ceiling for the ABI-22/V4 redemption route. */
+        /** Exact Torii body ceiling for the Kagemusha V4 redemption route. */
         const val MAX_TORII_REDEEM_REQUEST_BYTES_V4: Int = 48 * 1024 * 1024
 
         private const val MAX_REQUEST_AUTHORIZATION_BYTES: Int = 512 * 1024
@@ -1138,66 +1136,6 @@ class KagemushaRecursiveSpendProver private constructor() {
                 verifiedAtMilliseconds,
                 projection,
             )
-        }
-
-        /** Create the request-independent selector used to prefetch portable receiver lineage. */
-        @JvmStatic
-        fun createRecipientLineageQueryV2(
-            networkId: NetworkId,
-            chainDiscriminant: Int,
-            recipientAccountId: String,
-            receiverDeviceId: String,
-            assetDefinitionId: String,
-            trustedCheckpointHeight: Long,
-        ): RecipientLineageQueryV2 {
-            requireArtifactBridge()
-            require(trustedCheckpointHeight > 0) { "trustedCheckpointHeight must be positive" }
-            return RecipientLineageQueryV2(
-                nativeCreateRecipientLineageQueryV2(
-                    networkId.bytes(),
-                    requireChainDiscriminant(chainDiscriminant),
-                    utf8(recipientAccountId, "recipientAccountId"),
-                    utf8(receiverDeviceId, "receiverDeviceId"),
-                    utf8(assetDefinitionId, "assetDefinitionId"),
-                    trustedCheckpointHeight,
-                ),
-            )
-        }
-
-        /** Verify signed request, active-state lineage and a bounded finality suffix locally. */
-        @JvmStatic
-        fun verifyRecipientRegistrationLineageV2(
-            request: RecipientPaymentRequest,
-            lineage: RecipientRegistrationLineage,
-            verifiedAtMilliseconds: Long,
-            trustedCheckpointHeight: Long,
-            trustedCheckpointContextId: ByteArray,
-        ): VerifiedRecipientRegistrationLineageV2 {
-            requireArtifactBridge()
-            require(verifiedAtMilliseconds > 0) { "verifiedAtMilliseconds must be positive" }
-            require(trustedCheckpointHeight > 0) {
-                "trustedCheckpointHeight must be positive"
-            }
-            val trustedContext = requireFinalityCheckpointContext(
-                trustedCheckpointContextId,
-                "trustedCheckpointContextId",
-            )
-            return try {
-                val fields = nativeVerifyRecipientRegistrationLineageV2(
-                    request.noritoEncoded(),
-                    lineage.noritoEncoded(),
-                    verifiedAtMilliseconds,
-                    trustedCheckpointHeight,
-                    trustedContext,
-                )
-                requireFieldCount(fields, 2, "verified recipient lineage")
-                VerifiedRecipientRegistrationLineageV2(
-                    RecipientRegistrationLineage(fields[0]),
-                    FinalityCheckpointPromotionV2(fields[1]),
-                )
-            } finally {
-                trustedContext.fill(0)
-            }
         }
 
         /** Build one canonical receive offer carrying request, lineage and publisher envelope. */
@@ -2418,8 +2356,6 @@ class KagemushaRecursiveSpendProver private constructor() {
 
         @JvmStatic private external fun nativeCreateRecipientRequestV2(payload: ByteArray, signature: ByteArray): ByteArray
         @JvmStatic private external fun nativeVerifyRecipientRequestV2(request: ByteArray, verifiedAtMilliseconds: Long): ByteArray
-        @JvmStatic private external fun nativeCreateRecipientLineageQueryV2(networkId: ByteArray, chainDiscriminant: Int, recipient: ByteArray, receiverDeviceId: ByteArray, asset: ByteArray, trustedCheckpointHeight: Long): ByteArray
-        @JvmStatic private external fun nativeVerifyRecipientRegistrationLineageV2(request: ByteArray, lineage: ByteArray, verifiedAtMilliseconds: Long, trustedCheckpointHeight: Long, trustedCheckpointContextId: ByteArray): Array<ByteArray>
         @JvmStatic private external fun nativeCreateRecipientReceiveOfferV2(request: ByteArray, lineage: ByteArray, publisherCheckpointEnvelope: ByteArray): ByteArray
         @JvmStatic private external fun nativeProjectRecipientReceiveOfferV2(offer: ByteArray): Array<ByteArray>
         @JvmStatic private external fun nativeVerifyRecipientReceiveOfferV2(offer: ByteArray, verifiedAtMilliseconds: Long, trustedCheckpointHeight: Long, trustedCheckpointContextId: ByteArray): Array<ByteArray>
@@ -2584,13 +2520,6 @@ class KagemushaRecursiveSpendProver private constructor() {
         archive,
         "iroha_data_model::offline::model::KagemushaRecipientPaymentRequestV2",
         "recipientPaymentRequest",
-        MAX_PEER_ARCHIVE_BYTES_V2,
-    )
-
-    class RecipientLineageQueryV2 internal constructor(archive: ByteArray) : CanonicalArchive(
-        archive,
-        "iroha_torii_shared::offline_api::OfflineRecipientLineageRequest",
-        "recipientLineageQuery",
         MAX_PEER_ARCHIVE_BYTES_V2,
     )
 
@@ -3554,11 +3483,6 @@ class KagemushaRecursiveSpendProver private constructor() {
         fun contextId(): ByteArray = encodedValue.copyOfRange(8, encodedValue.size)
     }
 
-    class VerifiedRecipientRegistrationLineageV2 internal constructor(
-        val lineage: RecipientRegistrationLineage,
-        val promotedCheckpoint: FinalityCheckpointPromotionV2,
-    )
-
     class RecipientReceiveOfferProjectionV2 internal constructor(
         val request: RecipientPaymentRequest,
         val lineage: RecipientRegistrationLineage,
@@ -3859,12 +3783,33 @@ class KagemushaRecursiveSpendProver private constructor() {
             require(maximumHops == MAXIMUM_PEER_HOPS) {
                 "maximumHops must match the cash_handoff_v1 bound"
             }
-            require(ready) { "ready must be true for universal offline capability" }
+            require(!ready) {
+                "ready must be false for asset-neutral offline capability"
+            }
             require(assets.isEmpty()) { "assets must be empty because capability is asset-neutral" }
-            require(blockers.isEmpty()) { "blockers must be empty for universal offline capability" }
+            require(
+                blockers.map { it.code to it.message } ==
+                    activationBlockers.map { it.code to it.message },
+            ) {
+                "blockers must contain the three ordered canonical activation blockers"
+            }
         }
 
         internal companion object {
+            private val activationBlockers = listOf(
+                ReadinessBlocker(
+                    "offline_cash_authenticated_release_unavailable",
+                    "No authenticated Offline Cash V1 release is selected by this asset-neutral response.",
+                ),
+                ReadinessBlocker(
+                    "offline_cash_eligible_asset_unavailable",
+                    "No eligible Offline Cash V1 asset is selected by this asset-neutral response.",
+                ),
+                ReadinessBlocker(
+                    "offline_cash_proof_backend_unavailable",
+                    "No reviewed production Offline Cash V1 proof and secure-device backend is authenticated by this response.",
+                ),
+            )
             private val fields = setOf(
                 "mandatory",
                 "cash_handoff_capability",
@@ -3894,7 +3839,7 @@ class KagemushaRecursiveSpendProver private constructor() {
                 val blockers = parsed["blockers"] as? List<*>
                     ?: error("offline capability blockers must be an array")
                 check(assets.isEmpty()) { "offline capability assets must be empty" }
-                check(blockers.isEmpty()) { "offline capability blockers must be empty" }
+                val decodedBlockers = decodeBlockers(blockers)
                 return OfflineStatus(
                     mandatory = mandatory,
                     cashHandoffCapability = capability,
@@ -3902,8 +3847,36 @@ class KagemushaRecursiveSpendProver private constructor() {
                     maximumHops = hops,
                     ready = ready,
                     assets = emptyList(),
-                    blockers = emptyList(),
+                    blockers = decodedBlockers,
                 )
+            }
+
+            private fun decodeBlockers(values: List<*>): List<ReadinessBlocker> {
+                val codes = mutableSetOf<String>()
+                return values.mapIndexed { index, value ->
+                    check(value is Map<*, *> && value.keys == setOf("code", "message")) {
+                        "offline capability blocker[$index] must contain exactly code and message"
+                    }
+                    val code = value["code"] as? String
+                        ?: error("offline capability blocker[$index].code must be a string")
+                    check(code.matches(Regex("[a-z][a-z0-9_]{0,63}"))) {
+                        "offline capability blocker[$index].code must be canonical lowercase text"
+                    }
+                    check(codes.add(code)) {
+                        "offline capability repeats blocker code $code"
+                    }
+                    val message = value["message"] as? String
+                        ?: error("offline capability blocker[$index].message must be a string")
+                    check(
+                        message.isNotEmpty() &&
+                            message == message.trim() &&
+                            message.codePointCount(0, message.length) <= 1024 &&
+                            message.codePoints().noneMatch(Character::isISOControl),
+                    ) {
+                        "offline capability blocker[$index].message must be canonical bounded text"
+                    }
+                    ReadinessBlocker(code, message)
+                }
             }
 
             private fun exactInt(value: Any?, field: String): Int {
@@ -3947,7 +3920,7 @@ class KagemushaRecursiveSpendProver private constructor() {
                 (withdrawalHeight == null || blockHeight < withdrawalHeight)
     }
 
-    /** Authenticated ABI-22 V4 release identity selected at the readiness snapshot. */
+    /** Authenticated Kagemusha V4 release identity selected at the readiness snapshot. */
     class AuthenticatedArtifactSet internal constructor(
         val generation: String,
         manifestSha256: ByteArray,
@@ -3993,7 +3966,7 @@ class KagemushaRecursiveSpendProver private constructor() {
                 "authenticated artifact activation window is invalid"
             }
             require(maximumProofBytes in 1..MAXIMUM_RECURSIVE_PROOF_PAIR_BYTES_V4) {
-                "artifactMaximumProofBytes exceeds the ABI-21 V4 release limit"
+                "artifactMaximumProofBytes exceeds the Kagemusha V4 release limit"
             }
             require(assetScale in 0..KagemushaScaledAmount.MAXIMUM_SCALE) {
                 "artifactAssetScale exceeds the offline payment limit"
@@ -4124,7 +4097,7 @@ class KagemushaRecursiveSpendProver private constructor() {
         fun transactionHash(): ByteArray = transactionHashValue.copyOf()
     }
 
-    /** Strict typed client for the five first-release Kagemusha Torii routes. */
+    /** Strict typed client for the four first-release Kagemusha Torii routes. */
     class ToriiClient internal constructor(
         baseUri: URI,
         private val transport: TransportExecutor,
@@ -4135,7 +4108,6 @@ class KagemushaRecursiveSpendProver private constructor() {
             const val TOP_UP_PATH: String = "/v1/offline/top-up"
             const val REDEEM_PATH: String = "/v1/offline/redeem"
             const val OPERATIONS_PATH: String = "/v1/offline/operations"
-            const val RECEIVER_LINEAGE_PATH: String = "/v1/offline/receiver-lineage"
             const val JSON_MEDIA_TYPE: String = "application/json"
             const val NORITO_MEDIA_TYPE: String = "application/x-norito"
 
@@ -4180,52 +4152,6 @@ class KagemushaRecursiveSpendProver private constructor() {
                 200,
                 JSON_MEDIA_TYPE,
             ).thenApply { OfflineStatus.decode(it.body) }
-        }
-
-        fun getRecipientRegistrationLineage(
-            query: RecipientLineageQueryV2,
-            canonicalAuth: ToriiCanonicalRequestAuth,
-        ): CompletableFuture<RecipientRegistrationLineage> {
-            val target = URI.create("$baseUri$RECEIVER_LINEAGE_PATH")
-            val body = query.noritoEncoded()
-            val timestampMs = canonicalAuth.timestampMs
-            val nonce = canonicalAuth.nonce
-            require((timestampMs == null) == (nonce == null)) {
-                "timestampMs and nonce must be provided together"
-            }
-            val authHeaders = if (timestampMs == null) {
-                CanonicalRequestSigner.buildHeaders(
-                    localSigningContext.networkId(),
-                    "POST",
-                    target,
-                    body,
-                    canonicalAuth.accountId,
-                    canonicalAuth.privateKey,
-                )
-            } else {
-                CanonicalRequestSigner.buildHeaders(
-                    localSigningContext.networkId(),
-                    "POST",
-                    target,
-                    body,
-                    canonicalAuth.accountId,
-                    canonicalAuth.privateKey,
-                    timestampMs,
-                    nonce!!,
-                )
-            }
-            val builder = TransportRequest.builder()
-                .setMethod("POST")
-                .setUri(target)
-                .addHeader("Accept", NORITO_MEDIA_TYPE)
-                .addHeader("Content-Type", NORITO_MEDIA_TYPE)
-                .setBody(body)
-                .setMaximumResponseBytes(MAX_TORII_RESPONSE_BYTES.toLong())
-            authHeaders.forEach { (name, value) -> builder.addHeader(name, value) }
-            return execute(
-                builder.build(),
-                200,
-            ).thenApply { RecipientRegistrationLineage(it.body) }
         }
 
         fun submitTopUp(

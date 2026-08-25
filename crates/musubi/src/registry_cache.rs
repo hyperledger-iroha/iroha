@@ -967,13 +967,13 @@ mod tests {
     };
     use tempfile::TempDir;
     fn network_id() -> NetworkId {
-        "hash:32C903E5B3497E34C2B844EBFE8A39C19E6CF8F95D44C1FFB8BA9DCB42F91149#A2F0"
+        "32c903e5b3497e34c2b844ebfe8a39c19e6cf8f95d44c1ffb8ba9dcb42f91149"
             .parse()
             .expect("network id")
     }
     #[cfg(any(target_os = "linux", target_os = "android"))]
     fn other_network_id() -> NetworkId {
-        "hash:214A4C8F95074B216BE2F72EB93166506DAE0B1026ED01EF5A760632CD93ABAB#50FA"
+        "214a4c8f95074b216be2f72eb93166506dae0b1026ed01ef5a760632cd93abab"
             .parse()
             .expect("other network id")
     }

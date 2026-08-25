@@ -119,7 +119,7 @@ fn load_base_config(path: &Path) -> Result<BaseConfig> {
         .and_then(toml::Value::as_str)
         .ok_or_else(|| eyre!("base config is missing `network_id`"))?
         .parse::<NetworkId>()
-        .wrap_err("base config `network_id` is not an exact genesis hash")?;
+        .wrap_err("base config `network_id` is not canonical raw lowercase hexadecimal text")?;
     let torii_url = value
         .get("torii_url")
         .and_then(toml::Value::as_str)
@@ -187,8 +187,7 @@ fn normalize_names(raw: Vec<String>) -> Result<Vec<String>> {
 fn render_client_config(base: &BaseConfig, domain: &str, key_pair: &KeyPair) -> Zeroizing<String> {
     let public_key = key_pair.public_key().to_string();
     let private_key = Zeroizing::new(ExposedPrivateKey(key_pair.private_key().clone()).to_string());
-    let network_id =
-        norito::literal::format("hash", &base.network_id.to_string().to_ascii_uppercase());
+    let network_id = base.network_id.to_string();
     let mut rendered = Zeroizing::new(format!(
         concat!(
             "chain = \"{chain}\"\n",
@@ -228,7 +227,7 @@ mod tests {
     fn write_base_config(path: &Path) {
         let payload = r#"
 chain = "demo-chain"
-network_id = "hash:32C903E5B3497E34C2B844EBFE8A39C19E6CF8F95D44C1FFB8BA9DCB42F91149#A2F0"
+network_id = "32c903e5b3497e34c2b844ebfe8a39c19e6cf8f95d44c1ffb8ba9dcb42f91149"
 torii_url = "http://127.0.0.1:8080/"
 
 [basic_auth]
@@ -246,7 +245,7 @@ web_login = "demo"
         assert_eq!(base.chain, "demo-chain");
         assert_eq!(
             base.network_id.to_string(),
-            "32C903E5B3497E34C2B844EBFE8A39C19E6CF8F95D44C1FFB8BA9DCB42F91149"
+            "32c903e5b3497e34c2b844ebfe8a39c19e6cf8f95d44c1ffb8ba9dcb42f91149"
         );
         assert_eq!(base.torii_url, "http://127.0.0.1:8080/");
         let auth = base.basic_auth.expect("basic auth present");
@@ -285,10 +284,9 @@ web_login = "demo"
     fn render_client_config_contains_expected_fields() {
         let base = BaseConfig {
             chain: "demo-chain".to_owned(),
-            network_id:
-                "hash:32C903E5B3497E34C2B844EBFE8A39C19E6CF8F95D44C1FFB8BA9DCB42F91149#A2F0"
-                    .parse()
-                    .expect("network id"),
+            network_id: "32c903e5b3497e34c2b844ebfe8a39c19e6cf8f95d44c1ffb8ba9dcb42f91149"
+                .parse()
+                .expect("network id"),
             torii_url: "http://127.0.0.1:8080/".to_owned(),
             basic_auth: Some(BasicAuth {
                 web_login: "demo".to_owned(),
@@ -305,7 +303,7 @@ web_login = "demo"
         );
         assert_eq!(
             value.get("network_id").and_then(toml::Value::as_str),
-            Some("hash:32C903E5B3497E34C2B844EBFE8A39C19E6CF8F95D44C1FFB8BA9DCB42F91149#A2F0")
+            Some("32c903e5b3497e34c2b844ebfe8a39c19e6cf8f95d44c1ffb8ba9dcb42f91149")
         );
         assert_eq!(
             value.get("torii_url").and_then(toml::Value::as_str),
@@ -369,10 +367,9 @@ web_login = "demo"
     fn render_client_config_accepts_dataspace_account_scope() {
         let base = BaseConfig {
             chain: "demo-chain".to_owned(),
-            network_id:
-                "hash:32C903E5B3497E34C2B844EBFE8A39C19E6CF8F95D44C1FFB8BA9DCB42F91149#A2F0"
-                    .parse()
-                    .expect("network id"),
+            network_id: "32c903e5b3497e34c2b844ebfe8a39c19e6cf8f95d44c1ffb8ba9dcb42f91149"
+                .parse()
+                .expect("network id"),
             torii_url: "http://127.0.0.1:8080/".to_owned(),
             basic_auth: None,
         };

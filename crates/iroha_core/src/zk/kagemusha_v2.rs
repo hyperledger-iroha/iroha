@@ -1,4 +1,4 @@
-//! Selector-free ABI-21/V4 Kagemusha recursive-spend backend.
+//! Selector-free bridge ABI-22 / Kagemusha V4 recursive-spend backend.
 //!
 //! V4 reuses the unchanged V2 amounts, note openings, authorization, membership, and finality
 //! relations. Its fixed Eq/Ep recursive circuits keep the recursive IPA verifier separate from the
@@ -1002,7 +1002,7 @@ impl KagemushaRecursiveSpendStateVectorV5 {
             .expect("manifest slot has eight exact limbs")
     }
     /// Reconstruct the complete continuing-state vector directly from an
-    /// ABI-21 statement without projecting it through a legacy carrier.
+    /// Kagemusha V4 statement without projecting it through a legacy carrier.
     pub fn from_statement_v4(
         statement: &KagemushaRecursiveSpendPublicStatementV4,
     ) -> Result<Self, String> {
@@ -1073,7 +1073,7 @@ impl KagemushaRecursiveSpendStateVectorV5 {
         );
         Ok(Self { limbs })
     }
-    /// Validate every exact ABI-21 state limb against its canonical statement.
+    /// Validate every exact Kagemusha V4 state limb against its canonical statement.
     pub fn validate_against_statement_v4(
         &self,
         statement: &KagemushaRecursiveSpendPublicStatementV4,
@@ -1215,7 +1215,7 @@ pub(super) fn kagemusha_public_inputs_for_statement_v4(
         live_selector: KAGEMUSHA_PASTA_PUBLIC_LIVE_SELECTOR_V4,
     })
 }
-/// Derive the canonical ABI-21 child statement for one validated peer split.
+/// Derive the canonical Kagemusha V4 child statement for one validated peer split.
 ///
 /// The caller supplies only the proof-derived final tree root and next-zero frontier. All lineage,
 /// transition, count, release, and verifier identities are derived from the split itself, so bridge
@@ -1406,7 +1406,7 @@ impl<'a> KagemushaArtifactLoaderBindingV4<'a> {
         Ok(())
     }
 }
-/// Opaque ABI-21 prover facade around the private Pasta recursion adapter.
+/// Opaque Kagemusha V4 prover facade around the private Pasta recursion adapter.
 ///
 /// Lifecycle callers select a semantic operation and provide its confidential
 /// openings, but never receive or construct fold transcripts, accumulator
@@ -1469,7 +1469,7 @@ pub struct KagemushaPastaCycleOpaqueProverV4 {
     candidate_evidence_lab: bool,
 }
 impl KagemushaPastaCycleOpaqueProverV4 {
-    /// Parse and cross-check the complete authenticated ABI-21 prover set.
+    /// Parse and cross-check the complete authenticated Kagemusha V4 prover set.
     pub fn from_authenticated_artifacts(
         artifacts: &super::kagemusha_artifact_v4::KagemushaPastaCycleProverArtifactsV4,
     ) -> Result<Self, String> {
@@ -1893,7 +1893,7 @@ impl KagemushaPastaCycleOpaqueProverV4 {
         )
     }
 }
-/// Opaque ABI-21 terminal-verifier facade. Spend acceptance requires a complete V4 bundle; the
+/// Opaque Kagemusha V4 terminal-verifier facade. Spend acceptance requires a complete V4 bundle; the
 /// separate unbound-pair method exists only for authenticated release qualification.
 /// Recursion-specific pair internals remain private.
 enum KagemushaPastaCycleOpaqueVerifierInnerV4 {
@@ -1968,7 +1968,7 @@ fn ensure_bundle_operation_v4(
     Ok(())
 }
 impl KagemushaPastaCycleOpaqueVerifierV4 {
-    /// Parse and cross-check the complete authenticated ABI-21 verifier set.
+    /// Parse and cross-check the complete authenticated Kagemusha V4 verifier set.
     pub fn from_authenticated_artifacts(
         artifacts: &super::kagemusha_artifact_v4::KagemushaPastaCycleVerifierArtifactsV4,
     ) -> Result<Self, String> {
@@ -2147,7 +2147,7 @@ impl KagemushaPastaCycleOpaqueVerifierV4 {
         )
     }
 }
-/// Require a complete ABI-21 bundle to bind its opaque pair envelope to the
+/// Require a complete Kagemusha V4 bundle to bind its opaque pair envelope to the
 /// authenticated release and to the exact statement-derived state boundary.
 pub(crate) fn ensure_kagemusha_recursive_spend_v4_proof_envelope_binding(
     bundle: &KagemushaRecursiveSpendBundleV4,

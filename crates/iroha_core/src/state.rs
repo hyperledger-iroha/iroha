@@ -12692,6 +12692,16 @@ impl<'state> StateBlock<'state> {
     > {
         self.settlement_accumulator.drain_nexus_fees()
     }
+    /// Drain actual direct-settlement fee payments gathered while building this block.
+    #[inline]
+    pub fn drain_direct_fee_payment_records(
+        &mut self,
+    ) -> std::collections::BTreeMap<
+        HashOf<SignedTransaction>,
+        crate::settlement::PendingDirectFeePaymentReceipt,
+    > {
+        self.settlement_accumulator.drain_direct_fee_payments()
+    }
     /// Record a settlement receipt for the current transaction.
     #[inline]
     pub fn record_settlement_receipt(
@@ -12861,6 +12871,9 @@ pub struct StateTransaction<'block, 'state> {
     /// Nexus fee receipts staged during this transaction execution.
     pending_nexus_fee_records:
         BTreeMap<HashOf<SignedTransaction>, crate::settlement::PendingNexusFeeReceipt>,
+    /// Successful direct-settlement debits staged during this transaction execution.
+    pending_direct_fee_payment_records:
+        BTreeMap<HashOf<SignedTransaction>, crate::settlement::PendingDirectFeePaymentReceipt>,
     /// Charged Nexus fee event staged until the transaction is committed.
     pending_nexus_fee_event: Option<crate::sumeragi::status::NexusFeeEvent>,
     /// Block fee amount staged until the transaction is committed.
@@ -13079,6 +13092,44 @@ impl<'block, 'state> StateTransaction<'block, 'state> {
         record: crate::settlement::PendingNexusFeeReceipt,
     ) {
         self.pending_nexus_fee_records.insert(tx_hash, record);
+    }
+    /// Stage one successfully applied direct-settlement fee component.
+    ///
+    /// Components for the same signed transaction must agree on their exact debit source and
+    /// may contain each fee kind at most once. A rejected business transaction can still apply
+    /// this fee-only state transaction; a dropped state transaction cannot leak this record.
+    pub fn record_direct_fee_payment_charge(
+        &mut self,
+        tx_hash: HashOf<SignedTransaction>,
+        debit_source: iroha_data_model::nexus::FeeDebitSource,
+        debited_account_id: AccountId,
+        sponsor_program_revision: Option<u64>,
+        charge: crate::settlement::PendingDirectFeePaymentCharge,
+    ) -> Result<(), ValidationFail> {
+        use std::collections::btree_map::Entry;
+
+        match self.pending_direct_fee_payment_records.entry(tx_hash) {
+            Entry::Vacant(entry) => {
+                entry.insert(crate::settlement::PendingDirectFeePaymentReceipt::new(
+                    tx_hash,
+                    debit_source,
+                    debited_account_id,
+                    sponsor_program_revision,
+                    charge,
+                ));
+            }
+            Entry::Occupied(mut entry) => entry
+                .get_mut()
+                .record_charge(
+                    tx_hash,
+                    debit_source,
+                    debited_account_id,
+                    sponsor_program_revision,
+                    charge,
+                )
+                .map_err(|error| ValidationFail::InternalError(error.to_owned()))?,
+        }
+        Ok(())
     }
     /// Drain settlement receipts staged while executing this transaction.
     pub fn drain_settlement_records(
@@ -30460,6 +30511,10 @@ impl State {
                 .collect::<Vec<_>>();
             state_block
                 .take_merge_lane_batch_transfer_outcomes(&source.input.entrypoints, &mut results)?;
+            state_block.take_merge_lane_direct_fee_payment_receipts(
+                &source.input.entrypoints,
+                &mut results,
+            )?;
             let result_hashes = results
                 .iter()
                 .map(|result| Hash::from(result.hash()))
@@ -46304,6 +46359,7 @@ impl<'state> StateBlock<'state> {
             settlement_accumulator: &mut self.settlement_accumulator,
             pending_settlement_records: BTreeMap::new(),
             pending_nexus_fee_records: BTreeMap::new(),
+            pending_direct_fee_payment_records: BTreeMap::new(),
             pending_nexus_fee_event: None,
             #[cfg(feature = "telemetry")]
             pending_block_fee_amount: Quantity::zero(),
@@ -47208,6 +47264,57 @@ impl<'state> StateBlock<'state> {
                 ));
             }
             result.set_batch_transfer_outcomes(outcomes);
+        }
+        Ok(())
+    }
+    fn take_merge_lane_direct_fee_payment_receipts(
+        &mut self,
+        entrypoints: &[TransactionEntrypoint],
+        results: &mut [TransactionResult],
+    ) -> Result<(), MergeLedgerCommitError> {
+        if entrypoints.len() != results.len() {
+            return Err(MergeLedgerCommitError::ExecutionDivergence(
+                "lane execution cannot align direct fee receipts with transaction results"
+                    .to_owned(),
+            ));
+        }
+        let mut pending = self.drain_direct_fee_payment_records();
+        let block_height = self._curr_block.height().get();
+        let block_hash = self._curr_block.hash();
+        let mut seen = BTreeSet::new();
+        for (entrypoint, result) in entrypoints.iter().zip(results) {
+            let Some(transaction_hash) = crate::tx::exact_signed_transaction_hash(entrypoint)
+            else {
+                continue;
+            };
+            if !seen.insert(transaction_hash) {
+                return Err(MergeLedgerCommitError::ExecutionDivergence(
+                    "lane execution produced duplicate direct fee transaction bindings".to_owned(),
+                ));
+            }
+            let Some(record) = pending.remove(&transaction_hash) else {
+                continue;
+            };
+            let receipt = record
+                .into_final_receipt(result, block_height, block_hash)
+                .map_err(|error| {
+                    MergeLedgerCommitError::ExecutionDivergence(format!(
+                        "lane direct fee receipt failed finalization: {error}"
+                    ))
+                })?;
+            receipt
+                .validate_committed_binding(entrypoint, result, block_height, &block_hash)
+                .map_err(|error| {
+                    MergeLedgerCommitError::ExecutionDivergence(format!(
+                        "lane direct fee receipt failed committed binding: {error}"
+                    ))
+                })?;
+            result.set_fee_payment(Some(receipt));
+        }
+        if !pending.is_empty() {
+            return Err(MergeLedgerCommitError::ExecutionDivergence(
+                "lane execution produced direct fee evidence for an unbound transaction".to_owned(),
+            ));
         }
         Ok(())
     }
@@ -56601,6 +56708,7 @@ impl StateTransaction<'_, '_> {
             settlement_accumulator,
             pending_settlement_records,
             pending_nexus_fee_records,
+            pending_direct_fee_payment_records,
             pending_nexus_fee_event,
             #[cfg(feature = "telemetry")]
             pending_block_fee_amount,
@@ -56644,6 +56752,11 @@ impl StateTransaction<'_, '_> {
         if !pending_nexus_fee_records.is_empty() {
             for (tx_hash, record) in pending_nexus_fee_records {
                 settlement_accumulator.record_nexus_fee(tx_hash, record);
+            }
+        }
+        if !pending_direct_fee_payment_records.is_empty() {
+            for (tx_hash, record) in pending_direct_fee_payment_records {
+                settlement_accumulator.record_direct_fee_payment(tx_hash, record);
             }
         }
         if let Some(event) = pending_nexus_fee_event {

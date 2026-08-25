@@ -83,7 +83,7 @@ fn contract_subject_binding_materializes_missing_account_and_preserves_existing_
         .execute(&ALICE_ID, &mut state_transaction)
         .expect("seed lifecycle authority");
     let missing_address = ContractAddress::derive(
-        &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
+        &"0000000000000000000000000000000000000000000000000000000000000001"
             .parse()
             .expect("canonical test network id"),
         &ALICE_ID,
@@ -103,7 +103,7 @@ fn contract_subject_binding_materializes_missing_account_and_preserves_existing_
         &missing_subject,
     ));
     let existing_address = ContractAddress::derive(
-        &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
+        &"0000000000000000000000000000000000000000000000000000000000000001"
             .parse()
             .expect("canonical test network id"),
         &ALICE_ID,

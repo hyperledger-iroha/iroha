@@ -51,7 +51,7 @@ class OfflineCashDeviceLifecycleBridgeV1 private constructor(
         STALE_OR_CONCURRENT(2),
         INTENT_MISMATCH(3),
         TRUSTED_TIME_REJECTED(4),
-        REJECTED(5),
+        POLICY_REJECTED(5),
         MISSING(6),
         CONFLICT(7),
         CORRUPT(8),
@@ -143,6 +143,9 @@ class OfflineCashDeviceLifecycleBridgeV1 private constructor(
 
     companion object {
         const val PROTOCOL_VERSION: Int = 1
+        const val OPERATION_COUNT: Int = 14
+        const val CAPABILITY_FRAME_BYTES: Int = 96
+        const val REQUIRED_CAPABILITY_MASK: Int = 0x1ff
         const val MAXIMUM_COMMAND_PAYLOAD_BYTES: Int = 64 * 1024
         const val MAXIMUM_RESPONSE_PAYLOAD_BYTES: Int = 64 * 1024
         const val MAXIMUM_AUTHENTICATOR_BYTES: Int = 8 * 1024
@@ -158,7 +161,7 @@ class OfflineCashDeviceLifecycleBridgeV1 private constructor(
         private const val FEATURE_ATOMIC_COMMIT_AND_TERMINAL_RECEIPT = 1 shl 6
         private const val FEATURE_TERMINAL_RECOVERY = 1 shl 7
         private const val FEATURE_NO_SOFTWARE_FALLBACK = 1 shl 8
-        private const val REQUIRED_FEATURES =
+        private const val DERIVED_REQUIRED_CAPABILITY_MASK =
             FEATURE_ONE_INTENT_SLOT or
                 FEATURE_EXACT_NEXT_COUNTER or
                 FEATURE_AUTHENTICATED_DURABLE_JOURNAL or
@@ -193,8 +196,9 @@ class OfflineCashDeviceLifecycleBridgeV1 private constructor(
     }
 
     private object NativeEndpoint : Endpoint {
-        // TODO: implement these optional JNI methods only for an audited OEM/StrongBox service
-        // that can attest every required capability; stock AndroidKeyStore is insufficient.
+        // An audited OEM/StrongBox service may supply these optional JNI symbols only when it can
+        // attest every required capability. Their deliberate absence keeps stock AndroidKeyStore
+        // devices online-only instead of introducing a software fallback.
         fun create(): Endpoint? = try {
             System.loadLibrary(LIBRARY_NAME)
             val capabilities = nativeCapabilitiesV1()
@@ -230,18 +234,24 @@ class OfflineCashDeviceLifecycleBridgeV1 private constructor(
         private val capabilityMagic = "IOCFJCP1".toByteArray(Charsets.US_ASCII)
         private val commandMagic = "IOCFJCM1".toByteArray(Charsets.US_ASCII)
         private val responseMagic = "IOCFJRS1".toByteArray(Charsets.US_ASCII)
-        private const val CAPABILITY_BYTES = 96
         private const val COMMAND_HEADER_BYTES = 80
         private const val RESPONSE_HEADER_BYTES = 116
 
         fun decodeCapabilities(encoded: ByteArray, expectedPlatform: Int): Capabilities {
-            require(encoded.size == CAPABILITY_BYTES) { "invalid Offline Cash V1 capability size" }
+            check(DERIVED_REQUIRED_CAPABILITY_MASK == REQUIRED_CAPABILITY_MASK) {
+                "Offline Cash V1 capability mask declaration drifted"
+            }
+            require(encoded.size == CAPABILITY_FRAME_BYTES) {
+                "invalid Offline Cash V1 capability size"
+            }
             val input = reader(encoded)
             requireMagic(input, capabilityMagic, "capabilities")
             require(readU16(input) == PROTOCOL_VERSION) { "unsupported Offline Cash device bridge version" }
             require(readU8(input) == expectedPlatform) { "Offline Cash device bridge platform mismatch" }
             require(readU8(input) == 0) { "non-canonical Offline Cash capability flags" }
-            require(readU32(input) == REQUIRED_FEATURES.toLong()) { "incomplete Offline Cash secure backend" }
+            require(readU32(input) == REQUIRED_CAPABILITY_MASK.toLong()) {
+                "incomplete Offline Cash secure backend"
+            }
             require(readU32(input) == MAXIMUM_COMMAND_PAYLOAD_BYTES.toLong()) { "Offline Cash command bound mismatch" }
             require(readU32(input) == MAXIMUM_RESPONSE_PAYLOAD_BYTES.toLong()) { "Offline Cash response bound mismatch" }
             val policy = ByteArray(32).also(input::get)
@@ -334,12 +344,12 @@ class OfflineCashDeviceLifecycleBridgeV1 private constructor(
         ): ByteArray {
             requireDigest(policy, "policy")
             requireDigest(attestation, "attestation")
-            val output = writer(CAPABILITY_BYTES)
+            val output = writer(CAPABILITY_FRAME_BYTES)
             output.put(capabilityMagic)
             writeU16(output, PROTOCOL_VERSION)
             writeU8(output, platform)
             writeU8(output, 0)
-            writeU32(output, REQUIRED_FEATURES)
+            writeU32(output, REQUIRED_CAPABILITY_MASK)
             writeU32(output, MAXIMUM_COMMAND_PAYLOAD_BYTES)
             writeU32(output, MAXIMUM_RESPONSE_PAYLOAD_BYTES)
             output.put(policy)

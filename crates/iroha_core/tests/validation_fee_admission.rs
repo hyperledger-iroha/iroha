@@ -128,7 +128,7 @@ fn xor_asset_definition_id() -> AssetDefinitionId {
 }
 fn payout_contract_address() -> ContractAddress {
     ContractAddress::derive(
-        &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
+        &"0000000000000000000000000000000000000000000000000000000000000001"
             .parse()
             .expect("canonical test network id"),
         &account(1).0,
@@ -139,7 +139,7 @@ fn payout_contract_address() -> ContractAddress {
 }
 fn pool_contract_address() -> ContractAddress {
     ContractAddress::derive(
-        &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
+        &"0000000000000000000000000000000000000000000000000000000000000001"
             .parse()
             .expect("canonical test network id"),
         &account(2).0,

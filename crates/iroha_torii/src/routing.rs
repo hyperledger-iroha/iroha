@@ -4433,8 +4433,7 @@ async fn handle_connect_session_with_rng<R: rand::rand_core::TryCryptoRng + ?Siz
     let app_pk_b64 = B64.encode(app_pk);
     let nonce_b64 = B64.encode(nonce);
     let node = req.node.unwrap_or_default();
-    let network_id_literal =
-        norito::literal::format("hash", &hex::encode_upper(network_id.as_bytes()));
+    let network_id_literal = network_id.to_string();
     let wallet_uri = format!(
         "iroha://connect?sid={}&network_id={}&app_pk={}&nonce={}&node={}&v=1&role=wallet&token={}&relay={}",
         sid_b64,
@@ -4568,7 +4567,7 @@ mod connect_session_tests {
         assert!(resp.0.wallet_uri.contains("&relay="));
         assert!(resp.0.app_uri.contains("&relay="));
         const CANONICAL_NETWORK_ID: &str =
-            "hash:445E0F6E4B393BFB5FA7688DA17D509A9B4F8DFC9032DE25C65C83DD7C7FBF7D#6120";
+            "445e0f6e4b393bfb5fa7688da17d509a9b4f8dfc9032de25c65c83dd7c7fbf7d";
         for uri in [&resp.0.wallet_uri, &resp.0.app_uri] {
             let parsed = url::Url::parse(uri).expect("valid Connect URI");
             let network_ids = parsed
@@ -20972,7 +20971,7 @@ mod multisig_contract_call_tests {
     fn contract_runtime_permission_target_is_exactly_bound_to_instance_and_selector() {
         let authority = sample_account_id();
         let first = iroha_data_model::smart_contract::ContractAddress::derive(
-            &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
+            &"0000000000000000000000000000000000000000000000000000000000000001"
                 .parse()
                 .expect("canonical test network id"),
             &authority,
@@ -20981,7 +20980,7 @@ mod multisig_contract_call_tests {
         )
         .expect("first contract address");
         let second = iroha_data_model::smart_contract::ContractAddress::derive(
-            &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
+            &"0000000000000000000000000000000000000000000000000000000000000001"
                 .parse()
                 .expect("canonical test network id"),
             &authority,
@@ -21019,7 +21018,7 @@ mod multisig_contract_call_tests {
         let code_hash = Hash::new(b"code-hash".to_vec());
         let payload = IrohaJson::new(norito::json!({ "n": 1 }));
         let contract_address = iroha_data_model::smart_contract::ContractAddress::derive(
-            &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
+            &"0000000000000000000000000000000000000000000000000000000000000001"
                 .parse()
                 .expect("canonical test network id"),
             &multisig,
@@ -21057,7 +21056,7 @@ mod multisig_contract_call_tests {
     routing_test! { sync multisig_contract_call_instruction_envelope_hashes_deterministically
         let multisig = sample_account_id();
         let contract_address = iroha_data_model::smart_contract::ContractAddress::derive(
-            &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
+            &"0000000000000000000000000000000000000000000000000000000000000001"
                 .parse()
                 .expect("canonical test network id"),
             &multisig,
@@ -21131,7 +21130,7 @@ mod multisig_contract_call_tests {
     routing_test! { sync multisig_contract_call_intent_requires_exact_canonical_envelope
         let multisig = sample_account_id();
         let contract_address = iroha_data_model::smart_contract::ContractAddress::derive(
-            &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
+            &"0000000000000000000000000000000000000000000000000000000000000001"
                 .parse()
                 .expect("canonical test network id"),
             &multisig,
@@ -22188,7 +22187,7 @@ seiyaku ZkIvmPayloadNormalizeTest {
             .expect("payload");
         assert_eq!(normalized, payload);
         let contract_address = ContractAddress::derive(
-            &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
+            &"0000000000000000000000000000000000000000000000000000000000000001"
                 .parse()
                 .expect("canonical test network id"),
             &authority,
@@ -22785,7 +22784,7 @@ mod multisig_selector_tests {
         deploy_nonce: u64,
     ) -> iroha_data_model::smart_contract::ContractAddress {
         iroha_data_model::smart_contract::ContractAddress::derive(
-            &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
+            &"0000000000000000000000000000000000000000000000000000000000000001"
                 .parse()
                 .expect("canonical test network id"),
             authority,
@@ -25219,7 +25218,7 @@ seiyaku BytesPayloadNormalizeTest {
         let paynet_dataspace_id = DataSpaceId::new(10);
         let paynet_lane_id = LaneId::new(2);
         let contract_address = iroha_data_model::smart_contract::ContractAddress::derive(
-            &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
+            &"0000000000000000000000000000000000000000000000000000000000000001"
                 .parse()
                 .expect("canonical test network id"),
             &signer_account_id,
@@ -44345,7 +44344,7 @@ mod validation_fee_torii_ingress_tests {
     }
     fn payout_contract_address(user: &AccountId) -> ContractAddress {
         ContractAddress::derive(
-            &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
+            &"0000000000000000000000000000000000000000000000000000000000000001"
                 .parse()
                 .expect("canonical test network id"),
             user,
@@ -44357,7 +44356,7 @@ mod validation_fee_torii_ingress_tests {
     fn pool_contract_address() -> ContractAddress {
         let (deployer, _) = account(4, "derive validation-fee pool deployer");
         ContractAddress::derive(
-            &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
+            &"0000000000000000000000000000000000000000000000000000000000000001"
                 .parse()
                 .expect("canonical test network id"),
             &deployer,
@@ -52794,7 +52793,7 @@ routing_test! { sync faucet_claim_scanner_includes_instruction_items_from_mixed_
     let transfer: InstructionBox =
         Transfer::asset_quantity(source_asset_id.clone(), amount.clone(), BOB_ID.clone()).into();
     let contract_address = iroha_data_model::smart_contract::ContractAddress::derive(
-        &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
+        &"0000000000000000000000000000000000000000000000000000000000000001"
             .parse()
             .expect("canonical test network id"),
         &ALICE_ID,

@@ -332,6 +332,21 @@ if [[ ! "$GENESIS_EXPECTED_HASH" =~ ^[0-9a-f]{63}[13579bdf]$ ]]; then
   echo "Genesis expected hash is not one canonical marked lowercase hash." >&2
   exit 1
 fi
+GENESIS_IDENTITY_FILE="$BASE/genesis.identity.toml"
+if [[ ! -f "$GENESIS_IDENTITY_FILE" ]]; then
+  echo "Genesis signing did not publish $GENESIS_IDENTITY_FILE." >&2
+  exit 1
+fi
+DEPLOYMENT_NETWORK_ID="$(sed -n 's/^network_id = "\([^"]*\)"$/\1/p' "$GENESIS_IDENTITY_FILE")"
+GENESIS_EXPECTED_HASH_CONFIG="$(sed -n 's/^expected_hash = "\([^"]*\)"$/\1/p' "$GENESIS_IDENTITY_FILE")"
+if [[ "$DEPLOYMENT_NETWORK_ID" != "$GENESIS_EXPECTED_HASH" ]]; then
+  echo "Genesis deployment identity does not match the exact raw network id." >&2
+  exit 1
+fi
+if [[ ! "$GENESIS_EXPECTED_HASH_CONFIG" =~ ^hash:[0-9A-F]{63}[13579BDF]#[0-9A-F]{4}$ ]]; then
+  echo "Genesis deployment identity does not contain one canonical tagged config hash." >&2
+  exit 1
+fi
 
 trusted_peers_literal() {
   printf '["%s@%s","%s@%s","%s@%s","%s@%s"]' \
@@ -383,7 +398,7 @@ identity_private_key = "${STREAM_SKS[$idx]}"
 [genesis]
 public_key = "$GEN_PUB"
 file = "$BASE/genesis.signed.nrt"
-expected_hash = "$GENESIS_EXPECTED_HASH"
+expected_hash = "$GENESIS_EXPECTED_HASH_CONFIG"
 [kura]
 init_mode = "fast"
 store_dir = "$store_dir"

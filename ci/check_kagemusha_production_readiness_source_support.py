@@ -615,10 +615,27 @@ def device_attestation_governance_source_errors(texts: dict[str, str]) -> list[s
         android_auth, ANDROID_AUTH, errors,
         (r"packages\.len\(\) != 1.*?signature_digests\.len\(\) != 1.*?"
          r"verified_boot_key\.is_empty\(\).*?!device_locked.*?VERIFIED.*?"
-         r"verified_boot_hash\.len\(\) != 32.*?seen_tags.*?"
-         r"!seen_tags\.insert\(tag\.number\).*?!hardware_enforced.*?"
+         r"verified_boot_hash\.len\(\) != 32.*?"
+         r"fn require_hardware_enforced_android_property\(.*?"
+         r"if hardware_enforced \{\s*return Ok\(\(\)\);\s*\}.*?"
+         r"must be hardwareEnforced.*?seen_tags.*?"
+         r"!seen_tags\.insert\(tag\.number\).*?"
+         r"OFFLINE_ATTESTATION_ANDROID_TAG_ROOT_OF_TRUST.*?"
+         r"require_hardware_enforced_android_property\(hardware_enforced, \"rootOfTrust\"\).*?"
          r"validate_android_root_of_trust\(value\)"),
         "strict Android application, boot, and authorization identity",
+    )
+    require(
+        android_auth, ANDROID_AUTH, errors,
+        'require_hardware_enforced_android_property(hardware_enforced, "osVersion")?;',
+        'require_hardware_enforced_android_property(hardware_enforced, "osPatchLevel")?;',
+        'require_hardware_enforced_android_property(\n                    hardware_enforced,\n                    "attestationIdBrand",\n                )?;',
+        'require_hardware_enforced_android_property(\n                    hardware_enforced,\n                    "attestationIdDevice",\n                )?;',
+        'require_hardware_enforced_android_property(\n                    hardware_enforced,\n                    "attestationIdProduct",\n                )?;',
+        'require_hardware_enforced_android_property(\n                    hardware_enforced,\n                    "attestationIdManufacturer",\n                )?;',
+        'require_hardware_enforced_android_property(\n                    hardware_enforced,\n                    "attestationIdModel",\n                )?;',
+        'require_hardware_enforced_android_property(hardware_enforced, "vendorPatchLevel")?;',
+        'require_hardware_enforced_android_property(hardware_enforced, "bootPatchLevel")?;',
     )
     require_pattern(
         strict_der, CORE_ATTESTATION_CERTIFICATE_DER_PROFILE_COMPONENT, errors,

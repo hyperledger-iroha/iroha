@@ -16,8 +16,10 @@ field. The JNI contract revision is checked separately so an older ABI-22
 artifact fails closed instead of exposing a retired transaction surface.
 Revision 5 hard-cuts native transaction signing from human chain labels to the
 exact genesis-derived `NetworkId`: JNI accepts exactly 32 marked hash bytes,
-while the C and Swift surface accepts only canonical checksummed `NetworkId`
-text. No label conversion or compatibility fallback exists.
+while the C and Swift surface accepts only the exact 64-character lowercase
+marked hash text used by Rust `Display`/`FromStr`. Norito JSON remains the
+tagged uppercase checksummed representation. No label conversion or
+compatibility fallback exists.
 
 The exact-12 privacy KAT ABI is compiled through the narrow
 `iroha_data_model/privacy-exact12-conformance` feature. Shipping bridge builds
@@ -29,6 +31,16 @@ The native privacy metadata ABI exports only the local
 policy, activation, lifecycle, or readiness projection. SDKs must fetch a
 fresh authoritative `PrivacyCapabilitySnapshotV1` from live Torii before
 submitting a privacy proof.
+
+ABI 22 now also requires the terminal Offline Cash V1 boundary. A release is
+usable only after the bridge has streamed and reauthenticated the exact ordered
+34-file inventory selected by a threshold-authenticated release manifest. The
+artifact installer never accepts paths across the ABI, and the opaque wallet
+session retains the move-only paired-proof receipt needed to validate the exact
+acknowledgement. Replacing or uninstalling the selected release invalidates old
+sessions. This verifier performs no secure-device mutation: production remains
+online-only unless the separate 14-operation rollback-resistant device contract
+is present and available.
 
 The archive checksums below are historical and do not establish a current
 ABI-22/revision-5 artifact. Regenerate, verify, and republish the bridge

@@ -425,7 +425,7 @@ fn build_fixture() -> Result<FixtureParts, Box<dyn Error>> {
         (
             "capabilities",
             str_array(&[
-                "offline_payments",
+                "offline_cash_v1",
                 "offline_kagemusha_v4_release_distribution_available",
                 "offline_kagemusha_v4_required_native_bridge_abi_version",
                 "offline_kagemusha_v4_release_manifest_sha256s",

@@ -178,6 +178,11 @@ final class OfflineDeviceAttestationCodec {
       field(encoder, child -> optionString(child, value.iosEnvironment()));
       field(encoder, child -> optionString(child, value.androidPackageName()));
       field(encoder, child -> optionBytes(child, value.androidSigningCertificateSha256()));
+      field(
+          encoder,
+          child ->
+              optionAndroidAttestedDeviceProperties(
+                  child, value.androidAttestedDeviceProperties()));
       field(encoder, child -> p256PublicKey(child, value.publicKey().sec1Bytes()));
       field(encoder, child -> string(child, value.assertionScheme()));
       field(encoder, child -> string(child, value.assertionKeyAlgorithm()));
@@ -212,6 +217,9 @@ final class OfflineDeviceAttestationCodec {
           readField(decoder, OfflineDeviceAttestationCodec::readOptionString),
           readField(decoder, OfflineDeviceAttestationCodec::readOptionString),
           readField(decoder, OfflineDeviceAttestationCodec::readOptionBytes),
+          readField(
+              decoder,
+              OfflineDeviceAttestationCodec::readOptionAndroidAttestedDeviceProperties),
           new KagemushaDevicePublicKeyV2(
               readField(decoder, OfflineDeviceAttestationCodec::readP256PublicKey)),
           readField(decoder, OfflineDeviceAttestationCodec::readString),
@@ -488,6 +496,71 @@ final class OfflineDeviceAttestationCodec {
     return readField(decoder, OfflineDeviceAttestationCodec::readBytes);
   }
 
+  private static void optionAndroidAttestedDeviceProperties(
+      final NoritoEncoder encoder,
+      final OfflineAndroidAttestedDevicePropertiesV2 value) {
+    option(encoder, value, child -> encodeAndroidAttestedDeviceProperties(child, value));
+  }
+
+  private static OfflineAndroidAttestedDevicePropertiesV2
+      readOptionAndroidAttestedDeviceProperties(final NoritoDecoder decoder) {
+    final int tag = decoder.readByte();
+    if (tag == 0) {
+      return null;
+    }
+    if (tag != 1) {
+      throw new IllegalArgumentException("invalid option tag");
+    }
+    return readField(decoder, OfflineDeviceAttestationCodec::readAndroidAttestedDeviceProperties);
+  }
+
+  private static void encodeAndroidAttestedDeviceProperties(
+      final NoritoEncoder encoder,
+      final OfflineAndroidAttestedDevicePropertiesV2 value) {
+    field(encoder, child -> child.writeUInt(value.version(), 16));
+    field(encoder, child -> child.writeUInt(value.attestationVersion(), 32));
+    field(encoder, child -> child.writeUInt(value.keymintVersion(), 32));
+    field(encoder, child -> child.writeUInt(value.securityLevel().noritoDiscriminant(), 32));
+    field(encoder, child -> string(child, value.brand()));
+    field(encoder, child -> string(child, value.device()));
+    field(encoder, child -> string(child, value.product()));
+    field(encoder, child -> string(child, value.manufacturer()));
+    field(encoder, child -> string(child, value.model()));
+    field(encoder, child -> child.writeUInt(value.osVersion(), 32));
+    field(encoder, child -> child.writeUInt(value.osPatchLevel(), 32));
+    field(encoder, child -> child.writeUInt(value.vendorPatchLevel(), 32));
+    field(encoder, child -> child.writeUInt(value.bootPatchLevel(), 32));
+    field(encoder, child -> bytes(child, value.verifiedBootKey()));
+    field(encoder, child -> child.writeBytes(value.verifiedBootHash()));
+  }
+
+  private static OfflineAndroidAttestedDevicePropertiesV2
+      readAndroidAttestedDeviceProperties(final NoritoDecoder decoder) {
+    return new OfflineAndroidAttestedDevicePropertiesV2(
+        readField(decoder, child -> checkedU16(child.readUInt(16))),
+        readField(decoder, child -> checkedUnsignedU32(child.readUInt(32))),
+        readField(decoder, child -> checkedUnsignedU32(child.readUInt(32))),
+        readField(
+            decoder,
+            child -> {
+              final long tag = child.readUInt(32);
+              if (tag == 0) return OfflineAndroidDeviceSecurityLevelV2.TRUSTED_ENVIRONMENT;
+              if (tag == 1) return OfflineAndroidDeviceSecurityLevelV2.STRONG_BOX;
+              throw new IllegalArgumentException("invalid Android device security level");
+            }),
+        readField(decoder, OfflineDeviceAttestationCodec::readString),
+        readField(decoder, OfflineDeviceAttestationCodec::readString),
+        readField(decoder, OfflineDeviceAttestationCodec::readString),
+        readField(decoder, OfflineDeviceAttestationCodec::readString),
+        readField(decoder, OfflineDeviceAttestationCodec::readString),
+        readField(decoder, child -> checkedUnsignedU32(child.readUInt(32))),
+        readField(decoder, child -> checkedUnsignedU32(child.readUInt(32))),
+        readField(decoder, child -> checkedUnsignedU32(child.readUInt(32))),
+        readField(decoder, child -> checkedUnsignedU32(child.readUInt(32))),
+        readField(decoder, OfflineDeviceAttestationCodec::readBytes),
+        readField(decoder, child -> child.readBytes(32)));
+  }
+
   private static void optionU32(final NoritoEncoder encoder, final Integer value) {
     option(encoder, value, child -> child.writeUInt(value, 32));
   }
@@ -501,6 +574,13 @@ final class OfflineDeviceAttestationCodec {
       throw new IllegalArgumentException("invalid option tag");
     }
     return readField(decoder, child -> checkedU32(child.readUInt(32)));
+  }
+
+  private static long checkedUnsignedU32(final long value) {
+    if (value < 0 || value > OfflineAndroidAttestedDevicePropertiesV2.U32_MAX) {
+      throw new IllegalArgumentException("u32 exceeds supported range");
+    }
+    return value;
   }
 
   private static void optionAssetDefinitionId(

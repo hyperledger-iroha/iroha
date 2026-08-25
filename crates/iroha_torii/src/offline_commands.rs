@@ -511,7 +511,7 @@ fn ensure_kagemusha_v4_transaction_release(
 ) -> Result<(), Error> {
     let resolved = resolution.map_err(|error| Error::AppServiceUnavailable {
         code: "offline_recursive_release_invalid",
-        message: format!("The authenticated ABI-21 V4 release could not be resolved: {error}"),
+        message: format!("The authenticated Kagemusha V4 release could not be resolved: {error}"),
     })?;
     ensure_kagemusha_v4_issuance_window(resolved.issuance_active, issuance_required)
 }
@@ -522,8 +522,9 @@ fn ensure_kagemusha_v4_issuance_window(
     if issuance_required && !issuance_active {
         return Err(Error::AppServiceUnavailable {
             code: "offline_recursive_release_outside_issuance_window",
-            message: "The selected authenticated ABI-21 V4 release is outside its issuance window."
-                .to_owned(),
+            message:
+                "The selected authenticated Kagemusha V4 release is outside its issuance window."
+                    .to_owned(),
         });
     }
     Ok(())

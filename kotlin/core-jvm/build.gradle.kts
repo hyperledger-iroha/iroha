@@ -68,6 +68,16 @@ tasks.test {
             .dir("..")
             .file("fixtures/offline/kagemusha_peer_transport_v2.json"),
     )
+    inputs.file(
+        rootProject.layout.projectDirectory
+            .dir("..")
+            .file("fixtures/offline/offline_cash_peer_transport_v1.json"),
+    )
+    inputs.file(
+        rootProject.layout.projectDirectory
+            .dir("..")
+            .file("fixtures/offline/offline_cash_profile3_ipm_iqr_v1.json"),
+    )
     inputs.dir(
         rootProject.layout.projectDirectory
             .dir("..")

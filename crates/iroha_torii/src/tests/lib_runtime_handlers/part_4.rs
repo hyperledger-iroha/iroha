@@ -2242,7 +2242,7 @@ async fn core_info_handlers_ok() {
     let peer_bytes = torii_body_bytes(resp, "peers body").await;
     let peers: HashSet<Peer> = norito::json::from_slice(&peer_bytes).expect("peers JSON");
     assert!(peers.is_empty());
-    // A generic test state intentionally has no authenticated ABI-21/V4
+    // A generic test state intentionally has no authenticated bridge ABI-22 / Kagemusha V4
     // release, issuer, or escrow catalog. `/health` is readiness (not
     // liveness), so it must fail closed for this fixture.
     // For ConnectInfo we can pass a dummy loopback address by constructing the extractor arg manually is not possible here.

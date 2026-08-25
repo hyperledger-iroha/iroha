@@ -7,12 +7,12 @@
 //! enters world state.
 #[cfg(feature = "zk-stark")]
 use crate::privacy_engines::zk_ace::{
-    ZK_ACE_AIR_RELATION_SCHEMA_V1, ZK_ACE_AUTHORIZATION_PROJECTION_V1,
-    ZK_ACE_FULL_ENGINE_AVAILABLE_V1, ZK_ACE_POSEIDON_MANIFEST_SHA256_V1,
-    ZK_ACE_POSEIDON_PROFILE_V1, ZK_ACE_PRIVACY_MAX_PROOF_BYTES_V1,
-    ZK_ACE_PRIVACY_TRANSCRIPT_LABEL_V1, ZK_ACE_PROOF_WIRE_V1,
-    ZK_ACE_REQUIRED_COMMITMENT_REMEDIATION_V1, ZK_ACE_SOURCE_PROFILE_V1,
-    zk_ace_compiled_profile_digest_v1, zk_ace_stark_profile_descriptor_v1,
+    ZK_ACE_AIR_RELATION_SCHEMA_V2, ZK_ACE_AUTHORIZATION_PROJECTION_V1,
+    ZK_ACE_COMMITMENT_BINDING_PROFILE_V2, ZK_ACE_FULL_ENGINE_AVAILABLE_V1,
+    ZK_ACE_POSEIDON_MANIFEST_SHA256_V1, ZK_ACE_POSEIDON_PROFILE_V2,
+    ZK_ACE_PRIVACY_MAX_PROOF_BYTES_V1, ZK_ACE_PRIVACY_TRANSCRIPT_LABEL_V2, ZK_ACE_PROOF_WIRE_V2,
+    ZK_ACE_SOURCE_PROFILE_V2, zk_ace_compiled_profile_digest_v1,
+    zk_ace_stark_profile_descriptor_v1,
 };
 use crate::privacy_engines::{
     anonymous_pgc::{
@@ -341,8 +341,8 @@ const ZK_AMS_PROVISION_EFFECT_SCHEMA_V1: &[u8] = b"issuer_id:32|registry_id:32|c
 #[cfg(feature = "zk-stark")]
 const ZK_ACE_PROTOCOL_LABEL_V1: &[u8] = b"zk-ace-pq-authorization-v0";
 #[cfg(feature = "zk-stark")]
-const ZK_ACE_PARAMETER_SET_LABEL_V1: &[u8] =
-    b"goldilocks-dense-mds-poseidon-x7-transparent-stark-candidate-v1";
+const ZK_ACE_PARAMETER_SET_LABEL_V2: &[u8] =
+    b"goldilocks-dense-mds-poseidon-x7-four-independent-parallel-lanes-width136-transparent-stark-v2";
 const ZK_X509_PARAMETER_SET_LABEL_V1: &[u8] =
     b"goldilocks-fp4-sha256-p256-rfc5280-fixed-capacity-v1";
 const ZK_X509_PROOF_WIRE_LABEL_V1: &[u8] =
@@ -1548,18 +1548,18 @@ fn compiled_zk_ace_profile_v1() -> Result<CompiledPrivacyProfileV1, CompiledPriv
     let proof_bytes_encoded = proof_bytes.to_be_bytes();
     let global_proof_cap = TAIRA_PRIVACY_MAX_PROOF_BYTES_PER_ACTION_V1.to_be_bytes();
     let poseidon_manifest = ZK_ACE_POSEIDON_MANIFEST_SHA256_V1.as_bytes();
-    let poseidon_profile = ZK_ACE_POSEIDON_PROFILE_V1;
+    let poseidon_profile = ZK_ACE_POSEIDON_PROFILE_V2;
     let stark_profile = zk_ace_stark_profile_descriptor_v1();
     let parameter_id = digest_fields_v1(
         PARAMETER_ID_DOMAIN_V1,
         &[
             ZK_ACE_PROTOCOL_LABEL_V1,
-            ZK_ACE_PARAMETER_SET_LABEL_V1,
-            ZK_ACE_SOURCE_PROFILE_V1,
+            ZK_ACE_PARAMETER_SET_LABEL_V2,
+            ZK_ACE_SOURCE_PROFILE_V2,
             TRY_CRYPTO_PROVER_RANDOMNESS_POLICY_V1,
             poseidon_manifest,
             poseidon_profile,
-            ZK_ACE_REQUIRED_COMMITMENT_REMEDIATION_V1,
+            ZK_ACE_COMMITMENT_BINDING_PROFILE_V2,
             stark_profile,
             &compiled_profile_digest,
             &proof_bytes_encoded,
@@ -1569,14 +1569,14 @@ fn compiled_zk_ace_profile_v1() -> Result<CompiledPrivacyProfileV1, CompiledPriv
         PARAMETER_DIGEST_DOMAIN_V1,
         &[
             ZK_ACE_PROTOCOL_LABEL_V1,
-            ZK_ACE_PARAMETER_SET_LABEL_V1,
-            ZK_ACE_SOURCE_PROFILE_V1,
+            ZK_ACE_PARAMETER_SET_LABEL_V2,
+            ZK_ACE_SOURCE_PROFILE_V2,
             TRY_CRYPTO_PROVER_RANDOMNESS_POLICY_V1,
-            ZK_ACE_AIR_RELATION_SCHEMA_V1,
+            ZK_ACE_AIR_RELATION_SCHEMA_V2,
             ZK_ACE_AUTHORIZATION_PROJECTION_V1,
             poseidon_manifest,
             poseidon_profile,
-            ZK_ACE_REQUIRED_COMMITMENT_REMEDIATION_V1,
+            ZK_ACE_COMMITMENT_BINDING_PROFILE_V2,
             stark_profile,
             &compiled_profile_digest,
             &proof_bytes_encoded,
@@ -1593,16 +1593,16 @@ fn compiled_zk_ace_profile_v1() -> Result<CompiledPrivacyProfileV1, CompiledPriv
         VERIFIER_DIGEST_DOMAIN_V1,
         &[
             ZK_ACE_PROTOCOL_LABEL_V1,
-            ZK_ACE_SOURCE_PROFILE_V1,
+            ZK_ACE_SOURCE_PROFILE_V2,
             TRY_CRYPTO_PROVER_RANDOMNESS_POLICY_V1,
-            ZK_ACE_PARAMETER_SET_LABEL_V1,
-            ZK_ACE_PRIVACY_TRANSCRIPT_LABEL_V1.as_bytes(),
-            ZK_ACE_PROOF_WIRE_V1,
-            ZK_ACE_AIR_RELATION_SCHEMA_V1,
+            ZK_ACE_PARAMETER_SET_LABEL_V2,
+            ZK_ACE_PRIVACY_TRANSCRIPT_LABEL_V2.as_bytes(),
+            ZK_ACE_PROOF_WIRE_V2,
+            ZK_ACE_AIR_RELATION_SCHEMA_V2,
             ZK_ACE_AUTHORIZATION_PROJECTION_V1,
             poseidon_manifest,
             poseidon_profile,
-            ZK_ACE_REQUIRED_COMMITMENT_REMEDIATION_V1,
+            ZK_ACE_COMMITMENT_BINDING_PROFILE_V2,
             stark_profile,
             &compiled_profile_digest,
             &proof_bytes_encoded,
@@ -1614,18 +1614,18 @@ fn compiled_zk_ace_profile_v1() -> Result<CompiledPrivacyProfileV1, CompiledPriv
         ENGINE_MANIFEST_DIGEST_DOMAIN_V1,
         &[
             ZK_ACE_PROTOCOL_LABEL_V1,
-            ZK_ACE_SOURCE_PROFILE_V1,
+            ZK_ACE_SOURCE_PROFILE_V2,
             TRY_CRYPTO_PROVER_RANDOMNESS_POLICY_V1,
             b"proof-system:stark-fri-sha256-goldilocks",
             b"engine:native-goldilocks-stark-fri",
-            ZK_ACE_PARAMETER_SET_LABEL_V1,
-            ZK_ACE_PRIVACY_TRANSCRIPT_LABEL_V1.as_bytes(),
-            ZK_ACE_PROOF_WIRE_V1,
-            ZK_ACE_AIR_RELATION_SCHEMA_V1,
+            ZK_ACE_PARAMETER_SET_LABEL_V2,
+            ZK_ACE_PRIVACY_TRANSCRIPT_LABEL_V2.as_bytes(),
+            ZK_ACE_PROOF_WIRE_V2,
+            ZK_ACE_AIR_RELATION_SCHEMA_V2,
             ZK_ACE_AUTHORIZATION_PROJECTION_V1,
             poseidon_manifest,
             poseidon_profile,
-            ZK_ACE_REQUIRED_COMMITMENT_REMEDIATION_V1,
+            ZK_ACE_COMMITMENT_BINDING_PROFILE_V2,
             stark_profile,
             &compiled_profile_digest,
             &proof_bytes_encoded,

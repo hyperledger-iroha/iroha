@@ -27,7 +27,7 @@ import org.hyperledger.iroha.android.model.NetworkId;
 public final class HttpClientTransportExactReadTests {
   private static final NetworkId OTHER_NETWORK_ID =
       NetworkId.parse(
-          "hash:0E5751C026E543B2E8AB2EB06099DAA1D1E5DF47778F7787FAAB45CDF12FE3A9#6A22");
+          "0e5751c026e543b2e8ab2eb06099daa1d1e5df47778f7787faab45cdf12fe3a9");
   private static final KeyPair PRIVACY_KEY_PAIR = generatePrivacyKeyPair();
 
   private HttpClientTransportExactReadTests() {}

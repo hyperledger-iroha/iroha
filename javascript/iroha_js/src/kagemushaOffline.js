@@ -25,6 +25,21 @@ const OFFLINE_STATUS_FIELDS = Object.freeze([
   "assets",
   "blockers",
 ]);
+const OFFLINE_CAPABILITY_ACTIVATION_BLOCKERS_V1 = Object.freeze([
+  Object.freeze({
+    code: "offline_cash_authenticated_release_unavailable",
+    message: "No authenticated Offline Cash V1 release is selected by this asset-neutral response.",
+  }),
+  Object.freeze({
+    code: "offline_cash_eligible_asset_unavailable",
+    message: "No eligible Offline Cash V1 asset is selected by this asset-neutral response.",
+  }),
+  Object.freeze({
+    code: "offline_cash_proof_backend_unavailable",
+    message:
+      "No reviewed production Offline Cash V1 proof and secure-device backend is authenticated by this response.",
+  }),
+]);
 
 function record(value, context) {
   if (value === null || typeof value !== "object" || Array.isArray(value)) {
@@ -123,23 +138,36 @@ export function normalizeOfflineStatus(payload) {
   ) {
     throw new TypeError(`${context}.max_hops must be 8`);
   }
-  if (item.ready !== true) {
-    throw new TypeError(`${context}.ready must be true`);
+  if (item.ready !== false) {
+    throw new TypeError(`${context}.ready must be false`);
   }
   if (!Array.isArray(item.assets) || item.assets.length !== 0) {
     throw new TypeError(`${context}.assets must be an empty array`);
   }
-  if (!Array.isArray(item.blockers) || item.blockers.length !== 0) {
-    throw new TypeError(`${context}.blockers must be an empty array`);
+  if (
+    !Array.isArray(item.blockers) ||
+    item.blockers.length !== OFFLINE_CAPABILITY_ACTIVATION_BLOCKERS_V1.length
+  ) {
+    throw new TypeError(`${context}.blockers must contain the three canonical activation blockers`);
   }
+  const blockers = item.blockers.map((value, index) => {
+    const blocker = exactFields(value, `${context}.blockers[${index}]`, ["code", "message"]);
+    const expected = OFFLINE_CAPABILITY_ACTIVATION_BLOCKERS_V1[index];
+    const code = exactString(blocker.code, `${context}.blockers[${index}].code`);
+    const message = exactString(blocker.message, `${context}.blockers[${index}].message`);
+    if (code !== expected.code || message !== expected.message) {
+      throw new TypeError(`${context}.blockers[${index}] is not the canonical activation blocker`);
+    }
+    return Object.freeze({ code, message });
+  });
   return Object.freeze({
     mandatory: false,
     cash_handoff_capability: KAGEMUSHA_CASH_HANDOFF_CAPABILITY,
     required_bridge_abi_version: KAGEMUSHA_REQUIRED_BRIDGE_ABI_VERSION,
     max_hops: KAGEMUSHA_MAX_HOPS,
-    ready: true,
+    ready: false,
     assets: Object.freeze([]),
-    blockers: Object.freeze([]),
+    blockers: Object.freeze(blockers),
   });
 }
 

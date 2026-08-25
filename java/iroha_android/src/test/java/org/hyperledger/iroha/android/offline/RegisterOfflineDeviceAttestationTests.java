@@ -35,7 +35,7 @@ import org.junit.Test;
 public final class RegisterOfflineDeviceAttestationTests {
   private static final NetworkId TEST_NETWORK_ID =
       NetworkId.parse(
-          "hash:32C903E5B3497E34C2B844EBFE8A39C19E6CF8F95D44C1FFB8BA9DCB42F91149#A2F0");
+          "32c903e5b3497e34c2b844ebfe8a39c19e6cf8f95d44c1ffb8ba9dcb42f91149");
   private static final FeePaymentIntent TEST_FEE_PAYMENT =
       FeePaymentIntent.authority(Collections.emptyList());
 
@@ -120,6 +120,40 @@ public final class RegisterOfflineDeviceAttestationTests {
   }
 
   @Test
+  public void androidAttestedPropertiesSomeRoundTripsWithoutChangingPreKeyChallenge()
+      throws Exception {
+    final String accountId = rustFixture().get(3);
+    final DeviceAttestationRegistration withoutProperties = registration(accountId);
+    final OfflineAndroidAttestedDevicePropertiesV2 properties =
+        new OfflineAndroidAttestedDevicePropertiesV2(
+            OfflineAndroidAttestedDevicePropertiesV2.VERSION,
+            400,
+            300,
+            OfflineAndroidDeviceSecurityLevelV2.STRONG_BOX,
+            "Iroha",
+            "abi22-device",
+            "abi22-product",
+            "Hyperledger",
+            "Kagemusha",
+            14,
+            202608,
+            202608,
+            202608,
+            bytes("abi22-verified-boot-key"),
+            sha256(bytes("abi22-verified-boot-hash")));
+    final DeviceAttestationRegistration withProperties =
+        registration(accountId, properties);
+
+    assertArrayEquals(withoutProperties.challengeHash(), withProperties.challengeHash());
+    assertTrue(!Arrays.equals(withoutProperties.noritoEncoded(), withProperties.noritoEncoded()));
+    assertEquals(properties, withProperties.androidAttestedDeviceProperties());
+    assertEquals(
+        withProperties,
+        DeviceAttestationRegistration.decodeCanonical(
+            withProperties.noritoEncoded(), AccountAddress.DEFAULT_I105_DISCRIMINANT));
+  }
+
+  @Test
   public void hashAndAppIdentitySubstitutionsFailClosed() throws Exception {
     final String accountId = rustFixture().get(3);
     final DeviceAttestationRegistration canonical = registration(accountId);
@@ -128,7 +162,7 @@ public final class RegisterOfflineDeviceAttestationTests {
         () ->
             registration(
                 accountId,
-                "org.hyperledger.iroha.abi20.fixture",
+                "org.hyperledger.iroha.abi22.fixture",
                 signingCertificate(),
                 IrohaHash.prehash(bytes("wrong-challenge")),
                 null,
@@ -139,7 +173,7 @@ public final class RegisterOfflineDeviceAttestationTests {
         () ->
             registration(
                 accountId,
-                "org.hyperledger.iroha.abi20.fixture",
+                "org.hyperledger.iroha.abi22.fixture",
                 signingCertificate(),
                 null,
                 IrohaHash.prehash(bytes("wrong-report")),
@@ -150,7 +184,7 @@ public final class RegisterOfflineDeviceAttestationTests {
         () ->
             registration(
                 accountId,
-                "org.hyperledger.iroha.abi20.fixture",
+                "org.hyperledger.iroha.abi22.fixture",
                 signingCertificate(),
                 null,
                 null,
@@ -161,7 +195,7 @@ public final class RegisterOfflineDeviceAttestationTests {
         () ->
             registration(
                 accountId,
-                "org.hyperledger.iroha.abi20.fixture",
+                "org.hyperledger.iroha.abi22.fixture",
                 signingCertificate(),
                 null,
                 null,
@@ -185,7 +219,7 @@ public final class RegisterOfflineDeviceAttestationTests {
         () ->
             registration(
                 accountId,
-                "org.hyperledger.iroha.abi20.fixture",
+                "org.hyperledger.iroha.abi22.fixture",
                 sha256(bytes("substituted-signing-certificate")),
                 canonical.challengeHash(),
                 null,
@@ -307,8 +341,23 @@ public final class RegisterOfflineDeviceAttestationTests {
       throws Exception {
     return registration(
         accountId,
-        "org.hyperledger.iroha.abi20.fixture",
+        "org.hyperledger.iroha.abi22.fixture",
         signingCertificate(),
+        null,
+        null,
+        null,
+        null);
+  }
+
+  private static DeviceAttestationRegistration registration(
+      final String accountId,
+      final OfflineAndroidAttestedDevicePropertiesV2 attestedProperties)
+      throws Exception {
+    return registration(
+        accountId,
+        "org.hyperledger.iroha.abi22.fixture",
+        signingCertificate(),
+        attestedProperties,
         null,
         null,
         null,
@@ -324,12 +373,33 @@ public final class RegisterOfflineDeviceAttestationTests {
       final byte[] evidenceHash,
       final byte[] evidence)
       throws Exception {
+    return registration(
+        accountId,
+        packageName,
+        signingCertificate,
+        null,
+        challengeHash,
+        reportHash,
+        evidenceHash,
+        evidence);
+  }
+
+  private static DeviceAttestationRegistration registration(
+      final String accountId,
+      final String packageName,
+      final byte[] signingCertificate,
+      final OfflineAndroidAttestedDevicePropertiesV2 attestedProperties,
+      final byte[] challengeHash,
+      final byte[] reportHash,
+      final byte[] evidenceHash,
+      final byte[] evidence)
+      throws Exception {
     final byte[] assertionPublicKey = hexToBytes(P256_GENERATOR);
     return new DeviceAttestationRegistration(
         1,
         DeviceAttestationRegistration.ANDROID_KEYMINT_PLATFORM,
         hexLower(sha256(assertionPublicKey)),
-        "abi20-android-unit-test-device",
+        "abi22-android-unit-test-device",
         accountId,
         null,
         null,
@@ -337,6 +407,7 @@ public final class RegisterOfflineDeviceAttestationTests {
         null,
         packageName,
         signingCertificate,
+        attestedProperties,
         new KagemushaDevicePublicKeyV2(hexToBytes(P256_GENERATOR)),
         DeviceAttestationRegistration.ANDROID_KEYMINT_ASSERTION_SCHEME,
         DeviceAttestationRegistration.ANDROID_KEYMINT_ASSERTION_KEY_ALGORITHM,
@@ -345,16 +416,16 @@ public final class RegisterOfflineDeviceAttestationTests {
         true,
         challengeHash,
         reportHash,
-        bytes("abi20-unit-test-not-physical-attestation-evidence"),
+        bytes("abi22-unit-test-not-physical-attestation-evidence"),
         evidenceHash,
         evidence,
         42,
-        IrohaHash.prehash(bytes("abi20-unit-test-block")),
+        IrohaHash.prehash(bytes("abi22-unit-test-block")),
         2_000_000_000_000L);
   }
 
   private static byte[] signingCertificate() throws Exception {
-    return sha256(bytes("abi20-unit-test-signing-certificate"));
+    return sha256(bytes("abi22-unit-test-signing-certificate"));
   }
 
   private static List<String> rustFixture() throws Exception {

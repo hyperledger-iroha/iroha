@@ -4,6 +4,27 @@
 //! telemetry. Keeping them here prevents either transport layer from depending on the other.
 use iroha_schema::IntoSchema;
 use norito::derive::{JsonDeserialize, JsonSerialize, NoritoDeserialize, NoritoSerialize};
+
+/// Canonical fail-closed blockers returned by asset-neutral capability discovery.
+///
+/// The endpoint advertises the wire contract but cannot authenticate a
+/// production proof backend, release, or eligible asset without evaluating
+/// deployment state. These codes and messages are therefore stable API data.
+pub const OFFLINE_CAPABILITY_ACTIVATION_BLOCKERS_V1: [(&str, &str); 3] = [
+    (
+        "offline_cash_authenticated_release_unavailable",
+        "No authenticated Offline Cash V1 release is selected by this asset-neutral response.",
+    ),
+    (
+        "offline_cash_eligible_asset_unavailable",
+        "No eligible Offline Cash V1 asset is selected by this asset-neutral response.",
+    ),
+    (
+        "offline_cash_proof_backend_unavailable",
+        "No reviewed production Offline Cash V1 proof and secure-device backend is authenticated by this response.",
+    ),
+];
+
 /// Legacy machine-readable diagnostic for an explicitly requested proof release.
 #[derive(
     Debug,
@@ -20,9 +41,23 @@ use norito::derive::{JsonDeserialize, JsonSerialize, NoritoDeserialize, NoritoSe
 pub struct OfflineReadinessBlocker {
     /// Stable SDK-facing blocker code.
     pub code: String,
-    /// Human-readable explanation; clients must not match this text.
+    /// Human-readable explanation. The asset-neutral capability projection
+    /// pins this text exactly; asset-specific diagnostics should key on `code`.
     pub message: String,
 }
+
+/// Materialize the canonical asset-neutral production-activation blockers.
+#[must_use]
+pub fn offline_capability_activation_blockers_v1() -> Vec<OfflineReadinessBlocker> {
+    OFFLINE_CAPABILITY_ACTIVATION_BLOCKERS_V1
+        .iter()
+        .map(|(code, message)| OfflineReadinessBlocker {
+            code: (*code).to_owned(),
+            message: (*message).to_owned(),
+        })
+        .collect()
+}
+
 /// Stable registry identity of the verifier selected for offline transfers.
 #[derive(
     Debug,
@@ -322,8 +357,8 @@ impl OfflineCashReleaseStatusV1 {
 )]
 #[norito(deny_unknown_fields)]
 pub struct OfflineStatus {
-    /// Legacy compatibility field. Offline capability is universal and does
-    /// not impose a backend service-readiness gate.
+    /// Legacy compatibility field. Offline capability discovery does not make
+    /// the proof backend a node-startup requirement.
     pub mandatory: bool,
     /// Exact irreversible peer-cash handoff contract.
     pub cash_handoff_capability: String,
@@ -331,12 +366,13 @@ pub struct OfflineStatus {
     pub required_bridge_abi_version: u32,
     /// Maximum peer-spend hop depth accepted by the protocol.
     pub max_hops: u32,
-    /// Protocol capability availability. This is independent of any asset or dataspace catalog.
+    /// Production payment authority. Asset-neutral discovery reports false
+    /// until authenticated backend, release, and eligible-asset state are evaluated.
     pub ready: bool,
     /// Optional diagnostics for release material explicitly referenced by
     /// offline operations, sorted by canonical asset definition id.
     pub assets: Vec<OfflineReadiness>,
-    /// Command-specific proof-material diagnostics; never startup blockers.
+    /// Stable production-activation diagnostics; never node-startup blockers.
     pub blockers: Vec<OfflineReadinessBlocker>,
 }
 impl norito::json::JsonDeserialize for OfflineReadiness {
@@ -605,10 +641,17 @@ mod tests {
             cash_handoff_capability: "cash_handoff_v1".to_owned(),
             required_bridge_abi_version: 22,
             max_hops: 8,
-            ready: true,
+            ready: false,
             assets: Vec::new(),
-            blockers: Vec::new(),
+            blockers: offline_capability_activation_blockers_v1(),
         };
+        assert_eq!(status.blockers.len(), 3);
+        assert!(
+            status
+                .blockers
+                .windows(2)
+                .all(|pair| pair[0].code.as_str() < pair[1].code.as_str())
+        );
         let bytes = norito::to_bytes(&status).expect("encode status");
         let decoded: OfflineStatus = norito::decode_from_bytes(&bytes).expect("decode status");
         assert_eq!(decoded, status);

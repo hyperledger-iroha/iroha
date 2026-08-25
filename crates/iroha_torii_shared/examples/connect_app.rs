@@ -7,7 +7,7 @@
 //!
 //! Build (example only):
 //!   cargo run -p `iroha_torii_shared` --example `connect_app` -- \
-//!     --node <http://127.0.0.1:8080> --network-id <hash:...#....> \
+//!     --node <http://127.0.0.1:8080> --network-id <64-lowercase-hex> \
 //!     [--action ok|reject|close]
 #[cfg(feature = "connect")]
 use base64::Engine;
@@ -71,7 +71,7 @@ async fn run_connect_app() -> anyhow::Result<()> {
     let network_id_literal = required_arg(&mut args, "--network-id")?;
     let network_id: NetworkId = network_id_literal.parse()?;
     if network_id.to_string() != network_id_literal {
-        anyhow::bail!("--network-id must use the canonical checksummed spelling");
+        anyhow::bail!("--network-id must use canonical raw lowercase hexadecimal text");
     }
     let action = match args.next() {
         Some(flag) if flag == "--action" => args
@@ -228,9 +228,10 @@ async fn request_session(
     let url = format!("{node}/v1/connect/session");
     let sid = sdk::derive_session_id(&network_id, app_pk, nonce);
     let encode = |bytes: &[u8]| base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(bytes);
+    let network_id_json = json::to_value(&network_id)?;
     let request = norito::json!({
         "sid": (encode(&sid)),
-        "network_id": (network_id.to_string()),
+        "network_id": (network_id_json),
         "app_pk": (encode(app_pk)),
         "nonce": (encode(nonce)),
         "node": (node)

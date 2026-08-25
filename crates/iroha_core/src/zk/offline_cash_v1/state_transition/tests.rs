@@ -13,8 +13,9 @@ use iroha_data_model::{
     block::BlockHeader,
     domain::DomainId,
     offline::{
-        OFFLINE_CASH_HISTORY_ACCUMULATOR_BYTES_V1, OFFLINE_CASH_PAYMENT_MAX_BYTES_V1,
-        OfflineCashPairedProofV1, offline_cash_receiver_key_reference_v1,
+        OFFLINE_CASH_PAYMENT_MAX_BYTES_V1, OFFLINE_CASH_WIRE_VERSION_V1, OfflineCashIpaLineageV1,
+        OfflineCashPairedProofV1, OfflineCashRecursivePairBindingV1, OfflineCashTransferResultV1,
+        offline_cash_receiver_key_reference_v1,
     },
 };
 use p256::ecdsa::{Signature, SigningKey, signature::Signer as _};
@@ -34,6 +35,14 @@ fn signing_key() -> SigningKey {
 fn receiver_public_key() -> KagemushaDevicePublicKeyV2 {
     let encoded = signing_key().verifying_key().to_encoded_point(false);
     KagemushaDevicePublicKeyV2::from_sec1_bytes(encoded.as_bytes()).expect("receiver public key")
+}
+
+fn recipient_encryption_public_key() -> Digest {
+    [
+        0x85, 0x20, 0xf0, 0x09, 0x89, 0x30, 0xa7, 0x54, 0x74, 0x8b, 0x7d, 0xdc, 0xb4, 0x3e, 0xf7,
+        0x5a, 0x0d, 0xbf, 0x3a, 0x0d, 0x26, 0x38, 0x1a, 0xf4, 0xeb, 0xa4, 0xa9, 0x8e, 0xaa, 0x9b,
+        0x4e, 0x6a,
+    ]
 }
 
 fn sign(bytes: &[u8]) -> KagemushaDeviceSignatureV2 {
@@ -317,7 +326,7 @@ impl TestHardware {
         if public_key == &receiver_public_key() {
             Ok(())
         } else {
-            Err(HardwareGuardErrorV1::Rejected)
+            Err(HardwareGuardErrorV1::PolicyRejected)
         }
     }
 
@@ -364,7 +373,7 @@ impl ExactNextHardwareGuardBackendV1 for TestHardware {
         self.check_live(request)?;
         Self::check_key(receiver_public_key)?;
         if request.kind() != HardwareIntentKindV1::ReceivePending || signing_bytes.is_empty() {
-            return Err(HardwareGuardErrorV1::Rejected);
+            return Err(HardwareGuardErrorV1::PolicyRejected);
         }
         let signing_digest = hash_bytes(signing_bytes);
         let mut journals = self.journals.lock().expect("journal lock");
@@ -387,7 +396,7 @@ impl ExactNextHardwareGuardBackendV1 for TestHardware {
         journal.next_epoch = journal
             .next_epoch
             .checked_add(1)
-            .ok_or(HardwareGuardErrorV1::Rejected)?;
+            .ok_or(HardwareGuardErrorV1::PolicyRejected)?;
         let signature = sign(signing_bytes);
         journal.active = Some(ActiveRecord {
             request: *request,
@@ -435,7 +444,7 @@ impl ExactNextHardwareGuardBackendV1 for TestHardware {
     ) -> Result<(), HardwareGuardErrorV1> {
         self.check_available()?;
         if request_digest == [0; 32] {
-            return Err(HardwareGuardErrorV1::Rejected);
+            return Err(HardwareGuardErrorV1::PolicyRejected);
         }
         let mut journals = self.journals.lock().expect("journal lock");
         let active = journals
@@ -461,7 +470,7 @@ impl ExactNextHardwareGuardBackendV1 for TestHardware {
         self.check_available()?;
         self.check_live(request)?;
         if request.kind() != HardwareIntentKindV1::SendPublished || payment_digest == [0; 32] {
-            return Err(HardwareGuardErrorV1::Rejected);
+            return Err(HardwareGuardErrorV1::PolicyRejected);
         }
         let mut journals = self.journals.lock().expect("journal lock");
         let journal = journals.entry(request.wallet_binding()).or_default();
@@ -477,7 +486,7 @@ impl ExactNextHardwareGuardBackendV1 for TestHardware {
         journal.next_epoch = journal
             .next_epoch
             .checked_add(1)
-            .ok_or(HardwareGuardErrorV1::Rejected)?;
+            .ok_or(HardwareGuardErrorV1::PolicyRejected)?;
         journal.active = Some(ActiveRecord {
             request: *request,
             epoch: journal.next_epoch,
@@ -603,7 +612,7 @@ impl ExactNextHardwareGuardBackendV1 for TestHardware {
         let operation = match intent.kind() {
             HardwareIntentKindV1::ReceivePending => {
                 if request.acknowledgement_digest().is_some() {
-                    return Err(HardwareGuardErrorV1::Rejected);
+                    return Err(HardwareGuardErrorV1::PolicyRejected);
                 }
                 let now_ms = self.time();
                 if now_ms < intent.not_before_ms() || now_ms >= intent.expires_at_ms() {
@@ -615,7 +624,7 @@ impl ExactNextHardwareGuardBackendV1 for TestHardware {
                 if active.bound_digest != Some(request.payment_digest())
                     || request.acknowledgement_digest().is_none()
                 {
-                    return Err(HardwareGuardErrorV1::Rejected);
+                    return Err(HardwareGuardErrorV1::PolicyRejected);
                 }
                 HardwareTerminalOperationV1::SendCommitted
             }
@@ -702,7 +711,7 @@ impl ExactNextHardwareGuardBackendV1 for TestHardware {
             || acknowledgement_digest == [0; 32]
             || signing_bytes.is_empty()
         {
-            return Err(HardwareGuardErrorV1::Rejected);
+            return Err(HardwareGuardErrorV1::PolicyRejected);
         }
         let signing_digest = hash_bytes(signing_bytes);
         let mut journals = self.journals.lock().expect("journal lock");
@@ -805,6 +814,7 @@ fn unsigned_request(
     request_tag: u8,
 ) -> UnsignedReceiveRequestV1 {
     let public_key = receiver_public_key();
+    let encryption_public_key = recipient_encryption_public_key();
     UnsignedReceiveRequestV1::new(
         RELEASE_ID,
         network_id(),
@@ -813,7 +823,8 @@ fn unsigned_request(
         amount,
         recipient(),
         balance.head(),
-        offline_cash_receiver_key_reference_v1(&public_key),
+        offline_cash_receiver_key_reference_v1(&public_key, encryption_public_key),
+        encryption_public_key,
         public_key,
         [request_tag; 32],
         ISSUED_AT_MS,
@@ -839,31 +850,39 @@ fn open_pending(
     apply_open_pending_v1(balance, plan, &guard_session).expect("open pending")
 }
 
+fn test_lineage(marker: u8) -> OfflineCashIpaLineageV1 {
+    OfflineCashIpaLineageV1::new(
+        std::array::from_fn(|index| [u8::try_from(index + 1).expect("lineage index fits"); 32]),
+        [marker; 32],
+    )
+    .expect("fixed-shape test lineage")
+}
+
 fn payment_for_plan(
     plan: &SendSplitPlanV1,
     request: &OfflineCashPaymentRequestV1,
     encrypted_tag: u8,
 ) -> OfflineCashPaymentV1 {
-    let semantic_digest = plan
-        .statement()
-        .canonical_digest()
-        .expect("statement digest");
+    let transfer = OfflineCashTransferResultV1::from_statement_against(plan.statement(), request)
+        .expect("compact statement carrier");
     let payment = OfflineCashPaymentV1 {
         version: OFFLINE_CASH_WIRE_VERSION_V1,
-        request_digest: request.canonical_digest().expect("request digest"),
-        statement: plan.statement().clone(),
+        transfer,
         proof: OfflineCashPairedProofV1 {
             version: OFFLINE_CASH_WIRE_VERSION_V1,
-            eq_protocol_digest: [0x71; 32],
-            ep_protocol_digest: [0x72; 32],
-            semantic_digest,
             eq_proof: vec![0x73; 64],
             ep_proof: vec![0x74; 64],
-            eq_history: vec![0x75; OFFLINE_CASH_HISTORY_ACCUMULATOR_BYTES_V1],
-            ep_history: vec![0x76; OFFLINE_CASH_HISTORY_ACCUMULATOR_BYTES_V1],
+            eq_carried_lineage: test_lineage(0x79),
+            ep_carried_lineage: test_lineage(0x7A),
+            recursive_pair_binding: OfflineCashRecursivePairBindingV1::new_state(
+                [0x75; 32],
+                [0x76; 32],
+                &OfflineCashRecursivePairBindingV1::new_guard_bundle([0x77; 32], [0x78; 32])
+                    .expect("GuardBundle pair binding"),
+            )
+            .expect("recursive pair binding"),
         },
         encrypted_credit: vec![encrypted_tag; 96],
-        artifact_manifest_digest: [0x77; 32],
     };
     payment
         .validate_against(request)
@@ -900,7 +919,10 @@ fn bind_credit(
         pending.recipient_key_reference,
     )
     .expect("authenticated opening");
-    bind_verified_credit_v1(pending, &payment.statement, verification, opening)
+    let statement = payment
+        .reconstruct_statement(request)
+        .expect("reconstructed statement");
+    bind_verified_credit_v1(pending, &statement, verification, opening)
         .map_err(|rejection| rejection.error())
         .expect("verified credit binding")
 }

@@ -20,7 +20,7 @@ struct VerifierIdentity {
     public_input_limbs: u32,
 }
 
-/// Return the release-qualified verifier-key registry identifier for one ABI-21 parity.
+/// Return the release-qualified verifier-key registry identifier for one Kagemusha V4 parity.
 ///
 /// The manifest digest suffix keeps verifier records for overlapping retained releases distinct
 /// while preserving the fixed Eq/Ep circuit identity inside each [`VerifyingKeyRecord`].
@@ -41,7 +41,7 @@ pub fn kagemusha_recursive_spend_verifier_key_id_v4(
 
 /// Return the release-qualified verifier-key registry identifier for one V5 release parity.
 ///
-/// V5 retains the ABI-21 circuit ids but uses a disjoint registry namespace,
+/// V5 retains the Kagemusha V4 circuit ids but uses a disjoint registry namespace,
 /// so V4 and V5 release records cannot select the same qualified registry id
 /// even when their canonical manifest digests happen to match.
 #[must_use]

@@ -5466,7 +5466,7 @@ mod tests {
     fn resolve_contract_target_accepts_contract_address() {
         let authority = fixture_account(0x41);
         let contract_address = iroha::data_model::smart_contract::ContractAddress::derive(
-            &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
+            &"0000000000000000000000000000000000000000000000000000000000000001"
                 .parse()
                 .expect("canonical test network id"),
             &authority,
@@ -5571,10 +5571,9 @@ mod tests {
             let key_pair = fixture_key_pair(0xA5);
             let cfg = iroha::config::Config {
                 chain: ChainId::from("00000000-0000-0000-0000-000000000000"),
-                network_id:
-                    "hash:32C903E5B3497E34C2B844EBFE8A39C19E6CF8F95D44C1FFB8BA9DCB42F91149#A2F0"
-                        .parse()
-                        .expect("network id"),
+                network_id: "32c903e5b3497e34c2b844ebfe8a39c19e6cf8f95d44c1ffb8ba9dcb42f91149"
+                    .parse()
+                    .expect("network id"),
                 account,
                 account_chain_discriminant:
                     iroha_config::parameters::defaults::common::chain_discriminant(),

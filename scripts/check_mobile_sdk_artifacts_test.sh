@@ -1550,7 +1550,7 @@ mv "$symlinked_apple_cargo_lock/Cargo.lock" \
 ln -s Cargo.lock.real "$symlinked_apple_cargo_lock/Cargo.lock"
 run_expect_fail \
   "$symlinked_apple_cargo_lock" \
-  "selected Apple Cargo lock is not an absolute canonical non-symbolic regular file"
+  "selected Apple Cargo lock is not a stable singly linked canonical file"
 
 tampered_apple_build_environment="$TMP_DIR/tampered-apple-build-environment"
 make_fixture "$tampered_apple_build_environment"
@@ -1848,6 +1848,16 @@ run_expect_apple_forbidden_binary_fail \
   "$extra_binary_symbol" \
   "connect_norito_kagemusha_recipient_registration_lineage_verify_v1" \
   "ios-arm64_x86_64-simulator" \
+  "$inspection_tools"
+run_expect_apple_forbidden_binary_fail \
+  "$extra_binary_symbol" \
+  "connect_norito_kagemusha_recipient_lineage_query_create_v2" \
+  "ios-arm64" \
+  "$inspection_tools"
+run_expect_apple_forbidden_binary_fail \
+  "$extra_binary_symbol" \
+  "connect_norito_kagemusha_recipient_registration_lineage_verify_v2" \
+  "macos-arm64_x86_64" \
   "$inspection_tools"
 run_expect_apple_forbidden_binary_fail \
   "$extra_binary_symbol" \
@@ -2405,6 +2415,16 @@ run_expect_android_forbidden_binary_fail \
 run_expect_android_forbidden_binary_fail \
   "$with_android_outputs" \
   "connect_norito_kagemusha_recipient_registration_lineage_verify_v1" \
+  "arm64-v8a" \
+  "$android_inspection_tools"
+run_expect_android_forbidden_binary_fail \
+  "$with_android_outputs" \
+  "connect_norito_kagemusha_recipient_lineage_query_create_v2" \
+  "x86_64" \
+  "$android_inspection_tools"
+run_expect_android_forbidden_binary_fail \
+  "$with_android_outputs" \
+  "connect_norito_kagemusha_recipient_registration_lineage_verify_v2" \
   "arm64-v8a" \
   "$android_inspection_tools"
 run_expect_android_forbidden_binary_fail \

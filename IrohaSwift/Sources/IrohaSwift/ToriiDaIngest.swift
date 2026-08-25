@@ -464,7 +464,7 @@ struct ToriiDaIngestRequestBuilder {
         let signatureResult = try resolveSignatureDigest(signingDigest: signingDigest)
 
         var payload: [String: Any] = [:]
-        payload["network_id"] = submission.networkId.literal
+        payload["network_id"] = submission.networkId.noritoJSONLiteral
         payload["owner"] = submission.owner
         payload["client_blob_id"] = digestResult.encodedTuple
         payload["lane_id"] = NSNumber(value: submission.laneId)

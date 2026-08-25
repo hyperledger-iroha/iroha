@@ -101,7 +101,7 @@ MESSAGE_TYPE_RE = re.compile(r"^[a-z]{4}\.[0-9]{3}$")
 RAIL_MESSAGE_ID_RE = re.compile(r"^[A-Za-z0-9](?:[A-Za-z0-9._:@+-]*[A-Za-z0-9])?$")
 CLI_CANONICAL_INT_RE = re.compile(r"(?:0|-?[1-9][0-9]*)")
 JSON_CANONICAL_INT_RE = re.compile(r"(?:0|-?[1-9][0-9]*)")
-NETWORK_ID_RE = re.compile(r"hash:([0-9A-F]{64})#([0-9A-F]{4})")
+NETWORK_ID_RE = re.compile(r"[0-9a-f]{64}")
 CLI_CANONICAL_NUMBER_RE = re.compile(
     r"-?(?:0|[1-9][0-9]*)(?:\.[0-9]+)?(?:[eE][+-]?(?:0|[1-9][0-9]*))?"
 )
@@ -131,28 +131,11 @@ def _is_negative_zero_number_text(value: str) -> bool:
     return all(ch in {"0", "."} for ch in mantissa)
 
 
-def _crc16_ccitt_false(payload: bytes) -> int:
-    checksum = 0xFFFF
-    for byte in payload:
-        checksum ^= byte << 8
-        for _ in range(8):
-            checksum = (
-                ((checksum << 1) ^ 0x1021) & 0xFFFF
-                if checksum & 0x8000
-                else (checksum << 1) & 0xFFFF
-            )
-    return checksum
-
-
 def _check_canonical_network_id(value: str, label: str) -> None:
-    match = NETWORK_ID_RE.fullmatch(value)
-    if match is None:
-        raise EvidenceError(f"{label} must be one canonical checksummed NetworkId")
-    identity = bytes.fromhex(match.group(1))
-    if identity[-1] & 1 == 0 or _crc16_ccitt_false(value[:69].encode("ascii")) != int(
-        match.group(2), 16
-    ):
-        raise EvidenceError(f"{label} must be one canonical checksummed NetworkId")
+    if NETWORK_ID_RE.fullmatch(value) is None or bytes.fromhex(value)[-1] & 1 == 0:
+        raise EvidenceError(
+            f"{label} must be one canonical raw lowercase NetworkId with its marker bit set"
+        )
 LOCAL_PATH_ERROR_RE = re.compile(
     r"(?:^|[\s'\"(<:=])(?:[A-Za-z]:[\\/]|/[^/\s'\"<>]+|\.{1,2}/|~/)"
 )

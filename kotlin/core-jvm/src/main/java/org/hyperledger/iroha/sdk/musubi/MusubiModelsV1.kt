@@ -1664,7 +1664,7 @@ class MusubiExactReleaseSnapshotV1 internal constructor(
     }
 
     override fun wireValue(): Any = linkedMapOf(
-        "network_id" to networkId.toString(),
+        "network_id" to networkId.noritoJsonLiteral,
         "snapshot" to snapshot.wireValue(),
         "home_release" to homeRelease.wireValue(),
         "universal_release" to universalRelease.wireValue(),
@@ -1901,7 +1901,7 @@ class MusubiSeedIngressReceiptBindingV1(
     fun nonce(): ByteArray = nonceValue.copyOf()
 
     override fun wireValue(): Any = linkedMapOf(
-        "network_id" to networkId.toString(),
+        "network_id" to networkId.noritoJsonLiteral,
         "publisher" to publisher,
         "ingress_broker" to ingressBroker,
         "seed_provider" to listOf(seedProvider),
@@ -2111,7 +2111,7 @@ class MusubiProviderBundleVerificationBindingV1(
     }
 
     override fun wireValue(): Any = linkedMapOf(
-        "network_id" to networkId.toString(),
+        "network_id" to networkId.noritoJsonLiteral,
         "provider_id" to listOf(providerId),
         "completed_by" to completedBy,
         "completion_authority" to completionAuthority.wireValue(),
@@ -2627,7 +2627,7 @@ class MusubiResolverIndexPageV1 internal constructor(
 
     override fun wireValue(): Any = linkedMapOf(
         "query" to query.wireValue(),
-        "network_id" to networkId.toString(),
+        "network_id" to networkId.noritoJsonLiteral,
         "items" to items.map { it.wireValue() },
         "next_cursor" to nextCursor?.wireValue(),
         "snapshot" to snapshot.wireValue(),
@@ -2681,7 +2681,7 @@ class MusubiArchiveLocationPageV1 internal constructor(
     }
 
     override fun wireValue(): Any = linkedMapOf(
-        "network_id" to networkId.toString(),
+        "network_id" to networkId.noritoJsonLiteral,
         "archive" to archive.wireValue(),
         "items" to items.map { it.wireValue() },
         "next_cursor" to nextCursor?.wireValue(),
@@ -2731,7 +2731,7 @@ class MusubiArchiveRetentionPageV1 internal constructor(
     }
 
     override fun wireValue(): Any = linkedMapOf(
-        "network_id" to networkId.toString(),
+        "network_id" to networkId.noritoJsonLiteral,
         "items" to items.map { it.wireValue() },
         "finalized_time_ms" to finalizedTimeMs,
         "snapshot" to snapshot.wireValue(),
@@ -2797,7 +2797,7 @@ class MusubiOrderedPrefixPageV1 internal constructor(
 
     override fun wireValue(): Any = linkedMapOf(
         "query" to query.wireValue(),
-        "network_id" to networkId.toString(),
+        "network_id" to networkId.noritoJsonLiteral,
         "namespace_binding" to namespaceBinding.wireValue(),
         "items" to items.map { it.wireValue() },
         "next_cursor" to nextCursor?.wireValue(),

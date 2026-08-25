@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+import os
 import re
+import shutil
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -8,10 +11,10 @@ import pytest
 
 ROOT = Path(__file__).resolve().parents[2]
 FROZEN_LOCK_SHA256 = (
-    "cd9e829e454171f17540abeb7fd1aa14129252082bd8b076a0199b0ffa4e3f79"
+    "ccf4acebfe63ad981193b87afd559c195d8a67642d9536b8082f77bbf24a11f0"
 )
 TRACKED_ROOT_LOCK_SHA256 = (
-    "c90b3659d6cb44cd1d6f9e75e7b98aacc0d30bbe23041d4e6e109e8a206fa76b"
+    "ad0d209abaa51d4c77a9e67ccbb0c7660a0f8b7b5dbe3e3fbe4a70e142711bf7"
 )
 
 
@@ -161,10 +164,35 @@ def test_javascript_lane_builds_and_executes_real_napi_abi22() -> None:
     assert "actions/download-artifact@" in job
     assert FROZEN_LOCK_SHA256 in job
     assert TRACKED_ROOT_LOCK_SHA256 in job
-    assert "not yet requalified" in job
+    assert "not yet requalified" not in job
+    assert "IROHA_PRIVACY_RELEASE_CARGO_LOCKFILE_PATH" in job
+    assert '--lockfile-path "$IROHA_PRIVACY_RELEASE_CARGO_LOCKFILE_PATH"' in job
     assert "install -m 600" not in job
     assert "cargo fetch --locked" in job
+    fetch_step = job[job.index(
+        "- name: Prime privacy N-API dependencies from the frozen lock"
+    ) : job.index("- name: Install JavaScript SDK dependencies")]
+    assert 'RUSTC_BOOTSTRAP: "1"' in fetch_step
     assert "run: ci/check_privacy_js_sdk.sh" in job
+    assert "Revalidate frozen JavaScript lock inputs" in job
+    assert "if: always()" in job[job.index(
+        "Revalidate frozen JavaScript lock inputs"
+    ) :]
+    for dependency in (
+        "javascript/iroha_js/scripts/build-native.mjs",
+        "javascript/iroha_js/scripts/build-dist.mjs",
+        "javascript/iroha_js/scripts/copy-native.mjs",
+        "javascript/iroha_js/scripts/native-build-provenance.mjs",
+        "javascript/iroha_js/scripts/native-build-profile.mjs",
+        "javascript/iroha_js/src/native.js",
+        "javascript/iroha_js/src/nativeArtifactHash.js",
+        "javascript/iroha_js/package.json",
+        "javascript/iroha_js/package-lock.json",
+        "javascript/iroha_js/test/nativeBuildProfile.test.js",
+        "javascript/iroha_js/test/nativeBuildProvenance.test.js",
+        "javascript/iroha_js/test/privacyExact12Network.test.js",
+    ):
+        assert f'- "{dependency}"' in workflow
 
     gate = read("ci/check_privacy_js_sdk.sh")
     assert f'FROZEN_CARGO_LOCK_SHA256="{FROZEN_LOCK_SHA256}"' in gate
@@ -176,6 +204,9 @@ def test_javascript_lane_builds_and_executes_real_napi_abi22() -> None:
     assert 'test/privacyNative.integration.test.js' in gate
     assert 'export IROHA_JS_NATIVE_DIR=' in gate
     assert 'export CARGO_NET_OFFLINE=true' in gate
+    assert "PRIVACY_RELEASE_CARGO_LOCK_SEAL" in gate
+    assert "assert_privacy_release_cargo_lock" in gate
+    assert "privacy_sdk_assert_file_seal" in gate
 
     integration = read(
         "javascript/iroha_js/test/privacyNative.integration.test.js"
@@ -185,6 +216,93 @@ def test_javascript_lane_builds_and_executes_real_napi_abi22() -> None:
     assert "globalThis.__IROHA_NATIVE_BINDING__, undefined" in integration
     assert "withNativeBinding" not in integration
     assert "privacyValidateCompiledProfileCatalogV1" in integration
+
+
+def test_javascript_gate_rejects_late_external_lock_mutation(tmp_path: Path) -> None:
+    root = tmp_path / "repo"
+    ci = root / "ci"
+    tools = tmp_path / "bin"
+    js_root = root / "javascript/iroha_js"
+    for directory in (ci, tools, js_root):
+        directory.mkdir(parents=True)
+
+    gate = ci / "check_privacy_js_sdk.sh"
+    gate.write_text(read("ci/check_privacy_js_sdk.sh"), encoding="utf-8")
+    shutil.copy2(ROOT / "ci/privacy_sdk_cargo_lockfile.sh", ci)
+    tracked = root / "Cargo.lock"
+    release = tmp_path / "Cargo.lock"
+    tracked.write_text("tracked\n", encoding="utf-8")
+    release.write_text("release\n", encoding="utf-8")
+
+    fake_python = tools / "python"
+    fake_python.write_text(
+        "#!/usr/bin/env bash\n"
+        "last=${!#}\n"
+        "if [[ \" $* \" == *\" -S \"* ]]; then\n"
+        f'  [[ "$last" == "{tracked}" ]] && echo "{TRACKED_ROOT_LOCK_SHA256}" || echo "{FROZEN_LOCK_SHA256}"\n'
+        "elif [[ \"$last\" == \"$PRIVACY_TEST_TRACKED_LOCK\" ]]; then\n"
+        "  echo tracked-seal\n"
+        "elif grep -qx release \"$last\"; then\n"
+        "  echo release-seal\n"
+        "else\n"
+        "  echo changed-release-seal\n"
+        "fi\n",
+        encoding="utf-8",
+    )
+    fake_node = tools / "node"
+    fake_node.write_text(
+        "#!/usr/bin/env bash\n"
+        "if [[ \"${1:-}\" == --version ]]; then echo v20.20.0; exit 0; fi\n"
+        "if [[ \"${1:-}\" == --eval ]]; then printf darwin-arm64-node20; exit 0; fi\n"
+        "if [[ \"${PRIVACY_TEST_MUTATE_RELEASE:-0}\" == 1 && "
+        "\" $* \" == *\" test/privacyExact12Network.test.js \"* ]]; then\n"
+        "  printf 'mutated\\n' >\"$PRIVACY_TEST_RELEASE_LOCK\"\n"
+        "fi\n"
+        "exit 0\n",
+        encoding="utf-8",
+    )
+    fake_rustup = tools / "rustup"
+    fake_rustup.write_text(
+        "#!/usr/bin/env bash\n"
+        "case \"${!#}\" in\n"
+        f'  cargo) echo "{tools / "cargo"}" ;;\n'
+        f'  rustc) echo "{tools / "rustc"}" ;;\n'
+        f'  rustdoc) echo "{tools / "rustdoc"}" ;;\n'
+        "  *) exit 1 ;;\n"
+        "esac\n",
+        encoding="utf-8",
+    )
+    (tools / "cargo").write_text("#!/usr/bin/env bash\nexit 0\n", encoding="utf-8")
+    (tools / "rustc").write_text(
+        "#!/usr/bin/env bash\necho 'rustc 1.93.1 (fixture)'\n", encoding="utf-8"
+    )
+    (tools / "rustdoc").write_text("#!/usr/bin/env bash\nexit 0\n", encoding="utf-8")
+    for executable in tools.iterdir():
+        executable.chmod(0o700)
+
+    environment = {
+        **os.environ,
+        "PRIVACY_JS_SDK_ROOT": str(root),
+        "PRIVACY_JS_SDK_NODE_BIN": str(fake_node),
+        "PRIVACY_JS_SDK_PYTHON_BIN": str(fake_python),
+        "PRIVACY_JS_SDK_RUSTUP_BIN": str(fake_rustup),
+        "IROHA_PRIVACY_RELEASE_CARGO_LOCKFILE_PATH": str(release),
+        "PRIVACY_TEST_TRACKED_LOCK": str(tracked),
+        "PRIVACY_TEST_RELEASE_LOCK": str(release),
+    }
+    accepted = subprocess.run(
+        ["bash", str(gate)], env=environment, text=True, capture_output=True
+    )
+    assert accepted.returncode == 0, accepted.stderr
+
+    rejected = subprocess.run(
+        ["bash", str(gate)],
+        env={**environment, "PRIVACY_TEST_MUTATE_RELEASE": "1"},
+        text=True,
+        capture_output=True,
+    )
+    assert rejected.returncode == 1
+    assert "privacy JavaScript external Cargo.lock changed" in rejected.stderr
 
 
 def test_python_lane_authenticates_and_executes_real_pyo3_abi22() -> None:
@@ -227,12 +345,18 @@ def test_swift_lane_rebuilds_external_xcframework_and_requires_native_abi22() ->
     assert "actions/download-artifact@" in job
     assert FROZEN_LOCK_SHA256 in job
     assert TRACKED_ROOT_LOCK_SHA256 in job
-    assert "not yet requalified" in job
+    assert "not yet requalified" not in job
+    assert "IROHA_PRIVACY_RELEASE_CARGO_LOCKFILE_PATH" in job
+    assert '--lockfile-path "$IROHA_PRIVACY_RELEASE_CARGO_LOCKFILE_PATH"' in job
     assert "install -m 600" not in job
     assert "MOBILE_SDK_REQUIRE_EXTERNAL_APPLE_ARTIFACT=1" in job
     assert "NORITO_BRIDGE_OUT_DIR=" in job
     assert "NORITO_BRIDGE_BUILD_DIR=" in job
     assert "cargo fetch --locked" in job
+    fetch_step = job[job.index(
+        "- name: Install Apple Rust targets and prime frozen dependencies"
+    ) : job.index("- name: Bind the external privacy Swift Cargo envelope")]
+    assert 'RUSTC_BOOTSTRAP: "1"' in fetch_step
     assert "chmod -R a-w" in job
     assert "scripts/build_norito_xcframework.sh" in job
     assert "run: ci/check_privacy_swift_sdk.sh" in job

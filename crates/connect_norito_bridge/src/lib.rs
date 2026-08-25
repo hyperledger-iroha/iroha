@@ -133,6 +133,7 @@ mod confidential_note_ffi;
 mod kagemusha_candidate_apple;
 #[cfg(all(feature = "kagemusha-candidate-evidence-lab", unix))]
 mod kagemusha_candidate_scenario;
+mod offline_cash_v1_bridge;
 #[cfg(all(feature = "kagemusha-candidate-evidence-lab", unix))]
 pub use kagemusha_candidate_scenario::validate_kagemusha_candidate_scenario_directory_v1;
 const CONNECT_NORITO_BRIDGE_ABI_VERSION: u32 = PRIVACY_BRIDGE_ABI_VERSION_V1;
@@ -147,7 +148,9 @@ const CONNECT_NORITO_BRIDGE_ABI_VERSION: u32 = PRIVACY_BRIDGE_ABI_VERSION_V1;
     windows
 ))]
 const NATIVE_SIGNER_JNI_CONTRACT_REVISION: u32 = 5;
-const CANONICAL_NETWORK_ID_LITERAL_BYTES: usize = 74;
+const CANONICAL_NETWORK_ID_TEXT_BYTES: usize = Hash::LENGTH * 2;
+#[cfg(test)]
+const CANONICAL_NETWORK_ID_JSON_LITERAL_BYTES: usize = 74;
 const KAGEMUSHA_NATIVE_ARCHIVE_MAX_BYTES: usize = 256 * 1024 * 1024;
 const KAGEMUSHA_CANONICAL_TOTAL_ALLOCATION_MULTIPLIER: usize = 4;
 const KAGEMUSHA_CANONICAL_FIXED_ALLOCATION_ALLOWANCE: usize = 64 * 1024;
@@ -265,6 +268,8 @@ const ERR_KAGEMUSHA_PROVE: c_int = -311;
 const ERR_KAGEMUSHA_RECURSIVE_SPEND_V4_UNAVAILABLE: c_int = -316;
 const ERR_KAGEMUSHA_RECURSIVE_SPEND_V4_ARTIFACT: c_int = -317;
 const ERR_KAGEMUSHA_BUSY: c_int = -318;
+const ERR_OFFLINE_CASH_ARTIFACT: c_int = -319;
+const ERR_OFFLINE_CASH_SESSION: c_int = -320;
 const ERR_DA_PROOF_SUMMARY: c_int = -401;
 const ERR_MULTISIG_SPEC: c_int = -402;
 const ERR_VERIFYING_KEY_ID: c_int = -403;
@@ -305,6 +310,8 @@ enum BridgeError {
     KagemushaRecursiveSpendV4Unavailable,
     KagemushaRecursiveSpendV4Artifact,
     KagemushaBusy,
+    OfflineCashArtifact,
+    OfflineCashSession,
     UnsupportedAlgorithm,
     MetadataTarget,
     MetadataKey,
@@ -358,6 +365,8 @@ impl BridgeError {
                 ERR_KAGEMUSHA_RECURSIVE_SPEND_V4_ARTIFACT
             }
             BridgeError::KagemushaBusy => ERR_KAGEMUSHA_BUSY,
+            BridgeError::OfflineCashArtifact => ERR_OFFLINE_CASH_ARTIFACT,
+            BridgeError::OfflineCashSession => ERR_OFFLINE_CASH_SESSION,
             BridgeError::UnsupportedAlgorithm => ERR_UNSUPPORTED_ALGORITHM,
             BridgeError::MetadataTarget => ERR_METADATA_TARGET,
             BridgeError::MetadataKey => ERR_METADATA_KEY,
@@ -519,14 +528,14 @@ unsafe fn read_string_bridge(ptr: *const c_char, len: c_ulong) -> BridgeResult<S
     Ok(s.to_owned())
 }
 unsafe fn read_network_id_bridge(ptr: *const c_char, len: c_ulong) -> BridgeResult<NetworkId> {
-    if usize::try_from(len).ok() != Some(CANONICAL_NETWORK_ID_LITERAL_BYTES) {
+    if usize::try_from(len).ok() != Some(CANONICAL_NETWORK_ID_TEXT_BYTES) {
         return Err(BridgeError::NetworkId);
     }
-    let literal = unsafe { read_string_bridge(ptr, len) }?;
-    let network_id: NetworkId = norito::json::from_value(JsonValue::String(literal.clone()))
+    let text = unsafe { read_string_bridge(ptr, len) }?;
+    let network_id = text
+        .parse::<NetworkId>()
         .map_err(|_| BridgeError::NetworkId)?;
-    let canonical = norito::json::to_value(&network_id).map_err(|_| BridgeError::NetworkId)?;
-    if canonical.as_str() != Some(literal.as_str()) {
+    if network_id.to_string() != text {
         return Err(BridgeError::NetworkId);
     }
     Ok(network_id)
@@ -1678,8 +1687,16 @@ pub unsafe extern "C" fn connect_norito_offline_cash_payment_canonicalize_v1(
     bridge_result_to_code(result)
 }
 
-/// Decode, validate, and reproduce one request-bound Offline Cash V1 payment only when its
-/// authenticated artifact manifest matches the exact digest pinned by the wallet session.
+/// Decode and terminally verify one request-bound Offline Cash V1 payment for a
+/// wallet session against the active authenticated 34-role release.
+///
+/// The compact payment does not echo release-manifest metadata. The signed
+/// request selects the release, so a caller-supplied manifest digest alone
+/// cannot authenticate their mapping. This compatibility entry point resolves
+/// the mapping through the native governed registry and decides both current
+/// proofs before returning canonical bytes. New callers should use the opaque
+/// wallet-session handle API, which also retains the move-only proof receipt for
+/// acknowledgement verification and crash-safe device application.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn connect_norito_offline_cash_payment_canonicalize_for_session_v1(
     request_ptr: *const c_uchar,
@@ -1697,19 +1714,19 @@ pub unsafe extern "C" fn connect_norito_offline_cash_payment_canonicalize_for_se
         let payment =
             unsafe { offline_cash_payment_from_bridge_v1(&request, payment_ptr, payment_len) }?;
         let expected = unsafe {
-            read_offline_cash_archive_v1(
+            offline_cash_v1_bridge::read_session_digest(
                 expected_artifact_manifest_sha256_ptr,
                 expected_artifact_manifest_sha256_len,
-                32,
             )
         }?;
-        let expected: [u8; 32] = expected
+        let now_ms = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_err(|_| BridgeError::OfflineCashSession)?
+            .as_millis()
             .try_into()
-            .map_err(|_| BridgeError::KagemushaProve)?;
-        if expected == [0; 32] || payment.artifact_manifest_digest != expected {
-            return Err(BridgeError::KagemushaProve);
-        }
-        let canonical = offline_cash_bridge_error(norito::encode_canonical(&payment))?;
+            .map_err(|_| BridgeError::OfflineCashSession)?;
+        let canonical =
+            offline_cash_v1_bridge::verify_payment_once(&request, &payment, expected, now_ms)?;
         unsafe {
             publish_offline_cash_output_v1(
                 out_ptr,
@@ -1973,10 +1990,10 @@ pub unsafe extern "C" fn connect_norito_offline_cash_peer_decode_acknowledgement
 
 /// Probe the installed authenticated Offline Cash V1 release and artifact set.
 ///
-/// The dedicated 22-artifact Offline Cash V1 registry is not production-published yet, so this
-/// ABI22 bridge must report unavailable instead of substituting the older Kagemusha V4 registry.
-/// Successful probing always initializes every output; callers must require `available == 1` and
-/// exact equality with both signed runtime-manifest digests before creating a wallet session.
+/// Successful probing always initializes every output. Callers must require
+/// `available == 1` and exact equality with both signed runtime-manifest
+/// digests before creating a wallet session. The older eight-role Kagemusha V4
+/// registry is deliberately not consulted.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn connect_norito_offline_cash_release_probe_v1(
     out_available: *mut u8,
@@ -1998,7 +2015,22 @@ pub unsafe extern "C" fn connect_norito_offline_cash_release_probe_v1(
         ptr::write_bytes(out_release_id, 0, 32);
         ptr::write_bytes(out_artifact_manifest_sha256, 0, 32);
     }
-    0
+    match offline_cash_v1_bridge::release_probe() {
+        Ok(Some((release_id, manifest_digest))) => {
+            unsafe {
+                ptr::copy_nonoverlapping(release_id.as_ptr(), out_release_id, release_id.len());
+                ptr::copy_nonoverlapping(
+                    manifest_digest.as_ptr(),
+                    out_artifact_manifest_sha256,
+                    manifest_digest.len(),
+                );
+                *out_available = 1;
+            }
+            0
+        }
+        Ok(None) => 0,
+        Err(error) => error.code(),
+    }
 }
 const PRIVACY_BUFFER_HEADER_MAGIC: u64 = 0x4952_5041_484f_5249;
 const PRIVACY_BUFFER_HEADER_BYTES: usize = std::mem::size_of::<PrivacyBufferHeader>();
@@ -9675,35 +9707,6 @@ struct KagemushaProjectedRecipientReceiveOfferV2 {
     lineage_archive: Vec<u8>,
     publisher_checkpoint_envelope: Vec<u8>,
 }
-fn kagemusha_recipient_lineage_query_create_v2(
-    network_id: NetworkId,
-    recipient: AccountId,
-    receiver_device_id: String,
-    asset: AssetDefinitionId,
-    trusted_checkpoint_height: u64,
-) -> BridgeResult<Vec<u8>> {
-    if trusted_checkpoint_height == 0
-        || receiver_device_id.is_empty()
-        || receiver_device_id.len() > 128
-        || receiver_device_id.trim() != receiver_device_id
-        || receiver_device_id.chars().any(char::is_control)
-    {
-        return Err(BridgeError::KagemushaProve);
-    }
-    norito::to_bytes(
-        &iroha_torii_shared::offline_api::OfflineRecipientLineageRequest {
-            version: iroha_torii_shared::offline_api::OFFLINE_RECIPIENT_LINEAGE_VERSION,
-            selector: iroha_torii_shared::offline_api::OfflineRecipientLineageSelectorV2 {
-                network_id,
-                recipient,
-                receiver_device_id,
-                asset,
-            },
-            trusted_checkpoint_height,
-        },
-    )
-    .map_err(|_| BridgeError::KagemushaProve)
-}
 fn kagemusha_recipient_registration_lineage_verify_v2(
     request_archive: &[u8],
     lineage_archive: &[u8],
@@ -10068,114 +10071,6 @@ pub unsafe extern "C" fn connect_norito_kagemusha_recipient_payment_request_veri
         )?;
         let digest = kagemusha_recipient_payment_request_verify_v2(&request, verified_at_ms)?;
         unsafe { write_kagemusha_archive_bridge(out_digest_ptr, out_digest_len, &digest) }
-    })();
-    bridge_result_to_code(result)
-}
-/// Build a request-independent v2 Torii receiver-lineage selector query.
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn connect_norito_kagemusha_recipient_lineage_query_create_v2(
-    network_id_ptr: *const c_uchar,
-    network_id_len: c_ulong,
-    chain_discriminant: u16,
-    recipient_ptr: *const c_uchar,
-    recipient_len: c_ulong,
-    receiver_device_id_ptr: *const c_uchar,
-    receiver_device_id_len: c_ulong,
-    asset_ptr: *const c_uchar,
-    asset_len: c_ulong,
-    trusted_checkpoint_height: u64,
-    out_query_ptr: *mut *mut c_uchar,
-    out_query_len: *mut c_ulong,
-) -> c_int {
-    let result = (|| {
-        clear_bridge_output_or_null(out_query_ptr, out_query_len)?;
-        let network_id =
-            unsafe { read_network_id_bridge(network_id_ptr.cast::<c_char>(), network_id_len) }?;
-        let recipient = String::from_utf8(unsafe {
-            read_kagemusha_archive_bytes_bounded(recipient_ptr, recipient_len, 1_024)
-        }?)
-        .map_err(|_| BridgeError::KagemushaProve)?;
-        let receiver_device_id = String::from_utf8(unsafe {
-            read_kagemusha_archive_bytes_bounded(
-                receiver_device_id_ptr,
-                receiver_device_id_len,
-                128,
-            )
-        }?)
-        .map_err(|_| BridgeError::KagemushaProve)?;
-        let asset = String::from_utf8(unsafe {
-            read_kagemusha_archive_bytes_bounded(asset_ptr, asset_len, 1_024)
-        }?)
-        .map_err(|_| BridgeError::KagemushaProve)?;
-        let query = kagemusha_recipient_lineage_query_create_v2(
-            network_id,
-            parse_account_id_for_chain(recipient, chain_discriminant)?,
-            receiver_device_id,
-            parse_asset_definition(asset)?,
-            trusted_checkpoint_height,
-        )?;
-        unsafe { write_kagemusha_archive_bridge(out_query_ptr, out_query_len, &query) }
-    })();
-    bridge_result_to_code(result)
-}
-/// Verify a v2 receiver-registration lineage against an external trusted checkpoint.
-///
-/// On success the first output is the byte-identical canonical lineage and the
-/// second is exactly 40 bytes: big-endian evaluated height followed by the
-/// evaluated `HeightContextId` bytes. Both outputs must be persisted atomically
-/// by the caller; neither is emitted before all proof checks succeed.
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn connect_norito_kagemusha_recipient_registration_lineage_verify_v2(
-    request_norito_ptr: *const c_uchar,
-    request_norito_len: c_ulong,
-    lineage_norito_ptr: *const c_uchar,
-    lineage_norito_len: c_ulong,
-    verified_at_ms: u64,
-    trusted_checkpoint_height: u64,
-    trusted_checkpoint_context_id_ptr: *const c_uchar,
-    trusted_checkpoint_context_id_len: c_ulong,
-    out_lineage_ptr: *mut *mut c_uchar,
-    out_lineage_len: *mut c_ulong,
-    out_promoted_checkpoint_ptr: *mut *mut c_uchar,
-    out_promoted_checkpoint_len: *mut c_ulong,
-) -> c_int {
-    let result = (|| {
-        clear_bridge_output_or_null(out_lineage_ptr, out_lineage_len)?;
-        clear_bridge_output_or_null(out_promoted_checkpoint_ptr, out_promoted_checkpoint_len)?;
-        let request = read_kagemusha_bytes!(
-            request_norito_ptr,
-            request_norito_len,
-            iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_MAX_PEER_ARCHIVE_BYTES_V2
-        )?;
-        let lineage = read_kagemusha_bytes!(
-            lineage_norito_ptr,
-            lineage_norito_len,
-            iroha_torii_shared::offline_api::OFFLINE_RECIPIENT_LINEAGE_MAX_RESPONSE_BYTES
-        )?;
-        let trusted_checkpoint_context_id = unsafe {
-            read_fixed_array::<32>(
-                trusted_checkpoint_context_id_ptr,
-                trusted_checkpoint_context_id_len,
-                BridgeError::KagemushaProve,
-            )
-        }?;
-        let verified = kagemusha_recipient_registration_lineage_verify_v2(
-            &request,
-            &lineage,
-            verified_at_ms,
-            trusted_checkpoint_height,
-            trusted_checkpoint_context_id,
-        )?;
-        unsafe {
-            write_kagemusha_archive_pair_bridge(
-                out_lineage_ptr,
-                out_lineage_len,
-                &verified.lineage_archive,
-                out_promoted_checkpoint_ptr,
-                out_promoted_checkpoint_len,
-                &verified.promoted_checkpoint,
-            )
-        }
     })();
     bridge_result_to_code(result)
 }
@@ -13406,7 +13301,13 @@ fn bridge_source() -> &'static str {
             include_str!("platform_jni/part_3.rs"),
         ]
         .concat();
-        include_str!("./lib.rs").replacen("mod platform_jni;\n", &platform_source, 1)
+        include_str!("./lib.rs")
+            .replacen("mod platform_jni;\n", &platform_source, 1)
+            .replacen(
+                "mod offline_cash_v1_bridge;\n",
+                include_str!("offline_cash_v1_bridge.rs"),
+                1,
+            )
     })
 }
 #[cfg(test)]
@@ -13544,17 +13445,28 @@ mod detached_transaction_scaffold_tests {
         )
         .expect("NetworkId JSON projection");
         assert_eq!(object.get("network_id"), Some(&expected_network_id));
-        let network_literal = expected_network_id
+        let network_json_literal = expected_network_id
             .as_str()
             .expect("NetworkId JSON must be a string");
-        assert_eq!(network_literal.len(), CANONICAL_NETWORK_ID_LITERAL_BYTES);
+        assert_eq!(
+            network_json_literal.len(),
+            CANONICAL_NETWORK_ID_JSON_LITERAL_BYTES
+        );
+        let reparsed_json: NetworkId = norito::json::from_value(expected_network_id.clone())
+            .expect("detached scaffold NetworkId must remain canonical Norito JSON");
+        assert_eq!(tx.network_id(), Some(&reparsed_json));
+        let network_text = tx
+            .network_id()
+            .expect("detached scaffold must have a NetworkId")
+            .to_string();
+        assert_eq!(network_text.len(), CANONICAL_NETWORK_ID_TEXT_BYTES);
         let reparsed = unsafe {
             read_network_id_bridge(
-                network_literal.as_ptr().cast::<c_char>(),
-                network_literal.len() as c_ulong,
+                network_text.as_ptr().cast::<c_char>(),
+                network_text.len() as c_ulong,
             )
         }
-        .expect("detached scaffold must expose canonical checksummed NetworkId text");
+        .expect("the C/Swift bridge must accept canonical raw NetworkId text");
         assert_eq!(tx.network_id(), Some(&reparsed));
         for retired_key in ["chain", "chain_id", "chainId"] {
             assert!(
@@ -15368,7 +15280,7 @@ mod kagemusha_bridge_tests {
         assert_eq!(one.lineage.selector.network_id, one.request.network_id);
         assert_eq!(one.lineage.selector.asset, one.request.asset);
         let one_bytes = norito::to_bytes(&one).expect("encode one-proof offer");
-        assert_eq!(one_bytes.len(), 12_425);
+        assert_eq!(one_bytes.len(), 12_423);
         assert_eq!(
             one_bytes,
             decode_hex_fixture(include_str!(
@@ -18677,7 +18589,7 @@ mod kagemusha_bridge_tests {
         let change_note = change_preparation.output.clone();
         assert_ne!(
             change_opening.spend_key, sender_opening.spend_key,
-            "peer-split change must use the ABI21 domain-separated spend key"
+            "peer-split change must use the Kagemusha V4 domain-separated spend key"
         );
         let append_frontier = kagemusha_output_membership_frontier_from_witness_v4(
             &init_result.bundle,
@@ -18728,7 +18640,7 @@ mod kagemusha_bridge_tests {
             .spend_key = sender_opening.spend_key;
         assert!(
             legacy_same_key_append.validate_shape().is_err(),
-            "ABI21 append must reject legacy input-key reuse for peer change"
+            "Kagemusha V4 append must reject legacy input-key reuse for peer change"
         );
         let append_archive =
             Zeroizing::new(norito::to_bytes(&append_local).expect("encode production DS append"));
@@ -20715,7 +20627,6 @@ mod kagemusha_bridge_tests {
     }
     #[cfg(feature = "privacy-production-enabled")]
     #[test]
-    #[ignore = "full production gate performs genuine compact degree-17 Eq/Ep key generation"]
     fn recursive_spend_v4_production_feature_installs_and_executes_real_release() {
         let resource_guard =
             KagemushaV4GuardChannel::require("bridge.production-acceptance.admitted")
@@ -24548,7 +24459,7 @@ mod accel_tests {
         CString::new(s).expect("valid cstring")
     }
     fn network_id_cstring(_test_case: &str) -> CString {
-        cstring("hash:32C903E5B3497E34C2B844EBFE8A39C19E6CF8F95D44C1FFB8BA9DCB42F91149#A2F0")
+        cstring("32c903e5b3497e34c2b844ebfe8a39c19e6cf8f95d44c1ffb8ba9dcb42f91149")
     }
     fn chain_guard() -> std::sync::MutexGuard<'static, ()> {
         super::test_support::chain_discriminant_guard()
@@ -28723,6 +28634,56 @@ mod tests {
         assert_eq!(out_len, 0);
     }
     #[test]
+    fn offline_cash_v1_artifact_and_session_handles_fail_closed() {
+        let malformed = b"not-canonical-norito";
+        let mut artifact_handle = u64::MAX;
+        assert_eq!(
+            unsafe {
+                offline_cash_v1_bridge::connect_norito_offline_cash_artifact_begin_v1(
+                    malformed.as_ptr(),
+                    malformed.len() as c_ulong,
+                    0,
+                    &mut artifact_handle,
+                )
+            },
+            ERR_OFFLINE_CASH_ARTIFACT
+        );
+        assert_eq!(artifact_handle, 0);
+
+        let digest = [1_u8; 32];
+        let mut session_handle = u64::MAX;
+        assert_eq!(
+            unsafe {
+                offline_cash_v1_bridge::connect_norito_offline_cash_wallet_session_open_v1(
+                    malformed.as_ptr(),
+                    malformed.len() as c_ulong,
+                    digest.as_ptr(),
+                    digest.len() as c_ulong,
+                    digest.as_ptr(),
+                    digest.len() as c_ulong,
+                    &mut session_handle,
+                )
+            },
+            ERR_OFFLINE_CASH_SESSION
+        );
+        assert_eq!(session_handle, 0);
+
+        let mut state = u8::MAX;
+        assert_eq!(
+            unsafe {
+                offline_cash_v1_bridge::connect_norito_offline_cash_wallet_session_state_v1(
+                    1, &mut state,
+                )
+            },
+            ERR_OFFLINE_CASH_SESSION
+        );
+        assert_eq!(state, 0);
+        assert_eq!(
+            offline_cash_v1_bridge::connect_norito_offline_cash_wallet_session_close_v1(1),
+            ERR_OFFLINE_CASH_SESSION
+        );
+    }
+    #[test]
     fn offline_cash_v1_c_jni_and_swift_symbol_contract_is_present() {
         let source = bridge_source();
         for symbol in [
@@ -28737,10 +28698,46 @@ mod tests {
             "connect_norito_offline_cash_peer_encode_acknowledgement_v1",
             "connect_norito_offline_cash_peer_decode_acknowledgement_v1",
             "connect_norito_offline_cash_release_probe_v1",
+            "connect_norito_offline_cash_artifact_begin_v1",
+            "connect_norito_offline_cash_artifact_write_v1",
+            "connect_norito_offline_cash_artifact_finalize_v1",
+            "connect_norito_offline_cash_artifact_cancel_v1",
+            "connect_norito_offline_cash_artifact_set_install_v1",
+            "connect_norito_offline_cash_artifact_set_uninstall_v1",
+            "connect_norito_offline_cash_wallet_session_open_v1",
+            "connect_norito_offline_cash_wallet_session_open_bound_v1",
+            "connect_norito_offline_cash_wallet_session_accept_payment_v1",
+            "connect_norito_offline_cash_wallet_session_accept_acknowledgement_v1",
+            "connect_norito_offline_cash_wallet_session_state_v1",
+            "connect_norito_offline_cash_wallet_session_close_v1",
             "Java_org_hyperledger_iroha_sdk_offline_OfflineCashNativeV1_nativeReleaseProbeV1",
             "Java_org_hyperledger_iroha_android_offline_OfflineCashNativeV1_nativeReleaseProbeV1",
             "Java_org_hyperledger_iroha_sdk_offline_OfflineCashNativeV1_nativeCanonicalizePaymentForSessionV1",
             "Java_org_hyperledger_iroha_android_offline_OfflineCashNativeV1_nativeCanonicalizePaymentForSessionV1",
+            "Java_org_hyperledger_iroha_sdk_offline_OfflineCashNativeV1_nativeWalletSessionOpenV1",
+            "Java_org_hyperledger_iroha_android_offline_OfflineCashNativeV1_nativeWalletSessionOpenV1",
+            "Java_org_hyperledger_iroha_sdk_offline_OfflineCashNativeV1_nativeWalletSessionOpenBoundV1",
+            "Java_org_hyperledger_iroha_android_offline_OfflineCashNativeV1_nativeWalletSessionOpenBoundV1",
+            "Java_org_hyperledger_iroha_sdk_offline_OfflineCashNativeV1_nativeArtifactBeginV1",
+            "Java_org_hyperledger_iroha_android_offline_OfflineCashNativeV1_nativeArtifactBeginV1",
+            "Java_org_hyperledger_iroha_sdk_offline_OfflineCashNativeV1_nativeArtifactWriteV1",
+            "Java_org_hyperledger_iroha_android_offline_OfflineCashNativeV1_nativeArtifactWriteV1",
+            "Java_org_hyperledger_iroha_sdk_offline_OfflineCashNativeV1_nativeArtifactFinalizeV1",
+            "Java_org_hyperledger_iroha_android_offline_OfflineCashNativeV1_nativeArtifactFinalizeV1",
+            "Java_org_hyperledger_iroha_sdk_offline_OfflineCashNativeV1_nativeArtifactCancelV1",
+            "Java_org_hyperledger_iroha_android_offline_OfflineCashNativeV1_nativeArtifactCancelV1",
+            "Java_org_hyperledger_iroha_sdk_offline_OfflineCashNativeV1_nativeArtifactSetInstallV1",
+            "Java_org_hyperledger_iroha_android_offline_OfflineCashNativeV1_nativeArtifactSetInstallV1",
+            "Java_org_hyperledger_iroha_sdk_offline_OfflineCashNativeV1_nativeArtifactSetUninstallV1",
+            "Java_org_hyperledger_iroha_android_offline_OfflineCashNativeV1_nativeArtifactSetUninstallV1",
+            "Java_org_hyperledger_iroha_sdk_offline_OfflineCashNativeV1_nativeWalletSessionAcceptPaymentV1",
+            "Java_org_hyperledger_iroha_android_offline_OfflineCashNativeV1_nativeWalletSessionAcceptPaymentV1",
+            "Java_org_hyperledger_iroha_sdk_offline_OfflineCashNativeV1_nativeWalletSessionAcceptAcknowledgementV1",
+            "Java_org_hyperledger_iroha_android_offline_OfflineCashNativeV1_nativeWalletSessionAcceptAcknowledgementV1",
+            "Java_org_hyperledger_iroha_sdk_offline_OfflineCashNativeV1_nativeWalletSessionStateV1",
+            "Java_org_hyperledger_iroha_android_offline_OfflineCashNativeV1_nativeWalletSessionStateV1",
+            "Java_org_hyperledger_iroha_sdk_offline_OfflineCashNativeV1_nativeWalletSessionCloseV1",
+            "Java_org_hyperledger_iroha_android_offline_OfflineCashNativeV1_nativeWalletSessionCloseV1",
         ] {
             assert!(
                 source.contains(symbol),
@@ -28748,14 +28745,55 @@ mod tests {
             );
         }
     }
+
+    #[test]
+    fn offline_cash_v1_sessions_require_the_authenticated_terminal_verifier() {
+        let source = bridge_source();
+        let c_body = source
+            .split_once("fn connect_norito_offline_cash_payment_canonicalize_for_session_v1")
+            .expect("C session canonicalizer")
+            .1
+            .split_once("fn connect_norito_offline_cash_acknowledgement_canonicalize_v1")
+            .expect("next C canonicalizer")
+            .0;
+        assert!(c_body.contains("offline_cash_v1_bridge::verify_payment_once"));
+        assert!(c_body.contains("publish_offline_cash_output_v1"));
+
+        let jni_source = include_str!("platform_jni/part_3.rs");
+        let jni_body = jni_source
+            .split_once("fn java_offline_cash_v1_canonicalize_payment_for_session")
+            .expect("JNI session canonicalizer")
+            .1
+            .split_once("fn java_offline_cash_v1_canonicalize_acknowledgement")
+            .expect("next JNI canonicalizer")
+            .0;
+        assert!(jni_body.contains("offline_cash_v1_bridge::verify_payment_once"));
+
+        let registry = include_str!("offline_cash_v1_bridge.rs");
+        for required in [
+            "OfflineCashAuthenticatedArtifactFileSetV1::new",
+            "OfflineCashVerifierV1::from_authenticated_artifact_file_set",
+            ".verify_payment(&request, &payment_for_verification, now_ms)",
+            "receipt: Option<VerifiedOfflineCashCreditV1>",
+            ".verify_acknowledgement(&state.request, payment, &acknowledgement, receipt)",
+            "if !is_current(&state.installed)?",
+        ] {
+            assert!(
+                registry.contains(required),
+                "missing terminal Offline Cash session contract: {required}"
+            );
+        }
+    }
+
     #[test]
     fn c_and_jni_transaction_network_ids_require_exact_canonical_encodings() {
-        const NETWORK_ID: &str =
+        const NETWORK_ID: &str = "32c903e5b3497e34c2b844ebfe8a39c19e6cf8f95d44c1ffb8ba9dcb42f91149";
+        const RETIRED_JSON_LITERAL: &str =
             "hash:32C903E5B3497E34C2B844EBFE8A39C19E6CF8F95D44C1FFB8BA9DCB42F91149#A2F0";
         let canonical = CString::new(NETWORK_ID).expect("canonical network id has no NUL");
         let parsed =
             unsafe { read_network_id_bridge(canonical.as_ptr(), NETWORK_ID.len() as c_ulong) }
-                .expect("canonical checksummed NetworkId must parse");
+                .expect("canonical raw lowercase NetworkId must parse");
         assert_eq!(parsed.as_bytes().len(), Hash::LENGTH);
         assert_eq!(
             network_id_from_raw_bytes(parsed.as_bytes())
@@ -28770,11 +28808,12 @@ mod tests {
         let mut unmarked = *parsed.as_bytes();
         unmarked[Hash::LENGTH - 1] &= !1;
         assert!(network_id_from_raw_bytes(&unmarked).is_err());
-        let lowercase = NETWORK_ID.to_ascii_lowercase();
+        let uppercase = NETWORK_ID.to_ascii_uppercase();
+        let unmarked = format!("{}8", &NETWORK_ID[..NETWORK_ID.len() - 1]);
         for retired in [
-            &NETWORK_ID[5..69],
-            lowercase.as_str(),
-            "hash:32C903E5B3497E34C2B844EBFE8A39C19E6CF8F95D44C1FFB8BA9DCB42F91149#A2F1",
+            uppercase.as_str(),
+            RETIRED_JSON_LITERAL,
+            unmarked.as_str(),
             "00000042",
         ] {
             let retired = CString::new(retired).expect("fixture has no NUL");
@@ -28866,102 +28905,6 @@ mod tests {
         );
     }
     #[test]
-    fn kagemusha_lineage_c_boundary_uses_explicit_network_and_resolved_asset_id() {
-        const TAIRA_CHAIN_DISCRIMINANT: u16 = 369;
-        const SORA_CHAIN_DISCRIMINANT: u16 = 753;
-        const NETWORK_ID: &str =
-            "hash:32C903E5B3497E34C2B844EBFE8A39C19E6CF8F95D44C1FFB8BA9DCB42F91149#A2F0";
-        let key_pair = KeyPair::try_from_seed(vec![0x73; 32], Algorithm::Ed25519)
-            .expect("fixture seed must derive a valid keypair");
-        let account_id = AccountId::new(key_pair.public_key().clone());
-        let recipient = AccountAddress::from_account_id(&account_id)
-            .expect("account address")
-            .to_i105_for_discriminant(TAIRA_CHAIN_DISCRIMINANT)
-            .expect("Taira recipient");
-        let network_id = NETWORK_ID.as_bytes();
-        let receiver_device_id = b"receiver-device";
-        // The ABI receives the exact deployed typed ID resolved from the `ds#boi.is` selector.
-        let asset = AssetDefinitionId::parse_address_literal("7ZepsJTHCVLKsrFFNZGSRGZgvBhv")
-            .expect("deployed typed DS definition ID")
-            .to_string()
-            .into_bytes();
-        assert_eq!(asset, b"7ZepsJTHCVLKsrFFNZGSRGZgvBhv");
-        let ambient = connect_norito_chain_discriminant_scope_enter(SORA_CHAIN_DISCRIMINANT);
-        assert_ne!(ambient, 0);
-        let mut output = ptr::null_mut();
-        let mut output_len = 0;
-        let status = unsafe {
-            connect_norito_kagemusha_recipient_lineage_query_create_v2(
-                network_id.as_ptr(),
-                network_id.len() as c_ulong,
-                TAIRA_CHAIN_DISCRIMINANT,
-                recipient.as_ptr(),
-                recipient.len() as c_ulong,
-                receiver_device_id.as_ptr(),
-                receiver_device_id.len() as c_ulong,
-                asset.as_ptr(),
-                asset.len() as c_ulong,
-                1,
-                &mut output,
-                &mut output_len,
-            )
-        };
-        assert_eq!(status, 0);
-        assert!(!output.is_null());
-        assert_ne!(output_len, 0);
-        let query_bytes = unsafe {
-            slice::from_raw_parts(output, usize::try_from(output_len).expect("query length"))
-        };
-        let query = norito::decode_from_bytes::<
-            iroha_torii_shared::offline_api::OfflineRecipientLineageRequest,
-        >(query_bytes)
-        .expect("decode canonical lineage query");
-        let expected_network_id: NetworkId =
-            norito::json::from_value(JsonValue::from(NETWORK_ID)).expect("canonical NetworkId");
-        assert_eq!(query.selector.network_id, expected_network_id);
-        connect_norito_free(output);
-        let status = unsafe {
-            connect_norito_kagemusha_recipient_lineage_query_create_v2(
-                network_id.as_ptr(),
-                network_id.len() as c_ulong,
-                SORA_CHAIN_DISCRIMINANT,
-                recipient.as_ptr(),
-                recipient.len() as c_ulong,
-                receiver_device_id.as_ptr(),
-                receiver_device_id.len() as c_ulong,
-                asset.as_ptr(),
-                asset.len() as c_ulong,
-                1,
-                &mut output,
-                &mut output_len,
-            )
-        };
-        assert_eq!(status, ERR_AUTHORITY_PARSE);
-        assert!(output.is_null());
-        assert_eq!(output_len, 0);
-        let lowercase_network_id = NETWORK_ID.to_ascii_lowercase();
-        let status = unsafe {
-            connect_norito_kagemusha_recipient_lineage_query_create_v2(
-                lowercase_network_id.as_ptr(),
-                lowercase_network_id.len() as c_ulong,
-                TAIRA_CHAIN_DISCRIMINANT,
-                recipient.as_ptr(),
-                recipient.len() as c_ulong,
-                receiver_device_id.as_ptr(),
-                receiver_device_id.len() as c_ulong,
-                asset.as_ptr(),
-                asset.len() as c_ulong,
-                1,
-                &mut output,
-                &mut output_len,
-            )
-        };
-        assert_eq!(status, ERR_NETWORK_ID_PARSE);
-        assert!(output.is_null());
-        assert_eq!(output_len, 0);
-        assert_eq!(connect_norito_chain_discriminant_scope_exit(ambient), 0);
-    }
-    #[test]
     fn bridge_abi_omits_obsolete_process_global_and_kagemusha_exports() {
         let source = bridge_source();
         let header = include_str!("../include/connect_norito_bridge.h");
@@ -28971,6 +28914,16 @@ mod tests {
             [
                 "connect_norito_kagemusha_recipient_registration_",
                 "lineage_verify_v1",
+            ]
+            .concat(),
+            [
+                "connect_norito_kagemusha_recipient_lineage_",
+                "query_create_v2",
+            ]
+            .concat(),
+            [
+                "connect_norito_kagemusha_recipient_registration_",
+                "lineage_verify_v2",
             ]
             .concat(),
             [
@@ -29006,7 +28959,6 @@ mod tests {
         for symbol in [
             "java_native_encode_register_zk_asset_signed_transaction",
             "java_native_kagemusha_prepare_recipient_request_v2",
-            "java_native_kagemusha_create_recipient_lineage_query_v2",
             "java_native_kagemusha_build_redeem_request_v4",
             "java_native_kagemusha_prepare_authorization_v2",
             "java_native_kagemusha_prepare_top_up_v4",

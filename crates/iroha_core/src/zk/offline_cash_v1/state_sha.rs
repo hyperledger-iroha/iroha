@@ -2,7 +2,8 @@
 //!
 //! The bridge deliberately wraps the repository Table16 implementation instead
 //! of exposing Kagemusha types through the Offline Cash module boundary. The
-//! ordered ten jobs use exactly `[6, 6, 5, 6, 6, 2, 2, 5, 6, 7]` SHA-256 blocks and are
+//! ordered thirteen jobs use exactly
+//! `[6, 6, 5, 6, 6, 2, 2, 5, 6, 7, 5, 8, 7]` SHA-256 blocks and are
 //! routed round-robin across five lanes sharing one k=16 spread table.
 
 use core::marker::PhantomData;
@@ -25,9 +26,9 @@ pub(super) const STATE_SHA_LANES_V1: usize = OFFLINE_CASH_STATE_SHA_LANES_V1 as 
 pub(super) const STATE_SHA_JOBS_V1: usize = OFFLINE_CASH_STATE_SHA_JOBS_V1 as usize;
 pub(super) const STATE_SHA_TOTAL_BLOCKS_V1: usize = OFFLINE_CASH_STATE_SHA_TOTAL_BLOCKS_V1 as usize;
 
-const _: () = assert!(STATE_SHA_JOBS_V1 == 10);
-const _: () = assert!(STATE_SHA_TOTAL_BLOCKS_V1 == 51);
-const _: () = assert!(STATE_SHA_TOTAL_BLOCKS_V1.div_ceil(STATE_SHA_LANES_V1) == 11);
+const _: () = assert!(STATE_SHA_JOBS_V1 == 13);
+const _: () = assert!(STATE_SHA_TOTAL_BLOCKS_V1 == 71);
+const _: () = assert!(STATE_SHA_TOTAL_BLOCKS_V1.div_ceil(STATE_SHA_LANES_V1) == 15);
 
 /// One message byte without leaking the underlying Table16 type.
 ///

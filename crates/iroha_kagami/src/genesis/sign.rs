@@ -59,9 +59,10 @@ pub struct Args {
     bound_manifest_out: Option<PathBuf>,
     /// Write the exact signed consensus-header hash as one lowercase line.
     ///
-    /// This also atomically publishes a sibling `*.identity.toml` containing the same exact value
-    /// as both client `network_id` and `genesis.expected_hash`. Deployment tooling must consume
-    /// that paired identity artifact rather than assembling the two trust domains independently.
+    /// This also atomically publishes a sibling `*.identity.toml` binding the same exact hash bytes
+    /// as raw lowercase client `network_id` text and a tagged typed `genesis.expected_hash`.
+    /// Deployment tooling must consume that paired identity artifact rather than assembling the
+    /// two trust domains independently.
     #[clap(long, value_name = "PATH")]
     expected_hash_out: Option<PathBuf>,
     /// Use this topology instead of specified in genesis.json.
@@ -127,8 +128,21 @@ fn deployment_identity_path(expected_hash_path: &Path) -> PathBuf {
     expected_hash_path.with_extension("identity.toml")
 }
 fn publish_deployment_identity(path: &Path, expected_hash: &str) -> Outcome {
+    let parsed_expected_hash = expected_hash
+        .parse::<HashOf<BlockHeader>>()
+        .wrap_err("parse canonical raw genesis expected hash")?;
+    if parsed_expected_hash.to_string() != expected_hash {
+        return Err(eyre!(
+            "genesis expected hash must use canonical raw lowercase hexadecimal text"
+        ));
+    }
+    let tagged_expected_hash = norito::json::to_value(&parsed_expected_hash)
+        .wrap_err("serialize genesis expected hash for typed config")?
+        .as_str()
+        .ok_or_else(|| eyre!("typed genesis expected hash must serialize as a string"))?
+        .to_owned();
     let body = format!(
-        "network_id = \"{expected_hash}\"\n\n[genesis]\nexpected_hash = \"{expected_hash}\"\n"
+        "network_id = \"{expected_hash}\"\n\n[genesis]\nexpected_hash = \"{tagged_expected_hash}\"\n"
     );
     if body.len() as u64 > MAX_DEPLOYMENT_IDENTITY_BYTES {
         return Err(eyre!(
@@ -2577,7 +2591,10 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
             format!(
                 "network_id = \"{}\"\n\n[genesis]\nexpected_hash = \"{}\"\n",
                 block.hash(),
-                block.hash()
+                norito::json::to_value(&block.hash())
+                    .expect("serialize expected hash")
+                    .as_str()
+                    .expect("expected hash JSON string")
             ),
         );
     }

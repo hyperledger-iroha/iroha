@@ -31,7 +31,7 @@ final class IrohaPeerKagemushaStructuralRailFixtureTests: XCTestCase {
         XCTAssertEqual(try integer("frame_count", in: qr), 1)
         XCTAssertEqual(text, try string("static_text", in: qr))
         switch try IrohaPeerQRScanSessionV1().ingest(text) {
-        case .completed(let scanned): XCTAssertEqual(scanned, message)
+        case .completed(let scanned): XCTAssertEqual(scanned.message, message)
         default: XCTFail("single-frame structural fixture must complete")
         }
 

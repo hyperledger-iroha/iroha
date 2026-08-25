@@ -231,7 +231,7 @@ def test_privacy_gate_enforces_the_ci_lock_and_native_build_policy() -> None:
         "privacy-swift-python": 1,
         "privacy-jvm-python": 4,
         "privacy-csharp-python": 3,
-        "privacy-js-python": 2,
+        "privacy-js-python": 3,
         "privacy-python": 8,
     }.items():
         assert workflow.count(
@@ -270,19 +270,43 @@ def test_privacy_gate_enforces_the_ci_lock_and_native_build_policy() -> None:
         assert -1 not in positions
         assert positions == sorted(positions)
         assert "if: always()" in block[positions[-1] :]
-    for artifact_job in (
-        "privacy_javascript_sdk_tests",
-        "privacy_swift_sdk_parse",
-    ):
+    artifact_jobs = {
+        "privacy_javascript_sdk_tests": (
+            "Prime privacy N-API dependencies from the frozen lock",
+            "run: ci/check_privacy_js_sdk.sh",
+            "Revalidate frozen JavaScript lock inputs",
+        ),
+        "privacy_swift_sdk_parse": (
+            "Install Apple Rust targets and prime frozen dependencies",
+            "run: ci/check_privacy_swift_sdk.sh",
+            "Revalidate frozen Swift inputs and ABI22 artifacts",
+        ),
+    }
+    for artifact_job, (fetch_name, consumer, revalidate_name) in artifact_jobs.items():
         block = re.search(
             rf"(?ms)^  {artifact_job}:\n(.*?)(?=^  [A-Za-z0-9_-]+:\n|\Z)",
             workflow,
         )
         assert block is not None
         source = block.group(1)
-        assert source.count("Install and verify the frozen workspace Cargo lock") == 1
+        positions = [
+            source.find(marker)
+            for marker in (
+                "Download frozen source-bound privacy lock input",
+                "Authenticate distinct privacy release lock",
+                fetch_name,
+                "cargo fetch --locked -Z unstable-options --lockfile-path",
+                consumer,
+                revalidate_name,
+            )
+        ]
+        assert -1 not in positions
+        assert positions == sorted(positions)
         assert source.count("cargo fetch --locked") == 1
-        assert "cd9e829e454171f17540abeb7fd1aa14129252082bd8b076a0199b0ffa4e3f79" in source
+        assert source.count(
+            "ccf4acebfe63ad981193b87afd559c195d8a67642d9536b8082f77bbf24a11f0"
+        ) == 2
+        assert "if: always()" in source[positions[-1] :]
         assert "provision-ci" not in source
     for workflow_path in (
         ".gitignore",

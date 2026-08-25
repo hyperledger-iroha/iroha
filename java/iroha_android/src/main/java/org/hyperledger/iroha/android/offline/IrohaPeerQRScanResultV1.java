@@ -1,27 +1,35 @@
 package org.hyperledger.iroha.android.offline;
 
+import java.util.Arrays;
+
 /** Immutable QR scan progress and optional completed peer message. */
 public final class IrohaPeerQRScanResultV1 {
   private final IrohaPeerWireMessageV1 message;
   private final IrohaPeerPayloadProfile profile;
   private final IrohaPeerPayloadKind payloadKind;
+  private final byte[] streamId;
   private final int receivedDataFrames;
   private final int totalDataFrames;
   private final int recoveredDataFrames;
+  private final boolean duplicate;
 
   IrohaPeerQRScanResultV1(
       final IrohaPeerWireMessageV1 message,
       final IrohaPeerPayloadProfile profile,
       final IrohaPeerPayloadKind payloadKind,
+      final byte[] streamId,
       final int receivedDataFrames,
       final int totalDataFrames,
-      final int recoveredDataFrames) {
+      final int recoveredDataFrames,
+      final boolean duplicate) {
     this.message = message;
     this.profile = profile;
     this.payloadKind = payloadKind;
+    this.streamId = Arrays.copyOf(streamId, streamId.length);
     this.receivedDataFrames = receivedDataFrames;
     this.totalDataFrames = totalDataFrames;
     this.recoveredDataFrames = recoveredDataFrames;
+    this.duplicate = duplicate;
   }
 
   public IrohaPeerWireMessageV1 message() {
@@ -36,6 +44,10 @@ public final class IrohaPeerQRScanResultV1 {
     return payloadKind;
   }
 
+  public byte[] streamId() {
+    return Arrays.copyOf(streamId, streamId.length);
+  }
+
   public int receivedDataFrames() {
     return receivedDataFrames;
   }
@@ -46,6 +58,10 @@ public final class IrohaPeerQRScanResultV1 {
 
   public int recoveredDataFrames() {
     return recoveredDataFrames;
+  }
+
+  public boolean isDuplicate() {
+    return duplicate;
   }
 
   public boolean isComplete() {

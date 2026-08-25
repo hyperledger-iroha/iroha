@@ -38,6 +38,11 @@ public final class OfflineCashDeviceLifecycleBridgeV1Tests {
     assertEquals(14, OfflineCashDeviceLifecycleBridgeV1.Operation.values().length);
     assertEquals(10, OfflineCashDeviceLifecycleBridgeV1.Status.values().length);
     assertEquals(
+        "[SUCCESS, UNAVAILABLE, STALE_OR_CONCURRENT, INTENT_MISMATCH, "
+            + "TRUSTED_TIME_REJECTED, POLICY_REJECTED, MISSING, CONFLICT, CORRUPT, "
+            + "MALFORMED_REQUEST]",
+        Arrays.toString(OfflineCashDeviceLifecycleBridgeV1.Status.values()));
+    assertEquals(
         Arrays.toString(
             org.hyperledger.iroha.sdk.offline.OfflineCashDeviceLifecycleBridgeV1.Operation
                 .values()),

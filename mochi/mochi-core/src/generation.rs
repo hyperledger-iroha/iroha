@@ -1737,7 +1737,13 @@ mod tests {
             "file = \"../../genesis/genesis.signed.nrt\"\nmanifest_json = \"../../genesis/genesis.json\"",
             1,
         );
-        config = config.replacen(FIXTURE_CONFIGURED_HASH, expected_hash, 1);
+        let expected_hash =
+            if expected_hash == izanami::genesis_support::UNRESOLVED_GENESIS_EXPECTED_HASH {
+                expected_hash.to_owned()
+            } else {
+                norito::literal::format("hash", &expected_hash.to_ascii_uppercase())
+            };
+        config = config.replacen(FIXTURE_CONFIGURED_HASH, &expected_hash, 1);
         config.push_str(
             r#"
 

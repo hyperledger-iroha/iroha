@@ -6266,7 +6266,7 @@ public struct ToriiConnectSessionResponse: Decodable, Sendable, Equatable {
             field: "network_id"
         )
         do {
-            networkID = try NetworkId(literal: networkLiteral)
+            networkID = try NetworkId(noritoJSONLiteral: networkLiteral)
         } catch {
             throw ToriiClientError.invalidPayload("network_id must be an exact canonical NetworkId")
         }
@@ -9153,7 +9153,7 @@ public typealias ToriiKagemushaActiveRecursiveStepEqVerifier =
 public typealias ToriiKagemushaActiveRecursiveStepEpVerifier =
     ToriiKagemushaActiveTransferVerifier
 
-/// Authenticated ABI-21 V4 recursive release selected for a readiness snapshot.
+/// Authenticated Kagemusha V4 recursive release selected for a readiness snapshot.
 ///
 /// The three digests bind the release manifest, locally trusted policy, and
 /// signed release attestation. Torii emits this value only after Core has
@@ -9259,7 +9259,7 @@ public struct ToriiKagemushaAuthenticatedArtifactSet: Decodable, Sendable, Equat
                 forKey: .maxProofBytes,
                 in: container,
                 debugDescription:
-                    "max_proof_bytes must be within the ABI-21 V4 absolute proof limit"
+                    "max_proof_bytes must be within the Kagemusha V4 absolute proof limit"
             )
         }
         maxProofBytes = decodedMaxProofBytes
@@ -9296,7 +9296,7 @@ public struct ToriiKagemushaAuthenticatedArtifactSet: Decodable, Sendable, Equat
 /// Asset-neutral offline protocol capability advertised by every app-api node.
 ///
 /// This is deliberately not a service-readiness or settlement projection. A
-/// conforming node always exposes the ABI-21 `cash_handoff_v1` application
+/// conforming node always exposes the Kagemusha V4 `cash_handoff_v1` application
 /// interface, independent of assets and dataspaces.
 public struct ToriiOfflineStatus: Decodable, Sendable, Equatable {
     public let mandatory: Bool
@@ -9306,6 +9306,21 @@ public struct ToriiOfflineStatus: Decodable, Sendable, Equatable {
     public let ready: Bool
     public let assets: [ToriiJSONValue]
     public let blockers: [ToriiKagemushaReadinessBlocker]
+
+    private static let canonicalActivationBlockersV1: [(code: String, message: String)] = [
+        (
+            "offline_cash_authenticated_release_unavailable",
+            "No authenticated Offline Cash V1 release is selected by this asset-neutral response."
+        ),
+        (
+            "offline_cash_eligible_asset_unavailable",
+            "No eligible Offline Cash V1 asset is selected by this asset-neutral response."
+        ),
+        (
+            "offline_cash_proof_backend_unavailable",
+            "No reviewed production Offline Cash V1 proof and secure-device backend is authenticated by this response."
+        ),
+    ]
 
     private enum CodingKeys: String, CodingKey, CaseIterable {
         case mandatory
@@ -9369,11 +9384,11 @@ public struct ToriiOfflineStatus: Decodable, Sendable, Equatable {
                 debugDescription: "max_hops does not match the cash_handoff_v1 bound"
             )
         }
-        guard decodedReady else {
+        guard !decodedReady else {
             throw DecodingError.dataCorruptedError(
                 forKey: .ready,
                 in: container,
-                debugDescription: "ready must be true for universal offline capability"
+                debugDescription: "ready must be false for asset-neutral capability discovery"
             )
         }
         guard decodedAssets.isEmpty else {
@@ -9383,11 +9398,14 @@ public struct ToriiOfflineStatus: Decodable, Sendable, Equatable {
                 debugDescription: "assets must be empty because capability is asset-neutral"
             )
         }
-        guard decodedBlockers.isEmpty else {
+        guard decodedBlockers.count == Self.canonicalActivationBlockersV1.count,
+              zip(decodedBlockers, Self.canonicalActivationBlockersV1).allSatisfy({
+                  $0.0.code == $0.1.code && $0.0.message == $0.1.message
+              }) else {
             throw DecodingError.dataCorruptedError(
                 forKey: .blockers,
                 in: container,
-                debugDescription: "blockers must be empty for universal offline capability"
+                debugDescription: "blockers must equal the exact ordered Offline Cash V1 activation blockers"
             )
         }
 
@@ -9401,7 +9419,7 @@ public struct ToriiOfflineStatus: Decodable, Sendable, Equatable {
     }
 }
 
-/// Legacy asset-specific command diagnostics retained for persisted ABI-21
+/// Legacy asset-specific command diagnostics retained for persisted Kagemusha V4
 /// artifacts. It is not returned by the universal discovery endpoint.
 public struct ToriiKagemushaReadiness: Decodable, Sendable, Equatable {
     public let cashHandoffCapability: String
@@ -9423,7 +9441,7 @@ public struct ToriiKagemushaReadiness: Decodable, Sendable, Equatable {
     /// verifier records. `nil` is an explicit unavailable registry state.
     public let artifactSet: ToriiKagemushaAuthenticatedArtifactSet?
     public let proofBackendAvailable: Bool
-    /// True only when the chain can verify and redeem the ABI-21 lineage.
+    /// True only when the chain can verify and redeem the Kagemusha V4 lineage.
     public let recursiveLineageSupported: Bool
     public let ready: Bool
     public let blockers: [ToriiKagemushaReadinessBlocker]
@@ -9752,7 +9770,7 @@ public struct ToriiKagemushaReadiness: Decodable, Sendable, Equatable {
                 forKey: .recursiveLineageSupported,
                 in: container,
                 debugDescription:
-                    "recursive_lineage_supported must equal the exact authenticated ABI-21 lineage conjunction"
+                    "recursive_lineage_supported must equal the exact authenticated Kagemusha V4 lineage conjunction"
             )
         }
         guard decodedRecursiveLineageSupported
@@ -9778,7 +9796,7 @@ public struct ToriiKagemushaReadiness: Decodable, Sendable, Equatable {
             throw DecodingError.dataCorruptedError(
                 forKey: .ready,
                 in: container,
-                debugDescription: "ready must equal the complete ABI-21 runtime conjunction"
+                debugDescription: "ready must equal the complete Kagemusha V4 runtime conjunction"
             )
         }
         cashHandoffCapability = decodedCashHandoffCapability
@@ -9877,7 +9895,7 @@ public struct ToriiKagemushaReadiness: Decodable, Sendable, Equatable {
         }
     }
 
-    /// ABI-21 recursive verifier names and circuits are exact registry roles.
+    /// Kagemusha V4 recursive verifier names and circuits are exact registry roles.
     /// The authenticated artifact set subsequently binds their proof cap and
     /// lifecycle window to one release.
     private static func validateRecursiveVerifierRoleV4(
@@ -22399,16 +22417,6 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
     }
 
     @discardableResult
-    public func getKagemushaRecipientRegistrationLineage(
-        query: KagemushaRecipientLineageQueryV2, canonicalAuth: ToriiCanonicalRequestAuth,
-        completion: @escaping (Result<Data, Swift.Error>) -> Void
-    ) -> Task<Void, Never> {
-        runTask(completion) { try await self.getKagemushaRecipientRegistrationLineage(
-            query: query, canonicalAuth: canonicalAuth
-        ) }
-    }
-
-    @discardableResult
     public func submitKagemushaTopUp(
         _ request: KagemushaTopUpRequest,
         completion: @escaping (Result<KagemushaOperationReference, Swift.Error>) -> Void
@@ -24154,7 +24162,7 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
         )
         var payload: [String: ToriiJSONValue] = [
             "sid": .string(sid),
-            "network_id": .string(networkID.literal),
+            "network_id": .string(networkID.noritoJSONLiteral),
             "app_pk": .string(connectBase64URL(appPublicKey)),
             "nonce": .string(connectBase64URL(nonce))
         ]
@@ -25752,7 +25760,7 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
             )
         }
         do {
-            _ = try NetworkId(literal: networkIdLiteral)
+            _ = try NetworkId(noritoJSONLiteral: networkIdLiteral)
         } catch {
             throw ToriiClientError.invalidPayload(
                 "unsignedPayload.domain.value must be an exact canonical NetworkId literal."
@@ -25917,29 +25925,6 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
             )
         }
         return try decodeJSON(ToriiOfflineStatus.self, from: data)
-    }
-
-    public func getKagemushaRecipientRegistrationLineage(
-        query queryBody: KagemushaRecipientLineageQueryV2, canonicalAuth: ToriiCanonicalRequestAuth
-    ) async throws -> Data {
-        let request = try makeCanonicalAccountRequest(
-            path: KagemushaToriiAPI.Endpoint.receiverLineage.path,
-            method: .post,
-            body: queryBody.noritoArchive,
-            headers: [
-                "Content-Type": "application/x-norito",
-                "Accept": "application/x-norito",
-            ], canonicalAuth: canonicalAuth
-        )
-        let (responseData, response) = try await sendBoundedSccpResponse(
-            request,
-            context: "Kagemusha receiver registration lineage",
-            maximumBytes: KagemushaRecipientRegistrationLineage.maximumArchiveBytes
-        )
-        try ensureStatus(response, equals: 200, responseBody: responseData)
-        try ensureResponseMediaType(response, equals: "application/x-norito")
-        guard !responseData.isEmpty else { throw ToriiClientError.emptyBody }
-        return responseData
     }
 
     public func submitKagemushaTopUp(

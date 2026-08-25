@@ -2173,16 +2173,6 @@ pub mod extractors {
         }
     }
     #[cfg(feature = "app_api")]
-    impl OfflineCanonicalNoritoSchema
-        for iroha_torii_shared::offline_api::OfflineRecipientLineageRequest
-    {
-        const MAX_BODY_BYTES: usize =
-            iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_MAX_PEER_ARCHIVE_BYTES_V2;
-        const MAX_NESTING_DEPTH: usize = 32;
-        const FIXED_ALLOCATION_ALLOWANCE_BYTES: usize =
-            OFFLINE_CANONICAL_STRUCTURAL_ALLOCATION_ALLOWANCE_BYTES;
-    }
-    #[cfg(feature = "app_api")]
     impl OfflineCanonicalNoritoSchema for iroha_torii_shared::offline_api::OfflineTopUpRequest {
         const MAX_BODY_BYTES: usize =
             iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_TOPUP_REQUEST_MAX_BYTES_V4;
@@ -3949,13 +3939,7 @@ pub mod extractors {
         #[cfg(feature = "app_api")]
         #[test]
         fn offline_norito_body_caps_are_exact_and_fail_one_byte_over() {
-            assert_eq!(
-                <iroha_torii_shared::offline_api::OfflineRecipientLineageRequest as OfflineCanonicalNoritoSchema>::MAX_BODY_BYTES,
-                32 * 1024,
-                "the lineage extractor and route share the exact 32 KiB protocol cap"
-            );
             for maximum in [
-                iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_MAX_PEER_ARCHIVE_BYTES_V2,
                 iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_TOPUP_REQUEST_MAX_BYTES_V4,
                 iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_REDEEM_REQUEST_MAX_BYTES_V4,
             ] {
@@ -3979,9 +3963,6 @@ pub mod extractors {
         #[cfg(feature = "app_api")]
         #[test]
         fn offline_norito_max_shaped_schema_archives_fit_the_schema_allocation_budget() {
-            use iroha_torii_shared::offline_api::{
-                OfflineRecipientLineageRequest, OfflineRecipientLineageSelectorV2,
-            };
             fn assert_bounded_roundtrip<T>(value: &T)
             where
                 T: OfflineCanonicalNoritoSchema + core::fmt::Debug + PartialEq,
@@ -4015,17 +3996,6 @@ pub mod extractors {
             assert_bounded_roundtrip(&top_up);
             let redeem = offline_ingress_max_shaped_redeem_fixture(&top_up);
             assert_bounded_roundtrip(&redeem);
-            let lineage = OfflineRecipientLineageRequest {
-                version: iroha_torii_shared::offline_api::OFFLINE_RECIPIENT_LINEAGE_VERSION,
-                selector: OfflineRecipientLineageSelectorV2 {
-                    network_id: top_up.current_note.network_id,
-                    recipient: top_up.authorization.authority.clone(),
-                    receiver_device_id: "d".repeat(128),
-                    asset: top_up.current_note.asset.clone(),
-                },
-                trusted_checkpoint_height: 1,
-            };
-            assert_bounded_roundtrip(&lineage);
         }
         #[cfg(feature = "app_api")]
         #[tokio::test]

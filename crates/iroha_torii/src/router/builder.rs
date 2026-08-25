@@ -1002,10 +1002,6 @@ mod tests {
             catalog_get(|| async { StatusCode::NO_CONTENT }),
         );
         builder.route(
-            &offline::RECIPIENT_LINEAGE,
-            catalog_post(|| async { StatusCode::NO_CONTENT }),
-        );
-        builder.route(
             &offline::TOP_UP,
             catalog_post(|| async { StatusCode::NO_CONTENT })
                 .authenticated_in_handler(HandlerAuthentication::CanonicalSignedBody),

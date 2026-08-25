@@ -271,7 +271,7 @@ fn fixture_public_key_from_seed_uses_checked_seed_derivation() {
 fn contract_subject_sysvar_returns_bound_subject_and_fails_outside_contract_scope() {
     let authority = fixture_account("alice");
     let contract_address = ContractAddress::derive(
-        &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
+        &"0000000000000000000000000000000000000000000000000000000000000001"
             .parse()
             .expect("canonical test network id"),
         &authority,
@@ -617,7 +617,7 @@ fn install_contract_with_interface_and_lifecycle(
     manifest = manifest.signed(&fixture_signing_keypair(authority));
     register_manifest(authority, manifest, &mut tx).expect("register contract manifest");
     let contract_address = ContractAddress::derive(
-        &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
+        &"0000000000000000000000000000000000000000000000000000000000000001"
             .parse()
             .expect("canonical test network id"),
         authority,

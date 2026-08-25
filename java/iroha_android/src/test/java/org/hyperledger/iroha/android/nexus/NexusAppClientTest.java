@@ -31,6 +31,7 @@ import org.junit.Test;
 
 public final class NexusAppClientTest {
 
+  private static final int NEXUS_FIXTURE_CHAIN_DISCRIMINANT = 369;
   private static final String ASSET_DEFINITION_ID = "7EAD8EFYUx1aVKZPUU1fyKvr8dF1";
   private static final byte[] SIGNING_PRIVATE_KEY_SEED = filled(0x11, 32);
   private static final byte[] PUBLIC_KEY =
@@ -42,7 +43,7 @@ public final class NexusAppClientTest {
       FeePaymentIntent.authority(Collections.emptyList());
   private static final NetworkId TEST_NETWORK_ID =
       NetworkId.parse(
-          "hash:32C903E5B3497E34C2B844EBFE8A39C19E6CF8F95D44C1FFB8BA9DCB42F91149#A2F0");
+          "32c903e5b3497e34c2b844ebfe8a39c19e6cf8f95d44c1ffb8ba9dcb42f91149");
   private static final String ACCOUNT_ID =
       "sorauﾛ1PｸCｶrﾑhyﾜｴﾄhｳﾔSqP2GFGﾗヱﾐｹﾇﾏzﾍｵﾐMﾇﾖﾄksJヱRRJXVB";
   private static final String DESTINATION_ACCOUNT_ID =
@@ -127,25 +128,53 @@ public final class NexusAppClientTest {
   @Test
   public void buildTransferDraftMatchesSharedFixturePayload() throws Exception {
     final Map<String, Object> fixture = loadNexusFixture();
+    final Map<String, Object> connect = asMap(fixture.get("connect"));
+    final Map<String, Object> approval = asMap(connect.get("approval_frame"));
+    final Map<String, Object> transfer = asMap(fixture.get("transfer_input"));
     final Map<String, Object> expected = asMap(fixture.get("expected"));
+    final byte[] fixturePublicKey =
+        hexToBytes(string(approval, "signing_public_key_hex"));
+    final NexusTransferInput fixtureInput =
+        NexusTransferInput.builder()
+            .sourceAssetId(string(transfer, "source_asset_id"))
+            .quantity(string(transfer, "quantity"))
+            .destinationAccountId(string(transfer, "destination_account_id"))
+            .feePayment(TEST_FEE_PAYMENT)
+            .authority(string(transfer, "authority"))
+            .signingPublicKey(fixturePublicKey)
+            .creationTimeMs(number(transfer, "creation_time_ms").longValue())
+            .ttlMs(number(transfer, "ttl_ms").longValue())
+            .nonce(number(transfer, "nonce").longValue())
+            .metadata(
+                Collections.singletonMap(
+                    "purpose", string(asMap(transfer.get("metadata")), "purpose")))
+            .build();
     final NexusAppClient client =
         new NexusAppClient(
             new NexusAppConfig(
-                TEST_NETWORK_ID, "test-chain", AccountAddress.DEFAULT_I105_DISCRIMINANT, null, null, null, ACCOUNT_ID, PUBLIC_KEY, Collections.emptyMap()));
+                NetworkId.parse(string(transfer, "network_id")),
+                string(connect, "chain_id"),
+                NEXUS_FIXTURE_CHAIN_DISCRIMINANT,
+                null,
+                null,
+                null,
+                string(transfer, "authority"),
+                fixturePublicKey,
+                Collections.emptyMap()));
 
-    final NexusTransferDraft draft = client.buildTransferDraft(sampleInput());
+    final NexusTransferDraft draft = client.buildTransferDraft(fixtureInput);
     final byte[] fixtureSignature = hexToBytes(string(expected, "wallet_signature_hex"));
     final SignedTransaction signed =
         SignedTransaction.builder()
             .setEncodedPayload(draft.signable().payloadBytes())
             .setSignature(fixtureSignature)
-            .setPublicKey(PUBLIC_KEY)
-            .setSchemaName(new NoritoJavaCodecAdapter(org.hyperledger.iroha.android.address.AccountAddress.DEFAULT_I105_DISCRIMINANT).schemaName())
+            .setPublicKey(fixturePublicKey)
+            .setSchemaName(new NoritoJavaCodecAdapter(NEXUS_FIXTURE_CHAIN_DISCRIMINANT).schemaName())
             .build();
 
     assertEquals(string(expected, "payload_hash_hex"), draft.signable().payloadHashHex());
     assertArrayEquals(hexToBytes(string(expected, "payload_bytes_hex")), draft.signable().payloadBytes());
-    assertArrayEquals(signPayload(draft.signable().payloadBytes()), fixtureSignature);
+    assertArrayEquals(signFixturePayload(draft.signable().payloadBytes()), fixtureSignature);
     assertEquals(
         string(expected, "signed_transaction_hash_hex"), SignedTransactionHasher.hashHex(signed));
     assertEquals(Arrays.asList("Submitted", "Applied"), expected.get("status_sequence"));
@@ -557,6 +586,10 @@ public final class NexusAppClientTest {
     return (String) map.get(key);
   }
 
+  private static Number number(final Map<String, Object> map, final String key) {
+    return (Number) map.get(key);
+  }
+
   private static byte[] fixtureExpectedBytes(final String key) {
     try {
       return hexToBytes(string(asMap(loadNexusFixture().get("expected")), key));
@@ -569,6 +602,14 @@ public final class NexusAppClientTest {
     final byte[] message = IrohaHash.prehash(payloadBytes);
     final Ed25519Signer signer = new Ed25519Signer();
     signer.init(true, new Ed25519PrivateKeyParameters(SIGNING_PRIVATE_KEY_SEED, 0));
+    signer.update(message, 0, message.length);
+    return signer.generateSignature();
+  }
+
+  private static byte[] signFixturePayload(final byte[] payloadBytes) {
+    final byte[] message = IrohaHash.prehash(payloadBytes);
+    final Ed25519Signer signer = new Ed25519Signer();
+    signer.init(true, new Ed25519PrivateKeyParameters(filled(0x51, 32), 0));
     signer.update(message, 0, message.length);
     return signer.generateSignature();
   }

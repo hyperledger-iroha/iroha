@@ -217,15 +217,13 @@ def source_seal_home() -> pathlib.Path:
 def selected_lockfile_path(
     root: pathlib.Path, configured: pathlib.Path | None = None
 ) -> pathlib.Path:
-    """Return the canonical, non-symbolic root Cargo lock used by the build."""
+    """Return the canonical, non-symbolic Cargo lock used by the build."""
 
-    candidate = root / "Cargo.lock"
-    if configured is not None and configured != candidate:
-        raise RuntimeError(
-            f"source sealing requires the explicit root Cargo lock: {candidate}"
-        )
+    candidate = configured if configured is not None else root / "Cargo.lock"
     if not candidate.is_absolute():
         raise RuntimeError("selected Cargo lock path must be absolute")
+    if candidate.name != "Cargo.lock":
+        raise RuntimeError("selected Cargo lock path must end in Cargo.lock")
     canonical_spelling = pathlib.Path(os.path.abspath(candidate))
     if candidate != canonical_spelling:
         raise RuntimeError("selected Cargo lock path must be canonical")
@@ -240,9 +238,68 @@ def selected_lockfile_path(
         resolved != candidate
         or stat.S_ISLNK(metadata.st_mode)
         or not stat.S_ISREG(metadata.st_mode)
+        or metadata.st_nlink != 1
     ):
-        raise RuntimeError("selected Cargo lock must be a non-symbolic regular file")
+        raise RuntimeError(
+            "selected Cargo lock must be a singly linked non-symbolic regular file"
+        )
     return candidate
+
+
+def selected_lockfile_bytes_and_seal(
+    root: pathlib.Path, configured: pathlib.Path | None = None
+) -> tuple[bytes, tuple[int, int, int, int, int, int, int]]:
+    """Read one selected lock through a stable, singly linked inode."""
+
+    candidate = selected_lockfile_path(root, configured)
+    flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
+    try:
+        descriptor = os.open(candidate, flags)
+    except OSError as error:
+        raise RuntimeError("selected Cargo lock is unavailable") from error
+    try:
+        before = os.fstat(descriptor)
+        if not stat.S_ISREG(before.st_mode) or before.st_nlink != 1:
+            raise RuntimeError(
+                "selected Cargo lock must be a singly linked non-symbolic regular file"
+            )
+        chunks: list[bytes] = []
+        while chunk := os.read(descriptor, 1024 * 1024):
+            chunks.append(chunk)
+        after = os.fstat(descriptor)
+    finally:
+        os.close(descriptor)
+    before_seal = (
+        before.st_dev,
+        before.st_ino,
+        before.st_mode,
+        before.st_nlink,
+        before.st_size,
+        before.st_mtime_ns,
+        before.st_ctime_ns,
+    )
+    after_seal = (
+        after.st_dev,
+        after.st_ino,
+        after.st_mode,
+        after.st_nlink,
+        after.st_size,
+        after.st_mtime_ns,
+        after.st_ctime_ns,
+    )
+    payload = b"".join(chunks)
+    try:
+        visible = candidate.lstat()
+    except OSError as error:
+        raise RuntimeError("selected Cargo lock became unavailable") from error
+    if (
+        before_seal != after_seal
+        or len(payload) != before.st_size
+        or stat.S_ISLNK(visible.st_mode)
+        or (visible.st_dev, visible.st_ino) != (before.st_dev, before.st_ino)
+    ):
+        raise RuntimeError("selected Cargo lock changed identity while it was read")
+    return payload, before_seal
 
 
 def source_seal_environment(
@@ -643,7 +700,10 @@ def fingerprint(
             raise RuntimeError(f"source-seal input is symlinked: {relative}")
         if not source.is_file():
             raise RuntimeError(f"source-seal input is not a regular file: {relative}")
-        contents = source.read_bytes()
+        if relative == "Cargo.lock":
+            contents, _lock_seal = selected_lockfile_bytes_and_seal(root, lockfile)
+        else:
+            contents = source.read_bytes()
         if relative == SWIFT_NATIVE_BRIDGE_PATH:
             contents = normalize_swift_native_bridge_hash_pins(contents)
         digest.update(relative.encode("utf-8"))
@@ -701,6 +761,9 @@ def snapshot(
     """Return the canonical source state consumed by one platform build."""
 
     lockfile = selected_lockfile_path(root, lockfile_path)
+    _lock_bytes_before, lock_seal_before = selected_lockfile_bytes_and_seal(
+        root, lockfile
+    )
     inputs = seal_inputs(root, platform, lockfile)
     source_commit_before = source_commit(root)
     source_status_before = status(root, inputs, lockfile)
@@ -708,13 +771,17 @@ def snapshot(
     source_fingerprint_after = fingerprint(root, inputs, lockfile)
     source_status_after = status(root, inputs, lockfile)
     source_commit_after = source_commit(root)
+    _lock_bytes_after, lock_seal_after = selected_lockfile_bytes_and_seal(
+        root, lockfile
+    )
     if source_commit_before != source_commit_after:
         raise RuntimeError(
             f"{platform} NoritoBridge source commit changed while authenticating "
             "the selected-source fingerprint"
         )
     if (
-        source_status_before != source_status_after
+        lock_seal_before != lock_seal_after
+        or source_status_before != source_status_after
         or source_fingerprint_before != source_fingerprint_after
     ):
         raise RuntimeError(

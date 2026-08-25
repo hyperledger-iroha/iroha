@@ -21,7 +21,7 @@ sys.modules[SPEC.name] = MODULE
 SPEC.loader.exec_module(MODULE)
 
 OTHER_CANONICAL_NETWORK_ID = (
-    "hash:1111111111111111111111111111111111111111111111111111111111111111#4667"
+    "1111111111111111111111111111111111111111111111111111111111111111"
 )
 
 
@@ -475,10 +475,10 @@ def test_manifest_rejects_traversal_and_payload_mismatch(tmp_path: Path) -> None
             "network_id", OTHER_CANONICAL_NETWORK_ID
         ),
         lambda record: record.__setitem__(
-            "network_id", MODULE.CANONICAL_DEV_NETWORK_ID.lower()
+            "network_id", MODULE.CANONICAL_DEV_NETWORK_ID.upper()
         ),
     ],
-    ids=["missing", "null", "different-valid", "lowercase"],
+    ids=["missing", "null", "different-valid", "uppercase"],
 )
 def test_shared_payload_requires_exact_canonical_dev_network_id(
     tmp_path: Path, mutation
@@ -851,10 +851,10 @@ def test_swift_payload_requires_explicit_bounded_positive_nonce(
             "network_id", OTHER_CANONICAL_NETWORK_ID
         ),
         lambda payload: payload.__setitem__(
-            "network_id", MODULE.CANONICAL_DEV_NETWORK_ID.lower()
+            "network_id", MODULE.CANONICAL_DEV_NETWORK_ID.upper()
         ),
     ],
-    ids=["missing", "null", "different-valid", "lowercase"],
+    ids=["missing", "null", "different-valid", "uppercase"],
 )
 def test_swift_payload_requires_exact_canonical_dev_network_id(
     tmp_path: Path, mutation

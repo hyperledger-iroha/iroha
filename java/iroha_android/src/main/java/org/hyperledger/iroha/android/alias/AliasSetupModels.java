@@ -891,7 +891,7 @@ public final class AliasSetupModels {
       final Map<String, Object> map = new LinkedHashMap<>();
       map.put("version", version);
       map.put("authority", authority);
-      map.put("network_id", networkId.literal());
+      map.put("network_id", networkId.noritoJsonLiteral());
       map.put("anchor", anchor.toJsonMap());
       map.put("resources", maps(resources));
       map.put("instructions", maps(instructions));

@@ -20,10 +20,10 @@ sys.modules[SPEC.name] = MODULE
 SPEC.loader.exec_module(MODULE)
 
 TEST_NETWORK_ID = (
-    "hash:32C903E5B3497E34C2B844EBFE8A39C19E6CF8F95D44C1FFB8BA9DCB42F91149#A2F0"
+    "32c903e5b3497e34c2b844ebfe8a39c19e6cf8f95d44c1ffb8ba9dcb42f91149"
 )
 TEST_OTHER_NETWORK_ID = (
-    "hash:82531CE8EAE8BFF6BEECA4698BFD13A3BC8BEC5F0EE0D23D428C97FC17AB0F3B#3E94"
+    "82531ce8eae8bff6beeca4698bfd13a3bc8bec5f0ee0d23d428c97fc17ab0f3b"
 )
 
 
@@ -69,7 +69,7 @@ def _signed_frame(signed: bytes) -> bytes:
 def _transaction_payload(
     suffix: bytes = b"", network_id: str = TEST_NETWORK_ID
 ) -> bytes:
-    identity = bytes.fromhex(network_id[5:69])
+    identity = bytes.fromhex(network_id)
     domain = (0).to_bytes(4, "little") + _field(identity)
     return _field(domain) + suffix
 
@@ -436,16 +436,11 @@ def test_fixture_schemas_reject_all_legacy_chain_fields(
 def test_network_id_validator_requires_exact_canonical_hash_identity() -> None:
     assert MODULE.validate_network_id(TEST_NETWORK_ID, "fixture") == TEST_NETWORK_ID
 
-    unmarked_body = "00" * 32
-    unmarked_checksum = MODULE._crc16_ccitt_false(  # type: ignore[attr-defined]
-        f"hash:{unmarked_body}".encode("ascii")
-    )
-    unmarked = f"hash:{unmarked_body}#{unmarked_checksum:04X}"
     invalid = [
         "00000002",
-        TEST_NETWORK_ID.lower(),
-        f"{TEST_NETWORK_ID[:-4]}0000",
-        unmarked,
+        TEST_NETWORK_ID.upper(),
+        f"hash:{TEST_NETWORK_ID}",
+        "00" * 32,
         None,
     ]
     for value in invalid:
@@ -456,7 +451,7 @@ def test_network_id_validator_requires_exact_canonical_hash_identity() -> None:
 def test_transaction_payload_network_id_requires_exact_network_domain() -> None:
     canonical = _transaction_payload(b"tail")
     assert MODULE.transaction_payload_network_id(canonical, "fixture") == bytes.fromhex(
-        TEST_NETWORK_ID[5:69]
+        TEST_NETWORK_ID
     )
     MODULE.require_transaction_network_id(canonical, TEST_NETWORK_ID, "fixture")
 

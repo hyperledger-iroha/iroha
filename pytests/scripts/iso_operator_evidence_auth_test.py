@@ -40,11 +40,6 @@ class IsoOperatorEvidenceAuthTest(unittest.TestCase):
             self.assertEqual(rc, 0, stderr)
 
     def test_network_and_operator_key_substitutions_are_rejected(self):
-        even_prefix = "hash:" + ("08" * 32)
-        forged_marker = (
-            f"{even_prefix}#{EVIDENCE._crc16_ccitt_false(even_prefix.encode('ascii')):04X}"
-        )
-
         def remove_flag(body, flag):
             command = body["stages"][0]["command"]
             offset = _flag_offset(command, flag)
@@ -66,16 +61,21 @@ class IsoOperatorEvidenceAuthTest(unittest.TestCase):
                 "must contain --operator-private-key-file",
             ),
             (
-                "wrong-checksum",
+                "checksummed-network-text",
                 lambda body: replace_flag(
-                    body, "--network-id", TEST_NETWORK_ID[:-1] + "4"
+                    body, "--network-id", f"hash:{'A5' * 32}#95D7"
                 ),
-                "canonical checksummed NetworkId",
+                "canonical raw lowercase NetworkId",
             ),
             (
-                "forged-marker-bit",
-                lambda body: replace_flag(body, "--network-id", forged_marker),
-                "canonical checksummed NetworkId",
+                "uppercase-network-text",
+                lambda body: replace_flag(body, "--network-id", "A5" * 32),
+                "canonical raw lowercase NetworkId",
+            ),
+            (
+                "unmarked-network-id",
+                lambda body: replace_flag(body, "--network-id", "08" * 32),
+                "canonical raw lowercase NetworkId",
             ),
             (
                 "unredacted-operator-key",

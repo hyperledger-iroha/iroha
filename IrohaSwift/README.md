@@ -59,8 +59,10 @@ export SOURCE_DATE_EPOCH="$(git show -s --format=%ct HEAD)"
 make bridge-xcframework
 ```
 
-The build requires Python 3.12, uses only the repository-root `Cargo.lock`, and
-rejects in-tree or symbolic Cargo targets. A nonempty external isolated target
+The build requires Python 3.12. Ordinary builds select the repository-root
+`Cargo.lock`; the authenticated privacy lane instead selects its distinct
+external frozen `Cargo.lock` through `IROHA_PRIVACY_RELEASE_CARGO_LOCKFILE_PATH`.
+Both paths are identity-sealed, and the builder rejects in-tree or symbolic Cargo targets. A nonempty external isolated target
 is supported; builds sharing that target or output are serialized by held locks,
 and every Apple slice is freshly invoked. The archive owner requires the explicit
 epoch, snapshots the complete authenticated generation under the output lock, and
@@ -192,8 +194,9 @@ That option passes the existing `privacy-production-enabled` Cargo feature to
 every Apple slice and marks the XCFramework plus its artifact manifest. The
 `Mobile SDK Artifacts` manual workflow exposes the same default-off option.
 The builder always compiles all four slices into the one caller-selected target,
-uses the root `Cargo.lock`, and fails closed if `xcodebuild` cannot package them.
-There is no skip-build, preserved-target, alternate-lock, or manual-packaging mode.
+uses the ordinary root lock or the authenticated privacy-lane external lock, and
+fails closed if `xcodebuild` cannot package them. There is no skip-build,
+preserved-target, arbitrary CLI alternate-lock, or manual-packaging mode.
 
 CI runs `.github/workflows/mobile_sdk_artifacts.yml` to authenticate the exact
 external Apple artifact, enforce mandatory missing-artifact rejection, run the
@@ -217,6 +220,12 @@ public installation evidence: CocoaPods may still consult configured spec
 sources. Publish the immutable release asset and both specs, then capture a clean
 registry `pod install` and Release build before advertising the coordinate (see
 [`docs/norito_bridge_release.md`](../docs/norito_bridge_release.md)).
+
+`NetworkId(literal:)`, `NetworkId.literal`, and `description` use the Rust
+`Display`/`FromStr` text contract: exactly 64 lowercase hexadecimal characters
+whose final byte carries the Iroha hash marker bit. The bytes are unchanged.
+`NetworkId`'s `Codable` conformance is a separate Norito JSON contract and keeps
+the tagged checksummed `hash:<64 uppercase hex>#<CRC16>` representation.
 
 Usage:
 ```swift
@@ -412,10 +421,14 @@ convenience APIs are Ed25519-only while native-backed algorithms use
 ### Offline peer transport V1
 
 `IrohaPeerWireMessageV1` is the only first-release request/payment/ACK envelope.
-Its sole profile code `2` requires schema `0x0102` and allows a 24,576-byte
-bounded whole-offer body (24,660 bytes including the fixed 84-byte IPM1
-header). Canonical bytes are capped at 32 KiB and must be a kind-matched ABI22
-archive. Construction and decode validate NRT0 v0.0, no compression, exact
+Profile `2` requires schema `0x0102` and allows a 24,576-byte bounded Kagemusha
+V4 whole-offer body (24,660 bytes including the fixed 84-byte IPM1 header).
+Profile `3` requires schema `0x0100` and carries only exact canonical `kgm2:`
+Offline Cash V1 text: request/payment/ACK raw maxima are 768/7,936/256 bytes
+and text maxima are 1,029/10,587/347 bytes. The 9,211 raw and 12,288 text
+values are aggregate session caps, never per-message caps. Canonical bytes are
+capped at 32 KiB and cross the native mobile bridge at ABI22 while Kagemusha's
+protocol/data ABI remains V4. Construction and decode validate NRT0 v0.0, no compression, exact
 compact-length flags, CRC64, the authoritative fully-qualified schema, and
 static padding (request/payment 8, ACK 0) without requiring the native bridge.
 The typed adapter performs deeper semantics.
@@ -433,7 +446,9 @@ session; wrong-schema streams are quarantined before completion. The
 `.peerOptimized` compression policy is shared by all rails and uses zlib only
 when it saves at least 32 bytes and one 256-byte shard. If wallet-domain
 validation rejects a structurally valid completion, call
-`scanSession.quarantine(streamID:)` before resuming capture. Scan input is exact
+`scanSession.quarantine(streamID:)` before resuming capture. The Offline Cash
+QR wrapper returns that stream ID, kind, duplicate state, and recovered-frame
+count and exposes the same quarantine operation. Scan input is exact
 IQR1 text with no whitespace trimming; explicit Swift scanner uptimes are
 throwing and must be finite and nonnegative.
 Nearby uses Google Connections point-to-point service
@@ -579,6 +594,26 @@ either native symbol or any required capability is absent, `availability` is
 bridge accepts only bounded V1 command frames and rejects relabelled V4/V5 input.
 The exact offsets and optional symbol signatures are fixed in
 [`specs/offline_cash_device_bridge_v1.md`](../specs/offline_cash_device_bridge_v1.md).
+
+Before opening a clean Offline Cash V1 receiver session, install the governed
+proof release with `OfflineCashArtifactSetInstallerV1.install`. The caller must
+supply the canonical manifest, its independently trusted SHA-256, the internal
+validation receipt, trusted authority policy, threshold release attestation,
+and exactly one local file URL for every case of
+`OfflineCashArtifactRoleV1`. Swift streams each file in bounded chunks; native
+code pins and reauthenticates all 34 files before publishing the release. No
+path string crosses the native ABI. Use `uninstall` with both the exact release
+ID and manifest digest; release replacement or removal invalidates previously
+opened sessions.
+
+`OfflineCashWalletSessionV1` then opens an opaque native session pinned to that
+release and request. `acceptPayment(canonicalNorito:)` performs both Eq and Ep
+current-proof and carried-lineage decisions and retains the unforgeable receipt
+inside native memory. `acceptAcknowledgement(canonicalNorito:)` accepts only an
+acknowledgement bound to that exact receipt. The session verifier is not a
+durability substitute: applications must still apply the result through
+`OfflineCashDeviceLifecycleBridgeV1`, and must remain online-only when the
+production device service is unavailable.
 
 ### Push Devices
 
@@ -1166,23 +1201,50 @@ the application owns reconciliation and any later explicit submission.
 
 `ToriiClient` uses only the canonical direct Torii lifecycle:
 `GET /v1/offline/readiness`, `POST /v1/offline/top-up`,
-`POST /v1/offline/redeem`, `GET /v1/offline/operations/{operation_id}`, and
-`POST /v1/offline/receiver-lineage`.
+`POST /v1/offline/redeem`, and `GET /v1/offline/operations/{operation_id}`.
 Use `getOfflineCapability()`, `submitKagemushaTopUp`,
-`submitKagemushaRedeem`, `getKagemushaOperationStatus(operationId:)`, and
-`getKagemushaRecipientRegistrationLineage(query:canonicalAuth:)`.
+`submitKagemushaRedeem`, and `getKagemushaOperationStatus(operationId:)`.
 No selector-taking readiness alias is exposed.
 
-Receiver-lineage proof evaluation requires `ToriiLocalSigningContext` and a
-per-call `ToriiCanonicalRequestAuth`. Swift signs the exact genesis-derived
-`NetworkId`, POST target, and raw Norito selector body, rejects redirects, and
-never retries the nonce-bearing request.
+Receiver-registration lineage remains a protocol-internal component of the
+portable receive offer and is verified locally by the native Kagemusha V4
+receive-offer verifier; it is not a Torii endpoint.
 
 `ToriiOfflineStatus` is an asset-neutral protocol contract, not backend
 settlement readiness. Swift accepts only `mandatory: false`,
 `cash_handoff_capability: "cash_handoff_v1"`, bridge ABI `22`, the exact maximum
-hop bound, `ready: true`, and empty `assets` and `blockers`. Assets and
-dataspaces require no offline enrollment or backend enablement.
+hop bound, `ready: false`, empty `assets`, and the exact ordered three
+activation blockers. The universal endpoint never claims production wallet
+admission because it has not selected an authenticated release, eligible
+asset, or reviewed proof/secure-device backend:
+
+```json
+{
+  "mandatory": false,
+  "cash_handoff_capability": "cash_handoff_v1",
+  "required_bridge_abi_version": 22,
+  "max_hops": 8,
+  "ready": false,
+  "assets": [],
+  "blockers": [
+    {
+      "code": "offline_cash_authenticated_release_unavailable",
+      "message": "No authenticated Offline Cash V1 release is selected by this asset-neutral response."
+    },
+    {
+      "code": "offline_cash_eligible_asset_unavailable",
+      "message": "No eligible Offline Cash V1 asset is selected by this asset-neutral response."
+    },
+    {
+      "code": "offline_cash_proof_backend_unavailable",
+      "message": "No reviewed production Offline Cash V1 proof and secure-device backend is authenticated by this response."
+    }
+  ]
+}
+```
+
+Missing, reordered, or text-modified blockers are rejected. Recognizing this
+closed-state wire contract does not enable production wallet operations.
 
 `KagemushaTopUpRequest` and `KagemushaRedeemRequest` accept only the corresponding
 typed Kagemusha Norito archive. They derive the lowercase idempotency key from
@@ -1821,6 +1883,11 @@ The parity checker compares the two generated JSON files directly with
 `fixtures/norito_rpc` and rejects copied shared payload blobs. Commit the canonical
 outputs and all generated SDK mirrors together; never use Java resources, an archive,
 or a retained historical payload as an alternate Swift fixture source.
+`Fixtures/swift_parity_payloads.json` is custom builder input rather than Norito
+JSON, so its `network_id` uses the raw lowercase `NetworkId` text form.
+The generated transaction manifest and payload descriptor `network_id` fields
+use the same raw text contract; an embedded Norito JSON `NetworkId` remains the
+tagged checksummed form.
 
 ### Connect (WalletConnect-style relay)
 
@@ -2089,7 +2156,8 @@ checksum-pinned `NoritoBridge` binary pod; public registry/install evidence rema
 external. Generated artifacts stay untracked, and the resulting release asset
 uses the SemVer in `IrohaSwift/VERSION`; it need not numerically equal the
 `norito` Rust crate version. The release binds Rust inputs through the reviewed
-commit, source fingerprint, and root lockfile.
+commit, source fingerprint, and selected authenticated lockfile (the root lock
+for ordinary releases or the frozen external lock for the privacy lane).
 The canonical `NoritoBridge.artifacts.json` is embedded in the XCFramework and
 records the bridge version plus per-platform SHA-256 hashes.
 `dist/NoritoBridge.artifacts.json` is the stable relative symlink to that embedded

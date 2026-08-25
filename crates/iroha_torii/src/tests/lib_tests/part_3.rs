@@ -543,7 +543,7 @@ async fn contract_alias_resolve_returns_bound_contract() {
     let authority_account = Account::new(authority.clone()).build(&authority);
     let app = mk_app_state_for_tests_with_world(World::with([], [authority_account], []));
     let contract_address = iroha_data_model::smart_contract::ContractAddress::derive(
-        &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
+        &"0000000000000000000000000000000000000000000000000000000000000001"
             .parse()
             .expect("canonical test network id"),
         &authority,

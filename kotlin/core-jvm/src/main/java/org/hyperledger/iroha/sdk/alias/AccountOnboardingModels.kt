@@ -79,7 +79,7 @@ class AccountOnboardingPlanBodyV1(
         "version" to version,
         "request" to request.toJsonMap(),
         "authority" to authority,
-        "network_id" to networkId.literal,
+        "network_id" to networkId.noritoJsonLiteral,
         "anchor" to anchor.toJsonMap(),
         "resource" to resource.toJsonMap(),
         "acquisition" to acquisition.toJsonMap(),
@@ -283,7 +283,9 @@ object AccountOnboardingJsonParser {
                 parser.intField(requestRoot, "version", "body.request.version"),
             ),
             parser.stringField(root, "authority", "body.authority"),
-            NetworkId.parse(parser.stringField(root, "network_id", "body.network_id")),
+            NetworkId.parseNoritoJsonLiteral(
+                parser.stringField(root, "network_id", "body.network_id"),
+            ),
             parser.parseAnchor(parser.objectField(root, "anchor", "body.anchor")),
             parser.parseResource(parser.objectField(root, "resource", "body.resource"), "body.resource"),
             AliasLeaseAcquisitionV1(

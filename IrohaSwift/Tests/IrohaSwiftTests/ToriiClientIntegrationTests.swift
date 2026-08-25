@@ -452,7 +452,10 @@ final class ToriiClientIntegrationTests: XCTestCase {
             XCTAssertEqual(request.url?.path, "/v1/da/ingest")
             XCTAssertEqual(request.value(forHTTPHeaderField: "Content-Type"), "application/json")
             let body = tcBodyJSON(from: request)
-            XCTAssertEqual(body["network_id"] as? String, TestNetworkIds.canonical.literal)
+            XCTAssertEqual(
+                body["network_id"] as? String,
+                TestNetworkIds.canonical.noritoJSONLiteral
+            )
             XCTAssertEqual(body["owner"] as? String, owner)
             XCTAssertEqual(body["lane_id"] as? Int, 9)
             XCTAssertEqual(body["epoch"] as? Int, 4)

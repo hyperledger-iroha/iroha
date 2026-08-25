@@ -38,9 +38,22 @@ def offline_capability_payload(**overrides: Any) -> Dict[str, Any]:
         "cash_handoff_capability": "cash_handoff_v1",
         "required_bridge_abi_version": 22,
         "max_hops": 8,
-        "ready": True,
+        "ready": False,
         "assets": [],
-        "blockers": [],
+        "blockers": [
+            {
+                "code": "offline_cash_authenticated_release_unavailable",
+                "message": "No authenticated Offline Cash V1 release is selected by this asset-neutral response.",
+            },
+            {
+                "code": "offline_cash_eligible_asset_unavailable",
+                "message": "No eligible Offline Cash V1 asset is selected by this asset-neutral response.",
+            },
+            {
+                "code": "offline_cash_proof_backend_unavailable",
+                "message": "No reviewed production Offline Cash V1 proof and secure-device backend is authenticated by this response.",
+            },
+        ],
     }
     payload.update(overrides)
     return payload

@@ -1,4 +1,4 @@
-//! Generate and finalize calibrated ABI-21 Kagemusha release bundles.
+//! Generate and finalize calibrated Kagemusha V4 release bundles.
 //!
 //! Candidate generation runs two byte-identical builds of the independently reviewed recursion
 //! source closure and publishes eight immutable `KRV4KEY` artifacts plus one canonical
@@ -87,7 +87,7 @@ use std::{
     sync::OnceLock,
 };
 const HELP: &str = "\
-Generate an unsigned ABI-21 candidate, then finalize those exact bytes after approval.
+Generate an unsigned Kagemusha V4 candidate, then finalize those exact bytes after approval.
 
 Usage:
   <binary_path-from-sealed-kagemusha-candidate-build.json> memory-capacity-v1

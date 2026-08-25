@@ -34973,7 +34973,7 @@ publish_delay_seconds = 17
         let identity_path = identity_dir.path().join("expected_hash");
         fs::write(
             &identity_path,
-            "hash:0000000000000000000000000000000000000000000000000000000000000001#C50E\n",
+            "0000000000000000000000000000000000000000000000000000000000000001\n",
         )
         .expect("write identity");
         let mut table = base_table();

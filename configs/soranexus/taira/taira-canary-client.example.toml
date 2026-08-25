@@ -8,7 +8,7 @@
 # `/v1` API does not use an `x-iroha-api-version` request header.
 
 chain = "fc56984b-2be7-431d-840e-21514d1883f0"
-network_id = "hash:82531CE8EAE8BFF6BEECA4698BFD13A3BC8BEC5F0EE0D23D428C97FC17AB0F3B#3E94"
+network_id = "82531ce8eae8bff6beeca4698bfd13a3bc8bec5f0ee0d23d428c97fc17ab0f3b"
 torii_url = "https://taira.sora.org/"
 
 [account]

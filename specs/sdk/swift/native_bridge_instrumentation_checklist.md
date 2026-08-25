@@ -40,7 +40,9 @@ export RUSTC="$(rustup which --toolchain 1.93.1 rustc)"
 export RUSTDOC="$(rustup which --toolchain 1.93.1 rustdoc)"
 ```
 
-Use Python 3.12 and the repository-root `Cargo.lock`; alternate lockfiles and
+Use Python 3.12. Ordinary builds use the repository-root `Cargo.lock`; the
+authenticated privacy lane uses its distinct frozen external `Cargo.lock` via
+`IROHA_PRIVACY_RELEASE_CARGO_LOCKFILE_PATH`. Arbitrary CLI lock selection and
 in-tree or symbolic Cargo targets are rejected. A nonempty external isolated
 target is supported; builds sharing that target or output are serialized, and
 each Apple slice is freshly invoked.

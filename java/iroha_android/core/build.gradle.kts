@@ -89,6 +89,18 @@ tasks.withType<Test>().configureEach {
             .dir("..")
             .file("fixtures/offline/kagemusha_peer_transport_v2.json"),
     )
+    inputs.file(
+        rootProject.layout.projectDirectory
+            .dir("..")
+            .dir("..")
+            .file("fixtures/offline/offline_cash_peer_transport_v1.json"),
+    )
+    inputs.file(
+        rootProject.layout.projectDirectory
+            .dir("..")
+            .dir("..")
+            .file("fixtures/offline/offline_cash_profile3_ipm_iqr_v1.json"),
+    )
     inputs.dir(
         rootProject.layout.projectDirectory
             .dir("..")
@@ -105,10 +117,21 @@ tasks.withType<Test>().configureEach {
     if (!harnessFilter.isNullOrBlank()) {
         systemProperty("android.test.mains", harnessFilter)
     }
-    val nativeLibPath = System.getenv("IROHA_NATIVE_LIBRARY_PATH")
-    if (!nativeLibPath.isNullOrBlank()) {
-        jvmArgs("-Djava.library.path=$nativeLibPath")
+    // Release CI supplies an isolated ABI22 bridge. Local development uses the
+    // repository's warm target/debug lane, matching the Kotlin SDK gate.
+    val configuredNativeDir = System.getenv("IROHA_NATIVE_LIBRARY_PATH")
+    val nativeLibPath = if (configuredNativeDir.isNullOrBlank()) {
+        rootProject.layout.projectDirectory
+            .dir("..")
+            .dir("..")
+            .dir("target")
+            .dir("debug")
+            .asFile
+            .absolutePath
+    } else {
+        configuredNativeDir
     }
+    jvmArgs("-Djava.library.path=$nativeLibPath")
 }
 
 sourceSets {

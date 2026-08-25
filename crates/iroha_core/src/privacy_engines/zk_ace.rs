@@ -1,12 +1,12 @@
-//! Disabled first-release ZK-ACE authorization candidate.
+//! First-release ZK-ACE authorization engine.
 //!
-//! The low-level candidate proof wire is the dedicated masked execution-trace STARK in
+//! The low-level proof wire is the dedicated masked execution-trace STARK in
 //! `zk_ace_stark`. It proves both dense-MDS Poseidon `x^7` relations, commits an independent
 //! full-space zero-knowledge mask before batching challenges, links the AIR at one quartic-extension
 //! DEEP point, runs Fp4 FRI, and carries no caller-selected backend, verifier key, parameter record,
-//! or legacy generic envelope. Production proving, verification, and profile activation remain
-//! fail-closed because the candidate's four sequential capacity-1 sponge outputs provide only about
-//! 32 bits of generic collision resistance.
+//! or legacy generic envelope. Each 256-bit public commitment uses the first
+//! output of four fresh Poseidon sponges under independent length-framed lane
+//! domains, meeting the compiled 128-bit generic collision target.
 //!
 //! The compiled 128-bit Fiat--Shamir certificate is work-normalized in the
 //! classical random-oracle model.  The `pq_authorization` relation name does
@@ -14,7 +14,7 @@
 #[cfg(test)]
 use super::prover_randomness::TRY_CRYPTO_PROVER_RANDOMNESS_POLICY_V1;
 use super::zk_ace_stark::{
-    AIR_PUBLIC_TRANSCRIPT_SCHEMA_V1, COMPILED_STARK_PROFILE_DESCRIPTOR_V1, MAX_PROOF_BYTES,
+    AIR_PUBLIC_TRANSCRIPT_SCHEMA_V2, COMPILED_STARK_PROFILE_DESCRIPTOR_V2, MAX_PROOF_BYTES,
     MAX_ROM_QUERY_LOG2_V1, PROVABLE_SOUNDNESS_BITS_V1, ZkAceAirRelationInputsV1, ZkAceStarkError,
     prove_zk_ace_stark_v1_with_rng, verify_zk_ace_stark_v1,
 };
@@ -42,7 +42,7 @@ pub use rand::TryRngCore as ZkAceTryRngCoreV1;
 use sha2::{Digest as _, Sha256};
 use thiserror::Error;
 use zeroize::Zeroize;
-/// Secret witness shape retained for the disabled native ZK-ACE candidate.
+/// Secret witness shape retained by the native ZK-ACE engine.
 ///
 /// It intentionally implements neither `Debug`, `Clone`, `Copy`, nor any
 /// serialization trait. The engine owns the three secrets and overwrites them
@@ -83,7 +83,7 @@ impl ZkAcePrivacyWitnessV1 {
         }
         Ok(())
     }
-    /// Derive the candidate public identity commitment under its fixed domain.
+    /// Derive the public identity commitment under its fixed independent-lane domains.
     #[must_use]
     pub fn identity_commitment_v1(&self) -> PrivacyCommitmentV1 {
         PrivacyCommitmentV1::new(derive_zk_ace_identity_commitment(
@@ -134,33 +134,32 @@ pub enum ZkAcePrivacyWitnessValidationErrorV1 {
     ZeroReplaySecret,
 }
 /// Transcript family frozen into the dedicated proof implementation.
-pub const ZK_ACE_PRIVACY_TRANSCRIPT_LABEL_V1: &str = "iroha:privacy:zk-ace:transparent-stark:v1";
+pub const ZK_ACE_PRIVACY_TRANSCRIPT_LABEL_V2: &str = "iroha:privacy:zk-ace:transparent-stark:v2";
 /// Whether ZK-ACE is eligible for production proving, verification, or activation.
 ///
-/// The current candidate exposes four sequential outputs from one rate-2,
-/// capacity-1 Goldilocks sponge. Its public commitment binding is therefore
-/// only about 32 bits, below the required 128-bit profile.
-pub const ZK_ACE_FULL_ENGINE_AVAILABLE_V1: bool = false;
-/// Release blocker that must be resolved before enabling the ZK-ACE engine.
-pub const ZK_ACE_REQUIRED_COMMITMENT_REMEDIATION_V1: &[u8] = b"four-independent-domain-separated-dense-mds-poseidon-x7-invocations:one-u64-output-each:generic-collision-target-128-bits:air-schedule-and-fri-profile-must-be-recertified";
+/// The V2 profile uses four independent lane-domain invocations, and its AIR
+/// retains the recertified k=12 trace / 16x FRI geometry below.
+pub const ZK_ACE_FULL_ENGINE_AVAILABLE_V1: bool = true;
+/// Exact public-commitment construction authenticated by the compiled profile.
+pub const ZK_ACE_COMMITMENT_BINDING_PROFILE_V2: &[u8] = b"four-independent-length-framed-lane-domains:dense-mds-poseidon-x7:one-first-state0-u64-output-each:generic-collision-target-128-bits:air-schedule-recertified-under-trace4096-fri16x";
 /// Source and relation description frozen into the compiled profile.
-pub const ZK_ACE_SOURCE_PROFILE_V1: &[u8] = b"iroha-native-rust:zk-ace:typed-statement+trusted-genesis:type-name-independent-ordered-length-framed-public-transcript:private-witness:masked-dense-mds-poseidon-x7-execution-trace:sequential-state0-outputs4:binding-ceiling32:activation-disabled:fp4-deep-ali:independent-pre-batching-fri-mask:fp4-fri:producer=preflight+rand0.9-trycrypto-fixed64-reservoir-zeroize-poison-error-or-unwind+self-verify:v1";
+pub const ZK_ACE_SOURCE_PROFILE_V2: &[u8] = b"iroha-native-rust:zk-ace:typed-statement+trusted-genesis:type-name-independent-ordered-length-framed-public-transcript:private-witness:masked-dense-mds-poseidon-x7-execution-trace:four-independent-length-framed-lane-domains:four-parallel-air-lanes:first-state0-output-each:combined-collision-target128:fp4-deep-ali:independent-pre-batching-fri-mask:fp4-fri:producer=preflight+rand0.9-trycrypto-fixed64-reservoir-zeroize-poison-error-or-unwind+self-verify:v2";
 /// Exact native proof wire description frozen into the compiled profile.
-pub const ZK_ACE_PROOF_WIRE_V1: &[u8] =
-    b"ZKA1:fixed-shape-big-endian:1341142:strict-exact:no-lengths:no-generic-envelope";
+pub const ZK_ACE_PROOF_WIRE_V2: &[u8] =
+    b"ZKA2:fixed-shape-big-endian:1427158:strict-exact:no-lengths:no-generic-envelope";
 /// Exact low-level AIR relation schema frozen into the compiled profile.
-pub const ZK_ACE_AIR_RELATION_SCHEMA_V1: &[u8] = AIR_PUBLIC_TRANSCRIPT_SCHEMA_V1;
+pub const ZK_ACE_AIR_RELATION_SCHEMA_V2: &[u8] = AIR_PUBLIC_TRANSCRIPT_SCHEMA_V2;
 /// Exact typed authorization projection frozen into the compiled profile.
 pub const ZK_ACE_AUTHORIZATION_PROJECTION_V1: &[u8] = b"norito:zk-ace-pq-authorization-statement-v1:replay-nullifier-zero|transaction-intent-bound|trusted-genesis-bound";
 /// Canonical Poseidon constant manifest consumed through `fastpq_prover`.
 ///
 /// The manifest authenticates only round constants and the MDS matrix. The
 /// construction and S-box exponent are authenticated separately by
-/// [`ZK_ACE_POSEIDON_PROFILE_V1`].
+/// [`ZK_ACE_POSEIDON_PROFILE_V2`].
 pub const ZK_ACE_POSEIDON_MANIFEST_SHA256_V1: &str =
     "99bef7760fcc80c2d4c47e720cf28a156f106a0fa389f2be55a34493a0ca4c21";
-/// Exact Poseidon permutation profile used by the candidate native hash and AIR.
-pub const ZK_ACE_POSEIDON_PROFILE_V1: &[u8] = b"dense-mds-poseidon:goldilocks:x7:width3:rate2:full8:partial57:v1:constants-sha256=99bef7760fcc80c2d4c47e720cf28a156f106a0fa389f2be55a34493a0ca4c21";
+/// Exact Poseidon permutation and independent-lane profile used by the native hash and AIR.
+pub const ZK_ACE_POSEIDON_PROFILE_V2: &[u8] = b"dense-mds-poseidon:goldilocks:x7:width3:rate2:full8:partial57:v1:commitment=four-independent-length-framed-lane-domains:first-state0-output-each:v2:constants-sha256=99bef7760fcc80c2d4c47e720cf28a156f106a0fa389f2be55a34493a0ca4c21";
 /// Native and consensus proof byte ceiling.
 pub const ZK_ACE_PRIVACY_MAX_PROOF_BYTES_V1: u32 = MAX_PROOF_BYTES as u32;
 /// Theorem-backed classical-ROM, work-normalized soundness of the profile.
@@ -169,41 +168,38 @@ pub const ZK_ACE_PRIVACY_MAX_PROOF_BYTES_V1: u32 = MAX_PROOF_BYTES as u32;
 pub const ZK_ACE_PROVABLE_SOUNDNESS_BITS_V1: u16 = PROVABLE_SOUNDNESS_BITS_V1;
 /// Maximum base-two random-oracle query-work exponent covered by that bound.
 pub const ZK_ACE_MAX_ROM_QUERY_LOG2_V1: u8 = MAX_ROM_QUERY_LOG2_V1;
-/// Frozen digest of every disabled candidate verifier-profile field below.
-///
-/// This digest authenticates the candidate for regression testing; it is not
-/// an activation credential while [`ZK_ACE_FULL_ENGINE_AVAILABLE_V1`] is false.
-pub const ZK_ACE_COMPILED_PROFILE_DIGEST_V1: [u8; 32] = [
-    0x92, 0x96, 0x79, 0x0e, 0x93, 0xa5, 0x6c, 0xd8, 0xaa, 0x56, 0x89, 0x24, 0x28, 0xca, 0x5c, 0x5b,
-    0x00, 0xf7, 0xee, 0xfe, 0x31, 0x9a, 0xa4, 0xcb, 0x96, 0x74, 0xe0, 0x92, 0x6a, 0x01, 0x3b, 0xb9,
+/// Frozen digest of every V2 verifier-profile field below.
+pub const ZK_ACE_COMPILED_PROFILE_DIGEST_V2: [u8; 32] = [
+    0x29, 0xb1, 0x22, 0x9c, 0xfb, 0x61, 0xd3, 0xa7, 0xca, 0x5d, 0xcb, 0xf5, 0xe3, 0x54, 0xed, 0x6f,
+    0xe4, 0x09, 0x59, 0x27, 0x45, 0xe5, 0xec, 0x6e, 0x1b, 0xe5, 0xae, 0xa9, 0xb8, 0xf7, 0x01, 0xff,
 ];
-/// Return the frozen digest of the exact disabled candidate verifier profile.
+/// Return the frozen digest of the exact V2 verifier profile.
 #[must_use]
 pub const fn zk_ace_compiled_profile_digest_v1() -> [u8; 32] {
-    ZK_ACE_COMPILED_PROFILE_DIGEST_V1
+    ZK_ACE_COMPILED_PROFILE_DIGEST_V2
 }
 /// Return the complete human-auditable compiled algebraic profile.
 #[must_use]
 pub const fn zk_ace_stark_profile_descriptor_v1() -> &'static [u8] {
-    COMPILED_STARK_PROFILE_DESCRIPTOR_V1
+    COMPILED_STARK_PROFILE_DESCRIPTOR_V2
 }
 #[cfg(test)]
-fn recompute_zk_ace_compiled_profile_digest_v1() -> [u8; 32] {
+fn recompute_zk_ace_compiled_profile_digest_v2() -> [u8; 32] {
     let mut hasher = Sha256::new();
-    hash_field(&mut hasher, b"iroha.privacy.zk-ace.compiled-profile.v1");
-    hash_field(&mut hasher, ZK_ACE_SOURCE_PROFILE_V1);
+    hash_field(&mut hasher, b"iroha.privacy.zk-ace.compiled-profile.v2");
+    hash_field(&mut hasher, ZK_ACE_SOURCE_PROFILE_V2);
     hash_field(&mut hasher, TRY_CRYPTO_PROVER_RANDOMNESS_POLICY_V1);
-    hash_field(&mut hasher, ZK_ACE_PROOF_WIRE_V1);
-    hash_field(&mut hasher, ZK_ACE_AIR_RELATION_SCHEMA_V1);
+    hash_field(&mut hasher, ZK_ACE_PROOF_WIRE_V2);
+    hash_field(&mut hasher, ZK_ACE_AIR_RELATION_SCHEMA_V2);
     hash_field(&mut hasher, ZK_ACE_AUTHORIZATION_PROJECTION_V1);
     hash_field(&mut hasher, ZK_ACE_POSEIDON_MANIFEST_SHA256_V1.as_bytes());
-    hash_field(&mut hasher, ZK_ACE_POSEIDON_PROFILE_V1);
-    hash_field(&mut hasher, ZK_ACE_REQUIRED_COMMITMENT_REMEDIATION_V1);
+    hash_field(&mut hasher, ZK_ACE_POSEIDON_PROFILE_V2);
+    hash_field(&mut hasher, ZK_ACE_COMMITMENT_BINDING_PROFILE_V2);
     hash_field(
         &mut hasher,
         ZK_ACE_PQ_AUTHORIZATION_V0_CIRCUIT_ID.as_bytes(),
     );
-    hash_field(&mut hasher, ZK_ACE_PRIVACY_TRANSCRIPT_LABEL_V1.as_bytes());
+    hash_field(&mut hasher, ZK_ACE_PRIVACY_TRANSCRIPT_LABEL_V2.as_bytes());
     hash_field(&mut hasher, zk_ace_stark_profile_descriptor_v1());
     hash_field(
         &mut hasher,
@@ -262,12 +258,12 @@ fn validate_privacy_witness_relation(
     }
     Ok(())
 }
-/// Reject production proving while the ZK-ACE candidate is unavailable.
+/// Produce one fixed-profile ZK-ACE proof.
 ///
 /// # Errors
 ///
-/// Returns [`ZkAceNativeErrorV1::EngineUnavailable`] before validation or
-/// entropy use until the independent-lane commitment remediation is complete.
+/// Returns a typed error before publishing bytes if validation, entropy,
+/// proving, or mandatory self-verification fails.
 pub fn prove_zk_ace_privacy_v1_with_rng<R: TryCryptoRng + ?Sized>(
     public_inputs: &ZkAcePrivacyPublicInputsV1,
     witness: &ZkAcePrivacyWitnessV1,
@@ -295,7 +291,7 @@ pub fn prove_zk_ace_privacy_v1_with_rng<R: TryCryptoRng + ?Sized>(
         }
     })
 }
-/// Reject production proving before requesting operating-system entropy.
+/// Produce one fixed-profile ZK-ACE proof using operating-system entropy.
 ///
 /// # Errors
 ///
@@ -307,11 +303,11 @@ pub fn prove_zk_ace_privacy_v1(
 ) -> Result<Vec<u8>, ZkAceNativeErrorV1> {
     prove_zk_ace_privacy_v1_with_rng(public_inputs, witness, &mut rand::rngs::OsRng)
 }
-/// Reject production verification while the ZK-ACE candidate is unavailable.
+/// Verify one fixed-profile ZK-ACE proof.
 ///
 /// # Errors
 ///
-/// Returns [`ZkAceNativeErrorV1::EngineUnavailable`] before parsing any proof.
+/// Returns a typed error for invalid public input, size, wire, or proof relation.
 pub fn verify_zk_ace_privacy_v1(
     public_inputs: &ZkAcePrivacyPublicInputsV1,
     proof: &[u8],
@@ -359,8 +355,8 @@ fn validate_privacy_public_inputs(
 /// Native ZK-ACE construction or verification failure.
 #[derive(Debug, PartialEq, Eq, Error)]
 pub enum ZkAceNativeErrorV1 {
-    /// The candidate commitment does not yet meet the release binding target.
-    #[error("ZK-ACE native engine is unavailable pending independent-lane commitment remediation")]
+    /// This build deliberately excludes or disables the native engine.
+    #[error("ZK-ACE native engine is unavailable in this build")]
     EngineUnavailable,
     /// The public-input wrapper is not the exact first-release schema.
     #[error("ZK-ACE public-input version must be 1, got {actual}")]
@@ -457,6 +453,20 @@ mod tests {
         }
     }
     impl TryCryptoRng for PanicEntropyRng {}
+    struct FailingEntropyRng;
+    impl TryRngCore for FailingEntropyRng {
+        type Error = InjectedEntropyError;
+        fn try_next_u32(&mut self) -> Result<u32, Self::Error> {
+            Err(InjectedEntropyError)
+        }
+        fn try_next_u64(&mut self) -> Result<u64, Self::Error> {
+            Err(InjectedEntropyError)
+        }
+        fn try_fill_bytes(&mut self, _destination: &mut [u8]) -> Result<(), Self::Error> {
+            Err(InjectedEntropyError)
+        }
+    }
+    impl TryCryptoRng for FailingEntropyRng {}
     fn account(seed: u8) -> AccountId {
         let key_pair = KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519)
             .expect("derive test account");
@@ -532,21 +542,21 @@ mod tests {
             fastpq_prover::poseidon_profile_id(),
             EXPECTED_PERMUTATION_PROFILE_ID
         );
-        assert!(ZK_ACE_POSEIDON_PROFILE_V1.starts_with(EXPECTED_PERMUTATION_PROFILE_ID.as_bytes()));
+        assert!(ZK_ACE_POSEIDON_PROFILE_V2.starts_with(EXPECTED_PERMUTATION_PROFILE_ID.as_bytes()));
         assert!(
-            core::str::from_utf8(ZK_ACE_POSEIDON_PROFILE_V1)
+            core::str::from_utf8(ZK_ACE_POSEIDON_PROFILE_V2)
                 .expect("profile is UTF-8")
                 .ends_with(ZK_ACE_POSEIDON_MANIFEST_SHA256_V1)
         );
-        assert!(!ZK_ACE_FULL_ENGINE_AVAILABLE_V1);
+        assert!(ZK_ACE_FULL_ENGINE_AVAILABLE_V1);
         assert!(
-            core::str::from_utf8(ZK_ACE_REQUIRED_COMMITMENT_REMEDIATION_V1)
-                .expect("remediation profile is UTF-8")
-                .contains("four-independent-domain-separated")
+            core::str::from_utf8(ZK_ACE_COMMITMENT_BINDING_PROFILE_V2)
+                .expect("binding profile is UTF-8")
+                .contains("four-independent-length-framed-lane-domains")
         );
         assert_eq!(
-            recompute_zk_ace_compiled_profile_digest_v1(),
-            ZK_ACE_COMPILED_PROFILE_DIGEST_V1
+            recompute_zk_ace_compiled_profile_digest_v2(),
+            ZK_ACE_COMPILED_PROFILE_DIGEST_V2
         );
     }
     #[test]
@@ -574,25 +584,29 @@ mod tests {
         );
     }
     #[test]
-    fn production_entrypoints_fail_before_validation_entropy_or_proof_work() {
+    fn production_entrypoints_validate_before_entropy_and_fail_closed() {
         let (public_inputs, witness) = public_inputs_and_witness();
         let mut invalid_public = public_inputs.clone();
         invalid_public.version ^= 1;
         assert_eq!(
             prove_zk_ace_privacy_v1_with_rng(&invalid_public, &witness, &mut PanicEntropyRng,),
-            Err(ZkAceNativeErrorV1::EngineUnavailable)
+            Err(ZkAceNativeErrorV1::PublicInputVersionMismatch {
+                actual: invalid_public.version,
+            })
         );
         assert_eq!(
-            prove_zk_ace_privacy_v1_with_rng(&public_inputs, &witness, &mut PanicEntropyRng),
-            Err(ZkAceNativeErrorV1::EngineUnavailable)
+            prove_zk_ace_privacy_v1_with_rng(&public_inputs, &witness, &mut FailingEntropyRng),
+            Err(ZkAceNativeErrorV1::RandomnessUnavailable)
         );
         assert_eq!(
             verify_zk_ace_privacy_v1(&invalid_public, &[], ZK_ACE_PRIVACY_MAX_PROOF_BYTES_V1,),
-            Err(ZkAceNativeErrorV1::EngineUnavailable)
+            Err(ZkAceNativeErrorV1::PublicInputVersionMismatch {
+                actual: invalid_public.version,
+            })
         );
         assert_eq!(
             verify_zk_ace_privacy_v1(&public_inputs, &[1], ZK_ACE_PRIVACY_MAX_PROOF_BYTES_V1,),
-            Err(ZkAceNativeErrorV1::EngineUnavailable)
+            Err(ZkAceNativeErrorV1::VerificationFailed)
         );
     }
 }

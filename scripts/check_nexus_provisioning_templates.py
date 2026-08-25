@@ -7,7 +7,7 @@ import argparse
 import pathlib
 import re
 import sys
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 
 try:
     import tomllib
@@ -33,16 +33,19 @@ CLIENT_TEMPLATE = pathlib.Path("defaults/nexus/client.toml")
 SECRET_ROOT = pathlib.PurePosixPath("/run/secrets/iroha")
 PUBLIC_IDENTITY_ROOT = pathlib.PurePosixPath("/run/iroha")
 HASH_LITERAL = re.compile(r"^hash:([0-9A-F]{64})#([0-9A-F]{4})$")
+RAW_NETWORK_ID = re.compile(r"^[0-9a-f]{64}$")
 
 
 class ProvisioningTemplateError(ValueError):
     """A checked deployment template violates the public-only contract."""
 
 
-def _is_canonical_hash_literal(value: str) -> bool:
+def _canonical_hash_literal_identity(value: object) -> str | None:
+    if not isinstance(value, str):
+        return None
     matched = HASH_LITERAL.fullmatch(value)
     if matched is None:
-        return False
+        return None
     body, checksum = matched.groups()
     crc = 0xFFFF
     for byte in f"hash:{body}".encode("ascii"):
@@ -53,7 +56,23 @@ def _is_canonical_hash_literal(value: str) -> bool:
                 if crc & 0x8000
                 else (crc << 1) & 0xFFFF
             )
-    return checksum == f"{crc:04X}" and int(body[-2:], 16) & 1 == 1
+    if checksum != f"{crc:04X}" or int(body[-2:], 16) & 1 == 0:
+        return None
+    return body.lower()
+
+
+def _is_canonical_hash_literal(value: str) -> bool:
+    return _canonical_hash_literal_identity(value) is not None
+
+
+def _canonical_network_id_identity(value: object) -> str | None:
+    if (
+        not isinstance(value, str)
+        or RAW_NETWORK_ID.fullmatch(value) is None
+        or int(value[-2:], 16) & 1 == 0
+    ):
+        return None
+    return value
 
 
 def _load_toml(path: pathlib.Path) -> dict[str, object]:
@@ -86,6 +105,9 @@ def _require_public_identity_source(
     inline_field: str,
     file_field: str,
     label: str,
+    *,
+    normalize_inline: Callable[[object], str | None],
+    inline_description: str,
 ) -> str:
     inline = table.get(inline_field)
     file = table.get(file_field)
@@ -94,11 +116,12 @@ def _require_public_identity_source(
             f"{label} must set exactly one of `{inline_field}` or `{file_field}`"
         )
     if inline is not None:
-        if not isinstance(inline, str) or not _is_canonical_hash_literal(inline):
+        normalized = normalize_inline(inline)
+        if normalized is None:
             raise ProvisioningTemplateError(
-                f"{label}.{inline_field} must be a canonical concrete hash literal"
+                f"{label}.{inline_field} must be {inline_description}"
             )
-        return f"inline:{inline}"
+        return f"inline:{normalized}"
 
     if not isinstance(file, str) or not file:
         raise ProvisioningTemplateError(f"{label}.{file_field} must be non-empty")
@@ -167,6 +190,8 @@ def validate_server_template(path: pathlib.Path) -> str:
         "expected_hash",
         "expected_hash_file",
         f"{path}.genesis",
+        normalize_inline=_canonical_hash_literal_identity,
+        inline_description="a canonical concrete hash literal",
     )
 
 
@@ -183,7 +208,12 @@ def validate_client_template(path: pathlib.Path) -> str:
         )
     _require_secret_file(account, "private_key_file", f"{path}.account")
     return _require_public_identity_source(
-        table, "network_id", "network_id_file", str(path)
+        table,
+        "network_id",
+        "network_id_file",
+        str(path),
+        normalize_inline=_canonical_network_id_identity,
+        inline_description="a canonical raw lowercase NetworkId",
     )
 
 

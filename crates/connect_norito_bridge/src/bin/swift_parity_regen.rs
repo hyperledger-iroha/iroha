@@ -38,7 +38,7 @@ const DEFAULT_MANIFEST_NAME: &str = "swift_parity_manifest.json";
 const SIGNING_SEED_HEX: &str = "616e64726f69642d666978747572652d7369676e696e672d6b65792d30313032";
 const DEFAULT_CHAIN_DISCRIMINANT: u16 = 369;
 const CANONICAL_DEV_NETWORK_ID: &str =
-    "hash:32C903E5B3497E34C2B844EBFE8A39C19E6CF8F95D44C1FFB8BA9DCB42F91149#A2F0";
+    "32c903e5b3497e34c2b844ebfe8a39c19e6cf8f95d44c1ffb8ba9dcb42f91149";
 const EXPECTED_FIXTURE_NAMES: [&str; 3] = [
     "swift_burn_asset_basic",
     "swift_mint_asset_basic",
@@ -63,7 +63,7 @@ struct PayloadFileEntry {
 #[derive(Debug, norito::json::JsonDeserialize)]
 #[norito(deny_unknown_fields)]
 struct PayloadSpec {
-    network_id: NetworkId,
+    network_id: String,
     authority: String,
     creation_time_ms: u64,
     executable: ExecutableSpec,
@@ -163,8 +163,18 @@ fn parse_canonical_account(raw: &str, label: &str) -> Result<AccountId, String> 
     Ok(account)
 }
 fn canonical_dev_network_id() -> NetworkId {
-    json::from_value(Value::String(CANONICAL_DEV_NETWORK_ID.to_owned()))
+    NetworkId::from_str(CANONICAL_DEV_NETWORK_ID)
         .expect("the canonical Iroha3 dev network identity must remain valid")
+}
+fn parse_canonical_network_id(raw: &str) -> Result<NetworkId, String> {
+    let network_id =
+        NetworkId::from_str(raw).map_err(|err| format!("invalid network_id '{raw}': {err}"))?;
+    if network_id.to_string() != raw {
+        return Err(format!(
+            "network_id must use exact canonical lowercase marked hash text, got '{raw}'"
+        ));
+    }
+    Ok(network_id)
 }
 impl FeePaymentSpec {
     fn to_intent(&self) -> Result<FeePaymentIntent, String> {
@@ -185,18 +195,16 @@ impl FeePaymentSpec {
 }
 impl PayloadSpec {
     fn to_builder(&self) -> Result<TransactionBuilder, String> {
-        if self.network_id != canonical_dev_network_id() {
+        let network_id = parse_canonical_network_id(&self.network_id)?;
+        if network_id != canonical_dev_network_id() {
             return Err(format!(
                 "network_id must be the canonical Iroha3 dev genesis identity '{CANONICAL_DEV_NETWORK_ID}'"
             ));
         }
         let authority = parse_canonical_account(&self.authority, "authority")?;
-        let mut builder = TransactionBuilder::new(
-            self.network_id,
-            authority.clone(),
-            self.fee_payment.to_intent()?,
-        )
-        .with_admission_intent(self.admission_intent);
+        let mut builder =
+            TransactionBuilder::new(network_id, authority.clone(), self.fee_payment.to_intent()?)
+                .with_admission_intent(self.admission_intent);
         if self.admission_intent != TransactionAdmissionIntent::QueuePlanSynced {
             return Err(
                 "Swift public parity fixtures require QueuePlanSynced admission intent".to_owned(),
@@ -1326,7 +1334,7 @@ mod tests {
     }
     fn payload_spec(authority: &AccountId, destination: &AccountId) -> PayloadSpec {
         PayloadSpec {
-            network_id: canonical_dev_network_id(),
+            network_id: CANONICAL_DEV_NETWORK_ID.to_owned(),
             authority: account_literal(authority),
             creation_time_ms: 123,
             executable: ExecutableSpec {
@@ -1490,13 +1498,24 @@ mod tests {
         assert!(decode_document(aliased).is_err());
         let mut label = source_document();
         first_payload(&mut label).insert("network_id".into(), Value::String("00000042".into()));
-        assert!(decode_document(label).is_err());
+        let entries = decode_document(label).expect("network_id input is structurally text");
+        assert!(entries[0].payload.to_builder().is_err());
         let mut noncanonical = source_document();
         first_payload(&mut noncanonical).insert(
             "network_id".into(),
-            Value::String(CANONICAL_DEV_NETWORK_ID.to_ascii_lowercase()),
+            Value::String(CANONICAL_DEV_NETWORK_ID.to_ascii_uppercase()),
         );
-        assert!(decode_document(noncanonical).is_err());
+        let entries = decode_document(noncanonical).expect("network_id input is structurally text");
+        assert!(entries[0].payload.to_builder().is_err());
+        let mut json_hash = source_document();
+        first_payload(&mut json_hash).insert(
+            "network_id".into(),
+            Value::String(
+                "hash:32C903E5B3497E34C2B844EBFE8A39C19E6CF8F95D44C1FFB8BA9DCB42F91149#A2F0".into(),
+            ),
+        );
+        let entries = decode_document(json_hash).expect("network_id input is structurally text");
+        assert!(entries[0].payload.to_builder().is_err());
     }
     #[test]
     fn payload_builder_rejects_a_different_canonical_network_identity() {
@@ -1506,11 +1525,12 @@ mod tests {
         let mut payload = payload_spec(&authority, &authority);
         payload.network_id = NetworkId::from_genesis_hash(HashOf::from_untyped_unchecked(
             Hash::prehashed([0xAB; Hash::LENGTH]),
-        ));
+        ))
+        .to_string();
         assert_eq!(
             payload.to_builder().err().as_deref(),
             Some(
-                "network_id must be the canonical Iroha3 dev genesis identity 'hash:32C903E5B3497E34C2B844EBFE8A39C19E6CF8F95D44C1FFB8BA9DCB42F91149#A2F0'"
+                "network_id must be the canonical Iroha3 dev genesis identity '32c903e5b3497e34c2b844ebfe8a39c19e6cf8f95d44c1ffb8ba9dcb42f91149'"
             )
         );
     }
