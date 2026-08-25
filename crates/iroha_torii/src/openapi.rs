@@ -897,6 +897,10 @@ mod tests {
             operation_response_schema_ref(execute, "200", "private uploaded-model execute",),
             "#/components/schemas/PrivateUploadedModelExecuteResponse"
         );
+        assert_eq!(
+            operation_response_schema_ref(execute, "202", "private uploaded-model execute",),
+            "#/components/schemas/PrivateUploadedModelExecuteResponse"
+        );
         assert_strict_object_schema(
             schemas,
             "PrivateUploadedModelExecuteRequest",
@@ -905,9 +909,11 @@ mod tests {
                 "model_name",
                 "bundle_root",
                 "service_name",
+                "service_version",
                 "weight_version",
                 "decryption_request_id",
                 "input_artifact",
+                "output_recipient",
             ],
             &[],
         );
@@ -917,9 +923,10 @@ mod tests {
             &[
                 "schema_version",
                 "status",
+                "submission_status",
+                "transaction_hash",
                 "receipt",
                 "output_artifact",
-                "tx_instructions",
             ],
             &[],
         );
@@ -942,8 +949,10 @@ mod tests {
             "SoraPrivateUploadedModelExecutionReceiptV1",
             &[
                 "schema_version",
+                "network_id",
                 "receipt_id",
                 "service_name",
+                "service_version",
                 "model_id",
                 "weight_version",
                 "runtime_version",
@@ -956,9 +965,24 @@ mod tests {
                 "output_artifact",
                 "input_commitment",
                 "output_commitment",
+                "output_recipient",
                 "request_commitment",
                 "result_commitment",
                 "emitted_sequence",
+                "emitted_block_height",
+            ],
+            &[],
+        );
+        assert_strict_object_schema(
+            schemas,
+            "SoraPrivateModelArtifactRefV1",
+            &[
+                "schema_version",
+                "sorafs_manifest_digest",
+                "sorafs_root_cid",
+                "artifact_hash",
+                "ciphertext_bytes",
+                "artifact_role",
             ],
             &[],
         );
@@ -986,6 +1010,38 @@ mod tests {
                 .map(|role| role.as_str().expect("private model artifact role"))
                 .collect::<BTreeSet<_>>();
         assert_eq!(artifact_roles, BTreeSet::from(["input", "output"]));
+        let ciphertext_bytes =
+            &component_properties(schemas, "SoraPrivateModelArtifactRefV1")["ciphertext_bytes"];
+        assert_eq!(
+            ciphertext_bytes.get("minimum").and_then(Value::as_u64),
+            Some(1)
+        );
+        assert_eq!(
+            ciphertext_bytes.get("maximum").and_then(Value::as_u64),
+            Some(
+                u64::try_from(
+                    iroha_data_model::soracloud::SORA_PRIVATE_MODEL_ENCRYPTED_ARTIFACT_MAX_BYTES_V1,
+                )
+                .expect("private encrypted artifact limit fits u64")
+            )
+        );
+        let remaining_items = &component_properties(
+            schemas,
+            "PrivateUploadedModelReceiptListResponse",
+        )["remaining_items"];
+        let remaining_variants = remaining_items["anyOf"]
+            .as_array()
+            .expect("private receipt remaining_items nullable variants");
+        assert!(
+            remaining_variants
+                .iter()
+                .any(|variant| variant["type"].as_str() == Some("integer"))
+        );
+        assert!(
+            remaining_variants
+                .iter()
+                .any(|variant| variant["type"].as_str() == Some("null"))
+        );
 
         let parameters =
             document["paths"]["/v1/soracloud/model/upload/private/receipts"]["get"]["parameters"]
@@ -1002,6 +1058,33 @@ mod tests {
             .map(|variant| variant.as_str().expect("count_mode string variant"))
             .collect::<BTreeSet<_>>();
         assert_eq!(variants, BTreeSet::from(["bounded", "exact"]));
+        let limit = parameters
+            .iter()
+            .find(|parameter| parameter["name"].as_str() == Some("limit"))
+            .expect("private uploaded-model receipt limit parameter");
+        assert_eq!(limit["schema"]["minimum"].as_u64(), Some(1));
+        assert_eq!(
+            limit["schema"]["default"].as_u64(),
+            Some(u64::from(
+                crate::soracloud::PRIVATE_UPLOADED_MODEL_RECEIPT_DEFAULT_LIMIT
+            ))
+        );
+        assert_eq!(
+            limit["schema"]["maximum"].as_u64(),
+            Some(u64::from(
+                crate::soracloud::PRIVATE_UPLOADED_MODEL_RECEIPT_MAX_LIMIT
+            ))
+        );
+        let cursor = parameters
+            .iter()
+            .find(|parameter| parameter["name"].as_str() == Some("cursor"))
+            .expect("private uploaded-model receipt cursor parameter");
+        assert_eq!(cursor["schema"]["minLength"].as_u64(), Some(114));
+        assert_eq!(cursor["schema"]["maxLength"].as_u64(), Some(114));
+        assert_eq!(
+            cursor["schema"]["pattern"].as_str(),
+            Some("^[A-Za-z0-9_-]{114}$")
+        );
     }
     #[test]
     #[expect(

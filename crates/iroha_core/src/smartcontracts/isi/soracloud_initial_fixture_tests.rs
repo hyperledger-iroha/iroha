@@ -1208,6 +1208,11 @@ fn service_runtime_mutations_require_exact_validator_placement() -> Result<(), e
     let private_artifact = |role: &str, byte: u8| SoraPrivateModelArtifactRefV1 {
         schema_version: iroha_data_model::soracloud::SORA_PRIVATE_MODEL_ARTIFACT_REF_VERSION_V1,
         sorafs_manifest_digest: ManifestDigest::new([byte; 32]),
+        sorafs_root_cid:
+            iroha_data_model::sorafs::pin_registry::ManifestRootCid::from_blake3_digest([
+                byte; 32
+            ])
+            .expect("fixture root CID"),
         artifact_hash: Hash::new([byte; 32]),
         ciphertext_bytes: 64,
         artifact_role: role.to_string(),
@@ -1215,8 +1220,10 @@ fn service_runtime_mutations_require_exact_validator_placement() -> Result<(), e
     let mut private_receipt = SoraPrivateUploadedModelExecutionReceiptV1 {
         schema_version:
             iroha_data_model::soracloud::SORA_PRIVATE_UPLOADED_MODEL_EXECUTION_RECEIPT_VERSION_V1,
+        network_id: *stx.network_id(),
         receipt_id: Hash::prehashed([0; 32]),
         service_name: private_bundle.service_name.clone(),
+        service_version: victim_version.to_owned(),
         model_id: private_bundle.model_id.clone(),
         weight_version: private_bundle.weight_version.clone(),
         runtime_version: iroha_data_model::soracloud::SORACLOUD_PRIVATE_MODEL_RUNTIME_VERSION_V1
@@ -1225,6 +1232,7 @@ fn service_runtime_mutations_require_exact_validator_placement() -> Result<(), e
         model_bundle_root: private_bundle.bundle_root,
         policy_id: private_bundle.decryption_policy_ref.clone(),
         decryption_request_id: "decrypt-upload-1".to_string(),
+        output_recipient: private_bundle.upload_recipient.clone(),
         attesting_validator: SoraRuntimeDeterministicValidatorHostV1 {
             lane_id: LaneId::SINGLE,
             validator_account_id: ALICE_ID.clone(),
@@ -1237,7 +1245,11 @@ fn service_runtime_mutations_require_exact_validator_placement() -> Result<(), e
         request_commitment: Hash::prehashed([0; 32]),
         result_commitment: Hash::prehashed([0; 32]),
         emitted_sequence: 0,
+        emitted_block_height: 0,
     };
+    let (private_output_manifest_payload, private_output_manifest_digest) =
+        private_artifact_manifest_fixture(0xD3, private_receipt.output_artifact.ciphertext_bytes);
+    private_receipt.output_artifact.sorafs_manifest_digest = private_output_manifest_digest;
     private_receipt.request_commitment =
         derive_soracloud_private_model_request_commitment_v1(&private_receipt);
     private_receipt.result_commitment =
@@ -1245,6 +1257,7 @@ fn service_runtime_mutations_require_exact_validator_placement() -> Result<(), e
     private_receipt.receipt_id =
         derive_soracloud_private_uploaded_model_execution_receipt_id_v1(&private_receipt);
     let private_receipt_error = isi::RecordSoracloudPrivateUploadedModelExecutionReceipt {
+        output_manifest_payload: private_output_manifest_payload.clone(),
         receipt: private_receipt.clone(),
     }
     .execute(&BOB_ID, &mut stx)
@@ -1270,6 +1283,7 @@ fn service_runtime_mutations_require_exact_validator_placement() -> Result<(), e
     wrong_peer_receipt.receipt_id =
         derive_soracloud_private_uploaded_model_execution_receipt_id_v1(&wrong_peer_receipt);
     let wrong_peer_error = isi::RecordSoracloudPrivateUploadedModelExecutionReceipt {
+        output_manifest_payload: private_output_manifest_payload.clone(),
         receipt: wrong_peer_receipt,
     }
     .execute(&ALICE_ID, &mut stx)
@@ -1288,6 +1302,7 @@ fn service_runtime_mutations_require_exact_validator_placement() -> Result<(), e
     inactive_lane_receipt.receipt_id =
         derive_soracloud_private_uploaded_model_execution_receipt_id_v1(&inactive_lane_receipt);
     let inactive_lane_error = isi::RecordSoracloudPrivateUploadedModelExecutionReceipt {
+        output_manifest_payload: private_output_manifest_payload.clone(),
         receipt: inactive_lane_receipt,
     }
     .execute(&ALICE_ID, &mut stx)
@@ -1297,15 +1312,16 @@ fn service_runtime_mutations_require_exact_validator_placement() -> Result<(), e
         InstructionExecutionError::InvariantViolation(message)
             if message.contains("attesting_validator must exactly match the authority's active public-lane validator record")
     ));
-    let unavailable_error = isi::RecordSoracloudPrivateUploadedModelExecutionReceipt {
+    let missing_model_pin_error = isi::RecordSoracloudPrivateUploadedModelExecutionReceipt {
+        output_manifest_payload: private_output_manifest_payload,
         receipt: private_receipt.clone(),
     }
     .execute(&ALICE_ID, &mut stx)
-    .expect_err("private receipt persistence must remain unavailable without artifact execution");
+    .expect_err("private receipt persistence requires the exact active model pin");
     assert!(matches!(
-        unavailable_error,
+        missing_model_pin_error,
         InstructionExecutionError::InvariantViolation(message)
-            if message.contains("exact finalized-bundle loading")
+            if message.contains("uploaded model") && message.contains("is not registered")
     ));
     assert!(
         stx.world

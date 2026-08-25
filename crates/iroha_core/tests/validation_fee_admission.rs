@@ -327,6 +327,10 @@ fn test_state() -> (
     state.install_lane_manifests(&Arc::new(
         LaneManifestRegistry::empty().rebind(&nexus.lane_catalog, &nexus.governance),
     ));
+    state
+        .block(block_header(1, 1_700_000_000_000))
+        .commit()
+        .expect("commit canonical genesis asset-incarnation state");
     (state, user, user_key_pair, recipient, treasury, fee_asset)
 }
 fn accept_transaction(state: &State, tx: SignedTransaction) -> AcceptedTransaction<'static> {

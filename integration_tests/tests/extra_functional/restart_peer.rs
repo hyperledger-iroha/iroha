@@ -39,7 +39,7 @@ use iroha::{
             encode_uploaded_model_bundle_register_provenance_payload,
             encode_uploaded_model_finalize_provenance_payload,
         },
-        sorafs::pin_registry::ManifestDigest,
+        sorafs::pin_registry::{ManifestDigest, ManifestRootCid},
     },
 };
 use iroha_config_base::toml::WriteExt as _;
@@ -72,9 +72,12 @@ const PRIVATE_MODEL_ARTIFACT_ID: &str = "vision_model_artifact";
 const PRIVATE_MODEL_DATASET_REF: &str = "sorafs://private-upload-fixture";
 const PRIVATE_MODEL_POLICY_ID: &str = "private_release_policy";
 const PRIVATE_MODEL_DECRYPTION_REQUEST_ID: &str = "private-upload-input-release";
+const SORACLOUD_PRIVATE_RESTART_TEST_STACK_BYTES: usize = 32 * 1024 * 1024;
+const SORACLOUD_PRIVATE_RESTART_TEST_STORAGE_BUDGET_BYTES: i64 = 1024 * 1024 * 1024;
 #[derive(Clone, Debug, iroha::data_model::JsonSerialize)]
 struct PrivateUploadedModelExecuteRequestForTest {
     service_name: String,
+    service_version: String,
     weight_version: String,
     #[norito(required)]
     model_id: Option<String>,
@@ -84,8 +87,15 @@ struct PrivateUploadedModelExecuteRequestForTest {
     bundle_root: Option<Hash>,
     decryption_request_id: String,
     input_artifact: SoraPrivateModelArtifactRefV1,
+    output_recipient: SoraUploadedModelEncryptionRecipientV1,
 }
-fn with_soracloud_private_runtime_bootstrap(mut builder: NetworkBuilder) -> NetworkBuilder {
+fn with_soracloud_private_model_ledger_bootstrap(mut builder: NetworkBuilder) -> NetworkBuilder {
+    builder = builder.with_config_layer(|layer| {
+        layer.write(
+            ["nexus", "storage", "local_budget_bytes"],
+            SORACLOUD_PRIVATE_RESTART_TEST_STORAGE_BUDGET_BYTES,
+        );
+    });
     for instruction in sorafs_pin_fee_bootstrap_instructions() {
         builder = builder.with_genesis_instruction(instruction);
     }
@@ -96,8 +106,6 @@ fn sorafs_pin_fee_bootstrap_instructions() -> Vec<InstructionBox> {
         iroha_config::parameters::defaults::governance::sorafs_pin_fee::asset_id()
             .parse()
             .expect("default SoraFS pin fee asset id");
-    let treasury =
-        iroha_config::parameters::defaults::governance::sorafs_pin_fee::treasury_account_id();
     let fee_definition = AssetDefinition::numeric(
         fee_asset_id.clone(),
         "xor".to_owned(),
@@ -106,7 +114,6 @@ fn sorafs_pin_fee_bootstrap_instructions() -> Vec<InstructionBox> {
     );
     let seed_amount = Quantity::from(10_000_000_000_000_u128);
     vec![
-        Register::account(Account::new(treasury)).into(),
         Register::asset_definition(fee_definition).into(),
         Mint::asset_quantity(seed_amount, AssetId::new(fee_asset_id, ALICE_ID.clone())).into(),
     ]
@@ -114,12 +121,13 @@ fn sorafs_pin_fee_bootstrap_instructions() -> Vec<InstructionBox> {
 fn register_private_model_pin(
     content_length: u64,
     chunk_seed: u8,
-) -> Result<(ManifestDigest, RegisterPinManifest)> {
+) -> Result<(ManifestDigest, ManifestRootCid, RegisterPinManifest)> {
     let descriptor = sorafs_manifest::chunker_registry::default_descriptor();
+    let root_cid_bytes =
+        sorafs_manifest::canonical_manifest_root_cid([chunk_seed.wrapping_add(0x11); 32]);
+    let root_cid = ManifestRootCid::try_from_slice(&root_cid_bytes)?;
     let manifest = ManifestBuilder::new()
-        .root_cid(sorafs_manifest::canonical_manifest_root_cid(
-            [chunk_seed.wrapping_add(0x11); 32],
-        ))
+        .root_cid(root_cid_bytes)
         .dag_codec(DagCodecId(MANIFEST_DAG_CODEC))
         .chunking_from_registry(descriptor.id)
         .chunk_digest_sha3_256([chunk_seed; 32])
@@ -135,7 +143,7 @@ fn register_private_model_pin(
         .build()?;
     let digest = ManifestDigest::from_manifest(&manifest)?;
     let instruction = RegisterPinManifest::new(manifest.encode()?, None, None);
-    Ok((digest, instruction))
+    Ok((digest, root_cid, instruction))
 }
 fn soracloud_private_model_service_bundle() -> SoraDeploymentBundleV1 {
     let mut container = SoraContainerManifestV1 {
@@ -337,12 +345,14 @@ fn uploaded_model_finalize_provenance(
 fn private_model_artifact_ref(
     role: &str,
     manifest_digest: ManifestDigest,
+    sorafs_root_cid: ManifestRootCid,
     hash_seed: &[u8],
     ciphertext_bytes: u64,
 ) -> SoraPrivateModelArtifactRefV1 {
     SoraPrivateModelArtifactRefV1 {
         schema_version: SORA_PRIVATE_MODEL_ARTIFACT_REF_VERSION_V1,
         sorafs_manifest_digest: manifest_digest,
+        sorafs_root_cid,
         artifact_hash: Hash::new(hash_seed),
         ciphertext_bytes,
         artifact_role: role.to_owned(),
@@ -413,12 +423,14 @@ fn private_uploaded_model_execute_request(
 ) -> PrivateUploadedModelExecuteRequestForTest {
     PrivateUploadedModelExecuteRequestForTest {
         service_name: bundle.service_name.to_string(),
+        service_version: PRIVATE_MODEL_SERVICE_VERSION.to_owned(),
         weight_version: bundle.weight_version.clone(),
         model_id: Some(bundle.model_id.clone()),
         model_name: None,
         bundle_root: Some(bundle.bundle_root),
         decryption_request_id: decryption_request_id.to_owned(),
         input_artifact,
+        output_recipient: bundle.upload_recipient.clone(),
     }
 }
 #[tokio::test]
@@ -957,25 +969,56 @@ fn add_canonical_app_headers(
         .header(HEADER_TIMESTAMP_MS, timestamp_ms.to_string())
         .header(HEADER_NONCE, nonce))
 }
-#[tokio::test]
-#[allow(clippy::too_many_lines)]
-async fn soracloud_private_uploaded_model_execute_remains_fail_closed_after_four_peer_restart()
+#[test]
+// TODO: Add a companion successful restart-recovery case once the network harness can inject an
+// exact production mutation signer plus hermetic encrypted model/input bytes and custody keys.
+fn soracloud_private_uploaded_model_requires_qualified_persistence_after_four_peer_restart()
 -> Result<()> {
     let test_name = stringify!(
-        soracloud_private_uploaded_model_execute_remains_fail_closed_after_four_peer_restart
+        soracloud_private_uploaded_model_requires_qualified_persistence_after_four_peer_restart
     );
+    let handle = std::thread::Builder::new()
+        .name(test_name.to_owned())
+        .stack_size(SORACLOUD_PRIVATE_RESTART_TEST_STACK_BYTES)
+        .spawn(move || {
+            let runtime = tokio::runtime::Builder::new_multi_thread()
+                .thread_stack_size(SORACLOUD_PRIVATE_RESTART_TEST_STACK_BYTES)
+                .enable_all()
+                .build()
+                .expect("build SoraCloud private restart test runtime");
+            runtime.block_on(
+                soracloud_private_uploaded_model_requires_qualified_persistence_after_four_peer_restart_impl(
+                    test_name,
+                ),
+            )
+        })
+        .expect("spawn SoraCloud private restart test thread");
+    match handle.join() {
+        Ok(result) => result,
+        Err(panic) => std::panic::resume_unwind(panic),
+    }
+}
+#[allow(clippy::too_many_lines)]
+async fn soracloud_private_uploaded_model_requires_qualified_persistence_after_four_peer_restart_impl(
+    test_name: &'static str,
+) -> Result<()> {
     let Some(network) = sandbox::start_network_async_or_skip(
-        with_soracloud_private_runtime_bootstrap(NetworkBuilder::new().with_peers(4)),
+        with_soracloud_private_model_ledger_bootstrap(NetworkBuilder::new().with_peers(4)),
         test_name,
     )
     .await?
     else {
         return Ok(());
     };
-    let (model_digest, model_pin) = register_private_model_pin(4_352, 0xC1)?;
-    let (input_digest, input_pin) = register_private_model_pin(64, 0xC2)?;
-    let input_artifact =
-        private_model_artifact_ref("input", input_digest, b"private-input-artifact", 64);
+    let (model_digest, _model_root_cid, model_pin) = register_private_model_pin(4_352, 0xC1)?;
+    let (input_digest, input_root_cid, input_pin) = register_private_model_pin(64, 0xC2)?;
+    let input_artifact = private_model_artifact_ref(
+        "input",
+        input_digest,
+        input_root_cid,
+        b"private-input-artifact",
+        64,
+    );
     let service_bundle = soracloud_private_model_service_bundle();
     let uploaded_bundle = private_uploaded_model_bundle(model_digest);
     let decryption_policy = private_uploaded_model_decryption_policy();
@@ -1080,7 +1123,11 @@ async fn soracloud_private_uploaded_model_execute_remains_fail_closed_after_four
         &decryption_request.request_id,
         input_artifact.clone(),
     );
-    assert_private_uploaded_model_execute_unavailable(&network.client(), &execute_request).await?;
+    assert_private_uploaded_model_requires_qualified_persistence(
+        &network.client(),
+        &execute_request,
+    )
+    .await?;
     assert_no_private_uploaded_model_receipts(&network.client(), &uploaded_bundle).await?;
     network.shutdown().await;
     for peer in network.peers() {
@@ -1097,12 +1144,16 @@ async fn soracloud_private_uploaded_model_execute_remains_fail_closed_after_four
         .map_err(eyre::Report::new)??;
     }
     for peer in network.peers() {
-        assert_private_uploaded_model_execute_unavailable(&peer.client(), &execute_request).await?;
+        assert_private_uploaded_model_requires_qualified_persistence(
+            &peer.client(),
+            &execute_request,
+        )
+        .await?;
         assert_no_private_uploaded_model_receipts(&peer.client(), &uploaded_bundle).await?;
     }
     Ok(())
 }
-async fn assert_private_uploaded_model_execute_unavailable(
+async fn assert_private_uploaded_model_requires_qualified_persistence(
     client: &Client,
     request: &PrivateUploadedModelExecuteRequestForTest,
 ) -> Result<()> {
@@ -1120,9 +1171,9 @@ async fn assert_private_uploaded_model_execute_unavailable(
         .await?;
     let status = response.status();
     let response_body = response.bytes().await?.to_vec();
-    if status != reqwest::StatusCode::CONFLICT {
+    if status != reqwest::StatusCode::SERVICE_UNAVAILABLE {
         return Err(eyre!(
-            "private uploaded-model execute returned status {status}, expected 409 Conflict: {}",
+            "private uploaded-model execute returned status {status}, expected 503 Service Unavailable: {}",
             String::from_utf8_lossy(&response_body)
         ));
     }
@@ -1130,26 +1181,29 @@ async fn assert_private_uploaded_model_execute_unavailable(
     let root = value
         .as_object()
         .ok_or_else(|| eyre!("private execute error was not a JSON object"))?;
-    if root.get("code").and_then(Value::as_str) != Some("conflict") {
+    if root.get("code").and_then(Value::as_str) != Some("unavailable") {
         return Err(eyre!(
-            "private uploaded-model execute returned a non-conflict error body: {value:?}"
+            "private uploaded-model execute returned a non-unavailable error body: {value:?}"
         ));
     }
     let message = root
         .get("message")
         .and_then(Value::as_str)
-        .ok_or_else(|| eyre!("private execute conflict omitted its message"))?;
-    if !message.contains("cannot yet load and decrypt the exact finalized SoraFS bundle")
-        || !message.contains("no execution receipt was emitted")
-    {
+        .ok_or_else(|| eyre!("private execute unavailable response omitted its message"))?;
+    if message != "private execution journal binding requires an exact production signer binding" {
         return Err(eyre!(
-            "private uploaded-model execute returned an unexpected conflict: {message}"
+            "private uploaded-model execute returned an unexpected unavailable response: {message}"
         ));
     }
-    for forbidden in ["receipt", "output_artifact", "tx_instructions"] {
+    for forbidden in [
+        "receipt",
+        "output_artifact",
+        "transaction_hash",
+        "tx_instructions",
+    ] {
         if root.contains_key(forbidden) {
             return Err(eyre!(
-                "fail-closed private execute response unexpectedly exposed `{forbidden}`: {value:?}"
+                "persistence-unqualified private execute response unexpectedly exposed `{forbidden}`: {value:?}"
             ));
         }
     }

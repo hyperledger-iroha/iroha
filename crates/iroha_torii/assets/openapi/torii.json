@@ -23757,18 +23757,26 @@
           "service_name": {
             "type": "string"
           },
+          "service_version": {
+            "type": "string"
+          },
+          "output_recipient": {
+            "$ref": "#/components/schemas/SoraUploadedModelEncryptionRecipientV1"
+          },
           "weight_version": {
             "type": "string"
           }
         },
         "required": [
           "service_name",
+          "service_version",
           "weight_version",
           "model_id",
           "model_name",
           "bundle_root",
           "decryption_request_id",
-          "input_artifact"
+          "input_artifact",
+          "output_recipient"
         ],
         "type": "object"
       },
@@ -23788,19 +23796,31 @@
           "status": {
             "$ref": "#/components/schemas/UploadedModelStatusResponse"
           },
-          "tx_instructions": {
-            "items": {
-              "$ref": "#/components/schemas/SoracloudTxInstruction"
-            },
-            "type": "array"
+          "submission_status": {
+            "enum": [
+              "submitted",
+              "committed"
+            ],
+            "type": "string"
+          },
+          "transaction_hash": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Hash"
+              },
+              {
+                "type": "null"
+              }
+            ]
           }
         },
         "required": [
           "schema_version",
           "status",
+          "submission_status",
+          "transaction_hash",
           "receipt",
-          "output_artifact",
-          "tx_instructions"
+          "output_artifact"
         ],
         "type": "object"
       },
@@ -23810,6 +23830,10 @@
           "continue_cursor": {
             "anyOf": [
               {
+                "description": "Opaque canonical URL-safe no-padding V1 token for the next page. It binds the exact filters and the first page's ledger sequence snapshot.",
+                "maxLength": 114,
+                "minLength": 114,
+                "pattern": "^[A-Za-z0-9_-]{114}$",
                 "type": "string"
               },
               {
@@ -23834,10 +23858,18 @@
             "type": "array"
           },
           "remaining_items": {
-            "format": "uint32",
-            "maximum": 4294967295,
-            "minimum": 0,
-            "type": "integer"
+            "anyOf": [
+              {
+                "description": "Exact number of matching rows after this page when count_mode is exact.",
+                "format": "uint32",
+                "maximum": 4294967295,
+                "minimum": 0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "returned_items": {
             "format": "uint32",
@@ -32316,7 +32348,8 @@
           },
           "ciphertext_bytes": {
             "format": "uint64",
-            "minimum": 0,
+            "maximum": 75497472,
+            "minimum": 1,
             "type": "integer"
           },
           "schema_version": {
@@ -32325,11 +32358,15 @@
           },
           "sorafs_manifest_digest": {
             "$ref": "#/components/schemas/ManifestDigest"
+          },
+          "sorafs_root_cid": {
+            "$ref": "#/components/schemas/PinManifestRootCidV1"
           }
         },
         "required": [
           "schema_version",
           "sorafs_manifest_digest",
+          "sorafs_root_cid",
           "artifact_hash",
           "ciphertext_bytes",
           "artifact_role"
@@ -32344,6 +32381,11 @@
           },
           "decryption_request_id": {
             "type": "string"
+          },
+          "emitted_block_height": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
           },
           "emitted_sequence": {
             "format": "uint64",
@@ -32365,11 +32407,17 @@
           "model_manifest_digest": {
             "$ref": "#/components/schemas/ManifestDigest"
           },
+          "network_id": {
+            "$ref": "#/components/schemas/NetworkId"
+          },
           "output_artifact": {
             "$ref": "#/components/schemas/SoraPrivateModelArtifactRefV1"
           },
           "output_commitment": {
             "$ref": "#/components/schemas/Hash"
+          },
+          "output_recipient": {
+            "$ref": "#/components/schemas/SoraUploadedModelEncryptionRecipientV1"
           },
           "policy_id": {
             "type": "string"
@@ -32393,14 +32441,19 @@
           "service_name": {
             "type": "string"
           },
+          "service_version": {
+            "type": "string"
+          },
           "weight_version": {
             "type": "string"
           }
         },
         "required": [
           "schema_version",
+          "network_id",
           "receipt_id",
           "service_name",
+          "service_version",
           "model_id",
           "weight_version",
           "runtime_version",
@@ -32413,9 +32466,11 @@
           "output_artifact",
           "input_commitment",
           "output_commitment",
+          "output_recipient",
           "request_commitment",
           "result_commitment",
-          "emitted_sequence"
+          "emitted_sequence",
+          "emitted_block_height"
         ],
         "type": "object"
       },
@@ -72601,7 +72656,17 @@
                 }
               }
             },
-            "description": "Successful response"
+            "description": "Exact replay of an already committed private execution receipt"
+          },
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PrivateUploadedModelExecuteResponse"
+                }
+              }
+            },
+            "description": "Encrypted output durably ingested and atomic pin-plus-receipt transaction submitted"
           }
         },
         "summary": "Execute a private uploaded model.",
@@ -72692,11 +72757,25 @@
             }
           },
           {
+            "description": "Opaque continue_cursor returned by the preceding page. The token is bound to the exact filters and initial ledger sequence snapshot.",
+            "in": "query",
+            "name": "cursor",
+            "required": false,
+            "schema": {
+              "maxLength": 114,
+              "minLength": 114,
+              "pattern": "^[A-Za-z0-9_-]{114}$",
+              "type": "string"
+            }
+          },
+          {
             "in": "query",
             "name": "limit",
             "required": false,
             "schema": {
+              "default": 50,
               "format": "uint32",
+              "maximum": 500,
               "minimum": 1,
               "type": "integer"
             }

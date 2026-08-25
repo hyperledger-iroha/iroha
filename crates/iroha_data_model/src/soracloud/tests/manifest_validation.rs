@@ -2734,6 +2734,7 @@ fn runtime_receipt_validation_separates_submission_and_persisted_sequence_states
 fn private_runtime_receipt_validation_separates_submission_and_persisted_sequence_states() {
     let mut receipt = sample_private_uploaded_model_execution_receipt();
     receipt.emitted_sequence = 0;
+    receipt.emitted_block_height = 0;
     receipt
         .validate_submission()
         .expect("an unassigned private receipt is valid for ledger submission");
@@ -2746,6 +2747,16 @@ fn private_runtime_receipt_validation_separates_submission_and_persisted_sequenc
         .validate_submission()
         .expect_err("a private receipt submission must not select its authoritative sequence");
     assert_soracloud_invalid_field(error, "emitted_sequence");
+    let error = receipt
+        .validate()
+        .expect_err("a persisted private receipt requires a ledger-assigned block height");
+    assert_soracloud_invalid_field(error, "emitted_block_height");
+    receipt.emitted_sequence = 0;
+    receipt.emitted_block_height = 1;
+    let error = receipt
+        .validate_submission()
+        .expect_err("a private receipt submission must not select its authoritative block height");
+    assert_soracloud_invalid_field(error, "emitted_block_height");
 }
 #[test]
 fn runtime_receipt_validate_rejects_invalid_host_attribution() {

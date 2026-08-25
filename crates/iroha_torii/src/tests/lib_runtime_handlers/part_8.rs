@@ -2713,11 +2713,12 @@ async fn validate_generated_hf_proxy_response_authority_rejects_mismatched_recei
     else {
         panic!("generated HF proxy receipt must carry HF execution-host attribution");
     };
-    host.peer_id = checked_torii_test_peer_id(
+    let mismatched_validator = checked_torii_test_account_id(
         0x7c,
         "derive generated-HF proxy mismatched receipt fixture key",
-    )
-    .to_string();
+    );
+    host.peer_id = PeerId::from(mismatched_validator.expect_single_signatory().clone()).to_string();
+    host.validator_account_id = mismatched_validator;
     let error = super::validate_generated_hf_proxy_response_authority(
         &app,
         &request,
@@ -2820,11 +2821,13 @@ async fn run_generated_hf_failure_report_case(case: GeneratedHfFailureReportCase
             else {
                 panic!("generated HF proxy receipt must carry HF execution-host attribution");
             };
-            host.peer_id = checked_torii_test_peer_id(
+            let mismatched_validator = checked_torii_test_account_id(
                 0x7c,
                 "derive generated-HF proxy mismatched receipt fixture key",
-            )
-            .to_string();
+            );
+            host.peer_id =
+                PeerId::from(mismatched_validator.expect_single_signatory().clone()).to_string();
+            host.validator_account_id = mismatched_validator;
             super::validate_generated_hf_proxy_response_authority(
                 &app,
                 &request,

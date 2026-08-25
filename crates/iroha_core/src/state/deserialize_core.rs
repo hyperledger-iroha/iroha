@@ -333,6 +333,22 @@ impl KuraSeed {
             take_required(&mut map, "nexus_runtime")?;
         let chain_id: ChainId = take_required(&mut map, "chain_id")?;
         let network_id: NetworkId = take_required(&mut map, "network_id")?;
+        {
+            let world_view = world.view();
+            for (_receipt_id, receipt) in world_view
+                .soracloud_private_uploaded_model_execution_receipts()
+                .iter()
+            {
+                if receipt.network_id != network_id {
+                    return Err(json::Error::InvalidField {
+                        field: "state.world.soracloud_private_uploaded_model_execution_receipts"
+                            .to_owned(),
+                        message: "private receipt network_id must match the snapshot network_id"
+                            .to_owned(),
+                    });
+                }
+            }
+        }
         let block_hashes_vec: Vec<HashOf<BlockHeader>> = take_required(&mut map, "block_hashes")?;
         let committed_height =
             u64::try_from(block_hashes_vec.len()).map_err(|_| json::Error::InvalidField {

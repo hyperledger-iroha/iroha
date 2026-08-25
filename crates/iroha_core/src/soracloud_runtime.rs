@@ -1,6 +1,14 @@
 //! Shared Soracloud runtime snapshot types, generated HF manifests, and execution traits.
 use crate::state::WorldReadOnly;
 use iroha_crypto::Hash;
+#[cfg(test)]
+use iroha_data_model::soracloud::{
+    SORA_PRIVATE_UPLOADED_MODEL_EXECUTION_RECEIPT_VERSION_V1,
+    SORACLOUD_PRIVATE_MODEL_RUNTIME_VERSION_V1, SoraUploadedModelRuntimeFormatV1,
+    derive_soracloud_private_model_request_commitment_v1,
+    derive_soracloud_private_model_result_commitment_v1,
+    derive_soracloud_private_uploaded_model_execution_receipt_id_v1,
+};
 use iroha_data_model::{
     account::AccountId,
     isi::InstructionBox,
@@ -11,31 +19,28 @@ use iroha_data_model::{
     soracloud::{
         AGENT_APARTMENT_MANIFEST_VERSION_V1, AgentApartmentManifestV1, AgentToolCapabilityV1,
         AgentUpgradePolicyV1, SORA_CONTAINER_MANIFEST_VERSION_V1,
-        SORA_DEPLOYMENT_BUNDLE_VERSION_V1,
-        SORA_PRIVATE_UPLOADED_MODEL_EXECUTION_RECEIPT_VERSION_V1, SORA_SERVICE_MANIFEST_VERSION_V1,
-        SORACLOUD_PRIVATE_MODEL_RUNTIME_VERSION_V1, SoraAgentRuntimeStatusV1, SoraArtifactKindV1,
-        SoraCapabilityPolicyV1, SoraCertifiedResponsePolicyV1, SoraConfigExportV1,
-        SoraContainerManifestRefV1, SoraContainerManifestV1, SoraContainerRuntimeV1,
-        SoraDeploymentBundleV1, SoraHfPlacementHostAssignmentV1, SoraHfPlacementHostRoleV1,
-        SoraHfPlacementHostStatusV1, SoraHfPlacementRecordV1, SoraHfPlacementStatusV1,
-        SoraHfSharedLeaseMemberStatusV1, SoraHfSharedLeaseStatusV1, SoraHfSourceStatusV1,
-        SoraHttpServiceEconomicsV1, SoraInrouGuestIsaV1, SoraInrouGuestOsV1,
-        SoraInrouReplicaPlacementV1, SoraInrouServicePlacementRecordV1, SoraLeaseVolumeKindV1,
-        SoraLifecycleHooksV1, SoraNetworkAllowlistEntryV1, SoraNetworkPolicyV1,
-        SoraOrderedMailboxResultV1, SoraPrivateModelArtifactRefV1,
+        SORA_DEPLOYMENT_BUNDLE_VERSION_V1, SORA_SERVICE_MANIFEST_VERSION_V1,
+        SoraAgentRuntimeStatusV1, SoraArtifactKindV1, SoraCapabilityPolicyV1,
+        SoraCertifiedResponsePolicyV1, SoraConfigExportV1, SoraContainerManifestRefV1,
+        SoraContainerManifestV1, SoraContainerRuntimeV1, SoraDeploymentBundleV1,
+        SoraHfPlacementHostAssignmentV1, SoraHfPlacementHostRoleV1, SoraHfPlacementHostStatusV1,
+        SoraHfPlacementRecordV1, SoraHfPlacementStatusV1, SoraHfSharedLeaseMemberStatusV1,
+        SoraHfSharedLeaseStatusV1, SoraHfSourceStatusV1, SoraHttpServiceEconomicsV1,
+        SoraInrouGuestIsaV1, SoraInrouGuestOsV1, SoraInrouReplicaPlacementV1,
+        SoraInrouServicePlacementRecordV1, SoraLeaseVolumeKindV1, SoraLifecycleHooksV1,
+        SoraModelProvenanceKindV1, SoraModelProvenanceRefV1, SoraNetworkAllowlistEntryV1,
+        SoraNetworkPolicyV1, SoraOrderedMailboxResultV1, SoraPrivateModelArtifactRefV1,
         SoraPrivateUploadedModelExecutionReceiptV1, SoraResourceLimitsV1, SoraRolloutPolicyV1,
         SoraRouteTargetV1, SoraRouteVisibilityV1, SoraRuntimeDeterministicValidatorHostV1,
         SoraRuntimeReceiptV1, SoraServiceDeploymentStateV1, SoraServiceExecutionPlaneV1,
         SoraServiceHandlerClassV1, SoraServiceHandlerV1, SoraServiceHealthStatusV1,
         SoraServiceLeaseStatusV1, SoraServiceMailboxMessageV1, SoraServiceManifestV1,
         SoraServiceRuntimeStateV1, SoraStateEncryptionV1, SoraStateMutationOperationV1,
-        SoraTlsModeV1, SoraUploadedModelBundleV1, SoraUploadedModelKeyEncapsulationV1,
-        SoraUploadedModelKeyWrapAeadV1, SoraUploadedModelRuntimeFormatV1,
-        derive_soracloud_private_model_request_commitment_v1,
-        derive_soracloud_private_model_result_commitment_v1,
-        derive_soracloud_private_uploaded_model_execution_receipt_id_v1,
+        SoraTlsModeV1, SoraUploadedModelBundleV1, SoraUploadedModelEncryptionRecipientV1,
+        SoraUploadedModelKeyEncapsulationV1, SoraUploadedModelKeyWrapAeadV1,
     },
-    sorafs::pin_registry::StorageClass,
+    sorafs::pin_registry::{ManifestDigest, StorageClass},
+    transaction::SignedTransaction,
 };
 use iroha_primitives::numeric::Quantity;
 use mv::storage::StorageReadOnly;
@@ -72,6 +77,135 @@ pub fn latest_soracloud_sequence(world: &impl WorldReadOnly) -> u64 {
 pub fn authoritative_soracloud_sequence(world: &impl WorldReadOnly) -> u64 {
     latest_soracloud_sequence(world).saturating_add(1)
 }
+
+/// Validate the exact writer-produced finalization projections for an uploaded-model bundle.
+///
+/// A registered bundle is not executable until one unambiguous `UserUpload` weight projection
+/// and its one matching artifact projection exist. The projection records must preserve the
+/// immutable provenance fields written by finalization, and their registration sequences must be
+/// the exact consecutive pair allocated by that atomic instruction. Service revision metadata is
+/// deliberately excluded from the equality check because later promotion updates the weight
+/// projection without rewriting its immutable artifact.
+///
+/// # Errors
+///
+/// Returns a deterministic error when either projection is missing, ambiguous, invalid,
+/// mis-keyed, non-consecutive, or does not exactly bind the uploaded bundle and its counterpart.
+pub fn validate_finalized_soracloud_uploaded_model_release(
+    world: &impl WorldReadOnly,
+    bundle: &SoraUploadedModelBundleV1,
+) -> Result<(), String> {
+    let service_name = bundle.service_name.as_ref();
+    let source_matches = |source: Option<&SoraModelProvenanceRefV1>| {
+        source.is_some_and(|source| {
+            source.kind == SoraModelProvenanceKindV1::UserUpload && source.id == bundle.model_id
+        })
+    };
+    let mut matching_weights = world.soracloud_model_weight_versions().iter().filter(
+        |((stored_service, _stored_model, stored_version), weight)| {
+            stored_service == service_name
+                && (stored_version == &bundle.weight_version
+                    || weight.weight_version == bundle.weight_version)
+                && source_matches(weight.source_provenance.as_ref())
+        },
+    );
+    let Some((weight_key, weight)) = matching_weights.next() else {
+        return Err(format!(
+            "uploaded model `{}` version `{}` for service `{}` has not been finalized with an exact UserUpload weight projection",
+            bundle.model_id, bundle.weight_version, bundle.service_name
+        ));
+    };
+    if matching_weights.next().is_some() {
+        return Err(format!(
+            "uploaded model `{}` version `{}` for service `{}` has ambiguous UserUpload weight projections",
+            bundle.model_id, bundle.weight_version, bundle.service_name
+        ));
+    }
+    weight.validate().map_err(|error| {
+        format!(
+            "uploaded model `{}` version `{}` has an invalid finalization weight projection: {error}",
+            bundle.model_id, bundle.weight_version
+        )
+    })?;
+    let expected_weight_key = (
+        service_name.to_owned(),
+        weight.model_name.clone(),
+        bundle.weight_version.clone(),
+    );
+    if weight_key != &expected_weight_key
+        || weight.service_name != bundle.service_name
+        || weight.weight_version != bundle.weight_version
+        || !weight.training_job_id.is_empty()
+    {
+        return Err(format!(
+            "uploaded model `{}` version `{}` finalization weight projection does not exactly bind its UserUpload source",
+            bundle.model_id, bundle.weight_version
+        ));
+    }
+
+    let mut matching_artifacts = world.soracloud_model_artifacts().iter().filter(
+        |((stored_service, _stored_artifact), artifact)| {
+            stored_service == service_name
+                && (artifact.weight_version.as_deref() == Some(bundle.weight_version.as_str())
+                    || artifact.consumed_by_version.as_deref()
+                        == Some(bundle.weight_version.as_str()))
+                && source_matches(artifact.source_provenance.as_ref())
+        },
+    );
+    let Some((artifact_key, artifact)) = matching_artifacts.next() else {
+        return Err(format!(
+            "uploaded model `{}` version `{}` for service `{}` has not been finalized with an exact UserUpload artifact projection",
+            bundle.model_id, bundle.weight_version, bundle.service_name
+        ));
+    };
+    if matching_artifacts.next().is_some() {
+        return Err(format!(
+            "uploaded model `{}` version `{}` for service `{}` has ambiguous UserUpload artifact projections",
+            bundle.model_id, bundle.weight_version, bundle.service_name
+        ));
+    }
+    artifact.validate().map_err(|error| {
+        format!(
+            "uploaded model `{}` version `{}` has an invalid finalization artifact projection: {error}",
+            bundle.model_id, bundle.weight_version
+        )
+    })?;
+    let expected_artifact_key = (service_name.to_owned(), artifact.artifact_id.clone());
+    if artifact_key != &expected_artifact_key
+        || artifact.service_name != bundle.service_name
+        || artifact.model_name != weight.model_name
+        || artifact.training_job_id != artifact.artifact_id
+        || artifact.weight_version.as_deref() != Some(bundle.weight_version.as_str())
+        || artifact.consumed_by_version.as_deref() != Some(bundle.weight_version.as_str())
+        || artifact.source_provenance != weight.source_provenance
+        || artifact.weight_artifact_hash != weight.weight_artifact_hash
+        || artifact.dataset_ref != weight.dataset_ref
+        || artifact.training_config_hash != weight.training_config_hash
+        || artifact.reproducibility_hash != weight.reproducibility_hash
+        || artifact.provenance_attestation_hash != weight.provenance_attestation_hash
+        || artifact.chunk_manifest_root != Some(bundle.chunk_manifest_root)
+    {
+        return Err(format!(
+            "uploaded model `{}` version `{}` finalization artifact does not exactly match its UserUpload weight projection",
+            bundle.model_id, bundle.weight_version
+        ));
+    }
+    let expected_artifact_sequence =
+        weight.registered_sequence.checked_add(1).ok_or_else(|| {
+            format!(
+                "uploaded model `{}` version `{}` finalization weight sequence overflows",
+                bundle.model_id, bundle.weight_version
+            )
+        })?;
+    if artifact.registered_sequence != expected_artifact_sequence {
+        return Err(format!(
+            "uploaded model `{}` version `{}` finalization weight and artifact sequences must be consecutive",
+            bundle.model_id, bundle.weight_version
+        ));
+    }
+    Ok(())
+}
+
 /// Return whether an account has an exact, active validator record on an authoritative lane.
 ///
 /// Soracloud adverts are only eligibility claims; validator lifecycle state remains the
@@ -1935,6 +2069,75 @@ pub trait SoracloudRuntimeReadHandle: Send + Sync {
     ) -> Option<SoracloudUploadedModelEncryptionRecipient> {
         None
     }
+    /// Execute one exact encrypted uploaded-model request inside the node-local private boundary.
+    ///
+    /// Implementations must load their own durable decryption secret, derive the local active
+    /// validator identity, and never expose decrypted model, input, or output payloads.
+    fn execute_private_uploaded_model(
+        &self,
+        _request: SoracloudPrivateUploadedModelExecutionRequestV1,
+    ) -> Result<SoracloudPrivateUploadedModelExecutionResultV1, SoracloudRuntimeExecutionError>
+    {
+        Err(SoracloudRuntimeExecutionError::new(
+            SoracloudRuntimeExecutionErrorKind::Unavailable,
+            "private uploaded-model execution is unavailable on this runtime",
+        ))
+    }
+    /// Load durable ciphertext-only recovery state for one private execution request.
+    ///
+    /// A production runtime must implement this together with `store_...` and `remove_...` so a
+    /// node restart after inference never requires repeating the decrypted computation merely to
+    /// recover or resubmit its idempotent ledger commit.
+    fn load_private_uploaded_model_execution_journal(
+        &self,
+        _service_name: &Name,
+        _decryption_request_id: &str,
+    ) -> Result<
+        Option<SoracloudPrivateUploadedModelExecutionJournalV1>,
+        SoracloudRuntimeExecutionError,
+    > {
+        Err(SoracloudRuntimeExecutionError::new(
+            SoracloudRuntimeExecutionErrorKind::Unavailable,
+            "durable private uploaded-model execution recovery is unavailable on this runtime",
+        ))
+    }
+    /// Durably store prepared or submitted ciphertext-only recovery state.
+    fn store_private_uploaded_model_execution_journal(
+        &self,
+        _entry: SoracloudPrivateUploadedModelExecutionJournalV1,
+    ) -> Result<(), SoracloudRuntimeExecutionError> {
+        Err(SoracloudRuntimeExecutionError::new(
+            SoracloudRuntimeExecutionErrorKind::Unavailable,
+            "durable private uploaded-model execution recovery is unavailable on this runtime",
+        ))
+    }
+    /// Remove recovery state after its exact receipt is visible in committed world state.
+    fn remove_private_uploaded_model_execution_journal(
+        &self,
+        _service_name: &Name,
+        _decryption_request_id: &str,
+    ) -> Result<(), SoracloudRuntimeExecutionError> {
+        Err(SoracloudRuntimeExecutionError::new(
+            SoracloudRuntimeExecutionErrorKind::Unavailable,
+            "durable private uploaded-model execution recovery is unavailable on this runtime",
+        ))
+    }
+    /// Atomically submit output-manifest registration and private receipt persistence.
+    ///
+    /// `output_manifest_payload` must be the exact canonical `ManifestV1` bytes whose digest and
+    /// content length are carried by `receipt.output_artifact`. The returned hash identifies the
+    /// signed transaction containing the single atomic output-manifest-and-receipt instruction.
+    fn persist_private_uploaded_model_execution(
+        &self,
+        _output_manifest_payload: Vec<u8>,
+        _receipt: SoraPrivateUploadedModelExecutionReceiptV1,
+        _replace_expired_transaction: Option<Hash>,
+    ) -> Result<Hash, SoracloudRuntimeExecutionError> {
+        Err(SoracloudRuntimeExecutionError::new(
+            SoracloudRuntimeExecutionErrorKind::Unavailable,
+            "private uploaded-model receipt persistence is unavailable on this runtime",
+        ))
+    }
     /// Return the local peer id, when the runtime knows its host identity.
     fn local_peer_id(&self) -> Option<String> {
         None
@@ -1942,6 +2145,10 @@ pub trait SoracloudRuntimeReadHandle: Send + Sync {
     /// Return the maximum time Torii should wait for an internal Soracloud proxy read.
     fn local_read_proxy_timeout(&self) -> Duration {
         Duration::from_secs(10)
+    }
+    /// Return the maximum interval between durable private-execution outbox recovery passes.
+    fn private_execution_recovery_interval(&self) -> Duration {
+        Duration::from_secs(60)
     }
     /// Report a failed generated-HF proxy read targeting the authoritative primary host.
     fn report_generated_hf_proxy_failure(
@@ -2108,109 +2315,123 @@ fn round_quantized_accumulator(
 pub struct SoracloudPrivateUploadedModelExecutionRequestV1 {
     /// Admitted uploaded model package metadata.
     pub bundle: SoraUploadedModelBundleV1,
+    /// Exact active service revision authorized for this execution.
+    pub service_version: String,
     /// Decryption policy approved for this execution.
     pub policy_id: String,
     /// Exact committed authorization record that released the encrypted input.
     pub decryption_request_id: String,
-    /// Locally derived active validator that will attest the resulting receipt transaction.
-    pub attesting_validator: SoraRuntimeDeterministicValidatorHostV1,
-    /// Plaintext input visible only inside the private runtime boundary.
-    pub plaintext_input_i32: Vec<i32>,
     /// Persisted encrypted input artifact reference.
     pub input_artifact: SoraPrivateModelArtifactRefV1,
-    /// Persisted encrypted output artifact reference.
-    pub output_artifact: SoraPrivateModelArtifactRefV1,
+    /// Exact recipient requested for the encrypted output.
+    pub output_recipient: SoraUploadedModelEncryptionRecipientV1,
+    /// Exact encoded encrypted model artifact loaded under a SoraFS read lease.
+    pub encrypted_model_artifact_bytes: Vec<u8>,
+    /// Exact encoded encrypted input artifact loaded under a SoraFS read lease.
+    pub encrypted_input_artifact_bytes: Vec<u8>,
 }
 /// Result emitted by the deterministic private uploaded-model CPU runtime.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct SoracloudPrivateUploadedModelExecutionResultV1 {
-    /// Plaintext output visible only inside the private runtime boundary.
-    pub plaintext_output_i32: Vec<i32>,
-    /// Chain-facing receipt containing only commitments and encrypted artifact references.
-    pub receipt: SoraPrivateUploadedModelExecutionReceiptV1,
+    /// Exact encoded encrypted output artifact ready for durable SoraFS ingestion.
+    pub encrypted_output_artifact_bytes: Vec<u8>,
+    /// Runtime-blinded commitment over the canonical decrypted input payload.
+    pub input_commitment: Hash,
+    /// Runtime-blinded commitment over the canonical output payload before encryption.
+    pub output_commitment: Hash,
+    /// Exact recipient metadata used to wrap the encrypted output.
+    pub output_recipient: SoraUploadedModelEncryptionRecipientV1,
+    /// Locally resolved active validator that must attest receipt persistence.
+    pub attesting_validator: SoraRuntimeDeterministicValidatorHostV1,
+    /// Canonical deterministic runtime version used for execution.
+    pub runtime_version: String,
 }
-/// Execute the deterministic quantized CPU runtime for a private uploaded model.
-pub fn execute_private_uploaded_model_quantized_cpu_v1(
-    model: &SoracloudQuantizedCpuModelV1,
-    request: SoracloudPrivateUploadedModelExecutionRequestV1,
-) -> Result<SoracloudPrivateUploadedModelExecutionResultV1, SoracloudRuntimeExecutionError> {
-    request.bundle.validate().map_err(|err| {
-        SoracloudRuntimeExecutionError::new(
-            SoracloudRuntimeExecutionErrorKind::InvalidRequest,
-            format!("invalid uploaded model bundle: {err}"),
-        )
-    })?;
-    if request.bundle.runtime_format
-        != SoraUploadedModelRuntimeFormatV1::DeterministicQuantizedCpuV1
-    {
-        return Err(SoracloudRuntimeExecutionError::new(
-            SoracloudRuntimeExecutionErrorKind::InvalidRequest,
-            "uploaded model bundle is not admitted for deterministic quantized CPU execution",
-        ));
+/// Schema version for durable private uploaded-model execution recovery state.
+pub const SORACLOUD_PRIVATE_UPLOADED_MODEL_EXECUTION_JOURNAL_VERSION_V1: u16 = 1;
+/// Maximum freshly signed transaction attempts retained for one exact private execution.
+pub const SORACLOUD_PRIVATE_UPLOADED_MODEL_EXECUTION_MAX_SUBMISSION_ATTEMPTS_V1: u8 = 3;
+/// Ciphertext-only prepared/submitted state used to recover private execution across restarts.
+///
+/// Decrypted model, input, and output payloads are deliberately absent. The referenced encrypted
+/// output must already be durably ingested into local SoraFS before this record is published.
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
+pub struct SoracloudPrivateUploadedModelExecutionJournalV1 {
+    /// Journal schema version.
+    pub schema_version: u16,
+    /// Service and decryption request forming the unique journal key.
+    pub service_name: Name,
+    /// Exact committed decryption request identifier.
+    pub decryption_request_id: String,
+    /// Commitment to the complete canonical Torii execution request.
+    pub request_fingerprint: Hash,
+    /// Canonical output `ManifestV1` payload carried by the idempotent commit instruction.
+    pub output_manifest_payload: Vec<u8>,
+    /// Canonical receipt submission with ledger-owned sequence and height still zero.
+    pub receipt: SoraPrivateUploadedModelExecutionReceiptV1,
+    /// Most recently submitted signed transaction hash, absent while merely prepared.
+    pub transaction_hash: Option<Hash>,
+    /// Exact signed transaction persisted before enqueue, absent while merely prepared.
+    pub signed_transaction: Option<SignedTransaction>,
+    /// Number of distinct signed transactions produced for this exact prepared execution.
+    pub submission_attempt: u8,
+}
+impl SoracloudPrivateUploadedModelExecutionJournalV1 {
+    /// Validate bounded canonical recovery state and all output/receipt bindings.
+    pub fn validate(&self) -> Result<(), String> {
+        if self.schema_version != SORACLOUD_PRIVATE_UPLOADED_MODEL_EXECUTION_JOURNAL_VERSION_V1 {
+            return Err(format!(
+                "unsupported private execution journal schema_version {}",
+                self.schema_version
+            ));
+        }
+        if self.decryption_request_id.trim().is_empty()
+            || self.decryption_request_id.len() > 256
+            || self.service_name != self.receipt.service_name
+            || self.decryption_request_id != self.receipt.decryption_request_id
+        {
+            return Err(
+                "private execution journal key does not exactly match its receipt".to_owned(),
+            );
+        }
+        self.receipt
+            .validate_submission()
+            .map_err(|error| format!("invalid private execution journal receipt: {error}"))?;
+        if self.output_manifest_payload.is_empty()
+            || self.output_manifest_payload.len() > sorafs_manifest::MAX_MANIFEST_ENCODED_BYTES
+        {
+            return Err(format!(
+                "private execution journal manifest length must be in 1..={} bytes",
+                sorafs_manifest::MAX_MANIFEST_ENCODED_BYTES
+            ));
+        }
+        let manifest = sorafs_manifest::decode_manifest_v1_canonical(&self.output_manifest_payload)
+            .map_err(|error| format!("invalid journal output ManifestV1: {error}"))?;
+        let digest = ManifestDigest::from_manifest(&manifest)
+            .map_err(|error| format!("derive journal output manifest digest: {error}"))?;
+        if digest != self.receipt.output_artifact.sorafs_manifest_digest
+            || manifest.content_length != self.receipt.output_artifact.ciphertext_bytes
+        {
+            return Err(
+                "private execution journal manifest does not match its receipt output artifact"
+                    .to_owned(),
+            );
+        }
+        match (&self.signed_transaction, self.transaction_hash) {
+            (None, None) if self.submission_attempt == 0 => {}
+            (Some(transaction), Some(hash))
+                if self.submission_attempt > 0
+                    && self.submission_attempt
+                        <= SORACLOUD_PRIVATE_UPLOADED_MODEL_EXECUTION_MAX_SUBMISSION_ATTEMPTS_V1
+                    && Hash::from(transaction.hash()) == hash => {}
+            _ => {
+                return Err(
+                    "private execution journal signed transaction, hash, and attempt are inconsistent"
+                        .to_owned(),
+                );
+            }
+        }
+        Ok(())
     }
-    if request.policy_id != request.bundle.decryption_policy_ref {
-        return Err(SoracloudRuntimeExecutionError::new(
-            SoracloudRuntimeExecutionErrorKind::InvalidRequest,
-            "execution policy_id must match the uploaded model decryption policy",
-        ));
-    }
-    if request.decryption_request_id.trim() != request.decryption_request_id
-        || request.decryption_request_id.is_empty()
-        || request.decryption_request_id.chars().any(char::is_control)
-    {
-        return Err(SoracloudRuntimeExecutionError::new(
-            SoracloudRuntimeExecutionErrorKind::InvalidRequest,
-            "execution decryption_request_id must be canonical and non-empty",
-        ));
-    }
-    request.input_artifact.validate().map_err(|err| {
-        SoracloudRuntimeExecutionError::new(
-            SoracloudRuntimeExecutionErrorKind::InvalidRequest,
-            format!("invalid encrypted input artifact: {err}"),
-        )
-    })?;
-    request.output_artifact.validate().map_err(|err| {
-        SoracloudRuntimeExecutionError::new(
-            SoracloudRuntimeExecutionErrorKind::InvalidRequest,
-            format!("invalid encrypted output artifact: {err}"),
-        )
-    })?;
-    let output = model.evaluate(&request.plaintext_input_i32)?;
-    let input_commitment = Hash::new(request.plaintext_input_i32.encode());
-    let output_commitment = Hash::new(output.encode());
-    let mut receipt = SoraPrivateUploadedModelExecutionReceiptV1 {
-        schema_version: SORA_PRIVATE_UPLOADED_MODEL_EXECUTION_RECEIPT_VERSION_V1,
-        receipt_id: Hash::prehashed([0; 32]),
-        service_name: request.bundle.service_name,
-        model_id: request.bundle.model_id,
-        weight_version: request.bundle.weight_version,
-        runtime_version: SORACLOUD_PRIVATE_MODEL_RUNTIME_VERSION_V1.to_owned(),
-        model_manifest_digest: request.bundle.sorafs_manifest_digest,
-        model_bundle_root: request.bundle.bundle_root,
-        policy_id: request.policy_id,
-        decryption_request_id: request.decryption_request_id,
-        attesting_validator: request.attesting_validator,
-        input_artifact: request.input_artifact,
-        output_artifact: request.output_artifact,
-        input_commitment,
-        output_commitment,
-        request_commitment: Hash::prehashed([0; 32]),
-        result_commitment: Hash::prehashed([0; 32]),
-        emitted_sequence: 0,
-    };
-    receipt.request_commitment = derive_soracloud_private_model_request_commitment_v1(&receipt);
-    receipt.result_commitment = derive_soracloud_private_model_result_commitment_v1(&receipt);
-    receipt.receipt_id = derive_soracloud_private_uploaded_model_execution_receipt_id_v1(&receipt);
-    receipt.validate_submission().map_err(|err| {
-        SoracloudRuntimeExecutionError::new(
-            SoracloudRuntimeExecutionErrorKind::Internal,
-            format!("invalid private uploaded model execution receipt: {err}"),
-        )
-    })?;
-    Ok(SoracloudPrivateUploadedModelExecutionResultV1 {
-        plaintext_output_i32: output,
-        receipt,
-    })
 }
 /// Shared Soracloud runtime handle type used across crate boundaries.
 pub type SharedSoracloudRuntimeHandle = Arc<dyn SoracloudRuntimeReadHandle>;
@@ -3027,10 +3248,17 @@ mod tests {
         assert_eq!(authoritative_soracloud_sequence(&world.view()), 22);
 
         let private_bundle = sample_quantized_uploaded_model_bundle();
+        let output_recipient = private_bundle.upload_recipient.clone();
         let mut private_receipt = SoraPrivateUploadedModelExecutionReceiptV1 {
             schema_version: SORA_PRIVATE_UPLOADED_MODEL_EXECUTION_RECEIPT_VERSION_V1,
+            network_id: iroha_data_model::NetworkId::from_genesis_hash(iroha_crypto::HashOf::<
+                iroha_data_model::block::BlockHeader,
+            >::from_untyped_unchecked(
+                Hash::prehashed([0x93; Hash::LENGTH]),
+            )),
             receipt_id: Hash::prehashed([0; 32]),
             service_name: private_bundle.service_name,
+            service_version: "1.0.0".to_owned(),
             model_id: private_bundle.model_id,
             weight_version: private_bundle.weight_version,
             runtime_version: SORACLOUD_PRIVATE_MODEL_RUNTIME_VERSION_V1.to_owned(),
@@ -3043,9 +3271,11 @@ mod tests {
             output_artifact: sample_private_model_artifact_ref("output", 0x52),
             input_commitment: Hash::new(b"sequence-private-input"),
             output_commitment: Hash::new(b"sequence-private-output"),
+            output_recipient,
             request_commitment: Hash::prehashed([0; 32]),
             result_commitment: Hash::prehashed([0; 32]),
             emitted_sequence: 34,
+            emitted_block_height: 1,
         };
         private_receipt.request_commitment =
             derive_soracloud_private_model_request_commitment_v1(&private_receipt);
@@ -3917,6 +4147,11 @@ mod tests {
         SoraPrivateModelArtifactRefV1 {
             schema_version: iroha_data_model::soracloud::SORA_PRIVATE_MODEL_ARTIFACT_REF_VERSION_V1,
             sorafs_manifest_digest: ManifestDigest::new([seed; 32]),
+            sorafs_root_cid:
+                iroha_data_model::sorafs::pin_registry::ManifestRootCid::from_blake3_digest(
+                    [seed; 32],
+                )
+                .expect("fixture root CID"),
             artifact_hash: Hash::new([seed; 16]),
             ciphertext_bytes: 128,
             artifact_role: role.to_owned(),
@@ -4566,7 +4801,7 @@ mod tests {
         Ok(())
     }
     #[test]
-    fn private_uploaded_model_quantized_cpu_runtime_is_deterministic_and_receipted() {
+    fn private_uploaded_model_quantized_cpu_operator_is_deterministic() {
         let model = SoracloudQuantizedCpuModelV1 {
             input_len: 3,
             output_len: 2,
@@ -4577,39 +4812,13 @@ mod tests {
             output_max: 32,
             rounding: SoracloudQuantizedRoundingV1::NearestAwayFromZero,
         };
-        let request = SoracloudPrivateUploadedModelExecutionRequestV1 {
-            bundle: sample_quantized_uploaded_model_bundle(),
-            policy_id: "policy/v1".to_owned(),
-            decryption_request_id: "decrypt-upload-1".to_owned(),
-            attesting_validator: checked_validator_host(),
-            plaintext_input_i32: vec![7, -2, 5],
-            input_artifact: sample_private_model_artifact_ref("input", 0x11),
-            output_artifact: sample_private_model_artifact_ref("output", 0x22),
-        };
-        let first =
-            execute_private_uploaded_model_quantized_cpu_v1(&model, request.clone()).expect("run");
-        let second =
-            execute_private_uploaded_model_quantized_cpu_v1(&model, request).expect("rerun");
-        assert_eq!(first.plaintext_output_i32, vec![20, -9]);
+        let first = model.evaluate(&[7, -2, 5]).expect("run");
+        let second = model.evaluate(&[7, -2, 5]).expect("rerun");
+        assert_eq!(first, vec![20, -9]);
         assert_eq!(first, second);
-        assert_eq!(
-            first.receipt.runtime_version,
-            SORACLOUD_PRIVATE_MODEL_RUNTIME_VERSION_V1
-        );
-        assert_eq!(first.receipt.input_artifact.artifact_role, "input");
-        assert_eq!(first.receipt.output_artifact.artifact_role, "output");
-        assert_ne!(
-            first.receipt.input_commitment,
-            first.receipt.output_commitment
-        );
-        assert_eq!(first.receipt.emitted_sequence, 0);
-        first
-            .receipt
-            .validate_submission()
-            .expect("runtime receipt is ready for ledger submission");
     }
     #[test]
-    fn private_uploaded_model_quantized_cpu_runtime_rejects_wrong_format() {
+    fn private_uploaded_model_quantized_cpu_operator_rejects_wrong_input_shape() {
         let model = SoracloudQuantizedCpuModelV1 {
             input_len: 1,
             output_len: 1,
@@ -4620,21 +4829,9 @@ mod tests {
             output_max: i32::MAX,
             rounding: SoracloudQuantizedRoundingV1::NearestAwayFromZero,
         };
-        let mut bundle = sample_quantized_uploaded_model_bundle();
-        bundle.runtime_format = SoraUploadedModelRuntimeFormatV1::HuggingFaceSafetensors;
-        let err = execute_private_uploaded_model_quantized_cpu_v1(
-            &model,
-            SoracloudPrivateUploadedModelExecutionRequestV1 {
-                bundle,
-                policy_id: "policy/v1".to_owned(),
-                decryption_request_id: "decrypt-upload-1".to_owned(),
-                attesting_validator: checked_validator_host(),
-                plaintext_input_i32: vec![1],
-                input_artifact: sample_private_model_artifact_ref("input", 0x11),
-                output_artifact: sample_private_model_artifact_ref("output", 0x22),
-            },
-        )
-        .expect_err("wrong runtime format must fail closed");
+        let err = model
+            .evaluate(&[])
+            .expect_err("wrong input shape must fail closed");
         assert_eq!(err.kind, SoracloudRuntimeExecutionErrorKind::InvalidRequest);
     }
 }

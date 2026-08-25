@@ -1,3 +1,9 @@
+import { x25519 } from "@noble/curves/ed25519";
+import { blake2b256 } from "./blake2b.js";
+import { computeHashLiteralCrc } from "./hashLiteralCrc.js";
+import { assertWellFormedUtf16 } from "./instructionBuilderPrimitives.js";
+import { strictDecodeBase64 } from "./toriiClientEncoding.js";
+
 const BASE58_PATTERN = /^[1-9A-HJ-NP-Za-km-z]+$/;
 const HF_COMMIT_OID_PATTERN_V1 = /^[0-9a-f]{40}$/;
 const REJECTED_SIGNING_SECRET_FIELDS = [
@@ -19,13 +25,23 @@ const HF_DEPLOY_PAYLOAD_FIELDS = new Set([
   "lease_asset_definition_id",
   "base_fee_nanos",
 ]);
-const PRIVATE_UPLOADED_MODEL_RECEIPT_WIRE_ID =
-  "iroha_data_model::isi::soracloud::RecordSoracloudPrivateUploadedModelExecutionReceipt";
 export const SORACLOUD_APP_INFRA_DEPLOY_WIRE_ID =
   "iroha_data_model::isi::soracloud::DeploySoracloudAppInfra";
 export const SORACLOUD_APP_INFRA_UPGRADE_WIRE_ID =
   "iroha_data_model::isi::soracloud::UpgradeSoracloudAppInfra";
 const PRIVATE_UPLOADED_MODEL_COUNT_MODES = new Set(["bounded", "exact"]);
+const PRIVATE_UPLOADED_MODEL_IDENTIFIER_PATTERN = /^[A-Za-z0-9._:#-]+$/u;
+const PRIVATE_UPLOADED_MODEL_U32_MAX = 0xffff_ffff;
+const PRIVATE_UPLOADED_MODEL_RECEIPT_MAX_LIMIT = 500;
+const PRIVATE_UPLOADED_MODEL_RECEIPT_CURSOR_PATTERN = /^[A-Za-z0-9_-]{114}$/u;
+const PRIVATE_UPLOADED_MODEL_MAX_CIPHERTEXT_BYTES = 72 * 1024 * 1024;
+const PRIVATE_UPLOADED_MODEL_ZERO_PREHASH_BODY = `${"00".repeat(31)}01`;
+const PRIVATE_UPLOADED_MODEL_CONTROL_PATTERN = /[\u0000-\u001F\u007F-\u009F]/u;
+const PRIVATE_UPLOADED_MODEL_BIDI_CONTROL_PATTERN =
+  /[\u061C\u200E\u200F\u202A-\u202E\u2066-\u2069]/u;
+const PRIVATE_UPLOADED_MODEL_NAME_FORBIDDEN_PATTERN = /[@#$]/u;
+const PRIVATE_UPLOADED_MODEL_UTF8_ENCODER = new TextEncoder();
+const X25519_LOW_ORDER_PROBE_PRIVATE_KEY = new Uint8Array(32).fill(1);
 const JSON_ACCEPT_HEADERS = Object.freeze({ Accept: "application/json" });
 
 function requireExactObject(input, label, allowedFields, requiredFields = allowedFields) {
@@ -198,15 +214,101 @@ function normalizeArray(input, field) {
   return value;
 }
 
-function normalizeHashLike(input, field) {
-  return normalizeHashLikeValue(input?.[field], field);
+function normalizeCanonicalHashLiteral(value, field) {
+  const match = typeof value === "string"
+    ? /^hash:([0-9A-F]{64})#([0-9A-F]{4})$/u.exec(value)
+    : null;
+  if (match === null) {
+    throw new TypeError(
+      `${field} must be an exact uppercase checksummed marker-bit Iroha Hash literal`,
+    );
+  }
+  const [, body, checksum] = match;
+  if ((Number.parseInt(body.slice(-2), 16) & 1) === 0) {
+    throw new TypeError(
+      `${field} must be an exact uppercase checksummed marker-bit Iroha Hash literal`,
+    );
+  }
+  if (computeHashLiteralCrc("hash", body) !== checksum) {
+    throw new TypeError(`${field} has invalid checksum for its Iroha Hash literal`);
+  }
+  if (body === PRIVATE_UPLOADED_MODEL_ZERO_PREHASH_BODY) {
+    throw new TypeError(`${field} must not be the zero prehash sentinel`);
+  }
+  return value;
 }
 
-function normalizeHashLikeValue(value, field) {
-  if (typeof value !== "string" || value.trim() === "") {
+function irohaBlake2b256PrehashLiteral(value) {
+  const digest = blake2b256(value);
+  digest[digest.length - 1] |= 1;
+  const body = Array.from(
+    digest,
+    (byte) => byte.toString(16).toUpperCase().padStart(2, "0"),
+  ).join("");
+  return `hash:${body}#${computeHashLiteralCrc("hash", body)}`;
+}
+
+function normalizePrivateExactString(value, field, maxUtf8Bytes = undefined) {
+  if (typeof value !== "string" || value.length === 0) {
     throw new TypeError(`${field} must be a non-empty string`);
   }
-  return value.trim();
+  assertWellFormedUtf16(value, field);
+  if (value.trim() !== value) {
+    throw new TypeError(`${field} must not contain surrounding whitespace`);
+  }
+  if (PRIVATE_UPLOADED_MODEL_CONTROL_PATTERN.test(value)) {
+    throw new TypeError(`${field} must not contain control characters`);
+  }
+  if (
+    maxUtf8Bytes !== undefined &&
+    PRIVATE_UPLOADED_MODEL_UTF8_ENCODER.encode(value).length > maxUtf8Bytes
+  ) {
+    throw new TypeError(`${field} must contain at most ${maxUtf8Bytes} UTF-8 bytes`);
+  }
+  return value;
+}
+
+function normalizePrivateName(value, field) {
+  const exact = normalizePrivateExactString(value, field, 255);
+  if (exact.normalize("NFC") !== exact) {
+    throw new TypeError(`${field} must use its exact NFC-normalized spelling`);
+  }
+  if (
+    /\s/u.test(exact) ||
+    PRIVATE_UPLOADED_MODEL_BIDI_CONTROL_PATTERN.test(exact) ||
+    PRIVATE_UPLOADED_MODEL_NAME_FORBIDDEN_PATTERN.test(exact)
+  ) {
+    throw new TypeError(`${field} must be a canonical Iroha Name`);
+  }
+  return exact;
+}
+
+function normalizePrivateIdentifier(value, field) {
+  const exact = normalizePrivateExactString(value, field, 128);
+  if (!PRIVATE_UPLOADED_MODEL_IDENTIFIER_PATTERN.test(exact)) {
+    throw new TypeError(
+      `${field} must use only ASCII letters, digits, or [-_.:#]`,
+    );
+  }
+  return exact;
+}
+
+function normalizeNullablePrivateValue(value, field, normalizer) {
+  return value === null ? null : normalizer(value, field);
+}
+
+function normalizeOptionalPrivateValue(value, field, normalizer) {
+  return value === undefined ? undefined : normalizer(value, field);
+}
+
+function normalizePrivatePositiveIntegerValue(value, field) {
+  if (!["bigint", "number", "string"].includes(typeof value)) {
+    throw new TypeError(`${field} must be a number, bigint, or decimal string`);
+  }
+  if (typeof value === "string" && !/^[1-9][0-9]*$/u.test(value)) {
+    throw new TypeError(`${field} must be a canonical positive decimal integer`);
+  }
+  return normalizeSafePositiveIntegerValue(value, field);
 }
 
 function normalizeStorageClass(value) {
@@ -224,6 +326,64 @@ function normalizeLeaseAssetDefinitionId(input) {
   return value;
 }
 
+function normalizeExactUnsignedByteArray(value, field, expectedLength) {
+  if (!Array.isArray(value)) {
+    throw new TypeError(`${field} must be an array`);
+  }
+  if (value.length !== expectedLength) {
+    throw new TypeError(`${field} must contain exactly ${expectedLength} bytes`);
+  }
+  if (Object.getOwnPropertySymbols(value).length > 0) {
+    throw new TypeError(`${field} symbols are not accepted`);
+  }
+  for (const property of Object.getOwnPropertyNames(value)) {
+    if (property === "length") {
+      continue;
+    }
+    const index = Number(property);
+    if (!Number.isInteger(index) || index < 0 || index >= value.length || String(index) !== property) {
+      throw new TypeError(`${field}.${property} is not accepted`);
+    }
+  }
+  const bytes = Array.from(value, (byte, index) => {
+    if (!Object.hasOwn(value, index)) {
+      throw new TypeError(`${field}[${index}] is required`);
+    }
+    if (!Number.isInteger(byte) || byte < 0 || byte > 0xff) {
+      throw new TypeError(`${field}[${index}] must be an unsigned byte`);
+    }
+    return byte;
+  });
+  return bytes;
+}
+
+function normalizeManifestDigest(value, field) {
+  return normalizeExactUnsignedByteArray(value, field, 32);
+}
+
+function normalizeManifestRootCid(value, field) {
+  const bytes = normalizeExactUnsignedByteArray(value, field, 36);
+  if (bytes[0] !== 1 || bytes[1] !== 0x71 || bytes[2] !== 0x1f || bytes[3] !== 32) {
+    throw new TypeError(
+      `${field} must use canonical CIDv1/dag-cbor/BLAKE3-256 framing`,
+    );
+  }
+  if (bytes.slice(4).every((byte) => byte === 0)) {
+    throw new TypeError(`${field} digest must not be all zero`);
+  }
+  return bytes;
+}
+
+function normalizePrivateCiphertextBytes(value, field) {
+  const bytes = normalizePrivatePositiveIntegerValue(value, field);
+  if (bytes > PRIVATE_UPLOADED_MODEL_MAX_CIPHERTEXT_BYTES) {
+    throw new TypeError(
+      `${field} must be between 1 and ${PRIVATE_UPLOADED_MODEL_MAX_CIPHERTEXT_BYTES}`,
+    );
+  }
+  return bytes;
+}
+
 function normalizePrivateArtifactRef(input, field, expectedRole) {
   const artifact = input?.[field];
   if (artifact == null || typeof artifact !== "object" || Array.isArray(artifact)) {
@@ -233,6 +393,7 @@ function normalizePrivateArtifactRef(input, field, expectedRole) {
   requireExactObject(artifact, field, [
     "schemaVersion",
     "sorafsManifestDigest",
+    "sorafsRootCid",
     "artifactHash",
     "ciphertextBytes",
     "artifactRole",
@@ -241,24 +402,114 @@ function normalizePrivateArtifactRef(input, field, expectedRole) {
   if (role !== expectedRole) {
     throw new TypeError(`${field}.artifactRole must be ${expectedRole}`);
   }
+  const schemaVersion = normalizePrivatePositiveIntegerValue(
+    artifact.schemaVersion,
+    `${field}.schemaVersion`,
+  );
+  if (schemaVersion !== 1) {
+    throw new TypeError(`${field}.schemaVersion must be 1`);
+  }
   return {
-    schema_version: normalizeSafePositiveIntegerValue(
-      artifact.schemaVersion,
-      `${field}.schemaVersion`,
-    ),
-    sorafs_manifest_digest: normalizeHashLikeValue(
+    schema_version: schemaVersion,
+    sorafs_manifest_digest: normalizeManifestDigest(
       artifact.sorafsManifestDigest,
       `${field}.sorafsManifestDigest`,
     ),
-    artifact_hash: normalizeHashLikeValue(
+    sorafs_root_cid: normalizeManifestRootCid(
+      artifact.sorafsRootCid,
+      `${field}.sorafsRootCid`,
+    ),
+    artifact_hash: normalizeCanonicalHashLiteral(
       artifact.artifactHash,
       `${field}.artifactHash`,
     ),
-    ciphertext_bytes: normalizeSafePositiveIntegerValue(
+    ciphertext_bytes: normalizePrivateCiphertextBytes(
       artifact.ciphertextBytes,
       `${field}.ciphertextBytes`,
     ),
     artifact_role: role,
+  };
+}
+
+function normalizePrivateOutputRecipient(input) {
+  const recipient = input?.outputRecipient;
+  if (recipient == null || typeof recipient !== "object" || Array.isArray(recipient)) {
+    throw new TypeError("outputRecipient must be an object");
+  }
+  rejectSoracloudSigningSecrets(recipient);
+  requireExactObject(recipient, "outputRecipient", [
+    "schemaVersion",
+    "keyId",
+    "keyVersion",
+    "kem",
+    "aead",
+    "publicKeyBytes",
+    "publicKeyFingerprint",
+  ]);
+  if (recipient.kem !== "X25519HkdfSha256") {
+    throw new TypeError("outputRecipient.kem must be X25519HkdfSha256");
+  }
+  if (recipient.aead !== "Aes256Gcm") {
+    throw new TypeError("outputRecipient.aead must be Aes256Gcm");
+  }
+  const schemaVersion = normalizePrivatePositiveIntegerValue(
+    recipient.schemaVersion,
+    "outputRecipient.schemaVersion",
+  );
+  if (schemaVersion !== 1) {
+    throw new TypeError("outputRecipient.schemaVersion must be 1");
+  }
+  const publicKeyBytes = normalizePrivateExactString(
+    recipient.publicKeyBytes,
+    "outputRecipient.publicKeyBytes",
+  );
+  if (!/^[A-Za-z0-9+/]{43}=$/u.test(publicKeyBytes)) {
+    throw new TypeError("outputRecipient.publicKeyBytes must be canonical padded base64");
+  }
+  let decodedPublicKey;
+  try {
+    decodedPublicKey = strictDecodeBase64(publicKeyBytes);
+  } catch (error) {
+    throw new TypeError("outputRecipient.publicKeyBytes must be canonical padded base64", {
+      cause: error,
+    });
+  }
+  if (decodedPublicKey.length !== 32) {
+    throw new TypeError("outputRecipient.publicKeyBytes must encode exactly 32 bytes");
+  }
+  try {
+    x25519.getSharedSecret(X25519_LOW_ORDER_PROBE_PRIVATE_KEY, decodedPublicKey);
+  } catch (error) {
+    throw new TypeError(
+      "outputRecipient.publicKeyBytes must not encode a low-order X25519 public key",
+      { cause: error },
+    );
+  }
+  const keyVersion = normalizePrivatePositiveIntegerValue(
+    recipient.keyVersion,
+    "outputRecipient.keyVersion",
+  );
+  if (keyVersion > PRIVATE_UPLOADED_MODEL_U32_MAX) {
+    throw new TypeError("outputRecipient.keyVersion must fit in an unsigned 32-bit integer");
+  }
+  const publicKeyFingerprint = normalizeCanonicalHashLiteral(
+    recipient.publicKeyFingerprint,
+    "outputRecipient.publicKeyFingerprint",
+  );
+  const expectedFingerprint = irohaBlake2b256PrehashLiteral(decodedPublicKey);
+  if (publicKeyFingerprint !== expectedFingerprint) {
+    throw new TypeError(
+      "outputRecipient.publicKeyFingerprint must equal the Iroha Blake2b-256 prehash of outputRecipient.publicKeyBytes",
+    );
+  }
+  return {
+    schema_version: schemaVersion,
+    key_id: normalizePrivateExactString(recipient.keyId, "outputRecipient.keyId"),
+    key_version: keyVersion,
+    kem: { kem: "X25519HkdfSha256", value: null },
+    aead: { aead: "Aes256Gcm", value: null },
+    public_key_bytes: publicKeyBytes,
+    public_key_fingerprint: publicKeyFingerprint,
   };
 }
 
@@ -913,45 +1164,68 @@ export function assembleSoracloudHfDeployRequest(draft, provenances = {}) {
 /**
  * Build a canonical private uploaded-model execution request.
  *
- * Exactly one model selector is required. The committed decryption request
- * authorizes the encrypted input artifact; model bytes, plaintext, execution
- * claims, and output destinations are never accepted from the caller.
+ * Exactly one model selector is required. The request binds an exact service
+ * revision, committed decryption authorization, encrypted SoraFS input, and
+ * output-recipient public key plus its Iroha prehash. It never accepts model
+ * bytes, plaintext, validator-created output claims, runtime claims, or signing
+ * secrets.
  *
- * @param {{ serviceName: string, weightVersion: string, modelId: string | null, modelName: string | null, bundleRoot: string | null, decryptionRequestId: string, inputArtifact: Record<string, unknown> }} input
+ * @param {{ serviceName: string, serviceVersion: string, weightVersion: string, modelId: string | null, modelName: string | null, bundleRoot: string | null, decryptionRequestId: string, inputArtifact: Record<string, unknown>, outputRecipient: Record<string, unknown> }} input
  * @returns {Record<string, unknown>}
  */
 export function buildSoracloudPrivateUploadedModelExecuteRequest(input = {}) {
   rejectSoracloudSigningSecrets(input);
   requireExactObject(input, "input", [
     "serviceName",
+    "serviceVersion",
     "weightVersion",
     "modelId",
     "modelName",
     "bundleRoot",
     "decryptionRequestId",
     "inputArtifact",
+    "outputRecipient",
   ]);
-  const modelId = nullableString(input, "modelId");
-  const modelName = nullableString(input, "modelName");
+  const modelId = normalizeNullablePrivateValue(
+    input.modelId,
+    "modelId",
+    normalizePrivateIdentifier,
+  );
+  const modelName = normalizeNullablePrivateValue(
+    input.modelName,
+    "modelName",
+    normalizePrivateName,
+  );
   if ((modelId === null) === (modelName === null)) {
     throw new TypeError("exactly one of modelId or modelName must be provided");
   }
-  const bundleRoot = nullableString(input, "bundleRoot");
+  const bundleRoot = input.bundleRoot === null
+    ? null
+    : normalizeCanonicalHashLiteral(input.bundleRoot, "bundleRoot");
   return {
-    service_name: requireString(input, "serviceName"),
-    weight_version: requireString(input, "weightVersion"),
+    service_name: normalizePrivateName(input.serviceName, "serviceName"),
+    service_version: normalizePrivateExactString(
+      input.serviceVersion,
+      "serviceVersion",
+      256,
+    ),
+    weight_version: normalizePrivateIdentifier(input.weightVersion, "weightVersion"),
     model_id: modelId,
     model_name: modelName,
     bundle_root: bundleRoot,
-    decryption_request_id: requireString(input, "decryptionRequestId"),
+    decryption_request_id: normalizePrivateExactString(
+      input.decryptionRequestId,
+      "decryptionRequestId",
+    ),
     input_artifact: normalizePrivateArtifactRef(input, "inputArtifact", "input"),
+    output_recipient: normalizePrivateOutputRecipient(input),
   };
 }
 
 /**
  * Build query parameters for committed private uploaded-model execution receipts.
  *
- * @param {{ receiptId?: string, serviceName?: string, modelId?: string, weightVersion?: string, limit?: number | bigint | string, countMode?: "bounded" | "exact" }} input
+ * @param {{ receiptId?: string, serviceName?: string, modelId?: string, weightVersion?: string, cursor?: string, limit?: number | bigint | string, countMode?: "bounded" | "exact" }} input
  * @returns {Record<string, string>}
  */
 export function buildSoracloudPrivateUploadedModelReceiptQuery(input = {}) {
@@ -959,30 +1233,62 @@ export function buildSoracloudPrivateUploadedModelReceiptQuery(input = {}) {
   requireExactObject(
     input,
     "input",
-    ["receiptId", "serviceName", "modelId", "weightVersion", "limit", "countMode"],
+    ["receiptId", "serviceName", "modelId", "weightVersion", "cursor", "limit", "countMode"],
     [],
   );
   const query = {};
-  const receiptId = optionalString(input, "receiptId");
-  if (receiptId !== undefined) {
-    query.receipt_id = receiptId;
+  if (input.receiptId !== undefined) {
+    query.receipt_id = normalizeCanonicalHashLiteral(input.receiptId, "receiptId");
   }
-  const serviceName = optionalString(input, "serviceName");
+  const serviceName = normalizeOptionalPrivateValue(
+    input.serviceName,
+    "serviceName",
+    normalizePrivateName,
+  );
   if (serviceName !== undefined) {
     query.service_name = serviceName;
   }
-  const modelId = optionalString(input, "modelId");
+  const modelId = normalizeOptionalPrivateValue(
+    input.modelId,
+    "modelId",
+    normalizePrivateIdentifier,
+  );
   if (modelId !== undefined) {
     query.model_id = modelId;
   }
-  const weightVersion = optionalString(input, "weightVersion");
+  const weightVersion = normalizeOptionalPrivateValue(
+    input.weightVersion,
+    "weightVersion",
+    normalizePrivateIdentifier,
+  );
   if (weightVersion !== undefined) {
     query.weight_version = weightVersion;
   }
-  if (input.limit !== undefined && input.limit !== null) {
-    query.limit = String(normalizeSafePositiveInteger(input, "limit"));
+  const cursor = normalizeOptionalPrivateValue(
+    input.cursor,
+    "cursor",
+    normalizePrivateExactString,
+  );
+  if (cursor !== undefined) {
+    if (!PRIVATE_UPLOADED_MODEL_RECEIPT_CURSOR_PATTERN.test(cursor)) {
+      throw new TypeError("cursor must be an exact canonical V1 receipt cursor");
+    }
+    query.cursor = cursor;
   }
-  const countMode = optionalString(input, "countMode");
+  if (input.limit !== undefined) {
+    const limit = normalizePrivatePositiveIntegerValue(input.limit, "limit");
+    if (limit > PRIVATE_UPLOADED_MODEL_RECEIPT_MAX_LIMIT) {
+      throw new TypeError(
+        `limit must be between 1 and ${PRIVATE_UPLOADED_MODEL_RECEIPT_MAX_LIMIT}`,
+      );
+    }
+    query.limit = String(limit);
+  }
+  const countMode = normalizeOptionalPrivateValue(
+    input.countMode,
+    "countMode",
+    normalizePrivateExactString,
+  );
   if (countMode !== undefined) {
     if (!PRIVATE_UPLOADED_MODEL_COUNT_MODES.has(countMode)) {
       throw new TypeError("countMode must be bounded or exact");
@@ -990,40 +1296,4 @@ export function buildSoracloudPrivateUploadedModelReceiptQuery(input = {}) {
     query.count_mode = countMode;
   }
   return query;
-}
-
-/**
- * Validate and extract the receipt-recording instruction from a private execute response.
- *
- * @param {Record<string, unknown>} response
- * @returns {{ wire_id: string, payload_hex: string }}
- */
-export function privateUploadedModelReceiptInstruction(response) {
-  if (response == null || typeof response !== "object" || Array.isArray(response)) {
-    throw new TypeError("response must be an object");
-  }
-  const instructions = response.tx_instructions;
-  if (!Array.isArray(instructions) || instructions.length !== 1) {
-    throw new TypeError("response.tx_instructions must contain exactly one instruction");
-  }
-  const instruction = instructions[0];
-  if (instruction == null || typeof instruction !== "object" || Array.isArray(instruction)) {
-    throw new TypeError("response.tx_instructions[0] must be an object");
-  }
-  if (instruction.wire_id !== PRIVATE_UPLOADED_MODEL_RECEIPT_WIRE_ID) {
-    throw new TypeError(
-      `response.tx_instructions[0].wire_id must be ${PRIVATE_UPLOADED_MODEL_RECEIPT_WIRE_ID}`,
-    );
-  }
-  if (
-    typeof instruction.payload_hex !== "string" ||
-    instruction.payload_hex.length === 0 ||
-    !/^[0-9a-fA-F]+$/.test(instruction.payload_hex)
-  ) {
-    throw new TypeError("response.tx_instructions[0].payload_hex must be non-empty hex");
-  }
-  return {
-    wire_id: instruction.wire_id,
-    payload_hex: instruction.payload_hex,
-  };
 }

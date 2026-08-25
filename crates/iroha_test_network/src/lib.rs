@@ -8871,25 +8871,16 @@ impl NetworkPeer {
             iroha_data_model::domain::DomainId::try_new("default", "universal")
                 .expect("explicit client convenience domain")
                 .to_string();
+        let network_id = self
+            .network_id
+            .get()
+            .copied()
+            .expect("peer must be attached to a network before creating clients");
         let config = ConfigReader::new()
             .with_toml_source(TomlSource::inline(
                 Table::new()
                     .write("chain", config::chain_id().to_string())
-                    .write(
-                        "network_id",
-                        norito::literal::format(
-                            "hash",
-                            &self
-                                .network_id
-                                .get()
-                                .copied()
-                                .expect(
-                                    "peer must be attached to a network before creating clients",
-                                )
-                                .to_string()
-                                .to_ascii_uppercase(),
-                        ),
-                    )
+                    .write("network_id", network_id.to_string())
                     .write(["account", "domain"], default_account_domain)
                     .write(
                         ["account", "public_key"],
@@ -13994,7 +13985,7 @@ mod tests {
                 "ordinary Core construction must not compile the test signer"
             );
         }
-        let integration_manifest = include_str!("../../integration_tests/Cargo.toml");
+        let integration_manifest = include_str!("../../../integration_tests/Cargo.toml");
         assert!(integration_manifest.contains("required-features = [\"parliament-test-signers\"]"));
         assert!(integration_manifest.contains(
             "parliament-test-signers = [\"iroha_core/test-network-parliament-signers\"]"
@@ -14167,6 +14158,7 @@ mod tests {
             .api_address();
         let client = network.client();
         let expected_host = expected.host_str();
+        assert_eq!(client.network_id, network.network_id());
         assert_eq!(client.torii_url.host_str(), Some(expected_host.as_ref()));
         assert_eq!(
             client.torii_url.port_or_known_default(),

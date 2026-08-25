@@ -414,16 +414,36 @@ fn sample_private_model_artifact_ref(role: &str, seed: u8) -> SoraPrivateModelAr
     SoraPrivateModelArtifactRefV1 {
         schema_version: SORA_PRIVATE_MODEL_ARTIFACT_REF_VERSION_V1,
         sorafs_manifest_digest: ManifestDigest::new([seed; 32]),
+        sorafs_root_cid: crate::sorafs::pin_registry::ManifestRootCid::from_blake3_digest(
+            [seed; 32],
+        )
+        .expect("fixture root CID"),
         artifact_hash: sample_hash(seed.wrapping_add(1)),
         ciphertext_bytes: 128,
         artifact_role: role.to_string(),
     }
 }
+fn sample_private_model_artifact_context() -> SoraPrivateModelArtifactContextV1 {
+    SoraPrivateModelArtifactContextV1::Model(SoraPrivateModelArtifactModelContextV1 {
+        service_name: sample_name("private_model_host"),
+        service_version: "2026.1".to_owned(),
+        model_id: "upload-1".to_owned(),
+        weight_version: "v1".to_owned(),
+        policy_id: "policy/v1".to_owned(),
+        model_plaintext_commitment: sample_hash(0x35),
+    })
+}
 fn sample_private_uploaded_model_execution_receipt() -> SoraPrivateUploadedModelExecutionReceiptV1 {
     let mut receipt = SoraPrivateUploadedModelExecutionReceiptV1 {
         schema_version: SORA_PRIVATE_UPLOADED_MODEL_EXECUTION_RECEIPT_VERSION_V1,
+        network_id: crate::NetworkId::from_genesis_hash(iroha_crypto::HashOf::<
+            crate::block::BlockHeader,
+        >::from_untyped_unchecked(
+            Hash::prehashed([0x92; Hash::LENGTH])
+        )),
         receipt_id: Hash::prehashed([0; 32]),
         service_name: sample_name("private_model_host"),
+        service_version: "2026.1".to_string(),
         model_id: "upload-1".to_string(),
         weight_version: "v1".to_string(),
         runtime_version: SORACLOUD_PRIVATE_MODEL_RUNTIME_VERSION_V1.to_string(),
@@ -436,9 +456,11 @@ fn sample_private_uploaded_model_execution_receipt() -> SoraPrivateUploadedModel
         output_artifact: sample_private_model_artifact_ref("output", 0x22),
         input_commitment: sample_hash(0x41),
         output_commitment: sample_hash(0x42),
+        output_recipient: sample_uploaded_model_encryption_recipient(),
         request_commitment: Hash::prehashed([0; 32]),
         result_commitment: Hash::prehashed([0; 32]),
         emitted_sequence: 7,
+        emitted_block_height: 3,
     };
     receipt.request_commitment = derive_soracloud_private_model_request_commitment_v1(&receipt);
     receipt.result_commitment = derive_soracloud_private_model_result_commitment_v1(&receipt);

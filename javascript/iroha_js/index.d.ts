@@ -13927,34 +13927,52 @@ export function assembleSoracloudHfDeployRequest(
 
 export interface SoracloudPrivateArtifactRefInput {
   schemaVersion: number | bigint | string;
-  sorafsManifestDigest: string;
+  /** Exact 32-byte SoraFS manifest digest. */
+  sorafsManifestDigest: ReadonlyArray<number>;
+  /** Canonical 36-byte CIDv1/dag-cbor/BLAKE3-256 root. */
+  sorafsRootCid: ReadonlyArray<number>;
+  /** Exact uppercase checksummed marker-bit Iroha Hash literal. */
   artifactHash: string;
+  /** Positive encrypted size, capped at 75,497,472 bytes in V1. */
   ciphertextBytes: number | bigint | string;
   artifactRole: "input";
 }
 
+export interface SoracloudPrivateOutputRecipientInput {
+  schemaVersion: number | bigint | string;
+  keyId: string;
+  keyVersion: number | bigint | string;
+  kem: "X25519HkdfSha256";
+  aead: "Aes256Gcm";
+  publicKeyBytes: string;
+  /** Exact Iroha Blake2b-256 prehash of the decoded public key. */
+  publicKeyFingerprint: string;
+}
+
 export interface SoracloudPrivateUploadedModelExecuteInput {
   serviceName: string;
+  serviceVersion: string;
   weightVersion: string;
   modelId: string | null;
   modelName: string | null;
+  /** Exact uppercase checksummed marker-bit Iroha Hash literal, or null. */
   bundleRoot: string | null;
   decryptionRequestId: string;
   inputArtifact: SoracloudPrivateArtifactRefInput;
+  outputRecipient: SoracloudPrivateOutputRecipientInput;
 }
 
 export interface SoracloudPrivateUploadedModelReceiptQueryInput {
+  /** Exact uppercase checksummed marker-bit Iroha Hash literal. */
   receiptId?: string;
   serviceName?: string;
   modelId?: string;
   weightVersion?: string;
+  /** Opaque continuation token returned as `continue_cursor` by the preceding page. */
+  cursor?: string;
+  /** Positive integer no greater than 500; the server defaults omission to 50. */
   limit?: number | bigint | string;
   countMode?: "bounded" | "exact";
-}
-
-export interface SoracloudTxInstruction {
-  wire_id: string;
-  payload_hex: string;
 }
 
 export function buildSoracloudPrivateUploadedModelExecuteRequest(
@@ -13964,10 +13982,6 @@ export function buildSoracloudPrivateUploadedModelExecuteRequest(
 export function buildSoracloudPrivateUploadedModelReceiptQuery(
   input?: SoracloudPrivateUploadedModelReceiptQueryInput,
 ): Record<string, string>;
-
-export function privateUploadedModelReceiptInstruction(
-  response: Record<string, unknown>,
-): SoracloudTxInstruction;
 
 export class NumericV1Error extends Error {
   readonly code: string;

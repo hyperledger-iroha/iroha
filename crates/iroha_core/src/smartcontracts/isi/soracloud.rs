@@ -153,14 +153,15 @@ use iroha_data_model::{
         SoraModelHostViolationEvidenceRecordV1, SoraModelHostViolationKindV1,
         SoraModelProvenanceKindV1, SoraModelProvenanceRefV1, SoraModelRegistryV1,
         SoraModelWeightActionV1, SoraModelWeightAuditEventV1, SoraModelWeightVersionRecordV1,
-        SoraPrivateUploadedModelExecutionReceiptV1, SoraRolloutStageV1, SoraRuntimeExecutionHostV1,
-        SoraRuntimeReceiptV1, SoraServiceAuditEventV1, SoraServiceConfigEntryV1,
-        SoraServiceConfigMutationV1, SoraServiceDeploymentStateV1,
-        SoraServiceExactCurrentRevisionPreconditionV1, SoraServiceExecutionPlaneV1,
-        SoraServiceHandlerClassV1, SoraServiceHealthStatusV1, SoraServiceLeaseEgressCheckpointV1,
-        SoraServiceLeaseReporterAssignmentV1, SoraServiceLeaseReportingEpochRolloverV1,
-        SoraServiceLeaseStateV1, SoraServiceLeaseStatusV1, SoraServiceLeaseUsageAuditV1,
-        SoraServiceLeaseVolumeStateV1, SoraServiceLifecycleActionV1, SoraServiceMailboxMessageV1,
+        SoraPrivateModelArtifactRefV1, SoraPrivateUploadedModelExecutionReceiptV1,
+        SoraRolloutStageV1, SoraRuntimeExecutionHostV1, SoraRuntimeReceiptV1,
+        SoraServiceAuditEventV1, SoraServiceConfigEntryV1, SoraServiceConfigMutationV1,
+        SoraServiceDeploymentStateV1, SoraServiceExactCurrentRevisionPreconditionV1,
+        SoraServiceExecutionPlaneV1, SoraServiceHandlerClassV1, SoraServiceHealthStatusV1,
+        SoraServiceLeaseEgressCheckpointV1, SoraServiceLeaseReporterAssignmentV1,
+        SoraServiceLeaseReportingEpochRolloverV1, SoraServiceLeaseStateV1,
+        SoraServiceLeaseStatusV1, SoraServiceLeaseUsageAuditV1, SoraServiceLeaseVolumeStateV1,
+        SoraServiceLifecycleActionV1, SoraServiceMailboxMessageV1,
         SoraServiceMutationPreconditionV1, SoraServiceRolloutStateV1, SoraServiceRuntimeStateV1,
         SoraServiceSecretEntryV1, SoraServiceSecretMutationV1, SoraServiceStateEntryV1,
         SoraStateEncryptionV1, SoraStateMutationOperationV1, SoraTrainingJobActionV1,
@@ -214,7 +215,7 @@ use iroha_data_model::{
         soracloud_fhe_public_key_proof_open_verify_bounds,
         soracloud_fhe_public_key_proof_public_inputs_schema_hash_v1,
     },
-    sorafs::pin_registry::{PinStatus, StorageClass},
+    sorafs::pin_registry::{ManifestDigest, PinStatus, StorageClass},
     zk::{BackendTag, OpenVerifyEnvelope, OpenVerifyEnvelopeBounds, StarkFriOpenProofV1},
 };
 use iroha_primitives::{
@@ -4797,86 +4798,107 @@ fn ensure_soracloud_audit_sequence_capacity(
     Ok(())
 }
 fn parse_training_model_name(model_name: &str) -> Result<String, InstructionExecutionError> {
-    let normalized = model_name.trim();
-    let parsed: iroha_data_model::name::Name = normalized
+    if model_name.trim() != model_name {
+        return Err(invalid_parameter(
+            "model_name must not contain surrounding whitespace",
+        ));
+    }
+    let parsed: iroha_data_model::name::Name = model_name
         .parse()
         .map_err(|err| invalid_parameter(format!("invalid model_name: {err}")))?;
+    if parsed.as_ref() != model_name {
+        return Err(invalid_parameter(
+            "model_name must use its exact NFC-normalized spelling",
+        ));
+    }
     Ok(parsed.to_string())
 }
 fn parse_training_job_id(job_id: &str) -> Result<String, InstructionExecutionError> {
-    let normalized = job_id.trim();
-    if normalized.is_empty() {
+    if job_id.is_empty() {
         return Err(invalid_parameter("job_id must not be empty"));
     }
-    if normalized.len() > TRAINING_MAX_IDENTIFIER_BYTES {
+    if job_id.trim() != job_id {
+        return Err(invalid_parameter(
+            "job_id must not contain surrounding whitespace",
+        ));
+    }
+    if job_id.len() > TRAINING_MAX_IDENTIFIER_BYTES {
         return Err(invalid_parameter(format!(
             "job_id exceeds max bytes ({TRAINING_MAX_IDENTIFIER_BYTES})"
         )));
     }
-    if normalized.chars().any(char::is_control) {
+    if job_id.chars().any(char::is_control) {
         return Err(invalid_parameter(
             "job_id must not contain control characters",
         ));
     }
-    if normalized.chars().any(|ch| ch.is_ascii_whitespace()) {
+    if job_id.chars().any(|ch| ch.is_ascii_whitespace()) {
         return Err(invalid_parameter("job_id must not contain whitespace"));
     }
-    if !normalized
+    if !job_id
         .chars()
         .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '-' | '_' | '.' | ':' | '#'))
     {
         return Err(invalid_parameter(
-            "job_id must use only ASCII letters, digits, or [- _ . : #]",
+            "job_id must use only ASCII letters, digits, or [-_.:#]",
         ));
     }
-    Ok(normalized.to_owned())
+    Ok(job_id.to_owned())
 }
 fn parse_model_weight_version(weight_version: &str) -> Result<String, InstructionExecutionError> {
-    let normalized = weight_version.trim();
-    if normalized.is_empty() {
+    if weight_version.is_empty() {
         return Err(invalid_parameter("weight_version must not be empty"));
     }
-    if normalized.len() > TRAINING_MAX_IDENTIFIER_BYTES {
+    if weight_version.trim() != weight_version {
+        return Err(invalid_parameter(
+            "weight_version must not contain surrounding whitespace",
+        ));
+    }
+    if weight_version.len() > TRAINING_MAX_IDENTIFIER_BYTES {
         return Err(invalid_parameter(format!(
             "weight_version exceeds max bytes ({TRAINING_MAX_IDENTIFIER_BYTES})"
         )));
     }
-    if normalized.chars().any(char::is_control) {
+    if weight_version.chars().any(char::is_control) {
         return Err(invalid_parameter(
             "weight_version must not contain control characters",
         ));
     }
-    if normalized.chars().any(|ch| ch.is_ascii_whitespace()) {
+    if weight_version.chars().any(|ch| ch.is_ascii_whitespace()) {
         return Err(invalid_parameter(
             "weight_version must not contain whitespace",
         ));
     }
-    if !normalized
+    if !weight_version
         .chars()
         .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '-' | '_' | '.' | ':' | '#'))
     {
         return Err(invalid_parameter(
-            "weight_version must use only ASCII letters, digits, or [- _ . : #]",
+            "weight_version must use only ASCII letters, digits, or [-_.:#]",
         ));
     }
-    Ok(normalized.to_owned())
+    Ok(weight_version.to_owned())
 }
 fn parse_model_weight_dataset_ref(dataset_ref: &str) -> Result<String, InstructionExecutionError> {
-    let normalized = dataset_ref.trim();
-    if normalized.is_empty() {
+    if dataset_ref.is_empty() {
         return Err(invalid_parameter("dataset_ref must not be empty"));
     }
-    if normalized.len() > MODEL_WEIGHT_MAX_DATASET_REF_BYTES {
+    if dataset_ref.trim() != dataset_ref {
+        return Err(invalid_parameter(
+            "dataset_ref must not contain surrounding whitespace",
+        ));
+    }
+    if dataset_ref.len() > MODEL_WEIGHT_MAX_DATASET_REF_BYTES {
         return Err(invalid_parameter(format!(
             "dataset_ref exceeds max bytes ({MODEL_WEIGHT_MAX_DATASET_REF_BYTES})"
         )));
     }
-    if normalized.chars().any(char::is_control) {
+    if dataset_ref.chars().any(char::is_control) {
         return Err(invalid_parameter(
             "dataset_ref must not contain control characters",
         ));
     }
-    Ok(normalized.to_owned())
+    Ok(dataset_ref.to_owned())
 }
 fn parse_uploaded_model_id(model_id: &str) -> Result<String, InstructionExecutionError> {
     parse_training_job_id(model_id).map_err(|_| invalid_parameter("invalid model_id"))
@@ -6341,14 +6363,389 @@ pub(crate) fn write_soracloud_runtime_receipt(
         .insert(receipt.receipt_id, receipt);
     Ok(())
 }
-pub(crate) fn write_soracloud_private_uploaded_model_execution_receipt(
-    _state_transaction: &mut StateTransaction<'_, '_>,
-    _receipt: SoraPrivateUploadedModelExecutionReceiptV1,
+fn validate_soracloud_private_output_manifest_binding(
+    output_manifest_payload: &[u8],
+    output_artifact: &SoraPrivateModelArtifactRefV1,
 ) -> Result<(), InstructionExecutionError> {
-    Err(InstructionExecutionError::InvariantViolation(
-        "private uploaded-model receipt persistence is disabled until the node runtime can prove exact finalized-bundle loading, committed decryption authorization, and atomic encrypted-output publication"
+    if output_manifest_payload.is_empty()
+        || output_manifest_payload.len() > sorafs_manifest::MAX_MANIFEST_ENCODED_BYTES
+    {
+        return Err(invalid_parameter(format!(
+            "private output manifest payload has {} bytes; expected 1..={}",
+            output_manifest_payload.len(),
+            sorafs_manifest::MAX_MANIFEST_ENCODED_BYTES,
+        )));
+    }
+    let manifest = sorafs_manifest::decode_manifest_v1_canonical(output_manifest_payload).map_err(
+        |error| {
+            invalid_parameter(format!(
+                "invalid canonical private output ManifestV1 payload: {error}"
+            ))
+        },
+    )?;
+    let digest = ManifestDigest::from_manifest(&manifest).map_err(|error| {
+        invalid_parameter(format!(
+            "failed to derive private output manifest digest: {error}"
+        ))
+    })?;
+    let root_cid =
+        iroha_data_model::sorafs::pin_registry::ManifestRootCid::try_from_slice(&manifest.root_cid)
+            .map_err(|error| {
+                invalid_parameter(format!(
+                    "private output manifest root CID is not canonical: {error}"
+                ))
+            })?;
+    if digest != output_artifact.sorafs_manifest_digest
+        || root_cid != output_artifact.sorafs_root_cid
+        || manifest.content_length != output_artifact.ciphertext_bytes
+    {
+        return Err(InstructionExecutionError::InvariantViolation(
+            "private output manifest digest, root CID, or content length does not match the receipt artifact"
+                .into(),
+        ));
+    }
+    Ok(())
+}
+
+pub(crate) fn write_soracloud_private_uploaded_model_execution_receipt(
+    state_transaction: &mut StateTransaction<'_, '_>,
+    authority: &AccountId,
+    output_manifest_payload: Vec<u8>,
+    mut receipt: SoraPrivateUploadedModelExecutionReceiptV1,
+) -> Result<(), InstructionExecutionError> {
+    receipt
+        .validate_submission()
+        .map_err(|err| invalid_parameter(err.to_string()))?;
+    validate_soracloud_private_output_manifest_binding(
+        &output_manifest_payload,
+        &receipt.output_artifact,
+    )?;
+
+    // Exact retries are a no-op even if the referenced artifacts were retired after the
+    // original execution. The persisted sequence is ledger-owned and is the only field a
+    // submission cannot reproduce.
+    if let Some(existing) = state_transaction
+        .world
+        .soracloud_private_uploaded_model_execution_receipts
+        .get(&receipt.receipt_id)
+    {
+        let mut expected = receipt;
+        expected.emitted_sequence = existing.emitted_sequence;
+        expected.emitted_block_height = existing.emitted_block_height;
+        if existing == &expected {
+            return Ok(());
+        }
+        return Err(InstructionExecutionError::InvariantViolation(
+            format!(
+                "private receipt id `{}` is already bound to different execution evidence",
+                existing.receipt_id
+            )
             .into(),
-    ))
+        ));
+    }
+
+    let bundle_key = (
+        receipt.service_name.as_ref().to_owned(),
+        receipt.model_id.clone(),
+        receipt.weight_version.clone(),
+    );
+    let bundle = state_transaction
+        .world
+        .soracloud_uploaded_model_bundles
+        .get(&bundle_key)
+        .ok_or_else(|| {
+            InstructionExecutionError::InvariantViolation(
+                format!(
+                    "uploaded model `{}` version `{}` for service `{}` has not been finalized",
+                    receipt.model_id, receipt.weight_version, receipt.service_name
+                )
+                .into(),
+            )
+        })?;
+    if bundle.runtime_format
+        != iroha_data_model::soracloud::SoraUploadedModelRuntimeFormatV1::DeterministicQuantizedCpuV1
+    {
+        return Err(InstructionExecutionError::InvariantViolation(
+            format!(
+                "private receipt `{}` targets uploaded model `{}` version `{}` with a non-deterministic private runtime format",
+                receipt.receipt_id, receipt.model_id, receipt.weight_version
+            )
+            .into(),
+        ));
+    }
+    if bundle.sorafs_manifest_digest != receipt.model_manifest_digest
+        || bundle.bundle_root != receipt.model_bundle_root
+        || bundle.decryption_policy_ref != receipt.policy_id
+    {
+        return Err(InstructionExecutionError::InvariantViolation(
+            format!(
+                "private receipt `{}` does not exactly match finalized uploaded model `{}` version `{}`",
+                receipt.receipt_id, receipt.model_id, receipt.weight_version
+            )
+            .into(),
+        ));
+    }
+
+    crate::soracloud_runtime::validate_finalized_soracloud_uploaded_model_release(
+        &state_transaction.world,
+        bundle,
+    )
+    .map_err(|error| InstructionExecutionError::InvariantViolation(error.into()))?;
+    require_active_sorafs_uploaded_model_pin(state_transaction, bundle)?;
+    let service_revision_key = (
+        receipt.service_name.as_ref().to_owned(),
+        receipt.service_version.clone(),
+    );
+    let service_revision = state_transaction
+        .world
+        .soracloud_service_revisions
+        .get(&service_revision_key)
+        .ok_or_else(|| {
+            InstructionExecutionError::InvariantViolation(
+                format!(
+                    "private receipt `{}` references missing service revision `{}`",
+                    receipt.receipt_id, receipt.service_version
+                )
+                .into(),
+            )
+        })?;
+    if service_revision.service.service_name != receipt.service_name
+        || service_revision.service.service_version != receipt.service_version
+        || !service_revision
+            .container
+            .capabilities
+            .allow_model_inference
+    {
+        return Err(InstructionExecutionError::InvariantViolation(
+            format!(
+                "private receipt `{}` service revision does not admit uploaded-model inference",
+                receipt.receipt_id
+            )
+            .into(),
+        ));
+    }
+    let release_key = (
+        receipt.service_name.as_ref().to_owned(),
+        receipt.decryption_request_id.clone(),
+    );
+    let release = state_transaction
+        .world
+        .soracloud_decryption_request_records
+        .get(&release_key)
+        .ok_or_else(|| {
+            InstructionExecutionError::InvariantViolation(
+                format!(
+                    "private receipt `{}` references decryption request `{}` that is not authoritative for service `{}`",
+                    receipt.receipt_id, receipt.decryption_request_id, receipt.service_name
+                )
+                .into(),
+            )
+        })?;
+    release.validate().map_err(|err| {
+        InstructionExecutionError::InvariantViolation(
+            format!(
+                "private receipt `{}` references an invalid authoritative decryption request: {err}",
+                receipt.receipt_id
+            )
+            .into(),
+        )
+    })?;
+    if release.service_name != receipt.service_name
+        || release.service_version != receipt.service_version
+        || release.request.request_id != receipt.decryption_request_id
+        || release.request.policy_name.as_ref() != receipt.policy_id
+        || release.request.ciphertext_commitment != receipt.input_artifact.artifact_hash
+    {
+        return Err(InstructionExecutionError::InvariantViolation(
+            format!(
+                "private receipt `{}` does not exactly match its committed decryption authorization",
+                receipt.receipt_id
+            )
+            .into(),
+        ));
+    }
+
+    let release_event = state_transaction
+        .world
+        .soracloud_service_audit_events
+        .get(&release.sequence)
+        .ok_or_else(|| {
+            InstructionExecutionError::InvariantViolation(
+                format!(
+                    "private receipt `{}` decryption request is missing its exact audit event",
+                    receipt.receipt_id
+                )
+                .into(),
+            )
+        })?;
+    release_event.validate().map_err(|err| {
+        InstructionExecutionError::InvariantViolation(
+            format!(
+                "private receipt `{}` references an invalid decryption audit event: {err}",
+                receipt.receipt_id
+            )
+            .into(),
+        )
+    })?;
+    if release_event.sequence != release.sequence
+        || release_event.action != SoraServiceLifecycleActionV1::DecryptionRequest
+        || release_event.service_name != release.service_name
+        || release_event.from_version.is_some()
+        || release_event.to_version != release.service_version
+        || release_event.service_manifest_hash != service_revision.service_manifest_hash()
+        || release_event.container_manifest_hash != service_revision.container_manifest_hash()
+        || release_event.governance_tx_hash != Some(release.request.governance_tx_hash)
+        || release_event.binding_name.as_ref() != Some(&release.request.binding_name)
+        || release_event.state_key.as_deref() != Some(release.request.state_key.as_str())
+        || release_event.policy_name.as_ref() != Some(&release.request.policy_name)
+        || release_event.policy_snapshot_hash != Some(release.policy_snapshot_hash())
+        || release_event.jurisdiction_tag.as_deref()
+            != Some(release.request.jurisdiction_tag.as_str())
+        || release_event.consent_evidence_hash != release.request.consent_evidence_hash
+        || release_event.break_glass != Some(release.request.break_glass)
+        || release_event.break_glass_reason.as_deref()
+            != release.request.break_glass_reason.as_deref()
+        || release_event.signer != release.signer
+    {
+        return Err(InstructionExecutionError::InvariantViolation(
+            format!(
+                "private receipt `{}` decryption request does not match its authoritative audit event",
+                receipt.receipt_id
+            )
+            .into(),
+        ));
+    }
+    let release_expires_at_height = release_event
+        .block_height
+        .checked_add(u64::from(release.request.requested_ttl_blocks.get()))
+        .ok_or_else(|| {
+            InstructionExecutionError::InvariantViolation(
+                "private execution decryption-request expiry height overflowed".into(),
+            )
+        })?;
+    let execution_height = state_transaction.block_height();
+    if execution_height < release_event.block_height
+        || execution_height >= release_expires_at_height
+    {
+        return Err(InstructionExecutionError::InvariantViolation(
+            format!(
+                "private receipt `{}` decryption authorization is not active at block height {execution_height}",
+                receipt.receipt_id
+            )
+            .into(),
+        ));
+    }
+
+    let require_artifact_pin = |artifact: &SoraPrivateModelArtifactRefV1,
+                                require_approved: bool|
+     -> Result<(), InstructionExecutionError> {
+        let pin = state_transaction
+            .world
+            .pin_manifests
+            .get(&artifact.sorafs_manifest_digest)
+            .ok_or_else(|| {
+                InstructionExecutionError::InvariantViolation(
+                    format!(
+                        "private `{}` artifact SoraFS manifest {:?} is not registered",
+                        artifact.artifact_role, artifact.sorafs_manifest_digest
+                    )
+                    .into(),
+                )
+            })?;
+        match pin.status {
+            PinStatus::Approved(_) => {}
+            PinStatus::Pending if !require_approved => {}
+            PinStatus::Pending => {
+                return Err(InstructionExecutionError::InvariantViolation(
+                    format!(
+                        "private `{}` artifact SoraFS manifest {:?} is not approved",
+                        artifact.artifact_role, artifact.sorafs_manifest_digest
+                    )
+                    .into(),
+                ));
+            }
+            PinStatus::Retired(epoch) => {
+                return Err(InstructionExecutionError::InvariantViolation(
+                    format!(
+                        "private `{}` artifact SoraFS manifest {:?} retired at epoch {epoch}",
+                        artifact.artifact_role, artifact.sorafs_manifest_digest
+                    )
+                    .into(),
+                ));
+            }
+        }
+        if pin.digest != artifact.sorafs_manifest_digest
+            || pin.root_cid != artifact.sorafs_root_cid
+            || pin.content_length != artifact.ciphertext_bytes
+        {
+            return Err(InstructionExecutionError::InvariantViolation(
+                format!(
+                    "private `{}` artifact does not exactly match its SoraFS pin record",
+                    artifact.artifact_role
+                )
+                .into(),
+            ));
+        }
+        if artifact.artifact_role == "output"
+            && pin.submitted_by != receipt.attesting_validator.validator_account_id
+        {
+            return Err(InstructionExecutionError::InvariantViolation(
+                "private output artifact pin submitter must equal the attesting validator".into(),
+            ));
+        }
+        Ok(())
+    };
+    require_artifact_pin(&receipt.input_artifact, true)?;
+    // A governed SoraFS policy can leave an output pin pending. An exact existing pin is reused;
+    // otherwise the canonical payload is registered below only after every receipt precondition
+    // and the final ledger-owned sequence have been validated.
+    let output_pin_exists = state_transaction
+        .world
+        .pin_manifests
+        .get(&receipt.output_artifact.sorafs_manifest_digest)
+        .is_some();
+    if output_pin_exists {
+        require_artifact_pin(&receipt.output_artifact, false)?;
+    }
+
+    if state_transaction
+        .world
+        .soracloud_private_uploaded_model_execution_receipts
+        .iter()
+        .any(|(_, existing)| {
+            existing.service_name == receipt.service_name
+                && existing.decryption_request_id == receipt.decryption_request_id
+        })
+    {
+        return Err(InstructionExecutionError::InvariantViolation(
+            format!(
+                "decryption request `{}` for service `{}` already has an authoritative private execution receipt",
+                receipt.decryption_request_id, receipt.service_name
+            )
+            .into(),
+        ));
+    }
+
+    receipt.emitted_sequence = next_soracloud_audit_sequence(state_transaction)?;
+    receipt.emitted_block_height = execution_height;
+    receipt
+        .validate()
+        .map_err(|err| invalid_parameter(err.to_string()))?;
+
+    if !output_pin_exists {
+        iroha_data_model::isi::sorafs::RegisterPinManifest::new(
+            output_manifest_payload,
+            None,
+            None,
+        )
+        .execute(authority, state_transaction)?;
+    }
+    ensure_soracloud_sequence_is_next(state_transaction, receipt.emitted_sequence)?;
+    state_transaction
+        .world
+        .soracloud_private_uploaded_model_execution_receipts
+        .insert(receipt.receipt_id, receipt);
+    Ok(())
 }
 /// Apply an authoritative Soracloud service-state mutation using the active binding contract.
 ///
@@ -17196,6 +17593,44 @@ impl Execute for isi::FinalizeSoracloudUploadedModelBundle {
             ));
         }
         require_active_sorafs_uploaded_model_pin(state_transaction, &bundle_record)?;
+        // Finalization belongs to the uploaded release, not to a registry model-name alias. A
+        // second alias would create projections that the executable-release validator must reject
+        // as ambiguous, so fail before writing either half of the atomic projection pair.
+        let user_upload_source_matches = |source: Option<&SoraModelProvenanceRefV1>| {
+            source.is_some_and(|source| {
+                source.kind == SoraModelProvenanceKindV1::UserUpload && source.id == model_id
+            })
+        };
+        let has_weight_projection = state_transaction
+            .world
+            .soracloud_model_weight_versions
+            .iter()
+            .any(
+                |((stored_service, _stored_model, stored_version), weight)| {
+                    stored_service == service_name.as_ref()
+                        && (stored_version == &weight_version
+                            || weight.weight_version == weight_version)
+                        && user_upload_source_matches(weight.source_provenance.as_ref())
+                },
+            );
+        let has_artifact_projection = state_transaction
+            .world
+            .soracloud_model_artifacts
+            .iter()
+            .any(|((stored_service, _stored_artifact), artifact)| {
+                stored_service == service_name.as_ref()
+                    && (artifact.weight_version.as_deref() == Some(weight_version.as_str())
+                        || artifact.consumed_by_version.as_deref() == Some(weight_version.as_str()))
+                    && user_upload_source_matches(artifact.source_provenance.as_ref())
+            });
+        if has_weight_projection || has_artifact_projection {
+            return Err(InstructionExecutionError::InvariantViolation(
+                format!(
+                    "uploaded model bundle `{model_id}` version `{weight_version}` for service `{service_name}` already has a finalization projection"
+                )
+                .into(),
+            ));
+        }
         let artifact_key = (service_name.as_ref().to_owned(), artifact_id.clone());
         if state_transaction
             .world
@@ -18251,12 +18686,34 @@ impl Execute for isi::RecordSoracloudPrivateUploadedModelExecutionReceipt {
         authority: &AccountId,
         state_transaction: &mut StateTransaction<'_, '_>,
     ) -> Result<(), InstructionExecutionError> {
-        let attester = &self.receipt.attesting_validator;
+        let Self {
+            output_manifest_payload,
+            receipt,
+        } = self;
+        if receipt.network_id != *state_transaction.network_id() {
+            return Err(InstructionExecutionError::InvariantViolation(
+                "private uploaded-model receipt belongs to another network".into(),
+            ));
+        }
+        let attester = &receipt.attesting_validator;
         if attester.validator_account_id != *authority {
             return Err(InstructionExecutionError::InvariantViolation(
                 "private uploaded-model receipt attesting_validator must equal the transaction authority"
-                    .into(),
+                .into(),
             ));
+        }
+        if state_transaction
+            .world
+            .soracloud_private_uploaded_model_execution_receipts
+            .get(&receipt.receipt_id)
+            .is_some()
+        {
+            return write_soracloud_private_uploaded_model_execution_receipt(
+                state_transaction,
+                authority,
+                output_manifest_payload,
+                receipt,
+            );
         }
         require_active_public_lane_validator(authority, state_transaction)?;
         let validator_key = (attester.lane_id, authority.clone());
@@ -18276,7 +18733,12 @@ impl Execute for isi::RecordSoracloudPrivateUploadedModelExecutionReceipt {
                     .into(),
             ));
         }
-        write_soracloud_private_uploaded_model_execution_receipt(state_transaction, self.receipt)
+        write_soracloud_private_uploaded_model_execution_receipt(
+            state_transaction,
+            authority,
+            output_manifest_payload,
+            receipt,
+        )
     }
 }
 #[cfg(all(test, feature = "zk-stark"))]
