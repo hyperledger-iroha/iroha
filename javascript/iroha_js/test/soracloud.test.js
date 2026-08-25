@@ -14,6 +14,11 @@ import {
 
 const CANONICAL_XOR_ASSET_DEFINITION_ID = "61CtjvNd9T3THAR65GsMVHr82Bjc";
 const HF_COMMIT_OID = "0123456789abcdef0123456789abcdef01234567";
+const PRIVATE_ROOT_CID = Object.freeze([
+  1, 0x71, 0x1f, 32,
+  1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16,
+  17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32,
+]);
 
 function validHfDeployInput(overrides = {}) {
   return {
@@ -34,6 +39,7 @@ function validPrivateArtifact(role, overrides = {}) {
   return {
     schemaVersion: 1,
     sorafsManifestDigest: `${role}-manifest-digest`,
+    sorafsRootCid: [...PRIVATE_ROOT_CID],
     artifactHash: `${role}-artifact-hash`,
     ciphertextBytes: 64,
     artifactRole: role,
@@ -1104,6 +1110,7 @@ test("buildSoracloudPrivateUploadedModelExecuteRequest normalizes encrypted exec
   assert.deepEqual(request.input_artifact, {
     schema_version: 1,
     sorafs_manifest_digest: "input-manifest-digest",
+    sorafs_root_cid: PRIVATE_ROOT_CID,
     artifact_hash: "input-artifact-hash",
     ciphertext_bytes: 64,
     artifact_role: "input",
@@ -1192,6 +1199,17 @@ test("buildSoracloudPrivateUploadedModelExecuteRequest rejects aliases, omission
       }),
     /inputArtifact\.artifact_hash is not accepted/,
   );
+  assert.throws(
+    () =>
+      buildSoracloudPrivateUploadedModelExecuteRequest({
+        ...validPrivateExecuteInput(),
+        inputArtifact: {
+          ...validPrivateArtifact("input"),
+          sorafs_root_cid: PRIVATE_ROOT_CID,
+        },
+      }),
+    /inputArtifact\.sorafs_root_cid is not accepted/,
+  );
 
   const inherited = Object.create({ retiredField: true });
   Object.assign(inherited, validPrivateExecuteInput());
@@ -1223,6 +1241,32 @@ test("buildSoracloudPrivateUploadedModelExecuteRequest accepts modelName selecto
 });
 
 test("buildSoracloudPrivateUploadedModelExecuteRequest rejects malformed encrypted requests", () => {
+  const missingRootCid = validPrivateArtifact("input");
+  delete missingRootCid.sorafsRootCid;
+  assert.throws(
+    () =>
+      buildSoracloudPrivateUploadedModelExecuteRequest(
+        validPrivateExecuteInput({ inputArtifact: missingRootCid }),
+      ),
+    /inputArtifact\.sorafsRootCid is required/,
+  );
+  for (const malformedRootCid of [
+    PRIVATE_ROOT_CID.slice(0, 35),
+    [2, ...PRIVATE_ROOT_CID.slice(1)],
+    [1, 0x71, 0x1f, 32, ...new Array(32).fill(0)],
+    PRIVATE_ROOT_CID.map((value, index) => index === 4 ? 1.5 : value),
+    PRIVATE_ROOT_CID.map((value, index) => index === 4 ? 256 : value),
+  ]) {
+    assert.throws(() =>
+      buildSoracloudPrivateUploadedModelExecuteRequest(
+        validPrivateExecuteInput({
+          inputArtifact: validPrivateArtifact("input", {
+            sorafsRootCid: malformedRootCid,
+          }),
+        }),
+      ),
+    );
+  }
   assert.throws(
     () =>
       buildSoracloudPrivateUploadedModelExecuteRequest(
@@ -1289,6 +1333,7 @@ test("buildSoracloudPrivateUploadedModelReceiptQuery normalizes filters", () => 
     weightVersion: "v1",
     limit: "25",
     countMode: "exact",
+    cursor: "opaque-page-cursor",
   });
 
   assert.deepEqual(query, {
@@ -1298,6 +1343,7 @@ test("buildSoracloudPrivateUploadedModelReceiptQuery normalizes filters", () => 
     weight_version: "v1",
     limit: "25",
     count_mode: "exact",
+    cursor: "opaque-page-cursor",
   });
 });
 

@@ -39,7 +39,7 @@ use iroha_data_model::{
         SoraUploadedModelBundleV1, SoraUploadedModelEncryptionRecipientV1,
         SoraUploadedModelKeyEncapsulationV1, SoraUploadedModelKeyWrapAeadV1,
     },
-    sorafs::pin_registry::{ManifestDigest, StorageClass},
+    sorafs::pin_registry::{ManifestDigest, ManifestRootCid, StorageClass},
     transaction::SignedTransaction,
 };
 use iroha_primitives::numeric::Quantity;
@@ -2279,11 +2279,14 @@ impl SoracloudPrivateUploadedModelExecutionJournalV1 {
             .map_err(|error| format!("invalid journal output ManifestV1: {error}"))?;
         let digest = ManifestDigest::from_manifest(&manifest)
             .map_err(|error| format!("derive journal output manifest digest: {error}"))?;
+        let root_cid = ManifestRootCid::try_from_slice(&manifest.root_cid)
+            .map_err(|error| format!("derive journal output manifest root CID: {error}"))?;
         if digest != self.receipt.output_artifact.sorafs_manifest_digest
+            || root_cid != self.receipt.output_artifact.sorafs_root_cid
             || manifest.content_length != self.receipt.output_artifact.ciphertext_bytes
         {
             return Err(
-                "private execution journal manifest does not match its receipt output artifact"
+                "private execution journal manifest digest, root CID, or content length does not match its receipt output artifact"
                     .to_owned(),
             );
         }
@@ -2293,7 +2296,13 @@ impl SoracloudPrivateUploadedModelExecutionJournalV1 {
                 if self.submission_attempt > 0
                     && self.submission_attempt
                         <= SORACLOUD_PRIVATE_UPLOADED_MODEL_EXECUTION_MAX_SUBMISSION_ATTEMPTS_V1
-                    && Hash::from(transaction.hash()) == hash => {}
+                    && Hash::from(transaction.hash()) == hash => {
+                        transaction.verify_signature().map_err(|error| {
+                            format!(
+                                "private execution journal signed transaction failed signature verification: {error}"
+                            )
+                        })?;
+                    }
             _ => {
                 return Err(
                     "private execution journal signed transaction, hash, and attempt are inconsistent"

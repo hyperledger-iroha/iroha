@@ -56,9 +56,9 @@ use iroha_crypto::{
     },
 };
 use iroha_data_model::{
-    Encode,
+    Encode, IntoKeyValue,
     account::Account,
-    asset::{AssetDefinition, AssetDefinitionId, AssetId},
+    asset::{Asset, AssetDefinition, AssetDefinitionId, AssetId},
     confidential::ConfidentialStatus,
     domain::Domain,
     isi::{Grant, Mint},
@@ -15365,6 +15365,74 @@ fn insert_uploaded_model_pin_with_content_length(
 ) {
     insert_uploaded_model_pin_record(state_transaction, digest, digest, content_length, status);
 }
+fn seed_private_receipt_sorafs_pin_fee_fixture(
+    state_transaction: &mut StateTransaction<'_, '_>,
+) -> Result<(), eyre::Report> {
+    let fee_asset_id = state_transaction.gov.sorafs_pin_fee_asset_id.clone();
+    let domain_id =
+        DomainId::try_new("universal", "universal").expect("SoraFS fee fixture domain");
+    if state_transaction.world.domains.get(&domain_id).is_none() {
+        state_transaction.world.domains.insert(
+            domain_id.clone(),
+            Domain::new(domain_id.clone()).build(&ALICE_ID),
+        );
+    }
+    let treasury = state_transaction
+        .gov
+        .sorafs_pin_fee_treasury_account
+        .clone();
+    if state_transaction.world.accounts.get(&treasury).is_none() {
+        let (account_id, account) = Account::new(treasury).build(&ALICE_ID).into_key_value();
+        state_transaction.world.accounts.insert(account_id, account);
+    }
+    if state_transaction
+        .world
+        .asset_definitions
+        .get(&fee_asset_id)
+        .is_none()
+    {
+        let definition = AssetDefinition::numeric(
+            fee_asset_id.clone(),
+            "xor".to_owned(),
+            iroha_data_model::asset::AssetBalancePolicy::Global,
+            Some(domain_id.clone()),
+        )
+        .build(&ALICE_ID);
+        state_transaction
+            .world
+            .asset_definition_domains
+            .insert(fee_asset_id.clone(), domain_id.clone());
+        state_transaction
+            .world
+            .domain_asset_definitions
+            .insert(domain_id, BTreeSet::from([fee_asset_id.clone()]));
+        state_transaction
+            .world
+            .asset_definitions_by_owner
+            .insert(ALICE_ID.clone(), BTreeSet::from([fee_asset_id.clone()]));
+        state_transaction
+            .world
+            .asset_definitions
+            .insert(fee_asset_id.clone(), definition);
+    }
+    let alice_fee_asset = AssetId::new(fee_asset_id.clone(), ALICE_ID.clone());
+    let (asset_id, asset) =
+        Asset::new(alice_fee_asset.clone(), Quantity::from(u128::MAX)).into_key_value();
+    state_transaction.world.assets.insert(asset_id, asset);
+    state_transaction
+        .world
+        .asset_definition_holders
+        .insert(fee_asset_id.clone(), BTreeSet::from([ALICE_ID.clone()]));
+    state_transaction
+        .world
+        .asset_definition_assets
+        .insert(fee_asset_id.clone(), BTreeSet::from([alice_fee_asset]));
+    state_transaction
+        .world
+        .asset_definition_nonzero_holders
+        .insert(fee_asset_id, BTreeSet::from([ALICE_ID.clone()]));
+    Ok(())
+}
 fn private_output_manifest_fixture(seed: u8, content_length: u64) -> (Vec<u8>, ManifestDigest) {
     let commitment = seed.max(1);
     let manifest = sorafs_manifest::ManifestBuilder::new()
@@ -25650,6 +25718,8 @@ fn soracloud_uploaded_model_register_rejects_missing_pending_or_retired_sorafs_p
 fn private_uploaded_model_execution_receipt_persists_idempotently_from_exact_artifacts()
 -> Result<(), eyre::Report> {
     permissioned_soracloud_transaction!(kura, state, state_block, stx);
+    seed_private_receipt_sorafs_pin_fee_fixture(&mut stx)?;
+    stx.tx_call_hash = Some(Hash::prehashed([0x51; Hash::LENGTH]));
     let mut service_bundle = sample_training_bundle("portal", "1.0.0");
     service_bundle.container.capabilities.allow_model_inference = true;
     service_bundle.service.container.manifest_hash = service_bundle.container_manifest_hash();
@@ -25661,12 +25731,15 @@ fn private_uploaded_model_execution_receipt_persists_idempotently_from_exact_art
         provenance: bundle_provenance(&service_bundle),
     }
     .execute(&ALICE_ID, &mut stx)?;
-    let model_digest = ManifestDigest::new([0xD1; 32]);
-    let mut bundle = sample_uploaded_model_bundle("portal", model_digest);
+    let mut bundle = sample_uploaded_model_bundle("portal", ManifestDigest::new([0xD1; 32]));
+    let (model_manifest_payload, model_digest) =
+        private_output_manifest_fixture(0xD1, bundle.ciphertext_bytes);
+    bundle.sorafs_manifest_digest = model_digest;
     bundle.runtime_format =
         iroha_data_model::soracloud::SoraUploadedModelRuntimeFormatV1::DeterministicQuantizedCpuV1;
     bundle.decryption_policy_ref = "private_release".to_owned();
-    insert_uploaded_model_pin(&mut stx, model_digest, PinStatus::Approved(1));
+    iroha_data_model::isi::sorafs::RegisterPinManifest::new(model_manifest_payload, None, None)
+        .execute(&ALICE_ID, &mut stx)?;
     stx.world.soracloud_uploaded_model_bundles.insert(
         (
             bundle.service_name.as_ref().to_owned(),
@@ -25687,21 +25760,16 @@ fn private_uploaded_model_execution_receipt_persists_idempotently_from_exact_art
         ciphertext_bytes: 64,
         artifact_role: role.to_string(),
     };
-    let input_artifact = artifact("input", 0xD2);
+    let (input_manifest_payload, input_manifest_digest) =
+        private_output_manifest_fixture(0xD2, 64);
+    let mut input_artifact = artifact("input", 0xD2);
+    input_artifact.sorafs_manifest_digest = input_manifest_digest;
+    iroha_data_model::isi::sorafs::RegisterPinManifest::new(input_manifest_payload, None, None)
+        .execute(&ALICE_ID, &mut stx)?;
     let (output_manifest_payload, output_manifest_digest) =
         private_output_manifest_fixture(0xD3, 64);
     let mut output_artifact = artifact("output", 0xD3);
     output_artifact.sorafs_manifest_digest = output_manifest_digest;
-    let mut input_artifact = input_artifact;
-    input_artifact.sorafs_root_cid =
-        iroha_data_model::sorafs::pin_registry::ManifestRootCid::from_blake3_digest([0xA8; 32])
-            .expect("input pin root CID");
-    insert_uploaded_model_pin_with_content_length(
-        &mut stx,
-        input_artifact.sorafs_manifest_digest,
-        input_artifact.ciphertext_bytes,
-        PinStatus::Approved(1),
-    );
     let mut policy = sample_decryption_policy();
     policy.policy_name = bundle
         .decryption_policy_ref

@@ -4247,6 +4247,7 @@ impl SoracloudInrouPersistedStateV1<'_> {
                             )
                         })?;
                     if pin.digest != artifact.sorafs_manifest_digest
+                        || pin.root_cid != artifact.sorafs_root_cid
                         || pin.content_length != artifact.ciphertext_bytes
                     {
                         return Err(invalid_soracloud_state(
@@ -7358,6 +7359,16 @@ fn build_state(
     #[cfg(feature = "telemetry")]
     let telemetry_seed = telemetry.clone();
     let initial_crypto = iroha_config::parameters::actual::Crypto::default();
+    if world
+        .soracloud_private_uploaded_model_execution_receipts
+        .view()
+        .iter()
+        .any(|(_, receipt)| receipt.network_id != network_id)
+    {
+        return Err(MergeLedgerCommitError::ExecutionStatePublication(
+            "restored private uploaded-model receipt belongs to another network".to_owned(),
+        ));
+    }
     let streaming_storage_paths = StreamingStoragePaths::default();
     let da_receipt_cursors = parking_lot::RwLock::new(DaReceiptCursorIndex::default());
     let da_shard_cursors = parking_lot::RwLock::new(DaShardCursorIndex::default());

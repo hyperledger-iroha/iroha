@@ -13928,6 +13928,7 @@ export function assembleSoracloudHfDeployRequest(
 export interface SoracloudPrivateArtifactRefInput {
   schemaVersion: number | bigint | string;
   sorafsManifestDigest: string;
+  sorafsRootCid: ReadonlyArray<number>;
   artifactHash: string;
   ciphertextBytes: number | bigint | string;
   artifactRole: "input" | "output";
@@ -13962,6 +13963,7 @@ export interface SoracloudPrivateUploadedModelReceiptQueryInput {
   weightVersion?: string;
   limit?: number | bigint | string;
   countMode?: "bounded" | "exact";
+  cursor?: string;
 }
 
 export function buildSoracloudPrivateUploadedModelExecuteRequest(

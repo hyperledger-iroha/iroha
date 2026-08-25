@@ -949,6 +949,7 @@ mod tests {
             "SoraPrivateUploadedModelExecutionReceiptV1",
             &[
                 "schema_version",
+                "network_id",
                 "receipt_id",
                 "service_name",
                 "service_version",
@@ -969,6 +970,19 @@ mod tests {
                 "result_commitment",
                 "emitted_sequence",
                 "emitted_block_height",
+            ],
+            &[],
+        );
+        assert_strict_object_schema(
+            schemas,
+            "SoraPrivateModelArtifactRefV1",
+            &[
+                "schema_version",
+                "sorafs_manifest_digest",
+                "sorafs_root_cid",
+                "artifact_hash",
+                "ciphertext_bytes",
+                "artifact_role",
             ],
             &[],
         );
@@ -1001,6 +1015,12 @@ mod tests {
             document["paths"]["/v1/soracloud/model/upload/private/receipts"]["get"]["parameters"]
                 .as_array()
                 .expect("private uploaded-model receipt query parameters");
+        assert!(
+            parameters
+                .iter()
+                .any(|parameter| parameter["name"].as_str() == Some("cursor")),
+            "private uploaded-model receipt query must expose its continuation cursor",
+        );
         let count_mode = parameters
             .iter()
             .find(|parameter| parameter["name"].as_str() == Some("count_mode"))

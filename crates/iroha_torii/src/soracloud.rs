@@ -15,7 +15,10 @@ use axum::{
     http::{HeaderMap, StatusCode},
     response::{IntoResponse, Response},
 };
-use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STANDARD};
+use base64::{
+    Engine as _,
+    engine::general_purpose::{STANDARD as BASE64_STANDARD, URL_SAFE_NO_PAD},
+};
 use futures_util::{StreamExt as _, TryStreamExt as _, stream};
 use iroha_core::soracloud_runtime::{
     HF_GENERATED_AGENT_AUTONOMY_BUDGET_UNITS, HF_GENERATED_AGENT_LEASE_BLOCKS,
@@ -36,7 +39,7 @@ use iroha_crypto::{Algorithm, Hash, HashOf, PublicKey, Signature};
 #[cfg(test)]
 use iroha_data_model::soracloud::SoraServiceExactCurrentRevisionPreconditionV1;
 use iroha_data_model::{
-    Encode,
+    Decode, Encode,
     account::AccountId,
     asset::AssetDefinitionId,
     isi::{self, InstructionBox},
@@ -1399,6 +1402,8 @@ pub(crate) struct PrivateUploadedModelReceiptQuery {
     pub limit: Option<u32>,
     #[norito(default)]
     pub count_mode: Option<String>,
+    #[norito(default)]
+    pub cursor: Option<String>,
 }
 #[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
 #[norito(deny_unknown_fields)]
@@ -1418,6 +1423,88 @@ pub(crate) struct PrivateUploadedModelReceiptListResponse {
 enum PrivateUploadedModelReceiptCountMode {
     Bounded,
     Exact,
+}
+const PRIVATE_UPLOADED_MODEL_RECEIPT_CURSOR_VERSION_V1: u16 = 1;
+const PRIVATE_UPLOADED_MODEL_RECEIPT_CURSOR_MAX_BYTES_V1: usize = 256;
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode)]
+struct PrivateUploadedModelReceiptCursorV1 {
+    schema_version: u16,
+    filter_digest: Hash,
+    emitted_sequence: u64,
+    receipt_id: Hash,
+}
+
+fn private_uploaded_model_receipt_filter_digest(
+    receipt_id: Option<Hash>,
+    service_name: Option<&str>,
+    model_id: Option<&str>,
+    weight_version: Option<&str>,
+) -> Hash {
+    let mut transcript = b"soracloud:private-uploaded-model-receipt-filter:v1".to_vec();
+    transcript.extend(receipt_id.encode());
+    transcript.extend(service_name.map(str::to_owned).encode());
+    transcript.extend(model_id.map(str::to_owned).encode());
+    transcript.extend(weight_version.map(str::to_owned).encode());
+    Hash::new(transcript)
+}
+
+fn decode_private_uploaded_model_receipt_cursor(
+    raw: &str,
+    expected_filter_digest: Hash,
+) -> Result<(u64, Hash), SoracloudError> {
+    if raw.is_empty() || raw.len() > PRIVATE_UPLOADED_MODEL_RECEIPT_CURSOR_MAX_BYTES_V1 * 2 {
+        return Err(SoracloudError::bad_request(
+            "private receipt cursor has an invalid encoded length",
+        ));
+    }
+    let bytes = URL_SAFE_NO_PAD.decode(raw.as_bytes()).map_err(|_| {
+        SoracloudError::bad_request("private receipt cursor is not canonical base64url")
+    })?;
+    if bytes.is_empty()
+        || bytes.len() > PRIVATE_UPLOADED_MODEL_RECEIPT_CURSOR_MAX_BYTES_V1
+        || URL_SAFE_NO_PAD.encode(&bytes) != raw
+    {
+        return Err(SoracloudError::bad_request(
+            "private receipt cursor is not canonical base64url",
+        ));
+    }
+    let cursor: PrivateUploadedModelReceiptCursorV1 = norito::decode_canonical(&bytes)
+        .map_err(|_| SoracloudError::bad_request("private receipt cursor is malformed"))?;
+    if cursor.schema_version != PRIVATE_UPLOADED_MODEL_RECEIPT_CURSOR_VERSION_V1
+        || cursor.emitted_sequence == 0
+    {
+        return Err(SoracloudError::bad_request(
+            "private receipt cursor has an unsupported version or key",
+        ));
+    }
+    if cursor.filter_digest != expected_filter_digest {
+        return Err(SoracloudError::bad_request(
+            "private receipt cursor does not belong to these filters",
+        ));
+    }
+    Ok((cursor.emitted_sequence, cursor.receipt_id))
+}
+
+fn encode_private_uploaded_model_receipt_cursor(
+    filter_digest: Hash,
+    emitted_sequence: u64,
+    receipt_id: Hash,
+) -> Result<String, SoracloudError> {
+    let cursor = PrivateUploadedModelReceiptCursorV1 {
+        schema_version: PRIVATE_UPLOADED_MODEL_RECEIPT_CURSOR_VERSION_V1,
+        filter_digest,
+        emitted_sequence,
+        receipt_id,
+    };
+    let bytes = norito::encode_canonical(&cursor).map_err(|error| {
+        SoracloudError::internal(format!("failed to encode private receipt cursor: {error}"))
+    })?;
+    if bytes.is_empty() || bytes.len() > PRIVATE_UPLOADED_MODEL_RECEIPT_CURSOR_MAX_BYTES_V1 {
+        return Err(SoracloudError::internal(
+            "encoded private receipt cursor exceeded its fixed bound",
+        ));
+    }
+    Ok(URL_SAFE_NO_PAD.encode(bytes))
 }
 impl PrivateUploadedModelReceiptCountMode {
     const fn label(self) -> &'static str {
@@ -6256,48 +6343,79 @@ fn authoritative_private_uploaded_model_receipts_response(
         })
         .transpose()?;
     let limit = query.limit.unwrap_or(50).clamp(1, 500) as usize;
+    let filter_digest = private_uploaded_model_receipt_filter_digest(
+        query.receipt_id,
+        service_name.as_deref(),
+        query.model_id.as_deref(),
+        query.weight_version.as_deref(),
+    );
+    let after = query
+        .cursor
+        .as_deref()
+        .map(|cursor| decode_private_uploaded_model_receipt_cursor(cursor, filter_digest))
+        .transpose()?;
     let state_view = app.state.view();
     let world = state_view.world();
-    let mut receipts = world
+    let page_bound = limit.saturating_add(1);
+    let mut receipts = Vec::with_capacity(page_bound);
+    let mut total = 0_u64;
+    let mut remaining_from_cursor = 0_u64;
+    for (receipt_id, receipt) in world
         .soracloud_private_uploaded_model_execution_receipts()
         .iter()
-        .filter_map(|(receipt_id, receipt)| {
-            if query.receipt_id.is_some_and(|filter| filter != *receipt_id) {
-                return None;
-            }
-            if service_name
+    {
+        if query.receipt_id.is_some_and(|filter| filter != *receipt_id)
+            || service_name
                 .as_deref()
                 .is_some_and(|filter| filter != receipt.service_name.as_ref())
-            {
-                return None;
-            }
-            if query
+            || query
                 .model_id
                 .as_deref()
                 .is_some_and(|filter| filter != receipt.model_id)
-            {
-                return None;
-            }
-            if query
+            || query
                 .weight_version
                 .as_deref()
                 .is_some_and(|filter| filter != receipt.weight_version)
-            {
-                return None;
+        {
+            continue;
+        }
+        total = total.saturating_add(1);
+        let key = (receipt.emitted_sequence, receipt.receipt_id);
+        if after.is_some_and(|cursor| key <= cursor) {
+            continue;
+        }
+        remaining_from_cursor = remaining_from_cursor.saturating_add(1);
+        let insert_at = receipts.partition_point(
+            |existing: &SoraPrivateUploadedModelExecutionReceiptV1| {
+                (existing.emitted_sequence, existing.receipt_id) < key
+            },
+        );
+        if insert_at < page_bound {
+            receipts.insert(insert_at, receipt.clone());
+            if receipts.len() > page_bound {
+                receipts.pop();
             }
-            Some(receipt.clone())
-        })
-        .collect::<Vec<_>>();
-    receipts.sort_by(|left, right| {
-        left.emitted_sequence
-            .cmp(&right.emitted_sequence)
-            .then_with(|| left.receipt_id.cmp(&right.receipt_id))
-    });
-    let total = receipts.len();
-    let has_more = total > limit;
+        }
+    }
+    let has_more = remaining_from_cursor > u64::try_from(limit).unwrap_or(u64::MAX);
     receipts.truncate(limit);
     let returned_items = u32::try_from(receipts.len()).unwrap_or(u32::MAX);
-    let remaining_items = u32::try_from(total.saturating_sub(receipts.len())).unwrap_or(u32::MAX);
+    let remaining_items = u32::try_from(
+        remaining_from_cursor.saturating_sub(u64::from(returned_items)),
+    )
+    .unwrap_or(u32::MAX);
+    let continue_cursor = if has_more {
+        let last = receipts.last().ok_or_else(|| {
+            SoracloudError::internal("private receipt page has_more without a returned item")
+        })?;
+        Some(encode_private_uploaded_model_receipt_cursor(
+            filter_digest,
+            last.emitted_sequence,
+            last.receipt_id,
+        )?)
+    } else {
+        None
+    };
     Ok(PrivateUploadedModelReceiptListResponse {
         schema_version: 1,
         receipts,
@@ -6307,7 +6425,7 @@ fn authoritative_private_uploaded_model_receipts_response(
         remaining_items,
         has_more,
         count_mode: count_mode.label().to_string(),
-        continue_cursor: None,
+        continue_cursor,
     })
 }
 fn authoritative_uploaded_model_status_from_query(
@@ -15340,6 +15458,7 @@ mod tests {
         assert!(empty_query.weight_version.is_none());
         assert!(empty_query.limit.is_none());
         assert!(empty_query.count_mode.is_none());
+        assert!(empty_query.cursor.is_none());
 
         let partial_query =
             norito::json::from_str::<PrivateUploadedModelReceiptQuery>(r#"{"limit":10}"#)
@@ -15656,6 +15775,44 @@ mod tests {
             ["secrets"],
             "service secret status response"
         );
+    }
+    #[test]
+    fn private_uploaded_model_receipt_cursor_is_canonical_and_filter_bound() {
+        let filter_digest = private_uploaded_model_receipt_filter_digest(
+            None,
+            Some("portal"),
+            Some("upload-1"),
+            Some("v1"),
+        );
+        let receipt_id = Hash::new(b"private receipt cursor fixture");
+        let cursor = encode_private_uploaded_model_receipt_cursor(filter_digest, 7, receipt_id)
+            .expect("encode canonical private receipt cursor");
+        assert_eq!(
+            decode_private_uploaded_model_receipt_cursor(&cursor, filter_digest)
+                .expect("decode canonical private receipt cursor"),
+            (7, receipt_id),
+        );
+        let rebound_filter = private_uploaded_model_receipt_filter_digest(
+            None,
+            Some("portal"),
+            Some("upload-2"),
+            Some("v1"),
+        );
+        let error = decode_private_uploaded_model_receipt_cursor(&cursor, rebound_filter)
+            .expect_err("a cursor must not be reusable with different filters");
+        assert_eq!(error.kind, SoracloudErrorKind::BadRequest);
+        assert!(error.message.contains("does not belong to these filters"));
+
+        for malformed in [
+            String::new(),
+            "not+base64url".to_owned(),
+            format!("{cursor}="),
+        ] {
+            assert!(
+                decode_private_uploaded_model_receipt_cursor(&malformed, filter_digest).is_err(),
+                "malformed cursor `{malformed}` must fail closed",
+            );
+        }
     }
     #[test]
     fn rollout_advance_payload_rejects_unknown_fields() {

@@ -4079,6 +4079,7 @@ fn store_private_execution_journal_entry(
             && entry.submission_attempt == existing.submission_attempt.saturating_add(1)
             && entry.transaction_hash.is_some()
             && entry.signed_transaction.is_some()
+            && entry.transaction_hash != existing.transaction_hash
             && replace_expired_transaction == existing.transaction_hash;
         if !first_submission && !next_expired_submission {
             return Err(io::Error::new(
@@ -4221,6 +4222,11 @@ fn validate_private_execution_commit_transaction(
     output_manifest_payload: &[u8],
     receipt: &SoraPrivateUploadedModelExecutionReceiptV1,
 ) -> Result<(), SoracloudRuntimeExecutionError> {
+    transaction.verify_signature().map_err(|error| {
+        private_model_invalid(format!(
+            "private execution journal transaction signature is invalid: {error}"
+        ))
+    })?;
     if transaction.network_id() != Some(network_id) {
         return Err(private_model_invalid(
             "private execution journal transaction belongs to another network",
@@ -29483,6 +29489,570 @@ mod tests {
         assert_eq!(tx.authority(), &authority);
         Ok(())
     }
+    fn private_execution_journal_test_network(seed: u8) -> NetworkId {
+        NetworkId::from_genesis_hash(iroha_crypto::HashOf::<BlockHeader>::from_untyped_unchecked(
+            Hash::prehashed([seed; Hash::LENGTH]),
+        ))
+    }
+    fn private_execution_journal_test_binding(
+        network_id: NetworkId,
+        seed: u8,
+    ) -> PrivateExecutionJournalDeploymentBindingV1 {
+        PrivateExecutionJournalDeploymentBindingV1 {
+            network_id,
+            deployment_fingerprint: Hash::new([seed; 32]),
+        }
+    }
+    fn private_execution_journal_test_artifact(
+        role: &str,
+        seed: u8,
+        manifest_digest: ManifestDigest,
+        root_cid: ManifestRootCid,
+        ciphertext_bytes: u64,
+    ) -> SoraPrivateModelArtifactRefV1 {
+        SoraPrivateModelArtifactRefV1 {
+            schema_version: iroha_data_model::soracloud::SORA_PRIVATE_MODEL_ARTIFACT_REF_VERSION_V1,
+            sorafs_manifest_digest: manifest_digest,
+            sorafs_root_cid: root_cid,
+            artifact_hash: Hash::new([seed; 32]),
+            ciphertext_bytes,
+            artifact_role: role.to_owned(),
+        }
+    }
+    fn private_execution_journal_test_fixture(
+        seed: u8,
+    ) -> Result<(
+        PrivateExecutionJournalDeploymentBindingV1,
+        SoracloudPrivateUploadedModelExecutionJournalV1,
+    )> {
+        let network_id = private_execution_journal_test_network(seed);
+        let binding = private_execution_journal_test_binding(network_id, seed.wrapping_add(1));
+        let output_ciphertext = vec![seed; 257];
+        let (_, output_manifest) = build_sorafs_manifest(&output_ciphertext)?;
+        let output_manifest_payload = norito::encode_canonical(&output_manifest)?;
+        let output_manifest_digest = ManifestDigest::from_manifest(&output_manifest)?;
+        let output_root_cid = ManifestRootCid::try_from_slice(&output_manifest.root_cid)?;
+        let input_manifest_digest = ManifestDigest::new([seed.wrapping_add(2); 32]);
+        let input_root_cid = ManifestRootCid::from_blake3_digest([seed.wrapping_add(3); 32])?;
+        let validator_account_id = (*ALICE_ID).clone();
+        let attesting_validator = SoraRuntimeDeterministicValidatorHostV1 {
+            lane_id: LaneId::SINGLE,
+            peer_id: PeerId::from(validator_account_id.expect_single_signatory().clone())
+                .to_string(),
+            validator_account_id,
+        };
+        let mut receipt = SoraPrivateUploadedModelExecutionReceiptV1 {
+            schema_version:
+                iroha_data_model::soracloud::SORA_PRIVATE_UPLOADED_MODEL_EXECUTION_RECEIPT_VERSION_V1,
+            network_id,
+            receipt_id: Hash::prehashed([0; Hash::LENGTH]),
+            service_name: format!("private_journal_{seed}").parse()?,
+            service_version: "1.0.0".to_owned(),
+            model_id: format!("model-{seed}"),
+            weight_version: "v1".to_owned(),
+            runtime_version:
+                iroha_data_model::soracloud::SORACLOUD_PRIVATE_MODEL_RUNTIME_VERSION_V1.to_owned(),
+            model_manifest_digest: ManifestDigest::new([seed.wrapping_add(4); 32]),
+            model_bundle_root: Hash::new([seed.wrapping_add(5); 32]),
+            policy_id: "policy/v1".to_owned(),
+            decryption_request_id: format!("decrypt-{seed}"),
+            attesting_validator,
+            input_artifact: private_execution_journal_test_artifact(
+                "input",
+                seed.wrapping_add(6),
+                input_manifest_digest,
+                input_root_cid,
+                128,
+            ),
+            output_artifact: private_execution_journal_test_artifact(
+                "output",
+                seed.wrapping_add(7),
+                output_manifest_digest,
+                output_root_cid,
+                u64::try_from(output_ciphertext.len())?,
+            ),
+            input_commitment: Hash::new([seed.wrapping_add(8); 32]),
+            output_commitment: Hash::new([seed.wrapping_add(9); 32]),
+            output_recipient: uploaded_model_encryption_recipient_from_secret(&[seed; 32]),
+            request_commitment: Hash::prehashed([0; Hash::LENGTH]),
+            result_commitment: Hash::prehashed([0; Hash::LENGTH]),
+            emitted_sequence: 0,
+            emitted_block_height: 0,
+        };
+        receipt.request_commitment =
+            iroha_data_model::soracloud::derive_soracloud_private_model_request_commitment_v1(
+                &receipt,
+            );
+        receipt.result_commitment =
+            iroha_data_model::soracloud::derive_soracloud_private_model_result_commitment_v1(
+                &receipt,
+            );
+        receipt.receipt_id = iroha_data_model::soracloud::derive_soracloud_private_uploaded_model_execution_receipt_id_v1(&receipt);
+        receipt.validate_submission()?;
+        let entry = SoracloudPrivateUploadedModelExecutionJournalV1 {
+            schema_version: iroha_core::soracloud_runtime::SORACLOUD_PRIVATE_UPLOADED_MODEL_EXECUTION_JOURNAL_VERSION_V1,
+            service_name: receipt.service_name.clone(),
+            decryption_request_id: receipt.decryption_request_id.clone(),
+            request_fingerprint: Hash::new([seed.wrapping_add(10); 32]),
+            output_manifest_payload,
+            receipt,
+            transaction_hash: None,
+            signed_transaction: None,
+            submission_attempt: 0,
+        };
+        entry
+            .validate()
+            .map_err(|error| eyre::eyre!("invalid private journal test fixture: {error}"))?;
+        Ok((binding, entry))
+    }
+    fn private_execution_journal_test_signed_transaction(
+        network_id: NetworkId,
+        marker: &str,
+    ) -> Result<SignedTransaction> {
+        let payload = build_soracloud_runtime_submission_payload(
+            network_id,
+            (*ALICE_ID).clone(),
+            InstructionBox::from(Log::new(
+                Level::INFO,
+                format!("private execution journal {marker}"),
+            )),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+            "/internal/soracloud/runtime/private-journal-test",
+        )?;
+        sign_soracloud_runtime_submission_payload(
+            payload,
+            &ALICE_KEYPAIR,
+            "/internal/soracloud/runtime/private-journal-test",
+        )
+    }
+    fn private_execution_journal_test_signed_entry(
+        prepared: &SoracloudPrivateUploadedModelExecutionJournalV1,
+        attempt: u8,
+        marker: &str,
+    ) -> Result<SoracloudPrivateUploadedModelExecutionJournalV1> {
+        let transaction =
+            private_execution_journal_test_signed_transaction(prepared.receipt.network_id, marker)?;
+        let mut signed = prepared.clone();
+        signed.transaction_hash = Some(Hash::from(transaction.hash()));
+        signed.signed_transaction = Some(transaction);
+        signed.submission_attempt = attempt;
+        Ok(signed)
+    }
+    fn private_execution_journal_test_reseal_receipt(
+        receipt: &mut SoraPrivateUploadedModelExecutionReceiptV1,
+    ) {
+        receipt.request_commitment =
+            iroha_data_model::soracloud::derive_soracloud_private_model_request_commitment_v1(
+                receipt,
+            );
+        receipt.result_commitment =
+            iroha_data_model::soracloud::derive_soracloud_private_model_result_commitment_v1(
+                receipt,
+            );
+        receipt.receipt_id = iroha_data_model::soracloud::derive_soracloud_private_uploaded_model_execution_receipt_id_v1(receipt);
+    }
+    fn private_execution_journal_test_invalid_signature_entry(
+        prepared: &SoracloudPrivateUploadedModelExecutionJournalV1,
+    ) -> Result<SoracloudPrivateUploadedModelExecutionJournalV1> {
+        let payload = build_soracloud_runtime_submission_payload(
+            prepared.receipt.network_id,
+            (*ALICE_ID).clone(),
+            InstructionBox::from(Log::new(
+                Level::INFO,
+                "private execution journal invalid signature".to_owned(),
+            )),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+            "/internal/soracloud/runtime/private-journal-invalid-signature-test",
+        )?;
+        let builder = TransactionBuilder::from_payload(payload)?;
+        let wrong_signer = KeyPair::try_from_seed(vec![0xE9; 32], Algorithm::Ed25519)?;
+        assert_ne!(wrong_signer.public_key(), ALICE_KEYPAIR.public_key());
+        let signature =
+            Signature::try_new(wrong_signer.private_key(), &builder.payload_hash_bytes())?;
+        let transaction = builder.build_with_signature(signature);
+        assert!(transaction.verify_signature().is_err());
+        let mut signed = prepared.clone();
+        signed.transaction_hash = Some(Hash::from(transaction.hash()));
+        signed.signed_transaction = Some(transaction);
+        signed.submission_attempt = 1;
+        Ok(signed)
+    }
+    #[test]
+    fn private_execution_journal_prepared_round_trip_is_idempotent_and_removable() -> Result<()> {
+        let temp_dir = tempfile::tempdir()?;
+        let (binding, prepared) = private_execution_journal_test_fixture(0x41)?;
+        store_private_execution_journal_entry(temp_dir.path(), binding, &prepared, None)?;
+
+        assert_eq!(
+            load_private_execution_journal_entry(
+                temp_dir.path(),
+                binding,
+                &prepared.service_name,
+                &prepared.decryption_request_id,
+            )?,
+            Some(prepared.clone())
+        );
+        assert_eq!(
+            list_private_execution_journal_entries(temp_dir.path(), binding)?,
+            vec![prepared.clone()]
+        );
+
+        let directory = private_execution_journal_dir(temp_dir.path());
+        let path = private_execution_journal_path(
+            &directory,
+            &prepared.service_name,
+            &prepared.decryption_request_id,
+        );
+        let before_bytes = fs::read(&path)?;
+        #[cfg(unix)]
+        let before_metadata = fs::metadata(&path)?;
+        store_private_execution_journal_entry(temp_dir.path(), binding, &prepared, None)?;
+        assert_eq!(
+            fs::read(&path)?,
+            before_bytes,
+            "exact replay must not rewrite"
+        );
+        #[cfg(unix)]
+        assert_eq!(
+            fs::metadata(&path)?.ino(),
+            before_metadata.ino(),
+            "exact replay must preserve the durable file identity"
+        );
+
+        remove_private_execution_journal_entry(
+            temp_dir.path(),
+            binding,
+            &prepared.service_name,
+            &prepared.decryption_request_id,
+        )?;
+        assert!(!path.exists());
+        assert!(list_private_execution_journal_entries(temp_dir.path(), binding)?.is_empty());
+        remove_private_execution_journal_entry(
+            temp_dir.path(),
+            binding,
+            &prepared.service_name,
+            &prepared.decryption_request_id,
+        )?;
+        Ok(())
+    }
+    #[test]
+    fn private_execution_journal_requires_prepared_before_signed() -> Result<()> {
+        let temp_dir = tempfile::tempdir()?;
+        let (binding, prepared) = private_execution_journal_test_fixture(0x42)?;
+        let signed = private_execution_journal_test_signed_entry(&prepared, 1, "direct-signed")?;
+        let error = store_private_execution_journal_entry(temp_dir.path(), binding, &signed, None)
+            .expect_err("a new Signed(1) entry must not bypass durable Prepared(0)");
+        assert_eq!(error.kind(), io::ErrorKind::InvalidInput);
+        assert!(
+            load_private_execution_journal_entry(
+                temp_dir.path(),
+                binding,
+                &prepared.service_name,
+                &prepared.decryption_request_id,
+            )?
+            .is_none()
+        );
+        Ok(())
+    }
+    #[test]
+    fn private_execution_journal_manifest_binds_the_exact_root_cid() -> Result<()> {
+        let temp_dir = tempfile::tempdir()?;
+        let (binding, mut prepared) = private_execution_journal_test_fixture(0x4A)?;
+        let wrong_root = ManifestRootCid::from_blake3_digest([0xEE; 32])?;
+        assert_ne!(prepared.receipt.output_artifact.sorafs_root_cid, wrong_root);
+        prepared.receipt.output_artifact.sorafs_root_cid = wrong_root;
+        private_execution_journal_test_reseal_receipt(&mut prepared.receipt);
+        prepared.receipt.validate_submission()?;
+
+        let validation_error = prepared
+            .validate()
+            .expect_err("journal manifest root CID mismatch must fail validation");
+        assert!(validation_error.contains("root CID"), "{validation_error}");
+        let error =
+            store_private_execution_journal_entry(temp_dir.path(), binding, &prepared, None)
+                .expect_err("journal storage must reject a mismatched manifest root CID");
+        assert_eq!(error.kind(), io::ErrorKind::InvalidInput);
+        Ok(())
+    }
+    #[test]
+    fn private_execution_journal_rejects_invalid_transaction_signature() -> Result<()> {
+        let temp_dir = tempfile::tempdir()?;
+        let (binding, prepared) = private_execution_journal_test_fixture(0x4B)?;
+        store_private_execution_journal_entry(temp_dir.path(), binding, &prepared, None)?;
+        let invalid = private_execution_journal_test_invalid_signature_entry(&prepared)?;
+        let validation_error = invalid
+            .validate()
+            .expect_err("journal must cryptographically verify its signed transaction");
+        assert!(
+            validation_error.contains("signature verification"),
+            "{validation_error}"
+        );
+        let error = store_private_execution_journal_entry(temp_dir.path(), binding, &invalid, None)
+            .expect_err("invalid signed transaction must not replace Prepared(0)");
+        assert_eq!(error.kind(), io::ErrorKind::InvalidInput);
+        assert_eq!(
+            load_private_execution_journal_entry(
+                temp_dir.path(),
+                binding,
+                &prepared.service_name,
+                &prepared.decryption_request_id,
+            )?,
+            Some(prepared)
+        );
+        Ok(())
+    }
+    #[test]
+    fn private_execution_journal_enforces_signed_transition_and_replacement_bounds() -> Result<()> {
+        let temp_dir = tempfile::tempdir()?;
+        let (binding, prepared) = private_execution_journal_test_fixture(0x43)?;
+        store_private_execution_journal_entry(temp_dir.path(), binding, &prepared, None)?;
+
+        let signed_one = private_execution_journal_test_signed_entry(&prepared, 1, "signed-one")?;
+        store_private_execution_journal_entry(temp_dir.path(), binding, &signed_one, None)?;
+        assert_eq!(
+            load_private_execution_journal_entry(
+                temp_dir.path(),
+                binding,
+                &prepared.service_name,
+                &prepared.decryption_request_id,
+            )?,
+            Some(signed_one.clone())
+        );
+        store_private_execution_journal_entry(temp_dir.path(), binding, &signed_one, None)?;
+        assert_eq!(
+            store_private_execution_journal_entry(
+                temp_dir.path(),
+                binding,
+                &signed_one,
+                signed_one.transaction_hash,
+            )
+            .expect_err("an exact replay is not an expired replacement")
+            .kind(),
+            io::ErrorKind::InvalidInput
+        );
+
+        let substitution =
+            private_execution_journal_test_signed_entry(&prepared, 1, "substitution")?;
+        let jump = private_execution_journal_test_signed_entry(&prepared, 3, "jump")?;
+        for (candidate, replacement) in [
+            (&prepared, None),
+            (&substitution, None),
+            (&jump, signed_one.transaction_hash),
+        ] {
+            assert_eq!(
+                store_private_execution_journal_entry(
+                    temp_dir.path(),
+                    binding,
+                    candidate,
+                    replacement,
+                )
+                .expect_err("regression, substitution, and attempt jumps must fail")
+                .kind(),
+                io::ErrorKind::InvalidInput
+            );
+        }
+
+        let mut reused_transaction = signed_one.clone();
+        reused_transaction.submission_attempt = 2;
+        assert_eq!(
+            store_private_execution_journal_entry(
+                temp_dir.path(),
+                binding,
+                &reused_transaction,
+                signed_one.transaction_hash,
+            )
+            .expect_err("a replacement attempt must use a distinct signed transaction hash")
+            .kind(),
+            io::ErrorKind::InvalidInput
+        );
+
+        let signed_two = private_execution_journal_test_signed_entry(&prepared, 2, "signed-two")?;
+        assert_eq!(
+            store_private_execution_journal_entry(
+                temp_dir.path(),
+                binding,
+                &signed_two,
+                Some(Hash::new(b"not-the-expired-transaction")),
+            )
+            .expect_err("replacement must name the exact previous signed hash")
+            .kind(),
+            io::ErrorKind::InvalidInput
+        );
+        store_private_execution_journal_entry(
+            temp_dir.path(),
+            binding,
+            &signed_two,
+            signed_one.transaction_hash,
+        )?;
+        let signed_three =
+            private_execution_journal_test_signed_entry(&prepared, 3, "signed-three")?;
+        store_private_execution_journal_entry(
+            temp_dir.path(),
+            binding,
+            &signed_three,
+            signed_two.transaction_hash,
+        )?;
+        assert_eq!(
+            load_private_execution_journal_entry(
+                temp_dir.path(),
+                binding,
+                &prepared.service_name,
+                &prepared.decryption_request_id,
+            )?,
+            Some(signed_three.clone())
+        );
+
+        let signed_four = private_execution_journal_test_signed_entry(&prepared, 4, "signed-four")?;
+        assert_eq!(
+            store_private_execution_journal_entry(
+                temp_dir.path(),
+                binding,
+                &signed_four,
+                signed_three.transaction_hash,
+            )
+            .expect_err("the durable replacement attempt bound must fail closed")
+            .kind(),
+            io::ErrorKind::InvalidInput
+        );
+        Ok(())
+    }
+    #[test]
+    fn private_execution_journal_rejects_network_and_deployment_or_custody_binding_mismatch()
+    -> Result<()> {
+        let temp_dir = tempfile::tempdir()?;
+        let (binding, prepared) = private_execution_journal_test_fixture(0x44)?;
+        store_private_execution_journal_entry(temp_dir.path(), binding, &prepared, None)?;
+
+        let wrong_network = PrivateExecutionJournalDeploymentBindingV1 {
+            network_id: private_execution_journal_test_network(0x45),
+            deployment_fingerprint: binding.deployment_fingerprint,
+        };
+        let wrong_deployment = private_execution_journal_test_binding(binding.network_id, 0x46);
+        for mismatched in [wrong_network, wrong_deployment] {
+            // The opaque deployment fingerprint commits the validator signer, peer, and custody
+            // recipient. Any one of those changing is intentionally indistinguishable here.
+            let error = load_private_execution_journal_entry(
+                temp_dir.path(),
+                mismatched,
+                &prepared.service_name,
+                &prepared.decryption_request_id,
+            )
+            .expect_err("journal binding mismatch must fail closed");
+            assert_eq!(error.kind(), io::ErrorKind::PermissionDenied);
+            assert_eq!(
+                store_private_execution_journal_entry(
+                    temp_dir.path(),
+                    mismatched,
+                    &prepared,
+                    None,
+                )
+                .expect_err("a mismatched deployment must not overwrite durable evidence")
+                .kind(),
+                io::ErrorKind::PermissionDenied
+            );
+            assert_eq!(
+                remove_private_execution_journal_entry(
+                    temp_dir.path(),
+                    mismatched,
+                    &prepared.service_name,
+                    &prepared.decryption_request_id,
+                )
+                .expect_err("a mismatched deployment must not remove durable evidence")
+                .kind(),
+                io::ErrorKind::PermissionDenied
+            );
+        }
+        assert_eq!(
+            load_private_execution_journal_entry(
+                temp_dir.path(),
+                binding,
+                &prepared.service_name,
+                &prepared.decryption_request_id,
+            )?,
+            Some(prepared)
+        );
+        Ok(())
+    }
+    #[cfg(unix)]
+    #[test]
+    fn private_execution_journal_lock_exclusive_child() -> Result<()> {
+        const STATE_DIR_ENV: &str = "IROHA_TEST_PRIVATE_EXECUTION_JOURNAL_LOCK_STATE_DIR";
+        let Some(state_dir) = std::env::var_os(STATE_DIR_ENV) else {
+            return Ok(());
+        };
+        let error = open_private_execution_journal_lock(Path::new(&state_dir))
+            .expect_err("a second process must not acquire the same journal lock");
+        assert_eq!(error.kind(), io::ErrorKind::WouldBlock);
+        Ok(())
+    }
+    #[cfg(unix)]
+    #[test]
+    fn private_execution_journal_lock_is_exclusive_for_the_state_directory() -> Result<()> {
+        const STATE_DIR_ENV: &str = "IROHA_TEST_PRIVATE_EXECUTION_JOURNAL_LOCK_STATE_DIR";
+        let temp_dir = tempfile::tempdir()?;
+        let first = open_private_execution_journal_lock(temp_dir.path())?;
+        let output = Command::new(std::env::current_exe()?)
+            .arg("private_execution_journal_lock_exclusive_child")
+            .arg("--test-threads=1")
+            .env(STATE_DIR_ENV, temp_dir.path())
+            .output()?;
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(
+            output.status.success(),
+            "exclusive-lock child failed\nstdout:\n{}\nstderr:\n{}",
+            stdout,
+            stderr,
+        );
+        assert!(
+            stdout.contains("1 passed"),
+            "exclusive-lock child test did not execute\nstdout:\n{stdout}\nstderr:\n{stderr}",
+        );
+        drop(first);
+        let reacquired = open_private_execution_journal_lock(temp_dir.path())?;
+        drop(reacquired);
+        Ok(())
+    }
+    #[test]
+    fn private_execution_journal_corruption_noncanonical_bytes_and_oversize_fail_closed()
+    -> Result<()> {
+        for (seed, mutation) in [
+            (0x47, "corrupt"),
+            (0x48, "noncanonical"),
+            (0x49, "oversized"),
+        ] {
+            let temp_dir = tempfile::tempdir()?;
+            let (binding, prepared) = private_execution_journal_test_fixture(seed)?;
+            store_private_execution_journal_entry(temp_dir.path(), binding, &prepared, None)?;
+            let path = private_execution_journal_path(
+                &private_execution_journal_dir(temp_dir.path()),
+                &prepared.service_name,
+                &prepared.decryption_request_id,
+            );
+            match mutation {
+                "corrupt" => fs::write(&path, b"not a Norito journal envelope")?,
+                "noncanonical" => {
+                    let mut file = fs::OpenOptions::new().append(true).open(&path)?;
+                    file.write_all(&[0])?;
+                    file.sync_all()?;
+                }
+                "oversized" => fs::OpenOptions::new()
+                    .write(true)
+                    .open(&path)?
+                    .set_len(SORACLOUD_PRIVATE_EXECUTION_JOURNAL_MAX_FILE_BYTES + 1)?,
+                _ => unreachable!(),
+            }
+            let error = load_private_execution_journal_entry(
+                temp_dir.path(),
+                binding,
+                &prepared.service_name,
+                &prepared.decryption_request_id,
+            )
+            .expect_err("unsafe durable journal bytes must fail closed");
+            assert_eq!(error.kind(), io::ErrorKind::InvalidData, "{mutation}");
+        }
+        Ok(())
+    }
     struct FailingUploadedModelRng;
     #[derive(Debug)]
     struct FailingUploadedModelRngError;
@@ -30221,6 +30791,8 @@ mod tests {
         iroha_data_model::soracloud::SoraServiceAuditEventV1 {
             schema_version: iroha_data_model::soracloud::SORA_SERVICE_AUDIT_EVENT_VERSION_V1,
             sequence,
+            block_height: sequence,
+            block_timestamp_ms: sequence,
             action: SoraServiceLifecycleActionV1::Deploy,
             service_name: bundle.service.service_name.clone(),
             from_version: None,
@@ -30251,11 +30823,36 @@ mod tests {
             break_glass: None,
             break_glass_reason: None,
             lease_usage: None,
-
-            service_lease: None,
-
+            service_lease_commitment: None,
             lease_reporting_epoch_rollover: None,
             signer: ALICE_KEYPAIR.public_key().clone(),
+        }
+    }
+    fn sample_service_lease_egress_checkpoint(
+        bundle: &SoraDeploymentBundleV1,
+        reporting_epoch: u64,
+        accounted_egress_bytes: u64,
+    ) -> iroha_data_model::soracloud::SoraServiceLeaseEgressCheckpointV1 {
+        iroha_data_model::soracloud::SoraServiceLeaseEgressCheckpointV1 {
+            reporting_epoch,
+            assignment: iroha_data_model::soracloud::SoraServiceLeaseReporterAssignmentV1 {
+                schema_version:
+                    iroha_data_model::soracloud::SORA_SERVICE_LEASE_REPORTER_ASSIGNMENT_VERSION_V1,
+                service_version: bundle.service.service_version.clone(),
+                placement: SoraInrouReplicaPlacementV1 {
+                    replica_slot: 1,
+                    validator_account_id: ALICE_ID.clone(),
+                    peer_id: canonical_inrou_test_peer_id().to_owned(),
+                    selected_guest_isa: SoraInrouGuestIsaV1::X8664,
+                    selected_geography_tag: None,
+                    selection_latency_ms: None,
+                },
+                placement_reconciled_at_ms: 1,
+            },
+            accounted_egress_bytes,
+            last_updated_height: 1,
+            finalize_reporter: false,
+            forced_finalization: false,
         }
     }
     fn sample_app_infra_audit_event(
@@ -30416,16 +31013,11 @@ mod tests {
         let lease = deployment.service_lease.as_mut().expect("service lease");
         let lease_started_height = lease.lease_started_height;
         let reporting_epoch = lease.reporting_epoch;
-        lease.egress_reporter_checkpoints = vec![
-            iroha_data_model::soracloud::SoraServiceLeaseEgressCheckpointV1 {
-                reporting_epoch: lease.reporting_epoch,
-                active_service_version: bundle.service.service_version.clone(),
-                replica_slot: 1,
-                validator_account_id: ALICE_ID.clone(),
-                accounted_egress_bytes: 37,
-                finalize_reporter: false,
-            },
-        ];
+        lease.egress_reporter_checkpoints = vec![sample_service_lease_egress_checkpoint(
+            &bundle,
+            lease.reporting_epoch,
+            37,
+        )];
         lease
             .refresh_accounted_egress_bytes()
             .expect("fixture egress aggregate");
@@ -30669,6 +31261,7 @@ mod tests {
             payload_commitment,
             delivery_delay_blocks: 0,
             enqueue_sequence: 6,
+            enqueue_height: 6,
             available_after_height: 6,
             expires_at_height: 7,
         };
@@ -34916,6 +35509,7 @@ mod tests {
             view.world(),
             bundle.service.service_name.as_ref(),
             &bundle.service.service_version,
+            committed_height(&view),
         )
         .expect_err("cross-keyed placement must fail closed");
         assert!(error.contains("storage key"), "unexpected error: {error}");
@@ -34965,6 +35559,7 @@ mod tests {
             view.world(),
             bundle.service.service_name.as_ref(),
             &bundle.service.service_version,
+            committed_height(&view),
         )
         .expect_err("invalid placement must fail closed");
         assert!(error.contains("malformed"), "unexpected error: {error}");
@@ -35033,6 +35628,7 @@ mod tests {
                 view.world(),
                 bundle.service.service_name.as_ref(),
                 &bundle.service.service_version,
+                committed_height(&view),
             )
             .map_err(|error| eyre::eyre!(error))?
             .expect("each placement lifecycle remains independently active");
@@ -35047,6 +35643,7 @@ mod tests {
                 bundle.service.service_name.as_ref(),
                 &bundle.service.service_version,
                 soracloud_state_view_observed_at_ms(&view),
+                committed_height(&view),
                 |lane_id| view.is_lane_active_for_authority(lane_id),
             )
             .map_err(|error| eyre::eyre!(error))?;
@@ -37966,16 +38563,11 @@ mod tests {
         let mut caught_up_state = test_state();
         let mut caught_up_deployment = deployment_state.clone();
         let caught_up_lease = caught_up_deployment.service_lease.as_mut().expect("lease");
-        caught_up_lease.egress_reporter_checkpoints = vec![
-            iroha_data_model::soracloud::SoraServiceLeaseEgressCheckpointV1 {
-                reporting_epoch: caught_up_lease.reporting_epoch,
-                active_service_version: bundle.service.service_version.clone(),
-                replica_slot: 1,
-                validator_account_id: ALICE_ID.clone(),
-                accounted_egress_bytes: 8 * 1024 * 1024,
-                finalize_reporter: false,
-            },
-        ];
+        caught_up_lease.egress_reporter_checkpoints = vec![sample_service_lease_egress_checkpoint(
+            &bundle,
+            caught_up_lease.reporting_epoch,
+            8 * 1024 * 1024,
+        )];
         caught_up_lease
             .refresh_accounted_egress_bytes()
             .expect("fixture egress aggregate");

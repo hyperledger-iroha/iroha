@@ -33343,6 +33343,9 @@ fn sample_snapshot_private_decryption_release(
             "snapshot_private_approver"
                 .parse()
                 .expect("canonical approver name"),
+            "snapshot_private_approver_backup"
+                .parse()
+                .expect("canonical backup approver name"),
         ],
         allow_break_glass: false,
         jurisdiction_tag: "snapshot-private-jurisdiction".to_owned(),
@@ -33423,19 +33426,27 @@ fn sample_snapshot_private_uploaded_model_world(
         ),
         uploaded_model_bundle.clone(),
     );
-    world.pin_manifests.insert(
+    world.pin_manifests = std::iter::once((
         uploaded_model_bundle.sorafs_manifest_digest,
         sample_snapshot_private_pin(
             uploaded_model_bundle.sorafs_manifest_digest,
             uploaded_model_bundle.ciphertext_bytes,
         ),
-    );
-    for artifact in [&receipt.input_artifact, &receipt.output_artifact] {
-        world.pin_manifests.insert(
-            artifact.sorafs_manifest_digest,
-            sample_snapshot_private_pin(artifact.sorafs_manifest_digest, artifact.ciphertext_bytes),
-        );
-    }
+    ))
+    .chain(
+        [&receipt.input_artifact, &receipt.output_artifact]
+            .into_iter()
+            .map(|artifact| {
+                (
+                    artifact.sorafs_manifest_digest,
+                    sample_snapshot_private_pin(
+                        artifact.sorafs_manifest_digest,
+                        artifact.ciphertext_bytes,
+                    ),
+                )
+            }),
+    )
+    .collect();
     let (release, release_event) = sample_snapshot_private_decryption_release(
         service_bundle,
         &uploaded_model_bundle,
@@ -34398,6 +34409,22 @@ state_test! { sync private_uploaded_model_receipt_restore_validates_durable_exec
                 .expect("adversarial private uploaded-model receipt snapshot must fail closed")
         };
 
+    let mut substituted_network = receipt.clone();
+    substituted_network.network_id = iroha_data_model::NetworkId::from_genesis_hash(
+        HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0xEE; Hash::LENGTH])),
+    );
+    substituted_network.request_commitment =
+        derive_soracloud_private_model_request_commitment_v1(&substituted_network);
+    substituted_network.result_commitment =
+        derive_soracloud_private_model_result_commitment_v1(&substituted_network);
+    substituted_network.receipt_id =
+        derive_soracloud_private_uploaded_model_execution_receipt_id_v1(&substituted_network);
+    let error = restore_error(uploaded_model_bundle.clone(), substituted_network);
+    assert!(
+        error.to_string().contains("belongs to another network"),
+        "unexpected private receipt network restore error: {error}"
+    );
+
     let mut substituted_runtime = receipt.clone();
     substituted_runtime.runtime_version = "soracloud.quantized-cpu.v2".to_owned();
     substituted_runtime.request_commitment =
@@ -34432,6 +34459,23 @@ state_test! { sync private_uploaded_model_receipt_restore_validates_durable_exec
     assert!(
         error.to_string().contains("request_commitment"),
         "unexpected private receipt output-destination restore error: {error}"
+    );
+
+    let mut substituted_output_root = receipt.clone();
+    substituted_output_root.output_artifact.sorafs_root_cid =
+        ManifestRootCid::from_blake3_digest([0xEE; 32]).expect("substituted root CID");
+    substituted_output_root.request_commitment =
+        derive_soracloud_private_model_request_commitment_v1(&substituted_output_root);
+    substituted_output_root.result_commitment =
+        derive_soracloud_private_model_result_commitment_v1(&substituted_output_root);
+    substituted_output_root.receipt_id =
+        derive_soracloud_private_uploaded_model_execution_receipt_id_v1(&substituted_output_root);
+    let error = restore_error(uploaded_model_bundle.clone(), substituted_output_root);
+    assert!(
+        error
+            .to_string()
+            .contains("must exactly match its SoraFS pin record"),
+        "unexpected private receipt output-root restore error: {error}"
     );
 
     let mut substituted_result = receipt.clone();
@@ -34503,9 +34547,13 @@ state_test! { sync private_uploaded_model_receipt_restore_validates_durable_exec
         uploaded_model_bundle.clone(),
         receipt.clone(),
     );
-    missing_output_pin_world
-        .pin_manifests
-        .remove(receipt.output_artifact.sorafs_manifest_digest);
+    missing_output_pin_world.pin_manifests = {
+        let pins = missing_output_pin_world.pin_manifests.view();
+        pins.iter()
+            .filter(|(digest, _)| **digest != receipt.output_artifact.sorafs_manifest_digest)
+            .map(|(digest, pin)| (*digest, pin.clone()))
+            .collect()
+    };
     let missing_output_pin_snapshot = norito::json::to_value(&snapshot_state_from_world(
         missing_output_pin_world,
     ))

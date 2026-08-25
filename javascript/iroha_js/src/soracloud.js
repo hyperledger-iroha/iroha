@@ -233,6 +233,7 @@ function normalizePrivateArtifactRef(input, field, expectedRole) {
   requireExactObject(artifact, field, [
     "schemaVersion",
     "sorafsManifestDigest",
+    "sorafsRootCid",
     "artifactHash",
     "ciphertextBytes",
     "artifactRole",
@@ -254,6 +255,10 @@ function normalizePrivateArtifactRef(input, field, expectedRole) {
       artifact.sorafsManifestDigest,
       `${field}.sorafsManifestDigest`,
     ),
+    sorafs_root_cid: normalizePrivateSorafsRootCid(
+      artifact.sorafsRootCid,
+      `${field}.sorafsRootCid`,
+    ),
     artifact_hash: normalizeHashLikeValue(
       artifact.artifactHash,
       `${field}.artifactHash`,
@@ -264,6 +269,45 @@ function normalizePrivateArtifactRef(input, field, expectedRole) {
     ),
     artifact_role: role,
   };
+}
+
+function normalizePrivateSorafsRootCid(value, field) {
+  if (!Array.isArray(value) || Object.getPrototypeOf(value) !== Array.prototype) {
+    throw new TypeError(`${field} must be a plain array`);
+  }
+  if (value.length !== 36) {
+    throw new TypeError(`${field} must contain exactly 36 unsigned integer bytes`);
+  }
+  if (Object.getOwnPropertySymbols(value).length !== 0) {
+    throw new TypeError(`${field} symbols are not accepted`);
+  }
+  const expectedNames = new Set(["length", ...Array.from({ length: 36 }, (_, index) => String(index))]);
+  const actualNames = Object.getOwnPropertyNames(value);
+  if (actualNames.length !== expectedNames.size) {
+    throw new TypeError(`${field} must contain every byte as an own property`);
+  }
+  for (const name of actualNames) {
+    if (!expectedNames.has(name)) {
+      throw new TypeError(`${field}.${name} is not accepted`);
+    }
+  }
+  const bytes = value.map((element, index) => {
+    const descriptor = Object.getOwnPropertyDescriptor(value, String(index));
+    if (descriptor == null || !("value" in descriptor) || descriptor.enumerable !== true) {
+      throw new TypeError(`${field}[${index}] must be an enumerable data property`);
+    }
+    if (!Number.isInteger(element) || element < 0 || element > 255) {
+      throw new TypeError(`${field}[${index}] must be an unsigned integer byte`);
+    }
+    return element;
+  });
+  if (bytes[0] !== 1 || bytes[1] !== 0x71 || bytes[2] !== 0x1f || bytes[3] !== 32) {
+    throw new TypeError(`${field} must use canonical CIDv1/dag-cbor/BLAKE3-256 framing`);
+  }
+  if (!bytes.slice(4).some((byte) => byte !== 0)) {
+    throw new TypeError(`${field} digest must be nonzero`);
+  }
+  return bytes;
 }
 
 function normalizePrivateOutputRecipient(input) {
@@ -1020,7 +1064,7 @@ export function buildSoracloudPrivateUploadedModelExecuteRequest(input = {}) {
 /**
  * Build query parameters for committed private uploaded-model execution receipts.
  *
- * @param {{ receiptId?: string, serviceName?: string, modelId?: string, weightVersion?: string, limit?: number | bigint | string, countMode?: "bounded" | "exact" }} input
+ * @param {{ receiptId?: string, serviceName?: string, modelId?: string, weightVersion?: string, limit?: number | bigint | string, countMode?: "bounded" | "exact", cursor?: string }} input
  * @returns {Record<string, string>}
  */
 export function buildSoracloudPrivateUploadedModelReceiptQuery(input = {}) {
@@ -1028,7 +1072,7 @@ export function buildSoracloudPrivateUploadedModelReceiptQuery(input = {}) {
   requireExactObject(
     input,
     "input",
-    ["receiptId", "serviceName", "modelId", "weightVersion", "limit", "countMode"],
+    ["receiptId", "serviceName", "modelId", "weightVersion", "limit", "countMode", "cursor"],
     [],
   );
   const query = {};
@@ -1057,6 +1101,10 @@ export function buildSoracloudPrivateUploadedModelReceiptQuery(input = {}) {
       throw new TypeError("countMode must be bounded or exact");
     }
     query.count_mode = countMode;
+  }
+  const cursor = optionalString(input, "cursor");
+  if (cursor !== undefined) {
+    query.cursor = cursor;
   }
   return query;
 }
