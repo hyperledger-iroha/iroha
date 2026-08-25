@@ -5,6 +5,24 @@ This directory hosts the developer-facing shell helpers that gate CI jobs
 `target/`, so keep that layout unchanged unless the entire toolchain is updated
 as part of a coordinated migration.
 
+## Taira privacy release gates
+
+The manual `capture_taira_privacy_release_gate_evidence.yml` workflow is the
+only CI owner for the eight intentionally ignored, resource-heavy privacy
+release tests. It runs each exact test alone on the protected native ARM64
+release host, authenticates the signed source commit and Rust sysroot, enforces
+reviewed elapsed, peak-RSS, and address-space ceilings, and uploads an immutable
+per-test evidence bundle. `ci/run_taira_privacy_release_gate.sh` keeps the test
+inventory closed and rejects matrix/filter substitutions.
+
+Dispatch inputs must bind the final full commit, the clean output from
+`scripts/compute_workspace_source_manifest.py`, the exact `Cargo.lock` SHA-256,
+and the reviewed resource ceilings. The protected environment supplies the
+approved Iroha SSH signer identity and Rust sysroot tree seal. ZK-AMS evidence
+from this corridor is candidate evidence only: it is explicitly not activation
+authority, and the Taira rollout remains unavailable until every MKHE readiness
+gate is closed and the rollout plan is separately reviewed and re-pinned.
+
 ## Affected Rust lanes
 
 `ci/rust_lanes.toml` assigns every Cargo workspace package to exactly one

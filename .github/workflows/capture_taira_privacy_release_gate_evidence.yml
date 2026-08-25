@@ -1,0 +1,209 @@
+name: Capture Taira privacy release-gate evidence
+
+on:
+  workflow_dispatch:
+    inputs:
+      expected_commit:
+        description: Lowercase full signed Iroha commit containing this workflow
+        required: true
+        type: string
+      expected_source_sha256:
+        description: Reviewed clean-workspace source-manifest SHA-256
+        required: true
+        type: string
+      expected_cargo_lock_sha256:
+        description: Reviewed SHA-256 of Cargo.lock
+        required: true
+        type: string
+      elapsed_ceiling_ms:
+        description: Reviewed per-test elapsed ceiling in canonical decimal milliseconds
+        required: true
+        type: string
+      peak_rss_ceiling_bytes:
+        description: Reviewed per-test peak-RSS ceiling in canonical decimal bytes
+        required: true
+        type: string
+      address_space_ceiling_bytes:
+        description: Reviewed per-test address-space ceiling in canonical decimal bytes
+        required: true
+        type: string
+
+concurrency:
+  group: taira-privacy-release-gates-${{ inputs.expected_commit }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+env:
+  CARGO_BUILD_JOBS: "1"
+  CARGO_INCREMENTAL: "0"
+  RAYON_NUM_THREADS: "4"
+  RUST_MIN_STACK: "8388608"
+  TAIRA_INPUT_EXPECTED_COMMIT: ${{ inputs.expected_commit }}
+  TAIRA_INPUT_SOURCE_SHA256: ${{ inputs.expected_source_sha256 }}
+  TAIRA_INPUT_LOCK_SHA256: ${{ inputs.expected_cargo_lock_sha256 }}
+  TAIRA_INPUT_ELAPSED_CEILING_MS: ${{ inputs.elapsed_ceiling_ms }}
+  TAIRA_INPUT_PEAK_RSS_CEILING_BYTES: ${{ inputs.peak_rss_ceiling_bytes }}
+  TAIRA_INPUT_ADDRESS_SPACE_CEILING_BYTES: ${{ inputs.address_space_ceiling_bytes }}
+
+jobs:
+  evidence:
+    name: ${{ matrix.case }}
+    environment: taira-privacy-release-gates
+    env:
+      TAIRA_APPROVED_IROHA_SIGNER_FINGERPRINT: ${{ vars.TAIRA_PRIVACY_IROHA_SIGNER_FINGERPRINT }}
+      TAIRA_APPROVED_IROHA_SIGNER_PRINCIPAL: ${{ vars.TAIRA_PRIVACY_IROHA_SIGNER_PRINCIPAL }}
+      TAIRA_APPROVED_IROHA_SIGNER_PUBLIC_KEY: ${{ vars.TAIRA_PRIVACY_IROHA_SIGNER_PUBLIC_KEY }}
+      TAIRA_APPROVED_RUST_SYSROOT_TREE_SHA256: ${{ vars.TAIRA_PRIVACY_RUST_SYSROOT_TREE_SHA256 }}
+    runs-on:
+      - self-hosted
+      - Linux
+      - ARM64
+      - numeric-v1-release-calibration
+      - numeric-v1-slowest-supported-tier
+      - aws-graviton3
+      - c7g-4xlarge
+    timeout-minutes: 360
+    strategy:
+      fail-fast: false
+      max-parallel: 1
+      matrix:
+        include:
+          - case: zk-ams-production-dispatch
+            filter: privacy_verifier::tests::zk_ams_production_dispatch_covers_batch_and_successor_provisioning
+          - case: vega-action-api
+            filter: privacy_release_evidence::tests::vega_action_api_binds_signs_and_rejects_transaction_proof_and_statement_drift
+          - case: zk-ace-release-stages
+            filter: privacy_release_evidence::tests::zk_ace_release_stages_exercise_the_activatable_profile
+          - case: bootle-lantern-release-stage
+            filter: privacy_release_evidence::tests::bootle_lantern_release_stage_exercises_one_shot_issuance_and_wire_rejection
+          - case: zk-ams-corruption-stage
+            filter: privacy_release_evidence::tests::zk_ams_corruption_stage_rejects_maximum_and_submaximum_wire_mutations
+          - case: zk-ams-complete-batch
+            filter: privacy_engines::zk_ams::tests::complete_batch_admission_proves_verifies_and_fails_closed
+          - case: pq-masp-full-domain
+            filter: privacy_engines::pq_masp::stark::tests::full_domain_authorized_facade_roundtrip_and_adversarial_wires_fail_closed
+          - case: ivm-private-note-full-domain
+            filter: privacy_engines::ivm_private_note::stark::tests::full_domain_stark_roundtrip_and_adversarial_wires_fail_closed
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          clean: true
+          fetch-depth: 0
+          persist-credentials: false
+          ref: ${{ inputs.expected_commit }}
+
+      - uses: actions-rust-lang/setup-rust-toolchain@166cdcfd11aee3cb47222f9ddb555ce30ddb9659
+        with:
+          toolchain: 1.93.1
+
+      - name: Authenticate source, toolchain, and resource host
+        shell: bash
+        env:
+          WORKFLOW_SHA: ${{ github.workflow_sha }}
+        run: |
+          set -Eeuo pipefail
+          umask 077
+          require_sha256() {
+            [[ "$1" =~ ^[0-9a-f]{64}$ ]]
+            [[ "$1" != "$(printf '0%.0s' {1..64})" ]]
+          }
+          require_decimal() {
+            [[ "$1" =~ ^[1-9][0-9]*$ ]]
+          }
+          [[ "$TAIRA_INPUT_EXPECTED_COMMIT" =~ ^[0-9a-f]{40}$ ]]
+          [[ "$TAIRA_INPUT_EXPECTED_COMMIT" != "$(printf '0%.0s' {1..40})" ]]
+          require_sha256 "$TAIRA_INPUT_SOURCE_SHA256"
+          require_sha256 "$TAIRA_INPUT_LOCK_SHA256"
+          require_sha256 "$TAIRA_APPROVED_RUST_SYSROOT_TREE_SHA256"
+          require_decimal "$TAIRA_INPUT_ELAPSED_CEILING_MS"
+          require_decimal "$TAIRA_INPUT_PEAK_RSS_CEILING_BYTES"
+          require_decimal "$TAIRA_INPUT_ADDRESS_SPACE_CEILING_BYTES"
+          test "$TAIRA_INPUT_EXPECTED_COMMIT" = "$GITHUB_SHA"
+          test "$TAIRA_INPUT_EXPECTED_COMMIT" = "$WORKFLOW_SHA"
+          test "$(git rev-parse HEAD)" = "$TAIRA_INPUT_EXPECTED_COMMIT"
+          git diff --quiet
+          git diff --cached --quiet
+          test -z "$(git ls-files --others --exclude-standard)"
+          printf '%s  %s\n' "$TAIRA_INPUT_LOCK_SHA256" Cargo.lock | sha256sum -c -
+          test "$(
+            python3 -I -S scripts/compute_workspace_source_manifest.py \
+              --root "$GITHUB_WORKSPACE"
+          )" = "$TAIRA_INPUT_SOURCE_SHA256"
+
+          [[ "$TAIRA_APPROVED_IROHA_SIGNER_PRINCIPAL" \
+            =~ ^[A-Za-z0-9][A-Za-z0-9._@+-]{0,127}$ ]]
+          [[ "$TAIRA_APPROVED_IROHA_SIGNER_PUBLIC_KEY" \
+            =~ ^ssh-ed25519\ [A-Za-z0-9+/]+={0,2}$ ]]
+          observed_fingerprint="$(
+            printf '%s\n' "$TAIRA_APPROVED_IROHA_SIGNER_PUBLIC_KEY" \
+              | ssh-keygen -lf - -E sha256 \
+              | awk '{print $2}'
+          )"
+          test "$observed_fingerprint" \
+            = "$TAIRA_APPROVED_IROHA_SIGNER_FINGERPRINT"
+          auth_root="$(mktemp -d "${RUNNER_TEMP}/privacy-release-auth.XXXXXXXXXX")"
+          printf '%s namespaces="git" %s\n' \
+            "$TAIRA_APPROVED_IROHA_SIGNER_PRINCIPAL" \
+            "$TAIRA_APPROVED_IROHA_SIGNER_PUBLIC_KEY" \
+            >"$auth_root/allowed-signers"
+          chmod 0400 "$auth_root/allowed-signers"
+          git -c gpg.format=ssh \
+            -c gpg.minTrustLevel=fully \
+            -c "gpg.ssh.allowedSignersFile=$auth_root/allowed-signers" \
+            verify-commit --raw "$TAIRA_INPUT_EXPECTED_COMMIT" \
+            >"$auth_root/verify-commit.log" 2>&1
+          grep -F "Good \"git\" signature for $TAIRA_APPROVED_IROHA_SIGNER_PRINCIPAL" \
+            "$auth_root/verify-commit.log"
+          grep -F "$TAIRA_APPROVED_IROHA_SIGNER_FINGERPRINT" \
+            "$auth_root/verify-commit.log"
+
+          evidence_root="$(
+            mktemp -d "${RUNNER_TEMP}/privacy-release-${{ matrix.case }}.XXXXXXXXXX"
+          )"
+          mkdir -m 0700 "$evidence_root/preflight"
+          bash ci/check_taira_privacy_native_host.sh \
+            --metadata-out "$evidence_root/preflight/native-host.json" \
+            --x509-environment-out "$evidence_root/preflight/resource-environment.json"
+          rust_sysroot="$(rustc --print sysroot)"
+          rust_sysroot="$(cd "$rust_sysroot" && pwd -P)"
+          observed_toolchain_sha="$(
+            python3 -I -S scripts/hash_taira_rust_toolchain.py \
+              --sysroot "$rust_sysroot" \
+              --manifest-out "$evidence_root/preflight/rust-toolchain-tree-v1.json"
+          )"
+          test "$observed_toolchain_sha" \
+            = "$TAIRA_APPROVED_RUST_SYSROOT_TREE_SHA256"
+          rustc -Vv >"$evidence_root/preflight/rustc.txt"
+          grep -Fx 'release: 1.93.1' "$evidence_root/preflight/rustc.txt"
+          grep -Fx \
+            'commit-hash: 01f6ddf7588f42ae2d7eb0a2f21d44e8e96674cf' \
+            "$evidence_root/preflight/rustc.txt"
+          grep -Fx 'host: aarch64-unknown-linux-gnu' \
+            "$evidence_root/preflight/rustc.txt"
+          {
+            echo "CARGO_TARGET_DIR=$evidence_root/cargo-target"
+            echo "TAIRA_EVIDENCE_ROOT=$evidence_root"
+            echo "TAIRA_RUST_TOOLCHAIN_TREE_SHA256=$observed_toolchain_sha"
+          } >>"$GITHUB_ENV"
+
+      - name: Run the exact ignored release gate
+        shell: bash
+        env:
+          TAIRA_EVIDENCE_CASE: ${{ matrix.case }}
+          TAIRA_EVIDENCE_FILTER: ${{ matrix.filter }}
+        run: |
+          set -Eeuo pipefail
+          bash ci/run_taira_privacy_release_gate.sh \
+            "$TAIRA_EVIDENCE_ROOT/evidence"
+
+      - name: Upload immutable release-gate evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: taira-privacy-release-${{ matrix.case }}-${{ inputs.expected_commit }}
+          path: ${{ env.TAIRA_EVIDENCE_ROOT }}
+          if-no-files-found: error
+          retention-days: 30
+          compression-level: 0
